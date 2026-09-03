@@ -6,20 +6,91 @@ default ("hash everything") key.
 | | |
 |---|---|
 | Device operation | `ttnn::operations::experimental::ccl::Matmul_RS` (`device/rs_matmul_op.hpp:30-81`) |
-| Custom hash | `device/rs_matmul_op.cpp:86-98` |
+| Custom hash | `device/rs_matmul_op.cpp:116-183` |
 | `operation_attributes_t` | `rs` (a default-constructed `LlamaReduceScatterDeviceOperation` tag), `rs_op` (the reduce-scatter attributes: `dim`, `cross_device_semaphore`, `subdevice_id`, `cluster_axis`, `output_mem_config`, `ring_devices`, `num_links`, `topology`, `use_noc1_only`), `matmul` (the full `MatmulParams`) |
 | `tensor_args_t` | `rs` (= `{input_tensor, intermediate_packet_buffer}`), `matmul` (= `{input_tensor, weight_tensor}`), `matmul_output_tensors`, `second_weight_tensor` |
 | Program factories | `Matmul_RS_PF` (single; builds the reduce-scatter and the 1D matmul into one `Program`) |
 | `override_runtime_arguments` | **Yes** (`device/rs_matmul_program_factory.cpp:98-139`) |
 | `get_dynamic_runtime_args` | No |
-| `validate_on_program_cache_hit` | Present and non-empty (`device/rs_matmul_op.cpp:17-33`) — but see below |
+| `validate_on_program_cache_hit` | Present and non-empty (`device/rs_matmul_op.cpp:45-62`) — but see below |
 | Cache-hit patch mechanism | **Op-owned re-derivation** (the factory's `override_runtime_arguments` runs on every hit) |
+
+## Post-fix status — commit fab067a
+
+**Verdict: CLEAR — with justified relaxation(s).** All eight program-cache bugs recorded below are closed.
+The hash went from nine terms to thirty, and the root cause — it was a verbatim copy of the standalone
+`LlamaReduceScatterDeviceOperation` key with the matmul half never added — is fixed: both halves of the
+fusion are now keyed. Every remaining omission is either a deliberate relaxation or a value pinned by a
+`TT_FATAL` that genuinely runs on the hit path.
+
+What fab067a changed here:
+
+- **Hashed the matmul operands** — `padded_shape`, `dtype`, `memory_config` and `page_config` for both
+  `tensor_args.matmul.input_tensor` and `tensor_args.matmul.weight_tensor`
+  (`device/rs_matmul_op.cpp:175-182`).
+- **Hashed the whole `MatmulParams`** — `operation_attributes.matmul` (`:145`), plus the global CB's
+  `buffer_address()` and `config_address()` (`:151-156`), which reflection cannot reach because
+  `GlobalCircularBuffer::attribute_values` is only `(sender_receiver_core_mapping, size, buffer_type)`
+  (`tt_metal/api/tt-metalium/global_circular_buffer.hpp:77-82`).
+- **Hashed `second_weight_tensor.has_value()`** (`:138`) — the bit that selects between two structurally
+  different programs and two different output arities.
+- **Hashed `rs_op.output_mem_config`** (`:159`) and **`rs_op.subdevice_id`** (`:160-162`, widened to
+  `uint32_t` with an `0xFFFFFFFF` sentinel).
+- **Hashed the reduce-scatter input's `logical_shape`** (`:170`) and its `page_config` (`:166`).
+- **Hashed the intermediate packet buffer's `memory_config` and `page_config`** (`:173-174`).
+- **Added a tile/layout guard** — `validate_standard_tile` pins `Layout::TILE` and a 32x32 tile on the
+  reduce-scatter input (`device/rs_matmul_op.cpp:28-41`). Because this op *does* define
+  `validate_on_program_cache_hit`, the miss validator is not substituted onto the hit path
+  (`ttnn/api/ttnn/device_operation.hpp:265-268`), so the guard is deliberately called from **both**
+  validators (`:61` and `:80`) rather than from the miss validator alone.
+
+What remains open:
+
+- Nothing in the cache key.
+- Three surviving omissions, all relaxations rather than gaps: the matmul operands' `logical_shape`
+  (finding #1), `rs_op.cross_device_semaphore`'s `(cores, buffer_type)` (finding #7), and the packet
+  buffer's `dtype`/`logical_shape` (finding #6).
+- Two non-cache correctness defects, tracked in their own section at the end of this document: the empty
+  `LlamaReduceScatterDeviceOperation::validate_on_program_cache_hit` stub, and the 32x32 `tile_size()`
+  assumption still living in the shared reduce-scatter factory.
+- Two residual caveats that are **not** omissions relative to the default key, because the default hash
+  would not see them either: a `SubDeviceId` names a core set that depends on which sub-device manager is
+  loaded on the mesh device, and the fabric-connection runtime args stay frozen at first-miss values
+  (finding #12).
+- One discrepancy between fab067a's commit message and its code, noted for the record: the message lists a
+  `storage_type()` check "covering `device()` dereference" among the validators it moved into a shared
+  helper for `llama_rs_matmul`. The shared helper here (`validate_standard_tile`) checks layout and tile
+  only. A host-storage reduce-scatter input therefore still faults inside `compute_program_hash` itself, at
+  `tensor_args.rs.input_tensor.device()->id()` (`device/rs_matmul_op.cpp:165`), rather than reporting. It
+  faults rather than aliases, so this is a diagnostics gap, not a cache bug — see finding #10.
+
+**Metal 2.0 port readiness: clear**, with one thing to get right at declaration time, because this op's two
+halves take *opposite* conventions and the relaxation must be declared per tensor parameter rather than
+op-wide:
+
+- The **reduce-scatter input** keys `logical_shape` (`device/rs_matmul_op.cpp:170`) and therefore takes **no
+  relaxation** — declare it strict. This is not an oversight to be tidied up: the op deliberately supports
+  an over-provisioned shard grid where the logical width and the grid capacity differ, which is what the
+  padding branch of `compute_output_specs` exists for
+  (`.../llama_reduce_scatter/device/llama_reduce_scatter_device_operation.cpp:64-81`), so the logical width
+  carries information the memory config does not. Finding #8 has the details.
+- The **matmul operands** key `padded_shape` and drop `logical_shape` (`:176`, `:180`) — that is
+  `TensorSpecRelaxations::match_padded_shape_only`
+  (`tt_metal/api/tt-metalium/experimental/metal2_host_api/tensor_spec_relaxations.hpp:41`). `pertinent_fields`
+  maps that flag to `PertinentFields{.padded_shape = true}`
+  (`tt_metal/impl/metal2_host_api/tensor_spec_relaxations.cpp:67-87`), and
+  `hash_tensorspec_with_relaxation` (`:116`) and `tensorspecs_match_with_relaxation` (`:161-201`) are driven
+  from that same field set, so the key and the accept/reject predicate cannot disagree — `ValidateTensorArgs`
+  delegates to the predicate (`tt_metal/impl/metal2_host_api/program_run_args.cpp:176-189`). Note that this
+  relaxation, unlike the reduce-scatter input's strictness, is **not** needed: the matmul factory works
+  entirely in padded shapes, so declaring nothing here is equally correct and merely costs recompiles for
+  operands that pad identically.
 
 The CSV row (*explicit / SELECTIVE / has own hit validator / has `override_runtime_arguments` / no
 `get_dynamic_runtime_args`*) is accurate on all five columns. The "own hit validator" column is
 technically true and materially misleading, which is worth stating up front:
 
-```17:33:ttnn/cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter_matmul/device/rs_matmul_op.cpp
+```45:62:ttnn/cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter_matmul/device/rs_matmul_op.cpp
 void Matmul_RS::validate_on_program_cache_hit(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.second_weight_tensor.has_value()) {
@@ -36,21 +107,30 @@ void Matmul_RS::validate_on_program_cache_hit(
             {{tensor_args.matmul.input_tensor, tensor_args.matmul.weight_tensor}, {std::nullopt}, {}});
     }
     LlamaReduceScatterDeviceOperation::validate_on_program_cache_hit(operation_attributes.rs_op, tensor_args.rs);
+    validate_standard_tile(tensor_args);
 }
 ```
 
 This validator checks the *current call* for internal consistency. It has no access to the cached
 program and makes no comparison against it, so it cannot detect that the current call's matmul
 configuration differs from the one the cached program was compiled for. It offers zero protection
-against a hash gap. (The reduce-scatter half it delegates to is an empty stub:
-`ttnn/cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter/device/llama_reduce_scatter_device_operation.cpp:57-58`.)
+against a hash gap — which is why every finding below had to be closed in the key rather than here.
+
+Two consequences of defining it at all, both of which fab067a had to work around. First, the miss
+validator is *not* substituted onto the hit path (`ttnn/api/ttnn/device_operation.hpp:265-268`), so any
+check placed only in `validate_on_program_cache_miss` silently would not run on reuses; that is why the
+new `validate_standard_tile` helper (`device/rs_matmul_op.cpp:28-41`) is called explicitly from both
+validators, at `:61` and `:80`. Second, the reduce-scatter half it delegates to is an empty stub
+(`.../llama_reduce_scatter/device/llama_reduce_scatter_device_operation.cpp:57-58`), so the same
+suppression applies one level down and the reduce-scatter half's own miss-only checks do not run on hits
+either. That one is not a cache bug and is treated separately under "Non-cache correctness defects".
 
 ## Cache-hit patch mechanism
 
 The factory exposes `override_runtime_arguments` and no `apply_descriptor`, so the framework calls it
 on every hit:
 
-```279:285:ttnn/api/ttnn/device_operation.hpp
+```282:288:ttnn/api/ttnn/device_operation.hpp
         if constexpr (requires { &WorkloadFactory::apply_descriptor; }) {
             WorkloadFactory::apply_descriptor(
                 cached_mesh_workload, operation_attributes, tensor_args, tensor_return_value);
@@ -87,8 +167,8 @@ side dispatches to one of the three per-variant address patchers
 (`ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.cpp:3062-3082`).
 No compile-time arg, no kernel `define`, no CB size, and no core range is refreshed.
 
-So the hash must cover everything structural on **both** halves of the fusion. It covers a strict
-subset of one half.
+So the hash must cover everything structural on **both** halves of the fusion. Pre-fix it covered a strict
+subset of one half; post-fab067a it covers both.
 
 ## Baseline: what the default hash would cover
 
@@ -106,34 +186,80 @@ subset of one half.
 
 ## What the custom hash covers
 
-```88:97:ttnn/cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter_matmul/device/rs_matmul_op.cpp
+```137:182:ttnn/cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter_matmul/device/rs_matmul_op.cpp
     return tt::tt_metal::operation::hash_operation<Matmul_RS>(
+        tensor_args.second_weight_tensor.has_value(),
         operation_attributes.rs_op.dim,
         operation_attributes.rs_op.cluster_axis,
         operation_attributes.rs_op.ring_devices,
         operation_attributes.rs_op.num_links,
         operation_attributes.rs_op.topology,
         operation_attributes.rs_op.use_noc1_only,
+        operation_attributes.matmul,
+        // MatmulParams reaches global_cb through reflection, which covers the GCB's structure (core
+        // mapping, size, buffer type) but not which allocation it is. The matmul's remote CB is created
+        // against the GCB and bakes both addresses at build time, and UpdateDynamicCircularBufferAddress
+        // refuses to re-point a GCB-backed CB, so two same-shaped GCBs at different allocations must not
+        // share a program. Same reasoning as dram_prefetcher_validator.
+        static_cast<uint64_t>(
+            operation_attributes.matmul.global_cb.has_value() ? operation_attributes.matmul.global_cb->buffer_address()
+                                                              : 0),
+        static_cast<uint64_t>(
+            operation_attributes.matmul.global_cb.has_value() ? operation_attributes.matmul.global_cb->config_address()
+                                                              : 0),
+        // output_mem_config supplies the output shard grid behind the OUTPUT_CORE_XY define and the
+        // output/accumulator CB sizes; subdevice_id selects the matmul core pool and mcast origin.
+        operation_attributes.rs_op.output_mem_config,
+        operation_attributes.rs_op.subdevice_id.has_value()
+            ? static_cast<uint32_t>(operation_attributes.rs_op.subdevice_id->get())
+            : 0xFFFFFFFFu,
         tensor_args.rs.input_tensor.dtype(),
         tensor_args.rs.input_tensor.memory_config(),
-        tensor_args.rs.input_tensor.device()->id());
+        tensor_args.rs.input_tensor.device()->id(),
+        tensor_args.rs.input_tensor.tensor_spec().page_config(),
+        // The shared reduce-scatter factory derives ncores_input and the SCHEDULE define from the
+        // logical shape, which the hashed memory config does not determine for an over-provisioned
+        // shard grid — a configuration this op explicitly supports.
+        tensor_args.rs.input_tensor.logical_shape(),
+        // The packet buffer's shard grid picks the packet-worker cores and, via restricted_cores, the
+        // matmul placement too, so its memory config is structural and not just its page config.
+        tensor_args.rs.intermediate_packet_buffer.tensor_spec().page_config(),
+        tensor_args.rs.intermediate_packet_buffer.memory_config(),
+        mm_in.tensor_spec().page_config(),
+        mm_in.padded_shape(),
+        mm_in.dtype(),
+        mm_in.memory_config(),
+        mm_w.tensor_spec().page_config(),
+        mm_w.padded_shape(),
+        mm_w.dtype(),
+        mm_w.memory_config());
 ```
 
-Nine terms, all from the reduce-scatter half. The hash is a verbatim copy of the standalone
-`LlamaReduceScatterDeviceOperation` key with the op type swapped — the matmul half of the fusion was
-never added. **Not one attribute of the matmul, and not one of the four matmul-side tensors, reaches
-the cache key.**
+Thirty terms, covering both halves of the fusion. Pre-fix there were nine, all from the reduce-scatter
+half: the hash was a verbatim copy of the standalone `LlamaReduceScatterDeviceOperation` key with the op
+type swapped, and the matmul half of the fusion had never been added, so **not one attribute of the
+matmul, and not one of the four matmul-side tensors, reached the cache key.** That is the single root
+cause behind findings #1 through #5 below.
+
+Note the deliberate asymmetry in how the two halves key their shapes. The reduce-scatter input is keyed on
+`logical_shape` (`:170`) with no padded term; the matmul operands are keyed on `padded_shape` (`:176`,
+`:180`) with no logical term. Both are correct for their half — see #1 and #8.
 
 ## Omitted parameters
 
 ### 1. `tensor_args.matmul.input_tensor` and `tensor_args.matmul.weight_tensor`
 
-**Verdict: BUG.** This is the most severe finding in this audit.
+**Verdict: RESOLVED by fab067a** (was BUG). This was the most severe finding in this audit.
 
-These are the matmul's A and B operands. They are distinct tensors from
+Closed by hashing `padded_shape`, `dtype`, `memory_config` and `page_config` for both operands
+(`device/rs_matmul_op.cpp:175-182`) — the four properties from which the helper derives M/K/N, the tile
+sizes, all three CB data formats and the work split. `logical_shape` and `alignment` are still dropped;
+that is finding #1's residual relaxation, discussed at the end of this entry.
+
+Pre-fix: these are the matmul's A and B operands. They are distinct tensors from
 `tensor_args.rs.input_tensor` — the launcher wires them separately:
 
-```191:195:ttnn/cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter_matmul/device/rs_matmul_op.cpp
+```276:280:ttnn/cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter_matmul/device/rs_matmul_op.cpp
     auto tensor_args = OperationType::tensor_args_t{
         .rs = std::move(rs_tensor_args),
         .matmul = {.input_tensor = input_tensor, .weight_tensor = weight_tensor},
@@ -143,8 +269,8 @@ These are the matmul's A and B operands. They are distinct tensors from
 
 and `rs_tensor_args` is built from `new_rs_tensor`, which is either the caller's separate `rs_tensor`
 or the matmul's *output*, never its input
-(`device/rs_matmul_op.cpp:165-186`). So the hashed
-`tensor_args.rs.input_tensor.{dtype, memory_config}` says nothing about A or B.
+(`device/rs_matmul_op.cpp:250-257`). So the hashed
+`tensor_args.rs.input_tensor.{dtype, memory_config}` said nothing about A or B.
 
 They are passed straight into the matmul builder, which derives M, K, N, the tile sizes, all three CB
 data formats and the entire work split from them:
@@ -167,7 +293,7 @@ data formats and the entire work split from them:
         reduce_scatter_core_range);
 ```
 
-**Reproduction.** Fix everything on the reduce-scatter side (`rs_tensor`, packet buffer, semaphore,
+**Reproduction (pre-fix).** Fix everything on the reduce-scatter side (`rs_tensor`, packet buffer, semaphore,
 `dim`, `cluster_axis`, `num_links`, `topology`, `use_noc1_only`) and vary only the weight:
 
 - Call 1: `weight_tensor` of shape `[1, 1, 2048, 3584]`, `bfloat8_b`.
@@ -180,16 +306,38 @@ allocated at the correct (doubled) size and correctly re-pointed by `override_pr
 but only the first half of it is ever written and the in1 reader walks off the end of its CB. The
 symptom is half-garbage output with no error.
 
-The same reproduction works with a dtype change (`bfloat16` vs `bfloat8_b` weights change
-`in1_data_format` and the in1 tile size) or a sharded-vs-interleaved change on either operand.
+The same reproduction worked with a dtype change (`bfloat16` vs `bfloat8_b` weights change
+`in1_data_format` and the in1 tile size) or a sharded-vs-interleaved change on either operand. All three
+variants now produce distinct keys.
+
+**Residual relaxation: `logical_shape` on the matmul operands.** The key carries `padded_shape` and not
+`logical_shape`, which is a category-2 relaxation rather than a gap — the matmul helper works entirely in
+padded shapes and tile counts, so two operand pairs that pad identically compile to the same program and
+legitimately share an entry. The direction matters: `padded_shape` is a function of `logical_shape` plus
+alignment but not the reverse, so keying padded is a strict widening. Note, though, that the reuse it buys
+is narrow here — `create_matmul_attributes` is fed `weight_tensor.logical_shape()` to decide
+`user_run_batched` (`device/rs_matmul_op.cpp:226`), and that lands in the hashed `MatmulParams`, so a
+logical-shape difference that flips batching still separates the keys. Unlike the reduce-scatter input's
+`logical_shape` (finding #8), this relaxation is **not** load-bearing: dropping it and keying the operands
+strictly would also be correct.
 
 ### 2. `operation_attributes.matmul` (the entire `MatmulParams`)
 
-**Verdict: BUG.**
+**Verdict: RESOLVED by fab067a** (was BUG).
 
-Every field the factory reads at `device/rs_matmul_program_factory.cpp:61-69` and
+Closed by hashing `operation_attributes.matmul` wholesale (`device/rs_matmul_op.cpp:145`). The struct is a
+plain aggregate with no `attribute_names`, so reflection walks all 14 members including the
+`program_config` variant and its per-alternative fields. Reflection does not reach *which*
+`GlobalCircularBuffer` allocation `global_cb` names — `attribute_values` is only
+`(sender_receiver_core_mapping, size, buffer_type)`
+(`tt_metal/api/tt-metalium/global_circular_buffer.hpp:77-82`) — so `buffer_address()` and
+`config_address()` are hashed explicitly beside it (`:151-156`). That extra step is necessary rather than
+belt-and-braces: `UpdateDynamicCircularBufferAddress` refuses to re-point a GCB-backed CB
+(`tt_metal/impl/host_api/tt_metal.cpp:1688`), so a GCB reallocation cannot be patched on a hit.
+
+Pre-fix: every field the factory reads at `device/rs_matmul_program_factory.cpp:61-69` and
 `device/rs_matmul_program_factory.cpp:86-94` — `bcast_batch`, `compute_kernel_config`,
-`program_config`, `untilize_out`, `global_cb` — is structural, and none is hashed. `program_config`
+`program_config`, `untilize_out`, `global_cb` — is structural, and none was hashed. `program_config`
 alone carries `compute_with_storage_grid_size`, `in0_block_w`, `out_subblock_h/w`, `out_block_h/w`,
 `per_core_M`, `per_core_N`, `fuse_batch`, `fused_activation`, `mcast_in0`, `gather_in0`, `hop_cores`,
 `num_global_cb_receivers` and `stream_in1`; the helper unpacks all of them into the program
@@ -200,7 +348,7 @@ All of it is user-reachable. The ttnn-level entry point exposes `program_config`
 `transpose_b`, `activation` and `output_tile` as ordinary arguments
 (`rs_matmul.cpp:24-36`), and they are packed verbatim into `MatmulParams`:
 
-```142:159:ttnn/cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter_matmul/device/rs_matmul_op.cpp
+```227:244:ttnn/cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter_matmul/device/rs_matmul_op.cpp
     auto matmul_struct = ttnn::prim::create_matmul_attributes(
         input_tensor,
         weight_tensor,
@@ -221,21 +369,35 @@ All of it is user-reachable. The ttnn-level entry point exposes `program_config`
         {});
 ```
 
-**Reproduction.** Identical inputs and weights; call 1 with `activation=None`, call 2 with
+**Reproduction (pre-fix).** Identical inputs and weights; call 1 with `activation=None`, call 2 with
 `activation="silu"`. `get_fused_activation` turns the string into `user_fused_activation`, which
 `create_matmul_attributes` folds into the program config's `fused_activation`, which becomes a
 compile-time define/arg on the matmul compute kernel. Same hash, so call 2 reuses the un-activated
 kernel and silently returns un-activated results. A `dtype=` change is the same class and additionally
-mismatches the output CB data format.
+mismatches the output CB data format. Both are now distinct keys, since `user_fused_activation` and
+`output_dtype` are `MatmulParams` members.
+
+One nuance worth recording, because it is why hashing the struct was mandatory rather than merely tidy.
+`create_matmul_attributes` normalizes `bcast_batch`, `output_dtype`, `compute_kernel_config` and
+`output_tile` to concrete values before storing them
+(`ttnn/cpp/ttnn/operations/matmul/device/matmul_device_operation.cpp:2871-2885`), but it does **not**
+normalize `program_config` — unlike the `matmul()` entry point, the fused launcher never routes a
+`nullopt` config through `get_program_config`. The factory then dereferences it unconditionally
+(`device/rs_matmul_program_factory.cpp:63`, `:88`), so a caller-supplied config is mandatory here and is
+keyed exactly as supplied.
 
 ### 3. `tensor_args.second_weight_tensor`
 
-**Verdict: BUG.**
+**Verdict: RESOLVED by fab067a** (was BUG).
 
-Its presence selects between two structurally different programs — a two-output matmul with a
+Closed by hashing the discriminator directly: `tensor_args.second_weight_tensor.has_value()` is now the
+first hash term (`device/rs_matmul_op.cpp:138`). Only the engaged bit is needed, not the tensor's spec —
+the factory reads `second_weight_tensor` for its presence alone, never for its properties.
+
+Pre-fix: its presence selects between two structurally different programs — a two-output matmul with a
 `MatmulFusedOpSignaler` versus a single-output matmul with no signaler:
 
-```43:71:ttnn/cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter_matmul/device/rs_matmul_program_factory.cpp
+```43:54:ttnn/cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter_matmul/device/rs_matmul_program_factory.cpp
     if (tensor_args.second_weight_tensor.has_value()) {
         ttnn::experimental::ccl::MatmulFusedOpSignaler base_signaler = ttnn::experimental::ccl::MatmulFusedOpSignaler(
             ttnn::experimental::ccl::MatmulFusedOpSignalerType::LLAMA_REDUCE_SCATTER);
@@ -252,18 +414,18 @@ Its presence selects between two structurally different programs — a two-outpu
 
 It also changes the *arity* of the return value: `create_output_tensors` returns three tensors in the
 `second_weight_tensor` case and two otherwise
-(`device/rs_matmul_op.cpp:73-84`), and `override_runtime_arguments` branches on the same condition and
+(`device/rs_matmul_op.cpp:103-114`), and `override_runtime_arguments` branches on the same condition and
 indexes `tensor_return_value.at(2)` (`device/rs_matmul_program_factory.cpp:103-121`).
 
-It is not hashed. There is a partial, accidental mitigation: in the `second_weight_tensor` case
+It was not hashed. There was a partial, accidental mitigation: in the `second_weight_tensor` case
 `rs.input_tensor` is set to `matmul_output_tensors.at(0)` rather than the caller's `rs_tensor`
-(`device/rs_matmul_op.cpp:165-172`), so the hashed `rs.input_tensor.memory_config()` will usually
+(`device/rs_matmul_op.cpp:250-255`), so the hashed `rs.input_tensor.memory_config()` would usually
 differ between the two modes. "Usually" is not a guarantee — a caller passing an `rs_tensor` whose
-memory config happens to match the matmul output's gets a collision. The `TT_FATAL` at
-`device/rs_matmul_op.cpp:132-134` enforces that exactly one of the two is supplied, which means both
-modes are genuinely reachable in one process.
+memory config happens to match the matmul output's got a collision. The `TT_FATAL` at
+`device/rs_matmul_op.cpp:217-219` enforces that exactly one of the two is supplied, which means both
+modes are genuinely reachable in one process — so the discriminator had to be keyed rather than inferred.
 
-**Reproduction.** Call 1 in single-weight mode with an `rs_tensor` whose dtype and memory config match
+**Reproduction (pre-fix).** Call 1 in single-weight mode with an `rs_tensor` whose dtype and memory config match
 what the two-weight mode would produce; call 2 in two-weight mode with the same reduce-scatter
 parameters. Same key. Call 2 hits a program built with one matmul output and no fused-op signaler,
 then `override_runtime_arguments` takes the two-weight branch and calls
@@ -272,9 +434,13 @@ at best an out-of-range access, at worst a silently mis-patched CB.
 
 ### 4. `operation_attributes.rs_op.output_mem_config`
 
-**Verdict: BUG.**
+**Verdict: RESOLVED by fab067a** (was BUG).
 
-Unlike its sibling `llama_reduce_scatter_create_heads`, where the equivalent field is dead, here
+Closed by hashing `operation_attributes.rs_op.output_mem_config` (`device/rs_matmul_op.cpp:159`). It is
+hashed as the whole `std::optional<MemoryConfig>`, so the engaged bit is keyed too — which matters,
+because "unset" selects the derived-grid branch rather than a particular grid.
+
+Pre-fix: unlike its sibling `llama_reduce_scatter_create_heads`, where the equivalent field is dead, here
 `output_mem_config` determines the reduce-scatter output tensor's shard spec:
 
 ```86:91:ttnn/cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter/device/llama_reduce_scatter_device_operation.cpp
@@ -304,7 +470,7 @@ and appears in reader, writer and compute compile-time args
 The only validation is a shard-height check
 (`.../llama_reduce_scatter/device/llama_reduce_scatter_device_operation.cpp:47-54`); the grid is free.
 
-**Reproduction.** Call 1 with `memory_config_rs=None` (the op derives a grid from the compute grid at
+**Reproduction (pre-fix).** Call 1 with `memory_config_rs=None` (the op derives a grid from the compute grid at
 `.../llama_reduce_scatter_device_operation.cpp:94-105`); call 2 with an explicit `memory_config_rs`
 placing the output shards on a different core set of the same size. Same key. The cached reader still
 writes back to the old cores via the `OUTPUT_CORE_XY` define, and the freshly allocated output tensor
@@ -312,9 +478,14 @@ is never written.
 
 ### 5. `operation_attributes.rs_op.subdevice_id`
 
-**Verdict: BUG** (via the matmul half only).
+**Verdict: RESOLVED by fab067a** (was BUG, via the matmul half only).
 
-`subdevice_id` is unwrapped at the top of the factory and handed to the matmul builder:
+Closed by adding it to the key (`device/rs_matmul_op.cpp:160-162`), hashed as a `uint32_t` with an
+`0xFFFFFFFF` sentinel for the disengaged optional so "unset" cannot collide with sub-device 0. (The
+factory dereferences it with `.value()` at `device/rs_matmul_program_factory.cpp:39`, so the disengaged
+case is unreachable through the fused launcher, but the sentinel costs nothing and keeps the term honest.)
+
+Pre-fix: `subdevice_id` is unwrapped at the top of the factory and handed to the matmul builder:
 
 ```39:41:ttnn/cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter_matmul/device/rs_matmul_program_factory.cpp
     tt::tt_metal::SubDeviceId sub_device_id = operation_attributes.rs_op.subdevice_id.value();
@@ -340,15 +511,31 @@ and, in the mcast variants, the multicast origin:
 The reduce-scatter half happens to be immune: `get_rs_core_grids` takes its available cores from
 `llama_specific::get_custom_cores(num_links)` rather than from the sub-device
 (`.../llama_reduce_scatter_program_factory.cpp:324`), and the `sub_device_cores` local computed at
-`.../llama_reduce_scatter_program_factory.cpp:436-438` is never subsequently read. So the exposure is
-entirely on the matmul side, but it is real: two calls differing only in `subdevice_id` share a cache
-entry and the second runs matmul kernels on the first's cores.
+`.../llama_reduce_scatter_program_factory.cpp:436-438` is never subsequently read. So the exposure was
+entirely on the matmul side, but it was real: two calls differing only in `subdevice_id` shared a cache
+entry and the second ran matmul kernels on the first's cores.
+
+One residual caveat survives the fix, and it is not an omission relative to the default key, because the
+default hash would not have caught it either: a `SubDeviceId` is just an id, and the core set it names
+depends on which sub-device manager is currently loaded on the mesh device. Two calls with the same id
+across a manager reload share a key and mean different grids. Every sub-device-aware op has this exposure.
 
 ### 6. `tensor_args.rs.intermediate_packet_buffer`
 
-**Verdict: BUG** for the spec; **VALID — patched** for the address.
+**Verdict: RESOLVED by fab067a** (was BUG) for the spec; **VALID — patched** for the address.
 
-The packet buffer's shard grid selects the packet-worker cores, and thence the whole core range the
+Closed by hashing the packet buffer's `memory_config` and `page_config`
+(`device/rs_matmul_op.cpp:173-174`). The `memory_config` term is the load-bearing one — it carries the
+shard grid that this finding is about — and `page_config` was added alongside it for the tile.
+
+Two properties are still dropped, and both are genuine relaxations rather than residue. The packet
+buffer's `dtype` never reaches the program: every byte size in the reduce-scatter half is derived from
+`input_tensor.dtype()` (`.../llama_reduce_scatter_program_factory.cpp:540-541`), which is hashed at
+`device/rs_matmul_op.cpp:163`. Its `logical_shape` is likewise unread — only the shard grid off its
+memory config is. Dropping both buys real reuse: one cached program serves packet buffers that differ in
+element type or declared extent as long as the grid and tile match.
+
+Pre-fix: the packet buffer's shard grid selects the packet-worker cores, and thence the whole core range the
 reduce-scatter kernels and CBs are built on:
 
 ```305:328:ttnn/cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter/device/llama_reduce_scatter_program_factory.cpp
@@ -378,7 +565,8 @@ reduce-scatter kernels and CBs are built on:
     auto all_cores_grid = packet_worker_cores_grid.merge(sender_core_grid);
 ```
 
-Note the compounding effect specific to *this* op: `rs_cores` (the second element of the returned
+Note the compounding effect specific to *this* op, and the reason the packet buffer's memory config had to
+be keyed rather than merely its page config: `rs_cores` (the second element of the returned
 tuple, i.e. `all_cores_grid`) is passed to the matmul as `restricted_cores`
 (`device/rs_matmul_program_factory.cpp:42`, `device/rs_matmul_program_factory.cpp:69` and
 `device/rs_matmul_program_factory.cpp:94`), so the packet buffer's grid also shifts the *matmul's*
@@ -411,11 +599,25 @@ Slot 0 of both the reduce-scatter reader and writer args
 
 Never a compile-time arg. Correctly omitted, correctly patched.
 
+Worth being precise about what dropping the whole attribute costs, since the address was never the issue:
+`GlobalSemaphore::attribute_values` is `(cores, buffer_type)` and excludes the address
+(`tt_metal/api/tt-metalium/global_semaphore.hpp:73-74`), so those two fields are all the default key would
+have carried. Neither is read by either factory. Omitting them is therefore a relaxation with a real if
+modest payoff: one cached program serves semaphores allocated over different core sets or buffer types,
+which the default hash would rebuild for.
+
 ### 8. `tensor_args.rs.input_tensor.logical_shape()`
 
-**Verdict: BUG.**
+**Verdict: RESOLVED by fab067a** (was BUG).
 
-The logical width is read directly and drives the work split:
+Closed by hashing `tensor_args.rs.input_tensor.logical_shape()` (`device/rs_matmul_op.cpp:170`). This is
+the one place in either of these two ops where the *logical* shape is the load-bearing term and no
+padded-shape proxy would do; the analysis below is why, and it is unchanged by the fix. Note the
+consequence for the Metal 2.0 port: this tensor parameter must be declared **without**
+`match_padded_shape_only`, because that flag would key `padded_shape` and drop exactly the term this
+finding shows is needed. The matmul operands take the opposite convention — see #1.
+
+Pre-fix: the logical width is read directly and drives the work split:
 
 ```298:302:ttnn/cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter/device/llama_reduce_scatter_program_factory.cpp
     const auto& input_tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
@@ -456,29 +658,55 @@ branch of `compute_output_specs` is for:
 ```
 
 The comment is explicit: the logical width (3584) and the shard-grid capacity (3840) are allowed to
-differ. So the logical width carries information the memory config does not.
+differ. So the logical width carries information the memory config does not — which is why the fix had to
+add `logical_shape` itself rather than a padded proxy, and why this half takes no relaxation at all.
 
-**Reproduction.** Two `rs_tensor`s with the identical memory config — 24 cores, shard width 160 — one
+**Reproduction (pre-fix).** Two `rs_tensor`s with the identical memory config — 24 cores, shard width 160 — one
 with logical width 3584 and one with logical width 3520. Same dtype, same everything else. Same key.
 `ncores_input` is `ceil(3584/160)=23` versus `ceil(3520/160)=22`, so the work `schedule` and the
 `SCHEDULE` compile-time define differ, and the second call reuses the first's. One core's worth of
 data is either read twice or never read.
 
-### 9. `tensor_args.rs.input_tensor.page_config` (the `Tile`) and `layout()` — the unguarded 32x32 assumption
+### 9. `tensor_args.rs.input_tensor.page_config` (the `Tile`) and `layout()` — the 32x32 assumption
 
-**Verdict: BUG.**
+**Verdict: RESOLVED by fab067a** (was BUG).
 
-**`page_config()` is confirmed absent from this hash.** The nine terms are six `rs_op` scalars plus
-exactly three tensor terms, and none of them is the page config, the tensor spec or even the layout:
+Closed by **both** available mechanisms, which is the right answer because the shared reduce-scatter
+factory exhibits both failure modes of the 32x32 pattern at once:
 
-```95:97:ttnn/cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter_matmul/device/rs_matmul_op.cpp
+- `tensor_args.rs.input_tensor.tensor_spec().page_config()` is now hashed
+  (`device/rs_matmul_op.cpp:166`). `PageConfig`'s reflected attribute is its inner variant
+  (`tt_metal/api/tt-metalium/tensor/spec/layout/page_config.hpp:50-51`), which carries the `Tile`, so tile
+  geometry is in the key. This is what the genuinely tile-aware arithmetic — `input_tiles_per_core_width`
+  and friends, and the whole matmul half — needed.
+- `validate_standard_tile` pins `Layout::TILE` and a 32x32 tile on the reduce-scatter input
+  (`device/rs_matmul_op.cpp:28-41`). This is what the hardcoded `tile_size(cb_data_format)` page sizing
+  needed: hashing alone would only have given a mis-sized non-32x32 program its own cache entry rather
+  than making it correct.
+
+The guard's placement is the interesting part, and it is specific to this op. Because `Matmul_RS` defines
+`validate_on_program_cache_hit`, the miss validator is **not** substituted onto the hit path
+(`ttnn/api/ttnn/device_operation.hpp:265-268`), so a guard installed only in
+`validate_on_program_cache_miss` would not fire on reuses. fab067a therefore calls the shared helper from
+both validators explicitly — `:61` on the hit path and `:80` on the miss path — which is what makes it a
+`TT_FATAL` that actually runs on hits and so qualifies the `layout()` omission as "pinned by validation".
+The helper's own comment says as much.
+
+The guard covers the reduce-scatter input only. The matmul operands are not pinned to 32x32 and do not
+need to be: that half is tile-aware throughout, and their tiles are keyed via `mm_in`/`mm_w`'s
+`page_config` (`:175`, `:179`).
+
+Pre-fix, **`page_config()` was confirmed absent from this hash.** The nine terms were six `rs_op` scalars plus
+exactly three tensor terms, and none of them was the page config, the tensor spec or even the layout:
+
+```163:165:ttnn/cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter_matmul/device/rs_matmul_op.cpp
         tensor_args.rs.input_tensor.dtype(),
         tensor_args.rs.input_tensor.memory_config(),
-        tensor_args.rs.input_tensor.device()->id());
+        tensor_args.rs.input_tensor.device()->id(),
 ```
 
-So the `Tile` is not in the key by any route, and the BUG grade below turns on that. Both failure
-modes of the unguarded-32x32 pattern are then present at once, in the same factory.
+So the `Tile` was not in the key by any route, and the BUG grade turned on that. Both failure
+modes of the unguarded-32x32 pattern were then present at once, in the same factory.
 
 **Tile-aware for tile counts.** The reduce-scatter half reads the real tile and divides the shard
 width by it:
@@ -534,8 +762,8 @@ these land in the reader's compile-time args:
 and in the writer's (`.../llama_reduce_scatter_program_factory.cpp:703-706`). The matmul half is
 tile-aware throughout, as every matmul factory in the tree is, so it too varies with `Tile`.
 
-**No guard.** The miss validator pins the packet buffer's tile to *match the input's*, but never pins
-the input's own tile to a value:
+**No guard — pre-fix.** The reduce-scatter miss validator pins the packet buffer's tile to *match the
+input's*, but never pins the input's own tile to a value:
 
 ```42:46:ttnn/cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter/device/llama_reduce_scatter_device_operation.cpp
     TT_FATAL(
@@ -546,11 +774,13 @@ the input's own tile to a value:
 ```
 
 That is a consistency check between two tensors, not a geometry check. All three adjudication
-criteria hold — the op accepts `Layout::TILE`, host-side code calls `tt::tile_size(...)`, and nothing
-validates the tile geometry — and the mirror-image criterion holds too, since the tile-count
-arithmetic provably varies with `Tile` while `Tile` is absent from the key.
+criteria held — the op accepts `Layout::TILE`, host-side code calls `tt::tile_size(...)`, and nothing
+validated the tile geometry — and the mirror-image criterion held too, since the tile-count
+arithmetic provably varies with `Tile` while `Tile` was absent from the key. fab067a added the missing
+geometry check as `validate_standard_tile` (`device/rs_matmul_op.cpp:28-41`); the consistency check
+quoted above is unchanged and still useful, since it now transitively pins the packet buffer to 32x32 too.
 
-**Reproduction.** Two calls with the same `rs_tensor` dtype and memory config (say 24 cores, shard
+**Reproduction (pre-fix).** Two calls with the same `rs_tensor` dtype and memory config (say 24 cores, shard
 width 160), the same `dim`, `cluster_axis`, `ring_devices`, `num_links`, `topology` and
 `use_noc1_only`; the first with `Tile{32, 32}` and the second with `Tile{16, 32}`. The nine hash terms
 are identical, so the second call hits the first's entry. The cached program has
@@ -570,7 +800,8 @@ lives. Exactly two ops build through that shared factory — this one and the st
 `experimental/ccl/llama_reduce_scatter` — so both inherit the defect and both would be fixed by a
 single change there. The third sibling, `experimental/ccl/llama_reduce_scatter_create_heads`, has its
 own factory and is genuinely free of host-side tile math, so it neither inherits the defect nor the
-fix.
+fix. fab067a chose to guard at each caller rather than fix the shared factory, so the
+`tile_size(cb_data_format)` calls are still there; that is recorded under "Non-cache correctness defects".
 
 ### 10. `tensor_args.rs.input_tensor` alignment and storage kind, and all buffer addresses
 
@@ -578,11 +809,21 @@ fix.
 only on the miss path** (storage kind).
 
 Alignment reaches the program only via the buffer page size, itself determined by the hashed
-`{memory_config, dtype}` plus the tile discussed in #9. Storage kind is pinned by the miss validator's
-requirement of a shard spec — but this op defines `validate_on_program_cache_hit`, so that
-requirement does not run on a hit (rule 4a-ii), which is why the verdict is CAVEAT rather than VALID.
-It is only a CAVEAT and not a BUG because the factory's `buffer()` dereferences fault on a
-host-storage tensor rather than aliasing silently. Buffer addresses must not
+`{memory_config, dtype, page_config}` plus the 32x32 tile that `validate_standard_tile` now pins; with
+`Layout::TILE` and a 32x32 tile fixed, the default alignment is exactly the tile dims
+(`tt_metal/impl/tensor/spec/layout/page_config.cpp:43-57`), so there is nothing left for it to vary.
+
+Storage kind is pinned by the miss validator's requirement of a shard spec — but this op defines
+`validate_on_program_cache_hit`, so that requirement does not run on a hit (rule 4a-ii), which is why the
+verdict is CAVEAT rather than VALID. It is only a CAVEAT and not a BUG because a host-storage tensor
+faults rather than aliasing silently. fab067a's commit message lists a `storage_type()` check "covering
+`device()` dereference" among the validators it moved into a shared helper for `llama_rs_matmul`; the
+helper it actually added (`validate_standard_tile`, `device/rs_matmul_op.cpp:28-41`) checks layout and
+tile only. So the fault point is unchanged, and it is earlier than the factory: `compute_program_hash`
+itself dereferences `tensor_args.rs.input_tensor.device()` (`device/rs_matmul_op.cpp:165`), which is a
+null dereference on a host tensor before any validator or factory runs. Diagnostics gap, not a cache bug.
+
+Buffer addresses must not
 be hashed and are all patched: the reduce-scatter input, output and packet CBs at
 `.../llama_reduce_scatter_program_factory.cpp:884-886`, and the matmul operands and outputs through
 `override_program_parameters`
@@ -597,7 +838,7 @@ The reduce-scatter half derives its chip index and neighbours from `mesh_coordin
 `cluster_axis`, `ring_devices` and `topology`. The latter three are hashed; the first is folded in by
 the framework for both hash paths:
 
-```989:992:ttnn/api/ttnn/mesh_device_operation_adapter.hpp
+```1012:1015:ttnn/api/ttnn/mesh_device_operation_adapter.hpp
         // Combine with the mesh coordinates the workload is targeting.
         for (const auto& coord : mesh_device_operation_utils::extract_tensor_coordinates(tensor_args, mesh_device)) {
             hash = ttsl::hash::hash_objects(hash, coord);
@@ -618,74 +859,94 @@ assumption as every fabric CCL op in the tree.
 
 ## Keys the custom hash adds beyond the default
 
+Two things.
+
 `tensor_args.rs.input_tensor.device()->id()`. The default reflection hash does not include the device
 id (`DeviceStorage` has an empty attribute tuple, so neither buffer nor device reaches the key) and
 the framework appends only mesh coordinates, which do not identify which mesh. Adding the id makes
-an entry non-transferable between two `MeshDevice`s. It does not compensate for any of the omissions
-above.
+an entry non-transferable between two `MeshDevice`s.
+
+Since fab067a, the global CB's `buffer_address()` and `config_address()` are also beyond the default:
+`GlobalCircularBuffer::attribute_values` is `(sender_receiver_core_mapping, size, buffer_type)`
+(`tt_metal/api/tt-metalium/global_circular_buffer.hpp:77-82`), so reflection keys the GCB's *structure*
+but not which allocation it is — and a GCB-backed CB cannot be re-pointed on a hit
+(`tt_metal/impl/host_api/tt_metal.cpp:1688`), so hashing the allocation identity is the only option.
 
 ## Framework side effect of having a custom hash
 
-```1012:1014:ttnn/api/ttnn/mesh_device_operation_adapter.hpp
+```1035:1037:ttnn/api/ttnn/mesh_device_operation_adapter.hpp
         if constexpr (requires { DeviceOperation::compute_program_hash(attrs, tensor_args); }) {
             return key;  // custom hash -> opt out beyond the op-identity prefix
         } else {
 ```
 
 `ProgramCacheKey::canonical` degrades to the op type name, so a 64-bit collision resolves to a wrong
-hit rather than a rebuild. Given how few terms this hash has, the effective key space here is also
-unusually small.
+hit rather than a rebuild. Unchanged by fab067a, but much less consequential now: the pre-fix concern was
+that a nine-term key made the effective key space unusually small, and it is thirty terms wide today.
 
 ## Summary
 
 | Omitted vs. default | Used by program? | Patched on hit? | Verdict |
 |---|---|---|---|
-| `matmul.input_tensor`, `matmul.weight_tensor` | Yes — M/K/N, tile sizes, all CB formats, work split | Addresses only | **BUG** |
-| `operation_attributes.matmul` (all `MatmulParams`) | Yes — compute kernel structure, blocking, activation, output dtype | No | **BUG** |
-| `second_weight_tensor` (presence) | Yes — selects the program branch and the output arity | No | **BUG** |
-| `rs_op.output_mem_config` | Yes — `OUTPUT_CORE_XY` define, output/accumulator CB sizes, compile args | No | **BUG** |
-| `rs_op.subdevice_id` | Yes — matmul core pool and mcast origin | No | **BUG** |
-| `rs.intermediate_packet_buffer` spec | Yes — packet-worker cores, and via `restricted_cores` the matmul placement too | Address only | **BUG** |
-| `rs.input_tensor.logical_shape` | Yes — `ncores_input`, `SCHEDULE` define, compile args | No | **BUG** |
-| `rs_op.cross_device_semaphore` | Yes — reader/writer slot 0 | Yes | VALID — patched |
-| `rs.input_tensor.page_config` (`Tile`) / `layout` | Yes — tiles-per-core arithmetic, and every CB page size via a hardcoded 32x32 `tile_size()` | No | **BUG** |
+| `matmul.input_tensor`, `matmul.weight_tensor` | Yes — M/K/N, tile sizes, all CB formats, work split | Addresses only | **RESOLVED by fab067a** — `padded_shape`, `dtype`, `memory_config`, `page_config` now hashed for both |
+| `operation_attributes.matmul` (all `MatmulParams`) | Yes — compute kernel structure, blocking, activation, output dtype | No | **RESOLVED by fab067a** — hashed whole, plus the GCB's two addresses |
+| `second_weight_tensor` (presence) | Yes — selects the program branch and the output arity | No | **RESOLVED by fab067a** — `has_value()` hashed |
+| `rs_op.output_mem_config` | Yes — `OUTPUT_CORE_XY` define, output/accumulator CB sizes, compile args | No | **RESOLVED by fab067a** — hashed, engaged bit included |
+| `rs_op.subdevice_id` | Yes — matmul core pool and mcast origin | No | **RESOLVED by fab067a** — hashed with a sentinel for the disengaged optional |
+| `rs.intermediate_packet_buffer` `memory_config`/`page_config` | Yes — packet-worker cores, and via `restricted_cores` the matmul placement too | Address only | **RESOLVED by fab067a** — both hashed |
+| `rs.intermediate_packet_buffer` `dtype`/`logical_shape` | No — all byte sizes come from the hashed `rs.input_tensor.dtype()` | n/a | VALID — relaxation win |
+| `rs.input_tensor.logical_shape` | Yes — `ncores_input`, `SCHEDULE` define, compile args | No | **RESOLVED by fab067a** — hashed; no padded proxy would have worked |
+| `rs_op.cross_device_semaphore` (the default keys only `cores`/`buffer_type`, never the address) | Address: yes — reader/writer slot 0. `cores`/`buffer_type`: no | Yes | VALID — patched; dropping the two structural fields is a deliberate relaxation |
+| `rs.input_tensor.page_config` (`Tile`) / `layout` | Yes — tiles-per-core arithmetic, and every CB page size via a hardcoded 32x32 `tile_size()` | No | **RESOLVED by fab067a** — `page_config` hashed *and* pinned to TILE/32x32 by `validate_standard_tile` |
+| `matmul.input_tensor`, `matmul.weight_tensor` `logical_shape` | No — the matmul helper works in padded shapes | n/a | VALID — relaxation (present but not needed) |
 | `rs.input_tensor.alignment` | Only via hashed derivatives | n/a | VALID — unused |
-| `rs.input_tensor` storage kind | n/a | n/a | CAVEAT — pinned only on the miss path (faults in the factory rather than aliasing) |
+| `rs.input_tensor` storage kind | n/a | n/a | CAVEAT — pinned only on the miss path (faults in `compute_program_hash` rather than aliasing) |
 | All buffer addresses | Yes | Yes | VALID — patched |
 | `ring_index`, fabric neighbours | Yes — compile args | n/a | VALID — invariant (keyed via the mesh coordinates the framework appends) |
 | Fabric connection rt args | Yes | No | CAVEAT — relies on fixed fabric config |
 
-**Program-cache bugs were found — eight of them, and this is the weakest hash of the four CCL ops in
-this audit.** The root cause is structural rather than incidental: `compute_program_hash` is a
-verbatim copy of the standalone `LlamaReduceScatterDeviceOperation` key, and the matmul half of the
-fusion was never added to it. Two calls that differ *only* in their matmul — different weights,
-different program config, different activation, different output dtype — are indistinguishable to the
-cache. The eighth is the tile omission (#9), which is independent of the fusion problem and would be
-present in the standalone reduce-scatter too. The `validate_on_program_cache_hit` hook, which might
-have been expected to catch this, only re-checks the current call's internal consistency and provides
-no protection.
+**Zero program-cache bugs remain.** All eight recorded above are closed by fab067a, and the root cause is
+gone with them: `compute_program_hash` was a verbatim copy of the standalone
+`LlamaReduceScatterDeviceOperation` key with the matmul half of the fusion never added, so two calls
+differing *only* in their matmul — different weights, different program config, different activation,
+different output dtype — were indistinguishable to the cache. Both halves are keyed now. The eighth,
+the tile omission (#9), was independent of the fusion problem and is present in the standalone
+reduce-scatter too; it was closed here by hashing `page_config` and by a `TT_FATAL` that this op had to
+install in *both* validators, because defining `validate_on_program_cache_hit` suppresses the miss
+validator on hits.
 
-The op works in the Llama model because every one of these parameters is fixed there. It is not safe
-against its own public API.
+What is left is three relaxations — the matmul operands' `logical_shape`, the packet buffer's
+`dtype`/`logical_shape`, and the semaphore's `(cores, buffer_type)` — each over a value the program is
+genuinely invariant to. Only the packet buffer's and the semaphore's buy meaningful reuse; the matmul
+operands' is real but nearly inert, since `weight_tensor.logical_shape()` still reaches the key
+indirectly through `user_run_batched` in the hashed `MatmulParams`.
 
 ## Recommendations
 
-1. Add the matmul-side tensors to the hash. At minimum
+Recommendations 1 through 7 are **done**, implemented by fab067a; they are kept here with their outcome so
+the reasoning behind each change stays on record. 8 remains open.
+
+1. **Done.** Add the matmul-side tensors to the hash. At minimum
    `tensor_args.matmul.input_tensor.{padded_shape, dtype, layout, memory_config}` and the same four
    for `weight_tensor`; mirror whatever selectivity the standalone
-   `ttnn::prim::MatmulDeviceOperation` hash applies so the two stay consistent.
-2. Hash `operation_attributes.matmul`. It is fully reflectable, so a single extra argument to
+   `ttnn::prim::MatmulDeviceOperation` hash applies so the two stay consistent. *Landed as
+   `{page_config, padded_shape, dtype, memory_config}` for both operands (`device/rs_matmul_op.cpp:175-182`)
+   — `page_config` in place of `layout`, which subsumes it.*
+2. **Done.** Hash `operation_attributes.matmul`. It is fully reflectable, so a single extra argument to
    `hash_operation` covers `program_config`, `compute_kernel_config`, `output_dtype`,
-   `output_mem_config`, `activation`, `transpose_a/b`, `output_tile` and `global_cb` at once.
-3. Hash `tensor_args.second_weight_tensor.has_value()` at the very least — one bit that currently
+   `output_mem_config`, `activation`, `transpose_a/b`, `output_tile` and `global_cb` at once. *Landed at
+   `:145`, plus the GCB's `buffer_address()`/`config_address()` (`:151-156`) that reflection cannot reach.*
+3. **Done.** Hash `tensor_args.second_weight_tensor.has_value()` at the very least — one bit that
    selects between two incompatible programs — and preferably the tensor's properties as in
-   recommendation 1.
-4. Hash `rs_op.output_mem_config` and `rs_op.subdevice_id`.
-5. Hash `tensor_args.rs.intermediate_packet_buffer.memory_config()`; it moves both halves of the
-   fusion through `restricted_cores`.
-6. Hash `tensor_args.rs.input_tensor.logical_shape()`. The over-provisioned-shard-grid case this op
-   explicitly supports makes the shape genuinely independent of the hashed memory config.
-7. Close the tile gap (#9), **in the shared factory rather than here**. The hardcoded
+   recommendation 1. *Landed as the bit alone (`:138`), which is sufficient: the factory reads the tensor
+   for its presence only.*
+4. **Done.** Hash `rs_op.output_mem_config` and `rs_op.subdevice_id`. *Landed at `:159` and `:160-162`.*
+5. **Done.** Hash `tensor_args.rs.intermediate_packet_buffer.memory_config()`; it moves both halves of the
+   fusion through `restricted_cores`. *Landed at `:174`, with `page_config` at `:173`.*
+6. **Done.** Hash `tensor_args.rs.input_tensor.logical_shape()`. The over-provisioned-shard-grid case this op
+   explicitly supports makes the shape genuinely independent of the hashed memory config. *Landed at
+   `:170`.*
+7. **Partly done.** Close the tile gap (#9), **in the shared factory rather than here**. The hardcoded
    `tile_size(cb_data_format)` calls are at
    `ttnn/cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter/device/llama_reduce_scatter_program_factory.cpp:315`
    and `:426`, and the tile-count arithmetic that already reads the real tile is in the same file at
@@ -701,13 +962,71 @@ against its own public API.
    `input_tensor.tensor_spec().tile().get_tile_size(cb_data_format)` and hashing
    `tensor_spec().page_config()` must land in the same change. Fixing only the page size would leave
    a factory that is fully tile-aware and a key that still cannot tell two tiles apart, which reads as
-   correct and aliases anyway. Note that hashing `page_config()` covers the tile *shape* only:
+   correct and aliases anyway. *Landed as the guard route, but per-caller rather than in the shared
+   factory: `validate_standard_tile` (`device/rs_matmul_op.cpp:28-41`, called from both validators at
+   `:61` and `:80`) plus the `page_config` hash term (`:166`). The cache defect is fully closed. The
+   shared factory's `tile_size(cb_data_format)` calls are untouched — see "Non-cache correctness defects"
+   below.*
+   Note that hashing `page_config()` covers the tile *shape* only:
    `Tile::attribute_values()` exposes just `tile_shape`, `face_shape` and `num_faces`
    (`tt_metal/api/tt-metalium/tile.hpp:46-47`) and `Tile::operator==` compares only the first two
    (`tt_metal/impl/data_format/tile.cpp:122-124`), so `transpose_within_face` and `transpose_of_faces`
    stay invisible to both halves of the key. That hole is framework-wide rather than specific to this
-   op, and only an explicit `TT_FATAL` on the two transpose accessors closes it.
-8. Consider deriving this op's hash by *composing* the two component hashes —
+   op, and only an explicit `TT_FATAL` on the two transpose accessors closes it. Here the guard makes it
+   moot for the reduce-scatter input; the matmul operands and `MatmulParams::output_tile` are still
+   exposed to it in principle.
+8. **Open.** Consider deriving this op's hash by *composing* the two component hashes —
    `hash_objects(LlamaReduceScatter-key, Matmul-key)` — rather than hand-copying one of them. That
    makes the fusion's key automatically track future changes to either component and prevents this
-   class of copy-and-forget regression.
+   class of copy-and-forget regression. fab067a fixed the instance but not the pattern: the key is still
+   hand-written and will drift again if either component's key changes.
+
+## Non-cache correctness defects
+
+These were found while auditing the cache key but are **not** program-cache bugs and must not be counted as
+such. Neither affects the key's soundness.
+
+### N1. `LlamaReduceScatterDeviceOperation::validate_on_program_cache_hit` is an empty stub
+
+```57:58:ttnn/cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter/device/llama_reduce_scatter_device_operation.cpp
+void LlamaReduceScatterDeviceOperation::validate_on_program_cache_hit(
+    const operation_attributes_t& /*attributes*/, const tensor_args_t& /*tensor_args*/) {}
+```
+
+Defining it at all is what does the damage: the dispatcher runs exactly one validator on a hit
+(`ttnn/api/ttnn/device_operation.hpp:265-268`), so declaring an empty hit validator suppresses the miss
+validator rather than supplementing it. Every check in
+`LlamaReduceScatterDeviceOperation::validate_on_program_cache_miss` — the shard-height constraint on the
+output memory config (`:47-54`), the packet-buffer-tile-matches-input constraint (`:42-46`) — therefore
+runs on the first call with a given key and never again. `Matmul_RS` inherits this because its own hit
+validator delegates to the stub (`device/rs_matmul_op.cpp:60`).
+
+**Why this is a diagnostics problem and not a cache bug.** Every value those checks constrain is now in the
+key: `rs_op.output_mem_config` at `device/rs_matmul_op.cpp:159`, the packet buffer's `page_config` and
+`memory_config` at `:173-174`, and the reduce-scatter input's `page_config` at `:166`. A call that
+violates one of them therefore differs from the cached call in a hashed term, so it misses, takes the
+compile path, and meets the `TT_FATAL` there. It cannot reach a cached program via a hit and skip the
+check. What is lost is the *timing and clarity* of the diagnostic on the one path where a hit is possible
+— namely a violating call that is the first of its key, which is a miss anyway. In practice the residual
+exposure is nil; the defect is that the code encodes an assumption ("hit validation is unnecessary here")
+that is only true because of a property of the hash, and nothing links the two. Deleting the stub would
+restore substitution of the miss validator and cost nothing.
+
+### N2. The shared reduce-scatter factory still assumes a 32x32 tile
+
+```426:426:ttnn/cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter/device/llama_reduce_scatter_program_factory.cpp
+    uint32_t input_page_size = tile_size(cb_data_format);
+```
+
+and identically at `.../llama_reduce_scatter_program_factory.cpp:315`. The free function
+`tt::tile_size(fmt)` always returns the byte size of a 32x32 tile; the tile-aware API is
+`tile.get_tile_size(data_format)`. Two lines earlier the same function divides shard widths by the
+tensor's *real* tile (`:298`, `:302`, `:398-411`), so the two sides of the same page arithmetic disagree
+about what a tile is whenever the tile is not 32x32.
+
+`validate_standard_tile` (`device/rs_matmul_op.cpp:28-41`) makes this latent rather than live *for this
+op*: a non-32x32 reduce-scatter input is now rejected on both the miss and the hit path, so the hardcoded
+page size is correct for every input this op accepts. The defect is that the factory is shared, the guard
+is not, and the factory still reads as though it handles arbitrary tiles on one side and 32x32 on the
+other. The durable fix is the one recommendation 7 describes: replace the two `tile_size` calls in the
+shared factory and drop the per-caller guards, in a single change.

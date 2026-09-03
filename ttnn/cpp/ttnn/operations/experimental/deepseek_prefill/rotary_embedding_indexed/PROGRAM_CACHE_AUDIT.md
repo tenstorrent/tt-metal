@@ -18,6 +18,93 @@ against the framework default ("hash everything") key.
 | Cache-hit patch mechanism | **Op-owned override**, applied through Metal 2.0 `UpdateProgramRunArgs`. `resolve_bindings` and the descriptor buffer-binding fast path are not involved at all |
 | In-place | No — the op allocates a fresh output tensor |
 
+## Post-fix status — commit fab067a
+
+**Verdict: CLEAR — with one justified relaxation** (`kv_actual_global`). Every other omission relative
+to the framework default is now zero-value: pinned by a `TT_FATAL` that genuinely runs on the
+cache-hit path, or functionally determined by a term that is in the key. No program-cache correctness
+bug remains, and the miss-path factory defect recorded in omission 5 is closed as well.
+
+**What fab067a changed in this op**
+
+- `compute_program_hash` now hashes each operand's whole `tensor_spec()` rather than a projection of
+  it (`device/rotary_embedding_indexed_device_operation.cpp:262-275`), with the optional `metadata`
+  tensor's spec folded in when engaged (`:271-274`). That one change subsumes pre-fix omissions 2, 3,
+  4 and 5: `logical_shape`, `dtype`, `page_config` (hence the `Tile`), `memory_config` and `alignment`
+  are now in the key for all five tensors.
+- Added a `require_standard_tile` lambda to the **shared** `validate_runtime_args` (`:87-109`),
+  applied to all four operands (`:106-109`). It asserts both `layout() == Layout::TILE` and 32x32 tile
+  geometry, so the three unhashed `Layout::TILE` pins of omission 4 run on hits for the first time,
+  and a non-32x32 call is now reported by operand name instead of compiling a mis-sized program.
+- Added `cos.storage_type() == StorageType::DEVICE` to `validate_runtime_args` (`:72-75`) — the one
+  operand whose `device()` is dereferenced on the following line.
+- Rewrote the two comments that overclaimed safety: the hash rationale (`:245-261`) and the hit
+  validator's (`:224-227`), which now states explicitly that anything which must hold on a hit belongs
+  inside `validate_runtime_args`.
+- Documented the 32x32 tile requirement in the nanobind docstring
+  (`rotary_embedding_indexed_nanobind.cpp:45-47`).
+
+**What remains open**
+
+- `attrs.kv_actual_global` stays out of the key by design — a reader common runtime arg re-applied on
+  every hit (`:658-661`) and consumed only on-device. This is the relaxation the op exists to exploit,
+  and it is paid for by the per-hit shard-bound check at `:140-160`.
+- The op still defines `validate_on_program_cache_hit`
+  (`device/rotary_embedding_indexed_device_operation.hpp:90`), so the miss validator is still
+  *replaced* rather than supplemented on hits, and everything above the delegation at `:219` remains
+  miss-only. That is now benign — see the regraded reachability table below — but the argument has to
+  be re-derived whenever the key is loosened.
+- Defining a custom hash still forfeits attribute-level collision resolution
+  (`ttnn/api/ttnn/mesh_device_operation_adapter.hpp:1035-1036`); unchanged by this commit. On a
+  colliding hit every operand spec is now compared exactly, so a collision would have to be between
+  two configurations whose five specs all agree and which differ only in `cluster_axis`,
+  `compute_kernel_config` or `output_mem_config`.
+
+**Metal 2.0 port**
+
+Clear to port, and this op is the model the other three should follow. It carries **no**
+logical-vs-padded relaxation at all: pre-fix it hashed `padded_shape` and dropped the operands'
+`logical_shape`, and fab067a moved it to hashing `tensor_spec()` wholesale, which is strictly finer —
+`padded_shape` is a derivation of `logical_shape`, `page_config` and `alignment`, all now in the key.
+So there is nothing here to express as a `TensorSpecRelaxations` flag, and the op's `TensorParameter`s
+are correctly left with default-constructed relaxations
+(`tt_metal/api/tt-metalium/experimental/metal2_host_api/tensor_spec_relaxations.hpp:41`), which require
+an exact match. The next subsection is why that agreement is the property to preserve in the ports of
+its two `kv_cache` siblings.
+
+### The `report_tensor_arg_mismatch` interaction
+
+This is the specific defect the hash rewrite closes, and it is worth stating precisely, because it is
+the failure mode the siblings' Metal 2.0 ports will inherit if they key on a projection.
+
+The framework derives the run-time accept/reject predicate and the relaxation-aware hash from **one**
+field set. `pertinent_fields` maps a `TensorSpecRelaxations` to the fields that are load-bearing
+(`tt_metal/impl/metal2_host_api/tensor_spec_relaxations.cpp:67-87` — `match_padded_shape_only` maps to
+`PertinentFields{.padded_shape = true}`, and a default-constructed relaxation maps to
+`PertinentFields{.whole_spec = true}`), and both `hash_tensorspec_with_relaxation` (`:116`) and
+`tensorspecs_match_with_relaxation` (`:161-201`) consume that same set. `ValidateTensorArgs` delegates
+its accept/reject to the predicate on every dispatch
+(`tt_metal/impl/metal2_host_api/program_run_args.cpp:176-189`), throwing through
+`report_tensor_arg_mismatch` on rejection.
+
+**Pre-fix:** the key was a projection of each spec, while the `TensorParameter`s were declared with
+default relaxations and therefore compared `whole_spec`. The two disagreed. Two `cos` tensors differing
+only in a field the projection dropped — `logical_shape`, or `alignment` — computed the *same* key, hit
+the cache, and were then rejected by `report_tensor_arg_mismatch` when `UpdateProgramRunArgs` compared
+the whole spec. Fail-safe, but the outcome was a hard throw on a call that should simply have compiled
+a second program: the hash relaxed exactly what the framework then required exactly.
+
+**Post-fix:** the key hashes `tensor_spec()` wholesale, which is the same field set `whole_spec`
+compares, so key and predicate agree **by construction**. The two `cos` tensors now compute different
+keys, miss, and rebuild. No spec difference can produce a hit-then-throw any more.
+
+The generalisable rule for the ports: the hash must key on the same fields the declared
+`TensorSpecRelaxations` makes load-bearing. Either hash the whole spec and leave the relaxations
+default, as this op now does, or declare the relaxation you actually want — `match_padded_shape_only`
+(`tensor_spec_relaxations.hpp:49`) for a genuine padded-shape-only dependence — and key on
+`padded_shape`. Hashing a projection while validating strictly is the one combination that is always
+wrong.
+
 ## Cache-hit patch mechanism
 
 `select_program_factory` always returns `MeshWorkloadFactory`
@@ -133,11 +220,13 @@ An op that defines no hit validator gets the miss validator substituted on hits,
 hold. **This op defines one** (`device/rotary_embedding_indexed_device_operation.hpp:90`), so the miss
 validator does not run on a hit at all:
 
-```187:192:ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/rotary_embedding_indexed/device/rotary_embedding_indexed_device_operation.cpp
+```222:229:ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/rotary_embedding_indexed/device/rotary_embedding_indexed_device_operation.cpp
 void RotaryEmbeddingIndexedDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     // kv_actual_global is not hashed and can differ from the compiled program's call; re-validate
-    // every hit. Structural constraints are hashed and so guaranteed unchanged here.
+    // every hit. Structural specs are hashed wholesale, so a structural change misses rather than
+    // arriving here -- but note the checks above the delegation in validate_on_program_cache_miss are
+    // miss-only, so anything that must hold on a hit belongs in validate_runtime_args.
     validate_runtime_args(args, tensor_args);
 }
 ```
@@ -149,7 +238,9 @@ hit path therefore loses all of the following:
 - `storage_type() == DEVICE` on `input`, `cos`, `sin` and `trans_mat` (`:142-145`).
 - The `buffer() != nullptr` checks and the `device() == input.device()` checks on all four operands
   (`:149-155`).
-- `Layout::TILE` on all four operands (`:157-160`).
+- `Layout::TILE` on all four operands (`:157-160`). **Post-fix this loss is nominal**: fab067a's
+  `require_standard_tile` re-asserts `layout() == Layout::TILE` on all four inside
+  `validate_runtime_args` (`:92-96`), so the pin holds on both paths through a different line.
 - The rank-4 checks and the `trans_mat` single-tile check (`:166-176`).
 - `cos.dtype() == sin.dtype()`, `cos_shape == sin_shape`, and the input-vs-cos head-dim equality
   (`:177-179`).
@@ -160,12 +251,16 @@ What *does* run on both paths is `validate_runtime_args` (`:60-126`): the `clust
 `metadata.dtype() == UINT32` pin that omission 2 relies on), and the scalar-path `kv_actual_global`
 tile-alignment and shard-bound checks.
 
-The comment on the hit validator asserts that "structural constraints are hashed and so guaranteed
-unchanged here." That is true of the shapes and dtypes it has in mind, but it is not true of the four
-`Layout::TILE` pins or the four `storage_type()` pins, which are neither hashed nor re-run — hence the
-regrade of omissions 4 and 7 below from `VALID — pinned by validation` to
-`CAVEAT — pinned only on the miss path`. Omission 2 is unaffected, because its pin genuinely does live
-in `validate_runtime_args`.
+Pre-fix, the comment on the hit validator asserted that "structural constraints are hashed and so
+guaranteed unchanged here." That was true of the shapes and dtypes it had in mind, but not of the four
+`Layout::TILE` pins or the four `storage_type()` pins, which were then neither hashed nor re-run —
+which is what drove the pre-fix regrade of omissions 4 and 7 to
+`CAVEAT — pinned only on the miss path`. fab067a closes both: the layout pins are re-asserted inside
+`validate_runtime_args` by `require_standard_tile` (`:92-96`) *and* the layout is now hashed as part of
+`page_config`, and the storage pins turn out never to have been reachable at all — see the framework
+correction under omission 7. The comment itself was rewritten (`:224-227`) and now describes the actual
+contract. Omission 2 was never affected, because its pin genuinely does live in
+`validate_runtime_args`.
 
 This op is better off than its two siblings in the same situation, for the same reason it is better off
 on the tile: the framework's exact `TensorSpec` comparison independently rejects a `layout` divergence
@@ -175,25 +270,27 @@ not cover the storage-kind or cross-tensor-equality checks — so the caveats ar
 **Which of the dropped checks are actually reachable.** The list above is the mechanical diff, but most
 of those checks constrain values that are themselves in the cache key, and a miss-only pin on a *hashed*
 value cannot be evaded: any call carrying a new value of that parameter misses, and the miss validator
-runs and rejects it there. Filtering the list against `compute_program_hash:230-250`:
+runs and rejects it there. Filtering the list against the post-fix
+`compute_program_hash:262-275`, which keys every operand's whole `tensor_spec()`:
 
 | Dropped check | Constrains | In the key? | Reachable on a hit? |
 |---|---|---|---|
-| `storage_type() == DEVICE` ×4 (`:142-145`) | storage variant kind | No | **Yes** |
-| `buffer() != nullptr` ×4, `device() == input.device()` ×3 (`:149-155`) | allocation and device identity | No | **Yes** |
-| `Layout::TILE` ×4 (`:157-160`) | `cos`/`sin`/`trans_mat` layout | No (only `input.layout()` is) | **Yes**, but the framework spec check rejects it |
-| Rank-4 on `input` and `cos` (`:166-167`) | both padded shapes | Yes, both | No |
-| `trans_mat` single-tile check (`:170-176`) | `trans_mat.padded_shape()` | Yes | No |
+| `storage_type() == DEVICE` ×4 (`:142-145`) | storage variant kind | No | No — pinned by the framework in `launch()`, see omission 7 |
+| `buffer() != nullptr` ×4 (`:149-152`) | allocation | No | No — pinned by the framework in `launch()`, see omission 7 |
+| `device() == input.device()` ×3 (`:153-155`) | device identity | No | **Yes** |
+| `Layout::TILE` ×4 (`:157-160`) | all four operands' layout | Yes, via `page_config` | No — and re-asserted on both paths by `require_standard_tile` (`:92-96`) |
+| Rank-4 on `input` and `cos` (`:166-167`) | both specs | Yes, both | No |
+| `trans_mat` single-tile check (`:170-176`) | `trans_mat`'s spec | Yes | No |
 | `cos.dtype() == sin.dtype()` (`:177`) | both dtypes | Yes, both | No |
-| `cos_shape == sin_shape`, input-vs-cos head dim (`:178-179`) | both padded shapes | Yes, both | No |
-| Input seq tile-alignment (`:182`) | `input.padded_shape()` | Yes | No |
+| `cos_shape == sin_shape`, input-vs-cos head dim (`:178-179`) | both specs | Yes, both | No |
+| Input seq tile-alignment (`:182`) | `input`'s spec | Yes | No |
 
-So the reachable losses are the allocation-and-device block (`:142-155`) and the three layout pins
-(`:157-160`) — and none of them fails silently. The allocation block fails as a fault when
-`UpdateProgramRunArgs` tries to resolve a buffer; the layout pins are caught by the framework spec
-comparison and throw. Everything in the lower half of the block is unreachable because the shapes and
-dtypes it constrains are all in the key. This is what drives the recommendations at the end of this
-document: there is no silent-corruption path here to buy back, so no new per-dispatch check is
+Post-fix the only reachable loss is the three `device() == input.device()` comparisons (`:153-155`),
+and it does not fail silently: a cross-device operand faults when `UpdateProgramRunArgs` tries to
+resolve its buffer against the wrong mesh device. Everything else is now unreachable — the shapes,
+dtypes, layouts and tiles are all in the key via `tensor_spec()`, and the storage-kind and allocation
+rows were never reachable on any path (omission 7). This is what drives the recommendations at the end
+of this document: there is no silent-corruption path here to buy back, so no new per-dispatch check is
 justified on this account.
 
 ## How the position index actually arrives
@@ -254,38 +351,34 @@ custom paths (`ttnn/api/ttnn/mesh_device_operation_adapter.hpp:989-992`), so the
 
 ## What the custom hash covers
 
-```230:250:ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/rotary_embedding_indexed/device/rotary_embedding_indexed_device_operation.cpp
-    return tt::tt_metal::operation::hash_operation<RotaryEmbeddingIndexedDeviceOperation>(
+```262:275:ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/rotary_embedding_indexed/device/rotary_embedding_indexed_device_operation.cpp
+    auto hash = tt::tt_metal::operation::hash_operation<RotaryEmbeddingIndexedDeviceOperation>(
         tensor_args.metadata.has_value(),
-        metadata_mem_config,
-        metadata_padded_shape,
         args.cluster_axis,
         args.compute_kernel_config,
         args.output_mem_config,
-        input.dtype(),
-        input.memory_config(),
-        input.logical_shape(),
-        input.padded_shape(),
-        input.layout(),
-        cos.dtype(),
-        cos.memory_config(),
-        cos.padded_shape(),
-        sin.dtype(),
-        sin.memory_config(),
-        sin.padded_shape(),
-        trans_mat.dtype(),
-        trans_mat.memory_config(),
-        trans_mat.padded_shape());
+        tensor_args.input.tensor_spec(),
+        tensor_args.cos.tensor_spec(),
+        tensor_args.sin.tensor_spec(),
+        tensor_args.trans_mat.tensor_spec());
+    if (tensor_args.metadata.has_value()) {
+        // metadata is an optional TensorParameter, compared just as strictly when it is present.
+        hash = ttsl::hash::hash_objects(hash, tensor_args.metadata->tensor_spec());
+    }
+    return hash;
 ```
 
 Three of the four attributes are kept; only `kv_actual_global` is dropped. All five tensors
-participate, decomposed selectively — `input` most fully (five components), `cos`/`sin`/`trans_mat`
-with three each, `metadata` with two plus its engagement bit.
+participate, each by its **whole** `TensorSpec` — so the key covers `logical_shape`, `dtype`,
+`page_config`, `memory_config` and `alignment` for every one of them, and `padded_shape` as a
+derivation of those.
 
-Note that the explanatory comment above this body claims the hash covers "the full input, cos, sin and
-trans_mat specs" (`:210-214`). It does not; it covers projections of them. The claim matters because it
-is the stated safety argument for the whole function, and omissions 3-5 below are exactly the gap
-between the claim and the code.
+**Pre-fix, this body hashed a projection instead** (`dtype`, `memory_config` and `padded_shape` per
+tensor, plus `logical_shape` and `layout` for `input` only, and `memory_config` + `padded_shape` for
+`metadata`), and its explanatory comment claimed the hash covered "the full input, cos, sin and
+trans_mat specs" when it covered projections of them. That gap between the claim and the code was
+exactly pre-fix omissions 3-5, and fab067a closed both the gap and the comment (`:245-261`). The
+projection form is retained in each omission below so the reproductions stay readable.
 
 ## Omitted parameters
 
@@ -324,11 +417,13 @@ compiled.
 Since the value is not hashed, the op re-runs its bounds checks on every hit rather than only on a
 miss:
 
-```187:192:ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/rotary_embedding_indexed/device/rotary_embedding_indexed_device_operation.cpp
+```222:229:ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/rotary_embedding_indexed/device/rotary_embedding_indexed_device_operation.cpp
 void RotaryEmbeddingIndexedDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     // kv_actual_global is not hashed and can differ from the compiled program's call; re-validate
-    // every hit. Structural constraints are hashed and so guaranteed unchanged here.
+    // every hit. Structural specs are hashed wholesale, so a structural change misses rather than
+    // arriving here -- but note the checks above the delegation in validate_on_program_cache_miss are
+    // miss-only, so anything that must hold on a hit belongs in validate_runtime_args.
     validate_runtime_args(args, tensor_args);
 }
 ```
@@ -365,8 +460,12 @@ relaxation with a per-hit validator that mirrors the kernel's arithmetic.
 
 ### 2. `metadata.dtype()`
 
-**Verdict: VALID — pinned by validation.** The hash keeps `metadata`'s `memory_config` and
-`padded_shape` but drops its dtype, and the omission is explicitly compensated:
+**Verdict: NO LONGER OMITTED after fab067a** (was VALID — pinned by validation). The hash now folds in
+`metadata->tensor_spec()` when the tensor is engaged (`compute_program_hash:271-274`), so the dtype is
+in the key outright and the pin below is belt-and-braces rather than the sole guarantee.
+
+**Pre-fix:** the hash kept `metadata`'s `memory_config` and `padded_shape` but dropped its dtype, and
+the omission was explicitly compensated:
 
 ```79:94:ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/rotary_embedding_indexed/device/rotary_embedding_indexed_device_operation.cpp
         // on-device as uint32, so validate the tensor itself here (runs on both cache miss and hit,
@@ -396,18 +495,25 @@ intent. Pinned to one value, the dtype carries no information. Belt and braces: 
 metadata tensor is also a `TensorParameter` (`create_at:392-395`), so a dtype change would additionally
 be rejected by the `UpdateProgramRunArgs` spec check.
 
-Worth calling out because it is the family contrast: this op hashes `metadata->memory_config()` and
-`metadata->padded_shape()` (`compute_program_hash:226-233`), so its metadata tensor's buffer type and
-page geometry are part of the cache key. Its two siblings in this family, `update_padded_kv_cache` and
-`zero_padded_kv_cache`, hash only the `has_value()` bit while compiling their metadata tensor's
-`TensorAccessorArgs` — buffer type and aligned page size included — into kernel compile-time args. This
-op is the correct model for that pattern.
+Worth calling out because it is the family contrast: this op now hashes `metadata->tensor_spec()`
+outright (`compute_program_hash:271-274`), so its metadata tensor's dtype, buffer type and page geometry
+are all part of the cache key. Its two siblings in this family, `update_padded_kv_cache` and
+`zero_padded_kv_cache`, still hash only the `has_value()` bit while compiling their metadata tensor's
+`TensorAccessorArgs` — buffer type and aligned page size included — into kernel compile-time args, and
+close the gap with `TT_FATAL`s in `validate_runtime_args` instead. This op is the correct model for that
+pattern.
 
 ### 3. `cos.logical_shape()`, `sin.logical_shape()`, `trans_mat.logical_shape()` — replaced by `padded_shape()`
 
-**Verdict: CAVEAT.** Correct as a relaxation of what the *program* depends on, but the framework's
-exact-spec check turns any exercised difference into a hard failure rather than the recompile the
-relaxation implies.
+**Verdict: RESOLVED by fab067a** (was CAVEAT). The hash now keys each operand's whole `tensor_spec()`
+(`compute_program_hash:262-275`), which includes `logical_shape`, so there is no longer any
+logical-vs-padded relaxation in this op to disagree with the framework's exact-spec check. The two
+calls in the reproduction below now compute *different* keys, miss, and compile a second program —
+which is what the relaxation was implying should happen but could not deliver.
+
+**Pre-fix:** correct as a relaxation of what the *program* depends on, but the framework's exact-spec
+check turned any exercised difference into a hard failure rather than the recompile the relaxation
+implied. The analysis below describes that pre-fix code.
 
 The factory reads padded shapes only:
 
@@ -428,30 +534,43 @@ These feed the `cos_Ht` / `sin_Ht` / `freq_per_head` compile-time args (`:441-45
 a hit — so hashing the padded shapes is both necessary and sufficient for the program itself. Nothing
 reads a logical shape of `cos`, `sin` or `trans_mat`.
 
-The catch is that `cos.tensor_spec()` is what gets baked as the `COS_PARAM` `TensorParameter`
-(`create_at:387`), and the spec check on every hit is *exact*. Two calls whose `cos` tensors share a
-padded shape, dtype and memory config but differ in logical shape produce the same hash, hit the cache,
-and then throw from `report_tensor_arg_mismatch`. That is fail-safe — no corruption, and the diagnostic
-names the binding — but the outcome is a crash on a call that should simply have compiled a second
-program.
+The catch was that `cos.tensor_spec()` is what gets baked as the `COS_PARAM` `TensorParameter`
+(`create_at:387`), and the spec check on every hit is *exact*. Two calls whose `cos` tensors shared a
+padded shape, dtype and memory config but differed in logical shape produced the same hash, hit the
+cache, and then threw from `report_tensor_arg_mismatch`. That was fail-safe — no corruption, and the
+diagnostic names the binding — but the outcome was a crash on a call that should simply have compiled a
+second program. See `### The report_tensor_arg_mismatch interaction` above for the full mechanism.
 
-What would break it: a caller who trims the logical extent of a cos/sin cache without changing its
+What would have broken it: a caller who trims the logical extent of a cos/sin cache without changing its
 padded extent. Nothing in DeepSeek prefill does that today, since the cos/sin shards are allocated once
-per model at a fixed shape. The guard that closes it is to hash `cos.logical_shape()`,
-`sin.logical_shape()` and `trans_mat.logical_shape()` alongside the padded shapes — cheap, since these
-are per-model constants that will never actually diverge, and it converts a potential throw into a
-correct rebuild. Alternatively, declaring `TensorSpecRelaxations::match_padded_shape_only` on those
-three tensor parameters would make the relaxation explicit at the framework level; that flag exists for
-exactly this and loosens validation only along `logical_shape`
-(`tt_metal/api/tt-metalium/experimental/metal2_host_api/tensor_spec_relaxations.hpp:42-49`).
+per model at a fixed shape.
+
+Two fixes were available, and fab067a took the first. **(a)** Hash the logical shapes alongside the
+padded ones so the key matches the strict predicate — cheap, since these are per-model constants that
+will never actually diverge, and it converts a potential throw into a correct rebuild. The commit went
+further and hashed the whole spec, which subsumes it. **(b)** Declare
+`TensorSpecRelaxations::match_padded_shape_only` on those three tensor parameters to make the relaxation
+explicit at the framework level
+(`tt_metal/api/tt-metalium/experimental/metal2_host_api/tensor_spec_relaxations.hpp:41,49`); that flag
+maps to `PertinentFields{.padded_shape = true}`
+(`tt_metal/impl/metal2_host_api/tensor_spec_relaxations.cpp:67-87`), which both
+`hash_tensorspec_with_relaxation` (`:116`) and `tensorspecs_match_with_relaxation` (`:161-201`) consume,
+so key and validation would have agreed that way too. Option (a) was the right call for this op: nothing
+in the factory benefits from the extra hits, so paying nothing for a strictly finer key is preferable to
+opting into an unsafe-by-default flag. Its two `kv_cache` siblings, which *do* benefit, are the ones that
+should carry the flag.
 
 ### 4. `cos.layout()`, `sin.layout()`, `trans_mat.layout()`
 
-**Verdict: CAVEAT — pinned only on the miss path.** The pin exists but does not re-run on a hit; the
-framework spec check is what actually holds the line there.
+**Verdict: RESOLVED by fab067a** (was CAVEAT — pinned only on the miss path). Closed twice over: the
+layouts are now *in the key* as part of each operand's hashed `page_config`
+(`compute_program_hash:262-275`), and fab067a's `require_standard_tile` lambda re-asserts
+`layout() == Layout::TILE` on all four operands from inside the shared `validate_runtime_args`
+(`:92-96`, applied at `:106-109`) — the placement that runs on the hit path. A ROW_MAJOR `cos` on a hit
+is now rejected by the op, by name, instead of relying on the framework spec comparison to notice.
 
-`input.layout()` is hashed but the other three operands' layouts are not. They are constrained on the
-miss path:
+**Pre-fix:** `input.layout()` was hashed but the other three operands' layouts were not. They were
+constrained on the miss path only:
 
 ```157:160:ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/rotary_embedding_indexed/device/rotary_embedding_indexed_device_operation.cpp
     TT_FATAL(input.layout() == Layout::TILE, "input must be TILE layout");
@@ -460,37 +579,73 @@ miss path:
     TT_FATAL(trans_mat.layout() == Layout::TILE, "trans_mat must be TILE layout");
 ```
 
-These live in `validate_on_program_cache_miss` and are *not* repeated in `validate_runtime_args`. Since
+These live in `validate_on_program_cache_miss` and were *not* repeated in `validate_runtime_args`. Since
 this op defines a hit validator, the miss validator is replaced rather than supplemented on a hit (see
-`### Which validator runs on a cache hit`), so these four `TT_FATAL`s run on the first call and never
+`### Which validator runs on a cache hit`), so these four `TT_FATAL`s ran on the first call and never
 again. Under the audit rule that a pin living only in the miss validator is at most a caveat, this
-cannot be graded `VALID — pinned by validation` even though the pin is real and the value is
+could not be graded `VALID — pinned by validation` even though the pin was real and the value is
 single-valued in every admissible call.
 
-What keeps it safe in practice is not the pin but the framework: the `UpdateProgramRunArgs` spec check
+What kept it safe pre-fix was not the pin but the framework: the `UpdateProgramRunArgs` spec check
 catches a layout divergence independently, because `layout` is a projection of `page_config` and
-`page_config` is part of the exact match. A ROW_MAJOR `cos` on a hit throws from the framework rather
-than executing. That is a backstop rather than a pin, which is exactly the shape of a caveat — safe
-today, resting on a mechanism outside the op, and producing a throw where a rebuild was intended.
+`page_config` is part of the exact match. A ROW_MAJOR `cos` on a hit threw from the framework rather
+than executing. That was a backstop rather than a pin, which is exactly the shape of a caveat — safe,
+resting on a mechanism outside the op, and producing a throw where a rebuild was intended.
 
-(This is a meaningful difference from the two `kv_cache` siblings, where the analogous cross-tensor
+(This was a meaningful difference from the two `kv_cache` siblings, where the analogous cross-tensor
 consistency checks are also miss-path-only but there is no framework backstop, so the same structure
-degrades to silent corruption.)
+degraded to silent corruption.)
 
-The guard that would close it is to repeat the three unhashed `Layout::TILE` checks in
-`validate_runtime_args`, which both paths call. This document does **not** recommend doing so: that
-function runs on the cache-hit path, so the checks would be paid on every dispatch, and what they buy
-over the existing framework rejection is a clearer error message rather than a correctness improvement.
-See recommendation 4.
+**The guard fab067a landed.** The fix is the one this section named — repeat the unhashed
+`Layout::TILE` checks in `validate_runtime_args`, which both paths call — and the commit did exactly
+that, folding them into the same `require_standard_tile` lambda that carries the tile-geometry check of
+omission 5:
+
+```87:109:ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/rotary_embedding_indexed/device/rotary_embedding_indexed_device_operation.cpp
+    // Runs on cache hit as well as miss, which is the point: the factory bakes 32x32 tile arithmetic
+    // into compile-time args, and page_config is hashed, so a differing tile misses -- but layout and
+    // tile geometry must still be rejected by name rather than by a downstream spec mismatch.
+    const auto require_standard_tile = [](const Tensor& tensor, std::string_view name) {
+        TT_FATAL(tensor.layout() == Layout::TILE, "{} must be TILE layout", name);
+        const auto tile = tensor.tensor_spec().tile();
+        TT_FATAL(
+            tile.get_height() == TILE_HEIGHT && tile.get_width() == TILE_WIDTH,
+            "{} must use standard {}x{} tiles, got {}x{}",
+            name,
+            TILE_HEIGHT,
+            TILE_WIDTH,
+            tile.get_height(),
+            tile.get_width());
+    };
+    require_standard_tile(input, "input");
+    require_standard_tile(cos, "cos");
+    require_standard_tile(sin, "sin");
+    require_standard_tile(trans_mat, "trans_mat");
+```
+
+This document previously argued against that change on the grounds that it bought a clearer error
+message rather than a correctness improvement. That reasoning was right about the *layout* half and
+wrong about the *tile* half — the same lambda is what closes the miss-path factory defect in omission 5,
+which was a genuine correctness gap — so the combined check earns its per-dispatch cost. See
+recommendation 4.
 
 ### 5. `page_config` (the `Tile`) and `alignment` of all five tensors — the unguarded 32x32 assumption
 
-**Verdict: CAVEAT, not BUG.** This op meets two of the three criteria for the tile bug — it requires
-`Layout::TILE` and it derives all of its tile geometry from the architectural 32x32 constants with no
-tile-geometry guard anywhere in the directory — but the framework rescues it. Its Metal 2.0 dispatch
-path performs an exact `TensorSpec` comparison on every hit, and that comparison provably covers
-`page_config`, so a differing `Tile` throws a diagnostic rather than silently executing the wrong
-program. It fails loudly where a rebuild was intended, which is a caveat, not corruption.
+**Verdict: RESOLVED by fab067a** (was CAVEAT, not BUG). Both halves are closed. `page_config` — hence
+the `Tile` — is now in the key as part of each operand's hashed `tensor_spec()`
+(`compute_program_hash:262-275`), and the miss-path factory defect described below is blocked outright
+by `require_standard_tile` in the shared `validate_runtime_args` (`:87-109`), which asserts 32x32 tile
+geometry on all four operands. A non-32x32 call is now rejected by operand name on the first call,
+before any mis-sized dataflow buffer is ever built, and on every subsequent call too. `alignment` is
+likewise now hashed as part of the spec.
+
+**Pre-fix:** this op met two of the three criteria for the tile bug — it requires `Layout::TILE` and it
+derives all of its tile geometry from the architectural 32x32 constants with no tile-geometry guard
+anywhere in the directory — but the framework rescued it. Its Metal 2.0 dispatch path performs an exact
+`TensorSpec` comparison on every hit, and that comparison provably covers `page_config`, so a differing
+`Tile` threw a diagnostic rather than silently executing the wrong program. It failed loudly where a
+rebuild was intended, which was a caveat, not corruption. The rest of this section describes that
+pre-fix code; the factory itself is unchanged, and is now fenced by the validator instead.
 
 **The factory is entirely 32x32-hardcoded, exactly like its siblings.** Five `tt::tile_size` calls
 (which return the byte size of a 32x32 tile, not `tile.get_tile_size(format)`) size every dataflow
@@ -524,10 +679,11 @@ buffer, and bare `TILE_HEIGHT`/`TILE_WIDTH` do all the tile-count arithmetic:
              {"tile_height", TILE_HEIGHT},  // reader divides kv_actual_global (tokens) into tiles
 ```
 
-Nothing validates the geometry. There is no `tensor_spec().tile()` read and no tile-geometry `TT_FATAL`
-anywhere in the op directory. The validator does require `Layout::TILE` on four tensors (`:157-160`) and
-does pin `trans_mat` to a single tile — but that check is a *shape* check against the architectural
-constant, not a tile check, and under `Tile{16, 32}` a `[1, 1, 32, 32]` trans_mat is two tiles, not one:
+Pre-fix, nothing validated the geometry: there was no `tensor_spec().tile()` read and no tile-geometry
+`TT_FATAL` anywhere in the op directory. The validator did require `Layout::TILE` on four tensors
+(`:157-160`) and did pin `trans_mat` to a single tile — but that check is a *shape* check against the
+architectural constant, not a tile check, and under `Tile{16, 32}` a `[1, 1, 32, 32]` trans_mat is two
+tiles, not one:
 
 ```168:176:ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/rotary_embedding_indexed/device/rotary_embedding_indexed_device_operation.cpp
     // The reader pushes trans_mat as a single page (page 0) into a one-tile CB, so it must be exactly
@@ -542,26 +698,28 @@ constant, not a tile check, and under `Tile{16, 32}` a `[1, 1, 32, 32]` trans_ma
 ```
 
 So on a cache *miss* a non-32x32 call would compile a program with mis-sized dataflow buffers and a
-truncated trans_mat. That is a factory bug, and it is real — but it is not the program-cache bug class,
-because a miss means the program was at least built for the tensor in front of it.
+truncated trans_mat. That was a factory bug, and it was real — but it was not the program-cache bug
+class, because a miss means the program was at least built for the tensor in front of it. This is the
+half fab067a's `require_standard_tile` blocks outright; it is recorded under
+`## Non-cache correctness defects` below rather than counted as a cache bug.
 
-**Why the cache-hit exposure is a throw and not corruption.** The spec check quoted in
+**Why the cache-hit exposure was a throw and not corruption.** The spec check quoted in
 `## Cache-hit patch mechanism` above delegates to `tensorspecs_match_with_relaxation`, and the
 `page_config` coverage was traced through the whole chain rather than assumed:
 
-```61:68:tt_metal/impl/metal2_host_api/tensor_spec_relaxations.cpp
-    switch (relaxation_mode(relaxation)) {
-        case RelaxationMode::DynamicRank:
-            return a.tensor_layout() == b.tensor_layout() && a.logical_shape().rank() == b.logical_shape().rank();
-        case RelaxationMode::PaddedShapeOnly:
-            return a.tensor_layout() == b.tensor_layout() && a.padded_shape() == b.padded_shape();
-        case RelaxationMode::Strict: break;
+```178:184:tt_metal/impl/metal2_host_api/tensor_spec_relaxations.cpp
+    const relaxation_fields::PertinentFields fields = relaxation_fields::pertinent_fields(relaxation);
+    if (fields.whole_spec) {
+        return a == b;
     }
-    return a == b;
+    if (!(a.tensor_layout() == b.tensor_layout())) {
+        return false;
+    }
 ```
 
-This op leaves `TensorParameter::relaxations` default-constructed, so it takes the `Strict` branch and
-compares whole `TensorSpec`s. From there:
+This op leaves `TensorParameter::relaxations` default-constructed, which `pertinent_fields` maps to
+`PertinentFields{.whole_spec = true}` (`:67-87`), so it takes the `a == b` branch and compares whole
+`TensorSpec`s. From there:
 
 - `TensorSpec::operator==` is `= default`
   (`tt_metal/api/tt-metalium/experimental/tensor/spec/tensor_spec.hpp:26`), so it compares
@@ -581,9 +739,10 @@ bool Tile::operator==(const Tile& other) const {
 }
 ```
 
-So `page_config` is genuinely covered, and it is covered in *every* relaxation mode — all three branches
-above compare `tensor_layout()` unconditionally, so no `TensorSpecRelaxations` setting can ever relax the
-tile away. That is a stronger guarantee than this op needs and it is worth relying on.
+So `page_config` is genuinely covered, and it is covered under *every* relaxation — the `whole_spec`
+branch compares the specs outright and every other path compares `tensor_layout()` unconditionally
+(`:173-175`), so no `TensorSpecRelaxations` setting can relax the tile away. That is a stronger
+guarantee than this op needs, and post-fix it is a second line rather than the only one.
 
 One precise limit: `Tile::operator==` does not compare the `transpose_within_face` / `transpose_of_faces`
 flags. Those escape the check — but they equally escape the framework's default hash, whose
@@ -591,12 +750,14 @@ flags. Those escape the check — but they equally escape the framework's defaul
 (`tt_metal/api/tt-metalium/tile.hpp:46-47`). They are therefore not an omission relative to the default,
 and this factory never reads them.
 
-**Two-call sequence, and how it differs from the siblings.** Call 1: `input`, `cos`, `sin`, `trans_mat`
-all `BFLOAT16`, `Layout::TILE`, `Tile{32, 32}`, interleaved DRAM. Call 2: identical padded shapes,
-dtypes and memory configs, but `Tile{16, 32}`. The hash omits `page_config`
-(`compute_program_hash:230-250` hashes `dtype`, `memory_config`, `padded_shape` and — for `input` only —
-`logical_shape` and `layout`, never the tile), so the key is identical and the cache hits — exactly as it does in
-the two `kv_cache` ops. The divergence is in what happens next. Here, `override_runtime_arguments`
+**Two-call sequence (pre-fix), and how it differed from the siblings.** Call 1: `input`, `cos`, `sin`,
+`trans_mat` all `BFLOAT16`, `Layout::TILE`, `Tile{32, 32}`, interleaved DRAM. Call 2: identical padded
+shapes, dtypes and memory configs, but `Tile{16, 32}`. The pre-fix hash omitted `page_config` (it hashed
+`dtype`, `memory_config`, `padded_shape` and — for `input` only — `logical_shape` and `layout`, never
+the tile), so the key was identical and the cache hit — exactly as it does in the two `kv_cache` ops.
+Post-fix, call 2 does not even reach the cache: `require_standard_tile` rejects it in
+`validate_runtime_args`, and had the guard not been there the hashed `page_config` would have made it
+miss. The divergence pre-fix was in what happened next. Here, `override_runtime_arguments`
 calls `UpdateProgramRunArgs`, which validates before it patches
 (`tt_metal/impl/metal2_host_api/program_run_args.cpp:1105-1107`, delegating to
 `ValidateUpdateProgramRunArgs` and thence to `ValidateTensorArgs` at `:1087`), the `Tile{16, 32}` spec
@@ -607,23 +768,23 @@ the descriptor buffer-binding fast path
 and compares nothing, so the stale 32x32 compile-time args and CB page sizes are simply executed against
 a 16-row-tile buffer and the KV cache is silently corrupted.
 
-**This is the single most useful observation across the three documents.** Three sibling ops, written by
+**This was the single most useful observation across the three documents.** Three sibling ops, written by
 the same team against the same hardcoded 32x32 assumption, with the same `page_config` omission from the
-hash. Two of them silently corrupt data; this one fails loudly. The entire difference is which cache-hit
-mechanism the op happens to be built on — Metal 2.0 `ProgramSpec` with named tensor parameters and an
-enforced spec contract, versus a `ProgramDescriptor` with raw buffer bindings and no contract at all. The
-safety here is not a property of this op's code; it is a property of the dispatch layer, and it would
-evaporate the moment someone set a relaxation or passed `skip_validation`. It should not be mistaken for
-the op being correct.
+hash. Two of them silently corrupted data; this one failed loudly. The entire difference was which
+cache-hit mechanism the op happens to be built on — Metal 2.0 `ProgramSpec` with named tensor parameters
+and an enforced spec contract, versus a `ProgramDescriptor` with raw buffer bindings and no contract at
+all. The safety was not a property of this op's code; it was a property of the dispatch layer, and it
+would have evaporated the moment someone set a relaxation or passed `skip_validation`. That is precisely
+why fab067a did not leave it there: the guard now lives in the op, and the framework check is a backstop.
 
 `alignment` deserves a separate note: it does not appear in this factory at all. The op reads and writes
 through Metal 2.0 `TensorAccessor`s bound by name (`reader_...cpp:97-100`) rather than through
 host-emitted `TensorAccessorArgs`, so no aligned page size is baked into a compile-time arg the way it is
-in this family's two `kv_cache` ops. Its omission is `CAVEAT` purely for the throw-not-rebuild reason,
-with no underlying factory defect behind it.
+in this family's two `kv_cache` ops. Its omission was `CAVEAT` purely for the throw-not-rebuild reason,
+with no underlying factory defect behind it, and it is now hashed as part of the spec regardless.
 
-**The guard.** The recommended fix is the same for all three siblings, and for this one it converts the
-verdict to `VALID — pinned by validation` while also fixing the miss-path factory bug:
+**The guard, as landed.** The fix this section recommended is the pattern already established elsewhere
+in the repo:
 
 ```94:98:ttnn/cpp/ttnn/operations/data_movement/sharded/interleaved_to_sharded/device/interleaved_to_sharded_op.cpp
     if (input_tensor.layout() == Layout::TILE) {
@@ -633,8 +794,12 @@ verdict to `VALID — pinned by validation` while also fixing the miss-path fact
         }
 ```
 
-Making the factory genuinely tile-aware instead would require adding `page_config` to
-`compute_program_hash` in the same change, since the program would then provably vary with `Tile`.
+fab067a adopted it as `require_standard_tile` (`:87-109`, quoted under omission 4) and — critically —
+placed it in the **shared** `validate_runtime_args` rather than in `validate_on_program_cache_miss`.
+Placing it in the miss validator would have blocked the factory defect but left the hit path uncovered;
+placing it in the shared function covers both. Making the factory genuinely tile-aware instead remains
+the alternative, and would now be safe to attempt, since `page_config` is in the key and the program may
+provably vary with `Tile`.
 
 ### 6. Per-core runtime args and the work split (not re-applied by the override)
 
@@ -676,7 +841,11 @@ can collide onto one work split.
 
 ### 7. `input.storage`, `cos.storage`, `sin.storage`, `trans_mat.storage` variant kind
 
-**Verdict: CAVEAT — pinned only on the miss path.**
+**Verdict: VALID — pinned by the framework** (was CAVEAT — pinned only on the miss path). This is a
+correction to the pre-fix grade, not a change fab067a made: device storage was never a reachable
+omission on any path. See `#### Framework correction` below. fab067a additionally added a `cos` storage
+pin to `validate_runtime_args` (`:72-75`) for the one operand whose `device()` is dereferenced on the
+next line, so the op no longer relies solely on the framework for that operand.
 
 ```142:145:ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/rotary_embedding_indexed/device/rotary_embedding_indexed_device_operation.cpp
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "input must be on device");
@@ -685,22 +854,47 @@ can collide onto one work split.
     TT_FATAL(trans_mat.storage_type() == StorageType::DEVICE, "trans_mat must be on device");
 ```
 
-Constant across every admissible call, so on the miss path it carries no information. But all four sit
+Constant across every admissible call, so on the miss path it carries no information. All four sit
 above the `validate_runtime_args` delegation at `:184`, and this op's hit validator replaces the miss
 validator rather than supplementing it, so none of them re-run on a hit. Unlike omission 4, the
-framework spec check is *no* backstop here: `TensorSpec` covers `logical_shape` and `tensor_layout` and
-says nothing about the storage variant, so a host-storage tensor is not rejected by the comparison.
+framework spec check is *no* backstop: `TensorSpec` covers `logical_shape` and `tensor_layout` and says
+nothing about the storage variant, so a host-storage tensor is not rejected by the comparison. That is
+what drove the pre-fix `CAVEAT` grade, and it was wrong — the backstop is elsewhere.
 
-The severity is nevertheless low. A host tensor has no device allocation to bind, so the hit path faults
-when `UpdateProgramRunArgs` tries to resolve its buffer, rather than executing a stale program against a
-valid-looking one. The outcome is a crash on the offending call, not silent corruption on a later one.
+#### Framework correction
 
-That difference in kind is why this document deliberately does **not** recommend closing it. Repeating
-the four checks in `validate_runtime_args` would upgrade the verdict to `VALID — pinned by validation`,
-but `validate_runtime_args` runs on the cache-hit path, which is the fast path, so four
-`storage_type()` queries would be paid on every dispatch for the life of the process. The only thing
-they would buy is a clearer error message in front of a fault that already happens on the same call.
-The right disposition is to leave this as a recorded caveat; see recommendation 4.
+`launch()` asserts device storage on **every** tensor argument, on **every** dispatch, before any
+op-specific validator or hash runs:
+
+```491:502:ttnn/api/ttnn/device_operation.hpp
+    std::vector<std::reference_wrapper<const Tensor>> input_tensors;
+    ttsl::reflection::visit_object_of_type<Tensor>(
+        [&input_tensors](const Tensor& t) { input_tensors.push_back(std::cref(t)); }, tensor_args);
+    // ...
+    for (const auto& input_tensor_ref : input_tensors) {
+        const auto& input_tensor = input_tensor_ref.get();
+        TT_FATAL(is_device_tensor(input_tensor), "Device Operations expect device tensors as inputs");
+        TT_FATAL(input_tensor.is_allocated(), "Input Tensor is not allocated");
+    }
+```
+
+Three properties make this decisive. It sits at the top of `launch()` (`:487`), well before
+`launch_operation_with_adapter` computes the key and probes the cache (`:409-418`), so it runs on hits
+and misses alike. It traverses via `visit_object_of_type<Tensor>` (`:492-493`), which descends into
+`std::optional<Tensor>`, so the engaged `metadata` tensor is covered too. And it is unconditional — no
+op can opt out.
+
+So the storage variant kind cannot vary along any reachable path, which makes it a zero-value omission
+rather than a caveat: there is no admissible call in which it differs, on either path, and the op's own
+four `TT_FATAL`s are redundant with a framework guarantee rather than the only thing enforcing it. The
+same correction applies to the `buffer() != nullptr` rows in the reachability table above, since
+`is_device_tensor` implies a device allocation.
+
+This is why the document no longer recommends repeating the four checks in `validate_runtime_args`:
+they would cost four `storage_type()` queries on every dispatch and buy nothing at all, not even a
+better message than the framework's. fab067a's one addition here (`cos`, at `:72-75`) is justified on
+different grounds — it guards a `device()` dereference on the immediately following line, so it is
+local defensive coding rather than a cache guard.
 
 ### 8. Buffer addresses of all operands and the output
 
@@ -749,15 +943,16 @@ coordinate (`:596-610`) rather than one program across the range.
 
 ## Keys the custom hash adds beyond the default
 
-- `input.padded_shape()`, `cos.padded_shape()`, `sin.padded_shape()`, `trans_mat.padded_shape()` —
-  derivations in the default key, promoted to first-class. These are what the factory actually reads,
-  so promoting them is what allows the corresponding `logical_shape`s to be dropped.
-- `metadata->padded_shape()` — likewise.
-- `input.layout()` — a projection of `page_config`, kept because it feeds the output spec.
 - `tensor_args.metadata.has_value()` — separates the two program variants; the reader's
   `HAS_METADATA` define, its `META_DFB` dataflow buffer, its `METADATA_PARAM` binding and its common-arg
   schema all switch on it (`create_at:376-382,392-395,402-404,420-433`), and all of those are frozen on
   a hit, so hashing it is mandatory rather than optional.
+
+Post-fix that is the whole list. Pre-fix the hash also promoted the four operands' `padded_shape()` and
+`metadata->padded_shape()` to first-class terms, and kept `input.layout()` as a projection of
+`page_config`, in order to justify dropping the corresponding `logical_shape`s. Hashing each
+`tensor_spec()` wholesale makes all of those redundant: `padded_shape` and `layout` are derivations of
+the spec, so they are covered without being named, and there is nothing left to drop.
 
 ## Framework side effect of having a custom hash
 
@@ -777,86 +972,104 @@ specs are all identical and which differ only in `cluster_axis`, `compute_kernel
 `output_mem_config`. Still worth noting, since a `compute_kernel_config` collision would silently run
 at the wrong math fidelity.
 
+## Non-cache correctness defects
+
+Recorded separately so they are not counted as program-cache bugs. Both entries concern the factory,
+not the key.
+
+| Defect | Status | Note |
+|---|---|---|
+| Miss-path 32x32 factory defect: five `tt::tile_size` calls (`create_at:268-276`) size every dataflow buffer for a 32x32 tile, bare `TILE_HEIGHT`/`TILE_WIDTH` do all tile-count arithmetic (`:277-283`), `tile_height` is baked as a reader compile-time arg fixed to `TILE_HEIGHT` (`:448-449`), and the `trans_mat` single-tile check (`:168-176`) is a shape check against those constants rather than a tile check. On a cache **miss** a `Tile{16, 32}` call would have compiled mis-sized dataflow buffers and silently truncated `trans_mat` to its first tile. | **RESOLVED by fab067a** | `require_standard_tile` in `validate_runtime_args` (`:87-109`) rejects the call before `create_at` runs. The factory is still 32x32-only; it is now fenced rather than fixed, which is the correct order of operations — the fence is one lambda, making the factory tile-aware is a rewrite. |
+| The 32x32 assumption is undocumented in the public API, so a caller had no way to know the constraint existed before hitting it. | **RESOLVED by fab067a** | Stated in the nanobind docstring (`rotary_embedding_indexed_nanobind.cpp:45-47`). |
+
+No hard-coded kernel-handle indices here: this op's override rebinds tensors by parameter name through
+`run_args.tensor_args` (`:624-631`) rather than by position, so it has none of the handle-coupling
+defect recorded in its two `kv_cache` siblings' documents.
+
 ## Summary
 
 | Omitted vs. default | Used by program? | Patched on hit? | Verdict |
 |---|---|---|---|
 | `attrs.kv_actual_global` | Yes (reader common arg) on the scalar path; no on the metadata path | Yes (override) / n/a | VALID — patched / VALID — unused |
-| `metadata.dtype` | Only via the on-device read width | No | VALID — pinned by validation |
-| `cos`/`sin`/`trans_mat` `logical_shape` | No (padded shapes used) | n/a | CAVEAT — exact spec match turns a divergence into a throw |
-| `cos`/`sin`/`trans_mat` `layout` | No | n/a | CAVEAT — pinned only on the miss path (framework spec check is the real backstop) |
-| `page_config` (`Tile`) of all five tensors | Yes (`tile_height` compile-time arg, DFB sizes, tile counts — all hardcoded 32x32) | No — but a mismatch is rejected before dispatch | CAVEAT — fail-safe: exact spec equality covers `page_config`, so a differing `Tile` throws where its two siblings silently corrupt |
-| `alignment` of all five tensors | No (no host-emitted `TensorAccessorArgs`) | n/a | CAVEAT — same throw-not-rebuild exposure |
-| Per-core work-split args | Yes (per-core RTAs, `RELOAD_IMPL`) | No (deliberately) | VALID — invariant (function of hashed shapes) |
-| Operand `storage` kinds | n/a | n/a | CAVEAT — pinned only on the miss path (no spec-check backstop; fails as a crash) |
+| `metadata.dtype` | Only via the on-device read width | No | NO LONGER OMITTED — hashed via `metadata->tensor_spec()` (was VALID — pinned by validation) |
+| `cos`/`sin`/`trans_mat` `logical_shape` | No (padded shapes used) | n/a | RESOLVED by fab067a — whole `tensor_spec()` hashed, so the relaxation is gone (was CAVEAT) |
+| `cos`/`sin`/`trans_mat` `layout` | No | n/a | RESOLVED by fab067a — hashed via `page_config` **and** pinned in `validate_runtime_args` (was CAVEAT — pinned only on the miss path) |
+| `page_config` (`Tile`) of all five tensors | Yes (`tile_height` compile-time arg, DFB sizes, tile counts — all hardcoded 32x32) | No — call now rejected by the op | RESOLVED by fab067a — hashed, and 32x32 asserted in `validate_runtime_args` (was CAVEAT) |
+| `alignment` of all five tensors | No (no host-emitted `TensorAccessorArgs`) | n/a | RESOLVED by fab067a — hashed as part of the spec (was CAVEAT) |
+| Per-core work-split args | Yes (per-core RTAs, `RELOAD_IMPL`) | No (deliberately) | VALID — invariant (function of hashed specs) |
+| Operand `storage` kinds | n/a | n/a | VALID — pinned by the framework at `device_operation.hpp:500-501` (was CAVEAT — pinned only on the miss path; that grade was wrong) |
 | All buffer addresses (incl. the fresh output) | Yes | Yes (`UpdateProgramRunArgs` tensor bindings) | VALID — patched, required |
 | `my_sp_coord`, `sp_factor` | Yes (compile-time args) | n/a (coordinate hashed) | VALID — invariant |
 
-**No program-cache correctness bug was found.** The single omitted attribute is the per-chunk position
-scalar, and it is handled the way this class of value should be: kept out of the key, re-applied to the
-reader's common runtime argument on every hit, consumed only on-device so nothing derived from it can
-be baked, and re-validated on every hit by a host-side check that reproduces the kernel's own
-`update_idxt` arithmetic. Every compile-time argument, dataflow-buffer size, kernel define and per-core
-runtime argument in `create_at` is a function of the hashed set plus device constants the per-device
-cache already partitions on. The tensor-spec omissions do not threaten correctness because
-`UpdateProgramRunArgs` enforces exact `TensorSpec` equality against the baked `TensorParameter`s on
-every hit; their residual cost is a hard rejection instead of a recompile in call patterns nothing
-currently exercises.
+**No program-cache correctness bug was found, pre-fix or post-fix; post-fix, no caveat remains either.**
+The single omitted attribute is now the per-chunk position scalar, and it is handled the way this class
+of value should be: kept out of the key, re-applied to the reader's common runtime argument on every
+hit, consumed only on-device so nothing derived from it can be baked, and re-validated on every hit by a
+host-side check that reproduces the kernel's own `update_idxt` arithmetic. Every compile-time argument,
+dataflow-buffer size, kernel define and per-core runtime argument in `create_at` is a function of the
+hashed set plus device constants the per-device cache already partitions on. The five pre-fix
+tensor-spec caveats (omissions 2-5) are closed at the source: the hash keys each operand's whole
+`tensor_spec()`, so it no longer relaxes anything the framework then requires exactly.
 
-That verdict includes the tile omission, and it is worth being explicit about how narrowly it was
-earned. This op carries the same unguarded 32x32 assumption as its two siblings — five `tt::tile_size`
-calls, four bare-constant tile-count conversions, a `tile_height` compile-time arg fixed to
-`TILE_HEIGHT`, and no tile-geometry check anywhere in the directory — and its hash omits `page_config`
-just as theirs do. In `update_padded_kv_cache` and `zero_padded_kv_cache` that combination is a BUG: a
-`Tile{16, 32}` call hits the cache entry built for `Tile{32, 32}` and executes stale compile-time args
-and CB page sizes against it, silently corrupting the KV cache. Here the same call is rejected before
-dispatch, because the exact `TensorSpec` comparison performed by `UpdateProgramRunArgs` reaches all the
-way down to `Tile::operator==` and therefore covers `page_config` in every relaxation mode. The op is
-not safer than its siblings; the dispatch layer it was built on is. It still has a genuine miss-path
-factory bug — a non-32x32 call would compile mis-sized dataflow buffers and a truncated trans_mat — and
-the same one-line guard fixes both halves.
+That last point is the substance of the change and is worth restating as a rule. Pre-fix the op's
+safety rested entirely on `UpdateProgramRunArgs` enforcing exact `TensorSpec` equality against the baked
+`TensorParameter`s — which it does, reaching all the way down to `Tile::operator==` — so a spec omission
+surfaced as a hard rejection rather than corruption. That is fail-safe but it is not correct: the
+residual cost was a throw instead of a recompile, and the safety was a property of the dispatch layer
+rather than of the op. In `update_padded_kv_cache` and `zero_padded_kv_cache`, built on a
+`ProgramDescriptor` with raw buffer bindings and no spec contract, the same source-level omissions were
+BUGs that silently corrupted the KV cache. fab067a removes the dependence on that accident: the key and
+the framework predicate now agree by construction (see
+`### The report_tensor_arg_mismatch interaction`), and the 32x32 assumption is fenced by the op's own
+validator rather than by a framework comparison that a future `TensorSpecRelaxations` or
+`skip_validation` could switch off.
 
-A separate, lower-severity finding runs through omissions 4 and 7: because the op defines
-`validate_on_program_cache_hit`, that validator *replaces* the miss validator on hits rather than
-supplementing it, and this op's hit validator delegates to `validate_runtime_args` and does nothing
-else. Everything the miss validator checks before its own delegation at `:184` is therefore absent on
-the hit path — the four `Layout::TILE` pins, the four `storage_type() == DEVICE` pins, the
-`buffer() != nullptr` and same-device checks, the `trans_mat` single-tile check, and the `cos`/`sin`
-dtype and shape equalities. A narrow hit validator is a hazard rather than a safeguard in general: by
-existing, it disables everything above it.
+A separate, lower-severity structural finding remains, and it is the one thing here that is not fixed:
+because the op defines `validate_on_program_cache_hit`, that validator *replaces* the miss validator on
+hits rather than supplementing it, and this op's hit validator delegates to `validate_runtime_args` and
+does nothing else. Everything the miss validator checks before its own delegation at `:184` is absent
+on the hit path — the four `storage_type() == DEVICE` pins, the `buffer() != nullptr` and same-device
+checks, the four `Layout::TILE` pins, the `trans_mat` single-tile check, and the `cos`/`sin` dtype and
+shape equalities. A narrow hit validator is a hazard rather than a safeguard in general: by existing, it
+disables everything above it.
 
-Filtered for reachability, the practical loss is smaller than that list suggests and, importantly, it
-is entirely non-silent. Most of the dropped checks constrain shapes and dtypes that are in the cache
-key, and a miss-only pin on a hashed value cannot be evaded — any call carrying a new value of it
-misses and meets the pin there. What survives the filter is the allocation-and-device block
-(`:142-155`), which faults when `UpdateProgramRunArgs` cannot resolve a buffer, and the three unhashed
-`Layout::TILE` pins (`:158-160`), which the framework's exact `TensorSpec` comparison rejects with a
-diagnostic. Both fail loudly on the offending call.
+Filtered for reachability, the practical loss is now near zero. Most of the dropped checks constrain
+specs that are in the cache key, and a miss-only pin on a hashed value cannot be evaded — any call
+carrying a new value of it misses and meets the pin there. The storage and allocation rows were never
+reachable, because `launch()` asserts both on every dispatch
+(`ttnn/api/ttnn/device_operation.hpp:500-501`). The layout pins are now both hashed and re-asserted in
+the shared function. What survives the filter is the three `device() == input.device()` comparisons
+(`:153-155`), which fault when `UpdateProgramRunArgs` cannot resolve a buffer against the wrong mesh
+device. That fails loudly on the offending call.
 
-That is why the recommendations leave both regraded rows as documented caveats rather than closing
-them. `validate_runtime_args` runs on the cache-hit path, so every check moved into it is paid on every
-dispatch for the life of the process, and here the purchase would be a better error message in front of
-a failure that already occurs — not a correctness improvement. The one hit-path check this document
-does recommend adding is the tile guard, and only because that one closes a defect nothing else
-catches.
+So the recommendations' original disposition — leave the regraded rows as caveats, add only the tile
+guard — was the right call, and fab067a implemented exactly that plus the hash widening. The general
+principle holds for the ports: `validate_runtime_args` runs on the cache-hit path, so every check moved
+into it is paid on every dispatch for the life of the process, and it is worth paying only where the
+failure it catches would otherwise be *silent*.
 
-Two family-level observations. First, all three `deepseek_prefill` ops audited here (this one,
-`update_padded_kv_cache`, `zero_padded_kv_cache`) share the same correct core idiom: the moving
-per-request index is omitted from the hash, patched on every hit, and re-checked by a validator that
-runs on both the miss and hit paths — with a dual "scalar or 1-element device tensor" path selected by
-a hashed `has_value()` bit. They also share the same 32x32 defect, and the divergence in its
-consequences is purely a dispatch-mechanism artifact. All three also define a narrow hit validator that
+Two family-level observations, both now historical for this op and live for its siblings. First, all
+three `deepseek_prefill` ops audited here (this one, `update_padded_kv_cache`, `zero_padded_kv_cache`)
+share the same correct core idiom: the moving per-request index is omitted from the hash, patched on
+every hit, and re-checked by a validator that runs on both the miss and hit paths — with a dual "scalar
+or 1-element device tensor" path selected by a hashed `has_value()` bit. They also shared the same 32x32
+defect, and the divergence in its consequences was purely a dispatch-mechanism artifact; fab067a fenced
+all three, in each case by putting the guard in the shared `validate_runtime_args` rather than in
+`validate_on_program_cache_miss`, which for the two `kv_cache` ops is the difference between fixing the
+bug and not, since their reproductions are cache hits. All three also define a narrow hit validator that
 delegates to a shared `validate_runtime_args` and thereby drops the rest of their miss-time pins on the
-hit path; this op's shared function is the most complete of the three, which is why its regrades are
-confined to two low-severity rows. In all three, the only miss-only pin worth buying back on the hot
-path is the one whose absence is *silent* — which in this op is none of them, and in
-`update_padded_kv_cache` is the `cache`-vs-`input` dtype and layout pair. Second, this op is the only
-one of the three that
-hashes its metadata tensor's `memory_config` and `padded_shape`; the other two hash only the engagement
-bit while baking that tensor's `TensorAccessorArgs` into kernel compile-time args, which is a real
-defect in those two. The pattern implemented here is the one they should adopt.
+hit path; this op's shared function is the most complete of the three. Second, this op is the only one
+of the three that hashes its metadata tensor's spec at all; the other two hash only the engagement bit
+while baking that tensor's `TensorAccessorArgs` into kernel compile-time args, and close the resulting
+gap with `TT_FATAL`s instead. That works, but the pattern implemented here — hash the spec, leave the
+relaxations default, let key and validation agree by construction — is the one they should adopt when
+they are ported to Metal 2.0.
 
 ## Recommendations
+
+**Status: recommendations 1, 2 and 3 landed in fab067a; 4 and 5 stand as non-recommendations.** Each
+item below carries its own status line. The section is left in place because the reasoning is what
+transfers to the two siblings' ports, not because anything here is outstanding.
 
 **Every guard below names the function it must go into, and for this op that function is
 `validate_runtime_args`.** Because the op defines `validate_on_program_cache_hit`, the miss validator is
@@ -880,8 +1093,10 @@ There are two distinct ways to close a miss-only pin in this op, and they are no
 
 1. Hash `cos.logical_shape()`, `sin.logical_shape()` and `trans_mat.logical_shape()` alongside the
    padded shapes, or declare `TensorSpecRelaxations::match_padded_shape_only` on those three
-   `TensorParameter`s. Either makes omission 3 explicit; today the hash relaxes what the framework then
-   requires exactly, so the "relaxation" can only ever surface as a crash.
+   `TensorParameter`s. Either makes omission 3 explicit; pre-fix the hash relaxed what the framework
+   then required exactly, so the "relaxation" could only ever surface as a crash.
+   **Status: DONE in fab067a**, and more than asked — the hash now keys the whole `tensor_spec()`
+   (`:262-275`), which subsumes the logical shapes and leaves the relaxations correctly default.
 2. Reject a non-32x32 `Tile` on every operand, closing omission 5. Assert
    `tensor_spec().tile().get_height() == TILE_HEIGHT` and the same for `get_width()`, on `input`, `cos`,
    `sin` and `trans_mat`, in the same shape as the `interleaved_to_sharded` guard quoted in omission 5.
@@ -905,36 +1120,43 @@ There are two distinct ways to close a miss-only pin in this op, and they are no
    This is a family-wide gap: apply the same guard to `update_padded_kv_cache` and
    `zero_padded_kv_cache`, where it is not a caveat but a fix for silent data corruption, and where the
    `validate_runtime_args` placement is load-bearing rather than merely preferable.
+   **Status: DONE in fab067a** — landed as `require_standard_tile` (`:87-109`), in
+   `validate_runtime_args` as specified, on all four operands, with the `Layout::TILE` checks of
+   omission 4 folded into the same lambda. The same guard landed in both siblings.
 3. Correct two stale comments, each of which is the stated safety argument for the function it sits on,
-   and each of which currently claims more than the code delivers. An inaccurate safety comment is worse
+   and each of which claimed more than the code delivered. An inaccurate safety comment is worse
    than none, because it talks the next reader out of checking.
-   - `compute_program_hash` (`:210-214`) states the hash covers "the full input, cos, sin and trans_mat
-     specs". It covers projections of them, and that gap is exactly omissions 3-5.
-   - `validate_on_program_cache_hit` (`:189-190`) states that "structural constraints are hashed and so
-     guaranteed unchanged here". True of the shapes and dtypes it has in mind; false of the four
-     `Layout::TILE` pins and the four `storage_type()` pins, which are neither hashed nor re-checked —
+   - `compute_program_hash` (`:210-214`) stated the hash covered "the full input, cos, sin and trans_mat
+     specs". It covered projections of them, and that gap was exactly omissions 3-5.
+   - `validate_on_program_cache_hit` (`:189-190`) stated that "structural constraints are hashed and so
+     guaranteed unchanged here". True of the shapes and dtypes it had in mind; false of the four
+     `Layout::TILE` pins and the four `storage_type()` pins, which were neither hashed nor re-checked —
      omissions 4 and 7.
-4. **Leave the regraded omissions 4 and 7 as documented CAVEATs — do not move their pins onto the hit
-   path.** This is a deliberate non-recommendation, recorded so it is not mistaken for an oversight.
 
-   The available fix is to move the three unhashed `Layout::TILE` checks (`:158-160`) and the four
-   `storage_type() == StorageType::DEVICE` checks (`:142-145`) into `validate_runtime_args`, upgrading
-   both rows to `VALID — pinned by validation`. Neither is worth its price, for the same underlying
-   reason: **neither failure is silent.** The layout divergence is already rejected on the hit by the
-   framework's exact `TensorSpec` comparison, which throws a named diagnostic before any kernel runs;
-   the storage divergence already faults when `UpdateProgramRunArgs` tries to resolve a buffer that a
-   host tensor does not have. In both cases the caller gets a hard failure on the offending call today.
-   Moving the checks buys a better error message, and charges seven extra `TT_FATAL`s per dispatch for
-   it, forever. For a rotary embedding on the prefill hot path that is the wrong trade.
+   **Status: DONE in fab067a.** Both were rewritten (`:245-261` and `:224-227`), and the second now
+   states the contract positively: anything that must hold on a hit belongs inside
+   `validate_runtime_args`. That is also the mitigation recommendation 5 asks for, so it is covered.
+4. **Do not move the four `storage_type()` pins onto the hit path.** This is a deliberate
+   non-recommendation, recorded so it is not mistaken for an oversight.
 
-   The judgement would flip if either failure were silent — that is exactly the distinction that makes
-   the tile guard in recommendation 2 worth paying for and these two not. It would also flip for the
-   layout row specifically if anyone ever set `TensorSpecRelaxations` on these `TensorParameter`s or
-   passed `skip_validation`, since the framework backstop is the only thing holding that row up; a
-   comment at the `TensorParameter` declarations (`create_at:385-395`) noting that the audit relies on
-   default-constructed relaxations would be cheaper insurance than the runtime checks.
+   **Status: STANDS, and strengthened.** As originally written this item also covered the three
+   unhashed `Layout::TILE` checks, on the grounds that the framework spec comparison already rejected a
+   layout divergence and moving the pins would buy only a better message. fab067a moved them anyway —
+   correctly, because they ride along in the tile lambda of recommendation 2 at no extra dispatch cost
+   beyond three `layout()` queries, and because relying on a framework comparison a relaxation could
+   switch off was the weak part of the argument. The storage half of this item is now on firmer ground
+   than when it was written: the pins are not merely low-value, they are **provably** zero-value, since
+   `launch()` asserts `is_device_tensor` on every tensor argument on every dispatch
+   (`ttnn/api/ttnn/device_operation.hpp:500-501`) — see `#### Framework correction` under omission 7.
+   Moving them into `validate_runtime_args` would charge four `storage_type()` queries per dispatch,
+   forever, to re-check something the framework has already made impossible. fab067a's one addition
+   (`cos`, `:72-75`) is not this: it guards a `device()` dereference on the next line.
 
-5. **Do not delete `validate_on_program_cache_hit` to fix this.** Deleting it would put the op on the
+   The general judgement stands: buy back a miss-only pin on the hot path only when the failure it
+   catches would otherwise be *silent*. That is exactly the distinction that made the tile guard worth
+   paying for and the storage pins not.
+
+5. **Do not delete `validate_on_program_cache_hit` to fix this. Status: STANDS.** Deleting it would put the op on the
    dispatcher's substitution branch, so the full miss validator would run on every hit and every pin
    above would hold by construction — genuinely the simplest and safest fix, and immune to a future
    check being added to the wrong function. It is recorded here as the alternative rather than the
@@ -949,9 +1171,9 @@ There are two distinct ways to close a miss-only pin in this op, and they are no
    `## Cache-hit patch mechanism` vindicates the choice: fewer than half of those lines can be reached
    on a hit at all, and none of the reachable ones fails silently.
 
-   The one thing the current arrangement genuinely costs is fragility — the hit validator's comment
-   already claims more than the code delivers (see recommendation 3), and nothing stops the next person
+   The one thing the current arrangement genuinely costs is fragility — nothing stops the next person
    adding a load-bearing check above the delegation and not noticing it never runs. The cheap mitigation
-   is a comment at the top of `validate_on_program_cache_miss` stating that everything above the
-   `validate_runtime_args` call at `:184` is miss-only by design, and that any check which must hold on
-   a hit belongs inside `validate_runtime_args`.
+   is a comment stating that everything above the `validate_runtime_args` call at `:184` is miss-only by
+   design, and that any check which must hold on a hit belongs inside `validate_runtime_args`.
+   **fab067a landed that mitigation** on the hit validator (`:224-227`), which is where a reader looking
+   for the contract will actually be standing.

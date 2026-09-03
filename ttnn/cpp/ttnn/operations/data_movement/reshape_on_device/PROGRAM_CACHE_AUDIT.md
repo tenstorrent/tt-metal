@@ -6,7 +6,7 @@ default ("hash everything") key.
 | | |
 |---|---|
 | Device operation | `ttnn::prim::ReshapeDeviceOperation` (`device/reshape_op.hpp`) |
-| Custom hash | `device/reshape_op.cpp:84` |
+| Custom hash | `device/reshape_op.cpp:109` |
 | `operation_attributes_t` | `ReshapeOnDeviceParams` — `logical_output_shape`, `padded_output_shape`, `output_mem_config` |
 | `tensor_args_t` | `ReshapeOnDeviceInputs` — `input_tensor` |
 | Program factories | `ReshapeTileProgramFactory`, `ReshapeRMProgramFactory` (both `ProgramDescriptor`-based) |
@@ -14,13 +14,61 @@ default ("hash everything") key.
 | `get_dynamic_runtime_args` | **No** |
 | Cache-hit patch mechanism | Framework **buffer-binding fast path** |
 
+## Post-fix status — commit fab067a
+
+**CLEAR — with a justified relaxation.** The one program-cache bug this audit found (omission #2, the
+unguarded 32x32 tile assumption) is fixed. Every remaining omission is now either pinned by a
+`TT_FATAL` that executes on the hit path or functionally determined by a hashed term, with the single
+exception of `input.logical_shape()`, which is a genuine relaxation: the key carries `padded_shape`
+instead, which is exactly the projection of the input shape both factories observe. Zero remaining
+bugs.
+
+What `fab067a` changed in this op:
+
+- Added a 32x32 tile guard to the TILE branch of `validate_on_program_cache_miss`
+  (`device/reshape_op.cpp:48-58`). Because the op declares no `validate_on_program_cache_hit`, the
+  dispatcher substitutes the miss validator on hits (`ttnn/api/ttnn/device_operation.hpp:265-269`), so
+  the guard is live on the offending call, not just on the build call. This is the minimal fix this
+  audit recommended (recommendation 1) rather than the tile-aware-factory alternative.
+- Documented the constraint on the public API: `reshape_nanobind.cpp:52` now reads "A TILE layout
+  tensor must use the standard 32x32 tile."
+- `compute_program_hash` was **not** touched. The eight terms are unchanged.
+
+What remains open:
+
+- The `Tile` transpose flags (`get_transpose_within_face()` / `get_transpose_of_faces()`) are still
+  unguarded, as recommendation 1 anticipated. This is now harmless rather than latent: with
+  `tile_shape` pinned to 32x32, `Tile`'s constructor derives every other field from it
+  (`tt_metal/impl/data_format/tile.cpp:36-68`) and `Tile::get_tile_size` ignores the transpose flags
+  entirely (`tt_metal/impl/data_format/tile.cpp:70-118`), so nothing either factory reads can move.
+  It is a framework-wide gap, not a reshape defect — the flags reach neither the default hash nor the
+  canonical key.
+- Recommendation 2 (drop the redundant `program_factory.index()`) was not taken. No correctness
+  impact either way.
+- Recommendation 3 stands: this op still has no sharded path, so re-audit if one is added.
+
+**Metal 2.0 port: clear**, with one flag to declare. The logical-vs-padded relaxation below is not
+ad-hoc — it is exactly the shape of `TensorSpecRelaxations::match_padded_shape_only`
+(`tt_metal/api/tt-metalium/experimental/metal2_host_api/tensor_spec_relaxations.hpp:41`), which
+`pertinent_fields` maps to `PertinentFields{.padded_shape = true}`
+(`tt_metal/impl/metal2_host_api/tensor_spec_relaxations.cpp:77-79`). The input `TensorParameter` must
+declare it, or a second call differing only in logical shape will hit the key and then be *rejected*
+by `ValidateTensorArgs` (`tt_metal/impl/metal2_host_api/program_run_args.cpp:176-189`) instead of
+reusing the program. Declaring it is safe: `hash_tensorspec_with_relaxation`
+(`tt_metal/impl/metal2_host_api/tensor_spec_relaxations.cpp:116`) and
+`tensorspecs_match_with_relaxation` (`:161-201`) derive their field set from the same
+`pertinent_fields` call, so the key and the run-time predicate cannot disagree. Note the flag is
+*tighter* than this op's current key: it pins the whole `tensor_layout()` — including `page_config`
+and `Alignment`, which the custom hash drops — so porting strengthens the key rather than weakening
+it, and omissions #2 and #3 below become moot by construction.
+
 ## Cache-hit patch mechanism (what actually gets refreshed)
 
 Both factories declare their address slots through `emplace_runtime_args({buffer, ...})`, which
 produces `resolved_bindings.rt_args`. In `MeshDeviceOperationAdapter`'s descriptor cache-hit path
 this selects the fast path:
 
-```726:731:ttnn/api/ttnn/mesh_device_operation_adapter.hpp
+```735:740:ttnn/api/ttnn/mesh_device_operation_adapter.hpp
                     if (!sv.resolved_bindings.rt_args.empty() ||
                         (!dynamic_args.empty() && !sv.resolved_bindings.empty())) {
                         auto collected =
@@ -40,7 +88,7 @@ hash, either directly or via a value it is derived from.
 This decides omission #4 below, and it runs the opposite way to the intuitive reading, so it is
 worth settling before the omissions. The dispatcher runs exactly *one* validator on a hit:
 
-```262:266:ttnn/api/ttnn/device_operation.hpp
+```265:269:ttnn/api/ttnn/device_operation.hpp
     if constexpr (HasValidateOnProgramCacheHit<mesh_device_operation_t>) {
         mesh_device_operation_t::validate_on_program_cache_hit(operation_attributes, tensor_args);
     } else {
@@ -50,7 +98,7 @@ worth settling before the omissions. The dispatcher runs exactly *one* validator
 
 The mesh adapter mirrors the same rule for the adapted type:
 
-```228:234:ttnn/api/ttnn/mesh_device_operation_adapter.hpp
+```229:235:ttnn/api/ttnn/mesh_device_operation_adapter.hpp
     static void validate_on_program_cache_hit(const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
         if constexpr (HasValidateOnProgramCacheHit<DeviceOperation>) {
             DeviceOperation::validate_on_program_cache_hit(attrs, tensor_args);
@@ -66,13 +114,15 @@ places the op in the favourable branch: the framework substitutes the *miss* val
 every `TT_FATAL` in it executes on the offending call rather than only on the build call. The pins that
 therefore hold on the hit path are the storage-type and non-null-buffer checks
 (`device/reshape_op.cpp:30-31`), the BFLOAT16-or-FLOAT32 dtype check (`:32-35`), the TILE-or-ROW_MAJOR
-layout check (`:37-39`), and the INTERLEAVED memory-layout checks on both the input and the output
-memory config (`:41-46`). A "VALID — pinned by validation" verdict resting on any of these is legitimate,
-not miss-only; that is what licenses omission #4.
+layout check (`:37-39`), the INTERLEAVED memory-layout checks on both the input and the output
+memory config (`:41-46`), and — since `fab067a` — the 32x32 tile geometry check on the TILE path
+(`:53-58`). A "VALID — pinned by validation" verdict resting on any of these is legitimate,
+not miss-only; that is what licenses omission #4, and post-`fab067a` it is also what licenses
+omission #2.
 
 The corollary bounds the other direction: whatever the miss validator does *not* check is unpinned on
-both paths. It never inspects the tile geometry, which is what keeps omission #2 a bug rather than a
-caveat.
+both paths. Pre-`fab067a` the validator never inspected the tile geometry, which is what made
+omission #2 a bug rather than a caveat; `fab067a` closed exactly that gap.
 
 ## Baseline: what the default hash would cover
 
@@ -90,7 +140,7 @@ Note the default key does **not** contain `padded_shape` directly — it is deri
 
 ## What the custom hash covers
 
-```89:97:ttnn/cpp/ttnn/operations/data_movement/reshape_on_device/device/reshape_op.cpp
+```114:122:ttnn/cpp/ttnn/operations/data_movement/reshape_on_device/device/reshape_op.cpp
     return operation::hash_operation<ReshapeDeviceOperation>(
         operation_attributes.logical_output_shape,
         operation_attributes.padded_output_shape,
@@ -134,16 +184,35 @@ the default hash would have forced a needless recompile. The freshly-computed ou
 still carries the correct per-call logical shape, since `compute_output_specs` /
 `create_output_tensors` run on every invocation, hit or miss.
 
+Post-`fab067a` this is the only omission in this document that is a relaxation rather than a
+zero-value drop, and two qualifications belong with it. First, it is **TILE-path only**: for
+ROW_MAJOR interleaved the default `Alignment` is `{1}`
+(`tt_metal/impl/tensor/spec/layout/page_config.cpp:47-57`), so `padded_shape == logical_shape` and
+the relaxation is vacuous there. Second, reshape preserves logical volume, so the extra hits it buys
+are narrower than the example above suggests: `logical_output_shape` is hashed, so the two calls must
+also agree on the reshape target — logical `[1,1,2,16]` and `[1,1,16,2]` (both padding to
+`[1,1,32,32]`, both of volume 32) reshaped to the same `[1,1,4,8]`. The op does not **need** the
+relaxation; see the summary and recommendation 4 for what removing it would cost.
+
 ### 2. `input_tensor.tensor_spec().page_config()` — only `layout()` is hashed
 
-**Verdict: BUG.** The tile factory is only correct for 32x32 tiles, nothing validates that, and
-the tile geometry is not hashed — so a non-32x32 input silently inherits a wrong cached program.
+**Verdict: RESOLVED by fab067a** (was BUG).
 
-The third clause is the one that makes this a *cache* defect rather than only a factory defect, so it
-is worth demonstrating rather than asserting. `compute_program_hash` (`device/reshape_op.cpp:84-98`)
-hashes exactly eight terms:
+`fab067a` added a `TT_FATAL` rejecting any tile other than 32x32 to the TILE branch of
+`validate_on_program_cache_miss` (`device/reshape_op.cpp:53-58`), which — because this op declares no
+`validate_on_program_cache_hit` — the dispatcher substitutes onto the hit path as well. The hash was
+deliberately left alone: with `Tile` pinned, omitting `page_config` is correct by construction, which
+is the minimal route recommendation 1 below sets out. The `Tile` value can no longer vary, so the
+omission is now a category-3 zero-value omission rather than a defect.
 
-```89:97:ttnn/cpp/ttnn/operations/data_movement/reshape_on_device/device/reshape_op.cpp
+Pre-fix: the tile factory was only correct for 32x32 tiles, nothing validated that, and
+the tile geometry was not hashed — so a non-32x32 input silently inherited a wrong cached program.
+
+The third clause is the one that made this a *cache* defect rather than only a factory defect, so it
+is worth demonstrating rather than asserting. `compute_program_hash` (`device/reshape_op.cpp:109-123`)
+hashes exactly eight terms, unchanged by `fab067a`:
+
+```114:122:ttnn/cpp/ttnn/operations/data_movement/reshape_on_device/device/reshape_op.cpp
     return operation::hash_operation<ReshapeDeviceOperation>(
         operation_attributes.logical_output_shape,
         operation_attributes.padded_output_shape,
@@ -164,14 +233,23 @@ absent from the key, and two tensors differing only in `Tile` land on the same c
 face/transpose configuration. The tile factory sizes its CB from the *architectural* tile and
 indexes with the global tile constants, never `input_tensor.tensor_spec().tile()`:
 
-```30:35:ttnn/cpp/ttnn/operations/data_movement/reshape_on_device/device/reshape_tile_program_factory.cpp
+```30:39:ttnn/cpp/ttnn/operations/data_movement/reshape_on_device/device/reshape_tile_program_factory.cpp
     tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t single_tile_size = tt::tile_size(cb_data_format);
 
     Buffer* src0_buffer = input_tensor.buffer();
 
-    uint32_t num_tiles = input_tensor.physical_volume() / tt::constants::TILE_HW;
+    auto output_shape = output_tensor.padded_shape();
+
+    // Tile count must come from the output tensor to match what the reader produces; deriving it
+    // from the input deadlocks when the input and output have different tile padding.
+    uint32_t num_tiles = output_tensor.physical_volume() / tt::constants::TILE_HW;
 ```
+
+(The `num_tiles` line reads `output_tensor` rather than `input_tensor` since `c4bc9b32ae5`, the
+tile-reshape deadlock fix, which also added the equal-padded-volume `TT_FATAL` at
+`device/reshape_op.cpp:73-79`. That commit predates `fab067a`; it changed which padded volume the
+factory reads, not whether the tile is hardcoded.)
 
 `tt::tile_size(format)` returns the byte size of a 32x32 tile of that format; the tile-aware API is
 `tile.get_tile_size(format)`. Likewise `TILE_HW`, `TILE_WIDTH` and `TILE_HEIGHT` are the
@@ -179,7 +257,8 @@ architectural constants, not this tensor's geometry. Non-32x32 tiles are a suppo
 configuration — sibling data-movement factories such as `untilize`, `transpose` and `slice` read
 `tensor_spec().tile().get_tile_shape()` precisely because of it.
 
-Validation does not close the gap. It constrains the layout enum but never the tile geometry:
+Pre-fix, validation did not close the gap. It constrained the layout enum but never the tile
+geometry:
 
 ```37:39:ttnn/cpp/ttnn/operations/data_movement/reshape_on_device/device/reshape_op.cpp
     TT_FATAL(
@@ -187,16 +266,20 @@ Validation does not close the gap. It constrains the layout enum but never the t
         "Only tile and row major reshape supported!");
 ```
 
-The two defects compound, and that is what makes this a cache bug rather than only a factory bug.
+The two defects compounded, and that is what made this a cache bug rather than only a factory bug.
 Taken alone, the hardcoding would at least produce a fresh (wrong) program per call. Because the
-tile geometry is also absent from the hash, a `Tile{16, 32}` input reuses the cache entry built for
+tile geometry was also absent from the hash, a `Tile{16, 32}` input reused the cache entry built for
 a `Tile{32, 32}` input of the same padded shape and dtype, so the CB page size, `num_tiles`, and the
-reader's `padded_shape[3] / TILE_WIDTH` argument are all silently those of the 32x32 program. The
-symptom is wrong data or a hang, with no cache miss to hint at the cause.
+reader's `padded_shape[3] / TILE_WIDTH` argument were all silently those of the 32x32 program. The
+symptom was wrong data or a hang, with no cache miss to hint at the cause.
 
-The right fix is the guard, not a hash change. Once `Tile` is constrained to 32x32, omitting
-`page_config` from the key becomes correct by construction. The codebase already has a canonical
-form of this check:
+The right fix is the guard, not a hash change, and that is the route `fab067a` took. Once `Tile` is
+constrained to 32x32, omitting `page_config` from the key becomes correct by construction — and the
+constraint is total, not partial: `Tile`'s only public constructor takes `(tile_shape,
+transpose_tile)` and derives `face_shape`, `num_faces`, `tile_hw`, `face_hw`, `partial_face` and
+`narrow_tile` from `tile_shape` (`tt_metal/impl/data_format/tile.cpp:36-68`), so pinning 32x32 pins
+every field that reaches a page size or a CB. The shipped check matches the canonical form the
+codebase already had:
 
 ```95:97:ttnn/cpp/ttnn/operations/data_movement/sharded/interleaved_to_sharded/device/interleaved_to_sharded_op.cpp
         auto tile = input_tensor.tensor_spec().tile();
@@ -204,10 +287,13 @@ form of this check:
             return {false, fmt::format("interleaved_to_sharded requires standard 32x32 tiles, got {}x{}", tile.get_height(), tile.get_width())};
 ```
 
-If instead the factory is ever made genuinely tile-aware, `page_config` must be added to the hash
-at the same time. Both routes have one gap in common — neither a height/width guard nor a hashed
-`page_config` covers the tile's transpose flags, which are invisible to the cache framework-wide.
-Recommendation 1 sets out why, and what to add.
+If the factory is ever made genuinely tile-aware instead, `page_config` must be added to the hash
+at the same time and the guard relaxed in the same change. Both routes have one gap in common —
+neither a height/width guard nor a hashed `page_config` covers the tile's transpose flags, which are
+invisible to the cache framework-wide, so `fab067a`'s guard does not cover them either. Under the
+guard that gap is inert rather than latent: `Tile::get_tile_size` never reads the flags
+(`tt_metal/impl/data_format/tile.cpp:70-118`) and neither factory reads them at all. Recommendation 1
+sets out why, and what to add if the op ever becomes tile-aware.
 
 ### 3. `input_tensor.tensor_spec().tensor_layout().get_alignment()`
 
@@ -237,7 +323,7 @@ omission #2's finding rather than this one's.
 The one alignment-*named* quantity the tile factory reads is a different thing entirely, the DRAM/L1
 alignment:
 
-```58:59:ttnn/cpp/ttnn/operations/data_movement/reshape_on_device/device/reshape_tile_program_factory.cpp
+```60:61:ttnn/cpp/ttnn/operations/data_movement/reshape_on_device/device/reshape_tile_program_factory.cpp
     bool src0_is_dram = src0_buffer->buffer_type() == BufferType::DRAM;
     uint32_t alignment = src0_is_dram ? hal::get_dram_alignment() : hal::get_l1_alignment();
 ```
@@ -268,7 +354,7 @@ ran on misses would be worth no more than "pinned only on the miss path" — the
 definition the one that *hits*. Because `ReshapeDeviceOperation` declares no
 `validate_on_program_cache_hit`, the dispatcher runs the miss validator on hits too:
 
-```262:266:ttnn/api/ttnn/device_operation.hpp
+```265:269:ttnn/api/ttnn/device_operation.hpp
     if constexpr (HasValidateOnProgramCacheHit<mesh_device_operation_t>) {
         mesh_device_operation_t::validate_on_program_cache_hit(operation_attributes, tensor_args);
     } else {
@@ -319,7 +405,7 @@ with a different idle set.
 
 Defining `compute_program_hash` opts this op out of attribute-level hash-collision resolution:
 
-```1012:1014:ttnn/api/ttnn/mesh_device_operation_adapter.hpp
+```1035:1037:ttnn/api/ttnn/mesh_device_operation_adapter.hpp
         if constexpr (requires { DeviceOperation::compute_program_hash(attrs, tensor_args); }) {
             return key;  // custom hash -> opt out beyond the op-identity prefix
         } else {
@@ -334,30 +420,41 @@ here relative to a default-hashed op.
 
 | Omitted vs. default | Used by program? | Patched on hit? | Verdict |
 |---|---|---|---|
-| `input.logical_shape` | No (padded shape used instead) | n/a | VALID — relaxation win |
-| `input.page_config` (`Tile`) | Yes, but only as a hardcoded 32x32 | No | **BUG** — unguarded 32x32 assumption |
+| `input.logical_shape` | No (padded shape used instead) | n/a | VALID — relaxation win (TILE path only) |
+| `input.page_config` (`Tile`) | Yes, but only as a hardcoded 32x32 | No | **RESOLVED by fab067a** — pinned by the 32x32 guard, live on hits |
 | `input.tensor_layout.alignment` | Only via hashed derivatives | n/a | VALID — unused |
 | `input.storage` kind | n/a | n/a | VALID — pinned by validation (on hits too) |
 | Buffer addresses | Yes | Yes (`resolved_bindings`) | VALID — patched |
 
-**One program-cache bug found**: the unguarded 32x32 tile assumption (omission #2). A
-`Tile{16, 32}` input reuses the program built for a `Tile{32, 32}` input of the same padded shape
-and dtype.
+**Zero program-cache bugs remain.** The one this audit found — the unguarded 32x32 tile assumption
+(omission #2), under which a `Tile{16, 32}` input reused the program built for a `Tile{32, 32}` input
+of the same padded shape and dtype — was fixed by `fab067a`'s guard at `device/reshape_op.cpp:53-58`.
 
-Setting that aside, the rest of the key is sound. Every other non-address runtime arg and every
+The rest of the key is sound. Every non-address runtime arg and every
 compile-time arg in both factories is a function of the hashed set
 {`logical_output_shape`, `padded_output_shape`, `output_mem_config`, input `dtype`,
-input `memory_config`, input `layout`, input `padded_shape`} plus device-fixed constants
-(compute grid, HAL alignments) that the per-device cache already partitions on.
+input `memory_config`, input `layout`, input `padded_shape`} plus the now-pinned 32x32 tile and
+device-fixed constants (compute grid, HAL alignments) that the per-device cache already partitions
+on.
+
+The one omission that remains a genuine *relaxation* rather than a zero-value drop is
+`input.logical_shape` (omission #1), and it applies to the TILE path alone: on ROW_MAJOR interleaved
+the default `Alignment` is `{1}` (`tt_metal/impl/tensor/spec/layout/page_config.cpp:47-57`), so
+`padded_shape == logical_shape` and hashing one is hashing the other. It is not *needed* — no
+in-tree caller varies the input logical shape under a fixed padded shape and a fixed reshape target,
+so adding `logical_shape()` back would cost zero real misses and would restore the collision
+backstop discussed above. Worth doing as part of the Metal 2.0 port, where the alternative is
+declaring `match_padded_shape_only` on the input binding.
 
 ## Recommendations
 
-1. **Fix the bug.** Add a `TT_FATAL` in `validate_on_program_cache_miss` rejecting any `Tile` other
-   than 32x32, matching the wording used by `interleaved_to_sharded`. This is the minimal fix and
-   it makes omission #2 correct by construction. Put it in the miss validator specifically: the op has
+1. **Fixed by `fab067a`.** ~~Add~~ Added a `TT_FATAL` in `validate_on_program_cache_miss` rejecting
+   any `Tile` other than 32x32, matching the wording used by `interleaved_to_sharded`
+   (`device/reshape_op.cpp:53-58`). This was the minimal fix and
+   it makes omission #2 correct by construction. It went in the miss validator specifically: the op has
    no hit validator, so the substitution branch runs it on hits as well, at a cost of two integer
-   comparisons per dispatch. Do not close the hole by adding a hit validator instead — that would
-   replace the miss validator on hits and drop the four pins omission #4 rests on.
+   comparisons per dispatch. The hole was deliberately *not* closed by adding a hit validator — that
+   would replace the miss validator on hits and drop the four pins omission #4 rests on.
 
    The alternative — making both factories genuinely tile-aware via `tile.get_tile_size(format)` and
    `tile.get_tile_shape()` — requires adding `page_config` to the hash in the same change. If you take
@@ -382,9 +479,14 @@ bool Tile::operator==(const Tile& other) const {
    hashed. This is framework-wide and not something reshape's custom hash introduced, but it means a
    tile-aware reshape would still need an explicit `TT_FATAL` on
    `get_transpose_within_face()` / `get_transpose_of_faces()` alongside the hash change. The 32x32
-   guard above has the same gap — it checks height and width only — so if either path is taken, guard
-   the transpose flags too.
+   guard `fab067a` shipped has the same gap — it checks height and width only — so if the tile-aware
+   route is ever taken, guard the transpose flags too. Under the guard as shipped the gap is inert,
+   since nothing either factory reads depends on the flags.
 2. Consider dropping `program_factory.index()` (already implied by `layout()`), or keep it as
-   documentation — no correctness impact either way.
+   documentation — no correctness impact either way. Not taken by `fab067a`.
 3. If this op ever gains a sharded path, `memory_config` alone will no longer pin the
-   `TensorAccessorArgs` compile-time layout; re-audit at that point.
+   `TensorAccessorArgs` compile-time layout; re-audit at that point. Still open — the op remains
+   INTERLEAVED-only on both sides (`device/reshape_op.cpp:41-46`).
+4. Before the Metal 2.0 port, either add `input_tensor.logical_shape()` to the key or declare
+   `match_padded_shape_only` on the input `TensorParameter` — see the post-fix status section. Doing
+   neither leaves a key that hits where `ValidateTensorArgs` then rejects.

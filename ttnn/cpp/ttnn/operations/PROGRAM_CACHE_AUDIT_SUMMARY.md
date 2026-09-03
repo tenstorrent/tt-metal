@@ -1,4 +1,4 @@
-# Program-cache audit — cross-cutting summary
+d# Program-cache audit — cross-cutting summary
 
 Covers 24 ops. Each has a `PROGRAM_CACHE_AUDIT.md` in its own directory under this tree with the
 full per-parameter analysis; this document records only what is visible across ops and not from any
@@ -15,7 +15,135 @@ documents so the counts stay comparable.
 
 ---
 
+## Post-fix status — commit fab067a
+
+`fab067a` ("[Bug Fix] Fix Common Program Cache Bugs", #53997) landed after this audit and touched 12
+of the 24 ops. **16 distinct cache defects remain across 10 ops, down from 48 across 18.** Of the 35
+defects in the ops it touched, 34 are closed; the exception is
+`experimental/test/prefetcher_consumer`, where the one-line fix landed on the validator and not on
+its sibling consumer. Two new defects were found while verifying the result, one in `slice` and one
+in `tanh_bw`, both described below.
+
+The commit closed defects by three routes, and which route matters for reading the per-op documents:
+adding the missing term to the hash; adding a `TT_FATAL` that pins the parameter so it cannot vary;
+or, for the DeepSeek ops, moving an existing check into a shared `validate_runtime_args` so it runs
+on hits as well as misses. That last route is the only one that works for those ops, because their
+reproductions are cache *hits* — a guard in `validate_on_program_cache_miss` would pass the first
+call and never execute on the call that corrupts data.
+
+**Clear to port** — `data_movement/reshape_on_device`, `data_movement/roll`,
+`data_movement/sharded_partial/interleaved_to_sharded_partial`,
+`experimental/ccl/llama_all_gather_matmul_async`, `experimental/ccl/llama_reduce_scatter_matmul`,
+`experimental/deepseek_prefill/moe_padding_config`,
+`experimental/deepseek_prefill/rotary_embedding_indexed`,
+`experimental/deepseek_prefill/update_padded_kv_cache`,
+`experimental/deepseek_prefill/zero_padded_kv_cache`, and the validator half of
+`experimental/test/prefetcher_consumer`.
+
+**Still blocked** — `data_movement/slice` (a pre-allocated TILE output supplied to a ROW_MAJOR slice
+still escapes both the hash and the new guard, because the layout/dtype/tile checks landed inside the
+TILE-input branch) and `eltwise/unary_backward/tanh_bw` (a sharded `grad_output`'s page geometry
+reaches the reader's compile-time accessor args while the key carries only the input's padded
+*volume*).
+
+**Untouched by the commit and still open** — `data_movement/sharded/interleaved_to_sharded`,
+`experimental/ccl/llama_reduce_scatter_create_heads`,
+`experimental/ccl/strided_reduce_scatter_async`, `ccl/reduce_to_root`, `generic`, `pool/generic`,
+`experimental/fusion`, and the consumer half of `experimental/test/prefetcher_consumer`.
+
+One correction to the body of this document, established while verifying the fixes:
+`TT_FATAL(is_device_tensor(...))` at `ttnn/api/ttnn/device_operation.hpp:500-501` runs inside
+`launch()` on every dispatch and descends into optionals by reflection. Every "storage variant kind"
+omission adjudicated across these audits was therefore pinned by the framework on both paths, and
+was never a reachable omission on any of them.
+
+---
+
+## Metal 2.0 porting
+
+Metal 2.0 replaces the hand-rolled key with a declared contract: a `TensorParameter` carries a
+`TensorSpec` plus a `TensorSpecRelaxations`
+(`tt_metal/api/tt-metalium/experimental/metal2_host_api/tensor_spec_relaxations.hpp:41`), and both
+the cache key and the runtime accept/reject test are derived from the same field set via
+`pertinent_fields` (`tt_metal/impl/metal2_host_api/tensor_spec_relaxations.cpp:67-87`). Key and
+validation therefore cannot disagree, which retires a failure mode this audit hit repeatedly: under a
+projection hash, two tensors differing only in a dropped field share a key, hit, and then throw from
+`report_tensor_arg_mismatch` instead of rebuilding.
+
+**The logical-vs-padded relaxation is a first-class flag, not a blocker.**
+`match_padded_shape_only` maps to `PertinentFields{.padded_shape = true}` — exactly the relaxation
+these ops take. Of the ops clear to port, `moe_padding_config` and `rotary_embedding_indexed` need no
+flag (the first because its input is pinned row-major unsharded so padded and logical always
+coincide, the second because it now hashes `tensor_spec()` wholesale); the rest declare
+`match_padded_shape_only`; and `llama_reduce_scatter_matmul` declares both — strict on its
+reduce-scatter input, which genuinely uses the logical width for an over-provisioned shard grid, and
+`match_padded_shape_only` on its matmul operands.
+
+**The relaxation type does not vary by path.** No program factory in any of these ops reads a
+logical shape or logical volume on any branch; every branch works in padded or physical terms. The
+logical reads that exist are front-end validation, per-call output-spec computation that cannot go
+stale, or launcher derivations feeding an already-hashed attribute. What does vary by input —
+factory selection, optional-operand presence, sharded versus interleaved — produces a different
+program and therefore a different `ProgramSpec`, not a different flag on the same one.
+
+**It does vary by input, in three ops.** Relaxations are declared per `TensorParameter`, and while
+the eight relaxed ops all take `match_padded_shape_only` on their principal operands, three of them
+do not apply it to every tensor argument:
+
+| Op | Relaxation | Same on all paths? | Applied to all inputs? |
+|---|---|---|---|
+| `reshape_on_device` | logical/padded | Yes | Yes — one tensor param (`input_tensor`) |
+| `roll` | logical/padded | Yes | Yes — one (`input`) |
+| `interleaved_to_sharded_partial` | logical/padded | Yes | Yes — one (`input_tensor`) |
+| `dram_prefetcher_validator` | logical/padded | Yes | Yes — one (`source_tensor`) |
+| `llama_all_gather_matmul_async` | logical/padded | Yes | Yes — all three (`input0`, `input1`, `intermediate`) |
+| `update_padded_kv_cache` | logical/padded | Yes | **No** — `cache`, `input` only |
+| `zero_padded_kv_cache` | logical/padded | Yes | **No** — `cache` only |
+| `llama_reduce_scatter_matmul` | logical/padded | Yes | **No** — matmul operands only |
+| `moe_padding_config` | none in effect | n/a | n/a |
+| `rotary_embedding_indexed` | none | n/a | n/a |
+
+The non-uniform parameters split into two opposite cases. The tensors with **no shape term at all**
+— `slot_idx`, `kv_actual_global` and `valid_global` in the two kv-cache ops, and
+`intermediate_packet_buffer` in `llama_reduce_scatter_matmul` — are *broader* than a logical/padded
+relaxation, not narrower: no shape property reaches the program. The metadata tensors are pinned by
+validation to 1-element UINT32 row-major unsharded and only their `memory_config()` is keyed, for the
+`TensorAccessorArgs` bank table; the packet buffer's identity is its `page_config` and
+`memory_config`. Reproducing that literally would need `dynamic_tensor_shape`, but since no caller
+varies these, declaring exact match costs nothing and is the recommended port.
+
+`rs.input_tensor` in `llama_reduce_scatter_matmul` is the opposite case: it keys `logical_shape()`
+with no padded term, because the shared reduce-scatter factory derives `ncores_input` and the
+`SCHEDULE` define from the logical shape. No flag expresses "logical exact, padded free", so this
+parameter ports as an exact spec match — strictly safer than what the hash does today.
+
+`interleaved_to_sharded_partial` is the row worth spot-checking, since its non-partial sibling is
+where this same relaxation is a live bug. Both of its factory branches read padded quantities —
+`padded_shape()[-1] / TILE_WIDTH` and `physical_volume()` on the tile path
+(`.../interleaved_to_sharded_partial/device/interleaved_to_sharded_partial_program_factory.cpp:101-104`)
+and `padded_shape()[-1] * element_size()` on the row-major path (`:118-120`) — so the relaxation
+holds on both. `reshape_on_device` has two factories but hashes `program_factory.index()`, so its
+layout paths cannot share a key at all.
+
+**Porting tightens these keys rather than loosening them.** Even the relaxed path requires exact
+`tensor_layout()` equality (`tensor_spec_relaxations.cpp:173-175`), and `tensor_layout` carries
+dtype, page config, memory config and alignment. Declaring `match_padded_shape_only` therefore pins
+the tile and the alignment exactly, structurally retiring the unguarded-32x32 and dropped-alignment
+classes below. The one residual is that `Tile::operator==` still excludes the transpose flags, so
+those stay invisible even under the strict comparison.
+
+`tanh_bw` is the one op whose relaxation has no expression here: no flag lets the padded shape vary
+while the accessor configuration stays fixed, and `dynamic_tensor_shape` keeps sharded distribution
+geometry load-bearing by design, rejecting a mismatch rather than accepting it
+(`tensor_spec_relaxations.hpp:68-74`). Its key must be narrowed from the padded volume to the padded
+shape before it can be ported — which closes its remaining defect as a side effect.
+
+---
+
 ## Counts
+
+The counts in this section are the **pre-fix baseline**, as originally audited. See the post-fix
+section above for the current state.
 
 48 distinct cache defects across 18 of the 24 ops. Three ops also carry a factory defect recorded
 outside these counts (`experimental/ccl/strided_reduce_scatter_async`,
@@ -309,6 +437,11 @@ The distinction that matters is not how many defects an op has but what has to c
 fire. Sorted that way, most defects are already reachable through ordinary configuration changes.
 
 ### Armed — the defect fires on an ordinary configuration change
+
+This triage is the **pre-fix** picture. `fab067a` disarmed most of it: of the ops listed below, only
+`generic`, `llama_reduce_scatter_create_heads`, and the consumer half of `prefetcher_consumer`
+remain armed, joined by the two newly found defects in `slice` and `tanh_bw`. See the post-fix
+section at the top for the current state.
 
 | Op | Defects | What has to change |
 |---|---|---|

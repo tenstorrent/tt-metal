@@ -15,6 +15,50 @@ framework default ("hash everything") key.
 | Own cache-hit validator | **No** — but see below; the framework substitutes the miss validator |
 | Cache-hit patch mechanism | **Framework buffer-binding fast path** (mode B) |
 
+## Post-fix status — commit fab067a
+
+**`fab067a` ("Fix Common Program Cache Bugs", #53997) did not touch this op.** No file under
+`data_movement/sharded/interleaved_to_sharded/` appears in the commit. The row-major-path BUG this
+document records therefore **stands unchanged at HEAD**: the key carries `padded_shape()` only,
+
+```144:151:ttnn/cpp/ttnn/operations/data_movement/sharded/interleaved_to_sharded/device/interleaved_to_sharded_op.cpp
+    return tt::tt_metal::operation::hash_operation<InterleavedToShardedDeviceOperation>(
+        operation_attributes.output_mem_config,
+        operation_attributes.output_dtype,
+        operation_attributes.keep_l1_aligned,
+        input_tensor.dtype(),
+        input_tensor.memory_config(),
+        input_tensor.layout(),
+        input_tensor.padded_shape());
+```
+
+while the row-major branch of the factory derives its work split from the *logical* shape and volume:
+
+```120:128:ttnn/cpp/ttnn/operations/data_movement/sharded/interleaved_to_sharded/device/interleaved_to_sharded_program_factory.cpp
+    } else {
+        input_unit_size = static_cast<uint32_t>(shard_spec.shape[1] * input.element_size());
+        output_unit_size = static_cast<uint32_t>(shard_spec.shape[1] * output.element_size());
+        num_units_per_shard_height = shard_spec.shape[0];
+        num_units_per_shard_width = 1;
+        num_units_per_shard = num_units_per_shard_height * num_units_per_shard_width;
+        num_units_per_row = static_cast<uint32_t>(input.logical_shape()[-1] * input.element_size());
+        num_units_offset = 1;
+        uint32_t num_units_height = static_cast<uint32_t>(input.logical_volume() / input.logical_shape()[-1]);
+```
+
+Two row-major inputs that share a padded shape but differ in logical shape — reachable through a
+non-default `Alignment`, which is itself unhashed — still collide on the key and still inherit a work
+split computed for the first one's logical extent.
+
+**Contrast with the partial sibling.** `interleaved_to_sharded_partial` was in the commit, and it is
+now complete on this axis for a different reason: `fab067a` gave it the `padded_shape` and
+`memory_config` terms this op already had, and it rejects row-major outright
+(`sharded_partial/interleaved_to_sharded_partial/device/interleaved_to_sharded_partial_op.cpp:26`), so
+its padded-only key has no logical-shape-reading branch to be wrong about. This op keeps that branch,
+which is why the same key that is sufficient there is insufficient here. See
+`sharded_partial/interleaved_to_sharded_partial/PROGRAM_CACHE_AUDIT.md` for the post-fix state of the
+pair.
+
 ## Cache-hit patch mechanism
 
 With neither `override_runtime_arguments` nor `get_dynamic_runtime_args`, the adapter falls

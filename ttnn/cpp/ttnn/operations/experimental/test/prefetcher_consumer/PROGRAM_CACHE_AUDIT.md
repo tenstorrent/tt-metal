@@ -14,16 +14,97 @@ because its hash makes an even more aggressive substitution.
 | | Consumer | Validator |
 |---|---|---|
 | Device operation | `DramPrefetcherConsumerDeviceOperation` (`dram_prefetcher_consumer.hpp:23`) | `DramPrefetcherValidatorDeviceOperation` (`dram_prefetcher_validator.hpp:25`) |
-| Custom hash | `dram_prefetcher_consumer.cpp:46-55` | `dram_prefetcher_validator.cpp:57-73` |
+| Custom hash | `dram_prefetcher_consumer.cpp:46-55` — **unchanged by fab067a** | `dram_prefetcher_validator.cpp:57-87` (post-fab067a; `:57-73` pre-fix, which is what the V-sections cite) |
 | `operation_attributes_t` | `num_iters`, `page_size_bytes`, `global_cb`, `mesh_device` | `num_layers`, `print_stride`, `global_cb`, `streaming`, `rotation` |
 | `tensor_args_t` | **empty struct** (`dram_prefetcher_consumer.hpp:33`) | `source_tensor` |
 | Program factory | `ProgramFactory` (`create_at` → `CachedProgram`) | `ProgramFactory` (`create_at` → `CachedProgram`) |
-| `override_runtime_arguments` | Present but an **empty no-op** (`dram_prefetcher_consumer.cpp:89-95`) | Present but an **empty no-op** (`dram_prefetcher_validator.cpp:250-256`) |
+| `override_runtime_arguments` | Present but an **empty no-op** (`dram_prefetcher_consumer.cpp:89-95`) | Present but an **empty no-op** (`dram_prefetcher_validator.cpp:264-270`; `:250-256` pre-fix) |
 | `get_dynamic_runtime_args` | No | No |
 | `validate_on_program_cache_hit` | Present but an **empty no-op** (`dram_prefetcher_consumer.cpp:33-34`) | Present but an **empty no-op** (`dram_prefetcher_validator.cpp:44-45`) |
 | Cache-hit patch mechanism | **Op-owned re-derivation (mode A) with an empty body — nothing is refreshed** | Same |
 
-**Result: one BUG in the consumer, three in the validator.** All four share a root cause — an
+## Post-fix status — commit fab067a
+
+**The verdicts for the two ops in this directory now diverge, and that is the headline.** fab067a
+rewrote `DramPrefetcherValidatorDeviceOperation::compute_program_hash` and left
+`DramPrefetcherConsumerDeviceOperation` entirely untouched.
+
+- **Validator: CLEAR.** All three of its bugs (V1, V2, V3) are resolved. One relaxation-free key now
+  covers the whole `GlobalCircularBuffer`, both of its allocation addresses, and the source tensor's
+  `page_config`, `padded_shape` and `memory_config`.
+- **Consumer: NOT CLEAR — its bug is unchanged.** The one-line fix landed on the validator and not on
+  its sibling. `DramPrefetcherConsumerDeviceOperation::compute_program_hash` still keys only
+  `num_iters`, `page_size_bytes` and `global_cb->config_address()`
+  (`dram_prefetcher_consumer.cpp:46-55`), and the comment asserting that "GlobalCircularBuffer isn't
+  reflection-hashable" (`:48-49`) is still there and still wrong — the validator's own fix disproves it
+  three lines of code away, by calling
+  `std::hash<tt::tt_metal::experimental::GlobalCircularBuffer>{}` directly
+  (`dram_prefetcher_validator.cpp:74-75`). The reproduction under omission 1 below still executes as
+  written.
+
+**What fab067a changed in the validator**
+
+- `compute_program_hash` now keys the **whole** GCB via its `std::hash` specialization
+  (`dram_prefetcher_validator.cpp:74-75`), guarded on `has_value()` with a `std::size_t{0}` sentinel.
+  That puts `sender_receiver_core_mapping`, `size` and `buffer_type` in the key by value, which is
+  what V1 asked for.
+- It additionally keys **both** GCB allocation addresses — `buffer_address()` and `config_address()`
+  (`:80-81`) — with the rationale spelled out at `:76-79`: `std::hash` covers the GCB's structure but
+  not which allocation it is, the remote CB bakes both addresses at build time, and
+  `UpdateDynamicCircularBufferAddress` refuses to re-point a GCB-backed CB, so two same-shaped GCBs at
+  different allocations must not share a program. This is an *addition* to the fix V1 requested, not a
+  substitution for it.
+- It keys `source_tensor.tensor_spec().page_config()`, `padded_shape()` and `memory_config()`
+  (`:84-86`). `page_config` is exactly what V3 turns on; `padded_shape` and `memory_config` are what
+  V2 turns on.
+- The hash comment was rewritten (`:59-65`) to enumerate what `create_at` reads and why the address
+  alone is not a sufficient identity, replacing the "aren't reflection-hashable" claim.
+
+**What remains open — validator**
+
+- `source_tensor.logical_shape()` is not keyed; `padded_shape()` is. That is a genuine
+  logical-vs-padded relaxation and it is sound: `create_at` reads `padded_shape[-2]` and
+  `padded_shape[-1]` only (`:112-115`), never a logical extent, so a weight tensor with `K = 4090`
+  padded to 4096 correctly shares a program with one at `K = 4096`. On a Metal 2.0 port this maps onto
+  `TensorSpecRelaxations::match_padded_shape_only`
+  (`tt_metal/api/tt-metalium/experimental/metal2_host_api/tensor_spec_relaxations.hpp:41,49`), which
+  `pertinent_fields` reduces to `PertinentFields{.padded_shape = true}`
+  (`tt_metal/impl/metal2_host_api/tensor_spec_relaxations.cpp:67-87`) — the field the hash already
+  keys. Both `hash_tensorspec_with_relaxation` (`:116`) and `tensorspecs_match_with_relaxation`
+  (`:161-201`) consume that one set and `ValidateTensorArgs` delegates to the predicate
+  (`tt_metal/impl/metal2_host_api/program_run_args.cpp:176-189`), so the key and validation cannot
+  disagree. Alternatively, keying the whole `tensor_spec()` and leaving relaxations default would be
+  simpler and strictly finer, since nothing in `create_at` benefits from the extra hits — that is what
+  `rotary_embedding_indexed` now does.
+- `alignment` and `layout` are still not keyed by name, but they are no longer reachable omissions:
+  the accessor's aligned page size and every shard-geometry word reduce to the now-hashed
+  `page_config`, `padded_shape`, `memory_config` and dtype.
+- The empty `validate_on_program_cache_hit` (`:44-45`) was **not** deleted, and the `is_dram()` check
+  still runs only on the miss path. That is now moot rather than fixed: `is_dram()` is a projection of
+  `buffer_type`, which is carried by the hashed `memory_config`, so the DRAM/L1
+  numeric-address-coincidence variant of V2 now misses instead of hitting. The silent hole is closed by
+  hashing rather than by validation, so recommendation 3's premise no longer holds.
+- The empty `override_runtime_arguments` (`:264-270`) is unchanged, so the three allocation addresses stay
+  in the key and a reallocation still forces a recompile. That is a cost, not a correctness defect;
+  see `## Non-cache correctness defects`.
+
+**What remains open — consumer**
+
+Everything. Omission 1 is unresolved: `sender_receiver_core_mapping`, `size` and `buffer_type` are all
+absent from the key, they determine the kernel's core range, the CB's core range and the pegged remote
+CB's geometry, and the empty `override_runtime_arguments` (`:89-95`) refreshes none of it.
+
+**Metal 2.0 port**
+
+The validator is clear to port, carrying the one `match_padded_shape_only` relaxation described above.
+The consumer is **not** clear: porting it would move it onto a dispatch path with a `TensorSpec`
+contract, but the consumer has no tensors at all — its stale state is a `CoreRangeSet` and a pegged
+global CB, neither of which any framework predicate compares. Nothing about the port would catch its
+bug. It needs the one-line hash fix first, and the fix is already written down twice: in
+recommendation 1 below, and in its sibling's source.
+
+**Result: one BUG in the consumer, three in the validator, at the time of the original audit.** All
+four share a root cause — an
 allocation address used as an identity token — and all four are made unrecoverable by the empty
 `override_runtime_arguments`, which means nothing at all is refreshed on a cache hit. The *second*
 empty hook, `validate_on_program_cache_hit`, matters much less than a raw diff of the two validators
@@ -73,7 +154,9 @@ ops.
 ### Consumer — one of five dropped checks is reachable
 
 Hashed: `num_iters`, `page_size_bytes`, `global_cb->config_address()`
-(`dram_prefetcher_consumer.cpp:46-55`).
+(`dram_prefetcher_consumer.cpp:46-55`). **This section stands unaltered post-fab067a** — the commit did
+not touch `dram_prefetcher_consumer.cpp`, so the hashed set, the table and the verdict are all current
+as written.
 
 | Dropped check | Value it constrains | In the key? | Reachable on a hit? |
 |---|---|---|---|
@@ -96,54 +179,108 @@ would be equally reachable if the hook did not exist. What the missing check doe
 degenerate case of a hit whose GCB has *no* receivers at all, which fails silently (the cached
 program simply keeps executing on call 1's cores).
 
-### Validator — almost every dropped check is reachable
+### Validator — almost every dropped check is reachable (pre-fix)
 
-Hashed: `num_layers`, `print_stride`, `streaming`, `rotation`, `global_cb->config_address()`, the
-source buffer's address, and its dataformat (`dram_prefetcher_validator.cpp:57-73`). Because that set
-carries nothing structural about either the GCB or the tensor spec, the filter removes almost
-nothing here. Checks inside `create_at` are listed alongside the validator's own, since `create_at`
-runs only on a miss and the effect on the hit path is identical.
+Pre-fix hashed set: `num_layers`, `print_stride`, `streaming`, `rotation`,
+`global_cb->config_address()`, the source buffer's address, and its dataformat
+(`dram_prefetcher_validator.cpp:57-73`). Because that set carried nothing structural about either the
+GCB or the tensor spec, the filter removed almost nothing. Checks inside `create_at` are listed
+alongside the validator's own, since `create_at` runs only on a miss and the effect on the hit path is
+identical.
 
-| Check absent on the hit path | Where it lives | Value it constrains | In the key? | Reachable on a hit? |
+The **In the key?** column below has two entries per row: the pre-fix answer, then the post-fab067a
+answer, because that is where the change shows up. fab067a keys the whole GCB (`:74-75`), both of its
+allocation addresses (`:80-81`), and the source tensor's `page_config`, `padded_shape` and
+`memory_config` (`:84-86`).
+
+| Check absent on the hit path | Where it lives | Value it constrains | In the key? (pre-fix → post-fix) | Reachable on a hit? (post-fix) |
 |---|---|---|---|---|
-| `attrs.num_layers > 0` | miss validator, `:33` | `attrs.num_layers` | Yes — hash term 1 | No |
-| `tensor_buffer != nullptr` | miss validator, `:34-35` | source tensor storage kind | Effectively yes — the hash substitutes `0` for a null buffer (`:71`), and no device allocation sits at address 0; the framework also rejects a host tensor at `device_operation.hpp:455` on both paths | No |
-| `tensor_buffer->is_dram()` | miss validator, `:36` | the source buffer's `buffer_type` | **No** — only the numeric address is hashed | **Yes** |
-| `attrs.global_cb.has_value()` | miss validator, `:37` | engagement of the GCB optional | No | No — dereferenced by `compute_program_hash` at `:70` before any validator |
-| `receiver_cores().num_cores() > 0` | miss validator, `:38` | non-emptiness of the receiver core set | **No** | **Yes** |
-| `!sr_mapping.empty()` | miss validator, `:40-41` | non-emptiness of the sender/receiver mapping | **No** | **Yes** |
-| `num_blocks % num_dram_banks == 0` | `create_at`, `:97-101` | GCB mapping shape | **No** | **Yes** |
-| `padded_shape.rank() >= 2` | `create_at`, `:112-115` | `source_tensor.padded_shape()` | **No** | **Yes** |
-| `K_elems % tile_h == 0 && N_elems % tile_w == 0` | `create_at`, `:122-128` | `padded_shape` against `Tile` | **No** — neither is hashed | **Yes** |
-| `k_tiles % num_blocks == 0` | `create_at`, `:131-132` | `padded_shape`, `Tile`, GCB mapping | **No** | **Yes** |
-| `total_n_tiles % ring_size == 0` | `create_at`, `:134-138` | same | **No** | **Yes** |
-| `bank_local_recv < receivers_per_bank` | `create_at`, `:205-211` | GCB mapping shape | **No** | **Yes** |
-| `ring_pos < rotation.size()` | `create_at`, `:226-231` | `rotation` against the GCB mapping | `rotation` yes, mapping no | **Yes** |
+| `attrs.num_layers > 0` | miss validator, `:33` | `attrs.num_layers` | Yes → Yes | No |
+| `tensor_buffer != nullptr` | miss validator, `:34-35` | source tensor storage kind | Effectively yes → Yes | No — and never was; pinned by the framework, see `#### Framework correction` below |
+| `tensor_buffer->is_dram()` | miss validator, `:36` | the source buffer's `buffer_type` | **No** → **Yes**, inside the hashed `memory_config` | **No** |
+| `attrs.global_cb.has_value()` | miss validator, `:37` | engagement of the GCB optional | No → **Yes**, explicitly, via the `has_value()` ternaries at `:75-82` | No |
+| `receiver_cores().num_cores() > 0` | miss validator, `:38` | non-emptiness of the receiver core set | **No** → **Yes**, inside the hashed `sender_receiver_core_mapping` | **No** |
+| `!sr_mapping.empty()` | miss validator, `:40-41` | non-emptiness of the sender/receiver mapping | **No** → **Yes**, hashed by value | **No** |
+| `num_blocks % num_dram_banks == 0` | `create_at`, `:97-101` | GCB mapping shape | **No** → **Yes** | **No** |
+| `padded_shape.rank() >= 2` | `create_at`, `:112-115` | `source_tensor.padded_shape()` | **No** → **Yes** | **No** |
+| `K_elems % tile_h == 0 && N_elems % tile_w == 0` | `create_at`, `:122-128` | `padded_shape` against `Tile` | **No** — neither hashed → **Yes**, both | **No** |
+| `k_tiles % num_blocks == 0` | `create_at`, `:131-132` | `padded_shape`, `Tile`, GCB mapping | **No** → **Yes**, all three | **No** |
+| `total_n_tiles % ring_size == 0` | `create_at`, `:134-138` | same | **No** → **Yes** | **No** |
+| `bank_local_recv < receivers_per_bank` | `create_at`, `:205-211` | GCB mapping shape | **No** → **Yes** | **No** |
+| `ring_pos < rotation.size()` | `create_at`, `:226-231` | `rotation` against the GCB mapping | `rotation` yes, mapping no → **Yes**, both | **No** |
 
-Only three of thirteen are filtered out. That is the diagnostic signature of a hash that keys on
-allocation addresses instead of structure: because neither the GCB's mapping nor the tensor's spec is
-in the key, virtually nothing the validator checks is self-enforcing. Note that only the first six
-rows are attributable to the empty hook — the seven `create_at` rows were never on the hit path under
-any hook, since `create_at` runs only when a program is built.
+Pre-fix, only three of thirteen were filtered out. That was the diagnostic signature of a hash that
+keys on allocation addresses instead of structure: because neither the GCB's mapping nor the tensor's
+spec was in the key, virtually nothing the validator checked was self-enforcing. Note that only the
+first six rows were ever attributable to the empty hook — the seven `create_at` rows were never on the
+hit path under any hook, since `create_at` runs only when a program is built.
 
-The `is_dram()` row deserves its own reproduction, because it turns the address-as-identity choice
-into a bug even when nothing is reallocated. DRAM and L1 are separate address spaces that both start
-near zero, so an L1 buffer and a DRAM buffer can hold the *same numeric address* simultaneously.
-Call 1 with a DRAM source tensor at address `A` compiles the accessor with `IsDram` set; call 2 with
-an L1 source tensor that happens to sit at address `A` and has the same dtype produces an identical
-hash, hits, and is not rejected because `is_dram()` no longer runs. The kernel then resolves an L1
-offset through the DRAM bank map. This is the one dropped check whose restoration closes a silent
+**Post-fix the reachable column is empty.** Every value in the table is now either hashed by value or
+pinned by the framework, so each of these checks is self-enforcing: a call carrying a new value of any
+of them computes a different key, misses, and meets the check on the miss path. That is the correct
+resolution — it makes the miss-only placement of all thirteen harmless *by construction* rather than by
+audit, and it is why the empty `validate_on_program_cache_hit`, though still present (`:44-45`), no
+longer suppresses anything reachable.
+
+#### Framework correction
+
+The `tensor_buffer != nullptr` row was graded "effectively yes" pre-fix on the strength of the hash's
+`0` sentinel, with a parenthetical about `device_operation.hpp:455`. The correct statement is stronger,
+and it is a framework guarantee rather than a property of this op's key: `launch()` asserts device
+storage *and* allocation on every tensor argument, on every dispatch, before the key is computed or the
+cache is probed.
+
+```491:502:ttnn/api/ttnn/device_operation.hpp
+    std::vector<std::reference_wrapper<const Tensor>> input_tensors;
+    ttsl::reflection::visit_object_of_type<Tensor>(
+        [&input_tensors](const Tensor& t) { input_tensors.push_back(std::cref(t)); }, tensor_args);
+    // ...
+    for (const auto& input_tensor_ref : input_tensors) {
+        const auto& input_tensor = input_tensor_ref.get();
+        TT_FATAL(is_device_tensor(input_tensor), "Device Operations expect device tensors as inputs");
+        TT_FATAL(input_tensor.is_allocated(), "Input Tensor is not allocated");
+    }
+```
+
+It sits at the top of `launch()` (`:487`), well before `launch_operation_with_adapter` computes the key
+and probes the cache (`:409-418`), so it runs on hits and misses alike; it traverses via
+`visit_object_of_type<Tensor>` (`:492-493`), which descends into `std::optional<Tensor>`; and it is
+unconditional. So the source tensor's storage variant kind was never a reachable omission on any path,
+and `tensor_buffer` can never be null when `compute_program_hash` runs. The `0` sentinel at `:82` is
+defensive rather than load-bearing.
+
+The `is_dram()` row deserves its own reproduction, because pre-fix it turned the address-as-identity
+choice into a bug even when nothing was reallocated. DRAM and L1 are separate address spaces that both
+start near zero, so an L1 buffer and a DRAM buffer can hold the *same numeric address* simultaneously.
+Call 1 with a DRAM source tensor at address `A` compiled the accessor with `IsDram` set; call 2 with an
+L1 source tensor that happened to sit at address `A` and had the same dtype produced an identical hash,
+hit, and was not rejected because `is_dram()` no longer ran. The kernel then resolved an L1 offset
+through the DRAM bank map. This was the one dropped check whose restoration would have closed a silent
 hole outright rather than merely improving a diagnostic.
+
+**fab067a closes it by hashing instead of by validating**, which is the better of the two fixes.
+`is_dram()` is a projection of `buffer_type`, which is carried by the now-hashed `memory_config`
+(`:86`), so the L1 tensor at address `A` computes a *different* key and misses. The check itself is
+still miss-only, and it is still worth keeping there for its diagnostic — but it is no longer the only
+thing standing between the op and a silent wrong hit.
 
 ### What the filter changes, and what it does not
 
-No verdict below moves. All four bugs are hash omissions on values that the *miss* validator does not
-constrain either — a different receiver core set, a different tensor shape, a different `Tile` all
-pass every `TT_FATAL` in both ops — so restoring the miss validator on the hit path would not reject
-a single one of the reproductions. The empty `validate_on_program_cache_hit` overrides are a real but
-secondary defect: between them they suppress eleven checks on the hit path, of which four are
-reachable — one degenerate-case guard on the consumer and three on the validator — and of those four
-exactly one, `is_dram()`, closes a silent failure rather than a degenerate one.
+No verdict below moved on the strength of the filter alone. All four bugs were hash omissions on values
+that the *miss* validator does not constrain either — a different receiver core set, a different tensor
+shape, a different `Tile` all pass every `TT_FATAL` in both ops — so restoring the miss validator on the
+hit path would not have rejected a single one of the reproductions. The empty
+`validate_on_program_cache_hit` overrides were a real but secondary defect: between them they suppress
+eleven checks on the hit path, of which four were reachable — one degenerate-case guard on the consumer
+and three on the validator — and of those four exactly one, `is_dram()`, closed a silent failure rather
+than a degenerate one.
+
+**That analysis is what fab067a acted on: it fixed the hashes and left the hooks alone.** For the
+validator that was the right call and it worked — with the GCB, `page_config`, `padded_shape` and
+`memory_config` in the key, all thirteen suppressed checks become self-enforcing and the empty hook
+suppresses nothing reachable. The empty hook is still there (`:44-45`), and it is now genuinely
+harmless rather than merely secondary. For the consumer nothing was fixed at all, so its bug and its
+one reachable suppressed guard both stand exactly as described below.
 
 Note finally that both ops define a custom `compute_program_hash`, so the canonical half of the cache
 key degrades to the op-identity prefix (see "Framework side effect" below). The rows marked
@@ -189,6 +326,14 @@ for a normal op, because the *core placement itself* comes from a hashed-away at
 For the consumer the claim in the comment is at least self-consistent — `create_at` calls no
 `SetRuntimeArgs` at all, so there genuinely are no runtime args to refresh. The problem is not the
 runtime args; it is everything else the program is made of.
+
+Both overrides are still empty post-fab067a. The validator therefore still carries the full obligation
+above, and it now discharges it — its key covers the GCB by structure and by both allocation
+addresses, and the source tensor by `page_config`, `padded_shape` and `memory_config`. The price is
+paid in the key rather than in the override: three allocation addresses in the hash means a recompile
+on every reallocation, which is what implementing the override would have avoided. That trade is
+recorded under `## Non-cache correctness defects`. The consumer still does not discharge the
+obligation at all.
 
 ## Baseline: what the default hash would cover
 
@@ -258,19 +403,58 @@ inline hash_t hash_object(const T& object) noexcept {
     } else if constexpr (ttsl::reflection::detail::supports_to_hash_v<T>) {
 ```
 
-So the premise of the custom hash is false: the default key would have covered
+So the premise of the consumer's custom hash is false: the default key would have covered
 `sender_receiver_core_mapping`, `size` and `buffer_type` by value, which is precisely the
-information the custom hash discards. The custom hash is strictly weaker than the default here.
+information the custom hash discards. The consumer's custom hash is strictly weaker than the default.
+
+**fab067a settled this empirically, in the file next door.** Its rewrite of the validator's hash calls
+`std::hash<tt::tt_metal::experimental::GlobalCircularBuffer>{}(*attrs.global_cb)` directly
+(`dram_prefetcher_validator.cpp:74-75`) and compiles. The consumer's comment claiming otherwise
+(`dram_prefetcher_consumer.cpp:48-49`) was not touched, so the directory now contains a claim and its
+counterexample side by side.
 
 ## What the custom hash covers
 
-Consumer: `num_iters`, `page_size_bytes`, and `global_cb->config_address()`.
+Consumer: `num_iters`, `page_size_bytes`, and `global_cb->config_address()`. **Unchanged by fab067a.**
+
+Validator, post-fab067a (`dram_prefetcher_validator.cpp:70-86`):
+
+```70:86:ttnn/cpp/ttnn/operations/experimental/test/prefetcher_consumer/dram_prefetcher_validator.cpp
+        attrs.num_layers,
+        attrs.print_stride,
+        attrs.streaming,
+        attrs.rotation,
+        attrs.global_cb.has_value() ? std::hash<tt::tt_metal::experimental::GlobalCircularBuffer>{}(*attrs.global_cb)
+                                    : std::size_t{0},
+        // std::hash covers the GCB's structure (core mapping, size, buffer type) but not which
+        // allocation it is. The remote CB is created against the GCB and bakes both of these addresses
+        // at build time, and UpdateDynamicCircularBufferAddress refuses to re-point a GCB-backed CB, so
+        // two same-shaped GCBs at different allocations must not share a program.
+        static_cast<uint64_t>(attrs.global_cb.has_value() ? attrs.global_cb->buffer_address() : 0),
+        static_cast<uint64_t>(attrs.global_cb.has_value() ? attrs.global_cb->config_address() : 0),
+        static_cast<uint64_t>(tensor_buffer != nullptr ? tensor_buffer->address() : 0),
+        static_cast<uint32_t>(dataformat),
+        tensor_args.source_tensor.tensor_spec().page_config(),
+        tensor_args.source_tensor.padded_shape(),
+        tensor_args.source_tensor.memory_config());
+```
+
+The three `has_value()` ternaries also fix a latent defect the pre-fix code had: it dereferenced
+`attrs.global_cb` unconditionally at `:70`, so a disengaged optional was a null dereference *inside the
+hash*, before the miss validator's own `has_value()` check could report it. The disengaged case now
+hashes to a triple of zeros, which no live GCB can produce — a real GCB's structural hash is not zero
+and neither of its allocation addresses is.
 
 ## Omitted parameters — consumer
 
 ### 1. `attrs.global_cb` — everything except `config_address()`
 
-**Verdict: BUG.**
+**Verdict: BUG — UNCHANGED by fab067a.** This is the one finding in this directory that the commit did
+not touch. The consumer's `compute_program_hash` still reads exactly as quoted above
+(`dram_prefetcher_consumer.cpp:46-55`), the "isn't reflection-hashable" comment is still there and
+still false, and `override_runtime_arguments` is still an empty no-op. The reproduction below still
+executes as written. The one-line fix in recommendation 1 remains outstanding, and its sibling
+`dram_prefetcher_validator.cpp:74-75` now shows exactly what it should look like.
 
 `config_address()` is not a stable identity. It is the base address of an ordinary L1 sharded
 buffer handed out by the device allocator:
@@ -383,8 +567,10 @@ This is why the CSV's `SELECTIVE` label is wrong for this op.
 
 ## The validator op in the same directory
 
-The validator makes the same architectural choice and takes it further: it hashes a **DRAM buffer
-address** in place of the whole source tensor.
+**Pre-fix**, the validator made the same architectural choice and took it further: it hashed a **DRAM
+buffer address** in place of the whole source tensor. fab067a rewrote this function — see
+`## Post-fix status` above and the verdicts in V1-V3 — but the pre-fix body is retained here because
+the three reproductions are written against it.
 
 ```57:73:ttnn/cpp/ttnn/operations/experimental/test/prefetcher_consumer/dram_prefetcher_validator.cpp
 ttsl::hash::hash_t DramPrefetcherValidatorDeviceOperation::compute_program_hash(
@@ -408,7 +594,25 @@ ttsl::hash::hash_t DramPrefetcherValidatorDeviceOperation::compute_program_hash(
 
 ### V1. `attrs.global_cb` beyond `config_address()`
 
-**Verdict: BUG — identical to consumer omission 1, with a wider blast radius.**
+**Verdict: RESOLVED by fab067a** (was BUG — identical to consumer omission 1, with a wider blast
+radius). The key now carries the whole `GlobalCircularBuffer` by value through its `std::hash`
+specialization (`dram_prefetcher_validator.cpp:74-75`), which covers
+`sender_receiver_core_mapping`, `size` and `buffer_type` — so the mapping that determines the ring
+topology is in the key rather than being proxied by an allocation address.
+
+fab067a also went a step further than V1 asked, and the extra step is worth recording because the
+reasoning is not obvious: it keys `buffer_address()` **and** `config_address()` alongside the
+structural hash (`:80-81`). The structural hash establishes that two GCBs have the same shape; it does
+not establish that they are the same *allocation*. `CreateCircularBuffer`'s GCB overload pegs the
+remote CB to the GCB's buffer and config addresses at build time, and
+`UpdateDynamicCircularBufferAddress` refuses to re-point a GCB-backed CB, so two same-shaped GCBs at
+different allocations genuinely must not share a program. Keying an address is normally the defect —
+this is the case where it is the fix, precisely because the empty `override_runtime_arguments` means
+the pegged address can never be refreshed. The cost is recorded in
+`## Non-cache correctness defects`.
+
+**The consumer's identical omission is unresolved** — see omission 1. Everything below describes the
+pre-fix validator.
 
 The validator derives its entire ring topology from `sender_receiver_core_mapping`:
 
@@ -433,9 +637,30 @@ scratch CB page sizes (`:164-171`), and the whole per-receiver runtime-arg table
 
 ### V2. `tensor_args.source_tensor` — everything except buffer address and dtype
 
-**Verdict: BUG.**
+**Verdict: RESOLVED by fab067a** (was BUG). The key now carries `tensor_spec().page_config()`,
+`padded_shape()` and `memory_config()` (`dram_prefetcher_validator.cpp:84-86`) alongside the address
+and dataformat. Those three cover every field the bullets below identify as load-bearing: shape
+arithmetic, the sharding-derived contiguity flags, the tile (via `page_config`, which V3 addresses),
+and the `TensorAccessorArgs` compile-time block — whose sharded contents reduce to `memory_config`'s
+`NdShardSpec`, `padded_shape` and the page size, and whose `IsDram` bit is `memory_config`'s
+`buffer_type`. Two source tensors that differ in any of them now compute different keys and miss.
 
-The omitted spec fields all feed compile-time args, CB page sizes and runtime args:
+Two residual fields are still not keyed, and both are now graded rather than left open:
+
+- **`logical_shape()` — a relaxation with real value.** The key carries `padded_shape` only, so two
+  tensors with the same padded shape and different logical shapes share a program. That is correct
+  here: `create_at` reads `padded_shape[-2]` and `padded_shape[-1]` and never touches
+  `logical_shape`, so the program is genuinely invariant to it, and the reuse is real — a weight
+  tensor with `K = 4090` and one with `K = 4096` both pad to `4096` and should share one program.
+  This is the op's one logical-vs-padded relaxation; see `## Post-fix status` for how it maps onto
+  Metal 2.0's `match_padded_shape_only`.
+- **`alignment` and `layout()` — determined by hashed terms.** `alignment` only reaches the program
+  through the aligned page size, which for this op's tile-layout source is the tile size — a function
+  of `page_config` and dtype, both hashed — and through `padded_shape`, also hashed. `layout()` is a
+  projection of `page_config`. Neither can move independently of the key.
+
+**Everything below describes the pre-fix code.** The omitted spec fields all feed compile-time args,
+CB page sizes and runtime args:
 
 - `padded_shape()` → `k_tiles`, `total_n_tiles`, `n_per_recv_tiles`, `k_block_w_tiles`,
   `page_bytes_per_recv` (`:111-143`), which set the remote CB and scratch CB page sizes
@@ -450,7 +675,7 @@ The omitted spec fields all feed compile-time args, CB page sizes and runtime ar
   bank coordinates (`tt_metal/impl/buffers/tensor_accessor_args.cpp:37-80`), and whose `IsDram` bit
   is unpinned on the hit path (see the `is_dram()` reproduction above).
 
-Substituting `tensor_buffer->address()` is an attempt to make the frozen program self-consistent —
+Pre-fix, substituting `tensor_buffer->address()` was an attempt to make the frozen program self-consistent —
 the address is itself baked in as `bank_base_addr` (`:195`, `:236`) and as the `TensorAccessor`
 base, so keying on it does prevent the *address* from going stale. But the address is not a proxy
 for the spec. Two-call reproduction:
@@ -474,13 +699,27 @@ for the spec. Two-call reproduction:
   does not exist. For an op whose entire purpose is to be an oracle, a silent false positive is the
   worst possible failure.
 
+Post-fix, `N2 != N1` changes `padded_shape` and therefore the key, so call 2 misses, builds a correct
+program, and meets all of the `TT_FATAL`s on the miss path where they live.
+
 Even when the hash *does* protect correctness, keying on a buffer address means the validator
 recompiles its kernels every time the source tensor is reallocated — a full cache miss per layer in
-any realistic multi-layer bench.
+any realistic multi-layer bench. fab067a did not change this, and in fact added two more addresses to
+the key; it is a cost rather than a defect, and it is recorded under
+`## Non-cache correctness defects`.
 
 ### V3. `source_tensor.page_config`'s `Tile` — a tile-aware factory keyed without the tile
 
-**Verdict: BUG.**
+**Verdict: RESOLVED by fab067a** (was BUG). `tensor_spec().page_config()` is now hashed
+(`dram_prefetcher_validator.cpp:84`), and `Tile` is part of `TilePageConfig`'s attribute values, so the
+tile the factory reads is the tile the key carries. The reproduction below now misses on call 2.
+
+Note the shape of the fix: this op needed no new guard, because the defect was never that a check sat
+in the wrong validator — the tile-alignment and divisibility `TT_FATAL`s at `:122-138` live in
+`create_at` and are exactly where they belong. The defect was purely that the key did not distinguish
+the inputs those checks accept. Hashing the field is the whole fix. Contrast the KV-cache ops in this
+audit series, where the values *were* keyed-adjacent but the guards sat in
+`validate_on_program_cache_miss` and so never ran on the hitting call.
 
 This is the mirror image of the more common defect. Most ops in this codebase hardcode 32x32 and get
 away with omitting `page_config` only by accident; the validator does the opposite. It is genuinely
@@ -522,8 +761,8 @@ Because the program provably varies with `Tile`, `page_config` **must** be in th
 not: the hash carries the buffer address and the dataformat, nothing else from the tensor. The
 reproduction is more direct than the shape one in V2 because it needs no shape change at all.
 
-**Two-call reproduction.** One GCB, `num_layers`, `print_stride`, `streaming` and `rotation` fixed;
-source tensor bfloat16, DRAM, padded shape `[256, 256]` in both calls.
+**Two-call reproduction (pre-fix).** One GCB, `num_layers`, `print_stride`, `streaming` and `rotation`
+fixed; source tensor bfloat16, DRAM, padded shape `[256, 256]` in both calls.
 
 - **Call 1**: `T1` built with the default `Tile{32, 32}` at DRAM address `A`. Then
   `tile_h = tile_w = 32`, `k_tiles = 8`, `total_n_tiles = 8`, `tile_bytes = 2048`.
@@ -542,8 +781,8 @@ source tensor bfloat16, DRAM, padded shape `[256, 256]` in both calls.
   the core hangs waiting for a page that never completes.
 
 Non-32x32 tiles are constructible directly from Python
-(`ttnn/cpp/ttnn-nanobind/tensor.cpp:220-226`), so this is reachable, not hypothetical. Note also
-that hashing `page_config` would still not distinguish a transposed tile from an untransposed one:
+(`ttnn/cpp/ttnn-nanobind/tensor.cpp:220-226`), so this was reachable, not hypothetical. Note also
+that hashing `page_config` still does not distinguish a transposed tile from an untransposed one:
 `Tile::attribute_values()` omits both transpose flags
 (`tt_metal/api/tt-metalium/tile.hpp:46-47`) and `Tile::operator==` ignores them
 (`tt_metal/impl/data_format/tile.cpp:122-124`). That gap is framework-wide and not introduced here.
@@ -558,8 +797,15 @@ right for the validator and inapplicable to the consumer.
 - Consumer: `global_cb->config_address()`. This is not in the default key (the GCB's `std::hash`
   covers the core mapping, size and buffer type, not the config allocation address). It is an
   *addition*, but it does not compensate for the three fields it displaces — see omission 1.
+  **Unchanged by fab067a.**
 - Validator: `source_tensor.buffer()->address()`, likewise absent from the default key
   (`DeviceStorage` has an empty attribute tuple, so addresses never enter the default hash).
+  fab067a adds two more of the same kind — `global_cb->buffer_address()` and
+  `global_cb->config_address()` (`:80-81`) — so the validator's key is now the default key's field set
+  *plus* three allocation addresses. The additions are load-bearing, not incidental: the remote CB is
+  pegged to the GCB's addresses at build time and `override_runtime_arguments` is empty, so a
+  same-shaped GCB at a different allocation must not share the program. The recompile cost that
+  follows is recorded under `## Non-cache correctness defects`.
 
 ## Framework side effect of having a custom hash
 
@@ -570,8 +816,25 @@ right for the validator and inapplicable to the consumer.
 ```
 
 `ProgramCacheKey::canonical` degrades to the op type name for both ops, so a 64-bit collision
-resolves to a wrong hit instead of a rebuild. For these two ops that matters less than usual only
-because the deliberate gaps are already much wider than a chance collision.
+resolves to a wrong hit instead of a rebuild. For the consumer that still matters less than usual only
+because its deliberate gap is much wider than a chance collision. For the validator, post-fab067a it is
+now the residual exposure: with the field set correct, forfeiting attribute-level collision resolution
+is the only way a wrong hit can still occur.
+
+## Non-cache correctness defects
+
+Recorded separately so they are not counted as program-cache bugs. These concern the override and the
+cost model, not the key.
+
+| Defect | Status | Note |
+|---|---|---|
+| The validator's key carries three allocation addresses — the source buffer's (`:82`) and the GCB's `buffer_address()` and `config_address()` (`:80-81`) — so any reallocation of either forces a full recompile. In a multi-layer bench that is a cache miss per layer. | **OPEN** — widened by fab067a, deliberately | This is a cost, not a correctness defect: the addresses are in the key because they are baked into the program and nothing refreshes them. It is forced by the no-op `override_runtime_arguments` (`:264-270`). Implementing that hook to re-apply `bank_base_addr` per receiver (`:195`, `:236`) would let the source address leave the key; the GCB pair is harder, since `UpdateDynamicCircularBufferAddress` refuses to re-point a GCB-backed CB, so those two have to stay until that restriction is lifted. See recommendation 2. |
+| The consumer's empty `override_runtime_arguments` with the comment "Nothing to override — all args are compile-time". | **OPEN** — unchanged by fab067a | True as stated, but it does not imply the conclusion; the invariant actually being relied on is that the GCB is fully hashed, which for the consumer is still not the case. See recommendation 4. |
+| The consumer's comment asserting `GlobalCircularBuffer` "isn't reflection-hashable" (`dram_prefetcher_consumer.cpp:48-49`). | **OPEN** — and now demonstrably false in-tree | fab067a's validator hash calls `std::hash<GlobalCircularBuffer>{}` directly (`dram_prefetcher_validator.cpp:74-75`) in the same directory. The comment is the stated justification for omission 1, so it is load-bearing misinformation rather than a stale note. |
+
+The validator has no factory-level defects of the kind found in the KV-cache ops: it reads the
+tensor's real tile shape and uses the tile-aware `get_tile_size` rather than assuming 32x32
+(`:116-143`), so there was never a wrong-program-on-a-miss hazard to fence off.
 
 ## Summary
 
@@ -579,9 +842,9 @@ because the deliberate gaps are already much wider than a chance collision.
 
 | Omitted vs. default | Used by program? | Patched on hit? | Verdict |
 |---|---|---|---|
-| `global_cb.sender_receiver_core_mapping` | Yes — kernel + CB core ranges, pegged CB | No (empty override) | **BUG** |
-| `global_cb.size` | Yes — ring geometry of the pegged remote CB | No | **BUG** (same root cause) |
-| `global_cb.buffer_type` | Yes — L1 vs L1_SMALL placement of the pegged CB | No | **BUG** (same root cause) |
+| `global_cb.sender_receiver_core_mapping` | Yes — kernel + CB core ranges, pegged CB | No (empty override) | **BUG — unchanged by fab067a** |
+| `global_cb.size` | Yes — ring geometry of the pegged remote CB | No | **BUG — unchanged** (same root cause) |
+| `global_cb.buffer_type` | Yes — L1 vs L1_SMALL placement of the pegged CB | No | **BUG — unchanged** (same root cause) |
 | `mesh_device` | n/a | n/a | VALID — invariant |
 | Tensor arguments (incl. any `page_config` / `Tile`) | n/a — none exist, and the factory does no tile arithmetic | n/a | n/a |
 
@@ -589,42 +852,57 @@ because the deliberate gaps are already much wider than a chance collision.
 
 | Omitted vs. default | Used by program? | Patched on hit? | Verdict |
 |---|---|---|---|
-| `global_cb.sender_receiver_core_mapping` / `size` / `buffer_type` | Yes — `num_blocks`/`num_senders` compile-time args, CB page sizes, all runtime args | No (empty override) | **BUG** |
-| `source_tensor.padded_shape` | Yes — CB page sizes + 4 runtime args | No | **BUG** (V2) |
-| `source_tensor.memory_config` | Yes — ring-pairing formula, accessor args | No | **BUG** (V2) |
-| `source_tensor.page_config` (`Tile`) | Yes — `tile_bytes`, `page_bytes_per_recv`, CB page sizes | No | **BUG** (V3, tile-aware factory keyed without the tile) |
-| `source_tensor.alignment` / `layout` / storage kind | Yes, via `TensorAccessorArgs` including the `IsDram` bit | No, and `is_dram()` is not re-checked on hits | **BUG** (subsumed by V2) |
+| `global_cb.sender_receiver_core_mapping` / `size` / `buffer_type` | Yes — `num_blocks`/`num_senders` compile-time args, CB page sizes, all runtime args | No (empty override) | **RESOLVED by fab067a** (V1) — whole GCB hashed, plus both allocation addresses |
+| `source_tensor.padded_shape` | Yes — CB page sizes + 4 runtime args | No | **RESOLVED by fab067a** (V2) — hashed at `:85` |
+| `source_tensor.memory_config` | Yes — ring-pairing formula, accessor args | No | **RESOLVED by fab067a** (V2) — hashed at `:86` |
+| `source_tensor.page_config` (`Tile`) | Yes — `tile_bytes`, `page_bytes_per_recv`, CB page sizes | No | **RESOLVED by fab067a** (V3) — hashed at `:84` |
+| `source_tensor.alignment` / `layout` | Yes, via `TensorAccessorArgs` | No | VALID — determined by the hashed `page_config`, dtype and `padded_shape` |
+| `source_tensor.logical_shape` | No — `create_at` reads only `padded_shape` | n/a | VALID — relaxation win; maps to `match_padded_shape_only` |
+| `source_tensor` storage kind (incl. the `IsDram` bit) | Yes, via `TensorAccessorArgs` | n/a | VALID — device storage pinned by the framework; `IsDram` now inside the hashed `memory_config` |
 
-**Four program-cache correctness bugs were found: one in the consumer, three in the validator.**
-Both ops replace a genuinely hashable composite (`GlobalCircularBuffer`, and for the validator a
-`Tensor`) with a single *allocation address* used as an identity token. Allocation addresses are
-unique only among live objects; they are recycled, and DRAM and L1 addresses can coincide
-numerically. An empty `override_runtime_arguments` then means literally nothing is refreshed on a
-cache hit, so a recycled or colliding address yields a wrong hit against a program whose kernel
-placement, CB configuration, compile-time args and runtime args all belong to a different
-configuration.
+**Four program-cache correctness bugs were found; three are resolved and one stands. The current count
+is one: consumer omission 1.** Both ops replaced a genuinely hashable composite
+(`GlobalCircularBuffer`, and for the validator a `Tensor`) with a single *allocation address* used as
+an identity token. Allocation addresses are unique only among live objects; they are recycled, and
+DRAM and L1 addresses can coincide numerically. An empty `override_runtime_arguments` then means
+literally nothing is refreshed on a cache hit, so a recycled or colliding address yields a wrong hit
+against a program whose kernel placement, CB configuration, compile-time args and runtime args all
+belong to a different configuration.
 
-The count is unchanged after the hit-path reachability filter. The empty
-`validate_on_program_cache_hit` overrides do suppress guards that the key does not make
-self-enforcing — three of the validator's six and one of the consumer's five — but no bug is caused
-by them, and only one is widened. Every headline reproduction above survives the miss validator
-being restored, because those checks test existence, non-emptiness or a scalar bound; not one tests
-that a GCB or a tensor spec still *matches* the one the cached program was built for, which is
-precisely what a hash keyed on an allocation address cannot establish. The single exception is
-`is_dram()`, which does reject the DRAM/L1 address-coincidence variant of V2 and is therefore the one
-place where the empty hook leaves a silent hole of its own. The empty hit validators are a genuine
-but secondary defect on that basis.
+fab067a applied exactly the fix recommendation 2 called for, to the validator: it hashes the GCB by
+value and adds the source tensor's `page_config`, `padded_shape` and `memory_config`, which closes V1,
+V2 and V3 together and, as a side effect, makes all thirteen of the validator's hit-path-suppressed
+checks self-enforcing. **It did not apply the one-line equivalent from recommendation 1 to the
+consumer**, whose hash, comment and empty override are byte-for-byte unchanged. The two files sit in
+the same directory and now disagree with each other about whether `GlobalCircularBuffer` can be
+hashed.
 
-The validator's third bug is of a different kind and does not depend on address recycling for its
-diagnosis: its factory is genuinely tile-aware, so the program varies with `Tile` by construction,
-and `Tile` is nowhere in the key.
+The count was unchanged by the hit-path reachability filter, and that assessment held up: the empty
+`validate_on_program_cache_hit` overrides did suppress guards the key did not make self-enforcing —
+three of the validator's six and one of the consumer's five — but no bug was caused by them, and only
+one was widened. Every headline reproduction above survives the miss validator being restored, because
+those checks test existence, non-emptiness or a scalar bound; not one tests that a GCB or a tensor spec
+still *matches* the one the cached program was built for, which is precisely what a hash keyed on an
+allocation address cannot establish. The single exception was `is_dram()`, which does reject the
+DRAM/L1 address-coincidence variant of V2 — and fab067a closed that by putting `memory_config` in the
+key rather than by touching the hook, which is the stronger of the two fixes. Both empty hooks are
+still present; the validator's is now harmless, the consumer's still suppresses one reachable
+degenerate-case guard.
+
+The validator's third bug was of a different kind and did not depend on address recycling for its
+diagnosis: its factory is genuinely tile-aware, so the program provably varies with `Tile`, and `Tile`
+was nowhere in the key. Hashing `page_config` was the entire fix — no new guard was needed, because no
+guard was in the wrong place. This is the cleanest contrast in the audit series with the KV-cache ops,
+where the guards existed but sat in `validate_on_program_cache_miss` and so never ran on the hitting
+call.
 
 These are bench-only debug ops, which is severity context rather than a mitigation; the validator's
-case is the more damaging of the two because it turns an oracle into a source of false alarms.
+case was the more damaging of the two because it turned an oracle into a source of false alarms. That
+is now fixed. The consumer's remains open.
 
 ## Recommendations
 
-1. **Consumer**: hash `attrs.global_cb` directly. It already has a working `std::hash`
+1. **OUTSTANDING — Consumer**: hash `attrs.global_cb` directly. It already has a working `std::hash`
    specialization covering `sender_receiver_core_mapping`, `size` and `buffer_type`
    (`tt_metal/impl/buffers/global_circular_buffer.cpp:608-611`), so
    `ttsl::hash::hash_objects_with_default_seed(type_hash<...>, attrs.num_iters,
@@ -632,14 +910,25 @@ case is the more damaging of the two because it turns an oracle into a source of
    there now. Delete the "isn't reflection-hashable" comment — it is not true. Keeping
    `config_address()` as an *additional* term is harmless but no longer necessary, and dropping it
    also removes the spurious-recompile-on-reallocation behaviour.
-2. **Validator**: same change for `global_cb`, plus hash the source tensor's `tensor_spec()`
-   instead of its buffer address. `tensor_spec()` is one term and covers all three of V2 and V3's
-   omissions at once — `padded_shape()` is derived from it, and it carries `page_config` (hence the
-   `Tile` that V3 turns on), `memory_config` and the alignment behind the accessor args. Then
-   implement `override_runtime_arguments` to re-apply `bank_base_addr` for each receiver — that is
-   exactly the `Buffer*`-address slot the mode-A hook exists for, and it lets the address leave the
-   hash so a reallocated source tensor stops forcing a recompile.
-3. Delete the validator's empty `validate_on_program_cache_hit`, and add
+
+   **This is the one recommendation in this document that fab067a did not act on**, and it is now a
+   two-line copy of code that exists in the same directory: `dram_prefetcher_validator.cpp:74-75`.
+2. **DONE in part — Validator**: fab067a made the `global_cb` change (`:74-75`) and keyed the source
+   tensor's `page_config`, `padded_shape` and `memory_config` (`:84-86`) rather than `tensor_spec()`
+   wholesale. That field-by-field form is equivalent for correctness and deliberately preserves the
+   logical-vs-padded relaxation the wholesale form would have given up — see V2's residual-fields
+   note. Compare `rotary_embedding_indexed`, which took the wholesale `tensor_spec()` route because it
+   had no such relaxation to keep.
+
+   **The override half is outstanding.** `override_runtime_arguments` is still empty (`:264-270`), so
+   the buffer address is still in the key and the commit added two more addresses beside it.
+   Re-applying `bank_base_addr` for each receiver (`:195`, `:236`) — exactly the `Buffer*`-address slot
+   the mode-A hook exists for — would let the source address leave the hash so a reallocated source
+   tensor stops forcing a recompile. The GCB's two addresses cannot follow until
+   `UpdateDynamicCircularBufferAddress` allows re-pointing a GCB-backed CB. Recorded as a cost under
+   `## Non-cache correctness defects`.
+3. **SUPERSEDED for the validator, still OUTSTANDING as written.** Delete the validator's empty
+   `validate_on_program_cache_hit`, and add
    `TT_FATAL(tensor_buffer->is_dram(), ...)` to `DramPrefetcherValidatorDeviceOperation::
    validate_on_program_cache_miss` if it is not already reached that way. With the override gone the
    framework substitutes the miss validator on every hit
@@ -654,8 +943,14 @@ case is the more damaging of the two because it turns an oracle into a source of
    above: every check in it tests existence or non-emptiness, and in each reproduction the second
    call's GCB and tensor are perfectly well-formed. Fixing the hashes is what closes the bugs; this
    recommendation closes one additional silent hole that the hash fixes would also cover (hashing
-   `tensor_spec()` puts `memory_config` and hence `buffer_type` in the key), so if only one change is
-   made it should be 1 and 2, not this.
+   `memory_config` puts `buffer_type` in the key), so if only one change is made it should be 1 and 2,
+   not this.
+
+   fab067a took that advice and it was correct: it fixed the hash and left the hook alone, and the
+   `is_dram()` hole closed anyway because `memory_config` is now hashed (`:86`). The empty hook still
+   sits at `:44-45` and the deletion is still worth doing for tidiness, but it no longer suppresses
+   anything reachable — see the post-fix note under "Validator — almost every dropped check is
+   reachable". Its priority drops from secondary to cosmetic.
 
    For the consumer the same change is not worth making. Its miss validator drops five checks on the
    hit path, of which two are self-enforcing (`num_iters` and `page_size_bytes` are hash terms), two
@@ -667,12 +962,31 @@ case is the more damaging of the two because it turns an oracle into a source of
 
    Note also that none of this restores the checks inside `create_at`
    (`dram_prefetcher_validator.cpp:97-101`, `:112-115`, `:122-138`): those run only when a program is
-   built, under any hook. The rank, tile-alignment and divisibility invariants all test values absent
-   from the key and so are reachable on a hit, but the right fix for them is hashing `tensor_spec()`
-   (recommendation 2), which makes them unreachable by construction rather than paying for them per
-   dispatch.
-4. If the empty `override_runtime_arguments` bodies are meant to say "this op genuinely has no
-   per-dispatch state", say so in a comment that names the invariant being relied on (the GCB is
-   fully hashed, so the pegged CB and core ranges cannot change under a hit). As written, the
-   comment "Nothing to override — all args are compile-time" states a true fact that does not imply
-   the conclusion.
+   built, under any hook. The rank, tile-alignment and divisibility invariants all tested values absent
+   from the key and so were reachable on a hit, but the right fix for them was hashing the tensor's
+   spec fields (recommendation 2), which makes them unreachable by construction rather than paying for
+   them per dispatch. **That is what happened**: with `page_config`, `padded_shape` and `memory_config`
+   in the key, a call that would violate any of the three necessarily misses and meets the check where
+   it lives.
+4. **OUTSTANDING for both ops.** If the empty `override_runtime_arguments` bodies are meant to say
+   "this op genuinely has no per-dispatch state", say so in a comment that names the invariant being
+   relied on (the GCB is fully hashed, so the pegged CB and core ranges cannot change under a hit). As
+   written, the comment "Nothing to override — all args are compile-time" states a true fact that does
+   not imply the conclusion.
+
+   Post-fab067a the invariant is *true* for the validator — the GCB is hashed by structure and by both
+   allocation addresses, so nothing pegged can change under a hit — but it is still unstated, and the
+   op now pays a recompile per reallocation for it. For the consumer the invariant remains false, so
+   the comment there is not merely under-argued but wrong.
+5. **Metal 2.0.** The validator is clear to port. Declare
+   `TensorSpecRelaxations{.match_padded_shape_only = true}` for `source_tensor` to preserve the V2
+   relaxation; `pertinent_fields` maps that flag to `PertinentFields{.padded_shape = true}`
+   (`tt_metal/impl/metal2_host_api/tensor_spec_relaxations.cpp:67-87`), and because
+   `hash_tensorspec_with_relaxation` (`:116`) and `tensorspecs_match_with_relaxation` (`:161-201`)
+   consume the same field set, the key and `ValidateTensorArgs`' accept/reject predicate
+   (`tt_metal/impl/metal2_host_api/program_run_args.cpp:176-189`) cannot disagree. The GCB and the
+   three addresses stay in the workload attributes as they are today.
+
+   The consumer is **not** clear to port while omission 1 stands. Porting it unchanged would carry the
+   omission into a framework whose `UpdateProgramRunArgs` validates specs strictly but has no view
+   into a `GlobalCircularBuffer` attribute the op declines to hash. Fix recommendation 1 first.
