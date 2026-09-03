@@ -1,5 +1,14 @@
 {
   "config_id": "C09_dense_mlp_bf4_lofi",
+  "source_manifest": {
+    "tt/provenance.py": "3b162e8ac0fe0674",
+    "tt/model.py": "0a16aba8d30408f4",
+    "tt/generator.py": "466b12c764bb95ff",
+    "tt/optimized_decoder.py": "70b11be7312cc01e",
+    "tt/fused_decoder.py": "0dbbe26e401a1716",
+    "tt/functional_decoder.py": "d04c7d1958a8fe74",
+    "tests/dev_datatype_sweep.py": "f15ce9994b9b150b"
+  },
   "build_kwargs_requested": {
     "expert_dtype": null,
     "weight_dtype": null,
@@ -19,11 +28,10 @@
   },
   "reference": "/home/stisi/tt-metal/models/autoports/zai_org_glm_4_7_flash/readiness_aime24_chat.refpt",
   "mesh_device": "N150",
-  "build_s": 175.8086916150005,
+  "build_s": 175.59147921600015,
   "policy_snapshot": {
     "expert_dtype": "DataType.BFLOAT4_B",
     "weight_dtype": "DataType.BFLOAT8_B",
-    "cache_dtype": "DataType.BFLOAT8_B",
     "embed_dtype": "DataType.BFLOAT16",
     "lm_head_dtype": "DataType.BFLOAT8_B",
     "lm_head_fidelity": "hifi2",
@@ -32,6 +40,8 @@
       "fp32_dest_acc_en": false
     },
     "decoder_cls": "SweepDecoder_C09_dense_mlp_bf4_lofi",
+    "kv_cache_dtype": "DataType.BFLOAT8_B",
+    "kv_cache_dtype_source": "generator._kv_cache[0].dtype (real allocated per-layer cache tensor)",
     "moe_layer": {
       "attn_weight_dtype": "DataType.BFLOAT4_B",
       "ck_attn": {
@@ -101,12 +111,12 @@
         "matches_top100": 100,
         "total": 100,
         "k": 100,
-        "elapsed_s": 2.839400488001047,
-        "e2e_t/s/u": 35.21870212482795,
-        "ttft_ms": 590.8248260002438,
+        "elapsed_s": 2.839515202998882,
+        "e2e_t/s/u": 35.2172793068294,
+        "ttft_ms": 590.6857049994869,
         "decode_tokens": 99.0,
-        "decode_elapsed_s": 2.2485148579999077,
-        "decode_t/s/u": 44.029061959618176
+        "decode_elapsed_s": 2.2487711690009746,
+        "decode_t/s/u": 44.0240436042148
       }
     ],
     "aggregate": {
@@ -118,12 +128,12 @@
       "matches_top100": 100,
       "total": 100,
       "k": 100,
-      "elapsed_s": 2.839400488001047,
-      "e2e_t/s/u": 35.21870212482795,
-      "ttft_ms": 590.8248260002438,
+      "elapsed_s": 2.839515202998882,
+      "e2e_t/s/u": 35.2172793068294,
+      "ttft_ms": 590.6857049994869,
       "decode_tokens": 99.0,
-      "decode_elapsed_s": 2.2485148579999077,
-      "decode_t/s/u": 44.029061959618176
+      "decode_elapsed_s": 2.2487711690009746,
+      "decode_t/s/u": 44.0240436042148
     }
   }
 }

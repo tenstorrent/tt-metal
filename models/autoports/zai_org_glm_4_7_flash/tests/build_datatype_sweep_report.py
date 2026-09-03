@@ -33,9 +33,17 @@ COLOR_SELECTED = "#d33f3f"
 COLOR_NOTRUN = "#9aa5b1"
 COLOR_THRESHOLD = "#7a7a7a"
 
-TOP1_BAR = None  # informational only for this model; see README
 TOP5_BAR = 0.98
 TOP100_BAR = 1.00
+# This model's stated readiness bar (doc/full_model/README.md, doc/optimized_full_model/README.md,
+# across many committed review rounds) is top-5>=0.98, top-100=1.00 with top-1 reported but not
+# numerically thresholded. The goal contract for *this* stage names a "top-1/top-5 gate" explicitly,
+# and this exact autoport's own FM-021 precedent (doc/full_model/work_log.md) treats any material
+# top-1 regression from a precision change as a real, disqualifying finding, not noise -- so the
+# gate this stage actually enforces adds a concrete, checkable top-1 condition: no regression below
+# the C00 baseline's teacher-forced top-1. That baseline value, not a generic threshold, is the bar,
+# because the model's own accepted history is what defines "regression" here.
+BASELINE_TOP1 = 0.85
 
 CMD_TEMPLATE = (
     "python -m models.autoports.zai_org_glm_4_7_flash.tests.dev_datatype_sweep "
@@ -52,112 +60,130 @@ CANDIDATES = [
         "flags": "",
         "delta": "shipped optimized-decoder/optimized-full-model policy, unchanged",
         "decision": "SELECTED",
-        "reason": "fastest config that passes the bar; every deviation tested below is slower, "
-        "less accurate, or both",
+        "reason": "clears the real gate (top5>=0.98, top100=1.00, top1 no worse than the 0.850 "
+        "baseline -- trivially true, it IS the baseline). The strictly fastest candidate that also "
+        "clears that gate is C09 (44.029 t/s/u vs C00's 44.023, a +0.02% delta far inside this "
+        "harness's own run-to-run spread, e.g. baseline itself reproduces at 43.98-44.02 across "
+        "separate runs) -- within measurement noise, so the skill's tie-break rule applies: prefer "
+        "the simpler, better-evidenced config. C09 (dense-MLP bf4) also carries an already-documented "
+        "real-weight 202k long-context accuracy regression (doc/optimized_decoder/README.md) that "
+        "this stage's short 154-token-prompt/100-position reference cannot see, so C00 is preferred "
+        "over it, not merely tied with it. Every other config that passes the top5/top100 bar (C04, "
+        "C06, C07) is measurably slower with no accuracy benefit; every config that fails the top1 "
+        "no-regression gate (C01, C02, C03, C05, C08) is rejected on accuracy regardless of speed.",
     },
     {
         "config_id": "C01_lmhead_bf4_lofi",
         "flags": "--lm-head-dtype bf4 --lm-head-fidelity lofi",
         "delta": "LM head bfloat8_b -> bfloat4_b, fidelity HiFi2 -> LoFi",
-        "decision": "REJECTED",
-        "reason": "teacher-forced top-1 0.850->0.790 (-0.060 abs, -7.1% rel), top-5 1.000->0.990 "
-        "(still >=0.98 bar) for a +1.36% token-out decode gain (44.02->44.62 t/s/u); the isolated-op "
-        "624us-vs-878us win (doc/full_model/head_probe.json) is ~4% of the model-only step so the "
-        "full-model gain is much smaller than the op-level number suggests. Same precedent as "
-        "FM-021 (doc/full_model/work_log.md): an LM-head precision change is an accuracy change, "
-        "and this stage's team rejected a comparable top-1 hit there for an even smaller (0.04%) "
-        "gain. The LM head is not capacity-constrained (0.314 GiB bf8 vs the ~32 GiB budget), so "
-        "there is no capacity argument for bf4 here the way there is for routed experts.",
+        "decision": "FAIL_TOP1",
+        "reason": "teacher-forced top-1 0.850->0.790 (-0.060 abs, -7.1% rel, below the 0.850 "
+        "no-regression gate) even though top-5 1.000->0.990 still clears the model's stated 0.98 "
+        "bar, for a +1.36% token-out decode gain (44.02->44.62 t/s/u); the isolated-op 624us-vs-878us "
+        "win (doc/full_model/head_probe.json, a reduced 2-layer profile) is ~4% of the real 47-layer "
+        "model-only step so the full-model gain is much smaller than the op-level number suggests. "
+        "Same precedent as FM-021 (doc/full_model/work_log.md): an LM-head precision change is an "
+        "accuracy change, and this stage's team rejected a comparable top-1 hit there for an even "
+        "smaller (0.04%) gain. The LM head is not capacity-constrained (0.314 GiB bf8 vs the ~32 GiB "
+        "budget), so there is no capacity argument for bf4 here the way there is for routed experts.",
     },
     {
         "config_id": "C02_lmhead_bf4_hifi2",
         "flags": "--lm-head-dtype bf4 --lm-head-fidelity hifi2",
         "delta": "LM head bfloat8_b -> bfloat4_b, fidelity stays HiFi2 (BFP4+HiFi2 vs BFP4+LoFi pair for C01)",
-        "decision": "REJECTED",
+        "decision": "FAIL_TOP1",
         "reason": "identical to C01 (top1 0.790, top5 0.990, decode 44.62 t/s/u): the accuracy cost is "
         "from the bf4 dtype quantization, not the fidelity choice -- HiFi2 buys nothing over LoFi here. "
         "Confirms LoFi is the correct fidelity *if* bf4 LM head were ever adopted, and confirms the "
-        "rejection is dtype-driven, not fidelity-driven.",
+        "rejection is dtype-driven, not fidelity-driven. Fails the same top1 no-regression gate as C01.",
     },
     {
         "config_id": "C03_lmhead_bf8_lofi",
         "flags": "--lm-head-fidelity lofi",
         "delta": "LM head dtype unchanged (bfloat8_b); fidelity HiFi2 -> LoFi (BFP8+LoFi vs BFP8+HiFi2 "
         "for this dominant decode projection group, per skill mandate)",
-        "decision": "REJECTED",
-        "reason": "teacher-forced top-1 0.850->0.830 (-0.020 abs) for a 44.02->44.08 t/s/u change "
-        "(+0.14%, inside this harness's run-to-run noise band, consistent with the isolated-op finding "
-        "of a 0.6% device-time difference in doc/optimized_full_model/README.md item 1). No measurable "
-        "speed benefit to justify any accuracy risk.",
+        "decision": "FAIL_TOP1",
+        "reason": "teacher-forced top-1 0.850->0.830 (-0.020 abs, below the no-regression gate) for a "
+        "44.02->44.08 t/s/u change (+0.14%, inside this harness's run-to-run noise band, consistent "
+        "with the isolated-op finding of a 0.6% device-time difference in "
+        "doc/optimized_full_model/README.md item 1). No measurable speed benefit to justify the "
+        "accuracy cost, so this fails the gate for no compensating reason.",
     },
     {
         "config_id": "C04_kvcache_bf16",
         "flags": "--cache-dtype bf16",
         "delta": "paged latent KV cache bfloat8_b -> bfloat16 (comparability arm)",
-        "decision": "REJECTED",
-        "reason": "teacher-forced accuracy is identical to baseline (top1 0.850, top5 1.000, top100 "
-        "1.000) but TTFT regresses 590.28->620.48 ms (+5.1%, more DRAM traffic for the doubled-width "
-        "cache read/write) and decode is marginally slower (44.02->43.91 t/s/u). Matches the "
-        "already-committed 202k real-weight evidence in doc/context_contract.json's optimized_decoder "
-        "section (bf8 == bf16 within noise on accuracy); bf8 wins on speed with no accuracy cost.",
+        "decision": "PASS_NOT_SELECTED",
+        "reason": "clears the gate (top1 tied at 0.850) but TTFT regresses 590.28->620.48 ms (+5.1%, "
+        "more DRAM traffic for the doubled-width cache read/write) and decode is marginally slower "
+        "(44.02->43.91 t/s/u). Matches the already-committed 202k real-weight evidence in "
+        "doc/context_contract.json's optimized_decoder section (bf8 == bf16 within noise on accuracy); "
+        "bf8 wins on speed with no accuracy cost either way.",
     },
     {
         "config_id": "C05_router_hifi2",
         "flags": "--router-fidelity hifi2",
         "delta": "router/gate compute fidelity HiFi4+fp32acc -> HiFi2 (decode only; prefill routing is "
         "unaffected by this plumbing and stays HiFi4)",
-        "decision": "REJECTED",
-        "reason": "teacher-forced top-1 0.850->0.820 (-0.030 abs) from routing-decision flips under "
-        "lower router fidelity, for a 44.02->44.09 t/s/u change (+0.16%, noise-level, matches the "
-        "isolated-op finding of ~0.19% of the model-only step in doc/optimized_full_model/README.md "
-        "item 2). No measurable benefit for a real accuracy cost on a selection-sensitive tensor.",
+        "decision": "FAIL_TOP1",
+        "reason": "teacher-forced top-1 0.850->0.820 (-0.030 abs, below the no-regression gate), "
+        "consistent with (though not directly measured as) routing-decision sensitivity under lower "
+        "router fidelity -- this codebase has tests/dev_optimize.py --check-ties for verifying "
+        "expert-selection ties/flips directly, which this stage did not run. Decode change is "
+        "44.02->44.09 t/s/u (+0.16%, noise-level, matches the isolated-op finding of ~0.19% of the "
+        "model-only step in doc/optimized_full_model/README.md item 2). No measurable benefit for a "
+        "real accuracy cost on a selection-sensitive tensor.",
     },
     {
         "config_id": "C06_attn_hifi2",
         "flags": "--attn-fidelity hifi2",
         "delta": "attention decode group (wqkv_a, wq_b, w_uk, w_uv, wo; bfloat4_b) fidelity LoFi -> HiFi2 "
         "(BFP4+HiFi2 vs BFP4+LoFi pair)",
-        "decision": "REJECTED",
-        "reason": "teacher-forced accuracy identical to baseline (0.850/1.000/1.000) but decode "
-        "regresses 44.02->41.87 t/s/u (-4.9%, the largest speed delta in this sweep after LM-head "
-        "dtype). LoFi ties on accuracy and wins decisively on speed for this group.",
+        "decision": "PASS_NOT_SELECTED",
+        "reason": "clears the gate (top1 tied at 0.850) but decode regresses 44.02->41.87 t/s/u "
+        "(-4.9%, the largest speed delta in this sweep after LM-head dtype). LoFi ties on accuracy "
+        "and wins decisively on speed for this group.",
     },
     {
         "config_id": "C07_expert_hifi2",
         "flags": "--expert-fidelity hifi2",
         "delta": "routed experts (bfloat4_b, the dominant MoE compute) fidelity LoFi -> HiFi2 "
         "(BFP4+HiFi2 vs BFP4+LoFi pair)",
-        "decision": "REJECTED",
-        "reason": "teacher-forced accuracy identical to baseline (0.850/1.000/1.000); decode regresses "
-        "44.02->43.82 t/s/u (-0.45%). LoFi ties on accuracy and wins on speed.",
+        "decision": "PASS_NOT_SELECTED",
+        "reason": "clears the gate (top1 tied at 0.850); decode regresses 44.02->43.82 t/s/u (-0.45%). "
+        "LoFi ties on accuracy and wins on speed.",
     },
     {
         "config_id": "C08_mlp_hifi2",
         "flags": "--mlp-fidelity hifi2",
         "delta": "shared-expert (bfloat4_b) + dense-MLP (bfloat8_b) fidelity LoFi -> HiFi2, both groups "
         "together (single class-attribute knob covers both; BFP4+HiFi2/BFP8+HiFi2 vs LoFi pair)",
-        "decision": "REJECTED",
-        "reason": "teacher-forced top-1 0.850->0.820 (-0.030 abs) and decode regresses "
-        "44.02->43.48 t/s/u (-1.2%). LoFi wins on both axes for this combined group.",
+        "decision": "FAIL_TOP1",
+        "reason": "teacher-forced top-1 0.850->0.820 (-0.030 abs, below the no-regression gate) and "
+        "decode regresses 44.02->43.48 t/s/u (-1.2%). LoFi wins on both axes for this combined group.",
     },
     {
         "config_id": "C09_dense_mlp_bf4_lofi",
         "flags": "--dense-mlp-dtype bf4",
         "delta": "dense-layer MLP (1 of 47 layers) bfloat8_b -> bfloat4_b, fidelity stays LoFi",
-        "decision": "REJECTED",
-        "reason": "mixed/noisy accuracy signal at this sample size (prefill top1 0.880->0.850, "
-        "teacher-forced top1 0.850->0.870) but decode is unchanged within noise (44.02->44.03 t/s/u, "
-        "+0.02%): only 1 of 47 layers is dense, so there is no full-model speed benefit to justify "
-        "adopting it regardless of the accuracy question. Matches the decoder-level finding "
-        "(doc/optimized_decoder/README.md: real-weight 202k dense-control regression, decode@202751 "
-        "0.99865 vs 0.99993) that already rejected this dtype for the same 1-of-47-layers reason.",
+        "decision": "PASS_NOT_SELECTED",
+        "reason": "clears the gate and is, on this stage's own numbers, the single fastest passing "
+        "candidate (44.029 t/s/u, +0.02% over C00) with a *higher* teacher-forced top-1 (0.870 vs "
+        "0.850) -- but that +0.02% speed delta is far inside this harness's measurement noise (see "
+        "C00's reason), and the accuracy read is from a single 154-token prompt at 100 positions, too "
+        "short to see the failure mode that already rejected this exact dtype at the decoder level: "
+        "doc/optimized_decoder/README.md's real-weight 202k long-context evidence shows a measurable "
+        "dense-control regression (decode@202751 0.99865 vs 0.99993, end window 28/32 vs 29/32 rows) "
+        "for the same change. Not selected: no real speed benefit, and the only accuracy signal this "
+        "stage's short reference can offer is not strong enough to overturn evidence from a much "
+        "harder, already-committed long-context test.",
     },
     {
         "config_id": "C10_all_bf8_canonical",
         "flags": None,
         "delta": "canonical/comparability arm: expert_dtype and attn_weight_dtype/mlp_gateup_dtype/"
         "mlp_down_dtype all bfloat8_b (no bfloat4_b anywhere)",
-        "decision": "REJECTED_NOT_RUN",
+        "decision": "NOT_RUN",
         "reason": "hard DRAM capacity limit, not a measured accuracy/speed tradeoff: "
         "doc/probe/README.md measured bfloat8_b routed experts at ~32 GB of expert weights alone, "
         "which does not fit the single Blackhole p150's 31.5 GiB allocatable DRAM "
@@ -234,7 +260,7 @@ def build_row(meta: dict) -> dict:
     tf = run["teacher_forcing"]["aggregate"]
     dtype_policy = (
         f"expert={_dtype_str(snap['expert_dtype'])} weight={_dtype_str(snap['weight_dtype'])} "
-        f"cache={_dtype_str(snap['cache_dtype'])} lm_head={_dtype_str(snap['lm_head_dtype'])} "
+        f"cache={_dtype_str(snap['kv_cache_dtype'])} lm_head={_dtype_str(snap['lm_head_dtype'])} "
         f"attn={_dtype_str(snap['moe_layer']['attn_weight_dtype'])} "
         f"shared_gu={_dtype_str(snap['moe_layer']['shared_gate_up_dtype'])} "
         f"shared_dn={_dtype_str(snap['moe_layer']['shared_down_dtype'])} "
@@ -249,6 +275,7 @@ def build_row(meta: dict) -> dict:
     )
     top5_ok = tf.get("top5", 0.0) >= TOP5_BAR
     top100_ok = tf.get("top100", 0.0) >= TOP100_BAR
+    top1_ok = tf.get("top1", 0.0) >= BASELINE_TOP1
     row.update(
         {
             "dtype_policy": dtype_policy,
@@ -262,7 +289,11 @@ def build_row(meta: dict) -> dict:
             "ttft_ms": tf.get("ttft_ms"),
             "decode_t_s_u": tf.get("decode_t/s/u"),
             "e2e_t_s_u": tf.get("e2e_t/s/u"),
-            "pass_fail": "PASS" if (top5_ok and top100_ok) else "FAIL",
+            # The real gate this stage selects against: the model's stated top5/top100
+            # bar AND no teacher-forced top-1 regression from the C00 baseline (see
+            # BASELINE_TOP1's comment -- this is the concrete form of the goal's
+            # "top-1/top-5 gate" and of the FM-021 precedent this stage follows).
+            "pass_fail": "PASS" if (top5_ok and top100_ok and top1_ok) else "FAIL",
         }
     )
     return row
@@ -280,12 +311,16 @@ def main():
                 "mesh": MESH,
                 "reference": REFERENCE,
                 "accuracy_bar": {
-                    "top1": "informational only (baseline itself is 0.850, below the skill's generic "
-                    "90% default); tracked but not gated -- see README 'Accuracy bar' section",
+                    "top1": f">= {BASELINE_TOP1} (no regression from the C00 baseline's teacher-forced "
+                    "top-1, not a fixed threshold -- the skill's generic 90% default would fail the "
+                    "already-accepted baseline itself, so this stage uses the baseline as its own bar; "
+                    "see README 'Accuracy bar' section)",
                     "top5": f">= {TOP5_BAR}",
                     "top100": f"= {TOP100_BAR}",
-                    "provenance": "doc/full_model/README.md and doc/optimized_full_model/README.md both "
-                    "state this exact bar across many committed review rounds",
+                    "provenance": "top5/top100 from doc/full_model/README.md and "
+                    "doc/optimized_full_model/README.md, stated across many committed review rounds; "
+                    "the top1 no-regression condition is this stage's own, following the FM-021 "
+                    "precedent in doc/full_model/work_log.md",
                 },
                 "selected_config_id": "C00_baseline",
                 "candidates": rows,
@@ -330,16 +365,15 @@ def main():
 
 
 def plot_pareto(rows: list[dict]):
-    # top-1 has no model-specific gating bar (see README "Accuracy bar"); the
-    # skill's own generic default (0.90) is drawn anyway, labeled as
-    # informational-only, so the chart still carries the required threshold
-    # line without misrepresenting it as this model's actual gate.
+    # top-1's gate is "no regression from the C00 baseline" (BASELINE_TOP1), not a
+    # fixed universal threshold -- see the accuracy_bar note in main() / README
+    # "Accuracy bar" for why the skill's generic 90% default doesn't apply here.
     for metric, fname, bar, bar_label, title in (
         (
             "tf_top1",
             "top1_perf_pareto.png",
-            0.90,
-            "skill generic default (informational only -- not this model's gate; see README)",
+            BASELINE_TOP1,
+            f"minimum allowed = {BASELINE_TOP1:.2f} (no regression from C00 baseline; see README)",
             "GLM-4.7-Flash datatype sweep: top-1 vs decode throughput",
         ),
         (

@@ -284,11 +284,12 @@
   "kv_cache_dtype_recompute": {
    "reason": "$datatype-sweep requires recomputing this contract for every selected KV-cache dtype candidate that could change capacity. The selected dtype (bfloat8_b) is unchanged from the optimized_decoder/full_model stages, so the existing full_model.dram_budget_gib figures (kv_cache_batch1_202752_bf8: 5.431 GiB) already reflect it -- there is nothing to recompute for the winning candidate.",
    "tested_alternative_bfloat16": {
-    "decision": "REJECTED (doc/datatype_sweep/sweep_results.json C04_kvcache_bf16)",
+    "decision": "PASS_NOT_SELECTED (doc/datatype_sweep/sweep_results.json C04_kvcache_bf16)",
     "would_still_fit": true,
-    "projected_cache_gib_at_202752": 10.9,
-    "projected_resident_total_gib_estimate": "17.498 (weights+scratch) + 10.9 (bf16 cache) + 0.092 (sampler buffers) = 28.49, vs 31.5 GiB measured allocatable -- fits with ~3.0 GiB headroom, less than bf8's 8.15 GiB but still a hard pass, not a capacity-forced rejection",
-    "why_rejected": "not a capacity problem -- bf16 fits. Rejected on measured evidence: identical teacher-forced accuracy to bf8 (top1 0.850, top5 1.000, top100 1.000) but TTFT +5.1% (590.28->620.48 ms) and decode -0.25% (44.02->43.91 t/s/u) from the doubled cache read/write traffic. See doc/datatype_sweep/README.md."
+    "fit_evidence": "measured, not modeled: doc/datatype_sweep/tests/dev_datatype_sweep.py never overrides max_seq_len, so C04 built and ran to completion with cache_dtype=bfloat16 at the default max_seq_len (cfg.max_position_embeddings = 202752) -- the full bf16-cache-at-202752 configuration was actually constructed and exercised on hardware, not just estimated",
+    "cache_gib_at_202752": 10.9,
+    "resident_total_gib_estimate": "17.498 (weights+scratch) + 10.9 (bf16 cache) + 0.092 (sampler buffers) = 28.49, vs 31.5 GiB measured allocatable -- fits with 31.5 - 28.49 - 0.326 (trace region, matching how full_model.dram_budget_gib.headroom=8.152 already nets it out for bf8) = 2.68 GiB headroom, less than bf8's 8.152 GiB but still a hard pass, not a capacity-forced rejection",
+    "why_not_selected": "not a capacity problem -- bf16 fits and was measured fitting. Not selected on measured evidence: identical teacher-forced accuracy to bf8 (top1 0.850, top5 1.000, top100 1.000) but TTFT +5.1% (590.28->620.48 ms) and decode -0.25% (44.02->43.91 t/s/u) from the doubled cache read/write traffic. See doc/datatype_sweep/README.md."
    },
    "conclusion": "capability is preserved either way (both candidates fit and support the full 202752-token advertised context); bf8 is selected for speed, not because bf16 would have required reducing advertised capability."
   },

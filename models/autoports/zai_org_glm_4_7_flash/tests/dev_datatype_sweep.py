@@ -44,6 +44,7 @@ import ttnn
 from models.autoports.zai_org_glm_4_7_flash.tt.generator import build_generator
 from models.autoports.zai_org_glm_4_7_flash.tt.model import SharedRopeDecoder
 from models.autoports.zai_org_glm_4_7_flash.tt.optimized_decoder import FIDELITY
+from models.autoports.zai_org_glm_4_7_flash.tt.provenance import source_manifest
 from models.common.readiness_check.mesh_device import close_readiness_mesh_device, open_readiness_mesh_device
 from models.common.readiness_check.run_prefill_check import _run_one_entry_prefill
 from models.common.readiness_check.run_teacher_forcing import _run_one_entry as _run_one_entry_tf
@@ -89,20 +90,31 @@ def _fid(ck) -> dict:
     return {"math_fidelity": str(ck.math_fidelity), "fp32_dest_acc_en": bool(ck.fp32_dest_acc_en)}
 
 
-def policy_snapshot(model) -> dict:
+def policy_snapshot(model, generator) -> dict:
     """Introspect the just-built model's real dtype/compute-kernel-config
-    objects (not the requested kwargs) -- the propagation-check proof."""
+    objects (not the requested kwargs) -- the propagation-check proof.
+
+    ``expert_dtype``/``weight_dtype``/``embed_dtype``/``lm_head_fidelity`` below
+    are the model's own recorded constructor state (an echo of the requested
+    kwarg, not an independent tensor read) -- kept for a human-readable summary
+    only. Every other field, including ``kv_cache_dtype`` (the real allocated
+    cache tensor's dtype, read from ``generator._kv_cache``, not from
+    ``model.cache_dtype``), is read directly off a real ``ttnn`` tensor or
+    ``ttnn.init_device_compute_kernel_config`` object, and that's what
+    ``check_selected_precision_config.py`` compares against."""
     dense = next((layer for layer in model.layers if layer.layer_kind == "dense"), None)
     moe = next((layer for layer in model.layers if layer.layer_kind == "moe"), None)
+    kv_cache = getattr(generator, "_kv_cache", None) or getattr(generator, "_bound_cache", None)
     snap = {
         "expert_dtype": str(model.expert_dtype),
         "weight_dtype": str(model.weight_dtype),
-        "cache_dtype": str(model.cache_dtype),
         "embed_dtype": str(model.embed_dtype),
         "lm_head_dtype": str(model.lm_head_weight.dtype),
         "lm_head_fidelity": model.lm_head_fidelity,
         "ck_lm_head": _fid(model.ck_lm_head),
         "decoder_cls": model.decoder_cls_name,
+        "kv_cache_dtype": str(kv_cache[0].dtype) if kv_cache else None,
+        "kv_cache_dtype_source": "generator._kv_cache[0].dtype (real allocated per-layer cache tensor)",
     }
     if moe is not None:
         snap["moe_layer"] = {
@@ -175,6 +187,7 @@ def run_candidate(args) -> dict:
     )
     result: dict = {
         "config_id": args.config_id,
+        "source_manifest": source_manifest([__file__]),
         "build_kwargs_requested": {
             "expert_dtype": args.expert_dtype,
             "weight_dtype": args.weight_dtype,
@@ -191,7 +204,9 @@ def run_candidate(args) -> dict:
     try:
         generator = build_generator(model_dir=MODEL_DIR, mesh_device=mesh_device, **build_kwargs)
         result["build_s"] = time.perf_counter() - t_build0
-        result["policy_snapshot"] = policy_snapshot(generator.model)
+        # build_generator() already calls generator._ensure_owned_state(), which
+        # allocates/binds generator._kv_cache -- read the real tensor, not a kwarg echo.
+        result["policy_snapshot"] = policy_snapshot(generator.model, generator)
 
         reference = load_reference(args.reference)
         prefill_entries = []

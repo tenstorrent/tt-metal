@@ -1,0 +1,28 @@
+=== C01_lmhead_bf4_lofi ===
+C01_lmhead_bf4_lofi: prefill top1=0.860 top5=1.000 top100=1.000 | tf top1=0.790 top5=0.990 top100=1.000 TTFT=590.59ms decode=44.49t/s/u
+CANDIDATE_DONE C01_lmhead_bf4_lofi -> models/autoports/zai_org_glm_4_7_flash/doc/datatype_sweep/runs/C01_lmhead_bf4_lofi.json
+=== C02_lmhead_bf4_hifi2 ===
+C02_lmhead_bf4_hifi2: prefill top1=0.860 top5=1.000 top100=1.000 | tf top1=0.790 top5=0.990 top100=1.000 TTFT=590.23ms decode=44.48t/s/u
+CANDIDATE_DONE C02_lmhead_bf4_hifi2 -> models/autoports/zai_org_glm_4_7_flash/doc/datatype_sweep/runs/C02_lmhead_bf4_hifi2.json
+=== C03_lmhead_bf8_lofi ===
+C03_lmhead_bf8_lofi: prefill top1=0.850 top5=1.000 top100=1.000 | tf top1=0.830 top5=1.000 top100=1.000 TTFT=590.65ms decode=44.05t/s/u
+CANDIDATE_DONE C03_lmhead_bf8_lofi -> models/autoports/zai_org_glm_4_7_flash/doc/datatype_sweep/runs/C03_lmhead_bf8_lofi.json
+=== C04_kvcache_bf16 ===
+C04_kvcache_bf16: prefill top1=0.860 top5=0.990 top100=1.000 | tf top1=0.850 top5=1.000 top100=1.000 TTFT=619.79ms decode=43.91t/s/u
+CANDIDATE_DONE C04_kvcache_bf16 -> models/autoports/zai_org_glm_4_7_flash/doc/datatype_sweep/runs/C04_kvcache_bf16.json
+=== C05_router_hifi2 ===
+C05_router_hifi2: prefill top1=0.880 top5=1.000 top100=1.000 | tf top1=0.820 top5=1.000 top100=1.000 TTFT=590.60ms decode=44.01t/s/u
+CANDIDATE_DONE C05_router_hifi2 -> models/autoports/zai_org_glm_4_7_flash/doc/datatype_sweep/runs/C05_router_hifi2.json
+=== C06_attn_hifi2 ===
+C06_attn_hifi2: prefill top1=0.880 top5=1.000 top100=1.000 | tf top1=0.850 top5=1.000 top100=1.000 TTFT=590.44ms decode=41.87t/s/u
+CANDIDATE_DONE C06_attn_hifi2 -> models/autoports/zai_org_glm_4_7_flash/doc/datatype_sweep/runs/C06_attn_hifi2.json
+=== C07_expert_hifi2 ===
+C07_expert_hifi2: prefill top1=0.880 top5=1.000 top100=1.000 | tf top1=0.850 top5=1.000 top100=1.000 TTFT=590.41ms decode=43.82t/s/u
+CANDIDATE_DONE C07_expert_hifi2 -> models/autoports/zai_org_glm_4_7_flash/doc/datatype_sweep/runs/C07_expert_hifi2.json
+=== C08_mlp_hifi2 ===
+C08_mlp_hifi2: prefill top1=0.880 top5=1.000 top100=1.000 | tf top1=0.820 top5=1.000 top100=1.000 TTFT=590.82ms decode=43.47t/s/u
+CANDIDATE_DONE C08_mlp_hifi2 -> models/autoports/zai_org_glm_4_7_flash/doc/datatype_sweep/runs/C08_mlp_hifi2.json
+=== C09_dense_mlp_bf4_lofi ===
+C09_dense_mlp_bf4_lofi: prefill top1=0.850 top5=0.990 top100=1.000 | tf top1=0.870 top5=1.000 top100=1.000 TTFT=590.69ms decode=44.02t/s/u
+CANDIDATE_DONE C09_dense_mlp_bf4_lofi -> models/autoports/zai_org_glm_4_7_flash/doc/datatype_sweep/runs/C09_dense_mlp_bf4_lofi.json
+ALL_DONE

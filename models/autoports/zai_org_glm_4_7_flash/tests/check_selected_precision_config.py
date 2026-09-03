@@ -153,7 +153,15 @@ def check_baseline_run_matches(config: dict) -> list[str]:
             "dense_mlp_down.dtype",
         ),
         (_dtype_short(groups["lm_head"]["dtype"]), _dtype_short(snap["lm_head_dtype"]), "lm_head.dtype"),
-        (_dtype_short(config["kv_cache_dtype"]["selected"]), _dtype_short(snap["cache_dtype"]), "kv_cache.dtype"),
+        (
+            _dtype_short(config["kv_cache_dtype"]["selected"]),
+            # snap["kv_cache_dtype"] is read from generator._kv_cache[0].dtype, the real
+            # allocated cache tensor -- not model.cache_dtype (which only echoes the
+            # requested constructor kwarg and would pass even if allocate_kv_cache()
+            # silently ignored it).
+            _dtype_short(snap["kv_cache_dtype"]),
+            "kv_cache.dtype",
+        ),
         (
             _fidelity_key_from_prose(
                 groups["attention_decode_dram_sharded_copies_and_absorbed_kv_b"]["compute_fidelity"]
@@ -175,6 +183,23 @@ def check_baseline_run_matches(config: dict) -> list[str]:
             _fidelity_key_from_prose(groups["lm_head"]["compute_fidelity"]),
             _fidelity_key_from_snapshot(snap["ck_lm_head"]),
             "lm_head.compute_fidelity",
+        ),
+        (
+            # shared_expert's decode fidelity is the "LoFi (decode) / HiFi2+fp32acc
+            # (prefill)" string's first clause; ck_mlp_shared is the decode kernel config.
+            _fidelity_key_from_prose(groups["shared_expert_gate_up"]["compute_fidelity"]),
+            _fidelity_key_from_snapshot(snap["moe_layer"]["ck_mlp_shared"]),
+            "shared_expert.compute_fidelity(decode)",
+        ),
+        (
+            _fidelity_key_from_prose(groups["dense_mlp_gate_up_down"]["compute_fidelity"]),
+            _fidelity_key_from_snapshot(snap["dense_layer"]["ck_mlp_dense"]),
+            "dense_mlp.compute_fidelity(decode)",
+        ),
+        (
+            _dtype_short(groups["router_gate"]["dtype"]),
+            _dtype_short(snap["moe_layer"]["router_dtype"]),
+            "router_gate.dtype",
         ),
     ]
     for expected, live, label in pairs:
