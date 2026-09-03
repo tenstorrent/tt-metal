@@ -6463,7 +6463,7 @@ def _ceiling_armed(target, rep: dict) -> tuple:
     return True, ""
 
 
-def _stage_of_op(op, profile) -> str:
+def stage_of_op(op, profile) -> str:
     """Which stage this op costs the most in, read from the capture, or "" when it cannot say.
 
     next_target names an OP and never said where it lives, and the prompt's only stage-shaped signal
@@ -6710,7 +6710,7 @@ def termination_check() -> dict:
             # WHERE THIS OP LIVES. Without it the agent has an op and a metric, and the metric names
             # only the recurring stage -- so it worked that stage regardless of where the ranking
             # pointed. Discovered from the capture's own marks; "" when the capture carried none.
-            "stage": _stage_of_op(blocking[0]["op"], prof),
+            "stage": stage_of_op(blocking[0]["op"], prof),
         }
         if blocking
         else None

@@ -391,6 +391,33 @@ def _dominant_bound_by(profile: dict | None) -> str:
     return max(weight, key=weight.get) if weight else ""
 
 
+def _perf_mcp():
+    """The perf_mcp module, however this one was loaded, or None.
+
+    summary.py is imported three ways: as `cc_optimize.summary`, as a bare `summary`, and -- in the
+    running tool -- by perf_mcp itself through spec_from_file_location under the name "cc_summary",
+    which leaves it with NO package, so `from .perf_mcp import ...` cannot resolve. Every caller
+    needing something from perf_mcp had to know that and carry its own two-step fallback. Asking
+    sys.modules first also avoids re-importing a module that is, in the tool, already running.
+    """
+    for _name in ("cc_optimize.perf_mcp", "perf_mcp"):
+        _m = sys.modules.get(_name)
+        if _m is not None:
+            return _m
+    try:
+        from . import perf_mcp as _m  # type: ignore
+
+        return _m
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        import perf_mcp as _m  # type: ignore
+
+        return _m
+    except Exception:  # noqa: BLE001 -- a lookup that cannot load must not cost the report
+        return None
+
+
 def _levels_display(bound_by: str = "") -> str:
     """Render the ladder from its single definition in perf_mcp, not from a second hardcoded copy.
 
@@ -398,14 +425,31 @@ def _levels_display(bound_by: str = "") -> str:
     leads on a compute-bound model and trails on a memory-bound one -- so the binding travels with
     the request. Without one, perf_mcp's own default row is used; there is no display-side default,
     because a display-side default is how the two copies drifted the first time."""
-    try:
-        from .perf_mcp import ladder_order
-    except Exception:  # noqa: BLE001
-        try:
-            from perf_mcp import ladder_order  # type: ignore
-        except Exception:  # noqa: BLE001
-            return "grid -> dtype -> shard -> fidelity -> host -> structural -> tt-lang -> cpp"
+    _m = _perf_mcp()
+    if _m is None or not hasattr(_m, "ladder_order"):
+        return "grid -> dtype -> shard -> fidelity -> host -> structural -> tt-lang -> cpp"
+    ladder_order = _m.ladder_order
     return " -> ".join(_disp_level(r) if r == "tt-lang" else r for r in ladder_order(bound_by))
+
+
+def _stage_label(op, profile, width: int = 9) -> str:
+    """Which stack this op runs in, from the capture's own marks. "" when the capture cannot say.
+
+    THE SAME RULE THE TARGET USES, not a second one. perf_mcp.stage_of_op attributes an op to the
+    stage it costs the most in; a report that answered differently would disagree with the target the
+    agent was handed for the very same op. Resolved lazily through _perf_mcp: perf_mcp imports this
+    module, so it cannot be imported at load time.
+
+    Stage names come from the marks the model emitted, so a model that calls its stacks anything is
+    labelled in its own words. Truncated to the column, never renamed.
+    """
+    _m = _perf_mcp()
+    if _m is None or not hasattr(_m, "stage_of_op"):
+        return ""
+    try:
+        return str(_m.stage_of_op(op, profile) or "")[:width]
+    except Exception:  # noqa: BLE001 -- a label that cannot be derived must not cost the report
+        return ""
 
 
 def _op_label(sig: str, width: int = 34) -> str:
@@ -3288,12 +3332,17 @@ def render_summary(
         # SAME FURNITURE AS THE TABLES ABOVE: ruled columns, one field per fact. Packed right-aligned
         # against each other the numbers ran together and the op name had no column edge to end at.
         # Sized to the coverage matrix above it, so the two tables in this section share a width.
-        _ar = " %-44s\u2502 %-18s\u2502 %-20s\u2502 %-22s\u2502 %s"
-        ah = _ar % ("op", "lever", "eager device_ms", "1CQ \u0394 vs current", "result")
+        # WHICH STACK THE OP RUNS IN. Without it a reader cannot tell a decode matmul from a prefill
+        # one except by decoding the shape in its name, and the ops with no shape -- SDPA, Concat,
+        # Copy, the data movers, half of a typical run -- cannot be placed at all. Read from the
+        # capture's marks; blank when the capture marked no stages, which is exactly how the column
+        # renders for a model that emits none.
+        _ar = " %-44s\u2502 %-9s\u2502 %-18s\u2502 %-20s\u2502 %-22s\u2502 %s"
+        ah = _ar % ("op", "stack", "lever", "eager device_ms", "1CQ \u0394 vs current", "result")
         lines.append(ah)
         # THE RULE IS DERIVED FROM THE HEADER, not counted by hand. Hand-counted it drifted the
         # moment a field width changed -- crosses at 33/48/64/82 under dividers at 33/49/66/85.
-        lines.append("".join("\u253c" if c == "\u2502" else "\u2500" for c in ah.ljust(128)))
+        lines.append("".join("\u253c" if c == "\u2502" else "\u2500" for c in ah.ljust(140)))
         _unmeasured = 0
         for _i, a in enumerate(attempts):
             if not isinstance(a, dict):
@@ -3335,7 +3384,9 @@ def render_summary(
                 _unmeasured += 1
                 continue
             res = "✓ win" if _i in _wins else ("· wedged" if a.get("wedged") else "· no gain")
-            lines.append((_ar % (sig, lever, ms_s, gain_s, res)).rstrip())
+            lines.append(
+                (_ar % (sig, _stage_label(a.get("op_signature"), baseline_profile), lever, ms_s, gain_s, res)).rstrip()
+            )
         if _unmeasured:
             lines.append("")
             lines.append(

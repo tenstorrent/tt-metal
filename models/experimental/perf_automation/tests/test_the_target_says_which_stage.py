@@ -22,7 +22,7 @@ _spec = _ilu.spec_from_file_location("_pm_stage", PERF / "cc_optimize" / "perf_m
 _pm = _ilu.module_from_spec(_spec)
 _spec.loader.exec_module(_pm)
 
-_stage_of_op = _pm._stage_of_op
+_stage_of_op = _pm.stage_of_op
 _stage_gap_share = _pm._stage_gap_share
 
 
@@ -71,7 +71,7 @@ def test_the_share_summarises_every_marked_stage():
 
 def test_the_target_carries_the_stage_and_the_directive_shows_where_time_is():
     src = (PERF / "cc_optimize" / "perf_mcp.py").read_text(encoding="utf-8")
-    assert '"stage": _stage_of_op(blocking[0]["op"], prof)' in src
+    assert '"stage": stage_of_op(blocking[0]["op"], prof)' in src
     assert "IN THE STAGE " in src, "the directive must tell the agent to work that stage"
     assert "_stage_time_note" in src, "the directive must show where the time actually is"
 
@@ -111,4 +111,4 @@ def test_the_stop_gate_is_the_registered_tool_and_the_helper_is_not():
     """
     src = (PERF / "cc_optimize" / "perf_mcp.py").read_text(encoding="utf-8")
     assert "@mcp.tool()\ndef termination_check(" in src, "the stop gate must stay registered"
-    assert "@mcp.tool()\ndef _stage_of_op(" not in src, "a private helper must not be exposed as a tool"
+    assert "@mcp.tool()\ndef stage_of_op(" not in src, "a shared helper must not be exposed as a tool"
