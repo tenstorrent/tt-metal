@@ -140,7 +140,7 @@ public:
     // Page-id step between memory-contiguous pages. Constant per accessor. Usually 1, but
     // tensor_shape[-1] for a one-page-wide shard (row-major width/block sharding).
     FORCE_INLINE
-    uint32_t contiguous_page_stride() const { return dspec().tensor_strides()[contiguous_dim()]; }
+    uint32_t contiguous_page_stride() const { return dspec().tensor_strides()[contiguous_page_dim()]; }
 
     // How many pages from page_id are contiguous in memory, page_id included: the page ids
     // { page_id + k * contiguous_page_stride() } at { get_noc_addr(page_id) + k * aligned_page_size }.
@@ -153,7 +153,7 @@ public:
         ASSERT(page_id < end);
         ASSERT(end <= dspec().tensor_volume());
 
-        const int d = contiguous_dim();
+        const int d = contiguous_page_dim();
 
         // The shard is one page wide inside d, so the walk starts at d.
         uint32_t coords = page_id;
@@ -413,7 +413,7 @@ private:
     // Innermost dim the shard spans more than one page of. Stepping any dim inside it leaves the
     // shard, so the run walks this one. Shapes only, so it is constant per accessor.
     FORCE_INLINE
-    int contiguous_dim() const {
+    int contiguous_page_dim() const {
         const int rank = static_cast<int>(dspec().rank());
         ASSERT(rank > 0);  // callers index tensor_strides() with the result
         for (int i = rank - 1; i >= 0; --i) {
