@@ -20,7 +20,7 @@ class DataCopyGolden(Golden):
         return Chain(
             [
                 self.l1_to_srcA(cfg, source="in0"),
-                self.src_to_dest(lambda regs: regs["srcA"], reads=("srcA",)),
+                self.src_to_dest(cfg, lambda regs: regs["srcA"], reads=("srcA",)),
                 self.dest_to_l1(cfg, into="out"),
             ]
         )

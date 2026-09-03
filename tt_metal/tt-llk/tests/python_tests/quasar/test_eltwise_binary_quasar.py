@@ -5,9 +5,8 @@ import pytest
 import torch
 from helpers.constraints import get_valid_math_fidelities
 from helpers.format_config import DataFormat, InputOutputFormat
-from helpers.golden_generators import (
-    EltwiseBinaryGolden,
-    get_golden_generator,
+from helpers.golden_generator.heavyweight.operations.quasar_operations import (
+    QuasarEltwiseBinaryGolden,
 )
 from helpers.llk_params import (
     DestAccumulation,
@@ -305,16 +304,14 @@ def test_eltwise_binary(
         tile_shape.total_tile_size() * num_tiles_per_accumulation
     )
 
-    generate_golden = get_golden_generator(EltwiseBinaryGolden)
-    golden_tensor = generate_golden(
-        mathop,
-        src_A,
-        src_B,
+    generate_golden = QuasarEltwiseBinaryGolden(mathop, math_fidelity)
+    golden_tensor = generate_golden.run(
+        [src_A, src_B],
+        formats.input_format,
         formats.output_format,
-        math_fidelity,
-        input_format=formats.input_format,
-        acc_to_dest=acc_to_dest,
-        tile_shape=tile_shape,
+        dest_acc=(dest_acc == DestAccumulation.Yes),
+        num_faces=num_faces,
+        face_r_dim=tile_shape.face_r_dim,
         num_tiles_per_accumulation=num_tiles_per_accumulation,
     )
 

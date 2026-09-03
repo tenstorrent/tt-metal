@@ -26,7 +26,7 @@ class MatmulGolden(Golden):
             [
                 self.l1_to_srcA(cfg, source="in0"),
                 self.l1_to_srcB(cfg, source="in1"),
-                self.src_to_dest(self.apply, reads=("srcA", "srcB")),
+                self.src_to_dest(cfg, self.apply, reads=("srcA", "srcB")),
                 self.dest_to_l1(cfg, into="out"),
             ]
         )

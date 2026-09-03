@@ -157,6 +157,8 @@ class DataTransferBlocks(ABC):
         Check :func:`.pack_effects.is_deterministic` and compare with PCC.
         """
         self._check_dest_format(dest_format)
+        # Normally already at Dest precision (src_to_dest wrote it there); this
+        # is a no-op then, and a safety net for a caller that bypassed Dest.
         values = self._to_dest_storage(dest_values, dest_format)
         values = apply_pack_effects(
             values,
@@ -179,6 +181,33 @@ class DataTransferBlocks(ABC):
     def supported_dest_formats(self) -> FrozenSet[DataFormat]:
         """Dest formats available on this architecture."""
         return DEST_STORAGE_FORMATS & self.SUPPORTED_L1_FORMATS
+
+    # ------------------------------------------------------------------
+    # Src registers -> Dest
+    # ------------------------------------------------------------------
+
+    def src_to_dest(
+        self,
+        values: torch.Tensor,
+        dest_format: DataFormat = DataFormat.Float32,
+        current: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        """Write a math result into Dest.
+
+        The maths belongs to the operation; what belongs here is where it lands.
+        A Dest slot holds only what `dest_format` can represent, and the value is
+        rounded on the way *in*, not on the way out to L1.
+
+        `current` is Dest's existing contents, which a multi-pass op passes to
+        accumulate rather than replace — the FPU has an accumulate-enable bit,
+        not a second instruction. Because the rounding happens on this write, it
+        happens on every pass; accumulating at full precision and rounding once
+        at the end would model an accumulator the hardware does not have.
+        """
+        self._check_dest_format(dest_format)
+        if current is not None:
+            values = current.float() + values.float()
+        return self._to_dest_storage(values, dest_format)
 
     def dest_format_for(
         self, l1_input_format: DataFormat, dest_acc: bool = False
