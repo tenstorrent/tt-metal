@@ -17,6 +17,7 @@
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/invalid-scalar-destination.cpp 2>&1 | FileCheck %s --check-prefix=INVALID_SCALAR_DESTINATION
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/overlapping-assignments.cpp 2>&1 | FileCheck %s --check-prefix=OVERLAPPING_ASSIGNMENTS
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/overlapping-operations.cpp 2>&1 | FileCheck %s --check-prefix=OVERLAPPING_OPERATIONS
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/rmwcib-ignored.cpp 2>&1 | FileCheck %s --check-prefix=RMWCIB_IGNORED
 // clang-format on
 
 //--- invalid-section.cpp
@@ -153,4 +154,15 @@ void overlapping_operations()
     cfg::write<cfg::Access::TensixCfgUnit>(
         cfg::set<cfg::AluFormatSpecReg::SrcB_val, cfg::Sec::S0, 1>(), cfg::from_gpr<cfg::AluFormatSpecReg::SrcA_val, cfg::Sec::S0>(hal::gpr<4>()));
     // OVERLAPPING_OPERATIONS: error: static assertion failed: overlapping field assignments or GPR destination spans in cfg::write
+}
+
+//--- rmwcib-ignored.cpp
+#include "hal/cfg.h"
+
+namespace cfg = hal::cfg;
+
+void rmwcib_ignored()
+{
+    cfg::write<cfg::Access::TensixCfgUnit, cfg::StateReset::EN, cfg::Sec::S0, 1>();
+    // RMWCIB_IGNORED: error: static assertion failed: RMWCIB writes to the state-reset register are ignored by hardware
 }
