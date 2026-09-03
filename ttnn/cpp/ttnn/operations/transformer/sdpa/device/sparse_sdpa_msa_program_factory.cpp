@@ -55,13 +55,15 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
         cb_kack,           // writer->reader ack that its half of the block landed in cb_k_in/cb_v_in
         cb_neginf,         // causal mask: persistent all -inf tile (writer-built); masks full future key-tiles
         cb_vmask,          // causal mask: per-token partial-column "vertical" tile (reader-built) for the boundary
+        cb_page_bundle,    // paged K/V only: logical-page -> physical-bundle uint16 table
         cb_count
     };
 
     tt::tt_metal::ProgramDescriptor desc;
 
     const uint32_t H_total = t.q.logical_shape()[1];  // total query heads
-    const uint32_t n_kv = t.k.logical_shape()[1];     // KV groups
+    const bool paged_kv = t.has_paged_kv_cache();
+    const uint32_t n_kv = paged_kv ? t.indices.logical_shape()[1] : t.k.logical_shape()[1];  // KV groups
     const uint32_t H_logical = H_total / n_kv;        // query heads per KV group
     const uint32_t H =
         ((H_logical + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT) * tt::constants::TILE_HEIGHT;
@@ -113,8 +115,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
     const uint32_t num_cores = dyn.num_cores;
 
     // ---- CBs (fixed order = SparseCB enum) ----
-    const auto cb = [&](uint32_t page_size, uint32_t num_pages, tt::DataFormat df) {
-        const uint32_t idx = desc.cbs.size();
+    const auto cb = [&](uint32_t idx, uint32_t page_size, uint32_t num_pages, tt::DataFormat df) {
         desc.cbs.push_back(tt::tt_metal::CBDescriptor{
             .total_size = page_size * num_pages,
             .core_ranges = core_grid,
@@ -122,33 +123,39 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
                 .buffer_index = static_cast<uint8_t>(idx), .data_format = df, .page_size = page_size}}},
         });
     };
-    cb(q_row_bytes, H, q_rm_df);              // cb_q_rm : H row-sticks (native Q dtype: bf16/fp8)
-    cb(q_in_tile_bytes, Sqt * DHt, q_in_df);  // cb_q_in : [Sqt,DHt] (bfp8 when Q is fp8, else Q's float format)
+    cb(cb_q_rm, q_row_bytes, H, q_rm_df);              // cb_q_rm : H row-sticks (native Q dtype: bf16/fp8)
+    cb(cb_q_in, q_in_tile_bytes, Sqt * DHt, q_in_df);  // cb_q_in : [Sqt,DHt]
     // Single-buffered: reader reserves one block and writer fills its half into the same L1 region.
-    cb(k_tile_bytes, Skt * DHt, k_df);       // cb_k_in : [Skt,DHt] tiled cache (reader-filled, no tilize)
-    cb(v_tile_bytes, Skt * vDHt, v_df);      // cb_v_in : [Skt,vDHt] tiled cache (reader-filled, no tilize)
-    cb(tile_bytes, 1, bf);                   // cb_scale
-    cb(tile_bytes, Sqt * Skt, bf);           // cb_qk_im : [Sqt,Skt]
-    cb(tile_bytes, Sqt, bf);                 // cb_max_a
-    cb(tile_bytes, Sqt, bf);                 // cb_max_b
-    cb(tile_bytes, Sqt, bf);                 // cb_sum_a
-    cb(tile_bytes, Sqt, bf);                 // cb_sum_b
-    cb(tile_bytes, Sqt * vDHt, bf);          // cb_out_a
-    cb(tile_bytes, Sqt * vDHt, bf);          // cb_out_b
-    cb(tile_bytes, Sqt, bf);                 // cb_corr
-    cb(tile_bytes, Sqt * vDHt, bf);          // cb_out_im (bf16 accumulator, full precision)
-    cb(out_tile_bytes, Sqt * vDHt, out_df);  // cb_out_rm : untilized output in Q's dtype
-    cb(topk * idx_elem_bytes, 1, bf);        // cb_idx : one block-id row
-    cb(16, 2, bf);                           // cb_ctrl : active block count (double-buffered)
-    cb(tile_bytes, 1, bf);                   // cb_col_identity
-    cb(tile_bytes, 1, bf);                   // cb_recip_scratch
-    cb(16, 2, bf);                           // cb_kreq : {block_id, is_last} reader->writer (double-buffered)
-    cb(16, 2, bf);                           // cb_kack : writer->reader ack (double-buffered)
+    cb(cb_k_in, k_tile_bytes, Skt * DHt, k_df);
+    cb(cb_v_in, v_tile_bytes, Skt * vDHt, v_df);
+    cb(cb_scale, tile_bytes, 1, bf);
+    cb(cb_qk_im, tile_bytes, Sqt * Skt, bf);
+    cb(cb_max_a, tile_bytes, Sqt, bf);
+    cb(cb_max_b, tile_bytes, Sqt, bf);
+    cb(cb_sum_a, tile_bytes, Sqt, bf);
+    cb(cb_sum_b, tile_bytes, Sqt, bf);
+    cb(cb_out_a, tile_bytes, Sqt * vDHt, bf);
+    cb(cb_out_b, tile_bytes, Sqt * vDHt, bf);
+    cb(cb_corr, tile_bytes, Sqt, bf);
+    cb(cb_out_im, tile_bytes, Sqt * vDHt, bf);
+    cb(cb_out_rm, out_tile_bytes, Sqt * vDHt, out_df);
+    cb(cb_idx, topk * idx_elem_bytes, 1, bf);
+    cb(cb_ctrl, 16, 2, bf);
+    cb(cb_col_identity, tile_bytes, 1, bf);
+    cb(cb_recip_scratch, tile_bytes, 1, bf);
+    cb(cb_kreq, 16, 2, bf);
+    cb(cb_kack, 16, 2, bf);
     // Mask tiles are touched only under CAUSAL_MASK_ENABLED in the kernels, so skip their L1 when causal
     // masking is off. Safe to gate: these are the trailing CBs, so omitting them shifts no other buffer index.
     if (attrs.causal_enabled()) {
-        cb(tile_bytes, 1, bf);  // cb_neginf : persistent all -inf mask tile
-        cb(tile_bytes, 2, bf);  // cb_vmask : per-token partial-column mask tile
+        cb(cb_neginf, tile_bytes, 1, bf);
+        cb(cb_vmask, tile_bytes, 2, bf);
+    }
+    const uint32_t page_bundle_count = paged_kv ? t.page_bundle_indices->logical_volume() : 0;
+    const uint32_t page_bundle_bytes = ((page_bundle_count * sizeof(uint16_t) + 31) / 32) * 32;
+    const uint32_t cb_page_bundle_id = paged_kv ? cb_page_bundle : cb_idx;
+    if (paged_kv) {
+        cb(cb_page_bundle, page_bundle_bytes, 1, tt::DataFormat::UInt16);
     }
 
     // Block-cyclic ("slab") cache: the invP remap is baked as compile-time args, so a natural-order cache folds
@@ -186,6 +193,14 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
     reader_ct.push_back(block_size);                        // block_size: for diag_block = p/bs, offset = p%bs
     reader_ct.push_back(cb_vmask);                          // reader builds the per-token partial-column tile
     reader_ct.insert(reader_ct.end(), block_cyclic_ct.begin(), block_cyclic_ct.end());
+    reader_ct.insert(
+        reader_ct.end(),
+        {static_cast<uint32_t>(paged_kv),
+         paged_kv ? attrs.kv_cache_page_size : tt::constants::TILE_HEIGHT,
+         paged_kv ? attrs.kv_cache_num_layers : 1u,
+         paged_kv ? attrs.kv_cache_layer_idx : 0u,
+         cb_page_bundle_id,
+         page_bundle_count});
     std::vector<uint32_t> reader_crt;
     tt::tt_metal::TensorAccessorArgs(t.q.buffer()).append_to(reader_ct, reader_crt);
     tt::tt_metal::TensorAccessorArgs(t.k.buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
@@ -193,6 +208,8 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
     tt::tt_metal::TensorAccessorArgs(t.v.buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
         .append_to(reader_ct, reader_crt);
     tt::tt_metal::TensorAccessorArgs(t.indices.buffer()).append_to(reader_ct, reader_crt);
+    tt::tt_metal::TensorAccessorArgs(paged_kv ? t.page_bundle_indices->buffer() : nullptr)
+        .append_to(reader_ct, reader_crt);
 
     // Writer builds persistent compute tiles, co-gathers K/V halves, and drains row-major output.
     const uint32_t row_bytes = vDHt * tt::constants::TILE_WIDTH * out_elem_bytes;
@@ -218,6 +235,14 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
     writer_ct.push_back(attrs.causal_enabled() ? 1u : 0u);  // CAUSAL_MASK_ENABLED
     writer_ct.push_back(cb_neginf);                         // writer builds the persistent -inf mask tile
     writer_ct.insert(writer_ct.end(), block_cyclic_ct.begin(), block_cyclic_ct.end());
+    writer_ct.insert(
+        writer_ct.end(),
+        {static_cast<uint32_t>(paged_kv),
+         paged_kv ? attrs.kv_cache_page_size : tt::constants::TILE_HEIGHT,
+         paged_kv ? attrs.kv_cache_num_layers : 1u,
+         paged_kv ? attrs.kv_cache_layer_idx : 0u,
+         cb_page_bundle_id,
+         block_size});
     std::vector<uint32_t> writer_crt;
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_ct, writer_crt);
     tt::tt_metal::TensorAccessorArgs(t.k.buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
@@ -293,6 +318,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
     auto* v_buf = t.v.buffer();
     auto* idx_buf = t.indices.buffer();
     auto* out_buf = output.buffer();
+    auto* page_bundle_buf = paged_kv ? t.page_bundle_indices->buffer() : nullptr;
     for (uint32_t i = 0; i < num_cores; ++i) {
         tt::tt_metal::CoreCoord core = {i % grid.x, i / grid.x};
         uint32_t work_start = i * dyn.base_work + std::min(i, dyn.extra);
@@ -314,6 +340,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
         // Baked per-coordinate (one program per device, so each rank masks against its own global
         // position) and re-applied on cache hits.
         reader_rt[RArg::kReaderChunkStart] = dyn.chunk_start_local;
+        reader_rt[RArg::kReaderPageBundleAddr] = page_bundle_buf;
         reader_desc.emplace_runtime_args(core, reader_rt);
 
         using WArg = SparseSDPAMsaOperation::WriterArg;

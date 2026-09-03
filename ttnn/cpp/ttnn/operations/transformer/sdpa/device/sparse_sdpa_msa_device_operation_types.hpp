@@ -27,6 +27,10 @@ struct SparseSDPAMsaParams {
     std::optional<uint32_t> chunk_start_idx = std::nullopt;
     // SP mesh axis used to derive the per-device chunk_start (chunk_start_idx + rank*S); host-side only.
     std::optional<uint32_t> cluster_axis = std::nullopt;
+    // Paged K/V pools flatten physical pages as [bundle][layer][kv_head].
+    uint32_t kv_cache_num_layers = 1;
+    uint32_t kv_cache_layer_idx = 0;
+    uint32_t kv_cache_page_size = 32;
     bool has_indexed_kv_cache() const { return cache_batch_idx.has_value(); }
     bool causal_enabled() const { return chunk_start_idx.has_value(); }
     bool has_block_cyclic() const { return block_cyclic.has_value(); }
@@ -37,6 +41,9 @@ struct SparseSDPAMsaInputs {
     Tensor k;        // [B,n_kv,T,d] TILE bf16|bfp8_b
     Tensor v;        // [B,n_kv,T,v_dim] TILE bf16|bfp8_b
     Tensor indices;  // [1,n_kv,S,TOPK] uint32 block ids; 0xFFFFFFFF is the sentinel
+    std::optional<Tensor> page_bundle_indices;
+
+    bool has_paged_kv_cache() const { return page_bundle_indices.has_value(); }
 };
 
 }  // namespace ttnn::prim

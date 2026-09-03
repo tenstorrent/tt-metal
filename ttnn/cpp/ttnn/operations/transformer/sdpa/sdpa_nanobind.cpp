@@ -460,6 +460,13 @@ void bind_sdpa(nb::module_& mod) {
                 physical block in-kernel (invP), so no host reorder is needed. sp is read from the mesh.
             block_cyclic_chunk_local (int, optional): per-shard chunk length (chunk_size_global / sp). Required
                 iff block_cyclic_sp_axis is set; cross-checked against q (must equal q_isl or tp*q_isl).
+            kv_cache_num_layers (int, optional): layers interleaved in each physical paged-cache bundle.
+            kv_cache_layer_idx (int, optional): layer to read from each physical paged-cache bundle.
+            page_bundle_indices (ttnn.Tensor, optional): ROW_MAJOR uint16 [1,1,1,num_logical_bundles] table.
+                When present, K/V are separate TILE ND-sharded pools shaped
+                [physical_bundles*num_layers*n_kv,1,kv_cache_page_size,feature_dim], ordered
+                [bundle][layer][kv_head]. Logical block ids may span physical pages.
+            kv_cache_page_size (int): tokens per physical page; a positive multiple of 32. Defaults to 32.
 
         Returns:
             ttnn.Tensor: [1, H, S, v_dim] ROW-MAJOR, dtype = q.
@@ -480,7 +487,11 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("chunk_start_idx") = nb::none(),
         nb::arg("cluster_axis") = nb::none(),
         nb::arg("block_cyclic_sp_axis") = nb::none(),
-        nb::arg("block_cyclic_chunk_local") = nb::none());
+        nb::arg("block_cyclic_chunk_local") = nb::none(),
+        nb::arg("kv_cache_num_layers") = nb::none(),
+        nb::arg("kv_cache_layer_idx") = nb::none(),
+        nb::arg("page_bundle_indices").noconvert() = nb::none(),
+        nb::arg("kv_cache_page_size") = 32);
 
     const auto* const chunked_doc =
         R"doc(
