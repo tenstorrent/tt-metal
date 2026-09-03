@@ -147,7 +147,7 @@ constexpr float GELU_HCORR_C3 = 7.5950479368e-04f;
 
 // Forward GELU Evaluation with CDF Polynomial Approximation
 // GELU(x) = x * Phi(x) where Phi is approximated piecewise
-sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x) {
+sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x, sfpi::vFloat k_c5, sfpi::vFloat k_c7) {
     sfpi::vFloat result = 0.0f;  // Default: 0 for x <= -5.54259443 (torch saturation)
     sfpi::vFloat x2 = x * x;
 
@@ -184,11 +184,11 @@ sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x) {
             x2,
             GELU_CDF_CORE_C1,
             GELU_CDF_CORE_C3,
-            GELU_CDF_CORE_C5,
-            GELU_CDF_CORE_C7,
-            GELU_CDF_CORE_C9,
-            GELU_CDF_CORE_C11,
-            GELU_CDF_CORE_C13);
+            k_c5,
+            k_c7,
+            sfpi::vConstFloatPrgm0,
+            sfpi::vConstFloatPrgm1,
+            sfpi::vConstFloatPrgm2);
         sfpi::vFloat phi = GELU_CDF_CORE_C0 + x * odd_poly;
         result = x * phi;
 
@@ -207,26 +207,58 @@ void gelu_init() {
     if constexpr (APPROXIMATION_MODE) {
         sfpi::vConstFloatPrgm0 = 0.5f;
 
-        // LUT segments (6-entry piecewise linear, each hi/lo pair packed into one imm32):
-        // [0.0, 0.5): slope=0.1928, intercept=-0.000104  (lreg0)
-        // [0.5, 1.0): slope=0.4939, intercept=-0.1605  (lreg0 hi / lreg4 hi)
-        // [1.0, 1.5): slope=0.6189, intercept=-0.2797  (lreg1)
-        // [1.5, 2.0): slope=0.6099, intercept=-0.2635  (lreg1 hi / lreg5 hi)
-        // [2.0, 3.0): slope=0.5402, intercept=-0.1194  (lreg2)
-        // [3.0, ∞):   slope=0.5,    intercept=0.0      (lreg2 hi / lreg6 hi)
-        sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vUInt(0x37E7322B);
-        sfpi::l_reg[sfpi::LRegs::LReg4] = sfpi::vUInt(0xB12286D8);
+        // Six-segment piecewise-linear table for g(u) = gelu(u) - u/2, evaluated on |x|;
+        // calculate_gelu_appx adds the x/2 back. g is even because x and Phi(x) - 0.5 are
+        // both odd, which is why the LUT needs no sign handling.
+        //
+        //   [0.0, 0.5): slope=+0.159424  intercept= 0
+        //   [0.5, 1.0): slope=+0.491211  intercept=-0.156616
+        //   [1.0, 1.5): slope=+0.616699  intercept=-0.276855
+        //   [1.5, 2.0): slope=+0.609375  intercept=-0.262939
+        //   [2.0, 3.0): slope=+0.541504  intercept=-0.123718
+        //   [3.0, inf): slope=+0.500000  intercept= 0        exact: gelu(u) -> u
+        //
+        // Packing: LReg0/1/2 hold slopes, LReg4/5/6 the matching intercepts, low half then
+        // high half, two segments per register.
+        //
+        // Coefficients are Lut16ToFp32, which is IEEE binary16 for ordinary values with two
+        // departures: exponent 31 encodes **zero** rather than inf/NaN, and exponent 0 is an
+        // ordinary normal, so there are no denormals and the smallest magnitude is 2^-15.
+        // Hence 0x7C00 for the two zero intercepts -- 0x0000 would silently mean 3.05e-5.
+        //
+        // The first intercept is pinned to zero because gelu(0) = 0 exactly. The table this
+        // replaced carried -1.044e-4 there, so gelu(0) came back negative and small inputs
+        // came back with the wrong sign.
+        // Refitting all six segments on the same breakpoints costs nothing -- same three
+        // instructions, same 222.76 cycles/tile -- and takes the worst-case error from
+        // 0.023887 to 0.018938 and RMS from 2.079e-3 to 1.517e-3 over all 65536 bfloat16
+        // patterns.
+        //
+        // vUInt(uint32_t) emits a full 32-bit immediate load, equivalent to the two
+        // 16-bit halves that _sfpu_load_imm32_ previously wrote.
+        sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vUInt(0x37DC311A);
+        sfpi::l_reg[sfpi::LRegs::LReg4] = sfpi::vUInt(0xB1037C00);
 
-        sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::vUInt(0x38E138F3);
-        sfpi::l_reg[sfpi::LRegs::LReg5] = sfpi::vUInt(0xB437B479);
+        sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::vUInt(0x38E038EF);
+        sfpi::l_reg[sfpi::LRegs::LReg5] = sfpi::vUInt(0xB435B46E);
 
-        sfpi::l_reg[sfpi::LRegs::LReg2] = sfpi::vUInt(0x38003852);
-        sfpi::l_reg[sfpi::LRegs::LReg6] = sfpi::vUInt(0x7c00afa4);
+        sfpi::l_reg[sfpi::LRegs::LReg2] = sfpi::vUInt(0x38003855);
+        sfpi::l_reg[sfpi::LRegs::LReg6] = sfpi::vUInt(0x7C00AFEB);
     } else if constexpr (is_fp32_dest_acc_en) {
         // FP32 accurate mode: rational erf evaluation requires reciprocal init
         sfpu_reciprocal_init<false>();
+    } else {
+        // BF16 accurate mode: park the five highest-order core CDF coefficients in
+        // registers that survive the whole kernel. Without this every unrolled copy
+        // re-materialises each FP32 coefficient with a pair of SFPLOADI. The three
+        // CREGs cost no LReg pressure; two LRegs is the most the allocator can spare
+        // before the SFPU register file overflows and codegen fails.
+        sfpi::vConstFloatPrgm0 = GELU_CDF_CORE_C9;
+        sfpi::vConstFloatPrgm1 = GELU_CDF_CORE_C11;
+        sfpi::vConstFloatPrgm2 = GELU_CDF_CORE_C13;
+        sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::reinterpret<sfpi::vUInt>(sfpi::vFloat(GELU_CDF_CORE_C5));
+        sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::reinterpret<sfpi::vUInt>(sfpi::vFloat(GELU_CDF_CORE_C7));
     }
-    // BF16 accurate mode: no init needed (correction polynomial has no reciprocal)
 }
 
 template <int ITERATIONS>
@@ -333,16 +365,23 @@ inline void calculate_gelu() {
             sfpi::dst_reg++;
         }
     } else {
-        // BF16 accurate mode: piecewise CDF with Max ULP=1 vs true GELU.
+        // BF16 accurate mode: piecewise CDF with Max ULP=1 vs true GELU for x > -5.54259443.
+        // At or below that threshold the result is flushed to exactly 0 to match torch's own
+        // BF16 saturation, so the ULP bound does not apply there: the true gelu is around
+        // -8.3e-8 at the boundary and shrinks from there.
         // unroll 8 fills the SFPU pipeline across 8 independent dst-tile chains.
+        sfpi::vFloat k_c5 = sfpi::reinterpret<sfpi::vFloat>(sfpi::vUInt(sfpi::l_reg[sfpi::LRegs::LReg0]));
+        sfpi::vFloat k_c7 = sfpi::reinterpret<sfpi::vFloat>(sfpi::vUInt(sfpi::l_reg[sfpi::LRegs::LReg1]));
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vFloat in = sfpi::dst_reg[0];
-            sfpi::vFloat result = calculate_gelu_piecewise(in);
+            sfpi::vFloat result = calculate_gelu_piecewise(in, k_c5, k_c7);
             result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
             sfpi::dst_reg[0] = result;
             sfpi::dst_reg++;
         }
+        sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::reinterpret<sfpi::vUInt>(k_c5);
+        sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::reinterpret<sfpi::vUInt>(k_c7);
     }
 }
 
@@ -368,10 +407,11 @@ inline void calculate_gelu_tanh() {
 
         // reload due to register pressure
         x = sfpi::dst_reg[0];
-        sfpi::vFloat result = sfpi::copysgn(sfpi::vFloat(0.0f), x);
 
+        // The copysgn(0, x) that used to sit here was overwritten by the next statement
+        // with no branch in between, but survived codegen as two SFPSETSGN per element.
         sfpi::vFloat half_x = 0.5f * x;
-        result = half_x * t + half_x;
+        sfpi::vFloat result = half_x * t + half_x;
 
         if constexpr (!is_fp32_dest_acc_en) {
             result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
@@ -424,7 +464,7 @@ constexpr float GELU_DERIV_H8 = 4.2734988881e-09f;
 // - One saturation: x >= 3.1719 (GELU'(x) becomes exactly 1 in BF16)
 // Note: GELU'(x) has a "hump" exceeding 1.0 for x in [0.77, 3.16]
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
-sfpi_inline sfpi::vFloat calculate_gelu_derivative_simple(sfpi::vFloat x) {
+sfpi_inline sfpi::vFloat calculate_gelu_derivative_simple(sfpi::vFloat x, sfpi::vFloat k_h6) {
     sfpi::vFloat result = 0.0f;  // Default: 0 for x <= -13.375
 
     // For x >= 3.1719, output saturates to 1 (verified saturation threshold)
@@ -442,7 +482,7 @@ sfpi_inline sfpi::vFloat calculate_gelu_derivative_simple(sfpi::vFloat x) {
             GELU_DERIV_H3,
             GELU_DERIV_H4,
             GELU_DERIV_H5,
-            GELU_DERIV_H6,
+            k_h6,
             GELU_DERIV_H7,
             GELU_DERIV_H8);
         result = 0.5f + x * h;
@@ -482,23 +522,97 @@ sfpi_inline sfpi::vFloat calculate_gelu_derivative_simple(sfpi::vFloat x) {
     return result;
 }
 
+// GELU' via the six-segment LUT, the same hardware instruction calculate_gelu_appx uses.
+//
+// gelu'(x) + gelu'(-x) = 1, so gelu'(x) - 0.5 is odd and can be written
+//     gelu'(x) = 0.5 + copysgn(g(|x|), x),   g(u) = gelu'(u) - 0.5.
+// SFPLUTFP32 already evaluates on |LReg3|, so g needs no sign handling inside the table and
+// the sign-retaining modifiers are not required -- applying copysgn afterwards costs one
+// instruction and keeps this on stock sfpi.
+//
+// g(u) -> 0.5 as u grows, so the unbounded final segment is an exact constant rather than a
+// line that must chase an asymptote, which is what limits the same trick for silu.
+// The first segment's intercept is pinned to zero: gelu'(0) = 0.5 exactly, and most bfloat16
+// patterns are tiny |x|, so any intercept there dominates the bit-exact fraction.
+template <int ITERATIONS>
+inline void calculate_gelu_derivative_appx() {
+    sfpi::vUInt l0 = sfpi::l_reg[sfpi::LRegs::LReg0];
+    sfpi::vUInt l1 = sfpi::l_reg[sfpi::LRegs::LReg1];
+    sfpi::vUInt l2 = sfpi::l_reg[sfpi::LRegs::LReg2];
+    sfpi::vUInt l4 = sfpi::l_reg[sfpi::LRegs::LReg4];
+    sfpi::vUInt l5 = sfpi::l_reg[sfpi::LRegs::LReg5];
+    sfpi::vUInt l6 = sfpi::l_reg[sfpi::LRegs::LReg6];
+
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++) {
+        sfpi::vFloat in = sfpi::dst_reg[0];
+        sfpi::vFloat half = sfpi::vConstFloatPrgm0;
+        sfpi::vFloat r = lut2_sign(in, l0, l1, l2, l4, l5, l6);
+        r = half + sfpi::copysgn(r, in);
+        // SFPSTORE truncates; the other gelu paths round, and without this the table's
+        // accuracy is thrown away at the last step (3401 patterns measured).
+        sfpi::dst_reg[0] = sfpi::convert<sfpi::vFloat16b>(r, sfpi::RoundMode::Nearest);
+        sfpi::dst_reg++;
+    }
+
+    sfpi::l_reg[sfpi::LRegs::LReg0] = l0;
+    sfpi::l_reg[sfpi::LRegs::LReg1] = l1;
+    sfpi::l_reg[sfpi::LRegs::LReg2] = l2;
+    sfpi::l_reg[sfpi::LRegs::LReg4] = l4;
+    sfpi::l_reg[sfpi::LRegs::LReg5] = l5;
+    sfpi::l_reg[sfpi::LRegs::LReg6] = l6;
+}
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_gelu_derivative_polynomial() {
+    if constexpr (APPROXIMATION_MODE) {
+        calculate_gelu_derivative_appx<ITERATIONS>();
+        return;
+    }
+    sfpi::vFloat k_h6 = sfpi::reinterpret<sfpi::vFloat>(sfpi::vUInt(sfpi::l_reg[sfpi::LRegs::LReg0]));
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat val = sfpi::dst_reg[0];
-        sfpi::vFloat result = calculate_gelu_derivative_simple<APPROXIMATION_MODE, is_fp32_dest_acc_en>(val);
+        sfpi::vFloat result = calculate_gelu_derivative_simple<APPROXIMATION_MODE, is_fp32_dest_acc_en>(val, k_h6);
         if constexpr (!is_fp32_dest_acc_en) {
             result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
         }
         sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;
     }
+    sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::reinterpret<sfpi::vUInt>(k_h6);
 }
 
 template <bool APPROXIMATION_MODE>
 inline void gelu_derivative_polynomial_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
+    if constexpr (APPROXIMATION_MODE) {
+        // Six-segment piecewise-linear table for g(u) = gelu'(u) - 0.5, evaluated on |x|:
+        //
+        //   [0.0, 0.5): slope=+0.750488  intercept=+0.000000
+        //   [0.5, 1.0): slope=+0.431641  intercept=+0.163574
+        //   [1.0, 1.5): slope=+0.088318  intercept=+0.503906
+        //   [1.5, 2.0): slope=-0.084473  intercept=+0.756348
+        //   [2.0, 3.0): slope=-0.073303  intercept=+0.726074
+        //   [3.0, inf): slope=+0.000000  intercept=+0.500000   exact: g is asymptotically constant
+        //
+        // Packing: LReg0/1/2 hold slopes, LReg4/5/6 the matching intercepts, low half then
+        // high half, two segments per register. Coefficients are Lut16ToFp32, where
+        // exponent 31 encodes zero -- hence 0x7C00, not 0x0000, for the two zeros.
+        //
+        // The first intercept is zero because gelu'(0) = 0.5 exactly and the 0.5 is added
+        // outside the table. That is not cosmetic: most bfloat16 patterns are tiny |x|, and
+        // a free fit there drops the fraction of inputs matching the true gelu' bit for bit
+        // from 96.7% to 49.4%.
+        sfpi::vConstFloatPrgm0 = 0.5f;
+        sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vUInt(0x36E83A01);
+        sfpi::l_reg[sfpi::LRegs::LReg4] = sfpi::vUInt(0x313C7C00);
+        sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::vUInt(0xAD682DA7);
+        sfpi::l_reg[sfpi::LRegs::LReg5] = sfpi::vUInt(0x3A0D3808);
+        sfpi::l_reg[sfpi::LRegs::LReg2] = sfpi::vUInt(0x7C00ACB1);
+        sfpi::l_reg[sfpi::LRegs::LReg6] = sfpi::vUInt(0x380039CF);
+        return;
+    }
     if constexpr (!APPROXIMATION_MODE) {
         // Call sfpu_reciprocal_init directly: gelu derivative uses sfpu_reciprocal_iter
         // inline (not _calculate_reciprocal_internal_), so SFPLOADMACRO fast-path init is
@@ -510,9 +624,18 @@ inline void gelu_derivative_polynomial_init() {
         // sfpu_reciprocal_init only seeds the initial estimate and does not vary
         // with N. A single <false> call therefore covers both precisions. The
         // asymmetry vs gelu_init() (which gained an fp32-specific branch) is
-        // intentional — the derivative path has no LUT to load.
+        // intentional — this branch is the accurate path, which has no LUT to load.
+        // The approximate path returns above, before reaching here.
         sfpu_reciprocal_init<false>();
     }
+    // Park the highest-order h() coefficient in a register that survives the kernel, so the
+    // eight unrolled copies stop re-materialising it with a pair of SFPLOADI each. Unlike
+    // Blackhole, no constant register is available here: this path calls sfpu_reciprocal_iter
+    // in its deep tail, and Wormhole's sfpu_reciprocal_init seeds all three of
+    // vConstFloatPrgm0/1/2 with the Sollya coefficients of its 1/x estimate. Writing any of
+    // them corrupts that tail. One LReg is also all the allocator can spare -- two fails
+    // codegen with a register spill.
+    sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::reinterpret<sfpi::vUInt>(sfpi::vFloat(GELU_DERIV_H6));
 }
 
 }  // namespace ckernel::sfpu
