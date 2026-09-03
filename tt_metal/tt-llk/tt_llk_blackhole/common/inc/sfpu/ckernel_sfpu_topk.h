@@ -312,7 +312,7 @@ inline void _topk_defuse_tile_(const int num_tiles)
 // TEN-2932 discipline (index-tracking mode is ON): the merge-time stamp runs
 // AFTER the true indices are loaded into LREG4/5, so it must not issue any
 // SFPLOAD/SFPLOADI to LREG0..3 (loads capture into LREG4..7); its low-16
-// clear is an SFPAND against LREG11 = 0xFFFF0000 and every op is an ALU
+// clear is an SFPAND against LREG14 = 0xFFFF0000 and every op is an ALU
 // write to LREG0..3 or a programmable-constant read. The standalone sweeps
 // below run while LREG4..7 are dead, so their load captures are harmless.
 
@@ -1188,7 +1188,7 @@ inline void _bitonic_topk_merge(const int m_iter, const int k)
         // run before any load and under fully enabled lanes.
         TTI_SFPENCC(3, 0, 0, 10);
         sfpi::vConstIntPrgm0 = 0x0000FFFF;                    // LREG12: tag complement operand
-        _sfpu_load_config32_(p_sfpu::LREG11, 0xFFFF, 0x0000); // lo16 clear mask (SFPAND -- no loads mid-stamp)
+        _sfpu_load_config32_(p_sfpu::LREG14, 0xFFFF, 0x0000); // lo16 clear mask (SFPAND -- no loads mid-stamp)
         const std::uint32_t rank_span = 2 * static_cast<std::uint32_t>(k) - 1;
         _sfpu_load_config32_(p_sfpu::LREG13, rank_span >> 16, rank_span & 0xFFFF); // right-run complement (2K-1)
     }
@@ -1235,7 +1235,7 @@ inline void _bitonic_topk_merge(const int m_iter, const int k)
                         // kept extreme, exactly as the fused-key conditioning does.
                         constexpr int stamp_cc = top_min ? sfpi::SFPSETCC_MOD1_LREG_LT0 : sfpi::SFPSETCC_MOD1_LREG_GTE0;
                         // Left run: global direction, lower rank range.
-                        TTI_SFPAND(0, p_sfpu::LREG11, p_sfpu::LREG0, 0);
+                        TTI_SFPAND(0, p_sfpu::LREG14, p_sfpu::LREG0, 0);
                         TTI_SFPOR(0, p_sfpu::LREG2, p_sfpu::LREG0, 0);
                         TTI_SFPSETCC(0, p_sfpu::LREG0, 0, stamp_cc);
                         TTI_SFPXOR(0, p_sfpu::LREG12, p_sfpu::LREG0, 0);
@@ -1244,7 +1244,7 @@ inline void _bitonic_topk_merge(const int m_iter, const int k)
                         // a single XOR because 2K is a power of two and rank < 2K.
                         TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG3, 0);
                         TTI_SFPXOR(0, p_sfpu::LREG13, p_sfpu::LREG3, 0);
-                        TTI_SFPAND(0, p_sfpu::LREG11, p_sfpu::LREG1, 0);
+                        TTI_SFPAND(0, p_sfpu::LREG14, p_sfpu::LREG1, 0);
                         TTI_SFPOR(0, p_sfpu::LREG3, p_sfpu::LREG1, 0);
                         TTI_SFPSETCC(0, p_sfpu::LREG1, 0, stamp_cc);
                         TTI_SFPXOR(0, p_sfpu::LREG12, p_sfpu::LREG1, 0);
@@ -1624,7 +1624,7 @@ inline void _init_topk()
 // swaps at DEST offset 128, as in the plain unfused modes) plus the tag
 // complement constant. Written as an explicit set so a preceding fused-mode
 // topk in the same kernel cannot leak tracking OFF. The merge programs the
-// remaining stamp constants (LREG11/13/14) at each entry, since K and the
+// remaining stamp constants (LREG12/13/14) at each entry, since K and the
 // rank base are runtime values there.
 inline void _init_topk_rank_stamped_()
 {
