@@ -61,7 +61,9 @@ void kernel_main() {
         input_tile_start[input] = get_arg_val<uint32_t>(arg_idx++);
         input_tile_end[input] = get_arg_val<uint32_t>(arg_idx++);
         input_batch_base[input] = get_arg_val<uint32_t>(arg_idx++);
-        input_cache_batch_extent[input] = get_arg_val<uint32_t>(arg_idx++);
+        if constexpr (has_halo_metadata) {
+            input_cache_batch_extent[input] = get_arg_val<uint32_t>(arg_idx++);
+        }
     }
 
     // Trace-safe metadata path. The halo's source group is linear in the chunk index, so on the scalar
