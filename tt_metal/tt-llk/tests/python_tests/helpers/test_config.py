@@ -23,7 +23,6 @@ import pytest
 from filelock import FileLock
 from ttexalens.tt_exalens_lib import (
     TTException,
-    load_elf,
     parse_elf,
     read_word_from_device,
 )
@@ -42,6 +41,7 @@ from .device import (
     commit_tensix_soft_reset,
     exalens_device_setup,
     handle_if_assert_hit,
+    load_elf,
     reset_mailboxes,
     set_tensix_soft_reset,
     wait_brisc_boot_ready,

@@ -56,7 +56,9 @@ _IS_XDIST_WORKER = "PYTEST_XDIST_WORKER" in os.environ
 _SHOULD_RUN_SIMULATOR = _IS_XDIST_WORKER or (
     "--run-simulator" in sys.argv and "--compile-producer" not in sys.argv
 )
-if _SHOULD_RUN_SIMULATOR and _SIMULATOR_PATH and _SIMULATOR_PATH.endswith(".so"):
+from helpers.simulator_backend import runs_in_process as _runs_in_process
+
+if _SHOULD_RUN_SIMULATOR and _runs_in_process(_SIMULATOR_PATH):
     from ttexalens import tt_exalens_init as _tt_exalens_init
 
     _tt_exalens_init.init_ttexalens(simulation_directory=_SIMULATOR_PATH)
@@ -71,6 +73,7 @@ from helpers.exalens_server import ExalensServer
 from helpers.format_config import InputOutputFormat
 from helpers.logger import configure_logger, logger
 from helpers.perf.core import PerfConfig, PerfReport, combine_perf_reports
+from helpers.simulator_backend import is_versim
 from helpers.test_config import BuildMode, TestConfig, process_coverage_run_artefacts
 from ttexalens import check_context, tt_exalens_init
 from ttexalens.tt_exalens_lib import get_tensix_state
@@ -484,13 +487,15 @@ def pytest_configure(config):
                     returncode=1,
                 )
 
-            if _SIMULATOR_PATH.endswith(".so"):
-                # ttsim: already initialized at module import above; runs in-process, no server.
-                # --reset-simulator-per-test restarts the ExalensServer, which ttsim doesn't use,
+            if _runs_in_process(_SIMULATOR_PATH):
+                # ttsim and Versim: already initialized at module import above; both run
+                # in-process, with no server.
+                # --reset-simulator-per-test restarts the ExalensServer, which neither uses,
                 # so it would be a silent no-op. Fail fast to avoid confusing false-green runs.
                 if TestConfig.TEST_TARGET.reset_simulator_per_test:
+                    backend = "Versim" if is_versim() else "ttsim"
                     pytest.exit(
-                        "ERROR: --reset-simulator-per-test is not supported with ttsim. "
+                        f"ERROR: --reset-simulator-per-test is not supported with {backend}. "
                         "Re-run without it.",
                         returncode=1,
                     )
