@@ -60,6 +60,7 @@ _STEP_TO_METRIC = {
 }
 
 
+@pytest.mark.timeout(6000)
 @pytest.mark.parametrize(
     "width, height",
     [
@@ -78,7 +79,8 @@ _STEP_TO_METRIC = {
 @pytest.mark.parametrize(
     "mesh_device, sp_axis, tp_axis, encoder_tp_axis, vae_tp_axis, topology, num_links, is_fsdp, dynamic_load, device_params",
     [
-        [(2, 2), 0, 1, 1, 1, ttnn.Topology.Linear, 2, True, False, line_params_flux2_perf],
+        # Without dynamic_load the encoder OOMs during weight conversion on 4 chips.
+        [(2, 2), 0, 1, 1, 1, ttnn.Topology.Linear, 2, True, True, line_params_flux2_perf],
         [(2, 4), 0, 1, 1, 1, ttnn.Topology.Linear, 2, False, False, line_params_flux2_perf],
         [(4, 8), 0, 1, 1, 1, ttnn.Topology.Linear, 2, False, False, line_params_8k_flux2_perf],
         [(4, 8), 0, 1, 1, 0, ttnn.Topology.Ring, 2, False, False, ring_params_8k_flux2_perf],
