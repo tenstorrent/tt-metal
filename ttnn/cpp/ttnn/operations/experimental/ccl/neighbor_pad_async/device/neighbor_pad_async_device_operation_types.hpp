@@ -98,6 +98,7 @@ struct NeighborPadAsyncParams {
         "pad2_right",
         "pad2_cluster_axis",
         "pad2_num_links",
+        "using_persistent_buffers",
         "logical_h",
         "t_front_pad");
 
@@ -117,6 +118,7 @@ struct NeighborPadAsyncParams {
             this->pad2_right,
             this->pad2_cluster_axis,
             this->pad2_num_links,
+            this->using_persistent_buffers,
             this->logical_h,
             this->t_front_pad);
     }

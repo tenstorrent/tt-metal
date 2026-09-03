@@ -241,8 +241,9 @@ void kernel_main() {
                 noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), w_barrier_wait);
             }
         }
-        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
     }
+    // Always zero: Phase 2 H→W signaling reuses this word even when the startup barrier is skipped.
+    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
 
     // Corners-only optimization for 2D H writers:
     // Only W-boundary sticks (corners) go to neighbor L1; non-corner sticks go directly to DRAM.

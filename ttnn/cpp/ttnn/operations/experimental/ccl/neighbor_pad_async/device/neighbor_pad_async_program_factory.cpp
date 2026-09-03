@@ -524,7 +524,9 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                 h_writer_num_sticks_per_halo_dim,  // num_sticks_per_halo_dim
                 virtual_core.x,                    // neighbor_sem_noc0_x
                 virtual_core.y,                    // neighbor_sem_noc0_y
-                true,                              // use_barrier_semaphore
+                // Match AG: skip fabric startup barrier when the output is preallocated.
+                // Phase 2 still uses barrier_sem (CRTA[3]) for H→W signaling.
+                !operation_attributes.using_persistent_buffers,  // use_barrier_semaphore
                 virtual_opposite_core.x,           // barrier_sem_noc0_x
                 virtual_opposite_core.y};          // barrier_sem_noc0_y
             // Phase 2 signal targets (W fabric reader cores for 2D padding)
@@ -838,7 +840,7 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                     1,                               // num_sticks_per_halo_dim
                     w_virtual_core.x,                // neighbor_sem_noc0_x
                     w_virtual_core.y,                // neighbor_sem_noc0_y
-                    true,                            // use_barrier_semaphore (W-axis startup barrier)
+                    !operation_attributes.using_persistent_buffers,  // use_barrier_semaphore (W-axis startup)
                     w_fabric_virtual_cores[(w_link * 2) + (1 - w_direction)].x,   // barrier_sem_noc0_x (opp dir)
                     w_fabric_virtual_cores[(w_link * 2) + (1 - w_direction)].y};  // barrier_sem_noc0_y
                 // No Phase 2 signal targets (W writers don't signal further)
