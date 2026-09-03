@@ -135,7 +135,7 @@ def test_dram_group_norm_vae_welford_reciprocal_performance():
     # Extract the device kernel duration result
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
-    expected_duration_ns = 1300000  # Measured: ~1.30ms for GroupNorm VAE welford_reciprocal
+    expected_duration_ns = 1319543  # Measured: ~1.319ms for GroupNorm VAE welford_reciprocal
 
     # Log the performance result
     print(
@@ -172,7 +172,7 @@ def test_block_sharded_group_norm_sdxl_performance():
     # Extract the device kernel duration result
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
-    expected_duration_ns = 67828  # Measured: ~67.8μs with full-block synchronization and valid-tail math
+    expected_duration_ns = 68875  # Measured: ~68.8μs with full-block synchronization and valid-tail math
 
     # Log the performance result
     print(

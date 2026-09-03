@@ -50,8 +50,10 @@ void kernel_main() {
     DataflowBuffer dfb_reduce(dfb::reduce);
     constexpr auto in0_input =
         ckl::input(dfb::in0, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block);
+#ifdef FUSE_PRE_ADD
     constexpr auto res_input =
         ckl::input(dfb::res, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block);
+#endif
     constexpr auto input_squared =
         ckl::input(dfb_inp_id, ckl::WaitPolicy::Cumulative, ckl::PopPolicy::None, ckl::InputTileMapping::Block);
 

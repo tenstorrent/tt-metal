@@ -316,6 +316,7 @@ void kernel_main() {
     constexpr uint32_t blk = get_arg(args::block_size);
     constexpr uint32_t do_gamma = get_arg(args::do_gamma);
     constexpr uint32_t do_beta = get_arg(args::do_beta);
+    constexpr bool fuse_pre_add = get_arg(args::fuse_pre_add) == 1;
     constexpr bool FLOAT32_DTYPE = get_arg(args::fp32_dest_acc_en) == 1;
     constexpr uint32_t W = get_arg(args::W);
     constexpr uint32_t tile_width = get_arg(args::tile_width);
@@ -555,20 +556,24 @@ void kernel_main() {
                 dfb_x_welford_obj_eltwise.pop_front(block.full_block_size());
             }
 
-            if constexpr (fuse_pre_add) {
-                // Fuse in = in + b
-                reconfig_data_format_srca(dfb_in, dfb_inb);
-                add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(dfb_inb);
-                dfb_inb_obj.wait_front(block.full_block_size());
-                for (auto i : block.local()) {
-                    add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(dfb_inb, i, i);
-                }
-                dfb_inb_obj.pop_front(block.full_block_size());
+#ifdef FUSE_PRE_ADD
+            // Fuse in = in + b
+            reconfig_data_format_srca(dfb_in, dfb_inb);
+            add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(dfb_inb);
+            dfb_inb_obj.wait_front(block.full_block_size());
+            for (auto i : block.local()) {
+                add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(dfb_inb, i, i);
             }
+            dfb_inb_obj.pop_front(block.full_block_size());
+#endif
 
             // Multiply by 1/(√(Var(X) + ε)). SrcA currently holds dfb_inb (fused) or dfb_in
             // (non-fused), the last operand read above; switch it to dfb_ex2pe's format.
-            reconfig_data_format_srca(fuse_pre_add ? dfb_inb : dfb_in, dfb_ex2pe);
+#ifdef FUSE_PRE_ADD
+            reconfig_data_format_srca(dfb_inb, dfb_ex2pe);
+#else
+            reconfig_data_format_srca(dfb_in, dfb_ex2pe);
+#endif
             mul_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(dfb_ex2pe);
             for (auto i : block.local()) {
                 mul_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(dfb_ex2pe, 0 /*in_tile_index*/, i);

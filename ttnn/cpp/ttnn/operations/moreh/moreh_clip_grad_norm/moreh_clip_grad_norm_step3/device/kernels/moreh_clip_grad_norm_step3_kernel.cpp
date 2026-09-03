@@ -4,6 +4,9 @@
 
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
+
+namespace ckl = compute_kernel_lib;
+
 void kernel_main() {
     int i{0};
     const auto num_tiles = get_arg_val<uint32_t>(i++);
@@ -14,21 +17,15 @@ void kernel_main() {
 
     compute_kernel_hw_startup(dfb_x_id, dfb_clip_coef_clamped_id, dfb_y_id);
 
-    compute_kernel_lib::mul<
-        compute_kernel_lib::input(
-            dfb_x_id,
-            compute_kernel_lib::WaitPolicy::PerTile,
-            compute_kernel_lib::PopPolicy::PerTile,
-            compute_kernel_lib::DataFormatReconfig::Disabled),
-        compute_kernel_lib::input(
+    ckl::mul<
+        ckl::input(dfb_x_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
+        ckl::input(
             dfb_clip_coef_clamped_id,
-            compute_kernel_lib::BroadcastDim::Scalar,
-            compute_kernel_lib::WaitPolicy::Upfront,
-            compute_kernel_lib::PopPolicy::AtEnd,
-            compute_kernel_lib::DataFormatReconfig::Disabled),
-        compute_kernel_lib::output(
-            dfb_y_id,
-            compute_kernel_lib::ReservePolicy::PerTile,
-            compute_kernel_lib::PushPolicy::PerTile,
-            compute_kernel_lib::DataFormatReconfig::Disabled)>(compute_kernel_lib::IterationShape::tiles(num_tiles));
+            ckl::BroadcastDim::Scalar,
+            ckl::WaitPolicy::Upfront,
+            ckl::PopPolicy::AtEnd,
+            ckl::DataFormatReconfig::Disabled),
+        ckl::output(
+            dfb_y_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>(
+        ckl::IterationShape::tiles(num_tiles));
 }

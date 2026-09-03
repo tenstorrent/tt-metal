@@ -65,7 +65,7 @@ ELTWISE_DECLARE_BINOP_SCALAR(RsubUnary, rsub_unary_tile)
 // The chain emits it once (boot-hoist), the once-per-kernel seeding the original kernel
 // did out-of-band.
 template <Dst Slot>
-struct Dropout : UnaryOp<Dropout<Slot>, Slot> {
+struct Dropout : PrngSeedTag, UnaryOp<Dropout<Slot>, Slot> {
     uint32_t probability;
     uint32_t scale_factor;
     uint32_t seed;

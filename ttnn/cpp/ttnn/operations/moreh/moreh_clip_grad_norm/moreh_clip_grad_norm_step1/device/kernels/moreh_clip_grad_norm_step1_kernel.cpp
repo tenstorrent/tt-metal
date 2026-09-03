@@ -82,7 +82,7 @@ void kernel_main() {
 
     // Compute dfb_xpowadd_id
     for (uint32_t tile_idx = 0; tile_idx < num_tiles; tile_idx++) {
-        // Comput dfb_xabs_id and mask(optional)
+        // Compute dfb_xabs_id and mask(optional)
         const bool mh = do_mask_h && need_to_do_mask_h(tile_idx, ht, wt);
         const bool mw = do_mask_w && ((tile_idx + 1) % wt) == 0;
         ckl::eltwise_chain(

@@ -293,6 +293,7 @@ void kernel_main() {
                 reconfig_data_format_srca(dfb_xmm_id, dfb_fusion_id);
             }
 #endif
+#ifdef FUSE_GAMMA
             if constexpr (do_gamma) {
                 constexpr uint32_t dfb_outg_id = do_beta ? dfb_fusion_id : dfb_out_id;
                 if constexpr (!do_beta) {
@@ -328,6 +329,8 @@ void kernel_main() {
                         ckl::PushPolicy::PerBlockSize,
                         ckl::DataFormatReconfig::Disabled)>{});
             }
+#endif
+#ifdef FUSE_BETA
             if constexpr (do_beta) {
                 pack_reconfig_data_format(dfb_out_id);
                 if constexpr (do_gamma) {
@@ -360,6 +363,7 @@ void kernel_main() {
                         ckl::PushPolicy::PerBlockSize,
                         ckl::DataFormatReconfig::Disabled)>{});
             }
+#endif
         }
         dfb_ex2pe_obj.pop_front(1);
         dfb_xmm_obj.pop_front(total_buffer_size);

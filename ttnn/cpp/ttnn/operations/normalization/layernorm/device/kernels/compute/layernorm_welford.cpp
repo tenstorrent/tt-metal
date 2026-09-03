@@ -352,6 +352,7 @@ void kernel_main() {
                 ckl::PackTile<ckl::output(
                     dfb_im_or_out_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{});
 
+#ifdef FUSE_GAMMA
             if constexpr (do_gamma) {
                 constexpr uint32_t dfb_outg_id = do_beta ? dfb_fusion_id : dfb_out_id;
                 ckl::eltwise_chain(
@@ -375,6 +376,8 @@ void kernel_main() {
                     ckl::PackTile<ckl::output(
                         dfb_outg_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{});
             }
+#endif
+#ifdef FUSE_BETA
             if constexpr (do_beta) {
                 ckl::eltwise_chain(
                     block_shape,
@@ -396,6 +399,7 @@ void kernel_main() {
                     ckl::PackTile<ckl::output(
                         dfb_out_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{});
             }
+#endif
         }
         dfb_ex2pe_obj.pop_front(onetile);
         dfb_xmm_obj.pop_front(total_buffer_size);

@@ -2,6 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Shared compute kernel: bound by moreh_layer_norm_backward's and moreh_group_norm_backward's
+// gamma_beta_grad factories. Both bind the same resource names, so a change to this kernel's
+// binding vocabulary or argument schema has to land on both factories together.
+
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
@@ -19,13 +23,12 @@ constexpr auto kDataFormatReconfig = ckl::DataFormatReconfig::Disabled;
 // Optional masks are absent from the generated DFB accessor header when not bound. These macros
 // therefore remove their complete operation (including the accessor name), rather than merely
 // making its predicate false at runtime.
-#ifdef DO_MASK_H
-#define MAYBE_MASK_H(predicate)                \
+#define MAYBE_MASK(predicate, dfb_mask)        \
     ckl::runtime_if(                           \
         predicate,                             \
         ckl::CopyTile<                         \
             ckl::input(                        \
-                dfb::mask_h,                   \
+                dfb_mask,                      \
                 ckl::WaitPolicy::None,         \
                 ckl::PopPolicy::None,          \
                 ckl::InputTileMapping::Scalar, \
@@ -33,24 +36,15 @@ constexpr auto kDataFormatReconfig = ckl::DataFormatReconfig::Disabled;
                 ckl::TileAddressing::Offset),  \
             ckl::Dst::D1>{0},                  \
         ckl::Mask<>{}),
+
+#ifdef DO_MASK_H
+#define MAYBE_MASK_H(predicate) MAYBE_MASK(predicate, dfb::mask_h)
 #else
 #define MAYBE_MASK_H(predicate)
 #endif
 
 #ifdef DO_MASK_W
-#define MAYBE_MASK_W(predicate)                \
-    ckl::runtime_if(                           \
-        predicate,                             \
-        ckl::CopyTile<                         \
-            ckl::input(                        \
-                dfb::mask_w,                   \
-                ckl::WaitPolicy::None,         \
-                ckl::PopPolicy::None,          \
-                ckl::InputTileMapping::Scalar, \
-                kDataFormatReconfig,           \
-                ckl::TileAddressing::Offset),  \
-            ckl::Dst::D1>{0},                  \
-        ckl::Mask<>{}),
+#define MAYBE_MASK_W(predicate) MAYBE_MASK(predicate, dfb::mask_w)
 #else
 #define MAYBE_MASK_W(predicate)
 #endif
@@ -107,6 +101,7 @@ void kernel_main() {
                 w_idx = outer_idx;
             }
 
+            // Compute dfb::dycopy: copy dy and apply optional masks.
             ckl::eltwise_chain(
                 ckl::IterationShape::one_tile(),
                 ckl::CopyTile<ckl::input(
@@ -116,6 +111,7 @@ void kernel_main() {
                         dfb::dycopy, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
 
 #ifdef BETA_GRAD_HAS_VALUE
+            // Compute dfb::dyadd.
             if (inner_idx == 0) {
 #ifdef GAMMA_GRAD_HAS_VALUE
                 copy_tile_to_dfb<dfb::dycopy, dfb::dyadd>(0, 0);
@@ -129,9 +125,10 @@ void kernel_main() {
                 add_tiles_to_dfb<dfb::dyadd, dfb::dycopy, dfb::dyadd>(0, 0, 1, 1);
 #endif
             }
-#endif
+#endif  // BETA_GRAD_HAS_VALUE
 
 #ifdef GAMMA_GRAD_HAS_VALUE
+            // Compute dfb::xmm: x - mean with optional masks.
             ckl::eltwise_chain(
                 ckl::IterationShape::one_tile(),
                 ckl::BinaryFpu<
@@ -147,6 +144,7 @@ void kernel_main() {
                     ckl::PackTile<ckl::output(
                         dfb::xmm, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
 
+            // Compute dfb::y: (x - mean) * rstd.
             ckl::mul<
                 ckl::input(dfb::xmm, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
                 ckl::input(
@@ -159,39 +157,47 @@ void kernel_main() {
                 ckl::IterationShape::one_tile());
 
 #ifdef BETA_GRAD_HAS_VALUE
+            // Compute dfb::ydy.
             mul_tiles_to_dfb<dfb::y, dfb::dycopy, dfb::ydy>(0, 0, 1, 0);
 #else
             mul_tiles_to_dfb<dfb::y, dfb::dycopy, dfb::ydy>(0, 0, 1, 1);
 #endif
+            // Compute dfb::ydyadd.
             if (inner_idx == 0) {
                 copy_tile_to_dfb<dfb::ydy, dfb::ydyadd>();
             } else {
                 add_tiles_to_dfb<dfb::ydyadd, dfb::ydy, dfb::ydyadd>();
             }
-#endif
+#endif  // GAMMA_GRAD_HAS_VALUE
 
 #if defined(GAMMA_GRAD_HAS_VALUE) && defined(BETA_GRAD_HAS_VALUE)
             dfb_dycopy_obj.pop_front(onetile);
 #endif
-        }
+        }  // inner_idx loop
 
 #ifdef GAMMA_GRAD_HAS_VALUE
+        // Compute dfb::dgamma.
         if (is_lastdim_layernorm || is_groupnorm) {
+            // Sum[y * dy].
             compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, dfb::ydyadd, dfb::scaler, dfb::dgamma>(
                 compute_kernel_lib::ReduceInputBlockShape::single());
         } else {
+            // Just copy.
             copy_tile_to_dfb<dfb::ydyadd, dfb::dgamma>();
         }
-#endif
+#endif  // GAMMA_GRAD_HAS_VALUE
 #ifdef BETA_GRAD_HAS_VALUE
+        // Compute dfb::dbeta.
         if (is_lastdim_layernorm || is_groupnorm) {
+            // Sum[dy].
             compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, dfb::dyadd, dfb::scaler, dfb::dbeta>(
                 compute_kernel_lib::ReduceInputBlockShape::single());
         } else {
+            // Just copy.
             copy_tile_to_dfb<dfb::dyadd, dfb::dbeta>();
         }
-#endif
-    }
+#endif  // BETA_GRAD_HAS_VALUE
+    }  // outer_idx loop
 
     dfb_scaler_obj.pop_front(onetile);
 #ifdef DO_MASK_H
@@ -204,3 +210,4 @@ void kernel_main() {
 
 #undef MAYBE_MASK_H
 #undef MAYBE_MASK_W
+#undef MAYBE_MASK
