@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <cstdint>
 #include <cstring>
+#include <fstream>
 #include <memory>
 #include <optional>
 #include <span>
@@ -517,8 +518,30 @@ TEST(DispatchTelemetryObserverChild, ReadInfoFromDeviceOwnedByAnotherProcess) {
     ASSERT_EQ(*parse_end, '\0');
     ASSERT_GE(pci_device_id, 0);
 
+    // #region agent log
+    {
+        std::ofstream f("/localdev/ruizhang/wh-03/.cursor/debug-8a5827.log", std::ios::app);
+        f << "{\"sessionId\":\"8a5827\",\"runId\":\"initial\",\"hypothesisId\":\"H2\",\"location\":\"test_dispatch_"
+             "telemetry.cpp:child-before-init\",\"message\":\"observer child before UMD init\",\"data\":{\"pid\":"
+          << getpid() << ",\"pciDeviceId\":" << pci_device_id << "},\"timestamp\":"
+          << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
+                 .count()
+          << "}\n";
+    }
+    // #endregion
     std::unique_ptr<tt::umd::TTDevice> tt_device = tt::umd::TTDevice::create(static_cast<int>(pci_device_id));
     tt_device->init_tt_device();
+    // #region agent log
+    {
+        std::ofstream f("/localdev/ruizhang/wh-03/.cursor/debug-8a5827.log", std::ios::app);
+        f << "{\"sessionId\":\"8a5827\",\"runId\":\"initial\",\"hypothesisId\":\"H2\",\"location\":\"test_dispatch_"
+             "telemetry.cpp:child-after-init\",\"message\":\"observer child completed UMD init\",\"data\":{\"pid\":"
+          << getpid() << ",\"pciDeviceId\":" << pci_device_id << "},\"timestamp\":"
+          << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
+                 .count()
+          << "}\n";
+    }
+    // #endregion
     if (auto skip_reason = smc_runtime_telemetry_unavailable_reason(*tt_device); skip_reason.has_value()) {
         GTEST_SKIP() << *skip_reason;
     }
@@ -577,6 +600,20 @@ TEST_F(DispatchTelemetryHostL1WaitTest, ReadInfoFromSeparateProcessWhileDeviceIn
     const pid_t wait_result = waitpid(pid, &status, 0);
     release_core_and_finish(worker_core);
 
+    // #region agent log
+    {
+        std::ofstream f("/localdev/ruizhang/wh-03/.cursor/debug-8a5827.log", std::ios::app);
+        f << "{\"sessionId\":\"8a5827\",\"runId\":\"initial\",\"hypothesisId\":\"H1,H2\",\"location\":\"test_dispatch_"
+             "telemetry.cpp:parent-after-wait\",\"message\":\"observer child wait status\",\"data\":{\"waitResult\":"
+          << wait_result << ",\"childPid\":" << pid << ",\"rawStatus\":" << status
+          << ",\"exited\":" << WIFEXITED(status) << ",\"exitCode\":" << (WIFEXITED(status) ? WEXITSTATUS(status) : -1)
+          << ",\"signaled\":" << WIFSIGNALED(status) << ",\"signal\":" << (WIFSIGNALED(status) ? WTERMSIG(status) : 0)
+          << "},\"timestamp\":"
+          << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
+                 .count()
+          << "}\n";
+    }
+    // #endregion
     ASSERT_EQ(wait_result, pid) << "waitpid failed";
     ASSERT_TRUE(WIFEXITED(status)) << "Child terminated abnormally";
     EXPECT_EQ(WEXITSTATUS(status), 0) << "Child exited with code " << WEXITSTATUS(status);
@@ -1489,6 +1526,24 @@ TEST_F(DispatchTelemetryHostL1WaitTest, DispatchCoreEfficiencyAndUtilization) {
         GTEST_SKIP() << "Requires worker dispatch and dispatch_s to be enabled";
     }
 
+    // #region agent log
+    {
+        const auto proposed = MetalContext::instance().resolve_dispatch_core_config();
+        const auto& live = MetalContext::instance().get_dispatch_core_config();
+        std::ofstream f("/localdev/ruizhang/wh-03/.cursor/debug-8a5827.log", std::ios::app);
+        f << "{\"sessionId\":\"8a5827\",\"runId\":\"initial\",\"hypothesisId\":\"H1\",\"location\":\"test_dispatch_"
+             "telemetry.cpp:efficiency-config\",\"message\":\"proposed and live dispatch "
+             "configs\",\"data\":{\"proposedType\":"
+          << static_cast<int>(proposed.get_dispatch_core_type())
+          << ",\"proposedAxis\":" << static_cast<int>(proposed.get_dispatch_core_axis())
+          << ",\"liveType\":" << static_cast<int>(live.get_dispatch_core_type())
+          << ",\"liveAxis\":" << static_cast<int>(live.get_dispatch_core_axis()) << ",\"meshCount\":" << devices_.size()
+          << "},\"timestamp\":"
+          << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
+                 .count()
+          << "}\n";
+    }
+    // #endregion
     IDevice* device = this->device();
     auto mesh_device = devices_.at(0);
     auto& cq = mesh_device->mesh_command_queue();

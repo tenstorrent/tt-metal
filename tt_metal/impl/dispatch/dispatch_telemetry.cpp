@@ -9,6 +9,8 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <chrono>
+#include <fstream>
 #include <type_traits>
 
 #include <tt-metalium/experimental/dispatch_telemetry.hpp>
@@ -421,6 +423,21 @@ public:
         const double avg_work_runtime_per_core = delta_total_work_runtime / static_cast<double>(total_number_of_cores);
         const float core_efficiency = static_cast<float>(avg_work_runtime_per_core / delta_elapsed_device_time);
 
+        // #region agent log
+        {
+            std::ofstream f("/localdev/ruizhang/wh-03/.cursor/debug-8a5827.log", std::ios::app);
+            f << "{\"sessionId\":\"8a5827\",\"runId\":\"initial\",\"hypothesisId\":\"H3,H4\",\"location\":\"dispatch_"
+                 "telemetry.cpp:core-efficiency\",\"message\":\"core efficiency inputs\",\"data\":{\"totalCores\":"
+              << total_number_of_cores << ",\"deltaTotalWorkRuntime\":" << delta_total_work_runtime
+              << ",\"deltaElapsedDeviceTime\":" << delta_elapsed_device_time
+              << ",\"avgWorkRuntimePerCore\":" << avg_work_runtime_per_core << ",\"coreEfficiency\":" << core_efficiency
+              << ",\"cqCount\":" << current_dispatch_core_telemetry.size() << "},\"timestamp\":"
+              << std::chrono::duration_cast<std::chrono::milliseconds>(
+                     std::chrono::system_clock::now().time_since_epoch())
+                     .count()
+              << "}\n";
+        }
+        // #endregion
         TT_ASSERT(
             core_efficiency <= 1.0f, "If core_efficiency is greater than 100%, there is an issue with the telemetry");
         TT_ASSERT(core_efficiency >= 0.0f, "If core_efficiency is less than 0%, there is an issue with the telemetry");
