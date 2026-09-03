@@ -169,6 +169,29 @@ static_assert(
         kSlotBytes % (kernel_profiler::SPSC_SPAN_PACK_ALIGN_WORDS * 4u) == 0,
     "packed-gather congruence broken");
 
+// socket_reserve_pages spins with no escape. This wait holds through quiesce (stop=1), when the receiver is
+// still acking; only the kill switch (stop=2) returns false.
+inline bool reserve_pages(const SocketSenderInterface& socket, uint32_t num_pages, volatile tt_l1_ptr uint32_t* stop) {
+    const uint32_t num_bytes = num_pages * socket.page_size;
+    volatile tt_l1_ptr uint32_t* acked = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(socket.bytes_acked_base_addr);
+    const uint32_t acked_end = socket.bytes_acked_base_addr + socket.num_downstreams * bytes_acked_size_bytes;
+    while (reinterpret_cast<uint32_t>(acked) < acked_end) {
+        while (true) {
+            invalidate_l1_cache();
+            const uint32_t bytes_free = socket.downstream_fifo_total_size - (socket.bytes_sent - *acked);
+            if (bytes_free >= num_bytes) {
+                break;
+            }
+            if (*stop == kernel_profiler::kRelayStopRelease) {
+                return false;
+            }
+        }
+        acked =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reinterpret_cast<uint32_t>(acked) + bytes_acked_size_bytes);
+    }
+    return true;
+}
+
 // pass() never blocks: every wait is a state a later pass observes, so the pump can delay host delivery but
 // never the sweep. kSpoolBytes == 0 is the direct-push build, which never calls this.
 struct SpoolPump {
@@ -797,7 +820,7 @@ static FORCE_INLINE bool emit_slots(
         // sweep, as the pump's does.
         if (sender.downstream_fifo_total_size - (sender.bytes_sent - acked_seen) < bytes) {
             pump.notify();
-            if (!socket_reserve_pages(sender, bytes / kPageBytes, stop, kernel_profiler::kRelayStopRelease)) {
+            if (!reserve_pages(sender, bytes / kPageBytes, stop)) {
                 return true;
             }
             acked_seen = *pump.acked_;
