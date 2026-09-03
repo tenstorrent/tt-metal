@@ -14,11 +14,20 @@
 // entry is copied into the math dest register and then discarded (there is no
 // output DFB).
 //
+// Because there is no output DFB, the payload can't be checked through DRAM the
+// way the DM consumer's is. Instead the UNPACK thread folds each entry it drains
+// into an FNV-1a digest and reports it to an L1 scratch region, so the host can
+// verify both the bytes and the delivery order of every entry. Digests are laid
+// out as [consumer_idx][drain_index], one uint32_t each; the host seeds the
+// region with a sentinel so a slot the kernel never reached is distinguishable
+// from a wrong value.
+//
 // Flow per test invocation:
 //   1. DM producer kernel writes data into the DFB L1 ring (NoC read from DRAM).
-//   2. This kernel does wait_front + copy_tile + pop_front for
+//   2. This kernel does wait_front + digest + copy_tile + pop_front for
 //      num_entries_per_consumer iterations, then dfb.finish().
-//   3. Host verifies the program ran (DM→Tensix L1 verification is omitted).
+//   3. Host reads the digest region and compares against the input pages it
+//      expects this consumer to have been handed, in order.
 //
 // Bindings (set by host KernelSpec):
 //   dfb::in — CONSUMER (host binds the same DFB the DM producer pushes to).
@@ -27,10 +36,13 @@
 #include "api/compute/common.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/kernel_thread_globals.h"
+#include "dev_mem_map.h"
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
     constexpr uint32_t num_entries_per_consumer = get_arg(args::num_entries_per_consumer);
+    const uint32_t result_l1_addr = get_arg(args::result_l1_addr);
 
     DataflowBuffer dfb(dfb::in);
 
@@ -45,9 +57,37 @@ void kernel_main() {
     compute_kernel_hw_startup(dfb.get_id(), dfb.get_id());
     copy_init(dfb.get_id());
 
+#ifdef UCK_CHLKC_UNPACK
+    // UNPACK owns the read cursor, so it is the only thread that can address the
+    // entry at the front of this Neo's tile counter (MATH has no fifo state at all
+    // and PACK holds the write cursor). One UNPACK thread per Neo, so the Neo's
+    // thread id keys its slice of the digest region.
+    const uint32_t words_per_entry = dfb.get_entry_size() / sizeof(uint32_t);
+    // The producer NoC-writes the ring, so read it through the uncached alias on
+    // Quasar rather than risk a stale cached line (same reason dfb_l1_uncached_*_ptr
+    // exists for TRISC reads of DM-written DFB config). MEM_L1_BASE is 0, so the
+    // alias is just a constant bias. WH/BH TRISC L1 access is not cached.
+    volatile tt_l1_ptr uint32_t* const digests = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+        result_l1_addr + get_my_thread_id() * num_entries_per_consumer * sizeof(uint32_t));
+#endif
+
     for (uint32_t tile_id = 0; tile_id < num_entries_per_consumer; ++tile_id) {
         acquire_dst();
         dfb.wait_front(1);
+#ifdef UCK_CHLKC_UNPACK
+        {
+            // Safe between wait_front and pop_front: the entry is credited to us and
+            // the producer cannot reclaim the slot until we pop. get_read_ptr() is in
+            // 16B units on both arches, hence the << 4 (cf. dfb_t6_intra_2_0.cpp).
+            const volatile tt_l1_ptr uint32_t* const entry =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>((dfb.get_read_ptr() << 4) + l1_uncached_bias);
+            uint32_t digest = 2166136261u;  // FNV-1a offset basis
+            for (uint32_t w = 0; w < words_per_entry; ++w) {
+                digest = (digest ^ entry[w]) * 16777619u;  // FNV-1a prime
+            }
+            digests[tile_id] = digest;
+        }
+#endif
         copy_tile(dfb.get_id(), 0, 0);
         dfb.pop_front(1);
         release_dst();

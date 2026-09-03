@@ -230,6 +230,28 @@ inline uint32_t default_num_entries(uint32_t num_p, uint32_t num_c) {
     return ((16u + m - 1u) / m) * m;
 }
 
+// ---- Tensix-consumer digest verification ----
+// A Tensix consumer has no DRAM output, so dfb_t6_consumer_2_0.cpp reports an FNV-1a
+// digest of every entry it drains into an L1 scratch region. These two helpers are the
+// host side of that contract: the same hash, and the region's placement/sizing.
+constexpr uint32_t k_dfb_digest_sentinel = 0xDEADBEEFu;
+
+inline uint32_t fnv1a_page_digest(const std::vector<uint32_t>& words, uint32_t page_id, uint32_t words_per_entry) {
+    uint32_t digest = 2166136261u;  // FNV-1a offset basis
+    for (uint32_t w = 0; w < words_per_entry; ++w) {
+        digest = (digest ^ words[page_id * words_per_entry + w]) * 16777619u;  // FNV-1a prime
+    }
+    return digest;
+}
+
+// Top of L1, below anything the allocator hands out (a single-DFB program's ring sits at
+// the allocator base). Same placement the read_tile_value / extent-probe tests use.
+inline uint32_t dfb_digest_region_addr(distributed::MeshDevice& mesh_device, uint32_t bytes) {
+    const uint32_t alignment = mesh_device.allocator()->get_alignment(BufferType::L1);
+    const uint32_t aligned = (bytes + alignment - 1u) / alignment * alignment;
+    return static_cast<uint32_t>(mesh_device.l1_size_per_core()) - aligned;
+}
+
 // ---- shared skip macros + ring-size helper (used by base + overrides) ----
 #define DFB_SKIP_IF_UNSUPPORTED(num_p, num_c)                                                  \
     if (this->device().arch() != ARCH::QUASAR && (GetParam() || (num_p) > 1 || (num_c) > 1)) { \
@@ -336,6 +358,7 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
             "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_consumer_2_0.cpp",
             static_cast<uint8_t>(p.num_consumers));
         consumer.compile_time_args = {{"num_entries_per_consumer", num_entries_per_consumer}};
+        consumer.runtime_arg_schema = {.runtime_arg_names = {"result_l1_addr"}};
     }
     consumer.dfb_bindings = {
         {.dfb_spec_name = DFB,
@@ -404,6 +427,12 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
     } else {
         params.kernel_run_args.push_back({.kernel = PRODUCER});
     }
+    // Tensix consumer: hand it the L1 region it reports per-entry digests into (see the
+    // verification block after LaunchProgram).
+    const uint32_t digest_region_bytes =
+        p.num_consumers * num_entries_per_consumer * static_cast<uint32_t>(sizeof(uint32_t));
+    const uint32_t digest_l1_addr =
+        p.consumer_type == M2PorCType::TENSIX ? dfb_digest_region_addr(mesh_device, digest_region_bytes) : 0u;
     if (p.consumer_type == M2PorCType::DM) {
         params.kernel_run_args.push_back({
             .kernel = CONSUMER,
@@ -411,7 +440,11 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
                 node, {{"chunk_offset", 0u}, {"entries_per_core", entries_per_core}}),
         });
     } else {
-        params.kernel_run_args.push_back({.kernel = CONSUMER});
+        params.kernel_run_args.push_back({
+            .kernel = CONSUMER,
+            .runtime_arg_values =
+                experimental::MakeRuntimeArgsForSingleNode(node, {{"result_l1_addr", digest_l1_addr}}),
+        });
     }
     if (in_tensor) {
         params.tensor_args.insert({IN_TENSOR, std::cref(*in_tensor)});
@@ -465,6 +498,13 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
             }
         }
         slow_dispatch::WriteToL1(mesh_device, CoreCoord(0, 0), dfb_l1_addr, slice);
+    }
+
+    // Seed the digest region so a slot the consumer never reached reads back as the
+    // sentinel rather than as stale data from a previous test in the same binary.
+    if (p.consumer_type == M2PorCType::TENSIX) {
+        std::vector<uint32_t> sentinel(digest_region_bytes / sizeof(uint32_t), k_dfb_digest_sentinel);
+        slow_dispatch::WriteToL1(mesh_device, CoreCoord(0, 0), digest_l1_addr, sentinel);
     }
 
     LaunchProgram(mesh_device, std::move(program));
@@ -535,8 +575,39 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
             EXPECT_EQ(input, output) << "M2 single-DFB identity mismatch";
         }
     }
-    // DM→Tensix: L1 verification is omitted for now (legacy parity requires complex
-    // golden computation for the ALL pattern). We just verify the program runs.
+    // DM→Tensix: the Tensix consumer writes no DRAM, so it reports an FNV-1a digest of each
+    // entry it drained into L1 (see dfb_t6_consumer_2_0.cpp). Verifying it needs no new golden
+    // machinery -- the delivery mapping is the one the DM consumer's identity check above
+    // already relies on, read off that kernel's page_id:
+    //   STRIDED: the k-th entry handed to consumer c is input page k*num_consumers + c
+    //            (dfb_consumer_2_0.cpp writes it to exactly that page and we expect identity).
+    //   ALL:     every consumer sees the whole stream in order, so the k-th entry is input
+    //            page k (blocked_consumer writes page_id = tile_id, again with identity
+    //            expected). ALL is the *simpler* case, not a harder one.
+    // This checks the payload bytes and the per-consumer delivery order of every entry, which
+    // is what the DM-consumer path gets from its DRAM readback.
+    if (p.consumer_type == M2PorCType::TENSIX) {
+        // Under STRIDED each consumer drains num_entries_per_consumer entries unconditionally
+        // (unlike the DM consumer, which breaks once page_id runs past the tensor), so an
+        // indivisible split would mean waiting on entries no producer sends. default_num_entries
+        // returns a multiple of lcm(P,C), so every config in the sweep divides.
+        if (!is_all) {
+            ASSERT_EQ(entries_per_core % p.num_consumers, 0u)
+                << "M2 DM→Tensix STRIDED: entries_per_core must divide across consumers";
+        }
+        std::vector<uint32_t> digests;
+        slow_dispatch::ReadFromL1(mesh_device, CoreCoord(0, 0), digest_l1_addr, digest_region_bytes, digests);
+        const uint32_t wpe = p.entry_size / sizeof(uint32_t);
+        for (uint32_t c = 0; c < p.num_consumers; ++c) {
+            for (uint32_t k = 0; k < num_entries_per_consumer; ++k) {
+                const uint32_t page_id = is_all ? k : (k * p.num_consumers + c);
+                ASSERT_LT(page_id, entries_per_core);
+                EXPECT_EQ(digests[c * num_entries_per_consumer + k], fnv1a_page_digest(input, page_id, wpe))
+                    << "M2 DM→Tensix digest mismatch: consumer " << c << " drain index " << k
+                    << " should have been input page " << page_id;
+            }
+        }
+    }
 }
 
 }  // namespace tt::tt_metal
