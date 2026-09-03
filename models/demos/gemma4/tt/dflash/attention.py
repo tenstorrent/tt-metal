@@ -50,6 +50,38 @@ def build_attention_mask_additive(
     return mask.unsqueeze(0).unsqueeze(0)  # [1,1,q_len,total]
 
 
+def build_attention_mask_additive_device(
+    mesh_device, ctx_len: int, q_len: int, is_causal: bool, sliding_window: int | None
+) -> ttnn.Tensor:
+    """On-device equivalent of ``build_attention_mask_additive`` -- same formula, built
+    entirely with ttnn ops (``ttnn.arange``/``le``/``lt``/``logical_and``/``where``), no
+    host torch computation or upload. Confirmed exact match (bf16) against the host-torch
+    version, cast to bf16 the same way the caller would (``ttnn.from_torch(...,
+    dtype=bfloat16)``), for every (ctx_len, q_len, is_causal, sliding_window) combination
+    this pipeline actually uses. Returns [1,1,q_len,ctx_len+q_len] bf16, replicated."""
+    total = ctx_len + q_len
+    query_position = ttnn.arange(total - q_len, total, 1, device=mesh_device, dtype=ttnn.int32)
+    key_position = ttnn.arange(0, total, 1, device=mesh_device, dtype=ttnn.int32)
+    query_col = ttnn.reshape(query_position, [q_len, 1])
+    key_row = ttnn.reshape(key_position, [1, total])
+    query_full = ttnn.repeat(query_col, ttnn.Shape([1, total]))
+    key_full = ttnn.repeat(key_row, ttnn.Shape([q_len, 1]))
+
+    visible = ttnn.ones([q_len, total], dtype=ttnn.int32, device=mesh_device)
+    if is_causal:
+        visible = ttnn.logical_and(visible, ttnn.le(key_full, query_full))
+    if sliding_window is not None:
+        visible = ttnn.logical_and(visible, ttnn.lt(ttnn.subtract(query_full, key_full), sliding_window))
+        if not is_causal:
+            visible = ttnn.logical_and(visible, ttnn.lt(ttnn.subtract(key_full, query_full), sliding_window))
+
+    visible = ttnn.to_layout(ttnn.typecast(visible, ttnn.bfloat16), ttnn.TILE_LAYOUT)
+    zero = ttnn.zeros([q_len, total], dtype=ttnn.bfloat16, device=mesh_device, layout=ttnn.TILE_LAYOUT)
+    neg = ttnn.full([q_len, total], fill_value=-1e4, dtype=ttnn.bfloat16, device=mesh_device, layout=ttnn.TILE_LAYOUT)
+    mask = ttnn.where(visible, zero, neg)
+    return ttnn.unsqueeze_to_4D(ttnn.unsqueeze_to_4D(mask))  # [1,1,q_len,total]
+
+
 def _apply_rope_single(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
     return ttnn.add(ttnn.multiply(x, cos), ttnn.multiply(rotate_half_ttnn(x), sin))
 

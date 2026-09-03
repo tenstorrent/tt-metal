@@ -10,7 +10,7 @@ are sliding/causal, layer 5 is full/bidirectional)."""
 from __future__ import annotations
 
 import ttnn
-from models.demos.gemma4.tt.dflash.attention import build_attention_mask_additive
+from models.demos.gemma4.tt.dflash.attention import build_attention_mask_additive_device
 from models.demos.gemma4.tt.dflash.layer import dflash_layer_forward
 from models.demos.gemma4.tt.dflash.weights import Gemma4DFlashWeights
 
@@ -33,15 +33,13 @@ def dflash_drafter_forward(
     ctx_len = context.shape[-2]
     q_len = noise.shape[-2]
 
-    replicate = ttnn.ReplicateTensorToMesh(mesh_device)
     mask_cache: dict[tuple[bool, int | None], ttnn.Tensor] = {}
 
     def mask_for(is_causal, sliding_window):
         key = (is_causal, sliding_window)
         if key not in mask_cache:
-            mask_torch = build_attention_mask_additive(ctx_len, q_len, is_causal, sliding_window)
-            mask_cache[key] = ttnn.from_torch(
-                mask_torch, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=replicate
+            mask_cache[key] = build_attention_mask_additive_device(
+                mesh_device, ctx_len, q_len, is_causal, sliding_window
             )
         return mask_cache[key]
 
