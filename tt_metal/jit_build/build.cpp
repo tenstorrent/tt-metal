@@ -109,13 +109,15 @@ void hard_link_or_copy(const std::filesystem::path& target, const std::filesyste
     }
 }
 
-TelemetryToken& binary_size_telemetry_token(const std::string& target_name) {
+TelemetryToken& per_target_telemetry_token(
+    std::string_view metric_name, const std::string& target_name, std::string_view unit) {
     static std::mutex mutex;
     static std::unordered_map<std::string, TelemetryToken*> tokens;
+    std::string key = fmt::format("{}.{}", metric_name, target_name);
     std::lock_guard lock(mutex);
-    auto [it, inserted] = tokens.try_emplace(target_name, nullptr);
+    auto [it, inserted] = tokens.try_emplace(key, nullptr);
     if (inserted) {
-        it->second = &BuildCacheTelemetry::inst().register_metric("kernel_binary_size." + target_name, "bytes");
+        it->second = &BuildCacheTelemetry::inst().register_metric(key, std::string(unit));
     }
     return *it->second;
 }
@@ -902,7 +904,13 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
         fs::create_directories(target_out_dir);
         if (state_changed || compiled.any() || target->need_link(target_out_dir)) {
             populate_link_objs();
+            // Only link() is per-target work (compile() and populate_link_objs() are shared across
+            // targets), and only this branch links at all -- cache hits would record ~0 ms noise.
+            auto t0_link = std::chrono::steady_clock::now();
             target->link(target_out_dir, settings, link_objs);
+            auto link_elapsed_ms =
+                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0_link).count();
+            per_target_telemetry_token("kernel_link_time", target->target_name_, "ms").record(link_elapsed_ms);
             if (target->is_fw_) {
                 target->weaken(target_out_dir);
             }
@@ -914,7 +922,8 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
         std::error_code elf_size_ec;
         const auto elf_size = fs::file_size(target_out_dir + target->target_name_ + ".elf", elf_size_ec);
         if (!elf_size_ec) {
-            binary_size_telemetry_token(target->target_name_).record(static_cast<double>(elf_size));
+            per_target_telemetry_token("kernel_binary_size", target->target_name_, "bytes")
+                .record(static_cast<double>(elf_size));
         }
     }
 
