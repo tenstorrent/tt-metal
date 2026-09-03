@@ -63,6 +63,7 @@ def _apply_manifest_env(manifest_path: str) -> dict:
     sd("PREFILL_PRODUCER_MULTI_TURN_PROB", workload.get("multi_turn_prob"))
     sd("PREFILL_PRODUCER_SEED", workload.get("seed"))
     sd_bool("PREFILL_PRODUCER_CHECK_PCC", workload.get("check_pcc"))
+    sd_bool("PREFILL_PRODUCER_SYNTHETIC_TOKENS", workload.get("synthetic_tokens"))
     sd("PREFILL_TRACE_DIR", workload.get("trace_dir"))
     slot_prompts = workload.get("slot_prompts")
     if slot_prompts is not None:
@@ -901,6 +902,18 @@ def _load_token_pool(trace_dir, num_tokens: int) -> list:
 def _resolve_slot_prompts(cfg: ProducerConfig):
     default = os.environ.get("PREFILL_TRACE_DIR", ADAPTER.prefill_trace_default)
     spec = os.environ.get("PREFILL_PRODUCER_SLOT_TRACES", "").strip()
+    synthetic = os.environ.get("PREFILL_PRODUCER_SYNTHETIC_TOKENS", "0") == "1"
+    if synthetic:
+        if cfg.verify:
+            raise ValueError("synthetic tokens cannot be used with PREFILL_PRODUCER_CHECK_PCC=1")
+        synthetic_trace = "<synthetic>"
+        pool_tokens = MAX_SEQ_LEN if cfg.multi_turn_prob > 0 else cfg.chunks_max * CHUNK_SIZE
+        logger.info(f"[producer] using {pool_tokens} synthetic token IDs; golden trace loading is disabled")
+        return (
+            {slot: synthetic_trace for slot in range(cfg.num_users)},
+            None,
+            {synthetic_trace: [1] * pool_tokens},
+        )
     if spec and cfg.multi_turn_prob > 0:
         raise ValueError(
             "PREFILL_PRODUCER_SLOT_TRACES is incompatible with multi-turn "
