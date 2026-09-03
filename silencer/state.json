@@ -278,10 +278,11 @@
       "number": 55002
     },
     {
-      "branch": "silencer/quiet-artifact-tar-extract",
-      "pattern": "tar -xvf ttm_any.tar.zst verbose extraction noise",
-      "status": "pr-opened",
-      "validation_workflow": "galaxy_multi_user_isolation_tests"
+      "branch": "silencer/layernorm-rmsnorm-dfb-x-id-unused",
+      "pattern": "layernorm.cpp RMSNORM dfb_x_id unused-but-set-variable",
+      "status": "pr-opened-dispatch-requested",
+      "validation_workflow": "models-t3-e2e-tests",
+      "note": "Awaiting CI validation before Phase A can reconcile/mark ready for review."
     }
   ],
   "backlog_cursor": "Phase B target this run: verbose tar extraction noise fixed. Next run: continue scanning untried workflows (models t1/t2, single-card, blackhole) or check validation results for this PR."
