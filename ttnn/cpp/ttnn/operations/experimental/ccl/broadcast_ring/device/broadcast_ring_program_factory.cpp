@@ -325,6 +325,9 @@ BroadcastRingProgramFactory::cached_program_t BroadcastRingProgramFactory::creat
             .set_page_size(packet_header_cb_id, packet_header_size);
     CreateCircularBuffer(program, worker_core_range, packet_header_cb_config);
 
+    const uint32_t max_payload_bytes = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
+    const uint32_t tiles_per_packet = std::max<uint32_t>(1, max_payload_bytes / page_size);
+
     // CT layout must match broadcast_ring_relay_l1.cpp exactly.
     std::vector<uint32_t> ct_args = {
         ring_size,
@@ -340,6 +343,7 @@ BroadcastRingProgramFactory::cached_program_t BroadcastRingProgramFactory::creat
         unicast_backward_args[0],
         unicast_backward_args[1],
         num_slots,
+        tiles_per_packet,
     };
     tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(ct_args);
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(ct_args);
