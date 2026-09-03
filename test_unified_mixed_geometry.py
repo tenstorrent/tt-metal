@@ -71,14 +71,28 @@ VARIANTS = [
     ("init on row, row pass alone", True, True, False, None, True, True),
     ("init on row, both passes", False, True, False, True, True, True),
     ("init on 32x32, re-init for row", False, False, True, True, True, True),
+    # The FPU path, whose operands are configured in fpu_seed_init rather than in the leaf's
+    # emit. Same two geometries, same expectation; a + a rather than recip so the pass stays
+    # on the FPU.
+    ("FPU both passes", False, False, False, True, True, True, "fpu"),
+    # The matmul path: a 32x32 product, then B3's row-form LHS, whose operands are a MIXED
+    # pair under matmul's reversed order. All-ones inputs, so a 32-deep product is exactly
+    # 32 in bfloat16 and a lost face reads as 0 rather than as a tolerance question.
+    # The matmul path. One shape per body, because two matmul shapes in one body is a
+    # separate limitation -- see the kernel, and A3.
+    ("matmul, row-form", True, False, False, None, True, True, "matmul"),
 ]
 
 
-def run(device, row_only=False, row_init=False, reinit=False, seed=0):
+def run(device, row_only=False, row_init=False, reinit=False, fpu=False, matmul=False, seed=0):
     torch.manual_seed(seed)
     # Strictly positive and away from zero: recip is ill-conditioned near it.
-    full = (0.5 + 1.5 * torch.rand([1, 1, TILE, TILE])).to(torch.bfloat16)
-    row = (0.5 + 1.5 * torch.rand([1, 1, 1, TILE])).to(torch.bfloat16)
+    if matmul:
+        full = torch.ones([1, 1, TILE, TILE], dtype=torch.bfloat16)
+        row = torch.ones([1, 1, 1, TILE], dtype=torch.bfloat16)
+    else:
+        full = (0.5 + 1.5 * torch.rand([1, 1, TILE, TILE])).to(torch.bfloat16)
+        row = (0.5 + 1.5 * torch.rand([1, 1, 1, TILE])).to(torch.bfloat16)
 
     dram = ttnn.DRAM_MEMORY_CONFIG
     t_in = ttnn.from_torch(full, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=dram)
@@ -107,6 +121,8 @@ def run(device, row_only=False, row_init=False, reinit=False, seed=0):
         ([("MG_ROW_ONLY", "1")] if row_only else [])
         + ([("MG_ROW_INIT", "1")] if row_init else [])
         + ([("MG_REINIT", "1")] if reinit else [])
+        + ([("MG_FPU", "1")] if fpu else [])
+        + ([("MG_MATMUL", "1")] if matmul else [])
     )
 
     # Roles come off the kernel's declarations: in/in_row are filled by DM thread 0, out and
@@ -123,21 +139,27 @@ def run(device, row_only=False, row_init=False, reinit=False, seed=0):
         ],
         tensors=tensors,
         defines=defines or None,
-        name=f"mixed_geometry{'_ro' if row_only else ''}{'_ri' if row_init else ''}{'_re' if reinit else ''}",
+        name=f"mixed_geometry{'_ro' if row_only else ''}{'_ri' if row_init else ''}{'_re' if reinit else ''}{'_fpu' if fpu else ''}{'_mm' if matmul else ''}",
     )
     run_unified_spec(device, spec, tensors)
 
     got_full = ttnn.to_torch(t_out).to(torch.float32)
     got_row = ttnn.to_torch(t_out_row).to(torch.float32).flatten()
-    want_full = torch.reciprocal(full.to(torch.float32))
-    want_row = torch.reciprocal(row.to(torch.float32)).flatten()
+    if matmul:
+        f = full.to(torch.float32)[0, 0]
+        want_full = (f @ f).reshape(1, 1, TILE, TILE)
+        want_row = (row.to(torch.float32).reshape(1, TILE) @ f).flatten()
+    else:
+        ref = (lambda x: x + x) if fpu else torch.reciprocal
+        want_full = ref(full.to(torch.float32))
+        want_row = ref(row.to(torch.float32)).flatten()
     err_full = (got_full - want_full).abs() / want_full.abs().clamp(min=1e-6)
     err_row = (got_row - want_row).abs() / want_row.abs().clamp(min=1e-6)
     return err_full, err_row
 
 
-def measure(device, row_only, row_init, reinit, tol):
-    err_full, err_row = run(device, row_only=row_only, row_init=row_init, reinit=reinit)
+def measure(device, row_only, row_init, reinit, tol, fpu=False, matmul=False):
+    err_full, err_row = run(device, row_only=row_only, row_init=row_init, reinit=reinit, fpu=fpu, matmul=matmul)
     ok_row = err_row <= tol
     full = None if row_only else bool((err_full <= tol).all())
     return full, int(ok_row[:FACE].sum()), int(ok_row[FACE:].sum())
@@ -152,14 +174,21 @@ def main(argv=None):
     cases = VARIANTS if args.matrix else VARIANTS[:1]
     device = ttnn.open_device(device_id=0)
     try:
-        measured = [measure(device, c[1], c[2], c[3], args.rel_err) for c in cases]
+        measured = [
+            measure(
+                device, c[1], c[2], c[3], args.rel_err,
+                fpu=(len(c) > 7 and c[7] == "fpu"),
+                matmul=(len(c) > 7 and c[7] == "matmul"),
+            )
+            for c in cases
+        ]
     finally:
         ttnn.close_device(device)
 
     failed = []
     for case, (full, face0, face1) in zip(cases, measured):
         name, row_only = case[0], case[1]
-        want = tuple(case[4:])
+        want = tuple(case[4:7])
         shown = "n/a" if full is None else ("exact" if full else "WRONG")
         logger.info(f"{name:34s} 32x32={shown:5s}  face0={face0}/{FACE}  face1={face1}/{FACE}")
         if (full, face0 == FACE, face1 == FACE) != want:
