@@ -273,7 +273,9 @@ tests/tt_metal/tt_metal/test_kernels/sfpi/ @nathan-TT @kstevensTT
 
 # misc tests
 tests/didt/ @rdjogoTT @ttmtrajkovic @ctr-nradojevicTT @ctr-adjokicTT
-tests/tt_metal/tt_metal/deployment/ @rdjogoTT @ctr-nradojevicTT @ctr-adjokicTT
+
+# Deployment tests
+tests/tt_metal/tt_metal/deployment/ @gsarabandoTT @tt-mnijjar @mgajewskiTT @ctr-nradojevicTT @ctr-adjokicTT
 
 # TTNN
 ttnn/ @tenstorrent/metalium-developers-ttnn-core
