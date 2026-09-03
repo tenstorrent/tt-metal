@@ -259,11 +259,83 @@ UNTRACED_PERF_MARGIN = 0.05
 # carries fixed overhead that does not scale with the window and understates throughput by 17-30%
 # (see test_mistral4_prefill_transformer_chunked_no_pcc's docstring).
 MISTRAL4_TRACED_BASELINE_CHUNK_TIMES_S: dict[tuple[int, int, int], list[float]] = {
-    # (num_layers, n_chunks, num_iters): [per-chunk median seconds]
-    # (36, 20, 10): [...],  # 102,400 tokens; fill from the gated CI row
+    # test_mistral4_prefill_transformer_chunked_no_pcc[...-L36-chunks20-ten_iters-traced], 102,400
+    # tokens. Per-chunk median-of-medians over runs 33804792151 and 33804828393.
+    #
+    # TWO runs, and that is enough here for the same reason it is on the Kimi traced table above: a
+    # replay has the device as its only noise source. Measured within-run per-chunk stddev is
+    # 0.000-0.003 s (<=1% of the median) in both runs, and the two runs agree to <=2.0% per chunk --
+    # the worst single sample sits 37% into the +/-3% band, so CI noise spends about a third of it.
+    #
+    # This table RAMPS (0.136 -> 0.376) while the untraced twin below is flat. That is the real
+    # signal and the reason this row is worth gating: chunk c attends to KV[0:c*CHUNK], so traced
+    # time grows with depth, and an MLA/SDPA regression at long context shows up here. The untraced
+    # twin cannot see it -- it is host-dispatch bound, so the dispatch cost swamps the depth ramp.
+    (36, 20, 10): [
+        0.136,
+        0.143,
+        0.149,
+        0.163,
+        0.176,
+        0.188,
+        0.202,
+        0.214,
+        0.223,
+        0.235,
+        0.257,
+        0.259,
+        0.272,
+        0.290,
+        0.301,
+        0.315,
+        0.334,
+        0.348,
+        0.357,
+        0.376,
+    ],
 }
 MISTRAL4_UNTRACED_BASELINE_CHUNK_TIMES_S: dict[tuple[int, int, int], list[float]] = {
-    # (36, 20, 10): [...],
+    # Same row, notrace. Per-chunk median-of-medians over THREE runs: 33799453086, 33804792151,
+    # 33804828393. Flat ~0.69 s/chunk at every depth, as expected -- untraced measures host dispatch,
+    # not attention.
+    #
+    # Three runs rather than one, and this table is why. Within a run the spread is enormous: max
+    # per-chunk stddev 0.36-0.38 s, i.e. 52-55% of the median, on 12 of 20 chunks. The MEDIAN is the
+    # stable quantity, and only across runs -- run 33799453086 alone reported chunk 17 at 0.924 s,
+    # 32.9% above its own cross-chunk median, and pasting that single run would have written 0.924
+    # here and then failed every healthy run afterwards by 25%. The other two runs put that chunk at
+    # 0.696 and 0.701.
+    #
+    # That 0.924 is also the ONLY sample from any of the three runs that falls outside the armed
+    # +/-5% band, and it comes from the run whose traced row then died with "Device 17: All NOCs
+    # hung" -- a session with failing hardware, not a measurement to widen a band for. Excluding it
+    # is what the median does; it is called out here so a future re-cut does not rediscover it as a
+    # mystery. Every other sample from every run lands inside its band.
+    #
+    # If this goes flaky, re-center on the median over MORE runs before widening; a band that needs
+    # more than 10% is a regression, not noise.
+    (36, 20, 10): [
+        0.697,
+        0.694,
+        0.694,
+        0.692,
+        0.692,
+        0.694,
+        0.698,
+        0.695,
+        0.698,
+        0.689,
+        0.694,
+        0.694,
+        0.710,
+        0.689,
+        0.714,
+        0.693,
+        0.694,
+        0.701,
+        0.691,
+        0.690,
+    ],
 }
 
 # Deepest config whose per-layer PCC is asserted; deeper runs (L61) stay record-only until their

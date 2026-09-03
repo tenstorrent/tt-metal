@@ -876,19 +876,21 @@
   test_group: module
   skus:
     bh_sc1:
-      # PROVISIONAL, but now measured on one side. Run 33799453086's notrace row: 18.7 min total,
-      # of which tt_transformer_creation is 14.1 and tt_forward 4.6. The 5.2 min estimate this
-      # replaces was not wrong about the measured work -- it just costed the wrong thing. The leg is
-      # dominated by weight load, not by the 20 x 10 chunk executions.
+      # Measured, no longer provisional. Worst observed test-step time over three runs is 24.9 min
+      # (33804792151: notrace 21.9 + traced 3.0); the other two ran 10.5 and ~22. 35 is ~1.4x the
+      # worst.
       #
-      # And that load is paid TWICE. notrace and traced are separate parametrizations, so each
-      # builds its own TtPrefillTransformer: ~2 x 14.1 + 4.6 + ~3 (traced forward) ~= 38 min. 50
-      # keeps ~30% over that for the first green two-row run, then comes down.
+      # The swing is the weight cache, not the work. tt_forward is stable -- 4.6 min notrace, 1.1
+      # traced, every run -- while tt_transformer_creation ranged 1.0 to 17.3 min depending on
+      # whether the runner's page cache was warm. That is the run-to-run leg-time swing; it does NOT
+      # appear in the per-chunk medians, which agree to <=2.0% traced and are gated on their own
+      # bands. Do not size the timeout from the medians or re-cut the medians from the leg time.
       #
-      # The obvious lever if this leg needs to get cheaper: share one transformer build across the
-      # two rows (module-scoped fixture in run_chunked_transformer_updated) and the leg loses ~14
-      # min outright. Not done here -- it is a refactor of a helper five other models drive.
-      timeout: 50
+      # An earlier revision of this comment claimed the two rows each pay a full cold weight load.
+      # They do not: the second row in a session reads the same cache files and creation drops to
+      # 1.0-1.4 min. Traced is also far cheaper than first estimated -- 0.136-0.376 s/chunk, not the
+      # guessed ~0.9 -- because a replay is not host-dispatch bound the way the untraced row is.
+      timeout: 35
   owner_id: U08GEEEEC75 # ssalice
   team: models
   sp_config: sc1
