@@ -23,6 +23,7 @@ from models.demos.qwen3_tts.tt.dram_sharded_matmul import (
     decode_hidden_width_memcfg,
     dram_sharded_program_config,
     find_grid_k_n,
+    unpad_dram_sharded_out,
     width_sharded_l1_memcfg,
 )
 from models.demos.qwen3_tts.tt.linear_1d_program_config import find_1d_mcast_grid, make_linear_1d_program_config
@@ -406,18 +407,12 @@ class MLP(LightweightModule):
                     ttnn.deallocate(out_sharded)
                     return tp_all_reduce(output_il, self.device, memory_config=ttnn.L1_MEMORY_CONFIG)
                 return out_sharded
-            # Weight N was padded; slice back via L1_INTERLEAVED.
-            output_padded = ttnn.to_memory_config(out_sharded, ttnn.L1_MEMORY_CONFIG)
-            ttnn.deallocate(out_sharded)
-            output = ttnn.slice(
-                output_padded,
-                [0, 0, 0, 0],
-                [output_padded.shape[0], output_padded.shape[1], output_padded.shape[2], self.hidden_size],
-                memory_config=(
-                    self._decode_residual_memcfg if self._decode_residual_memcfg is not None else ttnn.L1_MEMORY_CONFIG
-                ),
+            # Weight N was padded; trim straight off the width-sharded output.
+            output = unpad_dram_sharded_out(
+                out_sharded,
+                self.hidden_size,
+                self._decode_residual_memcfg if self._decode_residual_memcfg is not None else ttnn.L1_MEMORY_CONFIG,
             )
-            ttnn.deallocate(output_padded)
             if self.tp_size > 1:
                 from models.demos.qwen3_tts.tt.mesh_utils import tp_all_reduce
 

@@ -5,7 +5,8 @@
 Sequence lengths match ``demo_full_ttnn_tts`` / ``server.py``:
 
   Talker prefill  32 / 64 / 128   TRACE buckets (different matmul M and kernel path)
-  Talker decode   seq=1           QKV/MLP always M=1; one capture is enough
+  Talker decode   seq=1           QKV/MLP always M=1; attention spans the whole
+                                 KV cache (kv_max=352) on the deployed path
   CP prefill      seq=2           always (talker hidden + code0); TILE-padded to 32
   CP decode       seq=1           KV max=32 always
   Speaker         T=384           ~4s jim_reference mel; no TRACE buckets
@@ -18,7 +19,9 @@ Speaker conv length follows the reference wav (one T).
 
 On-device modules (Mimi encode/decode stays on CPU and is not in these tests):
 
-  Talker DecoderLayer     -k talker_layer_prefill_32 | _64 | _128 | talker_layer_decode
+  Talker DecoderLayer     -k talker_layer_prefill_32 | _64 | _128
+                          -k talker_layer_decode          eager fallback (cache sliced to 1)
+                          -k talker_layer_decode_traced   DEPLOYED path (full-cache SDPA)
   CodePredictor layer     -k cp_layer_prefill | cp_layer_decode
   Speaker TDNN 128→512    -k speaker_tdnn
   Speaker SERes2Net       -k speaker_block
@@ -54,6 +57,9 @@ except ModuleNotFoundError:
 # Demo TRACE_PREFILL_BUCKETS = (32, 64, 128). Japanese sample pads to 64.
 DEMO_TALKER_PREFILL_BUCKETS = (32, 64, 128)
 DEMO_TALKER_DECODE_SEQ = 1
+# Decode position for the traced-decode window (any pos < kv_max gives the same
+# op shapes; 128 matches the qwen3_tts_trace_perf.txt capture).
+DEMO_TALKER_DECODE_POS = 128
 DEMO_MAX_NEW_TOKENS = 256
 _TILE = 32
 
@@ -278,6 +284,89 @@ def test_talker_layer_decode(device, talker_layer):
 
     _profile_forward(device, _fwd)
     print(f"[talker_layer_decode] seq_len={DEMO_TALKER_DECODE_SEQ} hidden={cfg.hidden_size} kv_max={kv_max}")
+
+
+def test_talker_layer_decode_traced(device, talker_layer):
+    """One Talker DecoderLayer on the **deployed** decode path (server.py trace form).
+
+    ``test_talker_layer_decode`` above drives the eager fallback: ``cur_pos_tensor``
+    and ``decode_attn_mask`` are None, so the layer writes the cache with
+    ``update_cache`` and slices it to ``start_pos+1`` — SDPA then sees a 1-position
+    K/V.  The demo never runs that graph.  Under Metal trace, ``server.py`` passes a
+    device ``cur_pos_tensor`` + a full ``[1, heads, 1, kv_max]`` mask, so the layer
+    uses ``paged_fused_update_cache`` and attends over the WHOLE cache (kv_max=352
+    for the Japanese bucket).  That makes every attention op ~kv_max/32 times larger
+    and is where the GQA-expansion / typecast overhead actually lands.
+
+    Hoists the cos/sin reshard and the SDPA mask conversion exactly like
+    ``Talker._forward_layers`` does, so the window is one deployed layer.
+    """
+    from models.demos.qwen3_tts.tt.attention import prepare_fused_sdpa_mask, talker_fused_sdpa_enabled
+    from models.demos.qwen3_tts.tt.kv_cache import create_kv_cache_list
+    from models.demos.qwen3_tts.tt.mesh_utils import get_tp_size
+    from models.demos.qwen3_tts.tt.model_config import Qwen3TTSTalkerConfig
+    from models.demos.qwen3_tts.tt.rope import shard_decode_rope_tables
+
+    cfg = Qwen3TTSTalkerConfig()
+    cfg.num_hidden_layers = 1
+    kv_max = _talker_kv_max(64)
+    cur_pos = DEMO_TALKER_DECODE_POS
+    tp = get_tp_size(device) if device.__class__.__name__ == "MeshDevice" else 1
+    local_heads = cfg.num_attention_heads // tp
+
+    x = _hidden(device, DEMO_TALKER_DECODE_SEQ, cfg.hidden_size)
+    cos, sin, trans = _rope(
+        device,
+        DEMO_TALKER_DECODE_SEQ,
+        cfg.head_dim,
+        cfg.rope_theta,
+        positions=torch.tensor([cur_pos]),
+    )
+    kv_caches = create_kv_cache_list(device, cfg, max_batch_size=1, max_seq_len=kv_max)
+
+    # server.py: int32 [1] position in DRAM (paged_fused_update_cache requires DRAM).
+    cur_pos_tt = ttnn.from_torch(
+        torch.tensor([cur_pos], dtype=torch.int32),
+        device=device,
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    mask_cpu = torch.full((1, local_heads, 1, kv_max), float("-inf"), dtype=torch.float32)
+    mask_cpu[0, :, 0, : cur_pos + 1] = 0.0
+    mask_tt = ttnn.from_torch(
+        mask_cpu,
+        device=device,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+
+    # Per-step hoists that Talker._forward_layers does once for all 28 layers.
+    cos_s, sin_s, _own_rope = shard_decode_rope_tables(cos, sin, cfg.head_dim)
+    if talker_fused_sdpa_enabled(device):
+        mask_s, _own_mask = prepare_fused_sdpa_mask(mask_tt)
+    else:
+        mask_s = mask_tt  # manual fp32 chain adds the fp32 mask directly
+
+    def _fwd():
+        y, _ = talker_layer(
+            x,
+            cos_s,
+            sin_s,
+            trans,
+            kv_cache=kv_caches[0],
+            mode="decode",
+            cur_pos_tensor=cur_pos_tt,
+            decode_attn_mask=mask_s,
+        )
+        return y
+
+    _profile_forward(device, _fwd)
+    print(
+        f"[talker_layer_decode_traced] seq_len={DEMO_TALKER_DECODE_SEQ} hidden={cfg.hidden_size} "
+        f"kv_max={kv_max} cur_pos={cur_pos} local_heads={local_heads} tp={tp}"
+    )
 
 
 def _cp_prefill_mask(device, num_heads, seq_len, max_seq, dtype=ttnn.float32):
