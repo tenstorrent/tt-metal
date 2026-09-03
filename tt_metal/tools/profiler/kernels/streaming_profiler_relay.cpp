@@ -893,8 +893,8 @@ void kernel_main() {
         // Gather generation G on the read NoC while G^1 ships. No lambda here: a by-reference capture costs sweep
         // time at the saturation boundary.
         uint32_t gen = 0;
-        uint32_t pend_n = 0;  // frames staged for gen pend_gen and not yet shipped; 0 = none pending
-        uint32_t pend_gen = 0;
+        uint32_t pend_n = 0;  // frames staged for the previous generation and not yet shipped; 0 = none pending
+        static_assert(kNGens == 2, "the pending generation is derived as the other one");
         const bool defer_ok = grid_busy && stop_seen_at == 0;
         const uint32_t demote_below = defer_ok ? kDeferBelow : 1u;
 
@@ -945,7 +945,6 @@ void kernel_main() {
         // them here), and the cores they promote are gathered by a second pass over the appended tail.
         uint32_t cur = 0;
         uint32_t n = 0;
-        const uint8_t* batch = ship_list;
         while (true) {
             const uint32_t n_end = n_list;
             while (true) {
@@ -958,8 +957,7 @@ void kernel_main() {
                     }
                     invalidate_l1_cache();
                     n = (n_end - cur) < kGenSlots ? (n_end - cur) : kGenSlots;
-                    batch = &ship_list[cur];
-                    const uint32_t pk = issue_batch(batch, n, kGenBase[gen], ring_base);
+                    const uint32_t pk = issue_batch(&ship_list[cur], n, kGenBase[gen], ring_base);
                     if (pk < demote_below) {
                         note_demotions(kGenBase[gen], n, cur, demote_below);
                     }
@@ -980,6 +978,7 @@ void kernel_main() {
                 }
 
                 if (pend_n != 0) {
+                    const uint32_t pend_gen = gen ^ 1u;
                     killed |= emit_slots(pump, sender, stop, kGenBase[pend_gen], pend_n);
                     if constexpr (kSpool) {
                         gen_dma_mark[pend_gen] = pump.dma_issued;
@@ -1007,11 +1006,10 @@ void kernel_main() {
                         }
                     }
                 }
-                advance_heads(n, batch);
+                advance_heads(n, &ship_list[cur - n]);
 
                 pend_n = n;
-                pend_gen = gen;
-                gen = gen + 1u == kNGens ? 0u : gen + 1u;
+                gen ^= 1u;
             }
             if (!probe_pending) {
                 break;
