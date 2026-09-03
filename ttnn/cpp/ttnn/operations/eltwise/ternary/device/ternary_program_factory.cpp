@@ -1529,29 +1529,18 @@ void TernaryDeviceOperation::TernaryProgramFactory::override_runtime_arguments(
     tensor_return_value_t& output,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
     // Re-apply ALL per-dispatch state to the cached program on a program-cache hit.  No descriptor
-    // rebuild and no kernel recompile -- but every per-core arg IS re-derived, because
-    // compute_program_hash coarsens each input to its padded VOLUME and therefore shares one cached
-    // program across calls whose shapes differ in their factorization.  The reader strides are a
-    // function of the individual dims (n_stride = Ht*Wt*C*(N>1), c_stride = Ht*Wt*(C>1)), not of the
-    // product the key retains, so predicates of [4,1,32,32] and [1,4,32,32] hash the same but need
-    // different strides; re-applying only the buffer addresses left those frozen at the first-miss
-    // shape and silently corrupted the second call (issue #54235).  We re-derive them from the SAME
+    // rebuild and no kernel recompile -- but every per-core arg IS re-derived. We re-derive them from the SAME
     // shared builder create_descriptor() uses, so the two paths stay byte-identical by construction.
     //
-    // Kernel push order in create_descriptor(): reader(0), writer(1), compute(2).  The work-core
-    // partition shifts with the output volume (a core can flip between work and noop), so the builder
-    // emits args for ALL cores; we re-apply every one, buffer-address slots included, so a core
-    // promoted to a work core on this hit is never left with a stale base address.
+    // Kernel push order in create_descriptor(): reader(0), writer(1), compute(2).
     //
     // NOT refreshed here: the reader/writer COMMON runtime args, which carry the TensorAccessorArgs
     // words.  On interleaved tensors that is vacuous -- TensorAccessorArgs::update_args_config()
     // resets the config to None for any buffer without a BufferDistributionSpec and re-sets only
     // IsDram, so the requested RuntimeTensorShape is discarded and no shape words are emitted at all.
     // On the SHARDED path the words ARE emitted and nothing re-applies them, so they stay at the
-    // first-miss tensors.  No failing case was found for that (colliding sharded dispatches were
-    // verified correct), and the shard specs feed compute_program_hash via get_shard_volumes(), but
-    // this has not been proven safe for every shard layout -- treat it as a remaining gap, not as an
-    // established invariant.  See issue #54235.
+    // first-miss tensors. The shard specs feed compute_program_hash via get_shard_volumes()
+
     const auto& [predicate_tensor, value_true_tensor, value_false_tensor, optional_output_tensor] = tensor_args;
     const TernaryVariant variant = operation_attributes.ternary_variant;
 
@@ -1564,8 +1553,7 @@ void TernaryDeviceOperation::TernaryProgramFactory::override_runtime_arguments(
 
     // The builder already resolved every buffer address into the flat row, so re-applying a core is
     // a fixed-width copy.  The size check turns any future divergence between the builder's row width
-    // and what create_descriptor() baked into the program into a loud failure rather than an
-    // out-of-bounds write -- that invariant now spans two functions.
+    // and what create_descriptor() baked into the program into a loud failure.
     auto apply = [&](uint32_t kernel_idx, const CoreCoord& core, const uint32_t* row, size_t n) {
         auto& data = tt::tt_metal::GetRuntimeArgs(program, kernel_idx, core);
         TT_FATAL(
@@ -1598,8 +1586,7 @@ void TernaryDeviceOperation::TernaryProgramFactory::override_runtime_arguments(
     //
     // The else-if chain assumes each CB carries at most ONE of c_0..c_3.  That holds by construction:
     // every CB above is built with a single CBFormatDescriptor, so buffer_indices() is a single
-    // index.  The TT_FATAL keeps it that way -- if a CB ever carries two of these indices, the chain
-    // would silently re-point only the lowest.
+    // index.
     tt::tt_metal::Buffer* pred_buffer = predicate_tensor.buffer();
     const auto& src1_tensor = (variant == TernaryVariant::TST) ? value_false_tensor : value_true_tensor;
     tt::tt_metal::Buffer* src1_buffer = src1_tensor.has_value() ? src1_tensor->buffer() : nullptr;
