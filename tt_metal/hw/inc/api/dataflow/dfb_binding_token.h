@@ -26,11 +26,18 @@
 // does not have to pull in the whole DataflowBuffer implementation. See
 // api/dataflow/dataflow_buffer.h for the DataflowBuffer class these tokens construct.
 //
+namespace binding_details {
+template <const auto& Token>
+struct LLKOperandExtractor;
+}
+
 struct DFBBindingToken {
     explicit constexpr DFBBindingToken(uint16_t id) noexcept : id_(id) {}
 
     // Binding token constructor when host supplies LLK metadata.
-    // See "Entry format metadata" in DataflowBufferSpec. DM-only DFBs use the id-only constructor.
+    // See "Entry format metadata" in DataflowBufferSpec. LLKOperandFrom reads these via
+    // binding_details::LLKOperandExtractor (api/llk_operand_from_tokens.h). DM-only DFBs use the
+    // id-only constructor.
     constexpr DFBBindingToken(uint16_t id, binding_details::LLKMetadata llk) noexcept : id_(id), llk_metadata_(llk) {}
 
     // DFBBindingToken is backed by a compile-time ID (an implicit CTA).
@@ -42,6 +49,9 @@ struct DFBBindingToken {
     constexpr operator uint32_t() const noexcept { return id_; }
 
 private:
+    template <const auto& Token>
+    friend struct binding_details::LLKOperandExtractor;
+
     uint16_t id_;
     binding_details::LLKMetadata llk_metadata_{};
 };
