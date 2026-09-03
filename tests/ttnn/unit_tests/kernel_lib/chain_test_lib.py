@@ -56,12 +56,12 @@ def make_input(shape, ttnn_dtype, device, seed, scale=0.5, bias=0.25):
     return torch_t, tt_t
 
 
-def pcc_threshold(dtypes):
-    if any(d == ttnn.bfloat8_b for d in dtypes):
-        return 0.99
-    if any(d == ttnn.float32 for d in dtypes):
-        return 0.999
-    return 0.9999
+def assert_close(golden, actual, label, rtol=0.05, atol=0.02):
+    """Numerical assertion for helper tests; PCC is intentionally not a correctness oracle here."""
+    assert torch.allclose(golden, actual, rtol=rtol, atol=atol, equal_nan=True), (
+        f"{label}: max abs error {(golden - actual).abs().nan_to_num().max().item()} "
+        f"exceeded rtol={rtol}, atol={atol}"
+    )
 
 
 def single_core_grid():

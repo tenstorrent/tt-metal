@@ -17,8 +17,6 @@ Fill / Rand (no-CB-input elements with special init) and quaternary SFPU are tra
 import torch
 import pytest
 import ttnn
-from loguru import logger
-from tests.ttnn.utils_for_testing import comp_pcc
 import tests.ttnn.unit_tests.kernel_lib.chain_test_lib as lib
 
 DEST_REUSE_PARAM = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/axes/dest_reuse_param.cpp"
@@ -61,9 +59,7 @@ def test_dest_reuse_matrix(device, reuse, op):
     _, fn = _OP[op]
     golden = fn(dest, c) if reuse == 0 else fn(c, dest)  # SRCA: DEST op C ; SRCB: C op DEST
     out = ttnn.to_torch(output).to(torch.float32)
-    pcc_ok, msg = comp_pcc(golden, out, lib.pcc_threshold([dt]))
-    logger.debug(f"DestReuse {_REUSE[reuse]} {_OP[op][0]} | {msg}")
-    assert pcc_ok, f"{_REUSE[reuse]} {_OP[op][0]}: {msg}"
+    lib.assert_close(golden, out, f"DestReuse {_REUSE[reuse]} {_OP[op][0]}")
 
 
 def test_ternary_where(device):
@@ -96,9 +92,7 @@ def test_ternary_where(device):
 
     golden = torch.where(cond_f != 0, ta.to(torch.float32), tb.to(torch.float32))
     out = ttnn.to_torch(output).to(torch.float32)
-    pcc_ok, msg = comp_pcc(golden, out, lib.pcc_threshold([dt]))
-    logger.debug(f"Where ternary | {msg}")
-    assert pcc_ok, msg
+    lib.assert_close(golden, out, "Where ternary")
 
 
 def test_pack_relu(device):
@@ -130,8 +124,7 @@ def test_pack_relu(device):
         (tt_relu, torch.clamp_min(torch_in.to(torch.float32), 0)),
         (tt_linear, torch_in.to(torch.float32)),
     ):
-        pcc_ok, message = comp_pcc(golden, ttnn.to_torch(output).to(torch.float32), lib.pcc_threshold([dt]))
-        assert pcc_ok, message
+        lib.assert_close(golden, ttnn.to_torch(output).to(torch.float32), "pack relu")
 
 
 @pytest.mark.parametrize("dim", [0, 1, 2, 3], ids=["none", "col", "row", "scalar"])
@@ -172,6 +165,4 @@ def test_unary_bcast(device, dim):
     golden = golden_tiles.permute(0, 1, 3, 2, 4).reshape(shape)
 
     out = ttnn.to_torch(output).to(torch.float32)
-    pcc_ok, msg = comp_pcc(golden, out, lib.pcc_threshold([dt]))
-    logger.debug(f"UnaryBcast dim={dim} | {msg}")
-    assert pcc_ok, msg
+    lib.assert_close(golden, out, f"UnaryBcast dim={dim}")
