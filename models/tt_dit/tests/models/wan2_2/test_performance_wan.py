@@ -49,7 +49,7 @@ def create_fractal_image(width: int, height: int) -> Image.Image:
 
 def t2v_metrics(mesh_device, height):
     expected_metrics = {}
-    if tuple(mesh_device.shape) == (2, 4) and height == 480:
+    if (tuple(mesh_device.shape) == (2, 4) or tuple(mesh_device.shape) == (1, 4)) and height == 480:
         if is_blackhole():
             expected_metrics = {
                 "encoder": 0.1,
@@ -145,6 +145,7 @@ def wan_pipeline_metrics_condimg(mesh_device, width, height, model_type, topolog
         [(4, 8), (4, 8), 1, 0, 2, False, ring_params_8k_req_exact_devices, ttnn.Topology.Ring, False, None],
         # BH (linear) on 4x8
         [(4, 8), (4, 8), 1, 0, 2, False, line_params_req_exact_devices, ttnn.Topology.Linear, False, None],
+        [(1, 4), (1, 4), 1, 0, 2, True, line_params_req_exact_devices, ttnn.Topology.Linear, True, None],
         [
             (4, 32),
             (4, 32),
@@ -167,6 +168,7 @@ def wan_pipeline_metrics_condimg(mesh_device, width, height, model_type, topolog
         "wh_4x8_sp1tp0",
         "ring_bh_4x8_sp1tp0",
         "line_bh_4x8_sp1tp0",
+        "bh_1x4sp1tp0",
         "bh_4x32sp1tp0",
         "2x4_sp0tp1_bf8_lofi",
     ],
