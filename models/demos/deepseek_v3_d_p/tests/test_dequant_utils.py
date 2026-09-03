@@ -289,19 +289,19 @@ def test_dequantize_per_tensor_fp8_passes_unquantized_tensors_through():
     assert torch.equal(out["model.some_index"], ids), "non-float tensors must pass through unconverted"
 
 
-def test_dequantize_per_tensor_fp8_rejects_fp8_without_a_scale():
+def test_dequantize_per_tensor_fp8_rejects_fp8_without_a_scale(expect_error):
     """An fp8 tensor whose scale key is missing would otherwise be emitted as raw fp8 garbage."""
     state_dict = {"model.layers.0.mlp.down_proj.weight": torch.zeros(2, 2, dtype=torch.float8_e4m3fn)}
-    with pytest.raises(ValueError, match="without matching inverse scale"):
+    with expect_error(ValueError, "without matching inverse scale"):
         _dequantize_per_tensor_fp8_state_dict(state_dict)
 
 
-def test_dequantize_per_tensor_fp8_rejects_an_unexpected_scale_rank():
+def test_dequantize_per_tensor_fp8_rejects_an_unexpected_scale_rank(expect_error):
     """Rank must be 0 or the tensor's own; anything else means the scale does not mean what the
     dequantizer assumes, and broadcasting would quietly produce wrong weights."""
     state_dict = {
         "w": torch.randn(3, 2, 4),
         "w_scale_inv": torch.rand(3, 1),  # ndim 2 against a rank-3 tensor
     }
-    with pytest.raises(ValueError, match="expected 0"):
+    with expect_error(ValueError, "expected 0"):
         _dequantize_per_tensor_fp8_state_dict(state_dict)
