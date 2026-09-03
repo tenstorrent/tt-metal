@@ -650,9 +650,23 @@ struct MatmulGeometry {
 
     // And again in ELEMENTS, which the tile-count check above cannot see. Equal tile counts
     // at different tile geometry pass it and are still not a valid product: a 1x32-tiled
-    // Shape<1, 1> has one column of 32 elements, a 1x32-tiled Shape<1, 1> as the RHS has one
-    // row of ONE. That mismatch used to reach the hardware and come back as an out-of-bounds
-    // read -- measured at 4.6e32 max error, see unified_blaze_integration_spec.md B3.
+    // Shape<1, 1> has one column of 32 elements, and as the RHS it has one row of ONE.
+    //
+    // WHAT THIS CHECK IS FOR, stated carefully, because it is easy to attribute to the wrong
+    // measurement. A product whose inner dimensions differ in elements is not wrong at the
+    // hardware -- it computes the full 32-element inner product the tile descriptors describe
+    // -- and it can even be the RESULT the author wants, if the surplus columns of the wider
+    // operand happen to be zero. That is a fact about operand CONTENTS, and no type can see
+    // it. So the check refuses the shape rather than trusting an invisible promise.
+    //
+    // It is NOT what fixed the 4.6e32 out-of-bounds read. That was the host never telling the
+    // device its buffers' tile geometry, so a 64-byte page was unpacked as a 2048-byte tile;
+    // `d690e91e182` and `e9cfa6dc2f3` fixed it, and with the geometry declared the same
+    // 32x32-by-1x32 shape measures PCC 1.00000 on an n150. See
+    // unified_blaze_integration_spec.md B3's table, and B4 for what this check therefore
+    // costs: the rank-1 update every linear-attention decode step is built from has no
+    // in-model spelling, and wants a named `outer(a, b)` verb rather than a weaker check
+    // here.
     static_assert(
         logical_cols_v<SA> == logical_rows_v<SB>,
         "matmul inner dimension disagrees in ELEMENTS: operand A's columns times its tile WIDTH must "
