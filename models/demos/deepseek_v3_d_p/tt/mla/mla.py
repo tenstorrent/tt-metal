@@ -1167,10 +1167,25 @@ class ttMLA:
 
         NOTE ON RESIDENCY: the cache is per ttMLA, i.e. per layer, and holds one
         [1, heads_local, chunk, width] bf16 tensor per distinct offset -- 3.28 MB per entry at 8x4 /
-        chunk 5120, so ~2 GB per device across 36 layers x 18 chunks, freed only with the model.
-        The contents are layer-invariant, so a shared buffer refreshed in place -- which the traced
-        path already does -- would cut that to a single tensor. Left as follow-up: refreshing a
-        buffer another layer's enqueued multiply may still be reading needs its own validation.
+        chunk 5120, freed only with the model. Growth is linear in context depth, since an offset is
+        visited once per request and never repeats:
+
+            261,120 tokens (the longest row tested)   51 offsets  ->  6.0 GB per device
+            1,048,576 tokens (MAX_POSITION_EMBEDDINGS) 204 offsets -> 24.1 GB per device
+
+        Both are before weights and KV cache, so the advertised max context does not fit. The
+        contents are layer-invariant, so sharing one set across layers cuts either figure by 36x
+        (to 0.17 / 0.67 GB), and a single buffer refreshed in place cuts it to one tensor.
+
+        Left as follow-up rather than fixed here, and deliberately joined to
+        https://github.com/tenstorrent/tt-metal/issues/55126: the chosen fix there is to pre-build
+        one device buffer per deterministic k * chunk_size offset and reuse it, which is the same
+        machinery this needs. Refreshing in place additionally requires validating that no other
+        layer's enqueued multiply is still reading the buffer; doing both under one validation pass
+        is cheaper than doing them twice.
+
+        An LRU cap is NOT the answer: offsets never repeat within a request, so every chunk would
+        miss and rebuild a ~105 MB host tensor, which measured 3x slower at long context.
 
         Full width rather than [1, 1, S, 1] + broadcast: a width-1 TILE_LAYOUT operand is tile-padded
         to 32, and relying on bcast to read only column 0 is not worth the risk.

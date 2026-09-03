@@ -261,7 +261,12 @@ def generate_pcc_mermaid(result: dict, threshold: float = 0.99) -> str:
             legend += f" &nbsp; 🟣 PE Threshold ({pe_threshold})"
         sections.append(legend + "\n")
 
-    output_by_label = {_short_label(l): (pcc, threshold) for l, pcc in output_pcc.items()}
+    # Per-label bars for the output stages, so a model whose norm/lm_head/logits bar differs from its
+    # per-layer bar renders each against the one it was actually gated on. Falls back to the scalar.
+    output_thresholds = result.get("output_thresholds", {})
+    output_by_label = {
+        _short_label(l): (pcc, output_thresholds.get(l, threshold)) for l, pcc in output_pcc.items()
+    }
     kv_by_idx = {i: (pcc, kv_threshold) for i, pcc in enumerate(kvpe_kv_pcc.values())}
     pe_by_idx = {i: (pcc, pe_threshold) for i, pcc in enumerate(kvpe_pe_pcc.values())}
 

@@ -117,10 +117,12 @@ def run_model(
     # The routing family this row drives must match the one the adapter declares; crossing
     # families applies a different affinity function with no error (see the assert).
     assert_gate_mode_matches_adapter(variant, gate_fallback_mode)
-    # Kimi's parametrize has no `balanced` entry today (only non_balanced).
-    # Applying this skip would zero out Kimi's CI coverage for this test.
-    # Remove this exception once there's need to test both balanced and non_balanced for Kimi.
-    if (is_ci_env or is_ci_v2_env) and not is_balanced and variant.name != "kimi_k2_7":
+    # Kimi and Mistral parametrize no `balanced` entry (only non_balanced), so applying this skip
+    # would zero out their CI coverage for this test -- which is exactly what happened to Mistral
+    # until this exemption was added: the leg reported 36 skipped, 0 passed, and read as green.
+    # Neither can add one today: RotarySetup asserts indexed rotated rope is incompatible with
+    # is_balanced (rope.py). Remove an entry once its variant gains a balanced row.
+    if (is_ci_env or is_ci_v2_env) and not is_balanced and variant.name not in ("kimi_k2_7", "mistral_small_4"):
         pytest.skip("Skip non_balanced variant in CI — runnable locally for non_balanced-mode validation")
 
     # host_gate_all is a local testing aid for sub-256-expert configs (e.g. the 4x4 sub-torus,

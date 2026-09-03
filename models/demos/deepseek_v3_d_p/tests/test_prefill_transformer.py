@@ -863,13 +863,20 @@ def run_model(
         output_pcc = {}
         kvpe_kv_pcc = {}
         kvpe_pe_pcc = {}
-        for label, pcc, _ in pcc_results:
+        # Report the score each stage was GATED on, against the bar it was gated against. Scoring the
+        # summary on raw PCC while the gate used nPCC renders a passing run as a red wall: Mistral's
+        # layer_32 reads 0.17 raw against 0.936 normalised, both sides of a 0.91 bar.
+        output_thresholds = {}
+        for label, pcc, npcc in pcc_results:
+            bar, gate_on_npcc = _threshold_for(label, th)
+            score = npcc if (gate_on_npcc and npcc is not None) else pcc
             if "_kv" in label:
-                kvpe_kv_pcc[label] = pcc
+                kvpe_kv_pcc[label] = score
             elif "_pe" in label:
-                kvpe_pe_pcc[label] = pcc
+                kvpe_pe_pcc[label] = score
             else:
-                output_pcc[label] = pcc
+                output_pcc[label] = score
+                output_thresholds[label] = bar
 
         summary_result = {
             "pcc": (output_pcc, kvpe_kv_pcc, kvpe_pe_pcc),
@@ -882,6 +889,10 @@ def run_model(
             "capacity_factor": dispatch_buffer_capacity_factor,
             "gate_fallback_mode": gate_fallback_mode,
             "threshold": th.layer,
+            "output_thresholds": output_thresholds,
+            "kv_threshold": th.kvpe_kv,
+            "pe_threshold": th.kvpe_pe,
+            "metric": th.metric,
         }
         write_pcc_summary(summary_result, threshold=th.layer)
         # PCC plots are opt-in (TT_PREFILL_PCC_PLOTS=1). generate_pcc_plots renders a PNG into trace_dir,
