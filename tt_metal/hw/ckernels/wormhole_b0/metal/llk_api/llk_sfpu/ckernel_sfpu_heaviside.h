@@ -28,8 +28,14 @@ inline void calculate_heaviside(std::uint32_t value) {
         // copysgn(0.5, v) + 0.5 is 1.0 for a clear sign bit and 0.0 for a set one, which
         // reproduces the v<0 and v>0 arms in two unpredicated slots. Only exact zero is
         // left to branch on, so the three-way chain's SFPPUSHC/SFPPOPC pair disappears.
-        // Sign-bit dispatch also matches the old chain on NaN: SFPSETCC tests the sign
-        // bit, so -NaN took the v<0 arm and +NaN took the v>0 arm, same as here.
+        //
+        // NaN is unchanged by this. Both forms dispatch on the sign bit -- SFPSETCC tests
+        // it -- and a NaN reaching this kernel over the bf16 path has its sign bit clear,
+        // so it takes the positive arm and yields 1.0 either way. Measured on device
+        // before and after the rewrite; see test_vif_equiv_sweep's _NONFINITE_EXPECTED,
+        // where the NaN column equals the +inf column for every one of these kernels.
+        // (torch returns NaN here instead; neither the old nor the new kernel does, and
+        // this rewrite does not change that.)
         vFloat r = sfpi::copysgn(vFloat(0.5f), v) + 0.5f;
         v_if(v == 0.0f) { r = s; }
         v_endif;

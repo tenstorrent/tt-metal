@@ -1,35 +1,62 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Bit-exact equivalence capture for the branch ldjurovic/vif_optimizations_wh.
+"""Exhaustive bit-exact check for the Wormhole metal SFPU comparison kernels.
 
-The branch rewrites several Wormhole metal SFPU kernels from predicated (`v_if`)
-form into SFPSWAP min/max, `copysgn`, or a cheaper condition code. Every one of
-those rewrites is claimed to be *functionally identical*, not merely close, so
-the check has to be a bit-for-bit comparison over the whole input domain rather
-than a tolerance against a golden.
+These kernels reach a 0/1 (or pass-through) result through predication, and
+several of them have been rewritten into unpredicated forms -- a `copysgn` sign
+stamp, a comparison rearranged onto a native condition code, or a default
+written up front so the `v_else` can go. Rewrites like that are exact or they
+are wrong; there is no "close". So this module checks them the two ways that
+actually settle the question:
 
-This module captures raw output **bit patterns** for each affected kernel and
-dumps them to .npz tagged by $SFPU_EQUIV_TAG. Run it once with the baseline
-headers checked out and once with the branch headers, then diff the two dumps
-with `compare_vif_equiv.py`. Anything that differs in a single bit fails.
+1. **Always**: every output bit pattern is compared with `==` against a golden,
+   over all 65,279 distinct finite bf16 values plus the non-finite patterns,
+   rather than a sampled tolerance. That is the standing regression guard, and
+   it is what runs in CI.
+
+2. **On demand**: setting `SFPU_EQUIV_OUT` (and optionally `SFPU_EQUIV_TAG`)
+   additionally dumps the raw bit patterns to .npz, so a baseline checkout and a
+   candidate checkout can be diffed against *each other* with
+   `compare_vif_equiv.py`. Use this when changing one of these kernels: the
+   golden encodes intended behaviour, the A/B dump catches any change in
+   behaviour whether or not the golden happens to pin it.
 
 Bits, not floats: NaN != NaN under float comparison, and the NaN *payload* the
-kernel emits is exactly the kind of thing a sign-bit rewrite could change. The
-dumps therefore store int32/int16 views and compare with ==.
+kernel emits is exactly the kind of thing a sign-bit rewrite could disturb. Both
+paths therefore store and compare int32/int16 views.
 
-Domain coverage:
+Two hardware behaviours the fp32 golden does not model, both of which were
+measured identical on the pre-rewrite headers and are therefore properties of
+this SFPU path rather than of any rewrite:
 
-* float kernels -- all 65,279 distinct finite bf16 values (StimuliSpec.ulp_sweep)
-  plus the 256 exp==0xFF patterns (2 infinities, 254 NaNs) run separately, since
-  the sweep generator sorts and dedupes and would drop them.
-* int32 kernels (calculate_comp_int) -- 2^32 is not enumerable, so a crafted set:
-  every 16-bit low pattern, both sign-magnitude and two's-complement boundaries,
-  and a fixed-seed random sample. Comparison to zero only reads the sign and the
-  zero-ness, so this covers every equivalence class the kernel can distinguish.
+* **bf16 subnormals are flushed to zero** on the way into DEST. In fp32 they are
+  ordinary non-zero numbers, so `UnarySFPUGolden` would call them non-zero and
+  disagree with the kernel on all 254 of them for `sign` and `heaviside`. The
+  golden is therefore fed subnormal-flushed inputs -- see `_flush_subnormals`.
+* **Non-finite inputs** are pinned by the explicit `_NONFINITE_EXPECTED` table
+  rather than by the golden, which canonicalises NaN. Note what that table
+  records: NaN behaves exactly like `+inf` for all nine kernels, i.e. it reaches
+  the SFPU with a *clear* sign bit, so the sign-bit dispatch these kernels rely
+  on sends it down the positive arm.
 
-Wormhole only; the rewrites are in hw/ckernels/wormhole_b0.
+A note on non-finite coverage, because it is easy to overstate: the stimulus
+asks for all 256 exp==0xFF bf16 patterns, but only three distinct patterns
+survive the host-to-device path -- torch canonicalises NaN payloads when it
+narrows fp32 to bf16. `test_nonfinite_stimulus_reaches_device` pins that, so the
+claim cannot silently rot. What is covered is the *classes* +inf, -inf and a
+quiet NaN, not 254 separate payloads.
+
+A/B runs must wipe the ELF cache between checkouts. `TestConfig.variant_id`
+hashes the `-I` include-directory paths, not header *content*, and
+`build_elfs()` skips outright once `.build_complete` is set, so an unwiped
+$RUNNER_TEMP/tt-llk-build silently replays the first checkout's ELFs and reports
+a spurious "identical". Each dump therefore records a fingerprint of the ELFs it
+actually ran, and `compare_vif_equiv.py` fails when two tags share one.
+
+Wormhole only; the kernels are in hw/ckernels/wormhole_b0.
 """
 
+import hashlib
 import math
 import os
 from pathlib import Path
@@ -39,7 +66,11 @@ import pytest
 import torch
 from conftest import wormhole_only
 from helpers.format_config import DataFormat, InputOutputFormat
-from helpers.golden_generators import TILE_DIMENSIONS
+from helpers.golden_generators import (
+    TILE_DIMENSIONS,
+    UnarySFPUGolden,
+    get_golden_generator,
+)
 from helpers.llk_params import (
     ApproximationMode,
     BlocksCalculationAlgorithm,
@@ -67,12 +98,16 @@ from helpers.test_variant_parameters import (
 _FACE_ELEMENTS = 16 * 16
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Kernels the branch touches, grouped by the input domain they need.
+# The metal comparison kernels, grouped by the input domain they need.
 #
-# relu_min / relu_max are deliberately absent: the tt-llk harness routes
-# MathOperation.ReluMin/ReluMax to tt-llk's own _relu_min_/_relu_max_ in
-# tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_relu.h, not to the metal
-# relu_min/relu_max this branch edits. Those two are covered from ttnn instead.
+# relu_min / relu_max are deliberately absent, and not for a harness reason:
+# every float relu entry point in tt_metal/hw/inc/api/compute/eltwise_unary/relu.h
+# passes _relu_min_/_relu_max_ to SFPU_UNARY_CALL, i.e. tt-llk's own kernels in
+# tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_relu.h. The metal
+# sfpu::relu_min / sfpu::relu_max in llk_sfpu/ckernel_sfpu_relu.h have no caller
+# at all, so there is nothing here for a sweep to cover. sfpu_operations.h routes
+# MathOperation.ReluMin/ReluMax to the same tt-llk pair, which is what
+# test_eltwise_unary_sfpu already exercises.
 # ─────────────────────────────────────────────────────────────────────────────
 
 _FLOAT_OPS = {
@@ -96,6 +131,20 @@ _INT_OPS = {
     "gez_int": MathOperation.GreaterThanEqualZero,
 }
 
+# calculate_comp_int maps each element to 0 or 1 by comparing it against zero as
+# a signed two's-complement int32. Written directly rather than via
+# UnarySFPUGolden -- see the note in test_equiv_int32.
+_INT_GOLDEN = {
+    "eqz_int": lambda x: (x == 0).astype(np.int64),
+    "nez_int": lambda x: (x != 0).astype(np.int64),
+    "ltz_int": lambda x: (x < 0).astype(np.int64),
+    "gtz_int": lambda x: (x > 0).astype(np.int64),
+    "lez_int": lambda x: (x <= 0).astype(np.int64),
+    "gez_int": lambda x: (x >= 0).astype(np.int64),
+}
+
+assert set(_INT_GOLDEN) == set(_INT_OPS)
+
 # bf16 in / fp32 out is the sensitive pair: it shows the kernel's own result
 # before the pack quantises it, so a one-bit difference cannot hide.
 _FLOAT_FORMATS = {
@@ -104,6 +153,45 @@ _FLOAT_FORMATS = {
 }
 
 _INT_FORMAT = InputOutputFormat(DataFormat.Int32, DataFormat.Int32)
+
+# Measured behaviour on the three non-finite classes that actually reach the SFPU,
+# expressed as fp32 result values; the bf16-out case is exactly this narrowed to
+# bf16, which _nonfinite_want() does. Every row was captured on the pre-rewrite
+# headers as well and is unchanged by the rewrites.
+#
+# The "nan" column is the interesting one: it equals the "+inf" column for all
+# nine kernels. These kernels dispatch on the sign bit (SFPSETCC tests it), so
+# that says the NaN arrives with its sign bit clear and takes the positive arm --
+# which is why none of the sign-bit rewrites could disturb it.
+# Smallest normal bf16: exponent field 1, mantissa 0.
+_BF16_MIN_NORMAL = 2.0**-126
+
+_INF = math.inf
+_NONFINITE_EXPECTED = {
+    #              +inf,  -inf,   nan
+    "sign": (1.0, -1.0, 1.0),
+    "heaviside": (1.0, 0.0, 1.0),
+    "hardshrink": (_INF, -_INF, _INF),
+    "unary_eq": (0.0, 0.0, 0.0),
+    "unary_ne": (1.0, 1.0, 1.0),
+    "unary_gt": (1.0, 0.0, 1.0),
+    "unary_lt": (0.0, 1.0, 0.0),
+    "unary_ge": (1.0, 0.0, 1.0),
+    "unary_le": (0.0, 1.0, 0.0),
+}
+
+assert set(_NONFINITE_EXPECTED) == set(_FLOAT_OPS)
+
+
+def _flush_subnormals(t: torch.Tensor) -> torch.Tensor:
+    """Model the DEST flush-to-zero the golden's fp32 arithmetic does not have.
+
+    Flushed to +0.0 rather than to a signed zero: the kernels that branch on
+    zero write a literal +0.0 in that arm, so a negative subnormal comes out as
+    +0.0 and not -0.0. Verified against the device for all 254 subnormal
+    patterns; without this the golden calls them non-zero and disagrees.
+    """
+    return torch.where(t.abs() < _BF16_MIN_NORMAL, torch.zeros_like(t), t)
 
 
 def _nonfinite_patterns():
@@ -128,10 +216,15 @@ _INT_VALUES = _INT_FACES * _FACE_ELEMENTS
 def _int32_probe_values():
     """Crafted int32 domain for the comparison-to-zero kernels.
 
-    Comparison to zero only distinguishes {negative, zero, positive}, but the
-    kernel reaches that verdict through sign-magnitude / two's-complement
-    handling, so the set pins every representation boundary explicitly and then
-    fills the rest with a fixed-seed random bulk sample across the full range.
+    2^32 is not enumerable, so this is a sample rather than a sweep: 19 explicit
+    representation boundaries (INT_MIN/INT_MAX, 0x80000000, the 16-bit carries),
+    1,024 dense small magnitudes either side of zero, and a fixed-seed random
+    bulk fill across the full range for the remaining 3,053 slots.
+
+    Comparison to zero only distinguishes {negative, zero, positive}, so those
+    three equivalence classes are covered many times over; what the boundaries
+    buy is coverage of the sign-magnitude / two's-complement handling the kernel
+    reaches its verdict through.
     """
     special = [
         0,
@@ -181,8 +274,11 @@ def _unpack_to_dest(input_format: DataFormat, dest_acc: DestAccumulation) -> boo
     return input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
 
 
-def _drive(mathop, formats, spec_A, num_tiles, dest_acc):
-    """Run one kernel over one stimulus set and return the raw result tensor."""
+def _drive(mathop, formats, spec_A, num_tiles, dest_acc, want_golden=True):
+    """Run one kernel over one stimulus set.
+
+    Returns (src_A, result tensor, golden tensor or None, ELF fingerprint).
+    """
     input_dimensions = [TILE_DIMENSIONS[0], TILE_DIMENSIONS[1] * num_tiles]
 
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
@@ -193,11 +289,25 @@ def _drive(mathop, formats, spec_A, num_tiles, dest_acc):
         spec_A=spec_A,
     )
 
+    actual_dimensions = [TILE_DIMENSIONS[0], TILE_DIMENSIONS[1] * tile_cnt_A]
+
+    golden_tensor = None
+    if want_golden:
+        generate_golden = get_golden_generator(UnarySFPUGolden)
+        golden_tensor = generate_golden(
+            mathop,
+            _flush_subnormals(src_A),
+            formats.output_format,
+            dest_acc,
+            formats.input_format,
+            actual_dimensions,
+        )
+
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
         DestSync.Half,
         dest_acc,
         formats,
-        [TILE_DIMENSIONS[0], TILE_DIMENSIONS[1] * tile_cnt_A],
+        actual_dimensions,
         TILE_DIMENSIONS,
         BlocksCalculationAlgorithm.Standard,
     )
@@ -206,10 +316,7 @@ def _drive(mathop, formats, spec_A, num_tiles, dest_acc):
         "sources/eltwise_unary_sfpu_test.cpp",
         formats,
         templates=[
-            generate_input_dim(
-                [TILE_DIMENSIONS[0], TILE_DIMENSIONS[1] * tile_cnt_A],
-                [TILE_DIMENSIONS[0], TILE_DIMENSIONS[1] * tile_cnt_A],
-            ),
+            generate_input_dim(actual_dimensions, actual_dimensions),
             APPROX_MODE(ApproximationMode.No),
             FAST_MODE(FastMode.No),
             CLAMP_NEGATIVE(True),
@@ -234,7 +341,28 @@ def _drive(mathop, formats, spec_A, num_tiles, dest_acc):
         unpack_to_dest=_unpack_to_dest(formats.input_format, dest_acc),
     )
     res = configuration.run().result
-    return src_A, torch.tensor(res, dtype=format_dict[formats.output_format])
+    res_tensor = torch.tensor(res, dtype=format_dict[formats.output_format])
+    return src_A, res_tensor, golden_tensor, _elf_fingerprint(configuration)
+
+
+def _elf_fingerprint(configuration) -> str:
+    """Hash the ELFs this variant actually ran.
+
+    The A/B workflow's one silent failure mode is a stale build cache serving the
+    previous checkout's binaries; recording this lets compare_vif_equiv.py refuse
+    a comparison where the two tags demonstrably ran the same code.
+    """
+    elf_dir = (
+        TestConfig.ARTEFACTS_DIR
+        / configuration.test_name
+        / configuration.variant_id
+        / "elf"
+    )
+    h = hashlib.sha256()
+    for elf in sorted(elf_dir.glob("*.elf")):
+        h.update(elf.name.encode())
+        h.update(elf.read_bytes())
+    return h.hexdigest()[:16]
 
 
 def _as_bits(t: torch.Tensor, fmt: DataFormat) -> np.ndarray:
@@ -250,55 +378,158 @@ def _as_bits(t: torch.Tensor, fmt: DataFormat) -> np.ndarray:
     raise AssertionError(f"no bit view for {fmt}")
 
 
-def _dump(tag, name, x_bits, y_bits):
-    out_dir = os.environ["SFPU_EQUIV_OUT"]
+def _assert_bit_exact(case, x_bits, got_bits, want_bits, x_mask=0xFFFF):
+    """Compare against the golden with ==, reporting the first few divergences."""
+    assert (
+        got_bits.shape == want_bits.shape
+    ), f"{case}: result has {got_bits.shape} points, golden has {want_bits.shape}"
+    diff = got_bits != want_bits
+    ndiff = int(diff.sum())
+    if not ndiff:
+        return
+    idx = np.flatnonzero(diff)[:8]
+    detail = ", ".join(
+        f"x={int(x_bits[i]) & x_mask:#x} got={int(got_bits[i]) & 0xFFFFFFFF:#x} "
+        f"want={int(want_bits[i]) & 0xFFFFFFFF:#x}"
+        for i in idx
+    )
+    raise AssertionError(
+        f"{case}: {ndiff}/{got_bits.size} outputs differ from the golden bit pattern "
+        f"(first {len(idx)}: {detail})"
+    )
+
+
+def _maybe_dump(case, x_bits, y_bits, elf_id):
+    """Optional A/B capture. No-op unless SFPU_EQUIV_OUT is set."""
+    out_dir = os.environ.get("SFPU_EQUIV_OUT")
+    if not out_dir:
+        return
+    tag = os.environ.get("SFPU_EQUIV_TAG", "run")
     dest = Path(out_dir)
     dest.mkdir(parents=True, exist_ok=True)
-    path = dest / f"{tag}__{name}.npz"
-    np.savez_compressed(path, x=x_bits, y=y_bits)
-    print(f"\nwrote {path} ({y_bits.size} points)")
+    path = dest / f"{tag}__{case}.npz"
+    np.savez_compressed(path, x=x_bits, y=y_bits, elf=np.array(elf_id))
+    print(f"\nwrote {path} ({y_bits.size} points, elf {elf_id})")
 
 
-def _tag():
-    tag = os.environ.get("SFPU_EQUIV_TAG")
-    if not tag or not os.environ.get("SFPU_EQUIV_OUT"):
-        pytest.skip("set SFPU_EQUIV_OUT and SFPU_EQUIV_TAG")
-    return tag
+def _bf16_class(pattern: int) -> str:
+    """Classify a delivered bf16 bit pattern as +inf / -inf / nan."""
+    if pattern & 0x7FFF == 0x7F80:
+        return "-inf" if pattern & 0x8000 else "+inf"
+    return "nan"
+
+
+def _nonfinite_want(op_name, x_bits, out_format):
+    """Expected result bits for each delivered non-finite input."""
+    plus_inf, minus_inf, nan = _NONFINITE_EXPECTED[op_name]
+    lookup = {"+inf": plus_inf, "-inf": minus_inf, "nan": nan}
+    vals = torch.tensor(
+        [lookup[_bf16_class(int(b) & 0xFFFF)] for b in x_bits], dtype=torch.float32
+    )
+    return _as_bits(vals, out_format)
 
 
 @wormhole_only
-@pytest.mark.parametrize("domain", ("finite", "nonfinite"))
 @pytest.mark.parametrize("fmt_name", list(_FLOAT_FORMATS))
 @pytest.mark.parametrize("op_name", list(_FLOAT_OPS))
-def test_equiv_float(op_name, fmt_name, domain):
-    tag = _tag()
+def test_equiv_float_finite(op_name, fmt_name):
+    """All 65,279 distinct finite bf16 values, against the golden, bit for bit."""
     formats = _FLOAT_FORMATS[fmt_name]
+    # ulp_sweep sorts and dedupes, so it yields the distinct finite bf16 values
+    # and drops the exp==0xFF patterns -- hence the separate non-finite test.
+    spec_A = StimuliSpec.ulp_sweep(low=-math.inf, high=math.inf)
+    expected = 65279
 
-    if domain == "finite":
-        spec_A = StimuliSpec.ulp_sweep(low=-math.inf, high=math.inf)
-        num_tiles, expected = 64, 65279
-    else:
-        spec_A = StimuliSpec.custom(values=_nonfinite_patterns().tolist(), seed=0)
-        num_tiles, expected = 1, _FACE_ELEMENTS
-
-    src_A, res = _drive(
-        _FLOAT_OPS[op_name], formats, spec_A, num_tiles, DestAccumulation.Yes
+    src_A, res, golden, elf_id = _drive(
+        _FLOAT_OPS[op_name], formats, spec_A, 64, DestAccumulation.Yes
     )
 
     x_bits = _as_bits(src_A.to(torch.float32), DataFormat.Float16_b)[:expected]
-    y_bits = _as_bits(res, formats.output_format)[:expected]
-    _dump(tag, f"{op_name}__{fmt_name}__{domain}", x_bits, y_bits)
+    got_bits = _as_bits(res, formats.output_format)[:expected]
+    want_bits = _as_bits(golden, formats.output_format)[:expected]
+
+    case = f"{op_name}__{fmt_name}__finite"
+    _maybe_dump(case, x_bits, got_bits, elf_id)
+    _assert_bit_exact(case, x_bits, got_bits, want_bits)
+
+
+@wormhole_only
+@pytest.mark.parametrize("fmt_name", list(_FLOAT_FORMATS))
+@pytest.mark.parametrize("op_name", list(_FLOAT_OPS))
+def test_equiv_float_nonfinite(op_name, fmt_name):
+    """+inf, -inf and NaN, against the measured table rather than the golden.
+
+    The golden canonicalises a generated NaN's sign, so it cannot arbitrate this
+    class; _NONFINITE_EXPECTED records what the SFPU actually does, captured on
+    both the pre- and post-rewrite headers.
+    """
+    formats = _FLOAT_FORMATS[fmt_name]
+    spec_A = StimuliSpec.custom(values=_nonfinite_patterns().tolist(), seed=0)
+    expected = _FACE_ELEMENTS
+
+    src_A, res, _, elf_id = _drive(
+        _FLOAT_OPS[op_name],
+        formats,
+        spec_A,
+        1,
+        DestAccumulation.Yes,
+        want_golden=False,
+    )
+
+    x_bits = _as_bits(src_A.to(torch.float32), DataFormat.Float16_b)[:expected]
+    got_bits = _as_bits(res, formats.output_format)[:expected]
+    want_bits = _nonfinite_want(op_name, x_bits, formats.output_format)
+
+    case = f"{op_name}__{fmt_name}__nonfinite"
+    _maybe_dump(case, x_bits, got_bits, elf_id)
+    _assert_bit_exact(case, x_bits, got_bits, want_bits)
+
+
+@wormhole_only
+def test_nonfinite_stimulus_reaches_device():
+    """Pin what the non-finite stimulus actually delivers.
+
+    The request is all 256 exp==0xFF bf16 patterns, but torch canonicalises NaN
+    payloads when it narrows fp32 to bf16, so only the three classes below
+    survive. This test exists so the coverage claim in the module docstring
+    cannot quietly become false: if the harness ever starts carrying payloads,
+    this fails and the docstring gets updated with it.
+    """
+    formats = _FLOAT_FORMATS["bf16_to_fp32"]
+    spec_A = StimuliSpec.custom(values=_nonfinite_patterns().tolist(), seed=0)
+    src_A, _, _, _ = _drive(
+        _FLOAT_OPS["sign"], formats, spec_A, 1, DestAccumulation.Yes, want_golden=False
+    )
+    x_bits = _as_bits(src_A.to(torch.float32), DataFormat.Float16_b)[:_FACE_ELEMENTS]
+    classes = {_bf16_class(int(b) & 0xFFFF) for b in x_bits}
+    assert classes == {"+inf", "-inf", "nan"}, (
+        f"non-finite stimulus delivered classes {sorted(classes)}; "
+        f"distinct patterns {sorted(hex(int(b) & 0xFFFF) for b in set(x_bits.tolist()))}"
+    )
 
 
 @wormhole_only
 @pytest.mark.parametrize("op_name", list(_INT_OPS))
 def test_equiv_int32(op_name):
-    tag = _tag()
     spec_A = _int32_face_spec(_int32_probe_values())
-    src_A, res = _drive(
-        _INT_OPS[op_name], _INT_FORMAT, spec_A, _INT_TILES, DestAccumulation.Yes
+    # UnarySFPUGolden cannot be used here: for an (Int32, Int32) pair it falls
+    # through to convert_nan_to_inf, which builds a float inf and overflows the
+    # int tensor. calculate_comp_int's semantics are a one-liner and its output
+    # is 0/1 in the same format as its input, so there is no pack behaviour to
+    # model -- the golden below is the whole specification.
+    src_A, res, _, elf_id = _drive(
+        _INT_OPS[op_name],
+        _INT_FORMAT,
+        spec_A,
+        _INT_TILES,
+        DestAccumulation.Yes,
+        want_golden=False,
     )
 
     x_bits = _as_bits(src_A, DataFormat.Int32)
-    y_bits = _as_bits(res, DataFormat.Int32)
-    _dump(tag, f"{op_name}__int32", x_bits, y_bits)
+    got_bits = _as_bits(res, DataFormat.Int32)
+    want_bits = _INT_GOLDEN[op_name](x_bits).astype(np.int64)
+
+    case = f"{op_name}__int32"
+    _maybe_dump(case, x_bits, got_bits, elf_id)
+    _assert_bit_exact(case, x_bits, got_bits, want_bits)

@@ -156,6 +156,14 @@ inline void calculate_comp() {
 // and lets the default be materialised once outside the predicate.
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
 inline void calculate_comp_int() {
+    // res is pre-set below, so an unhandled COMP_MODE would silently zero the whole tile
+    // instead of falling through to the identity copy the v/v_else form used to give.
+    // SfpuType has dozens of enumerators and a mistyped one would otherwise compile clean.
+    static_assert(
+        (COMP_MODE == SfpuType::equal_zero) or (COMP_MODE == SfpuType::not_equal_zero) or
+            (COMP_MODE == SfpuType::less_than_zero) or (COMP_MODE == SfpuType::greater_than_zero) or
+            (COMP_MODE == SfpuType::less_than_equal_zero) or (COMP_MODE == SfpuType::greater_than_equal_zero),
+        "calculate_comp_int supports only the six comparison-to-zero modes");
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         vInt v = dst_reg[0];

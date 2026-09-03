@@ -1,17 +1,29 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Perf slice for the kernels touched by ldjurovic/vif_optimizations_wh.
+"""Perf coverage for the SFPU comparison kernels the shared sweep cannot reach.
 
-perf_eltwise_unary_sfpu.py already measures most of these, but only on
-Float16_b; `calculate_comp_int` is reachable only with an Int32 input and
-therefore has no coverage there at all. Rather than widen the shared sweep (its
-format matrix is asserted against PERF_SWEEP_OPS), this module carries just the
-affected ops, at the same loop_factor/iterations as the main sweep so numbers
-are directly comparable.
+This module deliberately measures only what `perf_eltwise_unary_sfpu.py` does
+not. `Sign`, `Heaviside`, `Hardshrink`, `UnaryGt`, `UnaryLt`, `UnaryGe` and
+`UnaryLe` are all in `_OP_DOMAIN_REGISTRY` and therefore already in
+`PERF_SWEEP_OPS` at exactly these parameters, and `run_llk_perf_wormhole.sh`
+collects the whole directory -- carrying them here too would measure every one
+of those rows twice in every perf shard. What is left is the genuine gap:
 
-Run it once per header variant with the ELF cache wiped in between —
-/tmp/tt-llk-build keys on source path, not header content, so a stale cache
-silently measures the previous variant.
+* `UnaryEq` / `UnaryNe` sit outside `_OP_DOMAIN_REGISTRY`
+  (`helpers/sfpu_domains.py`), so they have no perf coverage anywhere.
+* `calculate_comp_int` is reachable only with an Int32 input, a format the
+  shared sweep's matrix does not carry, so it has none either.
+
+Both slices follow the pattern `test_perf_eltwise_unary_sfpu_comp_uint16` and
+`_comp_uint32` already use: an extra slice that bypasses `PERF_SWEEP_OPS`
+rather than widening it. loop_factor/iterations/dimensions match the shared
+sweep so the numbers stay directly comparable with it.
+
+When A/B-ing header variants, wipe the ELF cache between runs.
+`TestConfig.variant_id` hashes the `-I` include-directory paths, not header
+*content*, and `build_elfs()` skips outright once `.build_complete` is set, so
+an unwiped $RUNNER_TEMP/tt-llk-build silently replays the previous variant's
+ELFs and reports a 1.00x delta that means nothing.
 """
 
 import pytest
@@ -45,17 +57,12 @@ from helpers.test_variant_parameters import (
 
 _DIMS = [[128, 64]]  # tile_cnt: 8, same as the main perf sweep
 
-# Float kernels the branch rewrites (metal llk_sfpu/*.h).
+# calculate_unary_eq / calculate_unary_ne: the two float comparison kernels with
+# no coverage in the shared sweep. The other seven touched float ops are already
+# measured there at these same parameters and are not repeated here.
 _FLOAT_OPS = [
-    MathOperation.Sign,
-    MathOperation.Heaviside,
-    MathOperation.Hardshrink,
     MathOperation.UnaryEq,
     MathOperation.UnaryNe,
-    MathOperation.UnaryGt,
-    MathOperation.UnaryLt,
-    MathOperation.UnaryGe,
-    MathOperation.UnaryLe,
 ]
 
 # calculate_comp_int: reached only when the runtime math_format is Int32.
@@ -69,19 +76,12 @@ _INT_COMP_OPS = [
 ]
 
 
-def _config(
-    formats,
-    mathop,
-    dest_acc,
-    unpack_to_dest,
-    input_dimensions,
-    source="sources/eltwise_unary_sfpu_perf.cpp",
-):
+def _config(formats, mathop, dest_acc, unpack_to_dest, input_dimensions):
     tile_count_A, tile_count_B, faces_to_generate = calculate_tile_and_face_counts(
         input_dimensions, input_dimensions, face_r_dim=16, num_faces=4
     )
     return PerfConfig(
-        source,
+        "sources/eltwise_unary_sfpu_perf.cpp",
         formats,
         run_types=ALL_PERF_RUN_TYPES,
         templates=[
@@ -122,9 +122,13 @@ def _config(
     input_dimensions=_DIMS,
 )
 def test_perf_vif_float(perf_report, formats, mathop, input_dimensions):
-    _config(formats, mathop, DestAccumulation.No, False, input_dimensions).run(
-        perf_report
-    )
+    _config(
+        formats,
+        mathop,
+        DestAccumulation.No,
+        unpack_to_dest=False,
+        input_dimensions=input_dimensions,
+    ).run(perf_report)
 
 
 @skip_for_blackhole
@@ -136,34 +140,10 @@ def test_perf_vif_float(perf_report, formats, mathop, input_dimensions):
 )
 def test_perf_vif_comp_int32(perf_report, formats, mathop, input_dimensions):
     # Int32 unpacks straight into a 32-bit DEST, mirroring the correctness path.
-    _config(formats, mathop, DestAccumulation.Yes, True, input_dimensions).run(
-        perf_report
-    )
-
-
-# The metal relu_min / relu_max need their own sources: sfpu_operations.h routes
-# SfpuType::relu_min/relu_max to tt-llk's own _relu_min_/_relu_max_, so the shared
-# op would measure a different kernel. sources/vif_relu_*_perf.cpp are copies of
-# eltwise_unary_sfpu_perf.cpp with only the SFPU call swapped, so the measurement
-# path (and therefore the MATH_ISOLATE number) is directly comparable.
-@skip_for_blackhole
-@pytest.mark.perf
-@parametrize(
-    formats=input_output_formats([DataFormat.Float16_b], same=True),
-    mathop=[MathOperation.ReluMin, MathOperation.ReluMax],
-    input_dimensions=_DIMS,
-)
-def test_perf_vif_metal_relu(perf_report, formats, mathop, input_dimensions):
-    source = (
-        "sources/vif_relu_min_perf.cpp"
-        if mathop == MathOperation.ReluMin
-        else "sources/vif_relu_max_perf.cpp"
-    )
     _config(
         formats,
         mathop,
-        DestAccumulation.No,
-        False,
-        input_dimensions,
-        source=source,
+        DestAccumulation.Yes,
+        unpack_to_dest=True,
+        input_dimensions=input_dimensions,
     ).run(perf_report)
