@@ -16,11 +16,10 @@ namespace ttml::metal::optimizers::adamw::device {
 void AdamWDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& param = tensor_args.param;
-    auto check_tensor = [&param](
-                            const ttnn::Tensor& tensor,
-                            const std::string& name,
-                            const tt::tt_metal::Layout required_layout,
-                            const tt::tt_metal::DataType required_dtype) {
+    auto check_tensor = [](const ttnn::Tensor& tensor,
+                           const std::string& name,
+                           const tt::tt_metal::Layout required_layout,
+                           const tt::tt_metal::DataType required_dtype) {
         TT_FATAL(
             tensor.storage_type() == ttnn::StorageType::DEVICE,
             "AdamW optimizer requires '{}' to be on DEVICE. Got storage type: '{}'",
@@ -54,7 +53,10 @@ void AdamWDeviceOperation::validate_on_program_cache_miss(
             "Tensor '{}' must use INTERLEAVED memory layout, but got '{}'",
             name,
             enchantum::to_string(tensor.memory_config().memory_layout()));
-
+    };
+    // Companion tensors (grad, optimizer state) are indexed in lockstep with the parameter; the
+    // single-element scalar tensors are not, so they only go through check_tensor.
+    auto check_shape_matches_param = [&param](const ttnn::Tensor& tensor, const std::string& name) {
         // Logical shapes must match for element-for-element correspondence with the parameter;
         // padding alone cannot tell apart tensors that round up to the same tile extent.
         TT_FATAL(
@@ -100,13 +102,17 @@ void AdamWDeviceOperation::validate_on_program_cache_miss(
     check_tensor(param, "Parameter", tt::tt_metal::Layout::TILE, param_dtype);
     // Gradient is always bf16
     check_tensor(grad, "Gradient", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
+    check_shape_matches_param(grad, "Gradient");
     // Optimizer states must match param dtype
     check_tensor(exp_avg, "Exponential Average Buffer", tt::tt_metal::Layout::TILE, param_dtype);
+    check_shape_matches_param(exp_avg, "Exponential Average Buffer");
     check_tensor(exp_avg_sq, "Exponential Average Squared Buffer", tt::tt_metal::Layout::TILE, param_dtype);
+    check_shape_matches_param(exp_avg_sq, "Exponential Average Squared Buffer");
 
     if (max_exp_avg_sq.has_value()) {
         check_tensor(
             max_exp_avg_sq.value(), "Max Exponential Average Squared Buffer", tt::tt_metal::Layout::TILE, param_dtype);
+        check_shape_matches_param(max_exp_avg_sq.value(), "Max Exponential Average Squared Buffer");
     }
 
     if (tensor_args.step_scalars.has_value()) {
