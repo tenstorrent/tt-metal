@@ -215,7 +215,8 @@ void ring_attention_neighbor_halo_exchange_helper(
     TT_FATAL(!input_tensors.empty() && input_tensors.size() == output_tensors.size(), "Invalid halo tensor list");
     TT_FATAL(
         semaphores.size() >= 3,
-        "Neighbor halo requires three global semaphores: backward all-gather, forward all-gather, and dedicated halo");
+        "Neighbor halo requires three global semaphores: backward all-gather, forward all-gather, and dedicated halo. "
+        "Sliding-window models must allocate 3 semaphores; non-halo models may allocate 2");
     TT_FATAL(
         halo.derives_cache_batch_on_device() == halo.derives_start_on_device(),
         "Neighbor halo slot_id and kv_actual_isl metadata must be supplied together");
