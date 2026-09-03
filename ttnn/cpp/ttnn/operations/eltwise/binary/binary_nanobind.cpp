@@ -1149,6 +1149,7 @@ void bind_div(
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             fast_and_approximate_mode (bool, optional): `true` if input_tensor_b is non-zero for fast approximation, else `false` for accurate division (Only if the input tensor is not ComplexTensor). Defaults to `false`.
             rounding_mode (string, optional): can be `None`, `floor` and `trunc` (only if the input tensor is not ComplexTensor). Defaults to `None`.
+            dtype (ttnn.DataType, optional): dtype of the output tensor. Integer division with `rounding_mode=None` only accepts `None` or `ttnn.float32`. Defaults to the dtype of :attr:`input_tensor_a`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
 
