@@ -11,7 +11,7 @@
 
 namespace tt::tt_metal::experimental {
 
-#if defined(HAS_LIBFABRIC)
+#if defined(TT_METAL_HOST_BRIDGE)
 
 namespace {
 
@@ -71,12 +71,12 @@ bool D2H2H2DSocket::open(std::string& err) {
     sc.ladder_sync = cfg_.ladder_sync;
     sc.workers = cfg_.workers;
     sc.pin_threads = cfg_.pin;
-    // DELIVERY IS DRIVEN BY THE RX CONTROL WORD, IN EVERY MODE. An armed, valid ctrl_rx that is
+    // Delivery driven by RX control word. An armed, valid ctrl_rx that is
     // never scanned looks exactly like one that is rejected, and those are different bugs -- so
     // this is not a mode flag, it is always on.
     sc.scan_rx = true;
     // Only the slots this payload can use.
-    // NO DERIVED JOB TOTAL. Stopping after `msgs * 2` serviced jobs counts two different things
+    // Stopping after `msgs * 2` serviced jobs counts two different things
     // in one budget, so a side receiving faster than it sends reaches the total while still
     // owing sends -- it stops, and its peer starves waiting for a tail that never comes.
     // The caller stops us on the actual conditions instead.
@@ -151,7 +151,7 @@ void D2H2H2DSocket::retire_tx(uint32_t core) {
     }
 }
 
-// THE ACCUMULATOR. kArgElapsed carries the running sum of every stage measured so far. Each
+// kArgElapsed carries the running sum of every stage measured so far. Each
 // party brackets its OWN stage on its OWN clock, adds its measurement, and passes the total on;
 // the last hop reports the sum. No stage is ever computed by subtracting one machine's
 // timestamp from another's.
@@ -239,7 +239,7 @@ uint64_t D2H2H2DSocket::deliver_to_l1(const Job& job, WorkerStats& ws, uint32_t 
         } else if ((off < store_guard_.signal_addr + 4 && off + length > store_guard_.signal_addr) ||
                    (off < store_guard_.completion_addr + 4 && off + length > store_guard_.completion_addr) ||
                    (off < store_guard_.stop_addr + 4 && off + length > store_guard_.stop_addr)) {
-            // A FORGED DOORBELL RELEASES A KERNEL FOR BYTES THAT NEVER ARRIVED, which is why
+            // a 'forged' doorbell releases a kernel for bytes that never arrived, which is why
             // this is a fault and not a clamp.
             why = "overlaps a doorbell word (rdma_signal / rdma_completion / stop)";
         }
@@ -254,7 +254,7 @@ uint64_t D2H2H2DSocket::deliver_to_l1(const Job& job, WorkerStats& ws, uint32_t 
         dst_l1 = off;
     }
 
-    // SERIALISE THIS CORE'S DELIVERIES -- see deliver_m_ in the header. Taken BEFORE the stage
+    // serialize a core's deliveries -- see deliver_m_ in the header. Taken BEFORE the stage
     // clock so the lock wait is billed as queueing rather than appearing inside this stage
     // under a name that says PCIe.
     std::lock_guard<std::mutex> deliver_guard(deliver_m_[job.core]);
@@ -269,7 +269,7 @@ uint64_t D2H2H2DSocket::deliver_to_l1(const Job& job, WorkerStats& ws, uint32_t 
         return 0;
     }
     const uint64_t t1 = now_ns();
-    // A MONOTONIC PER-CORE COUNT, not the message's sequence number. The kernel waits for
+    // monotonic per-core count, not the message's sequence number. The kernel waits for
     // `doorbell == i + 1` after its i-th message, and the sequence comes from a global counter
     // with no relationship to any one core's iteration -- ringing it would leave the kernel
     // waiting for a value that never arrives.
@@ -278,7 +278,7 @@ uint64_t D2H2H2DSocket::deliver_to_l1(const Job& job, WorkerStats& ws, uint32_t 
         fail("doorbell: " + e);
         return 0;
     }
-    // INSIDE THE STAGE, DELIBERATELY. A no-op on the push path; on the socket path it is what
+    // A no-op on the push path; on the socket path it is what
     // keeps this stage meaning "bytes are in L1" rather than "bytes are in host RAM and a core
     // will fetch them shortly".
     const uint64_t t1b = now_ns();
@@ -297,7 +297,7 @@ uint64_t D2H2H2DSocket::deliver_to_l1(const Job& job, WorkerStats& ws, uint32_t 
     add_sample(ws, rec, stage, t2 - t0);
     stage_ns = t2 - t0;
     ws.delivered++;
-    // ONE PER DELIVERED MESSAGE -- the receiving side's contribution to the volume ladder.
+    // one for each message delivered -- the receiving side's contribution to the volume ladder.
     ladder_note_message(ws, rec, length);
     counters_.delivered.fetch_add(1, std::memory_order_relaxed);
 
@@ -306,7 +306,7 @@ uint64_t D2H2H2DSocket::deliver_to_l1(const Job& job, WorkerStats& ws, uint32_t 
     // not read yet. Locally-armed notices need none -- the producer is in this process and can
     // see the counter directly.
     if ((ctrl_flags(job.ctrl) & kFlagRemoteNotice) != 0) {
-        // The ORIGIN SELECTOR (wire v2) -- it names the peer as well as its core, which is what
+        // origin selector -- it names the peer as well as its core, which is what
         // a bare core index could not do once there was more than one peer.
         const uint32_t origin_sel =
             job.operand_count > 2 ? static_cast<uint32_t>(job.operand[2])
@@ -325,7 +325,7 @@ uint64_t D2H2H2DSocket::service_rx(const Job& job, WorkerStats& ws, bool rec) {
     }
     const uint64_t carried_ns = job.operand[1];
 
-    // THE PATH IS ONE WAY, so there is no homeward leg and this delivery is always the
+    // there is no homeward leg and this delivery is always the
     // remote-host-to-remote-T6 stage. The reply arm and the host-side turnaround that used to
     // live here are gone: the turnaround armed `ctrl_tx(job.core)`, the far core's OWN TX
     // control register, which that core's kernel also writes -- two writers on one word. The
@@ -337,7 +337,7 @@ uint64_t D2H2H2DSocket::service_rx(const Job& job, WorkerStats& ws, bool rec) {
     if (moved == 0) {
         return 0;
     }
-    // THE RECEIVING SIDE'S CONTRIBUTION TO THE TIMED NUMERATOR: bytes that reached an L1. This
+    // receiving side's contribution too the timed numerator bytes that reached an L1. This
     // is the only byte count a receive-only side has, and it is the site whose absence made
     // that side report a confident zero.
     if (rec) {
@@ -368,7 +368,7 @@ uint64_t D2H2H2DSocket::service_tx(const Job& job, WorkerStats& ws, bool rec) {
         return 0;
     }
     const uint64_t dest_uva = job.operand[kArgDestUva];
-    // WHERE THE LENGTH LIVES IS THE OPCODE'S CHOICE -- an immediate in the instruction, or a
+    // opcode - an immediate in the instruction, or a
     // 64-bit operand register. The one line that has to know; every hop after it carries a
     // plain byte count.
     const uint64_t length = store_imm ? static_cast<uint64_t>(ctrl_imm(job.ctrl)) : job.operand[kArgLength];
@@ -408,8 +408,6 @@ uint64_t D2H2H2DSocket::service_tx(const Job& job, WorkerStats& ws, bool rec) {
             return 0;
 
         case kHostReachLocal: {
-            // REFUSED, AND THIS IS THE PER-CORE HALF OF THE SYMMETRIC INVARIANT.
-            //
             // Symmetric operation is native here (see the header): one side's cores are
             // sources, the other's are destinations, and each core therefore holds ONE L1
             // buffer at a shared address instead of two. A UVA that resolves to THIS host
@@ -417,7 +415,6 @@ uint64_t D2H2H2DSocket::service_tx(const Job& job, WorkerStats& ws, bool rec) {
             // writer on the buffer that core is sending from -- overwriting a payload it had
             // not finished sending.
             //
-            // NAMED RATHER THAN SILENTLY DROPPED, because this is the shape a misroute takes.
             // Destinations are pre-filled with the complement of what should arrive, so a
             // payload delivered to the wrong place still verifies as correct wherever it did
             // land; without this refusal a wrong selector would pass as a clean run. Counted as
@@ -454,7 +451,7 @@ uint64_t D2H2H2DSocket::service_one(const Job& job, WorkerStats& ws) {
     if (rec) {
         ws.hop[kHopNotice].add(t_service > job.t_notice ? t_service - job.t_notice : 0);
     }
-    // ONE FUNCTION, BOTH DIRECTIONS, ON THE SAME THREADS. Any arrangement that finishes one
+    // Any arrangement that finishes one
     // direction before starting the other stops at the first iteration with this host waiting
     // for records from cores that are waiting for this host.
     return job.dir == Dir::Rx ? service_rx(job, ws, rec) : service_tx(job, ws, rec);
@@ -465,7 +462,7 @@ uint64_t D2H2H2DSocket::service_one(const Job& job, WorkerStats& ws) {
 // ===========================================================================
 
 bool D2H2H2DSocket::start_transport(std::string& err) {
-    // THE PEER TABLE, built from the transport this class was constructed with plus any mesh
+    // PEER TABLE, built from the transport this class was constructed with plus any mesh
     // peers. Sized to the whole topology so a host inside it with no entry reports a
     // provisioning gap rather than being indistinguishable from a host that does not exist.
     peers_.configure(topo_.num, topo_.ident);
@@ -498,10 +495,6 @@ bool D2H2H2DSocket::start_transport(std::string& err) {
               "never within one";
         return false;
     } else {
-        // REFUSED BY NAME, NEVER SILENTLY REDUCED: a run labelled window=8 that ran at 4 is a
-        // file that lies. The constants come from the shared layout header rather than being
-        // repeated here -- a local 3 and 8 would be free to drift.
-        //
         // THE TIGHTEST PEER'S QUEUE, because one sender thread posts to all of them, so a depth
         // the narrowest endpoint cannot honour is a depth the sender cannot use. tx_depth() is 0
         // where the provider has no such number, which means "do not clamp", not "clamp to
@@ -592,8 +585,6 @@ void D2H2H2DSocket::return_credit(uint32_t origin_selector) {
 uint64_t D2H2H2DSocket::deliver_remote(const Job& job, WorkerStats& ws, uint32_t dest_core,
                                        uint64_t length, uint64_t accumulated_ns, bool reply) {
     (void)ws;
-    // THE DESTINATION HOST MUST BE ONE WE ARE CONNECTED TO.
-    //
     // host_reach() says only local/remote, so at three hosts a UVA naming host 2 classifies
     // exactly like one naming host 1 and would be posted down whichever transport exists. The
     // bytes land on the WRONG HOST and the run still passes: the destination is pre-filled with
@@ -613,7 +604,7 @@ uint64_t D2H2H2DSocket::deliver_remote(const Job& job, WorkerStats& ws, uint32_t
             return 0;
         }
     }
-    // HAND IT TO THE SENDER THREAD -- DO NOT SEND ON THIS THREAD. The send path waits on
+    // The send path waits on
     // completions, and a worker inside it cannot scan, so it cannot deliver the peer's inbound
     // traffic, so the peer never returns the credit it is waiting for. At one core the pool has
     // one worker and the stall is total.
@@ -649,7 +640,7 @@ uint64_t D2H2H2DSocket::deliver_remote(const Job& job, WorkerStats& ws, uint32_t
 // ===========================================================================
 //
 // One thread that posted a payload and waited on it inline held at most ONE RMA in flight on
-// the whole machine -- measured at 2.8 of 8 available with the fabric at 99% of line rate. The
+// the whole machine. The
 // payload must still COMPLETE before its notice is posted, so each message walks two phases and
 // the loop polls all of them instead of blocking on one.
 
@@ -797,22 +788,18 @@ bool D2H2H2DSocket::send_poll(SendSlot& slot, WorkerStats& ws, bool rec) {
             failed = true;
         }
         if (!failed) {
-            // The RX notice, posted only now: the payload has COMPLETED, so a peer that sees the
-            // trigger is guaranteed the bytes behind it.
-            sender_state_.store(3, std::memory_order_relaxed);
-            if (const std::string e = slot.tp->post_notice(
-                    slot.r.dest_core, slot.rx_slot, slot.r.length,
-                    t6_global_selector(topo_.ident, cfg_.chip, slot.r.src_core, topo_.chips_per_host),
-                    slot.r.accumulated_ns + (now_ns() - slot.t0), slot.r.reply, my_stage_slot(),
-                    slot.notice_op, slot.r.dest_uva);
-                !e.empty()) {
-                fail("transport notice: " + e);
-                failed = true;
-            } else {
-                slot.phase = SendSlot::kAwaitNotice;
-                return true;
-            }
+            // LOCAL completion only -- this side is done with the TX arena, which is NOT the same
+            // as the peer having the bytes. The notice cannot be armed until the sender's flush
+            // pass has closed that gap; it does so once per endpoint per lap and then calls
+            // send_arm_notice(). Under libfabric the gap is already closed and the slot spends a
+            // single lap here; under MPI this is the phase hazard 1 lives in.
+            slot.phase = SendSlot::kPayloadLocal;
+            return true;
         }
+    } else if (slot.phase == SendSlot::kPayloadLocal) {
+        // Owned by the flush pass in sender_loop(), not by the poll. Reporting no progress here
+        // is what lets the loop fall through to that pass instead of spinning on the slot.
+        return false;
     } else {
         if (!advance(slot.notice_op, c)) {
             if (!timed_out) {
@@ -846,8 +833,13 @@ bool D2H2H2DSocket::send_poll(SendSlot& slot, WorkerStats& ws, bool rec) {
         }
     }
 
-    // A failed message must STILL retire, or the producer blocks on tx_done to the drain
-    // deadline and reports a timeout instead of the error that actually happened.
+    send_fail_slot(slot);
+    return true;
+}
+
+// A failed message must STILL retire, or the producer blocks on tx_done to the drain deadline
+// and reports a timeout instead of the error that actually happened.
+void D2H2H2DSocket::send_fail_slot(SendSlot& slot) {
     transport_failed_.store(true, std::memory_order_release);
     sender_state_.store(0, std::memory_order_relaxed);
     if (!slot.r.reply) {
@@ -855,6 +847,25 @@ bool D2H2H2DSocket::send_poll(SendSlot& slot, WorkerStats& ws, bool rec) {
         retire_tx(slot.r.src_core);
     }
     slot.phase = SendSlot::kIdle;
+}
+
+bool D2H2H2DSocket::send_arm_notice(SendSlot& slot) {
+    // The RX notice, posted only now: the payload has completed AND been flushed, so a peer that
+    // sees the trigger is guaranteed the bytes behind it. The two halves of that guarantee come
+    // from different places -- local completion from the payload's own handle, remote visibility
+    // from Transport::flush() -- and on the MPI backend only the second one is load-bearing.
+    sender_state_.store(3, std::memory_order_relaxed);
+    if (const std::string e = slot.tp->post_notice(
+            slot.r.dest_core, slot.rx_slot, slot.r.length,
+            t6_global_selector(topo_.ident, cfg_.chip, slot.r.src_core, topo_.chips_per_host),
+            slot.r.accumulated_ns + (now_ns() - slot.t0), slot.r.reply, my_stage_slot(),
+            slot.notice_op, slot.r.dest_uva);
+        !e.empty()) {
+        fail("transport notice: " + e);
+        send_fail_slot(slot);
+        return true;
+    }
+    slot.phase = SendSlot::kAwaitNotice;
     return true;
 }
 
@@ -862,6 +873,11 @@ void D2H2H2DSocket::sender_loop() {
     std::vector<SendSlot> slots(kProvisionedCores);
     WorkerStats& ws = sender_stats_;
     const uint32_t n = cfg_.cores ? cfg_.cores : 1u;
+
+    // Reused across laps so the hot path allocates nothing. Never longer than the number of
+    // connected peers: one entry per ENDPOINT with at least one slot waiting on a flush.
+    std::vector<Transport*> to_flush;
+    to_flush.reserve(8);
 
     for (;;) {
         const bool rec = recording();
@@ -873,9 +889,55 @@ void D2H2H2DSocket::sender_loop() {
         for (uint32_t c = 0; c < n; ++c) {
             if (slots[c].phase != SendSlot::kIdle) {
                 progressed |= send_poll(slots[c], ws, rec);
-                if (slots[c].phase != SendSlot::kIdle) {
-                    ++in_flight;
+            }
+        }
+
+        // THE FLUSH PASS -- ONE ROUND TRIP PER ENDPOINT PER LAP, NOT ONE PER MESSAGE. This is the
+        // whole reason kPayloadLocal is a phase: a flush retires every operation outstanding to
+        // its target, so one call releases every slot queued behind it and the cost divides by
+        // the window rather than multiplying by the message count. Doing it inside send_poll()
+        // would put a full round trip on each message's critical path.
+        //
+        // Empty on the libfabric backend, where a reaped completion already means remote arrival.
+        to_flush.clear();
+        for (uint32_t c = 0; c < n; ++c) {
+            if (slots[c].phase != SendSlot::kPayloadLocal) {
+                continue;
+            }
+            Transport* const tp = slots[c].tp;
+            if (std::find(to_flush.begin(), to_flush.end(), tp) == to_flush.end()) {
+                to_flush.push_back(tp);
+            }
+        }
+        for (Transport* const tp : to_flush) {
+            const std::string e = tp->flush();
+            if (e.empty()) {
+                continue;
+            }
+            fail("transport flush: " + e);
+            // EVERY slot on this endpoint dies, not just one. A failed flush leaves it unknown
+            // whether the payloads landed, and arming a trigger over bytes that may not be there
+            // is precisely what the flush exists to prevent.
+            for (uint32_t c = 0; c < n; ++c) {
+                if (slots[c].phase == SendSlot::kPayloadLocal && slots[c].tp == tp) {
+                    send_fail_slot(slots[c]);
                 }
+            }
+            progressed = true;
+        }
+
+        // Strictly after the flush, and that ordering IS the protocol's guarantee.
+        for (uint32_t c = 0; c < n; ++c) {
+            if (slots[c].phase == SendSlot::kPayloadLocal) {
+                progressed |= send_arm_notice(slots[c]);
+            }
+        }
+
+        // Counted here rather than during the poll: the flush pass can retire a slot, and a
+        // window computed before that would hold back sends against capacity already freed.
+        for (uint32_t c = 0; c < n; ++c) {
+            if (slots[c].phase != SendSlot::kIdle) {
+                ++in_flight;
             }
         }
         // Rotating origin so a core with a permanently full queue cannot starve the others -- a
@@ -895,6 +957,49 @@ void D2H2H2DSocket::sender_loop() {
             }
         }
         send_rr_ = (send_rr_ + 1) % n;
+
+        // THE CREDIT FLUSH, and the reason a receive-only host does not deadlock.
+        //
+        // return_credit() posts an unwaited one-sided word from the SCAN workers, on purpose: a
+        // credit is idempotent and monotonic, and putting a round trip in the middle of the
+        // receive path is exactly what that design avoids. But unwaited is not unflushed. Under
+        // MPI a put with no following synchronisation has no guaranteed completion at all -- it
+        // lands at the next synchronisation call. On a host that is only receiving, the passes
+        // above find no payloads, so nothing above ever flushes, and the peer parks in
+        // credit-wait for a credit sitting in this host's own runtime.
+        //
+        // ON AN IDLE LAP *OR* ON A DEADLINE -- and the deadline is not optional.
+        //
+        // `!progressed` alone was the whole condition, on the reasoning that an idle thread is
+        // about to yield anyway so the flush is free. That holds while the window is small. It
+        // fails as the core count rises: with 64 slots something advances on nearly every lap,
+        // `progressed` is almost never false, and a credit posted by return_credit() can sit
+        // locally complete in this host's runtime indefinitely.
+	// 
+        // The flush also runs once kCreditFlushInterval has elapsed regardless of progress.
+        // That bounds credit latency by wall time rather than by whether this host happens to
+        // find an idle lap, which is the property the receive path actually needs. One clock read
+        // per lap against a lap that already does `n` send_polls is not a cost worth avoiding.
+        const auto credit_now = std::chrono::steady_clock::now();
+        if (!progressed || (credit_now - last_credit_flush_) >= kCreditFlushInterval) {
+            bool flushed_any = false;
+            for (Transport* const tp : peers_.all()) {
+                if (!tp->needs_flush()) {
+                    continue;
+                }
+                flushed_any = true;
+                if (const std::string e = tp->flush(); !e.empty()) {
+                    fail("credit flush: " + e);
+                    transport_failed_.store(true, std::memory_order_release);
+                }
+            }
+            if (flushed_any) {
+                credit_flushes_.fetch_add(1, std::memory_order_relaxed);
+            }
+            // Stamped even when nothing needed flushing, so an endpoint that goes dirty right
+            // after a clean sweep waits one interval rather than being flushed on the next lap.
+            last_credit_flush_ = credit_now;
+        }
 
         if (progressed) {
             continue;
@@ -967,7 +1072,7 @@ void D2H2H2DSocket::append_transport_stats(RunStats& s) const {
 }
 
 void D2H2H2DSocket::dump_transport(std::string& into) const {
-    // WHAT THE TRANSPORT THINKS IS OUTSTANDING. A sender parked in state 2 or 3 is waiting for
+    // A sender parked in state 2 or 3 is waiting for
     // one specific operation, and these say whether the provider was given it (posted), whether
     // anything came back (retired), and whether something came back that belonged to nobody
     // (unmatched). A stall with outstanding=1 and unmatched=0 is a completion the provider never
@@ -1015,6 +1120,11 @@ std::string D2H2H2DSocket::stall_dump(const char* where) const {
       << " home=" << counters_.home_done.load() << " routed_remote=" << counters_.routed_remote.load()
       << " errors=" << counters_.errors.load() << "\n";
     m << "    sender: " << sender_state_.load() << "  (0=idle 1=credit-wait 2=payload 3=notice)\n";
+    // credit_flushes IS THE DISCRIMINATOR for a credit-wait stall: a peer parked short of its
+    // last credit while this number is not advancing means the credits are posted but unflushed,
+    // which is the failure the deadline in sender_loop() exists to prevent. A number that climbs
+    // while the peer still starves points somewhere else entirely -- the scan, or the wire.
+    m << "    credit_flushes=" << credit_flushes_.load(std::memory_order_relaxed) << "\n";
     std::string t;
     dump_transport(t);
     m << t;
@@ -1044,6 +1154,6 @@ std::string D2H2H2DSocket::stall_dump(const char* where) const {
     return m.str();
 }
 
-#endif  // HAS_LIBFABRIC
+#endif  // TT_METAL_HOST_BRIDGE
 
 }  // namespace tt::tt_metal::experimental

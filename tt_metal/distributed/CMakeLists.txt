@@ -61,6 +61,24 @@ else()
     list(APPEND DISTRIBUTED_SRC multihost/single_host_context.cpp)
 endif()
 
+# D2H2H2DSocket -- a device-to-device channel whose middle is two hosts. The host-to-host hop is
+# MPI one-sided RMA and there is no version of the socket without one, so the whole set follows
+# USE_MPI.
+#
+if(USE_MPI)
+    list(
+        APPEND
+        DISTRIBUTED_SRC
+        ${CMAKE_CURRENT_SOURCE_DIR}/D2H2H2DSocket.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/host_clock.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/host_deliver.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/host_region.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/host_scan.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/host_stats.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/host_transport.cpp
+    )
+endif()
+
 add_library(distributed OBJECT ${DISTRIBUTED_SRC})
 
 # Enable unity builds for faster compilation
@@ -84,14 +102,10 @@ target_link_libraries(
 )
 add_dependencies(distributed metalium_GeneratedHeaders)
 
-if(TT_METAL_ENABLE_LIBFABRIC)
-    target_link_libraries(distributed PRIVATE PkgConfig::LIBFABRIC)
-    target_compile_definitions(distributed PRIVATE HAS_LIBFABRIC=1)
-endif()
-
 if(USE_MPI)
     target_link_libraries(distributed PRIVATE OpenMPI::MPI)
     target_compile_definitions(distributed PRIVATE OPEN_MPI="1")
+    target_compile_definitions(distributed PRIVATE TT_METAL_HOST_BRIDGE=1)
 endif()
 
 if(TT_UMD_BUILD_SIMULATION)

@@ -10,104 +10,18 @@
 // sweeps the banks from a work-stealing pool; a host-to-host transport carries the middle
 // hop; the far host writes the last one into L1.
 //
-// THE NAME SPELLS EVERY HOP ON PURPOSE. Each host holds a pair of endpoints against its own
-// device -- one it reads and one it writes -- and the two pairs are joined by a host-to-host
-// link: D2H, H2D, H2H, H2D, D2H. It is not shortened to D2D because D2D already means
-// device-to-device over Tenstorrent's own ethernet fabric (MeshSocket, in these same
-// headers), and the defining property of this path is the opposite -- the host is IN it,
-// twice, because the destination is not in any chip's NOC address space.
-//
 // ---------------------------------------------------------------------------
-// WHERE THIS SITS, AND WHAT IT STILL DEPENDS ON
 //
-// Declared in tt::tt_metal::experimental for review. Note that the sibling socket classes --
-// D2HSocket, H2DSocket, MeshSocket -- are declared in tt::tt_metal::distributed even though
-// their headers live under experimental/sockets/, so if the intent is for this to sit beside
-// them rather than in the experimental namespace proper, this is the line to change.
-//
-// Everything it is built on now lives in this same namespace, in this same directory:
 // HostRegion (the pinned register file and per-core arenas), Deliverer (the H2D leg),
 // Transport (the H2H leg), BankScanner (the work-stealing sweep), PeerTable, and the stats,
 // clock, UVA and wire-layout headers. Nothing in this file reaches outside
 // tt::tt_metal::experimental.
 //
-// THOSE TYPES ARE COPIES, NOT MOVES. tests/t6_host_uva/ still holds the originals in namespace
-// t6_host_uva, because two shipping programs and -- critically -- the bare-metal RISC-V kernels
-// still compile against them. So there are now TWO definitions of the wire contract, and
-// nothing in the tree detects a copy that was missed. See host_uva_layout.hpp here for which
-// half the kernels actually read.
-//
-// WHAT IT DOES NOT OWN, and should not acquire: the producer (a kernel, or a test's stand-in
-// thread), the PASS/FAIL verdict, and the CSV. Those belong to a driver, not to a path.
-//
-// ---------------------------------------------------------------------------
-// ONE CLASS, NO BASE, AND THE TRANSPORT IS REQUIRED
-//
-// In tests/t6_host_uva/host_socket.hpp this type derives from D2H2DSocket, which does three
-// jobs at once: it holds the shared engine, it IS the one-host configuration, and it is the
-// type the driver holds polymorphically. Here there is no base. `Transport&` is a constructor
-// argument rather than an optional member, so a socket named for a five-hop path still cannot
-// be constructed without the hop in the middle -- the guarantee is carried by the absence of
-// a nullable pointer, not by a check. What it gives up is the ability to serve the
-// no-transport case; that case is simply not this class's job.
-//
-// Six things follow, and each REMOVES something that previously had to be explained:
-//
-//   1. NO VIRTUALS AT ALL. The six former seams (deliver_remote, start_transport,
-//      stop_transport, append_transport_stats, dump_transport, return_credit) are ordinary
-//      private methods. Their NAMES are unchanged on purpose, so `grep -c` still lines this
-//      file up against host_socket.cpp and t6_host_uva.cpp.
-//   2. THE open() VTABLE HAZARD IS GONE. host_socket.hpp had to explain that open() cannot
-//      live in the constructor because the pool's callback dispatches through the vtable, and
-//      a virtual call from a base constructor resolves to the base. With no base there is no
-//      such hazard. open() stays separate for the honest reason: it can FAIL, and it reports
-//      why through a string a constructor could only throw.
-//   3. deliver_remote() HAS ONE BODY. The base's refusal went with the base; the routing
-//      switch calls the real thing directly.
-//   4. set_recording() IS ONE METHOD that both flips the gate and forwards it to the
-//      transport, instead of a base method plus an override that calls it.
-//   5. TWO DEAD DECLARATIONS DROPPED. `send_remote()` was declared at host_socket.hpp:436 and
-//      never defined anywhere -- a leftover of the pre-2026-08-28 blocking sender. `tx_mutex_`
-//      was declared and never used; its serialisation moved inside the transport when the
-//      three-threads-one-endpoint bug was fixed. The reasons they existed are recorded here
-//      instead, which is what keeping the unused member was for.
-//   6. ONE BEHAVIOUR FIX. See set_recording() below -- it is the only one in this file.
-//
-// ---------------------------------------------------------------------------
-// WHY THERE IS NO service()
-//
-// A caller-driven non-blocking pass over both directions is the right shape when a single
-// embedded core walks every bank and the host is a one-threaded servant of it. It cannot
-// carry over here: the bank sweep is a work-stealing pool of pinned threads, and the
-// bank-sweep term in `interval = S + F/D` is absent precisely BECAUSE the sweep is parallel.
-// A caller-driven service() would collapse the pool back to one thread and throw away the
-// reason this path exists.
-//
-// So this class owns the pool and exposes a lifecycle -- open/stop -- with the service
-// function as an internal callback. What survives from that other shape is the part about
-// correctness rather than control flow: both directions are serviced by ONE function on the
-// SAME threads, because any arrangement that finishes one direction before starting the other
-// stops at the first iteration with this host waiting for records from cores that are waiting
-// for this host.
-//
-// ---------------------------------------------------------------------------
-// BUILDING
-//
-// The includes are bare names and every one of them is a file in THIS directory, so
-// `finalized/` alone on the include path is enough -- verified by compiling every translation
-// unit here with nothing else on it. Do not add tests/t6_host_uva to the include path as well:
-// the headers there have the same filenames, and a quoted include that resolved to the wrong
-// copy would put two namespaces' worth of the same wire contract into one binary.
-//
-// REQUIRES A HOST-TO-HOST TRANSPORT. The class is a middle hop and there is no version of it
-// without one, so the declaration sits under HAS_LIBFABRIC and the translation
-// unit is empty without it. Do not add a second libfabric probe -- a second thing that can
-// disagree about whether libfabric exists is how the two halves of a pair end up built
-// differently.
 // ---------------------------------------------------------------------------
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
@@ -127,21 +41,6 @@
 #include "tt_metal/distributed/host_uva_layout.hpp"
 
 namespace tt::tt_metal::experimental {
-
-// WHAT THIS CLASS IS BUILT ON, all of it now in this namespace:
-//
-//   HostRegion    the pinned register file + per-core arenas    host_region.hpp
-//   Deliverer     the H2D leg (an H2DSocket on the socket route) host_deliver.hpp
-//   Transport     the H2H leg -- post / wait / try_wait          host_transport.hpp
-//   BankScanner   the work-stealing sweep                        host_scan.hpp
-//   PeerTable     host id -> endpoint                            host_transport.hpp
-//   HostTopology, ClockSync, Job, WorkerStats, RunStats, OpHandle, VolumeLadder, LadderSync
-//
-// Transport is the interesting one for review: it is the only one that is already an
-// ABSTRACTION rather than a concrete type, which makes it the natural place to meet tt-metal's
-// own multi-host plumbing -- DistributedContext is the closest fit, and it covers the
-// bootstrap, rank identity and barrier half cleanly. It does NOT cover the data path: it is
-// message-passing only, with no one-sided put/get anywhere in it, and this hot path is RMA.
 
 // Operand layout. Named rather than indexed at every use site: "operand[2]" appearing in four
 // files is how a producer and a consumer end up disagreeing about which register holds the
@@ -171,8 +70,7 @@ struct SocketConfig {
     bool pin = true;
     bool roundtrip = false;
 
-    // THE TWO SENDER KNOBS, AND THEY ARE INDEPENDENT. `send_window` 0 means unset ->
-    // cores-in-use, the behaviour before the knob existed; `send_blocking` selects
+    // `send_window` 0 means unset -> cores-in-use, the behaviour before the knob existed; `send_blocking` selects
     // post-and-wait and implies a window of 1. The window caps CONCURRENCY; the shape decides
     // whether the thread parks or spins. A window of 1 is NOT the blocking sender -- it gives
     // the blocking sender's concurrency while still spinning in try_wait() and still SKIPPING
@@ -182,8 +80,7 @@ struct SocketConfig {
     bool send_blocking = false;
     bool record_from_start = true;  // false while a warmup is pending
 
-    // MESSAGES THIS SIDE MUST HANDLE BEFORE THE GATE OPENS BY ITSELF. 0 means "the caller owns
-    // the gate" and set_recording() is the only thing that will ever open it.
+    // 0 means "the caller owns the gate" and set_recording() is the only thing that will ever open it.
     //
     // Needed because set_recording() is driven from a PRODUCER loop, which knows the iteration
     // number -- and a side that only receives has no producer loop. Where the roles are split
@@ -228,21 +125,10 @@ struct SocketCounters {
     SocketCounters& operator=(const SocketCounters&) = delete;
 };
 
-#if defined(HAS_LIBFABRIC)
+#if defined(TT_METAL_HOST_BRIDGE)
 
 // ---------------------------------------------------------------------------
-// SYMMETRIC OPERATION IS NATIVE. There is no flag for it, because there is no other way this
-// socket works.
-//
-// The name spells two hosts -- chip A, host A, host B, chip B -- so there are exactly two. One
-// side's cores are sources and the other's are destinations, and that is what lets a core hold
-// ONE L1 buffer at a shared address (`deliver_addr == payload_addr`) instead of two, roughly
-// doubling the payload a core can carry.
-//
-// THE INVARIANT IS PER-CORE, NOT PER-HOST, and saying it that way is what makes it checkable:
-// **a core must never be simultaneously a source and a destination.** Splitting roles by host
-// is merely the crude way to guarantee it. Both consequences are enforced here rather than left
-// to a driver to remember, because a driver that forgets produces a run that passes:
+// Operates with symmetry
 //
 //   open()        refuses unless the topology really is two hosts.
 //   service_tx()  refuses a LOCAL destination. A UVA resolving to this host names a core that
@@ -251,15 +137,20 @@ struct SocketCounters {
 //                 sending, with nothing anywhere reporting it.
 //
 // ---------------------------------------------------------------------------
-// SENDING MUST NOT HAPPEN ON A SCAN THREAD. The send path waits on completions, and a worker
+// Sending must not happen on a scan thread. The send path waits on completions, and a worker
 // inside it is a worker not scanning -- so it cannot DELIVER the peer's inbound traffic, so
 // the peer never returns the credit it is waiting for. At one core the pool has one worker and
 // the stall is total: measured delivered=0 with ~129k scans in 15 s, where an unblocked worker
 // does 100M+. Hence one dedicated sender thread.
 //
-// ONE sender thread, not one per worker: the transport is ONE endpoint with ONE completion
-// queue, already serialised inside itself, so a second thread would add contention rather than
+// ONE sender thread, not one per worker: the transport is ONE endpoint with ONE request table,
+// already serialised inside itself, so a second thread would add contention rather than
 // throughput. Scaling that (an endpoint per worker) is a different measurement.
+//
+// It also keeps the RMA calls single-threaded in practice. MPI_THREAD_MULTIPLE is required and
+// provided, but concurrent one-sided operations on a single window are the least-exercised
+// corner of most runtimes -- so the shape that was chosen for throughput happens to be the one
+// that stays on the well-trodden path, and it should not be traded away casually.
 // ---------------------------------------------------------------------------
 class D2H2H2DSocket {
 public:
@@ -396,10 +287,19 @@ private:
         uint32_t dest_host = 0;
     };
 
-    // A message in flight, per core. Two phases because the payload must have COMPLETED before
-    // its notice is posted -- that is what puts the bytes ahead of the trigger.
+    // A message in flight, per core. Three phases because the payload must be IN THE PEER'S
+    // MEMORY before its notice is posted -- that is what puts the bytes ahead of the trigger.
     struct SendSlot {
-        enum Phase : uint8_t { kIdle = 0, kAwaitPayload = 1, kAwaitNotice = 2 };
+        // kPayloadLocal sits BETWEEN the other two, and it exists because those are two different
+        // facts. MPI_Rput's handle retires when THIS host is done with the TX arena; it promises
+        // nothing about the peer. Only Transport::flush() promises that, and it costs a round
+        // trip with no nonblocking form to hide it behind.
+        //
+        // So the flush is amortised over every slot sitting in this phase at once -- which is why
+        // it is a phase rather than a call inside send_poll(). Flushing where the notice is armed
+        // would put a full round trip on each message; flushing per lap divides one round trip by
+        // the send window. See sender_loop().
+        enum Phase : uint8_t { kIdle = 0, kAwaitPayload = 1, kAwaitNotice = 2, kPayloadLocal = 3 };
         uint8_t phase = kIdle;
         SendReq r{};
         OpHandle payload_op{};
@@ -420,6 +320,17 @@ private:
     bool send_try_start(SendSlot& slot, uint32_t core, WorkerStats& ws, bool rec);
     bool send_poll(SendSlot& slot, WorkerStats& ws, bool rec);
 
+    // Arms the RX notice for a slot the flush pass has just made remotely visible. Split out of
+    // send_poll() because the flush between the two is per-ENDPOINT and per-lap, while this is
+    // per-slot: one flush releases every slot waiting on the same peer.
+    bool send_arm_notice(SendSlot& slot);
+
+    // Retires a slot whose message will not complete. Extracted so the flush pass can fail a
+    // whole endpoint's worth of slots the same way send_poll() fails one -- a message that is
+    // dropped without retiring leaves its producer blocked on tx_done to the drain deadline,
+    // reporting a timeout instead of the error that actually happened.
+    void send_fail_slot(SendSlot& slot);
+
     // ---- construction state ----------------------------------------------
     HostRegion& region_;
     Deliverer* deliverer_ = nullptr;
@@ -436,7 +347,7 @@ private:
     // total, and the gate stops opening the moment a core changes destination.
     std::vector<std::vector<std::atomic<uint64_t>>> credit_out_;  // remote deliveries echoed back
     std::vector<std::atomic<uint64_t>> delivered_per_core_;       // the value rdma_signal carries
-    // ONE DELIVERY AT A TIME PER CORE. The H2D endpoint, its write pointer and the per-core
+    // Single delivery at a time per core. The H2D endpoint, its write pointer and the per-core
     // acked snapshot the delivery wait measures against are all per-core state with NO
     // per-message identity; letting two of a core's receive slots be delivered concurrently by
     // two stealing workers raced all three. A converged end state cannot see a delivery that
@@ -464,7 +375,7 @@ private:
     // ---- the sender -------------------------------------------------------
     std::atomic<bool> transport_failed_{false};
 
-    // ONE QUEUE PER CORE. A destination core has one RX control word, so at most one message
+    // Each core has a single queue. A destination core has one RX control word, so at most one message
     // may be outstanding to it; per-core queues make that STRUCTURAL rather than a check, which
     // is what lets the sender hold a window across cores. It also removes the head-of-line
     // stall where one core's unreturned credit parked every other core's sends.
@@ -482,10 +393,18 @@ private:
     uint32_t send_window_ = 0;
     bool send_blocking_ = false;
 
+    // Credit flush deadline. Owned by the sender thread alone (last_credit_flush_) except for
+    // the counter, which the stall dump reads from another thread. See the credit flush in
+    // sender_loop(): flushing only on an idle lap starves at high core counts, so a deadline
+    // bounds credit latency by wall time instead of by whether this host happens to be idle.
+    static constexpr std::chrono::microseconds kCreditFlushInterval{100};
+    std::chrono::steady_clock::time_point last_credit_flush_{};
+    std::atomic<uint64_t> credit_flushes_{0};
+
     std::thread sender_;
     WorkerStats sender_stats_{};
 };
 
-#endif  // HAS_LIBFABRIC
+#endif  // TT_METAL_HOST_BRIDGE
 
 }  // namespace tt::tt_metal::experimental

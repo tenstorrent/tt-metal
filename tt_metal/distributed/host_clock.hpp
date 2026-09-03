@@ -25,6 +25,8 @@
 // deciding whether a cross-host hop number can be believed.
 #pragma once
 
+#include <tt-metalium/distributed_context.hpp>
+
 #include <cstdint>
 #include <string>
 
@@ -61,6 +63,16 @@ struct ClockSync {
 // opposite values of `initiator` -- one probes, the other answers. Deriving it from
 // is_server rather than from a separate flag is what keeps the two from both probing and
 // deadlocking.
-ClockSync sync_clocks(int oob_fd, bool initiator, bool same_host, uint32_t samples = 64);
+// The probe exchange runs over the distributed context, not over a socket: the OOB bootstrap
+// this used to borrow an fd from went with libfabric, and MPI has no fd to hand out.
+//
+// `peer` is the rank to sync against. `initiator` must be true on exactly one side of the pair
+// and false on the other -- both sides initiating deadlocks, neither produces no samples.
+ClockSync sync_clocks(
+    const tt::tt_metal::distributed::multihost::ContextPtr& ctx,
+    tt::tt_metal::distributed::multihost::Rank peer,
+    bool initiator,
+    bool same_host,
+    uint32_t samples = 64);
 
 }  // namespace tt::tt_metal::experimental

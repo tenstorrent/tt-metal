@@ -31,6 +31,9 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include "tt_metal/distributed/hd_socket_descriptor.hpp"
+// HDSocketConnectorState -- carries the SECOND bytes_sent, the host-side one in the shm that
+// push_bytes() maintains and ~H2DSocket()'s barrier reads back. See commit_to_device().
+#include "tt_metal/distributed/hd_socket_connector_state.hpp"
 // receiver_socket_md -- its first field is bytes_sent, the word notify_receiver() writes.
 #include "tt_metal/hw/inc/hostdev/socket.h"
 
@@ -607,6 +610,7 @@ public:
         ring_bytes_.assign(cores_, 0);
         cfg_addr_.assign(cores_, 0);
         sent_.assign(cores_, 0);
+        connector_.assign(cores_, nullptr);
         for (uint32_t c = 0; c < cores_; ++c) {
             const auto d = sockets_[c]->populate_descriptor();
             // shm_size comes off the descriptor rather than fstat so that a layout change
@@ -654,6 +658,13 @@ public:
             ring_[c] = static_cast<uint8_t*>(p) + d.data_offset;
             ring_bytes_[c] = d.shm_size;
             cfg_addr_[c] = d.config_buffer_address;
+            // The connector state rides in the SAME shm we just mapped, at an offset the
+            // descriptor publishes -- so aliasing the ring aliases this too, and commit_to_device()
+            // can keep the host-side counter honest without reaching into H2DSocket's privates.
+            // Taken off the DESCRIPTOR rather than recomputed from fifo_size for the same reason
+            // fifo_size is: the socket is the authority on the layout it actually built.
+            connector_[c] = reinterpret_cast<tt::tt_metal::distributed::HDSocketConnectorState*>(
+                static_cast<uint8_t*>(p) + d.connector_state_offset);
 
             // Without this the overlay is only half
             // done: provision() would still zero, and reset_banks_and_arenas() would still
@@ -701,6 +712,9 @@ public:
             }
             ring_[c] = nullptr;
             ring_bytes_[c] = 0;
+            // Points into the mapping just replaced above, so it dies with the ring or it
+            // dangles into an anonymous page.
+            connector_[c] = nullptr;
         }
     }
 
@@ -714,6 +728,30 @@ public:
         static_assert(offsetof(receiver_socket_md, bytes_sent) == 0,
                       "bytes_sent moved within receiver_socket_md; this write targets the wrong word");
         sent_[core] += bytes;
+
+        // THERE ARE TWO bytes_sent, AND write() ADVANCES BOTH. This reimplemented only the
+        // device-side one for a long time, which is a bug that hides completely in the data path
+        // and then costs a minute of teardown:
+        //
+        //   push_bytes()      h2d_socket.cpp:674  connector_state_->bytes_sent = bytes_sent_
+        //                                         -- HOST copy, in the shm
+        //   notify_receiver() h2d_socket.cpp:680  pcie_writer(..., config_buffer + offsetof(...))
+        //                                         -- DEVICE copy, in L1, what the kernel polls
+        //
+        // The kernel only needs the device copy, so delivery was correct and measured 381 MB/s.
+        // But ~H2DSocket() calls barrier(), and barrier() reads back the HOST copy only. With it
+        // stranded at 0 while the device dutifully acked every page, the wait condition is
+        // `bytes_sent_ - bytes_acked != 0` on unsigned words -- 0 minus everything, which wraps
+        // and can never reach zero. Measured 2026-09-02 at 110 cores: 41 sockets x a 1 s timeout
+        // after a passing run, reporting "Bytes sent: 0, Bytes acknowledged: 86769664" (which is
+        // exactly --iters x page_size, i.e. the device had pulled all of it).
+        //
+        // Host copy FIRST, device copy second: the device write is what releases the kernel, so
+        // it stays the last store here, exactly as it was.
+        if (connector_[core] != nullptr) {
+            connector_[core]->bytes_sent = sent_[core];
+        }
+
         const auto& v = virt_[core];
         tt::tt_metal::distributed::noc_write_immediate(
             device_id_, static_cast<uint32_t>(v.x), static_cast<uint32_t>(v.y),
@@ -747,6 +785,8 @@ private:
     std::vector<size_t> ring_bytes_;
     std::vector<uint32_t> cfg_addr_;
     std::vector<uint32_t> sent_;
+    // Into the aliased shm, one per core; null when the ring is not aliased or after teardown.
+    std::vector<tt::tt_metal::distributed::HDSocketConnectorState*> connector_;
 };
 
 }  // namespace

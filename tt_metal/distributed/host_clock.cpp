@@ -3,8 +3,6 @@
 
 #include "host_clock.hpp"
 
-#include <sys/socket.h>
-
 #include <cerrno>
 #include <cstring>
 #include <sstream>
@@ -20,20 +18,22 @@ struct Probe {
     uint64_t peer_now;  // filled by the responder
 };
 
-bool xfer(int fd, void* buf, size_t len, bool sending) {
-    auto* p = static_cast<uint8_t*>(buf);
-    size_t done = 0;
-    while (done < len) {
-        const ssize_t n = sending ? ::send(fd, p + done, len - done, 0) : ::recv(fd, p + done, len - done, 0);
-        if (n <= 0) {
-            if (n < 0 && errno == EINTR) {
-                continue;
-            }
-            return false;
-        }
-        done += static_cast<size_t>(n);
+using tt::tt_metal::distributed::multihost::ContextPtr;
+using tt::tt_metal::distributed::multihost::Rank;
+using tt::tt_metal::distributed::multihost::Tag;
+
+// A tag of its own, so a probe cannot be matched by anything else the context carries.
+constexpr int kClockTag = 0x7433;
+
+// The context's send/recv are already all-or-nothing, so the partial-transfer loop the socket
+// version needed is gone with the socket.
+void xfer(const ContextPtr& ctx, void* buf, size_t len, Rank peer, bool sending) {
+    ttsl::Span<std::byte> span(static_cast<std::byte*>(buf), len);
+    if (sending) {
+        ctx->send(span, peer, Tag{kClockTag});
+    } else {
+        ctx->recv(span, peer, Tag{kClockTag});
     }
-    return true;
 }
 
 }  // namespace
@@ -51,7 +51,7 @@ std::string ClockSync::describe() const {
     return o.str();
 }
 
-ClockSync sync_clocks(int oob_fd, bool initiator, bool same_host, uint32_t samples) {
+ClockSync sync_clocks(const ContextPtr& ctx, Rank peer, bool initiator, bool same_host, uint32_t samples) {
     ClockSync s;
     s.same_host = same_host;
 
@@ -65,8 +65,8 @@ ClockSync sync_clocks(int oob_fd, bool initiator, bool same_host, uint32_t sampl
         return s;
     }
 
-    if (oob_fd < 0) {
-        s.error = "no bootstrap socket";
+    if (!ctx) {
+        s.error = "no distributed context";
         return s;
     }
 
@@ -81,14 +81,8 @@ ClockSync sync_clocks(int oob_fd, bool initiator, bool same_host, uint32_t sampl
         for (uint32_t i = 0; i < samples; ++i) {
             Probe p{i, 0};
             const uint64_t t0 = now_ns();
-            if (!xfer(oob_fd, &p, sizeof(p), true)) {
-                s.error = "sending probe failed";
-                return s;
-            }
-            if (!xfer(oob_fd, &p, sizeof(p), false)) {
-                s.error = "receiving probe reply failed";
-                return s;
-            }
+            xfer(ctx, &p, sizeof(p), peer, true);
+            xfer(ctx, &p, sizeof(p), peer, false);
             const uint64_t t2 = now_ns();
             if (t2 < t0) {
                 continue;
@@ -116,12 +110,9 @@ ClockSync sync_clocks(int oob_fd, bool initiator, bool same_host, uint32_t sampl
         // Tell the responder the result so BOTH sides can convert peer timestamps, and
         // so both print the same numbers. A run where the two hosts disagree about the
         // offset would produce two reports that cannot be reconciled.
-        if (!xfer(oob_fd, &s.offset_ns, sizeof(s.offset_ns), true) ||
-            !xfer(oob_fd, &s.uncertainty_ns, sizeof(s.uncertainty_ns), true) ||
-            !xfer(oob_fd, &s.min_rtt_ns, sizeof(s.min_rtt_ns), true)) {
-            s.error = "publishing offset to peer failed";
-            s.valid = false;
-        }
+        xfer(ctx, &s.offset_ns, sizeof(s.offset_ns), peer, true);
+    xfer(ctx, &s.uncertainty_ns, sizeof(s.uncertainty_ns), peer, true);
+    xfer(ctx, &s.min_rtt_ns, sizeof(s.min_rtt_ns), peer, true);
         return s;
     }
 
@@ -130,24 +121,16 @@ ClockSync sync_clocks(int oob_fd, bool initiator, bool same_host, uint32_t sampl
     // asymmetry the estimate assumes away.
     for (uint32_t i = 0; i < samples; ++i) {
         Probe p{};
-        if (!xfer(oob_fd, &p, sizeof(p), false)) {
-            s.error = "receiving probe failed";
-            return s;
-        }
+        xfer(ctx, &p, sizeof(p), peer, false);
         p.peer_now = now_ns();
-        if (!xfer(oob_fd, &p, sizeof(p), true)) {
-            s.error = "echoing probe failed";
-            return s;
-        }
+        xfer(ctx, &p, sizeof(p), peer, true);
     }
 
     int64_t offset = 0;
     uint64_t unc = 0, rtt = 0;
-    if (!xfer(oob_fd, &offset, sizeof(offset), false) || !xfer(oob_fd, &unc, sizeof(unc), false) ||
-        !xfer(oob_fd, &rtt, sizeof(rtt), false)) {
-        s.error = "receiving offset from peer failed";
-        return s;
-    }
+    xfer(ctx, &offset, sizeof(offset), peer, false);
+    xfer(ctx, &unc, sizeof(unc), peer, false);
+    xfer(ctx, &rtt, sizeof(rtt), peer, false);
     // NEGATED. The initiator computed "add this to a responder timestamp to get initiator
     // time"; from the responder's side the conversion runs the other way. Getting this
     // backwards produces an offset of exactly the wrong sign, which shows up as one host
