@@ -394,3 +394,27 @@ def test_argmax_nan_and_signed_zero(device, dtype, row):
 
     assert actual_idx == expected_idx, f"Row {row} ({dtype}): expected {expected_idx}, got {actual_idx}"
 
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+def test_argmax_tile_layout_with_nan_and_signed_zero(device, dtype, layout):
+    """Verifies tile-layout and multicore reduction paths with NaNs and signed zeros."""
+    torch_tensor = torch.zeros((32, 64), dtype=dtype)
+    torch_tensor[0, 5] = float("nan")
+    torch_tensor[1, 0] = -0.0
+    torch_tensor[1, 1] = 0.0
+    torch_tensor[2, 10] = 3.0
+    torch_tensor[2, 20] = float("nan")
+    torch_tensor[3, 0] = 5.0
+    torch_tensor[3, 1] = 5.0
+
+    expected = torch.argmax(torch_tensor, dim=-1, keepdim=False)
+
+    ttnn_dtype = ttnn.float32 if dtype == torch.float32 else ttnn.bfloat16
+    ttnn_tensor = ttnn.from_torch(torch_tensor, ttnn_dtype, layout=layout, device=device)
+
+    out = ttnn.argmax(ttnn_tensor, dim=-1, keepdim=False)
+    actual = ttnn.to_torch(ttnn.from_device(out)).to(torch.int64)
+
+    assert torch.equal(actual, expected), f"Mismatch for dtype {dtype}, layout {layout}"
+
