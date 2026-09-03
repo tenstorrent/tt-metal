@@ -936,6 +936,21 @@ def _run_spec_decode(
         )
     logger.info(f"Verify iterations: {n_iters} ({ms_per_iter:.2f} ms/iter)")
     logger.info(f"Decode: {ms_per_token:.2f} ms/token @ {tok_s_u:.2f} tok/s/user " f"({tok_s:.2f} tok/s throughput)")
+    if spec._verify_time_s > 0 or spec._draft_time_s > 0:
+        logger.info(
+            f"Target verify: {spec._verify_time_s * 1000.0:.1f} ms total "
+            f"({spec._verify_time_s * 1000.0 / n_iters:.2f} ms/iter)"
+        )
+        logger.info(
+            f"MTP (drafter) parallel-token generation: {spec._draft_time_s * 1000.0:.1f} ms total "
+            f"({spec._draft_time_s * 1000.0 / n_iters:.2f} ms/iter, {draft_len} tokens/iter)"
+        )
+    else:
+        logger.info(
+            "Target-verify/MTP time split not available: draft+verify ran as ONE fused Metal "
+            "trace replay per iteration (GEMMA4_SPEC_TRACE=1/enable_trace), so the two phases "
+            "aren't separately observable on the host. Set GEMMA4_SPEC_TRACE=0 for the breakdown."
+        )
     assert n_tokens > 0, "speculative decode produced no tokens"
     return generated, accepts
 
@@ -1106,6 +1121,22 @@ def _run_spec_decode_batched(
         f"Decode: {steady_s:.2f}s steady @ {tok_s:.2f} tok/s aggregate, {tok_s / B:.2f} tok/s/user "
         f"({'traced' if spec._use_trace else 'untraced'})"
     )
+    n_batched_iters = max(max((len(a) for a in accepts), default=0), 1)
+    if spec._verify_time_s > 0 or spec._draft_time_s > 0:
+        logger.info(
+            f"Target verify: {spec._verify_time_s * 1000.0:.1f} ms total "
+            f"({spec._verify_time_s * 1000.0 / n_batched_iters:.2f} ms/iter)"
+        )
+        logger.info(
+            f"MTP (drafter) parallel-token generation: {spec._draft_time_s * 1000.0:.1f} ms total "
+            f"({spec._draft_time_s * 1000.0 / n_batched_iters:.2f} ms/iter, {draft_len} tokens/iter/user)"
+        )
+    else:
+        logger.info(
+            "Target-verify/MTP time split not available: draft+verify ran as ONE fused Metal "
+            "trace replay per iteration (GEMMA4_SPEC_TRACE=1/enable_trace), so the two phases "
+            "aren't separately observable on the host. Set GEMMA4_SPEC_TRACE=0 for the breakdown."
+        )
     assert total_tokens > 0, "batched speculative decode produced no tokens"
     return outs, accepts
 
