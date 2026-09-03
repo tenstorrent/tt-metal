@@ -34,6 +34,7 @@ public:
             const uint32_t page_stride = accessor.contiguous_page_stride();
             run_steps_ = (stride_ % page_stride == 0) ? stride_ / page_stride : 0;
             initialize_from_page_id(start_page_id);
+            refresh_run(start_page_id);
             update_current_page();
         }
     }
@@ -62,6 +63,7 @@ public:
             current_noc_addr += accessor.get_aligned_page_size() * run_steps_;
         } else {
             initialize_from_page_id(current_page_id);
+            refresh_run(current_page_id);
         }
         update_current_page();
         return *this;
@@ -87,6 +89,7 @@ public:
 
         // For large steps or when crossing many boundaries, reinitialize from page_id
         initialize_from_page_id(current_page_id);
+        refresh_run(current_page_id);
         update_current_page();
         return *this;
     }
@@ -131,10 +134,11 @@ private:
 
     void update_current_page() { current_page = Page(current_noc_addr, current_page_id); }
 
-    void initialize_from_page_id(uint32_t page_id) {
-        current_noc_addr = accessor.get_noc_addr(page_id, 0, noc);
-        // Dead when the fast path can never fire. The ctor sets run_steps_ before the first call.
-        if (run_steps_ != 0) {
+    // Keep num_contiguous_pages() out of this function: inlining it here costs ~2x per page.
+    void initialize_from_page_id(uint32_t page_id) { current_noc_addr = accessor.get_noc_addr(page_id, 0, noc); }
+
+    void refresh_run(uint32_t page_id) {
+        if (run_steps_ != 0) {  // at 0 the count is never read
             contiguous_pages_left_ = accessor.num_contiguous_pages(page_id);
         }
     }

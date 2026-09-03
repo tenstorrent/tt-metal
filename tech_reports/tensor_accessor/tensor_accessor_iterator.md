@@ -10,7 +10,7 @@ The pages iterator allows you to iterate over pages in a tensor within a given r
 
 ### Performance Considerations 🚀
 - For interleaved tensors, performance is identical to just iterating over page IDs and calling `TA.get_noc_addr(...)` for each of them.
-- For sharded tensors, performance is better with the iterator since its state allows skipping some expensive address computations. The exception is a tensor whose shard is one page wide (what row-major width- and block-sharded tensors give): consecutive page IDs are not adjacent in memory there, so the iterator does not help.
+- For sharded tensors, performance is better with the iterator since its state allows skipping some expensive address computations.
 
 ### Creation ⚙️
 ```c++
