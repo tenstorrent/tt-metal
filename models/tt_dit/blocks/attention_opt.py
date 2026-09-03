@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING
 
 import torch
@@ -18,6 +19,13 @@ from ..layers.normalization import DistributedRMSNorm
 from ..utils.matmul import get_matmul_config, get_matmul_core_grid
 from ..utils.mochi import get_rot_transformation_mat
 from ..utils.padding import PaddingConfig, pad_weight_tensor
+
+# DIAGNOSTIC (probe branch only): apply the attention output projection's gated residual as a
+# separate ttnn.addcmul instead of fusing it into the matmul epilogue. addcmul_scalar defaults to
+# 1.0, so `addcmul_a + 1.0 * result * addcmul_b` is exactly ttnn.addcmul(a, result, b). Note this
+# also moves the Ring path onto its addcmul_a-is-None sub-branch, so it swaps two things at once;
+# read it as "is the gated residual the problem", not "is one specific op the problem".
+_UNFUSE_ATTN_OUT = os.environ.get("FLUX2_DEBUG_UNFUSE_ATTN_OUT") == "1"
 from ..utils.substate import pop_substate
 
 if TYPE_CHECKING:
@@ -663,26 +671,38 @@ class Attention(Module):
 
         spatial = ttnn.transformer.concatenate_heads(spatial)
         if self.to_out is not None:
-            spatial = self.to_out(
-                x=spatial,
-                addcmul_a=addcmul_spatial_residual,
-                addcmul_b=addcmul_spatial_gate,
-                parallel_config=self.parallel_config,
-                core_grid=self.get_core_grid(spatial.shape[-2], self.mesh_device.compute_with_storage_grid_size()),
-            )
+            core_grid = self.get_core_grid(spatial.shape[-2], self.mesh_device.compute_with_storage_grid_size())
+            if _UNFUSE_ATTN_OUT and addcmul_spatial_residual is not None:
+                spatial = self.to_out(x=spatial, parallel_config=self.parallel_config, core_grid=core_grid)
+                spatial = ttnn.addcmul(addcmul_spatial_residual, spatial, addcmul_spatial_gate)
+            else:
+                spatial = self.to_out(
+                    x=spatial,
+                    addcmul_a=addcmul_spatial_residual,
+                    addcmul_b=addcmul_spatial_gate,
+                    parallel_config=self.parallel_config,
+                    core_grid=core_grid,
+                )
 
         if sequence_2 is not None and sequence_2.shape[2] > 0:
             sequence_2 = ttnn.transformer.concatenate_heads(sequence_2)
             if self.to_add_out is not None:
-                sequence_2 = self.to_add_out(
-                    x=sequence_2,
-                    addcmul_a=addcmul_prompt_residual,
-                    addcmul_b=addcmul_prompt_gate,
-                    parallel_config=self.parallel_config,
-                    core_grid=self.get_core_grid(
-                        sequence_2.shape[-2], self.mesh_device.compute_with_storage_grid_size()
-                    ),
+                add_core_grid = self.get_core_grid(
+                    sequence_2.shape[-2], self.mesh_device.compute_with_storage_grid_size()
                 )
+                if _UNFUSE_ATTN_OUT and addcmul_prompt_residual is not None:
+                    sequence_2 = self.to_add_out(
+                        x=sequence_2, parallel_config=self.parallel_config, core_grid=add_core_grid
+                    )
+                    sequence_2 = ttnn.addcmul(addcmul_prompt_residual, sequence_2, addcmul_prompt_gate)
+                else:
+                    sequence_2 = self.to_add_out(
+                        x=sequence_2,
+                        addcmul_a=addcmul_prompt_residual,
+                        addcmul_b=addcmul_prompt_gate,
+                        parallel_config=self.parallel_config,
+                        core_grid=add_core_grid,
+                    )
 
         return spatial, sequence_2
 

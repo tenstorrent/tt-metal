@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING
 
 import ttnn
@@ -331,6 +332,12 @@ class TransformerBlock(Module):
         )
 
         is_ring = self.ccl_manager.topology == ttnn.Topology.Ring
+        # DIAGNOSTIC (probe branch only): route the feedforward's gated residual through the
+        # non-fused branch below even on Ring -- all_gather + ff + plain ttnn.addcmul, the same
+        # path Linear topology already takes and which cannot be wrong. Isolates the addcmul
+        # fused into minimal_matmul_strided_reduce_scatter_async as an error source.
+        if os.environ.get("FLUX2_DEBUG_UNFUSE_FF") == "1":
+            is_ring = False
 
         # NOTE: workaround - addcmul is less accurate with fp32 gate input
         spatial_gate_attn = as_bf16(spatial_gate_attn)

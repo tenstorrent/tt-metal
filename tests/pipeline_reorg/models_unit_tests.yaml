@@ -1124,47 +1124,50 @@
 # matches the machine, so this command and the QuietBox one are identical apart from the
 # multihost launcher and the env below.
 - name: TT-DiT Flux.2-dev multihost unit tests
+  # PROBE BRANCH ONLY -- this cmd is an isolation matrix, not a CI leg.
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886
-    # FLUX.2-dev is staged on the yyz4 mount the QuietBox uses, not on this one, so the first
-    # runs here still need the hub. Switch to HF_HUB_OFFLINE=1 (as the LTX legs do) once the
-    # checkpoint is present under /mnt/models/huggingface.
+    unset TT_METAL_WATCHER
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1
     export HF_HOME=/mnt/models/huggingface
-    # $HOME is /home/user on the exabox runner and persists, unlike the containerised
-    # bh_quietbox_2 legs where it is wiped between jobs. Matches the LTX-2.3 bh_sc1 leg.
     export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
     export TT_MESH_ID=0
     export TT_MESH_HOST_RANK=0
     export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/models/tt_dit/tests/models/flux2/scaleout_configs/single_galaxy/mesh_graph_descriptor.textproto"
-    # Every leg runs and the job fails if any of them did -- same reason as the QuietBox entry,
-    # and the same shape the LTX-2.3 bh_sc1 leg uses.
     rc=0
-    run() { mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" python3 -m pytest -rs "$@" || rc=1; }
-    # Cheapest first. The two transformer parametrizations get a process each: each loads the full
-    # 32B torch reference checkpoint, and two in one process is an OOM kill on 4 chips
-    # (run 33667518970). They share one TT cache key, so the second is cheap once the first ran.
-    run --timeout 600 models/tt_dit/tests/models/flux2/test_vae_flux2.py
-    run --timeout 1200 models/tt_dit/tests/models/flux2/test_prompt_encoder.py::test_encode
-    # Ring topology (4x8) is not affected by the ColParallelLinear addcmul drop, which is why
-    # run 33689082073 gets PCC 99.9820% on single_blocks here against 0.3185% at 2x2 Linear.
-    # all_blocks still fails, at 70.8769%: the second defect in 92919ba7f5d -- the double block
-    # built without per_head_norm -- is a constructor argument, so it is topology-independent.
-    # single_blocks keeps only one double block and barely accumulates the error; all_blocks
-    # runs every one of them. Both cases go green when that fix lands.
-    run --timeout 1500 models/tt_dit/tests/models/flux2/test_transformer_flux2.py::test_transformer -k all_blocks
-    run --timeout 900 models/tt_dit/tests/models/flux2/test_transformer_flux2.py::test_transformer -k single_blocks
+    # Declare the diagnostic flags off, and forward them explicitly with -x: a bare env prefix
+    # reaches mpirun's own environment, but relying on the rank inheriting it is an assumption
+    # this run is too expensive to make. Echoed per invocation so the log proves what was set.
+    export FLUX2_DEBUG_UNFUSE_FF=0
+    export FLUX2_DEBUG_UNFUSE_ATTN_OUT=0
+    run() {
+      echo "    flags: UNFUSE_FF=$FLUX2_DEBUG_UNFUSE_FF UNFUSE_ATTN_OUT=$FLUX2_DEBUG_UNFUSE_ATTN_OUT"
+      mpirun -np 1 --bind-to none --tag-output \
+        -x FLUX2_DEBUG_UNFUSE_FF -x FLUX2_DEBUG_UNFUSE_ATTN_OUT \
+        --wdir "${TT_METAL_HOME}" python3 -m pytest -rs "$@" || rc=1
+    }
+    XF=models/tt_dit/tests/models/flux2/test_transformer_flux2.py::test_transformer
+    # single_blocks at 4x8 Ring is a ~1 min readout that still carries the fingerprint: with the
+    # fix it sits at RMSE/sigma 7.0% against 0.9% for the VAE and 1.6% for the encoder. Sweep the
+    # two Ring-only fused addcmul paths against it, cheaply, before spending a long all_blocks run.
+    echo "=== [1/6] single_blocks baseline (both fused) ==="
+    run --timeout 400 "$XF" -k "single_blocks and bh_4x8_ring"
+    echo "=== [2/6] single_blocks, FF unfused ==="
+    FLUX2_DEBUG_UNFUSE_FF=1 run --timeout 400 "$XF" -k "single_blocks and bh_4x8_ring"
+    echo "=== [3/6] single_blocks, attention out-proj unfused ==="
+    FLUX2_DEBUG_UNFUSE_ATTN_OUT=1 run --timeout 400 "$XF" -k "single_blocks and bh_4x8_ring"
+    echo "=== [4/6] single_blocks, both unfused ==="
+    FLUX2_DEBUG_UNFUSE_FF=1 FLUX2_DEBUG_UNFUSE_ATTN_OUT=1 run --timeout 400 "$XF" -k "single_blocks and bh_4x8_ring"
+    # Confirm at scale: all_blocks is where the failure is visible as a PCC miss (75.80% vs 99.6%).
+    echo "=== [5/6] all_blocks, both unfused ==="
+    FLUX2_DEBUG_UNFUSE_FF=1 FLUX2_DEBUG_UNFUSE_ATTN_OUT=1 run --timeout 800 "$XF" -k "all_blocks and bh_4x8_ring"
+    echo "=== [6/6] all_blocks, FF unfused only ==="
+    FLUX2_DEBUG_UNFUSE_FF=1 run --timeout 800 "$XF" -k "all_blocks and bh_4x8_ring"
     exit $rc
   model: flux.2-dev
   model_family: Flux
   skus:
     bh_sc1:
-      # Measured on run 33689082073: VAE 2m06s, prompt encoder 7m41s, transformer all_blocks
-      # 9m51s, single_blocks 58s -- 20m37s of pytest, 31m45s of job. Far cheaper than the
-      # QuietBox leg: 32 chips, and the HF weights were already staged on this mount (every
-      # "Fetching N files" was an instant cache hit). Above the sum of the pytest --timeouts
-      # (70 min) so a hang fails cleanly rather than being killed by the runner.
       timeout: 75
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
