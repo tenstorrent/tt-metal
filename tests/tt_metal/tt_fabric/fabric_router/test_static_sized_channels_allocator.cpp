@@ -55,7 +55,7 @@ TEST(FabricStaticSizedChannelsAllocatorTest, MeshAssignsStrandedSlotsToLocalWork
 }
 
 TEST(FabricStaticSizedChannelsAllocatorTest, MeshCapsLocalWorkerInjectionDepth) {
-    // Worker injection depth stays capped at 127 no matter how much buffering space is available.
+    // Worker injection depth stays capped no matter how much buffering space is available.
     constexpr size_t channel_buffer_size = 14432;
     constexpr size_t available_space = channel_buffer_size * 10000;
     constexpr std::array<size_t, builder_config::MAX_NUM_VCS> sender_channels = {4, 3, 0};
@@ -71,7 +71,7 @@ TEST(FabricStaticSizedChannelsAllocatorTest, MeshCapsLocalWorkerInjectionDepth) 
         available_space,
         memory_regions);
 
-    EXPECT_EQ(allocator.get_sender_channel_number_of_slots(0, 0), 127);
+    EXPECT_EQ(allocator.get_sender_channel_number_of_slots(0, 0), MAX_CHANNEL_BUFFER_SLOTS);
 }
 
 TEST(FabricStaticSizedChannelsAllocatorTest, RingKeepsUniformChannelDepth) {
