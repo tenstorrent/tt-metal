@@ -690,6 +690,7 @@ static uint8_t demote_pos[kMaxCores];  // ship-list positions demoted this sweep
 static uint32_t tails_seen[kMaxCores];
 static uint32_t n_list;
 static uint32_t n_probe;
+static uint32_t acked_seen;  // direct push: the downstream's bytes_acked as last read
 static uint32_t n_demote;
 static uint32_t sweep_peak;
 static bool sweep_grew;
@@ -818,16 +819,16 @@ static FORCE_INLINE bool emit_slots(
         pump.rebalance();
     } else {
         staged_store_fence();
-        // Credit only returns for bytes the host has been told about, so a FIFO without room is notified before
-        // the wait; otherwise bytes_sent goes out once per sweep, as the pump's does.
-        if (pump.notify_pending) {
-            invalidate_l1_cache();
-            if (sender.downstream_fifo_total_size - (sender.bytes_sent - *pump.acked_) < bytes) {
-                pump.notify();
+        // bytes_acked only advances, so a copy that shows room is still right; it is re-read (an L1 invalidate the
+        // next batch's record reads pay for) only when it does not. Credit only returns for bytes the host has been
+        // told about, so a FIFO without room is notified before the wait; otherwise bytes_sent goes out once per
+        // sweep, as the pump's does.
+        if (sender.downstream_fifo_total_size - (sender.bytes_sent - acked_seen) < bytes) {
+            pump.notify();
+            if (!socket_reserve_pages(sender, bytes / kPageBytes, stop, kernel_profiler::kRelayStopRelease)) {
+                return true;
             }
-        }
-        if (!socket_reserve_pages(sender, bytes / kPageBytes, stop, kernel_profiler::kRelayStopRelease)) {
-            return true;
+            acked_seen = *pump.acked_;
         }
         push_fifo(sender, base, sender.write_ptr, raw0);
         if (len1 != 0) {
@@ -870,6 +871,7 @@ void kernel_main() {
     // Statics persist across launches, so everything the loop trusts is re-initialised.
     n_list = 0;
     n_probe = num_cores;
+    acked_seen = 0;
     for (uint32_t i = 0; i < num_cores; i++) {
         probe_list[i] = static_cast<uint8_t>(i);
     }
