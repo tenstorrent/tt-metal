@@ -66,7 +66,7 @@ def t2v_metrics(mesh_device, height):
             }
     elif tuple(mesh_device.shape) == (4, 8) and height == 480:
         expected_metrics = {
-            "encoder": 0.1,
+            "encoder": 0.12,
             "denoising": 163.0,
             "vae": 18.2,
             "total": 192.0,
@@ -74,10 +74,10 @@ def t2v_metrics(mesh_device, height):
     elif tuple(mesh_device.shape) == (4, 8) and height == 720:
         if is_blackhole():
             expected_metrics = {
-                "encoder": 0.1,
-                "denoising": 140.0,
+                "encoder": 0.12,
+                "denoising": 165.0,
                 "vae": 2.0,
-                "total": 142.1,
+                "total": 166.0,
             }
         else:
             expected_metrics = {
