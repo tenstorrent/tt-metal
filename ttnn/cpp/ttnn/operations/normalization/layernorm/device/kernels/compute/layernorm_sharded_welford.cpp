@@ -31,7 +31,7 @@
  *     one or more rows of the tensor (the number of rows each core
  *     is assigned is `num_tiles_per_allgather_worker`)
  *   - Each core computes its partial mean and variance of its slices
- *     for all rows it is assigned (using Welford's algorithm) and pushes
+ *     for all rows it is assigned (using stable two-pass statistics) and pushes
  *     the interleaved mean and variance results to the partial buffer.
  *     This produces 1 mean tile and 1 variance tile per tile row
  *   - The reader kernels populate the external buffer with the core's
