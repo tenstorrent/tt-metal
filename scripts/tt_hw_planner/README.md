@@ -1,6 +1,6 @@
 # Getting Started with tt_hw_planner
 
-New here? Start with this. It is the single doc for the tool: what it does, how to set it up, and every command and flag you need.
+New here? Start with this. For every internal stage, flag, and design detail, see **`README.md`** next to this file.
 
 ## What this tool does
 You have an AI model on HuggingFace. You want it to **run on Tenstorrent hardware, correctly and fast**. Normally an engineer would rewrite the whole model by hand for the chip — weeks of work. This tool does that automatically: it rewrites the model piece by piece, checks each piece gives the same answers as the original, and then tunes it for speed. You mostly just start it and wait.
@@ -244,8 +244,7 @@ Once a model runs correctly, `optimize` profiles it on the device and climbs the
 
 > **Important — one-time precondition for `optimize`.** For an existing model, `optimize` runs in a throwaway git **worktree**, which is a *clean checkout of your current branch* — it only sees **committed** files. So before you run it:
 > 1. Be on the branch that has the **`tt_hw_planner` tool committed** (`scripts/tt_hw_planner/` **and** `models/experimental/perf_automation/`) — e.g. check out the tool's branch.
-> 2. Make sure the **model's code is committed on that same branch** — commit the model directory
->    before the run, so the worktree contains it and REVERT has a clean baseline to return to.
+> 2. Make sure the **model's code is committed on that same branch** — bring the modelbaseline profile.
 >
 > If the tool or the model is only *uncommitted/untracked* on the branch you run from, the worktree won't contain it and the run fails before profiling. (This doesn't apply to `--in-place`, or to a model this tool brought up — those edit in place.)
 
