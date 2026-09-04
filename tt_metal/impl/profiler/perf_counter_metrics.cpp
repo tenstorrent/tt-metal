@@ -85,7 +85,7 @@ double global_value_sum(const Pivot& pivot, uint16_t type) {
 bool any_core_has(const Pivot& pivot, uint16_t type) {
     for (const auto& [uid, op] : pivot) {
         for (const auto& [core, cc] : op) {
-            if (cc.count(type)) {
+            if (cc.contains(type)) {
                 return true;
             }
         }
@@ -228,7 +228,7 @@ public:
         active_.insert(col);
     }
 
-    bool active(const std::string& col) const { return active_.count(col) > 0; }
+    bool active(const std::string& col) const { return active_.contains(col); }
 
     PerfCounterColumns finalize(const std::vector<std::string>& canonical_order) {
         PerfCounterColumns out;
