@@ -376,124 +376,6 @@ sampling-lane state, the upstream-filed contamination defect) continued
 across further sessions before the final evidence-collection pass. That final
 pass is VS-010.
 
-## VS-010: evidence collected at spec, smoke-gated
-
-Final run at the real serving spec (one Blackhole p150, full 202752 context,
-`max_num_seqs=32`, on-device sampling), after VS-007/VS-008/VS-009 landed.
-Command (default stages, `--sampling-profile smoke`):
-
-```
-python -m models.common.readiness_check.run_vllm_server \
-  --model-dir models/autoports/zai_org_glm_4_7_flash \
-  --hf-model zai-org/GLM-4.7-Flash \
-  --mesh-device N150 --max-num-seqs 32 --max-model-len 202752 \
-  --sampling-profile smoke \
-  --tt-config '{"trace_region_size": 350000000}'
-```
-
-produced the server boot, smoke sampling (3 passed/1 skipped/0 failed),
-qualitative (6 prompts), and both benchmark profiles in one pass
-(`server.log`'s `APIServer pid=89584` session, 19:20:03-19:36:47). The
-recorded-but-not-gated `--sampling-profile full` run
-(`sampling_tests_full_RECORD.log`, 11 failed/62 passed/1 skipped,
-452.11 s) was a follow-up attach to that same live server using the
-documented `--stages sampling --sampling-profile full --server-url
-http://localhost:8000` pattern; its exact invocation was not preserved
-verbatim (recorded as a provenance gap, README Known Limitations #4).
-
-Headline: TTFT 273.8 ms (128-token prompt), decode 45.0 ms/token = 22.2 t/s/u
-batch-1, serving burst 100/100/32 at 137.1 tok/s output / 274.2 tok/s total.
-Both runner-side gates pass: `check_degenerate_output --scope all` exit 0
-(no degenerate output across 12 completions), `check_context_contract
---stage vllm` exit 0 (target 202752 = supported 202752, two advisory-only
-notes about an unrelated `--max-model-len 8192` debugging mention in VS-007/
-VS-008, non-blocking).
-
-Committed as `e95eb76d725` ("glm47-flash autoport: vLLM stage evidence at
-spec, smoke-gated (VS-010)"). Full artifact list and headline numbers are in
-`doc/vllm_integration/README.md`.
-
-## VS-011: `$stage-review` findings, fixed
-
-Independent review (`$stage-review`, fresh subagent, read-only, no hardware)
-against the `e95eb76d725` evidence found one real correctness bug and several
-documentation/attribution issues. Verdict was `more-work-needed`; findings and
-fixes:
-
-**P1, real bug -- `allocate_kv_cache` sized the per-request page-table width
-wrong.** `model.blocks_per_user = num_blocks // self.max_batch_size` treats
-vLLM's shared block pool as if it were divided into 32 equal, fixed
-per-request shares -- it is not; vLLM's paged allocator lets one request use
-far more than `num_blocks / max_batch_size` blocks as long as the sum across
-concurrent requests fits `num_blocks`. At this stage's measured
-`num_blocks=7362`, the wrong formula gave `blocks_per_user=230` (14,720
-tokens) instead of the correct, `max_seq_len`-derived `cdiv(202752, 64)=3168`
-(202,752 tokens) -- and `_write_page_table_rows` silently truncated any wider
-table to that wrong width instead of raising, so a long request would have
-been served with a partially-filled cache and wrong logits, not an error.
-`GLM47FlashModel.max_seq_len_physical` (which clamps `prefill_physical_len`)
-inherited the same wrong bound. Confirmed on real hardware to be the actual
-number this stage's own run produced (`server.log`'s `num_gpu_blocks=7362`).
-
-Fixed in `tt/generator_vllm.py`'s `allocate_kv_cache`: `blocks_per_user` is now
-`cdiv(model.max_seq_len, block_size)`, computed independently of `num_blocks`
-(with a loud `ValueError` if `num_blocks` is ever too small to hold even one
-full-context request -- a real hard-physical-limit case, which this run's
-pool is not: 7362 >> 3168). `_write_page_table_rows` now raises instead of
-truncating if a table is ever wider than that. New hardware-verified
-regression test, `test_blocks_per_user_is_max_seq_len_derived_not_pool_derived`
-in `tests/test_generator_vllm_adapter.py`, uses a deliberately
-non-equal-share pool (`NUM_BLOCKS_SHARED_POOL = BLOCKS_PER_USER + 8`, where
-the old formula would have given `72 // 32 == 2`) and proves both the correct
-width and the raise-on-overflow behavior. Full reduced-model suite re-ran
-clean, 15/15 pass.
-
-None of this stage's measured numbers are affected (every served request --
-128/100-token benchmarks, 13-28-token qualitative prompts -- was always far
-under both the old wrong cap and the corrected one). Re-verifying through a
-live vLLM server request above the old 14,720-token cap was judged a new
-hardware serving run, out of this review round's budget; the fix is proven by
-the reduced-model hardware test only. See README's "Post-evidence-collection
-correctness fix" note.
-
-**P1, attribution overreach -- the #55408 write-up overstated its own
-mechanism.** The original wording ("greedy requests lose determinism ...
-seeded incidental", "monotone poisoning after a long host-sampled request")
-does not match the committed `sampling_tests_full_RECORD.log`: several of the
-11 failures are pure `temperature=1.0` seeded-reproducibility assertions with
-no greedy row in the batch at all, and `test_specific_seed_reproducible`
-alternates FAIL/PASS/FAIL/PASS across its four seed parametrizations at a
-fixed batch size, which a clean "batch==32" or "poisoned-forever" rule cannot
-explain either. Re-derived and corrected using only the already-committed log
-(no new hardware run): README "Known limitations" #2 now states exactly what
-the log shows (full-occupancy determinism breaks, both greedy-in-mixed-batch
-and pure-seed forms, discriminator not fully identified), names the concrete
-next step to disambiguate adapter-vs-upstream (an A/B reverting the VS-008
-lane-broadcast), and stops short of asserting the upstream attribution as
-settled fact. The upstream issue #55408 itself was not edited (out of scope,
-no new evidence to add).
-
-**P2s, fixed:** the degenerate-check number range in the README was
-transcribed wrong (corrected from 0.0-0.015 to the actual 0.0-0.0273);
-`generator_vllm.py`'s module docstring and `generator.py`'s
-`apply_prefill_sampling_state` docstring both still said "seed drops on a
-condense" after VS-007's position-anchoring fix already closed that specific
-gap -- corrected to describe the current mechanism accurately, without
-overclaiming that it also closes the separate open full-occupancy defect;
-added the missing primary-profile aggregate-output-throughput number; added
-the qualitative prompts' real tokenized lengths (13/20/28/14/19/15, all
-non-aligned to tile/block/chunk sizes) as through-serving non-aligned-length
-evidence, since none had been called out explicitly before.
-
-**P2s, disclosed rather than fixed (would require new hardware evidence):**
-the pre-VS-008 full-profile log and the SmolLM2 cross-check log that VS-009's
-strongest claims depend on were never committed; the one
-active-trace-during-warmup allocator warning was not run through the
-`TT_METAL_TRACE_ALLOC_TRACKING=1` probe the codebase already has for this
-exact hazard class. Both recorded in README Known Limitations rather than
-chased further, per this review round's budget.
-
----
 
 ## VS-007: per-request seed determinism on the device-sampling decode path
 
@@ -875,3 +757,128 @@ it fails the same canary at baseline). It does not affect single-request
 correctness on a freshly started server, and it does not touch the runner-side
 stage gate (degenerate output + context contract). Recorded here as a known
 limitation rather than a blocker.
+
+## VS-010: evidence collected at spec, smoke-gated
+
+Final run at the real serving spec (one Blackhole p150, full 202752 context,
+`max_num_seqs=32`, on-device sampling), after VS-007/VS-008/VS-009 landed.
+Command (default stages, `--sampling-profile smoke`):
+
+```
+python -m models.common.readiness_check.run_vllm_server \
+  --model-dir models/autoports/zai_org_glm_4_7_flash \
+  --hf-model zai-org/GLM-4.7-Flash \
+  --mesh-device N150 --max-num-seqs 32 --max-model-len 202752 \
+  --sampling-profile smoke \
+  --tt-config '{"trace_region_size": 350000000}'
+```
+
+produced the server boot, smoke sampling (3 passed/1 skipped/0 failed),
+qualitative (6 prompts), and both benchmark profiles in one pass
+(`server.log`'s `APIServer pid=89584` session, 19:20:03-19:36:47). The
+recorded-but-not-gated `--sampling-profile full` run
+(`sampling_tests_full_RECORD.log`, 11 failed/62 passed/1 skipped,
+452.11 s) was a follow-up attach to that same live server using the
+documented `--stages sampling --sampling-profile full --server-url
+http://localhost:8000` pattern; its exact invocation was not preserved
+verbatim (recorded as a provenance gap, README Known Limitations #4).
+
+Headline: TTFT 273.8 ms (128-token prompt), decode 45.0 ms/token = 22.2 t/s/u
+batch-1, serving burst 100/100/32 at 137.1 tok/s output / 274.2 tok/s total.
+Both runner-side gates pass: `check_degenerate_output --scope all` exit 0
+(no degenerate output across 12 completions), `check_context_contract
+--stage vllm` exit 0 (target 202752 = supported 202752, two advisory-only
+notes about an unrelated `--max-model-len 8192` debugging mention in VS-007/
+VS-008, non-blocking).
+
+Committed as `e95eb76d725` ("glm47-flash autoport: vLLM stage evidence at
+spec, smoke-gated (VS-010)"). Full artifact list and headline numbers are in
+`doc/vllm_integration/README.md`.
+
+## VS-011: `$stage-review` findings, fixed
+
+Independent review (`$stage-review`, fresh subagent, read-only, no hardware)
+against the `e95eb76d725` evidence found one real correctness bug and several
+documentation/attribution issues. Verdict was `more-work-needed`; findings and
+fixes:
+
+**P1, real bug -- `allocate_kv_cache` sized the per-request page-table width
+wrong.** `model.blocks_per_user = num_blocks // self.max_batch_size` treats
+vLLM's shared block pool as if it were divided into 32 equal, fixed
+per-request shares -- it is not; vLLM's paged allocator lets one request use
+far more than `num_blocks / max_batch_size` blocks as long as the sum across
+concurrent requests fits `num_blocks`. At this stage's measured
+`num_blocks=7362`, the wrong formula gave `blocks_per_user=230` (14,720
+tokens) instead of the correct, `max_seq_len`-derived `cdiv(202752, 64)=3168`
+(202,752 tokens) -- and `_write_page_table_rows` silently truncated any wider
+table to that wrong width instead of raising, so a long request would have
+been served with a partially-filled cache and wrong logits, not an error.
+`GLM47FlashModel.max_seq_len_physical` (which clamps `prefill_physical_len`)
+inherited the same wrong bound. Confirmed on real hardware to be the actual
+number this stage's own run produced (`server.log`'s `num_gpu_blocks=7362`).
+
+Fixed in `tt/generator_vllm.py`'s `allocate_kv_cache`: `blocks_per_user` is now
+`cdiv(model.max_seq_len, block_size)`, computed independently of `num_blocks`
+(with a loud `ValueError` if `num_blocks` is ever too small to hold even one
+full-context request -- a real hard-physical-limit case, which this run's
+pool is not: 7362 >> 3168). `_write_page_table_rows` now raises instead of
+truncating if a table is ever wider than that. New hardware-verified
+regression test, `test_blocks_per_user_is_max_seq_len_derived_not_pool_derived`
+in `tests/test_generator_vllm_adapter.py`, uses a deliberately
+non-equal-share pool (`NUM_BLOCKS_SHARED_POOL = BLOCKS_PER_USER + 8`, where
+the old formula would have given `72 // 32 == 2`) and proves both the correct
+width and the raise-on-overflow behavior. Full reduced-model suite re-ran
+clean, 15/15 pass.
+
+None of this stage's measured numbers are affected (every served request --
+128/100-token benchmarks, 13-28-token qualitative prompts -- was always far
+under both the old wrong cap and the corrected one). Re-verifying through a
+live vLLM server request above the old 14,720-token cap was judged a new
+hardware serving run, out of this review round's budget; the fix is proven by
+the reduced-model hardware test only. See README's "Post-evidence-collection
+correctness fix" note.
+
+**P1, attribution overreach -- the #55408 write-up overstated its own
+mechanism.** The original wording ("greedy requests lose determinism ...
+seeded incidental", "monotone poisoning after a long host-sampled request")
+does not match the committed `sampling_tests_full_RECORD.log`: several of the
+11 failures are pure `temperature=1.0` seeded-reproducibility assertions with
+no greedy row in the batch at all, and `test_specific_seed_reproducible`
+alternates FAIL/PASS/FAIL/PASS across its four seed parametrizations at a
+fixed batch size, which a clean "batch==32" or "poisoned-forever" rule cannot
+explain either. Re-derived and corrected using only the already-committed log
+(no new hardware run): README "Known limitations" #2 now states exactly what
+the log shows (full-occupancy determinism breaks, both greedy-in-mixed-batch
+and pure-seed forms, discriminator not fully identified), names the concrete
+next step to disambiguate adapter-vs-upstream (an A/B reverting the VS-008
+lane-broadcast), and stops short of asserting the upstream attribution as
+settled fact. The upstream issue #55408 itself was not edited (out of scope,
+no new evidence to add).
+
+**P2s, fixed:** the degenerate-check number range in the README was
+transcribed wrong (corrected from 0.0-0.015 to the actual 0.0-0.0273);
+`generator_vllm.py`'s module docstring and `generator.py`'s
+`apply_prefill_sampling_state` docstring both still said "seed drops on a
+condense" after VS-007's position-anchoring fix already closed that specific
+gap -- corrected to describe the current mechanism accurately, without
+overclaiming that it also closes the separate open full-occupancy defect;
+added the missing primary-profile aggregate-output-throughput number; added
+the qualitative prompts' real tokenized lengths (13/20/28/14/19/15, all
+non-aligned to tile/block/chunk sizes) as through-serving non-aligned-length
+evidence, since none had been called out explicitly before.
+
+**P2s, disclosed rather than fixed (would require new hardware evidence):**
+the pre-VS-008 full-profile log and the SmolLM2 cross-check log that VS-009's
+strongest claims depend on were never committed; the one
+active-trace-during-warmup allocator warning was not run through the
+`TT_METAL_TRACE_ALLOC_TRACKING=1` probe the codebase already has for this
+exact hazard class. Both recorded in README Known Limitations rather than
+chased further, per this review round's budget.
+
+VS-011 committed as `81fb16698ae` ("glm47-flash autoport: vLLM stage-review
+fixes (VS-011)"), branch `ttmodelmanager/glm47-flash-probe`, on top of
+`e95eb76d725` (VS-010). Registration commit for this stage remains
+`9f2ec5d` on `ttmodelmanager/glm47-flash-registration` in the sibling
+`vllm-tt-plugin` checkout (unchanged by this review round).
+
+---
