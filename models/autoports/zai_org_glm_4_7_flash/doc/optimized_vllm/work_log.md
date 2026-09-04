@@ -262,7 +262,7 @@ clean on both arms.
 
 ## OV-008 -- Closing checks
 
-* Reduced adapter suite: 25 passed, including 10 new tests for the kc bound,
+* Reduced adapter suite: 28 passed, including 13 new tests for the kc bound,
   bucket selection, the union fallback, one-trace-per-bucket, the shared logits
   buffer, token feedback across a bucket switch, page-table skipping, and the
   per-slot prefill warm. One of them first failed under the full file because it

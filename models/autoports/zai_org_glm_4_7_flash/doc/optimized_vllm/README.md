@@ -347,7 +347,7 @@ enabled (`server.log`: "Asynchronous scheduling is enabled"), so the plugin's
 | gate: `check_context_contract --stage optimized-vllm` | **exit 0**, target 202752 = supported 202752 |
 | non-aligned prompt lengths through the live server | 37, 129, 777, 1039, 2051 tokens all served, exact `prompt_tokens` echoed; 1039 and 2051 cross the 1024 serving prefill-chunk cap |
 | concurrency | 32 concurrent requests completed, 0 missing output tokens |
-| reduced adapter suite | **25 passed** |
+| reduced adapter suite | **28 passed** (`logs/test_adapter_after.log`); the watcher run below is 25, because it predates the three device-free report-consistency tests added last |
 | full-model batch-32 suite (real 47 layers) | **10 passed**; **10 passed** again at `GLM47_FM_BATCH=8`, which takes the union fallback |
 | full-model batch-1 suite (real 47 layers) | **47 passed** |
 | watcher (`TT_METAL_WATCHER=10`) | **0 faults**, see `watcher/summary.json` |
@@ -513,27 +513,110 @@ serving overhead and splits into two measured parts:
    any other caller (for example `GLM47_FM_BATCH=8`) falls back to the
    batch-agnostic union path rather than failing. Supporting a non-tile batch is
    a measurement away, not a redesign, and nothing has needed it.
-8. **Which measurements are on the shipped source, precisely.** Re-measured
-   after the last source edit: the `after` serving arm (both benchmark profiles,
-   smoke sampling, qualitative, and the full sampling record),
-   `adapter_decode_floor_{before,after,kc64,kcexact}.json`,
-   `prefill_recapture_probe_{before,after}.json`,
-   `full_model_batch1_regression.json`, both runner gates, the adapter suite
-   (25 passed), the adapter suite under watcher, and the full-model batch-1 (47)
-   and batch-32 (10, plus 10 at `GLM47_FM_BATCH=8`) suites, which also
-   regenerated `doc/full_model/accuracy.json` with a matching source manifest.
-   **Not** re-measured: the `before` and `attribution_warm_only` serving arms
-   (both run `GLM47_VLLM_MOE_COMPACT=0`, so `_kc_buckets` returns no buckets and
-   none of the compact-path edits are reachable in them),
-   `bucket_numerics.json` and `compact_decode_equivalence*.json` (the edits
-   since are bucket-*selection* and docstrings; these probes force a bucket
-   directly and do not consult the selection table), `moe_union_width.json`,
-   `moe_prologue_ablation.json`, `moe_compact_layer.json`,
-   `moe_union_vs_compact.json` and `non_aligned_serving.json` (single-layer or
-   serving-request probes that do not touch bucket selection), and the
-   full-model batch-32 watcher run (labelled in `watcher/summary.json`).
+8. **Which measurements are on the shipped source, precisely.** Provenance below
+   is read off each artifact's own contents, not off file timestamps.
+
+   **On the shipped source** (they record the shipped bucket set
+   `(4, 16, 24, 32, union)` or are otherwise produced by it): the `after`
+   serving arm (both benchmark profiles, smoke sampling, qualitative, and the
+   full sampling record), `adapter_decode_floor_after.json`
+   (`decode_kc_buckets [4, 16, 24, 32, null]`, 5 traces),
+   `bucket_numerics.json` (`saturated_row_per_bucket {1: 4, 4: 16, 6: 24,
+   8: 32}`), `compact_decode_equivalence*.json` (buckets `[4, 16, 24, 32,
+   null]`, rows 1-32 including 5 and 6), `prefill_recapture_probe_{before,after}.json`,
+   `full_model_batch1_regression.json`, both runner gates, the plain adapter
+   suite (28 passed) and the full-model batch-1 (47) and batch-32 (10, plus 10
+   at `GLM47_FM_BATCH=8`) suites, which also regenerated
+   `doc/full_model/accuracy.json` with a matching source manifest.
+
+   **On an earlier revision, and why each is still sound:**
+   `adapter_decode_floor_before.json` and the `before` /
+   `attribution_warm_only` serving arms all run `GLM47_VLLM_MOE_COMPACT=0`, so
+   `_kc_buckets` returns `()` (the artifact records `buckets []`) and no
+   compact-path code is reachable in them at all.
+   `adapter_decode_floor_{kc64,kcexact}.json` monkeypatch their own bucket sets
+   and crossover tables (`[4, 16, 32, 64]` and `[4, 8, ..., 32, union]`), so
+   the shipped values never enter them. `moe_union_width.json`,
+   `moe_prologue_ablation.json`, `moe_compact_layer.json` and
+   `moe_union_vs_compact.json` call one decoder layer directly and never
+   consult bucket selection. `non_aligned_serving.json` is a set of serving
+   requests at one live row, which selects `kc=4` under both the earlier and
+   the shipped table. The adapter-suite watcher run (25 passed) and the
+   full-model batch-32 watcher run predate later edits; see Known limitations.
 9. Not exercised: prefix caching (still `False`), KV-cache migration, multi-host
    or multi-rank serving (single chip by design).
+
+## Known limitations
+
+Open items carried out of the last `$stage-review` round. They are recorded here
+rather than fixed: the stage's review budget was closed by the project owner
+with the functional gates passing and the evidence committed, so each of these
+is a disclosed gap and a concrete next step, not a silent one.
+
+* **The `kc=24` bucket has no vLLM-serving replay.** It serves 5-6 concurrent
+  requests, and neither benchmark profile covers that range (the primary runs at
+  1 concurrent, the CI burst at 32), so `kc_replays` in every committed
+  `server.log` shows only `4`, `16`, `32` and `None`. Its correctness *is*
+  evidenced -- bitwise identical to the union path on the real 47-layer model at
+  6 live rows, which is its saturated bound (`bucket_numerics.json`), and
+  checksum-identical on the reduced model at 5 and 6 live rows
+  (`compact_decode_equivalence.json`) -- and its latency is measured through the
+  adapter (`adapter_decode_floor_after.json`). What is missing is one served
+  request at 5-8 concurrency. Next step: a `vllm bench serve` profile with
+  `--max-concurrency 6`.
+* **The full-model batch-32 watcher run predates the `kc=24` bucket**, which is
+  a new device program (new `topk` / `sparse_matmul` / `embedding` shapes), so
+  the 47-layer watcher coverage of that specific bucket is inferred rather than
+  run. The adapter-suite watcher run does replay every captured bucket including
+  `kc=24`, and reported 0 faults. Next step: re-run
+  `TT_METAL_WATCHER=10 pytest tests/test_full_model_batch.py -k 'traced_decode_feedback or inactive_rows'`.
+* **The adapter-suite watcher run is 25 tests, not the shipped 28.** The three
+  tests added last are device-free assertions over committed JSON, so they
+  cannot produce a device fault, but the watcher count and the suite count in
+  the Checks table therefore differ.
+* **The exact-bound bucket set is faster and was deferred on trace-region
+  headroom, without proving that headroom is actually the binding constraint.**
+  One bucket per reachable row count wins a further 8.0 / 3.9 / 4.1 / 3.8
+  ms/token at 2 / 3 / 5 / 7 live rows and loses nothing
+  (`adapter_decode_floor_kcexact.json`), but uses 78.4% of the 350 MB trace
+  region against the shipped 43.5%. No multi-sampling-mode serving run has been
+  done to show whether the remaining 9.0 MiB per bank is or is not enough for
+  the traces `models/common/sampling` captures per mode. Next step: that run; if
+  the region holds, the exact-bound set is a straight win.
+* **The new compact `sparse_matmul` calls reuse program configs tuned for the
+  batch-1 indexed path** (`sparse_gu_pc` / `sparse_dn_pc`, tuned in the
+  optimized-decoder stage at `k = top_k = 4`). They are now the dominant decode
+  matmul at B=32 and `kc` up to 32, with no geometry sweep of their own. The
+  vLLM-stage profiler ban removes the usual evidence form, so this was not
+  pursued; the bitwise-identity evidence shows the configs are *correct* at the
+  new shapes, not that they are *optimal*.
+* **`nnz` is not passed on the new INDEXED `sparse_matmul` calls.** In indexed
+  mode the loop count is exactly `kc`, so a static `nnz` would be legal, but the
+  `nnz=None` decision is an inherited, documented Blackhole-deadlock call
+  (`doc/optimized_decoder/work_log.md`) and this stage copied the batch-1 op
+  contract rather than revisiting it.
+* **Prefill remains untraced.** Documented in `tt/generator_vllm.py`'s
+  `warmup_model_prefill`, and unchanged by this stage, but it is the remaining
+  untraced boundary and the report's performance sections are decode-only.
+* **The ~6.0 ms/token residual against a batch-1-built model is deferred.** It
+  is the cost of driving 32 physical decode rows rather than one, quantified in
+  "Serving vs the model's own traced decode". Narrowing it is a
+  construction-time change to the decoder's per-slot shard grids and would trade
+  away the 32-sequence serving capability unless several decoders shared
+  weights. Named as the largest open performance item for a later stage.
+* **The upstream full-occupancy determinism defect
+  ([tenstorrent/tt-metal#55408](https://github.com/tenstorrent/tt-metal/issues/55408))
+  is unchanged.** Its signature -- under greedy decode at full occupancy, N-1
+  rows correct and one row garbage -- is worth restating precisely as it is
+  carried into the release stage, and it remains this model's most significant
+  serving limitation. This stage established that its failing set varies run to
+  run (11 / 5 / 8 / 7 / 8 across five measurements of the same suite), that
+  every failure passes alone against a fresh server, and that the decode logits
+  are bitwise identical whichever bucket runs, so the stage's own change is
+  ruled out -- but the defect is not narrowed.
+* **No `$optimize` checklist walk-through is written out item by item.** The
+  substantive items are covered across this report and `perf_summary.json`, but
+  a reader has to reconstruct the mapping.
 
 ## Files
 
@@ -542,7 +625,7 @@ serving overhead and splits into two measured parts:
   `logits_out` plumbing), `tt/generator.py` (kc buckets, per-bucket traces,
   shared logits buffer, `warmup_prefill_slots`), `tt/generator_vllm.py`
   (both A/B knobs, page-table diff, counter logging).
-* `tests/test_generator_vllm_adapter.py` -- 10 new tests covering the kc bound,
+* `tests/test_generator_vllm_adapter.py` -- 13 new tests covering the kc bound,
   bucket selection, the measured crossover below which a bucket must not be used,
   the union fallback, one-trace-per-bucket, the shared logits buffer replayed per
   bucket, token feedback across a bucket switch, page-table skipping, the
