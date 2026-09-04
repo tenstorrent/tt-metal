@@ -5,14 +5,8 @@
 Optimal matmul and SDPA configurations for the MLA module, keyed by local sequence length
 (per-device after SP sharding). SDPA configs sourced from op_unit_tests/test_ring_joint_mla.py.
 
-utils/test_mla_matmuls.py is a local testing and perf-measurement harness for these matmuls: it
-runs each one standalone on a Galaxy so a tiling can be timed and PCC-checked in isolation. It is
-run by hand -- no CI pipeline collects it -- and it is NOT kept in sync with the table below.
-It drives the DeepSeek 128-head shapes at 640, whereas the 640 entries here are Kimi-shaped
-(num_heads 64 / 96), so only q_a_proj, kv_a_proj_with_mqa and o_proj tiling coincides; q_b_proj,
-wkv_b1 and wkv_b2 differ because head count sets N and the batch, and g_proj has no case there at
-all. The 4096 / 3200 entries did mirror it before it was retuned to 640, and no longer have any
-counterpart in it. Treat a number in that file as a measurement, not as what ships.
+utils/test_mla_matmuls.py is a hand-run harness for local development and perf measurement of
+these matmuls, and is not kept in sync with the table below.
 
 Production local seq_len values:
   - 128k total / 8 SP devices = 16384 per device
