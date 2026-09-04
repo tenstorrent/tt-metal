@@ -63,6 +63,19 @@ while IFS= read -r FILE; do
         .github/actions/fetch-ttsim/**|.github/actions/setup-ttsim/**|.github/workflows/ttsim-*.yaml)
             TTSIM_CI_CHANGED=true
             ;;
+        # The workflows that define and drive the ttsim legs themselves: the gate that
+        # schedules them, the impl that runs them, and the budget they are checked
+        # against. A PR that rewires any of these must exercise the legs it just
+        # changed rather than skipping them and discovering a broken filter on main.
+        # WORKFLOWS_CHANGED is raised too so these keep the standard full-gate fanout
+        # they get from the .github/workflows/*.yaml catch-all below.
+        .github/workflows/merge-gate.yaml|.github/workflows/runtime-sanity-tests-impl.yaml)
+            TTSIM_CI_CHANGED=true
+            WORKFLOWS_CHANGED=true
+            ;;
+        .github/time_budget.yaml)
+            TTSIM_CI_CHANGED=true
+            ;;
         .clang-tidy|**/.clang-tidy)
             CLANG_TIDY_CONFIG_CHANGED=true
             ;;
