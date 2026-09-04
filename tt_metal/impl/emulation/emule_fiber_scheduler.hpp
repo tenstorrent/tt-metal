@@ -17,6 +17,7 @@
 #include <string>
 #include <vector>
 
+#include "jit_hw/internal/emule_fiber_trace.h"
 #include "jit_hw/internal/emule_thread_ctx.h"  // ThreadCommonCtx (the fiber-owned ctx)
 
 namespace tt::tt_metal::emule_fiber {
@@ -38,6 +39,8 @@ struct FiberIdentity {
     uint32_t logical_x = 0;
     uint32_t logical_y = 0;
     uint8_t  proc_id = 0;
+    uint32_t chip_id = 0;
+    uint64_t program_id = 0;
     const char* kernel_src = nullptr;  // static string (kernel source path), for diagnostics
 };
 
@@ -91,7 +94,16 @@ public:
     void quiescence_park();              // defer to quiescence: re-queue lowest-priority, released at quiescence
     void wake(const void* key);
     void yield();
+    void note_progress(unsigned units);
     void note_publish(unsigned pages);
+    void trace_event(
+        EmuleTraceEventKind kind,
+        const void* object = nullptr,
+        uint64_t a = 0,
+        uint64_t b = 0,
+        uint64_t c = 0,
+        uint64_t d = 0);
+    void flush_trace_for_test(const std::string& reason);
 
     FiberScheduler(const FiberScheduler&) = delete;
     FiberScheduler& operator=(const FiberScheduler&) = delete;
