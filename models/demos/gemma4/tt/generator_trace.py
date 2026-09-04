@@ -859,6 +859,12 @@ def warmup_gemma4_batched_prefill_traces(
     warmup (before any traced decode) keeps runtime prefills to trace *replay*,
     avoiding the #49083 cold-eager-capture fetch-queue wedge.
     """
+    # Two-phase note: the plugin's warmup calls this twice (enable_trace=False
+    # compile pass, then enable_trace=True capture pass) and RESETS
+    # already_warmed_up_prefill between the phases (tt model_runner), so the
+    # early-return below does not suppress the capture pass in serving. The
+    # sp1 chunked capture in warmup_gemma4_model_prefill is gated on
+    # enable_trace so it cannot capture during the compile pass.
     if generator.already_warmed_up_prefill:
         return
     generator.already_warmed_up_prefill = True
@@ -1004,7 +1010,13 @@ def warmup_gemma4_batched_prefill_traces(
                         sampling_params=param,
                     )
 
-                sampling_parameters_sweeped = True
+                # The b=1 iteration is forced greedy-only (penalty masks are only
+                # shape-valid on the batched sharded-logits path), so it must not
+                # complete the sweep: a batch-N iteration (or an explicitly
+                # greedy-only warmup) does, otherwise the penalty/log-prob
+                # variants first-compile at runtime under live traces.
+                if greedy_only or batch_size > 1:
+                    sampling_parameters_sweeped = True
 
             if skip_sequence_lengths:
                 break
@@ -1074,7 +1086,11 @@ def warmup_gemma4_model_prefill(
     # prefill (warmup_prefill=True). The batched helper early-returns via
     # already_warmed_up_prefill, but this 8192 sp1 capture used to re-run
     # and add ~1.4s to every request TTFT.
-    if chunked_prefill_trace_enabled() and not getattr(generator, "_warmed_chunked_prefill_sp1", False):
+    if (
+        enable_trace
+        and chunked_prefill_trace_enabled()
+        and not getattr(generator, "_warmed_chunked_prefill_sp1", False)
+    ):
         chunk = int(getattr(generator.model_args[0], "max_prefill_chunk_size", GEMMA4_DEFAULT_PREFILL_CHUNK))
         chunk = min(chunk, GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN)
         if chunk > 0:
