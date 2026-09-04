@@ -451,7 +451,7 @@ std::string base_kernel_name(const std::string& kernel_name) {
 // overlap, never correctness: a kept device-init kernel would still gate its program via
 // prewarm_warms_kernel(); an excluded model kernel would just compile cold.
 bool is_device_init_kernel(const std::string& base_name) {
-    return base_name.rfind("cq_", 0) == 0 || base_name.find("fabric") != std::string::npos;
+    return base_name.starts_with("cq_") || base_name.find("fabric") != std::string::npos;
 }
 
 std::size_t run_prewarm(
@@ -782,7 +782,7 @@ bool prewarm_warms_kernel(const std::string& kernel_name) {
     if (!g_prewarm_names_ready.load(std::memory_order_acquire)) {
         return false;
     }
-    return g_prewarm_kernel_names.find(kernel_name) != g_prewarm_kernel_names.end();
+    return g_prewarm_kernel_names.contains(kernel_name);
 }
 
 }  // namespace tt::tt_metal::kernel_prewarm
