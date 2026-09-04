@@ -1213,21 +1213,12 @@ using LowLatencyPacketHeader = LowLatencyPacketHeaderT<FABRIC_1D_PKT_HDR_EXTENSI
 using LowLatencyRoutingFields = LowLatencyRoutingFieldsT<FABRIC_1D_PKT_HDR_EXTENSION_WORDS>;
 #endif
 
-// Legacy 2D mesh routing state. Dead to the fabric since the indexed action-map codec replaced the hop program.
-// Retained temporarily as packet-layout/type plumbing until the remaining legacy users are migrated.
+// Reserved 2D routing word. Indexed action-map routing consumes route_buffer instead; this type remains only to
+// preserve the packet layout and the shared ROUTING_FIELDS_TYPE plumbing.
 struct LowLatencyMeshRoutingFields {
-    // Routing state (the actual data members)
-    union {
-        uint32_t value;  // Referenced for fast increment when updating hop count in packet header.
-                         // Also used when doing noc inline dword write to update packet header in next hop
-                         // router.
-        struct {
-            uint16_t hop_index;
-            uint8_t branch_east_offset;  // Referenced when updating hop index for mcast east branch
-            uint8_t branch_west_offset;  // Referenced when updating hop index for mcast west branch
-        };
-    };
+    uint32_t value;
 };
+static_assert(sizeof(LowLatencyMeshRoutingFields) == sizeof(uint32_t));
 
 // Primary template for 2D routing headers with variable route buffer size
 template <int RouteBufferSize = FabricHeaderConfig::MESH_ROUTE_BUFFER_SIZE>
@@ -1280,8 +1271,7 @@ struct HybridMeshPacketHeaderT : PacketHeaderBase<HybridMeshPacketHeaderT<RouteB
 // Base size = 60 B (command_fields:40 + payload_size:2 + noc_send_type:1 + src_ch_id:1 +
 //              routing_fields:4 + dst_start:4 + mcast_params:8)
 //
-// routing_fields (hop_index / branch_east_offset / branch_west_offset) remains as temporary packet-layout/type
-// plumbing. Reclaim it once the remaining legacy users are migrated.
+// routing_fields is a reserved 4 B compatibility word. Reclaim it once the shared 1D/2D type plumbing is split.
 // The 60 B base plus the maximum 68 B action map fills a 128 B header exactly.
 static_assert(sizeof(HybridMeshPacketHeaderT<20>) == 80, "20B buffer must result in 80B header (max capacity)");
 static_assert(sizeof(HybridMeshPacketHeaderT<36>) == 96, "36B buffer must result in 96B header (max capacity)");
