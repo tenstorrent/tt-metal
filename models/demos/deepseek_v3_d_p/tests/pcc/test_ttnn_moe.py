@@ -23,11 +23,17 @@ from tracy import signpost
 import ttnn
 from models.common.utility_functions import is_blackhole, profiler
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
 from models.demos.deepseek_v3_d_p.reference.glm_5_2_config import GLM52Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
-from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import ACTIVATION_SILU, ACTIVATION_SITU
+from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import (
+    ACTIVATION_CLAMPED_SILU_GLU,
+    ACTIVATION_SILU,
+    ACTIVATION_SITU,
+)
 from models.demos.deepseek_v3_d_p.reference.tt.moe.moe import TorchMoe
+from models.demos.deepseek_v3_d_p.tests.conftest import assert_clamp_coverage
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     fabric2d_device_params,
     torus_xy_device_params,
@@ -43,6 +49,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     create_torch_expert_weights,
     extract_mesh_config,
     get_ep_mesh_composer,
+    get_gate_outputs,
     get_sp_mesh_composer,
     get_tp_mesh_composer,
 )
@@ -51,6 +58,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeM
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import ROUTED_EXPERT_ACTIVATION_BY_NAME
 from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
     compare_recall,
+    hash_gate_golden_act,
     log_combine_mismatch_details,
     log_per_chip_statistics,
     validate_combine_output,
@@ -81,6 +89,7 @@ _MOE_LAYER_IDX = 3
 _TORCH_ROUTED_ACTIVATION = {
     ttnn.RoutedExpertActivation.Silu: ACTIVATION_SILU,
     ttnn.RoutedExpertActivation.SituGlu: ACTIVATION_SITU,
+    ttnn.RoutedExpertActivation.ClampedSiluGlu: ACTIVATION_CLAMPED_SILU_GLU,
 }
 
 # ...and -> the upstream vendored model's hidden_act spelling. None leaves the variant config's own
@@ -88,7 +97,14 @@ _TORCH_ROUTED_ACTIVATION = {
 _UPSTREAM_ACT = {
     ttnn.RoutedExpertActivation.Silu: None,
     ttnn.RoutedExpertActivation.SituGlu: "situ",
+    # No hidden_act makes the upstream reference clamp -- V4 carries the clamp on swiglu_limit --
+    # so clamped cases pass skip_upstream_reference instead.
+    ttnn.RoutedExpertActivation.ClampedSiluGlu: None,
 }
+
+# Synthetic tid2eid depth: no checkpoint table exists, and the lookup is exact on both sides.
+_HASH_VOCAB_SIZE = 1024
+_HASH_GATE_MODES = (GateComputeMode.HASH_HOST, GateComputeMode.HASH_DEVICE)
 
 
 def run_model(
@@ -117,6 +133,10 @@ def run_model(
     routed_activation=ttnn.RoutedExpertActivation.Silu,
     shared_activation=ACTIVATION_SILU,
     measure=None,
+    clamped_silu_glu_limit=None,
+    gate_up_scale=1.0,
+    score_func=None,
+    skip_upstream_reference=False,
 ):
     """TtMoe PCC body — shared between `test_ds_moe` / `test_kimi_moe`.
 
@@ -136,6 +156,16 @@ def run_model(
     because the two sites run different implementations -- a fused kernel vs the Python-composed
     ttnn ops in TtSharedExpert -- even where Kimi-K3 sets both to SiTU (#53625).
 
+    ``clamped_silu_glu_limit`` is required by the clamped activation and ignored otherwise.
+    ``gate_up_scale`` multiplies the routed and shared gate/up projections in place so they reach
+    the clamp; it is part of the weight-cache key. ``score_func`` is the gate's router affinity,
+    None keeping the gate config's default. ``skip_upstream_reference`` drops the vendored-model
+    cross-check.
+
+    A HASH_HOST / HASH_DEVICE ``gate_fallback_mode`` selects hash routing: the tid2eid table and
+    per-token ids are built here and handed to both sides, and the torch reference takes the
+    resulting route instead of running its own gate.
+
     ``measure`` wraps the forward for a perf caller: it is called as ``measure(forward)``,
     must invoke the thunk and return its result, and owns the device sync. The perf gates use
     it to run the forward inside a real-time-profiler window (see
@@ -146,8 +176,19 @@ def run_model(
         raise ValueError(f"no torch reference for {routed_activation}; supported: {list(_TORCH_ROUTED_ACTIVATION)}")
     torch_routed_activation = _TORCH_ROUTED_ACTIVATION[routed_activation]
     upstream_activation = _UPSTREAM_ACT[routed_activation]
-    if shared_activation not in (ACTIVATION_SILU, ACTIVATION_SITU):
+    if shared_activation not in (ACTIVATION_SILU, ACTIVATION_SITU, ACTIVATION_CLAMPED_SILU_GLU):
         raise ValueError(f"unknown shared_activation {shared_activation!r}")
+    if gate_fallback_mode in _HASH_GATE_MODES:
+        # TtMoe builds a padding config for DEVICE_FP32 only, and the hash gate's input_ids
+        # sharding assumes sequential SP placement.
+        if padded_percent or is_balanced:
+            raise ValueError(f"{gate_fallback_mode} needs padded_percent=0 and is_balanced=False")
+        if score_func is None:
+            raise ValueError(f"{gate_fallback_mode} requires an explicit score_func")
+    elif score_func is not None:
+        # The non-hash golden is TorchMoe's own gate, which takes no affinity argument, so
+        # overriding the device's would grade two different routers.
+        raise ValueError(f"score_func is only mirrored on the hash gate modes, not {gate_fallback_mode}")
 
     profiler.clear()
     profiler.start("test_ttnn_moe")
@@ -208,6 +249,9 @@ def run_model(
         logger.info(f"LatentMoE: routed side at {routed_emb} (emb_dim={emb_dim}), shared inter={shared_hidden}")
 
     weights_type = "realistic" if run_pcc_check else "dummy"
+    # Scaled gate/up is a different weight set at identical shapes, so it needs its own cohort.
+    if gate_up_scale != 1.0:
+        weights_type = f"{weights_type}_x{gate_up_scale:g}"
     # Base dir is env-overridable so concurrent users don't collide on a single shared /tmp path
     # (the default /tmp/{variant}_moe_cache is world-visible but owner-writable → cross-user EACCES).
     _moe_cache_base = os.environ.get("DS_MOE_CACHE_DIR", f"/tmp/{variant.name}_moe_cache")
@@ -247,6 +291,15 @@ def run_model(
         else:
             all_routed_weights = None
             shared_expert_weights = None
+        # Before the cache build, so the persisted tensors and both models see one set of weights.
+        # down_proj only rescales the output, so it is left alone.
+        if gate_up_scale != 1.0 and all_routed_weights is not None:
+            with torch.no_grad():
+                for expert in all_routed_weights:
+                    expert["gate_proj"].mul_(gate_up_scale)
+                    expert["up_proj"].mul_(gate_up_scale)
+                shared_expert_weights["gate_proj"].mul_(gate_up_scale)
+                shared_expert_weights["up_proj"].mul_(gate_up_scale)
         gate_weights = create_gate_weights(num_routed_experts, emb_dim, seed=9012)
         # Fixed seed for the same reason as above: a perf-built cache must match the PCC reference.
         latent_weights = create_latent_weights(emb_dim, routed_emb, seed=3456) if use_latent else None
@@ -331,6 +384,36 @@ def run_model(
             dtype=ttnn.bfloat16,
         )
 
+    # ========================================
+    # Step 2b: Hash routing (DeepSeek-V4 hash_moe layers)
+    # ========================================
+    # One table and one id vector feed both sides: the device gate does the lookup itself, the
+    # torch reference is handed the resulting route.
+    tid2eid = None
+    input_ids = None
+    hash_indices = None
+    hash_weights = None
+    if gate_fallback_mode in _HASH_GATE_MODES:
+        total_tokens = dispatch_group_size * seq_len_per_chip
+        gen = torch.Generator().manual_seed(7890)
+        tid2eid = torch.randint(
+            0, num_routed_experts, (_HASH_VOCAB_SIZE, num_experts_per_tok), dtype=torch.long, generator=gen
+        )
+        input_ids = torch.randint(0, _HASH_VOCAB_SIZE, (total_tokens,), dtype=torch.long, generator=gen)
+        if run_pcc_check:
+            logits = x.reshape(-1, emb_dim).float() @ gate_weights["weight"].float().T
+            hash_indices, hash_weights = hash_gate_golden_act(
+                logits,
+                input_ids,
+                tid2eid,
+                config.routed_scaling_factor,
+                1e-20,
+                num_experts_per_tok,
+                score_func=score_func,
+            )
+            hash_indices = hash_indices.view(dispatch_group_size, seq_len_per_chip, num_experts_per_tok).to(torch.int32)
+            hash_weights = hash_weights.view(dispatch_group_size, seq_len_per_chip, num_experts_per_tok)
+
     # Engage right-padding only on the perf (non-PCC) path; see the run_model docstring.
     if padded_percent > 0 and not run_pcc_check:
         actual_isl = int(dispatch_group_size * seq_len_per_chip * (1 - padded_percent / 100))
@@ -374,8 +457,41 @@ def run_model(
         )
         profiler.end("torch_moe_creation")
 
+        if shared_activation == ACTIVATION_CLAMPED_SILU_GLU:
+            # x is bf16 while the projections are fp32, and only the first 512 rows are projected.
+            coverage_rows = x.reshape(-1, emb_dim)[:512].float()
+            # Both expert kinds are scaled, so both are checked. The routed experts see dispatched
+            # rows rather than x, but coverage is distributional.
+            assert_clamp_coverage(torch_moe.shared_expert, coverage_rows, clamped_silu_glu_limit)
+            assert_clamp_coverage(torch_moe.routed_experts[0], coverage_rows, clamped_silu_glu_limit)
+
         profiler.start("torch_forward")
-        torch_output, torch_intermediates = torch_moe(x, return_intermediates=True)
+        if hash_indices is None:
+            torch_output, torch_intermediates = torch_moe(x, return_intermediates=True)
+            torch_gate_indices = torch_intermediates.gate_indices
+        else:
+            # The hash route replaces the gate, so the reference takes it pre-computed along with
+            # the dispatch offsets it would otherwise derive from its own indices.
+            expert_offsets, expert_token_counts, expert_region_offsets, _ = get_gate_outputs(
+                hash_indices,
+                dispatch_group_size,
+                num_routed_experts,
+                experts_per_chip,
+                seq_len_per_chip,
+                num_experts_per_tok,
+                expert_dispatch_table=expert_dispatch_table,
+            )
+            torch_output, torch_intermediates = torch_moe(
+                x,
+                hash_weights,
+                hash_indices,
+                expert_offsets,
+                expert_token_counts,
+                expert_region_offsets,
+                return_intermediates=True,
+            )
+            # gate_indices is only populated on the internal-gate path.
+            torch_gate_indices = hash_indices
         profiler.end("torch_forward")
 
     # ========================================
@@ -408,7 +524,10 @@ def run_model(
         shared_expert_activation=shared_activation,
         shared_expert_situ_beta=KimiK3Config.ACTIVATION_SITU_BETA,
         shared_expert_situ_linear_beta=KimiK3Config.ACTIVATION_SITU_LINEAR_BETA,
+        shared_expert_clamped_silu_glu_limit=clamped_silu_glu_limit,
         gate_weights=gate_weights,
+        gate_score_func=score_func,
+        gate_hash_table=tid2eid,
         gate_fallback_mode=gate_fallback_mode,
         weight_cache_path=moe_cache_dir,
         layer_idx=layer_idx,
@@ -425,13 +544,27 @@ def run_model(
     ttnn.synchronize_device(mesh_device)
     profiler.end("tt_moe_creation")
 
+    # Normalizing over few activated experts leaves the affinities ~0.99 correlated, so no PCC
+    # threshold here distinguishes them; this asserts only that the value reached the gate.
+    # Score fidelity itself belongs to tests/pcc/test_moe_gate_prefill2d.py.
+    if score_func is not None:
+        assert (
+            tt_moe.gate.config.score_func == score_func
+        ), f"gate ran {tt_moe.gate.config.score_func!r}, expected {score_func!r}"
+
     profiler.start("tt_forward")
     logger.debug("Running TtMoe forward pass...")
 
     tt_x = upload_tt_x()
 
     def forward():
-        return tt_moe(tt_x, return_intermediates=run_pcc_check, actual_isl=actual_isl, padding_side="right")
+        return tt_moe(
+            tt_x,
+            return_intermediates=run_pcc_check,
+            actual_isl=actual_isl,
+            padding_side="right",
+            input_ids=input_ids,
+        )
 
     signpost(header="tt_forward_START")
     if measure is None:
@@ -477,7 +610,7 @@ def run_model(
 
     recall_result = validate_composed(
         tt_indices.view(1, n_sp_devices, seq_len_per_chip, -1),
-        torch_intermediates.gate_indices.view(1, n_sp_devices, seq_len_per_chip, -1),
+        torch_gate_indices.view(1, n_sp_devices, seq_len_per_chip, -1),
         1,
         n_sp_devices,
         compare_recall(target_recall),
@@ -653,20 +786,23 @@ def run_model(
     logger.debug("Note: Final PCC expected to be low until full pipeline is enabled")
     profiler.end("pcc_validation")
 
-    # Upstream MoE reference cross-check. Returns None when the variant has no reference bundled.
+    # Upstream MoE reference cross-check. Returns None when the variant has no reference bundled,
+    # and is skipped for an activation the vendored model cannot express.
     profiler.start("reference")
-    ref_out = run_reference_moe(
-        variant,
-        config=config,
-        gate_weights=gate_weights,
-        routed_expert_weights=all_routed_weights,
-        shared_expert_weights=shared_expert_weights,
-        latent_weights=latent_weights,
-        x=x,
-        # Same per-site activations the device runs; see run_reference_moe.
-        hidden_act=upstream_activation,
-        shared_hidden_act=shared_activation if upstream_activation is not None else None,
-    )
+    ref_out = None
+    if not skip_upstream_reference:
+        ref_out = run_reference_moe(
+            variant,
+            config=config,
+            gate_weights=gate_weights,
+            routed_expert_weights=all_routed_weights,
+            shared_expert_weights=shared_expert_weights,
+            latent_weights=latent_weights,
+            x=x,
+            # Same per-site activations the device runs; see run_reference_moe.
+            hidden_act=upstream_activation,
+            shared_hidden_act=shared_activation if upstream_activation is not None else None,
+        )
     if ref_out is not None and tt_output is not None:
         logger.info("Running upstream MoE reference")
         tt_final_host = ttnn.to_torch(tt_output, mesh_composer=get_tp_mesh_composer(mesh_device), dtype=torch.bfloat16)
@@ -986,4 +1122,93 @@ def test_kimi_k3_moe(
         final_output_pcc=0.965,
         routed_activation=ROUTED_EXPERT_ACTIVATION_BY_NAME[KimiK3Config.ROUTED_EXPERT_ACTIVATION],
         shared_activation=KimiK3Config.SHARED_EXPERT_ACTIVATION,
+    )
+
+
+# DeepSeek-V4 at MoE level, on both of its layer kinds: the first NUM_HASH_LAYERS route by
+# hash_moe, the rest by top-k (mlp_layer_types in configuration_deepseek_v4.py).
+@pytest.mark.parametrize(
+    "gate_fallback_mode, score_func",
+    [
+        # A host gate, not DEVICE_FP32: moe_grouped_topk's grouped path TT_FATALs unless
+        # experts == 256, n_groups == 8, topk_groups == 4 and n_activated == 8, and n_groups here
+        # comes from the deepseek_v3 variant config, so 64 experts cannot reach a device gate.
+        pytest.param(GateComputeMode.HOST_ALL, None, id="clamped-host"),
+        pytest.param(GateComputeMode.HASH_HOST, DeepSeekV4ProConfig.SCORE_FUNC, id="clamped-hash_host"),
+        pytest.param(GateComputeMode.HASH_DEVICE, DeepSeekV4ProConfig.SCORE_FUNC, id="clamped-hash_device"),
+    ],
+)
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    [
+        pytest.param(
+            (8, 1),
+            torus_y_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
+            2 if is_blackhole() else 1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
+            id="torus-y-8x1",
+        ),
+        pytest.param(
+            (4, 2),
+            fabric2d_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
+            2 if is_blackhole() else 1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
+            id="fabric2d-mesh-4x2",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.skipif(not is_blackhole(), reason="Blackhole only")
+@pytest.mark.timeout(900)
+def test_dsv4_moe(
+    variant,
+    config_only,
+    mesh_device,
+    device_params,
+    num_links,
+    gate_fallback_mode,
+    score_func,
+    request,
+):
+    """DeepSeek-V4 MoE: the clamped activation on both expert kinds, over both of V4's routers.
+
+    Runs at 64 experts / top-2 rather than V4's own 384 or 256, which keeps the routed experts on
+    the fused path (the op switches to the unfused extract -> FFN -> insert chain above 64 experts,
+    covered by test_ds_moe's 256-expert rows) and the scaled-weight cache cohort small.
+
+    Two limits worth knowing:
+
+      * ``variant`` is unparametrized, so ``config_only`` resolves the deepseek_v3 HF config and
+        n_group / topk_group come from it -- the non-hash row runs V3's grouped router, not V4's.
+        V4's ungrouped top-k over sqrtsoftplus is covered by test_moe_gate_prefill2d.py.
+      * No upstream cross-check: the vendored DeepseekV3MoE cannot express the clamp, so grading
+        is against TorchMoe alone. A deepseek_v4 variant would close that.
+    """
+    topology = per_axis_topology(device_params["fabric_config"])
+    run_model(
+        variant,
+        config_only,
+        mesh_device,
+        device_params,
+        PREFILL_CHUNK_TOKENS_PER_CHIP,
+        DeepSeekV3Config.EMB_SIZE,
+        DeepSeekV3Config.MOE_INTERMEDIATE_SIZE,
+        64,
+        2,
+        8,
+        True,
+        num_links,
+        topology,
+        gate_fallback_mode,
+        request,
+        routed_activation=ROUTED_EXPERT_ACTIVATION_BY_NAME[DeepSeekV4ProConfig.ROUTED_EXPERT_ACTIVATION],
+        shared_activation=DeepSeekV4ProConfig.SHARED_EXPERT_ACTIVATION,
+        clamped_silu_glu_limit=DeepSeekV4ProConfig.SWIGLU_LIMIT,
+        # Measured window is (0.958, 0.984), the lower bound with the up clamp dropped.
+        final_output_pcc=0.975,
+        # The reference init leaves the projections ~6 sigma short of the limit, so without this
+        # the clamp never engages.
+        gate_up_scale=4.5,
+        score_func=score_func,
+        skip_upstream_reference=True,
     )

@@ -485,6 +485,8 @@ class TtPrefillBlock(LightweightModule):
             shared_expert_situ_beta=getattr(model_cfg, "ACTIVATION_SITU_BETA", None),
             shared_expert_situ_linear_beta=getattr(model_cfg, "ACTIVATION_SITU_LINEAR_BETA", None),
             shared_expert_clamped_silu_glu_limit=getattr(model_cfg, "SWIGLU_LIMIT", None),
+            # Only DeepSeek-V4 names one; None keeps the gate config's sigmoid default.
+            gate_score_func=getattr(model_cfg, "SCORE_FUNC", None),
             gate_weights=state_dict.get("gate_weights"),  # None if cache exists
             gate_fallback_mode=gate_fallback_mode,
             n_expert_groups=model_cfg.NUM_EXPERT_GROUPS,
