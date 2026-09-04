@@ -112,6 +112,7 @@ def test_unframed_atem_fallback_still_extracts(parser):
     out = extract(parser, invoke("get_weather", city="Paris"))
     assert out.tools_called is True
     assert call_arguments(out.tool_calls[0]) == {"city": "Paris"}
+    assert out.content is None
 
 
 # Tool extraction, normalization, and malformed output.
@@ -228,6 +229,25 @@ def test_named_choice_does_not_install_incompatible_json_guidance(parser):
     parser.adjust_request(req)
     assert req.skip_special_tokens is False
     assert req.structured_outputs is None
+
+
+def test_none_choice_removes_tools_but_keeps_channel_parser_active(parser):
+    """The vLLM 0.24 ``none`` fast path leaks Muse channel delimiters."""
+    req = request(tool_choice="none")
+    parser.adjust_request(req)
+    assert req.skip_special_tokens is False
+    assert req.tools is None
+    assert req.tool_choice is None
+
+
+def test_responses_none_choice_uses_its_typed_no_tools_representation(parser):
+    from vllm.entrypoints.openai.responses.protocol import ResponsesRequest
+
+    req = ResponsesRequest(input="answer plainly", tool_choice="none")
+    parser.adjust_request(req)
+    assert req.skip_special_tokens is False
+    assert req.tools == []
+    assert req.tool_choice == "auto"
 
 
 # Streaming.

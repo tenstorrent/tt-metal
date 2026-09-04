@@ -31,19 +31,19 @@ identify and validate the call.  It is purely an API-layer reformat of text the
 server already produced; it does not touch sampling, the generator, or
 anything on device.
 
-**The parser never removes information.**  It splits only a turn that actually
-reached a visible channel.  A turn cut short before that -- ``max_tokens``
-exhausted mid-analysis, or a ``stop`` string that matched inside the analysis
-channel, both of which are ordinary for a model that always thinks first -- has
-no visible channel to report, and reporting ``content=None`` for it would throw
-away every token the model produced.  Such a turn is returned unsplit: exactly
-the string an unparsed server would have returned.  So `content` is a string for
-every response this server can produce, and enabling the parser can only ever
-move the analysis of a *completed* turn out of `content` -- it can never empty
-it.  (vLLM's own ``<think>``-style parsers do return ``content=None`` in this
-case; that behaviour breaks any client that treats `content` as a string, which
-includes tt-inference-server's own chat-completions parameter-conformance
-suite.)
+**Complete non-streaming parsing never removes information.**  It splits only a
+turn that actually reached a visible channel.  A turn cut short before that --
+``max_tokens`` exhausted mid-analysis, or a ``stop`` string that matched inside
+the analysis channel, both of which are ordinary for a model that always thinks
+first -- has no visible channel to report, and reporting ``content=None`` for it
+would throw away every token the model produced.  Such a turn is returned
+unsplit: exactly the string an unparsed server would have returned.  So
+non-streaming `content` is a string for every response this server can produce,
+and enabling the parser can only ever move the analysis of a *completed* turn
+out of `content` -- it can never empty it.  (vLLM's own ``<think>``-style parsers
+do return ``content=None`` in this case; that behaviour breaks any client that
+treats `content` as a string, which includes tt-inference-server's own
+chat-completions parameter-conformance suite.)
 
 Enable it with::
 
@@ -105,6 +105,12 @@ _HEADER_RE = re.compile(r"(?:\A[ ]?|assistant[ ]?)to=(" + "|".join(_RECIPIENTS) 
 #: the space optional for robustness, but treating a bare trailing ``"t"`` as a
 #: possible header would stall every streamed word ending in one.
 _HEADER_LITERALS = tuple(prefix + "to=" + recipient for recipient in _RECIPIENTS for prefix in ("assistant ", " "))
+
+# A rendered chat prompt ends at this prefix; the model emits the recipient and
+# message delimiter as the first generated tokens.  vLLM asks
+# ``is_reasoning_end(prompt_token_ids)`` before generation, so this suffix must
+# be distinguished from generated text that genuinely skipped reasoning.
+_ASSISTANT_PROMPT_SUFFIX_RE = re.compile(r"<\|start\|>\s*assistant\s*$")
 
 #: How many leading tokens to decode when deciding whether the model opened the
 #: analysis channel.  The header is 3-5 tokens; 12 is slack for a tokenizer that
@@ -199,6 +205,7 @@ class MuseGlimmerReasoningParser(ReasoningParser):
         vocab = self.vocab
         self.eom_token_id = vocab.get("<|eom|>")
         self.eot_token_id = vocab.get("<|eot|>")
+        self.message_token_id = vocab.get("<|message|>")
         if self.eom_token_id is None:
             raise RuntimeError(
                 "MuseGlimmerReasoningParser could not find <|eom|> in the "
@@ -241,17 +248,63 @@ class MuseGlimmerReasoningParser(ReasoningParser):
         self._head_cache = (head, opened)
         return opened
 
-    def is_reasoning_end(self, input_ids: Sequence[int]) -> bool:
-        """True once the analysis channel is closed -- or was never opened.
+    def _prompt_opens_assistant_turn(self, input_ids: Sequence[int]) -> bool:
+        """Whether these are prompt tokens awaiting a generated channel.
 
-        The analysis channel is terminated by ``<|eom|>``.  When the model never
-        opened one (a grammar-constrained generation, or a direct reply), there
-        is no reasoning to wait for and the answer is True from the first step,
-        which is what keeps structured output applying its grammar immediately.
+        Muse Glimmer's chat template supplies ``<|start|>assistant`` but not
+        ``to=self<|message|>``.  Decode with special tokens retained so this
+        prompt state cannot be mistaken for an unchannelled direct response.
         """
+        if not input_ids:
+            return False
+        tail = self.model_tokenizer.decode(list(input_ids[-_HEAD_TOKENS:]), skip_special_tokens=False)
+        return _ASSISTANT_PROMPT_SUFFIX_RE.search(tail) is not None
+
+    def is_reasoning_end(self, input_ids: Sequence[int]) -> bool:
+        """True once the generated analysis channel closed or was skipped.
+
+        vLLM also calls this method on the rendered *prompt*.  That prompt ends
+        at ``<|start|>assistant`` and therefore has no generated channel header
+        yet; it must start in the reasoning phase so streamed output reaches
+        :meth:`extract_reasoning_streaming`.  Generated direct replies and
+        grammar-constrained output still return True as soon as their first
+        token proves they did not open ``to=self``.
+        """
+        if self._prompt_opens_assistant_turn(input_ids):
+            return False
         if not self._opened_analysis_channel(input_ids):
             return True
         return self.eom_token_id in input_ids
+
+    def is_reasoning_end_streaming(
+        self,
+        input_ids: Sequence[int],
+        delta_ids: Iterable[int],
+    ) -> bool:
+        """Wait for a complete first channel header before choosing a phase.
+
+        The first token decodes to ``" to"`` for both ``to=self`` and a direct
+        ``to=user`` reply.  Treating that incomplete prefix as "no reasoning"
+        transitions vLLM permanently to its tool/content phase one token too
+        early and leaks every later channel marker.  Once the header resolves,
+        direct output transitions immediately while ``self`` waits for EOM.
+        """
+        if self.eom_token_id in delta_ids:
+            return True
+        if self._opened_analysis_channel(input_ids):
+            return False
+        head_text = self.model_tokenizer.decode(list(input_ids[:_HEAD_TOKENS]), skip_special_tokens=True)
+        match = _HEADER_RE.search(head_text)
+        if match is not None and match.group(1) != REASONING_RECIPIENT:
+            # Keep the direct channel under the reasoning parser until its
+            # first body token.  DelegatingParser hands only the current
+            # content delta to the tool-parser phase at transition time; doing
+            # this on ``to=user`` itself would discard the header and leave the
+            # downstream parser unable to identify any later content.
+            if self.message_token_id is not None and self.message_token_id not in input_ids:
+                return False
+            return any(body for recipient, body in split_channels(head_text) if recipient != REASONING_RECIPIENT)
+        return not any(literal.startswith(head_text) for literal in _HEADER_LITERALS)
 
     def extract_content_ids(self, input_ids: list[int]) -> list[int]:
         """The token ids after the analysis channel closed."""
@@ -319,8 +372,8 @@ class MuseGlimmerReasoningParser(ReasoningParser):
         visible channel ever arrives is not known until the turn ends.  A turn
         cut off inside the analysis channel therefore streams as reasoning
         deltas with no content, which is what every other vLLM reasoning parser
-        does.  Every eval, benchmark and conformance path in this release runs
-        non-streaming.
+        does.  Release coverage exercises both complete non-streaming parsing
+        and the live streaming path used by the tool-call latency harness.
         """
         if not delta_text:
             return None

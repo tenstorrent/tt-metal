@@ -82,6 +82,12 @@ _MAX_MARKER_LEN = max(len(m) for m in _STRUCTURAL_MARKERS)
 # "<|start|>assistant", so the model's first emitted text is " to=self<|message|>").
 _OPEN_TAIL_TO_RE = re.compile(r"[^\S\n]+to=[A-Za-z0-9_.\-]*$")
 
+# Before a streamed header reaches ``<|message|>``, it is deliberately not a
+# match for ``_MSG_HEADER_RE``.  These prefixes distinguish that incomplete
+# structure from genuinely unframed content handed over by the reasoning
+# parser on a direct reply.
+_CHANNEL_PREFIXES = ("<|start|>", "assistant to=", " to=")
+
 # --- Tool-call extraction (unchanged from MUSE_GLIMMER_RESPONSE_SCHEMA) -------------
 _INVOKE_RE = re.compile(r"(<atem:invoke\b.*?</atem:invoke>)", re.DOTALL)
 _NAME_RE = re.compile(r'<atem:invoke\b[^>]*?\bname="([^"]+)"')
@@ -214,6 +220,25 @@ class MuseGlimmerToolParser(ToolParser):
         choices decode natively, the same as "auto".
         """
         request.skip_special_tokens = False
+
+        # vLLM normalizes a request without tools to ``tool_choice="none"``.
+        # Its 0.24 DelegatingParser then bypasses this plugin after reasoning
+        # ends and streams every remaining delta verbatim, including Muse's
+        # ``<|start|>assistant to=user<|message|>`` framing.  ``None`` has the
+        # same no-tool API meaning when the tools list is empty, but follows
+        # the channel-aware auto-parser branch.  For an explicit ``none`` with
+        # tools, drop those tools first (the requested semantics) and use the
+        # same parser-only representation.
+        if getattr(request, "tool_choice", None) == "none":
+            if isinstance(request, ChatCompletionRequest):
+                request.tools = None
+                request.tool_choice = None
+            else:
+                # ResponsesRequest models these as a non-optional list and
+                # choice, so use its equivalent no-tools representation.
+                request.tools = []
+                request.tool_choice = "auto"
+            return request
 
         tool_choice = getattr(request, "tool_choice", None)
         if request.tools and (
@@ -385,7 +410,11 @@ class MuseGlimmerToolParser(ToolParser):
             return ExtractedToolCallInformation(
                 tools_called=True,
                 tool_calls=tool_calls,
-                content=self._extract_content(model_output),
+                # If upstream stripped every channel token, the ATEM payload
+                # itself is the tool call rather than assistant prose.  Keep
+                # the recovery path for extracting the call, but do not also
+                # echo its XML into ``message.content``.
+                content=(None if _MSG_HEADER_RE.search(model_output) is None else self._extract_content(model_output)),
             )
         except Exception:
             logger.exception("Error extracting MuseGlimmer ATEM tool calls.")
@@ -429,6 +458,19 @@ class MuseGlimmerToolParser(ToolParser):
             registered = self._registered_names(request)
             calls = self._parse_tool_calls(current_text, registered)
             content, reasoning, content_open, reasoning_open = self._visible_channels(current_text)
+
+            if not content and not reasoning and _MSG_HEADER_RE.search(current_text) is None:
+                possible_header = any(
+                    prefix.startswith(current_text) or current_text.startswith(prefix) for prefix in _CHANNEL_PREFIXES
+                )
+                if current_text and not possible_header and _FUNCTION_CALLS_OPEN not in current_text:
+                    # A direct ``to=user`` reply transitions after its first
+                    # body token.  vLLM passes that clean body, without the
+                    # already-consumed channel header, into this phase.  Keep
+                    # streaming it while trimming a terminal special token.
+                    terminator = _MSG_END_RE.search(current_text)
+                    content = current_text[: terminator.start()] if terminator else _safe_open_body(current_text)
+                    content_open = terminator is None
 
             # Trim the tail of a channel that is still growing, so the emitted
             # prefix never shrinks between deltas.

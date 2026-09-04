@@ -64,6 +64,40 @@ class _FakeTokenizer:
         return self._head_text
 
 
+class _LifecycleTokenizer:
+    """Token-level fixture for vLLM's prompt-to-stream parser lifecycle."""
+
+    _SPECIALS = {
+        "<|eom|>": 200007,
+        "<|eot|>": 200008,
+        "<|start|>": 200022,
+        "<|message|>": 200023,
+    }
+    _PIECES = {
+        100: "A user prompt.",
+        328: " to",
+        19669: "=self",
+        76221: "Think first.",
+        140680: "assistant",
+        76976: "=user",
+        30550: "Done.",
+    }
+
+    def get_vocab(self):
+        return dict(self._SPECIALS)
+
+    def decode(self, ids, skip_special_tokens=True):
+        specials_by_id = {token_id: token for token, token_id in self._SPECIALS.items()}
+        text = []
+        for token_id in ids:
+            if token_id in specials_by_id:
+                if not skip_special_tokens:
+                    text.append(specials_by_id[token_id])
+            else:
+                text.append(self._PIECES[token_id])
+        return "".join(text)
+
+
 def _parser(head_text: str = "") -> MuseGlimmerReasoningParser:
     return MuseGlimmerReasoningParser(_FakeTokenizer(head_text))
 
@@ -261,6 +295,195 @@ def test_reasoning_end_waits_for_eom_once_the_analysis_channel_is_open():
     parser = _parser(head_text=" to=self")
     assert parser.is_reasoning_end([1, 2, 3]) is False
     assert parser.is_reasoning_end([1, 2, 3, 200007]) is True
+
+
+def test_delegating_parser_starts_new_assistant_turn_in_reasoning_phase():
+    """Match vLLM's live prompt-to-stream lifecycle for a plain chat request.
+
+    The rendered prompt ends at ``<|start|>assistant``; the generated channel
+    header comes afterwards.  Treating the prompt as if reasoning had already
+    ended bypasses this parser and leaks the raw self/user channel protocol to
+    ``message.content``.
+    """
+    from vllm.entrypoints.openai.chat_completion.protocol import ChatCompletionRequest
+    from vllm.parser import ParserManager
+
+    from models.autoports.meta_models_muse_glimmer_30b.tt import muse_glimmer_tool_parser  # noqa: F401
+
+    tokenizer = _LifecycleTokenizer()
+    req = ChatCompletionRequest(
+        model="meta-models/Muse-Glimmer-30B",
+        messages=[{"role": "user", "content": "answer plainly"}],
+        stream=True,
+    )
+    parser_cls = ParserManager.get_parser(
+        tool_parser_name="muse_glimmer",
+        reasoning_parser_name="muse_glimmer",
+        enable_auto_tools=True,
+        model_name=req.model,
+    )
+    assert parser_cls is not None
+    parser = parser_cls(tokenizer, tools=req.tools)
+    parser.adjust_request(req)
+
+    prompt_ids = [100, 200008, 200022, 140680]
+    assert parser.is_reasoning_end(prompt_ids) is False
+
+    generated_ids = [
+        328,
+        19669,
+        200023,
+        76221,
+        200007,
+        200022,
+        140680,
+        328,
+        76976,
+        200023,
+        30550,
+        200008,
+    ]
+    reasoning_parts: list[str] = []
+    content_parts: list[str] = []
+    previous_text = ""
+    for i, token_id in enumerate(generated_ids):
+        current_text = tokenizer.decode(generated_ids[: i + 1], skip_special_tokens=False)
+        delta = parser.parse_delta(
+            delta_text=current_text[len(previous_text) :],
+            delta_token_ids=[token_id],
+            request=req,
+            prompt_token_ids=prompt_ids if i == 0 else None,
+            finished=i == len(generated_ids) - 1,
+        )
+        previous_text = current_text
+        if delta is None:
+            continue
+        if delta.reasoning:
+            reasoning_parts.append(delta.reasoning)
+        if delta.content:
+            content_parts.append(delta.content)
+
+    assert "".join(reasoning_parts) == "Think first."
+    assert "".join(content_parts) == "Done."
+
+
+def test_delegating_parser_keeps_a_direct_user_channel_visible():
+    """A direct reply must survive the reasoning-to-content transition."""
+    from vllm.entrypoints.openai.chat_completion.protocol import ChatCompletionRequest
+    from vllm.parser import ParserManager
+
+    from models.autoports.meta_models_muse_glimmer_30b.tt import muse_glimmer_tool_parser  # noqa: F401
+
+    tokenizer = _LifecycleTokenizer()
+    req = ChatCompletionRequest(
+        model="meta-models/Muse-Glimmer-30B",
+        messages=[{"role": "user", "content": "answer directly"}],
+        stream=True,
+    )
+    parser_cls = ParserManager.get_parser(
+        tool_parser_name="muse_glimmer",
+        reasoning_parser_name="muse_glimmer",
+        enable_auto_tools=True,
+        model_name=req.model,
+    )
+    assert parser_cls is not None
+    parser = parser_cls(tokenizer, tools=req.tools)
+    parser.adjust_request(req)
+
+    prompt_ids = [100, 200008, 200022, 140680]
+    generated_ids = [328, 76976, 200023, 30550, 200008]
+    content_parts: list[str] = []
+    previous_text = ""
+    for i, token_id in enumerate(generated_ids):
+        current_text = tokenizer.decode(generated_ids[: i + 1], skip_special_tokens=False)
+        delta = parser.parse_delta(
+            delta_text=current_text[len(previous_text) :],
+            delta_token_ids=[token_id],
+            request=req,
+            prompt_token_ids=prompt_ids if i == 0 else None,
+            finished=i == len(generated_ids) - 1,
+        )
+        previous_text = current_text
+        if delta is not None and delta.content:
+            content_parts.append(delta.content)
+
+    assert "".join(content_parts) == "Done."
+
+
+def test_delegating_parser_still_transitions_to_streamed_tool_calls():
+    """The prompt-state fix must not strand active tools in reasoning."""
+    import json
+
+    from vllm.entrypoints.openai.chat_completion.protocol import ChatCompletionRequest
+    from vllm.parser import ParserManager
+
+    from models.autoports.meta_models_muse_glimmer_30b.tt import muse_glimmer_tool_parser  # noqa: F401
+
+    tokenizer = _LifecycleTokenizer()
+    req = ChatCompletionRequest(
+        model="meta-models/Muse-Glimmer-30B",
+        messages=[{"role": "user", "content": "run the probe"}],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "record_latency_probe",
+                    "description": "Record the probe",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"payload": {"type": "string"}},
+                        "required": ["payload"],
+                    },
+                },
+            }
+        ],
+        tool_choice="auto",
+        stream=True,
+    )
+    parser_cls = ParserManager.get_parser(
+        tool_parser_name="muse_glimmer",
+        reasoning_parser_name="muse_glimmer",
+        enable_auto_tools=True,
+        model_name=req.model,
+    )
+    assert parser_cls is not None
+    parser = parser_cls(tokenizer, tools=req.tools)
+    parser.adjust_request(req)
+
+    prompt_ids = [100, 200008, 200022, 140680]
+    tool_delta = (
+        "<|start|>assistant to=record_latency_probe<|message|>"
+        '<atem:function_calls><atem:invoke name="record_latency_probe">'
+        '<atem:parameter name="payload">ready</atem:parameter>'
+        "</atem:invoke></atem:function_calls>"
+    )
+    chunks = [
+        (" to", [328]),
+        ("=self", [19669]),
+        ("<|message|>", [200023]),
+        ("Think first.", [76221]),
+        ("<|eom|>", [200007]),
+        (tool_delta, [999]),
+    ]
+    calls = []
+    reasoning_parts: list[str] = []
+    for i, (delta_text, delta_ids) in enumerate(chunks):
+        delta = parser.parse_delta(
+            delta_text=delta_text,
+            delta_token_ids=delta_ids,
+            request=req,
+            prompt_token_ids=prompt_ids if i == 0 else None,
+            finished=i == len(chunks) - 1,
+        )
+        if delta is None:
+            continue
+        reasoning_parts.append(delta.reasoning or "")
+        calls.extend(delta.tool_calls or [])
+
+    assert "".join(reasoning_parts) == "Think first."
+    assert len(calls) == 1
+    assert calls[0].function.name == "record_latency_probe"
+    assert json.loads(calls[0].function.arguments) == {"payload": "ready"}
 
 
 def test_content_ids_start_after_the_analysis_channel():
