@@ -97,7 +97,7 @@ uint32_t get_available_worker_core_count_for_program(
     const DispatchCoreConfig& dispatch_core_config) {
     const auto decoded = detail::DecodePerDeviceProgramID(encoded_runtime_host_id);
     const std::optional<tt::ProgramSubDeviceInfo> sub_device_info =
-        tt::GetProgramSubDevice(chip_id, decoded.base_program_id);
+        tt::GetProgramSubDevice(MetalContext::instance().get_context_id(), chip_id, decoded.base_program_id);
     if (sub_device_info.has_value() && sub_device_info->num_available_worker_cores > 0) {
         return sub_device_info->num_available_worker_cores;
     }

@@ -206,9 +206,8 @@ void kernel_main() {
     const uint32_t num_pairs = get_arg_val<uint32_t>(1);
 #endif
 
-    init_sfpu(cb_query, cb_key);
-    // TODO(#52395): compute_kernel_hw_startup is a call-once API and should be the kernel's first Tensix-engine call, but here it follows another engine op (init_sfpu / a prior startup); see the issue.
     compute_kernel_hw_startup(cb_grad_output, cb_query, cb_key);
+    copy_init(cb_query);
 
     cb_wait_front(cb_mat_mul_reduction, onetile);
     // compute_kernel_hw_startup above does the one-time HW config; each matmul site below

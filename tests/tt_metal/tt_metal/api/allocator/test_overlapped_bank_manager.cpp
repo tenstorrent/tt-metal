@@ -46,6 +46,13 @@ tt::tt_metal::BankManager get_bank_manager_with_allocator_dependencies(
         allocator_dependencies);
 }
 
+void expect_statistics_equal(const tt::tt_metal::Statistics& actual, const tt::tt_metal::Statistics& expected) {
+    EXPECT_EQ(actual.total_allocatable_size_bytes, expected.total_allocatable_size_bytes);
+    EXPECT_EQ(actual.total_allocated_bytes, expected.total_allocated_bytes);
+    EXPECT_EQ(actual.total_free_bytes, expected.total_free_bytes);
+    EXPECT_EQ(actual.largest_free_block_bytes, expected.largest_free_block_bytes);
+}
+
 }  // namespace overlapped_bank_manager_tests
 
 using namespace overlapped_bank_manager_tests;
@@ -179,24 +186,119 @@ TEST(OverlappedAllocators, CPU_InvalidAllocator) {
             ::testing::HasSubstr("Invalid allocator ID 2 (num_allocators=2)")));
 }
 
-TEST(OverlappedAllocators, CPU_InvalidAPIsForOverlappedAllocators) {
-    // Create bank manager with 2 allocators (0 and 1)
-    BankManager::AllocatorDependencies deps{{{AllocatorID{0}, {}}, {AllocatorID{1}, {}}}};
-    BankManager bank_manager = get_bank_manager_with_allocator_dependencies(1024 * 1024, 1024, deps);
+TEST(OverlappedAllocators, CPU_ShrinkAndResetSize) {
+    constexpr uint64_t bank_size = 1024 * 1024;
+    constexpr uint32_t alignment = 1024;
+    constexpr DeviceAddr shrink_size = 1024;
+    BankManager::AllocatorDependencies deps{{{AllocatorID{0}, {}}, {AllocatorID{1}, {}}, {AllocatorID{2}, {}}}};
+    BankManager bank_manager(
+        BufferType::DRAM,
+        std::vector<int64_t>{0},
+        bank_size,
+        alignment,
+        alignment,
+        /*alloc_offset=*/0,
+        /*disable_interleaved=*/false,
+        deps);
 
-    // Test accessing an API that only works for single allocator
+    // Allocator 0 is the default ID, so resizing it resizes every per-sub-device allocator.
+    bank_manager.shrink_size(shrink_size);
+    for (const AllocatorID allocator_id : deps.allocator_ids()) {
+        EXPECT_EQ(bank_manager.get_statistics(allocator_id).total_allocatable_size_bytes, bank_size - shrink_size);
+    }
+
+    bank_manager.reset_size();
+    for (const AllocatorID allocator_id : deps.allocator_ids()) {
+        EXPECT_EQ(bank_manager.get_statistics(allocator_id).total_allocatable_size_bytes, bank_size);
+    }
+
+    // A non-default ID continues to address only that allocator.
+    bank_manager.shrink_size(shrink_size, true, AllocatorID{1});
+    EXPECT_EQ(bank_manager.get_statistics(AllocatorID{0}).total_allocatable_size_bytes, bank_size);
+    EXPECT_EQ(bank_manager.get_statistics(AllocatorID{1}).total_allocatable_size_bytes, bank_size - shrink_size);
+    EXPECT_EQ(bank_manager.get_statistics(AllocatorID{2}).total_allocatable_size_bytes, bank_size);
+
+    bank_manager.reset_size();
+    for (const AllocatorID allocator_id : deps.allocator_ids()) {
+        EXPECT_EQ(bank_manager.get_statistics(allocator_id).total_allocatable_size_bytes, bank_size);
+    }
+}
+
+TEST(OverlappedAllocators, CPU_FailedShrinkDoesNotMutateAnyAllocator) {
+    constexpr uint64_t bank_size = 1024 * 1024;
+    constexpr uint32_t alignment = 1024;
+    constexpr DeviceAddr shrink_size = 1024;
+    BankManager::AllocatorDependencies deps{{{AllocatorID{0}, {}}, {AllocatorID{1}, {}}}};
+    BankManager bank_manager(
+        BufferType::DRAM,
+        std::vector<int64_t>{0},
+        bank_size,
+        alignment,
+        alignment,
+        /*alloc_offset=*/0,
+        /*disable_interleaved=*/false,
+        deps);
+
+    const auto allocation_address = bank_manager.allocate_buffer(
+        alignment,
+        alignment,
+        /*bottom_up=*/true,
+        CoreRangeSet(std::vector<CoreRange>{}),
+        std::nullopt,
+        AllocatorID{1});
+    const auto allocator0_stats = bank_manager.get_statistics(AllocatorID{0});
+    const auto allocator1_stats = bank_manager.get_statistics(AllocatorID{1});
+    const auto allocator0_blocks = bank_manager.get_memory_block_table(AllocatorID{0});
+    const auto allocator1_blocks = bank_manager.get_memory_block_table(AllocatorID{1});
+
     EXPECT_THAT(
-        [&]() { bank_manager.reset_size(AllocatorID{0}); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Expected single allocator!")));
+        [&]() { bank_manager.shrink_size(shrink_size); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("cuts into allocated block")));
+
+    expect_statistics_equal(bank_manager.get_statistics(AllocatorID{0}), allocator0_stats);
+    expect_statistics_equal(bank_manager.get_statistics(AllocatorID{1}), allocator1_stats);
+    EXPECT_EQ(bank_manager.get_memory_block_table(AllocatorID{0}), allocator0_blocks);
+    EXPECT_EQ(bank_manager.get_memory_block_table(AllocatorID{1}), allocator1_blocks);
+
+    bank_manager.deallocate_buffer(allocation_address, AllocatorID{1});
+    bank_manager.shrink_size(shrink_size);
+    EXPECT_EQ(bank_manager.get_statistics(AllocatorID{0}).total_allocatable_size_bytes, bank_size - shrink_size);
+    EXPECT_EQ(bank_manager.get_statistics(AllocatorID{1}).total_allocatable_size_bytes, bank_size - shrink_size);
+
+    bank_manager.reset_size();
+    EXPECT_EQ(bank_manager.get_statistics(AllocatorID{0}).total_allocatable_size_bytes, bank_size);
+    EXPECT_EQ(bank_manager.get_statistics(AllocatorID{1}).total_allocatable_size_bytes, bank_size);
+}
+
+TEST(OverlappedAllocators, CPU_FailedShrinkPreservesDifferentAllocatorSizes) {
+    constexpr uint64_t bank_size = 1024 * 1024;
+    constexpr uint32_t alignment = 1024;
+    constexpr DeviceAddr targeted_shrink_size = bank_size / 2;
+    BankManager::AllocatorDependencies deps{{{AllocatorID{0}, {}}, {AllocatorID{1}, {}}}};
+    BankManager bank_manager(
+        BufferType::DRAM,
+        std::vector<int64_t>{0},
+        bank_size,
+        alignment,
+        alignment,
+        /*alloc_offset=*/0,
+        /*disable_interleaved=*/false,
+        deps);
+
+    bank_manager.shrink_size(targeted_shrink_size, true, AllocatorID{1});
+    const auto allocator0_stats = bank_manager.get_statistics(AllocatorID{0});
+    const auto allocator1_stats = bank_manager.get_statistics(AllocatorID{1});
+    const auto allocator0_blocks = bank_manager.get_memory_block_table(AllocatorID{0});
+    const auto allocator1_blocks = bank_manager.get_memory_block_table(AllocatorID{1});
+
     EXPECT_THAT(
-        [&]() { bank_manager.reset_size(AllocatorID{1}); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Expected single allocator!")));
-    EXPECT_THAT(
-        [&]() { bank_manager.shrink_size(1024, true, AllocatorID{0}); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Expected single allocator!")));
-    EXPECT_THAT(
-        [&]() { bank_manager.shrink_size(1024, true, AllocatorID{1}); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Expected single allocator!")));
+        [&]() { bank_manager.shrink_size(targeted_shrink_size); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("must be smaller than max size")));
+
+    expect_statistics_equal(bank_manager.get_statistics(AllocatorID{0}), allocator0_stats);
+    expect_statistics_equal(bank_manager.get_statistics(AllocatorID{1}), allocator1_stats);
+    EXPECT_EQ(bank_manager.get_memory_block_table(AllocatorID{0}), allocator0_blocks);
+    EXPECT_EQ(bank_manager.get_memory_block_table(AllocatorID{1}), allocator1_blocks);
 }
 
 TEST(OverlappedAllocators, CPU_DeallocateAllAndClear) {

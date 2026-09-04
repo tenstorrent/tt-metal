@@ -28,6 +28,20 @@ T get_arg_val(int arg_idx);
 
 namespace tensor_accessor {
 
+// DSpec of an accessor built from an absent tensor binding (see NullTensorBindingToken).
+//
+// This is a dummy DSpec only meant to allow instantiation of a TensorAccessor from a NullTensorBindingToken.
+// The details of these fields should not be accessed at runtime.
+using NullDSpec = DistributionSpec<
+    /* RankCT */ 1,
+    /* NumBanksCT */ 1,
+    /* TensorShapeWrapper */ ArrayStaticWrapperU32<1>,
+    /* ShardShapeWrapper */ ArrayStaticWrapperU32<1>,
+    /* BankCoordsWrapper */ ArrayStaticWrapperU16<0>,
+    /* IsInterleaved */ false,
+    /* IsDram */ false,
+    /* IsShardContiguous */ false>;
+
 // This helper gets proper additional offset from interleaved_addr_gen::get_bank_offset +
 //      Adds proper xy coordinates for NOC address
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
@@ -104,6 +118,12 @@ public:
         static_assert(
             ADDR_CRTA_OFFSET % sizeof(uint32_t) == 0, "TensorBindingToken: ADDR_CRTA_OFFSET must be 4-byte aligned");
     }
+
+    // Construct from the "binding not present" token.
+    // Meant to be used with `get_token_if_present` to make the token-not-exist branch compile.
+    // Will not attempt to read any CTAs.
+    // This will never be run in runtime & NullTensorBindingToken is not constructible.
+    explicit TensorAccessor(const tensor_accessor::NullTensorBindingToken&) : TensorAccessor(size_t{0}, uint32_t{0}) {}
 
     constexpr const auto& dspec() const {
         if constexpr (DSpec::is_static) {
@@ -563,6 +583,8 @@ TensorAccessor(tensor_accessor::TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>
         /* IsShardContiguous */
         TensorAccessorArgs<CTA_OFFSET, ADDR_CRTA_OFFSET / sizeof(uint32_t) + 1>::is_shard_contiguous>>;
 
+TensorAccessor(const tensor_accessor::NullTensorBindingToken&) -> TensorAccessor<tensor_accessor::NullDSpec>;
+
 template <std::size_t CTA_OFFSET, std::size_t CRTA_OFFSET>
 TensorAccessor(const TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>& args, size_t, uint32_t)
     -> TensorAccessor<tensor_accessor::DistributionSpec<
@@ -634,6 +656,31 @@ auto make_tensor_accessor_tuple(const std::tuple<Args...>& args, uint32_t addres
 }
 
 /**
+ * @brief Map a tensor sequence (tuple of TensorBindingToken) to a tuple of TensorAccessor.
+ *
+ * A tuple of TensorBindingTokens is obtained from a TensorBindingSequence: host codegen emits
+ * `tensor::<sequence_name>` as `std::tuple` of the named binding tokens. This helper
+ * maps that sequence into a std::tuple of TensorAccessors, one per token, in the same order.
+ *
+ * Usage (typed tuple — compile-time index):
+ *   auto accessor_tuple = make_tensor_accessors(tensor::inputs);
+ *   noc.async_read(std::get<0>(accessor_tuple), ...);
+ *
+ * Usage (type-erased array — runtime index):
+ *   auto accessor_tuple = make_tensor_accessors(tensor::inputs);
+ *   auto accessor_array = make_abstract_tensor_accessor_wrappers(accessor_tuple);
+ *   noc.async_read(accessor_array[i], ...);
+ *
+ * @param tokens constexpr tuple of TensorBindingTokens from a TensorBindingSequence
+ *               (tensor::<sequence_name>).
+ * @return std::tuple<TensorAccessor<...>, ...>, one per token, in sequence order.
+ */
+template <typename... Tokens>
+auto make_tensor_accessors(const std::tuple<Tokens...>& tokens) {
+    return std::apply([](const auto&... toks) { return std::make_tuple(TensorAccessor(toks)...); }, tokens);
+}
+
+/**
  * @brief AbstractTensorAccessorWrapper provides a unified interface over templated tensor accessors.
  *
  * The wrapper allows to use and iterate over different kinds of tensor accessors in a unified way.
@@ -671,6 +718,9 @@ auto make_abstract_tensor_accessor_wrappers(
 
 // Wraps a tuple of templated tensor accessors into an array of AbstractTensorAccessorWrapper,
 // allowing for easy iteration and runtime dispatch.
+//
+// CAUTION: each wrapper stores a pointer into `accessors`. The tuple must outlive the returned
+// array; do not pass a temporary from make_tensor_accessors(...) straight through.
 template <typename... Accessors>
 auto make_abstract_tensor_accessor_wrappers(const std::tuple<Accessors...>& accessors) {
     return tensor_accessor::detail::make_abstract_tensor_accessor_wrappers(

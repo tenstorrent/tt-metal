@@ -7,21 +7,16 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
     using namespace tt::constants;
-    uint32_t i = 0;
-    auto output_addr = get_arg_val<uint32_t>(i++);
-    auto num_tiles_per_core = get_arg_val<uint32_t>(i++);
-    auto start_id = get_arg_val<uint32_t>(i++);
-    auto W = get_arg_val<uint32_t>(i++);
-    auto element_size = get_arg_val<uint32_t>(i++);
+    auto num_tiles_per_core = get_arg(args::num_tiles_per_core);
+    auto start_id = get_arg(args::start_id);
+    auto W = get_arg(args::W);
+    auto element_size = get_arg(args::element_size);
 
-    constexpr uint32_t cb_output = tt::CBIndex::c_16;
-
-    constexpr auto output_args = TensorAccessorArgs<0>();
-
-    const auto output_addrg = TensorAccessor(output_args, output_addr);
+    const auto output_addrg = TensorAccessor(tensor::output);
 
     uint32_t Wf = (W + FACE_WIDTH - 1) / FACE_WIDTH;
     uint32_t Wt = (W + TILE_WIDTH - 1) / TILE_WIDTH;
@@ -29,7 +24,7 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
 
     Noc noc;
-    DataflowBuffer dfb_out(cb_output);
+    DataflowBuffer dfb_out(dfb::output);
 
     uint32_t end_id = start_id + num_tiles_per_core;
     for (uint32_t i = start_id; i < end_id; ++i) {

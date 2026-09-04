@@ -1269,17 +1269,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     // Convenience accessor for CB sizing.
     auto cb = [&](Conv2dCb name) -> const CBInfo& { return get_cb_info_by_name(cb_info, name); };
 
-    // QSR: the packer RELU (llk_pack_relu_config(ReluConfig::zero())) leaves ~one 16x16 face per output tile
-    // UNCLAMPED on Quasar -- proven by bisect (test_conv2d_correctness_bisect): a height-sharded conv is
-    // correct with the activation off (PCC 0.99997) but drops to 0.8547 with RELU on, uniform / tap-count-
-    // independent / fidelity-independent, with stale negatives surviving (output absmax > golden). WH is fine.
-    // Route RELU through the SFPU activation path on Quasar instead (full DEST tile; the same path GELU uses)
-    // by NOT taking the packer-relu fast-path here -- the `!pack_relu` branch below then merges the SFPU relu
-    // defines (SFPU_OP_*_ACTIVATION), applied per output tile in the compute kernel after the bias add.
-    // TODO(LLK): fix the Quasar packer relu face coverage so the faster packer clamp can be used again.
-    // (arch_is_quasar is declared earlier, near the out_subblock 1x1 workaround.)
-    bool pack_relu =
-        fused_activation.has_value() && fused_activation.value().op_type == unary::UnaryOpType::RELU && !arch_is_quasar;
+    bool pack_relu = fused_activation.has_value() && fused_activation.value().op_type == unary::UnaryOpType::RELU;
 
     const bool check_skip_compute = input_cores != output_cores;
     // populate_skipped_work_cores is only reachable with split reader (deferred), so it is always false.
@@ -1376,10 +1366,11 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     // ---- compute defines ----
     std::map<std::string, std::string> compute_defines;
     if (fused_activation.has_value() && !pack_relu) {
-        // Pass the activation input dtype: several unary ops (RELU, SIGNBIT, ...) branch float-vs-int in
-        // get_op_init_and_func and TT_FATAL if it is absent. On Quasar RELU takes this SFPU path (packer-relu
-        // is disabled above), so the dtype is now required. The activation runs on the accumulated conv
-        // result that becomes the output, so use the output dtype (bf16 => the float relu_tile path).
+        // Non-RELU fused activations (GELU, SILU, ...) take the SFPU path. RELU uses packer relu
+        // (`pack_relu` above) and skips this branch. Pass the activation input dtype: several unary
+        // ops branch float-vs-int in get_op_init_and_func and TT_FATAL if it is absent. The
+        // activation runs on the accumulated conv result that becomes the output, so use the output
+        // dtype.
         compute_defines.merge(ttnn::operations::unary::utils::get_defines(
             fused_activation.value().op_type, fused_activation.value().params, "ACTIVATION", "i", output.dtype()));
     }

@@ -13,6 +13,7 @@
 #include "concat_s2s_multi_program_factory.hpp"
 #include "concat_s2i_program_factory.hpp"
 #include "concat_block_sharded_program_factory.hpp"
+#include "concat_tiled_unaligned_program_factory.hpp"
 
 #include "concat_device_operation_types.hpp"
 #include "ttnn/types.hpp"
@@ -32,9 +33,12 @@ struct ConcatDeviceOperation {
         ConcatS2SRMProgramFactory,
         ConcatS2SMultiProgramFactory,
         ConcatS2IProgramFactory,
-        ConcatBlockShardedProgramFactory>;
+        ConcatBlockShardedProgramFactory,
+        ConcatTiledUnalignedProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
+
+    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 

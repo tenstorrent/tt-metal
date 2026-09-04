@@ -11,16 +11,33 @@ if TYPE_CHECKING:
     from rich.theme import Theme
 
 
+def resolve_mpi_rank() -> int | None:
+    """This process's rank in the MPI world, or None when the run is single-rank."""
+
+    rank_env = os.environ.get("TT_RUN_RANK")
+    if rank_env is None:
+        try:
+            size = int(os.environ.get("OMPI_COMM_WORLD_SIZE", "1"))
+            if size <= 1:
+                return None
+            rank_env = os.environ.get("OMPI_COMM_WORLD_RANK")
+            if rank_env is None:
+                return None
+        except ValueError:
+            return None
+
+    try:
+        return int(rank_env)
+    except ValueError:
+        return None
+
+
 def safe_path(path: str | None) -> str | None:
     """Disambiguate an output path per process so parallel tt-run instances don't clobber it."""
     if not path:
         return path
-    rank_env = os.environ.get("TT_RUN_RANK")
-    if rank_env is None:
-        return path
-    try:
-        rank = int(rank_env)
-    except ValueError:
+    rank = resolve_mpi_rank()
+    if rank is None:
         return path
     root, ext = os.path.splitext(path)
     return f"{root}_rank_{rank}{ext}"

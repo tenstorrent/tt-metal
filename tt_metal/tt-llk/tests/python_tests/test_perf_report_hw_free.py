@@ -26,9 +26,11 @@ from helpers.llk_params import ApproximationMode, DestAccumulation, PerfRunType
 from helpers.perf.core import (
     PerfConfig,
     PerfReport,
+    _assert_matches_catalog,
     _ci_provenance,
     _prune_runs,
     _refresh_latest,
+    _reject_duplicate_keys,
     combine_perf_reports,
     postprocess_tile_loop,
 )
@@ -39,6 +41,10 @@ from helpers.perf.schema import (
     PerfSchemaError,
     assert_unique_columns,
     stat_column,
+)
+from helpers.perf.test_schemas import (
+    PERF_TEST_SCHEMAS,
+    PERF_TEST_SCHEMAS_QSR,
 )
 from helpers.perf.wide_schema import DB_SCHEMA, DROPPED_COLUMNS, OUTPUT_SCHEMA
 from helpers.profiler import Profiler, ProfilerData, _stats_l1_to_l1
@@ -441,7 +447,8 @@ def test_combine_perf_reports_emits_parquet_alongside_csv(tmp_path, monkeypatch)
     # ...reachable through the stable `latest` path...
     assert (root / "perf_data" / "latest" / "perf_x" / "perf_x.csv").exists()
     # ...and a run-level Parquet batch alongside it.
-    parquet = run_dir / "testrun.parquet"
+    # Named from the run tag, not run_id: run_id is shared by every shard.
+    parquet = run_dir / "testrun-wormhole-0.parquet"
     assert parquet.exists()
     table = pq.read_table(parquet)
     assert table.schema.names == [c.name for c in DB_SCHEMA]
@@ -482,7 +489,8 @@ def test_combine_perf_reports_raises_on_unknown_parquet_columns(tmp_path, monkey
 
     run_dir = root / "perf_data" / "runs" / "testrun-wormhole-0"
     assert (run_dir / "perf_x" / "perf_x.csv").exists()
-    assert not (run_dir / "testrun.parquet").exists()
+    # Glob rather than a literal name: the batch is named from the run tag.
+    assert not list(run_dir.glob("*.parquet"))
 
 
 def _seed_worker_csv(workers, base, mean):
@@ -687,3 +695,95 @@ def test_latest_swap_leaves_no_debris_when_it_fails(tmp_path, monkeypatch):
 
     assert (perf_data / "latest").readlink() == Path("runs") / "run-1"
     assert not list(perf_data.glob(".latest.tmp.*"))
+
+
+def test_duplicate_sweep_key_is_rejected_not_averaged():
+    # Two rows with the same (sweep-params, marker) key make the measurement
+    # ambiguous, so the run must fail instead of averaging them into one row.
+    frame = pd.DataFrame(
+        {
+            "dest_acc": ["Yes", "Yes"],
+            "tile_cnt": [8, 8],
+            MARKER: ["TILE_LOOP", "TILE_LOOP"],
+            stat_column("L1_TO_L1", MEAN): [100.0, 140.0],
+        }
+    )
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        PerfSchemaError
+    ) as excinfo:
+        _reject_duplicate_keys(frame, "perf_example.csv")
+    message = str(excinfo.value)
+    assert "perf_example.csv" in message
+    assert "duplicate" in message
+
+
+def test_distinct_sweep_keys_pass_through_unchanged():
+    frame = pd.DataFrame(
+        {
+            "dest_acc": ["Yes", "No"],
+            "tile_cnt": [8, 8],
+            MARKER: ["TILE_LOOP", "TILE_LOOP"],
+            stat_column("L1_TO_L1", MEAN): [100.0, 140.0],
+        }
+    )
+    pd.testing.assert_frame_equal(
+        _reject_duplicate_keys(frame, "perf_example.csv"), frame
+    )
+
+
+# ── Two-way catalog check: the CSV a run produced vs its recorded schema ──
+
+_EXAMPLE = "perf_example"
+
+
+def _register(monkeypatch, columns):
+    """One throwaway entry in both catalogs, so the arch branch cannot matter."""
+    entry = {
+        "version": 7,
+        "columns": columns,
+        "aliases": {},
+        "test_name_aliases": {_EXAMPLE: _EXAMPLE},
+    }
+    for catalog in (PERF_TEST_SCHEMAS, PERF_TEST_SCHEMAS_QSR):
+        monkeypatch.setitem(catalog, _EXAMPLE, entry)
+
+
+def _frame(**extra):
+    """A report frame: sweep columns, then marker, then one metric column."""
+    sweep = {"dest_acc": ["Yes"], "tile_cnt": [8], **{k: [v] for k, v in extra.items()}}
+    return pd.DataFrame(
+        {**sweep, MARKER: ["TILE_LOOP"], stat_column(MEAN, "L1_TO_L1"): [100.0]}
+    )
+
+
+def test_catalog_check_passes_and_ignores_speed_of_light(monkeypatch):
+    # speed_of_light is run mode: in the CSV, deliberately not in the catalog.
+    _register(monkeypatch, ["dest_acc", "tile_cnt", MARKER])
+    _assert_matches_catalog(_frame(speed_of_light=True), _EXAMPLE, "perf_example.csv")
+
+
+def test_catalog_check_rejects_a_column_the_catalog_does_not_record(monkeypatch):
+    # The exact failure the static source reader could not see.
+    _register(monkeypatch, ["dest_acc", "tile_cnt", MARKER])
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        PerfSchemaError
+    ) as excinfo:
+        _assert_matches_catalog(_frame(full_rt_dim=4), _EXAMPLE, "perf_example.csv")
+    assert "full_rt_dim" in str(excinfo.value)
+    assert "not the catalog" in str(excinfo.value)
+
+
+def test_catalog_check_rejects_a_recorded_column_the_csv_lost(monkeypatch):
+    _register(monkeypatch, ["dest_acc", "num_faces", "tile_cnt", MARKER])
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        PerfSchemaError
+    ) as excinfo:
+        _assert_matches_catalog(_frame(), _EXAMPLE, "perf_example.csv")
+    assert "num_faces" in str(excinfo.value)
+    assert "not the CSV" in str(excinfo.value)
+
+
+def test_catalog_check_skips_a_base_name_with_no_entry():
+    # The static gate already fails a perf test missing from the catalog, and
+    # combine globs whatever is on disk, so this must not fail a partial run.
+    _assert_matches_catalog(_frame(), "perf_absent_from_catalog", "x.csv")

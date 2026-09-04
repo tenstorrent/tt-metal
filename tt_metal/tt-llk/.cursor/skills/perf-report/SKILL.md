@@ -112,7 +112,7 @@ finish, or every selected test was skipped.
    two ops share one module. Fix the test; do not work around it.
 2. **Row count.** Reconcile rather than assert equality. Start from
    `selected variants × markers`, then subtract skipped or deselected
-   variants and any rows merged by duplicate-key collapse. Markers are the
+   variants; duplicate keys are rejected, never merged. Markers are the
    zones the kernel declares — `INIT` and `TILE_LOOP` in the perf sources,
    plus the `KERNEL` zone that `trisc.cpp` wraps around every profiler build.
    A counter report has no profiler-derived rows, so expect only the counter

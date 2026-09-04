@@ -57,7 +57,13 @@ _TENSOR_RE = re.compile(
     r"dtype=DataType\.(?P<dtype>\w+), layout=Layout\.(?P<layout>\w+), "
     r"memory_config=(?P<mem>MemoryConfig\(.*?\)), storage_type="
 )
-# Entries of a python list of tensors print their values, then shape/dtype/layout.
+# An element of a python list of tensors, as summarized by ttnn.graph._safe_arg_str:
+# same fields as a bare tensor argument, so the memory config comes through too.
+# Unanchored so finditer can walk every element of the list.
+_TENSOR_SUMMARY_RE = re.compile(_TENSOR_RE.pattern.lstrip("^"))
+# Legacy captures (before ttnn.graph._safe_arg_str learned to summarize sequences)
+# print each element's *values*, then shape/dtype/layout in C++ spelling, and carry no
+# memory config for list elements.
 _TENSOR_IN_LIST_RE = re.compile(
     r"shape=Shape\(\[(?P<shape>[^\]]*)\]\), dtype=DataType::(?P<dtype>\w+), layout=Layout::(?P<layout>\w+)"
 )
@@ -74,6 +80,12 @@ _SHARD_SHAPE_RE = re.compile(r"shape=\[(\d+), *(\d+)\]")
 _SHARD_ORIENT_RE = re.compile(r"orientation=ShardOrientation::(\w+)")
 _CONFIG_RE = re.compile(r"^(?P<kind>[A-Z]\w*(?:ProgramConfig|Config))\((?P<body>.*)\)$")
 _TENSOR_ID_RE = re.compile(r"tensor_id=(\d+)")
+# ttnn.Tile's repr, e.g. gpt-oss's sparse_matmul(output_tile=ttnn.Tile([32, 32])).
+_TILE_RE = re.compile(r"^Tile with shape: \[(?P<h>\d+), (?P<w>\d+)\]$")
+# An unquoted string argument: the capture prints a str's value, not its repr.
+_BARE_STRING_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+# ttnn.graph._safe_arg_str' marker for a sequence it summarized only in part.
+_ELIDED_SEQUENCE_RE = re.compile(r"\.\.\. (\+\d+ more|\d+ element\(s\) below the summary depth limit)")
 _GRID_RE = re.compile(r"^(\d+)-(\d+)$")
 
 _DTYPE_TAG = {
@@ -242,15 +254,45 @@ def parse_argument(text: str):
             "mem": mem,
         }
 
-    if text.startswith("[ttnn.Tensor("):
-        # Every element must be accounted for: findall over a list whose element repr
+    if text.startswith("[ttnn.Tensor(") or text.startswith("(ttnn.Tensor("):
+        # Every element must be accounted for: a scan over a list whose element repr
         # changed would quietly return a subset, and a concat case would then run with
         # fewer operands than the captured call and still pass.
+        # An elided sequence is exactly that subset: _safe_arg_str summarizes at most
+        # _MAX_SEQUENCE_ELEMENTS entries and appends "... +N more", which the per-element counts
+        # below cannot see. Fail closed instead of emitting a case with the operands that fit.
+        if _ELIDED_SEQUENCE_RE.search(text):
+            return {"k": "skip", "repr": text}
+        expected = text.count("ttnn.Tensor(")
+        summaries = list(_TENSOR_SUMMARY_RE.finditer(text))
+        if len(summaries) == expected:
+            tensors = []
+            for m in summaries:
+                mem = parse_memory_config(m.group("mem"))
+                if mem is None:
+                    return {"k": "skip", "repr": text}
+                tensors.append(
+                    {
+                        "k": "t",
+                        "shape": _shape(m.group("shape")),
+                        "dtype": m.group("dtype"),
+                        "layout": m.group("layout"),
+                        "mem": mem,
+                    }
+                )
+            return {"k": "tlist", "tensors": tensors}
         found = _TENSOR_IN_LIST_RE.findall(text)
-        if not found or len(found) != text.count("ttnn.Tensor("):
+        if not found or len(found) != expected:
             return {"k": "skip", "repr": text}
         tensors = [{"k": "t", "shape": _shape(sh), "dtype": dt, "layout": lay, "mem": None} for sh, dt, lay in found]
         return {"k": "tlist", "tensors": tensors}
+
+    if "ttnn.Tensor(" in text and (text.startswith("[") or text.startswith("(")):
+        # A nested sequence -- [[tensor], [tensor]] -- which _safe_arg_str now summarizes rather
+        # than str()-ing. graph_case rebuilds a "tlist" as one flat list of operands, so parsing
+        # this would flatten the structure and call the op with a different argument shape than
+        # the capture recorded. Fail closed; the generated file's docstring reports the drop.
+        return {"k": "skip", "repr": text}
 
     if text.startswith("MemoryConfig("):
         spec = parse_memory_config(text)
@@ -262,6 +304,9 @@ def parse_argument(text: str):
         return {"k": "layout", "v": text.split(".", 1)[1]}
     if text.startswith("MeshDevice("):
         return {"k": "device"}
+    tile = _TILE_RE.match(text)
+    if tile:
+        return {"k": "tile", "shape": [int(tile.group("h")), int(tile.group("w"))]}
     if text.startswith("[UnaryOpType."):
         return {"k": "acts", "v": re.findall(r"UnaryOpType\.(\w+)", text)}
     if text.startswith("slice(") or text.startswith("(slice("):
@@ -285,6 +330,22 @@ def parse_argument(text: str):
     try:
         return {"k": "lit", "v": parse_literal(text)}
     except (ValueError, SyntaxError):
+        # A bare identifier is an unquoted string argument -- ttnn.linear(activation="gelu")
+        # reaches the capture as `gelu`, which literal_eval cannot read. Without this branch the
+        # whole call is dropped: 84 of the Qwen3-VL capture's linear calls (the vision MLP and
+        # patch-merger gelu fusions) were unreconstructible for want of it, and with them the only
+        # calls that launch the standalone activation program (matmul.cpp:355 runs a fused
+        # activation as a separate unary_chain when no core_coord is given).
+        # True/False/None never reach here -- literal_eval takes them above. nan/inf/infinity do
+        # reach here (literal_eval rejects them as bare identifiers) and must stay floats: a
+        # captured `epsilon=inf` reconstructed as the string "inf" would change the argument's
+        # type for any op reading a scalar kwarg.
+        try:
+            return {"k": "lit", "v": float(text)}
+        except ValueError:
+            pass
+        if _BARE_STRING_RE.match(text):
+            return {"k": "lit", "v": text}
         return {"k": "skip", "repr": text}
 
 
@@ -326,7 +387,18 @@ DROP_KWARGS = {"compute_kernel_config"}
 # The captured name doubles as the callable expression (``ttnn.Tensor.__getitem__``
 # is bound in ttnn/__init__.py:478, so even that one needs no wrapper). Ops whose
 # python entry point differs from the captured name go here.
-OP_EXPR: dict[str, str] = {}
+#
+# Quasar-uplifted ops: the model now calls the ``ttnn.experimental.quasar.transformer``
+# fork of the Metal 2.0 port, so the generated test's callable (``_OP``) must target
+# the fork. Only ``_OP`` is remapped; ``case["op"]`` stays the captured current-gen
+# name so it still keys into graph_case.py's INDEX_VALUES / GOLDEN tables (the op is
+# semantically identical, and its index-tensor generators are keyed by that name).
+OP_EXPR: dict[str, str] = {
+    "ttnn.transformer.scaled_dot_product_attention_decode": "ttnn.experimental.quasar.transformer.scaled_dot_product_attention_decode",
+    "ttnn.transformer.paged_scaled_dot_product_attention_decode": "ttnn.experimental.quasar.transformer.paged_scaled_dot_product_attention_decode",
+    "ttnn.transformer.scaled_dot_product_attention": "ttnn.experimental.quasar.transformer.scaled_dot_product_attention",
+    "ttnn.transformer.chunked_scaled_dot_product_attention": "ttnn.experimental.quasar.transformer.chunked_scaled_dot_product_attention",
+}
 
 FILE_NAME = {"ttnn.Tensor.__getitem__": "test_tensor_getitem"}
 

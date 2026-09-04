@@ -12,6 +12,8 @@
 #include <tt-metalium/tt_metal.hpp>
 #include "hal.hpp"
 #include "llrt/rtoptions.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "impl/program/program_impl.hpp"
 #include <algorithm>
 
 #ifndef OVERRIDE_KERNEL_PREFIX
@@ -209,7 +211,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
     for (uint32_t i = 0; i < num_elements; i++) {
         initial_data[i] = i;
     }
-    tt_metal::detail::WriteToDeviceL1(mesh_device->get_devices()[0], node_0, buf_a_addr, initial_data);
+    slow_dispatch::WriteToL1(*mesh_device, node_0, buf_a_addr, initial_data);
 
     const CoreCoord core_1_virtual = mesh_device->worker_core_from_logical_core(node_1);
 
@@ -388,8 +390,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
     distributed::EnqueueMeshWorkload(cq, workload, true);
 
     std::vector<uint32_t> actual_data(num_elements, 0);
-    tt_metal::detail::ReadFromDeviceDRAMChannel(
-        mesh_device->get_devices()[0], 0, dram_dst_addr, num_elements * sizeof(uint32_t), actual_data);
+    slow_dispatch::ReadFromDRAMChannel(*mesh_device, 0, dram_dst_addr, num_elements * sizeof(uint32_t), actual_data);
 
     const std::vector<uint32_t> expected_data = {2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
 
@@ -403,7 +404,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
 // Final DRAM stage = seed + N. Shows every node can both receive from the previous node
 // and send to the next, the 2-node cross-node pipeline generalized to N nodes.
 static void run_snake_chain(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    distributed::MeshDevice& mesh_device,
     const std::vector<experimental::NodeCoord>& nodes,
     bool ring = false,
     uint32_t num_elements = 10) {
@@ -414,7 +415,6 @@ static void run_snake_chain(
     using experimental::WorkUnitSpec;
     const uint32_t N = static_cast<uint32_t>(nodes.size());
     ASSERT_GE(N, 2u);
-    IDevice* dev = mesh_device->get_devices()[0];
 
     const uint32_t buf_a = MetalContext::instance().hal().get_dev_addr(
         HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
@@ -433,14 +433,14 @@ static void run_snake_chain(
     for (uint32_t i = 0; i < num_elements; ++i) {
         seed[i] = i;
     }
-    tt_metal::detail::WriteToDeviceDRAMChannel(dev, 0, stage_addr(0), seed);
+    slow_dispatch::WriteToDRAMChannel(mesh_device, 0, stage_addr(0), seed);
     // Pre-fill the output stage with a sentinel value.
     std::vector<uint32_t> out_sentinel(num_elements, 0xdeadbeefu);
-    tt_metal::detail::WriteToDeviceDRAMChannel(dev, 0, stage_addr(N), out_sentinel);
+    slow_dispatch::WriteToDRAMChannel(mesh_device, 0, stage_addr(N), out_sentinel);
     // Ring mode also checks the token that wraps back to node[0]'s buf_wrap; pre-fill it with a
     // sentinel too so that check can't pass on stale or uninitialized data.
     if (ring) {
-        tt_metal::detail::WriteToDeviceL1(dev, nodes[0], buf_wrap, out_sentinel);
+        slow_dispatch::WriteToL1(mesh_device, nodes[0], buf_wrap, out_sentinel);
     }
 
     experimental::ProgramSpec spec{.name = "snake_chain"};
@@ -578,7 +578,7 @@ static void run_snake_chain(
                      {"num_elements", num_elements},
                      {"dram_bank_id", 0u}})});
         } else {
-            const CoreCoord nxt = mesh_device->worker_core_from_logical_core(is_sink ? nodes[0] : nodes[i + 1]);
+            const CoreCoord nxt = mesh_device.worker_core_from_logical_core(is_sink ? nodes[0] : nodes[i + 1]);
             params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
                 .kernel = WRITER,
                 .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
@@ -592,16 +592,16 @@ static void run_snake_chain(
         }
     }
 
-    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    distributed::MeshCommandQueue& cq = mesh_device.mesh_command_queue();
     distributed::MeshWorkload workload;
-    distributed::MeshCoordinateRange device_range(mesh_device->shape());
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    distributed::MeshCoordinateRange device_range(mesh_device.shape());
+    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
     experimental::SetProgramRunArgs(program, params);
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);
 
     std::vector<uint32_t> out(num_elements, 0);
-    tt_metal::detail::ReadFromDeviceDRAMChannel(dev, 0, stage_addr(N), num_elements * sizeof(uint32_t), out);
+    slow_dispatch::ReadFromDRAMChannel(mesh_device, 0, stage_addr(N), num_elements * sizeof(uint32_t), out);
     std::vector<uint32_t> expected(num_elements);
     for (uint32_t i = 0; i < num_elements; ++i) {
         expected[i] = i + N;  // +1 per hop
@@ -612,7 +612,7 @@ static void run_snake_chain(
 
     if (ring) {
         std::vector<uint32_t> wrapped(num_elements, 0);
-        tt_metal::detail::ReadFromDeviceL1(dev, nodes[0], buf_wrap, num_elements * sizeof(uint32_t), wrapped);
+        slow_dispatch::ReadFromL1(mesh_device, nodes[0], buf_wrap, num_elements * sizeof(uint32_t), wrapped);
         std::cout << "[snake] RING wrap-back to node0 L1[0]=" << wrapped[0] << " expected=" << expected[0]
                   << (wrapped == expected ? "  PASS" : "  FAIL") << std::endl;
         EXPECT_EQ(wrapped, expected);
@@ -623,8 +623,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, RingChainFull) {
     if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
         GTEST_SKIP() << "simulator/emulator only";
     }
-    auto md = devices_[0];
-    const auto g = md->compute_with_storage_grid_size();
+    const auto g = this->device().compute_with_storage_grid_size();
     if (g.x < 8 || g.y < 4) {
         GTEST_SKIP() << "need the full 8x4 grid";
     }
@@ -640,7 +639,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, RingChainFull) {
             }
         }
     }
-    run_snake_chain(md, nodes, /*ring=*/true);  // 32-node snake + wrap edge back to node[0]
+    run_snake_chain(this->device(), nodes, /*ring=*/true);  // 32-node snake + wrap edge back to node[0]
 }
 
 // Longest single cross-node hop: opposite corners {0,0} <-> {7,3}.
@@ -648,12 +647,11 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, SnakeCornerToCorner) {
     if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
         GTEST_SKIP() << "simulator/emulator only";
     }
-    auto md = devices_[0];
-    const auto g = md->compute_with_storage_grid_size();
+    const auto g = this->device().compute_with_storage_grid_size();
     if (g.x < 8 || g.y < 4) {
         GTEST_SKIP() << "need the full 8x4 grid";
     }
-    run_snake_chain(md, {experimental::NodeCoord{0, 0}, experimental::NodeCoord{7, 3}});
+    run_snake_chain(this->device(), {experimental::NodeCoord{0, 0}, experimental::NodeCoord{7, 3}});
 }
 
 // Sweep a few payload sizes across the full 32-node snake.
@@ -661,8 +659,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, SnakePayloadSweep) {
     if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
         GTEST_SKIP() << "simulator/emulator only";
     }
-    auto md = devices_[0];
-    const auto g = md->compute_with_storage_grid_size();
+    const auto g = this->device().compute_with_storage_grid_size();
     if (g.x < 8 || g.y < 4) {
         GTEST_SKIP() << "need the full 8x4 grid";
     }
@@ -680,7 +677,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, SnakePayloadSweep) {
     }
     for (uint32_t ne : {64u, 256u}) {
         std::cout << "[L6] payload sweep: num_elements=" << ne << std::endl;
-        run_snake_chain(md, nodes, /*ring=*/false, ne);
+        run_snake_chain(this->device(), nodes, /*ring=*/false, ne);
     }
 }
 
@@ -689,12 +686,10 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, FanOutBroadcast) {
     if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
         GTEST_SKIP() << "simulator/emulator only";
     }
-    auto md = devices_[0];
-    const auto g = md->compute_with_storage_grid_size();
+    const auto g = this->device().compute_with_storage_grid_size();
     if (g.x < 8 || g.y < 4) {
         GTEST_SKIP() << "need the full 8x4 grid";
     }
-    IDevice* dev = md->get_devices()[0];
     constexpr uint32_t ne = 8;
     const uint32_t buf_a = MetalContext::instance().hal().get_dev_addr(
         HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
@@ -703,11 +698,11 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, FanOutBroadcast) {
     for (uint32_t i = 0; i < ne; ++i) {
         seed[i] = 0xa000 + i;
     }
-    tt_metal::detail::WriteToDeviceDRAMChannel(dev, 0, dram_bcast, seed);
+    slow_dispatch::WriteToDRAMChannel(this->device(), 0, dram_bcast, seed);
     for (uint32_t y = 0; y < g.y; ++y) {
         for (uint32_t x = 0; x < g.x; ++x) {
             std::vector<uint32_t> sentinel(ne, 0xffffffffu);
-            tt_metal::detail::WriteToDeviceL1(dev, experimental::NodeCoord{x, y}, buf_a, sentinel);
+            slow_dispatch::WriteToL1(this->device(), experimental::NodeCoord{x, y}, buf_a, sentinel);
         }
     }
 
@@ -737,16 +732,16 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, FanOutBroadcast) {
     }
     params.kernel_run_args = {kra};
     distributed::MeshWorkload workload;
-    Program program = experimental::MakeProgramFromSpec(*md, spec);
+    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
     experimental::SetProgramRunArgs(program, params);
-    workload.add_program(distributed::MeshCoordinateRange(md->shape()), std::move(program));
-    distributed::EnqueueMeshWorkload(md->mesh_command_queue(), workload, true);
+    workload.add_program(distributed::MeshCoordinateRange(this->device().shape()), std::move(program));
+    distributed::EnqueueMeshWorkload(this->device().mesh_command_queue(), workload, true);
 
     uint32_t ok = 0, fail = 0;
     for (uint32_t y = 0; y < g.y; ++y) {
         for (uint32_t x = 0; x < g.x; ++x) {
             std::vector<uint32_t> r(ne, 0);
-            tt_metal::detail::ReadFromDeviceL1(dev, experimental::NodeCoord{x, y}, buf_a, ne * sizeof(uint32_t), r);
+            slow_dispatch::ReadFromL1(this->device(), experimental::NodeCoord{x, y}, buf_a, ne * sizeof(uint32_t), r);
             (r == seed) ? ++ok : ++fail;
         }
     }
@@ -761,12 +756,10 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, FanInGather) {
     if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
         GTEST_SKIP() << "simulator/emulator only";
     }
-    auto md = devices_[0];
-    const auto g = md->compute_with_storage_grid_size();
+    const auto g = this->device().compute_with_storage_grid_size();
     if (g.x < 8 || g.y < 4) {
         GTEST_SKIP() << "need the full 8x4 grid";
     }
-    IDevice* dev = md->get_devices()[0];
     constexpr uint32_t ne = 8;
     constexpr uint32_t stride = 4096;
     const uint32_t buf_a = MetalContext::instance().hal().get_dev_addr(
@@ -782,9 +775,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, FanInGather) {
         for (uint32_t x = 0; x < g.x; ++x) {
             const uint32_t idx = x + y * g.x;
             std::vector<uint32_t> s(ne, sig_of(x, y));
-            tt_metal::detail::WriteToDeviceDRAMChannel(dev, 0, dram_src + idx * stride, s);
+            slow_dispatch::WriteToDRAMChannel(this->device(), 0, dram_src + idx * stride, s);
             std::vector<uint32_t> sentinel(ne, 0xffffffffu);
-            tt_metal::detail::WriteToDeviceDRAMChannel(dev, 0, dram_gather + idx * stride, sentinel);
+            slow_dispatch::WriteToDRAMChannel(this->device(), 0, dram_gather + idx * stride, sentinel);
         }
     }
 
@@ -835,17 +828,17 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, FanInGather) {
     }
     params.kernel_run_args = {kr, kw};
     distributed::MeshWorkload workload;
-    Program program = experimental::MakeProgramFromSpec(*md, spec);
+    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
     experimental::SetProgramRunArgs(program, params);
-    workload.add_program(distributed::MeshCoordinateRange(md->shape()), std::move(program));
-    distributed::EnqueueMeshWorkload(md->mesh_command_queue(), workload, true);
+    workload.add_program(distributed::MeshCoordinateRange(this->device().shape()), std::move(program));
+    distributed::EnqueueMeshWorkload(this->device().mesh_command_queue(), workload, true);
 
     uint32_t ok = 0, fail = 0;
     for (uint32_t y = 0; y < g.y; ++y) {
         for (uint32_t x = 0; x < g.x; ++x) {
             const uint32_t idx = x + y * g.x;
             std::vector<uint32_t> r(ne, 0);
-            tt_metal::detail::ReadFromDeviceDRAMChannel(dev, 0, dram_gather + idx * stride, ne * sizeof(uint32_t), r);
+            slow_dispatch::ReadFromDRAMChannel(this->device(), 0, dram_gather + idx * stride, ne * sizeof(uint32_t), r);
             (r == std::vector<uint32_t>(ne, sig_of(x, y))) ? ++ok : ++fail;
         }
     }
@@ -858,8 +851,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, PerRowChains) {
     if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
         GTEST_SKIP() << "simulator/emulator only";
     }
-    auto md = devices_[0];
-    const auto g = md->compute_with_storage_grid_size();
+    const auto g = this->device().compute_with_storage_grid_size();
     if (g.x < 8 || g.y < 4) {
         GTEST_SKIP() << "need the full 8x4 grid";
     }
@@ -870,7 +862,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, PerRowChains) {
             row.push_back(experimental::NodeCoord{x, y});
         }
         std::cout << "[L6] per-row chain y=" << y << std::endl;
-        run_snake_chain(md, row);
+        run_snake_chain(this->device(), row);
     }
 }
 
@@ -881,8 +873,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, PerColumnChains) {
     if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
         GTEST_SKIP() << "simulator/emulator only";
     }
-    auto md = devices_[0];
-    const auto g = md->compute_with_storage_grid_size();
+    const auto g = this->device().compute_with_storage_grid_size();
     if (g.x < 8 || g.y < 4) {
         GTEST_SKIP() << "need the full 8x4 grid";
     }
@@ -893,7 +884,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, PerColumnChains) {
             col.push_back(experimental::NodeCoord{x, y});
         }
         std::cout << "[L6] per-column chain x=" << x << std::endl;
-        run_snake_chain(md, col);
+        run_snake_chain(this->device(), col);
     }
 }
 
@@ -904,8 +895,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GridBarrierAllToOne) {
     if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
         GTEST_SKIP() << "simulator/emulator only";
     }
-    auto md = devices_[0];
-    const auto g = md->compute_with_storage_grid_size();
+    const auto g = this->device().compute_with_storage_grid_size();
     if (g.x != 8 || g.y != 4) {
         GTEST_SKIP() << "need the full 8x4 grid";
     }
@@ -913,7 +903,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GridBarrierAllToOne) {
     const uint32_t num_signalers = g.x * g.y - 1;  // everyone except the target
     // The target's result slot is a single-core L1 MeshBuffer on the target node, result_addr is
     // threaded into the kernel and host I/O (seed + read-back) goes through the mesh command queue.
-    distributed::MeshCommandQueue& cq = md->mesh_command_queue();
+    distributed::MeshCommandQueue& cq = this->device().mesh_command_queue();
     const CoreRangeSet result_grid(CoreRange(target, target));
     const ShardSpecBuffer result_shard(
         result_grid,
@@ -927,7 +917,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GridBarrierAllToOne) {
         .sharding_args = BufferShardingArgs(result_shard, TensorMemoryLayout::HEIGHT_SHARDED),
     };
     distributed::ReplicatedBufferConfig result_global{.size = sizeof(uint32_t)};
-    auto result_buf = distributed::MeshBuffer::create(result_global, result_local, md.get());
+    auto result_buf = distributed::MeshBuffer::create(result_global, result_local, &this->device());
     const uint32_t result_addr = result_buf->address();
 
     // Seed the target's result slot so an incomplete barrier is detectable.
@@ -936,7 +926,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GridBarrierAllToOne) {
 
     const experimental::SemaphoreSpecName BARRIER{"barrier_sem"};
     const experimental::KernelSpecName BK{"barrier_kernel"};
-    const CoreCoord tgt_phys = md->worker_core_from_logical_core(target);
+    const CoreCoord tgt_phys = this->device().worker_core_from_logical_core(target);
     const experimental::NodeRange all_nodes{experimental::NodeCoord{0, 0}, experimental::NodeCoord{g.x - 1, g.y - 1}};
 
     experimental::ProgramSpec spec{.name = "grid_barrier"};
@@ -954,7 +944,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GridBarrierAllToOne) {
     spec.kernels.push_back(bk);
     spec.work_units.push_back(experimental::WorkUnitSpec{.name = "wu", .kernels = {BK}, .target_nodes = all_nodes});
 
-    Program program = experimental::MakeProgramFromSpec(*md, spec);
+    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
 
     experimental::ProgramRunArgs params;
     experimental::ProgramRunArgs::KernelRunArgs kra{.kernel = BK};
@@ -975,7 +965,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GridBarrierAllToOne) {
     experimental::SetProgramRunArgs(program, params);
 
     distributed::MeshWorkload workload;
-    distributed::MeshCoordinateRange device_range(md->shape());
+    distributed::MeshCoordinateRange device_range(this->device().shape());
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);
 
@@ -992,19 +982,18 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, SnakeChain3) {
         GTEST_SKIP() << "simulator/emulator only";
     }
     // Uses logical nodes {0,0},{1,0},{2,0}; skip (don't fault) on grids narrower than 3 (e.g. 1x3 CI).
-    if (devices_[0]->compute_with_storage_grid_size().x < 3) {
+    if (this->device().compute_with_storage_grid_size().x < 3) {
         GTEST_SKIP() << "need a >=3-wide grid";
     }
     // Source -> relay -> sink across 3 adjacent nodes in row 0.
-    run_snake_chain(devices_[0], {{0, 0}, {1, 0}, {2, 0}});
+    run_snake_chain(this->device(), {{0, 0}, {1, 0}, {2, 0}});
 }
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, SnakeChainRow) {
     if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
         GTEST_SKIP() << "simulator/emulator only";
     }
-    auto md = devices_[0];
-    if (md->compute_with_storage_grid_size().x < 8) {
+    if (this->device().compute_with_storage_grid_size().x < 8) {
         GTEST_SKIP() << "need an 8-wide grid";
     }
     std::vector<experimental::NodeCoord> nodes;  // full row 0, left->right (8 hops)
@@ -1012,15 +1001,14 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, SnakeChainRow) {
     for (uint32_t x = 0; x < 8; ++x) {
         nodes.push_back(experimental::NodeCoord{x, 0});
     }
-    run_snake_chain(md, nodes);
+    run_snake_chain(this->device(), nodes);
 }
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, SnakeChainFull) {
     if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
         GTEST_SKIP() << "simulator/emulator only";
     }
-    auto md = devices_[0];
-    const auto g = md->compute_with_storage_grid_size();
+    const auto g = this->device().compute_with_storage_grid_size();
     if (g.x < 8 || g.y < 4) {
         GTEST_SKIP() << "need the full 8x4 grid";
     }
@@ -1037,5 +1025,5 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, SnakeChainFull) {
             }
         }
     }
-    run_snake_chain(md, nodes);  // all 32 nodes, one continuous snake
+    run_snake_chain(this->device(), nodes);  // all 32 nodes, one continuous snake
 }

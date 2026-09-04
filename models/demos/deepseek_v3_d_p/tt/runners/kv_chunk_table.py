@@ -25,7 +25,7 @@ from models.demos.common.prefill.runners.migration import (
 )
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
-    PREFILL_CHUNK_OUTPUT_TOKENS,
+    PREFILL_CHUNK_TOKENS,
     create_kv_chunk_address_table_kimi,
     merged_num_layers,
     populate_kv_chunk_address_table_dflash,
@@ -108,7 +108,7 @@ def build_and_serialize_kv_chunk_table(
     max_seq_len) lists the wrong, block-cyclically-scattered chunks and fails its PCC check.
 
     ``chunk_size_global`` is the block-cyclic period; the kimi builder hardcodes it as
-    PREFILL_CHUNK_OUTPUT_TOKENS, so a non-default period is rejected here rather than mismapped.
+    PREFILL_CHUNK_TOKENS, so a non-default period is rejected here rather than mismapped.
 
     ``index_kv_cache`` (sparse/DSA models only): when given, a single MERGED table describes BOTH
     caches — config 0 = the KVPE cache, config 1 = the index-key cache — sharing one device-group
@@ -125,9 +125,9 @@ def build_and_serialize_kv_chunk_table(
     layers [first_layer_idx, first_layer_idx + num_my_layers); ``stage_layouts`` holds ONE all-gathered
     per-stage layout per block-cyclic cache (config order), so rank 0 builds one table spanning every
     stage while the collectives ran on all ranks. Leave it None to gather inline (single-rank / tests)."""
-    assert chunk_size_global == PREFILL_CHUNK_OUTPUT_TOKENS, (
+    assert chunk_size_global == PREFILL_CHUNK_TOKENS, (
         f"create_kv_chunk_address_table_kimi assumes a block-cyclic period of "
-        f"PREFILL_CHUNK_OUTPUT_TOKENS={PREFILL_CHUNK_OUTPUT_TOKENS}, but chunk_size_global={chunk_size_global}. "
+        f"PREFILL_CHUNK_TOKENS={PREFILL_CHUNK_TOKENS}, but chunk_size_global={chunk_size_global}. "
         f"A different period would mismap every position; re-introduce a parametrized builder if needed."
     )
 

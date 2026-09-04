@@ -5,6 +5,7 @@
 from typing import List
 
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.data_format_inference import is_format_combination_outlier
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import TILE_DIMENSIONS
 from helpers.llk_params import (
@@ -71,6 +72,28 @@ def get_valid_dest_accumulation_modes(formats):
             return [DestAccumulation.Yes]
 
     return [DestAccumulation.No, DestAccumulation.Yes]
+
+
+def distinct_dest_accumulation_modes(formats, modes):
+    """Drop dest_acc modes that TestConfig normalizes onto another requested mode.
+
+    TestConfig promotes dest_acc to Yes for outlier format combinations (expB input
+    to Float16 output), and the perf CSV records the promoted value. A sweep that
+    asks for both No and Yes therefore writes two rows with an identical
+    (sweep-params, marker) key: one kernel, measured twice. Keep only the modes
+    that stay distinct after that promotion.
+    """
+    if get_chip_architecture() == ChipArchitecture.QUASAR:
+        return list(modes)
+    if (
+        DestAccumulation.No in modes
+        and DestAccumulation.Yes in modes
+        and is_format_combination_outlier(
+            formats.input_format, formats.output_format, DestAccumulation.No
+        )
+    ):
+        return [DestAccumulation.Yes]
+    return list(modes)
 
 
 def get_valid_math_fidelities(format, operation, PERF_RUN: bool = False):

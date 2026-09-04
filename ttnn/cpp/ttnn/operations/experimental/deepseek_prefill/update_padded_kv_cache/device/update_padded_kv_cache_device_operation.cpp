@@ -4,15 +4,19 @@
 
 #include "update_padded_kv_cache_device_operation.hpp"
 
+#include <algorithm>
 #include <cstdint>
+#include <iterator>
 #include <utility>
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/common/host/mesh_ring_plan.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cache {
@@ -57,7 +61,10 @@ constexpr uint32_t kMetadataBytes = 16;
 void validate_runtime_args(
     const UpdatePaddedKvCacheDeviceOperation::operation_attributes_t& args,
     const UpdatePaddedKvCacheDeviceOperation::tensor_args_t& tensor_args) {
-    TT_FATAL(args.cluster_axis == 0 || args.cluster_axis == 1, "cluster_axis ({}) must be 0 or 1", args.cluster_axis);
+    TT_FATAL(
+        !args.cluster_axis.has_value() || *args.cluster_axis < 2,
+        "cluster_axis must be 0, 1, or None for a complete-mesh row-major cache; got {}",
+        args.cluster_axis);
     TT_FATAL(
         args.layer_idx < args.num_layers,
         "layer_idx {} out of range for num_layers {}",
@@ -65,8 +72,76 @@ void validate_runtime_args(
         args.num_layers);
     // The cache is sharded across a 2D mesh; the kernel derives sp_factor from the mesh extent.
     const auto& cache = tensor_args.cache;
+    // Checked here rather than only in the miss validator because device() is dereferenced on the next
+    // line and returns nullptr for host storage, so on a hit the fault would land there instead.
+    TT_FATAL(
+        cache.storage_type() == StorageType::DEVICE,
+        "cache must be on device, but its storage type is {}",
+        cache.storage_type());
     const auto& mesh_view = cache.device()->get_view();
     TT_FATAL(mesh_view.is_mesh_2d(), "update_padded_kv_cache requires a 2D mesh");
+    if (!args.cluster_axis.has_value()) {
+        const uint32_t mesh_size = mesh_view.num_rows() * mesh_view.num_cols();
+        TT_FATAL(
+            ttnn::operations::ccl::common::has_row_major_mesh_coordinates(cache) &&
+                ttnn::operations::ccl::common::has_row_major_mesh_coordinates(tensor_args.input),
+            "update_padded_kv_cache cluster_axis=None requires row-major tensor coordinates");
+        const uint32_t cache_shard_factor = ttnn::operations::ccl::common::tensor_dim_shard_factor(cache, 2);
+        const uint32_t input_shard_factor =
+            ttnn::operations::ccl::common::tensor_dim_shard_factor(tensor_args.input, 2);
+        TT_FATAL(
+            cache_shard_factor == mesh_size && input_shard_factor == mesh_size,
+            "update_padded_kv_cache cluster_axis=None requires cache and input sequence dim 2 sharded across all "
+            "{} mesh devices (got cache factor {}, input factor {}; cache distribution {}, placements {}, rank {})",
+            mesh_size,
+            cache_shard_factor,
+            input_shard_factor,
+            cache.tensor_topology().distribution_shape(),
+            cache.tensor_topology().placements(),
+            cache.logical_shape().rank());
+    }
+
+    // One clamp form per path; mixing them would silently ignore one.
+    TT_FATAL(
+        !tensor_args.valid_global.has_value() || tensor_args.slot_idx.has_value(),
+        "valid_global tensor requires the metadata path (pass slot_idx/kv_actual_global as tensors too)");
+    TT_FATAL(
+        !(args.valid_global.has_value() && tensor_args.slot_idx.has_value()),
+        "scalar valid_global cannot be combined with the metadata path; pass the valid_global TENSOR instead");
+
+    // create_descriptor's TILE branch derives its page size, Wt/input_Ht/cache_HtWt and the
+    // writer_tile_height compile arg from the architectural 32x32 constants, and the tile is absent
+    // from compute_program_hash. Checked here rather than in the miss validator so it also runs on the
+    // cache-hit path, where a non-standard tile would otherwise alias onto a cached 32x32 program.
+    const auto require_standard_tile = [](const Tensor& tensor, const char* name) {
+        if (tensor.layout() != Layout::TILE) {
+            return;
+        }
+        const auto tile = tensor.tensor_spec().tile();
+        TT_FATAL(
+            tile.get_height() == TILE_HEIGHT && tile.get_width() == TILE_WIDTH,
+            "update_padded_kv_cache does not currently support tiles other than 32x32, but {} has a {}x{} "
+            "tile",
+            name,
+            tile.get_height(),
+            tile.get_width());
+    };
+    require_standard_tile(cache, "cache");
+    require_standard_tile(tensor_args.input, "input");
+
+    // cache's dtype and layout are absent from the key (only input's are hashed), and both set the
+    // writer's page size, so they have to be re-checked on hits too: a second call that changes only
+    // the cache would otherwise reuse a program built for the first one's page geometry.
+    TT_FATAL(
+        cache.dtype() == tensor_args.input.dtype(),
+        "cache and input dtype must match (got {} and {})",
+        cache.dtype(),
+        tensor_args.input.dtype());
+    TT_FATAL(
+        cache.layout() == tensor_args.input.layout(),
+        "cache and input layout must match (got {} and {})",
+        cache.layout(),
+        tensor_args.input.layout());
 
     // Metadata-path invariant: the two per-request tensors are supplied together or not at all.
     // The path is selected on `slot_idx.has_value()`, but create_descriptor / override_runtime_arguments
@@ -82,7 +157,8 @@ void validate_runtime_args(
     // UINT32, ROW_MAJOR, single-element, non-sharded) here, so a malformed tensor fails host-side with a
     // clear message instead of a hard-to-debug device-side read. Values stay off the host dispatch path.
     if (tensor_args.slot_idx.has_value()) {
-        auto validate_meta = [&cache](const Tensor& meta, const char* name) {
+        const auto& meta_memory_config = tensor_args.slot_idx->memory_config();
+        auto validate_meta = [&cache, &meta_memory_config](const Tensor& meta, const char* name) {
             TT_FATAL(meta.storage_type() == StorageType::DEVICE, "metadata tensor {} must be on device", name);
             TT_FATAL(meta.dtype() == DataType::UINT32, "metadata tensor {} must be UINT32", name);
             TT_FATAL(meta.layout() == Layout::ROW_MAJOR, "metadata tensor {} must be ROW_MAJOR", name);
@@ -95,9 +171,23 @@ void validate_runtime_args(
             // The writer resolves meta.buffer()->address() against cache.device(); a tensor on a
             // different mesh device would bake the wrong address and fail obscurely downstream.
             TT_FATAL(meta.device() == cache.device(), "metadata tensor {} must be on the same device as cache", name);
+            // create_descriptor emits a single TensorAccessorArgs built from slot_idx and the writer uses
+            // it for every metadata read, so a tensor carrying a different memory config would have its
+            // address resolved through the wrong bank table.
+            TT_FATAL(
+                meta.memory_config() == meta_memory_config,
+                "update_padded_kv_cache does not currently support metadata tensors with different memory "
+                "configs: one TensorAccessor serves every metadata read, so {} must match slot_idx (got "
+                "buffer types {} and {})",
+                name,
+                meta.memory_config().buffer_type(),
+                meta_memory_config.buffer_type());
         };
         validate_meta(tensor_args.slot_idx.value(), "slot_idx");
         validate_meta(tensor_args.kv_actual_global.value(), "kv_actual_global");
+        if (tensor_args.valid_global.has_value()) {
+            validate_meta(tensor_args.valid_global.value(), "valid_global");
+        }
     }
 
     if (!tensor_args.slot_idx.has_value()) {
@@ -110,18 +200,44 @@ void validate_runtime_args(
         const uint32_t num_slots = cache.padded_shape()[0] / args.num_layers;
         TT_FATAL(args.slot_idx < num_slots, "slot_idx ({}) out of range for num_slots ({})", args.slot_idx, num_slots);
 
-        // This chunk is written at a per-chip offset derived from kv_actual_global; the prior valid KV
-        // plus this chunk must fit the global cache capacity (sp_factor slabs of cache_seq tokens each),
-        // else the write spills past the cache. sp_factor = mesh extent along cluster_axis.
-        const uint32_t sp_factor = (args.cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
+        // This chunk is written at a per-chip offset derived from kv_actual_global; what must fit the
+        // global cache capacity (sp_factor slabs of cache_seq tokens each) is what the write stores:
+        // the whole padded slab without a clamp, only the real tokens (rounded up to 32) with one.
+        // sp_factor = mesh extent along cluster_axis, or the whole mesh when it is nullopt.
+        const uint32_t sp_factor = ttnn::ccl::get_topological_dimension(cache, args.cluster_axis);
         const uint32_t chunk_global_tokens = sp_factor * tensor_args.input.padded_shape()[-2];
         const uint32_t global_cache_capacity = sp_factor * cache.padded_shape()[-2];
-        TT_FATAL(
-            args.kv_actual_global + chunk_global_tokens <= global_cache_capacity,
-            "kv_actual_global ({}) + chunk_global ({}) would overflow global cache capacity ({})",
-            args.kv_actual_global,
-            chunk_global_tokens,
-            global_cache_capacity);
+        if (args.valid_global.has_value()) {
+            const uint32_t valid_global = args.valid_global.value();
+            TT_FATAL(
+                valid_global >= args.kv_actual_global,
+                "valid_global ({}) must be >= kv_actual_global ({}): the real tokens end at or after the "
+                "chunk's write offset",
+                valid_global,
+                args.kv_actual_global);
+            TT_FATAL(
+                valid_global <= args.kv_actual_global + chunk_global_tokens,
+                "valid_global ({}) exceeds this chunk's window [{}, {}); one call writes at most one chunk",
+                valid_global,
+                args.kv_actual_global,
+                args.kv_actual_global + chunk_global_tokens);
+            const uint32_t write_end = tt::round_up(valid_global, TILE_HEIGHT);
+            TT_FATAL(
+                write_end <= global_cache_capacity,
+                "valid_global ({} tok, {} written after page-row rounding) would overflow global cache "
+                "capacity ({})",
+                valid_global,
+                write_end,
+                global_cache_capacity);
+        } else {
+            TT_FATAL(
+                args.kv_actual_global + chunk_global_tokens <= global_cache_capacity,
+                "kv_actual_global ({}) + chunk_global ({}) would overflow global cache capacity ({}). Pass "
+                "valid_global to clamp the write to the real tokens and keep the padded tail out of the cache.",
+                args.kv_actual_global,
+                chunk_global_tokens,
+                global_cache_capacity);
+        }
     }
 }
 
@@ -137,16 +253,15 @@ void UpdatePaddedKvCacheDeviceOperation::validate_on_program_cache_miss(
     const auto& cache = tensor_args.cache;
     const auto& input = tensor_args.input;
 
-    TT_FATAL(cache.storage_type() == StorageType::DEVICE, "cache must be on device");
+    // cache storage is pinned in validate_runtime_args so it also runs on hits.
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "input must be on device");
-    TT_FATAL(cache.dtype() == input.dtype(), "cache and input dtype must match");
 
     // Layout / dtype gating. The op is a pure page copy, so it supports both TILE and ROW_MAJOR;
     // the page-unit math in create_descriptor branches on layout. The two formats are mutually
     // exclusive per dtype family:
     //   - block-float (bfloat8_b/bfloat4_b) carries a per-face shared exponent and is tile-only.
     //   - fp8_e4m3 is ROW_MAJOR-only (Blackhole) in ttnn today.
-    TT_FATAL(cache.layout() == input.layout(), "cache and input layout must match");
+    // cache-vs-input dtype and layout agreement lives in validate_runtime_args so it also runs on hits.
     TT_FATAL(input.layout() == Layout::TILE || input.layout() == Layout::ROW_MAJOR, "layout must be TILE or ROW_MAJOR");
     if (tt::tt_metal::is_block_float(input.dtype())) {
         TT_FATAL(input.layout() == Layout::TILE, "block-float dtypes (bfloat8_b/bfloat4_b) require TILE layout");
@@ -199,6 +314,15 @@ UpdatePaddedKvCacheDeviceOperation::spec_return_value_t UpdatePaddedKvCacheDevic
     return tensor_args.cache.tensor_spec();
 }
 
+UpdatePaddedKvCacheDeviceOperation::topology_return_value_t
+UpdatePaddedKvCacheDeviceOperation::compute_output_topologies(
+    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
+    // In-place: preserve the cache's exact distribution. The generic output-topology inference sees
+    // both cache and update inputs and otherwise collapses a valid Shard(2),Shard(2) cache to the
+    // cache allocator's legacy Shard(2),Replicate projection before validation and launch.
+    return {tensor_args.cache.tensor_topology()};
+}
+
 UpdatePaddedKvCacheDeviceOperation::tensor_return_value_t UpdatePaddedKvCacheDeviceOperation::create_output_tensors(
     const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     // In-place: return a handle to the cache.
@@ -220,8 +344,10 @@ ttsl::hash::hash_t UpdatePaddedKvCacheDeviceOperation::compute_program_hash(
     // Hash the full padded shapes, not just their volumes: the descriptor derives Wt, input_Ht,
     // cache_HtWt/CHtWt and the work split from specific dimensions, so two differently-shaped
     // tensors that happen to share a volume must NOT collide onto the same cached program.
+    // has_valid is a writer compile arg, so it is hashed; the VALUE stays out (patched runtime arg).
     return tt::tt_metal::operation::hash_operation<UpdatePaddedKvCacheDeviceOperation>(
         tensor_args.slot_idx.has_value(),
+        tensor_args.valid_global.has_value() || args.valid_global.has_value(),
         args.layer_idx,
         args.num_layers,
         args.cluster_axis,
@@ -230,7 +356,11 @@ ttsl::hash::hash_t UpdatePaddedKvCacheDeviceOperation::compute_program_hash(
         input.memory_config(),
         input.padded_shape(),
         cache.memory_config(),
-        cache.padded_shape());
+        cache.padded_shape(),
+        // On the metadata path the writer bakes a TensorAccessorArgs built from slot_idx into its
+        // compile-time args, so the bank table it selects cannot be refreshed on a cache hit. Only the
+        // config is keyed, never the value; kv_actual_global is pinned to match by validate_runtime_args.
+        tensor_args.slot_idx.has_value() ? tensor_args.slot_idx->memory_config() : MemoryConfig{});
 }
 
 tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFactory::create_descriptor(
@@ -247,6 +377,7 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
     const auto& input = tensor_args.input;
     auto* device = input.device();
     const bool has_metadata = tensor_args.slot_idx.has_value();
+    const bool has_valid = tensor_args.valid_global.has_value() || args.valid_global.has_value();
 
     const auto& cache_shape = cache.padded_shape();
     const auto& input_shape = input.padded_shape();
@@ -283,9 +414,19 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
 
     // Per-chip kernel inputs: kernel does the update_idxt + start_id math itself from these.
     // sp_factor is the mesh extent along the cluster axis (validated 2D in validate_runtime_args).
-    const auto& mesh_view = device->get_view();
-    const uint32_t sp_factor = (args.cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
-    const uint32_t my_sp_coord = ::ttnn::ccl::get_linearized_index_from_physical_coord(cache, coord, args.cluster_axis);
+    const uint32_t sp_factor = ttnn::ccl::get_topological_dimension(cache, args.cluster_axis);
+    uint32_t my_sp_coord;
+    if (args.cluster_axis.has_value()) {
+        my_sp_coord = ::ttnn::ccl::get_linearized_index_from_physical_coord(cache, coord, args.cluster_axis);
+    } else {
+        // Full-mesh cache ownership follows the tensor's declared canonical row-major topology. An
+        // allocate-on-device tensor's storage coordinate vector may use a different internal order;
+        // using that order would rotate the wrong cache shard after a nonzero kv_actual_global.
+        const auto& topology_coords = cache.tensor_topology().mesh_coords();
+        const auto it = std::find(topology_coords.begin(), topology_coords.end(), coord);
+        TT_FATAL(it != topology_coords.end(), "cache mesh coordinate {} is absent from its tensor topology", coord);
+        my_sp_coord = static_cast<uint32_t>(std::distance(topology_coords.begin(), it));
+    }
     // On the metadata path slot_idx and kv_actual_global are not host values — the writer kernel reads
     // element [0] of each per-element tensor and divides kv_actual_global by TILE_HEIGHT on-device.
 
@@ -336,14 +477,18 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
 
     // Writer kernel descriptor. Compile args (uniform leading layout so the kernel offsets are fixed):
     // [0]=kSrcCbIndex, [1]=has_metadata, [2]=kMetaCbIndex (placeholder 0 on scalar path),
-    // [3]=writer_tile_height, [4..]=cache accessor, then (metadata path only) ONE metadata accessor
+    // [3]=writer_tile_height, [4]=has_valid, [5..]=cache accessor, then (metadata path only) ONE metadata accessor
     // (the slot_idx and kv_actual_global tensors share an identical 1-element uint32 replicated-DRAM
     // layout, so the same TensorAccessorArgs serves both reads). writer_tile_height divides kv tokens
     // into the page-row unit (TILE_HEIGHT for TILE, 1 for ROW_MAJOR). On the metadata path the writer
     // reads slot_idx then kv_actual_global (each element [0]) via this accessor against the two raw
     // addresses in common args 8/9; on the scalar path it reads them directly from common args 8/9.
     KernelDescriptor::CompileTimeArgs writer_compile_args = {
-        kSrcCbIndex, static_cast<uint32_t>(has_metadata), has_metadata ? kMetaCbIndex : 0u, writer_tile_height};
+        kSrcCbIndex,
+        static_cast<uint32_t>(has_metadata),
+        has_metadata ? kMetaCbIndex : 0u,
+        writer_tile_height,
+        static_cast<uint32_t>(has_valid)};
     TensorAccessorArgs(cache.buffer()).append_to(writer_compile_args);
     if (has_metadata) {
         // One accessor reused for both 1-element tensors (identical layout).
@@ -379,6 +524,9 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
             slot_idx_addr,          // smuggled-rta-ok: 1-element metadata tensor DRAM addr; the writer reads
                                     // slot_idx on-device from it (trace-safe; value kept out of the program hash)
             kv_actual_global_addr,  // smuggled-rta-ok: 1-element metadata tensor DRAM addr; read on-device
+            // Arg 10: valid_global's DRAM addr when clamping, else an inert 0 (always present so the
+            // indices never shift).
+            has_valid ? tensor_args.valid_global->buffer()->address() : 0u,  // smuggled-rta-ok: as above
         });
     } else {
         writer_kernel.emplace_common_runtime_args({
@@ -392,6 +540,7 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
             cache_CHtWt,
             args.slot_idx,
             args.kv_actual_global,
+            args.valid_global.value_or(0),  // arg 10; read only by the has_valid program
         });
     }
 
@@ -451,15 +600,20 @@ void UpdatePaddedKvCacheDeviceOperation::MeshWorkloadFactory::override_runtime_a
     constexpr uint32_t kWriterKernelHandle = 1;  // writer is pushed second in create_descriptor
     constexpr uint32_t kArg8 = 8;
     constexpr uint32_t kArg9 = 9;
+    constexpr uint32_t kArg10 = 10;
     const bool has_metadata = tensor_args.slot_idx.has_value();
     const uint32_t arg8 = has_metadata ? tensor_args.slot_idx->buffer()->address() : args.slot_idx;
     const uint32_t arg9 = has_metadata ? tensor_args.kv_actual_global->buffer()->address() : args.kv_actual_global;
+    // Arg 10: valid_global's address (metadata) or token count (scalar); 0 when not clamping.
+    const uint32_t arg10 = tensor_args.valid_global.has_value() ? tensor_args.valid_global->buffer()->address()
+                                                                : args.valid_global.value_or(0);
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         auto& writer_common = GetCommonRuntimeArgs(program, kWriterKernelHandle);
         TT_FATAL(
-            kArg9 < writer_common.size(), "update_padded_kv_cache writer is missing its per-call common runtime args");
+            kArg10 < writer_common.size(), "update_padded_kv_cache writer is missing its per-call common runtime args");
         writer_common[kArg8] = arg8;
         writer_common[kArg9] = arg9;
+        writer_common[kArg10] = arg10;
     }
 }
 
@@ -476,7 +630,9 @@ ttnn::Tensor update_padded_kv_cache(
     uint32_t kv_actual_global,
     uint32_t layer_idx,
     uint32_t num_layers,
-    uint32_t cluster_axis) {
+    std::optional<uint32_t> cluster_axis,
+    const std::optional<ttnn::Tensor>& valid_global_tensor,
+    std::optional<uint32_t> valid_global) {
     using OperationType =
         ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cache::UpdatePaddedKvCacheDeviceOperation;
     auto attrs = OperationType::operation_attributes_t{
@@ -485,12 +641,14 @@ ttnn::Tensor update_padded_kv_cache(
         .layer_idx = layer_idx,
         .num_layers = num_layers,
         .cluster_axis = cluster_axis,
+        .valid_global = valid_global,
     };
     auto tensor_args = OperationType::tensor_args_t{
         .cache = cache,
         .input = input,
         .slot_idx = slot_idx_tensor,
         .kv_actual_global = kv_actual_global_tensor,
+        .valid_global = valid_global_tensor,
     };
     return ttnn::device_operation::launch<OperationType>(attrs, tensor_args);
 }

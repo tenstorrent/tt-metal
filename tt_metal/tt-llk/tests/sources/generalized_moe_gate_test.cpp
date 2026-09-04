@@ -526,6 +526,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         if constexpr (GMG_MODE != MODE_BINARY && !STEP2_RUNS)
         {
+// Wait until unpack has posted both dummy valids; clearing before they arrive leaves unpack blocked after math completes.
+TTI_STALLWAIT(
+    p_stall::STALL_MATH,
+    p_stall::WAIT_SFPU | p_stall::SRCA_VLD | p_stall::SRCB_VLD);
             TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_ABD);
         }
 

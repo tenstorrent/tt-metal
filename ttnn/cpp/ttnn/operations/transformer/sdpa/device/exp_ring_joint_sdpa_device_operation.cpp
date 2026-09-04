@@ -215,9 +215,11 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
     }
 
     // --- Grid and chunk compatibility ---
-    // The factory always computes sdpa_grid = {device_x - 1, device_y} (last column = CCL MUX).
-    // The op is designed for at most one (batch, head) per grid row and one Q chunk per core,
-    // so total Q chunks must not exceed the SDPA core count.
+    // The factory computes sdpa_grid = {user_grid.x - 1, user_grid.y} (last column = fabric MUX),
+    // where user_grid is the program config's grid. Work is assigned row-aligned: each core row
+    // hosts ceil(B*NQH / rows) heads and walks them as serial passes, one Q chunk per pass, with a
+    // head's Q chunks filling its row. Mirror the factory's grid derivation exactly so validation
+    // and the factory never disagree.
 
     TT_FATAL(
         DH % tt::constants::TILE_WIDTH == 0,
@@ -235,8 +237,38 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
         "Got {} columns.",
         device_grid.x);
 
-    const uint32_t sdpa_grid_x = device_grid.x - 1;
-    const uint32_t sdpa_grid_y = device_grid.y;
+    const CoreCoord user_grid =
+        args.program_config.has_value() ? args.program_config->compute_with_storage_grid_size : device_grid;
+    TT_FATAL(
+        user_grid.x <= device_grid.x && user_grid.y <= device_grid.y,
+        "Program config grid ({}x{}) exceeds device grid ({}x{}).",
+        user_grid.x,
+        user_grid.y,
+        device_grid.x,
+        device_grid.y);
+    // Mirrors the factory's grid derivation, including the bottom-row MUX experiment.
+    // Lower-bound the grid BEFORE the derivation: last-column mode subtracts the reserved MUX
+    // column from x and bottom-row mode subtracts two rows from y, so an undersized
+    // program-config grid would otherwise underflow unsigned here (and the num_q_chunks modulo
+    // below would divide by zero) instead of failing with a clear error.
+    const bool mux_on_bottom_row = exp_sdpa_mux_on_bottom_row();
+    if (mux_on_bottom_row) {
+        TT_FATAL(
+            user_grid.y >= 3,
+            "Program config grid ({}x{}) too short for bottom-row MUX placement: needs at least 3 "
+            "rows (2 reserved for the MUX row and its spacer).",
+            user_grid.x,
+            user_grid.y);
+    } else {
+        TT_FATAL(
+            user_grid.x >= 2,
+            "Program config grid ({}x{}) too narrow: needs at least 2 columns (the last column is "
+            "reserved for the fabric MUX kernels).",
+            user_grid.x,
+            user_grid.y);
+    }
+    const uint32_t sdpa_grid_x = mux_on_bottom_row ? user_grid.x : user_grid.x - 1;
+    const uint32_t sdpa_grid_y = mux_on_bottom_row ? user_grid.y - 2 : user_grid.y;
     const uint32_t num_sdpa_cores = sdpa_grid_x * sdpa_grid_y;
 
     // Joint sequence must divide evenly (or be zero); last local Q chunk may be padded.
@@ -251,40 +283,71 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const uint32_t num_q_chunks = num_local_q_chunks + num_joint_q_chunks;
     const uint32_t total_q_chunks = B * NQH * num_q_chunks;
 
-    // One head per row: each (batch, head) pair must map to its own grid row.
+    // Every head-segment must fill its row exactly: fewer chunks than columns would idle the
+    // trailing columns, and the last two SDPA columns are the fabric MUX clients that drive the
+    // K/V all-gather — an idle MUX column means that link never forwards its shard.
     TT_FATAL(
-        B * NQH <= sdpa_grid_y,
-        "Number of (batch × heads) combinations (B={} × NQH={} = {}) exceeds SDPA grid rows ({}) on "
-        "device grid {}×{}. Reduce batch size or head count (e.g. via tensor parallelism).",
-        B,
-        NQH,
-        B * NQH,
-        sdpa_grid_y,
-        device_grid.x,
-        device_grid.y);
-
-    // One Q chunk per column: all Q chunks for one head must fit across the grid columns.
-    TT_FATAL(
-        num_q_chunks <= sdpa_grid_x,
-        "Q chunks per head (num_local={} + num_joint={} = {}) exceeds SDPA grid columns ({}) on "
-        "device grid {}×{}. Increase q_chunk_size or reduce sequence length.",
+        num_q_chunks % sdpa_grid_x == 0,
+        "Q chunks per head (num_local={} + num_joint={} = {}) must be a multiple of the SDPA grid "
+        "columns ({}) on device grid {}×{}. Adjust q_chunk_size so ceil(N_local / q_chunk_size) is "
+        "a multiple of {}.",
         num_local_q_chunks,
         num_joint_q_chunks,
         num_q_chunks,
         sdpa_grid_x,
         device_grid.x,
-        device_grid.y);
+        device_grid.y,
+        sdpa_grid_x);
+    const uint32_t segs_per_head = num_q_chunks / sdpa_grid_x;
+    const uint32_t total_segments = B * NQH * segs_per_head;
 
-    // Final sanity: total Q chunks must not exceed total SDPA cores.
+    // Every SDPA row must own at least one head-segment. An empty row builds no K/V chain and no
+    // injector, and the MUX-writer columns of that row would then hit the row-has-injector
+    // TT_FATAL during program construction — reject the shape here with an actionable message
+    // instead.
     TT_FATAL(
-        total_q_chunks <= num_sdpa_cores,
-        "Total Q chunks (B={} × NQH={} × num_q_chunks={} = {}) exceeds SDPA cores ({}). "
-        "The two constraints above should have caught this.",
+        total_segments >= sdpa_grid_y,
+        "Head-segments (B={} x NQH={} x segs_per_head={} = {}) must cover all {} SDPA grid rows; "
+        "rows without a segment are not supported. Use a program_config grid with at most {} rows, "
+        "or a smaller q_chunk_size to raise segs_per_head.",
+        B,
+        NQH,
+        segs_per_head,
+        total_segments,
+        sdpa_grid_y,
+        total_segments);
+
+    // Segments per row: each core row hosts up to kMaxPasses head-segments, walked as serial
+    // passes. Keep in lockstep with kMaxPasses in exp_ring_joint_sdpa_program_factory.cpp
+    // (L1-bound).
+    constexpr uint32_t kMaxPasses = 3;
+    const uint32_t num_passes = (total_segments + sdpa_grid_y - 1) / sdpa_grid_y;
+    TT_FATAL(
+        num_passes <= kMaxPasses,
+        "Number of head-segments (B={} × NQH={} × segs_per_head={} = {}) needs {} serial passes on "
+        "{} SDPA grid rows (device grid {}×{}), but at most {} are supported. Reduce batch size or "
+        "head count (e.g. via tensor parallelism), or use a larger q_chunk_size.",
+        B,
+        NQH,
+        segs_per_head,
+        total_segments,
+        num_passes,
+        sdpa_grid_y,
+        device_grid.x,
+        device_grid.y,
+        kMaxPasses);
+
+    // Final sanity: total Q chunks must fit the cores across all passes.
+    TT_FATAL(
+        total_q_chunks <= num_passes * num_sdpa_cores,
+        "Total Q chunks (B={} × NQH={} × num_q_chunks={} = {}) exceeds SDPA cores ({}) across {} "
+        "passes. The two constraints above should have caught this.",
         B,
         NQH,
         num_q_chunks,
         total_q_chunks,
-        num_sdpa_cores);
+        num_sdpa_cores,
+        num_passes);
 }
 
 ExpRingJointSDPAResultSpec ExpRingJointSDPADeviceOperation::compute_output_specs(

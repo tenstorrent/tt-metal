@@ -100,7 +100,7 @@ inline void calculate_softplus_body(const float beta, const float beta_reciproca
     sfpi::vFloat val = sfpi::dst_reg[0];
     sfpi::vFloat t = beta * val;
 
-    v_if(t < threshold) {
+    v_if(t <= threshold) {
         // a = |t| via setsgn (clear sign bit, no branch)
         sfpi::vFloat a = sfpi::setsgn(t, 0);
 

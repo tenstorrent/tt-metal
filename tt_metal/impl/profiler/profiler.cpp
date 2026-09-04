@@ -36,7 +36,7 @@
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include "profiler_analysis.hpp"
 #include "hal_types.hpp"
-#include "hostdevcommon/profiler_common.h"
+#include "hostdev/profiler_common.h"
 #include "llrt.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "llrt/metal_soc_descriptor.hpp"
@@ -75,7 +75,8 @@ kernel_profiler::PacketTypes get_packet_type(uint32_t timer_id) {
         kernel_profiler::PROFILER_TIMER_PACKET_TYPE_MASK);
 }
 
-void add_program_sub_device_meta_data(nlohmann::json& meta_data, tt::ChipId device_id, uint32_t runtime_id) {
+void add_program_sub_device_meta_data(
+    nlohmann::json& meta_data, ContextId context_id, tt::ChipId device_id, uint32_t runtime_id) {
     using CacheKey = std::pair<tt::ChipId, uint32_t>;
     struct CacheKeyHash {
         std::size_t operator()(const CacheKey& k) const noexcept {
@@ -93,9 +94,11 @@ void add_program_sub_device_meta_data(nlohmann::json& meta_data, tt::ChipId devi
         std::lock_guard<std::mutex> lock(cache_mutex);
         auto cache_it = sub_device_info_cache.find(cache_key);
         if (cache_it == sub_device_info_cache.end()) {
-            cache_it = sub_device_info_cache
-                           .emplace(cache_key, tt::GetProgramSubDevice(device_id, static_cast<uint16_t>(runtime_id)))
-                           .first;
+            cache_it =
+                sub_device_info_cache
+                    .emplace(
+                        cache_key, tt::GetProgramSubDevice(context_id, device_id, static_cast<uint16_t>(runtime_id)))
+                    .first;
         }
         sub_device_info = cache_it->second;
     }
@@ -106,12 +109,12 @@ void add_program_sub_device_meta_data(nlohmann::json& meta_data, tt::ChipId devi
     meta_data["sub_device_manager_id"] = sub_device_info->sub_device_manager_id;
 }
 
-void add_program_sub_device_meta_data(nlohmann::json& meta_data, uint32_t encoded_run_host_id) {
+void add_program_sub_device_meta_data(nlohmann::json& meta_data, ContextId context_id, uint32_t encoded_run_host_id) {
     if (encoded_run_host_id == 0) {
         return;
     }
     const auto decoded = detail::DecodePerDeviceProgramID(encoded_run_host_id);
-    add_program_sub_device_meta_data(meta_data, decoded.device_id, decoded.base_program_id);
+    add_program_sub_device_meta_data(meta_data, context_id, decoded.device_id, decoded.base_program_id);
 }
 
 #if defined(TRACY_ENABLE)
@@ -1997,7 +2000,7 @@ void DeviceProfiler::readDeviceMarkerData(
     ZoneScoped;
 
     nlohmann::json meta_data;
-    add_program_sub_device_meta_data(meta_data, run_host_id);
+    add_program_sub_device_meta_data(meta_data, this->context_id, run_host_id);
     const tracy::MarkerDetails marker_details = getMarkerDetails(timer_id);
     const kernel_profiler::PacketTypes packet_type = get_packet_type(timer_id);
     const auto [trace_id, trace_id_count] = getTraceIdAndCount(run_host_id, device_trace_counter);
@@ -2142,11 +2145,14 @@ void DeviceProfiler::readTsData16BMarkerData(
     }
 
 #if defined(TRACY_ENABLE)
-    // Emit the NOC-debug event exactly once per genuine device event. The profiler re-parses undrained profiler
-    // buffers many times per run (periodic debug-dump polls + force reads + the Tracy marker pass); the persistent
-    // marker set (device_markers_per_core_risc_map) deduplicates those re-reads, so pushing only when the marker was
-    // newly inserted guarantees each event reaches the NOCDebugState once. This mirrors how readDeviceMarkerData
-    // handles scoped-lock events (its push sits after the same new_marker_inserted early-out).
+    // Emit the NOC-debug event exactly once per genuine device event. One read pass parses the same undrained buffer
+    // more than once -- the debug-dump poll reads each stalled core's active DRAM buffer, then processResults re-reads
+    // buffer 0 plus the L1 residual -- and the marker set (device_markers_per_core_risc_map) deduplicates those
+    // re-reads, so pushing only when the marker was newly inserted guarantees each event reaches the NOCDebugState
+    // once. The set only has to survive the pass, NOT the whole run: every read path calls resetControlBuffers when it
+    // is done and parsing is bounded by the control-buffer end index, so once a pass completes the device cannot
+    // reproduce that data. That is what lets the mid-run dump clear the set to keep host memory bounded. This mirrors
+    // how readDeviceMarkerData handles scoped-lock events (its push sits after the same new_marker_inserted early-out).
     if (noc_debug_event.has_value()) {
         MetalContext::instance(context_id)
             .noc_debug_state()
@@ -2630,32 +2636,6 @@ void DeviceProfiler::processResults(
         readRiscProfilerResults(device, virtual_core, data_source, metadata, riscs_to_include);
     }
 #endif
-}
-
-void DeviceProfiler::dumpRoutingInfo() const {
-    tt::filesystem::safe_create_directories(noc_trace_data_output_dir);
-    if (!tt::filesystem::safe_is_directory(noc_trace_data_output_dir).value_or(false)) {
-        log_error(
-            tt::LogMetal,
-            "Could not dump topology to '{}' because the directory path could not be created!",
-            noc_trace_data_output_dir);
-        return;
-    }
-
-    tt::tt_metal::dumpRoutingInfo(noc_trace_data_output_dir / "topology.json");
-}
-
-void DeviceProfiler::dumpClusterCoordinates() const {
-    tt::filesystem::safe_create_directories(noc_trace_data_output_dir);
-    if (!tt::filesystem::safe_is_directory(noc_trace_data_output_dir).value_or(false)) {
-        log_error(
-            tt::LogMetal,
-            "Could not dump cluster coordinates to '{}' because the directory path could not be created!",
-            noc_trace_data_output_dir);
-        return;
-    }
-
-    tt::tt_metal::dumpClusterCoordinatesAsJson(noc_trace_data_output_dir / "cluster_coordinates.json");
 }
 
 bool isSyncInfoNewer(const SyncInfo& old_info, const SyncInfo& new_info) {

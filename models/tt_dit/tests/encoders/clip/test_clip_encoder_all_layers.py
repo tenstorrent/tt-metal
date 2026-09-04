@@ -121,7 +121,7 @@ def test_clip_stack_all_layers(
             embeddings_state_dict[new_key] = value
     tt_embedding.load_torch_state_dict(embeddings_state_dict)
 
-    hidden_states = tt_embedding(tt_prompt, encoder_submesh)
+    hidden_states = tt_embedding(tt_prompt)
 
     causal_attention_mask = create_4d_causal_attention_mask(
         tt_prompt.shape, encoder_submesh, dtype=hidden_states.get_dtype()
@@ -166,11 +166,11 @@ def test_clip_stack_all_layers(
         current_hidden_states = hf_hidden_states
 
         for layer_idx in range(hf_model.config.num_hidden_layers):
+            # transformers 5.x merged causal_attention_mask into attention_mask and returns
+            # the hidden states directly instead of a tuple.
             layer_output = hf_model.text_model.encoder.layers[layer_idx](
-                current_hidden_states, None, hf_causal_mask  # hidden_states, attention_mask, causal_attention_mask
-            )[
-                0
-            ]  # HF returns tuple (hidden_states, attentions)
+                current_hidden_states, hf_causal_mask  # hidden_states, attention_mask
+            )
             hf_all_hidden_states.append(layer_output)
             current_hidden_states = layer_output
 

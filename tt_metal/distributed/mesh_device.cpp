@@ -46,6 +46,7 @@
 #include "impl/threading/thread_pool.hpp"
 #include "device/device_manager.hpp"
 #include <experimental/fabric/control_plane.hpp>
+#include <experimental/fabric/topology_mapper.hpp>
 #include <experimental/fabric/fabric_types.hpp>
 #include "distributed/fd_mesh_command_queue.hpp"
 #include "distributed/realtime_profiler_manager.hpp"
@@ -62,6 +63,7 @@
 #include "debug/inspector/inspector.hpp"
 #include "sub_device/sub_device_manager.hpp"
 #include "sub_device/sub_device_manager_tracker.hpp"
+#include <map>
 #include <set>
 #include "llrt/metal_soc_descriptor.hpp"
 #include <umd/device/types/xy_pair.hpp>
@@ -80,20 +82,6 @@ class SystemMemoryManager;
 namespace program_cache::detail {
 struct ProgramCache;
 }  // namespace program_cache::detail
-
-namespace experimental {
-std::map<ChipId, IDevice*> CreateDevices(
-    ContextId context_id,
-    const std::vector<ChipId>& device_ids,
-    uint8_t num_hw_cqs,
-    size_t l1_small_size,
-    size_t trace_region_size,
-    const DispatchCoreConfig& dispatch_core_config,
-    const std::vector<uint32_t>& l1_bank_remap,
-    size_t worker_l1_size,
-    bool init_profiler,
-    bool initialize_fabric_and_dispatch_fw);
-}  // namespace experimental
 
 }  // namespace tt::tt_metal
 
@@ -172,8 +160,8 @@ MeshDeviceImpl::ScopedDevices::ScopedDevices(
     ContextId context_id) :
     context_id_(context_id) {
     auto local_devices = extract_locals(all_device_ids);
-    opened_local_devices_ = tt_metal::experimental::CreateDevices(
-        context_id,
+    auto& ctx = MetalContext::instance(context_id);
+    ctx.initialize_device_manager(
         local_devices,
         num_command_queues,
         l1_small_size,
@@ -183,6 +171,12 @@ MeshDeviceImpl::ScopedDevices::ScopedDevices(
         worker_l1_size,
         /* init_profiler */ false,
         /* initialize_fabric_and_dispatch_fw */ false);
+    const bool is_galaxy = ctx.get_cluster().is_galaxy_cluster();
+    for (IDevice* device : ctx.device_manager()->get_all_active_devices()) {
+        if (!is_galaxy || !device->is_mmio_capable()) {
+            opened_local_devices_.emplace(device->id(), device);
+        }
+    }
 
     for (auto device_id : active_device_ids) {
         if (device_id.is_local()) {
@@ -1054,6 +1048,7 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
     drisc_l1_arena_.reset();
 
     if (is_initialized()) {
+        disable_and_clear_program_cache();
         sub_device_manager_tracker_.reset();
         scoped_devices_.reset();
         parent_mesh_.reset();
@@ -1220,6 +1215,88 @@ std::vector<CoreCoord> MeshDeviceImpl::worker_cores_from_logical_cores(
         return device->worker_cores_from_logical_cores(logical_cores);
     });
 }
+const std::vector<int>& MeshDeviceImpl::coowner_ranks() const {
+    std::lock_guard<std::mutex> lock(coowner_mutex_);
+    if (coowner_ranks_.has_value()) {
+        return *coowner_ranks_;
+    }
+    // Every coordinate local: nothing is co-owned, and no lookup is needed.
+    if (num_devices() == get_devices().size()) {
+        coowner_ranks_.emplace();
+        return *coowner_ranks_;
+    }
+
+    const auto& control_plane = MetalContext::instance(context_id_).get_control_plane();
+
+    // (mesh id, host rank) -> MPI rank, inverted from the control plane's global bindings.
+    std::map<std::pair<uint32_t, uint32_t>, int> rank_of_binding;
+    for (const auto& [rank, binding] : control_plane.get_global_logical_bindings()) {
+        rank_of_binding[{*binding.first, *binding.second}] = *rank;
+    }
+
+    std::set<int> ranks;
+    std::optional<uint32_t> fabric_mesh_id;
+    for (const auto& coord : MeshCoordinateRange(shape())) {
+        const auto fabric_node_id = get_fabric_node_id(coord);
+
+        // Every device must belong to one fabric mesh: only devices of the same mesh share an
+        // allocator address space, and a submesh straddling a boundary would pull ranks from both
+        // meshes into the sub-context, where they never reach a collective together.
+        const uint32_t coord_mesh_id = *fabric_node_id.mesh_id;
+        if (!fabric_mesh_id.has_value()) {
+            fabric_mesh_id = coord_mesh_id;
+        }
+        TT_FATAL(
+            coord_mesh_id == *fabric_mesh_id,
+            "Cannot determine the co-owners of this mesh: it spans fabric meshes {} and {} (coordinate {} is chip "
+            "{} of mesh {}).",
+            *fabric_mesh_id,
+            coord_mesh_id,
+            coord,
+            fabric_node_id.chip_id,
+            coord_mesh_id);
+
+        // Resolve through the topology mapper, the same source get_global_logical_bindings() is
+        // keyed against, so the two views cannot disagree about who owns a chip.
+        //
+        // Note the chip id, not the coordinate: get_host_rank_for_chip converts to a PARENT-mesh
+        // coordinate internally, while `coord` here is submesh-local. get_fabric_node_id resolves
+        // that through this mesh's own handle first, which is what makes the lookup valid.
+        const auto host_rank =
+            control_plane.get_topology_mapper().get_host_rank_for_chip(fabric_node_id.mesh_id, fabric_node_id.chip_id);
+        TT_FATAL(
+            host_rank.has_value(),
+            "Cannot determine the co-owners of this mesh: chip {} of mesh {} has no host rank.",
+            fabric_node_id.chip_id,
+            *fabric_node_id.mesh_id);
+        auto it = rank_of_binding.find({*fabric_node_id.mesh_id, **host_rank});
+        TT_FATAL(
+            it != rank_of_binding.end(),
+            "Cannot determine the co-owners of this mesh: mesh {} host rank {} is not bound to any MPI rank.",
+            *fabric_node_id.mesh_id,
+            **host_rank);
+        ranks.insert(it->second);
+    }
+
+    coowner_ranks_ = ranks.size() <= 1 ? std::vector<int>{} : std::vector<int>(ranks.begin(), ranks.end());
+    return *coowner_ranks_;
+}
+
+const std::shared_ptr<distributed::multihost::DistributedContext>& MeshDeviceImpl::coowner_context() const {
+    const auto& ranks = coowner_ranks();  // takes coowner_mutex_ and releases it
+    std::lock_guard<std::mutex> lock(coowner_mutex_);
+    if (!coowner_context_ && !ranks.empty()) {
+        // TODO: the ranks come from the control plane's global bindings, while this splits the
+        // process-wide current world. Those are the same rank space only when the job is not
+        // subcontext-split (TT_RUN_SUBCONTEXT_ID); MeshSocket::process_host_ranks translates
+        // between them for the same reason. Revisit before running a split job.
+        auto mutable_ranks = ranks;  // create_sub_context takes a mutable span
+        coowner_context_ = distributed::multihost::DistributedContext::get_current_world()->create_sub_context(
+            ttsl::Span<int>(mutable_ranks.data(), mutable_ranks.size()));
+    }
+    return coowner_context_;
+}
+
 std::vector<CoreCoord> MeshDeviceImpl::get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) {
     return get_devices().front()->get_optimal_dram_bank_to_logical_worker_assignment(noc);
 }

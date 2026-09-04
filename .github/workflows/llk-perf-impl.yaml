@@ -127,14 +127,12 @@ jobs:
           fi
           echo "CHIP_ARCH=$CHIP_ARCH" >> "$GITHUB_ENV"
           # One name for everything this shard produces: the report directory
-          # perf_data/runs/<tag> and the published Parquet. Must be unique per
+          # perf_data/runs/<tag> and the Parquet inside it. Must be unique per
           # job, because pytest-split divides by test item rather than by
           # module, so one module's variants land in several shards and their
           # reports would collide the moment the artefacts are brought together.
           # It carries the workflow run id, so it is also unique across nights --
           # which matters once these files are archived into one directory.
-          # Exported here rather than scoped to a single step: the publish step
-          # names its output from the same tag, and two naming schemes drift.
           echo "PERF_RUN_TAG=${{ github.run_id }}-$CHIP_ARCH-${{ strategy.job-index }}" >> "$GITHUB_ENV"
       - name: Run tests
         shell: bash
@@ -144,31 +142,12 @@ jobs:
         run: |
           ${{ matrix.test-group.cmd }}
 
-      - name: Publish Parquet from CSVs
-        if: always() && hashFiles('tt_metal/tt-llk/perf_data/**/*.csv') != ''
-        shell: bash
-        working-directory: ${{ env.LLK_PATH }}/tests/python_tests
-        env:
-          COMMIT_SHA: ${{ github.sha }}
-          RUN_ID: ${{ github.run_id }}
-          PIPELINE: ${{ github.event_name == 'schedule' && 'nightly' || 'PR' }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: |
-          # This run only. publish_run globs **/*.csv, so pointing it at
-          # perf_data would sweep every retained run into one batch.
-          python3 -m helpers.perf.publish_run \
-            --csv-dir ../../perf_data/latest \
-            --out ../../perf_data/llk-perf-${{ env.PERF_RUN_TAG }}.parquet \
-            --arch ${{ env.CHIP_ARCH }}
-
       - name: Upload performance data
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         if: always() && hashFiles('tt_metal/tt-llk/perf_data/runs/**') != ''
         with:
           name: perf-data-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}
-          path: |
-            ${{ env.LLK_PATH }}/perf_data/runs/
-            ${{ env.LLK_PATH }}/perf_data/*.parquet
+          path: ${{ env.LLK_PATH }}/perf_data/runs/
 
       - name: Upload test logs on failure
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0

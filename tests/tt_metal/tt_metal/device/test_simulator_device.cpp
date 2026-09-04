@@ -98,7 +98,7 @@ TEST_F(AnyDispatchSimulatorFixture, QuasarStaticTlbReadWrite) {
     constexpr uint32_t value32 = 0xDEADBEEF;
 
     for (auto& mesh_device : this->devices_) {
-        const ChipId chip_id = mesh_device->get_devices()[0]->id();
+        const ChipId chip_id = mesh_device->get_device_ids()[0];
         const auto& sdesc = cluster.get_soc_desc(chip_id);
 
         const std::vector<tt::umd::CoreCoord> tensix_cores =
