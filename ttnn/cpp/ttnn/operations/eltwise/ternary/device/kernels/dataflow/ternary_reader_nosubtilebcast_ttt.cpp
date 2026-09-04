@@ -8,7 +8,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
-#include "ttnn/operations/eltwise/ternary/device/kernels/dataflow/nd_indexing.hpp"
+#include "ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/nd_indexing.hpp"
 
 void kernel_main() {
     const uint32_t src0_addr = get_arg_val<uint32_t>(0);
@@ -111,8 +111,6 @@ void kernel_main() {
     uint32_t next_n_shift = n_stride - c_stride * C;
     uint32_t next_d_shift = d_stride - n_stride * N;
     const uint32_t d_span = d_stride * D;
-    const uint32_t next_nd_shift = nD_stride - d_span;
-    const uint32_t repeat_nd_shift = 0u - d_span;
 
     uint32_t tile_offset_b =
         input_nd_b * nD_stride_b + start_d * d_stride_b + start_n * n_stride_b + start_c * c_stride_b + start_th * Wt;
@@ -120,8 +118,6 @@ void kernel_main() {
     uint32_t next_n_shift_b = n_stride_b - c_stride_b * C;
     uint32_t next_d_shift_b = d_stride_b - n_stride_b * N;
     const uint32_t d_span_b = d_stride_b * D;
-    const uint32_t next_nd_shift_b = nD_stride_b - d_span_b;
-    const uint32_t repeat_nd_shift_b = -d_span_b;
 
     uint32_t tile_offset_c =
         input_nd_c * nD_stride_c + start_d * d_stride_c + start_n * n_stride_c + start_c * c_stride_c + start_th * Wt;
@@ -129,8 +125,6 @@ void kernel_main() {
     uint32_t next_n_shift_c = n_stride_c - c_stride_c * C;
     uint32_t next_d_shift_c = d_stride_c - n_stride_c * N;
     const uint32_t d_span_c = d_stride_c * D;
-    const uint32_t next_nd_shift_c = nD_stride_c - d_span_c;
-    const uint32_t repeat_nd_shift_c = -d_span_c;
 
     uint32_t num_tiles_read = 0;
     // Supports both nobcast and outer_bcast cases for TTT variant
@@ -192,9 +186,9 @@ void kernel_main() {
         const uint32_t next_input_nd = get_input_nd_index(nd + 1, nd_broadcast_factor);
         const uint32_t next_input_nd_b = get_input_nd_index(nd + 1, nd_broadcast_factor_b);
         const uint32_t next_input_nd_c = get_input_nd_index(nd + 1, nd_broadcast_factor_c);
-        tile_offset += nd_loop_shift(input_nd, next_input_nd, next_nd_shift, repeat_nd_shift);
-        tile_offset_b += nd_loop_shift(input_nd_b, next_input_nd_b, next_nd_shift_b, repeat_nd_shift_b);
-        tile_offset_c += nd_loop_shift(input_nd_c, next_input_nd_c, next_nd_shift_c, repeat_nd_shift_c);
+        tile_offset = advance_nd_offset(tile_offset, input_nd, next_input_nd, nD_stride, d_span);
+        tile_offset_b = advance_nd_offset(tile_offset_b, input_nd_b, next_input_nd_b, nD_stride_b, d_span_b);
+        tile_offset_c = advance_nd_offset(tile_offset_c, input_nd_c, next_input_nd_c, nD_stride_c, d_span_c);
         input_nd = next_input_nd;
         input_nd_b = next_input_nd_b;
         input_nd_c = next_input_nd_c;

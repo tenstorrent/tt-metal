@@ -589,10 +589,12 @@ uint32_t pack_compute_scalar_arg(
 }
 
 // Per-core runtime-arg vector lengths, shared by create_descriptor() and the cache-hit patch.
-// TTT readers consume nD broadcast factors at slots 27-29. TTS/TST keep the original 27-arg
-// layout; ttnn.where tensor-scalar goes through binary_ng, not these kernels.
+// Slots 0-26 are the original layout; the nD broadcast factors follow, one per tensor operand, so
+// TTT takes three (27-29) and TTS/TST two (27-28).
 constexpr size_t num_reader_args = 30;
-constexpr size_t num_ts_reader_args = 27;
+constexpr size_t num_ts_reader_args = 29;
+// Slots 0-26 of the reader layout, i.e. everything before the nD broadcast factors.
+constexpr size_t num_shape_reader_args = 27;
 constexpr size_t num_writer_args = 11;
 constexpr size_t num_compute_args = 4;
 
@@ -615,7 +617,7 @@ void generate_runtime_arguments(
     const TernaryDeviceOperation::tensor_args_t& tensor_args,
     TernaryDeviceOperation::tensor_return_value_t& output,
     ttnn::operations::ternary::TernaryBroadcastType broadcast_type,
-    Emit&& emit) {
+    const Emit& emit) {
     const auto& [predicate_tensor, value_true_tensor, value_false_tensor, optional_output_tensor] = tensor_args;
     TernaryVariant variant = operation_attributes.ternary_variant;
     const bool is_ttt = variant == TernaryVariant::TTT;
@@ -677,13 +679,11 @@ void generate_runtime_arguments(
     const auto src1_dims = extract_tensor_dimensions(src1_tensor, out_rank, tile_height, tile_width);
     const auto pred_strides = calculate_strides(pred_dims);
     const auto src1_strides = calculate_strides(src1_dims);
-    uint32_t pred_nd_factor = 1u;
-    uint32_t src1_nd_factor = 1u;
+    const uint32_t pred_nd_factor = nd_broadcast_factor(pred_dims.ND, output_dims.ND);
+    const uint32_t src1_nd_factor = nd_broadcast_factor(src1_dims.ND, output_dims.ND);
     Strides src2_strides{};
     uint32_t src2_nd_factor = 1u;
     if (is_ttt) {
-        pred_nd_factor = nd_broadcast_factor(pred_dims.ND, output_dims.ND);
-        src1_nd_factor = nd_broadcast_factor(src1_dims.ND, output_dims.ND);
         const auto src2_dims = extract_tensor_dimensions(*value_false_tensor, out_rank, tile_height, tile_width);
         src2_strides = calculate_strides(src2_dims);
         src2_nd_factor = nd_broadcast_factor(src2_dims.ND, output_dims.ND);
@@ -697,8 +697,7 @@ void generate_runtime_arguments(
     // and therefore dynamic: baked on the cache-miss build, re-applied on every hit.
     const uint32_t scalar_arg = pack_compute_scalar_arg(operation_attributes, output.dtype());
 
-    // TTS/TST without broadcast only need the address/tile-count prefix. TTT always takes the
-    // full 30-arg set, including nD broadcast factors. Other TTS/TST broadcasts keep 27 args.
+    // TTS/TST without broadcast only need the address/tile-count prefix; its reader does no nD walk.
     const size_t reader_arg_count = is_ttt                                         ? num_reader_args
                                     : broadcast_type == TernaryBroadcastType::NONE ? 5
                                                                                    : num_ts_reader_args;
@@ -765,7 +764,7 @@ void generate_runtime_arguments(
         reader_args[2] = src2_addr;           // 2: src2_addr (3rd tensor operand, 0 when scalar)
         reader_args[3] = num_tiles_per_core;  // 3: num_tiles (per core)
         reader_args[4] = c_start_id;          // 4: start_id
-        if (reader_arg_count >= num_ts_reader_args) {
+        if (reader_arg_count >= num_shape_reader_args) {
             reader_args[5] = pred_strides.nD_stride;   // 5: nD_stride
             reader_args[6] = pred_strides.d_stride;    // 6: d_stride
             reader_args[7] = pred_strides.n_stride;    // 7: n_stride
@@ -788,9 +787,9 @@ void generate_runtime_arguments(
             reader_args[24] = src2_num_tiles;          // 24: src2_num_tiles
             reader_args[25] = c_current_shard_width;   // 25: dst_shard_width
             reader_args[26] = a_num_tiles;             // 26: src_num_tiles (predicate)
+            reader_args[27] = pred_nd_factor;          // 27: predicate nD broadcast factor
+            reader_args[28] = src1_nd_factor;          // 28: src1 nD broadcast factor
             if (is_ttt) {
-                reader_args[27] = pred_nd_factor;  // 27: predicate nD broadcast factor
-                reader_args[28] = src1_nd_factor;  // 28: src1 nD broadcast factor
                 reader_args[29] = src2_nd_factor;  // 29: src2 nD broadcast factor
             }
         }
@@ -938,6 +937,18 @@ size_t overwrite_tensor_shape_common_args(RuntimeArgsData& common_args, size_t o
         common_args[offset + i] = shape_in_pages[i];
     }
     return offset + shape_in_pages.size();
+}
+
+// Every word of a kernel's common runtime args comes from one of its TensorAccessors, so once all of
+// them have been rewritten the offset must land exactly on the end. Anything else means this call's
+// accessor ranks differ from the ones the cached program was built for, which compute_program_hash is
+// supposed to keep apart.
+void check_tensor_shape_common_args_exhausted(const RuntimeArgsData& common_args, size_t offset) {
+    TT_FATAL(
+        offset == common_args.size(),
+        "Rewrote {} of the {} common runtime args; the cached program was built for different accessor ranks",
+        offset,
+        common_args.size());
 }
 
 }  // namespace CMAKE_UNIQUE_NAMESPACE
@@ -1498,11 +1509,15 @@ void TernaryDeviceOperation::TernaryProgramFactory::override_runtime_arguments(
     offset =
         CMAKE_UNIQUE_NAMESPACE::overwrite_tensor_shape_common_args(reader_common_args, offset, *src1_tensor.buffer());
     if (variant == TernaryVariant::TTT) {
-        CMAKE_UNIQUE_NAMESPACE::overwrite_tensor_shape_common_args(
+        offset = CMAKE_UNIQUE_NAMESPACE::overwrite_tensor_shape_common_args(
             reader_common_args, offset, *value_false_tensor->buffer());
     }
-    CMAKE_UNIQUE_NAMESPACE::overwrite_tensor_shape_common_args(
-        tt::tt_metal::GetCommonRuntimeArgs(program, writer_kernel_idx), 0, *output.buffer());
+    CMAKE_UNIQUE_NAMESPACE::check_tensor_shape_common_args_exhausted(reader_common_args, offset);
+
+    auto& writer_common_args = tt::tt_metal::GetCommonRuntimeArgs(program, writer_kernel_idx);
+    CMAKE_UNIQUE_NAMESPACE::check_tensor_shape_common_args_exhausted(
+        writer_common_args,
+        CMAKE_UNIQUE_NAMESPACE::overwrite_tensor_shape_common_args(writer_common_args, 0, *output.buffer()));
 
     tt::tt_metal::Buffer* true_buffer = value_true_tensor.has_value() ? value_true_tensor->buffer() : nullptr;
     tt::tt_metal::Buffer* false_buffer = value_false_tensor.has_value() ? value_false_tensor->buffer() : nullptr;

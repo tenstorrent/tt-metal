@@ -104,11 +104,7 @@ void kernel_main() {
     uint32_t next_n_shift_b = n_stride_b - c_stride_b * C;
     uint32_t next_d_shift_b = d_stride_b - n_stride_b * N;
     const uint32_t d_span = d_stride * D;
-    const uint32_t nd_advance_shift = nD_stride - d_span;
-    const uint32_t nd_repeat_shift = 0u - d_span;
     const uint32_t d_span_b = d_stride_b * D;
-    const uint32_t nd_advance_shift_b = nD_stride_b - d_span_b;
-    const uint32_t nd_repeat_shift_b = 0u - d_span_b;
 
     uint32_t num_tiles_read = 0;
     for (uint32_t nd = start_nd; nd < cND && num_tiles_read < dst_num_tiles; ++nd, start_d = 0) {
@@ -206,12 +202,12 @@ void kernel_main() {
         }
 #if !SRC_SHARDED
         const uint32_t next_input_nd_a = get_input_nd_index(nd + 1, a_nd_factor);
-        tile_offset += nd_loop_shift(input_nd_a, next_input_nd_a, nd_advance_shift, nd_repeat_shift);
+        tile_offset = advance_nd_offset(tile_offset, input_nd_a, next_input_nd_a, nD_stride, d_span);
         input_nd_a = next_input_nd_a;
 #endif
 #if !SRC_SHARDED_B
         const uint32_t next_input_nd_b = get_input_nd_index(nd + 1, b_nd_factor);
-        tile_offset_b += nd_loop_shift(input_nd_b, next_input_nd_b, nd_advance_shift_b, nd_repeat_shift_b);
+        tile_offset_b = advance_nd_offset(tile_offset_b, input_nd_b, next_input_nd_b, nD_stride_b, d_span_b);
         input_nd_b = next_input_nd_b;
 #endif
     }
