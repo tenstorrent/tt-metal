@@ -133,11 +133,13 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
         // reaches here is on a tilized path.
         const auto& in_shard = tensor_args.shard_spec().value();
         const auto& input_shard_grid = in_shard.grid;
-        TT_FATAL(
-            program_grid.contains(input_shard_grid),
-            "Input shard grid {} must be contained in program core grid {}",
-            input_shard_grid,
-            program_grid);
+        if (tensor_args.memory_config().is_l1()) {
+            TT_FATAL(
+                program_grid.contains(input_shard_grid),
+                "Input shard grid {} must be contained in program core grid {}",
+                input_shard_grid,
+                program_grid);
+        }
         const uint32_t tile_height = tensor_args.tensor_spec().tile().get_height();
         const uint32_t tile_width = tensor_args.tensor_spec().tile().get_width();
         TT_FATAL(
@@ -164,16 +166,18 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
         const uint32_t output_tile_height = out_spec.tile().get_height();
         const uint32_t output_tile_width = out_spec.tile().get_width();
 
-        TT_FATAL(
-            program_grid.contains(output_shard_grid),
-            "Output shard grid {} must be contained in program core grid {}",
-            output_shard_grid,
-            program_grid);
-        TT_FATAL(
-            device_grid.contains(output_shard_grid),
-            "Output shard grid {} must be contained in device grid {}",
-            output_shard_grid,
-            device_grid);
+        if (operation_attributes.output_mem_config.is_l1()) {
+            TT_FATAL(
+                program_grid.contains(output_shard_grid),
+                "Output shard grid {} must be contained in program core grid {}",
+                output_shard_grid,
+                program_grid);
+            TT_FATAL(
+                device_grid.contains(output_shard_grid),
+                "Output shard grid {} must be contained in device grid {}",
+                output_shard_grid,
+                device_grid);
+        }
         if (output_nd_shard_spec.shard_shape.rank() >= 2) {
             TT_FATAL(
                 output_nd_shard_spec.shard_shape[-2] > 0 && output_nd_shard_spec.shard_shape[-1] > 0,

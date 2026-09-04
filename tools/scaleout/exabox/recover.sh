@@ -126,7 +126,7 @@ EOF
 HOSTS=""
 CONFIG="4x32"
 DOCKER_IMAGE=""
-DOCKER_IMAGE_DEFAULT="ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx:v0.76.0-dev20260728-7-g04e4029f0e3"
+DOCKER_IMAGE_DEFAULT="ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx:v0.79.0-dev20260903-20-gcc9c295fdf0"
 NUM_ITERATIONS=5
 MAX_ATTEMPTS=1
 SLEEP_DURATION=5
