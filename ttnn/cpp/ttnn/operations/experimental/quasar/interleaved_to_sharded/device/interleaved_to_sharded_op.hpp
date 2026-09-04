@@ -31,6 +31,14 @@ struct InterleavedToShardedDeviceOperation {
 
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+
+    // Deliberately no compute_program_hash. This op declares its TensorParameters with default
+    // relaxations, so a cache hit is accepted only if the whole TensorSpec matches -- alignment
+    // included -- and the framework default hash is already exactly that strict: it reflects each
+    // Tensor as (storage, tensor_spec), TensorSpec as (logical_shape, tensor_layout), and
+    // TensorLayout as (dtype, page_config, memory_config, alignment). A hand-written projection of
+    // those fields is what let the unported sibling key two alignment-differing inputs the same, so
+    // overriding here would only reintroduce the ability to drift from the accept/reject predicate.
 };
 
 Tensor interleaved_to_sharded(
