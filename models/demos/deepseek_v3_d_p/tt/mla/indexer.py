@@ -21,7 +21,8 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3_d_p.tt.mla.mla_config import get_indexer_key_chunk
+from models.common.utility_functions import is_blackhole
+from models.demos.deepseek_v3_d_p.tt.mla.mla_config import get_indexer_key_chunk, get_matmul_config
 from models.demos.deepseek_v3_d_p.tt.mla.rope import interleaved_perm_matrix
 
 # DSA indexer weight names are owned by TtIndexer.WEIGHT_NAMES (single source of truth). A
@@ -615,6 +616,23 @@ class TtIndexer:
             input_batch_index=cache_batch_idx if index_kbuf.shape[0] > 1 else 0,
         )
 
+    def _resolve_mm_cfg(self, weight_name: str, seq_len_local: int) -> dict | None:
+        """Return the model-gated Blackhole config for an indexer matmul."""
+        if not is_blackhole():
+            return None
+        entry = get_matmul_config(weight_name, seq_len_local)
+        candidates = entry if isinstance(entry, list) else [entry]
+        return next(
+            (
+                cfg
+                for cfg in candidates
+                if cfg is not None
+                and cfg.get("num_heads") in (None, self.config.num_attention_heads)
+                and cfg.get("q_lora_rank") in (None, getattr(self.config, "q_lora_rank", None))
+            ),
+            None,
+        )
+
     def write_k(
         self,
         hidden_states,
@@ -637,11 +655,13 @@ class TtIndexer:
         ``actual_end`` (end of the chunk's real tokens) clamps the write to them, so a chunk padding past
         the cache end needs only its real tokens to fit. forward() reads back the same prefix
         (``valid_pos``)."""
+        wk_cfg = self._resolve_mm_cfg("indexer.wk", seq_len)
         k = ttnn.linear(
             hidden_states,
             self._idx_wk,
             compute_kernel_config=self.default_compute_kernel_config,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=wk_cfg["out_mem_config"] if wk_cfg is not None else ttnn.DRAM_MEMORY_CONFIG,
+            **({"program_config": wk_cfg["program_config"]} if wk_cfg is not None else {}),
         )  # per-chip partial [1, 1, S/sp, D_idx]
         k = self._tp_rs_ag(k)  # all-reduce over TP
         k = ttnn.layer_norm(
@@ -660,12 +680,14 @@ class TtIndexer:
         # compacted stride (_index_cache_layers) so it matches the cache_batch_idx computed in forward().
         cache_layer_idx = self._cache_slot(cache_layer_idx)
         k = self._bc_rope_pe(k, rope_tensors, start_pos)  # [1, 1, S/sp, D_idx] bf16
+        k_hadamard_cfg = self._resolve_mm_cfg("indexer.k_hadamard", seq_len)
         k_h = ttnn.matmul(
             k,
             self._index_hadamard,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.default_compute_kernel_config,
+            **({"program_config": k_hadamard_cfg["program_config"]} if k_hadamard_cfg is not None else {}),
         )
         ttnn.deallocate(k)
         k = k_h
@@ -744,11 +766,13 @@ class TtIndexer:
         )
 
         # Q stem: the shared q_a latent (qr) -> indexer wq_b.
+        wq_b_cfg = self._resolve_mm_cfg("indexer.wq_b", seq_len)
         q = ttnn.linear(
             qr,
             self._idx_wq_b,
             compute_kernel_config=self.default_compute_kernel_config,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=wq_b_cfg["out_mem_config"] if wq_b_cfg is not None else ttnn.DRAM_MEMORY_CONFIG,
+            **({"program_config": wq_b_cfg["program_config"]} if wq_b_cfg is not None else {}),
             # Preserve the unquantized values through Hadamard, then materialize BFP8 once below.
             dtype=ttnn.bfloat16,
         )  # [1, 1, S/sp, H_idx*D_idx] — ALL heads (wq_b replicated); queries stay SP-sharded (rotation-safe)
@@ -757,23 +781,27 @@ class TtIndexer:
         )  # [1, H_idx, S/sp, D_idx] — all heads resident
         # block-cyclic indexed rope (same op/tables as the key rope + MLA q_pe)
         q_dev = self._bc_rope_pe(q, rope_tensors, start_pos)
+        q_hadamard_cfg = self._resolve_mm_cfg("indexer.q_hadamard", seq_len)
         q_h = ttnn.matmul(
             q_dev,
             self._index_hadamard,
             dtype=ttnn.bfloat8_b,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.default_compute_kernel_config,
+            **({"program_config": q_hadamard_cfg["program_config"]} if q_hadamard_cfg is not None else {}),
         )
         ttnn.deallocate(q_dev)
         q_dev = q_h
 
         # weights_proj: device stem -> FULL all-reduce over tp (all H_idx heads, matching the replicated
         # wq_b heads) -> scale -> [1, 1, S/sp, H_idx].
+        wproj_cfg = self._resolve_mm_cfg("indexer.weights_proj", seq_len)
         wts = ttnn.linear(
             hidden_states,
             self._idx_wproj,
             compute_kernel_config=self.default_compute_kernel_config,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=wproj_cfg["out_mem_config"] if wproj_cfg is not None else ttnn.DRAM_MEMORY_CONFIG,
+            **({"program_config": wproj_cfg["program_config"]} if wproj_cfg is not None else {}),
         )
         # H_idx=32 doesn't divide evenly into tile-sized TP=4 shards (8 < tile width), so _tp_rs_ag's
         # dim-3 reduce-scatter would hit ttnn's composite fallback (~30 extra tilize/pad/slice ops, see
