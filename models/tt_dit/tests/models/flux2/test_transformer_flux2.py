@@ -149,10 +149,26 @@ def test_transformer(
     else:
         padding_config = None
 
+    num_layers = torch_model.config.num_layers - skip_layers
+    num_single_layers = torch_model.config.num_single_layers - skip_single_layers
+
+    # The converted-weight cache key is model/subfolder/<parallel>mesh<shape>_<dtype>[_FSDP] and
+    # carries no layer counts, so the layer-skip parametrizations would otherwise share one entry
+    # while holding different tensor sets. Whichever ran first would win: all_blocks first leaves
+    # a full tree that single_blocks reads a subset of, harmlessly, but single_blocks first leaves
+    # a 1-double/1-single tree and all_blocks then dies on "Unable to load the tensor" -- seen on
+    # run 33789514904, where four single_blocks invocations preceded all_blocks. The CI leg only
+    # avoids it because -k all_blocks happens to be ordered first, which is far too subtle a thing
+    # to rely on. Give each pruned variant its own entry, and leave the unpruned model on the
+    # plain "transformer" path so it still shares the pipeline's cache.
+    cache_subfolder = (
+        "transformer" if skip_layers == skip_single_layers == 0 else f"transformer_L{num_layers}_S{num_single_layers}"
+    )
+
     tt_model = Flux2Transformer(
         in_channels=in_channels,
-        num_layers=torch_model.config.num_layers - skip_layers,
-        num_single_layers=torch_model.config.num_single_layers - skip_single_layers,
+        num_layers=num_layers,
+        num_single_layers=num_single_layers,
         attention_head_dim=head_dim,
         num_attention_heads=num_heads,
         joint_attention_dim=joint_attention_dim,
@@ -169,7 +185,7 @@ def test_transformer(
         tt_model,
         get_torch_state_dict=torch_model.state_dict,
         model_name="FLUX.2-dev",
-        subfolder="transformer",
+        subfolder=cache_subfolder,
         parallel_config=parallel_config,
         mesh_shape=tuple(mesh_device.shape),
         mesh_device=mesh_device,

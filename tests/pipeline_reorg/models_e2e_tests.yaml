@@ -974,7 +974,10 @@
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1
     export HF_HOME=/mnt/models/huggingface
-    # $HOME is /home/user on the exabox runner and persists. Matches the LTX-2.3 bh_sc1 legs.
+    # $HOME is /home/user here and does NOT persist between jobs -- the multihost runners are
+    # ephemeral pods from one scale set, so the converted-weight cache is rebuilt every run (see
+    # the unit leg for the evidence). It is still the only writable option, since
+    # /mnt/models/huggingface is read-only for the job user, which is what blocks this leg below.
     export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
     export TT_MESH_ID=0
     export TT_MESH_HOST_RANK=0

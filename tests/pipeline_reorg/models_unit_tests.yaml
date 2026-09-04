@@ -1131,8 +1131,14 @@
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1
     export HF_HOME=/mnt/models/huggingface
-    # $HOME is /home/user on the exabox runner and persists, unlike the containerised
-    # bh_quietbox_2 legs where it is wiped between jobs. Matches the LTX-2.3 bh_sc1 leg.
+    # $HOME is /home/user here, and it does NOT persist between jobs: the multihost runners are
+    # ephemeral pods from one scale set, so each job gets its own. Runs 33689082073 and
+    # 33789514904 landed on runner-psddg and runner-nmvfb, and the second reported "Cache does
+    # not exist" for a key the first had written. So the converted-weight cache is rebuilt every
+    # run on this SKU. That is not fixable the way it was for bh_quietbox_2, where the cache moved
+    # onto the mount: /mnt/models/huggingface is read-only for the job user here, which is the
+    # same wall the e2e leg hits. $HOME is simply the only writable option, which is why the
+    # LTX-2.3 bh_sc1 legs use it too. The timeout below is sized from a run that did rebuild.
     export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
     export TT_MESH_ID=0
     export TT_MESH_HOST_RANK=0
