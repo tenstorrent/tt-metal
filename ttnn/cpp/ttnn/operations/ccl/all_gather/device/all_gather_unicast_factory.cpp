@@ -305,9 +305,9 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
         // link count do, so both appear in the rules.
         //
         // workers_per_dir: each extra worker feeds a link harder but costs a core and, past one, a mux
-        // core plus a NOC hop per packet. Three is the ceiling on either topology; four regresses, and
-        // it regresses *more* the more links there are, because workers are per-link while DRAM is
-        // shared, so link count multiplies the total worker pressure.
+        // core plus a NOC hop per packet. How far that pays scales with link count, because workers are
+        // per-link while DRAM is shared -- so at 4 links a fourth worker regresses, while at 2 links it
+        // is worth 1.4-2.2% once the output passes ~16 MB.
         // The scaling variable differs by topology:
         //  - Ring: total output bytes. The boundary sits at the same total volume at every link count
         //    measured (the per-link figure moves with links, the total does not).
@@ -319,34 +319,40 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
         // cannot land sequential writes and stop paying.
         const bool long_stripe = output_chunks_per_stripe >= 8;
         if (is_ring) {
-            workers_per_dir = total_output_bytes < 64u * 1024u
-                                  ? 1u
-                                  : ((total_output_bytes < 1536u * 1024u || !long_stripe) ? 2u : 3u);
+            workers_per_dir = total_output_bytes < 64u * 1024u ? 1u
+                              : (total_output_bytes < 1536u * 1024u || !long_stripe)
+                                  ? 2u
+                                  : (total_output_bytes >= 16u * 1024u * 1024u ? 4u : 3u);
         } else {
+            // A line wants two workers over essentially its whole useful range: three loses 3-8% from
+            // 1 MB per link up, and below ~256 KB per link the choice is inside the noise.
             const uint64_t dev = std::max(1u, num_devices);
-            workers_per_dir = per_link_bytes < (640u * 1024u / dev)
-                                  ? 1u
-                                  : (per_link_bytes < (3072u * 1024u / dev) ? 2u : 3u);
+            workers_per_dir = per_link_bytes < (640u * 1024u / dev) ? 1u : 2u;
         }
-        // packets_per_cb_entry: a two-packet entry halves the reader/writer handshake count, which only a
-        // ring has the volume to amortise against the writer trailing an extra packet behind. Near-free
-        // either way once the run cap below is active, but it costs nothing to keep.
-        packets_per_cb_entry = (is_ring && per_link_bytes >= 2u * 1024u * 1024u) ? 2u : 1u;
+        // packets_per_cb_entry: one, except in a narrow stripe band. A two-packet entry halves the
+        // reader/writer handshake count but leaves the writer trailing an extra packet behind, and that
+        // lag costs 1-4% at almost every stripe length -- measured at 2, 4, 5, 8, 20, 32 and 64 chunks.
+        // Between 9 and 15 it inverts hard, and by a lot: +16% on a ring and +23-27% on a line at
+        // stripes 10 and 12, with stripe 8 and 16 sitting within half a percent either way. A packet
+        // holds 7 chunks of a 2 KB page, so this band is where a one-packet entry leaves its second
+        // entry roughly half empty on every stripe while a two-packet entry covers the stripe in one.
+        // Measured band, not a derived one: the boundaries are where the sign flips, and the two
+        // shapes in it (last dim 2560 and 3072 at 8 devices) are otherwise 11-27% off their best.
+        const bool half_empty_second_entry = output_chunks_per_stripe >= 9 && output_chunks_per_stripe <= 15;
+        packets_per_cb_entry = half_empty_second_entry ? 2u : 1u;
         // run_cap_bytes: capping a run costs packet fill but stops the walk parking in one DRAM bank. On
-        // a ring the cap follows *link count*, not volume: every link runs its own 2 x workers_per_dir
-        // readers against one shared DRAM, so the more links, the shorter each run has to be to keep the
-        // banks spread. 16384 / links reproduces every link count measured, and at one link it lands
-        // above the hardware transfer ceiling so it correctly stops biting.
-        // A line instead tracks the slice split: an uneven split leaves one worker holding an extra page
-        // and finishing last, and shortening its runs only makes that straggler slower. A ring hides the
-        // same imbalance by pulling from two neighbours, which is why only the line sees it.
-        const bool even_split = (num_input_pages % (num_links * workers_per_dir)) == 0;
-        if (is_ring) {
-            // Below ~8 MB of output the cap can cost as much as it wins, so gate it.
-            run_cap_bytes = total_output_bytes >= 8u * 1024u * 1024u ? (16384u / std::max(1u, num_links)) : 0u;
-        } else {
-            run_cap_bytes = even_split ? 8192u : 0u;
-        }
+        // a ring the cap follows *link count*: every link runs its own 2 x workers_per_dir readers
+        // against one shared DRAM, so the more links, the shorter each run has to be to keep the banks
+        // spread...
+        // ...but only once there are enough links to create that pressure, and that is now the whole
+        // gate: at 2 links capping is a straight loss on both topologies -- ring 14% at 10 MB of output,
+        // 21% at 50 MB, 22% at 100 MB; line 25% at 10 MB -- and irrelevant below that. At 4 links it was
+        // worth +22% on a ring. The earlier line rule keyed on whether the slice split was even; that no
+        // longer separates anything, so it is gone.
+        // The 4-link figure predates the output-alignment and init-barrier fixes and has not been
+        // re-measured since, so treat it as the weaker half of this rule.
+        const bool cap_pays = num_links >= 4 && total_output_bytes >= 8u * 1024u * 1024u;
+        run_cap_bytes = cap_pays ? (16384u / std::max(1u, num_links)) : 0u;
         // mux_slots_per_channel: one slot wins only on an even split, and loses more when the split is
         // uneven than it wins there, so the even case is not worth special-casing.
         mux_slots_per_channel = 2;
