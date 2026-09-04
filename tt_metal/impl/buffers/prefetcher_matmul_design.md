@@ -1,9 +1,8 @@
 # Matmul + DRAM Prefetcher Design
 
-This document describes the contract between the gather-in0 matmul receiver
-and the two DRAM prefetcher implementations that feed it: the worker-core
-prefetcher (`ttnn.dram_prefetcher`) and the Tensor prefetcher
-(`ttnn.experimental.start_tensor_prefetcher`). It exists so that a future maintainer
+This document describes the contract between the 1D matmul receiver and the two DRAM prefetcher
+implementations that feed it: the worker-core prefetcher (`ttnn.dram_prefetcher`) and the Tensor
+prefetcher (`ttnn.experimental.start_tensor_prefetcher`). It exists so that a future maintainer
 touching either side can read one file and learn what is invariant across the
 two paths, without having to reverse-engineer the kernels.
 
@@ -415,6 +414,78 @@ requested `block_count` K-blocks and slices every block across that bank's recei
 the one exception — a per-receiver rotation is receiver-contiguous only — so a K-row-major gather
 consumer is always batched, whereas K-row-major mcast is not (its natural FIFO order needs no
 rotation).
+
+#### PrefetcherPipe delivery to mcast-in0
+
+A DRAM-sender `PrefetcherPipe` group (`TensorPrefetcherPipes`) is the second delivery transport, and
+mcast-in0 consumes it under the same block contract as the GCB: `block_count = K_tiles /
+in0_block_w`, natural FIFO order, one output block per receiver, one effective activation batch. The
+consumer today is the Metal 2.0 (Quasar-fork) matmul,
+`ttnn.experimental.quasar.linear/matmul(prefetcher_pipes=)`; `global_cb` and `prefetcher_pipes` are
+mutually exclusive.
+
+Where it differs from the GCB:
+
+- **Receiver-contiguous weights only.** A pipe sender pushes each receiver its own shard and never
+  slices a bank's shard across receivers, so the K-row-major layout is rejected.
+- **The ring is fixed, the block size is not.** `entry_size * num_entries` fixes the ring at
+  creation and nothing changes it, but a matmul Attaches at *its own* in1 K-block size
+  (`in0_block_w * per_core_N * tile_bytes`), which only has to satisfy
+  `ring_size % block == 0` and `ring_size >= 2 * block` (the reader's one-block lookahead). Two
+  matmuls with different block sizes can therefore share one pipe set: each receiver resizes onto
+  the new grid in `PrefetcherPipe`'s constructor, and the DRAM sender snaps its derived write cursor
+  the same way and publishes the bytes it skips as pad credits
+  (`pipe_set_entry_size`, mirroring `PrefetcherPipe::resize_sender_interface`). The whole-entry ring
+  divisibility is what lets the sender's cursor stay `(entries_sent % ring_units)` with no
+  trailing-gap term. A GCB, by contrast, is sized in bytes and floored to whole pages.
+- **The in1 buffer is the ring, paged by K-block.** Rather than the GCB's paired remote `c_31` /
+  local `c_1` CBs, the in1 DataflowBuffer is laid over the pipes' rings and registered as their
+  relay. One page is one delivered entry is one K-block, so the reader publishes one page per block
+  and `PrefetcherPipe::pop_front` waits for one compute pop before acking the sender. The compute
+  kernel cannot let the unpacker derive the tile stride from that page, so under
+  `ENABLE_PREFETCHER_PIPE` it reads the block's pointer once per block and calls
+  `matmul_block_in1_at(..., in1_read_ptr, in1_tile_size, ...)`, the address-taking sibling of
+  `matmul_block`.
+- **Both RISCs re-align at kernel entry.** The pipe's read cursor is durable across programs while
+  firmware resets a buffer's pointers every launch. The in1 reader re-aligns via
+  `PrefetcherPipe::bind_relay()`; the compute kernel re-aligns through the generated relay binding
+  (see below).
+- **Publish exactly once.** The reader publishes each block through the in1 buffer
+  (`cb_in1.push_back`) and never through the relay view `bind_relay()` returns; doing both would
+  hand compute twice the credit for the same bytes.
+- **Lifetime.** The Program holds a non-owning pointer to each pipe and the in1 buffer address is
+  the pipe's ring, so the pipes must outlive any cached program built against them. They must also
+  be created before any op seals the receiver cores' persistent L1 arena — under ttnn's program
+  cache a cached op keeps its Program, and its seal, alive.
+
+##### One relay DataflowBuffer over every pipe
+
+The Metal 2.0 ProgramSpec factory has no imperative Program to create circular buffers on, so the
+in1 DataflowBuffer declares the pipes instead:
+
+```cpp
+in1_dfb.entry_size = in1_block_tiles * in1_single_tile_size;   // one K-block
+in1_dfb.num_entries = pipes.ring_size() / in1_dfb.entry_size;  // the whole ring
+in1_dfb.prefetcher_pipe_relays = {{pipe, prefetcher_pipe_receiver_cores(*pipe)}, ...};
+```
+
+`BuildProgramFromSpec` Attaches each pipe on its own receivers at the DFB's entry size and registers
+the DFB as that pipe's relay, so one DFB spans *all* the receivers rather than one buffer per pipe.
+The relays must partition the DFB's nodes exactly, every pipe must be laid over the same ring
+address, and the DFB borrows memory without a `borrowed_from` TensorParameter (the ring address
+comes from the pipes, and a borrowed-tensor DFB would have its address overwritten every enqueue).
+
+Because the DFB serves several pipes, no single pipe id is right for every core running the shared
+kernel binaries — and the kernel JIT cache key does not fold the pipe id anyway. The binding
+therefore carries the sentinel `PREFETCHER_PIPE_ID_BY_RELAY` (0xFE, beside `..._NONE` = 0xFF for a
+CrossNode relay), and both RISCs resolve their slot at run time by scanning the launch-msg dense
+index for the one live slot whose `relay_dfb_id` is this DFB's: the reader through
+`PrefetcherPipe::for_relay(dfb::cb_in1)`, the compute kernel through the generated
+`RelayDFBBindingToken` constructor (no explicit align call and no compute runtime arg). The weight
+tensor is not a TensorParameter on this path at all: nothing reads it.
+
+Blackhole only: `matmul_block_in1_at` has no Quasar implementation, so both kernels `#error` under
+`ARCH_QUASAR` when `ENABLE_PREFETCHER_PIPE` is defined.
 
 #### Fit ladder (receiver-contiguous)
 

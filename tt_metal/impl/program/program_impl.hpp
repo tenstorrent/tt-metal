@@ -378,6 +378,12 @@ public:
     void register_prefetcher_pipe_relay_dfb(
         const CoreRangeSet& receiver_cores, uint8_t prefetcher_pipe_id, uint32_t relay_dfb_host_id);
 
+    // Check that every relay DFB registered above is fully covered by its pipes. Each
+    // register_prefetcher_pipe_relay_dfb call only claims part of a DFB (one relay DFB may span
+    // several pipes' receivers), so completeness is a whole-program property. Call once, after
+    // registering every pipe of every relay.
+    void validate_prefetcher_pipe_relay_coverage() const;
+
     // Allocates TCs and remapper configs, cannot be done on creation because we need to determine if a set of DFBs on a
     // core require remapper being enabled
     void finalize_dataflow_buffer_configs();
@@ -590,6 +596,9 @@ private:
     std::unordered_map<uint8_t, experimental::PrefetcherPipe*> prefetcher_pipe_attachments_;
     // Optional typed relay: prefetcher_pipe_id → local DFB host id (from CreatePrefetcherPipeRelayDataflowBuffer).
     std::unordered_map<uint8_t, uint32_t> prefetcher_pipe_relay_host_ids_;
+    // relay DFB host id → the nodes its pipes have claimed so far. Read to reject two pipes
+    // relaying through one DFB on a shared node, and to check whole-DFB coverage at the end.
+    std::unordered_map<uint32_t, CoreRangeSet> prefetcher_pipe_relay_covered_cores_;
     uint8_t next_prefetcher_pipe_slot_ = 0;
     tt::tt_metal::experimental::dfb::detail::TileCounterAllocator tile_counter_allocator_;
     tt::tt_metal::experimental::dfb::detail::RemapperIndexAllocator remapper_index_allocator_;

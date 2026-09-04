@@ -264,22 +264,39 @@ void bind_tensor_prefetcher(nb::module_& mod) {
         mod,
         R"doc(
             Compute and validate the block_count to pair with a DRAM weight in
-            queue_tensor_prefetcher_request for a gather_in0 or mcast_in0 1D matmul fed via
-            global_cb. Gather returns the receiver/ring count. Mcast returns
-            weight_K_tiles / in0_block_w and uses natural FIFO order.
+            queue_tensor_prefetcher_request for a gather_in0 or mcast_in0 1D matmul. Gather returns
+            the receiver/ring count. Mcast returns weight_K_tiles / in0_block_w and uses natural
+            FIFO order.
 
             Args:
                 program_config: The 1D matmul program config that will consume the weight.
-                weight: The DRAM weight tensor, in either layout.
+                weight: The DRAM weight tensor. Either layout with global_cb; receiver-contiguous
+                    only with prefetcher_pipes.
                 global_cb: The DRAM-sender GCB the prefetcher and matmul share.
+                prefetcher_pipes: The DRAM-sender PrefetcherPipes the prefetcher and matmul share,
+                    as an alternative third argument to global_cb.
 
             Returns:
                 int: the validated block_count.
         )doc",
-        &ttnn::global_circular_buffer::tensor_prefetcher_block_count_for_matmul_1d,
-        nb::arg("program_config"),
-        nb::arg("weight"),
-        nb::arg("global_cb"));
+        ttnn::overload_t(
+            static_cast<uint32_t (*)(
+                const ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig&,
+                const ttnn::Tensor&,
+                const tt::tt_metal::experimental::GlobalCircularBuffer&)>(
+                &ttnn::global_circular_buffer::tensor_prefetcher_block_count_for_matmul_1d),
+            nb::arg("program_config"),
+            nb::arg("weight"),
+            nb::arg("global_cb")),
+        ttnn::overload_t(
+            static_cast<uint32_t (*)(
+                const ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig&,
+                const ttnn::Tensor&,
+                const TensorPrefetcherPipes&)>(
+                &ttnn::global_circular_buffer::tensor_prefetcher_block_count_for_matmul_1d),
+            nb::arg("program_config"),
+            nb::arg("weight"),
+            nb::arg("prefetcher_pipes")));
 }
 
 }  // namespace ttnn::operations::experimental

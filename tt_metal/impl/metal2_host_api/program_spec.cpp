@@ -24,17 +24,20 @@
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include <hostdevcommon/tensor_accessor/arg_config.hpp>
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_accessor.hpp"
+#include "impl/dataflow_buffer/prefetcher_pipe.hpp"
 #include "impl/dispatch/dispatch_core_manager.hpp"
 #include "impl/metal2_host_api/semaphore_scope.hpp"
 #include "distributed/mesh_workload_impl.hpp"
 #include "tt_metal/hw/inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h"
 #include <core_descriptor.hpp>
 #include <llrt/tt_cluster.hpp>
+#include "hostdev/remote_dfb_constants.h"
 #include <variant>
 
 namespace tt::tt_metal::experimental {
@@ -1628,6 +1631,71 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             tensor_bytes);
     }
 
+    // Validate PrefetcherPipe relay DFBs.
+    //
+    // A relay DFB is laid over the durable rings of the pipes named here instead of over
+    // Program-lifetime L1, so what has to hold is that every node of the DFB reads exactly one
+    // pipe's ring, and that a ring holds exactly the DFB's entries.
+    for (const auto& dfb : spec.dataflow_buffers) {
+        if (dfb.prefetcher_pipe_relays.empty()) {
+            continue;
+        }
+        TT_FATAL(
+            !dfb.borrowed_from.has_value(),
+            "DFB '{}' both relays PrefetcherPipes and borrows from TensorParameter '{}'. A relay's "
+            "memory is the pipes' rings; drop borrowed_from.",
+            dfb.unique_id,
+            *dfb.borrowed_from);
+        TT_FATAL(
+            dfb_alias_with(dfb).empty(),
+            "DFB '{}' relays PrefetcherPipes and cannot be aliased: an alias group shares one "
+            "allocation, and this DFB's is a ring the pipes own.",
+            dfb.unique_id);
+        const NodeRangeSet& dfb_nodes = collected.dfb_node_set.at(dfb.unique_id);
+        NodeRangeSet covered_nodes;
+        for (const auto& relay : dfb.prefetcher_pipe_relays) {
+            TT_FATAL(relay.pipe != nullptr, "DFB '{}' has a PrefetcherPipe relay with a null pipe", dfb.unique_id);
+            TT_FATAL(
+                relay.nodes.num_cores() > 0,
+                "DFB '{}' has a PrefetcherPipe relay with an empty node set",
+                dfb.unique_id);
+            const uint32_t ring_size = relay.pipe->ring_size();
+            TT_FATAL(
+                ring_size % dfb.entry_size == 0 && ring_size / dfb.entry_size == dfb.num_entries,
+                "DFB '{}' relays a PrefetcherPipe whose {} B ring is not exactly its {} entries of {} B. "
+                "A relay DFB spans the whole ring, one entry per delivered entry.",
+                dfb.unique_id,
+                ring_size,
+                dfb.num_entries,
+                dfb.entry_size);
+            // AttachPrefetcherPipe refuses to split a pipe's receivers across Programs, so a relay
+            // takes all of them. Say so here rather than letting Attach report the count mismatch.
+            const NodeRangeSet& receivers = prefetcher_pipe_receiver_cores(*relay.pipe);
+            TT_FATAL(
+                relay.nodes.merge_ranges() == receivers.merge_ranges(),
+                "DFB '{}' relays a PrefetcherPipe on nodes {}, but that pipe's receivers are {}. A "
+                "relay covers all of its pipe's receivers.",
+                dfb.unique_id,
+                relay.nodes,
+                receivers);
+            const NodeRangeSet overlap = covered_nodes.intersection(relay.nodes);
+            TT_FATAL(
+                overlap.num_cores() == 0,
+                "DFB '{}' relays two PrefetcherPipes on nodes {}. A node reads one ring, so the "
+                "relays must partition the DFB's nodes.",
+                dfb.unique_id,
+                overlap);
+            covered_nodes = covered_nodes.merge(relay.nodes);
+        }
+        TT_FATAL(
+            covered_nodes.merge_ranges() == dfb_nodes.merge_ranges(),
+            "DFB '{}' runs on nodes {} but its PrefetcherPipe relays cover {}. Every node of a relay "
+            "DFB must be a receiver of one of its pipes.",
+            dfb.unique_id,
+            dfb_nodes,
+            covered_nodes);
+    }
+
     // Validate DFB alias groups.
     // Rules:
     //  1. Transitivity: every DFB in an alias group must list every other member in its
@@ -2714,8 +2782,11 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
         .unpack_face_geometry = dfb_spec->unpack_face_geometry_metadata,
         .tensix_scope = tensix_scope,
         // DFB borrowed memory mode is declared at program creation time.
-        // The actual backing memory L1 address is attached at runtime.
-        .borrows_memory = dfb_spec->borrowed_from.has_value()};
+        // The actual backing memory L1 address is attached at runtime for a TensorParameter, and
+        // at registration time for a PrefetcherPipe relay (the pipes' ring address is already
+        // known then).
+        .borrows_memory = dfb_spec->borrowed_from.has_value() || !dfb_spec->prefetcher_pipe_relays.empty(),
+        .is_relay = !dfb_spec->prefetcher_pipe_relays.empty()};
 }
 
 // ----------------------------------------------------------------------------
@@ -3093,9 +3164,26 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
         }
     }
 
+    // PrefetcherPipe relays: attach each pipe on the DFB nodes it feeds, then point that pipe's
+    // per-core relay slot at this DFB. Runs after every DFB exists so the relay's device slot --
+    // what the pipe's receivers publish credit through -- is final.
+    for (const auto& dfb_spec : spec.dataflow_buffers) {
+        if (dfb_spec.prefetcher_pipe_relays.empty()) {
+            continue;
+        }
+        const uint32_t dfb_id = dfb_name_to_id.at(dfb_spec.unique_id);
+        for (const auto& relay : dfb_spec.prefetcher_pipe_relays) {
+            const uint8_t prefetcher_pipe_id =
+                program_impl->add_prefetcher_pipe_attachment(*relay.pipe, relay.nodes, dfb_spec.entry_size);
+            program_impl->register_prefetcher_pipe_relay_dfb(relay.nodes, prefetcher_pipe_id, dfb_id);
+        }
+    }
+    program_impl->validate_prefetcher_pipe_relay_coverage();
+
     std::unordered_map<DFBSpecName, uint8_t> dfb_name_to_prefetcher_pipe_id;
     for (const auto& [dfb_name, dfb_id] : dfb_name_to_id) {
-        dfb_name_to_prefetcher_pipe_id[dfb_name] = program_impl->get_prefetcher_pipe_id_for_relay(dfb_id).value_or(0xFF);
+        dfb_name_to_prefetcher_pipe_id[dfb_name] =
+            program_impl->get_prefetcher_pipe_id_for_relay(dfb_id).value_or(PREFETCHER_PIPE_ID_NONE);
     }
 
     // Wire alias groups: for each DFB that has alias_with entries, make the first

@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include <utility>
@@ -69,8 +70,21 @@
 
 namespace tt::tt_metal::experimental {
 
+class PrefetcherPipe;
+
 // Name identifying a DataflowBufferSpec within a ProgramSpec.
 using DFBSpecName = ttsl::StrongType<std::string, struct DFBSpecNameTag>;
+
+// One PrefetcherPipe a DFB relays for. See DataflowBufferSpec::prefetcher_pipe_relays.
+struct PrefetcherPipeRelay {
+    // The pipe whose ring the DFB is laid over on `nodes`. Attached to the Program at the DFB's
+    // entry_size, so one delivered entry is one DFB entry. Keep it alive for as long as the
+    // Program may run: the Program holds a non-owning pointer.
+    std::shared_ptr<PrefetcherPipe> pipe;
+    // The DFB nodes this pipe feeds — a subset of the pipe's receivers. The relays of one DFB
+    // partition its node set: each node reads exactly one pipe's ring.
+    NodeRangeSet nodes;
+};
 
 //------------------------------------------------
 // DataflowBufferSpec
@@ -128,6 +142,22 @@ struct DataflowBufferSpec {
     //
     // (TODO: this should become std::variant<TensorParamName, BufferParameterName>.)
     std::optional<TensorParamName> borrowed_from = std::nullopt;
+
+    // Build the DFB on the rings of one or more PrefetcherPipes: a relay.
+    //
+    // A PrefetcherPipe's ring is durable L1 filled by a sender outside this Program (a DRAM core
+    // running the Tensor prefetcher, say). Naming pipes here lays the DFB directly over those
+    // rings, so its consumer reads the delivered entries in place with the ordinary DFB API while
+    // the producer kernel only turns arrivals into DFB credit. The producer opens the pipe itself
+    // (experimental::PrefetcherPipe on the device side) and owns its credits.
+    //
+    // The relays partition the DFB's nodes: each entry's `nodes` names the part fed by that pipe,
+    // and together they must cover the DFB exactly. Every pipe must be laid over the same ring
+    // address and have a ring that is `num_entries` whole `entry_size` entries.
+    //
+    // Non-empty makes the DFB a borrowed-memory relay, so it is mutually exclusive with
+    // `borrowed_from`: the ring address comes from the pipes, not from a TensorParameter.
+    std::vector<PrefetcherPipeRelay> prefetcher_pipe_relays;
 
     //////////////////////////////
     // Advanced options (see advanced_options.hpp)
