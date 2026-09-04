@@ -65,12 +65,25 @@ def t2v_metrics(mesh_device, height):
                 "total": 850.0,
             }
     elif tuple(mesh_device.shape) == (4, 8) and height == 480:
-        expected_metrics = {
-            "encoder": 0.12,
-            "denoising": 163.0,
-            "vae": 18.2,
-            "total": 192.0,
-        }
+        if is_blackhole():
+            expected_metrics = {
+                "encoder": 0.12,
+                "denoising": 163.0,
+                "vae": 18.2,
+                "total": 192.0,
+            }
+        else:
+            # PROVISIONAL: these are the Blackhole numbers, kept only so the split is in place.
+            # Wormhole 4x8 480p has never been measured -- the config was excluded from the CI leg
+            # with `not wh_4x8`, so it has no data. The other arch-split branches put Wormhole
+            # 2.2-3.3x behind Blackhole (2x4 480p denoising 240 vs 800; 4x8 720p 165 vs 370), so
+            # these will not hold. Replace with measured values + headroom.
+            expected_metrics = {
+                "encoder": 0.12,
+                "denoising": 163.0,
+                "vae": 18.2,
+                "total": 192.0,
+            }
     elif tuple(mesh_device.shape) == (4, 8) and height == 720:
         if is_blackhole():
             expected_metrics = {
