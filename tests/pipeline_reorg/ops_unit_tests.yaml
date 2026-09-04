@@ -118,10 +118,13 @@
   # where a failure would abort tests belonging to someone else.
   # The per-test timeout sits below the step timeout so a hang is reported as a pytest stack
   # dump rather than an opaque step kill, with room left over for the report to be written.
-  cmd: 'pytest tests/ttnn/unit_tests/operations/experimental/test_mhc_split_sinkhorn.py -xv --timeout=120'
+  # 2 min is the whole of ttnn's remaining bh_p150b_civ2 unit budget, not a measured need: the
+  # file runs in 15 s warm and well under a minute with a cold kernel cache. Raising it fails
+  # load-test-matrix until .github/time_budget.yaml grows to match.
+  cmd: 'pytest tests/ttnn/unit_tests/operations/experimental/test_mhc_split_sinkhorn.py -xv --timeout=90'
   skus:
     bh_p150b_civ2:
-      timeout: 5
+      timeout: 2
   owner_id: U09LK84G4TF # Nikola Milicevic
   team: ttnn
   category: experimental
