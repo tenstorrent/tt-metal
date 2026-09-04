@@ -3582,14 +3582,18 @@ class ModelArgs:
         per_core_k = k_tiles // num_cores
         per_worker_n = math.ceil(n / (ttnn.TILE_SIZE * self.dram_grid_size.x))
         budget_tiles = 800 * 1024 // (3 * 1088)
-        for bw in range(min(16, k_tiles), 0, -1):
+        base = self.find_largest_divisor(per_core_k)
+        # Only ever widen. The budget governs the widening, not the existing choice: a wide-N
+        # projection such as the LM head already buffers more than the budget at the stock width,
+        # and returning the largest width that fits would make its block count worse, not better.
+        for bw in range(min(16, k_tiles), base, -1):
             if k_tiles % bw:
                 continue
             if per_core_k % bw and bw % per_core_k:
                 continue
             if bw * per_worker_n <= budget_tiles:
                 return bw
-        return self.find_largest_divisor(per_core_k)
+        return base
 
     def dram_shard_core_grid_for_k(self, k: int) -> Tuple[int, int]:
         rows, cols = self.find_grid(k // ttnn.TILE_SIZE)
