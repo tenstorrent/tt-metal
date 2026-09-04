@@ -39,10 +39,8 @@ struct ProgramArtifacts {
 // factory allocates, plus the per-coordinate programs that reference them. Splits the same way
 // tt::tt_metal::WorkloadDescriptor does, for the same reasons.
 struct MeshWorkloadArtifacts {
-    // Parked for the cache entry's lifetime, so the allocation outlives the miss at a stable address.
-    std::vector<tt::tt_metal::MeshTensor> op_owned_tensors;
-
     // Semaphores for cross-device sync belong here once Metal 2.0 has its own semaphore object.
+    // No op-owned tensors: a MeshTensor spans the mesh, so op-allocated scratch stays SPMD-only.
 
     // Range-keyed: a program uniform over part of the mesh is one entry covering that range.
     struct PerCoordProgram {

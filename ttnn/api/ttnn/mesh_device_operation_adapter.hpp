@@ -1077,14 +1077,7 @@ public:
                 attrs, tensor_args, tensor_return_value, tensor_coords);
             TT_FATAL(!artifacts.programs.empty(), "create_mesh_workload_artifacts returned no programs");
 
-            // Park the workload-scoped resources first: run_params may reference the owned tensors,
-            // and a vector move preserves element addresses.
-            auto op_owned_tensors =
-                std::make_shared<std::vector<tt::tt_metal::MeshTensor>>(std::move(artifacts.op_owned_tensors));
-            auto mesh_tensors = SpecBindingSupport::collect_mesh_tensors(tensor_args, tensor_return_value);
-            for (const auto& op_owned_tensor : *op_owned_tensors) {
-                mesh_tensors.push_back(std::cref(op_owned_tensor));
-            }
+            const auto mesh_tensors = SpecBindingSupport::collect_mesh_tensors(tensor_args, tensor_return_value);
 
             std::unordered_map<ttnn::MeshCoordinateRange, tt::tt_metal::experimental::ProgramSpec> program_specs;
             std::unordered_map<ttnn::MeshCoordinateRange, tt::tt_metal::experimental::ProgramRunArgs> run_params;
@@ -1111,8 +1104,7 @@ public:
                     per_coord.range,
                     shared_variables_t{
                         .bindings =
-                            SpecBindingSupport::resolve_bindings(per_coord.run_params.tensor_args, mesh_tensors),
-                        .op_owned_tensors = op_owned_tensors});
+                            SpecBindingSupport::resolve_bindings(per_coord.run_params.tensor_args, mesh_tensors)});
                 run_params.emplace(per_coord.range, std::move(per_coord.run_params));
             }
 

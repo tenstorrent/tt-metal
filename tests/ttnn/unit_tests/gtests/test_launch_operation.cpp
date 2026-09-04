@@ -465,15 +465,6 @@ TEST_F(LaunchOperation2x4Test, MeshWorkloadSpecAdapterMapsProgramsPerCoordinate)
     EXPECT_GT(expected, 0u);
     EXPECT_EQ(cached.workload.get_programs().size(), expected);
     EXPECT_EQ(cached.shared_variables.size(), expected);
-
-    // Workload-scoped, not per-device: every range shares one parked resource vector.
-    const auto* first_resources = static_cast<const void*>(nullptr);
-    for (const auto& [range, sv] : cached.shared_variables) {
-        if (first_resources == nullptr) {
-            first_resources = static_cast<const void*>(sv.op_owned_tensors.get());
-        }
-        EXPECT_EQ(static_cast<const void*>(sv.op_owned_tensors.get()), first_resources) << "range " << range;
-    }
 }
 
 // Same per-coordinate mapping, but with an override so the cache-hit path takes the
