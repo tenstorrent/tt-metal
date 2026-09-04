@@ -584,6 +584,18 @@ class TtPrefillRuntime:
         deterministic (``k * chunk_size``), so paying all of them once here turns a per-chunk host
         rebuild into a per-chunk device-to-device copy.
 
+        MEASURED, not argued. Through prefill_runner with PREFILL_USE_TRACE=1 at 102,400 tokens
+        (20 chunks, 36 layers, single-rank SP=8 x TP=4, tests/perf/pp4's ttft cell): prefill-completion
+        latency 5.111 s / 20,033 tok/s, against the pre-temperature reference's 5.745 s for the same
+        single-rank configuration. No regression, and nothing resembling the 3.2x the host refresh
+        cost. The per-chunk profile is the tell: 204 ms on the first chunk rising to 361 ms on the
+        last, i.e. a clean KV-depth ramp with no fixed per-chunk term. A host rebuild would have added
+        its ~460 ms to EVERY chunk, flat.
+
+        One run, and this platform's per-unit-KV cost varies run to run (see
+        MISTRAL4_TRACED_BASELINE_CHUNK_TIMES_S in test_prefill_transformer_chunked.py), so read the
+        11% as "no regression", not as a speedup.
+
         COST. Each buffer is [1, heads_local, chunk_global, width] bf16 sharded on dim 2 over the SP
         axis: at 8x4 with chunk 5120 that is 8 x 640 x 320 x 2 = 3,276,800 B = 3.28 MB per device per
         offset (both dims are tile multiples, so no tile padding inflates it). max_seq_len/chunk offsets,
