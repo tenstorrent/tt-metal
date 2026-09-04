@@ -41,16 +41,20 @@ CoreRangeSet TensorPrefetcherPipes::receiver_cores() const {
     return CoreRangeSet().merge(ranges);
 }
 
-std::vector<uint8_t> TensorPrefetcherPipes::attach(tt::tt_metal::Program& program) const {
+std::vector<uint8_t> TensorPrefetcherPipes::attach(tt::tt_metal::Program& program, uint32_t attach_entry_size) const {
     std::vector<uint8_t> pipe_ids;
     pipe_ids.reserve(num_pipes());
     for (const auto& bank : banks) {
         for (const auto& pipe : bank.pipes) {
             pipe_ids.push_back(metal_exp::AttachPrefetcherPipe(
-                program, *pipe, metal_exp::prefetcher_pipe_receiver_cores(*pipe), entry_size));
+                program, *pipe, metal_exp::prefetcher_pipe_receiver_cores(*pipe), attach_entry_size));
         }
     }
     return pipe_ids;
+}
+
+std::vector<uint8_t> TensorPrefetcherPipes::attach(tt::tt_metal::Program& program) const {
+    return attach(program, entry_size);
 }
 
 bool is_tensor_prefetcher_supported(tt::tt_metal::distributed::MeshDevice* mesh_device) {

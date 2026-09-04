@@ -552,12 +552,15 @@ def test_validator_pipe_cursor_persists_across_requests(device, K, N, dtype, rec
 
 
 @pytest.mark.parametrize("K,N,dtype,recv_per_bank", [(2048, 3584, ttnn.bfloat8_b, 2)])
-def test_validator_pipe_rejects_block_size_not_dividing_ring(device, K, N, dtype, recv_per_bank, expect_error):
-    """A pushed block size need not match the pipes' entry_size, but the ring must be whole blocks.
+@pytest.mark.parametrize("num_entries", [5, 7], ids=["ring_2.5_blocks", "ring_3.5_blocks"])
+def test_validator_pipe_block_size_not_dividing_ring(device, K, N, dtype, recv_per_bank, num_entries):
+    """A pushed block size need not divide the ring: the remainder becomes a trailing gap.
 
-    The DRAM sender derives each receiver's write cursor as (entries_sent % ring_units) with no
-    trailing-gap term, so a ring with a remainder would put it on a different grid than the
-    receivers after the first wrap.
+    Pipes are created at half this tensor's block size and an odd depth, so the ring is N-and-a-half
+    blocks. The DRAM sender stops at the page-aligned usable limit and credits the leftover half
+    block as padding at each wrap, which is what keeps its derived cursor -- (entries_sent %
+    ring_units) -- landing on a block boundary. Two layers so the ring wraps at least once with a
+    gap in play.
     """
     tt_weight, _pipes, push_page_size, ring_size = _setup_weight_and_pipes_recv_contig(
         device, K, N, dtype, recv_per_bank
@@ -568,8 +571,36 @@ def test_validator_pipe_rejects_block_size_not_dividing_ring(device, K, N, dtype
         (b, _bank_receivers_strided(b, recv_per_bank, num_dram_banks, ring_cols=ring_cols))
         for b in range(num_dram_banks)
     ]
-    # Three half-blocks of ring: a legal pipe geometry, but one and a half of this tensor's blocks.
-    bad_pipes = ttnn.experimental.create_prefetcher_pipes_for_tensor_prefetcher(
+    gapped_pipes = ttnn.experimental.create_prefetcher_pipes_for_tensor_prefetcher(
+        device,
+        bank_to_receivers,
+        entry_size=push_page_size // 2,
+        num_entries=num_entries,
+        support_multi_receiver_shards=True,
+    )
+    with tensor_prefetcher_session(device):
+        ttnn.experimental.queue_tensor_prefetcher_request(
+            device, [(tt_weight, ring_size)] * 2, prefetcher_pipes=gapped_pipes
+        )
+        ttnn.experimental.test_tensor_prefetcher_pipe_validator(
+            device, tt_weight, num_layers=2, print_stride=max(1, ring_size // 4), prefetcher_pipes=gapped_pipes
+        )
+
+
+@pytest.mark.parametrize("K,N,dtype,recv_per_bank", [(2048, 3584, ttnn.bfloat8_b, 2)])
+def test_validator_pipe_rejects_ring_holding_one_block(device, K, N, dtype, recv_per_bank, expect_error):
+    """A ring with room for a single block deadlocks a consumer that keeps one block of lookahead."""
+    tt_weight, _pipes, push_page_size, ring_size = _setup_weight_and_pipes_recv_contig(
+        device, K, N, dtype, recv_per_bank
+    )
+    num_dram_banks = device.dram_grid_size().x
+    ring_cols = _ring_grid_cols(num_dram_banks, ring_size)
+    bank_to_receivers = [
+        (b, _bank_receivers_strided(b, recv_per_bank, num_dram_banks, ring_cols=ring_cols))
+        for b in range(num_dram_banks)
+    ]
+    # Three half-blocks of ring: room for one whole block of this tensor, plus a half-block gap.
+    too_small = ttnn.experimental.create_prefetcher_pipes_for_tensor_prefetcher(
         device,
         bank_to_receivers,
         entry_size=push_page_size // 2,
@@ -577,9 +608,9 @@ def test_validator_pipe_rejects_block_size_not_dividing_ring(device, K, N, dtype
         support_multi_receiver_shards=True,
     )
     with tensor_prefetcher_session(device):
-        with expect_error(RuntimeError, "does not divide"):
+        with expect_error(RuntimeError, "at least two"):
             ttnn.experimental.queue_tensor_prefetcher_request(
-                device, [(tt_weight, ring_size)], prefetcher_pipes=bad_pipes
+                device, [(tt_weight, ring_size)], prefetcher_pipes=too_small
             )
 
 

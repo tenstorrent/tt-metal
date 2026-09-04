@@ -415,27 +415,19 @@ void validate_prefetcher_pipe_delivery(
         "queued with a {}-entry rotation table.",
         tensor_idx,
         input.rotation.size());
-    // The sender addresses its ring in whole blocks: (entries_sent % ring_units) with no
-    // trailing-gap term. A block size the ring is not a multiple of would put sender and receiver
-    // on different grids after the first wrap.
+    // A block size the ring does not divide is fine -- the trailing remainder becomes a gap that
+    // holds no block, and both endpoints credit it at the wrap. What the ring must hold is two
+    // whole blocks: a consumer streams through a two-block window (publish the current one, ack the
+    // previous one), so a ring with room for one deadlocks it.
     TT_FATAL(
-        per_recv_capacity_bytes % layout.page_bytes_per_recv == 0,
-        "Tensor prefetcher: input tensor {} pushes {} B per receiver per block, which does not divide the "
-        "PrefetcherPipes' {} B per-receiver ring ({} B left over). Size the ring as a whole number of blocks.",
-        tensor_idx,
-        layout.page_bytes_per_recv,
-        per_recv_capacity_bytes,
-        per_recv_capacity_bytes % layout.page_bytes_per_recv);
-    // A consumer streams blocks through a two-block window -- publish the current one, ack the
-    // previous one -- so a ring holding a single block deadlocks it.
-    TT_FATAL(
-        per_recv_capacity_bytes >= 2 * layout.page_bytes_per_recv,
+        per_recv_capacity_bytes / layout.page_bytes_per_recv >= 2,
         "Tensor prefetcher: input tensor {} pushes {} B per receiver per block, but the PrefetcherPipes' "
-        "per-receiver ring holds only {} B. Consumers keep one block of lookahead, so the ring needs room for at "
-        "least two ({} B).",
+        "per-receiver ring holds only {} B -- room for {} whole block(s). Consumers keep one block of lookahead, so "
+        "the ring needs room for at least two ({} B).",
         tensor_idx,
         layout.page_bytes_per_recv,
         per_recv_capacity_bytes,
+        per_recv_capacity_bytes / layout.page_bytes_per_recv,
         2 * layout.page_bytes_per_recv);
 }
 
@@ -493,6 +485,11 @@ void TensorPrefetcherManager::enumerate_dram_senders() {
 
 TensorPrefetcherManager::RequestTarget TensorPrefetcherManager::target_for(
     const experimental::GlobalCircularBuffer& gcb) const {
+    // The DRISC L1 offsets below are this mesh's; a target built on another mesh would point the
+    // senders at unrelated state rather than fail.
+    TT_FATAL(
+        gcb.get_device() == static_cast<IDevice*>(mesh_device_),
+        "QueueTensorPrefetcherRequest requires a GlobalCircularBuffer created on the prefetcher's own mesh device");
     RequestTarget target;
     target.mapping = gcb.sender_receiver_core_mapping();
     // One GCB block per sender, all at the same DRISC L1 offset.
@@ -539,6 +536,15 @@ TensorPrefetcherManager::RequestTarget TensorPrefetcherManager::target_for(
         for (size_t p = 0; p < bank.pipes.size(); ++p, ++flat_pipe) {
             // Null pipes were rejected by prefetcher_pipe_sender_receiver_mapping above.
             const experimental::PrefetcherPipe& pipe = *bank.pipes[p];
+            // Same reason as the GCB overload: state_addr_per_sender below is a DRISC L1 offset
+            // reserved on this mesh, so a pipe from another one would aim the sender at unrelated
+            // state instead of failing here.
+            TT_FATAL(
+                pipe.get_device() == mesh_device_,
+                "QueueTensorPrefetcherRequest requires PrefetcherPipes created on the prefetcher's own mesh device, "
+                "but bank {} pipe {} belongs to another",
+                bank.bank_id,
+                p);
             TT_FATAL(
                 experimental::prefetcher_pipe_sender_core_type(pipe) == experimental::SenderCoreType::Dram,
                 "QueueTensorPrefetcherRequest requires DRAM-sender PrefetcherPipes, but bank {} pipe {} has a worker "

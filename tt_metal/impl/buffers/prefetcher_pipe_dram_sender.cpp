@@ -8,6 +8,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -32,6 +33,15 @@ std::vector<TensorPrefetcherBankPipes> CreatePrefetcherPipesForTensorPrefetcher(
     TT_FATAL(!bank_to_receivers.empty(), "CreatePrefetcherPipesForTensorPrefetcher requires at least one DRAM bank");
     TT_FATAL(entry_size > 0, "PrefetcherPipe entry_size must be > 0");
     TT_FATAL(num_entries > 0, "PrefetcherPipe num_entries must be > 0");
+    // The ring is entry_size * num_entries and is sized in uint32. Catch the overflow here: a
+    // wrapped product can still be a legal, allocatable ring, so it would surface much later as a
+    // capacity error naming a size the caller never asked for.
+    TT_FATAL(
+        num_entries <= std::numeric_limits<uint32_t>::max() / entry_size,
+        "PrefetcherPipe ring size overflows: {} entries of {} B exceeds the {} B a ring can be",
+        num_entries,
+        entry_size,
+        std::numeric_limits<uint32_t>::max());
 
     // Multi-receiver shards (the legacy interleaved layout) force one sender per bank; the
     // receiver-contiguous layout that disallows them is what lets a bank use two senders.

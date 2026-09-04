@@ -153,8 +153,11 @@ void QueueTensorPrefetcherRequest(
 //   - every tensor must resolve to the receiver-contiguous layout (each receiver owning a disjoint
 //     contiguous shard);
 //   - no streaming rotation (pass an empty `rotation`);
-//   - each tensor's per-receiver bytes-per-block must equal the pipes' `entry_size`. This
-//     transport does not resize mid-flight.
+//   - each tensor's per-receiver bytes-per-block must leave the ring room for two whole blocks
+//     (consumers keep one block of lookahead). The block size need not equal the pipes'
+//     `entry_size` nor divide the ring: the sender re-grids its write cursor per tensor, and any
+//     trailing remainder of the ring is a gap both endpoints credit at the wrap. The ring itself is
+//     fixed at creation and never resizes.
 void QueueTensorPrefetcherRequest(
     distributed::MeshDevice& mesh_device,
     const std::vector<TensorPrefetcherBankPipes>& prefetcher_pipes,
