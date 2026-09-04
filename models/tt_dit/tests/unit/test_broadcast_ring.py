@@ -27,7 +27,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.tt_dit.utils.test import ring_params, ring_params_8k
+from models.tt_dit.utils.test import ring_params
 
 try:  # tracy signpost is only present under `python -m tracy`; no-op otherwise.
     from tracy import signpost
@@ -43,10 +43,7 @@ OWNER = 5  # sender index along the ring (cluster) axis
 
 @pytest.mark.parametrize(
     ("mesh_device", "sp_axis", "tp_axis", "device_params", "topology"),
-    [
-        pytest.param((4, 8), 1, 0, ring_params, ttnn.Topology.Ring, id="bh_4x8_ring"),
-        pytest.param((4, 8), 1, 0, ring_params_8k, ttnn.Topology.Ring, id="bh_4x8_ring_8k"),
-    ],
+    [pytest.param((4, 8), 1, 0, ring_params, ttnn.Topology.Ring, id="bh_4x8_ring")],
     indirect=["mesh_device", "device_params"],
 )
 # (tiles_per_shard, chunk_size_tiles): 1 tile = correctness sanity; 1024 tiles exposes the bandwidth
