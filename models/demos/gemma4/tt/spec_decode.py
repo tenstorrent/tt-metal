@@ -239,6 +239,52 @@ class SpeculativeDecoder:
             pt, device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32, mesh_mapper=self._mapper
         )
 
+    def _shared_kv_page_tables(self, fallback_pt):
+        """Per-layer-type page tables for the KV-shared drafter.
+
+        The drafter cross-attends the target's LAST layer of each type
+        (get_shared_kv_caches / last_kv_layer_by_type). Unbounded, every layer
+        shares one block-ID space, so one flat table serves both types. Under
+        BOUNDED sliding the target runs HYBRID per-layer tables and each layer
+        owns a DISTINCT block-ID range -- handing the drafter one flat table then
+        points it at the right cache with the wrong blocks, and it drafts noise
+        (measured acceptance 0.00/5 at 256k).
+
+        Returns {layer_type: page_table}; falls back to the flat table whenever
+        per-layer tables are not installed, keeping the unbounded path identical.
+        """
+        installed = getattr(self.target, "_active_page_tables_per_layer", None)
+        by_type = getattr(self.target, "last_kv_layer_by_type", None)
+        if not installed or not by_type:
+            return {lt: fallback_pt for lt in self._shared_kv}
+        cache = getattr(self, "_shared_pt_cache", None)
+        if cache is None:
+            cache = {}
+            self._shared_pt_cache = cache
+        key = id(installed)
+        hit = cache.get(key)
+        if hit is not None:
+            return hit
+        out = {}
+        for lt in self._shared_kv:
+            idx = by_type.get(lt)
+            pt = installed[idx] if (idx is not None and idx < len(installed)) else None
+            if pt is None:
+                out[lt] = fallback_pt
+                continue
+            if not isinstance(pt, ttnn.Tensor):
+                row = pt[0:1] if pt.dim() > 1 else pt.unsqueeze(0)
+                pt = ttnn.from_torch(
+                    row.to(torch.int32),
+                    device=self.mesh_device,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    dtype=ttnn.int32,
+                    mesh_mapper=self._mapper,
+                )
+            out[lt] = pt
+        cache[key] = out
+        return out
+
     def _page_tables_per_layer(self, batch, user_idx=0):
         """Per-layer page tables replicated to ``batch`` verify rows (bounded KV).
 
@@ -667,7 +713,7 @@ class SpeculativeDecoder:
         h_in = ttnn.clone(anchor_hidden)
         pos_u, pos_i = self._pos_tensors([anchor_pos])
         pt = self._page_table(1)
-        page_tables = {lt: pt for lt in self._shared_kv}
+        page_tables = self._shared_kv_page_tables(pt)
         _lg.info("[spec-trace] capture draft step: compile run")
         logits, h_next = self.assistant.step(tok_in, h_in, self._shared_kv, page_tables, pos_u, pos_i)
         ttnn.synchronize_device(self.mesh_device)
@@ -746,7 +792,7 @@ class SpeculativeDecoder:
         pos_u, pos_i = self._pos_tensors([anchor_pos])
         # Drafter page table: batch=1, this user's blocks for both layer types.
         pt = self._page_table(1, user_idx=user_idx)
-        page_tables = {lt: pt for lt in self._shared_kv}
+        page_tables = self._shared_kv_page_tables(pt)
 
         drafts, draft_logits = [], []
         tok = anchor_token
@@ -857,7 +903,7 @@ class SpeculativeDecoder:
         # Drafter queries a single fixed position (HF SinglePositionMTP).
         d_pu, d_pi = self._pos_tensors([anchor_pos])
         d_pt = self._page_table(1)
-        page_tables = {lt: d_pt for lt in self._shared_kv}
+        page_tables = self._shared_kv_page_tables(d_pt)
 
         draft_id_tts = []  # [1,1] uint32 each
         tok_tt = anchor_tok_tt
@@ -1035,7 +1081,7 @@ class SpeculativeDecoder:
         verify_x[1:]. All argmax/re-embed/concat are on device, so the K drafter
         steps chain in-graph (no inter-replay copy)."""
         K = self.draft_len
-        page_tables = {lt: tr["d_pt"] for lt in self._shared_kv}
+        page_tables = self._shared_kv_page_tables(tr["d_pt"])
         tok = tr["anchor_tok"]
         if self._fused_reseed:
             seed_logits, h = self.target.ttnn_verify_forward(
@@ -1336,7 +1382,7 @@ class SpeculativeDecoder:
         B = len(anchor_tokens)
         pos_u, pos_i = self._pos_tensors(anchor_positions)  # pu [1,32] (B filled), pi [B]
         pt = self._page_table_users(B)
-        page_tables = {lt: pt for lt in self._shared_kv}
+        page_tables = self._shared_kv_page_tables(pt)
 
         drafts_b = [[] for _ in range(B)]
         tok_tt = self._tokens_tensor(anchor_tokens)  # [1,B]
@@ -1372,7 +1418,7 @@ class SpeculativeDecoder:
         K = self.draft_len
         B = tr["B"]
         P = K + 1
-        page_tables = {lt: tr["d_pt"] for lt in self._shared_kv}
+        page_tables = self._shared_kv_page_tables(tr["d_pt"])
         tok = tr["anchor_tok"]  # [1,B]
         h = tr["h"]  # [1,1,B,backbone]
         draft_cols = []

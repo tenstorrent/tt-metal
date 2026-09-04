@@ -111,7 +111,11 @@ def create_tt_model(
     # precision_overrides.json changes which files a build needs. Without the precision in the
     # variant, a marker seeded under the old overrides would certify a warm build whose files do
     # not exist -- and as_tensor would persist placeholders for them. (#45400 review, finding B2)
-    _precision_for_variant = Gemma4Precision.load(model_path, _worker_mesh)
+    # NOTE: use the SERVED max_seq_len argument, not model_args.max_seq_len --
+    # model_args still carries its construction default here (the served value is
+    # applied further below), so reading it silently skipped the bfp8 context
+    # ceiling at long context.
+    _precision_for_variant = Gemma4Precision.load(model_path, _worker_mesh, max_seq_len=max_seq_len)
     cache_identity = dict(
         model_name=os.path.basename(str(model_path).rstrip("/")) or "gemma4",
         n_layers=model_args.num_hidden_layers,
@@ -172,6 +176,7 @@ def create_assistant_model(
     state_dict=None,
     max_local_batch_size=1,
     bounded_sliding_kv_cache=None,
+    max_seq_len=None,
 ):
     """Create the Gemma4 it-assistant drafter, sharing the target's mesh/CCL.
 
@@ -237,6 +242,15 @@ def create_assistant_model(
 
     mesh_shape = tuple(mesh_device.shape) if hasattr(mesh_device, "shape") else (1, 1)
     assistant_args.cluster_shape = mesh_shape
+    # Serve length: Gemma4AssistantArgs.max_seq_len DEFAULTS to 131072, and the
+    # drafter's layers are built from it (assistant/model.py max_seq_len=...). Left
+    # unset, a 256k run builds the drafter for HALF the context while positions run
+    # to 262143 -- the drafter then produces noise and acceptance collapses to
+    # ~0.00/5 (measured), while <=128k looked fine because the default covered it.
+    if max_seq_len is not None:
+        assistant_args.max_seq_len = int(max_seq_len)
+        if hasattr(assistant_args, "text_args"):
+            assistant_args.text_args.max_seq_len = int(max_seq_len)
     tensor_cache_path = str(assistant_args.weight_cache_path(dtype, mesh_shape=mesh_shape))
 
     model = Gemma4AssistantModel(
@@ -252,10 +266,22 @@ def create_assistant_model(
         # Match the TARGET's KV mode: with bounded sliding caches the drafter's
         # cross-attention must wrap positions into the same ring. Inferred from
         # the target when not stated explicitly.
+        # Whether the DRAFTER wraps positions must match the caches it actually
+        # reads, not the target's global mode. The drafter cross-attends only the
+        # LAST layer of each type; full-attention layers are always unbounded, and
+        # the last sliding layer is EXEMPTED from bounding for exactly this reason
+        # (Gemma4Model._spec_unbounded_layer). So when that exemption is active,
+        # both caches the drafter touches hold absolute positions and it must NOT
+        # apply the ring modulo -- otherwise it looks up p % window in a
+        # full-length cache and drafts noise (measured: acceptance 0.12/5 at 128k
+        # bounded vs 2.78/5 unbounded, 0.00/5 at 256k).
         bounded_sliding_kv_cache=(
             bounded_sliding_kv_cache
             if bounded_sliding_kv_cache is not None
-            else bool(getattr(target_model, "bounded_sliding_kv_cache", False))
+            else (
+                bool(getattr(target_model, "bounded_sliding_kv_cache", False))
+                and getattr(target_model, "_spec_unbounded_layer", None) is None
+            )
         ),
     )
     return assistant_args, model

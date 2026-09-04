@@ -444,6 +444,31 @@ class Gemma4Model:
 
         # Decoder layers (each creates its own KV cache if requested)
         self.bounded_sliding_kv_cache = bounded_sliding_kv_cache
+        # Speculative decoding exemption: the it-assistant drafter is KV-SHARED --
+        # it computes only Q and cross-attends into the TARGET's caches, taking the
+        # LAST layer of each type (see get_shared_kv_caches / last_kv_layer_by_type).
+        # A bounded sliding layer is a 1024-slot ring, and a drafter reading it gets
+        # the wrong slots: measured acceptance 0.02/5 at 256k (with coherent bf16
+        # output, so this is not the precision bug). Full-attention layers are
+        # already unbounded, so exactly ONE layer -- the last sliding one -- has to
+        # stay unbounded for the drafter to work at long context.
+        #
+        # Cost measured on 31B/tp=8 at 256k: 0.54 GB/device for that layer vs 2.1 MB
+        # bounded, i.e. ~1.7% of a 32 GB chip, while the other sliding layers keep
+        # their bounded footprint. This is what qwen3.6's MTP head gets for free by
+        # owning its own KV cache (models/demos/blackhole/qwen36/tt/mtp.py); gemma4's
+        # drafter checkpoint has no k/v projections at all, so it cannot.
+        #
+        # GEMMA4_SPEC_UNBOUNDED_DRAFTER_LAYER=0 disables the exemption.
+        self._spec_unbounded_layer = None
+        if bounded_sliding_kv_cache and os.environ.get("GEMMA4_SPEC_UNBOUNDED_DRAFTER_LAYER", "1") == "1":
+            _sliding = [i for i in range(n_layers) if hf_config.layer_types[i] == "sliding_attention"]
+            if _sliding:
+                self._spec_unbounded_layer = max(_sliding)
+                logger.info(
+                    f"Bounded sliding KV: exempting layer {self._spec_unbounded_layer} (last sliding) "
+                    "so the KV-shared spec-decode drafter reads unbounded positions"
+                )
         self.layers = []
         for i in range(n_layers):
             layer = Gemma4DecoderLayer(
@@ -461,7 +486,7 @@ class Gemma4Model:
                 mesh_config=mesh_config,
                 max_seq_len=max_seq_len,
                 max_local_batch_size=max_local_batch_size,
-                bounded_sliding_kv_cache=bounded_sliding_kv_cache,
+                bounded_sliding_kv_cache=(bounded_sliding_kv_cache and i != self._spec_unbounded_layer),
             )
             # Create KV cache for non-shared layers only
             # Shared layers will use their source layer's KV cache
@@ -476,6 +501,10 @@ class Gemma4Model:
                 max_num_blocks_override = None
                 if (
                     bounded_sliding_kv_cache
+                    # the drafter-visible layer keeps a FULL-length cache (see
+                    # _spec_unbounded_layer above); sizing it as a ring here would
+                    # undo the exemption and hand the drafter wrapped positions.
+                    and i != self._spec_unbounded_layer
                     and attn_cfg.is_sliding
                     and attn_cfg.sliding_window is not None
                     and paged_attention_config is not None

@@ -803,6 +803,13 @@ def _spec_install_hybrid_page_tables(
     margs = model_args[0] if isinstance(model_args, (list, tuple)) else model_args
     n_layers = num_layers or margs.num_hidden_layers
     sliding_mask = [margs.layer_types[i] == "sliding_attention" for i in range(n_layers)]
+    # Keep the drafter-visible sliding layer on the FULL pool: the model exempts it
+    # from bounding (Gemma4Model._spec_unbounded_layer) so the KV-shared drafter
+    # reads unbounded positions, and its page table has to match that allocation.
+    exempt = getattr(generator.model[0], "_spec_unbounded_layer", None)
+    if exempt is not None and 0 <= exempt < n_layers:
+        sliding_mask[exempt] = False
+        logger.info(f"Hybrid page tables: layer {exempt} on the full pool (spec-decode drafter layer)")
     per_layer_pts = build_hybrid_page_tables(
         n_layers,
         sliding_mask,
@@ -972,6 +979,7 @@ def _run_spec_decode(
         mesh_config=target.mesh_config,
         ccl_manager=target.ccl_manager,
         assistant_path=assistant_path,
+        max_seq_len=max_seq_len,
     )
 
     spec = SpeculativeDecoder(
@@ -1165,6 +1173,7 @@ def _run_spec_decode_batched(
         mesh_config=target.mesh_config,
         ccl_manager=target.ccl_manager,
         assistant_path=assistant_path,
+        max_seq_len=max_seq_len,
         max_local_batch_size=B,
     )
 
