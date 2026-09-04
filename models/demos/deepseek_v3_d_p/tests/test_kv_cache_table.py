@@ -1231,3 +1231,81 @@ def test_glm52_index_cache_pipeline_stage_addresses():
     mismatched = {k: (merged[k], golden[k]) for k in golden if merged[k] != golden[k]}
     assert not mismatched, f"{len(mismatched)} entries mismapped, e.g. {list(mismatched.items())[:2]}"
     logger.info(f"[glm52] merged 2-stage index-cache table matches the per-rank walk over {len(merged)} entries")
+
+
+def test_glm52_tp_sharded_pipeline_stage_addresses():
+    rows, cols, sp_axis, tp_axis = 8, 4, 0, 1
+    num_users, seq_len, num_banks = 2, 2 * PREFILL_CHUNK_TOKENS, BH_NUM_DRAM_BANKS
+    CHUNK_SIZE_BYTES = 19584
+    stage_ranges = [(0, 18), (18, 20)]
+    num_layers = sum(count for _, count in stage_ranges)
+    base_addrs = [0x1000_0000, 0x2000_0000]
+    tokens_per_device = PREFILL_CHUNK_TOKENS // (rows * cols)
+
+    def stage(rank, first_layer, count):
+        return {
+            "rank": rank,
+            "first_layer": first_layer,
+            "count": count,
+            "base_addr": base_addrs[rank],
+            "num_banks": num_banks,
+            "host_tag": 0xABC0000 + rank,
+            "fnids": [[ttnn.FabricNodeId(ttnn.MeshId(rank), r * cols + c) for c in range(cols)] for r in range(rows)],
+        }
+
+    def populate(stage_layout, tp):
+        config = ttnn.experimental.disaggregation.KvChunkAddressTableConfig()
+        config.num_layers = num_layers
+        table = _RecordingKvChunkAddressTable()
+        populate_kv_chunk_address_table_kimi(
+            lookup_table=table,
+            config=config,
+            mesh_device=None,
+            mesh_shape=(rows, cols),
+            seq_len=seq_len,
+            sp_axis=sp_axis,
+            tt_kvpe_cache=None,
+            chunk_size_bytes=CHUNK_SIZE_BYTES,
+            num_users=num_users,
+            stage_layout=stage_layout,
+            tp_axis=tp,
+        )
+        return table.entries
+
+    layout = [stage(rank, first, count) for rank, (first, count) in enumerate(stage_ranges)]
+
+    golden = {}
+    for rank, (first_layer, count) in enumerate(stage_ranges):
+        solo = populate([stage(rank, 0, count)], tp_axis)
+        golden.update({(cid, layer + first_layer, pos, slot): v for (cid, layer, pos, slot), v in solo.items()})
+
+    merged = populate(layout, tp_axis)
+    assert merged.keys() == golden.keys(), (
+        f"merged table covers {len(merged)} entries vs {len(golden)} golden — the stages do not tile "
+        f"the cache (layers {sorted({k[1] for k in merged})} vs {sorted({k[1] for k in golden})})"
+    )
+    mismatched = {k: (merged[k], golden[k]) for k in golden if merged[k] != golden[k]}
+    assert not mismatched, f"{len(mismatched)} entries mismapped, e.g. {list(mismatched.items())[:2]}"
+
+    replicated = populate(layout, None)
+    assert merged.keys() == replicated.keys(), (
+        f"TP-sharded table covers {len(merged)} entries vs {len(replicated)} TP-replicated — dedup must "
+        f"not change the position set"
+    )
+
+    for (_, layer, position, _), (noc_addr, size_bytes, group) in merged.items():
+        rank = 0 if layer < stage_ranges[0][1] else 1
+        offset_in_chunk = position % PREFILL_CHUNK_TOKENS
+        row = offset_in_chunk // (PREFILL_CHUNK_TOKENS // rows)
+        col = (offset_in_chunk % (PREFILL_CHUNK_TOKENS // rows)) // tokens_per_device
+        assert group == ((rank, row * cols + col),), (
+            f"layer {layer} position {position} is owned by {group}, expected the single device "
+            f"(mesh {rank}, chip {row * cols + col}) that holds that 32-token shard"
+        )
+        assert size_bytes == CHUNK_SIZE_BYTES
+        assert (noc_addr & 0xFFFFFFFF) >= base_addrs[rank], (
+            f"layer {layer} addresses {noc_addr & 0xFFFFFFFF:#x}, below stage {rank}'s base "
+            f"{base_addrs[rank]:#x} — the stage's base address did not reach the walk"
+        )
+
+    logger.info(f"[glm52] merged 2-stage TP-sharded table matches the per-rank walk over {len(merged)} entries")
