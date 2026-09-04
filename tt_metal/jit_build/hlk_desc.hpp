@@ -111,6 +111,11 @@ inline uint64_t stable_hash_hlk_desc(const tt::tt_hlk_desc& obj) {
         hasher.update(static_cast<uint64_t>(obj.get_buf_dataformat(i)));
         hasher.update(static_cast<uint64_t>(obj.get_buf_tile_r_dim(i)));
         hasher.update(static_cast<uint64_t>(obj.get_buf_tile_c_dim(i)));
+        // The face layout is baked into the generated kernel headers as constexpr arrays, so it has to
+        // participate in the hash: two operands with the same tile shape but different face layouts
+        // must not share a compiled kernel.
+        hasher.update(static_cast<uint64_t>(obj.get_buf_face_r_dim(i)));
+        hasher.update(static_cast<uint64_t>(obj.get_buf_num_faces(i)));
     }
     hasher.update(static_cast<uint64_t>(obj.get_hlk_math_fidelity()));
     hasher.update(obj.get_hlk_math_approx_mode() ? 1u : 0u);
