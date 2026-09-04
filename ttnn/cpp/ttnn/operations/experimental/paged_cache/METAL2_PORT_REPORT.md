@@ -10,8 +10,11 @@
 | 2 | `PagedTiledFusedUpdateCacheProgramFactory`, `PagedRowMajorFusedUpdateCacheProgramFactory` | `CustomProgramSpecFactoryConcept` |
 | 3 | `PagedUpdateCacheMeshWorkloadFactory`, `PagedFillCacheMeshWorkloadFactory`, `PagedTiledFusedUpdateCacheMeshWorkloadFactory`, `PagedRowMajorFusedUpdateCacheMeshWorkloadFactory` | **`MeshWorkloadSpecFactoryConcept`** |
 
-Nothing in the op builds a `ProgramDescriptor` any more, and the ~1,700 lines of retained ported-from
-descriptor bodies and index-addressed cache-hit patches are gone with their last consumer.
+Nothing in the op builds a `ProgramDescriptor` any more; the ~1,700 lines of retained ported-from
+descriptor bodies and index-addressed cache-hit patches are gone with their last consumer; and the
+eleven `_metal2` kernel forks the conversion needed as scaffolding have been retired onto the original
+filenames, so the op ends with the same eleven kernel files it started with, at the same paths, now
+containing Metal 2.0 code.
 
 ### Read this before reviewing pass 3
 
@@ -52,7 +55,6 @@ fixed, and needing a one-line ruling from the op owners. Full detail in
 | item | owner | nature |
 |---|---|---|
 | Rule on the empty-`mesh_coords` delta above | ops team | one-line decision |
-| Fork sunset: delete the 11 unreferenced legacy kernels, rename the `_metal2` forks onto their names | this op's next toucher | purely mechanical; deliberately not bundled with pass 3 ([Open items](#open-items-for-downstream) #6) |
 | Parametrize `row_major` in the fused test | ops team | one-line; closes the coverage gap in [Open items](#open-items-for-downstream) #4 |
 | Acceptance-test the mesh factories on a real mesh | whoever has T3K/Galaxy | the exclusion branch is unobservable on one device ([Open items](#open-items-for-downstream) #5) |
 | Write the `MeshWorkloadSpecFactoryConcept` port procedure | Metal 2.0 doc maintainers | so the next such port is covered rather than authorised case-by-case |
@@ -234,55 +236,37 @@ pass 3 cannot run on a single-device bench** ([Open items](#open-items-for-downs
 Llama-3.2-1B never passes `mesh_coords` at all, so its whole captured path is on the single-device
 factories.
 
-### 2. **Eleven intra-op `_metal2` kernel forks created — every kernel source in the op.** *(coordination signal; owner: this op's next porter)*
+### 2. **Eleven intra-op `_metal2` kernel forks created, then retired.** *(closed — no coordination needed)*
 
-Because each `*MeshWorkloadFactory` binds the *same* kernel sources as the single-device sibling that
-did convert, converting those sources in place would have broken the four out-of-scope factories. Per
-*Caution: Porting a shared kernel* — **rung 2 (create the fork), intra-op shape** — each fork was
-created beside its original, the original was left untouched apart from the mandated pointer comment,
-and the originals keep serving the mesh factories.
+**Net effect on the tree: none.** The op has the same eleven kernel files it started with, at the same
+paths, now containing Metal 2.0 code. The forks were scaffolding for the three-pass conversion and are
+gone.
 
-| fork created (all under `device/kernels/`) | forked from | pass | remaining consumers of the original |
-|---|---|---|---|
-| `dataflow/reader_update_cache_interleaved_start_id_metal2.cpp` | `reader_update_cache_interleaved_start_id.cpp` | 1 | `PagedUpdateCacheMeshWorkloadFactory` |
-| `dataflow/writer_update_cache_interleaved_start_id_metal2.cpp` | `writer_update_cache_interleaved_start_id.cpp` | 1 | `PagedUpdateCacheMeshWorkloadFactory` |
-| `compute/update_cache_metal2.cpp` | `compute/update_cache.cpp` | 1 | `PagedUpdateCacheMeshWorkloadFactory` |
-| `dataflow/reader_fill_cache_interleaved_metal2.cpp` | `reader_fill_cache_interleaved.cpp` | 1 | `PagedFillCacheMeshWorkloadFactory` |
-| `dataflow/writer_fill_cache_interleaved_metal2.cpp` | `writer_fill_cache_interleaved.cpp` | 1 | `PagedFillCacheMeshWorkloadFactory` |
-| `dataflow/reader_paged_fused_update_cache_interleaved_start_id_metal2.cpp` | `reader_paged_fused_update_cache_interleaved_start_id.cpp` | **2** | `PagedTiledFusedUpdateCacheMeshWorkloadFactory` |
-| `dataflow/writer_paged_fused_update_cache_interleaved_start_id_metal2.cpp` | `writer_paged_fused_update_cache_interleaved_start_id.cpp` | **2** | `PagedTiledFusedUpdateCacheMeshWorkloadFactory` |
-| `compute/paged_fused_update_cache_metal2.cpp` | `compute/paged_fused_update_cache.cpp` | **2** | `PagedTiledFusedUpdateCacheMeshWorkloadFactory` |
-| `dataflow/reader_paged_row_major_fused_update_cache_interleaved_start_id_metal2.cpp` | `reader_paged_row_major_fused_update_cache_interleaved_start_id.cpp` | **2** | `PagedRowMajorFusedUpdateCacheMeshWorkloadFactory` |
-| `dataflow/writer_paged_row_major_fused_update_cache_interleaved_start_id_metal2.cpp` | `writer_paged_row_major_fused_update_cache_interleaved_start_id.cpp` | **2** | `PagedRowMajorFusedUpdateCacheMeshWorkloadFactory` |
-| `compute/paged_row_major_fused_update_cache_metal2.cpp` | `compute/paged_row_major_fused_update_cache.cpp` | **2** | `PagedRowMajorFusedUpdateCacheMeshWorkloadFactory` |
+Because each `*MeshWorkloadFactory` bound the *same* kernel sources as the single-device sibling that
+converted first, converting those sources in place would have broken the factories left behind. So
+passes 1-2 took *Caution: Porting a shared kernel* **rung 2 (create the fork), intra-op shape** —
+eleven `_metal2` files beside their originals, originals untouched apart from the mandated pointer
+comment. Pass 3 converted the last consumers, which made all eleven originals unreferenced, and a
+fourth commit retired them: originals deleted, forks renamed onto their names, pointer comments gone
+with the files that held them, and the eleven `constexpr auto *_SOURCE` path strings in the four
+factories updated. No build-system change at any point — the op's kernels are installed by a
+`file(GLOB_RECURSE device/kernels/*.cpp)`.
 
-No `_metal2` fork existed beside any of them beforehand (checked locationally, by `ls` of each
-original's directory — not by a tree-wide grep). No build-system change was needed: the op's kernels
-are installed by a `file(GLOB_RECURSE …)` that already covers both directories, and no `sources.cmake`
-entry changed because the port added no new host `.cpp`.
+**The doc-evolution signal, which is the part worth keeping.** The fork convention is designed for
+*cross-op* sharing, where the two consumers have different owners and drift is the honest price of
+decoupling. Applied to an **intra-op** mesh/single-device split it duplicated the op's whole kernel
+surface — eleven files, ~2,900 lines — for a reason that was purely temporal, and the mitigation the
+Caution offers (record each pair, evaluate every fix against both) scales poorly at that size. It also
+carried a real hazard for as long as it lasted: two live copies of every kernel in one directory, where
+a fix landing in one and not the other is invisible.
 
-**Sunset trigger — now met, and the drift risk is gone with it.** Pass 3 ported the four mesh
-factories, so **nothing binds any of the eleven originals** any more: every factory binds a `_metal2`
-fork. The remaining sunset work is to delete the eleven originals and rename the forks onto their
-names, which pass 3 deliberately did **not** bundle — it is purely mechanical, touches 22 files, and
-mixing it with a novel-concept port would make both harder to review and to bisect. Carried in
-[Open items](#open-items-for-downstream) #6.
-
-Note what changed about the *risk* here, because it is the opposite of what the pass-2 report
-predicted. Pass 2 called eleven live pairs "a real drift-discipline liability"; with the last consumer
-of the originals gone, there are no longer two live copies of anything — the originals are simply dead
-files awaiting deletion. So the urgency this entry carried has evaporated rather than been resolved.
-
-**The doc-evolution signal stands, though**, and is the more useful half of this entry: the
-shared-kernel Caution's fork convention is designed for *cross-op* sharing, where the two consumers
-have different owners and drift is the honest price of decoupling. Applied to an **intra-op**
-mesh/single-device split it duplicated the op's entire kernel surface — eleven files, ~2,900 lines —
-for a reason that was purely temporal, and the mitigation the Caution offers (record the pair,
-evaluate every fix against both) scales poorly at that size. A cheaper option existed and the Caution
-does not mention it: convert the sibling factories **together**, which is what ultimately happened
-here across three passes, just with a fork round-trip in the middle. Worth a rung in the Caution for
-the intra-op case — "if the sibling is portable in the same pass, co-port instead of forking" — with
-forking reserved for when the sibling is genuinely blocked.
+A cheaper route existed and the Caution does not mention it: **co-port the sibling factories together.**
+That is what ultimately happened here, just with a fork round-trip in the middle — and the round trip
+was only necessary because the mesh siblings were genuinely blocked at the time (no concept existed).
+Suggested rung for the intra-op case: *"if the sibling factory is portable in the same pass, co-port it
+instead of forking; fork only when the sibling is blocked, and retire the fork in the change that
+unblocks it."* Had that rung existed, this op would have been two commits rather than four, with no
+duplicated kernel ever on the branch.
 
 ### 3. **An empty `mesh_coords` now raises where it used to dispatch nothing.** *(owner: ops team — needs a one-line ruling)*
 
@@ -942,22 +926,28 @@ strict-subset `mesh_coords` to both non-fused ops (see handoff #1).
 
 ---
 
-### 6. Fork sunset — the last mechanical step, deliberately not in pass 3
+### 6. Fork sunset — **done** (fourth commit)
 
-Nothing binds the eleven legacy kernel sources any more (pass 3 converted their last consumers). What
-is left:
+Completed rather than carried. Nothing bound the eleven legacy kernel sources after pass 3, so a
+separate commit deleted them, renamed the eleven `_metal2` forks onto their names, and updated the
+eleven kernel-source path strings in the four factories. Verified afterwards: zero `_metal2` references
+anywhere in the op, all eleven renamed files carrying Metal 2.0 markers and **zero** legacy markers
+(`get_compile_time_arg_val` / `CircularBuffer` / `get_arg_val<`), and the full test set re-run — the
+kernel paths are string literals the JIT resolves at dispatch, so a stale path is a runtime failure
+that only a test can catch, not a build error.
 
-1. Delete the eleven originals under `device/kernels/{dataflow,compute}/`.
-2. Rename the eleven `_metal2` forks onto the original names.
-3. Delete the pointer comment from each (it points at a file that no longer exists once step 1 lands).
-4. Update the eleven `constexpr auto *_SOURCE` path strings in the four factory `.cpp` files.
+Kept as its own commit deliberately. It is 22 files of pure renaming with no behaviour change, and
+bundling it with the concept port would have left `git bisect` unable to distinguish "the mesh port
+broke it" from "the rename broke it" — which, given that a wrong kernel path fails at *runtime*, is
+exactly the ambiguity worth avoiding.
 
-Purely mechanical, no behaviour change, and no host logic touched. It was kept out of pass 3 on
-attribution grounds: 22 files of renames on top of a novel-concept port would make both changes harder
-to review, and if a regression appeared, `git bisect` landing on that commit would leave "the concept
-port or the rename?" as an expensive question. Do it as its own commit, ideally before this branch
-merges, since the `_metal2` suffix is now meaningless — there is no non-`_metal2` sibling left to
-distinguish from.
+Two stale comments surfaced during it and were fixed: two writer kernels described
+`writer_update_cache_interleaved_start_id.cpp` as "the legacy sibling", which after the rename names
+the ported file itself; and both fused factory headers still described `compute_*_fused_offsets` as
+shared with "the retained legacy descriptor body the mesh factory still builds", which pass 3 deleted.
+Worth noting as a pattern: a fork-and-retire cycle leaves comments that were accurate at every
+intermediate step and wrong at the end, and nothing mechanical catches them — the CB sweep and the
+`.md`-citation sweep both pass over prose like this.
 
 ### 7. `MeshWorkloadArtifacts` has no `op_owned_tensors`, which this op did not need but the next might
 

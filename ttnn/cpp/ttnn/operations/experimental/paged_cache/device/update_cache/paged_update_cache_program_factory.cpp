@@ -52,12 +52,12 @@ const KernelSpecName UC_COMPUTE_KERNEL{"compute"};
 
 constexpr auto UC_READER_SOURCE =
     "ttnn/cpp/ttnn/operations/experimental/paged_cache/device/kernels/dataflow/"
-    "reader_update_cache_interleaved_start_id_metal2.cpp";
+    "reader_update_cache_interleaved_start_id.cpp";
 constexpr auto UC_WRITER_SOURCE =
     "ttnn/cpp/ttnn/operations/experimental/paged_cache/device/kernels/dataflow/"
-    "writer_update_cache_interleaved_start_id_metal2.cpp";
+    "writer_update_cache_interleaved_start_id.cpp";
 constexpr auto UC_COMPUTE_SOURCE =
-    "ttnn/cpp/ttnn/operations/experimental/paged_cache/device/kernels/compute/update_cache_metal2.cpp";
+    "ttnn/cpp/ttnn/operations/experimental/paged_cache/device/kernels/compute/update_cache.cpp";
 
 bool enable_fp32_dest(const tt_metal::IDevice* device, const ttnn::DeviceComputeKernelConfig& compute_kernel_config) {
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
