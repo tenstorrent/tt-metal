@@ -65,13 +65,21 @@ _DEFAULT_BRISC_RESERVE = 16
 
 
 def _normalize_groups(groups):
-    out = []
+    # Mirror the CLI bitfield (tools/tracy/__main__.py): "all" anywhere overrides the
+    # whole selection (assign + break), and the bitfield arms each group once, so
+    # repeated groups and aliases (e.g. fpu,sfpu) collapse to a single count.
+    normalized = []
     for g in groups:
         gl = g.lower()
         if gl == "all":
-            out.extend(_ALL_GROUPS)
-        else:
-            out.append(_GROUP_ALIASES.get(gl, gl))
+            return list(_ALL_GROUPS)
+        normalized.append(_GROUP_ALIASES.get(gl, gl))
+    seen = set()
+    out = []
+    for g in normalized:
+        if g not in seen:
+            seen.add(g)
+            out.append(g)
     return out
 
 

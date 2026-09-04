@@ -46,6 +46,19 @@ def test_all_expands_to_single_pass_set():
     assert markers_per_zone("blackhole", ["all"]) == 3 + 5 + 22 + 16 + 59
 
 
+def test_all_overrides_other_groups_like_cli():
+    # The CLI assigns the "all" bitfield and breaks, so extra tokens alongside "all"
+    # never arm; sizing must not count them either.
+    assert markers_per_zone("blackhole", ["all", "l1_1"]) == markers_per_zone("blackhole", ["all"])
+    assert markers_per_zone("blackhole", ["l1_1", "all"]) == markers_per_zone("blackhole", ["all"])
+
+
+def test_repeated_aliases_counted_once_like_bitfield():
+    # fpu and sfpu share bit 0; the bitfield arms the group once.
+    assert markers_per_zone("blackhole", ["fpu", "sfpu"]) == markers_per_zone("blackhole", ["fpu"])
+    assert markers_per_zone("blackhole", ["fpu", "fpu"]) == markers_per_zone("blackhole", ["fpu"])
+
+
 def test_blackhole_only_groups_have_counters():
     assert markers_per_zone("blackhole", ["l1_2"]) == 16
     # L1 banks 2-4 do not exist on Wormhole.
