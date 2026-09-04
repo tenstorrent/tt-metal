@@ -155,11 +155,15 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
     const TensorParamName INPUT_TENSOR{"input"};
     const TensorParamName OUTPUT_TENSOR{"output"};
 
-    // The column reader batches a dest chunk; a core that owns fewer columns stays unbatched.
+    // The column reader batches a dest chunk; a core that owns fewer columns stays unbatched. The
+    // H-axis split has one column per core, so it batches down the slice instead — but those tiles
+    // feed a single accumulator, so the batch costs compute the chance to start on each tile as it
+    // lands. That trade only pays while the reads dominate, which fp32 input is too slow to do.
     const uint32_t min_cols_per_core = num_cols_per_core_group_2 == 0
                                            ? num_cols_per_core_group_1
                                            : std::min(num_cols_per_core_group_1, num_cols_per_core_group_2);
-    const uint32_t reader_tiles_per_batch = min_cols_per_core < chunk_size ? 1u : chunk_size;
+    const bool batch_down_slice = tile_h_split && src0_cb_data_format != tt::DataFormat::Float32;
+    const uint32_t reader_tiles_per_batch = (batch_down_slice || min_cols_per_core >= chunk_size) ? chunk_size : 1u;
 
     ProgramSpec spec;
     spec.name = rm_path ? "reduce_multi_core_h_dense_rm"

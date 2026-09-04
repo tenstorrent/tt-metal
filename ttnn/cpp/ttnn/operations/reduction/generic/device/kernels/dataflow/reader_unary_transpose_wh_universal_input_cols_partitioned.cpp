@@ -11,7 +11,6 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_common.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
 
 void kernel_main() {
     // Start id in column major order. This should be the start of a column.
@@ -65,7 +64,14 @@ void kernel_main() {
     if constexpr (num_h_slices > 1) {
         // Work units are (nc, slice, wt) in wt-fastest order. col_start_tile_id is the global id
         // (curr_col_in_batch unused). Nesting matches the un-split DEST_AUTO_LIMIT chunking.
+        //
+        // Reads batch along the whole (i, j, k) stream rather than the k loop alone: the split sizes
+        // num_cols to fill the grid, so a core usually owns one column and its consecutive reads run
+        // down the slice's H. Only the trailing push is short, so every full reserve stays aligned to
+        // tiles_per_batch and none straddles the buffer wrap.
         const uint32_t work_start = col_start_tile_id;
+        uint32_t filled = 0;
+        bool padded = false;
         for (uint32_t i = 0; i < num_cols; i += row_chunk) {
             const uint32_t chunk_end = std::min(i + row_chunk, num_cols);
             for (uint32_t j = 0; j < slice_Ht; ++j) {
@@ -76,22 +82,40 @@ void kernel_main() {
                     const uint32_t nc = id / (Wt * num_h_slices);
                     const uint32_t ht = slice * slice_Ht + j;
 
-                    dfb_in0.reserve_back(onetile);
+                    if (filled == 0) {
+                        dfb_in0.reserve_back(tiles_per_batch);
+                    }
                     if (ht < Ht) {
                         noc.async_read(
                             tensor_accessor,
                             dfb_in0,
                             tile_bytes,
                             {.page_id = nc * HtWt + ht * Wt + wt},
-                            {.offset_bytes = 0});
-                        noc.async_read_barrier();
+                            {.offset_bytes = filled * tile_bytes});
                     } else {
                         // slice_Ht is rounded up; pad past Ht with the SUM identity.
-                        dataflow_kernel_lib::zero_tile(dfb_in0);
+                        noc.async_write_zeros(dfb_in0, tile_bytes, {.offset_bytes = filled * tile_bytes});
+                        padded = true;
                     }
-                    dfb_in0.push_back(onetile);
+
+                    if (++filled == tiles_per_batch) {
+                        noc.async_read_barrier();
+                        if (padded) {
+                            noc.write_zeros_l1_barrier();
+                        }
+                        dfb_in0.push_back(tiles_per_batch);
+                        filled = 0;
+                        padded = false;
+                    }
                 }
             }
+        }
+        if (filled > 0) {
+            noc.async_read_barrier();
+            if (padded) {
+                noc.write_zeros_l1_barrier();
+            }
+            dfb_in0.push_back(filled);
         }
         return;
     }
