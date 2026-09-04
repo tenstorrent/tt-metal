@@ -790,8 +790,8 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                 uint32_t num_workers = num_links * num_workers_per_direction;
 
                 const auto
-                    [channel_start,
-                     channel_end,
+                    [unit_start,
+                     unit_end,
                      start_tiles_read,
                      start_tiles_to_read,
                      start_pages_read_in_row,
@@ -799,6 +799,7 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                         ttnn::experimental::ccl::reduce_scatter_get_worker_split(
                             worker_id,
                             num_workers,
+                            input_tensor_B,
                             slice_C,
                             output_batch_num_pages,
                             output_channel_num_pages,
@@ -807,9 +808,10 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                             normalized_dim);
 
                 // for dim 0 scatters we process each slice in batches
-                // for all other dims we process each slice in the channels this worker owns
+                // for all other dims we process each slice in the (batch, channel) units this worker owns,
+                // all of them inside every ring step
                 uint32_t tiles_per_worker_per_repeat = start_tiles_to_read - start_tiles_read;
-                uint32_t num_repeats = (normalized_dim == 0) ? slice_B : (channel_end - channel_start);
+                uint32_t num_repeats = (normalized_dim == 0) ? slice_B : (unit_end - unit_start);
                 uint32_t chunks_per_sync_val =
                     chunks_per_sync.value_or(ttnn::experimental::ccl::reduce_scatter_default_chunks_per_sync(
                         topology, tiles_per_worker_per_repeat, num_repeats, tile_granularity));
@@ -839,8 +841,8 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                         start_tiles_to_read,                      // start_tiles_to_read
                         start_pages_read_in_row,                  // start_pages_read_in_row
                         start_row_offset,                         // start_row_offset
-                        channel_start,                            // channel_start
-                        channel_end,                              // channel_end
+                        unit_start,                               // unit_start
+                        unit_end,                                 // unit_end
                         // penult_intermediate_tensor_address; 0 (unread) on the tiled staging layout
                         use_contiguous_interm ? penult_intermediate_tensor->buffer()->address() : 0,
                     };
@@ -892,8 +894,8 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                         start_row_offset,         // start_row_offset
                         start_tiles_read,         // start_tiles_read
                         start_tiles_to_read,      // tiles_to_read
-                        channel_start,            // channel_start
-                        channel_end,              // channel_end
+                        unit_start,               // unit_start
+                        unit_end,                 // unit_end
                         // penult_intermediate_tensor_address; 0 (unread) on the tiled staging layout. Precedes
                         // the mux/fabric-connection args appended after this block.
                         use_contiguous_interm ? penult_intermediate_tensor->buffer()->address() : 0,
@@ -938,15 +940,15 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                 }
                 tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, {core}, writer_rt_args);
 
-                // Shared by both compute kernels. dim_zero_ring_reduction.cpp has no channel loop and
+                // Shared by both compute kernels. dim_zero_ring_reduction.cpp has no unit loop and
                 // stops reading after dir, leaving the two trailing values unread; the split helper
                 // still reports the full span for dim 0, so nothing depends on them there.
                 std::vector<uint32_t> compute_rt_args = {
                     start_tiles_read,     // start_tiles_read
                     start_tiles_to_read,  // start_tiles_to_read
                     dir,                  // dir
-                    channel_start,        // channel_start
-                    channel_end};         // channel_end
+                    unit_start,           // unit_start
+                    unit_end};            // unit_end
                 tt::tt_metal::SetRuntimeArgs(program, compute_kernel_id, {core}, compute_rt_args);
             }
         }

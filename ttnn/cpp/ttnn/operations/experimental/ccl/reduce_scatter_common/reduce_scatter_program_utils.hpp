@@ -39,7 +39,7 @@ uint32_t reduce_scatter_default_workers(
 
 // Returns the default chunks_per_sync value for the given topology and chunking geometry.
 //
-// Takes the per-worker tile range and the repeat count (the channel or batch loop trip count)
+// Takes the per-worker tile range and the repeat count (units per worker for dims 1-3, batches for dim 0)
 // SEPARATELY rather than pre-multiplied: the kernels chunk each repeat independently, so the number
 // of chunks a step issues is repeats * ceil(tiles / granularity), which is not recoverable from the
 // product once the two have been multiplied together.
@@ -146,27 +146,26 @@ std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> reduce_scatter_get_tile_offse
     uint32_t input_tensor_Wt,
     uint32_t normalized_dim);
 
-// Per-worker share of the work inside one ring step, for the dims that iterate over channels.
+// Per-worker share of one ring step, for the dims that iterate over channels (dim 0 has its own kernels).
 //
-// Two ways exist to divide a slice between workers, and they cost differently:
+// The ring kernels process every (batch, channel) pair of the slice inside each ring step, so the
+// tensor crosses the ring once however many batches it has. A "unit" is one such pair, indexed
+// u = b * slice_C + c over U = input_tensor_B * slice_C units, and the split hands each worker a
+// contiguous range of them:
 //
-//   page-major (channel_start=0, channel_end=slice_C)
-//       Every worker visits every channel and takes a fraction of the pages in each. The channel
-//       loop is therefore walked slice_C times per worker per step, and the fixed cost of entering
-//       it -- rebuilding the tile bases, resetting the row counters, re-testing chunk parity -- is
-//       paid on every one of those visits however few pages it carries.
+//   unit-major (unit_start..unit_end a contiguous span, whole pages within)
+//       Each worker owns whole channels of whole batches. The per-channel loop is entered
+//       U/num_workers times per step and every visit carries a full channel of pages.
 //
-//   channel-major (channel_start..channel_end a contiguous span, whole pages within)
-//       Each worker owns a distinct group of channels outright. The same tiles are moved, but the
-//       channel loop is entered slice_C/num_workers times instead of slice_C, and each visit
-//       carries a full channel of pages rather than a fraction of one.
+//   page-major (unit_start=0, unit_end=U)
+//       Every worker visits every unit and takes a fraction of the pages inside each. Used when the
+//       units do not divide evenly among the workers, or for a single worker.
 //
-// Channel-major is chosen when the channels divide evenly among the workers, which keeps the split
-// exactly as balanced as the page-major one it replaces. Everything else -- dim 0, a single worker,
-// or an uneven division -- keeps the page-major split.
+// Either way a worker moves total_slice_pages / num_workers tiles per step, the same share the dim 0
+// kernels give their workers, and balance is identical between the two forms.
 struct ReduceScatterWorkerSplit {
-    uint32_t channel_start;
-    uint32_t channel_end;
+    uint32_t unit_start;
+    uint32_t unit_end;
     uint32_t start_tiles_read;
     uint32_t start_tiles_to_read;
     uint32_t start_pages_read_in_row;
@@ -176,6 +175,7 @@ struct ReduceScatterWorkerSplit {
 ReduceScatterWorkerSplit reduce_scatter_get_worker_split(
     uint32_t worker_id,
     uint32_t num_workers,
+    uint32_t input_tensor_B,
     uint32_t slice_C,
     uint32_t output_batch_num_pages,
     uint32_t output_channel_num_pages,

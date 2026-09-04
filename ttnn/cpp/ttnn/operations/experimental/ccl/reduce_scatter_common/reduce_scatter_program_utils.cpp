@@ -318,21 +318,24 @@ std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> reduce_scatter_get_tile_offse
 ReduceScatterWorkerSplit reduce_scatter_get_worker_split(
     uint32_t worker_id,
     uint32_t num_workers,
+    uint32_t input_tensor_B,
     uint32_t slice_C,
     uint32_t output_batch_num_pages,
     uint32_t output_channel_num_pages,
     uint32_t slice_Wt,
     uint32_t input_tensor_Wt,
     uint32_t normalized_dim) {
-    // Whole channels per worker, when they divide evenly. Balance is then identical to the
-    // page-major split, and each worker enters the channel loop slice_C/num_workers times
-    // rather than slice_C times.
-    const bool channel_major =
-        normalized_dim != 0 && num_workers > 1 && slice_C >= num_workers && slice_C % num_workers == 0;
-    if (channel_major) {
+    // Units are (batch, channel) pairs; the kernels walk all of a worker's units inside each ring step.
+    const uint32_t num_units = input_tensor_B * slice_C;
+    // Whole units per worker, when they divide evenly. Balance is then identical to the page-major
+    // split, and each worker enters the per-channel loop num_units/num_workers times rather than
+    // num_units times, each time with a full channel of pages.
+    const bool unit_major =
+        normalized_dim != 0 && num_workers > 1 && num_units >= num_workers && num_units % num_workers == 0;
+    if (unit_major) {
         return {
-            /*channel_start=*/worker_id * slice_C / num_workers,
-            /*channel_end=*/(worker_id + 1) * slice_C / num_workers,
+            /*unit_start=*/worker_id * num_units / num_workers,
+            /*unit_end=*/(worker_id + 1) * num_units / num_workers,
             /*start_tiles_read=*/0,
             /*start_tiles_to_read=*/output_channel_num_pages,
             /*start_pages_read_in_row=*/0,
@@ -349,8 +352,8 @@ ReduceScatterWorkerSplit reduce_scatter_get_worker_split(
             input_tensor_Wt,
             normalized_dim);
     return {
-        /*channel_start=*/0,
-        /*channel_end=*/slice_C,
+        /*unit_start=*/0,
+        /*unit_end=*/num_units,
         start_tiles_read,
         start_tiles_to_read,
         start_pages_read_in_row,
