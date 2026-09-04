@@ -37,7 +37,7 @@ struct LLKOperandExtractor {
     static_assert(
         Token.llk_metadata_.format != binding_details::LLKMetadata::kNoFormat,
         "LLKOperandFrom: this token has no data format. Did you forget to set data_format_metadata on ScratchpadSpec/ "
-        "DataflowBufferSpec?"
+        "DataflowBufferSpec?");
 
     static constexpr DataFormat format = static_cast<DataFormat>(Token.llk_metadata_.format);
     static constexpr ckernel::TensorShape shape{
