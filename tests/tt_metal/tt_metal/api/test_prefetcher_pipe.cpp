@@ -755,11 +755,12 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_RelayDFB_HostRelationshipValidation
         // RelayDFBBindingToken. Mirror MakeDataflowBufferBindingHandles and verify the callback
         // genfiles uses sees the PrefetcherPipe slot (not the 0xFF default).
         DataflowBufferBindingHandleMap handles;
-        handles.push_back(DataflowBufferBindingHandle{
-            .accessor_name = "relay_dfb",
-            .slot = static_cast<uint16_t>(relay_dfb->device_slot),
-            .is_relay = relay_dfb->config.is_relay,
-            .prefetcher_pipe_id = *prefetcher_pipe_id});
+        handles.emplace(
+            "relay_dfb",
+            DataflowBufferBindingHandle{
+                .logical_dfb_id = static_cast<uint16_t>(relay_dfb->device_slot),
+                .is_relay = relay_dfb->config.is_relay,
+                .prefetcher_pipe_id = *prefetcher_pipe_id});
         auto kernel = std::make_shared<ComputeKernel>(
             program.impl().get_context_id(),
             KernelSource::from_source("void kernel_main() {}"),

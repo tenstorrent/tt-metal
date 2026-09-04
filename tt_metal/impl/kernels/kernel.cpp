@@ -320,8 +320,8 @@ void Kernel::process_dataflow_buffer_binding_handles(const std::function<void(
                                                          bool is_relay,
                                                          uint8_t prefetcher_pipe_id,
                                                          const std::optional<LLKMetadata>&)> callback) const {
-    for (const auto& handle : this->dataflow_buffer_binding_handles_) {
-        callback(handle.accessor_name, handle.slot, handle.is_relay, handle.prefetcher_pipe_id, handle.llk_metadata);
+    for (const auto& [accessor_name, handle] : this->dataflow_buffer_binding_handles_) {
+        callback(accessor_name, handle.logical_dfb_id, handle.is_relay, handle.prefetcher_pipe_id, handle.llk_metadata);
     }
 }
 
@@ -594,18 +594,12 @@ uint64_t Kernel::compute_hash() const {
         hasher.update(static_cast<uint64_t>(metadata->face_geometry.face_r_dim));
         hasher.update(static_cast<uint64_t>(metadata->face_geometry.num_faces));
     };
-    std::vector<const DataflowBufferBindingHandle*> dfb_sorted;
-    dfb_sorted.reserve(this->dataflow_buffer_binding_handles_.size());
-    for (const auto& handle : this->dataflow_buffer_binding_handles_) {
-        dfb_sorted.push_back(&handle);
-    }
-    std::ranges::sort(dfb_sorted, [](const auto* a, const auto* b) { return a->accessor_name < b->accessor_name; });
-    for (const auto* handle : dfb_sorted) {
-        hasher.update(handle->accessor_name);
-        hasher.update(static_cast<uint64_t>(handle->slot));
-        hasher.update(static_cast<uint64_t>(handle->is_relay ? 1 : 0));
-        hasher.update(static_cast<uint64_t>(handle->prefetcher_pipe_id));
-        hash_llk_metadata(handle->llk_metadata);
+    for (const auto& it : sorted_iters(this->dataflow_buffer_binding_handles_)) {
+        hasher.update(it->first);
+        hasher.update(static_cast<uint64_t>(it->second.logical_dfb_id));
+        hasher.update(static_cast<uint64_t>(it->second.is_relay ? 1 : 0));
+        hasher.update(static_cast<uint64_t>(it->second.prefetcher_pipe_id));
+        hash_llk_metadata(it->second.llk_metadata);
     }
     for (const auto& it : sorted_iters(this->semaphore_binding_handles_)) {
         hasher.update(it->first);

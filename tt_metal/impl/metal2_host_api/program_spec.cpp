@@ -2691,12 +2691,11 @@ tt::tt_metal::DataflowBufferBindingHandleMap MakeDataflowBufferBindingHandles(
             dfb_binding.dfb_spec_name,
             slot);
         tt::tt_metal::DataflowBufferBindingHandle handle;
-        handle.accessor_name = dfb_binding.accessor_name;
-        handle.slot = static_cast<uint16_t>(slot);
+        handle.logical_dfb_id = static_cast<uint16_t>(slot);
         handle.is_relay = dfb_name_to_is_relay.at(dfb_binding.dfb_spec_name);
         handle.prefetcher_pipe_id = dfb_name_to_prefetcher_pipe_id.at(dfb_binding.dfb_spec_name);
         handle.llk_metadata = LLKMetadataFromDfb(*dfb_by_name.at(dfb_binding.dfb_spec_name));
-        out.push_back(std::move(handle));
+        out.emplace(dfb_binding.accessor_name, handle);
     }
     return out;
 }

@@ -91,18 +91,17 @@ KernelHandle CreateKernelFromString(
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     const DramConfig& config);
 
-// Metal 2.0: per-kernel resolved DFB binding (accessor name, device slot, relay flags, optional LLK metadata).
+// Metal 2.0: DFB accessor names -> device-slot binding (optionally typed as relay and carrying LLK metadata).
 // prefetcher_pipe_id is 0xFF (RelayDFBBindingToken::NO_PREFETCHER_PIPE) except for
 // PrefetcherPipe relays, where it names the persistent slot baked into the token so
 // the TRISC constructor can O(1)-align the borrowed iface to the durable checkpoint.
 struct DataflowBufferBindingHandle {
-    std::string accessor_name;
-    uint16_t slot = 0;
+    uint16_t logical_dfb_id = 0;
     bool is_relay = false;
     uint8_t prefetcher_pipe_id = 0xFF;
     std::optional<LLKMetadata> llk_metadata;
 };
-using DataflowBufferBindingHandleMap = std::vector<DataflowBufferBindingHandle>;
+using DataflowBufferBindingHandleMap = std::unordered_map<std::string, DataflowBufferBindingHandle>;
 
 // Metal 2.0: per-binding semaphore handle -> id and the host-baked scope; kernel code sees only a uint32_t id.
 struct SemaphoreBindingHandle {
