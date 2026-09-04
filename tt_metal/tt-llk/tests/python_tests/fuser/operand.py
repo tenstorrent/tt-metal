@@ -39,13 +39,6 @@ def bfd_current(engine: BfdResource) -> str:
     return f"ckernel::trisc::bfd_current<{engine.value}>()"
 
 
-_bfd_programmed: dict = {}
-
-
-def reset_bfd_state() -> None:
-    _bfd_programmed.clear()
-
-
 @dataclass
 class Operand:
     name: str
@@ -244,16 +237,6 @@ class Operand:
         engine: BfdResource,
         mode: L1AccessMode = L1AccessMode.CONTINUOUS,
     ) -> str:
-        descriptor = (
-            self.tile_shape.cpp_value,
-            self.l1_address,
-            self.data_format,
-            mode,
-        )
-        if _bfd_programmed.get(engine) == descriptor:
-            return ""
-        _bfd_programmed[engine] = descriptor
-
         return (
             f"ckernel::trisc::bfd_alloc_and_program<{engine.value}, {mode.value}>("
             f"{self.tile_shape.cpp_value}, "

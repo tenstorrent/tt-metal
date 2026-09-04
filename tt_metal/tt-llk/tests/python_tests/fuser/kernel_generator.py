@@ -11,7 +11,6 @@ from typing import Dict
 from helpers.chip_architecture import ChipArchitecture
 
 from .fuser_config import FuserConfig
-from .operand import reset_bfd_state
 
 FUSED_TESTS_DIR = Path("sources/fused_tests")
 
@@ -157,7 +156,6 @@ class FusedKernelGenerator:
         self.sfpu_gen = SfpuKernelGenerator(self.config)
 
     def generate_all(self) -> Dict[str, str]:
-        reset_bfd_state()
         return {
             "unpack": self.unpack_gen.generate(),
             "math": self.math_gen.generate(),
