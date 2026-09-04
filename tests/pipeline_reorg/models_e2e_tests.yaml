@@ -478,7 +478,7 @@
     bh_quietbox_2:
       timeout: 45
       tier: 1
-      release_ready: true
+      release_ready: false
   owner_id: U08HL8X1ECD # Aniruddha Tupe
   team: models
 
