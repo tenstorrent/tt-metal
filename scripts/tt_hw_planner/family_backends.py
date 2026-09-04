@@ -50,6 +50,21 @@ _BACKENDS: List[FamilyBackend] = [
         model_type_keys=["gemma2", "phi3"],
     ),
     FamilyBackend(
+        category="LLM",
+        name="NemotronH (nemotron_h hybrid Mamba2/MoE)",
+        demo_path="models/demos/nvidia_nemotron_3_nano_30b_a3b_bf16",
+        routing_mode="template",
+        canonical_hf_id="nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16",
+        notes=(
+            "Graduated Nano Nemotron-H bring-up: hybrid Mamba2 / GQA / MoE on a "
+            "TP mesh. Sibling nemotron_h models (e.g. Lightning) reuse this demo "
+            "as the template instead of falling through to generic tt_transformers."
+        ),
+        model_type_keys=["nemotron_h"],
+        pipeline_tags=["text-generation"],
+        use_module_tree=True,
+    ),
+    FamilyBackend(
         category="VLM",
         name="tt_transformers / simple_text_demo (multimodal)",
         demo_path="models/tt_transformers/demo/simple_text_demo.py",

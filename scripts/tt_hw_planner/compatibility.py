@@ -179,6 +179,7 @@ SUPPORTED_HF_MODELS = {
     "google/owlvit-base-patch32",
     "bert-large-uncased",
     "sentence-transformers/all-MiniLM-L6-v2",
+    "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16",
 }
 
 
@@ -223,6 +224,7 @@ def closest_supported_model(model_id: str, cfg: dict) -> Optional[str]:
         "qwen2_5_vl": "Qwen/Qwen2.5-VL-7B-Instruct",
         "mamba": "state-spaces/mamba-2.8b-slimpj",
         "mamba2": "state-spaces/mamba-2.8b-slimpj",
+        "nemotron_h": "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16",
         "vit": "google/vit-base-patch16-224",
         "beit": "google/vit-base-patch16-224",
         "deit": "google/vit-base-patch16-224",

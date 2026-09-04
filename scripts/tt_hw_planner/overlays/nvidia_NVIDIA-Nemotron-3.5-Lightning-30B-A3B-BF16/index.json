@@ -1,0 +1,130 @@
+{
+  "models/tt_transformers/demo/nvidia_nemotron_3_5_lightning_30b_a3b_bf16/_stubs/nemotron_h_block.py": {
+    "captured_ts": 1788562786.057222,
+    "classification": "shared",
+    "line_count": 523,
+    "patch_file": "models__tt_transformers__demo__nvidia_nemotron_3_5_lightning_30b_a3b_bf16___stubs__nemotron_h_block.py.patch",
+    "sha256": "e71cea44c539eba2e055f258341bfcff68b216764e2672daac43c3c99af225a7",
+    "source": "seeded_from_graduated_nano"
+  },
+  "models/tt_transformers/demo/nvidia_nemotron_3_5_lightning_30b_a3b_bf16/_stubs/nemotron_h_block.py.last_good_native": {
+    "captured_ts": 1788562786.0574467,
+    "classification": "shared",
+    "line_count": 516,
+    "patch_file": "models__tt_transformers__demo__nvidia_nemotron_3_5_lightning_30b_a3b_bf16___stubs__nemotron_h_block.py.last_good_native.patch",
+    "sha256": "c2a9d7b1f0a3a67c4397d425ada76e01d17fa07973553878dda16304401006b8",
+    "source": "seeded_from_graduated_nano"
+  },
+  "models/tt_transformers/demo/nvidia_nemotron_3_5_lightning_30b_a3b_bf16/_stubs/nemotron_h_block.py.last_good_sharded": {
+    "captured_ts": 1788562786.057658,
+    "classification": "shared",
+    "line_count": 523,
+    "patch_file": "models__tt_transformers__demo__nvidia_nemotron_3_5_lightning_30b_a3b_bf16___stubs__nemotron_h_block.py.last_good_sharded.patch",
+    "sha256": "1e978ca331d70c5013422ef45411c3bb33a9be9a9c51506f108061f943629635",
+    "source": "seeded_from_graduated_nano"
+  },
+  "models/tt_transformers/demo/nvidia_nemotron_3_5_lightning_30b_a3b_bf16/_stubs/nemotron_h_mamba2_mixer.py": {
+    "captured_ts": 1788562786.056351,
+    "classification": "shared",
+    "line_count": 434,
+    "patch_file": "models__tt_transformers__demo__nvidia_nemotron_3_5_lightning_30b_a3b_bf16___stubs__nemotron_h_mamba2_mixer.py.patch",
+    "sha256": "04b7f016197fb1bb00224cf55232bbfc62047ccbe0f674f72871bd2a1d87140c",
+    "source": "seeded_from_graduated_nano"
+  },
+  "models/tt_transformers/demo/nvidia_nemotron_3_5_lightning_30b_a3b_bf16/_stubs/nemotron_h_mamba2_mixer.py.last_good_native": {
+    "captured_ts": 1788562786.056515,
+    "classification": "shared",
+    "line_count": 342,
+    "patch_file": "models__tt_transformers__demo__nvidia_nemotron_3_5_lightning_30b_a3b_bf16___stubs__nemotron_h_mamba2_mixer.py.last_good_native.patch",
+    "sha256": "baa0d37845c6a67f7cca310f1b7d646526b6d0dccae795b7facfba607bf9e1b7",
+    "source": "seeded_from_graduated_nano"
+  },
+  "models/tt_transformers/demo/nvidia_nemotron_3_5_lightning_30b_a3b_bf16/_stubs/nemotron_h_mamba2_mixer.py.last_good_sharded": {
+    "captured_ts": 1788562786.056716,
+    "classification": "shared",
+    "line_count": 434,
+    "patch_file": "models__tt_transformers__demo__nvidia_nemotron_3_5_lightning_30b_a3b_bf16___stubs__nemotron_h_mamba2_mixer.py.last_good_sharded.patch",
+    "sha256": "825c0c99952c0a7b6179f8e1af4e8adaf1f6edb4d82282459b56d23366f68f89",
+    "source": "seeded_from_graduated_nano"
+  },
+  "models/tt_transformers/demo/nvidia_nemotron_3_5_lightning_30b_a3b_bf16/_stubs/nemotron_h_mo_e.py": {
+    "captured_ts": 1788562786.0578442,
+    "classification": "shared",
+    "line_count": 313,
+    "patch_file": "models__tt_transformers__demo__nvidia_nemotron_3_5_lightning_30b_a3b_bf16___stubs__nemotron_h_mo_e.py.patch",
+    "sha256": "993614d0b2b288475a0f703b4a77616c2f3a1e0e8b43fb7fdc5ffc989349e857",
+    "source": "seeded_from_graduated_nano"
+  },
+  "models/tt_transformers/demo/nvidia_nemotron_3_5_lightning_30b_a3b_bf16/_stubs/nemotron_h_mo_e.py.last_good_native": {
+    "captured_ts": 1788562786.058078,
+    "classification": "shared",
+    "line_count": 236,
+    "patch_file": "models__tt_transformers__demo__nvidia_nemotron_3_5_lightning_30b_a3b_bf16___stubs__nemotron_h_mo_e.py.last_good_native.patch",
+    "sha256": "6af823c85d3d66d24e2d4145ec8922d6749bcd51dcf99d8720c8f365b3ae574f",
+    "source": "seeded_from_graduated_nano"
+  },
+  "models/tt_transformers/demo/nvidia_nemotron_3_5_lightning_30b_a3b_bf16/_stubs/nemotron_h_mo_e.py.last_good_sharded": {
+    "captured_ts": 1788562786.0582676,
+    "classification": "shared",
+    "line_count": 313,
+    "patch_file": "models__tt_transformers__demo__nvidia_nemotron_3_5_lightning_30b_a3b_bf16___stubs__nemotron_h_mo_e.py.last_good_sharded.patch",
+    "sha256": "fdbb74696c8e856df9b90b21251c88908549875a8a2263bc69e145da6d517a98",
+    "source": "seeded_from_graduated_nano"
+  },
+  "models/tt_transformers/demo/nvidia_nemotron_3_5_lightning_30b_a3b_bf16/_stubs/nemotron_h_topk_router.py": {
+    "captured_ts": 1788562786.0559094,
+    "classification": "shared",
+    "line_count": 239,
+    "patch_file": "models__tt_transformers__demo__nvidia_nemotron_3_5_lightning_30b_a3b_bf16___stubs__nemotron_h_topk_router.py.patch",
+    "sha256": "f0da13cff2c07a6b15ad1b08c3964779fc89019eb18ec1ac89709850f3d1456e",
+    "source": "seeded_from_graduated_nano"
+  },
+  "models/tt_transformers/demo/nvidia_nemotron_3_5_lightning_30b_a3b_bf16/_stubs/nemotron_h_topk_router.py.last_good_native": {
+    "captured_ts": 1788562786.0560303,
+    "classification": "shared",
+    "line_count": 239,
+    "patch_file": "models__tt_transformers__demo__nvidia_nemotron_3_5_lightning_30b_a3b_bf16___stubs__nemotron_h_topk_router.py.last_good_native.patch",
+    "sha256": "87b1c21c1d5f8d949f7acdc634cc26637fb6c4a4ad1312127b20e94ca425731c",
+    "source": "seeded_from_graduated_nano"
+  },
+  "models/tt_transformers/demo/nvidia_nemotron_3_5_lightning_30b_a3b_bf16/_stubs/nemotron_h_topk_router.py.last_good_sharded": {
+    "captured_ts": 1788562786.0561595,
+    "classification": "shared",
+    "line_count": 239,
+    "patch_file": "models__tt_transformers__demo__nvidia_nemotron_3_5_lightning_30b_a3b_bf16___stubs__nemotron_h_topk_router.py.last_good_sharded.patch",
+    "sha256": "7e74d69f5164a18ba3a93ab30807177be00ba374f26681daffd04084507f77a3",
+    "source": "seeded_from_graduated_nano"
+  },
+  "models/tt_transformers/demo/nvidia_nemotron_3_5_lightning_30b_a3b_bf16/_stubs/re_l_u_squared_activation.py": {
+    "captured_ts": 1788562786.0568812,
+    "classification": "shared",
+    "line_count": 148,
+    "patch_file": "models__tt_transformers__demo__nvidia_nemotron_3_5_lightning_30b_a3b_bf16___stubs__re_l_u_squared_activation.py.patch",
+    "sha256": "b49c051bd06528a5895616e202d024ceba30ae04bd891fba54bb54ca427afa05",
+    "source": "seeded_from_graduated_nano"
+  },
+  "models/tt_transformers/demo/nvidia_nemotron_3_5_lightning_30b_a3b_bf16/_stubs/re_l_u_squared_activation.py.last_good_native": {
+    "captured_ts": 1788562786.0570087,
+    "classification": "shared",
+    "line_count": 148,
+    "patch_file": "models__tt_transformers__demo__nvidia_nemotron_3_5_lightning_30b_a3b_bf16___stubs__re_l_u_squared_activation.py.last_good_native.patch",
+    "sha256": "b09b9ddd77eec2790399c49646f6e7e6b57b4fbc265b2a87cf3b246fb8585c46",
+    "source": "seeded_from_graduated_nano"
+  },
+  "models/tt_transformers/demo/nvidia_nemotron_3_5_lightning_30b_a3b_bf16/_stubs/zamba2_r_m_s_norm_gated.py": {
+    "captured_ts": 1788562786.0584614,
+    "classification": "shared",
+    "line_count": 279,
+    "patch_file": "models__tt_transformers__demo__nvidia_nemotron_3_5_lightning_30b_a3b_bf16___stubs__zamba2_r_m_s_norm_gated.py.patch",
+    "sha256": "468609fc7a5f6b1ac9ce70c1e64a9c07f228f1355fe7c836aefac6921b000f5b",
+    "source": "seeded_from_graduated_nano"
+  },
+  "models/tt_transformers/demo/nvidia_nemotron_3_5_lightning_30b_a3b_bf16/_stubs/zamba2_r_m_s_norm_gated.py.last_good_native": {
+    "captured_ts": 1788562786.0586398,
+    "classification": "shared",
+    "line_count": 279,
+    "patch_file": "models__tt_transformers__demo__nvidia_nemotron_3_5_lightning_30b_a3b_bf16___stubs__zamba2_r_m_s_norm_gated.py.last_good_native.patch",
+    "sha256": "dd6db4021e7f9cf99691077b62b0335f9b87aa2c03a7cfe40f298e066088b012",
+    "source": "seeded_from_graduated_nano"
+  }
+}
