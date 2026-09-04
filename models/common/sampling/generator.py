@@ -388,6 +388,10 @@ class SamplingGenerator:
         saved_num_logprobs = list(log_probs.num_logprobs)
         try:
             for penalties_on, log_probs_on, force_argmax in itertools.product((False, True), repeat=_TRACE_KEY_FLAGS):
+                # Models that disable force-argmax never reach that program, and it is not runnable
+                # under their sub-device config (untilize with sub_core_grids=None).
+                if force_argmax and not self.tt_sampling._allow_force_argmax_sampling:
+                    continue
                 self._penalties_active = penalties_on
                 # Set the flag directly: reset_params() would re-derive it from k/p/temp and overwrite
                 # the live request params, and only the flag selects the program being compiled.
@@ -426,12 +430,17 @@ class SamplingGenerator:
             logger.debug(
                 f"Pre-compiling sampling path before trace capture (penalties={penalties_on},log_probs_on={log_probs_on},force_argmax={force_argmax})"
             )
+            # TTPenalties.apply() rewrites its input in place, so compiling on `logits` itself would
+            # leave the capture buffer already penalized and make the first replay penalize it twice.
+            scratch = ttnn.clone(logits) if penalties_on else logits
             self._run_sampling(
-                logits,
+                scratch,
                 penalties_on=penalties_on,
                 tt_out_tok=tt_out_tok,
                 count_tokens=False,
             )
+            if scratch is not logits:
+                ttnn.deallocate(scratch)
 
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=self.cq_id)
         sampled = self._run_sampling(
