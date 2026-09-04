@@ -175,9 +175,20 @@ class DFlashDrafter:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        # Drafter-specific RoPE tables (theta differs from the target's).
+        # Drafter-specific RoPE tables (theta differs from the target's),
+        # persistent on device in ROW_MAJOR for per-iteration position gathers
+        # (house pattern: rope_caches_2d) — no per-draft host uploads.
         cos, sin = _rope_tables(self.head_dim, float(cfg.get("rope_theta", 1e6)), max_ctx + 64)
-        self._cos_host, self._sin_host = cos.float(), sin.float()
+        mk2 = dict(device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self._replicate)
+        self._cos_2d = ttnn.from_torch(cos, **mk2)
+        self._sin_2d = ttnn.from_torch(sin, **mk2)
+        # Persistent mask-token noise rows [1,1,block-1,H] (constant per model).
+        self._mask_rows = None
+        # Greedy on-device argmax (softcap is monotonic -> argmax-invariant);
+        # GEMMA4_DFLASH_HOST_ARGMAX=1 reverts to the full-vocab host readback.
+        import os as _os
+
+        self._host_argmax = _os.environ.get("GEMMA4_DFLASH_HOST_ARGMAX", "0") == "1"
 
         # HiFi4 + fp32 accumulation everywhere (house parity with the target's
         # SDPA path); default-fidelity matmuls measurably drift draft argmaxes
@@ -246,10 +257,19 @@ class DFlashDrafter:
         return ttnn.rms_norm(x, epsilon=self.rms_eps, weight=w)
 
     def _rope4d(self, positions):
-        cos = self._cos_host[positions].to(torch.bfloat16).unsqueeze(0).unsqueeze(0)
-        sin = self._sin_host[positions].to(torch.bfloat16).unsqueeze(0).unsqueeze(0)
-        mk = dict(device=self.mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=self._replicate)
-        return ttnn.from_torch(cos, **mk), ttnn.from_torch(sin, **mk)
+        # On-device row gather from the persistent tables; only the position ids
+        # (a few dozen uint32) cross the host boundary.
+        idx = ttnn.from_torch(
+            positions.to(torch.int64).unsqueeze(0),
+            device=self.mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=self._replicate,
+        )
+        cos = ttnn.unsqueeze_to_4D(ttnn.embedding(idx, self._cos_2d, layout=ttnn.TILE_LAYOUT))
+        sin = ttnn.unsqueeze_to_4D(ttnn.embedding(idx, self._sin_2d, layout=ttnn.TILE_LAYOUT))
+        idx.deallocate(True)
+        return cos, sin
 
     def _apply_rope(self, x_bhsd, cos, sin):
         # x [1, heads, S, head_dim]; rotate_half convention.
@@ -279,12 +299,19 @@ class DFlashDrafter:
         assert self._ctx_len > 0, "append taps before drafting"
         ctx = self._ctx_len
 
-        # Noise block: raw embedding rows [anchor, mask x K].
-        ids = torch.tensor([anchor_id] + [self.mask_token_id] * K)
-        noise = self._embed_w_host[ids].to(torch.bfloat16).unsqueeze(0).unsqueeze(0)  # [1,1,K+1,H]
-        x = ttnn.from_torch(
-            noise, device=self.mesh_device, dtype=self.dtype, layout=ttnn.TILE_LAYOUT, mesh_mapper=self._replicate
+        # Noise block: raw embedding rows [anchor, mask x K]. The mask rows are
+        # constant — persistent on device; only the anchor row uploads per draft.
+        if self._mask_rows is None or self._mask_rows.shape[2] != K:
+            mrows = self._embed_w_host[[self.mask_token_id] * K].to(torch.bfloat16).unsqueeze(0).unsqueeze(0)
+            self._mask_rows = ttnn.from_torch(
+                mrows, device=self.mesh_device, dtype=self.dtype, layout=ttnn.TILE_LAYOUT, mesh_mapper=self._replicate
+            )
+        arow = self._embed_w_host[[anchor_id]].to(torch.bfloat16).unsqueeze(0).unsqueeze(0)
+        anchor_tt = ttnn.from_torch(
+            arow, device=self.mesh_device, dtype=self.dtype, layout=ttnn.TILE_LAYOUT, mesh_mapper=self._replicate
         )
+        x = ttnn.concat([anchor_tt, self._mask_rows], dim=2)
+        anchor_tt.deallocate(True)
 
         h_ctx = self._rms(self._ctx_acc, self.hidden_norm_w)  # [1,1,ctx,H]
 
@@ -391,6 +418,20 @@ class DFlashDrafter:
         h_drafts.deallocate(True)
         if self.tp > 1:
             logits = ccl_allgather(logits, self.mesh_config, self.ccl_manager)
+        if not self._host_argmax:
+            # Greedy: tanh softcap is monotonic (argmax-invariant), so argmax
+            # directly on device and read back K token ids instead of the
+            # full-vocab logits (16 MB -> 60 B per draft).
+            am = ttnn.argmax(logits[:, :, :, : self.vocab], dim=-1)
+            ids_t = ttnn.to_torch(ttnn.get_device_tensors(am)[0] if self.tp > 1 else am)
+            am.deallocate(True)
+            logits.deallocate(True)
+            for t in (cos_ctx, sin_ctx, cos_blk, sin_blk, mask_full_tt):
+                t.deallocate(True)
+            if self.sliding_window:
+                mask_slide_tt.deallocate(True)
+            h_ctx.deallocate(True)
+            return ids_t.reshape(-1).to(torch.int64).tolist()[:K]
         lt = ttnn.to_torch(ttnn.get_device_tensors(logits)[0]).float()
         logits.deallocate(True)
         for t in (cos_ctx, sin_ctx, cos_blk, sin_blk, mask_full_tt):
