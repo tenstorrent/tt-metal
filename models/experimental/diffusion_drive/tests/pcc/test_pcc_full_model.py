@@ -24,20 +24,11 @@ from pathlib import Path
 import pytest
 import torch
 
+from models.common.utility_functions import comp_pcc
+
 _DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
 _CKPT = _DATA_DIR / "diffusiondrive_navsim.pth"
 _ANCHORS = _DATA_DIR / "kmeans_navsim_traj_20.npy"
-
-
-def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
-    a = a.float().flatten()
-    b = b.float().flatten()
-    a = a - a.mean()
-    b = b - b.mean()
-    denom = (a.norm() * b.norm()).item()
-    if denom < 1e-12:
-        return 1.0
-    return (a @ b).item() / denom
 
 
 def _require_assets():
@@ -111,8 +102,8 @@ def test_full_model_pcc_random(device, model_config, batch):
     # TTNN wrapper
     ttnn_out = ttnn_model(features)
 
-    traj_pcc = _pcc(ttnn_out["trajectory"], ref_out["trajectory"])
-    scores_pcc = _pcc(ttnn_out["scores"], ref_out["scores"])
+    traj_pcc = comp_pcc(ref_out["trajectory"], ttnn_out["trajectory"])[1]
+    scores_pcc = comp_pcc(ref_out["scores"], ttnn_out["scores"])[1]
 
     assert traj_pcc >= 0.99, f"trajectory PCC {traj_pcc:.6f} < 0.99"
     assert scores_pcc >= 0.99, f"scores PCC {scores_pcc:.6f} < 0.99"

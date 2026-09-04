@@ -17,19 +17,9 @@ from __future__ import annotations
 import pytest
 import torch
 
+from models.common.utility_functions import comp_pcc
 from models.experimental.diffusion_drive.reference.model import DiffusionDriveConfig, DiffusionDriveModel
 from models.experimental.diffusion_drive.tt.ttnn_diffusion_drive import TtnnDiffusionDriveModel
-
-
-def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
-    a = a.float().flatten()
-    b = b.float().flatten()
-    a = a - a.mean()
-    b = b - b.mean()
-    denom = (a.norm() * b.norm()).item()
-    if denom < 1e-12:
-        return 1.0
-    return (a @ b).item() / denom
 
 
 def _make_model(anchor_path: str) -> DiffusionDriveModel:
@@ -77,7 +67,7 @@ def test_stage2_trajectory_pcc(device, model_config) -> None:
     torch.manual_seed(1234)
     ttnn_out = ttnn_model(features)
 
-    pcc = _pcc(ttnn_out["trajectory"], ref_out["trajectory"])
+    pcc = comp_pcc(ref_out["trajectory"], ttnn_out["trajectory"])[1]
     assert pcc >= 0.99, f"trajectory PCC {pcc:.6f} < 0.99"
 
 
@@ -105,5 +95,5 @@ def test_stage2_scores_pcc(device, model_config) -> None:
     torch.manual_seed(1234)
     ttnn_out = ttnn_model(features)
 
-    pcc = _pcc(ttnn_out["scores"], ref_out["scores"])
+    pcc = comp_pcc(ref_out["scores"], ttnn_out["scores"])[1]
     assert pcc >= 0.99, f"scores PCC {pcc:.6f} < 0.99"

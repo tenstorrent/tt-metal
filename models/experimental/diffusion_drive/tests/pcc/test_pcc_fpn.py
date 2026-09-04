@@ -20,23 +20,13 @@ from __future__ import annotations
 import pytest
 import torch
 
+from models.common.utility_functions import comp_pcc
 from models.experimental.diffusion_drive.reference.model import DiffusionDriveConfig, TransfuserBackbone
 from models.experimental.diffusion_drive.tt.ttnn_fpn import TtnnFPN
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
-    a = a.float().flatten()
-    b = b.float().flatten()
-    a = a - a.mean()
-    b = b - b.mean()
-    denom = (a.norm() * b.norm()).item()
-    if denom < 1e-12:
-        return 1.0
-    return (a @ b).item() / denom
 
 
 def _make_backbone() -> TransfuserBackbone:
@@ -70,5 +60,5 @@ def test_fpn_pcc(device) -> None:
 
     assert ttnn_out.shape == ref_out.shape, f"shape mismatch: {ttnn_out.shape} vs {ref_out.shape}"
 
-    pcc = _pcc(ttnn_out, ref_out)
+    pcc = comp_pcc(ref_out, ttnn_out)[1]
     assert pcc >= 0.99, f"FPN PCC {pcc:.6f} < 0.99"
