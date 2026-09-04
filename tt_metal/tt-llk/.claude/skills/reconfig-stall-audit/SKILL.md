@@ -29,7 +29,12 @@ before its first config write):
 `NO_UNIT_DRAIN` = a config write with no preceding STALLWAIT; `THCON_ONLY` = a
 stall that orders the GPR→cfg write but drains no execution unit; `DRAIN_REARMED`
 = a draining stall precedes the write but the unit was re-issued (UNPACR/PACR/
-matrix) between the drain and the write, so the drain no longer holds;
+matrix) between the drain and the write, so the drain no longer holds. A MOP /
+`mop_run` / replay sitting in that window re-arms the unit just as well, and the
+tool credits the drain straight across it — a MOP is **opaque to the tool, not
+skippable by you**: resolve what the MOP actually issues at its `run()`/`replay()`
+site (per `race-audit-all` → *"A word's SLOT, not its line"*) and treat a
+unit-re-issuing word in any slot as a re-arm;
 `PARTIAL_MATH_DRAIN` = a **MATH** reconfig whose stall drains only ONE of the two
 MATH engines (FPU=`MATH` vs SFPU=`WAIT_SFPU`/`SFPU1`) — **code-dependent, so
 low-confidence**: it is sufficient only if the reconfig'd field is not sampled by

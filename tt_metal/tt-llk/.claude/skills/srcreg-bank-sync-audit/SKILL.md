@@ -87,7 +87,9 @@ A desync → the FPU reads a bank the unpacker is still filling, or a thread clo
 
    But a `STALLWAIT` selecting **only** the source-valid condition is still wrong. That condition indexes `MatrixUnit.Src?Bank` **live** at the Wait Gate, and that pointer is advanced in the *epilogue* of the preceding Matrix Unit instruction — see the `if (FlipSrcA)` / `if (FlipSrcB)` block at the end of `ELWMUL.md`'s functional model, and equivalently `SETRWC` with a `CLR_*` operand. With a bank-flipping op still in flight the condition tests the **pre-flip** bank, which the Matrix Unit still owns, is satisfied vacuously, and releases — by the time the move executes the flip has landed and it writes the **post-flip** bank the unpacker owns and may be filling.
 
-   So the wait must **also** select the "this thread has an instruction in any stage of the Matrix Unit (FPU) pipeline" condition (`p_stall::MATH`), draining the pipe so the source-valid test observes the post-flip pointer. That condition's documented precondition is that the block mask blocks new Matrix Unit instructions (`p_stall::STALL_MATH`) — verify that too. Flag any `STALLWAIT` gating a `MOVD2A`/`MOVD2B` whose condition mask carries `SRC?_VLD` without `MATH`. Two further requirements on the same wait: it must name the bank-valid condition of the register the move actually **writes** (`SRCA_VLD` for `MOVD2A`, `SRCB_VLD` for `MOVD2B` — a stall naming only the other register proves nothing), and no **Src bank flip** may be issued between the stall and the move (`SETRWC` with `CLR_A`/`CLR_B`/`CLR_AB`, or a matrix op with `clr_src`) — the drain proves the pipe was empty *at the stall*, so a later flip re-arms the same race. A `MATH`-only drain is likewise not a gate: it settles the bank pointer but never waits for the unpacker to hand the bank over. **Symptom is a silent wrong value, never a hang**, because every FPU instruction that *reads* Src does auto-wait — so absence of hangs is not evidence of safety here.
+   So the wait must **also** select the "this thread has an instruction in any stage of the Matrix Unit (FPU) pipeline" condition (`p_stall::MATH`), draining the pipe so the source-valid test observes the post-flip pointer. That condition's documented precondition is that the block mask blocks new Matrix Unit instructions (`p_stall::STALL_MATH`) — verify that too. Flag any `STALLWAIT` gating a `MOVD2A`/`MOVD2B` whose condition mask carries `SRC?_VLD` without `MATH`. Two further requirements on the same wait: it must name the bank-valid condition of the register the move actually **writes** (`SRCA_VLD` for `MOVD2A`, `SRCB_VLD` for `MOVD2B` — a stall naming only the other register proves nothing), and no **Src bank flip** may be issued between the stall and the move (`SETRWC` with `CLR_A`/`CLR_B`/`CLR_AB`, or a matrix op with `clr_src`) — the drain proves the pipe was empty *at the stall*, so a later flip re-arms the same race. A flip **slotted into a MOP** counts here even though it is not written between the two lines (step 1b).
+
+   Two scoping facts keep this verdict honest in both directions. **The drain's only job is the bank pointer.** It is *not* needed to let the Dest values settle: per `Dst.md`'s instruction-scheduling note, hardware automatically stalls a Matrix Unit or `PACR` instruction that reads a `Dst` block written in the preceding cycles, and `MOVD2A`/`MOVD2B` are FPU readers of `Dst` — a *Vector Unit* writer is the cross-unit case, and that is what `p_stall::WAIT_SFPU` covers. So do not accept (or write) "drain so the Dest values have settled" as the justification, and do not treat a missing drain as a Dest-ordering bug. **And there is no cheaper condition to recommend.** The `STALLWAIT` condition mask offers a whole-FPU-pipeline condition and the two source-valid conditions, but nothing that means "the flip has retired" — so where the drain is genuinely required the only lever is structural (remove the flip-before-wait adjacency, or hoist one drain out of a loop), never a narrower condition. Beware the converse too: a whole-pipe condition is **not** discharged by the last issued instruction being cheap, so a trailing 1-cycle `SETRWC` after a long MOP burst leaves the pipe full and the drain still pays for the burst. A `MATH`-only drain is likewise not a gate: it settles the bank pointer but never waits for the unpacker to hand the bank over. **Symptom is a silent wrong value, never a hang**, because every FPU instruction that *reads* Src does auto-wait — so absence of hangs is not evidence of safety here.
 
    **(b) Unpack side — which bank the dummy publication waits on.** These moves depend on the unpacker publishing a dummy DVALID to hand the bank over. **Two instruction shapes do this and they are not equivalent** — get this right before judging any site:
 
@@ -130,6 +132,26 @@ A desync → the FPU reads a bank the unpacker is still filling, or a thread clo
    grep -rInE "SETDVALID|CLEARDVALID|CLEARSRC|set_dvalid|clear_src|Src[AB]?Bank|unpack.*bank|MOV[AB]2D|MOVD2[AB]|UNPACR_NOP|SET_DVALID|ZEROSRC|TTI_UNPACR|STALLWAIT|get_valid" \
         tt_metal/tt-llk/tt_llk_* tt_metal/hw/inc/api ttnn/cpp models --include=*.h --include=*.cpp 2>/dev/null | grep -v /tests/
    ```
+   **1b. Enumerate the bank FLIPS separately** — the pattern above does not name
+   them, and `CLEARDVALID` is the *rarer* of the two mechanisms. Per
+   `CLEARDVALID.md` a flip (`MatrixUnit.Src?Bank ^= 1`, handing the bank back to
+   the unpackers) is *also* performed by `SETRWC` with a `CLR_*` operand, and by
+   any matrix op carrying one — which is the dominant form in this tree. A flip
+   may additionally be installed into a **MOP slot** rather than issued inline,
+   in which case it executes where the MOP issues it, not at its line:
+   ```bash
+   # from the repo root — flips (inline and slotted), plus the slot setters
+   grep -rInE "(SETRWC|MVMUL|ELWADD|ELWSUB|ELWMUL|GAPOOL|GMPOOL|DOTPV)[^;]*CLR_(A|B|AB)\b|CLEARDVALID|set_(start|end)_ops?\(|set_last_(inner|outer)_loop_instr\(" \
+        tt_metal/tt-llk/tt_llk_* ttnn/cpp models --include=*.h --include=*.cpp 2>/dev/null | grep -v /tests/
+   ```
+   `CLR_NONE` flips nothing — exclude it. For a slotted flip, resolve the
+   position per `race-audit-all` → *"A word's SLOT, not its line"*: an `END_OP`
+   flip lands immediately before the **next** outer iteration's `START_OP`, which
+   is exactly the "bank-flipping op still in flight" precondition of check 5(a)
+   — and it is invisible to a textual read of the function that runs the MOP. The
+   `mop-replay` tool check recalls these as `MOP_SLOTTED_SRC_FLIP` (slot known)
+   and `MOP_WORD_SLOT_UNATTRIBUTED` (slot unresolved, e.g. a loop op passed
+   positionally to the `ckernel_template` constructor, which the tool cannot see).
 2. Per unpack→math op, pair the unpacker's fill/flip with the FPU's consume/flip; trace the bank pointer on both sides across the tile loop. Confirm lockstep, valid/clear ordering, and single-thread ownership.
 3. For Dst/LReg, identify the accessing threads and the mediating primitive (or its absence).
 
