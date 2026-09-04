@@ -1066,15 +1066,9 @@
   cmd: |
     unset TT_METAL_WATCHER  # blocked by #50886
     unset HF_HUB_OFFLINE
-    # On the mount, not $HOME or /tmp: the converted-weight cache for FLUX.2-dev is ~105 GB
-    # and takes ~5 min to build from ~106 GB of source safetensors, so it has to survive
-    # between jobs. On this SKU it would not otherwise -- the container sets
-    # HOME=/github/home, mapped to the runner's _work/_temp/_github_home, which Actions
-    # wipes between jobs, and /tmp is per-job too. /mnt/MLPerf/huggingface is the
-    # yyz4-mnt-models mount (host /mnt/models/huggingface) and does persist; it is the same
-    # place HF_HUB_CACHE already puts the source weights. Named tt_dit_cache to stay out of
-    # the tt_cache/ namespace tt_transformers uses -- the two cache formats are unrelated.
-    # Read-only on a normal run, which is fine: cache.load_model only writes on a miss.
+    # Persistent cache on the yyz4-mnt-models mount; tt_dit_cache stays out of the tt_cache/
+    # namespace tt_transformers uses. Read-only on a normal run; cache.load_model only writes
+    # on a miss.
     export TT_DIT_CACHE_DIR=/mnt/MLPerf/huggingface/tt_dit_cache/black-forest-labs/FLUX.2-dev
     # Every pytest below runs, and the leg still fails if any of them did. The step runs under
     # `bash -e`, so a bare sequence stops at the first failure: on run 33678382128 the known
@@ -1131,14 +1125,6 @@
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1
     export HF_HOME=/mnt/models/huggingface
-    # $HOME is /home/user here, and it does NOT persist between jobs: the multihost runners are
-    # ephemeral pods from one scale set, so each job gets its own. Runs 33689082073 and
-    # 33789514904 landed on runner-psddg and runner-nmvfb, and the second reported "Cache does
-    # not exist" for a key the first had written. So the converted-weight cache is rebuilt every
-    # run on this SKU. That is not fixable the way it was for bh_quietbox_2, where the cache moved
-    # onto the mount: /mnt/models/huggingface is read-only for the job user here, which is the
-    # same wall the e2e leg hits. $HOME is simply the only writable option, which is why the
-    # LTX-2.3 bh_sc1 legs use it too. The timeout below is sized from a run that did rebuild.
     export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
     export TT_MESH_ID=0
     export TT_MESH_HOST_RANK=0
@@ -1168,9 +1154,8 @@
       # Measured on the green run 33801719909: VAE 2m06s, prompt encoder 5m22s, transformer
       # all_blocks 9m20s, single_blocks 51s -- about 18 min of pytest. Far cheaper than the
       # QuietBox leg: 32 chips, and the HF weights are staged on this mount. The allowances
-      # still cover a cold converted-weight cache, which this SKU rebuilds every run: $HOME is
-      # per-pod on the ephemeral runners and /mnt/models is read-only, so there is nowhere
-      # persistent to put it. Above the sum of the pytest --timeouts (52 min).
+      # still cover a cold converted-weight cache, which this SKU rebuilds every run. Above the
+      # sum of the pytest --timeouts (52 min).
       timeout: 60
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
