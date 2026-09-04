@@ -318,8 +318,10 @@ int get_processor_id(tracy::RiscType risc_type) {
 
 DeviceAddr getControlVectorAddress(IDevice* device, const CoreCoord& virtual_core, ContextId context_id) {
     TT_ASSERT(context_id == extract_context_id(device));
-    const auto& hal = MetalContext::instance(context_id).hal();
-    const HalProgrammableCoreType core_type = tt::llrt::get_core_type(device->id(), virtual_core);
+    auto& context = MetalContext::instance(context_id);
+    const auto& hal = context.hal();
+    const HalProgrammableCoreType core_type =
+        tt::llrt::get_core_type(MetalEnvAccessor(context.get_env()).impl(), device->id(), virtual_core);
     DeviceAddr profiler_msg_addr = hal.get_dev_addr(core_type, HalL1MemAddrType::PROFILER);
     DeviceAddr control_vector_addr =
         profiler_msg_addr + hal.get_dev_msgs_factory(core_type).offset_of<dev_msgs::profiler_msg_t>(
@@ -718,6 +720,7 @@ bool compareCoalescedMarkersByCoreAndTimestamp(
 auto coalesceFabricEvents(
     std::unordered_map<experimental::ProgramExecutionUID, std::vector<tracy::TTDeviceMarker>>&
         timestamped_datapoints_by_op,
+    MetalEnvImpl& env,
     ChipId device_id) {
     std::unordered_map<
         experimental::ProgramExecutionUID,
@@ -789,7 +792,8 @@ auto coalesceFabricEvents(
                 auto local_noc_write = std::get<EMD::LocalNocEvent>(EMD(markers[i + 2].data).getContents());
                 CoreCoord local_noc_write_dst_virt = {
                     static_cast<size_t>(local_noc_write.dst_x), static_cast<size_t>(local_noc_write.dst_y)};
-                const HalProgrammableCoreType core_type = tt::llrt::get_core_type(device_id, local_noc_write_dst_virt);
+                const HalProgrammableCoreType core_type =
+                    tt::llrt::get_core_type(env, device_id, local_noc_write_dst_virt);
                 if (core_type == HalProgrammableCoreType::TENSIX) {
                     // disable linting here; slicing is __intended__
                     // NOLINTBEGIN
@@ -857,11 +861,13 @@ auto coalesceFabricEvents(
 std::unordered_map<experimental::ProgramExecutionUID, nlohmann::json::array_t> convertNocTracePacketsToJson(
     const std::map<CoreCoord, std::map<tracy::RiscType, std::set<tracy::TTDeviceMarker>>>&
         device_markers_per_core_risc_map,
+    ContextId context_id,
     ChipId device_id,
     const FabricRoutingLookup& routing_lookup,
     double device_sync_freq_scale,
     int64_t device_sync_shift) {
-    if (!MetalContext::instance().rtoptions().get_profiler_noc_events_enabled()) {
+    auto& context = MetalContext::instance(context_id);
+    if (!context.rtoptions().get_profiler_noc_events_enabled()) {
         return std::unordered_map<experimental::ProgramExecutionUID, nlohmann::json::array_t>();
     }
 
@@ -905,7 +911,8 @@ std::unordered_map<experimental::ProgramExecutionUID, nlohmann::json::array_t> c
     std::unordered_map<
         experimental::ProgramExecutionUID,
         std::vector<std::variant<FabricEventMarkers, tracy::TTDeviceMarker>>>
-        coalesced_events_by_op = coalesceFabricEvents(timestamped_datapoints_by_op, device_id);
+        coalesced_events_by_op =
+            coalesceFabricEvents(timestamped_datapoints_by_op, MetalEnvAccessor(context.get_env()).impl(), device_id);
 
     // Add zones back and sort by x, y, proc, timestamp
     for (auto& [program_execution_uid, markers] : zones_by_op) {
@@ -1332,8 +1339,10 @@ void writeToCoreControlBuffer(
     ZoneScoped;
 
     TT_ASSERT(context_id == extract_context_id(mesh_device, device));
-    const auto& hal = MetalContext::instance(context_id).hal();
-    const HalProgrammableCoreType core_type = tt::llrt::get_core_type(device->id(), virtual_core);
+    auto& context = MetalContext::instance(context_id);
+    const auto& hal = context.hal();
+    const HalProgrammableCoreType core_type =
+        tt::llrt::get_core_type(MetalEnvAccessor(context.get_env()).impl(), device->id(), virtual_core);
     DeviceAddr profiler_msg_addr = hal.get_dev_addr(core_type, HalL1MemAddrType::PROFILER);
     DeviceAddr control_vector_addr =
         profiler_msg_addr + hal.get_dev_msgs_factory(core_type).offset_of<dev_msgs::profiler_msg_t>(
@@ -1350,9 +1359,7 @@ void writeToCoreControlBuffer(
             TT_FATAL(false, "Fast dispatch write to control buffer requires mesh device support");
         }
     } else {
-        MetalContext::instance(context_id)
-            .get_cluster()
-            .write_core(device->id(), virtual_core, data, control_vector_addr);
+        context.get_cluster().write_core(device->id(), virtual_core, data, control_vector_addr);
     }
 }
 
@@ -1404,10 +1411,11 @@ void DeviceProfiler::issueFastDispatchReadFromL1DataBuffer(
     distributed::MeshDevice* mesh_device, const CoreCoord& worker_core, std::vector<uint32_t>& core_l1_data_buffer) {
     ZoneScoped;
 
-    TT_ASSERT(MetalContext::instance(context_id).device_manager()->is_dispatch_firmware_active());
-
-    const Hal& hal = MetalContext::instance(context_id).hal();
-    const HalProgrammableCoreType core_type = tt::llrt::get_core_type(device_id, worker_core);
+    auto& context = MetalContext::instance(context_id);
+    TT_ASSERT(context.device_manager()->is_dispatch_firmware_active());
+    const Hal& hal = context.hal();
+    const HalProgrammableCoreType core_type =
+        tt::llrt::get_core_type(MetalEnvAccessor(context.get_env()).impl(), device_id, worker_core);
     DeviceAddr profiler_msg_addr = hal.get_dev_addr(core_type, HalL1MemAddrType::PROFILER);
     DeviceAddr buffer_addr =
         profiler_msg_addr + hal.get_dev_msgs_factory(core_type).offset_of<dev_msgs::profiler_msg_t>(
@@ -1432,19 +1440,19 @@ void DeviceProfiler::issueSlowDispatchReadFromL1DataBuffer(
     IDevice* /*device*/, const CoreCoord& worker_core, std::vector<uint32_t>& core_l1_data_buffer) {
     ZoneScoped;
 
-    const Hal& hal = MetalContext::instance(context_id).hal();
-    const HalProgrammableCoreType core_type = tt::llrt::get_core_type(device_id, worker_core);
+    auto& context = MetalContext::instance(context_id);
+    const Hal& hal = context.hal();
+    const HalProgrammableCoreType core_type =
+        tt::llrt::get_core_type(MetalEnvAccessor(context.get_env()).impl(), device_id, worker_core);
     DeviceAddr profiler_msg_addr = hal.get_dev_addr(core_type, HalL1MemAddrType::PROFILER);
     DeviceAddr buffer_addr =
         profiler_msg_addr + hal.get_dev_msgs_factory(core_type).offset_of<dev_msgs::profiler_msg_t>(
                                 dev_msgs::profiler_msg_t::Field::buffer);
-    core_l1_data_buffer = MetalContext::instance(context_id)
-                              .get_cluster()
-                              .read_core(
-                                  device_id,
-                                  worker_core,
-                                  buffer_addr,
-                                  kernel_profiler::PROFILER_L1_BUFFER_SIZE * hal.get_num_risc_processors(core_type));
+    core_l1_data_buffer = context.get_cluster().read_core(
+        device_id,
+        worker_core,
+        buffer_addr,
+        kernel_profiler::PROFILER_L1_BUFFER_SIZE * hal.get_num_risc_processors(core_type));
 }
 
 void DeviceProfiler::readL1DataBufferForCore(
@@ -1477,8 +1485,10 @@ void DeviceProfiler::readL1DataBuffers(
 void DeviceProfiler::readControlBufferForCore(
     distributed::MeshDevice* mesh_device, IDevice* device, const CoreCoord& virtual_core, bool force_slow_dispatch) {
     ZoneScoped;
-    const auto& hal = MetalContext::instance(context_id).hal();
-    const HalProgrammableCoreType core_type = tt::llrt::get_core_type(device_id, virtual_core);
+    auto& context = MetalContext::instance(context_id);
+    const auto& hal = context.hal();
+    const HalProgrammableCoreType core_type =
+        tt::llrt::get_core_type(MetalEnvAccessor(context.get_env()).impl(), device_id, virtual_core);
     DeviceAddr profiler_msg = hal.get_dev_addr(core_type, HalL1MemAddrType::PROFILER);
     DeviceAddr control_vector_addr =
         profiler_msg + hal.get_dev_msgs_factory(core_type).offset_of<dev_msgs::profiler_msg_t>(
@@ -1499,11 +1509,8 @@ void DeviceProfiler::readControlBufferForCore(
             TT_FATAL(false, "Fast dispatch read from control buffer requires mesh device support");
         }
     } else {
-        core_control_buffers[virtual_core] =
-            MetalContext::instance(context_id)
-                .get_cluster()
-                .read_core(
-                    device_id, virtual_core, control_vector_addr, kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE);
+        core_control_buffers[virtual_core] = context.get_cluster().read_core(
+            device_id, virtual_core, control_vector_addr, kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE);
     }
 }
 
@@ -1635,7 +1642,8 @@ void DeviceProfiler::readRiscProfilerResults(
         return (metadata.has_value()) ? metadata->get_op_name(device_id, runtime_id) : "";
     };
 
-    HalProgrammableCoreType CoreType = tt::llrt::get_core_type(device_id, worker_core);
+    HalProgrammableCoreType CoreType = tt::llrt::get_core_type(
+        MetalEnvAccessor(MetalContext::instance(context_id).get_env()).impl(), device_id, worker_core);
     int riscCount = 1;
 
     if (!rtoptions.get_profiler_trace_only() && CoreType == HalProgrammableCoreType::TENSIX) {
@@ -2666,7 +2674,7 @@ void DeviceProfiler::writeDeviceResultsToFiles() const {
         FabricRoutingLookup routing_lookup;
         std::unordered_map<experimental::ProgramExecutionUID, nlohmann::json::array_t> noc_trace_data =
             convertNocTracePacketsToJson(
-                device_markers_per_core_risc_map, device_id, routing_lookup, freq_scale, shift);
+                device_markers_per_core_risc_map, context_id, device_id, routing_lookup, freq_scale, shift);
 
         if (!noc_trace_data.empty()) {
             dumpJsonNocTraces(noc_trace_data, device_id, noc_trace_data_output_dir);
