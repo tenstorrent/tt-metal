@@ -20,9 +20,11 @@ stick count, so any per-core count is legal — see the *_T1 / *_T2 unit cases);
 exchange scales with kernel size). Cases print their banner BEFORE running so a hang names the
 case in flight; OOM/ERROR are caught per-case.
 
-Cases tagged sim_skip=... are auto-skipped when TT_METAL_SIMULATOR is set: they fail/hang
-identically at num_threads=1 on craq-sim but pass exact-PCC on WH silicon (open sim bug class,
-same as the C >= 384 sweep skips). QPOOL_NO_SIM_SKIP=1 forces them to run anyway.
+Cases tagged sim_skip=... are auto-skipped when TT_METAL_SIMULATOR is set (craq-sim AND the ZeBu
+emulator both set it); the tag text records the evidence. Three classes exist: craq-sim artifacts
+(fail/hang on the sim only, exact on RTL), craq-sim ISA gaps (UnimplementedFunctionality), and
+REAL Quasar bugs that pre-date this branch (the <= 8-row-window cases: identical mismatch on sim,
+RTL, T=1/T=4 and main). QPOOL_NO_SIM_SKIP=1 forces them all to run -- do that on the emulator.
 
 Run via run_qpool.sh sweep (C ladder) / run_qpool.sh matrix (this matrix). On WH/BH silicon
 (the cross-check leg) set QPOOL_RUN_ON_ANY_ARCH=1 — conftest.py skips this directory otherwise so
@@ -251,7 +253,15 @@ MATRIX_CASES = [
     # kernel-size ladder @ C=64 (7/8/9 are chunked large kernels; single-core to bound halo volume).
     # sim_skip cases fail identically at num_threads=1 on craq-sim but pass exact-PCC on WH
     # silicon (verified 2026-09-01, full matrix) — same open sim bug class as the C>=384 sweep skips.
-    ("k2x2_s2", dict(kernel=(2, 2), stride=(2, 2), padding=(0, 0), sim_skip="craq-sim artifact")),
+    (
+        "k2x2_s2",
+        dict(
+            kernel=(2, 2),
+            stride=(2, 2),
+            padding=(0, 0),
+            sim_skip="Quasar pool bug, windows <= 8 rows: identical MISMATCH on craq-sim AND ZeBu RTL, at T=1 and T=4, and on main (merge-base bc294789ec3) -- pre-existing, not a sim artifact; WH silicon passes (different LLK path)",
+        ),
+    ),
     ("k3x3_s1", dict(in_h=8, in_w=8, kernel=(3, 3), stride=(1, 1), padding=(1, 1))),
     ("k5x5_s2", dict(kernel=(5, 5), stride=(2, 2), padding=(2, 2))),
     ("k7x7_s2_large", dict(kernel=(7, 7), stride=(2, 2), padding=(3, 3), cores=1)),
@@ -340,7 +350,7 @@ UNIT_CASES = [
             stride=(1, 1),
             padding=(0, 0),
             cores=1,
-            sim_skip="craq-sim artifact (tiny-window class, T=1-identical)",
+            sim_skip="Quasar pool bug, windows <= 8 rows: identical MISMATCH on craq-sim AND ZeBu RTL, at T=1 and T=4, and on main (merge-base bc294789ec3) -- pre-existing, not a sim artifact; WH silicon passes (different LLK path)",
         ),
     ),
     (
@@ -352,7 +362,7 @@ UNIT_CASES = [
             stride=(1, 1),
             padding=(0, 0),
             cores=1,
-            sim_skip="craq-sim artifact (tiny-window class, T=1-identical)",
+            sim_skip="Quasar pool bug, windows <= 8 rows: identical MISMATCH on craq-sim AND ZeBu RTL, at T=1 and T=4, and on main (merge-base bc294789ec3) -- pre-existing, not a sim artifact; WH silicon passes (different LLK path)",
         ),
     ),
     ("c24_k3x3", dict(channels=24, cores=1)),
