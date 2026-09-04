@@ -129,7 +129,10 @@ def get_drafter(model, weights_dir=None, block=None):
 class DFlash2Decoder(SpeculativeDecoder):
     """SpeculativeDecoder with the DFlash block-diffusion drafter (lossless: same verify/accept)."""
 
-    def __init__(self, model, page_table_torch, draft_len=None, stop_tokens=None, weights_dir=None):
+    def __init__(self, model, page_table_torch, draft_len=None, stop_tokens=None, weights_dir=None, sampling=None):
+        # The block drafter yields tokens, not a draft distribution: greedy only (the substrate's rejection
+        # sampler needs q(x) per draft position).
+        assert sampling is None, "DFlash2Decoder is greedy-only (sampling=None)"
         K = default_draft_len(weights_dir) if draft_len is None else int(draft_len)
         self._weights_dir = drafter_weights_dir(weights_dir)
         self.drafter = get_drafter(model, self._weights_dir, block=K + 1)

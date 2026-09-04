@@ -1,31 +1,15 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """Qwen3.5/3.6 MTP (multi-token prediction) head — the speculative-decode drafter.
-
-Every Qwen3.5/3.6 checkpoint ships a single-layer MTP head (the ``mtp.*`` tensors) that
-reuses the main model's token embedding and LM head. Structure (mirrors DeepSeek-V3 MTP2D):
-
-    h'  = fc( concat[ enorm(embed(token)), hnorm(hidden) ] )     # fuse token + hidden
-    h'' = DecoderLayer(h')                                        # 1 full-attention layer
-    logits = LMHead( norm(h'') )                                  # shared head
-
-``enorm``  = mtp.pre_fc_norm_embedding, ``hnorm`` = mtp.pre_fc_norm_hidden,
-``fc``     = mtp.fc (eh_proj, [dim, 2*dim]), ``DecoderLayer`` = mtp.layers.0 (reuses the
-qwen36 full-attention decoder layer verbatim), ``norm`` = mtp.norm. The head maintains its
-OWN paged KV cache (mtp.layers.0.self_attn has its own k/v_proj), separate from the base.
-
-forward_decode returns ``(logits, next_hidden)``: ``next_hidden`` is fed back as ``hidden`` for the
-next chained draft step (EAGLE-style K>1). WHAT it is follows the spec feed contract the parent
-model selects (Qwen36Model.spec_feed_rows, env QWEN36_SPEC_POSTNORM):
-
-* V3 (default; QWEN36_SPEC_POSTNORM unset or 1): the base feeds the OUTPUT of its final norm
-  (fractured to dim/tp), and the chain feeds back the OUTPUT of mtp.norm, re-fractured to dim/tp —
-  so the drafter's hnorm sees the same kind of tensor at every step.
-* V0 (QWEN36_SPEC_POSTNORM=0): the base feeds its residual stream BEFORE the final norm, and the
-  chain feeds back the decoder-block output BEFORE mtp.norm.
-
-Shapes and dtypes are identical in both contracts.
-"""
+Every checkpoint ships a single-layer MTP head (``mtp.*``) that reuses the main token embedding
+and LM head. Structure (DeepSeek-V3 MTP2D): h' = fc(concat[enorm(embed(token)), hnorm(hidden)]);
+h'' = DecoderLayer(h') (1 full-attention layer); logits = LMHead(norm(h'')) (shared head).
+``enorm``/``hnorm``/``fc``/``DecoderLayer``/``norm`` = mtp.pre_fc_norm_embedding / pre_fc_norm_hidden /
+fc (eh_proj, [dim, 2*dim]) / layers.0 (qwen36 full-attn layer verbatim) / mtp.norm. Own paged KV
+cache, separate from the base. forward_decode returns ``(logits, next_hidden)``; ``next_hidden`` is
+fed back as ``hidden`` for the next chained draft (EAGLE-style K>1). Spec feed contract
+(Qwen36Model.spec_feed_rows) is POST-NORM: the base feeds its final-norm output (fractured to dim/tp)
+and the chain feeds back mtp.norm's output, re-fractured to dim/tp, so hnorm sees the same kind of tensor at every step."""
 import ttnn
 from models.common.rmsnorm import RMSNorm
 from models.demos.blackhole.qwen36.tt.layer import Qwen36DecoderLayer
@@ -46,9 +30,6 @@ class Qwen36MTP:
         self.embd = parent.embd
         self._lm_head = parent._lm_head
         self.lm_head_weight = parent.lm_head_weight
-        # Feed contract, decided by the parent (see module docstring). V3 makes forward_decode chain
-        # mtp.norm's output instead of the raw block output.
-        self.spec_postnorm = bool(getattr(parent, "spec_postnorm", False))
 
         mtp_cache = (tensor_cache_path / "mtp") if tensor_cache_path is not None else None
 
@@ -102,19 +83,15 @@ class Qwen36MTP:
         )
         # KV accessor for allocate_kv_caches / rollback.
         self.attention = self.decoder.attention
-        # Drafter-only decode SDPA width. The shared decode program config leaves
-        # max_cores_per_head_batch at ttnn's default of 16, which at B=1 and 1 local KV head puts 16
-        # of the grid's 110 cores on the KV reduction. The drafter is exactly the shape that hurts:
-        # every one of the K draft steps is a B=1 decode that rescans the WHOLE prompt-length KV, so
-        # its SDPA is reduction-bound and scales with the core count. 64 is the ceiling the kernel
-        # allows (tree reduction is capped at MAX_TREE_REDUCTION_ROUNDS=6 rounds = 2^6 cores/head).
-        #
-        # Set on the MTP's own TPAttention instance only, so the base model's 16 full-attention
-        # layers keep the config they have. The batched reseed (B=K+1 rows through this same
-        # instance) is unaffected: at B=11 both 16 and 64 resolve to min(110, max*B)/B = 10
-        # cores/head. It DOES change the drafter's reduction order, so bf16 near-ties can round the
-        # other way and a different token gets drafted — which only shifts acceptance, never
-        # correctness: every draft is arbitrated by the base model's verify.
+        # Drafter-only decode SDPA width. Shared decode program config leaves max_cores_per_head_batch
+        # at ttnn's default of 16, which at B=1 and 1 local KV head puts 16 of 110 cores on the KV
+        # reduction. Every one of the K draft steps is a B=1 decode that rescans the WHOLE prompt KV,
+        # so SDPA is reduction-bound. 64 is the kernel ceiling (tree reduction capped at
+        # MAX_TREE_REDUCTION_ROUNDS=6 = 2^6 cores/head). Set on this MTP TPAttention only, so the
+        # base model's full-attention layers keep their config. Batched reseed (B=K+1 through this
+        # same instance) is unaffected: at B=11 both 16 and 64 resolve to min(110, max*B)/B = 10
+        # cores/head. Changes the drafter's reduction order, so bf16 near-ties can draft a different
+        # token — that only shifts acceptance, never correctness: every draft is arbitrated by verify.
         self.attention.decode_sdpa_max_cores = 64
 
     def _make_norm(self, state_dict, weight_key, cache, ag_key):
@@ -182,25 +159,15 @@ class Qwen36MTP:
         alias_kv_write=False,
     ):
         """One MTP draft step, or ONE batched KV-maintenance step over B rows.
-
-        hidden_states : [1,1,B,dim/tp] fractured — the base's drafter feed for the row
-                        (Qwen36Model.spec_feed_rows: pre-final-norm residual under V0, fractured
-                        final-norm output under V3), or the previous MTP step's next_hidden when
-                        chaining.
-        token_ids     : [B,1] uint32 device — the token at the position just before what we predict.
-        position_idxs : [B] int32 device — KV write index into the MTP cache (base cur_pos + step).
-        cos, sin      : partial-RoPE tables for position_idxs (+ rope_delta).
-        page_table    : [B, blocks] int32 for the MTP layer's own paged KV cache.
-        alias_kv_write: the B rows belong to ONE sequence at consecutive positions (the batched
-                        reseed), so their KV writes share physical blocks and must go row by row —
-                        see TPAttention.forward_decode.
-
-        Returns (logits, next_hidden), both fractured [1,1,B,dim/tp]. With need_logits=True,
-        next_hidden is the chain value: the decoder-block output before mtp.norm (V0) or mtp.norm's
-        output re-fractured to dim/tp (V3). With need_logits=False the head norm is skipped and
-        next_hidden is ALWAYS the raw block output regardless of contract: that path exists for KV
-        maintenance only (reseed / catch-up) and every caller discards the returned hidden, so it is
-        not a valid chain value under V3.
+        ``hidden_states`` [1,1,B,dim/tp] fractured: the base's drafter feed (spec_feed_rows:
+        fractured final-norm output), or the previous step's next_hidden when chaining.
+        ``token_ids`` [B,1] uint32: token just before what we predict. ``position_idxs`` [B] int32:
+        KV write index (base cur_pos + step). ``cos``/``sin``: partial-RoPE. ``page_table`` [B, blocks]
+        for the MTP layer's own paged KV. ``alias_kv_write``: B rows belong to ONE sequence at
+        consecutive positions (batched reseed), so KV writes share physical blocks and must go row
+        by row (TPAttention.forward_decode). Returns (logits, next_hidden), both fractured
+        [1,1,B,dim/tp]. need_logits=True: next_hidden is mtp.norm's output re-fractured to dim/tp
+        (chain value). need_logits=False skips the head norm and returns RAW block output — KV maintenance only (reseed / catch-up); callers discard it, so it is not a valid chain value.
         """
         mode = Mode.DECODE
         tok_emb = self.embd(token_ids)  # [B,1,dim/tp]
@@ -230,16 +197,15 @@ class Qwen36MTP:
             hnc = dict(self.args.get_norm_config("lm_head", Mode.DECODE))
             hnc["output_mem_config"] = ttnn.DRAM_MEMORY_CONFIG
         normed = self.head_norm(next_hidden, mode=mode, norm_config=hnc)  # -> full [1,1,B,dim]
-        if self.spec_postnorm:
-            # V3 chain: the next step is fused from mtp.norm's output, not the raw block output. The
-            # DECODE head norm gathers to the full dim (replicated), so slice each device's own
-            # dim/tp span back out — the inverse of that all-gather — to restore the fractured
-            # [1,1,B,dim/tp] every consumer expects. `normed` itself stays alive for the LM head.
-            ttnn.deallocate(next_hidden)
-            if self.num_devices > 1:
-                next_hidden = ttnn.mesh_partition(normed, dim=3, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            else:
-                next_hidden = ttnn.clone(normed, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # Chain: the next step is fused from mtp.norm's output, not the raw block output. The DECODE
+        # head norm gathers to the full dim (replicated), so slice each device's own dim/tp span back
+        # out — the inverse of that all-gather — to restore the fractured [1,1,B,dim/tp] every
+        # consumer expects. `normed` itself stays alive for the LM head.
+        ttnn.deallocate(next_hidden)
+        if self.num_devices > 1:
+            next_hidden = ttnn.mesh_partition(normed, dim=3, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        else:
+            next_hidden = ttnn.clone(normed, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         if sharded_lm_head or getattr(self, "_ondev_argmax", False):
             logits = ttnn.linear(normed, self.lm_head_weight)  # vocab-sharded shard
         else:
@@ -254,12 +220,11 @@ class Qwen36MTP:
         """Warm the MTP paged KV cache over the prompt (one forward, all positions).
 
         hidden_states : [1,1,S,dim/tp] fractured — the base's per-position drafter feed
-                        (Qwen36Model.spec_feed_rows: pre-final-norm under V0, fractured final-norm
-                        output under V3).
+                        (Qwen36Model.spec_feed_rows: the fractured final-norm output).
         token_ids     : [1,S] uint32 device — MTP input tokens for the prompt.
         page_table / chunk_page_table : the MTP layer's own paged KV page table.
-        Returns the fractured decoder-block output [1,1,S,dim/tp] (raw, before mtp.norm, under both
-        contracts — only the KV write matters here; callers free it).
+        Returns the fractured decoder-block output [1,1,S,dim/tp] (raw, before mtp.norm — only the
+        KV write matters here; callers free it).
         """
         S = token_ids.shape[-1]
         tok_emb = self.embd(token_ids)  # [1,S,dim/tp]
