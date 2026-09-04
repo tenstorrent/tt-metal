@@ -22,6 +22,13 @@ NON_TILE_ALIGNED_ATOL = 0.08
 STATISTICS_MODES = ("tile_reduction", "two_pass")
 
 
+@pytest.fixture
+def enabled_program_cache(device):
+    device.enable_program_cache()
+    yield
+    device.disable_and_clear_program_cache()
+
+
 def _use_two_pass_statistics(statistics_mode):
     if statistics_mode not in STATISTICS_MODES:
         raise ValueError(f"Unknown GroupNorm statistics mode: {statistics_mode!r}")
@@ -93,6 +100,57 @@ def test_group_norm_fp32_large_offset_DRAM(device, has_affine, num_groups):
     assert torch.isfinite(actual).all()
     assert error.abs().max() < 0.015
     assert error.abs().mean() < 0.004
+
+
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
+@run_for_blackhole("The near-capacity allocation is calibrated for Blackhole L1")
+def test_group_norm_interleaved_l1_replay_respects_occupied_l1(device, enabled_program_cache):
+    torch.manual_seed(20260904)
+    N, C, H, W, num_groups = 1, 256, 256, 256, 32
+    grid = ttnn.CoreGrid(y=8, x=8)
+    torch_input = torch.rand((N, C, H, W), dtype=torch.bfloat16)
+    reference = torch.nn.functional.group_norm(torch_input, num_groups).permute(0, 2, 3, 1).view(N, 1, H * W, C)
+    input_tensor = ttnn.from_torch(
+        torch_input.permute(0, 2, 3, 1).view(N, 1, H * W, C),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    def run_group_norm():
+        return ttnn.group_norm(
+            input_tensor,
+            num_groups=num_groups,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            core_grid=grid,
+            num_out_blocks=8,
+            use_welford=True,
+            inplace=False,
+        )
+
+    warm_output = run_group_norm()
+    ttnn.synchronize_device(device)
+    entries_with_replay = device.num_program_cache_entries()
+    warm_output.deallocate(force=True)
+
+    # Occupying 850 KiB/core leaves room for the streaming program, but not for
+    # replaying this operation's complete 512 KiB input shard alongside its CBs.
+    compute_grid = device.compute_with_storage_grid_size()
+    pressure_tiles = (850 * 1024 * compute_grid.x * compute_grid.y + 2047) // 2048
+    l1_pressure = ttnn.allocate_tensor_on_device(
+        ttnn.Shape((1, 1, 32, pressure_tiles * 32)),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        device,
+        ttnn.L1_MEMORY_CONFIG,
+    )
+    output = run_group_norm()
+    actual = ttnn.to_torch(ttnn.from_device(output))
+
+    assert_numeric_metrics(reference, actual, atol=0.043, frobenius_threshold=0.01)
+    assert device.num_program_cache_entries() == entries_with_replay + 1
+    assert l1_pressure.is_allocated()
 
 
 GROUP_NORM_DRAM_SHAPES = [
