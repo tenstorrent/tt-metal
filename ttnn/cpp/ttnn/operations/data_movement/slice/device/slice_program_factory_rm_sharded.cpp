@@ -4,19 +4,25 @@
 
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_program_factory_rm_sharded.hpp"
-#include "ttnn/operations/data_movement/slice/device/slice_program_factory_tile.hpp"
 
+#include <algorithm>
+#include <cstdint>
 #include <map>
 #include <optional>
+#include <utility>
+#include <vector>
+
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/experimental/program_descriptor_patching.hpp>
+
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 
 namespace ttnn::operations::data_movement {
 
@@ -57,14 +63,23 @@ inline std::vector<std::vector<uint32_t>> group_contiguous_values(std::vector<ui
     return chunks;
 }
 
-inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_slice_runtime_args_rm_sharded(
+// One node's reader arguments.
+//
+// The gather plan is data-directed — num_cores_read source cores, then a NoC (x, y) pair per source
+// core, then a chunk count per source core, then a (start_id, length) pair per chunk — and the
+// counts come from the data itself, so nothing past num_cores_read has a per-element identity. That
+// block travels as runtime varargs; num_cores_read is a named argument.
+struct ShardedPerNodeArgs {
+    uint32_t num_cores_read = 0;
+    std::vector<uint32_t> reader_varargs;
+};
+
+inline std::vector<ShardedPerNodeArgs> get_slice_runtime_args_rm_sharded(
     const Tensor& input_tensor,
     Tensor& output_tensor,
     const ttnn::Shape& output_tensor_start,
     uint32_t num_cores_unpadded,
     bool row_major,
-    uint32_t num_cores_x_unpadded,
-    uint32_t num_cores_y_unpadded,
     uint32_t shard_height_unpadded,
     uint32_t shard_height_padded,
     uint32_t num_cores_x_padded,
@@ -96,16 +111,10 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
         accumulated_total_per_dim[i] = num_total_dim * accumulated_total_per_dim[i - 1];
     }
 
-    std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> ret_val(num_cores_unpadded);
+    std::vector<ShardedPerNodeArgs> ret_val(num_cores_unpadded);
 
     uint32_t start_offset = ttnn::operations::data_movement::get_rm_start_offset(input_tensor, output_tensor_start);
     for (uint32_t i = 0, num_sticks_written = 0; i < num_cores_unpadded; i++) {
-        CoreCoord core;
-        if (row_major) {
-            core = {i % num_cores_x_unpadded, i / num_cores_x_unpadded};
-        } else {
-            core = {i / num_cores_y_unpadded, i % num_cores_y_unpadded};
-        }
         uint32_t num_sticks_per_core_unpadded = shard_height_unpadded;
         uint32_t num_sticks_per_core_padded = shard_height_padded;
 
@@ -164,19 +173,20 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
             }
         }
 
-        // reader rt args
-        std::vector<uint32_t> reader_kernel_args;
-        reader_kernel_args.reserve(1 + 3 * core_stick_map.size() + 2 * num_sticks_per_core_unpadded);
-        reader_kernel_args.push_back(core_stick_map.size());  // num_cores
+        // reader args: num_cores_read is named, the gather plan below is the vararg block.
+        ShardedPerNodeArgs node_args;
+        node_args.num_cores_read = core_stick_map.size();
+        std::vector<uint32_t>& reader_varargs = node_args.reader_varargs;
+        reader_varargs.reserve(3 * core_stick_map.size() + 2 * num_sticks_per_core_unpadded);
 
         for (const auto& core_stick_pair : core_stick_map) {
             auto xy_pair = core_stick_pair.first;
             if (row_major) {
-                reader_kernel_args.push_back(xy_pair.second);  // noc x
-                reader_kernel_args.push_back(xy_pair.first);   // noc y
+                reader_varargs.push_back(xy_pair.second);  // noc x
+                reader_varargs.push_back(xy_pair.first);   // noc y
             } else {
-                reader_kernel_args.push_back(xy_pair.first);   // noc x
-                reader_kernel_args.push_back(xy_pair.second);  // noc y
+                reader_varargs.push_back(xy_pair.first);   // noc x
+                reader_varargs.push_back(xy_pair.second);  // noc y
             }
         }
 
@@ -185,19 +195,18 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
         stick_chunks_per_core.reserve(core_stick_map.size());
         for (auto core_stick_pair : core_stick_map) {
             auto stick_chunks = group_contiguous_values(core_stick_pair.second);
-            reader_kernel_args.push_back(stick_chunks.size());  // num_chunks for current core
+            reader_varargs.push_back(stick_chunks.size());  // num_chunks for current core
 
             stick_chunks_per_core.push_back(std::move(stick_chunks));
         }
         for (const auto& stick_chunks : stick_chunks_per_core) {
             for (auto chunk : stick_chunks) {
-                reader_kernel_args.push_back(chunk[0]);      // start id of a chunk
-                reader_kernel_args.push_back(chunk.size());  // length of a chunk
+                reader_varargs.push_back(chunk[0]);      // start id of a chunk
+                reader_varargs.push_back(chunk.size());  // length of a chunk
             }
         }
 
-        std::vector<uint32_t> writer_kernel_args;
-        ret_val[i] = {std::move(reader_kernel_args), std::move(writer_kernel_args)};
+        ret_val[i] = std::move(node_args);
     }
 
     return ret_val;
@@ -209,10 +218,25 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
 
 namespace ttnn::prim {
 
-tt::tt_metal::ProgramDescriptor SliceRmShardedProgramFactory::create_descriptor(
+namespace {
+
+// Function-local for the same unity-build reason as the other slice factories.
+struct ShardedSpecNames {
+    KernelSpecName reader{"reader"};
+    DFBSpecName in_shard{"in_shard"};
+    DFBSpecName out_shard{"out_shard"};
+    TensorParamName input{"input"};
+    TensorParamName output{"output"};
+};
+
+}  // namespace
+
+ttnn::device_operation::ProgramArtifacts SliceRmShardedProgramFactory::create_program_artifacts(
     const SliceParams& args, const SliceInputs& tensor_args, Tensor& output) {
+    const ShardedSpecNames names;
+
     const auto& input = tensor_args.input;
-    ProgramDescriptor desc;
+    tt::tt_metal::IDevice* device = input.device();
 
     [[maybe_unused]] uint32_t num_padded_sticks = input.physical_volume() / input.padded_shape()[-1];
     [[maybe_unused]] uint32_t num_unpadded_sticks = output.physical_volume() / output.padded_shape()[-1];
@@ -257,11 +281,10 @@ tt::tt_metal::ProgramDescriptor SliceRmShardedProgramFactory::create_descriptor(
     log_debug(tt::LogOp, "all_cores_unpadded: {}", all_cores_unpadded);
     log_debug(tt::LogOp, "num_cores_unpadded: {}", num_cores_unpadded);
 
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
-    tt::DataFormat dst_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
+    tt::DataFormat dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
+    tt::DataFormat dst_dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
 
-    tt::tt_metal::Buffer* dst_buffer = output.buffer();
-    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(output.buffer() != nullptr, "Output buffer should be allocated on device!");
 
     // Real per-row L1 stride is aligned_page_size(), not the compact payload (differs when W·E % 16 != 0).
     const uint32_t src_stride_bytes = input.buffer()->aligned_page_size();
@@ -272,42 +295,32 @@ tt::tt_metal::ProgramDescriptor SliceRmShardedProgramFactory::create_descriptor(
         "SliceRmShardedProgramFactory: width-begin ({} bytes) must be L1-aligned.",
         begins_bytes);
 
-    // Sharded CBs: total_size and page_size vary with shard shape / element size,
-    // so padded_shape is folded into compute_program_hash() to keep each unique
-    // sizing in its own cache entry.  On cache hit, the framework copies runtime
-    // args and patches dynamic CB addresses (.buffer is set below); CB sizing
-    // itself is not re-applied — it is carried by the cached descriptor.
-    // CB order here (src0, then c_16) is mirrored positionally by override_runtime_arguments; keep in sync.
-    constexpr uint8_t src0_cb_index = 0;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = shard_height_padded * src_stride_bytes,
-        .core_ranges = all_cores_unpadded,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = src0_cb_index,
-            .data_format = cb_data_format,
-            .page_size = src_stride_bytes,
-        }}},
-        .buffer = input.buffer(),
-    });
+    // Both DFBs borrow their backing memory from a tensor, so the framework re-points them from the
+    // corresponding TensorArgument on every dispatch — no address ever travels as an argument.
+    //
+    // The reader is each one's only toucher, so it binds both endpoints of both (self-loop):
+    //  - in_shard is sync-free, touched only by a raw get_write_ptr() peek and no FIFO ops. Keeping
+    //    it borrowed from the input is load-bearing beyond addressing: the kernel uses that *local*
+    //    pointer as the address of reads aimed at *other* cores, which is only correct because a
+    //    sharded buffer lands at the same L1 offset on every core in the range.
+    //  - out_shard is a locked producer (reserve_back / push_back) that nothing drains.
+    const DataflowBufferSpec in_shard_dfb{
+        .unique_id = names.in_shard,
+        .entry_size = src_stride_bytes,
+        .num_entries = shard_height_padded,
+        .data_format_metadata = dfb_data_format,
+        .borrowed_from = names.input,
+    };
+    const DataflowBufferSpec out_shard_dfb{
+        .unique_id = names.out_shard,
+        .entry_size = dst_stride_bytes,
+        .num_entries = shard_height_unpadded,
+        .data_format_metadata = dst_dfb_data_format,
+        .borrowed_from = names.output,
+    };
 
-    constexpr uint8_t output_cb_index = tt::CBIndex::c_16;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = shard_height_unpadded * dst_stride_bytes,
-        .core_ranges = all_cores_unpadded,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = output_cb_index,
-            .data_format = dst_cb_data_format,
-            .page_size = dst_stride_bytes,
-        }}},
-        .buffer = output.buffer(),
-    });
-
-    std::vector<uint32_t> reader_ct_args = {
-        static_cast<uint32_t>(stick_size_unpadded),
-        static_cast<uint32_t>(shard_height_unpadded),
-        src_stride_bytes,
-        dst_stride_bytes,
-        begins_bytes};
+    const TensorParameter input_param{.unique_id = names.input, .spec = input.tensor_spec()};
+    const TensorParameter output_param{.unique_id = names.output, .spec = output.tensor_spec()};
 
     auto all_runtime_args = ttnn::operations::data_movement::get_slice_runtime_args_rm_sharded(
         input,
@@ -315,110 +328,108 @@ tt::tt_metal::ProgramDescriptor SliceRmShardedProgramFactory::create_descriptor(
         args.slice_start,
         num_cores_unpadded,
         row_major,
-        num_cores_x_unpadded,
-        num_cores_y_unpadded,
         shard_height_unpadded,
         shard_height_padded,
         num_cores_x_padded,
         num_cores_y_padded);
 
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/"
-        "slice_reader_unary_unpad_dims_rm_sharded.cpp";
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = all_cores_unpadded;
-    reader_desc.compile_time_args = std::move(reader_ct_args);
-    reader_desc.config = ReaderConfigDescriptor{};
-
-    reader_desc.runtime_args.reserve(num_cores_unpadded);
-    for (uint32_t i = 0; i < num_cores_unpadded; ++i) {
-        CoreCoord core;
-        if (row_major) {
-            core = {i % num_cores_x_unpadded, i / num_cores_x_unpadded};
-        } else {
-            core = {i / num_cores_y_unpadded, i % num_cores_y_unpadded};
-        }
-        reader_desc.runtime_args.emplace_back(core, std::move(all_runtime_args[i].first));
+    // The gather plan's length is data-dependent (it grows with the number of source cores and
+    // coalesced chunks a node reads from), but a KernelSpec declares one vararg count for every node
+    // it runs on. Declare the longest block and zero-fill the shorter ones: the kernel walks the
+    // block using the counts it reads out of it, so the tail is never read.
+    uint32_t num_reader_varargs = 0;
+    for (const auto& node_args : all_runtime_args) {
+        num_reader_varargs = std::max<uint32_t>(num_reader_varargs, node_args.reader_varargs.size());
     }
 
-    desc.kernels.push_back(std::move(reader_desc));
-
-    return desc;
-}
-
-// Re-point every per-dispatch address in a cached slice program, for the factory that built it.
-// Shared with MeshPartition, which drives these same factories directly, so the slot layout has one
-// home. Every shape-derived arg is keyed (both tensor specs, the slice params and factory.index() are
-// folded into compute_program_hash), so addresses are all that move on a hit.
-void patch_slice_program_addresses(
-    tt::tt_metal::Program& program,
-    const SliceDeviceOperation::program_factory_t& factory,
-    const SliceParams& operation_attributes,
-    const SliceInputs& tensor_args,
-    Tensor& output) {
-    // Height-sharded RM is CB-bound: the reader args are all keyed, so only the two sharded CB
-    // addresses move. CBs are matched positionally -- src0, then c_16.
-    if (std::holds_alternative<SliceRmShardedProgramFactory>(factory)) {
-        tt::tt_metal::ProgramDescriptor cb_addr_only;
-        cb_addr_only.cbs.push_back(tt::tt_metal::CBDescriptor{.buffer = tensor_args.input.buffer()});
-        cb_addr_only.cbs.push_back(tt::tt_metal::CBDescriptor{.buffer = output.buffer()});
-        tt::tt_metal::apply_descriptor_runtime_args(program, cb_addr_only);
-        return;
-    }
-
-    // A slot holding 0 belongs to a core create_descriptor left zero-filled; leave those alone.
-    constexpr uint32_t kReaderKernelIdx = 0, kWriterKernelIdx = 1;
-    const auto patch_slot0 = [&program](uint32_t kernel_idx, uint32_t addr) {
-        for (auto& col : tt::tt_metal::GetRuntimeArgs(program, kernel_idx)) {
-            for (auto& a : col) {
-                if (a.size() > 0 && a[0] != 0) {
-                    a[0] = addr;
-                }
-            }
-        }
+    const KernelSpec reader{
+        .unique_id = names.reader,
+        .source =
+            "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/"
+            "slice_reader_unary_unpad_dims_rm_sharded.cpp",
+        .dfb_bindings =
+            {
+                DFBBinding{
+                    .dfb_spec_name = names.in_shard,
+                    .accessor_name = "in_shard",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = names.in_shard,
+                    .accessor_name = "in_shard",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = names.out_shard,
+                    .accessor_name = "out_shard",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = names.out_shard,
+                    .accessor_name = "out_shard",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+            },
+        .compile_time_args =
+            {
+                {"stick_size_unpadded", static_cast<uint32_t>(stick_size_unpadded)},
+                {"num_sticks_unpadded", shard_height_unpadded},
+                {"src_stride_bytes", src_stride_bytes},
+                {"dst_stride_bytes", dst_stride_bytes},
+                {"begins_bytes", begins_bytes},
+            },
+        .runtime_arg_schema = {.runtime_arg_names = {"num_cores_read"}},
+        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .advanced_options = {.num_runtime_varargs = num_reader_varargs},
     };
-    patch_slot0(kWriterKernelIdx, output.buffer()->address());
 
-    std::visit(
-        [&](auto&& f) {
-            using Factory = std::decay_t<decltype(f)>;
-            if constexpr (
-                std::is_same_v<Factory, SliceRmProgramFactory> ||
-                std::is_same_v<Factory, SliceRmStrideProgramFactory>) {
-                patch_slot0(kReaderKernelIdx, tensor_args.input.buffer()->address());
-            } else if constexpr (
-                std::is_same_v<Factory, SliceTileProgramFactory> ||
-                std::is_same_v<Factory, SliceTileTensorArgsProgramFactory>) {
-                // Divergent-partition hit leaves writer num_pages=0 -> all-zero output (#52651).
-                std::vector<tt::tt_metal::DynamicRuntimeArg> dyn{
-                    {kReaderKernelIdx, {}, 0, tensor_args.input.buffer()->address(), true}};
-                if constexpr (std::is_same_v<Factory, SliceTileTensorArgsProgramFactory>) {
-                    dyn.push_back(
-                        {kReaderKernelIdx, {}, 1, tensor_args.start_tensor.value().buffer()->address(), true});
-                    dyn.push_back({kReaderKernelIdx, {}, 2, tensor_args.end_tensor.value().buffer()->address(), true});
-                }
-                tt::tt_metal::apply_dynamic_runtime_args(program, dyn);
+    KernelRunArgs reader_run_args{.kernel = names.reader};
+    for (uint32_t i = 0; i < num_cores_unpadded; ++i) {
+        CoreCoord node;
+        if (row_major) {
+            node = {i % num_cores_x_unpadded, i / num_cores_x_unpadded};
+        } else {
+            node = {i / num_cores_y_unpadded, i % num_cores_y_unpadded};
+        }
+        AddRuntimeArgsForNode(
+            reader_run_args.runtime_arg_values, node, {{"num_cores_read", all_runtime_args[i].num_cores_read}});
+        AdvancedKernelRunArgs::Varargs reader_varargs = all_runtime_args[i].reader_varargs;
+        reader_varargs.resize(num_reader_varargs, 0u);
+        reader_run_args.advanced_options.runtime_varargs[node] = std::move(reader_varargs);
+    }
 
-                const uint32_t start_offset = std::is_same_v<Factory, SliceTileProgramFactory>
-                                                  ? ttnn::operations::data_movement::get_tiled_start_offset(
-                                                        tensor_args.input, operation_attributes.slice_start)
-                                                  : 0u;
-                const auto per_core = slice_tile_dynamic_args(
-                    operation_attributes, tensor_args, output, start_offset, kReaderKernelIdx, kWriterKernelIdx);
-                tt::tt_metal::apply_dynamic_runtime_args(program, per_core);
-            }
-        },
-        factory);
+    ProgramSpec spec{
+        .name = "slice_rm_sharded",
+        .kernels = {reader},
+        .dataflow_buffers = {in_shard_dfb, out_shard_dfb},
+        .tensor_parameters = {input_param, output_param},
+        .work_units = {WorkUnitSpec{
+            .name = "slice",
+            .kernels = {names.reader},
+            .target_nodes = all_cores_unpadded,
+        }},
+    };
+
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args = {std::move(reader_run_args)};
+    run_args.tensor_args = {{names.input, input.mesh_tensor()}, {names.output, output.mesh_tensor()}};
+
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
-void SliceRmShardedProgramFactory::override_runtime_arguments(
-    tt::tt_metal::Program& program,
-    const SliceParams& args,
+tt::tt_metal::experimental::ProgramRunArgs SliceRmShardedProgramFactory::override_runtime_arguments(
+    const SliceParams& /*args*/,
     const SliceInputs& tensor_args,
     Tensor& output,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    patch_slice_program_addresses(program, SliceRmShardedProgramFactory{}, args, tensor_args, output);
+    const ShardedSpecNames names;
+
+    // The legacy refresh for this factory re-pointed the two borrowed backing addresses and nothing
+    // else, matching them positionally. Both now resolve by name from their backing tensor, so the
+    // positional order that had to be kept in sync stops mattering.
+    ProgramRunArgs run_args;
+    run_args.tensor_args = {{names.input, tensor_args.input.mesh_tensor()}, {names.output, output.mesh_tensor()}};
+    return run_args;
 }
 
 }  // namespace ttnn::prim

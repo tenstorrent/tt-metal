@@ -5,29 +5,32 @@
 import pytest
 import ttnn
 
-# The layernorm factories a fusion branch drives directly.
-_LAYERNORM_FACTORIES = (
+# The factories a fusion branch drives directly. Each entry is one that has migrated to Metal 2.0
+# (or is on its way there); the guard below is keyed on the method, not on this list, so an entry
+# that still has `create_descriptor` costs nothing.
+_BRANCH_FACTORIES = (
     ttnn.LayerNormMultiCoreProgramFactory,
     ttnn.LayerNormShardedProgramFactory,
+    ttnn.SliceTileProgramFactory,
 )
 
 
 @pytest.fixture(autouse=True)
-def _skip_branches_needing_layernorm_descriptors(monkeypatch):
-    """Skip tests that ask a layernorm factory for a ``create_descriptor`` it no longer has.
+def _skip_branches_needing_descriptors(monkeypatch):
+    """Skip tests that ask a factory for a ``create_descriptor`` it no longer has.
 
     A fusion branch drives a factory's ``create_descriptor`` and consumes the ``ProgramDescriptor``
-    it returns; both layernorm factories now produce a ``ProgramSpec``, which no branch can consume
-    yet. Standing in for the missing method, rather than marking whole tests, skips only the tests
-    that actually reach the ``create_descriptor`` call, and will become a no-op once a factory
+    it returns; a factory ported to Metal 2.0 produces a ``ProgramSpec`` instead, which no branch can
+    consume yet. Standing in for the missing method, rather than marking whole tests, skips only the
+    tests that actually reach the ``create_descriptor`` call, and will become a no-op once a factory
     exposes it again. Issue #54365.
     """
-    missing = [factory for factory in _LAYERNORM_FACTORIES if not hasattr(factory, "create_descriptor")]
+    missing = [factory for factory in _BRANCH_FACTORIES if not hasattr(factory, "create_descriptor")]
     if not missing:
         return
 
     def _no_descriptor(*_args, **_kwargs):
-        pytest.skip("layernorm factories produce a ProgramSpec; a fusion branch needs a ProgramDescriptor")
+        pytest.skip("factory produces a ProgramSpec; a fusion branch needs a ProgramDescriptor")
 
     for factory in missing:
         monkeypatch.setattr(factory, "create_descriptor", staticmethod(_no_descriptor), raising=False)
