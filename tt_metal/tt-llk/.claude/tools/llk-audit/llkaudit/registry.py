@@ -819,23 +819,25 @@ _UNPACR_NOP_OPERAND_IDX = {
     "quasar": (2, 3),
 }
 
-# The Wormhole-shaped packed constants are ALSO defined, byte-identically, in
-# BLACKHOLE's ckernel_instr_params.h (p_unpacr_nop), even though Blackhole takes the
-# controls as separate operands and sizes the last one at 2 bits. Passing
-# UNP_ZEROSRC_STALL_RESET_WR_RDY (0b10001) as Blackhole's Unpack_Pop puts bit 0 and
-# bit 4 = Bank_Clr_Ctrl into the word - an unintended BOTH-BANKS clear - while the
-# wait bit (bit 5) stays clear. TTI_UNPACR_NOP never calls TT_UNPACR_NOP_VALID, so the
-# operand overflow is silent. The same header gives itself its own SET_DVALID (0x1,
-# against Wormhole's packed 0b111), which is what marks these three as un-migrated
-# Wormhole holdovers - and matches its own "bits do not match for UNPACR_NOP" TODO.
-# Quasar has no p_unpacr_nop at all (it uses p_unpacr) and defines none of these, so
-# the check is inert there; it stays keyed on the operand-form arches rather than
-# naming Blackhole, so a future Quasar copy of the constants is caught too.
+# These packed constants are WORMHOLE-ONLY BY CONSTRUCTION: Wormhole's UNPACR_NOP takes
+# one NoOp immediate, so its controls must be packed into a single value. Blackhole
+# takes nine separate operands and Quasar six, and NEITHER header defines the packed
+# constants - Blackhole's p_unpacr_nop did carry all three at their Wormhole values,
+# under a "bits do not match for UNPACR_NOP" TODO, until the constants and that TODO
+# were both dropped for an explicit per-operand contract; Quasar has no p_unpacr_nop at all (it uses p_unpacr).
+# So a hit here does not compile today and the check is a RE-INTRODUCTION guard (a
+# Wormhole kernel ported across, or Quasar growing a p_unpacr_nop). Were
+# UNP_ZEROSRC_STALL_RESET_WR_RDY (0b10001) passed as Blackhole's Unpack_Pop it would
+# put bit 0 and bit 4 = Bank_Clr_Ctrl into the word - an unintended BOTH-BANKS clear -
+# while the wait bit (bit 5) stayed clear, and TT_UNPACR_NOP / TTI_UNPACR_NOP expand
+# straight to TT_OP_UNPACR_NOP without calling TT_UNPACR_NOP_VALID (Quasar has no
+# _VALID macro at all), so the overflow would be silent. Stays keyed on the
+# operand-form arches rather than naming Blackhole, so Quasar is covered too.
 _WH_PACKED_WAIT = "UNP_ZEROSRC_STALL_RESET_WR_RDY"
 _WH_PACKED_BOTH = "UNP_ZEROSRC_RESET_ALL_BANKS"
-# All three of Blackhole's un-migrated Wormhole-packed p_unpacr_nop constants, with
-# what each ACTUALLY encodes when dropped into Blackhole's 2-bit Unpack_Pop slot -
-# the natural slot, since the legitimate UNP_ZEROSRC lives there:
+# All three Wormhole-packed p_unpacr_nop constants, with what each WOULD encode if
+# dropped into Blackhole's 2-bit Unpack_Pop slot - the natural slot, since the
+# legitimate UNP_ZEROSRC lives there:
 #   ..._RESET_ALL_BANKS    (0b1001)    -> Src_ClrVal_Ctrl=0b10, i.e. clear to ONE,
 #                                         not "reset all banks" (that is Bank_Clr_Ctrl)
 #   ..._STALL_RESET_WR_RDY (0b10001)   -> Bank_Clr_Ctrl=1, i.e. clear BOTH banks,
@@ -843,9 +845,9 @@ _WH_PACKED_BOTH = "UNP_ZEROSRC_RESET_ALL_BANKS"
 #   ..._SET_DVALID         (0b1000001) -> Clr_to1_fmt_Ctrl=0b01 and Set_Dvalid=0, i.e.
 #                                         the DVALID is NEVER published (Set_Dvalid is
 #                                         at <<8) - the worst of the three
-# UNP_NEGINFSRC (0b101) is deliberately NOT listed: it lands as
-# Src_ClrVal_Ctrl=CLR_SRC_NEGINF + Unpack_Pop=CLR_SRC, which is bit-identical to
-# Blackhole's own idiomatic neginf clear, so it is harmless.
+# UNP_NEGINFSRC (0b101) is deliberately NOT listed: it would land as
+# Src_ClrVal_Ctrl=CLR_SRC_NEGINF + Unpack_Pop=CLR_SRC, bit-identical to Blackhole's own
+# idiomatic neginf clear, so it is harmless. Blackhole no longer defines it either.
 _WH_PACKED_ANY = (
     _WH_PACKED_WAIT,
     _WH_PACKED_BOTH,
@@ -941,7 +943,8 @@ def publication_bank_controls(text: str, arch: str):
 
 def publication_misuses_packed_wait(text: str, arch: str) -> bool:
     """A Wormhole-shaped packed NoOp constant on an arch whose UNPACR_NOP takes the
-    controls as separate operands - the value silently lands in the wrong bit field."""
+    controls as separate operands - the value would land in the wrong bit field. Only
+    Wormhole defines these constants today, so this is a re-introduction guard."""
     return arch in _UNPACR_NOP_OPERAND_IDX and any(c in text for c in _WH_PACKED_ANY)
 
 

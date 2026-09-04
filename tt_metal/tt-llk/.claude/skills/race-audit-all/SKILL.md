@@ -65,7 +65,8 @@ both halves of the Dest->Src gate (`DEST2SRC_*` flags the math side, which is th
 corruption half; on the unpack side `DUMMY_PUBLISH_SERIALIZING` is a
 throughput/parity candidate, while `DUMMY_PUBLISH_SETDVALID_UNSEQUENCED`,
 `DUMMY_PUBLISH_BOTH_BANKS_WAITLIKE` and `DUMMY_PUBLISH_PACKED_WAIT_WRONG_ARCH` are
-real encoding defects) — but not the
+real encoding defects — the last a re-introduction guard, since only Wormhole
+defines those constants today) — but not the
 bank-flip lockstep verdict — and `mailbox-sync` recalls only the
 IN-TREE mailbox surface — mailbox use in ttnn/models kernels (one-to-one channels
 and fan-outs) is covered by the skill's ttnn-widened grep unless a kernel capture

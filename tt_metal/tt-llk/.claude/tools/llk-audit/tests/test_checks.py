@@ -1289,17 +1289,19 @@ def test_srcreg_dummy_publication_packed_constant_is_arch_specific():
     """UNP_ZEROSRC_STALL_RESET_WR_RDY means the wait bit ONLY on Wormhole.
 
     Blackhole and Quasar take the controls as separate operands and size the last
-    one at 2 bits, so passing the packed 0b10001 there lands bit 4 = Bank_Clr_Ctrl
-    (an unintended both-banks clear) and leaves the wait bit clear. Crediting the
-    bare substring as a guard was a false all-clear.
+    one at 2 bits, so passing the packed 0b10001 there would land bit 4 =
+    Bank_Clr_Ctrl (an unintended both-banks clear) and leave the wait bit clear.
+    Crediting the bare substring as a guard was a false all-clear. Only Wormhole
+    defines these constants today, so the check guards re-introduction; this test
+    pins the behaviour so a header change cannot land unnoticed.
     """
     WH = "tt_llk_wormhole_b0/llk_lib/llk_unpack_A.h"
     BH = "tt_llk_blackhole/llk_lib/llk_unpack_A.h"
     TXT = "TTI_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_ZEROSRC_STALL_RESET_WR_RDY)"
-    # All three of Blackhole's un-migrated WH-packed constants must be caught, not
-    # just the wait one. UNP_ZEROSRC_SET_DVALID is the worst: dropped into
-    # Blackhole's Unpack_Pop it sets Clr_to1_fmt_Ctrl and leaves Set_Dvalid (at <<8)
-    # at zero, so the DVALID is never published at all.
+    # All three WH-packed constants must be caught, not just the wait one.
+    # UNP_ZEROSRC_SET_DVALID is the worst: dropped into Blackhole's Unpack_Pop it
+    # sets Clr_to1_fmt_Ctrl and leaves Set_Dvalid (at <<8) at zero, so the DVALID
+    # is never published at all.
     for const in (
         "UNP_ZEROSRC_STALL_RESET_WR_RDY",
         "UNP_ZEROSRC_RESET_ALL_BANKS",
