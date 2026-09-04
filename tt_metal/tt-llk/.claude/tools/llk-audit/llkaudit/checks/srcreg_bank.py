@@ -86,7 +86,8 @@ class SrcRegBank(Check):
         "(DUMMY_PUBLISH_SETDVALID_UNSEQUENCED), the wait bit set together with a both-banks "
         "clear (DUMMY_PUBLISH_BOTH_BANKS_WAITLIKE), and a Wormhole-shaped packed "
         "UNP_ZEROSRC_* constant on an arch whose UNPACR_NOP takes these controls as "
-        "separate operands (DUMMY_PUBLISH_PACKED_WAIT_WRONG_ARCH). The last two apply only "
+        "separate operands (DUMMY_PUBLISH_PACKED_WAIT_WRONG_ARCH - a re-introduction "
+        "guard: only Wormhole defines these constants today). The last two apply only "
         "to a clearing publication; the first only to a bare SET_DVALID. "
         "Whether a "
         "SERIALIZING publication should actually change is NOT decided here: that "
@@ -379,7 +380,8 @@ class SrcRegBank(Check):
 
                 # A Wormhole packed constant on Blackhole/Quasar does not mean what it
                 # says: the value lands in Bank_Clr_Ctrl instead of the wait bit, with
-                # no compile-time check. Report it and do not credit it as a guard.
+                # no compile-time check. Only Wormhole defines these constants today, so
+                # this guards re-introduction. Never credit one as a guard.
                 if registry.publication_misuses_packed_wait(text, fb.arch):
                     out.append(
                         Finding(
@@ -391,11 +393,13 @@ class SrcRegBank(Check):
                             detail=(
                                 f"{name} uses a Wormhole-shaped packed UNP_ZEROSRC_* "
                                 f"constant on {fb.arch}, whose UNPACR_NOP takes these "
-                                "controls as SEPARATE operands. The value silently lands "
-                                "in the wrong bit field (Bank_Clr_Ctrl, an unintended "
-                                "both-banks clear) and leaves the wait bit clear; "
-                                "TTI_UNPACR_NOP does not call TT_UNPACR_NOP_VALID, so the "
-                                "operand overflow is not caught. Pass the operand instead"
+                                "controls as SEPARATE operands. These constants are "
+                                "Wormhole-only, so this should not compile - check whether "
+                                "the arch header re-defined them. If it did, the value "
+                                "lands in the wrong bit field (Bank_Clr_Ctrl, an unintended "
+                                "both-banks clear) and leaves the wait bit clear, and "
+                                "TT_UNPACR_NOP_VALID is never called, so the operand "
+                                "overflow is not caught. Pass the operand instead"
                             ),
                             evidence=[self._ev(f, text or name)],
                         )
