@@ -14,9 +14,9 @@
 template <BroadcastType BType = BroadcastType::NONE>
 inline void llk_unpack_AB_init(
     const std::uint32_t operandA, const std::uint32_t operandB, const ckernel::Transpose transpose) {
-    SAN_HOOK(unsupported());
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operandA_id);
+    const std::uint32_t operandB_id = get_operand_id(operandB);
 
     LLK_ASSERT_BLOCK(are_unpackers_AB_configured_correctly(
         unpack_src_format[operandA_id],
@@ -28,12 +28,28 @@ inline void llk_unpack_AB_init(
         get_operand_num_faces(operandA_id),
         get_operand_num_faces(get_operand_id(operandB))));
 
+    // _llk_unpack_AB_ takes address_a into SrcA and address_b into SrcB -- unlike the matmul
+    // unpack, operandA/B are not swapped onto srcB/srcA here.
+    SAN_HOOK(init<OperationUnpackBinary>(
+        StateVal<OperationUnpackBinary::BroadcastType>(to_underlying(BType)),
+        StateVal<OperationUnpackBinary::FaceWidth>(tensor_shape.face_c_dim),
+        StateVal<OperationUnpackBinary::NumFacesRow>(tensor_shape.num_faces_r_dim),
+        StateVal<OperationUnpackBinary::NumFacesCol>(tensor_shape.num_faces_c_dim),
+        StateVal<OperationUnpackBinary::Transpose>(to_underlying(transpose)),
+        StateVal<Operand<Exu::Unpack>::InputFormatA>(unpack_src_format[operandA_id]),
+        StateVal<Operand<Exu::Unpack>::OutputFormatA>(unpack_dst_format[operandA_id]),
+        StateVal<Operand<Exu::Unpack>::FaceHeightA>(get_operand_face_r_dim(operandA_id)),
+        StateVal<Operand<Exu::Unpack>::NumFacesA>(get_operand_num_faces(operandA_id)),
+        StateVal<Operand<Exu::Unpack>::InputFormatB>(unpack_src_format[operandB_id]),
+        StateVal<Operand<Exu::Unpack>::OutputFormatB>(unpack_dst_format[operandB_id]),
+        StateVal<Operand<Exu::Unpack>::FaceHeightB>(get_operand_face_r_dim(operandB_id)),
+        StateVal<Operand<Exu::Unpack>::NumFacesB>(get_operand_num_faces(operandB_id))));
+
     _llk_unpack_AB_init_<BType>(tensor_shape, transpose);
 }
 
 template <BroadcastType BType = BroadcastType::NONE>
 inline void llk_unpack_AB_init(const std::uint32_t operandA, const std::uint32_t operandB) {
-    SAN_HOOK(unsupported());
     llk_unpack_AB_init<BType>(operandA, operandB, ckernel::Transpose::None);
 }
 
@@ -44,7 +60,6 @@ inline void llk_unpack_AB(
     const std::uint32_t tile_index_a,
     const std::uint32_t tile_index_b,
     [[maybe_unused]] const std::uint32_t bcast_row_idx = 0) {
-    SAN_HOOK(unsupported());
     std::uint32_t operandA_id = get_operand_id(operandA);
     std::uint32_t operandB_id = get_operand_id(operandB);
     std::uint32_t base_address_a = get_local_cb_interface(operandA_id).fifo_rd_ptr - 1;
@@ -66,6 +81,25 @@ inline void llk_unpack_AB(
         get_operand_face_r_dim(operandB_id),
         get_operand_num_faces(operandA_id),
         get_operand_num_faces(operandB_id)));
+
+    const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operandA_id);
+
+    SAN_HOOK(execute<OperationUnpackBinary>(
+        StateVal<OperationUnpackBinary::BroadcastType>(to_underlying(BType)),
+        StateVal<OperationUnpackBinary::FaceWidth>(tensor_shape.face_c_dim),
+        StateVal<OperationUnpackBinary::NumFacesRow>(tensor_shape.num_faces_r_dim),
+        StateVal<OperationUnpackBinary::NumFacesCol>(tensor_shape.num_faces_c_dim),
+        StateVal<Operand<Exu::Unpack>::InputFormatA>(unpack_src_format[operandA_id]),
+        StateVal<Operand<Exu::Unpack>::OutputFormatA>(unpack_dst_format[operandA_id]),
+        StateVal<Operand<Exu::Unpack>::FaceHeightA>(get_operand_face_r_dim(operandA_id)),
+        StateVal<Operand<Exu::Unpack>::NumFacesA>(get_operand_num_faces(operandA_id)),
+        StateVal<Operand<Exu::Unpack>::InputFormatB>(unpack_src_format[operandB_id]),
+        StateVal<Operand<Exu::Unpack>::OutputFormatB>(unpack_dst_format[operandB_id]),
+        StateVal<Operand<Exu::Unpack>::FaceHeightB>(get_operand_face_r_dim(operandB_id)),
+        StateVal<Operand<Exu::Unpack>::NumFacesB>(get_operand_num_faces(operandB_id)),
+        StateDiscard<std::uint32_t>(tile_index_a),
+        StateDiscard<std::uint32_t>(tile_index_b),
+        StateDiscard<std::uint32_t>(bcast_row_idx)));
 
     WAYPOINT("UABW");
     if constexpr (BType == BroadcastType::ROW) {
