@@ -292,6 +292,7 @@ def _extra_slice_config(formats, mathop, dest_acc, unpack_to_dest, input_dimensi
             ITERATIONS(32),
             FAST_MODE(FastMode.No),
             STABLE_SORT(StableSort.No),
+            FUSED_SORT(FusedSort.No),
             CLAMP_NEGATIVE(False),
         ],
         runtimes=[
