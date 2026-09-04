@@ -2748,6 +2748,7 @@ void DeviceProfiler::writeDeviceResultsToFiles() const {
 #endif
 }
 
+#if defined(TRACY_ENABLE)
 // TT: Phase 4 (Nsight-like zone tooltips) helper. Compact magnitude for a counter digest value
 // (1234567 -> "1.23M") so the per-zone label stays short. // TT-END
 static std::string formatCounterMagnitude(double v) {
@@ -2805,6 +2806,7 @@ static std::unordered_map<uint64_t, std::string> buildOpCounterDigests(
     }
     return digests;
 }
+#endif
 
 void DeviceProfiler::pushTracyDeviceResults(
     std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers_vec) {
