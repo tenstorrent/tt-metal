@@ -7,7 +7,6 @@
   <title>ttnn.reshape_on_device &mdash; TT-NN™  documentation</title>
       <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
-      <link rel="stylesheet" href="../../_static/copybutton.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
     <link rel="shortcut icon" href="../../_static/favicon.png"/>
     <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.reshape_on_device.html" />
@@ -20,8 +19,6 @@
         <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=b3ba4146"></script>
         <script src="../../_static/doctools.js?v=888ff710"></script>
         <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
-        <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
-        <script src="../../_static/copybutton.js?v=d122708d"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
         <script src="../../_static/posthog.js?v=aa5946f9"></script>
     <script src="../../_static/js/theme.js"></script>
@@ -359,9 +356,11 @@
         <div class="rst-content">
           <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
-  <li><a href="../../index.html">Home</a></li><li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
-  <li class="breadcrumb-item active">ttnn.reshape_on_device</li>
+      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
+      <li class="breadcrumb-item active">ttnn.reshape_on_device</li>
       <li class="wy-breadcrumbs-aside">
+            <a href="../../_sources/ttnn/api/ttnn.reshape_on_device.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -388,7 +387,7 @@
 <span class="n">output_tensor</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">,</span> <span class="p">(</span><span class="n">W</span><span class="p">,</span> <span class="n">Z</span><span class="p">,</span> <span class="n">Y</span><span class="p">,</span> <span class="n">X</span><span class="p">))</span>
 </pre></div>
 </div>
-<p>:param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>: Input Tensor. A TILE layout tensor must use the standard 32x32 tile.
+<p>:param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>: Input Tensor.
 :param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">W</span></code>: W dim of tensor.
 :param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">Z</span></code>: Z dim of tensor.
 :param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">Y</span></code>: Y dim of tensor.
