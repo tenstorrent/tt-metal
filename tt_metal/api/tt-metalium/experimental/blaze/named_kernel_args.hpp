@@ -31,6 +31,8 @@ struct KernelDescriptor;
 
 namespace tt::tt_metal::experimental::blaze {
 
+using NamedCompileTimeArgs = std::vector<std::pair<std::string, uint32_t>>;
+
 // Named runtime args use "ns.field" convention (e.g. "demo.num_tiles").
 // The name is split on '.' to produce namespace hierarchy in the generated header.
 // Common: same value on all cores. Per-core: different value per core.
@@ -65,7 +67,7 @@ using NamedPerCoreRuntimeArgArrays = std::vector<NamedPerCoreRuntimeArgArray>;
 // on `KernelDescriptor` so that the named-arg fields are quarantined in the
 // `experimental` namespace while `KernelDescriptor` itself stays intact.
 struct NamedKernelArgs {
-    std::vector<std::pair<std::string, uint32_t>> named_compile_time_args;
+    NamedCompileTimeArgs named_compile_time_args;
     NamedCommonRuntimeArgs named_common_runtime_args;
     NamedPerCoreRuntimeArgs named_per_core_runtime_args;
     NamedCommonRuntimeArgArrays named_common_runtime_arg_arrays;
