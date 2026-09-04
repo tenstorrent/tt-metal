@@ -74,8 +74,11 @@ class BgeM3ForEmbedding:
         # Set by _initialize_model once the mesh is known.
         self._data_parallel = False
         # Long-lived device tensors plus the trace that replays over them.
+        # release() frees all of them.
         self._traced_inputs = None
         self._traced_output = None
+        self._pool_mask = None
+        self._pool_counts = None
         self.state_dict = None
         self.tokenizer = None
         # Cache for mean-pool helper tensors keyed by (batch, seq) to avoid per-step
@@ -230,6 +233,30 @@ class BgeM3ForEmbedding:
             layout=ttnn.ROW_MAJOR_LAYOUT,
             **kwargs,
         )
+
+    def release(self) -> None:
+        """Free the trace and the device tensors that outlive one request.
+
+        A caller that unloads or rebuilds this wrapper must call this before the
+        mesh closes. The trace holds a region of device memory, and the input and
+        pooling buffers stay allocated between requests, so dropping the Python
+        reference alone leaks both. Calling this twice is safe.
+        """
+        if self.model is not None:
+            self.model.release_trace()
+        for tensor in (self._pool_mask, self._pool_counts):
+            if tensor is not None:
+                ttnn.deallocate(tensor)
+        self._pool_mask = None
+        self._pool_counts = None
+        for tensor in (self._traced_inputs or {}).values():
+            ttnn.deallocate(tensor)
+        self._traced_inputs = None
+        self._traced_output = None
+        for mask_tt, counts_tt, _signature in self._mean_pool_cache.values():
+            ttnn.deallocate(mask_tt)
+            ttnn.deallocate(counts_tt)
+        self._mean_pool_cache.clear()
 
     def _pool_helper_tensor(self, host: torch.Tensor) -> ttnn.Tensor:
         """Stage one mean-pool helper, sharded to match the output rows."""
@@ -613,8 +640,9 @@ class BgeM3ForEmbedding:
                 padded_seq_len=padded_seq_len,
             )
             # The serving modules need the exact B12/S8192 shard, and the trace needs
-            # one fixed shape. A shorter request, such as the one-prompt warmup, keeps
-            # the eager path.
+            # one fixed shape. Data-parallel requests already pad to that shape above,
+            # so they all replay the trace, including a one-prompt warmup. Every other
+            # configuration keeps the eager path.
             traced_shape = (
                 self._data_parallel
                 and target_padded_batch_size == BGE_M3_LONG_SEQ_CHUNK
