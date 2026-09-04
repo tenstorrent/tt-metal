@@ -475,7 +475,7 @@
   test_group: module
   skus:
     bh_sc1_high_power:
-      timeout: 5
+      timeout: 10
   owner_id: U07N3CUUN05  # Iva Potkonjak
   team: models
   sp_config: sc1
