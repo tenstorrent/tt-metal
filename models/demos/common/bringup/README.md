@@ -16,10 +16,11 @@ measured number and a raw log.
 |---|---|
 | `BRINGUP_RECIPE.md` | The recipe. Phases P0-P8, P10, P9; the logging protocol; how to set a threshold; the gate index; the failure playbook. |
 | `LANDMINES.md` | Traps found the hard way, grouped by how they fail. The silent ones are the expensive ones. |
-| `templates/` | The five log files a bring-up keeps, empty, with their required fields. |
+| `templates/` | Log-file templates with their required fields. The recipe's section 1.1 lists nine log files; five have templates here and `scripts/new_bringup.sh` stubs the other four. |
 | `examples/noise_floor.py` | The threshold primitive. Copy it into your package's test helpers. |
 | `examples/verify_citations.py` | Machine-checks every `path:line` in your code and docs. |
 | `examples/module_test_vs_ref.py` | The shape of a gate test: identical weights both sides, computed floor, negative control. |
+| `scripts/new_bringup.sh` | Scaffolds the package tree, the nine log files, and the verifier. |
 
 ## What is NOT here, on purpose
 

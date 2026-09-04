@@ -59,10 +59,10 @@ DOCS = [
 ]
 
 
-# P6 addition (Appendix F.7 / `DEC-035`): the package's **own Python docstrings** carry as many
+# The package's **own Python docstrings** carry as many
 # load-bearing `path:line` refs as the logs do, and none of them were checked. They are also where
 # citation shadowing bites hardest: `tt/layer.py`, `tt/model.py` and `tt/embedding.py` now shadow
-# gpt-oss files of the same basename, so a bare `model.py:211` in a docstring is genuinely ambiguous
+# gpt-oss files of the same basename, so a bare model.py line 211 in a docstring is genuinely ambiguous
 # and pass 2's AMBIGUOUS handling (line must be in range for *every* candidate) is exactly the right
 # check for it. Globbed rather than listed so a new file cannot be added without being scanned.
 DOCS += sorted(
@@ -96,8 +96,8 @@ DOC_PREFIXES = {
 }
 _REF = re.compile(r"`([A-Za-z0-9_./-]+\.(?:py|cpp|hpp|md|json|textproto|yaml)):(\d+)(?:-(\d+))?`")
 
-# P9 addition (`DEC-120`): `02_SURVEY.md` and the recipe write citations with the *same* one- and
-# two-letter aliases this script defines above (`GO/tt/ccl.py:55`, `TT/tt/common.py:489`) — 86 of
+# Logs and the recipe write citations with the *same* one- and
+# two-letter aliases this script defines above (GO/tt/ccl.py line 55, TT/tt/common.py line 489) — many of
 # them. Every one of those resolved before this map existed, but only by falling through to the
 # ambiguous-basename path, i.e. by luck: the day a second `ccl.py` is cited anywhere the ref flips
 # to a failure that has nothing to do with the ref being wrong. Expanding the alias makes them
@@ -105,16 +105,16 @@ _REF = re.compile(r"`([A-Za-z0-9_./-]+\.(?:py|cpp|hpp|md|json|textproto|yaml)):(
 _ALIASES = {"TT/": TT, "GO/": GO, "M3/": M3, "DS/": DS, "CP/": CP, "CM/": CM, "LL/": LL}
 
 
-# P5: the logs also use abbreviated forms — a bare basename (`common.py:564`, continuing an earlier
-# full citation) or a partial path (`gpt_oss_d_p/tt/config.py:55`). Resolving them instead of
+# Logs also use abbreviated forms — a bare basename (common.py line 564, continuing an earlier
+# full citation) or a partial path (gpt_oss_d_p/tt/config.py line 55). Resolving them instead of
 # reporting them "unresolved" is what makes pass 2 cover the decision log and the gate ledger, where
 # the shorthand is the norm. Ambiguous basenames are REPORTED, not silently dropped.
-# P6 addition: the package's own root, so a package-relative ref (`tt/config.py:134`,
-# `tests/unit/test_reference_model.py:136` — the shorthand every file in this package uses for its
+# P6 addition: the package's own root, so a package-relative ref (tt/config.py line 134,
+# tests/unit/test_reference_model.py line 136 — the shorthand every file in this package uses for its
 # own siblings) resolves LITERALLY instead of falling through to the ambiguous-basename path. Before
-# this, `tt/config.py:134` was matched against `gpt_oss_d_p/tt/attention/config.py` (108 lines) and
+# this, tt/config.py line 134 was matched against `gpt_oss_d_p/tt/attention/config.py` (108 lines) and
 # reported out of range — a false positive from citation shadowing, and it must be listed FIRST so
-# a package-local file wins over a same-named file elsewhere in the tree (`DEC-035`).
+# a package-local file wins over a same-named file elsewhere in the tree.
 _PARTIAL_PREFIXES = (
     f"{PKG}/",
     "models/demos/",
@@ -160,7 +160,7 @@ def _resolve(path, index):
         only = next(iter(hits))
         return only, f"basename -> {only}"
     if len(hits) > 1:
-        # A bare basename shared by several real files (`model_config.py:19`) carries less
+        # A bare basename shared by several real files (model_config.py line 19) carries less
         # information than a full path. Rather than drop it, require the line to be IN RANGE for
         # EVERY candidate: then whichever file the author meant, the reference resolves.
         return sorted(hits), f"AMBIGUOUS basename, {len(hits)} candidates"

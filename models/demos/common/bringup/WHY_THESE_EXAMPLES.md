@@ -6,7 +6,7 @@ the pattern, the template, or the measured fact that made the answer reachable.
 ```
 models/demos/common/bringup/
 ├── README.md                     what the kit is, how to start a bring-up
-├── BRINGUP_RECIPE.md             the recipe + Appendices D/E/F (the hard-won facts)
+├── BRINGUP_RECIPE.md             the recipe (facts folded into the body)
 ├── templates/
 │   ├── 00_MODEL_CARD.md          fact table w/ mandatory Source column + "does NOT have"
 │   ├── 05_DECISIONS.md           the DEC block, incl. Falsifier + Blast radius
@@ -14,9 +14,6 @@ models/demos/common/bringup/
 │   ├── 07_RISKS.md               risk entry w/ owner + how-to-close
 │   └── 08_INTEGRATION.md         coverage table: what a gate proves vs what it does not
 ├── examples/
-│   ├── mesh_config.py            TP is the only knob; SP derived; collective wrappers
-│   ├── ccl_manager.py            sub-device + ping-pong semaphores allocated ONCE
-│   ├── dense_mlp.py              worked module: col/row parallel, cache-only branch, TP tail
 │   ├── module_test_vs_ref.py     the canonical gate test, incl. negative control
 │   ├── noise_floor.py            quantize_like_device + err_ratio (the E.2 primitive)
 │   └── verify_citations.py       machine-checks every path:line in code and docs
@@ -44,3 +41,10 @@ models/demos/common/bringup/
 - The Llama implementation (`tt/`), its tests, golden scripts, and filled-in logs. Those are the
   answer key. Shipping them makes the validation run measure transcription.
 - Anything Llama-specific in the templates — dims, layer counts, key names.
+
+
+## A note on what is NOT shipped as an example
+
+`MeshConfig`, `CCLManager` and a worked dense MLP are **not** duplicated here. They already exist,
+maintained, in `models/demos/gpt_oss_d_p/` and `models/demos/minimax_m3/`, which the recipe names as
+the structural templates. Copying them into the kit would create a second version to drift.
