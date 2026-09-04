@@ -272,7 +272,7 @@ The importer produces output compatible with the ttnn-visualizer:
 - Input tensor IDs (instead of heuristic extraction from C++ graph connections)
 - Output tensor IDs (instead of C++ function_end connections)
 
-The importer matches `python_io` records to graph nodes by operation name, consuming them in order. Each Python-level `function_start` reserves a `python_io` slot before argument capture, so a recording-time failure still consumes a record and cannot be paired with a later same-name operation.
+The importer matches `python_io` records to graph nodes by operation name, consuming them in order. A failed start still consumes its record, so it is not paired with a later operation of the same name.
 
 **Tensor lifting**: When nested operations are filtered, their input/output tensor associations are "lifted" to the parent operation. For example, `ttnn.conv2d` might internally call `ttnn::matmul` which produces an output tensor — that tensor is attributed to `ttnn.conv2d` in the database. Internal tensors (produced and consumed within the same parent scope) are excluded.
 
@@ -629,25 +629,10 @@ Example device-op `function_start` params:
 **function_end params:**
 - `name`: Operation name
 - `duration_ns`: Wall-clock duration (optional)
-- `aborted`: `"true"` when the scope was left by an exception instead of returning (optional)
-- `abort_reason`: The exception's message, when one was recoverable (optional)
+- `aborted`: `"true"` when the operation left by exception instead of returning (optional)
+- `abort_reason`: The exception message, when available (optional)
 
-A `function_end` is emitted on both the success and the failure path, by one of two mechanisms:
-
-- **Scope guard.** C++ scopes instrumented with `tt::tt_metal::internal::ScopedTrackedFunction` close from its
-  destructor, which marks the node `aborted` when it detects an in-flight exception. The guard and the
-  abort payload it sends through `track_function_end` are internal Metal capture transport, not part of
-  the stable tt-metalium processor interface.
-- **Unwinding at the next top-level operation.** Call sites without that guard emit nothing when
-  they throw, and the Python decorator's `finally` then closes the innermost scope rather than its
-  own, so the operation stays open for the rest of the capture. The next top-level operation, where
-  nothing can legitimately still be open, closes everything the capture is still holding
-  (`ttnn.graph.track_function_start` → `unwind_open_functions`, `ttnn/ttnn/graph.py:117-157`). Each
-  scope it closes is marked `aborted`, with an `abort_reason` naming the operation that started.
-
-Both keep the trace balanced: operations that run after a failure keep their real nesting instead of
-being recorded as children of the operation that died — which is what makes them visible in the
-report at all, since only top-level scopes become operations.
+A failing operation still emits `function_end`, so the trace stays balanced. Later operations keep their real nesting and remain visible as top-level operations in the report.
 
 ### tensor
 
@@ -695,19 +680,11 @@ Circular buffer events for streaming/multi-buffering.
 
 ### error
 
-The C++ graph processor does not emit error nodes directly. A failing operation reaches the
-`errors` table by one of three routes, in order of preference:
+The C++ graph processor does not emit error nodes directly. The importer records a failing operation in the `errors` table from, in order of preference:
 
-1. **Python-recorded exception.** The operation decorators call `ttnn.graph.record_python_operation_error()`
-   on the way out, putting the exception's type and message in the `python_io` sidecar. This is the
-   richest source and is used whenever it is present.
-2. **Abort marker.** A `function_end` with `aborted: "true"` (see above) reports the operation as
-   `aborted_operation`, carrying `abort_reason` as the message. This is what a C++-initiated capture
-   sees, where no Python decorator was involved. When the aborting scope is nested, the diagnostic is
-   attributed to the enclosing operation that the report lists.
-3. **Orphan operation.** A `function_start` with no matching `function_end` is recorded as an
-   `incomplete_operation`. Neither of the two mechanisms above produces these, so this path now
-   covers older reports and the last operation of a capture that ends before another one starts.
+1. A Python exception captured with the operation (type and message).
+2. A `function_end` with `aborted: "true"` (`error_type` is `aborted_operation`; message is `abort_reason`). Nested aborts are attributed to the enclosing reported operation.
+3. A `function_start` with no matching `function_end` (`error_type` is `incomplete_operation`). This covers older reports and a capture that ends while an operation is still open.
 
 Legacy JSON files with explicit error nodes are also supported.
 
