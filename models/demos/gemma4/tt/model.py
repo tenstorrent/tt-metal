@@ -459,9 +459,18 @@ class Gemma4Model:
         # owning its own KV cache (models/demos/blackhole/qwen36/tt/mtp.py); gemma4's
         # drafter checkpoint has no k/v projections at all, so it cannot.
         #
-        # GEMMA4_SPEC_UNBOUNDED_DRAFTER_LAYER=0 disables the exemption.
+        # OPT-IN ONLY (GEMMA4_SPEC_UNBOUNDED_DRAFTER_LAYER=1); the spec-decode
+        # demo path sets it. It defaulted ON, which corrupted PLAIN bounded
+        # decode: the exempt layer gets a FULL-length cache with
+        # cache_position_modulo=None, but the plain demo's build_hybrid_page_tables
+        # still marks it sliding and hands it a 16-block table with a zero-padded
+        # tail -- so every position >= sliding_window indexed past the valid
+        # prefix and clobbered block 0 (the hazard kv_cache_hybrid.py documents).
+        # Measured: plain greedy bounded diverged from unbounded at 4k/32k.
+        # Without a drafter the exemption also buys nothing and costs 0.54
+        # GB/device at 256k, so plain bounded decode must not pay for it.
         self._spec_unbounded_layer = None
-        if bounded_sliding_kv_cache and os.environ.get("GEMMA4_SPEC_UNBOUNDED_DRAFTER_LAYER", "1") == "1":
+        if bounded_sliding_kv_cache and os.environ.get("GEMMA4_SPEC_UNBOUNDED_DRAFTER_LAYER", "0") == "1":
             _sliding = [i for i in range(n_layers) if hf_config.layer_types[i] == "sliding_attention"]
             if _sliding:
                 self._spec_unbounded_layer = max(_sliding)
@@ -509,7 +518,12 @@ class Gemma4Model:
                     and attn_cfg.sliding_window is not None
                     and paged_attention_config is not None
                 ):
-                    sliding_blocks_per_seq = attn_cfg.sliding_window // paged_attention_config.block_size
+                    # Size to the RING (window + spec headroom), not the window:
+                    # the ring is what positions wrap into. See bounded_ring_modulo.
+                    from models.demos.gemma4.tt.attention import bounded_ring_modulo
+
+                    _ring = bounded_ring_modulo(attn_cfg.sliding_window)
+                    sliding_blocks_per_seq = _ring // paged_attention_config.block_size
                     max_num_blocks_override = sliding_blocks_per_seq * max_local_batch_size
                 kv_cache = init_kv_cache(
                     mesh_device=mesh_device,

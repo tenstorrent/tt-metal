@@ -211,20 +211,16 @@ def create_assistant_model(
     # It requires the ring sizes to agree; the assistant's own sliding_window
     # matches its target's (1024 on both 12B and 31B), so verify that here
     # rather than assuming it.
-    if (
-        getattr(target_model, "bounded_sliding_kv_cache", False)
-        and os.environ.get("GEMMA4_SPEC_ALLOW_BOUNDED", "0") != "1"
-    ):
-        raise NotImplementedError(
-            "Speculative decoding on a BOUNDED sliding KV cache is not coherent yet. "
-            "The verify writes all K+1 candidates' KV up front and relies on rejected "
-            "positions being harmlessly overwritten later; in a bounded ring, position p "
-            "maps to slot p % window, so rejected speculative writes clobber slots that "
-            "still hold LIVE context (measured at 256k: degenerate output, acceptance "
-            "0.73/5 vs 3.27/5 at 4k). Needs accepted-only / deferred verify KV writes "
-            "(or scratch-slot save+restore) first. Set GEMMA4_SPEC_ALLOW_BOUNDED=1 to "
-            "run it anyway for development."
-        )
+    # GATE LIFTED. The clobbering described here was real -- verify writes all K+1
+    # candidates up front, and in a ring of EXACTLY the window, slot (p+j)%W still
+    # holds live position p+j-W. It is fixed by ring HEADROOM (the spec path runs
+    # ring = 2*window, so speculative slots fall outside the window; see
+    # attention.bounded_ring_modulo), plus the last-chunk expansion threshold fix
+    # in Gemma4Generator._expand_bounded_last_chunk.
+    # Measured 31B @ 32k, greedy/traced: bounded 2.40/5 @ 42.26 tok/s/u vs
+    # unbounded 2.40/5 @ 42.42 -- parity, matching text. 128k 2.78/5 @ 36.08
+    # (baseline 24.44); 256k 1.70/5 @ 16.35 (baseline 16.97 -- coherent but spec
+    # is NOT a win at 256k: verify cost scales with context, acceptance falls).
     if getattr(target_model, "bounded_sliding_kv_cache", False):
         _tgt_win = getattr(target_model, "sliding_window", None) or getattr(
             getattr(target_model, "hf_config", None), "sliding_window", None

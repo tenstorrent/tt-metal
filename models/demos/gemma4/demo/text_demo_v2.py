@@ -576,6 +576,16 @@ def test_demo_text(
 
         n_layers = num_layers or model_args.num_hidden_layers
         sliding_mask = [model_args.layer_types[i] == "sliding_attention" for i in range(n_layers)]
+        # The page table MUST match the allocation: a layer the model exempted
+        # from bounding (Gemma4Model._spec_unbounded_layer) owns a full-length
+        # cache, so marking it sliding here hands it a 16-block table whose
+        # zero-padded tail clobbers block 0 past the window. Normally None here
+        # (the exemption is spec-decode opt-in) -- this keeps the two in sync if
+        # it is ever enabled on the plain path.
+        _exempt = getattr(generator.model[0], "_spec_unbounded_layer", None)
+        if _exempt is not None and 0 <= _exempt < n_layers:
+            sliding_mask[_exempt] = False
+            logger.info(f"Hybrid page tables: layer {_exempt} on the full pool (model exempted it from bounding)")
         per_layer_pts = build_hybrid_page_tables(
             n_layers,
             sliding_mask,
@@ -889,6 +899,21 @@ def _run_spec_decode(
     paged_attention_config = PagedAttentionConfig(
         block_size=block_size, max_num_blocks=batch_size * math.ceil(max_seq_len / block_size)
     )
+    # Opt in to the last-sliding-layer exemption BEFORE the model is built: the
+    # KV-shared drafter cross-attends that layer, so it must hold unbounded
+    # positions. Off by default because it corrupts (and needlessly enlarges)
+    # plain bounded decode -- see Gemma4Model._spec_unbounded_layer.
+    if _spec_bounded:
+        os.environ.setdefault("GEMMA4_SPEC_UNBOUNDED_DRAFTER_LAYER", "1")
+        # Ring headroom for the speculative writes at p+1..p+K: without it each
+        # draft evicts a still-in-window token (measured: K=5 corrupts from the
+        # first token at 32k, K=1 stays correct).
+        # 16 blocks (=1024) rather than the 1 block K needs: the ring must stay a
+        # POWER OF TWO. Chunk starts must be multiples of the ring (paged_fill_cache
+        # has no start offset) AND of SDPA's q_chunk_size; a 1088 ring (2^6*17)
+        # makes those mutually satisfiable only every 8704 tokens, and SDPA
+        # TT_FATALs on chunk_start_idx % q_chunk_size. 2048 satisfies both.
+        os.environ.setdefault("GEMMA4_SPEC_RING_HEADROOM_BLOCKS", "16")
 
     generator, tt_kv_cache, tokenizer = Gemma4Generator.from_pretrained(
         mesh_device=mesh_device,
@@ -912,6 +937,9 @@ def _run_spec_decode(
         page_table = _spec_install_hybrid_page_tables(
             generator, model_args, num_layers, batch_size, block_size, max_seq_len, page_table
         )
+        # (The prefill-chunk floor for the bounded last-chunk expansion lives in
+        # resolve_gemma4_prefill_chunk_size: it must apply while model_args is
+        # built, not after -- setting the env here was too late to be read.)
 
     # Prefill tracing has ~no perf gain and OOMs the trace region at long context
     # (≥4K); gate it off above a threshold (decode/spec traces stay on), unless
@@ -1102,6 +1130,13 @@ def _run_spec_decode_batched(
     paged_attention_config = PagedAttentionConfig(block_size=block_size, max_num_blocks=B * blocks_per_user)
 
     _spec_bounded = _spec_bounded_sliding(max_seq_len, mesh_device, model_path, paged_attention=True)
+    if _spec_bounded:
+        # Same opt-ins the single-user spec path takes (see _run_spec_decode):
+        # the KV-shared drafter needs the last sliding layer unbounded, and the
+        # verify's speculative writes at p+1..p+K need ring headroom or they
+        # evict still-in-window tokens. Must be set BEFORE the model is built.
+        os.environ.setdefault("GEMMA4_SPEC_UNBOUNDED_DRAFTER_LAYER", "1")
+        os.environ.setdefault("GEMMA4_SPEC_RING_HEADROOM_BLOCKS", "16")
     generator, tt_kv_cache, tokenizer = Gemma4Generator.from_pretrained(
         mesh_device=mesh_device,
         model_path=model_path,
@@ -1120,6 +1155,15 @@ def _run_spec_decode_batched(
     model_args = generator.model_args
 
     page_table = create_tt_page_table(B, paged_attention_config)  # [B, blocks_per_user]
+    if _spec_bounded:
+        # Bounded sliding needs PER-LAYER page tables (sliding layers index the
+        # small ring pool, full layers the full pool). Without them the flat
+        # table does not span the ring and prefill dies in paged_fill_cache with
+        # a TT_FATAL. build_hybrid_page_tables(num_users=B) gives every user its
+        # OWN ring, which is what B>1 requires.
+        page_table = _spec_install_hybrid_page_tables(
+            generator, model_args, num_layers, B, block_size, max_seq_len, page_table
+        )
 
     # Prefill tracing has ~no perf gain and OOMs the trace region at long context
     # (≥4K); gate it off above a threshold (the batched decode trace stays on),

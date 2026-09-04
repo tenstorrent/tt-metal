@@ -437,28 +437,45 @@ class ChunkedPrefillPageTableGuardMixin:
         if not self._uses_bounded_sliding_kv(model_id):
             return last_chunk_start, last_token_idx_in_chunk
         modulo = None
+        window = None
         model = self.model[model_id]
         for layer in getattr(model, "layers", []):
             cfg = getattr(getattr(layer, "self_attn", None), "config", None)
             if cfg is not None and getattr(cfg, "cache_position_modulo", None) is not None:
                 modulo = int(cfg.cache_position_modulo)
+                window = int(getattr(cfg, "sliding_window", 0) or 0) or modulo
                 break
         if modulo is None:
             sw = getattr(getattr(model, "hf_config", None), "sliding_window", None)
             modulo = int(sw) if sw else None
+            window = modulo
         if not modulo or last_chunk_start <= 0:
             return last_chunk_start, last_token_idx_in_chunk
+        # Threshold on the WINDOW, not the ring. Attention only ever reads the
+        # last ``window`` positions; ring slots beyond that are masked out, so
+        # the last chunk only has to carry a full window of real K/V. Testing
+        # against ``modulo`` was equivalent while ring == window, but with
+        # speculative ring headroom (ring 2048, window 1024) it fired a needless
+        # expansion for a perfectly adequate remnant -- and the expanded chunk
+        # produced wrong K/V: bounded spec decode at 32k went from parity
+        # (2.40/5 @ 42.24 tok/s/u, matching unbounded) to corrupt-from-token-1.
         remnant = int(last_token_idx_in_chunk) + 1
-        if remnant >= modulo:
+        if remnant >= window:
             return last_chunk_start, last_token_idx_in_chunk
         # paged_fill_cache has no start-position input: row r is written to
         # circular slot r % modulo. Keep the expanded chunk's absolute start
         # ring-aligned so local row indices map to the corresponding absolute
         # slots. Pulling back by one complete window gives the last chunk at
         # least one full window of real K/V without changing its ring origin.
-        align = max(int(block_size), 128)
-        target_start = max(0, int(last_chunk_start) - modulo)
-        new_start = ((target_start + align - 1) // align) * align
+        # The start must be a multiple of the RING (``modulo``), not merely of
+        # 128: row r lands in slot r % modulo, so any other start rotates every
+        # local row off its absolute slot. With the exact-window ring
+        # (modulo == sliding_window) chunk starts were already multiples of it
+        # and 128-alignment happened to work; with speculative ring headroom it
+        # does not. Align DOWN so the expanded chunk still covers a full window.
+        align = int(modulo)
+        target_start = max(0, int(last_chunk_start) - int(window))
+        new_start = (target_start // align) * align
         new_idx = int(last_token_idx_in_seq) - new_start
         if new_idx + 1 > int(chunk_size):
             raise ValueError(f"Expanded bounded last chunk has {new_idx + 1} rows, exceeding chunk_size={chunk_size}")

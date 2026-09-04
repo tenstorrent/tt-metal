@@ -334,6 +334,35 @@ class SpeculativeDecoder:
             pt, device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32, mesh_mapper=self._mapper
         )
 
+    def _page_tables_per_layer_users(self, B):
+        """Per-layer page tables with DISTINCT rows for B real users (bounded KV).
+
+        The batch-alias variant (``_page_tables_per_layer``) replicates ONE user's
+        row across the candidate dim -- right for single-user verify, wrong for a
+        true B-user forward where each user owns its own blocks. Returns ``None``
+        when no per-layer tables are installed (unbounded path unchanged).
+        """
+        installed = getattr(self.target, "_active_page_tables_per_layer", None)
+        if not installed:
+            return None
+        cache = getattr(self, "_pt_layer_users_cache", None)
+        if cache is None:
+            cache = {}
+            self._pt_layer_users_cache = cache
+        key = (B, id(installed))
+        hit = cache.get(key)
+        if hit is not None:
+            return hit
+        out = []
+        for pt in installed:
+            if pt is None or not hasattr(pt, "dim"):
+                out.append(pt)  # None, or an already-device tensor the model owns
+                continue
+            rows = pt if pt.dim() > 1 else pt.unsqueeze(0)
+            out.append(rows[:B].to(torch.int32))
+        cache[key] = out
+        return out
+
     def _from_b(self, t, dtype, layout=ttnn.ROW_MAJOR_LAYOUT):
         return ttnn.from_torch(t, device=self.mesh_device, layout=layout, dtype=dtype, mesh_mapper=self._mapper)
 
@@ -392,7 +421,15 @@ class SpeculativeDecoder:
         _lg.info(f"[spec-trace] capture verify batch={batch}: begin_trace_capture")
         tid = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
         logits, hidden = self.target.ttnn_verify_forward(
-            x=x_dev, current_pos=pu_dev, current_pos_cache=pi_dev, page_table=pt_dev, kv_cache=self.tt_kv_cache
+            x=x_dev,
+            current_pos=pu_dev,
+            current_pos_cache=pi_dev,
+            page_table=pt_dev,
+            kv_cache=self.tt_kv_cache,
+            # Must match the compile run above: falling through to the model's
+            # batch-1 ``_active_page_tables_per_layer`` under bounded sliding both
+            # binds the wrong rows and allocates inside trace capture.
+            page_tables_per_layer=self._page_tables_per_layer(batch),
         )
         _lg.info(f"[spec-trace] capture verify batch={batch}: end_trace_capture")
         ttnn.end_trace_capture(self.mesh_device, tid, cq_id=0)
@@ -1090,6 +1127,7 @@ class SpeculativeDecoder:
                 current_pos_cache=tr["d_pi"],
                 page_table=tr["d_pt"],
                 kv_cache=self.tt_kv_cache,
+                page_tables_per_layer=tr["d_ptl"],
             )
             seed_idx = self._argmax_last(seed_logits, rows=1)
             seed_logits.deallocate(True)
@@ -1115,6 +1153,7 @@ class SpeculativeDecoder:
             current_pos_cache=tr["v_pi"],
             page_table=tr["v_pt"],
             kv_cache=self.tt_kv_cache,
+            page_tables_per_layer=tr["v_ptl"],
         )
         tail_rows = K if self._fused_reseed else K + 1
         tail_idx = self._argmax_last(vlogits, rows=tail_rows)  # [1,1,K or K+1] uint32 RM
@@ -1149,6 +1188,15 @@ class SpeculativeDecoder:
             "v_pu": v_pu,
             "v_pi": v_pi,
             "v_pt": self._page_table(K if self._fused_reseed else K + 1),
+            # Bounded sliding KV runs HYBRID per-layer page tables, and verify puts
+            # its candidates in the BATCH dim -- each layer's table needs the user's
+            # row replicated across them. Without this the fused body fell through
+            # to the model's batch-1 ``_active_page_tables_per_layer`` and
+            # decode_forward sliced row b>=1 of a 1-row table (RuntimeError: bad
+            # optional access). Resolved once here so compile and capture bind the
+            # SAME persistent device buffers. None when unbounded (path unchanged).
+            "d_ptl": self._page_tables_per_layer(1),
+            "v_ptl": self._page_tables_per_layer(K if self._fused_reseed else K + 1),
         }
         _lg.info("[spec-trace] capture fused: compile run")
         vx, vidx, vh = self._fused_body(tr)
@@ -1275,6 +1323,10 @@ class SpeculativeDecoder:
             current_pos_cache=pi,
             page_table=pt,
             kv_cache=self.tt_kv_cache,
+            # Distinct rows per user: falling through to the model's batch-1
+            # per-layer tables under bounded sliding slices row b>=1 of a 1-row
+            # table (see _capture_fused_trace).
+            page_tables_per_layer=self._page_tables_per_layer_users(len(tokens)),
         )
         logits.deallocate(True)
         for t in (x, pu, pi, pt):

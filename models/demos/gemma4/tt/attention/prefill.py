@@ -476,6 +476,10 @@ def _prefill_forward_single(
                 # cap): may still kernel-cap-fill in-graph.
                 if valid_seq_len is not None:
                     v = min(int(valid_seq_len), int(tt_k.shape[-2]))
+                    if os.environ.get("GEMMA4_DEBUG_RING_FILL") == "1":
+                        from loguru import logger as _rl
+
+                        _rl.info(f"[ring-fill] DEFERRED-STASH branch: v={v} rows={int(tt_k.shape[-2])}")
                     tile_end = ((v + TILE_HEIGHT - 1) // TILE_HEIGHT) * TILE_HEIGHT
                     tile_end = min(tile_end, int(tt_k.shape[-2]))
                     if tile_end <= 0:
@@ -525,6 +529,13 @@ def _prefill_forward_single(
                     # Traced / single-chunk with get_last_token=-1: kernel-cap fill.
                     k_fill, v_fill = tt_k, tt_v
                     fill_kwargs = {}
+                    if os.environ.get("GEMMA4_DEBUG_RING_FILL") == "1":
+                        from loguru import logger as _rl
+
+                        _rl.info(
+                            f"[ring-fill] KERNEL-CAP branch: valid_seq_len={valid_seq_len} "
+                            f"rows={int(tt_k.shape[-2])} modulo={config.cache_position_modulo}"
+                        )
                     valid_dev = _resolve_valid_seq_len_tensor(config, valid_seq_len, tt_k.shape[-2], k_cache.device())
                     if valid_dev is not None:
                         fill_kwargs["valid_seq_len_tensor"] = valid_dev
