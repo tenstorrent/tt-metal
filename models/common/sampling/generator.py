@@ -392,14 +392,19 @@ class SamplingGenerator:
                 count_tokens=False,
             )
 
-        trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=self.cq_id)
-        sampled = self._run_sampling(
-            logits,
-            penalties_on=penalties_on,
-            tt_out_tok=tt_out_tok,
-        )
-        ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=self.cq_id)
-        ttnn.synchronize_device(self.mesh_device)
+        # Whatever sampling allocates inside the capture window (e.g. the argmax output when no
+        # feedback buffer is supplied) belongs to the trace being recorded and must stay allocated
+        # for replay. Acknowledge the window (no-op unless TT_METAL_TRACE_ALLOC_TRACKING=1), as the
+        # model decode capture does; measured: 1 buffer left live across every replay on Qwen2.5-VL.
+        with ttnn.corruptible_allocation_scope(self.mesh_device):
+            trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=self.cq_id)
+            sampled = self._run_sampling(
+                logits,
+                penalties_on=penalties_on,
+                tt_out_tok=tt_out_tok,
+            )
+            ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=self.cq_id)
+            ttnn.synchronize_device(self.mesh_device)
 
         if tt_out_tok is not None:
             if isinstance(sampled, tuple):

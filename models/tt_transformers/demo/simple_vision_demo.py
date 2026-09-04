@@ -401,6 +401,9 @@ def test_multimodal_demo_text(
 
     non_trace_generated_texts = []
 
+    if enable_trace and hasattr(generator, "warmup_vision_encoder"):
+        # Compile the vision encoder for every image geometry before the decode trace is recorded.
+        generator.warmup_vision_encoder()
     for iter_num in range(warmup_iters + 1):
         logger.info(f"Iteration {iter_num}")
         current_dialogs = dialogs

@@ -117,6 +117,13 @@ class WarmupForwardMixin:
         logger.info(f"Start pos shape: {start_pos.shape}")
         logger.info(f"Page table shape: {page_table.shape}")
 
+        # Record every trace variant this sweep needs before any of them is live (see
+        # Generator.precapture_decode_trace_variants); the per-param passes below then only replay.
+        precapture = getattr(self, "precapture_decode_trace_variants", None)
+        if enable_trace and not skip_trace_precompile and precapture is not None:
+            if precapture(sampling_params, tokens, start_pos, page_table, kv_cache):
+                logger.info("Pre-captured decode trace variants before the sampling sweep")
+
         for param in sampling_params:
             logger.info(f"Warming up decode for sampling params: {param}")
             decode_kwargs = dict(

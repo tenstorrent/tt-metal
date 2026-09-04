@@ -77,6 +77,10 @@ class TtTransformer(LightweightModule):
         self.is_prefill_setup = False
         self.is_decode_setup = False
         self.prefetcher_setup = None
+        # Device-side prefill inputs, reused across requests. Keyed by the host inputs' shape /
+        # dtype / layout signature, which is bounded because prompts are padded to a small set of
+        # prefill buckets. See prepare_inputs_prefill.
+        self._prefill_input_cache = {}
         self.mesh_sub_device_manager_id_decode = None
         self.mesh_sub_device_manager_id_prefill = None
         # Cached CCLs so the no-prefetcher path can reuse them across mode switches instead of
@@ -156,6 +160,25 @@ class TtTransformer(LightweightModule):
         self._tt_seq_len_buffer = ttnn.from_torch(
             torch.tensor([1, 1, self.args.max_seq_len, self.args.head_dim], dtype=torch.int32),
             device=self.mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        # Runtime bounds and row selector for the prefill tail's last-token slice; see
+        # _select_last_token_row. Allocated here, before any trace exists, and rewritten in place.
+        self._tail_slice_start = ttnn.from_torch(
+            torch.zeros(4, dtype=torch.int32),
+            device=self.mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        self._tail_slice_end = ttnn.from_torch(
+            torch.zeros(4, dtype=torch.int32),
+            device=self.mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        self._tail_row_mask = ttnn.from_torch(
+            torch.zeros(1, 1, 32, 1, dtype=torch.bfloat16),
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
         # [0, 0, 0, 0] - slice to get [0,0] and [0] for building slice start [0, 0, N, 0] from chunk_start_idx [N].
@@ -478,7 +501,18 @@ class TtTransformer(LightweightModule):
         host_inputs = self.prepare_prefill_inputs_host(
             tokens, user_id, page_table, chunk_page_table, chunk_start_idx, batch_size
         )
-        device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)  # Helper function
+        # Allocating these per call leaves one set of device buffers per request live behind the
+        # traces captured during warmup. Only the untraced prefill path comes through here (the
+        # traced path stages its inputs once at capture and copies into them), and it is what a
+        # seeded or greedy request takes, so this is every such request. The buffers depend only on
+        # the padded prefill bucket, so cache them on that signature and copy into them instead.
+        cache_key = tuple(None if t is None else (tuple(t.shape), str(t.dtype), str(t.layout)) for t in host_inputs)
+        cached_inputs = self._prefill_input_cache.get(cache_key)
+        if cached_inputs is None:
+            device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
+            self._prefill_input_cache[cache_key] = device_inputs
+        else:
+            device_inputs = copy_host_to_device(host_inputs, device_tensors=cached_inputs)
         transformed_device_inputs = self.transform_prefill_inputs_device(*device_inputs)
         return transformed_device_inputs
 
@@ -618,6 +652,62 @@ class TtTransformer(LightweightModule):
         tt_tokens = self.embd(tokens)
         return tt_tokens, current_pos, tt_rot_mats, page_table
 
+    def _select_last_token_row(self, x, last_token_idx_i):
+        """
+        Pick row ``last_token_idx_i`` out of the sequence dimension without baking the position into
+        a program.
+
+        ``x[:, :, i : i + 1, :]`` puts the bounds in the slice's compile-time attributes, so every
+        distinct prompt position compiles a new program and strands its program-cache buffer behind
+        the traces captured during warmup - and warmup cannot pre-compile them, because it only ever
+        sees bucket-length mock prompts.
+
+        The tensor-args slice takes the position at runtime but only accepts a tile-aligned window,
+        which a single row is not. So take the aligned 32-row window that contains the row (the
+        position travels in a device tensor, so this compiles once per prefill bucket), then pick the
+        row inside it with a fixed-shape one-hot mask - constant shapes, so that compiles once too.
+        """
+        seq_len = int(x.shape[-2])
+        if seq_len % 32 != 0 or seq_len < 32:
+            return x[:, :, last_token_idx_i : last_token_idx_i + 1, :]
+
+        window_start = (int(last_token_idx_i) // 32) * 32
+        row_in_window = int(last_token_idx_i) % 32
+
+        for device_tensor, values in (
+            (self._tail_slice_start, [0, 0, window_start, 0]),
+            (self._tail_slice_end, [1, 1, window_start + 32, int(x.shape[-1])]),
+        ):
+            ttnn.copy_host_to_device_tensor(
+                ttnn.from_torch(
+                    torch.tensor(values, dtype=torch.int32),
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                ),
+                device_tensor,
+            )
+        window = ttnn.slice(
+            input_tensor=x,
+            starts=self._tail_slice_start,
+            ends=self._tail_slice_end,
+            slice_dim=2,
+            num_devices=seq_len // 32,
+        )
+
+        mask_torch = torch.zeros(1, 1, 32, 1, dtype=torch.bfloat16)
+        mask_torch[0, 0, row_in_window, 0] = 1.0
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(
+                mask_torch,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            ),
+            self._tail_row_mask,
+        )
+        # Exactly one row survives the mask, so the reduction copies it rather than accumulating:
+        # every other term is a true zero.
+        return ttnn.sum(ttnn.mul(window, self._tail_row_mask), dim=2, keepdim=True)
+
     def process_output_prefill_logits(self, tt_out, last_token_idx, tt_out_logits_saved=None, user_id=0):
         """
         Process prefill output to get logits tensor for on-device sampling.
@@ -638,7 +728,7 @@ class TtTransformer(LightweightModule):
                 last_token_idx_i = last_token_idx[i]
             else:
                 last_token_idx_i = last_token_idx
-            x = x[:, :, last_token_idx_i : last_token_idx_i + 1, :]
+            x = self._select_last_token_row(x, last_token_idx_i)
             # lm_head returns logits in sharded format (same as decode before all-gather)
             tt_logits = self.lm_head(x, None, mode="prefill")
             tt_logits = tt_logits[0]
@@ -868,8 +958,19 @@ class TtTransformer(LightweightModule):
                 self.lm_head.tt_ccl = self.tt_ccl
                 if self.use_prefetcher:
                     self.tt_tensors = self.prefetcher_setup.get_input_tensors()
+                    # The global CB is rebuilt on every prefill->decode switch, which on-device
+                    # prefill sampling makes once per request. It cannot be cached: it is
+                    # top-anchored in L1 and deliberately not held across prefill (keeping it
+                    # alive there fails with "static dataflow buffers clash with L1 buffers"),
+                    # and it cannot be reordered before the traces because the switch is what
+                    # creates it. Acknowledge it: the decode trace binds this CB at capture and
+                    # replays correctly across every later rebuild, so the rebuild lands where
+                    # the trace expects. NOTE this is an acknowledgement - it tells the checker
+                    # the program is prepared for this buffer, it does not stop a replay writing
+                    # it. No-op unless TT_METAL_TRACE_ALLOC_TRACKING=1.
                     # Re-create global CB for decode (if it was not already created)
-                    self.prefetcher_setup.create_global_cb()
+                    with ttnn.corruptible_allocation_scope(self.mesh_device):
+                        self.prefetcher_setup.create_global_cb()
                 else:
                     # No-prefetcher path reuses the cached decode CCL; clear its semaphore drift.
                     self.tt_ccl.reset_global_semaphores()
@@ -910,7 +1011,9 @@ class TtTransformer(LightweightModule):
         batch_size=1,
     ):
         if mode == "decode" and self.use_prefetcher:
-            self.prefetcher_setup.create_global_cb()
+            # Same rebuild-per-switch as in switch_mode; see the note there.
+            with ttnn.corruptible_allocation_scope(self.mesh_device):
+                self.prefetcher_setup.create_global_cb()
             garbage_tensor = ttnn.dram_prefetcher(
                 self.tt_tensors,
                 num_layers=self.n_layers,

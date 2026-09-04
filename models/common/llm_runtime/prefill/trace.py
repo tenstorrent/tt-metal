@@ -149,13 +149,9 @@ class PrefillTraceLifecycle:
         # Rotary positions are fixed for regular trace families; only tokens
         # and the page table vary on every replay.
         self.hooks.input_stager.refresh_regular_device_inputs(request, persistent.device_inputs)
-        uses_static_single_logits = (
-            prepared.sampling_params is None and request.kind == "single" and not request.uses_chunked_prefill
-        )
-        if (
-            not self.hooks.postprocessor.uses_static_q128_topk(request, prepared.sampling_path)
-            and not uses_static_single_logits
-        ):
+        # Host-sampling single requests now use the runtime last-token bounds as well (see
+        # finish_regular_prefill), so their position inputs must follow the prompt on every replay.
+        if not self.hooks.postprocessor.uses_static_q128_topk(request, prepared.sampling_path):
             if state.position_signature != relative_last:
                 position_inputs = self.hooks.input_stager.prepare_position_inputs_host(
                     relative_last,

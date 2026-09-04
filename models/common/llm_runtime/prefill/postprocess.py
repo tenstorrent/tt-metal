@@ -228,16 +228,19 @@ class PrefillPostprocessor:
                 request.padded_batch_size,
                 request.padded_sequence_length,
             )
-        elif self.uses_static_q128_topk(request, prepared.sampling_path) or (
-            prepared.sampling_params is None and request.kind == "single" and not request.uses_chunked_prefill
-        ):
+        elif self.uses_static_q128_topk(request, prepared.sampling_path):
             logits = self.config.model.post_process_prefill_output(hidden, relative_last[0])
         else:
+            # Runtime last-token bounds and row index for host sampling too. The static path keyed
+            # both its 32-row tile slice and the final 1-row slice on the prompt offset, so every
+            # new offset compiled fresh programs on the first real request - after warmup had
+            # recorded the decode traces (measured: 2 buffers left live across replays per model).
+            # With the device-side row pick the logits already hold the last token in row 0.
             logits = self.config.model.post_process_prefill_output(
                 hidden,
                 relative_last[0],
                 last_token_slice=(position_inputs.slice_start, position_inputs.slice_end),
-                last_token_index=(position_inputs.row_index if prepared.sampling_params is not None else None),
+                last_token_index=position_inputs.row_index,
             )
         retain_owned(owned, logits)
         if prepared.sampling_params is not None:
@@ -246,9 +249,13 @@ class PrefillPostprocessor:
             output = self.sample_device(selected, kpt, sampled_output)
         else:
             output = ttnn.untilize(logits, use_multicore=True)
-            if request.kind == "single" and not request.uses_chunked_prefill:
+            if request.kind == "single" and not request.uses_chunked_prefill and int(output.shape[2]) > 1:
+                # Only the static q128-topk family still yields a 32-row tile here; the row-picked
+                # logits are already a single row. Row 0 keeps this slice offset-independent.
                 retain_owned(owned, output)
-                row = relative_last[0] % _TILE_SIZE
+                row = (
+                    relative_last[0] % _TILE_SIZE if self.uses_static_q128_topk(request, prepared.sampling_path) else 0
+                )
                 output = ttnn.slice(output, (0, 0, row, 0), (1, 1, row + 1, int(output.shape[-1])))
         retain_owned(owned, output)
         return output

@@ -591,19 +591,18 @@ class GemmaMultimodalGenerator(Generator):
 
         skip_sequence_lengths = False
 
-        # Sweep all sampling parameters for prefill warmup just once since it is sequence length agnostic
-        sampling_parameters_sweeped = False
+        # Every data-parallel lane is a separate device with its own program cache, and Gemma's prefill is
+        # never traced, so the base gate (warm lanes 1..N-1 only for traced lengths) left those lanes
+        # compiling their whole prefill graph on the first real request - behind the decode traces warmup
+        # had just recorded (measured on DP-4: ~90 stranded programs per lane). Warm every lane for every
+        # bucket, and sweep the sampling parameters once per lane rather than once overall.
+        swept_sampling_model_ids = set()
 
         if enable_trace:
             logger.info("Using batch-1-only traced prefill warmup; runtime batched prefill remains enabled")
 
         for model_id in range(self.data_parallel):
             for supported_length in sequence_lengths_to_warmup:
-                if model_id != 0 and (
-                    supported_length not in self.model_args[0].trace_prefill_supported_seq_lens or not enable_trace
-                ):
-                    continue
-
                 # Token-limit guard below skips combinations that would
                 # exceed MAX_BATCHED_PREFILL_SEQ_LEN.
                 for batch_size in warmup_batch_sizes:
@@ -626,14 +625,21 @@ class GemmaMultimodalGenerator(Generator):
                         skip_sequence_lengths = True
                         break
 
-                    if not sampling_parameters_sweeped:
+                    if model_id not in swept_sampling_model_ids:
                         sampling_params = self._create_sampling_params(
                             can_sample_on_device=can_sample_on_device,
                             batch_size=batch_size,
                             greedy_only=greedy_only,
                         )
                     else:
-                        sampling_params = [None]
+                        # Not [None]: that path skips the on-device-sampling tail, whose bucket-keyed
+                        # programs (last-token slice, untilize) would then compile on the first real
+                        # request instead. One greedy pass per bucket compiles them here.
+                        sampling_params = self._create_sampling_params(
+                            can_sample_on_device=can_sample_on_device,
+                            batch_size=batch_size,
+                            greedy_only=True,
+                        )
 
                     for param in sampling_params:
                         logger.info(
@@ -647,7 +653,7 @@ class GemmaMultimodalGenerator(Generator):
                             sampling_params=param,
                         )
 
-                    sampling_parameters_sweeped = True
+                    swept_sampling_model_ids.add(model_id)
 
                 if skip_sequence_lengths:
                     break

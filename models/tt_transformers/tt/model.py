@@ -48,6 +48,18 @@ class Transformer(LightweightModule):
         self.decoders_optimizations = args.decoders_optimizations
         self.prefetcher = prefetcher
         self.tt_ccl = TT_CCL(self.mesh_device)
+        # Runtime bounds for the post-prefill tail's slice. Allocated here, before any trace exists,
+        # and rewritten in place per call - see process_logits_after_prefill_trace.
+        self._tail_slice_start = ttnn.from_torch(
+            torch.zeros(4, dtype=torch.int32),
+            device=self.mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        self._tail_slice_end = ttnn.from_torch(
+            torch.zeros(4, dtype=torch.int32),
+            device=self.mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
 
         embd_kwargs = {
             "mesh_device": mesh_device,
@@ -234,11 +246,42 @@ class Transformer(LightweightModule):
 
     def process_logits_after_prefill_trace(self, logits, last_token_idx):
         get_last_token = (last_token_idx // 32) * 32
-        logits = ttnn.slice(
-            logits,
-            (0, 0, get_last_token, 0),
-            (1, 1, get_last_token + 32, logits.shape[-1]),
-        )
+        seq_len = int(logits.shape[-2])
+        # Pass the offset as a runtime argument rather than a compile-time attribute. With literal
+        # bounds every distinct prompt offset compiles its own slice program, and since this runs
+        # after the prefill traces are captured - once per data-parallel group - that was the single
+        # largest source of buffers left live across trace replays on a DP run. Warmup cannot cover
+        # it either: it only ever sees bucket-length mock prompts, and real prompts are shorter.
+        #
+        # The tensor-args path needs the slice tile-aligned, which this one already is: it takes 32
+        # rows starting at a multiple of 32. num_devices splits the sequence into equal parts, so
+        # seq_len // 32 gives exactly the 32-row window, and the program then keys on the padded
+        # prefill bucket instead of the offset.
+        if seq_len % 32 == 0:
+            for device_tensor, values in (
+                (self._tail_slice_start, [0, 0, get_last_token, 0]),
+                (self._tail_slice_end, [1, 1, get_last_token + 32, int(logits.shape[-1])]),
+            ):
+                ttnn.copy_host_to_device_tensor(
+                    ttnn.from_torch(
+                        torch.tensor(values, dtype=torch.int32),
+                        mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                    ),
+                    device_tensor,
+                )
+            logits = ttnn.slice(
+                input_tensor=logits,
+                starts=self._tail_slice_start,
+                ends=self._tail_slice_end,
+                slice_dim=2,
+                num_devices=seq_len // 32,
+            )
+        else:
+            logits = ttnn.slice(
+                logits,
+                (0, 0, get_last_token, 0),
+                (1, 1, get_last_token + 32, logits.shape[-1]),
+            )
         logits = self._apply_norm_and_lm_head(logits)
         return logits
 
@@ -1012,7 +1055,33 @@ class Transformer(LightweightModule):
 
         # Slicing the tensor to the nearest ceiling/floor multiples of 32 for the prefill_len, to get the last token
         if get_last_token != -1:
-            x = ttnn.slice(x, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, x.shape[-1]))
+            seq_len = int(x.shape[2])
+            if seq_len % 32 == 0:
+                # Runtime bounds, as in process_logits_after_prefill_trace: with literal bounds every
+                # distinct prompt offset compiles its own slice program. Untraced-prefill models
+                # (Gemma-3) reach this slice on every real request, after warmup has recorded their
+                # decode traces, and warmup only ever sees bucket-length mock prompts - measured on
+                # Gemma-3-27B DP-4 as the last 8 buffers left live across trace replays.
+                for device_tensor, values in (
+                    (self._tail_slice_start, [0, 0, get_last_token, 0]),
+                    (self._tail_slice_end, [1, 1, get_last_token + 32, int(x.shape[-1])]),
+                ):
+                    ttnn.copy_host_to_device_tensor(
+                        ttnn.from_torch(
+                            torch.tensor(values, dtype=torch.int32),
+                            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                        ),
+                        device_tensor,
+                    )
+                x = ttnn.slice(
+                    input_tensor=x,
+                    starts=self._tail_slice_start,
+                    ends=self._tail_slice_end,
+                    slice_dim=2,
+                    num_devices=seq_len // 32,
+                )
+            else:
+                x = ttnn.slice(x, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, x.shape[-1]))
 
         # Output norm
         x = self.norm(x, mode=mode, norm_config=self.args.get_norm_config("lm_head", mode, self.prefetcher))

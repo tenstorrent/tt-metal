@@ -278,31 +278,36 @@ class TraceCompiler:
             for trace_key in capture_order:
                 persistent, plan = prepared[trace_key]
                 record = self._traces[trace_key]
-                trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
-                outputs = None
-                capture_ended = False
-                try:
-                    outputs = plan.capture(persistent)
-                    ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
-                    capture_ended = True
-                    ttnn.synchronize_device(self.mesh_device)
-                except BaseException as primary:
-                    cleanup_failures = []
-                    if not capture_ended:
-                        try:
-                            ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
-                        except BaseException as error:
-                            cleanup_failures.append(error)
-                    record.artifact = TraceArtifact(
-                        trace_id=trace_id,
-                        persistent_inputs=persistent,
-                        outputs=outputs,
-                        refresh_policy=plan.refresh_policy,
-                    )
-                    captured_keys.add(trace_key)
-                    cleanup_failures.extend(self._release_trace(record))
-                    attach_cleanup_failures(primary, cleanup_failures)
-                    raise
+                # Whatever the model allocates between begin/end_trace_capture belongs to the trace
+                # being recorded and must stay allocated for replay; recording N traces means capture
+                # N runs while 1..N-1 are live, which ordering cannot avoid. Acknowledge the window
+                # (no-op unless TT_METAL_TRACE_ALLOC_TRACKING=1), as tt_transformers' generator does.
+                with ttnn.corruptible_allocation_scope(self.mesh_device):
+                    trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+                    outputs = None
+                    capture_ended = False
+                    try:
+                        outputs = plan.capture(persistent)
+                        ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+                        capture_ended = True
+                        ttnn.synchronize_device(self.mesh_device)
+                    except BaseException as primary:
+                        cleanup_failures = []
+                        if not capture_ended:
+                            try:
+                                ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+                            except BaseException as error:
+                                cleanup_failures.append(error)
+                        record.artifact = TraceArtifact(
+                            trace_id=trace_id,
+                            persistent_inputs=persistent,
+                            outputs=outputs,
+                            refresh_policy=plan.refresh_policy,
+                        )
+                        captured_keys.add(trace_key)
+                        cleanup_failures.extend(self._release_trace(record))
+                        attach_cleanup_failures(primary, cleanup_failures)
+                        raise
                 record.artifact = TraceArtifact(
                     trace_id=trace_id,
                     persistent_inputs=persistent,
