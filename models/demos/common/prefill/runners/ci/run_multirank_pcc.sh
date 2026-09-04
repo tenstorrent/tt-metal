@@ -19,6 +19,7 @@ WARMUP_CHUNKS=10
 PCC_THRESHOLD=0.85
 RUNNER_ENV=""
 PRODUCER_ENV=""
+TP_SHARD_KV_DEFAULT=0
 
 case "${MODEL}" in
   kimi27)
@@ -32,6 +33,7 @@ case "${MODEL}" in
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/glm52_prefill_runner_kv}"
     MGD="${MGD_DIR}/glm52_mgd.textproto"
     MANIFEST="${MANIFEST_DIR}/glm52.json"
+    TP_SHARD_KV_DEFAULT=1
     RUNNER_ENV="export PREFILL_LAYER_ACK_D2H=1;"
     PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}'; \
         export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k;"
@@ -107,6 +109,7 @@ python3 "${TTRUN_PY}" \
     export PREFILL_MANIFEST='${MANIFEST}'; \
     export PREFILL_FABRIC_MODE=2d; \
     export PREFILL_MAX_SEQ_LEN=${MAX_SEQ_LEN}; \
+    export PREFILL_TP_SHARD_KV=${PREFILL_TP_SHARD_KV:-${TP_SHARD_KV_DEFAULT}}; \
     export PREFILL_SYNC_PER_CHUNK=1; \
     export PREFILL_TIMING_DIR='${TIMING_DIR}'; \
     export PREFILL_ENABLE_MIGRATION=1; \
