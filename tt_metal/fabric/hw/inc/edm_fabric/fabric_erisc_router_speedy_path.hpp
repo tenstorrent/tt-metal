@@ -131,6 +131,7 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
             uint32_t src_addr = local_sender_channel.get_cached_next_buffer_slot_addr();
 
             const size_t payload_size_bytes = pkt_header->get_payload_size_including_header();
+            record_sender_channel_usage(sender_channel_index, payload_size_bytes);
 
             bool busy = internal_::eth_txq_is_busy(sender_txq_id);
 
