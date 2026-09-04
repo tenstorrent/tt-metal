@@ -1,0 +1,58 @@
+# Two-rank Qwen3-0.6B GRPO for GSM8K, FULLY-ASYNC rollout variant (first cut).
+# 1 mock training chip + 1 TTT rollout chip (2 chips total on one host).
+#
+# Sibling of grpo_gsm8k_qwen3_p6b_remote_rollout.yaml. Differences:
+#   - No optimizer / actual training happens on rank 0 in this cut: rank 0 is a
+#     sleep-based mock that fires typed AsyncTrainingEvent messages to rank 1
+#     via the new AsyncTrainingEventChannel (see fully_async_config below).
+#   - weight_bridge omitted; both send/receive events are mocked with sleeps.
+#     Real bridge integration lands in a follow-up cut and will re-enable the
+#     weight_bridge field then.
+#
+# Rank 1 (TTT) still runs a real TttGenerationWorker with the same sampling
+# config, and now also collects per-token sampled log-probs alongside the
+# completions.
+
+training_config:
+  # Only max_sequence_length is read from here.
+  model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/qwen3_06b.yaml"
+
+  # HF repo (rank 1 uses this for the tokenizer + the TttGenerationWorker's
+  # model_source; rank 0 doesn't touch it in this cut).
+  model_id: "ichovpanTT/qwen3-0.6b-base-think-sft"
+
+  # Reproducibility knob for the dataset shuffle on the TTT rank.
+  seed: 0
+
+  # Kept so ``num_devices`` and ``completions_per_batch`` still resolve on
+  # rank 0 the same way the real trainer will size them.
+  grpo_config:
+    epsilon: 0.2
+    per_device_train_batch_size: 16   # one prompt's group of 16 completions
+    num_iterations: 1
+    gradient_accumulation_steps: 2    # 2 prompts x 16 completions = 32 per generate call
+    logging_steps: 1
+    checkpointing: false              # no trainer to checkpoint in this cut
+    checkpoint_interval: 20
+    prompts_to_train: 200
+    temperature: 1.0
+    max_completion_length: 512
+    num_generations: 16
+    warmup_steps: 20
+
+  # First-cut, mock-only knobs.
+  fully_async_config:
+    wait_step_s: 5                    # mock trainer sleeps this long per step
+    weight_bridge_mock_s: 2           # mock weight-bridge push duration per step
+    steps: 10                         # number of mock training iterations
+
+device_config:
+  enable_ddp: false
+  mesh_shape: [1, 1]
+  device_ids: [0]
+
+# TTT rollout-rank settings (mesh, batch, seq-len for the generation worker).
+remote_rollout_config:
+  mesh_shape: [1, 1]
+  max_batch_size: 32
+  max_seq_len: 1024

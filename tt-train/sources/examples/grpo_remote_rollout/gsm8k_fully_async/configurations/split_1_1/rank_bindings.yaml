@@ -1,0 +1,25 @@
+# Maps MPI ranks (0 = mock trainer, 1 = TTT worker) to mgd.textproto mesh ids,
+# pinning each to one disjoint P150 card via TT_VISIBLE_DEVICES.
+#
+# Rank 0 doesn't actually touch its device in this first cut (it only drives
+# the AsyncTrainingEventChannel), but keeping the binding parallel to
+# gsm8k_onestep means switching to the real trainer later is a code change
+# only.
+#
+# !!! HARDWARE-SPECIFIC TEMPLATE !!!
+# TT_VISIBLE_DEVICES indexes PCIe devices (0..1 here); each P150 card is one
+# PCIe device exposing one chip. Adjust to your machine.
+
+rank_bindings:
+  - rank: 0
+    mesh_id: 0
+    mesh_host_rank: 0
+    env_overrides:
+      TT_VISIBLE_DEVICES: "0"
+  - rank: 1
+    mesh_id: 1
+    mesh_host_rank: 0
+    env_overrides:
+      TT_VISIBLE_DEVICES: "1"
+
+mesh_graph_desc_path: "configurations/split_1_1/mgd.textproto"
