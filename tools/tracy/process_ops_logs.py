@@ -926,6 +926,11 @@ def _enrich_ops_from_device_logs(
                 # Math Pipeline Utilization
                 assign_metric("Math Pipeline Utilization", per_op_stats.get("Math Pipeline Utilization", {}))
 
+                # Math-to-Pack Handoff Efficiency
+                assign_metric(
+                    "Math-to-Pack Handoff Efficiency", per_op_stats.get("Math-to-Pack Handoff Efficiency", {})
+                )
+
                 # Unpacker-to-Math Data Flow
                 assign_metric("Unpacker-to-Math Data Flow", per_op_stats.get("Unpacker-to-Math Data Flow", {}))
 

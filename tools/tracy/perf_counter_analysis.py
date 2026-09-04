@@ -368,6 +368,10 @@ PERF_COUNTER_CSV_HEADERS = [
     "Math Pipeline Utilization Median (%)",
     "Math Pipeline Utilization Max (%)",
     "Math Pipeline Utilization Avg (%)",
+    "Math-to-Pack Handoff Efficiency Min (%)",
+    "Math-to-Pack Handoff Efficiency Median (%)",
+    "Math-to-Pack Handoff Efficiency Max (%)",
+    "Math-to-Pack Handoff Efficiency Avg (%)",
     "Unpacker-to-Math Data Flow Min (%)",
     "Unpacker-to-Math Data Flow Median (%)",
     "Unpacker-to-Math Data Flow Max (%)",
@@ -871,6 +875,7 @@ def print_efficiency_metrics_summary(metrics_df: pd.DataFrame, device_id: int) -
         "Packer Efficiency",
         "FPU Execution Efficiency",
         "Math Pipeline Utilization",
+        "Math-to-Pack Handoff Efficiency",
         "Unpacker-to-Math Data Flow",
         # INSTRN_THREAD metrics
         "Thread 0 Issue Stall Rate",
@@ -1194,6 +1199,18 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
     else:
         math_pipe_util = pd.Series(dtype=float)
 
+    # Falls back to AVAILABLE_MATH / ref_cnt when packer unused.
+    if packer_busy is not None and packer_busy.sum() > 0:
+        math_pack_eff = (available_math / packer_busy * 100).replace([float("inf"), -float("inf")], nan)
+    elif available_math is not None:
+        avail_ref = get_counter_ref_cnt("AVAILABLE_MATH") if has_counter("AVAILABLE_MATH") else None
+        if avail_ref is not None:
+            math_pack_eff = (available_math / avail_ref * 100).replace([float("inf"), -float("inf")], nan)
+        else:
+            math_pack_eff = pd.Series(dtype=float)
+    else:
+        math_pack_eff = pd.Series(dtype=float)
+
     unpack_math_flow = (
         ((srca_write_avail + srcb_write_avail) / 2) / ((unpack0_busy + unpack1_busy) / 2) * 100
     ).replace([float("inf"), -float("inf")], nan)
@@ -1210,6 +1227,7 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
     per_op_stats["FPU Execution Efficiency"] = _group_to_stat_dict(fpu_exec_eff)
 
     per_op_stats["Math Pipeline Utilization"] = _group_to_stat_dict(math_pipe_util)
+    per_op_stats["Math-to-Pack Handoff Efficiency"] = _group_to_stat_dict(math_pack_eff)
     per_op_stats["Unpacker-to-Math Data Flow"] = _group_to_stat_dict(unpack_math_flow)
 
     # === Thread issue-stall metrics (0-2 on tt-1xx, 0-3 on Quasar). THREAD_STALLS counts
@@ -1726,6 +1744,17 @@ def compute_device_only_metrics(
             axis=1,
         )
 
+    # Falls back to AVAILABLE_MATH / ref_cnt when packer unused.
+    if has_packer_busy:
+        eff_pivot["Math-to-Pack Handoff Efficiency"] = eff_pivot.apply(
+            lambda x: safe_div(x.get("value_AVAILABLE_MATH", 0), x.get("value_PACKER_BUSY", 0)),
+            axis=1,
+        )
+    elif "ref_cnt_AVAILABLE_MATH" in eff_pivot.columns:
+        eff_pivot["Math-to-Pack Handoff Efficiency"] = eff_pivot.apply(
+            lambda x: safe_div(x.get("value_AVAILABLE_MATH", 0), x.get("ref_cnt_AVAILABLE_MATH", 0)),
+            axis=1,
+        )
     eff_pivot["Unpacker-to-Math Data Flow"] = eff_pivot.apply(
         lambda x: safe_div(
             (x.get("value_SRCA_WRITE_AVAILABLE", 0) + x.get("value_SRCB_WRITE_AVAILABLE", 0)) / 2,
@@ -2390,6 +2419,7 @@ def compute_device_only_metrics(
         "Packer Efficiency",
         "FPU Execution Efficiency",
         "Math Pipeline Utilization",
+        "Math-to-Pack Handoff Efficiency",
         "Unpacker-to-Math Data Flow",
         "Thread 0 Issue Stall Rate",
         "Thread 1 Issue Stall Rate",
