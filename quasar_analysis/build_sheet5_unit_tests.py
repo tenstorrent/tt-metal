@@ -405,7 +405,18 @@ def build_rows():
 
         if fname not in files:  # test_op_inventory_bf16.py
             srow, forge_op, assertion = INVENTORY[func]
-            rows.append([fname, func, srow, forge_op] + ["—"] * 10 + [assertion, result, note, 'pytest -s "%s"' % nid])
+            rows.append(
+                [fname, func, srow, forge_op]
+                + ["—"] * 10
+                + [
+                    assertion,
+                    result,
+                    note,
+                    'pytest -s "%s"' % nid,
+                    blob(commit, "%s/%s" % (RELDIR, fname)),
+                    blob(commit, LOG_REL),
+                ]
+            )
             continue
 
         decl = files[fname]

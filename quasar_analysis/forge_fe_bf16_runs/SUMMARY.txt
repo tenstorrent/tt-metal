@@ -33,7 +33,20 @@ RUN PROVENANCE
   pytest          -q -rA --tb=line --timeout=300, one invocation over the whole directory
   log             all_ops.log
 
-RESULT   119 tests:   47 passed,   54 failed,   18 xfailed (the documented Quasar gaps)
+RESULT   101 tests:   47 passed,   54 failed,   0 xfailed
+
+NO XFAIL
+  The three ops Quasar does not bind (relu x16, permute, mean) are tested through the route that
+  DOES exist -- a fused add+RELU, transpose x2, avg_pool2d -- each a full device test with a real
+  PCC or exact-equality check. One test per op file. The gaps themselves are watched in ONE place,
+  test_op_inventory_bf16.py::test_forge_ops_map_onto_the_live_quasar_build, which FAILS the day one
+  closes.
+
+ON THE REMOTE
+  branch https://github.com/tenstorrent/tt-metal/tree/ctr-lelanchelian/resnet50-forge-fe-op-tests
+  logs   .../quasar_analysis/forge_fe_bf16_runs/{all_ops.log, dispatch_attestation.json, SUMMARY.txt}
+  Sheet 5 of the workbook carries a SHA-pinned permalink to the test file and to the run log on
+  every row.
 
 PER-TEST LEDGER
   resnet50_forge_bf16_vs_quasar.xlsx, SHEET 5 "Unit tests (Quasar run)" -- one row per test, 119
@@ -46,22 +59,19 @@ PER-TEST LEDGER
 --------------------------------------------------------------------------------------------------
 PER OP KIND
 --------------------------------------------------------------------------------------------------
-OP                    FILES  TESTS  PASS  FAIL  XFAIL   NOTE
-ttnn.conv2d              53     53     0    53      0   causes A (33) and B (20)
-ttnn.add                 16     16    16     0      0
-ttnn.relu                16     32    16     0     16   gap; the 16 fused-add workarounds all pass
-ttnn.reshape              2      2     2     0      0
-ttnn.permute              1      2     1     0      1   gap; the transpose x2 workaround passes
-ttnn.max_pool2d           1      1     1     0      0   halo and all
-ttnn.mean                 1      2     1     0      1   gap; the avg_pool2d workaround passes
-ttnn.linear               1      1     0     1      0   cause A
-(inventory file)          1     10    10     0      0   9 host-only + 1 device check
-TOTAL                    92    119    47    54     18
+OP                    FILES  TESTS  PASS  FAIL   NOTE
+ttnn.conv2d              53     53     0    53   causes A (33) and B (20)
+ttnn.add                 16     16    16     0
+ttnn.relu                16     16    16     0   no quasar relu -> fused add+RELU, all pass
+ttnn.reshape              2      2     2     0
+ttnn.permute              1      1     1     0   no quasar permute -> transpose x2, passes
+ttnn.max_pool2d           1      1     1     0   halo and all
+ttnn.mean                 1      1     1     0   no quasar mean -> avg_pool2d, passes
+ttnn.linear               1      1     0     1   cause A
+(inventory file)          1     10    10     0   9 host-only + 1 device check
+TOTAL                    92    101    47    54
 
-ttnn.to_layout            0      0     -     -      -   EXCLUDED: 50 sheet-1 rows, layout plumbing
-
-The 18 xfails are the three documented Quasar gaps -- relu x16, permute x1, mean x1 -- each of
-which also has a passing workaround test in the same file (fused add, transpose x2, avg_pool2d).
+ttnn.to_layout            0      0     -     -   EXCLUDED: 50 sheet-1 rows, layout plumbing
 
 --------------------------------------------------------------------------------------------------
 DID IT ACTUALLY RUN ON QUASAR?  (dispatch attestation)
@@ -75,15 +85,15 @@ DID IT ACTUALLY RUN ON QUASAR?  (dispatch attestation)
   attestation.log.
 
   RESULT (2026-09-04)
-    device tests captured : 110
-    arch reported         : Arch.QUASAR   -- all 110, no exceptions
+    device tests captured : 92
+    arch reported         : Arch.QUASAR   -- all 92, no exceptions
     DISPATCHED            : 35 passing tests ran a device program on Quasar
     VIEW                  :  2 -- both reshapes; quasar.reshape is a metadata-only view when the
                                   last dim does not change (0 ns, no device program). Correct ttnn
                                   behaviour, but those two passes do NOT prove device execution.
-    XFAILED               : 18 -- the op does not exist, nothing dispatches by design
+    not an op test        :  1 -- the arch/grid check calls no ttnn op
     failed                : 54, of which 54 REACHED THE DEVICE FIRST
-    total device time     : 5318.3 ms across 147 dispatches
+    total device time     : 9726.4 ms across 147 dispatches (4542.0 ms on passing tests)
 
   Device operations that COMPLETED on passing tests:
     BinaryNgDeviceOperation x32, HaloDeviceOperation, InterleavedToShardedDeviceOperation,

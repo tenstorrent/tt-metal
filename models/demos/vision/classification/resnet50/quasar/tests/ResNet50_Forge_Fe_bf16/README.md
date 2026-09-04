@@ -220,12 +220,13 @@ claim is auditable after the fact rather than a line of prose.
 ### What the attestation run actually reported — 2026-09-04
 
 ```
-device tests captured : 110
-arch reported         : Arch.QUASAR          <- all 110, no exceptions
+device tests captured : 92
+arch reported         : Arch.QUASAR          <- all 92, no exceptions
 DISPATCHED            : 35 passing tests ran a device program on Quasar
 VIEW                  :  2 (both reshapes — metadata-only, 0 ns)
+not an op test        :  1 (the arch/grid check calls no ttnn op)
 failed                : 54, of which 54 reached the device first
-total device-operation time: 5318.3 ms across 147 dispatches
+total device-operation time: 9726.4 ms across 147 dispatches (4542.0 ms on passing tests)
 ```
 
 Device operations that **completed** on passing tests: `BinaryNgDeviceOperation` ×32 (the adds and
@@ -299,24 +300,29 @@ three gaps closes.
 
 ## Status on 2026-09-04 (craq-sim, `Arch.QUASAR`, 8×4)
 
-**119 tests: 47 passed, 54 failed, 18 xfailed.**
+**101 tests: 47 passed, 54 failed, 0 xfailed.** One test per op file, plus 10 in the inventory.
 
 * **Per-test ledger — `resnet50_forge_bf16_vs_quasar.xlsx`, sheet 5 "Unit tests (Quasar run)".**
-  One row per test, 119 rows: the sheet-1 row it replays, the file and function, the quasar op it
-  calls, every operand and attribute **verbatim from sheet 1**, the torch golden, the assertion, the
-  result, the root cause, and a copy-pasteable pytest command. Nothing on it is re-typed. Built by
-  `quasar_analysis/build_sheet5_unit_tests.py`, which then re-reads the written workbook and checks
-  sheet 5 against sheet 1 and against the files on disk (**674 assertions, 0 mismatches, 91/91
-  covered sheet-1 rows, 91/91 op files with a row, + 50 excluded `to_layout` rows = 141**).
-* Log: `quasar_analysis/forge_fe_bf16_runs/all_ops.log`; grouped analysis in `SUMMARY.txt` beside it.
+  101 rows: the sheet-1 row each test replays, the file and function, the quasar op it calls, every
+  operand and attribute **verbatim from sheet 1**, the torch golden, the assertion, the result, the
+  root cause, a copy-pasteable pytest command, and — last two columns — **SHA-pinned GitHub
+  permalinks to the test file and to the run log**, so every row is auditable from the sheet alone.
+  Built by `quasar_analysis/build_sheet5_unit_tests.py`, which re-reads the written workbook and
+  checks it against sheet 1 and the files on disk (**584 assertions, 0 mismatches, 91/91 covered
+  rows, + 50 excluded `to_layout` rows = 141**).
+* **Everything is on the remote**, branch
+  [`ctr-lelanchelian/resnet50-forge-fe-op-tests`](https://github.com/tenstorrent/tt-metal/tree/ctr-lelanchelian/resnet50-forge-fe-op-tests) — the 91 op files, the inventory, the
+  generators, the attestation plugin, and the logs:
+  [`all_ops.log`](https://github.com/tenstorrent/tt-metal/blob/ctr-lelanchelian/resnet50-forge-fe-op-tests/quasar_analysis/forge_fe_bf16_runs/all_ops.log) · [`dispatch_attestation.json`](https://github.com/tenstorrent/tt-metal/blob/ctr-lelanchelian/resnet50-forge-fe-op-tests/quasar_analysis/forge_fe_bf16_runs/dispatch_attestation.json) · [`SUMMARY.txt`](https://github.com/tenstorrent/tt-metal/blob/ctr-lelanchelian/resnet50-forge-fe-op-tests/quasar_analysis/forge_fe_bf16_runs/SUMMARY.txt)
 
 | outcome | count | where |
 |---|---|---|
-| PASS | 47 | all 16 adds, all 16 fused add+relu workarounds, `max_pool2d`, `avg_pool2d`, both reshapes, the transpose-decomposed permute, and the 10 inventory checks |
+| PASS | 47 | 16 adds, 16 fused add+RELU (the relu route), `max_pool2d`, `avg_pool2d` (the mean route), both reshapes, the transpose-decomposed permute, and the 10 inventory checks |
 | FAIL | 54 | 53 convs, the fc |
-| XFAIL | 18 | the three gaps: `relu` ×16, `permute`, `mean` — each with a passing workaround alongside |
+| XFAIL | 0 | by design — see *There is no `xfail` anywhere in this suite* above |
 
-All 54 failures are device-side and fall into **two** causes — neither is a config or test defect:
+All 54 failures are device-side and fall into **two** causes — neither is a config or test defect,
+and the attestation shows **all 54 reached the device before throwing**:
 
 * **A — 34 (33 convs + the fc): `fp32_dest_acc_en=true` is rejected.**
   `program_spec.cpp:1076` — *"Compute kernel 'compute' consumes FP32 DFB 'cb_intermed0' with
