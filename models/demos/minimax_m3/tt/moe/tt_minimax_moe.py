@@ -116,6 +116,10 @@ class TtMiniMaxMoE(LightweightModule):
             topology=topology,
             subdevice_id=None,
         )
+        worst_case_tokens = dispatch_group_size * seq_len_per_chip * num_experts_per_tok
+        assert (
+            max_dispatch_buffer_token_size >= worst_case_tokens
+        ), f"init_zeros=False needs a drop-free dispatch buffer: {max_dispatch_buffer_token_size} < {worst_case_tokens}"
         self.combine_module = TtCombineModule(
             mesh_device=mesh_device,
             dispatch_group_size=dispatch_group_size,
@@ -126,14 +130,10 @@ class TtMiniMaxMoE(LightweightModule):
             cluster_axis=0,
             num_links=num_links,
             topology=topology,
-            # init_zeros=False saves a ~95 us full-buffer zeroing on every chip's critical path per
-            # call. It is safe iff every combine-output slot post_combine_reduce reads is guaranteed
-            # written: (a) pad rows carry the gate's sentinel expert id whose dispatch-table entry is
-            # -1, so pcr skips them; (b) dispatch drops are impossible because the dispatch buffer is
-            # sized for the worst case (dispatch_buffer_capacity_factor=4 in mlp.py — factor 2 could
-            # drop rows under extreme skew, which is what caused the token-0 NaN of 2026-06-29 and
-            # forced init_zeros=True until now). If the factor is ever lowered, this must go back to
-            # True.
+            # No zero-init (~95 us per call): every slot the reduce reads with a non-zero weight is
+            # written because the dispatch buffer is drop-free (asserted above). Slots it reads with
+            # a zero weight (tokens with no local expert, padded rows) may be stale; the Blackhole
+            # FPU gives 0 for NaN*0 and Inf*0, same path as deepseek_v3_d_p prefill.
             init_zeros=False,
         )
         global_expert_idx_tt = ttnn.from_torch(
