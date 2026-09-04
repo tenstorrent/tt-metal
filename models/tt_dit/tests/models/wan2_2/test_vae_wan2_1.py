@@ -1622,7 +1622,7 @@ def test_wan_decoder3d(
 @pytest.mark.parametrize("T", [1, 10], ids=["_1f", "10f"])
 # @pytest.mark.parametrize("mean, std", [(0, 1), (2, 3), (-2, 3)])
 @pytest.mark.parametrize("mean, std", [(0, 1)])
-@pytest.mark.parametrize("t_chunk_size", [1, 4, None], ids=["chunk_1", "chunk_4", "no_cache_full_T"])
+@pytest.mark.parametrize("t_chunk_size", [1, 4, None], ids=["chunk_1", "chunk_4", "no_cache_fullT"])
 @pytest.mark.parametrize(
     "dtype, MIN_PCC, MAX_RMSE",
     [
