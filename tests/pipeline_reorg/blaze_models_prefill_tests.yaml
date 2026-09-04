@@ -1172,6 +1172,43 @@
   sp_config: sc1
 
 
+# MiniMax-M3 traced chunked prefill: the served trace-pool path (capture_trace + per-chunk replay) with two
+# users on DISTINCT prompts, replays interleaved per chunk so the device-valued slot is re-targeted on every
+# replay. Gates (a) traced KV against an eager pass of the same prompts, per slot / layer / tensor
+# (PREFILL_TRACE_VS_EAGER_PCC floor; the expectation is bit-exact) and (b) slot 0 against the golden.
+# 18 layers over the 2-chunk golden keeps it short; the full-depth eager entries above remain the
+# absolute-accuracy gates.
+- name: "(MiniMax-M3-428B) chunked prefill trace accuracy 2-user 18L 10k@5k traced vs eager"
+  cmd: |
+    export LOGURU_LEVEL=INFO
+    export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
+    export PYTHONPATH=${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}
+    export HF_MODEL=/mnt/models/MiniMaxAI/MiniMax-M3-ref/
+    export PREFILL_TRACE_DIR=/mnt/models/MiniMaxAI/MiniMax-M3-ref/golden/longbook_10240
+    export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
+    export EXPERT_DTYPE=bf4
+    export PREFILL_CHUNKED=1
+    export PREFILL_CHUNK_SIZE=5120
+    export PREFILL_NUM_LAYERS=18
+    export PREFILL_NUM_USERS=2
+    export PREFILL_USE_TRACE=1
+    export PREFILL_TRACE_REGION_SIZE=800000000
+    export PREFILL_TPS_ITERS=3
+    mpirun --pernode --tag-output bash -lc '
+      python3 models/demos/minimax_m3/tests/galaxy_prefill_kv_pcc.py
+    '
+  test_type: minimax_prefill_kv_pcc
+  test_tags: [minimax_m3, transformer, kv_cache]
+  test_group: module
+  skus:
+    bh_sc1:
+      # 18L weight load + 2-bucket compile sweep + eager reference pass + capture + 3 traced passes +
+      # two 2-slot readbacks (eager reference, traced). Cold weight-cache build will exceed this.
+      timeout: 45
+  owner_id: U08ECJQ848G # Viacheslav Melnykov
+  team: models
+  sp_config: sc1
+
 # ===== Mistral-Small-4-119B ============================================================================
 
 # Also carries the llama4 query-temperature tests. Mistral's query scale is the reason this model
