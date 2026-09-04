@@ -1,6 +1,6 @@
 # Plan: FSD-backed topology map + Control Plane downed-links API
 
-**Status:** Implementation plan. Nothing here is built yet **except its dependency**: §5.5's decision that mapper identity is `(host_id, tray, loc)` shipped as [`PLAN_physical_node_id.md`](PLAN_physical_node_id.md) slices 1–4, so the mapper is already keyed on `PhysicalNodeId` and §5.2's canonicalization already exists as a function to call. Not yet written: `LinkHealth` (§2–§3), `diff_physical_system_descriptors` (§6), the ControlPlane wiring and forwarders (§7), and all three test files (§8).
+**Status:** In progress. Landed: §5.5's mapper identity, via [`PLAN_physical_node_id.md`](PLAN_physical_node_id.md) slices 1–4, so the mapper is already keyed on `PhysicalNodeId` and §5.2's canonicalization exists as a function to call; and §6's `diff_physical_system_descriptors` with its offline tests. Not yet written: `LinkHealth` (§2–§3), the host filter and its rank-agreement protocol (§5.1–§5.4), the ControlPlane wiring and forwarders (§7), and the `test_link_health.cpp` / `test_fsd_psd_e2e.cpp` halves of §8.
 **Umbrella:** [tenstorrent/tt-metal#52859](https://github.com/tenstorrent/tt-metal/issues/52859)
 **Contract:** [`README_downed_links_contract.md`](README_downed_links_contract.md)
 **Depends on (already on main):** RTOptions FSD path ([#53451](https://github.com/tenstorrent/tt-metal/pull/53451)), `build_physical_descriptor_from_file` ([#53857](https://github.com/tenstorrent/tt-metal/pull/53857)), `filter_factory_descriptor`
@@ -756,6 +756,19 @@ assert one specific mapping will need a re-baseline; that is expected and is the
 
 ## 6. `diff_physical_system_descriptors`
 
+**Built.** `physical_system_descriptor.hpp` declares it, `physical_system_descriptor_diff.cpp`
+implements it, `test_physical_system_descriptor_diff.cpp` covers §8's list. Two notes on what shipped:
+
+- **`mismatched_asics` is a board-type disagreement, not a tray one.** §8 below asked for "tray
+  mismatch → `mismatched_asics`", which cannot happen: tray is part of the address, so a chip that
+  moved trays is one address that lost its chip and another that gained one. It reads as
+  `missing_asics` + `extra_asics`, and there is a test pinning exactly that. Board type is the
+  attribute that *can* differ at a fixed address, and it is §5.3 case 7's fatal.
+- **The link maps are flat across hosts**, resolving §10.1 #12: a cable is not a property of one host,
+  and filing a cross-host cable under one of its two ends would be arbitrary. Repeated destination
+  entries within one `AsicTopology` are merged before comparing, which #12 warned would otherwise
+  produce false misses; there is a test for that shape too.
+
 ```cpp
 // physical_system_descriptor.hpp / physical_system_descriptor_diff.cpp
 namespace tt::tt_metal {
@@ -763,19 +776,16 @@ namespace tt::tt_metal {
 struct PhysicalSystemDelta {
     std::vector<AsicID> missing_asics;
     std::vector<AsicID> extra_asics;
-    AsicTopology missing_links;  // both endpoints, same shape as descriptor graph
+    std::vector<AsicID> mismatched_asics;  // same address, different board type
+    AsicTopology missing_links;  // flat across hosts; each cable as both directed halves
     AsicTopology extra_links;
-    AsicTopology mismatched_links;  // same LinkKey, different port_type / is_local
-    std::vector<AsicID> mismatched_asics;
+    AsicTopology mismatched_links;  // same two endpoints, different port_type / is_local
 
-    bool matches() const {
-        return missing_asics.empty() && extra_asics.empty() &&
-               missing_links.empty() && extra_links.empty() &&
-               mismatched_links.empty() && mismatched_asics.empty();
-    }
+    bool matches() const;
 };
 
 // PRECONDITION: none on AsicID space. Join by physical position.
+// Fatal if either descriptor has two ASICs at one address -- the join would be ambiguous.
 PhysicalSystemDelta diff_physical_system_descriptors(
     const PhysicalSystemDescriptor& golden, const PhysicalSystemDescriptor& candidate);
 
