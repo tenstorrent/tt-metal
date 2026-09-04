@@ -26,13 +26,21 @@ legitimately depend on that, and it did: WRONG at both tile counts, 0.958560 thr
 descriptor call, so the pass ran on whatever the init left. It now calls
 `unpack_geometry_to(block, vec)` beside the reconfig, and rows 1 and 2 are exact.
 
-FINDING 2 -- a matmul does not restore its operand descriptors after another pass moves
-them. Rows 3 to 6, all with `matmul_init<Row, Blk>` naming the matmul's own shapes:
+FINDING 2 -- a matmul did not restore its operand descriptors after another pass moved
+them -- FIXED. Rows 3 to 6, all with `matmul_init<Row, Blk>` naming the matmul's own shapes.
+What they measured before the fix:
 
     matmul alone                    exact
     bcast, then the matmul          BROKEN     <- was exact before finding 1 was fixed
     SFPU, then the matmul           BROKEN
     matmul, then the SFPU           exact, both
+
+`Strategy<FPUFusion>::run` and `::run_banded` now call
+`unpack_geometry_to(node.in1_dfb, node.in0_dfb)` beside the `matmul_block_init` at their
+entry. That is EXACTLY the call matmul_init makes for the unpack side, reversed to match:
+`compute_kernel_hw_startup<SrcOrder::Reverse>` resolves src_a_cb = icb1 and src_b_cb = icb0
+before calling `llk_unpack_hw_configure(src_a_cb, src_b_cb)`, so in1 is srcA and in0 is srcB
+(compute_kernel_hw_startup.h:60-64). All sixteen rows are exact.
 
 THIS TABLE CHANGED WHEN FINDING 1 WAS FIXED, and the change is the most useful thing in it.
 Row 4 used to be exact, and it was exact only because the bcast programmed nothing. Now that
@@ -50,29 +58,67 @@ because "a broadcast, a reduction or an SFPU pass reconfigures the unpack and ma
 itself, so a matmul that FOLLOWS one -- as attention's second matmul does -- would otherwise
 run against another op's state and return garbage". Exactly right, and the call it reaches
 for carries the block dimensions and the formats and not the tile descriptors. So a matmul
-programs its block dimensions per pass and its operand geometry never, and it is right only
-while nothing has moved what matmul_init left. That is the next thing to fix, and rows 4 and
-5 are the two witnesses for it.
+programmed its block dimensions per pass and its operand geometry never, and was right only
+while nothing had moved what matmul_init left. Rows 4 and 5 are the two witnesses, and the
+call now sits directly under that comment.
 
-Whatever fixes it should be measured the way the bcast fix was. The bcast call itself is free
-on the matmul sweep and costs +0.6% on the d64 prefill configs, which is the work. The
-matching one-liner in `bias_finish` was backed out instead: +0.44% on every L1-mode matmul
-cell for a call the sweep never executes, because `via_bias` is a runtime bool so the whole
-epilogue is EMITTED for L1 mode and elided for Dst. A descriptor call on the matmul entry
-path is on every matmul in the sweep, so its cost will be real rather than layout, and it
-wants the same A/B plus an A/A control -- the noise floor on this baseline is worst-cell
-1.4%, which is larger than any per-cell number either fix produced.
+Both fixes were measured the way this repo measures things. The bcast call is free on the
+matmul sweep and costs +0.6% on the d64 prefill configs, which is the work. The matching
+one-liner in `bias_finish` was backed out instead: +0.44% on every L1-mode matmul cell for a
+call the sweep never executes, because `via_bias` is a runtime bool so the whole epilogue is
+EMITTED for L1 mode and elided for Dst.
+
+The matmul entry cost +1.16% mean and +7.2% worst as first written, and the shape of that
+number is what gave it away: a FLAT 0.14us on every cell, +4.5% on the smallest and +0.1% on
+the largest. A one-off, not per-tile work -- `matmul_init` and `compute_init` program the
+descriptors at kernel entry and did not tell the memo, so the first pass of every homogeneous
+kernel reprogrammed what was already in place. `unpack_geometry_assume` / `pack_geometry_assume`
+record it instead, and the cost fell to
+
+    mean +0.30%   worst +3.1% at matmul l1/kb1/kt8/rt1/ct1
+
+against an A/A noise floor of mean -0.04% and worst 1.4%. What remains is the memo compare
+itself -- two table loads and two compares per pass boundary -- and it lands on the L1 cells
+rather than the Dst ones because L1 mode enters `run` once per k-block plus the finish pass,
+so it crosses more boundaries. Folding the geometry word to a literal via a `pack_to<DfbId>()`
+style template form is the outstanding way to recover it.
+
+ON CODE SIZE, because the matmul entry is on every matmul and that was the worry. It costs
+nothing. Measured on test_unified_flash.py's q-loop (sq=4, nq=4, sk=4) config with
+LIGHTWEIGHT_KERNEL_ASSERTS on, which is the largest program either suite builds:
+
+    HEAD                          73488
+    the two calls added           73488     <- no change
+    ... and marked noinline       74080     <- +592, so they are NOT marked noinline
+
+A `noinline` on the geometry helpers was tried, on the theory that a helper inlined into
+every `Strategy<FPUFusion>::run` instantiation was the cost. It is not: LTO already shares
+what it can, and forcing the call out of line costs more than it saves. Reverted.
+
+SEPARATELY, AND NOT CAUSED BY ANY OF THIS: those numbers are all over the 70656 kernel config
+buffer, so `test_unified_flash.py` cannot launch that config with lightweight asserts enabled
+-- at HEAD, 2832 bytes over, before any of this landed. It passes with asserts off, which is
+why it went unnoticed, and it fails in `run_unified_tests.sh` because the sweep turns asserts
+on. That is its own defect and wants its own fix; the biggest single symbol in that build is
+`kernel_main` at 10376 bytes, and each distinct matmul SHAPE costs about 6.5KB across its
+IPA-CP clones. Disabling those clones is not the lever -- `-fno-ipa-cp-clone` makes the same
+translation unit 41% bigger, because each clone is a specialisation that replaces a larger
+general version rather than duplicating it.
 
 Still distinct from the matmul limitation A3 records: that one is two matmul SHAPES in one
 body, and rows 4 and 5 have a single matmul with a non-matmul pass in front.
 
-ROWS 7 AND 8 ARE THE TRAP, and they are the reason this test runs every row at TWO tile
+ROWS 7 AND 8 WERE THE TRAP, and they are the reason this test runs every row at TWO tile
 counts rather than one. A mid-body re-init -- `ckernel::init_sfpu` naming the operands the
-matmul is about to use -- makes the matmul come back exact at wt=1 and does NOT fix it at
+matmul was about to use -- made the matmul come back exact at wt=1 and did NOT fix it at
 wt=4:
 
-    SFPU, re-init, then matmul    wt=1  face0=16/16 face1=16/16     <- looks fixed
-    SFPU, re-init, then matmul    wt=4  face0=29/64 face1=35/64     <- is not
+    SFPU, re-init, then matmul    wt=1  face0=16/16 face1=16/16     <- looked fixed
+    SFPU, re-init, then matmul    wt=4  face0=29/64 face1=35/64     <- was not
+
+Both are exact at both counts now, and the re-init in them is REDUNDANT rather than
+load-bearing: the matmul entry programs its own operands, so there is nothing left for a
+hand re-init to repair.
 
 wt is the matmul's kt_dim, so wt=1 is one k-step and wt=4 walks four, and a k-step re-reads
 srcB. `init_sfpu(in, out)` forwards to `unpack_hw_configure(in, in)`, which programs srcA
@@ -83,24 +129,26 @@ wt=1-only test reports this as a working workaround.
 The `pack_to_forget()` that mixed_geometry's MG_REINIT pairs it with makes no difference in
 either direction, which rows 7 and 8 exist to say.
 
-So there is no kernel-level workaround: the one-operand re-init is the only form `u::`
-exposes, `matmul_init` cannot be re-run (compute_kernel_hw_startup is MMIO plus a pack-sync
-init and the second call hangs), and a raw two-operand `llk_unpack_hw_configure(a, b)` from
-a kernel body is not something to ship. It has to be fixed inside the FPU path.
+There was no kernel-level workaround, which is why it was fixed inside the FPU path: the
+one-operand re-init is the only form `u::` exposes, `matmul_init` cannot be re-run
+(compute_kernel_hw_startup is MMIO plus a pack-sync init and the second call hangs), and a
+raw two-operand `llk_unpack_hw_configure(a, b)` from a kernel body is not something to
+ship.
 
 Note for anyone reading A3's blaze bisect: an attempt there read 0.599 -> 0.396 and was
 recorded as "no workaround", then re-measured as working. Both readings were partial -- the
 first measured a body with a trailing copy() after the matmul, the second a single-tile
 matmul. The two tile counts here are what settle it.
 
-THE EXPECTATIONS PIN TODAY'S BEHAVIOUR, so this suite is GREEN while the defect is present
-and says loudly which rows are wrong. `--expect-fixed` is the switch to flip when the fix
-lands; it asserts every row exact, which is what the fix has to deliver.
+EVERY ROW MUST NOW BE EXACT. This suite pinned today's behaviour while the two defects were
+live, and `--expect-fixed` was the switch to flip when they were fixed; both are fixed, so
+the pins are gone and the flag with them. A wrong number here is a regression, and the row it
+appears on says which half broke -- which is the whole reason the bodies were kept after they
+stopped disagreeing.
 
     export TT_METAL_HOME=$PWD
     source python_env/bin/activate
-    python test_unified_pass_order.py                  # all eight rows
-    python test_unified_pass_order.py --expect-fixed    # assert them all exact
+    python test_unified_pass_order.py     # eight bodies, each at two tile counts
 """
 
 import argparse
@@ -130,27 +178,29 @@ FACE = 16  # a row-form tile is two faces of 1x16; face 1 is the one that goes m
 TILE_COUNTS = [1, 4]
 
 VARIANTS = [
+    # name                                defines                        stores sq / row
     # ---- Finding 1: an all-32x32 bcast, and the init is the only variable ----
-    ("bcast alone, init on 32x32", ["PO_BCAST"], True, None, True, None),
-    # Exact since the bcast strategy programs its own descriptors. It was WRONG at both tile
-    # counts before that, which was finding 1: an all-32x32 body whose answer depended on
-    # what the init named.
-    ("bcast alone, init on row", ["PO_BCAST", "PO_ROW_INIT"], True, None, True, None),
+    ("bcast alone, init on 32x32", ["PO_BCAST"], True, None),
+    # This is the finding-1 body. It was WRONG at both tile counts: an all-32x32 broadcast
+    # whose answer depended on what the init named.
+    ("bcast alone, init on row", ["PO_BCAST", "PO_ROW_INIT"], True, None),
     # ---- Finding 2: the matmul names its own shapes throughout ----
-    ("matmul alone", [], None, True, None, True),
-    # Both halves flipped when finding 1 was fixed, and the row half flipped the WRONG way.
-    # The 32x32 store is exact now: it programs its own descriptors rather than inheriting
-    # the row geometry matmul_init named. And the matmul after it is now broken exactly as
-    # it is after the SFPU pass below -- because the bcast used to disturb nothing only by
-    # virtue of programming nothing. So finding 2 is not about the SFPU path: ANY pass that
-    # programs operand geometry ahead of a matmul breaks it, and fixing finding 1 is what
-    # made that visible.
-    ("bcast, then matmul", ["PO_BCAST_FIRST"], True, False, True, False),
-    ("SFPU, then matmul", ["PO_SFPU_FIRST"], True, False, True, False),
-    ("matmul, then SFPU", ["PO_SFPU_LAST"], True, True, True, True),
-    # ---- The mid-body re-init, which LOOKS like a repair at wt=1 and is not one ----
-    ("SFPU, re-init, then matmul", ["PO_SFPU_FIRST", "PO_REINIT"], True, True, True, False),
-    ("SFPU, re-init w/o forget, matmul", ["PO_SFPU_FIRST", "PO_REINIT_NO_FORGET"], True, True, True, False),
+    ("matmul alone", [], None, True),
+    # These two are the finding-2 bodies, and they broke in opposite eras. "SFPU, then
+    # matmul" was broken from the start. "bcast, then matmul" was EXACT until finding 1 was
+    # fixed and broke the moment the bcast started programming its own descriptors -- it was
+    # never a control, only a pass that happened to disturb nothing.
+    ("bcast, then matmul", ["PO_BCAST_FIRST"], True, True),
+    ("SFPU, then matmul", ["PO_SFPU_FIRST"], True, True),
+    ("matmul, then SFPU", ["PO_SFPU_LAST"], True, True),
+    # ---- The mid-body re-init, which LOOKED like a repair at wt=1 and was not one ----
+    # Both were 29/64 and 35/64 at wt=4 while reading a clean 16/16 at wt=1. They are exact
+    # at both counts now, and REDUNDANT rather than load-bearing: the matmul entry programs
+    # its own operands, so nothing is left for a hand re-init to repair. Kept because a
+    # regression would show here first, and because the wt=1 / wt=4 disagreement is the
+    # reason this suite runs every body at two tile counts.
+    ("SFPU, re-init, then matmul", ["PO_SFPU_FIRST", "PO_REINIT"], True, True),
+    ("SFPU, re-init w/o forget, matmul", ["PO_SFPU_FIRST", "PO_REINIT_NO_FORGET"], True, True),
 ]
 
 
@@ -230,11 +280,6 @@ def measure(device, defines, nt, tol):
 def main(argv=None):
     p = argparse.ArgumentParser()
     p.add_argument("--rel-err", type=float, default=0.02, help="max elementwise relative error")
-    p.add_argument(
-        "--expect-fixed",
-        action="store_true",
-        help="assert every row exact, instead of pinning today's behaviour",
-    )
     args = p.parse_args(argv)
 
     device = ttnn.open_device(device_id=0)
@@ -245,34 +290,32 @@ def main(argv=None):
 
     failed = []
     for variant, per_nt in zip(VARIANTS, measured):
-        name, defines = variant[0], variant[1]
+        name, defines, stores_sq, stores_row = variant
         for nt, (sq, face0, face1, per_face) in zip(TILE_COUNTS, per_nt):
-            # Expectations are per tile count: index 2/3 are wt=1, 4/5 are wt=4 where the
-            # variant gives them, else the wt=1 pair applies to both.
-            want_sq, want_row = (variant[2], variant[3]) if nt == 1 or len(variant) < 6 else (variant[4], variant[5])
             row_ok = face0 == per_face and face1 == per_face
             logger.info(
                 f"{name:33s} wt={nt}  "
-                f"blk={('exact' if sq else 'WRONG') if want_sq is not None else 'n/a':5s}  "
-                f"row: {f'face0={face0}/{per_face} face1={face1}/{per_face}' if want_row is not None else 'n/a'}"
+                f"blk={('exact' if sq else 'WRONG') if stores_sq else 'n/a':5s}  "
+                f"row: {f'face0={face0}/{per_face} face1={face1}/{per_face}' if stores_row else 'n/a'}"
             )
-            # None stays None under --expect-fixed: the body does not store that buffer, so
-            # there is nothing there to be right.
-            exp_sq = (True if want_sq is not None else None) if args.expect_fixed else want_sq
-            exp_row = (True if want_row is not None else None) if args.expect_fixed else want_row
-            if (exp_sq is not None and sq != exp_sq) or (exp_row is not None and row_ok != exp_row):
+            # Every body that stores a buffer must be exact in it. There is no per-body
+            # expectation left to carry: the two findings this suite was written for are
+            # both fixed, so a wrong number here is a REGRESSION rather than a pin.
+            if (stores_sq and not sq) or (stores_row and not row_ok):
                 failed.append(f"{name} (wt={nt})")
 
     if failed:
         logger.error(f"FAIL: {failed}")
         logger.error(
-            "'bcast alone, init on row' wrong means the broadcast path is not programming "
-            "its operands' geometry and inherits the init's. 'SFPU, then matmul' wrong "
-            "means the FPU path's geometry memo was not invalidated when the SFPU path "
-            "reprogrammed the same descriptor. See unified_blaze_integration_spec.md A3."
+            "a wrong 32x32 store on a bcast body means Strategy<BcastFusion> is not "
+            "programming its operands' descriptors. A wrong row store on a body with a "
+            "pass in front of the matmul means the matmul entry is not putting its own "
+            "descriptors back -- and if that shows only at wt=4, whatever programmed them "
+            "did it from ONE buffer, so srcB is wrong from the second k-step on. See "
+            "unified_blaze_integration_spec.md A3."
         )
         return 1
-    logger.info("PASS" + (" (all exact)" if args.expect_fixed else " (defect pinned as expected)"))
+    logger.info("PASS (all exact)")
     return 0
 
 

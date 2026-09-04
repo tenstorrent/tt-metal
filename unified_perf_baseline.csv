@@ -558,3 +558,175 @@ bcast-only-geometry,691e40dab2a,2026-09-04,llama_prefill,Phi-3 mini 3.8B/d96/S51
 bcast-only-geometry,691e40dab2a,2026-09-04,llama_prefill,Qwen3 0.6B/d128/S512,221.2
 bcast-only-geometry,691e40dab2a,2026-09-04,llama_prefill,Llama 3.2 3B/d128/S512,221.3
 bcast-only-geometry,691e40dab2a,2026-09-04,llama_prefill,Gemma 3 1B/d256/S512,308.8
+no-matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt8/rt1/ct1,3.36
+no-matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt8/rt1/ct4,6.27
+no-matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt8/rt1/ct8,10.05
+no-matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt8/rt4/ct1,6.31
+no-matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt8/rt4/ct4,12.63
+no-matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt8/rt4/ct8,21.37
+no-matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt8/rt8/ct1,10.22
+no-matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt8/rt8/ct4,20.97
+no-matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt8/rt8/ct8,36.39
+no-matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt32/rt1/ct1,8.17
+no-matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt32/rt1/ct4,18.50
+no-matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt32/rt1/ct8,32.02
+no-matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt32/rt4/ct1,18.74
+no-matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt32/rt4/ct4,40.28
+no-matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt32/rt4/ct8,71.29
+no-matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt32/rt8/ct1,32.86
+no-matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt32/rt8/ct4,69.94
+no-matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt32/rt8/ct8,123.61
+no-matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt8/rt1/ct1,3.60
+no-matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt8/rt1/ct4,6.81
+no-matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt8/rt1/ct8,10.92
+no-matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt8/rt4/ct1,6.87
+no-matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt8/rt4/ct4,13.48
+no-matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt8/rt4/ct8,23.09
+no-matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt8/rt8/ct1,11.07
+no-matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt8/rt8/ct4,22.68
+no-matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt8/rt8/ct8,39.73
+no-matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt32/rt1/ct1,8.45
+no-matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt32/rt1/ct4,18.99
+no-matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt32/rt1/ct8,32.89
+no-matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt32/rt4/ct1,19.25
+no-matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt32/rt4/ct4,41.15
+no-matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt32/rt4/ct8,72.97
+no-matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt32/rt8/ct1,33.73
+no-matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt32/rt8/ct4,71.62
+no-matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt32/rt8/ct8,126.93
+no-matmul-geometry,b2d8d8b6e2d,2026-09-04,llama_prefill,Llama 3.2 1B/d64/S512,178.4
+no-matmul-geometry,b2d8d8b6e2d,2026-09-04,llama_prefill,Qwen2.5 0.5B/d64/S512,178.4
+no-matmul-geometry,b2d8d8b6e2d,2026-09-04,llama_prefill,TinyLlama 1.1B/d64/S512,178.4
+no-matmul-geometry,b2d8d8b6e2d,2026-09-04,llama_prefill,Phi-3 mini 3.8B/d96/S512,200.6
+no-matmul-geometry,b2d8d8b6e2d,2026-09-04,llama_prefill,Qwen3 0.6B/d128/S512,221.3
+no-matmul-geometry,b2d8d8b6e2d,2026-09-04,llama_prefill,Llama 3.2 3B/d128/S512,221.4
+no-matmul-geometry,b2d8d8b6e2d,2026-09-04,llama_prefill,Gemma 3 1B/d256/S512,308.9
+matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt8/rt1/ct1,3.51
+matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt8/rt1/ct4,6.41
+matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt8/rt1/ct8,10.15
+matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt8/rt4/ct1,6.45
+matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt8/rt4/ct4,12.74
+matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt8/rt4/ct8,21.46
+matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt8/rt8/ct1,10.34
+matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt8/rt8/ct4,21.10
+matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt8/rt8/ct8,36.51
+matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt32/rt1/ct1,8.32
+matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt32/rt1/ct4,18.55
+matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt32/rt1/ct8,32.14
+matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt32/rt4/ct1,18.84
+matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt32/rt4/ct4,40.38
+matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt32/rt4/ct8,71.41
+matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt32/rt8/ct1,32.97
+matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt32/rt8/ct4,70.13
+matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt32/rt8/ct8,123.75
+matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt8/rt1/ct1,3.86
+matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt8/rt1/ct4,7.08
+matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt8/rt1/ct8,11.14
+matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt8/rt4/ct1,7.07
+matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt8/rt4/ct4,13.70
+matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt8/rt4/ct8,23.28
+matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt8/rt8/ct1,11.27
+matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt8/rt8/ct4,22.91
+matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt8/rt8/ct8,39.99
+matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt32/rt1/ct1,8.65
+matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt32/rt1/ct4,19.23
+matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt32/rt1/ct8,33.13
+matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt32/rt4/ct1,19.47
+matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt32/rt4/ct4,41.38
+matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt32/rt4/ct8,73.25
+matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt32/rt8/ct1,33.96
+matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt32/rt8/ct4,71.91
+matmul-geometry,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt32/rt8/ct8,127.19
+matmul-geometry,b2d8d8b6e2d,2026-09-04,llama_prefill,Llama 3.2 1B/d64/S512,178.4
+matmul-geometry,b2d8d8b6e2d,2026-09-04,llama_prefill,Qwen2.5 0.5B/d64/S512,178.4
+matmul-geometry,b2d8d8b6e2d,2026-09-04,llama_prefill,TinyLlama 1.1B/d64/S512,178.3
+matmul-geometry,b2d8d8b6e2d,2026-09-04,llama_prefill,Phi-3 mini 3.8B/d96/S512,201.7
+matmul-geometry,b2d8d8b6e2d,2026-09-04,llama_prefill,Qwen3 0.6B/d128/S512,223.0
+matmul-geometry,b2d8d8b6e2d,2026-09-04,llama_prefill,Llama 3.2 3B/d128/S512,223.1
+matmul-geometry,b2d8d8b6e2d,2026-09-04,llama_prefill,Gemma 3 1B/d256/S512,310.8
+matmul-geometry-aa,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt8/rt1/ct1,3.46
+matmul-geometry-aa,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt8/rt1/ct4,6.38
+matmul-geometry-aa,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt8/rt1/ct8,10.15
+matmul-geometry-aa,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt8/rt4/ct1,6.43
+matmul-geometry-aa,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt8/rt4/ct4,12.75
+matmul-geometry-aa,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt8/rt4/ct8,21.48
+matmul-geometry-aa,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt8/rt8/ct1,10.34
+matmul-geometry-aa,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt8/rt8/ct4,21.08
+matmul-geometry-aa,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt8/rt8/ct8,36.55
+matmul-geometry-aa,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt32/rt1/ct1,8.27
+matmul-geometry-aa,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt32/rt1/ct4,18.57
+matmul-geometry-aa,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt32/rt1/ct8,32.14
+matmul-geometry-aa,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt32/rt4/ct1,18.90
+matmul-geometry-aa,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt32/rt4/ct4,40.38
+matmul-geometry-aa,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt32/rt4/ct8,71.40
+matmul-geometry-aa,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt32/rt8/ct1,32.98
+matmul-geometry-aa,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt32/rt8/ct4,70.09
+matmul-geometry-aa,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt32/rt8/ct8,123.71
+matmul-geometry-aa,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt8/rt1/ct1,3.88
+matmul-geometry-aa,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt8/rt1/ct4,7.01
+matmul-geometry-aa,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt8/rt1/ct8,11.13
+matmul-geometry-aa,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt8/rt4/ct1,7.10
+matmul-geometry-aa,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt8/rt4/ct4,13.71
+matmul-geometry-aa,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt8/rt4/ct8,23.31
+matmul-geometry-aa,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt8/rt8/ct1,11.30
+matmul-geometry-aa,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt8/rt8/ct4,22.93
+matmul-geometry-aa,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt8/rt8/ct8,39.98
+matmul-geometry-aa,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt32/rt1/ct1,8.64
+matmul-geometry-aa,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt32/rt1/ct4,19.25
+matmul-geometry-aa,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt32/rt1/ct8,33.15
+matmul-geometry-aa,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt32/rt4/ct1,19.53
+matmul-geometry-aa,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt32/rt4/ct4,41.39
+matmul-geometry-aa,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt32/rt4/ct8,73.25
+matmul-geometry-aa,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt32/rt8/ct1,33.93
+matmul-geometry-aa,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt32/rt8/ct4,71.88
+matmul-geometry-aa,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt32/rt8/ct8,127.20
+matmul-geometry-aa,b2d8d8b6e2d,2026-09-04,llama_prefill,Llama 3.2 1B/d64/S512,178.4
+matmul-geometry-aa,b2d8d8b6e2d,2026-09-04,llama_prefill,Qwen2.5 0.5B/d64/S512,178.4
+matmul-geometry-aa,b2d8d8b6e2d,2026-09-04,llama_prefill,TinyLlama 1.1B/d64/S512,178.5
+matmul-geometry-aa,b2d8d8b6e2d,2026-09-04,llama_prefill,Phi-3 mini 3.8B/d96/S512,201.6
+matmul-geometry-aa,b2d8d8b6e2d,2026-09-04,llama_prefill,Qwen3 0.6B/d128/S512,223.0
+matmul-geometry-aa,b2d8d8b6e2d,2026-09-04,llama_prefill,Llama 3.2 3B/d128/S512,222.9
+matmul-geometry-aa,b2d8d8b6e2d,2026-09-04,llama_prefill,Gemma 3 1B/d256/S512,310.7
+matmul-geometry-seeded,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt8/rt1/ct1,3.37
+matmul-geometry-seeded,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt8/rt1/ct4,6.26
+matmul-geometry-seeded,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt8/rt1/ct8,10.03
+matmul-geometry-seeded,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt8/rt4/ct1,6.39
+matmul-geometry-seeded,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt8/rt4/ct4,12.60
+matmul-geometry-seeded,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt8/rt4/ct8,21.37
+matmul-geometry-seeded,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt8/rt8/ct1,10.22
+matmul-geometry-seeded,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt8/rt8/ct4,20.99
+matmul-geometry-seeded,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt8/rt8/ct8,36.44
+matmul-geometry-seeded,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt32/rt1/ct1,8.18
+matmul-geometry-seeded,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt32/rt1/ct4,18.41
+matmul-geometry-seeded,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt32/rt1/ct8,32.04
+matmul-geometry-seeded,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt32/rt4/ct1,18.73
+matmul-geometry-seeded,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt32/rt4/ct4,40.28
+matmul-geometry-seeded,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt32/rt4/ct8,71.26
+matmul-geometry-seeded,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt32/rt8/ct1,32.88
+matmul-geometry-seeded,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt32/rt8/ct4,69.96
+matmul-geometry-seeded,b2d8d8b6e2d,2026-09-04,matmul,dst/kb1/kt32/rt8/ct8,123.61
+matmul-geometry-seeded,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt8/rt1/ct1,3.71
+matmul-geometry-seeded,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt8/rt1/ct4,6.87
+matmul-geometry-seeded,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt8/rt1/ct8,10.98
+matmul-geometry-seeded,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt8/rt4/ct1,6.93
+matmul-geometry-seeded,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt8/rt4/ct4,13.54
+matmul-geometry-seeded,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt8/rt4/ct8,23.18
+matmul-geometry-seeded,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt8/rt8/ct1,11.14
+matmul-geometry-seeded,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt8/rt8/ct4,22.78
+matmul-geometry-seeded,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt8/rt8/ct8,39.94
+matmul-geometry-seeded,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt32/rt1/ct1,8.48
+matmul-geometry-seeded,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt32/rt1/ct4,19.07
+matmul-geometry-seeded,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt32/rt1/ct8,33.00
+matmul-geometry-seeded,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt32/rt4/ct1,19.37
+matmul-geometry-seeded,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt32/rt4/ct4,41.22
+matmul-geometry-seeded,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt32/rt4/ct8,73.12
+matmul-geometry-seeded,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt32/rt8/ct1,33.82
+matmul-geometry-seeded,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt32/rt8/ct4,71.74
+matmul-geometry-seeded,b2d8d8b6e2d,2026-09-04,matmul,l1/kb1/kt32/rt8/ct8,127.05
+matmul-geometry-seeded,b2d8d8b6e2d,2026-09-04,llama_prefill,Llama 3.2 1B/d64/S512,178.4
+matmul-geometry-seeded,b2d8d8b6e2d,2026-09-04,llama_prefill,Qwen2.5 0.5B/d64/S512,178.5
+matmul-geometry-seeded,b2d8d8b6e2d,2026-09-04,llama_prefill,TinyLlama 1.1B/d64/S512,178.5
+matmul-geometry-seeded,b2d8d8b6e2d,2026-09-04,llama_prefill,Phi-3 mini 3.8B/d96/S512,201.0
+matmul-geometry-seeded,b2d8d8b6e2d,2026-09-04,llama_prefill,Qwen3 0.6B/d128/S512,222.2
+matmul-geometry-seeded,b2d8d8b6e2d,2026-09-04,llama_prefill,Llama 3.2 3B/d128/S512,222.2
+matmul-geometry-seeded,b2d8d8b6e2d,2026-09-04,llama_prefill,Gemma 3 1B/d256/S512,310.1
