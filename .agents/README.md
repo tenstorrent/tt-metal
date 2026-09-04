@@ -37,6 +37,21 @@ hours of unattended work. Results land in `models/autoports/<model>/`, where
 `<model>` is the HF model id lowercased with non-alphanumerics replaced by
 underscores.
 
+Run logs and resume state default to
+`<repo>/bringup/artifacts/multigoal-runs/<UTC timestamp>/`, inside the bringup
+workspace and excluded from Git. `<repo>` is `--repo`, or the current directory
+when omitted. `RUN_MULTIGOAL_LOG_DIR` overrides the parent directory and still
+gets a timestamp subdirectory; `--log-dir DIR` selects the exact run directory.
+Keep both the workspace and Codex home on storage that survives reboots (and
+container recreation, when applicable). `/tmp` is not suitable: losing
+`manifest.txt` loses the runner's mapping from stages to Codex threads.
+
+After an interruption, use `--resume-stage N --log-dir DIR` with the original
+run directory and the same Codex home recorded in its manifest. The Codex home
+contains the session state needed to resume the recorded thread. For older
+runs still logging to `/tmp`, stop the runner and copy the entire log directory
+to persistent storage before rebooting, then resume using the copied directory.
+
 ## How It Works
 
 Each prompt file is one *goal*: a stage with explicit completion requirements.
@@ -148,7 +163,10 @@ but unattended experiments should not rely on it.
 - `--dry-run` — validate the prompt sequence and show what would run.
 - `--check-retries N` / `--no-checks` / `--check-error-policy stop|continue`
   — gate behavior knobs; the defaults are the recommended ones.
-- `--log-dir DIR` — where the manifest, STATUS.md, and per-stage logs go.
+- `--log-dir DIR` — exact directory for the manifest, STATUS.md, and per-stage
+  logs. Defaults to a timestamped directory under
+  `<repo>/bringup/artifacts/multigoal-runs/`, or under `RUN_MULTIGOAL_LOG_DIR`
+  when set.
 
 One sharp edge worth knowing: the agent backend caps a goal's objective at
 4000 characters *after* `HF_MODEL` substitution. The runner validates every

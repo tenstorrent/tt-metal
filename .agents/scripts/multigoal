@@ -243,7 +243,10 @@ def parse_args() -> argparse.Namespace:
         "--log-dir",
         type=pathlib.Path,
         default=None,
-        help="Default: $RUN_MULTIGOAL_LOG_DIR or $TMPDIR/codex-multigoal-runs/<UTC timestamp>",
+        help=(
+            "Exact run directory. Default: $RUN_MULTIGOAL_LOG_DIR/<UTC timestamp> "
+            "or <repo>/bringup/artifacts/multigoal-runs/<UTC timestamp>."
+        ),
     )
     parser.add_argument(
         "--replace",
@@ -1191,7 +1194,7 @@ def main() -> int:
     default_log_root = pathlib.Path(
         os.environ.get(
             "RUN_MULTIGOAL_LOG_DIR",
-            pathlib.Path(os.environ.get("TMPDIR", "/tmp")) / "codex-multigoal-runs",
+            repo / "bringup" / "artifacts" / "multigoal-runs",
         )
     )
     log_dir = args.log_dir or default_log_root / timestamp()

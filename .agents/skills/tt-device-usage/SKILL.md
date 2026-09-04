@@ -13,6 +13,7 @@ Use this skill for the hardware-facing parts of model bringup. It covers only no
 - Close devices before starting the next device-facing command. Kill stale processes from the same run before reset or retry.
 - Keep watcher and profiler evidence in separate runs. Do not combine `TT_METAL_WATCHER` with device-profiler or Tracy collection.
 - Do not profile live vLLM serving stages. Use serving benchmark JSON and logs instead.
+- Before launching a bringup, keep the workspace, multigoal log directory, and `CODEX_HOME` on storage that survives reboot and, when applicable, container recreation. The runner defaults to `<repo>/bringup/artifacts/multigoal-runs/<timestamp>`; any `--log-dir` or `RUN_MULTIGOAL_LOG_DIR` override must also use persistent storage. Do not put resume state in `/tmp`: recovery needs both the manifest's stage/thread mapping and the Codex session state.
 - Preserve evidence before cleanup: work logs, README files, benchmark JSON, server logs, compact perf summaries, and exact failing commands. Do not delete `CODEX_HOME`, auth/config, completed stage artifacts, or the repo state.
 
 ## Reset And Health Checks
@@ -61,7 +62,7 @@ Recovery sequence:
 4. If listing is incomplete after the first successful reset, run the bounded reset sequence once more.
 5. If devices are visible, clear stale TT UMD locks only after confirming no live process from this run owns the devices. Then run the mesh smoke.
 6. If reset, listing, or mesh smoke still fails, ask the monitor/operator for a physical Docker-host reboot and reservation re-acquire. If the current agent explicitly owns experiment monitoring or machine recovery, reboot the host directly and repeat list/reset/list plus mesh smoke after reconnecting.
-7. Resume the same stage from preserved state. In the multigoal flow, use `--resume-stage <stage_number>` instead of restarting completed earlier stages.
+7. Resume the same stage from preserved state. In the multigoal flow, use `--resume-stage <stage_number> --log-dir <preserved_run_directory>` with the same Codex home recorded in the manifest instead of restarting completed earlier stages.
 8. Record this as infrastructure recovery, not a model correctness or performance result.
 
 Do not mark a model stage blocked because a board briefly became undiscoverable. A model stage may block on hardware only after this recovery path fails or requires operator intervention the agent cannot perform.
