@@ -54,6 +54,7 @@ from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transfor
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import cache_root
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import allocate_mla_kvpe_cache
 from models.demos.deepseek_v3_d_p.utils.test_utils import cache_half_pccs, gather_cache_tp0, unrotate_cache_layer
 
@@ -136,6 +137,11 @@ def _compose(mesh_device, tensor):
     ).reshape(-1, KimiK3Config.EMB_SIZE)[:SEQ_LEN]
 
 
+# Almost all of this is reading routed experts out of the TTNN cache, which is a fixed cost per
+# depth and already puts L1 at 254s against pytest.ini's global 300s cap. The rungs that do real
+# work have no headroom left, so give the ladder its own budget rather than let L12 and L24 die
+# on a timeout that has nothing to do with what they measure.
+@pytest.mark.timeout(4800)
 @pytest.mark.parametrize("mesh_device, device_params", PLACEMENTS, indirect=True)
 @pytest.mark.parametrize("num_layers", DEPTHS, ids=[f"L{n}" for n in DEPTHS])
 def test_depth_ladder_matches_golden(mesh_device, device_params, num_layers):
@@ -158,6 +164,9 @@ def test_depth_ladder_matches_golden(mesh_device, device_params, num_layers):
         hidden_size=KimiK3Config.EMB_SIZE,
         eps=KimiK3Config.RMS_NORM_EPS,
         tp_axis=TP_AXIS,
+        # Same pools the KDA layers cycle. AttnRes's private fallback set is only safe while nothing
+        # else has a collective in flight on this axis, which is not true inside a K3 layer stack.
+        tt_ccl=get_tt_ccl(mesh_device),
         weights=load_attn_res_weights(
             mesh_device,
             load_attn_res_state_dict(checkpoint, num_layers, root),
@@ -324,6 +333,9 @@ def test_depth_ladder_matches_golden(mesh_device, device_params, num_layers):
     # its slab and reads it back for causal attention within the chunk, so a wrong write can be
     # partly self-consistent here and only surface at chunk 2, when attention reads the previous
     # chunk's cached KV. The golden ships one file per MLA layer, so there is no reason not to check.
+    # Initialised outside the guard: depths 1 and 2 hold no MLA layer, so there is no cache to
+    # score and the assert below still has to have something to assert on.
+    kv_failures: list[str] = []
     if kvpe is not None and trace.has_kv_cache(model.schedule.mla_layer_ids[0]):
         # The device cache is indexed by rank-local MLA SLOT; the golden by MODEL layer. The
         # schedule is the only thing that knows the mapping, which is exactly why the block never
@@ -339,9 +351,11 @@ def test_depth_ladder_matches_golden(mesh_device, device_params, num_layers):
             logger.info(
                 f"L{num_layers} KV slot {slot} (model layer {model_layer}): " f"lora={pcc_nope:.6f} rope={pcc_pe:.6f}"
             )
-            assert min(pcc_nope, pcc_pe) >= KV_CACHE_PCC, (
-                f"KV cache slot {slot} (model layer {model_layer}) diverged: " f"lora={pcc_nope:.6f} rope={pcc_pe:.6f}"
-            )
+            # Score every slot before failing. Which slots diverge is the whole diagnosis here -- slot 0
+            # alone says the write path works, slots 1..n-1 say the per-slot stride does not -- and
+            # asserting inside the loop throws that away at the first bad one.
+            if min(pcc_nope, pcc_pe) < KV_CACHE_PCC:
+                kv_failures.append(f"slot {slot} (model layer {model_layer}): lora={pcc_nope:.6f} rope={pcc_pe:.6f}")
 
     # Score every layer before asserting on any of them. Asserting inside the loop stops at the
     # first shortfall and hides the shape of the curve after it — and the shape is the diagnosis:
@@ -364,3 +378,7 @@ def test_depth_ladder_matches_golden(mesh_device, device_params, num_layers):
         f"worst layer {worst_idx} diverged from the model: {scores[worst_idx]:.7f} < {layer_pcc}; "
         f"full curve {[f'{i}:{v:.5f}' for i, v in scores.items()]}"
     )
+    # Asserted last, after the residual curve, for the same reason the KV loop scores every slot: a
+    # bad KV slot and a bad residual layer look identical from one assertion, and which of the two
+    # moved is the whole diagnosis. The residual stream is the model; the cache is what it wrote.
+    assert not kv_failures, "KV cache diverged: " + "; ".join(kv_failures)

@@ -118,6 +118,8 @@ def _dram_bytes(mesh_device):
     return view.total_bytes_allocated_per_bank * view.num_banks
 
 
+# Same weight-loading floor as the depth ladder, then eleven chunks of real work on top of it.
+@pytest.mark.timeout(3600)
 @pytest.mark.parametrize("mesh_device, device_params", PLACEMENTS, indirect=True)
 @pytest.mark.parametrize("num_layers", DEPTHS, ids=[f"L{n}" for n in DEPTHS])
 def test_chunked_prefill_carries_kda_state(mesh_device, device_params, num_layers):
