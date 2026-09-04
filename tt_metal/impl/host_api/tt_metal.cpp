@@ -421,7 +421,7 @@ void DispatchCompiledProgramToDevice(IDevice* device, Program& program) {
     ZoneScoped;
 
     auto device_id = device->id();
-    const MetalContext& metal_ctx = MetalContext::instance(extract_context_id(device));
+    MetalContext& metal_ctx = MetalContext::instance(extract_context_id(device));
 
 #ifdef TT_METAL_USE_EMULE
     if (metal_ctx.get_cluster().get_target_device_type() == tt::TargetDevice::Emule) {
@@ -478,6 +478,7 @@ void DispatchCompiledProgramToDevice(IDevice* device, Program& program) {
 
             auto physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
             tt::llrt::write_launch_msg_to_core(
+                MetalEnvAccessor(metal_ctx.get_env()).impl(),
                 device_id,
                 physical_core,
                 local_launch_msg.view(),
@@ -976,10 +977,12 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
                     auto physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
                     not_done_cores.insert(physical_core);
                     if (force_slow_dispatch) {
-                        tt::llrt::send_reset_go_signal(device->id(), physical_core);
+                        tt::llrt::send_reset_go_signal(
+                            MetalEnvAccessor(metal_ctx.get_env()).impl(), device->id(), physical_core);
                     }
 
                     tt::llrt::write_launch_msg_to_core(
+                        MetalEnvAccessor(metal_ctx.get_env()).impl(),
                         device->id(),
                         physical_core,
                         kg->launch_msg.view(),
@@ -989,7 +992,7 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
             }
             if (wait_until_cores_done) {
                 // Wait for all cores to be done
-                llrt::internal_::wait_until_cores_done(device_id, dev_msgs::RUN_MSG_GO, not_done_cores);
+                llrt::internal_::wait_until_cores_done(metal_ctx, device_id, dev_msgs::RUN_MSG_GO, not_done_cores);
             }
         }
     }  // Profiler scope end
@@ -999,9 +1002,10 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
 }
 
 void WaitProgramDone(IDevice* device, Program& program, bool read_device_profiler_results) {
+    auto& metal_ctx = MetalContext::instance(extract_context_id(device));
     auto device_id = device->id();
     std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.impl().logical_cores();
-    llrt::internal_::wait_for_idle(device_id, logical_cores_used_in_program);
+    llrt::internal_::wait_for_idle(metal_ctx, device_id, logical_cores_used_in_program);
     if (read_device_profiler_results) {
         detail::ReadDeviceProfilerResults(device);
     }
@@ -1143,10 +1147,10 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
                 auto it = per_core_cross_node_dfbs.find(logical_core);
                 if (it != per_core_cross_node_dfbs.end() && !it->second.empty()) {
                     TT_FATAL(
-                        cross_node_dfb_offset != REMOTE_DFB_OFFSET_NONE,
+                        cross_node_dfb_offset != CROSS_NODE_DFB_OFFSET_NONE,
                         "CrossNodeDFB participants present but cross_node_dfb_offset is NONE");
                     const uint8_t num_program_slots = program.impl().num_cross_node_dfb_slots();
-                    const uint32_t payload_words = remote_dfb_config_region_words(num_program_slots);
+                    const uint32_t payload_words = cross_node_dfb_config_region_words(num_program_slots);
                     std::vector<uint32_t> cross_node_dfb_vec(payload_words, 0u);
                     cross_node_dfb_vec[0] = num_program_slots;
                     for (const auto& participant : it->second) {
@@ -1155,8 +1159,8 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
                             "CrossNodeDFB sparse participant remote_dfb_id {} exceeds program slot count {}",
                             participant.remote_dfb_id,
                             num_program_slots);
-                        const uint32_t base = REMOTE_DFB_REGION_HEADER_WORDS +
-                                              participant.remote_dfb_id * UINT32_WORDS_PER_REMOTE_DFB_CONFIG;
+                        const uint32_t base = CROSS_NODE_DFB_REGION_HEADER_WORDS +
+                                              participant.remote_dfb_id * CROSS_NODE_DFB_CONFIG_WORDS;
                         cross_node_dfb_vec[base + 0] = participant.config_page_addr;
                         cross_node_dfb_vec[base + 1] = participant.entry_size;
                         cross_node_dfb_vec[base + 2] = participant.relay_dfb_id;
@@ -1170,35 +1174,6 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
                     }
                     uint64_t addr = kernel_config_base + cross_node_dfb_offset;
                     metal_ctx.get_cluster().write_core(device_id, physical_core, cross_node_dfb_vec, addr);
-                }
-
-                // PrefetcherPipe dense index only config pages written to device when the PrefetcherPipe is created.
-                const uint32_t prefetcher_pipe_offset = program_config.prefetcher_pipe_offset;
-                const auto& per_core_prefetcher_pipes = program.impl().get_per_core_prefetcher_pipes();
-                auto persistent_it = per_core_prefetcher_pipes.find(logical_core);
-                if (persistent_it != per_core_prefetcher_pipes.end() && !persistent_it->second.empty()) {
-                    TT_FATAL(
-                        prefetcher_pipe_offset != REMOTE_DFB_OFFSET_NONE,
-                        "PrefetcherPipe participants present but prefetcher_pipe_offset is NONE");
-                    const uint8_t num_program_slots = program.impl().num_prefetcher_pipe_slots();
-                    const uint32_t payload_words = remote_dfb_config_region_words(num_program_slots);
-                    std::vector<uint32_t> prefetcher_pipe_vec(payload_words, 0u);
-                    prefetcher_pipe_vec[0] = num_program_slots;
-                    for (const auto& participant : persistent_it->second) {
-                        TT_FATAL(
-                            participant.prefetcher_pipe_id < num_program_slots,
-                            "PrefetcherPipe sparse participant prefetcher_pipe_id {} exceeds program slot count {}",
-                            participant.prefetcher_pipe_id,
-                            num_program_slots);
-                        const uint32_t base = REMOTE_DFB_REGION_HEADER_WORDS +
-                                              participant.prefetcher_pipe_id * UINT32_WORDS_PER_REMOTE_DFB_CONFIG;
-                        prefetcher_pipe_vec[base + 0] = participant.config_page_addr;
-                        prefetcher_pipe_vec[base + 1] = participant.entry_size;
-                        prefetcher_pipe_vec[base + 2] = participant.relay_dfb_id;
-                    }
-                    uint64_t addr = kernel_config_base + prefetcher_pipe_offset;
-                    MetalContext::instance().get_cluster().write_core(
-                        device_id, physical_core, prefetcher_pipe_vec, addr);
                 }
             }
             program.impl().init_semaphores(*device, logical_core, index);
