@@ -78,11 +78,22 @@ def test_the_two_outcomes_do_not_read_alike(tmp_path):
     assert cut != done
 
 
-def test_a_driver_that_says_nothing_leaves_the_section_as_it_was(tmp_path):
-    for facts in (None, {}, "not a dict", {"can_stop": False}):
+def test_a_driver_that_says_nothing_states_no_reason(tmp_path):
+    """No stop facts, no claim about why the run ended -- and with nothing else to caveat, the
+    section says so rather than going blank or restating findings from the tables above."""
+    for facts in (None, {}, "not a dict"):
         body = _limits(tmp_path, facts)
         assert "round(s) used" not in body, facts
-        assert "no lever beat baseline" in body, "the existing findings must survive"
+        assert "ROUND BUDGET" not in body, facts
+        assert "- none" in body, facts
+
+
+def test_can_stop_false_is_the_driver_saying_something(tmp_path):
+    """Not silence: the gate refused to clear the run, which is the caveat worth printing even when
+    the counters are missing."""
+    body = _limits(tmp_path, {"can_stop": False})
+    assert "ROUND BUDGET" in body, body
+    assert "round(s) used" not in body, "no counters were given, so none may be claimed"
 
 
 def test_the_line_leads_the_section(tmp_path):

@@ -3562,22 +3562,24 @@ def render_summary(
     # this, consider that, the model "may already be" at its floor. A report that is read to
     # VALIDATE a run has to be all checkable statements: a suggestion cannot be true or false, so
     # it cannot be validated, and it crowds the findings it sits between.
-    _won_ops = {attempts[i].get("op_signature") for i in _wins}
-    _no_gain = sorted({o for o in by_op} - {o for o in _won_ops if o})
     lines.append("")
     lines.append("Limitations")
     lines.append("─" * _REPORT_W)
     # A SECTION WITH NOTHING IN IT SAYS SO. The old filler pointed the reader at another report
     # instead, which is advice; "none" is the finding.
     _limits_at = len(lines)
-    # FIRST, because it frames every finding under it: a "no lever beat baseline" list means one
-    # thing in a run the gate cleared and another in a run that was cut off mid-climb.
+    # FIRST, because it frames everything under it: an inconclusive result means one thing in a run
+    # the gate cleared and another in a run that was cut off mid-climb.
     _ended = _why_it_ended(stop_facts)
     if _ended:
         lines.append(_ended)
-    if _no_gain:
-        shown = ", ".join(_op_label(o, 26) for o in _no_gain[:8]) + (" …" if len(_no_gain) > 8 else "")
-        lines.append(f"- {len(_no_gain)} op(s) tried but no lever beat baseline: {shown}")
+    # NO "N op(s) tried but no lever beat baseline" LIST. It restated the two tables above it: the
+    # op x rung matrix already marks every op's every rung, and the per-attempt table already gives
+    # each attempt its verdict -- an op absent from both as a win IS the list, read off the page the
+    # reader is already looking at. Worse, four of its five entries on voxtral had been tried ONCE,
+    # so "no lever beat baseline" read as a verdict on the op when it stated only that one thing was
+    # tried. A caveat section that repeats findings makes the real caveats -- an inconclusive run, a
+    # budget stop -- harder to see.
     _measured = [a for a in attempts if isinstance(a, dict) and a.get("measured_ms") is not None]
     _any_win = bool(_wins)
     if not _measured and attempts:
