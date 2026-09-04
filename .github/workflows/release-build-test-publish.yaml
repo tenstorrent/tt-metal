@@ -32,6 +32,11 @@ on:
         required: false
         default: ""
         type: string
+      ops-test-categories:
+        description: "Categories to run from ops_pnr_tests.yaml (comma-separated)."
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: write
@@ -137,6 +142,23 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enabled-skus: wh_n150,bh_p150
+
+  ttnn-ops-unit-tests:
+    needs: [build-artifact]
+    if: ${{ inputs.tag-version != '' && inputs.platform == inputs.main-platform }}
+    permissions:
+      contents: read
+      packages: read
+    secrets: inherit
+    uses: ./.github/workflows/ops-unit-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enabled-skus: wh_n150_civ2,bh_p150b_civ2
+      additional_test_categories: ${{ inputs.ops-test-categories }}
+      tests-yaml-path: ./tests/pipeline_reorg/ops_pnr_tests.yaml
+      budget-subheading: package_and_release
 
   # Run-level aggregate of per-job AI summaries from release-demo-tests-impl.
   # expected-jobs is the union of single-host and exabox multihost legs so a
