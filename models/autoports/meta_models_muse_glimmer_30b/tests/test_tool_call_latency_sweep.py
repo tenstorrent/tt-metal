@@ -17,6 +17,7 @@ from models.autoports.meta_models_muse_glimmer_30b.doc.serving_perf.tool_call_la
     _append_tool_delta,
     exact_prompt,
     median_row,
+    prompt_messages,
     prompt_tokens,
     source_context,
     source_context_sha256,
@@ -31,7 +32,11 @@ def test_exact_prompt_builds_the_requested_tool_template_length():
         local_files_only=True,
     )
     for target in DEFAULT_ISLS:
-        assert prompt_tokens(tokenizer, exact_prompt(tokenizer, target)) == target
+        prompt = exact_prompt(tokenizer, target)
+        assert prompt_tokens(tokenizer, prompt) == target
+        assert "# Latency padding:" in prompt
+        assert prompt_messages(prompt)[0]["role"] == "system"
+        assert prompt_messages(prompt)[1] == {"role": "user", "content": prompt}
 
 
 def test_prompt_corpus_is_large_tracked_source_with_a_stable_digest():

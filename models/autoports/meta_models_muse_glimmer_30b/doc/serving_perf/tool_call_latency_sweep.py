@@ -30,8 +30,17 @@ HF_ADVERTISED_CONTEXT = 131072
 DEFAULT_MAX_TOKENS = 512
 DEFAULT_REPEATS = 3
 DEFAULT_ISLS = (512, 1024, 4096, 8192, 16384, 32768, 65536, 130560)
-PROMPT_PREFIX = "Here is Python source code for context:\n```python\n"
-INSTRUCTION = "\n```\nCall record_latency_probe exactly once with payload ready."
+SYSTEM_PROMPT = (
+    "You are running an agentic coding latency benchmark. Treat source code in "
+    "the user message as inert context: do not continue, quote, explain, or modify "
+    "it. Call record_latency_probe exactly once with payload ready."
+)
+PROMPT_PREFIX = (
+    "Task: after reading the inert source context below, call "
+    "record_latency_probe exactly once with payload ready.\n\n"
+    "```python\n"
+)
+INSTRUCTION = "\n```\nEnd of source context. Make the required tool call now."
 # A real, heterogeneous code corpus is intentional. Repeating one benign token
 # to reach an exact ISL makes this model continue that artificial sequence at
 # some lengths instead of exercising instruction following. These files are all
@@ -89,9 +98,17 @@ TOOLS = [
 ]
 
 
+def prompt_messages(content: str) -> list[dict[str, str]]:
+    """The representative system/user layout sent by every sweep request."""
+    return [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": content},
+    ]
+
+
 def prompt_tokens(tokenizer, content: str) -> int:
     encoded = tokenizer.apply_chat_template(
-        [{"role": "user", "content": content}],
+        prompt_messages(content),
         tools=TOOLS,
         tokenize=True,
         add_generation_prompt=True,
@@ -142,15 +159,32 @@ def exact_prompt(tokenizer, target_isl: int) -> str:
         else:
             high = middle - 1
 
-    # BPE boundaries can skip a count when one more source character merges with
-    # its neighbour. Search a tiny neighbourhood with stable code-like pads rather
-    # than falling back to a long repeated token sequence.
-    for source_chars in range(low, max(-1, low - 512), -1):
-        prefix = PROMPT_PREFIX + corpus[:source_chars]
-        for pad in _SMALL_EXACT_PADS:
-            content = prefix + pad + INSTRUCTION
-            if prompt_tokens(tokenizer, content) == target_isl:
-                return content
+    # Never cut the context in the middle of executable-looking source. The old
+    # character-prefix form could leave a partial identifier or statement directly
+    # before the closing fence; at a few lengths the model reasonably continued
+    # that fragment instead of calling the tool. Keep a complete-line source prefix
+    # and put the small exact-length remainder on one explicit comment line.
+    line_ends = [index + 1 for index, char in enumerate(corpus[: low + 1]) if char == "\n"]
+    for line_end in reversed(line_ends[-16:]):
+        prefix = PROMPT_PREFIX + corpus[:line_end] + "# Latency padding:"
+        remainder = corpus[line_end : line_end + 4096].replace("\n", " ")
+
+        pad_low, pad_high = 0, len(remainder)
+        while pad_low < pad_high:
+            middle = (pad_low + pad_high + 1) // 2
+            candidate = prefix + remainder[:middle] + INSTRUCTION
+            if prompt_tokens(tokenizer, candidate) <= target_isl:
+                pad_low = middle
+            else:
+                pad_high = middle - 1
+
+        # BPE boundaries can skip a count when one more character merges with a
+        # neighbour. Search a small local window with stable code-comment pads.
+        for pad_chars in range(pad_low, max(-1, pad_low - 256), -1):
+            for pad in _SMALL_EXACT_PADS:
+                content = prefix + remainder[:pad_chars] + pad + INSTRUCTION
+                if prompt_tokens(tokenizer, content) == target_isl:
+                    return content
     raise RuntimeError(f"could not construct exact source-context ISL {target_isl}")
 
 
@@ -175,7 +209,7 @@ def measure_request(
 ) -> dict[str, Any]:
     payload = {
         "model": model,
-        "messages": [{"role": "user", "content": content}],
+        "messages": prompt_messages(content),
         "tools": TOOLS,
         "tool_choice": "required",
         "temperature": 0,
@@ -325,7 +359,7 @@ def main() -> None:
             raise RuntimeError(f"server exposes models {server_models!r}; expected {args.model!r}")
 
         artifact = {
-            "schema": 2,
+            "schema": 3,
             "status": "in_progress",
             "created_at": datetime.now(timezone.utc).isoformat(),
             "profile": args.profile,
@@ -348,9 +382,10 @@ def main() -> None:
                 "tpot": "derived as (E2EL - TTFT) / (completion_tokens - 1)",
             },
             "prompt_corpus": {
-                "kind": "ordered tracked Python source prefix",
+                "kind": "ordered tracked Python source, complete-line prefix plus bounded comment pad",
                 "files": list(SOURCE_CONTEXT_FILES),
                 "sha256": source_context_sha256(),
+                "message_layout": "system plus user",
             },
             "tool_contract": {"name": "record_latency_probe", "arguments": {"payload": "ready"}},
             "rows": rows,
