@@ -49,7 +49,7 @@ std::optional<SMCRuntimeTelemetryBuffer> discover_smc_dispatch_telemetry_control
     }
 
     auto size = firmware_info_provider->get_runtime_telemetry_buffer_size();
-    if (!size.has_value()) {
+    if (!size.has_value() || size.value() == 0) {
         log_debug(tt::LogMetal, "Dispatch telemetry SMC buffer is unavailable");
         return std::nullopt;
     }
@@ -63,7 +63,8 @@ std::optional<SMCRuntimeTelemetryBuffer> discover_smc_dispatch_telemetry_control
     }
 
     auto addr = firmware_info_provider->get_runtime_telemetry_buffer_address();
-    if (!addr.has_value()) {
+    // 0 is unpublished, not a valid buffer. Same class of versim trap as L1 addr_offset == 0.
+    if (!addr.has_value() || addr.value() == 0) {
         log_warning(tt::LogMetal, "Dispatch telemetry SMC buffer address is unavailable or invalid");
         return std::nullopt;
     }

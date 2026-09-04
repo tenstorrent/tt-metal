@@ -97,7 +97,8 @@ Device::Device(
 }
 
 void Device::initialize_smc_dispatch_telemetry_control() {
-    if (context_->rtoptions().get_dispatch_telemetry_disabled()) {
+    // Versim has no firmware, so there is no SMC telemetry buffer to publish.
+    if (context_->rtoptions().get_dispatch_telemetry_disabled() || context_->rtoptions().get_simulator_enabled()) {
         return;
     }
     auto* tt_device = [&]() -> tt::umd::TTDevice* {
@@ -132,7 +133,7 @@ void Device::initialize_smc_dispatch_telemetry_control() {
 }
 
 void Device::invalidate_smc_dispatch_telemetry_control() {
-    if (context_->rtoptions().get_dispatch_telemetry_disabled()) {
+    if (context_->rtoptions().get_dispatch_telemetry_disabled() || context_->rtoptions().get_simulator_enabled()) {
         return;
     }
 
@@ -155,7 +156,7 @@ void Device::invalidate_smc_dispatch_telemetry_control() {
 
 void Device::update_smc_dispatch_telemetry_for_fast_dispatch(
     uint8_t cq_id, const dispatch_telemetry_types::SMCDispatchCoreCoords& coords) {
-    if (context_->rtoptions().get_dispatch_telemetry_disabled()) {
+    if (context_->rtoptions().get_dispatch_telemetry_disabled() || context_->rtoptions().get_simulator_enabled()) {
         return;
     }
 
@@ -184,7 +185,7 @@ void Device::update_smc_dispatch_telemetry_for_fast_dispatch(
 }
 
 void Device::set_smc_dispatch_telemetry_slow_dispatch_enabled(bool enabled) {
-    if (context_->rtoptions().get_dispatch_telemetry_disabled()) {
+    if (context_->rtoptions().get_dispatch_telemetry_disabled() || context_->rtoptions().get_simulator_enabled()) {
         return;
     }
 
