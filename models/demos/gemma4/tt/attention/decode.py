@@ -17,7 +17,9 @@ from models.demos.gemma4.tt.compute_config import (
 )
 
 from .operations import (
+    _fused_qkv_norm_supported,
     apply_allreduce,
+    apply_fused_qkv_head_norm,
     apply_output_projection,
     apply_per_head_norm,
     apply_qkv_projection,
@@ -25,6 +27,7 @@ from .operations import (
     apply_rope_decode_peruser,
     concat_heads,
     effective_block_size,
+    fused_qkv_head_norm_enabled,
     split_qkv_heads_decode,
     split_qkv_heads_prefill,
 )
@@ -101,26 +104,57 @@ def decode_forward(
     # 1. Fused QKV projection
     xqkv = apply_qkv_projection(hidden_states, weights)
 
-    # 2. Split into Q, K, V heads
+    # 2-3. Per-head norms + head split.
+    #
+    # FUSED: one unscaled rms_norm over the fused QKV viewed one head per row,
+    # plus one scale multiply, replaces three single-core per-head norms (and
+    # their three to_memory_config un-shards). Only when this layer actually
+    # runs all three norms — a KV-shared layer throws K/V away, so it would pay
+    # the fused norm to normalise tensors it then discards. See
+    # operations.apply_fused_qkv_head_norm.
+    n_q_local = config.num_attention_heads // tp
+    n_kv_local = 1 if weights.kv_replicated else config.num_key_value_heads // tp
+    use_fused_norm = (
+        fused_qkv_head_norm_enabled()
+        and _fused_qkv_norm_supported(int(xqkv.shape[-2]))
+        and not is_kv_shared
+        and weights.qkv_norm_weight is not None
+        and int(xqkv.shape[-1]) == (n_q_local + 2 * n_kv_local) * config.head_dim
+    )
+    if use_fused_norm:
+        xqkv = apply_fused_qkv_head_norm(
+            xqkv,
+            weights.qkv_norm_weight,
+            config.rms_norm_eps,
+            num_rows=n_q_local + 2 * n_kv_local,
+            head_dim=config.head_dim,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+
     tt_q, tt_k, tt_v = split_qkv_heads_decode(
         xqkv, config, weights.is_global, tp=tp, kv_replicated=weights.kv_replicated
     )
-
-    # 3. Per-head norms (move to DRAM for rms_norm, restore sharded for RoPE)
     q_sharded_mem = tt_q.memory_config()
-    tt_q = ttnn.to_memory_config(tt_q, ttnn.DRAM_MEMORY_CONFIG)
-    tt_q = apply_per_head_norm(tt_q, weights.q_norm_weight, config.rms_norm_eps, with_scale=True)
 
-    if is_kv_shared:
-        # KV-shared layer: discard own K/V, use source layer's KV cache directly
-        tt_k.deallocate(True)
-        tt_v.deallocate(True)
-    else:
+    if use_fused_norm:
+        # Already normed — un-shard onto DRAM for RoPE, matching every other
+        # tensor on this path (no L1 norm/RoPE "island" staging on this branch).
+        tt_q = ttnn.to_memory_config(tt_q, ttnn.DRAM_MEMORY_CONFIG)
         tt_k = ttnn.to_memory_config(tt_k, ttnn.DRAM_MEMORY_CONFIG)
-        tt_v = ttnn.to_memory_config(tt_v, ttnn.DRAM_MEMORY_CONFIG)
-        # Do not K→V clone (resync): that produced unicode garbage on LB 12B.
-        tt_k = apply_per_head_norm(tt_k, weights.k_norm_weight, config.rms_norm_eps, with_scale=True)
-        tt_v = apply_per_head_norm(tt_v, None, config.rms_norm_eps, with_scale=False)
+    else:
+        tt_q = ttnn.to_memory_config(tt_q, ttnn.DRAM_MEMORY_CONFIG)
+        tt_q = apply_per_head_norm(tt_q, weights.q_norm_weight, config.rms_norm_eps, with_scale=True)
+
+        if is_kv_shared:
+            # KV-shared layer: discard own K/V, use source layer's KV cache directly
+            tt_k.deallocate(True)
+            tt_v.deallocate(True)
+        else:
+            tt_k = ttnn.to_memory_config(tt_k, ttnn.DRAM_MEMORY_CONFIG)
+            tt_v = ttnn.to_memory_config(tt_v, ttnn.DRAM_MEMORY_CONFIG)
+            # Do not K→V clone (resync): that produced unicode garbage on LB 12B.
+            tt_k = apply_per_head_norm(tt_k, weights.k_norm_weight, config.rms_norm_eps, with_scale=True)
+            tt_v = apply_per_head_norm(tt_v, None, config.rms_norm_eps, with_scale=False)
 
     # 4. RoPE — use on-device embedding lookup for trace compatibility
     # use_embedding_rope: cos/sin are per-position [1,1,batch_pad,head_dim] tensors.
