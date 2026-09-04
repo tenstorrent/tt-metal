@@ -71,6 +71,7 @@ def _run_case(
     pattern=None,  # input pattern override (default: module-level PATTERN)
     dilation=(1, 1),  # max pool only
     ceil_mode=False,
+    count_include_pad=None,  # avg only; None = op default (True). False -> per-stick scalars (config DFB)
     dtype="bf16",  # "bf16" | "bf8b" (bf8b forces TILE layout; golden runs on the quantized input)
     out_layout="rm",  # "rm" | "tile" output layout (tiled output runs single-lane by policy)
     perf_label=None,  # perf mode: skip the golden check, run PERF_ITERS labeled iterations instead
@@ -110,6 +111,7 @@ def _run_case(
                 stride=stride,
                 padding=padding,
                 ceil_mode=ceil_mode,
+                **({} if count_include_pad is None else dict(count_include_pad=count_include_pad)),
             )
         out_h, out_w = golden_nchw.shape[2], golden_nchw.shape[3]  # exact for ceil_mode/dilation
         golden = golden_nchw.permute(0, 2, 3, 1).reshape(batch * out_h * out_w, channels).contiguous()
@@ -144,6 +146,7 @@ def _run_case(
         + (f" pattern={pattern}" if pattern != PATTERN else "")
         + (f" d={dilation}" if dilation != [1, 1] else "")
         + (" ceil" if ceil_mode else "")
+        + (" excl_pad" if count_include_pad is False else "")
         + (f" {dtype}" if dtype != "bf16" else "")
         + (" out=TILE" if out_layout == "tile" else ""),
         flush=True,
@@ -170,6 +173,7 @@ def _run_case(
             ceil_mode=ceil_mode,
             output_layout=ttnn.TILE_LAYOUT if out_layout == "tile" else ttnn.ROW_MAJOR_LAYOUT,
             **(dict(dilation=dilation) if pool == "max" else {}),  # avg_pool2d takes no dilation
+            **({} if count_include_pad is None else dict(count_include_pad=count_include_pad)),
         )
         ttnn.synchronize_device(device)
         return out
@@ -390,9 +394,44 @@ UNIT_CASES = [
     ),
     ("stick1_1core", dict(in_h=8, in_w=4, kernel=(8, 4), stride=(1, 1), padding=(0, 0), cores=1)),
     ("sticks2_k3_s4_2cores", dict(in_h=8, in_w=8, stride=(4, 4), cores=2)),  # 2 output sticks per core
-    ("sticks3_k3_s3x4_1core", dict(in_h=8, in_w=4, stride=(3, 4), cores=1)),  # 3 sticks: lane 3 idle
+    (
+        "sticks3_k3_s3x4_1core",  # 3 sticks: lane 3 idle
+        dict(
+            in_h=8,
+            in_w=4,
+            stride=(3, 4),
+            cores=1,
+            sim_skip="craq-sim HANG at T=4 (uneven lane split); exact on ZeBu RTL at T=4 (pcc=1.0, 2026-09-04) and on WH -- sim artifact",
+        ),
+    ),
     ("sticks6_b3_1core", dict(batch=3, in_h=8, in_w=4, stride=(4, 4), cores=1)),  # 6 sticks: 2,2,1,1
-    ("sticks10_b5_1core", dict(batch=5, in_h=8, in_w=4, stride=(4, 4), cores=1)),  # 10 sticks: 3,3,2,2
+    (
+        "sticks10_b5_1core",  # 10 sticks: 3,3,2,2
+        dict(
+            batch=5,
+            in_h=8,
+            in_w=4,
+            stride=(4, 4),
+            cores=1,
+            sim_skip="craq-sim HANG at T=4 (uneven lane split); exact on ZeBu RTL at T=4 (pcc=1.0, 2026-09-04) and on WH -- sim artifact",
+        ),
+    ),
+    # Output-DFB entry count = sticks x 16-wide faces; 2 sticks x 3 faces (48 channels per core) is
+    # not a multiple of 4 lanes. The row-major out_cb is only a census binding (compute packs to the
+    # scratch DFB, the reader writes DFB_OUT_SHARD), so the factory gives it raw-view geometry. Found
+    # by gap_b1_width_max_1stick on the ZeBu emulator (1 stick x 2 faces -> TT_FATAL at T=4).
+    ("sticks2_c48_2cores", dict(channels=48, in_h=8, in_w=8, stride=(4, 4), cores=2)),
+    # width-sharded twin: 32 channels per core = 2 faces x 3 sticks (stride 6 keeps NHW % 32 == 0)
+    ("sticks3_c64_width_1x2_s6", dict(in_h=16, in_w=2, stride=(6, 4), shard="width", grid_yx=(1, 2))),
+    # Per-stick scalars (avg with !one_scalar_per_core: count_include_pad=False with padding, or
+    # ceil-mode overhang) use the scalar config DFB, a single-entry buffer before it became
+    # lane-aware (num_threads entries / raw view + lane-base recovery in the reader). These run the
+    # config-DFB path at T=4; the L1-config leg also covers the raw-view base math on lanes 1..3.
+    ("avg_k3x3_p1_excl_pad", dict(pool="avg", padding=(1, 1), count_include_pad=False, cores=1)),
+    (
+        "avg_ceil_k3x3_s2_b4",
+        dict(pool="avg", batch=4, in_h=8, in_w=4, stride=(2, 2), padding=(0, 0), ceil_mode=True, cores=1),
+    ),
     # TILE output layout runs single-lane by policy (the tiled-output path is not lane-aware: at
     # num_threads=4 DFB_FAST_TILIZE has in_ntiles_c entries -> TT_FATAL for C<128, hang at C=128;
     # found by resnet50/quasar/tests/ops/test_max_pool2d_correctness.py on the ZeBu emulator).
