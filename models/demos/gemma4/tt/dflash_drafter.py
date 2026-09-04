@@ -468,8 +468,22 @@ class DFlashFusedDecoder:
         mkT = dict(device=self.mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=self._mapper)
         z = torch.zeros
         self.ctx_dev = ttnn.from_torch(z(1, 1, ctx_cap, H, dtype=torch.bfloat16), **mkT)
+        # Host mirror: SEED ONLY (prefill_ingest fills it once and uploads once).
+        # Steady-state context commits happen ON DEVICE: the fused body starts by
+        # embed-gather-merging [ctx_dev | fc_prev] through ``merge_idx`` (a host-
+        # refreshed [1, cap] row map, ~8 KB/iter), replacing the old full-buffer
+        # re-upload (cap x H bf16 = ~22 MB/iter at cap 2048) and the fc-row
+        # readback. Same loop-free pattern as the packed verify's staging merge.
         self.mirror = torch.zeros(ctx_cap, H, dtype=torch.bfloat16)
         self.ctx_len = 0
+        self.fc_prev = ttnn.from_torch(z(1, 1, K + 1, H, dtype=torch.bfloat16), **mkT)
+        self.merge_idx = ttnn.from_torch(
+            torch.arange(ctx_cap, dtype=torch.int64).reshape(1, ctx_cap),
+            device=self.mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=self._mapper,
+        )
         # Sliding window: mirror row r holds ABSOLUTE position win_first + r
         # (4/5 drafter layers are sliding-2048 by architecture, so a window is
         # the natural context). Row->position is a per-iteration device input;
@@ -596,6 +610,21 @@ class DFlashFusedDecoder:
     def _body(self):
         d = self.drafter
         K = self.K
+        # ── on-device context commit (start-of-replay) ─────────────────────
+        # fc_prev holds the PREVIOUS replay's projected tap rows; merge_idx maps
+        # each ctx row to [ctx_dev | fc_prev] (identity / window-shift / commit
+        # rows), refreshed per iteration by step(). At capture merge_idx is
+        # identity, so compile + capture are no-ops here (idempotent).
+        src = ttnn.concat([self.ctx_dev, self.fc_prev], dim=2)  # [1,1,cap+K+1,H]
+        src2d = ttnn.reshape(src, (self.cap + K + 1, d.hidden))
+        merged = ttnn.embedding(self.merge_idx, src2d, layout=ttnn.TILE_LAYOUT)  # [1,cap,H]
+        merged4 = ttnn.reshape(merged, (1, 1, self.cap, d.hidden))
+        ttnn.assign(merged4, self.ctx_dev)
+        for t in (merged4, merged, src2d, src):
+            try:
+                t.deallocate(True)
+            except Exception:
+                pass
         cos_blk = ttnn.unsqueeze_to_4D(ttnn.embedding(self.blk_pos, d._cos_2d, layout=ttnn.TILE_LAYOUT))
         sin_blk = ttnn.unsqueeze_to_4D(ttnn.embedding(self.blk_pos, d._sin_2d, layout=ttnn.TILE_LAYOUT))
         noise = ttnn.concat([self.anchor_row, d._mask_rows], dim=2)
@@ -617,9 +646,12 @@ class DFlashFusedDecoder:
             vidx, _lp = self._sampler.sample(logits, enable_trace=False)
         else:
             vidx = ttnn.argmax(logits[:, :, :, : d.vocab], dim=-1)
-        # tap fc (buffers were filled by the verify's copy-mode hook)
+        # tap fc (buffers were filled by the verify's copy-mode hook). The rows
+        # also land in the persistent fc_prev so the NEXT replay's start-of-body
+        # merge can commit the accepted prefix on device.
         cat = ttnn.concat(self.tap_bufs, dim=3)
         fc_out = ttnn.linear(cat, d.fc, compute_kernel_config=d._ckc)
+        ttnn.assign(fc_out, self.fc_prev)
         return draft_ids, vidx, fc_out
 
     # ---------------------------------------------------------------- lifecycle
@@ -664,6 +696,16 @@ class DFlashFusedDecoder:
         self.win_first = n - keep
         self.ctx_len = n
         self._upload_ctx()
+        # Fresh seed: the next replay's start-of-body merge must be a no-op
+        # (identity), not the previous generation's stale commit map.
+        h = ttnn.from_torch(
+            torch.arange(self.cap, dtype=torch.int64).reshape(1, self.cap),
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.uint32,
+            mesh_mapper=self._mapper,
+        )
+        ttnn.copy_host_to_device_tensor(h, self.merge_idx)
+        h.deallocate(True)
 
     def capture(self, anchor_id, start):
         """Compile-run then capture the fused body at the first-iteration inputs."""
@@ -711,20 +753,32 @@ class DFlashFusedDecoder:
                 break
         bonus = posterior[acc]
         produced = acc + 1
-        # commit taps: fc_out rows [0..produced) are positions [start..start+produced)
-        src = ttnn.get_device_tensors(fc_out)[0] if self._tp > 1 else fc_out
-        rows = ttnn.to_torch(src).reshape(-1, self.mirror.shape[-1])[:produced].to(torch.bfloat16)
+        # Commit taps ON DEVICE: fc rows [0..produced) are positions
+        # [start..start+produced). Build the row map the NEXT replay's start-of-
+        # body merge applies to [ctx_dev | fc_prev]: identity (optionally window-
+        # shifted) for kept rows, cap+j for committed row j. ~8 KB upload
+        # replaces the old fc readback + full ctx re-upload (~22 MB/iter).
         win_len = self.ctx_len - self.win_first
+        idx = torch.arange(self.cap, dtype=torch.int64)
         if win_len + produced <= self.cap:
-            self.mirror[win_len : win_len + produced] = rows
+            m = idx.clone()
+            m[win_len : win_len + produced] = self.cap + torch.arange(produced)
         else:
             shift = win_len + produced - self.cap
             keep_n = self.cap - produced
-            self.mirror[:keep_n] = self.mirror[shift : shift + keep_n].clone()
-            self.mirror[keep_n:] = rows
+            m = torch.empty(self.cap, dtype=torch.int64)
+            m[:keep_n] = idx[:keep_n] + shift
+            m[keep_n:] = self.cap + torch.arange(produced)
             self.win_first += shift
+        h = ttnn.from_torch(
+            m.reshape(1, self.cap),
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.uint32,
+            mesh_mapper=self._mapper,
+        )
+        ttnn.copy_host_to_device_tensor(h, self.merge_idx)
+        h.deallocate(True)
         self.ctx_len = self.start + produced
-        self._upload_ctx()
         accepted = [self.anchor] if False else drafts[:acc]
         self.anchor = bonus
         self.start = self.start + produced
