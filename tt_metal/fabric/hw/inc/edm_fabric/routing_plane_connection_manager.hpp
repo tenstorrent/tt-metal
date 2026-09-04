@@ -39,9 +39,7 @@ public:
         BUILD_AND_OPEN_CONNECTION_START_ONLY,
     };
 
-    // These field for FABRIC_2D are used by fabric_set_unicast_route
 #if defined(FABRIC_2D)
-    uint32_t ew_dim;
     uint16_t my_mesh_id;
     uint16_t my_chip_id;
 #endif
@@ -86,7 +84,6 @@ public:
         }
 
 #if defined(FABRIC_2D)
-        mgr.ew_dim = get_arg_val<uint32_t>(arg_idx++);
         mgr.my_chip_id = get_arg_val<uint32_t>(arg_idx++);
         mgr.my_mesh_id = get_arg_val<uint32_t>(arg_idx++);
         for (uint32_t i = 0; i < num_connections_to_build; i++) {

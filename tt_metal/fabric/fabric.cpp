@@ -453,8 +453,6 @@ void append_routing_plane_connection_manager_rt_args_impl(
 
     // 2) Append additional info for 2D Mesh
     if (fabric_context.is_2D_routing_enabled()) {
-        auto mesh_shape = control_plane.get_physical_mesh_shape(src_fabric_node_id.mesh_id);
-        worker_args.push_back(mesh_shape[1]);                     // ew_dim
         worker_args.push_back(src_fabric_node_id.chip_id);        // my_chip_id
         worker_args.push_back(src_fabric_node_id.mesh_id.get());  // my_mesh_id
 
@@ -725,7 +723,7 @@ std::vector<uint32_t> compute_fabric_connection_rt_args(
     const auto& fabric_context = control_plane.get_fabric_context();
 
     std::vector<uint32_t> worker_args;
-    worker_args.reserve(dst_nodes.size() * 4 + (fabric_context.is_2D_routing_enabled() ? 3 + dst_nodes.size() * 2 : 0));
+    worker_args.reserve(dst_nodes.size() * 4 + (fabric_context.is_2D_routing_enabled() ? 2 + dst_nodes.size() * 2 : 0));
 
     for (size_t i = 0; i < dst_nodes.size(); i++) {
         const auto& dst_node = dst_nodes[i];
@@ -763,8 +761,6 @@ std::vector<uint32_t> compute_fabric_connection_rt_args(
 
     // 2D metadata
     if (fabric_context.is_2D_routing_enabled()) {
-        auto mesh_shape = control_plane.get_physical_mesh_shape(src_fabric_node_id.mesh_id);
-        worker_args.push_back(mesh_shape[1]);                     // ew_dim
         worker_args.push_back(src_fabric_node_id.chip_id);        // my_chip_id
         worker_args.push_back(src_fabric_node_id.mesh_id.get());  // my_mesh_id
 

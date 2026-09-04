@@ -14,8 +14,6 @@
 #include "internal/tt-1xx/risc_common.h"
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "fabric_2d_route_interface.h"
-#include <array>
-#include <type_traits>
 
 using namespace tt::tt_fabric;
 
@@ -36,41 +34,24 @@ inline eth_chan_directions get_next_hop_router_direction(uint32_t dst_mesh_id, u
     }
 }
 
-// Defined in the 2D action-map section below; the public path delegates to it.
-inline void fabric_set_2d_single_hop_unicast_route_from_direction(
+// Contract: the destination is the final destination, is in this mesh, and is exactly one physical
+// fabric hop away. Do not use this helper for inter-mesh traffic -- it has no valid coordinates for a
+// chip numbered in another mesh's id space.
+inline void fabric_set_single_hop_unicast_route_from_direction(
     volatile tt_l1_ptr HybridMeshPacketHeader* packet_header,
     eth_chan_directions next_hop_direction,
     uint16_t dst_dev_id,
     uint16_t dst_mesh_id);
 
-// Contract: the destination is the final destination, is in this mesh, and is exactly one physical
-// fabric hop away. Do not use this helper for inter-mesh traffic -- it has no valid coordinates for a
-// chip numbered in another mesh's id space.
-void fabric_set_single_hop_unicast_route_from_direction(
-    volatile tt_l1_ptr HybridMeshPacketHeader* packet_header,
-    eth_chan_directions next_hop_direction,
-    uint16_t dst_dev_id,
-    uint16_t dst_mesh_id) {
-    fabric_set_2d_single_hop_unicast_route_from_direction(packet_header, next_hop_direction, dst_dev_id, dst_mesh_id);
-}
-
-void fabric_set_single_hop_unicast_route(
+inline void fabric_set_single_hop_unicast_route(
     volatile tt_l1_ptr HybridMeshPacketHeader* packet_header, uint16_t dst_dev_id, uint16_t dst_mesh_id) {
     fabric_set_single_hop_unicast_route_from_direction(
         packet_header, get_next_hop_router_direction(dst_mesh_id, dst_dev_id), dst_dev_id, dst_mesh_id);
 }
 
-template <bool called_from_router = false, eth_chan_directions my_direction = eth_chan_directions::COUNT>
-bool fabric_set_unicast_route(
-    volatile tt_l1_ptr HybridMeshPacketHeader* packet_header,
-    uint16_t dst_dev_id,
-    uint16_t dst_mesh_id = MAX_NUM_MESHES);
-
-// Defined in the 2D action-map section below; the public worker path delegates to it.
-inline bool fabric_set_2d_unicast_route(
+inline bool fabric_set_unicast_route(
     volatile tt_l1_ptr HybridMeshPacketHeader* packet_header, uint16_t dst_dev_id, uint16_t dst_mesh_id);
 
-// Defined in the 2D action-map section below; the public worker path delegates to it.
 inline std::uint8_t fabric_set_2d_mcast_route(
     volatile tt_l1_ptr HybridMeshPacketHeader* packet_header,
     uint16_t dst_dev_id,
@@ -88,7 +69,7 @@ inline std::uint8_t fabric_set_2d_mcast_route(
 // N with optional E/W teeth, and S with optional E/W teeth. If one such branch has multiple root
 // outputs under express routing (for example N and Z), use a fabric_multicast_source_inject_* API to
 // submit the same encoded branch through each selected connection.
-void fabric_set_mcast_route(
+inline void fabric_set_mcast_route(
     volatile tt_l1_ptr HybridMeshPacketHeader* packet_header,
     uint16_t dst_dev_id,
     uint16_t dst_mesh_id,
@@ -102,25 +83,10 @@ void fabric_set_mcast_route(
     ASSERT((root_outputs & (root_outputs - 1)) == 0);
 }
 
-uint8_t get_router_direction(uint32_t eth_channel) {
+inline uint8_t get_router_direction(uint32_t eth_channel) {
     tt_l1_ptr tensix_fabric_connections_l1_info_t* connection_info =
         reinterpret_cast<tt_l1_ptr tensix_fabric_connections_l1_info_t*>(FABRIC_CONNECTIONS_BASE);
     return connection_info->read_only[eth_channel].edm_direction;
-}
-
-// Overload: Fill route_buffer of HybridMeshPacketHeader and initialize hop_index/branch offsets for 2D.
-// 2D unicast. Widens the destination's action maps from this chip's destination-major L1 route table.
-//
-// The `called_from_router` / `my_direction` template parameters are vestigial: the router-side
-// re-encode they selected was the legacy hop-program path, whose only caller (recompute_path in
-// fabric_edge_node_router.hpp) is gone. Router-side re-encode is now the intermesh landing encoder,
-// which the kernel calls directly. The parameters are retained so the ~149 existing call sites keep
-// compiling; both are ignored.
-template <bool called_from_router, eth_chan_directions my_direction>
-bool fabric_set_unicast_route(
-    volatile tt_l1_ptr HybridMeshPacketHeader* packet_header, uint16_t dst_dev_id, uint16_t dst_mesh_id) {
-    static_assert(!called_from_router, "router-side re-encode is fabric_set_2d_intermesh_landing_route()");
-    return fabric_set_2d_unicast_route(packet_header, dst_dev_id, dst_mesh_id);
 }
 
 // ============================================================================
@@ -132,7 +98,7 @@ bool fabric_set_unicast_route(
 // Unicast setup retains the final destination in packet metadata, then expands one destination-major
 // table entry into the packet's [Y | X] map. A remote destination temporarily expands the local exit
 // chip instead; the destination-mesh landing later rebuilds the final map.
-inline bool fabric_set_2d_unicast_route(
+inline bool fabric_set_unicast_route(
     volatile tt_l1_ptr HybridMeshPacketHeader* packet_header, uint16_t dst_dev_id, uint16_t dst_mesh_id) {
     tt_l1_ptr routing_l1_info_t* routing_table = reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(ROUTING_TABLE_BASE);
     const uint8_t mesh_y_size = routing_table->mesh_y_size;
@@ -293,8 +259,8 @@ inline void fabric_set_2d_intermesh_landing_route(
 }
 
 // Single-hop poke: the destination is exactly one fabric hop away, so this writes LOCAL_DELIVER at
-// the destination's map slot on the hop's axis. Unlike the legacy helper, Z hops are allowed.
-inline void fabric_set_2d_single_hop_unicast_route_from_direction(
+// the destination's map slot on the hop's axis. Z uses the Y-axis slot.
+inline void fabric_set_single_hop_unicast_route_from_direction(
     volatile tt_l1_ptr HybridMeshPacketHeader* packet_header,
     eth_chan_directions next_hop_direction,
     uint16_t dst_dev_id,
@@ -332,11 +298,6 @@ inline void fabric_set_2d_single_hop_unicast_route_from_direction(
     packet_header->mcast_params_64 = 0;
     packet_header->routing_fields.value = 0;
 }
-
-// NOTE: there is deliberately no private `fabric_set_2d_single_hop_unicast_route` wrapper here. The
-// public `fabric_set_single_hop_unicast_route` above already resolves the direction with
-// get_next_hop_router_direction(), then delegates through the public from-direction helper to the 2D
-// action-map encoder. A second wrapper doing the same two steps would be dead code.
 
 // Overload: For 1D LowLatencyPacketHeader
 // 1D need to choose between target_as_dev true/false and compressed true/false
