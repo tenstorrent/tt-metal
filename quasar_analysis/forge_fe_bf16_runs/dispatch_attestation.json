@@ -1,0 +1,1882 @@
+[
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op001_permute_nchw2nhwc.py::test_forge_bf16_op001_permute_via_transpose[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.transpose",
+   "ttnn.experimental.quasar.transpose",
+   "ttnn.from_device",
+   "ttnn.to_torch"
+  ],
+  "device_ops": [
+   "TransposeDeviceOperation",
+   "TransposeDeviceOperation"
+  ],
+  "device_op_ns": 341492117,
+  "buffer_allocations": 3,
+  "device_ids": [
+   0
+  ],
+  "outcome": "passed"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op002_reshape_stem_flatten.py::test_forge_bf16_op002_reshape[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.reshape",
+   "ttnn.from_device",
+   "ttnn.to_torch"
+  ],
+  "device_ops": [],
+  "device_op_ns": 0,
+  "buffer_allocations": 1,
+  "device_ids": [
+   1
+  ],
+  "outcome": "view"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op004_conv2d_conv1.py::test_forge_bf16_op004_conv2d[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.conv2d"
+  ],
+  "device_ops": [
+   "InterleavedToShardedDeviceOperation",
+   "HaloDeviceOperation"
+  ],
+  "device_op_ns": 258846611,
+  "buffer_allocations": 10,
+  "device_ids": [
+   2
+  ],
+  "outcome": "failed",
+  "error": "RuntimeError: TT_FATAL @ /proj_sw/user_dev/ctr-lelanchelian/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:1439: !(is_gen2_arch() && self_loop_kernel->is_data_movement_kernel())"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op006_max_pool2d_stem.py::test_forge_bf16_op006_max_pool2d[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.max_pool2d",
+   "ttnn.from_device",
+   "ttnn.to_torch"
+  ],
+  "device_ops": [
+   "InterleavedToShardedDeviceOperation",
+   "HaloDeviceOperation",
+   "ShardedToInterleavedDeviceOperation"
+  ],
+  "device_op_ns": 2917395414,
+  "buffer_allocations": 10,
+  "device_ids": [
+   3
+  ],
+  "outcome": "passed"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op007_conv2d_layer1_0_conv1.py::test_forge_bf16_op007_conv2d[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.conv2d"
+  ],
+  "device_ops": [
+   "TilizeDeviceOperation",
+   "MatmulDeviceOperation"
+  ],
+  "device_op_ns": 311125759,
+  "buffer_allocations": 5,
+  "device_ids": [
+   4
+  ],
+  "outcome": "failed",
+  "error": "RuntimeError: TT_FATAL @ /proj_sw/user_dev/ctr-lelanchelian/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:1076: dfbs_with_entry.contains(binding.dfb_spec_name)"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op009_conv2d_layer1_0_conv2.py::test_forge_bf16_op009_conv2d[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.conv2d"
+  ],
+  "device_ops": [
+   "InterleavedToShardedDeviceOperation",
+   "HaloDeviceOperation"
+  ],
+  "device_op_ns": 63127499,
+  "buffer_allocations": 10,
+  "device_ids": [
+   5
+  ],
+  "outcome": "failed",
+  "error": "RuntimeError: TT_FATAL @ /proj_sw/user_dev/ctr-lelanchelian/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:1439: !(is_gen2_arch() && self_loop_kernel->is_data_movement_kernel())"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op011_conv2d_layer1_0_conv3.py::test_forge_bf16_op011_conv2d[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.conv2d"
+  ],
+  "device_ops": [
+   "TilizeDeviceOperation",
+   "MatmulDeviceOperation"
+  ],
+  "device_op_ns": 14168039,
+  "buffer_allocations": 5,
+  "device_ids": [
+   6
+  ],
+  "outcome": "failed",
+  "error": "RuntimeError: TT_FATAL @ /proj_sw/user_dev/ctr-lelanchelian/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:1076: dfbs_with_entry.contains(binding.dfb_spec_name)"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op012_conv2d_layer1_0_downsample.py::test_forge_bf16_op012_conv2d[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.conv2d"
+  ],
+  "device_ops": [
+   "TilizeDeviceOperation",
+   "MatmulDeviceOperation"
+  ],
+  "device_op_ns": 4408441,
+  "buffer_allocations": 5,
+  "device_ids": [
+   7
+  ],
+  "outcome": "failed",
+  "error": "RuntimeError: TT_FATAL @ /proj_sw/user_dev/ctr-lelanchelian/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:1076: dfbs_with_entry.contains(binding.dfb_spec_name)"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op013_add_layer1_0.py::test_forge_bf16_op013_add[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.add",
+   "ttnn.from_device",
+   "ttnn.to_torch"
+  ],
+  "device_ops": [
+   "BinaryNgDeviceOperation"
+  ],
+  "device_op_ns": 357178712,
+  "buffer_allocations": 3,
+  "device_ids": [
+   8
+  ],
+  "outcome": "passed"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op014_relu_layer1_0.py::test_forge_bf16_op014_relu_fused_add[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.add",
+   "ttnn.from_device",
+   "ttnn.to_torch"
+  ],
+  "device_ops": [
+   "BinaryNgDeviceOperation"
+  ],
+  "device_op_ns": 111541989,
+  "buffer_allocations": 3,
+  "device_ids": [
+   9
+  ],
+  "outcome": "passed"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op016_conv2d_layer1_1_conv1.py::test_forge_bf16_op016_conv2d[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.conv2d"
+  ],
+  "device_ops": [
+   "TilizeDeviceOperation",
+   "MatmulDeviceOperation"
+  ],
+  "device_op_ns": 282003689,
+  "buffer_allocations": 5,
+  "device_ids": [
+   10
+  ],
+  "outcome": "failed",
+  "error": "RuntimeError: TT_FATAL @ /proj_sw/user_dev/ctr-lelanchelian/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:1076: dfbs_with_entry.contains(binding.dfb_spec_name)"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op018_conv2d_layer1_1_conv2.py::test_forge_bf16_op018_conv2d[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.conv2d"
+  ],
+  "device_ops": [
+   "InterleavedToShardedDeviceOperation",
+   "HaloDeviceOperation"
+  ],
+  "device_op_ns": 6010107,
+  "buffer_allocations": 10,
+  "device_ids": [
+   11
+  ],
+  "outcome": "failed",
+  "error": "RuntimeError: TT_FATAL @ /proj_sw/user_dev/ctr-lelanchelian/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:1439: !(is_gen2_arch() && self_loop_kernel->is_data_movement_kernel())"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op020_conv2d_layer1_1_conv3.py::test_forge_bf16_op020_conv2d[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.conv2d"
+  ],
+  "device_ops": [
+   "TilizeDeviceOperation",
+   "MatmulDeviceOperation"
+  ],
+  "device_op_ns": 8572299,
+  "buffer_allocations": 5,
+  "device_ids": [
+   12
+  ],
+  "outcome": "failed",
+  "error": "RuntimeError: TT_FATAL @ /proj_sw/user_dev/ctr-lelanchelian/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:1076: dfbs_with_entry.contains(binding.dfb_spec_name)"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op021_add_layer1_1.py::test_forge_bf16_op021_add[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.add",
+   "ttnn.from_device",
+   "ttnn.to_torch"
+  ],
+  "device_ops": [
+   "BinaryNgDeviceOperation"
+  ],
+  "device_op_ns": 9474646,
+  "buffer_allocations": 3,
+  "device_ids": [
+   13
+  ],
+  "outcome": "passed"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op022_relu_layer1_1.py::test_forge_bf16_op022_relu_fused_add[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.add",
+   "ttnn.from_device",
+   "ttnn.to_torch"
+  ],
+  "device_ops": [
+   "BinaryNgDeviceOperation"
+  ],
+  "device_op_ns": 24287388,
+  "buffer_allocations": 3,
+  "device_ids": [
+   14
+  ],
+  "outcome": "passed"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op024_conv2d_layer1_2_conv1.py::test_forge_bf16_op024_conv2d[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.conv2d"
+  ],
+  "device_ops": [
+   "TilizeDeviceOperation",
+   "MatmulDeviceOperation"
+  ],
+  "device_op_ns": 7915722,
+  "buffer_allocations": 5,
+  "device_ids": [
+   15
+  ],
+  "outcome": "failed",
+  "error": "RuntimeError: TT_FATAL @ /proj_sw/user_dev/ctr-lelanchelian/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:1076: dfbs_with_entry.contains(binding.dfb_spec_name)"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op026_conv2d_layer1_2_conv2.py::test_forge_bf16_op026_conv2d[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.conv2d"
+  ],
+  "device_ops": [
+   "InterleavedToShardedDeviceOperation",
+   "HaloDeviceOperation"
+  ],
+  "device_op_ns": 4358575,
+  "buffer_allocations": 10,
+  "device_ids": [
+   16
+  ],
+  "outcome": "failed",
+  "error": "RuntimeError: TT_FATAL @ /proj_sw/user_dev/ctr-lelanchelian/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:1439: !(is_gen2_arch() && self_loop_kernel->is_data_movement_kernel())"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op028_conv2d_layer1_2_conv3.py::test_forge_bf16_op028_conv2d[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.conv2d"
+  ],
+  "device_ops": [
+   "TilizeDeviceOperation",
+   "MatmulDeviceOperation"
+  ],
+  "device_op_ns": 56731520,
+  "buffer_allocations": 5,
+  "device_ids": [
+   17
+  ],
+  "outcome": "failed",
+  "error": "RuntimeError: TT_FATAL @ /proj_sw/user_dev/ctr-lelanchelian/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:1076: dfbs_with_entry.contains(binding.dfb_spec_name)"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op029_add_layer1_2.py::test_forge_bf16_op029_add[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.add",
+   "ttnn.from_device",
+   "ttnn.to_torch"
+  ],
+  "device_ops": [
+   "BinaryNgDeviceOperation"
+  ],
+  "device_op_ns": 10790173,
+  "buffer_allocations": 3,
+  "device_ids": [
+   18
+  ],
+  "outcome": "passed"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op030_relu_layer1_2.py::test_forge_bf16_op030_relu_fused_add[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.add",
+   "ttnn.from_device",
+   "ttnn.to_torch"
+  ],
+  "device_ops": [
+   "BinaryNgDeviceOperation"
+  ],
+  "device_op_ns": 4492739,
+  "buffer_allocations": 3,
+  "device_ids": [
+   19
+  ],
+  "outcome": "passed"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op032_conv2d_layer2_0_conv1.py::test_forge_bf16_op032_conv2d[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.conv2d"
+  ],
+  "device_ops": [
+   "TilizeDeviceOperation",
+   "MatmulDeviceOperation"
+  ],
+  "device_op_ns": 5733466,
+  "buffer_allocations": 5,
+  "device_ids": [
+   20
+  ],
+  "outcome": "failed",
+  "error": "RuntimeError: TT_FATAL @ /proj_sw/user_dev/ctr-lelanchelian/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:1076: dfbs_with_entry.contains(binding.dfb_spec_name)"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op034_conv2d_layer2_0_conv2.py::test_forge_bf16_op034_conv2d[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.conv2d"
+  ],
+  "device_ops": [
+   "InterleavedToShardedDeviceOperation",
+   "HaloDeviceOperation"
+  ],
+  "device_op_ns": 188159580,
+  "buffer_allocations": 10,
+  "device_ids": [
+   21
+  ],
+  "outcome": "failed",
+  "error": "RuntimeError: TT_FATAL @ /proj_sw/user_dev/ctr-lelanchelian/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:1439: !(is_gen2_arch() && self_loop_kernel->is_data_movement_kernel())"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op036_conv2d_layer2_0_conv3.py::test_forge_bf16_op036_conv2d[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.conv2d"
+  ],
+  "device_ops": [
+   "TilizeWithValPaddingDeviceOperation",
+   "MatmulDeviceOperation"
+  ],
+  "device_op_ns": 359008339,
+  "buffer_allocations": 5,
+  "device_ids": [
+   22
+  ],
+  "outcome": "failed",
+  "error": "RuntimeError: TT_FATAL @ /proj_sw/user_dev/ctr-lelanchelian/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:1076: dfbs_with_entry.contains(binding.dfb_spec_name)"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op037_conv2d_layer2_0_downsample.py::test_forge_bf16_op037_conv2d[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.conv2d"
+  ],
+  "device_ops": [
+   "InterleavedToShardedDeviceOperation",
+   "HaloDeviceOperation"
+  ],
+  "device_op_ns": 42472059,
+  "buffer_allocations": 10,
+  "device_ids": [
+   23
+  ],
+  "outcome": "failed",
+  "error": "RuntimeError: TT_FATAL @ /proj_sw/user_dev/ctr-lelanchelian/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:1439: !(is_gen2_arch() && self_loop_kernel->is_data_movement_kernel())"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op038_add_layer2_0.py::test_forge_bf16_op038_add[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.add",
+   "ttnn.from_device",
+   "ttnn.to_torch"
+  ],
+  "device_ops": [
+   "BinaryNgDeviceOperation"
+  ],
+  "device_op_ns": 4068874,
+  "buffer_allocations": 3,
+  "device_ids": [
+   24
+  ],
+  "outcome": "passed"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op039_relu_layer2_0.py::test_forge_bf16_op039_relu_fused_add[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.add",
+   "ttnn.from_device",
+   "ttnn.to_torch"
+  ],
+  "device_ops": [
+   "BinaryNgDeviceOperation"
+  ],
+  "device_op_ns": 12439331,
+  "buffer_allocations": 3,
+  "device_ids": [
+   25
+  ],
+  "outcome": "passed"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op041_conv2d_layer2_1_conv1.py::test_forge_bf16_op041_conv2d[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.conv2d"
+  ],
+  "device_ops": [
+   "TilizeWithValPaddingDeviceOperation",
+   "MatmulDeviceOperation"
+  ],
+  "device_op_ns": 2490327537,
+  "buffer_allocations": 5,
+  "device_ids": [
+   26
+  ],
+  "outcome": "failed",
+  "error": "RuntimeError: TT_FATAL @ /proj_sw/user_dev/ctr-lelanchelian/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:1076: dfbs_with_entry.contains(binding.dfb_spec_name)"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op043_conv2d_layer2_1_conv2.py::test_forge_bf16_op043_conv2d[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.conv2d"
+  ],
+  "device_ops": [
+   "InterleavedToShardedDeviceOperation",
+   "HaloDeviceOperation"
+  ],
+  "device_op_ns": 9803528,
+  "buffer_allocations": 10,
+  "device_ids": [
+   27
+  ],
+  "outcome": "failed",
+  "error": "RuntimeError: TT_FATAL @ /proj_sw/user_dev/ctr-lelanchelian/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:1439: !(is_gen2_arch() && self_loop_kernel->is_data_movement_kernel())"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op045_conv2d_layer2_1_conv3.py::test_forge_bf16_op045_conv2d[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.conv2d"
+  ],
+  "device_ops": [
+   "TilizeWithValPaddingDeviceOperation",
+   "MatmulDeviceOperation"
+  ],
+  "device_op_ns": 3943020,
+  "buffer_allocations": 5,
+  "device_ids": [
+   28
+  ],
+  "outcome": "failed",
+  "error": "RuntimeError: TT_FATAL @ /proj_sw/user_dev/ctr-lelanchelian/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:1076: dfbs_with_entry.contains(binding.dfb_spec_name)"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op046_add_layer2_1.py::test_forge_bf16_op046_add[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.add",
+   "ttnn.from_device",
+   "ttnn.to_torch"
+  ],
+  "device_ops": [
+   "BinaryNgDeviceOperation"
+  ],
+  "device_op_ns": 5101824,
+  "buffer_allocations": 3,
+  "device_ids": [
+   29
+  ],
+  "outcome": "passed"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op047_relu_layer2_1.py::test_forge_bf16_op047_relu_fused_add[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.add",
+   "ttnn.from_device",
+   "ttnn.to_torch"
+  ],
+  "device_ops": [
+   "BinaryNgDeviceOperation"
+  ],
+  "device_op_ns": 16108085,
+  "buffer_allocations": 3,
+  "device_ids": [
+   30
+  ],
+  "outcome": "passed"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op049_conv2d_layer2_2_conv1.py::test_forge_bf16_op049_conv2d[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.conv2d"
+  ],
+  "device_ops": [
+   "TilizeWithValPaddingDeviceOperation",
+   "MatmulDeviceOperation"
+  ],
+  "device_op_ns": 18430443,
+  "buffer_allocations": 5,
+  "device_ids": [
+   31
+  ],
+  "outcome": "failed",
+  "error": "RuntimeError: TT_FATAL @ /proj_sw/user_dev/ctr-lelanchelian/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:1076: dfbs_with_entry.contains(binding.dfb_spec_name)"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op051_conv2d_layer2_2_conv2.py::test_forge_bf16_op051_conv2d[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.conv2d"
+  ],
+  "device_ops": [
+   "InterleavedToShardedDeviceOperation",
+   "HaloDeviceOperation"
+  ],
+  "device_op_ns": 8103315,
+  "buffer_allocations": 10,
+  "device_ids": [
+   32
+  ],
+  "outcome": "failed",
+  "error": "RuntimeError: TT_FATAL @ /proj_sw/user_dev/ctr-lelanchelian/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:1439: !(is_gen2_arch() && self_loop_kernel->is_data_movement_kernel())"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op053_conv2d_layer2_2_conv3.py::test_forge_bf16_op053_conv2d[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.conv2d"
+  ],
+  "device_ops": [
+   "TilizeWithValPaddingDeviceOperation",
+   "MatmulDeviceOperation"
+  ],
+  "device_op_ns": 4295648,
+  "buffer_allocations": 5,
+  "device_ids": [
+   33
+  ],
+  "outcome": "failed",
+  "error": "RuntimeError: TT_FATAL @ /proj_sw/user_dev/ctr-lelanchelian/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:1076: dfbs_with_entry.contains(binding.dfb_spec_name)"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op054_add_layer2_2.py::test_forge_bf16_op054_add[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.add",
+   "ttnn.from_device",
+   "ttnn.to_torch"
+  ],
+  "device_ops": [
+   "BinaryNgDeviceOperation"
+  ],
+  "device_op_ns": 54390166,
+  "buffer_allocations": 3,
+  "device_ids": [
+   34
+  ],
+  "outcome": "passed"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op055_relu_layer2_2.py::test_forge_bf16_op055_relu_fused_add[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.add",
+   "ttnn.from_device",
+   "ttnn.to_torch"
+  ],
+  "device_ops": [
+   "BinaryNgDeviceOperation"
+  ],
+  "device_op_ns": 39235482,
+  "buffer_allocations": 3,
+  "device_ids": [
+   35
+  ],
+  "outcome": "passed"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op057_conv2d_layer2_3_conv1.py::test_forge_bf16_op057_conv2d[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.conv2d"
+  ],
+  "device_ops": [
+   "TilizeWithValPaddingDeviceOperation",
+   "MatmulDeviceOperation"
+  ],
+  "device_op_ns": 10366308,
+  "buffer_allocations": 5,
+  "device_ids": [
+   36
+  ],
+  "outcome": "failed",
+  "error": "RuntimeError: TT_FATAL @ /proj_sw/user_dev/ctr-lelanchelian/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:1076: dfbs_with_entry.contains(binding.dfb_spec_name)"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op059_conv2d_layer2_3_conv2.py::test_forge_bf16_op059_conv2d[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.conv2d"
+  ],
+  "device_ops": [
+   "InterleavedToShardedDeviceOperation",
+   "HaloDeviceOperation"
+  ],
+  "device_op_ns": 6832906,
+  "buffer_allocations": 10,
+  "device_ids": [
+   37
+  ],
+  "outcome": "failed",
+  "error": "RuntimeError: TT_FATAL @ /proj_sw/user_dev/ctr-lelanchelian/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:1439: !(is_gen2_arch() && self_loop_kernel->is_data_movement_kernel())"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op061_conv2d_layer2_3_conv3.py::test_forge_bf16_op061_conv2d[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.conv2d"
+  ],
+  "device_ops": [
+   "TilizeWithValPaddingDeviceOperation",
+   "MatmulDeviceOperation"
+  ],
+  "device_op_ns": 6875648,
+  "buffer_allocations": 5,
+  "device_ids": [
+   38
+  ],
+  "outcome": "failed",
+  "error": "RuntimeError: TT_FATAL @ /proj_sw/user_dev/ctr-lelanchelian/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:1076: dfbs_with_entry.contains(binding.dfb_spec_name)"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op062_add_layer2_3.py::test_forge_bf16_op062_add[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.add",
+   "ttnn.from_device",
+   "ttnn.to_torch"
+  ],
+  "device_ops": [
+   "BinaryNgDeviceOperation"
+  ],
+  "device_op_ns": 12676791,
+  "buffer_allocations": 3,
+  "device_ids": [
+   39
+  ],
+  "outcome": "passed"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op063_relu_layer2_3.py::test_forge_bf16_op063_relu_fused_add[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.add",
+   "ttnn.from_device",
+   "ttnn.to_torch"
+  ],
+  "device_ops": [
+   "BinaryNgDeviceOperation"
+  ],
+  "device_op_ns": 5586241,
+  "buffer_allocations": 3,
+  "device_ids": [
+   40
+  ],
+  "outcome": "passed"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op065_conv2d_layer3_0_conv1.py::test_forge_bf16_op065_conv2d[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.conv2d"
+  ],
+  "device_ops": [
+   "TilizeWithValPaddingDeviceOperation",
+   "MatmulDeviceOperation"
+  ],
+  "device_op_ns": 4859615,
+  "buffer_allocations": 5,
+  "device_ids": [
+   41
+  ],
+  "outcome": "failed",
+  "error": "RuntimeError: TT_FATAL @ /proj_sw/user_dev/ctr-lelanchelian/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:1076: dfbs_with_entry.contains(binding.dfb_spec_name)"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op067_conv2d_layer3_0_conv2.py::test_forge_bf16_op067_conv2d[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.conv2d"
+  ],
+  "device_ops": [
+   "InterleavedToShardedDeviceOperation",
+   "HaloDeviceOperation"
+  ],
+  "device_op_ns": 24932091,
+  "buffer_allocations": 10,
+  "device_ids": [
+   42
+  ],
+  "outcome": "failed",
+  "error": "RuntimeError: TT_FATAL @ /proj_sw/user_dev/ctr-lelanchelian/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:1439: !(is_gen2_arch() && self_loop_kernel->is_data_movement_kernel())"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op069_conv2d_layer3_0_conv3.py::test_forge_bf16_op069_conv2d[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.conv2d"
+  ],
+  "device_ops": [
+   "TilizeWithValPaddingDeviceOperation",
+   "MatmulDeviceOperation"
+  ],
+  "device_op_ns": 371317068,
+  "buffer_allocations": 5,
+  "device_ids": [
+   43
+  ],
+  "outcome": "failed",
+  "error": "RuntimeError: TT_FATAL @ /proj_sw/user_dev/ctr-lelanchelian/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:1076: dfbs_with_entry.contains(binding.dfb_spec_name)"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op070_conv2d_layer3_0_downsample.py::test_forge_bf16_op070_conv2d[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.conv2d"
+  ],
+  "device_ops": [
+   "InterleavedToShardedDeviceOperation",
+   "HaloDeviceOperation"
+  ],
+  "device_op_ns": 224083683,
+  "buffer_allocations": 10,
+  "device_ids": [
+   44
+  ],
+  "outcome": "failed",
+  "error": "RuntimeError: TT_FATAL @ /proj_sw/user_dev/ctr-lelanchelian/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:1439: !(is_gen2_arch() && self_loop_kernel->is_data_movement_kernel())"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op071_add_layer3_0.py::test_forge_bf16_op071_add[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.add",
+   "ttnn.from_device",
+   "ttnn.to_torch"
+  ],
+  "device_ops": [
+   "BinaryNgDeviceOperation"
+  ],
+  "device_op_ns": 21025877,
+  "buffer_allocations": 3,
+  "device_ids": [
+   45
+  ],
+  "outcome": "passed"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op072_relu_layer3_0.py::test_forge_bf16_op072_relu_fused_add[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.add",
+   "ttnn.from_device",
+   "ttnn.to_torch"
+  ],
+  "device_ops": [
+   "BinaryNgDeviceOperation"
+  ],
+  "device_op_ns": 4213724,
+  "buffer_allocations": 3,
+  "device_ids": [
+   46
+  ],
+  "outcome": "passed"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op074_conv2d_layer3_1_conv1.py::test_forge_bf16_op074_conv2d[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.conv2d"
+  ],
+  "device_ops": [
+   "TilizeWithValPaddingDeviceOperation",
+   "MatmulDeviceOperation"
+  ],
+  "device_op_ns": 98391466,
+  "buffer_allocations": 5,
+  "device_ids": [
+   47
+  ],
+  "outcome": "failed",
+  "error": "RuntimeError: TT_FATAL @ /proj_sw/user_dev/ctr-lelanchelian/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:1076: dfbs_with_entry.contains(binding.dfb_spec_name)"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op076_conv2d_layer3_1_conv2.py::test_forge_bf16_op076_conv2d[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.conv2d"
+  ],
+  "device_ops": [
+   "InterleavedToShardedDeviceOperation",
+   "HaloDeviceOperation"
+  ],
+  "device_op_ns": 5148129,
+  "buffer_allocations": 10,
+  "device_ids": [
+   48
+  ],
+  "outcome": "failed",
+  "error": "RuntimeError: TT_FATAL @ /proj_sw/user_dev/ctr-lelanchelian/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:1439: !(is_gen2_arch() && self_loop_kernel->is_data_movement_kernel())"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op078_conv2d_layer3_1_conv3.py::test_forge_bf16_op078_conv2d[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.conv2d"
+  ],
+  "device_ops": [
+   "TilizeWithValPaddingDeviceOperation",
+   "MatmulDeviceOperation"
+  ],
+  "device_op_ns": 42603850,
+  "buffer_allocations": 5,
+  "device_ids": [
+   49
+  ],
+  "outcome": "failed",
+  "error": "RuntimeError: TT_FATAL @ /proj_sw/user_dev/ctr-lelanchelian/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:1076: dfbs_with_entry.contains(binding.dfb_spec_name)"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op079_add_layer3_1.py::test_forge_bf16_op079_add[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.add",
+   "ttnn.from_device",
+   "ttnn.to_torch"
+  ],
+  "device_ops": [
+   "BinaryNgDeviceOperation"
+  ],
+  "device_op_ns": 59759132,
+  "buffer_allocations": 3,
+  "device_ids": [
+   50
+  ],
+  "outcome": "passed"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op080_relu_layer3_1.py::test_forge_bf16_op080_relu_fused_add[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.add",
+   "ttnn.from_device",
+   "ttnn.to_torch"
+  ],
+  "device_ops": [
+   "BinaryNgDeviceOperation"
+  ],
+  "device_op_ns": 4611470,
+  "buffer_allocations": 3,
+  "device_ids": [
+   51
+  ],
+  "outcome": "passed"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op082_conv2d_layer3_2_conv1.py::test_forge_bf16_op082_conv2d[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.conv2d"
+  ],
+  "device_ops": [
+   "TilizeWithValPaddingDeviceOperation",
+   "MatmulDeviceOperation"
+  ],
+  "device_op_ns": 4765817,
+  "buffer_allocations": 5,
+  "device_ids": [
+   52
+  ],
+  "outcome": "failed",
+  "error": "RuntimeError: TT_FATAL @ /proj_sw/user_dev/ctr-lelanchelian/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:1076: dfbs_with_entry.contains(binding.dfb_spec_name)"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op084_conv2d_layer3_2_conv2.py::test_forge_bf16_op084_conv2d[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.conv2d"
+  ],
+  "device_ops": [
+   "InterleavedToShardedDeviceOperation",
+   "HaloDeviceOperation"
+  ],
+  "device_op_ns": 5012776,
+  "buffer_allocations": 10,
+  "device_ids": [
+   53
+  ],
+  "outcome": "failed",
+  "error": "RuntimeError: TT_FATAL @ /proj_sw/user_dev/ctr-lelanchelian/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:1439: !(is_gen2_arch() && self_loop_kernel->is_data_movement_kernel())"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op086_conv2d_layer3_2_conv3.py::test_forge_bf16_op086_conv2d[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.conv2d"
+  ],
+  "device_ops": [
+   "TilizeWithValPaddingDeviceOperation",
+   "MatmulDeviceOperation"
+  ],
+  "device_op_ns": 5149316,
+  "buffer_allocations": 5,
+  "device_ids": [
+   54
+  ],
+  "outcome": "failed",
+  "error": "RuntimeError: TT_FATAL @ /proj_sw/user_dev/ctr-lelanchelian/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:1076: dfbs_with_entry.contains(binding.dfb_spec_name)"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op087_add_layer3_2.py::test_forge_bf16_op087_add[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.add",
+   "ttnn.from_device",
+   "ttnn.to_torch"
+  ],
+  "device_ops": [
+   "BinaryNgDeviceOperation"
+  ],
+  "device_op_ns": 4252905,
+  "buffer_allocations": 3,
+  "device_ids": [
+   55
+  ],
+  "outcome": "passed"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op088_relu_layer3_2.py::test_forge_bf16_op088_relu_fused_add[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.add",
+   "ttnn.from_device",
+   "ttnn.to_torch"
+  ],
+  "device_ops": [
+   "BinaryNgDeviceOperation"
+  ],
+  "device_op_ns": 4540231,
+  "buffer_allocations": 3,
+  "device_ids": [
+   56
+  ],
+  "outcome": "passed"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op090_conv2d_layer3_3_conv1.py::test_forge_bf16_op090_conv2d[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.conv2d"
+  ],
+  "device_ops": [
+   "TilizeWithValPaddingDeviceOperation",
+   "MatmulDeviceOperation"
+  ],
+  "device_op_ns": 5017525,
+  "buffer_allocations": 5,
+  "device_ids": [
+   57
+  ],
+  "outcome": "failed",
+  "error": "RuntimeError: TT_FATAL @ /proj_sw/user_dev/ctr-lelanchelian/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:1076: dfbs_with_entry.contains(binding.dfb_spec_name)"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op092_conv2d_layer3_3_conv2.py::test_forge_bf16_op092_conv2d[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.conv2d"
+  ],
+  "device_ops": [
+   "InterleavedToShardedDeviceOperation",
+   "HaloDeviceOperation"
+  ],
+  "device_op_ns": 6244005,
+  "buffer_allocations": 10,
+  "device_ids": [
+   58
+  ],
+  "outcome": "failed",
+  "error": "RuntimeError: TT_FATAL @ /proj_sw/user_dev/ctr-lelanchelian/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:1439: !(is_gen2_arch() && self_loop_kernel->is_data_movement_kernel())"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op094_conv2d_layer3_3_conv3.py::test_forge_bf16_op094_conv2d[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.conv2d"
+  ],
+  "device_ops": [
+   "TilizeWithValPaddingDeviceOperation",
+   "MatmulDeviceOperation"
+  ],
+  "device_op_ns": 5823702,
+  "buffer_allocations": 5,
+  "device_ids": [
+   59
+  ],
+  "outcome": "failed",
+  "error": "RuntimeError: TT_FATAL @ /proj_sw/user_dev/ctr-lelanchelian/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:1076: dfbs_with_entry.contains(binding.dfb_spec_name)"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op095_add_layer3_3.py::test_forge_bf16_op095_add[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.add",
+   "ttnn.from_device",
+   "ttnn.to_torch"
+  ],
+  "device_ops": [
+   "BinaryNgDeviceOperation"
+  ],
+  "device_op_ns": 38601464,
+  "buffer_allocations": 3,
+  "device_ids": [
+   60
+  ],
+  "outcome": "passed"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op096_relu_layer3_3.py::test_forge_bf16_op096_relu_fused_add[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.add",
+   "ttnn.from_device",
+   "ttnn.to_torch"
+  ],
+  "device_ops": [
+   "BinaryNgDeviceOperation"
+  ],
+  "device_op_ns": 4379946,
+  "buffer_allocations": 3,
+  "device_ids": [
+   61
+  ],
+  "outcome": "passed"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op098_conv2d_layer3_4_conv1.py::test_forge_bf16_op098_conv2d[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.conv2d"
+  ],
+  "device_ops": [
+   "TilizeWithValPaddingDeviceOperation",
+   "MatmulDeviceOperation"
+  ],
+  "device_op_ns": 4833494,
+  "buffer_allocations": 5,
+  "device_ids": [
+   62
+  ],
+  "outcome": "failed",
+  "error": "RuntimeError: TT_FATAL @ /proj_sw/user_dev/ctr-lelanchelian/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:1076: dfbs_with_entry.contains(binding.dfb_spec_name)"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op100_conv2d_layer3_4_conv2.py::test_forge_bf16_op100_conv2d[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.conv2d"
+  ],
+  "device_ops": [
+   "InterleavedToShardedDeviceOperation",
+   "HaloDeviceOperation"
+  ],
+  "device_op_ns": 5473448,
+  "buffer_allocations": 10,
+  "device_ids": [
+   63
+  ],
+  "outcome": "failed",
+  "error": "RuntimeError: TT_FATAL @ /proj_sw/user_dev/ctr-lelanchelian/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:1439: !(is_gen2_arch() && self_loop_kernel->is_data_movement_kernel())"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op102_conv2d_layer3_4_conv3.py::test_forge_bf16_op102_conv2d[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.conv2d"
+  ],
+  "device_ops": [
+   "TilizeWithValPaddingDeviceOperation",
+   "MatmulDeviceOperation"
+  ],
+  "device_op_ns": 4800250,
+  "buffer_allocations": 5,
+  "device_ids": [
+   64
+  ],
+  "outcome": "failed",
+  "error": "RuntimeError: TT_FATAL @ /proj_sw/user_dev/ctr-lelanchelian/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:1076: dfbs_with_entry.contains(binding.dfb_spec_name)"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op103_add_layer3_4.py::test_forge_bf16_op103_add[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.add",
+   "ttnn.from_device",
+   "ttnn.to_torch"
+  ],
+  "device_ops": [
+   "BinaryNgDeviceOperation"
+  ],
+  "device_op_ns": 4270714,
+  "buffer_allocations": 3,
+  "device_ids": [
+   65
+  ],
+  "outcome": "passed"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op104_relu_layer3_4.py::test_forge_bf16_op104_relu_fused_add[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.add",
+   "ttnn.from_device",
+   "ttnn.to_torch"
+  ],
+  "device_ops": [
+   "BinaryNgDeviceOperation"
+  ],
+  "device_op_ns": 4328892,
+  "buffer_allocations": 3,
+  "device_ids": [
+   66
+  ],
+  "outcome": "passed"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op106_conv2d_layer3_5_conv1.py::test_forge_bf16_op106_conv2d[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.conv2d"
+  ],
+  "device_ops": [
+   "TilizeWithValPaddingDeviceOperation",
+   "MatmulDeviceOperation"
+  ],
+  "device_op_ns": 6061161,
+  "buffer_allocations": 5,
+  "device_ids": [
+   67
+  ],
+  "outcome": "failed",
+  "error": "RuntimeError: TT_FATAL @ /proj_sw/user_dev/ctr-lelanchelian/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:1076: dfbs_with_entry.contains(binding.dfb_spec_name)"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op108_conv2d_layer3_5_conv2.py::test_forge_bf16_op108_conv2d[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.conv2d"
+  ],
+  "device_ops": [
+   "InterleavedToShardedDeviceOperation",
+   "HaloDeviceOperation"
+  ],
+  "device_op_ns": 5417645,
+  "buffer_allocations": 10,
+  "device_ids": [
+   68
+  ],
+  "outcome": "failed",
+  "error": "RuntimeError: TT_FATAL @ /proj_sw/user_dev/ctr-lelanchelian/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:1439: !(is_gen2_arch() && self_loop_kernel->is_data_movement_kernel())"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op110_conv2d_layer3_5_conv3.py::test_forge_bf16_op110_conv2d[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.conv2d"
+  ],
+  "device_ops": [
+   "TilizeWithValPaddingDeviceOperation",
+   "MatmulDeviceOperation"
+  ],
+  "device_op_ns": 4433374,
+  "buffer_allocations": 5,
+  "device_ids": [
+   69
+  ],
+  "outcome": "failed",
+  "error": "RuntimeError: TT_FATAL @ /proj_sw/user_dev/ctr-lelanchelian/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:1076: dfbs_with_entry.contains(binding.dfb_spec_name)"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op111_add_layer3_5.py::test_forge_bf16_op111_add[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.add",
+   "ttnn.from_device",
+   "ttnn.to_torch"
+  ],
+  "device_ops": [
+   "BinaryNgDeviceOperation"
+  ],
+  "device_op_ns": 4366885,
+  "buffer_allocations": 3,
+  "device_ids": [
+   70
+  ],
+  "outcome": "passed"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op112_relu_layer3_5.py::test_forge_bf16_op112_relu_fused_add[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.add",
+   "ttnn.from_device",
+   "ttnn.to_torch"
+  ],
+  "device_ops": [
+   "BinaryNgDeviceOperation"
+  ],
+  "device_op_ns": 3992887,
+  "buffer_allocations": 3,
+  "device_ids": [
+   71
+  ],
+  "outcome": "passed"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op114_conv2d_layer4_0_conv1.py::test_forge_bf16_op114_conv2d[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.conv2d"
+  ],
+  "device_ops": [
+   "TilizeWithValPaddingDeviceOperation",
+   "MatmulDeviceOperation"
+  ],
+  "device_op_ns": 4864364,
+  "buffer_allocations": 5,
+  "device_ids": [
+   72
+  ],
+  "outcome": "failed",
+  "error": "RuntimeError: TT_FATAL @ /proj_sw/user_dev/ctr-lelanchelian/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:1076: dfbs_with_entry.contains(binding.dfb_spec_name)"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op116_conv2d_layer4_0_conv2.py::test_forge_bf16_op116_conv2d[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.conv2d"
+  ],
+  "device_ops": [
+   "InterleavedToShardedDeviceOperation",
+   "HaloDeviceOperation"
+  ],
+  "device_op_ns": 4892858,
+  "buffer_allocations": 10,
+  "device_ids": [
+   73
+  ],
+  "outcome": "failed",
+  "error": "RuntimeError: TT_FATAL @ /proj_sw/user_dev/ctr-lelanchelian/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:1439: !(is_gen2_arch() && self_loop_kernel->is_data_movement_kernel())"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op118_conv2d_layer4_0_conv3.py::test_forge_bf16_op118_conv2d[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.conv2d"
+  ],
+  "device_ops": [
+   "TilizeWithValPaddingDeviceOperation",
+   "MatmulDeviceOperation"
+  ],
+  "device_op_ns": 4681520,
+  "buffer_allocations": 5,
+  "device_ids": [
+   74
+  ],
+  "outcome": "failed",
+  "error": "RuntimeError: TT_FATAL @ /proj_sw/user_dev/ctr-lelanchelian/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:1076: dfbs_with_entry.contains(binding.dfb_spec_name)"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op119_conv2d_layer4_0_downsample.py::test_forge_bf16_op119_conv2d[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.conv2d"
+  ],
+  "device_ops": [
+   "InterleavedToShardedDeviceOperation",
+   "Conv2dDeviceOperation"
+  ],
+  "device_op_ns": 39052638,
+  "buffer_allocations": 7,
+  "device_ids": [
+   75
+  ],
+  "outcome": "failed",
+  "error": "RuntimeError: TT_FATAL @ /proj_sw/user_dev/ctr-lelanchelian/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:1439: !(is_gen2_arch() && self_loop_kernel->is_data_movement_kernel())"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op120_add_layer4_0.py::test_forge_bf16_op120_add[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.add",
+   "ttnn.from_device",
+   "ttnn.to_torch"
+  ],
+  "device_ops": [
+   "BinaryNgDeviceOperation"
+  ],
+  "device_op_ns": 4055813,
+  "buffer_allocations": 3,
+  "device_ids": [
+   76
+  ],
+  "outcome": "passed"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op121_relu_layer4_0.py::test_forge_bf16_op121_relu_fused_add[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.add",
+   "ttnn.from_device",
+   "ttnn.to_torch"
+  ],
+  "device_ops": [
+   "BinaryNgDeviceOperation"
+  ],
+  "device_op_ns": 4245781,
+  "buffer_allocations": 3,
+  "device_ids": [
+   77
+  ],
+  "outcome": "passed"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op123_conv2d_layer4_1_conv1.py::test_forge_bf16_op123_conv2d[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.conv2d"
+  ],
+  "device_ops": [
+   "TilizeWithValPaddingDeviceOperation",
+   "MatmulDeviceOperation"
+  ],
+  "device_op_ns": 94508998,
+  "buffer_allocations": 5,
+  "device_ids": [
+   78
+  ],
+  "outcome": "failed",
+  "error": "RuntimeError: TT_FATAL @ /proj_sw/user_dev/ctr-lelanchelian/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:1076: dfbs_with_entry.contains(binding.dfb_spec_name)"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op125_conv2d_layer4_1_conv2.py::test_forge_bf16_op125_conv2d[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.conv2d"
+  ],
+  "device_ops": [
+   "InterleavedToShardedDeviceOperation",
+   "HaloDeviceOperation"
+  ],
+  "device_op_ns": 5425956,
+  "buffer_allocations": 10,
+  "device_ids": [
+   79
+  ],
+  "outcome": "failed",
+  "error": "RuntimeError: TT_FATAL @ /proj_sw/user_dev/ctr-lelanchelian/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:1439: !(is_gen2_arch() && self_loop_kernel->is_data_movement_kernel())"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op127_conv2d_layer4_1_conv3.py::test_forge_bf16_op127_conv2d[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.conv2d"
+  ],
+  "device_ops": [
+   "TilizeWithValPaddingDeviceOperation",
+   "MatmulDeviceOperation"
+  ],
+  "device_op_ns": 4384695,
+  "buffer_allocations": 5,
+  "device_ids": [
+   80
+  ],
+  "outcome": "failed",
+  "error": "RuntimeError: TT_FATAL @ /proj_sw/user_dev/ctr-lelanchelian/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:1076: dfbs_with_entry.contains(binding.dfb_spec_name)"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op128_add_layer4_1.py::test_forge_bf16_op128_add[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.add",
+   "ttnn.from_device",
+   "ttnn.to_torch"
+  ],
+  "device_ops": [
+   "BinaryNgDeviceOperation"
+  ],
+  "device_op_ns": 4834681,
+  "buffer_allocations": 3,
+  "device_ids": [
+   81
+  ],
+  "outcome": "passed"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op129_relu_layer4_1.py::test_forge_bf16_op129_relu_fused_add[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.add",
+   "ttnn.from_device",
+   "ttnn.to_torch"
+  ],
+  "device_ops": [
+   "BinaryNgDeviceOperation"
+  ],
+  "device_op_ns": 4288524,
+  "buffer_allocations": 3,
+  "device_ids": [
+   82
+  ],
+  "outcome": "passed"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op131_conv2d_layer4_2_conv1.py::test_forge_bf16_op131_conv2d[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.conv2d"
+  ],
+  "device_ops": [
+   "TilizeWithValPaddingDeviceOperation",
+   "MatmulDeviceOperation"
+  ],
+  "device_op_ns": 5549436,
+  "buffer_allocations": 5,
+  "device_ids": [
+   83
+  ],
+  "outcome": "failed",
+  "error": "RuntimeError: TT_FATAL @ /proj_sw/user_dev/ctr-lelanchelian/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:1076: dfbs_with_entry.contains(binding.dfb_spec_name)"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op133_conv2d_layer4_2_conv2.py::test_forge_bf16_op133_conv2d[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.conv2d"
+  ],
+  "device_ops": [
+   "InterleavedToShardedDeviceOperation",
+   "HaloDeviceOperation"
+  ],
+  "device_op_ns": 7685386,
+  "buffer_allocations": 10,
+  "device_ids": [
+   84
+  ],
+  "outcome": "failed",
+  "error": "RuntimeError: TT_FATAL @ /proj_sw/user_dev/ctr-lelanchelian/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:1439: !(is_gen2_arch() && self_loop_kernel->is_data_movement_kernel())"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op135_conv2d_layer4_2_conv3.py::test_forge_bf16_op135_conv2d[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.conv2d"
+  ],
+  "device_ops": [
+   "TilizeWithValPaddingDeviceOperation",
+   "MatmulDeviceOperation"
+  ],
+  "device_op_ns": 6373421,
+  "buffer_allocations": 5,
+  "device_ids": [
+   85
+  ],
+  "outcome": "failed",
+  "error": "RuntimeError: TT_FATAL @ /proj_sw/user_dev/ctr-lelanchelian/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:1076: dfbs_with_entry.contains(binding.dfb_spec_name)"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op136_add_layer4_2.py::test_forge_bf16_op136_add[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.add",
+   "ttnn.from_device",
+   "ttnn.to_torch"
+  ],
+  "device_ops": [
+   "BinaryNgDeviceOperation"
+  ],
+  "device_op_ns": 5732280,
+  "buffer_allocations": 3,
+  "device_ids": [
+   86
+  ],
+  "outcome": "passed"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op137_relu_layer4_2.py::test_forge_bf16_op137_relu_fused_add[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.add",
+   "ttnn.from_device",
+   "ttnn.to_torch"
+  ],
+  "device_ops": [
+   "BinaryNgDeviceOperation"
+  ],
+  "device_op_ns": 3932334,
+  "buffer_allocations": 3,
+  "device_ids": [
+   87
+  ],
+  "outcome": "passed"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op138_mean_global_avgpool.py::test_forge_bf16_op138_mean_via_avg_pool2d[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.avg_pool2d",
+   "ttnn.from_device",
+   "ttnn.to_torch"
+  ],
+  "device_ops": [
+   "TilizeWithValPaddingDeviceOperation",
+   "ReduceDeviceOperation",
+   "UntilizeWithUnpaddingDeviceOperation"
+  ],
+  "device_op_ns": 430286646,
+  "buffer_allocations": 4,
+  "device_ids": [
+   88
+  ],
+  "outcome": "passed"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op139_reshape_classifier_squeeze.py::test_forge_bf16_op139_reshape[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.reshape",
+   "ttnn.from_device",
+   "ttnn.to_torch"
+  ],
+  "device_ops": [],
+  "device_op_ns": 0,
+  "buffer_allocations": 1,
+  "device_ids": [
+   89
+  ],
+  "outcome": "view"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op140_linear_fc.py::test_forge_bf16_op140_linear[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.from_torch",
+   "ttnn.experimental.quasar.linear"
+  ],
+  "device_ops": [
+   "MatmulDeviceOperation"
+  ],
+  "device_op_ns": 967649,
+  "buffer_allocations": 4,
+  "device_ids": [
+   90
+  ],
+  "outcome": "failed",
+  "error": "RuntimeError: TT_FATAL @ /proj_sw/user_dev/ctr-lelanchelian/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:1076: dfbs_with_entry.contains(binding.dfb_spec_name)"
+ },
+ {
+  "test": "models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op_inventory_bf16.py::test_device_under_test_is_quasar[quasar-device_params0]",
+  "arch": "Arch.QUASAR",
+  "ttnn_ops": [],
+  "device_ops": [],
+  "device_op_ns": 0,
+  "buffer_allocations": 0,
+  "device_ids": [],
+  "outcome": "passed"
+ }
+]

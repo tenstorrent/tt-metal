@@ -1,0 +1,212 @@
+ResNet50_Forge_Fe_bf16 -- full test log
+==================================================================================================
+
+Tests under  models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/
+
+ONE STANDALONE TEST FILE PER OP CALL-SITE: 91 files, one per COMPUTE row of sheet 1, named
+test_op<row>_<op>_<module>.py so the directory listing is the graph in @forward order. Each replays
+that one op on Quasar with the configuration the Forge compiler chose: shapes, page layout,
+kernel/stride/padding, the fused activation, math fidelity (HiFi4) and fp32_dest_acc_en, every
+Conv2dConfig flag, and the memory config -- which in this compile is DRAM INTERLEAVED for every
+single tensor, so no test is skipped for device grid size and every case was actually exercised.
+
+CONFIG SOURCE
+  resnet50_forge_bf16_vs_quasar.xlsx, sheet 1 "Forge ops (bf16 only)" -- 141 ops in @forward from
+  CompilerConfig() with exactly enable_optimization_passes=True and default_df_override=Float16_b,
+  and nothing else (no consteval, no opt_level=2, no HiFi2, no remove_dead_values, no
+  max_legal_layouts). The op files are GENERATED from that sheet by
+  quasar_analysis/gen_forge_bf16_op_tests.py, so each one carries the verbatim TTNN IR line and the
+  full operand table in its docstring.
+
+NOT COVERED
+  The 50 ttnn.to_layout rows get no test file -- layout plumbing rather than compute, the same
+  reason the workbook's comparison sheets 3 and 4 leave them out. 91 covered + 50 excluded = 141.
+  test_to_layout_is_deliberately_excluded in test_op_inventory_bf16.py asserts that arithmetic so
+  the exclusion stays a decision. See CAUSE C below for what stops being watched with them.
+
+RUN PROVENANCE
+  date            2026-09-04
+  tt-metal        a382e8d2b3b (+ working tree)
+  device          craq-sim functional Quasar simulator, TT_METAL_SIMULATOR=sim/qsr/libttsim.so,
+                  TT_METAL_SLOW_DISPATCH_MODE=1, ARCH_NAME=quasar.
+                  Reported by the suite itself: arch=Arch.QUASAR, compute grid 8x4 = 32 cores.
+  pytest          -q -rA --tb=line --timeout=300, one invocation over the whole directory
+  log             all_ops.log
+
+RESULT   119 tests:   47 passed,   54 failed,   18 xfailed (the documented Quasar gaps)
+
+PER-TEST LEDGER
+  resnet50_forge_bf16_vs_quasar.xlsx, SHEET 5 "Unit tests (Quasar run)" -- one row per test, 119
+  rows, carrying the sheet-1 row each replays, the file and function, the quasar op called, every
+  operand and attribute verbatim from sheet 1, the golden, the assertion, the result and the root
+  cause. Written by quasar_analysis/build_sheet5_unit_tests.py, which then re-reads the written
+  workbook and checks sheet 5 against sheet 1 AND against the files on disk (674 assertions, 0
+  mismatches, 91/91 covered rows, 91/91 op files with a row, + 50 excluded to_layout rows = 141).
+
+--------------------------------------------------------------------------------------------------
+PER OP KIND
+--------------------------------------------------------------------------------------------------
+OP                    FILES  TESTS  PASS  FAIL  XFAIL   NOTE
+ttnn.conv2d              53     53     0    53      0   causes A (33) and B (20)
+ttnn.add                 16     16    16     0      0
+ttnn.relu                16     32    16     0     16   gap; the 16 fused-add workarounds all pass
+ttnn.reshape              2      2     2     0      0
+ttnn.permute              1      2     1     0      1   gap; the transpose x2 workaround passes
+ttnn.max_pool2d           1      1     1     0      0   halo and all
+ttnn.mean                 1      2     1     0      1   gap; the avg_pool2d workaround passes
+ttnn.linear               1      1     0     1      0   cause A
+(inventory file)          1     10    10     0      0   9 host-only + 1 device check
+TOTAL                    92    119    47    54     18
+
+ttnn.to_layout            0      0     -     -      -   EXCLUDED: 50 sheet-1 rows, layout plumbing
+
+The 18 xfails are the three documented Quasar gaps -- relu x16, permute x1, mean x1 -- each of
+which also has a passing workaround test in the same file (fused add, transpose x2, avg_pool2d).
+
+--------------------------------------------------------------------------------------------------
+DID IT ACTUALLY RUN ON QUASAR?  (dispatch attestation)
+--------------------------------------------------------------------------------------------------
+
+  pytest -p quasar_analysis.pytest_quasar_attest <dir> --attest-out .../dispatch_attestation.json
+
+  captures the ttnn graph around every test and records the DEVICE OPERATION underneath each ttnn
+  call, with its duration. A device-operation node only exists if a program was created and enqueued
+  on the device, so its presence is the attestation. Records: dispatch_attestation.json, log:
+  attestation.log.
+
+  RESULT (2026-09-04)
+    device tests captured : 110
+    arch reported         : Arch.QUASAR   -- all 110, no exceptions
+    DISPATCHED            : 35 passing tests ran a device program on Quasar
+    VIEW                  :  2 -- both reshapes; quasar.reshape is a metadata-only view when the
+                                  last dim does not change (0 ns, no device program). Correct ttnn
+                                  behaviour, but those two passes do NOT prove device execution.
+    XFAILED               : 18 -- the op does not exist, nothing dispatches by design
+    failed                : 54, of which 54 REACHED THE DEVICE FIRST
+    total device time     : 5318.3 ms across 147 dispatches
+
+  Device operations that COMPLETED on passing tests:
+    BinaryNgDeviceOperation x32, HaloDeviceOperation, InterleavedToShardedDeviceOperation,
+    ShardedToInterleavedDeviceOperation, TransposeDeviceOperation x2, ReduceDeviceOperation,
+    UntilizeWithUnpaddingDeviceOperation
+
+  The failing tests are NOT "nothing ran". Real Quasar programs executed before each threw:
+    op004_conv2d (7x7 stem)  InterleavedToSharded, Halo          -> threw at the halo   (cause B)
+    op123_conv2d (1x1)       TilizeWithValPadding, Matmul        -> threw at the matmul (cause A)
+    op140_linear             Matmul                              -> threw at the matmul (cause A)
+
+  Two further guarantees that need no run: every test calls _assert_quasar(device), so the suite
+  cannot pass on the wrong arch; and every op called is ttnn.experimental.quasar.*, which builds
+  Gen2 kernels that TT_FATAL on any other arch.
+
+--------------------------------------------------------------------------------------------------
+FAILURES, GROUPED BY ROOT CAUSE
+--------------------------------------------------------------------------------------------------
+
+All 54 failures fall into exactly 2 causes. None is a config or test defect: both are device-side
+TT_FATALs raised during program-spec validation, before any kernel runs. A third cause -- silent
+numeric corruption in quasar untilize -- was found by the ttnn.to_layout tests before those were
+removed, and is kept below because it is the only one that produces wrong numbers rather than an
+error.
+
+==================================================================================================
+CAUSE A -- 34 of 54 failures        (33 conv2d + 1 linear)
+  fp32_dest_acc_en=true is rejected: no unpack_modes entry for the FP32 DFB
+==================================================================================================
+
+  TT_FATAL @ tt_metal/impl/metal2_host_api/program_spec.cpp:1076
+      dfbs_with_entry.contains(binding.dfb_spec_name)
+      Compute kernel 'compute' consumes FP32 DFB 'cb_intermed0' with enable_32_bit_dest=true, but
+      provides no unpack_modes entry for this DFB. This configuration requires an explicit choice
+      between UnpackMode::UnpackToSrc and UnpackMode::UnpackToDest.
+
+  Forge sets compute_config = <math_fidelity = hifi4, fp32_dest_acc_en = true> on all 53 convs,
+  the linear and the mean. It is passed through verbatim, because that is what the sheet records.
+
+  Hits every conv that does NOT need a halo (the 33 stride-1 1x1 convs) and the fc. The other 20
+  convs never reach this check -- they fail earlier, at cause B.
+
+  Confirmed to be this flag and nothing else about the config: re-running conv case 47
+  (layer4.1.conv1, 2048->512 1x1 @7x7) with fp32_dest_acc_en=False gets past this check and then
+  fails at a THIRD, unrelated pre-existing bug -- the quasar matmul in0 receiver kernel does not
+  compile:
+      ttnn/cpp/ttnn/operations/experimental/quasar/matmul/device/kernels/dataflow/
+          reader_bmm_tile_layout_in0_receiver_metal2.cpp:59
+      error: 'Semaphore<TENSIX>::get_l1_addr() const' is private within this context
+             (declared private at tt_metal/hw/inc/api/dataflow/noc_semaphore.h:241)
+  so conv numerics on this build cannot be reached from either direction yet.
+
+==================================================================================================
+CAUSE B -- 20 of 54 failures        (all conv2d)
+  halo scratch DataflowBuffer is self-looped, which Gen2 forbids
+==================================================================================================
+
+  TT_FATAL @ tt_metal/impl/metal2_host_api/program_spec.cpp:1439
+      !(is_gen2_arch() && self_loop_kernel->is_data_movement_kernel())
+      DataflowBuffer 'gather_scratch0' is self-looped by data-movement kernel 'reader0' (bound as
+      both PRODUCER and CONSUMER). Self-loop DFBs are not supported for data-movement kernels on
+      Gen2 architectures.
+
+  19 of the 20 name 'gather_scratch0'; conv case 0 (the 7x7 stem) names 'act_sharded' instead.
+
+  Hits exactly the 20 convs that need a halo: the 7x7 stem, all 16 3x3 convs, and the 3 stride-2
+  1x1 downsamples. This is the same halo path that failed to COMPILE in the earlier
+  ../forge_fe_runs/ sweep (halo_gather.cpp:259, call to non-constexpr get_arg); the build has moved
+  on and it now fails validation instead.
+
+  NOTE: max_pool2d also needs a halo and it PASSES here (PCC 0.999). So the halo itself is not
+  uniformly broken on Quasar -- it is the conv halo path specifically.
+
+==================================================================================================
+CAUSE C -- NOT IN THE CURRENT RUN, kept because it is the serious one
+  quasar untilize silently corrupts TILE -> ROW_MAJOR for some tile-grid shapes
+==================================================================================================
+
+  Found by the 50 ttnn.to_layout tests in the run of 2026-09-04 before those files were removed
+  (11 of them failed). Nothing in the suite watches this any more; reproduce it on demand with
+  quasar_analysis/probe_quasar_untilize.py.
+
+  No error, no throw -- just wrong data. PCCs observed:
+      0.7553   1x1x3136x256   (sheet 1 rows 15, 23, 31)
+      0.7564   1x1x3136x128   (sheet 1 row 33)
+      0.8653   1x1x196x1024   (sheet 1 rows 73, 81, 89, 97, 105, 113)
+      0.9797   1x1x50176x3    (sheet 1 row 3)
+  The other 39 untilizes and the single ROW_MAJOR -> TILE are EXACT (the test asserts equality,
+  not a tolerance).
+
+  Narrowed with a follow-up probe (quasar_analysis/probe_quasar_untilize.py):
+
+      shape           roundtrip   to_layout   untilize    untilize_with_unpadding
+      1x1x3136x256    1.0000      0.7553      0.7553      0.7553
+      1x1x3136x128    1.0000      0.7564      0.7564      0.7564
+      1x1x196x1024    1.0000      0.8659      0.8659      0.8659
+      1x1x50176x3     1.0000      0.9792      0.9792      0.9792
+      1x1x3136x64     1.0000      1.0000      1.0000      0.7551   <-- unpad variant ALSO wrong
+      1x1x196x256     1.0000      1.0000      1.0000      1.0000
+      1x1x784x512     1.0000      1.0000      1.0000      1.0000
+
+  Three things this settles:
+    * "roundtrip" is from_torch(TILE, device) -> to_torch with NO device op at all, and it is
+      exact everywhere. The upload/download transport is sound; the corruption is in the device
+      untilize.
+    * to_layout and untilize corrupt IDENTICALLY, so to_layout is only dispatching -- the bug is
+      in untilize, not in to_layout.
+    * untilize_with_unpadding has an ADDITIONAL failure mode: it corrupts 1x1x3136x64, which plain
+      untilize gets right.
+
+  This is the most serious of the three findings, because it is the only one that produces wrong
+  numbers rather than an error. A ported graph would not crash here, just be silently wrong -- the
+  same shape of trap as ttnn.softmax returning zeros on Quasar.
+
+--------------------------------------------------------------------------------------------------
+WHAT PASSED
+--------------------------------------------------------------------------------------------------
+  quasar.add            16/16 residual adds, bare, PCC >= 0.99
+  quasar.add + RELU     16/16 fused add+relu (the route the 16 stranded relus would have to take)
+  quasar.max_pool2d      1/1  the 3x3 s2 stem pool, halo and all, PCC 0.999 -- with Forge's
+                              reallocate_halo_output=false and config_tensors_in_dram=true
+  quasar.avg_pool2d      1/1  the 7x7 global average that replaces ttnn.mean, PCC >= 0.99, and it
+                              accepts fp32_dest_acc_en=true where conv and linear do not
+  quasar.reshape         2/2  both call-sites, EXACT
+  quasar.transpose x2    1/1  the NCHW -> NHWC permute decomposition, EXACT
+  (quasar.to_layout      39/50 were exact in the run before those files were removed; see cause C)
