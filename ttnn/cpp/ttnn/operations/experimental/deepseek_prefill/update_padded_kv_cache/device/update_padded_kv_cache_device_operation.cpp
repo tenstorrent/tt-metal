@@ -72,6 +72,12 @@ void validate_runtime_args(
         args.num_layers);
     // The cache is sharded across a 2D mesh; the kernel derives sp_factor from the mesh extent.
     const auto& cache = tensor_args.cache;
+    // Checked here rather than only in the miss validator because device() is dereferenced on the next
+    // line and returns nullptr for host storage, so on a hit the fault would land there instead.
+    TT_FATAL(
+        cache.storage_type() == StorageType::DEVICE,
+        "cache must be on device, but its storage type is {}",
+        cache.storage_type());
     const auto& mesh_view = cache.device()->get_view();
     TT_FATAL(mesh_view.is_mesh_2d(), "update_padded_kv_cache requires a 2D mesh");
     if (!args.cluster_axis.has_value()) {
@@ -103,6 +109,40 @@ void validate_runtime_args(
         !(args.valid_global.has_value() && tensor_args.slot_idx.has_value()),
         "scalar valid_global cannot be combined with the metadata path; pass the valid_global TENSOR instead");
 
+    // create_descriptor's TILE branch derives its page size, Wt/input_Ht/cache_HtWt and the
+    // writer_tile_height compile arg from the architectural 32x32 constants, and the tile is absent
+    // from compute_program_hash. Checked here rather than in the miss validator so it also runs on the
+    // cache-hit path, where a non-standard tile would otherwise alias onto a cached 32x32 program.
+    const auto require_standard_tile = [](const Tensor& tensor, const char* name) {
+        if (tensor.layout() != Layout::TILE) {
+            return;
+        }
+        const auto tile = tensor.tensor_spec().tile();
+        TT_FATAL(
+            tile.get_height() == TILE_HEIGHT && tile.get_width() == TILE_WIDTH,
+            "update_padded_kv_cache does not currently support tiles other than 32x32, but {} has a {}x{} "
+            "tile",
+            name,
+            tile.get_height(),
+            tile.get_width());
+    };
+    require_standard_tile(cache, "cache");
+    require_standard_tile(tensor_args.input, "input");
+
+    // cache's dtype and layout are absent from the key (only input's are hashed), and both set the
+    // writer's page size, so they have to be re-checked on hits too: a second call that changes only
+    // the cache would otherwise reuse a program built for the first one's page geometry.
+    TT_FATAL(
+        cache.dtype() == tensor_args.input.dtype(),
+        "cache and input dtype must match (got {} and {})",
+        cache.dtype(),
+        tensor_args.input.dtype());
+    TT_FATAL(
+        cache.layout() == tensor_args.input.layout(),
+        "cache and input layout must match (got {} and {})",
+        cache.layout(),
+        tensor_args.input.layout());
+
     // Metadata-path invariant: the two per-request tensors are supplied together or not at all.
     // The path is selected on `slot_idx.has_value()`, but create_descriptor / override_runtime_arguments
     // dereference `kv_actual_global` unconditionally whenever slot_idx is set — a mismatched optional
@@ -117,7 +157,8 @@ void validate_runtime_args(
     // UINT32, ROW_MAJOR, single-element, non-sharded) here, so a malformed tensor fails host-side with a
     // clear message instead of a hard-to-debug device-side read. Values stay off the host dispatch path.
     if (tensor_args.slot_idx.has_value()) {
-        auto validate_meta = [&cache](const Tensor& meta, const char* name) {
+        const auto& meta_memory_config = tensor_args.slot_idx->memory_config();
+        auto validate_meta = [&cache, &meta_memory_config](const Tensor& meta, const char* name) {
             TT_FATAL(meta.storage_type() == StorageType::DEVICE, "metadata tensor {} must be on device", name);
             TT_FATAL(meta.dtype() == DataType::UINT32, "metadata tensor {} must be UINT32", name);
             TT_FATAL(meta.layout() == Layout::ROW_MAJOR, "metadata tensor {} must be ROW_MAJOR", name);
@@ -130,6 +171,17 @@ void validate_runtime_args(
             // The writer resolves meta.buffer()->address() against cache.device(); a tensor on a
             // different mesh device would bake the wrong address and fail obscurely downstream.
             TT_FATAL(meta.device() == cache.device(), "metadata tensor {} must be on the same device as cache", name);
+            // create_descriptor emits a single TensorAccessorArgs built from slot_idx and the writer uses
+            // it for every metadata read, so a tensor carrying a different memory config would have its
+            // address resolved through the wrong bank table.
+            TT_FATAL(
+                meta.memory_config() == meta_memory_config,
+                "update_padded_kv_cache does not currently support metadata tensors with different memory "
+                "configs: one TensorAccessor serves every metadata read, so {} must match slot_idx (got "
+                "buffer types {} and {})",
+                name,
+                meta.memory_config().buffer_type(),
+                meta_memory_config.buffer_type());
         };
         validate_meta(tensor_args.slot_idx.value(), "slot_idx");
         validate_meta(tensor_args.kv_actual_global.value(), "kv_actual_global");
@@ -201,16 +253,15 @@ void UpdatePaddedKvCacheDeviceOperation::validate_on_program_cache_miss(
     const auto& cache = tensor_args.cache;
     const auto& input = tensor_args.input;
 
-    TT_FATAL(cache.storage_type() == StorageType::DEVICE, "cache must be on device");
+    // cache storage is pinned in validate_runtime_args so it also runs on hits.
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "input must be on device");
-    TT_FATAL(cache.dtype() == input.dtype(), "cache and input dtype must match");
 
     // Layout / dtype gating. The op is a pure page copy, so it supports both TILE and ROW_MAJOR;
     // the page-unit math in create_descriptor branches on layout. The two formats are mutually
     // exclusive per dtype family:
     //   - block-float (bfloat8_b/bfloat4_b) carries a per-face shared exponent and is tile-only.
     //   - fp8_e4m3 is ROW_MAJOR-only (Blackhole) in ttnn today.
-    TT_FATAL(cache.layout() == input.layout(), "cache and input layout must match");
+    // cache-vs-input dtype and layout agreement lives in validate_runtime_args so it also runs on hits.
     TT_FATAL(input.layout() == Layout::TILE || input.layout() == Layout::ROW_MAJOR, "layout must be TILE or ROW_MAJOR");
     if (tt::tt_metal::is_block_float(input.dtype())) {
         TT_FATAL(input.layout() == Layout::TILE, "block-float dtypes (bfloat8_b/bfloat4_b) require TILE layout");
@@ -305,7 +356,11 @@ ttsl::hash::hash_t UpdatePaddedKvCacheDeviceOperation::compute_program_hash(
         input.memory_config(),
         input.padded_shape(),
         cache.memory_config(),
-        cache.padded_shape());
+        cache.padded_shape(),
+        // On the metadata path the writer bakes a TensorAccessorArgs built from slot_idx into its
+        // compile-time args, so the bank table it selects cannot be refreshed on a cache hit. Only the
+        // config is keyed, never the value; kv_actual_global is pinned to match by validate_runtime_args.
+        tensor_args.slot_idx.has_value() ? tensor_args.slot_idx->memory_config() : MemoryConfig{});
 }
 
 tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFactory::create_descriptor(

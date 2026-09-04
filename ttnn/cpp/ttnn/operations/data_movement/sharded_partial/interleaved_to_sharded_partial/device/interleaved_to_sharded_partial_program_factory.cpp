@@ -442,7 +442,7 @@ void InterleavedToShardedPartialProgramFactory::override_runtime_arguments(
     // work-split (shard extents, curr_idx, num_units) is pinned by the hashed shape/shard-spec. The only
     // per-dispatch values are the source/output buffer addresses and the slice_index-dependent
     // starting_idx_h. Patch just those slots in place instead of rebuilding the whole descriptor (O(1)
-    // per core rather than O(num_cores) descriptor work). Replaces get_dynamic_runtime_args.
+    // per core rather than O(num_cores) descriptor work).
     const uint32_t starting_idx_h = operations::data_movement::detail::calculate_starting_idx_h(
         input_tensor, operation_attributes.num_slices, operation_attributes.slice_index);
     const uint32_t src_addr = input_tensor.buffer()->address();

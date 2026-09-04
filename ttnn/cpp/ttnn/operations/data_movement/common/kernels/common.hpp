@@ -40,12 +40,10 @@ FORCE_INLINE void enhanced_noc_async_read(
                                        ? NOC_MAX_BURST_SIZE
                                        : (max_transfer_size == 0 ? NOC_MAX_BURST_SIZE + 1 : max_transfer_size);
     noc.async_read<NocOptions::DEFAULT, page_size>(
-        UnicastEndpoint{},
+        PrecomposedUnicastEndpoint{},
         CoreLocalMem<uint32_t>(dst_l1_addr),
         bytes,
-        {.noc_x = (uint32_t)NOC_UNICAST_ADDR_X(src_noc_addr),
-         .noc_y = (uint32_t)NOC_UNICAST_ADDR_Y(src_noc_addr),
-         .addr = (uint32_t)NOC_LOCAL_ADDR_OFFSET(src_noc_addr)},
+        {.noc_addr = src_noc_addr},
         {.offset_bytes = 0});
 }
 
@@ -65,12 +63,10 @@ FORCE_INLINE void enhanced_noc_async_write(
                                        : (max_transfer_size == 0 ? NOC_MAX_BURST_SIZE + 1 : max_transfer_size);
     noc.async_write<NocOptions::DEFAULT, page_size>(
         CoreLocalMem<uint32_t>(src_l1_addr),
-        UnicastEndpoint{},
+        PrecomposedUnicastEndpoint{},
         bytes,
         {.offset_bytes = 0},
-        {.noc_x = (uint32_t)NOC_UNICAST_ADDR_X(dst_noc_addr),
-         .noc_y = (uint32_t)NOC_UNICAST_ADDR_Y(dst_noc_addr),
-         .addr = (uint32_t)NOC_LOCAL_ADDR_OFFSET(dst_noc_addr)});
+        {.noc_addr = dst_noc_addr});
 }
 
 template <uint32_t max_transfer_size, bool only_writes>
