@@ -212,6 +212,7 @@ std::vector<JitBuildState> create_build_state(JitBuildEnv& build_env, const JitD
                 .processor_class = static_cast<HalProcessorClassType>(processor_class),
                 .is_fw = is_fw,
                 .dispatch_message_addr = dev_config.dispatch_message_addr,
+                .fds_worker_done = dev_config.fds_worker_done,
                 .is_cooperative = hal.get_eth_fw_is_cooperative(),
             };
 

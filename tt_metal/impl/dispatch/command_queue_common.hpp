@@ -30,7 +30,9 @@ enum class CommandQueueDeviceAddrType : uint8_t {
     REALTIME_PROFILER_MSG = 9,
     DISPATCH_TELEMETRY = 10,
     DISPATCH_TELEMETRY_CONTROL = 11,
-    // Completion counters for worker-done signalling on Quasar. Not used on WH/BH.
+    // Completion counters for worker-done signalling on Quasar. Incremented by worker NOC atomics, or by dispatch_s
+    // from FDS counts when FDS worker completion is enabled. With one CQ and one sub-device, RUN_MSG_GO uses
+    // alternating FDS tokens and worker DM0 writes the mailbox signal byte. Not used on WH/BH.
     WORKER_COMPLETION_SEMAPHORES = 12,
     UNRESERVED = 13,
 };
