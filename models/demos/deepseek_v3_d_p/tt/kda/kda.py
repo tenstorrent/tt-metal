@@ -11,7 +11,7 @@ from pathlib import Path
 import torch
 
 import ttnn
-from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
+from models.demos.deepseek_v3_d_p.reference.kda.config import KDA_SOFTPLUS_BETA, KDA_SOFTPLUS_THRESHOLD, KDAConfig
 from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_BETA_DTYPE,
     KDA_CHUNK_SIZE,
@@ -317,7 +317,13 @@ class ttKDA:
             gate = ttnn.multiply(
                 weights.decay_scale_flat,
                 gate,
-                input_tensor_b_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.SOFTPLUS, 1.0, 20.0)],
+                input_tensor_b_activations=[
+                    ttnn.UnaryWithParam(
+                        ttnn.UnaryOpType.SOFTPLUS,
+                        KDA_SOFTPLUS_BETA,
+                        KDA_SOFTPLUS_THRESHOLD,
+                    )
+                ],
                 dtype=ttnn.bfloat16,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
