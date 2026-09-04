@@ -982,7 +982,7 @@ BENCHMARK_CAPTURE(
     ->Apply(Max8192Args)
     ->UseManualTime();
 
-// Worst case: every knob maxed at once (32 CBs, 128 RTAs, 4 sems, all processors, all cores).
+// Combined high-cost configuration: 32 CBs, 128 per-core RTAs, 4 semaphores, all processors, and all cores.
 BENCHMARK_CAPTURE(
     BM_pgm_dispatch,
     maxed_config_params_trace,
