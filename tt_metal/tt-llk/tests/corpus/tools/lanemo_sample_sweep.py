@@ -41,19 +41,21 @@ _N_RE = re.compile(r"n_samples=(\d+)")
 
 
 def _text_sha(venv, rt):
-    """Object-identity attestation: sha256 of the built math kernel's .text.
-    Each leg builds into its own RUNNER_TEMP, so the single math.elf there is
-    that leg's certified kernel. Empty string if not found (build+run only)."""
-    elfs = sorted(Path(rt).glob("tt-llk-build/sources/*/*/elf/math.elf"))
-    if not elfs:
-        return ""
-    here = Path(__file__).resolve().parent
-    r = subprocess.run(
-        [venv, str(here / "elf_text_sha.py"), str(elfs[-1])],
-        capture_output=True,
-        text=True,
+    """Object-identity attestation: the leg's BUILD-VARIANT hash — the harness'
+    own content hash of the whole kernel build (source + templates), which is the
+    variant directory name under sources/. This discriminates the sem and hand
+    builds regardless of WHICH TRISC ELF carries the difference: reduce_sdpa's
+    impl lives in pack.elf, not math.elf, so a math-only hash wrongly calls the
+    two builds identical. Empty string if not found (build+run only)."""
+    import hashlib as _h
+
+    variants = sorted(
+        p.name for p in Path(rt).glob("tt-llk-build/sources/*/*") if p.is_dir()
     )
-    return r.stdout.strip()
+    if not variants:
+        return ""
+    # One build per leg-RT; fold if more than one so any difference shows.
+    return _h.sha256("\n".join(variants).encode()).hexdigest()
 
 
 def run_leg(args, node, rt, out_file, log_file):
