@@ -403,7 +403,6 @@ struct NocUnicastScatterWriteFields {
 
 template <typename T>
 void setup_2d_mcast_route(uint32_t packet_header_address, const ChipMulticastFields2D& mcast_fields) {
-    // Template constraint: T must be MeshPacketHeader or HybridMeshPacketHeader
     fabric_set_mcast_route(
         (T*)packet_header_address,
         mcast_fields.dst_device_id,
