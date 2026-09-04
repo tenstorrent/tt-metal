@@ -70,8 +70,9 @@ class TtPrefillRuntimeConfig:
     # this model's residual layout): True => emb TP-sharded, False => emb replicated across TP. M3's SP
     # residual is emb-replicated, so its adapter passes False.
     pipeline_activation_emb_tp_sharded: bool = True
-    # The runner picks the per-layer ack transport from this: traced runs use the host callback, untraced
-    # ones the D2H service. M3 has no traced path, so it stays False.
+    # Replay the per-bucket metal-trace pool (capture_trace) instead of dispatching op by op. Headless
+    # cache-fill only, and the replay emits no per-layer acks, so capture_trace refuses when a LayerAck
+    # channel or completion sink is registered. Needs the mesh opened with trace_region_size > 0.
     use_trace: bool = False
 
     @property
@@ -408,11 +409,18 @@ class TtPrefillRuntime:
                 "use_trace captures the headless cache-fill forward; logits (skip_lm_head=False / "
                 "get_last_token>=0) are not on the traced path"
             )
+            # Each bucket bakes cached_len = bucket * chunk_size (KV write row, RoPE start, causal extent), so
+            # an unaligned start would replay a neighbouring depth without error. The producer's multi-turn
+            # prefix resume is the one caller that produces such starts (32-aligned, not chunk-aligned).
+            assert actual_start % self.config.chunk_size == 0, (
+                f"trace replay serves chunk-aligned starts only, got actual_start={actual_start} "
+                f"(chunk_size={self.config.chunk_size}); prefix resume must run untraced"
+            )
             bucket = actual_start // self.config.chunk_size
             assert bucket in self._trace_pool, f"no captured trace for cache offset {actual_start} (bucket {bucket})"
             if kv_cache.num_users > 1:
                 kv_cache.set_read_user(slot_id)
-            self.update_chunk_input(bucket, activation=input_tensor)
+            self.update_chunk_input(bucket, input_tensor)
             ttnn.deallocate(input_tensor)
             return self.replay_chunk(bucket)
 
@@ -484,6 +492,8 @@ class TtPrefillRuntime:
     def _trace_fwd(self, buf, cached_len: int, slot_id: int, kv_cache):
         # Non-first rank clones the input because prefill_forward's first layer frees its arg, and the
         # persistent buffer must survive. rot_mats_global=self.rope_indexed avoids the SP+trace host reshard.
+        # on_layer_complete stays None: the ack is a host-side shm bump, which cannot live inside a captured
+        # trace, so a replay emits no per-layer acks (capture_trace refuses when one is registered).
         x = self._embed_tokens(buf) if self.config.is_first_rank else ttnn.clone(buf)
         return self.model.prefill_forward(
             x,
@@ -504,26 +514,12 @@ class TtPrefillRuntime:
             return
         self._trace_in = {c: self.make_chunk_input([0] * self.config.chunk_size) for c in range(n_chunks)}
 
-    def update_chunk_input(self, c: int, *, tokens=None, activation=None) -> None:
+    def update_chunk_input(self, c: int, src: ttnn.Tensor) -> None:
         """Overwrite chunk c's persistent input buffer in place before replay — the trace binds the
-        buffer's address, so we update contents, never the handle. First rank: host token ids →
-        copy_host_to_device. Non-first rank: the freshly-received D2D activation → device copy."""
-        buf = self._trace_in[c]
-        if tokens is not None:
-            sp = self.config.sp_factor
-            s_local = self.config.chunk_size // sp
-            host = torch.tensor(tokens, dtype=torch.int32).reshape(sp, 1, s_local)
-            host_tt = ttnn.from_torch(
-                host,
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=ttnn.ShardTensor2dMesh(
-                    self.mesh_device, mesh_shape=self.config.mesh_shape, dims=(self.config.sp_axis, None)
-                ),
-            )
-            ttnn.copy_host_to_device_tensor(host_tt, buf)
-        elif activation is not None:
-            ttnn.copy(activation, buf)
+        buffer's address, so we update contents, never the handle. ``src`` is any device tensor of the
+        buffer's spec: the first rank's uint32 token tensor (make_chunk_input / the H2D socket), or a
+        non-first rank's D2D hidden-state activation."""
+        ttnn.copy(src, self._trace_in[c])
 
     def capture_chunk_trace(self, c: int, kv_cache, *, slot_id: int, cached_len: int) -> None:
         """Capture chunk c's trace over the input already loaded in its persistent buffer. Runs one warm
@@ -549,16 +545,14 @@ class TtPrefillRuntime:
             self._trace_pool = {}
         self._trace_pool[c] = {"tid": tid, "in": buf, "out": out, "cached_len": cached_len}
 
-    def capture_prefill_trace_pool(self, kv_cache, *, slot_id: int, n_chunks: int, token_ids=None) -> dict:
-        """Capture the whole pool for a single-rank (first-rank) prefill: allocate the per-chunk buffers,
-        load each chunk's real tokens, and capture in order. token_ids is the full padded prompt; slice
-        [c*chunk : (c+1)*chunk] per chunk. Non-first pipeline ranks capture per chunk via
-        capture_chunk_trace after receiving the real activation (see the runner)."""
+    def capture_prefill_trace_pool(self, kv_cache, *, slot_id: int, n_chunks: int) -> dict:
+        """Capture one trace per depth bucket, in order, on whatever rank this is (capture_trace calls it
+        on every rank). Each capture runs over the bucket's zero-initialised persistent buffer — zero
+        tokens on the first rank, a placeholder activation elsewhere: the trace binds the buffer's address,
+        not its contents, and prefill_chunk refreshes the contents in place before every replay."""
         chunk = self.config.chunk_size
         self._ensure_trace_buffers(n_chunks)
         for c in range(n_chunks):
-            if self.config.is_first_rank and token_ids is not None:
-                self.update_chunk_input(c, tokens=token_ids[c * chunk : (c + 1) * chunk])
             self.capture_chunk_trace(c, kv_cache, slot_id=slot_id, cached_len=c * chunk)
         return self._trace_pool
 
@@ -582,9 +576,17 @@ class TtPrefillRuntime:
         set: pre-capture the whole per-bucket pool so every later prefill_chunk replays instead of
         dispatching. One trace per depth bucket up to the configured max (chunk boundaries 0..max_seq_len),
         captured over slot 0; num_users > 1 makes the slot device-valued so the one pool serves any user via
-        set_read_user at replay. No-op if not use_trace or already captured."""
+        set_read_user at replay. Replay serves chunk-aligned actual_start only (no prefix resume) and
+        emits no per-layer acks, so a registered LayerAck channel / completion sink is refused here rather
+        than silently starved. No-op if not use_trace or already captured."""
         if not self.config.use_trace or self._trace_pool is not None:
             return
+        if self._on_layer_complete is not None or self._layer_completion_sink is not None:
+            raise NotImplementedError(
+                "MiniMax-M3 trace replay emits no per-layer acks (the captured forward runs with "
+                "on_layer_complete=None), so PREFILL_USE_TRACE=1 cannot serve a LayerAck channel or a "
+                "layer-completion sink; run PREFILL_USE_TRACE=0 with PREFILL_ENABLE_LAYER_ACK / migration."
+            )
         n_buckets = self.config.max_seq_len // self.config.chunk_size
         self.capture_prefill_trace_pool(kv_cache, slot_id=0, n_chunks=n_buckets)
 
