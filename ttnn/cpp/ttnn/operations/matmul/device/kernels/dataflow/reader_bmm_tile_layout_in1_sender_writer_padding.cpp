@@ -755,7 +755,11 @@ void kernel_main() {
 #endif
 #ifdef ENABLE_GLOBAL_CB
     experimental::update_remote_cb_config_in_l1(remote_cb_id);
-    noc.async_atomic_barrier();
 #endif
+    // #53329: this kernel issues non-posted NOC atomics (multicast semaphore increments, and
+    // OpSignaler in the fused reduce-scatter path). Flushing only writes lets the kernel retire
+    // with atomics still unacknowledged -> watcher reports an inter-kernel data race under load.
+    // Barrier both, unconditionally, mirroring the CCL reader fix in #53595.
+    noc.async_atomic_barrier();
     noc.async_write_barrier();
 }

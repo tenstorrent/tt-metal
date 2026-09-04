@@ -47,7 +47,7 @@ def cleanup_object_graph(obj, seen=None):
         return
 
     if isinstance(obj, dict):
-        for value in obj.values():
+        for value in list(obj.values()):
             cleanup_object_graph(value, seen)
         return
 
