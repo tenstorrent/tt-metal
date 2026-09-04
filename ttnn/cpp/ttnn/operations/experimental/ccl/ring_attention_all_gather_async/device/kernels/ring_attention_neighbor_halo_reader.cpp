@@ -15,17 +15,28 @@
 #include <cstddef>
 #include <cstdint>
 
-constexpr uint32_t my_ring_id = get_compile_time_arg_val(0);
-constexpr uint32_t ring_size = get_compile_time_arg_val(1);
-constexpr uint32_t cb_output_id = get_compile_time_arg_val(2);
-constexpr uint32_t packet_size_in_pages = get_compile_time_arg_val(3);
-constexpr uint32_t input_page_size = get_compile_time_arg_val(4);
-constexpr uint32_t num_inputs = get_compile_time_arg_val(5);
-constexpr uint32_t page_size_base_idx = 6;
-constexpr uint32_t prefetch_packets = 4;
+enum CompileTimeArg : uint32_t {
+    kMyRingId,
+    kRingSize,
+    kCbOutputId,
+    kPacketSizeInPages,
+    kInputPageSize,
+    kNumInputs,
+    kPrefetchPackets,
+    kNumFixedCompileTimeArgs,
+};
+
+constexpr uint32_t my_ring_id = get_compile_time_arg_val(kMyRingId);
+constexpr uint32_t ring_size = get_compile_time_arg_val(kRingSize);
+constexpr uint32_t cb_output_id = get_compile_time_arg_val(kCbOutputId);
+constexpr uint32_t packet_size_in_pages = get_compile_time_arg_val(kPacketSizeInPages);
+constexpr uint32_t input_page_size = get_compile_time_arg_val(kInputPageSize);
+constexpr uint32_t num_inputs = get_compile_time_arg_val(kNumInputs);
+constexpr uint32_t prefetch_packets = get_compile_time_arg_val(kPrefetchPackets);
 
 void kernel_main() {
-    constexpr auto input_accessor_args = make_tensor_accessor_args_tuple<num_inputs, page_size_base_idx + num_inputs>();
+    constexpr auto input_accessor_args =
+        make_tensor_accessor_args_tuple<num_inputs, kNumFixedCompileTimeArgs + num_inputs>();
 
     uint32_t arg_idx = 0;
     const size_t incoming_ready_sem = get_arg_val<uint32_t>(arg_idx++);
