@@ -206,6 +206,12 @@ uint32_t Mcast1D::ack_count() const { return ack_count_; }
 
 std::vector<uint32_t> Mcast1D::runtime_args(const tt::tt_metal::CoreCoord& core) const {
     // TODO: Share this RT argument layout and count with McastArgs.
+    if (!grid_.contains(core)) {
+        std::vector<uint32_t> args(4u + (rotating_sender_ ? 2u * span_ : 0u), 0u);
+        detail::append_role_args(args, false, false, detail::NO_SENDER_ROUND);
+        return args;
+    }
+
     std::vector<uint32_t> args;
     if (rotating_sender_) {
         args = rotating_rt_(core);

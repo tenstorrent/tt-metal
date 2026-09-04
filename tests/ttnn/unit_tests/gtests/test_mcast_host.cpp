@@ -95,6 +95,32 @@ TEST_F(McastHostFixture, PerCoreRolesAndSenderPhases) {
     EXPECT_EQ(role_only(mc.runtime_args(CoreCoord(2, 1))), (std::vector<uint32_t>{0x2u, NO_SENDER_ROUND}));
 }
 
+TEST_F(McastHostFixture, Mcast1DFixedNonparticipantGetsRoleNoneRuntimeArgs) {
+    Mcast1D mc(device_, make_grid(/*gc=*/2, /*gr=*/3), Mcast1DShape::PerColumn, Mcast1DFixedSenderConfig{});
+
+    EXPECT_EQ(mc.runtime_args(CoreCoord(2, 0)), (std::vector<uint32_t>{0u, 0u, 0u, 0u, 0u, NO_SENDER_ROUND}));
+}
+
+TEST_F(McastHostFixture, Mcast1DRotatingNonparticipantGetsRoleNoneRuntimeArgs) {
+    Mcast1D mc(device_, make_grid(/*gc=*/3, /*gr=*/2), Mcast1DShape::PerRow, Mcast1DRotatingSenderConfig{});
+
+    EXPECT_EQ(
+        mc.runtime_args(CoreCoord(0, 2)),
+        (std::vector<uint32_t>{
+            0u,
+            0u,
+            0u,
+            0u,  // Rectangle.
+            0u,
+            0u,
+            0u,
+            0u,
+            0u,
+            0u,  // Three rotating sender coordinates.
+            0u,
+            NO_SENDER_ROUND}));
+}
+
 TEST(GroupNormMcastGeometry, ZeroEdgeRectangle) {
     std::vector<CoreCoord> group = {CoreCoord(0, 0), CoreCoord(1, 0), CoreCoord(2, 0)};
     std::vector<CoreCoord> first;

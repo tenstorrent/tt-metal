@@ -114,7 +114,8 @@ public:
         detail::append_args_to(destination, compile_time_args(pre_handshake));
     }
 
-    // Per-core runtime arguments consumed by McastArgs.
+    // Per-core runtime arguments consumed by McastArgs. Cores outside the participating
+    // topology receive a correctly sized argument block with neither role enabled.
     std::vector<uint32_t> runtime_args(const tt::tt_metal::CoreCoord& core) const;
 
     template <typename Args>
