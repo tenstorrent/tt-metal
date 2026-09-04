@@ -811,16 +811,23 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
     dfbs.push_back(
         local_dfb(DFB_CLEAR_VALUE, cb_sizes.clear_value_cb_size, params.num_threads_per_cluster, params.data_format));
     // raw input shard CB (borrowed input). Raw views only supply a base pointer (the kernel undoes
-    // the per-thread lane stagger), but striding validation still needs num_entries % num_threads,
-    // and shard heights (e.g. halo'd rows) divide by nothing — so view the shard as exactly
-    // num_threads aligned-down entries instead of per-row pages.
+    // the per-thread lane stagger with ptr - lane * entry_size), but striding validation still needs
+    // num_entries % num_threads, and shard heights (e.g. halo'd rows) divide by nothing — so view the
+    // shard as num_threads * k aligned-down entries instead of per-row pages. The TRISC-side stride of
+    // a STRIDED binding is entry_size * num_threads = the whole view per lane pass and must fit
+    // uint16_t L1 units (16 B), i.e. ~1 MB: k > 1 only for shards beyond that (e.g. the 112x112x64
+    // resnet stem held on a single cluster), where it keeps the stride in range at no kernel cost.
+    const auto raw_view_geometry = [&](uint32_t total_bytes) {
+        constexpr uint32_t k_max_stride_bytes = std::numeric_limits<uint16_t>::max() * 16u;
+        const uint32_t k = std::max(1u, tt::div_up(total_bytes, k_max_stride_bytes));
+        const uint32_t num_entries = params.num_threads_per_cluster * k;
+        const uint32_t entry_size = (total_bytes / num_entries) & ~15u;
+        return std::pair<uint32_t, uint32_t>{entry_size, num_entries};
+    };
     const uint32_t in_shard_total_bytes = in_nbytes_c * input.shard_spec().value().shape[0];
-    dfbs.push_back(borrowed_dfb(
-        DFB_IN_SHARD,
-        (in_shard_total_bytes / params.num_threads_per_cluster) & ~15u,
-        params.num_threads_per_cluster,
-        params.data_format,
-        INPUT_TENSOR));
+    const auto [in_shard_entry_size, in_shard_num_entries] = raw_view_geometry(in_shard_total_bytes);
+    dfbs.push_back(
+        borrowed_dfb(DFB_IN_SHARD, in_shard_entry_size, in_shard_num_entries, params.data_format, INPUT_TENSOR));
     // reader indices CB (borrowed L1 config tensor, or local scratch for DRAM path)
     // RawUInt16 (not UInt16): the reader-indices DFB is a raw packed-uint16 index/config buffer, and Quasar
     // does not support the typed UInt16 DFB format (is_supported_quasar) — RawUInt16 is the raw 16-bit format
@@ -928,14 +935,11 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         // [DEBUG scratch->out] borrowed OUTPUT view (per-stick RM rows) that the DM readers write into
         // via NoC. page = output row bytes; npages = output sticks per core. Mirrors DFB_IN_SHARD.
         const uint32_t out_row_bytes = output_shard_shape[1] * params.nbytes;
-        // Same raw-view treatment as DFB_IN_SHARD: num_threads aligned-down entries, base-only use.
+        // Same raw-view treatment as DFB_IN_SHARD (num_threads * k aligned-down entries, base-only use).
         const uint32_t out_shard_total_bytes = out_row_bytes * output_shard_shape[0];
+        const auto [out_shard_entry_size, out_shard_num_entries] = raw_view_geometry(out_shard_total_bytes);
         dfbs.push_back(borrowed_dfb(
-            DFB_OUT_SHARD,
-            (out_shard_total_bytes / params.num_threads_per_cluster) & ~15u,
-            params.num_threads_per_cluster,
-            params.output_data_format,
-            OUTPUT_TENSOR));
+            DFB_OUT_SHARD, out_shard_entry_size, out_shard_num_entries, params.output_data_format, OUTPUT_TENSOR));
     }
     if (cb_sizes.has_out_idx) {
         TT_FATAL(output_tensors.size() == 2, "return_indices requires two outputs, got {}", output_tensors.size());
