@@ -379,8 +379,8 @@ models:
     wh_llmbox_perf: 180
     wh_galaxy_perf: 55
     wh_n150: 108
-    # wh_n300 = 60 + 25 for the Qwen3.5-9B e2e tests.
-    wh_n300: 85
+    # wh_n300 = 60 + 20 for the Qwen3.5-9B e2e tests (measured 16 min).
+    wh_n300: 80
     bh_p150: 33
     bh_p300: 13
     bh_quietbox_2: 140 # 62 + 78 for cherry-picked Qwen3.6-27B teacher-forced accuracy; needs #tt-metal-infra sign-off
@@ -408,7 +408,7 @@ models:
     wh_llmbox_perf: 58
     wh_n150: 75
     wh_n150_civ2: 12
-    wh_n300: 66  # 43 (incl. +10 DiffusionDrive #42995) + 23 for Qwen3.5-9B unit tests
+    wh_n300: 73  # 43 (incl. +10 DiffusionDrive #42995) + 30 for Qwen3.5-9B unit tests (measured 26 min)
     bh_p150: 50 # 30 + 20 for cherry-picked Qwen3.5-9B P150 unit tests; needs #tt-metal-infra sign-off
     bh_p300: 30
     bh_quietbox_2: 25
