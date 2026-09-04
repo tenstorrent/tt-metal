@@ -85,9 +85,9 @@ void test_dram_prefetcher_validator(
     const std::vector<uint32_t>& rotation = {});
 
 // Same validation against a PrefetcherPipe target (bound as
-// `ttnn.experimental.test_tensor_prefetcher_pipe_validator`). Batched delivery only, so there is no
-// streaming/rotation parameter; the consumer Attaches the pipes and reads them through the
-// device-side experimental::PrefetcherPipe.
+// `ttnn.experimental.test_tensor_prefetcher_pipe_validator`). `streaming` / `rotation` mean what
+// they do above and must match what was queued; the consumer Attaches the pipes and reads them
+// through the device-side experimental::PrefetcherPipe.
 //
 // Unlike the GlobalCircularBuffer path this is not a ttnn device operation: it builds and enqueues
 // its program directly. Every run wants a fresh program anyway -- the validator is checked once per
@@ -98,6 +98,8 @@ void test_tensor_prefetcher_pipe_validator(
     const ttnn::Tensor& source_tensor,
     uint32_t num_layers,
     uint32_t print_stride,
-    const ttnn::operations::experimental::TensorPrefetcherPipes& prefetcher_pipes);
+    const ttnn::operations::experimental::TensorPrefetcherPipes& prefetcher_pipes,
+    bool streaming = false,
+    const std::vector<uint32_t>& rotation = {});
 
 }  // namespace ttnn::operations::experimental::test

@@ -159,6 +159,22 @@ ValidatorGeometry compute_validator_geometry(
     }
     return geom;
 }
+
+// Physical block the receiver at `ring_pos` expects at FIFO position 0 under streaming:
+// rotation[ring_pos] when a rotation was supplied (it must be the one queued to the prefetcher),
+// else ring_pos for the identity (natural topology) order. Ignored by the kernel when not
+// streaming.
+uint32_t lead_block_for(const std::vector<uint32_t>& rotation, uint32_t ring_pos) {
+    if (rotation.empty()) {
+        return ring_pos;
+    }
+    TT_FATAL(
+        ring_pos < rotation.size(),
+        "Validator rotation has {} entries but ring_pos {} indexes past it",
+        rotation.size(),
+        ring_pos);
+    return rotation[ring_pos];
+}
 }  // namespace
 
 void DramPrefetcherValidatorDeviceOperation::validate_on_program_cache_miss(
@@ -269,18 +285,6 @@ DramPrefetcherValidatorDeviceOperation::ProgramFactory::create_at(
 
     const uint32_t bank_base_addr = static_cast<uint32_t>(tensor_buffer->address());
     for (const auto& plan : geom.receivers) {
-        // Lead physical block this receiver expects at FIFO position 0 under streaming:
-        // rotation[ring_pos] when a rotation was supplied (must match the prefetcher), else
-        // ring_pos for the identity (natural topology) order.
-        uint32_t lead_block = plan.ring_pos;
-        if (!operation_attributes.rotation.empty()) {
-            TT_FATAL(
-                plan.ring_pos < operation_attributes.rotation.size(),
-                "Validator rotation has {} entries but ring_pos {} indexes past it",
-                operation_attributes.rotation.size(),
-                plan.ring_pos);
-            lead_block = operation_attributes.rotation[plan.ring_pos];
-        }
         const std::vector<uint32_t> rt_args = {
             plan.bank_id,
             plan.bank_local_recv,
@@ -289,7 +293,7 @@ DramPrefetcherValidatorDeviceOperation::ProgramFactory::create_at(
             geom.total_n_tiles,
             geom.n_per_recv_tiles,
             plan.ring_pos * geom.n_per_recv_tiles,
-            lead_block,
+            lead_block_for(operation_attributes.rotation, plan.ring_pos),
         };
         SetRuntimeArgs(program, kernel_id, plan.core, rt_args);
     }
@@ -330,7 +334,9 @@ void test_tensor_prefetcher_pipe_validator(
     const ttnn::Tensor& source_tensor,
     uint32_t num_layers,
     uint32_t print_stride,
-    const ttnn::operations::experimental::TensorPrefetcherPipes& prefetcher_pipes) {
+    const ttnn::operations::experimental::TensorPrefetcherPipes& prefetcher_pipes,
+    bool streaming,
+    const std::vector<uint32_t>& rotation) {
     using namespace tt::tt_metal;
 
     TT_FATAL(!prefetcher_pipes.banks.empty(), "prefetcher_pipes must hold at least one bank");
@@ -372,6 +378,7 @@ void test_tensor_prefetcher_pipe_validator(
         num_layers,
         geom.num_blocks,
         print_stride,
+        streaming ? 1u : 0u,
     };
     TensorAccessorArgs(*tensor_buffer).append_to(compile_args);
 
@@ -393,6 +400,7 @@ void test_tensor_prefetcher_pipe_validator(
             geom.total_n_tiles,
             geom.n_per_recv_tiles,
             plan.ring_pos * geom.n_per_recv_tiles,
+            lead_block_for(rotation, plan.ring_pos),
         };
         SetRuntimeArgs(program, kernel_id, plan.core, rt_args);
     }
