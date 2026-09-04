@@ -7,10 +7,6 @@
 #define REDUCE_OP (PoolType::MAX)
 #define REDUCE_DIM (ReduceDim::REDUCE_ROW)
 
-// This kernel reconfigs ~30x; inlining the LLK Src zero-flag DEFAULT configurator at each site pushes
-// the program over the kernel-config buffer. Force it out-of-line here.
-#define LLK_ZEROFLAG_OUTLINE 1
-
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include <tt-metalium/constants.hpp>
@@ -94,6 +90,10 @@ void kernel_main() {
     constexpr bool sparse_frames_enabled = get_compile_time_arg_val(79) == 1;
     constexpr uint32_t tiles_per_frame = get_compile_time_arg_val(80);
     constexpr uint32_t num_frames_padded_compile = get_compile_time_arg_val(81);
+    // Reference-frame delivery CT scalars (factory pushes them right after the sparse ones).
+    constexpr uint32_t has_reference = get_compile_time_arg_val(82);
+    constexpr uint32_t reference_frame_idx = get_compile_time_arg_val(83);
+    constexpr uint32_t num_reference_k_chunks = get_compile_time_arg_val(84);
     // In-place latent-V (single-tile Q): read V straight from K^T instead of materializing it.
     // Shared with the program factory and reader via kt_inplace_v_enabled().
     constexpr bool kt_inplace_v = kt_inplace_v_enabled(v_shares_k_buffer, Sq_chunk_t);
@@ -278,20 +278,41 @@ void kernel_main() {
         q_shard_start_tile = ring_index * q_local_padded_Nt;
     }
 
-    constexpr uint32_t sdpa_ring_iterations = has_sliding_window ? 1 : ring_size;
-    for (uint32_t ring_iter = 0; ring_iter < sdpa_ring_iterations; ++ring_iter) {
+    // Windowed gather: match the reader's iteration count (1 + fwd + bwd delivered shards; this equals
+    // ring_size for a dense gather but is fewer when the AG num_targets are clamped to a window radius).
+    const uint32_t sdpa_ring_iterations =
+        has_sliding_window ? 1u : (1u + forward_writes_expected + backward_writes_expected);
+    // Reference iteration: one extra pass at index sdpa_ring_iterations that reads the pre-delivered
+    // reference_kv chunks (compute side forces k_frame = reference_frame_idx). No sequencer sync.
+    const uint32_t reference_iter = sdpa_ring_iterations;
+    const uint32_t total_iterations = sdpa_ring_iterations + (has_reference ? 1u : 0u);
+    for (uint32_t ring_iter = 0; ring_iter < total_iterations; ++ring_iter) {
+        const bool is_reference_iter = has_reference && (ring_iter == reference_iter);
         // Sliding folds all local/halo source ranges into one synthetic local iteration.
-        // The dataflow reader has already waited for the required halo completion signals.
-        uint32_t ring_id = has_sliding_window ? ring_index : fused_op_indexer.get_next_ring_id_and_sync();
+        // The dataflow reader has already waited for the required halo completion signals. The reference
+        // iteration is pre-delivered, so it also skips the sync (placeholder ring_id).
+        uint32_t ring_id =
+            (is_reference_iter || has_sliding_window) ? ring_index : fused_op_indexer.get_next_ring_id_and_sync();
         // Host precomputes which ring iterations have useful SDPA work; sync/ring-id sequencing
         // still advances above so compute stays aligned with reader, writer, and all-gather.
         if (!has_sliding_window && ((active_ring_iter_mask >> ring_iter) & 1u) == 0) {
             continue;
         }
         // Sharded joint: one L/P shard per ring iteration — process joint K/V on every iteration.
-        // Replicated joint: All data already present process joint when ring_id == ring_size-1
-        const bool do_joint_kv = has_gathered_joint_k ? true : (ring_id == ring_size - 1);
-        const uint32_t num_kv_chunks = do_joint_kv ? num_local_k_chunks + num_joint_k_chunks : num_local_k_chunks;
+        // Replicated joint: process joint once per device. Full ring visits ring_size-1; a windowed
+        // gather may not, so fire on the last active windowed iteration instead (all kernels agree via
+        // active_ring_iter_mask). Data is local (replicated), so the choice of iteration is free.
+        // The reference iteration carries no joint chunks.
+        const bool do_joint_kv =
+            is_reference_iter
+                ? false
+                : (has_gathered_joint_k
+                       ? true
+                       : (sdpa_ring_iterations < ring_size ? is_last_active_ring_iter(active_ring_iter_mask, ring_iter)
+                                                           : (ring_id == ring_size - 1)));
+        const uint32_t num_kv_chunks = is_reference_iter ? num_reference_k_chunks
+                                       : do_joint_kv     ? num_local_k_chunks + num_joint_k_chunks
+                                                         : num_local_k_chunks;
         const bool is_first_active_iter = !seen_active_iter;
         seen_active_iter = true;
 
@@ -449,7 +470,6 @@ void kernel_main() {
                 local_n_has_padding,
                 joint_has_padding,
                 has_straddle && is_causal && is_balanced,
-                false,  // use_l1_state_fifo — compile-time off: no FIFO branch overhead here
                 kv_pad_rotation_enabled,
                 v_cb_physical_width_t,
                 v_shares_k_buffer,
@@ -469,7 +489,10 @@ void kernel_main() {
                 num_q_chunks,
                 ring_iter,
                 ring_id,
-                num_local_k_chunks,
+                // sdpa_ring_v2 classifies k >= num_local_k_chunks as joint. On the reference iteration the
+                // reference chunks (num_reference_k_chunks) can exceed num_local_k_chunks (sub-frame regime),
+                // so pass the full reference count as the local boundary to keep every chunk spatial.
+                is_reference_iter ? iter_num_kv_chunks : num_local_k_chunks,
                 logical_nt,
                 ring_iter_needs_global_n_mask,
                 ring_iter_needs_joint_n_mask,
@@ -486,10 +509,13 @@ void kernel_main() {
                 chunked_context,
                 is_first_active_iter,
                 logical_lt,
-                /*q_base_tiles=*/0u,
                 sparse_frame_mask_words,
                 q_shard_start_tile,
-                q_work_bitmap);
+                q_work_bitmap,
+                // Reference iteration: force the frame gate to reference_frame_idx so spatial q_chunks
+                // attend it via mask[q_frame][reference_frame_idx].
+                is_reference_iter,
+                reference_frame_idx);
         } else {
             assert_kv_pad_rotation_streaming_only<kv_pad_rotation_enabled>();
             sdpa_ring<

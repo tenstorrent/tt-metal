@@ -130,7 +130,10 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     // cache slot as slot * kv_cache_num_layers + kv_cache_layer_idx (slot = slot_id[0]), matching
     // update_padded_kv_cache. Defaults (1, 0) reduce to slot, so single-layer callers are unaffected.
     uint32_t kv_cache_num_layers = 1,
-    uint32_t kv_cache_layer_idx = 0);
+    uint32_t kv_cache_layer_idx = 0,
+    // Windowed gather radius (0 = full ring). >0 clamps num_targets so each device gathers only its
+    // +-window_radius neighbour shards (frame-block sparse attention).
+    uint32_t window_radius = 0);
 
 void ring_attention_neighbor_halo_exchange_helper(
     tt::tt_metal::ProgramDescriptor& desc,

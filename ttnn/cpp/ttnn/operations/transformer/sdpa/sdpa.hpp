@@ -25,15 +25,7 @@ ttnn::Tensor scaled_dot_product_attention(
     std::optional<operations::transformer::SDPAProgramConfig> program_config = std::nullopt,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     const std::optional<ttnn::Tensor>& attention_sink = std::nullopt,
-    const std::optional<ttnn::Tensor>& cu_window_seqlens = std::nullopt,
-    /// Windowed mode only. Global row index of Q row 0, for a Q holding a contiguous slice of a longer
-    /// sequence: Q and the output are indexed locally while cu_window_seqlens and K/V stay global, so this
-    /// locates the slice among the windows. Must be a multiple of TILE_HEIGHT and satisfy offset+Sq <= Sk.
-    uint32_t windowed_q_token_offset = 0,
-    /// Windowed mode only. Per-device form of the offset above: a 1-element int32/uint32 ROW_MAJOR device
-    /// tensor, read at runtime rather than baked into the program. Shard it on the sequence-parallel axis
-    /// so every device runs the SAME program yet sees its own origin. Overrides the scalar when set.
-    const std::optional<ttnn::Tensor>& windowed_q_token_offset_tensor = std::nullopt);
+    const std::optional<ttnn::Tensor>& cu_window_seqlens = std::nullopt);
 
 /// Chunked SDPA over paged K/V: one Q chunk per call, K/V in paged layout.
 /// Two overloads: legacy (chunk_start_idx as int) or flexible (chunk_start_idx_tensor on device).
@@ -114,7 +106,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     const std::optional<ttnn::Tensor>& persistent_output_buffer_joint_v = std::nullopt,
     std::optional<uint32_t> tokens_per_frame = std::nullopt,
     std::optional<uint32_t> num_frames_padded = std::nullopt,
-    std::vector<uint32_t> sparse_frame_mask = {});
+    std::vector<uint32_t> sparse_frame_mask = {},
+    const std::optional<ttnn::Tensor>& reference_kv = std::nullopt,
+    std::optional<uint32_t> reference_frame_idx = std::nullopt);
 
 std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
     const ttnn::Tensor& input_tensor_q,

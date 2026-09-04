@@ -51,6 +51,11 @@ struct RingJointSDPAParams {
     std::optional<std::uint32_t> num_frames_padded = std::nullopt;
     std::vector<std::uint32_t> sparse_frame_mask;  // empty when sparse-frames disabled
 
+    // Reference-frame delivery (windowed sparse only): the replicated `reference_kv` input holds one
+    // attention frame that every query attends. This is its frame index in the allow-table; the kernels
+    // process it as one extra ring iteration whose k_frame is forced to this value. nullopt = disabled.
+    std::optional<std::uint32_t> reference_frame_idx = std::nullopt;
+
     // We need a constructor, because all_gather_struct is not default initializable.
     RingJointSDPAParams(
         std::string joint_strategy,
@@ -75,7 +80,8 @@ struct RingJointSDPAParams {
         std::optional<uint32_t> sliding_window_size = std::nullopt,
         std::optional<std::uint32_t> tokens_per_frame = std::nullopt,
         std::optional<std::uint32_t> num_frames_padded = std::nullopt,
-        std::vector<std::uint32_t> sparse_frame_mask = {}) :
+        std::vector<std::uint32_t> sparse_frame_mask = {},
+        std::optional<std::uint32_t> reference_frame_idx = std::nullopt) :
         joint_strategy(std::move(joint_strategy)),
         scale(scale),
         is_causal(is_causal),
@@ -98,7 +104,8 @@ struct RingJointSDPAParams {
         sliding_window_size(sliding_window_size),
         tokens_per_frame(tokens_per_frame),
         num_frames_padded(num_frames_padded),
-        sparse_frame_mask(std::move(sparse_frame_mask)) {}
+        sparse_frame_mask(std::move(sparse_frame_mask)),
+        reference_frame_idx(reference_frame_idx) {}
 
     std::uint32_t get_q_chunk_size() const { return program_config.has_value() ? program_config->q_chunk_size : 32; }
 
@@ -110,6 +117,7 @@ struct RingJointSDPAParams {
 
     bool has_sparse_frames() const { return tokens_per_frame.has_value() && num_frames_padded.has_value(); }
     bool has_sliding_window() const { return sliding_window_size.value_or(0) > 0; }
+    bool has_reference() const { return reference_frame_idx.has_value(); }
 
     static constexpr auto attribute_names = std::forward_as_tuple(
         "joint_strategy",
@@ -131,7 +139,8 @@ struct RingJointSDPAParams {
         "all_gather_tensor_args",
         "tokens_per_frame",
         "num_frames_padded",
-        "sparse_frame_mask");
+        "sparse_frame_mask",
+        "reference_frame_idx");
     auto attribute_values() const {
         return std::make_tuple(
             std::cref(joint_strategy),
@@ -153,7 +162,8 @@ struct RingJointSDPAParams {
             std::cref(all_gather_tensor_args),
             std::cref(tokens_per_frame),
             std::cref(num_frames_padded),
-            std::cref(sparse_frame_mask));
+            std::cref(sparse_frame_mask),
+            std::cref(reference_frame_idx));
     }
 };
 
@@ -167,6 +177,11 @@ struct RingJointSDPAInputs {
     Tensor gathered_k;
     std::optional<Tensor> gathered_v;
     std::optional<Tensor> attention_sink;
+
+    // Reference-frame delivery: replicated per-device tensor holding one attention frame (frame
+    // `reference_frame_idx`) that every query attends. Delivered by a broadcast before the op; the
+    // kernels read it on one extra ring iteration. nullopt = disabled.
+    std::optional<Tensor> reference_kv;
 
     // Populated on the sharded-joint path only; nullopt on the replicated path.
     // Invariant: joint_is_sharded() <=> gathered_joint_k.has_value()

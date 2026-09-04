@@ -51,8 +51,6 @@ void kernel_main() {
     constexpr uint32_t k_partial_col = get_compile_time_arg_val(32);
     // Zigzag remap flag drives the external remap_q_index call on the flat B*NQH*q_num_chunks range.
     constexpr bool use_zigzag_balancing = get_compile_time_arg_val(33) == 1;
-    // Windowed K-range narrowing: per-Q-chunk [k_lo, k_hi) arrives from the reader over a ctrl CB.
-    constexpr bool use_windowed_narrowing = get_compile_time_arg_val(34) == 1;
 
     const uint32_t core_id = get_arg_val<uint32_t>(0);
     const uint32_t num_phases = get_arg_val<uint32_t>(1);
@@ -73,7 +71,7 @@ void kernel_main() {
     constexpr uint32_t qk_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
 
-    constexpr uint32_t cb_arg_offset = 35;
+    constexpr uint32_t cb_arg_offset = 34;
     constexpr uint32_t cb_q_in = get_compile_time_arg_val(cb_arg_offset + 0);
     constexpr uint32_t cb_k_in = get_compile_time_arg_val(cb_arg_offset + 1);
     constexpr uint32_t cb_v_in = get_compile_time_arg_val(cb_arg_offset + 2);
@@ -92,7 +90,6 @@ void kernel_main() {
     constexpr uint32_t cb_sum_A = get_compile_time_arg_val(cb_arg_offset + 15);
     constexpr uint32_t cb_sum_B = get_compile_time_arg_val(cb_arg_offset + 16);
     constexpr uint32_t cb_exp_max_diff = get_compile_time_arg_val(cb_arg_offset + 17);
-    constexpr uint32_t cb_windowed_k_range = get_compile_time_arg_val(cb_arg_offset + 18);
     uint32_t chunked_q_chunk_offset = 0;
     CircularBuffer cb_chunk_start_idx_obj(cb_chunk_start_idx);
     CircularBuffer cb_identity_scale_in_obj(cb_identity_scale_in);
@@ -182,9 +179,7 @@ void kernel_main() {
             is_causal,
             use_attention_sink,
             cb_attention_sink,
-            use_provided_mask,
-            use_windowed_narrowing,
-            cb_windowed_k_range>(
+            use_provided_mask>(
             global_q_count,
             k_num_chunks,
             cb_out_im_A,
@@ -236,9 +231,7 @@ void kernel_main() {
                 is_chunked,
                 scale_fp32,
                 sliding_window_size,
-                use_lightweight_causal_mask,
-                use_windowed_narrowing,
-                cb_windowed_k_range>(
+                use_lightweight_causal_mask>(
                 Skt,
                 qk_in0_block_w,
                 qk_subblock_w,

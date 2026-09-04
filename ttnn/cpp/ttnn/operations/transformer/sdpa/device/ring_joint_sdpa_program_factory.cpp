@@ -91,6 +91,12 @@ struct RingJointRuntimeDerivation {
     bool kernel_chunked = false;
     bool kv_pad_rotation_enabled = false;
     bool kernel_is_causal = false;
+    // Reference-frame delivery: one extra ring iteration (index num_ring_iters) attends frame
+    // reference_frame_idx from the replicated reference_kv buffer. num_reference_k_chunks = one frame's
+    // tiles / k_chunk. has_reference gates all of it.
+    bool has_reference = false;
+    uint32_t reference_frame_idx = 0;
+    uint32_t num_reference_k_chunks = 0;
 };
 
 struct RingJointRuntimeArgLayout {
@@ -249,16 +255,76 @@ RingWorkPlan build_ring_work_plan(
     // same ring-id sequence, so use a no-op callback.
     auto noop_sync = [](uint32_t, uint32_t) {};
 
-    for (uint32_t ring_iter = 0; ring_iter < derivation.ring_size; ++ring_iter) {
+    // Only iterate the shards the kernels actually visit: 1 (local) + fwd + bwd, which equals ring_size
+    // for a full/dense gather but is fewer when the AG num_targets are clamped to a window radius. Past
+    // that count the sequencer marches out of window and would set active bits at ring_iter indices the
+    // kernels never reach, poisoning is_last_active_ring_iter (never-fires normalization -> deadlock).
+    const uint32_t num_ring_iters = std::min<uint32_t>(
+        derivation.ring_size, 1u + ring_write_plan.backward_writes_expected + ring_write_plan.forward_writes_expected);
+    // The reference uses one extra ring_iter index (num_ring_iters); masks are uint32 shifted by index.
+    TT_FATAL(
+        num_ring_iters + (derivation.has_reference ? 1u : 0u) <= 32u,
+        "ring-work masks are 32-bit: num_ring_iters ({}) + reference ({}) must be <= 32",
+        num_ring_iters,
+        derivation.has_reference ? 1u : 0u);
+
+    // True spatial-work activeness for a ring_id, mirroring the main loop's ring_iter_does_work minus
+    // joint. Used to place the replicated joint under windowing (see below).
+    auto spatial_iter_active = [&](uint32_t rid) -> bool {
+        uint32_t vs = 0;
+        for (uint32_t k = 0; k < derivation.num_local_k_chunks; ++k) {
+            const uint32_t lts = k * derivation.k_chunk_tile_count;
+            if (lts >= derivation.kv_local_padded_Nt) {
+                continue;
+            }
+            if (kv_global_tile_for_host_ring_plan(
+                    derivation.kernel_chunked,
+                    rid,
+                    lts,
+                    derivation.q_chunk_group_tile_count,
+                    derivation.q_local_padded_Nt,
+                    derivation.kv_local_padded_Nt) < derivation.logical_nt) {
+                vs++;
+            }
+        }
+        const bool hkw = (derivation.kernel_chunked && !derivation.kv_pad_rotation_enabled) || vs > 0;
+        return hkw && !(derivation.kernel_is_causal && ring_write_plan.device_index < rid && !is_balanced);
+    };
+
+    // Under a windowed gather a device may never visit ring_size-1, so the replicated joint (delivered
+    // locally, iteration-independent) must ride the LAST active iteration instead -- matching the
+    // kernels' is_last_active_ring_iter. Since the joint only ever rides an already spatial-active iter,
+    // that is the last spatial-active iter, found here by a pre-scan. Full-ring keeps ring_size-1.
+    const bool is_windowed = num_ring_iters < derivation.ring_size;
+    const bool replicated_joint_windowed = is_windowed && derivation.num_joint_k_chunks > 0 &&
+                                           derivation.joint_seq_len != 0 && !derivation.joint_is_sharded;
+    uint32_t windowed_joint_iter = 0;
+    if (replicated_joint_windowed) {
+        RingIdSequencer pscan(
+            ring_write_plan.device_index,
+            derivation.ring_size,
+            ring_write_plan.backward_writes_expected,
+            ring_write_plan.forward_writes_expected);
+        for (uint32_t ri = 0; ri < num_ring_iters; ++ri) {
+            const uint32_t rid = pscan.get_next_ring_id(noop_sync);
+            if (spatial_iter_active(rid)) {
+                windowed_joint_iter = ri;  // keep the last active one
+            }
+        }
+    }
+
+    for (uint32_t ring_iter = 0; ring_iter < num_ring_iters; ++ring_iter) {
         const uint32_t ring_id = seq.get_next_ring_id(noop_sync);
         // Sharded joint: each ring iteration delivers one L/P shard immediately, so process
         // joint K/V on every ring iteration (no need to wait for the full gather to complete).
-        // Replicated joint: process joint when ring_id == ring_size-1
+        // Replicated joint: full ring processes it at ring_id == ring_size-1; a windowed gather rides
+        // the last active iteration instead (windowed_joint_iter above), matching the kernels.
         const bool has_joint_work = derivation.num_joint_k_chunks > 0 && derivation.joint_seq_len != 0;
-        // Whether this ring iteration is a candidate to consume joint K/V at all (sharded: every iter;
-        // replicated: when ring_id == ring_size-1, matching the kernel's do_joint_kv condition).
         const bool joint_iter_selected =
-            has_joint_work && (derivation.joint_is_sharded || ring_id == derivation.ring_size - 1);
+            has_joint_work &&
+            (derivation.joint_is_sharded ? true
+                                         : (replicated_joint_windowed ? (ring_iter == windowed_joint_iter)
+                                                                      : (ring_id == derivation.ring_size - 1)));
         // Count only the joint K chunks that carry REAL tokens, mirroring the kernel's
         // kv_chunk_is_beyond_logical_l skip: a joint chunk whose global start tile
         // (ring_id * joint_local_padded_Nt + k * k_chunk_tile_count) is at/after logical_lt is pure
@@ -312,6 +378,18 @@ RingWorkPlan build_ring_work_plan(
         }
     }
 
+    // Reference-frame delivery: one extra iteration at a dedicated index past the window. It always does
+    // work (every real q attends the reference frame) and reads the replicated reference_kv buffer, so it
+    // is not gated on spatial/joint chunk validity here. The per-q_chunk gate lives in the bitmap.
+    if (derivation.has_reference) {
+        const uint32_t ref_iter = num_ring_iters;
+        plan.masks.active_ring_iter_mask |= (1u << ref_iter);
+        plan.last_active_ring_iter = ref_iter;
+        if (derivation.num_reference_k_chunks <= 1) {
+            plan.masks.single_valid_kv_chunk_mask |= (1u << ref_iter);
+        }
+    }
+
     return plan;
 }
 
@@ -344,7 +422,9 @@ std::vector<uint32_t> compute_q_work_bitmap(
     bool sparse_frames_enabled,
     uint32_t tiles_per_frame,
     uint32_t sparse_num_frames_padded,
-    const std::vector<uint32_t>& sparse_frame_mask) {
+    const std::vector<uint32_t>& sparse_frame_mask,
+    bool has_reference,
+    [[maybe_unused]] uint32_t reference_frame_idx) {
     std::vector<uint32_t> bitmap(num_q_chunks, 0);
     if (!sparse_frames_enabled) {
         // Dense fallback: every mask-active iter is a work iter for every q_chunk.
@@ -359,12 +439,19 @@ std::vector<uint32_t> compute_q_work_bitmap(
     // Simulate the ring_id sequencer for this device to get ring_id per iter.
     RingIdSequencer seq(device_index, ring_size, backward_writes_expected, forward_writes_expected);
     auto noop_sync = [](uint32_t, uint32_t) {};
+    // Windowed gather: the kernels retime replicated joint to the last active iteration (a windowed ring
+    // may never visit ring_size-1). This bitmap must match, or compute/writer wait on joint work the
+    // reader pushes on a different iter -> deadlock. Mirror the kernel condition exactly.
+    const bool is_windowed = (1u + backward_writes_expected + forward_writes_expected) < ring_size;
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         const uint32_t ring_id = seq.get_next_ring_id(noop_sync);
         if (!((active_ring_iter_mask >> ring_iter) & 1u)) {
             continue;  // inactive iter — bitmap bit stays 0
         }
-        const bool do_joint_kv = (ring_id == ring_size - 1) && (num_joint_k_chunks > 0);
+        // Last active iter (windowed) matches is_last_active_ring_iter: no active bits above ring_iter.
+        const bool is_last_active = ((active_ring_iter_mask >> (ring_iter + 1)) == 0);
+        const bool do_joint_kv =
+            (num_joint_k_chunks > 0) && (is_windowed ? is_last_active : (ring_id == ring_size - 1));
         for (uint32_t q_chunk = 0; q_chunk < num_q_chunks; ++q_chunk) {
             const bool is_joint_q = (q_chunk >= num_local_q_chunks);
             if (is_joint_q) {
@@ -404,6 +491,20 @@ std::vector<uint32_t> compute_q_work_bitmap(
                     bitmap[q_chunk] |= (1u << ring_iter);
                     break;
                 }
+            }
+        }
+    }
+    // Reference-frame pass: the extra iteration at index num_ring_iters attends frame reference_frame_idx.
+    // Every real query attends the reference frame, so the gate cannot use the peeled sparse_frame_mask
+    // (whose reference column is zeroed to keep the windowed ring gather from re-attending it). A real
+    // spatial q_chunk is exactly one that already does windowed work above (bitmap != 0); padding q_chunks
+    // do no work and must not attend the reference. Joint q_chunks never reach here.
+    if (has_reference) {
+        const uint32_t ref_iter =
+            std::min<uint32_t>(ring_size, 1u + backward_writes_expected + forward_writes_expected);
+        for (uint32_t q_chunk = 0; q_chunk < num_local_q_chunks; ++q_chunk) {
+            if (bitmap[q_chunk] != 0u) {
+                bitmap[q_chunk] |= (1u << ref_iter);
             }
         }
     }
@@ -486,6 +587,14 @@ RingWritePlan build_ring_write_plan(
         std::swap(num_targets_forward, num_targets_backward);
     }
 
+    // Windowed gather: mirror the AG helper's num_targets clamp so the reader-sequencer expects exactly
+    // the +-window_radius shards the clamped all-gather delivers (must stay in lockstep, else deadlock).
+    if (args.all_gather_operation_attributes.window_radius > 0) {
+        const uint32_t w = args.all_gather_operation_attributes.window_radius;
+        num_targets_forward = std::min<uint32_t>(num_targets_forward, w);
+        num_targets_backward = std::min<uint32_t>(num_targets_backward, w);
+    }
+
     if (args.all_gather_operation_attributes.topology == ttnn::ccl::Topology::Linear) {
         plan.forward_writes_expected = num_targets_backward;
         plan.backward_writes_expected = num_targets_forward;
@@ -530,6 +639,14 @@ RingJointRuntimeDerivation build_runtime_derivation(
     derivation.kv_pad_rotation_enabled =
         args.has_kv_pad_rotation() || (tensor_args.has_metadata() && tensor_args.is_chunked());
     derivation.kernel_is_causal = args.is_causal && !derivation.kernel_chunked;
+
+    // Reference-frame delivery: one frame's worth of K chunks, attended on the extra reference iteration.
+    derivation.has_reference = args.has_reference();
+    if (derivation.has_reference) {
+        derivation.reference_frame_idx = args.reference_frame_idx.value();
+        const uint32_t frame_tiles = args.tokens_per_frame.value() / tt::constants::TILE_HEIGHT;
+        derivation.num_reference_k_chunks = tt::div_up(frame_tiles, derivation.k_chunk_tile_count);
+    }
 
     TT_FATAL(
         derivation.ring_size <= std::numeric_limits<uint32_t>::digits,
@@ -595,9 +712,14 @@ RingJointRuntimeArgLayout get_runtime_arg_layout(
         enable_kv_chains && k_uses_batch_chain ? (kRingJointChainConfigArgCount + kReaderBatchChainExtraArgCount) : 0;
     const uint32_t gqa_chain_args =
         enable_kv_chains && gqa_grouped_kv ? (kRingJointChainConfigArgCount + kReaderGQAChainExtraArgCount) : 0;
-    layout.reader_kv_cache_batch_idx = kReaderBaseBufferArgCount + joint_buffer_args + gathered_joint_buffer_args + 2;
+    // reference_kv address is always pushed (nullptr buffer when disabled), right after attention_sink,
+    // so every reader RT arg after it shifts by one.
+    const uint32_t reference_buffer_args = 1;
+    layout.reader_kv_cache_batch_idx =
+        kReaderBaseBufferArgCount + joint_buffer_args + gathered_joint_buffer_args + reference_buffer_args + 2;
     layout.reader_logical_nt = kReaderBaseBufferArgCount + joint_buffer_args + gathered_joint_buffer_args +
-                               kReaderQWorkArgCount + head_chain_args + batch_chain_args + gqa_chain_args;
+                               reference_buffer_args + kReaderQWorkArgCount + head_chain_args + batch_chain_args +
+                               gqa_chain_args;
     layout.reader_active_ring_iter_mask = layout.reader_logical_nt + 1;
     layout.writer_logical_nt = kWriterBaseArgCount;
     layout.writer_active_ring_iter_mask = layout.writer_logical_nt + 1;
@@ -994,6 +1116,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         tensor_args.gathered_v.has_value() ? tensor_args.gathered_v.value() : gathered_input_tensor_k;
     const auto& attention_sink = tensor_args.attention_sink;
     const bool use_attention_sink = attention_sink.has_value();
+    const auto& reference_kv = tensor_args.reference_kv;
 
     auto& output_tensor = output_tensors[RING_JOINT_SDPA_OUTPUT_IDX];
     auto& joint_output_tensor = output_tensors[RING_JOINT_SDPA_JOINT_OUTPUT_IDX];
@@ -1563,6 +1686,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     }
     TensorAccessorArgs(attention_sink.has_value() ? attention_sink->buffer() : nullptr)
         .append_to(reader_compile_time_args);
+    // Reference-frame accessor follows the sink accessor (reader gates its offset on has_reference).
+    TensorAccessorArgs(reference_kv.has_value() ? reference_kv->buffer() : nullptr).append_to(reader_compile_time_args);
     // Metadata accessors follow the tensor accessors (metadata path only) and precede the chain semaphore
     // compile args; the reader kernel gates their offsets on slot_from_metadata / kv_pad_from_metadata.
     // sem_args_offset below is computed after this append, so the chain/CB compile-arg indices stay correct.
@@ -1961,6 +2086,19 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     writer_compile_time_args.push_back(tiles_per_frame);
     writer_compile_time_args.push_back(sparse_num_frames_padded);
 
+    // Reference-frame delivery CT args (all three kernels): has_reference gates the one extra ring
+    // iteration (index num_ring_iters); reference_frame_idx is the forced k_frame; num_reference_k_chunks
+    // is the reference K-loop length (one frame's tiles / k_chunk). Reader reads reference_kv; writer only
+    // needs has_reference + the bitmap; compute needs all three.
+    const bool has_reference = args.has_reference();
+    const uint32_t reference_frame_idx = args.reference_frame_idx.value_or(0);
+    const uint32_t num_reference_k_chunks = has_reference ? tt::div_up(tiles_per_frame, Sk_chunk_t) : 0u;
+    for (auto* v : {&compute_compile_time_args, &reader_compile_time_args, &writer_compile_time_args}) {
+        v->push_back(static_cast<uint32_t>(has_reference));
+        v->push_back(reference_frame_idx);
+        v->push_back(num_reference_k_chunks);
+    }
+
     // Precompute per-q_chunk work bitmap for this device. Both compute and writer consume it to
     // derive per-(q_chunk, iter) work status, first/last work iter, and zero-work checks.
     const std::vector<uint32_t> q_work_bitmap = compute_q_work_bitmap(
@@ -1981,7 +2119,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         sparse_frames_enabled,
         tiles_per_frame,
         sparse_num_frames_padded,
-        args.sparse_frame_mask);
+        args.sparse_frame_mask,
+        args.has_reference(),
+        args.reference_frame_idx.value_or(0));
 
     auto* const q_buf = input_tensor_q.buffer();
     auto* const k_buf = input_tensor_k.buffer();
@@ -1989,6 +2129,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     auto* const gathered_k_buf = gathered_input_tensor_k.buffer();
     auto* const gathered_v_buf = gathered_input_tensor_v.buffer();
     auto* const attention_sink_buf = attention_sink.has_value() ? attention_sink->buffer() : nullptr;
+    auto* const reference_kv_buf = reference_kv.has_value() ? reference_kv->buffer() : nullptr;
     auto* const out_buf = output_tensor.buffer();
     auto* const joint_out_buf = joint_output_tensor.buffer();
     auto* const stats_buf = stats_output_tensor.buffer();
@@ -2769,6 +2910,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             reader_args.push_back(joint_tensor_v->buffer());
         }
         reader_args.push_back(attention_sink_buf);
+        // reference_kv address: parsed by the reader right after attention_sink_addr (has_reference-gated),
+        // mirroring the CT accessor order (sink, then reference).
+        reader_args.push_back(reference_kv_buf);
         // Read by the kernel right after attention_sink_addr and before global_q_start.
         if (joint_is_sharded) {
             reader_args.push_back(gathered_joint_tensor_k->buffer());
@@ -3038,7 +3182,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             // (user, layer)-major KV-cache batch factor: the all-gather reader computes the gathered slot as
             // slot_id[0] * kv_cache_num_layers + kv_cache_layer_idx. Defaults (1, 0) keep callers unaffected.
             args.kv_cache_num_layers,
-            args.kv_cache_layer_idx);
+            args.kv_cache_layer_idx,
+            // Windowed gather radius (0 = full ring). Set on the AG attributes for the sparse-frames path.
+            args.all_gather_operation_attributes.window_radius);
     }
 
     return desc;
