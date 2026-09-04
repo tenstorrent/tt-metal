@@ -1,35 +1,15 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """Speculative decoding for Qwen3.6-27B using the built-in MTP drafter head.
-
-The MTP head (models/demos/blackhole/qwen36/tt/mtp.py) drafts K tokens autoregressively; the base
-model verifies them in one traced K+1-token chunk forward; accepted tokens are committed by pointing
-the GDN recurrent state at the accepted slot.
-
-Iteration shape (anchor p; the base has consumed through p and we hold its hidden h_p):
-
-    pending = argmax(base logits at p)      # the base's OWN next token: free, already confirmed
-    draft   : slot p+j fuses (hidden, token at slot+1) -> candidate for p+2+j, for j in 0..K-1
-    verify  : ONE chunk over [pending, d_0..d_K-1] at positions p+1..p+K+1
-    accept  : d_j's target is argmax(verify logits at p+1+j); commit [pending] + matching prefix
-
-Two measured properties fix the shape of that loop:
-
-* The head expects the DeepSeek-V3 / vLLM pairing (h_i, token_{i+1}) -> token_{i+2}, not the
-  same-index pairing (h_i, token_i): 0.78 vs 0.64 depth-1 top-1 on the real weights, and e2e
-  acceptance 2.82/3 vs 1.52/3.
-* Because `pending` is known before drafting, all K drafter steps propose new tokens. Spending the
-  first step re-predicting `pending` aborted 60% of iterations.
-
-The base model's Gated DeltaNet (GDN) recurrent state is the hard part: a speculative verify advances
-it through candidate positions, so a rejected draft must not leave it there. Verify buffers the state
-after every token and commit points the durable state at the accepted-prefix slot — the reference's
-`spec_state_indices` / `num_accepted_tokens` scheme, with no rollback and no commit forward. The
-full-attention layers' paged KV is corrected implicitly (rejected positions past the frontier are
-never attended and get overwritten next iteration).
-
-TP (P150x4) only, B=1, greedy (temperature==0).
-"""
+MTP (tt/mtp.py) drafts K tokens; the base verifies them in one traced K+1-token chunk; accepted
+tokens are committed by pointing GDN at the accepted slot. Iteration (anchor p, hidden h_p):
+pending = argmax(base logits at p) (already confirmed); draft slot p+j fuses (hidden, token at
+slot+1) -> candidate for p+2+j; verify [pending, d_0..d_K-1] at p+1..p+K+1; commit [pending] +
+accepted prefix. Head expects DeepSeek-V3 / vLLM pairing (h_i, token_{i+1}) -> token_{i+2}, not
+(h_i, token_i); pending is known before drafting, so all K steps propose new tokens. GDN: verify
+buffers state after every token and commit points durable state at the accepted-prefix slot
+(spec_state_indices / num_accepted_tokens — no rollback). Full-attention paged KV is corrected
+implicitly (rejected positions past the frontier never attended, overwritten next iteration). TP (P150x4) only, B=1. Greedy accepts the longest matching-argmax prefix (token-identical to plain greedy). Sampling (temp > 0, optional top-k/top-p) runs exact speculative rejection sampling (tt/spec_sampling.py), lossless in distribution; drafts stay the device ARGMAX so the accept test is u < p(d). Extra sampling cost is the [T, vocab] logits readback plus host accept math."""
 import os
 import time
 
@@ -37,19 +17,22 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.blackhole.qwen36.tt.spec_sampling import SpecSampler, SpecSamplingParams
 
 # Prompt length above which the reseed goes back to the per-slot loop; see generate().
 EAGER_RESEED_PROMPT_LEN = 131072
 
 
 class SpeculativeDecoder:
-    """Greedy MTP speculative decode. Reproduces the plain-decode greedy trajectory exactly.
+    """MTP speculative decode, greedy or sampling.
 
-    This is the demo's DEFAULT decode path (QWEN36_SPEC=0 opts out). Everything that is not a genuine
-    tuning knob is fixed to its measured-best setting: the only env flags left are
-    QWEN36_SPEC_DRAFT_LEN (K override) and QWEN36_SPEC_TIMING / QWEN36_SPEC_PROFILE (diagnostics).
-    The A/B switches that used to be env vars are instance attributes instead — set them from python
-    (force_eager_reseed, read_verify_logits here; use_fullbatch_verify on the GDN layers).
+    Greedy (``sampling=None``) reproduces the plain-decode greedy trajectory exactly. A
+    ``SpecSamplingParams`` (temperature > 0, optional top-k / top-p) switches acceptance to exact
+    speculative rejection sampling over the verify logits, lossless in distribution, and turns
+    ``read_verify_logits`` on (needs [T, vocab] target rows, not the trace's argmax ids). Drafts are
+    the drafter's argmax under sampling as well. This is the demo's DEFAULT decode path
+    (QWEN36_SPEC=0 opts out). Remaining knobs: QWEN36_SPEC_DRAFT_LEN (K override),
+    QWEN36_SPEC_TIMING (per-iteration timing), and the ``sampling`` constructor argument.
     """
 
     # Field order of the QWEN36_SPEC_TIMING lines.
@@ -58,7 +41,14 @@ class SpeculativeDecoder:
     # the timing lines are tagged with a class-level call id to tell the two apart in the log.
     _gen_calls = 0
 
-    def __init__(self, model, page_table_torch, draft_len=None, stop_tokens=None):
+    def __init__(
+        self,
+        model,
+        page_table_torch,
+        draft_len=None,
+        stop_tokens=None,
+        sampling: SpecSamplingParams | None = None,
+    ):
         assert model.mtp is not None, "model has no MTP head (has_mtp / mtp.* weights?)"
         assert model.num_devices > 1, "SpeculativeDecoder is TP-only for now"
         self.model = model
@@ -72,9 +62,6 @@ class SpeculativeDecoder:
         # instead: K=10 up to a 4k prompt, K=6 above it (_run_tp_spec_generation). QWEN36_SPEC_DRAFT_LEN
         # overrides both.
         self.K = int(draft_len if draft_len is not None else os.environ.get("QWEN36_SPEC_DRAFT_LEN", 3))
-        # QWEN36_SPEC_PROFILE=1: per-phase wall-clock (synchronize-bracketed) to see where time goes.
-        self._prof = bool(int(os.environ.get("QWEN36_SPEC_PROFILE", "0")))
-        self._pt = {"draft": 0.0, "verify": 0.0, "commit": 0.0, "reseed": 0.0}
         # QWEN36_SPEC_TIMING=1: per-ITERATION breakdown (one log line per iteration + a mean at the
         # end). Off by default and every cost sits behind `self._timing`.
         self._timing = bool(int(os.environ.get("QWEN36_SPEC_TIMING", "0")))
@@ -82,16 +69,6 @@ class SpeculativeDecoder:
         self._tn = 0  # iterations folded into _tsum
         self.stop_tokens = set(stop_tokens or [])
         self.mtp = model.mtp
-        # Feed contract (Qwen36Model.spec_feed_rows; env QWEN36_SPEC_POSTNORM). V3 (default) feeds
-        # the drafter the final-norm output and chains mtp.norm's output; V0 (QWEN36_SPEC_POSTNORM=0)
-        # feeds the pre-final-norm residual and chains the raw MTP block output. Both halves are
-        # decided by the model at build time;
-        # the drafter must agree or it would fuse mixed-scale hiddens across a chain.
-        self.spec_postnorm = bool(getattr(model, "spec_postnorm", False))
-        assert self.spec_postnorm == bool(getattr(model.mtp, "spec_postnorm", False)), (
-            f"spec feed contract mismatch: model spec_postnorm={self.spec_postnorm} but "
-            f"mtp spec_postnorm={getattr(model.mtp, 'spec_postnorm', False)}"
-        )
         # The MTP layer keeps its own paged KV cache with its own (identity) page table.
         self.mtp_pt = ttnn.from_torch(
             page_table_torch, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.mesh
@@ -101,26 +78,29 @@ class SpeculativeDecoder:
             # verify and decode must share GDN math or near-tie argmax flips reduce acceptance
             gdn.use_fused_recurrent_decode = True
         self._vfy_captured = False
-        # QWEN36_SPEC_TRACED_COMMIT=0 reverts the commit phase to the eager per-layer
-        # commit_verify_slot loop; the default replays one pre-captured trace per accepted-prefix
-        # index instead. Measured A/B at ISL 16k, K=7 (traced_16k demo case): commit 4.87 -> 3.21
-        # ms/iteration, total 88.32 -> 86.55, 38.65 -> 39.44 tok/s, with acceptance byte-identical
-        # (2.41/7 both ways) — the trace does the same copies, it just stops paying host dispatch
-        # for 4 ops x 48 layers. The remaining 3.2 ms is the replay's own on-device dispatch of
-        # those ~192 programs, which is why this is worth ~2% and not the whole 4.9 ms.
-        # Kept as an env flag purely so the two can be A/B'd on the same build.
-        self.traced_commit = os.environ.get("QWEN36_SPEC_TRACED_COMMIT", "1") != "0"
+        # The commit phase replays one pre-captured trace per accepted-prefix index, falling back to
+        # the eager per-layer commit_verify_slot loop automatically when the capture is unavailable.
+        # Measured A/B at ISL 16k, K=7 (traced_16k demo case): commit 4.87 -> 3.21 ms/iteration,
+        # total 88.32 -> 86.55, 38.65 -> 39.44 tok/s, with acceptance byte-identical (2.41/7 both
+        # ways) — the trace does the same copies, it just stops paying host dispatch for 4 ops x 48
+        # layers. The remaining 3.2 ms is the replay's own on-device dispatch of those ~192
+        # programs, which is why this is worth ~2% and not the whole 4.9 ms.
         self._commit_traced = False  # resolved in generate(): did the capture actually take?
         # Persistent anchor-hidden buffer, allocated before any trace capture (see _anchor_warmup).
         self._hp_buf = None
+        # Acceptance mode. None => greedy (argmax-prefix) acceptance; a SpecSamplingParams =>
+        # exact speculative rejection sampling on host over the verify logits (tt/spec_sampling.py).
+        self.sampler = SpecSampler(sampling, self.vocab) if sampling is not None else None
         # Read the full [T, vocab] verify logits back to host as well as the argmax ids. Greedy
-        # acceptance does not need them (the trace argmaxes on device), so this is off; the device
-        # path stays in model.verify_traced for whatever needs distributions (sampling, debug).
-        self.read_verify_logits = False
-        # None => generate() picks batched or eager from the prompt length (see the note there).
-        # Set True/False to force one, for A/B work.
-        self.force_eager_reseed = None
-        self._batched_reseed = True  # resolved in generate()
+        # acceptance does not need them (the trace argmaxes on device), so it stays off there; the
+        # sampling accept step needs the distributions, so the constructor turns it on for it.
+        self.read_verify_logits = self.sampler is not None
+        # Mean target probability of the drafts the sampler actually evaluated: the sampling path's
+        # analogue of per-depth acceptance (see stats()).
+        self._p_draft_sum = 0.0
+        self._p_draft_n = 0
+        # Batched or eager reseed, decided in generate() from the prompt length (see the note there).
+        self._batched_reseed = True
         # The batched reseed's scratch block (its padding rows' KV sink) is the EXTRA block the MTP
         # cache carries past the page table's span — _allocate_mtp_kv_cache allocates num_blocks + 1.
         # It must not be one of the sequence's own blocks: stealing the last one caps the sequence at
@@ -147,20 +127,13 @@ class SpeculativeDecoder:
         """Autoregressively draft K tokens from the MTP head, starting at slot ``p``.
 
         The head is fused from (base hidden at slot s, embedding of the token at s+1) and predicts
-        the token at s+2 — the DeepSeek-V3 / vLLM convention. So:
-
-          step 0: (h_p, pending_tok) at slot p     -> candidate for position p+2
-          step j: (own hidden, previous draft)     -> candidate for position p+2+j
-
-        ``pending_tok`` is the base's OWN next token at p+1, already confirmed by the anchor logits.
-        Feeding it here is what makes all K drafts genuinely new.
-
-        The chain stays ON DEVICE: reading back the full 151k-vocab logits and argmaxing on host for
-        every step forces a host round-trip between steps (~12 ms/step against ~3 ms of device work).
-        Device argmax feeds the next step directly and defers the readback to K small ids at the end.
-
-        Returns the K drafted ids; drafts[j] is the candidate for position p+2+j.
-        """
+        the token at s+2 — DeepSeek-V3 / vLLM. Step 0: (h_p, pending_tok) at slot p -> candidate for
+        p+2; step j: (own hidden, previous draft) -> candidate for p+2+j. ``pending_tok`` is the
+        base's OWN next token at p+1, already confirmed; feeding it here makes all K drafts new.
+        The chain stays ON DEVICE: host argmax of 151k-vocab logits between steps is a round-trip;
+        device argmax feeds the next step and defers readback to K small ids at the end. Each step
+        is an fp32 LM head, then untilize + ttnn.argmax (``_argmax_last``); under sampling that
+        argmax is the deterministic proposal (the delta at that id). Returns the K drafted ids."""
         tok_tt = ttnn.from_torch(
             torch.tensor([[int(pending_tok)]], dtype=torch.int32),
             dtype=ttnn.uint32,
@@ -181,7 +154,9 @@ class SpeculativeDecoder:
             h = h_next
         if h is not anchor_hidden:
             ttnn.deallocate(h)
-        drafts = [self._id_to_host(t) for t in owned_tok[1:]]  # one sync, K ids
+        # ONE sync for the whole chain: the first readback blocks, and everything below is already
+        # computed — K small ids.
+        drafts = [self._id_to_host(t) for t in owned_tok[1:]]
         for t in owned_tok:
             ttnn.deallocate(t)
         return drafts
@@ -189,18 +164,14 @@ class SpeculativeDecoder:
     def _draft_warmup(self, pending, Hp, p):
         """Run ONE full (need_logits=True) draft step eagerly, BEFORE any trace is captured.
 
-        The first real ``_draft`` happens after capture_verify_trace, and the logits-producing drafter
-        path has programs nothing earlier in generate() has run at B=1: head_norm in DECODE mode
-        (gather-then-norm), the fp32 LM head and its vocab all-gather, the multicore untilize and the
-        argmax — and, under V3, the mesh_partition that re-fractures mtp.norm's output. A program that
-        first compiles while a trace is parked lands its kernel binaries in memory the replayed trace
-        writes over (see capture_verify_trace), so they have to compile here. Runs under BOTH feed
-        contracts.
-
-        Side effect: writes the drafter's KV at slot ``p`` from (H_p, pending) — exactly the write
-        draft step 0 repeats, from the same inputs, on the first real iteration — so it is inert. The
-        drafted id is discarded.
-        """
+        The first real ``_draft`` happens after capture_verify_trace, and the logits-producing
+        drafter path has programs nothing earlier in generate() has run at B=1: head_norm in DECODE
+        (gather-then-norm), the LM head and its vocab all-gather, the argmax pick, and the
+        mesh_partition that re-fractures mtp.norm's output for the next chain step. A program that
+        first compiles while a trace is parked lands its kernel binaries in memory the replayed
+        trace writes over, so they must compile here. Side effect: writes the drafter's KV at slot
+        ``p`` from (H_p, pending) — the same write draft step 0 repeats on the first real iteration,
+        so it is inert. The drafted id is discarded."""
         logits, h = self.model.ttnn_mtp_decode_forward(Hp, int(pending), p, self.mtp_pt)
         idx = self._argmax_last(logits)
         for t in (logits, idx, h):
@@ -212,13 +183,10 @@ class SpeculativeDecoder:
 
         ttnn.argmax needs ROW_MAJOR input: a TILE tensor takes a single-core internal-untilize path
         that is catastrophically slow on a 151k-wide vocab. So untilize multicore, then argmax.
-
-        This used to pad 1 -> 32 rows first, on the belief that the multicore argmax is row-parallel
-        and returns garbage below a full tile of rows. It does not: measured on the real drafter, the
-        unpadded argmax returns byte-identical ids (K=3 lossless acceptance 2.57 either way) and the
-        draft phase drops 35.1 -> 22.3 ms at K=10. The pad was pure traffic — [1,1,1,vocab] is
-        ALREADY 32 rows physically, so padding it to 32 logical rows made untilize and argmax move
-        ~32x the bytes they need, so the pad is gone.
+        Used to pad 1 -> 32 rows on the belief that multicore argmax is row-parallel and returns
+        garbage below a full tile. It does not: the unpadded argmax returns byte-identical ids, and
+        [1,1,1,vocab] is ALREADY 32 rows physically, so padding to 32 logical rows made untilize
+        and argmax move ~32x the bytes they need. The pad is gone.
         """
         u = ttnn.untilize(logits, use_multicore=True)
         out = ttnn.argmax(u, dim=-1, keepdim=False)  # [1,1,1] uint32 RM
@@ -238,19 +206,13 @@ class SpeculativeDecoder:
         """Warm the MTP drafter's KV over ONE prompt chunk, in one forward.
 
         The drafter must see prompt context: with an empty cache at the first draft, acceptance
-        collapses (2.82/3 -> 1.10/3 measured). Slot i is fused from (base_hidden_i, token_{i+1}) —
-        the same shift pairing the draft loop uses.
-
-        Slot T-1 is deliberately NOT written here: its token is the base's own prediction for
-        position T, which is not known until the prefill logits exist. ``_warm_mtp_last`` writes it
-        afterwards.
-
-        The forward runs over the WHOLE bucket, not just the valid rows: the bucket is tile-aligned
-        (128..2048) and the prefill matmuls require that, whereas an arbitrary valid_len (5, 2047)
-        fails the matmul shape check. Rows past the prompt write junk MTP KV at slots >= T-1, which
-        is harmless — slot T-1 is overwritten by _warm_mtp_last, and every slot above it is
-        rewritten by the drafter before it is ever attended (draft step k writes slot p+k, then
-        attends to slots <= p+k).
+        collapses. Slot i is fused from (base_hidden_i, token_{i+1}) — the same shift pairing the
+        draft loop uses. Slot T-1 is deliberately NOT written here: its token is the base's own
+        prediction for position T, unknown until the prefill logits exist; ``_warm_mtp_last``
+        writes it afterwards. The forward runs over the WHOLE bucket, not just the valid rows: the
+        bucket is tile-aligned (128..2048) and prefill matmuls require that, whereas an arbitrary
+        valid_len fails the matmul shape check. Rows past the prompt write junk MTP KV at slots
+        >= T-1, which is harmless — slot T-1 is overwritten by _warm_mtp_last, and every slot above it is rewritten by the drafter before it is ever attended.
         """
         T = len(prompt_ids)
         if chunk_start >= T - 1:
@@ -277,22 +239,15 @@ class SpeculativeDecoder:
 
     def _reseed_mtp(self, slot0, vhidden, tokens):
         """Refresh the MTP KV of the committed slots with the BASE hidden, replacing the drafter's
-        own chained hidden.
-
-        The drafter wrote those slots from its own chained hidden while drafting; the prompt warming
-        wrote base hiddens. Leaving the mismatch in place costs acceptance (2.00 -> 2.82 /3 measured),
-        so every committed slot is rewritten from the base hidden the verify forward already produced.
-        ``vhidden`` row i is the base hidden at slot0+i; tokens[i] is the token at slot0+i+1.
-
-        One drafter DECODE step per slot. Superseded by _reseed_mtp_batched (one forward over all
-        slots at once, ~11 ms/iteration cheaper at K=10) except past EAGER_RESEED_PROMPT_LEN prompt
-        tokens, where generate() comes back here — see its reseed note.
-
-        Batching it does NOT go through the drafter's prefill path — that needs a genuine prefill
-        shape and neither candidate width works at an arbitrary mid-sequence slot0 (at one tile the
-        stack silently picks DECODE matmuls while the norms stay in PREFILL mode, so the fused fc is
-        handed a fractured activation; at 128 rows the SDPA rejects the unaligned chunk start). It
-        goes through the DECODE path at B rows instead — see _reseed_mtp_batched.
+        own chained hidden. The drafter wrote those slots from its own chained hidden while drafting;
+        the prompt warming wrote base hiddens. Leaving the mismatch in place costs acceptance, so
+        every committed slot is rewritten from the base hidden the verify forward already produced.
+        ``vhidden`` row i is the base hidden at slot0+i; tokens[i] is the token at slot0+i+1. One
+        drafter DECODE step per slot. Superseded by _reseed_mtp_batched (one forward over all slots)
+        except past EAGER_RESEED_PROMPT_LEN, where generate() comes back here. Batching does NOT go
+        through the drafter's prefill path — that needs a genuine prefill shape and neither candidate
+        width works at an arbitrary mid-sequence slot0 (at one tile the stack silently picks DECODE
+        matmuls while norms stay PREFILL; at 128 rows SDPA rejects the unaligned chunk start). Goes through the DECODE path at B rows instead — see _reseed_mtp_batched.
         """
         for i, tok in enumerate(tokens):
             row = ttnn.slice(vhidden, (0, 0, i, 0), (1, 1, i + 1, vhidden.shape[-1]))
@@ -304,22 +259,14 @@ class SpeculativeDecoder:
     def _reseed_mtp_batched(self, slot0, vhidden, tokens, scratch_only=False):
         """``_reseed_mtp`` as ONE fixed-shape drafter forward over all T = K+1 verify rows.
 
-        The per-slot loop above is m sequential decode forwards (~2.7 ms each, m ~ 6 at K=10). The
-        rows are INDEPENDENT — only the KV write survives, and K/V come from the row's own
-        (hidden, token, position) through the in-projection, never from the attention output — so
-        running them as B=T pseudo-users of one sequence is exactly equivalent and costs one forward.
-
-        This is the same hybrid trick the verify uses: per-row position tensor, page-table rows
-        aliasing the sequence's blocks, alias_kv_write=True so the shared-block KV writes go row by
-        row instead of racing several cores onto one 32-row tile.
-
+        The per-slot loop is m sequential decode forwards. The rows are INDEPENDENT — only the KV
+        write survives, and K/V come from the row's own (hidden, token, position) through the
+        in-projection, never from the attention output — so running them as B=T pseudo-users of one
+        sequence is exactly equivalent and costs one forward. Same hybrid trick as verify: per-row
+        position tensor, page-table rows aliasing the sequence's blocks, alias_kv_write=True so
+        shared-block KV writes go row by row instead of racing several cores onto one 32-row tile.
         Rows m..T-1 are PADDING (m varies, the shape must not): their page-table rows point at a
-        dedicated scratch block, so their KV write lands there and never touches the sequence, and
-        their position is 0 so their (discarded) SDPA read is one slot deep instead of full-context.
-        ``vhidden`` supplies their hidden rows unchanged — junk in, junk to the scratch block.
-
-        ``scratch_only=True`` makes EVERY row padding (the warmup below): same shapes, same program,
-        no real slot touched.
+        dedicated scratch block (KV write never touches the sequence) and position 0 so the discarded SDPA read is one slot deep. ``scratch_only=True`` makes EVERY row padding (warmup): same shapes/program, no real slot touched.
         """
         m = 0 if scratch_only else len(tokens)
         if m == 0 and not scratch_only:
@@ -369,7 +316,7 @@ class SpeculativeDecoder:
         ttnn.deallocate(z)
 
     # --------------------------------------------------------------------- #
-    # Accept (greedy)
+    # Accept
     # --------------------------------------------------------------------- #
     def _accept_greedy(self, drafts, verify_ids):
         """Greedy acceptance of the matching prefix; returns the number of accepted drafts.
@@ -378,10 +325,8 @@ class SpeculativeDecoder:
         which predicts p+2+j — exactly drafts[j]'s position. No draft's target was known before
         drafting (that token is ``pending``, committed unconditionally), so every rejection is a
         genuine drafter miss and nothing extra needs committing: the correction arrives as the next
-        iteration's ``pending``.
-
-        Greedy compares IDS, so the verify trace argmaxes on device and this walks a [K+1] int list
-        rather than a [K+1, 151936] host float tensor.
+        iteration's ``pending``. Greedy compares IDS, so the verify trace argmaxes on device and
+        this walks a [K+1] int list rather than a [K+1, 151936] host float tensor.
         """
         K = len(drafts)
         m = K
@@ -396,6 +341,43 @@ class SpeculativeDecoder:
             self.zero_accept += 1
         return m
 
+    def _accept_sample(self, drafts, vlogits, penalize_base=None):
+        """Exact speculative rejection sampling over the verify logits; returns (m, next_token).
+
+        The drafts are the drafter's argmax, so the proposal is the delta at ``d_j`` and the accept
+        test is ``u_j < p_j(d_j)``. ``next_token`` is the recovered token from the rejection row
+        (m < K) or the bonus token from the extra row (m == K), and becomes the next iteration's
+        ``pending`` exactly like greedy's ``verify_ids[mi]`` (see spec_sampling.py). ``penalize_base``
+        is this iteration's presence-penalty set (``generated_so_far ∪ {pending}``, None when the
+        request has no presence penalty); the sampler adds ``drafts[:j]`` per row, so each verify
+        row is penalized on exactly the output that precedes it. Same instrumentation as
+        _accept_greedy, plus the mean target probability of the drafts the sampler evaluated."""
+        m, next_tok, p_draft = self.sampler.accept(vlogits, drafts, penalize_base)
+        self.accept_hist[m] += 1
+        for j in range(m):
+            self.depth_hits[j] += 1
+        if m == 0:
+            self.zero_accept += 1
+        self._p_draft_sum += sum(p_draft)
+        self._p_draft_n += len(p_draft)
+        return m, next_tok
+
+    def _pick_token(self, logits_row, penalize=None):
+        """One token from a host 1-D logits row: argmax (greedy) or a sampler draw.
+
+        Used at the two SEED sites (the prefill's first token and the anchor's `pending`), where
+        there is no draft to accept and the token comes straight out of one distribution. The row
+        may be padded past the vocabulary (the LM head's width), so it is sliced first.
+
+        ``penalize`` is the presence-penalty set for the site: nothing at all for the prefill's
+        `first` token (the output is empty there) and ``{first}`` for the anchor's `pending`, which
+        follows it. Unused on the greedy path, which has no sampler and no penalty.
+        """
+        row = logits_row.reshape(-1)[: self.vocab]
+        if self.sampler is None:
+            return int(row.float().argmax())
+        return self.sampler.pick(row.float(), penalize)
+
     # --------------------------------------------------------------------- #
     # Verify / commit
     # --------------------------------------------------------------------- #
@@ -405,25 +387,24 @@ class SpeculativeDecoder:
         Advances GDN recurrently token by token (the SAME kernel decode uses, so it is
         recurrent-faithful) while attention/MLP/norm/lm_head stay batched over the bucket. Buffers
         the per-token GDN state so commit_verify_slot(m) can roll the durable state to the accepted
-        slot — no rollback, no commit forward.
-
-        Returns (per-position argmax ids, per-position hidden rows [1,1,len,dim/tp]).
+        slot — no rollback, no commit forward. Returns (per-position argmax ids, per-position hidden
+        rows [1,1,len,dim/tp], per-position host logits [T, vocab] — None unless read_verify_logits
+        is set, i.e. unless the sampling accept step needs the distributions).
         """
-        _lt, vhidden, ids = self.model.verify_traced(
+        lt, vhidden, ids = self.model.verify_traced(
             tokens, p + 1, read_logits=self.read_verify_logits, clone_rows=False
         )
-        return ids, vhidden
+        return ids, vhidden, lt
 
     def _commit(self, mi):
         """Point the durable GDN state at the accepted prefix's last verify slot `mi`.
 
         Traced path (default): ONE execute_trace carries all 48 layers' commit device ops for this
-        mi, and python only does the per-layer host bookkeeping (staleness marks + dropping the
-        verify handle). Eager path: the original per-layer commit_verify_slot loop, unchanged.
-
-        mi == K is FULL acceptance: the verify already left rec_state at the last token and
-        _conv_win_buf at the last window, so there is nothing to copy and no trace was captured for
-        it — replay_commit_trace returns False and only the host half runs. Same early-out the eager
+        mi; python only does the per-layer host bookkeeping (staleness marks + dropping the verify
+        handle). Eager path: the original per-layer commit_verify_slot loop, unchanged. mi == K is
+        FULL acceptance: the verify already left rec_state at the last token and _conv_win_buf at
+        the last window, so there is nothing to copy and no trace was captured for it —
+        replay_commit_trace returns False and only the host half runs. Same early-out the eager
         path takes, so the two agree token for token.
         """
         if not self._commit_traced:
@@ -436,22 +417,15 @@ class SpeculativeDecoder:
 
     def _anchor_warmup(self, T, dim_frac, dtype):
         """Allocate the persistent anchor-hidden buffer and compile every op the loop uses to refill
-        it — BEFORE any trace is captured.
-
-        Two reasons this has to happen here rather than lazily in the loop.
-
+        it — BEFORE any trace is captured. Two reasons this cannot happen lazily in the loop.
         1. ADDRESS STATIONARITY. The anchor hidden used to be a fresh ttnn.clone per iteration, and
-           it is LIVE across the commit phase. A commit trace bakes its intermediates' addresses in
-           at capture time, when no such per-iteration buffer exists, so the loop's clone could land
-           on one of them and the replay would overwrite the anchor mid-flight — the drafter then
-           chains from corrupted hidden and acceptance collapses (measured: 2.36 -> 0.09 on the third
-           generate of test_spec_determinism). One fixed-address buffer, allocated before the
-           captures, removes the whole class: at commit-replay time nothing but persistent buffers
-           is allocated, exactly as at capture time.
-        2. NO POST-CAPTURE COMPILE. The refill slices row `mi` of the verify window, and
-           SliceDeviceOperation::compute_program_hash folds the slice offsets in, so every mi is its
-           own program. Compiling one while a trace is parked writes kernel binaries over it.
-        """
+        it is LIVE across the commit phase. A commit trace bakes its intermediates' addresses in at
+        capture time, when no such per-iteration buffer exists, so the loop's clone could land on
+        one of them and the replay would overwrite the anchor mid-flight — the drafter then chains
+        from corrupted hidden and acceptance collapses. One fixed-address buffer, allocated before
+        the captures, removes the whole class. 2. NO POST-CAPTURE COMPILE. The refill slices row
+        `mi` of the verify window, and SliceDeviceOperation hashes the slice offsets, so every mi
+        is its own program. Compiling one while a trace is parked writes kernel binaries over it."""
         self._hp_buf = ttnn.zeros(
             [1, 1, 1, dim_frac],
             device=self.mesh,
@@ -489,17 +463,6 @@ class SpeculativeDecoder:
         ttnn.deallocate(chidden)
         return clogits[0], self._hp_buf
 
-    def _phase(self, name, fn):
-        """Run fn, accumulating its synchronize-bracketed wall time under `name` when profiling."""
-        if not self._prof:
-            return fn()
-        ttnn.synchronize_device(self.mesh)
-        t = time.perf_counter()
-        r = fn()
-        ttnn.synchronize_device(self.mesh)
-        self._pt[name] += time.perf_counter() - t
-        return r
-
     # --------------------------------------------------------------------- #
     # Per-iteration timing (QWEN36_SPEC_TIMING=1)
     # --------------------------------------------------------------------- #
@@ -521,9 +484,7 @@ class SpeculativeDecoder:
         ``ttnn.to_torch(ttnn.get_device_tensors(...)[0])``, so hooking ``ttnn.get_device_tensors``
         for the duration of the call marks the device/host boundary without editing model.py. The
         trailing sync flushes the small hidden-rows clone that follows the readback, which lands in
-        the readback bucket.
-
-        Returns (vids, vhidden, device_seconds, readback_seconds).
+        the readback bucket. Returns (vids, vhidden, vlogits, device_seconds, readback_seconds).
         """
         orig = ttnn.get_device_tensors
         mark = []
@@ -536,13 +497,13 @@ class SpeculativeDecoder:
         ttnn.get_device_tensors = hooked
         t0 = time.perf_counter()
         try:
-            vids, vhidden = self._verify(tokens, p)
+            vids, vhidden, vlogits = self._verify(tokens, p)
         finally:
             ttnn.get_device_tensors = orig
         ttnn.synchronize_device(self.mesh)
         t1 = time.perf_counter()
         t_mark = mark[0] if mark else t1
-        return vids, vhidden, t_mark - t0, t1 - t_mark
+        return vids, vhidden, vlogits, t_mark - t0, t1 - t_mark
 
     def _log_iter_timing(self, row):
         """Log one iteration's breakdown and fold it into the mean (first 2 iterations excluded)."""
@@ -569,21 +530,12 @@ class SpeculativeDecoder:
             + f" committed_per_iter={cpi:.3f} tok_s={cpi / max(mean['total'], 1e-9):.2f}"
         )
 
-    def log_profile(self, prefix="spec", tokens=None):
-        """Log the per-phase wall-clock breakdown gathered when QWEN36_SPEC_PROFILE=1."""
-        if not self._prof:
-            return
-        total = sum(self._pt.values())
-        logger.info(f"[{prefix}] phase profile ({total:.2f}s over {self.iters} iters):")
-        for k, v in sorted(self._pt.items(), key=lambda kv: -kv[1]):
-            per_tok = f", {v / tokens * 1e3:.1f} ms/tok" if tokens else ""
-            logger.info(f"[{prefix}]   {k:8s}: {v:.3f}s ({v / max(total, 1e-9):.0%}){per_tok}")
-
     # --------------------------------------------------------------------- #
-    # Generate (greedy)
+    # Generate
     # --------------------------------------------------------------------- #
     def generate(self, prompt_ids, max_new_tokens):
-        """Greedy speculative generation. Returns the list of generated token ids (excludes prompt).
+        """Speculative generation (greedy or sampling, per the constructor's ``sampling`` arg).
+        Returns the list of generated token ids (excludes prompt).
 
         Records self.prefill_time (prompt prefill + MTP warm + seed, i.e. TTFT) and self.decode_time
         (the spec loop), both synchronize-bracketed, so callers can report ttft / decode tok/s.
@@ -593,16 +545,28 @@ class SpeculativeDecoder:
         SpeculativeDecoder._gen_calls += 1
         self._gen_id = SpeculativeDecoder._gen_calls
         _t_start = time.perf_counter()
+        # The GENERATED ids so far (prompt excluded), which is the set the presence penalty is
+        # defined over. Maintained unconditionally — a set add per committed token — and read only
+        # when the request actually carries a penalty.
+        self._out_set = set()
 
         # Reseed shape, from the prompt length. Past EAGER_RESEED_PROMPT_LEN the batched reseed's B=K+1
         # in-projection drifts enough bf16 near-ties to cost ~0.3 accepted drafts/iter (256k: 19.7 vs
         # 20.9 tok/s), while its dispatch saving (~2 ms/iter) no longer covers that; the per-slot loop
-        # keeps spec >= plain at every ISL. force_eager_reseed overrides for A/B work.
-        eager_reseed = T > EAGER_RESEED_PROMPT_LEN if self.force_eager_reseed is None else self.force_eager_reseed
+        # keeps spec >= plain at every ISL.
+        eager_reseed = T > EAGER_RESEED_PROMPT_LEN
         self._batched_reseed = not eager_reseed
+        if self.sampler is None:
+            _samp = "sampling=greedy"
+        else:
+            _sp = self.sampler.params
+            _samp = (
+                f"sampling=temp={_sp.temperature} top_k={_sp.top_k} top_p={_sp.top_p} "
+                f"presence={_sp.presence_penalty} seed={self.sampler.seed}"
+            )
         logger.info(
             f"[spec] gen={self._gen_id} T={T} K={self.K} reseed={'eager' if eager_reseed else 'batched'} "
-            f"feed={'V3' if self.spec_postnorm else 'V0'} max_new={max_new_tokens}"
+            f"max_new={max_new_tokens} {_samp}"
         )
 
         # Chunked prompt prefill (2048-token chunks + masked tail — the same path the demo uses, so
@@ -612,9 +576,9 @@ class SpeculativeDecoder:
         last_hidden = [None]  # the base hidden at slot T-1, kept for _warm_mtp_last
 
         def _on_chunk(hidden, chunk_start, valid_len):
-            # Drafter feed for the chunk (V0: `hidden` itself; V3: a new fractured post-norm tensor).
-            # Both the warm and the slot-T-1 row must come from the SAME tensor, so the drafter is
-            # never handed a mix of contracts. The caller still frees `hidden`.
+            # Drafter feed for the chunk (a new fractured post-norm tensor). Both the warm and the
+            # slot-T-1 row must come from the SAME tensor, so the drafter is never handed a mix of
+            # scales. The caller still frees `hidden`.
             feed = self.model.spec_feed_rows(hidden)
             self._warm_mtp_chunk(feed, chunk_start, valid_len, prompt_ids)
             if chunk_start + valid_len >= T:  # the chunk holding slot T-1
@@ -627,8 +591,11 @@ class SpeculativeDecoder:
 
         logits_dev = model.prefill_for_spec(prompt, self.page_table, T, _on_chunk)
         lt = ttnn.to_torch(logits_dev, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh, dim=0))
-        first = int(lt.reshape(-1)[: self.vocab].float().argmax())
+        # penalize=None: the presence penalty looks at the OUTPUT only (prompt tokens excluded, as
+        # in vLLM), and at the prefill pick the output is still empty.
+        first = self._pick_token(lt.reshape(-1)[: self.vocab], None)
         out = [first]
+        self._out_set.add(first)
 
         # Slot T-1 pairs the base hidden at T-1 with `first`, which only exists now.
         assert last_hidden[0] is not None, "prefill_for_spec never delivered the chunk holding T-1"
@@ -664,13 +631,15 @@ class SpeculativeDecoder:
             self._reseed_warmup(self.K + 1, Hp.shape[-1], Hp.dtype)
 
         p = T
-        # The base's own next token, confirmed by the anchor logits. It is committed unconditionally
-        # next iteration and is what seeds the drafter, so no drafter step re-predicts it.
-        pending = int(Lp.argmax())
-        # Draft warmup: the logits-producing drafter step (head norm, fp32 LM head, untilize, argmax
-        # — plus V3's mesh_partition) has not run yet, and its first real run is AFTER the capture
-        # below. Compile it now; its one KV write (slot p from (H_p, pending)) is what draft step 0
-        # repeats.
+        # The base's own next token, taken from the anchor logits (argmax, or a sampler draw). It is
+        # committed unconditionally next iteration and is what seeds the drafter, so no drafter step
+        # re-predicts it. This position follows `first`, so `first` is the whole output set the
+        # presence penalty sees here.
+        pending = self._pick_token(Lp, torch.tensor([first], dtype=torch.int64))
+        # Draft warmup: the logits-producing drafter step (head norm, fp32 LM head, untilize, argmax,
+        # plus the chain's mesh_partition) has not run yet, and its first real run is AFTER the
+        # capture below. Compile it now; its one KV write (slot p from (H_p, pending)) is what draft
+        # step 0 repeats.
         self._draft_warmup(pending, Hp, p)
 
         # One-time verify-trace capture (replayed every iteration), done AFTER prefill + MTP warm +
@@ -680,7 +649,7 @@ class SpeculativeDecoder:
         # they advance. Counts toward TTFT, not decode_time.
         if not self._vfy_captured:
             model.capture_verify_trace(
-                self.page_table, self.K + 1, warm_start=T + 1, decode_cfg=True, commit_warmup=self.traced_commit
+                self.page_table, self.K + 1, warm_start=T + 1, decode_cfg=True, commit_warmup=True
             )
             self._vfy_captured = True
         # Commit traces, one per accepted-prefix index mi in 0..K-1 (mi == K is full acceptance,
@@ -688,7 +657,7 @@ class SpeculativeDecoder:
         # commit ops read the per-token state buffer that capture allocates. Their programs were
         # compiled by capture_verify_trace's commit_warmup, before ANY begin_trace_capture, so
         # nothing compiles here with the verify trace parked.
-        self._commit_traced = bool(self.traced_commit and model.capture_commit_traces())
+        self._commit_traced = bool(model.capture_commit_traces())
         logger.info(f"[spec] commit={'traced' if self._commit_traced else 'eager'}")
         ttnn.synchronize_device(self.mesh)
         self.prefill_time = time.perf_counter() - _t_start  # TTFT: prefill + MTP warm + seed
@@ -696,25 +665,41 @@ class SpeculativeDecoder:
 
         while len(out) < max_new_tokens:
             _tm = self._tick() if self._timing else 0.0
-            drafts = self._phase("draft", lambda: self._draft(pending, Hp, p))
+            drafts = self._draft(pending, Hp, p)
             _t_draft = self._tick() if self._timing else 0.0
 
             # Verify buffers per-token GDN state and keeps the hidden; commit = select the accepted
             # slot (no re-run forward). committed = [pending] + drafts[:m].
             if self._timing:
-                vids, vhidden, _s_verify, _s_read = self._verify_split([pending] + drafts, p)
+                vids, vhidden, vlogits, _s_verify, _s_read = self._verify_split([pending] + drafts, p)
                 _t_verify = time.perf_counter()
             else:
-                vids, vhidden = self._phase("verify", lambda: self._verify([pending] + drafts, p))
-            m = self._accept_greedy(drafts, vids)
+                vids, vhidden, vlogits = self._verify([pending] + drafts, p)
+            # Greedy compares IDS, so it walks the trace's on-device argmax. Sampling runs rejection
+            # sampling over the [T, vocab] host logits and IGNORES vids (still produced by the trace),
+            # drawing the emitted token itself — that token is the next iteration's `pending`.
+            sampled_tok = None
+            if self.sampler is None:
+                m = self._accept_greedy(drafts, vids)
+            else:
+                # Presence-penalty set for this window's FIRST row: the output so far plus `pending`,
+                # which the row follows (the sampler adds drafts[:j] for the deeper rows). Built only
+                # when the request asks for a penalty; trivial for the <= 500 tokens a run generates.
+                penalize_base = (
+                    torch.tensor(sorted(self._out_set | {pending}), dtype=torch.int64)
+                    if self.sampler.params.presence_penalty > 0
+                    else None
+                )
+                m, sampled_tok = self._accept_sample(drafts, vlogits, penalize_base)
             committed = [pending] + drafts[:m]
             mi = len(committed) - 1  # accepted-prefix's last token index in the verify window
             _t_accept = time.perf_counter() if self._timing else 0.0  # host-only: no fence needed
-            self._phase("commit", lambda: self._commit(mi))
+            self._commit(mi)
             _t_commit = self._tick() if self._timing else 0.0
             prev_p = p
-            # The next anchor's own next token: the base's argmax at the accepted-prefix's last row.
-            next_pending = vids[mi]
+            # The next anchor's own next token: greedy takes the base's argmax at the accepted-
+            # prefix's last row, sampling the token its accept step already drew from that row.
+            next_pending = vids[mi] if self.sampler is None else sampled_tok
             # The new anchor hidden is the accepted prefix's last row of the verify window, refilled
             # into the SAME persistent buffer the drafter already read this iteration (see
             # _anchor_warmup: a fresh per-iteration clone here is what the commit traces aliased).
@@ -725,13 +710,14 @@ class SpeculativeDecoder:
             # slot+1). vhidden is the verify trace's own persistent output row buffer, so it is not
             # freed here — the next replay overwrites it in place.
             _rfn = self._reseed_mtp_batched if self._batched_reseed else self._reseed_mtp
-            self._phase("reseed", lambda: _rfn(prev_p + 1, vhidden, committed[1:]))
+            _rfn(prev_p + 1, vhidden, committed[1:])
             _t_reseed = self._tick() if self._timing else 0.0
 
             p += len(committed)
             pending = next_pending
 
             out.extend(committed)
+            self._out_set.update(committed)
             if self._timing:
                 # `other` = the anchor-hidden slice + copy, the deallocates, and the host argmax
                 # that picks the next `pending`.
@@ -764,7 +750,6 @@ class SpeculativeDecoder:
         for dn in self._gdn:
             dn.sync_conv_taps()
         self._log_mean_timing()
-        self.log_profile(tokens=len(out[:max_new_tokens]))
         return out[:max_new_tokens]
 
     def accept_rate(self):
@@ -790,6 +775,11 @@ class SpeculativeDecoder:
             "hist": list(self.accept_hist),
             "zero_accept_rate": self.zero_accept / n,
             "mtp_extra_steps": self.mtp_extra_steps,
+            # Sampling only: mean target probability of the drafts the sampler evaluated. A draft is
+            # accepted with exactly that probability, so it is the per-draft acceptance odds.
+            "mean_draft_target_prob": (
+                (self._p_draft_sum / max(1, self._p_draft_n)) if self.sampler is not None else None
+            ),
         }
 
     def log_stats(self, prefix="spec"):
@@ -798,6 +788,13 @@ class SpeculativeDecoder:
             f"[{prefix}] {s['iters']} iters, K={s['K']}: accept={s['accept_rate']:.2f}/{s['K']} "
             f"-> {s['committed_per_iter']:.2f} committed tokens/iter"
         )
+        if self.sampler is not None:
+            sp = self.sampler.params
+            logger.info(
+                f"[{prefix}] sampling: temp={sp.temperature} top_k={sp.top_k} top_p={sp.top_p} "
+                f"presence={sp.presence_penalty} "
+                f"seed={self.sampler.seed} mean p_target(draft)={s['mean_draft_target_prob']:.3f}"
+            )
         logger.info(f"[{prefix}] per-depth accept   : {[f'{x:.2f}' for x in s['depth_rate']]}")
         logger.info(f"[{prefix}] conditional accept : {[f'{x:.2f}' for x in s['conditional']]}")
         logger.info(f"[{prefix}] accepted histogram : {s['hist']} (index j = exactly j drafts accepted)")

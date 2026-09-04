@@ -10,10 +10,11 @@ Shared by the device PCC test (tests/test_mtp_tp.py) and the off-device acceptan
     logits = LMHead( mtp.norm(h'') )
     chain  = mtp.norm(h'')  (default)  |  h''  (chain_postnorm=False)    # the next step's hidden
 
-``chain_postnorm`` mirrors the device head's feed contract (Qwen36MTP.forward_decode under
-QWEN36_SPEC_POSTNORM=1, "V3", the default): the next chained step is fused from mtp.norm's output
-instead of the raw block output. Default True is the V3 contract; False restores V0.
-``logits`` always consumes the raw block.
+``chain_postnorm`` mirrors the device head's feed contract (Qwen36MTP.forward_decode): the next
+chained step is fused from mtp.norm's output instead of the raw block output. True (the default) is
+the shipped contract; False is the pre-norm variant the device no longer has, kept here because
+this CPU reference is where the two contracts were compared. ``logits`` always consumes the raw
+block.
 
 Two forms with identical math (pinned by tests/test_mtp_torch_ref.py, CPU-only):
 
@@ -168,9 +169,9 @@ class MTPTorchHead:
     def chain(self, block_out):
         """Raw block output -> the hidden the NEXT chained step is fused from.
 
-        V3 (default, chain_postnorm=True): mtp.norm's output — the very tensor the LM head
-        consumes — as Qwen36MTP.forward_decode chains under QWEN36_SPEC_POSTNORM=1 (the default).
-        V0 (chain_postnorm=False): the block output itself, before mtp.norm.
+        chain_postnorm=True (default): mtp.norm's output — the very tensor the LM head consumes —
+        which is what Qwen36MTP.forward_decode chains.
+        chain_postnorm=False: the block output itself, before mtp.norm (the pre-norm variant).
         """
         if self.chain_postnorm:
             return rms(block_out, self.sd["mtp.norm.weight"], self.eps)

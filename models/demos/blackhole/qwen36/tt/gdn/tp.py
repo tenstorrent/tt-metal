@@ -1801,26 +1801,11 @@ class TPGatedDeltaNet:
         self._verify_states = None
 
     # ------------------------------------------------------------------ #
-    # Traced commit (QWEN36_SPEC_TRACED_COMMIT)
+    # Traced commit
     # ------------------------------------------------------------------ #
-    # commit_verify_slot above is the one EAGER step of the spec iteration that scales with layer
-    # count: 4 device ops x 48 layers at this stack's eager dispatch cost = ~4.9 ms/iteration
-    # (measured), almost all of it host launch overhead over a few KB of data. The device ops are
-    # IDENTICAL every iteration for a given accepted-prefix index, because every tensor they touch
-    # is persistent:
-    #
-    #   read  _verify_states_buf  the verify trace's per-token state output; the handle is re-armed
-    #                             each replay (verify_traced) but the BUFFER is the same one the
-    #                             capture pass allocated, so its address is fixed.
-    #   read  _verify_win_buf     persistent, allocated in _ensure_verify_slot_bufs.
-    #   write rec_state           persistent under _stable_state (in-place ttnn.copy).
-    #   write _conv_win_buf       persistent, allocated in _ensure_conv_win.
-    #
-    # So the whole commit for a given idx can be captured once as a trace and replayed: 4.9 -> 3.2 ms
-    # measured (ISL 16k, K=7). The replay is not free — it still dispatches ~192 programs on device —
-    # but it stops paying host launch for every one of them.
-    # commit_verify_slot_ops is the device half (the trace body), commit_verify_slot_host the host
-    # half (staleness flags + dropping the verify handle), which still runs every iteration.
+    # commit_verify_slot is the one eager step that scales with layer count (4 ops x 48 layers), almost all host launch over a few KB.
+    # Ops are identical every iteration for a given accepted-prefix index because every tensor is persistent: read _verify_states_buf (verify-trace per-token state; handle re-armed each verify_traced replay, capture-allocated BUFFER address is fixed), read _verify_win_buf (_ensure_verify_slot_bufs), write rec_state (in-place ttnn.copy under _stable_state), write _conv_win_buf (_ensure_conv_win). Capture once per idx and replay — still dispatches those programs on device, but stops paying host launch.
+    # commit_verify_slot_ops is the device half (trace body); commit_verify_slot_host is the host half (staleness flags + dropping the verify handle) and still runs every iteration.
 
     def commit_verify_slot_ops(self, idx):
         """Device half of commit_verify_slot(idx): the ops a commit trace captures.

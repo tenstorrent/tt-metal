@@ -53,7 +53,7 @@ def _random_sd(seed=0):
     }
 
 
-def _head(chain_postnorm=False):
+def _head(chain_postnorm=True):
     return MTPTorchHead(_random_sd(), rope_dim=ROPE_DIM, rope_theta=ROPE_THETA, chain_postnorm=chain_postnorm)
 
 
@@ -71,7 +71,7 @@ def test_dims_derived_from_state_dict():
 def test_incremental_matches_sequence(chain_postnorm):
     """Stepping slot-by-slot with a growing K/V cache == one causal pass over all slots.
 
-    Under both chain contracts (V0 raw block output, V3 mtp.norm output)."""
+    Under both chain contracts (post-norm mtp.norm output, and the pre-norm raw block output)."""
     head = _head(chain_postnorm)
     S = 7
     g = torch.Generator().manual_seed(1)
@@ -96,7 +96,7 @@ def test_step_from_warm_prefix_matches_sequence(chain_postnorm):
 
     Stepping slot P from the prefix cache [0..P-1] must equal row P of a full sequence pass, which
     is what makes 'warm the drafter over the prompt, then draft' a faithful simulation. Under both
-    chain contracts (V0 raw block output, V3 mtp.norm output).
+    chain contracts (post-norm mtp.norm output, and the pre-norm raw block output).
     """
     head = _head(chain_postnorm)
     S, P = 9, 6

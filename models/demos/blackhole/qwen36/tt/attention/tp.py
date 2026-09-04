@@ -576,8 +576,9 @@ class TPAttention:
         return self._spec_sdpa_cfg_cache[T]
 
     def spec_sdpa_enabled(self, T):
-        """Whether the fused spec-verify SDPA will be used at T candidates (for logging / A-B)."""
-        if T <= 1 or os.environ.get("QWEN36_SPEC_FUSED_SDPA", "1") == "0":
+        """Whether the fused spec-verify SDPA will be used at T candidates: it is, whenever T has an
+        _SPEC_SDPA_L1_FIT entry. Other T fall back to the legacy B=T call (for logging)."""
+        if T <= 1:
             return False
         return self._spec_sdpa_plan(T) is not None
 
@@ -608,7 +609,7 @@ class TPAttention:
         B — a real B-user decode must not take this path). Folds the B=T candidate rows into
         spec_sdpa_groups(T) batch rows for the SDPA read via spec_multi_pos_tiles, using the
         same-row-count aliased page table in spec_page_table. The KV write above still runs per row
-        off the T-row `page_table`. QWEN36_SPEC_FUSED_SDPA=0 forces the legacy B=T call for A/B.
+        off the T-row `page_table`. A T with no L1-fitting split takes the legacy B=T call.
         """
         tw, NH, NKV, HD = self.tw, self.NH, self.NKV, self.HD
         # Active decode width, taken from the input (x is [1,1,B,dim_frac]). Normally == self.B.
