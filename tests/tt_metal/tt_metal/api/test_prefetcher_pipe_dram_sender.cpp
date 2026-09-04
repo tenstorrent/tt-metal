@@ -410,23 +410,72 @@ TEST_F(PrefetcherPipeDramSenderFixture, RejectsDuplicateBank) {
     EXPECT_ANY_THROW(make_pipe_set(*mesh_device_, {{0, first}, {0, second}}, /*dual_senders_per_bank=*/true));
 }
 
-TEST_F(PrefetcherPipeDramSenderFixture, AttachRejectsEntrySizeThatDoesNotDivideRing) {
-    // A DRAM sender addresses its ring in whole entries, with no trailing-gap credit. An entry size
-    // the ring is not a multiple of would put it on a different grid than the receivers after the
-    // first wrap. Any other size is fine: the sender snaps its cursor and publishes pad credits.
+TEST_F(PrefetcherPipeDramSenderFixture, AttachAcceptsAnyEntrySizeTheRingHolds) {
+    // An entry size the ring does not divide is legal: the remainder is a trailing gap holding no
+    // entry, which both endpoints credit as padding at the wrap. Only a size the ring cannot hold
+    // at all is rejected.
     const CoreRangeSet receiver_cores(CoreRange({0, 0}, {1, 0}));
     const PipeSet set =
         make_pipe_set(*mesh_device_, {{/*bank_id=*/0, receiver_cores}}, /*dual_senders_per_bank=*/false);
     const uint32_t ring_size = set.pipes[0]->ring_size();
 
     Program program = CreateProgram();
-    // L1-aligned and well inside the ring, so only the divisibility rule can reject it.
+    // L1-aligned and well inside the ring, so only a divisibility rule could have rejected it.
     constexpr uint32_t kRingIndivisibleEntrySize = 48;
     ASSERT_NE(ring_size % kRingIndivisibleEntrySize, 0u);
-    EXPECT_ANY_THROW(
+    EXPECT_NO_THROW(
         experimental::AttachPrefetcherPipe(program, *set.pipes[0], receiver_cores, kRingIndivisibleEntrySize));
     EXPECT_NO_THROW(experimental::AttachPrefetcherPipe(program, *set.pipes[0], receiver_cores, kEntrySize / 2));
     EXPECT_NO_THROW(experimental::AttachPrefetcherPipe(program, *set.pipes[0], receiver_cores, kEntrySize));
+    EXPECT_ANY_THROW(
+        experimental::AttachPrefetcherPipe(program, *set.pipes[0], receiver_cores, ring_size + kEntrySize));
+}
+
+TEST_F(PrefetcherPipeDramSenderFixture, EntrySizeNotDividingRingWrapsOnTheGap) {
+    // An entry size the ring does not divide leaves a trailing gap that holds no entry. The sender
+    // lands back on slot 0 only if it credits that gap along with the entry reaching the usable
+    // limit: its cursor is derived as (entries_sent % ring_units), so an uncredited gap would leave
+    // the next lap starting inside the gap instead of at the ring base.
+    constexpr uint32_t kNumReceivers = 2;
+    const CoreRangeSet receiver_cores(CoreRange({0, 0}, {kNumReceivers - 1, 0}));
+    const PipeSet set =
+        make_pipe_set(*mesh_device_, {{/*bank_id=*/0, receiver_cores}}, /*dual_senders_per_bank=*/false);
+    const CoreCoord sender_logical = set.mapping.at(0).first;
+    const uint32_t ring_size = set.pipes[0]->ring_size();
+
+    const uint32_t l1_alignment =
+        MetalContext::instance(context_id_of(*mesh_device_)).hal().get_alignment(HalMemType::L1);
+    // Two thirds of the creation entry size, rounded down to L1 alignment: divides neither it nor
+    // the ring, so every lap ends on a gap.
+    const uint32_t entry_size = ((kEntrySize * 2) / 3) / l1_alignment * l1_alignment;
+    ASSERT_GT(entry_size, 0u);
+    ASSERT_NE(ring_size % entry_size, 0u) << "this test is only meaningful with a trailing gap";
+    const uint32_t entries_per_lap = ring_size / entry_size;
+
+    // One full lap, then a second carrying different bytes: the second must overwrite slot 0
+    // onward, which it does only if the first lap's wrap landed the cursor back on the ring base.
+    preload_pattern(*mesh_device_, sender_logical, entries_per_lap, kNumReceivers, /*entry_label=*/0, entry_size);
+    run_push_and_pop(*mesh_device_, set, entries_per_lap, entry_size);
+    preload_pattern(
+        *mesh_device_, sender_logical, entries_per_lap, kNumReceivers, /*entry_label=*/entries_per_lap, entry_size);
+    run_push_and_pop(*mesh_device_, set, entries_per_lap, entry_size);
+
+    const auto receivers = receivers_in_slab_order(receiver_cores);
+    for (uint32_t r = 0; r < receivers.size(); ++r) {
+        for (uint32_t i = 0; i < entries_per_lap; ++i) {
+            expect_ring_slot(
+                *mesh_device_,
+                *set.pipes[0],
+                receivers[r],
+                /*slot=*/i,
+                /*receiver_label=*/r,
+                /*entry_label=*/entries_per_lap + i,
+                entry_size);
+        }
+    }
+    // Two laps credit exactly two rings' worth: the payload plus one gap per lap. This is the
+    // assertion that fails if the gap term is dropped.
+    expect_credits_drained(*mesh_device_, set, credit_units(*mesh_device_, 2 * ring_size));
 }
 
 TEST_F(PrefetcherPipeDramSenderFixture, BlockSizeChangeAcrossPrograms) {
