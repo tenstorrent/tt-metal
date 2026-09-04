@@ -344,6 +344,16 @@ class BgeM3ForEmbedding:
 
         self.model.execute_trace(blocking=True)
 
+        if self.return_sparse or self.return_colbert:
+            raise NotImplementedError(
+                "The traced data-parallel path returns dense vectors only. "
+                "Ask for sparse or colbert vectors on the base path."
+            )
+        if not self.return_dense:
+            # The base path returns the heads the caller asks for, and an empty
+            # result when it asks for none. Match that, and skip the pooling.
+            return {}
+
         # Pool on the chip that holds the rows. Reading the whole hidden state instead
         # would move about 400 MB per request over PCIe and cost more than the forward.
         hidden = self._traced_output
@@ -371,11 +381,6 @@ class BgeM3ForEmbedding:
         pooled = pooled.reshape(-1, self.model_args.dim)[: input_ids.shape[0]]
         if self.normalize_embeddings:
             pooled = torch.nn.functional.normalize(pooled, p=2, dim=-1)
-        if self.return_sparse or self.return_colbert:
-            raise NotImplementedError(
-                "The traced data-parallel path returns dense vectors only. "
-                "Ask for sparse or colbert vectors on the base path."
-            )
         return {"dense_vecs": pooled[:chunk_batch_size]}
 
     def _pool_outputs(self, output, input_ids, attention_mask, chunk_batch_size):
