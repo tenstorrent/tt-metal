@@ -166,3 +166,9 @@ non-trivial conversion through a single unified Quasar SFPU typecast kernel, run
 (fp32_dest_acc_en is forced on for a Float32 output) and empty unpack_modes. Needs LLK/Quasar-SFPU owner triage
 (cf. #53529 SFPI Quasar master issue); repro = `test_emu_small_grid.py::...typecast_32x64_bf16_to_fp32...` on
 emu-quasar-1x3.
+
+**Update 2026-09-04 (watcher + LLK-assert reruns):** the bf16→fp32 wrong-values result is **emulator-config
+specific**: PASS on `emu-quasar-2x3` (with and without watcher), deterministic FAIL on `emu-quasar-1x3`
+(identical PCC 0.687 / max err 3.45 across 4 runs, with and without watcher; no LLK assert, no watcher assert).
+Same tt-metal build, same kernels. Treat as a 1x3 emulator-model issue (or a 1x3-only HW config difference)
+rather than a typecast bug; the op is GREEN on Quasar as far as the 2x3 emulator can show.

@@ -126,3 +126,4 @@ Start with `TT_METAL_LLK_ASSERTS` **on**; re-run with it unset. DPRINT needs `un
   `alias_with` DFB pair (`untilized_cache`/`untilized_cache2` name the same L1 through two DFBs) and the recipe §8.5
   intra-tensix tile-counter aliasing (LayerNorm is a listed candidate). Repro:
   `tests/graph_ops/test_emu_small_grid.py::...paged_update_cache_128x8x32x64_bf16...`. Still RED on Quasar.
+- **2026-09-04**: re-run on emu-quasar-2x3 with watcher + LLK asserts + lightweight kernel asserts: still the all-zero block, no assert, no stall (657 s under watcher). Config-independent (1x3 and 2x3).

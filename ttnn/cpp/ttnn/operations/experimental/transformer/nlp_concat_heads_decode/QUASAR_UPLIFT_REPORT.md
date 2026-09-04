@@ -180,3 +180,11 @@ TT_METAL_FORCE_JIT_COMPILE=1 pytest models/experimental/llama32_1b_quasar/tests/
 Notes: `TT_METAL_FORCE_JIT_COMPILE=1` because kernels changed; also purge
 `~/.cache/tt-metal-cache` between the pre-conversion baseline and post-conversion runs (stale
 JIT-cache era). Run Quasar both with and without `TT_METAL_LLK_ASSERTS` per recipe §9.
+
+## Emulator run 2026-09-04 (watcher + kernel asserts) — latent OOB vararg read, fixed
+
+With `TT_METAL_WATCHER` + `TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS=1` the 1-head variant (which passes without them)
+trips `DM2 accessed unique runtime arg index out of bounds` in reader_tm_tile_layout_nlp_concat_heads_decode.cpp:
+after the last input core the `qkv_x/qkv_y` cursor advances and `get_vararg(num_x + qkv_y)` reads one past the
+NoC-coordinate tables (value unused; benign garbage on WH/BH). Fixed by guarding the refetch with `qkv_y < num_y`
+(also the three Q/K/V blocks in nlp_create_qkv_heads_decode's reader). WH graph_ops + emu-quasar-2x3 with watcher pass.

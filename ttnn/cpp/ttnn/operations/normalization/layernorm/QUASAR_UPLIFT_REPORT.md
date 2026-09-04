@@ -153,3 +153,13 @@ pytest models/experimental/llama32_1b_quasar/tests/graph_ops/test_rms_norm.py
 
 If kernels are later edited, force JIT: `TT_METAL_FORCE_JIT_COMPILE=1` (and purge
 `~/.cache/tt-metal-cache` between baseline and post-change runs).
+
+## Emulator runs 2026-09-02/04 — RED on Quasar (all-zero output)
+
+rms_norm [1,1,32,2048] bf16 interleaved returns all zeros (PCC 0.0) on emu-quasar-1x3 and emu-quasar-2x3, with
+`TT_METAL_LLK_ASSERTS=1`, `TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS=1` and the watcher on (NoC sanitizer off): no
+assert trips, no stall, every RISC reaches Done (kernels: reader_unary_interleaved_ln_rm_gb.cpp,
+writer_unary_interleaved_start_id_blocked.cpp, compute layernorm.cpp). Silent wrong result; the §6 NoC-loopback
+gamma self-read remains the first suspect (same class as paged_update_cache's writer self-read), with the
+recipe §8.5 intra-tensix tile-counter aliasing (LayerNorm is a listed candidate) second. Repro:
+`pytest models/experimental/llama32_1b_quasar/tests/graph_ops/test_rms_norm.py -m emulator`.
