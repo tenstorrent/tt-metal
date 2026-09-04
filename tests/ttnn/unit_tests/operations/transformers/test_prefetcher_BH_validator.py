@@ -335,25 +335,26 @@ def test_validator_worker_sender(device, K, N, dtype, recv_per_bank, num_layers)
         device.remove_sub_device_manager(sub_device_manager)
 
 
-def _setup_weight_and_gcb_recv_contig(
+def _recv_contig_weight_and_bank_map(
     device,
     K,
     N,
     dtype,
     recv_per_bank,
-    num_layers,
-    dual_senders=False,
     distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
 ):
-    """Build a DRAM-sender GCB + NdShardSpec-allocated weight for the
-    receiver-contiguous DRAM-core path. num_shards = ring_size > num_dram_banks
-    triggers the manager's recv-contig detection.
+    """Weight + bank->receiver pairing shared by both DRAM-sender transports.
 
-    The weight's shard distribution and the GCB sender->receiver pairing must
-    agree: round-robin shards pair with strided arcs, shard-contiguous (CONTIGUOUS_1D)
-    shards pair with contiguous arcs. Either pairing yields shard index == ring
-    position, so the validator's per-receiver column slice is unchanged."""
-    is_shard_contiguous = distribution_strategy == ttnn.ShardDistributionStrategy.CONTIGUOUS_1D
+    Both factories go through build_dram_sender_mapping, so a tensor laid out for a GCB is laid out
+    for PrefetcherPipes; deriving the geometry once here is what keeps that true. num_shards =
+    ring_size > num_dram_banks triggers the manager's recv-contig detection.
+
+    The weight's shard distribution and the sender->receiver pairing must agree: round-robin shards
+    pair with strided arcs, shard-contiguous (CONTIGUOUS_1D) shards pair with contiguous arcs.
+    Either pairing yields shard index == ring position, so the validator's per-receiver column slice
+    is unchanged.
+
+    Returns (tt_weight, bank_to_receivers, push_page_size, ring_size)."""
     tile_bytes = _bytes_per_tile(dtype)
     num_dram_banks = device.dram_grid_size().x
     ring_size = num_dram_banks * recv_per_bank
@@ -373,7 +374,7 @@ def _setup_weight_and_gcb_recv_contig(
         device, pt_weight, num_dram_banks, ring_size, dtype, distribution_strategy=distribution_strategy
     )
 
-    if is_shard_contiguous:
+    if distribution_strategy == ttnn.ShardDistributionStrategy.CONTIGUOUS_1D:
         bank_to_receivers = [
             (b, _bank_receivers_contiguous(b, recv_per_bank, ring_cols=ring_cols)) for b in range(num_dram_banks)
         ]
@@ -382,6 +383,24 @@ def _setup_weight_and_gcb_recv_contig(
             (b, _bank_receivers_strided(b, recv_per_bank, num_dram_banks, ring_cols=ring_cols))
             for b in range(num_dram_banks)
         ]
+    return tt_weight, bank_to_receivers, push_page_size, ring_size
+
+
+def _setup_weight_and_gcb_recv_contig(
+    device,
+    K,
+    N,
+    dtype,
+    recv_per_bank,
+    num_layers,
+    dual_senders=False,
+    distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+):
+    """Build a DRAM-sender GCB + NdShardSpec-allocated weight for the receiver-contiguous
+    DRAM-core path. See _recv_contig_weight_and_bank_map for the geometry both transports share."""
+    tt_weight, bank_to_receivers, push_page_size, ring_size = _recv_contig_weight_and_bank_map(
+        device, K, N, dtype, recv_per_bank, distribution_strategy=distribution_strategy
+    )
     gcb_size = _GCB_DEPTH_PAGES * push_page_size
     gcb = ttnn.experimental.create_global_circular_buffer_for_tensor_prefetcher(
         device, bank_to_receivers, gcb_size, support_multi_receiver_shards=not dual_senders
@@ -442,42 +461,14 @@ def _setup_weight_and_pipes_recv_contig(
     dual_senders=False,
     distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
 ):
-    """PrefetcherPipe analogue of _setup_weight_and_gcb_recv_contig.
-
-    Same weight allocation and the same bank->receiver pairing: both DRAM-sender factories share
-    build_dram_sender_mapping, so a tensor laid out for a GCB is laid out for PrefetcherPipes. The
-    only difference is the target object, created at entry_size == the per-receiver block size so
-    the ring is a whole number of blocks (a later request may push a different block size, as long
-    as it too divides the ring)."""
-    is_shard_contiguous = distribution_strategy == ttnn.ShardDistributionStrategy.CONTIGUOUS_1D
-    tile_bytes = _bytes_per_tile(dtype)
-    num_dram_banks = device.dram_grid_size().x
-    ring_size = num_dram_banks * recv_per_bank
-    ring_cols = _ring_grid_cols(num_dram_banks, ring_size)
-
-    K_padded = _round_up(K, ring_size * ttnn.TILE_SIZE)
-    k_tiles = K_padded // ttnn.TILE_SIZE
-    k_block_w_tiles = k_tiles // ring_size
-    n_per_recv_tiles = N // ring_size // ttnn.TILE_SIZE
-    push_page_size = k_block_w_tiles * n_per_recv_tiles * tile_bytes
-
-    torch.manual_seed(0xC0FFEE)
-    pt_weight = torch.zeros(1, 1, K_padded, N)
-    pt_weight[:, :, :K, :] = torch.randn(1, 1, K, N)
-
-    tt_weight = _make_recv_contig_weight(
-        device, pt_weight, num_dram_banks, ring_size, dtype, distribution_strategy=distribution_strategy
+    """PrefetcherPipe analogue of _setup_weight_and_gcb_recv_contig: same weight and the same
+    bank->receiver pairing (see _recv_contig_weight_and_bank_map), differing only in the target
+    object. It is created at entry_size == the per-receiver block size so the ring is a whole
+    number of blocks; a later request may push a different block size, as long as it too divides
+    the ring."""
+    tt_weight, bank_to_receivers, push_page_size, ring_size = _recv_contig_weight_and_bank_map(
+        device, K, N, dtype, recv_per_bank, distribution_strategy=distribution_strategy
     )
-
-    if is_shard_contiguous:
-        bank_to_receivers = [
-            (b, _bank_receivers_contiguous(b, recv_per_bank, ring_cols=ring_cols)) for b in range(num_dram_banks)
-        ]
-    else:
-        bank_to_receivers = [
-            (b, _bank_receivers_strided(b, recv_per_bank, num_dram_banks, ring_cols=ring_cols))
-            for b in range(num_dram_banks)
-        ]
     pipes = ttnn.experimental.create_prefetcher_pipes_for_tensor_prefetcher(
         device,
         bank_to_receivers,

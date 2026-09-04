@@ -51,8 +51,7 @@ struct TensorPrefetcherPipes {
     TensorPrefetcherPipes(
         std::vector<tt::tt_metal::experimental::TensorPrefetcherBankPipes> banks,
         uint32_t entry_size,
-        uint32_t num_entries) :
-        banks(std::move(banks)), entry_size(entry_size), num_entries(num_entries) {}
+        uint32_t num_entries);
 
     std::vector<tt::tt_metal::experimental::TensorPrefetcherBankPipes> banks;
     // Per-receiver push granularity the pipes were created with, shared by every pipe. It is the
@@ -67,32 +66,39 @@ struct TensorPrefetcherPipes {
     uint32_t ring_size() const { return entry_size * num_entries; }
     uint32_t num_banks() const { return static_cast<uint32_t>(banks.size()); }
     // Pipes across every bank, which is one per DRAM sender core.
-    uint32_t num_pipes() const;
+    uint32_t num_pipes() const { return static_cast<uint32_t>(mapping_.size()); }
     // Every receiver across every pipe. This is the core set a consumer program attaches.
     CoreRangeSet receiver_cores() const;
     // Sender core (DRAM-logical, x == bank id) -> its receivers. One entry per pipe, bank-major.
-    std::vector<std::pair<tt::tt_metal::CoreCoord, CoreRangeSet>> sender_receiver_core_mapping() const;
-    // Attach every pipe to `program` on its own receiver cores, at `entry_size` bytes per entry --
-    // the size that program's kernels consume, which `ring_size()` must be a whole multiple of.
-    // Returns the program-local pipe id per pipe, bank-major; a receiver core's kernel takes the id
-    // of the one pipe it belongs to (as a runtime argument, since one kernel serves receivers of
-    // different pipes).
-    std::vector<uint8_t> attach(tt::tt_metal::Program& program, uint32_t entry_size) const;
-    // Attach at the creation-time entry size, for a consumer that reads entries as the pipes were
-    // built to deliver them.
+    const std::vector<std::pair<tt::tt_metal::CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping() const {
+        return mapping_;
+    }
+    // Attach every pipe to `program` on its own receiver cores, at the creation-time `entry_size`
+    // bytes per entry -- the size that program's kernels consume, and one `ring_size()` is a whole
+    // multiple of. Returns the program-local pipe id per pipe, bank-major; a receiver core's kernel
+    // takes the id of the one pipe it belongs to (as a runtime argument, since one kernel serves
+    // receivers of different pipes).
     std::vector<uint8_t> attach(tt::tt_metal::Program& program) const;
     // Each pipe's receiver-side config page address, bank-major. Identity rather than geometry:
     // two live pipes over the same receivers never share one.
-    std::vector<uint32_t> config_addresses() const;
+    const std::vector<uint32_t>& config_addresses() const { return config_addresses_; }
 
     // Reflection for op attribute hashing. The core mapping plus the config addresses identify
     // *these* pipes, not merely pipes of this shape -- a consuming op bakes each ring address into
     // its program, so a same-geometry replacement must not hit that op's program cache.
+    //
+    // A consuming op on the default reflection path hashes this on every dispatch, so both members
+    // are derived once at construction rather than rebuilt per call.
     static constexpr auto attribute_names =
         std::forward_as_tuple("sender_receiver_core_mapping", "config_addresses", "entry_size", "num_entries");
     auto attribute_values() const {
-        return std::make_tuple(sender_receiver_core_mapping(), config_addresses(), entry_size, num_entries);
+        return std::forward_as_tuple(mapping_, config_addresses_, entry_size, num_entries);
     }
+
+private:
+    // Bank-major views of `banks`, fixed at construction: the pipes a group holds never change.
+    std::vector<std::pair<tt::tt_metal::CoreCoord, CoreRangeSet>> mapping_;
+    std::vector<uint32_t> config_addresses_;
 };
 
 // One tensor to prefetch: either (tensor, block_count) or (tensor, block_count, rotation).
