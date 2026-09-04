@@ -59,6 +59,7 @@ void kernel_main() {
     constexpr uint32_t mean_dst = 1;
     constexpr uint32_t var_dst = 2;
     constexpr uint32_t retained_input_dst = 3;
+    constexpr uint32_t num_front_retained_limit = 2;
 
     // The number of valid columns in the last tile in width dimension.
     // Because the statistics LLK is given transposed data, skip some rows when
@@ -83,7 +84,8 @@ void kernel_main() {
             constexpr uint32_t stats_input_dst = input_dst;
 #else
             dfb_in.wait_front(onetile);
-            const uint32_t stats_input_dst = wt < 2 ? (wt == 0 ? retained_input_dst : mean_dst) : input_dst;
+            const uint32_t stats_input_dst =
+                wt < num_front_retained_limit ? (wt == 0 ? retained_input_dst : mean_dst) : input_dst;
             transpose_tile(dfb::in, 0, stats_input_dst);
             dfb_in.pop_front(onetile);
 #endif
@@ -108,7 +110,6 @@ void kernel_main() {
         // tile in input_dst. var_dst must stay clean because finalization writes only
         // the result row. Replay retained tiles in order, using the now-free retained
         // slot for any middle tiles.
-        constexpr uint32_t num_front_retained_limit = 2;
         constexpr uint32_t num_front_retained = Wt < num_front_retained_limit ? Wt : num_front_retained_limit;
         for (uint32_t wt = 0; wt < num_front_retained; ++wt) {
             const uint32_t stats_input_dst = wt == 0 ? retained_input_dst : wt;

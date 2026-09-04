@@ -142,6 +142,7 @@ void kernel_main() {
     constexpr uint32_t mean_dst = 1;
     constexpr uint32_t var_dst = 2;
     constexpr uint32_t retained_input_dst = 3;
+    constexpr uint32_t num_front_retained_limit = 3;
 
     // The number of valid columns in the last tile in width dimension.
     // Because the statistics LLK is given transposed data, skip some rows when
@@ -242,7 +243,8 @@ void kernel_main() {
             } else {
                 dfb_x_obj.wait_front(wt + 1);
             }
-            const uint32_t stats_input_dst = wt < 3 ? (wt == 0 ? retained_input_dst : wt) : input_dst;
+            const uint32_t stats_input_dst =
+                wt < num_front_retained_limit ? (wt == 0 ? retained_input_dst : wt) : input_dst;
             transpose_tile(dfb_x_welford, wt, stats_input_dst);
             if (wt == 0) {
                 two_pass_stats_update_shifted_rows<false /* accumulate_m2 */, true /* initialize_anchor */>(
@@ -262,8 +264,9 @@ void kernel_main() {
             dfb_x_obj.wait_front(num_to_wait);
         }
         constexpr uint32_t last_tile_idx = Wt - 1;
-        constexpr uint32_t last_pass1_dst =
-            last_tile_idx < 3 ? (last_tile_idx == 0 ? retained_input_dst : last_tile_idx) : input_dst;
+        constexpr uint32_t last_pass1_dst = last_tile_idx < num_front_retained_limit
+                                                ? (last_tile_idx == 0 ? retained_input_dst : last_tile_idx)
+                                                : input_dst;
         transpose_tile(dfb_x_welford, Wt - 1, last_pass1_dst);
         if constexpr (Wt == 1) {
             two_pass_stats_update_shifted_rows<false /* accumulate_m2 */, true /* initialize_anchor */>(
@@ -273,7 +276,7 @@ void kernel_main() {
         }
         two_pass_stats_finish_shifted_mean<true /* dual_sum */, true /* retain_anchor */>(reciprocal_w);
 
-        constexpr uint32_t num_front_retained = Wt < 3 ? Wt : 3;
+        constexpr uint32_t num_front_retained = Wt < num_front_retained_limit ? Wt : num_front_retained_limit;
         for (uint32_t wt = 0; wt < num_front_retained; ++wt) {
             const uint32_t stats_input_dst = wt == 0 ? retained_input_dst : wt;
             two_pass_stats_update_rows(stats_input_dst, 0, wt == last_tile_idx ? last_tile_rows : tile_width);
