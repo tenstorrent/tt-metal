@@ -7,7 +7,7 @@ from .attention import (
     DeepSeekV4Attention,
     _StaticLayerCache,
 )
-from .common import DeepSeekV4Module, _HIFI4, _profile
+from .common import DeepSeekV4Module, _HIFI4, _profile, _region
 from .hyperconnection import DeepSeekV4HyperConnection
 from .layers import DeepSeekV4RMSNorm
 from .moe import DeepSeekV4SparseMoeBlock
@@ -238,32 +238,40 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
 
         ``pool_compressor`` is fixed at capture time: the traced path captures one
         variant per window phase (see :meth:`DeepSeekV4Model._capture_traces`)."""
-        post, comb, collapsed = self.attn_hc(hidden_streams)
-        normed = self.input_layernorm(collapsed)
-        attn_out = self.self_attn.decode_static(
-            normed,
-            cos,
-            sin,
-            neg_sin,
-            cos_win,
-            sin_win,
-            mask,
-            scache,
-            sliding_pos,
-            compress_pos,
-            paged=paged,
-            pool_compressor=pool_compressor,
-            sdpa_cur_pos=sdpa_cur_pos,
-            win_slot=win_slot,
-            win_row=win_row,
-        )
-        hidden_streams = self._mix(post, comb, attn_out, hidden_streams)
+        with _region("ATTN_HC"):
+            post, comb, collapsed = self.attn_hc(hidden_streams)
+        with _region("INPUT_NORM"):
+            normed = self.input_layernorm(collapsed)
+        with _region("ATTENTION"):
+            attn_out = self.self_attn.decode_static(
+                normed,
+                cos,
+                sin,
+                neg_sin,
+                cos_win,
+                sin_win,
+                mask,
+                scache,
+                sliding_pos,
+                compress_pos,
+                paged=paged,
+                pool_compressor=pool_compressor,
+                sdpa_cur_pos=sdpa_cur_pos,
+                win_slot=win_slot,
+                win_row=win_row,
+            )
+        with _region("ATTN_MIX"):
+            hidden_streams = self._mix(post, comb, attn_out, hidden_streams)
         # Both are spent, and at a wide batch the L1 they hold is the difference
         # between the MoE's circular buffers fitting and not (a user's row is padded to
         # a whole tile, so these grow with the batch). Nothing below reads them.
         ttnn.deallocate(normed)
         ttnn.deallocate(attn_out)
-        post, comb, collapsed = self.ffn_hc(hidden_streams)
-        collapsed = self.post_attention_layernorm(collapsed)
-        mlp_out = self.mlp.decode_static(collapsed, hash_token=hash_token)
-        return self._mix(post, comb, mlp_out, hidden_streams)
+        with _region("FFN_HC"):
+            post, comb, collapsed = self.ffn_hc(hidden_streams)
+        with _region("POST_NORM"):
+            collapsed = self.post_attention_layernorm(collapsed)
+        with _region("MOE"):
+            mlp_out = self.mlp.decode_static(collapsed, hash_token=hash_token)
+        with _region("FFN_MIX"):
+            return self._mix(post, comb, mlp_out, hidden_streams)
