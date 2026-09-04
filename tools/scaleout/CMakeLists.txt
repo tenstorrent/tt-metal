@@ -128,7 +128,15 @@ target_link_libraries(
         tt_metal
 )
 target_compile_features(scaleout_tools PUBLIC cxx_std_20)
-tt_reuse_precompile_headers(scaleout_tools TT::CommonPCH)
+# LOCAL BUILD PATCH (tt-forge-onnx): do NOT reuse TT::CommonPCH here.
+# scaleout_tools sets CXX_VISIBILITY_PRESET "hidden" above (deliberately -- see the protobuf
+# descriptor-table comment), which adds -fvisibility=hidden. metal_common_pch is built WITHOUT
+# that flag, and clang's -Winvalid-pch + -Werror rejects the mismatch:
+#   error: default visibility for functions and variables [-fvisibility] differs in PCH file vs. current file
+# Dropping PCH reuse for this one target keeps the visibility semantics intact and leaves PCH
+# enabled everywhere else. Upstream needs to either build the PCH with hidden visibility or skip
+# reuse for hidden-visibility targets.
+# tt_reuse_precompile_headers(scaleout_tools TT::CommonPCH)
 
 install(TARGETS scaleout_tools EXPORT Metalium LIBRARY COMPONENT metalium-runtime FILE_SET api COMPONENT metalium-dev)
 
