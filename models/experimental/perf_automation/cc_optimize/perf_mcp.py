@@ -223,6 +223,27 @@ _FULLPIPE_SAMPLES = max(1, int(os.environ.get("PERF_MCP_FULLPIPE_SAMPLES", "3"))
 # the number is an observation rather than instrumentation noise -- and only an observation may be
 # pinned as a permanent ceiling divisor.
 _STAGE_BYTES_AGREE_TOL = 0.01
+
+
+def _sample_spread(values) -> float | None:
+    """How far a set of readings of ONE quantity spread, as a fraction of their median.
+
+    None when fewer than two readings exist: one sample states no spread, and inventing a zero there
+    would read as a perfect measurement. The read set uses this to refuse to pin a value its samples
+    disagree about; the per-stage timings use the same number as the bar a change must clear.
+    """
+    try:
+        vals = [float(v) for v in (values or [])]
+    except (TypeError, ValueError):
+        return None
+    if len(vals) < 2:
+        return None
+    med = statistics.median(vals)
+    if med <= 0:
+        return None
+    return (max(vals) - min(vals)) / med
+
+
 _FULLPIPE_TARGET_MS = float(os.environ.get("PERF_MCP_TARGET_MS", "0") or "0")
 
 # C++-kernel SAFETY: a bad Metalium kernel can WEDGE a device core (tt-lang/ttnn fail gracefully; raw
@@ -2516,6 +2537,7 @@ def _persist_stage_ms(
     prompt_tokens: int = 0,
     stage_isl_per_request: dict | None = None,
     stage_bytes: dict | None = None,
+    stage_spread: dict | None = None,
 ) -> None:
     """Record trace_replay's per-stage timings so the report can show a MEASURED phase split.
 
@@ -2558,6 +2580,11 @@ def _persist_stage_ms(
                     # convention, and the one that matters most -- what a TOKEN reads -- had no
                     # measurement at all until this.
                     "bytes": stage_bytes or {},
+                    # HOW MUCH THIS STAGE'S OWN READING WOBBLED, as a fraction of its median, across
+                    # the samples that produced it. The bytes beside it already refuse to be pinned
+                    # when their samples disagree; the timings had no such evidence recorded, so the
+                    # only thing left to judge them by was a constant chosen for a different quantity.
+                    "spread": stage_spread or {},
                     # The doc tracks the CURRENT build by design -- the report needs both numbers.
                     # The pinned baseline lives in the ledger, written just below.
                     # THE BATCH THE RUN ACTUALLY SERVED. Parsed off TRACE_REPLAY_PATH for the
@@ -2584,6 +2611,24 @@ def read_stage_ms(state_dir_path=None, model="", task="") -> dict:
         return {
             k: float(v)
             for k, v in (_read_stage_doc(state_dir_path, model, task).get("stages") or {}).items()
+            if float(v) > 0
+        }
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def read_stage_spread(state_dir_path=None, model="", task="") -> dict:
+    """Each stage's own measured spread, as a fraction of its median, or {}.
+
+    The evidence for how far two readings of one stage may differ and still be the same measurement.
+    Recorded per stage because the stages do not share a spread: on voxtral 2026-09-04 decode
+    repeated to 0.04% while prefill moved several percent, and judging both against one number is
+    how a real 5% prefill gain was filed as no result.
+    """
+    try:
+        return {
+            k: float(v)
+            for k, v in (_read_stage_doc(state_dir_path, model, task).get("spread") or {}).items()
             if float(v) > 0
         }
     except Exception:  # noqa: BLE001
@@ -3143,9 +3188,14 @@ def _run_full_pipeline_ms():
         # The same filter the headline gets, applied to each stage independently: a stage missing
         # from a sample simply has fewer readings, and median() of what it did report is still the
         # right answer for it.
+        stage_spread = {}
         for _sn, _svals in stage_ms_samples.items():
             if _svals:
                 stage_ms[_sn] = float(statistics.median(_svals))
+                # The evidence for what counts as a change in THIS stage, kept beside its timing.
+                _sp = _sample_spread(_svals)
+                if _sp is not None:
+                    stage_spread[_sn] = _sp
         # The read set has the same last-write-wins defect and a worse consequence: it is pinned
         # write-once. Take the median here, before the doc is written, so the recorded number and the
         # pinned number are the same one.
@@ -3161,6 +3211,7 @@ def _run_full_pipeline_ms():
             int(prompt_tokens_seen or 0),
             stage_isl_per_request,
             stage_bytes,
+            stage_spread,
         )
         # PIN WHAT ONE CALL OF EACH STAGE RETIRES, beside the read set and for the same reason: it
         # is a ceiling input (the compute floor is 2 x params x tokens), and the report's THEORETICAL
@@ -3198,12 +3249,12 @@ def _run_full_pipeline_ms():
                 if not _st or not _svals:
                     continue
                 _med = float(statistics.median(_svals))
-                _spread = (max(_svals) - min(_svals)) / _med if _med > 0 else 1.0
-                if len(_svals) < 2 or _spread > _STAGE_BYTES_AGREE_TOL:
+                _spread = _sample_spread(_svals)
+                if _spread is None or _spread > _STAGE_BYTES_AGREE_TOL:
                     sys.stderr.write(
                         "[full-pipeline-gate] read set for %s NOT pinned: %d reading(s), spread %.1f%% "
                         "(need <= %.1f%%) -- values %s\n"
-                        % (_st, len(_svals), _spread * 100.0, _STAGE_BYTES_AGREE_TOL * 100.0, _svals)
+                        % (_st, len(_svals), (_spread or 0.0) * 100.0, _STAGE_BYTES_AGREE_TOL * 100.0, _svals)
                     )
                     continue
                 _ledger().anchor(
@@ -4067,6 +4118,14 @@ def _measured_stages() -> dict:
         return {}
 
 
+def _measured_spread() -> dict:
+    """Per-stage spread from the measurement that just ran, or {}. Same channel as _measured_stages."""
+    try:
+        return {k: float(v) for k, v in (read_stage_spread() or {}).items() if isinstance(v, (int, float)) and v > 0}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 def _bar_stages() -> dict:
     """The committed per-stage bests, or {}. Absent means no stage has ratcheted yet."""
     try:
@@ -4090,19 +4149,35 @@ def _min_stages(cur: dict | None, new: dict | None) -> dict:
     return out
 
 
-def _stage_deltas(now: dict, bar: dict) -> dict:
+def _stage_deltas(now: dict, bar: dict, spread: dict | None = None) -> dict:
     """Per stage: {ms, best, delta_pct, improved, regressed}. A stage with no bar yet is neither.
 
-    THE TOLERANCE IS THE SAME ONE THE HEADLINE USES. A stage improving by less than the board's
-    spread is not a result, and treating it as one is how a lever that moved nothing gets banked."""
+    EACH STAGE IS JUDGED AGAINST ITS OWN MEASURED SPREAD. A stage improving by less than its own
+    reading wobbles is not a result -- but the wobble is a property of that stage, not a constant.
+    _FULLPIPE_TOL was chosen for the whole-pipeline number in July, then inherited here when the
+    per-stage test was added, so every stage had to clear the headline's spread. On voxtral it cost
+    real work: decode repeats to 0.04% while prefill moves several percent, and prefill's genuine
+    wins are 5-6% -- under the inherited 8%, so each was filed as no result and kept only when some
+    other stage happened to clear the bar in the same measurement. Whether a 5% gain counted came
+    down to what else was running.
+
+    The samples are already taken and the read set beside these timings already refuses to be pinned
+    when its own samples disagree; this applies that same evidence to the timings. The constant
+    survives only where there is no evidence -- a single sample records no spread -- because a stage
+    that cannot state its own wobble still has to be judged by something.
+    """
     out = {}
+    _sp = spread or {}
     for name, ms in sorted(now.items()):
         prev = bar.get(name)
         row = {"ms": round(ms, 4), "best": (round(prev, 4) if prev else None)}
         if prev and prev > 0:
+            tol = _sp.get(name)
+            tol = float(tol) if isinstance(tol, (int, float)) and tol > 0 else _FULLPIPE_TOL
             row["delta_pct"] = round((ms - prev) / prev * 100.0, 2)
-            row["improved"] = ms < prev * (1.0 - _FULLPIPE_TOL)
-            row["regressed"] = ms > prev * (1.0 + _FULLPIPE_TOL)
+            row["tol_pct"] = round(tol * 100.0, 2)
+            row["improved"] = ms < prev * (1.0 - tol)
+            row["regressed"] = ms > prev * (1.0 + tol)
         else:
             row["delta_pct"] = None
             row["improved"] = row["regressed"] = False
@@ -4623,7 +4698,7 @@ def check_full_pipeline_latency() -> dict:
     # follows the headline -- a slower recurring stage is a regression whatever else improved --
     # because that is the number the product is sold on.
     _stages_now = _measured_stages()
-    _sdelta = _stage_deltas(_stages_now, _bar_stages())
+    _sdelta = _stage_deltas(_stages_now, _bar_stages(), _measured_spread())
     stage_win = (
         bool(_sdelta)
         and any(r["improved"] for r in _sdelta.values())
