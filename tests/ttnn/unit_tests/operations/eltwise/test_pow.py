@@ -268,7 +268,7 @@ def test_pow_zero_base_special_cases(device, dtype):
             assert (~torch.isfinite(out)).all()
 
     def assert_zero_power_negative_binary(out):
-        # pow(0, y) = +inf for y < 0 for fp32 (bf16 still returns NaN)
+        # FP32 writes +inf; the bf16 kernel writes NaN, which reads back as +inf after conversion (tt-llk/issues/675).
         assert torch.isinf(out).all() and (out > 0).all()
 
     for exponent in positive_exponents:
@@ -383,10 +383,10 @@ def test_binary_pow_fp32_base_zero(base, device):
     output_tensor = ttnn.pow(input_tensor_a, input_tensor_b)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert all(
-        pow_result_matches(got.item(), want.item())
-        for got, want in zip(output_tensor.flatten(), torch_output_tensor.flatten())
-    )
+    for exponent, got, want in zip(ZERO_BASE_EXPONENTS, output_tensor.flatten(), torch_output_tensor.flatten()):
+        assert pow_result_matches(
+            got.item(), want.item()
+        ), f"pow({base}, {exponent}): got {got.item()}, expected {want.item()}"
 
 
 @pytest.mark.parametrize("dtype", ["float32", "bfloat16"])

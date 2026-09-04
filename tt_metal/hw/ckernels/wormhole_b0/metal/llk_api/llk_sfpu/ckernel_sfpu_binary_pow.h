@@ -170,8 +170,10 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat
  * stricter zero-base block.
  *
  * Special Cases:
- * - base = +/-0, pow > 0: Returns +/-0, sign kept for odd integer pow (incl. pow = +inf)
- * - base = +/-0, pow < 0: Returns +/-inf, sign kept for odd integer pow (incl. pow = -inf)
+ * - base = +/-0, pow > 0: Returns +/-0 for finite pow, preserving the base sign only for odd integer pow; +inf returns
+ * +0
+ * - base = +/-0, pow < 0: Returns +/-inf for finite pow, preserving the base sign only for odd integer pow; -inf
+ * returns +inf
  * - base = +/-0, pow = +/-0: Returns 1
  * - base = +/-0, pow = +/-NaN: Returns NaN
  * - base < 0, pow = integer: Returns proper signed result (negative if odd power)
