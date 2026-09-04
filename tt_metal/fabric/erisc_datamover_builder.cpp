@@ -1121,6 +1121,14 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
 
     // ===== Build named compile-time args (all non-pool/channel-mapping args) =====
     std::unordered_map<std::string, uint32_t> named_args;
+    const bool enable_capture = config.datapath_usage_l1_address != 0;
+    const bool is_2d_fabric = fabric_context.is_2D_routing_enabled();
+    if (enable_capture && is_2d_fabric) {
+        named_args["PACKED_DOWNSTREAM_VC0_SENDER_CHANNEL_IDS"] =
+            receiver_channel_to_downstream_adapter->get_packed_downstream_sender_channel_ids(0);
+        named_args["PACKED_DOWNSTREAM_VC1_SENDER_CHANNEL_IDS"] =
+            needs_vc1 ? receiver_channel_to_downstream_adapter->get_packed_downstream_sender_channel_ids(1) : 0;
+    }
 
     // --- Stream IDs (increment-on-write registers) ---
     //
@@ -1334,7 +1342,6 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     named_args["EDM_CHANNELS_MASK"] = 0;
 
     // --- Channel trimming (named args) ---
-    bool enable_capture = config.datapath_usage_l1_address != 0;
     named_args["ENABLE_CHANNEL_TRIMMING_RESOURCE_USAGE_CAPTURE"] = enable_capture ? 1 : 0;
     if (enable_capture) {
         named_args["RESOURCE_USAGE_CAPTURE_OUTPUT_L1_ADDRESS"] =
