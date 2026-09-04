@@ -328,24 +328,26 @@ jobs:
 
       # EXPERIMENT (kernel clang-tidy, PROTOTYPE — NOT a merge gate): the steps guarded by
       # inputs.enable-kernel-clang-tidy capture the real runtime JIT kernel compiles of ONE
-      # matrix leg with `bear` and run clang-tidy on them after the tests finish. Coverage is
-      # exactly the kernels that leg's pytest run JIT-compiled — real compile-time args, real
-      # generated headers from the tt-metal-cache dir — no more, no less. Every step is
-      # best-effort / continue-on-error and findings are uploaded as an artifact rather than
-      # failing the job. See tech_reports/code-indexing/kernel-clang-tidy.md. All steps are
-      # skipped (zero overhead) when the experiment is disabled.
-      - name: Install bear and clang-tidy (kernel clang-tidy)
+      # matrix leg and run clang-tidy on them after the tests finish. Capture uses the build
+      # system's own compile-command logging (TT_METAL_LOG_KERNELS_COMPILE_COMMANDS=1,
+      # jit_build/build.cpp) rather than `bear`: bear 3.0.x's gRPC-over-localhost intercept
+      # channel fails inside these CI containers ("gRPC call failed: failed to connect to all
+      # addresses"), killing the wrapped command before pytest even starts. Log-based capture
+      # has no wrapper process at all, so it structurally CANNOT fail an otherwise-passing
+      # test leg — the pytest exit code is untouched. Coverage is exactly the kernels that
+      # leg's pytest run JIT-compiled — real compile-time args, real generated headers from
+      # the tt-metal-cache dir — no more, no less. The tidy steps are continue-on-error and
+      # findings are uploaded as an artifact rather than failing the job. See
+      # tech_reports/code-indexing/kernel-clang-tidy.md. All steps are skipped (zero
+      # overhead) when the experiment is disabled.
+      - name: Install clang-tidy (kernel clang-tidy)
         id: kernel-tidy-tools
         if: ${{ inputs.enable-kernel-clang-tidy && !startsWith(matrix.test-group.sku, 'sim_') && matrix.test-group.name == format('{0} [{1}]', inputs.clang-tidy-target-group, matrix.test-group.sku) }}
         continue-on-error: true
         run: |
-          # Best-effort: if bear or clang-tidy can't be installed, leave a clear signal and
+          # Best-effort: if clang-tidy can't be found or installed, leave a clear signal and
           # let the tests run un-instrumented rather than failing the leg.
           tidy_ready=false
-          if ! command -v bear >/dev/null 2>&1; then
-            apt-get update || true
-            apt-get install -y bear || true
-          fi
           # Any reasonably recent clang-tidy works; the CI/dev images ship one for host lint.
           tidy_bin=""
           for v in 21 20 19 18 17 ""; do
@@ -357,11 +359,11 @@ jobs:
             apt-get install -y clang-tidy || true
             command -v clang-tidy >/dev/null 2>&1 && tidy_bin="clang-tidy"
           fi
-          if command -v bear >/dev/null 2>&1 && [ -n "$tidy_bin" ]; then
+          if [ -n "$tidy_bin" ]; then
             tidy_ready=true
-            echo "kernel clang-tidy tools ready: $(bear --version | head -1), $($tidy_bin --version | sed -n 2p)"
+            echo "kernel clang-tidy tools ready: $($tidy_bin --version | sed -n 2p)"
           else
-            echo "::warning::bear and/or clang-tidy unavailable; kernel clang-tidy capture will be skipped."
+            echo "::warning::clang-tidy unavailable; kernel clang-tidy will be skipped."
           fi
           echo "tidy_ready=$tidy_ready" >> "$GITHUB_OUTPUT"
           echo "KERNEL_TIDY_BIN=$tidy_bin" >> "$GITHUB_ENV"
@@ -418,37 +420,39 @@ jobs:
               RUNNER=(bash -c "$TEST_GROUP_CMD")
             fi
 
-            # EXPERIMENT (kernel clang-tidy): when this leg is the selected target, wrap the
-            # run in `bear` to capture every runtime JIT compiler invocation. Every kernel
+            # EXPERIMENT (kernel clang-tidy): when this leg is the selected target, have the
+            # JIT build itself log every kernel compile command (captured into this step's
+            # run-with-log file, which the post-step parses). Pure env-var capture — no
+            # wrapper process — so it cannot change the tests' exit code. Every kernel
             # compile cache must be defeated for the capture to see anything — a cache hit at
-            # ANY layer means the real compiler never execs and bear records nothing:
-            #   1. TT_METAL_FORCE_JIT_COMPILE=1 — a tt-metal-cache hit spawns no compiler
-            #      process at all (JitBuildState::need_compile).
+            # ANY layer means the compile (and its logged command) never happens:
+            #   1. TT_METAL_FORCE_JIT_COMPILE=1 — a tt-metal-cache hit skips the compile
+            #      entirely (JitBuildState::need_compile).
             #   2. unset TT_METAL_CCACHE_KERNEL_SUPPORT — this job enables kernel ccache
             #      (setup-job enable-kernel-ccache), which makes JitBuildEnv prepend `ccache`
             #      to the SFPI command AND configures CCACHE_REMOTE_ONLY=true +
             #      CCACHE_REMOTE_STORAGE=redis://... — i.e. the CI Redis-backed kernel cache.
-            #      A Redis hit serves the object without ever exec'ing the compiler. Unsetting
-            #      this takes ccache (and therefore Redis) out of the process tree entirely
-            #      for this leg, so the captured argv is the bare SFPI compiler.
+            #      A Redis hit serves the object without running the real compile. Unsetting
+            #      this takes ccache (and therefore Redis) out of the picture entirely for
+            #      this leg, so the logged argv is the bare SFPI compiler.
             #   3. CCACHE_DISABLE=1 + clear CCACHE_REMOTE_STORAGE — belt and suspenders in
             #      case anything else routes a kernel compile through ccache: disabled ccache
             #      is a pure pass-through (no local or remote/Redis lookup, no store).
-            # These exports are scoped to this step's process tree for this one leg; other
-            # legs and the job-level CCACHE_* env (used by the CCache Report step) are
-            # untouched. This leg runs slower by design — that's inherent to the capture.
+            # TT_LOGGER_LEVEL=info is required because the compile-cmd lines are logged at
+            # info level (the container default here is warn). These exports are scoped to
+            # this step's process tree for this one leg; other legs and the job-level
+            # CCACHE_* env (used by the CCache Report step) are untouched. This leg runs
+            # slower and logs more by design — that's inherent to the capture.
             KERNEL_TIDY_THIS="${{ inputs.enable-kernel-clang-tidy && matrix.test-group.name == format('{0} [{1}]', inputs.clang-tidy-target-group, matrix.test-group.sku) }}"
-            KERNEL_TIDY_READY="${{ steps.kernel-tidy-tools.outputs.tidy_ready }}"
-            if [ "$KERNEL_TIDY_THIS" = "true" ] && [ "$KERNEL_TIDY_READY" = "true" ]; then
-              echo "kernel clang-tidy capture ENABLED for '$TEST_GROUP_NAME' (JIT + ccache/Redis kernel caches defeated for this leg)"
+            if [ "$KERNEL_TIDY_THIS" = "true" ]; then
+              echo "kernel clang-tidy capture ENABLED for '$TEST_GROUP_NAME' (compile-cmd logging on; JIT + ccache/Redis kernel caches defeated for this leg)"
+              export TT_METAL_LOG_KERNELS_COMPILE_COMMANDS=1
+              export TT_LOGGER_LEVEL=info
               export TT_METAL_FORCE_JIT_COMPILE=1
               unset TT_METAL_CCACHE_KERNEL_SUPPORT
               export CCACHE_DISABLE=1
               export CCACHE_REMOTE_STORAGE=
               unset CCACHE_REMOTE_ONLY
-              RUNNER=(bear --output /work/kernel_tidy_raw_compile_commands.json -- "${RUNNER[@]}")
-            elif [ "$KERNEL_TIDY_THIS" = "true" ]; then
-              echo "::warning::kernel clang-tidy tools not ready; running '$TEST_GROUP_NAME' without capture."
             fi
 
             python3 tools/tt-power-sidecar/tt_power_sidecar.py \
@@ -514,15 +518,21 @@ jobs:
         if: ${{ !cancelled() && inputs.enable-kernel-clang-tidy && !startsWith(matrix.test-group.sku, 'sim_') && matrix.test-group.name == format('{0} [{1}]', inputs.clang-tidy-target-group, matrix.test-group.sku) && steps.kernel-tidy-tools.outputs.tidy_ready == 'true' }}
         continue-on-error: true
         timeout-minutes: 45
+        env:
+          # Via env so the group name (spaces, brackets) is never shell-interpolated.
+          KERNEL_TIDY_GROUP: ${{ matrix.test-group.name }}
         run: |
-          if [ ! -s /work/kernel_tidy_raw_compile_commands.json ]; then
-            echo "::warning::no kernel compile commands captured (bear output missing/empty); skipping clang-tidy."
+          # The test step's run-with-log file holds the combined output, including the
+          # "g++ compile cmd:" lines the JIT build logged for every kernel compile.
+          RUN_LOG="generated/test_logs/${KERNEL_TIDY_GROUP}.log"
+          if [ ! -s "$RUN_LOG" ]; then
+            echo "::warning::run log '$RUN_LOG' missing/empty; skipping clang-tidy."
             exit 0
           fi
           # tee opens summary.txt before the filter script mkdirs its output dir; create it first.
           mkdir -p /work/kernel_tidy
           python3 scripts/build_kernel_clang_tidy_commands.py \
-            --input /work/kernel_tidy_raw_compile_commands.json \
+            --input-log "$RUN_LOG" \
             --output-dir /work/kernel_tidy \
             --clang-tidy "$KERNEL_TIDY_BIN" \
             --config-file "$PWD/tt_metal/jit_build/kernel_clang_tidy/.clang-tidy" \
@@ -545,7 +555,6 @@ jobs:
           name: kernel-clang-tidy-${{ matrix.test-group.name }}
           # /docker-job/ is the host-side mount of the container's /work/ directory.
           path: |
-            ${{ github.workspace }}/docker-job/kernel_tidy_raw_compile_commands.json
             ${{ github.workspace }}/docker-job/kernel_tidy/compile_commands.json
             ${{ github.workspace }}/docker-job/kernel_tidy/findings.txt
             ${{ github.workspace }}/docker-job/kernel_tidy/summary.txt

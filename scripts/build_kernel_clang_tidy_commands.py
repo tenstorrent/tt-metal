@@ -3,17 +3,31 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Turn a bear-captured compile_commands.json from a real JIT run into a
-clang-tidy-compatible one, and (optionally) run clang-tidy over it.
+"""Turn the kernel compile commands captured from a real JIT run into a
+clang-tidy-compatible compile_commands.json, and (optionally) run clang-tidy.
+
+Two capture sources are supported:
+
+  --input-log FILE   (recommended) A run log produced with
+                     TT_METAL_LOG_KERNELS_COMPILE_COMMANDS=1 and
+                     TT_LOGGER_LEVEL=info: jit_build/build.cpp logs the exact
+                     compile argv of every kernel ("g++ compile cmd: ...").
+                     No interception tooling needed; works in any container.
+  --input FILE       A bear-captured compile_commands.json. Works locally, but
+                     note bear 3.0.x's gRPC-over-localhost intercept channel is
+                     known to fail inside some CI containers ("gRPC call
+                     failed: failed to connect to all addresses"), killing the
+                     wrapped command outright -- which is why the CI flow uses
+                     --input-log instead.
 
 Background
 ----------
 Device kernels are JIT-compiled at runtime by tt_metal/jit_build/build.cpp using
-the SFPI cross-compiler (riscv-tt-elf-g++, a GCC). Running a workload under
-`bear` (with TT_METAL_FORCE_JIT_COMPILE=1 so cache hits don't suppress compiler
-processes) captures every real kernel compile: real compile-time args, real
-generated headers (chlkc_*.cpp, chlkc_descriptors.h, kernel_includes.hpp,
-defines_generated.h -- all durable in the tt-metal-cache dir), real defines.
+the SFPI cross-compiler (riscv-tt-elf-g++, a GCC). Capturing a real run (with
+TT_METAL_FORCE_JIT_COMPILE=1 so cache hits don't suppress compiles) yields every
+real kernel compile: real compile-time args, real generated headers
+(chlkc_*.cpp, chlkc_descriptors.h, kernel_includes.hpp, defines_generated.h --
+all durable in the tt-metal-cache dir), real defines.
 
 clang-tidy needs *clang* to parse, so this script translates each captured
 SFPI-GCC invocation into an equivalent clang invocation:
@@ -57,9 +71,11 @@ Typical use (see tech_reports/code-indexing/kernel-clang-tidy.md):
 
   export TT_METAL_FORCE_JIT_COMPILE=1
   export CCACHE_DISABLE=1   # if kernel ccache is enabled
-  bear --output /tmp/raw_cc.json -- python3 /abs/path/to/some_test.py
+  export TT_METAL_LOG_KERNELS_COMPILE_COMMANDS=1
+  export TT_LOGGER_LEVEL=info   # the compile-cmd lines are logged at info level
+  python3 /abs/path/to/some_test.py 2>&1 | tee /tmp/run.log
   python3 scripts/build_kernel_clang_tidy_commands.py \
-      --input /tmp/raw_cc.json --output-dir /tmp/kernel_tidy \
+      --input-log /tmp/run.log --output-dir /tmp/kernel_tidy \
       --run --config-file tt_metal/jit_build/kernel_clang_tidy/.clang-tidy
 """
 
@@ -129,6 +145,44 @@ NOISE_SUPPRESSIONS = [
 # Matches the per-kernel JIT cache dir layout:
 #   <cache>/<key>/kernels/<kernel_name>/<hash>/<target>/
 KERNEL_DIR_RE = re.compile(r"/kernels/(?P<kname>[^/]+)/(?P<khash>[^/]+)/(?P<target>[^/]+)/?$")
+
+# jit_build/build.cpp compile_one logs "    g++ compile cmd: <space-joined argv>"
+# when TT_METAL_LOG_KERNELS_COMPILE_COMMANDS=1 (at info level, so the run needs
+# TT_LOGGER_LEVEL=info). The logger appends a "(build.cpp:NNN)" source-location
+# suffix. argv elements are joined with single spaces and never quoted; kernel
+# compile argv elements contain no spaces in practice (paths, -D defines,
+# comma-joined CTAs), so a plain split() recovers the elements verbatim --
+# including defines that carry literal quote characters, which shlex would eat.
+LOG_CMD_RE = re.compile(r"g\+\+ compile cmd: (?P<cmd>.+?)(?:\s*\(build\.cpp:\d+\))?\s*$")
+
+
+def entries_from_log(path):
+    """Reconstruct compile_commands-style entries from a TT run log."""
+    entries = []
+    seen_lines = set()
+    with open(path, errors="replace") as f:
+        for line in f:
+            m = LOG_CMD_RE.search(line)
+            if not m:
+                continue
+            cmd = m.group("cmd")
+            if cmd in seen_lines:
+                continue
+            seen_lines.add(cmd)
+            argv = cmd.split()
+            # directory: the JIT build runs the compiler with cwd = the kernel's
+            # out_dir, which is also the (absolute) dirname of the -o object.
+            directory = None
+            src = None
+            for i, a in enumerate(argv):
+                if a == "-o" and i + 1 < len(argv):
+                    directory = os.path.dirname(argv[i + 1])
+                if a.endswith((".cc", ".cpp")):
+                    src = a
+            if not directory or not src:
+                continue
+            entries.append({"directory": directory, "file": src, "arguments": argv})
+    return entries
 
 
 def entry_argv(entry):
@@ -266,7 +320,12 @@ FINDING_RE = re.compile(r"(?:warning|error): .*\[([A-Za-z0-9.,\-]+)\]\s*$")
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--input", required=True, help="Raw compile_commands.json captured by bear")
+    src_group = ap.add_mutually_exclusive_group(required=True)
+    src_group.add_argument("--input", help="Raw compile_commands.json captured by bear")
+    src_group.add_argument(
+        "--input-log",
+        help="Run log captured with TT_METAL_LOG_KERNELS_COMPILE_COMMANDS=1 and TT_LOGGER_LEVEL=info",
+    )
     ap.add_argument("--output-dir", required=True, help="Where to write the translated compile_commands.json (and findings)")
     ap.add_argument("--clang", default="clang++", help="clang driver name to put in the translated commands")
     ap.add_argument("--dedupe", choices=["kernel-role", "none"], default="kernel-role",
@@ -283,8 +342,11 @@ def main():
                     help="Exit nonzero if any finding is emitted (default: report only)")
     args = ap.parse_args()
 
-    with open(args.input) as f:
-        raw = json.load(f)
+    if args.input_log:
+        raw = entries_from_log(args.input_log)
+    else:
+        with open(args.input) as f:
+            raw = json.load(f)
 
     seen = set()
     entries = []
@@ -315,8 +377,9 @@ def main():
         print(f"[kernel-clang-tidy] skipped {skipped_unknown_cpu} entries with unrecognized -mcpu", file=sys.stderr)
     if not entries:
         print("[kernel-clang-tidy] nothing captured. Did the run compile anything? "
-              "(TT_METAL_FORCE_JIT_COMPILE=1 and CCACHE_DISABLE=1 must be set, "
-              "and the command must be wrapped in `bear --`)", file=sys.stderr)
+              "(TT_METAL_FORCE_JIT_COMPILE=1 and CCACHE_DISABLE=1 must be set; for --input-log "
+              "the run also needs TT_METAL_LOG_KERNELS_COMPILE_COMMANDS=1 and TT_LOGGER_LEVEL=info; "
+              "for --input the command must be wrapped in `bear --`)", file=sys.stderr)
         return 0
 
     if not args.run:

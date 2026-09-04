@@ -3,8 +3,11 @@
 Device kernels are compiled at runtime by `tt_metal/jit_build/` with the SFPI
 cross-compiler, so they are invisible to the host build's static analysis.
 This flow runs clang-tidy on them **after the fact**: run any workload
-normally, capture the real JIT compiler invocations with
-[`bear`](https://github.com/rizsotto/Bear), translate them for clang, and lint.
+normally with the build system's own compile-command logging enabled
+(`TT_METAL_LOG_KERNELS_COMPILE_COMMANDS=1`), parse the logged real JIT compiler
+invocations, translate them for clang, and lint.
+([`bear`](https://github.com/rizsotto/Bear) capture is also supported as an
+alternative input — see the gotchas below for why it is not the default.)
 
 No synthetic build system, no stub headers, no enumeration of kernel configs:
 the runtime already produced everything needed (real compile-time args, real
@@ -28,31 +31,39 @@ Prior art / related:
 
 ## Running it locally
 
-Prerequisites: `bear` (`apt-get install bear`), any clang-tidy ≥ 17.
+Prerequisites: any clang-tidy ≥ 17.
 
 ```bash
 cd <tt-metal root>
 
-# 1. Cache hits spawn no compiler process, so force real compiles.
+# 1. Cache hits skip the compile, so force real compiles.
 export TT_METAL_FORCE_JIT_COMPILE=1
 # 2. If kernel ccache is enabled (TT_METAL_CCACHE_KERNEL_SUPPORT), a ccache hit
-#    also skips the compiler exec. Take ccache out of the path entirely, and
+#    also skips the real compile. Take ccache out of the path entirely, and
 #    disable it as a fallback in case something else invokes it.
 unset TT_METAL_CCACHE_KERNEL_SUPPORT
 export CCACHE_DISABLE=1
+# 3. Have the JIT build log every kernel compile command. The lines are logged
+#    at info level, so the logger must be at info too.
+export TT_METAL_LOG_KERNELS_COMPILE_COMMANDS=1
+export TT_LOGGER_LEVEL=info
 
-# 3. Run any test/workload under bear. Use absolute paths.
-bear --output /tmp/kernel_raw_cc.json -- pytest /abs/path/to/tests/ttnn/...::test_case
+# 4. Run any test/workload, teeing its output to a file.
+pytest tests/ttnn/...::test_case 2>&1 | tee /tmp/kernel_run.log
 
-# 4. Translate GCC->clang and run clang-tidy over every captured kernel compile.
+# 5. Parse the logged compile commands, translate GCC->clang, run clang-tidy.
 python3 scripts/build_kernel_clang_tidy_commands.py \
-    --input /tmp/kernel_raw_cc.json \
+    --input-log /tmp/kernel_run.log \
     --output-dir /tmp/kernel_tidy \
     --run \
     --config-file "$PWD/tt_metal/jit_build/kernel_clang_tidy/.clang-tidy"
 
 less /tmp/kernel_tidy/findings.txt
 ```
+
+Alternative capture: wrap the run in `bear --output raw.json --` and pass
+`--input raw.json` instead of `--input-log`. Equivalent output; see the bear
+gotcha below before relying on it in a container.
 
 Do **not** clear the tt-metal cache (`~/.cache/tt-metal-cache` or
 `$TT_METAL_CACHE`) between the run and the lint: the captured commands
@@ -61,12 +72,26 @@ reference the generated headers there (`chlkc_*.cpp`, `chlkc_descriptors.h`,
 those sources. Object files do not need to survive (they don't; the JIT build
 uses temp names) — only sources/headers matter, and those are durable.
 
+### Gotcha: bear 3.0.x breaks inside (some) CI containers
+
+The first CI iteration of this flow used `bear` and failed instantly with
+`wrapper: failed with: gRPC call failed: failed to connect to all addresses` —
+bear 3.0.x's intercept architecture has every wrapped process report back to a
+supervisor over a gRPC localhost channel, and that connection fails inside the
+CI test containers, killing the wrapped command **before pytest even starts**
+(observed with bear 3.0.18, the only version packaged for Ubuntu 22.04). That
+is why the default capture is the build system's own compile-command logging
+(`TT_METAL_LOG_KERNELS_COMPILE_COMMANDS=1`): no wrapper process, nothing to
+intercept, structurally incapable of failing the test run. Bear remains a
+supported `--input` source for local use where it works.
+
 ### Gotcha: every kernel-compile cache silently defeats the capture
 
-`bear` only records what actually `exec`s. A cache hit at **any** layer serves
-the result without spawning the real compiler, and the capture silently comes
-up empty (the filter script warns on zero entries, but the failure mode to
-understand is "cache hit", not "bear broke"). There are three layers:
+Both capture modes only see compiles that actually happen. A cache hit at
+**any** layer serves the result without running the real compile, and the
+capture silently comes up empty (the filter script warns on zero entries, but
+the failure mode to understand is "cache hit", not "capture broke"). There are
+three layers:
 
 1. **The tt-metal JIT cache** (`~/.cache/tt-metal-cache`): a hit means
    `JitBuildState::need_compile` returns false and no process is spawned at
@@ -108,10 +133,12 @@ every configuration.
 
 `.github/workflows/ttnn-sanity-tests-impl.yaml` has an opt-in experiment:
 callers pass `enable-kernel-clang-tidy: true` plus `clang-tidy-target-group:
-"<exact matrix group name>"`. That leg's pytest run is wrapped in `bear`, with
-all three kernel-compile cache layers defeated for that leg only (see the
-gotcha above: `TT_METAL_FORCE_JIT_COMPILE=1`, `TT_METAL_CCACHE_KERNEL_SUPPORT`
-unset, `CCACHE_DISABLE=1`, and the Redis `CCACHE_REMOTE_STORAGE` cleared), and
+"<exact matrix group name>"`. That leg's pytest run gets
+`TT_METAL_LOG_KERNELS_COMPILE_COMMANDS=1` + `TT_LOGGER_LEVEL=info` (the logged
+compile commands land in the leg's run-with-log file), with all three
+kernel-compile cache layers defeated for that leg only (see the gotcha above:
+`TT_METAL_FORCE_JIT_COMPILE=1`, `TT_METAL_CCACHE_KERNEL_SUPPORT` unset,
+`CCACHE_DISABLE=1`, and the Redis `CCACHE_REMOTE_STORAGE` cleared), and
 after the tests a
 non-blocking (`continue-on-error`) step runs the filter + clang-tidy and
 uploads `kernel-clang-tidy-<group>` as an artifact (raw + translated
