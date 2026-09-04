@@ -290,22 +290,19 @@ void py_module_types(nb::module_& mod) {
                tt::tt_metal::Precision sfpu_precision_mode,
                bool enable_32_bit_dest,
                bool double_buffer_dest,
-               m2::ComputeUnpackModes unpack_modes,
-               bool enable_2x_src_register) {
+               m2::ComputeUnpackModes unpack_modes) {
                 new (self) m2::ComputeGen2Config{
                     .fpu_math_fidelity = fpu_math_fidelity,
                     .sfpu_precision_mode = sfpu_precision_mode,
                     .enable_32_bit_dest = enable_32_bit_dest,
                     .double_buffer_dest = double_buffer_dest,
-                    .unpack_modes = std::move(unpack_modes),
-                    .enable_2x_src_register = enable_2x_src_register};
+                    .unpack_modes = std::move(unpack_modes)};
             },
             nb::arg("fpu_math_fidelity") = MathFidelity::HiFi4,
             nb::arg("sfpu_precision_mode") = tt::tt_metal::Precision::Precise,
             nb::arg("enable_32_bit_dest") = false,
             nb::arg("double_buffer_dest") = true,
-            nb::arg("unpack_modes") = m2::ComputeUnpackModes{},
-            nb::arg("enable_2x_src_register") = false);
+            nb::arg("unpack_modes") = m2::ComputeUnpackModes{});
 
     mod.def("create_reader_dm_config", &m2::CreateReaderGen1DataMovementConfig);
     mod.def("create_writer_dm_config", &m2::CreateWriterGen1DataMovementConfig);
