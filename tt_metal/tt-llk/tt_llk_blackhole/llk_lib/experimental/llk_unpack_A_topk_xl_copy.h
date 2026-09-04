@@ -28,8 +28,10 @@ inline void _llk_unpack_topk_xl_copy_init_(const std::uint32_t unpack_src_format
         TT_OP_UNPACR(SrcA, 0b0 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
     static constexpr std::uint32_t unpack_srca_to_dest =
         TT_OP_UNPACR(SrcA, 0b0 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-    static constexpr std::uint32_t clear_srca_to_neginf = TT_OP_UNPACR_NOP(SrcA, 0, 0, 0, 0, 0, 0, p_unpacr_nop::CLR_SRC_NEGINF, p_unpacr_nop::CLR_SRC);
-    static constexpr std::uint32_t clear_srcb_dvalid    = TT_OP_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+    static constexpr std::uint32_t clear_srca_to_neginf =
+        TT_OP_UNPACR_NOP(SrcA, 0, 0, 0, 0, 1 /* wait like UNPACR */, 0, p_unpacr_nop::CLR_SRC_NEGINF, p_unpacr_nop::CLR_SRC);
+    static constexpr std::uint32_t clear_srcb_dvalid =
+        TT_OP_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 1 /* wait like UNPACR */, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
     if (is_32bit_input(unpack_src_format, unpack_dst_format))
     {
         ckernel_template tmp(1, 1, unpack_srca_to_dest);
