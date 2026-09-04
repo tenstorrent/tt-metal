@@ -338,11 +338,7 @@ public:
     std::vector<std::string> defines(const Params& params) const override {
         auto defines = HalJitBuildQueryBase::defines(params);
         defines.push_back("ARCH_QUASAR");
-        std::string qsr_noc_api_version = "NOC_API_V2";
-        if (params.rtoptions.get_simulator_enabled() && params.rtoptions.get_simulator_path().extension() == ".so") {
-            qsr_noc_api_version = "NOC_API_V" + std::to_string(params.rtoptions.get_simulator_quasar_noc_api_version());
-        }
-        defines.push_back(qsr_noc_api_version);
+        defines.push_back("NOC_API_V" + std::to_string(params.rtoptions.get_quasar_noc_api_version()));
         return defines;
     }
 
