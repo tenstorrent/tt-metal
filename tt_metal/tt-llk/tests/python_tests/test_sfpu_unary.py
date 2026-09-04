@@ -134,6 +134,88 @@ def _lanemk_run_fp32_stream(configuration, spec):
         fh.write(line + "\n")
 
 
+def _lanemo_run_sample_stream(configuration, spec):
+    """laneMO stratified-sampling streamer for the cross-lane / multi-input ops.
+
+    Same object-identity-preserving persistent-session pattern as the laneMK
+    streamer, but the operand-A input for each dispatch is a STRATIFIED SAMPLE
+    tile (from corpus/tools/lanemo_sample_gen) instead of an ascending counter,
+    so a defensible high-coverage sample of the (otherwise 2^(32*lanes)) input
+    space is fed to the certified kernel. Only operand A is sampled (the harness
+    exposes raw injection for A only); an op's operand B keeps its fixed
+    generated stimulus. Emits a per-leg output SHA plus checkpoint SHAs (every
+    `ckpt` samples) so the orchestrator can compare legs and, on a divergence,
+    localize the first diverging checkpoint window.
+
+    A verdict built on this is SAMPLED-CONSISTENT (N samples, 0 diffs) or
+    SAMPLED-DIVERGENT — a WEAKER class than a proof over all inputs. Never call
+    a sampled op "verified"/"proven".
+
+    spec = "n_tiles,seed,ckpt,outfile" (op name taken from LANEMO_OP env).
+    """
+    import hashlib
+    import struct
+    import time
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "corpus" / "tools"))
+    import lanemo_sample_gen as G
+
+    n_s, seed_s, ckpt_s, outfile = spec.split(",", 3)
+    n_tiles = int(n_s, 0)
+    seed = int(seed_s, 0)
+    ckpt = max(1, int(ckpt_s, 0))
+    op = os.environ.get("LANEMO_OP", "op")
+    st = configuration.variant_stimuli
+    loc = TestConfig.TENSIX_LOCATION
+    per_run = int(st.tile_count_A) * 1024
+
+    configuration.prepare()
+    configuration.write_runtimes_to_L1()
+    _wait_to = int(os.environ.get("LANEMK_WAIT_TIMEOUT", "60"))
+
+    osha = hashlib.sha256()
+    isha = hashlib.sha256()
+    ckpt_shas = []
+    ck = hashlib.sha256()
+    tiles = 0
+    obytes = 0
+    t0 = time.time()
+    for tile in G.iter_tiles(op, per_run, n_tiles, seed):
+        raw = struct.pack(f"<{per_run}I", *tile)
+        st.lanejn_raw_a = raw
+        st.write(loc)
+        st.clear_result_buffer(loc)
+        configuration.run_elf_files()
+        configuration.wait_for_tensix_operations_finished(timeout=_wait_to)
+        res = st.collect_raw_result_bytes(loc)
+        want = per_run * 4
+        if len(res) < want:
+            raise RuntimeError(f"sample {tiles}: got {len(res)} result bytes < {want}")
+        out = res[:want]
+        osha.update(out)
+        isha.update(raw)
+        ck.update(out)
+        obytes += want
+        tiles += 1
+        if tiles % ckpt == 0:
+            ckpt_shas.append(ck.hexdigest())
+            ck = hashlib.sha256()
+    if tiles % ckpt != 0:
+        ckpt_shas.append(ck.hexdigest())
+    dt = time.time() - t0
+
+    line = (
+        "LANEMO_SAMPLE_RESULT,"
+        f"op={op},n_samples={tiles},per_run_elems={per_run},seed=0x{seed:016x},"
+        f"ckpt={ckpt},wall_s={dt:.3f},per_run_ms={(1000.0 * dt / tiles) if tiles else 0:.3f},"
+        f"input_sha256={isha.hexdigest()},output_sha256={osha.hexdigest()}"
+    )
+    print(line, flush=True)
+    with open(outfile, "w") as fh:
+        fh.write(line + "\n")
+        fh.write("checkpoint_shas\t" + ",".join(ckpt_shas) + "\n")
+
+
 SUPPORTED_FAST_MODE_OPS = [
     MathOperation.Rsqrt,
     MathOperation.Sqrt,
@@ -1121,6 +1203,15 @@ def eltwise_unary_sfpu(
     _lanemk_stream = os.environ.get("LANEMK_STREAM")
     if _lanemk_stream:
         _lanemk_run_fp32_stream(configuration, _lanemk_stream)
+        return
+
+    # laneMO stratified-sampling hook (corpus/tools/lanemo_sample_sweep.py),
+    # env-gated and inert otherwise. LANEMO_SAMPLE="n_tiles,seed,ckpt,outfile"
+    # + LANEMO_OP=<op> streams stratified operand-A sample tiles through the
+    # certified kernel in one open session and emits the per-leg sample line.
+    _lanemo_sample = os.environ.get("LANEMO_SAMPLE")
+    if _lanemo_sample:
+        _lanemo_run_sample_stream(configuration, _lanemo_sample)
         return
 
     res_from_L1 = configuration.run().result
