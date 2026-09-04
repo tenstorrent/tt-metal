@@ -12,6 +12,7 @@
 #include "ckernel_sfpu_recip.h"
 #include "ckernel_trisc_common.h"
 #include "sfpi.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -185,5 +186,19 @@ inline void calculate_sfpu_atan2_init() {
     _init_reciprocal_<APPROXIMATION_MODE || !is_fp32_dest_acc_en>();
 }
 
+// ---------------------------------------------------------------------------------------------------
+// Atan2<APPROXIMATION_MODE, DST_SYNC, DST_ACCUM, ITERATIONS>
+//   calculate(in0, in1, out, vector_mode) -> calculate_sfpu_atan2<.., DST_ACCUM>
+//   init()                                -> calculate_sfpu_atan2_init<.., DST_ACCUM>
+//   Backs atan2_binary_tile / atan2_binary_tile_init (api/compute/atan2.h).
+// ---------------------------------------------------------------------------------------------------
+template <bool APPROXIMATION_MODE, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8>
+struct Atan2 : SfpuBinaryOp<Atan2<APPROXIMATION_MODE, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static void kernel(std::uint32_t dst_index_in0, std::uint32_t dst_index_in1, std::uint32_t dst_index_out) {
+        calculate_sfpu_atan2<APPROXIMATION_MODE, ITERATIONS, DST_ACCUM>(dst_index_in0, dst_index_in1, dst_index_out);
+    }
+
+    static void init_kernel() { calculate_sfpu_atan2_init<APPROXIMATION_MODE, DST_ACCUM>(); }
+};
 }  // namespace sfpu
 }  // namespace ckernel

@@ -8,12 +8,13 @@
 #include "ckernel_addrmod.h"
 #include "ckernel_defs.h"
 #include "sfpi.h"
+#include "sfpu/ckernel_sfpu_mul_int.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel::sfpu {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void mul_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
-
     constexpr uint dst_tile_size = 64;
 
     uint offset_in0 = dst_index_in0 * dst_tile_size;
@@ -22,20 +23,39 @@ inline void mul_int32(const uint dst_index_in0, const uint dst_index_in1, const 
 
 #ifdef DISABLE_SFPLOADMACRO
 #pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++)
-    {
+    for (int d = 0; d < ITERATIONS; d++) {
         TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, offset_in0);
-        TTI_SFPSHFT((-23) & 0xFFF, p_sfpu::LREG0, p_sfpu::LREG1, 5); // lreg[1] = lreg[0] >> 23
+        TTI_SFPSHFT((-23) & 0xFFF, p_sfpu::LREG0, p_sfpu::LREG1, 5);  // lreg[1] = lreg[0] >> 23
         TT_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::INT32, ADDR_MOD_7, offset_in1);
-        TTI_SFPSHFT((-23) & 0xFFF, p_sfpu::LREG2, p_sfpu::LREG3, 5); // lreg[3] = lreg[2] >> 23
-        TTI_SFPMUL24(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG4, 0); // lreg[4] = lreg[0] * lreg[2] (low 23 bits)
-        TTI_SFPMUL24(p_sfpu::LREG2, p_sfpu::LREG0, p_sfpu::LCONST_0, p_sfpu::LREG5, 1); // lreg[5] = lreg[0] * lreg[2] (high 23 bits)
-        TTI_SFPMUL24(p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG6, 0); // lreg[6] = lreg[1] * lreg[2] (low 23 bits)
-        TTI_SFPMUL24(p_sfpu::LREG0, p_sfpu::LREG3, p_sfpu::LCONST_0, p_sfpu::LREG7, 0); // lreg[7] = lreg[0] * lreg[3] (low 23 bits)
-        TTI_SFPIADD(0, p_sfpu::LREG6, p_sfpu::LREG5, sfpi::SFPIADD_MOD1_CC_NONE); // lreg[5] += lreg[6]
-        TTI_SFPIADD(0, p_sfpu::LREG7, p_sfpu::LREG5, sfpi::SFPIADD_MOD1_CC_NONE); // lreg[5] += lreg[7]
-        TTI_SFPSHFT(23, p_sfpu::LREG5, p_sfpu::LREG5, 5); // lreg[5] <<= 23
-        TTI_SFPIADD(0, p_sfpu::LREG5, p_sfpu::LREG4, sfpi::SFPIADD_MOD1_CC_NONE); // lreg[4] += lreg[5]
+        TTI_SFPSHFT((-23) & 0xFFF, p_sfpu::LREG2, p_sfpu::LREG3, 5);  // lreg[3] = lreg[2] >> 23
+        TTI_SFPMUL24(
+            p_sfpu::LREG0,
+            p_sfpu::LREG2,
+            p_sfpu::LCONST_0,
+            p_sfpu::LREG4,
+            0);  // lreg[4] = lreg[0] * lreg[2] (low 23 bits)
+        TTI_SFPMUL24(
+            p_sfpu::LREG2,
+            p_sfpu::LREG0,
+            p_sfpu::LCONST_0,
+            p_sfpu::LREG5,
+            1);  // lreg[5] = lreg[0] * lreg[2] (high 23 bits)
+        TTI_SFPMUL24(
+            p_sfpu::LREG1,
+            p_sfpu::LREG2,
+            p_sfpu::LCONST_0,
+            p_sfpu::LREG6,
+            0);  // lreg[6] = lreg[1] * lreg[2] (low 23 bits)
+        TTI_SFPMUL24(
+            p_sfpu::LREG0,
+            p_sfpu::LREG3,
+            p_sfpu::LCONST_0,
+            p_sfpu::LREG7,
+            0);  // lreg[7] = lreg[0] * lreg[3] (low 23 bits)
+        TTI_SFPIADD(0, p_sfpu::LREG6, p_sfpu::LREG5, sfpi::SFPIADD_MOD1_CC_NONE);  // lreg[5] += lreg[6]
+        TTI_SFPIADD(0, p_sfpu::LREG7, p_sfpu::LREG5, sfpi::SFPIADD_MOD1_CC_NONE);  // lreg[5] += lreg[7]
+        TTI_SFPSHFT(23, p_sfpu::LREG5, p_sfpu::LREG5, 5);                          // lreg[5] <<= 23
+        TTI_SFPIADD(0, p_sfpu::LREG5, p_sfpu::LREG4, sfpi::SFPIADD_MOD1_CC_NONE);  // lreg[4] += lreg[5]
         TT_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::INT32, ADDR_MOD_6, offset_out);
     }
 #else
@@ -169,7 +189,7 @@ inline void mul_int32_init() {
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
 
         // Configure Sequence[1], via VD=4+1
-        TTI_SFPCONFIG(0, 4+1, 0);
+        TTI_SFPCONFIG(0, 4 + 1, 0);
     }
     // Macro 2:
     {
@@ -177,7 +197,7 @@ inline void mul_int32_init() {
         constexpr uint mad_bits = 0x80 | 0x00 | (1 << 3) | (4 + 1);
 
         // Configure Sequence[2], via VD=4+2
-        TTI_SFPCONFIG((mad_bits << 8) | simple_bits, 4+2, 1);
+        TTI_SFPCONFIG((mad_bits << 8) | simple_bits, 4 + 2, 1);
     }
     // Macro 3:
     {
@@ -190,7 +210,7 @@ inline void mul_int32_init() {
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
 
         // Configure Sequence[3], via VD=4+3
-        TTI_SFPCONFIG(0, 4+3, 0);
+        TTI_SFPCONFIG(0, 4 + 3, 0);
     }
     // Misc: {
     //   StoreMod0: MOD0_FMT_SRCB,
@@ -200,5 +220,46 @@ inline void mul_int32_init() {
     TTI_SFPCONFIG(0xff0, 8, 1);
 #endif
 }
+
+// ---------------------------------------------------------------------------------------------------
+// MulInt<APPROX, FORMAT, DST_SYNC, DST_ACCUM, SIGN_MAGNITUDE_FORMAT, ITERATIONS>
+//   UInt16          : calculate -> _mul_int_ (tt-llk),  init -> _init_mul_int_
+//   Int32 / UInt32  : calculate -> mul_int32,           init -> mul_int32_init
+// Backs mul_int_tile / mul_int_tile_init.
+// SIGN_MAGNITUDE_FORMAT is a Quasar-only dest-encoding flag; WH/BH INT32 loads convert implicitly, so it is ignored.
+// ---------------------------------------------------------------------------------------------------
+template <
+    bool APPROXIMATION_MODE,
+    DataFormat FORMAT,
+    DstSync DST_SYNC,
+    bool DST_ACCUM,
+    [[maybe_unused]] bool SIGN_MAGNITUDE_FORMAT = false,
+    int ITERATIONS = 8>
+struct MulInt : SfpuBinaryOp<
+                    MulInt<APPROXIMATION_MODE, FORMAT, DST_SYNC, DST_ACCUM, SIGN_MAGNITUDE_FORMAT, ITERATIONS>,
+                    DST_SYNC,
+                    DST_ACCUM> {
+    static_assert(
+        FORMAT == DataFormat::Int32 || FORMAT == DataFormat::UInt32 || FORMAT == DataFormat::UInt16,
+        "Unsupported data format for mul_int. Supported data formats are: Int32, UInt32, UInt16");
+    static constexpr bool is_uint16 = FORMAT == DataFormat::UInt16;
+
+    static void kernel(uint32_t dst_index_in0, uint32_t dst_index_in1, uint32_t dst_index_out) {
+        if constexpr (is_uint16) {
+            _mul_int_<APPROXIMATION_MODE, ITERATIONS>(dst_index_in0, dst_index_in1, dst_index_out);
+        } else {
+            mul_int32<APPROXIMATION_MODE, ITERATIONS>(dst_index_in0, dst_index_in1, dst_index_out);
+        }
+    }
+
+    static void init_kernel() {
+        addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+        if constexpr (is_uint16) {
+            _init_mul_int_<APPROXIMATION_MODE>();
+        } else {
+            mul_int32_init<APPROXIMATION_MODE>();
+        }
+    }
+};
 
 }  // namespace ckernel::sfpu

@@ -1096,7 +1096,7 @@ _FPU_ELTWISE_OPS: FrozenSet[MathOperation] = frozenset(
 )
 
 # Applied by the packer (STACC_RELU), not the SFPU. Relu is the entry that looks like it
-# should be a unary SFPU op: it has a domain, but `relu` is not a member of SfpuType at
+# should be a unary SFPU op: it has a domain, but `relu` is not a member of SfpuUnaryOp at
 # all, so driving it through the unary test fails to compile.
 _PACKER_OPS: FrozenSet[MathOperation] = frozenset({MathOperation.Relu})
 
@@ -1773,7 +1773,7 @@ _ZERO_EDGE_OPS = (
     MathOperation.Signbit,  # true for -0.0, false for +0.0
     MathOperation.Heaviside,  # returns the dispatch value 0.5 at exactly 0
     # Relu is deliberately absent: its knee is at 0 like the rest, but relu is applied by
-    # the packer (STACC_RELU) and is not a member of SfpuType, so no SFPU probe can reach
+    # the packer (STACC_RELU) and is not a member of SfpuUnaryOp, so no SFPU probe can reach
     # it. See _NON_SFPU_UNARY_OPS.
     MathOperation.Lrelu,  # LRELU_NEGATIVE_SLOPE applies below 0
     MathOperation.Prelu,  # PRELU_SLOPE applies below 0

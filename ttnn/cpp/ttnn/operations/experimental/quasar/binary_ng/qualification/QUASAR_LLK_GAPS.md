@@ -22,8 +22,8 @@ any Quasar cell that is not yet `✓`. Over time the WH and Quasar columns conve
 | `✓` | Supported — present at all 3 layers with an explicit Quasar branch **and it compiles**. |
 | `✓*` | Supported **and sim-certified** on the QSR simulator (craq-sim). |
 | `✓!` | LLK primitive **compiles**, but the op is **runtime-wrong** end-to-end on the `binary_ng` DFB path (see Caveats). NOT a working claim. |
-| `bridge` | **Tier-1, cheap.** The Quasar ckernel **and** `SfpuType` slot already exist; only the layer-1 compute-API gate and/or the layer-2 `calculate_<op>` bridge is missing. |
-| `kernel` | **Tier-2, real LLK work.** No Quasar `_calculate_<op>_` ckernel and/or no `SfpuType` slot. |
+| `bridge` | **Tier-1, cheap.** The Quasar ckernel already exists; only the layer-1 compute-API gate and/or the layer-2 `calculate_<op>` bridge is missing. |
+| `kernel` | **Tier-2, real LLK work.** No Quasar `_calculate_<op>_` ckernel. |
 | `broken` | The Quasar bridge/ckernel EXISTS but **fails to JIT-compile** — a bug to fix, not a port. |
 | `format` | Op exists, but a dtype (uint16/uint32/int32/block-float) is `static_assert`-blocked. |
 | `—` | Not applicable (op/dtype not defined on that target). |
@@ -60,8 +60,9 @@ itself lacks.
      ~`263-671` and ~`828-1273`.
   2. Quasar LLK-API bridge `tt_metal/hw/ckernels/quasar/metal/llk_api/llk_sfpu/` — `ckernel::sfpu::calculate_<op>`.
   3. Quasar ckernel `tt_metal/tt-llk/tt_llk_quasar/common/inc/{sfpu,experimental}/` — `_calculate_<op>_`,
-     plus a `SfpuType` entry in `…/llk_lib/llk_defs.h`.
-- `bridge` vs `kernel` is decided by layers 2-3: ckernel + `SfpuType` present ⇒ at worst `bridge`.
+     plus the op struct (`struct <Op> : SfpuUnaryOp<...>`) in the layer-2 bridge header.
+- `bridge` vs `kernel` is decided by layers 2-3: ckernel present ⇒ at worst `bridge`. (There is no
+  central op enumeration; ops are identified by their dispatch struct.)
 
 ## Table 1 — Binary ops (WH baseline)
 
@@ -139,26 +140,26 @@ Everything else is `bridge` or `kernel`.
 | Activation | WH | Quasar | Evidence / to-close |
 |---|:--:|---|---|
 | `relu` | ✓ | `✓*` | `eltwise_unary/relu.h` Quasar branch; ResNet50-certified |
-| `relu_max` | ✓ | `bridge` | `_relu_max_` + `SfpuType::relu_max` exist; un-gate `relu.h:52-177` |
-| `relu_min` | ✓ | `bridge` | `_relu_min_` + `SfpuType::relu_min` exist; un-gate |
-| `leaky_relu` | ✓ | `bridge` | `_calculate_lrelu_` + `SfpuType::lrelu` exist; un-gate |
-| `relu6` | ✓ | `kernel` | no ckernel / `SfpuType` |
+| `relu_max` | ✓ | `bridge` | `_relu_max_` exists; un-gate `relu.h:52-177` |
+| `relu_min` | ✓ | `bridge` | `_relu_min_` exists; un-gate |
+| `leaky_relu` | ✓ | `bridge` | `_calculate_lrelu_` exists; un-gate |
+| `relu6` | ✓ | `kernel` | no ckernel |
 
 ### gelu / sigmoid / silu / tanh / square
 | Activation | WH | Quasar | Evidence / to-close |
 |---|:--:|---|---|
-| `gelu` | ✓ | `✓*` | bridge + `#else` branch (`gelu.h:42-55`) + `SfpuType::gelu`; compiles and sim-certified (interleaved/height × post/lhs). |
-| `gelu_tanh` | ✓ | `kernel` | inside `gelu.h` `#ifndef` (57-140); no `gelu_tanh` ckernel/`SfpuType` |
+| `gelu` | ✓ | `✓*` | bridge + `#else` branch (`gelu.h:42-55`); compiles and sim-certified (interleaved/height × post/lhs). |
+| `gelu_tanh` | ✓ | `kernel` | inside `gelu.h` `#ifndef` (57-140); no `gelu_tanh` ckernel |
 | `sigmoid` | ✓ | `✓*` | `compute_kernel_api.h:133` `#ifdef ARCH_QUASAR` branch; sim-certified |
 | `silu` | ✓ | `✓*` | `:162` branch; Llama SwiGLU-certified |
-| `tanh` | ✓ | `✓*` | `:215-228` `#else` branch + `ckernel_sfpu_tanh.h` + `SfpuType::tanh`; sim-certified |
-| `square` | ✓ | `✓*` | `:244-250` `#else` branch + `ckernel_sfpu_square.h` + `SfpuType::square`; sim-certified |
+| `tanh` | ✓ | `✓*` | `:215-228` `#else` branch + `ckernel_sfpu_tanh.h`; sim-certified |
+| `square` | ✓ | `✓*` | `:244-250` `#else` branch + `ckernel_sfpu_square.h`; sim-certified |
 
 ### exp / log
 | Activation | WH | Quasar | Evidence / to-close |
 |---|:--:|---|---|
 | `exp` | ✓ | `✓` | `eltwise_unary/exp.h` Quasar path |
-| `exp2` | ✓ | `kernel` | no ckernel/`SfpuType` (also blocks `ldexp`/`logaddexp2`) |
+| `exp2` | ✓ | `kernel` | no ckernel (also blocks `ldexp`/`logaddexp2`) |
 | `expm1` | ✓ | `kernel` | |
 | `log` | ✓ | `kernel` | blocks `logaddexp` |
 | `log2` | ✓ | `kernel` | blocks `logaddexp2` |
@@ -201,7 +202,7 @@ Everything else is `bridge` or `kernel`.
 ### sign / misc math
 | Activation | WH | Quasar | Evidence / to-close |
 |---|:--:|---|---|
-| `abs` | ✓ | `bridge` | `common/inc/experimental/ckernel_sfpu_abs.h` + `SfpuType::abs`; un-gate `abs_tile` (~`:437`) |
+| `abs` | ✓ | `bridge` | `common/inc/experimental/ckernel_sfpu_abs.h`; un-gate `abs_tile` (~`:437`) |
 | `abs_int32` | ✓ | `format` | int32 abs path inside the gated int block (~`:462`) |
 | `neg` | ✓ | `kernel` | blocks `rsub` (FPU path) |
 | `sign` `signbit` | ✓ | `kernel` | |
@@ -297,8 +298,8 @@ plus BOTH mixed compositions, `ROW_B_COL_A` and `ROW_A_COL_B` (Table 3) — sim-
 - **`bridge` → `✓`:** add `ckernel::sfpu::calculate_<op>` in `hw/ckernels/quasar/…/llk_sfpu/ckernel_sfpu_<op>.h`
   (copy `ckernel_sfpu_silu.h` / `ckernel_sfpu_gelu.h`), then change the compute-API bare `#ifndef ARCH_QUASAR`
   around `<op>_tile()` into an `#ifndef … #else … #endif` branch (mirror `gelu.h:42-55`).
-- **`kernel` → `bridge`:** add `_calculate_<op>_` in `tt_llk_quasar/common/inc/sfpu/` + a `SfpuType` entry
-  (`tt_llk_quasar/llk_lib/llk_defs.h`).
+- **`kernel` → `bridge`:** add `_calculate_<op>_` in `tt_llk_quasar/common/inc/sfpu/` and the op struct in
+  the layer-2 bridge header.
 - **No ops-side change needed:** `binary_ng` already emits the correct `<op>_tile()` / `<op>_binary_tile()`
   calls; every gap here is below the compute-API line.
 - **Verify:** add the op to the Quasar LLK test, run on the QSR sim (`run_test.sh`), then re-run
@@ -313,8 +314,7 @@ plus BOTH mixed compositions, `ROW_B_COL_A` and `ROW_A_COL_B` (Table 3) — sim-
 - Compute-API gates: `tt_metal/hw/inc/api/compute/eltwise_binary_sfpu.h` (binary SFPU),
   `compute_kernel_api.h` (gated blocks ~`:263-671`, ~`:828-1273`), `eltwise_unary/*.h`, per-op SFPU headers.
 - Quasar LLK-API bridges: `tt_metal/hw/ckernels/quasar/metal/llk_api/llk_sfpu/`.
-- Quasar ckernels + `SfpuType`: `tt_metal/tt-llk/tt_llk_quasar/common/inc/{sfpu,experimental}/`,
-  `…/llk_lib/llk_defs.h`. **(Authoritative build tree — NOT `third_party/tt_llk/tt_llk_quasar/`.)**
+- Quasar ckernels: `tt_metal/tt-llk/tt_llk_quasar/common/inc/{sfpu,experimental}/`. **(Authoritative build tree — NOT `third_party/tt_llk/tt_llk_quasar/`.)**
 - Quasar LLK tests: `tt_metal/tt-llk/tests/python_tests/quasar/test_eltwise_{binary,binary_sfpu,unary_sfpu}_quasar.py`
   (WH baselines: `tests/python_tests/test_eltwise_binary.py`, `test_eltwise_unary_sfpu.py`).
 - Broadcast primitive (Table 3): `tt_metal/hw/inc/api/compute/bcast.h` (`unary_bcast`/`_init`/`_uninit`) ·

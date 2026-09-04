@@ -9,6 +9,7 @@
 #include "ckernel_sfpu_recip.h"
 #include "cmath_common.h"
 #include "sfpu/ckernel_sfpu_rounding_ops.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -48,5 +49,20 @@ void rdiv_init() {
     sfpu_reciprocal_init<APPROXIMATION_MODE>();
 }
 
+// ---------------------------------------------------------------------------------------------------
+// Rdiv<APPROX, ROUNDING_MODE, DST_SYNC, DST_ACCUM, ITERATIONS>
+//   calculate(dst_index, vector_mode, value) -> calculate_rdiv
+//   init()                                   -> rdiv_init
+// Backs rdiv_tile / rdiv_tile_init.
+// ---------------------------------------------------------------------------------------------------
+template <bool APPROXIMATION_MODE, RoundingMode ROUNDING_MODE, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8>
+struct Rdiv
+    : SfpuUnaryOp<Rdiv<APPROXIMATION_MODE, ROUNDING_MODE, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static void kernel(uint32_t value) {
+        calculate_rdiv<APPROXIMATION_MODE, DST_ACCUM, ROUNDING_MODE, ITERATIONS>(value);
+    }
+
+    static void init_kernel() { rdiv_init<APPROXIMATION_MODE>(); }
+};
 }  // namespace sfpu
 }  // namespace ckernel

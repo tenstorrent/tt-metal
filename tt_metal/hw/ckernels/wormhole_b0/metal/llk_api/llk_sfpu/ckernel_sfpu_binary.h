@@ -14,6 +14,7 @@
 #include "ckernel_sfpu_conversions.h"
 #include "ckernel_sfpu_exp.h"
 #include "sfpu/ckernel_sfpu_log.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 using namespace sfpi;
 
@@ -221,6 +222,41 @@ inline void sfpu_binary_init() {
         _init_log_<APPROXIMATION_MODE>();
     }
 }
+
+// ---------------------------------------------------------------------------------------------------
+// SfpuBinary<APPROX, BINOP, DST_SYNC, DST_ACCUM, DST_ROUNDING_MODE, ITERATIONS>
+//   calculate(in0, in1, out, vector_mode) -> calculate_sfpu_binary_div (DIV), calculate_sfpu_binary_mul (MUL),
+//                                            calculate_sfpu_binary (ADD/SUB/RSUB/XLOGY)
+//   init()                                -> sfpu_binary_init<APPROX, BINOP>
+// Backs {div,mul,add,sub,rsub}_binary_tile[_init] and xlogy_binary_tile[_init].
+// DST_ROUNDING_MODE only affects ADD/SUB/RSUB with a bf16 dest.
+// ---------------------------------------------------------------------------------------------------
+template <
+    bool APPROXIMATION_MODE,
+    BinaryOp BINOP,
+    DstSync DST_SYNC,
+    bool DST_ACCUM,
+    DstRoundingMode DST_ROUNDING_MODE = DstRoundingMode::Default,
+    int ITERATIONS = 8>
+struct SfpuBinary : SfpuBinaryOp<
+                        SfpuBinary<APPROXIMATION_MODE, BINOP, DST_SYNC, DST_ACCUM, DST_ROUNDING_MODE, ITERATIONS>,
+                        DST_SYNC,
+                        DST_ACCUM> {
+    static void kernel(std::uint32_t dst_index_in0, std::uint32_t dst_index_in1, std::uint32_t dst_index_out) {
+        if constexpr (BINOP == BinaryOp::DIV) {
+            calculate_sfpu_binary_div<APPROXIMATION_MODE, BINOP, ITERATIONS, DST_ACCUM>(
+                dst_index_in0, dst_index_in1, dst_index_out);
+        } else if constexpr (BINOP == BinaryOp::MUL) {
+            calculate_sfpu_binary_mul<APPROXIMATION_MODE, BINOP, ITERATIONS, DST_ACCUM>(
+                dst_index_in0, dst_index_in1, dst_index_out);
+        } else {
+            calculate_sfpu_binary<APPROXIMATION_MODE, BINOP, ITERATIONS, DST_ACCUM, DST_ROUNDING_MODE>(
+                dst_index_in0, dst_index_in1, dst_index_out);
+        }
+    }
+
+    static void init_kernel() { sfpu_binary_init<APPROXIMATION_MODE, BINOP>(); }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

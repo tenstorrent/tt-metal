@@ -6,8 +6,7 @@
 
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
-#include "sfpu/ckernel_sfpu_rounding_ops.h"
-#include "llk_math_eltwise_unary_sfpu_macros.h"
+#include "ckernel_sfpu_rounding_ops.h"
 #endif
 
 namespace ckernel {
@@ -15,7 +14,11 @@ namespace ckernel {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void rounding_op_tile_init() { MATH(SFPU_UNARY_INIT(unused)); }
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void rounding_op_tile_init() {
+    // The init is the shared SFPU init; the rounding-op parameter of the op struct is irrelevant here.
+    MATH((sfpu::Rounding<APPROX, sfpu::RoundingOp::Round, DST_SYNC_MODE, is_fp32_dest_acc_en>::init()));
+}
 
 // clang-format off
 /**
@@ -31,9 +34,10 @@ ALWI void rounding_op_tile_init() { MATH(SFPU_UNARY_INIT(unused)); }
  * | idst            | The index of the tile in DST register buffer to perform ceil operation     | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void ceil_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_ceil_, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC));
+    MATH((sfpu::Rounding<APPROX, sfpu::RoundingOp::Ceil, DST_SYNC_MODE, is_fp32_dest_acc_en>::calculate(
+        idst, VectorMode::RC)));
 }
 
 // clang-format off
@@ -50,9 +54,10 @@ ALWI void ceil_tile(uint32_t idst) {
  * | idst            | The index of the tile in DST register buffer to perform floor operation    | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void floor_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_floor_, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC));
+    MATH((sfpu::Rounding<APPROX, sfpu::RoundingOp::Floor, DST_SYNC_MODE, is_fp32_dest_acc_en>::calculate(
+        idst, VectorMode::RC)));
 }
 
 // clang-format off
@@ -69,9 +74,10 @@ ALWI void floor_tile(uint32_t idst) {
  * | idst            | The index of the tile in DST register buffer to perform trunc operation    | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void trunc_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_trunc_, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC));
+    MATH((sfpu::Rounding<APPROX, sfpu::RoundingOp::Trunc, DST_SYNC_MODE, is_fp32_dest_acc_en>::calculate(
+        idst, VectorMode::RC)));
 }
 
 // clang-format off
@@ -89,9 +95,10 @@ ALWI void trunc_tile(uint32_t idst) {
  * | decimals        | The number of decimal places to round to.                                  | uint32_t |                                                       | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void round_tile(uint32_t idst, int32_t decimals) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_round_, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC, decimals));
+    MATH((sfpu::Rounding<APPROX, sfpu::RoundingOp::Round, DST_SYNC_MODE, is_fp32_dest_acc_en>::calculate(
+        idst, VectorMode::RC, decimals)));
 }
 
 // clang-format off
@@ -112,9 +119,10 @@ ALWI void round_tile(uint32_t idst, int32_t decimals) {
  * | idst            | The index of the tile in DST register buffer to perform the stochastic round on     | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void stochastic_round_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_stochastic_round_, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC));
+    MATH((sfpu::Rounding<APPROX, sfpu::RoundingOp::StochasticRound, DST_SYNC_MODE, is_fp32_dest_acc_en>::calculate(
+        idst, VectorMode::RC)));
 }
 
 // clang-format off
@@ -131,9 +139,10 @@ ALWI void stochastic_round_tile(uint32_t idst) {
  * | idst            | The index of the tile in DST register buffer to perform frac operation     | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void frac_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_frac_, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC));
+    MATH((sfpu::Rounding<APPROX, sfpu::RoundingOp::Frac, DST_SYNC_MODE, is_fp32_dest_acc_en>::calculate(
+        idst, VectorMode::RC)));
 }
 
 }  // namespace ckernel

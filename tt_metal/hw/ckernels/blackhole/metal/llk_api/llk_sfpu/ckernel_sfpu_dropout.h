@@ -9,6 +9,7 @@
 #include "ckernel_ops.h"
 #include "cmath_common.h"
 #include "sfpi.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -61,5 +62,17 @@ inline void dropout_init(const uint seed) {
     init_prng_seed(seed);
 }
 
+// ---------------------------------------------------------------------------------------------------
+// Dropout<APPROX, DST_SYNC, DST_ACCUM, ITERATIONS>::calculate(dst_index, vector_mode, probability, scale)
+//   backs dropout_tile; init(seed) backs dropout_kernel_init (init_kernel -> dropout_init(seed)).
+// ---------------------------------------------------------------------------------------------------
+template <bool APPROXIMATION_MODE, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8>
+struct Dropout : SfpuUnaryOp<Dropout<APPROXIMATION_MODE, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static void kernel(uint32_t probability, uint32_t scale) {
+        calculate_dropout<APPROXIMATION_MODE, ITERATIONS>(probability, scale);
+    }
+
+    static void init_kernel(const uint32_t seed) { dropout_init<APPROXIMATION_MODE>(seed); }
+};
 }  // namespace sfpu
 }  // namespace ckernel

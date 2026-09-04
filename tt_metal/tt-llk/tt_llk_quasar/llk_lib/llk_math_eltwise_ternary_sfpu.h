@@ -12,21 +12,6 @@
 #include "llk_math_eltwise_sfpu_common.h"
 
 /**
- * @brief Initializes shared SFPU state for ternary element-wise operations.
- *
- * Programs ADDR_MOD_7 with dest.incr=0 via the common SFPU init. Per-op
- * state (e.g. ADDR_MOD_6 for ops that auto-advance dest) is set up by the
- * op's own @c _init_<op>_ call after this one.
- *
- * @tparam sfpu_op  The ternary SFPU operation type (e.g. @c SfpuType::where).
- */
-template <SfpuType sfpu_op>
-inline void _llk_math_eltwise_ternary_sfpu_init_()
-{
-    _llk_math_sfpu_init_();
-}
-
-/**
  * @brief Dispatches a ternary SFPU kernel over faces selected by @p vector_mode.
  *
  * Sets the DEST section base to tile 0, calls @p sfpu_func once per selected face with the

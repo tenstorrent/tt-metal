@@ -9,6 +9,7 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "llk_math_eltwise_sfpu_op.h"
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "sfpi.h"
 
@@ -1023,6 +1024,233 @@ inline void init_typecast_uint_to_uint8() {
     sfpi::vConstIntPrgm0 = 0xFF;
     sfpi::vConstIntPrgm1 = UINT16_LOW_MASK;
 }
+
+// ---------------------------------------------------------------------------------------------------
+// Typecast<IN_FORMAT, OUT_FORMAT, APPROX, DST_SYNC, DST_ACCUM, ITERATIONS>
+//   calculate(dst_index, vector_mode) -> the calculate_typecast_<from>_to_<to> kernel for the pair
+//   init()                            -> the matching init_typecast_<from>_to_<to>, else the bare typecast init
+// Backs typecast_tile / typecast_tile_init. Pairs the unpacker/packer convert on their own (e.g. Bfp8_b ->
+// Float16_b) and unsupported pairs have no SFPU kernel: calculate() issues nothing and init() runs the bare
+// per-op typecast init, exactly as the former if-constexpr chain in the compute API header did.
+// ---------------------------------------------------------------------------------------------------
+namespace typecast_detail {
+
+// Which calculate_typecast_* kernel serves an (in, out) pair; None means no SFPU kernel runs.
+enum class Kernel {
+    None,
+    Fp32ToUint16,
+    Uint16ToFp16b,
+    Int32ToFp16b,
+    Fp32ToInt32,
+    Fp32ToFp16b,
+    Uint16ToFp32,
+    Int32ToFp32,
+    Fp32ToUint32,
+    Uint32ToFp16b,
+    Uint32ToFp32,
+    Uint16ToUint32,
+    Uint32ToUint16,
+    Int32ToUint16,
+    Fp32ToUint8,
+    UintToUint8,
+};
+
+// Float formats that sit in Dest as fp32 / fp16b and share the fp32_to_* kernels.
+constexpr bool is_float(DataFormat f) {
+    return f == DataFormat::Float32 || f == DataFormat::Float16_b || f == DataFormat::Bfp8_b || f == DataFormat::Bfp4_b;
+}
+
+// 16-bit float outputs that share the *_to_fp16b kernels (a Float32 output has its own *_to_fp32 kernels).
+constexpr bool is_fp16b_like(DataFormat f) {
+    return f == DataFormat::Float16_b || f == DataFormat::Bfp8_b || f == DataFormat::Bfp4_b;
+}
+
+constexpr Kernel select_kernel(DataFormat in, DataFormat out) {
+    if (is_float(in)) {
+        if (out == DataFormat::UInt16) {
+            return Kernel::Fp32ToUint16;
+        }
+        if (out == DataFormat::Int32) {
+            return Kernel::Fp32ToInt32;
+        }
+        if (out == DataFormat::UInt32) {
+            return Kernel::Fp32ToUint32;
+        }
+        if (out == DataFormat::UInt8) {
+            return Kernel::Fp32ToUint8;
+        }
+        if (in == DataFormat::Float32 && out == DataFormat::Float16_b) {
+            return Kernel::Fp32ToFp16b;
+        }
+        return Kernel::None;  // every other float -> float pair is handled by the unpacker/packer
+    }
+    if (in == DataFormat::UInt16) {
+        if (is_fp16b_like(out)) {
+            return Kernel::Uint16ToFp16b;
+        }
+        if (out == DataFormat::Float32) {
+            return Kernel::Uint16ToFp32;
+        }
+        if (out == DataFormat::UInt32 || out == DataFormat::Int32) {
+            return Kernel::Uint16ToUint32;
+        }
+        if (out == DataFormat::UInt8) {
+            return Kernel::UintToUint8;
+        }
+        return Kernel::None;
+    }
+    if (in == DataFormat::Int32) {
+        if (is_fp16b_like(out)) {
+            return Kernel::Int32ToFp16b;
+        }
+        if (out == DataFormat::Float32) {
+            return Kernel::Int32ToFp32;
+        }
+        if (out == DataFormat::UInt16) {
+            return Kernel::Int32ToUint16;
+        }
+        if (out == DataFormat::UInt8) {
+            return Kernel::UintToUint8;
+        }
+        return Kernel::None;
+    }
+    if (in == DataFormat::UInt32) {
+        if (is_fp16b_like(out)) {
+            return Kernel::Uint32ToFp16b;
+        }
+        if (out == DataFormat::Float32) {
+            return Kernel::Uint32ToFp32;
+        }
+        if (out == DataFormat::UInt16) {
+            return Kernel::Uint32ToUint16;
+        }
+        if (out == DataFormat::UInt8) {
+            return Kernel::UintToUint8;
+        }
+        return Kernel::None;
+    }
+    if (in == DataFormat::UInt8) {
+        // UInt8 is zero-extended in Dest, so it reuses the uint32 kernels; UInt8 -> Int32 / UInt32 needs none.
+        if (is_fp16b_like(out)) {
+            return Kernel::Uint32ToFp16b;
+        }
+        if (out == DataFormat::Float32) {
+            return Kernel::Uint32ToFp32;
+        }
+        if (out == DataFormat::UInt16) {
+            return Kernel::Uint32ToUint16;
+        }
+        return Kernel::None;
+    }
+    return Kernel::None;
+}
+
+// fp32_to_int32 / fp32_to_uint32 have no dedicated init and, like the no-kernel pairs, only need ADDR_MOD_6.
+constexpr bool has_dedicated_init(Kernel k) {
+    return k != Kernel::None && k != Kernel::Fp32ToInt32 && k != Kernel::Fp32ToUint32;
+}
+
+// init_kernel for every typecast pair: the kernel's dedicated init_typecast_* function where one exists
+// (each programs ADDR_MOD_6 itself), otherwise just ADDR_MOD_6 (dest incr 2).
+template <Kernel K, bool APPROXIMATION_MODE>
+struct Init {
+    static void init_kernel() {
+        // Every typecast kernel stores through ADDR_MOD_6 with dest auto-increment. The dedicated
+        // init_typecast_* functions program it themselves; the remaining pairs get it here.
+        if constexpr (!has_dedicated_init(K)) {
+            addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+        } else if constexpr (K == Kernel::Fp32ToUint16) {
+            init_typecast_fp32_to_uint16<APPROXIMATION_MODE>();
+        } else if constexpr (K == Kernel::Uint16ToFp16b) {
+            init_typecast_uint16_to_fp16b<APPROXIMATION_MODE>();
+        } else if constexpr (K == Kernel::Int32ToFp16b) {
+            init_typecast_int32_to_fp16b<APPROXIMATION_MODE>();
+        } else if constexpr (K == Kernel::Fp32ToFp16b) {
+            init_typecast_fp32_to_fp16b<APPROXIMATION_MODE>();
+        } else if constexpr (K == Kernel::Uint16ToFp32) {
+            init_typecast_uint16_to_fp32<APPROXIMATION_MODE>();
+        } else if constexpr (K == Kernel::Int32ToFp32) {
+            init_typecast_int32_to_fp32<APPROXIMATION_MODE>();
+        } else if constexpr (K == Kernel::Uint32ToFp16b) {
+            init_typecast_uint32_to_fp16b<APPROXIMATION_MODE>();
+        } else if constexpr (K == Kernel::Uint32ToFp32) {
+            init_typecast_uint32_to_fp32<APPROXIMATION_MODE>();
+        } else if constexpr (K == Kernel::Uint16ToUint32) {
+            init_typecast_uint16_to_uint32<APPROXIMATION_MODE>();
+        } else if constexpr (K == Kernel::Uint32ToUint16) {
+            init_typecast_uint32_to_uint16<APPROXIMATION_MODE>();
+        } else if constexpr (K == Kernel::Int32ToUint16) {
+            init_typecast_int32_to_uint16<APPROXIMATION_MODE>();
+        } else if constexpr (K == Kernel::Fp32ToUint8) {
+            init_typecast_fp32_to_uint8<APPROXIMATION_MODE>();
+        } else {
+            static_assert(K == Kernel::UintToUint8, "kernel without a dedicated init");
+            init_typecast_uint_to_uint8<APPROXIMATION_MODE>();
+        }
+    }
+};
+
+}  // namespace typecast_detail
+
+template <
+    DataFormat IN_FORMAT,
+    DataFormat OUT_FORMAT,
+    bool APPROXIMATION_MODE,
+    DstSync DST_SYNC,
+    bool DST_ACCUM,
+    int ITERATIONS = 8>
+struct Typecast : SfpuUnaryOp<
+                      Typecast<IN_FORMAT, OUT_FORMAT, APPROXIMATION_MODE, DST_SYNC, DST_ACCUM, ITERATIONS>,
+                      DST_SYNC,
+                      DST_ACCUM>,
+                  typecast_detail::Init<typecast_detail::select_kernel(IN_FORMAT, OUT_FORMAT), APPROXIMATION_MODE> {
+    using typecast_detail::Init<typecast_detail::select_kernel(IN_FORMAT, OUT_FORMAT), APPROXIMATION_MODE>::init_kernel;
+    using Base = SfpuUnaryOp<Typecast, DST_SYNC, DST_ACCUM>;
+    using Kernel = typecast_detail::Kernel;
+
+    static constexpr Kernel kernel_id = typecast_detail::select_kernel(IN_FORMAT, OUT_FORMAT);
+
+    // Pairs without an SFPU kernel issue nothing (the unpacker/packer perform the conversion).
+    inline __attribute__((always_inline)) static void calculate(std::uint32_t dst_index, VectorMode vector_mode) {
+        if constexpr (kernel_id != Kernel::None) {
+            Base::calculate(dst_index, vector_mode);
+        }
+    }
+
+    static void kernel() {
+        if constexpr (kernel_id == Kernel::Fp32ToUint16) {
+            calculate_typecast_fp32_to_uint16<APPROXIMATION_MODE, ITERATIONS, DST_ACCUM>();
+        } else if constexpr (kernel_id == Kernel::Uint16ToFp16b) {
+            calculate_typecast_uint16_to_fp16b<APPROXIMATION_MODE, ITERATIONS>();
+        } else if constexpr (kernel_id == Kernel::Int32ToFp16b) {
+            calculate_typecast_int32_to_fp16b<APPROXIMATION_MODE, ITERATIONS>();
+        } else if constexpr (kernel_id == Kernel::Fp32ToInt32) {
+            calculate_typecast_fp32_to_int32<APPROXIMATION_MODE, ITERATIONS>();
+        } else if constexpr (kernel_id == Kernel::Fp32ToFp16b) {
+            calculate_typecast_fp32_to_fp16b<APPROXIMATION_MODE, ITERATIONS>();
+        } else if constexpr (kernel_id == Kernel::Uint16ToFp32) {
+            calculate_typecast_uint16_to_fp32<APPROXIMATION_MODE, ITERATIONS, DST_ACCUM>();
+        } else if constexpr (kernel_id == Kernel::Int32ToFp32) {
+            calculate_typecast_int32_to_fp32<APPROXIMATION_MODE, ITERATIONS>();
+        } else if constexpr (kernel_id == Kernel::Fp32ToUint32) {
+            calculate_typecast_fp32_to_uint32<APPROXIMATION_MODE, ITERATIONS>();
+        } else if constexpr (kernel_id == Kernel::Uint32ToFp16b) {
+            calculate_typecast_uint32_to_fp16b<APPROXIMATION_MODE, ITERATIONS>();
+        } else if constexpr (kernel_id == Kernel::Uint32ToFp32) {
+            calculate_typecast_uint32_to_fp32<APPROXIMATION_MODE, ITERATIONS>();
+        } else if constexpr (kernel_id == Kernel::Uint16ToUint32) {
+            calculate_typecast_uint16_to_uint32<APPROXIMATION_MODE, ITERATIONS, DST_ACCUM>();
+        } else if constexpr (kernel_id == Kernel::Uint32ToUint16) {
+            calculate_typecast_uint32_to_uint16<APPROXIMATION_MODE, ITERATIONS>();
+        } else if constexpr (kernel_id == Kernel::Int32ToUint16) {
+            calculate_typecast_int32_to_uint16<APPROXIMATION_MODE, ITERATIONS>();
+        } else if constexpr (kernel_id == Kernel::Fp32ToUint8) {
+            calculate_typecast_fp32_to_uint8<APPROXIMATION_MODE, ITERATIONS>();
+        } else if constexpr (kernel_id == Kernel::UintToUint8) {
+            calculate_typecast_uint_to_uint8<APPROXIMATION_MODE, ITERATIONS, (IN_FORMAT == DataFormat::UInt16)>();
+        }
+    }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

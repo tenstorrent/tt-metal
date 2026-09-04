@@ -9,6 +9,7 @@
 
 #include "ckernel_ops.h"
 #include "sfpi.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -134,5 +135,50 @@ inline void calculate_logical_right_shift(
     }
 }
 
+// ---------------------------------------------------------------------------------------------------
+// BinaryShift<APPROXIMATION_MODE, SHIFT_OP, INSTRUCTION_MODE, DST_SYNC, DST_ACCUM, SIGN_MAGNITUDE_FORMAT, ITERATIONS>
+//   SHIFT_OP selects calculate_binary_left_shift / calculate_binary_right_shift / calculate_logical_right_shift.
+//   init() is the shared SFPU init only.
+//   Backs binary_left_shift_tile, binary_right_shift_tile, binary_logical_right_shift_tile,
+//   binary_shift_tile_init (api/compute/binary_shift.h).
+// ---------------------------------------------------------------------------------------------------
+enum class BinaryShiftOp : std::uint8_t {
+    LEFT = 0,
+    RIGHT = 1,
+    LOGICAL_RIGHT = 2,
+};
+
+template <
+    bool APPROXIMATION_MODE,
+    BinaryShiftOp SHIFT_OP,
+    InstrModLoadStore INSTRUCTION_MODE,
+    DstSync DST_SYNC,
+    bool DST_ACCUM,
+    bool SIGN_MAGNITUDE_FORMAT = false,
+    int ITERATIONS = 8>
+struct BinaryShift : SfpuBinaryOp<
+                         BinaryShift<
+                             APPROXIMATION_MODE,
+                             SHIFT_OP,
+                             INSTRUCTION_MODE,
+                             DST_SYNC,
+                             DST_ACCUM,
+                             SIGN_MAGNITUDE_FORMAT,
+                             ITERATIONS>,
+                         DST_SYNC,
+                         DST_ACCUM> {
+    static void kernel(std::uint32_t dst_index_in0, std::uint32_t dst_index_in1, std::uint32_t dst_index_out) {
+        if constexpr (SHIFT_OP == BinaryShiftOp::LEFT) {
+            calculate_binary_left_shift<APPROXIMATION_MODE, ITERATIONS, INSTRUCTION_MODE, SIGN_MAGNITUDE_FORMAT>(
+                dst_index_in0, dst_index_in1, dst_index_out);
+        } else if constexpr (SHIFT_OP == BinaryShiftOp::RIGHT) {
+            calculate_binary_right_shift<APPROXIMATION_MODE, ITERATIONS, INSTRUCTION_MODE, SIGN_MAGNITUDE_FORMAT>(
+                dst_index_in0, dst_index_in1, dst_index_out);
+        } else {
+            calculate_logical_right_shift<APPROXIMATION_MODE, ITERATIONS, INSTRUCTION_MODE, SIGN_MAGNITUDE_FORMAT>(
+                dst_index_in0, dst_index_in1, dst_index_out);
+        }
+    }
+};
 }  // namespace sfpu
 }  // namespace ckernel

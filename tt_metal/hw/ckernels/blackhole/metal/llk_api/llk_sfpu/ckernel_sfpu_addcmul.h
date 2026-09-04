@@ -8,6 +8,7 @@
 #include "llk_defs.h"
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_converter.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel::sfpu {
 
@@ -61,4 +62,22 @@ inline void calculate_addcmul(
         sfpi::dst_reg += 2;
     }
 }
+// ---------------------------------------------------------------------------------------------------
+// Approach A dispatch struct (prototype).
+// Addcmul<APPROX, FORMAT, DST_SYNC, DST_ACCUM>::calculate(in0, in1, in2, out, vector_mode, value)
+// Addcmul<...>::init()   (bare: shared ternary init only)
+// ---------------------------------------------------------------------------------------------------
+template <bool APPROXIMATION_MODE, DataFormat FORMAT, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8>
+struct Addcmul
+    : SfpuTernaryOp<Addcmul<APPROXIMATION_MODE, FORMAT, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static void kernel(
+        std::uint32_t dst_index_in0,
+        std::uint32_t dst_index_in1,
+        std::uint32_t dst_index_in2,
+        std::uint32_t dst_index_out,
+        std::uint32_t value) {
+        calculate_addcmul<APPROXIMATION_MODE, DST_ACCUM, FORMAT, ITERATIONS>(
+            dst_index_in0, dst_index_in1, dst_index_in2, dst_index_out, value);
+    }
+};
 }  // namespace ckernel::sfpu

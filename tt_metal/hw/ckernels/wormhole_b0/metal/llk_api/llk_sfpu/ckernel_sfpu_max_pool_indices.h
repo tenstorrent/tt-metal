@@ -9,6 +9,7 @@
 #include "ckernel_addrmod.h"
 #include "ckernel_instr_params.h"
 #include "sfpi.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -395,6 +396,35 @@ inline void init_max_pool_with_indices() {
         TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
     }
 }
+
+// MaxPoolWithIndices<APPROX, LAYOUT, DST_SYNC, DST_ACCUM, NUM_ROWS, ACCUMULATE, ITERATIONS>:
+// max_reduce_with_indices / max_reduce_with_indices_init (compute_kernel_api.h). Binary op: values tile,
+// indices tile, unused out index. NUM_ROWS / ACCUMULATE / ITERATIONS only affect the kernel, so init can
+// leave them defaulted.
+template <
+    bool APPROXIMATION_MODE,
+    DataLayout LAYOUT,
+    DstSync DST_SYNC,
+    bool DST_ACCUM,
+    int NUM_ROWS = 9,
+    bool ACCUMULATE = false,
+    int ITERATIONS = 8>
+struct MaxPoolWithIndices
+    : SfpuBinaryOp<
+          MaxPoolWithIndices<APPROXIMATION_MODE, LAYOUT, DST_SYNC, DST_ACCUM, NUM_ROWS, ACCUMULATE, ITERATIONS>,
+          DST_SYNC,
+          DST_ACCUM> {
+    static void kernel(
+        std::uint32_t values_tile_idx,
+        std::uint32_t indices_tile_idx,
+        std::uint32_t unused_tile_idx,
+        std::uint32_t chunk) {
+        calculate_max_pool_with_indices<APPROXIMATION_MODE, DST_ACCUM, NUM_ROWS, ITERATIONS, LAYOUT, ACCUMULATE>(
+            values_tile_idx, indices_tile_idx, unused_tile_idx, chunk);
+    }
+
+    static void init_kernel() { init_max_pool_with_indices<APPROXIMATION_MODE, LAYOUT>(); }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

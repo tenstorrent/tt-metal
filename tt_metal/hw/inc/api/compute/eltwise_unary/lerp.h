@@ -7,7 +7,6 @@
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_lerp.h"
-#include "llk_math_eltwise_ternary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
@@ -26,21 +25,17 @@ namespace ckernel {
 // clang-format on
 template <DataFormat data_format, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void lerp_tile(uint32_t idst0, uint32_t idst1, uint32_t idst2, uint32_t odst) {
-    MATH((SFPU_TERNARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_lerp,
-        (APPROX, is_fp32_dest_acc_en, data_format, 8 /* ITERATIONS */),
-        idst0,
-        idst1,
-        idst2,
-        odst,
-        VectorMode::RC)));
+    MATH((sfpu::Lerp<APPROX, data_format, DST_SYNC_MODE, is_fp32_dest_acc_en>::calculate(
+        idst0, idst1, idst2, odst, VectorMode::RC)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void lerp_tile_init() { MATH((SFPU_TERNARY_INIT(lerp))); }
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void lerp_tile_init() {
+    // The init is the shared SFPU init; the data-format parameter of the op struct is irrelevant here.
+    MATH((sfpu::Lerp<APPROX, DataFormat::Float16_b, DST_SYNC_MODE, is_fp32_dest_acc_en>::init()));
+}
 
 }  // namespace ckernel

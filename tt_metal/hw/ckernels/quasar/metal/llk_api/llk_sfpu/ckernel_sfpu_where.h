@@ -13,6 +13,7 @@
 #include "cmath_common.h"
 #include "lltt.h"
 #include "sfpi.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -74,6 +75,28 @@ inline void calculate_where(
         sfpi::dst_reg++;
     }
 }
+
+// ---------------------------------------------------------------------------------------------------
+// Where<APPROX, FORMAT, DST_SYNC, DST_ACCUM, ITERATIONS>::calculate(in0, in1, in2, out, vector_mode)
+//   backs where_tile<data_format> and where_tile_init. Same interface as WH/BH; FORMAT is unused on
+//   Quasar (calculate_where reads the dest format from the hardware config) and init is the shared SFPU
+//   init only (no SFPLOADMACRO setup).
+// ---------------------------------------------------------------------------------------------------
+template <
+    bool APPROXIMATION_MODE,
+    [[maybe_unused]] DataFormat FORMAT,
+    DstSync DST_SYNC,
+    bool DST_ACCUM,
+    int ITERATIONS = SFPU_ITERATIONS>
+struct Where : SfpuTernaryOp<Where<APPROXIMATION_MODE, FORMAT, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static void kernel(
+        std::uint32_t dst_index_in0,
+        std::uint32_t dst_index_in1,
+        std::uint32_t dst_index_in2,
+        std::uint32_t dst_index_out) {
+        calculate_where<APPROXIMATION_MODE, ITERATIONS>(dst_index_in0, dst_index_in1, dst_index_in2, dst_index_out);
+    }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

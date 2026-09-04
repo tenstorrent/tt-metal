@@ -72,7 +72,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
     _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
 
-    _llk_math_eltwise_binary_sfpu_init_<SfpuType::add1>();
+    _llk_math_eltwise_sfpu_init_();
 
     _llk_math_wait_for_dest_available_<DST_SYNC>();
 

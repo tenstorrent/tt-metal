@@ -7,6 +7,7 @@
 #include "cmath_common.h"  // math::reset_counters, p_setrwc
 #include "ckernel_sfpu_sigmoid.h"
 #include "ckernel_sfpu_recip.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel::sfpu {
 
@@ -35,5 +36,15 @@ inline void silu_init() {
     // calculate_silu uses the non-approx sigmoid path via _sfpu_sigmoid_, so we must use non-approx sigmoid_init
     sigmoid_init<false>();
 }
+
+// Silu<APPROX, DST_SYNC, DST_ACCUM, ITERATIONS>: silu_tile / silu_tile_init and the
+// silu_tile_pack / silu_tile_init_pack pack-thread variants (compute_kernel_api.h).
+// APPROXIMATION_MODE only reaches silu_init; the kernel is always the accurate path.
+template <bool APPROXIMATION_MODE, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8>
+struct Silu : SfpuUnaryOp<Silu<APPROXIMATION_MODE, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static void kernel() { calculate_silu<DST_ACCUM, ITERATIONS>(); }
+
+    static void init_kernel() { silu_init<APPROXIMATION_MODE>(); }
+};
 
 }  // namespace ckernel::sfpu

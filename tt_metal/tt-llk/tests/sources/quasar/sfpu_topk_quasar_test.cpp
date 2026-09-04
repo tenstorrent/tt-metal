@@ -142,7 +142,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_eltwise_sfpu_common.h"
 #include "llk_math_eltwise_unary_datacopy.h"
 #include "llk_sfpu/ckernel_sfpu_topk.h"
-#include "llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h"
+#include "llk_sfpu/llk_math_eltwise_sfpu_op.h"
 #include "params.h"
 
 using namespace ckernel;
@@ -169,7 +169,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t math_data_types[NUM_STAGES] = {formats.math, TOPK_INDEX_FORMAT};
 
     // Initialize topk SFPU: base init, ADDR_MOD_6, and the index-tracking LaneConfig bit.
-    SFPU_UNARY_INIT_FN(topk_local_sort, sfpu::topk_init, (APPROX));
+    sfpu::TopkLocalSort<APPROX, TOPK_STABLE_SORT, dest_sync, is_fp32_dest_acc_en>::init();
 
     // Datacopy 4 tiles (2 value + 2 index) from SRC to DEST; the FPU dvalid
     // wait gates the writes until pack releases the bank.
@@ -219,61 +219,26 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 // Run the topk stages. RC_custom issues one SFPU call per tile (no per-face walk).
                 if (first_iter)
                 {
-                    SFPU_UNARY_CALL(
-                        dest_sync,
-                        is_fp32_dest_acc_en,
-                        calculate_bitonic_topk_phases_steps,
-                        (APPROX, is_fp32_dest_acc_en, TOPK_STABLE_SORT),
-                        dst_index,
-                        VectorMode::RC_custom,
-                        TOPK_SORT_DIRECTION,
-                        end_phase,
-                        0 /*start_phase*/,
-                        0 /*end_step*/,
-                        0 /*start_step*/);
+                    SfpuUnaryFn<sfpu::calculate_bitonic_topk_phases_steps<APPROX, is_fp32_dest_acc_en, TOPK_STABLE_SORT>, dest_sync, is_fp32_dest_acc_en>::
+                        calculate(dst_index, VectorMode::RC_custom, TOPK_SORT_DIRECTION, end_phase, 0 /*start_phase*/, 0 /*end_step*/, 0 /*start_step*/);
                 }
                 else
                 {
-                    SFPU_UNARY_CALL(
-                        dest_sync,
-                        is_fp32_dest_acc_en,
-                        calculate_bitonic_topk_rebuild,
-                        (APPROX, is_fp32_dest_acc_en, TOPK_STABLE_SORT),
-                        dst_index,
-                        VectorMode::RC_custom,
-                        TOPK_SORT_DIRECTION,
-                        current_iteration,
-                        TOPK_K,
-                        TOPK_LOGK,
-                        0 /* skip_second */);
+                    SfpuUnaryFn<sfpu::calculate_bitonic_topk_rebuild<APPROX, is_fp32_dest_acc_en, TOPK_STABLE_SORT>, dest_sync, is_fp32_dest_acc_en>::calculate(
+                        dst_index, VectorMode::RC_custom, TOPK_SORT_DIRECTION, current_iteration, TOPK_K, TOPK_LOGK, 0 /* skip_second */);
                 }
 
                 // Always merge
-                SFPU_UNARY_CALL(
+                SfpuUnaryFn<
+                    sfpu::calculate_bitonic_topk_merge<APPROX, is_fp32_dest_acc_en, TOPK_SORT_DIRECTION, TOPK_STABLE_SORT>,
                     dest_sync,
-                    is_fp32_dest_acc_en,
-                    calculate_bitonic_topk_merge,
-                    (APPROX, is_fp32_dest_acc_en, TOPK_SORT_DIRECTION, TOPK_STABLE_SORT),
-                    dst_index,
-                    VectorMode::RC_custom,
-                    current_iteration,
-                    TOPK_K);
+                    is_fp32_dest_acc_en>::calculate(dst_index, VectorMode::RC_custom, current_iteration, TOPK_K);
 
                 // Final iteration: extra rebuild
                 if (last_iter)
                 {
-                    SFPU_UNARY_CALL(
-                        dest_sync,
-                        is_fp32_dest_acc_en,
-                        calculate_bitonic_topk_rebuild,
-                        (APPROX, is_fp32_dest_acc_en, TOPK_STABLE_SORT),
-                        dst_index,
-                        VectorMode::RC_custom,
-                        TOPK_SORT_DIRECTION,
-                        current_iteration,
-                        TOPK_K,
-                        TOPK_LOGK,
-                        1 /* skip_second */);
+                    SfpuUnaryFn<sfpu::calculate_bitonic_topk_rebuild<APPROX, is_fp32_dest_acc_en, TOPK_STABLE_SORT>, dest_sync, is_fp32_dest_acc_en>::calculate(
+                        dst_index, VectorMode::RC_custom, TOPK_SORT_DIRECTION, current_iteration, TOPK_K, TOPK_LOGK, 1 /* skip_second */);
                 }
 
                 // Release the SFPU dvalid to the PACK client.
@@ -341,7 +306,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     if (last_iter)
                     {
                         const int tile_L1_offset = current_tile_row * NUM_TILES_IN_RESULT_BUFFER_PER_ROW + stage_index;
-                        l1_addr_16B               = params.buffer_Res[tile_L1_offset] / 16;
+                        l1_addr_16B              = params.buffer_Res[tile_L1_offset] / 16;
                     }
                     else
                     {

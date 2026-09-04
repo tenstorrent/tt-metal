@@ -11,6 +11,7 @@
 #include "sfpi.h"
 #include "ckernel_sfpu_exp.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 using namespace sfpi;
 
@@ -345,6 +346,23 @@ inline void sfpu_binary_pow_init() {
     sfpi::vConstFloatPrgm0 = 1.442695f;
     sfpi::vConstFloatPrgm1 = -127.0f;
 }
+
+// ---------------------------------------------------------------------------------------------------
+// SfpuBinaryPow<APPROX, DST_SYNC, DST_ACCUM, ITERATIONS>
+//   calculate(in0, in1, out, vector_mode) -> calculate_sfpu_binary_pow
+//   init()                                -> sfpu_binary_pow_init
+// Backs power_binary_tile / power_binary_tile_init.
+// ---------------------------------------------------------------------------------------------------
+template <bool APPROXIMATION_MODE, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8>
+struct SfpuBinaryPow
+    : SfpuBinaryOp<SfpuBinaryPow<APPROXIMATION_MODE, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static void kernel(uint32_t dst_index_in0, uint32_t dst_index_in1, uint32_t dst_index_out) {
+        calculate_sfpu_binary_pow<APPROXIMATION_MODE, ITERATIONS, DST_ACCUM>(
+            dst_index_in0, dst_index_in1, dst_index_out);
+    }
+
+    static void init_kernel() { sfpu_binary_pow_init<APPROXIMATION_MODE>(); }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

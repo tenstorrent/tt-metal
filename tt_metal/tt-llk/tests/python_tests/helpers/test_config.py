@@ -1552,10 +1552,7 @@ class TestConfig:
         return header_content
 
     def generate_build_header(self) -> str:
-        if TestConfig.ARCH == ChipArchitecture.QUASAR:
-            sfpu_types_include = ""
-        else:
-            sfpu_types_include = '#include "llk_sfpu_types.h"'
+        sfpu_types_include = '#include "sfpu_test_ops.h"'
 
         header_content: list[str] = [
             "// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC",

@@ -9,13 +9,12 @@
 #include "ckernel_defs.h"
 #include "cmath_common.h"
 #include "sfpu/ckernel_sfpu_converter.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 using namespace sfpi;
 
 namespace ckernel {
 namespace sfpu {
-
-inline void heaviside_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_heaviside(std::uint32_t value) {
@@ -45,6 +44,13 @@ inline void calculate_heaviside(std::uint32_t value) {
         dst_reg++;
     }
 }
+
+// Heaviside<APPROX, DST_SYNC, DST_ACCUM, ITERATIONS>: heaviside_tile / heaviside_tile_init
+// (compute_kernel_api.h). init() is the shared SFPU init only.
+template <bool APPROXIMATION_MODE, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8>
+struct Heaviside : SfpuUnaryOp<Heaviside<APPROXIMATION_MODE, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static void kernel(std::uint32_t value) { calculate_heaviside<APPROXIMATION_MODE, ITERATIONS>(value); }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

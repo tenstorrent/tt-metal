@@ -9,6 +9,7 @@
 #include "ckernel_sfpu_exp.h"
 #include "cmath_common.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 /*
  * The expm1(x) code is derived from code by Norbert Juffa.
@@ -201,5 +202,13 @@ void expm1_init() {
         sfpi::vConstFloatPrgm2 = 1.666259766e-01f;      // c1
     }
 }
+
+// Expm1<APPROX, DST_SYNC, DST_ACCUM, ITERATIONS>: expm1_tile / expm1_tile_init (compute_kernel_api.h).
+template <bool APPROXIMATION_MODE, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8>
+struct Expm1 : SfpuUnaryOp<Expm1<APPROXIMATION_MODE, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static void kernel() { calculate_expm1<APPROXIMATION_MODE, DST_ACCUM, ITERATIONS>(); }
+
+    static void init_kernel() { expm1_init<APPROXIMATION_MODE, DST_ACCUM>(); }
+};
 
 }  // namespace ckernel::sfpu

@@ -5,7 +5,7 @@
 #pragma once
 
 #include <cstdint>
-#include "llk_math_eltwise_unary_sfpu_init.h"
+#include "llk_math_eltwise_sfpu_op.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
 #include "experimental/llk_sfpu/ckernel_sfpu_sdpa_reduce_row.h"
 

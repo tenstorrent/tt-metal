@@ -10,6 +10,7 @@
 #include "ckernel_sfpu_exp.h"
 #include "cmath_common.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel::sfpu {
 
@@ -149,4 +150,16 @@ void i1_init() {
     sfpu_reciprocal_init<APPROXIMATION_MODE>();
 }
 
+// ---------------------------------------------------------------------------------------------------
+// I1<APPROX, DST_SYNC, DST_ACCUM, ITERATIONS>
+//   calculate(dst_index, vector_mode) -> calculate_i1
+//   init()                            -> i1_init
+// Backs i1_tile / i1_tile_init.
+// ---------------------------------------------------------------------------------------------------
+template <bool APPROXIMATION_MODE, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8>
+struct I1 : SfpuUnaryOp<I1<APPROXIMATION_MODE, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static void kernel() { calculate_i1<APPROXIMATION_MODE, ITERATIONS>(); }
+
+    static void init_kernel() { i1_init<APPROXIMATION_MODE>(); }
+};
 }  // namespace ckernel::sfpu

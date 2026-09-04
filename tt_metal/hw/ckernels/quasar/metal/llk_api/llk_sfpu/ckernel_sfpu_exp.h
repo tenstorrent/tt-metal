@@ -10,8 +10,8 @@
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
 #include "llk_assert.h"
-#include "llk_math_eltwise_unary_sfpu_init.h"
 #include "sfpi.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -150,8 +150,36 @@ template <
 void exp_init() {
     static_assert(scale == 0x3F800000, "Non-default scale not supported in Quasar exp");
     static_assert(CLAMP_NEGATIVE == true, "Non-default CLAMP_NEGATIVE not supported in Quasar exp");
-    llk_math_eltwise_unary_sfpu_init<SfpuType::exponential>();
+    // Self-contained shared SFPU init so direct callers (SDPA) need no separate init.
+    _llk_math_eltwise_sfpu_init_();
 }
 
+// ---------------------------------------------------------------------------------------------------
+// Approach A dispatch struct (prototype).
+// Exp<APPROX, CLAMP_NEGATIVE, DST_SYNC, DST_ACCUM, SCALE_EN, ITERATIONS, INIT_SCALE>
+//   calculate(dst_index, vector_mode, scale) -> calculate_exponential   (uses SCALE_EN, ITERATIONS)
+//   init()                                   -> exp_init                (uses INIT_SCALE)
+// The struct carries the union of the calculate and init template parameters, so each call site names
+// only the ones it cares about and leaves the rest defaulted.
+// ---------------------------------------------------------------------------------------------------
+template <
+    bool APPROXIMATION_MODE,
+    bool CLAMP_NEGATIVE,
+    DstSync DST_SYNC,
+    bool DST_ACCUM,
+    bool SCALE_EN = false,
+    int ITERATIONS = SFPU_ITERATIONS,
+    std::uint32_t INIT_SCALE = 0x3F800000>
+struct Exp : SfpuUnaryOp<
+                 Exp<APPROXIMATION_MODE, CLAMP_NEGATIVE, DST_SYNC, DST_ACCUM, SCALE_EN, ITERATIONS, INIT_SCALE>,
+                 DST_SYNC,
+                 DST_ACCUM> {
+    static void kernel(std::uint32_t exp_base_scale_factor) {
+        calculate_exponential<APPROXIMATION_MODE, DST_ACCUM, SCALE_EN, ITERATIONS, CLAMP_NEGATIVE>(
+            exp_base_scale_factor);
+    }
+
+    static void init_kernel() { exp_init<APPROXIMATION_MODE, INIT_SCALE, CLAMP_NEGATIVE, DST_ACCUM>(); }
+};
 }  // namespace sfpu
 }  // namespace ckernel

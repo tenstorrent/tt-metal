@@ -7,6 +7,7 @@
 #include "ckernel_sfpu_binary_comp.h"
 #include "sfpu/ckernel_sfpu_converter.h"
 #include "sfpi.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel::sfpu {
 
@@ -99,5 +100,26 @@ inline void calculate_sfpu_isclose(
 // Programs the sign-clear mask into a constant register so the hot loop does not
 // rebuild it with a per-element SFPLOADI inside the replay block.
 inline void isclose_init() { sfpi::vConstIntPrgm0 = 0x7FFFFFFF; }
+
+// ---------------------------------------------------------------------------------------------------
+// IsClose<APPROX, EQUAL_NAN, DST_SYNC, DST_ACCUM, ITERATIONS>::calculate(in0, in1, out, vector_mode, rtol_bits,
+// atol_bits)
+//   backs isclose_binary_tile<EQUAL_NAN> and isclose_binary_tile_init (init_kernel -> isclose_init).
+// ---------------------------------------------------------------------------------------------------
+template <bool APPROXIMATION_MODE, bool EQUAL_NAN, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8>
+struct IsClose
+    : SfpuBinaryOp<IsClose<APPROXIMATION_MODE, EQUAL_NAN, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static void kernel(
+        uint32_t dst_index_in0,
+        uint32_t dst_index_in1,
+        uint32_t dst_index_out,
+        uint32_t rtol_bits,
+        uint32_t atol_bits) {
+        calculate_sfpu_isclose<APPROXIMATION_MODE, ITERATIONS, EQUAL_NAN>(
+            dst_index_in0, dst_index_in1, dst_index_out, rtol_bits, atol_bits);
+    }
+
+    static void init_kernel() { isclose_init(); }
+};
 
 }  // namespace ckernel::sfpu

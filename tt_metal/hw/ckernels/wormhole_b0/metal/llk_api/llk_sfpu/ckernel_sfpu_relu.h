@@ -9,6 +9,7 @@
 #include "cmath_common.h"
 #include "sfpu/ckernel_sfpu_converter.h"
 #include "sfpu/ckernel_sfpu_relu.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 using namespace sfpi;
 
@@ -140,8 +141,6 @@ inline void relu_clamp_int(uint threshold) {
         }
     }
 }
-inline void relu_min_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
-
 template <bool APPROXIMATION_MODE>
 inline void relu_min(uint uint_threshold) {
     vFloat threshold = Converter::as_float(uint_threshold);
@@ -153,8 +152,6 @@ inline void relu_min(uint uint_threshold) {
         dst_reg++;
     }
 }
-
-inline void relu_max_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
 template <bool APPROXIMATION_MODE>
 inline void relu_max(uint uint_threshold) {
@@ -170,12 +167,56 @@ inline void relu_max(uint uint_threshold) {
     }
 }
 
-inline void lrelu_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
-
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_lrelu(const uint slope) {
     _calculate_lrelu_<APPROXIMATION_MODE>(ITERATIONS, slope);
 }
 
+// ---------------------------------------------------------------------------------------------------
+// Approach A dispatch structs (prototype).
+//
+// Relu<APPROX, FORMAT, DST_SYNC, DST_ACCUM>::calculate(dst_index, vector_mode)                relu (threshold 0)
+// ReluClamp<APPROX, IS_LOWER_BOUND, FORMAT, DST_SYNC, DST_ACCUM>::calculate(idst, vm, threshold) relu_min / relu_max
+// LeakyRelu<APPROX, DST_SYNC, DST_ACCUM>::calculate(dst_index, vector_mode, slope)
+//
+// FORMAT selects the kernel: Float16_b/Float32 -> vFloat path, Int32 -> signed clamp, UInt32/UInt16 ->
+// unsigned clamp. All three use the shared SFPU init only.
+// ---------------------------------------------------------------------------------------------------
+template <bool APPROXIMATION_MODE, DataFormat FORMAT, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8>
+struct Relu : SfpuUnaryOp<Relu<APPROXIMATION_MODE, FORMAT, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static void kernel() {
+        using VectorType = std::conditional_t<FORMAT == DataFormat::Int32, sfpi::vInt, sfpi::vFloat>;
+        _relu_min_<VectorType, APPROXIMATION_MODE, ITERATIONS, uint32_t>(0);
+    }
+};
+
+template <
+    bool APPROXIMATION_MODE,
+    bool IS_LOWER_BOUND,
+    DataFormat FORMAT,
+    DstSync DST_SYNC,
+    bool DST_ACCUM,
+    int ITERATIONS = 8>
+struct ReluClamp : SfpuUnaryOp<
+                       ReluClamp<APPROXIMATION_MODE, IS_LOWER_BOUND, FORMAT, DST_SYNC, DST_ACCUM, ITERATIONS>,
+                       DST_SYNC,
+                       DST_ACCUM> {
+    static void kernel(uint32_t threshold) {
+        if constexpr (FORMAT == DataFormat::Int32) {
+            relu_clamp_int<APPROXIMATION_MODE, IS_LOWER_BOUND, ITERATIONS>(threshold);
+        } else if constexpr (FORMAT == DataFormat::UInt32 || FORMAT == DataFormat::UInt16) {
+            relu_clamp_uint<APPROXIMATION_MODE, IS_LOWER_BOUND, FORMAT, ITERATIONS>(threshold);
+        } else if constexpr (IS_LOWER_BOUND) {
+            _relu_min_<sfpi::vFloat, APPROXIMATION_MODE, ITERATIONS, uint32_t>(threshold);
+        } else {
+            _relu_max_<sfpi::vFloat, APPROXIMATION_MODE, ITERATIONS, uint32_t>(threshold);
+        }
+    }
+};
+
+template <bool APPROXIMATION_MODE, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8>
+struct LeakyRelu : SfpuUnaryOp<LeakyRelu<APPROXIMATION_MODE, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static void kernel(uint32_t slope) { calculate_lrelu<APPROXIMATION_MODE, ITERATIONS>(slope); }
+};
 }  // namespace sfpu
 }  // namespace ckernel

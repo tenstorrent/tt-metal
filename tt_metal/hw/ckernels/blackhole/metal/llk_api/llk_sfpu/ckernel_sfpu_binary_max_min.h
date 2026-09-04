@@ -8,6 +8,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "lltt.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 using namespace sfpi;
 
@@ -264,5 +265,35 @@ inline void binary_max_min_int32_init() {
 #endif
 }
 
+// ---------------------------------------------------------------------------------------------------
+// Approach A dispatch struct (prototype).
+// BinaryMaxMin<IS_MAX_OP, FORMAT, DST_SYNC, DST_ACCUM>::calculate(in0, in1, out, vector_mode)
+// BinaryMaxMin<...>::init()
+// FORMAT: Float16_b/Float32 -> float kernel, Int32 -> signed int32 kernel, UInt32 -> unsigned int32 kernel.
+// ---------------------------------------------------------------------------------------------------
+template <bool IS_MAX_OP, DataFormat FORMAT, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8>
+struct BinaryMaxMin
+    : SfpuBinaryOp<BinaryMaxMin<IS_MAX_OP, FORMAT, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static constexpr bool is_int = FORMAT == DataFormat::Int32 || FORMAT == DataFormat::UInt32;
+    static constexpr bool is_unsigned = FORMAT == DataFormat::UInt32;
+
+    static void kernel(uint32_t dst_index_in0, uint32_t dst_index_in1, uint32_t dst_index_out) {
+        if constexpr (is_int) {
+            calculate_binary_max_min_int32<IS_MAX_OP, is_unsigned, ITERATIONS>(
+                dst_index_in0, dst_index_in1, dst_index_out);
+        } else {
+            calculate_binary_max_min<IS_MAX_OP, ITERATIONS>(dst_index_in0, dst_index_in1, dst_index_out);
+        }
+    }
+
+    static void init_kernel() {
+        addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+        if constexpr (is_int) {
+            binary_max_min_int32_init<IS_MAX_OP, is_unsigned>();
+        } else {
+            binary_max_min_init<IS_MAX_OP>();
+        }
+    }
+};
 }  // namespace sfpu
 }  // namespace ckernel

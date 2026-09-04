@@ -13,7 +13,7 @@
 // The numeric conversion is performed in-place in Dest by the SFPU
 // `calculate_typecast_*` primitives, dispatched through the shared unary-SFPU
 // entry points (call_unary_sfpu_operation in helpers/include/sfpu_operations.h)
-// under SfpuType::typecast. Pairs realised purely by unpacker/packer format
+// under SfpuUnaryOp::typecast. Pairs realised purely by unpacker/packer format
 // conversion run the same copy + pack path with no SFPU call.
 //
 // Compile-time configuration emitted by the Python harness:
@@ -96,7 +96,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // Program the SFPU for this specific typecast pair (no-op for pairs handled
     // purely by unpacker/packer format conversion). Goes through the shared
-    // unary-SFPU dispatch under SfpuType::typecast, with the (IN, OUT) format
+    // unary-SFPU dispatch under SfpuUnaryOp::typecast, with the (IN, OUT) format
     // pair supplied as the trailing template parameters.
     test_utils::call_unary_sfpu_operation_init<
         SFPU_UNARY_OPERATION,

@@ -17,7 +17,7 @@
 #include "../../hw/ckernels/wormhole_b0/metal/llk_api/llk_math_deepseek_moe_gate_eltwise_binary_api.h"
 #include "../../hw/ckernels/wormhole_b0/metal/llk_api/llk_math_deepseek_moe_gate_transpose_dest_single_face_api.h"
 #endif
-#include "llk_math_eltwise_unary_sfpu_macros.h"
+#include "llk_math_eltwise_sfpu_op.h"
 #endif
 
 namespace ckernel {
@@ -39,7 +39,7 @@ ALWI void deepseek_moe_gate_init(uint32_t icb0, uint32_t icb1) {
         // Init transpose dest addrmods (does not conflict with copy add)
         MATH((llk_math_deepseek_moe_gate_transpose_dest_single_face_common_init<is_32bit>()));
         // Init topk (SFPU)
-        MATH(SFPU_UNARY_INIT_FN(unused, sfpu::deepseek_moe_gate_topk_init, (APPROX, DST_ACCUM_MODE)));
+        MATH(_llk_math_eltwise_sfpu_init_(); sfpu::deepseek_moe_gate_topk_init<APPROX, DST_ACCUM_MODE>();)
     }
 }
 
@@ -64,7 +64,7 @@ ALWI void deepseek_moe_gate(uint32_t icb0, uint32_t icb1, uint32_t eps, uint32_t
         // Init transpose dest addrmods (does not conflict with add binary reuse)
         MATH((llk_math_deepseek_moe_gate_transpose_dest_single_face_common_init<is_32bit>()));
         // Init topk (SFPU)
-        MATH(SFPU_UNARY_INIT_FN(unused, sfpu::deepseek_moe_gate_topk_init, (APPROX, DST_ACCUM_MODE)));
+        MATH(_llk_math_eltwise_sfpu_init_(); sfpu::deepseek_moe_gate_topk_init<APPROX, DST_ACCUM_MODE>();)
     } else {
         // Copy add (FPU)
         UNPACK((llk_unpack_AB(icb0, icb1, 0, 0)));
@@ -74,37 +74,21 @@ ALWI void deepseek_moe_gate(uint32_t icb0, uint32_t icb1, uint32_t eps, uint32_t
     // Set srcb dummy valid for transpose wh (FPU)
     UNPACK((llk_unpack_set_srcb_dummy_valid()));
     // Sum top2 (SFPU)
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        deepseek_moe_gate_sum_top2,
-        (APPROX, DST_ACCUM_MODE),
-        0 /*dst_index*/,
-        VectorMode::RC_custom));
+    MATH((
+        SfpuUnaryFn<sfpu::deepseek_moe_gate_sum_top2<APPROX, DST_ACCUM_MODE>, DST_SYNC_MODE, DST_ACCUM_MODE>::calculate(
+            0 /*dst_index*/, VectorMode::RC_custom)));
     // Transpose dest step 0 (FPU)
     MATH((llk_math_deepseek_moe_gate_transpose_dest_single_face_step0_init<is_32bit>()));
     MATH((llk_math_deepseek_moe_gate_transpose_dest_single_face_step0<DST_ACCUM_MODE, is_32bit>()));
     // Sort top4 groups (SFPU)
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        deepseek_moe_gate_sort_top4_groups,
-        (APPROX, DST_ACCUM_MODE),
-        0 /*dst_index*/,
-        VectorMode::RC_custom));
+    MATH((SfpuUnaryFn<sfpu::deepseek_moe_gate_sort_top4_groups<APPROX, DST_ACCUM_MODE>, DST_SYNC_MODE, DST_ACCUM_MODE>::
+              calculate(0 /*dst_index*/, VectorMode::RC_custom)));
     // Transpose dest step 1 (FPU)
     MATH((llk_math_deepseek_moe_gate_transpose_dest_single_face_step1_init<is_32bit>()));
     MATH((llk_math_deepseek_moe_gate_transpose_dest_single_face_step1<DST_ACCUM_MODE, is_32bit>()));
     // Top8 (SFPU)
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        deepseek_moe_gate_top8,
-        (APPROX, DST_ACCUM_MODE),
-        0 /*dst_index*/,
-        VectorMode::RC_custom,
-        eps,
-        scale));
+    MATH((SfpuUnaryFn<sfpu::deepseek_moe_gate_top8<APPROX, DST_ACCUM_MODE>, DST_SYNC_MODE, DST_ACCUM_MODE>::calculate(
+        0 /*dst_index*/, VectorMode::RC_custom, eps, scale)));
     // Transpose dest step 2 (FPU)
     MATH((llk_math_deepseek_moe_gate_transpose_dest_single_face_step2_init<is_32bit>()));
     MATH((llk_math_deepseek_moe_gate_transpose_dest_single_face_step2<DST_ACCUM_MODE, is_32bit>()));

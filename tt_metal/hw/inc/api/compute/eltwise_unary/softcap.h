@@ -6,14 +6,13 @@
 
 #include "api/compute/common_globals.h"
 
-// ckernel_sfpu_softcap.h and the SfpuType entry it needs exist only under
+// ckernel_sfpu_softcap.h exists only under
 // hw/ckernels/blackhole, so the API is declared for Blackhole only. Including this header
 // on another arch is harmless; calling softcap_tile there fails to compile.
 #if defined(ARCH_BLACKHOLE)
 
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_softcap.h"
-#include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
@@ -43,22 +42,19 @@ namespace ckernel {
  * | beta_recip     | The reciprocal of beta, as an fp32 bit pattern                             | uint32_t |                                                       | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void softcap_tile(uint32_t idst, uint32_t beta, uint32_t beta_recip) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_softcap,
-        (APPROX, DST_ACCUM_MODE, 8 /* ITERATIONS */),
-        idst,
-        VectorMode::RC,
-        beta,
-        beta_recip));
+    MATH(
+        (sfpu::Softcap<APPROX, DST_SYNC_MODE, is_fp32_dest_acc_en>::calculate(idst, VectorMode::RC, beta, beta_recip)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void softcap_tile_init() { MATH(SFPU_UNARY_INIT(softcap)); }
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void softcap_tile_init() {
+    MATH((sfpu::Softcap<APPROX, DST_SYNC_MODE, is_fp32_dest_acc_en>::init()));
+}
 
 }  // namespace ckernel
 

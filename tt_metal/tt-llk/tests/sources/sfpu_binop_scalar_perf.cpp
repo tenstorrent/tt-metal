@@ -83,9 +83,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef LLK_TRISC_MATH
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_datacopy.h"
-
 #include "llk_sfpu/ckernel_sfpu_binop_with_unary.h"
-#include "llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h"
+#include "llk_sfpu/llk_math_eltwise_sfpu_op.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -98,7 +97,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_pack_sync_init_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
 
-        ckernel::llk_math_eltwise_unary_sfpu_init<::SfpuType::unused, is_fp32_dest_acc_en>();
+        _llk_math_eltwise_sfpu_init_();
         PROFILER_SYNC();
     }
     {
@@ -174,14 +173,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         // Scalar binop reads one Dest tile and writes the result back to
                         // the same tile. The SFPU cost is data-independent, so this
                         // measures the representative math cost.
-                        SFPU_UNARY_CALL(
+                        SfpuUnaryFn<
+                            sfpu::calculate_binop_with_scalar<APPROX_MODE, SFPU_BINOP_MODE, 8, is_fp32_dest_acc_en>,
                             DST_SYNC_MODE,
-                            is_fp32_dest_acc_en,
-                            calculate_binop_with_scalar,
-                            (APPROX_MODE, SFPU_BINOP_MODE, 8, is_fp32_dest_acc_en),
-                            block_tile,
-                            VectorMode::RC,
-                            SFPU_UNARY_SCALAR);
+                            is_fp32_dest_acc_en>::calculate(block_tile, VectorMode::RC, SFPU_UNARY_SCALAR);
                     }
                 }
             }
@@ -198,19 +193,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
                     for (std::uint32_t block_tile = 0; block_tile < block_tiles; ++block_tile)
                     {
-                        // Bounds assert is redundant here: SFPU_UNARY_CALL runs _sfpu_check_
+                        // Bounds assert is redundant here: SfpuUnaryFn::calculate runs check_dst_index
                         // on the same block_tile below.
                         _llk_math_eltwise_unary_datacopy_<data_copy_type, DST_SYNC_MODE, is_fp32_dest_acc_en, BROADCAST_TYPE, unpack_to_dest>(
                             block_tile, formats.math, formats.math);
 
-                        SFPU_UNARY_CALL(
+                        SfpuUnaryFn<
+                            sfpu::calculate_binop_with_scalar<APPROX_MODE, SFPU_BINOP_MODE, 8, is_fp32_dest_acc_en>,
                             DST_SYNC_MODE,
-                            is_fp32_dest_acc_en,
-                            calculate_binop_with_scalar,
-                            (APPROX_MODE, SFPU_BINOP_MODE, 8, is_fp32_dest_acc_en),
-                            block_tile,
-                            VectorMode::RC,
-                            SFPU_UNARY_SCALAR);
+                            is_fp32_dest_acc_en>::calculate(block_tile, VectorMode::RC, SFPU_UNARY_SCALAR);
                     }
 
                     _llk_math_dest_section_done_<DST_SYNC_MODE, is_fp32_dest_acc_en>();

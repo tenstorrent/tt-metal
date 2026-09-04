@@ -78,7 +78,7 @@
 // advance Dst by configurable strides without a separate INCRWC issue:
 //
 //   ADDR_MOD_7 : zero advance (used by SFPLOAD/SFPSTORE that don't move Dst).
-//                On MATH it arrives via `_llk_math_eltwise_unary_sfpu_init_`,
+//                On MATH it arrives via `_llk_math_eltwise_sfpu_init_`,
 //                and PACK gets it through `_topk_xl_remove_msb_values_init_`.
 //   ADDR_MOD_6 : +32 (one face row)
 //   ADDR_MOD_5 : +16 (half face row)

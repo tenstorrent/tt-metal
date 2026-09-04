@@ -6,6 +6,7 @@
 
 #include "ckernel.h"
 #include "ckernel_sfpu_rsqrt.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel::sfpu {
 
@@ -35,5 +36,21 @@ template <bool APPROXIMATION_MODE>
 inline void init_add_rsqrt() {
     sqrt_init<APPROXIMATION_MODE>();
 }
+
+// ---------------------------------------------------------------------------------------------------
+// AddRsqrt<APPROXIMATION_MODE, FAST_APPROX, DST_SYNC, DST_ACCUM, ITERATIONS>
+//   Backs add_rsqrt_tile / add_rsqrt_tile_init (api/compute/experimental/add_rsqrt.h).
+//   calculate(dst_index, vector_mode, addend) -> calculate_add_rsqrt  (DST_ACCUM feeds fp32_dest_acc_en)
+//   init()                                    -> init_add_rsqrt
+// ---------------------------------------------------------------------------------------------------
+template <bool APPROXIMATION_MODE, bool FAST_APPROX, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8>
+struct AddRsqrt
+    : SfpuUnaryOp<AddRsqrt<APPROXIMATION_MODE, FAST_APPROX, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static void kernel(uint32_t param0) {
+        calculate_add_rsqrt<APPROXIMATION_MODE, ITERATIONS, DST_ACCUM, FAST_APPROX>(param0);
+    }
+
+    static void init_kernel() { init_add_rsqrt<APPROXIMATION_MODE>(); }
+};
 
 }  // namespace ckernel::sfpu

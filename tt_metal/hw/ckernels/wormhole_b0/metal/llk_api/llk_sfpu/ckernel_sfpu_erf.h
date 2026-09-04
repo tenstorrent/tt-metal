@@ -12,6 +12,8 @@
 
 #include "ckernel_sfpu_piecewise_rational.h"
 #include "cmath_common.h"
+#include "ckernel_sfpu_erfc.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel::sfpu {
 
@@ -89,4 +91,28 @@ void erf_init() {
     sfpu_reciprocal_init<APPROXIMATION_MODE>();
 }
 
+// ---------------------------------------------------------------------------------------------------
+// Erf<APPROX, IS_ERFC, DST_SYNC, DST_ACCUM, ITERATIONS>
+//   IS_ERFC == false: calculate(dst_index, vector_mode) -> calculate_erf,  init() -> erf_init
+//   IS_ERFC == true:  calculate(dst_index, vector_mode) -> calculate_erfc, init() -> erfc_init
+// Backs erf_tile / erf_tile_init and erfc_tile / erfc_tile_init.
+// ---------------------------------------------------------------------------------------------------
+template <bool APPROXIMATION_MODE, bool IS_ERFC, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8>
+struct Erf : SfpuUnaryOp<Erf<APPROXIMATION_MODE, IS_ERFC, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static void kernel() {
+        if constexpr (IS_ERFC) {
+            calculate_erfc<ITERATIONS>();
+        } else {
+            calculate_erf<APPROXIMATION_MODE, ITERATIONS>();
+        }
+    }
+
+    static void init_kernel() {
+        if constexpr (IS_ERFC) {
+            erfc_init<APPROXIMATION_MODE>();
+        } else {
+            erf_init<APPROXIMATION_MODE>();
+        }
+    }
+};
 }  // namespace ckernel::sfpu

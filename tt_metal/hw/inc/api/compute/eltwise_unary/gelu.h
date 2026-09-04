@@ -7,7 +7,6 @@
 #include "api/compute/common_globals.h"
 #if defined(TRISC_MATH) || defined(TRISC_PACK)
 #include "ckernel_sfpu_gelu.h"
-#include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
@@ -16,7 +15,7 @@ namespace ckernel {
  */
 template <bool fast_and_approx = true, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void gelu_tile_init() {
-    MATH(SFPU_UNARY_INIT_FN(gelu, sfpu::gelu_init, (fast_and_approx, is_fp32_dest_acc_en)));
+    MATH((sfpu::Gelu<fast_and_approx, DST_SYNC_MODE, is_fp32_dest_acc_en>::init()));
 }
 
 // clang-format off
@@ -36,31 +35,31 @@ ALWI void gelu_tile_init() {
 // clang-format on
 template <bool fast_and_approx = true, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void gelu_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_gelu, (fast_and_approx, is_fp32_dest_acc_en), idst, VectorMode::RC));
+    MATH((sfpu::Gelu<fast_and_approx, DST_SYNC_MODE, is_fp32_dest_acc_en>::calculate(idst, VectorMode::RC)));
 }
 
 #ifndef ARCH_QUASAR
 template <bool fast_and_approx = true, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void gelu_tile_init_pack() {
-    PACK(SFPU_UNARY_INIT_FN(gelu, sfpu::gelu_init, (fast_and_approx, is_fp32_dest_acc_en)));
+    PACK((sfpu::Gelu<fast_and_approx, DST_SYNC_MODE, is_fp32_dest_acc_en>::init()));
 }
 
 template <bool fast_and_approx = true, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void gelu_tile_pack(uint32_t idst) {
-    PACK(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_gelu, (fast_and_approx, is_fp32_dest_acc_en), idst, VectorMode::RC));
+    PACK((sfpu::Gelu<fast_and_approx, DST_SYNC_MODE, is_fp32_dest_acc_en>::calculate(idst, VectorMode::RC)));
 }
 
 /**
  * Init for gelu_tanh_tile. See gelu_tanh_tile() for semantics.
  */
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void gelu_tanh_tile_init() {
-    MATH(llk_math_eltwise_unary_sfpu_init<SfpuType::gelu_tanh>(sfpu::gelu_tanh_init));
+    MATH((sfpu::GeluTanh<DST_SYNC_MODE, is_fp32_dest_acc_en>::init()));
 }
 
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void gelu_tanh_tile_init_pack() {
-    PACK(llk_math_eltwise_unary_sfpu_init<SfpuType::gelu_tanh>(sfpu::gelu_tanh_init));
+    PACK((sfpu::GeluTanh<DST_SYNC_MODE, is_fp32_dest_acc_en>::init()));
 }
 
 // clang-format off
@@ -80,20 +79,20 @@ ALWI void gelu_tanh_tile_init_pack() {
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void gelu_tanh_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_gelu_tanh, (is_fp32_dest_acc_en), idst, VectorMode::RC));
+    MATH((sfpu::GeluTanh<DST_SYNC_MODE, is_fp32_dest_acc_en>::calculate(idst, VectorMode::RC)));
 }
 
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void gelu_tanh_tile_pack(uint32_t idst) {
-    PACK(SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_gelu_tanh, (is_fp32_dest_acc_en), idst, VectorMode::RC));
+    PACK((sfpu::GeluTanh<DST_SYNC_MODE, is_fp32_dest_acc_en>::calculate(idst, VectorMode::RC)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-template <bool fast_and_approx = false>
+template <bool fast_and_approx = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void gelu_derivative_tile_init() {
-    MATH(SFPU_UNARY_INIT_FN(gelu_derivative, sfpu::gelu_derivative_polynomial_init, (fast_and_approx)));
+    MATH((sfpu::GeluDerivative<fast_and_approx, DST_SYNC_MODE, is_fp32_dest_acc_en>::init()));
 }
 
 // clang-format off
@@ -120,13 +119,7 @@ ALWI void gelu_derivative_tile_init() {
 // clang-format on
 template <bool fast_and_approx = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void gelu_derivative_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_gelu_derivative_polynomial,
-        (fast_and_approx, is_fp32_dest_acc_en),
-        idst,
-        VectorMode::RC));
+    MATH((sfpu::GeluDerivative<fast_and_approx, DST_SYNC_MODE, is_fp32_dest_acc_en>::calculate(idst, VectorMode::RC)));
 }
 
 #endif

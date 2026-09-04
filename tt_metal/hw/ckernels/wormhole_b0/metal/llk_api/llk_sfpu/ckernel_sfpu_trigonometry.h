@@ -17,6 +17,7 @@
 #include "sfpu/ckernel_sfpu_log.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
 #include "sfpi.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 using namespace sfpi;
 
@@ -1237,4 +1238,72 @@ void init_atanh() {
     log1p_init<APPROXIMATION_MODE, false, is_fp32_dest_acc_en>();
 }
 
+// ---------------------------------------------------------------------------------------------------
+// Trigonometry<TRIG_OP, APPROX, DST_SYNC, DST_ACCUM, ITERATIONS>::calculate(dst_index, vector_mode) / init()
+//   backs sin/cos/tan/asin/acos/atan/sinh/cosh/asinh/acosh/atanh _tile and _tile_init. TRIG_OP selects the
+//   per-function kernel and its init routine.
+// ---------------------------------------------------------------------------------------------------
+enum class TrigOp { Sine, Cosine, Tan, Asin, Acos, Atan, Sinh, Cosh, Asinh, Acosh, Atanh };
+
+template <TrigOp TRIG_OP, bool APPROXIMATION_MODE, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8>
+struct Trigonometry
+    : SfpuUnaryOp<Trigonometry<TRIG_OP, APPROXIMATION_MODE, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static_assert(
+        TRIG_OP == TrigOp::Sine || TRIG_OP == TrigOp::Cosine || TRIG_OP == TrigOp::Tan || TRIG_OP == TrigOp::Asin ||
+            TRIG_OP == TrigOp::Acos || TRIG_OP == TrigOp::Atan || TRIG_OP == TrigOp::Sinh || TRIG_OP == TrigOp::Cosh ||
+            TRIG_OP == TrigOp::Asinh || TRIG_OP == TrigOp::Acosh || TRIG_OP == TrigOp::Atanh,
+        "Trigonometry: unsupported TrigOp");
+
+    static void kernel() {
+        if constexpr (TRIG_OP == TrigOp::Sine) {
+            calculate_sine<APPROXIMATION_MODE, DST_ACCUM, ITERATIONS>();
+        } else if constexpr (TRIG_OP == TrigOp::Cosine) {
+            calculate_cosine<APPROXIMATION_MODE, DST_ACCUM, ITERATIONS>();
+        } else if constexpr (TRIG_OP == TrigOp::Tan) {
+            calculate_tangent<APPROXIMATION_MODE, DST_ACCUM, ITERATIONS>();
+        } else if constexpr (TRIG_OP == TrigOp::Asin) {
+            calculate_asin<APPROXIMATION_MODE, DST_ACCUM, ITERATIONS>();
+        } else if constexpr (TRIG_OP == TrigOp::Acos) {
+            calculate_acos<APPROXIMATION_MODE, DST_ACCUM, ITERATIONS>();
+        } else if constexpr (TRIG_OP == TrigOp::Atan) {
+            calculate_atan<APPROXIMATION_MODE, DST_ACCUM, ITERATIONS>();
+        } else if constexpr (TRIG_OP == TrigOp::Sinh) {
+            calculate_sinh<APPROXIMATION_MODE, DST_ACCUM, ITERATIONS>();
+        } else if constexpr (TRIG_OP == TrigOp::Cosh) {
+            calculate_cosh<APPROXIMATION_MODE, DST_ACCUM, ITERATIONS>();
+        } else if constexpr (TRIG_OP == TrigOp::Asinh) {
+            calculate_asinh<APPROXIMATION_MODE, DST_ACCUM, ITERATIONS>();
+        } else if constexpr (TRIG_OP == TrigOp::Acosh) {
+            calculate_acosh<APPROXIMATION_MODE, DST_ACCUM, ITERATIONS>();
+        } else if constexpr (TRIG_OP == TrigOp::Atanh) {
+            calculate_atanh<APPROXIMATION_MODE, DST_ACCUM, ITERATIONS>();
+        }
+    }
+
+    static void init_kernel() {
+        if constexpr (TRIG_OP == TrigOp::Sine) {
+            sine_init<APPROXIMATION_MODE>();
+        } else if constexpr (TRIG_OP == TrigOp::Cosine) {
+            cosine_init<APPROXIMATION_MODE>();
+        } else if constexpr (TRIG_OP == TrigOp::Tan) {
+            tangent_init<APPROXIMATION_MODE>();
+        } else if constexpr (TRIG_OP == TrigOp::Asin) {
+            asin_acos_init<DST_ACCUM>();
+        } else if constexpr (TRIG_OP == TrigOp::Acos) {
+            asin_acos_init<DST_ACCUM>();
+        } else if constexpr (TRIG_OP == TrigOp::Atan) {
+            atan_init<APPROXIMATION_MODE, DST_ACCUM>();
+        } else if constexpr (TRIG_OP == TrigOp::Sinh) {
+            sinh_init<APPROXIMATION_MODE, DST_ACCUM>();
+        } else if constexpr (TRIG_OP == TrigOp::Cosh) {
+            cosh_init<APPROXIMATION_MODE, DST_ACCUM>();
+        } else if constexpr (TRIG_OP == TrigOp::Asinh) {
+            init_inverse_hyperbolic<APPROXIMATION_MODE, DST_ACCUM>();
+        } else if constexpr (TRIG_OP == TrigOp::Acosh) {
+            init_inverse_hyperbolic<APPROXIMATION_MODE, DST_ACCUM>();
+        } else if constexpr (TRIG_OP == TrigOp::Atanh) {
+            init_atanh<APPROXIMATION_MODE, DST_ACCUM>();
+        }
+    }
+};
 }  // namespace ckernel::sfpu

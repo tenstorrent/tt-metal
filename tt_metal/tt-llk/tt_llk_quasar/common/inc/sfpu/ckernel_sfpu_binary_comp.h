@@ -16,6 +16,16 @@ namespace ckernel
 namespace sfpu
 {
 
+enum class BinaryCompMode
+{
+    Lt,
+    Gt,
+    Le,
+    Ge,
+    Eq,
+    Ne
+};
+
 // Int32 binary comparison for relational ops (signed), ported from BH.
 // All ops reduce to computing LT(X, Y) with optional operand swap and result
 // inversion:
@@ -24,17 +34,18 @@ namespace sfpu
 template <
     bool APPROXIMATION_MODE,
     int ITERATIONS,
-    SfpuType RELATIONAL_OP,
+    BinaryCompMode RELATIONAL_OP,
     bool SIGN_MAGNITUDE_FORMAT     = false,
     trisc::DstTileShape TILE_SHAPE = trisc::DstTileShape::Tile32x32>
 inline void calculate_binary_comp_int32(const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out)
 {
     static_assert(
-        RELATIONAL_OP == SfpuType::lt || RELATIONAL_OP == SfpuType::gt || RELATIONAL_OP == SfpuType::le || RELATIONAL_OP == SfpuType::ge,
-        "Supported operation types: lt, gt, le, ge");
+        RELATIONAL_OP == BinaryCompMode::Lt || RELATIONAL_OP == BinaryCompMode::Gt || RELATIONAL_OP == BinaryCompMode::Le ||
+            RELATIONAL_OP == BinaryCompMode::Ge,
+        "Supported operation types: Lt, Gt, Le, Ge");
 
-    constexpr bool swap_operands = (RELATIONAL_OP == SfpuType::gt || RELATIONAL_OP == SfpuType::le);
-    constexpr bool invert_result = (RELATIONAL_OP == SfpuType::le || RELATIONAL_OP == SfpuType::ge);
+    constexpr bool swap_operands = (RELATIONAL_OP == BinaryCompMode::Gt || RELATIONAL_OP == BinaryCompMode::Le);
+    constexpr bool invert_result = (RELATIONAL_OP == BinaryCompMode::Le || RELATIONAL_OP == BinaryCompMode::Ge);
 
     if constexpr (invert_result)
     {

@@ -98,7 +98,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         TILE_NUM_FACES, formats.math);
 
     // Invariant SFPU config + ADDR_MOD_7, then the functor's own seed constants.
-    _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
+    _llk_math_eltwise_sfpu_init_();
     ckernel::sfpu::init_add_rsqrt<APPROX_MODE>();
 
     _llk_math_wait_for_dest_available_<DST_SYNC>();

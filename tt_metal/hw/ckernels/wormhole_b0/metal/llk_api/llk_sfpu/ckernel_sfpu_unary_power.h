@@ -11,6 +11,7 @@
 #include "ckernel_sfpu_conversions.h"
 #include "sfpu/ckernel_sfpu_converter.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 using namespace sfpi;
 
@@ -385,8 +386,6 @@ inline void _sfpu_unary_power_fp32_(const uint32_t exponent) {
     }
 }
 
-inline void power_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
-
 /**
  * @brief Compute power operation
  *
@@ -436,6 +435,27 @@ inline void sfpu_unary_pow_init() {
     sfpi::vConstFloatPrgm1 = -127.0f;
     sfpi::vConstFloatPrgm2 = std::numeric_limits<float>::quiet_NaN();
 }
+
+// UnaryPower<APPROX, DST_SYNC, DST_ACCUM, ITERATIONS>: power_tile / power_tile_init (compute_kernel_api.h).
+// Direct x^y via exp/log; init programs the exp constants (sfpu_unary_pow_init).
+template <bool APPROXIMATION_MODE, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8>
+struct UnaryPower : SfpuUnaryOp<UnaryPower<APPROXIMATION_MODE, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static void kernel(const uint32_t exponent) {
+        calculate_unary_power<APPROXIMATION_MODE, DST_ACCUM, ITERATIONS>(exponent);
+    }
+
+    static void init_kernel() { sfpu_unary_pow_init(); }
+};
+
+// UnaryPowerIterative<APPROX, DST_SYNC, DST_ACCUM, ITERATIONS>: power_iterative_tile / power_iterative_tile_init
+// (compute_kernel_api.h). Repeated-multiply x^n for integer n; uses the bare per-op init.
+template <bool APPROXIMATION_MODE, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8>
+struct UnaryPowerIterative
+    : SfpuUnaryOp<UnaryPowerIterative<APPROXIMATION_MODE, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static void kernel(const uint32_t exponent) {
+        calculate_unary_power_iterative<APPROXIMATION_MODE, ITERATIONS>(exponent);
+    }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

@@ -11,6 +11,7 @@
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_recip.h"
 #include "sfpi.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -135,6 +136,32 @@ inline void sfpu_binary_init() {
         _init_reciprocal_<APPROXIMATION_MODE>();
     }
 }
+
+// ---------------------------------------------------------------------------------------------------
+// SfpuBinary<APPROX, BINOP, DST_SYNC, DST_ACCUM, DST_ROUNDING_MODE, ITERATIONS>. Same interface as WH/BH;
+// Quasar has a single kernel for ADD/SUB/MUL/DIV (it applies the DIV/MUL bf16 rounding itself).
+//   calculate(in0, in1, out, vector_mode) -> calculate_sfpu_binary
+//   init()                                -> sfpu_binary_init<APPROX, BINOP>
+// Backs {div,mul,add,sub}_binary_tile[_init].
+// ---------------------------------------------------------------------------------------------------
+template <
+    bool APPROXIMATION_MODE,
+    BinaryOp BINOP,
+    DstSync DST_SYNC,
+    bool DST_ACCUM,
+    DstRoundingMode DST_ROUNDING_MODE = DstRoundingMode::Default,
+    int ITERATIONS = SFPU_ITERATIONS>
+struct SfpuBinary : SfpuBinaryOp<
+                        SfpuBinary<APPROXIMATION_MODE, BINOP, DST_SYNC, DST_ACCUM, DST_ROUNDING_MODE, ITERATIONS>,
+                        DST_SYNC,
+                        DST_ACCUM> {
+    static void kernel(std::uint32_t dst_index_in0, std::uint32_t dst_index_in1, std::uint32_t dst_index_out) {
+        calculate_sfpu_binary<APPROXIMATION_MODE, BINOP, DST_ACCUM, DST_ROUNDING_MODE, ITERATIONS>(
+            dst_index_in0, dst_index_in1, dst_index_out);
+    }
+
+    static void init_kernel() { sfpu_binary_init<APPROXIMATION_MODE, BINOP>(); }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

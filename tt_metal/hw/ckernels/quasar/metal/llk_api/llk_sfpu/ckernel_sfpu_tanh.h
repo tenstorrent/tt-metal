@@ -6,6 +6,7 @@
 
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -31,6 +32,14 @@ inline void calculate_tanh() {
                                                                                    // 2 rows)
     }
 }
+
+// Tanh<APPROX, DST_SYNC, DST_ACCUM, ITERATIONS>: tanh_tile / tanh_tile_init (compute_kernel_api.h).
+// The Quasar kernel takes only an iteration count and uses the bare per-op init, so APPROXIMATION_MODE
+// and DST_ACCUM are accepted for interface parity with WH/BH and ignored here.
+template <[[maybe_unused]] bool APPROXIMATION_MODE, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = SFPU_ITERATIONS>
+struct Tanh : SfpuUnaryOp<Tanh<APPROXIMATION_MODE, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static void kernel() { calculate_tanh<ITERATIONS>(); }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

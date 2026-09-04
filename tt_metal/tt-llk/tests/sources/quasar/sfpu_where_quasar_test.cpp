@@ -125,7 +125,7 @@ const bool is_int_fpu_en = false;
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_datacopy.h"
 #include "llk_sfpu/ckernel_sfpu_where.h"
-#include "llk_sfpu/llk_math_eltwise_ternary_sfpu_macros.h"
+#include "llk_sfpu/llk_math_eltwise_sfpu_op.h"
 #include "params.h"
 
 using namespace ckernel;
@@ -159,7 +159,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // SFPU uses ADDR_MOD_7 and does not overwrite the datacopy MOP's
         // ADDR_MOD_0/1 or bank-0 programming, so both initializers can remain in
         // the INIT zone before the measured TILE_LOOP.
-        _llk_math_eltwise_ternary_sfpu_init_<SfpuType::where>();
+        sfpu::Where<false, DataFormat::Float32, dest_sync, is_fp32_dest_acc_en>::init();
 
         // Program dest-dvalid CFG after HW configure so wait masks are the last
         // writes before TILE_LOOP.
@@ -216,16 +216,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 // true_val=base+1, false_val=base+2, result written to base+0. Faces
                 // outside the selected set keep whatever the producer wrote into Dest before
                 // SFPU ran (the cond tile, here), so Python asserts only processed faces.
-                SFPU_TERNARY_CALL(
-                    dest_sync,
-                    is_fp32_dest_acc_en,
-                    calculate_where,
-                    (false /*APPROXIMATION_MODE*/),
-                    DST_INDEX + 0u /*DST_IN0*/,
-                    DST_INDEX + 1u /*DST_IN1*/,
-                    DST_INDEX + 2u /*DST_IN2*/,
-                    DST_INDEX + 0u /*DST_OUT*/,
-                    VECTOR_MODE);
+                SfpuTernaryFn<sfpu::calculate_where<false /*APPROXIMATION_MODE*/>, dest_sync, is_fp32_dest_acc_en>::calculate(
+                    DST_INDEX + 0u /*DST_IN0*/, DST_INDEX + 1u /*DST_IN1*/, DST_INDEX + 2u /*DST_IN2*/, DST_INDEX + 0u /*DST_OUT*/, VECTOR_MODE);
 
                 if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                 {

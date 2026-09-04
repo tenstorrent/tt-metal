@@ -210,7 +210,7 @@ def test_no_bcast_lhs_silu_swiglu(device, layout):
 # Class-(C) coverage headroom (QUASAR_PARITY_GAPS.md §5): activations the WH-baseline matrix
 # (QUASAR_LLK_GAPS.md Table 2) marks SUPPORTED on Quasar but that this op previously never exercised —
 # only relu and silu were tested. gelu/tanh/square/sigmoid are the model-relevant fusions and each has a
-# Quasar ckernel + SfpuType + an #else ARCH_QUASAR compute-API branch, so they should fuse today. This
+# Quasar ckernel + an #else ARCH_QUASAR compute-API branch, so they should fuse today. This
 # validates that matrix claim end-to-end through the op; a failure means either an op-layer gap or an
 # over-optimistic matrix cell (both worth knowing).
 _LLK_SUPPORTED_ACTS = [

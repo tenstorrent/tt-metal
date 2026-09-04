@@ -21,7 +21,6 @@
 #include "experimental/llk_sfpu/ckernel_sfpu_deepseek_sdpa.h"
 #include "ckernel_sfpu_exp.h"
 #include "ckernel_sfpu_recip.h"
-#include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 #ifdef TRISC_UNPACK
 #include "experimental/llk_unpack_A_sdpa_api.h"
@@ -31,7 +30,6 @@
 #include "ckernel_sfpu_exp.h"
 #include "ckernel_sfpu_recip.h"
 #include "sfpu/experimental/ckernel_sfpu_sdpa_exp_unclamped.h"
-#include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
@@ -433,18 +431,16 @@ void compute_sdpa_recip(
 
 /**
  * Wrapper for fused max-sub-exp-add SFPI kernel.
- * Invokes calculate_fused_max_sub_exp_add_tile via the SFPU macro wrapper.
+ * Invokes calculate_fused_max_sub_exp_add_tile via the sfpu::FusedMaxSubExpAdd op struct.
  */
-template <bool SDPA_EXP_APPROX_MODE, VectorMode vector_mode = VectorMode::C, bool final_norm = false>
+template <
+    bool SDPA_EXP_APPROX_MODE,
+    VectorMode vector_mode = VectorMode::C,
+    bool final_norm = false,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 void fused_max_sub_exp_add_tile(std::uint32_t idst, int scale_bf16) {
-    SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_fused_max_sub_exp_add_tile,
-        (SDPA_EXP_APPROX_MODE, final_norm),
-        idst,
-        vector_mode,
-        scale_bf16);
+    sfpu::FusedMaxSubExpAdd<SDPA_EXP_APPROX_MODE, final_norm, DST_SYNC_MODE, is_fp32_dest_acc_en>::calculate(
+        idst, vector_mode, scale_bf16);
 }
 #endif
 

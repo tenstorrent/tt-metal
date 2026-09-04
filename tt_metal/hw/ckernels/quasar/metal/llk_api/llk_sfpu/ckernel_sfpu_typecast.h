@@ -11,6 +11,7 @@
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
 #include "llk_math_eltwise_sfpu_common.h"
+#include "llk_math_eltwise_sfpu_op.h"
 #include "sfpi.h"
 
 namespace ckernel {
@@ -169,6 +170,62 @@ inline void calculate_typecast() {
         _calculate_typecast_arith_sfp_rows_<SRC_FMT, DST_FMT>();
     }
 }
+
+// MX / block-float typecasts are a pure unpack/pack format conversion (a datacopy) on Quasar:
+// the unpacker converts MX -> float into Dest and the packer converts float -> MX on the way out,
+// so no SFPU op runs. This mirrors the BH "handled by unpacker/packer" no-op bfp arms.
+inline constexpr bool _typecast_is_mx_format_(DataFormat fmt) {
+    return fmt == DataFormat::MxFp8R || fmt == DataFormat::MxFp8P || fmt == DataFormat::MxFp6R ||
+           fmt == DataFormat::MxFp6P || fmt == DataFormat::MxFp4 || fmt == DataFormat::MxInt8 ||
+           fmt == DataFormat::MxInt4 || fmt == DataFormat::MxInt2;
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Typecast<IN_FORMAT, OUT_FORMAT, APPROX, DST_SYNC, DST_ACCUM, ITERATIONS>
+//   calculate(dst_index, vector_mode) -> calculate_typecast<effective in, effective out, ITERATIONS>
+//   init()                            -> init_typecast
+// Backs typecast_tile / typecast_tile_init. APPROXIMATION_MODE is carried for parity with the WH/BH struct
+// and unused by Quasar's single unified kernel.
+// An MX endpoint is unpacked to / packed from Float16_b by the format, so at the SFPU level an MX format
+// behaves as Float16_b. Route through that effective format: MX <-> Float16_b (and MX <-> MX) collapse to a
+// pure format no-op (calculate() and init() issue nothing), while MX <-> {Float32, Int32, ...} run the
+// Float16_b <-> X SFPU conversion on top of the format (X -> MX runs X -> Float16_b, then the packer emits MX).
+// ---------------------------------------------------------------------------------------------------
+template <
+    DataFormat IN_FORMAT,
+    DataFormat OUT_FORMAT,
+    bool APPROXIMATION_MODE,
+    DstSync DST_SYNC,
+    bool DST_ACCUM,
+    int ITERATIONS = SFPU_ITERATIONS>
+struct Typecast : SfpuUnaryOp<
+                      Typecast<IN_FORMAT, OUT_FORMAT, APPROXIMATION_MODE, DST_SYNC, DST_ACCUM, ITERATIONS>,
+                      DST_SYNC,
+                      DST_ACCUM> {
+    using Base = SfpuUnaryOp<Typecast, DST_SYNC, DST_ACCUM>;
+
+    static constexpr DataFormat effective_in_format =
+        _typecast_is_mx_format_(IN_FORMAT) ? DataFormat::Float16_b : IN_FORMAT;
+    static constexpr DataFormat effective_out_format =
+        _typecast_is_mx_format_(OUT_FORMAT) ? DataFormat::Float16_b : OUT_FORMAT;
+    static constexpr bool has_sfpu_kernel = effective_in_format != effective_out_format;
+
+    inline __attribute__((always_inline)) static void calculate(uint32_t dst_index, VectorMode vector_mode) {
+        if constexpr (has_sfpu_kernel) {
+            Base::calculate(dst_index, vector_mode);
+        }
+    }
+
+    inline __attribute__((always_inline)) static void init() {
+        if constexpr (has_sfpu_kernel) {
+            Base::init();
+        }
+    }
+
+    static void kernel() { calculate_typecast<effective_in_format, effective_out_format, ITERATIONS>(); }
+
+    static void init_kernel() { init_typecast(); }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

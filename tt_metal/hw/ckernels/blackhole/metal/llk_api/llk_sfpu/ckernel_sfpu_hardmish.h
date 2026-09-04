@@ -8,6 +8,7 @@
 #include "ckernel_defs.h"
 #include "cmath_common.h"
 #include "sfpi.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -26,8 +27,6 @@ namespace sfpu {
 // Constants 0.5 and 1.0 are exactly representable in IEEE 754.
 // Clamping to [0, 1] gives exact boundary values (0 or 1),
 // so the final multiply produces exact 0 or exact x at transitions.
-inline void hardmish_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
-
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void hardmish() {
     for (int d = 0; d < ITERATIONS; d++) {
@@ -41,5 +40,13 @@ inline void hardmish() {
     }
 }
 
+// ---------------------------------------------------------------------------------------------------
+// Hardmish<APPROX, DST_SYNC, DST_ACCUM, ITERATIONS>::calculate(dst_index, vector_mode)
+//   backs hardmish_tile / hardmish_tile_init (bare per-op init).
+// ---------------------------------------------------------------------------------------------------
+template <bool APPROXIMATION_MODE, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8>
+struct Hardmish : SfpuUnaryOp<Hardmish<APPROXIMATION_MODE, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static void kernel() { hardmish<APPROXIMATION_MODE, ITERATIONS>(); }
+};
 }  // namespace sfpu
 }  // namespace ckernel

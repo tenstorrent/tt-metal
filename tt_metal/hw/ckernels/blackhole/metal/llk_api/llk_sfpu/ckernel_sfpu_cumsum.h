@@ -8,6 +8,7 @@
 #include "ckernel_ops.h"
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "sfpi.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -166,5 +167,17 @@ inline void cumsum_init() {
     });
 }
 
+// ---------------------------------------------------------------------------------------------------
+// Cumsum<DST_SYNC, DST_ACCUM, APPROXIMATION_MODE, ITERATIONS>
+//   calculate(dst_index, VectorMode::RC_custom, first) -> calculate_cumsum;  init() -> cumsum_init
+//   APPROXIMATION_MODE / ITERATIONS are unused by the kernel (only the exact implementation exists).
+//   Backs cumsum_tile / cumsum_tile_init (api/compute/cumsum.h).
+// ---------------------------------------------------------------------------------------------------
+template <DstSync DST_SYNC, bool DST_ACCUM, bool APPROXIMATION_MODE = false, int ITERATIONS = 8>
+struct Cumsum : SfpuUnaryOp<Cumsum<DST_SYNC, DST_ACCUM, APPROXIMATION_MODE, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static void kernel(bool first) { calculate_cumsum<APPROXIMATION_MODE, ITERATIONS>(first); }
+
+    static void init_kernel() { cumsum_init<APPROXIMATION_MODE>(); }
+};
 }  // namespace sfpu
 }  // namespace ckernel

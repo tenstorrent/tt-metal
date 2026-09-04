@@ -228,7 +228,7 @@ using namespace ckernel;
 #define DST_SYNC_MODE  dest_sync
 #define DST_ACCUM_MODE is_fp32_dest_acc_en
 #include "llk_sfpu/ckernel_sfpu_topk.h"
-#include "llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h"
+#include "llk_sfpu/llk_math_eltwise_sfpu_op.h"
 #undef DST_SYNC_MODE
 #undef DST_ACCUM_MODE
 
@@ -258,8 +258,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // After Datacopy, we do topk SFPU.
     // These two calls are essentially the same as calling ckernel::llk_math_eltwise_unary_sfpu_topk_init<APPROX>(); from metal.
-    _llk_math_eltwise_unary_sfpu_init_<SfpuType::topk_local_sort>();
-    ckernel::sfpu::_init_topk();
+    sfpu::TopkLocalSort<APPROX, TOPK_STABLE_SORT, dest_sync, is_fp32_dest_acc_en>::init();
 
     for (int current_tile_row = 0; current_tile_row < NUM_TOPK_PIPELINE_EXECUTIONS; ++current_tile_row) // Iterates over tile_rows.
     {
@@ -321,63 +320,28 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 if (first_iteration)
                 {
                     // same as calling ckernel::llk_math_eltwise_unary_sfpu_topk_local_sort from metal.
-                    SFPU_UNARY_CALL(
-                        dest_sync,
-                        is_fp32_dest_acc_en,
-                        calculate_bitonic_topk_phases_steps,
-                        (APPROX, is_fp32_dest_acc_en, TOPK_STABLE_SORT),
-                        dst_index,
-                        vector_mode,
-                        TOPK_SORT_DIRECTION,
-                        end_phase,
-                        start_phase,
-                        end_step,
-                        start_step);
+                    SfpuUnaryFn<sfpu::calculate_bitonic_topk_phases_steps<APPROX, is_fp32_dest_acc_en, TOPK_STABLE_SORT>, dest_sync, is_fp32_dest_acc_en>::
+                        calculate(dst_index, vector_mode, TOPK_SORT_DIRECTION, end_phase, start_phase, end_step, start_step);
                 }
                 else
                 {
                     // Same as calling ckernel::llk_math_eltwise_unary_sfpu_topk_rebuild from metal.
-                    SFPU_UNARY_CALL(
-                        dest_sync,
-                        is_fp32_dest_acc_en,
-                        calculate_bitonic_topk_rebuild,
-                        (APPROX, is_fp32_dest_acc_en, TOPK_STABLE_SORT),
-                        dst_index,
-                        vector_mode,
-                        TOPK_SORT_DIRECTION,
-                        current_iteration,
-                        TOPK_K,
-                        TOPK_LOGK,
-                        0 /*skip_second*/);
+                    SfpuUnaryFn<sfpu::calculate_bitonic_topk_rebuild<APPROX, is_fp32_dest_acc_en, TOPK_STABLE_SORT>, dest_sync, is_fp32_dest_acc_en>::calculate(
+                        dst_index, vector_mode, TOPK_SORT_DIRECTION, current_iteration, TOPK_K, TOPK_LOGK, 0 /*skip_second*/);
                 }
 
                 // Always a second operation.
-                SFPU_UNARY_CALL(
+                SfpuUnaryFn<
+                    sfpu::calculate_bitonic_topk_merge<APPROX, is_fp32_dest_acc_en, TOPK_SORT_DIRECTION, TOPK_STABLE_SORT>,
                     dest_sync,
-                    is_fp32_dest_acc_en,
-                    calculate_bitonic_topk_merge,
-                    (APPROX, is_fp32_dest_acc_en, TOPK_SORT_DIRECTION, TOPK_STABLE_SORT),
-                    dst_index,
-                    vector_mode,
-                    current_iteration,
-                    TOPK_K);
+                    is_fp32_dest_acc_en>::calculate(dst_index, vector_mode, current_iteration, TOPK_K);
 
                 // Additional last operation.
                 if (last_iteration)
                 {
                     // Same as calling ckernel::llk_math_eltwise_unary_sfpu_topk_rebuild from metal.
-                    SFPU_UNARY_CALL(
-                        dest_sync,
-                        is_fp32_dest_acc_en,
-                        calculate_bitonic_topk_rebuild,
-                        (APPROX, is_fp32_dest_acc_en, TOPK_STABLE_SORT),
-                        dst_index,
-                        vector_mode,
-                        TOPK_SORT_DIRECTION,
-                        current_iteration,
-                        TOPK_K,
-                        TOPK_LOGK,
-                        1 /*skip_second*/);
+                    SfpuUnaryFn<sfpu::calculate_bitonic_topk_rebuild<APPROX, is_fp32_dest_acc_en, TOPK_STABLE_SORT>, dest_sync, is_fp32_dest_acc_en>::calculate(
+                        dst_index, vector_mode, TOPK_SORT_DIRECTION, current_iteration, TOPK_K, TOPK_LOGK, 1 /*skip_second*/);
                 }
 
                 _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();

@@ -7,6 +7,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpi.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel::sfpu {
 
@@ -197,4 +198,31 @@ inline void div_floor_init() {
     div_trunc_init<APPROXIMATION_MODE>();
 }
 
+// ---------------------------------------------------------------------------------------------------
+// DivInt32Rounding<APPROXIMATION_MODE, IS_FLOOR, DST_SYNC, DST_ACCUM, ITERATIONS>
+//   IS_FLOOR = true  -> calculate_div_int32_floor / div_floor_init
+//   IS_FLOOR = false -> calculate_div_int32_trunc / div_trunc_init
+//   Backs div_int32_floor_tile(_init) / div_int32_trunc_tile(_init) (api/compute/div_int32_floor.h).
+// ---------------------------------------------------------------------------------------------------
+template <bool APPROXIMATION_MODE, bool IS_FLOOR, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8>
+struct DivInt32Rounding : SfpuBinaryOp<
+                              DivInt32Rounding<APPROXIMATION_MODE, IS_FLOOR, DST_SYNC, DST_ACCUM, ITERATIONS>,
+                              DST_SYNC,
+                              DST_ACCUM> {
+    static void kernel(uint32_t dst_index_in0, uint32_t dst_index_in1, uint32_t dst_index_out) {
+        if constexpr (IS_FLOOR) {
+            calculate_div_int32_floor<APPROXIMATION_MODE, ITERATIONS>(dst_index_in0, dst_index_in1, dst_index_out);
+        } else {
+            calculate_div_int32_trunc<APPROXIMATION_MODE, ITERATIONS>(dst_index_in0, dst_index_in1, dst_index_out);
+        }
+    }
+
+    static void init_kernel() {
+        if constexpr (IS_FLOOR) {
+            div_floor_init<APPROXIMATION_MODE>();
+        } else {
+            div_trunc_init<APPROXIMATION_MODE>();
+        }
+    }
+};
 }  // namespace ckernel::sfpu

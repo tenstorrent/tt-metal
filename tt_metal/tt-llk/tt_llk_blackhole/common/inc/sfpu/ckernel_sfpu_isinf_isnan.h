@@ -11,7 +11,16 @@
 namespace ckernel::sfpu
 {
 
-template <SfpuType operation, bool APPROXIMATION_MODE, int ITERATIONS>
+enum class IsInfNanMode
+{
+    IsInf,
+    IsPosInf,
+    IsNegInf,
+    IsNan,
+    IsFinite
+};
+
+template <IsInfNanMode operation, bool APPROXIMATION_MODE, int ITERATIONS>
 inline void _calculate_sfpu_isinf_isnan_()
 {
     // SFPU microcode
@@ -20,7 +29,7 @@ inline void _calculate_sfpu_isinf_isnan_()
         sfpi::vFloat in  = sfpi::dst_reg[0];
         sfpi::vFloat res = 0.0f;
 
-        if constexpr (operation == SfpuType::isinf)
+        if constexpr (operation == IsInfNanMode::IsInf)
         {
             v_if (sfpi::is_inf(in))
             {
@@ -28,7 +37,7 @@ inline void _calculate_sfpu_isinf_isnan_()
             }
             v_endif;
         }
-        else if constexpr (operation == SfpuType::isposinf)
+        else if constexpr (operation == IsInfNanMode::IsPosInf)
         {
             v_if (sfpi::is_pos(in) && sfpi::is_inf(in))
             {
@@ -36,7 +45,7 @@ inline void _calculate_sfpu_isinf_isnan_()
             }
             v_endif;
         }
-        else if constexpr (operation == SfpuType::isneginf)
+        else if constexpr (operation == IsInfNanMode::IsNegInf)
         {
             v_if (sfpi::is_neg(in) && sfpi::is_inf(in))
             {
@@ -44,7 +53,7 @@ inline void _calculate_sfpu_isinf_isnan_()
             }
             v_endif;
         }
-        else if constexpr (operation == SfpuType::isnan)
+        else if constexpr (operation == IsInfNanMode::IsNan)
         {
             v_if (sfpi::is_nan(in))
             {
@@ -52,7 +61,7 @@ inline void _calculate_sfpu_isinf_isnan_()
             }
             v_endif;
         }
-        else if constexpr (operation == SfpuType::isfinite)
+        else if constexpr (operation == IsInfNanMode::IsFinite)
         {
             v_if (sfpi::is_finite(in))
             {

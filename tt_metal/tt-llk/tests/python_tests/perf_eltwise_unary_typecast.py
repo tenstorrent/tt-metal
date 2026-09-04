@@ -14,7 +14,7 @@ optimized) and once with TT_METAL_DISABLE_SFPLOADMACRO=1 (macro OFF, baseline)
 
 Unlike test_perf_eltwise_unary_sfpu (which dispatches a single MathOperation),
 typecast is selected by the (IN, OUT) DataFormat pair via typecast_tile<IN, OUT>
-/ the shared SfpuType::typecast dispatch, so this module uses the dedicated
+/ the shared SfpuUnaryOp::typecast dispatch, so this module uses the dedicated
 typecast perf kernel sources/eltwise_unary_typecast_perf.cpp with the
 TYPECAST_FORMATS(in, out) template.
 """
@@ -120,7 +120,7 @@ def test_perf_eltwise_unary_typecast(
             PerfRunType.MATH_ISOLATE,
         ],
         templates=[
-            # Emits SFPU_UNARY_OPERATION = SfpuType::typecast so the kernel goes
+            # Emits SFPU_UNARY_OPERATION = SfpuUnaryOp::typecast so the kernel goes
             # through the shared unary-SFPU dispatch; TYPECAST_FORMATS supplies the
             # (input, output) pair that selects the concrete typecast kernel.
             MATH_OP(mathop=MathOperation.Typecast),

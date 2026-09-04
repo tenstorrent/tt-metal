@@ -8,7 +8,6 @@
 #include "api/compute/sentinel/compute_kernel_sentinel.h"
 #ifdef TRISC_MATH
 #include "llk_math_binary_api.h"
-#include "llk_math_eltwise_unary_sfpu_init.h"
 #endif
 #ifdef TRISC_UNPACK
 #include "llk_unpack_AB_api.h"
@@ -402,7 +401,10 @@ namespace detail {
 // (DEST_TO_SRCA) or SrcB (DEST_TO_SRCB); the op runs on SrcA & SrcB and writes back to DST[idst].
 // The public {add,sub,mul}_reuse_dest_tiles wrappers and the deprecated binary_dest_reuse_tiles shim
 // forward here. Assumes a prior op populated DST[idst], else it reads zeroes.
-template <EltwiseBinaryType eltwise_binary_type, EltwiseBinaryReuseDestType reuse_dest, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <
+    EltwiseBinaryType eltwise_binary_type,
+    EltwiseBinaryReuseDestType reuse_dest,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void binary_reuse_dest_tiles(uint32_t in_cb_id, uint32_t in_tile_index, uint32_t dst_tile_index) {
 #ifndef ARCH_QUASAR
     UNPACK(constexpr bool acc_to_dest = true);
@@ -595,7 +597,8 @@ template <
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
 [[deprecated(
     "Renamed to add_reuse_dest_init / sub_reuse_dest_init / mul_reuse_dest_init<reuse_dest>, e.g. "
-    "add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(in_cb). This will be removed after September 15th, 2026.")]] ALWI void
+    "add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(in_cb). This will be removed after September 15th, "
+    "2026.")]] ALWI void
 binary_dest_reuse_tiles_init(uint32_t icb0, uint32_t call_line = __builtin_LINE()) {
     // Single-operand dest-reuse init path. Kept as a shim so existing callers (and the degenerate
     // binary_reuse_dest == NONE case, e.g. the sentinel test) retain the exact reconfigure behaviour.
@@ -620,7 +623,8 @@ template <
     bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 [[deprecated(
     "Renamed to add_reuse_dest_tiles / sub_reuse_dest_tiles / mul_reuse_dest_tiles<reuse_dest>, e.g. "
-    "add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(in_cb, it, idst). This will be removed after September 15th, 2026.")]] ALWI void
+    "add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(in_cb, it, idst). This will be removed after "
+    "September 15th, 2026.")]] ALWI void
 binary_dest_reuse_tiles(uint32_t in_cb_id, uint32_t in_tile_index, uint32_t dst_tile_index) {
     detail::binary_reuse_dest_tiles<eltwise_binary_type, binary_reuse_dest, is_fp32_dest_acc_en>(
         in_cb_id, in_tile_index, dst_tile_index);

@@ -10,6 +10,7 @@
 #include "sfpi.h"
 #include "ckernel_sfpu_recip.h"
 #include "sfpu/ckernel_sfpu_rounding_ops.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel::sfpu {
 
@@ -305,4 +306,39 @@ inline void remainder_binary_init() {
     recip_init<APPROXIMATION_MODE, false, false>();
 }
 
+// ---------------------------------------------------------------------------------------------------
+// BinaryRemainder<APPROXIMATION_MODE, FORMAT, DST_SYNC, DST_ACCUM, ITERATIONS>
+//   FORMAT = Int32  -> calculate_remainder_int32  / remainder_int32_init
+//   FORMAT = UInt32 -> calculate_remainder_uint32 / remainder_uint32_init
+//   other (float)   -> calculate_sfpu_binary_remainder<.., DST_ACCUM> / remainder_binary_init
+//   Backs remainder_int32_tile, remainder_uint32_tile, remainder_binary_tile (+ _init)
+//   (api/compute/binary_remainder.h).
+// ---------------------------------------------------------------------------------------------------
+template <bool APPROXIMATION_MODE, DataFormat FORMAT, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8>
+struct BinaryRemainder
+    : SfpuBinaryOp<BinaryRemainder<APPROXIMATION_MODE, FORMAT, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static constexpr bool is_int32 = FORMAT == DataFormat::Int32;
+    static constexpr bool is_uint32 = FORMAT == DataFormat::UInt32;
+
+    static void kernel(uint32_t dst_index_in0, uint32_t dst_index_in1, uint32_t dst_index_out) {
+        if constexpr (is_int32) {
+            calculate_remainder_int32<APPROXIMATION_MODE, ITERATIONS>(dst_index_in0, dst_index_in1, dst_index_out);
+        } else if constexpr (is_uint32) {
+            calculate_remainder_uint32<APPROXIMATION_MODE, ITERATIONS>(dst_index_in0, dst_index_in1, dst_index_out);
+        } else {
+            calculate_sfpu_binary_remainder<APPROXIMATION_MODE, ITERATIONS, DST_ACCUM>(
+                dst_index_in0, dst_index_in1, dst_index_out);
+        }
+    }
+
+    static void init_kernel() {
+        if constexpr (is_int32) {
+            remainder_int32_init<APPROXIMATION_MODE>();
+        } else if constexpr (is_uint32) {
+            remainder_uint32_init<APPROXIMATION_MODE>();
+        } else {
+            remainder_binary_init<APPROXIMATION_MODE>();
+        }
+    }
+};
 }  // namespace ckernel::sfpu

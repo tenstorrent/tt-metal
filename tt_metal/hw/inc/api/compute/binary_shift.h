@@ -7,7 +7,6 @@
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_shift.h"
-#include "llk_math_eltwise_binary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
@@ -34,22 +33,15 @@ namespace ckernel {
  * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-template <DataFormat data_format>
+template <DataFormat data_format, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void binary_left_shift_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
     static_assert(
         data_format == DataFormat::Int32 || data_format == DataFormat::UInt32 || data_format == DataFormat::UInt16,
         "Unsupported data format for left shift. Supported data formats are: Int32, UInt32, UInt16");
     constexpr InstrModLoadStore INSTRUCTION_MODE =
         (data_format == DataFormat::UInt16) ? InstrModLoadStore::LO16 : InstrModLoadStore::INT32;
-    MATH((SFPU_BINARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_binary_left_shift,
-        (APPROX, 8 /* ITERATIONS */, INSTRUCTION_MODE, false /* SIGN_MAGNITUDE_FORMAT */),
-        idst0,
-        idst1,
-        odst,
-        VectorMode::RC)));
+    MATH((sfpu::BinaryShift<APPROX, sfpu::BinaryShiftOp::LEFT, INSTRUCTION_MODE, DST_SYNC_MODE, is_fp32_dest_acc_en>::
+              calculate(idst0, idst1, odst, VectorMode::RC)));
 }
 
 // clang-format off
@@ -74,22 +66,15 @@ ALWI void binary_left_shift_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) 
  * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-template <DataFormat data_format>
+template <DataFormat data_format, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void binary_right_shift_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
     static_assert(
         data_format == DataFormat::Int32 || data_format == DataFormat::UInt32 || data_format == DataFormat::UInt16,
         "Unsupported data format for right shift. Supported data formats are: Int32, UInt32, UInt16");
     constexpr InstrModLoadStore INSTRUCTION_MODE =
         (data_format == DataFormat::UInt16) ? InstrModLoadStore::LO16 : InstrModLoadStore::INT32;
-    MATH((SFPU_BINARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_binary_right_shift,
-        (APPROX, 8 /* ITERATIONS */, INSTRUCTION_MODE, false /* SIGN_MAGNITUDE_FORMAT */),
-        idst0,
-        idst1,
-        odst,
-        VectorMode::RC)));
+    MATH((sfpu::BinaryShift<APPROX, sfpu::BinaryShiftOp::RIGHT, INSTRUCTION_MODE, DST_SYNC_MODE, is_fp32_dest_acc_en>::
+              calculate(idst0, idst1, odst, VectorMode::RC)));
 }
 
 // clang-format off
@@ -114,27 +99,33 @@ ALWI void binary_right_shift_tile(uint32_t idst0, uint32_t idst1, uint32_t odst)
  * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-template <DataFormat data_format>
+template <DataFormat data_format, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void binary_logical_right_shift_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
     static_assert(
         data_format == DataFormat::Int32 || data_format == DataFormat::UInt32 || data_format == DataFormat::UInt16,
         "Unsupported data format for logical right shift. Supported data formats are: Int32, UInt32, UInt16");
     constexpr InstrModLoadStore INSTRUCTION_MODE =
         (data_format == DataFormat::UInt16) ? InstrModLoadStore::LO16 : InstrModLoadStore::INT32;
-    MATH((SFPU_BINARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_logical_right_shift,
-        (APPROX, 8 /* ITERATIONS */, INSTRUCTION_MODE, false /* SIGN_MAGNITUDE_FORMAT */),
-        idst0,
-        idst1,
-        odst,
-        VectorMode::RC)));
+    MATH((sfpu::BinaryShift<
+          APPROX,
+          sfpu::BinaryShiftOp::LOGICAL_RIGHT,
+          INSTRUCTION_MODE,
+          DST_SYNC_MODE,
+          is_fp32_dest_acc_en>::calculate(idst0, idst1, odst, VectorMode::RC)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void binary_shift_tile_init() { MATH((SFPU_BINARY_INIT(unused))); }
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void binary_shift_tile_init() {
+    // The init is shared by all shift variants and data formats (shared SFPU init only).
+    MATH((sfpu::BinaryShift<
+          APPROX,
+          sfpu::BinaryShiftOp::LEFT,
+          InstrModLoadStore::INT32,
+          DST_SYNC_MODE,
+          is_fp32_dest_acc_en>::init()));
+}
 
 }  // namespace ckernel

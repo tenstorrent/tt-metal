@@ -14,34 +14,5 @@
 #include "cmath_common.h"
 #include "llk_math_common.h"
 #include "llk_math_eltwise_sfpu_common.h"
-#include "llk_sfpu_types.h"
-
-// local function declarations
-template <SfpuType sfpu_op>
-inline void eltwise_ternary_sfpu_configure_addrmod()
-{
-    addr_mod_t {
-        .srca = {.incr = 0},
-        .srcb = {.incr = 0},
-        .dest = {.incr = 0},
-    }
-        .set(ADDR_MOD_7);
-
-    if constexpr (sfpu_op == SfpuType::where)
-    {
-        addr_mod_t {
-            .srca = {.incr = 0},
-            .srcb = {.incr = 0},
-            .dest = {.incr = 2},
-        }
-            .set(ADDR_MOD_6);
-    }
-}
-
-template <SfpuType sfpu_op>
-inline void _llk_math_eltwise_ternary_sfpu_init_()
-{
-    sfpu::_init_sfpu_config_reg();
-    eltwise_ternary_sfpu_configure_addrmod<sfpu_op>();
-    math::reset_counters(p_setrwc::SET_ABD_F);
-}
+// The shared init for ternary SFPU ops is _llk_math_eltwise_sfpu_init_() in llk_math_eltwise_sfpu_common.h;
+// ops that need ADDR_MOD_6 (dest auto-increment) program it in their own init.

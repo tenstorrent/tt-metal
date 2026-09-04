@@ -169,7 +169,7 @@ def _generate_operation_constants(mathop: MathOperation) -> list[str]:
 
     if mathop in SFPU_UNARY_OPERATIONS:
         constants.append(
-            f"constexpr auto SFPU_UNARY_OPERATION = SfpuType::{mathop.cpp_enum_value};"
+            f"constexpr auto SFPU_UNARY_OPERATION = ::SfpuUnaryOp::{mathop.cpp_enum_value};"
         )
     elif mathop in SFPU_BINARY_OPERATIONS:
         constants.append(
@@ -215,7 +215,7 @@ class MATH_OP(TemplateParameter):
             temp_header.extend(
                 [
                     "\n// Additional SFPU unary operation",
-                    f"constexpr auto SFPU_UNARY_OPERATION = SfpuType::{self.unary_extra.cpp_enum_value};",
+                    f"constexpr auto SFPU_UNARY_OPERATION = ::SfpuUnaryOp::{self.unary_extra.cpp_enum_value};",
                 ]
             )
 
@@ -226,15 +226,15 @@ class MATH_OP(TemplateParameter):
 class SFPU_TERNARY_OP(TemplateParameter):
     """Select the ternary SFPU op at compile time.
 
-    Emits ``constexpr auto SFPU_TERNARY_OPERATION = SfpuType::<op>;`` consumed by
+    Emits ``constexpr auto SFPU_TERNARY_OPERATION = ::SfpuTernaryOp::<op>;`` consumed by
     ``sfpu_operations.h``. ``ternary_mathop.cpp_enum_value`` must match the
-    ``SfpuType`` enumerator name (e.g. ``addcmul``/``addcdiv``).
+    ``SfpuTernaryOp`` enumerator name (e.g. ``addcmul``/``addcdiv``).
     """
 
     ternary_mathop: MathOperation = None
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr auto SFPU_TERNARY_OPERATION = SfpuType::{self.ternary_mathop.cpp_enum_value};"
+        return f"constexpr auto SFPU_TERNARY_OPERATION = ::SfpuTernaryOp::{self.ternary_mathop.cpp_enum_value};"
 
 
 @dataclass
@@ -1761,7 +1761,7 @@ class TYPECAST_FORMATS(TemplateParameter):
 
     Emits the logical input/output ``DataFormat`` enum values consumed by
     ``typecast_tile<IN, OUT>`` (mirrored by the typecast dispatch in
-    ``sfpu_operations.h``, reached via ``SfpuType::typecast``).
+    ``sfpu_operations.h``, reached via ``SfpuUnaryOp::typecast``).
     """
 
     input_format: DataFormat = DataFormat.Float32

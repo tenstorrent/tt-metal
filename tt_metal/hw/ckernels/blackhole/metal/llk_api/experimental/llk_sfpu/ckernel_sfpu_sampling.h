@@ -10,6 +10,7 @@
 #include "sfpi.h"
 #include "ckernel_sfpu_recip.h"
 #include "sfpu/ckernel_sfpu_converter.h"
+#include "ckernel_sfpu_binary_comp.h"
 
 namespace ckernel::sfpu {
 
@@ -23,8 +24,7 @@ constexpr int ITERATIONS_FIRST_COLUMN = 4;
 // column-0 callers never read, so the walk steps over it.
 constexpr int FIRST_COLUMN_SLOT_STRIDE = 2;
 
-// SfpuType has no generic float add/sub/mul (only the *_int32/*_uint32 variants), so the column-0
-// binary helpers dispatch on this local tag instead.
+// Column-0 binary helpers dispatch on this local tag instead of BinaryOp (add/sub/mul).
 enum class SamplingBinaryOp { add, sub, mul };
 
 /**
@@ -122,27 +122,27 @@ inline void calculate_sampling_clamp_max_scalar(const std::uint32_t param) {
  * Writes 1.0f where the comparison holds and 0.0f where it does not, so the result is a keep-mask
  * the binary helpers can multiply through. Used by the top-P mask (exclusive_CDF < top_p).
  *
- * @tparam OP: Comparison to apply, values = <le/lt/ge>
+ * @tparam OP: Comparison to apply, values = <Le/Lt/Ge>
  * @param dst_index_in0: DEST tile index of the left operand.
  * @param dst_index_in1: DEST tile index of the right operand.
  * @param dst_index_out: DEST tile index the mask is written to.
  */
-template <SfpuType OP>
+template <BinaryCompMode OP>
 inline void calculate_sampling_binary_comp_first_column(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     static_assert(
-        OP == SfpuType::le || OP == SfpuType::lt || OP == SfpuType::ge,
-        "sampling_binary_comp_first_column supports le/lt/ge only");
+        OP == BinaryCompMode::Le || OP == BinaryCompMode::Lt || OP == BinaryCompMode::Ge,
+        "sampling_binary_comp_first_column supports Le/Lt/Ge only");
 
     for (int d = 0; d < ITERATIONS_FIRST_COLUMN; d++) {
         sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
         sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
         sfpi::vFloat result = sfpi::vConst0;
 
-        if constexpr (OP == SfpuType::le) {
+        if constexpr (OP == BinaryCompMode::Le) {
             v_if(in0 <= in1) { result = sfpi::vConst1; }
             v_endif;
-        } else if constexpr (OP == SfpuType::lt) {
+        } else if constexpr (OP == BinaryCompMode::Lt) {
             v_if(in0 < in1) { result = sfpi::vConst1; }
             v_endif;
         } else {

@@ -6,8 +6,7 @@
 
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
-#include "sfpu/ckernel_sfpu_isinf_isnan.h"
-#include "llk_math_eltwise_unary_sfpu_macros.h"
+#include "ckernel_sfpu_isinf_isnan.h"
 #endif
 
 namespace ckernel {
@@ -25,20 +24,19 @@ namespace ckernel {
  * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void isinf_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        _calculate_sfpu_isinf_isnan_,
-        (SfpuType::isinf, APPROX, 8),
-        idst,
-        VectorMode::RC));
+    MATH((sfpu::IsInfIsNan<sfpu::IsInfNanMode::IsInf, APPROX, DST_SYNC_MODE, is_fp32_dest_acc_en>::calculate(
+        idst, VectorMode::RC)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void isinf_tile_init() { MATH(SFPU_UNARY_INIT(isinf)); }
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void isinf_tile_init() {
+    MATH((sfpu::IsInfIsNan<sfpu::IsInfNanMode::IsInf, APPROX, DST_SYNC_MODE, is_fp32_dest_acc_en>::init()));
+}
 
 // clang-format off
 /**
@@ -54,20 +52,19 @@ ALWI void isinf_tile_init() { MATH(SFPU_UNARY_INIT(isinf)); }
  * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void isposinf_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        _calculate_sfpu_isinf_isnan_,
-        (SfpuType::isposinf, APPROX, 8),
-        idst,
-        VectorMode::RC));
+    MATH((sfpu::IsInfIsNan<sfpu::IsInfNanMode::IsPosInf, APPROX, DST_SYNC_MODE, is_fp32_dest_acc_en>::calculate(
+        idst, VectorMode::RC)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void isposinf_tile_init() { MATH(SFPU_UNARY_INIT(isposinf)); }
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void isposinf_tile_init() {
+    MATH((sfpu::IsInfIsNan<sfpu::IsInfNanMode::IsPosInf, APPROX, DST_SYNC_MODE, is_fp32_dest_acc_en>::init()));
+}
 
 // clang-format off
 /**
@@ -83,20 +80,19 @@ ALWI void isposinf_tile_init() { MATH(SFPU_UNARY_INIT(isposinf)); }
  * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void isneginf_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        _calculate_sfpu_isinf_isnan_,
-        (SfpuType::isneginf, APPROX, 8),
-        idst,
-        VectorMode::RC));
+    MATH((sfpu::IsInfIsNan<sfpu::IsInfNanMode::IsNegInf, APPROX, DST_SYNC_MODE, is_fp32_dest_acc_en>::calculate(
+        idst, VectorMode::RC)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void isneginf_tile_init() { MATH(SFPU_UNARY_INIT(isneginf)); }
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void isneginf_tile_init() {
+    MATH((sfpu::IsInfIsNan<sfpu::IsInfNanMode::IsNegInf, APPROX, DST_SYNC_MODE, is_fp32_dest_acc_en>::init()));
+}
 
 // clang-format off
 /**
@@ -112,20 +108,19 @@ ALWI void isneginf_tile_init() { MATH(SFPU_UNARY_INIT(isneginf)); }
  * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void isnan_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        _calculate_sfpu_isinf_isnan_,
-        (SfpuType::isnan, APPROX, 8),
-        idst,
-        VectorMode::RC));
+    MATH((sfpu::IsInfIsNan<sfpu::IsInfNanMode::IsNan, APPROX, DST_SYNC_MODE, is_fp32_dest_acc_en>::calculate(
+        idst, VectorMode::RC)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void isnan_tile_init() { MATH(SFPU_UNARY_INIT(isnan)); }
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void isnan_tile_init() {
+    MATH((sfpu::IsInfIsNan<sfpu::IsInfNanMode::IsNan, APPROX, DST_SYNC_MODE, is_fp32_dest_acc_en>::init()));
+}
 
 // clang-format off
 /**
@@ -141,18 +136,17 @@ ALWI void isnan_tile_init() { MATH(SFPU_UNARY_INIT(isnan)); }
  * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void isfinite_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        _calculate_sfpu_isinf_isnan_,
-        (SfpuType::isfinite, APPROX, 8),
-        idst,
-        VectorMode::RC));
+    MATH((sfpu::IsInfIsNan<sfpu::IsInfNanMode::IsFinite, APPROX, DST_SYNC_MODE, is_fp32_dest_acc_en>::calculate(
+        idst, VectorMode::RC)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void isfinite_tile_init() { MATH(SFPU_UNARY_INIT(isfinite)); }
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void isfinite_tile_init() {
+    MATH((sfpu::IsInfIsNan<sfpu::IsInfNanMode::IsFinite, APPROX, DST_SYNC_MODE, is_fp32_dest_acc_en>::init()));
+}
 }  // namespace ckernel

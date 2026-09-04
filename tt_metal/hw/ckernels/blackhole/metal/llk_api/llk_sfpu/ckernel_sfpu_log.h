@@ -36,6 +36,7 @@
 #include "ckernel_defs.h"
 #include "cmath_common.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -172,6 +173,29 @@ inline void log_init() {
         sfpi::vConstFloatPrgm2 = -0x1.008p-1f;
     }
 }
+
+// Log<APPROX, FAST_APPROX, HAS_BASE_SCALING, DST_SYNC, DST_ACCUM, ITERATIONS, IS_BASE_TWO>: log_tile /
+// log_tile_init (HAS_BASE_SCALING == false) and log_with_base_tile / log_with_base_tile_init
+// (HAS_BASE_SCALING == true) in compute_kernel_api.h.
+template <
+    bool APPROXIMATION_MODE,
+    bool FAST_APPROX,
+    bool HAS_BASE_SCALING,
+    DstSync DST_SYNC,
+    bool DST_ACCUM,
+    int ITERATIONS = 8,
+    bool IS_BASE_TWO = false>
+struct Log : SfpuUnaryOp<
+                 Log<APPROXIMATION_MODE, FAST_APPROX, HAS_BASE_SCALING, DST_SYNC, DST_ACCUM, ITERATIONS, IS_BASE_TWO>,
+                 DST_SYNC,
+                 DST_ACCUM> {
+    static void kernel(uint32_t log_base_scale_factor) {
+        calculate_log<APPROXIMATION_MODE, FAST_APPROX, HAS_BASE_SCALING, DST_ACCUM, ITERATIONS, IS_BASE_TWO>(
+            log_base_scale_factor);
+    }
+
+    static void init_kernel() { log_init<APPROXIMATION_MODE, FAST_APPROX, DST_ACCUM>(); }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

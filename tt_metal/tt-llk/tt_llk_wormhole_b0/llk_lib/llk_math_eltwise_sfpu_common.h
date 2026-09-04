@@ -10,7 +10,6 @@
 #include "ckernel_sfpu.h"
 #include "llk_assert.h"
 #include "llk_math_common.h"
-#include "llk_sfpu_types.h"
 
 using namespace ckernel;
 
@@ -37,6 +36,30 @@ inline void _llk_math_eltwise_sfpu_inc_dst_face_addr_()
 
 inline void _llk_math_eltwise_sfpu_uninit_()
 {
+}
+
+/**
+ * @brief Shared SFPU init, run by every op's init() ahead of the op-specific init_kernel.
+ *
+ * Programs the SFPU config register, the invariant ADDR_MOD_7 = {srca:0, srcb:0, dest:0} and resets the
+ * RWC counters. Ops that need a non-zero dest increment program ADDR_MOD_6 themselves afterwards.
+ * Same name and contract as the Quasar function.
+ */
+inline void _llk_math_eltwise_sfpu_init_()
+{
+    sfpu::_init_sfpu_config_reg();
+
+    // NOTE: this kernel is typically used in conjunction with
+    //       A2D, which is using ADDR_MOD_0 and ADDR_MOD_2, so use one
+    //       that doesn't conflict!
+    addr_mod_t {
+        .srca = {.incr = 0},
+        .srcb = {.incr = 0},
+        .dest = {.incr = 0},
+    }
+        .set(ADDR_MOD_7);
+
+    math::reset_counters(p_setrwc::SET_ABD_F);
 }
 
 template <DstSync Dst>

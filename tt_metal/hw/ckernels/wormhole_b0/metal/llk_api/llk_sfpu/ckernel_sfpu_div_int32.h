@@ -9,6 +9,7 @@
 #include "ckernel_defs.h"
 #include "sfpi.h"
 #include "ckernel_sfpu_recip.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel::sfpu {
 template <bool APPROXIMATION_MODE, int ITERATIONS>
@@ -51,4 +52,17 @@ inline void div_init() {
     sfpu_reciprocal_init<false>();
 }
 
+// ---------------------------------------------------------------------------------------------------
+// DivInt32<APPROXIMATION_MODE, DST_SYNC, DST_ACCUM, ITERATIONS>
+//   calculate(in0, in1, out, vector_mode) -> calculate_div_int32;  init() -> div_init
+//   Backs div_int32_tile / div_int32_tile_init (api/compute/div_int32_sfpu.h).
+// ---------------------------------------------------------------------------------------------------
+template <bool APPROXIMATION_MODE, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8>
+struct DivInt32 : SfpuBinaryOp<DivInt32<APPROXIMATION_MODE, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static void kernel(std::uint32_t dst_index_in0, std::uint32_t dst_index_in1, std::uint32_t dst_index_out) {
+        calculate_div_int32<APPROXIMATION_MODE, ITERATIONS>(dst_index_in0, dst_index_in1, dst_index_out);
+    }
+
+    static void init_kernel() { div_init<APPROXIMATION_MODE>(); }
+};
 }  // namespace ckernel::sfpu

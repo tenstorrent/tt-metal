@@ -9,6 +9,7 @@
 #include "ckernel_sfpu_recip.h"
 #include "cmath_common.h"
 #include "sfpu/ckernel_sfpu_converter.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -67,5 +68,16 @@ inline void calculate_fmod() {
     }
 }
 
+// ---------------------------------------------------------------------------------------------------
+// Fmod<APPROX, DST_SYNC, DST_ACCUM, ITERATIONS>
+//   calculate(dst_index, vector_mode) -> calculate_fmod (fmod_tile)
+//   init(value, recip)                -> init_fmod      (fmod_tile_init)
+// ---------------------------------------------------------------------------------------------------
+template <bool APPROXIMATION_MODE, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8>
+struct Fmod : SfpuUnaryOp<Fmod<APPROXIMATION_MODE, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static void kernel() { calculate_fmod<APPROXIMATION_MODE, ITERATIONS>(); }
+
+    static void init_kernel(uint32_t value, uint32_t recip) { init_fmod<APPROXIMATION_MODE>(value, recip); }
+};
 }  // namespace sfpu
 }  // namespace ckernel

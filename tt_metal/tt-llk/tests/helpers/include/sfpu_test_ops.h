@@ -1,10 +1,31 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-enum class SfpuType {
+#include <cstdint>
+
+// Test-only compile-time op keys for the tt-llk Python/C++ harness.
+//
+// These enums are NOT production types. Production SFPU ops are selected by
+// per-op structs (sfpu::Exp, sfpu::Where, ...) and per-family mode enums
+// (ckernel::sfpu::ZeroCompMode, UnaryCompMode, BinaryCompMode, IsInfNanMode,
+// TrigOp). The enumerators below are the union of the names previously
+// published as the production op-key enum in the WH/BH metal llk_api headers and the Quasar
+// llk_defs.h copy, spelled identically so OpSpec names in
+// python_tests/helpers/llk_params.py stay unchanged.
+//
+// To add a harness-visible op:
+// 1. Add the enumerator here (SfpuUnaryOp or SfpuTernaryOp).
+// 2. Add the struct / SfpuUnaryFn adapter to the dispatch tables in
+//    sfpu_operations.h (and sfpu_operations_quasar.h when the op is on Quasar).
+
+namespace test_utils
+{
+
+enum class SfpuUnaryOp : std::uint32_t
+{
     tanh,
     hardtanh,
     gelu,
@@ -42,6 +63,11 @@ enum class SfpuType {
     tan,
     relu_max,
     relu_min,
+    relu,
+    stochround,
+    add,
+    swiglu,
+    mul_int,
     cast_fp32_to_fp16a,
     sigmoid_appx,
     gelu_appx,
@@ -146,7 +172,7 @@ enum class SfpuType {
     max_pool_with_indices,
     selu,
     rpow,
-    cbrt,  // cube root
+    cbrt,
     hardmish,
     reduce,
     add_top_row,
@@ -177,4 +203,23 @@ enum class SfpuType {
     rsqrt_compat,
     reciprocal_compat,
     expm1_cw,
+    softcap,
+    situ_glu,
 };
+
+enum class SfpuTernaryOp : std::uint32_t
+{
+    where,
+    addcmul,
+    addcdiv,
+    lerp,
+    snake_beta,
+    mac,
+};
+
+} // namespace test_utils
+
+// Global using so emitted kernel code can spell `SfpuUnaryOp::x` / `SfpuTernaryOp::x`
+// the same way it previously spelled the production op-key enum.
+using test_utils::SfpuTernaryOp;
+using test_utils::SfpuUnaryOp;

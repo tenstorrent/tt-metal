@@ -62,7 +62,7 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
     // No early exit: beta is per-op, so every SOFTCAP entry in the chain has to be checked.
     for (const auto& op : args.op_chain) {
         if (op.type() == operations::unary::UnaryOpType::SOFTCAP) {
-            // ckernel_sfpu_softcap.h and the SfpuType registration it needs exist only
+            // ckernel_sfpu_softcap.h exists only
             // under hw/ckernels/blackhole. Without this the kernel reaches JIT and
             // dies on a missing header, which points nowhere useful.
             TT_FATAL(

@@ -9,10 +9,9 @@
 #include "cmath_common.h"
 #include "sfpu/ckernel_sfpu_converter.h"
 #include "sfpu/ckernel_sfpu_expm1_cw.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel::sfpu {
-
-inline void celu_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
 // celu(x) = x for x>=0, alpha*(exp(x/alpha)-1) for x<0
 
@@ -38,4 +37,14 @@ inline void calculate_celu(std::uint32_t param0, std::uint32_t param1) {
     }
 }
 
+// ---------------------------------------------------------------------------------------------------
+// Celu<APPROX, DST_SYNC, DST_ACCUM, ITERATIONS>::calculate(dst_index, vector_mode, alpha, alpha_recip)
+//   backs celu_tile / celu_tile_init (bare per-op init).
+// ---------------------------------------------------------------------------------------------------
+template <bool APPROXIMATION_MODE, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8>
+struct Celu : SfpuUnaryOp<Celu<APPROXIMATION_MODE, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static void kernel(std::uint32_t param0, std::uint32_t param1) {
+        calculate_celu<APPROXIMATION_MODE, DST_ACCUM, ITERATIONS>(param0, param1);
+    }
+};
 }  // namespace ckernel::sfpu

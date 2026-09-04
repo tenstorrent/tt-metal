@@ -9,7 +9,6 @@
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_binop_with_unary.h"
 #include "ckernel_sfpu_rsub_int32.h"
-#include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
@@ -32,20 +31,19 @@ namespace ckernel {
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void rsub_tile(uint32_t idst, uint32_t scalar) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_binop_with_scalar,
-        (APPROX, RSUB_UNARY, 8 /* ITERATIONS */, is_fp32_dest_acc_en),
-        idst,
-        VectorMode::RC,
-        scalar));
+    MATH((
+        sfpu::BinopWithScalar<APPROX, RSUB_UNARY, DataFormat::Float16_b, DST_SYNC_MODE, is_fp32_dest_acc_en>::calculate(
+            idst, VectorMode::RC, scalar)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void rsub_tile_init() { MATH(SFPU_UNARY_INIT(unused)); }
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void rsub_tile_init() {
+    MATH(
+        (sfpu::BinopWithScalar<APPROX, RSUB_UNARY, DataFormat::Float16_b, DST_SYNC_MODE, is_fp32_dest_acc_en>::init()));
+}
 
 // clang-format off
 /**
@@ -62,20 +60,17 @@ ALWI void rsub_tile_init() { MATH(SFPU_UNARY_INIT(unused)); }
  * | scalar         | Constant value that is being subtracted from                               | uint32_t |                                                       | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void rsub_unary_int32_tile(uint32_t idst, uint32_t scalar) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_rsub_scalar_int32,
-        (APPROX, 8 /* ITERATIONS */),
-        idst,
-        VectorMode::RC,
-        scalar));
+    MATH((sfpu::RsubScalarInt32<APPROX, DST_SYNC_MODE, is_fp32_dest_acc_en>::calculate(idst, VectorMode::RC, scalar)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void rsub_unary_int32_tile_init() { MATH(SFPU_UNARY_INIT(unused)); }
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void rsub_unary_int32_tile_init() {
+    MATH((sfpu::RsubScalarInt32<APPROX, DST_SYNC_MODE, is_fp32_dest_acc_en>::init()));
+}
 
 }  // namespace ckernel

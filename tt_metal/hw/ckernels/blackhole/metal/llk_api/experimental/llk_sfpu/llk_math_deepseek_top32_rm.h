@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "llk_math_eltwise_unary_sfpu_init.h"
+#include "llk_math_eltwise_sfpu_op.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
 #include "sfpu/experimental/ckernel_sfpu_deepseek_top32_rm.h"
 
@@ -12,7 +12,8 @@ namespace ckernel {
 
 template <bool APPROXIMATE>
 inline void llk_math_deepseek_top32_rm_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::unused>(sfpu::_top32_rm_init_);
+    _llk_math_eltwise_sfpu_init_();
+    sfpu::_top32_rm_init_();
 }
 
 template <bool APPROXIMATE, bool is_fp32_dest_acc_en>

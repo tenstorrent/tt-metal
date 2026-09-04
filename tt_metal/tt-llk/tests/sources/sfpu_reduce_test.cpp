@@ -68,7 +68,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t num_blocks         = params.NUM_BLOCKS;
     const std::uint32_t num_tiles_in_block = params.NUM_TILES_IN_BLOCK;
 
-    _llk_math_eltwise_unary_sfpu_init_<SfpuType::reduce>();
+    _llk_math_eltwise_sfpu_init_();
     ckernel::sfpu::init_reduce<POOL_TYPE, static_cast<DataFormat>(formats.math), is_fp32_dest_acc_en>();
 
     if (REDUCE_DIM == ReduceDim::REDUCE_COL)
@@ -124,7 +124,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 BLOCK_CT_DIM, BLOCK_RT_DIM);
 
 #ifdef ADD_TOP_ROW
-        _llk_math_eltwise_binary_sfpu_init_<SfpuType::add_top_row>();
+        _llk_math_eltwise_sfpu_init_();
         _llk_math_eltwise_sfpu_start_(0);
         ckernel::sfpu::_init_add_top_row_();
 

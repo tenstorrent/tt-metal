@@ -8,7 +8,7 @@
 #include "api/compute/common_globals.h"
 
 #ifdef TRISC_MATH
-#include "llk_math_eltwise_unary_sfpu_macros.h"
+#include "llk_math_eltwise_sfpu_op.h"
 #endif
 
 /**
@@ -135,13 +135,11 @@ inline void _add_bias_() {
 
 }  // namespace sfpu
 
-inline void _llk_math_add_bias_init_() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::unused>(ckernel::sfpu::_add_bias_configure_addrmod_);
-}
+using AddBiasOp = SfpuUnaryFn<sfpu::_add_bias_, DST_SYNC_MODE, DST_ACCUM_MODE, sfpu::_add_bias_configure_addrmod_>;
 
-inline void _llk_math_add_bias_(uint32_t input_index) {
-    SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(DST_SYNC_MODE, DST_ACCUM_MODE, _add_bias_, input_index, VectorMode::RC_custom);
-}
+inline void _llk_math_add_bias_init_() { AddBiasOp::init(); }
+
+inline void _llk_math_add_bias_(uint32_t input_index) { AddBiasOp::calculate(input_index, VectorMode::RC_custom); }
 
 #endif
 

@@ -13,6 +13,7 @@
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_rsqrt_compat.h"
 #include "lltt.h"
+#include "llk_math_eltwise_sfpu_op.h"
 using namespace sfpi;
 
 namespace ckernel {
@@ -406,5 +407,18 @@ void recip_init() {
     }
 }
 
+// ---------------------------------------------------------------------------------------------------
+// Recip<APPROX, LEGACY_COMPAT, DST_SYNC, DST_ACCUM, ITERATIONS>
+//   calculate(dst_index, vector_mode) -> calculate_reciprocal
+//   init()                            -> recip_init
+// Backs recip_tile / recip_tile_init.
+// ---------------------------------------------------------------------------------------------------
+template <bool APPROXIMATION_MODE, bool LEGACY_COMPAT, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8>
+struct Recip
+    : SfpuUnaryOp<Recip<APPROXIMATION_MODE, LEGACY_COMPAT, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static void kernel() { calculate_reciprocal<APPROXIMATION_MODE, DST_ACCUM, ITERATIONS, LEGACY_COMPAT>(); }
+
+    static void init_kernel() { recip_init<APPROXIMATION_MODE, DST_ACCUM, LEGACY_COMPAT>(); }
+};
 }  // namespace sfpu
 }  // namespace ckernel

@@ -9,8 +9,8 @@
 #include "ckernel_ops.h"
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
-#include "llk_math_eltwise_unary_sfpu_init.h"
 #include "sfpi.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -36,7 +36,7 @@ sfpi_inline sfpi::vFloat _sfpu_reciprocal_(const sfpi::vFloat x) {
         if constexpr (max_iter == 2) {
             sfpi::vFloat y1 = y * -t - 0.0f;
             // If t=NaN, then t>=0.  This check consumes the SFPNOP slot of the preceding SFPMAD.
-            v_if (t < 0) {
+            v_if(t < 0) {
                 t = x * y1 - sfpi::vConstFloatPrgm0;
                 y = y1 * -t - 0.0f;
             }
@@ -44,9 +44,7 @@ sfpi_inline sfpi::vFloat _sfpu_reciprocal_(const sfpi::vFloat x) {
         } else {
             // If t=NaN, then t>=0.  This check cannot be hidden in a SFPNOP slot as it depends on the result of the
             // preceding SFPMAD.
-            v_if (t < 0) {
-                y = y * -t - 0.0f;
-            }
+            v_if(t < 0) { y = y * -t - 0.0f; }
             v_endif;
         }
     }
@@ -98,10 +96,23 @@ inline void calculate_reciprocal() {
 template <bool APPROXIMATION_MODE, [[maybe_unused]] bool EN_32BIT_DEST, [[maybe_unused]] bool legacy_compat = true>
 void recip_init() {
     static_assert(legacy_compat == true, "Non-default legacy_compat (false) not supported in Quasar reciprocal");
-    llk_math_eltwise_unary_sfpu_init<SfpuType::reciprocal>();
+    _llk_math_eltwise_sfpu_init_();
     // Program the Newton-Raphson constant the non-approximate reciprocal refines with.
     _init_reciprocal_<APPROXIMATION_MODE>();
 }
 
+// ---------------------------------------------------------------------------------------------------
+// Recip<APPROX, LEGACY_COMPAT, DST_SYNC, DST_ACCUM, ITERATIONS>
+//   calculate(dst_index, vector_mode) -> calculate_reciprocal
+//   init()                            -> recip_init
+// Backs recip_tile / recip_tile_init.
+// ---------------------------------------------------------------------------------------------------
+template <bool APPROXIMATION_MODE, bool LEGACY_COMPAT, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8>
+struct Recip
+    : SfpuUnaryOp<Recip<APPROXIMATION_MODE, LEGACY_COMPAT, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static void kernel() { calculate_reciprocal<APPROXIMATION_MODE, DST_ACCUM, ITERATIONS, LEGACY_COMPAT>(); }
+
+    static void init_kernel() { recip_init<APPROXIMATION_MODE, DST_ACCUM, LEGACY_COMPAT>(); }
+};
 }  // namespace sfpu
 }  // namespace ckernel

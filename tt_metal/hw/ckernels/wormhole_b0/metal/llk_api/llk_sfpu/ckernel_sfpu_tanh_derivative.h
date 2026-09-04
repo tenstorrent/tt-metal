@@ -10,6 +10,7 @@
 #include "sfpu/ckernel_sfpu_polyval.h"
 #include "ckernel_sfpu_exp.h"
 #include "cmath_common.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -215,5 +216,17 @@ inline void tanh_derivative_sech2_init() {
     // Polynomial uses only Horner evaluation, inline exp uses only arithmetic.
 }
 
+// ---------------------------------------------------------------------------------------------------
+// TanhDerivative<APPROX, DST_SYNC, DST_ACCUM, ITERATIONS>::calculate(dst_index, vector_mode) / init()
+//   backs tanh_derivative_tile / tanh_derivative_tile_init (sech^2 polynomial path;
+//   init_kernel -> tanh_derivative_sech2_init).
+// ---------------------------------------------------------------------------------------------------
+template <bool APPROXIMATION_MODE, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8>
+struct TanhDerivative
+    : SfpuUnaryOp<TanhDerivative<APPROXIMATION_MODE, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static void kernel() { calculate_tanh_derivative_sech2<APPROXIMATION_MODE, DST_ACCUM, ITERATIONS>(); }
+
+    static void init_kernel() { tanh_derivative_sech2_init<APPROXIMATION_MODE>(); }
+};
 }  // namespace sfpu
 }  // namespace ckernel
