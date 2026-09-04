@@ -138,10 +138,34 @@ def apply_per_head_norm(tensor, weight, eps, with_scale=True, memory_config=None
         num_heads = orig_shape[1]
         seq_or_batch = orig_shape[2]
         flat = ttnn.reshape(tensor, (1, 1, num_heads * seq_or_batch, head_dim))
+    compute_kernel_config = None
+    # Hugging Face promotes every per-head Q/K/V RMSNorm to FP32.  This is a
+    # smaller effect than the full-width decoder norms, but measurably improves
+    # the corrected 60-layer prefill and fits comfortably at head_dim 256/512.
+    # An explicit 0 retains the former path for accuracy bisections.
+    if os.environ.get("GEMMA4_PER_HEAD_RMSNORM_FP32", "1").lower() in ("1", "true", "yes"):
+        compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            tensor.device().arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
     if with_scale and weight is not None:
-        normed = ttnn.rms_norm(flat, weight=weight, epsilon=eps, memory_config=memory_config)
+        normed = ttnn.rms_norm(
+            flat,
+            weight=weight,
+            epsilon=eps,
+            memory_config=memory_config,
+            compute_kernel_config=compute_kernel_config,
+        )
     else:
-        normed = ttnn.rms_norm(flat, epsilon=eps, memory_config=memory_config)
+        normed = ttnn.rms_norm(
+            flat,
+            epsilon=eps,
+            memory_config=memory_config,
+            compute_kernel_config=compute_kernel_config,
+        )
 
     return ttnn.reshape(normed, orig_shape)
 

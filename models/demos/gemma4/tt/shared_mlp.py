@@ -14,6 +14,8 @@ HF weight shapes:
   down_proj.weight: [hidden_size, intermediate_size] = [2816, 2112]
 """
 
+import os
+
 import ttnn
 from models.demos.gemma4.tt.ccl import ccl_allreduce
 from models.demos.gemma4.tt.precision import dtype_to_str
@@ -36,6 +38,11 @@ class SharedMLP:
         self.ccl_manager = ccl_manager
         self.hidden_size = hf_config.hidden_size
         self.intermediate_size = hf_config.intermediate_size
+        activation = getattr(hf_config, "hidden_activation", "gelu_pytorch_tanh")
+        default_gelu_mode = "tanh" if activation == "gelu_pytorch_tanh" else "exact"
+        self.gelu_mode = os.environ.get("GEMMA4_SHARED_MLP_GELU", default_gelu_mode).strip().lower()
+        if self.gelu_mode not in ("fast", "exact", "tanh"):
+            raise ValueError("GEMMA4_SHARED_MLP_GELU must be one of: fast, exact, tanh")
 
         tp = mesh_config.tp if mesh_config else 1
         tp_suffix = f"_tp{tp}" if tp > 1 else ""
@@ -119,7 +126,10 @@ class SharedMLP:
         """
         # gate = GELU(x @ gate_proj)
         gate = ttnn.linear(hidden_states, self.gate_proj, compute_kernel_config=self.compute_kernel_config)
-        gate = ttnn.gelu(gate, fast_and_approximate_mode=True)
+        if self.gelu_mode == "tanh":
+            gate = ttnn.gelu(gate, variant=ttnn.GeluVariant.Tanh)
+        else:
+            gate = ttnn.gelu(gate, fast_and_approximate_mode=self.gelu_mode == "fast")
 
         # up = x @ up_proj
         up = ttnn.linear(hidden_states, self.up_proj, compute_kernel_config=self.compute_kernel_config)

@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 from torch import nn
 
 import ttnn
@@ -13,6 +15,12 @@ class RMSNorm(nn.Module):
         super().__init__()
         self.with_scale = with_scale
 
+        # Gemma4's reference RMSNorm explicitly promotes the reduction and
+        # scale multiply to FP32.  Keeping the old BF16-destination path for
+        # the 60-layer prefill causes small directional errors to compound,
+        # especially through the checkpoint's very anisotropic late-layer
+        # gamma vectors.  Allow an explicit 0 only for accuracy bisections.
+        use_prefill_fp32 = os.environ.get("GEMMA4_RMSNORM_FP32", "1").lower() in ("1", "true", "yes")
         if with_scale and state_dict and "weight" in state_dict:
             torch_weight = state_dict["weight"].reshape((1, 1, -1, ttnn.TILE_SIZE))
         else:
@@ -29,16 +37,35 @@ class RMSNorm(nn.Module):
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 cache_file_name=get_cache_file_name(tensor_cache_path, "weight"),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=self.mesh_config.shard_mapper(mesh_device, mesh_dims=(None, -2))
-                if self.is_distributed
-                else None,
+                mesh_mapper=(
+                    self.mesh_config.shard_mapper(mesh_device, mesh_dims=(None, -2)) if self.is_distributed else None
+                ),
             )
+            self.tt_weight_tile = None
+            if use_prefill_fp32:
+                # Select the generic TILE-gamma kernel independently for the
+                # layout control and whenever FP32 is requested.  The row-major
+                # kernel's 5376-wide FP32 intermediate CBs exceed Blackhole L1.
+                # Keep the row-major copy for the width-sharded decode path;
+                # the generic prefill kernel needs [1, 1, 1, hidden] TILE
+                # gamma, including when construction is cache-only.
+                flat_weight = ttnn.reshape(self.tt_weight, (1, 1, 1, hf_config.hidden_size))
+                self.tt_weight_tile = ttnn.to_layout(flat_weight, ttnn.TILE_LAYOUT)
         else:
             self.tt_weight = None
+            self.tt_weight_tile = None
 
         self.eps = hf_config.rms_norm_eps
         self.mesh_device = mesh_device
-
+        self.prefill_compute_kernel_config = None
+        if use_prefill_fp32:
+            self.prefill_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+                mesh_device.arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=False,
+            )
         # Decode width-sharded fast path. The plain (interleaved) rms_norm runs
         # the RMS reduction over the full hidden width on few cores — ~76 us for
         # a single-token [1,1,32,hidden] norm on Gemma4-31B (hidden=5376). Width-
@@ -162,15 +189,20 @@ class RMSNorm(nn.Module):
                 if self._sharded_cfg:
                     return self._forward_sharded(x)
 
+            is_prefill = len(x.shape) == 4 and x.shape[-2] > ttnn.TILE_SIZE
+            compute_kernel_config = self.prefill_compute_kernel_config if is_prefill else None
+            weight = self.tt_weight_tile if is_prefill and self.tt_weight_tile is not None else self.tt_weight
             if self.with_scale:
                 tt_output = ttnn.rms_norm(
                     x,
-                    weight=self.tt_weight,
+                    weight=weight,
                     epsilon=self.eps,
+                    compute_kernel_config=compute_kernel_config,
                 )
             else:
                 tt_output = ttnn.rms_norm(
                     x,
                     epsilon=self.eps,
+                    compute_kernel_config=compute_kernel_config,
                 )
             return tt_output
