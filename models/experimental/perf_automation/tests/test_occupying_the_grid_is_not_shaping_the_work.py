@@ -35,6 +35,20 @@ def _pm():
     return m
 
 
+def _code_of(fn: str) -> str:
+    """A function's CODE, with its docstring removed.
+
+    These checks kept reading prose as if it were code: the explanation of why a blanket except is
+    wrong contains the words "except Exception", and a longer docstring pushed the import out of a
+    fixed-size window. What is being asserted is what the function DOES.
+    """
+    src = (_CC / "perf_mcp.py").read_text(encoding="utf-8")
+    i = src.index("def %s" % fn)
+    body = src[i : src.index("\ndef ", i + 10)]
+    q = body.find('"""')
+    return body[body.index('"""', q + 3) + 3 :] if q != -1 else body
+
+
 def _op(code, grid="full", bound="memory"):
     return {
         "op_code": code,
@@ -93,11 +107,9 @@ def test_m_is_read_from_the_shape_the_op_reports():
 
 def test_the_tile_height_is_not_redefined_here():
     """agent.tp owns TILE. A second copy is a second thing to get wrong."""
-    src = (_CC / "perf_mcp.py").read_text(encoding="utf-8")
-    i = src.index("def _matmul_m_tiles")
-    seg = src[i : i + 900]
-    assert "from agent.tp import TILE" in seg
-    assert "= 32" not in seg, "a local tile size was introduced"
+    code = _code_of("_matmul_m_tiles")
+    assert "from agent.tp import TILE" in code
+    assert "= 32" not in code, "a local tile size was introduced"
 
 
 def test_every_knob_is_counted_the_same_way():
@@ -137,8 +149,27 @@ def test_the_agent_is_told_what_the_rung_means():
 
 def test_no_stage_name_is_typed_into_the_rung():
     """Which ops qualify is decided by shape; a stage name here would outlive the model that had it."""
-    src = (_CC / "perf_mcp.py").read_text(encoding="utf-8")
-    i = src.index("def _matmul_m_tiles")
-    body = src[i : src.index("def ", i + 10)]
+    code = _code_of("_matmul_m_tiles")
     for typed in ("decode", "prefill", "encode"):
-        assert '"%s"' % typed not in body, typed
+        assert '"%s"' % typed not in code, typed
+
+
+def test_the_shape_reader_does_not_swallow_its_own_bugs():
+    """0 withdraws the rung, so a blanket except turns a typo into "nothing to carve", silently.
+
+    That is not hypothetical: `re` is imported as `_re` in this module, the bare name raised
+    NameError, and `except Exception: return 0` answered 0 for every shape while the suite stayed
+    green -- because the cases asserted the rung was offered, not the count.
+    """
+    code = _code_of("_matmul_m_tiles")
+    assert "except Exception" not in code, "a blanket except is back; a typo here disables the rung"
+    assert "except ImportError" in code, "the one thing that legitimately varies must still be caught"
+
+
+def test_a_shape_that_cannot_be_read_is_zero_not_a_crash():
+    """The real runtime variations still degrade quietly."""
+    m = _pm()
+    assert m._matmul_m_tiles({}) == 0
+    assert m._matmul_m_tiles(None) == 0
+    assert m._matmul_m_tiles("not a dict") == 0
+    assert m._matmul_m_tiles({"op_code": None}) == 0

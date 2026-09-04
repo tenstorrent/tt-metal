@@ -790,14 +790,22 @@ def _matmul_m_tiles(open_op) -> int:
     so shaping it is not a lever. Read off the op's own reported shape via the shape pattern already
     used for the warm-start table, and the tile height from agent.tp, which owns it -- no second
     definition of either.
+
+    NOT wrapped in `except Exception`. Returning 0 here does not degrade -- it withdraws the block
+    rung from the op entirely, so a typo in this function reads exactly like "nothing to carve" and
+    the rung silently never fires. That happened while this was written: `re` is imported as `_re` in
+    this module, the bare name raised NameError, the blanket except answered 0 for every shape, and
+    the suite stayed green because the tests asserted the rung was OFFERED, not the count. Only the
+    two things that legitimately vary at runtime are caught.
     """
     try:
         from agent.tp import TILE
-
-        m = _re.search(_MATMUL_SHAPE_PAT, str((open_op or {}).get("shape") or (open_op or {}).get("op_code") or ""))
-        return (int(m.group(1)) + int(TILE) - 1) // int(TILE) if m else 0
-    except Exception:  # noqa: BLE001
+    except ImportError:
         return 0
+    if not isinstance(open_op, dict):
+        return 0
+    m = _re.search(_MATMUL_SHAPE_PAT, str(open_op.get("shape") or open_op.get("op_code") or ""))
+    return (int(m.group(1)) + TILE - 1) // TILE if m else 0
 
 
 def _warm_start_for(model_root, op_code: str):
