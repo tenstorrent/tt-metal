@@ -101,7 +101,7 @@ def test_resolve_audio_t_shard(requested, mesh_shape, tp_axis, sp_axis, expected
     assert _resolve_audio_t_shard(requested, mesh_shape, tp_axis, sp_axis) == expected
 
 
-def test_requested_audio_t_factor_precedence(monkeypatch):
+def test_requested_audio_t_factor_precedence(monkeypatch, expect_error):
     # explicit kwarg wins over the env var
     monkeypatch.setenv("MINIMAX_H3_AUDIO_T_FACTOR", "32")
     assert _requested_audio_t_factor(4) == (4, False)
@@ -112,7 +112,7 @@ def test_requested_audio_t_factor_precedence(monkeypatch):
     assert _requested_audio_t_factor(None) == (8, False)
     # a non-integer env value is a clear error, not a silent fallback
     monkeypatch.setenv("MINIMAX_H3_AUDIO_T_FACTOR", "thirty-two")
-    with pytest.raises(ValueError, match="MINIMAX_H3_AUDIO_T_FACTOR"):
+    with expect_error(ValueError, "MINIMAX_H3_AUDIO_T_FACTOR"):
         _requested_audio_t_factor(None)
 
 
