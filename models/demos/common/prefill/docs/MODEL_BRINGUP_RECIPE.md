@@ -315,21 +315,37 @@ mesh-mapped, not at allocation — every chip is allocated the same zeroed buffe
 
 One subsection per stage. Fill in individually.
 
+Each stage below ends in a **Testing** table. The first column references an existing test that the
+agent implements an equivalent of for this model — copy its structure, not its content.
+
+Rows marked **SHARED** are the exception: those tests are already model-agnostic and live in
+`common/prefill`. Do **not** rewrite them per model — select the model with env and run them as they
+are.
+
+**A stage is complete when, and only when, every test in its Testing table passes.** No stage is
+entered before the previous stage's table is green.
+
+---
+
 ### D1 — Torch golden impl (decoder)
 
 **Steps**
-1. Vendor the model's `config.json`; write the config constants class and the test that diffs every
-   constant against it.
+1. Vendor the model's `config.json`; write the config constants class.
 2. Get a torch reference for the decoder blocks. Import the HF modeling file directly if it imports
    and constructs standalone; otherwise trim and vendor the classes you need, recording upstream
    line numbers as provenance. The reference imports torch only — no ttnn, no device code.
 3. Write the golden runner: run the reference and dump each block's inputs/outputs to disk, keyed on
    everything that changes the result. Reuse `ReferenceCacheKey` + `save_/load_reference_cache`.
+4. Create the tests in the Testing table.
 
-**Goal** Torch implementation for each decoder building block (attention, MLP, norms).
+**Testing** — host only, no device.
 
-**Verified by** Host pytest, no device: golden matches an HF forward, and config constants equal the
-vendored `config.json`.
+| Reference for the test to implement | What it compares |
+|---|---|
+| `deepseek_v3_d_p/tests/torch/test_kimi_k3_mla_reference.py` | Every constant in the config class against the vendored `config.json`, and the vendored torch reference against the upstream HF math. No TTNN. |
+| `minimax_m3/tests/unit/test_reference_model.py` | The standalone CPU reference against the inline torch golden, on a reduced config with random weights — so the two oracles cannot drift apart. |
+
+**Goal** D1 passes when both tests above pass.
 
 ---
 
@@ -342,13 +358,31 @@ vendored `config.json`.
    tests are written against.
 3. Decide the KV cache layout (§5.2). It is encoded by both the attention read path and the address
    table, so it cannot wait.
-4. Write a PCC test per block and one for the whole decoder, driving reference and TT module with
-   identical random weights.
+4. Write the whole decoder test suite (table below) against those signatures.
 
-**Goal** A `layer.py` outline in high-level blocks, and PCC tests for each building block and for
-the decoder.
+**Testing** — this is where **the decoder test suite** is written. Target mesh, random weights,
+identical weights on both sides. Drop rows for features the model does not have.
 
-**Verified by** The suite collects and runs. Tests fail on PCC, not on import or signature errors.
+the model does not have.
+
+| Reference for the test to implement | What it compares |
+|---|---|
+| `minimax_m3/tests/unit/test_norm_vs_ref.py` | RMSNorm output vs a torch reference, including the Gemma `(1 + weight)` fold if the model uses it. |
+| `minimax_m3/tests/unit/test_swiglu_vs_ref.py` | The activation vs a torch reference at the model's exact variant and constants (e.g. swigluoai alpha / clamp limit). |
+| `minimax_m3/tests/unit/test_qk_norm_vs_ref.py` | Per-head QK-norm vs a torch reference. Only if the model has QK-norm. |
+| `minimax_m3/tests/unit/test_attention_vs_ref.py` | The whole attention block vs a torch reference: QKV proj → head split → QK-norm → RoPE → causal SDPA → o_proj. Same random weights both sides, shared cos/sin so the test measures attention and not the RoPE constants. |
+| `minimax_m3/tests/unit/test_ring_joint_sp_vs_ref.py` | The SP-sharded ring SDPA against a torch reference with **live Q/K/V** (no cache): that gathering KV across the SP axis by online softmax gives the same answer as unsharded attention. |
+| `minimax_m3/tests/unit/test_ring_joint_cache_read_sp_vs_ref.py` | The same op reading K/V **out of the block-cyclic KV cache** — short Q against a longer accumulated prefix. This is the mechanism chunked prefill depends on. |
+| `minimax_m3/tests/unit/test_kv_cache_write_vs_ref.py` | Cache contents after a write through the production prefill seam, read back and PCC'd against the torch reference's K/V — i.e. the write landed at the right slot and offset. |
+| `minimax_m3/tests/unit/test_kv_cache_gqa_sp_vs_ref.py` | Write **and** read-back for the model's own cache shape on the chunked-KV substrate, at target SP × TP. |
+| `minimax_m3/tests/unit/test_attention_chunked_vs_ref.py` | A 2-chunk sequence pushed through the **same** `Attention` module two ways; asserts the second chunk's output matches. Proves the cache-read path is wired, not just callable. |
+| `minimax_m3/tests/unit/test_dense_mlp_vs_ref.py` | Dense MLP vs a torch reference at real dims. |
+| `minimax_m3/tests/unit/test_fused_gate_vs_ref.py` | The fused MoE gate (`moe_grouped_topk`) vs the model's routing rule at its exact expert count and top-k. |
+| `minimax_m3/tests/unit/test_ep_moe_vs_ref.py` | Router + shared expert + expert-parallel routed experts vs a torch reference, at real dims and the production EP dispatch. |
+| `minimax_m3/tests/unit/test_decoder_layer_vs_ref.py` | One complete decoder layer with residuals vs a torch reference — the composition, after every piece above passes alone. |
+
+**Goal** D2 passes when the decoder test suite **collects and runs**, and every failure is a PCC or
+`NotImplementedError` — not an import error, a missing fixture, or a signature mismatch.
 
 ---
 
@@ -357,19 +391,20 @@ the decoder.
 **Steps**
 1. Mesh prerequisite first: target mesh opens, `MeshConfig` and `CCLManager` in place, all-gather +
    all-reduce smoke test passes. No module work before this.
-2. Implement in dependency order — norm, MLP/activation, rope, attention (one-shot), KV cache
-   allocation + write, MoE, then the composed layer.
-3. Where no single ttnn op matches the block, write the mathematical equivalent out of the ttnn ops
+2. Implement in dependency order — norm, activation/MLP, rope, attention (one-shot and cache-read),
+   KV cache allocation + write, MoE, then the composed layer.
+3. Where no single ttnn op matches a block, write the mathematical equivalent out of the ttnn ops
    that do exist — `ttnn.mlp` does not exist, but an MLP is a matmul, an activation and a second
-   matmul, so compose it. Same for anything else with no one-call equivalent: decompose it first.
+   matmul, so compose it. Same for every other block with no one-call equivalent: decompose it
+   before reaching for a fallback.
 4. Fall back to torch on CPU only where the math cannot be expressed in ttnn at all. If the fallback
    is inevitable, take it, log it, and move on — a new kernel is out of scope for bring-up.
 
-**Goal** Every decoder building block passes its PCC test in isolation — ttnn wherever the math can
-be composed from ttnn ops, torch CPU only where it cannot — and one decoder block passes its PCC
-test.
+**Testing** — the decoder test suite written in D2. No new tests.
 
-**Verified by** The D2 suite on the target mesh with random weights.
+**Goal** D3 passes when every applicable test in the decoder test suite passes, with each block in
+ttnn wherever its math can be composed from ttnn ops and a logged torch CPU fallback only where it
+cannot.
 
 ---
 
@@ -379,13 +414,18 @@ test.
 1. Extend the D1 reference with what the decoder did not need: embedding, final norm, lm head, and
    the layer stack.
 2. Extend the golden cache to the end-to-end output. A CPU forward of the full model is expensive —
-   it should run once, not per test.
+   it must run once, not per test.
+3. Create the tests in the Testing table.
 
-**Goal** Torch implementation for every remaining building block, and a full-model forward that
-matches HF.
+**Testing** — host only.
 
-**Verified by** Host pytest: full-model golden matches an HF forward; a second run loads from cache
-rather than recomputing.
+| Reference for the test to implement | What it compares |
+|---|---|
+| `minimax_m3/tests/unit/test_reference_model.py`, widened to the full model | The whole-model CPU reference forward against the inline torch golden, all layers, random weights. |
+| `minimax_m3/tests/golden_hf_first_token.py` | The reference against the **real HF checkpoint** loaded on CPU — ground truth for the whole model, not just self-consistency. |
+| No donor — author it | That the golden cache round-trips: a second run loads from disk instead of recomputing, and a changed `ReferenceCacheKey` field forces a miss rather than silently reusing a stale result. |
+
+**Goal** M1 passes when all three pass.
 
 ---
 
@@ -395,12 +435,19 @@ rather than recomputing.
 1. Write the model outline: embedding, decoder x N, final norm, lm head. The decoder slot is the
    real D3 module; everything else is a mock.
 2. Fix the signatures of the new components, as in D2.
-3. Write a PCC test per new component and one end-to-end model test.
+3. Write the whole model test suite (table below).
 
-**Goal** A `model.py` outline in high-level blocks, with PCC tests for each new building block and
-for the e2e model.
+**Testing** — this is where **the model test suite** is written. Target mesh, random weights.
 
-**Verified by** The suite collects and runs; new-component tests fail on PCC, not on wiring.
+| Reference for the test to implement | What it compares |
+|---|---|
+| `minimax_m3/tests/unit/test_parallel_embedding_vs_ref.py` | Embedding lookup vs `torch.nn.functional.embedding`, for **both** sharding modes (emb-on-TP with vocab replicated, and vocab-sharded-on-SP). |
+| `gemma4/tests/unit/test_lm_head.py` | LM-head projection vs a torch reference, with the vocab shard layout the model uses. |
+| `minimax_m3/tests/unit/test_norm_vs_ref.py` (final-norm instance) | The model's final norm — same test, applied to the tail instance rather than a layer's. |
+| `minimax_m3/tests/unit/test_model_sp_vs_ref.py` | The **whole model** at target SP × TP vs a composed torch reference: sequence sharded across SP rows, residual stream SP-sharded through every layer. Catches per-layer weight-slicing and layer-type-dispatch errors that single-layer tests cannot. |
+
+**Goal** M2 passes when the model test suite collects and runs, failing only on PCC or
+`NotImplementedError`.
 
 ---
 
@@ -410,15 +457,15 @@ for the e2e model.
 1. Implement embedding, final norm, and lm head on the target mesh.
 2. Wire the N-layer stack: per-layer weight slicing and naming, per-layer type dispatch if the model
    is hybrid, and the KV cache sized for N layers rather than 1.
-3. Same rule as D3: where no single ttnn op matches the block, compose the mathematical equivalent
-   from the ttnn ops that do exist before considering a fallback. Torch CPU only where the math
+3. Same rule as D3: where no single ttnn op matches a block, compose the mathematical equivalent
+   from the ttnn ops that do exist before reaching for a fallback. Torch CPU only where the math
    cannot be expressed in ttnn at all — log it and move on if it is inevitable.
 
-**Goal** Every new building block passes PCC in isolation — ttnn wherever the math can be composed
-from ttnn ops, torch CPU only where it cannot — and the whole model passes its e2e PCC test.
+**Testing** — the model test suite written in M2, plus the decoder test suite as a regression.
 
-**Verified by** The M2 suite on the target mesh with random weights, with the D3 decoder tests still
-passing.
+**Goal** M3 passes when every test in the model test suite passes, with each new block in ttnn
+wherever its math can be composed from ttnn ops and a logged torch CPU fallback only where it
+cannot, and the decoder test suite still green.
 
 ---
 
@@ -427,61 +474,34 @@ passing.
 **Steps**
 1. Write the checkpoint loader: safetensors iteration, prefix filtering, dtype conversion.
 2. Add dequantization and any qkv fusion / permutation the TT modules expect.
-3. Run the full model with real weights on the target mesh, one-shot (no chunking).
+3. Create the tests in the Testing table.
 
-**Goal** The model runs on real checkpoint weights at the target mesh shape.
+**Testing** — target mesh, **real weights**, golden trace required.
 
-**Verified by** — port the donor's `tests/galaxy_prefill_kv_pcc.py` and run it one-shot:
+| Reference for the test to implement | What it compares |
+|---|---|
+| `gpt_oss_d_p/tests/unit/test_mxfp4_loader.py` | Dequantized expert weights against a reference dequantization of the packed blocks + scales. Only if the checkpoint is quantized. Host-only. |
+| `minimax_m3/tests/galaxy_prefill_kv_pcc.py`, run `PREFILL_CHUNKED=0` | Every layer's on-device K/V after a one-shot real-weights prefill, against the CPU golden trace. First test where real weights, full layer count, target parallelism and MoE all interact. Also reports throughput. |
 
-```bash
-PREFILL_TRACE_DIR=<golden> PREFILL_CHUNKED=0 \
-  python3 models/demos/<model>/tests/galaxy_prefill_kv_pcc.py
-```
-
-Every layer's K/V must clear the spec's PCC threshold, and the random-weight suites from D3 and M3
-must still pass.
+**Goal** P1 passes when the loader test passes and the one-shot per-layer KV PCC clears the spec's
+threshold — with the D3 and M3 random-weight tables still green.
 
 ---
 
 ### P2 — Chunked prefill
 
 **Steps**
-1. Wrap the cache-read op. It is a shared ttnn primitive —
-   `ttnn.transformer.ring_joint_scaled_dot_product_attention` — which gathers KV across the SP axis
-   internally by online softmax, so there is no explicit all-gather. Both donors wrap it the same
-   way, in `tt/attention/dense_sp.py`; copy that wrapper. Q is the current chunk, K/V is the
-   accumulated prefix `[0:logical_n]` read straight out of the block-cyclic cache.
-2. Thread the model's attention features into the op: attention sinks, per-layer sliding window,
-   and whatever else the spec lists. A donor without that feature will not show you the argument.
-3. Take the persistent ring-gather scratch buffers from the CCL manager
-   (`get_ring_gather_buffer`) rather than allocating per call.
-4. Implement the runtime: `compile`, `make_chunk_input`, `prefill_chunk`, with assertions on
+1. Implement the runtime: `compile`, `make_chunk_input`, `prefill_chunk`, with assertions on
    `actual_start` / `actual_end` so an out-of-contract chunk fails loudly.
+   The cache-read op itself is already implemented and tested in D3.
 
-Two constraints worth knowing before you start: the cache must be **bf8** on this path (the sliding
-ring path and its gather buffers are bf8, and the donor asserts it), and no cache re-layout is
-needed — the ring reads the same block-cyclic layout the write op already produced (§5.1).
+**Testing** — target mesh, real weights.
 
-Validate the ring building block on its own before wiring it into the model; M3 has
-`test_ring_joint_sp_vs_ref.py` and `test_ring_joint_cache_read_sp_vs_ref.py` for exactly that.
+| Reference for the test to implement | What it compares |
+|---|---|
+| `minimax_m3/tests/galaxy_prefill_kv_pcc.py`, run `PREFILL_CHUNKED=1` | Per-layer K/V after a **multi-chunk** prefill against the same golden trace P1 used one-shot — i.e. chunk N attending the prefix chunks 0..N-1 left in the cache produces the same result as processing the whole sequence at once. |
 
-**Goal** Multi-chunk prefill produces the same KV as an equal-length one-shot run.
-
-**Verified by** two things, in this order.
-
-1. The ring op in isolation — port M3's pair, which exist for exactly this:
-
-```bash
-pytest models/demos/minimax_m3/tests/unit/test_ring_joint_sp_vs_ref.py
-pytest models/demos/minimax_m3/tests/unit/test_ring_joint_cache_read_sp_vs_ref.py
-```
-
-2. The same P1 script in chunked mode, which must produce the per-layer PCC P1 did:
-
-```bash
-PREFILL_TRACE_DIR=<golden> PREFILL_CHUNKED=1 PREFILL_CHUNK_SIZE=<spec> \
-  python3 models/demos/<model>/tests/galaxy_prefill_kv_pcc.py
-```
+**Goal** P2 passes when the chunked run reaches the same per-layer PCC as P1's one-shot run.
 
 ---
 
@@ -493,28 +513,19 @@ PREFILL_TRACE_DIR=<golden> PREFILL_CHUNKED=1 PREFILL_CHUNK_SIZE=<spec> \
    Keep imports lazy — the producers import this module too.
 3. Add the `ADAPTER_PATHS` line and the manifest JSON.
 4. Add a KV read-back branch for your cache layout in
-   `prefill_producer.py::_read_slot_kv_and_check_pcc`. It dispatches on `ADAPTER.name` — today
-   `minimax_m3`, `gpt_oss_d_p`, and an MLA fallback — and is deliberately **not**
-   adapter-pluggable, so a third layout needs a branch there and its own decode.
+   `prefill_producer.py::_read_slot_kv_and_check_pcc`. It dispatches on `ADAPTER.name` and is
+   deliberately **not** adapter-pluggable, so a new layout needs a branch there and its own decode.
+   Without it the shared test below cannot validate anything.
 
-**Goal** The engine serves chunks pushed by the producer and the KV it wrote reads back correct. No
-inference server and no decode side are needed.
+**Testing** — no tests to author.
 
-**Verified by** a model-agnostic test that already exists — it spawns the runner and the producer
-itself:
+| Reference for the test to implement | What it compares |
+|---|---|
+| **SHARED — do not rewrite:** `models/demos/common/prefill/tests/test_producer_runner_e2e.py::test_producer_runner_pcc` | Spawns the runner and producer itself. The producer pushes token chunks over the H2D socket, then reads the KV back **device-lessly over UMD through the published address table** and PCCs it against the golden trace. Select the model with `PREFILL_MODEL` / `PREFILL_TRACE_DIR`. Scenarios cover full-depth single user, deterministic round-robin over 4 users, and seeded random interleave over 8 users with slot recycling. |
+| **SHARED — do not rewrite:** `models/demos/common/prefill/tests/test_prefill_producer_kv_decode.py` | Decoding of a KV chunk's raw bytes for each supported cache format (row-major, FP8 with page padding, packed scaled FP8), and that an unknown format is rejected rather than silently misread. |
 
-```bash
-PREFILL_MODEL=<model> PREFILL_TRACE_DIR=<golden> \
-  pytest models/demos/common/prefill/tests/test_producer_runner_e2e.py::test_producer_runner_pcc
-```
-
-Three scenarios must pass: `single_user_full_depth` (11 x 5120, the deepest correctness gate),
-`round_robin_4users` (deterministic interleave), `random_8users` (seeded chaotic interleave with slot
-recycling). Look for `[producer] KV cache PCC PASSED`; the threshold is
-`PREFILL_STANDALONE_CHUNKED_PCC`, producer default `0.93`.
-
-The manual two-terminal equivalent is Gate 1 in
-[`PREFILL_MIGRATION_TESTING.md`](PREFILL_MIGRATION_TESTING.md) — use it to debug, not as the gate.
+**Goal** P3 passes when the shared e2e test passes for this model on every scenario that applies to
+it, and the decode test passes. No inference server and no decode side are involved.
 
 ---
 
@@ -524,31 +535,27 @@ The manual two-terminal equivalent is Gate 1 in
 1. Write the KV chunk address table for your cache layout (bank walk, config ordering).
 2. Implement `kv_migration_base_address` (or `kv_migration_stages` for several caches) and
    `set_layer_ack_channel`.
+3. Create the tests in the Testing table.
 
-**Goal** Another process can locate this model's KV bytes from the published table and copy them.
+**Testing**
 
-**Verified by** two things.
+| Reference for the test to implement | What it compares |
+|---|---|
+| `deepseek_v3_d_p/tests/test_kv_cache_table.py` — **port this one, not gpt_oss's** | Allocates a real cache on the target mesh, writes it, then reads raw bytes back **from device DRAM at the addresses the table computed** and compares **bit-exactly**. Proves the address arithmetic, the DRAM bank walk, the packed-byte decode, and that a protobuf round-trip preserves lookups. Runs no model and moves nothing over fabric. |
+| `minimax_m3/tests/test_kv_chunk_table_merge.py` | The multi-stage (pipeline-parallel) table merge, driven with synthetic per-stage layouts. Device-free. Only if the model runs across multiple pipeline ranks. |
+| Manual — Gate 2 in [`PREFILL_MIGRATION_TESTING.md`](PREFILL_MIGRATION_TESTING.md) | The real DRAM → transport → DRAM copy, source and destination sharing one table via loopback. The only gate needing external binaries (`migration_endpoint`, `migration_worker`). |
 
-1. The address table in isolation — no model run, no fabric migrate. Port the donor's test:
+`gpt_oss_d_p/tests/test_kv_cache_table.py` is parametrized only for a `(2,4)` submesh, which cannot
+bring up fabric on a Galaxy — port the deepseek variant, which uses the full mesh and has a
+no-weights `random` case.
 
-```bash
-pytest models/demos/<model>/tests/test_kv_cache_table.py -k smoke
-pytest models/demos/<model>/tests/test_kv_cache_table.py -k readback
-```
-
-`smoke` checks the multi-config layout, block-cyclic SP positions and the DRAM bank walk;
-`readback` checks the bytes match the live device cache after a write. Both also cover the protobuf
-round-trip preserving lookups.
-
-2. The real DRAM -> transport -> DRAM copy: Gate 2 (loopback migration) in
-[`PREFILL_MIGRATION_TESTING.md`](PREFILL_MIGRATION_TESTING.md). Loopback means
-`dest_endpoint_id` is the endpoint's own id, so source and destination slots share one table. This
-needs the tt-llm-engine binaries (`migration_endpoint`, `migration_worker`) built against the same
-tt-metal — the only gate in the ladder with an external dependency.
+**Goal** P4 passes when the ported address-table test passes (plus the merge test if
+pipeline-parallel). Gate 2 is the sign-off that bytes actually move, and is tracked separately
+because of its external dependency.
 
 ---
 
-## 7. Definition of done
+## 7. Definition of done in terms of this model bringup
 
 - [ ] Every module has a `*_vs_ref` test at or above its `unit_pcc` threshold
 - [ ] Full model runs at target mesh shape with real weights; per-layer KV PCC recorded in `README.md`
