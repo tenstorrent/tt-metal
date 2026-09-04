@@ -667,7 +667,7 @@ class SpeculativeDecoder:
                 for t in (rebuilt, block, tail):
                     ttnn.deallocate(t)
 
-    def _pv_host_inputs(self, c, P, s_k=None):
+    def _pv_host_inputs(self, c, P, s_k=None, h_repeat=True):
         """Host tensors for one packed verify at anchor position ``c``.
 
         Returns dict of torch tensors: pos [1,P]u32, masks [1,1,H*P,S_k] bf16
@@ -696,7 +696,8 @@ class SpeculativeDecoder:
         for p in range(P):
             upper = c + p
             rows_full[p] = torch.where(j <= upper, 0.0, NEG)
-        mask_full = rows_full.repeat(H, 1).reshape(1, 1, H * P, S_k).to(torch.bfloat16)
+        _rep = H if h_repeat else 1
+        mask_full = rows_full.repeat(_rep, 1).reshape(1, 1, _rep * P, S_k).to(torch.bfloat16)
 
         ring = self._pv_ring.get("sliding_attention")
         if ring:
@@ -718,13 +719,13 @@ class SpeculativeDecoder:
                 lo = P - 1 - p
                 ok = (d >= lo) & (d < lo + W) & (d <= top)
                 rows_slide[p] = torch.where(ok, 0.0, NEG)
-            mask_slide = rows_slide.repeat(H, 1).reshape(1, 1, H * P, S_r).to(torch.bfloat16)
+            mask_slide = rows_slide.repeat(_rep, 1).reshape(1, 1, _rep * P, S_r).to(torch.bfloat16)
         else:
             rows_slide = torch.empty(P, S_k)
             for p in range(P):
                 upper = c + p
                 rows_slide[p] = torch.where((j <= upper) & (j > upper - W), 0.0, NEG)
-            mask_slide = rows_slide.repeat(H, 1).reshape(1, 1, H * P, S_k).to(torch.bfloat16)
+            mask_slide = rows_slide.repeat(_rep, 1).reshape(1, 1, _rep * P, S_k).to(torch.bfloat16)
 
         # merge_idx over staging positions: committed prefix from staging
         # (identity, or +bs on a rollover — the prefix came from the spill
@@ -1351,11 +1352,16 @@ class SpeculativeDecoder:
             # Inputs are persistent buffers refreshed per replay by
             # _generate_fused_traced; page tables are width-matched to their
             # masks (see _pv_tables_per_layer).
+            # Repeat the [1,1,P,S_k] host masks H x in-trace: dim-2 repeat tiles
+            # the whole P-block per head -> row order h*P+p, the packed layout.
+            _H = self._packed_H()
+            mask_full = ttnn.repeat(tr["pv_mask_full"], ttnn.Shape([1, 1, _H, 1]))
+            mask_slide = ttnn.repeat(tr["pv_mask_slide"], ttnn.Shape([1, 1, _H, 1]))
             vlogits, vhidden = self.target.ttnn_packed_verify_forward(
                 x=verify_x,
                 position_idx=tr["pv_pos"],
-                attn_mask_full=tr["pv_mask_full"],
-                attn_mask_sliding=tr["pv_mask_slide"],
+                attn_mask_full=mask_full,
+                attn_mask_sliding=mask_slide,
                 packed_p=K + 1,
                 page_table=tr["v_pt"],
                 kv_cache=self.tt_kv_cache,
@@ -1365,6 +1371,8 @@ class SpeculativeDecoder:
                 hot_pt_sliding=tr["pv_hot"].get("sliding_attention"),
                 page_tables_per_layer=tr["pv_ptl"],
             )
+            mask_full.deallocate(True)
+            mask_slide.deallocate(True)
         else:
             vlogits, vhidden = self.target.ttnn_verify_forward(
                 x=verify_x,
@@ -1450,7 +1458,14 @@ class SpeculativeDecoder:
             P_v = K + 1
             horizon = anchor_pos + (max_new_tokens or 0) + P_v + 1
             s_k_cap = ((horizon + self._pv_sk_bucket - 1) // self._pv_sk_bucket) * self._pv_sk_bucket
-            h = self._pv_host_inputs(anchor_pos, P_v, s_k=s_k_cap)
+            # h_repeat=False: masks arrive as [1,1,P,S_k] and are repeated H x
+            # IN-TRACE (ttnn.repeat dim-2 tiles the P-block per head, exactly the
+            # h*P+p row order the packed SDPA wants). Rows depend only on p, so
+            # this cuts the per-replay host mask build+copy by H (25 MB -> 3.1 MB
+            # at 256k). A device-computed mask (bcast add + clip) was probed and
+            # ttnn's unit-tensor broadcast does NOT do scalar semantics -- 97%
+            # wrong; do not re-try without a dedicated bcast op.
+            h = self._pv_host_inputs(anchor_pos, P_v, s_k=s_k_cap, h_repeat=False)
             tr["pv"] = True
             tr["pv_S_k"] = s_k_cap
             tr["pv_pos"] = self._pv_from_torch(h["pos"], ttnn.uint32)
@@ -1539,7 +1554,7 @@ class SpeculativeDecoder:
                     # capture), per-type merge indices (they encode the hot-block
                     # roll) and per-type hot pages. _pv_a_prev must advance ONLY
                     # after the host inputs are built (the roll flag reads it).
-                    h2 = self._pv_host_inputs(cur_pos, K + 1, s_k=tr["pv_S_k"])
+                    h2 = self._pv_host_inputs(cur_pos, K + 1, s_k=tr["pv_S_k"], h_repeat=False)
                     ttnn.copy_host_to_device_tensor(
                         self._pv_from_torch(h2["pos"], ttnn.uint32, device=False), tr["pv_pos"]
                     )

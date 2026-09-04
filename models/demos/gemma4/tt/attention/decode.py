@@ -808,10 +808,17 @@ def packed_decode_forward(
     q_packed = ttnn.to_layout(tt_q, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     ttnn.deallocate(tt_q)
 
+    # GEMMA4_PV_K_CHUNK: experiment knob only; keep the default 64. The
+    # rescale-count theory of the packed long-S_k greedy drift was TESTED and
+    # FALSIFIED: k_chunk=128 diverges at exactly the same token as 64 (char 165
+    # at 128k) with the same acceptance, and k_chunk=256 TT_THROWs at program
+    # build. The drift is inherent packed-vs-decode path numerics; it is handled
+    # by the ISL tier gate in spec_decode._fused_packed_enabled, not here.
+    _k_chunk = int(os.environ.get("GEMMA4_PV_K_CHUNK", "64"))
     sdpa_program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=_packed_sdpa_grid(config, mesh_device),
         q_chunk_size=32,
-        k_chunk_size=64,
+        k_chunk_size=_k_chunk,
         exp_approx_mode=False,
         max_cores_per_head_batch=16,
     )
