@@ -260,8 +260,6 @@ def test_pow_zero_base_special_cases(device, dtype):
     positive_exponents = (1e-4, 0.01, 0.25, 0.5, 1.0 / 3.0, 0.75, 0.99, 1.5, 3.0, 4.0)
 
     def assert_zero_power_undefined(out):
-        # The unary kernel (scalar exponent) is a separate implementation, unchanged by
-        # tenstorrent/tt-metal#53922 and still returning NaN here.
         if dtype == "float32":
             assert torch.isnan(out).all()
         else:
@@ -270,12 +268,8 @@ def test_pow_zero_base_special_cases(device, dtype):
             assert (~torch.isfinite(out)).all()
 
     def assert_zero_power_negative_binary(out):
-        # IEEE-754 pow(0, y) = +inf for y < 0, matching torch. The fp32 binary body
-        # returns that directly now; it used to return NaN, which the header documented
-        # as "undefined" (tenstorrent/tt-metal#53922). The bfloat16 body still writes
-        # NaN and only reads back as inf because of the packer conversion above, so the
-        # observable value is the same either way.
-        assert torch.isinf(out).all() and (out > 0).all(), f"expected +inf, got {out.flatten()[0].item()}"
+        # pow(0, y) = +inf for y < 0 for fp32 (bf16 still returns NaN)
+        assert torch.isinf(out).all() and (out > 0).all()
 
     for exponent in positive_exponents:
         exp_t = torch.full(shape, exponent, dtype=torch_dtype)
@@ -327,22 +321,11 @@ def test_pow_zero_base_special_cases(device, dtype):
     assert_zero_power_negative_binary(binary_neg_zero)
 
 
-# IEEE-754 pow(0, y) is +0 for y > 0, +inf for y < 0, 1 for y = +/-0 and NaN for a NaN
-# exponent. The kernel patches all of these on after the fact, because exp_21f builds a
-# result out of the biased exponent field and cannot carry a non-finite argument through
-# the mainline, so every case is a separate predicate that can regress on its own. Two of
-# them did: pow(0, NaN) returned 0 and pow(0, y<0) returned NaN
-# (tenstorrent/tt-metal#53922). This pins the whole block rather than one case.
 def _bits(v):
     return struct.unpack("<I", struct.pack("<f", float(v)))[0]
 
 
 def pow_result_matches(got, want):
-    """Exact match, including the sign of a zero and NaN-ness.
-
-    `got == want` is not enough: -0.0 == 0.0 in Python, so a sign-of-zero regression
-    would go unnoticed, and nan != nan would fail a correct result.
-    """
     if want != want:
         return got != got
     if want == 0.0 and got == 0.0:
@@ -350,83 +333,60 @@ def pow_result_matches(got, want):
     return got == want
 
 
-def _fmt_pow(v):
-    if v != v:
-        return "nan"
-    if v == 0.0:
-        return "-0" if _bits(v) >> 31 else "+0"
-    return f"{v:g}"
+ZERO_BASE_EXPONENTS = [
+    -3.0,
+    -2.0,
+    -1.5,
+    -1.0,
+    -0.5,
+    -0.1,
+    -0.0,
+    0.0,
+    0.1,
+    0.5,
+    1.0,
+    1.5,
+    2.0,
+    3.0,
+    float("inf"),
+    float("-inf"),
+    float("nan"),
+    -float("nan"),
+    torch.finfo(torch.float32).tiny,
+    -torch.finfo(torch.float32).tiny,
+]
 
 
-# Smallest positive normal, same for fp32 and bfloat16 (both have 8 exponent bits).
-SMALLEST_NORMAL = 1.1754943508222875e-38
-INF = float("inf")
-NAN = float("nan")
+@pytest.mark.parametrize("base", [0.0, -0.0])
+def test_binary_pow_fp32_base_zero(base, device):
+    torch_input_tensor_a = torch.full((len(ZERO_BASE_EXPONENTS),), base, dtype=torch.float32)
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        dtype=ttnn.float32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
 
-# Every exponent class that reaches a distinct path through the zero-base block, since
-# each is patched on by its own predicate. Grouped by what makes them distinct.
-ZERO_BASE_EXPONENTS = (
-    # Positive non-integers: the mainline result, 2**(0 * -127).
-    (1e-4, "1e-4"),
-    (0.01, "0.01"),
-    (0.1, "0.1"),
-    (0.25, "0.25"),
-    (1.0 / 3.0, "1/3"),
-    (0.5, "0.5"),
-    (0.75, "0.75"),
-    (0.99, "0.99"),
-    (1.5, "1.5"),
-    (SMALLEST_NORMAL, "smallest normal"),
-    # Positive integers, odd and even -- odd ones are where a signed base would matter.
-    (1.0, "1.0"),
-    (2.0, "2.0"),
-    (3.0, "3.0"),
-    (4.0, "4.0"),
-    # Both signed zeros. `!=` is bit-exact on SFPU, so -0 does not behave like +0 here:
-    # it passes the `pow != 0` gate and then the sign-bit-based `pow < 0` narrowing.
-    (0.0, "+0.0"),
-    (-0.0, "-0.0"),
-    # Negative exponents, the `pow < 0` fill. IEEE says +inf; this returned NaN before.
-    (-0.5, "-0.5"),
-    (-1.0, "-1.0"),
-    (-1.5, "-1.5"),
-    (-2.0, "-2.0"),
-    (-2.5, "-2.5"),
-    (-3.0, "-3.0"),
-    (-4.0, "-4.0"),
-    # Non-finite. +inf must stay 0 while NaN must give NaN, and the two differ only in
-    # the mantissa, so they cannot be lumped together. A sign-bit-set NaN takes a
-    # different route than a positive one -- an integer compare against +inf's bit
-    # pattern gets -NaN wrong -- so both are covered.
-    (INF, "+inf"),
-    (-INF, "-inf"),
-    (NAN, "+NaN"),
-    (-NAN, "-NaN"),
-)
+    torch_input_tensor_b = torch.tensor(ZERO_BASE_EXPONENTS, dtype=torch.float32)
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b,
+        dtype=ttnn.float32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
 
+    golden_function = ttnn.get_golden_function(ttnn.pow)
+    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b)
 
-def test_pow_zero_base_exponent_matrix(device):
-    # fp32 only: the guards fixed by tenstorrent/tt-metal#53922 are in
-    # _sfpu_binary_power_f32_, and the bfloat16 body is left as it is in main. With them
-    # in, every case below matches torch exactly, so there is nothing to waive here.
-    shape = [1, 1, 32, 32]
+    output_tensor = ttnn.pow(input_tensor_a, input_tensor_b)
+    output_tensor = ttnn.to_torch(output_tensor)
 
-    def to_tt(fill):
-        return ttnn.from_torch(
-            torch.full(shape, fill, dtype=torch.float32), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device
-        )
-
-    tt_base = to_tt(0.0)
-    base_t = torch.zeros(shape, dtype=torch.float32)
-
-    failures = []
-    for exp_val, exp_label in ZERO_BASE_EXPONENTS:
-        want = torch.pow(base_t, torch.full(shape, exp_val, dtype=torch.float32)).flatten()[0].item()
-        got = ttnn.to_torch(ttnn.pow(tt_base, to_tt(exp_val))).flatten()[0].item()
-        if not pow_result_matches(got, want):
-            failures.append(f"pow(0, {exp_label}) = {_fmt_pow(got)}, expected {_fmt_pow(want)}")
-
-    assert not failures, "; ".join(failures)
+    assert all(
+        pow_result_matches(got.item(), want.item())
+        for got, want in zip(output_tensor.flatten(), torch_output_tensor.flatten())
+    )
 
 
 @pytest.mark.parametrize("dtype", ["float32", "bfloat16"])

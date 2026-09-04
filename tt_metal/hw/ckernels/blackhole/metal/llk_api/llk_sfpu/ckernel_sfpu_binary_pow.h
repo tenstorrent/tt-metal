@@ -166,25 +166,16 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat
  * @brief base**pow on an fp32 DST.
  *
  * Same two-step log2/exp2 shape as _sfpu_binary_power_21f_, but with a wider log and a
- * stricter zero-base block, so the special cases below are not the same as that
- * function's:
- * - base = +/-0, pow > 0: Returns +0 (including pow = +inf)
- * - base = +/-0, pow < 0: Returns +inf (including pow = -inf)
+ * stricter zero-base block.
+ *
+ * Special Cases:
+ * - base = +/-0, pow > 0: Returns +/-0, sign kept for odd integer pow (incl. pow = +inf)
+ * - base = +/-0, pow < 0: Returns +/-inf, sign kept for odd integer pow (incl. pow = -inf)
  * - base = +/-0, pow = +/-0: Returns 1
  * - base = +/-0, pow = +/-NaN: Returns NaN
  * - base < 0, pow = integer: Returns proper signed result (negative if odd power)
  * - base < 0, pow = non-integer: Returns NaN (complex result)
  * - Overflow/underflow: Clamped to appropriate limits
- *
- * _sfpu_binary_power_21f_ diverges on the last three zero-base rows: it returns NaN for
- * pow < 0, 0 for a NaN exponent (tenstorrent/tt-metal#53922) and +inf for pow = -0. The
- * guards that fix those cost ~7% of a tile there and cannot be observed anyway, because
- * a bfloat16 DST converts NaN to infinity on the way out (tenstorrent/tt-llk#675).
- *
- * Known divergence from IEEE-754 / torch: the sign of a zero base is not carried into
- * the result, so pow(-0, odd integer) loses it -- +0 where IEEE wants -0 (pow = 3), +inf
- * where it wants -inf (pow = -1). Even exponents, non-integers and non-finite exponents
- * are unaffected. See the zero-base block below for why it is left that way.
  */
 sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat pow) {
     // The algorithm works in two steps:
@@ -318,33 +309,18 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat
     // Fill 0 for every non-zero exponent, then narrow to the negative ones, which
     // IEEE defines as +inf. v_and tightens the enclosing predicate in place, so it
     // costs one compare where a second flat v_if would also save and restore the
-    // lane mask.
-    // Gating on |pow| rather than pow lets both signed zeros fall through to the
-    // mainline, which already evaluates 2**(0 * -127) = 1 correctly.
-    // Both fills write a positive value, so pow(-0, odd integer) loses its sign:
-    // +0 where IEEE wants -0, +inf where it wants -inf. The sign is available --
-    // v_if(base < 0) above is sign-bit based, so it fires on -0 and has already
-    // applied setsgn2(y, pow_int), the odd-integer parity rule -- and copying it
-    // back with copysgn on both fills would make this block fully conformant.
-    // That costs +1 SFPU instruction per tile, which is not worth it for a
-    // signed-zero corner.
+    // lane mask. Gating on |pow| lets both signed zeros fall through to the mainline.
+    // Both fills take their sign from y rather than writing a positive constant, because
+    // IEEE keeps the sign of a zero base through an odd integer exponent.
     sfpi::vFloat abs_end = sfpi::abs(base);
     v_if(abs_end == 0.f) {
         sfpi::vFloat abs_pow = sfpi::abs(pow);
         v_if(abs_pow != 0.f) {
-            y = 0.0f;
+            y = sfpi::copysgn(sfpi::vFloat(0.0f), y);
             v_and(pow < 0.f);
-            y = std::numeric_limits<float>::infinity();
+            y = sfpi::copysgn(sfpi::vFloat(std::numeric_limits<float>::infinity()), y);
         }
         v_endif;
-        // A NaN exponent owes a NaN (IEEE NaN-in/NaN-out), but +inf must keep
-        // returning 0, and the two differ only in the mantissa, so telling them
-        // apart needs the mantissa inspected. is_nan does exactly that
-        // (exexp >= 255 && exman != 0) and ignores the sign bit, so it catches
-        // -NaN too. A single `as<vInt>(abs(pow)) > 0x7f800000` compare looks
-        // cheaper and is what #53922 proposes, but it does not hold up on
-        // hardware: SFPU's integer compare is a wrapping two's-complement
-        // subtract, and -NaN comes back as +inf through it.
         v_if(sfpi::is_nan(pow)) { y = std::numeric_limits<float>::quiet_NaN(); }
         v_endif;
     }
@@ -370,37 +346,32 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_<true>(sfpi::vFloat base, sfpi::vFlo
 
 template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en>
 inline void calculate_sfpu_binary_pow(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
-    // Unrolled for fp32 only, and deliberately so. The fp32 body reloads ~41 constants
-    // and stalls on ~25 sfpnops per iteration because its ~35 distinct constants cannot
-    // all stay live in 8 LREGs; unrolling lets the scheduler interleave independent
-    // iterations and share those loads, taking it from 181 to 159 SFPU instructions per
-    // element and 5% below an unguarded main. The bf16 body also sheds instructions
-    // under the same pragma but runs markedly slower for it (measured +17% at unroll 4,
-    // +29% at unroll 2, non-monotonic, so most likely spilling), and is left rolled.
-    // Unroll 8 buys fp32 a further 2% for double the .text; not taken.
+    // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
+    constexpr uint dst_tile_size_sfpi = 32;
+    const uint in0_offset = dst_index_in0 * dst_tile_size_sfpi;
+    const uint in1_offset = dst_index_in1 * dst_tile_size_sfpi;
+    const uint out_offset = dst_index_out * dst_tile_size_sfpi;
+
+    // Unrolled for fp32 only. The bf16 body runs slower.
     if constexpr (is_fp32_dest_acc_en) {
 #pragma GCC unroll 4
         for (int d = 0; d < ITERATIONS; d++) {
-            // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
-            constexpr uint dst_tile_size_sfpi = 32;
-            sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
-            sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
+            sfpi::vFloat in0 = sfpi::dst_reg[in0_offset];
+            sfpi::vFloat in1 = sfpi::dst_reg[in1_offset];
 
             sfpi::vFloat result = _sfpu_binary_power_<is_fp32_dest_acc_en>(in0, in1);
 
-            sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
+            sfpi::dst_reg[out_offset] = result;
             sfpi::dst_reg++;
         }
     } else {
         for (int d = 0; d < ITERATIONS; d++) {
-            // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
-            constexpr uint dst_tile_size_sfpi = 32;
-            sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
-            sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
+            sfpi::vFloat in0 = sfpi::dst_reg[in0_offset];
+            sfpi::vFloat in1 = sfpi::dst_reg[in1_offset];
 
             sfpi::vFloat result = _sfpu_binary_power_<is_fp32_dest_acc_en>(in0, in1);
 
-            sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
+            sfpi::dst_reg[out_offset] = result;
             sfpi::dst_reg++;
         }
     }
