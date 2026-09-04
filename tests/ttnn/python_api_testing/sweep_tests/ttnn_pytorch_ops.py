@@ -7,6 +7,7 @@ import math
 import ttnn
 import torch
 from tests.tt_eager.python_api_testing.sweep_tests.model_tests import TorchConvConv, TorchConvReluConv, BertFeedForward
+from tests.ttnn.python_api_testing.typecast_test_helpers import narrow_to_8bit
 import transformers
 from loguru import logger
 
@@ -316,13 +317,13 @@ def eltwise_typecast(x, *args, tt_input_dtype, tt_output_dtype, **kwargs):
             x = _simulate_bfp_quantization(x, 3)
         elif tt_input_dtype == ttnn.bfloat8_b:
             x = _simulate_bfp_quantization(x, 7)
-        return x.to(torch.uint8)
+        return narrow_to_8bit(x, signed=False)
     elif tt_output_dtype == ttnn.int8:
         if tt_input_dtype == ttnn.bfloat4_b:
             x = _simulate_bfp_quantization(x, 3)
         elif tt_input_dtype == ttnn.bfloat8_b:
             x = _simulate_bfp_quantization(x, 7)
-        return x.to(torch.int8)
+        return narrow_to_8bit(x, signed=True)
     elif tt_input_dtype == ttnn.uint8:
         if tt_output_dtype == ttnn.float32:
             return x.to(torch.float32)
