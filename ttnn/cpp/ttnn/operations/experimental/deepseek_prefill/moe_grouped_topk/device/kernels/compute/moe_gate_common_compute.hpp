@@ -267,6 +267,7 @@ void topk_group_scores(
 
     // llk_topk_sort -> inplace
     ckernel::topk_local_sort<stable_sort>(0, (int)ascending, log_topk_groups);
+    ckernel::topk_finalize_uint16_indices(2);
 
     tile_regs_commit();
     tile_regs_wait();
@@ -302,7 +303,7 @@ void transpose_and_pack(const uint32_t input_cb_index, const uint32_t output_cb_
     }
 }
 
-template <bool stable_sort = false>
+template <bool stable_sort = false, bool indices_pretransposed = false>
 void topk(
     const uint32_t cb_winning_group_scores_id,
     const uint32_t cb_winning_group_indices_id,
@@ -336,9 +337,15 @@ void topk(
 
     // transpose and unpack into dest regs
     reconfig_data_format_srca(cb_winning_group_indices_id);
-    transpose_init(cb_winning_group_indices_id);
-    transpose_tile(cb_winning_group_indices_id, 0, 2);
-    transpose_tile(cb_winning_group_indices_id, 1, 3);
+    if constexpr (indices_pretransposed) {
+        copy_init(cb_winning_group_indices_id);
+        copy_tile(cb_winning_group_indices_id, 0, 2);
+        copy_tile(cb_winning_group_indices_id, 1, 3);
+    } else {
+        transpose_init(cb_winning_group_indices_id);
+        transpose_tile(cb_winning_group_indices_id, 0, 2);
+        transpose_tile(cb_winning_group_indices_id, 1, 3);
+    }
     // llk_topk_sort -> inplace
     ckernel::topk_local_sort<stable_sort>(0, (int)ascending, 4);
     ckernel::topk_merge<false, stable_sort>(0, 0, 32);
@@ -351,13 +358,19 @@ void topk(
         transpose_tile(cb_winning_group_scores_id, j, 1);
 
         reconfig_data_format_srca(cb_winning_group_indices_id);
-        transpose_init(cb_winning_group_indices_id);
-        transpose_tile(cb_winning_group_indices_id, j, 3);
+        if constexpr (indices_pretransposed) {
+            copy_init(cb_winning_group_indices_id);
+            copy_tile(cb_winning_group_indices_id, j, 3);
+        } else {
+            transpose_init(cb_winning_group_indices_id);
+            transpose_tile(cb_winning_group_indices_id, j, 3);
+        }
 
         ckernel::topk_local_sort<stable_sort>(0, (int)ascending, 4);
         ckernel::topk_merge<false, stable_sort>(0, 0, 32);
     }
     ckernel::topk_rebuild<stable_sort>(0, (int)ascending, 0, 32, 5, true);
+    ckernel::topk_finalize_uint16_indices(2);
     tile_regs_commit();
     tile_regs_wait();
     cb_final_indices_transposed.reserve_back(1);

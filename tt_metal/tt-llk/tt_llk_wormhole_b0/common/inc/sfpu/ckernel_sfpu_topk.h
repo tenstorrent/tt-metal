@@ -442,6 +442,23 @@ inline void _topk_strip_rank_tags_(std::uint32_t dst_tile_index)
     set_dst_write_addr(0);
 }
 
+// uint16 index tile in 32-bit DEST: rotate the [0|idx] integer into the high half the packer reads.
+inline void _topk_finalize_hi16_index_tile_(std::uint32_t dst_tile_index)
+{
+    TTI_SFPENCC(3, 0, 0, 10);
+    TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
+    set_dst_write_addr(0);
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    const std::uint32_t base = dst_tile_index * 64;
+    for (std::uint32_t off = base; off < base + 64; off += 2)
+    {
+        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, off);
+        TT_SFPSTORE(p_sfpu::LREG0, TOPK_SFPSTORE_MODE_PACK_UINT16, ADDR_MOD_7, off);
+    }
+    set_dst_write_addr(0);
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+}
+
 template <bool is_fp32_dest_acc_en, bool FUSED = false, bool RANK_STAMPED = false>
 inline void bitonic_topk_load8(std::uint32_t offset, std::uint32_t dist)
 {
