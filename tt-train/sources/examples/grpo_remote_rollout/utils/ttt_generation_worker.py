@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import os
 import time
-from typing import Any, Callable, List, Optional, Sequence
+from typing import Any, Callable, List, Optional, Sequence, Tuple
 
 import torch
 import ttnn
@@ -146,8 +146,60 @@ class TttGenerationWorker:
         """Prefill + decode a token-ID prompt batch, data-parallel across submeshes. The
         batch is padded to the global size; sampling params were baked into
         ``self._sampling_params`` at construction and cannot vary per call."""
+        completions, _ = self._generate_impl(
+            prompts,
+            max_new_tokens=max_new_tokens,
+            enable_trace=enable_trace,
+            stop_at_eos=stop_at_eos,
+            collect_logprobs=False,
+        )
+        return completions
+
+    def generate_and_get_log_probs(
+        self,
+        prompts: List[List[int]],
+        *,
+        max_new_tokens: int = 128,
+        enable_trace: bool = True,
+        stop_at_eos: bool = True,
+    ) -> Tuple[List[List[int]], List[List[float]]]:
+        """Same as :meth:`generate`, but also returns per-token sampled log-probs
+        (post temperature/top_k/top_p) aligned 1:1 with completion tokens.
+
+        Returns:
+            ``(completions, logprobs)`` where ``completions[u][t]`` is the ``t``-th
+            emitted token for user ``u`` and ``logprobs[u][t]`` is the log-probability
+            of that token under the (post-processed) sampling distribution.
+        """
+        completions, logprobs = self._generate_impl(
+            prompts,
+            max_new_tokens=max_new_tokens,
+            enable_trace=enable_trace,
+            stop_at_eos=stop_at_eos,
+            collect_logprobs=True,
+        )
+        assert logprobs is not None, "collect_logprobs=True must return log-probs"
+        return completions, logprobs
+
+    def _generate_impl(
+        self,
+        prompts: List[List[int]],
+        *,
+        max_new_tokens: int,
+        enable_trace: bool,
+        stop_at_eos: bool,
+        collect_logprobs: bool,
+    ) -> Tuple[List[List[int]], Optional[List[List[float]]]]:
+        """Shared prefill + decode driver behind :meth:`generate` and
+        :meth:`generate_and_get_log_probs`. When ``collect_logprobs`` is True, also
+        collects per-token sampled log-probs into a parallel list-of-lists sized to
+        match ``completions`` slot-for-slot; when False, returns ``None`` for the
+        log-probs to keep the perf profile of the classic ``generate()`` path.
+        """
         if max_new_tokens == 0:
-            return [[] for _ in prompts]
+            empty_completions: List[List[int]] = [[] for _ in prompts]
+            empty_logprobs: Optional[List[List[float]]] = [[] for _ in prompts] if collect_logprobs else None
+            return empty_completions, empty_logprobs
 
         _t_total = time.perf_counter()
 
@@ -157,7 +209,8 @@ class TttGenerationWorker:
         print(
             f"[TttGenerationWorker] generate() start: data_parallel={self._data_parallel}, "
             f"active_batch_size={active_batch_size}, global_batch_size={batch_size}, "
-            f"max_prompt_len={max_prompt_len}, max_new_tokens={max_new_tokens}, enable_trace={enable_trace}",
+            f"max_prompt_len={max_prompt_len}, max_new_tokens={max_new_tokens}, "
+            f"enable_trace={enable_trace}, collect_logprobs={collect_logprobs}",
         )
 
         pad_id = self._pad_token_id
@@ -179,6 +232,21 @@ class TttGenerationWorker:
             enable_trace=enable_trace,
         )
         prefilled_token = (prefill_out[0] if isinstance(prefill_out, tuple) else prefill_out).reshape(-1)
+        prefill_logprobs: Optional[List[float]] = None
+        if collect_logprobs:
+            if not isinstance(prefill_out, tuple) or len(prefill_out) < 2 or prefill_out[1] is None:
+                raise RuntimeError(
+                    "TttGenerationWorker: collect_logprobs=True requires on-device sampling to emit log-probs; "
+                    "prefill_forward_text did not return a log-probs tensor. Check the model's sampling config."
+                )
+            lp_prefill = prefill_out[1]
+            if not isinstance(lp_prefill, torch.Tensor):
+                raise RuntimeError(
+                    "TttGenerationWorker: prefill log-probs are not a torch.Tensor "
+                    f"(got {type(lp_prefill).__name__}); the top-k LogProbsResult path is not supported here. "
+                    "Configure sampling with top_k=0 and top_p=1.0 to get scalar per-token log-probs."
+                )
+            prefill_logprobs = [float(x) for x in lp_prefill.reshape(-1).tolist()]
         _prefill_s = time.perf_counter() - _t_prefill
         prefill_real_tokens = sum(prompt_lens[:active_batch_size])
         print(
@@ -187,12 +255,13 @@ class TttGenerationWorker:
         )
 
         completions: List[List[int]] = [[] for _ in range(batch_size)]
+        logprobs: Optional[List[List[float]]] = [[] for _ in range(batch_size)] if collect_logprobs else None
         user_done = [False] * batch_size
         for u in range(active_batch_size, batch_size):
             user_done[u] = True
         stop_ids = self._stop_token_ids if stop_at_eos else frozenset()
 
-        def _collect_step(step_tokens: List[int]) -> None:
+        def _collect_step(step_tokens: List[int], step_logprobs: Optional[List[float]] = None) -> None:
             for u in range(batch_size):
                 if user_done[u]:
                     continue
@@ -201,15 +270,27 @@ class TttGenerationWorker:
                     user_done[u] = True
                 else:
                     completions[u].append(tok)
+                    if logprobs is not None:
+                        # step_logprobs may be None on paths that don't have them, in which
+                        # case we align the token with 0.0 -- callers of
+                        # generate_and_get_log_probs always request them, so in practice
+                        # this branch is never taken there.
+                        logprobs[u].append(float(step_logprobs[u]) if step_logprobs is not None else 0.0)
 
-        _collect_step([int(t) for t in prefilled_token.tolist()])  # first token came from prefill
+        _collect_step(
+            [int(t) for t in prefilled_token.tolist()],
+            prefill_logprobs,
+        )  # first token came from prefill
 
         if all(user_done) or max_new_tokens <= 1:
             print(
                 f"[TttGenerationWorker] generate() done (no decode loop): "
                 f"total={time.perf_counter() - _t_total:.2f}s",
             )
-            return completions[:active_batch_size]
+            return (
+                completions[:active_batch_size],
+                logprobs[:active_batch_size] if logprobs is not None else None,
+            )
 
         current_pos = torch.tensor(prompt_lens, dtype=torch.int32)
         out_tok = prefilled_token.unsqueeze(1)  # stays on device; decoding continues on-device
@@ -223,8 +304,23 @@ class TttGenerationWorker:
                 ttnn.event_synchronize(mesh_event=ev)
             for step_reads in buffered_reads:
                 gathered = self.generator.process_decode_output_host(step_reads, is_tokens=True)
-                tokens = gathered[0] if isinstance(gathered, tuple) else gathered
-                _collect_step([int(t) for t in tokens.reshape(-1).tolist()])
+                if isinstance(gathered, tuple):
+                    tokens_t = gathered[0]
+                    lp_t = gathered[1]
+                else:
+                    tokens_t = gathered
+                    lp_t = None
+                step_tokens = [int(t) for t in tokens_t.reshape(-1).tolist()]
+                step_lp: Optional[List[float]] = None
+                if collect_logprobs:
+                    if not isinstance(lp_t, torch.Tensor):
+                        raise RuntimeError(
+                            "TttGenerationWorker: decode log-probs are not a torch.Tensor "
+                            f"(got {type(lp_t).__name__ if lp_t is not None else 'None'}); "
+                            "the top-k LogProbsResult path is not supported here."
+                        )
+                    step_lp = [float(x) for x in lp_t.reshape(-1).tolist()]
+                _collect_step(step_tokens, step_lp)
 
         _t_decode = time.perf_counter()
         steps_executed = 0
@@ -263,7 +359,10 @@ class TttGenerationWorker:
             f"(prefill={_prefill_s:.2f}s, decode={_decode_s:.2f}s over {steps_executed} steps), "
             f"completion_tokens={decode_active_tokens} -> {overall_tok_s:.1f} tok/s overall",
         )
-        return completions[:active_batch_size]
+        return (
+            completions[:active_batch_size],
+            logprobs[:active_batch_size] if logprobs is not None else None,
+        )
 
     def update_weights(self, per_submesh: List[dict]) -> None:
         """Apply one received HF-keyed weight dict per submesh (order matches
