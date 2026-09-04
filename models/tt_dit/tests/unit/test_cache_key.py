@@ -73,6 +73,8 @@ def _key(module, sources):
         subfolder="connector",
         parallel_config=SimpleNamespace(_asdict=dict),
         mesh_shape=(4, 8),
+        # No device: the ownership suffix is empty below world size 2, so mesh_device is never read.
+        mesh_device=None,
         content=cache.content_key(module, sources),
     )
 
@@ -154,6 +156,7 @@ def test_the_superseded_directory_is_reclaimed(checkpoint, monkeypatch, tmp_path
         subfolder="connector",
         parallel_config=SimpleNamespace(_asdict=dict),
         mesh_shape=(4, 8),
+        mesh_device=None,
         content=None,
     )
     _module().save(legacy)
