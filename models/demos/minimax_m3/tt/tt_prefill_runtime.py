@@ -402,7 +402,7 @@ class TtPrefillRuntime:
 
         if self.config.use_trace and self._trace_pool is not None:
             # Replay this chunk's captured bucket (selected by cache offset) instead of re-dispatching,
-            # after re-targeting the device-valued slot (num_users > 1) and refreshing the input in place.
+            # after re-targeting the device-valued slot (device_slot) and refreshing the input in place.
             # compile()'s warm sweep runs before capture, when the pool is empty, so it falls through to the
             # eager path below — which is what warms the programs the capture then records.
             assert skip_lm_head and get_last_token == -1, (
@@ -418,7 +418,7 @@ class TtPrefillRuntime:
             )
             bucket = actual_start // self.config.chunk_size
             assert bucket in self._trace_pool, f"no captured trace for cache offset {actual_start} (bucket {bucket})"
-            if kv_cache.num_users > 1:
+            if kv_cache.device_slot:
                 kv_cache.set_read_user(slot_id)
             self.update_chunk_input(bucket, input_tensor)
             ttnn.deallocate(input_tensor)
@@ -533,13 +533,12 @@ class TtPrefillRuntime:
         ttnn.synchronize_device(mesh)
         if warm is not None:
             warm.deallocate(True)
-        # The warm forward pre-set the device slot metadata to slot_id; freeze it so the captured forward
-        # only reads it — a host copy inside a trace is illegal (set_read_user re-targets it outside).
-        kv_cache._slot_frozen = True
-        tid = ttnn.begin_trace_capture(mesh, cq_id=0)
-        out = self._trace_fwd(buf, cached_len, slot_id, kv_cache)
-        ttnn.end_trace_capture(mesh, tid, cq_id=0)
-        kv_cache._slot_frozen = False
+        # The warm forward pre-set the device slot metadata to slot_id; hold it fixed so the captured
+        # forward only reads it — a host copy inside a trace is illegal (set_read_user re-targets it outside).
+        with kv_cache.frozen_slots():
+            tid = ttnn.begin_trace_capture(mesh, cq_id=0)
+            out = self._trace_fwd(buf, cached_len, slot_id, kv_cache)
+            ttnn.end_trace_capture(mesh, tid, cq_id=0)
         ttnn.synchronize_device(mesh)
         if self._trace_pool is None:
             self._trace_pool = {}
@@ -564,7 +563,9 @@ class TtPrefillRuntime:
         ttnn.execute_trace(self.mesh_device, slot["tid"], cq_id=0, blocking=True)
         return slot["out"] if not self.config.is_last_rank else None
 
-    def release_trace_pool(self) -> None:
+    def release_trace(self) -> None:
+        """Runner teardown hook (`prefill_runner.py` looks up `release_trace` before closing the mesh):
+        free every captured bucket and the persistent input buffers. Safe when nothing was captured."""
         if self._trace_pool is not None:
             for slot in self._trace_pool.values():
                 ttnn.release_trace(self.mesh_device, slot["tid"])
@@ -575,8 +576,8 @@ class TtPrefillRuntime:
         """Runner hook (`prefill_runner.py`), called ONCE before the request loop when config.use_trace is
         set: pre-capture the whole per-bucket pool so every later prefill_chunk replays instead of
         dispatching. One trace per depth bucket up to the configured max (chunk boundaries 0..max_seq_len),
-        captured over slot 0; num_users > 1 makes the slot device-valued so the one pool serves any user via
-        set_read_user at replay. Replay serves chunk-aligned actual_start only (no prefix resume) and
+        captured over slot 0; with kv_cache.device_slot the slot is device-valued, so the one pool serves any
+        user via set_read_user at replay. Replay serves chunk-aligned actual_start only (no prefix resume) and
         emits no per-layer acks, so a registered LayerAck channel / completion sink is refused here rather
         than silently starved. No-op if not use_trace or already captured."""
         if not self.config.use_trace or self._trace_pool is not None:

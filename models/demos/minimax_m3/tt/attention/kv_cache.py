@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 
 import torch
@@ -39,6 +40,11 @@ class MiniMaxKVCache(KvCaches):
     num_layers: int
     max_seq_len: int
     sp: int
+    # Read and write the user slot from persistent device tensors instead of host ints. Only a captured
+    # trace needs that (a host int is baked into the capture, so one pool could serve one user); eager
+    # runs keep the host int, which is correct at any user count and cheaper. Set by the allocator from
+    # `use_trace and num_users > 1`.
+    device_slot: bool = False
 
     def deallocate(self) -> None:
         """Free the three device caches (e.g. to re-allocate at a different ``max_seq_len`` while the
@@ -60,6 +66,10 @@ class MiniMaxKVCache(KvCaches):
     # Device-valued slot metadata for request-mode tracing (populated only when num_users > 1). A captured
     # trace reads these tensors by address, so set_read_user re-targets a user's slot in place without
     # recapture; `_slot_frozen` blocks the host update during capture (a host copy inside a trace is illegal).
+
+    # Device-valued slot metadata (populated only under device_slot). A captured trace reads these tensors
+    # by address, so set_read_user re-targets a user's slot in place without recapture; frozen_slots() holds
+    # them fixed across a capture (a host copy inside a trace is illegal).
     #   _read_slot_start — cache-read partition-slice begin [slot,0,0,0], one per layer. `_read_slot_end` is a
     #                      constant companion (the reader ignores its value).
     #   _write_slot      — KV-write user slot (update_padded_kv_cache tensor form); one scalar, all layers.
@@ -69,6 +79,23 @@ class MiniMaxKVCache(KvCaches):
     _write_slot: object = field(default=None, repr=False)
     _write_kv_actual: dict = field(default_factory=dict, repr=False)
     _slot_frozen: bool = field(default=False, repr=False)
+
+    @contextmanager
+    def frozen_slots(self):
+        """Hold the slot tensors fixed for the duration of a trace capture: the getters return them as-is
+        (no host->device re-target) and refuse to allocate a missing one, since a tensor first created
+        inside the capture would sit in the trace's own freed intermediates and be clobbered on replay.
+        Restored on any exit, so a failed capture cannot leave later eager calls silently un-targeted."""
+        assert not self._slot_frozen, "frozen_slots() does not nest"
+        self._slot_frozen = True
+        try:
+            yield
+        finally:
+            self._slot_frozen = False
+
+    def _guard_create(self, what):
+        if self._slot_frozen:
+            raise RuntimeError(f"{what} would be allocated inside a trace capture; warm this path before capturing")
 
     def _begin_index_tensor(self, values, mesh_device):
         return ttnn.from_torch(
@@ -103,6 +130,7 @@ class MiniMaxKVCache(KvCaches):
         `slot` in place unless frozen — during capture the warm forward's value must be read as-is."""
         t = self._read_slot_start.get(layer_idx)
         if t is None:
+            self._guard_create(f"read-slot begin tensor for layer {layer_idx}")
             self._read_slot_start[layer_idx] = t = self._begin_index_tensor([slot, 0, 0, 0], mesh_device)
         elif not self._slot_frozen:
             ttnn.copy_host_to_device_tensor(
@@ -115,6 +143,7 @@ class MiniMaxKVCache(KvCaches):
 
     def read_slot_end(self, max_rows, head_dim, mesh_device):
         if self._read_slot_end is None:
+            self._guard_create("read-slot end tensor")
             self._read_slot_end = self._begin_index_tensor(
                 [self.num_users * self.num_layers, 1, max_rows, head_dim], mesh_device
             )
@@ -123,6 +152,7 @@ class MiniMaxKVCache(KvCaches):
     def write_slot_tensor(self, slot_idx, mesh_device):
         """Persistent user-slot scalar for the traceable KV write. Updated in place unless frozen."""
         if self._write_slot is None:
+            self._guard_create("write-slot scalar")
             self._write_slot = self._meta_scalar(slot_idx, mesh_device)
         elif not self._slot_frozen:
             ttnn.copy_host_to_device_tensor(self._host_scalar(slot_idx), self._write_slot)
@@ -133,6 +163,7 @@ class MiniMaxKVCache(KvCaches):
         each bucket reads its own depth and is shared across users (no set_read_user)."""
         t = self._write_kv_actual.get(kv_actual)
         if t is None:
+            self._guard_create(f"write kv_actual scalar for depth {kv_actual}")
             self._write_kv_actual[kv_actual] = t = self._meta_scalar(kv_actual, mesh_device)
         return t
 
@@ -161,6 +192,7 @@ def allocate_kv_caches(
     num_users=1,
     head_dim=128,
     cache_dtype=ttnn.bfloat8_b,
+    device_slot=False,
 ) -> MiniMaxKVCache:
     """Allocate the three external prefill KV caches (K, V, index_k). See :class:`MiniMaxKVCache`.
 
@@ -176,6 +208,8 @@ def allocate_kv_caches(
         num_users: independent user slots sharing the cache (1 for bring-up).
         head_dim: per-head width (128 for M3 main K/V and the index head alike).
         cache_dtype: on-device cache dtype (bf8 matches the DeepSeek substrate + the device golden check).
+        device_slot: read/write the user slot from persistent device tensors (trace replay across users);
+            see :attr:`MiniMaxKVCache.device_slot`. Pass ``use_trace and num_users > 1``.
     """
     sp = mesh_device.shape[sp_axis]
     assert max_seq_len % sp == 0, f"max_seq_len ({max_seq_len}) must be divisible by sp ({sp})"
@@ -220,6 +254,7 @@ def allocate_kv_caches(
         num_layers=num_layers,
         max_seq_len=max_seq_len,
         sp=sp,
+        device_slot=device_slot,
     )
 
 
@@ -230,11 +265,11 @@ def _write_one(kv_cache, cache, tensor, *, slot_idx, layer_idx, num_layers, kv_a
     needed (the original stays live for the attention op that follows). At ``kv_actual % 32 == 0`` chunk
     boundaries the per-device write offset is contiguous (block-cyclic degenerates to a reshape).
 
-    With more than one user this takes the op's traceable tensor form: slot/kv_actual are read on-device
-    from persistent scalars (kv_cache), so a captured trace re-targets the write slot per user.
+    Under ``kv_cache.device_slot`` this takes the op's traceable tensor form: slot/kv_actual are read
+    on-device from persistent scalars (kv_cache), so a captured trace re-targets the write slot per user.
     """
     src = tensor if tensor.dtype == cache.dtype else ttnn.typecast(tensor, cache.dtype)
-    if kv_cache.num_users > 1:
+    if kv_cache.device_slot:
         mesh_device = cache.device()
         ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
             cache,

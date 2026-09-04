@@ -138,6 +138,8 @@ class MiniMaxM3PrefillAdapter(PrefillModelAdapter):
             sp_axis=params.sp_axis,
             num_users=params.num_users,
             head_dim=hf_config.head_dim,
+            # Only a trace replayed for more than one user needs the slot on-device; eager keeps the host int.
+            device_slot=params.use_trace and params.num_users > 1,
         )
 
     def build_runtime(self, *, mesh_device, hf_config, params: PrefillRunParams):

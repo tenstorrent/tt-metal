@@ -39,13 +39,12 @@ def test_device_slot_slice_trace_retarget(mesh_device, device_params):
 
     # Warm pass creates the persistent begin/end tensors (pointing at slot_a) and compiles the programs.
     sliced().deallocate(True)
-    # Freeze exactly as capture_chunk_trace does: a host->device copy inside a capture is illegal, so the
-    # captured forward must only read the begin tensor the warm pass set.
-    kv_cache._slot_frozen = True
-    tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-    out = sliced()
-    ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
-    kv_cache._slot_frozen = False
+    # Hold the slot tensors fixed exactly as capture_chunk_trace does: a host->device copy inside a capture
+    # is illegal, so the captured forward must only read the begin tensor the warm pass set.
+    with kv_cache.frozen_slots():
+        tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        out = sliced()
+        ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
 
     def replay_expecting(slot):
         ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)

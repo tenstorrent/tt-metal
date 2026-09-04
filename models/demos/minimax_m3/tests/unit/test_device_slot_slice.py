@@ -30,7 +30,14 @@ N_SLOTS = N_USERS * N_LAYERS
 def make_kv_cache(packed: ttnn.Tensor) -> MiniMaxKVCache:
     """A cache whose three tensors alias one packed device tensor — only the slot metadata is under test."""
     return MiniMaxKVCache(
-        k=packed, v=packed, index_k=packed, num_users=N_USERS, num_layers=N_LAYERS, max_seq_len=MAX_ROWS, sp=1
+        k=packed,
+        v=packed,
+        index_k=packed,
+        num_users=N_USERS,
+        num_layers=N_LAYERS,
+        max_seq_len=MAX_ROWS,
+        sp=1,
+        device_slot=True,
     )
 
 
