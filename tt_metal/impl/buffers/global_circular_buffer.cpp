@@ -193,7 +193,6 @@ GlobalCircularBuffer::GlobalCircularBuffer(
 
 void GlobalCircularBuffer::initialize_dram_sender_state_block(
     distributed::MeshDevice* mesh_device, uint32_t max_num_receivers_per_sender) {
-    const auto context_id = mesh_device->impl().get_context_id();
     // The block was already allocated by the DRAM-sender ctor (combined with the
     // pages_sent region); here we just compose its bytes and write them to L1.
     const uint32_t state_block_size = dram_sender_state_block_size(max_num_receivers_per_sender);
@@ -225,18 +224,8 @@ void GlobalCircularBuffer::initialize_dram_sender_state_block(
 
     auto* noc_xy_words = reinterpret_cast<uint32_t*>(block_bytes.data() + sizeof(DramSenderStateBlock));
 
-    // Host writes to a DRAM core's L1 go over NOC and need the DRAM-L1 NOC offset
-    // added on top of the local L1 address. (Worker L1 has local==NOC space so the
-    // EnqueueWriteMeshBuffer path used for the receiver-side config buffer doesn't
-    // need this; DRAM-core L1 sits at a high NOC offset on Blackhole.)
-    auto& metal_ctx = MetalContext::instance(context_id);
-    const uint64_t dram_l1_noc_offset = metal_ctx.hal().get_l1_noc_offset(HalProgrammableCoreType::DRAM);
-    const uint64_t write_addr = dram_l1_noc_offset + static_cast<uint64_t>(sender_state_drisc_l1_base_);
-
     const auto& devices = mesh_device->get_devices();
     const std::vector<uint8_t> pages_sent_zero_bytes(2 * sizeof(uint32_t) * max_num_receivers_per_sender, 0);
-    const uint64_t pages_sent_write_addr = dram_l1_noc_offset + static_cast<uint64_t>(pages_sent_drisc_l1_base_);
-    auto& cluster = metal_ctx.get_cluster();
     for (size_t s = 0; s < sender_receiver_core_mapping_.size(); ++s) {
         const CoreCoord& sender_logical = sender_receiver_core_mapping_[s].first;
         const std::vector<CoreCoord>& receivers_vec = receiver_logical_cores_per_sender_[s];
@@ -258,17 +247,14 @@ void GlobalCircularBuffer::initialize_dram_sender_state_block(
                     noc_xy_words[2 * i + 1] = 0;
                 }
             }
-            const CoreCoord virtual_core = dev->virtual_core_from_logical_core(sender_logical, CoreType::DRAM);
-            cluster.write_core(
-                dev->id(),
-                tt_cxy_pair(dev->id(), virtual_core),
-                std::span<const uint8_t>(pages_sent_zero_bytes.data(), pages_sent_zero_bytes.size()),
-                pages_sent_write_addr);
-            cluster.write_core(
-                dev->id(),
-                tt_cxy_pair(dev->id(), virtual_core),
-                std::span<const uint8_t>(block_bytes.data(), block_bytes.size()),
-                write_addr);
+            write_dram_sender_l1(
+                *mesh_device,
+                dev,
+                sender_logical,
+                pages_sent_drisc_l1_base_,
+                std::as_bytes(std::span(pages_sent_zero_bytes)));
+            write_dram_sender_l1(
+                *mesh_device, dev, sender_logical, sender_state_drisc_l1_base_, std::as_bytes(std::span(block_bytes)));
         }
     }
 }
@@ -477,7 +463,6 @@ struct GlobalCircularBufferDramSenderInternals {
     static DeviceAddr sender_state_drisc_l1_base(const GlobalCircularBuffer& gcb);
     static const std::vector<std::vector<CoreCoord>>& receiver_logical_cores_per_sender(
         const GlobalCircularBuffer& gcb);
-    static std::vector<std::vector<uint32_t>> receiver_slab_indices(const GlobalCircularBuffer& gcb);
 };
 
 GlobalCircularBuffer GlobalCircularBufferDramSenderInternals::make_dram_sender(
@@ -510,11 +495,6 @@ const std::vector<std::vector<CoreCoord>>& GlobalCircularBufferDramSenderInterna
     return gcb.receiver_logical_cores_per_sender_;
 }
 
-std::vector<std::vector<uint32_t>> GlobalCircularBufferDramSenderInternals::receiver_slab_indices(
-    const GlobalCircularBuffer& gcb) {
-    return receiver_slab_indices_per_sender(gcb.sender_receiver_core_mapping());
-}
-
 }  // namespace global_circular_buffer_dram_sender
 
 GlobalCircularBuffer CreateGlobalCircularBufferForTensorPrefetcher(
@@ -526,7 +506,9 @@ GlobalCircularBuffer CreateGlobalCircularBufferForTensorPrefetcher(
     // Multi-receiver shards (legacy interleaved layout) force one sender per bank; the
     // receiver-contiguous layout that disallows them is what lets a bank use two senders.
     auto mapping = build_dram_sender_mapping(
-        &mesh_device, bank_to_receivers, /*dual_senders_per_bank=*/!support_multi_receiver_shards);
+        &mesh_device,
+        bank_to_receivers,
+        support_multi_receiver_shards ? DramSenderSplit::OnePerBank : DramSenderSplit::TwoPerBank);
     return global_circular_buffer_dram_sender::GlobalCircularBufferDramSenderInternals::make_dram_sender(
         &mesh_device, mapping, size, buffer_type);
 }
@@ -550,10 +532,6 @@ DeviceAddr sender_state_drisc_l1_base(const GlobalCircularBuffer& gcb) {
 const std::vector<std::vector<CoreCoord>>& receiver_logical_cores_per_sender(const GlobalCircularBuffer& gcb) {
     return global_circular_buffer_dram_sender::GlobalCircularBufferDramSenderInternals::
         receiver_logical_cores_per_sender(gcb);
-}
-
-std::vector<std::vector<uint32_t>> receiver_slab_indices(const GlobalCircularBuffer& gcb) {
-    return global_circular_buffer_dram_sender::GlobalCircularBufferDramSenderInternals::receiver_slab_indices(gcb);
 }
 
 }  // namespace tt::tt_metal::experimental
