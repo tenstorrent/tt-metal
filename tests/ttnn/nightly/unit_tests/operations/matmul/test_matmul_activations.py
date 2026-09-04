@@ -795,6 +795,7 @@ def run_test_matmul_dram_sharded_with_bias_and_activation(
         (False, "relu", 33.607, 0.0046, 0.0768, 0.99566),
         (False, "gelu", 33.9469, 0.0046, 0.0769, 0.99565),
         (False, "sigmoid", 1.9992, 0.0046, 0.2126, 0.95478),
+        (False, "softplus", 33.607, 0.0358, 0.0844, 0.99476),
         # Test bias + activation combinations (main focus)
         (True, "relu", 33.6096, 0.0046, 0.0769, 0.99566),
         (True, "gelu", 33.9495, 0.0046, 0.077, 0.99565),
@@ -812,6 +813,7 @@ def run_test_matmul_dram_sharded_with_bias_and_activation(
         "relu_only",
         "gelu_only",
         "sigmoid_only",
+        "softplus_only",
         "bias_relu",
         "bias_gelu",
         "bias_sigmoid",
