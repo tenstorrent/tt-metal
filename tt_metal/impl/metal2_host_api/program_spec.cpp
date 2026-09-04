@@ -752,8 +752,6 @@ bool DmKernelDisablesImplicitSync(const DataMovementGen2Config& gen2_config, con
     return std::find(vec.begin(), vec.end(), dfb_name) != vec.end();
 }
 
-namespace {
-
 // The LLK geometry rules shared by DFBs and scratchpads. Format presence and arch support are per-object
 // and stay with the callers.
 template <typename Id>
@@ -832,8 +830,6 @@ LLKMetadata LLKMetadataFromTensorSpec(const TensorSpec& spec) {
         .tile = tile,
         .face_geometry = FaceGeometryFromTile(tile)};
 }
-
-}  // namespace
 
 // ValidateProgramSpec: Semantic validation
 // ----------------------------------------------------------------------------
