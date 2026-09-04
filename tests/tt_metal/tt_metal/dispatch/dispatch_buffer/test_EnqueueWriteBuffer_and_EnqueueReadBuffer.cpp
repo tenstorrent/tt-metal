@@ -292,10 +292,10 @@ void test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
     const TestBufferConfig& config) {
     auto* device = mesh_device->get_devices()[0];
     auto device_coord = distributed::MeshCoordinate(0, 0);
-    // Clear out command queue. Skipped on Quasar: the emulator's soc descriptor overstates DRAM, so
-    // allocator buffers alias onto the reserved CQ region and zeroing it corrupts live commands.
-    // See https://github.com/tenstorrent/tt-metal/issues/55417.
-    if (device->arch() != tt::ARCH::QUASAR) {
+    // Clear out command queue. Skipped for DRAM-backed CQs on Quasar: the emulator's soc descriptor
+    // overstates DRAM, so allocator buffers alias onto the reserved CQ region and zeroing it corrupts
+    // live commands. See https://github.com/tenstorrent/tt-metal/issues/55417.
+    if (device->arch() != tt::ARCH::QUASAR || !device->sysmem_manager().is_dram_backed()) {
         uint16_t channel =
             tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device->id());
         ChipId mmio_device_id =
