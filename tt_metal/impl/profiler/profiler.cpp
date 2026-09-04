@@ -2521,9 +2521,10 @@ void DeviceProfiler::generateAnalysesForDeviceMarkers(
             }
         }
     }
+    const bool counters_enabled = MetalContext::instance(context_id).rtoptions().get_profiler_perf_counter_mode() != 0;
     const profiler_perf_counters::PerfCounterColumns counter_columns =
         profiler_perf_counters::computePerfCounterColumns(
-            device_markers, this->max_compute_cores, kernel_cycles_by_uid);
+            device_markers, this->max_compute_cores, kernel_cycles_by_uid, counters_enabled);
 
     writeProgramsPerfResultsToCSV(
         programs_perf_results, this->device_logs_output_dir / PROFILER_DEVICE_PERF_REPORT_NAME, counter_columns);

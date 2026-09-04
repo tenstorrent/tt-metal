@@ -230,14 +230,15 @@ public:
 
     bool active(const std::string& col) const { return active_.contains(col); }
 
-    PerfCounterColumns finalize(const std::vector<std::string>& canonical_order) {
+    PerfCounterColumns finalize(const std::vector<std::string>& canonical_order, bool counters_enabled) {
         PerfCounterColumns out;
-        // Emit the FULL canonical schema (not just the columns active on this device) whenever any
-        // counter value exists. writeProgramsPerfResultsToCSV appends one block per device to a shared
-        // CSV with a single header row; a per-device-variable column set would misalign the appended
-        // blocks. A fixed schema keeps every block aligned — empty cells for an uncaptured group are
-        // trimmed downstream by the Python active-header pass.
-        if (!values_.empty()) {
+        // The report schema is fixed by capture configuration, not by whether THIS device/dump produced
+        // values. writeProgramsPerfResultsToCSV appends one block per device to a shared CSV with a single
+        // header row (written by the first block); a per-block column set would misalign later blocks — e.g.
+        // a counter-empty first block would write a header lacking counter columns that later counter blocks
+        // then overflow. Emitting the full canonical schema for every block of a counter run keeps them all
+        // aligned; empty cells for an uncaptured group are trimmed downstream by the Python active-header pass.
+        if (counters_enabled || !values_.empty()) {
             out.active_headers = canonical_order;
         }
         out.values_per_uid = std::move(values_);
@@ -380,7 +381,8 @@ const std::vector<std::string>& canonical_headers() {
 PerfCounterColumns computePerfCounterColumns(
     const std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers,
     uint32_t total_compute_cores,
-    const std::map<experimental::ProgramExecutionUID, double>& kernel_cycles_by_uid) {
+    const std::map<experimental::ProgramExecutionUID, double>& kernel_cycles_by_uid,
+    bool counters_enabled) {
     // 1) Pivot the perf-counter markers into per-(op, core, counter) (value, ref_cnt).
     Pivot pivot;
     size_t dbg_counter_markers = 0, dbg_type0 = 0;
@@ -415,7 +417,7 @@ PerfCounterColumns computePerfCounterColumns(
 
     ColumnSink sink(pivot);
     if (pivot.empty()) {
-        return sink.finalize(canonical_headers());
+        return sink.finalize(canonical_headers(), counters_enabled);
     }
 
     // Global fallback gates (computed across the whole run, like df["x"].sum()).
@@ -960,7 +962,7 @@ PerfCounterColumns computePerfCounterColumns(
         return *math / denom * 100.0;
     });
 
-    return sink.finalize(canonical_headers());
+    return sink.finalize(canonical_headers(), counters_enabled);
 }
 
 }  // namespace tt::tt_metal::profiler_perf_counters

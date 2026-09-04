@@ -43,9 +43,15 @@ struct PerfCounterColumns {
 //                              columns — matches the legacy path's deviceInfo.max_compute_cores.
 //   kernel_cycles_by_uid     : per-op kernel duration in cycles (end - start), used to turn the
 //                              grid-summed counts into the "Avg X util on full grid (%)" columns.
+//   counters_enabled         : whether counter capture is armed for this run (perf_counter_mode != 0).
+//                              When set, the full canonical schema is emitted for every device/dump --
+//                              even a counter-empty one -- so the shared CSV's single header row stays
+//                              aligned with every appended block (a counter-empty block must not write a
+//                              header that later counter blocks then overflow).
 PerfCounterColumns computePerfCounterColumns(
     const std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers,
     uint32_t total_compute_cores,
-    const std::map<experimental::ProgramExecutionUID, double>& kernel_cycles_by_uid);
+    const std::map<experimental::ProgramExecutionUID, double>& kernel_cycles_by_uid,
+    bool counters_enabled);
 
 }  // namespace tt::tt_metal::profiler_perf_counters
