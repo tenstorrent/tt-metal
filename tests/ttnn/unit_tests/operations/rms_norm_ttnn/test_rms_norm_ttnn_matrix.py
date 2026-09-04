@@ -363,6 +363,38 @@ def test_widest_row_major_band_with_every_operand(device, dtype, memory_layout):
 
 
 # ---------------------------------------------------------------------------
+# 4b. the COMPACT cross-core combine (BLOCK_ROWS > 1) with the operands
+# ---------------------------------------------------------------------------
+#
+# The least-covered corner in the op, and the reason it needs pinning by hand:
+# every WIDTH-shard geometry the auto-sharder picks solves to BLOCK_ROWS == 1,
+# which takes the combine's IDENTITY carve-out (both permutation matmuls are the
+# identity map and are elided).  The COMPACT path -- one whole row-block's stats
+# permuted into the columns of ONE tile, gathered, folded and multicast as one
+# page -- only appears above BLOCK_ROWS == 1, so it needs a shard PINNED tall
+# enough that a core owns many tile-rows.  These geometries are the measured
+# ones from the feature spec's perf cases plus three more, and each is run with
+# and without the operands: a residual doubles the activation footprint the
+# BLOCK_ROWS solve has to fit, which is exactly what could push a compact combine
+# back onto the identity path (or off L1 altogether).
+
+
+@pytest.mark.parametrize("mode", ["gamma", "gamma_bias", "residual", "gamma_bias_residual"])
+@pytest.mark.parametrize(
+    "shape, shard, memory_layout",
+    [
+        ((1, 1, 7168, 1024), ([896, 128], (8, 8)), _ML.BLOCK_SHARDED),  # 28 tile-rows/core
+        ((1, 1, 2048, 1024), ([256, 128], (8, 8)), _ML.BLOCK_SHARDED),  # 8 tile-rows/core
+        ((1, 1, 1024, 512), ([1024, 128], (4, 1)), _ML.WIDTH_SHARDED),  # 32 tile-rows/core
+        ((1, 1, 3232, 96), ([3232, 32], (3, 1)), _ML.WIDTH_SHARDED),  # 101 rows -> the 32 cap
+    ],
+    ids=["block_28rows", "block_8rows", "width_32rows", "width_101rows_capped"],
+)
+def test_compact_combine_with_operands(device, shape, shard, memory_layout, mode):
+    _run(device, shape, mode=mode, memory_layout=memory_layout, shard=shard)
+
+
+# ---------------------------------------------------------------------------
 # 5. mixed per-channel formats
 # ---------------------------------------------------------------------------
 
