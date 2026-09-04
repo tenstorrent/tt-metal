@@ -73,6 +73,27 @@ void kernel_main() {
     const auto in_row = TensorAccessor(tensor::in_row);
     const auto out_row = TensorAccessor(tensor::out_row);
 
+#if defined(MG_OUTER)
+    // B4's RANK-1 UPDATE: k [K,1] (x) delta [1,V], which every gated-delta-net and
+    // linear-attention decode step is built from.
+    //
+    // The LHS wants a 32x1 tile and there is no such tile -- metal's TILE_FACE_HW_CHOICES has
+    // nothing one column wide -- so k lives in a 32x32 tile with columns 1..31 ZERO, and that
+    // zero padding is what makes the product right: the hardware takes a full 32-element
+    // inner step and the surplus terms contribute nothing. The type cannot see it, which is
+    // why the check compares PADDED extents and the contract is the author's.
+    //
+    // Before that change this had no spelling at all: logical 32 columns against logical 1
+    // row, refused, with no third form satisfying both the check and the buffers' declared
+    // geometry.
+    u::matmul_init<Blk, Row>(kDfbIn, kDfbInRow, kDfbOut);
+
+    u::ComputeBlock k = u::noc_load(in_storage, in, 0).wait();
+    u::ComputeBlock d = u::noc_load(in_row_storage, in_row, 0).wait();
+    u::noc_store(out_storage, u::matmul(k, d), out, 0);
+    return;
+#endif
+
 #if defined(MG_MATMUL)
     // Pass 1: a 32x32 product, which leaves every descriptor at the 32x32 geometry.
     // Pass 2: a ROW-FORM LHS, which is B3's `1x32 @ 32x32` -- the inner dimension still

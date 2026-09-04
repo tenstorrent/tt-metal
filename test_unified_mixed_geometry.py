@@ -81,13 +81,21 @@ VARIANTS = [
     # The matmul path. One shape per body, because two matmul shapes in one body is a
     # separate limitation -- see the kernel, and A3.
     ("matmul, row-form", True, False, False, None, True, True, "matmul"),
+    # B4's rank-1 update, which the padded inner-dimension check is what admits.
+    ("outer product, k (x) delta", False, False, False, True, True, True, "outer"),
 ]
 
 
-def run(device, row_only=False, row_init=False, reinit=False, fpu=False, matmul=False, seed=0):
+def run(device, row_only=False, row_init=False, reinit=False, fpu=False, matmul=False, outer=False, seed=0):
     torch.manual_seed(seed)
     # Strictly positive and away from zero: recip is ill-conditioned near it.
-    if matmul:
+    if outer:
+        # k in column 0 and columns 1..31 ZERO: the padding the product's correctness rests
+        # on, written out here because it is the contract the type cannot carry.
+        full = torch.zeros([1, 1, TILE, TILE], dtype=torch.bfloat16)
+        full[0, 0, :, 0] = (0.5 + 1.5 * torch.rand([TILE])).to(torch.bfloat16)
+        row = (0.5 + 1.5 * torch.rand([1, 1, 1, TILE])).to(torch.bfloat16)
+    elif matmul:
         full = torch.ones([1, 1, TILE, TILE], dtype=torch.bfloat16)
         row = torch.ones([1, 1, 1, TILE], dtype=torch.bfloat16)
     else:
@@ -123,6 +131,7 @@ def run(device, row_only=False, row_init=False, reinit=False, fpu=False, matmul=
         + ([("MG_REINIT", "1")] if reinit else [])
         + ([("MG_FPU", "1")] if fpu else [])
         + ([("MG_MATMUL", "1")] if matmul else [])
+        + ([("MG_OUTER", "1")] if outer else [])
     )
 
     # Roles come off the kernel's declarations: in/in_row are filled by DM thread 0, out and
@@ -139,13 +148,18 @@ def run(device, row_only=False, row_init=False, reinit=False, fpu=False, matmul=
         ],
         tensors=tensors,
         defines=defines or None,
-        name=f"mixed_geometry{'_ro' if row_only else ''}{'_ri' if row_init else ''}{'_re' if reinit else ''}{'_fpu' if fpu else ''}{'_mm' if matmul else ''}",
+        name=f"mixed_geometry{'_ro' if row_only else ''}{'_ri' if row_init else ''}{'_re' if reinit else ''}{'_fpu' if fpu else ''}{'_mm' if matmul else ''}{'_out' if outer else ''}",
     )
     run_unified_spec(device, spec, tensors)
 
     got_full = ttnn.to_torch(t_out).to(torch.float32)
     got_row = ttnn.to_torch(t_out_row).to(torch.float32).flatten()
-    if matmul:
+    if outer:
+        # k (x) delta: column 0 of the LHS against the row, a 32x32 result.
+        k = full.to(torch.float32)[0, 0, :, 0]
+        want_full = torch.outer(k, row.to(torch.float32).flatten()).reshape(1, 1, TILE, TILE)
+        want_row = torch.zeros(TILE)  # this body does not store the row buffer
+    elif matmul:
         f = full.to(torch.float32)[0, 0]
         want_full = (f @ f).reshape(1, 1, TILE, TILE)
         want_row = (row.to(torch.float32).reshape(1, TILE) @ f).flatten()
@@ -158,10 +172,15 @@ def run(device, row_only=False, row_init=False, reinit=False, fpu=False, matmul=
     return err_full, err_row
 
 
-def measure(device, row_only, row_init, reinit, tol, fpu=False, matmul=False):
-    err_full, err_row = run(device, row_only=row_only, row_init=row_init, reinit=reinit, fpu=fpu, matmul=matmul)
+def measure(device, row_only, row_init, reinit, tol, fpu=False, matmul=False, outer=False):
+    err_full, err_row = run(
+        device, row_only=row_only, row_init=row_init, reinit=reinit, fpu=fpu, matmul=matmul, outer=outer
+    )
     ok_row = err_row <= tol
     full = None if row_only else bool((err_full <= tol).all())
+    if outer:
+        # Only the 32x32 result is stored here, so the row columns are not a measurement.
+        return full, FACE, FACE
     return full, int(ok_row[:FACE].sum()), int(ok_row[FACE:].sum())
 
 
@@ -179,6 +198,7 @@ def main(argv=None):
                 device, c[1], c[2], c[3], args.rel_err,
                 fpu=(len(c) > 7 and c[7] == "fpu"),
                 matmul=(len(c) > 7 and c[7] == "matmul"),
+                outer=(len(c) > 7 and c[7] == "outer"),
             )
             for c in cases
         ]
