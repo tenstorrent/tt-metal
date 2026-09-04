@@ -1,6 +1,11 @@
 # Plan: FSD-backed topology map + Control Plane downed-links API
 
-**Status:** In progress. Landed: §5.5's mapper identity, via [`PLAN_physical_node_id.md`](PLAN_physical_node_id.md) slices 1–4, so the mapper is already keyed on `PhysicalNodeId` and §5.2's canonicalization exists as a function to call; §6's `diff_physical_system_descriptors` with its offline tests; and `LinkHealth` (§2–§3) with `test_link_health.cpp`. Not yet written: the host filter and its rank-agreement protocol (§5.1–§5.4), the ControlPlane wiring and forwarders (§7), and the `test_fsd_psd_e2e.cpp` half of §8.
+**Status:** In progress. Landed: §5.5's mapper identity, via [`PLAN_physical_node_id.md`](PLAN_physical_node_id.md) slices 1–4, so the mapper is already keyed on `PhysicalNodeId` and §5.2's canonicalization exists as a function to call; §6's `diff_physical_system_descriptors` with its offline tests; `LinkHealth` (§2–§3) with `test_link_health.cpp`; and the host filter with its rank-agreement protocol (§5.1–§5.4), minus §5.3 cases 5–7. Not yet written: the ControlPlane wiring and forwarders (§7), and the `test_fsd_psd_e2e.cpp` half of §8.
+
+**§7 is the only thing left that makes any of this reachable.** `LinkHealth` and the host filter are both
+built and both unreferenced outside their tests: nothing constructs a `LinkHealth`, and nothing calls
+`fsd_host_filter_from_live`. §7 is what loads a factory descriptor at init, filters it, maps on it, and
+hangs a `LinkHealth` off the result.
 
 `LinkHealth` is built but nothing constructs it yet — §7's wiring is what puts it on the ControlPlane. Two coverage gaps in its tests, both from the fixture rather than the class: `test_link_health.cpp` runs on the T3K mock, which is a single mesh on a single host, so the intermesh path (§4) and the cross-host merge (§5.4) are exercised only by construction, not by a test. Both need a multi-mesh mock fixture.
 **Umbrella:** [tenstorrent/tt-metal#52859](https://github.com/tenstorrent/tt-metal/issues/52859)
@@ -534,6 +539,12 @@ lives next to pairing in ControlPlane, not as a second identity key in `LinkHeal
 
 ## 5. Host filtering: which slice of the FSD to ingest
 
+**Built, except three §5.3 error cases.** `fsd_host_filter.{hpp,cpp}` (internal — ControlPlane is the only
+consumer) plus the builder changes in §5.4, covered by `test_fsd_host_filter.cpp`. Cases 1, 2, 4, 8, 10 and
+§5.2's injectivity requirement all throw from `fsd_host_filter_from_live`; case 9's protocol is
+`agree_or_throw_fsd_host_filter`. Cases 5, 6 and 7 are not done — see §5.4. Nothing calls any of it yet;
+that is §7.
+
 An FSD in the wild describes a whole superpod or an aggregated datacenter. A job runs on a subset of it.
 Ingesting the whole FSD breaks both halves of this feature:
 
@@ -671,10 +682,32 @@ does not need live ranks: it is producing the rank binding.
 
 ### 5.4 What the builder needs
 
-- `filter_factory_descriptor`: match on canonical names, reject duplicates among the retained hosts, keep
-  reporting *all* missing names at once (it already does).
-- Optional `FilterReport` out-param (hosts dropped, connections dropped, component count) so ControlPlane
-  logs one line and the builder stays quiet.
+**Built**, in `physical_descriptor_builder.{hpp,cpp}` and `fsd_host_filter.{hpp,cpp}`, covered by
+`test_fsd_host_filter.cpp`. What shipped:
+
+- `filter_factory_descriptor` matches on canonical names, rejects retained hosts that collide under
+  canonicalization, and still reports *all* missing names at once.
+- `FilterReport` carries hosts before / after and dropped connections. **No component count** — components
+  are `build_physical_descriptors`' concern and counting them here would mean running that partition on
+  every ingest for a log line. §5.3 case 5 is therefore still unimplemented.
+- `validate_host_filter` runs those checks *without* building the filtered copy. This is the piece the
+  sketch above missed, and case 9 does not work without it: the failure has to be known before the
+  agreement, and discovering it during the ingest is exactly the mid-ingest per-rank abort case 9 exists to
+  prevent. `fsd_host_filter_from_live` calls it as a dry run, so it throws for every reason the later
+  ingest would.
+- `fsd_host_filter_from_live` takes the FSD **path**, not a loaded proto as the §7 sketch shows, so
+  ControlPlane never names a proto type. The cost is parsing the descriptor twice per init — once to
+  derive, once to build. If that shows up on a datacenter-scale textproto, the fix is an opaque handle
+  rather than leaking the proto.
+- The agreement reduces `{local_ok, host_checksum, fsd_fingerprint}` as one `uint64` array, twice
+  (`MIN` then `MAX`), and compares each value's min against its max. `all_reduce` was already available on
+  `DistributedContext`; §8's "all-reduce" is literal. The `fsd_fingerprint` half is not in the sketch
+  above and is what catches ranks agreeing on the host list while reading *different files* for it, which
+  is what a half-rolled-out asset update looks like.
+
+Still open from §5.3: case 5 (allocation not connected), case 6 (live-only ASICs on a retained host — needs
+the diff, so it belongs with §7's ingest) and case 7 (board-type mismatch — likewise; note
+`diff_physical_system_descriptors` already reports it as `mismatched_asics`).
 
 The init sequence that applies all of this is in §7.
 
