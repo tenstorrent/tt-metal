@@ -228,7 +228,7 @@ grid dimensions (`:335-341`).
 |---|---|---|---|
 | `eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp` | **borrowed** by `SliceTileTensorArgs` (`…_tile_tensor_args.cpp:133`); ≥15 other binding factories | **yes** — `…/writer_unary_interleaved_start_id_metal2.cpp` | **Rung 1 — bind the existing fork, create nothing, edit nothing** |
 | `slice/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp` (slice's own copy) | neither borrowed nor lent — `SliceTileProgramFactory` is its only binder | n/a | **Convert in place, no fork** |
-| slice's other seven referenced kernels | slice-owned, single-binder | n/a | Convert in place |
+| slice's other nine referenced kernels | slice-owned, single-binder | converted in place | none |
 
 **Fork's binding vocabulary (now this port's constraint, not a free choice):** DFB `dfb::out`
 (CONSUMER), tensor `tensor::dst`, named args `args::num_pages`, `args::start_id`; gated on
