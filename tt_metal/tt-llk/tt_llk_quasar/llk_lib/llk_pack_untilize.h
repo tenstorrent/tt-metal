@@ -57,6 +57,7 @@ inline void _llk_pack_untilize_mop_config_(const std::uint8_t buf_desc_id)
 template <std::uint32_t FULL_CT_DIM, std::uint32_t BLOCK_CT_DIM>
 inline void _llk_pack_untilize_init_(const std::uint8_t buf_desc_id, const TensorShape& tensor_shape)
 {
+    static_assert(FULL_CT_DIM % BLOCK_CT_DIM == 0, "FULL_CT_DIM must be divisible by BLOCK_CT_DIM");
     ckernel::pack::pack_untilize_stride_cfg_u pk_cfg = {};
 
     pk_cfg.f.src_z_stride    = tensor_shape.total_num_faces() * tensor_shape.face_r_dim; // inc MATH DEST REG ptr by 64 16-datum rows
@@ -255,6 +256,7 @@ inline void _llk_pack_untilize_strided_sparse_mop_config_(const std::uint8_t buf
 template <std::uint32_t FULL_CT_DIM, std::uint32_t NUM_TILES_PER_BLOCK>
 inline void _llk_pack_untilize_strided_init_(const std::uint8_t buf_desc_id, const TensorShape& tensor_shape)
 {
+    static_assert(FULL_CT_DIM % NUM_TILES_PER_BLOCK == 0, "FULL_CT_DIM must be divisible by NUM_TILES_PER_BLOCK");
     cfg_rmw(THCON_PACKER0_REG3_PACK_STRIDE_VAL_SOURCE_RMW, 0); // sel STRIDE_OFFSET_0
 
     ckernel::pack::pack_untilize_stride_cfg_u stride_cfg = {};
