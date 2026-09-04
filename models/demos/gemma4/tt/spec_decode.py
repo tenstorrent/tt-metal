@@ -667,12 +667,18 @@ class SpeculativeDecoder:
                 for t in (rebuilt, block, tail):
                     ttnn.deallocate(t)
 
-    def _pv_host_inputs(self, c, P):
+    def _pv_host_inputs(self, c, P, s_k=None):
         """Host tensors for one packed verify at anchor position ``c``.
 
         Returns dict of torch tensors: pos [1,P]u32, masks [1,1,H*P,S_k] bf16
         (full + sliding), embed_idx per layer type [1,nkv*S2]u32, hot_pt
         [1,BLK]i32, and S_k.
+
+        ``s_k`` overrides the full mask's bucketed width -- the fused trace
+        fixes S_k at capture to cover the whole generation so mask/table widths
+        (and hence the captured program) stay stable across replays. Columns
+        beyond the current ``c+P-1`` are NEG by construction, so a wider mask is
+        exact, not diluted.
         """
         bs, S2, BLK = self._pv_bs, self._pv_s2, self._pv_blk
         a, off = c // bs, c % bs
@@ -684,7 +690,7 @@ class SpeculativeDecoder:
         # Additive masks, head-major rows h*P+p: causal upper bound c+p; sliding
         # adds the window lower bound. S_k is bucket-padded for trace stability.
         NEG = -1e9
-        S_k = ((c + P + self._pv_sk_bucket - 1) // self._pv_sk_bucket) * self._pv_sk_bucket
+        S_k = s_k if s_k else ((c + P + self._pv_sk_bucket - 1) // self._pv_sk_bucket) * self._pv_sk_bucket
         j = torch.arange(S_k)
         rows_full = torch.empty(P, S_k)
         for p in range(P):
@@ -1338,14 +1344,36 @@ class SpeculativeDecoder:
         # single verify batch [anchor, d0..dK-1].
         verify_inputs = draft_ids if self._fused_reseed else [tr["anchor_tok"]] + draft_ids
         verify_x = ttnn.concat(verify_inputs, dim=1)  # reseed: [1,K], shift: [1,K+1]
-        vlogits, vhidden = self.target.ttnn_verify_forward(
-            x=verify_x,
-            current_pos=tr["v_pu"],
-            current_pos_cache=tr["v_pi"],
-            page_table=tr["v_pt"],
-            kv_cache=self.tt_kv_cache,
-            page_tables_per_layer=tr["v_ptl"],
-        )
+        if tr.get("pv"):
+            # PACKED verify: all K+1 candidates in the query-heads dim -> ONE
+            # KV read per layer instead of K+1 (the batch-dim verify re-reads
+            # the whole KV per candidate row; at 256k that is 6x 5.2 GB/step).
+            # Inputs are persistent buffers refreshed per replay by
+            # _generate_fused_traced; page tables are width-matched to their
+            # masks (see _pv_tables_per_layer).
+            vlogits, vhidden = self.target.ttnn_packed_verify_forward(
+                x=verify_x,
+                position_idx=tr["pv_pos"],
+                attn_mask_full=tr["pv_mask_full"],
+                attn_mask_sliding=tr["pv_mask_slide"],
+                packed_p=K + 1,
+                page_table=tr["v_pt"],
+                kv_cache=self.tt_kv_cache,
+                embed_idx_full=tr["pv_embed"].get("full_attention"),
+                embed_idx_sliding=tr["pv_embed"].get("sliding_attention"),
+                hot_pt_full=tr["pv_hot"].get("full_attention"),
+                hot_pt_sliding=tr["pv_hot"].get("sliding_attention"),
+                page_tables_per_layer=tr["pv_ptl"],
+            )
+        else:
+            vlogits, vhidden = self.target.ttnn_verify_forward(
+                x=verify_x,
+                current_pos=tr["v_pu"],
+                current_pos_cache=tr["v_pi"],
+                page_table=tr["v_pt"],
+                kv_cache=self.tt_kv_cache,
+                page_tables_per_layer=tr["v_ptl"],
+            )
         tail_rows = K if self._fused_reseed else K + 1
         tail_idx = self._argmax_last(vlogits, rows=tail_rows)  # [1,1,K or K+1] uint32 RM
         if self._fused_reseed:
@@ -1357,7 +1385,29 @@ class SpeculativeDecoder:
         vlogits.deallocate(True)
         return verify_x, vidx, vhidden
 
-    def _capture_fused_trace(self, anchor_token, anchor_hidden, anchor_pos):
+    def _fused_packed_enabled(self):
+        """Packed verify inside the fused trace. Auto: ON for BOUNDED targets in
+        the 256k tier (max_seq_len > 131072), shift seed mode only.
+
+        Measured (31B, greedy K=5, packed vs batch-dim verify, tok/s/u):
+          32k  44.79 (2.28/5) vs 42.23 (2.40/5)  -- packed wins slightly
+          128k 32.93 (1.70/5) vs 36.06 (2.78/5)  -- packed LOSES: its non-causal
+               long-S_k softmax drifts off greedy (~tok 41) with the mesh op
+               default; fp32 dest acc on mesh makes it far worse (0.06/5)
+          256k 23.16 (1.63/5) vs 16.35 (1.70/5)  -- packed turns the datapoint
+               positive vs the 16.97 baseline (KV re-read dominates batch-dim)
+        So auto only enables where the KV amortization outweighs the acceptance
+        cost. Reseed mode is excluded structurally: its seed forward writes the
+        anchor KV around the staging, and the staged hot block goes stale.
+        GEMMA4_SPEC_FUSED_PACKED=1/0 overrides."""
+        env = os.environ.get("GEMMA4_SPEC_FUSED_PACKED")
+        if env in ("0", "1"):
+            return env == "1" and not self._fused_reseed
+        bounded = bool(getattr(self.target, "bounded_sliding_kv_cache", False))
+        max_seq = int(getattr(self.target, "max_seq_len", 0) or 0)
+        return bounded and max_seq > 131072 and not self._fused_reseed
+
+    def _capture_fused_trace(self, anchor_token, anchor_hidden, anchor_pos, max_new_tokens=None):
         """Capture ONE fused iteration at the real first-call inputs.
 
         Allocates persistent input buffers (anchor token, recurrent hidden, the
@@ -1389,6 +1439,27 @@ class SpeculativeDecoder:
             "d_ptl": self._page_tables_per_layer(1),
             "v_ptl": self._page_tables_per_layer(K if self._fused_reseed else K + 1),
         }
+        if self._fused_packed_enabled():
+            # PACKED verify inside the trace (shift mode: rows = anchor,d0..dK-1
+            # at positions c..c+K, exactly _pv_host_inputs' layout). S_k is fixed
+            # at capture to cover the WHOLE generation so mask/table widths (and
+            # the captured program) never change across replays; columns beyond
+            # the live top are NEG, so the wide mask is exact.
+            self._pv_setup()
+            self._pv_seed_staging(anchor_pos)
+            P_v = K + 1
+            horizon = anchor_pos + (max_new_tokens or 0) + P_v + 1
+            s_k_cap = ((horizon + self._pv_sk_bucket - 1) // self._pv_sk_bucket) * self._pv_sk_bucket
+            h = self._pv_host_inputs(anchor_pos, P_v, s_k=s_k_cap)
+            tr["pv"] = True
+            tr["pv_S_k"] = s_k_cap
+            tr["pv_pos"] = self._pv_from_torch(h["pos"], ttnn.uint32)
+            tr["pv_mask_full"] = self._pv_from_torch(h["mask_full"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            tr["pv_mask_slide"] = self._pv_from_torch(h["mask_slide"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            tr["pv_embed"] = {lt: self._pv_from_torch(e, ttnn.uint32) for lt, e in h["embed"].items()}
+            tr["pv_hot"] = {lt: self._pv_from_torch(t, ttnn.int32) for lt, t in h["hot_t"].items()}
+            tr["pv_ptl"] = self._pv_tables_per_layer(s_k_cap)
+            _lg.info(f"[spec-trace] fused verify: PACKED (S_k={s_k_cap}, ring={self._pv_ring})")
         _lg.info("[spec-trace] capture fused: compile run")
         vx, vidx, vh = self._fused_body(tr)
         ttnn.synchronize_device(self.mesh_device)
@@ -1435,7 +1506,7 @@ class SpeculativeDecoder:
         self._use_trace = False
         anchor_hidden = self.seed(anchor_token, anchor_pos)
         self._use_trace = True
-        self._capture_fused_trace(anchor_token, anchor_hidden, anchor_pos)
+        self._capture_fused_trace(anchor_token, anchor_hidden, anchor_pos, max_new_tokens=max_new_tokens)
         anchor_hidden.deallocate(True)
         tr = self._fused_trace
         self._last_fused_setup_s = time.perf_counter() - setup_t0
@@ -1462,6 +1533,33 @@ class SpeculativeDecoder:
                 ttnn.copy_host_to_device_tensor(v_hpi, tr["v_pi"])
                 v_hpu.deallocate(True)
                 v_hpi.deallocate(True)
+                if tr.get("pv"):
+                    # Refresh the packed-verify inputs for the new anchor: the
+                    # positions, both masks (fixed widths -- S_k was capped at
+                    # capture), per-type merge indices (they encode the hot-block
+                    # roll) and per-type hot pages. _pv_a_prev must advance ONLY
+                    # after the host inputs are built (the roll flag reads it).
+                    h2 = self._pv_host_inputs(cur_pos, K + 1, s_k=tr["pv_S_k"])
+                    ttnn.copy_host_to_device_tensor(
+                        self._pv_from_torch(h2["pos"], ttnn.uint32, device=False), tr["pv_pos"]
+                    )
+                    ttnn.copy_host_to_device_tensor(
+                        self._pv_from_torch(h2["mask_full"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=False),
+                        tr["pv_mask_full"],
+                    )
+                    ttnn.copy_host_to_device_tensor(
+                        self._pv_from_torch(h2["mask_slide"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=False),
+                        tr["pv_mask_slide"],
+                    )
+                    for lt, e in h2["embed"].items():
+                        ttnn.copy_host_to_device_tensor(
+                            self._pv_from_torch(e, ttnn.uint32, device=False), tr["pv_embed"][lt]
+                        )
+                    for lt, t in h2["hot_t"].items():
+                        ttnn.copy_host_to_device_tensor(
+                            self._pv_from_torch(t, ttnn.int32, device=False), tr["pv_hot"][lt]
+                        )
+                    self._pv_a_prev = cur_pos // self._pv_bs
                 # In reseed mode the trace computes the exact seed internally.
                 # Otherwise tr["h"] already holds this iter's approximate seed
                 # (set at the end of the previous iteration).

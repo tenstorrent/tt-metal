@@ -446,6 +446,11 @@ def _packed_verify_sdpa(
     # there so the packed path stays identical to upstream.
     _dev = k.device()
     _num_dev = getattr(_dev, "get_num_devices", lambda: 1)()
+    # Single-device ONLY, as originally shipped. Forcing fp32_dest_acc on a
+    # MESH was tried against the long-S_k greedy drift (128k packed verify
+    # diverges at ~tok 41 with op defaults) and made it far worse -- 0.06/5
+    # accepted, divergent from token 0 -- so the mesh keeps the op default and
+    # the drift is handled by gating packed verify per ISL tier instead.
     compute_kernel_config = (
         ttnn.init_device_compute_kernel_config(
             _dev.arch(),
