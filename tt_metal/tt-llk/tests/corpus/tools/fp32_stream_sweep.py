@@ -55,10 +55,17 @@ def run_band_leg(args, node, start, count, out_sha_file, log_file):
     )
     cmd = ["flock", "-x", f"/tmp/tt-dev-{args.chip}.lock", "-c", inner]
     t0 = time.time()
-    subprocess.run(cmd, cwd=args.farm, env=env, timeout=args.timeout)
+    # Retry a failed dispatch a few times: a transient slow/hung band (cold device open,
+    # a slow first dispatch) usually clears on a fresh attempt, so one bad band should not
+    # abandon the whole op's sweep.
+    m = None
+    for _ in range(3):
+        subprocess.run(cmd, cwd=args.farm, env=env, timeout=args.timeout)
+        txt = Path(out_sha_file).read_text() if Path(out_sha_file).exists() else ""
+        m = _SHA_RE.search(txt)
+        if m:
+            break
     dt = time.time() - t0
-    txt = Path(out_sha_file).read_text() if Path(out_sha_file).exists() else ""
-    m = _SHA_RE.search(txt)
     r = _RUNS_RE.search(txt)
     if not m:
         raise RuntimeError(
