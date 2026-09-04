@@ -8,7 +8,7 @@ import torch
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
-from models.demos.deepseek_v3_d_p.tests.kda.utils import make_config, random_weights
+from models.demos.deepseek_v3_d_p.tests.kda.utils import make_small_kda_test_config, random_weights
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate, assert_bit_identical
 
@@ -32,7 +32,7 @@ def test_segmented_prefill_matches_reference_and_reuses_program(
     device: ttnn.Device,
     isolated_program_cache: None,
 ) -> None:
-    config = make_config()
+    config = make_small_kda_test_config()
     weights = random_weights(config)
     hidden = torch.randn(1, 64, config.hidden_size, generator=torch.Generator().manual_seed(73)).to(torch.bfloat16)
     golden_first, golden_state = kda_forward_reference(hidden[:, :32], weights, config)
@@ -67,7 +67,7 @@ def test_segmented_prefill_matches_reference_and_reuses_program(
 
 @pytest.mark.use_module_device
 def test_trace_replay_matches_eager_without_mutating_input_state(device: ttnn.Device) -> None:
-    config = make_config()
+    config = make_small_kda_test_config()
     hidden = torch.randn(1, 32, config.hidden_size, generator=torch.Generator().manual_seed(1917)).to(torch.bfloat16)
     hidden_tt = ttnn.from_torch(
         hidden,

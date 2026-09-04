@@ -14,7 +14,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import (
     load_kda_layer_state_dict,
     resolve_kda_layer_shards,
 )
-from models.demos.deepseek_v3_d_p.tests.kda.utils import make_config, random_weights
+from models.demos.deepseek_v3_d_p.tests.kda.utils import make_small_kda_test_config, random_weights
 
 
 def _write_indexed_layer(checkpoint_dir: Path, layer_idx: int, config: KDAConfig) -> Path:
@@ -28,7 +28,7 @@ def _write_indexed_layer(checkpoint_dir: Path, layer_idx: int, config: KDAConfig
 
 
 def test_loads_one_indexed_full_rank_kda_layer(tmp_path: Path) -> None:
-    config = make_config(use_full_rank_gate=True)
+    config = make_small_kda_test_config(use_full_rank_gate=True)
     shard = _write_indexed_layer(tmp_path, layer_idx=1, config=config)
 
     assert resolve_kda_layer_shards(tmp_path, 1, config) == (shard,)
@@ -41,7 +41,7 @@ def test_loads_one_indexed_full_rank_kda_layer(tmp_path: Path) -> None:
 
 
 def test_rejects_incomplete_checkpoint_shard_set(tmp_path: Path, expect_error) -> None:
-    config = make_config(use_full_rank_gate=True)
+    config = make_small_kda_test_config(use_full_rank_gate=True)
     _write_indexed_layer(tmp_path, layer_idx=1, config=config).unlink()
 
     with expect_error(FileNotFoundError, "missing complete KDA checkpoint shard"):
@@ -49,7 +49,7 @@ def test_rejects_incomplete_checkpoint_shard_set(tmp_path: Path, expect_error) -
 
 
 def test_rejects_index_missing_required_kda_weight(tmp_path: Path, expect_error) -> None:
-    config = make_config(use_full_rank_gate=True)
+    config = make_small_kda_test_config(use_full_rank_gate=True)
     _write_indexed_layer(tmp_path, layer_idx=1, config=config)
     index_path = tmp_path / "model.safetensors.index.json"
     index = json.loads(index_path.read_text(encoding="utf-8"))

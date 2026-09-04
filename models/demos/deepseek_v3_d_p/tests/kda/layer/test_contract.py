@@ -12,7 +12,7 @@ from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     collect_mesh_accuracy_and_determinism_results,
-    make_config,
+    make_small_kda_test_config,
     random_weights,
 )
 from models.demos.deepseek_v3_d_p.tt.kda.config import KDAProgramConfig
@@ -53,7 +53,7 @@ def _assert_state_metadata(state: KdaState, config) -> None:
 
 
 def test_layer_matches_reference_and_is_deterministic(device: ttnn.Device) -> None:
-    config = make_config()
+    config = make_small_kda_test_config()
     weights = random_weights(config)
     sequence = 32
     hidden = torch.randn(1, sequence, config.hidden_size, generator=torch.Generator().manual_seed(41 + sequence)).to(
@@ -86,7 +86,7 @@ def test_layer_matches_reference_and_is_deterministic(device: ttnn.Device) -> No
 
 
 def test_allocate_state_contract(device: ttnn.Device) -> None:
-    config = make_config()
+    config = make_small_kda_test_config()
     layer = ttKDA(device, config, random_weights(config))
     first = layer.allocate_state()
     second = layer.allocate_state()
@@ -98,7 +98,7 @@ def test_allocate_state_contract(device: ttnn.Device) -> None:
 
 
 def test_forward_contract(device: ttnn.Device) -> None:
-    config = make_config()
+    config = make_small_kda_test_config()
     weights = random_weights(config)
     hidden = torch.randn(1, 64, config.hidden_size, generator=torch.Generator().manual_seed(109)).to(torch.bfloat16)
     golden_output, golden_state = kda_forward_reference(hidden, weights, config)
@@ -154,7 +154,7 @@ def test_forward_contract(device: ttnn.Device) -> None:
     ],
 )
 def test_layer_rejects_invalid_construction(case: str, device: ttnn.Device, expect_error) -> None:
-    config = make_config()
+    config = make_small_kda_test_config()
     state_dict = random_weights(config)
 
     if case == "axes":
@@ -192,7 +192,7 @@ def test_layer_rejects_invalid_construction(case: str, device: ttnn.Device, expe
     ],
 )
 def test_layer_rejects_invalid_forward(case: str, device: ttnn.Device, expect_error) -> None:
-    config = make_config()
+    config = make_small_kda_test_config()
     layer = ttKDA(device, config, random_weights(config))
     hidden_shape = (1, 32, config.hidden_size)
     state = layer.allocate_state()

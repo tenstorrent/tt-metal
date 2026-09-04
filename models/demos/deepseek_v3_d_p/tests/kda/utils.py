@@ -370,10 +370,11 @@ def kimi_k3_tensor_cache_path(
     return Path(ttnn.CONFIG.model_cache_path) / "kimi_k3" / weights_identity / layout
 
 
-def make_config(
+def make_small_kda_test_config(
     *,
     use_full_rank_gate: bool = False,
 ) -> KDAConfig:
+    """Return a reduced synthetic KDA config for fast contract tests, not a Kimi-K3 config."""
     return KDAConfig(
         hidden_size=64,
         num_heads=2,

@@ -11,7 +11,7 @@ import torch
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import kda_state_dict_sha256
-from models.demos.deepseek_v3_d_p.tests.kda.utils import make_config, random_weights
+from models.demos.deepseek_v3_d_p.tests.kda.utils import make_small_kda_test_config, random_weights
 from models.demos.deepseek_v3_d_p.tt.kda.config import KDAProgramConfig, KDARecurrenceProgramConfig
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights, load_kda_weights
@@ -46,7 +46,7 @@ def test_cache_identity_changes_with_weight_content() -> None:
 
 
 def test_cache_key_covers_semantic_config_and_placement(tmp_path: Path) -> None:
-    baseline = make_config()
+    baseline = make_small_kda_test_config()
     bounded = replace(baseline, gate_lower_bound=-5.0)
     cases = {
         "baseline": (baseline, 1),
@@ -72,22 +72,24 @@ def test_cache_key_covers_semantic_config_and_placement(tmp_path: Path) -> None:
 
 
 def test_missing_cache_is_incomplete(tmp_path: Path) -> None:
-    assert not KDAWeights.check_cache_complete(tmp_path / "missing", "layer_0.kda", make_config(), object())
+    assert not KDAWeights.check_cache_complete(
+        tmp_path / "missing", "layer_0.kda", make_small_kda_test_config(), object()
+    )
 
 
 def test_weight_loader_rejects_empty_source_weights(expect_error) -> None:
     with expect_error(ValueError, "state_dict must be non-empty"):
-        load_kda_weights(object(), make_config(), {})
+        load_kda_weights(object(), make_small_kda_test_config(), {})
 
 
 def test_cache_build_requires_source_weights(tmp_path: Path, expect_error) -> None:
     with expect_error(ValueError, "requires a state_dict"):
-        KDAWeights.build_ttnn_cache(None, tmp_path, "layer_0.kda", make_config(), object())
+        KDAWeights.build_ttnn_cache(None, tmp_path, "layer_0.kda", make_small_kda_test_config(), object())
 
 
 @pytest.mark.use_module_device
 def test_cache_only_load_rejects_corrupt_tensor(device: ttnn.Device, tmp_path: Path, expect_error) -> None:
-    config = make_config()
+    config = make_small_kda_test_config()
     cache_prefix = "layer_0.kda"
     KDAWeights.build_ttnn_cache(random_weights(config), tmp_path, cache_prefix, config, device)
     next(tmp_path.glob("*.tensorbin")).write_bytes(b"corrupt")
@@ -98,7 +100,7 @@ def test_cache_only_load_rejects_corrupt_tensor(device: ttnn.Device, tmp_path: P
 
 @pytest.mark.use_module_device
 def test_cached_and_in_memory_layers_match(device: ttnn.Device, tmp_path: Path) -> None:
-    config = make_config()
+    config = make_small_kda_test_config()
     state_dict = random_weights(config)
     hidden = torch.randn(1, 32, config.hidden_size, generator=torch.Generator().manual_seed(151), dtype=torch.bfloat16)
     cache_prefix = "layer_0.kda"
@@ -123,7 +125,7 @@ def test_cached_and_in_memory_layers_match(device: ttnn.Device, tmp_path: Path) 
 
 @pytest.mark.use_module_device
 def test_program_config_resolution(device: ttnn.Device) -> None:
-    config = make_config()
+    config = make_small_kda_test_config()
     program_config = replace(KDAProgramConfig(), qkv_channel_chunk_size=128, tp_ccl_topology=ttnn.Topology.Ring)
     layer = ttKDA(device, config, random_weights(config), program_config=program_config)
 
