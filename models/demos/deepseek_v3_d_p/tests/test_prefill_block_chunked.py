@@ -141,17 +141,6 @@ def _gather_kv(tt: ttnn.Tensor, mesh_device) -> torch.Tensor:
     return full[:, :1][0, 0]  # TP replica 0 -> [chunk_size_global, D]
 
 
-def _ci_unsupported_param_combos(**params):
-    on_ci = params["is_ci_env"] or params["is_ci_v2_env"]
-    gate_fallback_mode = params["gate_fallback_mode"]
-
-    if not on_ci:
-        return False
-    if gate_fallback_mode != GateComputeMode.DEVICE_FP32:
-        return True
-    return False
-
-
 def run_chunked_block(
     variant, config, mesh_device, weight_cache_path, n_chunks, layer_idx, gate_fallback_mode, num_links, topology
 ):
@@ -872,7 +861,6 @@ def test_ds_prefill_block_chunked_padded(
 # These skip until the Kimi golden trace lands (set PREFILL_TRACE_DIR; see tt/runners/adapters/).
 
 
-@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos)
 @pytest.mark.parametrize("n_chunks", [1, 2, 5, 10, 11], ids=["chunks1", "chunks2", "chunks5", "chunks10", "chunks11"])
 @pytest.mark.parametrize(
     "layer_idx, gate_fallback_mode",
@@ -905,7 +893,14 @@ def test_kimi_prefill_block_chunked(
     layer_idx,
     gate_fallback_mode,
     num_links,
+    is_ci_env,
+    is_ci_v2_env,
 ):
+    # Skipped at run time rather than uncollected: this test's only parametrize row is the host
+    # gate, so an uncollect_if would leave a `-k kimi` run with zero items (pytest exit 5).
+    if (is_ci_env or is_ci_v2_env) and gate_fallback_mode != GateComputeMode.DEVICE_FP32:
+        pytest.skip("host gate is a local diagnostic; CI runs device_fp32 only")
+
     topology = per_axis_topology(device_params["fabric_config"])
     run_chunked_block(
         variant,
@@ -920,7 +915,6 @@ def test_kimi_prefill_block_chunked(
     )
 
 
-@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos)
 @pytest.mark.parametrize("splits", [[1024, 4096], _PADDED_FULL_55K], ids=["1k+4k", "full55k"])
 @pytest.mark.parametrize(
     "layer_idx, gate_fallback_mode",
@@ -953,7 +947,14 @@ def test_kimi_prefill_block_chunked_padded(
     layer_idx,
     gate_fallback_mode,
     num_links,
+    is_ci_env,
+    is_ci_v2_env,
 ):
+    # Skipped at run time rather than uncollected: this test's only parametrize row is the host
+    # gate, so an uncollect_if would leave a `-k kimi` run with zero items (pytest exit 5).
+    if (is_ci_env or is_ci_v2_env) and gate_fallback_mode != GateComputeMode.DEVICE_FP32:
+        pytest.skip("host gate is a local diagnostic; CI runs device_fp32 only")
+
     topology = per_axis_topology(device_params["fabric_config"])
     run_chunked_block_padded(
         variant, config_only, mesh_device, weight_cache_path, splits, layer_idx, gate_fallback_mode, num_links, topology
