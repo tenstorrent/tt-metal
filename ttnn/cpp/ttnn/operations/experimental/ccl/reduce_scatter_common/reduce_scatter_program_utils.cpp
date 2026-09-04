@@ -105,6 +105,8 @@ uint32_t reduce_scatter_default_chunks_per_sync(
     uint32_t tile_granularity) {
     // For Line, as early as 20 chunks per sync we get statistically significant performance improvements.
     // For Ring there is no statistically significant performance improvement until 80 chunks per sync.
+    // (The ring kernels for dims 1-3 apply a tighter cap on top of this; see
+    // RING_UNIT_STEP_MAX_CHUNKS_PER_SYNC.)
     TT_FATAL(topology == ttnn::ccl::Topology::Ring || topology == ttnn::ccl::Topology::Linear, "Invalid topology");
     constexpr uint32_t RING_DEFAULT_CHUNKS_PER_SYNC = 80;
     constexpr uint32_t LINEAR_DEFAULT_CHUNKS_PER_SYNC = 20;

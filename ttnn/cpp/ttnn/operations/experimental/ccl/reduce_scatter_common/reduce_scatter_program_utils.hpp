@@ -49,6 +49,15 @@ uint32_t reduce_scatter_default_chunks_per_sync(
     uint32_t num_repeats,
     uint32_t tile_granularity);
 
+// Cap on the default chunks_per_sync for the ring kernels that carry a worker's whole share of the
+// slice in every step (scatter dims 1-3). A step there holds up to 48 chunks, so "half the chunks"
+// reaches 16-24 and delays the receiver's start on each sync group. Measured on a 1x8 Blackhole ring
+// (bf16, 2 links): 4 was never worse than the uncapped default and beat it by 6.5% at 8M elements (16
+// chunks per step) and by ~1% at 16M-24M (32-48 chunks per step). An interval of 1 loses 5-21% on
+// steps of 8-48 chunks to the per-chunk waits. The dim 0 kernels, which split a step between the two
+// directions chunk by chunk, prefer the longer interval by 1.5-2% at 24M and are not capped.
+constexpr uint32_t RING_UNIT_STEP_MAX_CHUNKS_PER_SYNC = 4;
+
 // Sizing for the chunk-paged "contiguous" intermediate used by the ring reduce-scatter fast path.
 //
 // The contiguous path replaces scatter-writes to the intermediate with a single contiguous

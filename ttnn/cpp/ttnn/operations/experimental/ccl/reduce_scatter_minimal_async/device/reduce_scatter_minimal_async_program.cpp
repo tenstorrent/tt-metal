@@ -815,6 +815,12 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                 uint32_t chunks_per_sync_val =
                     chunks_per_sync.value_or(ttnn::experimental::ccl::reduce_scatter_default_chunks_per_sync(
                         topology, tiles_per_worker_per_repeat, num_repeats, tile_granularity));
+                if (!chunks_per_sync.has_value() && normalized_dim != 0) {
+                    // The dims 1-3 kernels carry the worker's whole share of the slice per step; see the
+                    // constant's comment for why their default interval is capped and dim 0's is not.
+                    chunks_per_sync_val =
+                        std::min(chunks_per_sync_val, ttnn::experimental::ccl::RING_UNIT_STEP_MAX_CHUNKS_PER_SYNC);
+                }
                 log_trace(tt::LogOp, "DEBUG: chunks_per_sync_val: {}", chunks_per_sync_val);
 
                 std::vector<uint32_t> reader_rt_args;
