@@ -1,0 +1,22 @@
+{
+  "purpose": "TT_METAL_WATCHER=10 over this stage's changed decode path, re-run on the shipped source after the final round of edits. Watcher runs are kept separate from any profiler run; no profiler run happened in this stage at all.",
+  "runs": [
+    {
+      "command": "TT_METAL_WATCHER=10 pytest models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py -q -s",
+      "result": "25 passed",
+      "watcher_faults": 0,
+      "watcher_log": "watcher/watcher_adapter_tests.log",
+      "covers": "compact kc buckets and their bound, bucket switching and token feedback across it, the shared logits buffer replayed per bucket, the async decode split, the page-table diff, the per-slot prefill warm",
+      "source": "shipped source"
+    },
+    {
+      "command": "TT_METAL_WATCHER=10 pytest models/autoports/zai_org_glm_4_7_flash/tests/test_full_model_batch.py -q -s -k 'traced_decode_feedback or inactive_rows or slot_isolation'",
+      "result": "2 passed (test_batch_traced_decode_feedback, test_batch_inactive_rows), 1 failed",
+      "failure": "test_batch_slot_isolation_matches_single_user hit pytest-timeout's 300 s cap during its 32x96-token batched prefill: 'Failed: Timeout (>300.0s) from pytest-timeout'. That is watcher instrumentation overhead, not a device fault and not a model change -- the same test passes in the un-instrumented run (logs/test_full_model_batch_after.log: all 10 tests in 311 s), and watcher reported zero faults in this run.",
+      "watcher_faults": 0,
+      "watcher_log": "not committed: 3.5 MB, over the repo's 500 KB file limit. Regenerate with the command above. The fault count was checked with a case-insensitive grep for watcher-detected / sanitize / assert / corrupt markers and was 0.",
+      "covers": "real 47-layer compact decode at 32 physical rows, traced token feedback, inactive-row handling",
+      "source": "the revision before the kc=24 bucket, the COMPACT_KC_MIN_ROWS crossover table and the non-tile fallback landed. The kc=24 bucket is a new device program (new topk / sparse_matmul / embedding shapes), so this run does not cover it; the adapter-suite watcher run above does -- it is on the shipped source and its test_all_decode_traces_share_one_logits_buffer replays every captured bucket, kc=24 included. bucket_numerics.json additionally replays kc=24 on the real 47-layer model at its saturated bound (6 live rows) and finds it bitwise identical to the union path."
+    }
+  ]
+}

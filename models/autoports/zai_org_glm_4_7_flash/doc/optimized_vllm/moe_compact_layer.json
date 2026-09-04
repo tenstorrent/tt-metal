@@ -1,0 +1,36 @@
+{
+  "purpose": "Prototype of a compact (sparse_matmul INDEXED/GATHER) batch>1 decode MoE plus an inactive-row routing mask, validated for PCC against the shipped union path and timed against it, on one real MoE layer at B=32. Includes the full routing prologue, so these are whole-routed-expert-block numbers, not just the post-matmul chain.",
+  "config": {
+    "batch_rows": 32,
+    "n_experts": 64,
+    "top_k": 4,
+    "expert_dtype": "bfloat4_b (deployment policy)",
+    "iters": 30,
+    "activations": "synthetic torch.randn"
+  },
+  "results": {
+    "pcc_vs_union": {
+      "all32rows_kc16": 0.597339,
+      "all32rows_kc32": 0.829392,
+      "all32rows_kc64": 1.0,
+      "row0_masked_kc4": 1.0,
+      "masked_rows_zero_kc4": 0.0,
+      "row0_masked_kc8": 1.0,
+      "masked_rows_zero_kc8": 0.0
+    },
+    "ms": {
+      "union_all32rows": 1.9442,
+      "union_1row_masked": 0.507,
+      "compact_kc4_1row_masked": 0.2945,
+      "compact_kc8_1row_masked": 0.3827,
+      "compact_kc16_1row_masked": 0.557,
+      "compact_kc32_1row_masked": 0.8982,
+      "compact_kc64_1row_masked": 1.6368,
+      "compact_kc32_all32rows": 0.8959,
+      "compact_kc64_all32rows": 1.6308
+    }
+  },
+  "moe_layers_in_model": 46,
+  "activation_source": "torch.randn(1, 1, B, hidden) * 0.02 (synthetic)",
+  "synthetic_activation_caveat": "SYNTHETIC ACTIVATIONS: routing is driven by torch.randn(1,1,B,hidden)*0.02, not by real hidden states. Measured (moe_union_width.json): randn selects a union of 52 of 64 experts at 32 rows, while the real model's decode union at 32 live rows averages 32.2 (median 32, range 20-48). Per-layer comparisons at a FIXED active count are unaffected and are what this file is for; any comparison that lets the union path's active count float -- notably compact kc=n_experts vs union at 32 rows -- is biased toward the compact form here and must be taken from the whole-model arm (adapter_decode_floor_kc64.json vs adapter_decode_floor_after.json) instead."
+}

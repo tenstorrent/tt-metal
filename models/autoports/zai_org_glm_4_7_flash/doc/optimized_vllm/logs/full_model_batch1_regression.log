@@ -1,0 +1,82 @@
+2026-09-04 06:40:08.225 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/stisi/.cache/ttnn,model_cache_path=/home/stisi/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-09-04 06:40:09.962 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:222)
+2026-09-04 06:40:09.962 | info     |             UMD | Cluster constructor started. (cluster.cpp:406)
+2026-09-04 06:40:09.962 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-09-04 06:40:09.962 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-09-04 06:40:09.975 | info     |             UMD | Established firmware bundle version: 19.12.0 (topology_discovery.cpp:576)
+2026-09-04 06:40:09.975 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-09-04 06:40:10.009 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-09-04 06:40:10.009 | info     |             UMD | IOMMU: disabled (cluster.cpp:147)
+2026-09-04 06:40:10.009 | info     |             UMD | KMD version: 2.8.1 (cluster.cpp:150)
+2026-09-04 06:40:10.009 | info     |             UMD | Cluster constructor completed. (cluster.cpp:665)
+2026-09-04 06:40:10.011 | info     |             UMD | Starting devices in cluster (cluster.cpp:1205)
+2026-09-04 06:40:10.036 | warning  |             UMD | AICLK settled at 1343 MHz, within 5% of the requested 1350 MHz but not an exact match. Proceeding. (tt_device.cpp:256)
+2026-09-04 06:40:10.166 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1213)
+2026-09-04 06:40:10.271 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
+2026-09-04 06:40:10.271 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
+2026-09-04 06:40:10.271 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-09-04 06:40:10.271 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3368)
+2026-09-04 06:40:10.271 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3376)
+2026-09-04 06:40:10.321 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 06:43:04.660 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1248256 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-04 06:43:04.660 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-04 06:43:04.888 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1248256 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-04 06:43:04.888 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-04 06:43:05.283 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1248256 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-04 06:43:05.283 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-04 06:43:06.032 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1248256 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-04 06:43:06.033 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-04 06:43:07.763 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1248256 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-04 06:43:07.763 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-04 06:43:09.136 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1248256 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-04 06:43:09.136 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-04 06:43:09.232 | warning  |           Metal | Allocating device buffers is potentially unsafe due to the existence of an active trace. These buffers may be corrupted once a trace is executed if they are not released before then. Use the trace allocation tracker to verify. (allocator.cpp:130)
+2026-09-04 06:43:09.232 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1248256 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-04 06:43:09.232 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-04 06:43:09.443 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1158144 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-04 06:43:09.443 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+{
+  "statistic_note": "Both mean and median are reported because the baseline this guards is a MEAN: tests/test_full_model_perf.py's bench() divides total wall time by iterations. Comparing this probe's median against that mean is not like-for-like and would hide up to a few percent of regression; use the mean-to-mean row.",
+  "purpose": "Batch-1 full-model traced decode after this stage's model.py/generator.py changes, against doc/optimized_full_model/perf.json's recorded 21.760 (model only) / 23.013 (token out) ms per token. Writes only into doc/optimized_vllm/.",
+  "batch": 1,
+  "iters": 64,
+  "traced_model_only_ms_per_token_mean": 20.675,
+  "token_out_ms_per_token_mean": 21.83,
+  "token_out_tokens_per_s_per_user_mean": 45.809,
+  "traced_model_only_ms_per_token": 20.676,
+  "token_out_ms_per_token": 21.826,
+  "token_out_tokens_per_s_per_user": 45.817,
+  "median_vs_mean_note": "the *_mean fields are the like-for-like comparison; see statistic_note",
+  "recorded_optimized_full_model": {
+    "traced_model_only_no_sampling": 21.76,
+    "token_out_incl_readback": 23.013,
+    "source": "doc/optimized_full_model/perf.json",
+    "statistic": "mean (tests/test_full_model_perf.py bench(): total wall time / iterations)"
+  },
+  "counters": {
+    "model_trace_replays": 128,
+    "sampling_trace_replays": 64,
+    "eager_decode_steps": 0,
+    "token_input_refreshes": 7,
+    "position_refreshes": 6,
+    "rope_index_refreshes": 0,
+    "page_table_refreshes": 1,
+    "device_synchronizations": 4,
+    "token_readbacks": 65,
+    "full_logits_readbacks": 0,
+    "host_argmax_calls": 0,
+    "kv_cache_resets": 3,
+    "trace_recaptures": 0,
+    "decode_trace_bucket_switches": 0,
+    "eager_sampling_steps": 0
+  }
+}
+2026-09-04 06:43:12.298 | DEBUG    | models.common.sampling.generator:reset_trace:166 - Resetting sampling trace (bucket=None, penalties=False, log_probs=False, force_argmax=False, trace_id=MeshTraceId(1))
+2026-09-04 06:43:12.991 | info     |    BuildKernels | JIT cache stats: 1234/1234 hits (100.0%) [1234 cached, 846 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-09-04 06:43:12.991 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-09-04 06:43:13.013 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:542)
+2026-09-04 06:43:13.013 | info     |             UMD | Closing devices in cluster (cluster.cpp:1218)
+2026-09-04 06:43:13.404 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1227)
+2026-09-04 06:43:13.404 | info     |             UMD | Cluster destructor started. (cluster.cpp:933)
+2026-09-04 06:43:13.404 | info     |             UMD | Cluster destructor completed. (cluster.cpp:936)

@@ -20,5 +20,5 @@ tests/tt/test_request_isolation.py::TestBatchIsolation::test_mixed_params_batch
   <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-================== 3 passed, 1 skipped, 2 warnings in 17.51s ===================
+================== 3 passed, 1 skipped, 2 warnings in 17.48s ===================
 sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute

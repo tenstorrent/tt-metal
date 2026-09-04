@@ -821,9 +821,23 @@ class OptimizedDecoder(FusedDecoder):
         ttnn.deallocate(shared)
         return out
 
-    def _moe_decode_union(self, x):
-        """Batch>1 decode MoE (union sparsity), tuned configs + L1 glue."""
-        B = x.shape[2]
+    def _routing_weights_decode(self, x, active_mask=None):
+        """Normalized per-row routed-expert weights ``[1, 1, B, E]`` (bf16).
+
+        Shared by :meth:`_moe_decode_union` and :meth:`_moe_decode_compact` so
+        the two paths cannot drift apart; the op sequence is exactly the one
+        ``_moe_decode_union`` used before the compact path existed.
+
+        ``active_mask`` (``[1, 1, B, 1]`` bf16, 1 for a live decode row and 0
+        for an inactive one, derived on device from the current-position
+        tensor) zeroes inactive rows' weights. That is what makes a
+        row-count-derived ``kc`` bound sound: the union of selected experts is
+        then provably at most ``live_rows * top_k`` instead of including
+        whatever experts the inactive rows' stale hidden state happens to
+        route to. It is a no-op for the union path (an inactive row's routed
+        output is discarded either way), so it is only applied when a caller
+        asks for it.
+        """
         scores, centered_bf16 = self._router_scores_decode(x)
         _, idx = ttnn.topk(centered_bf16, k=self.top_k, dim=-1, sorted=True)
         T = idx.shape[2]
@@ -847,6 +861,147 @@ class OptimizedDecoder(FusedDecoder):
         ttnn.deallocate(inv)
         routing = ttnn.typecast(weights, ttnn.bfloat16)
         ttnn.deallocate(weights)
+        if active_mask is not None:
+            live = ttnn.multiply(routing, active_mask, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(routing)
+            routing = live
+        return routing
+
+    def _moe_decode_compact(self, x, kc, active_mask=None):
+        """Batch>1 decode MoE over a COMPACT ``kc``-wide expert axis.
+
+        ``_moe_decode_union`` asks ``ttnn.sparse_matmul`` to scan all ``E``
+        expert groups and zero-fill the ones the union skipped, so its output
+        is ``[1, E, B, N]`` and every post-matmul op (two slices, the fused
+        SiLU multiply, the routing-weight multiply, the final reduction) runs
+        over all 64 groups no matter how few were actually selected. This path
+        instead hands the union's expert ids to ``sparse_matmul``'s
+        INDEXED/GATHER mode, whose output group axis is compact
+        (``num_active = kc``), so the whole chain runs over ``kc`` groups.
+
+        ``kc = n_experts`` is mathematically identical to the union path (PCC
+        1.0 on real weights, ``doc/optimized_vllm/moe_compact_layer.json``) but
+        is **not** a free win, and the generator never captures it: the compact
+        form pays for all ``kc`` groups unconditionally while the union form
+        skips the groups the batch did not select, so at full width the union
+        path wins on the real model (91.77 vs 78.43 ms/token at 32 live rows,
+        ``adapter_decode_floor_kc64.json`` against ``adapter_decode_floor_after.json``).
+        The single-layer probes in ``moe_compact_layer.json`` /
+        ``moe_union_vs_compact.json`` show the opposite sign at full width
+        because they drive routing from synthetic ``torch.randn`` activations,
+        which select far more distinct experts than real activations do
+        (``moe_union_width.json`` measures the real width); trust the
+        whole-model arm for that comparison.
+
+        What this path is for is the narrow buckets, where the bound is small
+        and the win is large. Whole-model token-out decode at 32 physical rows,
+        union path vs the shipped bucket set
+        (``doc/optimized_vllm/adapter_decode_floor_{before,after}.json``):
+        45.208 -> 29.513 ms/token at one live row (kc=4),
+        53.397 -> 41.603 at four (kc=16), 56.749 -> 49.756 at six
+        (kc=24) and 60.213 -> 57.537 at eight (kc=32). A bucket is only
+        selected from the live-row count where it was measured to win; see
+        ``GLM47FlashGenerator``'s ``COMPACT_KC_MIN_ROWS``.
+
+        ``kc`` is a hard correctness bound, not a heuristic: the union has at
+        most ``live_rows * top_k`` members, so a caller must pass
+        ``kc >= min(E, live_rows * top_k)`` and must pass the matching
+        ``active_mask``. Passing a ``kc`` below the real union size silently
+        drops the lowest-scoring selected experts (measured: PCC 0.60 at kc=16
+        with 32 live rows). The generator owns that bound; see
+        ``GLM47FlashGenerator.decode_kc_for_rows``.
+        """
+        E, inter = self.n_experts, self.moe_inter
+        B = x.shape[2]
+        if B % TILE:
+            # Defensive backstop only. The per-row routing-weight lookup below
+            # uses B as the embedding table's width, so a non-tile decode batch
+            # is not supported here -- but reaching this is a wiring bug, not a
+            # user error: GLM47FlashGenerator._kc_buckets already returns no
+            # compact buckets for such a model, so it takes the batch-agnostic
+            # union path instead of failing.
+            raise ValueError(
+                f"compact decode MoE builds a [{E}, {B}] routing table for ttnn.embedding, which needs the "
+                f"decode batch to be a whole tile; got B={B}. This model should not have compact kc buckets."
+            )
+        routing = self._routing_weights_decode(x, active_mask)
+
+        union = ttnn.max(routing, dim=2, keepdim=True)  # [1,1,1,E]
+        _, uidx = ttnn.topk(union, k=kc, dim=-1, sorted=True)  # [1,1,1,kc] uint16
+        ttnn.deallocate(union)
+        # sparse_matmul's indexed mode wants a single ROW_MAJOR uint16 stick.
+        idx_rm = ttnn.reshape(ttnn.to_layout(uidx, ttnn.ROW_MAJOR_LAYOUT), (1, kc))
+        ttnn.deallocate(uidx)
+        # Per-row weights at those same ids, via ttnn.embedding over the routing
+        # table transposed to [E, B] -- the same trick _moe_decode_indexed uses
+        # at batch 1, extended to a per-row table by making B the embedding
+        # width instead of 1. The obvious alternative, broadcasting the id list
+        # to [1,1,B,kc] and calling ttnn.gather (ttnn.gather does not broadcast
+        # its index against its input, so the repeat is mandatory), measured
+        # slower, as did building a one-hot and multiplying:
+        # doc/optimized_vllm/moe_prologue_ablation.json, per MoE layer at B=32,
+        # kc=4, whole prologue including the shared router/top-k/normalize --
+        # repeat+gather 0.1904 ms, one-hot+matmul 0.1678 ms, this 0.1599 ms
+        # (1.40 ms/token over 46 layers).
+        idx_u32 = ttnn.typecast(idx_rm, ttnn.uint32)
+        table = ttnn.transpose(routing, -2, -1)  # [1,1,E,B]
+        ttnn.deallocate(routing)
+        table = ttnn.reshape(ttnn.to_layout(table, ttnn.ROW_MAJOR_LAYOUT), (self.n_experts, B))
+        rw = ttnn.embedding(idx_u32, table)  # [1, kc, B]
+        ttnn.deallocate(table)
+        ttnn.deallocate(idx_u32)
+        rw = ttnn.to_layout(ttnn.reshape(rw, (1, kc, B, 1)), ttnn.TILE_LAYOUT)
+
+        gu = ttnn.sparse_matmul(
+            x,
+            self.experts_gate_up,
+            sparsity=self.ones_e,  # required operand; not read in indexed mode
+            indices=idx_rm,
+            is_input_b_sparse=True,
+            program_config=self.sparse_gu_pc,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            compute_kernel_config=self.ck_expert,
+            dtype=ttnn.bfloat16,
+        )
+        gu = ttnn.reshape(gu, (1, kc, B, 2 * inter))
+        gate = ttnn.slice(gu, [0, 0, 0, 0], [1, kc, B, inter], memory_config=ttnn.L1_MEMORY_CONFIG)
+        up = ttnn.slice(gu, [0, 0, 0, inter], [1, kc, B, 2 * inter], memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(gu)
+        h = ttnn.multiply(
+            gate, up, input_tensor_a_activations=[ttnn.UnaryOpType.SILU], memory_config=ttnn.L1_MEMORY_CONFIG
+        )
+        ttnn.deallocate(gate)
+        ttnn.deallocate(up)
+        h = ttnn.multiply(h, rw, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(rw)
+        down = ttnn.sparse_matmul(
+            h,
+            self.experts_down,
+            sparsity=self.ones_e,
+            indices=idx_rm,
+            is_input_a_sparse=True,
+            is_input_b_sparse=True,
+            program_config=self.sparse_dn_pc,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            compute_kernel_config=self.ck_expert,
+            dtype=ttnn.bfloat16,
+        )
+        ttnn.deallocate(h)
+        ttnn.deallocate(idx_rm)
+        routed = ttnn.sum(down, dim=1, keepdim=True)  # [1,1,B,hidden]
+        ttnn.deallocate(down)
+
+        shared = self._swiglu_shared_decode(x)
+        routed = ttnn.to_memory_config(routed, self.res_mem)
+        out = ttnn.add(routed, shared, memory_config=self.res_mem)
+        ttnn.deallocate(routed)
+        ttnn.deallocate(shared)
+        return out
+
+    def _moe_decode_union(self, x, active_mask=None):
+        """Batch>1 decode MoE (union sparsity), tuned configs + L1 glue."""
+        B = x.shape[2]
+        routing = self._routing_weights_decode(x, active_mask)
 
         union = ttnn.max(routing, dim=2, keepdim=True)  # [1,1,1,E]
         sparsity = ttnn.to_layout(union, ttnn.ROW_MAJOR_LAYOUT)
@@ -899,17 +1054,24 @@ class OptimizedDecoder(FusedDecoder):
         ttnn.deallocate(shared)
         return out
 
-    def _mlp_decode(self, x):
-        """x: interleaved L1 normed hidden. Returns width-sharded residual-grid output."""
+    def _mlp_decode(self, x, *, moe_kc=None, active_mask=None):
+        """x: interleaved L1 normed hidden. Returns width-sharded residual-grid output.
+
+        ``moe_kc`` selects the compact indexed expert path (see
+        :meth:`_moe_decode_compact`); ``None`` keeps the historical union path,
+        so every non-serving caller's op sequence is unchanged.
+        """
         if self.layer_kind == "dense":
             return self._swiglu_dense_decode(x)
         if self.max_batch == 1:
             return self._moe_decode_indexed(x)
-        return self._moe_decode_union(x)
+        if moe_kc is not None:
+            return self._moe_decode_compact(x, moe_kc, active_mask)
+        return self._moe_decode_union(x, active_mask)
 
     # ------------------------------------------------------------------ public decode
 
-    def decode_forward(self, x, *, kv_cache, page_table, cur_pos_tensor, rot_idxs):
+    def decode_forward(self, x, *, kv_cache, page_table, cur_pos_tensor, rot_idxs, moe_kc=None, active_mask=None):
         if x.memory_config() != self.res_mem:
             x = ttnn.to_memory_config(x, self.res_mem)
         h = self._rms_sharded(x, self.input_norm_w, self.rms_eps, self.res_mem, self.res_norm_pc)
@@ -920,10 +1082,10 @@ class OptimizedDecoder(FusedDecoder):
         h2 = self._rms_sharded(res, self.post_norm_w, self.rms_eps, self.res_mem, self.res_norm_pc)
         if self.layer_kind == "dense" and getattr(self, "dense_gu_dram", False):
             # the DRAM-sharded dense MLP consumes the width-sharded norm output directly
-            mlp = self._mlp_decode(h2)
+            mlp = self._mlp_decode(h2, moe_kc=moe_kc, active_mask=active_mask)
         else:
             h2 = ttnn.sharded_to_interleaved(h2, ttnn.L1_MEMORY_CONFIG)
-            mlp = self._mlp_decode(h2)
+            mlp = self._mlp_decode(h2, moe_kc=moe_kc, active_mask=active_mask)
         ttnn.deallocate(h2)
         out = ttnn.add(res, mlp, memory_config=self.res_mem)
         ttnn.deallocate(res)

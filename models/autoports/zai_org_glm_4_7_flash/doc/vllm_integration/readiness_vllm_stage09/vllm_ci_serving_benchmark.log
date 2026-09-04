@@ -1,0 +1,94 @@
+INFO 09-03 19:27:15 [__init__.py:44] Available plugins for group vllm.platform_plugins:
+INFO 09-03 19:27:15 [__init__.py:46] - tt -> vllm_tt_plugin.entrypoints:platform_plugin
+INFO 09-03 19:27:15 [__init__.py:49] All plugins in this group will be loaded. Set `VLLM_PLUGINS` to control which plugins to load.
+2026-09-03 19:27:16.507 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/stisi/.cache/ttnn,model_cache_path=/home/stisi/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+INFO 09-03 19:27:16 [__init__.py:237] Platform plugin tt is activated
+INFO 09-03 19:27:18 [importing.py:53] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 09-03 19:27:18 [importing.py:88] Triton not installed or not compatible; certain GPU-related functions will not be available.
+Namespace(subparser='bench', bench_type='serve', dispatch_function=<function BenchmarkServingSubcommand.cmd at 0x7f4816a09d00>, trust_remote_code=False, seed=0, num_prompts=32, dataset_name='random', no_stream=False, dataset_path=None, no_oversample=False, skip_chat_template=False, enable_multimodal_chat=False, disable_shuffle=False, custom_output_len=256, custom_ensure_client_side_data=False, spec_bench_output_len=256, spec_bench_category=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, timed_trace_chunk_hash_size=16, timed_trace_sec_multiplier=1, timed_trace_label_timestamp='timestamp', timed_trace_label_input_length='input_length', timed_trace_label_output_length='output_length', timed_trace_label_hash_ids='hash_ids', blazedit_min_distance=0.0, blazedit_max_distance=1.0, asr_max_audio_len_sec=inf, asr_min_audio_len_sec=0.0, random_input_len=100, random_output_len=100, random_range_ratio='0.0', random_prefix_len=0, random_batch_size=1, no_reranker=False, random_mm_base_items_per_request=1, random_mm_num_mm_items_range_ratio=0.0, random_mm_limit_mm_per_prompt={'image': 255, 'video': 1}, random_mm_bucket_config={(256, 256, 1): 0.5, (720, 1280, 1): 0.5, (720, 1280, 16): 0.0}, hf_subset=None, hf_split=None, hf_name=None, hf_output_len=None, bfcl_categories=None, prefix_repetition_prefix_len=256, prefix_repetition_suffix_len=256, prefix_repetition_num_prefixes=10, prefix_repetition_output_len=128, speed_bench_dataset_subset='qualitative', speed_bench_output_len=4096, speed_bench_category=None, label=None, backend='vllm', base_url='http://localhost:8000', host='127.0.0.1', port=8000, endpoint='/v1/completions', header=None, max_concurrency=None, model='zai-org/GLM-4.7-Flash', input_len=None, output_len=None, tokenizer=None, tokenizer_mode='auto', use_beam_search=False, logprobs=None, request_rate=inf, burstiness=1.0, disable_tqdm=False, num_warmups=0, profile=False, save_result=True, save_detailed=False, append_result=False, metadata=None, result_dir=None, result_filename='/home/stisi/tt-metal/models/autoports/zai_org_glm_4_7_flash/readiness_vllm/vllm_ci_serving_result.json', ignore_eos=True, self_timed=None, percentile_metrics='ttft,tpot,itl,e2el', metric_percentiles='99', goodput=None, request_id_prefix='bench-75673f3c-', top_p=None, top_k=None, min_p=None, temperature=0.0, frequency_penalty=None, presence_penalty=None, repetition_penalty=None, served_model_name=None, lora_modules=None, lora_assignment='random', ramp_up_strategy=None, ramp_up_start_rps=None, ramp_up_end_rps=None, ready_check_timeout_sec=0, chat_template_kwargs=None, extra_body=None, skip_tokenizer_init=False, insecure=False, plot_timeline=False, timeline_itl_thresholds='25,50', plot_dataset_stats=False)
+INFO 09-03 19:27:20 [utils.py:90] Sampling input_len from [100, 100] and output_len from [100, 100]
+Starting initial single prompt test run...
+Skipping endpoint ready check.
+Starting main benchmark run...
+Traffic request rate: inf
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: None
+  0%|          | 0/32 [00:00<?, ?it/s]  3%|▎         | 1/32 [00:23<12:03, 23.34s/it]100%|██████████| 32/32 [00:23<00:00,  1.37it/s]
+tip: install termplotlib and gnuplot to plot the metrics
+============ Serving Benchmark Result ============
+Successful requests:                     32
+Failed requests:                         0
+Benchmark duration (s):                  23.34
+Total input tokens:                      3200
+Total generated tokens:                  3200
+Request throughput (req/s):              1.37
+Output token throughput (tok/s):         137.08
+Peak output token throughput (tok/s):    384.00
+Peak concurrent requests:                32.00
+Total token throughput (tok/s):          274.15
+---------------Time to First Token----------------
+Mean TTFT (ms):                          14444.46
+Median TTFT (ms):                        14444.45
+P99 TTFT (ms):                           14445.81
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          89.89
+Median TPOT (ms):                        89.88
+P99 TPOT (ms):                           89.91
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           89.89
+Median ITL (ms):                         90.95
+P99 ITL (ms):                            94.33
+----------------End-to-end Latency----------------
+Mean E2EL (ms):                          23343.13
+Median E2EL (ms):                        23343.12
+P99 E2EL (ms):                           23344.44
+==================================================
+nanobind: leaked 102 instances!
+ - leaked instance 0x3c1a2ed0 of type "ttnn._ttnn.operations.unary.tanh_t"
+ - leaked instance 0x3b8b0b10 of type "ttnn._ttnn.operations.unary.relu6_t"
+ - leaked instance 0x7f4841584388 of type "ttnn._ttnn.operations.sliding_window.Op2DSliceConfig"
+ - leaked instance 0x3bf00cc0 of type "ttnn._ttnn.operations.unary.hardswish_t"
+ - leaked instance 0x3c224ce0 of type "ttnn._ttnn.operations.unary.exp_t"
+ - leaked instance 0x3be03bd0 of type "ttnn._ttnn.operations.unary.isnan_t"
+ - leaked instance 0x7f48416a9c98 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x3bb59390 of type "ttnn._ttnn.operations.unary.log2_t"
+ - leaked instance 0x3bc75130 of type "ttnn._ttnn.operations.unary.sinh_t"
+ - leaked instance 0x3bf5c440 of type "ttnn._ttnn.operations.unary.bitcast_t"
+ - leaked instance 0x3bf36ec0 of type "ttnn._ttnn.operations.unary.softsign_t"
+ - leaked instance 0x7f48416aa448 of type "ttnn._ttnn.operations.experimental.IndexerScoreProgramConfig"
+ - leaked instance 0x7f484172b728 of type "ttnn._ttnn.tensor.MemoryConfig"
+ - leaked instance 0x7f4895519588 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+ - leaked instance 0x7f48417d4f28 of type "ttnn._ttnn.operations.normalization.SoftmaxDefaultProgramConfig"
+ - leaked instance 0x7f48417d6de8 of type "ttnn._ttnn.tensor.MemoryConfig"
+ - leaked instance 0x3bc2e950 of type "ttnn._ttnn.operations.unary.cos_t"
+ - leaked instance 0x3ba95570 of type "ttnn._ttnn.operations.unary.log10_t"
+ - leaked instance 0x3b8171e0 of type "ttnn._ttnn.operations.unary.gelu_t"
+ - leaked instance 0x3be1a340 of type "ttnn._ttnn.operations.unary.log1p_t"
+ - ... skipped remainder
+nanobind: leaked 971 types!
+ - leaked type "SocketEndpoint"
+ - leaked type "ttnn._ttnn.operations.experimental.quasar.gt__t"
+ - leaked type "ttnn._ttnn.d2d_stream_service.D2DStreamServiceSender"
+ - leaked type "ttnn._ttnn.operations.experimental.quasar.SliceDeviceOperation"
+ - leaked type "ttnn._ttnn.operations.experimental.quasar.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "ttnn._ttnn.operations.binary.lt__t"
+ - leaked type "ttnn._ttnn.operations.binary_backward.xlogy_bw_t"
+ - leaked type "ttnn._ttnn.operations.experimental.insert_t"
+ - leaked type "ttnn._ttnn.operations.experimental.quasar.isclose_t"
+ - leaked type "ttnn._ttnn.operations.reduction.var_t"
+ - ... skipped remainder
+nanobind: leaked 4447 functions!
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "__init__"
+ - leaked function "__len__"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html

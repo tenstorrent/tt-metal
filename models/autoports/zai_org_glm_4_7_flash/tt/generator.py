@@ -81,6 +81,7 @@ from typing import Any, Dict, List, Optional
 from loguru import logger
 
 import ttnn
+from models.autoports.zai_org_glm_4_7_flash.tt.functional_decoder import TILE
 from models.autoports.zai_org_glm_4_7_flash.tt.model import DEFAULT_HF_MODEL_ID, GLM47FlashModel, resolve_checkpoint_dir
 
 try:  # the readiness contract is optional at import time so the module stays usable standalone
@@ -197,6 +198,151 @@ def _broadcast_per_user_fields(sampling_params, lanes: int):
     return replace(sampling_params, **updates)
 
 
+def _next_pow2(n: int) -> int:
+    p = 1
+    while p < n:
+        p *= 2
+    return p
+
+
+#: Compact-MoE ``kc`` widths worth capturing a decode trace for, and the fewest
+#: live rows at which each is actually the cheaper choice.
+#:
+#: Two facts set this. First, ``kc`` is a hard correctness bound: with the
+#: inactive-row routing mask on, the union of routed experts over the live rows
+#: has at most ``live_rows * top_k`` members, so a bucket may only serve steps
+#: with ``live_rows * top_k <= kc``. Second, a bucket's cost is *flat* across the
+#: rows it serves (every op in ``_moe_decode_compact`` is shaped by ``kc`` and
+#: ``B``, not by live rows) while the union path's cost grows with the real union
+#: width, so inside a bucket's range the compact form starts behind and crosses
+#: over. A bucket is therefore selected only where it is both legal and measured
+#: to win; below its crossover the union trace is replayed, which is always
+#: correct and there also cheaper.
+#:
+#: Measured whole-model token-out decode at 32 physical rows, real 47 layers,
+#: distinct tokens and positions per row, every live-row count where the choice
+#: changes (``doc/optimized_vllm/adapter_decode_floor_{before,after}.json``;
+#: this table is generated from those two files, not typed):
+#:
+#: ==========  ======  =============== =======
+#: live rows   union   shipped         delta
+#: ==========  ======  =============== =======
+#: 1           45.208  29.513 (kc 4)   -15.695
+#: 2           48.436  41.586 (kc 16)  -6.850
+#: 3           51.283  41.593 (kc 16)  -9.690
+#: 4           53.397  41.603 (kc 16)  -11.794
+#: 5           55.377  49.745 (kc 24)  -5.632
+#: 6           56.749  49.756 (kc 24)  -6.993
+#: 7           58.949  57.525 (kc 32)  -1.424
+#: 8           60.213  57.537 (kc 32)  -2.676
+#: 12          65.802  65.825 (union)  +0.023
+#: 16          71.616  71.620 (union)  +0.004
+#: 32          78.447  78.426 (union)  -0.021
+#: ==========  ======  =============== =======
+#:
+#: Sweeping only the counts where each bound is saturated (1 / 4 / 8 / 32)
+#: measures each bucket's best case; an earlier revision did exactly that and
+#: shipped a +2.1 ms/token regression at 5 live rows, because kc=32 does not pay
+#: until 7. Hence ``COMPACT_KC_MIN_ROWS``.
+#:
+#: ``kc == n_experts`` is never captured: the real decode union at 32 live rows
+#: averages 32.2 of 64 (``moe_union_width.json``), so a fixed full-width compact
+#: trace does about twice the expert work -- 91.77 vs 78.44 ms/token, 13.3
+#: ms/token slower (``adapter_decode_floor_kc64.json``).
+#:
+#: Finer buckets were measured, not assumed away. One bucket per reachable row
+#: count (``kc = live_rows * top_k`` for rows 1..8, i.e. 8 compact traces plus
+#: the union trace, ``adapter_decode_floor_kcexact.json``) wins a further 8.0 /
+#: 3.9 / 4.1 / 3.8 ms/token at 2 / 3 / 5 / 7 live rows and loses nothing -- but
+#: it uses **78.4%** of the 350 MB trace region against this set's 43.5%,
+#: leaving 9.4 MB per bank for the additional traces
+#: ``models/common/sampling`` captures per sampling mode. That headroom, not the
+#: latency, is why it is not the default; see doc/optimized_vllm/README.md.
+COMPACT_KC_BUCKETS = (4, 16, 24, 32)
+COMPACT_KC_MIN_ROWS = {4: 1, 16: 2, 24: 5, 32: 7}
+
+
+def _kc_buckets(model) -> tuple:
+    """Decode-trace MoE ``kc`` buckets for this model's decode batch.
+
+    ``kc`` is the width of the compact expert axis a decode trace was captured
+    with, and it is a hard correctness bound: with the inactive-row routing
+    mask on, the union of routed experts over the live rows has at most
+    ``live_rows * top_k`` members, so a trace at ``kc`` may only serve steps
+    with ``live_rows * top_k <= kc``. One trace per bucket plus (when reachable)
+    the union trace as ``None``, and the cheapest legal one is picked per step.
+
+    Deliberately coarse: each bucket is a separate captured 47-layer trace, so
+    trace region and capture time scale with the count.
+    """
+    layers = getattr(model, "layers", []) or []
+    moe = next((layer for layer in layers if getattr(layer, "layer_kind", None) == "moe"), None)
+    if moe is None:
+        return ()
+    n_experts = int(getattr(moe, "n_experts", 0) or 0)
+    top_k = int(getattr(moe, "top_k", 0) or 0)
+    if n_experts <= 0 or top_k <= 0:
+        return ()
+    if model.max_batch_size % TILE:
+        # The compact path's per-row routing-weight lookup builds an [E, B]
+        # ttnn.embedding table, which wants a whole-tile decode batch. Serving
+        # always builds 32 rows, but other callers may not, and a decode batch
+        # this path cannot compact must fall back to the union path rather than
+        # fail: the union path is batch-agnostic and is what every non-serving
+        # caller used before this stage existed. Supporting a non-tile batch is
+        # a measurement away, not a redesign; nothing has needed it.
+        return ()
+    cap = min(n_experts, _next_pow2(model.max_batch_size * top_k))
+    missing = [b for b in COMPACT_KC_BUCKETS if b not in COMPACT_KC_MIN_ROWS]
+    if missing:
+        # A bucket without a measured crossover would default to "use it from
+        # one live row up", which is exactly the regression COMPACT_KC_MIN_ROWS
+        # exists to prevent. Adding a bucket means measuring it.
+        raise RuntimeError(f"COMPACT_KC_BUCKETS entries {missing} have no measured COMPACT_KC_MIN_ROWS crossover")
+    compact = tuple(b for b in COMPACT_KC_BUCKETS if b <= cap and b < n_experts)
+    if not compact:
+        return ()
+    # A row count whose bound exceeds the widest compact bucket replays the
+    # union trace; capture it only when some reachable row count needs it.
+    return compact + ((None,) if cap > compact[-1] else ())
+
+
+def _kc_by_rows(model, buckets) -> tuple:
+    """``live_rows -> kc`` lookup table (index 0..max_batch_size)."""
+    if not buckets:
+        return ()
+    moe = next((layer for layer in model.layers if getattr(layer, "layer_kind", None) == "moe"), None)
+    n_experts = int(getattr(moe, "n_experts", 0) or 0)
+    top_k = int(getattr(moe, "top_k", 0) or 0)
+    table = []
+    for rows in range(model.max_batch_size + 1):
+        need = min(n_experts, rows * top_k)
+        # ``None`` is the union trace: unbounded coverage, so it terminates the
+        # search. Falling off the end without one cannot happen (_kc_buckets
+        # appends None exactly when a reachable row count needs it), but keep
+        # the widest bucket as a defensive last resort.
+        # Smallest bucket whose bound covers this row count...
+        pick = next((b for b in buckets if b is None or b >= need), None)
+        # ...but only if it is also the cheaper choice at this row count. A
+        # wider compact bucket is never the answer here (its fixed cost is
+        # higher still), so the fallback is the union trace.
+        if pick is not None and rows < COMPACT_KC_MIN_ROWS[pick]:
+            pick = None if None in buckets else pick
+        if pick is None and need > 0 and None not in buckets:
+            # Falling back to the widest captured bucket here would be a silent
+            # wrong answer, not a slow one: a bucket narrower than the bound
+            # drops the lowest-scoring selected experts (measured PCC 0.60 at
+            # kc=16 with 32 live rows). _kc_buckets appends the union trace
+            # exactly when a reachable row count needs it, so this cannot
+            # happen in a normal build -- and if it ever does, it must be loud.
+            raise RuntimeError(
+                f"no decode kc bucket covers {rows} live rows (needs {need}, buckets={buckets}); "
+                f"a narrower bucket would silently drop selected experts"
+            )
+        table.append(pick)
+    return tuple(table)
+
+
 def _new_counters() -> Dict[str, int]:
     return {
         "model_trace_replays": 0,
@@ -214,6 +360,10 @@ def _new_counters() -> Dict[str, int]:
         "host_argmax_calls": 0,
         "kv_cache_resets": 0,
         "trace_recaptures": 0,
+        # Decode traces are captured per compact-MoE ``kc`` bucket; a switch is
+        # a change of which captured trace the next replay uses, not a
+        # recapture (nothing is released or re-warmed).
+        "decode_trace_bucket_switches": 0,
         # A sampler run that did *not* replay a captured trace. Non-zero means
         # either an explicit request seed (eager by construction in
         # models/common/sampling) or a sampling mode whose trace is missing.
@@ -231,10 +381,26 @@ class GLM47FlashGenerator(_ReadinessGenerator):
         tokenizer=None,
         host_sampling: bool = False,
         enable_sampling: bool = True,
+        moe_decode_compact: bool = True,
+        prefill_slot_warmup: bool = True,
     ):
         self.model = model
         self.mesh_device = model.mesh_device
         self.max_batch_size = model.max_batch_size
+        #: Compact indexed batch>1 decode MoE (see
+        #: ``OptimizedDecoder._moe_decode_compact``). Only meaningful at
+        #: ``max_batch_size > 1``: at batch 1 the decoder already takes the
+        #: compact indexed path unconditionally and there is nothing to bucket.
+        self.moe_decode_compact = bool(moe_decode_compact) and model.max_batch_size > 1
+        #: Compile every decode slot's prefill program during warm-up. Off is
+        #: only for the optimized-vLLM stage's before/after attribution: with it
+        #: off, the first request admitted into each slot compiles under a live
+        #: decode trace and forces a full decode-trace recapture.
+        self.prefill_slot_warmup = bool(prefill_slot_warmup)
+        self._decode_kc_buckets = _kc_buckets(model) if self.moe_decode_compact else ()
+        #: live_rows -> kc bucket, precomputed so the per-token hot path does a
+        #: list index instead of re-deriving the bound every step.
+        self._kc_by_rows = _kc_by_rows(model, self._decode_kc_buckets)
         self.tokenizer = tokenizer
         self.host_sampling = host_sampling
         self.counters = _new_counters()
@@ -264,8 +430,17 @@ class GLM47FlashGenerator(_ReadinessGenerator):
         #: the host can tell that the *next* replay would step past the context.
         self._host_positions = None
         self._bound_cache = None
+        #: kc bucket -> model decode trace id. ``self._decode_trace_id`` is the
+        #: currently selected one (kept as a plain attribute because every
+        #: existing "is a trace captured?" check reads it).
+        self._decode_traces = {}
         self._decode_trace_id = None
+        self._active_kc = None
+        #: Persistent sampler-ready logits buffer every decode trace writes
+        #: into, so one captured sampling trace serves all of them.
         self._decode_logits = None
+        #: Per-bucket replay counts, for the "which trace actually ran" evidence.
+        self.kc_replays = {}
         #: num_program_cache_entries() at capture time; see
         #: _maybe_recapture_after_compile.
         self._program_cache_entries_at_capture = None
@@ -521,7 +696,9 @@ class GLM47FlashGenerator(_ReadinessGenerator):
 
     # ------------------------------------------------------------------ decode graph
 
-    def _decode_logits_device(self, *, kv_cache=None, page_table=None, advance_positions=True):
+    def _decode_logits_device(
+        self, *, kv_cache=None, page_table=None, advance_positions=True, moe_kc=None, logits_out=None
+    ):
         """One eager device decode over the persistent trace inputs."""
         if advance_positions:
             self._advance_host_positions()
@@ -531,7 +708,55 @@ class GLM47FlashGenerator(_ReadinessGenerator):
             page_table if page_table is not None else self._page_table_dev,
             kv_cache if kv_cache is not None else self._bound_cache,
             advance_positions=advance_positions,
+            moe_kc=moe_kc,
+            logits_out=logits_out,
         )
+
+    # ------------------------------------------------------------------ decode kc buckets
+
+    def decode_kc_for_rows(self, live_rows: int):
+        """The smallest captured ``kc`` bucket that is provably wide enough for
+        ``live_rows`` live decode rows, or ``None`` when compaction is off.
+
+        Soundness: with the inactive-row routing mask on (which the compact
+        path always enables), only live rows contribute selected experts, so
+        the union has at most ``live_rows * top_k`` members. A bucket at least
+        that wide loses nothing; a narrower one silently drops the
+        lowest-scoring selected experts.
+        """
+        if not self._kc_by_rows:
+            return None
+        rows = max(0, min(int(live_rows), len(self._kc_by_rows) - 1))
+        return self._kc_by_rows[rows]
+
+    def _live_row_count(self) -> int:
+        if self._host_positions is None:
+            return self.max_batch_size
+        return sum(1 for p in self._host_positions if p >= 0)
+
+    def _select_decode_trace(self):
+        """Point ``_decode_trace_id`` at the bucket this step needs."""
+        if not self._decode_traces:
+            return None
+        kc = self.decode_kc_for_rows(self._live_row_count())
+        trace_id = self._decode_traces.get(kc)
+        if trace_id is None:
+            # Never fall back to "whatever ran last": a narrower bucket than the
+            # live-row bound needs silently drops the lowest-scoring selected
+            # experts, which is a wrong answer with no error. Unreachable in a
+            # normal build (capture_decode_trace captures exactly
+            # _decode_kc_buckets), so if it happens the capture set and the
+            # selection table have diverged and that must be loud.
+            raise RuntimeError(
+                f"decode kc bucket {kc!r} has no captured trace (captured: {sorted(self._decode_traces, key=str)}); "
+                f"replaying another bucket would silently drop selected experts for "
+                f"{self._live_row_count()} live rows"
+            )
+        if kc != self._active_kc:
+            self.counters["decode_trace_bucket_switches"] += 1
+        self._active_kc = kc
+        self._decode_trace_id = trace_id
+        return kc
 
     def capture_decode_trace(self, *, kv_cache=None, warm=True, warm_inactive=False):
         """Warm, capture the model decode trace, then capture the sampling trace.
@@ -559,28 +784,52 @@ class GLM47FlashGenerator(_ReadinessGenerator):
         # allocation a replay could overwrite (see prepare_cache_reset).
         self.model.prepare_cache_reset(cache)
 
+        # One persistent logits buffer for every bucket's trace, allocated
+        # before any capture (so it is not a post-capture allocation the trace
+        # allocation tracker would flag) and never freed while traces live.
+        if self._decode_logits is None:
+            self._decode_logits = self.model.allocate_decode_logits()
+
+        buckets = list(self._decode_kc_buckets) or [None]
+
         self.set_decode_tokens([0] * self.max_batch_size)
         self.set_decode_positions([-1 if warm_inactive else 0] * self.max_batch_size)
 
         if warm:
-            warm_logits = self._decode_logits_device(kv_cache=cache)
-            ttnn.synchronize_device(self.mesh_device)
-            self.counters["device_synchronizations"] += 1
+            # Warm every bucket before capturing any of them: each kc is a
+            # different set of expert-axis shapes, so each needs its own
+            # program-cache warm-up, and none of that compilation may happen
+            # while a trace is live.
+            for kc in buckets:
+                self.set_decode_tokens([0] * self.max_batch_size)
+                self.set_decode_positions([-1 if warm_inactive else 0] * self.max_batch_size)
+                self._decode_logits_device(kv_cache=cache, moe_kc=kc, logits_out=self._decode_logits)
+                ttnn.synchronize_device(self.mesh_device)
+                self.counters["device_synchronizations"] += 1
             if self.sampling is not None:
                 # Pre-compile the sampling pipeline while no trace is live: it
                 # allocates device buffers a live trace could corrupt on replay.
-                self.sampling.precompile(warm_logits, tt_out_tok=self._tokens_dev)
-            ttnn.deallocate(warm_logits)
+                self.sampling.precompile(self._decode_logits, tt_out_tok=self._tokens_dev)
 
-        # The warm pass advanced the device positions and consumed the token
-        # buffer; restore the exact capture-time state before recording.
-        self.set_decode_tokens([0] * self.max_batch_size)
-        self.set_decode_positions([0] * self.max_batch_size)
-
-        trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
-        self._decode_logits = self._decode_logits_device(kv_cache=cache)
-        ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
-        self._decode_trace_id = trace_id
+        for kc in buckets:
+            # The warm pass advanced the device positions and consumed the token
+            # buffer; restore the exact capture-time state before recording.
+            self.set_decode_tokens([0] * self.max_batch_size)
+            self.set_decode_positions([0] * self.max_batch_size)
+            trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+            captured = self._decode_logits_device(kv_cache=cache, moe_kc=kc, logits_out=self._decode_logits)
+            ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+            # ttnn returns a fresh Python wrapper around the same device
+            # buffer when ``optional_output_tensor`` is used, so identity is
+            # the wrong test; the address is the thing the trace baked in.
+            if captured.buffer_address() != self._decode_logits.buffer_address():
+                raise RuntimeError(
+                    "decode trace did not write into the persistent logits buffer; the captured sampling "
+                    "trace would then read a different tensor than the model wrote"
+                )
+            self._decode_traces[kc] = trace_id
+            self._decode_trace_id = trace_id
+            self._active_kc = kc
 
         if self.sampling is not None and not self.host_sampling:
             self.sampling.capture_trace(logits=self._decode_logits, tt_out_tok=self._tokens_dev, skip_precompile=True)
@@ -591,7 +840,7 @@ class GLM47FlashGenerator(_ReadinessGenerator):
         self._program_cache_entries_at_capture = self.mesh_device.num_program_cache_entries()
 
     def recapture_decode_traces(self):
-        """Release and re-capture both decode traces.
+        """Release and re-capture every captured decode trace, plus the sampler's.
 
         Needed after a program is compiled *while a trace is live*. Metal
         registers a trace as active from ``end_mesh_trace`` until it is
@@ -605,9 +854,20 @@ class GLM47FlashGenerator(_ReadinessGenerator):
         of the program buffers instead of arguing about which addresses
         collide.
 
-        Cheap: ~0.17 s, against the >1 s the compile that triggered it already
-        cost. Verified with ``TT_METAL_TRACE_ALLOC_TRACKING=1`` in
-        ``probe/trace_alloc_probe.py``.
+        Not cheap any more, and that is now load-bearing. It re-warms and
+        re-captures **every** kc bucket, so its cost scales with
+        ``len(self._decode_kc_buckets)``. Measured on the serving path
+        (doc/optimized_vllm/README.md, work log OV-006): ~0.24 s with a single
+        decode trace, ~1.0 s with four (the fifth bucket, kc=24, landed after
+        that measurement, so ~1.0 s is a lower bound for the shipped five).
+        The optimized-vLLM stage
+        removed the trigger that fired it once per admitted request
+        (``warmup_prefill_slots``), which is what makes that affordable; the
+        remaining triggers are a first-use multi-chunk prompt and a sampling
+        mode change, each a one-off stall on the request that causes it.
+        The earlier "~0.17 s" figure was measured with one trace and no longer
+        describes this method. Trace-allocation safety is still verified with
+        ``TT_METAL_TRACE_ALLOC_TRACKING=1`` in ``probe/trace_alloc_probe.py``.
 
         Warmed with every slot **inactive** (position -1). The warm pass
         cannot be skipped, because Metal refuses to capture an uncached
@@ -620,18 +880,19 @@ class GLM47FlashGenerator(_ReadinessGenerator):
         """
         saved_tokens = self.read_decode_tokens(self.max_batch_size)
         saved_positions = list(self._host_positions) if self._host_positions is not None else None
-        saved_logits = self._decode_logits
-        if self._decode_trace_id is not None:
-            ttnn.release_trace(self.mesh_device, self._decode_trace_id)
-            self._decode_trace_id = None
+        for trace_id in self._decode_traces.values():
+            ttnn.release_trace(self.mesh_device, trace_id)
+        self._decode_traces = {}
+        self._decode_trace_id = None
+        self._active_kc = None
         if self.sampling is not None:
             self.sampling.reset_trace()
         self._sampling_traced = False
         self._program_cache_entries_at_capture = None
-        self._decode_logits = None
+        # The persistent logits buffer is kept, not freed and reallocated: it
+        # predates every capture, and re-allocating it here would make it a
+        # post-capture allocation for the traces captured just below.
         self.capture_decode_trace(warm_inactive=True)
-        if saved_logits is not None:
-            ttnn.deallocate(saved_logits)
         self.set_decode_tokens(saved_tokens)
         if saved_positions is not None:
             self.set_decode_positions(saved_positions)
@@ -692,7 +953,44 @@ class GLM47FlashGenerator(_ReadinessGenerator):
             seq_len=min(64, self.max_seq_len),
             return_all_logits=True,
         )
+        self.warmup_prefill_slots(lengths[0] if lengths else None)
         self.reset()
+
+    def warmup_prefill_slots(self, seq_len=None):
+        """Compile the per-slot prefill programs for every decode slot.
+
+        A served prefill compiles exactly one new program the first time a
+        given ``user_id`` is used, and that program depends only on the slot,
+        not on the prompt length (measured:
+        ``doc/optimized_vllm/prefill_recapture_probe_before.json`` -- slot 7 compiles
+        one program at prompt length 100 and then none at 200 or 400, and
+        repeating a slot compiles nothing).
+
+        That one compile is expensive out of all proportion to itself: it
+        happens *while the decode traces are live*, so
+        ``_maybe_recapture_after_compile`` correctly releases and re-captures
+        every decode trace right after it. In the 100/100/32 CI serving burst
+        that fired once per admitted request -- 22 recaptures inside the burst,
+        one per ~0.5 s, which is where that profile's 14.4 s TTFT came from
+        (and why it got worse once this stage captured several decode traces
+        instead of one). Warming all slots up front moves that cost to server
+        startup, where it is paid once and is not on any measured path.
+
+        One prefill per slot at the shortest warmed bucket is enough because
+        the program is slot-keyed, not length-keyed. The cache rows this
+        writes are cleared by the ``reset()`` that follows.
+        """
+        if self.max_batch_size <= 1 or not self.prefill_slot_warmup:
+            return
+        self._ensure_owned_state()
+        pad = self.model.pad_token_id
+        n = int(seq_len or min(self.model.prefill_buckets))
+        n = max(1, min(n, self.max_seq_len))
+        for slot in range(1, self.max_batch_size):
+            logits, _ = self.model.prefill_forward_last_logits_device(
+                [pad] * n, kv_cache=self._kv_cache, page_table=self._page_table_dev, user_id=slot, seq_len=n
+            )
+            ttnn.deallocate(logits)
 
     def _advance_host_positions(self):
         """Mirror the trace's on-device ``plus_one``, and refuse a step that
@@ -725,9 +1023,14 @@ class GLM47FlashGenerator(_ReadinessGenerator):
         """
         if self._decode_trace_id is None:
             raise RuntimeError("capture_decode_trace must run first")
+        # Bucket selection reads the *pre-advance* live-row set, which is the
+        # state the device position tensor (and therefore the on-device
+        # inactive-row mask) still holds when the trace runs.
+        kc = self._select_decode_trace()
         self._advance_host_positions()
         ttnn.execute_trace(self.mesh_device, self._decode_trace_id, cq_id=0, blocking=False)
         self.counters["model_trace_replays"] += 1
+        self.kc_replays[kc] = self.kc_replays.get(kc, 0) + 1
 
     def _capture_new_sampling_mode(self):
         """After one eager step in a new mode, capture it so the rest replay.
@@ -1325,18 +1628,31 @@ class GLM47FlashGenerator(_ReadinessGenerator):
         self.counters = _new_counters()
 
     def teardown(self):
-        if self._decode_trace_id is not None:
+        for trace_id in list(self._decode_traces.values()):
             try:
-                ttnn.release_trace(self.mesh_device, self._decode_trace_id)
+                ttnn.release_trace(self.mesh_device, trace_id)
             except Exception:
                 pass
-            self._decode_trace_id = None
+        self._decode_traces = {}
+        self._decode_trace_id = None
+        self._active_kc = None
         if self.sampling is not None:
             try:
                 self.sampling.reset_trace()
             except Exception:
                 pass
             self._sampling_traced = False
+        # Freed only here, never between recaptures: it predates every capture
+        # and re-allocating it mid-life would make it a post-capture allocation
+        # for the traces captured right after. Before the shared-buffer change
+        # the logits tensor was the trace's own output and died with the trace,
+        # so without this teardown would leak ~10 MB for the process lifetime.
+        if self._decode_logits is not None:
+            try:
+                ttnn.deallocate(self._decode_logits)
+            except Exception:
+                pass
+            self._decode_logits = None
 
 
 # --------------------------------------------------------------------- factory
@@ -1367,6 +1683,8 @@ def build_generator(model_dir, mesh_device, **kwargs) -> GLM47FlashGenerator:
     checkpoint_dir = kwargs.pop("checkpoint_dir", None)
     host_sampling = bool(kwargs.pop("host_sampling", False))
     enable_sampling = bool(kwargs.pop("enable_sampling", True))
+    moe_decode_compact = bool(kwargs.pop("moe_decode_compact", True))
+    prefill_slot_warmup = bool(kwargs.pop("prefill_slot_warmup", True))
     capture_trace = bool(kwargs.pop("capture_trace", True))
     warmup_prefill_lens = kwargs.pop("warmup_prefill_lens", "buckets")
     defer_cache_and_traces = bool(kwargs.pop("defer_cache_and_traces", False))
@@ -1387,7 +1705,12 @@ def build_generator(model_dir, mesh_device, **kwargs) -> GLM47FlashGenerator:
         tokenizer = AutoTokenizer.from_pretrained(str(snapshot), local_files_only=True)
 
     generator = GLM47FlashGenerator(
-        model, tokenizer=tokenizer, host_sampling=host_sampling, enable_sampling=enable_sampling
+        model,
+        tokenizer=tokenizer,
+        host_sampling=host_sampling,
+        enable_sampling=enable_sampling,
+        moe_decode_compact=moe_decode_compact,
+        prefill_slot_warmup=prefill_slot_warmup,
     )
     if defer_cache_and_traces:
         return generator

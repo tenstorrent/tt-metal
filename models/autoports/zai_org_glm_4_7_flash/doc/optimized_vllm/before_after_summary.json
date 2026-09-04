@@ -1,0 +1,153 @@
+{
+  "harness": "models.common.readiness_check.run_vllm_server, identical flags in every arm; the arms differ only in two independent env knobs on ONE commit, so each change's contribution is attributable and the whole comparison is reproducible from the committed tree.",
+  "arm_definitions": {
+    "before": "GLM47_VLLM_MOE_COMPACT=0 GLM47_VLLM_PREFILL_SLOT_WARM=0 -- the stage-entry behaviour",
+    "attribution_warm_only": "GLM47_VLLM_MOE_COMPACT=0, per-slot prefill warm on (--stages serve,benchmark) -- isolates the recapture fix",
+    "after": "both knobs at their defaults (on)"
+  },
+  "server_command": "python -m models.common.readiness_check.run_vllm_server --model-dir models/autoports/zai_org_glm_4_7_flash --hf-model zai-org/GLM-4.7-Flash --mesh-device N150 --max-num-seqs 32 --max-model-len 202752 --sampling-profile smoke --tt-config '{\"trace_region_size\": 350000000}'",
+  "primary_single_user_128_128_1": {
+    "workload": {
+      "prompt_len": 128,
+      "output_len": 128,
+      "num_requests": 1,
+      "concurrency": 1,
+      "temperature": 0.0,
+      "generation_config_mode": "explicit",
+      "dataset_name": "random",
+      "ignore_eos": true
+    },
+    "before": {
+      "ttft_ms_p50": 273.875,
+      "ttft_ms_p99": 273.875,
+      "tpot_ms_mean": 45.218,
+      "tpot_ms_p99": 45.218,
+      "itl_ms_p50": 45.21,
+      "itl_ms_p99": 45.584,
+      "e2el_ms_p50": 6016.57,
+      "output_throughput_tok_per_s": 21.273,
+      "total_token_throughput_tok_per_s": 42.547,
+      "decode_tps_per_user": 22.115
+    },
+    "attribution_warm_only": {
+      "ttft_ms_p50": 281.4,
+      "ttft_ms_p99": 281.4,
+      "tpot_ms_mean": 45.213,
+      "tpot_ms_p99": 45.213,
+      "itl_ms_p50": 45.198,
+      "itl_ms_p99": 45.573,
+      "e2el_ms_p50": 6023.475,
+      "output_throughput_tok_per_s": 21.249,
+      "total_token_throughput_tok_per_s": 42.498,
+      "decode_tps_per_user": 22.117
+    },
+    "after": {
+      "ttft_ms_p50": 274.074,
+      "ttft_ms_p99": 274.074,
+      "tpot_ms_mean": 29.496,
+      "tpot_ms_p99": 29.496,
+      "itl_ms_p50": 29.492,
+      "itl_ms_p99": 29.695,
+      "e2el_ms_p50": 4020.058,
+      "output_throughput_tok_per_s": 31.838,
+      "total_token_throughput_tok_per_s": 63.677,
+      "decode_tps_per_user": 33.903
+    },
+    "delta_pct_before_to_after": {
+      "ttft_ms_p50": 0.07,
+      "ttft_ms_p99": 0.07,
+      "tpot_ms_mean": -34.77,
+      "tpot_ms_p99": -34.77,
+      "itl_ms_p50": -34.77,
+      "itl_ms_p99": -34.86,
+      "e2el_ms_p50": -33.18,
+      "output_throughput_tok_per_s": 49.66,
+      "total_token_throughput_tok_per_s": 49.66,
+      "decode_tps_per_user": 53.3
+    },
+    "delta_pct_before_to_warm_only": {
+      "ttft_ms_p50": 2.75,
+      "ttft_ms_p99": 2.75,
+      "tpot_ms_mean": -0.01,
+      "tpot_ms_p99": -0.01,
+      "itl_ms_p50": -0.03,
+      "itl_ms_p99": -0.02,
+      "e2el_ms_p50": 0.11,
+      "output_throughput_tok_per_s": -0.11,
+      "total_token_throughput_tok_per_s": -0.12,
+      "decode_tps_per_user": 0.01
+    }
+  },
+  "secondary_ci_serving_burst_100_100_32": {
+    "workload": {
+      "prompt_len": 100,
+      "output_len": 100,
+      "num_requests": 32,
+      "concurrency": null,
+      "temperature": 0.0,
+      "generation_config_mode": "explicit",
+      "dataset_name": "random",
+      "ignore_eos": true
+    },
+    "before": {
+      "ttft_ms_p50": 14320.118,
+      "ttft_ms_p99": 14321.687,
+      "tpot_ms_mean": 90.157,
+      "tpot_ms_p99": 90.18,
+      "itl_ms_p50": 91.193,
+      "itl_ms_p99": 94.532,
+      "e2el_ms_p50": 23245.613,
+      "output_throughput_tok_per_s": 137.649,
+      "total_token_throughput_tok_per_s": 275.298,
+      "decode_tps_per_user": 11.092
+    },
+    "attribution_warm_only": {
+      "ttft_ms_p50": 9126.236,
+      "ttft_ms_p99": 9127.52,
+      "tpot_ms_mean": 90.154,
+      "tpot_ms_p99": 90.179,
+      "itl_ms_p50": 91.138,
+      "itl_ms_p99": 94.392,
+      "e2el_ms_p50": 18051.38,
+      "output_throughput_tok_per_s": 177.254,
+      "total_token_throughput_tok_per_s": 354.508,
+      "decode_tps_per_user": 11.092
+    },
+    "after": {
+      "ttft_ms_p50": 9132.855,
+      "ttft_ms_p99": 9134.037,
+      "tpot_ms_mean": 90.159,
+      "tpot_ms_p99": 90.183,
+      "itl_ms_p50": 91.168,
+      "itl_ms_p99": 94.338,
+      "e2el_ms_p50": 18058.598,
+      "output_throughput_tok_per_s": 177.185,
+      "total_token_throughput_tok_per_s": 354.37,
+      "decode_tps_per_user": 11.091
+    },
+    "delta_pct_before_to_after": {
+      "ttft_ms_p50": -36.22,
+      "ttft_ms_p99": -36.22,
+      "tpot_ms_mean": 0.0,
+      "tpot_ms_p99": 0.0,
+      "itl_ms_p50": -0.03,
+      "itl_ms_p99": -0.21,
+      "e2el_ms_p50": -22.31,
+      "output_throughput_tok_per_s": 28.72,
+      "total_token_throughput_tok_per_s": 28.72,
+      "decode_tps_per_user": -0.01
+    },
+    "delta_pct_before_to_warm_only": {
+      "ttft_ms_p50": -36.27,
+      "ttft_ms_p99": -36.27,
+      "tpot_ms_mean": -0.0,
+      "tpot_ms_p99": -0.0,
+      "itl_ms_p50": -0.06,
+      "itl_ms_p99": -0.15,
+      "e2el_ms_p50": -22.35,
+      "output_throughput_tok_per_s": 28.77,
+      "total_token_throughput_tok_per_s": 28.77,
+      "decode_tps_per_user": 0.0
+    }
+  }
+}

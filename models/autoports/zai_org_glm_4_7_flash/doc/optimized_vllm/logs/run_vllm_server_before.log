@@ -1,0 +1,49 @@
+Launching vLLM server for zai-org/GLM-4.7-Flash on N150
+  cmd: /home/stisi/tt-metal/python_env/bin/python -m vllm.entrypoints.openai.api_server --model zai-org/GLM-4.7-Flash --block_size 64 --max_num_seqs 32 --port 8000 --max_model_len 202752 --additional-config '{"tt": {"sample_on_device_mode": "all", "trace_region_size": 350000000}}'
+  log: /home/stisi/tt-metal/models/autoports/zai_org_glm_4_7_flash/readiness_vllm/server.log
+Waiting up to 1200s for server to become ready...
+  Server ready after ~200s
+
+=== Running plugin sampling tests ===
+  profile: full (1 target(s))
+  tt-max-num-seqs: 32
+  cmd: /home/stisi/tt-metal/python_env/bin/python -m pytest /home/stisi/vllm-tt-plugin/tests/tt -v --tt-server-url=http://localhost:8000 --tt-model-name=zai-org/GLM-4.7-Flash --tt-max-num-seqs=32
+  log: /home/stisi/tt-metal/models/autoports/zai_org_glm_4_7_flash/readiness_vllm/sampling_tests.log
+  FAIL (pytest exit 1) — inspect /home/stisi/tt-metal/models/autoports/zai_org_glm_4_7_flash/readiness_vllm/sampling_tests.log
+
+Sampling tests failed — skipping remaining stages.
+
+Shutting down server (PID 102354)...
+  Terminated cleanly.
+
+=== Server log tail (/home/stisi/tt-metal/models/autoports/zai_org_glm_4_7_flash/readiness_vllm/server.log, last 30 lines) ===
+ - leaked instance 0x304f1ac0 of type "ttnn._ttnn.operations.unary.log_sigmoid_t"
+ - leaked instance 0x302566e0 of type "ttnn._ttnn.operations.unary.hardsigmoid_t"
+ - leaked instance 0x72ce0b4b9158 of type "ttnn._ttnn.operations.experimental.IndexerScoreProgramConfig"
+ - ... skipped remainder
+nanobind: leaked 971 types!
+ - leaked type "SocketEndpoint"
+ - leaked type "ttnn._ttnn.operations.experimental.quasar.gt__t"
+ - leaked type "ttnn._ttnn.d2d_stream_service.D2DStreamServiceSender"
+ - leaked type "ttnn._ttnn.operations.experimental.quasar.SliceDeviceOperation"
+ - leaked type "ttnn._ttnn.operations.experimental.quasar.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "ttnn._ttnn.operations.binary.lt__t"
+ - leaked type "ttnn._ttnn.operations.binary_backward.xlogy_bw_t"
+ - leaked type "ttnn._ttnn.operations.experimental.insert_t"
+ - leaked type "ttnn._ttnn.operations.experimental.quasar.isclose_t"
+ - leaked type "ttnn._ttnn.operations.reduction.var_t"
+ - ... skipped remainder
+nanobind: leaked 4447 functions!
+ - leaked function ""
+ - leaked function "__call__"
+ - leaked function ""
+ - leaked function "__call__"
+ - leaked function ""
+ - leaked function "__init__"
+ - leaked function "__call__"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html

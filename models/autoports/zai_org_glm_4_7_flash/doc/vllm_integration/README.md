@@ -29,8 +29,18 @@ All numbers below are from **one run at the real serving spec**: full
 | burst e2e, 32 requests | 23.3 s | |
 | primary-profile aggregate output throughput | 21.371 tok/s | `vllm_benchmark.json` (batch-1, so this is the same rate as the decode t/s/u above, not an independent throughput figure) |
 
-Raw: `readiness_vllm/vllm_result.json`, `vllm_ci_serving_result.json`.
-Commands are recorded verbatim in each summary's `command_string`.
+Raw: `doc/vllm_integration/readiness_vllm_stage09/vllm_result.json`,
+`vllm_ci_serving_result.json`. Commands are recorded verbatim in each summary's
+`command_string`.
+
+**Where this stage's artifacts live.** They were produced into
+`models/autoports/zai_org_glm_4_7_flash/readiness_vllm/`, and every path in this
+report originally named that directory. The optimized-vLLM stage (stage 10) then
+ran its own `run_vllm_server` arms into the same place, so this stage's copies
+were preserved at `doc/vllm_integration/readiness_vllm_stage09/` first and every
+path here now points there. The live `readiness_vllm/` holds stage 10's
+after-arm evidence, whose numbers are different by design; see
+`doc/optimized_vllm/README.md`.
 
 Server command that produced the serve/sampling(smoke)/qualitative/benchmark
 evidence in one pass (no `--stages`, so the default
@@ -46,8 +56,9 @@ python -m models.common.readiness_check.run_vllm_server \
 ```
 
 The recorded, not-gated `--sampling-profile full` run (`sampling_tests_full_RECORD.log`)
-was a follow-up attach to that same live server (`server.log`'s single
-continuous `APIServer` session spans both sampling runs, 19:20-19:37), using
+was a follow-up attach to that same live server (that run's `server.log`, which
+was never committed, showed a single continuous `APIServer` session spanning
+both sampling runs, 19:20-19:37), using
 the runner's documented attach-to-a-running-server pattern
 (`--stages sampling --sampling-profile full --server-url http://localhost:8000`
 plus the same `--model-dir`/`--hf-model`); the exact flags for that specific
@@ -96,12 +107,24 @@ run, out of this review round's budget. See work log VS-011.
 The full model's own traced token-out decode is **22.994 ms/token (43.49 t/s/u)**
 (`doc/full_model/README.md`). Through vLLM it is **45.0 ms/token (22.2 t/s/u)**.
 
-That is **~22 ms/token, roughly 2x, of vLLM-path overhead** on an otherwise
-identical traced model+sampling replay. TTFT moves the other way (273.8 ms
-served vs 334.2 ms standalone), so prefill is not the cost. This is the single
-largest optimisation target for stage 08 (optimized vLLM: async decode, trace
-reuse, on-device sampling), and it is stated here as a lower-bound comparison
-exactly as the stage requires, not as a model limitation.
+That is **~22 ms/token, roughly 2x** on an otherwise identical traced
+model+sampling replay. TTFT moves the other way (273.8 ms served vs 334.2 ms
+standalone), so prefill is not the cost. This is the single largest optimisation
+target for the optimized-vLLM stage, and it is stated here as a lower-bound
+comparison exactly as the stage requires, not as a model limitation.
+
+> **Corrected by the optimized-vLLM stage (stage 10).** Calling this "vLLM-path
+> overhead" was wrong, and reading it that way would have sent the next stage
+> hunting for adapter and engine cost that does not exist. Driving this exact
+> adapter with the same async split and no vLLM engine at all measures 45.208
+> ms/token (doc/optimized_vllm/adapter_decode_floor_before.json), against 45.0
+> served: the engine contributes nothing measurable. The
+> whole gap was the model doing different work -- `build_generator` defaults to
+> `max_batch_size=1`, so the full-model harness builds a one-physical-row decoder
+> that takes the compact indexed MoE path, while the serving adapter builds 32
+> rows and took the union path. Stage 10 closed most of it in the model
+> (45.218 -> 29.496 ms/token served) and quantified the rest. See
+> `doc/optimized_vllm/README.md` and its work log OV-001.
 
 ## Stage results
 
@@ -221,8 +244,10 @@ multi-host/multi-rank serving (single chip by design).
 ## Files
 
 * `tt/generator_vllm.py`, `tests/test_generator_vllm_adapter.py`
-* `readiness_vllm/` — both sampling logs, qualitative outputs, both benchmark
-  summaries and raw results. The raw vLLM `server.log` (729 KB) is kept on disk
-  but not committed: it exceeds the repo's 500 KB file limit and is a debug log,
-  not stage evidence.
+* `doc/vllm_integration/readiness_vllm_stage09/` — this stage's runner output:
+  both sampling logs, qualitative outputs, both benchmark summaries and raw
+  results. (Produced into `readiness_vllm/`; preserved here before stage 10
+  overwrote that directory — see the note under Headline.) The raw vLLM
+  `server.log` (729 KB) was kept on disk but not committed: it exceeds the
+  repo's 500 KB file limit and is a debug log, not stage evidence.
 * `work_log.md` — VS-001..VS-011, the full investigation including corrections

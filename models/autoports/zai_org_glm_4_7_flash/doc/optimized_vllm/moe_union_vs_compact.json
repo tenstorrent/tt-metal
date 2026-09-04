@@ -1,0 +1,33 @@
+{
+  "purpose": "Per-MoE-layer traced decode cost at B=32: union (dense E=64 post-matmul chain, the path every max_batch>1 decode takes) vs indexed/compact (post-matmul chain over num_active only). Isolates how much of the served 45 ms/token is the dense-over-64 chain rather than expert matmul work.",
+  "config": {
+    "batch_rows": 32,
+    "n_experts": 64,
+    "moe_inter": 1536,
+    "hidden": 2048,
+    "top_k": 4,
+    "expert_dtype": "bfloat4_b (deployment policy)",
+    "iters": 30,
+    "measure": "median ms per traced replay of one MoE layer's expert chain",
+    "activations": "synthetic torch.randn"
+  },
+  "ms_per_layer": {
+    "union": {
+      "4": 0.4029,
+      "8": 0.5232,
+      "16": 0.7636,
+      "32": 1.2444,
+      "64": 2.2264
+    },
+    "compact": {
+      "4": 0.1258,
+      "8": 0.2128,
+      "16": 0.3849,
+      "32": 0.7374,
+      "64": 1.4376
+    }
+  },
+  "moe_layers_in_model": 46,
+  "activation_source": "torch.randn(1, 1, B, hidden) * 0.02 (synthetic)",
+  "synthetic_activation_caveat": "SYNTHETIC ACTIVATIONS: routing is driven by torch.randn(1,1,B,hidden)*0.02, not by real hidden states. Measured (moe_union_width.json): randn selects a union of 52 of 64 experts at 32 rows, while the real model's decode union at 32 live rows averages 32.2 (median 32, range 20-48). Per-layer comparisons at a FIXED active count are unaffected and are what this file is for; any comparison that lets the union path's active count float -- notably compact kc=n_experts vs union at 32 rows -- is biased toward the compact form here and must be taken from the whole-model arm (adapter_decode_floor_kc64.json vs adapter_decode_floor_after.json) instead."
+}

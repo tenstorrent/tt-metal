@@ -1,0 +1,63 @@
+{
+  "purpose": "Distinct routed experts in the decode union as a function of live rows, measured on the real 47-layer model's eager decode with real activations, plus the same measurement under the synthetic torch.randn activations the single-layer probes use. This is the number that explains why compact kc = n_experts loses to the union path on the real model even though the single-layer probes show the opposite sign.",
+  "method": "OptimizedDecoder._routing_weights_decode wrapped on the EAGER (untraced) decode path -- the compatibility path, never the measured serving path -- so the union mask can be read back per MoE layer. 46 MoE layers sampled per step.",
+  "n_experts": 64,
+  "top_k": 4,
+  "real_activations_by_live_rows": {
+    "1": {
+      "live_rows": 1,
+      "bound_live_rows_x_top_k": 4,
+      "moe_layers_sampled": 46,
+      "union_width_min": 4,
+      "union_width_median": 4,
+      "union_width_max": 4,
+      "union_width_mean": 4.0
+    },
+    "2": {
+      "live_rows": 2,
+      "bound_live_rows_x_top_k": 8,
+      "moe_layers_sampled": 46,
+      "union_width_min": 4,
+      "union_width_median": 6,
+      "union_width_max": 8,
+      "union_width_mean": 6.41
+    },
+    "4": {
+      "live_rows": 4,
+      "bound_live_rows_x_top_k": 16,
+      "moe_layers_sampled": 46,
+      "union_width_min": 6,
+      "union_width_median": 11,
+      "union_width_max": 15,
+      "union_width_mean": 10.41
+    },
+    "8": {
+      "live_rows": 8,
+      "bound_live_rows_x_top_k": 32,
+      "moe_layers_sampled": 46,
+      "union_width_min": 11,
+      "union_width_median": 17,
+      "union_width_max": 22,
+      "union_width_mean": 16.65
+    },
+    "16": {
+      "live_rows": 16,
+      "bound_live_rows_x_top_k": 64,
+      "moe_layers_sampled": 46,
+      "union_width_min": 15,
+      "union_width_median": 24,
+      "union_width_max": 31,
+      "union_width_mean": 23.43
+    },
+    "32": {
+      "live_rows": 32,
+      "bound_live_rows_x_top_k": 64,
+      "moe_layers_sampled": 46,
+      "union_width_min": 20,
+      "union_width_median": 32,
+      "union_width_max": 48,
+      "union_width_mean": 32.17
+    }
+  },
+  "synthetic_randn_activations_32_rows_union_width": 52
+}

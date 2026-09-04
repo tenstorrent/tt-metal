@@ -1,0 +1,422 @@
+2026-09-04 02:04:16.239 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/stisi/.cache/ttnn,model_cache_path=/home/stisi/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.12, pytest-9.0.3, pluggy-1.6.0 -- /home/stisi/tt-metal/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/stisi/tt-metal
+configfile: pytest.ini
+plugins: dash-2.15.0, cov-7.0.0, repeat-0.9.4, github-actions-annotate-failures-0.3.0, split-0.11.0, benchmark-5.2.3, anyio-4.14.2, timeout-2.4.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 10 items / 7 deselected / 3 selected
+
+models/autoports/zai_org_glm_4_7_flash/tests/test_full_model_batch.py::test_batch_slot_isolation_matches_single_user 2026-09-04 02:04:17.909 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:222)
+2026-09-04 02:04:17.909 | info     |             UMD | Cluster constructor started. (cluster.cpp:406)
+2026-09-04 02:04:17.909 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-09-04 02:04:17.909 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-09-04 02:04:17.922 | info     |             UMD | Established firmware bundle version: 19.12.0 (topology_discovery.cpp:576)
+2026-09-04 02:04:17.922 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-09-04 02:04:18.034 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-09-04 02:04:18.034 | info     |             UMD | IOMMU: disabled (cluster.cpp:147)
+2026-09-04 02:04:18.034 | info     |             UMD | KMD version: 2.8.1 (cluster.cpp:150)
+2026-09-04 02:04:18.034 | info     |             UMD | Cluster constructor completed. (cluster.cpp:665)
+2026-09-04 02:04:18.035 | info     |             UMD | Starting devices in cluster (cluster.cpp:1205)
+2026-09-04 02:04:18.213 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1213)
+2026-09-04 02:04:18.315 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
+2026-09-04 02:04:18.315 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
+2026-09-04 02:04:18.315 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-09-04 02:04:18.315 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3368)
+2026-09-04 02:04:18.315 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3376)
+2026-09-04 02:04:18.398 | info     |       LLRuntime | Watcher log file: /home/stisi/tt-metal/generated/watcher/watcher.log (watcher_server.cpp:296)
+2026-09-04 02:04:18.398 | info     |       LLRuntime | Watcher server initialized, disabled features: None (watcher_server.cpp:568)
+2026-09-04 02:04:18.398 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 02:04:18.398 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:410)
+2026-09-04 02:04:18.405 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:410)
+2026-09-04 02:04:18.411 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:410)
+2026-09-04 02:04:18.418 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:410)
+2026-09-04 02:04:28.447 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:410)
+2026-09-04 02:04:28.457 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:410)
+2026-09-04 02:04:28.467 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:410)
+2026-09-04 02:04:28.475 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:410)
+2026-09-04 02:04:38.505 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:410)
+2026-09-04 02:04:38.512 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:410)
+2026-09-04 02:04:38.519 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:410)
+2026-09-04 02:04:38.526 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:410)
+2026-09-04 02:04:48.556 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:410)
+2026-09-04 02:04:48.564 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:410)
+2026-09-04 02:04:48.572 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:410)
+2026-09-04 02:04:48.580 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:410)
+2026-09-04 02:04:58.608 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:410)
+2026-09-04 02:04:58.615 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:410)
+2026-09-04 02:04:58.622 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:410)
+2026-09-04 02:04:58.629 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:410)
+2026-09-04 02:05:08.661 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:410)
+2026-09-04 02:05:08.674 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:410)
+2026-09-04 02:05:08.687 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:410)
+2026-09-04 02:05:08.700 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:410)
+2026-09-04 02:05:18.739 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:410)
+2026-09-04 02:05:18.748 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:410)
+2026-09-04 02:05:18.756 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:410)
+2026-09-04 02:05:18.764 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:410)
+2026-09-04 02:05:28.793 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:410)
+2026-09-04 02:05:28.800 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:410)
+2026-09-04 02:05:28.807 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:410)
+2026-09-04 02:05:28.814 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:410)
+2026-09-04 02:05:38.844 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:410)
+2026-09-04 02:05:38.853 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:410)
+2026-09-04 02:05:38.861 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:410)
+2026-09-04 02:05:38.869 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:410)
+2026-09-04 02:05:48.901 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:410)
+2026-09-04 02:05:48.910 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:410)
+2026-09-04 02:05:48.918 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:410)
+2026-09-04 02:05:48.926 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:410)
+2026-09-04 02:05:58.960 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:410)
+2026-09-04 02:05:58.967 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:410)
+2026-09-04 02:05:58.973 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:410)
+2026-09-04 02:05:58.980 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:410)
+2026-09-04 02:06:09.017 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:410)
+2026-09-04 02:06:09.030 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:410)
+2026-09-04 02:06:09.043 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:410)
+2026-09-04 02:06:09.059 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:410)
+2026-09-04 02:06:19.094 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:410)
+2026-09-04 02:06:19.101 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:410)
+2026-09-04 02:06:19.107 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:410)
+2026-09-04 02:06:19.114 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:410)
+2026-09-04 02:06:29.143 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:410)
+2026-09-04 02:06:29.150 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:410)
+2026-09-04 02:06:29.157 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:410)
+2026-09-04 02:06:29.164 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:410)
+2026-09-04 02:06:39.199 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:410)
+2026-09-04 02:06:39.214 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:410)
+2026-09-04 02:06:39.227 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:410)
+2026-09-04 02:06:39.243 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:410)
+2026-09-04 02:06:49.281 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:410)
+2026-09-04 02:06:49.291 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:410)
+2026-09-04 02:06:49.300 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:410)
+2026-09-04 02:06:49.309 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:410)
+2026-09-04 02:06:59.338 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:410)
+2026-09-04 02:06:59.351 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:410)
+2026-09-04 02:06:59.364 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:410)
+2026-09-04 02:06:59.380 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:410)
+2026-09-04 02:07:09.411 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:410)
+2026-09-04 02:07:09.418 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:410)
+2026-09-04 02:07:09.425 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:410)
+2026-09-04 02:07:09.431 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:410)
+2026-09-04 02:07:09.891 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1248256 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-04 02:07:09.891 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-04 02:07:11.345 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1248256 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-04 02:07:11.345 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-04 02:07:19.442 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:410)
+2026-09-04 02:07:19.449 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:410)
+2026-09-04 02:07:19.456 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:410)
+2026-09-04 02:07:19.462 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:410)
+2026-09-04 02:07:29.474 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:410)
+2026-09-04 02:07:29.481 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:410)
+2026-09-04 02:07:29.487 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:410)
+2026-09-04 02:07:29.494 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:410)
+2026-09-04 02:07:39.505 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:410)
+2026-09-04 02:07:39.511 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:410)
+2026-09-04 02:07:39.518 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:410)
+2026-09-04 02:07:39.524 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:410)
+2026-09-04 02:07:49.536 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:410)
+2026-09-04 02:07:49.543 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:410)
+2026-09-04 02:07:49.549 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:410)
+2026-09-04 02:07:49.556 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:410)
+2026-09-04 02:07:52.003 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1248256 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-04 02:07:52.003 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-04 02:07:52.132 | warning  |           Metal | Allocating device buffers is potentially unsafe due to the existence of an active trace. These buffers may be corrupted once a trace is executed if they are not released before then. Use the trace allocation tracker to verify. (allocator.cpp:130)
+2026-09-04 02:07:52.554 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1248256 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-04 02:07:52.555 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-04 02:07:59.567 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:410)
+2026-09-04 02:07:59.574 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:410)
+2026-09-04 02:07:59.580 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:410)
+2026-09-04 02:07:59.587 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:410)
+2026-09-04 02:08:09.598 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:410)
+2026-09-04 02:08:09.605 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:410)
+2026-09-04 02:08:09.611 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:410)
+2026-09-04 02:08:09.617 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:410)
+2026-09-04 02:08:19.629 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:410)
+2026-09-04 02:08:19.636 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:410)
+2026-09-04 02:08:19.642 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:410)
+2026-09-04 02:08:19.649 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:410)
+2026-09-04 02:08:29.660 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:410)
+2026-09-04 02:08:29.667 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:410)
+2026-09-04 02:08:29.674 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:410)
+2026-09-04 02:08:29.680 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:410)
+2026-09-04 02:08:39.691 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:410)
+2026-09-04 02:08:39.698 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:410)
+2026-09-04 02:08:39.705 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:410)
+2026-09-04 02:08:39.711 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:410)
+2026-09-04 02:08:49.721 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:410)
+2026-09-04 02:08:49.728 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:410)
+2026-09-04 02:08:49.734 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:410)
+2026-09-04 02:08:49.741 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:410)
+2026-09-04 02:08:59.752 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:410)
+2026-09-04 02:08:59.759 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:410)
+2026-09-04 02:08:59.766 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:410)
+2026-09-04 02:08:59.772 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:410)
+2026-09-04 02:09:09.783 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:410)
+2026-09-04 02:09:09.790 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:410)
+2026-09-04 02:09:09.797 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:410)
+2026-09-04 02:09:09.803 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:410)
+building 47 decoder layers from /home/stisi/.cache/huggingface/hub/models--zai-org--GLM-4.7-Flash/snapshots/7dd20894a642a0aa287e9827cb1a1f7f91386b67
+  layer 0 (dense) built [1/47]
+  layer 1 (moe) built [2/47]
+  layer 2 (moe) built [3/47]
+  layer 3 (moe) built [4/47]
+  layer 4 (moe) built [5/47]
+  layer 5 (moe) built [6/47]
+  layer 6 (moe) built [7/47]
+  layer 7 (moe) built [8/47]
+  layer 8 (moe) built [9/47]
+  layer 9 (moe) built [10/47]
+  layer 10 (moe) built [11/47]
+  layer 11 (moe) built [12/47]
+  layer 12 (moe) built [13/47]
+  layer 13 (moe) built [14/47]
+  layer 14 (moe) built [15/47]
+  layer 15 (moe) built [16/47]
+  layer 16 (moe) built [17/47]
+  layer 17 (moe) built [18/47]
+  layer 18 (moe) built [19/47]
+  layer 19 (moe) built [20/47]
+  layer 20 (moe) built [21/47]
+  layer 21 (moe) built [22/47]
+  layer 22 (moe) built [23/47]
+  layer 23 (moe) built [24/47]
+  layer 24 (moe) built [25/47]
+  layer 25 (moe) built [26/47]
+  layer 26 (moe) built [27/47]
+  layer 27 (moe) built [28/47]
+  layer 28 (moe) built [29/47]
+  layer 29 (moe) built [30/47]
+  layer 30 (moe) built [31/47]
+  layer 31 (moe) built [32/47]
+  layer 32 (moe) built [33/47]
+  layer 33 (moe) built [34/47]
+  layer 34 (moe) built [35/47]
+  layer 35 (moe) built [36/47]
+  layer 36 (moe) built [37/47]
+  layer 37 (moe) built [38/47]
+  layer 38 (moe) built [39/47]
+  layer 39 (moe) built [40/47]
+  layer 40 (moe) built [41/47]
+  layer 41 (moe) built [42/47]
+  layer 42 (moe) built [43/47]
+  layer 43 (moe) built [44/47]
+  layer 44 (moe) built [45/47]
+  layer 45 (moe) built [46/47]
+  layer 46 (moe) built [47/47]
+  decode rope tables (ROW_MAJOR) built
+  embedding table uploaded
+  lm head uploaded
+  prefill programs warmed in 41.0s
+  decode + sampling traces captured in 2.5s
+FAILED
+models/autoports/zai_org_glm_4_7_flash/tests/test_full_model_batch.py::test_batch_inactive_rows 2026-09-04 02:09:19.815 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:410)
+2026-09-04 02:09:19.821 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:410)
+2026-09-04 02:09:19.828 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:410)
+2026-09-04 02:09:19.834 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:410)
+2026-09-04 02:09:29.846 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:410)
+2026-09-04 02:09:29.852 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:410)
+2026-09-04 02:09:29.859 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:410)
+2026-09-04 02:09:29.866 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:410)
+2026-09-04 02:09:39.877 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:410)
+2026-09-04 02:09:39.884 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:410)
+2026-09-04 02:09:39.891 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:410)
+2026-09-04 02:09:39.897 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:410)
+2026-09-04 02:09:49.909 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:410)
+2026-09-04 02:09:49.916 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:410)
+2026-09-04 02:09:49.922 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:410)
+2026-09-04 02:09:49.929 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:410)
+2026-09-04 02:09:59.941 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:410)
+2026-09-04 02:09:59.948 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:410)
+2026-09-04 02:09:59.954 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:410)
+2026-09-04 02:09:59.961 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:410)
+PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_full_model_batch.py::test_batch_traced_decode_feedback 2026-09-04 02:10:09.973 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:410)
+2026-09-04 02:10:09.979 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:410)
+2026-09-04 02:10:09.986 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:410)
+2026-09-04 02:10:09.992 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:410)
+2026-09-04 02:10:20.003 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:410)
+2026-09-04 02:10:20.010 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:410)
+2026-09-04 02:10:20.017 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:410)
+2026-09-04 02:10:20.023 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:410)
+2026-09-04 02:10:30.035 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:410)
+2026-09-04 02:10:30.042 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:410)
+2026-09-04 02:10:30.048 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:410)
+2026-09-04 02:10:30.055 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:410)
+2026-09-04 02:10:40.064 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:410)
+2026-09-04 02:10:40.071 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:410)
+2026-09-04 02:10:40.078 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:410)
+2026-09-04 02:10:40.084 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:410)
+2026-09-04 02:10:50.095 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:410)
+2026-09-04 02:10:50.102 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:410)
+2026-09-04 02:10:50.108 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:410)
+2026-09-04 02:10:50.115 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:410)
+2026-09-04 02:11:00.125 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:410)
+2026-09-04 02:11:00.132 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:410)
+2026-09-04 02:11:00.138 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:410)
+2026-09-04 02:11:00.145 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:410)
+2026-09-04 02:11:10.156 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:410)
+2026-09-04 02:11:10.163 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:410)
+2026-09-04 02:11:10.169 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:410)
+2026-09-04 02:11:10.176 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:410)
+2026-09-04 02:11:20.187 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:410)
+2026-09-04 02:11:20.193 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:410)
+2026-09-04 02:11:20.200 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:410)
+2026-09-04 02:11:20.206 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:410)
+2026-09-04 02:11:30.218 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:410)
+2026-09-04 02:11:30.224 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:410)
+2026-09-04 02:11:30.231 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:410)
+2026-09-04 02:11:30.237 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:410)
+PASSED2026-09-04 02:11:32.668 | DEBUG    | models.common.sampling.generator:reset_trace:166 - Resetting sampling trace (bucket=None, penalties=False, log_probs=False, force_argmax=False, trace_id=MeshTraceId(4))
+
+
+=================================== FAILURES ===================================
+________________ test_batch_slot_isolation_matches_single_user _________________
+
+gen = <models.autoports.zai_org_glm_4_7_flash.tt.generator.GLM47FlashGenerator object at 0x76be777663c0>
+
+    def test_batch_slot_isolation_matches_single_user(gen):
+        """A user placed in slot k with the batched path predicts the same first
+        token as the same prompt run alone in slot 0."""
+        model = gen.model
+        kv_cache = gen._kv_cache
+        page_table = gen._page_table_torch
+        slot = min(BATCH - 1, 7)
+        seq = 96
+        ids = _prompt_ids(gen, seq, salt=slot)
+
+        gen.reset()
+        solo = gen.prefill_forward(
+            torch.tensor([ids], dtype=torch.int32), page_table=page_table, kv_cache=kv_cache, prompt_lens=[seq]
+        )
+        solo_token = int(solo[0, 0].argmax())
+
+        gen.reset()
+        lengths = [seq] * BATCH
+        tokens = torch.zeros(BATCH, seq, dtype=torch.int32)
+        for user in range(BATCH):
+            tokens[user] = torch.tensor(_prompt_ids(gen, seq, salt=user), dtype=torch.int32)
+        tokens[slot] = torch.tensor(ids, dtype=torch.int32)
+>       batched = gen.prefill_forward(tokens, page_table=page_table, kv_cache=kv_cache, prompt_lens=lengths)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+models/autoports/zai_org_glm_4_7_flash/tests/test_full_model_batch.py:164:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+models/autoports/zai_org_glm_4_7_flash/tt/generator.py:1164: in prefill_forward
+    logits = self.model.prefill_forward(
+models/autoports/zai_org_glm_4_7_flash/tt/model.py:776: in prefill_forward
+    hidden, seq = self.run_layer_stack_prefill(
+models/autoports/zai_org_glm_4_7_flash/tt/model.py:754: in run_layer_stack_prefill
+    nxt = layer.prefill_forward(x, kv_cache=caches[i], page_table=page_table, user_id=user_id, seq_len=phys)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+models/autoports/zai_org_glm_4_7_flash/tt/fused_decoder.py:721: in prefill_forward
+    mlp = self._mlp(h2, "prefill")
+          ^^^^^^^^^^^^^^^^^^^^^^^^
+models/autoports/zai_org_glm_4_7_flash/tt/functional_decoder.py:633: in _mlp
+    return self._moe_prefill(x)
+           ^^^^^^^^^^^^^^^^^^^^
+models/autoports/zai_org_glm_4_7_flash/tt/fused_decoder.py:406: in _moe_prefill
+    routing = self._routing_weights(x)  # [1,1,S,E]
+              ^^^^^^^^^^^^^^^^^^^^^^^^
+models/autoports/zai_org_glm_4_7_flash/tt/fused_decoder.py:239: in _routing_weights
+    _, idx = ttnn.topk(centered_bf16, k=self.top_k, dim=-1, sorted=True)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = FastOperation(python_fully_qualified_name='ttnn.topk', function=<ttnn._ttnn.operations.reduction.topk_t object at 0x76...<function default_postprocess_golden_function_outputs at 0x76be88a90cc0>, is_cpp_operation=True, is_experimental=False)
+function_args = (ttnn.Tensor([[[[ 1.5564e-02, -6.8848e-02,  ...,  1.2939e-02,  2.6367e-02],
+               [ 1.9897e-02, -6.4941e-02, ...-02,  ...,  6.0303e-02, -8.6670e-03]]]], shape=Shape([1, 1, 128, 64]), dtype=DataType::BFLOAT16, layout=Layout::TILE),)
+function_kwargs = {'dim': -1, 'k': 4, 'sorted': True}, cq_id = None
+recording = False
+
+    def __call__(self, *function_args, **function_kwargs):
+        if self._requires_slow_runtime():
+            return self._slow_operation_instance()(*function_args, **function_kwargs)
+
+        cq_id = None
+        if "queue_id" in function_kwargs:
+            cq_id = function_kwargs.pop("queue_id")
+        elif "cq_id" in function_kwargs:
+            cq_id = function_kwargs.pop("cq_id")
+
+        recording = ttnn.graph.is_python_io_recording_enabled()
+        if recording:
+            ttnn.graph.track_function_start(self.python_fully_qualified_name)
+            ttnn.graph.record_python_operation(self.python_fully_qualified_name, function_args, function_kwargs)
+            input_tensors = get_all_tensors((function_args, function_kwargs))
+            set_tensor_id(input_tensors)
+
+        try:
+            if cq_id is None:
+>               result = self.function(*function_args, **function_kwargs)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E               Failed: Timeout (>300.0s) from pytest-timeout.
+
+ttnn/ttnn/decorators.py:728: Failed
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /home/stisi/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+214.94s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_full_model_batch.py::test_batch_slot_isolation_matches_single_user
+85.77s call     models/autoports/zai_org_glm_4_7_flash/tests/test_full_model_batch.py::test_batch_traced_decode_feedback
+85.06s call     models/autoports/zai_org_glm_4_7_flash/tests/test_full_model_batch.py::test_batch_slot_isolation_matches_single_user
+47.49s call     models/autoports/zai_org_glm_4_7_flash/tests/test_full_model_batch.py::test_batch_inactive_rows
+0.20s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_full_model_batch.py::test_batch_traced_decode_feedback
+0.20s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_full_model_batch.py::test_batch_inactive_rows
+0.02s teardown models/autoports/zai_org_glm_4_7_flash/tests/test_full_model_batch.py::test_batch_traced_decode_feedback
+
+(2 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_full_model_batch.py::test_batch_inactive_rows
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_full_model_batch.py::test_batch_traced_decode_feedback
+FAILED models/autoports/zai_org_glm_4_7_flash/tests/test_full_model_batch.py::test_batch_slot_isolation_matches_single_user
+====== 1 failed, 2 passed, 7 deselected, 2 warnings in 435.79s (0:07:15) =======
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+nanobind: leaked 2 instances!
+ - leaked instance 0x76be8870f908 of type "ttnn._ttnn.tensor.MemoryConfig"
+ - leaked instance 0x76be88cbea18 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 20 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "Arch"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - ... skipped remainder
+nanobind: leaked 253 functions!
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "unpad_from_tile"
+ - leaked function "__init__"
+ - leaked function "set_sub_device_stall_group"
+ - leaked function "__eq__"
+ - leaked function "is_allocated"
+ - leaked function ""
+ - leaked function "to_list"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-09-04 02:11:34.436 | info     |    BuildKernels | JIT cache stats: 854/854 hits (100.0%) [854 cached, 448 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-09-04 02:11:34.436 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-09-04 02:11:34.438 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:616)
+2026-09-04 02:11:34.457 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:542)
+2026-09-04 02:11:34.457 | info     |             UMD | Closing devices in cluster (cluster.cpp:1218)
+2026-09-04 02:11:34.848 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1227)
+2026-09-04 02:11:34.848 | info     |             UMD | Cluster destructor started. (cluster.cpp:933)
+2026-09-04 02:11:34.848 | info     |             UMD | Cluster destructor completed. (cluster.cpp:936)

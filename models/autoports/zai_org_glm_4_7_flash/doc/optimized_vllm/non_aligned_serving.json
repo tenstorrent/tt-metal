@@ -1,0 +1,55 @@
+{
+  "purpose": "Non-aligned prompt lengths through the live optimized-vLLM server: lengths that are not multiples of the tile (32), the paged-cache block (64), or the serving prefill chunk cap (1024). Sent as raw token ids through /v1/completions so the length is exact.",
+  "requests": [
+    {
+      "prompt_tokens_requested": 37,
+      "prompt_tokens_reported": 37,
+      "completion_tokens": 24,
+      "aligned_to_tile32": false,
+      "aligned_to_block64": false,
+      "aligned_to_prefill_chunk1024": false,
+      "finish_reason": "length",
+      "completion_preview": " model. The model is expected to respond with a single token that is the first token of the response.\n\nHere is the"
+    },
+    {
+      "prompt_tokens_requested": 129,
+      "prompt_tokens_reported": 129,
+      "completion_tokens": 24,
+      "aligned_to_tile32": false,
+      "aligned_to_block64": false,
+      "aligned_to_prefill_chunk1024": false,
+      "finish_reason": "length",
+      "completion_preview": " builds AI accelerators for datacenter inference. This paragraph exists so a request can be trimmed to an exact, deliberately non"
+    },
+    {
+      "prompt_tokens_requested": 777,
+      "prompt_tokens_reported": 777,
+      "completion_tokens": 24,
+      "aligned_to_tile32": false,
+      "aligned_to_block64": false,
+      "aligned_to_prefill_chunk1024": false,
+      "finish_reason": "length",
+      "completion_preview": " to an exact, deliberately non-aligned token length before it is sent to the running vLLM server. Tenstorrent"
+    },
+    {
+      "prompt_tokens_requested": 1039,
+      "prompt_tokens_reported": 1039,
+      "completion_tokens": 24,
+      "aligned_to_tile32": false,
+      "aligned_to_block64": false,
+      "aligned_to_prefill_chunk1024": false,
+      "finish_reason": "length",
+      "completion_preview": " it is sent to the running vLLM server. Tenstorrent builds AI accelerators for datacenter inference. This"
+    },
+    {
+      "prompt_tokens_requested": 2051,
+      "prompt_tokens_reported": 2051,
+      "completion_tokens": 24,
+      "aligned_to_tile32": false,
+      "aligned_to_block64": false,
+      "aligned_to_prefill_chunk1024": false,
+      "finish_reason": "length",
+      "completion_preview": " the running vLLM server. Tenstorrent builds AI accelerators for datacenter inference. This paragraph exists so a"
+    }
+  ]
+}

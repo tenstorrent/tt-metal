@@ -1,0 +1,98 @@
+{
+  "purpose": "Reduced 2-layer (one dense + one MoE) equivalence check under the SHIPPED bucket set (4, 16, 24, 32, union): kc-bucketed compact decode traces vs the union decode, at every live-row count where the shipped selection table changes bucket plus each bucket's saturated case, same weights/cache/page table, one arm per process. Two generators with live traces on one device corrupt each other's replays, so the arms cannot share a process; that was measured, see work log OV-003.",
+  "buckets": [
+    4,
+    16,
+    24,
+    32,
+    null
+  ],
+  "swept_live_row_counts": [
+    1,
+    2,
+    4,
+    5,
+    6,
+    8,
+    16,
+    32
+  ],
+  "kc_by_rows": {
+    "0": null,
+    "1": 4,
+    "2": 16,
+    "4": 16,
+    "5": 24,
+    "6": 24,
+    "8": 32,
+    "16": null,
+    "32": null
+  },
+  "per_live_row_count": {
+    "1": {
+      "kc_used": 4,
+      "argmax_match": true,
+      "max_row_checksum_delta": 0.0,
+      "union_absmax": 35.0,
+      "compact_absmax": 35.0
+    },
+    "2": {
+      "kc_used": 16,
+      "argmax_match": true,
+      "max_row_checksum_delta": 0.0,
+      "union_absmax": 35.0,
+      "compact_absmax": 35.0
+    },
+    "4": {
+      "kc_used": 16,
+      "argmax_match": true,
+      "max_row_checksum_delta": 0.0,
+      "union_absmax": 35.0,
+      "compact_absmax": 35.0
+    },
+    "5": {
+      "kc_used": 24,
+      "argmax_match": true,
+      "max_row_checksum_delta": 0.0,
+      "union_absmax": 35.0,
+      "compact_absmax": 35.0
+    },
+    "6": {
+      "kc_used": 24,
+      "argmax_match": true,
+      "max_row_checksum_delta": 0.0,
+      "union_absmax": 35.0,
+      "compact_absmax": 35.0
+    },
+    "8": {
+      "kc_used": 32,
+      "argmax_match": true,
+      "max_row_checksum_delta": 0.0,
+      "union_absmax": 35.0,
+      "compact_absmax": 35.0
+    },
+    "16": {
+      "kc_used": null,
+      "argmax_match": true,
+      "max_row_checksum_delta": 0.0,
+      "union_absmax": 35.0,
+      "compact_absmax": 35.0
+    },
+    "32": {
+      "kc_used": null,
+      "argmax_match": true,
+      "max_row_checksum_delta": 0.0,
+      "union_absmax": 37.25,
+      "compact_absmax": 37.25
+    }
+  },
+  "all_argmax_match_and_checksums_equal": true,
+  "kc_replays_compact": {
+    "4": 1,
+    "16": 2,
+    "24": 2,
+    "32": 1,
+    "None": 2
+  },
+  "bucket_switches_compact": 5
+}

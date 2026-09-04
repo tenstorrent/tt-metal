@@ -12,7 +12,9 @@ serving evidence -- run before the full-model `run_vllm_server` pass.
 
 from __future__ import annotations
 
+import json
 import math
+import re
 from pathlib import Path
 
 import pytest
@@ -499,3 +501,333 @@ def test_slice_row_indexes_tensor_params(expect_error):
     assert row.temperature == pytest.approx(1.5)
     assert row.top_k == 7
     assert row.top_p == pytest.approx(0.8)
+
+
+# ------------------------------------------------------------------ compact kc-bucketed decode traces
+#
+# The optimized-vLLM stage replaced the batch>1 union decode MoE with a
+# kc-bucketed compact (sparse_matmul INDEXED/GATHER) one; see
+# doc/optimized_vllm/README.md. kc is a hard correctness bound
+# (union <= live_rows * top_k, given the inactive-row routing mask), so these
+# pin the bound, the bucket choice, the union fallback, and the fact that
+# switching buckets mid-loop does not disturb the persistent trace inputs.
+
+
+def test_kc_bucket_bound_covers_every_live_row_count(adapter):
+    """Every row count must map to a bucket at least ``live_rows * top_k`` wide,
+    or to the union trace (``None``), which has no bound."""
+    model, _kv = adapter
+    gen = model.generator
+    moe = next(l for l in gen.model.layers if l.layer_kind == "moe")
+    top_k, n_experts = moe.top_k, moe.n_experts
+    assert gen._decode_kc_buckets, "compact decode buckets must exist at max_batch_size > 1"
+    for rows in range(0, MAX_BATCH_SIZE + 1):
+        kc = gen.decode_kc_for_rows(rows)
+        if kc is None:
+            continue  # union trace: scans every expert, no bound to satisfy
+        assert kc >= min(n_experts, rows * top_k), (
+            f"{rows} live rows can select up to {min(n_experts, rows * top_k)} distinct experts "
+            f"but the chosen bucket is only {kc} wide; the lowest-scoring selected experts "
+            f"would be silently dropped"
+        )
+
+
+def test_kc_full_width_is_never_captured_compact(adapter):
+    """kc == n_experts is measured to be *slower* than the union path (the
+    compact form pays for all kc experts unconditionally, the union form only
+    for the ones the batch selected), so it must fall back to the union trace
+    rather than being captured as a compact bucket."""
+    model, _kv = adapter
+    gen = model.generator
+    n_experts = next(l for l in gen.model.layers if l.layer_kind == "moe").n_experts
+    assert n_experts not in gen._decode_kc_buckets
+    assert None in gen._decode_kc_buckets, "row counts needing full width must have a union trace to fall back to"
+    assert gen.decode_kc_for_rows(MAX_BATCH_SIZE) is None
+
+
+def test_every_bucket_has_a_captured_trace(adapter):
+    """A bucket without a trace would silently fall back to a wider one."""
+    model, _kv = adapter
+    gen = model.generator
+    assert set(gen._decode_traces) == set(gen._decode_kc_buckets)
+    assert len({tid for tid in gen._decode_traces.values()}) == len(
+        gen._decode_kc_buckets
+    ), "trace ids must be distinct"
+
+
+def test_all_decode_traces_share_one_logits_buffer(adapter):
+    """One captured sampling trace serves every decode trace, which is only
+    sound because every decode trace writes the same logits *buffer*.
+
+    Replays each captured bucket in turn and checks the logits buffer address
+    is the one the sampler was captured against and never moves, and that each
+    replay actually wrote it (so this is not passing on a stale tensor).
+    """
+    model, _kv = adapter
+    gen = model.generator
+    assert gen._decode_logits is not None
+    assert gen._sampling_traced, "the sampler trace must be captured against that shared buffer"
+    shared_address = gen._decode_logits.buffer_address()
+
+    gen.reset()
+    gen.refresh_page_table(torch.cat([_block_table_for(s) for s in range(MAX_BATCH_SIZE)], dim=0))
+    seen = []
+    for i, kc in enumerate(gen._decode_kc_buckets):
+        gen.set_decode_tokens([500 + 31 * i] * MAX_BATCH_SIZE)
+        gen.set_decode_positions([70 + i] * MAX_BATCH_SIZE)
+        gen._decode_trace_id = gen._decode_traces[kc]
+        gen._active_kc = kc
+        gen._advance_host_positions()
+        ttnn.execute_trace(gen.mesh_device, gen._decode_trace_id, cq_id=0, blocking=True)
+        assert (
+            gen._decode_logits.buffer_address() == shared_address
+        ), f"bucket {kc} moved the logits buffer; the captured sampling trace reads {shared_address}"
+        seen.append(ttnn.to_torch(gen._decode_logits).float()[0, 0, 0, :64].clone())
+    assert len(seen) == len(gen._decode_kc_buckets)
+    # Different token inputs must produce different logits, so each replay
+    # demonstrably wrote the shared buffer rather than leaving the last one.
+    assert any(
+        not torch.equal(seen[0], other) for other in seen[1:]
+    ), "every bucket produced identical logits for different tokens; the replays did not write the buffer"
+
+
+def test_bucket_switch_preserves_token_feedback_and_positions(adapter):
+    """Growing then shrinking the live-row set switches decode traces. The
+    persistent token/position tensors are shared by all of them, so the sampled
+    token from the step before a switch must still be the token input after it,
+    and positions must keep advancing by exactly one per replay."""
+    model, kv_cache = adapter
+    gen = model.generator
+    gen.reset()
+
+    def step(rows, reset_batch):
+        page_table = torch.cat([_block_table_for(s) for s in range(rows)], dim=0)
+        return model.decode_forward(
+            tokens=torch.tensor([[100 + 7 * i] for i in range(rows)], dtype=torch.int32),
+            start_pos=torch.tensor([40 + i for i in range(rows)], dtype=torch.int32),
+            page_table=page_table,
+            kv_cache=kv_cache,
+            enable_trace=True,
+            read_from_device=True,
+            sampling_params=_greedy(rows),
+            reset_batch=reset_batch,
+        )
+
+    step(1, True)
+    kc_one = gen._active_kc
+    step(8, True)
+    kc_eight = gen._active_kc
+    step(1, True)
+    assert gen._active_kc == kc_one, "returning to one live row must return to the narrow bucket"
+    assert kc_eight != kc_one, "eight live rows must not reuse the one-row bucket"
+    assert gen.counters["decode_trace_bucket_switches"] >= 2
+
+    # Steady state on the narrow bucket: token feedback stays on device and the
+    # position advances by exactly one per replay, across the switch.
+    #
+    # Counters are cumulative over this module-scoped fixture and other tests in
+    # this file deliberately exercise the host-sampling compatibility path, so
+    # assert on the delta across this step, not on the absolute value.
+    before_tok = gen.read_decode_tokens(1)[0]
+    before_pos = list(gen._host_positions)
+    fallback_keys = ("eager_decode_steps", "full_logits_readbacks", "host_argmax_calls", "eager_sampling_steps")
+    baseline = {k: gen.counters[k] for k in fallback_keys}
+    gen.decode_step_traced()
+    assert gen._host_positions[0] == before_pos[0] + 1, "traced replay must advance the device position by one"
+    after_tok = gen.read_decode_tokens(1)[0]
+    assert isinstance(after_tok, int)
+    assert before_tok >= 0 and after_tok >= 0
+    for key in fallback_keys:
+        assert gen.counters[key] == baseline[key], f"{key} must not advance on the traced token-out path"
+
+
+def test_page_table_calls_are_skipped_when_rows_are_unchanged(adapter):
+    """The steady-state decode loop must not re-upload the page table. The
+    adapter diffs vLLM's rows against its own mirror, so an unchanged block
+    list costs one comparison and no host->device copy."""
+    model, kv_cache = adapter
+    page_table = _block_table_for(2)
+    common = dict(
+        page_table=page_table,
+        kv_cache=kv_cache,
+        enable_trace=True,
+        read_from_device=True,
+        sampling_params=_greedy(1),
+    )
+    model.decode_forward(
+        tokens=torch.tensor([[13]], dtype=torch.int32),
+        start_pos=torch.tensor([20], dtype=torch.int32),
+        reset_batch=True,
+        **common,
+    )
+    skipped = model.page_table_calls_skipped
+    written = model.page_table_calls_written
+    refreshes = model.generator.counters["page_table_refreshes"]
+    for _ in range(5):
+        model.decode_forward(
+            tokens=torch.tensor([[-1]], dtype=torch.int32),
+            start_pos=torch.tensor([-999], dtype=torch.int32),
+            reset_batch=False,
+            **common,
+        )
+    assert model.page_table_calls_skipped == skipped + 5, "identical rows must all be skipped"
+    assert model.page_table_calls_written == written, "no write may happen for an unchanged table"
+    assert model.generator.counters["page_table_refreshes"] == refreshes, "no host->device page-table copy"
+
+
+def test_serving_prefill_compiles_nothing_and_never_recaptures(adapter):
+    """A served prefill used to compile one new program the first time each
+    decode slot was used, while the decode traces were live -- so every
+    admitted request forced a full decode-trace recapture (22 of them inside
+    the 100/100/32 CI serving burst; doc/optimized_vllm/README.md). Warming one
+    prefill per slot at startup moves that compile off the served path.
+    """
+    model, _kv = adapter
+    gen = model.generator
+    dev = gen.mesh_device
+    entries = dev.num_program_cache_entries()
+    dev.set_program_cache_misses_allowed(False)
+    try:
+        for slot in (0, MAX_BATCH_SIZE // 2, MAX_BATCH_SIZE - 1):
+            gen.apply_prefill_sampling_state(_greedy(1), empty_slots=[slot])
+            gen.prefill_and_sample(list(range(1000, 1100)), user_id=slot, recapture=False)
+    finally:
+        dev.set_program_cache_misses_allowed(True)
+    assert dev.num_program_cache_entries() == entries, "a served prefill must not compile a new program"
+    assert not gen._maybe_recapture_after_compile(), "and therefore must not force a decode-trace recapture"
+
+
+def test_kc_bucket_is_only_chosen_where_it_is_the_cheaper_path(adapter):
+    """A compact bucket's cost is flat across the row counts it serves while the
+    union path's grows with the real union width, so within a bucket's range the
+    compact form starts behind and crosses over. Measured
+    (doc/optimized_vllm/adapter_decode_floor_{before,after,kc64}.json): kc=32
+    only pays from 7 live rows up (5 rows 55.377 union vs 57.495 kc=32, 7 rows
+    58.949 vs 57.525), so 5-6 live rows take the kc=24 bucket added for exactly
+    that window (49.745 / 49.756 vs the union's 55.377 / 56.749) rather than
+    kc=32, whose bound also covers them.
+    """
+    from models.autoports.zai_org_glm_4_7_flash.tt.generator import COMPACT_KC_MIN_ROWS
+
+    model, _kv = adapter
+    gen = model.generator
+    for rows in range(0, MAX_BATCH_SIZE + 1):
+        kc = gen.decode_kc_for_rows(rows)
+        if kc is None:
+            continue
+        assert rows >= COMPACT_KC_MIN_ROWS[kc], (
+            f"{rows} live rows chose compact bucket kc={kc}, but that bucket is only the cheaper path from "
+            f"{COMPACT_KC_MIN_ROWS[kc]} rows up"
+        )
+    # The specific crossovers this model measured, pinned so a bucket-set change
+    # cannot silently reintroduce a regression on part of a bucket's range.
+    assert gen.decode_kc_for_rows(1) == 4
+    assert gen.decode_kc_for_rows(4) == 16
+    assert gen.decode_kc_for_rows(5) == 24
+    assert gen.decode_kc_for_rows(6) == 24
+    assert gen.decode_kc_for_rows(7) == 32
+    assert gen.decode_kc_for_rows(9) is None
+
+
+def test_every_bucket_has_a_measured_crossover():
+    """A bucket with no measured COMPACT_KC_MIN_ROWS entry would be used from
+    one live row up, which is the regression the table exists to prevent.
+    Adding a bucket must mean measuring it, so the lookup is strict."""
+    from models.autoports.zai_org_glm_4_7_flash.tt.generator import COMPACT_KC_BUCKETS, COMPACT_KC_MIN_ROWS
+
+    assert set(COMPACT_KC_BUCKETS) <= set(
+        COMPACT_KC_MIN_ROWS
+    ), f"buckets without a measured crossover: {sorted(set(COMPACT_KC_BUCKETS) - set(COMPACT_KC_MIN_ROWS))}"
+
+
+def test_compaction_is_off_rather_than_fatal_for_a_non_tile_decode_batch():
+    """A decode batch that is not a whole tile cannot use the [E, B] embedding
+    table the compact path builds. That must disable compaction, not raise:
+    the union path is batch-agnostic and is what every non-serving caller used
+    before this stage existed."""
+    from models.autoports.zai_org_glm_4_7_flash.tt.generator import _kc_buckets
+
+    class _Layer:
+        layer_kind = "moe"
+        n_experts = 64
+        top_k = 4
+
+    class _Model:
+        layers = [_Layer()]
+
+        def __init__(self, batch):
+            self.max_batch_size = batch
+
+    for batch in (2, 8, 16, 31):
+        assert _kc_buckets(_Model(batch)) == (), f"max_batch_size={batch} must fall back to the union path"
+    assert _kc_buckets(_Model(32)) == (4, 16, 24, 32, None)
+
+
+# ------------------------------------------------------------------ report/source consistency
+#
+# Four of five $stage-review rounds on this stage found the same class of defect:
+# a number or a bucket set quoted in prose or in a shipped docstring that no
+# committed artifact contains, usually because a later re-measure did not
+# propagate. These are device-free checks that close it mechanically.
+
+_DOC_DIR = MODEL_DIR / "doc" / "optimized_vllm"
+
+
+def _decode_floor(arm: str) -> dict:
+    payload = json.loads((_DOC_DIR / f"adapter_decode_floor_{arm}.json").read_text())
+    return {r["active_rows"]: r for r in payload["results"]}
+
+
+def test_shipped_bucket_docstring_table_matches_the_committed_measurements():
+    """`COMPACT_KC_BUCKETS`' docstring carries the sweep that justifies the
+    shipped bucket set. Every row of it must be the committed measurement, to
+    the digit, and must name the bucket the shipped table actually selects."""
+    from models.autoports.zai_org_glm_4_7_flash.tt import generator as gen_module
+
+    before, after = _decode_floor("before"), _decode_floor("after")
+    doc = gen_module.__doc__ or ""
+    src = (MODEL_DIR / "tt" / "generator.py").read_text()
+    table = re.findall(r"^#: (\d+)\s+([\d.]+)\s+([\d.]+) \((kc \d+|union)\)\s+([+-][\d.]+)$", src, re.M)
+    assert table, "COMPACT_KC_BUCKETS' docstring table is missing or no longer machine-readable"
+    assert {int(r[0]) for r in table} == set(
+        before
+    ), f"docstring table rows {sorted(int(r[0]) for r in table)} != swept rows {sorted(before)}"
+    for rows_s, union_s, shipped_s, kc_s, delta_s in table:
+        rows = int(rows_s)
+        kc = after[rows]["moe_kc_used"]
+        assert float(union_s) == pytest.approx(before[rows]["adapter_async_token_out_ms"], abs=5e-4), rows
+        assert float(shipped_s) == pytest.approx(after[rows]["adapter_async_token_out_ms"], abs=5e-4), rows
+        assert kc_s == (
+            f"kc {kc}" if kc is not None else "union"
+        ), f"docstring says row {rows} uses {kc_s}, the committed arm says {kc}"
+        expected = after[rows]["adapter_async_token_out_ms"] - before[rows]["adapter_async_token_out_ms"]
+        assert float(delta_s) == pytest.approx(expected, abs=1e-3), rows
+    del doc
+
+
+def test_report_states_the_shipped_bucket_set():
+    """The stage README's prose bucket set must be the code's."""
+    from models.autoports.zai_org_glm_4_7_flash.tt.generator import COMPACT_KC_BUCKETS
+
+    readme = (_DOC_DIR / "README.md").read_text()
+    shipped = "(" + ", ".join(str(b) for b in COMPACT_KC_BUCKETS) + ", union)"
+    assert f"Buckets: `{shipped}`" in readme, f"README does not state the shipped bucket set {shipped}"
+    stale = re.findall(r"Buckets: `\(([^`]*)\)`", readme)
+    assert stale == [shipped.strip("()")], f"README states bucket sets {stale}, shipped is {shipped}"
+
+
+def test_every_shipped_bucket_has_bitwise_equivalence_evidence():
+    """Each compact bucket must be covered by bucket_numerics.json at the live-row
+    count where its bound is saturated -- its zero-slack case."""
+    from models.autoports.zai_org_glm_4_7_flash.tt.generator import COMPACT_KC_BUCKETS
+
+    payload = json.loads((_DOC_DIR / "bucket_numerics.json").read_text())
+    saturated = {int(k): v for k, v in payload["saturated_row_per_bucket"].items()}
+    assert set(saturated.values()) == set(COMPACT_KC_BUCKETS), (
+        f"bucket_numerics.json covers {sorted(set(saturated.values()))}, shipped buckets are "
+        f"{sorted(COMPACT_KC_BUCKETS)}"
+    )
+    for rows in saturated:
+        result = payload["results"][f"rows{rows}_compactbucket_vs_union"]
+        assert result["bitwise_identical"], f"{rows} live rows: compact bucket differs from the union path"
+        assert result["argmax_identical"]

@@ -1,0 +1,66 @@
+{
+  "purpose": "Serving-output equivalence across the optimized-vLLM A/B: the same six readiness prompts served by the stage-entry arm (both knobs off) and the shipped arm, same server flags, greedy and sampled. Greedy identity is the output-level counterpart of the bitwise logits identity in bucket_numerics.json. Sampled completions are expected to differ: the sampled arm runs at temperature with no request seed, so it is nondeterministic by construction in both arms.",
+  "greedy_identical_count": 6,
+  "sampled_identical_count": 0,
+  "prompts": 6,
+  "prompt_mode": [
+    "chat"
+  ],
+  "control": "doc/full_model/qualitative/ holds the HF control and the full-model TT completions on the same six prompts; the visible reasoning scaffold is this checkpoint's own style, established there.",
+  "per_prompt": [
+    {
+      "index": 0,
+      "prompt": "Write a haiku about machine learning.",
+      "prompt_mode": "chat",
+      "greedy_identical_before_after": true,
+      "sampled_identical_before_after": false,
+      "greedy_chars": 909,
+      "sampled_chars": 768
+    },
+    {
+      "index": 1,
+      "prompt": "Explain the difference between supervised and unsupervised learning in simple terms.",
+      "prompt_mode": "chat",
+      "greedy_identical_before_after": true,
+      "sampled_identical_before_after": false,
+      "greedy_chars": 1042,
+      "sampled_chars": 1137
+    },
+    {
+      "index": 2,
+      "prompt": "Complete this story: Once upon a time, in a faraway kingdom, there lived a curious young inventor who discovered",
+      "prompt_mode": "chat",
+      "greedy_identical_before_after": true,
+      "sampled_identical_before_after": false,
+      "greedy_chars": 968,
+      "sampled_chars": 964
+    },
+    {
+      "index": 3,
+      "prompt": "What are the three laws of thermodynamics?",
+      "prompt_mode": "chat",
+      "greedy_identical_before_after": true,
+      "sampled_identical_before_after": false,
+      "greedy_chars": 1038,
+      "sampled_chars": 1072
+    },
+    {
+      "index": 4,
+      "prompt": "Translate the following to French: \"Hello, how are you today?\"",
+      "prompt_mode": "chat",
+      "greedy_identical_before_after": true,
+      "sampled_identical_before_after": false,
+      "greedy_chars": 876,
+      "sampled_chars": 893
+    },
+    {
+      "index": 5,
+      "prompt": "Write a Python function to calculate the Fibonacci sequence.",
+      "prompt_mode": "chat",
+      "greedy_identical_before_after": true,
+      "sampled_identical_before_after": false,
+      "greedy_chars": 1183,
+      "sampled_chars": 1308
+    }
+  ]
+}

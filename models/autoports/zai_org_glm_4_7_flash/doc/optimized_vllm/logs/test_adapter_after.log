@@ -1,0 +1,244 @@
+2026-09-04 07:50:58.620 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/stisi/.cache/ttnn,model_cache_path=/home/stisi/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.12, pytest-9.0.3, pluggy-1.6.0 -- /home/stisi/tt-metal/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/stisi/tt-metal
+configfile: pytest.ini
+plugins: dash-2.15.0, cov-7.0.0, repeat-0.9.4, github-actions-annotate-failures-0.3.0, split-0.11.0, benchmark-5.2.3, anyio-4.14.2, timeout-2.4.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 28 items
+
+models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_blocks_per_user_is_max_seq_len_derived_not_pool_derived 2026-09-04 07:51:00.478 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:222)
+2026-09-04 07:51:00.478 | info     |             UMD | Cluster constructor started. (cluster.cpp:406)
+2026-09-04 07:51:00.478 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-09-04 07:51:00.478 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-09-04 07:51:00.491 | info     |             UMD | Established firmware bundle version: 19.12.0 (topology_discovery.cpp:576)
+2026-09-04 07:51:00.492 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-09-04 07:51:00.526 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-09-04 07:51:00.526 | info     |             UMD | IOMMU: disabled (cluster.cpp:147)
+2026-09-04 07:51:00.526 | info     |             UMD | KMD version: 2.8.1 (cluster.cpp:150)
+2026-09-04 07:51:00.526 | info     |             UMD | Cluster constructor completed. (cluster.cpp:665)
+2026-09-04 07:51:00.527 | info     |             UMD | Starting devices in cluster (cluster.cpp:1205)
+2026-09-04 07:51:00.569 | warning  |             UMD | AICLK settled at 1343 MHz, within 5% of the requested 1350 MHz but not an exact match. Proceeding. (tt_device.cpp:256)
+2026-09-04 07:51:00.614 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1213)
+2026-09-04 07:51:00.728 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
+2026-09-04 07:51:00.728 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
+2026-09-04 07:51:00.728 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-09-04 07:51:00.728 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3368)
+2026-09-04 07:51:00.728 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3376)
+2026-09-04 07:51:00.768 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 07:51:07.312 | INFO     | models.autoports.zai_org_glm_4_7_flash.tt.generator_vllm:allocate_kv_cache:361 - GLM-4.7-Flash allocate_kv_cache: overriding vLLM's requested cache dtype torch.bfloat16 with the selected policy DataType.BFLOAT8_B (doc/datatype_sweep/selected_precision_config.json); num_blocks=72 block_size=64 head_size=576
+2026-09-04 07:51:07.413 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1248256 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-04 07:51:07.413 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-04 07:51:07.498 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1248256 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-04 07:51:07.498 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-04 07:51:07.553 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1248256 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-04 07:51:07.553 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-04 07:51:07.603 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1248256 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-04 07:51:07.603 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-04 07:51:07.674 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1248256 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-04 07:51:07.674 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-04 07:51:08.045 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1248256 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-04 07:51:08.045 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-04 07:51:08.048 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1248256 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-04 07:51:08.048 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-04 07:51:08.052 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1248256 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-04 07:51:08.052 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-04 07:51:08.055 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1248256 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-04 07:51:08.055 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-04 07:51:08.058 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1248256 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-04 07:51:08.058 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-04 07:51:08.652 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1248256 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-04 07:51:08.652 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-04 07:51:08.659 | warning  |           Metal | Allocating device buffers is potentially unsafe due to the existence of an active trace. These buffers may be corrupted once a trace is executed if they are not released before then. Use the trace allocation tracker to verify. (allocator.cpp:130)
+2026-09-04 07:51:08.677 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1248256 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-04 07:51:08.677 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-04 07:51:08.877 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="refusing to truncate"
+2026-09-04 07:51:08.877 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="refusing to truncate"
+building 2 decoder layers from /home/stisi/.cache/huggingface/hub/models--zai-org--GLM-4.7-Flash/snapshots/7dd20894a642a0aa287e9827cb1a1f7f91386b67
+  layer 0 (dense) built [1/2]
+  layer 1 (moe) built [2/2]
+  decode rope tables (ROW_MAJOR) built
+  embedding table uploaded
+  lm head uploaded
+PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_implements_full_vllm_plugin_contract PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_cache_dtype_override 2026-09-04 07:51:15.156 | INFO     | models.autoports.zai_org_glm_4_7_flash.tt.generator_vllm:allocate_kv_cache:361 - GLM-4.7-Flash allocate_kv_cache: overriding vLLM's requested cache dtype torch.bfloat16 with the selected policy DataType.BFLOAT8_B (doc/datatype_sweep/selected_precision_config.json); num_blocks=2048 block_size=64 head_size=576
+2026-09-04 07:51:15.339 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1158144 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-04 07:51:15.340 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-04 07:51:15.345 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1158144 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-04 07:51:15.345 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-04 07:51:15.352 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1158144 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-04 07:51:15.352 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-04 07:51:15.356 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1158144 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-04 07:51:15.356 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-04 07:51:15.362 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1158144 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-04 07:51:15.362 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-04 07:51:15.802 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1158144 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-04 07:51:15.802 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-04 07:51:15.806 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1158144 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-04 07:51:15.806 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-04 07:51:15.810 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1158144 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-04 07:51:15.810 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-04 07:51:15.813 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1158144 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-04 07:51:15.813 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-04 07:51:15.817 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1158144 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-04 07:51:15.817 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-04 07:51:16.298 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1158144 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-04 07:51:16.298 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-04 07:51:16.328 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1158144 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-04 07:51:16.328 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+building 2 decoder layers from /home/stisi/.cache/huggingface/hub/models--zai-org--GLM-4.7-Flash/snapshots/7dd20894a642a0aa287e9827cb1a1f7f91386b67
+  layer 0 (dense) built [1/2]
+  layer 1 (moe) built [2/2]
+  decode rope tables (ROW_MAJOR) built
+  embedding table uploaded
+  lm head uploaded
+PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_prefill_forward_multi_request_non_aligned_lengths 2026-09-04 07:51:16.706 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1068032 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-04 07:51:16.706 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-04 07:51:16.716 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1068032 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-04 07:51:16.716 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_prefill_forward_host_sampling_fallback_returns_logits PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_decode_forward_reset_batch_then_steady_state PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_page_table_refresh_changed_and_unchanged PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_async_decode_split PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_get_max_tokens_all_users_matches_contract 2026-09-04 07:51:17.733 | INFO     | models.autoports.zai_org_glm_4_7_flash.tt.generator_vllm:get_max_tokens_all_users:316 - GLM-4.7-Flash get_max_tokens_all_users: 13.584 GiB headroom (0.75 GiB safety margin) / 29376 B/token (all-layers + one-layer zero-buffer) -> 469104 tokens (model_name=zai-org/GLM-4.7-Flash, num_devices=1, max_model_len=202752, max_num_seqs=32)
+PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_rejects_batch_size_over_32 2026-09-04 07:51:17.918 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="max_batch_size"
+2026-09-04 07:51:17.918 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="max_batch_size"
+PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_scalar_prefill_params_would_reach_only_lane_zero_without_broadcast PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_broadcast_makes_every_prefill_lane_carry_the_request_params PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_broadcast_leaves_real_per_lane_batches_alone PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_broadcast_never_touches_the_seed PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_slice_row_indexes_tensor_params PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_kc_bucket_bound_covers_every_live_row_count PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_kc_full_width_is_never_captured_compact PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_every_bucket_has_a_captured_trace PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_all_decode_traces_share_one_logits_buffer PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_bucket_switch_preserves_token_feedback_and_positions PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_page_table_calls_are_skipped_when_rows_are_unchanged PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_serving_prefill_compiles_nothing_and_never_recaptures 2026-09-04 07:51:20.171 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1068032 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-04 07:51:20.171 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-04 07:51:20.183 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1068032 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-04 07:51:20.183 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-04 07:51:20.195 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1068032 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-04 07:51:20.195 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_kc_bucket_is_only_chosen_where_it_is_the_cheaper_path PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_every_bucket_has_a_measured_crossover PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_compaction_is_off_rather_than_fatal_for_a_non_tile_decode_batch PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_shipped_bucket_docstring_table_matches_the_committed_measurements PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_report_states_the_shipped_bucket_set PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_every_shipped_bucket_has_bitwise_equivalence_evidence PASSED2026-09-04 07:51:21.306 | DEBUG    | models.common.sampling.generator:reset_trace:166 - Resetting sampling trace (bucket=None, penalties=False, log_probs=False, force_argmax=False, trace_id=MeshTraceId(11))
+2026-09-04 07:51:21.330 | DEBUG    | models.common.sampling.generator:reset_trace:166 - Resetting sampling trace (bucket=None, penalties=False, log_probs=False, force_argmax=False, trace_id=MeshTraceId(5))
+
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /home/stisi/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+8.40s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_blocks_per_user_is_max_seq_len_derived_not_pool_derived
+7.46s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_cache_dtype_override
+0.20s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_decode_forward_reset_batch_then_steady_state
+0.20s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_prefill_forward_host_sampling_fallback_returns_logits
+0.20s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_bucket_switch_preserves_token_feedback_and_positions
+0.19s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_kc_bucket_is_only_chosen_where_it_is_the_cheaper_path
+0.19s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_implements_full_vllm_plugin_contract
+0.19s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_report_states_the_shipped_bucket_set
+0.19s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_page_table_calls_are_skipped_when_rows_are_unchanged
+0.18s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_page_table_refresh_changed_and_unchanged
+0.18s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_scalar_prefill_params_would_reach_only_lane_zero_without_broadcast
+0.18s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_shipped_bucket_docstring_table_matches_the_committed_measurements
+0.18s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_rejects_batch_size_over_32
+0.18s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_get_max_tokens_all_users_matches_contract
+0.18s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_async_decode_split
+0.18s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_serving_prefill_compiles_nothing_and_never_recaptures
+0.18s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_kc_bucket_bound_covers_every_live_row_count
+0.18s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_compaction_is_off_rather_than_fatal_for_a_non_tile_decode_batch
+0.18s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_kc_full_width_is_never_captured_compact
+0.18s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_broadcast_makes_every_prefill_lane_carry_the_request_params
+0.18s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_every_bucket_has_a_captured_trace
+0.18s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_every_bucket_has_a_measured_crossover
+0.18s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_every_shipped_bucket_has_bitwise_equivalence_evidence
+0.18s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_all_decode_traces_share_one_logits_buffer
+0.18s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_broadcast_leaves_real_per_lane_batches_alone
+=========================== short test summary info ============================
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_blocks_per_user_is_max_seq_len_derived_not_pool_derived
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_implements_full_vllm_plugin_contract
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_cache_dtype_override
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_prefill_forward_multi_request_non_aligned_lengths
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_prefill_forward_host_sampling_fallback_returns_logits
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_decode_forward_reset_batch_then_steady_state
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_page_table_refresh_changed_and_unchanged
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_async_decode_split
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_get_max_tokens_all_users_matches_contract
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_rejects_batch_size_over_32
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_scalar_prefill_params_would_reach_only_lane_zero_without_broadcast
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_broadcast_makes_every_prefill_lane_carry_the_request_params
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_broadcast_leaves_real_per_lane_batches_alone
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_broadcast_never_touches_the_seed
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_slice_row_indexes_tensor_params
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_kc_bucket_bound_covers_every_live_row_count
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_kc_full_width_is_never_captured_compact
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_every_bucket_has_a_captured_trace
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_all_decode_traces_share_one_logits_buffer
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_bucket_switch_preserves_token_feedback_and_positions
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_page_table_calls_are_skipped_when_rows_are_unchanged
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_serving_prefill_compiles_nothing_and_never_recaptures
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_kc_bucket_is_only_chosen_where_it_is_the_cheaper_path
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_every_bucket_has_a_measured_crossover
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_compaction_is_off_rather_than_fatal_for_a_non_tile_decode_batch
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_shipped_bucket_docstring_table_matches_the_committed_measurements
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_report_states_the_shipped_bucket_set
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py::test_every_shipped_bucket_has_bitwise_equivalence_evidence
+======================= 28 passed, 2 warnings in 22.10s ========================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+nanobind: leaked 2 instances!
+ - leaked instance 0x78e4094ce898 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x78e408f0b928 of type "ttnn._ttnn.tensor.MemoryConfig"
+nanobind: leaked 20 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "Arch"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - ... skipped remainder
+nanobind: leaked 253 functions!
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "sfpu_eps"
+ - leaked function "to_json"
+ - leaked function ""
+ - leaked function "pad"
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-09-04 07:51:23.020 | info     |    BuildKernels | JIT cache stats: 1306/1306 hits (100.0%) [1306 cached, 1038 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-09-04 07:51:23.020 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-09-04 07:51:23.042 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:542)
+2026-09-04 07:51:23.042 | info     |             UMD | Closing devices in cluster (cluster.cpp:1218)
+2026-09-04 07:51:23.444 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1227)
+2026-09-04 07:51:23.444 | info     |             UMD | Cluster destructor started. (cluster.cpp:933)
+2026-09-04 07:51:23.444 | info     |             UMD | Cluster destructor completed. (cluster.cpp:936)

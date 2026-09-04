@@ -1,0 +1,84 @@
+{
+  "purpose": "Does the decode kc bucket change the logits on the real 47-layer model? Same generator, same persistent inputs, trace forced per bucket.",
+  "buckets": [
+    4,
+    16,
+    24,
+    32,
+    "union"
+  ],
+  "saturated_row_per_bucket": {
+    "1": 4,
+    "4": 16,
+    "6": 24,
+    "8": 32
+  },
+  "results": {
+    "rows1_compactbucket_vs_union": {
+      "bitwise_identical": true,
+      "max_abs_diff": 0.0,
+      "argmax_identical": true,
+      "rows_with_argmax_change": 0
+    },
+    "rows1_compactbucket_vs_compact32": {
+      "bitwise_identical": true,
+      "max_abs_diff": 0.0,
+      "argmax_identical": true,
+      "rows_with_argmax_change": 0
+    },
+    "rows1_same_bucket_repeat": {
+      "bitwise_identical": true,
+      "max_abs_diff": 0.0,
+      "argmax_identical": true,
+      "rows_with_argmax_change": 0
+    },
+    "rows4_compactbucket_vs_union": {
+      "bitwise_identical": true,
+      "max_abs_diff": 0.0,
+      "argmax_identical": true,
+      "rows_with_argmax_change": 0
+    },
+    "rows4_compactbucket_vs_compact32": {
+      "bitwise_identical": true,
+      "max_abs_diff": 0.0,
+      "argmax_identical": true,
+      "rows_with_argmax_change": 0
+    },
+    "rows4_same_bucket_repeat": {
+      "bitwise_identical": true,
+      "max_abs_diff": 0.0,
+      "argmax_identical": true,
+      "rows_with_argmax_change": 0
+    },
+    "rows6_compactbucket_vs_union": {
+      "bitwise_identical": true,
+      "max_abs_diff": 0.0,
+      "argmax_identical": true,
+      "rows_with_argmax_change": 0
+    },
+    "rows6_compactbucket_vs_compact32": {
+      "bitwise_identical": true,
+      "max_abs_diff": 0.0,
+      "argmax_identical": true,
+      "rows_with_argmax_change": 0
+    },
+    "rows6_same_bucket_repeat": {
+      "bitwise_identical": true,
+      "max_abs_diff": 0.0,
+      "argmax_identical": true,
+      "rows_with_argmax_change": 0
+    },
+    "rows8_compactbucket_vs_union": {
+      "bitwise_identical": true,
+      "max_abs_diff": 0.0,
+      "argmax_identical": true,
+      "rows_with_argmax_change": 0
+    },
+    "rows8_same_bucket_repeat": {
+      "bitwise_identical": true,
+      "max_abs_diff": 0.0,
+      "argmax_identical": true,
+      "rows_with_argmax_change": 0
+    }
+  }
+}

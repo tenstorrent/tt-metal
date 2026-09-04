@@ -1,5 +1,13 @@
 # GLM-4.7-Flash vLLM integration stage: work log
 
+> **Artifact location note, added by the optimized-vLLM stage (stage 10).** Paths
+> in this log that name `readiness_vllm/` refer to this stage's runner output,
+> which is preserved at `doc/vllm_integration/readiness_vllm_stage09/`. The live
+> `models/autoports/zai_org_glm_4_7_flash/readiness_vllm/` now holds stage 10's
+> after-arm serving evidence, whose numbers differ by design. Nothing from this
+> stage was destroyed; see `doc/optimized_vllm/work_log.md` OV-011.
+
+
 Branch `ttmodelmanager/glm47-flash-probe`, starting commit `8a53bd16b2f`
 (datatype-sweep). Target: one Blackhole p150-class chip, device 0, 1x1 mesh
 (vLLM mesh name `N150`). Repos touched: `tt-metal` (this repo) and

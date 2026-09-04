@@ -1,0 +1,28 @@
+============================= test session starts ==============================
+platform linux -- Python 3.12.12, pytest-9.0.3, pluggy-1.6.0 -- /home/stisi/tt-metal/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/stisi/vllm-tt-plugin
+configfile: pyproject.toml
+plugins: dash-2.15.0, cov-7.0.0, repeat-0.9.4, github-actions-annotate-failures-0.3.0, split-0.11.0, benchmark-5.2.3, anyio-4.14.2, timeout-2.4.0
+collecting ... collected 8 items
+
+../vllm-tt-plugin/tests/tt/test_request_isolation.py::TestBatchIsolation::test_mixed_params_batch PASSED [ 12%]
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_topk[15] PASSED [ 25%]
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_topk[19] PASSED [ 37%]
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_topk[32] PASSED [ 50%]
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_top1_is_greedy PASSED [ 62%]
+../vllm-tt-plugin/tests/tt/test_tt_penalties.py::TestRepetitionPenalty::test_repetition_penalty_mixed_batch PASSED [ 75%]
+../vllm-tt-plugin/tests/tt/test_tt_penalties.py::TestPresencePenalty::test_presence_penalty_mixed_batch PASSED [ 87%]
+../vllm-tt-plugin/tests/tt/test_tt_penalties.py::TestFrequencyPenalty::test_frequency_penalty_mixed_batch PASSED [100%]
+
+=============================== warnings summary ===============================
+tests/tt/test_request_isolation.py::TestBatchIsolation::test_mixed_params_batch
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+tests/tt/test_request_isolation.py::TestBatchIsolation::test_mixed_params_batch
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=================== 8 passed, 2 warnings in 74.17s (0:01:14) ===================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute

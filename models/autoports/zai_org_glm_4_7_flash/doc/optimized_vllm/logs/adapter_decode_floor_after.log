@@ -1,0 +1,301 @@
+2026-09-04 05:52:02.025 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/stisi/.cache/ttnn,model_cache_path=/home/stisi/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-09-04 05:52:03.280 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:222)
+2026-09-04 05:52:03.280 | info     |             UMD | Cluster constructor started. (cluster.cpp:406)
+2026-09-04 05:52:03.280 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-09-04 05:52:03.280 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-09-04 05:52:03.293 | info     |             UMD | Established firmware bundle version: 19.12.0 (topology_discovery.cpp:576)
+2026-09-04 05:52:03.293 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-09-04 05:52:03.328 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-09-04 05:52:03.328 | info     |             UMD | IOMMU: disabled (cluster.cpp:147)
+2026-09-04 05:52:03.328 | info     |             UMD | KMD version: 2.8.1 (cluster.cpp:150)
+2026-09-04 05:52:03.328 | info     |             UMD | Cluster constructor completed. (cluster.cpp:665)
+2026-09-04 05:52:03.330 | info     |             UMD | Starting devices in cluster (cluster.cpp:1205)
+2026-09-04 05:52:03.409 | warning  |             UMD | AICLK settled at 1343 MHz, within 5% of the requested 1350 MHz but not an exact match. Proceeding. (tt_device.cpp:256)
+2026-09-04 05:52:03.529 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1213)
+2026-09-04 05:52:03.633 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
+2026-09-04 05:52:03.633 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
+2026-09-04 05:52:03.633 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-09-04 05:52:03.633 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3368)
+2026-09-04 05:52:03.633 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3376)
+2026-09-04 05:52:03.674 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+building 47 decoder layers from /home/stisi/.cache/huggingface/hub/models--zai-org--GLM-4.7-Flash/snapshots/7dd20894a642a0aa287e9827cb1a1f7f91386b67
+  layer 0 (dense) built [1/47]
+  layer 1 (moe) built [2/47]
+  layer 2 (moe) built [3/47]
+  layer 3 (moe) built [4/47]
+  layer 4 (moe) built [5/47]
+  layer 5 (moe) built [6/47]
+  layer 6 (moe) built [7/47]
+  layer 7 (moe) built [8/47]
+  layer 8 (moe) built [9/47]
+  layer 9 (moe) built [10/47]
+  layer 10 (moe) built [11/47]
+  layer 11 (moe) built [12/47]
+  layer 12 (moe) built [13/47]
+  layer 13 (moe) built [14/47]
+  layer 14 (moe) built [15/47]
+  layer 15 (moe) built [16/47]
+  layer 16 (moe) built [17/47]
+  layer 17 (moe) built [18/47]
+  layer 18 (moe) built [19/47]
+  layer 19 (moe) built [20/47]
+  layer 20 (moe) built [21/47]
+  layer 21 (moe) built [22/47]
+  layer 22 (moe) built [23/47]
+  layer 23 (moe) built [24/47]
+  layer 24 (moe) built [25/47]
+  layer 25 (moe) built [26/47]
+  layer 26 (moe) built [27/47]
+  layer 27 (moe) built [28/47]
+  layer 28 (moe) built [29/47]
+  layer 29 (moe) built [30/47]
+  layer 30 (moe) built [31/47]
+  layer 31 (moe) built [32/47]
+  layer 32 (moe) built [33/47]
+  layer 33 (moe) built [34/47]
+  layer 34 (moe) built [35/47]
+  layer 35 (moe) built [36/47]
+  layer 36 (moe) built [37/47]
+  layer 37 (moe) built [38/47]
+  layer 38 (moe) built [39/47]
+  layer 39 (moe) built [40/47]
+  layer 40 (moe) built [41/47]
+  layer 41 (moe) built [42/47]
+  layer 42 (moe) built [43/47]
+  layer 43 (moe) built [44/47]
+  layer 44 (moe) built [45/47]
+  layer 45 (moe) built [46/47]
+  layer 46 (moe) built [47/47]
+  decode rope tables (ROW_MAJOR) built
+  embedding table uploaded
+  lm head uploaded
+2026-09-04 05:54:57.909 | INFO     | models.autoports.zai_org_glm_4_7_flash.tt.generator_vllm:allocate_kv_cache:361 - GLM-4.7-Flash allocate_kv_cache: overriding vLLM's requested cache dtype torch.bfloat16 with the selected policy DataType.BFLOAT8_B (doc/datatype_sweep/selected_precision_config.json); num_blocks=7362 block_size=64 head_size=576
+2026-09-04 05:54:59.787 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1248256 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-04 05:54:59.787 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-04 05:54:59.954 | warning  |           Metal | Allocating device buffers is potentially unsafe due to the existence of an active trace. These buffers may be corrupted once a trace is executed if they are not released before then. Use the trace allocation tracker to verify. (allocator.cpp:130)
+2026-09-04 05:55:00.544 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1248256 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-04 05:55:00.544 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+{
+  "label": "active_rows=1",
+  "active_rows": 1,
+  "moe_kc_used": 4,
+  "decode_kc_buckets": [
+    4,
+    16,
+    24,
+    32,
+    null
+  ],
+  "physical_rows": 32,
+  "iters": 30,
+  "adapter_async_token_out_ms": 29.513,
+  "adapter_async_token_out_ms_mean": 29.515,
+  "adapter_async_token_out_ms_min": 29.489,
+  "model_trace_only_ms": 28.401,
+  "tps_per_user": 33.883
+}
+{
+  "label": "active_rows=2",
+  "active_rows": 2,
+  "moe_kc_used": 16,
+  "decode_kc_buckets": [
+    4,
+    16,
+    24,
+    32,
+    null
+  ],
+  "physical_rows": 32,
+  "iters": 30,
+  "adapter_async_token_out_ms": 41.586,
+  "adapter_async_token_out_ms_mean": 41.585,
+  "adapter_async_token_out_ms_min": 41.558,
+  "model_trace_only_ms": 40.472,
+  "tps_per_user": 24.047
+}
+2026-09-04 05:55:06.540 | INFO     | models.autoports.zai_org_glm_4_7_flash.tt.generator_vllm:_maybe_log_counters:715 - GLM-4.7-Flash decode counters over the last 100 decode calls (deltas): model_trace_replays=159 sampling_trace_replays=99 eager_decode_steps=0 eager_sampling_steps=0 full_logits_readbacks=0 host_argmax_calls=0 token_input_refreshes=17 position_refreshes=17 page_table_refreshes=4 trace_recaptures=0 decode_trace_bucket_switches=2 token_readbacks=3 page_table_calls_written=3 page_table_calls_skipped=97 | kc_replays(total)={'4': 67, '16': 92}
+{
+  "label": "active_rows=3",
+  "active_rows": 3,
+  "moe_kc_used": 16,
+  "decode_kc_buckets": [
+    4,
+    16,
+    24,
+    32,
+    null
+  ],
+  "physical_rows": 32,
+  "iters": 30,
+  "adapter_async_token_out_ms": 41.593,
+  "adapter_async_token_out_ms_mean": 41.6,
+  "adapter_async_token_out_ms_min": 41.556,
+  "model_trace_only_ms": 40.474,
+  "tps_per_user": 24.043
+}
+{
+  "label": "active_rows=4",
+  "active_rows": 4,
+  "moe_kc_used": 16,
+  "decode_kc_buckets": [
+    4,
+    16,
+    24,
+    32,
+    null
+  ],
+  "physical_rows": 32,
+  "iters": 30,
+  "adapter_async_token_out_ms": 41.603,
+  "adapter_async_token_out_ms_mean": 41.602,
+  "adapter_async_token_out_ms_min": 41.575,
+  "model_trace_only_ms": 40.478,
+  "tps_per_user": 24.037
+}
+{
+  "label": "active_rows=5",
+  "active_rows": 5,
+  "moe_kc_used": 24,
+  "decode_kc_buckets": [
+    4,
+    16,
+    24,
+    32,
+    null
+  ],
+  "physical_rows": 32,
+  "iters": 30,
+  "adapter_async_token_out_ms": 49.745,
+  "adapter_async_token_out_ms_mean": 49.745,
+  "adapter_async_token_out_ms_min": 49.71,
+  "model_trace_only_ms": 48.609,
+  "tps_per_user": 20.103
+}
+2026-09-04 05:55:15.259 | INFO     | models.autoports.zai_org_glm_4_7_flash.tt.generator_vllm:_maybe_log_counters:715 - GLM-4.7-Flash decode counters over the last 100 decode calls (deltas): model_trace_replays=190 sampling_trace_replays=100 eager_decode_steps=0 eager_sampling_steps=0 full_logits_readbacks=0 host_argmax_calls=0 token_input_refreshes=6 position_refreshes=6 page_table_refreshes=3 trace_recaptures=0 decode_trace_bucket_switches=1 token_readbacks=3 page_table_calls_written=3 page_table_calls_skipped=97 | kc_replays(total)={'4': 67, '16': 201, '24': 81}
+{
+  "label": "active_rows=6",
+  "active_rows": 6,
+  "moe_kc_used": 24,
+  "decode_kc_buckets": [
+    4,
+    16,
+    24,
+    32,
+    null
+  ],
+  "physical_rows": 32,
+  "iters": 30,
+  "adapter_async_token_out_ms": 49.756,
+  "adapter_async_token_out_ms_mean": 49.766,
+  "adapter_async_token_out_ms_min": 49.727,
+  "model_trace_only_ms": 48.593,
+  "tps_per_user": 20.098
+}
+{
+  "label": "active_rows=7",
+  "active_rows": 7,
+  "moe_kc_used": 32,
+  "decode_kc_buckets": [
+    4,
+    16,
+    24,
+    32,
+    null
+  ],
+  "physical_rows": 32,
+  "iters": 30,
+  "adapter_async_token_out_ms": 57.525,
+  "adapter_async_token_out_ms_mean": 57.522,
+  "adapter_async_token_out_ms_min": 57.469,
+  "model_trace_only_ms": 56.696,
+  "tps_per_user": 17.384
+}
+{
+  "label": "active_rows=8",
+  "active_rows": 8,
+  "moe_kc_used": 32,
+  "decode_kc_buckets": [
+    4,
+    16,
+    24,
+    32,
+    null
+  ],
+  "physical_rows": 32,
+  "iters": 30,
+  "adapter_async_token_out_ms": 57.537,
+  "adapter_async_token_out_ms_mean": 57.541,
+  "adapter_async_token_out_ms_min": 57.485,
+  "model_trace_only_ms": 56.747,
+  "tps_per_user": 17.38
+}
+2026-09-04 05:55:25.981 | INFO     | models.autoports.zai_org_glm_4_7_flash.tt.generator_vllm:_maybe_log_counters:715 - GLM-4.7-Flash decode counters over the last 100 decode calls (deltas): model_trace_replays=190 sampling_trace_replays=100 eager_decode_steps=0 eager_sampling_steps=0 full_logits_readbacks=0 host_argmax_calls=0 token_input_refreshes=6 position_refreshes=6 page_table_refreshes=3 trace_recaptures=0 decode_trace_bucket_switches=2 token_readbacks=3 page_table_calls_written=3 page_table_calls_skipped=97 | kc_replays(total)={'4': 67, '16': 201, '24': 134, '32': 134, 'None': 3}
+{
+  "label": "active_rows=12",
+  "active_rows": 12,
+  "moe_kc_used": null,
+  "decode_kc_buckets": [
+    4,
+    16,
+    24,
+    32,
+    null
+  ],
+  "physical_rows": 32,
+  "iters": 30,
+  "adapter_async_token_out_ms": 65.825,
+  "adapter_async_token_out_ms_mean": 65.259,
+  "adapter_async_token_out_ms_min": 61.913,
+  "model_trace_only_ms": 64.421,
+  "tps_per_user": 15.192
+}
+{
+  "label": "active_rows=16",
+  "active_rows": 16,
+  "moe_kc_used": null,
+  "decode_kc_buckets": [
+    4,
+    16,
+    24,
+    32,
+    null
+  ],
+  "physical_rows": 32,
+  "iters": 30,
+  "adapter_async_token_out_ms": 71.62,
+  "adapter_async_token_out_ms_mean": 71.397,
+  "adapter_async_token_out_ms_min": 68.705,
+  "model_trace_only_ms": 69.738,
+  "tps_per_user": 13.963
+}
+2026-09-04 05:55:37.338 | INFO     | models.autoports.zai_org_glm_4_7_flash.tt.generator_vllm:_maybe_log_counters:715 - GLM-4.7-Flash decode counters over the last 100 decode calls (deltas): model_trace_replays=160 sampling_trace_replays=100 eager_decode_steps=0 eager_sampling_steps=0 full_logits_readbacks=0 host_argmax_calls=0 token_input_refreshes=4 position_refreshes=4 page_table_refreshes=2 trace_recaptures=0 decode_trace_bucket_switches=0 token_readbacks=2 page_table_calls_written=2 page_table_calls_skipped=98 | kc_replays(total)={'4': 67, '16': 201, '24': 134, '32': 134, 'None': 163}
+{
+  "label": "active_rows=32",
+  "active_rows": 32,
+  "moe_kc_used": null,
+  "decode_kc_buckets": [
+    4,
+    16,
+    24,
+    32,
+    null
+  ],
+  "physical_rows": 32,
+  "iters": 30,
+  "adapter_async_token_out_ms": 78.426,
+  "adapter_async_token_out_ms_mean": 78.429,
+  "adapter_async_token_out_ms_min": 75.239,
+  "model_trace_only_ms": 76.292,
+  "tps_per_user": 12.751
+}
+TRACE REGION: {"total_bytes_allocated_per_bank": 19013632, "total_bytes_per_bank": 43753472, "total_bytes_free_per_bank": 24739840, "largest_contiguous_bytes_free_per_bank": 24739840, "num_banks": 8}
+TRACE REGION RAW: <ttnn._ttnn.device.MemoryView object at 0x7716d0136790>
+WROTE /home/stisi/tt-metal/models/autoports/zai_org_glm_4_7_flash/doc/optimized_vllm/adapter_decode_floor_after.json
+2026-09-04 05:55:41.014 | info     |    BuildKernels | JIT cache stats: 580/580 hits (100.0%) [580 cached, 175 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-09-04 05:55:41.014 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-09-04 05:55:41.047 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:542)
+2026-09-04 05:55:41.047 | info     |             UMD | Closing devices in cluster (cluster.cpp:1218)
+2026-09-04 05:55:41.466 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1227)
+2026-09-04 05:55:41.466 | info     |             UMD | Cluster destructor started. (cluster.cpp:933)
+2026-09-04 05:55:41.466 | info     |             UMD | Cluster destructor completed. (cluster.cpp:936)

@@ -1,0 +1,305 @@
+{
+  "workload": {
+    "profile": "single_user_decode",
+    "prompt_len": 128,
+    "gen_len": 128,
+    "batch": 1,
+    "served_max_num_seqs": 32,
+    "physical_decode_rows": 32,
+    "max_model_len": 202752,
+    "sampling": "greedy on device (sample_on_device_mode=all), --temperature 0.0",
+    "path": "real vLLM TT-plugin serving through tt/generator_vllm.py"
+  },
+  "ttft_ms": 274.074,
+  "decode_ms_per_token_e2e": 29.496,
+  "decode_ms_per_token_device": null,
+  "roofline_ms_per_token_estimate": 3.9,
+  "device_time_reason": "vllm_serving_profiler_disabled_to_protect_hardware",
+  "device_vs_e2e_note": "No device-time figure is collected in a vLLM stage: $optimize and $vllm-integration both forbid Tracy, tt-perf-report, live-server device profiler, serving-adapter profiler and ReadDeviceProfiler here, and none were attempted. The nearest available substitute is measured rather than profiled: driving the same adapter with the same async split and no vLLM engine gives 29.513 ms/token against the served 29.496 ms/token, i.e. the vLLM engine costs -0.017 ms/token. Steady-state serving windows in server.log show 100/100 traced model and sampler replays with zero eager steps, zero host readbacks and zero input refreshes, so there is no per-token dispatch gap to reconcile.",
+  "roofline_derivation": "Same first-order byte model as doc/optimized_full_model/perf_summary.json, and it carries over unchanged: with one live row and the inactive-row routing mask, the compact kc=4 bucket reads exactly the four routed experts the batch-1 build's indexed path reads, and every other weight (attention bf4, shared expert bf4, dense MLP bf8, LM head bf8, fp32 router, bf8 latent cache) is identical, so per-token bytes are the same ~2.00 GB against the same ~514 GB/s peak DRAM bandwidth. Serving 32 physical rows does not change the weight traffic, which is what the roofline counts.",
+  "roofline_fraction_of_e2e_pct": 13.2,
+  "serving_before_after": {
+    "arms": {
+      "before": "GLM47_VLLM_MOE_COMPACT=0 GLM47_VLLM_PREFILL_SLOT_WARM=0 -- the stage-entry behaviour",
+      "attribution_warm_only": "GLM47_VLLM_MOE_COMPACT=0, per-slot prefill warm on (--stages serve,benchmark) -- isolates the recapture fix",
+      "after": "both knobs at their defaults (on)"
+    },
+    "primary_single_user_128_128_1": {
+      "before": {
+        "ttft_ms_p50": 273.875,
+        "ttft_ms_p99": 273.875,
+        "tpot_ms_mean": 45.218,
+        "tpot_ms_p99": 45.218,
+        "itl_ms_p50": 45.21,
+        "itl_ms_p99": 45.584,
+        "e2el_ms_p50": 6016.57,
+        "output_throughput_tok_per_s": 21.273,
+        "total_token_throughput_tok_per_s": 42.547,
+        "decode_tps_per_user": 22.115
+      },
+      "after": {
+        "ttft_ms_p50": 274.074,
+        "ttft_ms_p99": 274.074,
+        "tpot_ms_mean": 29.496,
+        "tpot_ms_p99": 29.496,
+        "itl_ms_p50": 29.492,
+        "itl_ms_p99": 29.695,
+        "e2el_ms_p50": 4020.058,
+        "output_throughput_tok_per_s": 31.838,
+        "total_token_throughput_tok_per_s": 63.677,
+        "decode_tps_per_user": 33.903
+      },
+      "attribution_warm_only": {
+        "ttft_ms_p50": 281.4,
+        "ttft_ms_p99": 281.4,
+        "tpot_ms_mean": 45.213,
+        "tpot_ms_p99": 45.213,
+        "itl_ms_p50": 45.198,
+        "itl_ms_p99": 45.573,
+        "e2el_ms_p50": 6023.475,
+        "output_throughput_tok_per_s": 21.249,
+        "total_token_throughput_tok_per_s": 42.498,
+        "decode_tps_per_user": 22.117
+      },
+      "delta_pct": {
+        "ttft_ms_p50": 0.07,
+        "ttft_ms_p99": 0.07,
+        "tpot_ms_mean": -34.77,
+        "tpot_ms_p99": -34.77,
+        "itl_ms_p50": -34.77,
+        "itl_ms_p99": -34.86,
+        "e2el_ms_p50": -33.18,
+        "output_throughput_tok_per_s": 49.66,
+        "total_token_throughput_tok_per_s": 49.66,
+        "decode_tps_per_user": 53.3
+      }
+    },
+    "secondary_ci_serving_burst_100_100_32": {
+      "before": {
+        "ttft_ms_p50": 14320.118,
+        "ttft_ms_p99": 14321.687,
+        "tpot_ms_mean": 90.157,
+        "tpot_ms_p99": 90.18,
+        "itl_ms_p50": 91.193,
+        "itl_ms_p99": 94.532,
+        "e2el_ms_p50": 23245.613,
+        "output_throughput_tok_per_s": 137.649,
+        "total_token_throughput_tok_per_s": 275.298,
+        "decode_tps_per_user": 11.092
+      },
+      "after": {
+        "ttft_ms_p50": 9132.855,
+        "ttft_ms_p99": 9134.037,
+        "tpot_ms_mean": 90.159,
+        "tpot_ms_p99": 90.183,
+        "itl_ms_p50": 91.168,
+        "itl_ms_p99": 94.338,
+        "e2el_ms_p50": 18058.598,
+        "output_throughput_tok_per_s": 177.185,
+        "total_token_throughput_tok_per_s": 354.37,
+        "decode_tps_per_user": 11.091
+      },
+      "attribution_warm_only": {
+        "ttft_ms_p50": 9126.236,
+        "ttft_ms_p99": 9127.52,
+        "tpot_ms_mean": 90.154,
+        "tpot_ms_p99": 90.179,
+        "itl_ms_p50": 91.138,
+        "itl_ms_p99": 94.392,
+        "e2el_ms_p50": 18051.38,
+        "output_throughput_tok_per_s": 177.254,
+        "total_token_throughput_tok_per_s": 354.508,
+        "decode_tps_per_user": 11.092
+      },
+      "delta_pct": {
+        "ttft_ms_p50": -36.22,
+        "ttft_ms_p99": -36.22,
+        "tpot_ms_mean": 0.0,
+        "tpot_ms_p99": 0.0,
+        "itl_ms_p50": -0.03,
+        "itl_ms_p99": -0.21,
+        "e2el_ms_p50": -22.31,
+        "output_throughput_tok_per_s": 28.72,
+        "total_token_throughput_tok_per_s": 28.72,
+        "decode_tps_per_user": -0.01
+      }
+    }
+  },
+  "reconciliation": {
+    "vllm_single_user_ms_per_token": 29.496,
+    "adapter_only_same_32_row_build_1_live_row_ms_per_token": 29.513,
+    "vllm_engine_overhead_ms_per_token": -0.017,
+    "full_model_traced_token_out_batch1_build_ms_per_token": 21.83,
+    "residual_vs_batch1_build_ms_per_token": 7.683,
+    "residual_attribution": {
+      "compact_specific_routing_prologue_ms_per_token": 1.68,
+      "compact_specific_routing_prologue_source": "doc/optimized_vllm/moe_prologue_ablation.json: the compact path's union-max/top-k/index/embedding tail costs 0.1599 ms/layer against the union path's 0.1234 ms/layer prologue, i.e. 0.0365 ms/layer x 46 = 1.68 ms/token of compact-specific cost. The shipped embedding form recovered 1.40 ms/token of the 3.08 ms/token the first repeat+gather implementation cost.",
+      "remaining_32_physical_row_shape_ms_per_token": 6.003,
+      "note": "The residual splits into a small compact-path routing tail (measured, 1.68 ms/token, two adapted alternatives tried) and the cost of driving 32 physical decode rows instead of one through attention, the paged cache update, the norms and the shared expert. The latter is a construction-time property of the decoder's per-slot shard grids, not serving overhead.",
+      "compact_routing_prologue_recovered_this_stage_ms_per_token": 1.4
+    },
+    "full_model_baseline_statistic": "mean, matching tests/test_full_model_perf.py's bench() which the recorded 23.013 ms/token came from; this probe's median (21.821) and mean (21.822) agree to 0.001 ms, so the ~5% improvement over the recorded figure is real and not a median-vs-mean artifact"
+  },
+  "rejected_with_measurement": {
+    "compact_bucket_at_kc_equals_n_experts": {
+      "why_tried": "it would let every row count take a compact trace instead of falling back to the union one",
+      "measured_ms_per_token_at_32_live_rows": 91.77,
+      "shipped_union_fallback_ms_per_token_at_32_live_rows": 78.426,
+      "artifact": "doc/optimized_vllm/adapter_decode_floor_kc64.json",
+      "why_it_loses": "The compact form pays for all kc groups unconditionally; the union form skips the groups the batch did not select. Measured on the real model (moe_union_width.json), the decode union at 32 live rows averages 32.2 of 64 experts, so a fixed kc=64 does about twice the expert work the union path does. The single-layer probes show the opposite sign only because their synthetic torch.randn activations select 52 of 64.",
+      "also_measured_at_12_and_16_live_rows": {
+        "12": {
+          "kc64": 90.253,
+          "shipped_union": 65.825
+        },
+        "16": {
+          "kc64": 90.305,
+          "shipped_union": 71.62
+        }
+      }
+    },
+    "repeat_plus_gather_compact_routing_weights": {
+      "ms_per_layer": 0.1904,
+      "artifact": "moe_prologue_ablation.json"
+    },
+    "one_hot_plus_matmul_compact_routing_weights": {
+      "ms_per_layer": 0.1678,
+      "artifact": "moe_prologue_ablation.json"
+    },
+    "shipped_embedding_compact_routing_weights": {
+      "ms_per_layer": 0.1599,
+      "artifact": "moe_prologue_ablation.json"
+    },
+    "kc32_bucket_below_7_live_rows_and_the_kc24_bucket_that_replaced_it": {
+      "why_tried": "kc=32 is the smallest bucket whose bound covers 5-8 live rows, so the naive rule selected it there",
+      "measured_ms_per_token": {
+        "5_live_rows": {
+          "union": 55.377,
+          "compact_kc32": 57.495,
+          "compact_kc24_SHIPPED": 49.745
+        },
+        "6_live_rows": {
+          "union": 56.749,
+          "compact_kc32": 57.519,
+          "compact_kc24_SHIPPED": 49.756
+        },
+        "7_live_rows": {
+          "union": 58.949,
+          "compact_kc32_SHIPPED": 57.525
+        }
+      },
+      "outcome": "kc=32 rejected below 7 live rows (COMPACT_KC_MIN_ROWS[32] = 7). A kc=24 bucket, legal because ttnn.topk accepts a non-power-of-two k, was then measured and shipped for 5-6 rows: 5.6 and 7.0 ms/token better than the union trace there. Worst remaining delta across the whole swept range is +0.023 ms/token, i.e. noise.",
+      "artifact": "doc/optimized_vllm/adapter_decode_floor_{before,after}.json for the union and shipped columns; adapter_decode_floor_kc64.json for kc=32 at 5-6 live rows, whose bucket set (4, 16, 32, 64) selects kc=32 there"
+    },
+    "exact_bound_bucket_per_row_count": {
+      "what": "one compact bucket per reachable row count (kc = live_rows * top_k for rows 1..8): 8 compact traces plus the union trace",
+      "measured_gain_vs_shipped_ms_per_token": {
+        "2_live_rows": -8.018,
+        "3_live_rows": -3.916,
+        "5_live_rows": -4.095,
+        "7_live_rows": -3.84,
+        "note": "no loss at any swept row count"
+      },
+      "measured_cost": {
+        "trace_region_used_pct_of_350MB": 78.4,
+        "shipped_set_trace_region_used_pct": 43.5,
+        "free_per_bank_bytes_exact_bound": 9437184,
+        "free_per_bank_bytes_shipped": 24739840,
+        "build_s_exact_bound": 178.4,
+        "build_s_shipped": 176.9
+      },
+      "outcome": "deferred, not rejected on principle: it is faster everywhere it differs, but it leaves 9.4 MB per bank of trace region for the additional traces models/common/sampling captures per sampling mode, against the shipped set's 23.6 MB. The headroom, not the latency, is the reason. Adopting it should come with a multi-sampling-mode serving run that proves the region still fits.",
+      "artifact": "doc/optimized_vllm/adapter_decode_floor_kcexact.json"
+    }
+  },
+  "adapter_only_decode_floor_ms_per_token": {
+    "sweep_note": "Every live-row count where the bucket choice changes, plus points inside each bucket's range. Sweeping only the saturated counts (1/4/8/32) measures each bucket's best case and missed that kc=32 was a net loss at 5-6 live rows; COMPACT_KC_MIN_ROWS plus the kc=24 bucket fix that.",
+    "before_union": {
+      "1": 45.208,
+      "2": 48.436,
+      "3": 51.283,
+      "4": 53.397,
+      "5": 55.377,
+      "6": 56.749,
+      "7": 58.949,
+      "8": 60.213,
+      "12": 65.802,
+      "16": 71.616,
+      "32": 78.447
+    },
+    "after_bucketed_compact": {
+      "1": 29.513,
+      "2": 41.586,
+      "3": 41.593,
+      "4": 41.603,
+      "5": 49.745,
+      "6": 49.756,
+      "7": 57.525,
+      "8": 57.537,
+      "12": 65.825,
+      "16": 71.62,
+      "32": 78.426
+    },
+    "kc_used_after": {
+      "1": 4,
+      "2": 16,
+      "3": 16,
+      "4": 16,
+      "5": 24,
+      "6": 24,
+      "7": 32,
+      "8": 32,
+      "12": null,
+      "16": null,
+      "32": null
+    },
+    "rejected_kc64_variant": {
+      "1": 29.512,
+      "2": 41.584,
+      "3": 41.591,
+      "4": 41.606,
+      "5": 57.495,
+      "6": 57.519,
+      "7": 57.515,
+      "8": 57.546,
+      "12": 90.253,
+      "16": 90.305,
+      "32": 91.77
+    },
+    "deferred_exact_bound_variant": {
+      "1": 29.512,
+      "2": 33.573,
+      "3": 37.67,
+      "4": 41.598,
+      "5": 45.66,
+      "6": 49.764,
+      "7": 53.692,
+      "8": 57.537,
+      "12": 65.813,
+      "16": 71.632,
+      "32": 78.459
+    },
+    "worst_regression_ms_per_token": 0.023
+  },
+  "named_limitations": [
+    "decode_ms_per_token_device and any profiler-derived per-op accounting are null by stage rule, not by omission: no Tracy, tt-perf-report, live-server device profiler, adapter profiler or ReadDeviceProfiler was collected or attempted. Device-op context for this model comes from the earlier non-serving reduced profile in doc/optimized_full_model/perf_report_summary.json.",
+    "roofline_ms_per_token_estimate is inherited from the previous stage's first-order params x dtype-size byte model and carries that model's own limitations (excludes tile padding, layout-conversion intermediates and router/norm/elementwise glue). It is a lower bound, not a target.",
+    "CI serving-burst TPOT is unchanged by design: at 9 or more live rows the kc bound forces kc = n_experts, which measured slower than the union path, so those steps replay the union trace. The burst's gain is TTFT and throughput, from removing the per-admission decode-trace recapture.",
+    "The remaining residual against a batch-1-built model is dominated by driving 32 physical decode rows. Narrowing it needs a decoder built for fewer rows, which is a construction-time change and would trade away the 32-sequence serving capability unless several decoders shared weights. Measured and deferred.",
+    "Trace-region occupancy rose from one decode trace to five plus a shared logits buffer: 43.5% of the 350 MB reservation in use, 23.6 MB per bank free (doc/context_contract.json optimized_vllm.trace_region_measured). Every remaining decode-trace recapture is correspondingly more expensive (~1.0 s vs ~0.24 s with one trace).",
+    "Compaction is disabled entirely for a decode batch that is not a whole tile (the compact path's per-row routing lookup builds an [E, B] ttnn.embedding table). Serving always builds 32 rows; other callers fall back to the batch-agnostic union path rather than failing. Supporting a non-tile batch is a measurement away, not a redesign, and nothing has needed it."
+  ],
+  "real_routed_expert_union_width": {
+    "source": "doc/optimized_vllm/moe_union_width.json",
+    "note": "Distinct routed experts in the decode union on the real model, per live-row count (mean over the 46 MoE layers). This is what makes kc = n_experts lose: the bound is 64 at 32 live rows but the real union averages 32.2, so a fixed full-width compact trace does about twice the expert work.",
+    "mean_by_live_rows": {
+      "1": 4.0,
+      "2": 6.41,
+      "4": 10.41,
+      "8": 16.65,
+      "16": 23.43,
+      "32": 32.17
+    },
+    "synthetic_randn_32_rows": 52
+  }
+}

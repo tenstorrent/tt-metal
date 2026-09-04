@@ -69,6 +69,7 @@ does the final ``ttnn.to_torch`` after the caller has synchronized that event.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any, List, Optional
 
@@ -107,6 +108,43 @@ VLLM_PREFILL_CHUNK_SIZE = 1024
 VLLM_PREFILL_BUCKETS = (128, 256, 512, 1024)
 
 
+#: A/B knob for the optimized-vLLM stage's before/after measurement, and an
+#: escape hatch if the compact decode path ever needs to be disabled in the
+#: field without a code change. ``0``/``false``/``no`` rebuilds the generator on
+#: the previous union decode MoE (one decode trace, no kc buckets); anything
+#: else (including unset) keeps the shipped bucketed compact path. The two arms
+#: differ only in this flag, which is what makes the recorded before/after a
+#: same-harness comparison rather than a comparison against an older commit.
+MOE_COMPACT_ENV = "GLM47_VLLM_MOE_COMPACT"
+
+#: Second A/B knob for the same stage: compile every decode slot's prefill
+#: program during warm-up. ``0`` reproduces the pre-stage behaviour where the
+#: first request admitted into each slot compiles under a live decode trace and
+#: forces a full decode-trace recapture. The two knobs are independent, which is
+#: what lets the stage report attribute the single-user decode win and the
+#: serving-burst TTFT win to the right change from one commit.
+PREFILL_SLOT_WARM_ENV = "GLM47_VLLM_PREFILL_SLOT_WARM"
+
+#: How many traced decode steps between one-line counter dumps into the server
+#: log. This is the live-server evidence that the measured serving path really
+#: is traced token-out decode with on-device sampling: a dump showing
+#: ``eager_decode=0 eager_sampling=0 full_logits_readbacks=0 host_argmax=0
+#: page_table_refreshes=0`` over a window of N steps is a fact from the running
+#: server, not an inference from unit tests. The default lines up with both
+#: readiness benchmark profiles (128-token single-user, 100-token burst) so each
+#: produces exactly one window. Set to 0 to disable.
+COUNTER_LOG_EVERY_ENV = "GLM47_VLLM_DECODE_COUNTER_LOG_EVERY"
+DEFAULT_COUNTER_LOG_EVERY = 100
+
+
+def _moe_decode_compact_enabled() -> bool:
+    return os.environ.get(MOE_COMPACT_ENV, "1").strip().lower() not in ("0", "false", "no", "off")
+
+
+def _prefill_slot_warmup_enabled() -> bool:
+    return os.environ.get(PREFILL_SLOT_WARM_ENV, "1").strip().lower() not in ("0", "false", "no", "off")
+
+
 def _load_context_contract() -> dict:
     return json.loads(_CONTRACT_PATH.read_text())
 
@@ -134,6 +172,18 @@ class GLM47FlashForCausalLM:
         # survive an in-place row overwrite untouched.
         self._pt_mirror = torch.zeros((self.max_batch_size, self.blocks_per_user), dtype=torch.int32)
         self._cache_bound = False
+        #: Page-table refresh accounting, so "the steady-state decode loop
+        #: performs no page-table copies" is a counted fact rather than a claim.
+        #: ``skipped`` is a decode/prefill call whose rows were already the ones
+        #: on device; ``written`` is a call that actually re-uploaded the table.
+        self.page_table_calls_skipped = 0
+        self.page_table_calls_written = 0
+        try:
+            self._counter_log_every = int(os.environ.get(COUNTER_LOG_EVERY_ENV, DEFAULT_COUNTER_LOG_EVERY))
+        except ValueError:
+            self._counter_log_every = DEFAULT_COUNTER_LOG_EVERY
+        self._decode_calls = 0
+        self._counter_snapshot = None
 
     # ------------------------------------------------------------------ construction
 
@@ -181,6 +231,18 @@ class GLM47FlashForCausalLM:
             # VLLM_PREFILL_CHUNK_SIZE's module-level docstring (VS-006).
             prefill_chunk_size=VLLM_PREFILL_CHUNK_SIZE,
             prefill_buckets=VLLM_PREFILL_BUCKETS,
+            moe_decode_compact=_moe_decode_compact_enabled(),
+            prefill_slot_warmup=_prefill_slot_warmup_enabled(),
+        )
+        logger.info(
+            "GLM-4.7-Flash vLLM adapter: compact decode MoE {} (buckets={}); per-slot prefill warm {}; {}={} {}={}",
+            "on" if generator.moe_decode_compact else "off",
+            generator._decode_kc_buckets,
+            "on" if generator.prefill_slot_warmup else "off",
+            MOE_COMPACT_ENV,
+            os.environ.get(MOE_COMPACT_ENV, "<unset, default on>"),
+            PREFILL_SLOT_WARM_ENV,
+            os.environ.get(PREFILL_SLOT_WARM_ENV, "<unset, default on>"),
         )
         return cls(generator)
 
@@ -433,16 +495,31 @@ class GLM47FlashForCausalLM:
                 f"block_size={self.generator.model.paged_config.block_size})); refusing to truncate."
             )
         width = rows.shape[1]
+        # Diff per row against the mirror (which is exactly what is on device)
+        # and do nothing at all when nothing moved. The steady-state decode
+        # loop is the unchanged case: vLLM re-sends the same block list every
+        # token and only extends it when a request crosses a 64-token block
+        # boundary, so this makes the common step cost one comparison instead
+        # of a full-width host copy plus a mirror clone plus the generator's
+        # own diff.
+        changed = False
         for i, slot in enumerate(at):
-            self._pt_mirror[slot, :width] = rows[i, :width]
-        # Pass a copy, not self._pt_mirror itself: refresh_page_table's
-        # only_if_changed compares against whatever object it was handed last
-        # time (torch.as_tensor does not copy an already-int32 tensor), so
-        # handing it the SAME mutable mirror object every call would make
-        # every future in-place edit "invisible" -- the stored previous value
-        # and the new value would always be the same object by the time the
-        # comparison runs, permanently defeating change detection.
-        self.generator.refresh_page_table(self._pt_mirror.clone(), only_if_changed=True)
+            row = rows[i, :width]
+            if not torch.equal(self._pt_mirror[slot, :width], row):
+                self._pt_mirror[slot, :width] = row
+                changed = True
+        if not changed:
+            self.page_table_calls_skipped += 1
+            return
+        self.page_table_calls_written += 1
+        # Pass a copy, not self._pt_mirror itself: refresh_page_table stores
+        # whatever object it is handed as the "previous value" for its own
+        # only_if_changed diff (torch.as_tensor does not copy an already-int32
+        # tensor), so handing it the SAME mutable mirror object would alias
+        # that snapshot to the live mirror and make every later in-place edit
+        # invisible to it. The clone only happens on a real change now, so it
+        # is off the per-token path entirely.
+        self.generator.refresh_page_table(self._pt_mirror.clone(), only_if_changed=False)
 
     # ------------------------------------------------------------------ prefill
 
@@ -596,6 +673,7 @@ class GLM47FlashForCausalLM:
             )
             return out.unsqueeze(1)  # [sz, 1, vocab]
 
+        self._maybe_log_counters()
         # Steady-state async path: no host token/position write here when
         # reset_batch is False -- decode_step_traced() replays the model trace
         # (which advances its own device-resident position) and the split
@@ -608,6 +686,38 @@ class GLM47FlashForCausalLM:
         return torch.tensor(tokens_out, dtype=torch.int64).unsqueeze(1)
 
     # ------------------------------------------------------------------ async decode split
+
+    def _maybe_log_counters(self) -> None:
+        """One line per ``_counter_log_every`` traced decode steps, as deltas."""
+        self._decode_calls += 1
+        if self._counter_log_every <= 0 or self._decode_calls % self._counter_log_every:
+            return
+        gen = self.generator
+        now = {
+            "model_trace_replays": gen.counters["model_trace_replays"],
+            "sampling_trace_replays": gen.counters["sampling_trace_replays"],
+            "eager_decode_steps": gen.counters["eager_decode_steps"],
+            "eager_sampling_steps": gen.counters["eager_sampling_steps"],
+            "full_logits_readbacks": gen.counters["full_logits_readbacks"],
+            "host_argmax_calls": gen.counters["host_argmax_calls"],
+            "token_input_refreshes": gen.counters["token_input_refreshes"],
+            "position_refreshes": gen.counters["position_refreshes"],
+            "page_table_refreshes": gen.counters["page_table_refreshes"],
+            "trace_recaptures": gen.counters["trace_recaptures"],
+            "decode_trace_bucket_switches": gen.counters["decode_trace_bucket_switches"],
+            "token_readbacks": gen.counters["token_readbacks"],
+            "page_table_calls_written": self.page_table_calls_written,
+            "page_table_calls_skipped": self.page_table_calls_skipped,
+        }
+        prev = self._counter_snapshot or dict.fromkeys(now, 0)
+        delta = {k: now[k] - prev.get(k, 0) for k in now}
+        self._counter_snapshot = now
+        logger.info(
+            "GLM-4.7-Flash decode counters over the last {} decode calls (deltas): {} | kc_replays(total)={}",
+            self._counter_log_every,
+            " ".join(f"{k}={v}" for k, v in delta.items()),
+            {str(k): v for k, v in gen.kc_replays.items()},
+        )
 
     def read_decode_output(self, tt_out, async_read: bool = False):
         if isinstance(tt_out, torch.Tensor):

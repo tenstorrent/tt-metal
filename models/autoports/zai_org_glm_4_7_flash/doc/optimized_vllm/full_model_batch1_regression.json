@@ -1,0 +1,36 @@
+{
+  "statistic_note": "Both mean and median are reported because the baseline this guards is a MEAN: tests/test_full_model_perf.py's bench() divides total wall time by iterations. Comparing this probe's median against that mean is not like-for-like and would hide up to a few percent of regression; use the mean-to-mean row.",
+  "purpose": "Batch-1 full-model traced decode after this stage's model.py/generator.py changes, against doc/optimized_full_model/perf.json's recorded 21.760 (model only) / 23.013 (token out) ms per token. Writes only into doc/optimized_vllm/.",
+  "batch": 1,
+  "iters": 64,
+  "traced_model_only_ms_per_token_mean": 20.675,
+  "token_out_ms_per_token_mean": 21.83,
+  "token_out_tokens_per_s_per_user_mean": 45.809,
+  "traced_model_only_ms_per_token": 20.676,
+  "token_out_ms_per_token": 21.826,
+  "token_out_tokens_per_s_per_user": 45.817,
+  "median_vs_mean_note": "the *_mean fields are the like-for-like comparison; see statistic_note",
+  "recorded_optimized_full_model": {
+    "traced_model_only_no_sampling": 21.76,
+    "token_out_incl_readback": 23.013,
+    "source": "doc/optimized_full_model/perf.json",
+    "statistic": "mean (tests/test_full_model_perf.py bench(): total wall time / iterations)"
+  },
+  "counters": {
+    "model_trace_replays": 128,
+    "sampling_trace_replays": 64,
+    "eager_decode_steps": 0,
+    "token_input_refreshes": 7,
+    "position_refreshes": 6,
+    "rope_index_refreshes": 0,
+    "page_table_refreshes": 1,
+    "device_synchronizations": 4,
+    "token_readbacks": 65,
+    "full_logits_readbacks": 0,
+    "host_argmax_calls": 0,
+    "kv_cache_resets": 3,
+    "trace_recaptures": 0,
+    "decode_trace_bucket_switches": 0,
+    "eager_sampling_steps": 0
+  }
+}

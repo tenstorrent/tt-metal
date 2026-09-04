@@ -1,0 +1,94 @@
+{
+  "offending_op": "none (no miss on a fresh slot)",
+  "slot_program_vs_prompt_length": [
+    {
+      "slot": 7,
+      "prompt_len": 100,
+      "compiled": 0
+    },
+    {
+      "slot": 7,
+      "prompt_len": 200,
+      "compiled": 0
+    },
+    {
+      "slot": 7,
+      "prompt_len": 400,
+      "compiled": 0
+    }
+  ],
+  "purpose": "Attribute the per-served-prefill decode-trace recapture to the exact call that grows the program cache, on the reduced 2-layer model at the CI serving-burst prompt length.",
+  "prompt_len": 100,
+  "per_slot": [
+    {
+      "slot": 0,
+      "entries_start": 648,
+      "compiled_by_apply_prefill_sampling_state": 0,
+      "compiled_by_prefill_and_sample": 0,
+      "recaptured": false,
+      "compiled_by_recapture": 0
+    },
+    {
+      "slot": 1,
+      "entries_start": 648,
+      "compiled_by_apply_prefill_sampling_state": 0,
+      "compiled_by_prefill_and_sample": 0,
+      "recaptured": false,
+      "compiled_by_recapture": 0
+    },
+    {
+      "slot": 2,
+      "entries_start": 648,
+      "compiled_by_apply_prefill_sampling_state": 0,
+      "compiled_by_prefill_and_sample": 0,
+      "recaptured": false,
+      "compiled_by_recapture": 0
+    },
+    {
+      "slot": 3,
+      "entries_start": 648,
+      "compiled_by_apply_prefill_sampling_state": 0,
+      "compiled_by_prefill_and_sample": 0,
+      "recaptured": false,
+      "compiled_by_recapture": 0
+    },
+    {
+      "slot": 4,
+      "entries_start": 648,
+      "compiled_by_apply_prefill_sampling_state": 0,
+      "compiled_by_prefill_and_sample": 0,
+      "recaptured": false,
+      "compiled_by_recapture": 0
+    },
+    {
+      "slot": 5,
+      "entries_start": 648,
+      "compiled_by_apply_prefill_sampling_state": 0,
+      "compiled_by_prefill_and_sample": 0,
+      "recaptured": false,
+      "compiled_by_recapture": 0
+    }
+  ],
+  "repeat_same_slot": [
+    {
+      "iter": 0,
+      "compiled": 0,
+      "recaptured": false
+    },
+    {
+      "iter": 1,
+      "compiled": 0,
+      "recaptured": false
+    },
+    {
+      "iter": 2,
+      "compiled": 0,
+      "recaptured": false
+    },
+    {
+      "iter": 3,
+      "compiled": 0,
+      "recaptured": false
+    }
+  ]
+}

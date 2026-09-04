@@ -1,0 +1,6 @@
+ADVISORY CONTEXT CAP: doc/optimized_vllm/probe_scripts/moe_prologue_ablation.py:89 mentions cap 1024 below 202752: max_context=1024,
+ADVISORY CONTEXT CAP: doc/optimized_vllm/probe_scripts/moe_union_width.py:129 mentions cap 1024 below 202752: max_context=1024,
+ADVISORY CONTEXT CAP: doc/vllm_integration/work_log.md:431 mentions cap 8192 below 202752: **Evidence (A/B on hardware, one p150, `--max-model-len 8192`, tests run in
+ADVISORY CONTEXT CAP: doc/vllm_integration/work_log.md:534 mentions cap 8192 below 202752: **Evidence (one p150, `--max-model-len 8192`, tests in isolation).**
+ADVISORY CONTEXT CAP: doc/vllm_integration/work_log.md:799 mentions cap 8192 below 202752: notes about an unrelated `--max-model-len 8192` debugging mention in VS-007/
+Context contract OK for models/autoports/zai_org_glm_4_7_flash: target=202752, supported=202752 (full HF context).

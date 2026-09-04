@@ -1,0 +1,20 @@
+{
+  "purpose": "Split the compact decode MoE's routing prologue into the part the union path pays too and the compact-specific tail, and measure two adapted alternatives for that tail. One real MoE layer, B=32, kc=4, one live row, traced warmed replay.",
+  "config": {
+    "batch_rows": 32,
+    "kc": 4,
+    "n_experts": 64,
+    "iters": 40
+  },
+  "ms_per_layer": {
+    "routing_weights_only": 0.1202,
+    "union_prologue": 0.1234,
+    "compact_prologue_candidate_onehot_matmul": 0.1678,
+    "compact_prologue_candidate_embedding": 0.1604,
+    "compact_prologue_first_implementation_repeat_gather": 0.1904,
+    "compact_prologue_SHIPPED_embedding_both_indices": 0.1599
+  },
+  "moe_layers_in_model": 46,
+  "shipped_variant": "compact_prologue_SHIPPED_embedding_both_indices",
+  "note": "The repeat+gather form was the stage's first implementation and is NOT what ships; the embedding form that produces both the uint16 stick sparse_matmul's indexed mode needs and the uint32 index ttnn.embedding needs is. Keys renamed after a stage-review round found the old name misleading."
+}

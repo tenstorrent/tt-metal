@@ -609,8 +609,15 @@ class GLM47FlashModel:
             memory_config=self.res_mem,
         )
 
-    def lm_head_decode(self, normed):
+    def lm_head_decode(self, normed, out=None):
         """Sampler-ready logits ``[1, 1, 32, vocab]`` from the normed residual.
+
+        ``out`` (optional) is a caller-owned persistent logits buffer the
+        matmul writes into instead of allocating its own. The generator uses it
+        so that several decode traces captured at different MoE ``kc`` buckets
+        all land their logits in the *same* device tensor, which is what lets
+        one captured sampling trace serve every decode trace (the sampler binds
+        to the tensor identity it was captured against).
 
         Consumes ``normed``. The mcast_in0 config wants an interleaved in0, so
         the width-sharded norm output is gathered back to L1 interleaved first
@@ -633,6 +640,7 @@ class GLM47FlashModel:
             program_config=self.lm_head_pc_decode,
             memory_config=self.decode_logits_memory_config,
             compute_kernel_config=self.ck_lm_head,
+            optional_output_tensor=out,
         )
         ttnn.deallocate(x)
         return logits
@@ -958,6 +966,41 @@ class GLM47FlashModel:
 
     # ------------------------------------------------------------------ decode
 
+    def allocate_decode_logits(self):
+        """Persistent sampler-ready logits buffer ``[1, 1, 32, vocab]``.
+
+        Allocated by the generator *before* any trace capture, so it is not one
+        of the post-capture allocations Metal's trace-allocation tracker flags
+        as unsafe, and so every decode trace can write into the same address.
+        """
+        import torch
+
+        return ttnn.from_torch(
+            torch.zeros(1, 1, SAMPLER_ROWS, self.vocab_size),
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=self.decode_logits_memory_config,
+        )
+
+    def decode_active_mask(self, cur_pos, batch):
+        """``[1, 1, B, 1]`` bf16: 1.0 for a live decode row, 0.0 for an
+        inactive one, derived on device from ``cur_pos`` (``-1`` = inactive).
+
+        Derived rather than carried as a separate persistent tensor for the
+        same reason ``decode_rope_indices`` is: there is exactly one position
+        state, so the mask cannot drift out of step with it inside a trace.
+        """
+        c = ttnn.clamp(cur_pos, min=-1, max=0)  # inactive -> -1, live -> 0
+        live = ttnn.add(c, 1)  # inactive -> 0, live -> 1
+        ttnn.deallocate(c)
+        live = ttnn.to_layout(ttnn.reshape(live, (1, 1, 1, batch)), ttnn.TILE_LAYOUT)
+        mask = ttnn.typecast(live, ttnn.bfloat16)
+        ttnn.deallocate(live)
+        out = ttnn.transpose(mask, -2, -1)  # [1, 1, B, 1]
+        ttnn.deallocate(mask)
+        return out
+
     def decode_rope_indices(self, cur_pos, batch):
         """RoPE index tensor ``[1, B]`` uint32 derived from ``cur_pos`` on device.
 
@@ -983,6 +1026,8 @@ class GLM47FlashModel:
         *,
         rot_idxs=None,
         advance_positions: bool = True,
+        moe_kc: int | None = None,
+        logits_out=None,
     ):
         """One device-only decode step over persistent device tensors.
 
@@ -999,6 +1044,18 @@ class GLM47FlashModel:
         When ``advance_positions`` the current position is incremented on
         device at the end of the graph, so a captured trace walks the decode
         positions itself with no host refresh.
+
+        ``moe_kc`` selects the compact indexed batch>1 MoE decode path with a
+        ``kc``-wide expert axis (``OptimizedDecoder._moe_decode_compact``) and
+        turns on the inactive-row routing mask that makes a row-count-derived
+        ``kc`` bound sound. It is part of the captured program's shapes, so a
+        trace is only valid for the ``kc`` it was captured with; the generator
+        keeps one trace per bucket. ``None`` keeps the historical union path.
+
+        ``logits_out``, when given, is the persistent buffer the LM head writes
+        into instead of allocating a fresh one, so decode traces captured at
+        different ``kc`` share one logits tensor identity (and therefore one
+        captured sampling trace).
         """
         batch = self.max_batch_size
         if tokens.shape[-1] == batch:
@@ -1012,21 +1069,32 @@ class GLM47FlashModel:
         if owns_rot:
             rot_idxs = self.decode_rope_indices(cur_pos, batch)
         shared_mats = self._decode_rope_lookup(rot_idxs, batch)
+        # One mask for the whole stack: it is derived from the single position
+        # tensor, so every layer sees the same live-row set by construction.
+        active_mask = self.decode_active_mask(cur_pos, batch) if moe_kc is not None else None
         caches = list(_iter_layer_caches(kv_cache))
         try:
             for i, layer in enumerate(self.layers):
                 nxt = layer.decode_forward(
-                    x, kv_cache=caches[i], page_table=page_table, cur_pos_tensor=cur_pos, rot_idxs=rot_idxs
+                    x,
+                    kv_cache=caches[i],
+                    page_table=page_table,
+                    cur_pos_tensor=cur_pos,
+                    rot_idxs=rot_idxs,
+                    moe_kc=moe_kc,
+                    active_mask=active_mask,
                 )
                 ttnn.deallocate(x)
                 x = nxt
         finally:
             self._release_decode_rope_lookup(shared_mats)
+            if active_mask is not None:
+                ttnn.deallocate(active_mask)
         if owns_rot:
             ttnn.deallocate(rot_idxs)
         normed = self._final_norm_decode(x)
         ttnn.deallocate(x)
-        logits = self.lm_head_decode(normed)  # consumes normed
+        logits = self.lm_head_decode(normed, out=logits_out)  # consumes normed
         if advance_positions:
             ttnn.plus_one(cur_pos, skip_negative_entries=True)
             if not owns_rot:

@@ -1,0 +1,104 @@
+{
+  "source": "vllm bench serve",
+  "profile": "single_user_decode",
+  "comparison_scope": "Primary batch-1 serving decode profile for headline t/s/u. TTFT is reported separately and is not blended into the TPOT-derived decode value beyond normal single-request timing.",
+  "raw_result_file": "/home/stisi/tt-metal/models/autoports/zai_org_glm_4_7_flash/readiness_vllm/vllm_result.json",
+  "command": [
+    "/home/stisi/tt-metal/python_env/bin/python",
+    "-m",
+    "vllm.entrypoints.cli.main",
+    "bench",
+    "serve",
+    "--backend",
+    "vllm",
+    "--model",
+    "zai-org/GLM-4.7-Flash",
+    "--base-url",
+    "http://localhost:8000",
+    "--endpoint",
+    "/v1/completions",
+    "--dataset-name",
+    "random",
+    "--random-input-len",
+    "128",
+    "--random-output-len",
+    "128",
+    "--num-prompts",
+    "1",
+    "--ignore-eos",
+    "--percentile-metrics",
+    "ttft,tpot,itl,e2el",
+    "--save-result",
+    "--result-filename",
+    "/home/stisi/tt-metal/models/autoports/zai_org_glm_4_7_flash/readiness_vllm/vllm_result.json",
+    "--max-concurrency",
+    "1",
+    "--temperature",
+    "0.0"
+  ],
+  "command_string": "/home/stisi/tt-metal/python_env/bin/python -m vllm.entrypoints.cli.main bench serve --backend vllm --model zai-org/GLM-4.7-Flash --base-url http://localhost:8000 --endpoint /v1/completions --dataset-name random --random-input-len 128 --random-output-len 128 --num-prompts 1 --ignore-eos --percentile-metrics ttft,tpot,itl,e2el --save-result --result-filename /home/stisi/tt-metal/models/autoports/zai_org_glm_4_7_flash/readiness_vllm/vllm_result.json --max-concurrency 1 --temperature 0.0",
+  "config": {
+    "prompt_len": 128,
+    "output_len": 128,
+    "num_requests": 1,
+    "concurrency": 1,
+    "temperature": 0.0,
+    "generation_config_mode": "explicit",
+    "dataset_name": "random",
+    "ignore_eos": true
+  },
+  "elapsed_s": 6.023843595001381,
+  "completed_requests": 1,
+  "total_input_tokens": 128.0,
+  "total_output_tokens": 128.0,
+  "requested_output_tokens": 128,
+  "missing_output_tokens": 0,
+  "ttft_ms": {
+    "p50": 281.40038999845274,
+    "p99": 281.40038999845274,
+    "mean": 281.40038999845274
+  },
+  "tpot_ms": {
+    "p50": 45.213184905523526,
+    "p99": 45.213184905523526,
+    "mean": 45.213184905523526
+  },
+  "itl_ms": {
+    "p50": 45.197689993074164,
+    "p99": 45.572545559844,
+    "mean": 45.213186244185145
+  },
+  "e2el_ms": {
+    "p50": 6023.474872999941,
+    "p99": 6023.474872999941,
+    "mean": 6023.474872999941
+  },
+  "itl_p50_decode_tps": 22.12502453451126,
+  "itl_mean_decode_tps": 22.11744146053431,
+  "vllm_mean_tpot_decode_tps": 22.11744211538245,
+  "mean_per_request_decode_tps": 22.11744211538245,
+  "mean_per_request_decode_tps_basis": "1000 / mean_tpot_ms from vllm bench serve; this is the TPOT-derived decode value. For burst-serving profiles, scheduler admission and chunked prefill can affect TPOT, so use the single-user profile for headline decode t/s/u.",
+  "output_throughput_tok_per_s": 21.248891672123612,
+  "request_throughput_per_s": 0.16600696618846572,
+  "total_token_throughput_tok_per_s": 42.497783344247225,
+  "secondary_benchmarks": {
+    "ci_serving_burst": {
+      "summary_file": "/home/stisi/tt-metal/models/autoports/zai_org_glm_4_7_flash/readiness_vllm/vllm_ci_serving_benchmark.json",
+      "raw_result_file": "/home/stisi/tt-metal/models/autoports/zai_org_glm_4_7_flash/readiness_vllm/vllm_ci_serving_result.json",
+      "log_file": "/home/stisi/tt-metal/models/autoports/zai_org_glm_4_7_flash/readiness_vllm/vllm_ci_serving_benchmark.log",
+      "config": {
+        "prompt_len": 100,
+        "output_len": 100,
+        "num_requests": 32,
+        "concurrency": null,
+        "temperature": 0.0,
+        "generation_config_mode": "explicit",
+        "dataset_name": "random",
+        "ignore_eos": true
+      },
+      "output_throughput_tok_per_s": 177.25414812787565,
+      "vllm_mean_tpot_decode_tps": 11.092137627551228,
+      "comparison_scope": "vLLM-nightly-style 100/100/32 serving-burst profile for CI parity and serving capacity. Do not use as headline decode t/s/u because burst admission and chunked prefill can affect TPOT."
+    }
+  }
+}

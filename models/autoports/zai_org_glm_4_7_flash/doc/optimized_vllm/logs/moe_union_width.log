@@ -1,0 +1,36 @@
+2026-09-04 02:50:21.513 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/stisi/.cache/ttnn,model_cache_path=/home/stisi/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-09-04 02:50:22.767 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:222)
+2026-09-04 02:50:22.767 | info     |             UMD | Cluster constructor started. (cluster.cpp:406)
+2026-09-04 02:50:22.767 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-09-04 02:50:22.767 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-09-04 02:50:22.780 | info     |             UMD | Established firmware bundle version: 19.12.0 (topology_discovery.cpp:576)
+2026-09-04 02:50:22.780 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-09-04 02:50:22.814 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-09-04 02:50:22.814 | info     |             UMD | IOMMU: disabled (cluster.cpp:147)
+2026-09-04 02:50:22.814 | info     |             UMD | KMD version: 2.8.1 (cluster.cpp:150)
+2026-09-04 02:50:22.814 | info     |             UMD | Cluster constructor completed. (cluster.cpp:665)
+2026-09-04 02:50:22.816 | info     |             UMD | Starting devices in cluster (cluster.cpp:1205)
+2026-09-04 02:50:22.937 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1213)
+2026-09-04 02:50:23.038 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
+2026-09-04 02:50:23.038 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
+2026-09-04 02:50:23.038 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-09-04 02:50:23.039 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3368)
+2026-09-04 02:50:23.039 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3376)
+2026-09-04 02:50:23.079 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 02:53:14.713 | INFO     | models.autoports.zai_org_glm_4_7_flash.tt.generator_vllm:allocate_kv_cache:361 - GLM-4.7-Flash allocate_kv_cache: overriding vLLM's requested cache dtype torch.bfloat16 with the selected policy DataType.BFLOAT8_B (doc/datatype_sweep/selected_precision_config.json); num_blocks=7362 block_size=64 head_size=576
+{"live_rows": 1, "bound_live_rows_x_top_k": 4, "moe_layers_sampled": 46, "union_width_min": 4, "union_width_median": 4, "union_width_max": 4, "union_width_mean": 4.0}
+{"live_rows": 2, "bound_live_rows_x_top_k": 8, "moe_layers_sampled": 46, "union_width_min": 4, "union_width_median": 6, "union_width_max": 8, "union_width_mean": 6.41}
+{"live_rows": 4, "bound_live_rows_x_top_k": 16, "moe_layers_sampled": 46, "union_width_min": 6, "union_width_median": 11, "union_width_max": 15, "union_width_mean": 10.41}
+{"live_rows": 8, "bound_live_rows_x_top_k": 32, "moe_layers_sampled": 46, "union_width_min": 11, "union_width_median": 17, "union_width_max": 22, "union_width_mean": 16.65}
+{"live_rows": 16, "bound_live_rows_x_top_k": 64, "moe_layers_sampled": 46, "union_width_min": 15, "union_width_median": 24, "union_width_max": 31, "union_width_mean": 23.43}
+{"live_rows": 32, "bound_live_rows_x_top_k": 64, "moe_layers_sampled": 46, "union_width_min": 20, "union_width_median": 32, "union_width_max": 48, "union_width_mean": 32.17}
+synthetic randn activations, 32 rows, union width: 52
+WROTE /home/stisi/tt-metal/models/autoports/zai_org_glm_4_7_flash/doc/optimized_vllm/moe_union_width.json
+2026-09-04 02:53:20.917 | info     |    BuildKernels | JIT cache stats: 365/365 hits (100.0%) [365 cached, 102 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-09-04 02:53:20.917 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-09-04 02:53:20.938 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:542)
+2026-09-04 02:53:20.938 | info     |             UMD | Closing devices in cluster (cluster.cpp:1218)
+2026-09-04 02:53:21.355 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1227)
+2026-09-04 02:53:21.355 | info     |             UMD | Cluster destructor started. (cluster.cpp:933)
+2026-09-04 02:53:21.355 | info     |             UMD | Cluster destructor completed. (cluster.cpp:936)
