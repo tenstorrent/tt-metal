@@ -166,8 +166,9 @@ void preload_pattern(
     const CoreCoord& sender_logical,
     uint32_t num_entries,
     uint32_t num_receivers,
-    uint32_t entry_label) {
-    constexpr uint32_t words_per_entry = kEntrySize / sizeof(uint32_t);
+    uint32_t entry_label,
+    uint32_t entry_size = kEntrySize) {
+    const uint32_t words_per_entry = entry_size / sizeof(uint32_t);
     std::vector<uint32_t> pattern(static_cast<size_t>(num_receivers) * num_entries * words_per_entry, 0);
     for (uint32_t r = 0; r < num_receivers; ++r) {
         for (uint32_t i = 0; i < num_entries; ++i) {
@@ -186,7 +187,8 @@ void preload_pattern(
 //
 // num_entries must fit the ring so a sender can publish its whole batch even if its receivers
 // start late.
-void run_push_and_pop(distributed::MeshDevice& mesh_device, const PipeSet& set, uint32_t num_entries) {
+void run_push_and_pop(
+    distributed::MeshDevice& mesh_device, const PipeSet& set, uint32_t num_entries, uint32_t entry_size = kEntrySize) {
     Program program = CreateProgram();
 
     const uint32_t pattern_base = static_cast<uint32_t>(drisc_pattern_base(mesh_device));
@@ -194,13 +196,12 @@ void run_push_and_pop(distributed::MeshDevice& mesh_device, const PipeSet& set, 
     for (size_t s = 0; s < set.pipes.size(); ++s) {
         experimental::PrefetcherPipe& pipe = *set.pipes[s];
         const auto config_page_addr = static_cast<uint32_t>(experimental::sender_state_drisc_l1_base(pipe));
-        const uint8_t pipe_id = experimental::AttachPrefetcherPipe(
-            program, pipe, set.mapping[s].second, experimental::prefetcher_pipe_fixed_entry_size(pipe));
+        const uint8_t pipe_id = experimental::AttachPrefetcherPipe(program, pipe, set.mapping[s].second, entry_size);
         CreateKernel(
             program,
             kSenderKernel,
             set.mapping[s].first,
-            DramConfig{.noc = NOC::NOC_0, .compile_args = {config_page_addr, num_entries, pattern_base}});
+            DramConfig{.noc = NOC::NOC_0, .compile_args = {config_page_addr, num_entries, pattern_base, entry_size}});
         // One kernel per pipe rather than one for all receivers: the pipe id is a compile-time arg
         // of the shared receiver kernel, and each pipe's receivers hold a different id.
         CreateKernel(
@@ -210,7 +211,7 @@ void run_push_and_pop(distributed::MeshDevice& mesh_device, const PipeSet& set, 
             DataMovementConfig{
                 .processor = DataMovementProcessor::RISCV_0,
                 .noc = NOC::RISCV_0_default,
-                .compile_args = {pipe_id, experimental::prefetcher_pipe_fixed_entry_size(pipe), num_entries, 0u}});
+                .compile_args = {pipe_id, entry_size, num_entries, 0u}});
     }
 
     distributed::MeshWorkload workload;
@@ -224,13 +225,14 @@ std::vector<uint32_t> read_ring_slot(
     distributed::MeshDevice& mesh_device,
     experimental::PrefetcherPipe& pipe,
     const CoreCoord& receiver_logical,
-    uint32_t slot) {
+    uint32_t slot,
+    uint32_t entry_size) {
     std::vector<uint32_t> out;
     detail::ReadFromDeviceL1(
         mesh_device.get_devices().at(0),
         receiver_logical,
-        pipe.buffer_address() + slot * kEntrySize,
-        kEntrySize,
+        pipe.buffer_address() + slot * entry_size,
+        entry_size,
         out,
         CoreType::WORKER);
     return out;
@@ -242,9 +244,10 @@ void expect_ring_slot(
     const CoreCoord& receiver_logical,
     uint32_t slot,
     uint32_t expected_receiver_label,
-    uint32_t expected_entry_label) {
-    const auto got = read_ring_slot(mesh_device, pipe, receiver_logical, slot);
-    ASSERT_EQ(got.size(), kEntrySize / sizeof(uint32_t));
+    uint32_t expected_entry_label,
+    uint32_t entry_size = kEntrySize) {
+    const auto got = read_ring_slot(mesh_device, pipe, receiver_logical, slot, entry_size);
+    ASSERT_EQ(got.size(), entry_size / sizeof(uint32_t));
     for (uint32_t w = 0; w < got.size(); ++w) {
         const uint32_t expected = pattern_word(expected_receiver_label, expected_entry_label, w);
         ASSERT_EQ(got[w], expected) << "receiver " << receiver_logical.str() << " ring slot " << slot << " word " << w
@@ -278,10 +281,12 @@ void expect_credits_drained(
     }
 }
 
-uint32_t credit_units(distributed::MeshDevice& mesh_device, uint32_t num_entries) {
+// Credit is counted in L1_ALIGNMENT-byte units, so a run's expected credit is the bytes it moved --
+// payload plus any pad the sender published to snap onto a new entry grid.
+uint32_t credit_units(distributed::MeshDevice& mesh_device, uint32_t bytes) {
     const uint32_t l1_alignment =
         MetalContext::instance(context_id_of(mesh_device)).hal().get_alignment(HalMemType::L1);
-    return num_entries * kEntrySize / l1_alignment;
+    return bytes / l1_alignment;
 }
 
 // Receivers in bank-local slab order, which is the order the sender's NOC XY table uses and hence
@@ -316,7 +321,7 @@ TEST_F(PrefetcherPipeDramSenderFixture, SmokeOneSenderFourReceivers) {
                 *mesh_device_, *set.pipes[0], receivers[r], /*slot=*/i, /*receiver_label=*/r, /*entry_label=*/i);
         }
     }
-    expect_credits_drained(*mesh_device_, set, credit_units(*mesh_device_, kRingDepth));
+    expect_credits_drained(*mesh_device_, set, credit_units(*mesh_device_, kRingDepth * kEntrySize));
 }
 
 TEST_F(PrefetcherPipeDramSenderFixture, CursorPersistsAcrossPrograms) {
@@ -345,7 +350,7 @@ TEST_F(PrefetcherPipeDramSenderFixture, CursorPersistsAcrossPrograms) {
                 *mesh_device_, *set.pipes[0], receivers[r], /*slot=*/i, /*receiver_label=*/r, /*entry_label=*/i);
         }
     }
-    expect_credits_drained(*mesh_device_, set, credit_units(*mesh_device_, 2 * kBatch));
+    expect_credits_drained(*mesh_device_, set, credit_units(*mesh_device_, 2 * kBatch * kEntrySize));
 }
 
 TEST_F(PrefetcherPipeDramSenderFixture, DualSendersSplitBankReceivers) {
@@ -382,7 +387,7 @@ TEST_F(PrefetcherPipeDramSenderFixture, DualSendersSplitBankReceivers) {
             }
         }
     }
-    expect_credits_drained(*mesh_device_, set, credit_units(*mesh_device_, kRingDepth));
+    expect_credits_drained(*mesh_device_, set, credit_units(*mesh_device_, kRingDepth * kEntrySize));
 }
 
 TEST_F(PrefetcherPipeDramSenderFixture, PipesOnDistinctSendersShareOneDriscOffset) {
@@ -422,18 +427,76 @@ TEST_F(PrefetcherPipeDramSenderFixture, RejectsDuplicateBank) {
     EXPECT_ANY_THROW(make_pipe_set(*mesh_device_, {{0, first}, {0, second}}, /*dual_senders_per_bank=*/true));
 }
 
-TEST_F(PrefetcherPipeDramSenderFixture, AttachRejectsMismatchedEntrySize) {
-    // A DRAM sender never Attaches, so it cannot answer the resize a differing entry size starts.
-    // Without this rejection the receivers would spin on pad credits nobody publishes.
+TEST_F(PrefetcherPipeDramSenderFixture, AttachRejectsEntrySizeThatDoesNotDivideRing) {
+    // A DRAM sender addresses its ring in whole entries, with no trailing-gap credit. An entry size
+    // the ring is not a multiple of would put it on a different grid than the receivers after the
+    // first wrap. Any other size is fine: the sender snaps its cursor and publishes pad credits.
     const CoreRangeSet receiver_cores(CoreRange({0, 0}, {1, 0}));
     const PipeSet set =
         make_pipe_set(*mesh_device_, {{/*bank_id=*/0, receiver_cores}}, /*dual_senders_per_bank=*/false);
+    const uint32_t ring_size = set.pipes[0]->ring_size();
 
     Program program = CreateProgram();
-    // Half the pipe's entry size: still L1-aligned and within the ring, so only the DRAM-sender
-    // guard can reject it.
-    EXPECT_ANY_THROW(experimental::AttachPrefetcherPipe(program, *set.pipes[0], receiver_cores, kEntrySize / 2));
+    // L1-aligned and well inside the ring, so only the divisibility rule can reject it.
+    constexpr uint32_t kRingIndivisibleEntrySize = 48;
+    ASSERT_NE(ring_size % kRingIndivisibleEntrySize, 0u);
+    EXPECT_ANY_THROW(
+        experimental::AttachPrefetcherPipe(program, *set.pipes[0], receiver_cores, kRingIndivisibleEntrySize));
+    EXPECT_NO_THROW(experimental::AttachPrefetcherPipe(program, *set.pipes[0], receiver_cores, kEntrySize / 2));
     EXPECT_NO_THROW(experimental::AttachPrefetcherPipe(program, *set.pipes[0], receiver_cores, kEntrySize));
+}
+
+TEST_F(PrefetcherPipeDramSenderFixture, BlockSizeChangeAcrossPrograms) {
+    // Two consumers of one pipe set that read different block sizes. The ring size is fixed at
+    // creation and both sizes divide it, so the DRAM sender snaps its derived cursor onto the new
+    // grid and publishes the skipped bytes as pad credits, which the receivers' own resize
+    // consumes. Neither endpoint stores a cursor, so the two snaps have to agree by arithmetic.
+    constexpr uint32_t kNumReceivers = 2;
+    constexpr uint32_t kFirstEntrySize = kEntrySize;
+    constexpr uint32_t kSecondEntrySize = 2 * kEntrySize;
+    // Leaves the cursor at 3/4 of the ring, which is not on the second size's grid: the snap has to
+    // wrap it to zero and credit the quarter ring it skips.
+    constexpr uint32_t kFirstBatch = 3;
+    constexpr uint32_t kSecondBatch = 2;
+    constexpr uint32_t kRingBytes = kEntrySize * kRingDepth;
+    static_assert(kRingBytes % kFirstEntrySize == 0);
+    static_assert(kRingBytes % kSecondEntrySize == 0);
+    static_assert(kFirstBatch * kFirstEntrySize < kRingBytes);
+    constexpr uint32_t kPadBytes = kRingBytes - kFirstBatch * kFirstEntrySize;
+    const CoreRangeSet receiver_cores(CoreRange({0, 0}, {kNumReceivers - 1, 0}));
+
+    const PipeSet set =
+        make_pipe_set(*mesh_device_, {{/*bank_id=*/0, receiver_cores}}, /*dual_senders_per_bank=*/false);
+    const CoreCoord sender_logical = set.mapping.at(0).first;
+
+    preload_pattern(*mesh_device_, sender_logical, kFirstBatch, kNumReceivers, /*entry_label=*/0, kFirstEntrySize);
+    run_push_and_pop(*mesh_device_, set, kFirstBatch, kFirstEntrySize);
+
+    preload_pattern(
+        *mesh_device_, sender_logical, kSecondBatch, kNumReceivers, /*entry_label=*/kFirstBatch, kSecondEntrySize);
+    run_push_and_pop(*mesh_device_, set, kSecondBatch, kSecondEntrySize);
+
+    const auto receivers = receivers_in_slab_order(receiver_cores);
+    for (uint32_t r = 0; r < receivers.size(); ++r) {
+        // The second batch starts over at ring offset 0: the snap wrapped the cursor rather than
+        // leaving a partial entry at the end of the ring.
+        for (uint32_t i = 0; i < kSecondBatch; ++i) {
+            expect_ring_slot(
+                *mesh_device_,
+                *set.pipes[0],
+                receivers[r],
+                /*slot=*/i,
+                /*receiver_label=*/r,
+                /*entry_label=*/kFirstBatch + i,
+                kSecondEntrySize);
+        }
+    }
+    // Pad bytes are credited like payload, so sent == acked only if both endpoints snapped by the
+    // same amount.
+    expect_credits_drained(
+        *mesh_device_,
+        set,
+        credit_units(*mesh_device_, kFirstBatch * kFirstEntrySize + kPadBytes + kSecondBatch * kSecondEntrySize));
 }
 
 }  // namespace tt::tt_metal

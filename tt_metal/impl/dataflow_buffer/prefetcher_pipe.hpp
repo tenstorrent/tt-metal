@@ -91,10 +91,12 @@ public:
     // programmable DRAM core (CreatePrefetcherPipesForTensorPrefetcher).
     SenderCoreType sender_core_type() const;
 
-    // The single entry size a DRAM-sender pipe is stamped with. A DRAM sender never Attaches, so
-    // it can neither observe nor answer a receiver-side resize; every Attach must use this size.
-    // 0 for a worker-sender pipe, which resizes normally.
-    uint32_t fixed_entry_size() const { return fixed_entry_size_; }
+    // The entry size a DRAM-sender pipe is created at: the ring is this many bytes times the
+    // requested depth, and it is what word[5] (applied_entry_size) starts out holding, so a
+    // consumer attaching at this size skips the resize handshake on the first program. Later
+    // Attaches and later requests may use any size that divides the ring. 0 for a worker-sender
+    // pipe, which is sized in bytes and resizes normally.
+    uint32_t initial_entry_size() const { return initial_entry_size_; }
 
 private:
     // Tag selecting the DRAM-sender constructor. Private so the only way in is
@@ -125,7 +127,7 @@ private:
         CoreCoord dram_sender_logical,
         const CoreRangeSet& receiver_cores,
         uint32_t ring_size,
-        uint32_t fixed_entry_size,
+        uint32_t initial_entry_size,
         BufferType buffer_type,
         DramSenderTag);
 
@@ -159,7 +161,7 @@ private:
     // Stored as uint8_t (0=Worker, 1=Dram) so the SenderCoreType enum stays in the experimental
     // header; sender_core_type() converts.
     uint8_t sender_core_type_value_ = 0;
-    uint32_t fixed_entry_size_ = 0;
+    uint32_t initial_entry_size_ = 0;
     // This pipe's sender config page in the DRISC L1 arena, reserved on its sender core alone so
     // sibling pipes on other banks can hold the same offset. Null for a worker-sender pipe.
     std::shared_ptr<DriscL1Allocation> drisc_config_page_alloc_;

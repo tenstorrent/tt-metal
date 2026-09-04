@@ -46,7 +46,7 @@ std::vector<std::pair<tt::tt_metal::CoreCoord, CoreRangeSet>> TensorPrefetcherPi
     return mapping;
 }
 
-std::vector<uint8_t> TensorPrefetcherPipes::attach(tt::tt_metal::Program& program) const {
+std::vector<uint8_t> TensorPrefetcherPipes::attach(tt::tt_metal::Program& program, uint32_t entry_size) const {
     std::vector<uint8_t> pipe_ids;
     pipe_ids.reserve(num_pipes());
     for (const auto& bank : banks) {
@@ -56,6 +56,21 @@ std::vector<uint8_t> TensorPrefetcherPipes::attach(tt::tt_metal::Program& progra
         }
     }
     return pipe_ids;
+}
+
+std::vector<uint8_t> TensorPrefetcherPipes::attach(tt::tt_metal::Program& program) const {
+    return attach(program, entry_size);
+}
+
+std::vector<uint32_t> TensorPrefetcherPipes::config_addresses() const {
+    std::vector<uint32_t> addresses;
+    addresses.reserve(num_pipes());
+    for (const auto& bank : banks) {
+        for (const auto& pipe : bank.pipes) {
+            addresses.push_back(metal_exp::prefetcher_pipe_config_address(*pipe));
+        }
+    }
+    return addresses;
 }
 
 bool is_tensor_prefetcher_supported(tt::tt_metal::distributed::MeshDevice* mesh_device) {
@@ -118,10 +133,10 @@ TensorPrefetcherPipes create_prefetcher_pipes_for_tensor_prefetcher(
     tt::tt_metal::BufferType buffer_type,
     bool support_multi_receiver_shards) {
     return TensorPrefetcherPipes{
-        .banks = metal_exp::CreatePrefetcherPipesForTensorPrefetcher(
+        metal_exp::CreatePrefetcherPipesForTensorPrefetcher(
             *mesh_device, bank_to_receivers, entry_size, num_entries, buffer_type, support_multi_receiver_shards),
-        .entry_size = entry_size,
-        .num_entries = num_entries};
+        entry_size,
+        num_entries};
 }
 
 void wait_for_cq_on_tensor_prefetcher(

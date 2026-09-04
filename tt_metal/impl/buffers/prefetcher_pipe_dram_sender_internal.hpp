@@ -37,7 +37,7 @@ struct PrefetcherPipeDramSenderInternals {
         CoreCoord dram_sender_logical,
         const CoreRangeSet& receiver_cores,
         uint32_t ring_size,
-        uint32_t fixed_entry_size,
+        uint32_t initial_entry_size,
         BufferType buffer_type);
 
     // DRISC L1 address of this pipe's sender config page (9-word header, receiver NOC XY table,

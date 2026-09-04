@@ -395,14 +395,14 @@ TensorPrefetcherTensorLayout compute_tensor_layout(
     return compute_tensor_layout_recv_contig(t, block_count, stage_third, context_id);
 }
 
-// Preconditions of the first-cut PrefetcherPipe delivery path: receiver-contiguous, batched, and
-// one fixed entry size. They are properties of the page stream the sender produces, so they are
-// checked against the computed layout rather than against the caller's spec -- which is why this
-// runs here, after compute_tensor_layout, rather than in queue().
+// Preconditions of the PrefetcherPipe delivery path: receiver-contiguous, batched, and a block
+// size the receiver ring is a whole multiple of. They are properties of the page stream the sender
+// produces, so they are checked against the computed layout rather than against the caller's spec
+// -- which is why this runs here, after compute_tensor_layout, rather than in queue().
 void validate_prefetcher_pipe_delivery(
     const TensorPrefetcherTensorLayout& layout,
     const experimental::TensorPrefetcherInput& input,
-    uint32_t fixed_entry_size,
+    uint32_t per_recv_capacity_bytes,
     uint32_t tensor_idx) {
     TT_FATAL(
         layout.layout_mode == static_cast<uint32_t>(LayoutMode::ReceiverContiguous),
@@ -415,14 +415,28 @@ void validate_prefetcher_pipe_delivery(
         "queued with a {}-entry rotation table.",
         tensor_idx,
         input.rotation.size());
+    // The sender addresses its ring in whole blocks: (entries_sent % ring_units) with no
+    // trailing-gap term. A block size the ring is not a multiple of would put sender and receiver
+    // on different grids after the first wrap.
     TT_FATAL(
-        layout.page_bytes_per_recv == fixed_entry_size,
-        "Tensor prefetcher: input tensor {} pushes {} B per receiver per block, but the PrefetcherPipes were created "
-        "with entry_size {} B. This transport does not resize mid-flight, so create them with "
-        "entry_size == the tensor's per-receiver block size.",
+        per_recv_capacity_bytes % layout.page_bytes_per_recv == 0,
+        "Tensor prefetcher: input tensor {} pushes {} B per receiver per block, which does not divide the "
+        "PrefetcherPipes' {} B per-receiver ring ({} B left over). Size the ring as a whole number of blocks.",
         tensor_idx,
         layout.page_bytes_per_recv,
-        fixed_entry_size);
+        per_recv_capacity_bytes,
+        per_recv_capacity_bytes % layout.page_bytes_per_recv);
+    // A consumer streams blocks through a two-block window -- publish the current one, ack the
+    // previous one -- so a ring holding a single block deadlocks it.
+    TT_FATAL(
+        per_recv_capacity_bytes >= 2 * layout.page_bytes_per_recv,
+        "Tensor prefetcher: input tensor {} pushes {} B per receiver per block, but the PrefetcherPipes' "
+        "per-receiver ring holds only {} B. Consumers keep one block of lookahead, so the ring needs room for at "
+        "least two ({} B).",
+        tensor_idx,
+        layout.page_bytes_per_recv,
+        per_recv_capacity_bytes,
+        2 * layout.page_bytes_per_recv);
 }
 
 }  // namespace
@@ -548,14 +562,14 @@ TensorPrefetcherManager::RequestTarget TensorPrefetcherManager::target_for(
                 sender.y,
                 sender.x);
 
-            const uint32_t entry_size = experimental::prefetcher_pipe_fixed_entry_size(pipe);
-            const uint32_t ring_size = experimental::prefetcher_pipe_ring_size(pipe);
+            const uint32_t entry_size = pipe.initial_entry_size();
+            const uint32_t ring_size = pipe.ring_size();
             if (target.mapping.empty()) {
-                target.fixed_entry_size = entry_size;
+                target.initial_entry_size = entry_size;
                 target.per_recv_capacity_bytes = ring_size;
             }
             TT_FATAL(
-                entry_size == target.fixed_entry_size && ring_size == target.per_recv_capacity_bytes,
+                entry_size == target.initial_entry_size && ring_size == target.per_recv_capacity_bytes,
                 "QueueTensorPrefetcherRequest requires one geometry across every pipe: bank {} pipe {} has entry size "
                 "{} B and ring size {} B, but the first pipe has {} B and {} B. One request stamps one layout for "
                 "every sender.",
@@ -563,7 +577,7 @@ TensorPrefetcherManager::RequestTarget TensorPrefetcherManager::target_for(
                 p,
                 entry_size,
                 ring_size,
-                target.fixed_entry_size,
+                target.initial_entry_size,
                 target.per_recv_capacity_bytes);
 
             const CoreRangeSet& receivers = experimental::prefetcher_pipe_receiver_cores(pipe);
@@ -970,7 +984,7 @@ std::vector<std::vector<std::vector<uint8_t>>> TensorPrefetcherManager::serializ
             tensor_idx);
 
         if (target.transport == TENSOR_PREFETCHER_TRANSPORT_PREFETCHER_PIPE) {
-            validate_prefetcher_pipe_delivery(layout, input, target.fixed_entry_size, tensor_idx);
+            validate_prefetcher_pipe_delivery(layout, input, target.per_recv_capacity_bytes, tensor_idx);
         }
 
         // The sender's free-space poll counts whole per-receiver pages; if the target's per-receiver
