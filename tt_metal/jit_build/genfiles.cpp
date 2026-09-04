@@ -344,14 +344,16 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
                         << (entry.prefetcher_pipe_id != 0xFF
                                 ? std::to_string(static_cast<uint32_t>(entry.prefetcher_pipe_id))
                                 : "RelayDFBBindingToken::NO_PREFETCHER_PIPE")
-                        << ", " << format_llk_metadata(*entry.metadata);
+                        << ", ";
+                emit_llk_metadata(content, *entry.metadata);
             } else if (entry.prefetcher_pipe_id != 0xFF) {
                 content << ", " << static_cast<uint32_t>(entry.prefetcher_pipe_id);
             }
             content << "};\n";
         } else if (entry.metadata.has_value()) {
-            content << "constexpr DFBBindingToken " << entry.name << "{" << entry.id << ", "
-                    << format_llk_metadata(*entry.metadata) << "};\n";
+            content << "constexpr DFBBindingToken " << entry.name << "{" << entry.id << ", ";
+            emit_llk_metadata(content, *entry.metadata);
+            content << "};\n";
         } else {
             content << "constexpr DFBBindingToken " << entry.name << "{" << entry.id << "};\n";
         }
@@ -431,8 +433,9 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     for (const auto& entry : ta_entries) {
         content << "using " << entry.name << "_t = ::tensor_accessor::TensorBindingToken<" << entry.cta_offset << "u, "
                 << entry.addr_crta_offset << "u>;\n";
-        content << "constexpr " << entry.name << "_t " << entry.name << "{" << format_llk_metadata(entry.metadata)
-                << "};\n";
+        content << "constexpr " << entry.name << "_t " << entry.name << "{";
+        emit_llk_metadata(content, entry.metadata);
+        content << "};\n";
     }
 
     // Unlike other binding token types, TensorBindingToken has meaningful template parameters associated with it.
@@ -459,7 +462,9 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     for (const auto& entry : scratch_entries) {
         if (entry.metadata.has_value()) {
             content << "constexpr ScratchpadBindingToken " << entry.name << "{" << entry.addr_crta_word << "u, "
-                    << entry.size_bytes << "u, " << format_llk_metadata(*entry.metadata) << "};\n";
+                    << entry.size_bytes << "u, ";
+            emit_llk_metadata(content, *entry.metadata);
+            content << "};\n";
         } else {
             content << "constexpr ScratchpadBindingToken " << entry.name << "{" << entry.addr_crta_word << "u, "
                     << entry.size_bytes << "u};\n";
@@ -1224,62 +1229,26 @@ void generate_all_descriptors(const JitBuildEnv& env, const JitBuildOptions& opt
 
 }  // namespace
 
-// Designated-initializer text for the device-side `binding_details::LLKMetadata` aggregate
-// (internal/llk_metadata.h). Positional init is deliberately avoided: a field reorder would silently
-// swap geometry. The host metadata carries the operand's tile and face geometry; the device wants the
-// 2D face grid, so the split happens here. A face geometry that describes a representable tile takes
-// that tile's dimensions; otherwise the operand's own tile bounds the grid.
-std::string format_llk_metadata(const LLKMetadata& metadata) {
-    const FaceGeometry& face = metadata.face_geometry;
-    const uint32_t implied_tile_height =
-        face.face_r_dim * (face.num_faces > 2 ? constants::TILE_HEIGHT / constants::FACE_HEIGHT : 1);
-    const uint32_t implied_tile_width = face.num_faces == 1 ? constants::FACE_WIDTH : constants::TILE_WIDTH;
-    const bool implied_tile_supported =
-        (implied_tile_width == constants::FACE_WIDTH || implied_tile_width == constants::TILE_WIDTH) &&
-        (implied_tile_height == 1 || implied_tile_height == 2 || implied_tile_height == 4 || implied_tile_height == 8 ||
-         implied_tile_height == constants::FACE_HEIGHT || implied_tile_height == constants::TILE_HEIGHT);
-    const uint32_t tile_height = implied_tile_supported ? implied_tile_height : metadata.tile.get_height();
-    const uint32_t tile_width = implied_tile_supported ? implied_tile_width : metadata.tile.get_width();
-
-    TT_FATAL(face.face_r_dim > 0, "LLK metadata face_r_dim must be > 0");
-    TT_FATAL(face.num_faces > 0, "LLK metadata num_faces must be > 0");
-    TT_FATAL(
-        tile_width % constants::FACE_WIDTH == 0,
-        "LLK metadata tile width ({}) must be a multiple of FACE_WIDTH ({})",
-        tile_width,
-        constants::FACE_WIDTH);
-    const uint32_t num_faces_c_dim = std::min(tile_width / constants::FACE_WIDTH, face.num_faces);
-    TT_FATAL(
-        face.num_faces % num_faces_c_dim == 0,
-        "LLK metadata num_faces ({}) must be divisible by num_faces_c_dim ({})",
-        face.num_faces,
-        num_faces_c_dim);
-    const uint32_t num_faces_r_dim = face.num_faces / num_faces_c_dim;
-    // Same tile-overflow guard as compute_num_faces_rc_dims: the logical face grid must fit the tile rows.
-    TT_FATAL(
-        num_faces_r_dim * face.face_r_dim <= tile_height,
-        "LLK metadata face grid (num_faces_r_dim={} * face_r_dim={} = {} rows) exceeds tile height ({})",
-        num_faces_r_dim,
-        face.face_r_dim,
-        num_faces_r_dim * face.face_r_dim,
-        tile_height);
-
-    return fmt::format(
-        "{{.format = {}u, .face_r_dim = {}u, .face_c_dim = {}u, .num_faces_r_dim = {}u, "
-        ".num_faces_c_dim = {}u}}",
-        host_data_format_to_hw(metadata.format),
-        face.face_r_dim,
-        constants::FACE_WIDTH,
-        num_faces_r_dim,
-        num_faces_c_dim);
-}
-
 // clang-format off
 void jit_build_genfiles_descriptors(const JitBuildEnv& env, const JitBuildOptions& options) {
     TTZoneScopedDN(JIT, "generate_descriptors");
     TTZoneTextD(JIT, options.name.c_str(), options.name.length());
     fs::create_directories(options.path);
     generate_all_descriptors(env, options);
+}
+
+void emit_llk_metadata(std::ostream& os, const LLKMetadata& metadata) {
+    const FaceGeometry& face = metadata.face_geometry;
+    const uint32_t num_faces_c_dim = std::min(metadata.tile.get_width() / constants::FACE_WIDTH, face.num_faces);
+    const uint32_t num_faces_r_dim = face.num_faces / num_faces_c_dim;
+    os << fmt::format(
+        "::binding_details::LLKMetadata{{.format = {}u, .face_r_dim = {}u, .face_c_dim = {}u, "
+        ".num_faces_r_dim = {}u, .num_faces_c_dim = {}u}}",
+        host_data_format_to_hw(metadata.format),
+        face.face_r_dim,
+        constants::FACE_WIDTH,
+        num_faces_r_dim,
+        num_faces_c_dim);
 }
 // clang-format on
 

@@ -765,32 +765,24 @@ void ValidateLlkTileAndFaceGeometry(
     if (!face.has_value()) {
         return;
     }
-    // Same checks as CircularBufferConfig::set_unpack_face_geometry.
     TT_FATAL(
         face->face_r_dim > 0,
         "{} '{}' has unpack_face_geometry_metadata.face_r_dim == 0; face_r_dim must be > 0",
         kind,
         unique_id);
     TT_FATAL(
-        face->face_r_dim <= tt::constants::FACE_HEIGHT,
+        face->face_r_dim <= constants::FACE_HEIGHT,
         "{} '{}' has unpack_face_geometry_metadata.face_r_dim ({}) which must be <= FACE_HEIGHT ({})",
         kind,
         unique_id,
         face->face_r_dim,
-        tt::constants::FACE_HEIGHT);
+        constants::FACE_HEIGHT);
     TT_FATAL(
         face->num_faces > 0,
         "{} '{}' has unpack_face_geometry_metadata.num_faces == 0; num_faces must be > 0",
         kind,
         unique_id);
     const Tile resolved_tile = tile.value_or(Tile{});
-    TT_FATAL(
-        resolved_tile.get_width() % constants::FACE_WIDTH == 0,
-        "{} '{}': tile width ({}) must be a multiple of FACE_WIDTH ({})",
-        kind,
-        unique_id,
-        resolved_tile.get_width(),
-        constants::FACE_WIDTH);
     const uint32_t num_faces_c_dim = std::min(resolved_tile.get_width() / constants::FACE_WIDTH, face->num_faces);
     TT_FATAL(
         face->num_faces % num_faces_c_dim == 0,
@@ -811,15 +803,11 @@ void ValidateLlkTileAndFaceGeometry(
         resolved_tile.get_height());
 }
 
-FaceGeometry FaceGeometryFromTile(const Tile& tile) {
-    return FaceGeometry{.face_r_dim = tile.get_face_shape()[0], .num_faces = tile.get_num_faces()};
-}
-
 std::optional<LLKMetadata> LLKMetadataFromDfb(const DataflowBufferSpec& spec) {
     if (!spec.data_format_metadata.has_value()) {
         return std::nullopt;
     }
-    Tile tile = spec.tile_format_metadata.value_or(Tile{});
+    const Tile tile = EffectiveLlkTile(spec.tile_format_metadata, spec.unpack_face_geometry_metadata);
     return LLKMetadata{
         .format = *spec.data_format_metadata,
         .tile = tile,
@@ -830,14 +818,14 @@ std::optional<LLKMetadata> LLKMetadataFromScratchpad(const ScratchpadSpec& spec)
     if (!spec.data_format_metadata.has_value()) {
         return std::nullopt;
     }
-    Tile tile = spec.tile_format_metadata.value_or(Tile{});
+    const Tile tile = EffectiveLlkTile(spec.tile_format_metadata, spec.unpack_face_geometry_metadata);
     return LLKMetadata{
         .format = *spec.data_format_metadata,
         .tile = tile,
         .face_geometry = spec.unpack_face_geometry_metadata.value_or(FaceGeometryFromTile(tile))};
 }
 
-std::optional<LLKMetadata> LLKMetadataFromTensorSpec(const TensorSpec& spec) {
+LLKMetadata LLKMetadataFromTensorSpec(const TensorSpec& spec) {
     const Tile& tile = spec.tile();
     return LLKMetadata{
         .format = datatype_to_dataformat_converter(spec.data_type()),
@@ -2418,7 +2406,8 @@ struct ResolvedTensorParameter {
     bool runtime_field_is_page_size = false;
 
     // Compile-time LLK metadata derived from the TensorParameter's spec, baked onto the binding token.
-    std::optional<LLKMetadata> llk_metadata;
+    // Always present: a tensor has a dtype and a tile.
+    LLKMetadata llk_metadata;
 };
 
 // Resolve a TensorParameter's static layout into a CTA payload + an extra CRTA word
@@ -2498,8 +2487,7 @@ ResolvedTensorParameter ResolveTensorParameterStaticCTAs(
         aligned_page_size,
         std::numeric_limits<uint32_t>::max());
 
-    ResolvedTensorParameter result;
-    result.llk_metadata = LLKMetadataFromTensorSpec(spec);
+    ResolvedTensorParameter result{.llk_metadata = LLKMetadataFromTensorSpec(spec)};
     std::vector<uint32_t>& cta_payload = result.cta_payload;
 
     // Common header (always emitted, sharded or not):

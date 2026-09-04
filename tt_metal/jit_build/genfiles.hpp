@@ -5,6 +5,7 @@
 #pragma once
 
 #include <core_coord.hpp>
+#include <iosfwd>
 #include <string>
 #include <vector>
 
@@ -19,7 +20,7 @@ class JitBuildEnv;
 class JitBuildOptions;
 class JitBuildSettings;
 
-std::string format_llk_metadata(const LLKMetadata& metadata);
+void emit_llk_metadata(std::ostream& os, const LLKMetadata& metadata);
 
 void jit_build_genfiles_kernel_include(
     const JitBuildEnv& env, const JitBuildSettings& settings, const KernelSource& kernel_src);

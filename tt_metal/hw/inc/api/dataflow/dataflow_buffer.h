@@ -88,6 +88,8 @@ template <bool IsWrite, typename ReleaseFunc>
 //
 // Here my_dfb_name is a constexpr DFBBindingToken, auto-included in kernel_bindings_generated.h.
 //
+
+// Support for LLKOperandFrom.
 namespace binding_details {
 template <const auto& Token>
 struct LLKOperandExtractor;

@@ -943,14 +943,16 @@ static void emit_metal2_namespaces(
                       << (entry.prefetcher_pipe_id != 0xFF
                               ? std::to_string(static_cast<uint32_t>(entry.prefetcher_pipe_id))
                               : "RelayDFBBindingToken::NO_PREFETCHER_PIPE")
-                      << ", " << format_llk_metadata(*entry.metadata);
+                      << ", ";
+                    emit_llk_metadata(f, *entry.metadata);
                 } else if (entry.prefetcher_pipe_id != 0xFF) {
                     f << ", " << static_cast<uint32_t>(entry.prefetcher_pipe_id);
                 }
                 f << "};\n";
             } else if (entry.metadata.has_value()) {
-                f << "constexpr DFBBindingToken " << name << "{" << entry.id << ", "
-                  << format_llk_metadata(*entry.metadata) << "};\n";
+                f << "constexpr DFBBindingToken " << name << "{" << entry.id << ", ";
+                emit_llk_metadata(f, *entry.metadata);
+                f << "};\n";
             } else {
                 f << "constexpr DFBBindingToken " << name << "{" << entry.id << "};\n";
             }
@@ -965,7 +967,9 @@ static void emit_metal2_namespaces(
         for (const auto& ta : s.ta_accessors) {
             f << "using " << ta.name << "_t = ::tensor_accessor::TensorBindingToken<" << ta.cta_offset << "u, "
               << ta.addr_crta_offset << "u>;\n";
-            f << "constexpr " << ta.name << "_t " << ta.name << "{" << format_llk_metadata(ta.metadata) << "};\n";
+            f << "constexpr " << ta.name << "_t " << ta.name << "{";
+            emit_llk_metadata(f, ta.metadata);
+            f << "};\n";
         }
         f << "}  // namespace tensor\n";
     }
@@ -974,7 +978,9 @@ static void emit_metal2_namespaces(
         for (const auto& sp : s.scratch_accessors) {
             if (sp.metadata.has_value()) {
                 f << "constexpr ScratchpadBindingToken " << sp.name << "{" << sp.addr_crta_word << "u, "
-                  << sp.size_bytes << "u, " << format_llk_metadata(*sp.metadata) << "};\n";
+                  << sp.size_bytes << "u, ";
+                emit_llk_metadata(f, *sp.metadata);
+                f << "};\n";
             } else {
                 f << "constexpr ScratchpadBindingToken " << sp.name << "{" << sp.addr_crta_word << "u, "
                   << sp.size_bytes << "u};\n";
