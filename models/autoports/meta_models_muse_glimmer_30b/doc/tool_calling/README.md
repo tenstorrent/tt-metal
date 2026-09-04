@@ -171,9 +171,14 @@ python models/autoports/meta_models_muse_glimmer_30b/doc/serving_perf/tool_call_
   --profile p150 \
   --base-url http://127.0.0.1:20000 \
   --repeats 3 \
+  --source-revision "$(git rev-parse HEAD)" \
   --out models/autoports/meta_models_muse_glimmer_30b/doc/serving_perf/benchmarks/p150_tool_call_latency.json
 ```
 
 Repeat with `--profile p150x2` and a `p150x2_...json` output path. The runner
 warms each shape once, validates the returned function and JSON arguments, and
-records TTFT, derived TPOT, E2E, and all raw samples.
+records TTFT, derived TPOT, E2E, and all raw samples. Three repeats are the
+default release setting. When validating a packaged image, also pass its exact
+`--image-digest`. The JSON is checkpointed after every context size with
+`status: in_progress`, `failed`, or `complete`, so an interrupted full-context
+run retains every finished row.

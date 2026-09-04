@@ -9,12 +9,14 @@ import json
 from transformers import AutoTokenizer
 
 from models.autoports.meta_models_muse_glimmer_30b.doc.serving_perf.tool_call_latency_sweep import (
+    DEFAULT_REPEATS,
     HF_MODEL_ID,
     WEIGHT_REVISION,
     _append_tool_delta,
     exact_prompt,
     median_row,
     prompt_tokens,
+    write_artifact,
 )
 
 
@@ -93,3 +95,17 @@ def test_median_row_retains_all_validation_samples():
     assert row["completion_tokens"] == 21.0
     assert row["tool_call_pass"] is True
     assert row["samples"] is samples
+
+
+def test_release_sweep_defaults_to_three_samples_and_checkpoints(tmp_path):
+    assert DEFAULT_REPEATS == 3
+    out = tmp_path / "nested" / "sweep.json"
+    artifact = {
+        "status": "in_progress",
+        "source_revision": "abc123",
+        "image_digest": "sha256:123",
+        "completed_isls": [512],
+        "rows": [{"isl": 512, "tool_call_pass": True}],
+    }
+    write_artifact(out, artifact)
+    assert json.loads(out.read_text()) == artifact
