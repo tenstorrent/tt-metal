@@ -1080,10 +1080,26 @@ def test_num_single_device_vocab_splits(padded_vocab_size, expected_splits):
         (151936, 4),  # Qwen3
         (256000, 4),  # Gemma-2
         (262144, 4),  # 4*TOPK_MAX_WIDTH exactly
+        (262208, 5),  # Gemma-3: 8194 tiles has no even tile-aligned cut in 5..10 -> minimum count, uneven
     ],
 )
 def test_untilize_chunk_count(width, expected):
     assert TTSampling._untilize_chunk_count(width) == expected
+
+
+@pytest.mark.parametrize(
+    "width, num_chunks, expected_split, expected_last",
+    [
+        (151936, 4, 37984, 37984),  # even cut: split size is the exact chunk width
+        (262208, 5, 52448, 52416),  # uneven cut: tile-aligned split, shorter tile-aligned remainder
+    ],
+)
+def test_untilize_chunk_width(width, num_chunks, expected_split, expected_last):
+    split = TTSampling._untilize_chunk_width(width, num_chunks)
+    assert split == expected_split
+    assert split % 32 == 0
+    assert -(-width // split) == num_chunks
+    assert width - split * (num_chunks - 1) == expected_last
 
 
 @pytest.mark.parametrize(

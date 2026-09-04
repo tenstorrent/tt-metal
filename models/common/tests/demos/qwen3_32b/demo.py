@@ -237,7 +237,10 @@ def _ttnn_mesh_device_param_from_env() -> dict:
         )
     param = {
         "mesh_shape": shape,
-        "trace_region_size": 50_000_000,
+        # 50 MB fits the decode-only trace set (eval-32, token-accuracy). The batch-1/batch-32 perf
+        # legs also capture the prefill traces (55.5 MB total on T3K), so size like the tt_transformers
+        # entry for this model (models/model_trace_region_sizes.yaml, wh_llmbox_perf: 90 MB).
+        "trace_region_size": 90_000_000,
         "num_command_queues": 1,
     }
     # TTTv2 multi-device executor dispatch (and the on-device sampling all-gather) stalls without an
@@ -1092,6 +1095,17 @@ def _run_perf_benchmark(
         # Natural-length tokenization (matches TTTv1): the executor buckets each user's real length to
         # get_padded_prefill_len. These sample prompts are ~90-125 tokens -> 128 bucket.
         input_tokens, prompt_lens = tokenize_prompts(prompts, tokenizer, max_prefill_len=max_prefill_len)
+
+        # The traced executor requires prefill trace warmup (requires_prefill_trace_warmup): without it
+        # capture is never activated and the first prefill_forward raises TraceCoverageError. Warm up
+        # as the eval-32 path does, compiling the benchmark prompt as the representative case.
+        _warmup_demo_executor(
+            traced_executor,
+            kv_cache=kv_cache,
+            page_table=page_table,
+            prefill_compile_case=(input_tokens, prompt_lens),
+            prefill_sampling_params=sampling_params,
+        )
 
         # BenchmarkProfiler brackets the timed prefill/decode regions inside run_perf_benchmark
         # (default-None ⇒ byte-inert for every other caller) so we can emit CI perf telemetry.

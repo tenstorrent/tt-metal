@@ -94,27 +94,30 @@ class TTSampling(LightweightModule):
 
     @staticmethod
     def _untilize_chunk_count(width):
-        """Fewest tile-aligned even chunks of at most TOPK_MAX_WIDTH each, or 1
-        when the row is narrow enough (<= 2 * TOPK_MAX_WIDTH, the widest row
-        known to untilize in one program).
+        """Fewest tile-aligned chunks of at most TOPK_MAX_WIDTH each, or 1 when
+        the row is narrow enough (<= 2 * TOPK_MAX_WIDTH, the widest row known
+        to untilize in one program).
 
-        Raise rather than fall back: a wide row that cannot be cut would either
-        recreate the full-row circular-buffer/L1 compile clash (silent return 1)
-        or explode into thousands of tiny chunks (unbounded search), and both
-        are better caught at the source. The search is bounded so chunks stay at
-        least half of TOPK_MAX_WIDTH wide.
+        Prefer an even cut so every chunk is at least half of TOPK_MAX_WIDTH
+        wide (the search is bounded to twice the minimum count).s
         """
         if width <= 2 * TOPK_MAX_WIDTH:
             return 1
-        num_chunks = -(-width // TOPK_MAX_WIDTH)
+        min_chunks = (width + TOPK_MAX_WIDTH - 1) // TOPK_MAX_WIDTH  # ceil(width / TOPK_MAX_WIDTH)
+        num_chunks = min_chunks
         max_chunks = 2 * num_chunks
         while num_chunks <= max_chunks:
             if width % num_chunks == 0 and (width // num_chunks) % ttnn.TILE_SIZE == 0:
                 return num_chunks
             num_chunks += 1
-        raise ValueError(
-            f"cannot cut an untilize row of width {width} into tile-aligned chunks of at most {TOPK_MAX_WIDTH}"
-        )
+        return min_chunks
+
+    @staticmethod
+    def _untilize_chunk_width(width, num_chunks):
+        """Tile-aligned ttnn.split size that cuts `width` into `num_chunks` pieces
+        (the last one shorter when the row does not divide evenly)."""
+        per_chunk = (width + num_chunks - 1) // num_chunks  # ceil(width / num_chunks)
+        return (per_chunk + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE * ttnn.TILE_SIZE  # round up to a tile
 
     def _is_force_argmax_sampling(self, k, p, temp):
         """Detect whether all users request deterministic greedy decoding.
@@ -857,7 +860,7 @@ class TTSampling(LightweightModule):
                 # is width-based, not mesh-based: multi-device force-argmax gathers the
                 # full padded vocab onto every device and hits the same wall. Untilize
                 # in tile-aligned chunks and concat row-major instead.
-                x_chunks = ttnn.split(x, x.shape[-1] // num_untilize_chunks, dim=3)
+                x_chunks = ttnn.split(x, self._untilize_chunk_width(x.shape[-1], num_untilize_chunks), dim=3)
                 untilized_chunks = []
                 for chunk in x_chunks:
                     # Free each tiled chunk as soon as its row-major copy exists,
