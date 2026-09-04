@@ -199,11 +199,12 @@ inline void llk_math_two_pass_sfpu_store_mean_var_to_dst_raw(
  * Uses three consecutive DST tiles; the third is scratch and is clobbered.
  *
  * @tparam dual_m2: Fold the secondary M2 accumulator before scaling.
+ * @tparam average_variance: Average the combined lane variance rather than storing its sum.
  * @param mean_dst_idx: First of the three consecutive DST tiles.
  * @param group_id: Four-lane group slot in the output vectors.
  * @param reciprocal_bits: FP32 bit pattern for each lane population's reciprocal.
  */
-template <bool dual_m2>
+template <bool dual_m2, bool average_variance = true>
 inline void llk_math_two_pass_sfpu_store_combined_mean_var_to_dst_raw(
     std::uint32_t mean_dst_idx, std::uint32_t group_id, std::uint32_t reciprocal_bits) {
     // The implementation stores mean and variance at mean_dst_idx and mean_dst_idx + 1,
@@ -212,7 +213,7 @@ inline void llk_math_two_pass_sfpu_store_combined_mean_var_to_dst_raw(
         (mean_dst_idx + 2 < get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>()),
         "two-pass combined statistics require three consecutive DST tiles");
     _llk_math_welfords_sfpu_params_(
-        ckernel::sfpu::_two_pass_store_combined_mean_var_to_dst_raw_group_<dual_m2>,
+        ckernel::sfpu::_two_pass_store_combined_mean_var_to_dst_raw_group_<dual_m2, average_variance>,
         mean_dst_idx,
         group_id,
         reciprocal_bits);

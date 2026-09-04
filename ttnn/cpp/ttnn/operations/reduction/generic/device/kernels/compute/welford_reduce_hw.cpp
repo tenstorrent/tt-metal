@@ -28,14 +28,7 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 
-#ifdef WELFORD_SFPU_LEAF_COMBINE
-#include "api/compute/compute_kernel_api.h"
-#include "api/compute/copy_dest_values.h"
-#include "api/compute/eltwise_binary_sfpu.h"
-#include "api/compute/sfpu_binary_bcast.h"
-#endif
-
-#if defined(WELFORD_POST_MUL) || defined(WELFORD_SFPU_LEAF_COMBINE)
+#ifdef WELFORD_POST_MUL
 // SFPU multiply-by-scalar (mul_unary_tile) applied to the reduced output. See issue #45222.
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #endif
@@ -58,9 +51,6 @@ void kernel_main() {
     constexpr bool is_std = get_arg(args::is_std) != 0;
     constexpr auto two_pass_mean_reciprocal = get_arg(args::two_pass_mean_reciprocal);
     constexpr auto two_pass_variance_reciprocal = get_arg(args::two_pass_variance_reciprocal);
-#ifdef WELFORD_SFPU_LEAF_COMBINE
-    constexpr auto welford_leaf_reciprocal = get_arg(args::welford_leaf_reciprocal);
-#endif
 
     constexpr std::uint32_t onetile = 1;
 
@@ -73,7 +63,6 @@ void kernel_main() {
 
     constexpr std::uint32_t input_dst = 0;
     constexpr std::uint32_t mean_dst = 1;
-    constexpr std::uint32_t var_dst = 2;
     constexpr std::uint32_t retained_input_dst = 3;
     constexpr std::uint32_t num_front_retained_limit = 2;
 
@@ -103,7 +92,7 @@ void kernel_main() {
                     constexpr std::uint32_t stats_input_dst = input_dst;
 #else
                     dfb_in.wait_front(onetile);
-                    // Keep var_dst clean: finalization writes only the result rows, so
+                    // Keep DST[2] clean: finalisation writes only the result rows, so
                     // parking pass-one input there would leak stale data into padding.
                     const std::uint32_t stats_input_dst =
                         ht < num_front_retained_limit ? (ht == 0 ? retained_input_dst : mean_dst) : input_dst;
@@ -143,38 +132,15 @@ void kernel_main() {
                     two_pass_stats_update_rows(input_dst, 0, last_tile_rows);
                 }
 #endif
-                two_pass_stats_finalize_to_row(mean_dst, two_pass_variance_reciprocal);
-
 #ifdef WELFORD_SFPU_LEAF_COMBINE
-                // Collapse the 32 equal-count column statistics into one stable
-                // leaf on SFPU. The writer then merges one record per input tile
-                // instead of executing soft-float arithmetic for every column.
-                // Centre on column zero before summing: even a constant finite
-                // input can overflow a sum of 32 absolute means.
-                copy_dest_values_init();
-                copy_dest_values<DataFormat::Float32>(mean_dst, input_dst);
-                sfpu_bcast_col_init();
-                sfpu_sub_bcast_col(mean_dst, input_dst);
-                copy_dest_values_init();
-                copy_dest_values<DataFormat::Float32>(mean_dst, retained_input_dst);
-
-                sfpu_reduce_init<PoolType::SUM, DataFormat::Float32>();
-                sfpu_reduce<PoolType::SUM, DataFormat::Float32, ReduceDim::REDUCE_ROW>(
-                    retained_input_dst, /*ct_dim=*/1, /*rt_dim=*/1);
-                binop_with_scalar_tile_init();
-                mul_unary_tile(retained_input_dst, welford_leaf_reciprocal);
-
-                sfpu_bcast_col_init();
-                sfpu_sub_bcast_col(mean_dst, retained_input_dst);
-                sfpu_add_bcast_col(retained_input_dst, input_dst);
-                square_tile_init();
-                square_tile(mean_dst);
-                add_binary_tile_init();
-                add_binary_tile(var_dst, mean_dst, var_dst);
-
-                sfpu_reduce_init<PoolType::SUM, DataFormat::Float32>();
-                sfpu_reduce<PoolType::SUM, DataFormat::Float32, ReduceDim::REDUCE_ROW>(
-                    var_dst, /*ct_dim=*/1, /*rt_dim=*/1);
+                // Combine the live 32-lane statistics without expanding them to
+                // full tiles. The writer reads element zero and expects summed
+                // lane variance, including the centred variance-of-means term.
+                // DST[3] is scratch; both input passes have finished using it.
+                two_pass_stats_finalize_and_combine_to_face<true /* dual_m2 */, false /* average_variance */>(
+                    mean_dst, 0, two_pass_variance_reciprocal);
+#else
+                two_pass_stats_finalize_to_row(mean_dst, two_pass_variance_reciprocal);
 #endif
                 tile_regs_commit();
 
@@ -182,12 +148,7 @@ void kernel_main() {
                 dfb_partial.reserve_back(2);
                 tile_regs_wait();
                 pack_reconfig_data_format(dfb::partial);
-#ifdef WELFORD_SFPU_LEAF_COMBINE
-                pack_tile(retained_input_dst, dfb::partial);
-                pack_tile(var_dst, dfb::partial);
-#else
                 pack_block(mean_dst, dfb::partial, 2);
-#endif
                 tile_regs_release();
                 dfb_partial.push_back(2);
             }

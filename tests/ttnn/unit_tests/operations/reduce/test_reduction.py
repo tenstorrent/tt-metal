@@ -41,6 +41,33 @@ def test_std_var_hw_large_constant(device, ttnn_op, correction, value):
     assert torch.count_nonzero(output) == 0
 
 
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b])
+@pytest.mark.parametrize("correction", [False, True])
+@pytest.mark.parametrize(
+    "shape,dim",
+    [
+        ((2, 1, 65, 128), (-2, -1)),
+        ((2, 3, 33, 128), (1, 2, 3)),
+        ((1, 1, 32, 10528), (-2, -1)),
+    ],
+    ids=["partial_height", "batch_merge", "uneven_tree"],
+)
+def test_std_var_hw_compact_lane_combine(device, enabled_program_cache, dtype, correction, shape, dim):
+    # Full-width leaves select the Blackhole SFPU combine. Distinct lane means
+    # and nonzero lane variances exercise both terms and their relative scaling.
+    torch.manual_seed(123)
+    values = torch.randn(shape) + (torch.arange(shape[-1]) % 32).float() + 1024
+    tt_input = ttnn.from_torch(values, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    quantised_input = ttnn.to_torch(tt_input).to(torch.float64)
+    rtol = 2e-4 if dtype == ttnn.float32 else 0.01 if dtype == ttnn.bfloat16 else 0.03
+    for torch_op, ttnn_op in ((torch.var, ttnn.var), (torch.std, ttnn.std)):
+        expected = torch_op(quantised_input, dim=dim, keepdim=True, correction=int(correction))
+        for _ in range(3):
+            actual = ttnn.to_torch(ttnn_op(tt_input, dim=dim, keepdim=True, correction=correction)).to(torch.float64)
+            assert torch.isfinite(actual).all()
+            torch.testing.assert_close(actual, expected, rtol=rtol, atol=1e-7)
+
+
 @pytest.mark.parametrize("batch_size", [1, 16])
 @pytest.mark.parametrize("h", [32, 64])
 @pytest.mark.parametrize("w", [32, 64])
@@ -234,6 +261,8 @@ def test_var_fp32_translation_invariance(device, dim, offset, scalar):
         ((4096, 64), (-2, -1)),
         ((4097, 64), (-2, -1)),
         ((12289, 64), (-2, -1)),
+        ((4097, 128), (-2, -1)),
+        ((12289, 128), (-2, -1)),
     ],
     ids=[
         "W_dynamic_l1_replay",
@@ -244,6 +273,8 @@ def test_var_fp32_translation_invariance(device, dim, offset, scalar):
         "HW_l1_replay",
         "HW_dynamic_l1_replay",
         "HW_streaming_fallback",
+        "HW_compact_l1_replay",
+        "HW_compact_streaming_fallback",
     ],
 )
 def test_var_fp32_large_reduction_translation_stability(device, shape, dim):

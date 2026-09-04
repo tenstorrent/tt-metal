@@ -312,7 +312,7 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
     std::map<std::string, std::string> reduce_defines =
         reduce_op_utils::get_defines(operation_attributes.math_op, operation_attributes.reduce_dim);
     reduce_defines["ENABLE_FP32_DEST_ACC"] = fp32_dest_acc_en ? "1" : "0";
-    reduce_defines["DST_SYNC_FULL"] = dst_full_sync_en ? "1" : "0";
+    reduce_defines["DST_SYNC_FULL"] = use_sfpu_leaf_combine || dst_full_sync_en ? "1" : "0";
     reduce_defines["WELFORD_TWO_PASS"] = "1";
     reduce_defines["WELFORD_TWO_PASS_STREAMING_CB_TILES"] = std::to_string(two_pass_streaming_cb_tiles);
     // Enables the SFPU post-multiplication of the reduced output by the user scalar in the
@@ -335,8 +335,6 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
         std::bit_cast<std::uint32_t>(1.0f / static_cast<float>(two_pass_reduce_size));
     const std::uint32_t two_pass_variance_reciprocal =
         std::bit_cast<std::uint32_t>(1.0f / static_cast<float>(two_pass_variance_divisor));
-    const std::uint32_t welford_leaf_reciprocal =
-        std::bit_cast<std::uint32_t>(1.0f / static_cast<float>(tt::constants::TILE_WIDTH));
 
     // --- Reader kernel ---
     std::string reader_source;
@@ -479,9 +477,6 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
             {"two_pass_mean_reciprocal", two_pass_mean_reciprocal},
             {"two_pass_variance_reciprocal", two_pass_variance_reciprocal},
         };
-        if (use_sfpu_leaf_combine) {
-            compute_ct_args.emplace("welford_leaf_reciprocal", welford_leaf_reciprocal);
-        }
         compute_kernel = "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/welford_reduce_hw.cpp";
         compute_rta_name = "NC_per_core";
     } else {
@@ -511,8 +506,8 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
     // Legacy resolved a TTNN ComputeKernelConfig but forwarded only math_fidelity,
     // fp32_dest_acc_en and unpack_to_dest_mode onto ComputeConfigDescriptor, leaving
     // math_approx_mode and dst_full_sync_en at the *Metal* descriptor defaults (both false).
-    // Reproduce that exactly: the TTNN helper would otherwise carry the caller's math_approx_mode
-    // into sfpu_precision_mode and the caller's dst_full_sync_en into double_buffer_dest, silently
+    // Preserve that policy outside the compact HW combine: the TTNN helper would otherwise carry the caller's
+    // math_approx_mode into sfpu_precision_mode and the caller's dst_full_sync_en into double_buffer_dest, silently
     // changing precision / Dest buffering. (DST_SYNC_FULL is still passed as a *define*, exactly as
     // legacy did.)
     auto compute_hw = ttnn::to_compute_hardware_config(device->arch(), operation_attributes.compute_kernel_config);
@@ -523,7 +518,10 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
     std::visit(
         [&](auto& compute_cfg) {
             compute_cfg.sfpu_precision_mode = Precision::Precise;  // legacy math_approx_mode = false
-            compute_cfg.double_buffer_dest = true;                 // legacy dst_full_sync_en = false
+            // Compact HW statistics need single-buffered DST: overlapping these
+            // sparse writes with PACK intermittently loses leaf statistics on
+            // long BF16/BFP8 streams. Retain legacy buffering on other paths.
+            compute_cfg.double_buffer_dest = !use_sfpu_leaf_combine;
             // For Float32 input with fp32_dest_acc_en, force unpack-to-dest so that
             // the unpacker writes full fp32 to DEST instead of routing through SrcA, which would
             // downcast to TF32, losing precision and even leading to large-mean fp32 variance

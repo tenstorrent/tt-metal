@@ -1072,10 +1072,11 @@ sfpi_inline void _two_pass_broadcast_first_lane_()
  * all 32 lanes, while the stored variance is valid only in sub-row 0 (lanes
  * 0-7); current consumers read one value from that sub-row for each group.
  * @tparam dual_m2 Whether LREG6 must be folded into LREG5 before scaling.
+ * @tparam average_variance Whether to average the combined lane variance; otherwise store its sum.
  * @param group_id Four-lane group slot within the output vectors.
  * @param reciprocal_bits FP32 bits for the reciprocal lane population count.
  */
-template <bool dual_m2>
+template <bool dual_m2, bool average_variance = true>
 sfpi_inline void _two_pass_store_combined_mean_var_to_dst_raw_group_(std::uint32_t group_id, std::uint32_t reciprocal_bits)
 {
     if constexpr (dual_m2)
@@ -1117,8 +1118,11 @@ sfpi_inline void _two_pass_store_combined_mean_var_to_dst_raw_group_(std::uint32
     _two_pass_horizontal_sum_mean_();
 
     TTI_SFPADD(ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LCONST_1, ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LREG5, 0);
-    TTI_SFPLOADI(ckernel::p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_FLOATB, lane_reciprocal_bf16);
-    TTI_SFPMUL(ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LCONST_0, ckernel::p_sfpu::LREG5, 0);
+    if constexpr (average_variance)
+    {
+        TTI_SFPLOADI(ckernel::p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_FLOATB, lane_reciprocal_bf16);
+        TTI_SFPMUL(ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LCONST_0, ckernel::p_sfpu::LREG5, 0);
+    }
     WELFORD_SFPU_ONLINE_HAZARD_NOP();
     TT_SFPSTORE(ckernel::p_sfpu::LREG5, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, WELFORD_SFPU_M2_TILE_OFFSET + group_offset);
 }

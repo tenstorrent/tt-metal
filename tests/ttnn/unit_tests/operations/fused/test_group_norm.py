@@ -238,6 +238,10 @@ def test_group_norm_sharded_fp32_large_offset(device, has_affine, num_groups, co
         x.fill_(constant)
     weight = torch.linspace(0.75, 1.25, C, dtype=torch.float32) if has_affine else None
     bias = torch.linspace(-0.25, 0.25, C, dtype=torch.float32) if has_affine else None
+    if constant is not None and bias is not None:
+        # Keep beta exact through the TF32 affine stage so equality tests the
+        # statistics result, not parameter truncation in that later stage.
+        bias = bias.to(torch.bfloat16).to(torch.float32)
     if constant is None:
         reference = (
             torch.nn.functional.group_norm(x, num_groups, weight=weight, bias=bias)
