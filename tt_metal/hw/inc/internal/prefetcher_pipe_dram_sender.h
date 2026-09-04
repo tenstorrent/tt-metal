@@ -22,12 +22,15 @@
 //   * Credit increments and payload writes ride the same NOC VC, so a drained NIU implies the
 //     payload landed before the credit the receiver observes.
 //
-// Simplifications this sender relies on, both asserted at load time and again on every
-// pipe_set_entry_size:
-//   * ring_bytes % entry_bytes == 0, so the page-aligned usable region is the whole ring and no
-//     end-of-ring padding credit is ever needed (the worker-sender path's trailing-gap term).
-//   * A write of n entries must not straddle the ring wrap, matching the contiguous-write rule the
-//     worker-sender path also enforces.
+// An entry size need not divide the ring. When it does not, the last `ring_bytes % entry_bytes`
+// bytes are a trailing gap that holds no entry: writes stop at the page-aligned usable limit, and
+// the wrap credits the gap along with the entry that reaches it. That keeps a lap worth exactly
+// ring_bytes of credit, which is what lets the write cursor be derived as
+// (entries_sent % ring_units) instead of stored -- the property that makes the cursor durable
+// across programs. This is the same trailing-gap term the worker-sender path uses.
+//
+// The one rule a caller must keep: a write of n entries must not straddle the usable limit,
+// matching the contiguous-write rule the worker-sender path also enforces.
 
 #pragma once
 
@@ -65,13 +68,18 @@ FORCE_INLINE void pipe_load_sender_ctx(PipeSenderCtx& ctx, uint32_t config_page_
 
     ASSERT(ctx.entry_bytes != 0);
     ASSERT(ctx.entry_bytes % L1_ALIGNMENT == 0);
-    // No trailing-gap credit anywhere in this sender: see the header comment.
-    ASSERT(ctx.ring_bytes % ctx.entry_bytes == 0);
+    ASSERT(ctx.entry_bytes <= ctx.ring_bytes);
 }
 
 FORCE_INLINE uint32_t pipe_ring_units(const PipeSenderCtx& ctx) { return ctx.ring_bytes / L1_ALIGNMENT; }
 
 FORCE_INLINE uint32_t pipe_units_per_entry(const PipeSenderCtx& ctx) { return ctx.entry_bytes / L1_ALIGNMENT; }
+
+// Bytes of the ring that hold whole entries. The remainder is the trailing gap: no entry starts
+// there, and it is credited as padding by whichever write reaches this limit.
+FORCE_INLINE uint32_t pipe_usable_bytes(const PipeSenderCtx& ctx) {
+    return ctx.ring_bytes - ctx.ring_bytes % ctx.entry_bytes;
+}
 
 // This sender's entries_sent counter for receiver r. entries_acked sits one L1_ALIGNMENT above it.
 FORCE_INLINE volatile tt_l1_ptr uint32_t* pipe_local_sent_ptr(const PipeSenderCtx& ctx, uint32_t r) {
@@ -115,9 +123,12 @@ FORCE_INLINE uint32_t pipe_poll_min_free_units(const PipeSenderCtx& ctx) {
 }
 
 // Spin until every receiver can take num_entries more entries. The requirement is converted to
-// credit units once so the spin body carries no division.
+// credit units once so the spin body carries no division, and includes the trailing gap because a
+// write that reaches the usable limit credits it too -- reserving the worst case here rather than
+// each receiver's actual cursor keeps the spin a single comparison.
 FORCE_INLINE void pipe_reserve_back(const PipeSenderCtx& ctx, uint32_t num_entries) {
-    const uint32_t needed_units = num_entries * pipe_units_per_entry(ctx);
+    const uint32_t needed_units =
+        num_entries * pipe_units_per_entry(ctx) + (ctx.ring_bytes - pipe_usable_bytes(ctx)) / L1_ALIGNMENT;
     while (pipe_poll_min_free_units(ctx) < needed_units) {
     }
 }
@@ -137,11 +148,24 @@ FORCE_INLINE void pipe_credit_receiver(const PipeSenderCtx& ctx, uint32_t r, uin
     noc_semaphore_inc</*skip_ptr_update=*/true>(get_noc_addr_helper(remote_noc_xy, remote_sent_ptr), units, noc);
 }
 
-// Publish num_entries to every receiver.
+// Credit units a write of `num_entries` starting at `wr_offset` publishes: the payload, plus the
+// trailing gap when the write reaches the usable limit, so a full lap credits exactly ring_bytes
+// and the derived cursor wraps to zero. Mirrors the worker-sender path's units_for_write().
+FORCE_INLINE uint32_t pipe_units_for_write(const PipeSenderCtx& ctx, uint32_t wr_offset, uint32_t num_entries) {
+    const uint32_t payload_bytes = num_entries * ctx.entry_bytes;
+    const uint32_t usable = pipe_usable_bytes(ctx);
+    uint32_t credited_bytes = payload_bytes;
+    if (wr_offset + payload_bytes >= usable) {
+        credited_bytes += ctx.ring_bytes - usable;
+    }
+    return credited_bytes / L1_ALIGNMENT;
+}
+
+// Publish num_entries to every receiver. Each receiver's own cursor decides whether this write
+// reaches the wrap, so the gap credit is computed per receiver rather than once.
 FORCE_INLINE void pipe_push_credits(const PipeSenderCtx& ctx, uint32_t num_entries, uint8_t noc) {
-    const uint32_t units = num_entries * pipe_units_per_entry(ctx);
     for (uint32_t r = 0; r < ctx.num_receivers; ++r) {
-        pipe_credit_receiver(ctx, r, units, noc);
+        pipe_credit_receiver(ctx, r, pipe_units_for_write(ctx, pipe_derived_wr_offset(ctx, r), num_entries), noc);
     }
 }
 
@@ -149,23 +173,30 @@ FORCE_INLINE void pipe_push_credits(const PipeSenderCtx& ctx, uint32_t num_entri
 // cursor onto the new entry grid and publish the bytes it skips as pad credits. A receiver runs the
 // matching snap -- PrefetcherPipe's constructor, when the Attach entry size differs from the one
 // last applied -- and waits for exactly these credits, so the two endpoints stay on one grid.
-// Mirrors PrefetcherPipe::resize_sender_interface<true>(): because ring_bytes % entry_bytes == 0
-// the usable region is the whole ring, so its align-then-wrap step reduces to the one remainder
-// below (a cursor that would land on the ring end wraps to zero after crediting the same bytes).
+// Mirrors PrefetcherPipe::resize_sender_interface<true>() step for step, including the case where
+// aligning up lands in the new size's trailing gap: there the cursor wraps to zero instead, and the
+// credit covers everything from the old cursor to the end of the full ring.
 //
 // A cursor already on the grid takes no credit, so this is idempotent: a caller pushing a run of
 // same-sized tensors can call it before each one.
 FORCE_INLINE void pipe_set_entry_size(PipeSenderCtx& ctx, uint32_t entry_bytes, uint8_t noc) {
     ASSERT(entry_bytes != 0);
     ASSERT(entry_bytes % L1_ALIGNMENT == 0);
-    ASSERT(ctx.ring_bytes % entry_bytes == 0);
+    ASSERT(entry_bytes <= ctx.ring_bytes);
     ctx.entry_bytes = entry_bytes;
+    const uint32_t usable = pipe_usable_bytes(ctx);
     for (uint32_t r = 0; r < ctx.num_receivers; ++r) {
-        const uint32_t offset_into_entry = pipe_derived_wr_offset(ctx, r) % entry_bytes;
-        if (offset_into_entry == 0) {
-            continue;
+        const uint32_t current_offset = pipe_derived_wr_offset(ctx, r);
+        const uint32_t offset_into_entry = current_offset % entry_bytes;
+        uint32_t adjustment_bytes = offset_into_entry == 0 ? 0u : entry_bytes - offset_into_entry;
+        if (current_offset + adjustment_bytes >= usable) {
+            // Aligning up reaches the usable limit: wrap to the ring base instead, crediting the
+            // trailing gap along with the skipped bytes so the cursor lands back on zero.
+            adjustment_bytes = ctx.ring_bytes - current_offset;
         }
-        pipe_credit_receiver(ctx, r, (entry_bytes - offset_into_entry) / L1_ALIGNMENT, noc);
+        if (adjustment_bytes != 0) {
+            pipe_credit_receiver(ctx, r, adjustment_bytes / L1_ALIGNMENT, noc);
+        }
     }
 }
 
@@ -175,8 +206,9 @@ FORCE_INLINE void pipe_write_to_receiver(
     const PipeSenderCtx& ctx, uint32_t r, uint32_t src_l1_addr, uint32_t num_entries, uint8_t noc) {
     const uint32_t wr_offset = pipe_derived_wr_offset(ctx, r);
     const uint32_t bytes = num_entries * ctx.entry_bytes;
-    // Contiguous-write rule: a write must not straddle the ring wrap.
-    ASSERT(wr_offset + bytes <= ctx.ring_bytes);
+    // Contiguous-write rule: a write must not straddle the usable limit, past which the ring holds
+    // only the trailing gap.
+    ASSERT(wr_offset + bytes <= pipe_usable_bytes(ctx));
 
     const uint32_t remote_noc_xy = pipe_receiver_noc_xy(ctx, r, noc);
     const uint64_t dst = get_noc_addr_helper(remote_noc_xy, ctx.fifo_start_addr + wr_offset);
