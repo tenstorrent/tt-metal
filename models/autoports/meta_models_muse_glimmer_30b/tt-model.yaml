@@ -64,6 +64,10 @@ serve:
     tool_parser: muse_glimmer
     reasoning_parser: muse_glimmer
   args:
+    # Keep the runtime on the same immutable snapshot as the package's weights
+    # pointer. The repository's default branch is metadata-only, and recording
+    # the revision above does not make vLLM use it automatically.
+    - [--revision, f84ecc3a0ea984a4c04542a84269e3d065350a6e]
     - [--tool-parser-plugin, /opt/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/muse_glimmer_tool_parser.py]
     - [--reasoning-parser-plugin, /opt/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/reasoning_parser.py]
   additional_config:
