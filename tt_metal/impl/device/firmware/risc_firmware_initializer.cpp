@@ -350,12 +350,15 @@ void RiscFirmwareInitializer::clear_launch_messages_on_eth_cores(tt::ChipId devi
 
         CoreCoord virtual_eth_core =
             cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, logical_eth_core, CoreType::ETH);
-        cluster_.write_core(
+        // The launch message must land before the go message telling the core to act on it.
+        // write_core gives no ordering guarantee between two writes to different addresses; write_core_immediate
+        // does, via IoOrdering::Strict over a UC-mapped window (matching llrt::write_launch_msg_to_core).
+        cluster_.write_core_immediate(
             init_launch_msg_data.data(),
             init_launch_msg_data.size(),
             tt_cxy_pair(device_id, virtual_eth_core),
             hal_.get_dev_addr(programmable_core_type, HalL1MemAddrType::LAUNCH));
-        cluster_.write_core(
+        cluster_.write_core_immediate(
             go_msg.data(),
             go_msg.size(),
             {static_cast<size_t>(device_id), virtual_eth_core},
@@ -1108,12 +1111,15 @@ void RiscFirmwareInitializer::initialize_firmware(
             hal_.get_dev_addr(programmable_core_type, HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR);
         uint32_t go_message_index_addr = hal_.get_dev_addr(programmable_core_type, HalL1MemAddrType::GO_MSG_INDEX);
         if (core_type != HalProgrammableCoreType::TENSIX) {
-            cluster_.write_core(
+            // The launch message must land before the go message telling the core to act on it.
+            // write_core gives no ordering guarantee between two writes to different addresses; write_core_immediate
+            // does, via IoOrdering::Strict over a UC-mapped window (matching llrt::write_launch_msg_to_core).
+            cluster_.write_core_immediate(
                 init_launch_msg_data.data(),
                 init_launch_msg_data.size(),
                 tt_cxy_pair(device_id, virtual_core),
                 launch_addr);
-            cluster_.write_core(go_msg.data(), go_msg.size(), tt_cxy_pair(device_id, virtual_core), go_addr);
+            cluster_.write_core_immediate(go_msg.data(), go_msg.size(), tt_cxy_pair(device_id, virtual_core), go_addr);
             uint32_t zero = 0;
             cluster_.write_reg(&zero, tt_cxy_pair(device_id, virtual_core), launch_msg_buffer_read_ptr_addr);
             cluster_.write_reg(&zero, tt_cxy_pair(device_id, virtual_core), go_message_index_addr);
@@ -1249,6 +1255,12 @@ void RiscFirmwareInitializer::initialize_firmware(
                 std::vector<uint8_t> data(factory.size_of<dev_msgs::ncrisc_halt_msg_t>(), 0);
                 cluster_.write_core(data.data(), data.size(), tt_cxy_pair(device_id, virtual_core), ncrisc_halt_addr);
             }
+
+            // The firmware binary and the ncrisc_halt mailbox above go through write_core, which does
+            // not guarantee the data has landed when it returns. Both branches below start the core
+            // executing that firmware, so flush first: the barrier in initialize_and_launch_firmware
+            // runs only after every core has already been started, which is too late for eth.
+            cluster_.l1_barrier(device_id);
 
             if (hal_.get_eth_fw_is_cooperative() || core_type != HalProgrammableCoreType::ACTIVE_ETH ||
                 !rtoptions_.get_enable_2_erisc_mode()) {
