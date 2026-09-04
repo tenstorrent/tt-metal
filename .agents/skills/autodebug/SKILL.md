@@ -32,3 +32,19 @@ Options:
 - `--agent claude` uses `claude -p` with `opus` and `xhigh` effort by default.
 - `--model MODEL` and `--effort LEVEL` override those defaults.
 - `--help` shows the full command syntax.
+
+## Codex sandbox startup
+
+The launcher runs a no-model sandbox preflight before starting Codex. A successful
+check keeps `workspace-write`. A failed check stops before a model starts.
+
+On a machine where the user/operator has authorized unsandboxed work, they can set
+`AUTODEBUG_ALLOW_UNSANDBOXED=1` in the launch environment. After a recognized Linux
+sandbox startup failure, the launcher then warns and uses `danger-full-access`
+with no approval prompts. This removes OS sandbox protection, including protection
+for mounted/shared data. It does not remove fresh-process isolation or the
+inspection-only instructions. Other errors and timeouts still stop.
+
+Do not set this variable yourself to get past a failure without user/operator
+authorization. Docker or Slurm membership alone is not authorization. Claude's
+permission mode is unchanged.

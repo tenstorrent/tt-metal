@@ -26,6 +26,11 @@ Options:
                            .agents/scripts/AUTODEBUG_PROMPT.md.
   --help                   Show this help.
 
+Environment:
+  AUTODEBUG_ALLOW_UNSANDBOXED=1
+    Permit unsandboxed Codex only after a recognized sandbox startup failure.
+    Set only with user/operator approval for this environment. Default: 0.
+
 Examples:
   .agents/scripts/autodebug.sh models/demos/foo "decode diverges after token 128"
   .agents/scripts/autodebug.sh --agent claude "why does this test hang?"
@@ -131,10 +136,11 @@ PY
 case "${AGENT,,}" in
     codex)
         command -v codex >/dev/null 2>&1 || die "codex executable not found"
+        SANDBOX="$(python3 "$SCRIPT_DIR/codex_sandbox.py")"
         exec codex --ask-for-approval never exec \
             --model "$CODEX_MODEL" \
             -c "model_reasoning_effort=$EFFORT" \
-            --sandbox workspace-write \
+            --sandbox "$SANDBOX" \
             --skip-git-repo-check \
             --color never \
             --cd "$RUN_DIR" \
