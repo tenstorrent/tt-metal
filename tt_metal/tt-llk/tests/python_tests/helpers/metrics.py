@@ -52,7 +52,6 @@ All metrics are bounded 0-100% unless noted otherwise.
 """
 
 import pandas as pd
-from loguru import logger
 
 from .perf.schema import (
     MARKER,
@@ -386,87 +385,3 @@ def export_counters(
         rows.append(row)
 
     return pd.DataFrame(rows)
-
-
-# ── Print ────────────────────────────────────────────────────────────
-
-
-def _print_detail(metrics: dict) -> None:
-    """Log detailed efficiency metrics for a single (zone, run) result."""
-
-    def fmt(value, decimals=2):
-        if value is None:
-            return "N/A"
-        return f"{value:.{decimals}f}%"
-
-    m = metrics
-    sep = "─" * 70
-
-    lines = [
-        f"\n{sep}",
-        "  COMPUTE UTILIZATION",
-        sep,
-        f"  {'FPU Utilization:':<40} {fmt(m.get('fpu_utilization_pct')):>12}",
-        f"  {'Compute (FPU+SFPU) Utilization:':<40} {fmt(m.get('compute_utilization_pct')):>12}",
-        f"\n{sep}",
-        "  THREAD STALL RATES",
-        sep,
-        f"  {'Unpack Thread (T0) Stall:':<40} {fmt(m.get('unpack_thread_stall_pct')):>12}",
-        f"  {'Math Thread (T1) Stall:':<40} {fmt(m.get('math_thread_stall_pct')):>12}",
-        f"  {'Pack Thread (T2) Stall:':<40} {fmt(m.get('pack_thread_stall_pct')):>12}",
-        f"\n{sep}",
-        "  SEMAPHORE WAIT RATES",
-        sep,
-        f"  {'Math Semaphore Wait:':<40} {fmt(m.get('math_sem_wait_pct')):>12}",
-        f"  {'Pack Semaphore Wait:':<40} {fmt(m.get('pack_sem_wait_pct')):>12}",
-        f"\n{sep}",
-        "  UNPACKER WRITE EFFICIENCY",
-        sep,
-        f"  {'Unpacker0 (srcA):':<40} {fmt(m.get('unpack0_write_eff_pct')):>12}",
-        f"  {'Unpacker1 (srcB):':<40} {fmt(m.get('unpack1_write_eff_pct')):>12}",
-        f"  {'Combined:':<40} {fmt(m.get('unpack_write_eff_pct')):>12}",
-        f"\n{sep}",
-        "  UNPACKER-TO-MATH DATA FLOW",
-        sep,
-        f"  {'srcA Buffer Availability:':<40} {fmt(m.get('unpack_to_math_flow0_pct')):>12}",
-        f"  {'srcB Buffer Availability:':<40} {fmt(m.get('unpack_to_math_flow1_pct')):>12}",
-        f"  {'Combined:':<40} {fmt(m.get('unpack_to_math_flow_pct')):>12}",
-        f"\n{sep}",
-        "  PACKER METRICS",
-        sep,
-        f"  {'Pack Utilization:':<40} {fmt(m.get('pack_utilization_pct')):>12}",
-        f"  {'Pack Dest Data Efficiency:':<40} {fmt(m.get('pack_dest_eff_pct')):>12}",
-        f"\n{sep}",
-        "  MATH PIPELINE STALLS",
-        sep,
-        f"  {'Fidelity Phase Stall:':<40} {fmt(m.get('fidelity_stall_pct')):>12}",
-        f"  {'Math Src Data Stall:':<40} {fmt(m.get('math_src_stall_pct')):>12}",
-    ]
-    logger.info("\n".join(lines))
-
-
-def _print_stability(zone_metrics: list[dict]) -> None:
-    """Log mean/std summary for multiple runs of the same zone."""
-    if len(zone_metrics) < 2:
-        return
-
-    metrics_df = pd.DataFrame(zone_metrics)
-
-    pct_cols = [c for c in metrics_df.columns if c.endswith("_pct")]
-
-    lines = [
-        f"\n  STABILITY ACROSS {len(zone_metrics)} RUNS (mean +/- std)",
-        f"  {'─' * 66}",
-        f"  {'Metric':<40} {'Mean':>12} {'Std':>12}",
-        f"  {'─' * 40} {'─' * 12} {'─' * 12}",
-    ]
-
-    for col in pct_cols:
-        values = metrics_df[col].dropna()
-        if len(values) >= 2:
-            mean_val = float(values.mean())
-            std_val = float(values.std())
-            label = col.replace("_pct", "").replace("_", " ")
-            lines.append(f"  {label:<40} {mean_val:>11.2f}% {std_val:>11.2f}%")
-
-    logger.info("\n".join(lines))
