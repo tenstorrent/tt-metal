@@ -315,31 +315,24 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
             operation_attributes.distributed_norm_stage == DistributedLayerNormStage::NOT_DISTRIBUTED,
             "Fused activation is not supported for distributed layernorm");
     }
+
+    const bool use_welford = std::visit(
+        [](const auto& program_config) { return program_config.use_welford; }, operation_attributes.program_config);
+    if (use_welford) {
+        TT_FATAL(
+            a.device()->arch() != tt::ARCH::QUASAR,
+            "LayerNorm with use_welford=True is not supported on Quasar; the two-pass SFPU implementation "
+            "currently supports Wormhole and Blackhole only.");
+        TT_FATAL(
+            operation_attributes.norm_type != LayerNormType::RMSNORM,
+            "Welford's algorithm is not supported for RMSNorm");
+    }
+
     std::visit(
         [&](const auto& program_config) {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
-            if constexpr (std::is_same_v<ProgramConfigType, LayerNormDefaultProgramConfig>) {
-                if (program_config.use_welford) {
-                    TT_FATAL(
-                        a.device()->arch() != tt::ARCH::QUASAR,
-                        "LayerNorm with use_welford=True is not supported on Quasar; the two-pass SFPU implementation "
-                        "currently supports Wormhole and Blackhole only.");
-                    TT_FATAL(
-                        operation_attributes.norm_type != LayerNormType::RMSNORM,
-                        "Welford's algorithm is not supported for RMSNorm");
-                }
-                if (operation_attributes.norm_type == LayerNormType::RMSNORM) {
-                    TT_FATAL(!program_config.use_welford, "Welford's algorithm is not supported for RMSNorm");
-                }
-            } else if constexpr (std::is_same_v<ProgramConfigType, LayerNormShardedMultiCoreProgramConfig>) {
-                if (program_config.use_welford) {
-                    TT_FATAL(
-                        a.device()->arch() != tt::ARCH::QUASAR,
-                        "LayerNorm with use_welford=True is not supported on Quasar; the two-pass SFPU implementation "
-                        "currently supports Wormhole and Blackhole only.");
-                    TT_FATAL(
-                        operation_attributes.norm_type != LayerNormType::RMSNORM,
-                        "Welford's algorithm is not supported for RMSNorm");
+            if constexpr (std::is_same_v<ProgramConfigType, LayerNormShardedMultiCoreProgramConfig>) {
+                if (use_welford) {
                     TT_FATAL(
                         operation_attributes.distributed_norm_stage == DistributedLayerNormStage::NOT_DISTRIBUTED,
                         "Welford's algorithm is not supported for distributed layernorm");
