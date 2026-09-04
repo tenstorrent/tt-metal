@@ -1396,8 +1396,8 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
         tt_l1_ptr PACKET_HEADER_TYPE* packet_header = const_cast<PACKET_HEADER_TYPE*>(
             local_receiver_channel.template get_packet_header<PACKET_HEADER_TYPE>(receiver_buffer_index));
 
-        ROUTING_FIELDS_TYPE cached_routing_fields;
-#if !defined(FABRIC_2D) || !defined(DYNAMIC_ROUTING_ENABLED)
+        ROUTING_FIELDS_TYPE cached_routing_fields{};
+#ifndef FABRIC_2D
         cached_routing_fields = packet_header->routing_fields;
 #endif
         if constexpr (!skip_src_ch_id_update && !enable_first_level_ack) {
