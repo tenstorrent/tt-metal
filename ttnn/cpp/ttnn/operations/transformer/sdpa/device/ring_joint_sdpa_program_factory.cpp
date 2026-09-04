@@ -195,13 +195,10 @@ constexpr uint32_t kComputeKernelIndex = 2;
 
 // Dense all-gather appends reader-forward, writer-forward, reader-backward, writer-backward.
 // Compact sliding appends only its predecessor reader/writer pair at indices 3 and 4.
-constexpr uint32_t kFirstAllGatherKernelIndex = 3;
-constexpr uint32_t kAllGatherReaderForwardKernelIndex = kFirstAllGatherKernelIndex + ag_rt::kReaderForwardKernelOffset;
-constexpr uint32_t kAllGatherWriterForwardKernelIndex = kFirstAllGatherKernelIndex + ag_rt::kWriterForwardKernelOffset;
-constexpr uint32_t kAllGatherReaderBackwardKernelIndex =
-    kFirstAllGatherKernelIndex + ag_rt::kReaderBackwardKernelOffset;
-constexpr uint32_t kAllGatherWriterBackwardKernelIndex =
-    kFirstAllGatherKernelIndex + ag_rt::kWriterBackwardKernelOffset;
+constexpr uint32_t kAllGatherReaderForwardKernelIndex = 3;
+constexpr uint32_t kAllGatherWriterForwardKernelIndex = 4;
+constexpr uint32_t kAllGatherReaderBackwardKernelIndex = 5;
+constexpr uint32_t kAllGatherWriterBackwardKernelIndex = 6;
 constexpr uint32_t kNeighborHaloReaderKernelIndex = 3;
 constexpr uint32_t kNeighborHaloWriterKernelIndex = 4;
 
@@ -613,6 +610,7 @@ void apply_ring_joint_scalar_runtime_args(
     const std::array<const Tensor*, 2> ag_inputs = {
         &input_k, tensor_args.input_v.has_value() ? &tensor_args.input_v.value() : &input_k};
     const bool uses_neighbor_halo = args.has_sliding_window();
+
     // Re-patch the fused all-gather readers to gather the single cache slot `kv_cache_batch_idx`.
     // input_batch_base is uniform across all gather cores/links, so patch every core that runs the
     // reader. Mirrors the helper's create-time arithmetic so miss and hit paths agree.
@@ -2928,7 +2926,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             // Share the split-forwarding decision derived above so the all-gather only splits when this
             // consumer implements the second-half wait.
             sdpa_fused_op_signaler->split_forwarding_enabled,
-            /*partial_readiness_enabled=*/false,
             rank_mapping);
     }
 
