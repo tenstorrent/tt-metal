@@ -851,6 +851,35 @@
 # before deleting it. Decoder outputs gate on nPCC (adapter.gate_hidden_states_on_npcc).
 # PREFILL_TRACE_DIR deliberately unexported, unlike the sibling rows: the adapter's default points at
 # the staged golden.
+- name: "Mistral-Small-4-119B chunked prefill throughput 100k (record-only)"
+  # Required, not decoration: without it the workflow skips its TorusXY fabric-profile step, so
+  # PREFILL_TORUS_XY_CERTIFIED is unset and conftest skips every row before device open.
+  fabric_profile: torus_xy
+  cmd: |
+    export MISTRAL4_HF_MODEL=/mnt/models/blaze/mistralai/Mistral-Small-4-119B-2603
+    export TT_MISTRAL4_PREFILL_TTNN_CACHE=/mnt/models/blaze/mistralai/Mistral-Small-4-Cache/CI
+
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      set -eo pipefail
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_mistral4_prefill_transformer_chunked_no_pcc -k "mistral4 and torus-xy-8x4 and L36 and chunks20 and ten_iters" -vvv --tb=short | tee /tmp/mistral4_chunked_perf.out
+      # A leg whose rows all skip exits 0 and reads as green. Fail instead.
+      grep -qE "[0-9]+ passed" /tmp/mistral4_chunked_perf.out || { echo "::error::mistral4_chunked_perf: every row skipped, so the leg measured nothing; check the TorusXY fabric profile and the certified allocation"; exit 1; }
+    '
+  test_type: mistral4_chunked_perf
+  test_tags: [mistral4, transformer]
+  test_group: module
+  skus:
+    bh_sc1:
+      # ~1.4x the worst observed test step (24.9 min over three runs). The run-to-run swing is the
+      # weight cache -- tt_transformer_creation ranges 1-17 min on page-cache warmth while tt_forward
+      # is stable -- and it does not show up in the per-chunk medians, which have their own bands.
+      timeout: 35
+  owner_id: U08GEEEEC75 # ssalice
+  team: models
+  sp_config: sc1
+
+
 - name: "Mistral-Small-4-119B chunked prefill padded accuracy 55k@5k (no trace)"
   fabric_profile: torus_xy
   cmd: |

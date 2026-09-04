@@ -246,6 +246,62 @@ KIMI_UNTRACED_BASELINE_CHUNK_TIMES_S = {
 TRACED_PERF_MARGIN = 0.03
 UNTRACED_PERF_MARGIN = 0.05
 
+# Mistral needs wider bands than Kimi. Traced: 5%, because the per-unit-KV cost varies up to 4.3%
+# per chunk between runs (3% failed 7/20 chunks on the next green run). Untraced: 8% plus one
+# isolated chunk, because 2 of 8 runs had a single chunk spike 32-66% while the rest sat in band.
+MISTRAL4_TRACED_PERF_MARGIN = 0.05
+MISTRAL4_UNTRACED_PERF_MARGIN = 0.08
+MISTRAL4_UNTRACED_MAX_OUT_OF_BAND = 1
+
+# Mistral-Small-4-119B chunked-prefill perf baselines. Same shape and the same two-table split as the
+# Kimi tables above, and for the same reason: traced and untraced are different regimes, so a baseline
+# from one can never gate the other.
+#
+# EMPTY UNTIL MEASURED. A missing key leaves the run record-only (print_duration_table prints the
+# table and asserts nothing), which is exactly the state every Mistral row is in today. Populate from
+# a green CI run's per-chunk medians -- NOT from a galaxy box, which runs the same work ~2.4x slower --
+# then the row gates itself with no further change.
+#
+# Read the PER-CHUNK MEDIAN from the rendered table, not `iter N done ... in Xs`: the iteration total
+# carries fixed overhead that does not scale with the window and understates throughput by 17-30%
+# (see test_mistral4_prefill_transformer_chunked_no_pcc's docstring).
+MISTRAL4_TRACED_BASELINE_CHUNK_TIMES_S: dict[tuple[int, int, int], list[float]] = {
+    # Deliberately empty: not gateable yet. Over seven CI runs the depth-independent cost held to
+    # +/-1% while the per-unit-KV cost -- the MLA/SDPA term this row exists to catch -- spanned 65%,
+    # so any fixed baseline fails the next run. AICLK, topology, device count and code are ruled
+    # out; within a session it repeats to 0.003 s, so it is per-session. Arm this once that is
+    # understood; the untraced twin below shows the machinery works.
+    # (36, 20, 10): [...],
+}
+MISTRAL4_UNTRACED_BASELINE_CHUNK_TIMES_S: dict[tuple[int, int, int], list[float]] = {
+    # Median-of-medians over three healthy CI runs. Flat ~0.69 s/chunk: untraced is host-dispatch
+    # bound, so it catches an eager-dispatch regression and cannot see MLA at all.
+    # Run 33799453086 excluded -- its traced row died with "Device 17: All NOCs hung", and both its
+    # outliers are the only samples that strain the band.
+    (36, 20, 10): [
+        0.691,
+        0.698,
+        0.694,
+        0.692,
+        0.688,
+        0.693,
+        0.697,
+        0.702,
+        0.700,
+        0.692,
+        0.694,
+        0.690,
+        0.699,
+        0.690,
+        0.702,
+        0.694,
+        0.696,
+        0.696,
+        0.694,
+        0.692,
+    ],
+}
+
 # Deepest config whose per-layer PCC is asserted; deeper runs (L61) stay record-only until their
 # accumulation headroom is pinned.
 GATED_LAYER_DEPTH = 10
@@ -1172,8 +1228,37 @@ def test_mistral4_prefill_transformer_chunked_padded(
     )
 
 
+def mistral4_chunked_perf_gate(use_trace, num_layers, n_chunks, num_iters, perf_margin=None):
+    """``(baseline_chunk_times_s, margin, max_out_of_band)`` for one Mistral parametrization,
+    mirroring ``kimi_chunked_perf_gate`` but with a third element Kimi does not need.
+
+    No ``preload_isl`` axis: the Mistral rows always start from an empty cache, so there is no
+    preload depth to disqualify a baseline. Everything else is the same contract -- a baseline of
+    None leaves the run record-only, and the mode picks both the table and the default margin so a
+    traced baseline can never arm an untraced run.
+
+    The untraced table is armed; the traced one stays record-only (see the tables for why).
+    ``max_out_of_band`` is 0 for traced -- it has no isolated-spike mode, so if it is ever armed it
+    should be armed with no allowance.
+    """
+    table, default_margin, max_oob = (
+        (MISTRAL4_TRACED_BASELINE_CHUNK_TIMES_S, MISTRAL4_TRACED_PERF_MARGIN, 0)
+        if use_trace
+        else (
+            MISTRAL4_UNTRACED_BASELINE_CHUNK_TIMES_S,
+            MISTRAL4_UNTRACED_PERF_MARGIN,
+            MISTRAL4_UNTRACED_MAX_OUT_OF_BAND,
+        )
+    )
+    baseline = table.get((num_layers, n_chunks, num_iters))
+    return baseline, (default_margin if perf_margin is None else perf_margin), max_oob
+
+
 @pytest.mark.parametrize("use_trace", [False, True], ids=["notrace", "traced"])
-@pytest.mark.parametrize("num_iters", [2], ids=["two_iters"])
+# 2 iters is the exploration sweep (one warmup, one measured) and stays record-only. 10 iters is the
+# gate-capable row: the gate reads the MEDIAN of the post-warmup iterations, and one measured
+# iteration has no median. Kimi gates at 10 iters for the same reason.
+@pytest.mark.parametrize("num_iters", [2, 10], ids=["two_iters", "ten_iters"])
 # Zero-padded: `-k chunks5` would substring-match chunks51 (the rows below hack around the same
 # collision with the ad-hoc id `chunks_eleven`).
 @pytest.mark.parametrize(
@@ -1227,6 +1312,9 @@ def test_mistral4_prefill_transformer_chunked_no_pcc(
     from the rendered table, not `iter N done ... in Xs` -- the iteration total carries fixed overhead
     that does not scale with the window, so window/iter_total understates throughput by 17-30%.
     """
+    baseline_chunk_times_s, perf_margin, max_out_of_band = mistral4_chunked_perf_gate(
+        use_trace, num_layers, n_chunks, num_iters
+    )
     run_chunked_transformer_updated(
         variant,
         config_only,
@@ -1243,6 +1331,11 @@ def test_mistral4_prefill_transformer_chunked_no_pcc(
         # chunks51 is 261,120 tokens; sized per-row so the longest sweep needs no env var and the
         # other variants' baselines keep the 100k default.
         seq_cache=max(SEQ_CACHE_NOPCC, n_chunks * CHUNK),
+        # Untraced is armed; traced is record-only until its variance is understood. See
+        # mistral4_chunked_perf_gate and the two baseline tables.
+        baseline_chunk_times_s=baseline_chunk_times_s,
+        perf_margin=perf_margin,
+        max_out_of_band=max_out_of_band,
     )
 
 
@@ -1321,6 +1414,7 @@ def run_chunked_transformer_updated(
     routing_use_l1_small_for_semaphores=False,
     baseline_chunk_times_s=None,
     perf_margin=None,
+    max_out_of_band=0,
     preload_isl=0,
     check_pcc=False,
     use_trace=False,
@@ -1409,7 +1503,32 @@ def run_chunked_transformer_updated(
                     )
             rows.append(row)
 
+        # Split the medians into a + b*c: a is depth-independent (MoE, matmuls, dispatch), b is the
+        # per-unit-KV MLA/SDPA cost. Logged always -- they vary independently, and reading only the
+        # per-chunk medians makes a shift in b look like noise that grows with depth.
+        medians = [statistics.median([row[c] for row in samples]) for c in range(n_chunks)]
+        if n_chunks >= 3:
+            xs = list(range(n_chunks))
+            xb, yb = statistics.mean(xs), statistics.mean(medians)
+            denom = sum((x - xb) ** 2 for x in xs)
+            b_fit = sum((x - xb) * (y - yb) for x, y in zip(xs, medians)) / denom if denom else 0.0
+            logger.info(
+                f"depth split: a = {(yb - b_fit * xb) * 1000:.1f} ms (depth-independent), "
+                f"b = {b_fit * 1000:.2f} ms per chunk of KV depth (MLA/SDPA scaling)"
+            )
+
+        # A regression moves the whole row; the single-chunk spikes this row actually exhibits do
+        # not. Tolerating one isolated chunk avoids flaking on those without hiding anything broader.
+        if gated and len(failures) <= max_out_of_band and failures:
+            logger.warning(
+                f"{len(failures)} chunk(s) out of band, within the {max_out_of_band} tolerated as "
+                f"isolated noise; NOT failing the run. Out-of-band: {failures}"
+            )
+            failures = []
+
         margin_note = f", baseline gate +/- {margin * 100:.1f}%" if gated else ", record-only (no baseline)"
+        if gated and max_out_of_band:
+            margin_note += f", up to {max_out_of_band} isolated chunk(s) tolerated"
         logger.info(f"chunk timing stats computed over {len(samples)} iterations (iter 0 omitted){margin_note}")
         return failures, render_table(headers, rows)
 
