@@ -70,8 +70,15 @@ _OPS_WITH_STABLE_SORT = {
     MathOperation.TopKRebuild,
 }
 
+# The defuse sweep belongs to the fused engine only. Fused rows: the local-sort row includes the
+# fuse sweep (a kernel fuses each freshly loaded pair of tiles before their local sort), merge and
+# rebuild are network-only (they run on already-packed words), defuse is timed here on its own.
+_OPS_FUSED_ONLY = {MathOperation.TopKDefuse}
+
 
 def _get_dest_acc_modes(mathop, formats):
+    if mathop in _OPS_FUSED_ONLY:
+        return [DestAccumulation.Yes]
     if mathop in _OPS_WITHOUT_DEST_ACC:
         return [DestAccumulation.No]
     # TestConfig promotes dest_acc=No to Yes for outlier format combos, so asking
@@ -88,6 +95,8 @@ def _get_fast_modes(mathop):
 
 
 def _get_fused_sort_modes(mathop):
+    if mathop in _OPS_FUSED_ONLY:
+        return [FusedSort.Yes]
     if mathop in _OPS_WITH_STABLE_SORT:
         return [FusedSort.Yes, FusedSort.No]
     return [FusedSort.No]

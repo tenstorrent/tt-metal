@@ -406,7 +406,8 @@ template <
     bool STABLE_SORT        = false,
     bool CLAMP_NEGATIVE     = false,
     DataFormat TYPECAST_IN  = DataFormat::Invalid,
-    DataFormat TYPECAST_OUT = DataFormat::Invalid>
+    DataFormat TYPECAST_OUT = DataFormat::Invalid,
+    bool FUSED_SORT         = false>
 void call_unary_sfpu_operation_init()
 {
     // Once-per-kernel SFPU init (SFPU config reg + invariant ADDR_MOD_7). In metal this is hoisted into the
@@ -675,6 +676,21 @@ void call_unary_sfpu_operation_init()
         // (program ADDR_MOD_6 + reset the dest RWC counter), so one representative init covers
         // the whole group; OPERATION is still forwarded so the per-op init tag stays correct.
         llk_math_eltwise_unary_sfpu_init<OPERATION>(sfpu::equal_zero_init);
+    }
+    else if constexpr (
+        OPERATION == SfpuType::topk_local_sort || OPERATION == SfpuType::topk_merge || OPERATION == SfpuType::topk_rebuild ||
+        OPERATION == SfpuType::topk_defuse)
+    {
+        // The topk network needs its own init (replay state, dest-index tracking, constants); the
+        // fused engine and the defuse sweep need the fused variant.
+        if constexpr (FUSED_SORT || OPERATION == SfpuType::topk_defuse)
+        {
+            _init_topk_fused_();
+        }
+        else
+        {
+            _init_topk();
+        }
     }
     else
     {
@@ -1081,6 +1097,12 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     }
     else if constexpr (OPERATION == SfpuType::topk_local_sort)
     {
+        if constexpr (FUSED_SORT)
+        {
+            // A real kernel fuses each freshly loaded pair of tiles right before their local sort,
+            // so the fused local-sort row includes the fuse sweep and the re-record it forces.
+            SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, _topk_fuse_tile_, (true /* largest */), dst_index, vector_mode);
+        }
         SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
@@ -1093,6 +1115,18 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
             0 /* i_start_phase */,
             10 /* i_end_step */,
             0 /* i_start_step */);
+    }
+    else if constexpr (OPERATION == SfpuType::topk_defuse)
+    {
+        // Runs once per output tile at the end of a fused sort; timed on its own.
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            _topk_defuse_tile_,
+            (true /* largest */, 9u /* TOPK_SFPSTORE_MODE_PACK_UINT16 */),
+            dst_index,
+            vector_mode,
+            1 /* num_tiles */);
     }
     else if constexpr (OPERATION == SfpuType::topk_merge)
     {
