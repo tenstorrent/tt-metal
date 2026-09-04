@@ -100,9 +100,9 @@ def encode_image_host(hf_model_name, inputs):
 
 
 def encode_image_tt(mesh_device, inputs, debug=False):
-    """Vision tower on device (models/demos/exaone45_vl). Returns [n, out_hidden]."""
-    from models.demos.exaone45_vl.tt.model import DropInVisionTransformer
-    from models.demos.exaone45_vl.tt.model_config import VisionModelArgs
+    """Vision tower on device (models/experimental/exaone45_vl). Returns [n, out_hidden]."""
+    from models.experimental.exaone45_vl.tt.model import DropInVisionTransformer
+    from models.experimental.exaone45_vl.tt.model_config import VisionModelArgs
 
     vargs = VisionModelArgs(mesh_device, max_batch_size=1, max_seq_len=2048)
     vision_ref = vargs.reference_vision_model()
@@ -126,7 +126,7 @@ def main():
         "--vision-device",
         choices=["host", "tt"],
         default="host",
-        help="where the vision tower runs: host CPU (HF) or on-device (models/demos/exaone45_vl)",
+        help="where the vision tower runs: host CPU (HF) or on-device (models/experimental/exaone45_vl)",
     )
     parser.add_argument("--vision-debug", action="store_true", help="log TT-vision PCC vs the HF reference")
     cli = parser.parse_args()

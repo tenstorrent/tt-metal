@@ -574,7 +574,7 @@ targets:
             perf:
               # Measured 2026-08-25 on P150x8: 34.1 t/s/u (1090 t/s), TTFT 14.4 ms.
               decode_t/s/u: 32
-              prefill_time_to_first_token: 25
+              prefill_time_to_first_token: 14.4
             accuracy: {}
 
   llama3.1-8b:

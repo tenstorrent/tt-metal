@@ -6,7 +6,7 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.exaone45_vl.tt.vision_rmsnorm import RMSNorm
+from models.experimental.exaone45_vl.tt.vision_rmsnorm import RMSNorm
 
 
 class PatchMerger(LightweightModule):

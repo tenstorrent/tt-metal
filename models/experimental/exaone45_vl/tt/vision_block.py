@@ -4,8 +4,8 @@
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
-from models.demos.exaone45_vl.tt.vision_attention import VisionAttention
-from models.demos.exaone45_vl.tt.vision_mlp import MLP
+from models.experimental.exaone45_vl.tt.vision_attention import VisionAttention
+from models.experimental.exaone45_vl.tt.vision_mlp import MLP
 from models.tt_transformers.tt.common import Mode
 
 

@@ -26,7 +26,7 @@ e2e tower-vs-HF 0.9984 inside the text demo.
 Run tests:
 ```bash
 export HF_MODEL=LGAI-EXAONE/EXAONE-4.5-33B MESH_DEVICE=P150x8
-pytest models/demos/exaone45_vl/tests/
+pytest models/experimental/exaone45_vl/tests/
 ```
 
 End-to-end image chat (vision on device + text TP=8):

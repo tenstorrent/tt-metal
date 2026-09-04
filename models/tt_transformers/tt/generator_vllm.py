@@ -1017,7 +1017,9 @@ class Exaone4_5_ForConditionalGeneration(HybridAttentionForCausalLM):
     ``ModelRegistry`` of the engine-core process. tt-inference-server does
     this via an ``EXTRA_MODELS_DIR`` plugin bundle (see
     tenstorrent/tt-inference-server#5023); direct plugin users must supply
-    an equivalent registration.
+    an equivalent registration and set ``--max-model-len 131072``: the
+    checkpoint advertises 262144 tokens, but prefill above 131072 needs
+    sliding-window chunked prefill, which is not supported yet.
 
     The checkpoint is multimodal, but ModelArgs runs its text decoder only
     (``force_text_only``): hybrid LLLG sliding/full attention (via
@@ -1033,6 +1035,9 @@ class Exaone4_5_ForConditionalGeneration(HybridAttentionForCausalLM):
         "supports_sample_on_device": True,
     }
 
+    # One prefill chunk on P150x8 (MAX_PREFILL_CHUNK_SIZES["EXAONE-4.5-33B"]).
+    MAX_SUPPORTED_SEQ_LEN = 128 * 1024
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -1047,6 +1052,15 @@ class Exaone4_5_ForConditionalGeneration(HybridAttentionForCausalLM):
         tt_data_parallel=1,
         optimizations: str = "performance",
     ):
+        # Prompts longer than one prefill chunk take the chunked path, where
+        # the sliding-window attention layers raise NotImplementedError, so
+        # reject the checkpoint's 262144-token default up front.
+        if max_seq_len > cls.MAX_SUPPORTED_SEQ_LEN:
+            raise ValueError(
+                f"EXAONE-4.5 currently supports max_seq_len <= {cls.MAX_SUPPORTED_SEQ_LEN}; "
+                f"got {max_seq_len}. Sliding-window chunked prefill is not supported; "
+                "pass --max-model-len 131072 to vLLM."
+            )
         tt_model, model_args = initialize_vllm_text_transformer(
             hf_config,
             tt_data_parallel,
