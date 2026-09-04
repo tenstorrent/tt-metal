@@ -1785,9 +1785,9 @@ def compute_device_only_metrics(
             safe_complement("value_MATH_NOT_STALLED_DEST_WR_PORT", "value_MATH_INSTRN_AVAILABLE"),
             axis=1,
         )
-    # AVAILABLE_MATH is PACK-group, so an unpack-only capture has no column and would read as 100%.
-    # Existence only, unlike the sum guard above: an all-zero column is a real fully-stalled reading.
-    if "value_AVAILABLE_MATH" in eff_pivot.columns:
+    # Different capture groups (PACK, UNPACK), so either column can be absent; a missing numerator
+    # reads as a flat 100%. Existence only, unlike the sum guard above: all-zero is a real reading.
+    if "value_AVAILABLE_MATH" in eff_pivot.columns and "value_MATH_INSTRN_AVAILABLE" in eff_pivot.columns:
         eff_pivot["Math Scoreboard Stall Rate"] = eff_pivot.apply(
             safe_complement("value_AVAILABLE_MATH", "value_MATH_INSTRN_AVAILABLE"),
             axis=1,
