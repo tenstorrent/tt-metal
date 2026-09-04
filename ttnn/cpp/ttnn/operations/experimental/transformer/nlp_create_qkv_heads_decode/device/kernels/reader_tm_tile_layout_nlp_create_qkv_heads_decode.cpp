@@ -128,8 +128,12 @@ void kernel_main() {
                     qkv_x = 0;
                     qkv_y++;
                 }
-                qkv_noc_x = get_vararg(qkv_x);
-                qkv_noc_y = get_vararg(num_x + qkv_y);
+                // Past the last input core the cursor is one beyond the coordinate tables; the value is
+                // never used but the read is out of bounds (kernel runtime-arg assert), so guard it.
+                if (qkv_y < num_y) {
+                    qkv_noc_x = get_vararg(qkv_x);
+                    qkv_noc_y = get_vararg(num_x + qkv_y);
+                }
                 qkv_read_addr = q_start_addr + in_tile_offset_by_batch;
                 num_tiles_read_cur_core = 0;
             }
@@ -187,8 +191,12 @@ void kernel_main() {
                         qkv_x = 0;
                         qkv_y++;
                     }
-                    qkv_noc_x = get_vararg(qkv_x);
-                    qkv_noc_y = get_vararg(num_x + qkv_y);
+                    // Past the last input core the cursor is one beyond the coordinate tables; the value is
+                    // never used but the read is out of bounds (kernel runtime-arg assert), so guard it.
+                    if (qkv_y < num_y) {
+                        qkv_noc_x = get_vararg(qkv_x);
+                        qkv_noc_y = get_vararg(num_x + qkv_y);
+                    }
                     qkv_read_addr = q_start_addr + in_tile_offset_by_batch;
                     num_tiles_read_cur_core = 0;
                 }
@@ -247,8 +255,12 @@ void kernel_main() {
                         qkv_x = 0;
                         qkv_y++;
                     }
-                    qkv_noc_x = get_vararg(qkv_x);
-                    qkv_noc_y = get_vararg(num_x + qkv_y);
+                    // Past the last input core the cursor is one beyond the coordinate tables; the value is
+                    // never used but the read is out of bounds (kernel runtime-arg assert), so guard it.
+                    if (qkv_y < num_y) {
+                        qkv_noc_x = get_vararg(qkv_x);
+                        qkv_noc_y = get_vararg(num_x + qkv_y);
+                    }
                     qkv_read_addr = q_start_addr + in_tile_offset_by_batch;
                     num_tiles_read_cur_core = 0;
                 }

@@ -91,8 +91,13 @@ void kernel_main() {
                     qkv_x = 0;
                     qkv_y++;
                 }
-                qkv_noc_x = get_vararg(qkv_x);
-                qkv_noc_y = get_vararg(num_x + qkv_y);
+                // After the last input core the cursor points one past the coordinate tables; the
+                // value would never be used, but the read itself is out of bounds (caught by the
+                // kernel runtime-arg assert / watcher), so only refetch while a core is left.
+                if (qkv_y < num_y) {
+                    qkv_noc_x = get_vararg(qkv_x);
+                    qkv_noc_y = get_vararg(num_x + qkv_y);
+                }
                 qkv_read_addr = q_start_addr + in_tile_offset_by_head;
                 num_tiles_read_cur_core = 0;
             }
