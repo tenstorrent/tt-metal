@@ -29,6 +29,8 @@ inline void _llk_pack_untilize_set_dst_offset_(const TensorShape& tensor_shape, 
 {
     const std::uint32_t dst_addr_offset_face_rows = l1_base_idx * tensor_shape.num_faces_c_dim;
 
+    TTI_STALLWAIT(p_stall::STALL_CFG, 0, 0, p_stall::PACK0);
+
     cfg_rmw(THCON_PACKER0_REG0_UNTILIZE_DST_ADDR_OFFSET_RMW, dst_addr_offset_face_rows);
 }
 
