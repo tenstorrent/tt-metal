@@ -12,27 +12,6 @@ forward/cache/sampling primitive is the full-model generator's, including the
 canonical split-sampling traced decode path. No separate sampling path, no host
 argmax, no full-logits readback on the measured path.
 
-**Post-evidence-collection correctness fix (VS-011, found by `$stage-review`):**
-`allocate_kv_cache` sized this adapter's per-request page-table width as
-`num_blocks // max_batch_size` (an equal-share quota), instead of
-`cdiv(max_seq_len, block_size)` (the actual bound on how wide any one
-request's block list can legitimately be in a shared vLLM pool). At this
-stage's measured `num_blocks=7362`, that silently capped every request's
-addressable context at 230 blocks = **14,720 tokens** while still advertising
-`max_model_len=202752` -- a real, un-evidenced capability reduction, not a
-hard physical limit. Fixed to derive the width from `max_seq_len` alone
-(independent of `num_blocks`), and `_write_page_table_rows` now raises rather
-than truncates if a table is ever wider than that. **None of the numbers in
-Headline are affected**: every measured request (128-token benchmark,
-100-token burst, 13-28-token qualitative prompts) was always far below both
-the old wrong cap and the corrected one. This fix is proven by a new
-hardware-verified regression test (`test_blocks_per_user_is_max_seq_len_derived_not_pool_derived`
-in `tests/test_generator_vllm_adapter.py`) using a deliberately
-non-equal-share pool size, but **has not been re-verified through a live
-vLLM server request above the old 14,720-token cap** -- doing so would be a
-new hardware serving run, out of this review round's budget. See work log
-VS-011.
-
 ## Headline
 
 All numbers below are from **one run at the real serving spec**: full
@@ -90,6 +69,27 @@ non-aligned-length evidence, not only the reduced-model inner-loop tests in
 `tests/test_generator_vllm_adapter.py` (which additionally cover larger
 non-aligned lengths -- 37, 65, 137 tokens -- but are explicitly *not* final
 serving evidence per `$vllm-integration`'s minimum-surface-loop guidance).
+
+**Post-evidence-collection correctness fix (VS-011, found by `$stage-review`)
+-- none of the numbers above are affected:** `allocate_kv_cache` sized this
+adapter's per-request page-table width as `num_blocks // max_batch_size` (an
+equal-share quota), instead of `cdiv(max_seq_len, block_size)` (the actual
+bound on how wide any one request's block list can legitimately be in a
+shared vLLM pool). At this stage's measured `num_blocks=7362`, that silently
+capped every request's addressable context at 230 blocks = **14,720 tokens**
+while still advertising `max_model_len=202752` -- a real, un-evidenced
+capability reduction, not a hard physical limit. Fixed to derive the width
+from `max_seq_len` alone (independent of `num_blocks`), and
+`_write_page_table_rows` now raises rather than truncates if a table is ever
+wider than that. Every measured request above (128-token benchmark,
+100-token burst, 13-28-token qualitative prompts) was always far below both
+the old wrong cap and the corrected one, so nothing in Headline changes. The
+fix is proven by a new hardware-verified regression test
+(`test_blocks_per_user_is_max_seq_len_derived_not_pool_derived` in
+`tests/test_generator_vllm_adapter.py`) using a deliberately non-equal-share
+pool size, but **has not been re-verified through a live vLLM server request
+above the old 14,720-token cap** -- doing so would be a new hardware serving
+run, out of this review round's budget. See work log VS-011.
 
 ## The serving overhead worth acting on
 
