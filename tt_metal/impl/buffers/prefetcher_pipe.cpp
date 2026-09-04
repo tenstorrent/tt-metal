@@ -150,7 +150,7 @@ PrefetcherPipe::PrefetcherPipe(
     CoreCoord dram_sender_logical,
     const CoreRangeSet& receiver_cores,
     uint32_t ring_size,
-    uint32_t fixed_entry_size,
+    uint32_t initial_entry_size,
     BufferType buffer_type,
     DramSenderTag) :
     device_(mesh_device),
@@ -162,7 +162,7 @@ PrefetcherPipe::PrefetcherPipe(
     all_cores_(receiver_cores),
     ring_size_(ring_size),
     sender_core_type_value_(static_cast<uint8_t>(SenderCoreType::Dram)),
-    fixed_entry_size_(fixed_entry_size) {
+    initial_entry_size_(initial_entry_size) {
     TT_FATAL(mesh_device != nullptr, "DRAM-sender PrefetcherPipe requires a non-null MeshDevice");
     const auto& hal = MetalContext::instance(mesh_device->impl().get_context_id()).hal();
     TT_FATAL(
@@ -170,19 +170,19 @@ PrefetcherPipe::PrefetcherPipe(
         "DRAM-sender PrefetcherPipe requires programmable DRAM cores, which auto-enable on Blackhole with firmware "
         ">= 19.12.0.0");
     TT_FATAL(receiver_cores.num_cores() > 0, "DRAM-sender PrefetcherPipe requires at least one receiver");
-    TT_FATAL(fixed_entry_size > 0, "DRAM-sender PrefetcherPipe entry size must be > 0");
+    TT_FATAL(initial_entry_size > 0, "DRAM-sender PrefetcherPipe entry size must be > 0");
     const uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
     TT_FATAL(
-        fixed_entry_size % l1_alignment == 0,
+        initial_entry_size % l1_alignment == 0,
         "DRAM-sender PrefetcherPipe entry size {} must be a multiple of L1_ALIGNMENT {}",
-        fixed_entry_size,
+        initial_entry_size,
         l1_alignment);
     TT_FATAL(
-        ring_size % fixed_entry_size == 0,
+        ring_size % initial_entry_size == 0,
         "DRAM-sender PrefetcherPipe ring size {} must be a whole number of {}-byte entries; a partial trailing entry "
         "would leave the sender's derived write cursor and the receiver's read cursor on different wrap points",
         ring_size,
-        fixed_entry_size);
+        initial_entry_size);
     try {
         setup_buffers(buffer_type);
     } catch (...) {
@@ -263,7 +263,7 @@ void PrefetcherPipe::build_dram_sender_receiver_config_pages(IDevice* target_dev
         .num_receivers = num_recv,
         .data_base_addr = data_address_,
         .ring_size = ring_size_,
-        .applied_entry_size = fixed_entry_size_,
+        .applied_entry_size = initial_entry_size_,
     };
 
     // Base of the sender's counter pairs, inside its config page in DRISC L1.
@@ -320,8 +320,8 @@ void PrefetcherPipe::initialize_dram_sender_config_page() {
     page[i++] = num_recv;
     page[i++] = data_address_;
     page[i++] = ring_size_;
-    page[i++] = data_address_;      // word[4]: initial fifo_ptr checkpoint (unused by this sender)
-    page[i++] = fixed_entry_size_;  // word[5]: applied_entry_size
+    page[i++] = data_address_;        // word[4]: initial fifo_ptr checkpoint (unused by this sender)
+    page[i++] = initial_entry_size_;  // word[5]: applied_entry_size
     page[i++] = layout.noc_xy_offset;
     page[i++] = layout.counters_offset;                     // word[7]: local counter pairs, in DRISC L1
     page[i++] = receiver_counters_base - config_page_addr;  // word[8]: remote (receiver) base
@@ -468,16 +468,18 @@ PrefetcherPipe CreatePrefetcherPipe(
 
 uint8_t AttachPrefetcherPipe(
     Program& program, PrefetcherPipe& prefetcher_pipe, const CoreRangeSet& cores, uint32_t entry_size) {
-    // A DRAM sender never Attaches, so it cannot take part in the resize handshake a differing
-    // entry size starts: the receivers would spin forever on pad credits nobody publishes. Reject
-    // it here rather than letting the program hang.
+    // A DRAM sender derives each receiver's write cursor as (entries_sent % ring_units), with no
+    // trailing-gap term for a ring the entry size does not divide. An entry size that leaves a
+    // remainder would put the sender's cursor and the receiver's on different grids after the first
+    // wrap, so the two would disagree about where an entry starts.
     TT_FATAL(
-        prefetcher_pipe.sender_core_type() != SenderCoreType::Dram || entry_size == prefetcher_pipe.fixed_entry_size(),
-        "AttachPrefetcherPipe entry size {} does not match the DRAM-sender pipe's fixed entry size {}. A DRAM sender "
-        "is not dispatched to and cannot answer a receiver-side resize, so every Attach must use the size the pipe "
-        "was created with",
+        prefetcher_pipe.sender_core_type() != SenderCoreType::Dram || prefetcher_pipe.ring_size() % entry_size == 0,
+        "AttachPrefetcherPipe entry size {} must divide the DRAM-sender pipe's ring size {}. A DRAM sender addresses "
+        "its ring in whole entries, so an entry size that leaves a remainder ({} B) desynchronizes it from the "
+        "receivers after the first wrap",
         entry_size,
-        prefetcher_pipe.fixed_entry_size());
+        prefetcher_pipe.ring_size(),
+        prefetcher_pipe.ring_size() % entry_size);
     return program.impl().add_prefetcher_pipe_attachment(prefetcher_pipe, cores, entry_size);
 }
 
@@ -533,7 +535,7 @@ std::shared_ptr<PrefetcherPipe> PrefetcherPipeDramSenderInternals::make_dram_sen
     CoreCoord dram_sender_logical,
     const CoreRangeSet& receiver_cores,
     uint32_t ring_size,
-    uint32_t fixed_entry_size,
+    uint32_t initial_entry_size,
     BufferType buffer_type) {
     // shared_ptr rather than a value: PrefetcherPipe is neither copyable nor movable, and callers
     // hold a list of them.
@@ -542,7 +544,7 @@ std::shared_ptr<PrefetcherPipe> PrefetcherPipeDramSenderInternals::make_dram_sen
         dram_sender_logical,
         receiver_cores,
         ring_size,
-        fixed_entry_size,
+        initial_entry_size,
         buffer_type,
         PrefetcherPipe::DramSenderTag{}));
 }

@@ -71,11 +71,9 @@ CoreCoord prefetcher_pipe_sender_core(const PrefetcherPipe& pipe) { return pipe.
 
 const CoreRangeSet& prefetcher_pipe_receiver_cores(const PrefetcherPipe& pipe) { return pipe.receiver_cores(); }
 
-uint32_t prefetcher_pipe_ring_size(const PrefetcherPipe& pipe) { return pipe.ring_size(); }
-
-uint32_t prefetcher_pipe_fixed_entry_size(const PrefetcherPipe& pipe) { return pipe.fixed_entry_size(); }
-
 SenderCoreType prefetcher_pipe_sender_core_type(const PrefetcherPipe& pipe) { return pipe.sender_core_type(); }
+
+uint32_t prefetcher_pipe_config_address(const PrefetcherPipe& pipe) { return pipe.config_address(); }
 
 DeviceAddr sender_state_drisc_l1_base(const PrefetcherPipe& pipe) {
     return prefetcher_pipe_dram_sender::PrefetcherPipeDramSenderInternals::sender_state_drisc_l1_base(pipe);

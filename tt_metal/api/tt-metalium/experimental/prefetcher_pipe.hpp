@@ -61,11 +61,11 @@ struct TensorPrefetcherBankPipes {
 // default, matching the receiver-contiguous layout — a bank with more than one receiver gets two
 // senders, each pushing roughly half of them.
 //
-// `entry_size` is the per-receiver push granularity and must equal the streamed tensor's
-// per-receiver page size: a DRAM sender is never dispatched to and so cannot answer a
-// receiver-side resize. Every pipe is stamped with it, and both AttachPrefetcherPipe and
-// QueueTensorPrefetcherRequest reject any other size (with the offending values in the message).
-// Each receiver's ring holds `num_entries` of them.
+// `entry_size` is the per-receiver push granularity a pipe starts life at, and `num_entries` is how
+// many of them a receiver's ring holds; together they fix the ring size, which never changes. A
+// later Attach and a later queued tensor may use a different entry size as long as it divides the
+// ring: the DRAM sender snaps its write cursor onto the new grid and publishes the skipped bytes as
+// pad credits, which is the same resize handshake a worker sender runs.
 //
 // The rings come from the persistent L1 arena, which refuses a core a live Program has sealed with
 // its own local circular buffers. Create the pipes before running any op on the receiver cores --
@@ -88,9 +88,11 @@ std::vector<TensorPrefetcherBankPipes> CreatePrefetcherPipesForTensorPrefetcher(
 // include the impl header. Each returns the same value as the member of the same name.
 CoreCoord prefetcher_pipe_sender_core(const PrefetcherPipe& pipe);
 const CoreRangeSet& prefetcher_pipe_receiver_cores(const PrefetcherPipe& pipe);
-uint32_t prefetcher_pipe_ring_size(const PrefetcherPipe& pipe);
-uint32_t prefetcher_pipe_fixed_entry_size(const PrefetcherPipe& pipe);
 SenderCoreType prefetcher_pipe_sender_core_type(const PrefetcherPipe& pipe);
+// Address of this pipe's receiver-side config page. Two live pipes over the same receivers never
+// share one, so a consumer op can use it (with the pipe's core mapping) as a cache-key identity
+// that distinguishes pipes of identical geometry.
+uint32_t prefetcher_pipe_config_address(const PrefetcherPipe& pipe);
 
 // Attach one PrefetcherPipe to `program` on `cores`, returning the program-local slot id kernels
 // name. Re-declared here (against the forward declaration above) so a consumer op can Attach
