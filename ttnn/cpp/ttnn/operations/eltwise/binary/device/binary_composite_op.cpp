@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <string_view>
 #include <type_traits>
 #include <utility>
 #include "ttnn/operations/eltwise/binary/binary.hpp"
@@ -44,13 +45,13 @@ std::optional<CoreRangeSet> resolve_sub_device_workers(
     return input.device()->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id.value());
 }
 
-void validate_scalar_promotion_typecast(const Tensor& input, const std::optional<CoreRangeSet>& sub_core_grids) {
+void validate_scalar_typecast(
+    Layout layout, bool is_sharded, const std::optional<CoreRangeSet>& sub_core_grids, std::string_view context) {
+    TT_FATAL(layout != Layout::ROW_MAJOR || !is_sharded, "{} does not support row-major sharded tensors", context);
     TT_FATAL(
-        input.layout() != Layout::ROW_MAJOR || !input.is_sharded(),
-        "INT32 scalar promotion does not support row-major sharded tensors");
-    TT_FATAL(
-        !sub_core_grids.has_value() || (input.layout() == Layout::TILE && !input.is_sharded()),
-        "INT32 scalar promotion on a restricted grid requires a tiled interleaved tensor");
+        !sub_core_grids.has_value() || (layout == Layout::TILE && !is_sharded),
+        "{} on a restricted grid requires a tiled interleaved tensor",
+        context);
 }
 
 }  // namespace
@@ -550,7 +551,8 @@ Tensor remainder(
     if (input.dtype() == DataType::INT32 && std::holds_alternative<float>(scalar)) {
         operation_sub_core_grids = resolve_sub_device_workers(input, sub_core_grids, sub_device_id);
         operation_sub_device_id = std::nullopt;
-        validate_scalar_promotion_typecast(input, operation_sub_core_grids);
+        validate_scalar_typecast(
+            input.layout(), input.is_sharded(), operation_sub_core_grids, "INT32 scalar promotion");
         operation_input =
             ttnn::typecast(input, DataType::FLOAT32, std::nullopt, std::nullopt, operation_sub_core_grids);
     }
@@ -568,9 +570,15 @@ Tensor remainder(
                 operation_input, scalar, output_mem_config, output_tensor, operation_sub_core_grids);
         }
 
+        // The intermediate inherits the input layout and the requested output's sharding.
+        // Validate its typecast before allocating or running the unary operation.
+        validate_scalar_typecast(
+            operation_input.layout(),
+            output_tensor->is_sharded(),
+            operation_sub_core_grids,
+            "Remainder output typecast");
         const Tensor operation_output = ttnn::unary_remainder(
             operation_input, scalar, output_tensor->memory_config(), std::nullopt, operation_sub_core_grids);
-        validate_scalar_promotion_typecast(operation_output, operation_sub_core_grids);
         return ttnn::typecast(
             operation_output, output_tensor->dtype(), std::nullopt, output_tensor, operation_sub_core_grids);
     }
@@ -619,7 +627,8 @@ Tensor fmod(
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     if (input.dtype() == DataType::INT32 && std::holds_alternative<float>(scalar)) {
         const auto operation_sub_core_grids = resolve_sub_device_workers(input, sub_core_grids, sub_device_id);
-        validate_scalar_promotion_typecast(input, operation_sub_core_grids);
+        validate_scalar_typecast(
+            input.layout(), input.is_sharded(), operation_sub_core_grids, "INT32 scalar promotion");
         const Tensor operation_input =
             ttnn::typecast(input, DataType::FLOAT32, std::nullopt, std::nullopt, operation_sub_core_grids);
         const float scalar_f = std::get<float>(scalar);

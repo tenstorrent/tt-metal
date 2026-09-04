@@ -1532,6 +1532,37 @@ def test_binary_remainder_int32_float_scalar_optional_output_sharding(input_is_s
     assert_equal(expected, ttnn.to_torch(output_tensor))
 
 
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+def test_binary_remainder_int32_float_scalar_rejects_unsupported_sharded_output(layout, device, expect_error):
+    torch_input = torch.arange(-512, 512, dtype=torch.int32).reshape(1, 1, 32, 32)
+    cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    sharded_memory_config = ttnn.create_sharded_memory_config(
+        shape=(32, 32),
+        core_grid=cores,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    input_tensor = ttnn.from_torch(
+        torch_input, dtype=ttnn.int32, layout=layout, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    output_tensor = ttnn.from_torch(
+        torch.zeros_like(torch_input),
+        dtype=ttnn.int32,
+        layout=layout,
+        device=device,
+        memory_config=sharded_memory_config,
+    )
+    sub_core_grids = cores if layout == ttnn.TILE_LAYOUT else None
+    message = (
+        "Remainder output typecast on a restricted grid requires a tiled interleaved tensor"
+        if sub_core_grids is not None
+        else "Remainder output typecast does not support row-major sharded tensors"
+    )
+    with expect_error(RuntimeError, message):
+        ttnn.remainder(input_tensor, 1.5, output_tensor=output_tensor, sub_core_grids=sub_core_grids)
+
+
 @pytest.mark.parametrize("ttnn_op", [ttnn.remainder, ttnn.fmod])
 def test_binary_remainder_fmod_int32_float_scalar_rejects_row_major_sharded(ttnn_op, device, expect_error):
     torch_input_tensor = torch.arange(-512, 512, dtype=torch.int32).reshape(1, 1, 32, 32)
