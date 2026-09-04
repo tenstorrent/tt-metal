@@ -21,9 +21,15 @@ from models.autoports.meta_models_muse_glimmer_30b.tt.multichip_decoder import (
     multichip_decode_matmul,
 )
 from models.autoports.meta_models_muse_glimmer_30b.tt.optimized_decoder import (
+    DECODE_MATMUL,
     OptimizedDecoder,
     resolve_decode_swiglu_mul_cores,
 )
+from models.autoports.meta_models_muse_glimmer_30b.tt.precision_config import (
+    lm_head_geometry_for_topology,
+    load_precision_config,
+)
+from models.common.sampling.tt_sampling import TTSampling
 
 TEXT_CONFIG = SimpleNamespace(
     num_attention_heads=32,
@@ -59,6 +65,72 @@ def test_qualified_topologies_have_exact_mesh_plans(
 
 def test_single_chip_decoder_accepts_a_shared_rope_cache_argument():
     assert "rope_cache" in OptimizedDecoder.from_state_dict.__func__.__annotations__
+
+
+def test_lm_head_geometry_tracks_local_vocabulary_width():
+    head = load_precision_config()["weights"]["lm_head"]
+    assert lm_head_geometry_for_topology(head, 1) == {"matmul": "mcast1d", "cores": 110, "in0_block_w": 1}
+    assert lm_head_geometry_for_topology(head, 2) == {"matmul": "mcast1d", "cores": 110, "in0_block_w": 1}
+    assert lm_head_geometry_for_topology(head, 4) == {
+        "matmul": "dram_sharded",
+        "cores": 52,
+        "in0_block_w": 2,
+    }
+
+
+def test_single_chip_sampler_indices_match_its_two_reduction_halves():
+    sampler = object.__new__(TTSampling)
+    sampler.padded_vocab_size = 202048
+    sampler.max_batch_size = 32
+    sampler.max_top_k = 32
+    sampler.multi_step_reduction = True
+    sampler.cluster_shape = [1, 1]
+    sampler.topk_split_to_power_of_2 = True
+    sampler.pad_to_power_of_2 = True
+
+    offsets, indices, shard_width = sampler._indices_host_tensors()
+
+    assert shard_width == 101024
+    assert sampler.topk_pieces == 1
+    assert sampler.candidates_per_device == 32
+    assert offsets.shape == (1, 1, 32, 64)
+    assert indices.shape == (1, 1, 32, 202048)
+    assert offsets[0, 0, 0, :32].eq(0).all()
+    assert offsets[0, 0, 0, 32:].eq(shard_width).all()
+    assert indices[0, 0, 0, :shard_width].equal(indices[0, 0, 0, shard_width:])
+
+
+def test_p150x2_sampler_uses_uint16_piece_relative_indices_with_global_offsets():
+    sampler = object.__new__(TTSampling)
+    sampler.padded_vocab_size = 202112
+    sampler.max_batch_size = 32
+    sampler.max_top_k = 32
+    sampler.multi_step_reduction = False
+    sampler.cluster_shape = [1, 2]
+    sampler.topk_split_to_power_of_2 = True
+    sampler.pad_to_power_of_2 = True
+
+    offsets, indices, shard_width = sampler._indices_host_tensors()
+    piece_indices = sampler._topk_piece_indices_host(indices.shape[-1])
+
+    assert shard_width == 101056
+    assert indices.shape == (1, 1, 32, 131072)
+    assert sampler.topk_pieces == 4
+    assert sampler.candidates_per_device == 128
+    assert piece_indices.shape == (1, 1, 32, 32768)
+    assert piece_indices[0, 0, 0, 0] == 0
+    assert piece_indices[0, 0, 0, -1] == 32767
+    expected_piece_bases = [0, 32768, 65536, 98304]
+    for device, device_base in enumerate((0, shard_width)):
+        for piece, piece_base in enumerate(expected_piece_bases):
+            start = device * sampler.candidates_per_device + piece * sampler.max_top_k
+            assert offsets[0, 0, 0, start : start + sampler.max_top_k].eq(device_base + piece_base).all()
+
+
+def test_p150_full_model_l1_safe_mlp_geometry():
+    assert DECODE_MATMUL[("mlp_gate", ttnn.bfloat4_b)] == (26, 8)
+    assert DECODE_MATMUL[("mlp_up", ttnn.bfloat4_b)] == (26, 4)
+    assert DECODE_MATMUL[("mlp_down", ttnn.bfloat4_b)] == (26, 12)
 
 
 @pytest.mark.parametrize(

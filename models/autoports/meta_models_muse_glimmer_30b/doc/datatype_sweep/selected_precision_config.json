@@ -29,7 +29,19 @@
       "output_dtype": "bfloat16",
       "matmul": "dram_sharded",
       "cores": 52,
-      "in0_block_w": 2
+      "in0_block_w": 2,
+      "topology_overrides": {
+        "1": {
+          "matmul": "mcast1d",
+          "cores": 110,
+          "in0_block_w": 1
+        },
+        "2": {
+          "matmul": "mcast1d",
+          "cores": 110,
+          "in0_block_w": 1
+        }
+      }
     },
     "embedding": {
       "dtype": "bfloat16",

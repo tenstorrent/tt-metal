@@ -2374,7 +2374,9 @@ def build_generator(model_dir: str | Path, mesh_device: ttnn.MeshDevice, **kwarg
     """
     from models.autoports.meta_models_muse_glimmer_30b.tt.precision_config import selected_build_kwargs
 
-    config_id, selected = selected_build_kwargs(kwargs.pop("precision_config", None))
+    config_id, selected = selected_build_kwargs(
+        kwargs.pop("precision_config", None), num_devices=int(mesh_device.get_num_devices())
+    )
     selected_decoder_kwargs = selected.pop("decoder_kwargs")
     caller_decoder_kwargs = dict(kwargs.pop("decoder_kwargs", {}))
     # ``weight_dtype`` / ``activation_dtype`` / ``kv_cache_dtype`` are the earlier

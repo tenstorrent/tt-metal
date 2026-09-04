@@ -335,23 +335,7 @@ class TTSampling(LightweightModule):
 
     def _create_indices_tensors(self):
         """Create the indices tensors needed for distributed top-k operations."""
-        num_devices_in_mesh = self._get_num_sampling_shards()
-        # padded_per_device: tile-aligned width matching actual logit tensors (for indices tensor)
-        padded_per_device = self.padded_vocab_size // num_devices_in_mesh
-        # How many candidates each device contributes to the gather. Normally max_top_k;
-        # the multi-core topk split contributes max_top_k *per piece* (see
-        # _topk_multicore_split for why they cannot be reduced back on device), so the
-        # offset stride has to follow it or the gathered indices get the wrong device's
-        # offset added.
-        self.topk_pieces = self._topk_piece_count(padded_per_device)
-        self.candidates_per_device = self.max_top_k * self.topk_pieces
-        indices_device_offsets = torch.ones(
-            1, 1, self.max_batch_size, self.candidates_per_device * num_devices_in_mesh, dtype=torch.int64
-        )
-
-        for device_id in range(num_devices_in_mesh):
-            lo = device_id * self.candidates_per_device
-            indices_device_offsets[:, :, :, lo : lo + self.candidates_per_device] = device_id * padded_per_device
+        indices_device_offsets, indices_tensor_torch, padded_per_device = self._indices_host_tensors()
         self.tt_indices_device_offsets = ttnn.from_torch(
             indices_device_offsets,
             device=self.mesh_device,
@@ -360,21 +344,6 @@ class TTSampling(LightweightModule):
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, None), mesh_shape=self.cluster_shape),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-
-        # Create local indices tensor for top-k operations (must match logit width)
-        indices_tensor_torch = torch.zeros(1, 1, self.max_batch_size, padded_per_device, dtype=torch.int32)
-        for i in range(padded_per_device):
-            indices_tensor_torch[:, :, :, i] = i
-
-        # pad to power of 2 if needed
-        if self.pad_to_power_of_2 and not is_power_of_2(indices_tensor_torch.shape[-1]):
-            padded_value = upper_power_of_2(indices_tensor_torch.shape[-1])
-            indices_tensor_torch = torch.nn.functional.pad(
-                indices_tensor_torch,
-                (0, padded_value - indices_tensor_torch.shape[-1]),  # pad only last dim
-                mode="constant",
-                value=-1,  # invalid index to ensure that the padding values are not used
-            )
 
         indices_dtype = self._select_topk_indices_dtype(padded_per_device, self.multi_step_reduction)
         self.tt_indices_tensor = ttnn.from_torch(
@@ -385,6 +354,101 @@ class TTSampling(LightweightModule):
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, None), mesh_shape=self.cluster_shape),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+
+        # The multi-core top-k factory uses 16-bit indices.  A split local shard can
+        # itself be wider than uint16 (P150x2 pads 101056 logits to 131072), so feeding
+        # slices of the full uint32 identity tensor to the otherwise-legal 32768-wide
+        # calls corrupts the returned indices. Rank every piece with the same uint16
+        # piece-relative identity instead. ``tt_indices_device_offsets`` already folds
+        # the piece base into each candidate block, so the ordinary post-gather add
+        # restores exact global vocabulary ids without another decode-time operation.
+        self.tt_topk_piece_indices = None
+        if self.topk_pieces > 1:
+            piece_indices_torch = self._topk_piece_indices_host(indices_tensor_torch.shape[-1])
+            self.tt_topk_piece_indices = ttnn.from_torch(
+                piece_indices_torch,
+                dtype=ttnn.uint16,
+                layout=ttnn.Layout.TILE,
+                device=self.mesh_device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, None), mesh_shape=self.cluster_shape),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+    def _indices_host_tensors(self):
+        """Build shape-matched local indices and global-shard offsets on host.
+
+        Single-device sampling performs two top-k reductions over the two halves
+        of one logits tensor. Those halves are logical sampling shards, but they
+        are not the per-device shards used by ``_topk_multicore_split``. Each
+        half therefore contributes exactly ``max_top_k`` candidates and needs a
+        full-width repeated local-index vector before the second half's offset
+        is added.
+        """
+        num_devices_in_mesh = self._get_num_sampling_shards()
+        if self.padded_vocab_size % num_devices_in_mesh:
+            raise ValueError(
+                f"padded_vocab_size {self.padded_vocab_size} is not divisible by "
+                f"{num_devices_in_mesh} sampling shards"
+            )
+        # padded_per_device: tile-aligned width matching actual logit tensors (for indices tensor)
+        padded_per_device = self.padded_vocab_size // num_devices_in_mesh
+        # How many candidates each device contributes to the gather. Normally max_top_k;
+        # the multi-core topk split contributes max_top_k *per piece* (see
+        # _topk_multicore_split for why they cannot be reduced back on device), so the
+        # offset stride has to follow it or the gathered indices get the wrong device's
+        # offset added.
+        self.topk_pieces = 1 if self.multi_step_reduction else self._topk_piece_count(padded_per_device)
+        self.candidates_per_device = self.max_top_k * self.topk_pieces
+        # Create local indices tensor for top-k operations (must match logit width)
+        local_indices = torch.arange(padded_per_device, dtype=torch.int32)
+        if self.multi_step_reduction:
+            local_indices = local_indices.repeat(num_devices_in_mesh)
+
+        # pad to power of 2 if needed
+        if not self.multi_step_reduction and self.pad_to_power_of_2 and not is_power_of_2(local_indices.shape[-1]):
+            padded_value = upper_power_of_2(local_indices.shape[-1])
+            local_indices = torch.nn.functional.pad(
+                local_indices,
+                (0, padded_value - local_indices.shape[-1]),
+                mode="constant",
+                value=-1,
+            )
+
+        # Candidate order is device-major after all-gather and piece-major within
+        # each device after concat. Fold both bases into one persistent int32 tensor:
+        #
+        #   global_id = device * unpadded_shard_width
+        #             + piece * padded_piece_width
+        #             + uint16_piece_relative_id
+        #
+        # For the single-device two-half reduction, ``num_devices_in_mesh`` is the
+        # number of logical halves and ``topk_pieces`` is forced to one, preserving
+        # its existing [0, half_width] offsets.
+        padded_topk_width = local_indices.shape[-1] // (num_devices_in_mesh if self.multi_step_reduction else 1)
+        if padded_topk_width % self.topk_pieces:
+            raise ValueError(f"top-k width {padded_topk_width} is not divisible by {self.topk_pieces} pieces")
+        per_piece = padded_topk_width // self.topk_pieces
+        piece_offsets = (torch.arange(self.topk_pieces, dtype=torch.int64) * per_piece).repeat_interleave(
+            self.max_top_k
+        )
+        device_bases = torch.arange(num_devices_in_mesh, dtype=torch.int64) * padded_per_device
+        offsets = (device_bases[:, None] + piece_offsets[None, :]).reshape(-1)
+        indices_device_offsets = offsets.reshape(1, 1, 1, -1).expand(1, 1, self.max_batch_size, -1)
+
+        indices_tensor_torch = local_indices.reshape(1, 1, 1, -1).expand(1, 1, self.max_batch_size, -1)
+        return indices_device_offsets.contiguous(), indices_tensor_torch.contiguous(), padded_per_device
+
+    def _topk_piece_indices_host(self, padded_topk_width: int):
+        """Build the uint16-safe identity tensor shared by every split top-k call."""
+        if self.topk_pieces <= 1:
+            raise ValueError("piece-relative top-k indices require more than one piece")
+        if padded_topk_width % self.topk_pieces:
+            raise ValueError(f"top-k width {padded_topk_width} is not divisible by {self.topk_pieces} pieces")
+        per_piece = padded_topk_width // self.topk_pieces
+        if per_piece > torch.iinfo(torch.uint16).max:
+            raise ValueError(f"top-k piece width {per_piece} exceeds the uint16 index limit")
+        piece_indices = torch.arange(per_piece, dtype=torch.int32)
+        return piece_indices.reshape(1, 1, 1, -1).expand(1, 1, self.max_batch_size, -1).contiguous()
 
     def _create_invalid_vocab_mask(self):
         self.tt_invalid_vocab_mask = None
@@ -534,23 +598,24 @@ class TTSampling(LightweightModule):
                 f"{self.candidates_per_device} was built for the split"
             )
 
+        if self.tt_topk_piece_indices is None:
+            raise RuntimeError(f"missing piece-relative indices for {pieces}-piece top-k")
+
         x_list = ttnn.split(x_bf16, per_piece, dim=3)
-        indices_list = ttnn.split(self.tt_indices_tensor, per_piece, dim=3)
         values_parts = []
         indices_parts = []
-        for x_piece, indices_piece in zip(x_list, indices_list):
+        for x_piece in x_list:
             values, indices = ttnn.topk(
                 x_piece,
                 k=self.max_top_k,
                 dim=-1,
                 sub_core_grids=self.sub_core_grid_topk,
-                indices_tensor=indices_piece,
+                indices_tensor=self.tt_topk_piece_indices,
                 stable=self._topk_stable,
             )
             values_parts.append(values)
             indices_parts.append(indices)
             ttnn.deallocate(x_piece)
-            ttnn.deallocate(indices_piece)
 
         topk_values = ttnn.concat(values_parts, dim=3)
         topk_indices = ttnn.concat(indices_parts, dim=3)

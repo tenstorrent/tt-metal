@@ -271,7 +271,45 @@ def _validate_structural(config: dict[str, Any]) -> None:
 # ------------------------------------------------------------- build kwargs
 
 
-def build_kwargs_from_config(config: dict[str, Any]) -> dict[str, Any]:
+LM_HEAD_GEOMETRY_KEYS = ("matmul", "cores", "in0_block_w")
+
+
+def lm_head_geometry_for_topology(head: dict[str, Any], num_devices: int | None = None) -> dict[str, Any]:
+    """Resolve an LM-head geometry without changing its precision policy.
+
+    The P150x4-selected DRAM-sharded program projects one quarter of the
+    vocabulary per device. Wider P150/P150x2 shards need a different legal
+    program, recorded alongside the selected head rather than hidden in a
+    source default. A caller that does not provide a topology retains the
+    historical flat geometry for compatibility with sweep artifacts.
+    """
+    geometry = {key: head[key] for key in LM_HEAD_GEOMETRY_KEYS}
+    overrides = head.get("topology_overrides") or {}
+    if not isinstance(overrides, dict):
+        raise PrecisionConfigError("weights.lm_head.topology_overrides must be an object")
+    for topology, override in overrides.items():
+        if not isinstance(override, dict):
+            raise PrecisionConfigError(f"weights.lm_head.topology_overrides.{topology} must be an object")
+        unknown = sorted(set(override) - set(LM_HEAD_GEOMETRY_KEYS))
+        if unknown:
+            raise PrecisionConfigError(
+                f"weights.lm_head.topology_overrides.{topology}: unknown fields {unknown}; "
+                f"choose from {list(LM_HEAD_GEOMETRY_KEYS)}"
+            )
+    if num_devices is not None:
+        geometry.update(overrides.get(str(int(num_devices)), {}))
+    if geometry["matmul"] not in ("dram_sharded", "mcast1d"):
+        raise PrecisionConfigError(
+            f"weights.lm_head.matmul: expected 'dram_sharded' or 'mcast1d', got {geometry['matmul']!r}"
+        )
+    for key in ("cores", "in0_block_w"):
+        geometry[key] = int(geometry[key])
+        if geometry[key] <= 0:
+            raise PrecisionConfigError(f"weights.lm_head.{key} must be positive, got {geometry[key]}")
+    return geometry
+
+
+def build_kwargs_from_config(config: dict[str, Any], *, num_devices: int | None = None) -> dict[str, Any]:
     """The artifact as ``build_generator`` keyword arguments.
 
     Returns ``lm_head_*`` at the top level and everything the decoder layers need
@@ -281,6 +319,7 @@ def build_kwargs_from_config(config: dict[str, Any]) -> dict[str, Any]:
     _validate_structural(config)
     policy = precision_policy_from_config(config)
     head = config["weights"]["lm_head"]
+    head_geometry = lm_head_geometry_for_topology(head, num_devices)
     head_fidelity = config["compute_fidelity"]["lm_head"]
     ccl = config["ccl"]
     return {
@@ -292,9 +331,9 @@ def build_kwargs_from_config(config: dict[str, Any]) -> dict[str, Any]:
         # circular-buffer budget is dtype-scaled, so the shipped BFP4 geometry
         # (52 cores, in0_block_w=2) overflows L1 at BFP8 and a candidate that
         # changes the head's dtype has to bring a legal geometry with it.
-        "lm_head_matmul": str(head["matmul"]),
-        "lm_head_cores": int(head["cores"]),
-        "lm_head_in0_block_w": int(head["in0_block_w"]),
+        "lm_head_matmul": str(head_geometry["matmul"]),
+        "lm_head_cores": int(head_geometry["cores"]),
+        "lm_head_in0_block_w": int(head_geometry["in0_block_w"]),
         "decoder_kwargs": {
             "precision": policy,
             "prefill_ccl_dtype": _dtype(ccl["prefill_dtype"], field="ccl.prefill_dtype"),
@@ -304,10 +343,12 @@ def build_kwargs_from_config(config: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def selected_build_kwargs(path: str | pathlib.Path | None = None) -> tuple[str, dict[str, Any]]:
+def selected_build_kwargs(
+    path: str | pathlib.Path | None = None, *, num_devices: int | None = None
+) -> tuple[str, dict[str, Any]]:
     """``(config_id, build kwargs)`` for the selected artifact."""
     config = load_precision_config(path)
-    return str(config["config_id"]), build_kwargs_from_config(config)
+    return str(config["config_id"]), build_kwargs_from_config(config, num_devices=num_devices)
 
 
 # ----------------------------------------------------------------- writing
@@ -483,6 +524,7 @@ def check_propagation(config: dict[str, Any], realised: dict[str, Any]) -> list[
 
     head = realised["lm_head"]
     head_want = config["weights"]["lm_head"]
+    head_geometry_want = lm_head_geometry_for_topology(head_want, realised.get("num_devices"))
     fidelity_want = config["compute_fidelity"]["lm_head"]
     for key, expected in (
         ("weight_dtype", head_want["dtype"]),
@@ -493,8 +535,8 @@ def check_propagation(config: dict[str, Any], realised: dict[str, Any]) -> list[
         if actual != expected.lower():
             problems.append(f"lm_head.{key}: requested {expected}, built {actual}")
     for key in ("matmul", "cores", "in0_block_w"):
-        if str(head[key]) != str(head_want[key]):
-            problems.append(f"lm_head.{key}: requested {head_want[key]}, built {head[key]}")
+        if str(head[key]) != str(head_geometry_want[key]):
+            problems.append(f"lm_head.{key}: requested {head_geometry_want[key]}, built {head[key]}")
     if bool(head["fp32_dest_acc_en"]) != bool(fidelity_want["fp32_dest_acc_en"]):
         problems.append(
             f"lm_head.fp32_dest_acc_en: requested {fidelity_want['fp32_dest_acc_en']}, built {head['fp32_dest_acc_en']}"

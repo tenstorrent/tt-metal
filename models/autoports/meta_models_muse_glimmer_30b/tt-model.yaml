@@ -92,6 +92,10 @@ serve_profiles:
     max_model_len: 131072
     env:
       TT_METAL_VISIBLE_DEVICES: "0,1"
+      # A P300 card has two inter-die Ethernet channels. The generic P150x2
+      # descriptor asks for four, so selecting two dies from QB2 needs this
+      # model-scoped logical view.
+      TT_MESH_GRAPH_DESC_PATH: /opt/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/p150x2_qb2_mesh_graph_descriptor.textproto
     additional_config:
       tt:
         fabric_config: FABRIC_1D_RING

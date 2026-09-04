@@ -387,8 +387,18 @@ DECODE_MATMUL: dict[tuple[str, ttnn.DataType], tuple[int, int]] = {
     ("attn_gate", ttnn.bfloat4_b): (BOUNDARY_CORES, 13),
     ("o_proj", ttnn.bfloat4_b): (BOUNDARY_CORES, 8),
     ("mlp_gate", ttnn.bfloat4_b): (MLP_WORKING_CORES, 8),
-    ("mlp_up", ttnn.bfloat4_b): (MLP_WORKING_CORES, 8),
-    ("mlp_down", ttnn.bfloat4_b): (MLP_WORKING_CORES, 24),
+    # The isolated/single-layer winner is in0=8 for both gate and up. In the
+    # full 52-layer P150 serving build, however, the gate output is live while
+    # the up projection compiles and leaves its static circular buffers 8,064 B
+    # above the remaining L1 boundary. Keeping the first projection at 8 and
+    # lowering only the second to 4 preserves half of the measured gain over
+    # the all-4 geometry while clearing that full-model boundary. The resulting
+    # SiLU product then leaves the down projection's in0=24 buffers 16,256 B
+    # above its boundary; in0=12 is the fastest measured legal fallback
+    # (1.1016 ms/layer versus 1.1095 at 8 and 1.1346 at 4 in the full-attention
+    # layer probe) and remains comfortably within the 5% regression policy.
+    ("mlp_up", ttnn.bfloat4_b): (MLP_WORKING_CORES, 4),
+    ("mlp_down", ttnn.bfloat4_b): (MLP_WORKING_CORES, 12),
     # 13 cores is the isolated-probe winner for gate/up (0.2300 ms against
     # 0.2301 at 26) and is **illegal in the layer**: at 13 cores the 19968-wide
     # gate/up output is 98 KB per core, and with the residual, the carried

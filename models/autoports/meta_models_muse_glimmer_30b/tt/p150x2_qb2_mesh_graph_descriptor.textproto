@@ -1,0 +1,15 @@
+# Logical two-die view of one P300 card inside a four-die QuietBox.
+#
+# The generic p150_x2 descriptor asks for four Ethernet channels between the
+# two devices.  A P300 card exposes two channels between its dies, so that
+# descriptor cannot be used when selecting P150x2 from a P300x2 host.  RELAXED
+# mapping keeps this descriptor usable on compatible two-die Blackhole hosts.
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 1, 2 ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: RELAXED }
+}
+
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }

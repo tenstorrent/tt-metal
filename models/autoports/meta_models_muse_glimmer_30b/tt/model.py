@@ -155,6 +155,9 @@ LM_HEAD_KEY = "lm_head.weight"
 #: an exact L1 blocker, *"Statically allocated circular buffers ... grow to
 #: 1821824 B which is beyond max L1 size of 1572864 B"* -- which is also why BFP8
 #: cannot take ``in0_block_w=2`` on this contract and loses to ``mcast1d``.
+# These defaults remain the measured P150x4 geometry. The selected precision
+# artifact carries the legal P150/P150x2 geometry because their wider local
+# vocabulary shards overflow this program's L1 circular-buffer budget.
 LM_HEAD_MATMUL = "dram_sharded"
 LM_HEAD_CORES = 52
 LM_HEAD_IN0_BLOCK_W = 2
@@ -1853,6 +1856,7 @@ class MuseGlimmerModel(LightweightModule):
         head = self.lm_head
         return {
             "policy_name": self.precision.name,
+            "num_devices": self.config.tp,
             "decoder_overrides": overrides or {},
             "num_layers": len(self.layers),
             "layer_groups": groups,
