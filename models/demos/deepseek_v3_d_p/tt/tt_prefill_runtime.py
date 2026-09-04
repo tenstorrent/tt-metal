@@ -459,7 +459,7 @@ class TtPrefillRuntime:
             # a capture cannot absorb a program-cache miss. The D2H ack has no no-op stand-in (it is a
             # device op, not a callback), so this warm pass emits num_layers REAL records. The caller is
             # required to drain them; see set_d2h_ack_service().
-            self._forward_traced(kv_cache)
+            self._forward_traced(kv_caches)
             ttnn.synchronize_device(self.mesh_device)
 
         controller.begin_capture()
