@@ -1698,10 +1698,18 @@ def run_chunked_transformer_updated(
     perf_failures, perf_table_lines = print_duration_table(iteration_chunk_times)
     timing_lines = [f"  {key}: {profiler.get(key) * 1000:.2f} ms" for key in profiler.times]
     if perf_table_lines:
+        # tp_shard_kv is a parametrize axis, so both legs run inside ONE CI job and share one
+        # PREFILL_SUMMARIES dir: without a discriminator they write the same perf/<name>.md and the second
+        # leg silently clobbers the first (and both tables carry an identical title, so the survivor is
+        # unattributable). Suffix only the tp_sharded leg, leaving the default path's filename byte-identical
+        # so the cross-run perf-trend history over these artifacts stays continuous.
+        kv_suffix = "_tpkv" if tp_shard_kv else ""
+        kv_label = ", TP-sharded KV" if tp_shard_kv else ""
         emit_summary(
             "perf",
-            f"{variant.name}_L{num_layers}_c{n_chunks}_i{num_iters}_p{preload_isl}",
-            f"Chunk timing — {variant.name} (L{num_layers}, {n_chunks} chunks, {num_iters} iters, preload {preload_isl})",
+            f"{variant.name}_L{num_layers}_c{n_chunks}_i{num_iters}_p{preload_isl}{kv_suffix}",
+            f"Chunk timing — {variant.name} (L{num_layers}, {n_chunks} chunks, {num_iters} iters, "
+            f"preload {preload_isl}{kv_label})",
             perf_table_lines + ["", "phase timings:"] + timing_lines,
         )
     for line in timing_lines:
