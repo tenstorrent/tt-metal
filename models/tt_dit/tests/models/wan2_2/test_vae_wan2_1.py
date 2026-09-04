@@ -1067,9 +1067,11 @@ def test_wan_mid_block(
     ],
 )
 # cache_len=0: empty cache, first iteration (list of Nones); 1,2: populated from previous passes.
-# feat_cache=None is deliberately not covered: it is valid in HF's module API but never executed by
-# HF's end-to-end encoder/decoder, which always pass the list clear_cache() builds. For downsample3d
-# we use that case for full-T encoding, so our result there differs from HF's no-op.
+# NOTE: Here we deliberately always test with a cache (i.e. a cache of len=0 is not the same thing
+# as cache=None). Even though feat_cache of None is valid in HF's module API, it is never executed
+# by HF's end-to-end encoder/decoder, which always pass a list. In fact, in our implementation of
+# WanResample, feat_cache=None in the downsample3d branch mimics the cached full-T encoding, so our
+# result there will differ from HF's anyways (HF would do a no-op if feat_cache=None).
 @pytest.mark.parametrize("cache_len", [0, 1, 2], ids=["cache_0", "cache_1", "cache_2"])
 @pytest.mark.parametrize("mean, std", [(0, 1)])
 @pytest.mark.parametrize(
