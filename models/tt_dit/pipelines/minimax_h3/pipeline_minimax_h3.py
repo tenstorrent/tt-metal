@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import time
 from collections.abc import Mapping, Sequence
 from contextlib import contextmanager
@@ -379,6 +380,14 @@ class MiniMaxH3Output:
 
 def _is_host_rank() -> bool:
     return not ttnn.using_distributed_env() or int(ttnn.distributed_context_get_rank()) == 0
+
+
+_TQDM_BAR_FORMAT = "\033[A\r\033[K{l_bar}{bar}{r_bar}\n"
+
+
+def _tqdm_spacer() -> None:
+    sys.stderr.write("\n")
+    sys.stderr.flush()
 
 
 class MiniMaxH3Pipeline:
@@ -2092,29 +2101,8 @@ class MiniMaxH3Pipeline:
         num_inference_steps: int = 50,
         rung_requests: Mapping[int, dict] | None = None,
     ) -> None:
-        """Compile and allocate everything a real call needs, so the next call measures compute only.
-
-        The analogue of `LTXPipeline.warmup_buffers`. Runs one full generation at the request's own
-        (natural) ladder rung, including the text-encoder forward, so the encoder's kernels compile
-        here too -- and, when tracing is on, walks the whole ladder: every rung is bound with a
-        short untraced generation (largest-first, so the big per-rung pools allocate before anything
-        else fragments the space), then captured with a short traced one. Rungs above the natural
-        one reuse the caller's request padded up; rungs below take a frames-shrunken variant -- any
-        request that fits warms a rung completely, because every program is keyed on the rung or on
-        the arena caps and the true lengths are index content -- or the matching `rung_requests`
-        entry (generation kwargs, per rung) where frames are not the right knob (a ref2va deployment
-        shrinks references instead). Afterwards every rung holds a resident capture and serving pays
-        neither a compile pass nor a capture; a rung nothing fits stays cold (logged) and is bound
-        lazily by its first real request. Already-warm rungs skip the bind and already-captured
-        rungs skip the capture, so a repeated warmup only fills gaps.
-
-        "Fully warm" in every number this pipeline reports means *after* this.
-
-        **Pass a representative `prompt` and keyframes or references**: the block-stack programs are
-        keyed on the padded packed length, so the request decides which rungs are reachable, and the
-        eager shell's programs (projections at the arena capacities, the assembly and selection
-        gathers per rung) compile on exactly the passes this runs. `last_seq_len` is exposed so a
-        caller can assert the warm and measured rungs agree.
+        """
+        Buffer allocation and trace warmup.
         """
         generation_kwargs = dict(
             image=image,
@@ -2142,8 +2130,14 @@ class MiniMaxH3Pipeline:
             shrunk = generation_kwargs
             host = _is_host_rank()
             bind_rungs = sorted(self.bucket_ladder, reverse=True)
+            if host:
+                _tqdm_spacer()
             for rung in tqdm.tqdm(
-                bind_rungs, desc=f"Initializing bucket buffers: {','.join(map(str, bind_rungs))}", disable=not host
+                bind_rungs,
+                desc=f"Initializing bucket buffers: {','.join(map(str, bind_rungs))}",
+                disable=not host,
+                file=sys.stderr,
+                bar_format=_TQDM_BAR_FORMAT,
             ):
                 bucket = self._buckets.get(rung)
                 shrink = rung < natural and rung not in overrides
@@ -2156,8 +2150,14 @@ class MiniMaxH3Pipeline:
                         shrunk = request
                 fitted[rung] = request
             capture_rungs = sorted(fitted, reverse=True)
+            if host:
+                _tqdm_spacer()
             for rung in tqdm.tqdm(
-                capture_rungs, desc=f"Capturing bucket traces: {','.join(map(str, capture_rungs))}", disable=not host
+                capture_rungs,
+                desc=f"Capturing bucket traces: {','.join(map(str, capture_rungs))}",
+                disable=not host,
+                file=sys.stderr,
+                bar_format=_TQDM_BAR_FORMAT,
             ):
                 if not self._rung_captured(rung):
                     shrink = rung < natural and rung not in overrides
@@ -2194,7 +2194,6 @@ class MiniMaxH3Pipeline:
                 kwargs["num_frames"] = max(5, frames // 2)
 
     def _rung_captured(self, rung: int) -> bool:
-        """Whether the denoise block stack holds a live capture keyed on this rung."""
         transformer = self._transformer
         if transformer is None:
             return False
@@ -2203,12 +2202,6 @@ class MiniMaxH3Pipeline:
         return tracer is not None and tracer.trace_captured
 
     def release_traces(self) -> None:
-        """Release every captured denoise trace, across all ladder rungs.
-
-        A trace holds device buffers for the whole request and nothing else drops them. A no-op when
-        nothing was traced. Warm rungs keep their `_BucketState` bindings, so each re-captures
-        automatically on its next traced call (~one forward), never a re-warm.
-        """
         transformer = self._transformer
         if transformer is None:
             return
@@ -2282,7 +2275,7 @@ class MiniMaxH3Pipeline:
             rung = ((layout.sequence_length + alignment - 1) // alignment) * alignment
         self.last_seq_len = SeqLen(padded=rung, logical=layout.sequence_length)
         self._log(
-            f"packed sequence {layout.sequence_length} -> {rung} padded, "
+            f"packed sequence {layout.sequence_length} -> bucket {rung}, "
             f"{rung // self.sp_factor} rows/device, {num_cond} condition rows"
         )
 
@@ -2397,7 +2390,17 @@ class MiniMaxH3Pipeline:
 
         t_preamble = time.time() - t_preamble
         t_first = t_steady = 0.0
-        for i, t in enumerate(timesteps):
+        if _is_host_rank():
+            _tqdm_spacer()
+        for i, t in enumerate(
+            tqdm.tqdm(
+                timesteps,
+                desc="Denoising",
+                disable=(not _is_host_rank()),
+                file=sys.stderr,
+                bar_format=_TQDM_BAR_FORMAT,
+            )
+        ):
             t_step = time.time()
             # Every trace input is a persistent buffer hoisted above the loop; only the per-slot
             # noise levels change. Each block projects `temb` for these levels on device (row
@@ -2437,12 +2440,7 @@ class MiniMaxH3Pipeline:
                 traced=traced,
             )
 
-            # On-device Euler, in place so the latents stay resident and the (traced) input buffers
-            # are advanced directly: `next = sample + (sigma - sigma_next) * v`, the mirror of Flux2's
-            # `multiply_`/`add_` step. `step_coefficient(i)` is the exact scalar `scheduler.step()`
-            # applies -- see its derivation -- so this matches the host reference to the bf16 apply's
-            # precision. Each stream steps its own schedule (shift 12.0 for video, 3.0 for audio), and
-            # only the target rows are ever touched, so the keyframe anchors survive untouched.
+            # On-device Euler
             ttnn.multiply_(video_velocity, float(scheduler.step_coefficient(i)))
             ttnn.add_(self._tt_video.value, video_velocity)
             ttnn.multiply_(audio_velocity, float(audio_scheduler.step_coefficient(i)))
@@ -2466,11 +2464,8 @@ class MiniMaxH3Pipeline:
             f"({t_steady / steady_steps * 1000:.0f} ms/step)"
         )
 
-        # One read-back of the resident latents into the target region of the host rows. The
         # condition rows live in their own arenas, so `[:num_cond]` stays pristine -- the return
         # contract (cond | target, cond first) and the decoders are unchanged, and the anchor check
-        # below is then structural. The arenas hold the target rows leading; the capacity tail is
-        # duplicated-velocity garbage and is sliced off here.
         video_rows[num_cond:] = (
             local_device_to_torch(self._tt_video.value)
             .reshape(-1, video_rows.shape[-1])[:v_target]
