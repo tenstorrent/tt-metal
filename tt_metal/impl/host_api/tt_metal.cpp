@@ -421,7 +421,7 @@ void DispatchCompiledProgramToDevice(IDevice* device, Program& program) {
     ZoneScoped;
 
     auto device_id = device->id();
-    const MetalContext& metal_ctx = MetalContext::instance(extract_context_id(device));
+    MetalContext& metal_ctx = MetalContext::instance(extract_context_id(device));
 
 #ifdef TT_METAL_USE_EMULE
     if (metal_ctx.get_cluster().get_target_device_type() == tt::TargetDevice::Emule) {
@@ -478,6 +478,7 @@ void DispatchCompiledProgramToDevice(IDevice* device, Program& program) {
 
             auto physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
             tt::llrt::write_launch_msg_to_core(
+                MetalEnvAccessor(metal_ctx.get_env()).impl(),
                 device_id,
                 physical_core,
                 local_launch_msg.view(),
@@ -976,10 +977,12 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
                     auto physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
                     not_done_cores.insert(physical_core);
                     if (force_slow_dispatch) {
-                        tt::llrt::send_reset_go_signal(device->id(), physical_core);
+                        tt::llrt::send_reset_go_signal(
+                            MetalEnvAccessor(metal_ctx.get_env()).impl(), device->id(), physical_core);
                     }
 
                     tt::llrt::write_launch_msg_to_core(
+                        MetalEnvAccessor(metal_ctx.get_env()).impl(),
                         device->id(),
                         physical_core,
                         kg->launch_msg.view(),
@@ -989,7 +992,7 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
             }
             if (wait_until_cores_done) {
                 // Wait for all cores to be done
-                llrt::internal_::wait_until_cores_done(device_id, dev_msgs::RUN_MSG_GO, not_done_cores);
+                llrt::internal_::wait_until_cores_done(metal_ctx, device_id, dev_msgs::RUN_MSG_GO, not_done_cores);
             }
         }
     }  // Profiler scope end
@@ -999,9 +1002,10 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
 }
 
 void WaitProgramDone(IDevice* device, Program& program, bool read_device_profiler_results) {
+    auto& metal_ctx = MetalContext::instance(extract_context_id(device));
     auto device_id = device->id();
     std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.impl().logical_cores();
-    llrt::internal_::wait_for_idle(device_id, logical_cores_used_in_program);
+    llrt::internal_::wait_for_idle(metal_ctx, device_id, logical_cores_used_in_program);
     if (read_device_profiler_results) {
         detail::ReadDeviceProfilerResults(device);
     }

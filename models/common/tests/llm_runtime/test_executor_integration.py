@@ -13,9 +13,16 @@ import pytest
 import torch
 
 import ttnn
-from models.common.llm_runtime.config import PagedKVCacheConfig, TraceConfig, WarmupConfig
+from models.common.llm_runtime.config import PagedKVCacheConfig, PageTableLayout, TraceConfig, WarmupConfig
+from models.common.llm_runtime.decode import DecodeTraceSignature
 from models.common.llm_runtime.execution import EagerExecutor
 from models.common.llm_runtime.lane_group import LaneGroupExecutor
+from models.common.llm_runtime.prefill.signatures import PrefillProgramSignature
+from models.common.llm_runtime.program_compiler import ProgramKey
+from models.common.llm_runtime.warmup import _build_plan
+from models.common.models import executor as shared_model_executor
+from models.common.models import llama3_executor as llama3_family_executor
+from models.common.models import qwen2_executor as qwen2_family_executor
 from models.common.models.deepseek_r1_distill_qwen_14b import executor as deepseek_executor
 from models.common.models.deepseek_r1_distill_qwen_14b import generator as deepseek_generator
 from models.common.models.llama32_1b import executor as llama32_executor
@@ -86,9 +93,15 @@ EXECUTOR_BINDINGS = {
         make_model=lambda **kwargs: _make_llama32_model(**kwargs),
         make_runtime_config=lambda: _make_llama32_runtime_config(),
         make_executor_config=lambda mode="none": _make_llama32_executor_config(mode, module=llama33_70b_executor),
-        make_recording_target=lambda **kwargs: _RecordingTarget(_make_llama32_model(), **kwargs),
+        make_recording_target=lambda **kwargs: _RecordingTarget(
+            _make_llama32_model(),
+            request_state_fields=llama33_70b_executor.Llama33_70BExecutor.request_state_fields,
+            **kwargs,
+        ),
         make_product=lambda mesh_device, max_batch_size: _make_llama32_product(mesh_device, max_batch_size),
-        make_lane=lambda llm, config: _FakeLane(llm, config),
+        make_lane=lambda llm, config: _FakeLane(
+            llm, config, request_state_fields=llama33_70b_executor.Llama33_70BExecutor.request_state_fields
+        ),
         hf_model="meta-llama/Llama-3.3-70B-Instruct",
     ),
     "qwen2_7b": SimpleNamespace(
@@ -173,9 +186,15 @@ EXECUTOR_BINDINGS = {
         make_model=lambda **kwargs: _make_qwen3_32b_model(**kwargs),
         make_runtime_config=lambda: _make_qwen3_32b_runtime_config(),
         make_executor_config=lambda mode="none": _make_qwen2_executor_config(mode, module=qwen3_32b_executor),
-        make_recording_target=lambda **kwargs: _RecordingTarget(_make_qwen3_32b_model(), **kwargs),
+        make_recording_target=lambda **kwargs: _RecordingTarget(
+            _make_qwen3_32b_model(),
+            request_state_fields=qwen3_32b_executor.Qwen3_32BExecutor.request_state_fields,
+            **kwargs,
+        ),
         make_product=lambda mesh_device, max_batch_size: _make_qwen3_32b_product(mesh_device, max_batch_size),
-        make_lane=lambda llm, config: _FakeLane(llm, config),
+        make_lane=lambda llm, config: _FakeLane(
+            llm, config, request_state_fields=qwen3_32b_executor.Qwen3_32BExecutor.request_state_fields
+        ),
         hf_model="Qwen/Qwen3-32B",
     ),
     "deepseek_r1_distill_qwen_14b": SimpleNamespace(
@@ -257,6 +276,34 @@ GENERATOR_PATHS = {
 @pytest.fixture(params=EXECUTOR_BINDINGS.items(), ids=lambda item: item[0])
 def binding(request):
     return request.param[1]
+
+
+_LLAMA_FAMILY_EXECUTOR_MODULES = (llama32_executor, llama32_3b_executor, llama33_70b_executor)
+_QWEN2_FAMILY_EXECUTOR_MODULES = (
+    qwen2_executor,
+    qwen25_executor,
+    qwen25_72b_executor,
+    qwen25_coder_32b_executor,
+)
+_SHARED_MODEL_EXECUTOR_MODULES = (
+    *_LLAMA_FAMILY_EXECUTOR_MODULES,
+    *_QWEN2_FAMILY_EXECUTOR_MODULES,
+    qwen3_32b_executor,
+)
+
+
+def _composition_module(binding):
+    if binding.executor_module in _SHARED_MODEL_EXECUTOR_MODULES:
+        return shared_model_executor
+    return binding.executor_module
+
+
+def _sampling_policy_module(binding):
+    if binding.executor_module in _LLAMA_FAMILY_EXECUTOR_MODULES:
+        return llama3_family_executor
+    if binding.executor_module in _QWEN2_FAMILY_EXECUTOR_MODULES:
+        return qwen2_family_executor
+    return binding.executor_module
 
 
 class _Mesh:
@@ -534,6 +581,63 @@ def test_qwen25_coder_32b_binding_preserves_tp8_runtime_and_sampling_defaults():
     assert config.device_sampling_enabled is False
 
 
+@pytest.mark.parametrize(
+    "product_binding",
+    (EXECUTOR_BINDINGS["qwen25_72b"], EXECUTOR_BINDINGS["qwen25_coder_32b"]),
+    ids=("qwen25_72b", "qwen25_coder_32b"),
+)
+@pytest.mark.parametrize("device_sampling_enabled", (False, True), ids=("sampling-off", "sampling-on"))
+def test_large_qwen_builder_threads_exact_decode_sampling_coverage(
+    monkeypatch,
+    product_binding,
+    device_sampling_enabled,
+):
+    mesh_device = _Mesh()
+    product = product_binding.make_product(mesh_device, 4)
+    executor_configs = []
+
+    monkeypatch.setattr(product_binding.generator_module, "from_pretrained", lambda **kwargs: product)
+    monkeypatch.setattr(
+        product_binding.generator_module,
+        "_model_kv_metadata",
+        lambda model: ((ttnn.bfloat8_b,), 1, 1, 128),
+    )
+
+    def build_executor(llm, config):
+        executor_configs.append(config)
+        return product_binding.make_lane(llm, config)
+
+    monkeypatch.setattr(product_binding.generator_module, product_binding.build_executor_name, build_executor)
+    generator = getattr(product_binding.generator_module, product_binding.build_generator_name)(
+        product_binding.generator_config_class(
+            hf_model=product_binding.hf_model,
+            mesh_device=mesh_device,
+            max_batch_size=4,
+            max_seq_len=1024,
+            n_layers=1,
+            device_sampling_enabled=device_sampling_enabled,
+        )
+    )
+
+    try:
+        assert len(executor_configs) == 1
+        warmup = executor_configs[0].warmup
+        assert warmup.include_decode_top_k is device_sampling_enabled
+        plan = _build_plan(
+            warmup=warmup,
+            layout=PageTableLayout(block_size=32, raw_capacity_width=32, prefill_width=64, decode_width=32),
+            prefill_sequence_lengths=(128,),
+            lane_batch_size=4,
+            allow_force_argmax=True,
+            can_sample_on_device=device_sampling_enabled,
+        )
+        assert [case.sampling_path for case in plan.decode] == (
+            ["logits", "argmax", "topk"] if device_sampling_enabled else ["logits"]
+        )
+    finally:
+        generator.cleanup()
+
+
 def test_qwen3_32b_binding_preserves_tp8_runtime_and_padded_vocab_defaults():
     model = _make_qwen3_32b_model()
     _, num_layers, kv_heads_per_device, head_dim = qwen3_32b_generator._model_kv_metadata(model)
@@ -555,6 +659,39 @@ def test_qwen3_32b_binding_preserves_tp8_runtime_and_padded_vocab_defaults():
     assert runtime.can_enable_trace(128, 1) is False
     assert config.hf_revision == qwen3_32b_generator.DEFAULT_HF_REVISION
     assert config.device_sampling_enabled is False
+
+
+@pytest.mark.parametrize(
+    ("cluster_shape", "disable_batched_prefill", "advertised_lengths", "expected"),
+    [
+        ([1, 8], False, (128, 1024), (128, 1024)),
+        ([1, 8], True, (128, 1024), (128, 1024)),
+        ([1, 4], False, (128, 1024), ()),
+        ([1, 8], False, (128,), (128,)),
+    ],
+    ids=("t3k-batched", "t3k-sequential", "bh-batched", "t3k-low-ceiling"),
+)
+def test_qwen3_prefill_capture_primes_are_t3k_product_owned(
+    cluster_shape,
+    disable_batched_prefill,
+    advertised_lengths,
+    expected,
+):
+    runtime = SimpleNamespace(
+        cluster_shape=cluster_shape,
+        disable_batched_prefill=disable_batched_prefill,
+        trace_prefill_supported_seq_lens=advertised_lengths,
+        can_enable_trace=lambda length, cached: length in advertised_lengths and cached == 0,
+    )
+
+    num_devices = int(cluster_shape[0]) * int(cluster_shape[1])
+    assert (
+        qwen3_32b_executor._resolve_trace_capture_prime_sequence_lengths(
+            runtime,
+            num_devices=num_devices,
+        )
+        == expected
+    )
 
 
 def test_phi4_binding_preserves_cap8_trace_buckets_and_pinned_revision():
@@ -586,10 +723,11 @@ def test_model_owned_executor_has_exact_composition_and_owner_counts(binding, mo
         "TracedExecutor",
         "WarmupCoordinator",
     )
+    composition_module = _composition_module(binding)
     owner_factories = {}
     for name in owner_names:
-        factory = MagicMock(wraps=getattr(binding.executor_module, name))
-        monkeypatch.setattr(binding.executor_module, name, factory)
+        factory = MagicMock(wraps=getattr(composition_module, name))
+        monkeypatch.setattr(composition_module, name, factory)
         owner_factories[name] = factory
 
     executor = binding.executor_class(
@@ -608,6 +746,9 @@ def test_model_owned_executor_has_exact_composition_and_owner_counts(binding, mo
     assert executor.warmup.eager is executor.eager_executor
     assert executor.warmup.trace_compiler is executor.trace_compiler
     assert executor.eager_execution is executor.eager_executor
+    assert executor.prefill_runtime.config.trace_capture_prime_sequence_lengths == (
+        (128, 1024) if binding.executor_module is qwen3_32b_executor else ()
+    )
     if mode == "none":
         assert executor.warmup.execution is executor.eager_executor
         assert executor.trace_compiler is None
@@ -623,20 +764,92 @@ def test_model_owned_executor_has_exact_composition_and_owner_counts(binding, mo
         assert executor.traced_decode_execution is executor.traced_executor
 
 
+def test_llama3_create_sampling_state_disables_duplicate_seed_salting(monkeypatch):
+    captured = {}
+
+    class FakeSampling1D:
+        def __init__(self):
+            self.config = SimpleNamespace(is_resolved=lambda: True)
+
+    class FakeSamplingState1D:
+        def __init__(self, sampling, *, salt_duplicate_seeds=True, **_kwargs):
+            captured["salt_duplicate_seeds"] = salt_duplicate_seeds
+            self.sampling = sampling
+
+        def create_state(self):
+            return object()
+
+    monkeypatch.setattr(llama3_family_executor, "Sampling1D", FakeSampling1D)
+    monkeypatch.setattr(llama3_family_executor, "SamplingState1D", FakeSamplingState1D)
+
+    controller, state = llama3_family_executor._create_sampling_state(SimpleNamespace(sampling=FakeSampling1D()), True)
+
+    assert captured["salt_duplicate_seeds"] is False
+    assert controller is not None
+    assert state is not None
+
+
+def test_qwen3_create_sampling_state_disables_duplicate_seed_salting(monkeypatch):
+    captured = {}
+
+    class FakeSampling1D:
+        def __init__(self):
+            self.config = SimpleNamespace(is_resolved=lambda: True)
+
+    class FakeSamplingState1D:
+        def __init__(self, sampling, *, salt_duplicate_seeds=True, **_kwargs):
+            captured["salt_duplicate_seeds"] = salt_duplicate_seeds
+            self.sampling = sampling
+
+        def create_state(self):
+            return object()
+
+    monkeypatch.setattr(qwen3_32b_executor, "Sampling1D", FakeSampling1D)
+    monkeypatch.setattr(qwen3_32b_executor, "SamplingState1D", FakeSamplingState1D)
+
+    controller, state = qwen3_32b_executor._create_sampling_state(SimpleNamespace(sampling=FakeSampling1D()), True)
+
+    assert captured["salt_duplicate_seeds"] is False
+    assert controller is not None
+    assert state is not None
+
+
 def _device_sampling_executor(binding, monkeypatch, *, runtime_disable: bool):
     class FakeSampling1D:
         config = SimpleNamespace(
             is_resolved=lambda: True,
             allow_force_argmax=False,
             max_batch_size=32,
+            max_top_k=32,
         )
 
         def decode_forward(self):
             raise AssertionError("construction-policy test must not execute sampling")
 
-    monkeypatch.setattr(binding.executor_module, "Sampling1D", FakeSampling1D)
+    sampling_policy_module = _sampling_policy_module(binding)
+    monkeypatch.setattr(sampling_policy_module, "Sampling1D", FakeSampling1D)
     model = binding.make_model()
     model.sampling = FakeSampling1D()
+    if binding.executor_module in (llama33_70b_executor, qwen3_32b_executor):
+
+        class FakeSamplingState1D:
+            def __init__(self, sampling, **_kwargs):
+                self.sampling = sampling
+                self.seed_manager = SimpleNamespace()
+
+            def create_state(self):
+                return SimpleNamespace(seed_state=SimpleNamespace(capacity=32))
+
+            def admit(self, *args, **kwargs):
+                return None
+
+            def decode_forward(self, *args, **kwargs):
+                return None
+
+            def release(self, *args, **kwargs):
+                return None
+
+        monkeypatch.setattr(sampling_policy_module, "SamplingState1D", FakeSamplingState1D)
     runtime_config = binding.make_runtime_config()
     runtime_config.disable_batched_prefill = runtime_disable
     config = replace(
@@ -655,7 +868,7 @@ def _device_sampling_executor(binding, monkeypatch, *, runtime_disable: bool):
     ],
     ids=("device-sampled-batched", "runtime-disabled", "environment-disabled"),
 )
-def test_device_sampling_does_not_implicitly_disable_batched_prefill(
+def test_device_sampling_prefill_batch_policy_is_model_owned(
     binding,
     monkeypatch,
     runtime_disable,
@@ -679,6 +892,8 @@ def test_device_sampling_does_not_implicitly_disable_batched_prefill(
         empty_slots=[0, 1],
     )
 
+    if binding.executor_module in (llama33_70b_executor, qwen3_32b_executor):
+        expected_kinds = ("single", "single")
     assert tuple(item.request.kind for item in prepared) == expected_kinds
     if expected_kinds == ("batched",):
         assert prepared[0].request.source_rows == (0, 1)
@@ -719,6 +934,143 @@ def test_llama32_1b_warms_every_q128_topk_tile_start_once_per_execution_mode():
 
 
 @pytest.mark.parametrize(
+    ("enable_trace", "expected_order"),
+    [
+        (False, ("default", 96, 0, 32, 64)),
+        (True, (0, 32, 64, "default", 96)),
+    ],
+    ids=("eager", "traced"),
+)
+def test_qwen3_lane4_warms_every_runtime_q128_topk_signature_before_activation(enable_trace, expected_order):
+    executor = SimpleNamespace(
+        _q128_topk_tile_ends_warmed=set(),
+        eager_executor=object(),
+        traced_executor=object(),
+        page_table_layout=SimpleNamespace(block_size=32),
+        prefill_runtime=SimpleNamespace(config=SimpleNamespace(static_q128_topk_supported=True)),
+        warmup=SimpleNamespace(
+            config=SimpleNamespace(
+                prefill_sequence_lengths=(128, 1024),
+                prime_q128_tile_ends=False,
+            )
+        ),
+    )
+    compiled = []
+    order = []
+    activation = []
+
+    def record_signature(prompt_length):
+        assert not activation
+        order.append(((prompt_length - 1) // 32) * 32)
+        compiled.append(
+            PrefillProgramSignature(
+                operation_variant="regular-single",
+                padded_batch_size=1,
+                invocation_sequence_length=128,
+                page_table_width=64,
+                chunk_page_table_width=None,
+                sampling_path="topk",
+                penalties_enabled=False,
+                logprobs_enabled=False,
+                last_token_tile_start=((prompt_length - 1) // 32) * 32,
+            )
+        )
+
+    def compile_prefill(**kwargs):
+        expected_execution = executor.traced_executor if enable_trace else executor.eager_executor
+        assert kwargs["execution"] is expected_execution
+        assert kwargs["kv_cache"] == "cache"
+        assert kwargs["sampling_params"].top_k.tolist() == [32]
+        record_signature(int(kwargs["prompt_lens"][0]))
+
+    executor.compile_prefill = compile_prefill
+
+    default_warmed = False
+
+    def default_warmup():
+        nonlocal default_warmed
+        if default_warmed:
+            return
+        default_warmed = True
+        order.append("default")
+        # The coordinator's ordinary Q128 top-k case covers the final tile.
+        record_signature(128)
+
+    for _ in range(2):
+        qwen3_32b_executor._warmup_q128_around_prefill(
+            executor,
+            default_warmup,
+            kv_cache="cache",
+            can_sample_on_device=True,
+            enable_trace=enable_trace,
+        )
+    activation.append(True)
+
+    assert tuple(order) == expected_order
+    assert {signature.last_token_tile_start for signature in compiled} == {0, 32, 64, 96}
+    compiled_keys = {ProgramKey.from_signature(signature) for signature in compiled}
+    runtime_signatures = {replace(compiled[0], last_token_tile_start=tile_start) for tile_start in (0, 32, 64, 96)}
+    assert {ProgramKey.from_signature(signature) for signature in runtime_signatures} == compiled_keys
+    assert executor._q128_topk_tile_ends_warmed == {enable_trace}
+
+
+def test_qwen3_lane4_executor_installs_model_owned_q128_warmup(monkeypatch):
+    executor = _device_sampling_executor(EXECUTOR_BINDINGS["qwen3_32b"], monkeypatch, runtime_disable=False)
+
+    assert executor._prefill_warmup is qwen3_32b_executor._warmup_q128_around_prefill
+    assert executor._q128_topk_tile_ends_warmed == set()
+
+
+@pytest.mark.parametrize("device_sampling_enabled", (False, True), ids=("disabled", "enabled"))
+def test_qwen3_generator_sampling_policy_controls_decode_topk_warmup(monkeypatch, device_sampling_enabled):
+    mesh_device = _Mesh8()
+    product = _make_qwen3_32b_product(mesh_device, max_batch_size=4)
+    executor_configs = []
+
+    monkeypatch.setattr(qwen3_32b_generator, "from_pretrained", lambda **kwargs: product)
+    monkeypatch.setattr(
+        qwen3_32b_generator,
+        "_model_kv_metadata",
+        lambda model: ((ttnn.bfloat8_b,), 1, 8, 64),
+    )
+
+    def build_executor(llm, config):
+        executor_configs.append(config)
+        return _FakeLane(
+            llm,
+            config,
+            request_state_fields=qwen3_32b_executor.Qwen3_32BExecutor.request_state_fields,
+        )
+
+    monkeypatch.setattr(qwen3_32b_generator, "build_qwen3_32b_executor", build_executor)
+    generator = qwen3_32b_generator.build_qwen3_32b_generator(
+        qwen3_32b_generator.Qwen3_32BGeneratorConfig(
+            hf_model="Qwen/Qwen3-32B",
+            mesh_device=mesh_device,
+            max_batch_size=4,
+            max_seq_len=1024,
+            trace_mode="decode_only",
+            device_sampling_enabled=device_sampling_enabled,
+        )
+    )
+
+    assert len(executor_configs) == 1
+    assert executor_configs[0].warmup.include_decode_top_k is device_sampling_enabled
+    if device_sampling_enabled:
+        observed_missing_signature = DecodeTraceSignature(
+            batch_size=4,
+            page_table_width=32,
+            sampling_path="topk",
+            device_feedback=True,
+        )
+        assert (
+            ProgramKey.from_signature(observed_missing_signature).digest
+            == "6f8351f51a0c90eaea5fca6700b3887e380a015dad7ee6f6a9e8be971dfebbd5"
+        )
+    generator.cleanup()
+
+
+@pytest.mark.parametrize(
     "method,positional,keyword_only",
     [
         (
@@ -732,23 +1084,56 @@ def test_llama32_1b_warms_every_q128_topk_tile_start_once_per_execution_mode():
                 "empty_slots",
                 "kv_cache",
                 "sampling_params",
+                "prompt_tokens",
+                "output_tokens",
+                "slot_remap",
                 "execution",
             ],
         ),
         (
             "compile_decode",
             ["self"],
-            ["tokens", "start_pos", "page_table", "kv_cache", "sampling_params", "reset_batch", "execution"],
+            [
+                "tokens",
+                "start_pos",
+                "page_table",
+                "kv_cache",
+                "sampling_params",
+                "prompt_tokens",
+                "output_tokens",
+                "slot_remap",
+                "reset_batch",
+                "execution",
+            ],
         ),
         (
             "prefill_forward",
             ["self", "tokens", "page_table"],
-            ["prompt_lens", "start_pos", "empty_slots", "kv_cache", "sampling_params", "execution"],
+            [
+                "prompt_lens",
+                "start_pos",
+                "empty_slots",
+                "kv_cache",
+                "sampling_params",
+                "prompt_tokens",
+                "output_tokens",
+                "slot_remap",
+                "execution",
+            ],
         ),
         (
             "decode_forward",
             ["self", "tokens", "start_pos", "page_table"],
-            ["kv_cache", "sampling_params", "reset_batch", "read_from_device", "execution"],
+            [
+                "kv_cache",
+                "sampling_params",
+                "prompt_tokens",
+                "output_tokens",
+                "slot_remap",
+                "reset_batch",
+                "read_from_device",
+                "execution",
+            ],
         ),
         ("read_decode_output", ["self", "tt_out"], ["async_read"]),
         ("process_decode_output_host", ["self", "tt_out"], ["is_tokens"]),
@@ -762,6 +1147,8 @@ def test_llama32_1b_warms_every_q128_topk_tile_start_once_per_execution_mode():
     ],
 )
 def test_executor_call_contract(binding, method, positional, keyword_only):
+    if binding.executor_module not in (llama33_70b_executor, qwen3_32b_executor):
+        keyword_only = [name for name in keyword_only if name not in {"prompt_tokens", "output_tokens", "slot_remap"}]
     signature = inspect.signature(getattr(binding.executor_class, method))
     parameters = signature.parameters
     required = {
@@ -796,12 +1183,10 @@ def test_executor_call_contract(binding, method, positional, keyword_only):
 @pytest.mark.parametrize(
     "executor_class",
     [
-        qwen25_72b_executor.Qwen25_72BExecutor,
-        qwen25_coder_32b_executor.Qwen25Coder32BExecutor,
         qwen3_32b_executor.Qwen3_32BExecutor,
     ],
 )
-def test_qwen32_family_delegates_resolved_sampling_warmup_and_activation_to_coordinator(executor_class):
+def test_qwen3_delegates_resolved_sampling_warmup_and_activation_to_coordinator(executor_class):
     warmup = SimpleNamespace(warmup_prefill=MagicMock(), warmup_decode=MagicMock())
     executor = SimpleNamespace(_ensure_active=MagicMock(), warmup=warmup)
 
@@ -844,9 +1229,10 @@ class _RecordingTarget:
     traced_prefill_execution = object()
     traced_decode_execution = object()
 
-    def __init__(self, model, traceable=True):
+    def __init__(self, model, traceable=True, request_state_fields=()):
         self.model = model
         self.traceable = traceable
+        self._request_state_fields = tuple(request_state_fields)
         self.calls = []
 
     def can_trace_prefill(self, **kwargs):
@@ -967,22 +1353,51 @@ def test_executor_validates_borrowed_cache_then_omits_it_from_execution(binding)
         *expected_validation,
         "dispatch_decode",
     ]
+    request_state_names = (
+        ("prompt_tokens", "output_tokens", "slot_remap")
+        if "prompt_tokens" in inspect.signature(binding.executor_class.compile_prefill).parameters
+        else ()
+    )
     for target, expected_names in (
         (
             execution.compile_prefill,
-            ("tokens", "page_table", "prompt_lens", "start_pos", "empty_slots", "sampling_params"),
+            (
+                "tokens",
+                "page_table",
+                "prompt_lens",
+                "start_pos",
+                "empty_slots",
+                "sampling_params",
+                *request_state_names,
+            ),
         ),
         (
             execution.compile_decode,
-            ("tokens", "start_pos", "page_table", "sampling_params", "reset_batch"),
+            ("tokens", "start_pos", "page_table", "sampling_params", *request_state_names, "reset_batch"),
         ),
         (
             execution.prefill_forward,
-            ("tokens", "page_table", "prompt_lens", "start_pos", "empty_slots", "sampling_params"),
+            (
+                "tokens",
+                "page_table",
+                "prompt_lens",
+                "start_pos",
+                "empty_slots",
+                "sampling_params",
+                *request_state_names,
+            ),
         ),
         (
             execution.decode_forward,
-            ("tokens", "start_pos", "page_table", "sampling_params", "reset_batch", "read_from_device"),
+            (
+                "tokens",
+                "start_pos",
+                "page_table",
+                "sampling_params",
+                *request_state_names,
+                "reset_batch",
+                "read_from_device",
+            ),
         ),
     ):
         assert target.call_count == 1
@@ -1026,6 +1441,9 @@ def test_late_capacity_reconfigures_existing_owners_before_allocation(binding, m
     assert executor.prefill_runtime.config.page_table_layout is executor.page_table_layout
     assert executor.decode_runtime.config.page_table_layout is executor.page_table_layout
     assert executor.warmup.config.page_table_layout is executor.page_table_layout
+    assert executor.prefill_runtime.config.trace_capture_prime_sequence_lengths == (
+        (128, 1024) if binding.executor_module is qwen3_32b_executor else ()
+    )
 
     def fake_allocate():
         assert executor._runtime_configuration_sealed
@@ -1223,12 +1641,13 @@ def test_vllm_generator_path_and_construction_defaults(model_id, generator_path)
 class _FakeLane:
     requires_prefill_trace_warmup = True
 
-    def __init__(self, llm, config):
+    def __init__(self, llm, config, request_state_fields=()):
         self.model = llm.model
         self.model_args = llm.runtime_config
         self.mesh_device = llm.model.config.mesh_device
         self.cache_path = llm.runtime_config.model_cache_path
         self.config = config
+        self._request_state_fields = tuple(request_state_fields)
         self.paged_kv_cache_config = config.paged_kv_cache
         self.already_warmed_up_prefill = False
         self.eager_execution = object()
@@ -1313,7 +1732,7 @@ def test_executor_cleanup_is_ordered_retryable_and_idempotent(binding, expect_er
         def __init__(self, name):
             self.name = name
 
-        def cleanup(self):
+        def cleanup(self, *args):
             calls.append(self.name)
             if self.name in failures:
                 raise RuntimeError(self.name)
@@ -1333,6 +1752,12 @@ def test_executor_cleanup_is_ordered_retryable_and_idempotent(binding, expect_er
     executor.program_compiler = _Owner("program")
     executor.config = SimpleNamespace(device_sampling_enabled=True)
     executor.model = SimpleNamespace(sampling=_Owner("sampling"))
+    if binding.executor_module in (llama33_70b_executor, qwen3_32b_executor):
+        executor.sampling_state_controller = _Owner("sampling-state")
+        executor.sampling_state = object()
+    else:
+        executor.sampling_state_controller = None
+        executor.sampling_state = None
     executor.kv_cache_manager = _Owner("kv")
 
     with expect_error(RuntimeError, "reader") as raised:
@@ -1345,9 +1770,10 @@ def test_executor_cleanup_is_ordered_retryable_and_idempotent(binding, expect_er
         "decode-external",
         "trace",
         "program",
-        "sampling",
-        "kv",
     ]
+    if binding.executor_module in (llama33_70b_executor, qwen3_32b_executor):
+        expected_order.append("sampling-state")
+    expected_order.extend(["sampling", "kv"])
     assert calls == expected_order
     assert tuple(error.args[0] for error in raised.value.cleanup_failures) == ("trace",)
     assert executor.terminal

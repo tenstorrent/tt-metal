@@ -26,6 +26,7 @@
 #include <tt_stl/span.hpp>
 #include <tt_stl/fmt.hpp>
 #include "impl/context/metal_context.hpp"
+#include "impl/context/metal_env_accessor.hpp"
 #include "tt_memory.h"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include "tt_metal/jit_build/genfiles.hpp"
@@ -1133,20 +1134,23 @@ bool DataMovementKernel::configure(
     if (not is_on_logical_core(logical_core)) {
         TT_THROW("Cannot configure kernel because it is not on core {}", logical_core.str());
     }
+    auto& env = MetalEnvAccessor(MetalContext::instance(extract_context_id(device)).get_env()).impl();
     auto device_id = device->id();
     auto worker_core = device->worker_core_from_logical_core(logical_core);
     const ll_api::memory& binary_mem = *this->binaries(BuildEnvManager::get_instance(extract_context_id(device))
                                                            .get_device_build_env(device->build_id())
                                                            .build_key())[0];
     int riscv_id = static_cast<std::underlying_type_t<DataMovementProcessor>>(this->config_.processor);
-    llrt::write_binary_to_address(binary_mem, device_id, worker_core, base_address + offsets[riscv_id]);
+    llrt::write_binary_to_address(env, binary_mem, device_id, worker_core, base_address + offsets[riscv_id]);
 
     return true;
 }
 
 bool EthernetKernel::configure(
     IDevice* device, const CoreCoord& logical_core, uint32_t base_address, const uint32_t offsets[]) const {
-    const auto& hal = MetalContext::instance(this->get_context_id()).hal();
+    auto& context = MetalContext::instance(this->get_context_id());
+    auto& env = MetalEnvAccessor(context.get_env()).impl();
+    const auto& hal = context.hal();
     auto device_id = device->id();
     auto ethernet_core = device->ethernet_core_from_logical_core(logical_core);
     const ll_api::memory& binary_mem = *this->binaries(BuildEnvManager::get_instance(extract_context_id(device))
@@ -1158,13 +1162,13 @@ bool EthernetKernel::configure(
             this->get_kernel_programmable_core_type(),
             HalProcessorClassType::DM,
             enchantum::to_underlying(this->config_.processor));
-        llrt::write_binary_to_address(binary_mem, device_id, ethernet_core, base_address + offsets[offset_idx]);
+        llrt::write_binary_to_address(env, binary_mem, device_id, ethernet_core, base_address + offsets[offset_idx]);
     } else {
         const auto erisc_core_index = hal.get_programmable_core_type_index(this->get_kernel_programmable_core_type());
         uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
         int erisc_id = enchantum::to_underlying(this->config_.processor);
         tt::llrt::test_load_write_read_risc_binary(
-            binary_mem, device_id, ethernet_core, erisc_core_index, dm_class_idx, erisc_id);
+            env, binary_mem, device_id, ethernet_core, erisc_core_index, dm_class_idx, erisc_id);
     }
 
     return true;
@@ -1175,7 +1179,9 @@ bool DramKernel::configure(
     const CoreCoord& logical_core,
     [[maybe_unused]] uint32_t base_address,
     [[maybe_unused]] const uint32_t offsets[]) const {
-    const auto& hal = MetalContext::instance(this->get_context_id()).hal();
+    auto& context = MetalContext::instance(this->get_context_id());
+    auto& env = MetalEnvAccessor(context.get_env()).impl();
+    const auto& hal = context.hal();
     auto device_id = device->id();
     auto dram_core = device->virtual_core_from_logical_core(logical_core, CoreType::DRAM);
     const ll_api::memory& binary_mem = *this->binaries(BuildEnvManager::get_instance(extract_context_id(device))
@@ -1184,7 +1190,7 @@ bool DramKernel::configure(
 
     const auto dram_core_index = hal.get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
-    tt::llrt::test_load_write_read_risc_binary(binary_mem, device_id, dram_core, dram_core_index, dm_class_idx, 0);
+    tt::llrt::test_load_write_read_risc_binary(env, binary_mem, device_id, dram_core, dram_core_index, dm_class_idx, 0);
 
     return true;
 }
@@ -1245,7 +1251,9 @@ bool experimental::quasar::DispatchEngineKernel::configure(
     [[maybe_unused]] uint32_t base_address,
     [[maybe_unused]] const uint32_t offsets[]) const {
     TT_FATAL(is_on_logical_core(logical_core), "Cannot configure kernel because it is not on core {}", logical_core.str());
-    const auto& hal = MetalContext::instance(this->get_context_id()).hal();
+    auto& context = MetalContext::instance(this->get_context_id());
+    auto& env = MetalEnvAccessor(context.get_env()).impl();
+    const auto& hal = context.hal();
     const ChipId device_id = device->id();
     const CoreCoord dispatch_core = device->virtual_core_from_logical_core(logical_core, CoreType::DISPATCH);
     const ll_api::memory& binary_mem = *this->binaries(BuildEnvManager::get_instance(extract_context_id(device))
@@ -1256,7 +1264,7 @@ bool experimental::quasar::DispatchEngineKernel::configure(
     const uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
     const int riscv_id = static_cast<std::underlying_type_t<DataMovementProcessor>>(this->dm_processors_[0]);
     tt::llrt::test_load_write_read_risc_binary(
-        binary_mem, device_id, dispatch_core, dispatch_core_type_index, dm_class_idx, riscv_id);
+        env, binary_mem, device_id, dispatch_core, dispatch_core_type_index, dm_class_idx, riscv_id);
     return true;
 }
 
@@ -1280,16 +1288,16 @@ bool ComputeKernel::configure(
     if (not is_on_logical_core(logical_core)) {
         TT_THROW("Cannot configure kernel because it is not on core {}", logical_core.str());
     }
+    auto& context = MetalContext::instance(extract_context_id(device));
+    auto& env = MetalEnvAccessor(context.get_env()).impl();
     auto device_id = device->id();
     auto worker_core = device->worker_core_from_logical_core(logical_core);
     const std::vector<const ll_api::memory*>& binaries = this->binaries(
         BuildEnvManager::get_instance(extract_context_id(device)).get_device_build_env(device->build_id()).build_key());
-    int32_t dm_count = MetalContext::instance(this->get_context_id())
-                           .hal()
-                           .get_processor_types_count(HalProgrammableCoreType::TENSIX, 0);
+    int32_t dm_count = context.hal().get_processor_types_count(HalProgrammableCoreType::TENSIX, 0);
     for (int trisc_id = 0; trisc_id <= 2; trisc_id++) {
         llrt::write_binary_to_address(
-            *binaries[trisc_id], device_id, worker_core, base_address + offsets[dm_count + trisc_id]);
+            env, *binaries[trisc_id], device_id, worker_core, base_address + offsets[dm_count + trisc_id]);
     }
 
     return pass;
@@ -1426,6 +1434,7 @@ bool QuasarDataMovementKernel::configure(
     IDevice* device, const CoreCoord& logical_core, uint32_t base_address, const uint32_t offsets[]) const {
     TT_FATAL(
         is_on_logical_core(logical_core), "Cannot configure kernel because it is not on core {}", logical_core.str());
+    auto& env = MetalEnvAccessor(MetalContext::instance(extract_context_id(device)).get_env()).impl();
     const ChipId device_id = device->id();
     const CoreCoord worker_core = device->worker_core_from_logical_core(logical_core);
     const std::vector<const ll_api::memory*>& binaries = this->binaries(
@@ -1433,6 +1442,7 @@ bool QuasarDataMovementKernel::configure(
     if (config_.is_legacy_kernel) {
         for (int i = 0; i < this->expected_num_binaries(); i++) {
             llrt::write_binary_to_address(
+                env,
                 *binaries[i],
                 device_id,
                 worker_core,
@@ -1442,7 +1452,7 @@ bool QuasarDataMovementKernel::configure(
     } else {
         const uint32_t canonical_offset =
             offsets[static_cast<std::underlying_type_t<DataMovementProcessor>>(this->dm_processors_[0])];
-        llrt::write_binary_to_address(*binaries[0], device_id, worker_core, base_address + canonical_offset);
+        llrt::write_binary_to_address(env, *binaries[0], device_id, worker_core, base_address + canonical_offset);
     }
 
     return true;
@@ -1548,18 +1558,18 @@ bool QuasarComputeKernel::configure(
     IDevice* device, const CoreCoord& logical_core, uint32_t base_address, const uint32_t offsets[]) const {
     TT_FATAL(
         is_on_logical_core(logical_core), "Cannot configure kernel because it is not on core {}", logical_core.str());
+    auto& context = MetalContext::instance(extract_context_id(device));
+    auto& env = MetalEnvAccessor(context.get_env()).impl();
     const ChipId device_id = device->id();
     const CoreCoord worker_core = device->worker_core_from_logical_core(logical_core);
     const std::vector<const ll_api::memory*>& binaries = this->binaries(
         BuildEnvManager::get_instance(extract_context_id(device)).get_device_build_env(device->build_id()).build_key());
-    const uint32_t dm_count =
-        MetalContext::instance(this->get_context_id())
-            .hal()
-            .get_processor_types_count(
-                HalProgrammableCoreType::TENSIX, enchantum::to_underlying(HalProcessorClassType::DM));
+    const uint32_t dm_count = context.hal().get_processor_types_count(
+        HalProgrammableCoreType::TENSIX, enchantum::to_underlying(HalProcessorClassType::DM));
     for (size_t i = 0; i < this->trisc_binary_groups_.size(); ++i) {
         const QuasarComputeProcessor canonical = this->trisc_binary_groups_[i][0];
         llrt::write_binary_to_address(
+            env,
             *binaries[i],
             device_id,
             worker_core,
