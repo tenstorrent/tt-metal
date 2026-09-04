@@ -12,10 +12,12 @@ validates every response, and records the actual prompt/completion token counts.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import statistics
 import time
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -28,8 +30,44 @@ HF_ADVERTISED_CONTEXT = 131072
 DEFAULT_MAX_TOKENS = 512
 DEFAULT_REPEATS = 3
 DEFAULT_ISLS = (512, 1024, 4096, 8192, 16384, 32768, 65536, 130560)
-FILLER = " context"
-INSTRUCTION = "\nCall record_latency_probe exactly once with payload ready."
+PROMPT_PREFIX = "Here is Python source code for context:\n```python\n"
+INSTRUCTION = "\n```\nCall record_latency_probe exactly once with payload ready."
+# A real, heterogeneous code corpus is intentional. Repeating one benign token
+# to reach an exact ISL makes this model continue that artificial sequence at
+# some lengths instead of exercising instruction following. These files are all
+# release inputs, and their ordered digest is recorded in the result artifact.
+SOURCE_CONTEXT_FILES = (
+    "models/common/sampling/tt_sampling.py",
+    "models/autoports/meta_models_muse_glimmer_30b/tt/generator.py",
+    "models/autoports/meta_models_muse_glimmer_30b/tt/model.py",
+    "models/autoports/meta_models_muse_glimmer_30b/tt/optimized_decoder.py",
+    "models/autoports/meta_models_muse_glimmer_30b/tt/multichip_decoder.py",
+    "models/autoports/meta_models_muse_glimmer_30b/tt/functional_decoder.py",
+    "models/autoports/meta_models_muse_glimmer_30b/tt/generator_vllm.py",
+    "models/autoports/meta_models_muse_glimmer_30b/tt/precision_config.py",
+    "models/autoports/meta_models_muse_glimmer_30b/tt/muse_glimmer_tool_parser.py",
+    "models/autoports/meta_models_muse_glimmer_30b/tt/reasoning_parser.py",
+    "models/autoports/meta_models_muse_glimmer_30b/tests/test_full_model.py",
+    "models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py",
+    "models/autoports/meta_models_muse_glimmer_30b/tests/test_optimized_decoder.py",
+    "models/autoports/meta_models_muse_glimmer_30b/tests/test_multichip_decoder.py",
+)
+_SMALL_EXACT_PADS = (
+    "",
+    " x",
+    " ok",
+    " data",
+    " neutral",
+    " a",
+    " .",
+    "\n",
+    "\n x",
+    " x x",
+    " ok ok",
+    " #",
+    " 0",
+    " pass",
+)
 TOOLS = [
     {
         "type": "function",
@@ -62,22 +100,58 @@ def prompt_tokens(tokenizer, content: str) -> int:
     return len(input_ids)
 
 
+@lru_cache(maxsize=1)
+def source_context() -> str:
+    """Return the ordered, tracked source corpus used as neutral prompt context."""
+    repo_root = Path(__file__).resolve().parents[5]
+    chunks = []
+    for relative in SOURCE_CONTEXT_FILES:
+        path = repo_root / relative
+        if not path.is_file():
+            raise FileNotFoundError(f"tool latency source corpus input is missing: {path}")
+        chunks.append(f"# File: {relative}\n{path.read_text()}\n")
+    return "\n".join(chunks)
+
+
+def source_context_sha256() -> str:
+    return hashlib.sha256(source_context().encode()).hexdigest()
+
+
 def exact_prompt(tokenizer, target_isl: int) -> str:
     """Build a tool-enabled chat prompt with exactly ``target_isl`` tokens."""
-    base = prompt_tokens(tokenizer, INSTRUCTION)
+    base = prompt_tokens(tokenizer, PROMPT_PREFIX + INSTRUCTION)
     if target_isl < base:
         raise ValueError(f"target ISL {target_isl} is below the tool-template floor of {base}")
-    # For this pinned tokenizer, each leading ``' context'`` contributes exactly
-    # one token. Assert that contract instead of silently reporting the wrong ISL
-    # if a future tokenizer revision changes its segmentation.
-    content = FILLER * (target_isl - base) + INSTRUCTION
-    actual = prompt_tokens(tokenizer, content)
-    if actual != target_isl:
-        raise RuntimeError(
-            f"could not construct exact ISL {target_isl}: tokenizer produced {actual}; "
-            "update FILLER for the pinned tokenizer revision"
-        )
-    return content
+
+    corpus = source_context()
+    # Bound the first search window near the expected ~4 chars/token, then widen
+    # only if this tokenizer/corpus needs it. This avoids tokenizing the complete
+    # 246k-token corpus when constructing the short rows.
+    high = min(len(corpus), max(1024, target_isl * 5))
+    while high < len(corpus) and prompt_tokens(tokenizer, PROMPT_PREFIX + corpus[:high] + INSTRUCTION) < target_isl:
+        high = min(len(corpus), high * 2)
+    if prompt_tokens(tokenizer, PROMPT_PREFIX + corpus[:high] + INSTRUCTION) < target_isl:
+        raise RuntimeError(f"source corpus is too short to construct exact ISL {target_isl}")
+
+    low = 0
+    while low < high:
+        middle = (low + high + 1) // 2
+        candidate = PROMPT_PREFIX + corpus[:middle] + INSTRUCTION
+        if prompt_tokens(tokenizer, candidate) <= target_isl:
+            low = middle
+        else:
+            high = middle - 1
+
+    # BPE boundaries can skip a count when one more source character merges with
+    # its neighbour. Search a tiny neighbourhood with stable code-like pads rather
+    # than falling back to a long repeated token sequence.
+    for source_chars in range(low, max(-1, low - 512), -1):
+        prefix = PROMPT_PREFIX + corpus[:source_chars]
+        for pad in _SMALL_EXACT_PADS:
+            content = prefix + pad + INSTRUCTION
+            if prompt_tokens(tokenizer, content) == target_isl:
+                return content
+    raise RuntimeError(f"could not construct exact source-context ISL {target_isl}")
 
 
 def _append_tool_delta(calls: dict[int, dict[str, str]], delta: dict[str, Any]) -> None:
@@ -272,6 +346,11 @@ def main() -> None:
                 "ttft": "client start to first semantic SSE delta (reasoning, content, or tool call)",
                 "e2el": "client start through SSE completion",
                 "tpot": "derived as (E2EL - TTFT) / (completion_tokens - 1)",
+            },
+            "prompt_corpus": {
+                "kind": "ordered tracked Python source prefix",
+                "files": list(SOURCE_CONTEXT_FILES),
+                "sha256": source_context_sha256(),
             },
             "tool_contract": {"name": "record_latency_probe", "arguments": {"payload": "ready"}},
             "rows": rows,

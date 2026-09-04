@@ -9,13 +9,17 @@ import json
 from transformers import AutoTokenizer
 
 from models.autoports.meta_models_muse_glimmer_30b.doc.serving_perf.tool_call_latency_sweep import (
+    DEFAULT_ISLS,
     DEFAULT_REPEATS,
     HF_MODEL_ID,
+    SOURCE_CONTEXT_FILES,
     WEIGHT_REVISION,
     _append_tool_delta,
     exact_prompt,
     median_row,
     prompt_tokens,
+    source_context,
+    source_context_sha256,
     write_artifact,
 )
 
@@ -26,8 +30,15 @@ def test_exact_prompt_builds_the_requested_tool_template_length():
         revision=WEIGHT_REVISION,
         local_files_only=True,
     )
-    for target in (512, 1024):
+    for target in DEFAULT_ISLS:
         assert prompt_tokens(tokenizer, exact_prompt(tokenizer, target)) == target
+
+
+def test_prompt_corpus_is_large_tracked_source_with_a_stable_digest():
+    corpus = source_context()
+    assert len(SOURCE_CONTEXT_FILES) == 14
+    assert len(corpus) > 500_000
+    assert len(source_context_sha256()) == 64
 
 
 def test_streamed_tool_fragments_are_reassembled_by_index():
