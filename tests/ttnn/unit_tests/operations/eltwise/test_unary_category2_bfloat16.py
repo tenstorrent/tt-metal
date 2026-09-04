@@ -35,16 +35,29 @@ Accuracy criteria
   relu, relu6    : exact  (comparison + select, no rounding introduced)
   hardsigmoid    : ULP ≤ 1  (clip(x/6 + 0.5, 0, 1); /6 division rounds ≤ 1 ULP)
   hardmish       : ULP ≤ 1  (golden emulates hardware's SFPSTORE truncation)
-  hardswish      : ULP ≤ 2  (x * hardsigmoid(x)); two known artifacts are
-                              verified explicitly, see test_hardswish
-  silu, swish    : PCC ≥ 0.999  (x * sigmoid(x); SFPU FTZ for large negative x)
-  softsign       : PCC ≥ 0.999  (x / (1 + |x|)); near-bf16_max FTZ artifact
-                              verified explicitly, see test_softsign
-  log_sigmoid    : PCC ≥ 0.999  (log(sigmoid(x)), restricted to [-80, 80])
-  tanhshrink     : PCC ≥ 0.999  (x - tanh(x); dedicated mpmath-based ULP
-                              regression for the cancellation region lives in
-                              test_activation.py::test_tanhshrink_ulp)
+  hardswish      : ULP ≤ 2  (two known artifacts verified explicitly, see
+                              test_hardswish)
+  silu, swish    : ULP ≤ 2  (near-zero and negative-sigmoid FTZ bands
+                              verified explicitly; see test_silu_swish_ops)
+  softsign       : ULP ≤ 2  (near-bf16_max FTZ band verified explicitly;
+                              see test_softsign)
+  log_sigmoid    : ULP ≤ 2 for x <= 0; PCC ≥ 0.999 for 0 < x <= 170; see
+                              test_log_sigmoid for a known kernel bug above 170
+  tanhshrink     : ULP ≤ 2 for |x| >= 1; PCC ≥ 0.999 for |x| < 1; see
+                              test_tanhshrink
 """
+
+
+def assert_ftz_band(result, band_mask, band_desc):
+    """Assert a known flush-to-zero band is non-empty and device-flushed to 0.
+
+    The band is a deterministic slice of the exhaustive sweep, so the
+    non-emptiness assertion guards against a future golden/kernel change that
+    shifts a boundary and silently empties the band (which would otherwise let
+    the test pass without ever checking the documented FTZ behavior).
+    """
+    assert band_mask.any(), f"expected {band_desc} to be non-empty for this exhaustive sweep"
+    assert_equal(torch.zeros_like(result[band_mask]), result[band_mask])
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -62,10 +75,9 @@ Accuracy criteria
 def test_exact_piecewise_ops(device, ttnn_op):
     """Exhaustive normal bfloat16 coverage for relu and relu6.
 
-    Both ops are exact piecewise-linear functions (max(0, x) and
-    min(max(0, x), 6)): every output is either the input value, 0, or 6 —
-    all exactly representable in bfloat16, so no rounding is introduced by
-    the op itself. Exact equality is asserted.
+    Both are exact piecewise-linear functions (max(0, x) and
+    min(max(0, x), 6)): every output is the input value, 0, or 6 — all
+    exactly representable in bfloat16, so exact equality is asserted.
     """
     input_tensor = generate_bfloat16_bits(dtype=torch.bfloat16)
 
@@ -77,7 +89,7 @@ def test_exact_piecewise_ops(device, ttnn_op):
     tt_result = ttnn_op(tt_in)
     result = ttnn.to_torch(tt_result)
 
-    assert_equal(result, golden)
+    assert_equal(golden, result)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -95,12 +107,10 @@ def test_exact_piecewise_ops(device, ttnn_op):
 def test_piecewise_division_ops(device, ttnn_op):
     """Exhaustive normal bfloat16 coverage for hardsigmoid and hardmish.
 
-    hardsigmoid = clip(x/6 + 0.5, 0, 1): the division by 6 rounds at most
-    1 ULP; the clip and add are exact or round at most 1 ULP as well.
-    hardmish's golden function already emulates the hardware's SFPSTORE
-    truncation behaviour for bfloat16 inputs (see torch_hardmish in
-    ttnn/ttnn/operations/unary.py), so device and golden should agree to
-    within 1 ULP of residual SFPU rounding.
+    hardsigmoid = clip(x/6 + 0.5, 0, 1): division/clip/add round at most
+    1 ULP total. hardmish's golden already emulates hardware's SFPSTORE
+    truncation (see torch_hardmish in ttnn/ttnn/operations/unary.py), so
+    both agree to within 1 ULP of residual SFPU rounding.
     """
     input_tensor = generate_bfloat16_bits(dtype=torch.bfloat16)
 
@@ -121,20 +131,16 @@ def test_piecewise_division_ops(device, ttnn_op):
 
 
 def test_hardswish(device):
-    """Exhaustive normal bfloat16 coverage for hardswish.
+    """Exhaustive normal bfloat16 coverage for hardswish = x * hardsigmoid(x).
 
-    hardswish(x) = x * hardsigmoid(x); ULP ≤ 2. Two known artifacts are
-    verified explicitly rather than silently excluded:
-
-    1. For x > ~bf16_max/6 (~5.65e37), torch's own golden formula
-       (x * relu6(x+3) / 6) overflows its intermediate product to +inf,
-       even though the true hardswish(x) = x is finite there. This is a
-       bug in torch's reference formula, not the device: the device is
-       asserted to return x exactly for every such input.
-    2. For x with bf16 exponent field == 1 (|x| in [tiny, 2*tiny)),
-       hardswish(x) ≈ x/2 underflows to a subnormal magnitude, which
-       hardware flushes to exact zero (FTZ). The device is asserted to
-       return exactly 0 for every such input.
+    Two known artifacts, verified explicitly rather than excluded:
+    1. x > ~5.65e37: torch's golden formula overflows to +inf (a golden bug,
+       not a device bug); device is asserted to return x exactly.
+    2. near-zero output FTZ: hardswish(x) = x*relu6(x+3)/6 ≈ x/2 for tiny x,
+       and the device flushes that subnormal result to 0 for |x| < 2*SNB
+       (strict; at exactly 2*SNB the device already returns a normal value).
+       Device is asserted to return exactly 0 there.
+    ULP ≤ 2 covers everything else.
     """
     input_tensor = generate_bfloat16_bits(dtype=torch.bfloat16)
 
@@ -146,18 +152,17 @@ def test_hardswish(device):
     tt_result = ttnn.hardswish(tt_in)
     result = ttnn.to_torch(tt_result)
 
-    # (1) Golden-formula overflow: device must return x exactly.
-    golden_overflow = torch.isinf(golden) & torch.isfinite(result)
-    if golden_overflow.any():
-        assert_equal(result[golden_overflow], input_tensor[golden_overflow])
+    # (1) Golden-formula overflow: device must return x exactly and finite.
+    golden_overflow = torch.isinf(golden)
+    assert golden_overflow.any(), "expected golden-overflow band to be non-empty for this exhaustive sweep"
+    assert torch.isfinite(result[golden_overflow]).all(), "device diverged to inf/nan in the golden-overflow band"
+    assert_equal(input_tensor[golden_overflow], result[golden_overflow])
 
-    # (2) exponent-field == 1 band: device must FTZ to exactly 0.
-    exp1_band = input_tensor.abs().float() < 2 * SMALLEST_NORMAL_BF16
-    if (exp1_band & ~golden_overflow).any():
-        flushed = exp1_band & ~golden_overflow
-        assert_equal(result[flushed], torch.zeros_like(result[flushed]))
+    # (2) near-zero output FTZ: |x/2| < smallest normal, i.e. |x| < 2*SNB.
+    near_zero_ftz = (input_tensor.abs().float() < 2 * SMALLEST_NORMAL_BF16) & ~golden_overflow
+    assert_ftz_band(result, near_zero_ftz, "near-zero FTZ band")
 
-    remaining = ~golden_overflow & ~exp1_band
+    remaining = ~golden_overflow & ~near_zero_ftz
     assert_with_ulp(golden[remaining], result[remaining], 2)
 
 
@@ -174,12 +179,22 @@ def test_hardswish(device):
     ],
 )
 def test_silu_swish_ops(device, ttnn_op):
-    """Exhaustive normal bfloat16 coverage for silu and swish.
+    """Exhaustive normal bfloat16 coverage for silu/swish = x * sigmoid(x).
 
-    silu(x) = swish(x) = x * sigmoid(x). PCC ≥ 0.999 is used because the
-    SFPU flushes sigmoid subnormals to zero for large negative x, causing
-    small legitimate differences from the CPU reference — the same
-    rationale as swiglu's gate function in test_unary_category5_bfloat16.py.
+    Two known FTZ artifacts, both verified explicitly (device returns exactly
+    0), then ULP ≤ 2 for everything else:
+    1. near-zero output FTZ: silu(x) = x*sigmoid(x) ≈ x/2 for tiny x, whose
+       subnormal result the device flushes to 0 for |x| <= 2*SNB. This is one
+       bf16 step wider than hardswish's identical x/2 underflow (<, exclusive)
+       because silu flushes the boundary value 2*SNB too.
+    2. negative sigmoid-underflow sliver x in [-88.5, -87.5]: the device's
+       internal sigmoid(x) flushes to 0 at x <= -87.5, whereas torch's float32
+       golden sigmoid = 1/(1+exp(-x)) only reaches exact 0 at x <= -89, where
+       exp(-x) overflows float32 (near x=-88.7). The 3 bf16 values in between
+       are the only ones where device (0) and golden (~1e-37) disagree; for
+       x <= -89 both are 0 and match. Boundaries are from a full-negative-
+       domain hardware sweep, not the analytic exp-underflow limit (~-104)
+       that torch's overflow-based sigmoid never actually reaches.
     """
     input_tensor = generate_bfloat16_bits(dtype=torch.bfloat16)
 
@@ -191,7 +206,16 @@ def test_silu_swish_ops(device, ttnn_op):
     tt_result = ttnn_op(tt_in)
     result = ttnn.to_torch(tt_result)
 
-    assert_with_pcc(golden, result, pcc=0.999)
+    # (1) near-zero output FTZ: |x/2| <= smallest normal, i.e. |x| <= 2*SNB.
+    near_zero_ftz = input_tensor.abs().float() <= 2 * SMALLEST_NORMAL_BF16
+    assert_ftz_band(result, near_zero_ftz, "near-zero FTZ band")
+
+    # (2) negative sigmoid-underflow sliver: device must FTZ to exactly 0.
+    neg_ftz_band = (input_tensor.float() >= -88.5) & (input_tensor.float() <= -87.5) & ~near_zero_ftz
+    assert_ftz_band(result, neg_ftz_band, "negative sigmoid-underflow sliver")
+
+    remaining = ~near_zero_ftz & ~neg_ftz_band
+    assert_with_ulp(golden[remaining], result[remaining], 2)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -200,14 +224,18 @@ def test_silu_swish_ops(device, ttnn_op):
 
 
 def test_softsign(device):
-    """Exhaustive normal bfloat16 coverage for softsign.
+    """Exhaustive normal bfloat16 coverage for softsign = x / (1 + |x|).
 
-    softsign(x) = x / (1 + |x|); PCC ≥ 0.999. The SFPU computes this as
-    x * reciprocal(1 + |x|); once |x| exceeds ~1/tiny - 1 (~8.5e37, near
-    bf16_max), that reciprocal intermediate underflows and hardware
-    flushes it to zero, producing 0 instead of the correct ±1 saturation
-    value. The device is asserted to return exactly 0 there; PCC is then
-    checked over the remaining "FTZ-safe" domain.
+    The SFPU computes this via reciprocal(1 + |x|); near bf16_max
+    (|x| > ~8.5e37) that intermediate underflows and is flushed to 0
+    instead of the correct ±1 saturation. Verified explicitly.
+
+    ULP ≤ 2 covers the remaining "FTZ-safe" domain, including both the
+    ~46% of it that already rounds to exactly ±1 in bf16 (|x| >= 512) and
+    the active reciprocal region below that. A whole-domain PCC would not
+    have constrained the reciprocal path at all here, since the exact-±1
+    majority alone is enough to satisfy PCC ≥ 0.999 for a badly broken
+    kernel.
     """
     input_tensor = generate_bfloat16_bits(dtype=torch.bfloat16)
 
@@ -221,13 +249,10 @@ def test_softsign(device):
 
     ftz_threshold = 1.0 / SMALLEST_NORMAL_BF16 - 1.0
     near_max = input_tensor.abs().float() > ftz_threshold
-
-    # Verified FTZ: device returns exactly 0 here.
-    if near_max.any():
-        assert_equal(result[near_max], torch.zeros_like(result[near_max]))
+    assert_ftz_band(result, near_max, "near-bf16_max FTZ band")
 
     ftz_safe = ~near_max
-    assert_with_pcc(golden[ftz_safe], result[ftz_safe], pcc=0.999)
+    assert_with_ulp(golden[ftz_safe], result[ftz_safe], 2)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -236,25 +261,34 @@ def test_softsign(device):
 
 
 def test_log_sigmoid(device):
-    """Exhaustive normal bfloat16 coverage for log_sigmoid over [-80, 80].
+    """Exhaustive normal bfloat16 coverage for log_sigmoid = log(sigmoid(x)).
 
-    log_sigmoid(x) = log(sigmoid(x)) is a compound log+sigmoid approximation.
-    The domain is restricted to [-80, 80]: for x below roughly -88, sigmoid(x)
-    legitimately underflows to exact 0 in bfloat16/float32, and log(0) = -inf
-    would incorrectly diverge from the true near-linear value of log_sigmoid
-    there. PCC ≥ 0.999 is used for the compound approximation error.
+    For x <= -4 the kernel uses the stable identity log_sigmoid(x) ≈ x
+    directly; exact for every negative value, so checked with ULP ≤ 2 over
+    the full negative domain. For 0 < x <= 170 a polynomial/exp approximation
+    is used; PCC ≥ 0.999 covers its compound approximation error (max abs
+    diff stays ~0.004 throughout this range).
+
+    Known kernel bug (tenstorrent/tt-metal#55457): for x > ~172 the
+    large-positive branch diverges and eventually returns -inf (e.g. x=266
+    -> -inf) instead of ~0. 170 is excluded as the tested upper bound since
+    it's the last point before that divergence begins.
     """
-    input_tensor = generate_bfloat16_bits_in_range(-80.0, 80.0)
+    negative_domain = generate_bfloat16_bits_in_range(-torch.finfo(torch.bfloat16).max, 0.0)
+    positive_domain = generate_bfloat16_bits_in_range(0.0, 170.0)
 
-    tt_in = to_tt_tensor(input_tensor, device)
+    tt_neg = to_tt_tensor(negative_domain, device)
+    tt_pos = to_tt_tensor(positive_domain, device)
 
     golden_function = ttnn.get_golden_function(ttnn.log_sigmoid)
-    golden = golden_function(input_tensor, device=device)
+    golden_neg = golden_function(negative_domain, device=device)
+    golden_pos = golden_function(positive_domain, device=device)
 
-    tt_result = ttnn.log_sigmoid(tt_in)
-    result = ttnn.to_torch(tt_result)
+    result_neg = ttnn.to_torch(ttnn.log_sigmoid(tt_neg))
+    result_pos = ttnn.to_torch(ttnn.log_sigmoid(tt_pos))
 
-    assert_with_pcc(golden, result, pcc=0.999)
+    assert_with_ulp(golden_neg, result_neg, 2)
+    assert_with_pcc(golden_pos, result_pos, pcc=0.999)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -263,13 +297,18 @@ def test_log_sigmoid(device):
 
 
 def test_tanhshrink(device):
-    """Exhaustive normal bfloat16 coverage for tanhshrink.
+    """Exhaustive normal bfloat16 coverage for tanhshrink = x - tanh(x).
 
-    tanhshrink(x) = x - tanh(x). The torch golden cancels the same way the
-    bfloat16 hardware does for small |x|, so PCC ≥ 0.999 is the appropriate
-    aggregate check for full-range exhaustive coverage. A dedicated mpmath-based
-    ULP regression for the cancellation region (issue #45520) lives separately
-    in test_activation.py::test_tanhshrink_ulp.
+    ULP ≤ 2 for |x| >= 1, where the subtraction doesn't cancel. For |x| < 1,
+    x and tanh(x) nearly cancel and torch's float32 golden rounds this
+    differently than bfloat16 hardware, so PCC ≥ 0.999 is used there instead
+    (a dedicated mpmath-based ULP regression for this region, issue #45520,
+    lives in test_activation.py::test_tanhshrink_ulp).
+
+    Splitting by magnitude matters: a single full-range PCC ≥ 0.999 would not
+    validate the |x| >= 1 majority, since tanh(x) is bounded by 1 and barely
+    perturbs the aggregate correlation once x spans up to ~3.4e38 — a kernel
+    that always returned x unchanged would still pass it.
     """
     input_tensor = generate_bfloat16_bits(dtype=torch.bfloat16)
 
@@ -281,4 +320,8 @@ def test_tanhshrink(device):
     tt_result = ttnn.tanhshrink(tt_in)
     result = ttnn.to_torch(tt_result)
 
-    assert_with_pcc(golden, result, pcc=0.999)
+    cancellation_band = input_tensor.abs().float() < 1.0
+    remaining = ~cancellation_band
+
+    assert_with_ulp(golden[remaining], result[remaining], 2)
+    assert_with_pcc(golden[cancellation_band], result[cancellation_band], pcc=0.999)
