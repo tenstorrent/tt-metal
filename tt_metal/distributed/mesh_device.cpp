@@ -136,9 +136,9 @@ decltype(auto) validate_and_get_reference_value(
 }
 
 // Returns offset of the mesh device view in the system mesh.
-MeshCoordinate compute_system_mesh_offset(const MeshDeviceView& view) {
+MeshCoordinate compute_system_mesh_offset(const MeshDeviceView& view, const SystemMesh& system_mesh) {
     const auto origin_fabric_node_id = view.get_fabric_node_id(MeshCoordinate::zero_coordinate(view.shape().dims()));
-    const auto system_mesh_shape = MetalContext::instance().get_system_mesh().shape();
+    const auto& system_mesh_shape = system_mesh.shape();
     for (const auto& coord : MeshCoordinateRange(system_mesh_shape)) {
         if (coord.to_linear_index(system_mesh_shape) == origin_fabric_node_id.chip_id) {
             return coord;
@@ -345,8 +345,10 @@ MeshDeviceImpl::MeshDeviceImpl(
     std::shared_ptr<ScopedDevices> mesh_handle,
     std::unique_ptr<MeshDeviceView> mesh_device_view,
     std::shared_ptr<MeshDevice> parent_mesh,
-    ContextId context_id) :
-    context_id_(context_id),
+    MetalContext& metal_context) :
+    context_id_(metal_context.get_context_id()),
+    metal_context_(&metal_context),
+    metal_env_(&MetalEnvAccessor(metal_context_->get_env()).impl()),
     scoped_devices_(std::move(mesh_handle)),
     mesh_id_(generate_unique_mesh_id()),
     view_(std::move(mesh_device_view)),
@@ -355,11 +357,14 @@ MeshDeviceImpl::MeshDeviceImpl(
     reader_thread_pool_(create_default_thread_pool(context_id_, extract_locals(scoped_devices_->root_devices()))),
     program_cache_(std::make_unique<program_cache::detail::ProgramCache>()) {
     Inspector::mesh_device_created(this, parent_mesh_ ? std::make_optional(parent_mesh_->id()) : std::nullopt);
-    const auto& mpi_context =
-        tt::tt_metal::MetalContext::instance(context_id_).get_control_plane().get_distributed_context(view_->mesh_id());
+    const auto& mpi_context = metal_env().get_control_plane().get_distributed_context(view_->mesh_id());
     distributed_context_ =
         mpi_context->split(distributed::multihost::Color(id()), distributed::multihost::Key(*mpi_context->rank()));
 }
+
+MetalContext& MeshDeviceImpl::metal_context() const { return *metal_context_; }
+
+MetalEnvImpl& MeshDeviceImpl::metal_env() const { return *metal_env_; }
 
 std::shared_ptr<MeshDevice> MeshDevice::create(
     const MeshDeviceConfig& config,
@@ -479,7 +484,7 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create(
         std::move(scoped_devices),
         std::make_unique<MeshDeviceView>(mesh_shape, root_devices, fabric_node_ids),
         std::shared_ptr<MeshDevice>(),
-        context_id);
+        ctx);
 
     mesh_device->pimpl_->initialize_impl(
         mesh_device.get(),
@@ -593,7 +598,7 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDeviceImpl::create_unit_meshes(
         std::move(scoped_devices),
         std::make_unique<MeshDeviceView>(MeshShape(1, device_ids.size()), root_devices, fabric_node_ids),
         std::shared_ptr<MeshDevice>(),
-        context_id);
+        ctx);
 
     auto submeshes = mesh_device->create_submeshes(MeshShape(1, 1));
     TT_FATAL(
@@ -735,7 +740,7 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create_submesh(
         scoped_devices_,
         std::make_unique<MeshDeviceView>(submesh_shape, submesh_devices, submesh_fabric_node_ids),
         parent_mesh,
-        context_id_);
+        metal_context());
 
     TT_FATAL(
         submesh->impl().get_context_id() == context_id_,
@@ -879,7 +884,7 @@ CoreCoord MeshDeviceImpl::compute_with_storage_grid_size() const {
         this->get_devices(), [](const auto* device) { return device->compute_with_storage_grid_size(); });
 }
 
-tt::ARCH MeshDeviceImpl::arch() const { return tt_metal::MetalContext::instance().get_cluster().arch(); }
+tt::ARCH MeshDeviceImpl::arch() const { return metal_env().get_cluster().arch(); }
 
 size_t MeshDeviceImpl::num_rows() const { return view_->num_rows(); }
 
@@ -931,8 +936,9 @@ void MeshDeviceImpl::reshape(const MeshShape& new_shape) {
     } else {
         // Do our best at requesting a new set of mapped devices from system mesh, starting at the offset of the first
         // device in the original mesh.
-        auto new_mapped_devices = MetalContext::instance().get_system_mesh().get_mapped_devices(
-            new_shape, compute_system_mesh_offset(*view_));
+        auto& system_mesh = metal_env().get_system_mesh();
+        auto new_mapped_devices =
+            system_mesh.get_mapped_devices(new_shape, compute_system_mesh_offset(*view_, system_mesh));
         for (int i = 0; i < new_mapped_devices.device_ids.size(); i++) {
             TT_FATAL(
                 current_fabric_nodes.contains(new_mapped_devices.fabric_node_ids[i]),
@@ -964,8 +970,7 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
     // Shut down the CQ first so dispatch_s sends TERMINATE to the profiler core with the
     // final buffer; the push kernel, receiver thread, and callbacks must still be alive.
     if (is_initialized()) {
-        if (MetalContext::instance(this->get_context_id()).get_cluster().get_target_device_type() !=
-            tt::TargetDevice::Mock) {
+        if (metal_env().get_cluster().get_target_device_type() != tt::TargetDevice::Mock) {
             ReadMeshDeviceProfilerResults(*pimpl_wrapper, ProfilerReadState::LAST_FD_READ);
         }
 
@@ -1060,8 +1065,7 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
         // (needs the cluster to map chip -> MMIO IDs). Must run before
         // destroy_instance below, and only on the first close_impl call.
         // Skip for mock devices — they never create pinned DMA regions.
-        if (MetalContext::instance(this->get_context_id()).get_cluster().get_target_device_type() !=
-            tt::TargetDevice::Mock) {
+        if (metal_env().get_cluster().get_target_device_type() != tt::TargetDevice::Mock) {
             experimental::PinnedMemoryCache::instance().release_for_device(*pimpl_wrapper);
         }
     }
@@ -1225,7 +1229,7 @@ const std::vector<int>& MeshDeviceImpl::coowner_ranks() const {
         return *coowner_ranks_;
     }
 
-    const auto& control_plane = MetalContext::instance(context_id_).get_control_plane();
+    const auto& control_plane = metal_env().get_control_plane();
 
     // (mesh id, host rank) -> MPI rank, inverted from the control plane's global bindings.
     std::map<std::pair<uint32_t, uint32_t>, int> rank_of_binding;
@@ -1602,9 +1606,9 @@ bool MeshDeviceImpl::initialize_impl(
 
     // For MeshDevice, we support uniform sub-devices across all devices and we do not support ethernet subdevices.
     const auto& compute_grid_size = this->compute_with_storage_grid_size();
-    auto& env_impl = MetalEnvAccessor(MetalContext::instance(context_id_).get_env()).impl();
     auto sub_devices = {SubDevice(SubDeviceImpl(
-        &env_impl, std::array{CoreRangeSet(CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1}))}))};
+        &metal_env(),
+        std::array{CoreRangeSet(CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1}))}))};
 
     // Resource shared across mesh command queues.
     auto cq_shared_state = std::make_shared<CQSharedState>();
@@ -1612,7 +1616,7 @@ bool MeshDeviceImpl::initialize_impl(
 
     const auto& allocator = reference_device()->allocator_impl();
     const auto& alloc_config = allocator->get_config();
-    auto is_mock = MetalContext::instance(context_id_).get_cluster().get_target_device_type() == tt::TargetDevice::Mock;
+    auto is_mock = metal_env().get_cluster().get_target_device_type() == tt::TargetDevice::Mock;
     auto mesh_allocator =
         is_mock ? experimental::make_mock_allocator(alloc_config) : std::make_unique<L1BankingAllocator>(alloc_config);
     // SubDeviceManagerTracker needs a MeshDevice pointer.
@@ -1620,10 +1624,9 @@ bool MeshDeviceImpl::initialize_impl(
         std::make_unique<SubDeviceManagerTracker>(pimpl_wrapper, std::move(mesh_allocator), sub_devices);
     // Issue #19729: Store the maximum number of active ethernet cores across opened physical devices in the Mesh
     // as the number of virtual ethernet cores seen by the MeshDevice
-    num_virtual_eth_cores_ =
-        tt_metal::MetalContext::instance(context_id_).device_manager()->get_max_num_eth_cores_across_all_devices();
+    num_virtual_eth_cores_ = metal_context().device_manager()->get_max_num_eth_cores_across_all_devices();
     mesh_command_queues_.reserve(this->num_hw_cqs());
-    if (MetalContext::instance(context_id_).rtoptions().get_fast_dispatch()) {
+    if (metal_env().get_rtoptions().get_fast_dispatch()) {
         for (std::size_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {
             mesh_command_queues_.push_back(std::make_unique<FDMeshCommandQueue>(
                 pimpl_wrapper,
@@ -1649,7 +1652,7 @@ bool MeshDeviceImpl::initialize_impl(
 
     // DRISC L1 arena: always constructed up-front when the HAL exposes programmable DRAM
     // cores so users don't observe a lazy side-effect on first DRAM-sender GCB creation.
-    if (MetalContext::instance(context_id_).hal().has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
+    if (metal_env().get_hal().has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
         drisc_l1_arena_ = std::make_shared<::tt::tt_metal::DriscL1Arena>(context_id_);
     }
 
@@ -1690,7 +1693,7 @@ TensorPrefetcherManager& MeshDeviceImpl::tensor_prefetcher(MeshDevice* mesh_devi
 
 CoreCoord MeshDeviceImpl::pick_unused_dram_logical_core(const IDevice* device, uint32_t bank_id) const {
     TT_FATAL(device != nullptr, "Cannot select a DRAM sender core for a null device");
-    const auto& soc_desc = MetalContext::instance(context_id_).get_cluster().get_soc_desc(device->id());
+    const auto& soc_desc = metal_env().get_cluster().get_soc_desc(device->id());
     const uint32_t num_banks = soc_desc.get_num_dram_views();
     TT_FATAL(
         bank_id < num_banks, "bank_id={} out of range for device {} (num_banks={})", bank_id, device->id(), num_banks);
@@ -1722,7 +1725,7 @@ CoreCoord MeshDeviceImpl::pick_unused_dram_logical_core(const IDevice* device, u
 
 std::vector<CoreCoord> MeshDeviceImpl::dram_sender_logical_cores(const IDevice* device, uint32_t bank_id) const {
     TT_FATAL(device != nullptr, "Cannot enumerate DRAM sender cores for a null device");
-    const auto& soc_desc = MetalContext::instance(context_id_).get_cluster().get_soc_desc(device->id());
+    const auto& soc_desc = metal_env().get_cluster().get_soc_desc(device->id());
 
     // Sender 0: the free non-endpoint subchannel.
     const CoreCoord free_core = pick_unused_dram_logical_core(device, bank_id);
