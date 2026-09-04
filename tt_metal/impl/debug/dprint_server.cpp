@@ -173,6 +173,7 @@ public:
     void attach_devices();
     void detach_devices();
     void clear_log_file();
+    void reset_for_new_run();
     bool reads_dispatch_cores(ChipId device_id) { return device_reads_dispatch_cores_[device_id]; }
     bool hang_detected() { return server_killed_due_to_hang_; }
 
@@ -260,6 +261,7 @@ private:
         std::string message_buffer;
         std::optional<std::string> line_prefix;
         int last_loaded_kernel_id = -1;
+        bool warned_missing_parser = false;
     };
 
     std::map<RiscKey, RiscData, RiscKeyComparator> risc_data_;
@@ -300,6 +302,11 @@ private:
 
     ofstream* outfile_ = nullptr;  // non-cout
     ostream* stream_ = nullptr;    // either == outfile_ or is &cout
+    std::mutex print_state_lock_;
+
+    // Opens (or re-opens) the output stream(s) per the current RTOptions.
+    // REQUIRES print_state_lock_ to be held.
+    void reconfigure_output();
 
     // For printing each risc's dprint to a separate file, a map from {device id, core, risc index} to files.
     std::map<RiscKey, ofstream*, RiscKeyComparator> risc_to_file_stream_;
@@ -535,6 +542,19 @@ void DPrintServer::Impl::print_buffer_data(
                         }
                     }
                 }
+            } else if (!risc_data.warned_missing_parser) {
+                risc_data.warned_missing_parser = true;
+                log_warning(
+                    tt::LogMetal,
+                    "DEVICE_PRINT: dropping messages from device {} core ({},{}) risc {}: no ELF parser "
+                    "resolved (is_kernel={}, info_id={}). The core is printing but never announced its "
+                    "kernel id; its firmware may be missing DEVICE_PRINT_KERNEL_FINISHED().",
+                    device_id,
+                    logical_core.coord.x,
+                    logical_core.coord.y,
+                    header->risc_id,
+                    header->is_kernel,
+                    header->info_id);
             }
 
             // Move to the next message
@@ -950,12 +970,7 @@ DPrintServer::Impl::Impl(
     }
 
     // Set the output stream according to RTOptions, either a file name or stdout if none specified.
-    std::filesystem::path output_dir(env_.get_rtoptions().get_logs_dir() + logfile_path);
-    std::filesystem::create_directories(output_dir);
-    if (!file_name.empty() && !one_file_per_risc) {
-        outfile_ = new ofstream(file_name);
-    }
-    stream_ = outfile_ ? outfile_ : &std::cout;
+    reconfigure_output();
 
     // Spin off the thread that runs the print server.
     print_server_thread_ = new std::thread([this] { poll_print_data(); });
@@ -1284,17 +1299,54 @@ void DPrintServer::Impl::detach_device(ChipId device_id) {
 }  // detach_device
 
 void DPrintServer::Impl::clear_log_file() {
+    std::lock_guard lock(print_state_lock_);
+    reconfigure_output();
+}  // clear_log_file
+
+void DPrintServer::Impl::reconfigure_output() {
+    // Close previous file
     if (outfile_) {
-        auto& rtoptions = env_.get_rtoptions();
-        // Just close the file and re-open it (without append) to clear it.
         outfile_->close();
         delete outfile_;
-
-        string file_name = rtoptions.get_feature_file_name(tt::llrt::RunTimeDebugFeatureDprint);
-        outfile_ = new ofstream(file_name);
-        stream_ = outfile_ ? outfile_ : &std::cout;
+        outfile_ = nullptr;
     }
-}  // clear_log_file
+
+    // Configure for new state
+    auto& rtoptions = env_.get_rtoptions();
+    const bool one_file_per_risc = rtoptions.get_feature_one_file_per_risc(tt::llrt::RunTimeDebugFeatureDprint);
+    string file_name = rtoptions.get_feature_file_name(tt::llrt::RunTimeDebugFeatureDprint);
+    std::filesystem::path output_dir(rtoptions.get_logs_dir() + logfile_path);
+    std::filesystem::create_directories(output_dir);
+
+    if (!file_name.empty() && !one_file_per_risc) {
+        outfile_ = new ofstream(file_name);
+    }
+    stream_ = outfile_ ? outfile_ : &std::cout;
+}  // reconfigure_output
+
+void DPrintServer::Impl::reset_for_new_run() {
+    std::lock_guard lock(print_state_lock_);
+
+    reconfigure_output();
+
+    // Clean up existing per-risc file streams.
+    for (auto& [risc_key, risc_stream] : risc_to_file_stream_) {
+        if (risc_stream != nullptr) {
+            risc_stream->close();
+            delete risc_stream;
+        }
+    }
+    risc_to_file_stream_.clear();
+
+    // Reset per-risc decode state.
+    for (auto& [risc_key, risc_data] : risc_data_) {
+        risc_data.message_buffer.clear();
+        risc_data.line_prefix.reset();
+        risc_data.kernel_elf_path.clear();
+        risc_data.kernel_elf_parser.reset();
+        risc_data.last_loaded_kernel_id = -1;
+    }
+}  // reset_for_new_run
 
 void DPrintServer::Impl::poll_print_data() {
     // Give the print server thread a reasonable name.
@@ -1317,13 +1369,16 @@ void DPrintServer::Impl::poll_print_data() {
 
         // Flag for whether any new print data was found in this round of polling.
         bool new_data_this_iter = false;
-        for (auto& device_and_cores : device_to_core_range_copy) {
-            ChipId device_id = device_and_cores.first;
-            new_data_this_iter |= poll_device_print_data(device_id, device_and_cores.second);
+        {
+            std::lock_guard state_lock(print_state_lock_);
+            for (auto& device_and_cores : device_to_core_range_copy) {
+                ChipId device_id = device_and_cores.first;
+                new_data_this_iter |= poll_device_print_data(device_id, device_and_cores.second);
 
-            // If this read detected a print hang, stop processing prints.
-            if (server_killed_due_to_hang_) {
-                return;
+                // If this read detected a print hang, stop processing prints.
+                if (server_killed_due_to_hang_) {
+                    return;
+                }
             }
         }
 
@@ -1423,6 +1478,7 @@ void DPrintServer::await() { impl_->await(); }
 void DPrintServer::attach_devices() { impl_->attach_devices(); }
 void DPrintServer::detach_devices() { impl_->detach_devices(); }
 void DPrintServer::clear_log_file() { impl_->clear_log_file(); }
+void DPrintServer::reset_for_new_run() { impl_->reset_for_new_run(); }
 bool DPrintServer::reads_dispatch_cores(ChipId device_id) { return impl_->reads_dispatch_cores(device_id); }
 bool DPrintServer::hang_detected() { return impl_->hang_detected(); }
 std::vector<umd::CoreDescriptor> DPrintServer::get_print_cores(ChipId device_id) const {
