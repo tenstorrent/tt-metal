@@ -34,6 +34,18 @@ the expensive ones** — a loud crash costs an hour, a silent wrong answer costs
 | Ring collectives hang rather than error | Fabric mode defaulted to non-ring while every collective is `Topology.Ring`. | Pin the ring fabric mode; a manifest cannot set the mesh-descriptor path, so set both. |
 | A probe "fails" at 257 tokens | `bfloat16` is exact only to **256**; 257 rounds to 256. The cache was correct, the probe was not. | Keep integer-valued probe payloads <= 256, or split across lanes. A failing probe is not evidence of a failing module until the probe's own numerics are checked. |
 
+## Repo hooks that will block your commit
+
+Found by a first independent run: these are enforced by `pre-commit`, so they fail at commit time
+rather than while you write, and one of them is easy to hit hundreds of lines deep in a test file.
+
+| Hook | What it rejects | What to write instead |
+|---|---|---|
+| `prefer-expect-error` (`.pre-commit-config.yaml:51`) | **any `pytest.raises` in a `tests/` file** | the repo-root `expect_error(ErrorClass, "substring")` fixture (`conftest.py:948`). The `message` argument is **mandatory** and must appear in the real error text, and the test must take `expect_error` as a parameter. |
+| `check-large-files` | files over 500 KB | **gzip** an oversized raw gate log rather than trimming it — compression is lossless, so the evidence stays byte-exact. Progress-bar output is usually what inflates them. |
+| `black --line-length 120`, `isort`, `autoflake` | formatting, import order, unused imports | run `pre-commit run --files <your files>` **before** recording any `path:line` in a log — reformatting moves the lines you just cited. |
+| `trailing-whitespace`, `end-of-file-fixer` | both, including inside raw logs | expect the first commit attempt to fail, be fixed by the hook, and need re-staging. |
+
 ## Method traps
 
 | Trap | Why it bites |
