@@ -383,7 +383,7 @@
 </dt>
 <dd class="field-odd">
 <ul class="simple">
-<li><p><span class="tt-api-param-name"><strong>input_tensor</strong></span><span class="tt-api-param-desc">A tensor whose elements will be rolled.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>input_tensor</strong></span><span class="tt-api-param-desc">A tensor whose elements will be rolled. A TILE layout tensor must use the standard 32x32 tile.</span></p></li>
 <li><p><span class="tt-api-param-name"><strong>shifts</strong></span><span class="tt-api-param-desc">The number of places by which elements are shifted. Can be an integer or a list of integers (one per dimension).</span></p></li>
 <li><p><span class="tt-api-param-name"><strong>dim</strong></span><span class="tt-api-param-desc">The dimension(s) along which to roll. If shifts is a list, then dim must be a list of the same length as shifts.</span></p></li>
 </ul>

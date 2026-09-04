@@ -378,7 +378,7 @@
 </dt>
 <dd>
 <p>Converts a partial tensor from interleaved to sharded memory layout</p>
-<p>:param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>: input tensor
+<p>:param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>: input tensor. Must be TILE layout with the standard 32x32 tile.
 :type * <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>: ttnn.Tensor
 :param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">grid</span></code>: Grid of sharded tensor
 :type * <code class="xref py py-attr docutils literal notranslate"><span class="pre">grid</span></code>: ttnn.CoreGrid

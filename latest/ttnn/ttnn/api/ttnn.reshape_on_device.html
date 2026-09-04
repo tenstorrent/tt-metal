@@ -388,7 +388,7 @@
 <span class="n">output_tensor</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">,</span> <span class="p">(</span><span class="n">W</span><span class="p">,</span> <span class="n">Z</span><span class="p">,</span> <span class="n">Y</span><span class="p">,</span> <span class="n">X</span><span class="p">))</span>
 </pre></div>
 </div>
-<p>:param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>: Input Tensor.
+<p>:param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>: Input Tensor. A TILE layout tensor must use the standard 32x32 tile.
 :param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">W</span></code>: W dim of tensor.
 :param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">Z</span></code>: Z dim of tensor.
 :param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">Y</span></code>: Y dim of tensor.

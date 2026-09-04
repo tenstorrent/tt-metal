@@ -403,6 +403,8 @@
 <div class="admonition note">
 <p class="admonition-title">Note</p>
 <p>Strided slicing (<code class="docutils literal notranslate"><span class="pre">slice_step</span> <span class="pre">!=</span> <span class="pre">1</span></code>) is not supported for <code class="docutils literal notranslate"><span class="pre">bfloat8_b</span></code> tensors.</p>
+<p>TILE layout tensors must use the standard 32x32 tile, and a pre-allocated <code class="docutils literal notranslate"><span class="pre">output_tensor</span></code> must
+carry the same tile as the input.</p>
 </div>
 <dl class="field-list simple">
 <dt class="field-odd">Returns<span class="colon">:</span>
