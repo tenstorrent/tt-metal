@@ -887,6 +887,23 @@ TEST_F(SDPABackwardTest, NIGHTLY_NoMask_ProductionEncoderShape) {
     run_sdpa_backward_test(config);
 }
 
+// Small per-PR shape for the unmasked path (same shape as DISABLED_SmallBatch above).
+TEST_F(SDPABackwardTest, NoMask_SmallBatch) {
+    SDPABackwardTestConfig config{
+        .batch_size = 2U,
+        .sequence_length = 128U,
+        .query_dim = 64U,
+        .key_value_dim = 64U,
+        .num_query_heads = 4U,
+        .num_kv_heads = 4U,
+        .dropout_prob = 0.0F,
+        .atol = 2e-2F,
+        .rtol = 2e-2F,
+        .test_name = "NoMask_SmallBatch (B=2, S=128, D=64, H=4, mask=None)",
+        .mask_type = ttml::metal::AttentionMaskType::None};
+    run_sdpa_backward_test(config);
+}
+
 // ========== Different V Dimension Tests (qE == kE != vE) ==========
 
 // Disabled: non-deterministic accuracy failures — https://github.com/tenstorrent/tt-metal/issues/46121
