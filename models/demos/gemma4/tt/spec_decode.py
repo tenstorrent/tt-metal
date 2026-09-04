@@ -138,20 +138,92 @@ class SpeculativeDecoder:
         # batched packed verify). Captured once, replayed per iter (prefill never
         # traced). See _capture_fused_trace_batched / _generate_fused_traced_batched.
         self._fused_trace_batched = None
-        # Seed mode for the fused greedy trace. "shift" (default) is the fast
-        # production mode: it reuses the previous verify hidden row as an
-        # approximate drafter seed and repairs the anchor KV at the next verify.
-        # "reseed" is the exact assistant contract: run a batch=1 target seed
-        # inside the fused trace before drafting, so the drafter sees the current
-        # anchor's exact target hidden/KV. It raises acceptance, but the extra
-        # target forward currently costs more than it saves; keep it as an A/B
-        # correctness/reference mode via GEMMA4_SPEC_FUSED_RESEED=1.
+        # Seed mode for the fused greedy trace.
+        #
+        # The drafter fuses concat(emb(token), target_hidden) through
+        # pre_projection (assistant/model.py step()) and wants BOTH at the same
+        # position t: the exact target hidden for the token it is drafting from.
+        #
+        # "reseed" (GEMMA4_SPEC_FUSED_RESEED=1) gets that exactly, with a
+        # batch=1 target forward at the new anchor before drafting. "shift"
+        # (default) avoids that forward by reusing a row of the previous verify.
+        # The exact hidden for the new anchor is NOT recoverable from that
+        # verify: the new anchor at p+m+1 is target_ids[m], but the verify row
+        # at p+m+1 processed the REJECTED draft d_m, so its hidden belongs to
+        # the wrong token. Row m (position p+m) is the nearest row that carries
+        # a committed token, which is why `current` is the default.
+        #
+        # Measured on T3K at K=6 (mean accepted /6, tok/s/user):
+        #     reseed KV-only  3.78     -     KV repair, shift's hidden
+        #     reseed          3.75   38.23   KV repair + exact h_t
+        #     shift current   3.38   51.12   no KV repair, hidden one back
+        #     shift last_acc  3.07     -     hidden two back
+        #     shift next      2.98     -     hidden of the REJECTED draft
+        #     shift + bound   3.07     -     hide the stale row from the drafter
+        #
+        # So reseed genuinely does raise acceptance (+8% tokens/iter) and still
+        # loses badly on throughput: the extra 31B forward adds ~42 ms to an
+        # ~82 ms iteration. Keep it as the A/B reference, not the default.
+        #
+        # The ablation (GEMMA4_SPEC_RESEED_KV_ONLY=1) pins down WHICH half of
+        # reseed earns that: discarding the exact hidden and keeping only the KV
+        # repair scores 3.78 -- the whole gain, and if anything better than the
+        # full mode. The exact hidden is worth nothing; the drafter only wants
+        # the ONE stale cache row at the new anchor fixed.
+        #
+        # That row is expensive on purpose. The committed token at p+m+1 is
+        # produced BY the verify, so the same verify cannot also write its KV,
+        # and any K/V for it needs a real forward. The free alternative -- just
+        # bounding the drafter's attention one position earlier to skip the
+        # stale row -- measures WORSE (3.07): the drafter would rather
+        # cross-attend to a stale anchor than to no anchor at all. If this gain
+        # is ever to be had cheaply it has to come from writing that one row,
+        # not from hiding it.
+        #
+        # Two bugs had to be fixed before any of that was measurable (it used to
+        # score 0.20/6 and emit different text than shift):
+        #   * the traced path dropped the anchor from the packed verify (P=K),
+        #     on the theory that its batch=1 seed had already covered p. But the
+        #     verify never reads the committed cache -- it merges its resident
+        #     staging block and paged_fill_cache's that back over the cache -- so
+        #     the seed's KV repair was invisible to it AND immediately clobbered,
+        #     leaving staging at p holding the previous iteration's rejected
+        #     draft. Both modes now verify [anchor, d0..dK-1] at p..p+K.
+        #   * generate_fused re-seeded from `anchor_token`, which the loop never
+        #     re-bound (only the device tensor anchor_tok_tt), so every reseed
+        #     after the first used the prompt's last token at the current
+        #     position.
         self._fused_reseed = os.environ.get("GEMMA4_SPEC_FUSED_RESEED", "0") == "1"
-        # Cheap approximate seed-row selection for fused shift mode. `next` is
-        # the original position-aligned row p+m+1. `current` uses row m (usually
-        # the last matched target row), and `last_accepted` uses row m-1 when at
-        # least one draft was accepted. These are A/B knobs for acceptance vs
-        # seed quality without paying a full target reseed.
+        # Ablation for WHY reseed raises acceptance. Reseed does two things at
+        # once: (a) hands the drafter the exact hidden at the new anchor, and
+        # (b) repairs that anchor's KV in the committed cache before the drafter
+        # cross-attends -- in shift mode position p+m+1 still holds the REJECTED
+        # draft d_m's KV until the next verify rewrites it. With
+        # GEMMA4_SPEC_RESEED_KV_ONLY=1 the seed forward still runs (so (b)
+        # happens) but its hidden is discarded in favour of the shift row (so
+        # (a) does not). Splitting the two says which one is worth chasing a
+        # cheap implementation for.
+        self._reseed_kv_only = os.environ.get("GEMMA4_SPEC_RESEED_KV_ONLY", "0") == "1"
+        # FREE alternative to the reseed forward. The ablation above shows the
+        # whole reseed gain is the KV repair, not the exact hidden -- and only
+        # ONE cache row is ever wrong: at the new anchor p+m+1 the verify left
+        # the REJECTED draft d_m's KV, and the drafter cross-attends before the
+        # next verify rewrites it. The drafter already receives emb(anchor_token)
+        # through its pre_projection input, so it may not need to attend to that
+        # row at all. Its SDPA upper bound (pos_int32) is a SEPARATE argument
+        # from its RoPE position (pos_uint32), so bounding attention one position
+        # earlier excludes the stale row while keeping RoPE correct -- no extra
+        # forward, no extra bytes. GEMMA4_SPEC_DRAFT_KV_BOUND=prev enables it.
+        #
+        # MEASURED WORSE -- 3.07/6 vs 3.38/6 baseline at K=6 (47.7 vs 51.3
+        # tok/s/user). The drafter would rather cross-attend to a stale anchor
+        # row than to no anchor row at all. Kept default-off as a recorded
+        # negative so the idea is not re-tried.
+        self._draft_kv_bound_prev = os.environ.get("GEMMA4_SPEC_DRAFT_KV_BOUND", "") == "prev"
+        # Seed-row selection for fused shift mode, as offsets from the new anchor
+        # at p+m+1. See the table above: `current` (row m, hidden at p+m) wins
+        # because it is the closest row whose hidden belongs to a COMMITTED
+        # token; `next` has the right position but the rejected draft's hidden.
         self._fused_shift_seed = os.environ.get("GEMMA4_SPEC_FUSED_SHIFT_SEED", "current")
         # Persistent anchor-hidden buffer for the traced loop (allocated once).
         # The traced loop MUST be allocation-free: any ttnn.clone/slice between
@@ -508,6 +580,8 @@ class SpeculativeDecoder:
             int(self.draft_len),
             int(P),
             bool(self._fused_reseed),
+            bool(self._reseed_kv_only),
+            bool(self._draft_kv_bound_prev),
             bool(self._fast_host_enabled()),
             bool(self._io_pack_in_graph_enabled()),
             bool(self._batch_sdpa_enabled()),
@@ -715,13 +789,13 @@ class SpeculativeDecoder:
     def _fused_verify_c_p(self, anchor_pos):
         """Packed-verify (c, P) for one fused greedy iteration at ``anchor_pos``.
 
-        Shift mode verifies [anchor, d0..dK-1] at p..p+K. Reseed mode already
-        ran a batch=1 seed at p, so verify is only the K drafts at p+1..p+K.
+        Both modes verify [anchor, d0..dK-1] at p..p+K. Reseed used to verify
+        only the K drafts at p+1..p+K on the grounds that its batch=1 seed had
+        already covered the anchor -- but that seed writes the COMMITTED cache
+        while the verify reads and rewrites its own staging block, so dropping
+        the anchor row corrupted the verify's history. See _fused_body.
         """
-        K = self.draft_len
-        if self._fused_reseed:
-            return anchor_pos + 1, K
-        return anchor_pos, K + 1
+        return anchor_pos, self.draft_len + 1
 
     def _fused_pv_prepare(self, anchor_pos):
         """Host packed-verify tensors for the fused greedy graph at ``anchor_pos``."""
@@ -1324,6 +1398,13 @@ class SpeculativeDecoder:
         anchor_tok_tt = self._tokens_tensor([anchor_token])
         while len(out) < max_new_tokens:
             if self._fused_reseed:
+                # Re-seed at the CURRENT anchor. ``anchor_token`` is re-bound at
+                # the end of every iteration below; before that fix this read the
+                # prompt's last token forever (the loop only re-bound the device
+                # tensor ``anchor_tok_tt``), so every reseed after the first
+                # produced the hidden for a long-stale token at the current
+                # position — the drafter was seeded from the wrong row and
+                # acceptance collapsed.
                 new_anchor_hidden = self.seed(anchor_token, anchor_pos)
                 anchor_hidden.deallocate(True)
                 anchor_hidden = new_anchor_hidden
@@ -1352,6 +1433,7 @@ class SpeculativeDecoder:
             anchor_hidden = new_anchor_hidden
             anchor_tok_tt.deallocate(True)
             anchor_tok_tt = self._tokens_tensor([new_token])
+            anchor_token = new_token
             anchor_pos = new_pos
 
             for tok in committed:
@@ -1389,30 +1471,57 @@ class SpeculativeDecoder:
             v_pos, v_pos_cache = tr["v_pos"], tr.get("v_pos_cache")
         tok = anchor_tok
         if self._fused_reseed:
-            seed_logits, h = self.target.ttnn_verify_forward(
+            # EXACT drafter seed: one batch=1 target forward at the anchor gives
+            # the true post-norm hidden for (anchor_tok, p), instead of reusing a
+            # verify row from the previous iteration -- which necessarily belongs
+            # to either an earlier position or a rejected draft. It also repairs
+            # the anchor's KV in the COMMITTED cache before the drafter
+            # cross-attends to it. Measured +8% tokens/iter at K=6, but the extra
+            # 31B forward costs far more than that; see __init__ for the numbers.
+            #
+            # It must NOT be used to shrink the packed verify. The verify never
+            # reads the committed cache -- it merges its resident `staging` hot
+            # block and then paged_fill_cache's that block back over the cache
+            # (see attention/decode._packed_fill_kv_loopfree_embed). So this
+            # forward's repair is invisible to the verify AND is immediately
+            # overwritten by it. Dropping the anchor from the verify (P=K,
+            # drafts only) therefore left staging position p holding the PREVIOUS
+            # iteration's rejected draft, and the verify scored every candidate
+            # against a corrupted history -- wrong target_ids, wrong output text,
+            # and acceptance collapsing to ~0.2/6 at K=6.
+            #
+            # Keeping the anchor at verify row 0 (P=K+1, exactly as shift mode)
+            # routes the repair through staging, which is the only path the
+            # verify actually reads. Reseed then differs from shift in precisely
+            # one thing -- the quality of the drafter's seed hidden -- which is
+            # what the mode is for.
+            seed_logits, seed_h = self.target.ttnn_verify_forward(
                 x=anchor_tok,
                 current_pos=d_pu,
                 current_pos_cache=d_pi,
                 page_table=tr["d_pt"],
                 kv_cache=self.tt_kv_cache,
             )
-            seed_idx = self._argmax_last(seed_logits, rows=1)
             seed_logits.deallocate(True)
+            # KV-only ablation: keep the forward (and its KV repair) but seed the
+            # drafter from the shift row instead. See _reseed_kv_only.
+            h = tr["h"] if self._reseed_kv_only else seed_h
         else:
             h = tr["h"]
+        # See _draft_kv_bound_prev: exclude the one stale cache row (the rejected
+        # draft at the anchor position) from the drafter's attention window.
+        # RoPE still uses d_pu, i.e. the true anchor position.
+        d_pi_draft = ttnn.subtract(d_pi, 1) if self._draft_kv_bound_prev else d_pi
         draft_ids = []
         for _ in range(K):
-            idx, h = self._greedy_draft_idx(tok, h, page_tables, d_pu, d_pi, rows=1)
+            idx, h = self._greedy_draft_idx(tok, h, page_tables, d_pu, d_pi_draft, rows=1)
             tok = ttnn.reshape(idx, (1, 1))  # [1,1] uint32 RM
             draft_ids.append(tok)
-        # In exact-reseed mode, the seed forward already computed row 0
-        # (target logits for the anchor) and repaired the anchor KV before the
-        # drafter reads shared KV. Verify only the draft tokens at p+1..p+K and
-        # prepend seed_idx to form target_ids[0..K]. In shift mode, keep the old
-        # single verify batch [anchor, d0..dK-1].
-        verify_inputs = draft_ids if self._fused_reseed else [anchor_tok] + draft_ids
-        verify_x = ttnn.concat(verify_inputs, dim=1)  # reseed: [1,K], shift: [1,K+1]
-        P = K if self._fused_reseed else K + 1
+        # Both modes verify [anchor, d0..dK-1] at p..p+K. The anchor row is what
+        # repairs its own KV through the verify's staging buffer, so it stays in
+        # even under exact reseed (see the seed block above).
+        verify_x = ttnn.concat([anchor_tok] + draft_ids, dim=1)  # [1, K+1]
+        P = K + 1
         vlogits, vhidden = self.target.ttnn_packed_verify_forward(
             x=verify_x,
             position_idx=v_pos,
@@ -1426,14 +1535,8 @@ class SpeculativeDecoder:
             embed_idx_sliding=tr["embed"].get("sliding_attention"),
             hot_pt=tr["hot"],
         )
-        tail_rows = K if self._fused_reseed else K + 1
-        tail_idx = self._argmax_last(vlogits, rows=tail_rows)  # [1,1,K or K+1] uint32 RM
-        if self._fused_reseed:
-            vidx = ttnn.concat([seed_idx, tail_idx], dim=2)  # [1,1,K+1]
-            seed_idx.deallocate(True)
-            tail_idx.deallocate(True)
-        else:
-            vidx = tail_idx
+        tail_rows = K + 1
+        vidx = self._argmax_last(vlogits, rows=tail_rows)  # [1,1,K+1] uint32 RM
         vlogits.deallocate(True)
         # Persistent per-row hidden outputs (captured slices). The next iter's
         # shift seed is ``ttnn.copy(h_rows[m], tr["h"])`` — no slice between
@@ -1696,14 +1799,16 @@ class SpeculativeDecoder:
 
             vx, target_ids = self._accept_ids_from_trace(tr)
             vx = vx.reshape(-1)
-            drafts = [int(vx[j if self._fused_reseed else 1 + j]) for j in range(K)]
+            drafts = [int(vx[1 + j]) for j in range(K)]  # vx = [anchor, d0..dK-1]
             m = next((i for i in range(K) if drafts[i] != target_ids[i]), K)
             committed = drafts[:m] + [target_ids[m]]
             accepts.append(m)
 
-            if not self._fused_reseed:
+            if (not self._fused_reseed) or self._reseed_kv_only:
                 # Shift seed: choose one of the verified hidden rows as a cheap
                 # approximate seed for the next anchor (see _fused_shift_seed).
+                # The KV-only ablation reseeds the CACHE but not the hidden, so
+                # it still needs this row copied for the next replay.
                 self._hidden_row_to_device(self._fused_shift_seed_row(m, K))
             cur_pos = cur_pos + m + 1
             cur_token = committed[-1]

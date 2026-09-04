@@ -310,6 +310,65 @@ def apply_per_head_norm(tensor, weight, eps, with_scale=True, memory_config=None
     return ttnn.reshape(normed, orig_shape)
 
 
+def fused_qkv_head_norm_enabled() -> bool:
+    """Opt out of the fused decode q/k/v per-head norm with ``GEMMA4_FUSED_QKV_NORM=0``."""
+    return os.environ.get("GEMMA4_FUSED_QKV_NORM", "1").lower() not in ("0", "false", "no")
+
+
+# The fused decode norm is restricted to batch == 1.
+#
+# The stored scale is ONE batch row of per-head weights ([1, 1, rows,
+# head_dim]) while the normed activation is [1, 1, B*rows, head_dim]. Those
+# only line up at B == 1: ttnn.mul cannot broadcast a rows-block across B (that
+# is a repeat, not a size-1 broadcast — it throws "Invalid subtile broadcast
+# type"). Physically repeating the pattern with a runtime ttnn.repeat DOES fix
+# the math (verified equal to the three-norm island at B=1/4/32), but it
+# reproducibly kills batch-32 decode under trace with
+#   "SubDeviceManagerTracker is not initialized on MeshDevice 0"
+# so it is not shipped. batch-8 measured 57.49 -> 54.28 ms/token (+5.9%) with
+# the repeat, so the B>1 case is worth reviving — but via a tiled weight built
+# on the HOST at load time, not a runtime allocation on the decode path.
+def _fused_qkv_norm_supported(batch) -> bool:
+    return int(batch) == 1
+
+
+def apply_fused_qkv_head_norm(xqkv, qkv_norm_weight, eps, num_rows, head_dim, memory_config=None):
+    """Per-head RMSNorm of Q, K and V in ONE norm launch, before the head split.
+
+    The shipped decode island runs three per-head norms (q_norm, k_norm, and the
+    unscaled v_norm), each preceded by a ``to_memory_config`` because the
+    layernorm op rejects HEIGHT_SHARDED input. Every one of those ops lands on a
+    SINGLE core -- Q is [4, 256] and K/V are [2, 256] logical at 31B/TP8 -- so
+    the island is ~35 us/layer of almost pure launch overhead (~2.0 ms/step from
+    the 2026-09-03 tracy capture).
+
+    All three normalise over ``head_dim``, and the fused QKV already stores one
+    head per ``head_dim``-wide column block in the order Q..., K..., V... (the
+    layout ``nlp_create_qkv_heads_decode`` itself assumes). So viewing it as
+    ``[1, 1, B*num_rows, head_dim]`` puts exactly one head per ROW, and a single
+    unscaled ``rms_norm`` over the last dim IS the per-head norm for all of
+    them. The three different scales are then one elementwise multiply by a
+    precomputed row-per-head weight (q_norm rows, k_norm rows, ones for V) --
+    see ``AttentionWeights.qkv_norm_weight``.
+
+    Q/K/V still fit one 32-row tile combined (4+2+2 = 8 rows), so the fused norm
+    costs what ONE of the three cost. Measured on T3K, 31B sliding at TP=8
+    (traced, best of 5): 35.24 us -> 16.25 us, i.e. 1.14 ms/step.
+
+    Equivalence is exact up to bf16 rounding -- the shipped path folds gamma
+    inside rms_norm while this applies it as a separate multiply. Measured
+    against the three-norm island: q 0.99999481, k 0.99999619, v bit-identical.
+    """
+    b = int(xqkv.shape[-2])
+    flat = ttnn.reshape(xqkv, (1, 1, b * num_rows, head_dim))
+    normed = ttnn.rms_norm(flat, epsilon=eps, memory_config=memory_config)
+    scaled = ttnn.mul(normed, qkv_norm_weight, memory_config=memory_config)
+    normed.deallocate(True)
+    out = ttnn.reshape(scaled, (1, 1, b, num_rows * head_dim))
+    scaled.deallocate(True)
+    return out
+
+
 def apply_rope(tensor, cos_cache, sin_cache, token_index=None, memory_config=None):
     """
     Apply HF-style rotary position embedding.
@@ -701,7 +760,26 @@ def concat_heads(
         grid_y = compute_grid.y if compute_grid is not None else 8
         grid_x = min(batch, physical_grid_x)
         if batch >= grid_x and batch % grid_x != 0:
-            grid_x = max(x for x in range(grid_x, 0, -1) if batch % x == 0 and batch // x <= grid_y)
+            # num_to_corerange needs a rectangle of EXACTLY ``batch`` cores, so
+            # batch must factor as gx*gy with gx <= physical_grid_x and
+            # gy <= grid_y. Some batches admit no such factorisation -- any
+            # ``batch`` with no divisor in [ceil(batch/grid_y), physical_grid_x],
+            # e.g. a prime > 8 on an 8x8 grid. Plain decode never hits it (batch
+            # is 1/8/32), but the packed verify runs at batch = B*(K+1), so
+            # draft lengths like K=10/12/16 (P=11/13/17) land there and this used
+            # to die with "max() arg is an empty sequence". Fall back to the
+            # transpose + nlp_concat_heads path, which has no rectangle
+            # constraint: slower (single core), but these K are all well past the
+            # measured throughput optimum, so correctness wins over speed here.
+            candidates = [x for x in range(grid_x, 0, -1) if batch % x == 0 and batch // x <= grid_y]
+            if not candidates:
+                transposed = ttnn.transpose(tensor, 1, 2)  # [1, heads, batch, head_dim]
+                out = ttnn.experimental.nlp_concat_heads(
+                    transposed, memory_config=memory_config or ttnn.DRAM_MEMORY_CONFIG
+                )
+                transposed.deallocate(True)
+                return out
+            grid_x = max(candidates)
         core_grid = ttnn.CoreRangeSet({num_to_corerange(batch, grid_x=grid_x, grid_y=grid_y)})
         shard_cfg = ttnn.create_sharded_memory_config(
             shape=(ttnn.TILE_SIZE, head_dim),

@@ -13,7 +13,9 @@ import ttnn
 from models.demos.gemma4.tt.compute_config import decode_sdpa_compute_kernel_config
 
 from .operations import (
+    _fused_qkv_norm_supported,
     apply_allreduce,
+    apply_fused_qkv_head_norm,
     apply_output_projection,
     apply_per_head_norm,
     apply_qkv_projection,
@@ -21,6 +23,7 @@ from .operations import (
     apply_rope_decode_peruser,
     concat_heads,
     effective_block_size,
+    fused_qkv_head_norm_enabled,
     split_qkv_heads_decode,
     split_qkv_heads_prefill,
 )
@@ -130,37 +133,72 @@ def decode_forward(
     # tiny (2048-3072 cols bf16 = 128-192 KB across the grid).
     xqkv = apply_qkv_projection(hidden_states, weights, memory_config=ttnn.L1_MEMORY_CONFIG, decode=True)
 
-    # 2. Split into Q, K, V heads
-    tt_q, tt_k, tt_v = split_qkv_heads_decode(
-        xqkv, config, weights.is_global, tp=tp, kv_replicated=weights.kv_replicated
-    )
-
-    # 3. Per-head norms (un-shard for rms_norm, restore sharded for the KV write).
-    # The staging buffer is L1 at batch=1 — see _qkv_norm_island_memcfg. Both
-    # inputs to that decision are known here: the split puts batch in dim 1, and
-    # the RoPE flavour follows from the cos-cache rank (step 4 re-derives it).
-    q_sharded_mem = tt_q.memory_config()
+    # 2-3. Per-head norms + head split.
+    # The island memcfg is L1 at batch=1 — see _qkv_norm_island_memcfg. Both
+    # inputs to that decision are known here: the split puts batch in dim 1
+    # (so batch == xqkv.shape[-2]), and the RoPE flavour follows from the
+    # cos-cache rank (step 4 re-derives it).
     island_mem = _qkv_norm_island_memcfg(
-        batch=int(tt_q.shape[1]),
+        batch=int(xqkv.shape[-2]),
         use_embedding_rope=bool(rope_presliced or len(cos_cache.shape) == 2),
     )
     island_is_l1 = island_mem.buffer_type == ttnn.BufferType.L1
-    tt_q = ttnn.to_memory_config(tt_q, island_mem)
-    tt_q = apply_per_head_norm(
-        tt_q, weights.q_norm_weight, config.rms_norm_eps, with_scale=True, memory_config=island_mem
-    )
 
-    if is_kv_shared:
-        # KV-shared layer: discard own K/V, use source layer's KV cache directly
-        tt_k.deallocate(True)
-        tt_v.deallocate(True)
-    else:
-        tt_k = ttnn.to_memory_config(tt_k, island_mem)
-        tt_v = ttnn.to_memory_config(tt_v, island_mem)
-        tt_k = apply_per_head_norm(
-            tt_k, weights.k_norm_weight, config.rms_norm_eps, with_scale=True, memory_config=island_mem
+    # FUSED: one unscaled rms_norm over the fused QKV viewed one head per row,
+    # plus one scale multiply, replaces three single-core per-head norms (and
+    # their three to_memory_config un-shards). Only when this layer actually
+    # runs all three norms — a KV-shared layer throws K/V away, so it would pay
+    # the fused norm to normalise tensors it then discards. See
+    # operations.apply_fused_qkv_head_norm.
+    n_q_local = config.num_attention_heads // tp
+    n_kv_local = 1 if weights.kv_replicated else config.num_key_value_heads // tp
+    use_fused_norm = (
+        fused_qkv_head_norm_enabled()
+        and _fused_qkv_norm_supported(int(xqkv.shape[-2]))
+        and not is_kv_shared
+        and weights.qkv_norm_weight is not None
+        and int(xqkv.shape[-1]) == (n_q_local + 2 * n_kv_local) * config.head_dim
+    )
+    if use_fused_norm:
+        xqkv = apply_fused_qkv_head_norm(
+            xqkv,
+            weights.qkv_norm_weight,
+            config.rms_norm_eps,
+            num_rows=n_q_local + 2 * n_kv_local,
+            head_dim=config.head_dim,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        tt_v = apply_per_head_norm(tt_v, None, config.rms_norm_eps, with_scale=False, memory_config=island_mem)
+
+    tt_q, tt_k, tt_v = split_qkv_heads_decode(
+        xqkv, config, weights.is_global, tp=tp, kv_replicated=weights.kv_replicated
+    )
+    q_sharded_mem = tt_q.memory_config()
+
+    if use_fused_norm:
+        # Already normed, so the island hop only has to serve what actually
+        # consumes these next. Q feeds _rope. K feeds _rope then the KV write's
+        # reshard to q_sharded_mem; V feeds that reshard directly with nothing
+        # in between — un-sharding it here just to reshard it back was a round
+        # trip to nowhere once the norm moved off this tensor.
+        tt_q = ttnn.to_memory_config(tt_q, island_mem)
+        tt_k = ttnn.to_memory_config(tt_k, island_mem)
+    else:
+        tt_q = ttnn.to_memory_config(tt_q, island_mem)
+        tt_q = apply_per_head_norm(
+            tt_q, weights.q_norm_weight, config.rms_norm_eps, with_scale=True, memory_config=island_mem
+        )
+
+        if is_kv_shared:
+            # KV-shared layer: discard own K/V, use source layer's KV cache directly
+            tt_k.deallocate(True)
+            tt_v.deallocate(True)
+        else:
+            tt_k = ttnn.to_memory_config(tt_k, island_mem)
+            tt_v = ttnn.to_memory_config(tt_v, island_mem)
+            tt_k = apply_per_head_norm(
+                tt_k, weights.k_norm_weight, config.rms_norm_eps, with_scale=True, memory_config=island_mem
+            )
+            tt_v = apply_per_head_norm(tt_v, None, config.rms_norm_eps, with_scale=False, memory_config=island_mem)
 
     # 4. RoPE — use on-device embedding lookup for trace compatibility
     # use_embedding_rope: cos/sin are per-position [1,1,batch_pad,head_dim] tensors.

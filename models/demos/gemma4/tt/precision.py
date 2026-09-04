@@ -72,6 +72,14 @@ _DTYPE_BY_NAME = {
     "bfloat16": ttnn.bfloat16,
     "bfp8": ttnn.bfloat8_b,
     "bfloat8_b": ttnn.bfloat8_b,
+    # bfp4 halves weight bytes again vs bfp8 (0.5625 vs 1.0625 B/param). Decode
+    # is DRAM-bandwidth bound and the shared MLP is ~72% of the weight traffic,
+    # so this is the largest remaining precision lever. Unlike an all-reduce
+    # payload it quantizes WEIGHTS, which are never summed across devices, so it
+    # does not hit the partial-sum cancellation that makes a bfp8 CCL unusable
+    # (see tt/ccl.py). Score any use of it on the PCC ladder, not on tok/s.
+    "bfp4": ttnn.bfloat4_b,
+    "bfloat4_b": ttnn.bfloat4_b,
     "fp32": ttnn.float32,
     "float32": ttnn.float32,
 }
@@ -130,7 +138,7 @@ def _lookup_model_entry(table, candidates):
 
 
 def dtype_to_str(dtype):
-    """Short stable string for cache-filename suffixes ("bf16" / "bfp8" / "fp32").
+    """Short stable string for cache-filename suffixes ("bf16" / "bfp8" / "bfp4" / "fp32").
 
     Cache filenames embed the dtype string so flipping a module's dtype in
     precision_overrides.json doesn't reuse a stale cached tensor at the
@@ -140,6 +148,8 @@ def dtype_to_str(dtype):
         return "bf16"
     if dtype == ttnn.bfloat8_b:
         return "bfp8"
+    if dtype == ttnn.bfloat4_b:
+        return "bfp4"
     if dtype == ttnn.float32:
         return "fp32"
     raise ValueError(f"No cache-suffix mapping for dtype {dtype}")

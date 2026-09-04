@@ -41,6 +41,14 @@ class AttentionWeights:
     k_norm_weight: ttnn.Tensor  # Replicated across devices
     is_global: bool  # Controls K=V tying and partial RoPE
     kv_replicated: bool = False  # True when KV heads are replicated (not split) across TP devices
+    # Combined per-head norm scale for the FUSED decode q/k/v norm, laid out as
+    # [1, 1, local_q_heads + 2*local_kv_heads, head_dim]: q_norm rows, then
+    # k_norm rows, then ones for the unscaled v_norm. Lets one unscaled
+    # rms_norm over the fused QKV (viewed one head per row) plus one multiply
+    # replace three separate per-head norms. See
+    # operations.apply_fused_qkv_head_norm. None when the model has no per-head
+    # norms (q_norm_w absent).
+    qkv_norm_weight: ttnn.Tensor = None
     # (program_config, compute_kernel_config) for the decode (M<=32) fused-QKV
     # matmul, or None to keep ttnn.linear's auto choice. See
     # dram_sharded.decode_1d_matmul_config: the fused QKV is the one narrow-N
@@ -131,11 +139,25 @@ def load_attention_weights(
         # Per-head norm weights: [head_dim] -> [1, 1, head_dim/TILE_SIZE, TILE_SIZE]
         q_norm_w = state_dict["q_norm.weight"].reshape(1, 1, -1, ttnn.TILE_SIZE)
         k_norm_w = state_dict["k_norm.weight"].reshape(1, 1, -1, ttnn.TILE_SIZE)
+        # Row-per-head scale for the fused decode norm (see AttentionWeights).
+        # Row order must match the fused-QKV column order that
+        # nlp_create_qkv_heads_decode assumes: all Q heads, then K, then V.
+        _n_q = config.num_attention_heads // tp
+        _n_kv = 1 if kv_replicated else config.num_key_value_heads // tp
+        qkv_norm_w = torch.cat(
+            [
+                state_dict["q_norm.weight"].reshape(1, -1).repeat(_n_q, 1),
+                state_dict["k_norm.weight"].reshape(1, -1).repeat(_n_kv, 1),
+                torch.ones(_n_kv, config.head_dim, dtype=state_dict["q_norm.weight"].dtype),
+            ],
+            dim=0,
+        ).reshape(1, 1, _n_q + 2 * _n_kv, config.head_dim)
     else:
         qkv = None
         o_w = None
         q_norm_w = None
         k_norm_w = None
+        qkv_norm_w = None
 
     # Mesh mappers
     if tp > 1:
@@ -222,6 +244,21 @@ def load_attention_weights(
         cache_file_name=get_cache_file_name(tensor_cache_path, f"k_norm.weight{tp_suffix}"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
+    # TILE layout (unlike the two above): this one is a multiply operand, not an
+    # rms_norm gamma, so it must tile-match the normed activation.
+    qkv_norm_weight = (
+        None
+        if qkv_norm_w is None
+        else ttnn.as_tensor(
+            qkv_norm_w,
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=replicate_mapper,
+            cache_file_name=get_cache_file_name(tensor_cache_path, f"qkv_norm.weight{tp_suffix}"),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+    )
 
     # Narrow-N decode config for the fused QKV matmul (no-op when wqkv is a
     # DramShardedLinear, which brings its own program config).
@@ -234,6 +271,7 @@ def load_attention_weights(
         o_proj=o_proj,
         q_norm_weight=q_norm_weight,
         k_norm_weight=k_norm_weight,
+        qkv_norm_weight=qkv_norm_weight,
         is_global=is_global,
         kv_replicated=kv_replicated,
         qkv_decode_config=qkv_decode_config,
