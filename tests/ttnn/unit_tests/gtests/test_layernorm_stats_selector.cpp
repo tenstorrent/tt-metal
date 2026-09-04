@@ -166,9 +166,12 @@ TEST(LayerNormStatsSelector, InterleavedArchitectureAndLayoutPolicy) {
         StatisticsBackend::TILE_REDUCTION);
     EXPECT_EQ(
         select_interleaved_statistics_backend(true, tt::ARCH::BLACKHOLE, false, true, true, params),
-        StatisticsBackend::SFPU_TWO_PASS);
+        StatisticsBackend::TILE_REDUCTION);
     EXPECT_EQ(
         select_interleaved_statistics_backend(true, tt::ARCH::BLACKHOLE, false, true, false, params),
+        StatisticsBackend::TILE_REDUCTION);
+    EXPECT_EQ(
+        select_interleaved_statistics_backend(true, tt::ARCH::WORMHOLE_B0, false, true, true, params),
         StatisticsBackend::TILE_REDUCTION);
     EXPECT_EQ(
         select_interleaved_statistics_backend(false, tt::ARCH::BLACKHOLE, false, false, true, params),

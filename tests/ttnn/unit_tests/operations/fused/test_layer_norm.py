@@ -290,6 +290,23 @@ def test_layer_norm_welford_off_default_tile(device, tile_shape, expect_error):
         )
 
 
+def test_layer_norm_welford_rejects_row_major_input(device, expect_error):
+    """Reject unsupported input layout before the SFPU kernel can wait on an unproduced tile CB."""
+    width = 32
+    input_tensor = ttnn.from_torch(
+        torch.randn((32, width), dtype=torch.float32),
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+
+    with expect_error(RuntimeError, "use_welford=True requires TILE input"):
+        ttnn.layer_norm(
+            input_tensor,
+            program_config=ttnn.LayerNormDefaultProgramConfig(use_welford=True),
+            recip_tensor=create_recip_tensor(device, width, use_welford=True),
+        )
+
+
 def test_layer_norm_rejects_mismatched_residual_tile(device, expect_error):
     rows, width = 32, 64
     torch_input = torch.randn((rows, width), dtype=torch.bfloat16)
@@ -402,26 +419,42 @@ def test_layer_norm_with_weight_and_bias_row_major(device, h, w, use_welford):
     assert_output_accuracy(torch_output_tensor, output_tensor, use_welford=use_welford)
 
 
-def test_layer_norm_fp32_residual_with_row_major_affine(device):
-    """Row-major affine tensors must select a matching full-precision finaliser."""
+@pytest.mark.parametrize(
+    "has_gamma,has_beta",
+    [
+        pytest.param(True, False, id="gamma"),
+        pytest.param(False, True, id="beta"),
+        pytest.param(True, True, id="gamma_beta"),
+    ],
+)
+def test_layer_norm_fp32_residual_with_row_major_affine(device, has_gamma, has_beta):
+    """Every row-major affine variant must select a matching full-precision finaliser."""
     torch.manual_seed(11)
     h, w = 32, 32
     base = 1_000_000.0
     torch_input = base + 64.0 * torch.randn((h, w), dtype=torch.float32)
     torch_residual = base + 64.0 * torch.randn((h, w), dtype=torch.float32)
-    torch_weight = torch.randn((w,), dtype=torch.float32)
-    torch_bias = torch.randn((w,), dtype=torch.float32)
+    torch_weight = torch.randn((w,), dtype=torch.float32) if has_gamma else None
+    torch_bias = torch.randn((w,), dtype=torch.float32) if has_beta else None
     reference = torch.nn.functional.layer_norm(
         torch_input.to(torch.float64) + torch_residual.to(torch.float64),
         [w],
-        torch_weight.to(torch.float64),
-        torch_bias.to(torch.float64),
+        torch_weight.to(torch.float64) if torch_weight is not None else None,
+        torch_bias.to(torch.float64) if torch_bias is not None else None,
     )
 
     input_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
     residual_tensor = ttnn.from_torch(torch_residual, layout=ttnn.TILE_LAYOUT, device=device)
-    weight = ttnn.from_torch(torch_weight.reshape(-1, 32), layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    bias = ttnn.from_torch(torch_bias.reshape(-1, 32), layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    weight = (
+        ttnn.from_torch(torch_weight.reshape(-1, 32), layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        if torch_weight is not None
+        else None
+    )
+    bias = (
+        ttnn.from_torch(torch_bias.reshape(-1, 32), layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        if torch_bias is not None
+        else None
+    )
     compute_kernel_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
         math_fidelity=ttnn.MathFidelity.HiFi4,

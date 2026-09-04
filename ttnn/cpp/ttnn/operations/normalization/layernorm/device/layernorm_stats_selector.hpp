@@ -83,9 +83,14 @@ constexpr StatisticsBackend select_interleaved_statistics_backend(
     if (!fp32_dest_acc_en) {
         return StatisticsBackend::TILE_REDUCTION;
     }
+    // The SFPU kernels consume tiled input directly and do not implement the
+    // row-major staging-buffer tilization owned by the tile-reduction kernels.
+    if (input_is_row_major) {
+        return StatisticsBackend::TILE_REDUCTION;
+    }
     // RMSNorm does not execute the Welford calculation, but its existing
     // Welford-configured route has distinct kernel and CB requirements.
-    if (arch != tt::ARCH::BLACKHOLE || rms_norm || input_is_row_major) {
+    if (arch != tt::ARCH::BLACKHOLE || rms_norm) {
         return StatisticsBackend::SFPU_TWO_PASS;
     }
     return use_blackhole_sfpu_stats(blackhole_params) ? StatisticsBackend::SFPU_TWO_PASS

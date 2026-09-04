@@ -356,8 +356,7 @@ def test_layer_norm_4D_llama(device, h, w, num_chunks):
 # FP32 coverage for the complete (non-distributed) interleaved LayerNorm op
 # Spans the full config matrix: {legacy, welford} x {fp32, bf16} input x {TILE, ROW_MAJOR} input
 # x {bf16, fp32} gamma/beta x {TILE, ROW_MAJOR} gamma/beta. FP32 requires fp32_dest_acc_en=True.
-# Welford requires TILE input (ROW_MAJOR input hangs for every dtype), so welford x rm_in is
-# skipped to record the limitation.
+# Welford requires TILE input, so the focused unit regression covers rejection of ROW_MAJOR input.
 # The gamma/beta layout axis matters because it selects the reader kernel (use_row_major_kernel):
 # ROW_MAJOR gamma/beta go through reader_unary_interleaved_ln_rm_gb.cpp, which reads them as
 # row-major sticks, while TILE gamma/beta are read whole-tile and are datum-size-agnostic.
@@ -369,7 +368,7 @@ def test_layer_norm_4D_llama(device, h, w, num_chunks):
 @pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b], ids=["fp32", "bf16", "bf8"])
 def test_layernorm_interleaved_all_config(device, dtype, use_welford, input_layout, gamma_dtype, gamma_layout):
     if use_welford and input_layout == ttnn.ROW_MAJOR_LAYOUT:
-        pytest.skip("Welford requires TILE input; ROW_MAJOR input hangs (dtype-independent limitation)")
+        pytest.skip("use_welford=True rejects ROW_MAJOR input before launching a device kernel")
     if gamma_layout == ttnn.ROW_MAJOR_LAYOUT and input_layout == ttnn.ROW_MAJOR_LAYOUT:
         # Pre-existing device hang, reproduces on unpatched main and unrelated to the reader fixes
         # here: the rm_gb reader has no TILIZE_IN path, so it reads a ROW_MAJOR input as tiles and

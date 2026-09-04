@@ -324,6 +324,10 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
             "LayerNorm with use_welford=True is not supported on Quasar; the two-pass SFPU implementation "
             "currently supports Wormhole and Blackhole only.");
         TT_FATAL(
+            a.layout() == Layout::TILE,
+            "LayerNorm with use_welford=True requires TILE input; the SFPU two-pass kernels do not implement "
+            "ROW_MAJOR input tilization.");
+        TT_FATAL(
             operation_attributes.norm_type != LayerNormType::RMSNORM,
             "Welford's algorithm is not supported for RMSNorm");
     }
