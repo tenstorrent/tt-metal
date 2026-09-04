@@ -417,7 +417,9 @@ std::unordered_map<std::string, std::string> build_firmware_filename_map(const s
 }
 
 std::once_flag g_launch_once;
-std::thread g_prewarm_thread;
+// A process can exit without compiling a kernel covered by the batch, so no compile barrier joins it.
+// jthread also joins that completed or in-flight batch during static teardown.
+std::jthread g_prewarm_thread;
 
 // True once a prewarm batch has been spawned for this process's build_key. Gates the op-by-op
 // barrier: on a cold cache (no batch) the compile path skips the barrier entirely.
@@ -699,7 +701,7 @@ void maybe_launch_prewarm(
 
         g_batch_launched.store(true, std::memory_order_release);
         g_prewarm_thread =
-            std::thread([reqs = std::move(requests), out_kernel_root, firmware_root, build_key, root_dir]() mutable {
+            std::jthread([reqs = std::move(requests), out_kernel_root, firmware_root, build_key, root_dir]() mutable {
                 try {
                     run_prewarm(reqs, out_kernel_root, firmware_root, build_key, root_dir, /*skip_device_init=*/true);
                 } catch (const std::exception& e) {
