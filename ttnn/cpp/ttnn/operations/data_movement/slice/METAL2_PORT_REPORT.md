@@ -19,9 +19,15 @@ measurement and reverted afterwards; the diff contains none of that scaffolding.
 
 | Suite | Pre-port baseline | Post-port |
 |---|---|---|
-| `unit_tests/operations/data_movement/test_slice.py` | 445 passed, 38 skipped | **445 passed, 38 skipped** |
+| `unit_tests/operations/data_movement/test_slice.py` | 445 passed, 38 skipped *(on the original base)* | **448 passed, 38 skipped** |
 | `nightly/…/test_slice_for_conv.py` + `test_universal_input_tm_slice.py` | not separately baselined | **321 passed, 4 skipped, 0 failed** |
 | C++ gtests | — | none exist for this op (see *Open items*) |
+
+The `test_slice.py` count moved 445 → 448 across the rebase described below, and the three are the
+newer base's, not this port's: the branch this landed on carries ops-team preallocated-output fixes
+that the original base lacked. 448 / 38 is also exactly what the audit recorded for PR #55433 on a
+branch carrying those same fixes, which is a useful independent check that this tree is the state that
+branch describes.
 
 Anti-pattern self-audit, over the op directory (**29 `.cpp`/`.hpp`/`.h` files scanned**, and 25 files
 in the change set for the diff-scoped checks) — every check zero over a non-zero denominator:
@@ -69,8 +75,13 @@ out-of-tree from `/localdev/edwinlee/metal2_port.md`, so the recipe version cann
   `tt_metal/api/tt-metalium/experimental/metal2_host_api/` instead.
 - **Audit docs (inherited):** `4bd4bf42bfe 2026-09-03 docs(metal_2.0): state the offset-base wall as a
   category, not as slice's current state`
-- **Port base commit:** `d1f66c276f2` (branch `edwinlee/Port_Slice`); merge-base with `origin/main` is
-  `f2fc16b61aa`.
+- **Port base commit:** `6ebddf3088a` — the tip of `origin/edwinlee/Port_Slice`. Merge-base with
+  `origin/main` is `2a8253ad20a`.
+
+  *The port was originally written against a local `edwinlee/Port_Slice` at `d1f66c276f2`, which had
+  diverged from the remote branch, and was rebased onto the remote tip before landing. The rebase
+  matters to two claims below and is described under* Rebase onto the live branch *at the end of this
+  report.*
 
 ## TTNN ProgramFactory
 
@@ -148,6 +159,13 @@ skip message generalized, since it is no longer layernorm-specific).
 | Suite | Before the guard | After |
 |---|---|---|
 | `…/parallel_sequential/test_parallel_sequential.py` + `…/demo/test_fused_demo.py` | 6 failed, 50 passed, 69 skipped | **0 failed, 50 passed, 75 skipped** |
+
+Both figures above were measured with Watcher **off**, so they compare like for like. With
+`TT_METAL_WATCHER=10` on, a further 20 tests in `test_fused_demo.py` skip on a pre-existing condition
+at `test_fused_demo.py:2392` (*"pytest-timeout plugin interacts with watcher on device reopen"*) —
+unrelated to this port, but worth knowing before comparing a watcher-on run against these numbers.
+Re-run post-rebase, watcher on: `test_parallel_sequential.py` 21 passed / 68 skipped / 0 failed, and
+`test_fused_demo.py` 9 passed / 27 skipped / 0 failed.
 
 The six that convert to skips are `TestBranchingTopology::test_three_way_split_with_slice`,
 `TestBranchingTopology::test_nested_split_with_slice`,
@@ -357,3 +375,42 @@ Everything here is behaviour the port carried forward deliberately. Each is an o
   `id_per_dim` write-back, same borrowed-shard DFBs) and is already ported. Anyone porting a third op
   in this family should read `pad`'s factories first — the two ports independently reached the same
   answers on every shared construct, which is a good sign those answers are the intended ones.
+
+---
+
+## Rebase onto the live branch
+
+The port was written against a local `edwinlee/Port_Slice` at `d1f66c276f2` and was later rebased onto
+the **remote** tip of the same branch, `6ebddf3088a`. The two had diverged, and the remote was ahead —
+so this is not bookkeeping; it changed the port in three ways worth recording.
+
+**1. Two items the port did itself were already done upstream.** The plan's *Tree state this port
+starts from* table reports both as absent, which was true of the base it was written against and is
+no longer true of the base it landed on:
+
+| Item | Original base `d1f66c276f2` | Landed base `6ebddf3088a` |
+|---|---|---|
+| `TensorAccessor` 3rd-arg drop + host arg reindex | absent — the port did it | **already present** |
+| `check_accessor_page_size` | absent — the port wrote one | **already present** |
+
+The kernels and the host arg lists agree either way (12 named reader RTAs, 9 named writer RTAs), so
+the conflict was textual rather than semantic: upstream had the legacy-shaped post-drop version and
+this port has the Metal 2.0 named-argument version of the same state.
+
+**2. Upstream's `check_accessor_page_size` is the better one, and is the one that survived.** This
+port's version skipped interleaved tensors entirely, on the reasoning that an interleaved accessor
+realigns the page size internally so any correct-magnitude value is inert. Upstream's instead
+*checks* the interleaved case by rounding —
+`effective = is_sharded ? per_shard : round_up(per_shard, alignment)`, compared against
+`aligned_page_size` — which catches a genuinely wrong row size there rather than waving it through.
+Upstream's is now in `slice_program_factory_rm.cpp`; this port's was discarded.
+
+**3. Ops-team fixes the port never saw, carried through untouched.** The landed base also contains
+preallocated-output validation in `slice_device_operation.cpp` (padded-vs-logical shape, a row-major
+logical-shape check, and a `tensor_layout()` comparison) and a `can_land_in_preallocated` guard in
+`slice.cpp`. Both files are outside the port's writeable surface and neither is touched, so they
+survive intact — `git diff origin/edwinlee/Port_Slice HEAD` over those two paths is empty. The
+"byte-identical" claim in *Verification* is against this landed base.
+
+The rebase is also where `test_slice.py` moved from 445 to 448 passing: those three are the
+preallocated-output fixes above, not this port.

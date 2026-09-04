@@ -25,6 +25,16 @@ So this port runs the brief's *"a port that starts from an unpatched tree"* path
 the 3rd-arg drop itself, and it must re-establish the `ccl/mesh_partition` bridge before any factory
 can compile. See [Deferred / Flagged](#deferred--flagged).
 
+> **Superseded in part — read this with the table above.** The port was later rebased onto the
+> **remote** tip of `edwinlee/Port_Slice` (`6ebddf3088a`), which had diverged from the local branch
+> this plan was written against and was ahead of it. Two rows above are true of the base this plan
+> was written against but **not** of the base the port landed on: the remote already had the
+> `TensorAccessor` 3rd-arg drop *and* a `check_accessor_page_size`. The upstream guard is the one that
+> survived — it is stricter than the one written here, checking the interleaved case by rounding
+> rather than skipping it. The remaining three rows are unchanged: no factory was ported upstream and
+> the `ccl/mesh_partition` bridge was still absent. Full account in
+> `METAL2_PORT_REPORT.md` → *Rebase onto the live branch*.
+
 The op *does* carry `1b0d9d1258a [Bug Fix] Prepare Slice for Metal 2.0 Port (#55262)`, which is what
 cleared the audit's offset-base-pointer gate (the W-begin fold is split out into `src_offset_bytes`).
 
