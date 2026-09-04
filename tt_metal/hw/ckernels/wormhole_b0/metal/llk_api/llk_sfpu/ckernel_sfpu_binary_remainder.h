@@ -165,18 +165,11 @@ sfpi_inline void calculate_remainder_int32_body(
     a_signed = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>();
     b_signed = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>();
 
-    // Remainder sign handling
+    // First form the truncating remainder, then adjust to the divisor's sign.
     sfpi::vInt sign = a_signed ^ b_signed;
-    v_if(r != 0) {
-        v_if(sign < 0) {
-            // When signs differ, floor(a/b) = trunc(a/b) - 1, so remainder needs adjustment
-            v_if(a_signed < 0) { r = b_signed - r; }
-            v_else { r += b_signed; }
-            v_endif;
-        }
-        v_elseif(a_signed < 0 && b_signed < 0) { r = -r; }
-        v_endif;
-    }
+    v_if(a_signed < 0) { r = -r; }
+    v_endif;
+    v_if(r != 0 && sign < 0) { r += b_signed; }
     v_endif;
 
     sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>() = r;
