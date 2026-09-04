@@ -429,6 +429,14 @@ struct CbWriterTag {};
 /// `pack_dfb_id()` on the element directly.
 struct DestOnlyTag {};
 
+/// DEST-only SFPU operation arity markers.  These are intentionally separate
+/// from the data-direction tag: convenience wrappers need to distinguish the
+/// DEST operands an operation consumes, while chain scheduling only needs to
+/// know that the operation has no CB lifecycle.
+struct UnaryOpTag : DestOnlyTag {};
+struct BinaryOpTag : DestOnlyTag {};
+struct TernaryOpTag : DestOnlyTag {};
+
 /// Marker mixed into runtime-conditional wrappers. It is orthogonal to the element-kind
 /// hierarchy so the wrapped element keeps its ordinary reader / DEST-only classification.
 struct RuntimeConditionalTag {};
@@ -475,6 +483,12 @@ template <class T>
 inline constexpr bool is_cb_writer_op_v = std::is_base_of_v<CbWriterTag, T>;
 template <class T>
 inline constexpr bool is_dest_only_op_v = std::is_base_of_v<DestOnlyTag, T>;
+template <class T>
+inline constexpr bool is_unary_op_v = std::is_base_of_v<UnaryOpTag, T>;
+template <class T>
+inline constexpr bool is_binary_op_v = std::is_base_of_v<BinaryOpTag, T>;
+template <class T>
+inline constexpr bool is_ternary_op_v = std::is_base_of_v<TernaryOpTag, T>;
 template <class T>
 inline constexpr bool is_copy_tile_op_v = std::is_base_of_v<CopyTileTag, T>;
 template <class T>
@@ -564,7 +578,7 @@ ALWI uint32_t tile_base_value([[maybe_unused]] uint32_t stored) noexcept {
 //   };
 
 template <class Derived, Dst Slot>
-struct UnaryOp : DestOnlyTag {
+struct UnaryOp : UnaryOpTag {
     static_assert(
         to_u32(Slot) < DEST_AUTO_LIMIT, "UnaryOp: DEST slot exceeds compile-time DEST capacity (DEST_AUTO_LIMIT)");
 
@@ -582,7 +596,7 @@ struct UnaryOp : DestOnlyTag {
 };
 
 template <class Derived, Dst In0, Dst In1, Dst Out>
-struct BinaryOp : DestOnlyTag {
+struct BinaryOp : BinaryOpTag {
     static_assert(
         to_u32(In0) < DEST_AUTO_LIMIT && to_u32(In1) < DEST_AUTO_LIMIT && to_u32(Out) < DEST_AUTO_LIMIT,
         "BinaryOp: DEST slot exceeds compile-time DEST capacity (DEST_AUTO_LIMIT)");
@@ -603,7 +617,7 @@ struct BinaryOp : DestOnlyTag {
 };
 
 template <class Derived, Dst In0, Dst In1, Dst In2, Dst Out>
-struct TernaryOp : DestOnlyTag {
+struct TernaryOp : TernaryOpTag {
     static_assert(
         to_u32(In0) < DEST_AUTO_LIMIT && to_u32(In1) < DEST_AUTO_LIMIT && to_u32(In2) < DEST_AUTO_LIMIT &&
             to_u32(Out) < DEST_AUTO_LIMIT,
@@ -3055,10 +3069,13 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
     constexpr uint32_t chain_lane_w = detail::ChainTraits<Es...>::any_dest_accumulation
                                           ? chain_transient_lane_width_v<Chain>
                                           : chain_lane_width_v<Chain>;
-    uint32_t block_size = shape.block_tiles;
+    // Assertions are intentionally absent in normal kernels.  Keep the debug
+    // contract, but normalize a malformed zero block size so the outer walk
+    // still makes forward progress in a release kernel.
+    uint32_t block_size = shape.block_tiles == 0 ? 1 : shape.block_tiles;
     ASSERT(shape.Ht > 0);
     ASSERT(shape.Wt > 0);
-    ASSERT(block_size > 0);
+    ASSERT(shape.block_tiles > 0);
     const bool synchronize_full_blocks = shape.tail_sync == BlockTailSync::FullBlock;
     if constexpr (!chain_supports_block_v<Chain>) {
         ASSERT(!synchronize_full_blocks || block_size == 1);

@@ -15,7 +15,7 @@ namespace detail {
 
 template <class Inner>
 constexpr bool runtime_conditional_element_supported() {
-    if constexpr (is_runtime_conditional_op_v<Inner> || is_cb_writer_op_v<Inner>) {
+    if constexpr (is_runtime_conditional_op_v<Inner> || is_cb_writer_op_v<Inner> || is_prng_seed_op_v<Inner>) {
         return false;
     } else if constexpr (is_dest_only_op_v<Inner>) {
         return true;

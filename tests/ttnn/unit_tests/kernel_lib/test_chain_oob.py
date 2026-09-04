@@ -17,6 +17,7 @@ fp32_dest_acc_en) and asserts either a legal slot compiles + reproduces the inpu
 slot FAILS to compile with "DEST slot exceeds DEST_AUTO_LIMIT" (surfaced as a generic_op exception).
 """
 
+import pytest
 import torch
 import ttnn
 from loguru import logger
@@ -150,10 +151,9 @@ def test_dst_slot5_overflow_fp32(device, expect_error):
 BLOCK_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/oob/block_clamp.cpp"
 
 
-def test_block_size_clamp_identity(device):
-    """chain_lane_width=1 here -> chain_max_block_v=8 (half-sync bf16). block_size=1000 must clamp
-    to 8 and still copy the input exactly. Ordinary block sizes are covered by the blocking suite."""
-    block_size = 1000
+@pytest.mark.parametrize("block_size", [0, 1000], ids=["zero-normalizes-to-one", "oversized-clamps"])
+def test_block_size_clamp_identity(device, block_size):
+    """A zero block size normalizes to one; an oversized value clamps to the DEST limit. Both preserve identity."""
     n = 16
     dt = ttnn.bfloat16
     shape = [1, 1, 32, 32 * n]
@@ -210,6 +210,9 @@ SHARED_CB_LIFECYCLE_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/oob/s
 SHARED_CB_LIFECYCLE_MSG = "staged CB window shares its front"
 PRNG_SEED_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/oob/prng_seed.cpp"
 PRNG_SEED_MSG = "one shared hardware PRNG"
+RUNTIME_PRNG_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/oob/runtime_prng.cpp"
+RUNTIME_PRNG_MSG = "non-PRNG DEST-only"
+CONVENIENCE_ARITY_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/oob/convenience_arity.cpp"
 
 
 def _expect_chain_compile_rejection(device, kernel, compile_time_args, message, with_input):
@@ -254,6 +257,23 @@ def test_shared_cb_staged_window_rejected_peer_first(device, expect_error):
 def test_multiple_prng_seeders_rejected(device, expect_error):
     inputs, program, message = _expect_chain_compile_rejection(
         device, PRNG_SEED_KERNEL, [2], PRNG_SEED_MSG, with_input=True
+    )
+    with expect_error(Exception, message):
+        ttnn.generic_op(inputs, program)
+
+
+def test_runtime_conditional_prng_seeder_rejected(device, expect_error):
+    inputs, program, message = _expect_chain_compile_rejection(
+        device, RUNTIME_PRNG_KERNEL, [2], RUNTIME_PRNG_MSG, with_input=True
+    )
+    with expect_error(Exception, message):
+        ttnn.generic_op(inputs, program)
+
+
+@pytest.mark.parametrize("mode", [0, 1], ids=["binary-used-as-unary", "unary-used-as-binary"])
+def test_convenience_wrapper_arity_rejected(device, expect_error, mode):
+    inputs, program, message = _expect_chain_compile_rejection(
+        device, CONVENIENCE_ARITY_KERNEL, [2, mode], "DEST operation", with_input=True
     )
     with expect_error(Exception, message):
         ttnn.generic_op(inputs, program)

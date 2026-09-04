@@ -23,6 +23,7 @@ import ttnn
 DTYPE_TILE_BYTES = {
     ttnn.bfloat16: 2048,
     ttnn.float32: 4096,
+    ttnn.int32: 4096,
     ttnn.bfloat8_b: 1088,
 }
 

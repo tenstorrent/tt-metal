@@ -90,7 +90,6 @@ ttnn:
     wh_llmbox: 50
     wh_galaxy: 120
     bh_galaxy: 40
-    # Add 10 minutes per single-card SKU for the daily kernel-lib eltwise chain correctness job.
     bh_p100: 815
     bh_p150b_civ2: 850
     wh_n150_civ2: 1020

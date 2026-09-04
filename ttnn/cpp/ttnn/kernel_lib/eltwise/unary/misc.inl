@@ -46,18 +46,14 @@ struct Square : UnaryOp<Square<Slot>, Slot> {
 };
 
 // CopyDest — copy a tile's values from one DEST slot to another (copy_dest_values).
-// Two slots (In -> Out), no CB. Uses the un-templated copy_dest_values(in, out)
-// overload, which the build permits via -Wno-error=deprecated-declarations.
+// Two slots (In -> Out), no CB. The LLK's DataFormat-templated overload is
+// required so integer and floating-point DEST values preserve their representation.
 template <Dst In, Dst Out, DataFormat DF>
 struct CopyDest : DestOnlyTag {
     static constexpr uint32_t lane_width = (to_u32(In) > to_u32(Out) ? to_u32(In) : to_u32(Out)) + 1;
     static ALWI void init() { copy_dest_values_init(); }
     static ALWI void exec_impl(uint32_t slot_offset) {
-        if constexpr (DF == DataFormat::Invalid) {
-            copy_dest_values(to_u32(In) + slot_offset, to_u32(Out) + slot_offset);
-        } else {
-            copy_dest_values<DF>(to_u32(In) + slot_offset, to_u32(Out) + slot_offset);
-        }
+        copy_dest_values<DF>(to_u32(In) + slot_offset, to_u32(Out) + slot_offset);
     }
     ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const { exec_impl(slot_offset); }
 };

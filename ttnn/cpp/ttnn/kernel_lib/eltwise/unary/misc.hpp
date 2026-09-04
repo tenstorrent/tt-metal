@@ -27,8 +27,9 @@ struct Sign;
 template <Dst Slot = Dst::D0>
 struct Square;
 
-// CopyDest — copy a tile's values from one DEST slot to another (no defaults).
-template <Dst In, Dst Out, DataFormat DF = DataFormat::Invalid>
+// CopyDest — copy a tile's values from one DEST slot to another. The LLK data
+// format is explicit because format-agnostic copying is deprecated.
+template <Dst In, Dst Out, DataFormat DF>
 struct CopyDest;
 
 // Typecast — compile-time in/out dtype encoded as numeric IDs.

@@ -127,6 +127,31 @@ def test_pack_relu(device):
         lib.assert_close(golden, ttnn.to_torch(output).to(torch.float32), "pack relu")
 
 
+def test_copy_dest_int32(device):
+    """CopyDest must use the DataFormat-aware LLK path when moving an integer tile between DEST slots."""
+    n = 2
+    dt = ttnn.int32
+    shape = [1, 1, 32, 32 * n]
+    core_grid = lib.single_core_grid()
+    torch.manual_seed(1802)
+    torch_in = torch.randint(-(2**20), 2**20, shape, dtype=torch.int32)
+    tt_in = ttnn.from_torch(
+        torch_in, dtype=dt, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    tt_out = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), dt, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG)
+    program = ttnn.ProgramDescriptor(
+        kernels=[
+            lib.build_reader_kernel([tt_in], n, core_grid),
+            lib.build_writer_1out_kernel(tt_out, n, core_grid),
+            lib.build_compute_kernel(MISC_ELEMENTS, [n, 2], core_grid),
+        ],
+        semaphores=[],
+        cbs=[lib.cb_descriptor(0, dt, 2, core_grid), lib.cb_descriptor(16, dt, 2, core_grid)],
+    )
+    output = ttnn.generic_op([tt_in, tt_out], program)
+    assert torch.equal(ttnn.to_torch(output), torch_in)
+
+
 @pytest.mark.parametrize("dim", [0, 1, 2, 3], ids=["none", "col", "row", "scalar"])
 def test_unary_bcast(device, dim):
     """UnaryBcast passes through or replicates one column, row, or scalar within each tile."""

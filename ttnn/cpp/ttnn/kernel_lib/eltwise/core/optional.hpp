@@ -30,9 +30,10 @@
  * branch wins. Every branch is one chain position, so one runtime decision guards
  * the whole element sequence.
  *
- * Runtime-conditional sequences deliberately support only DEST-only operations
- * and caller-managed CB readers. Writers and driver-managed waits/pops are rejected:
- * their lifecycle cannot be conservatively planned across a disabled branch.
+ * Runtime-conditional sequences deliberately support only non-PRNG DEST-only
+ * operations and caller-managed CB readers. Writers, PRNG seeders, and
+ * driver-managed waits/pops are rejected: their one-time setup or lifecycle
+ * cannot be conservatively planned across a disabled branch.
  */
 
 namespace compute_kernel_lib {
@@ -59,7 +60,7 @@ struct RuntimeConditionalBranch {
     static_assert(sizeof...(Elements) > 0, "A runtime conditional branch requires at least one element");
     static_assert(
         (runtime_conditional_element_supported<Elements>() && ...),
-        "Runtime conditional elements must be DEST-only or use caller-managed input lifecycles");
+        "Runtime conditional elements must be non-PRNG DEST-only or use caller-managed input lifecycles");
 
     std::tuple<Elements...> elements;
 

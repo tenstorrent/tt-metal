@@ -40,7 +40,7 @@ void kernel_main() {
             CopyTile<input(cb_in)>{},
             runtime_if(mode == 0, Negative<Dst::D0>{})
                 .else_if(mode == 1, Square<Dst::D0>{}, Negative<Dst::D0>{})
-                .otherwise(CopyDest<Dst::D0, Dst::D0>{}),
+                .otherwise(CopyDest<Dst::D0, Dst::D0, DataFormat::Float16_b>{}),
             runtime_if(mode == 2, Abs<Dst::D0>{}),
             runtime_if(mode == 3, Negative<Dst::D0>{}, Abs<Dst::D0>{}),
             runtime_if(mode == 4, Square<Dst::D0>{}),

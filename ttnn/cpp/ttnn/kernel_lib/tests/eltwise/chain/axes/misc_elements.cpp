@@ -5,12 +5,14 @@
 // Small element scenarios that do not justify separate kernel files:
 //   0: ternary Where over three input CBs;
 //   1: one ReLU pack plus one unmodified pack.
+//   2: int32 CopyDest from D0 to D1.
 //
 // CT args: [n, mode].
 
 #include <cstdint>
 
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/misc.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/special.hpp"
 
 void kernel_main() {
@@ -20,7 +22,7 @@ void kernel_main() {
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
     constexpr uint32_t n = get_compile_time_arg_val(0);
     constexpr uint32_t mode = get_compile_time_arg_val(1);
-    static_assert(mode < 2);
+    static_assert(mode < 3);
 
     using namespace compute_kernel_lib;
     if constexpr (mode == 0) {
@@ -32,7 +34,7 @@ void kernel_main() {
             CopyTile<input(cb_c), Dst::D2>{},
             Where<DataFormat::Float16_b, Dst::D0, Dst::D1, Dst::D2, Dst::D0>{},
             PackTile<output(cb_out)>{});
-    } else {
+    } else if constexpr (mode == 1) {
         constexpr uint32_t cb_linear = tt::CBIndex::c_17;
         compute_kernel_hw_startup(cb_a, cb_out);
         eltwise_chain(
@@ -48,5 +50,12 @@ void kernel_main() {
                 L1Accumulation::Disabled,
                 PackRelu::Zero)>{},
             PackTile<output(cb_linear)>{});
+    } else {
+        compute_kernel_hw_startup(cb_a, cb_out);
+        eltwise_chain(
+            IterationShape::tiles(n),
+            CopyTile<input(cb_a), Dst::D0>{},
+            CopyDest<Dst::D0, Dst::D1, DataFormat::Int32>{},
+            PackTile<output(cb_out), Dst::D1>{});
     }
 }

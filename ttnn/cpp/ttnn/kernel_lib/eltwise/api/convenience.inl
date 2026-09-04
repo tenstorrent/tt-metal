@@ -31,7 +31,9 @@ ALWI void square(IterationShape shape) {
 
 template <class SfpuOp, InputSpec Input, OutputSpec Output>
 ALWI void unary(IterationShape shape) {
-    static_assert(is_dest_only_op_v<SfpuOp>, "unary<SfpuOp, ...>: SfpuOp must be a DEST-only SFPU element");
+    static_assert(
+        is_unary_op_v<SfpuOp> && is_sfpu_op_v<SfpuOp>,
+        "unary<SfpuOp, ...>: SfpuOp must be a unary DEST operation");
     eltwise_chain(shape, CopyTile<Input>{}, SfpuOp{}, PackTile<Output>{});
 }
 
@@ -44,7 +46,9 @@ ALWI void typecast(IterationShape shape) {
 
 template <class SfpuBinOp, InputSpec AInput, InputSpec BInput, OutputSpec Output>
 ALWI void binary_sfpu(IterationShape shape) {
-    static_assert(is_dest_only_op_v<SfpuBinOp>, "binary_sfpu<Op, ...>: Op must be a DEST-only SFPU binary element");
+    static_assert(
+        is_binary_op_v<SfpuBinOp> && is_sfpu_op_v<SfpuBinOp>,
+        "binary_sfpu<Op, ...>: Op must be a binary DEST operation");
     eltwise_chain(shape, CopyTile<AInput>{}, CopyTile<BInput, Dst::D1>{}, SfpuBinOp{}, PackTile<Output>{});
 }
 
