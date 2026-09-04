@@ -40,6 +40,10 @@ export PREFILL_KV_ONLY_LAST_LAYER="${PP_KV_ONLY_LAST_LAYER:-1}"
 # Layer count: PREFILL_* is not auto-propagated by ttrun (only TT_/ARCH_/TTNN_/... are), so this
 # MUST be in the -x list below or the ranks fall back to the manifest's 36.
 export PREFILL_NUM_LAYERS="${PREFILL_NUM_LAYERS:-36}"
+# Opt into the PERF-ONLY llama4 query-scale replay (issue #55126). Defaults to 0, which keeps the
+# raise. Like PREFILL_*, ttrun does not auto-propagate it, so it MUST stay in the -x list below or
+# every rank silently falls back to raising while this driver reports the requested setting.
+export MISTRAL4_LLAMA4_PERF_UNSAFE="${MISTRAL4_LLAMA4_PERF_UNSAFE:-0}"
 export LOGURU_LEVEL=INFO
 
 SERVICE_ID=ds_prefill
@@ -58,12 +62,13 @@ fi
 # A stale descriptor from a prior run would make the readiness poll pass before this runner is up.
 rm -f "$DESCRIPTOR"
 
+echo "[driver] MISTRAL4_LLAMA4_PERF_UNSAFE=$MISTRAL4_LLAMA4_PERF_UNSAFE PREFILL_USE_TRACE=${PREFILL_USE_TRACE:-unset}"
 echo "[driver] launching 4-rank runner under tt-run ($(date -Is))"
 setsid python3 ttnn/ttnn/distributed/ttrun.py \
   --rank-binding "$BINDING" \
   --mpi-args "--host $(hostname):${PP_RANKS:-4} --map-by slot --bind-to none --tag-output --allow-run-as-root \
               -x PATH -x LD_LIBRARY_PATH -x PYTHONPATH -x MISTRAL4_HF_MODEL -x PREFILL_HF_MODEL \
-              -x PREFILL_MANIFEST -x PREFILL_TTNN_CACHE -x PREFILL_CHUNK_SIZE -x PREFILL_NUM_USERS -x PREFILL_USE_TRACE -x PREFILL_TRACE_REGION_SIZE -x PREFILL_KV_ONLY_LAST_LAYER -x PREFILL_NUM_LAYERS -x PROF_ROOT -x PROF_NAME -x PROF_PORT_BASE" \
+              -x PREFILL_MANIFEST -x PREFILL_TTNN_CACHE -x PREFILL_CHUNK_SIZE -x PREFILL_NUM_USERS -x PREFILL_USE_TRACE -x PREFILL_TRACE_REGION_SIZE -x PREFILL_KV_ONLY_LAST_LAYER -x PREFILL_NUM_LAYERS -x MISTRAL4_LLAMA4_PERF_UNSAFE -x PROF_ROOT -x PROF_NAME -x PROF_PORT_BASE" \
   -- ${PP_TARGET:-python3 -m models.demos.common.prefill.runners.prefill_runner} \
   > "$OUT/runner.log" 2>&1 &
 RUNNER_PGID=$!
