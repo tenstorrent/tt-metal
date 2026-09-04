@@ -47,8 +47,8 @@ std::optional<McastReverseTree> build_mcast_reverse_tree(
     tree.axis_dim = topo.axis_dim;
     tree.axis_len = len;
 
-    // Walk the canonical route to every destination and record each hop as a child->parent edge. The
-    // arborescence condition is that no row is ever entered two different ways, checked here hop by hop.
+    // Walk the canonical route to every destination and record each hop as a child->parent edge.
+    // A single-parent tree cannot enter one row from different predecessors, checked hop by hop.
     for (int dst = 0; dst < len; dst++) {
         if (dst == root) {
             continue;
@@ -83,7 +83,7 @@ std::optional<McastReverseTree> build_mcast_reverse_tree(
             } else if (parent[next] != cur || parent_output[next] != *direction) {
                 return fail(fmt::format(
                     "row {} is entered two ways -- from {} via {}, and from {} via {} on the route to {}. T({}) is not "
-                    "an arborescence, so one reverse pass cannot reproduce these routes",
+                    "a single-parent tree, so one reverse pass cannot reproduce these routes",
                     next,
                     parent[next],
                     dir_name(parent_output[next]),
@@ -107,7 +107,7 @@ std::optional<McastReverseTree> build_mcast_reverse_tree(
     }
     if (static_cast<int>(tree.edges.size()) != len - 1) {
         return fail(fmt::format(
-            "T({}) has {} edges, but an arborescence over {} rows has exactly {}",
+            "T({}) has {} edges, but a single-parent tree over {} rows has exactly {}",
             root,
             tree.edges.size(),
             len,
@@ -245,28 +245,6 @@ std::vector<std::uint8_t> encode_mcast_axis_actions(const McastReverseTree& tree
         }
     }
     return actions;
-}
-
-ArborescenceGateResult run_mcast_arborescence_gate(
-    const MeshGraph& mesh_graph, MeshId mesh_id, const AxisRouteTopology& topo) {
-    ArborescenceGateResult result;
-    result.trees.reserve(topo.axis_len);
-
-    for (int root = 0; root < topo.axis_len; root++) {
-        std::string failure;
-        auto tree = build_mcast_reverse_tree(mesh_graph, mesh_id, topo, root, &failure);
-        if (!tree.has_value()) {
-            result.passed = false;
-            result.failing_root = root;
-            result.failure = std::move(failure);
-            result.trees.clear();
-            return result;
-        }
-        result.trees.push_back(std::move(*tree));
-    }
-
-    result.passed = true;
-    return result;
 }
 
 std::vector<RoutingDirection> mcast_root_output_directions(
