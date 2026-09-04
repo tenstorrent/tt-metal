@@ -414,15 +414,21 @@ inline void _process_col_normalize_row_band_(
     lltt::replay(REPLAY_SLOT_BROADCAST, REPLAY_LEN_BROADCAST);
     _broadcast_stage3_with_data_prefetch_(data_tile_offset + slot0, data_tile_offset + slot1, data_tile_offset + slot2, data_tile_offset + slot3);
 
-    TTI_SFPMOV(0, LREG_BCAST, LREG_TMP, 1 /* SFPMOV_MOD1_NEGATE */);
-    TTI_SFPADD(LREG_DATA0, p_sfpu::LCONST_1, LREG_TMP, LREG_DATA0, 0);
-    TTI_SFPADD(LREG_DATA1, p_sfpu::LCONST_1, LREG_TMP, LREG_DATA1, 0);
-    TTI_SFPADD(LREG_DATA2, p_sfpu::LCONST_1, LREG_TMP, LREG_DATA2, 0);
-    TTI_SFPADD(LREG_DATA3, p_sfpu::LCONST_1, LREG_TMP, LREG_DATA3, 0);
+    TTI_SFPMOV(0, LREG_BCAST, p_sfpu::LREG7, 1 /* SFPMOV_MOD1_NEGATE */);
 
     TT_SFPLOAD(LREG_BCAST, IM, ADDR_MOD_7, inv_std_col0_addr);
     lltt::replay(REPLAY_SLOT_BROADCAST, REPLAY_LEN_BROADCAST);
-    _broadcast_stage3_preserve_data_();
+    // Centre the data in the dependent rotate chain's four latency slots.
+    TTI_SFPSHFT2(0, LREG_BCAST, LREG_TMP, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPADD(LREG_DATA0, p_sfpu::LCONST_1, p_sfpu::LREG7, LREG_DATA0, 0);
+    TTI_SFPSHFT2(0, LREG_TMP, LREG_TMP, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPADD(LREG_DATA1, p_sfpu::LCONST_1, p_sfpu::LREG7, LREG_DATA1, 0);
+    TTI_SFPSHFT2(0, LREG_TMP, LREG_TMP, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPADD(LREG_DATA2, p_sfpu::LCONST_1, p_sfpu::LREG7, LREG_DATA2, 0);
+    TTI_SFPSHFT2(0, LREG_TMP, LREG_TMP, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPADD(LREG_DATA3, p_sfpu::LCONST_1, p_sfpu::LREG7, LREG_DATA3, 0);
+    TTI_SFPADD(LREG_BCAST, p_sfpu::LCONST_1, LREG_TMP, LREG_BCAST, 0);
+    TTI_SFPNOP;
 
     TTI_SFPMUL(LREG_DATA0, LREG_BCAST, p_sfpu::LCONST_0, LREG_DATA0, 0);
     TTI_SFPMUL(LREG_DATA1, LREG_BCAST, p_sfpu::LCONST_0, LREG_DATA1, 0);
@@ -477,14 +483,20 @@ inline void _process_col_normalize_two_tiles_row_band_(
     _broadcast_stage3_with_data_prefetch_(
         first_data_tile_offset + slot0, first_data_tile_offset + slot1, first_data_tile_offset + slot2, first_data_tile_offset + slot3);
     TTI_SFPMOV(0, LREG_BCAST, p_sfpu::LREG7, 1 /* SFPMOV_MOD1_NEGATE */);
-    TTI_SFPADD(LREG_DATA0, p_sfpu::LCONST_1, p_sfpu::LREG7, LREG_DATA0, 0);
-    TTI_SFPADD(LREG_DATA1, p_sfpu::LCONST_1, p_sfpu::LREG7, LREG_DATA1, 0);
-    TTI_SFPADD(LREG_DATA2, p_sfpu::LCONST_1, p_sfpu::LREG7, LREG_DATA2, 0);
-    TTI_SFPADD(LREG_DATA3, p_sfpu::LCONST_1, p_sfpu::LREG7, LREG_DATA3, 0);
 
     TT_SFPLOAD(LREG_BCAST, IM, ADDR_MOD_7, inv_std_col0_addr);
     lltt::replay(REPLAY_SLOT_BROADCAST, REPLAY_LEN_BROADCAST);
-    _broadcast_stage3_preserve_data_();
+    // Centre the data in the dependent rotate chain's four latency slots.
+    TTI_SFPSHFT2(0, LREG_BCAST, LREG_TMP, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPADD(LREG_DATA0, p_sfpu::LCONST_1, p_sfpu::LREG7, LREG_DATA0, 0);
+    TTI_SFPSHFT2(0, LREG_TMP, LREG_TMP, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPADD(LREG_DATA1, p_sfpu::LCONST_1, p_sfpu::LREG7, LREG_DATA1, 0);
+    TTI_SFPSHFT2(0, LREG_TMP, LREG_TMP, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPADD(LREG_DATA2, p_sfpu::LCONST_1, p_sfpu::LREG7, LREG_DATA2, 0);
+    TTI_SFPSHFT2(0, LREG_TMP, LREG_TMP, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPADD(LREG_DATA3, p_sfpu::LCONST_1, p_sfpu::LREG7, LREG_DATA3, 0);
+    TTI_SFPADD(LREG_BCAST, p_sfpu::LCONST_1, LREG_TMP, LREG_BCAST, 0);
+    TTI_SFPNOP;
     TTI_SFPMUL(LREG_DATA0, LREG_BCAST, p_sfpu::LCONST_0, LREG_DATA0, 0);
     TTI_SFPMUL(LREG_DATA1, LREG_BCAST, p_sfpu::LCONST_0, LREG_DATA1, 0);
     TTI_SFPMUL(LREG_DATA2, LREG_BCAST, p_sfpu::LCONST_0, LREG_DATA2, 0);
@@ -580,15 +592,21 @@ inline void _process_col_residual_normalize_row_band_(
     TT_SFPLOAD(LREG_BCAST, IM, ADDR_MOD_7, mean_col0_addr);
     lltt::replay(REPLAY_SLOT_BROADCAST, REPLAY_LEN_BROADCAST);
     _broadcast_stage3_preserve_data_();
-    TTI_SFPMOV(0, LREG_BCAST, LREG_TMP, 1 /* SFPMOV_MOD1_NEGATE */);
-    TTI_SFPADD(LREG_DATA0, p_sfpu::LCONST_1, LREG_TMP, LREG_DATA0, 0);
-    TTI_SFPADD(LREG_DATA1, p_sfpu::LCONST_1, LREG_TMP, LREG_DATA1, 0);
-    TTI_SFPADD(LREG_DATA2, p_sfpu::LCONST_1, LREG_TMP, LREG_DATA2, 0);
-    TTI_SFPADD(LREG_DATA3, p_sfpu::LCONST_1, LREG_TMP, LREG_DATA3, 0);
+    TTI_SFPMOV(0, LREG_BCAST, p_sfpu::LREG7, 1 /* SFPMOV_MOD1_NEGATE */);
 
     TT_SFPLOAD(LREG_BCAST, IM, ADDR_MOD_7, inv_std_col0_addr);
     lltt::replay(REPLAY_SLOT_BROADCAST, REPLAY_LEN_BROADCAST);
-    _broadcast_stage3_preserve_data_();
+    // Centre the data in the dependent rotate chain's four latency slots.
+    TTI_SFPSHFT2(0, LREG_BCAST, LREG_TMP, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPADD(LREG_DATA0, p_sfpu::LCONST_1, p_sfpu::LREG7, LREG_DATA0, 0);
+    TTI_SFPSHFT2(0, LREG_TMP, LREG_TMP, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPADD(LREG_DATA1, p_sfpu::LCONST_1, p_sfpu::LREG7, LREG_DATA1, 0);
+    TTI_SFPSHFT2(0, LREG_TMP, LREG_TMP, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPADD(LREG_DATA2, p_sfpu::LCONST_1, p_sfpu::LREG7, LREG_DATA2, 0);
+    TTI_SFPSHFT2(0, LREG_TMP, LREG_TMP, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPADD(LREG_DATA3, p_sfpu::LCONST_1, p_sfpu::LREG7, LREG_DATA3, 0);
+    TTI_SFPADD(LREG_BCAST, p_sfpu::LCONST_1, LREG_TMP, LREG_BCAST, 0);
+    TTI_SFPNOP;
     TTI_SFPMUL(LREG_DATA0, LREG_BCAST, p_sfpu::LCONST_0, LREG_DATA0, 0);
     TTI_SFPMUL(LREG_DATA1, LREG_BCAST, p_sfpu::LCONST_0, LREG_DATA1, 0);
     TTI_SFPMUL(LREG_DATA2, LREG_BCAST, p_sfpu::LCONST_0, LREG_DATA2, 0);
