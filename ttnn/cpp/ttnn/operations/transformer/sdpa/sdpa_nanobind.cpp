@@ -376,6 +376,10 @@ void bind_sdpa(nb::module_& mod) {
             scale (float, optional): defaults to K_DIM**-0.5.
             k_chunk_size (int): defaults to 128 (must divide TOPK, multiple of 32).
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional).
+            attention_sink (ttnn.Tensor, optional): BF16 TILE DRAM tensor with logical shape [1,H,1,1].
+                One unscaled-domain sink logit per query head, broadcast over query tokens. As in dense SDPA,
+                the kernel applies `scale` to both QK scores and sink logits; pass sigma/scale when sigma is
+                already in the scaled-logit domain.
             cache_batch_idx (int, optional): select the batch slot of a shared [B, 1, T, K_DIM] kv cache.
                 It is a dynamic runtime arg, so changing the slot does not recompile. Changing T also reuses the
                 program for a plain interleaved cache, but recompiles for sharded or block-cyclic caches.
@@ -400,6 +404,7 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("scale") = nb::none(),
         nb::arg("k_chunk_size") = 128,
         nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("attention_sink") = nb::none(),
         nb::arg("cache_batch_idx") = nb::none(),
         nb::arg("block_cyclic_sp_axis") = nb::none(),
         nb::arg("block_cyclic_chunk_local") = nb::none());

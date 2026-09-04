@@ -3,8 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // sparse_sdpa reader: per token, gather Q rows + per-chunk indexed K rows (sentinel suffix zero-filled),
-// plus the per-token partial-boundary mask tile. (The persistent scaler/col-identity/-inf tiles are built
-// by the lighter-loaded writer.) Uses the object-based NoC + circular-buffer APIs.
+// plus the per-token partial-boundary mask tile. An optional per-head attention sink is packed once at startup
+// into row-statistic tiles and then remains persistent. (The scaler/col-identity/-inf tiles are built by the
+// lighter-loaded writer.) Uses the object-based NoC + circular-buffer APIs.
 //
 // Sentinels are a contiguous tail (producer contract): nv = first-sentinel index = valid-key count, so only
 // ceil(nv/k_chunk) chunks are active; all-sentinel chunks are skipped (no read/fill/compute), compute learns
@@ -61,6 +62,8 @@ void kernel_main() {
     constexpr uint32_t packed_row_bytes = get_compile_time_arg_val(sparse_sdpa::reader_ct_arg::PACKED_ROW_BYTES);
     constexpr uint32_t cb_kreq = get_compile_time_arg_val(sparse_sdpa::reader_ct_arg::CB_KREQ);
     constexpr uint32_t cb_kack = get_compile_time_arg_val(sparse_sdpa::reader_ct_arg::CB_KACK);
+    constexpr bool use_attention_sink = get_compile_time_arg_val(sparse_sdpa::reader_ct_arg::USE_ATTENTION_SINK) != 0;
+    constexpr uint32_t cb_attention_sink = get_compile_time_arg_val(sparse_sdpa::reader_ct_arg::CB_ATTENTION_SINK);
 
     // kv carries a RUNTIME tensor shape (its T dim is common runtime args, not compile-time), so its accessor
     // spans both the compile-time AND common-runtime arg streams. Thread both offsets through all three.
@@ -69,6 +72,8 @@ void kernel_main() {
         TensorAccessorArgs<q_args.next_compile_time_args_offset(), q_args.next_common_runtime_args_offset()>();
     constexpr auto idx_args =
         TensorAccessorArgs<kv_args.next_compile_time_args_offset(), kv_args.next_common_runtime_args_offset()>();
+    constexpr auto sink_args =
+        TensorAccessorArgs<idx_args.next_compile_time_args_offset(), idx_args.next_common_runtime_args_offset()>();
 
     const uint32_t q_addr = get_arg_val<uint32_t>(0);
     const uint32_t kv_addr = get_arg_val<uint32_t>(1);
@@ -77,6 +82,7 @@ void kernel_main() {
     const uint32_t tok_count = get_arg_val<uint32_t>(4);
     // Indexed KV cache: page offset (cache_batch_idx * T) selecting the cache's batch slot; 0 if not indexed.
     const uint32_t kv_batch_page_offset = get_arg_val<uint32_t>(5);
+    const uint32_t attention_sink_addr = get_arg_val<uint32_t>(6);
 
     constexpr uint32_t q_row_bytes = k_dim * q_elem_bytes;   // Q row (bf16)
     constexpr uint32_t k_row_bytes = k_dim * kv_elem_bytes;  // K row (native dtype: fp8 or bf16)
@@ -91,9 +97,67 @@ void kernel_main() {
     const auto q = TensorAccessor(q_args, q_addr);
     const auto kv = TensorAccessor(kv_args, kv_addr);
     const auto idx = TensorAccessor(idx_args, idx_addr);
-    // Reader-internal scratch for one token's index row (reserved once, reused).
-    idx_cb.reserve_back(1);
+
+    // Reserve the index scratch once for the whole launch. Sink-enabled programs over-allocate this CB so all
+    // per-head DRAM windows can be issued together and retired with one barrier before token processing.
+    constexpr uint32_t sink_scratch_pages =
+        use_attention_sink
+            ? (H * NOC_DRAM_READ_ALIGNMENT_BYTES + NOC_DRAM_READ_ALIGNMENT_BYTES - 1 + idx_row_bytes - 1) /
+                  idx_row_bytes
+            : 1;
+    idx_cb.reserve_back(sink_scratch_pages);
     const uint32_t idx_l1 = idx_cb.get_write_ptr();
+
+    if constexpr (use_attention_sink) {
+        const auto attention_sink = TensorAccessor(sink_args, attention_sink_addr);
+        // The public sink layout matches dense SDPA: one [1,H,1,1] TILE page per head, with the scalar at
+        // tile[0,0]. Sparse SDPA processes 32 heads as the rows of one statistics tile, so transpose those
+        // scalars once per kernel launch into [H/32,1] tiles. Non-first columns are -inf so MAX and exp-reduce
+        // see exactly one virtual logit per head.
+        constexpr uint32_t Sqt = H / tt::constants::TILE_HEIGHT;
+        constexpr uint32_t sink_tile_bytes = get_tile_size(cb_attention_sink);
+        experimental::CB sink_cb(cb_attention_sink);
+        sink_cb.reserve_back(Sqt);
+        const uint32_t sink_l1 = sink_cb.get_write_ptr();
+        volatile tt_l1_ptr uint16_t* sink_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(sink_l1);
+
+        constexpr uint32_t tile_elements = sink_tile_bytes / sizeof(uint16_t);
+        for (uint32_t i = 0; i < Sqt * tile_elements; ++i) {
+            sink_ptr[i] = neg_inf_bf16;
+        }
+
+        constexpr uint32_t face_height = tt::constants::TILE_HEIGHT / 2;
+        constexpr uint32_t face_width = tt::constants::TILE_WIDTH / 2;
+        constexpr uint32_t alignment = NOC_DRAM_READ_ALIGNMENT_BYTES;
+        constexpr uint32_t alignment_mask = alignment - 1;
+        const uint32_t scratch_l1 = (idx_l1 + alignment_mask) & ~alignment_mask;
+        volatile tt_l1_ptr uint16_t* scratch_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(scratch_l1);
+        for (uint32_t h = 0; h < H; ++h) {
+            // Stage one DRAM-aligned window, then copy its first logical BF16 value into the head row. The source
+            // may begin partway through that window, so align it backward and retain the corresponding offset.
+            const uint64_t src_noc_addr = attention_sink.get_noc_addr(h, 0, noc.get_noc_id());
+            const uint32_t src_align_offset = static_cast<uint32_t>(src_noc_addr) & alignment_mask;
+            const uint64_t aligned_src_noc_addr = src_noc_addr - src_align_offset;
+            const uint32_t aligned_read_size = (src_align_offset + sizeof(uint16_t) + alignment_mask) & ~alignment_mask;
+            noc_async_read<NOC_MAX_BURST_SIZE + 1, true>(
+                aligned_src_noc_addr, scratch_l1 + h * alignment, aligned_read_size, noc.get_noc_id());
+        }
+        noc.async_read_barrier();
+
+        for (uint32_t h = 0; h < H; ++h) {
+            const uint32_t tile = h / tt::constants::TILE_HEIGHT;
+            const uint32_t row = h % tt::constants::TILE_HEIGHT;
+            const uint32_t elem_offset =
+                (row < face_height ? 0 : 2 * tt::constants::FACE_HW) + (row % face_height) * face_width;
+            const uint64_t src_noc_addr = attention_sink.get_noc_addr(h, 0, noc.get_noc_id());
+            const uint32_t src_align_offset = static_cast<uint32_t>(src_noc_addr) & alignment_mask;
+            sink_ptr[tile * tile_elements + elem_offset] =
+                scratch_ptr[(h * alignment + src_align_offset) / sizeof(uint16_t)];
+        }
+        sink_cb.push_back(Sqt);
+    }
+
+    // Reader-internal scratch for one token's index row (reserved once, reused).
     volatile tt_l1_ptr uint32_t* idx_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(idx_l1);
 
     for (uint32_t tok = tok_start; tok < tok_start + tok_count; ++tok) {

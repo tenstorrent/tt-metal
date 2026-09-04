@@ -1,0 +1,625 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Why accelerator traces matter</title>
+  <style>
+    :root {
+      --ink: #172236;
+      --muted: #68758a;
+      --paper: #f7f2e8;
+      --panel: rgba(255,255,255,.72);
+      --host: #ffb347;
+      --device: #2ec4b6;
+      --trace: #745cff;
+      --data: #ef476f;
+      --line: #d9d5ca;
+      --shadow: 0 18px 60px rgba(38, 45, 62, .12);
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--ink);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background:
+        radial-gradient(circle at 9% 8%, rgba(255,179,71,.24), transparent 28%),
+        radial-gradient(circle at 91% 88%, rgba(46,196,182,.22), transparent 28%),
+        var(--paper);
+    }
+
+    button { font: inherit; }
+
+    .app {
+      width: min(1180px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 28px 0 34px;
+    }
+
+    header {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 24px;
+      margin-bottom: 18px;
+    }
+
+    .eyebrow {
+      margin: 0 0 7px;
+      color: var(--trace);
+      font-weight: 800;
+      font-size: 12px;
+      letter-spacing: .13em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 0;
+      max-width: 760px;
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: clamp(34px, 5vw, 62px);
+      font-weight: 500;
+      line-height: .98;
+      letter-spacing: -.04em;
+    }
+
+    .step-count {
+      flex: 0 0 auto;
+      color: var(--muted);
+      font-size: 14px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .progress {
+      height: 5px;
+      overflow: hidden;
+      margin-bottom: 18px;
+      border-radius: 999px;
+      background: rgba(23,34,54,.09);
+    }
+
+    .progress > div {
+      height: 100%;
+      width: 0;
+      border-radius: inherit;
+      background: linear-gradient(90deg, var(--host), var(--trace), var(--device));
+      transition: width .35s ease;
+    }
+
+    main {
+      display: grid;
+      grid-template-columns: minmax(270px, .72fr) minmax(560px, 1.55fr);
+      min-height: 620px;
+      overflow: hidden;
+      border: 1px solid rgba(23,34,54,.10);
+      border-radius: 28px;
+      background: var(--panel);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(12px);
+    }
+
+    .story {
+      display: flex;
+      flex-direction: column;
+      padding: 34px;
+      border-right: 1px solid var(--line);
+    }
+
+    .chapter {
+      display: inline-flex;
+      align-self: flex-start;
+      padding: 6px 10px;
+      border-radius: 999px;
+      color: white;
+      background: var(--trace);
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+
+    h2 {
+      margin: 22px 0 12px;
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: clamp(29px, 3.2vw, 43px);
+      font-weight: 500;
+      line-height: 1.04;
+      letter-spacing: -.025em;
+    }
+
+    #body {
+      margin: 0;
+      color: #48566d;
+      font-size: 17px;
+      line-height: 1.58;
+    }
+
+    .callout {
+      margin-top: 22px;
+      padding: 15px 17px;
+      border-left: 4px solid var(--trace);
+      border-radius: 0 12px 12px 0;
+      background: rgba(116,92,255,.08);
+      color: #403a73;
+      font-size: 14px;
+      line-height: 1.45;
+    }
+
+    .controls {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-top: auto;
+      padding-top: 26px;
+    }
+
+    .controls button {
+      min-height: 48px;
+      border: 0;
+      border-radius: 14px;
+      cursor: pointer;
+      font-weight: 750;
+      transition: transform .15s ease, opacity .15s ease, box-shadow .15s ease;
+    }
+
+    .controls button:hover:not(:disabled) { transform: translateY(-2px); }
+    .controls button:disabled { cursor: default; opacity: .35; }
+    #prev { color: var(--ink); background: #ebe7dd; }
+    #next { color: white; background: var(--ink); box-shadow: 0 8px 22px rgba(23,34,54,.18); }
+
+    .hint {
+      margin-top: 12px;
+      color: var(--muted);
+      text-align: center;
+      font-size: 12px;
+    }
+
+    .stage {
+      position: relative;
+      min-width: 0;
+      padding: 32px;
+      background:
+        linear-gradient(rgba(23,34,54,.035) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(23,34,54,.035) 1px, transparent 1px);
+      background-size: 28px 28px;
+    }
+
+    .actors {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 72px;
+      height: 100%;
+    }
+
+    .actor {
+      position: relative;
+      min-width: 0;
+      padding: 20px;
+      border: 2px solid transparent;
+      border-radius: 22px;
+      background: rgba(255,255,255,.82);
+      transition: opacity .28s, transform .28s, border-color .28s, box-shadow .28s;
+    }
+
+    .actor.host { border-top: 7px solid var(--host); }
+    .actor.device { border-top: 7px solid var(--device); }
+    .actor.focus { transform: translateY(-4px); box-shadow: 0 16px 36px rgba(23,34,54,.13); }
+    .actor.dim { opacity: .43; }
+
+    .actor-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 18px;
+      font-weight: 850;
+    }
+
+    .status {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #bdc3cc;
+    }
+
+    .focus .status { animation: pulse 1.1s infinite; }
+    .host.focus .status { background: var(--host); }
+    .device.focus .status { background: var(--device); }
+
+    @keyframes pulse {
+      50% { box-shadow: 0 0 0 7px rgba(46,196,182,.12); }
+    }
+
+    .queue-label {
+      margin: 17px 0 8px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+
+    .queue {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      min-height: 250px;
+    }
+
+    .command {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-height: 42px;
+      padding: 8px 11px;
+      border: 1px solid rgba(23,34,54,.1);
+      border-radius: 11px;
+      background: white;
+      font-size: 13px;
+      opacity: 0;
+      transform: translateY(8px);
+      animation: enter .3s forwards;
+    }
+
+    .command.done { opacity: .48; text-decoration: line-through; }
+    .command.active { border-color: var(--device); box-shadow: 0 0 0 3px rgba(46,196,182,.12); }
+    .command.recorded { color: #4435a5; border-color: rgba(116,92,255,.35); background: rgba(116,92,255,.07); }
+
+    @keyframes enter { to { opacity: 1; transform: none; } }
+
+    .num {
+      display: grid;
+      place-items: center;
+      flex: 0 0 24px;
+      height: 24px;
+      border-radius: 8px;
+      color: white;
+      background: var(--ink);
+      font-size: 11px;
+      font-weight: 800;
+    }
+
+    .metadata {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-top: 14px;
+    }
+
+    .meta {
+      padding: 10px;
+      border-radius: 11px;
+      background: #f2f0ea;
+      font-size: 12px;
+    }
+
+    .meta strong { display: block; margin-top: 3px; color: var(--data); font-size: 17px; }
+
+    .bridge {
+      position: absolute;
+      top: 47%;
+      left: 50%;
+      width: 72px;
+      height: 3px;
+      transform: translate(-50%, -50%);
+      background: #c9c5ba;
+    }
+
+    .packet {
+      position: absolute;
+      top: -9px;
+      left: -4px;
+      width: 20px;
+      height: 20px;
+      border: 4px solid white;
+      border-radius: 50%;
+      background: var(--host);
+      box-shadow: 0 3px 9px rgba(23,34,54,.25);
+      animation: travel 1.15s ease-in-out infinite;
+    }
+
+    .packet.trace { background: var(--trace); }
+    .packet.hidden { display: none; }
+    @keyframes travel { 0% { left: -4px; } 100% { left: 56px; } }
+
+    .trace-card {
+      margin-top: 14px;
+      padding: 14px;
+      border: 1px dashed rgba(116,92,255,.5);
+      border-radius: 14px;
+      background: linear-gradient(135deg, rgba(116,92,255,.12), rgba(116,92,255,.03));
+      opacity: 0;
+      transform: scale(.96);
+      transition: .3s ease;
+    }
+
+    .trace-card.visible { opacity: 1; transform: none; }
+    .trace-card b { color: var(--trace); }
+    .mini-commands { margin-top: 8px; color: #554b88; font: 11px/1.7 ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+    .timeline {
+      grid-column: 1 / -1;
+      align-self: end;
+      margin-top: 20px;
+      padding: 14px 16px 16px;
+      border-radius: 16px;
+      background: rgba(23,34,54,.88);
+      color: white;
+    }
+
+    .timeline-label { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 11px; opacity: .72; }
+    .bar { display: flex; height: 20px; overflow: hidden; border-radius: 7px; background: rgba(255,255,255,.1); }
+    .bar > span { display: grid; place-items: center; width: 0; overflow: hidden; font-size: 10px; font-weight: 800; transition: width .45s ease; }
+    .host-time { background: var(--host); color: #442800; }
+    .device-time { background: var(--device); color: #063d39; }
+    .saved-time { background: repeating-linear-gradient(135deg, #745cff, #745cff 7px, #8c78ff 7px, #8c78ff 14px); }
+
+    .legend { display: flex; flex-wrap: wrap; gap: 13px; margin-top: 9px; font-size: 10px; opacity: .8; }
+    .legend i { display: inline-block; width: 8px; height: 8px; margin-right: 5px; border-radius: 2px; }
+
+    @media (max-width: 850px) {
+      header { align-items: flex-start; flex-direction: column; }
+      main { grid-template-columns: 1fr; }
+      .story { border-right: 0; border-bottom: 1px solid var(--line); }
+      .stage { min-height: 620px; padding: 22px; }
+      .actors { gap: 44px; }
+      .bridge { width: 44px; }
+      @keyframes travel { 0% { left: -4px; } 100% { left: 28px; } }
+    }
+
+    @media (max-width: 560px) {
+      .app { width: min(100% - 18px, 1180px); padding-top: 16px; }
+      main { border-radius: 19px; }
+      .story { padding: 25px; }
+      .stage { min-height: 760px; }
+      .actors { grid-template-columns: 1fr; gap: 14px; }
+      .bridge { display: none; }
+      .queue { min-height: auto; }
+      .timeline { grid-column: 1; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <div>
+        <p class="eyebrow">Interactive walkthrough · Gemma4 prefill</p>
+        <h1>Capture once. Replay fast.</h1>
+      </div>
+      <div class="step-count" id="stepCount">Step 1 of 18</div>
+    </header>
+
+    <div class="progress" aria-hidden="true"><div id="progress"></div></div>
+
+    <main>
+      <section class="story" aria-live="polite">
+        <span class="chapter" id="chapter">The setup</span>
+        <h2 id="title"></h2>
+        <p id="body"></p>
+        <div class="callout" id="callout"></div>
+        <div class="controls">
+          <button id="prev" type="button">← Previous</button>
+          <button id="next" type="button">Next →</button>
+        </div>
+        <div class="hint">Use ← and → keys</div>
+      </section>
+
+      <section class="stage" aria-label="Host and accelerator execution visualization">
+        <div class="actors">
+          <div class="actor host" id="hostActor">
+            <div class="actor-title">Host CPU <span class="status"></span></div>
+            <div class="queue-label">Host work</div>
+            <div class="queue" id="hostQueue"></div>
+            <div class="metadata" id="metadata"></div>
+          </div>
+
+          <div class="actor device" id="deviceActor">
+            <div class="actor-title">Tenstorrent device <span class="status"></span></div>
+            <div class="queue-label">Device command queue</div>
+            <div class="queue" id="deviceQueue"></div>
+            <div class="trace-card" id="traceCard">
+              <b>TRACE #42</b> · reusable command list
+              <div class="mini-commands">read inputs<br>run attention layers<br>write outputs</div>
+            </div>
+          </div>
+
+          <div class="timeline">
+            <div class="timeline-label"><span>Illustrative time per chunk</span><span id="timingText"></span></div>
+            <div class="bar">
+              <span class="host-time" id="hostTime">HOST</span>
+              <span class="device-time" id="deviceTime">DEVICE</span>
+              <span class="saved-time" id="savedTime">SAVED</span>
+            </div>
+            <div class="legend">
+              <span><i style="background:var(--host)"></i>CPU setup & dispatch</span>
+              <span><i style="background:var(--device)"></i>device compute</span>
+              <span><i style="background:var(--trace)"></i>overhead removed by replay</span>
+            </div>
+          </div>
+        </div>
+        <div class="bridge"><div class="packet" id="packet"></div></div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const steps = [
+      {
+        chapter: "The setup", title: "A real chunked-prefill job",
+        body: "Gemma4 receives a 4,096-token prompt. Instead of processing it all at once, we use four chunks of 1,024 tokens. Each chunk runs the same stack of attention operations.",
+        callout: "Concrete example: chunk 1 handles tokens 0–1,023; chunk 2 handles 1,024–2,047.",
+        host: ["Split prompt into 4 chunks"], device: [], meta: ["chunk", "1 / 4", "valid KV", "0 tokens"], focus: "host", packet: false, time: [18, 62, 0]
+      },
+      {
+        chapter: "Without a trace", title: "The CPU prepares operation 1",
+        body: "For chunk 1, Python and C++ prepare the first device operation: buffer addresses, tensor shapes, kernel arguments, and synchronization details.",
+        callout: "The accelerator is powerful, but it cannot begin this operation until the host describes it.",
+        host: ["Prepare attention layer 1"], device: ["Waiting for command…"], meta: ["chunk", "1 / 4", "valid KV", "0 tokens"], focus: "host", packet: false, time: [18, 62, 0]
+      },
+      {
+        chapter: "Without a trace", title: "The CPU dispatches operation 1",
+        body: "The prepared command crosses from the host to the device. The device queues it and starts the first attention layer.",
+        callout: "Dispatch is small, but a model performs many operations—so the overhead accumulates.",
+        host: ["Prepare attention layer 1", "Dispatch layer 1"], device: ["Run attention layer 1"], meta: ["chunk", "1 / 4", "valid KV", "0 tokens"], focus: "both", packet: true, time: [18, 62, 0]
+      },
+      {
+        chapter: "Without a trace", title: "Then operation 2…",
+        body: "The CPU repeats the setup for the next layer while the accelerator consumes commands from its queue.",
+        callout: "Prepare → dispatch → execute. The same control pattern repeats layer after layer.",
+        host: ["Dispatch layer 1", "Prepare attention layer 2", "Dispatch layer 2"], device: ["✓ Layer 1", "Run attention layer 2"], meta: ["chunk", "1 / 4", "valid KV", "0 tokens"], focus: "both", packet: true, time: [18, 62, 0]
+      },
+      {
+        chapter: "Without a trace", title: "…and dozens more",
+        body: "Gemma4 has many layers. The host repeatedly performs nearly identical setup and dispatch work for attention, matrix multiplication, normalization, and other operations.",
+        callout: "The example timing is illustrative: 18 ms of host overhead plus 62 ms of useful device work.",
+        host: ["Dispatch layer 2", "Prepare layer 3", "…", "Prepare layer 60"], device: ["✓ Layer 1", "✓ Layer 2", "…", "Run layer 60"], meta: ["chunk", "1 / 4", "valid KV", "0 tokens"], focus: "both", packet: true, time: [18, 62, 0]
+      },
+      {
+        chapter: "The problem", title: "Chunk 2 repeats the choreography",
+        body: "The next 1,024 tokens need the same operation sequence. Without tracing, the host prepares and dispatches the entire sequence again.",
+        callout: "The tensor values changed, but the command structure is almost identical.",
+        host: ["Prepare layer 1 again", "Dispatch layer 1 again", "…", "Dispatch layer 60 again"], device: ["Run the same 60 layers again"], meta: ["chunk", "2 / 4", "valid KV", "1,024 tokens"], focus: "host", packet: true, time: [18, 62, 0]
+      },
+      {
+        chapter: "The idea", title: "What if we record the commands?",
+        body: "During one execution, the runtime can capture the device command sequence instead of treating it as disposable.",
+        callout: "A trace is not the output data. It is a reusable recipe of device commands.",
+        host: ["Begin trace capture", "Dispatch layer 1", "Dispatch layer 2", "…"], device: ["Record + run layer 1", "Record + run layer 2", "…"], meta: ["mode", "CAPTURE", "trace", "#42"], focus: "both", packet: true, trace: "building", time: [18, 62, 0]
+      },
+      {
+        chapter: "Capture", title: "Capture still executes real work",
+        body: "The capture run is a normal run: kernels execute and produce an answer. At the same time, the device records their launch order and dependencies.",
+        callout: "Capture usually costs about one ordinary execution. Its benefit arrives on later replays.",
+        host: ["Dispatch captured sequence"], device: ["① Read input buffers", "② Run attention stack", "③ Write output buffers"], meta: ["mode", "CAPTURE", "trace", "#42"], focus: "device", packet: true, trace: "building", time: [18, 62, 0]
+      },
+      {
+        chapter: "Capture", title: "Finish and store the trace",
+        body: "When capture ends, the device has trace #42: a compact command list describing the whole repeated workload.",
+        callout: "Think of it as a recorded macro located close to the hardware.",
+        host: ["End trace capture"], device: ["✓ Read inputs", "✓ Run attention stack", "✓ Write outputs"], meta: ["mode", "READY", "trace", "#42"], focus: "device", packet: false, trace: "ready", time: [18, 62, 0]
+      },
+      {
+        chapter: "Replay", title: "Stage the next chunk",
+        body: "For chunk 2, the host copies new input tokens into the same input buffers. Stable buffer addresses let the recorded commands continue pointing to the right places.",
+        callout: "The trace stays fixed; the contents of its input buffers change.",
+        host: ["Copy chunk 2 → input buffer"], device: ["TRACE #42 is ready"], meta: ["chunk", "2 / 4", "input", "tokens 1,024–2,047"], focus: "host", packet: true, trace: "ready", time: [7, 62, 11]
+      },
+      {
+        chapter: "Replay", title: "Update tiny metadata",
+        body: "Chunk 2 must attend to the 1,024 cached tokens from chunk 1. The host writes that changing fact into a tiny metadata tensor in device memory.",
+        callout: "For this PR, important metadata includes KV-cache slot and valid KV prefix length.",
+        host: ["Copy chunk 2", "Write metadata tensor"], device: ["slot_id = 3", "valid_kv = 1,024"], meta: ["cache slot", "3", "valid KV", "1,024 tokens"], focus: "host", packet: true, trace: "ready", time: [7, 62, 11]
+      },
+      {
+        chapter: "Replay", title: "Send one replay command",
+        body: "Instead of redispatching every layer, the host sends a single request: replay trace #42.",
+        callout: "One host command replaces a long stream of repeated setup and dispatch commands.",
+        host: ["REPLAY TRACE #42"], device: ["Load recorded command list"], meta: ["chunk", "2 / 4", "valid KV", "1,024 tokens"], focus: "both", packet: true, packetType: "trace", trace: "ready", time: [7, 62, 11]
+      },
+      {
+        chapter: "Replay", title: "The device runs the recipe",
+        body: "The accelerator executes the recorded operations in order without waiting for the host to redispatch each layer.",
+        callout: "The kernels and math are the same; only the command-delivery path is shorter.",
+        host: ["CPU is free for other work"], device: ["① Read new chunk", "② Run attention stack", "③ Write new output"], meta: ["chunk", "2 / 4", "trace", "#42"], focus: "device", packet: false, trace: "active", time: [7, 62, 11]
+      },
+      {
+        chapter: "The subtlety", title: "But a trace freezes host arguments",
+        body: "If valid_kv = 1,024 was embedded directly in a captured command, every replay would keep using 1,024—even when chunk 3 needs 2,048 cached tokens.",
+        callout: "This is the bug class addressed by the PR: the command sequence is fixed, but sequence state grows.",
+        host: ["Stage chunk 3", "Replay trace #42"], device: ["Danger: baked valid_kv = 1,024"], meta: ["needed", "2,048", "baked value", "1,024 ✕"], focus: "device", packet: false, trace: "active", time: [7, 62, 11]
+      },
+      {
+        chapter: "The fix", title: "Kernels read live metadata",
+        body: "The PR changes the traced kernels so they read slot_id and valid_kv from device memory during every replay, rather than relying on values fixed during capture.",
+        callout: "Fixed command: “read metadata.” Changing data: 1,024 → 2,048 → 3,072.",
+        host: ["Write valid_kv = 2,048", "Replay trace #42"], device: ["Read metadata now", "Use valid_kv = 2,048", "Run attention"], meta: ["cache slot", "3", "valid KV", "2,048 ✓"], focus: "device", packet: true, packetType: "trace", trace: "active", time: [7, 62, 11]
+      },
+      {
+        chapter: "The fix", title: "Replay chunk 4 the same way",
+        body: "For chunk 4, the host updates the inputs and valid prefix to 3,072, then replays the exact same trace. The device derives the correct cache and halo ranges at runtime.",
+        callout: "Same trace, different data, correct behavior.",
+        host: ["Copy chunk 4", "Write valid_kv = 3,072", "Replay trace #42"], device: ["Read live metadata", "Attend over 3,072 cached tokens", "Process 1,024 new tokens"], meta: ["chunk", "4 / 4", "valid KV", "3,072 ✓"], focus: "both", packet: true, packetType: "trace", trace: "active", time: [7, 62, 11]
+      },
+      {
+        chapter: "Why it matters", title: "Useful work stays; overhead shrinks",
+        body: "Tracing does not make attention math disappear. It removes repeated host-side setup and dispatch, helping the accelerator stay fed—especially when many small operations repeat.",
+        callout: "Illustrative comparison: 80 ms normally versus 69 ms with replay. Real savings depend on workload and hardware.",
+        host: ["Update inputs + metadata", "One replay command"], device: ["Run full recorded workload"], meta: ["normal", "80 ms", "replay", "69 ms"], focus: "both", packet: true, packetType: "trace", trace: "ready", time: [7, 62, 11]
+      },
+      {
+        chapter: "Summary", title: "The complete mental model",
+        body: "Capture records a reusable device command sequence. Replay launches it cheaply. Stable buffers hold changing inputs, and device-side metadata supplies changing state such as the KV-cache slot and valid prefix.",
+        callout: "Capture once → update data → update metadata → replay → repeat.",
+        host: ["1. Update input", "2. Update metadata", "3. Replay trace"], device: ["4. Read live metadata", "5. Execute recorded commands", "6. Produce output"], meta: ["trace", "fixed recipe", "data", "changes each replay"], focus: "both", packet: true, packetType: "trace", trace: "ready", time: [7, 62, 11]
+      }
+    ];
+
+    let index = 0;
+    const $ = id => document.getElementById(id);
+
+    function commandMarkup(items, recorded = false) {
+      return items.map((item, i) => {
+        const complete = item.startsWith("✓");
+        const cls = ["command", complete ? "done" : "", recorded ? "recorded" : "", i === items.length - 1 ? "active" : ""].filter(Boolean).join(" ");
+        const clean = item.replace(/^✓\s*/, "");
+        return `<div class="${cls}" style="animation-delay:${i * 55}ms"><span class="num">${complete ? "✓" : i + 1}</span><span>${clean}</span></div>`;
+      }).join("");
+    }
+
+    function render() {
+      const step = steps[index];
+      $("chapter").textContent = step.chapter;
+      $("title").textContent = step.title;
+      $("body").textContent = step.body;
+      $("callout").textContent = step.callout;
+      $("stepCount").textContent = `Step ${index + 1} of ${steps.length}`;
+      $("progress").style.width = `${((index + 1) / steps.length) * 100}%`;
+
+      $("hostQueue").innerHTML = commandMarkup(step.host);
+      $("deviceQueue").innerHTML = commandMarkup(step.device, Boolean(step.trace));
+      $("metadata").innerHTML = step.meta.map((value, i) => i % 2 === 0
+        ? `<div class="meta">${value}<strong>${step.meta[i + 1]}</strong></div>` : "").join("");
+
+      const host = $("hostActor");
+      const device = $("deviceActor");
+      host.className = "actor host";
+      device.className = "actor device";
+      if (step.focus === "host") { host.classList.add("focus"); device.classList.add("dim"); }
+      if (step.focus === "device") { device.classList.add("focus"); host.classList.add("dim"); }
+      if (step.focus === "both") { host.classList.add("focus"); device.classList.add("focus"); }
+
+      const packet = $("packet");
+      packet.className = `packet${step.packet ? "" : " hidden"}${step.packetType === "trace" ? " trace" : ""}`;
+      $("traceCard").className = `trace-card${step.trace ? " visible" : ""}`;
+      if (step.trace === "building") $("traceCard").querySelector("b").textContent = "RECORDING TRACE #42";
+      else if (step.trace === "active") $("traceCard").querySelector("b").textContent = "REPLAYING TRACE #42";
+      else $("traceCard").querySelector("b").textContent = "TRACE #42";
+
+      const [hostTime, deviceTime, saved] = step.time;
+      $("hostTime").style.width = `${hostTime}%`;
+      $("deviceTime").style.width = `${deviceTime}%`;
+      $("savedTime").style.width = `${saved}%`;
+      $("timingText").textContent = saved ? "replay path" : "ordinary dispatch path";
+
+      $("prev").disabled = index === 0;
+      $("next").disabled = index === steps.length - 1;
+      $("next").textContent = index === steps.length - 2 ? "Finish →" : "Next →";
+    }
+
+    $("prev").addEventListener("click", () => { if (index > 0) { index--; render(); } });
+    $("next").addEventListener("click", () => { if (index < steps.length - 1) { index++; render(); } });
+    window.addEventListener("keydown", event => {
+      if (event.key === "ArrowLeft" && index > 0) { index--; render(); }
+      if (event.key === "ArrowRight" && index < steps.length - 1) { index++; render(); }
+    });
+
+    render();
+  </script>
+</body>
+</html>

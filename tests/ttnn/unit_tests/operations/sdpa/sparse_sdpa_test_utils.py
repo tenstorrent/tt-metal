@@ -15,7 +15,7 @@ import ttnn
 MASKED_INDEX = 0xFFFFFFFF  # sentinel: a masked slot (scores -inf, contributes 0); a contiguous tail per row
 
 
-def sparse_mla(q, kvpe, indices, scale, v_dim):
+def sparse_mla(q, kvpe, indices, scale, v_dim, attention_sink=None):
     """Torch reference for the sparse-MLA prefill op. Absorbed MQA over the top-k selected latents named by
     `indices` (one shared latent KV head); masking is baked into `indices` (index == MASKED_INDEX scores -inf).
     Dims are derived from the inputs; V is the leading `v_dim` cols of the K_DIM-wide kvpe.
@@ -33,7 +33,12 @@ def sparse_mla(q, kvpe, indices, scale, v_dim):
     )
     scores = torch.einsum("bhsd,bsjd->bhsj", q, sel) * scale  # full-K_DIM scores [B,H,S,k]
     scores = scores.masked_fill(masked.view(B, 1, S, k), float("-inf"))
-    probs = scores.softmax(dim=-1, dtype=torch.float32).to(q.dtype)
+    if attention_sink is not None:
+        assert attention_sink.shape == (1, H, 1, 1)
+        sink = (attention_sink * scale).expand(B, H, S, 1)
+        probs = torch.cat([scores, sink], dim=-1).softmax(dim=-1, dtype=torch.float32)[..., :-1].to(q.dtype)
+    else:
+        probs = scores.softmax(dim=-1, dtype=torch.float32).to(q.dtype)
     return torch.einsum("bhsj,bsjd->bhsd", probs, sel[..., :v_dim])  # weighted sum of V views [B,H,S,v_dim]
 
 
@@ -50,8 +55,10 @@ def make_inputs(H, S, T, TOPK, k_dim, n_valid_fn, seed=0):
     return q, kv, indices
 
 
-def golden(q, kv, indices, scale, v_dim):
-    return sparse_mla(q, kv[0, 0], indices.to(torch.int64), scale, v_dim)  # [1,H,S,v_dim]
+def golden(q, kv, indices, scale, v_dim, attention_sink=None):
+    return sparse_mla(
+        q, kv[0, 0], indices.to(torch.int64), scale, v_dim, attention_sink=attention_sink
+    )  # [1,H,S,v_dim]
 
 
 def to_dev(t, device, dtype):
@@ -70,6 +77,7 @@ def run_op(
     compute_kernel_config=None,
     kv_dtype=ttnn.bfloat16,
     q_dtype=ttnn.bfloat16,
+    attention_sink=None,
 ):
     q_host = q.to(torch.bfloat16) if q_dtype == ttnn.bfloat16 else q.to(torch.float32)
     tt_q = to_dev(q_host, device, q_dtype)  # ttnn quantizes float -> fp8 when q_dtype is fp8_e4m3
@@ -80,6 +88,15 @@ def run_op(
     kv_format = (
         ttnn.transformer.SparseKVFormat.BF16 if kv_dtype == ttnn.bfloat16 else ttnn.transformer.SparseKVFormat.FP8_E4M3
     )
+    tt_sink = None
+    if attention_sink is not None:
+        tt_sink = ttnn.from_torch(
+            attention_sink.to(torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
     tt_out = ttnn.transformer.sparse_sdpa(
         tt_q,
         tt_kv,
@@ -89,6 +106,7 @@ def run_op(
         scale=scale,
         k_chunk_size=k_chunk_size,
         compute_kernel_config=compute_kernel_config,
+        attention_sink=tt_sink,
     )
     # Output dtype matches q. fp8 tensors can't be converted directly with to_torch, so typecast to bf16.
     if tt_out.dtype == ttnn.fp8_e4m3:

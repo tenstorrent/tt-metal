@@ -123,6 +123,8 @@ void kernel_main() {
     constexpr uint32_t cb_k_scale_bcast = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::CB_K_SCALE_BCAST);
     constexpr uint32_t cb_k_latent_tile = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::CB_K_LATENT_TILE);
     constexpr uint32_t cb_k_rope_tile = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::CB_K_ROPE_TILE);
+    constexpr bool use_attention_sink = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::USE_ATTENTION_SINK) != 0;
+    constexpr uint32_t cb_attention_sink = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::CB_ATTENTION_SINK);
 
     constexpr uint32_t qsb =
         get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::QUERY_SUBBLOCK);  // query tile-rows per DST group
@@ -139,6 +141,7 @@ void kernel_main() {
     CircularBuffer neginf_cb(cb_neginf), mask_part_cb(cb_mask_part), corr_cb(cb_corr);
     CircularBuffer k_rm_cb(cb_k_rm), scale_bcast_cb(cb_k_scale_bcast);
     CircularBuffer latent_tile_cb(cb_k_latent_tile), rope_tile_cb(cb_k_rope_tile);
+    CircularBuffer attention_sink_cb(cb_attention_sink);
 
     const uint32_t tok_count = get_arg_val<uint32_t>(1);
 
@@ -489,6 +492,52 @@ void kernel_main() {
             out_cur.push_back(Sqt * vDHt);
 
             if (is_last) {
+                if constexpr (use_attention_sink) {
+                    // Treat the per-head sink as one final virtual K chunk. Its tile has one finite logit in
+                    // column 0 of each head row and -inf elsewhere, so it contributes to the denominator but
+                    // has no V/numerator contribution. Keep the update in the same unscaled-max domain as the
+                    // regular sparse flash loop for numerical stability when the sink exceeds every QK score.
+                    attention_sink_cb.wait_front(Sqt);  // persistent; reused by every token assigned to this core
+
+                    // new_max = max(real_max, sink), written into the otherwise-empty max_prev ping-pong CB.
+                    for (uint32_t qg = 0; qg < q_groups; ++qg) {
+                        max_prev.reserve_back(qsb);
+                        configure_single_tile_pack(max_prev.get_cb_id());
+                        reduce_c_row_group<cb_attention_sink, cb_scale, 1>(
+                            max_prev.get_cb_id(),
+                            max_cur.get_cb_id(),
+                            /*row_group_index=*/qg,
+                            /*do_eltwise_max=*/true,
+                            qsb,
+                            /*reduce_cols=*/1);
+                        max_prev.push_back(qsb);
+                    }
+
+                    // correction = exp((real_max - new_max) * scale). It rescales both the accumulated
+                    // numerator and every partial-denominator tile into the new maximum's domain.
+                    exp_packthread_tile_init<EXP_APPROX_MODE>();
+                    for (uint32_t qg = 0; qg < q_groups; ++qg) {
+                        corr_cb.reserve_back(qsb);
+                        sub_exp_first_col_blocks<false, scale_fp32>(
+                            max_cur.get_cb_id(), max_prev.get_cb_id(), cb_corr, qg, qsb);
+                        corr_cb.push_back(qsb);
+                    }
+
+                    // sink_sum = exp((sink - new_max) * scale), leaving the persistent sink tiles unchanged.
+                    // sum_prev is empty after the final real chunk and serves as the transient sink denominator.
+                    sub_exp_block_bcast_cols_inplace<
+                        cb_attention_sink,
+                        Sqt,
+                        scale_fp32,
+                        /*write_result_inplace=*/false>(max_prev.get_cb_id(), sum_prev.get_cb_id(), /*cols=*/1);
+
+                    mul_tiles_bcast_cols_inplace(sum_cur.get_cb_id(), cb_corr, Sqt);
+                    mul_block_bcast_cols_inplace<Sqt, vDHt>(out_cur.get_cb_id(), cb_corr);
+                    add_block_inplace(sum_cur.get_cb_id(), sum_prev.get_cb_id(), Sqt);
+
+                    max_prev.pop_front(Sqt);
+                }
+
                 // Finalize: row-sum (matmul vs col-identity) -> recip -> out *= 1/sum -> cb_out_im.
                 // normalize_row_streaming is DST-safe for any sbh, so it does all Sqt rows in one call.
                 normalize_row_streaming<

@@ -1,0 +1,532 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Tracing from zero — an interactive explanation</title>
+  <style>
+    :root {
+      --ink: #152238;
+      --muted: #667389;
+      --paper: #f5f7fb;
+      --white: #fff;
+      --cpu: #ff9f43;
+      --device: #16a085;
+      --trace: #6c5ce7;
+      --data: #0984e3;
+      --memory: #e84393;
+      --line: #dce2eb;
+      --good: #00a878;
+      --shadow: 0 18px 55px rgba(25, 42, 70, .12);
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--ink);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background:
+        radial-gradient(circle at 5% 5%, rgba(255,159,67,.16), transparent 24%),
+        radial-gradient(circle at 95% 90%, rgba(22,160,133,.16), transparent 25%),
+        var(--paper);
+    }
+
+    button { font: inherit; }
+    .app { width: min(1240px, calc(100% - 28px)); margin: auto; padding: 25px 0 32px; }
+
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: end;
+      gap: 20px;
+      margin-bottom: 15px;
+    }
+
+    .kicker {
+      margin: 0 0 6px;
+      color: var(--trace);
+      font-size: 12px;
+      font-weight: 850;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 0;
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: clamp(34px, 5vw, 58px);
+      font-weight: 500;
+      line-height: 1;
+      letter-spacing: -.035em;
+    }
+
+    .counter { color: var(--muted); font-size: 14px; font-variant-numeric: tabular-nums; }
+    .progress { height: 5px; margin-bottom: 15px; overflow: hidden; border-radius: 9px; background: #e2e6ed; }
+    .progress div { height: 100%; width: 0; background: linear-gradient(90deg, var(--cpu), var(--trace), var(--device)); transition: width .3s; }
+
+    main {
+      display: grid;
+      grid-template-columns: minmax(290px, .7fr) minmax(610px, 1.55fr);
+      min-height: 675px;
+      overflow: hidden;
+      border: 1px solid rgba(21,34,56,.09);
+      border-radius: 25px;
+      background: rgba(255,255,255,.83);
+      box-shadow: var(--shadow);
+    }
+
+    .narrative {
+      display: flex;
+      flex-direction: column;
+      padding: 32px;
+      border-right: 1px solid var(--line);
+    }
+
+    .chapter {
+      align-self: flex-start;
+      padding: 6px 10px;
+      border-radius: 999px;
+      color: #fff;
+      background: var(--trace);
+      font-size: 11px;
+      font-weight: 850;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+
+    h2 {
+      margin: 21px 0 12px;
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: clamp(29px, 3.1vw, 42px);
+      font-weight: 500;
+      line-height: 1.04;
+      letter-spacing: -.02em;
+    }
+
+    #explanation { margin: 0; color: #49576d; font-size: 16px; line-height: 1.58; }
+    .takeaway {
+      margin-top: 21px;
+      padding: 14px 15px;
+      border-left: 4px solid var(--trace);
+      border-radius: 0 12px 12px 0;
+      background: rgba(108,92,231,.08);
+      color: #474176;
+      font-size: 14px;
+      line-height: 1.45;
+    }
+
+    .controls { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; margin-top: auto; padding-top: 24px; }
+    .controls button {
+      min-height: 48px;
+      border: 0;
+      border-radius: 13px;
+      cursor: pointer;
+      font-weight: 800;
+      transition: transform .15s, opacity .15s;
+    }
+    .controls button:hover:not(:disabled) { transform: translateY(-2px); }
+    .controls button:disabled { cursor: default; opacity: .32; }
+    #prev { color: var(--ink); background: #e9edf3; }
+    #next { color: #fff; background: var(--ink); }
+    .keys { margin-top: 10px; color: var(--muted); text-align: center; font-size: 11px; }
+
+    .scene {
+      position: relative;
+      padding: 25px;
+      background:
+        linear-gradient(rgba(21,34,56,.028) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(21,34,56,.028) 1px, transparent 1px);
+      background-size: 26px 26px;
+    }
+
+    .topology { display: grid; grid-template-columns: 1fr 54px 1.45fr; gap: 12px; min-height: 440px; }
+    .box {
+      position: relative;
+      min-width: 0;
+      padding: 18px;
+      border: 2px solid transparent;
+      border-radius: 19px;
+      background: rgba(255,255,255,.94);
+      transition: opacity .25s, transform .25s, box-shadow .25s;
+    }
+    .box.cpu { border-top: 6px solid var(--cpu); }
+    .box.accelerator { border-top: 6px solid var(--device); }
+    .box.focus { transform: translateY(-3px); box-shadow: 0 13px 28px rgba(21,34,56,.12); }
+    .box.dim { opacity: .43; }
+    .box-title { display: flex; justify-content: space-between; align-items: center; font-weight: 850; }
+    .light { width: 9px; height: 9px; border-radius: 50%; background: #bbc4d1; }
+    .cpu.focus .light { background: var(--cpu); animation: pulse 1s infinite; }
+    .accelerator.focus .light { background: var(--device); animation: pulse 1s infinite; }
+    @keyframes pulse { 50% { box-shadow: 0 0 0 7px rgba(22,160,133,.12); } }
+
+    .lane { position: relative; display: grid; place-items: center; }
+    .wire { width: 100%; height: 3px; background: #cbd2dc; }
+    .packet {
+      position: absolute;
+      left: 0;
+      width: 18px;
+      height: 18px;
+      border: 3px solid white;
+      border-radius: 50%;
+      background: var(--cpu);
+      box-shadow: 0 3px 9px rgba(21,34,56,.25);
+      animation: travel 1.1s ease-in-out infinite;
+    }
+    .packet.replay { background: var(--trace); }
+    .packet.off { display: none; }
+    @keyframes travel { from { left: -3px; } to { left: calc(100% - 15px); } }
+
+    .label { margin: 16px 0 7px; color: var(--muted); font-size: 10px; font-weight: 850; letter-spacing: .09em; text-transform: uppercase; }
+    .commands { display: flex; flex-direction: column; gap: 7px; }
+    .command {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 38px;
+      padding: 7px 9px;
+      border: 1px solid #e0e5ec;
+      border-radius: 10px;
+      background: white;
+      font-size: 12px;
+      opacity: 0;
+      transform: translateY(6px);
+      animation: appear .25s forwards;
+    }
+    .command.current { border-color: var(--device); box-shadow: 0 0 0 3px rgba(22,160,133,.1); }
+    .command.purple { color: #4e43a6; border-color: #c9c2fb; background: #f5f3ff; }
+    @keyframes appear { to { opacity: 1; transform: none; } }
+    .badge { display: grid; place-items: center; flex: 0 0 22px; height: 22px; border-radius: 7px; color: white; background: var(--ink); font-size: 10px; font-weight: 850; }
+
+    .numbers { display: flex; flex-wrap: wrap; gap: 7px; min-height: 42px; }
+    .number {
+      display: grid;
+      place-items: center;
+      width: 39px;
+      height: 39px;
+      border: 2px solid rgba(9,132,227,.2);
+      border-radius: 11px;
+      color: #075d9c;
+      background: rgba(9,132,227,.09);
+      font-weight: 850;
+      transition: .25s;
+    }
+
+    .memory-map { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; }
+    .memory {
+      min-height: 69px;
+      padding: 10px;
+      border: 1px solid #e0e5ec;
+      border-radius: 11px;
+      background: #f8fafc;
+      font-size: 10px;
+    }
+    .memory b { display: block; margin-top: 4px; color: var(--memory); font-size: 13px; }
+    .memory.trace-memory { border-color: rgba(108,92,231,.35); background: rgba(108,92,231,.06); }
+    .memory.trace-memory b { color: var(--trace); }
+
+    .trace-detail {
+      margin-top: 11px;
+      padding: 11px;
+      border: 1px dashed rgba(108,92,231,.5);
+      border-radius: 11px;
+      color: #4d448b;
+      background: rgba(108,92,231,.06);
+      font: 10px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace;
+      opacity: 0;
+      transform: scale(.97);
+      transition: .25s;
+    }
+    .trace-detail.show { opacity: 1; transform: none; }
+
+    .bottom {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-top: 14px;
+    }
+    .fact {
+      min-height: 119px;
+      padding: 14px;
+      border-radius: 14px;
+      background: #f3f5f9;
+    }
+    .fact-title { color: var(--muted); font-size: 10px; font-weight: 850; letter-spacing: .08em; text-transform: uppercase; }
+    .fact-value { margin-top: 7px; font-weight: 800; line-height: 1.3; }
+    .meter { display: flex; height: 17px; margin-top: 13px; overflow: hidden; border-radius: 6px; background: #dfe4ec; }
+    .meter span { display: grid; place-items: center; width: 0; overflow: hidden; color: white; font-size: 8px; font-weight: 850; transition: width .4s; }
+    .setup { background: var(--cpu); color: #563000 !important; }
+    .compute { background: var(--device); }
+    .saved { background: var(--trace); }
+
+    .formula { font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .green { color: var(--good); }
+
+    @media (max-width: 900px) {
+      main { grid-template-columns: 1fr; }
+      .narrative { border-right: 0; border-bottom: 1px solid var(--line); }
+      .scene { min-height: 650px; }
+    }
+    @media (max-width: 610px) {
+      header { align-items: start; flex-direction: column; }
+      main { border-radius: 18px; }
+      .narrative { padding: 24px; }
+      .scene { padding: 18px; }
+      .topology { grid-template-columns: 1fr; }
+      .lane { min-height: 32px; transform: rotate(90deg); }
+      .bottom { grid-template-columns: 1fr; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <div>
+        <p class="kicker">Interactive explanation · simple number machine</p>
+        <h1>What is a trace?</h1>
+      </div>
+      <div class="counter" id="counter">Step 1 of 23</div>
+    </header>
+    <div class="progress"><div id="progress"></div></div>
+
+    <main>
+      <section class="narrative" aria-live="polite">
+        <span class="chapter" id="chapter"></span>
+        <h2 id="title"></h2>
+        <p id="explanation"></p>
+        <div class="takeaway" id="takeaway"></div>
+        <div class="controls">
+          <button id="prev" type="button">← Previous</button>
+          <button id="next" type="button">Next →</button>
+        </div>
+        <div class="keys">Keyboard: ← Previous · Next →</div>
+      </section>
+
+      <section class="scene" aria-label="Interactive host and accelerator diagram">
+        <div class="topology">
+          <div class="box cpu" id="cpuBox">
+            <div class="box-title">Host CPU <span class="light"></span></div>
+            <div class="label">Host actions</div>
+            <div class="commands" id="hostCommands"></div>
+          </div>
+
+          <div class="lane"><div class="wire"></div><div class="packet off" id="packet"></div></div>
+
+          <div class="box accelerator" id="deviceBox">
+            <div class="box-title">Accelerator <span class="light"></span></div>
+            <div class="label">Input buffer at address 0x1000</div>
+            <div class="numbers" id="inputNumbers"></div>
+            <div class="label">Device command queue</div>
+            <div class="commands" id="deviceCommands"></div>
+            <div class="memory-map">
+              <div class="memory">Data memory<b id="dataMemory">input + output</b></div>
+              <div class="memory trace-memory">Reserved trace memory<b id="traceMemory">empty</b></div>
+            </div>
+            <div class="trace-detail" id="traceDetail"></div>
+          </div>
+        </div>
+
+        <div class="bottom">
+          <div class="fact">
+            <div class="fact-title">Current calculation</div>
+            <div class="fact-value formula" id="calculation"></div>
+          </div>
+          <div class="fact">
+            <div class="fact-title">Illustrative time per batch</div>
+            <div class="meter"><span class="setup" id="setupTime">SETUP</span><span class="compute" id="computeTime">COMPUTE</span><span class="saved" id="savedTime">SAVED</span></div>
+            <div class="fact-value" id="timeLabel"></div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const normalTime = [30, 55, 0];
+    const replayTime = [5, 55, 25];
+    const S = (chapter, title, explanation, takeaway, options = {}) => ({
+      chapter, title, explanation, takeaway,
+      host: [], device: [], input: [1, 2, 3, 4], calc: "Waiting…", focus: "cpu",
+      packet: false, packetType: "normal", trace: "empty", time: normalTime,
+      ...options
+    });
+
+    const steps = [
+      S("Start here", "Two computers, different jobs",
+        "The host CPU runs your Python/C++ program. The accelerator runs the heavy numerical work. The host must tell the accelerator what to do.",
+        "The host is the manager; the accelerator is the fast worker.",
+        {host:["Run application"], device:["Waiting for work"], calc:"No calculation yet", focus:"cpu"}),
+
+      S("Our example", "A tiny three-step recipe",
+        "For each batch of four numbers, we want the accelerator to add 1, multiply by 2, and subtract 3.",
+        "Recipe: add 1 → multiply by 2 → subtract 3.",
+        {host:["Define three operations"], device:["Waiting for commands"], calc:"([1,2,3,4] + 1) × 2 − 3", focus:"cpu"}),
+
+      S("Normal execution", "First, allocate buffers",
+        "The host asks the device to reserve memory for input and output. Our input buffer receives a stable device address: 0x1000.",
+        "Device commands use addresses, not variable names such as “my_numbers.”",
+        {host:["Allocate input @ 0x1000", "Allocate output @ 0x2000"], device:["Reserve data memory"], calc:"Input lives at device address 0x1000", focus:"both", packet:true}),
+
+      S("Normal execution", "Copy the first input",
+        "The host copies [1, 2, 3, 4] into the input buffer at 0x1000.",
+        "The values are now in device memory, ready for kernels to use.",
+        {host:["Copy [1,2,3,4] → 0x1000"], device:["Input buffer updated"], calc:"0x1000 = [1, 2, 3, 4]", focus:"both", packet:true}),
+
+      S("Normal execution", "Prepare command 1",
+        "The host prepares the first kernel launch. It specifies the add-one kernel, the input/output addresses, data size, and execution settings.",
+        "Even a simple kernel needs a complete launch description.",
+        {host:["Build command: ADD_ONE", "Set input address = 0x1000", "Set element count = 4"], device:["Waiting…"], calc:"Prepare: x ← x + 1", focus:"cpu"}),
+
+      S("Normal execution", "Dispatch and run command 1",
+        "The host sends the launch command. The accelerator executes ADD_ONE, changing the numbers to [2, 3, 4, 5].",
+        "One host dispatch caused one device kernel execution.",
+        {host:["Dispatch ADD_ONE"], device:["Run ADD_ONE"], input:[2,3,4,5], calc:"[1,2,3,4] + 1 = [2,3,4,5]", focus:"both", packet:true}),
+
+      S("Normal execution", "Repeat for command 2",
+        "The host now prepares and dispatches MULTIPLY_BY_2. The accelerator produces [4, 6, 8, 10].",
+        "The CPU repeats setup work even though this sequence will be used again later.",
+        {host:["Build MULTIPLY_BY_2 command", "Dispatch command"], device:["✓ ADD_ONE", "Run MULTIPLY_BY_2"], input:[4,6,8,10], calc:"[2,3,4,5] × 2 = [4,6,8,10]", focus:"both", packet:true}),
+
+      S("Normal execution", "Repeat for command 3",
+        "The host prepares and dispatches SUBTRACT_3. The final result is [1, 3, 5, 7].",
+        "The accelerator did the math; the host repeatedly described and delivered the work.",
+        {host:["Build SUBTRACT_3 command", "Dispatch command"], device:["✓ ADD_ONE", "✓ MULTIPLY_BY_2", "Run SUBTRACT_3"], input:[1,3,5,7], calc:"[4,6,8,10] − 3 = [1,3,5,7]", focus:"both", packet:true}),
+
+      S("Why trace?", "Now process another batch",
+        "A new batch [10, 20, 30, 40] needs exactly the same three-kernel recipe. Normally, the host builds and dispatches all three commands again.",
+        "New data; same execution structure.",
+        {host:["Copy new input", "Build command 1 again", "Build command 2 again", "Build command 3 again"], device:["Run same recipe again"], input:[10,20,30,40], calc:"([10,20,30,40] + 1) × 2 − 3", focus:"cpu", packet:true}),
+
+      S("Why trace?", "Small overhead repeats many times",
+        "For three kernels the overhead may look small. Real workloads can launch hundreds or thousands of kernels, and repeat that sequence many times.",
+        "Repeated preparation and dispatch can leave the accelerator waiting between commands.",
+        {host:["Prepare", "Dispatch", "Prepare", "Dispatch", "… many times"], device:["Run", "Wait", "Run", "Wait", "…"], calc:"Total time = host overhead + device work", focus:"both", packet:true}),
+
+      S("Capture", "Begin recording",
+        "The runtime enters capture mode. The host still launches the three kernels normally, but the device also records the command sequence.",
+        "Capture is one real execution plus recording.",
+        {host:["BEGIN CAPTURE", "Dispatch ADD_ONE", "Dispatch MULTIPLY_BY_2", "Dispatch SUBTRACT_3"], device:["Execute commands", "Record commands"], calc:"Capture recipe while processing a real batch", focus:"both", packet:true, trace:"recording"}),
+
+      S("Capture", "What exactly gets recorded?",
+        "The trace stores low-level commands: kernel launches, buffer addresses, arguments, ordering, and synchronization instructions. It does not store the meaning of your Python code.",
+        "A trace is a command list—not source code, not model weights, and not previous outputs.",
+        {host:["Normal launch descriptions"], device:["Record launch details", "Record dependencies", "Record buffer addresses"], calc:"Commands refer to input @ 0x1000", focus:"device", trace:"recording"}),
+
+      S("Storage", "Where is the trace stored?",
+        "In this simplified accelerator view, recorded commands are copied into a reserved trace region in device-accessible memory. The host receives a small trace ID, such as #42.",
+        "Large command list: device trace memory. Small handle: host runtime.",
+        {host:["Keep trace ID = 42"], device:["Store command list in trace region"], calc:"Host handle #42 → device trace command list", focus:"device", trace:"stored"}),
+
+      S("Storage", "Data and trace are separate",
+        "The input values live in the data buffer at 0x1000. The recorded commands live in reserved trace memory. The trace merely refers to the data-buffer address.",
+        "This separation allows new values to use the same recorded recipe.",
+        {host:["Trace ID #42"], device:["Data buffer @ 0x1000", "Trace commands in trace region"], calc:"Trace says: read whatever is currently at 0x1000", focus:"device", trace:"stored"}),
+
+      S("Replay", "Put new data at the same address",
+        "The host copies [10, 20, 30, 40] into the existing input buffer. Its address remains 0x1000, so the recorded commands still point to it.",
+        "The address stays fixed; the values change.",
+        {host:["Copy [10,20,30,40] → 0x1000"], device:["Update input buffer only"], input:[10,20,30,40], calc:"0x1000 now contains [10,20,30,40]", focus:"both", packet:true, trace:"stored", time:replayTime}),
+
+      S("Replay", "Send one small request",
+        "The host does not rebuild three launch descriptions. It sends one request: replay trace #42.",
+        "One replay request replaces many repeated host dispatches.",
+        {host:["REPLAY #42"], device:["Locate trace #42"], input:[10,20,30,40], calc:"Replay request → stored command list", focus:"both", packet:true, packetType:"replay", trace:"stored", time:replayTime}),
+
+      S("Replay", "The device follows its recording",
+        "The device reads the stored list and launches ADD_ONE, MULTIPLY_BY_2, and SUBTRACT_3 in the recorded order.",
+        "The math is unchanged. Only command delivery is faster.",
+        {host:["CPU can do other work"], device:["① ADD_ONE", "② MULTIPLY_BY_2", "③ SUBTRACT_3"], input:[19,41,61,81], calc:"([10,20,30,40] + 1) × 2 − 3 = [19,41,61,81]", focus:"device", trace:"replaying", time:replayTime}),
+
+      S("Important rule", "Addresses must stay valid",
+        "The recorded commands refer to address 0x1000. If the next input is allocated somewhere else, the trace still reads 0x1000 unless the trace system explicitly supports patching it.",
+        "Typical pattern: reuse stable input/output buffers and replace their contents.",
+        {host:["Keep buffer allocation alive", "Overwrite contents—not address"], device:["Trace still reads @ 0x1000"], calc:"Stable address ✓   moved buffer ✕", focus:"both", trace:"stored", time:replayTime}),
+
+      S("Important rule", "Captured commands are fixed",
+        "Suppose MULTIPLY_BY_2 was captured with the value 2 embedded in its command. Replaying the trace will continue multiplying by 2.",
+        "Changing ordinary host variables does not rewrite an already captured trace.",
+        {host:["Host variable multiplier = 5"], device:["Captured argument remains 2"], calc:"Replay still computes x × 2", focus:"device", trace:"stored", time:replayTime}),
+
+      S("Dynamic values", "Use a device-side parameter buffer",
+        "If a value must change each replay, place it in a small device buffer and capture a command that reads that buffer. Update the buffer before replay.",
+        "Fixed command: read parameter. Dynamic data: current parameter value.",
+        {host:["Write multiplier 5 → parameter buffer", "REPLAY #42"], device:["Read multiplier from buffer", "Use current value = 5"], calc:"Captured instruction: x × parameter[0]", focus:"both", packet:true, packetType:"replay", trace:"dynamic", time:replayTime}),
+
+      S("Why it helps", "Remove repeated control overhead",
+        "The accelerator performs the same three kernels, but the host now updates data and sends one replay request instead of preparing three launches.",
+        "Tracing saves orchestration time; it does not eliminate numerical work.",
+        {host:["Update input", "One replay request"], device:["Execute all three kernels"], calc:"Normal: 30 setup + 55 compute\nReplay: 5 setup + 55 compute", focus:"both", packet:true, packetType:"replay", trace:"stored", time:replayTime}),
+
+      S("When to use it", "Tracing rewards repetition",
+        "Tracing works best when the same operation graph runs many times with stable shapes and buffer addresses. Capture has an upfront cost, so one-off or constantly changing workloads benefit less.",
+        "Best fit: stable structure, many repetitions, meaningful host-dispatch overhead.",
+        {host:["Capture once", "Replay batch 2", "Replay batch 3", "Replay batch 4", "…"], device:["Reuse same stored recipe"], calc:"More replays → capture cost is amortized", focus:"both", trace:"stored", time:replayTime}),
+
+      S("Summary", "The whole concept in six moves",
+        "Allocate stable buffers, run once in capture mode, store the resulting command list in trace memory, update input/parameter buffers, send a trace ID, and let the device replay the list.",
+        "Trace = reusable device command recording. Replay = execute that recording again.",
+        {host:["1 Allocate", "2 Capture", "4 Update data", "5 Send trace ID"], device:["3 Store commands", "6 Replay commands"], input:[19,41,61,81], calc:"CAPTURE ONCE → UPDATE DATA → REPLAY MANY TIMES", focus:"both", packet:true, packetType:"replay", trace:"stored", time:replayTime})
+    ];
+
+    let index = 0;
+    const $ = id => document.getElementById(id);
+
+    function commandList(items, purple = false) {
+      return items.map((item, i) => `<div class="command ${purple ? "purple" : ""} ${i === items.length - 1 ? "current" : ""}" style="animation-delay:${i * 45}ms"><span class="badge">${i + 1}</span><span>${item}</span></div>`).join("");
+    }
+
+    function render() {
+      const s = steps[index];
+      $("chapter").textContent = s.chapter;
+      $("title").textContent = s.title;
+      $("explanation").textContent = s.explanation;
+      $("takeaway").textContent = s.takeaway;
+      $("counter").textContent = `Step ${index + 1} of ${steps.length}`;
+      $("progress").style.width = `${(index + 1) / steps.length * 100}%`;
+      $("hostCommands").innerHTML = commandList(s.host);
+      $("deviceCommands").innerHTML = commandList(s.device, s.trace !== "empty");
+      $("inputNumbers").innerHTML = s.input.map(n => `<div class="number">${n}</div>`).join("");
+      $("calculation").innerHTML = s.calc.replace(/\n/g, "<br>");
+
+      $("cpuBox").className = "box cpu";
+      $("deviceBox").className = "box accelerator";
+      if (s.focus === "cpu") { $("cpuBox").classList.add("focus"); $("deviceBox").classList.add("dim"); }
+      if (s.focus === "device") { $("deviceBox").classList.add("focus"); $("cpuBox").classList.add("dim"); }
+      if (s.focus === "both") { $("cpuBox").classList.add("focus"); $("deviceBox").classList.add("focus"); }
+
+      $("packet").className = `packet ${s.packet ? "" : "off"} ${s.packetType === "replay" ? "replay" : ""}`;
+      const traceText = {empty:"empty", recording:"recording…", stored:"trace #42 stored", replaying:"reading trace #42", dynamic:"trace #42 + parameter read"};
+      $("traceMemory").textContent = traceText[s.trace];
+      $("dataMemory").textContent = s.trace === "dynamic" ? "input + output + parameter" : "input + output";
+      const detail = $("traceDetail");
+      detail.className = `trace-detail ${s.trace !== "empty" ? "show" : ""}`;
+      detail.innerHTML = s.trace === "dynamic"
+        ? "TRACE #42<br>launch ADD_ONE(input@0x1000)<br>read parameter@0x3000<br>launch MULTIPLY(input, parameter)<br>launch SUBTRACT_3(input)"
+        : "TRACE #42<br>launch ADD_ONE(input@0x1000)<br>launch MULTIPLY_BY_2(input@0x1000)<br>launch SUBTRACT_3(input@0x1000)";
+
+      const [setup, compute, saved] = s.time;
+      $("setupTime").style.width = `${setup}%`;
+      $("computeTime").style.width = `${compute}%`;
+      $("savedTime").style.width = `${saved}%`;
+      $("timeLabel").innerHTML = saved
+        ? `<span class="green">Replay:</span> less setup, same compute`
+        : `Normal: setup + useful compute`;
+
+      $("prev").disabled = index === 0;
+      $("next").disabled = index === steps.length - 1;
+      $("next").textContent = index === steps.length - 2 ? "Finish →" : "Next →";
+    }
+
+    $("prev").addEventListener("click", () => { if (index > 0) { index--; render(); } });
+    $("next").addEventListener("click", () => { if (index < steps.length - 1) { index++; render(); } });
+    addEventListener("keydown", e => {
+      if (e.key === "ArrowLeft" && index > 0) { index--; render(); }
+      if (e.key === "ArrowRight" && index < steps.length - 1) { index++; render(); }
+    });
+    render();
+  </script>
+</body>
+</html>

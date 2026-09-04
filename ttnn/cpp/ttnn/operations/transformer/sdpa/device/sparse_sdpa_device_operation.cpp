@@ -62,6 +62,22 @@ void validate_non_hashed(const SparseSDPAParams& attrs, const SparseSDPAInputs& 
     } else {
         TT_FATAL(B == 1, "kv batch must be 1 unless cache_batch_idx is set (got {})", B);
     }
+
+    if (t.attention_sink.has_value()) {
+        const auto& sink = t.attention_sink.value();
+        TT_FATAL(sink.storage_type() == StorageType::DEVICE, "sparse_sdpa: attention_sink must be on device");
+        TT_FATAL(sink.buffer() != nullptr, "sparse_sdpa: attention_sink must be allocated");
+        TT_FATAL(sink.device() == q.device(), "sparse_sdpa: attention_sink must be on the same device as q");
+        TT_FATAL(sink.dtype() == DataType::BFLOAT16, "sparse_sdpa: attention_sink must be BF16");
+        TT_FATAL(sink.layout() == Layout::TILE, "sparse_sdpa: attention_sink must use TILE layout");
+        TT_FATAL(sink.memory_config().buffer_type() == BufferType::DRAM, "sparse_sdpa: attention_sink must be in DRAM");
+        TT_FATAL(!sink.memory_config().is_sharded(), "sparse_sdpa: attention_sink must be interleaved");
+        const auto ss = sink.logical_shape();
+        TT_FATAL(
+            ss.rank() == 4 && ss[0] == 1 && ss[1] == q.logical_shape()[1] && ss[2] == 1 && ss[3] == 1,
+            "sparse_sdpa: attention_sink must have logical shape [1,H,1,1] matching q heads (got {})",
+            ss);
+    }
 }
 }  // namespace
 
@@ -249,6 +265,7 @@ ttsl::hash::hash_t SparseSDPAOperation::compute_program_hash(const SparseSDPAPar
         attrs.has_block_cyclic(),
         attrs.block_cyclic.has_value() ? attrs.block_cyclic->sp : 0u,
         attrs.block_cyclic.has_value() ? attrs.block_cyclic->chunk_local : 0u,
+        t.attention_sink.has_value(),
         t.indices.logical_shape(),
         t.indices.dtype());
 }
@@ -262,6 +279,7 @@ Tensor sparse_sdpa(
     transformer::SparseKVFormat kv_format,
     uint32_t k_chunk_size,
     ttnn::DeviceComputeKernelConfig compute_kernel_config,
+    const std::optional<Tensor>& attention_sink,
     std::optional<uint32_t> cache_batch_idx,
     std::optional<BlockCyclicLayout> block_cyclic) {
     using OperationType = ttnn::prim::SparseSDPAOperation;
@@ -279,6 +297,7 @@ Tensor sparse_sdpa(
             .q = q,
             .kv = kv,
             .indices = indices,
+            .attention_sink = attention_sink,
         });
 }
 

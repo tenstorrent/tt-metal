@@ -134,22 +134,106 @@ def test_sparse_sdpa_bf16_multi_query_tile(device):
 
 
 @run_for_blackhole()
+@pytest.mark.parametrize("H", [64, 128], ids=["h64", "h128"])
+def test_sparse_sdpa_attention_sink(device, H):
+    """Per-head sinks span both faces and multiple head tiles; mixed valid counts exercise final-chunk masking."""
+    S, T, TOPK, kc = 32, 128, 64, 32
+    q, kv, indices = make_inputs(H, S, T, TOPK, K_DIM, lambda s: 1 + (s * 7) % TOPK, seed=63)
+    scale = K_DIM**-0.5
+    # DeepSeek stores sigma in the final scaled-logit domain. sparse_sdpa, like dense SDPA, scales its sink input.
+    sigma = torch.linspace(-3.0, 3.0, H).reshape(1, H, 1, 1)
+    sink_unscaled = sigma / scale
+
+    actual, _ = run_op(
+        q,
+        kv,
+        indices,
+        device,
+        k_chunk_size=kc,
+        v_dim=V_DIM,
+        attention_sink=sink_unscaled,
+    )
+    expected = golden(q, kv, indices, scale, V_DIM, attention_sink=sink_unscaled)
+    score = pcc(actual, expected)
+    rmse = torch.sqrt(torch.mean((actual.float() - expected.float()) ** 2)).item()
+    assert score >= 0.999, f"attention-sink sparse SDPA PCC {score:.5f}, RMSE {rmse:.6f}"
+    assert rmse < 0.02, f"attention-sink sparse SDPA RMSE {rmse:.6f}"
+
+
+@run_for_blackhole()
+def test_sparse_sdpa_attention_sink_addr_change_on_hit(device):
+    """A fresh sink buffer must be patched into an existing cached program rather than freezing its first address."""
+    H, S, T, TOPK, kc = 32, 32, 128, 32, 32
+    q, kv, indices = make_inputs(H, S, T, TOPK, K_DIM, lambda s: TOPK, seed=64)
+    scale = K_DIM**-0.5
+    tt_q = to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16)
+    tt_kv = to_dev(kv.to(torch.bfloat16), device, ttnn.bfloat16)
+    tt_idx = to_dev(indices.to(torch.int32), device, ttnn.uint32)
+    device.clear_program_cache()
+    keep_alive = []
+    actual_outputs = []
+
+    for sigma_value in (-2.0, 4.0):
+        sink_unscaled = torch.full((1, H, 1, 1), sigma_value / scale)
+        tt_sink = ttnn.from_torch(
+            sink_unscaled.to(torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        keep_alive.append(tt_sink)
+        out = ttnn.transformer.sparse_sdpa(
+            tt_q,
+            tt_kv,
+            tt_idx,
+            V_DIM,
+            kv_format=BF16_KV,
+            scale=scale,
+            k_chunk_size=kc,
+            attention_sink=tt_sink,
+        )
+        expected = golden(q, kv, indices, scale, V_DIM, attention_sink=sink_unscaled)
+        actual = ttnn.to_torch(out)
+        actual_outputs.append(actual)
+        score = pcc(actual, expected)
+        rmse = torch.sqrt(torch.mean((actual.float() - expected.float()) ** 2)).item()
+        assert score >= 0.999, f"attention-sink cache-hit PCC {score:.5f} (sigma={sigma_value})"
+        assert rmse < 0.02, f"attention-sink cache-hit RMSE {rmse:.6f} (sigma={sigma_value})"
+
+    assert device.num_program_cache_entries() == 1, "changing only the sink buffer address must not recompile"
+    assert not torch.allclose(
+        actual_outputs[0], actual_outputs[1], atol=0.02, rtol=0.02
+    ), "distinct sinks had no effect"
+
+
+@run_for_blackhole()
 def test_sparse_sdpa_scaled_fp8_kv_multi_query_tile(device):
-    """GLM geometry: two 32-head query tiles share each gathered packed-KV chunk."""
+    """GLM geometry: two head tiles share each packed-KV chunk and carry distinct per-head sinks."""
     H, S, T, TOPK, kc = 64, 64, 128, 64, 32
     q, _, indices = make_inputs(H, S, T, TOPK, K_DIM, lambda s: TOPK, seed=61)
     tt_packed, reconstructed = make_scaled_kv_cache(device, 1, T, seed=62, round_scale=True)
+    scale = K_DIM**-0.5
+    sink_unscaled = torch.linspace(-2.0, 2.0, H).reshape(1, H, 1, 1) / scale
+    tt_sink = ttnn.from_torch(
+        sink_unscaled.to(torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
     out = ttnn.transformer.sparse_sdpa(
         to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16),
         tt_packed,
         to_dev(indices.to(torch.int32), device, ttnn.uint32),
         V_DIM,
         kv_format=SCALED_FP8_KV,
-        scale=K_DIM**-0.5,
+        scale=scale,
         k_chunk_size=kc,
+        attention_sink=tt_sink,
     )
 
-    expected = golden(q, reconstructed, indices, K_DIM**-0.5, V_DIM)
+    expected = golden(q, reconstructed, indices, scale, V_DIM, attention_sink=sink_unscaled)
     actual = ttnn.to_torch(out)
     score = pcc(actual, expected)
     tile_scores = [pcc(actual[:, start : start + 32], expected[:, start : start + 32]) for start in (0, 32)]

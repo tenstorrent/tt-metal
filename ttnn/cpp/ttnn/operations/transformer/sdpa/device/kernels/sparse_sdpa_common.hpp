@@ -82,6 +82,8 @@ enum : uint32_t {
     PACKED_ROW_BYTES,
     CB_KREQ,
     CB_KACK,
+    USE_ATTENTION_SINK,
+    CB_ATTENTION_SINK,
     END,
 };
 }  // namespace reader_ct_arg
@@ -144,6 +146,8 @@ enum : uint32_t {
     CB_K_SCALE_BCAST,
     CB_K_LATENT_TILE,
     CB_K_ROPE_TILE,
+    USE_ATTENTION_SINK,
+    CB_ATTENTION_SINK,
     MATH_APPROX_MODE,
     QUERY_SUBBLOCK,
     PACKED_ROW_BYTES,

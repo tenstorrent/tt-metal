@@ -51,6 +51,10 @@ enum class SparseKVFormat : uint8_t {
 // as [v_dim FP8 latent bytes | v_dim/128 FP32 scales | K_DIM-v_dim BF16 RoPE values]. For the DSA 512+64 geometry this
 // is 656 logical bytes. Sparse gather writes each selected packed row once into a shared L1 allocation; compute reads
 // aliased FP8-latent and BF16-RoPE views and applies the scales while tilizing.
+//
+// attention_sink: optional BF16 TILE DRAM tensor [1,H,1,1], one logit per query head. It has the same
+// unscaled-score-domain semantics as dense SDPA: the kernel applies `scale` to both QK and the sink. A model whose
+// learned sink sigma is already a final softmax logit should therefore pass sigma / scale.
 ttnn::Tensor sparse_sdpa(
     const ttnn::Tensor& q,
     const ttnn::Tensor& kv,
@@ -60,6 +64,7 @@ ttnn::Tensor sparse_sdpa(
     std::optional<float> scale = std::nullopt,
     uint32_t k_chunk_size = 128,
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+    const std::optional<ttnn::Tensor>& attention_sink = std::nullopt,
     std::optional<uint32_t> cache_batch_idx = std::nullopt,
     std::optional<uint32_t> block_cyclic_sp_axis = std::nullopt,
     std::optional<uint32_t> block_cyclic_chunk_local = std::nullopt);

@@ -58,6 +58,7 @@ Tensor sparse_sdpa(
     transformer::SparseKVFormat kv_format,
     uint32_t k_chunk_size,
     ttnn::DeviceComputeKernelConfig compute_kernel_config,
+    const std::optional<Tensor>& attention_sink = std::nullopt,
     std::optional<uint32_t> cache_batch_idx = std::nullopt,
     std::optional<BlockCyclicLayout> block_cyclic = std::nullopt);
 
