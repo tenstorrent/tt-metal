@@ -1761,13 +1761,13 @@ GlobalSemaphore CreateGlobalSemaphore(
     return GlobalSemaphore(device, std::move(cores), initial_value, buffer_type);
 }
 
-std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config) {
+std::shared_ptr<Buffer> CreateBuffer(const BufferConfig& config) {
     return Buffer::create(config.device, config.size, config.page_size, config.buffer_type);
 }
-std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config, DeviceAddr address) {
+std::shared_ptr<Buffer> CreateBuffer(const BufferConfig& config, DeviceAddr address) {
     return Buffer::create(config.device, address, config.size, config.page_size, config.buffer_type);
 }
-std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config, SubDeviceId sub_device_id) {
+std::shared_ptr<Buffer> CreateBuffer(const BufferConfig& config, SubDeviceId sub_device_id) {
     return Buffer::create(
         config.device, config.size, config.page_size, config.buffer_type, std::nullopt, std::nullopt, sub_device_id);
 }
