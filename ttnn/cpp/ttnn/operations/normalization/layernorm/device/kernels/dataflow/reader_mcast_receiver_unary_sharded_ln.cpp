@@ -8,6 +8,7 @@
 #include "layernorm_dataflow_utils.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
 
 namespace df = norm::layernorm::device::kernels::dataflow;
 
@@ -40,31 +41,42 @@ void kernel_main() {
     // ---------------------------------------------------------------------------
     // Compile-time arguments
     // ---------------------------------------------------------------------------
-    constexpr uint32_t num_blocks = get_compile_time_arg_val(2);
-    constexpr uint32_t block_h = get_compile_time_arg_val(3);
-    const bool is_all_to_all_worker = get_compile_time_arg_val(4) == 1;
-    constexpr uint32_t num_all_to_all_workers = get_compile_time_arg_val(5);
-    constexpr uint32_t num_tiles_per_worker = get_compile_time_arg_val(6);
-    constexpr uint32_t num_tiles_per_worker_last = get_compile_time_arg_val(7);
-    constexpr bool row_major = (bool)get_compile_time_arg_val(8);
-    constexpr uint32_t num_x = get_compile_time_arg_val(9);
-    constexpr uint32_t num_y = get_compile_time_arg_val(10);
-    constexpr bool use_two_stage_reduce = (bool)get_compile_time_arg_val(11);
-    constexpr uint32_t num_blocks_first_stage = get_compile_time_arg_val(12);
-    constexpr uint32_t num_blocks_second_stage = get_compile_time_arg_val(13);
-    constexpr bool rms_norm = get_compile_time_arg_val(15) == 1;
-    constexpr bool use_welford = get_compile_time_arg_val(16) == 1;
+    constexpr uint32_t all_to_all_worker_done_semaphore_id = get_compile_time_arg_val(0);
+    constexpr uint32_t num_blocks = get_compile_time_arg_val(1);
+    constexpr uint32_t block_h = get_compile_time_arg_val(2);
+    constexpr bool is_all_to_all_worker = get_compile_time_arg_val(3) == 1;
+    constexpr uint32_t num_all_to_all_workers = get_compile_time_arg_val(4);
+    constexpr uint32_t num_tiles_per_worker = get_compile_time_arg_val(5);
+    constexpr uint32_t num_tiles_per_worker_last = get_compile_time_arg_val(6);
+    constexpr bool row_major = (bool)get_compile_time_arg_val(7);
+    constexpr uint32_t num_x = get_compile_time_arg_val(8);
+    constexpr uint32_t num_y = get_compile_time_arg_val(9);
+    constexpr bool use_two_stage_reduce = (bool)get_compile_time_arg_val(10);
+    constexpr uint32_t num_blocks_first_stage = get_compile_time_arg_val(11);
+    constexpr uint32_t num_blocks_second_stage = get_compile_time_arg_val(12);
+    constexpr uint32_t first_stage_reduce_done_semaphore_id = get_compile_time_arg_val(13);
+    constexpr bool rms_norm = get_compile_time_arg_val(14) == 1;
+    constexpr bool use_welford = get_compile_time_arg_val(15) == 1;
 
     // ---------------------------------------------------------------------------
     // Runtime arguments
     // ---------------------------------------------------------------------------
-    const bool is_last_all_to_all_worker = get_arg_val<uint32_t>(0);
-    const uint32_t all_to_all_tile_offset_bytes = get_arg_val<uint32_t>(1);
-    const bool is_second_stage_reader = get_arg_val<uint32_t>(2);
-    const uint32_t start_x = get_arg_val<uint32_t>(3);
-    const uint32_t start_y = get_arg_val<uint32_t>(4);
-    df::L1Ptr in0_remote_noc_x = (df::L1Ptr)(get_arg_addr(5));
-    df::L1Ptr in0_remote_noc_y = (df::L1Ptr)(get_arg_addr(5 + num_x));
+    bool is_last_all_to_all_worker = false;
+    uint32_t all_to_all_tile_offset_bytes = 0;
+    bool is_second_stage_reader = false;
+    uint32_t start_x = 0;
+    uint32_t start_y = 0;
+    df::L1Ptr remote_noc_x = nullptr;
+    df::L1Ptr remote_noc_y = nullptr;
+    if constexpr (is_all_to_all_worker) {
+        is_last_all_to_all_worker = get_arg_val<uint32_t>(0);
+        all_to_all_tile_offset_bytes = get_arg_val<uint32_t>(1);
+        is_second_stage_reader = get_arg_val<uint32_t>(2);
+        start_x = get_arg_val<uint32_t>(3);
+        start_y = get_arg_val<uint32_t>(4);
+        remote_noc_x = (df::L1Ptr)(get_arg_addr(5));
+        remote_noc_y = (df::L1Ptr)(get_arg_addr(5 + num_x));
+    }
 
     // ---------------------------------------------------------------------------
     // CB definitions
@@ -82,11 +94,20 @@ void kernel_main() {
     // ---------------------------------------------------------------------------
     // Set up experimental API objects
     // ---------------------------------------------------------------------------
+    constexpr uint32_t operation_ct_args_end = 16;
+    constexpr uint32_t operation_rt_args_end = is_all_to_all_worker ? 5 + num_x + num_y : 0;
+    constexpr dataflow_kernel_lib::McastArgs<operation_ct_args_end, operation_rt_args_end> reduction_ready_mcast_args;
+    constexpr dataflow_kernel_lib::McastArgs<
+        reduction_ready_mcast_args.next_compile_time_args_offset(),
+        reduction_ready_mcast_args.next_runtime_args_offset()>
+        final_statistics_mcast_args;
+
     Noc noc;
-    Semaphore<> reduce_receiver_sem(get_compile_time_arg_val(0));
-    Semaphore<> reduce_sender_sem(get_compile_time_arg_val(1));
-    Semaphore<> reduce_second_stage_sem(get_compile_time_arg_val(14));
+    Semaphore<> all_to_all_worker_done_sem(all_to_all_worker_done_semaphore_id);
+    Semaphore<> first_stage_reduce_done_sem(first_stage_reduce_done_semaphore_id);
     UnicastEndpoint remote_ep;
+    auto reduction_ready_pipe = reduction_ready_mcast_args.optional_receiver(noc);
+    auto final_statistics_pipe = final_statistics_mcast_args.optional_receiver(noc);
 
     const uint32_t num_tiles_to_read = is_last_all_to_all_worker ? num_tiles_per_worker_last : num_tiles_per_worker;
     DataflowBuffer dfb_partial_size_ref(rms_norm ? dfb_ex_partial2 : dfb_ex_partial);
@@ -105,18 +126,16 @@ void kernel_main() {
                 num_remote_noc_addrs_second_stage>(
                 remote_coords_first_stage,
                 remote_coords_second_stage,
-                in0_remote_noc_x,
-                in0_remote_noc_y,
+                remote_noc_x,
+                remote_noc_y,
                 start_x,
                 start_y,
                 num_x,
                 num_y);
         } else {
             df::compute_single_stage_noc_addrs<row_major, num_remote_noc_addrs_first_stage>(
-                remote_coords_first_stage, in0_remote_noc_x, in0_remote_noc_y, start_x, start_y, num_x, num_y);
+                remote_coords_first_stage, remote_noc_x, remote_noc_y, start_x, start_y, num_x, num_y);
         }
-    } else {
-        remote_coords_first_stage[0] = {in0_remote_noc_x[0], in0_remote_noc_y[0]};
     }
 
     // ============================================================================
@@ -129,7 +148,8 @@ void kernel_main() {
                                              const uint32_t dfb_ex_id,
                                              const uint32_t dfb_ex_global_id,
                                              const uint32_t dfb_reduce_first_stage_id,
-                                             const uint32_t num_tiles_scaler) __attribute__((always_inline)) {
+                                             const uint32_t num_tiles_scaler,
+                                             const uint32_t first_statistics_round) __attribute__((always_inline)) {
         DataflowBuffer dfb_partial_obj(dfb_partial_id);
         DataflowBuffer dfb_external_obj(dfb_external_id);
         DataflowBuffer dfb_ex_obj(dfb_ex_id);
@@ -142,9 +162,9 @@ void kernel_main() {
 
         dfb_partial_obj.wait_front(block_h * num_tiles_scaler);
 
-        reduce_sender_sem.set(INVALID);
-        reduce_receiver_sem.up(noc, in0_remote_noc_x[0], in0_remote_noc_y[0], 1);
-        reduce_sender_sem.wait(VALID);
+        if constexpr (num_blocks > 1) {
+            reduction_ready_pipe->receive_signal();
+        }
 
         // ============================================================================
         // Combine partial results
@@ -187,8 +207,8 @@ void kernel_main() {
                 if constexpr (use_two_stage_reduce) {
                     if (is_second_stage_reader) {
                         if (i == 0) {
-                            reduce_second_stage_sem.wait(num_blocks_second_stage - 1);
-                            reduce_second_stage_sem.set(0);
+                            first_stage_reduce_done_sem.wait(num_blocks_second_stage - 1);
+                            first_stage_reduce_done_sem.set(0);
                         }
 
                         dfb_external_obj.reserve_back((num_blocks_second_stage - 1) * num_tiles_scaler);
@@ -223,15 +243,15 @@ void kernel_main() {
             if constexpr (use_two_stage_reduce) {
                 if (is_second_stage_reader) {
                     dfb_ex_obj.wait_front(num_tiles_to_read * num_tiles_scaler);
-                    reduce_receiver_sem.up(noc, in0_remote_noc_x[0], in0_remote_noc_y[0], 1);
+                    all_to_all_worker_done_sem.up(noc, remote_noc_x[0], remote_noc_y[0], 1);
                 } else {
                     dfb_reduce_first_stage_obj.wait_front(num_tiles_to_read * num_tiles_scaler);
-                    reduce_second_stage_sem.up(
+                    first_stage_reduce_done_sem.up(
                         noc, remote_coords_second_stage[0].x, remote_coords_second_stage[0].y, 1);
                 }
             } else {
                 dfb_ex_obj.wait_front(num_tiles_to_read * num_tiles_scaler);
-                reduce_receiver_sem.up(noc, in0_remote_noc_x[0], in0_remote_noc_y[0], 1);
+                all_to_all_worker_done_sem.up(noc, remote_noc_x[0], remote_noc_y[0], 1);
             }
         }
 
@@ -241,7 +261,7 @@ void kernel_main() {
         for (uint32_t block = 0; block < num_all_to_all_workers; ++block) {
             uint32_t num_tiles = block == num_all_to_all_workers - 1 ? num_tiles_per_worker_last : num_tiles_per_worker;
             dfb_ex_global_obj.reserve_back(num_tiles * num_tiles_scaler);
-            reduce_sender_sem.wait_min(block + 2);
+            final_statistics_pipe->receive(first_statistics_round + block);
             dfb_ex_global_obj.push_back(num_tiles * num_tiles_scaler);
         }
 
@@ -253,10 +273,17 @@ void kernel_main() {
 
     if constexpr (!rms_norm) {
         // Welford processes 2 tiles at a time (mean and var)
-        global_reduce_receiver(dfb_ex_partial, dfb_ex_external, dfb_ex, dfb_ex_global, dfb_ex, use_welford ? 2 : 1);
+        global_reduce_receiver(dfb_ex_partial, dfb_ex_external, dfb_ex, dfb_ex_global, dfb_ex, use_welford ? 2 : 1, 0);
     }
 
     if constexpr (!use_welford) {
-        global_reduce_receiver(dfb_ex_partial2, dfb_ex_external2, dfb_ex2pe, dfb_ex_global, dfb_ex2, 1);
+        global_reduce_receiver(
+            dfb_ex_partial2,
+            dfb_ex_external2,
+            dfb_ex2pe,
+            dfb_ex_global,
+            dfb_ex2,
+            1,
+            rms_norm ? 0 : num_all_to_all_workers);
     }
 }

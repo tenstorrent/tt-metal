@@ -2,26 +2,24 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <stdint.h>
-#include "api/dataflow/dataflow_api.h"
-#include "hostdevcommon/common_values.hpp"
-#include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
 
-// split REDUCE across cores
 void kernel_main() {
-    constexpr uint32_t block_h = get_compile_time_arg_val(3);
-    constexpr bool rms_norm = get_compile_time_arg_val(15) == 1;
+    constexpr uint32_t block_h = get_compile_time_arg_val(2);
+    constexpr bool rms_norm = get_compile_time_arg_val(14) == 1;
 
-    constexpr uint32_t dfb_ex_global = tt::CBIndex::c_15;
+    constexpr uint32_t operation_ct_args_end = 16;
+    constexpr uint32_t operation_rt_args_end = 0;
+    constexpr dataflow_kernel_lib::McastArgs<operation_ct_args_end, operation_rt_args_end> final_statistics_mcast_args;
 
     constexpr uint32_t stats_tiles = rms_norm ? 1 : 2;
 
-    Semaphore<> reduce_sender_sem(get_compile_time_arg_val(1));
-    DataflowBuffer dfb_ex_global_obj(dfb_ex_global);
+    DataflowBuffer dfb_ex_global_obj(tt::CBIndex::c_15);
+    Noc noc;
+    auto final_statistics_pipe = final_statistics_mcast_args.receiver(noc);
 
-    reduce_sender_sem.set(INVALID);
     dfb_ex_global_obj.reserve_back(stats_tiles * block_h);
-    reduce_sender_sem.wait(VALID);
+    final_statistics_pipe.receive();
     dfb_ex_global_obj.push_back(stats_tiles * block_h);
 }
