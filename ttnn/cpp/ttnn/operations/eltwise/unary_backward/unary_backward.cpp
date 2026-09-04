@@ -273,10 +273,8 @@ std::vector<std::optional<Tensor>> pow_bw(
 
     Tensor result = ttnn::multiply(power_input, exponent, std::nullopt, output_mem_config);
     power_input.deallocate();
-    Tensor final_result = ttnn::multiply(result, grad, std::nullopt, output_mem_config);
+    input_grad = ttnn::multiply(result, grad, std::nullopt, output_mem_config, input_grad);
     result.deallocate();
-    // Handle negative inputs by returning infinity
-    where(ttnn::lez(input), std::numeric_limits<float>::infinity(), final_result, output_mem_config, input_grad);
     grad_tensor.emplace_back(input_grad);
     return grad_tensor;
 }
