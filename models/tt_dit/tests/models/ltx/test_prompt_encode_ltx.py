@@ -45,8 +45,30 @@ def _maxdiff(a: torch.Tensor, b: torch.Tensor) -> float:
     return (a.float() - b.float()).abs().max().item()
 
 
+def _ltx_checkpoint_cached(filename: str) -> bool:
+    """True if the LTX checkpoint is available -- a real local file (LTX_CHECKPOINT / flat
+    ~/.cache/ltx-checkpoints) OR already in the HF hub cache. os.path.exists on
+    default_ltx_checkpoint(...) alone always skips under HF_HOME CI, since a hub-resolved
+    checkpoint is returned as a "repo:file" ref, never a path (see
+    test_pipeline_ltx_distilled._ltx_checkpoint_cached)."""
+    ref = default_ltx_checkpoint(filename)
+    if os.path.exists(ref):
+        return True
+    if ":" in ref:  # "repo_id:filename" -> resolvable from the local hub cache without a network call
+        repo_id, fname = ref.split(":", 1)
+        from huggingface_hub import hf_hub_download
+        from huggingface_hub.utils import EntryNotFoundError, LocalEntryNotFoundError
+
+        try:
+            hf_hub_download(repo_id=repo_id, filename=fname, local_files_only=True)
+            return True
+        except (LocalEntryNotFoundError, EntryNotFoundError, FileNotFoundError):
+            return False
+    return False
+
+
 @pytest.mark.skipif(
-    not os.path.exists(default_ltx_checkpoint("ltx-2.3-22b-distilled-1.1.safetensors")),
+    not _ltx_checkpoint_cached("ltx-2.3-22b-distilled-1.1.safetensors"),
     reason="needs the LTX checkpoint (set LTX_CHECKPOINT to a local .safetensors)",
 )
 @pytest.mark.parametrize(
