@@ -93,6 +93,7 @@ SUITES=(
     matmul matmul_bias matmul_mcast matmul_transpose matmul_blocked dst32
     bmm_mcast
     custom_compute mcast_share rmsnorm rope attention attention_proj flash
+    mixed_geometry pass_order
     layer negative
 )
 [ $# -gt 0 ] && SUITES=("$@")
@@ -103,11 +104,19 @@ SUITES=(
 # slower than that -- binary is 29s and flash around 40 -- so the default is 120 with
 # overrides for the two that legitimately run long: layer sweeps eight configs in two
 # formats, and negative launches subprocesses that each open a device.
+# mixed_geometry runs its PRIMARY BODY here and not the full matrix: the sweep passes no
+# arguments, and its localising bodies are behind --matrix. That is the right default for a
+# sweep -- one body catches a regression, and the matrix says which half broke -- but it
+# means `python test_unified_mixed_geometry.py --matrix` is still the thing to run by hand
+# when the row form is what changed.
 TIMEOUT_DEFAULT="${TIMEOUT_DEFAULT:-120}"
 timeout_for() {
     case "$1" in
         layer) echo 600 ;;
         negative) echo 400 ;;
+        # pass_order builds sixteen programs -- eight bodies at two tile counts, and the two
+        # counts are the point of it -- so it is the longest suite here by a distance.
+        pass_order) echo 900 ;;
         *) echo "$TIMEOUT_DEFAULT" ;;
     esac
 }
