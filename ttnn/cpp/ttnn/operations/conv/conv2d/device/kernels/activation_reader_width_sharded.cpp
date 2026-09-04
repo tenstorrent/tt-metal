@@ -5,6 +5,9 @@
 #include <api/dataflow/dataflow_api.h>
 #include "conv_reader_common.hpp"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
+#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
+
+#include <optional>
 
 #define ENABLE_DEBUG 0
 
@@ -54,22 +57,19 @@ void kernel_main() {
     constexpr uint32_t num_input_cores = get_compile_time_arg_val(9);
     constexpr uint32_t act_num_blocks_h = get_compile_time_arg_val(10);
     constexpr uint32_t act_num_blocks_w = get_compile_time_arg_val(11);
-    Semaphore<> act_mcast_sender_sem(get_compile_time_arg_val(12));
-    Semaphore<> act_mcast_receiver_sem(get_compile_time_arg_val(13));
-    constexpr McastRect mcast_rect = {
-        get_compile_time_arg_val(14),
-        get_compile_time_arg_val(15),
-        get_compile_time_arg_val(16),
-        get_compile_time_arg_val(17)};
-    constexpr uint32_t act_mcast_sender_size_bytes = get_compile_time_arg_val(18);
-    constexpr uint32_t num_output_cores = get_compile_time_arg_val(19);
-    constexpr uint32_t num_reader_cores = get_compile_time_arg_val(20);
+    constexpr uint32_t act_mcast_sender_size_bytes = get_compile_time_arg_val(12);
+    constexpr uint32_t num_output_cores = get_compile_time_arg_val(13);
 
-    constexpr uint32_t cb_id_act = get_compile_time_arg_val(21);
-    constexpr uint32_t cb_id_sharded_act = get_compile_time_arg_val(22);
-    constexpr uint32_t cb_reader_indices = get_compile_time_arg_val(23);
-    constexpr uint32_t cb_id_act_row_major_bfloat16 = get_compile_time_arg_val(25);
-    constexpr uint32_t tilized_in0_cb_id = get_compile_time_arg_val(26);
+    constexpr uint32_t cb_id_act = get_compile_time_arg_val(15);
+    constexpr uint32_t cb_id_sharded_act = get_compile_time_arg_val(16);
+    constexpr uint32_t cb_reader_indices = get_compile_time_arg_val(17);
+    constexpr uint32_t cb_id_act_row_major_bfloat16 = get_compile_time_arg_val(19);
+    constexpr uint32_t tilized_in0_cb_id = get_compile_time_arg_val(20);
+    constexpr uint32_t operation_ct_args_end = 21;
+    constexpr dataflow_kernel_lib::McastArgs<operation_ct_args_end, 3> act_mcast_args;
+    constexpr uint32_t config_dram_addr_index = act_mcast_args.next_compile_time_args_offset();
+    constexpr uint32_t config_page_size_index = config_dram_addr_index + 1;
+    constexpr uint32_t config_tensor_args_index = config_page_size_index + 1;
 
     constexpr uint32_t num_mcast_cores = num_input_cores > num_output_cores ? num_input_cores : num_output_cores;
     uint32_t i = 0;  // Runtime arg index
@@ -82,13 +82,6 @@ void kernel_main() {
     // Num of cols of compute cores. (Total Cores, not active cores.)
     uint32_t num_cores_x = get_arg_val<uint32_t>(i);
     i += 1;
-
-    // X and Y lookup are independent.
-    // X Lookup table for translating logical to physical cores.
-    tt_l1_ptr uint32_t* act_mcast_x_lookup = (tt_l1_ptr uint32_t*)(get_arg_addr(i));
-    i += num_cores_x;
-    // Y lookup.
-    tt_l1_ptr uint32_t* act_mcast_y_lookup = (tt_l1_ptr uint32_t*)(get_arg_addr(i));
 
     // Equivalent to Core Index.
     uint32_t this_core_id = this_core_x + (num_cores_x * this_core_y);
@@ -105,23 +98,17 @@ void kernel_main() {
     DataflowBuffer sharded_act_dfb(cb_id_sharded_act);
     Noc noc;
 
-    load_config_tensor_if_in_dram<27, 28, 29, cb_reader_indices>(noc, reader_indices_dfb, 0);
+    auto act_send_pipe = act_mcast_args.optional_sender(noc);
+    auto act_recv_pipe = act_mcast_args.optional_receiver(noc);
+
+    load_config_tensor_if_in_dram<
+        config_dram_addr_index,
+        config_page_size_index,
+        config_tensor_args_index,
+        cb_reader_indices>(noc, reader_indices_dfb, 0);
 
     volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reader_indices_dfb.get_write_ptr());
-
-    // Experimental API multicast endpoint
-    MulticastEndpoint mcast_ep;
-    // Pre-built mcast destination; .addr is updated per mcast call
-    McastDst mcast_dst = {
-        .noc_x_start = mcast_rect.noc_x_start,
-        .noc_y_start = mcast_rect.noc_y_start,
-        .noc_x_end = mcast_rect.noc_x_end,
-        .noc_y_end = mcast_rect.noc_y_end,
-        .addr = 0};
-
-    // Set up remote VALID value
-    act_mcast_receiver_sem.set(VALID);
 
     // Compute is divided along the width to reduce the size of CBs.
     // Only a part of the width on each core is used in one block.
@@ -201,82 +188,25 @@ void kernel_main() {
 
             // Round robin self-mcast and receive tilized act matrix in cb_id_act
             // Compute should function like regular mm
-#ifndef SKIP_MCAST
-            for (uint32_t act_w_outer_i = 0; act_w_outer_i < num_input_cores; act_w_outer_i++) {
-                act_dfb.reserve_back(act_block_num_tiles);
-                if (act_w_outer_i == this_core_id) {
-                    // MCAST SENDER: send entire tilized input to other cores in column
-                    // wait until all act mcast destinations have atomically incremented the act semaphore_addr (i.e.
-                    // its value should be act_mcast_num_dests), then reset the semaphore_addr value back to zero for
-                    // the next block
+            if constexpr (act_mcast_args.active) {
+                for (uint32_t act_w_outer_i = 0; act_w_outer_i < num_input_cores; act_w_outer_i++) {
+                    act_dfb.reserve_back(act_block_num_tiles);
+                    if (act_mcast_args.should_send(act_w_outer_i)) {
+                        // compute tilizes and pops cb_id_act and pushes to tilized_in0_cb_id
+                        tilized_in0_dfb.wait_front(act_block_num_tiles);
 
-                    act_mcast_sender_sem.wait_min(num_mcast_cores - 1);
-                    act_mcast_sender_sem.set(0);
+                        act_send_pipe->send(
+                            tilized_in0_dfb.get_read_ptr(), act_dfb.get_write_ptr(), act_mcast_sender_size_bytes);
+                    } else {
+                        ASSERT(act_mcast_args.can_receive());
+                        act_recv_pipe->receive(act_w_outer_i);
+                    }
 
-                    act_mcast_receiver_sem.set(INVALID);
+                    act_dfb.push_back(act_block_num_tiles);
 
-                    // compute tilizes and pops cb_id_act and pushes to tilized_in0_cb_id
-                    tilized_in0_dfb.wait_front(act_block_num_tiles);
-
-                    // Now we have the block in the CB address, we can mcast to dests!
-                    // A bare DataflowBuffer NOC source already resolves to get_read_ptr() (see
-                    // noc_traits_t<DataflowBuffer>).
-                    auto tilized_src = tilized_in0_dfb;
-
-                    // Multicast tilized activations to all reader cores (including self)
-                    mcast_dst.addr = act_dfb.get_write_ptr();
-                    noc.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
-                        tilized_src,
-                        mcast_ep,
-                        act_mcast_sender_size_bytes,
-                        num_reader_cores,
-                        {.offset_bytes = 0},
-                        mcast_dst,
-                        true);
-
-                    // Note: no need for write barrier, since these two multicasts are done on the same noc id and same
-                    // vc even though cmd bufs are different Also, this only works because we are setting VCs statically
-                    // (using NOC_CMD_STATIC_VC).
-
-                    // Multicast VALID flag to destinations for receiver semaphore.
-                    // The old code used a separate scratch L1 address as the multicast source
-                    // and wait(VALID) on the loopback as a fence. The new Semaphore::set_multicast
-                    // API uses the semaphore itself as both source and destination, so we can't
-                    // clear the local value and wait for loopback — use write barrier instead.
-                    act_mcast_receiver_sem.set(VALID);
-                    act_mcast_receiver_sem.set_multicast<NocOptions::MCAST_INCL_SRC>(
-                        noc,
-                        mcast_rect.noc_x_start,
-                        mcast_rect.noc_y_start,
-                        mcast_rect.noc_x_end,
-                        mcast_rect.noc_y_end,
-                        num_reader_cores);
-                    noc.async_write_barrier();
-                } else {
-                    // MCAST RECEIVER: receive entire tilized input from sender core
-                    // Set act semaphore value to INVALID
-                    act_mcast_receiver_sem.set(INVALID);
-
-                    // Compute sender's logical coordinates from iteration index
-                    uint32_t sender_logical_x = act_w_outer_i % num_cores_x;
-                    uint32_t sender_logical_y = act_w_outer_i / num_cores_x;
-
-                    // Lookup physical coordinates
-                    uint32_t sender_x = act_mcast_x_lookup[sender_logical_x];
-                    uint32_t sender_y = act_mcast_y_lookup[sender_logical_y];
-
-                    // Atomic increment source core counter
-                    act_mcast_sender_sem.up(noc, sender_x, sender_y, 1);
-
-                    // wait on act semaphore value to become VALID (set by mcast sender after it multicasts data)
-                    act_mcast_receiver_sem.wait(VALID);
-                }
-
-                act_dfb.push_back(act_block_num_tiles);
-
-            }  // num_input_cores
-            tilized_in0_dfb.pop_front(act_block_num_tiles);
-#endif
+                }  // num_input_cores
+                tilized_in0_dfb.pop_front(act_block_num_tiles);
+            }
         }
     }
     noc.async_read_barrier();
