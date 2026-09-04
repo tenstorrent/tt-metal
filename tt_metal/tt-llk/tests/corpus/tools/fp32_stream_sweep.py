@@ -41,6 +41,9 @@ def run_band_leg(args, node, start, count, out_sha_file, log_file):
         RUNNER_TEMP=args.runner_temp,
         PYTHONUNBUFFERED="1",
         LANEMK_TILE_DIM=args.tile_dim,
+        # Map --chip to the physical device (per-chip parallelism: TT_VISIBLE_DEVICES=n +
+        # flock /tmp/tt-dev-n.lock lets N orchestrators run concurrently on N chips).
+        TT_VISIBLE_DEVICES=str(args.chip),
         LANEMK_STREAM=f"{start},{count},{out_sha_file}",
     )
     inner = (
@@ -77,10 +80,58 @@ def main():
     ap.add_argument("--out", required=True)
     ap.add_argument("--start-bit", type=lambda s: int(s, 0), default=0)
     ap.add_argument("--total", type=lambda s: int(s, 0), default=TWO32)
+    ap.add_argument(
+        "--idmap",
+        help="optional op->sem/hand .text identity map; gates before streaming",
+    )
     args = ap.parse_args()
 
-    out = Path(args.out)
+    out = Path(args.out).resolve()  # absolute: run_band_leg runs pytest with cwd=farm
     (out / "bands").mkdir(parents=True, exist_ok=True)
+
+    # OBJECT-IDENTITY GATE (optional but required for a bookable verdict): the two legs must
+    # be the certified pin-59 kernels. Verify each ELF's .text against the recorded map and
+    # sem != hand; refuse otherwise. .text is farm-path-dependent so the map is in-farm.
+    if args.idmap:
+        import subprocess as _sp
+
+        here = Path(__file__).resolve().parent
+        root = (
+            Path(args.runner_temp) / "tt-llk-build/sources/eltwise_unary_sfpu_test.cpp"
+        )
+        row = None
+        for line in open(args.idmap):
+            p = line.rstrip("\n").split("\t")
+            if p and p[0] == args.op:
+                row = p
+                break
+        if not row or len(row) < 5:
+            (out / f"{args.op}-VERDICT.txt").write_text(
+                f"OP={args.op} VERDICT=REFUSED-IDENTITY(no-idmap-row)\n"
+            )
+            print(f"OP={args.op} REFUSED-IDENTITY no-idmap-row", flush=True)
+            return
+        sv, ss, hv, hs = row[1], row[2], row[3], row[4]
+
+        def _text(v):
+            return _sp.run(
+                [
+                    args.venv,
+                    str(here / "elf_text_sha.py"),
+                    str(root / v / "elf/math.elf"),
+                ],
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+
+        sa, ha = _text(sv), _text(hv)
+        if sa != ss or ha != hs or sa == ha:
+            reason = "sem==hand" if sa == ha else "text-mismatch"
+            (out / f"{args.op}-VERDICT.txt").write_text(
+                f"OP={args.op} VERDICT=REFUSED-IDENTITY({reason})\n"
+            )
+            print(f"OP={args.op} REFUSED-IDENTITY {reason}", flush=True)
+            return
     band = 1 << args.band_bits
     n_bands = (args.total + band - 1) // band
     ledger = out / f"{args.op}-STREAM-LEDGER.tsv"

@@ -55,11 +55,22 @@ python3 fp32_stream_sweep.py --op sign --sem-node '<sem>' --hand-node '<hand>' \
 # -> <evdir>/sign-VERDICT.txt : BIT-EXACT-ALL-INPUTS (covered==2^32) or DIVERGENT+witness bands
 ```
 
-## Galaxy fan-out (all ops)
+## Galaxy fan-out (all ops) — ONE Slurm job = ONE galaxy = ONE op
 Stage the tree (with the hook) + the prebuilt shared ELF build to `/data`, then on the
-exabox login node: `lanemk_fleet.sh <ops.tsv> <root> <build> <venv> <llk_home> <pydir>
-<worker.sh> <idmap> [max_hosts] [band_bits]`. `ops.tsv` = op⇥sem_node⇥hand_node; `idmap`
-from `build_identity_gate.sh`. Verdicts land in `<root>/out/<op>/VERDICT` + `LEDGER.tsv`.
+exabox login node set `OPS_TSV IDMAP BUILD VENV LLK_HOME PYDIR OUT` and run
+`lanemk_submit.sh`. It submits one job per op lacking a verdict, each running
+`lanemk_run_op.sh <op>` — object-identity gate → stream the full 2^32 (resume-safe from
+cached band SHAs) → write `<OUT>/<op>/<op>-VERDICT.txt` → **exit, which frees the galaxy**.
+The loop repeats until every op has a verdict; Slurm is the refill and a dead job only
+costs a resubmit. No work-stealing, no claims dir, no supervisor, no held-idle nodes.
+`ops.tsv` = op⇥sem_node⇥hand_node; `idmap` from `build_identity_gate.sh`.
+
+> Design lesson (why this shape): an earlier work-stealing fleet with a central supervisor
+> leaked idle galaxies (a worker that ran out of ops left its node HELD until the whole
+> sweep ended) and abandoned ops (a crashed worker left its claim behind, so its op was
+> never re-stolen). One-op-per-job run-to-completion has neither failure mode by
+> construction: a job owns exactly one op and one node, and releases the node the instant
+> it finishes. Prefer it; do not reintroduce claims/steal/supervise machinery.
 
 ## Measured (BH silicon)
 ~2.5M patterns/s per chip ⇒ **~27.7 min/leg, ~55 min/op** full 2^32 on ONE chip (chunk size
