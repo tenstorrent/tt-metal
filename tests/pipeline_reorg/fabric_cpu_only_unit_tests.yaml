@@ -135,3 +135,17 @@
   team: scaleout
   arch: wormhole_b0
   owner_id: U08RRAU5E15 # Ridvan Song
+
+- id: fabric-cpu-bh-heterogeneous
+  name: fabric cpu unit tests (bh-heterogeneous)
+  cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-heterogeneous
+  skus:
+    cpu_medium:
+      # Heterogeneous (mixed-shape) mesh graphs: the 2-branch mesh-per-stage router pipeline (69 meshes /
+      # 352 chips = 11 galaxies) on the 36-host SC36 revC subtorus aisleD mock, plus the unpinned llama_8b
+      # 4-galaxy 7-mesh ring on the four SC4 single-pod mocks. The 36-host multi-mesh placement solve
+      # dominates wall-clock; cpu_medium is ~4x slower than local.
+      timeout: 50
+  team: scaleout
+  arch: wormhole_b0
+  owner_id: U08RRAU5E15 # Ridvan Song

@@ -1607,9 +1607,9 @@ TEST_F(PhysicalGroupingDescriptorSP4Tests, ValidatePreformedGroups_Sp4BhGalaxyMe
         const auto* mesh_grouping = find_mesh_by_name("4x2_Mesh");
         ASSERT_NE(mesh_grouping, nullptr) << "4x2_Mesh grouping not found";
 
-        auto asic_ids = pgd.find_any_in_psd(*mesh_grouping, psd);
+        auto placements = pgd.find_any_in_psd(*mesh_grouping, psd);
 
-        EXPECT_FALSE(asic_ids.empty())
+        EXPECT_FALSE(placements.empty())
             << "Expected validation to pass: 4x2_Mesh grouping should map to mock cluster PSD";
     }
 
@@ -1618,9 +1618,9 @@ TEST_F(PhysicalGroupingDescriptorSP4Tests, ValidatePreformedGroups_Sp4BhGalaxyMe
         const auto* mesh_grouping = find_mesh_by_name("4x4_Mesh");
         ASSERT_NE(mesh_grouping, nullptr) << "4x4_Mesh grouping not found";
 
-        auto asic_ids = pgd.find_any_in_psd(*mesh_grouping, psd);
+        auto placements = pgd.find_any_in_psd(*mesh_grouping, psd);
 
-        EXPECT_FALSE(asic_ids.empty())
+        EXPECT_FALSE(placements.empty())
             << "Expected validation to pass: 4x4_Mesh grouping should map to mock cluster PSD";
     }
 
@@ -1629,9 +1629,9 @@ TEST_F(PhysicalGroupingDescriptorSP4Tests, ValidatePreformedGroups_Sp4BhGalaxyMe
         const auto* mesh_grouping = find_mesh_by_name("2x8_Mesh");
         ASSERT_NE(mesh_grouping, nullptr) << "2x8_Mesh grouping not found";
 
-        auto asic_ids = pgd.find_any_in_psd(*mesh_grouping, psd);
+        auto placements = pgd.find_any_in_psd(*mesh_grouping, psd);
 
-        EXPECT_FALSE(asic_ids.empty())
+        EXPECT_FALSE(placements.empty())
             << "Expected validation to pass: 2x8_Mesh grouping should map to mock cluster PSD";
     }
 
@@ -1640,9 +1640,9 @@ TEST_F(PhysicalGroupingDescriptorSP4Tests, ValidatePreformedGroups_Sp4BhGalaxyMe
         const auto* mesh_grouping = find_mesh_by_name("4x8_Mesh");
         ASSERT_NE(mesh_grouping, nullptr) << "4x8_Mesh grouping not found";
 
-        auto asic_ids = pgd.find_any_in_psd(*mesh_grouping, psd);
+        auto placements = pgd.find_any_in_psd(*mesh_grouping, psd);
 
-        EXPECT_FALSE(asic_ids.empty())
+        EXPECT_FALSE(placements.empty())
             << "Expected validation to pass: 4x8_Mesh grouping should map to mock cluster PSD";
     }
 
@@ -1652,9 +1652,10 @@ TEST_F(PhysicalGroupingDescriptorSP4Tests, ValidatePreformedGroups_Sp4BhGalaxyMe
         ASSERT_FALSE(hosts_groupings.empty()) << "HOSTS grouping not found";
         const auto& hosts_grouping = hosts_groupings[0];
 
-        auto asic_ids = pgd.find_any_in_psd(hosts_grouping, psd);
+        auto placements = pgd.find_any_in_psd(hosts_grouping, psd);
 
-        EXPECT_FALSE(asic_ids.empty()) << "Expected validation to pass: HOSTS grouping should map to mock cluster PSD";
+        EXPECT_FALSE(placements.empty())
+            << "Expected validation to pass: HOSTS grouping should map to mock cluster PSD";
     }
 }
 
@@ -1673,9 +1674,9 @@ TEST_F(PhysicalGroupingDescriptorSP4Tests, ValidatePreformedGroups_Sp4BhGalaxyQu
         ASSERT_FALSE(hosts_groupings.empty()) << "galaxy_hosts grouping not found";
         const auto& hosts_grouping = hosts_groupings[0];
 
-        auto asic_ids = pgd.find_any_in_psd(hosts_grouping, psd);
+        auto placements = pgd.find_any_in_psd(hosts_grouping, psd);
 
-        EXPECT_FALSE(asic_ids.empty())
+        EXPECT_FALSE(placements.empty())
             << "Expected validation to pass: galaxy_hosts grouping should map to mock cluster PSD";
     }
 
@@ -1685,9 +1686,9 @@ TEST_F(PhysicalGroupingDescriptorSP4Tests, ValidatePreformedGroups_Sp4BhGalaxyQu
         ASSERT_FALSE(mesh_groupings.empty()) << "4x32_Mesh grouping not found";
         const auto& mesh_grouping = mesh_groupings[0];
 
-        auto asic_ids = pgd.find_any_in_psd(mesh_grouping, psd);
+        auto placements = pgd.find_any_in_psd(mesh_grouping, psd);
 
-        EXPECT_FALSE(asic_ids.empty())
+        EXPECT_FALSE(placements.empty())
             << "Expected validation to pass: 4x32_Mesh (32x4 device layout) should map to mock cluster PSD";
     }
 
@@ -1695,6 +1696,7 @@ TEST_F(PhysicalGroupingDescriptorSP4Tests, ValidatePreformedGroups_Sp4BhGalaxyQu
         auto mesh_groupings = pgd.get_groupings_by_name("4x32_Mesh");
         ASSERT_FALSE(mesh_groupings.empty()) << "4x32_Mesh grouping not found";
 
+        // TODO(plan 3 §8(a)): rewrite these find_all_in_psd tests onto solve_adjacency_guided_placement.
         auto asic_ids = pgd.find_all_in_psd(mesh_groupings, psd);
 
         EXPECT_EQ(asic_ids.size(), 4u)
@@ -1829,10 +1831,10 @@ TEST_F(PhysicalGroupingDescriptorSP4Tests, ValidateGroupingWithPsd_PodAndSuperpo
     const auto& pod_grouping = pod_groupings[0];
 
     // POD groupings reference meshes, but should flatten properly and match the PSD structure
-    auto pod_asic_ids = pgd.find_any_in_psd(pod_grouping, psd);
+    auto pod_placements = pgd.find_any_in_psd(pod_grouping, psd);
 
     // Expect it to pass - POD level grouping should validate successfully
-    EXPECT_FALSE(pod_asic_ids.empty())
+    EXPECT_FALSE(pod_placements.empty())
         << "Expected validation to pass: POD level grouping should validate against mock cluster PSD";
 
     // Test SUPERPOD level grouping - should fail during mesh building (all_to_all connection type)
@@ -2564,6 +2566,7 @@ TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_SinglePod4x4LineLi
     EXPECT_TRUE(found_split_host) << "Expected 4x4_SplitHost grouping to be committed alongside 4x4_Mesh";
 
     const auto& committed_groupings = valid_groupings.at("MESH").at("M0");
+    // TODO(plan 3 §8(a)): rewrite onto solve_adjacency_guided_placement when find_all_in_psd is deleted.
     const auto placements = pgd.find_all_in_psd(committed_groupings, psd);
     ASSERT_FALSE(placements.empty()) << "Should find at least one PSD placement for the 4x4 mesh";
 
