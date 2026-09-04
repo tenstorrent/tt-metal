@@ -16,10 +16,11 @@
 
 namespace tt::tt_fabric {
 
-// Source-rooted reverse trees for 2D action-map multicast: T(root) is the union over every destination of
-// the canonical route from root along one axis. Where that union is an arborescence, a worker can
-// encode a multicast by walking the edge list once from the leaves inward, setting a parent's output
-// when its subtree holds a requested target.
+// Source-rooted reverse trees for 2D action-map multicast: T(root) is the union over every destination
+// of the canonical route from root along one axis. That union must be a single-parent rooted tree: the
+// root has no parent, every other row has exactly one parent, every row reaches the root, and there are
+// no cycles. A worker can then encode a multicast by walking the edge list once from leaves to root,
+// setting a parent's output when its subtree holds a requested target.
 //
 // Topology comes from MeshGraph and canonical next hops from AxisRouteTopology, so a fixture can be
 // checked without a cluster.
@@ -41,26 +42,14 @@ struct McastReverseTree {
 };
 
 // The tree rooted at `root`, or nullopt with `failure` set when the canonical routes out of that root
-// are not an arborescence. That is a topology property rather than a bad argument, so it is reported
-// rather than thrown.
+// do not form the single-parent rooted tree described above. That is a topology property rather than
+// a bad argument, so it is reported rather than thrown.
 std::optional<McastReverseTree> build_mcast_reverse_tree(
     const MeshGraph& mesh_graph,
     MeshId mesh_id,
     const AxisRouteTopology& topo,
     int root,
     std::string* failure = nullptr);
-
-// Mesh-wide gate: every root on the axis must yield an arborescence. Only one encoder exists, so a
-// single failing root rejects the mesh.
-struct ArborescenceGateResult {
-    bool passed = false;
-    int failing_root = -1;                // -1 when passed
-    std::string failure;                  // empty when passed
-    std::vector<McastReverseTree> trees;  // one per root, in root order; empty when the gate fails
-};
-
-ArborescenceGateResult run_mcast_arborescence_gate(
-    const MeshGraph& mesh_graph, MeshId mesh_id, const AxisRouteTopology& topo);
 
 // The one-hot Routing2DCodec::ACTION_* bit a hop in this direction asks a router to take.
 std::uint8_t mcast_action_bit(RoutingDirection direction);
@@ -116,11 +105,11 @@ std::vector<RoutingDirection> mcast_root_output_directions(
 // Writes this chip's two trees -- T(my_y) and T(my_x) -- into the fixed multicast-tree region.
 // Unlike the mesh-identical action vectors, these are written per chip.
 //
-// This also serves as the mesh-wide gate, since every root on an axis is some chip's own root: refusing
-// a non-arborescent tree here rejects exactly the meshes the full sweep would, at O(axis^2) per chip.
+// Each call validates this chip's two roots. Across mesh initialization every axis root is checked,
+// because every row and column is owned by at least one chip.
 //
-// Returns false with `failure` set on a non-arborescent root, an axis past the packing bound, or a
-// shape whose vectors or trees exceed their fixed region.
+// Returns false with `failure` set when a root's routes are not a single-parent tree, an axis exceeds
+// the packing bound, or the shape exceeds either fixed region.
 bool embed_mcast_reverse_trees(
     const MeshGraph& mesh_graph,
     MeshId mesh_id,

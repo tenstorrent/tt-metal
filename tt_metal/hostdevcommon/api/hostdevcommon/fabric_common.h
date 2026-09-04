@@ -276,7 +276,7 @@ struct Routing2DCodec {
     // ---- Multicast reverse-tree region -------------------------------------------
     // The fixed tree region follows the fixed vector region. Within it, Y precedes X and the X offset
     // depends only on the live Y tree's edge count.
-    // An arborescence over n rows has n-1 edges; a single-row axis has none.
+    // A rooted tree with one parent per non-root row has n-1 edges; a single-row axis has none.
     static constexpr uint32_t mcast_tree_edge_count(uint32_t axis_size) { return axis_size > 1 ? axis_size - 1 : 0; }
 
     static constexpr uint32_t mcast_tree_x_offset(uint32_t y_size) {
