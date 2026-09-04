@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "common_globals.h"
 #include "sentinel/compute_kernel_sentinel.h"
 #include "sanitizer/api.h"
@@ -31,7 +32,7 @@ namespace ckernel {
  * | Function   | ocb  | The identifier of the output circular buffer (CB) | uint32_t | 0 to 31     | True     |
  */
 // clang-format on
-ALWI void pack_init(uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
+ALWI void pack_init(std::uint32_t ocb, std::uint32_t call_line = __builtin_LINE()) {
     state_configure<Operand::PACK>(ocb, call_line);
     PACK((llk_pack_init(ocb)));
 }
@@ -86,7 +87,7 @@ ALWI void pack_init(uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
  */
 // clang-format on
 template <bool out_of_order_output = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void pack_tile(uint32_t ifrom_dst, uint32_t icb, std::uint32_t output_tile_index = 0) {
+ALWI void pack_tile(std::uint32_t ifrom_dst, std::uint32_t icb, std::uint32_t output_tile_index = 0) {
     LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
     PACK((llk_pack<is_fp32_dest_acc_en, out_of_order_output, PackMode::Default>(ifrom_dst, icb, output_tile_index)));
@@ -133,7 +134,7 @@ ALWI void pack_tile(uint32_t ifrom_dst, uint32_t icb, std::uint32_t output_tile_
  */
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void pack_block(uint32_t ifrom_dst, uint32_t icb, uint32_t ntiles) {
+ALWI void pack_block(std::uint32_t ifrom_dst, std::uint32_t icb, std::uint32_t ntiles) {
     LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
     PACK((llk_matmul_pack<is_fp32_dest_acc_en, false, PackMode::Default>(ifrom_dst, icb, ntiles)));
@@ -141,6 +142,28 @@ ALWI void pack_block(uint32_t ifrom_dst, uint32_t icb, uint32_t ntiles) {
     PACK((llk_pack_block(ifrom_dst, icb, ntiles)));
 #endif
 }
+
+// clang-format off
+/**
+ * Issues a single no-write packer op: it steps the packer engine only -- no DST is committed to L1 and it
+ * does NOT push/advance the CB (the surrounding cb_push_back does that). Call it between cb_reserve_back
+ * and cb_push_back when a CB is being pushed but its tile data is not needed.
+ *
+ * On Quasar this is required: the hardware needs a real packer op between a WAIT_TILES and its PUSH_TILES
+ * on the same output CB, or the PUSH can retire before the space is available (TEN-4746 / #48552). This op
+ * programs the strided packer to write nothing (PACK_STRIDE_NO_WRITE, all rows masked) and issues one
+ * PACR_STRIDE to satisfy that ordering while leaving the output buffer untouched. On WH/BH there is no such
+ * ordering requirement and this compiles to a no-op. Each architecture supplies its own llk_pack_dummy();
+ * this helper dispatches to it through PACK(...). This call is only available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument | Description                                              | Data type | Valid range | required |
+ * |----------|----------------------------------------------------------|-----------|-------------|----------|
+ * | cb_id    | The identifier of the CB whose WAIT/PUSH this orders      | uint32_t  | 0 to 31     | True     |
+ * */
+// clang-format on
+ALWI void dummy_pack(std::uint32_t cb_id) { PACK((llk_pack_dummy(cb_id))); }
 
 // clang-format off
 /**
@@ -158,7 +181,7 @@ ALWI void pack_block(uint32_t ifrom_dst, uint32_t icb, uint32_t ntiles) {
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 [[deprecated("Renamed to pack_block(); pack_tile_block will be removed after August 15th, 2026.")]] ALWI void
-pack_tile_block(uint32_t ifrom_dst, uint32_t icb, uint32_t ntiles) {
+pack_tile_block(std::uint32_t ifrom_dst, std::uint32_t icb, std::uint32_t ntiles) {
     pack_block<is_fp32_dest_acc_en>(ifrom_dst, icb, ntiles);
 }
 
@@ -183,7 +206,7 @@ pack_tile_block(uint32_t ifrom_dst, uint32_t icb, uint32_t ntiles) {
  * | Function   | l1_acc_en | L1 accumulation enable flag        | uint32_t | 0 or 1      | True     |
  */
 // clang-format on
-ALWI void pack_reconfig_l1_acc(const uint32_t l1_acc_en) { PACK((llk_pack_reconfig_l1_acc(l1_acc_en))); }
+ALWI void pack_reconfig_l1_acc(const std::uint32_t l1_acc_en) { PACK((llk_pack_reconfig_l1_acc(l1_acc_en))); }
 
 // clang-format off
 /**
@@ -202,9 +225,7 @@ ALWI void pack_reconfig_l1_acc(const uint32_t l1_acc_en) { PACK((llk_pack_reconf
  */
 // clang-format on
 #ifndef ARCH_QUASAR
-ALWI void pack_rows_init(uint32_t num_rows) {
-    PACK((llk_pack_rows_init(num_rows)));
-}
+ALWI void pack_rows_init(std::uint32_t num_rows) { PACK((llk_pack_rows_init(num_rows))); }
 #endif
 
 // clang-format off
@@ -231,7 +252,7 @@ ALWI void pack_rows_init(uint32_t num_rows) {
  */
 // clang-format on
 #ifndef ARCH_QUASAR
-ALWI void pack_rows(uint32_t idst, uint32_t ocb, uint32_t output_index = 0) {
+ALWI void pack_rows(std::uint32_t idst, std::uint32_t ocb, std::uint32_t output_index = 0) {
     PACK((llk_pack_rows(idst, ocb, output_index)));
 }
 #endif
@@ -250,9 +271,7 @@ ALWI void pack_rows(uint32_t idst, uint32_t ocb, uint32_t output_index = 0) {
  */
 // clang-format on
 #ifndef ARCH_QUASAR
-ALWI void pack_rows_uninit() {
-    PACK((llk_pack_rows_uninit()));
-}
+ALWI void pack_rows_uninit() { PACK((llk_pack_rows_uninit())); }
 #endif
 
 /**

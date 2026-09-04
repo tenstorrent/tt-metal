@@ -99,6 +99,38 @@ inline void llk_pack(
 }
 
 /**
+ * @brief Order a PUSH after its WAIT on the pack thread with one no-write PACR_STRIDE. Writes nothing to L1.
+ *
+ * Call between cb_reserve_back and cb_push_back on an output buffer that is being pushed but whose packed
+ * data is not needed. Like llk_unpack_dummy on the unpack thread, this is a required Quasar primitive: the
+ * PACR_STRIDE is a real packer TDMA that orders the PUSH_TILES after its WAIT_TILES on pack_output
+ * (TEN-4746 / #48552). PACK_STRIDE_NO_WRITE suppresses the L1 store and every row is masked, so the output
+ * buffer is left untouched; ClrDatValid is 0, so the DEST valid bits are preserved for a later real pack.
+ * The strided-pack config is restored to pass-through afterwards so a subsequent pack-untilize (also
+ * PACR_STRIDE) is unaffected.
+ *
+ * With the store suppressed the buffer descriptor is never dereferenced, so a fixed table-select of 0 is
+ * used: this primitive needs no pack init and does not touch the BFD allocator or the DFB.
+ *
+ * @param pack_output  The output dataflow buffer whose WAIT/PUSH this orders; not used to address L1.
+ */
+inline void llk_pack_dummy(const std::uint32_t pack_output) {
+    // No-write + mask every row so the PACR_STRIDE below stores nothing to L1.
+    cfg_rmw(THCON_PACKER0_REG3_PACK_STRIDE_NO_WRITE_RMW, 1);
+    cfg_rmw(THCON_PACKER0_REG3_PACK_STRIDE_ROW_MASK_RMW, 0xF);
+
+    // Src/dst index 0, no increment, table-select 0 (never dereferenced since the store is suppressed),
+    // Packer0, ClrDatValid=0 (must not clear DEST valids).
+    TTI_PACR_STRIDE(0, 0, 0, 0, 0, 0 /*buf_desc_sel*/, 0 /*Packer0*/, 0 /*ClrDatValid*/);
+
+    // Restore pass-through so a later real pack-untilize (PACR_STRIDE) is unaffected.
+    cfg_rmw(THCON_PACKER0_REG3_PACK_STRIDE_NO_WRITE_RMW, 0);
+    cfg_rmw(THCON_PACKER0_REG3_PACK_STRIDE_ROW_MASK_RMW, 0);
+
+    LLK_TDMA_GUARD_NOTE_TDMA(pack_output);  // TEN-4746: PACR_STRIDE orders PUSH after WAIT -> disarm this dfb
+}
+
+/**
  * @brief Packs a block of destination tiles into the specified output buffer
  *
  * @param start_tile_index Starting destination register tile index to pack out from
