@@ -34,7 +34,12 @@ std::pair<bool, std::string> InterleavedToShardedDeviceOperation::validate_input
     // Use the normalized memory config for validation so that convertible ND specs are accepted.
     auto resolved_output_mem_config = output_mem_config;
     if (output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::ND_SHARDED) {
-        auto output_spec = compute_output_specs(operation_attributes, tensor_args);
+        // Normalize from the input alone. compute_output_specs returns the caller's own spec verbatim
+        // when a pre-allocated output is supplied, so passing tensor_args through would make the
+        // rejection below test the caller's layout instead of the computed one, and would reduce the
+        // memory-config comparison further down to comparing the tensor against itself.
+        auto output_spec =
+            compute_output_specs(operation_attributes, tensor_args_t{input_tensor, /*output_tensor=*/std::nullopt});
         if (output_spec.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::ND_SHARDED) {
             return {
                 false,
