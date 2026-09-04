@@ -112,3 +112,19 @@ class Gemma4PrefillAdapter(PrefillModelAdapter):
             use_trace=params.use_trace,
         )
         return TtPrefillRuntime(mesh_device=mesh_device, model_path=_model_path(), config=config)
+
+    def cache_head_dim(self, config_id: int):
+        """Packed global width for configs 0-3; sliding K/V width for configs 4-35.
+
+        Matches ``models.demos.gemma4.tt.runners.kv_chunk_table.CONFIG_NAMES``. The src-KV dump
+        uses this to unpack BFP8 tiles from ``table.lookup``; without it the dump skips.
+        """
+        from models.demos.gemma4.tt.attention.global_kv_cache import GLOBAL_PACKED_DIM, SLIDING_HEAD_DIM
+        from models.demos.gemma4.tt.runners.kv_chunk_table import CONFIG_NAMES
+
+        cfg_id = int(config_id)
+        if not 0 <= cfg_id < len(CONFIG_NAMES):
+            return None
+        if cfg_id < 4:
+            return int(GLOBAL_PACKED_DIM)
+        return int(SLIDING_HEAD_DIM)

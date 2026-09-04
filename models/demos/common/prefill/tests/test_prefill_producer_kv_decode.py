@@ -50,3 +50,12 @@ def test_decode_packed_scaled_fp8_kv_chunk_with_page_padding():
 def test_decode_unknown_kv_chunk_rejected(expect_error):
     with expect_error(ValueError, "unsupported"):
         _decode_kv_chunk(bytes(17), head_dim=576)
+
+
+def test_bfp8_head_dim_from_chunk_bytes():
+    from models.demos.common.prefill.runners.migration_driver import _head_dim_from_chunk_bytes
+
+    assert _head_dim_from_chunk_bytes(20 * 1088) == 640
+    assert _head_dim_from_chunk_bytes(8 * 1088) == 256
+    assert _head_dim_from_chunk_bytes(0) is None
+    assert _head_dim_from_chunk_bytes(17) is None

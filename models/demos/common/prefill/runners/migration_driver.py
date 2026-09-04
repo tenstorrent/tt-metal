@@ -270,6 +270,18 @@ class MigrationDriver:
         return pairs
 
 
+_BFP8_TILE_BYTES = 1088
+_TILE_TOKENS = 32
+
+
+def _head_dim_from_chunk_bytes(chunk_size_bytes) -> int | None:
+    """BFP8-tiled width implied by a table config's ``chunk_size_bytes`` (one 32-token chunk)."""
+    chunk_bytes = int(chunk_size_bytes or 0)
+    if chunk_bytes <= 0 or chunk_bytes % _BFP8_TILE_BYTES:
+        return None
+    return (chunk_bytes // _BFP8_TILE_BYTES) * _TILE_TOKENS
+
+
 def _cache_plan(table, migrated_layers) -> list:
     from models.demos.common.prefill.runners import prefill_producer as producer
 
@@ -312,6 +324,8 @@ def _cache_plan(table, migrated_layers) -> list:
             head_dim = mc.KV_LORA_RANK + mc.QK_ROPE_HEAD_DIM
         if head_dim is None and is_index:
             head_dim = getattr(mc, "INDEX_HEAD_DIM", None)
+        if head_dim is None:
+            head_dim = _head_dim_from_chunk_bytes(getattr(cfg, "chunk_size_bytes", 0))
 
         unaddressed = []
         if rows is not None and migrated_layers:
@@ -345,7 +359,7 @@ def _log_cache_plan(plan, tag: str) -> None:
             )
 
 
-def _dump_src_kv(dump_dir: str, table, stats, slot_traces: dict, layers) -> None:
+def _dump_src_kv(dump_dir: str, table, stats, slot_traces: dict, layers, *, pools_by_trace=None) -> None:
     import torch
 
     from models.demos.common.prefill.runners import prefill_producer as producer
@@ -378,7 +392,7 @@ def _dump_src_kv(dump_dir: str, table, stats, slot_traces: dict, layers) -> None
         if entry["head_dim"] is None:
             logger.warning(
                 f"[migration_driver] src-KV dump: cache config {cfg_id} not dumped -- axis known, but no "
-                f"decode width (no cache_head_dim() hook)."
+                f"decode width (no cache_head_dim() hook and chunk_size_bytes is not a BFP8 tile multiple)."
             )
             continue
         selected = {l: r for l, r in rows.items() if l in wanted}
@@ -389,33 +403,43 @@ def _dump_src_kv(dump_dir: str, table, stats, slot_traces: dict, layers) -> None
             )
             continue
         dumpable.append((cfg_id, selected, entry["head_dim"]))
-    if not any(cfg_id == 0 for cfg_id, _, _ in dumpable):
+    if not dumpable:
         logger.error(
-            "[migration_driver] src-KV dump: cache config 0 is not readable (see the plan above), so there "
+            "[migration_driver] src-KV dump: no cache config is readable (see the plan above), so there "
             "is no reference to write; skipping the dump."
         )
         return
+
+    config_names = []
+    if hasattr(table, "config_name") and hasattr(table, "num_configs"):
+        config_names = [table.config_name(i) for i in range(table.num_configs())]
 
     for slot_id, res in sorted(stats.resident.items()):
         real_len = res.real_len
         if real_len <= 0:
             continue
-        read_len = ((real_len + tokens_per_block - 1) // tokens_per_block) * tokens_per_block
 
         refs = {}
         for cfg_id, selected, head_dim in dumpable:
+            tcfg = table.config() if cfg_id == 0 else table.config(cfg_id)
+            stride = int(getattr(tcfg, "chunk_n_tokens", 0) or tokens_per_block)
+            read_len = ((real_len + stride - 1) // stride) * stride
             per_layer = [None] * producer.NUM_LAYERS
             for layer, row in sorted(selected.items()):
                 if table.lookup(row, 0, slot_id, cfg_id).size_bytes == 0:
                     continue
                 decoded_rows = []
-                for pos in range(0, read_len, tokens_per_block):
+                for pos in range(0, read_len, stride):
                     loc = table.lookup(row, pos, slot_id, cfg_id)
+                    if loc.size_bytes == 0:
+                        continue
                     unique_id = producer._resolve_unique_id(
                         table.get_device_group(loc.device_group_index).fabric_node_ids, device_map
                     )
                     raw = ttnn.experimental.disaggregation.read_dram_umd(unique_id, loc.noc_addr, loc.size_bytes)
                     decoded_rows.append(producer._decode_kv_chunk(raw, head_dim))
+                if not decoded_rows:
+                    continue
                 device_kv = torch.cat(decoded_rows, dim=0)[:real_len]
                 per_layer[layer] = device_kv.unsqueeze(0).unsqueeze(0)
             refs[cfg_id] = per_layer
@@ -423,14 +447,21 @@ def _dump_src_kv(dump_dir: str, table, stats, slot_traces: dict, layers) -> None
         out = os.path.abspath(os.path.join(base_dir, f"src_slot{int(slot_id)}.pt"))
         if not out.startswith(base_dir + os.sep):
             raise ValueError(f"src-KV dump path {out!r} escapes its base directory {base_dir!r}")
-        blob = {"ref_cache_lists": refs, "ref_kvpe_list": refs[0]}
+        blob = producer._prompt_meta_for_dump(slot_id, real_len, slot_traces, pools_by_trace)
+        blob["ref_cache_lists"] = refs
+        if 0 in refs:
+            blob["ref_kvpe_list"] = refs[0]
         if 1 in refs:
             blob["ref_index_k_list"] = refs[1]
+        if config_names:
+            blob["ref_config_names"] = config_names
         torch.save(blob, out)
         counts = ", ".join(f"cfg{c}={sum(t is not None for t in lst)}" for c, lst in sorted(refs.items()))
+        n_tok = len(blob.get("token_ids") or [])
         logger.success(
             f"[migration_driver] slot {slot_id} src KV dumped -> {out} "
-            f"(layers {sorted(wanted)}, positions [0,{real_len}), layer(s) per cache: {counts})"
+            f"(layers {sorted(wanted)}, positions [0,{real_len}), prompt_len={real_len} "
+            f"token_ids={n_tok}, layer(s) per cache: {counts})"
         )
 
 
@@ -730,6 +761,12 @@ def main() -> None:
         "to PCC its received copy against. Honours the migrated layer subset. Off when unset.",
     )
     parser.add_argument(
+        "--prompts",
+        default=os.environ.get("PREFILL_PROMPTS_JSON"),
+        help='JSON file {"prompts": [{"slot": 0, "token_ids": [...]}, ...]}. Same as prefill_producer '
+        "--prompts / PREFILL_PROMPTS_JSON / workload.prompts_file.",
+    )
+    parser.add_argument(
         "--verify-migration",
         choices=("off", "dst-bytes", "dst-golden", "both"),
         default=os.environ.get("PREFILL_VERIFY_MIGRATION", "dst-bytes"),
@@ -761,6 +798,9 @@ def main() -> None:
     apply_manifest_env(manifest)
     if args.migrations is not None:
         os.environ["PREFILL_MIGRATION_PAIRS"] = args.migrations
+    if args.prompts:
+        os.environ["PREFILL_PROMPTS_JSON"] = args.prompts
+    producer._reject_conflicting_prompt_sources()
     producer._load_env_config()
 
     if int(os.environ.get("OMPI_COMM_WORLD_SIZE", "1")) > 1:
@@ -849,7 +889,9 @@ def main() -> None:
                     f"THIS host's layers and None for the rest (world_size={world_size}). Dump from a "
                     "single-rank runner if the decode side needs every layer."
                 )
-            _dump_src_kv(args.dump_src_kv, kv_table, stats, slot_traces, driver.layers)
+            _dump_src_kv(
+                args.dump_src_kv, kv_table, stats, slot_traces, driver.layers, pools_by_trace=pools_by_trace
+            )
 
     triples = []
     migrate_ok = True

@@ -64,7 +64,15 @@ def _apply_manifest_env(manifest_path: str) -> dict:
     sd("PREFILL_PRODUCER_SEED", workload.get("seed"))
     sd_bool("PREFILL_PRODUCER_CHECK_PCC", workload.get("check_pcc"))
     sd("PREFILL_TRACE_DIR", workload.get("trace_dir"))
+    sd("PREFILL_PROMPTS_JSON", workload.get("prompts_file"))
+    prompts = workload.get("prompts")
+    if prompts is not None and workload.get("prompts_file") is not None:
+        raise ValueError("workload.prompts and workload.prompts_file are mutually exclusive")
     slot_prompts = workload.get("slot_prompts")
+    if slot_prompts is not None and (prompts is not None or workload.get("prompts_file") is not None):
+        raise ValueError("workload.prompts / prompts_file cannot be combined with slot_prompts")
+    global _MANIFEST_PROMPTS
+    _MANIFEST_PROMPTS = prompts
     if slot_prompts is not None:
         sd("PREFILL_PRODUCER_SLOT_TRACES", slot_prompts if isinstance(slot_prompts, str) else ",".join(slot_prompts))
     gap_ms = workload.get("gap_ms")
@@ -74,6 +82,8 @@ def _apply_manifest_env(manifest_path: str) -> dict:
     logger.info(f"[producer] applied manifest {manifest_path}")
     return manifest
 
+
+_MANIFEST_PROMPTS = None
 
 METADATA_SIZE_BYTES = 12
 
@@ -898,9 +908,116 @@ def _load_token_pool(trace_dir, num_tokens: int) -> list:
     return pool[:num_tokens]
 
 
+def _pad_token_pool(token_ids, num_tokens: int) -> list:
+    pool = [int(t) for t in token_ids]
+    if len(pool) < num_tokens:
+        pool = pool + [1] * (num_tokens - len(pool))
+    return pool[:num_tokens]
+
+
+def parse_prompts_blob(data) -> dict:
+    """Parse ``{"prompts": [{"slot": int, "token_ids": [int, ...]}, ...]}`` or a bare list."""
+    if isinstance(data, dict) and "prompts" in data:
+        entries = data["prompts"]
+    elif isinstance(data, list):
+        entries = data
+    else:
+        raise ValueError('prompts JSON must be {"prompts": [...]} or a list of {slot, token_ids} objects')
+    if not isinstance(entries, list) or not entries:
+        raise ValueError("prompts JSON has no prompt entries")
+    out = {}
+    for i, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            raise ValueError(f"prompts[{i}] must be an object, got {type(entry).__name__}")
+        if "token_ids" not in entry:
+            raise ValueError(f"prompts[{i}] is missing token_ids")
+        slot = int(entry["slot"]) if "slot" in entry else i
+        if slot < 0:
+            raise ValueError(f"prompts[{i}] has negative slot {slot}")
+        if slot in out:
+            raise ValueError(f"prompts JSON has duplicate slot {slot}")
+        token_ids = [int(t) for t in entry["token_ids"]]
+        if not token_ids:
+            raise ValueError(f"prompts slot {slot} has empty token_ids")
+        out[slot] = token_ids
+    return out
+
+
+def load_prompts_json(path) -> dict:
+    with open(path) as f:
+        data = json.load(f)
+    return parse_prompts_blob(data)
+
+
+def _prompts_from_env() -> dict | None:
+    path = os.environ.get("PREFILL_PROMPTS_JSON", "").strip()
+    if path:
+        return load_prompts_json(path)
+    if _MANIFEST_PROMPTS is not None:
+        return parse_prompts_blob(_MANIFEST_PROMPTS)
+    return None
+
+
+def _reject_conflicting_prompt_sources() -> None:
+    prompts = _prompts_from_env() is not None
+    slot_traces = os.environ.get("PREFILL_PRODUCER_SLOT_TRACES", "").strip()
+    if prompts and slot_traces:
+        raise ValueError(
+            "prompts JSON (--prompts / PREFILL_PROMPTS_JSON / workload.prompts_file) and "
+            f"slot_prompts (PREFILL_PRODUCER_SLOT_TRACES={slot_traces!r}) are mutually exclusive"
+        )
+
+
+def _slot_prompts_from_token_ids(cfg: ProducerConfig, prompts: dict):
+    expected = set(range(cfg.num_users))
+    got = set(prompts)
+    if got != expected:
+        raise ValueError(
+            f"prompts JSON slots {sorted(got)} do not match users 0..{cfg.num_users - 1}; "
+            "set workload.num_users / PREFILL_NUM_USERS to the prompt count and include every slot."
+        )
+    max_chunks = MAX_SEQ_LEN // CHUNK_SIZE
+    slot_traces = {}
+    slot_lengths = {}
+    pools_by_trace = {}
+    for slot, token_ids in sorted(prompts.items()):
+        real_len = len(token_ids)
+        chunks = (real_len + CHUNK_SIZE - 1) // CHUNK_SIZE
+        if chunks > max_chunks:
+            logger.warning(
+                f"[producer] prompts slot {slot} is {real_len} tok ({chunks} chunks) > per-user cache "
+                f"{max_chunks} chunks (MAX_SEQ_LEN={MAX_SEQ_LEN}); clamping to {max_chunks} chunks."
+            )
+            chunks = max_chunks
+            real_len = min(real_len, max_chunks * CHUNK_SIZE)
+        key = f"prompts:slot{slot}"
+        slot_traces[slot] = key
+        slot_lengths[slot] = real_len
+        pools_by_trace[key] = _pad_token_pool(token_ids[:real_len], chunks * CHUNK_SIZE)
+    logger.info(
+        "[producer] per-slot prompts: "
+        + ", ".join(f"slot {s}<-json ({slot_lengths[s]} tok)" for s in sorted(slot_traces))
+    )
+    return slot_traces, slot_lengths, pools_by_trace
+
+
+def _trace_label(trace) -> str:
+    return trace.name if hasattr(trace, "name") else str(trace)
+
+
 def _resolve_slot_prompts(cfg: ProducerConfig):
     default = os.environ.get("PREFILL_TRACE_DIR", ADAPTER.prefill_trace_default)
     spec = os.environ.get("PREFILL_PRODUCER_SLOT_TRACES", "").strip()
+    prompts = _prompts_from_env()
+    if prompts is not None:
+        _reject_conflicting_prompt_sources()
+        if cfg.verify:
+            raise ValueError(
+                "prompts JSON has no golden KV traces; set check_pcc: false (PREFILL_PRODUCER_CHECK_PCC=0)"
+            )
+        if cfg.multi_turn_prob > 0:
+            raise ValueError("prompts JSON is incompatible with multi-turn (PREFILL_PRODUCER_MULTI_TURN_PROB>0)")
+        return _slot_prompts_from_token_ids(cfg, prompts)
     if spec and cfg.multi_turn_prob > 0:
         raise ValueError(
             "PREFILL_PRODUCER_SLOT_TRACES is incompatible with multi-turn "
@@ -942,9 +1059,19 @@ def _resolve_slot_prompts(cfg: ProducerConfig):
     slot_lengths = {s: len_by_trace[t] for s, t in slot_traces.items()}
     logger.info(
         "[producer] per-slot prompts: "
-        + ", ".join(f"slot {s}<-{slot_traces[s].name} ({slot_lengths[s]} tok)" for s in sorted(slot_traces))
+        + ", ".join(f"slot {s}<-{_trace_label(slot_traces[s])} ({slot_lengths[s]} tok)" for s in sorted(slot_traces))
     )
     return slot_traces, slot_lengths, pools_by_trace
+
+
+def _prompt_meta_for_dump(slot_id, real_len, slot_traces, pools_by_trace) -> dict:
+    """Token ids bound into src_slot<N>.pt so decode does not join a sidecar file."""
+    meta = {"slot_id": int(slot_id), "prompt_len": int(real_len)}
+    if slot_traces is None or pools_by_trace is None or slot_id not in slot_traces:
+        return meta
+    pool = pools_by_trace[slot_traces[slot_id]]
+    meta["token_ids"] = [int(t) for t in pool[:real_len]]
+    return meta
 
 
 def _mr_config():
@@ -1023,10 +1150,27 @@ def main() -> None:
         default=os.environ.get("PREFILL_PRODUCER_MANIFEST"),
         help="Path to the producer YAML manifest (applied at startup; exported env vars override it).",
     )
+    parser.add_argument(
+        "--dump-src-kv",
+        default=os.environ.get("PREFILL_PRODUCER_DUMP_SRC_KV") or os.environ.get("PREFILL_MIGRATION_DUMP_SRC_KV"),
+        help="Directory to save each source slot's KV as src_slot<N>.pt after prefill. Off when unset. "
+        "Needs the runner's published KV chunk table and LayerAck (PREFILL_MOCK_MIGRATION=1 plus "
+        "PREFILL_ENABLE_LAYER_ACK=1). Does not migrate.",
+    )
+    parser.add_argument(
+        "--prompts",
+        default=os.environ.get("PREFILL_PROMPTS_JSON"),
+        help='JSON file {"prompts": [{"slot": 0, "token_ids": [...]}, ...]}. One prompt per user slot. '
+        "Mutually exclusive with slot_prompts and with check_pcc. Also: PREFILL_PROMPTS_JSON, "
+        "workload.prompts_file, or inline workload.prompts.",
+    )
     args = parser.parse_args()
 
     if args.manifest:
         _apply_manifest_env(args.manifest)
+    if args.prompts:
+        os.environ["PREFILL_PROMPTS_JSON"] = args.prompts
+    _reject_conflicting_prompt_sources()
     _load_env_config()
 
     mr_rank, world_size = _mr_config()
@@ -1035,6 +1179,7 @@ def main() -> None:
         return
 
     cfg = _config_from_env()
+    dump_dir = args.dump_src_kv
     if world_size > 1 and not cfg.verify:
         logger.error("[producer] multi-rank requires PREFILL_PRODUCER_CHECK_PCC=1 (all ranks verify).")
         sys.exit(1)
@@ -1051,20 +1196,21 @@ def main() -> None:
     payload_bytes = service.payload_size_bytes()
     logger.info(f"[producer] attached; payload={payload_bytes}B")
 
-    kv_table = _read_kv_chunk_table(timeout_s) if cfg.verify else None
+    need_kv_read = cfg.verify or bool(dump_dir)
+    kv_table = _read_kv_chunk_table(timeout_s) if need_kv_read else None
 
-    ack_channel = _connect_layer_ack_channel(timeout_s) if cfg.verify else None
-    if cfg.verify and ack_channel is None:
+    ack_channel = _connect_layer_ack_channel(timeout_s) if need_kv_read else None
+    if need_kv_read and ack_channel is None:
         logger.error(
-            "[producer] CHECK_PCC=1 but LayerAck channel missing — UMD read would race the runner's "
-            "prefill (H2D push return ≠ layers done). Set PREFILL_ENABLE_LAYER_ACK=1 on the runner "
-            "(Gate 1 mock defaults this on via run_prefill_migration_gate.sh)."
+            "[producer] KV read requested (check_pcc or --dump-src-kv) but LayerAck channel missing — "
+            "UMD read would race the runner's prefill (H2D push return ≠ layers done). Set "
+            "PREFILL_ENABLE_LAYER_ACK=1 on the runner."
         )
         sys.exit(1)
-    if not cfg.verify:
+    if not need_kv_read:
         logger.info(
-            "[producer] CHECK_PCC off — skipping the KV table read and not consuming the LayerAck "
-            "channel (pure token feeder; the runner's migration self-test owns it)"
+            "[producer] CHECK_PCC off and --dump-src-kv unset — skipping the KV table read and not "
+            "consuming the LayerAck channel (pure token feeder)"
         )
 
     slot_traces, slot_lengths, pools_by_trace = _resolve_slot_prompts(cfg)
@@ -1118,6 +1264,20 @@ def main() -> None:
     elif cfg.verify:
         logger.error("[producer] PREFILL_PRODUCER_CHECK_PCC=1 but no KV chunk table available; skipping PCC.")
         verify_ok = False
+
+    if dump_dir:
+        if kv_table is None:
+            logger.error("[producer] --dump-src-kv needs the KV chunk table, which never appeared.")
+        else:
+            if world_size > 1:
+                logger.warning(
+                    f"[producer] --dump-src-kv runs on rank 0 only, so {dump_dir} will hold THIS host's "
+                    f"layers and None for the rest (world_size={world_size}). Dump from a single-rank "
+                    "runner if a decode-side consumer needs every layer."
+                )
+            from models.demos.common.prefill.runners.migration_driver import _dump_src_kv
+
+            _dump_src_kv(dump_dir, kv_table, stats, slot_traces, layers=None, pools_by_trace=pools_by_trace)
 
     if world_size > 1:
         verdicts = _mr_allgather_verdict(verify_ok)
