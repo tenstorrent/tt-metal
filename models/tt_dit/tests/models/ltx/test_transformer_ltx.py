@@ -1796,3 +1796,17 @@ def test_ltx_per_token_timestep_nonuniform(
     logger.info(f"non-uniform per-token (TT vs oracle): all={pcc_all:.5f} frame0={pcc_f0:.5f} rest={pcc_rest:.5f}")
 
     assert_quality(ref_video, out_tt, pcc=0.99, relative_rmse=0.03)
+
+
+def test_ring_sdpa_chunk_override_reaches_per_n_configs():
+    # LTX_SDPA_RING_CHUNK must override every per-N ring config, not just the miss fallback;
+    # otherwise a sweep silently leaves the tuned stages on their defaults.
+    mesh_key = (True, 8, 4)
+    fallback, per_n = attention_ltx.LTXAttention.resolve_ring_sdpa_chunks(mesh_key, None)
+    assert fallback == (128, 512)
+    assert per_n == {9728: (96, 256), 38912: (192, 512)}
+
+    fallback, per_n = attention_ltx.LTXAttention.resolve_ring_sdpa_chunks(mesh_key, "128,256")
+    assert fallback == (128, 256)
+    assert per_n == {9728: (128, 256), 38912: (128, 256)}
+    assert per_n.get(12345, fallback) == (128, 256)
