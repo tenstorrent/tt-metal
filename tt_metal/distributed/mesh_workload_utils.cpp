@@ -7,6 +7,7 @@
 #include "mesh_device.hpp"
 #include "distributed/mesh_device_impl.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/context/metal_env_impl.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
 #include "hal_types.hpp"
 #include "llrt/hal.hpp"
@@ -38,14 +39,17 @@ void write_go_signal_sequence(
     bool send_unicasts,
     const program_dispatch::ProgramDispatchMetadata& dispatch_md,
     std::optional<uint32_t> config_ring_sync_count) {
-    MetalContext& metal_ctx = MetalContext::instance(sysmem_manager.get_context_id());
-    const auto& hal = metal_ctx.hal();
+    auto& mesh_impl = mesh_device->impl();
+    MetalContext& metal_ctx = mesh_impl.metal_context();
+    const auto& dispatch_mem_map = metal_ctx.dispatch_mem_map();
+    const auto& dispatch_query_manager = metal_ctx.get_dispatch_query_manager();
+    const auto& hal = mesh_impl.metal_env().get_hal();
     uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
     DeviceCommandCalculator calculator(metal_ctx);
     if (config_ring_sync_count.has_value()) {
         calculator.add_dispatch_wait();
     }
-    if (tt_metal::MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) {
+    if (dispatch_query_manager.dispatch_s_enabled()) {
         calculator.add_notify_dispatch_s_go_signal_cmd();
     }
     calculator.add_dispatch_go_signal_mcast();
@@ -69,7 +73,7 @@ void write_go_signal_sequence(
         go_signal_cmd_sequence.add_dispatch_wait(
             CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
             0,
-            MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(*sub_device_id),
+            dispatch_mem_map.get_dispatch_stream_index(*sub_device_id),
             config_ring_sync_count.value(),
             cq_id);
     }
@@ -78,8 +82,8 @@ void write_go_signal_sequence(
         dev_msgs::RUN_MSG_GO,
         dispatch_core.x,
         dispatch_core.y,
-        MetalContext::instance().dispatch_mem_map().get_dispatch_message_update_offset(sub_device_index) +
-            MetalContext::instance().dispatch_mem_map().get_completion_counter_offset(cq_id));
+        dispatch_mem_map.get_dispatch_message_update_offset(sub_device_index) +
+            dispatch_mem_map.get_completion_counter_offset(cq_id));
 
     // When running with dispatch_s enabled:
     //   - dispatch_d must notify dispatch_s that a go signal can be sent
@@ -89,7 +93,7 @@ void write_go_signal_sequence(
     // There is no need for dispatch_d to barrier before sending the dispatch_s notification or go signal,
     // since this go signal is not preceded by NOC txns for program config data
     DispatcherSelect dispatcher_for_go_signal = DispatcherSelect::DISPATCH_MASTER;
-    if (MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) {
+    if (dispatch_query_manager.dispatch_s_enabled()) {
         uint16_t index_bitmask = 1 << sub_device_index;
         go_signal_cmd_sequence.add_notify_dispatch_s_go_signal_cmd(
             0,                                   /* wait */
@@ -99,7 +103,7 @@ void write_go_signal_sequence(
     go_signal_cmd_sequence.add_dispatch_go_signal_mcast(
         expected_num_workers_completed,
         go_msg_u32_val,
-        MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(sub_device_index),
+        dispatch_mem_map.get_dispatch_stream_index(sub_device_index),
         (send_mcast && mesh_device->impl().has_noc_mcast_txns(sub_device_id)) ? *sub_device_id
                                                                               : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
         send_unicasts ? mesh_device->impl().num_virtual_eth_cores(sub_device_id) : 0,
@@ -124,7 +128,7 @@ void write_rt_profiler_flush(
     void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
 
     HugepageDeviceCommand flush_cmd_sequence(metal_ctx, cmd_region, cmd_sequence_sizeB);
-    const uint32_t wait_stream = MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(*sub_device_id);
+    const uint32_t wait_stream = metal_ctx.dispatch_mem_map().get_dispatch_stream_index(*sub_device_id);
     flush_cmd_sequence.add_dispatch_rt_profiler_flush(wait_count, wait_stream);
 
     TT_ASSERT(flush_cmd_sequence.size_bytes() == flush_cmd_sequence.write_offset_bytes());
