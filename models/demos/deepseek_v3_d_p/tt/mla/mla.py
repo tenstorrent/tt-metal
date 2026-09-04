@@ -1126,12 +1126,13 @@ class ttMLA:
         contents are layer-invariant, so sharing one set across layers cuts either figure by 36x
         (to 0.17 / 0.67 GB), and a single buffer refreshed in place cuts it to one tensor.
 
-        Left as follow-up rather than fixed here, and deliberately joined to
-        https://github.com/tenstorrent/tt-metal/issues/55126: the chosen fix there is to pre-build
-        one device buffer per deterministic k * chunk_size offset and reuse it, which is the same
-        machinery this needs. Refreshing in place additionally requires validating that no other
-        layer's enqueued multiply is still reading the buffer; doing both under one validation pass
-        is cheaper than doing them twice.
+        Still follow-up for THIS (eager) cache, but #55126 built the per-offset set on the runtime
+        (TtPrefillRuntime._prepare_llama4_scale_offsets) and this can point at it. The traced path
+        never had the x36 problem -- it shares one buffer across layers -- so the figures above are
+        the eager cost only.
+
+        The 'is another layer still reading it' question is settled for a device-to-device refresh
+        (the copy and the replay are both on cq 0) and open for a host write.
 
         An LRU cap is NOT the answer: offsets never repeat within a request, so every chunk would
         miss and rebuild a ~105 MB host tensor, which measured 3x slower at long context.
