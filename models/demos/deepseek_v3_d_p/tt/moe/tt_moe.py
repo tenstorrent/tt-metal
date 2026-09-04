@@ -742,7 +742,7 @@ class TtMoe(LightweightModule):
         if self.use_latent_moe:
             logger.debug(f"[TtMoe.forward] routed_x (latent) shape: {routed_x.shape}")
 
-        signpost("shared_expert_and_dispatch_start")
+        signpost("dispatch_and_shared_expert_start")
         if self.overlap_shared_expert_with_dispatch:
             if self._trace_controller is not None:
                 self._trace_controller.sub_device_load(self.sd_manager_id)
@@ -750,17 +750,7 @@ class TtMoe(LightweightModule):
                 self.mesh_device.load_sub_device_manager(self.sd_manager_id)
 
         # ========================================
-        # Step 1: Shared expert (enabled)
-        # ========================================
-        # Shared expert expects replicated input (full emb_dim)
-        # Convert x to TILE_LAYOUT for shared expert
-        logger.debug(f"[TtMoe.forward] {x.shape=} {x.memory_config()=}")
-
-        shared_output = self.shared_expert(x)
-        logger.debug(f"[TtMoe.forward] Shared expert output shape: {shared_output.shape}")
-
-        # ========================================
-        # Step 2: Dispatch (enabled)
+        # Step 1: Dispatch (enabled)
         # ========================================
         # Dispatch expects complete routed-side rows on each device: full emb_dim normally, or the
         # all-gathered latent under LatentMoE (routed_x is x itself when there is no latent space).
@@ -773,6 +763,18 @@ class TtMoe(LightweightModule):
             self.tt_expert_dispatch_table,
             padding_config=padding_config,
         )
+        logger.debug(f"[TtMoe.forward] Dispatch output: buffer={dispatched_buffer.shape}, metadata={metadata.shape}")
+
+        # ========================================
+        # Step 2: Shared expert (enabled)
+        # ========================================
+        # Shared expert expects replicated input (full emb_dim)
+        # Convert x to TILE_LAYOUT for shared expert
+        logger.debug(f"[TtMoe.forward] {x.shape=} {x.memory_config()=}")
+
+        shared_output = self.shared_expert(x)
+        logger.debug(f"[TtMoe.forward] Shared expert output shape: {shared_output.shape}")
+
         if self.overlap_shared_expert_with_dispatch:
             if self._trace_controller is not None:
                 self._trace_controller.sub_device_clear()
@@ -801,9 +803,8 @@ class TtMoe(LightweightModule):
         x = ttnn.deallocate(x, force=True)
         scores = ttnn.to_memory_config(scores, ttnn.DRAM_MEMORY_CONFIG)
         indices = ttnn.to_memory_config(indices, ttnn.DRAM_MEMORY_CONFIG)
-        logger.debug(f"[TtMoe.forward] Dispatch output: buffer={dispatched_buffer.shape}, metadata={metadata.shape}")
 
-        signpost("shared_expert_and_dispatch_end")
+        signpost("dispatch_and_shared_expert_end")
 
         # ========================================
         # Step 3: Routed experts (enabled)

@@ -92,6 +92,10 @@ void bind_indexer_score(nb::module_& mod) {
                 linearization over all devices (linear-approximate under a mid-slab
                 start); seq_shard_axes=[sp, tp] names both axes, giving the rotation-exact
                 2D geometry (see seq_shard_axes above).
+            block_cyclic_cache_tp_sharded: optional bool (default False). KV dedup: the K cache is striped
+                across ALL sp*tp devices (linear chip = sp_coord*tp + tp_coord), so only the invP key
+                remap moves to (sp*tp, block_cyclic_chunk_local/tp) -- the causal geometry is unchanged.
+                Needs block_cyclic_chunk_local divisible by tp with a tile-aligned quotient.
 
         Returns: score [B, 1, Sq, T] bf16 row-major; future/pad columns -inf.
         )doc",
@@ -107,7 +111,8 @@ void bind_indexer_score(nb::module_& mod) {
         nb::arg("kv_len") = std::nullopt,
         nb::arg("seq_shard_axes") = std::nullopt,
         nb::arg("block_cyclic_sp_axis") = std::nullopt,
-        nb::arg("block_cyclic_chunk_local") = std::nullopt);
+        nb::arg("block_cyclic_chunk_local") = std::nullopt,
+        nb::arg("block_cyclic_cache_tp_sharded") = false);
 
     ttnn::bind_function<"indexer_score_msa", "ttnn.experimental.">(
         mod,
@@ -251,6 +256,11 @@ void bind_indexer_score(nb::module_& mod) {
                 block_cyclic_sp_axis. In complete-mesh mode pass this argument alone; SP is the complete mesh
                 size and the value must equal q's local sequence length Sq. Leaving it unset selects contiguous
                 K placement.
+            block_cyclic_cache_tp_sharded: optional bool (default False). KV dedup: the K cache is striped
+                across ALL sp*tp devices (linear chip = sp_coord*tp + tp_coord), so the invP key remap
+                decodes (sp*tp, block_cyclic_chunk_local/tp) while the causal geometry stays on the query
+                pair (sp, block_cyclic_chunk_local). Requires block_cyclic_sp_axis, and a per-stripe chunk
+                that is tile-aligned. k_local must hold whole stripes. See indexer_score_dsa.
 
         Returns: score [B, 1, Sq, T] bf16 row-major; future/pad columns -inf.
         )doc",
@@ -273,6 +283,7 @@ void bind_indexer_score(nb::module_& mod) {
         nb::arg("seq_subshard_axis") = nb::none(),
         nb::arg("block_cyclic_sp_axis") = nb::none(),
         nb::arg("block_cyclic_chunk_local") = nb::none(),
+        nb::arg("block_cyclic_cache_tp_sharded") = false,
         nb::arg("chunk_start_idx_tensor") = nb::none(),
         nb::arg("cache_batch_idx_tensor") = nb::none(),
         nb::arg("index_cache_num_layers") = 1,
