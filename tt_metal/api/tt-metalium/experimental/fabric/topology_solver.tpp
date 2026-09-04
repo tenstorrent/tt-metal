@@ -54,6 +54,14 @@ AdjacencyGraph<NodeId>::AdjacencyGraph(const typename AdjacencyGraph<NodeId>::Ad
 }
 
 template <typename NodeId>
+AdjacencyGraph<NodeId>::AdjacencyGraph(typename AdjacencyGraph<NodeId>::AdjacencyMap&& adjacency_map) : adj_map_(std::move(adjacency_map)) {
+    nodes_cache_.reserve(adj_map_.size());
+    for (const auto& [node, neighbors] : adj_map_) {
+        nodes_cache_.push_back(node);
+    }
+}
+
+template <typename NodeId>
 const std::vector<NodeId>& AdjacencyGraph<NodeId>::get_nodes() const {
     return nodes_cache_;
 }

@@ -14,6 +14,7 @@
 #include <set>
 #include <string>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
@@ -52,6 +53,16 @@ public:
      * @param mesh_graph The mesh graph to construct the adjacency graph from
      */
     explicit AdjacencyGraph(const AdjacencyMap& adjacency_map);
+
+    /**
+     * @brief Construct adjacency graph by taking ownership of an adjacency map
+     *
+     * Same as the const-reference constructor without deep-copying the map. Use when the caller built
+     * the map solely to hand it over, e.g. a derived graph rebuilt per search node.
+     *
+     * @param adjacency_map The adjacency map to move from
+     */
+    explicit AdjacencyGraph(AdjacencyMap&& adjacency_map);
 
     /**
      * @brief Get all nodes in the graph

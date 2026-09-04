@@ -233,7 +233,7 @@ public:
     // variants are provided, the variant with the highest total ASIC coverage is chosen; alternatives are not
     // mixed in the same packing. Returns an empty vector if no valid packing exists.
     //
-    // TODO(plan 3 §8(a)): both overloads are superseded by solve_adjacency_guided_placement below. The coverage
+    // TODO: both overloads are superseded by solve_adjacency_guided_placement below. The coverage
     // objective above picks tile boundaries without consulting the MGD's mesh-level edges, so a packing that is
     // maximal can still be unusable. The only non-test callers are the two Phase 3 loops in
     // topology_mapper_utils.cpp; once those move to the DFS this becomes test-only and should be deleted.
@@ -251,7 +251,7 @@ public:
         const AdjacencyGraph<tt::tt_metal::AsicID>& physical_graph,
         std::vector<std::string>* errors_out = nullptr) const;
 
-    // WIP: adjacency-guided placement (Plan 3). Not yet the production path; find_all_in_psd still
+    // WIP: adjacency-guided placement. Not yet the production path; find_all_in_psd still
     // owns live mapping.
     //
     // Places one chip-disjoint physical region per mesh *instance*, so a descriptor that instantiates

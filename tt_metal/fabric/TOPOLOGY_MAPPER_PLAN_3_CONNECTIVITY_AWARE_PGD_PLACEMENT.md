@@ -849,6 +849,81 @@ try S4_a = [c2..c5]
 
 Three search nodes. The propagation does the work, not the enumeration.
 
+### (l) Implementation interface (v1 — incremental domains, adopted)
+
+The code skeleton in `physical_grouping_descriptor_matching.cpp` follows this split. It **replaces**
+the global-pool + `touches` index of §5(a)–(c) with on-demand domain generation (§5(i)) as the
+**default**, not a contingency — PGD slot labels collapse domains today, and per-node anchored
+`find_any_in_psd` avoids building a cross-shape pool up front.
+
+**Entry point — `solve_adjacency_guided_placement`**
+
+Infrastructure setup only:
+
+1. Merge MGDs → `LogicalMultiMeshGraph merged` + `local_to_global_mesh_ids`.
+2. Build PSD physical graph.
+3. Derive `ordered_mesh_ids` from `merged.mesh_adjacency_graphs_` (authoritative mesh instance list).
+4. Build `mesh_id_to_index` for dense `assignment[mesh_index]`.
+5. Move `merged.mesh_level_graph_` into search context (**do not** dedupe neighbours — channel
+   multiplicity lives in duplicate entries; §3).
+6. Call `start_adjacency_guided_dfs` (which runs `adjacency_guided_dfs_iteration_loop`).
+
+**Why `mesh_level_graph` directly, not a derived adjacency list**
+
+| Keep | Drop |
+| --- | --- |
+| `AdjacencyGraph<MeshId> mesh_level_graph` from merge | Precomputed `mesh_neighbors[mesh_index]` with sort+unique |
+
+Deduping neighbours loses parallel-link count. Strict-mode channel matching and exit-node graphs
+(`mesh_exit_node_graphs_`) may be wired in later; the mesh-level graph is the minimum connectivity
+view the DFS needs for frontier growth and seam existence (§5(j): existence-only v1).
+
+**`AdjacencyGuidedSearchContext`**
+
+| Field | Role |
+| --- | --- |
+| `pgd`, `valid_groupings`, `physical_system_descriptor`, `physical_graph` | Inputs to `find_any_in_psd` |
+| `mesh_level_graph` | MGD inter-mesh edges (with multiplicity) |
+| `ordered_mesh_ids`, `mesh_id_to_index` | Map `MeshId` ↔ dense index for `assignment[]` |
+| `mesh_accepted_groupings[mesh_index]` | PGD variant names per mesh (grouping only, no placements) |
+| `assignment`, `occupied_asics`, `nodes_expanded` | Search state |
+| `node_budget` | §5(f) cap on expanded nodes |
+
+**Function split**
+
+```
+solve_adjacency_guided_placement   → infrastructure (above)
+start_adjacency_guided_dfs         → populate mesh_accepted_groupings, size assignment[], run iteration loop
+adjacency_guided_dfs_iteration_loop → backtracking loop (stub)
+select_next_mesh                   → §5(b) frontier heuristic (stub)
+generate_next_step_pool            → §5(i) anchored find_any_in_psd per grouping variant (stub)
+forward_check                      → §5(d) union bound / domain wipeout (deferred)
+```
+
+**`generate_next_step_pool(mesh_index)` contract**
+
+For mesh `L = ordered_mesh_ids[mesh_index]`, for each `GroupingInfo` in
+`mesh_accepted_groupings[mesh_index]`:
+
+```cpp
+MappingConstraints<LogicalChipId, AsicID> seed;
+seed.add_forbidden_constraint(all_nodes, occupied_asics);
+for (MeshId neighbor_id : ctx.mesh_level_graph.get_neighbors(L)) {
+    if (!assignment[mesh_id_to_index.at(neighbor_id)].has_value()) continue;
+    seed.add_cardinality_constraint(all_nodes, open_boundary(neighbor_region), /*min_count=*/1);
+}
+pgd->find_any_in_psd(grouping, *physical_system_descriptor, *physical_graph, max=1, seed);
+```
+
+Seeded component (no placed neighbours): omit cardinality constraints; honour mesh-level pinning
+projection from §4(d) if present.
+
+**Not in v1 context**
+
+- Full `LogicalMultiMeshGraph` — only `mesh_level_graph` is needed until exit-node strictness;
+  `mesh_exit_node_graphs_` can be added when §5(j) channel/exit work lands.
+- Global `pool`, `touches`, `touches_bits` — superseded by incremental generation.
+
 ## 6. DFS optimizations
 
 ### (a) Status

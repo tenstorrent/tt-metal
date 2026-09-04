@@ -1525,7 +1525,7 @@ std::string build_pgd_mapping_failure_message(
         node_count);
 }
 
-// TODO(plan 3 §8(a)): delete with solve_set_packing / find_all_in_psd. DFS uses PlacementCandidate instead.
+// TODO: delete with solve_set_packing / find_all_in_psd. DFS uses PlacementCandidate instead.
 struct PackingCandidate {
     size_t grouping_idx;             // index into the input groupings vector
     std::vector<size_t> asic_slots;  // dense ASIC indices (0..universe_size-1) used by this placement
@@ -1534,7 +1534,7 @@ struct PackingCandidate {
     size_t host_count = 1;  // distinct hosts spanned by this placement
 };
 
-// TODO(plan 3 §8(a)): delete with solve_set_packing / find_all_in_psd.
+// TODO: delete with solve_set_packing / find_all_in_psd.
 struct PackingResult {
     std::vector<PackingCandidate> selected;
     uint64_t total_weight = 0;
@@ -1546,7 +1546,7 @@ struct PackingResult {
 // At each DFS node the upper bound is current_weight + min(free_slots, suffix_weight_sum) — loose but cheap.
 // When the wall-clock budget elapses, the best feasible solution found so far is returned with proven_optimal=false.
 //
-// TODO(plan 3 §8(a)): delete with solve_for_many_groupings_to_psd_heterogeneous, its only caller.
+// TODO: delete with solve_for_many_groupings_to_psd_heterogeneous, its only caller.
 PackingResult solve_set_packing(
     std::vector<PackingCandidate> candidates, size_t universe_size, std::chrono::milliseconds budget) {
     PackingResult best;
@@ -1651,7 +1651,7 @@ bool is_flattened(const GroupingInfo& grouping) {
 
 namespace tt::tt_fabric {
 
-// TODO(plan 3 §8(a)): these three caps exist only for find_all_in_psd's packer. Delete with it.
+// TODO: these three caps exist only for find_all_in_psd's packer. Delete with it.
 constexpr size_t kMaxPlacementsPerRun = 10000;
 constexpr size_t kMaxPlacementsPerGrouping = 1024;
 constexpr std::chrono::milliseconds kSetPackingBudget{5000};
@@ -1665,10 +1665,9 @@ constexpr std::chrono::milliseconds kSetPackingBudget{5000};
 //             ASIC coverage. Wall-clock-budgeted; returns best feasible solution found on expiry.
 // Returns map from each GroupingInfo* (by address into the input vector) to its vector of selected MappingResults.
 //
-// TODO(plan 3 §8(a)): delete once the adjacency-guided DFS is the only placement producer. Phase B commits to a
+// TODO: delete once the adjacency-guided DFS is the only placement producer. Phase B commits to a
 // maximum-coverage tiling before anything has looked at the MGD's mesh-level edges, which is the root cause the
-// DFS exists to remove; see TOPOLOGY_MAPPER_PLAN_3_CONNECTIVITY_AWARE_PGD_PLACEMENT.md. Its only caller is
-// find_all_in_psd, so this and solve_set_packing go together.
+// DFS exists to remove. Its only caller is find_all_in_psd, so this and solve_set_packing go together.
 std::unordered_map<const GroupingInfo*, std::vector<MappingResult<LogicalChipId, AsicID>>>
 solve_for_many_groupings_to_psd_heterogeneous(
     const std::vector<GroupingInfo>& groupings,
@@ -1786,455 +1785,6 @@ solve_for_many_groupings_to_psd_heterogeneous(
     }
     return map_result;
 }
-
-// ---------------------------------------------------------------------------
-// Adjacency-guided placement search
-// ---------------------------------------------------------------------------
-namespace {
-
-struct PlacementCandidate {
-    std::size_t grouping_index = 0;
-    MappingResult<LogicalChipId, AsicID> result;
-};
-
-constexpr std::size_t kUnassigned = std::numeric_limits<std::size_t>::max();
-constexpr std::uint32_t kNoMesh = std::numeric_limits<std::uint32_t>::max();
-
-// Fixed-width bitsets. Two independent index spaces are in play: dense chip indices (the occupancy
-// mask) and pool indices (the "touches" relation). Nothing distinguishes them at the type level, so
-// the two never meet in the same call.
-using Bits = std::vector<std::uint64_t>;
-
-std::size_t bits_word_count(std::size_t bit_count) { return (bit_count + 63) / 64; }
-
-void bits_set(Bits& bits, std::size_t idx) { bits[idx >> 6] |= (std::uint64_t{1} << (idx & 63U)); }
-
-bool bits_test(const Bits& bits, std::size_t idx) { return ((bits[idx >> 6] >> (idx & 63U)) & std::uint64_t{1}) != 0; }
-
-bool bits_disjoint(const Bits& a, const Bits& b) {
-    for (std::size_t i = 0; i < a.size(); ++i) {
-        if ((a[i] & b[i]) != 0) {
-            return false;
-        }
-    }
-    return true;
-}
-
-void bits_or_into(Bits& dst, const Bits& src) {
-    for (std::size_t i = 0; i < dst.size(); ++i) {
-        dst[i] |= src[i];
-    }
-}
-
-void bits_clear_of(Bits& dst, const Bits& src) {
-    for (std::size_t i = 0; i < dst.size(); ++i) {
-        dst[i] &= ~src[i];
-    }
-}
-
-// Precomputed view of the candidate pool. Everything the recursion needs per node is a bitset test
-// or a list walk; no maps or ASIC ids are touched once the search starts.
-struct PlacementIndex {
-    std::vector<Bits> footprint;                    // candidate -> chip bitset
-    std::vector<std::size_t> grouping_of;           // candidate -> grouping index
-    std::vector<std::vector<std::size_t>> touches;  // candidate -> candidates one link away
-    std::vector<Bits> touches_mask;                 // the same relation, membership-testable
-    std::size_t chip_word_count = 0;
-
-    // Per logical mesh: which groupings it accepts, and the pool entries produced by those
-    // groupings. The candidate lists are shared, because meshes of the same MGD shape have identical
-    // option sets and there is no reason to hold one copy of the list per mesh.
-    std::vector<Bits> mesh_allowed_groupings;
-    std::vector<std::vector<std::size_t>> candidate_lists;
-    std::vector<std::size_t> mesh_candidate_list;  // mesh -> index into candidate_lists
-};
-
-// Builds chip footprints, the touches relation and the per-mesh candidate lists. Returns an error
-// string (empty on success) rather than asserting, because every failure here is a malformed input
-// that a caller can report more usefully than a crash.
-std::string build_placement_index(
-    const std::vector<GroupingInfo>& groupings,
-    const std::vector<PlacementCandidate>& pool,
-    const std::vector<std::vector<std::size_t>>& mesh_grouping_options,
-    const AdjacencyGraph<tt::tt_metal::AsicID>& physical_graph,
-    PlacementIndex& index) {
-    const auto& chips = physical_graph.get_nodes();
-    std::unordered_map<tt::tt_metal::AsicID, std::size_t> chip_index;
-    chip_index.reserve(chips.size());
-    for (std::size_t i = 0; i < chips.size(); ++i) {
-        chip_index.emplace(chips[i], i);
-    }
-
-    index.chip_word_count = bits_word_count(chips.size());
-    index.footprint.assign(pool.size(), Bits(index.chip_word_count, 0));
-    index.grouping_of.assign(pool.size(), 0);
-    std::vector<std::vector<std::size_t>> pool_by_chip(chips.size());
-    std::vector<std::vector<std::size_t>> by_grouping(groupings.size());
-    for (std::size_t p = 0; p < pool.size(); ++p) {
-        const PlacementCandidate& candidate = pool[p];
-        if (candidate.grouping_index >= groupings.size()) {
-            return fmt::format(
-                "candidate {} names grouping {} but only {} grouping(s) were given",
-                p,
-                candidate.grouping_index,
-                groupings.size());
-        }
-        const std::string& grouping_name = groupings[candidate.grouping_index].name;
-        if (!candidate.result.success) {
-            return fmt::format("candidate {} (grouping '{}') is a failed MappingResult", p, grouping_name);
-        }
-        if (candidate.result.target_to_global.empty()) {
-            return fmt::format("candidate {} (grouping '{}') has an empty ASIC footprint", p, grouping_name);
-        }
-        index.grouping_of[p] = candidate.grouping_index;
-        by_grouping[candidate.grouping_index].push_back(p);
-        // The footprint is the image of target_to_global, exactly as find_all_in_psd derives it.
-        for (const auto& [grouping_node, asic] : candidate.result.target_to_global) {
-            const auto it = chip_index.find(asic);
-            if (it == chip_index.end()) {
-                return fmt::format(
-                    "candidate {} (grouping '{}') maps node {} to ASIC {}, which is not a node of the physical graph",
-                    p,
-                    grouping_name,
-                    grouping_node,
-                    *asic);
-            }
-            bits_set(index.footprint[p], it->second);
-            pool_by_chip[it->second].push_back(p);
-        }
-    }
-
-    // Two candidates touch when some chip of one is one ethernet link away from some chip of the
-    // other. Driving this from the link list keeps it linear in the physical edges incident on the
-    // pool rather than quadratic in the pool.
-    const std::size_t candidate_word_count = bits_word_count(pool.size());
-    index.touches_mask.assign(pool.size(), Bits(candidate_word_count, 0));
-    index.touches.assign(pool.size(), {});
-    auto record_touch = [&index](std::size_t a, std::size_t b) {
-        if (a == b || bits_test(index.touches_mask[a], b)) {
-            return;
-        }
-        bits_set(index.touches_mask[a], b);
-        index.touches[a].push_back(b);
-    };
-    for (std::size_t p = 0; p < pool.size(); ++p) {
-        for (const auto& [grouping_node, asic] : pool[p].result.target_to_global) {
-            for (const auto& neighbor : physical_graph.get_neighbors(asic)) {
-                const auto it = chip_index.find(neighbor);
-                if (it == chip_index.end()) {
-                    continue;
-                }
-                for (const std::size_t q : pool_by_chip[it->second]) {
-                    // Symmetrised on purpose: the question is whether a link exists between the two
-                    // regions, not which direction the physical graph happened to record it in.
-                    record_touch(p, q);
-                    record_touch(q, p);
-                }
-            }
-        }
-    }
-    for (auto& list : index.touches) {
-        std::sort(list.begin(), list.end());
-    }
-
-    const std::size_t grouping_word_count = bits_word_count(groupings.size());
-    index.mesh_allowed_groupings.assign(mesh_grouping_options.size(), Bits(grouping_word_count, 0));
-    index.mesh_candidate_list.assign(mesh_grouping_options.size(), 0);
-    std::map<std::vector<std::size_t>, std::size_t> list_for_option_set;
-    for (std::size_t mesh = 0; mesh < mesh_grouping_options.size(); ++mesh) {
-        std::vector<std::size_t> options = mesh_grouping_options[mesh];
-        std::sort(options.begin(), options.end());
-        options.erase(std::unique(options.begin(), options.end()), options.end());
-        if (options.empty()) {
-            return fmt::format("logical mesh {} lists no acceptable groupings", mesh);
-        }
-        for (const std::size_t grouping : options) {
-            if (grouping >= groupings.size()) {
-                return fmt::format(
-                    "logical mesh {} accepts grouping {} but only {} grouping(s) were given",
-                    mesh,
-                    grouping,
-                    groupings.size());
-            }
-            bits_set(index.mesh_allowed_groupings[mesh], grouping);
-        }
-
-        const auto [slot, inserted] = list_for_option_set.try_emplace(options, index.candidate_lists.size());
-        if (inserted) {
-            std::vector<std::size_t> merged;
-            for (const std::size_t grouping : options) {
-                merged.insert(merged.end(), by_grouping[grouping].begin(), by_grouping[grouping].end());
-            }
-            std::sort(merged.begin(), merged.end());
-            index.candidate_lists.push_back(std::move(merged));
-        }
-        index.mesh_candidate_list[mesh] = slot->second;
-    }
-    return {};
-}
-
-struct PlacementSearch {
-    const PlacementIndex* index = nullptr;
-    const std::vector<std::vector<std::uint32_t>>* mesh_neighbors = nullptr;
-    std::size_t node_budget = 0;
-
-    std::vector<std::size_t> assignment;  // mesh -> candidate, kUnassigned while unplaced
-    Bits occupied;
-    std::size_t nodes_expanded = 0;
-    std::size_t deepest_depth = 0;
-    bool budget_exhausted = false;
-    std::uint32_t stuck_mesh = kNoMesh;  // last mesh seen with an empty domain, for the diagnostic
-};
-
-// Candidates for `mesh` that come from a grouping it accepts, are chip-disjoint from everything
-// already placed, and touch every already-placed neighbour of `mesh`. Seeding the walk from the
-// smallest placed-neighbour touches list keeps the cost proportional to the local neighbourhood
-// instead of the whole set of candidates the mesh could otherwise take.
-void compute_domain(const PlacementSearch& search, std::uint32_t mesh, std::vector<std::size_t>& out) {
-    const PlacementIndex& index = *search.index;
-    const auto& neighbors = (*search.mesh_neighbors)[mesh];
-    const Bits& allowed_groupings = index.mesh_allowed_groupings[mesh];
-
-    out.clear();
-    const std::vector<std::size_t>* seed = &index.candidate_lists[index.mesh_candidate_list[mesh]];
-    for (const std::uint32_t neighbor : neighbors) {
-        const std::size_t placed = search.assignment[neighbor];
-        if (placed != kUnassigned && index.touches[placed].size() < seed->size()) {
-            seed = &index.touches[placed];
-        }
-    }
-
-    for (const std::size_t candidate : *seed) {
-        if (!bits_test(allowed_groupings, index.grouping_of[candidate])) {
-            continue;
-        }
-        if (!bits_disjoint(index.footprint[candidate], search.occupied)) {
-            continue;
-        }
-        bool adjacent_to_all = true;
-        for (const std::uint32_t neighbor : neighbors) {
-            const std::size_t placed = search.assignment[neighbor];
-            if (placed != kUnassigned && !bits_test(index.touches_mask[placed], candidate)) {
-                adjacent_to_all = false;
-                break;
-            }
-        }
-        if (adjacent_to_all) {
-            out.push_back(candidate);
-        }
-    }
-}
-
-// Most-constrained-first, biased towards the frontier: a mesh adjacent to something already placed
-// is preferred because that is where the adjacency constraint actually prunes. Ties break on domain
-// size and then on index, so the search order is a function of the inputs alone. The winner's domain
-// is handed back so the caller does not recompute it.
-std::uint32_t select_next_mesh(
-    const PlacementSearch& search, std::vector<std::size_t>& domain_out, std::vector<std::size_t>& scratch) {
-    std::uint32_t best = kNoMesh;
-    std::size_t best_placed_neighbors = 0;
-    for (std::uint32_t mesh = 0; mesh < search.assignment.size(); ++mesh) {
-        if (search.assignment[mesh] != kUnassigned) {
-            continue;
-        }
-        std::size_t placed_neighbors = 0;
-        for (const std::uint32_t neighbor : (*search.mesh_neighbors)[mesh]) {
-            placed_neighbors += static_cast<std::size_t>(search.assignment[neighbor] != kUnassigned);
-        }
-        if (best != kNoMesh && placed_neighbors < best_placed_neighbors) {
-            continue;
-        }
-        compute_domain(search, mesh, scratch);
-        if (best == kNoMesh || placed_neighbors > best_placed_neighbors || scratch.size() < domain_out.size()) {
-            best = mesh;
-            best_placed_neighbors = placed_neighbors;
-            domain_out.swap(scratch);
-            if (domain_out.empty()) {
-                // Dead already; no later mesh can be more constrained than this.
-                return best;
-            }
-        }
-    }
-    return best;
-}
-
-// After an assignment, every unplaced neighbour must still have somewhere to go. This is what turns
-// the 8-chip chain from a walk over every window into a couple of nodes.
-bool forward_check(PlacementSearch& search, std::uint32_t mesh, std::vector<std::size_t>& scratch) {
-    for (const std::uint32_t neighbor : (*search.mesh_neighbors)[mesh]) {
-        if (search.assignment[neighbor] != kUnassigned) {
-            continue;
-        }
-        compute_domain(search, neighbor, scratch);
-        if (scratch.empty()) {
-            search.stuck_mesh = neighbor;
-            return false;
-        }
-    }
-    return true;
-}
-
-bool run_dfs(PlacementSearch& search, std::size_t placed_count) {
-    if (placed_count == search.assignment.size()) {
-        return true;
-    }
-    if (search.node_budget != 0 && search.nodes_expanded >= search.node_budget) {
-        search.budget_exhausted = true;
-        return false;
-    }
-    ++search.nodes_expanded;
-
-    std::vector<std::size_t> domain;
-    std::vector<std::size_t> scratch;
-    const std::uint32_t mesh = select_next_mesh(search, domain, scratch);
-    if (domain.empty()) {
-        search.stuck_mesh = mesh;
-        return false;
-    }
-
-    for (const std::size_t candidate : domain) {
-        search.assignment[mesh] = candidate;
-        bits_or_into(search.occupied, search.index->footprint[candidate]);
-        search.deepest_depth = std::max(search.deepest_depth, placed_count + 1);
-        if (forward_check(search, mesh, scratch) && run_dfs(search, placed_count + 1)) {
-            return true;
-        }
-        // Exact undo: the candidate's chips were disjoint from `occupied` before the OR.
-        bits_clear_of(search.occupied, search.index->footprint[candidate]);
-        search.assignment[mesh] = kUnassigned;
-        if (search.budget_exhausted) {
-            return false;
-        }
-    }
-    return false;
-}
-
-std::vector<PsdPlacement> run_adjacency_guided_placement(
-    const std::vector<GroupingInfo>& groupings,
-    const std::vector<PlacementCandidate>& pool,
-    const std::vector<std::vector<std::size_t>>& mesh_grouping_options,
-    const AdjacencyGraph<std::uint32_t>& logical_mesh_graph,
-    const AdjacencyGraph<tt::tt_metal::AsicID>& physical_graph,
-    std::size_t node_budget) {
-    const std::size_t mesh_count = mesh_grouping_options.size();
-    if (mesh_count == 0) {
-        return {};
-    }
-
-    PlacementIndex index;
-    const std::string index_error =
-        build_placement_index(groupings, pool, mesh_grouping_options, physical_graph, index);
-    if (!index_error.empty()) {
-        log_debug(tt::LogFabric, "Adjacency-guided placement: {}", index_error);
-        return {};
-    }
-
-    // Undirected view of the logical mesh graph, deduplicated: this search only asks whether a link
-    // exists, so the repeated edges that encode channel multiplicity carry no extra information.
-    std::vector<std::vector<std::uint32_t>> mesh_neighbors(mesh_count);
-    for (const auto& [node, neighbors] : logical_mesh_graph.get_adjacency_map()) {
-        if (node >= mesh_count) {
-            log_debug(
-                tt::LogFabric,
-                "Adjacency-guided placement: logical mesh graph references mesh {} but only {} logical mesh(es) were "
-                "given",
-                node,
-                mesh_count);
-            return {};
-        }
-        for (const std::uint32_t neighbor : neighbors) {
-            if (neighbor >= mesh_count) {
-                log_debug(
-                    tt::LogFabric,
-                    "Adjacency-guided placement: logical mesh graph references mesh {} but only {} logical mesh(es) "
-                    "were given",
-                    neighbor,
-                    mesh_count);
-                return {};
-            }
-            if (neighbor == node) {
-                continue;
-            }
-            mesh_neighbors[node].push_back(neighbor);
-            mesh_neighbors[neighbor].push_back(node);
-        }
-    }
-    for (auto& neighbors : mesh_neighbors) {
-        std::sort(neighbors.begin(), neighbors.end());
-        neighbors.erase(std::unique(neighbors.begin(), neighbors.end()), neighbors.end());
-    }
-
-    for (std::size_t mesh = 0; mesh < mesh_count; ++mesh) {
-        if (index.candidate_lists[index.mesh_candidate_list[mesh]].empty()) {
-            std::vector<std::string> names;
-            names.reserve(mesh_grouping_options[mesh].size());
-            for (const std::size_t grouping : mesh_grouping_options[mesh]) {
-                names.push_back(groupings[grouping].name);
-            }
-            log_debug(
-                tt::LogFabric,
-                "Adjacency-guided placement: the pool of {} placement(s) contains nothing from any grouping "
-                "acceptable to logical mesh {} ({})",
-                pool.size(),
-                mesh,
-                fmt::join(names, ", "));
-            return {};
-        }
-    }
-
-    PlacementSearch search;
-    search.index = &index;
-    search.mesh_neighbors = &mesh_neighbors;
-    search.node_budget = node_budget;
-    search.assignment.assign(mesh_count, kUnassigned);
-    search.occupied.assign(index.chip_word_count, 0);
-
-    const bool solved = run_dfs(search, 0);
-    if (!solved) {
-        std::string stuck = "none recorded";
-        if (search.stuck_mesh != kNoMesh) {
-            std::vector<std::string> names;
-            for (const std::size_t grouping : mesh_grouping_options[search.stuck_mesh]) {
-                names.push_back(groupings[grouping].name);
-            }
-            stuck = fmt::format("mesh {} (accepts {})", search.stuck_mesh, fmt::join(names, ", "));
-        }
-        log_debug(
-            tt::LogFabric,
-            "Adjacency-guided placement failed: could not place all {} logical meshes on chip-disjoint, mutually "
-            "adjacent regions from a pool of {}{}. Deepest simultaneous placement was {} mesh(es) after {} search "
-            "nodes; last dead end at {}.",
-            mesh_count,
-            pool.size(),
-            search.budget_exhausted ? fmt::format(" within the {} node budget", node_budget) : std::string(),
-            search.deepest_depth,
-            search.nodes_expanded,
-            stuck);
-        return {};
-    }
-
-    std::vector<PsdPlacement> placements;
-    placements.reserve(mesh_count);
-    for (const std::size_t candidate : search.assignment) {
-        PsdPlacement placement;
-        placement.mesh_node_to_asic_position = groupings[pool[candidate].grouping_index].mesh_node_to_asic_position;
-        for (const auto& [grouping_node, asic] : pool[candidate].result.target_to_global) {
-            placement.asics.insert(asic);
-        }
-        placements.push_back(std::move(placement));
-    }
-    log_debug(
-        tt::LogFabric,
-        "Adjacency-guided placement: placed {} meshes from a pool of {} in {} nodes",
-        mesh_count,
-        pool.size(),
-        search.nodes_expanded);
-    return placements;
-}
-
-}  // namespace
-
-}  // namespace tt::tt_fabric
 
 bool PhysicalGroupingDescriptor::can_map_to_psd(
     const GroupingInfo& grouping_info, const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) {
@@ -2358,7 +1908,316 @@ std::vector<MappingResult<LogicalChipId, AsicID>> PhysicalGroupingDescriptor::fi
     return results;
 }
 
-namespace tt::tt_fabric {
+// ---------------------------------------------------------------------------
+// Adjacency-guided placement search (incremental domain generation)
+//
+// Places one mesh at a time by DFS with backtracking, generating each mesh's candidate regions only
+// when it is reached, so the candidates are already constrained by what its placed neighbours took.
+// ---------------------------------------------------------------------------
+namespace {
+
+using GlobalMeshId = MeshId;
+
+// A placed mesh is one PsdPlacement: the ASIC footprint chosen for it, plus the winning grouping
+// variant's mesh_node_to_asic_position. The pinning map is a property of the variant rather than of the
+// footprint, so it has to be carried from the placement that produced it.
+
+// TODO: forward_check — domain wipeout / union bound (deferred).
+// bool forward_check(...);
+
+// One mesh's chosen placement. Stored in a vector rather than a map: mesh count is modest (tens to
+// low hundreds), we iterate the whole assignment often, and a contiguous vector is smaller and more
+// cache-friendly than a tree node per entry.
+struct PlacedMesh {
+    GlobalMeshId mesh_id;
+    PsdPlacement placement;
+};
+using AssignedMeshes = std::vector<PlacedMesh>;
+
+bool assignment_has_mesh(const AssignedMeshes& assignment, const GlobalMeshId& mesh_id) {
+    for (const PlacedMesh& placed : assignment) {
+        if (placed.mesh_id == mesh_id) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Every ASIC claimed by an already-placed mesh. Derived from the assignment on demand rather than
+// tracked alongside it, so undoing a choice stays a single vector copy with nothing else to keep in sync.
+std::unordered_set<AsicID> collect_occupied_asics(const AssignedMeshes& assignment) {
+    std::unordered_set<AsicID> occupied;
+    for (const PlacedMesh& placed : assignment) {
+        occupied.insert(placed.placement.asics.begin(), placed.placement.asics.end());
+    }
+    return occupied;
+}
+
+// Drop every occupied ASIC, and every edge pointing at one, so a solve against the result cannot land
+// on a chip another mesh already holds. Parallel edges between two free chips are preserved, since
+// channel multiplicity is carried as duplicate neighbour entries.
+//
+// Takes the occupied set rather than the assignment: the caller needs that set for its own constraint
+// work, so deriving it once and passing it avoids walking every placed footprint twice.
+AdjacencyGraph<AsicID> filter_mapped_placements_in_physical_graph(
+    const std::unordered_set<AsicID>& occupied, const AdjacencyGraph<AsicID>& physical_graph) {
+    // AdjacencyMap is a std::map, and we walk the source map in ascending key order and keep a
+    // subsequence of it, so every key we insert is greater than the last. emplace_hint at end() turns
+    // each insert from a tree descent into a constant-time append; operator[] would re-descend per node.
+    AdjacencyGraph<AsicID>::AdjacencyMap free_adjacency;
+    for (const auto& [asic_id, neighbors] : physical_graph.get_adjacency_map()) {
+        if (occupied.contains(asic_id)) {
+            continue;
+        }
+        std::vector<AsicID> free_neighbors;
+        free_neighbors.reserve(neighbors.size());
+        for (const AsicID& neighbor : neighbors) {
+            if (!occupied.contains(neighbor)) {
+                free_neighbors.push_back(neighbor);
+            }
+        }
+        free_adjacency.emplace_hint(free_adjacency.end(), asic_id, std::move(free_neighbors));
+    }
+    return AdjacencyGraph<AsicID>(std::move(free_adjacency));
+}
+
+// TODO: the seam domain — the free chips with an ethernet link into a placed region.
+// Must be computed from the UNFILTERED physical graph: the filtered one has already deleted the
+// region's own chips, so the links out of it are gone with them.
+// std::set<AsicID> free_chips_bordering_region(...);
+
+// The distinct already-placed neighbours of `mesh_id`. mesh_level_graph carries channel multiplicity as
+// duplicate neighbour entries, so the raw neighbour list would count one neighbour several times.
+std::set<GlobalMeshId> placed_neighbors_of(
+    const GlobalMeshId& mesh_id,
+    const AssignedMeshes& assignment,
+    const AdjacencyGraph<GlobalMeshId>& mesh_level_graph) {
+    std::set<GlobalMeshId> placed;
+    for (const GlobalMeshId& neighbor : mesh_level_graph.get_neighbors(mesh_id)) {
+        if (assignment_has_mesh(assignment, neighbor)) {
+            placed.insert(neighbor);
+        }
+    }
+    return placed;
+}
+
+// Which mesh to place next, or nullopt once every mesh is placed (the search's base case). A pure
+// function of the current state: among the unplaced meshes prefer the one with the most already-placed
+// neighbours, so the search keeps growing the frontier it is most constrained by.
+//
+// When no unplaced mesh has a placed neighbour this returns one anyway, which is how a disconnected
+// mesh graph seeds its next component without any component detection — the components are coupled only
+// through ASIC occupancy, and a single search over them lets a later one force an earlier one to move.
+//
+// TODO: richer frontier heuristic — pinning seeds, smallest domain, largest shape.
+std::optional<GlobalMeshId> select_next_mesh(
+    const AssignedMeshes& assignment, const AdjacencyGraph<GlobalMeshId>& mesh_level_graph) {
+    std::optional<GlobalMeshId> next_mesh;
+    std::size_t best_placed_neighbor_count = 0;
+    // mesh_level_graph must have a node per mesh, including meshes with no intermesh connections, or an
+    // unconnected mesh is never selected and never placed. build_logical_multi_mesh_adjacency_graph seeds
+    // every mesh as a node, and both the remap and the merge preserve isolated ones, so this holds.
+    //
+    // get_nodes() is ordered by mesh id and the comparison below is strict, so ties keep the lowest id
+    // and the choice is deterministic.
+    for (const GlobalMeshId& mesh_id : mesh_level_graph.get_nodes()) {
+        if (assignment_has_mesh(assignment, mesh_id)) {
+            continue;
+        }
+        const std::size_t placed_neighbor_count = placed_neighbors_of(mesh_id, assignment, mesh_level_graph).size();
+        if (!next_mesh.has_value() || placed_neighbor_count > best_placed_neighbor_count) {
+            next_mesh = mesh_id;
+            best_placed_neighbor_count = placed_neighbor_count;
+        }
+    }
+    return next_mesh;
+}
+
+// The candidate placements for `mesh_id` given what is already placed: every placement of every grouping
+// variant accepted for this mesh that is disjoint from the regions already taken. Disjointness is
+// enforced by the solve rather than filtered afterwards, so an overlapping placement is never
+// constructed.
+//
+// TODO: adjacency is NOT enforced yet — the pool still contains placements that touch none of
+// `mesh_id`'s placed neighbours, so a candidate that satisfies no mesh-level edge is still offered.
+std::vector<PsdPlacement> next_step_pool(
+    const GlobalMeshId& mesh_id,
+    const AssignedMeshes& assignment,
+    const std::map<GlobalMeshId, std::vector<GroupingInfo>>& global_mesh_groupings,
+    const AdjacencyGraph<GlobalMeshId>& mesh_level_graph,
+    const AdjacencyGraph<AsicID>& physical_graph,
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    std::size_t max_placements_per_variant) {
+    const auto groupings_it = global_mesh_groupings.find(mesh_id);
+    if (groupings_it == global_mesh_groupings.end()) {
+        return {};
+    }
+
+    // Disjointness: occupied chips are absent from this graph, so no solve against it can pick one.
+    // Built once here and consumed by every variant's solve below; it dies with this call, so the
+    // trimmed graph is never alive across a recursion and never multiplied by search depth.
+    const std::unordered_set<AsicID> occupied = collect_occupied_asics(assignment);
+    const AdjacencyGraph<AsicID> free_physical_graph =
+        filter_mapped_placements_in_physical_graph(occupied, physical_graph);
+
+    // TODO: derive the adjacency constraints for this mesh from its placed neighbours
+    // (placed_neighbors_of(mesh_id, assignment, mesh_level_graph)) and add them below.
+    (void)mesh_level_graph;
+    // One constraint object per variant: enumerate_distinct_placements_for_grouping adds the
+    // variant's own trait and host-alignment constraints to it in place, and those must not leak
+    // into the next variant's solve.
+    MappingConstraints<LogicalChipId, AsicID> constraints;
+
+    std::vector<PsdPlacement> pool;
+    for (const GroupingInfo& grouping : groupings_it->second) {
+        const std::vector<uint32_t>& grouping_nodes = grouping.adjacency_graph.get_nodes();
+        if (grouping_nodes.empty()) {
+            continue;
+        }
+
+        for (const auto& mapping : enumerate_distinct_placements_for_grouping(
+                 grouping, free_physical_graph, physical_system_descriptor, max_placements_per_variant, constraints)) {
+            if (!mapping.success) {
+                continue;
+            }
+            PsdPlacement candidate;
+            // Carry the variant's pinning map: it is a property of the variant, not of the footprint,
+            // so it cannot be recovered once the grouping is out of scope.
+            candidate.mesh_node_to_asic_position = grouping.mesh_node_to_asic_position;
+            for (const auto& [grouping_node, asic_id] : mapping.target_to_global) {
+                candidate.asics.insert(asic_id);
+            }
+            pool.push_back(std::move(candidate));
+        }
+    }
+    return pool;
+}
+
+// Completes `assignment` into a placement for every remaining mesh.
+//
+// Returns an empty vector when this branch cannot be completed. A non-empty return means every mesh in
+// `mesh_level_graph` has an entry (size matches). The assignment is taken BY VALUE: each branch
+// works on its own copy, so a branch that fails just discards it and the caller's copy is untouched.
+//
+// `nodes_expanded` is shared across the whole search and must be passed by reference: a by-value
+// counter would restart the budget down every branch and never actually bind.
+AssignedMeshes place_remaining_meshes(
+    AssignedMeshes assignment,
+
+    // Global variables
+    const std::map<GlobalMeshId, std::vector<GroupingInfo>>& global_mesh_groupings,
+    const AdjacencyGraph<GlobalMeshId>& mesh_level_graph,
+    const AdjacencyGraph<AsicID>& physical_graph,
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    std::size_t& nodes_expanded,
+    std::size_t node_budget) {
+    // TODO: seed from MGD pinnings when present, and order seed candidates by
+    // symmetry class so a symmetric dead end is not rediscovered once per image.
+    const std::optional<GlobalMeshId> next_mesh = select_next_mesh(assignment, mesh_level_graph);
+    if (!next_mesh.has_value()) {
+        // Base case: every mesh is placed. The only way this is empty is a zero-mesh input, which can
+        // only happen in the top-level call, so the recursion never mistakes it for a dead end.
+        return assignment;
+    }
+
+    // Enumerate every placement per variant, uncapped: a pool truncated by a cap can hide the only
+    // solution, and the search would have no way to find it. The trimmed physical graph lives inside this call and is
+    // gone before we recurse, so it is never multiplied by search depth.
+    //
+    // TODO: this runs a fresh CSP enumeration at every node, which is by far the most expensive thing the
+    // search does. Two ways to stop paying it:
+    //
+    //  - Memoize the pool in a transposition table keyed on (grouping variants, occupied set). Key on the
+    //    variants rather than the mesh id, so every instance of the same mesh definition shares one entry —
+    //    a descriptor with many identical meshes then solves each shape once per distinct occupancy instead
+    //    of once per mesh. The key has to cover everything the pool depends on, so it must grow to include
+    //    the placed neighbours once the seam constraint starts narrowing the pool.
+    //  - Better: enumerate each grouping variant once against the FULL physical graph before the search
+    //    starts, and at each node filter that master list by occupancy instead of re-solving. Held as
+    //    bitsets over ASIC index, disjointness is a few word ANDs per candidate, so the per-node cost drops
+    //    from a CSP solve to a linear scan. The seam constraint filters the same list the same way. The
+    //    cost is building the master list up front and holding it, which is wasted if the search only ever
+    //    needs a handful of candidates.
+    std::vector<PsdPlacement> candidates = next_step_pool(
+        *next_mesh,
+        assignment,
+        global_mesh_groupings,
+        mesh_level_graph,
+        physical_graph,
+        physical_system_descriptor,
+        /*max_placements_per_variant=*/0);  // TRY ALL, but then see if you need to cap it
+
+    // TODO: value ordering — try the least-constraining candidate first (the one leaving
+    // the most live candidates for this mesh's unplaced neighbours), then prefer fewer hosts spanned.
+    // Candidates are currently tried in enumeration order.
+
+    for (PsdPlacement& candidate : candidates) {
+        // Budget is on search nodes expanded rather than wall clock, so a failure is reproducible from
+        // the MGD and PSD alone. 0 means no limit.
+        ++nodes_expanded;
+        if (node_budget != 0 && nodes_expanded > node_budget) {
+            return {};
+        }
+
+        // Take this branch's own copy of the state and commit the candidate to it. The copy IS the undo
+        // mechanism: if the branch fails, it is discarded and `assignment` was never touched.
+        AssignedMeshes branch = assignment;
+        branch.push_back(PlacedMesh{*next_mesh, std::move(candidate)});
+
+        // TODO: forward_check — before recursing, recompute the domains of `*next_mesh`'s
+        // unplaced neighbours and fail early on a domain wipeout or a violated union bound, so a dead
+        // branch is caught here instead of several levels deeper.
+
+        AssignedMeshes completed = place_remaining_meshes(
+            std::move(branch),
+            global_mesh_groupings,
+            mesh_level_graph,
+            physical_graph,
+            physical_system_descriptor,
+            nodes_expanded,
+            node_budget);
+        if (!completed.empty()) {
+            return completed;
+        }
+        // Dead end. Nothing to undo — `branch` is already gone.
+    }
+
+    // TODO: keep the deepest partial assignment reached and report it as the diagnostic
+    // ("placed 47 of 69 meshes; L48 needs a region adjacent to L47 at chips [...]"), rather than
+    // returning a bare failure.
+    return {};
+}
+
+AssignedMeshes start_adjacency_guided_dfs(
+    const std::map<GlobalMeshId, std::vector<GroupingInfo>>& global_mesh_groupings,
+    const AdjacencyGraph<GlobalMeshId>& mesh_level_graph,
+    const AdjacencyGraph<AsicID>& physical_graph,
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    std::size_t node_budget) {
+    // Owned here so every branch shares one counter.
+    std::size_t nodes_expanded = 0;
+
+    // Start from an empty assignment. No seeding is needed: select_next_mesh picks the first mesh when
+    // nothing is placed, and picks a fresh one again whenever the frontier runs dry, which is how
+    // disconnected components are covered.
+    AssignedMeshes assignment = place_remaining_meshes(
+        /*assignment=*/{},
+        global_mesh_groupings,
+        mesh_level_graph,
+        physical_graph,
+        physical_system_descriptor,
+        nodes_expanded,
+        node_budget);
+
+    // A complete placement has one entry per mesh; anything else is a search failure. Counted against the
+    // graph, since that is what the search enumerates from.
+    if (assignment.size() != mesh_level_graph.get_nodes().size()) {
+        return {};
+    }
+    return assignment;
+}
+
+}  // namespace
 
 std::vector<PsdPlacement> PhysicalGroupingDescriptor::solve_adjacency_guided_placement(
     const MeshGraphDescriptor& mesh_graph_descriptor,
@@ -2388,169 +2247,77 @@ std::vector<PsdPlacement> PhysicalGroupingDescriptor::solve_adjacency_guided_pla
         return {};
     }
 
-    // Build Logical Mesh level adjacency graph and merging multiple MGDs together
+    // Per-MGD logical multi-mesh adjacency graphs (chip-level + mesh-level graphs for one descriptor each).
     std::vector<LogicalMultiMeshGraph> parts;
     parts.reserve(mesh_graph_descriptors.size());
     for (const MeshGraphDescriptor* descriptor : mesh_graph_descriptors) {
         parts.push_back(build_logical_multi_mesh_adjacency_graph(*descriptor));
     }
+    // Local-to-global mesh ID maps produced while merging parts (one map per MGD index).
+    // Unified logical topology: global mesh-level adjacency plus merged per-mesh chip graphs.
     std::vector<std::map<MeshId, MeshId>> local_to_global_mesh_ids;
     const LogicalMultiMeshGraph merged = merge_logical_multi_mesh_adjacency_graphs(parts, &local_to_global_mesh_ids);
-
-    // Create a physical adjacency graph from the PSD
-    AdjacencyGraph<AsicID> physical_graph(
-        tt::tt_metal::experimental::tt_fabric::build_flat_adjacency_map_from_psd(physical_system_descriptor));
-
-    // mesh_adjacency_graphs_ holds an entry per mesh whether or not that mesh has any inter-mesh link,
-    // so it is the authoritative instance list; mesh_level_graph_ carries only the edges. It is a
-    // std::map, so iterating it gives the ascending-MeshId order the returned placements are in.
-    std::vector<MeshId> mesh_order;
-    mesh_order.reserve(merged.mesh_adjacency_graphs_.size());
-    for (const auto& [mesh_id, _] : merged.mesh_adjacency_graphs_) {
-        mesh_order.push_back(mesh_id);
-    }
-    if (mesh_order.empty()) {
+    if (merged.mesh_adjacency_graphs_.empty()) {
         return {};
     }
-    std::map<MeshId, std::uint32_t> mesh_to_dense;
-    for (std::uint32_t dense = 0; dense < mesh_order.size(); ++dense) {
-        mesh_to_dense.emplace(mesh_order[dense], dense);
-    }
 
-    std::vector<GroupingInfo> groupings;
-    std::vector<PlacementCandidate> pool;
-    std::vector<std::vector<std::size_t>> mesh_grouping_options(mesh_order.size());
+    // Flat ASIC adjacency graph of the physical system (search domain for placement).
+    const AdjacencyGraph<AsicID> physical_graph(
+        tt::tt_metal::experimental::tt_fabric::build_flat_adjacency_map_from_psd(physical_system_descriptor));
 
-    // Enumerating a grouping's placements depends only on the hierarchical PGD grouping and the PSD,
-    // not on which mesh asked, so each PGD grouping name is solved once and the result shared. Without
-    // this, a descriptor whose meshes all accept the same grouping repeats the same solve per
-    // definition name.
-    std::unordered_map<std::string, std::vector<MappingResult<LogicalChipId, AsicID>>> placements_by_grouping_name;
-
-    // Merged global MeshId -> ValidGroupingsMap MESH key. Uses MeshGraphDescriptor::mesh_id_to_instance_name
-    // and the same merged_instance_key spelling as get_valid_groupings_for_mgds.
-    std::unordered_map<MeshId, InstanceName> global_mesh_id_to_instance_key;
-    global_mesh_id_to_instance_key.reserve(merged.mesh_adjacency_graphs_.size());
+    // Instance-name keyed grouping variants from valid_groupings["MESH"].
+    // Global mesh ID -> grouping variants, remapped from mesh_groupings via local_to_global_mesh_ids.
+    const std::unordered_map<InstanceName, std::vector<GroupingInfo>>& mesh_groupings = mesh_it->second;
+    std::map<MeshId, std::vector<GroupingInfo>> global_mesh_groupings;
     const std::size_t mgd_count = mesh_graph_descriptors.size();
-    for (std::size_t mgd_index = 0; mgd_index < mgd_count; ++mgd_index) {
-        const auto mesh_id_to_name = mesh_graph_descriptors[mgd_index]->mesh_id_to_instance_name();
-        for (const auto& [mesh_id, instance_name] : mesh_id_to_name) {
-            const auto global_it = local_to_global_mesh_ids[mgd_index].find(mesh_id);
-            if (global_it == local_to_global_mesh_ids[mgd_index].end()) {
-                continue;
-            }
-            global_mesh_id_to_instance_key.emplace(
-                global_it->second, merged_instance_key(mgd_index, mgd_count, instance_name));
+    for (std::size_t mgd_index = 0; mgd_index < local_to_global_mesh_ids.size(); ++mgd_index) {
+        if (mgd_index >= mgd_count) {
+            break;
         }
-    }
-
-    for (std::uint32_t dense = 0; dense < mesh_order.size(); ++dense) {
-        const MeshId global_mesh_id = mesh_order[dense];
-        const auto instance_key_it = global_mesh_id_to_instance_key.find(global_mesh_id);
-        if (instance_key_it == global_mesh_id_to_instance_key.end()) {
-            log_debug(
-                tt::LogFabric,
-                "Adjacency-guided placement: merged mesh id {} has no MGD instance name",
+        const MeshGraphDescriptor& mgd = *mesh_graph_descriptors[mgd_index];
+        const auto mesh_id_to_instance_name = mgd.mesh_id_to_instance_name();
+        for (const auto& [local_mesh_id, global_mesh_id] : local_to_global_mesh_ids[mgd_index]) {
+            // Every mesh must be placeable. Skipping one here would drop it from the search silently and
+            // still report success, since it would be missing from the completeness check too.
+            const auto name_it = mesh_id_to_instance_name.find(local_mesh_id);
+            TT_FATAL(
+                name_it != mesh_id_to_instance_name.end(),
+                "Internal error: Adjacency-guided placement: mesh {} of descriptor {} has no instance name, "
+                "so its grouping variants cannot be looked up",
+                *local_mesh_id,
+                mgd_index);
+            const InstanceName grouping_key = merged_instance_key(mgd_index, mgd_count, name_it->second);
+            const auto groupings_it = mesh_groupings.find(grouping_key);
+            TT_FATAL(
+                groupings_it != mesh_groupings.end() && !groupings_it->second.empty(),
+                "Internal error: Adjacency-guided placement: mesh '{}' (global mesh {}) has no valid grouping "
+                "variants, so no region of this system can host it",
+                grouping_key,
                 *global_mesh_id);
-            return {};
+            global_mesh_groupings.emplace(global_mesh_id, groupings_it->second);
         }
-        const auto groupings_it = mesh_it->second.find(instance_key_it->second);
-        if (groupings_it == mesh_it->second.end()) {
-            log_debug(
-                tt::LogFabric,
-                "Adjacency-guided placement: mesh instance '{}' has no entry in the valid groupings map",
-                instance_key_it->second);
-            return {};
-        }
-        const auto& named_groupings = groupings_it->second;
-
-        std::vector<std::size_t> options;
-        std::unordered_set<std::string> enumerated_names;
-        for (const auto& grouping : named_groupings) {
-            if (!enumerated_names.insert(grouping.name).second) {
-                continue;
-            }
-
-            auto cached = placements_by_grouping_name.find(grouping.name);
-            if (cached == placements_by_grouping_name.end()) {
-                // find_any_in_psd flattens a hierarchical PGD grouping. Committed ValidGroupingsMap
-                // entries are already flat, so resolve the PGD source by name and flatten here.
-                const std::vector<GroupingInfo> hierarchical =
-                    is_flattened(grouping) ? get_groupings_by_name(grouping.name) : std::vector<GroupingInfo>{grouping};
-                std::vector<MappingResult<LogicalChipId, AsicID>> enumerated;
-                for (const auto& source : hierarchical) {
-                    auto found =
-                        find_any_in_psd(source, physical_system_descriptor, physical_graph, /*max_solutions=*/0);
-                    for (auto& placement : found) {
-                        if (placement.success) {
-                            enumerated.push_back(std::move(placement));
-                        }
-                    }
-                }
-                log_debug(
-                    tt::LogFabric,
-                    "Adjacency-guided placement: grouping '{}' ({} hierarchical source(s)) enumerated {} "
-                    "placements",
-                    grouping.name,
-                    hierarchical.size(),
-                    enumerated.size());
-                cached = placements_by_grouping_name.emplace(grouping.name, std::move(enumerated)).first;
-            }
-            if (cached->second.empty()) {
-                continue;
-            }
-
-            // The committed grouping carries this mesh definition's own pinning map, so two
-            // definitions accepting the same PGD grouping still need separate entries here even
-            // though they share the enumeration above.
-            const std::size_t grouping_index = groupings.size();
-            options.push_back(grouping_index);
-            groupings.push_back(grouping);
-            for (const auto& placement : cached->second) {
-                PlacementCandidate candidate;
-                candidate.grouping_index = grouping_index;
-                candidate.result = placement;
-                pool.push_back(std::move(candidate));
-            }
-        }
-
-        if (options.empty()) {
-            log_debug(
-                tt::LogFabric,
-                "Adjacency-guided placement: mesh instance '{}' has no grouping that places on this PSD",
-                instance_key_it->second);
-            return {};
-        }
-        mesh_grouping_options[dense] = std::move(options);
     }
 
-    // The mesh-level graph in the search's dense index space. run_adjacency_guided_placement
-    // symmetrises and deduplicates, so emitting each stored direction as-is is enough.
-    AdjacencyGraph<std::uint32_t>::AdjacencyMap logical_adjacency;
-    for (std::uint32_t dense = 0; dense < mesh_order.size(); ++dense) {
-        logical_adjacency[dense];
-    }
-    for (const auto& [mesh_id, neighbors] : merged.mesh_level_graph_.get_adjacency_map()) {
-        const auto from = mesh_to_dense.find(mesh_id);
-        if (from == mesh_to_dense.end()) {
+    // Adjacency-guided DFS: the placement chosen for each global mesh ID. The mesh-level graph is what
+    // enumerates the meshes, which is sound because its builder seeds a node per mesh before adding any
+    // connection edges, so a mesh with no intermesh links is still a node with an empty neighbour list.
+    auto mesh_placements = start_adjacency_guided_dfs(
+        global_mesh_groupings, merged.mesh_level_graph_, physical_graph, physical_system_descriptor, node_budget);
+
+    // Drop the mesh keying the caller does not consume and return the placements as a flat list.
+    // TODO: Consider keeping GlobalmeshId as hint for later lookups
+    std::vector<PsdPlacement> placements;
+    placements.reserve(mesh_placements.size());
+    for (PlacedMesh& placed : mesh_placements) {
+        if (placed.placement.asics.empty()) {
             continue;
         }
-        for (const MeshId neighbor : neighbors) {
-            const auto to = mesh_to_dense.find(neighbor);
-            if (to != mesh_to_dense.end()) {
-                logical_adjacency[from->second].push_back(to->second);
-            }
-        }
+        placements.push_back(std::move(placed.placement));
     }
-    const AdjacencyGraph<std::uint32_t> logical_mesh_graph(logical_adjacency);
-
-    return run_adjacency_guided_placement(
-        groupings, pool, mesh_grouping_options, logical_mesh_graph, physical_graph, node_budget);
+    return placements;
 }
 
-}  // namespace tt::tt_fabric
-
-// TODO(plan 3 §8(a)): delete both overloads once solve_adjacency_guided_placement is the only producer.
+// TODO: delete both overloads once solve_adjacency_guided_placement is the only producer.
 std::vector<PsdPlacement> PhysicalGroupingDescriptor::find_all_in_psd(
     const std::vector<GroupingInfo>& groupings,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const {
@@ -2560,7 +2327,7 @@ std::vector<PsdPlacement> PhysicalGroupingDescriptor::find_all_in_psd(
 }
 
 // NOTE this only works on flattenable meshes right now
-// TODO(plan 3 §8(a)): delete with the overload above.
+// TODO: delete with the overload above.
 std::vector<PsdPlacement> PhysicalGroupingDescriptor::find_all_in_psd(
     const std::vector<GroupingInfo>& groupings,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
@@ -2617,3 +2384,5 @@ std::vector<PsdPlacement> PhysicalGroupingDescriptor::find_all_in_psd(
 
     return placements;
 }
+
+}  // namespace tt::tt_fabric
