@@ -389,8 +389,8 @@ class RunTimeOptions {
     // Bypass FD CQ payload copies for simulator tensor preloads (TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES=1)
     bool simulator_direct_tensor_writes = false;
 
-    // NOC API version for the Quasar simulator
-    uint32_t simulator_quasar_noc_api_version = 2;
+    // NOC API version for Quasar (simulator and silicon)
+    uint32_t quasar_noc_api_version = 2;
 
     // To be used for NUMA node based thread binding
     bool numa_based_affinity = false;
@@ -939,7 +939,7 @@ public:
 
     bool get_simulator_direct_tensor_writes() const { return simulator_direct_tensor_writes; }
 
-    uint32_t get_simulator_quasar_noc_api_version() const { return simulator_quasar_noc_api_version; }
+    uint32_t get_quasar_noc_api_version() const { return quasar_noc_api_version; }
 
     std::optional<uint32_t> get_fabric_router_sync_timeout_ms() const { return fabric_router_sync_timeout_ms; }
 
