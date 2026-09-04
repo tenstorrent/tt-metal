@@ -1,0 +1,42 @@
+=== G-CCL-PLAN — P4 parallelism and CCL plan — 2026-09-04T08:45:59Z
+=== repo: 95da5578de3 branch mstojkovic/bringup_kit_validation
+
+--- 1. document structure checks (scratchpad script, not a package deliverable)
+[1] (mesh,TP,SP) arithmetic tokens present: 5/5
+[1] scatter-width rows arithmetically correct: 3/3
+[2] placement rows: 8
+[2] placement rows with a non-empty justification: 8/8
+[3] DEC-025 exists with a cost-equivalence argument, falsifier and blast radius: True
+[3] the *wrong* reason is named and rejected in the plan: True
+[4] semaphore count arithmetic rows correct: 3/3
+[4] total global semaphores stated: True, computed from the table: 14
+[5] collective call-site rows: 9
+[5] call-site rows with all 8 columns filled: 9/9
+
+STRUCTURE CHECK: PASS
+structure check exit: 0
+
+--- 2. canonical collective op usage counts (re-measured, not quoted)
+  ttnn.experimental.all_gather_async                 29 uses
+  ttnn.experimental.reduce_scatter_minimal_async     18 uses
+  ttnn.experimental.all_reduce_async                 2 uses
+
+--- 3. the three BH-galaxy torus mesh-graph descriptors named in the plan
+32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto
+bh_galaxy_sp4_torus_xy_graph_descriptor.textproto
+single_bh_galaxy_torus_xy_graph_descriptor.textproto
+
+--- 4. citation verifier
+citations checked : 253
+  verified        : 253
+  mismatched      : 0
+  missing files   : 0
+doc refs scanned  : 404
+  resolved        : 404
+  unresolved      : 0
+verify_citations exit: 0
+
+--- 5. per-phase regression: whole package suite
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_reference_model.py::test_negative_controls_are_rejected[s64]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_reference_model.py::test_hf_reference_wrapper_signature_branch
+======================== 10 passed, 1 warning in 13.77s ========================

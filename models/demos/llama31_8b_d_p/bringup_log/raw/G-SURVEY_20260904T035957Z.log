@@ -1,0 +1,39 @@
+=== G-SURVEY raw log (rerun; the first run's 'rows with a decision' grep was wrong — the bold
+    markers around **import** broke the regex, not the survey) — 2026-09-04T03:59:57Z ===
+--- 1. survey structure
+component rows                        : 30
+rows whose decision cell is non-empty : 30
+decision breakdown:
+     16    adapt
+      6    **import**
+      1    copy (one definition)
+      1    adapt + import the math
+      1    **import** the op, adapt the wrapper
+      1    **import** the op, adapt the program config
+      1    **import** the op, adapt the caller
+      1    **import** the op
+      1    **import** + convention
+      1    **import** (config, not code)
+rows with a full path:line            : 27
+rows citing whole files only (3 = rows 23, 27, 30; each also carries abbreviated :NN refs or is a config file):
+| 23 | **Chunked-prefill runtime** | adapt | `models/demos/gpt_oss_d_p/tt/tt_prefill_runti
+| 27 | **Per-module test shape** | adapt | `models/demos/gpt_oss_d_p/tests/unit/test_atten
+| 30 | **Mesh graph descriptors / fabric** | **import** (config, not code) | `tt_metal/fab
+'not bringing over' rows              : 16
+models/common verdict, both required citations present:
+models/common/modules/mlp/mlp_2d.py:461
+models/common/models/llama3_8b/model.py:890
+'write' rows (expected 0):            0
+--- 2. verify_citations.py
+citations checked : 123
+  verified        : 123
+  mismatched      : 0
+  missing files   : 0
+doc refs scanned  : 195
+  resolved        : 195
+  unresolved      : 0
+EXIT=0
+--- 3. per-phase regression: the whole package suite
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_reference_model.py::test_negative_controls_are_rejected[s64]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_reference_model.py::test_hf_reference_wrapper_signature_branch
+======================== 10 passed, 1 warning in 13.58s ========================

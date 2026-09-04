@@ -9,12 +9,14 @@ The register and the sections must agree. Re-checked at every phase boundary (la
 | R-002 | low | P0 | Checkpoint identity established against the in-repo config, not against the live gated HF repo | mitigated | P0 (`DEC-001`) |
 | R-003 | medium | P0 | Pre-existing tilized weight caches inside `$HF_MODEL` (`ttnn_cache/`, `P150/`) | open | P6 (`G-WEIGHTS`) |
 | R-004 | low | P0 | `CHUNK_SIZE` / `MAX_SEQ_LEN` not yet chosen | open — deferred by `DEC-004` | P7 (`G-CHUNK`) |
-| R-005 | high | P1 | `rope_theta` is absent from the `transformers` 5.12.1 config object; `getattr` with a default silently substitutes a wrong theta | mitigated by design, unenforced until P5.3 | P5.3 (`G-ROPE`) |
+| R-005 | high | P1 | `rope_theta` is absent from the `transformers` 5.12.1 config object; `getattr` with a default silently substitutes a wrong theta | **mitigated and enforced** as of P5.3 | closed by `tt/rope.py` + `G-ROPE` |
 | R-006 | medium | P1 | The hand-written oracle and HF could share a misreading of the architecture | open — inherent | P0 card / P6 (`G-MODEL`) |
 | R-007 | medium | P2 | `ttnn.experimental.deepseek_prefill.update_padded_kv_cache` and `rotary_embedding_indexed` are consumed from `deepseek_v3_d_p`'s substrate; no Llama-specific test exists upstream | open | P5.6 (`G-KV`), P7 |
 | R-008 | low | P2 | The kit ships fewer example files than its own README and `WHY_THESE_EXAMPLES.md` advertise | open — affects the kit, not the model | kit maintainer |
 | R-009 | medium | P2 | No in-repo template implements a **dense, bias-free, full-RoPE** attention block; `tt/attention/` is an adaptation with three features deleted | open | P5.5 (`G-ATTN`) |
-| R-010 | low | P2 | `compute_llama3_parameters` hard-codes low/high frequency factors instead of reading the config | open upstream, not blocking | P5.3 (`G-ROPE`) |
+| R-010 | low | P2 | `compute_llama3_parameters` hard-codes low/high frequency factors instead of reading the config | mitigated in-package (P5.3 assert); open upstream | P5.3 (`G-ROPE`) |
+| R-011 | low | P5.2 | `gpt_oss_d_p`'s dormant distributed-RMSNorm branch passes `stats` twice and would raise `TypeError` if enabled | open upstream; not carried into this package (`DEC-031`) | upstream `gpt_oss_d_p`, plus P8 if scheme B is taken |
+| R-012 | medium | P5.1 | The repo root ignores `*.log`, so every gate raw log — the run's whole evidence base — was untracked through P0-P4 | mitigated by a nested `.gitignore` (`DEC-037`); the kit does not warn about it | kit maintainer / repo maintainer |
 
 ---
 
@@ -79,11 +81,16 @@ trap in the bring-up. Copying either line into `tt/model_config.py` or `tt/tt_pr
 reproduces it exactly.
 **Status.** mitigated by design (`01_REFERENCE.md` §4 pins the rule: theta and scaling are read from
 the **raw `config.json` dict** through `models/tt_transformers/tt/common.py:165` / `:183`, in exactly
-one place, asserted non-`None`), and **regression-tested** in P1 by
-`test_rope_theta_is_not_an_attribute`. Not yet *enforced* in device code, because no device code
-exists until P5.
-**How to close.** P5.3 routes theta/scaling through the single normalised constructor and
-`G-ROPE`'s negative control (unscaled `inv_freq`, or theta 10000) must collapse. Owner: P5.3.
+one place, asserted non-`None`), **regression-tested** in P1 by
+`test_rope_theta_is_not_an_attribute`, and **enforced in device code as of P5.3**:
+`models/demos/llama31_8b_d_p/tt/rope.py`'s `rope_params` is the only reader, it goes through
+`get_rope_theta` / `get_rope_scaling` on the raw dict, and it asserts each of the three values
+non-`None`. Measured through it at `G-ROPE`: `(theta, factor, orig_context_len) ==
+(500000.0, 8.0, 8192)` (`raw/G-ROPE_20260904T091040Z.log`).
+**How to close.** Closed for `tt/rope.py`. Re-checks owed where the same values could re-enter:
+P6.2's `ModelArgs` and P7's `tt/tt_prefill_runtime.py` must call `rope_params` rather than read the
+config themselves, and `G-CLEAN` greps for `getattr(.*rope_theta` across the package. Owner: P6.2,
+P7, P9.
 
 ## R-006 — Two agreeing oracles can share one misreading
 **Fact.** `G-REF` shows the hand-written torch reference and HF `LlamaDecoderLayer` agree to
@@ -147,7 +154,50 @@ helper bit-identical to a config-driven transcription (`max|Δ| = 0.0`). Any *ot
 checkpoint with different factors would be silently wrong — the failure mode is a RoPE that is
 correct below `original_max_position_embeddings` and wrong above it, which short-sequence gates
 cannot see.
-**Status.** open upstream, not blocking here.
-**How to close.** Either pass the factors through `apply_scaling`, or assert in
-`tt/rope.py` that the config's factors equal the helper's literals so a different checkpoint fails
-loudly at build time. This package will take the assert (P5.3). Owner: P5.3, plus an upstream note.
+**Status.** **mitigated in this package as of P5.3**; still open upstream.
+`models/demos/llama31_8b_d_p/tt/rope.py`'s `assert_llama3_factors` compares the config's
+`low_freq_factor` / `high_freq_factor` against the helper's literals and raises on a mismatch; it
+runs on every call to `rope_params`, so no table can be built past it.
+`tests/unit/test_rope_vs_ref.py::test_llama3_scaling_is_active` executes it
+(`raw/G-ROPE_20260904T091040Z.log`).
+**How to close.** Upstream: pass the factors through `apply_scaling`. Owner: upstream note; the
+in-package half is done.
+
+## R-011 — The template's dormant distributed RMSNorm would raise `TypeError` if switched on
+**Fact.** `models/demos/gpt_oss_d_p/tt/rms_norm.py:82` passes `tt_gathered_stats` positionally to
+`ttnn.rms_norm_post_all_gather` and `:89` passes the same tensor again as `stats=`. The op's second
+positional parameter **is** `stats`, so the call cannot bind. Measured on this box:
+`ttnn.rms_norm_post_all_gather(x, s, stats=s)` raises
+`TypeError: ttnn.rms_norm_post_all_gather(): incompatible function arguments`. The branch is
+unreachable there (`models/demos/gpt_oss_d_p/tt/rms_norm.py:33` pins `is_distributed = False` with
+its condition commented out), so nothing has ever executed it.
+**Impact.** **None for this package**: `tt/rms_norm.py` passes `stats` once (`DEC-031`), and the
+branch is dormant here too under residual scheme A (`DEC-025`). The risk is to whoever enables the
+distributed norm in `gpt_oss_d_p` — or to a future package that copies the same lines, which is
+exactly what nearly happened here. It is also the general case of the dormant-branch hazard
+`DEC-028` names: a branch that has never run is a claim, not a fact.
+**Status.** open upstream; not carried into this package.
+**How to close.** File the one-line fix against `models/demos/gpt_oss_d_p/tt/rms_norm.py` (drop the
+`stats=` keyword). Owner: upstream `gpt_oss_d_p`; this package's P8 re-checks it if residual scheme
+B is ever taken.
+
+## R-012 — The repo's `.gitignore` silently excluded every gate raw log
+**Fact.** `.gitignore:7` is `*.log`. `git check-ignore -v` confirms it matches
+`bringup_log/raw/*.log`, and `git ls-files models/demos/llama31_8b_d_p/bringup_log/raw/` was
+**empty** after three committed phases — so the raw logs for `G-CARD`, `G-REF`, `G-SURVEY`,
+`G-OUTLINE` and `G-CCL-PLAN` were never in a commit. The gate ledger cites them by filename
+throughout.
+**Impact.** The recipe's central evidence rule — "A gate with no raw log did not happen"
+(`BRINGUP_RECIPE.md:199`) — and Appendix C item 2 (`BRINGUP_RECIPE.md:1817-1819`) were both
+unsatisfiable by construction: on a fresh clone the ledger would cite 15 files that do not exist.
+Nothing about the *numbers* is affected; what was at risk is their auditability, which is the
+stated point of the whole logging protocol. The logs were never lost here only because the session
+ran on the same disk.
+**Status.** mitigated in-package by `bringup_log/raw/.gitignore` containing `!*.log`
+(`DEC-037`), which re-includes them retroactively — P0-P4's logs are still on disk and are now
+trackable.
+**How to close.** Two things the kit and the repo owe, neither of which this session may write:
+`models/demos/common/bringup/BRINGUP_RECIPE.md` §1.2 should say that a raw-log directory needs a
+`.gitignore` exception (it currently discusses only the `check-large-files` hook, which implies
+committing without saying how), and `scripts/new_bringup.sh` should scaffold that file alongside
+`bringup_log/raw/`. Owner: kit maintainer.

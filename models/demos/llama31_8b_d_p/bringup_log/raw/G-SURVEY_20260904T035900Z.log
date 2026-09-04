@@ -1,0 +1,24 @@
+=== G-SURVEY raw log — 2026-09-04T03:59:00Z ===
+--- 1. survey structure checks
+component rows: 30
+rows with a decision AND a path:line: 18
+rows citing at least one path:line:   27
+not-bringing-over rows: 16
+models/common verdict citations present:
+1
+1
+--- 2. verify_citations.py
+citations checked : 123
+  verified        : 123
+  mismatched      : 0
+  missing files   : 0
+doc refs scanned  : 195
+  resolved        : 195
+  unresolved      : 0
+EXIT=0
+--- 3. per-phase regression: the whole package suite
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_reference_model.py::test_reference_attention_is_causal[s64]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_reference_model.py::test_llama3_rope_scaling_is_active
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_reference_model.py::test_negative_controls_are_rejected[s64]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_reference_model.py::test_hf_reference_wrapper_signature_branch
+======================== 10 passed, 1 warning in 13.84s ========================

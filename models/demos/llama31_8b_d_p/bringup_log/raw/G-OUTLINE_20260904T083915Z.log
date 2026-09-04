@@ -1,0 +1,36 @@
+=== G-OUTLINE — P3 package outline — 2026-09-04T08:39:15Z
+=== repo: 95da5578de3 branch mstojkovic/bringup_kit_validation
+
+--- 1. document structure checks (scratchpad script, not a package deliverable)
+[1] Appendix A gate rows found: 32
+[1] outline owner rows       : 32
+[1] Appendix A gates with an owner: 32/32
+[2] non-__init__ files in the committed tree: 50
+[2] files named in the per-file contract: 49/49
+[3] shape-table rows (excl. header): 18
+[3] rows with 4 filled cells and no unresolved /TP or /SP: 18/18
+[4] per-file responsibility text: 14
+[4] per-file interface blocks: 17
+[4] per-file template citations: 18
+[4] per-file shape statements: 13
+[5] labelled deviations from the recipe tree: 6 -> DEV-['1', '2', '3', '4', '5', '6']
+
+STRUCTURE CHECK: PASS
+structure check exit: 0
+
+--- 2. citation verifier
+citations checked : 225
+  verified        : 225
+  mismatched      : 0
+  missing files   : 0
+doc refs scanned  : 338
+  resolved        : 338
+  unresolved      : 0
+verify_citations exit: 0
+
+--- 3. per-phase regression: whole package suite
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_reference_model.py::test_reference_attention_is_causal[s64]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_reference_model.py::test_llama3_rope_scaling_is_active
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_reference_model.py::test_negative_controls_are_rejected[s64]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_reference_model.py::test_hf_reference_wrapper_signature_branch
+======================== 10 passed, 1 warning in 13.76s ========================

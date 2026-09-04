@@ -1,0 +1,72 @@
+2026-09-04 03:50:14.367 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mstojkovic/.cache/ttnn,model_cache_path=/home/mstojkovic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.14, pytest-9.0.3, pluggy-1.6.0 -- /home/mstojkovic/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mstojkovic/tt-metal
+configfile: pytest.ini
+plugins: timeout-2.4.0, anyio-4.15.0, cov-7.0.0, github-actions-annotate-failures-0.3.0, repeat-0.9.4, dash-2.15.0, benchmark-5.2.3, split-0.11.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 9 items
+
+models/demos/llama31_8b_d_p/tests/unit/test_reference_model.py::test_bundled_config_matches_checkpoint PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_reference_model.py::test_rope_theta_is_not_an_attribute_on_transformers_5 2026-09-04 03:50:16.836 | INFO     | llama31_8b_d_p.tests.unit.test_reference_model:test_rope_theta_is_not_an_attribute_on_transformers_5:282 - rope_theta: cfg.rope_theta raises AttributeError | getattr(cfg,'rope_theta',10000.0) -> 10000.0 (WRONG, silent) | get_rope_theta(config.json) -> 500000.0
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_reference_model.py::test_handwritten_reference_is_deterministic[s128] 2026-09-04 03:50:18.237 | INFO     | llama31_8b_d_p.tests.unit.test_reference_model:test_handwritten_reference_is_deterministic:300 - hand-written reference sha256: 0a16330068bce3807911a80462fad1b38c84cfd3f08ba9098df38156f67cb96b / 0a16330068bce3807911a80462fad1b38c84cfd3f08ba9098df38156f67cb96b
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_reference_model.py::test_hf_reference_is_deterministic[s128] 2026-09-04 03:50:20.667 | INFO     | llama31_8b_d_p.tests.unit.test_reference_model:test_hf_reference_is_deterministic:317 - HF LlamaDecoderLayer sha256: 0a16330068bce3807911a80462fad1b38c84cfd3f08ba9098df38156f67cb96b / 0a16330068bce3807911a80462fad1b38c84cfd3f08ba9098df38156f67cb96b
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_reference_model.py::test_handwritten_matches_hf_decoder_layer[s128] 2026-09-04 03:50:23.137 | INFO     | llama31_8b_d_p.tests.unit.test_reference_model:test_handwritten_matches_hf_decoder_layer:339 - hand-written vs HF (random weights, s128): PCC 1.0, max|delta| 0.000e+00
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_reference_model.py::test_handwritten_matches_hf_decoder_layer_real_weights[s64] 2026-09-04 03:50:24.455 | INFO     | llama31_8b_d_p.tests.unit.test_reference_model:test_handwritten_matches_hf_decoder_layer_real_weights:358 - hand-written vs HF (real layer-0 weights, s64): PCC 1.0, max|delta| 0.000e+00
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_reference_model.py::test_reference_attention_is_causal[s64] 2026-09-04 03:50:26.851 | INFO     | llama31_8b_d_p.tests.unit.test_reference_model:test_reference_attention_is_causal:384 - causality (hand-written): with mask max|delta| 0.000e+00, mask=None 3.515e+00
+2026-09-04 03:50:26.993 | INFO     | llama31_8b_d_p.tests.unit.test_reference_model:test_reference_attention_is_causal:384 - causality (HF): with mask max|delta| 0.000e+00, mask=None 3.515e+00
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_reference_model.py::test_llama3_rope_scaling_is_active 2026-09-04 03:50:27.317 | INFO     | llama31_8b_d_p.tests.unit.test_reference_model:test_llama3_rope_scaling_is_active:407 - llama3 inv_freq vs tt_transformers precompute_freqs: max|delta| 0.000e+00
+2026-09-04 03:50:27.317 | INFO     | llama31_8b_d_p.tests.unit.test_reference_model:test_llama3_rope_scaling_is_active:415 - llama3 scaling control: max|delta inv_freq| 8.894e-04, max|delta cos@8192| 1.882e+00
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_reference_model.py::test_negative_controls_are_rejected[s64] 2026-09-04 03:50:28.756 | INFO     | llama31_8b_d_p.tests.unit.test_reference_model:test_negative_controls_are_rejected:459 - controls: wrong-theta PCC 0.8743656579057711, repeat-vs-interleave PCC 0.5539609959070404, no-RoPE PCC 0.8647971830632548
+PASSED
+
+=============================== warnings summary ===============================
+python_env/lib/python3.12/site-packages/pydantic/_internal/_config.py:291
+  /home/mstojkovic/tt-metal/python_env/lib/python3.12/site-packages/pydantic/_internal/_config.py:291: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.9/migration/
+    warnings.warn(DEPRECATION_MESSAGE, DeprecationWarning)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /home/mstojkovic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+2.40s call     models/demos/llama31_8b_d_p/tests/unit/test_reference_model.py::test_reference_attention_is_causal[s64]
+2.29s call     models/demos/llama31_8b_d_p/tests/unit/test_reference_model.py::test_hf_reference_is_deterministic[s128]
+2.22s call     models/demos/llama31_8b_d_p/tests/unit/test_reference_model.py::test_handwritten_matches_hf_decoder_layer[s128]
+1.32s call     models/demos/llama31_8b_d_p/tests/unit/test_reference_model.py::test_negative_controls_are_rejected[s64]
+1.28s call     models/demos/llama31_8b_d_p/tests/unit/test_reference_model.py::test_handwritten_reference_is_deterministic[s128]
+1.11s call     models/demos/llama31_8b_d_p/tests/unit/test_reference_model.py::test_handwritten_matches_hf_decoder_layer_real_weights[s64]
+1.07s call     models/demos/llama31_8b_d_p/tests/unit/test_reference_model.py::test_rope_theta_is_not_an_attribute_on_transformers_5
+0.20s setup    models/demos/llama31_8b_d_p/tests/unit/test_reference_model.py::test_llama3_rope_scaling_is_active
+0.20s setup    models/demos/llama31_8b_d_p/tests/unit/test_reference_model.py::test_handwritten_matches_hf_decoder_layer[s128]
+0.20s setup    models/demos/llama31_8b_d_p/tests/unit/test_reference_model.py::test_handwritten_matches_hf_decoder_layer_real_weights[s64]
+0.20s setup    models/demos/llama31_8b_d_p/tests/unit/test_reference_model.py::test_reference_attention_is_causal[s64]
+0.19s setup    models/demos/llama31_8b_d_p/tests/unit/test_reference_model.py::test_hf_reference_is_deterministic[s128]
+0.19s setup    models/demos/llama31_8b_d_p/tests/unit/test_reference_model.py::test_handwritten_reference_is_deterministic[s128]
+0.19s setup    models/demos/llama31_8b_d_p/tests/unit/test_reference_model.py::test_negative_controls_are_rejected[s64]
+0.16s setup    models/demos/llama31_8b_d_p/tests/unit/test_reference_model.py::test_bundled_config_matches_checkpoint
+0.15s setup    models/demos/llama31_8b_d_p/tests/unit/test_reference_model.py::test_rope_theta_is_not_an_attribute_on_transformers_5
+
+(9 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_reference_model.py::test_bundled_config_matches_checkpoint
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_reference_model.py::test_rope_theta_is_not_an_attribute_on_transformers_5
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_reference_model.py::test_handwritten_reference_is_deterministic[s128]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_reference_model.py::test_hf_reference_is_deterministic[s128]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_reference_model.py::test_handwritten_matches_hf_decoder_layer[s128]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_reference_model.py::test_handwritten_matches_hf_decoder_layer_real_weights[s64]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_reference_model.py::test_reference_attention_is_causal[s64]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_reference_model.py::test_llama3_rope_scaling_is_active
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_reference_model.py::test_negative_controls_are_rejected[s64]
+======================== 9 passed, 1 warning in 13.47s =========================

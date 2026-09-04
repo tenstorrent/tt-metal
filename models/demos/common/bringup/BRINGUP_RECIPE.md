@@ -198,6 +198,21 @@ pytest models/demos/llama31_8b_d_p/tests/unit/test_mlp_vs_ref.py -x -q 2>&1 \
 
 The ledger entry then cites the raw filename. A gate with no raw log did not happen.
 
+**Commit the raw logs, and check that you actually did.** This repo's root `.gitignore` carries a
+blanket `*.log`, so `bringup_log/raw/` is silently excluded and the evidence for every gate lives on
+one disk only. It is not a theoretical risk: in one run three phases were committed, each claiming
+raw-log evidence in its message, before anyone ran `git ls-files bringup_log/raw/` and found it
+**empty**. Scaffold this file the moment you create the directory:
+
+```
+# bringup_log/raw/.gitignore -- the root .gitignore's blanket *.log would drop every
+# gate log. These are the EVIDENCE for ../06_GATES.md, so re-include them.
+!*.log
+```
+
+Then verify, once, that `git ls-files <pkg>/bringup_log/raw/ | wc -l` is non-zero. `scripts/new_bringup.sh`
+writes this file for you; if you hand-built the skeleton, you do not have it.
+
 ### 1.3 Decision entry template (`05_DECISIONS.md`)
 
 Copy verbatim, one block per decision, numbered monotonically from `DEC-001`.
@@ -397,7 +412,10 @@ noticing.
 
 ### 2.4 Always pass an explicit `compute_kernel_config` — and `fp32_dest_acc_en` polarity is per-op
 
-Build the config once via `ttnn.init_device_compute_kernel_config(...)` and pass it to **every** op
+Build the config once via `ttnn.init_device_compute_kernel_config(mesh_device.arch(), ...)` — it needs
+the arch, which is easy to miss — setting **all four** fields explicitly
+(`math_fidelity=HiFi4, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=False`), and pass
+it to **every** op
 that accepts one: each `ttnn.linear`, the SDPA call, the norms. Passing nothing is a silent
 precision regression, and every module in the templates that omits one inherits it.
 
@@ -451,7 +469,9 @@ Two related facts, so you do not go looking:
   is the *same object* (`ttnn/ttnn/types.py:61`). An "arch branch to pick the kernel-config class" is
   a no-op. Use `ttnn.WormholeComputeKernelConfig` on Blackhole — the name is misleading, not wrong
   (`models/demos/gpt_oss_d_p/tt/attention/config.py:103`, rename tracked as issue #51998) — or better,
-  the `ttnn.init_device_compute_kernel_config` factory. Fields: `math_fidelity`, `math_approx_mode`,
+  the `ttnn.init_device_compute_kernel_config` factory, whose own defaults include
+  `math_approx_mode=True` — so naming only the two fields discussed above leaves an approximate SFPU
+  switched on. Set all four. Fields: `math_fidelity`, `math_approx_mode`,
   `fp32_dest_acc_en`, `packer_l1_acc`.
 
 ### 2.5 Two numerical traps that make a probe or a control lie
@@ -1010,6 +1030,11 @@ indirect=True)` (pattern: `models/demos/gpt_oss_d_p/tests/test_kv_cache_table.py
 
 ### P5.1 `tt/config.py` + `tt/ccl.py` + `utils/`
 
+`tt/config.py` is also the home for **the package's single compute-kernel-config factory** (section 2.4).
+Give it one, reachable home here rather than burying it inside an attention config — the only in-repo
+precedent buries it, which is plausibly how one package ended up with `fp32_dest_acc_en=False` in one
+place and the correct value in another.
+
 Port `MeshConfig` (the **union** of `models/demos/minimax_m3/config.py` and
 `models/demos/gpt_oss_d_p/tt/config.py` — P4) and `CCLManager` (from
 `models/demos/gpt_oss_d_p/tt/ccl.py`), **deleting** what Llama does not need (the ring-gather scratch
@@ -1034,10 +1059,17 @@ argument defaulting to `False` until P8. Weight is reshaped to `(1,1,-1,ttnn.TIL
 `ROW_MAJOR`. Pass an explicit `compute_kernel_config` with `fp32_dest_acc_en=True` — this is the op
 whose default does *not* already enable it (§2.4).
 
-**Gate `G-RMS`:** `test_rms_norm_vs_ref.py`, seq_len ∈ {32, 512, 4096}, **PCC ≥ 0.9999**, with the
-gap to the computed floor (0.9999986) recorded. Drive it with **standard-normal** inputs and an
-**fp32** reference weight (§2.1). Negative control: a zero-gain probe must produce `max|out| = 0.0`
-— a Gemma `(1 + weight)` fold would return the normalised input instead.
+**Gate `G-RMS`:** `test_rms_norm_vs_ref.py`, seq_len ∈ {32, 512, 4096}, **PCC ≥ 0.9999**, with the gap to
+the computed floor recorded. Drive it with **standard-normal** inputs and an **fp32** reference weight
+(§2.1). Negative control: a zero-gain probe must produce `max|out| = 0.0` — a Gemma `(1 + weight)` fold
+would return the normalised input instead.
+
+**Run it on both random weights and the real layer-0 norm gain, and record both.** The noise floor
+itself moves between them — measured 0.9999973 with random weights against 0.9999986 with the real
+gain — so a random-weights-only number is not comparable with section 2's figures, which were all
+measured on real weights. (An earlier draft of this recipe specified this gate's input three
+incompatible ways: random weights here, standard-normal inputs with an fp32 reference weight in the
+same paragraph, and real layer-0 weights in §1.4's worked example. Running both is the resolution.)
 
 This gate is also the cheapest demonstration of §2.4: the same module measures **0.9999697** with
 no `compute_kernel_config` and **0.9999955** with `fp32_dest_acc_en=True` — ~22x off the floor
@@ -1091,7 +1123,14 @@ device and compare against the HF-convention torch `rotate_half` path applied to
 correspondingly-permuted input. **PCC ≥ 0.999** (expect ~0.99999). Negative control: feeding an
 HF-layout tensor to the Meta op must collapse (measured **0.01296**) — without it, 0.99999 could
 mean "both sides are wrong the same way". Also assert the llama3 scaling actually took
-effect: the scaled `inv_freq` must differ from the unscaled one for positions beyond
+the llama3 band structure must hold: of the head_dim/2 frequencies, the long-wavelength band is
+  divided by exactly `factor`, the short-wavelength band is bit-identical to the unscaled base, and a
+  handful in between are strictly interpolated. **Do not assert that scaled and unscaled cos/sin
+  differ beyond `original_max_position_embeddings`** — that control cannot fail. Measured,
+  `max|cos_scaled - cos_unscaled|` is 1.99933 *inside* the window and 1.99398 beyond it, both
+  saturated at the theoretical maximum of 2, because llama3 scaling divides the long-wavelength
+  frequencies at *every* position and cos oscillates. An implementation that scaled everything, or
+  nothing past the window, passes it.
 `original_max_position_embeddings` (a test that passes with scaling silently disabled is worthless).
 
 ### P5.4 `tt/mlp.py` — dense SwiGLU

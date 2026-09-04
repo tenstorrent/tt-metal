@@ -1,0 +1,8 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# The repo root ignores `*.log` (`.gitignore:7`), which would leave every gate raw log in this
+# directory untracked — and "a gate with no raw log did not happen" (`BRINGUP_RECIPE.md:199`) plus
+# Appendix C item 2 make these logs the run's evidence base, not scratch output. Re-include them
+# here, where the deeper pattern wins. See `DEC-037` and `07_RISKS.md` R-012.
+!*.log

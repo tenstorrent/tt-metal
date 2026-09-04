@@ -1019,3 +1019,367 @@ something stubbed; or find that the reference and the repo disagree.
   dead code that should go.
 - **Blast radius:** `tt/rms_norm.py`; `G-RMS` (which runs only the single-pass branch), `G-TP-PARITY`,
   `G-CLEAN` items 4 and 5.
+
+---
+
+### DEC-029 — Drop four dead pieces of the `CCLManager` template
+- **Phase / module:** P5.1 / `tt/ccl.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** porting `models/demos/gpt_oss_d_p/tt/ccl.py:17` verbatim, as `03_OUTLINE.md` §2.2
+  says ("taken essentially whole"), and finding four members that no caller reads.
+- **Question:** carry `_ping_pong_buffer_cache`, `_ping_pong_buffer_indices`, the
+  `_worker_sub_device` local and `ccl_sub_device_id` across, or delete them?
+- **Options considered:**
+  1. **Carry them.** Keeps the diff against the template minimal and keeps `03_OUTLINE.md` §2.2's
+     attribute list literally true, including `ccl_sub_device_id`. But agent-contract rule 5 is
+     explicit: no dead code.
+  2. **Delete all four.** Measured dead: `grep -rn` across `models/demos/gpt_oss_d_p/` and
+     `models/demos/minimax_m3/` finds each name **only at its own definition**. The `SubDevice` is
+     constructed into a local that is immediately discarded — it is never registered with the
+     device — and `ttnn.SubDeviceId(0)` is then set unconditionally, so the attribute does not even
+     describe the object that was built. `models/demos/deepseek_v3_d_p/tt/tt_ccl.py:67`, the
+     substrate both templates say they mirror, does not create a `SubDevice` at all: it keeps a
+     plain `CoreRangeSet` (`sub_device_crs`) and nothing else.
+  3. **Delete the buffers, keep `ccl_sub_device_id`** in case a P8 op wants a `subdevice_id=`. The
+     only in-tree call sites that take one pass `subdevice_id=None`
+     (`models/demos/gpt_oss_d_p/tt/moe/tt_gpt_oss_moe.py:104`,
+     `models/demos/minimax_m3/tt/moe/tt_minimax_moe.py:117`), and both are MoE, which Llama does
+     not have.
+- **Choice:** option 2. `self.ccl_cores` (the `CoreRangeSet` the semaphores are actually created
+  on) stays; the rest go. `_init_subdevice` is renamed `_init_ccl_cores`, which is what it does.
+- **Why:** rule 5, and the specific hazard that `ccl_sub_device_id` is worse than unused — it is a
+  plausible-looking handle whose value is unrelated to the discarded `SubDevice`, so the first
+  caller to trust it inherits a wrong id rather than an obvious `AttributeError`. Re-adding a real
+  sub-device in P8, if the ring path needs one, is three lines and will be gated by the phase that
+  needs it.
+- **Evidence:** `models/demos/gpt_oss_d_p/tt/ccl.py:24-25` (the two unused dicts), `:50` (the
+  discarded `SubDevice` local), `:55` (`ccl_sub_device_id`);
+  `models/demos/deepseek_v3_d_p/tt/tt_ccl.py:67` (the substrate's `sub_device_crs`, no `SubDevice`);
+  `models/demos/gpt_oss_d_p/tt/moe/tt_gpt_oss_moe.py:104` (`subdevice_id=None`).
+- **Confidence:** high on the buffers and the local; medium on `ccl_sub_device_id`, because P8's
+  ring SDPA has not been written yet and could want a sub-device.
+- **Falsifier:** a P8 op that requires a registered CCL sub-device, which would mean the template
+  was carrying an unfinished feature rather than dead code.
+- **Revisit if:** P8's `dense_sp.py` needs `subdevice_id=`; or `G-SEMAPHORE` at the target mesh
+  behaves differently from the one-card run in a way that points at core-range ownership.
+- **Blast radius:** `tt/ccl.py`; `03_OUTLINE.md` §2.2's attribute list (now four names shorter);
+  `G-MESH`, `G-SEMAPHORE`.
+
+---
+
+### DEC-030 — One compute-kernel config for the package, in `tt/config.py`, `fp32_dest_acc_en=True`
+- **Phase / module:** P5.1-P5.2 / `tt/config.py`, every module
+- **Date (UTC):** 2026-09-04
+- **Trigger:** `tt/rms_norm.py` is the first module that needs a `compute_kernel_config`, and
+  recipe §2.4 requires an explicit one on **every** op that accepts one. Neither
+  `BRINGUP_RECIPE.md:752-819`'s tree nor `03_OUTLINE.md` §1 gives that factory a home: the
+  templates put it inside `AttentionConfig` (`models/demos/gpt_oss_d_p/tt/attention/config.py:103`),
+  which only attention can reach.
+- **Question:** where does the single definition live, and with which four field values?
+- **Options considered:**
+  1. **A new `tt/compute_config.py`.** Clear ownership; adds a file to a tree that P3 froze and
+     that `G-CLEAN` audits against.
+  2. **`tt/model_config.py`.** The natural home, and P6.2 owns that file — writing it in P5.1
+     would step on a later phase's deliverable and force a merge.
+  3. **`tt/config.py`**, beside `MeshConfig`. Already the package's config module, already imported
+     by every module for the mesh, and its name does not promise "mesh only".
+  4. **Per-module, inline.** What both templates do, and how
+     `models/demos/gpt_oss_d_p/tt/attention/config.py:71`'s `fp32_dest_acc_en: bool = False` came to
+     exist in one place and not the other.
+- **Choice:** option 3 — `default_compute_kernel_config(mesh_device, *, fp32_dest_acc_en=True)`,
+  with `math_fidelity=HiFi4`, `math_approx_mode=False`, `packer_l1_acc=False`. The
+  `fp32_dest_acc_en` keyword exists for exactly two callers: the in-suite A/B, and P8's ring SDPA,
+  where `False` is mandatory.
+- **Why:** one definition is the same argument as the noise-floor helpers (`DEC-007`) — two copies
+  drift, and here a drifted copy costs 96x-1168x on a matmul, not a rounding difference. The three
+  non-obvious values: `HiFi4` because recipe §2.4 measures `MathFidelity` alone as a **no-op** and
+  HiFi2 as marginally *worse* than no config, so the fidelity choice is free and the highest is the
+  safe one; `math_approx_mode=False` matching both
+  `models/demos/gpt_oss_d_p/tt/attention/config.py:70` and
+  `models/common/models/llama32_1b/model.py:1026`, since an approximate SFPU is a precision
+  regression this iteration has no reason to accept; `packer_l1_acc=False` because it is a
+  performance knob and this iteration is functional-first (`BRINGUP_RECIPE.md:16-17`).
+- **Evidence:** recipe §2.4's two A/B tables (`BRINGUP_RECIPE.md:404-410`, `:420-427`);
+  `models/demos/gpt_oss_d_p/tt/attention/config.py:71` (the explicit `False` not to inherit);
+  `models/demos/gpt_oss_d_p/tt/rms_norm.py:94` (the norm with no config at all);
+  measured in-suite this phase, `raw/G-RMS_20260904T090144Z.log`: `fp32_dest_acc_en=True`
+  0.9999957 (1.56x the floor) vs `False` 0.9999707 (10.79x) at seq 32, and 0.9999958 (1.57x) vs
+  0.9999633 (13.58x) at seq 512 — a 6.90x / 8.66x error reduction on this box.
+- **Confidence:** high on the flag and the home; medium on `packer_l1_acc=False`, which is
+  unmeasured here.
+- **Falsifier:** an op where `HiFi4` or `math_approx_mode=False` measurably costs accuracy, or
+  where `packer_l1_acc=True` changes a PCC — either would mean these are not neutral defaults.
+- **Revisit if:** P6.2 lands `ModelArgs` and wants to own the factory; perf work starts
+  (`packer_l1_acc`); or P8 finds a second op needing `fp32_dest_acc_en=False`.
+- **Blast radius:** every module's ops; `G-RMS`, `G-ROPE`, `G-MLP`, `G-ATTN`, `G-LAYER`,
+  `G-MODEL`, `G-SP-RING`.
+
+---
+
+### DEC-031 — `rms_norm_post_all_gather` gets `stats` once: the template's dormant branch would raise
+- **Phase / module:** P5.2 / `tt/rms_norm.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** copying the `is_distributed` branch from
+  `models/demos/gpt_oss_d_p/tt/rms_norm.py:50-92`, which `BRINGUP_RECIPE.md:1032-1033` instructs to
+  keep.
+- **Question:** the template calls `ttnn.rms_norm_post_all_gather(x, tt_gathered_stats, ...,
+  stats=tt_gathered_stats)` — the same tensor positionally **and** by keyword. Reproduce it, or fix
+  it?
+- **Options considered:**
+  1. **Reproduce verbatim,** so the dormant branch stays a byte-for-byte copy of a known template.
+  2. **Pass `stats` once, positionally,** and record why.
+- **Choice:** option 2.
+- **Why:** it is not a style question — the op's second positional parameter **is** `stats`, so the
+  call cannot bind. Measured on this box:
+  `ttnn.rms_norm_post_all_gather(x, s, stats=s)` raises
+  `TypeError: ttnn.rms_norm_post_all_gather(): incompatible function arguments`. The branch is
+  dormant in gpt-oss (`models/demos/gpt_oss_d_p/tt/rms_norm.py:33` pins `is_distributed = False`),
+  so nothing has ever executed it and the bug is invisible there. Copying it would have handed P8
+  a `TypeError` at the moment residual scheme B is switched on — the most expensive time to find
+  it. This is the general hazard `DEC-028` names: a dormant branch is a claim about code that has
+  never run.
+- **Evidence:** `models/demos/gpt_oss_d_p/tt/rms_norm.py:82` (the positional pass) and `:89`
+  (`stats=tt_gathered_stats`); `models/demos/gpt_oss_d_p/tt/rms_norm.py:33` (the branch is
+  dormant); the op's own signature, `Args: input_tensor, stats`, from
+  `ttnn.rms_norm_post_all_gather.__doc__`; the measured `TypeError` above.
+- **Confidence:** high — the failure is a hard `TypeError`, reproduced.
+- **Falsifier:** none; the call either binds or it does not, and it does not.
+- **Revisit if:** the op gains a distinct second positional parameter.
+- **Blast radius:** `tt/rms_norm.py`'s dormant branch; P8's residual scheme B; nothing in this
+  iteration's numbers. Also an upstream fix worth filing against
+  `models/demos/gpt_oss_d_p/tt/rms_norm.py` (`07_RISKS.md` R-011).
+
+---
+
+### DEC-032 — `derive_head_dim` lives in `tt/config.py`, so `tt/rope.py` keeps the outline's signature
+- **Phase / module:** P5.3 / `tt/config.py`, `tt/rope.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** `tt/rope.py` needs `head_dim` and `DEC-020` says exactly one place in the package
+  may derive it — but that place is `ModelArgs`, a P6.2 deliverable.
+- **Question:** how does a P5.3 module get `head_dim` without either duplicating the derivation or
+  writing P6.2's file early?
+- **Options considered:**
+  1. **Derive it inline in `tt/rope.py`.** Two derivations in the package the moment `ModelArgs`
+     lands — precisely what `DEC-020` exists to prevent.
+  2. **Add `head_dim` as a required keyword to every RoPE builder.** No duplication, but it changes
+     three signatures away from `03_OUTLINE.md` §2.5 and pushes the derivation out to every caller,
+     which is where a wrong value would then be introduced.
+  3. **Put `derive_head_dim(hf)` in `tt/config.py`** and have `tt/rope.py` — and, in P6.2,
+     `ModelArgs` — both call it.
+- **Choice:** option 3.
+- **Why:** it satisfies `DEC-020`'s actual requirement (one derivation) rather than its literal
+  wording (one *file*), keeps `03_OUTLINE.md` §2.5's signatures unchanged, and puts the assertions
+  that make the derivation safe — divisibility, and tile alignment of the result — in the one place
+  they can be written once. P6.2's `ModelArgs.head_dim` becomes a call, not a formula.
+- **Evidence:** `DEC-020`; `03_OUTLINE.md` §2.5 (the signatures kept);
+  `models/demos/gpt_oss_d_p/tt/model.py:64` (`hf_config.head_dim`, the attribute Llama's config
+  does not have); `00_MODEL_CARD.md` §2 (no `head_dim` key; 4096/32 = 128).
+- **Confidence:** high.
+- **Falsifier:** P6.2 finding it cannot call into `tt/config.py` without a circular import.
+- **Revisit if:** P6.2 lands and prefers to own the derivation, in which case `tt/config.py`'s copy
+  is deleted rather than kept alongside.
+- **Blast radius:** `tt/config.py`, `tt/rope.py`, and P6.2's `ModelArgs`.
+
+---
+
+### DEC-033 — `tt/rope.py`'s public surface deviates from `03_OUTLINE.md` §2.5 in three places
+- **Phase / module:** P5.3 / `tt/rope.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** writing the module against `03_OUTLINE.md` §2.5's interface block and finding it
+  under-specified in two places and missing a needed knob in a third.
+- **Question:** follow the outline's signatures literally, or change them and record it?
+- **The three deviations, and why each:**
+  1. **`build_indexed_rope` takes `chunk_size` and derives `sp` from the mesh**, where the outline
+     writes `build_indexed_rope(mesh_device, hf, max_seq_len, sp, sp_axis)`. The block-cyclic
+     reorder is keyed by the **per-chip chunk** (`chunk_size // sp`), so the function cannot be
+     written without `chunk_size` — `models/demos/gpt_oss_d_p/tt/rope.py:115` takes it too, and
+     `models/demos/deepseek_v3_d_p/tt/mla/utils.py:65` `block_cyclic_reorder` requires
+     `chunk_local` as its second argument. `sp` becomes redundant once `sp_axis` is known
+     (`mesh_device.shape[sp_axis]`), and taking both invites them to disagree.
+     `CHUNK_SIZE` itself is still `DEC-004`'s deferral: the builder takes it as a parameter and P7
+     picks the value.
+  2. **`llama3_freqs(hf, seq_len, *, scaled=True)` gains a `scaled` flag.** `G-ROPE` is required to
+     prove the llama3 scaling took effect (`BRINGUP_RECIPE.md:1093-1095`), which needs the unscaled
+     tables for comparison. The alternative — the test re-deriving unscaled frequencies itself —
+     would compare the module against a second transcription of the same formula rather than
+     against the same code path with scaling off.
+  3. **`rope_params(hf)` is added** as the single accessor the other four functions go through, and
+     `build_prefill_rope` drops the outline's `dtype` argument.
+     `models/tt_transformers/tt/common.py:534` `get_prefill_rot_mat` hard-codes `bfloat16`
+     (`:542-547`) and takes no dtype, so a `dtype=` parameter that can only hold one value is a
+     false promise; the assertion that would police it is worse than not offering the knob.
+- **Choice:** all three, as described.
+- **Why:** each is forced by a real constraint in the code being wrapped rather than by preference,
+  and `03_OUTLINE.md` §2.5 was written before any of the three helpers had been called.
+- **Evidence:** `models/demos/gpt_oss_d_p/tt/rope.py:115` (`chunk_size` in the template's
+  signature); `models/demos/deepseek_v3_d_p/tt/mla/utils.py:65` (`chunk_local` required);
+  `models/tt_transformers/tt/common.py:534` and `:542` (bf16 hard-coded);
+  `BRINGUP_RECIPE.md:1093-1095` (the scaling assertion `scaled=False` serves).
+- **Confidence:** high.
+- **Falsifier:** P7 finding it needs `sp` independent of the mesh shape — e.g. a chunk table built
+  for a mesh other than the open one.
+- **Revisit if:** P7 picks `CHUNK_SIZE` / `MAX_SEQ_LEN` (`DEC-004`), or P8's SP path needs a
+  different sharding of the indexed tables.
+- **Blast radius:** `tt/rope.py`; `03_OUTLINE.md` §2.5; `G-ROPE`, `G-CHUNK`, `G-CHUNK-ATTN`.
+
+---
+
+### DEC-034 — The `prefer-expect-error` hook matches prose, so the prose is reworded
+- **Phase / module:** P5.1 / `tests/unit/test_mesh_config.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** the first `pre-commit run` on the P5.1 test files failed. The offending line was not
+  code: it was a **docstring sentence** explaining that the file uses `expect_error` rather than
+  pytest's raises helper.
+- **Question:** silence it with the documented same-line escape, or reword?
+- **Options considered:**
+  1. **Same-line escape.** `.pre-commit-config.yaml:55`'s pattern allows
+     `# allow-pytest.raises: <why>` on the line. Inside a module docstring that renders as a stray
+     comment in the prose, and it marks a line that contains no call at all — the marker would
+     claim an exemption for something that never needed one.
+  2. **Reword the sentence** so the literal token does not appear, and say in the file why the
+     sentence is phrased the long way.
+  3. **Delete the sentence.** Cheapest, and loses the one place a reader is told which fixture to
+     use and why.
+- **Choice:** option 2.
+- **Why:** the hook is a `pygrep` over the whole file, so it cannot distinguish a call from a
+  mention; that is a property of the hook, not a problem with the test. Rewording keeps the
+  guidance and leaves no exemption marker that a future reader would have to evaluate.
+- **Evidence:** `.pre-commit-config.yaml:51` (the hook), `:53` (`language: pygrep`), `:55` (the
+  grep pattern), `:56` (the same-line override); the failing run's message named
+  `models/demos/llama31_8b_d_p/tests/unit/test_mesh_config.py:20`, a docstring line.
+- **Confidence:** high.
+- **Falsifier:** the hook gaining comment/docstring awareness, which would make the rewording
+  unnecessary.
+- **Revisit if:** a later phase genuinely needs the escape for a real call the fixture cannot
+  express.
+- **Blast radius:** the wording of test docstrings across the package. Worth reporting upstream to
+  the kit: `LANDMINES.md` describes the hook as rejecting "any `pytest.raises` in a `tests/` file"
+  and does not say it also fires on the name in comments and docstrings.
+
+---
+
+### DEC-035 — `G-RMS` runs on **both** random and real layer-0 norm weights
+- **Phase / module:** P5.2 / `tests/unit/test_rms_norm_vs_ref.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** the recipe specifies the input distribution twice and not identically. P5.2 says
+  "Drive it with **standard-normal** inputs and an **fp32** reference weight"; §1.4's worked `G-RMS`
+  ledger block says "**real layer-0 norm weights**, seed 0"; and P5's per-module loop says
+  "**identical random weights** driving both sides".
+- **Question:** which weight source does `G-RMS` use?
+- **Options considered:**
+  1. **Random only.** Runs with no checkpoint, matches P5's loop, and is what makes every other P5
+     gate portable. But a trained norm gain is a narrow positive distribution, nothing like
+     standard normal, and §2.1's reference numbers were all measured on real weights — so a
+     random-only gate cannot be compared with them.
+  2. **Real only.** Comparable with §2.1, but makes the gate unrunnable on a weightless box, which
+     `requires_hf_reference` exists to avoid.
+  3. **Both**, as separate parametrised tests.
+- **Choice:** option 3. The random-weight test is unguarded; the real-weight test carries
+  `requires_hf_reference`.
+- **Why:** they are materially different numeric tests, not a duplicate — measured this phase, the
+  random-weight case sits at **1.54-1.57x** its floor and the real-weight case at **2.11-2.13x** a
+  *different* floor (0.9999973 vs 0.9999986). Reporting one number would have hidden that the floor
+  itself moves with the weight distribution. The real-weight run is also what makes the gate
+  comparable to §2.1's 0.9999867/0.99995 pair, and it reproduces the recipe's expected 0.9999955 →
+  measured **0.9999971** against the same 0.9999986 floor.
+- **Evidence:** `BRINGUP_RECIPE.md:1037-1040` (P5.2's instruction), `BRINGUP_RECIPE.md:254-256`
+  (§1.4's block naming real weights), `BRINGUP_RECIPE.md:997` (P5's "identical random weights");
+  measured numbers in `raw/G-RMS_20260904T090144Z.log`.
+- **Confidence:** high.
+- **Falsifier:** the two weight sources landing on the same floor and the same ratio, which would
+  make one of the two tests redundant.
+- **Revisit if:** `G-MLP`/`G-ATTN` adopt the same two-source pattern, in which case it should be a
+  package convention rather than a per-gate choice.
+- **Blast radius:** `tests/unit/test_rms_norm_vs_ref.py`; `G-RMS`'s recorded numbers.
+
+---
+
+### DEC-036 — `G-ROPE`'s scaling control asserts the **band structure**, not beyond-window divergence
+- **Phase / module:** P5.3 / `tests/unit/test_rope_vs_ref.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** implementing `BRINGUP_RECIPE.md:1093-1095` literally — "the scaled `inv_freq` must
+  differ from the unscaled one for positions beyond `original_max_position_embeddings`" — and
+  measuring that it does not discriminate.
+- **Question:** keep the recipe's assertion as the control, or assert something sharper?
+- **Measurement that forced the question:** `max|cos_scaled - cos_unscaled|` is **1.99933** for
+  positions *inside* the original window and **1.99398** *beyond* it. Both saturate at the
+  theoretical maximum of 2, because llama3 scaling divides the long-wavelength frequencies at
+  **every** position and `cos` oscillates. So "the tables differ beyond 8192" is satisfied by an
+  implementation that scales everything, or by one that scales nothing beyond the window — neither
+  of which is llama3 scaling.
+- **Options considered:**
+  1. **Keep the recipe's assertion.** Literal compliance; a control that cannot fail for the reason
+     it is supposed to catch, which is the exact failure mode §1.4 warns about.
+  2. **Assert the piecewise band structure** directly on the frequencies `apply_scaling` consumes:
+     wavelengths above `orig/low_freq_factor` divided by exactly `factor`, wavelengths below
+     `orig/high_freq_factor` bit-identical (`torch.equal`), and a non-empty middle band strictly
+     between the two. Measured: **29 low / 6 mid / 29 high** of 64 frequencies.
+  3. Both.
+- **Choice:** option 3 — the band structure is the assertion that gates, and the recipe's
+  beyond-window delta is still **recorded** with both halves of the number, so a reader can see why
+  it is not the discriminator.
+- **Why:** a control's job is to fail when the property is broken. The band test does: disabling
+  scaling makes all three bands identical to the base frequencies, and scaling everything breaks
+  the `torch.equal` on the high band. A first attempt at option 1 also produced a *false failure* —
+  recovering the frequency from a cos table by `arccos` gives `0/0 = nan` for the lowest frequency,
+  because `cos(1 * f)` rounds to 1.0 in fp32 — which is `LANDMINES.md`'s "a failing probe is not
+  evidence of a failing module until the probe's own numerics are checked", hit live. Both raw logs
+  are kept.
+- **Evidence:** `raw/G-ROPE_20260904T090652Z.log` (the `nan` probe failure);
+  `raw/G-ROPE_20260904T091040Z.log` (the band counts and both deltas);
+  `models/tt_transformers/tt/common.py:405` `compute_llama3_parameters` (the three branches being
+  asserted), `:407-408` (the factors).
+- **Confidence:** high.
+- **Falsifier:** a checkpoint whose `low_freq_factor`/`high_freq_factor` leave one band empty,
+  which `assert_llama3_factors` would catch first (`07_RISKS.md` R-010).
+- **Revisit if:** long-context `G-MODEL` shows the "good at short seq, bad past ~8192" symptom
+  anyway, which would mean the band test passes while something downstream of the tables is wrong.
+- **Blast radius:** `tests/unit/test_rope_vs_ref.py`; `G-ROPE`'s negative-control field. The recipe
+  sentence itself is reported as a defect rather than silently followed.
+
+---
+
+### DEC-037 — Re-include `bringup_log/raw/*.log` in git, which the root `.gitignore` excludes
+- **Phase / module:** P5.1 / `bringup_log/raw/.gitignore`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** `git status` after writing the first device gate's raw log showed **nothing** under
+  `bringup_log/raw/`. `git check-ignore -v` names `.gitignore:7`, the repo-root `*.log` rule. So
+  every raw log this bring-up has produced since P0 — `G-CARD`, `G-REF`, `G-SURVEY`, `G-OUTLINE`,
+  `G-CCL-PLAN`, and now the P5 gates — exists **on this disk only** and has never been tracked
+  (`git ls-files bringup_log/raw/` is empty, `git log -- bringup_log/raw/` is empty, across three
+  prior committed phases).
+- **Question:** leave the raw logs untracked, rename them out of the ignore pattern, or re-include
+  them?
+- **Options considered:**
+  1. **Leave them untracked.** Contradicts the recipe's own central rule — "A gate with no raw log
+     did not happen" (`BRINGUP_RECIPE.md:199`) — and Appendix C item 2, which requires every gate
+     "recorded in `bringup_log/06_GATES.md` **with raw logs**". A fresh clone of this branch would
+     contain a ledger citing 15 files that do not exist, i.e. the evidence base advertised by the
+     deliverable would be absent.
+  2. **Rename them** to `.txt` or extensionless. Escapes the pattern, and invalidates every
+     `raw/<GATE>_<ts>.log` citation already written into `06_GATES.md` by four completed phases —
+     the rename hazard §0.2 spends five paragraphs warning about, for no gain.
+  3. **A nested `.gitignore` in `bringup_log/raw/` containing `!*.log`.** A deeper pattern wins
+     over a shallower one, so the logs become trackable and nothing outside the package changes.
+     Verified: `git status -uall bringup_log/raw/` went from one ignored directory to 14 log files
+     plus the new `.gitignore`.
+- **Choice:** option 3. Two lines of pattern plus a comment explaining why, inside the package.
+- **Why:** it is the only option that satisfies the recipe without touching anything outside
+  `models/demos/llama31_8b_d_p/` and without rewriting citations. It also fixes the defect
+  *retroactively* for P0-P4's logs, which are still on disk. The alternative reading — that raw
+  logs are deliberately local scratch — is contradicted by `LANDMINES.md`'s own advice to **gzip**
+  an oversized raw log so it passes the `check-large-files` **commit** hook: that advice only makes
+  sense if the logs are meant to be committed, which under the root ignore they cannot be.
+- **Evidence:** `.gitignore:7` (`*.log`); `BRINGUP_RECIPE.md:199` (the rule);
+  `BRINGUP_RECIPE.md:1817-1819` (Appendix C item 2); `LANDMINES.md`'s `check-large-files` row
+  (gzip rather than trim, "so the evidence stays byte-exact"); `git check-ignore -v` and
+  `git ls-files` output above.
+- **Confidence:** high on the diagnosis; medium on the remedy being the one a repo maintainer would
+  choose — an alternative is a root-level exception for `bringup_log/`, which this session may not
+  write.
+- **Falsifier:** a maintainer stating that bring-up raw logs are intentionally local and the ledger
+  should cite them as reproduction commands rather than as artefacts — in which case the recipe's
+  "a gate with no raw log did not happen" needs rewording, not this file.
+- **Revisit if:** the kit adds guidance on this, or a root `.gitignore` exception lands.
+- **Blast radius:** the size of the package's commits (14 logs, ~180 KB today, all well under the
+  500 KB hook limit); `G-CLEAN`'s file inventory, which gains one `.gitignore`; nothing numeric.

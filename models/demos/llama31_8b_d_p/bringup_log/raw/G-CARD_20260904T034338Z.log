@@ -1,0 +1,14 @@
+=== G-CARD raw log (rerun after fixing the two shadowed prose refs in 05_DECISIONS.md) — 2026-09-04T03:43:38Z ===
+--- 1. checkpoint identity
+3cd5831d379b509d53afade0e24c36e9  /home/mstojkovic/models/Llama-3.1-8B-Instruct/config.json
+3cd5831d379b509d53afade0e24c36e9  models/tt_transformers/model_params/Llama-3.1-8B-Instruct/config.json
+3cd5831d379b509d53afade0e24c36e9  models/demos/llama31_8b_d_p/configs/Llama-3.1-8B-Instruct/config.json
+--- 2. verify_citations.py
+citations checked : 53
+  verified        : 53
+  mismatched      : 0
+  missing files   : 0
+doc refs scanned  : 115
+  resolved        : 115
+  unresolved      : 0
+EXIT=0

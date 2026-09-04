@@ -1,0 +1,87 @@
+=== G-CARD raw log — 2026-09-04T03:43:03Z ===
+--- 1. checkpoint identity
+HF_MODEL=/home/mstojkovic/models/Llama-3.1-8B-Instruct
+LICENSE
+P150
+README.md
+USE_POLICY.md
+config.json
+generation_config.json
+model-00001-of-00004.safetensors
+model-00002-of-00004.safetensors
+model-00003-of-00004.safetensors
+model-00004-of-00004.safetensors
+model.safetensors.index.json
+special_tokens_map.json
+tokenizer.json
+tokenizer_config.json
+ttnn_cache
+3cd5831d379b509d53afade0e24c36e9  /home/mstojkovic/models/Llama-3.1-8B-Instruct/config.json
+3cd5831d379b509d53afade0e24c36e9  models/tt_transformers/model_params/Llama-3.1-8B-Instruct/config.json
+3cd5831d379b509d53afade0e24c36e9  models/demos/llama31_8b_d_p/configs/Llama-3.1-8B-Instruct/config.json
+--- 2. config.json verbatim
+{
+  "architectures": [
+    "LlamaForCausalLM"
+  ],
+  "attention_bias": false,
+  "attention_dropout": 0.0,
+  "bos_token_id": 128000,
+  "eos_token_id": [
+    128001,
+    128008,
+    128009
+  ],
+  "hidden_act": "silu",
+  "hidden_size": 4096,
+  "initializer_range": 0.02,
+  "intermediate_size": 14336,
+  "max_position_embeddings": 131072,
+  "mlp_bias": false,
+  "model_type": "llama",
+  "num_attention_heads": 32,
+  "num_hidden_layers": 32,
+  "num_key_value_heads": 8,
+  "pretraining_tp": 1,
+  "rms_norm_eps": 1e-05,
+  "rope_scaling": {
+    "factor": 8.0,
+    "low_freq_factor": 1.0,
+    "high_freq_factor": 4.0,
+    "original_max_position_embeddings": 8192,
+    "rope_type": "llama3"
+  },
+  "rope_theta": 500000.0,
+  "tie_word_embeddings": false,
+  "torch_dtype": "bfloat16",
+  "transformers_version": "4.42.3",
+  "use_cache": true,
+  "vocab_size": 128256
+}
+--- 3. device facts
+2026-09-04 03:43:04.904 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mstojkovic/.cache/ttnn,model_cache_path=/home/mstojkovic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+ttnn.get_num_devices() = 32
+ttnn.get_arch_name()   = blackhole
+hasattr(ttnn,"BlackholeComputeKernelConfig") = False
+--- 4. derived arithmetic (TP=8, SP=4 on a (4,8) mesh)
+head_dim = hidden/num_attention_heads = 4096/32 = 128
+hidden/tp      = 4096/8 = 512; % 32 = 0
+intermediate/tp= 14336/8 = 1792; % 32 = 0
+q_heads/tp     = 32/8 = 4   (nqh local)
+kv_heads/tp    = 8/8 = 1   (nkv local)
+SDPA TT_FATAL nqh>=nkv and nqh%nkv==0 -> 4 >= 1 and 4%1 == 0
+vocab/tp       = 128256/8 = 16032; % 32 = 0
+SP = 32/TP = 4; CHUNK_SIZE % (SP*32) == 0 -> % 128
+--- 5. verify_citations.py
+citations checked : 53
+  verified        : 53
+  mismatched      : 0
+  missing files   : 0
+doc refs scanned  : 119
+  resolved        : 118
+  unresolved      : 1
+
+DOC FAILURES:
+  DOC OUT OF RANGE  models/demos/llama31_8b_d_p/bringup_log/05_DECISIONS.md: models/demos/gpt_oss_d_p/tt/attention/config.py:134-134 (file has 108 lines)
+EXIT=1

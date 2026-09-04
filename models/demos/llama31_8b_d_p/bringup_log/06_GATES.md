@@ -10,6 +10,9 @@ entry naming the blocker) · `NOT-RUN` (needs the reason). A gate with no raw lo
 | G-SURVEY | P2 | reuse decided, with citations | doc review + 0 bad citations | 30 component rows, 30 with a decision, 27 with a full `path:line`; 123/123 citations verified, 195/195 doc refs resolved | PASS | 2026-09-04 | `raw/G-SURVEY_20260904T035957Z.log` |
 | G-OUTLINE | P3 | file tree + shapes pinned; every gate owns a file | doc review + 0 bad citations | 41 files contracted (49/49 non-`__init__` tree files); **32/32** Appendix A gate rows owned; 18/18 shape rows filled; 225/225 citations, 338/338 doc refs | PASS | 2026-09-04 | `raw/G-OUTLINE_20260904T083915Z.log` |
 | G-CCL-PLAN | P4 | every collective placed and justified | doc review + 0 bad citations | 8/8 module placement rows justified; **9** collective call sites with `dim`/`axis`/topology/`num_links`; 14 semaphores (6+4+2+2), barrier depth 2; 253/253 citations, 404/404 doc refs | PASS | 2026-09-04 | `raw/G-CCL-PLAN_20260904T084559Z.log` |
+| G-MESH | P5.1 | `MeshConfig` arithmetic + refusals; `CCLManager` builds and allocates its semaphores once | exact asserts | 16/16 tests pass; `shard_size(4096)=512`, `shard_size(14336)=1792`; grid **(12,10)**, CCL offset **(11,0)**; semaphores **6/4/2/2 = 14**, unchanged after 128 barrier cycles; 4/4 sub-axis-TP shapes refused | PASS | 2026-09-04 | `raw/G-MESH_20260904T085727Z.log` |
+| G-RMS | P5.2 | plain RMSNorm vs an fp32 torch reference, `(1,1)` | PCC >= 0.9999; gap to the floor recorded | random weights **0.9999957 / 0.9999958 / 0.9999957** (floor 0.9999973/0.9999973/0.9999972 -> **1.56 / 1.57 / 1.54x**); real layer-0 weights **0.9999971** x3 (floor 0.9999986 -> **2.11 / 2.13 / 2.12x**) | PASS | 2026-09-04 | `raw/G-RMS_20260904T090144Z.log` |
+| G-ROPE | P5.3 | llama3-scaled RoPE + the Meta convention, `(1,1)` | PCC >= 0.999; control must collapse | **0.9999969 / 0.9999964 / 0.9999959** (floor 0.9999983/0.9999982/0.9999980 -> **1.76 / 1.95 / 2.08x**); control **0.01367**; tables bit-identical to the test's own Meta tables | PASS | 2026-09-04 | `raw/G-ROPE_20260904T091040Z.log` |
 
 ```
 STATUS after P0: gates PASS=1 FAIL=0 DEVIATION=0 BLOCKED=0 | next: P1 (reference)
@@ -331,30 +334,260 @@ and `DEC-013` (is `utils/` created at all, given the helpers are imported from
 
 ---
 
+### G-MESH — `MeshConfig` arithmetic and refusals; `CCLManager` allocates once
+- **Command:** `pytest models/demos/llama31_8b_d_p/tests/unit/test_mesh_config.py
+  models/demos/llama31_8b_d_p/tests/unit/test_ccl_semaphores.py -x -q`
+- **Mesh / device:** (a) none — device-free arithmetic; (b) `(1,1)`, Blackhole. Only (b) takes the
+  `mesh_device` fixture (`BRINGUP_RECIPE.md:1027`).
+- **Input distribution:** n/a — this gate has no numeric input. Its inputs are mesh shapes:
+  `(1,1)`, `(1,2)`, `(1,4)`, `(1,8)`, `(2,8)`, `(4,8)`, `(8,4)`, and the four refused
+  `(mesh, tp)` pairs below.
+- **Reference dtype policy:** n/a — no reference tensor. The "reference" is arithmetic stated in
+  `00_MODEL_CARD.md` §4 and re-derived from the bundled `config.json` in the test rather than
+  restated as a literal.
+- **Threshold:** exact asserts (`BRINGUP_RECIPE.md:1726`). No PCC, so §1.4's floor field does not
+  apply.
+- **Noise floor (computed):** n/a.
+- **Measured:**
+  - **16/16 tests pass** (9 device-free + 7 on the card).
+  - shard arithmetic at `(1,8)`/TP=8: `sp=1`, `shard_size(4096)=512`, `shard_size(14336)=1792`,
+    both `% 32 == 0`.
+  - deployment `(4,8)`/TP=8: `sp=4`; `tp == num_key_value_heads == 8`; `local_q=4`, `local_kv=1`,
+    so SDPA's `nqh >= nkv && nqh % nkv == 0` holds as `4 >= 1 && 4 % 1 == 0`.
+  - real compute grid **(12, 10)** — not 8x8 — and `ring_attention_ccl_core_grid_offset = (11, 0)`,
+    i.e. `grid.x - 1`. `num_links = 1` at `(1,1)`
+    (`models/demos/gpt_oss_d_p/utils/general_utils.py:33`: a single-row mesh gets 1 link).
+  - the build-time form of the ring op's assert holds: a pinned 8x8 SDPA grid needs
+    `8 <= grid.x - 1 = 11`.
+  - semaphore inventory **6 RS / 4 AG / 2 barrier / 2 ring-attention = 14**, identical after
+    32 layers x 4 collectives = 128 barrier cycles; all three ping-pongs cycle with period 2.
+- **Verdict:** **PASS**
+- **Negative control:** four, and all four fired.
+  1. **Sub-axis TP refuses.** `MeshConfig((1,8), tp=4)`, `((1,8), tp=2)`, `((4,8), tp=4)` and
+     `((1,8), tp=16)` all raise `ValueError: ... sub-axis TP is unsupported`. §1.4 admits a
+     configuration that must *refuse* as a control (`BRINGUP_RECIPE.md:277-278`).
+  2. **Its complement.** `(1,2)`, `(1,4)`, `(2,8)`, `(8,4)` with matching TP must **warn and
+     build** — without this, "raise on anything unusual" would satisfy control 1 while making
+     every `(1,1)` P5 gate unrunnable.
+  3. **A per-layer `CCLManager`.** Three managers stand in for three layers and produce
+     `3 x 14 = 42` semaphores, the shape of the bug (`n_layers x` the constant).
+  4. **`reset_global_semaphores` must not rewind the barrier index**, asserted, because `DEC-026`
+     ships the template's deliberate skip and a later change must show up as a failure here.
+- **Deviations:** none to the gate. Two `DEC`s came out of writing it: `DEC-029` (four dead
+  members of the `CCLManager` template dropped, which shortens `03_OUTLINE.md` §2.2's attribute
+  list) and `DEC-034` (the `prefer-expect-error` hook fires on the fixture's name in **prose**, so
+  a docstring had to be reworded).
+- **Raw log:** `raw/G-MESH_20260904T085727Z.log`
+- **What this does NOT prove:**
+  - **that any collective works.** At `(1,1)` no collective is issued: `MeshConfig`'s three
+    wrappers are never called by this gate, only constructed around. `G-TP-PARITY` and
+    `G-FABRIC-MATRIX` (P8) are what exercise them.
+  - **that the semaphores are correct under concurrency.** This is a counting and cycling test on
+    a single card. `G-RACE` (three runs, one process, one `CCLManager`, bit-identical) is the one
+    that can see a race, and `G-SEMAPHORE`'s target-mesh half is P8's.
+  - **that `num_links` is right for the deployment.** `(1,1)` yields 1 link by the helper's
+    single-row branch, so the `num_links = 2` the `(4,8)` deployment uses is untested here (P8
+    step 3).
+  - **that the deployment mesh can be opened at all.** The `(4,8)` assertions in this gate are
+    arithmetic on a shape tuple, not a device open (P8 step 1).
+- **Notes:** `G-SEMAPHORE` is a **P8** gate and is *not* being recorded as PASS here; its
+  one-card half runs in this file because `G-MESH` already requires the assertion
+  (`BRINGUP_RECIPE.md:1025-1026`) and writing it twice would let the two copies disagree
+  (`03_OUTLINE.md` §1.1 `[DEV-6]`). The 16 tests above include those 5.
+
+---
+
+### G-RMS — plain RMSNorm vs an fp32 torch reference
+- **Command:** `pytest models/demos/llama31_8b_d_p/tests/unit/test_rms_norm_vs_ref.py -x -q`
+- **Mesh / device:** `(1,1)`, Blackhole
+- **Input distribution:** **standard normal** activations, `[1, 1, S, 4096]`, `S ∈ {32, 512, 4096}`,
+  `reset_seeds` (repo-root `conftest.py:34`, seed 213919). Two weight sources, both run
+  (`DEC-035`): standard-normal random weights, and the **real** `model.layers.0.input_layernorm.weight`.
+  Stated because it must never be chosen to pass — recipe §2.1(b) measures the bf16 floor as
+  identical under `rand[0,1)` and `randn`, and randn is the harder of the two for a norm.
+- **Reference dtype policy:** reference weight and activations **fp32**, all arithmetic fp32
+  (`DEC-006`). Only what the device *stores* is quantised, and only to compute the floor: bf16
+  activations and a bf16 norm weight in its stored `(1, 1, 128, 32)` shape (`DEC-022`). A
+  bf16-weight reference would share the device's own rounding and flatter the number — recipe
+  §2.1(a) measures 0.9999867 against 0.99995 for that mistake.
+- **Threshold:** PCC >= 0.9999 (`BRINGUP_RECIPE.md:1728`). The error ratio is **recorded, not
+  asserted**: a correct module sits right on §2.2's 3x stage bound, so asserting it would gate on
+  the wrong side of the noise (`BRINGUP_RECIPE.md:1043-1046`).
+- **Noise floor (computed):** **0.9999973 / 0.9999973 / 0.9999972** with random weights;
+  **0.9999986** at all three lengths with the real layer-0 weight. The floor **moves with the
+  weight distribution** — a trained norm gain is a narrow positive distribution, not standard
+  normal — which is the whole reason `DEC-035` runs both rather than picking one.
+- **Measured:**
+
+  | weights | S=32 | S=512 | S=4096 |
+  |---|---|---|---|
+  | random, PCC | 0.9999957 | 0.9999958 | 0.9999957 |
+  | random, floor | 0.9999973 | 0.9999973 | 0.9999972 |
+  | random, ratio | **1.56x** | **1.57x** | **1.54x** |
+  | real layer-0, PCC | 0.9999971 | 0.9999971 | 0.9999971 |
+  | real layer-0, floor | 0.9999986 | 0.9999986 | 0.9999986 |
+  | real layer-0, ratio | **2.11x** | **2.13x** | **2.12x** |
+
+  The real-weight figure **reproduces the recipe's expected value against the same floor**: §2.4
+  predicts 0.9999955 with `fp32_dest_acc_en=True` against a 0.9999986 floor, and this module
+  measures **0.9999971** — slightly better, at 2.1x the floor rather than ~3x.
+- **The §2.4 A/B, measured in-suite** (`DEC-014`'s falsifier, `DEC-030`):
+
+  | S | `fp32_dest_acc_en=True` | `=False` | error reduction |
+  |---|---|---|---|
+  | 32 | 0.9999957 (1.56x floor) | 0.9999707 (10.79x) | **6.90x** |
+  | 512 | 0.9999958 (1.57x floor) | 0.9999633 (13.58x) | **8.66x** |
+
+  So the flag is worth ~7-9x of module error on this box, against the recipe's stated ~7x — and
+  note that **both** settings clear the 0.9999 threshold at S=32, which is precisely §2.2's point:
+  the absolute PCC does not distinguish them and the ratio to the floor does.
+- **Negative control:** the **zero-gain probe** — `weight = 0` must give `max|out| = 0.0`.
+  Measured **0.0**. A Gemma `(1 + weight)` fold would instead return the normalised input, whose
+  per-channel magnitude is ~1, so this is the discriminator between plain and folded RMSNorm and
+  therefore between Llama and the two nearest templates' feature set (`00_MODEL_CARD.md` §3).
+  A second control: building with an empty `state_dict` and no `tensor_cache_path` must raise
+  rather than run on a `None` gain — Appendix B's "cache-only build silently wrong" row.
+- **Deviations:** none to the gate. `DEC-035` records the two-weight-source choice, forced by the
+  recipe specifying the input three different ways.
+- **Raw log:** `raw/G-RMS_20260904T090144Z.log`
+- **What this does NOT prove:**
+  - **the distributed (3-op) branch.** It is dormant (`is_distributed=False`, `DEC-025`) and no
+    test executes it. `DEC-031` and `07_RISKS.md` R-011 record that the template's version of that
+    branch would in fact raise `TypeError` — which is exactly what a never-executed branch is worth.
+  - **cache-only loading.** The gate builds from a `state_dict` every time; the
+    `tensor_cache_path` branch is only proven to *refuse* when absent. `G-WEIGHTS` (P6.2) owns the
+    positive case.
+  - **that the norm is wired into anything.** `G-LAYER` and `G-MODEL` own placement — this gate
+    would pass equally if the two norms in a layer were swapped, which is `G-LAYER`'s own control.
+  - **`eps` correctness beyond agreement.** Both sides read `1e-05` from the same bundled
+    `config.json`, so a wrong value in that file would cancel. `G-CARD` is the provenance check.
+
+---
+
+### G-ROPE — llama3-scaled RoPE, Meta convention, vs the HF `rotate_half` reference
+- **Command:** `pytest models/demos/llama31_8b_d_p/tests/unit/test_rope_vs_ref.py -x -q`
+- **Mesh / device:** `(1,1)`, Blackhole (two of the eleven tests are host-only)
+- **Input distribution:** **standard normal**, `[1, 4, S, 128]` — 4 heads, the local Q-head count
+  per chip at the deployment TP=8 — with `S ∈ {32, 512, 4096}`, `reset_seeds`.
+- **Reference dtype policy:** fp32 input, fp32 cos/sin, fp32 arithmetic. The **HF** convention
+  (`x * cos + rotate_half(x) * sin`) is the reference; the device runs the **Meta** convention, and
+  both tables come from **one** frequency set, as
+  `models/demos/gpt_oss_d_p/tests/unit/test_attention_vs_ref.py:83` `_build_cos_sin` does, so the
+  test cannot silently compare two different RoPEs. For the floor, the three tensors the device
+  stores — input, cos, sin — are quantised to bf16 and the rest stays fp32.
+- **Threshold:** PCC >= 0.999 (`BRINGUP_RECIPE.md:1729`), expecting ~0.99999.
+- **Noise floor (computed):** **0.9999983 / 0.9999982 / 0.9999980**.
+- **Measured:** **0.9999969 / 0.9999964 / 0.9999959** at S = 32 / 512 / 4096 — **1.76x / 1.95x /
+  2.08x** the floor. 11/11 tests pass.
+  - `rope_params` reads `(theta, factor, original_max_position_embeddings) =
+    (500000.0, 8.0, 8192)` through `get_rope_theta` / `get_rope_scaling` on the raw dict, each
+    asserted non-`None` — which is `07_RISKS.md` R-005 enforced in device code rather than by
+    convention.
+  - `build_prefill_rope`'s device tables are **bit-identical** (`torch.equal`, `max|Δ| = 0.0`) to
+    the test's independently built Meta tables at all three lengths. A table layout is a mapping
+    claim, so it is gated on bit-equality, not PCC (recipe §2.5).
+  - `get_rot_transformation_mat()` and `get_rot_transformation_mat(dhead=128)` are
+    `torch.equal` and both 32x32 — recipe P1 trap 4 confirmed on this version, not assumed.
+- **Negative control:** two, both fired.
+  1. **HF-layout tensor into the Meta op** — the classic convention mismatch — scores
+     **0.01367** (the recipe measured 0.01296 for the same mistake). Without it, 0.99999 could
+     equally mean both sides are wrong the same way.
+  2. **The llama3 scaling must be provably active.** Asserted on the piecewise **band structure**
+     of the frequencies `apply_scaling` consumes: of 64 frequencies, **29 low** (wavelength >
+     8192) divided by exactly 8.0, **29 high** (wavelength < 2048) `torch.equal` to the base
+     frequencies, and **6 mid** strictly interpolated between the two. This is a **deviation from
+     the recipe's stated control** and `DEC-036` records why: the recipe asks that the scaled and
+     unscaled tables differ "for positions beyond `original_max_position_embeddings`"
+     (`BRINGUP_RECIPE.md:1093-1095`), and measured, `max|cos_scaled - cos_unscaled|` is
+     **1.99933 inside** the window and **1.99398 beyond** it — both saturated at the theoretical
+     maximum of 2, because llama3 scaling divides long-wavelength frequencies at *every* position
+     and `cos` oscillates. That assertion therefore cannot fail for the reason it exists. Both
+     numbers are still recorded, as the recipe asks; the band test is what gates.
+  3. A third refusal, counted with the controls: the contiguous builder must reject
+     `start_pos > seq_len` (the `gather_cos_sin` out-of-bounds landmine), and the indexed builder
+     must reject `chunk_size % (32*sp) != 0` and `max_seq_len % chunk_size != 0`.
+- **Deviations:** `DEC-036` (the scaling control, above) and `DEC-033` (three signature deviations
+  from `03_OUTLINE.md` §2.5, all forced by the helpers being wrapped). Verdict is `PASS` rather
+  than `PASS-WITH-DEVIATION` because the gate's own threshold and its required controls are met —
+  `DEC-036` makes the control *stronger* than specified, not weaker.
+- **Raw logs:** `raw/G-ROPE_20260904T091040Z.log` (the verdict) and
+  `raw/G-ROPE_20260904T090652Z.log` (a **failed** earlier run, kept deliberately: the first
+  attempt at the recipe's scaling assertion recovered each frequency from a cos table by `arccos`,
+  and for the lowest frequency `cos(1 * f)` rounds to 1.0 in fp32, giving `0/0 = nan`. That is
+  `LANDMINES.md`'s "a failing probe is not evidence of a failing module until the probe's own
+  numerics are checked", hit live — the module was correct throughout.) Three intermediate passing
+  runs made while adding tests were discarded as superseded; they were authoring runs, not gate runs.
+- **What this does NOT prove:**
+  - **that Q/K projection weights are `reverse_permute`d on the real load path.** The HF -> Meta
+    permutation is applied *by the test*, not by `tt/attention/weights.py`, which does not exist
+    until P5.5. `G-ATTN`'s "loaded without the Meta permute" control (recipe: 0.9475) is what
+    closes it — and note how high that broken variant scores.
+  - **the indexed RoPE numerically.** `build_indexed_rope` is exercised only structurally, at
+    SP=1, where the block-cyclic reorder is the identity; the table is asserted `torch.equal` to
+    the plain Meta table and the two shape constraints are asserted as refusals. Nothing about the
+    SP>1 layout is testable on `(1,1)`. `G-CHUNK` (P7) and `G-CHUNK-ATTN` (P8) own it.
+  - **long-context correctness.** The longest sequence gated is 4096, well inside
+    `original_max_position_embeddings` = 8192, so the scaled band of the tables is never exercised
+    *by the device*: the band structure is proved on the host. Appendix B's "PCC good at short seq,
+    bad past ~8192" symptom would still be invisible here; `G-MODEL` at long context is where it
+    would show.
+  - **that the RoPE is applied to the right tensors.** Only Q and K may be rotated; this gate
+    rotates a bare tensor. `G-ATTN` asserts the invariant.
+
+---
+
 ```
 STATUS after P3: gates PASS=4 FAIL=0 DEVIATION=0 BLOCKED=0 | next: P4 (parallelism + CCL plan)
 STATUS after P4: gates PASS=5 FAIL=0 DEVIATION=0 BLOCKED=0 | next: P5 (naive module implementations, bottom-up)
-Open DECs needing review: DEC-004 (chunk size deferred to P7), DEC-008 (TestFactory.setup_test lands in P5.1),
+STATUS after P5.1-P5.3: gates PASS=8 FAIL=0 DEVIATION=0 BLOCKED=0 | next: P5.4 (dense SwiGLU MLP, G-MLP)
+Per-phase regression gate: whole package suite **47 passed, 0 failed**
+(`raw/P5-REGRESSION_20260904T092212Z.log`)
+Citations after P5.3: **279/279 verified, 0 mismatched; 522/522 doc refs resolved**, exit 0
+(`raw/G-CITE_20260904T092334Z.log`)
+Open DECs needing review: DEC-004 (chunk size deferred to P7 — now a parameter of build_indexed_rope, DEC-033),
 DEC-012 (checkpoint loader moves to ModelArgs in P6.2), DEC-013/DEC-018 (import gpt_oss_d_p/utils; no utils/ package),
-DEC-017 (P5.1 must DELETE docs/ and scripts/__init__.py), DEC-019 (three Q/K/V projections + nlp_create_qkv_heads(q, cat(k,v))),
+DEC-019 (three Q/K/V projections + nlp_create_qkv_heads(q, cat(k,v))),
 DEC-021 (bf8_b KV dtype; the bf16 delta is owed at G-KV), DEC-025 (residual scheme A; scatter_output seam must refuse),
-DEC-026 (barrier depth 2 — G-RACE's first move if it fails), DEC-027 (descriptor not yet pinned; G-FABRIC-MATRIX picks it)
+DEC-026 (barrier depth 2 — G-RACE's first move if it fails), DEC-027 (descriptor not yet pinned; G-FABRIC-MATRIX picks it),
+DEC-029 (four dead CCLManager members dropped — P8 re-checks if the ring path wants a sub-device),
+DEC-030 (compute-kernel config home; P6.2 may want to own it), DEC-032 (derive_head_dim moves into ModelArgs at P6.2),
+DEC-031/R-011 (upstream fix owed against gpt_oss_d_p's dormant distributed RMSNorm),
+DEC-037/R-012 (the root .gitignore excluded every raw log; re-included in-package, kit fix owed)
+Closed this phase: DEC-008 (TestFactory.setup_test written in P5.1), DEC-017 (docs/ and scripts/__init__.py deleted),
+R-005 (rope_theta substitution now enforced in device code), R-010 (in-package assert added)
 ```
 
-**STOPPED HERE, ON A GATE BOUNDARY.** Supersedes the end-of-P2 stop note above. **P0, P1, P2, P3 and
-P4 are complete and gated; P5 (naive module implementations, bottom-up — `G-MESH`, `G-RMS`, `G-ROPE`,
-`G-MLP`, `G-ATTN`, `G-KV`) is next.** Still no device code: `tt/` holds only its `__init__.py`.
+**STOPPED HERE, ON A GATE BOUNDARY.** Supersedes the end-of-P2 and end-of-P4 stop notes above.
+**P0-P4 and P5.1, P5.2, P5.3 are complete and gated; P5.4 (the dense SwiGLU MLP, `G-MLP`) is
+next**, then P5.5 (attention, `G-ATTN`) and P5.6 (the KV cache, `G-KV`). Phase P5 is split across
+sessions deliberately; this session's scope was P5.1-P5.3 only.
 
-What P5.1 must do **first**, before writing `MeshConfig`:
+Device code now exists: `tt/{config,ccl,rms_norm,rope}.py`, with `tests/unit/{test_mesh_config,
+test_ccl_semaphores,test_rms_norm_vs_ref,test_rope_vs_ref}.py`. `tests/test_factory.py` gained
+`TestFactory.setup_test`. `docs/` and `scripts/__init__.py` are gone (`DEC-017`, executed).
 
-1. **Delete `docs/` (and `docs/.gitkeep`) and `scripts/__init__.py`** — `DEC-017`. They are the last
-   two artefacts of P0's literal reading and the committed tree (`03_OUTLINE.md` §1) does not contain
-   them.
-2. Add `TestFactory.setup_test(mesh_device, ...)` to `tests/test_factory.py` **in the same edit** that
-   creates `tt/config.py` and `tt/ccl.py` — `DEC-008`.
-3. Set `_VALIDATED_MESH_SHAPE = (4, 8)` / `_VALIDATED_TP = 8`, and make `_validate()` **raise** on
-   sub-axis TP (`tp != mesh_shape[tp_axis]`), warn otherwise — `03_OUTLINE.md` §5.1 explains which
-   half of `BRINGUP_RECIPE.md:1022-1024` is binding and why.
-4. Use the repo-root `expect_error` fixture (`conftest.py:948`) for the refusal assertions, **not**
-   `pytest.raises`, which the `prefer-expect-error` hook rejects in any `tests/` file
-   (`.pre-commit-config.yaml:51`).
+What P5.4 can rely on, and what it must not assume:
+
+1. **`MeshConfig` and `CCLManager` are constructed and counted, never exercised.** No collective
+   has run on this box in this package. `MLP.__call__`'s TP tail must therefore be written behind
+   `if self.mesh_config.tp > 1`, and `G-MLP` at `(1,1)` will not execute it — the first real
+   collective is P8's.
+2. **`default_compute_kernel_config(mesh_device)` in `tt/config.py` is the only compute-kernel
+   config** (`DEC-030`). Pass it to both `ttnn.linear` calls and to `down_proj`'s. Do **not**
+   copy `models/demos/gpt_oss_d_p/tt/attention/config.py:71`'s explicit `fp32_dest_acc_en=False`;
+   measured here, `False` costs 6.9-8.7x on the norm alone, and recipe §2.4 puts it at 96-1168x on
+   a matmul.
+3. **`derive_head_dim(hf)` in `tt/config.py`** is the package's one head-dim derivation
+   (`DEC-032`); `tt/mlp.py` does not need it, but `tt/attention/` (P5.5) does, and it must call it
+   rather than reach for `hf_config.head_dim`, which does not exist.
+4. **`G-MLP` gates both dtypes** — `>= 0.999 @bf8_b` and `>= 0.9995 @bf16`, **and `<= 3x` the
+   computed floor at each** (`BRINGUP_RECIPE.md:1730`). Unlike `G-RMS`, that ratio bound is
+   *asserted*, so compute a separate floor per dtype: quantise the weights at the dtype under test
+   and the activations at bf16 (`DEC-022`).
+5. **The negative control is SiLU on `up` instead of `gate`** (recipe: 0.6462). It is what proves
+   the fused unary is on the argument you think it is.
+6. **`scatter_output` must be wired and must refuse** what it cannot honour (`DEC-025`), not
+   half-implemented.
+7. **Run `pre-commit run --files ...` before recording any `path:line`** — and note `DEC-034`: the
+   `prefer-expect-error` hook is a `pygrep`, so it fires on the fixture's name in comments and
+   docstrings too, not only on a call.

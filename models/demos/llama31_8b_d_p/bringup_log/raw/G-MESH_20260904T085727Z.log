@@ -1,0 +1,171 @@
+2026-09-04 08:57:30.688 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mstojkovic/.cache/ttnn,model_cache_path=/home/mstojkovic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.14, pytest-9.0.3, pluggy-1.6.0 -- /home/mstojkovic/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mstojkovic/tt-metal
+configfile: pytest.ini
+plugins: timeout-2.4.0, anyio-4.15.0, cov-7.0.0, github-actions-annotate-failures-0.3.0, repeat-0.9.4, dash-2.15.0, benchmark-5.2.3, split-0.11.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 16 items
+
+models/demos/llama31_8b_d_p/tests/unit/test_mesh_config.py::test_mesh_config_arithmetic_1x8 2026-09-04 08:57:31.885 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:83 - MeshConfig(mesh_shape=(1, 8), tp=8) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 08:57:31.885 | INFO     | llama31_8b_d_p.tests.unit.test_mesh_config:test_mesh_config_arithmetic_1x8:58 - [G-MESH] MeshConfig((1, 8), tp=8, sp=1, tp_axis=1) shard_size(4096)=512 shard_size(14336)=1792
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_mesh_config.py::test_mesh_config_arithmetic_deployment_4x8 2026-09-04 08:57:32.037 | INFO     | llama31_8b_d_p.tests.unit.test_mesh_config:test_mesh_config_arithmetic_deployment_4x8:82 - [G-MESH] MeshConfig((4, 8), tp=8, sp=4, tp_axis=1) local_q=4 local_kv=1
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_mesh_config.py::test_mesh_config_1x1_single_card 2026-09-04 08:57:32.191 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:83 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 08:57:32.191 | INFO     | llama31_8b_d_p.tests.unit.test_mesh_config:test_mesh_config_1x1_single_card:90 - [G-MESH] MeshConfig((1, 1), tp=1, sp=1, tp_axis=1) (single card: no collective is needed at TP=1)
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_mesh_config.py::test_mesh_config_refuses_sub_axis_tp[mesh_shape0-4] 2026-09-04 08:57:32.341 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="sub-axis TP is unsupported"
+2026-09-04 08:57:32.341 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="sub-axis TP is unsupported"
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_mesh_config.py::test_mesh_config_refuses_sub_axis_tp[mesh_shape1-2] 2026-09-04 08:57:32.490 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="sub-axis TP is unsupported"
+2026-09-04 08:57:32.490 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="sub-axis TP is unsupported"
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_mesh_config.py::test_mesh_config_refuses_sub_axis_tp[mesh_shape2-4] 2026-09-04 08:57:32.641 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="sub-axis TP is unsupported"
+2026-09-04 08:57:32.641 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="sub-axis TP is unsupported"
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_mesh_config.py::test_mesh_config_refuses_sub_axis_tp[mesh_shape3-16] 2026-09-04 08:57:32.790 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="sub-axis TP is unsupported"
+2026-09-04 08:57:32.791 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="sub-axis TP is unsupported"
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_mesh_config.py::test_mesh_config_off_target_shape_warns_but_builds 2026-09-04 08:57:32.941 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:83 - MeshConfig(mesh_shape=(1, 2), tp=2) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 08:57:32.941 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:83 - MeshConfig(mesh_shape=(1, 4), tp=4) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 08:57:32.942 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:83 - MeshConfig(mesh_shape=(2, 8), tp=8) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 08:57:32.942 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:83 - MeshConfig(mesh_shape=(8, 4), tp=4) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_mesh_config.py::test_mesh_config_tp_axis_0_swaps_the_axes 2026-09-04 08:57:33.090 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:83 - MeshConfig(mesh_shape=(8, 4), tp=8) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_mesh_config.py::test_ccl_manager_constructs_on_card[blackhole-mesh_device0] 2026-09-04 08:57:33.244 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:224)
+2026-09-04 08:57:33.244 | info     |             UMD | Cluster constructor started. (cluster.cpp:406)
+2026-09-04 08:57:33.261 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-09-04 08:57:33.261 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-09-04 08:57:33.360 | info     |             UMD | Established firmware bundle version: 19.12.0 (topology_discovery.cpp:576)
+2026-09-04 08:57:33.365 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-09-04 08:57:34.800 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31}/[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 30, 31, 16, 17, 18, 19, 20, 21, 22, 23] and remote chip ids {} (cluster.cpp:173)
+2026-09-04 08:57:34.800 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-09-04 08:57:34.800 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-09-04 08:57:34.800 | info     |             UMD | Cluster constructor completed. (cluster.cpp:665)
+2026-09-04 08:57:34.819 | info     |             UMD | Starting devices in cluster (cluster.cpp:1205)
+2026-09-04 08:57:34.857 | warning  |             UMD | AICLK settled at 1343 MHz, within 5% of the requested 1350 MHz but not an exact match. Proceeding. (tt_device.cpp:256)
+2026-09-04 08:57:34.877 | warning  |             UMD | AICLK settled at 1343 MHz, within 5% of the requested 1350 MHz but not an exact match. Proceeding. (tt_device.cpp:256)
+2026-09-04 08:57:36.067 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1213)
+2026-09-04 08:57:39.925 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
+2026-09-04 08:57:39.926 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
+2026-09-04 08:57:39.944 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4, 3:16, 4:12} (topology_mapper_utils.cpp:3368)
+2026-09-04 08:57:39.944 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:24, 5:8} (topology_mapper_utils.cpp:3376)
+2026-09-04 08:57:40.576 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 08:57:41.257 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 08:57:41.258 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:83 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 08:57:41.260 | INFO     | llama31_8b_d_p.tests.unit.test_mesh_config:test_ccl_manager_constructs_on_card:140 - [G-MESH] compute grid = (12, 10); num_links = 1
+2026-09-04 08:57:41.260 | INFO     | llama31_8b_d_p.tests.unit.test_mesh_config:test_ccl_manager_constructs_on_card:141 - [G-MESH] ring_attention_ccl_core_grid_offset = (11, 0)
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_mesh_config.py::test_ccl_manager_allocates_semaphores_once[blackhole-mesh_device0] 2026-09-04 08:57:42.273 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 08:57:42.368 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 08:57:42.371 | INFO     | llama31_8b_d_p.tests.unit.test_mesh_config:test_ccl_manager_allocates_semaphores_once:169 - [G-MESH] semaphores rs/ag/barrier/ring = (6, 4, 2, 2), total 14
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_ccl_semaphores.py::test_semaphore_inventory_is_exact[blackhole-mesh_device0] 2026-09-04 08:57:43.388 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 08:57:43.481 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 08:57:43.484 | INFO     | llama31_8b_d_p.tests.unit.test_ccl_semaphores:test_semaphore_inventory_is_exact:52 - [G-SEMAPHORE] inventory at construction: {'rs': 6, 'ag': 4, 'barrier': 2, 'ring_attention': 2} (total 14)
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_ccl_semaphores.py::test_semaphores_survive_dozens_of_getter_cycles[blackhole-mesh_device0] 2026-09-04 08:57:44.494 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 08:57:44.586 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 08:57:44.589 | INFO     | llama31_8b_d_p.tests.unit.test_ccl_semaphores:test_semaphores_survive_dozens_of_getter_cycles:79 - [G-SEMAPHORE] after 32 layers x 4 collectives: {'rs': 6, 'ag': 4, 'barrier': 2, 'ring_attention': 2}
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_ccl_semaphores.py::test_ping_pong_cycles_and_is_two_deep[blackhole-mesh_device0] 2026-09-04 08:57:45.605 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 08:57:45.696 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 08:57:45.700 | INFO     | llama31_8b_d_p.tests.unit.test_ccl_semaphores:test_ping_pong_cycles_and_is_two_deep:107 - [G-SEMAPHORE] rs/ag/barrier ping-pong all cycle with period 2 (DEC-026)
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_ccl_semaphores.py::test_reset_skips_barrier_and_ring_attention[blackhole-mesh_device0] 2026-09-04 08:57:46.689 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 08:57:46.782 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_ccl_semaphores.py::test_semaphores_would_multiply_if_built_per_layer[blackhole-mesh_device0] 2026-09-04 08:57:47.784 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 08:57:47.877 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 08:57:47.884 | INFO     | llama31_8b_d_p.tests.unit.test_ccl_semaphores:test_semaphores_would_multiply_if_built_per_layer:143 - [G-SEMAPHORE] control: 3 managers -> 42 semaphores (correct code: 14)
+PASSED
+
+==================================== PASSES ====================================
+- generated xml file: /home/mstojkovic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+8.17s setup    models/demos/llama31_8b_d_p/tests/unit/test_mesh_config.py::test_ccl_manager_constructs_on_card[blackhole-mesh_device0]
+1.09s setup    models/demos/llama31_8b_d_p/tests/unit/test_ccl_semaphores.py::test_semaphore_inventory_is_exact[blackhole-mesh_device0]
+1.09s setup    models/demos/llama31_8b_d_p/tests/unit/test_mesh_config.py::test_ccl_manager_allocates_semaphores_once[blackhole-mesh_device0]
+1.09s setup    models/demos/llama31_8b_d_p/tests/unit/test_ccl_semaphores.py::test_ping_pong_cycles_and_is_two_deep[blackhole-mesh_device0]
+1.09s setup    models/demos/llama31_8b_d_p/tests/unit/test_ccl_semaphores.py::test_semaphores_survive_dozens_of_getter_cycles[blackhole-mesh_device0]
+1.07s setup    models/demos/llama31_8b_d_p/tests/unit/test_ccl_semaphores.py::test_semaphores_would_multiply_if_built_per_layer[blackhole-mesh_device0]
+1.06s setup    models/demos/llama31_8b_d_p/tests/unit/test_ccl_semaphores.py::test_reset_skips_barrier_and_ring_attention[blackhole-mesh_device0]
+0.16s setup    models/demos/llama31_8b_d_p/tests/unit/test_mesh_config.py::test_mesh_config_arithmetic_1x8
+0.15s setup    models/demos/llama31_8b_d_p/tests/unit/test_mesh_config.py::test_mesh_config_1x1_single_card
+0.15s setup    models/demos/llama31_8b_d_p/tests/unit/test_mesh_config.py::test_mesh_config_off_target_shape_warns_but_builds
+0.15s setup    models/demos/llama31_8b_d_p/tests/unit/test_mesh_config.py::test_mesh_config_refuses_sub_axis_tp[mesh_shape2-4]
+0.15s setup    models/demos/llama31_8b_d_p/tests/unit/test_mesh_config.py::test_mesh_config_refuses_sub_axis_tp[mesh_shape0-4]
+0.15s setup    models/demos/llama31_8b_d_p/tests/unit/test_mesh_config.py::test_mesh_config_refuses_sub_axis_tp[mesh_shape3-16]
+0.15s setup    models/demos/llama31_8b_d_p/tests/unit/test_mesh_config.py::test_mesh_config_refuses_sub_axis_tp[mesh_shape1-2]
+0.15s setup    models/demos/llama31_8b_d_p/tests/unit/test_mesh_config.py::test_mesh_config_arithmetic_deployment_4x8
+0.15s setup    models/demos/llama31_8b_d_p/tests/unit/test_mesh_config.py::test_mesh_config_tp_axis_0_swaps_the_axes
+0.02s teardown models/demos/llama31_8b_d_p/tests/unit/test_ccl_semaphores.py::test_semaphores_would_multiply_if_built_per_layer[blackhole-mesh_device0]
+0.02s teardown models/demos/llama31_8b_d_p/tests/unit/test_ccl_semaphores.py::test_reset_skips_barrier_and_ring_attention[blackhole-mesh_device0]
+0.02s teardown models/demos/llama31_8b_d_p/tests/unit/test_ccl_semaphores.py::test_ping_pong_cycles_and_is_two_deep[blackhole-mesh_device0]
+0.02s teardown models/demos/llama31_8b_d_p/tests/unit/test_ccl_semaphores.py::test_semaphore_inventory_is_exact[blackhole-mesh_device0]
+0.02s teardown models/demos/llama31_8b_d_p/tests/unit/test_ccl_semaphores.py::test_semaphores_survive_dozens_of_getter_cycles[blackhole-mesh_device0]
+0.02s teardown models/demos/llama31_8b_d_p/tests/unit/test_mesh_config.py::test_ccl_manager_constructs_on_card[blackhole-mesh_device0]
+0.02s teardown models/demos/llama31_8b_d_p/tests/unit/test_mesh_config.py::test_ccl_manager_allocates_semaphores_once[blackhole-mesh_device0]
+0.01s call     models/demos/llama31_8b_d_p/tests/unit/test_ccl_semaphores.py::test_semaphores_would_multiply_if_built_per_layer[blackhole-mesh_device0]
+
+(1 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_mesh_config.py::test_mesh_config_arithmetic_1x8
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_mesh_config.py::test_mesh_config_arithmetic_deployment_4x8
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_mesh_config.py::test_mesh_config_1x1_single_card
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_mesh_config.py::test_mesh_config_refuses_sub_axis_tp[mesh_shape0-4]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_mesh_config.py::test_mesh_config_refuses_sub_axis_tp[mesh_shape1-2]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_mesh_config.py::test_mesh_config_refuses_sub_axis_tp[mesh_shape2-4]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_mesh_config.py::test_mesh_config_refuses_sub_axis_tp[mesh_shape3-16]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_mesh_config.py::test_mesh_config_off_target_shape_warns_but_builds
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_mesh_config.py::test_mesh_config_tp_axis_0_swaps_the_axes
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_mesh_config.py::test_ccl_manager_constructs_on_card[blackhole-mesh_device0]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_mesh_config.py::test_ccl_manager_allocates_semaphores_once[blackhole-mesh_device0]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_ccl_semaphores.py::test_semaphore_inventory_is_exact[blackhole-mesh_device0]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_ccl_semaphores.py::test_semaphores_survive_dozens_of_getter_cycles[blackhole-mesh_device0]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_ccl_semaphores.py::test_ping_pong_cycles_and_is_two_deep[blackhole-mesh_device0]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_ccl_semaphores.py::test_reset_skips_barrier_and_ring_attention[blackhole-mesh_device0]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_ccl_semaphores.py::test_semaphores_would_multiply_if_built_per_layer[blackhole-mesh_device0]
+============================= 16 passed in 16.22s ==============================
+nanobind: leaked 2 instances!
+ - leaked instance 0x73c8e64aa6b8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x73c8e664f3c8 of type "ttnn._ttnn.tensor.MemoryConfig"
+nanobind: leaked 21 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "Arch"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - ... skipped remainder
+nanobind: leaked 255 functions!
+ - leaked function ""
+ - leaked function ""
+ - leaked function "is_range_lockstep_allocated"
+ - leaked function ""
+ - leaked function "default_core_range"
+ - leaked function "get_view"
+ - leaked function "num_program_cache_entries"
+ - leaked function ""
+ - leaked function "sfpu_eps"
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-09-04 08:57:49.306 | info     |    BuildKernels | JIT cache stats: 8/8 hits (100.0%) [8 cached, 36 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-09-04 08:57:49.306 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-09-04 08:57:49.523 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:550)
+2026-09-04 08:57:49.523 | info     |             UMD | Closing devices in cluster (cluster.cpp:1218)
+2026-09-04 08:57:57.398 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1227)
+2026-09-04 08:57:57.399 | info     |             UMD | Cluster destructor started. (cluster.cpp:933)
+2026-09-04 08:57:57.399 | info     |             UMD | Cluster destructor completed. (cluster.cpp:936)

@@ -4,7 +4,7 @@
 
 """Shared test fixtures, checkpoint access, and the package's single noise-floor definition.
 
-Modelled on `models/demos/minimax_m3/tests/test_factory.py`. Three groups of helpers:
+Modelled on `models/demos/minimax_m3/tests/test_factory.py`. Four groups of helpers:
 
 1. **Dimensions without a checkpoint** — `llama_config_dims()` reads the bundled
    `configs/Llama-3.1-8B-Instruct/config.json`, which is byte-identical to the staged checkpoint's
@@ -17,15 +17,20 @@ Modelled on `models/demos/minimax_m3/tests/test_factory.py`. Three groups of hel
    `models/demos/common/bringup/examples/noise_floor.py` as the package's ONE definition
    (`DEC-007`). Two copies drift, and then two gates disagree about what a floor is
    (recipe §2.2).
-
-`TestFactory.setup_test()` is deliberately absent until P5.1: it builds `MeshConfig` + `CCLManager`,
-which do not exist before then (`DEC-008`).
+4. **Device-side setup** — `TestFactory.setup_test()` builds `MeshConfig` + `CCLManager` once per
+   test. Added in P5.1, the phase that creates them (`DEC-008`); `ModelArgs` is not part of it until
+   P6.2 (`DEC-012`), so the returned `hf` is the bundled config dict.
 """
 
 import json
 import os
 
 import pytest
+
+import ttnn
+from models.demos.gpt_oss_d_p.utils.general_utils import get_default_num_links
+from models.demos.llama31_8b_d_p.tt.ccl import CCLManager
+from models.demos.llama31_8b_d_p.tt.config import MeshConfig
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _CONFIG_JSON = os.path.join(_HERE, "..", "configs", "Llama-3.1-8B-Instruct", "config.json")
@@ -122,3 +127,37 @@ def err_ratio(measured: float, floor: float) -> float:
     absolute PCC looks pretty.
     """
     return float("inf") if floor >= 1.0 else (1.0 - float(measured)) / (1.0 - float(floor))
+
+
+# --------------------------------------------------------------------------------------------
+# Device-side setup (`DEC-008`; template `models/demos/minimax_m3/tests/test_factory.py:45`)
+# --------------------------------------------------------------------------------------------
+class TestFactory:
+    """One place that builds the per-test device objects, so no test re-derives TP or `num_links`."""
+
+    @staticmethod
+    def setup_test(mesh_device, *, weight_dtype=ttnn.bfloat8_b, tensor_cache_path=None, topology=None):
+        """Build `MeshConfig` + `CCLManager` for an already-open `mesh_device`.
+
+        TP is taken from the mesh's own column count, so a `(1,1)` P5 test gets TP=1 and the
+        deployment `(4,8)` gets TP=8 — the only two shapes this package targets
+        (`bringup_log/00_MODEL_CARD.md` §4). `num_links` comes from
+        `models/demos/gpt_oss_d_p/utils/general_utils.py:27` (`DEC-013`).
+
+        Unlike `models/demos/minimax_m3/tests/test_factory.py:56` this returns no `ModelArgs` and no
+        `AutoConfig`: `ModelArgs` is a P6.2 deliverable (`DEC-012`), and the dims come from the
+        bundled `config.json` with no HF import, which is what keeps every P5 unit test runnable on
+        a bare card.
+        """
+        mesh_shape = tuple(mesh_device.shape)
+        mesh_config = MeshConfig(mesh_shape, tp=mesh_shape[1])
+        ccl_kwargs = {} if topology is None else {"topology": topology}
+        ccl_manager = CCLManager(mesh_device, num_links=get_default_num_links(mesh_device), **ccl_kwargs)
+        return {
+            "mesh_device": mesh_device,
+            "mesh_config": mesh_config,
+            "ccl_manager": ccl_manager,
+            "hf": llama_config_dims(),
+            "weight_dtype": weight_dtype,
+            "tensor_cache_path": tensor_cache_path,
+        }
