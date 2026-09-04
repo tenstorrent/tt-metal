@@ -262,6 +262,10 @@ public:
     // Probe for an incoming message from 'source' with 'tag'. Return the size of the message in bytes
     virtual std::size_t snoop_incoming_msg_size(Rank source, Tag tag) const = 0;
 
+    // Non-blocking probe. Returns the size in bytes of a pending message from 'source' with 'tag',
+    // or std::nullopt if no such message is currently available. Never blocks.
+    virtual std::optional<std::size_t> iprobe_incoming_msg_size(Rank source, Tag tag) const = 0;
+
     virtual ~DistributedContext() = default;
 
 protected:

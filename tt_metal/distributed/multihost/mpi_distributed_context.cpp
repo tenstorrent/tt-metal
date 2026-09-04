@@ -710,6 +710,18 @@ std::size_t MPIContext::snoop_incoming_msg_size(Rank source, Tag tag) const {
     return static_cast<std::size_t>(size_bytes);
 }
 
+std::optional<std::size_t> MPIContext::iprobe_incoming_msg_size(Rank source, Tag tag) const {
+    int flag = 0;
+    MPI_Status status;
+    MPI_CHECK(MPI_Iprobe(*source, *tag, comm_, &flag, &status));
+    if (!flag) {
+        return std::nullopt;
+    }
+    int size_bytes = 0;
+    MPI_CHECK(MPI_Get_count(&status, MPI_CHAR, &size_bytes));
+    return static_cast<std::size_t>(size_bytes);
+}
+
 MPIContext::~MPIContext() {
     if (was_mpi_finalized()) {
         return;  // MPI_Finalize() already called

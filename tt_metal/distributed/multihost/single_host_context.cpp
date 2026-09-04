@@ -163,4 +163,9 @@ std::size_t SingleHostContext::snoop_incoming_msg_size(Rank source [[maybe_unuse
     TT_THROW("method snoop_incoming_msg_size is unsupported for single-host distributed contexts.");
 }
 
+std::optional<std::size_t> SingleHostContext::iprobe_incoming_msg_size(
+    Rank source [[maybe_unused]], Tag tag [[maybe_unused]]) const {
+    TT_THROW("method iprobe_incoming_msg_size is unsupported for single-host distributed contexts.");
+}
+
 }  // namespace tt::tt_metal::distributed::multihost

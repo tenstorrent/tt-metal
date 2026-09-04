@@ -74,6 +74,7 @@ public:
 
     /* ------------- message snooping ------------- */
     std::size_t snoop_incoming_msg_size(Rank source, Tag tag) const override;
+    std::optional<std::size_t> iprobe_incoming_msg_size(Rank source, Tag tag) const override;
 
 private:
     int rank_{0};

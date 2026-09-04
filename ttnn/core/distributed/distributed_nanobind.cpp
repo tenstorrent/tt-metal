@@ -1217,6 +1217,39 @@ void py_module(nb::module_& mod) {
             Raises:
                 RuntimeError: If the distributed context has not been initialized.
         )doc");
+
+    // Non-blocking probe: return the size in bytes of a pending message from ``source`` with
+    // ``tag``, or ``None`` if none is currently available. Never blocks.
+    mod.def(
+        "iprobe_bytes",
+        [](int source, int tag) -> nb::object {
+            if (!DistributedContext::is_initialized()) {
+                throw std::runtime_error("Distributed context not initialized. Call init_distributed_context() first.");
+            }
+            auto result = DistributedContext::get_current_world()->iprobe_incoming_msg_size(Rank(source), Tag(tag));
+            if (!result.has_value()) {
+                return nb::none();
+            }
+            return nb::cast(*result);
+        },
+        nb::arg("source"),
+        nb::arg("tag") = 0,
+        R"doc(
+            Non-blocking probe for an incoming message.
+
+            Returns the size in bytes of a pending message from ``source`` with ``tag``,
+            or ``None`` if no such message is currently available. Never blocks.
+
+            Args:
+                source (int): Peer rank to probe for a message from.
+                tag (int): MPI tag to match (default 0).
+
+            Returns:
+                Optional[int]: Message size in bytes if a message is pending, else None.
+
+            Raises:
+                RuntimeError: If the distributed context has not been initialized.
+        )doc");
     // Sub-context API for split MPI worlds. Returns the sub-context identifier
     // assigned by tt-run when rank bindings compose multiple overlays.
     mod.def(
