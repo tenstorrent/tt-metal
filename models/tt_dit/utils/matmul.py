@@ -14,6 +14,18 @@ from models.common.utility_functions import is_blackhole
 # Track unique warning signatures to avoid stdout spam
 _warned_matmul_signatures = set()
 _warned_1d_matmul_signatures = set()
+_ENABLE_MM_LOG = os.environ.get("TT_DIT_ENABLE_MM_LOG", "true").lower() in ("1", "true")
+
+
+def log_warning(message):
+    if _ENABLE_MM_LOG:
+        logger.warning(message)
+
+
+def log_info(message):
+    if _ENABLE_MM_LOG:
+        logger.info(message)
+
 
 # ---------------------------------------------------------------------------
 # Known-best 1D mcast_in0 configs for specific (M, K, N, grid_x, grid_y).
@@ -603,7 +615,7 @@ def get_matmul_config(M, K, N, core_grid, default_block_size=None, use_heuristic
 
         signature = (M, K, N, grid_x, grid_y)
         if signature not in _warned_matmul_signatures:
-            logger.warning(
+            log_warning(
                 f"No known best blocking for (M, K, N) = ({M}, {K}, {N}) on {grid_x}x{grid_y} core grid; using default {M_block_size}x{K_block_size}x{N_block_size}"
             )
             _warned_matmul_signatures.add(signature)
@@ -694,7 +706,7 @@ def get_agmm_config(
     sub_h, sub_w = v3["subblock"]
     signature = (M, K, N, grid_x, grid_y)
     if signature not in _logged_agmm_v3_signatures:
-        logger.info(
+        log_info(
             f"AGMM v3 rule config for (M, K, N) = ({M}, {K}, {N}) on {grid_x}x{grid_y}"
             f"{' transposed' if v3['transposed'] else ''}: "
             f"({M}, {K}, {N}): ({m_blk}, {k_blk}, {n_blk}, ({sub_h}, {sub_w}))  "
@@ -743,7 +755,7 @@ def get_1d_matmul_config(
         in0_block_w, per_core_N, out_subblock_w = config_tuple
     else:
         if signature not in _warned_1d_matmul_signatures:
-            logger.warning(
+            log_warning(
                 f"1D matmul: no swept config for (M, K, N) = ({M}, {K}, {N}) on "
                 f"{core_grid.x}x{core_grid.y} grid; using default blocking — "
                 f"run test_1d_matmul_sweep_bh4x8_ring to find optimal params"
@@ -930,7 +942,7 @@ def get_fused_mmrs_config(M, K, N, device_core_grid, num_links):
             sub_h, sub_w = v23["subblock"]
             signature = (M, K, N, device_core_grid.x, device_core_grid.y)
             if signature not in _logged_mmrs_rule_signatures:
-                logger.info(
+                log_info(
                     f"MMRS v2.3 rule config for (M, K, N) = ({M}, {K}, {N}): "
                     f"FusedMMRSConfig(ttnn.CoreCoord{v23['mm_grid']}, "
                     f"{m_blk}, {k_blk}, {n_blk}, {sub_h}, {sub_w}, None, 1)  "
@@ -940,7 +952,7 @@ def get_fused_mmrs_config(M, K, N, device_core_grid, num_links):
             config = FusedMMRSConfig(ttnn.CoreCoord(*v23["mm_grid"]), m_blk, k_blk, n_blk, sub_h, sub_w, None, 1)
 
     if config is None:
-        logger.warning(
+        log_warning(
             f"No fused MM/RS config for (M, K, N) = ({M}, {K}, {N}) on {device_core_grid} core grid "
             "and the rule engine does not cover it; using default, which is likely slower than not "
             "fusing at all"

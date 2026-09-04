@@ -7,7 +7,8 @@
 Six aspect ratios (21:9 .. 9:16) x three durations (5 / 10 / 15 s), 50 steps. The canvas comes from
 `resolve_canvas_size` and the frame count from `align_num_frames`. Stage durations log on the host
 rank only, and only for the warm generation. Rank 0 writes the muxed mp4; quality gates live in
-`test_pipeline_minimax_h3.py`.
+`test_pipeline_minimax_h3.py`. `ENABLE_USER_INPUT=1` opens a prompt / aspect / duration
+loop after the measured generation.
 """
 
 from __future__ import annotations
@@ -29,6 +30,8 @@ from .common_av import (
     artifact_dir,
     is_host,
     log_pipeline_perf,
+    pretest_user_repl,
+    run_user_generations,
     run_warm_generation,
     to_uint8_frames,
     weights_dir,
@@ -58,6 +61,7 @@ SWEEP = [
 @pytest.mark.parametrize(("aspect_ratio", "duration_s"), SWEEP)
 @pytest.mark.parametrize(("mesh_device", "device_params"), GALAXY_MESHES, indirect=["mesh_device", "device_params"])
 def test_t2va_performance(mesh_device, reset_seeds, aspect_ratio, duration_s):
+    pretest_user_repl()
     weights = weights_dir("transformer", "text_encoder", "vae", "audio_vae")
     prompt = PROMPT
 
@@ -103,13 +107,20 @@ def test_t2va_performance(mesh_device, reset_seeds, aspect_ratio, duration_s):
         aspect_ratio=aspect_ratio,
         num_inference_steps=NUM_INFERENCE_STEPS,
     )
-
     if ttnn.using_distributed_env():
         ttnn.distributed_context_barrier()
-    pipeline.release_traces()
-
     if is_host():
         artifacts = artifact_dir("h3_t2va_artifacts")
         stem = f"t2va_{aspect_ratio[0]}x{aspect_ratio[1]}_{WIDTH}x{HEIGHT}_{duration_s}s"
         frames = to_uint8_frames(output)
         write_artifacts(frames, output.audio.cpu().numpy(), output.sampling_rate, artifacts, stem=stem)
+
+    run_user_generations(
+        pipeline,
+        default_aspect_ratio=aspect_ratio,
+        default_duration_s=duration_s,
+        num_inference_steps=NUM_INFERENCE_STEPS,
+        seed=SEED,
+    )
+
+    pipeline.release_traces()

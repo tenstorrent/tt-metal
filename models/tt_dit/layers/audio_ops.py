@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import math
+import os
 from typing import Sequence
 
 import torch
@@ -31,13 +32,25 @@ from ..utils.tensor import local_device_to_torch
 # Per-mesh cache of constant zeros buffers, keyed by id(mesh_device).
 _ZEROS_CACHE: dict = {}
 
+# TODO: Cleanup and centralize logging.
 # Dedup noisy construction / fallback warnings across every call in this process.
 _ONCE_WARNINGS: set = set()
+_ENABLE_MM_LOG = os.environ.get("TT_DIT_ENABLE_MM_LOG", "true").lower() in ("1", "true")
+
+
+def log_warning(message):
+    if _ENABLE_MM_LOG:
+        logger.warning(message)
+
+
+def log_info(message):
+    if _ENABLE_MM_LOG:
+        logger.info(message)
 
 
 def _warn_once(key, message: str) -> None:
     if key not in _ONCE_WARNINGS:
-        logger.warning(message)
+        log_warning(message)
         _ONCE_WARNINGS.add(key)
 
 

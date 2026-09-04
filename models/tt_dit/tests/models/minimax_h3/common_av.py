@@ -11,9 +11,13 @@ Artifact write paths and pipeline stage durations (`BenchmarkProfiler`) always l
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
+import socket
 import subprocess
+import sys
+import time
 from pathlib import Path
 
 import numpy as np
@@ -22,12 +26,16 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.perf.benchmarking_utils import BenchmarkProfiler
 
 from ....pipelines.events import profiler_event_callback
-from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS
+from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS, align_num_frames, resolve_canvas_size
 
 # Off by default: sanity, seam, CLIP, and reminder chatter. Set H3_LOG_QUALITY=1 to see it.
 # Asserts still run either way. Stage durations always log on the host rank.
+# ENABLE_USER_INPUT=1 turns the t2va perf test into a prompt/aspect/duration REPL after the
+# measured generation. Rank 0 is remote under tt-run, so the launch host relays /dev/tty
+# through cwd-relative `.h3_repl/journal` (append-only; NFS must not look up new ready.* names).
 _QUALITY_LOG_ON = ("1", "true", "yes", "on")
 
 
@@ -38,6 +46,10 @@ def is_host() -> bool:
 
 def quality_logs_enabled() -> bool:
     return os.environ.get("H3_LOG_QUALITY", "").strip().lower() in _QUALITY_LOG_ON
+
+
+def user_input_enabled() -> bool:
+    return os.environ.get("ENABLE_USER_INPUT", "").strip().lower() in _QUALITY_LOG_ON
 
 
 def log_quality(message: str) -> None:
@@ -566,7 +578,7 @@ def log_pipeline_perf(
     if pipeline.last_seq_len is not None:
         logical, padded = pipeline.last_seq_len.logical, pipeline.last_seq_len.padded
         waste = 100.0 * (padded - logical) / padded if padded else 0.0
-        lines.append(f"sequence_length:{logical}, padd:{padded}, waste:{waste:.1f}%")
+        lines.append(f"sequence_length:{logical}, bucket:{padded}, waste:{waste:.1f}%")
     lines.append(
         f"DiT Configuration: sp={pipeline.sp_factor} axis {pipeline.sp_axis}, "
         f"tp={pipeline.tp_factor} axis {pipeline.tp_axis}"
@@ -584,6 +596,298 @@ def log_pipeline_perf(
             lines.append(f"{'Denoising (per step)':25} | {duration / num_forwards:8.4f}s")
     lines.append("=" * 80)
     logger.info("\n" + "\n".join(lines))
+
+
+def _allgather_host_int(value: int) -> int:
+    """Rank 0's integer, on every rank. A no-op when not under MPI."""
+    if not ttnn.using_distributed_env():
+        return int(value)
+    gathered = ttnn.distributed_context_allgather_int(int(value) if is_host() else 0)
+    return int(gathered[0])
+
+
+def _parse_aspect(text: str, default: tuple[int, int]) -> tuple[int, int]:
+    text = text.strip()
+    if not text:
+        return default
+    for sep in (":", ",", "x", " "):
+        if sep in text:
+            left, right = text.split(sep, 1)
+            return int(left.strip()), int(right.strip())
+    raise ValueError(f"aspect ratio {text!r} is not W:H")
+
+
+def _parse_duration(text: str, default: float) -> float:
+    text = text.strip()
+    if not text:
+        return float(default)
+    duration = float(text)
+    if duration <= 0:
+        raise ValueError("duration must be positive")
+    return duration
+
+
+def _repl_dir() -> Path:
+    """Same directory the launch script uses: `$TT_METAL_HOME/.h3_repl` (NFS), not the pytest cwd."""
+    return Path(os.environ.get("TT_METAL_HOME") or os.getcwd()) / ".h3_repl"
+
+
+_REPL_SEQ = 0
+
+
+def _next_repl_seq() -> int:
+    global _REPL_SEQ
+    _REPL_SEQ += 1
+    return _REPL_SEQ
+
+
+def _journal_path() -> Path:
+    return _repl_dir() / "journal"
+
+
+def _ensure_journal() -> Path:
+    """Create the journal if needed. Never truncate: a stale NFS exists() must not wipe lines."""
+    path = _journal_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o644)
+    os.close(fd)
+    return path
+
+
+def _append_journal_line(line: str) -> None:
+    path = _ensure_journal()
+    payload = line if line.endswith("\n") else line + "\n"
+    fd = os.open(path, os.O_APPEND | os.O_WRONLY | os.O_CREAT | os.O_SYNC, 0o644)
+    try:
+        os.write(fd, payload.encode())
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    dirfd = os.open(str(path.parent), os.O_RDONLY)
+    try:
+        os.fsync(dirfd)
+    finally:
+        os.close(dirfd)
+
+
+def _append_journal(seq: int, line: str) -> None:
+    _append_journal_line(f"{seq}\t{line}")
+
+
+def _wait_journal(seq: int, timeout: float | None = None) -> str:
+    """Read seq's reply from the always-present journal. Never lookup a missing ready/reply name (NFS)."""
+    path = _ensure_journal()
+    prefix = f"{seq}\t"
+    deadline = None if timeout is None else time.time() + timeout
+    while True:
+        try:
+            os.listdir(path.parent)
+            fd = os.open(path, os.O_RDONLY)
+            try:
+                text = os.read(fd, os.fstat(fd).st_size).decode()
+            finally:
+                os.close(fd)
+        except FileNotFoundError:
+            text = ""
+        for entry in text.splitlines():
+            if entry.startswith("Q\t"):
+                continue
+            if entry.startswith(prefix):
+                return entry[len(prefix) :]
+        if deadline is not None and time.time() >= deadline:
+            raise TimeoutError(f"no journal seq {seq} after {timeout:.0f}s")
+        time.sleep(0.05)
+
+
+def _repl_listen_addr(*, timeout: float = 30) -> tuple[str, int]:
+    """Host:port written by `run_H3_perf_d23.sh` before tt-run starts. File already exists; no per-prompt names."""
+    path = _repl_dir() / "listen"
+    deadline = time.time() + timeout
+    while True:
+        try:
+            raw = path.read_bytes().replace(b"\x00", b"").decode().strip()
+        except FileNotFoundError:
+            raw = ""
+        if raw and ":" in raw:
+            host, port_s = raw.rsplit(":", 1)
+            return host, int(port_s)
+        if time.time() >= deadline:
+            raise RuntimeError(f"REPL listen file missing at {path}; run via run_H3_perf_d23.sh")
+        time.sleep(0.05)
+
+
+def _recv_line(sock: socket.socket) -> str:
+    buf = b""
+    while b"\n" not in buf:
+        chunk = sock.recv(4096)
+        if not chunk:
+            raise EOFError("REPL TCP closed")
+        buf += chunk
+    return buf.split(b"\n", 1)[0].decode()
+
+
+def _prompt_line(message: str, timeout: float | None = None) -> str:
+    """One line from the launch TTY. Local `input()`; under MPI, TCP to the launch-host relay (not NFS)."""
+    if not ttnn.using_distributed_env():
+        return input(message)
+    host, port = _repl_listen_addr()
+    try:
+        sock = socket.create_connection((host, port), timeout=timeout)
+    except OSError as error:
+        raise RuntimeError(f"REPL TCP connect to {host}:{port} failed: {error}") from error
+    try:
+        sock.settimeout(timeout)
+        sock.sendall(message.encode() + b"\n")
+        return _recv_line(sock)
+    except (TimeoutError, socket.timeout) as error:
+        raise TimeoutError(f"no TTY reply within {timeout:.0f}s") from error
+    finally:
+        sock.close()
+
+
+def pretest_user_repl(*, timeout: float = 1800, rounds: int = 3) -> None:
+    """`rounds` TTY round-trips before pipeline init. Fails fast if the launch-host relay is not working."""
+    if not user_input_enabled():
+        return
+    flag = 0
+    if is_host():
+        try:
+            for i in range(1, rounds + 1):
+                _prompt_line(f"REPL pretest {i}/{rounds} (type anything, Enter): ", timeout=timeout)
+            flag = 1
+        except TimeoutError:
+            flag = 0
+    if not _allgather_host_int(flag):
+        raise RuntimeError(f"REPL pretest failed: no TTY reply within {timeout:.0f}s; run via run_H3_perf_d23.sh")
+    if is_host():
+        logger.info(f"REPL pretest ok ({rounds} round-trips)")
+
+
+def _read_user_spec(
+    default_aspect_ratio: tuple[int, int], default_duration_s: float
+) -> tuple[str, tuple[int, int], float] | None:
+    """Host stdin: prompt (required; `q` quits; blank lines ignored), aspect and duration defaulting to the test case."""
+    while True:
+        try:
+            prompt = _prompt_line("User prompt (q to quit): ").strip()
+        except EOFError:
+            return None
+        if prompt.lower() == "q":
+            return None
+        if prompt:
+            break
+    while True:
+        try:
+            raw = _prompt_line(f"Aspect ratio [{default_aspect_ratio[0]}:{default_aspect_ratio[1]}]: ")
+            aspect = _parse_aspect(raw, default_aspect_ratio)
+            break
+        except EOFError:
+            return None
+        except ValueError:
+            print("expected W:H (e.g. 16:9)", file=sys.stderr)
+    while True:
+        try:
+            raw = _prompt_line(f"Duration seconds [{default_duration_s:g}]: ")
+            duration_s = _parse_duration(raw, default_duration_s)
+            break
+        except EOFError:
+            return None
+        except ValueError:
+            print("expected a positive number of seconds", file=sys.stderr)
+    return prompt, aspect, duration_s
+
+
+def _broadcast_user_spec(
+    spec: tuple[str, tuple[int, int], float] | None,
+) -> tuple[str, tuple[int, int], float] | None:
+    """Host `spec` (or None to quit) to every rank via the journal and one allgather."""
+    if not ttnn.using_distributed_env():
+        return spec
+    seq = 0
+    if is_host() and spec is not None:
+        seq = _next_repl_seq()
+        prompt, aspect, duration_s = spec
+        _append_journal(
+            seq,
+            json.dumps({"prompt": prompt, "aspect": [int(aspect[0]), int(aspect[1])], "duration_s": float(duration_s)}),
+        )
+    seq = _allgather_host_int(seq)
+    if not seq:
+        return None
+    if not is_host():
+        payload = json.loads(_wait_journal(seq))
+        spec = payload["prompt"], (int(payload["aspect"][0]), int(payload["aspect"][1])), float(payload["duration_s"])
+    ttnn.distributed_context_barrier()
+    return spec
+
+
+def run_user_generations(
+    pipeline,
+    *,
+    default_aspect_ratio: tuple[int, int],
+    default_duration_s: float,
+    num_inference_steps: int,
+    seed: int,
+    label: str = "t2va",
+    artifact_name: str = "h3_t2va_artifacts",
+) -> None:
+    """Prompt/aspect/duration REPL after a warm measured run. No-op unless ENABLE_USER_INPUT is set.
+
+    Each entry is a fresh `BenchmarkProfiler` fed by `on_event` (no `run` wrap). Artifacts use the
+    perf-test stem plus a 0-based index. Admission errors log and the loop continues.
+    """
+    if not user_input_enabled():
+        return
+    artifacts = artifact_dir(artifact_name)
+    index = 0
+    while True:
+        spec = _read_user_spec(default_aspect_ratio, default_duration_s) if is_host() else None
+        spec = _broadcast_user_spec(spec)
+        if spec is None:
+            return
+        prompt, aspect_ratio, duration_s = spec
+        profiler = BenchmarkProfiler()
+        try:
+            height, width = resolve_canvas_size(*aspect_ratio)
+            num_frames = align_num_frames(round(duration_s * MINIMAX_H3_FPS))
+            with profiler("run", iteration=0):
+                output = pipeline(
+                    prompt,
+                    num_frames=num_frames,
+                    height=height,
+                    width=width,
+                    num_inference_steps=num_inference_steps,
+                    seed=seed,
+                    on_event=profiler_event_callback(profiler, 0),
+                )
+        except ValueError as error:
+            if is_host():
+                logger.error(f"user generation rejected: {error}")
+            if ttnn.using_distributed_env():
+                ttnn.distributed_context_barrier()
+            continue
+        ttnn.synchronize_device(pipeline.mesh_device)
+        if ttnn.using_distributed_env():
+            ttnn.distributed_context_barrier()
+        log_pipeline_perf(
+            profiler,
+            label=label,
+            pipeline=pipeline,
+            num_forwards=num_inference_steps - 1,
+            width=width,
+            height=height,
+            num_frames=output.num_frames,
+            fps=MINIMAX_H3_FPS,
+            aspect_ratio=aspect_ratio,
+            num_inference_steps=num_inference_steps,
+        )
+        if is_host():
+            duration_tag = int(duration_s) if float(duration_s).is_integer() else duration_s
+            stem = f"{label}_{aspect_ratio[0]}x{aspect_ratio[1]}_{width}x{height}_{duration_tag}s_{index}"
+            write_artifacts(
+                to_uint8_frames(output), output.audio.cpu().numpy(), output.sampling_rate, artifacts, stem=stem
+            )
+        index += 1
 
 
 def to_uint8_frames(output) -> np.ndarray:
