@@ -33,10 +33,8 @@ constexpr uint32_t fwd_route_arg0 = get_compile_time_arg_val(8);   // to idx+1 d
 constexpr uint32_t fwd_route_arg1 = get_compile_time_arg_val(9);   // to idx+1 dst_chip_id
 constexpr uint32_t bwd_route_arg0 = get_compile_time_arg_val(10);  // to idx-1 dst_mesh_id
 constexpr uint32_t bwd_route_arg1 = get_compile_time_arg_val(11);  // to idx-1 dst_chip_id
-constexpr uint32_t num_slots = get_compile_time_arg_val(12);       // recv-buffer depth
-constexpr uint32_t tiles_per_packet =
-    get_compile_time_arg_val(13);  // contiguous tiles per fabric write (fills payload)
-constexpr uint32_t tensor_args_base = 14;
+constexpr uint32_t num_slots = get_compile_time_arg_val(12);       // recv-buffer depth (== credit window)
+constexpr uint32_t tensor_args_base = 13;
 
 // Arc roles: the sender sends both ways; the ring splits into a forward arc (HF hops) and backward arc (HB
 // hops). A non-sender receives from its one upstream and forwards away from the sender until its arc end.
@@ -139,13 +137,11 @@ void kernel_main() {
                             uint32_t chunk_tiles) {
         const uint64_t ds_slot_noc = safe_get_noc_addr(ds_sem_noc_x, ds_sem_noc_y, slot_addr, 0);
         uint32_t t = 0;
-        for (; t + tiles_per_packet <= chunk_tiles; t += tiles_per_packet) {
-            fabric_write_unidir(
-                ds_slot_noc + t * page_size, pkt_data, *conn, slot_addr + t * page_size, tiles_per_packet * page_size);
+        for (; t + 1 < chunk_tiles; t += 2) {
+            fabric_write_unidir(ds_slot_noc + t * page_size, pkt_data, *conn, slot_addr + t * page_size, 2 * page_size);
         }
         if (t < chunk_tiles) {
-            fabric_write_unidir(
-                ds_slot_noc + t * page_size, pkt_data, *conn, slot_addr + t * page_size, (chunk_tiles - t) * page_size);
+            fabric_write_unidir(ds_slot_noc + t * page_size, pkt_data, *conn, slot_addr + t * page_size, page_size);
         }
         pkt_sem->to_noc_unicast_atomic_inc(
             tt::tt_fabric::NocUnicastAtomicIncCommandHeader{ds_data_ready_noc, static_cast<uint32_t>(1)});
