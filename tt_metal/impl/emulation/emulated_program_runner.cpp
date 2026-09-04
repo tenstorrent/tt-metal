@@ -286,6 +286,10 @@ extern "C" void __emule_fiber_note_progress(unsigned units) { efib::FiberSchedul
 extern "C" void __emule_fiber_note_publish(unsigned pages) {
     efib::FiberScheduler::instance().note_publish(pages);
 }
+extern "C" void __emule_fiber_trace(
+    EmuleTraceEventKind kind, const void* object, uint64_t a, uint64_t b, uint64_t c, uint64_t d) {
+    efib::FiberScheduler::instance().trace_event(kind, object, a, b, c, d);
+}
 
 // Resolve a NOC address (encoded 64-bit) to a host pointer.
 // Real firmware encoding: y in bits [47:42], x in bits [41:36], addr in bits [35:0]
@@ -463,6 +467,13 @@ extern "C" void __emule_multicast_write(uint64_t mcast_addr, const uint8_t* src,
     };
     const uint32_t nx = axis_count(x_start, x_end);
     const uint32_t ny = axis_count(y_start, y_end);
+    efib::FiberScheduler::instance().trace_event(
+        EmuleTraceEventKind::NocIssue,
+        nullptr,
+        reinterpret_cast<uintptr_t>(src),
+        mcast_addr,
+        size,
+        (static_cast<uint64_t>(noc) << 32) | (include_self ? 1 : 0));
     uint32_t delivered = 0;
     for (uint32_t ix = 0; ix < nx; ix++) {
         const uint32_t x = (x_start + ix) & NOC_NODE_MASK;
@@ -475,6 +486,8 @@ extern "C" void __emule_multicast_write(uint64_t mcast_addr, const uint8_t* src,
             auto it = __emule_self->core_map->find(key);
             if (it != __emule_self->core_map->end() && it->second->role() == tt_emule::CoreRole::WORKER) {
                 uint8_t* dst = it->second->l1_ptr(l1_offset);
+                const uint64_t dst_noc_addr = (static_cast<uint64_t>(y) << (NOC_LOCAL_BITS + NOC_NODE_ID_BITS)) |
+                                              (static_cast<uint64_t>(x) << NOC_LOCAL_BITS) | l1_offset;
                 if (size == sizeof(uint32_t)) {
                     TT_FATAL(
                         reinterpret_cast<uintptr_t>(dst) % alignof(std::atomic<uint32_t>) == 0,
@@ -483,11 +496,28 @@ extern "C" void __emule_multicast_write(uint64_t mcast_addr, const uint8_t* src,
                     // Atomic store for semaphore-sized writes (4 bytes)
                     uint32_t val;
                     std::memcpy(&val, src, sizeof(uint32_t));
+                    const uint32_t old = reinterpret_cast<std::atomic<uint32_t>*>(dst)->load(std::memory_order_relaxed);
                     reinterpret_cast<std::atomic<uint32_t>*>(dst)->store(val, std::memory_order_release);
+                    efib::FiberScheduler::instance().trace_event(
+                        EmuleTraceEventKind::NocPublish,
+                        dst,
+                        reinterpret_cast<uintptr_t>(src),
+                        dst_noc_addr,
+                        size,
+                        (static_cast<uint64_t>(noc) << 32) | (include_self ? 1 : 0));
+                    efib::FiberScheduler::instance().trace_event(
+                        EmuleTraceEventKind::SemaphoreSet, dst, old, val, val, dst_noc_addr);
                     efib::FiberScheduler::instance().wake(dst);  // wake the target core's sem waiter
                 } else {
                     std::memcpy(dst, src, size);
                     std::atomic_thread_fence(std::memory_order_release);
+                    efib::FiberScheduler::instance().trace_event(
+                        EmuleTraceEventKind::NocPublish,
+                        dst,
+                        reinterpret_cast<uintptr_t>(src),
+                        dst_noc_addr,
+                        size,
+                        (static_cast<uint64_t>(noc) << 32) | (include_self ? 1 : 0));
                 }
                 delivered++;
             }
@@ -2754,14 +2784,30 @@ static std::vector<uint32_t> __emule_fabric_resolve_targets(const uint8_t* h, ui
 // Apply the terminal NOC command of a fabric send to ONE destination chip's L1 (the per-target delivery,
 // looped over by the teleport for multicast).
 static void __emule_fabric_deliver(
-    uint32_t dst_chip, const uint8_t* h, const void* payload, uint32_t size, uint8_t noc_send_type, bool dbg) {
+    uint32_t src_chip,
+    uint32_t dst_chip,
+    const uint8_t* h,
+    const void* payload,
+    uint32_t size,
+    uint8_t noc_send_type,
+    bool dbg) {
     const uint64_t noc_address = *reinterpret_cast<const uint64_t*>(h + 0);
+    const auto trace_publish = [&](const void* object, uint64_t destination_noc_address, uint32_t byte_count) {
+        efib::FiberScheduler::instance().trace_event(
+            EmuleTraceEventKind::FabricPublish,
+            object,
+            src_chip,
+            dst_chip,
+            destination_noc_address,
+            (static_cast<uint64_t>(noc_send_type) << 32) | byte_count);
+    };
     switch (noc_send_type) {
         case 0: {  // NOC_UNICAST_WRITE
             uint8_t* d = __emule_fabric_resolve_remote(dst_chip, noc_address);
             if (d != nullptr && payload != nullptr && size > 0) {
                 std::memcpy(d, payload, size);
                 std::atomic_thread_fence(std::memory_order_release);
+                trace_publish(d, noc_address, size);
                 __emule_fiber_wake(d);
             }
             break;
@@ -2770,7 +2816,11 @@ static void __emule_fabric_deliver(
             uint32_t value = *reinterpret_cast<const uint32_t*>(h + 8);
             uint8_t* d = __emule_fabric_resolve_remote(dst_chip, noc_address);
             if (d != nullptr) {
+                const uint32_t old = reinterpret_cast<std::atomic<uint32_t>*>(d)->load(std::memory_order_relaxed);
                 reinterpret_cast<std::atomic<uint32_t>*>(d)->store(value, std::memory_order_release);
+                trace_publish(d, noc_address, sizeof(uint32_t));
+                efib::FiberScheduler::instance().trace_event(
+                    EmuleTraceEventKind::SemaphoreSet, d, old, value, value, noc_address);
                 __emule_fiber_wake(d);
             }
             break;
@@ -2780,6 +2830,9 @@ static void __emule_fabric_deliver(
             uint8_t* d = __emule_fabric_resolve_remote(dst_chip, noc_address);
             if (d != nullptr) {
                 uint32_t old = reinterpret_cast<std::atomic<uint32_t>*>(d)->fetch_add(val, std::memory_order_release);
+                trace_publish(d, noc_address, sizeof(uint32_t));
+                efib::FiberScheduler::instance().trace_event(
+                    EmuleTraceEventKind::SemaphoreIncrement, d, old, old + val, val, noc_address);
                 if (dbg) {
                     fprintf(stderr, "[EMULE_FABRIC]   atomic_inc chip=%u dst=%p %u->%u (val=%u)\n",
                             dst_chip, (void*)d, old, old + val, val);
@@ -2795,11 +2848,16 @@ static void __emule_fabric_deliver(
             if (d != nullptr && payload != nullptr && size > 0) {
                 std::memcpy(d, payload, size);
                 std::atomic_thread_fence(std::memory_order_release);
+                trace_publish(d, noc_address, size);
                 __emule_fiber_wake(d);
             }
             uint8_t* s = __emule_fabric_resolve_remote(dst_chip, sem_addr);
             if (s != nullptr) {
-                reinterpret_cast<std::atomic<uint32_t>*>(s)->fetch_add(val, std::memory_order_release);
+                const uint32_t old =
+                    reinterpret_cast<std::atomic<uint32_t>*>(s)->fetch_add(val, std::memory_order_release);
+                trace_publish(s, sem_addr, sizeof(uint32_t));
+                efib::FiberScheduler::instance().trace_event(
+                    EmuleTraceEventKind::SemaphoreIncrement, s, old, old + val, val, sem_addr);
                 __emule_fiber_wake(s);
             }
             break;
@@ -2824,7 +2882,11 @@ static void __emule_fabric_deliver(
                 if (enc == 2 /*SEMINC_NO_FLUSH*/ || enc == 3 /*SEMINC_FLUSH*/) {
                     uint32_t val = cs[i];  // seminc value packed into this chunk's size slot
                     if (d != nullptr) {
-                        reinterpret_cast<std::atomic<uint32_t>*>(d)->fetch_add(val, std::memory_order_release);
+                        const uint32_t old =
+                            reinterpret_cast<std::atomic<uint32_t>*>(d)->fetch_add(val, std::memory_order_release);
+                        trace_publish(d, na[i], sizeof(uint32_t));
+                        efib::FiberScheduler::instance().trace_event(
+                            EmuleTraceEventKind::SemaphoreIncrement, d, old, old + val, val, na[i]);
                         if (dbg) {
                             fprintf(stderr, "[EMULE_FABRIC]   scatter_seminc chip=%u dst=%p val=%u\n",
                                     dst_chip, (void*)d, val);
@@ -2837,6 +2899,7 @@ static void __emule_fabric_deliver(
                 uint32_t csz = (i + 1 < chunk_count) ? cs[i] : (size - off);
                 if (payload != nullptr && d != nullptr && csz > 0) {
                     std::memcpy(d, static_cast<const uint8_t*>(payload) + off, csz);
+                    trace_publish(d, na[i], csz);
                     __emule_fiber_wake(d);
                 }
                 off += csz;
@@ -2863,6 +2926,16 @@ extern "C" void __emule_fabric_teleport(const void* packet_header, const void* p
     const uint32_t size = payload_size ? payload_size : hdr_payload_size;
     const uint32_t src_chip = __emule_self->chip_id;
     const std::vector<uint32_t> targets = __emule_fabric_resolve_targets(h, src_chip);
+    const uint64_t noc_address = *reinterpret_cast<const uint64_t*>(h + 0);
+    for (uint32_t dst_chip : targets) {
+        efib::FiberScheduler::instance().trace_event(
+            EmuleTraceEventKind::FabricIssue,
+            packet_header,
+            src_chip,
+            dst_chip,
+            noc_address,
+            (static_cast<uint64_t>(noc_send_type) << 32) | size);
+    }
     static const bool dbg = std::getenv("EMULE_FABRIC_DEBUG") != nullptr;
     if (dbg) {
         const uint64_t noc_address = *reinterpret_cast<const uint64_t*>(h + 0);
@@ -2934,7 +3007,7 @@ extern "C" void __emule_fabric_teleport(const void* packet_header, const void* p
     }
     // One target for unicast; the line members for a multicast. Replay the terminal NOC op to each.
     for (uint32_t dst_chip : targets) {
-        __emule_fabric_deliver(dst_chip, h, payload, size, noc_send_type, dbg);
+        __emule_fabric_deliver(src_chip, dst_chip, h, payload, size, noc_send_type, dbg);
     }
 }
 
@@ -3567,6 +3640,7 @@ static void launch_cores(
     uint8_t* dram_data,
     std::unordered_map<uint64_t, tt_emule::Core*>* core_map_ptr,
     ChipId device_id,
+    ProgramId program_id,
     bool defer_run,
     const EmuleOobTensorState& oob_state,
     // What the CoreSetups' KernelInfo pointers point into; each fiber below captures a copy of the owner.
@@ -3680,6 +3754,8 @@ static void launch_cores(
             id.logical_x = lx;
             id.logical_y = ly;
             id.proc_id = ki.processor_id;
+            id.chip_id = static_cast<uint32_t>(device_id);
+            id.program_id = program_id;
             // Interned, not ki.kernel_name.c_str(): the hang dump reads this after the closure is gone.
             id.kernel_src = intern_kernel_name(ki.kernel_name);
 
@@ -3902,7 +3978,7 @@ static void dispatch_to_device(
     uint8_t* dram_data = dram_core ? dram_core->l1_data() : nullptr;
 
     OobStateOwner oob = build_oob_tensor_state(device, device_id);
-    launch_cores(core_setups, dram_data, core_map_ptr, device_id, defer_run, oob.state, resolved_owner);
+    launch_cores(core_setups, dram_data, core_map_ptr, device_id, impl.get_id(), defer_run, oob.state, resolved_owner);
     if (defer_run) {
         // Deferred fibers run later (run_mesh_dispatch); keep the snapshot vectors that
         // oob.state's ASAN range pointers reference alive until then. See g_mesh_oob_keep.
