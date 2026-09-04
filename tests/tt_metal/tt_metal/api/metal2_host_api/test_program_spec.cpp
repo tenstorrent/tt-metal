@@ -1742,6 +1742,22 @@ TEST_F(ProgramSpecTestQuasar, ScratchpadInvalidFaceGeometryFails) {
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("face_r_dim == 0")));
 }
 
+TEST_F(ProgramSpecTestQuasar, ScratchpadZeroNumFacesFails) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    spec.scratchpads = {ScratchpadSpec{
+        .unique_id = ScratchpadSpecName{"scratch_0"},
+        .size_per_node = 1024,
+        .data_format_metadata = tt::DataFormat::Float16_b,
+        .unpack_face_geometry_metadata = FaceGeometry{.num_faces = 0},
+    }};
+    spec.kernels[1].scratchpad_bindings = {
+        KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"scratch_0"}, .accessor_name = "pad"}};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("num_faces == 0")));
+}
+
 TEST_F(ProgramSpecTestQuasar, ScratchpadFaceGridDoesNotFitTileFails) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
     spec.scratchpads = {ScratchpadSpec{

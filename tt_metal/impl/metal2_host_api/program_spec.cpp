@@ -764,12 +764,22 @@ void ValidateLlkTileAndFaceGeometry(
         return;
     }
     TT_FATAL(
+        face->face_r_dim > 0,
+        "{} '{}' has unpack_face_geometry_metadata.face_r_dim == 0; face_r_dim must be > 0",
+        kind,
+        unique_id);
+    TT_FATAL(
         face->face_r_dim <= constants::FACE_HEIGHT,
         "{} '{}' has unpack_face_geometry_metadata.face_r_dim ({}) which must be <= FACE_HEIGHT ({})",
         kind,
         unique_id,
         face->face_r_dim,
         constants::FACE_HEIGHT);
+    TT_FATAL(
+        face->num_faces > 0,
+        "{} '{}' has unpack_face_geometry_metadata.num_faces == 0; num_faces must be > 0",
+        kind,
+        unique_id);
     const Tile resolved_tile = tile.value_or(Tile{});
     const uint32_t num_faces_c_dim = std::min(resolved_tile.get_width() / constants::FACE_WIDTH, face->num_faces);
     TT_FATAL(
