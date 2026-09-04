@@ -58,7 +58,8 @@ it does flag are `DUMMY_PUBLISH_SETDVALID_UNSEQUENCED` (a bare `SET_DVALID`, whi
 performs no wait of its own, with nothing before it to inherit one from),
 `DUMMY_PUBLISH_BOTH_BANKS_WAITLIKE` (wait-like bit together with a both-banks clear)
 and `DUMMY_PUBLISH_PACKED_WAIT_WRONG_ARCH` (a Wormhole-shaped packed
-`UNP_ZEROSRC_*` constant on Blackhole). Recalled only inside
+`UNP_ZEROSRC_*` constant on an operand-form arch — a re-introduction guard; no
+arch defines these outside Wormhole today). Recalled only inside
 functions whose NAME marks them as dummy-bank publishers (`*dummy_valid*`,
 `*dummy_unpack*`, `*switch_to_reduce*`, `*reuse_dest*`, `*dest_reuse*`). A publisher
 named otherwise (e.g. rmsnorm's `*_mop_config_`, which builds the publication as a
@@ -105,7 +106,9 @@ A desync → the FPU reads a bank the unpacker is still filling, or a thread clo
 
    **The one genuinely unsafe combination** is the wait-like bit set together with a **both-banks** clear (`Bank_Clr_Ctrl` on BH/QSR, `BothBanks` in WH's packed immediate). The own-bank wait covers only the bank being prepared, so clearing both can overwrite the one the Matrix Unit still owns. A both-banks clear is correct **only** with the default drained wait. Flag that pairing — it is real corruption — and never recommend setting the bit at a site that clears both banks.
 
-   **Arch trap (Blackhole).** The packed `UNP_ZEROSRC_*` constants are Wormhole-shaped, yet BH's `p_unpacr_nop` defines all three **byte-identically to WH** (`0b1001` / `0b10001` / `0b1000001`) even though BH takes these controls as *separate operands* and sizes the last at 2 bits. So passing `UNP_ZEROSRC_STALL_RESET_WR_RDY` (`0b10001`) as BH's `Unpack_Pop` lands bit 0 and bit 4 = `Bank_Clr_Ctrl` — an unintended both-banks clear — while the wait bit (bit 5) stays clear. `TTI_UNPACR_NOP` never calls `TT_UNPACR_NOP_VALID`, so the overflow is silent. That the same header *does* give itself its own `SET_DVALID` (`0x1`, against WH's packed `0b111`) is what marks these three as un-migrated WH holdovers — and matches its own `// TODO: RT Review this struct, bits do not match for UNPACR_NOP`. On BH pass the operand; the constant is not a guard there. **Quasar defines none of these** (it has no `p_unpacr_nop`, only `p_unpacr`), so the trap does not exist there today — but Quasar's `UNPACR_NOP` is also operand-form, so a future copy of the constants would inherit it.
+   **Arch trap (operand-form arches).** The packed `UNP_ZEROSRC_*` constants are **Wormhole-only by construction**: WH's `UNPACR_NOP` takes a single `NoOp` immediate, so the controls have to be packed into it (`WaitLikeUnpacr<<4`, `BothBanks<<3`). Blackhole takes **nine** separate operands and Quasar **six**, and **neither header defines the packed constants today** — Blackhole's `p_unpacr_nop` did carry all three at their Wormhole values, under a `// TODO: ... bits do not match for UNPACR_NOP`, until the constants and that TODO were both dropped for an explicit per-operand contract; Quasar never had a `p_unpacr_nop` at all (only `p_unpacr`). So on an operand-form arch the trap now costs a **compile error, not a silent wrong value** — the name does not resolve — and what the check guards is **re-introduction**: a Wormhole kernel ported across, or Quasar growing a `p_unpacr_nop`.
+
+   The encoding is still worth knowing, because it is what makes re-introduction quiet rather than loud. Were `UNP_ZEROSRC_STALL_RESET_WR_RDY` (`0b10001`) passed as Blackhole's 2-bit `Unpack_Pop` — the natural slot, since the legitimate `UNP_ZEROSRC` lives there — it would set bit 0 and bit 4 = `Bank_Clr_Ctrl`, an unintended **both-banks clear**, while the wait bit (bit 5) stayed clear. `TT_UNPACR_NOP` / `TTI_UNPACR_NOP` expand straight to `TT_OP_UNPACR_NOP` and never call `TT_UNPACR_NOP_VALID` (Quasar defines no `_VALID` macro at all), so the operand overflow would not be caught. On an operand-form arch **pass the operand**; the constant is not a guard there.
 
    When you do recommend the pipelined form, these are equivalent; accept any one:
    - the "wait like UNPACR" control bit set (BH/QSR expose it as an `UNPACR_NOP` operand; WH only as the packed `UNP_ZEROSRC_*` encoding), or
@@ -138,7 +141,7 @@ A desync → the FPU reads a bank the unpacker is still filling, or a thread clo
 - **Bare `SET_DVALID` that inherits no wait** → CORRUPTION (hands over a bank the Matrix Unit may still own; `SET_DVALID` performs no wait of its own).
 - **Dummy publication in the default form** (waits on the Matrix-Unit bank) → **NOT corruption** — a throughput/parity observation: the stronger, serializing wait costs unpack/math overlap. Report it separately from the math-side verdict even when both are present at the same op, and label it as throughput, not a race.
 - **Dummy publication with the wait-like bit AND a both-banks clear** → CORRUPTION (clears a bank the Matrix Unit still owns).
-- **Wormhole-shaped packed `UNP_ZEROSRC_*` constant used on Blackhole** → CORRUPTION (silently sets `Bank_Clr_Ctrl` instead of the wait bit; Quasar defines none of these constants, so the trap is Blackhole-only today).
+- **Wormhole-shaped packed `UNP_ZEROSRC_*` constant used on an operand-form arch (BH/QSR)** → would be CORRUPTION (sets `Bank_Clr_Ctrl` instead of the wait bit, uncaught by any `_VALID` macro) — but **no arch defines these constants outside Wormhole today**, so a hit means the arch header changed. Read that header before writing the finding, and report it as a re-introduction, not as a live silent corruption.
 - **Cross-thread contention on bank state / unmediated Dst|LReg sharing** → RACE (hand the semaphore half to `semaphore-handshake-audit`).
 - **Risk only on an experimental/unused path or value-invariant** → LATENT — say so.
 
