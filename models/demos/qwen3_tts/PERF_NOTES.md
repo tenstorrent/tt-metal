@@ -609,6 +609,91 @@ For a one-shot demo the capture still outweighs the 816 ms saved, which is why
 `QWEN3_TTS_SE_TRACE` and `QWEN3_TTS_SE_AUTO_TRACE` both default to off — the capture belongs at
 server startup.
 
+**The device mel silently orphaned that trace, and did so for a day.** The numbers above were
+taken through `forward`, which is the host-mel entry. `ec5afc8f6e3` then made the device mel the
+default, and `forward_from_audio`'s device-mel branch calls `_forward_device` directly — while
+`_fwd_traces` is only consulted in `forward`. So from that commit until the fix below,
+`QWEN3_TTS_SE_TRACE=1` captured a forward trace that nothing ever replayed, and the demo ran the
+host-conv fallback with all 22 k>1 convs back on the host. A spy on `ttnn.execute_trace` over the
+demo's one `extract_speaker_embedding` call shows it: ids `[0, 1, 2, 3]` (the 3 SE blocks + FC),
+never id 4 (the forward), at 79.6 ms; forcing `_se_device_mel = False` replays id 4 at 10.2 ms.
+
+`_forward_from_device_mel` is the device-mel counterpart of `forward`'s trace lookup — same cache,
+same host-conv fallback, a D2D `ttnn.copy` instead of the H2D. It is gated on
+`QWEN3_TTS_SE_MEL_TRACE` (default **on**); `=0` restores the orphaned behaviour, because taking
+the trace switches the encoder onto device-conv numerics and so changes the generated audio
+(seed 42, this prompt: 68 frames on, 93 off — see the gate below). The mel is deallocated before the
+replay: a trace replays into the L1 addresses recorded at capture, which do not account for a live
+mel buffer. Measured on N300, jim_reference, mel T=376, demo stage is the median of 3 runs:
+
+| | speaker-embedding stage (demo, first call) | warm, in-process |
+|---|--:|--:|
+| untraced (`QWEN3_TTS_SE_TRACE=0`) | 1367 ms | 38.5 ms |
+| traced, before the fix | 552 ms — forward trace never replayed | 79.6 ms |
+| traced, after | **380 ms** | **12.3 ms** |
+
+**So the fix is worth ~172 ms on that stage, not the ~1 s the 59x row above implies.** Two things
+hide in that gap. `SE_TRACE=1` was already buying 1367 -> 552 ms before the fix, because the
+SE-block and FC traces *are* replayed and, more to the point, `capture_forward_trace` runs a warm
+`_forward_device` pass that populates the program cache the demo's single call would otherwise pay
+for. And warm, the pre-fix traced path is *slower* than untraced (79.6 vs 38.5 ms): three nested
+SE-block traces plus the FC trace each cost a `synchronize_device`, which the one whole-forward
+trace does not. Only the whole-forward replay gets the 12.3 ms.
+
+Generation gate (correct ref-text, seed 42, `SE_TRACE=1`): long prompt **151 frames**, short prompt
+**15 frames**, both EOS not cap, against 132 untraced — in line with the 108 / 18 the `+conv`
+traced rows record above. On the `demo/README` walk-in-the-park prompt: 93 frames before the fix,
+68 after, deterministic across 3 runs each. No NaN, no clipping (rms 0.065 / 0.154, crest 9.1 /
+4.6), warm calls bit-identical. The embedding moves 3.89 % relRMS against the untraced path, which
+is the documented device-conv-vs-host-conv shift (3.74 % in the `fuse/asp/conv` table above), not a
+copy bug — so **audio changes with this flag**, as it always did on the `+conv` row.
+
+**The reflect tap as one permutation matmul (`QWEN3_TTS_SE_CONV_SHIFT=matmul`, now the
+default).** With the trace reachable, the next cost was the capture, not the replay: in a
+one-shot demo the ECAPA capture is ~1.5 s against a 4.4 ms replay. Instrumenting
+`num_program_cache_entries` around every `ttnn` call in the traced forward shows where it goes —
+the warm pass creates **101 programs at ~8 ms each**, and re-running it costs only 42-75 ms, so
+this is program creation, not per-op dispatch. **Op count is therefore the wrong thing to cut;
+shape variety is the thing to cut.** 39 of the 101 came from `ttnn.slice` and 26 more from
+`ttnn.concat`, all in `_tap_by_slice`: a reflect tap is one ascending run plus a reversed edge,
+`ttnn.slice` cannot take a negative step, so the reversal is one slice per row and the leftover
+run length is 380 / 381 / 382 / 383 depending on dilation — a fresh program per dilation, plus a
+fresh concat program per edge arity.
+
+`_tap_by_matmul` builds each tap as one matmul against a cached one-hot row selector
+`P` (`P @ x == x[rows]`), so every tap is the same `[384,384] x [384,C]` matmul whatever the
+dilation and edge. Ten selectors cover the encoder at T=384 (~294 KB each in DRAM). HiFi4 is
+required and not incidental: `P` holds only 1.0 and 0.0 and each output row sums exactly one
+product, so the copy is bit-exact at HiFi4, while LoFi would truncate the activation mantissa
+going in. Measured on N300, mel T=376, JIT cache warm:
+
+| | slice (old default) | matmul (new default) |
+|---|--:|--:|
+| program-cache entries | 101 | **61** |
+| warm pass | 843 ms | **704 ms** |
+| `begin/end_trace_capture` | 81 ms | **47 ms** |
+| traced replay | 4.50 ms | **1.68 ms** |
+| device ops in the replay | 911 | **199** |
+| device kernel time | 4.369 ms | **1.618 ms** |
+
+`ttnn.slice` drops 39 -> 12 programs, `ttnn.concat` 26 -> 9, and the 46 permutation matmuls cost
+**2**. The op mix inverts with it — 79 % data movement / 21 % compute becomes 15 % / 85 %, with
+`UntilizeCodegen` (155 ops) gone entirely and `Tilize` 204 -> 3. End to end the demo's ECAPA
+capture goes 1550 -> 1315 ms, and the embedding is **bit-identical** to the slice path
+(`torch.equal`, max abs diff 0.0), so the generated wav is byte-identical (same md5, 68 frames).
+Report: `ops_list/perf_report_se_permmatmul/speaker_encoder/`.
+
+Two things this did *not* fix. The speaker-embedding stage stays at ~380 ms in a one-shot demo,
+because that is the **cold device mel** (370 ms of program creation for its 53 eager ops), which
+`capture_forward_trace` never warms — it feeds `_forward_device` a zeros tensor and never calls
+`compute_mel_spectrogram_device`. Warming it in the capture block moves the stage to 23.5 ms for
++256 ms of capture, a ~105 ms net win one-shot and much more for a server. And the first run after
+this change pays a one-time on-disk JIT for the new matmul shape: 3922 ms, then 704 ms.
+
+Total demo wall time is *not* a way to see any of this: it swings 33-70 s run to run on host work
+outside every timed stage, and the frame count changes with the embedding, so the generation term
+moves too. Compare the speaker-embedding stage line.
+
 > **Note this run was also the first time the pre-existing SE-block and FC traces were ever
 > exercised.** `init_server_context` is the only caller of `capture_se_block_traces` /
 > `capture_fc_trace`, nothing in the repo calls `init_server_context`, and

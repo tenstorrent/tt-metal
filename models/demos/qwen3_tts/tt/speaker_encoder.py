@@ -123,6 +123,12 @@ class SpeakerEncoder(LightweightModule):
         # host STFT in it. QWEN3_TTS_SE_DEVICE_MEL=0 restores the host path.
         # See compute_mel_spectrogram_device for the full measurements.
         self._se_device_mel = os.environ.get("QWEN3_TTS_SE_DEVICE_MEL", "1") != "0"
+        # Let the device-mel path replay a captured forward trace, the way the host-mel
+        # path already does in ``forward``. ON by default; QWEN3_TTS_SE_MEL_TRACE=0
+        # restores the pre-fix behaviour, where the device mel went straight to
+        # ``_forward_device`` and the trace captured by QWEN3_TTS_SE_TRACE=1 was never
+        # replayed. See _forward_from_device_mel and PERF_NOTES 3.4.
+        self._se_mel_trace = os.environ.get("QWEN3_TTS_SE_MEL_TRACE", "1") != "0"
         self._device_mel_cache = {}
         # Option A: one captured forward per mel length, with the host path as the
         # fallback on a miss. Traces are shape-locked and mel length varies with the
@@ -132,6 +138,7 @@ class SpeakerEncoder(LightweightModule):
         self._tap_idx_cache = {}  # (L, k, dilation) -> per-tap row indices (torch)
         self._tap_run_cache = {}  # id(rows) -> [(start, end)] ascending runs
         self._tap_idx_tt_cache = {}  # (L, C, k, dilation, j) -> ttnn uint32 index
+        self._tap_perm_tt_cache = {}  # (L, k, dilation, j) -> ttnn one-hot row selector
         self._stacked_w_cache = {}  # weight data_ptr -> ([1,1,k*Cin,Cout], bias)
         self._se_current_cache_id = None  # set by _se_res2net_block per block
         self._mel_stft_key = None
@@ -596,6 +603,60 @@ class SpeakerEncoder(LightweightModule):
             self._tap_idx_tt_cache[key] = hit
         return hit
 
+    def _tap_permutation_tt(self, rows: torch.Tensor, key) -> ttnn.Tensor:
+        """One-hot row selector ``P`` for a tap, ``[1, 1, L, L]``, so ``P @ x == x[rows]``.
+
+        Independent of channel count, so the cache key drops it: at mel T=384 the whole
+        encoder needs ten of these (k=5 d=1 has four shifted taps, each k=3 block two),
+        ~294 KB apiece in DRAM.
+        """
+        hit = self._tap_perm_tt_cache.get(key)
+        if hit is None:
+            length = int(rows.numel())
+            perm = torch.zeros(1, 1, length, length, dtype=torch.float32)
+            perm[0, 0, torch.arange(length), rows.long()] = 1.0
+            hit = ttnn.from_torch(
+                perm,
+                device=self.device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=self._replicate_mapper(),
+            )
+            self._tap_perm_tt_cache[key] = hit
+        return hit
+
+    def _tap_by_matmul(self, x_nlc, rows: torch.Tensor, key, memory_config) -> ttnn.Tensor:
+        """One conv tap as a single matmul against its one-hot row selector.
+
+        The reason this beats ``_tap_by_slice`` is program count, not device time. A
+        reflect tap is one ascending run plus a reversed edge, and a reversal costs one
+        ``ttnn.slice`` per row (negative steps return empty), so the slice path emits a
+        different shape per dilation and a different concat arity per edge width: 39 of
+        the traced forward's 101 program-cache entries came from its slices and 26 more
+        from its concats, at ~8 ms of capture-time program creation each. Every tap here
+        is the same ``[384,384] x [384,C]`` matmul instead, whatever the dilation.
+
+        HiFi4 is required, not a default: the selector's entries are 1.0 and 0.0 and each
+        output row sums exactly one product, so the copy is bit-exact at HiFi4, while LoFi
+        would truncate the activation mantissa on the way in.
+        """
+        batch, length, channels = int(x_nlc.shape[0]), int(x_nlc.shape[1]), int(x_nlc.shape[2])
+        y = ttnn.matmul(
+            self._tap_permutation_tt(rows, key[:1] + key[2:]),
+            ttnn.reshape(x_nlc, (batch, 1, length, channels)),
+            memory_config=memory_config,
+            compute_kernel_config=self._tap_matmul_kernel_config(),
+        )
+        return ttnn.reshape(y, (batch, length, channels))
+
+    def _tap_matmul_kernel_config(self):
+        hit = getattr(self, "_tap_kcfg", None)
+        if hit is None:
+            hit = ttnn.init_device_compute_kernel_config(self.device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4)
+            self._tap_kcfg = hit
+        return hit
+
     def _ensure_stacked_linear_params(self, weight: torch.Tensor, bias: torch.Tensor):
         """Conv weight ``[out, in, k]`` -> ``[1, 1, k*in, out]``, in the tap concat order."""
         key = (weight.data_ptr(), bias.data_ptr())
@@ -625,7 +686,7 @@ class SpeakerEncoder(LightweightModule):
         return hit
 
     def _conv_shift_mode(self) -> str:
-        return os.environ.get("QWEN3_TTS_SE_CONV_SHIFT", "slice")
+        return os.environ.get("QWEN3_TTS_SE_CONV_SHIFT", "matmul")
 
     def _pad_nlc_seq_to_tile(self, x_nlc: ttnn.Tensor, mc) -> ttnn.Tensor:
         """Edge-replicate pad so seq len is a multiple of 32 (one concat vs many tilize pads)."""
@@ -653,9 +714,12 @@ class SpeakerEncoder(LightweightModule):
         return ttnn.concat([x_nlc, pad_tt], dim=1, memory_config=mc)
 
     def _shift_tap(self, x_nlc, rows: torch.Tensor, key, memory_config) -> ttnn.Tensor:
-        if self._conv_shift_mode() == "gather":
+        mode = self._conv_shift_mode()
+        if mode == "gather":
             return ttnn.gather(x_nlc, dim=1, index=self._tap_index_tt(rows, int(x_nlc.shape[2]), key))
-        return self._tap_by_slice(x_nlc, rows, key, memory_config)
+        if mode == "slice":
+            return self._tap_by_slice(x_nlc, rows, key, memory_config)
+        return self._tap_by_matmul(x_nlc, rows, key, memory_config)
 
     def _conv1d_device_nlc(self, x, weight, bias, dilation: int = 1, activation=None) -> ttnn.Tensor:
         """Reflect-pad ``conv1d`` k>1 entirely on device: gather per tap, concat, matmul.
@@ -1303,6 +1367,33 @@ class SpeakerEncoder(LightweightModule):
                 self._se_traces_active,
             ) = prev
 
+    def _forward_from_device_mel(self, mel_nlc: ttnn.Tensor) -> ttnn.Tensor:
+        """``_forward_device`` for a mel that is already on device, replaying the
+        captured forward trace when one matches this length.
+
+        ``forward`` does the same for a host mel; this is the device-mel entry, and
+        without it ``forward_from_audio`` walks straight past the trace cache and runs
+        the host-conv fallback with every k>1 conv back on the host. Gated on
+        ``QWEN3_TTS_SE_MEL_TRACE`` (default on) because taking the trace switches the
+        encoder onto device-conv numerics, which reseeds AR sampling and changes the
+        generated audio -- same words, different draw. See PERF_NOTES 3.4. The mel is
+        deallocated before the replay: a captured trace replays into the L1 addresses
+        recorded at capture, which do not account for a live mel buffer.
+
+        Falls back to the eager body — the host-conv one, never eager device-conv (see
+        ``capture_forward_trace``) — when no trace exists for this length.
+        """
+        length = int(mel_nlc.shape[-2])
+        if length not in self._fwd_traces and self._se_auto_trace:
+            self.capture_forward_trace(length)
+        trace = self._fwd_traces.get(length)
+        if trace is None:
+            return self._forward_device(mel_nlc)
+        ttnn.copy(mel_nlc, trace["input_tt"])
+        ttnn.deallocate(mel_nlc)
+        ttnn.execute_trace(self.device, trace["trace_id"], cq_id=0, blocking=True)
+        return trace["output_tt"]
+
     def _forward_device(self, hidden_tt: ttnn.Tensor) -> ttnn.Tensor:
         """TTNN-only body of ``forward``: device mel in, device embedding out.
 
@@ -1692,7 +1783,7 @@ class SpeakerEncoder(LightweightModule):
         """
         if self._se_device_mel and self.device_mel_supported(audio):
             mel_nlc = self.compute_mel_spectrogram_device(audio)
-            out_tt = self._forward_device(mel_nlc)
+            out_tt = self._forward_from_device_mel(mel_nlc) if self._se_mel_trace else self._forward_device(mel_nlc)
             return _mesh_to_torch(out_tt, dtype=torch.float32).reshape(1, -1)
         mel = self.compute_mel_spectrogram(audio)
         return self.forward(mel)
