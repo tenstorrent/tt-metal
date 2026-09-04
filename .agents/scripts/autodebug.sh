@@ -130,6 +130,11 @@ missing = [token for token in ("{{FOCUS_PATH_SECTION}}", "{{PROBLEM}}") if token
 if missing:
     raise SystemExit(f"unrendered prompt placeholder(s): {', '.join(missing)}")
 
+print(
+    "You are the AutoDebug investigator, already running in a fresh isolated session. "
+    "Perform the investigation here and write AUTODEBUG.md. "
+    "Do not invoke the AutoDebug launcher again.\n"
+)
 print(rendered.strip())
 PY
 

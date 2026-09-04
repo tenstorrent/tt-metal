@@ -5,6 +5,10 @@ description: "Run a fresh-context AutoDebug investigation and then act on the ge
 
 # AutoDebug
 
+The launch instructions below are for the calling agent. If your prompt identifies
+you as the already-isolated AutoDebug investigator, perform that investigation in
+this session and write `AUTODEBUG.md`; do not launch AutoDebug again.
+
 Use the repo-local AutoDebug runner instead of doing the overall investigation
 in your current context.
 
@@ -17,6 +21,9 @@ Run this from the checkout or subdirectory that should be inspected:
 The script renders `.agents/scripts/AUTODEBUG_PROMPT.md`, starts a fresh
 Codex or Claude CLI session, and asks that agent to write `./AUTODEBUG.md`.
 Expect a serious run to take about 30 minutes.
+
+Wait for the launcher to finish and read `AUTODEBUG.md` before ending your
+response. If you start it in the background, wait for that task to complete.
 
 After the script exits:
 

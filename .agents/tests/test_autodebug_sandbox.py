@@ -186,6 +186,16 @@ class SandboxTests(unittest.TestCase):
         self.assertIn("workspace-write", self.session()["args"])
         self.assertNotIn("WARNING", result.stderr)
 
+    def test_both_backends_receive_investigator_role(self):
+        for agent in ("codex", "claude"):
+            with self.subTest(agent=agent):
+                result = self.launch(agent=agent)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                prompt = self.session()["prompt"]
+                self.assertTrue(prompt.startswith("You are the AutoDebug investigator,"))
+                self.assertIn("Do not invoke the AutoDebug launcher again.", prompt)
+                self.assertIn("Investigate the sample failure", prompt)
+
 
 if __name__ == "__main__":
     unittest.main()
