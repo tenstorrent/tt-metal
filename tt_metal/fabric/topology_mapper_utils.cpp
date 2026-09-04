@@ -902,12 +902,12 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     // the i-th candidate placement for that shape. Built once here so that
     // compute_solution_bitset (called once per SAT solution) is a simple
     // word-OR loop instead of a per-chip hash lookup.
-    // TODO(plan 3 §8(a)): delete with the find_all_in_psd Phase 3 loop. The DFS builds its own bitsets.
+    // TODO: delete with the find_all_in_psd Phase 3 loop. The DFS builds its own bitsets.
     std::unordered_map<std::string, std::vector<std::vector<std::uint64_t>>> group_bits_by_name;
 
     for (const auto& [mesh_name, groupings] : valid_groupings_map.at("MESH")) {
         // find_all_in_psd returns PSD placements (ASIC footprint + grouping with mesh_node_to_asic_position).
-        // TODO(plan 3 §8(a)): this per-shape loop is replaced by a single adjacency-guided DFS call over all
+        // TODO: this per-shape loop is replaced by a single adjacency-guided DFS call over all
         // shapes at once. Solving one shape at a time is what discards the cross-shape edges. Duplicated in the
         // other builder overload.
         std::vector<std::string> find_all_errors;
@@ -962,7 +962,7 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     // already cover the entire system. We can skip the solver entirely and
     // return the pre-built graph right away.
     //
-    // TODO(plan 3 §8(a)): delete this fast path. "Single mesh shape" means one MGD mesh descriptor name, which
+    // TODO: delete this fast path. "Single mesh shape" means one MGD mesh descriptor name, which
     // can still resolve to several PGD variants, and what is returned here is Phase B's coverage-maximizing
     // tiling. A single-shape MGD that needs a particular tile boundary therefore fails with no search left to
     // recover, so the premise "one shape means nothing to search" does not hold. Route every MGD through the
@@ -1000,7 +1000,7 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     //                     larger placements first (better pruning).
     //   exhausted       — set to true once the solver finds no more options.
     // -------------------------------------------------------------------------
-    // TODO(plan 3 §8(a)): delete with the find_all_in_psd Phase 3/6 path. DFS emits labelled placements directly.
+    // TODO: delete with the find_all_in_psd Phase 3/6 path. DFS emits labelled placements directly.
     struct MeshEnumState {
         AdjacencyGraph<MeshId> logical_graph;
         AdjacencyGraph<MeshId> physical_graph;
@@ -1203,7 +1203,7 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     };
 
     // -----------------------------------------------------------------------
-    // TODO(plan 3 §8(a)): delete with MeshEnumState / find_all_in_psd. Not the adjacency-guided DFS.
+    // TODO: delete with MeshEnumState / find_all_in_psd. Not the adjacency-guided DFS.
     // DisjointPackingSearch — depth-first search over all combinations of one
     // placement per mesh shape.
     //
@@ -1720,12 +1720,12 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     // the i-th candidate placement for that shape. Built once here so that
     // compute_solution_bitset (called once per SAT solution) is a simple
     // word-OR loop instead of a per-chip hash lookup.
-    // TODO(plan 3 §8(a)): delete with the find_all_in_psd Phase 3 loop. The DFS builds its own bitsets.
+    // TODO: delete with the find_all_in_psd Phase 3 loop. The DFS builds its own bitsets.
     std::unordered_map<std::string, std::vector<std::vector<std::uint64_t>>> group_bits_by_name;
 
     for (const auto& [mesh_name, groupings] : valid_groupings_map.at("MESH")) {
         // find_all_in_psd returns PSD placements (ASIC footprint + grouping with mesh_node_to_asic_position).
-        // TODO(plan 3 §8(a)): this per-shape loop is replaced by a single adjacency-guided DFS call over all
+        // TODO: this per-shape loop is replaced by a single adjacency-guided DFS call over all
         // shapes at once. Solving one shape at a time is what discards the cross-shape edges. Duplicated in the
         // other builder overload.
         std::vector<std::string> find_all_errors;
@@ -1780,7 +1780,7 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     // already cover the entire system. We can skip the solver entirely and
     // return the pre-built graph right away.
     //
-    // TODO(plan 3 §8(a)): delete this fast path. "Single mesh shape" means one MGD mesh descriptor name, which
+    // TODO: delete this fast path. "Single mesh shape" means one MGD mesh descriptor name, which
     // can still resolve to several PGD variants, and what is returned here is Phase B's coverage-maximizing
     // tiling. A single-shape MGD that needs a particular tile boundary therefore fails with no search left to
     // recover, so the premise "one shape means nothing to search" does not hold. Route every MGD through the
@@ -1818,7 +1818,7 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     //                     larger placements first (better pruning).
     //   exhausted       — set to true once the solver finds no more options.
     // -------------------------------------------------------------------------
-    // TODO(plan 3 §8(a)): delete with the find_all_in_psd Phase 3/6 path. DFS emits labelled placements directly.
+    // TODO: delete with the find_all_in_psd Phase 3/6 path. DFS emits labelled placements directly.
     struct MeshEnumState {
         AdjacencyGraph<MeshId> logical_graph;
         AdjacencyGraph<MeshId> physical_graph;
@@ -2037,7 +2037,7 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     };
 
     // -----------------------------------------------------------------------
-    // TODO(plan 3 §8(a)): delete with MeshEnumState / find_all_in_psd. Not the adjacency-guided DFS.
+    // TODO: delete with MeshEnumState / find_all_in_psd. Not the adjacency-guided DFS.
     // DisjointPackingSearch — depth-first search over all combinations of one
     // placement per mesh shape.
     //
