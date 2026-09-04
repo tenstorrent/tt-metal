@@ -349,12 +349,20 @@ class BgeM3ForEmbedding:
         hidden = self._traced_output
         if len(hidden.shape) == 4:
             hidden = ttnn.squeeze(hidden, dim=1)
+        # The base path also serves last_token, and it raises on anything it does
+        # not know. Match that, or a request for another method returns a mean
+        # embedding and reports success.
         if self.sentence_pooling_method == "cls":
             pooled_tt = ttnn.slice(hidden, [0, 0, 0], [hidden.shape[0], 1, hidden.shape[2]])
-        else:
+        elif self.sentence_pooling_method == "mean":
             masked = ttnn.multiply(hidden, self._pool_mask)
             pooled_tt = ttnn.div(ttnn.sum(masked, dim=1, keepdim=True), self._pool_counts)
             ttnn.deallocate(masked)
+        else:
+            raise NotImplementedError(
+                f"The traced data-parallel path serves cls and mean pooling. "
+                f"Ask for {self.sentence_pooling_method} on the base path."
+            )
 
         # Only [B, 1, D] crosses PCIe now.
         composer = ttnn.ConcatMesh2dToTensor(self.device, dims=(0, 2), mesh_shape=(2, 1))
@@ -369,29 +377,6 @@ class BgeM3ForEmbedding:
                 "Ask for sparse or colbert vectors on the base path."
             )
         return {"dense_vecs": pooled[:chunk_batch_size]}
-
-    def _pool_outputs_host(self, hidden, input_ids, attention_mask, chunk_batch_size):
-        """Pool one forward output on the host.
-
-        Mirrors the device heads in _pool_outputs. The traced path uses this one,
-        because a device allocation during a live trace is unsafe.
-        """
-        return_dict = {}
-        if self.return_dense:
-            if self.sentence_pooling_method == "cls":
-                pooled = hidden[:, 0, :]
-            else:
-                keep = attention_mask.to(hidden.dtype).unsqueeze(-1)
-                pooled = (hidden * keep).sum(dim=1) / keep.sum(dim=1).clamp(min=1.0)
-            if self.normalize_embeddings:
-                pooled = torch.nn.functional.normalize(pooled, p=2, dim=-1)
-            return_dict["dense_vecs"] = pooled[:chunk_batch_size]
-        if self.return_sparse or self.return_colbert:
-            raise NotImplementedError(
-                "The traced data-parallel path returns dense vectors only. "
-                "Ask for sparse or colbert vectors on the base path."
-            )
-        return return_dict
 
     def _pool_outputs(self, output, input_ids, attention_mask, chunk_batch_size):
         """Run the requested pooling heads over one forward output."""
