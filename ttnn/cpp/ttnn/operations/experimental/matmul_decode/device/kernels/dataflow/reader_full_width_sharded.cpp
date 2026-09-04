@@ -94,9 +94,13 @@ void kernel_main() {
     full_in0_cb.reserve_back(full_num_tiles);
 
 #ifdef IN0_REPLICATED
-    // A is already the full [M, K] replica on this core (ROW_MAJOR, 1x32-tile faces along K).
-    // Restoring the post-broadcast full_in0 layout compute expects: K-major 1x32 tiles
-    // (tile k occupies rows [0, M) at dst k*M .. k*M+M-1).
+#ifdef USE_CUSTOM_MM
+    // The replicated row-major shard is already M-major in 1x32 faces, which is
+    // the layout consumed by custom_mm (one complete K row per invocation).
+    noc_async_write(in0_cb.get_read_ptr(), get_noc_addr(full_in0_cb.get_write_ptr()), full_num_tiles * tile_size_bytes);
+    noc.async_write_barrier();
+#else
+    // General matmul_block consumes the replicated input in K-major order.
     {
         const uint32_t src_base = in0_cb.get_read_ptr();
         const uint32_t dst_base = full_in0_cb.get_write_ptr();
@@ -109,12 +113,10 @@ void kernel_main() {
         }
         noc.async_write_barrier();
     }
+#endif
     full_in0_cb.push_back(full_num_tiles);
 #else
-
-    const bool is_hub0 = (role == 1);
     const bool is_hub1 = (role == 2);
-
     if (is_sender) {
         const bool owned_by_hub0 = sender_id < split_H;
         const uint32_t hub_x = owned_by_hub0 ? hub0_noc_x : hub1_noc_x;
