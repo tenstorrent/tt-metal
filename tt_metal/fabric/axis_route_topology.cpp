@@ -592,8 +592,8 @@ std::optional<AxisRouteTopology> derive_ordinary_ring_topology(const MeshGraph& 
 // Always derivable, which is what makes it the fallback that guarantees every 2D mesh has an axis
 // topology on both dimensions.
 //
-// Trivially an arborescence from every root -- each coordinate's only way in is from its neighbour
-// toward the root -- so the multicast one-feeder-per-row gate always passes on a line.
+// Routes from any root give every other coordinate exactly one parent -- its neighbour toward the
+// root -- so the multicast reverse-tree representation always works on a line.
 AxisRouteTopology derive_line_axis_topology(const MeshGraph& mesh_graph, MeshId mesh_id, int axis) {
     const auto shape = mesh_graph.get_mesh_shape(mesh_id);
     const int len = static_cast<int>(shape[axis]);
