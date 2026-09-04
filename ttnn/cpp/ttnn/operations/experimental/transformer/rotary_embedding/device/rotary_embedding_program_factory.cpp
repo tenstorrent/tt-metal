@@ -789,7 +789,8 @@ ProgramDescriptor create_multi_tile_descriptor(
         (std::uint32_t)output_cb_index,
         (std::uint32_t)num_rows_per_core_group_1,
         (std::uint32_t)Wt,
-        (std::uint32_t)half_Wt};
+        (std::uint32_t)half_Wt,
+        (std::uint32_t)token_idx.has_value()};
     if (token_idx.has_value()) {
         compute_kernel_args_group_1.insert(
             compute_kernel_args_group_1.end(),
