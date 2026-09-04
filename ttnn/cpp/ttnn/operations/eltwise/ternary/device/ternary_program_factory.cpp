@@ -8,10 +8,6 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/circular_buffer.hpp>
-#include <tt_stl/span.hpp>
-#include <algorithm>
 #include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/binary_ng_utils.hpp"
 
@@ -430,20 +426,6 @@ uint32_t extract_nD_dims(const ttnn::Tensor& x, const int out_rank) {
     return nD_dim;
 }
 
-// 1 when the collapsed nD volumes match; otherwise output_nd / input_nd, which is
-// the dim -6 broadcast extent because dims -7 and outward are required to match.
-uint32_t nd_broadcast_factor(const uint32_t input_nd, const uint32_t output_nd) {
-    if (input_nd == output_nd) {
-        return 1u;
-    }
-    TT_FATAL(
-        input_nd != 0 && output_nd % input_nd == 0,
-        "Collapsed nD volume {} must divide the output volume {}; only dim -6 may broadcast",
-        input_nd,
-        output_nd);
-    return output_nd / input_nd;
-}
-
 // Helper struct to hold tensor dimensions
 struct TensorDimensions {
     uint32_t D = 1, N = 1, C = 1, Ht = 1, Wt = 1, ND = 1;
@@ -476,6 +458,91 @@ Strides calculate_strides(const TensorDimensions& dims) {
     strides.n_stride = dims.Ht * dims.Wt * dims.C * (dims.N > 1);
     strides.c_stride = dims.Ht * dims.Wt * (dims.C > 1);
     return strides;
+}
+
+// 1 when the collapsed nD volumes match; otherwise output_nd / input_nd, which is
+// the dim -6 broadcast extent because dims -7 and outward are required to match.
+uint32_t nd_broadcast_factor(const uint32_t input_nd, const uint32_t output_nd) {
+    if (input_nd == output_nd) {
+        return 1u;
+    }
+    TT_FATAL(
+        input_nd != 0 && output_nd % input_nd == 0,
+        "Collapsed nD volume {} must divide the output volume {}; only dim -6 may broadcast",
+        input_nd,
+        output_nd);
+    return output_nd / input_nd;
+}
+
+// Helper function to set up reader runtime arguments and dimensions for TTS/TST variants
+template <size_t num_reader_args>
+void setup_ts_reader_args_and_dims(
+    std::array<uint32_t, num_reader_args>& reader_runtime_args,
+    const ttnn::Tensor& predicate_tensor,
+    const ttnn::Tensor& tensor_operand,  // true tensor for TTS, false tensor for TST
+    const ttnn::Tensor& output,
+    uint32_t num_tiles_per_core,
+    uint32_t start_tile_id,
+    uint32_t& a_num_tiles,
+    uint32_t& tensor_num_tiles,  // number of tiles for the tensor operand
+    uint32_t& c_current_shard_width,
+    ttnn::operations::ternary::TernaryBroadcastType broadcast_type,
+    bool has_sharding,
+    int out_rank,
+    uint32_t tile_h,
+    uint32_t tile_w) {
+    auto output_dims = extract_tensor_dimensions(output, out_rank, tile_h, tile_w);
+    auto pred_dims = extract_tensor_dimensions(predicate_tensor, out_rank, tile_h, tile_w);
+    auto tensor_dims = extract_tensor_dimensions(tensor_operand, out_rank, tile_h, tile_w);
+
+    auto pred_strides = calculate_strides(pred_dims);
+    auto tensor_strides = calculate_strides(tensor_dims);
+
+    // Only set tile counts if sharding is enabled
+    if (has_sharding) {
+        a_num_tiles = pred_dims.Ht * pred_dims.Wt;           // predicate tiles per core
+        tensor_num_tiles = tensor_dims.Ht * tensor_dims.Wt;  // tensor operand tiles per core
+        c_current_shard_width = output_dims.Wt;
+    }
+    // Standard first 5 arguments
+    reader_runtime_args[0] = predicate_tensor.buffer()->address();  // 0: src0_addr (predicate)
+    reader_runtime_args[1] = tensor_operand.buffer()->address();    // 1: src1_addr (tensor operand)
+    reader_runtime_args[2] = 0u;                                    // 2: src2_addr (scalar operand)
+    reader_runtime_args[3] = num_tiles_per_core;                    // 3: num_tiles (per core)
+    reader_runtime_args[4] = start_tile_id;                         // 4: start_id
+    // Extended broadcast arguments
+    if (broadcast_type != ttnn::operations::ternary::TernaryBroadcastType::NONE) {
+        reader_runtime_args[5] = pred_strides.nD_stride;  // 5: nD_stride
+        reader_runtime_args[6] = pred_strides.d_stride;   // 6: d_stride
+        reader_runtime_args[7] = pred_strides.n_stride;   // 7: n_stride
+        reader_runtime_args[8] = pred_strides.c_stride;   // 8: c_stride
+        reader_runtime_args[9] = output_dims.D;           // 9: D
+        reader_runtime_args[10] = output_dims.N;          // 10: N
+        reader_runtime_args[11] = output_dims.C;          // 11: C
+        reader_runtime_args[12] = output_dims.Ht;         // 12: Ht
+        reader_runtime_args[13] = output_dims.Wt;         // 13: Wt
+        reader_runtime_args[14] = output_dims.ND;         // 14: cND
+        // Both TTS and TST: tensor operand strides in 15-19, scalar operand zeros in 20-24
+        reader_runtime_args[15] = tensor_strides.nD_stride;  // 15: tensor_operand_nD_stride
+        reader_runtime_args[16] = tensor_strides.d_stride;   // 16: tensor_operand_d_stride
+        reader_runtime_args[17] = tensor_strides.n_stride;   // 17: tensor_operand_n_stride
+        reader_runtime_args[18] = tensor_strides.c_stride;   // 18: tensor_operand_c_stride
+        reader_runtime_args[19] = tensor_num_tiles;          // 19: tensor_operand_num_tiles
+        // Scalar operand has no strides
+        reader_runtime_args[20] = 0u;  // 20: scalar_operand_nD_stride
+        reader_runtime_args[21] = 0u;  // 21: scalar_operand_d_stride
+        reader_runtime_args[22] = 0u;  // 22: scalar_operand_n_stride
+        reader_runtime_args[23] = 0u;  // 23: scalar_operand_c_stride
+        reader_runtime_args[24] = 0u;  // 24: scalar_operand_num_tiles
+
+        reader_runtime_args[25] = c_current_shard_width;  // 25: dst_shard_width
+        reader_runtime_args[26] = a_num_tiles;            // 26: src_num_tiles (predicate)
+
+        // 27-28: how many output nD slices each operand's nD slice covers, so the reader can map an
+        // output nD index back to its own. Slot 29 (src2) stays 0 -- TTS/TST has no third tensor.
+        reader_runtime_args[27] = nd_broadcast_factor(pred_dims.ND, output_dims.ND);
+        reader_runtime_args[28] = nd_broadcast_factor(tensor_dims.ND, output_dims.ND);
+    }
 }
 
 // Shared work-split so create_descriptor() (cache miss + cache-hit re-apply) partitions the same cores.
@@ -588,42 +655,85 @@ uint32_t pack_compute_scalar_arg(
     return 0u;
 }
 
-// Per-core runtime-arg vector lengths, shared by create_descriptor() and the cache-hit patch.
-// Slots 0-26 are the original layout; the nD broadcast factors follow, one per tensor operand, so
-// TTT takes three (27-29) and TTS/TST two (27-28).
-constexpr size_t num_reader_args = 30;
-constexpr size_t num_ts_reader_args = 29;
-// Slots 0-26 of the reader layout, i.e. everything before the nD broadcast factors.
-constexpr size_t num_shape_reader_args = 27;
-constexpr size_t num_writer_args = 11;
-constexpr size_t num_compute_args = 4;
+// Per-kernel runtime-arg counts.  Both the cache-miss and cache-hit paths fill exactly this many
+// slots for every core, which is what lets the hit path copy a fixed-width row per core.
+// Reader slots 0-26 are the addresses, strides and dims; 27-29 are the per-operand nD broadcast
+// factors (src2's stays 0 on TTS/TST, which has no third tensor).
+constexpr size_t kNumReaderArgs = 30;
+constexpr size_t kNumWriterArgs = 11;
+constexpr size_t kNumComputeArgs = 4;
 
-// One core's runtime args. The spans alias scratch owned by generate_runtime_arguments() and are only
-// valid for the duration of the callback.
-struct CoreRuntimeArgs {
-    CoreCoord core;
-    bool noop = false;
-    ttsl::Span<const uint32_t> reader;
-    ttsl::Span<const uint32_t> writer;
-    ttsl::Span<const uint32_t> compute;
+// Per-core runtime args for every core in the partition, in one place so the cache-miss and
+// cache-hit paths cannot drift apart.
+//
+// Args are stored FLAT and row-major -- core i's reader args occupy
+// [i * kNumReaderArgs, (i + 1) * kNumReaderArgs) -- with buffer base addresses ALREADY resolved to
+// their current value.  The cache-hit path is then a fixed-width copy per core: no variant
+// dispatch per slot and no per-core heap allocation on the dispatch path.
+//
+// reader_buffer_slots / writer_buffer_slots record which slots hold a buffer base address. Only
+// create_descriptor() needs them, to re-attach those slots as Buffer* bindings so the framework
+// keeps its O(1) address patching; the hit path ignores them, because the builder has already
+// written the current address into the flat row.  The slot layout is identical for every work
+// core, so this is one small list per kernel rather than one per core.
+struct TernaryPerCoreArgs {
+    struct BufferSlot {
+        uint32_t slot = 0;
+        tt::tt_metal::Buffer* buffer = nullptr;
+    };
+
+    std::vector<CoreCoord> cores;
+    std::vector<uint8_t> is_work_core;  // parallel to cores; noop cores are zero-filled
+    std::vector<uint32_t> reader;       // flat, kNumReaderArgs per core
+    std::vector<uint32_t> writer;       // flat, kNumWriterArgs per core
+    std::vector<uint32_t> compute;      // flat, kNumComputeArgs per core
+    std::vector<BufferSlot> reader_buffer_slots;
+    std::vector<BufferSlot> writer_buffer_slots;
+
+    // Start of core i's row within each flat array.
+    const uint32_t* reader_row(size_t i) const { return reader.data() + i * kNumReaderArgs; }
+    const uint32_t* writer_row(size_t i) const { return writer.data() + i * kNumWriterArgs; }
+    const uint32_t* compute_row(size_t i) const { return compute.data() + i * kNumComputeArgs; }
 };
 
-// Single source of truth for the per-core runtime args. create_descriptor() turns each emitted core
-// into KernelDescriptor entries; override_runtime_arguments() copies them straight into the cached
-// program. Everything that does not depend on the core is derived once, above the loop.
-template <typename Emit>
-void generate_runtime_arguments(
+// SINGLE SOURCE OF TRUTH for ternary per-core runtime args.  Run by BOTH create_descriptor()
+// (cache miss) and TernaryProgramFactory::override_runtime_arguments() (cache hit).
+//
+// compute_program_hash coarsens each input tensor to its padded VOLUME, so one cached program is
+// shared across calls whose shapes differ in their factorization -- e.g. a predicate of [4,1,32,32]
+// and one of [1,4,32,32] hash identically.  Those two need different reader strides (n_stride /
+// c_stride are functions of the individual dims, not of their product), and on a cache hit the
+// descriptor is NOT rebuilt.  So every shape-/work-split-dependent per-core arg (strides, D/N/C/Ht/Wt,
+// per-core tile counts, c_start_id, freq/counter, packed scalar, ...) would otherwise stay frozen at
+// the first-miss shape and silently corrupt the result (issue #54235).  override_runtime_arguments()
+// re-runs THIS builder for the current tensors and re-applies every arg.
+//
+// The work-core partition itself shifts with the output volume (a core can flip between work and
+// noop across hits), so the builder emits args for ALL num_cores_total cores -- noop cores get
+// zero-filled lists sized to match the work-core layout -- and the caller re-applies every slot,
+// buffer-address slots included, so nothing is left frozen however the partition moves.
+TernaryPerCoreArgs build_per_core_runtime_args(
     const TernaryDeviceOperation::operation_attributes_t& operation_attributes,
     const TernaryDeviceOperation::tensor_args_t& tensor_args,
     TernaryDeviceOperation::tensor_return_value_t& output,
-    ttnn::operations::ternary::TernaryBroadcastType broadcast_type,
-    const Emit& emit) {
+    ttnn::operations::ternary::TernaryBroadcastType broadcast_type) {
     const auto& [predicate_tensor, value_true_tensor, value_false_tensor, optional_output_tensor] = tensor_args;
     TernaryVariant variant = operation_attributes.ternary_variant;
-    const bool is_ttt = variant == TernaryVariant::TTT;
-    TT_FATAL(
-        variant == TernaryVariant::TTS || variant == TernaryVariant::TST || is_ttt,
-        "Unsupported Where variant in TernaryDeviceOperation. Supported: TTS, TST, TTT");
+
+    TernaryPerCoreArgs result;
+
+    // Which reader/writer slots carry a buffer base address depends only on the variant, not on the
+    // core, so record it once.  Kept in lockstep with the slot assignments in the core loop below.
+    result.reader_buffer_slots.push_back({0, predicate_tensor.buffer()});
+    if (variant == TernaryVariant::TTT) {
+        result.reader_buffer_slots.push_back({1, value_true_tensor.value().buffer()});
+        result.reader_buffer_slots.push_back({2, value_false_tensor.value().buffer()});
+    } else {
+        // TTS uses value_true as the 2nd operand, TST uses value_false; slot 2 stays a plain 0.
+        const auto& tensor_operand = (variant == TernaryVariant::TST) ? value_false_tensor : value_true_tensor;
+        result.reader_buffer_slots.push_back({1, tensor_operand.value().buffer()});
+    }
+    result.writer_buffer_slots.push_back({0, output.buffer()});
 
     auto partition = compute_core_partition(operation_attributes, tensor_args, output);
     const auto& cores = partition.cores;
@@ -667,50 +777,18 @@ void generate_runtime_arguments(
             shard_specs->output_shard_spec,
             get_memory_layout(predicate_tensor, value_true_tensor, value_false_tensor, output));
     }
+    constexpr size_t num_reader_args = kNumReaderArgs;
+    constexpr size_t num_writer_args = kNumWriterArgs;
+    constexpr size_t num_kernel_args = kNumComputeArgs;
 
-    // Shape metadata is a property of the tensors, not of the core, so derive it once here. On a cache
-    // hit these are exactly the values that can differ from the cached program's (compute_program_hash
-    // keys on volumes and H/W, so nD factors and strides are free to vary).
-    const auto out_rank = output.logical_shape().rank();
-    const auto output_dims = extract_tensor_dimensions(output, out_rank, tile_height, tile_width);
-    // src1 is the second tensor operand (value_false for TST, value_true otherwise); only TTT has a src2.
-    const auto& src1_tensor = (variant == TernaryVariant::TST) ? *value_false_tensor : *value_true_tensor;
-    const auto pred_dims = extract_tensor_dimensions(predicate_tensor, out_rank, tile_height, tile_width);
-    const auto src1_dims = extract_tensor_dimensions(src1_tensor, out_rank, tile_height, tile_width);
-    const auto pred_strides = calculate_strides(pred_dims);
-    const auto src1_strides = calculate_strides(src1_dims);
-    const uint32_t pred_nd_factor = nd_broadcast_factor(pred_dims.ND, output_dims.ND);
-    const uint32_t src1_nd_factor = nd_broadcast_factor(src1_dims.ND, output_dims.ND);
-    Strides src2_strides{};
-    uint32_t src2_nd_factor = 1u;
-    if (is_ttt) {
-        const auto src2_dims = extract_tensor_dimensions(*value_false_tensor, out_rank, tile_height, tile_width);
-        src2_strides = calculate_strides(src2_dims);
-        src2_nd_factor = nd_broadcast_factor(src2_dims.ND, output_dims.ND);
-    }
-
-    const uint32_t pred_addr = predicate_tensor.buffer()->address();
-    const uint32_t src1_addr = src1_tensor.buffer()->address();
-    const uint32_t src2_addr = is_ttt ? value_false_tensor->buffer()->address() : 0u;
-    const uint32_t out_addr = output.buffer()->address();
-    // scalar_arg is the packed scalar_input_a/scalar_input_b. It is EXCLUDED from compute_program_hash
-    // and therefore dynamic: baked on the cache-miss build, re-applied on every hit.
-    const uint32_t scalar_arg = pack_compute_scalar_arg(operation_attributes, output.dtype());
-
-    // TTS/TST without broadcast only need the address/tile-count prefix; its reader does no nD walk.
-    const size_t reader_arg_count = is_ttt                                         ? num_reader_args
-                                    : broadcast_type == TernaryBroadcastType::NONE ? 5
-                                                                                   : num_ts_reader_args;
-
-    std::array<uint32_t, num_reader_args> reader_args{};
-    std::array<uint32_t, num_writer_args> writer_args{};
-    std::array<uint32_t, num_compute_args> compute_args{};
+    result.cores.reserve(num_cores_total);
+    result.is_work_core.reserve(num_cores_total);
+    result.reader.reserve(num_cores_total * num_reader_args);
+    result.writer.reserve(num_cores_total * num_writer_args);
+    result.compute.reserve(num_cores_total * num_kernel_args);
 
     for (uint32_t i = 0, start_tile_id = 0; i < num_cores_total; i++) {
         const auto& core = cores[i];
-        reader_args.fill(0);
-        writer_args.fill(0);
-        compute_args.fill(0);
 
         uint32_t num_tiles_per_core = 0;
         if (core_group_1.contains(core)) {
@@ -718,17 +796,26 @@ void generate_runtime_arguments(
         } else if (core_group_2.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_2;
         } else {
-            emit(CoreRuntimeArgs{
-                .core = core,
-                .noop = true,
-                .reader = {reader_args.data(), reader_arg_count},
-                .writer = {writer_args.data(), num_writer_args},
-                .compute = {compute_args.data(), num_compute_args}});
+            result.cores.push_back(core);
+            result.is_work_core.push_back(0);
+            result.reader.resize(result.reader.size() + num_reader_args, 0u);
+            result.writer.resize(result.writer.size() + num_writer_args, 0u);
+            result.compute.resize(result.compute.size() + num_kernel_args, 0u);
             continue;
         }
 
+        result.cores.push_back(core);
+        result.is_work_core.push_back(1);
+
+        // Declare variables common to all variants
         uint32_t a_num_tiles = 0, b_num_tiles = 0, f_num_tiles = 0, c_current_shard_width = 0;
-        uint32_t c_start_id = start_tile_id;
+        const auto out_rank = output.logical_shape().rank();
+        const auto& tile = output.tensor_spec().tile();
+        const uint32_t tile_h = tile.get_height();
+        const uint32_t tile_w = tile.get_width();
+        auto output_dims = extract_tensor_dimensions(output, out_rank, tile_h, tile_w);
+
+        uint32_t c_start_id = 0;
         if (has_sharding) {
             auto output_shard_shape = output_shard_shape_generator(core);
             num_tiles_per_core = output_shard_shape[0] * output_shard_shape[1];  // actual
@@ -745,67 +832,112 @@ void generate_runtime_arguments(
             }
             c_start_id = (i / num_shards_per_width) * (c_shard_height * output_dims.Wt) +
                          (i % num_shards_per_width) * c_shard_width;
+        } else {
+            c_start_id = start_tile_id;
         }
 
-        // Tile counts follow the variant's CB mapping: TST reads its tensor operand from the
-        // value_false slot, TTS/TTT from value_true.
-        uint32_t src1_num_tiles = (variant == TernaryVariant::TST) ? f_num_tiles : b_num_tiles;
-        uint32_t src2_num_tiles = is_ttt ? f_num_tiles : 0u;
-        if (!is_ttt && has_sharding) {
-            // TTS/TST hand the reader whole-tensor tile counts and the full output width instead of the
-            // per-core shard shape.
-            a_num_tiles = pred_dims.Ht * pred_dims.Wt;
-            src1_num_tiles = src1_dims.Ht * src1_dims.Wt;
-            c_current_shard_width = output_dims.Wt;
+        // Set reader runtime arguments based on variant
+        if (variant == ttnn::operations::ternary::TernaryVariant::TTS ||
+            variant == ttnn::operations::ternary::TernaryVariant::TST) {
+            // Get the appropriate tensor operand
+            const auto& tensor_operand = (variant == ttnn::operations::ternary::TernaryVariant::TTS)
+                                             ? value_true_tensor.value()
+                                             : value_false_tensor.value();
+            uint32_t& tensor_num_tiles_ref =
+                (variant == ttnn::operations::ternary::TernaryVariant::TTS) ? b_num_tiles : f_num_tiles;
+
+            std::array<uint32_t, num_reader_args> reader_runtime_args{};
+            setup_ts_reader_args_and_dims<num_reader_args>(
+                reader_runtime_args,
+                predicate_tensor,
+                tensor_operand,
+                output,
+                num_tiles_per_core,
+                c_start_id,
+                a_num_tiles,
+                tensor_num_tiles_ref,
+                c_current_shard_width,
+                broadcast_type,
+                has_sharding,
+                out_rank,
+                tile_h,
+                tile_w);
+            // setup_ts_reader_args_and_dims already wrote the CURRENT addresses into slots 0 and 1
+            // (slot 2, the scalar operand, stays a plain 0 for TTS/TST); reader_buffer_slots records
+            // those two slots so create_descriptor() can re-attach them as Buffer* bindings.
+            result.reader.insert(result.reader.end(), reader_runtime_args.begin(), reader_runtime_args.end());
+        } else if (variant == TernaryVariant::TTT) {
+            auto pred_dims = extract_tensor_dimensions(predicate_tensor, out_rank, tile_h, tile_w);
+            auto true_dims = extract_tensor_dimensions(value_true_tensor.value(), out_rank, tile_h, tile_w);
+            auto false_dims = extract_tensor_dimensions(value_false_tensor.value(), out_rank, tile_h, tile_w);
+            auto pred_strides = calculate_strides(pred_dims);
+            auto true_strides = calculate_strides(true_dims);
+            auto false_strides = calculate_strides(false_dims);
+            // Tile counts are already calculated above if has_sharding
+            std::array<uint32_t, num_reader_args> reader_runtime_args{};              // zero-initialized
+            reader_runtime_args[0] = predicate_tensor.buffer()->address();            // 0: src0_addr (predicate)
+            reader_runtime_args[1] = value_true_tensor.value().buffer()->address();   // 1: src1_addr (true tensor)
+            reader_runtime_args[2] = value_false_tensor.value().buffer()->address();  // 2: src2_addr (false tensor)
+            reader_runtime_args[3] = num_tiles_per_core;                              // 3: num_tiles (per core)
+            reader_runtime_args[4] = c_start_id;                                      // 4: start_id
+            // Set arguments for both broadcast and no-bcast cases (same arguments needed for width sharding)
+            reader_runtime_args[5] = pred_strides.nD_stride;    // 5: nD_stride
+            reader_runtime_args[6] = pred_strides.d_stride;     // 6: d_stride
+            reader_runtime_args[7] = pred_strides.n_stride;     // 7: n_stride
+            reader_runtime_args[8] = pred_strides.c_stride;     // 8: c_stride
+            reader_runtime_args[9] = output_dims.D;             // 9: D
+            reader_runtime_args[10] = output_dims.N;            // 10: N
+            reader_runtime_args[11] = output_dims.C;            // 11: C
+            reader_runtime_args[12] = output_dims.Ht;           // 12: Ht
+            reader_runtime_args[13] = output_dims.Wt;           // 13: Wt
+            reader_runtime_args[14] = output_dims.ND;           // 14: cND
+            reader_runtime_args[15] = true_strides.nD_stride;   // 15: true_nD_stride
+            reader_runtime_args[16] = true_strides.d_stride;    // 16: true_d_stride
+            reader_runtime_args[17] = true_strides.n_stride;    // 17: true_n_stride
+            reader_runtime_args[18] = true_strides.c_stride;    // 18: true_c_stride
+            reader_runtime_args[19] = b_num_tiles;              // 19: true_num_tiles
+            reader_runtime_args[20] = false_strides.nD_stride;  // 20: false_nD_stride
+            reader_runtime_args[21] = false_strides.d_stride;   // 21: false_d_stride
+            reader_runtime_args[22] = false_strides.n_stride;   // 22: false_n_stride
+            reader_runtime_args[23] = false_strides.c_stride;   // 23: false_c_stride
+            reader_runtime_args[24] = f_num_tiles;              // 24: false_num_tiles
+            reader_runtime_args[25] = c_current_shard_width;    // 25: dst_shard_width
+            reader_runtime_args[26] = a_num_tiles;              // 26: src_num_tiles (predicate)
+            // 27-29: how many output nD slices each operand's nD slice covers, so the reader can map
+            // an output nD index back to its own.
+            reader_runtime_args[27] = nd_broadcast_factor(pred_dims.ND, output_dims.ND);
+            reader_runtime_args[28] = nd_broadcast_factor(true_dims.ND, output_dims.ND);
+            reader_runtime_args[29] = nd_broadcast_factor(false_dims.ND, output_dims.ND);
+
+            // Slots 0,1,2 already hold the three CURRENT buffer base addresses (set above);
+            // reader_buffer_slots records them for create_descriptor()'s bindings.
+            result.reader.insert(result.reader.end(), reader_runtime_args.begin(), reader_runtime_args.end());
+        } else {
+            TT_FATAL(false, "Unsupported Where variant in TernaryDeviceOperation. Supported: TTS, TST, TTT");
         }
 
-        reader_args[0] = pred_addr;           // 0: src0_addr (predicate)
-        reader_args[1] = src1_addr;           // 1: src1_addr (2nd tensor operand)
-        reader_args[2] = src2_addr;           // 2: src2_addr (3rd tensor operand, 0 when scalar)
-        reader_args[3] = num_tiles_per_core;  // 3: num_tiles (per core)
-        reader_args[4] = c_start_id;          // 4: start_id
-        if (reader_arg_count >= num_shape_reader_args) {
-            reader_args[5] = pred_strides.nD_stride;   // 5: nD_stride
-            reader_args[6] = pred_strides.d_stride;    // 6: d_stride
-            reader_args[7] = pred_strides.n_stride;    // 7: n_stride
-            reader_args[8] = pred_strides.c_stride;    // 8: c_stride
-            reader_args[9] = output_dims.D;            // 9: D
-            reader_args[10] = output_dims.N;           // 10: N
-            reader_args[11] = output_dims.C;           // 11: C
-            reader_args[12] = output_dims.Ht;          // 12: Ht
-            reader_args[13] = output_dims.Wt;          // 13: Wt
-            reader_args[14] = output_dims.ND;          // 14: cND
-            reader_args[15] = src1_strides.nD_stride;  // 15: src1_nD_stride
-            reader_args[16] = src1_strides.d_stride;   // 16: src1_d_stride
-            reader_args[17] = src1_strides.n_stride;   // 17: src1_n_stride
-            reader_args[18] = src1_strides.c_stride;   // 18: src1_c_stride
-            reader_args[19] = src1_num_tiles;          // 19: src1_num_tiles
-            reader_args[20] = src2_strides.nD_stride;  // 20: src2_nD_stride
-            reader_args[21] = src2_strides.d_stride;   // 21: src2_d_stride
-            reader_args[22] = src2_strides.n_stride;   // 22: src2_n_stride
-            reader_args[23] = src2_strides.c_stride;   // 23: src2_c_stride
-            reader_args[24] = src2_num_tiles;          // 24: src2_num_tiles
-            reader_args[25] = c_current_shard_width;   // 25: dst_shard_width
-            reader_args[26] = a_num_tiles;             // 26: src_num_tiles (predicate)
-            reader_args[27] = pred_nd_factor;          // 27: predicate nD broadcast factor
-            reader_args[28] = src1_nd_factor;          // 28: src1 nD broadcast factor
-            if (is_ttt) {
-                reader_args[29] = src2_nd_factor;  // 29: src2 nD broadcast factor
-            }
-        }
+        // Writer runtime args.  Slot 0 holds the CURRENT output base address; writer_buffer_slots
+        // records it for create_descriptor()'s bindings.  The framework allows the output buffer to
+        // alias an input (in-place ops).
+        const std::array<uint32_t, num_writer_args> writer_args = {
+            output.buffer()->address(),  // 0: dst_addr
+            num_tiles_per_core,          // 1: num_tiles
+            c_start_id,                  // 2: start_id
+            c_current_shard_width,       // 3: dst_shard_width
+            output_dims.D,               // 4: D
+            output_dims.N,               // 5: N
+            output_dims.C,               // 6: C
+            output_dims.Ht,              // 7: Ht
+            output_dims.Wt,              // 8: Wt
+            output_dims.ND,              // 9: cND
+            0u,                          // 10: padding
+        };
+        result.writer.insert(result.writer.end(), writer_args.begin(), writer_args.end());
 
-        writer_args[0] = out_addr;               // 0: dst_addr
-        writer_args[1] = num_tiles_per_core;     // 1: num_tiles
-        writer_args[2] = c_start_id;             // 2: start_id
-        writer_args[3] = c_current_shard_width;  // 3: dst_shard_width
-        writer_args[4] = output_dims.D;          // 4: D
-        writer_args[5] = output_dims.N;          // 5: N
-        writer_args[6] = output_dims.C;          // 6: C
-        writer_args[7] = output_dims.Ht;         // 7: Ht
-        writer_args[8] = output_dims.Wt;         // 8: Wt
-        writer_args[9] = output_dims.ND;         // 9: cND
-        writer_args[10] = 0u;                    // 10: padding
-
+        // Compute runtime args.  scalar_arg is the packed scalar_input_a/scalar_input_b; it is
+        // EXCLUDED from compute_program_hash and therefore DYNAMIC -- like every other arg here it is
+        // re-derived by this builder on each cache hit. Packed via the shared single-source-of-truth helper.
+        const uint32_t scalar_arg = pack_compute_scalar_arg(operation_attributes, output.dtype());
         auto [freq, counter] = [&] {
             switch (broadcast_type) {
                 case TernaryBroadcastType::ROW_COL_BCAST:
@@ -827,128 +959,23 @@ void generate_runtime_arguments(
                 default: __builtin_unreachable();
             }
         }();
-        compute_args = {num_tiles_per_core, freq, counter, scalar_arg};
-
-        emit(CoreRuntimeArgs{
-            .core = core,
-            .noop = false,
-            .reader = {reader_args.data(), reader_arg_count},
-            .writer = {writer_args.data(), num_writer_args},
-            .compute = {compute_args.data(), num_compute_args}});
+        const std::array<uint32_t, num_kernel_args> compute_args = {num_tiles_per_core, freq, counter, scalar_arg};
+        result.compute.insert(result.compute.end(), compute_args.begin(), compute_args.end());
 
         start_tile_id += num_tiles_per_core;
     }
-}
 
-// create_descriptor() consumer: turn each core's args into KernelDescriptor entries, registering the
-// tensor-address slots as Buffer* bindings so descriptor-based dispatch can resolve them.
-void populate_runtime_arguments(
-    KernelDescriptor& reader_desc,
-    KernelDescriptor& writer_desc,
-    KernelDescriptor& compute_desc,
-    const TernaryDeviceOperation::operation_attributes_t& operation_attributes,
-    const TernaryDeviceOperation::tensor_args_t& tensor_args,
-    TernaryDeviceOperation::tensor_return_value_t& output,
-    ttnn::operations::ternary::TernaryBroadcastType broadcast_type) {
-    const auto& [predicate_tensor, value_true_tensor, value_false_tensor, optional_output_tensor] = tensor_args;
-    const TernaryVariant variant = operation_attributes.ternary_variant;
-
-    std::array<Buffer*, 3> reader_buffers{
-        predicate_tensor.buffer(),
-        (variant == TernaryVariant::TST ? value_false_tensor : value_true_tensor)->buffer(),
-        nullptr};
-    size_t num_reader_buffers = 2;
-    if (variant == TernaryVariant::TTT) {
-        reader_buffers[2] = value_false_tensor->buffer();
-        num_reader_buffers = 3;
-    }
-
-    generate_runtime_arguments(
-        operation_attributes, tensor_args, output, broadcast_type, [&](const CoreRuntimeArgs& args) {
-            if (args.noop) {
-                reader_desc.runtime_args.emplace_back(
-                    args.core, KernelDescriptor::CoreRuntimeArgs(args.reader.size(), 0));
-                writer_desc.runtime_args.emplace_back(
-                    args.core, KernelDescriptor::CoreRuntimeArgs(args.writer.size(), 0));
-                compute_desc.runtime_args.emplace_back(
-                    args.core, KernelDescriptor::CoreRuntimeArgs(args.compute.size(), 0));
-                return;
-            }
-
-            KernelDescriptor::RTArgList reader_arg_list;
-            reader_arg_list.reserve(args.reader.size());
-            for (size_t k = 0; k < num_reader_buffers; ++k) {
-                reader_arg_list.push_back(reader_buffers[k]);
-            }
-            for (size_t k = num_reader_buffers; k < args.reader.size(); ++k) {
-                reader_arg_list.push_back(args.reader[k]);
-            }
-            reader_desc.emplace_runtime_args(args.core, reader_arg_list);
-
-            // The framework allows the output buffer to alias an input (in-place ops).
-            KernelDescriptor::RTArgList writer_arg_list;
-            writer_arg_list.reserve(args.writer.size());
-            writer_arg_list.push_back(output.buffer());
-            for (size_t k = 1; k < args.writer.size(); ++k) {
-                writer_arg_list.push_back(args.writer[k]);
-            }
-            writer_desc.emplace_runtime_args(args.core, writer_arg_list);
-
-            compute_desc.runtime_args.emplace_back(
-                args.core, KernelDescriptor::CoreRuntimeArgs{args.compute.begin(), args.compute.end()});
-        });
-}
-
-// Copy one core's freshly derived args over the cached program's args, in place. Dispatch pads every
-// core to the kernel group's maximum arg count, so the cached vector can be longer than what this core
-// actually uses; only the args this core owns are written.
-void overwrite_core_runtime_args(
-    std::vector<std::vector<RuntimeArgsData>>& args_by_core, const CoreCoord& core, ttsl::Span<const uint32_t> args) {
     TT_FATAL(
-        core.x < args_by_core.size() && core.y < args_by_core[core.x].size(),
-        "Cached program has no runtime args for core {}",
-        core.str());
-    auto& cached = args_by_core[core.x][core.y];
-    TT_FATAL(
-        args.size() <= cached.size(),
-        "Cannot write {} runtime args into the {} the cached program reserved for core {}",
-        args.size(),
-        cached.size(),
-        core.str());
-    std::copy(args.begin(), args.end(), cached.data());
-}
+        result.reader.size() == result.cores.size() * num_reader_args &&
+            result.writer.size() == result.cores.size() * num_writer_args &&
+            result.compute.size() == result.cores.size() * num_kernel_args,
+        "ternary per-core arg rows are ragged: {} cores but {}/{}/{} reader/writer/compute args",
+        result.cores.size(),
+        result.reader.size(),
+        result.writer.size(),
+        result.compute.size());
 
-// Overwrite the RuntimeTensorShape words one TensorAccessorArgs contributes to a kernel's common
-// runtime args, returning the offset of the next accessor's block. Interleaved buffers contribute
-// nothing (their accessor args are all compile-time), so they leave the offset untouched.
-size_t overwrite_tensor_shape_common_args(RuntimeArgsData& common_args, size_t offset, const Buffer& buffer) {
-    const auto& distribution_spec = buffer.buffer_distribution_spec();
-    if (!distribution_spec.has_value()) {
-        return offset;
-    }
-    const auto& shape_in_pages = distribution_spec->tensor_shape_in_pages();
-    TT_FATAL(
-        offset + shape_in_pages.size() <= common_args.size(),
-        "Tensor shape of rank {} at offset {} does not fit the {} common runtime args of the cached program",
-        shape_in_pages.size(),
-        offset,
-        common_args.size());
-    for (size_t i = 0; i < shape_in_pages.size(); ++i) {
-        common_args[offset + i] = shape_in_pages[i];
-    }
-    return offset + shape_in_pages.size();
-}
-
-// Every word of a kernel's common runtime args comes from one of its TensorAccessors, so once all of
-// them have been rewritten the offset must land exactly on the end. Anything else means this call's
-// accessor ranks differ from the ones the cached program was built for, which compute_program_hash is
-// supposed to keep apart.
-void check_tensor_shape_common_args_exhausted(const RuntimeArgsData& common_args, size_t offset) {
-    TT_FATAL(
-        offset == common_args.size(),
-        "Rewrote {} of the {} common runtime args; the cached program was built for different accessor ranks",
-        offset,
-        common_args.size());
+    return result;
 }
 
 }  // namespace CMAKE_UNIQUE_NAMESPACE
@@ -1264,7 +1291,8 @@ tt::tt_metal::ProgramDescriptor TernaryDeviceOperation::TernaryProgramFactory::c
 
     if (variant == TernaryVariant::TTS) {
         // TTS: c_0 = predicate, c_1 = value_true tensor
-        reader_compile_time_args = {(std::uint32_t)predicate_tensor_cb, (std::uint32_t)value_true_tensor_cb};
+        reader_compile_time_args = {
+            (std::uint32_t)predicate_tensor_cb, (std::uint32_t)value_true_tensor_cb};
 
         tt::tt_metal::TensorAccessorArgs(*predicate_tensor.buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
             .append_to(reader_compile_time_args, reader_common_runtime_args);
@@ -1275,7 +1303,8 @@ tt::tt_metal::ProgramDescriptor TernaryDeviceOperation::TernaryProgramFactory::c
 
     } else if (variant == TernaryVariant::TST) {
         // TST: c_0 = predicate, c_1 = value_false tensor
-        reader_compile_time_args = {(std::uint32_t)predicate_tensor_cb, (std::uint32_t)value_false_tensor_cb};
+        reader_compile_time_args = {
+            (std::uint32_t)predicate_tensor_cb, (std::uint32_t)value_false_tensor_cb};
         tt::tt_metal::TensorAccessorArgs(*predicate_tensor.buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
             .append_to(reader_compile_time_args, reader_common_runtime_args);
         tt::tt_metal::TensorAccessorArgs(
@@ -1339,8 +1368,7 @@ tt::tt_metal::ProgramDescriptor TernaryDeviceOperation::TernaryProgramFactory::c
                             output_data_format == tt::DataFormat::Int32 ||
                             output_data_format == tt::DataFormat::Float32;
 
-    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
-        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
 
     // c_0 is always predicate
     unpack_to_dest_mode[tt::CBIndex::c_0] = (predicate_tensor.dtype() == DataType::FLOAT32)
@@ -1368,10 +1396,9 @@ tt::tt_metal::ProgramDescriptor TernaryDeviceOperation::TernaryProgramFactory::c
                                                     : tt::tt_metal::UnpackToDestMode::Default;
     }
 
-    // Output is always c_3; c_2 holds the false tensor for TTT.
-    unpack_to_dest_mode[output_cb_index] = (output.dtype() == DataType::FLOAT32)
-                                               ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32
-                                               : tt::tt_metal::UnpackToDestMode::Default;
+    // Output CB depends on variant: c_2 for binary_ng compatibility (TTT col bcast), c_3 for other cases
+    unpack_to_dest_mode[output_cb_index] =
+        (output.dtype() == DataType::FLOAT32) ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32 : tt::tt_metal::UnpackToDestMode::Default;
 
     constexpr uint32_t num_tiles_per_cycle = 1;  // we produce 1 output tile per read-compute-write cycle
 
@@ -1454,8 +1481,65 @@ tt::tt_metal::ProgramDescriptor TernaryDeviceOperation::TernaryProgramFactory::c
     };
 
     // ---- Per-core runtime args ----
-    CMAKE_UNIQUE_NAMESPACE::populate_runtime_arguments(
-        reader_desc, writer_desc, compute_desc, operation_attributes, tensor_args, output, broadcast_type);
+    // Built via the shared single-source-of-truth builder so create_descriptor() (cache miss, here)
+    // and override_runtime_arguments() (cache hit) stay byte-identical.
+    //
+    // The builder returns flat uint32 rows with buffer addresses already resolved.  Here -- and only
+    // here, on the miss path -- the buffer-carrying slots are re-wrapped as Buffer* so
+    // emplace_runtime_args() registers them as bindings and the framework keeps its O(1) address
+    // patching.  Noop cores hold no buffers, so they take the plain path.
+    {
+        auto per_core = CMAKE_UNIQUE_NAMESPACE::build_per_core_runtime_args(
+            operation_attributes, tensor_args, output, broadcast_type);
+
+        std::vector<std::variant<uint32_t, Buffer*>> slots;  // reused across cores
+        auto emplace_with_buffers =
+            [&slots](
+                KernelDescriptor& desc,
+                const CoreCoord& core,
+                const uint32_t* row,
+                size_t n,
+                const std::vector<CMAKE_UNIQUE_NAMESPACE::TernaryPerCoreArgs::BufferSlot>& buffer_slots) {
+                slots.assign(row, row + n);
+                for (const auto& bs : buffer_slots) {
+                    TT_FATAL(bs.slot < n, "ternary buffer slot {} out of range for {} args", bs.slot, n);
+                    slots[bs.slot] = bs.buffer;
+                }
+                desc.emplace_runtime_args(core, slots);
+            };
+
+        for (size_t i = 0; i < per_core.cores.size(); ++i) {
+            const auto& core = per_core.cores[i];
+            if (per_core.is_work_core[i]) {
+                emplace_with_buffers(
+                    reader_desc,
+                    core,
+                    per_core.reader_row(i),
+                    CMAKE_UNIQUE_NAMESPACE::kNumReaderArgs,
+                    per_core.reader_buffer_slots);
+                emplace_with_buffers(
+                    writer_desc,
+                    core,
+                    per_core.writer_row(i),
+                    CMAKE_UNIQUE_NAMESPACE::kNumWriterArgs,
+                    per_core.writer_buffer_slots);
+            } else {
+                reader_desc.runtime_args.emplace_back(
+                    core,
+                    KernelDescriptor::CoreRuntimeArgs(
+                        per_core.reader_row(i), per_core.reader_row(i) + CMAKE_UNIQUE_NAMESPACE::kNumReaderArgs));
+                writer_desc.runtime_args.emplace_back(
+                    core,
+                    KernelDescriptor::CoreRuntimeArgs(
+                        per_core.writer_row(i), per_core.writer_row(i) + CMAKE_UNIQUE_NAMESPACE::kNumWriterArgs));
+            }
+            // Compute args never carry a buffer address.
+            compute_desc.runtime_args.emplace_back(
+                core,
+                KernelDescriptor::CoreRuntimeArgs(
+                    per_core.compute_row(i), per_core.compute_row(i) + CMAKE_UNIQUE_NAMESPACE::kNumComputeArgs));
+        }
+    }
 
     desc.kernels.push_back(std::move(reader_desc));
     desc.kernels.push_back(std::move(writer_desc));
@@ -1470,75 +1554,104 @@ void TernaryDeviceOperation::TernaryProgramFactory::override_runtime_arguments(
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    // A cache hit can reuse a program built for a different-but-volume-equivalent shape, because
-    // compute_program_hash keys on volumes and H/W rather than on the full shape. The nD broadcast
-    // factors, strides, dim extents and per-core tile counts are therefore all free to differ, so patch
-    // every per-core arg rather than just the addresses and the packed scalar. The values come from the
-    // same generator create_descriptor() uses and are written straight into the cached program: no
-    // descriptor, no per-core allocation, no re-derived core partition beyond the work split itself.
+    // Re-apply ALL per-dispatch state to the cached program on a program-cache hit.  No descriptor
+    // rebuild and no kernel recompile -- but every per-core arg IS re-derived. We re-derive them from the SAME
+    // shared builder create_descriptor() uses, so the two paths stay byte-identical by construction.
+    //
+    // Kernel push order in create_descriptor(): reader(0), writer(1), compute(2).
+    //
+    // NOT refreshed here, and probably safe: the reader/writer COMMON runtime args, which carry the
+    // TensorAccessorArgs words.  They are a pure function of state compute_program_hash already pins,
+    // so a cache hit cannot find them stale.  Two cases:
+    //
+    //   Interleaved -- vacuous.  TensorAccessorArgs::update_args_config() resets the config to None
+    //   for any buffer without a BufferDistributionSpec and re-sets only IsDram, so the requested
+    //   RuntimeTensorShape is discarded and no runtime words are emitted at all.
+    //
+    //   Sharded -- the words are BufferDistributionSpec::tensor_shape_in_pages(), the shard-collapsed
+    //   view of the tensor (leading dims flattened into the height), never the dim factorization.  So
+    //   they are a function of (padded volume, H, W) -- all three hashed.
+    //   ND sharding cannot reach this path: get_shard_specs() reads memory_config().shard_spec(), the
+    //   2D spec, so an ND-sharded tensor never takes it.
+    //
+    // If ternary ever gains ND sharding, tensor_shape_in_pages() would carry the individual dims and
+    // this reasoning lapses -- the words would then need re-applying via GetCommonRuntimeArgs.
+
     const auto& [predicate_tensor, value_true_tensor, value_false_tensor, optional_output_tensor] = tensor_args;
     const TernaryVariant variant = operation_attributes.ternary_variant;
 
-    // Kernel handles follow the create_descriptor() push order: reader, writer, compute.
-    constexpr tt::tt_metal::KernelHandle reader_kernel_idx = 0;
-    constexpr tt::tt_metal::KernelHandle writer_kernel_idx = 1;
-    constexpr tt::tt_metal::KernelHandle compute_kernel_idx = 2;
+    auto per_core = CMAKE_UNIQUE_NAMESPACE::build_per_core_runtime_args(
+        operation_attributes, tensor_args, output, operation_attributes.broadcast_type);
 
-    auto& reader_args_by_core = tt::tt_metal::GetRuntimeArgs(program, reader_kernel_idx);
-    auto& writer_args_by_core = tt::tt_metal::GetRuntimeArgs(program, writer_kernel_idx);
-    auto& compute_args_by_core = tt::tt_metal::GetRuntimeArgs(program, compute_kernel_idx);
+    constexpr uint32_t kReaderKernelIdx = 0;
+    constexpr uint32_t kWriterKernelIdx = 1;
+    constexpr uint32_t kComputeKernelIdx = 2;
 
-    CMAKE_UNIQUE_NAMESPACE::generate_runtime_arguments(
-        operation_attributes,
-        tensor_args,
-        output,
-        operation_attributes.broadcast_type,
-        [&](const CMAKE_UNIQUE_NAMESPACE::CoreRuntimeArgs& args) {
-            CMAKE_UNIQUE_NAMESPACE::overwrite_core_runtime_args(reader_args_by_core, args.core, args.reader);
-            CMAKE_UNIQUE_NAMESPACE::overwrite_core_runtime_args(writer_args_by_core, args.core, args.writer);
-            CMAKE_UNIQUE_NAMESPACE::overwrite_core_runtime_args(compute_args_by_core, args.core, args.compute);
-        });
+    // The builder already resolved every buffer address into the flat row, so re-applying a core is
+    // a fixed-width copy.  The size check turns any future divergence between the builder's row width
+    // and what create_descriptor() baked into the program into a loud failure.
+    auto apply = [&](uint32_t kernel_idx, const CoreCoord& core, const uint32_t* row, size_t n) {
+        auto& data = tt::tt_metal::GetRuntimeArgs(program, kernel_idx, core);
+        TT_FATAL(
+            data.size() == n,
+            "ternary override: kernel {} core ({},{}) has {} runtime args in the cached program but the "
+            "builder produced {}",
+            kernel_idx,
+            core.x,
+            core.y,
+            data.size(),
+            n);
+        std::copy_n(row, n, data.data());
+    };
 
-    // The TensorAccessor common runtime args carry each sharded tensor's shape in pages, which is
-    // shape- rather than volume-keyed, so it has to be re-written too. The accessors were appended in
-    // predicate, src1, src2 order; interleaved tensors contribute no runtime words at all.
-    auto& reader_common_args = tt::tt_metal::GetCommonRuntimeArgs(program, reader_kernel_idx);
-    const auto& src1_tensor = (variant == TernaryVariant::TST) ? *value_false_tensor : *value_true_tensor;
-    size_t offset =
-        CMAKE_UNIQUE_NAMESPACE::overwrite_tensor_shape_common_args(reader_common_args, 0, *predicate_tensor.buffer());
-    offset =
-        CMAKE_UNIQUE_NAMESPACE::overwrite_tensor_shape_common_args(reader_common_args, offset, *src1_tensor.buffer());
-    if (variant == TernaryVariant::TTT) {
-        offset = CMAKE_UNIQUE_NAMESPACE::overwrite_tensor_shape_common_args(
-            reader_common_args, offset, *value_false_tensor->buffer());
+    for (size_t i = 0; i < per_core.cores.size(); ++i) {
+        const auto& core = per_core.cores[i];
+        apply(kReaderKernelIdx, core, per_core.reader_row(i), CMAKE_UNIQUE_NAMESPACE::kNumReaderArgs);
+        apply(kWriterKernelIdx, core, per_core.writer_row(i), CMAKE_UNIQUE_NAMESPACE::kNumWriterArgs);
+        apply(kComputeKernelIdx, core, per_core.compute_row(i), CMAKE_UNIQUE_NAMESPACE::kNumComputeArgs);
     }
-    CMAKE_UNIQUE_NAMESPACE::check_tensor_shape_common_args_exhausted(reader_common_args, offset);
 
-    auto& writer_common_args = tt::tt_metal::GetCommonRuntimeArgs(program, writer_kernel_idx);
-    CMAKE_UNIQUE_NAMESPACE::check_tensor_shape_common_args_exhausted(
-        writer_common_args,
-        CMAKE_UNIQUE_NAMESPACE::overwrite_tensor_shape_common_args(writer_common_args, 0, *output.buffer()));
-
-    tt::tt_metal::Buffer* true_buffer = value_true_tensor.has_value() ? value_true_tensor->buffer() : nullptr;
-    tt::tt_metal::Buffer* false_buffer = value_false_tensor.has_value() ? value_false_tensor->buffer() : nullptr;
+    // Re-point tensor-backed (globally-allocated) circular buffers at the CURRENT buffers, by CBIndex.
+    // ternary convention: c_0 = predicate, c_1 = the 2nd tensor operand (true for TTS/TTT, false for
+    // TST), c_2 = the 3rd tensor operand (false, TTT only), c_3 = output.  Addressing by CBIndex (not
+    // by enumeration order) is what keeps an in-place alias correct: the output CB always tracks the
+    // output buffer even when it shares a Buffer* with an input.
+    //
+    // Only globally-allocated CBs are affected, i.e. only when a tensor is sharded -- CBDescriptor::
+    // buffer is nullptr on the interleaved path, so this loop is a no-op there.
+    //
+    // The else-if chain assumes each CB carries at most ONE of c_0..c_3.  That holds by construction:
+    // every CB above is built with a single CBFormatDescriptor, so buffer_indices() is a single
+    // index.
+    tt::tt_metal::Buffer* pred_buffer = predicate_tensor.buffer();
+    const auto& src1_tensor = (variant == TernaryVariant::TST) ? value_false_tensor : value_true_tensor;
+    tt::tt_metal::Buffer* src1_buffer = src1_tensor.has_value() ? src1_tensor->buffer() : nullptr;
+    tt::tt_metal::Buffer* src2_buffer =
+        (variant == TernaryVariant::TTT && value_false_tensor.has_value()) ? value_false_tensor->buffer() : nullptr;
+    tt::tt_metal::Buffer* out_buffer = output.buffer();
     for (const auto& cb : program.circular_buffers()) {
         if (!cb->globally_allocated()) {
             continue;
         }
         const auto& indices = cb->buffer_indices();
-        if (indices.contains(static_cast<uint8_t>(tt::CBIndex::c_0))) {
-            tt::tt_metal::UpdateDynamicCircularBufferAddress(program, cb->id(), *predicate_tensor.buffer());
-        } else if (indices.contains(static_cast<uint8_t>(tt::CBIndex::c_1))) {
-            auto* buffer = variant == TernaryVariant::TST ? false_buffer : true_buffer;
-            if (buffer != nullptr) {
-                tt::tt_metal::UpdateDynamicCircularBufferAddress(program, cb->id(), *buffer);
-            }
-        } else if (
-            indices.contains(static_cast<uint8_t>(tt::CBIndex::c_2)) && variant == TernaryVariant::TTT &&
-            false_buffer != nullptr) {
-            tt::tt_metal::UpdateDynamicCircularBufferAddress(program, cb->id(), *false_buffer);
-        } else if (indices.contains(static_cast<uint8_t>(tt::CBIndex::c_3))) {
-            tt::tt_metal::UpdateDynamicCircularBufferAddress(program, cb->id(), *output.buffer());
+        const int num_tensor_indices = static_cast<int>(indices.contains(static_cast<uint8_t>(tt::CBIndex::c_0))) +
+                                       static_cast<int>(indices.contains(static_cast<uint8_t>(tt::CBIndex::c_1))) +
+                                       static_cast<int>(indices.contains(static_cast<uint8_t>(tt::CBIndex::c_2))) +
+                                       static_cast<int>(indices.contains(static_cast<uint8_t>(tt::CBIndex::c_3)));
+        TT_FATAL(
+            num_tensor_indices <= 1,
+            "ternary override: globally-allocated CB {} carries {} of c_0..c_3; the re-point chain "
+            "below would update only the lowest",
+            cb->id(),
+            num_tensor_indices);
+        if (indices.contains(static_cast<uint8_t>(tt::CBIndex::c_0)) && pred_buffer != nullptr) {
+            tt::tt_metal::UpdateDynamicCircularBufferAddress(program, cb->id(), *pred_buffer);
+        } else if (indices.contains(static_cast<uint8_t>(tt::CBIndex::c_1)) && src1_buffer != nullptr) {
+            tt::tt_metal::UpdateDynamicCircularBufferAddress(program, cb->id(), *src1_buffer);
+        } else if (indices.contains(static_cast<uint8_t>(tt::CBIndex::c_2)) && src2_buffer != nullptr) {
+            tt::tt_metal::UpdateDynamicCircularBufferAddress(program, cb->id(), *src2_buffer);
+        } else if (indices.contains(static_cast<uint8_t>(tt::CBIndex::c_3)) && out_buffer != nullptr) {
+            tt::tt_metal::UpdateDynamicCircularBufferAddress(program, cb->id(), *out_buffer);
         }
     }
 }
