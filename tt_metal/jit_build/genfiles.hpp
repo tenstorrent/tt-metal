@@ -20,8 +20,6 @@ class JitBuildEnv;
 class JitBuildOptions;
 class JitBuildSettings;
 
-void emit_llk_metadata(std::ostream& os, const LLKMetadata& metadata);
-
 void jit_build_genfiles_kernel_include(
     const JitBuildEnv& env, const JitBuildSettings& settings, const KernelSource& kernel_src);
 void jit_build_genfiles_triscs_src(
