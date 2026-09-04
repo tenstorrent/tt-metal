@@ -108,27 +108,25 @@ Pointers that do NOT vary from model to model. Take them as-is; the donor map
 > Provisional home. These belong in their per-stage sections (D3, M3, P1, ...) and will be moved
 > there once those sections are written. Kept in one block for now so the donor template stays clean.
 
-| What | Pointer | Mode | Note |
-|---|---|---|---|
-| RMSNorm | `models/demos/gpt_oss_d_p/tt/rms_norm.py` | copy | SHOULD BE SHARED: `models/common/rmsnorm.py` exists (258 lines) and no prefill package uses it |
-| Embedding | `models/demos/minimax_m3/tt/parallel_embedding.py` | copy | Deliberately NOT gpt_oss_d_p: it replicates the table and carries a TODO to shard it |
-| MoE substrate | `models/demos/deepseek_v3_d_p/tt/moe/` | **import** | dispatch/combine/reduce/routing_setup/routed_expert. Copying it into the new package is the failure this pointer prevents |
-| MeshConfig | `models/demos/gpt_oss_d_p/tt/config.py` | copy | SHOULD BE SHARED: 5 copies. TP the only knob; SP/EP derived |
-| CCLManager | `models/demos/gpt_oss_d_p/tt/ccl.py` | copy | SHOULD BE SHARED: 4 copies; gpt_oss_d_p and minimax_m3 are both exactly 139 lines, differing almost only in docstrings. Wrong semaphore ping-pong is silent corruption |
-| CCL wrappers | `models/demos/gpt_oss_d_p/tt/config.py` | copy | allgather/allreduce composition + dealloc ordering. Never call the async CCL ops bare |
-| Weight cache | `models/demos/minimax_m3/tt/weight_cache.py` | copy | SHOULD BE SHARED. Also take `get_cache_file_name` from the donor's `utils/general_utils.py`. Cache-populate and serving runs must agree on key naming or the cache silently misses |
-| Migration helpers | `models/demos/common/prefill/runners/migration.py` | **import** | `serialize_kv_chunk_table`, `KvCacheStage`, `get_num_dram_banks`. Already common |
-| Runtime contract | `models/demos/common/prefill/docs/ADDING_A_PREFILL_MODEL.md` | contract | Section 2 is the authority |
-| Reference trimming | `models/demos/deepseek_v3_d_p/reference/kimi_k3/modeling_kimi_k3_mla.py` | pattern | Provenance header with upstream line numbers; why each replacement was made |
-| Reference purity | `models/demos/deepseek_v3_d_p/reference/kda/README.md` | contract | A reference imports torch only. No ttnn, no device code, no mesh fixtures, no checkpoints |
-| PCC test scaffold | `models/demos/gpt_oss_d_p/tests/unit/test_attention_vs_ref.py` | pattern | Identical random weights both sides, shared rope, `comp_pcc`, no checkpoint or network. The instrument every other PCC number depends on. The donor runs it on one card; bring-up runs every PCC test on the target mesh |
-| Config diff test | `models/demos/deepseek_v3_d_p/tests/torch/test_kimi_k3_mla_reference.py` | pattern | Asserts every constant equals the vendored `config.json` |
-| KV table test | `models/demos/gpt_oss_d_p/tests/test_kv_cache_table.py` | pattern | Isolates address-table correctness: no model run, no fabric migrate. Needs a galaxy |
-| Mesh KV-PCC | `models/demos/gpt_oss_d_p/tests/galaxy_prefill_kv_pcc.py` | pattern | Golden trace layout, env knobs, per-layer PCC reporting |
-| CPU golden cache | `models/demos/deepseek_v3_d_p/utils/transformer_helpers.py:762` | import | `ReferenceCacheKey` + `check_/save_/load_reference_cache`. Caches e2e snapshots + KV so a CPU forward runs once, not per test. Worked usage: `tests/test_prefill_transformer.py` (check :258, save :361, load :630) |
-| Golden trace generation | `models/demos/deepseek_v3_d_p/tt/runners/generate_prompt_trace.py` | pattern | Only if no golden trace is staged for this model yet |
-
-`grep "SHOULD BE SHARED"` here for the hoist backlog (P7).
+| What | Pointer | Mode |
+|---|---|---|
+| RMSNorm | `models/demos/gpt_oss_d_p/tt/rms_norm.py` | copy |
+| Embedding | `models/demos/minimax_m3/tt/parallel_embedding.py` | copy |
+| MoE substrate | `models/demos/deepseek_v3_d_p/tt/moe/` | **import** |
+| MeshConfig | `models/demos/gpt_oss_d_p/tt/config.py` | copy |
+| CCLManager | `models/demos/gpt_oss_d_p/tt/ccl.py` | copy |
+| CCL wrappers | `models/demos/gpt_oss_d_p/tt/config.py` | copy |
+| Weight cache | `models/demos/minimax_m3/tt/weight_cache.py` | copy |
+| Migration helpers | `models/demos/common/prefill/runners/migration.py` | **import** |
+| Runtime contract | `models/demos/common/prefill/docs/ADDING_A_PREFILL_MODEL.md` | contract |
+| Reference trimming | `models/demos/deepseek_v3_d_p/reference/kimi_k3/modeling_kimi_k3_mla.py` | pattern |
+| Reference purity | `models/demos/deepseek_v3_d_p/reference/kda/README.md` | contract |
+| PCC test scaffold | `models/demos/gpt_oss_d_p/tests/unit/test_attention_vs_ref.py` | pattern |
+| Config diff test | `models/demos/deepseek_v3_d_p/tests/torch/test_kimi_k3_mla_reference.py` | pattern |
+| KV table test | `models/demos/gpt_oss_d_p/tests/test_kv_cache_table.py` | pattern |
+| Mesh KV-PCC | `models/demos/gpt_oss_d_p/tests/galaxy_prefill_kv_pcc.py` | pattern |
+| CPU golden cache | `models/demos/deepseek_v3_d_p/utils/transformer_helpers.py:762` | import |
+| Golden trace generation | `models/demos/deepseek_v3_d_p/tt/runners/generate_prompt_trace.py` | pattern |
 
 Two rules the golden cache embodies, worth keeping: key the cache on **every** field that changes the
 output (`ReferenceCacheKey` is frozen so a changed field yields a different filename and stale results
@@ -140,10 +138,10 @@ Per-module goldens are cheap to regenerate and are deliberately not cached.
 
 ## 4. Stages and order
 
-Three ladders, run in order and one at a time: the decoder (D1-D4), then the whole model around it
-(M1-M4), then the prefill pipeline (P1-P4). D and M have the same four-step shape — torch golden,
-then a mock outline plus PCC tests, then implement with a torch CPU fallback where ttnn cannot yet,
-then replace every fallback with ttnn.
+Three ladders, run in order and one at a time: the decoder (D1-D3), then the whole model around it
+(M1-M3), then the prefill pipeline (P1-P4). D and M have the same three-step shape — torch golden,
+then a mock outline plus PCC tests, then implement in ttnn, with a torch CPU fallback only where
+ttnn genuinely cannot.
 
 **Prerequisite for D3 — mesh up.** Bring-up goes straight to the target mesh; there is no
 single-card step at any point. Before the first module is written: the target mesh opens,
@@ -167,25 +165,20 @@ Decoder bringup stages:
 
 - **D3 — Implement 1 Decoder as composition of big blocks (Attn, MLP, Emb,...)**
 
-  Bringup previously defined modules on target device straight away (no need for single chip bringup first). What is not supported in ttnn fallback to pytorch CPU to get working first version.
-
-- **D4 — Implement torch fallbacks in ttnn**
-
-  Each component that is in torch has to be rewriten/implemented in ttnn.
+  Bringup previously defined modules on target device straight away (no need for single chip bringup first). Where no single ttnn op matches the block, write the mathematical equivalent out of the ttnn ops that do exist — there is no `ttnn.mlp`, and an MLP is a matmul, an activation and a second matmul, so compose it rather than dropping to CPU. Fall back to pytorch CPU only when the math cannot be expressed in ttnn at all; if the fallback is inevitable, take it, log it and move on.
 
 
 When each stage is finished - goals:
 - D1 goal → Have torch implementation for each building block of model Attn,MLP,Norms,Emb.
 - D2 goal → Have layer.py outline of one decoder layer in high level blocks so we can write PCC tests for each building block and decoder. 
-- D3 goal → Have all building modules of decoder passing PCC tests in isolation (doesn't matter if the impl is ttnn or torch). Have one decoder block passing PCC test.
-- D4 goal → Rewrite all torch fallbacks to ttnn (everything is on tt hardware). All blocks rewriten from torch to ttnn in this stage should pass PCC tests. Old ttnn blocks should stil pass and e2e model should pass PCC test.
+- D3 goal → Have all building modules of decoder passing PCC tests in isolation (ttnn wherever the math can be composed from ttnn ops; torch CPU only where it cannot). Have one decoder block passing PCC test.
 
 We switch from one stage to next only when the goal is reached.
 
 
 Whole model bringup stages:
 
-Same shape as decoder bringup. The decoder is already implemented and PCC-tested from D1-D4, so it
+Same shape as decoder bringup. The decoder is already implemented and PCC-tested from D1-D3, so it
 enters as a finished block; only the parts around it are new.
 
 - **M1 — Torch golden impl (whole model)**
@@ -198,18 +191,13 @@ enters as a finished block; only the parts around it are new.
 
 - **M3 — Implement the whole-model components**
 
-  Bringup embedding, final norm, lm head and the N-layer stack on target device. What is not supported in ttnn fallback to pytorch CPU to get working first version.
-
-- **M4 — Implement torch fallbacks in ttnn**
-
-  Each component that is in torch has to be rewriten/implemented in ttnn.
+  Bringup embedding, final norm, lm head and the N-layer stack on target device. Same rule as D3: where no single ttnn op matches the block, write the mathematical equivalent out of the ttnn ops that do exist before considering a fallback. Fall back to pytorch CPU only when the math cannot be expressed in ttnn at all; if the fallback is inevitable, take it, log it and move on.
 
 
 When each stage is finished - goals:
 - M1 goal → Have torch implementation for every remaining building block: embedding, final norm, lm head, and a full-model forward that matches HF.
 - M2 goal → Have model.py outline of the whole model in high level blocks so we can write PCC tests for each new building block and for the e2e model.
-- M3 goal → Have all new building blocks passing PCC tests in isolation (doesn't matter if the impl is ttnn or torch). Have the whole model passing e2e PCC test.
-- M4 goal → Rewrite all torch fallbacks to ttnn (everything is on tt hardware). All blocks rewriten from torch to ttnn in this stage should pass PCC tests. Decoder blocks from D4 should still pass and e2e model should pass PCC test.
+- M3 goal → Have all new building blocks passing PCC tests in isolation (ttnn wherever the math can be composed from ttnn ops; torch CPU only where it cannot). Have the whole model passing e2e PCC test. Decoder blocks from D3 still pass.
 
 We switch from one stage to next only when the goal is reached.
 
@@ -241,7 +229,7 @@ The decoder and the model now run; what is left is real weights, chunking, and t
 
 
 When each stage is finished - goals:
-- P1 goal → Model runs with real checkpoint weights on target mesh, one-shot. Per-layer KV PCC vs golden trace passes. Random-weight tests from D4/M4 still pass.
+- P1 goal → Model runs with real checkpoint weights on target mesh, one-shot. Per-layer KV PCC vs golden trace passes. Random-weight tests from D3/M3 still pass.
 - P2 goal → Multi-chunk prefill produces the same KV as an equal-length one-shot run. Chunked per-layer KV PCC vs golden passes.
 - P3 goal → `prefill_runner` serves chunks pushed by `prefill_producer`; `PREFILL_PRODUCER_CHECK_PCC=1` passes (runner with `PREFILL_MOCK_MIGRATION=1`).
 - P4 goal → Host-only KV address-table test passes; table + device map export to file (`PREFILL_MIGRATION_EXPORT_TO_FILE=1`) and validate offline; mock/loopback migration manifests run.
@@ -371,24 +359,17 @@ the decoder.
    all-reduce smoke test passes. No module work before this.
 2. Implement in dependency order — norm, MLP/activation, rope, attention (one-shot), KV cache
    allocation + write, MoE, then the composed layer.
-3. Where ttnn has no op for something, fall back to torch on CPU to get a first working version.
+3. Where no single ttnn op matches the block, write the mathematical equivalent out of the ttnn ops
+   that do exist — `ttnn.mlp` does not exist, but an MLP is a matmul, an activation and a second
+   matmul, so compose it. Same for anything else with no one-call equivalent: decompose it first.
+4. Fall back to torch on CPU only where the math cannot be expressed in ttnn at all. If the fallback
+   is inevitable, take it, log it, and move on — a new kernel is out of scope for bring-up.
 
-**Goal** Every decoder building block passes its PCC test in isolation (ttnn or torch), and one
-decoder block passes its PCC test.
+**Goal** Every decoder building block passes its PCC test in isolation — ttnn wherever the math can
+be composed from ttnn ops, torch CPU only where it cannot — and one decoder block passes its PCC
+test.
 
 **Verified by** The D2 suite on the target mesh with random weights.
-
----
-
-### D4 — Decoder torch fallbacks to ttnn
-
-**Steps**
-1. Replace one torch fallback with ttnn at a time. Rewrite each block in torch as mathematical equivalent in ttnn operations. Re-run the edited block PCC check and e2e check after each block rewrite.
-2. If you can't map torch implementation to ttnn operations, log this and move on — a new kernel is currently out of scope for bring-up.
-
-**Goal** No torch left in the decoder path.
-
-**Verified by** The D2 suite still passes, and nothing in the decoder path imports a torch fallback.
 
 ---
 
@@ -412,7 +393,7 @@ rather than recomputing.
 
 **Steps**
 1. Write the model outline: embedding, decoder x N, final norm, lm head. The decoder slot is the
-   real D4 module; everything else is a mock.
+   real D3 module; everything else is a mock.
 2. Fix the signatures of the new components, as in D2.
 3. Write a PCC test per new component and one end-to-end model test.
 
@@ -429,26 +410,15 @@ for the e2e model.
 1. Implement embedding, final norm, and lm head on the target mesh.
 2. Wire the N-layer stack: per-layer weight slicing and naming, per-layer type dispatch if the model
    is hybrid, and the KV cache sized for N layers rather than 1.
-3. Torch CPU fallback where ttnn cannot yet.
+3. Same rule as D3: where no single ttnn op matches the block, compose the mathematical equivalent
+   from the ttnn ops that do exist before considering a fallback. Torch CPU only where the math
+   cannot be expressed in ttnn at all — log it and move on if it is inevitable.
 
-**Goal** Every new building block passes PCC in isolation (ttnn or torch), and the whole model
-passes its e2e PCC test.
+**Goal** Every new building block passes PCC in isolation — ttnn wherever the math can be composed
+from ttnn ops, torch CPU only where it cannot — and the whole model passes its e2e PCC test.
 
-**Verified by** The M2 suite on the target mesh with random weights.
-
----
-
-### M4 — Model torch fallbacks to ttnn
-
-**Steps**
-1. Replace remaining torch fallbacks with ttnn, one at a time. Rewrite each block in torch as mathematical equivalent in ttnn operations. Re-run the edited block PCC check and e2e check after each block rewrite.
-2. If you can't map torch implementation to ttnn operations, log this and move on — a new kernel is currently out of scope for bring-up.
-
-
-**Goal** Everything runs on TT hardware.
-
-**Verified by** The M2 suite passes, the D4 decoder tests still pass, and the e2e model PCC test
-passes.
+**Verified by** The M2 suite on the target mesh with random weights, with the D3 decoder tests still
+passing.
 
 ---
 
@@ -468,7 +438,7 @@ PREFILL_TRACE_DIR=<golden> PREFILL_CHUNKED=0 \
   python3 models/demos/<model>/tests/galaxy_prefill_kv_pcc.py
 ```
 
-Every layer's K/V must clear the spec's PCC threshold, and the random-weight suites from D4 and M4
+Every layer's K/V must clear the spec's PCC threshold, and the random-weight suites from D3 and M3
 must still pass.
 
 ---
