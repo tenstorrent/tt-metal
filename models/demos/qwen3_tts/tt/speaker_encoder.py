@@ -134,6 +134,7 @@ class SpeakerEncoder(LightweightModule):
         # fallback on a miss. Traces are shape-locked and mel length varies with the
         # reference audio (~1 frame per 10.7 ms), so it is a cache, not a bucket list.
         self._fwd_traces = {}
+        self._audio_traces = {}  # waveform samples -> captured mel+forward trace
         self._se_auto_trace = os.environ.get("QWEN3_TTS_SE_AUTO_TRACE", "0") != "0"
         self._tap_idx_cache = {}  # (L, k, dilation) -> per-tap row indices (torch)
         self._tap_run_cache = {}  # id(rows) -> [(start, end)] ascending runs
@@ -357,10 +358,65 @@ class SpeakerEncoder(LightweightModule):
         """
         if audio.dim() == 1:
             audio = audio.unsqueeze(0)
-        length = int(audio.shape[1])
+        assert self.device_mel_supported(audio, n_fft, hop_size), "unsupported input for the device mel path"
+        wav_tt = self.upload_waveform(audio)
+        mel = self._mel_from_device_waveform(
+            wav_tt,
+            int(audio.shape[1]),
+            n_fft=n_fft,
+            num_mels=num_mels,
+            sampling_rate=sampling_rate,
+            hop_size=hop_size,
+            win_size=win_size,
+            fmin=fmin,
+            fmax=fmax,
+            frame_chunk=frame_chunk,
+        )
+        ttnn.deallocate(wav_tt)
+        return mel
+
+    def upload_waveform(self, audio: torch.Tensor) -> ttnn.Tensor:
+        """Waveform -> device, in the layout ``_mel_from_device_waveform`` expects.
+
+        Split out so the captured audio trace can own a persistent buffer of this exact
+        shape and refill it with ``copy_host_to_device_tensor``.
+
+        ROW_MAJOR, deliberately. A ``[1, N]`` waveform in TILE layout pads its single row
+        out to 32, so the host tensor and the transfer are 32x the real bytes: at
+        N=96256 that measured 6.66 ms in ``from_torch`` plus 4.18 ms of H2D, against
+        0.03 ms row-major. ``_mel_from_device_waveform`` tilizes on device instead, which
+        inside a trace costs nothing per call.
+        """
+        return ttnn.from_torch(
+            (audio if audio.dim() > 1 else audio.unsqueeze(0)).float(),
+            device=self.device,
+            dtype=ttnn.float32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=self._replicate_mapper(),
+        )
+
+    def _mel_from_device_waveform(
+        self,
+        wav_tt: ttnn.Tensor,
+        length: int,
+        n_fft: int = 1024,
+        num_mels: int = 128,
+        sampling_rate: int = 24000,
+        hop_size: int = 256,
+        win_size: int = 1024,
+        fmin: int = 0,
+        fmax: int = 12000,
+        frame_chunk: int = 256,
+    ) -> ttnn.Tensor:
+        """The device half of the mel: waveform already on device, no host round-trip.
+
+        Free of host interaction so it can sit inside a Metal trace together with
+        ``_forward_device`` -- see ``capture_audio_forward_trace``. ``length`` is passed
+        rather than read off ``wav_tt`` because the tile-padded shape does not carry it.
+        """
         pad = (n_fft - hop_size) // 2
         rows_per_frame = -(-n_fft // hop_size)
-        assert self.device_mel_supported(audio, n_fft, hop_size), "unsupported input for the device mel path"
         consts = self._device_mel_constants(n_fft, num_mels, sampling_rate, win_size, fmin, fmax)
         L1 = ttnn.L1_MEMORY_CONFIG
         kcfg = ttnn.WormholeComputeKernelConfig(
@@ -369,24 +425,19 @@ class SpeakerEncoder(LightweightModule):
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
         )
-
-        wav_tt = ttnn.from_torch(
-            audio.float(),
-            device=self.device,
-            dtype=ttnn.float32,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=self._replicate_mapper(),
-        )
         # torch's reflect pad mirrors about the edge sample and excludes it, so the
         # left pad is reverse(x[1:pad+1]) and the right pad reverse(x[L-1-pad:L-1]).
         rev = self._anti_identity(consts, pad)
-        left = ttnn.matmul(ttnn.slice(wav_tt, [0, 1], [1, pad + 1]), rev, compute_kernel_config=kcfg)
-        right = ttnn.matmul(ttnn.slice(wav_tt, [0, length - 1 - pad], [1, length - 1]), rev, compute_kernel_config=kcfg)
-        xpad = ttnn.concat([left, wav_tt, right], dim=1)
+        wav_tile = wav_tt if wav_tt.layout == ttnn.TILE_LAYOUT else ttnn.to_layout(wav_tt, ttnn.TILE_LAYOUT)
+        left = ttnn.matmul(ttnn.slice(wav_tile, [0, 1], [1, pad + 1]), rev, compute_kernel_config=kcfg)
+        right = ttnn.matmul(
+            ttnn.slice(wav_tile, [0, length - 1 - pad], [1, length - 1]), rev, compute_kernel_config=kcfg
+        )
+        xpad = ttnn.concat([left, wav_tile, right], dim=1)
         ttnn.deallocate(left)
         ttnn.deallocate(right)
-        ttnn.deallocate(wav_tt)
+        if wav_tile is not wav_tt:
+            ttnn.deallocate(wav_tile)
 
         frames = 1 + (length + 2 * pad - n_fft) // hop_size
         pieces = []
@@ -1367,6 +1418,67 @@ class SpeakerEncoder(LightweightModule):
                 self._se_traces_active,
             ) = prev
 
+    def capture_audio_forward_trace(self, audio: torch.Tensor) -> None:
+        """Capture mel + forward as ONE trace, keyed by waveform sample count.
+
+        ``capture_forward_trace`` starts at the mel, leaving the mel itself eager: 53 ops
+        whose 1.86 ms of device kernel time takes 8.51 ms of wall clock, the rest being
+        per-op host dispatch, and whose programs are still cold on the demo's single call
+        (370 ms of the ~380 ms speaker-embedding stage). Pulling it inside the trace
+        removes the dispatch and moves the program creation into the warm pass, which is
+        paid once at capture either way.
+
+        Keyed by samples, not mel frames, because the waveform is what the caller hands
+        us; one entry per registered voice, same as the forward cache. Falls back to
+        ``forward_from_audio``'s other paths when there is no entry.
+        """
+        if audio.dim() == 1:
+            audio = audio.unsqueeze(0)
+        num_samples = int(audio.shape[1])
+        if num_samples in self._audio_traces or not self.device_mel_supported(audio):
+            return
+        prev = (
+            self._se_host_fuse,
+            self._se_device_asp,
+            self._se_device_conv,
+            getattr(self, "_se_traces_active", False),
+        )
+        self._se_host_fuse = self._se_device_asp = self._se_device_conv = True
+        self._se_traces_active = False
+        try:
+            wav_tt = self.upload_waveform(audio)
+            # Warm pass outside the capture: builds the mel constants, and creates every
+            # program the trace will replay. Trace capture cannot JIT or touch the host.
+            warm = self._forward_device(self._mel_from_device_waveform(wav_tt, num_samples))
+            ttnn.synchronize_device(self.device)
+            ttnn.deallocate(warm)
+            trace_id = ttnn.begin_trace_capture(self.device, cq_id=0)
+            try:
+                out_tt = self._forward_device(self._mel_from_device_waveform(wav_tt, num_samples))
+            finally:
+                ttnn.end_trace_capture(self.device, trace_id, cq_id=0)
+            ttnn.synchronize_device(self.device)
+            self._audio_traces[num_samples] = {"wav_tt": wav_tt, "output_tt": out_tt, "trace_id": trace_id}
+        finally:
+            (
+                self._se_host_fuse,
+                self._se_device_asp,
+                self._se_device_conv,
+                self._se_traces_active,
+            ) = prev
+
+    def _forward_from_audio_trace(self, audio: torch.Tensor):
+        """Replay the mel+forward trace for this sample count, or ``None`` if none."""
+        trace = self._audio_traces.get(int(audio.shape[1]))
+        if trace is None:
+            return None
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(audio.float(), dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT),
+            trace["wav_tt"],
+        )
+        ttnn.execute_trace(self.device, trace["trace_id"], cq_id=0, blocking=True)
+        return trace["output_tt"]
+
     def _forward_from_device_mel(self, mel_nlc: ttnn.Tensor) -> ttnn.Tensor:
         """``_forward_device`` for a mel that is already on device, replaying the
         captured forward trace when one matches this length.
@@ -1782,6 +1894,11 @@ class SpeakerEncoder(LightweightModule):
             Speaker embedding [batch, 2048]
         """
         if self._se_device_mel and self.device_mel_supported(audio):
+            audio_2d = audio if audio.dim() > 1 else audio.unsqueeze(0)
+            if self._se_mel_trace:
+                out_tt = self._forward_from_audio_trace(audio_2d)
+                if out_tt is not None:
+                    return _mesh_to_torch(out_tt, dtype=torch.float32).reshape(1, -1)
             mel_nlc = self.compute_mel_spectrogram_device(audio)
             out_tt = self._forward_from_device_mel(mel_nlc) if self._se_mel_trace else self._forward_device(mel_nlc)
             return _mesh_to_torch(out_tt, dtype=torch.float32).reshape(1, -1)

@@ -683,12 +683,50 @@ capture goes 1550 -> 1315 ms, and the embedding is **bit-identical** to the slic
 (`torch.equal`, max abs diff 0.0), so the generated wav is byte-identical (same md5, 68 frames).
 Report: `ops_list/perf_report_se_permmatmul/speaker_encoder/`.
 
-Two things this did *not* fix. The speaker-embedding stage stays at ~380 ms in a one-shot demo,
-because that is the **cold device mel** (370 ms of program creation for its 53 eager ops), which
-`capture_forward_trace` never warms — it feeds `_forward_device` a zeros tensor and never calls
-`compute_mel_spectrogram_device`. Warming it in the capture block moves the stage to 23.5 ms for
-+256 ms of capture, a ~105 ms net win one-shot and much more for a server. And the first run after
-this change pays a one-time on-disk JIT for the new matmul shape: 3922 ms, then 704 ms.
+**Mel + forward in one trace (`capture_audio_forward_trace`).** With the taps cheap, the mel was
+60 % of the warm call: 8.51 ms of wall clock for 1.86 ms of device kernel time, the rest per-op
+host dispatch over its 53 eager ops, plus 370 ms of cold program creation on the demo's single
+call. `capture_forward_trace` starts *after* the mel, so none of that was inside a trace.
+`_mel_from_device_waveform` is the mel with the host upload split out (`upload_waveform`), which
+lets the whole waveform-to-embedding path capture as one trace keyed by sample count.
+
+**The layout of the waveform buffer is the whole story.** Captured naively the warm call got
+*worse* — 17.5 ms against 14.4 — because a `[1, N]` waveform in TILE layout pads its single row
+out to 32, so both the host tilize and the H2D move 32x the real bytes. Measured at N=96256:
+
+| | TILE | ROW_MAJOR |
+|---|--:|--:|
+| `ttnn.from_torch` (host) | 6.66 ms | **0.03 ms** |
+| `copy_host_to_device_tensor` | 4.18 ms | **0.50 ms** |
+
+So the buffer is ROW_MAJOR and `_mel_from_device_waveform` tilizes on device, which inside the
+trace is one op nobody pays per call. The warm call becomes 0.03 + 0.50 + 3.67 (replay, mel and
+forward together) + 1.48 (D2H) = **6.25 ms**, and the demo's speaker-embedding stage goes
+**365 -> 7 ms** because the mel's program creation moved into the capture that was already being
+paid. Byte-identical wav (md5 b76f009d, 68 frames), ECAPA suite 13/13.
+
+| | forward trace only | mel+forward trace |
+|---|--:|--:|
+| warm call | 14.38 ms | **6.25 ms** |
+| demo speaker-embedding stage | 365 ms | **7 ms** |
+| demo ECAPA capture | 1315 ms | 1549 ms |
+| net, one-shot demo | | **-124 ms** |
+
+The demo captures the audio trace and only falls back to `capture_forward_trace` when the device
+mel cannot take the waveform, since capturing both pays the warm pass twice (+536 ms measured).
+
+> **All ECAPA captures must precede the first replay.** Capturing the audio trace *after* the
+> forward trace had been executed returned a stable but wrong embedding (norm 25.80 against
+> 17.32) — no error, no NaN, reproducible. Captured before any replay, in any order relative to
+> the other ECAPA traces, it is exact (relRMS 0.000 %). This is the trace_region overlap the
+> demo's own capture-ordering comment warns about, and it is worth restating because the failure
+> is silent and looks like a numerics bug.
+
+Two things this did *not* fix. The one-shot ECAPA capture is still ~1.5 s, of which the
+warm pass is ~700 ms of program creation over 61 programs — 8 of those are the Res2Net `scale=8`
+channel split emitting one program per offset for identical shapes, and 10 more are
+`_pad_nlc_seq_to_tile`. And the first run after this change pays a one-time on-disk JIT for the
+new matmul shape: 3922 ms, then 704 ms.
 
 Total demo wall time is *not* a way to see any of this: it swings 33-70 s run to run on host work
 outside every timed stage, and the frame count changes with the embedding, so the generation term
