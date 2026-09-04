@@ -96,23 +96,31 @@ FORCE_INLINE noc_traits_t<UnicastEndpoint>::dst_args_type self_l1_dst_args(Noc n
 // the last written word (blocking load + memory clobber) so the copy is processed before the caller
 // publishes / NoC-reads the destination -- the counterpart of the NoC path's completion barrier.
 //
-// TODO(ARCH_QUASAR): this CPU-copy fallback is NOT fully cache-coherent on Quasar. Quasar's data path is
-// Core -> L1 D$ -> L2 -> TL1, and invalidate_l1_cache() is a no-op there (risc_common.h), so:
+// ARCH_QUASAR cache coherency (#51763): this CPU-copy fallback is not cache-coherent on Quasar by default.
+// Quasar's data path is Core -> L1 D$ -> L2 -> TL1, and invalidate_l1_cache() is a no-op there
+// (risc_common.h), so two gaps had to be closed (both fixed below, ARCH_QUASAR && COMPILE_FOR_DM only):
 //   (a) SOURCE read: if the source was just NoC-written into a reused CB, the RISC's cached line can be
-//       stale; a correct read needs invalidate_l2_cache_range(src, bytes) before the memmove.
+//       stale; invalidate_l2_cache_range(src, bytes) before the memmove forces a fresh read.
 //   (b) DEST publish: the CPU stores land in L1 D$/L2, not TL1. The drain below only reads back the dirty
-//       L1D line (a LOCAL ordering barrier) -- unlike WH/BH load_blocking it does NOT publish to TL1, so a
-//       later NoC / other-agent read of the destination can see stale data. A correct publish needs
-//       flush_l2_cache_range(dst, bytes) after the memmove; the copy_async=true path skips even the drain.
-// This is a PRE-EXISTING gap that was previously unreachable on Quasar (this header didn't compile for
-// Quasar DM); it is a fallback path (tt_memmove only calls it on overlapping self-copy or the misaligned
-// fallback), it is off the resnet critical path, and it does not manifest on the emulator (flat memory,
-// no cache hierarchy modeled). Deferred to a follow-up (needs HW validation), tracked in issue #51763;
-// the flush/invalidate primitives + the ARCH_QUASAR&&COMPILE_FOR_DM pattern already exist (see the #50329
-// tilize-padding fix).
+//       L1D line (a LOCAL ordering barrier) -- unlike WH/BH load_blocking it does NOT publish to TL1, and the
+//       copy_async=true path skips even the drain. flush_l2_cache_range(dst, bytes) after the memmove
+//       publishes to TL1 so a later NoC / other-agent read sees the copied data.
+// This was a PRE-EXISTING gap, unreachable until this header started compiling for Quasar DM; it is a
+// fallback path (tt_memmove only calls it on overlapping self-copy or the misaligned fallback), off the
+// resnet critical path, and does not manifest on the emulator (flat memory, no cache hierarchy modeled).
+// The two blocks below mirror the #50329 tilize-padding L2 pattern; WH/BH are unchanged (invalidate_l1_cache
+// + the load_blocking drain).
 template <bool copy_async>
 FORCE_INLINE void copy_via_memmove(const uint32_t dst_l1_addr, const uint32_t src_l1_addr, const uint32_t bytes) {
     invalidate_l1_cache();
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    // (a, #51763) SOURCE coherency: invalidate_l1_cache() is a no-op on Quasar (risc_common.h). If the source
+    // is a NoC-written reused CB, the RISC's cached L1/L2 line can be stale, so invalidate the L2 range to
+    // force the memmove to read the freshly-arrived data (data path Core -> L1 D$ -> L2 -> TL1).
+    if (bytes != 0) {
+        invalidate_l2_cache_range(static_cast<uintptr_t>(src_l1_addr), static_cast<size_t>(bytes));
+    }
+#endif
     // Cast the L1 address (uint32_t) to a pointer through uintptr_t: a bare (void*)(uint32_t) is an
     // int-to-pointer cast that -Werror=int-to-pointer-cast rejects on Quasar (64-bit pointers). uintptr_t
     // is the correct width on every arch, so this is a no-op change for WH/BH.
@@ -125,14 +133,22 @@ FORCE_INLINE void copy_via_memmove(const uint32_t dst_l1_addr, const uint32_t sr
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>((dst_l1_addr + bytes - 1) & ~uint32_t{3});
 #if defined(ARCH_QUASAR)
             // Quasar has no ckernel::load_blocking. This volatile load is a LOCAL ordering barrier only
-            // (reads back the dirty L1D line); it does NOT flush L2->TL1 for cross-agent visibility -- see
-            // the TODO(ARCH_QUASAR) coherency note above.
+            // (reads back the dirty L1D line); the L2->TL1 publish for cross-agent visibility is done by the
+            // flush_l2_cache_range() after this block (see the #51763 coherency note above).
             (void)*drain_ptr;
 #else
             (void)ckernel::load_blocking(drain_ptr);
 #endif
         }
     }
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    // (b, #51763) DEST coherency: the CPU stores land in L1 D$/L2, not TL1; the volatile-load drain above is
+    // only a LOCAL ordering barrier (and the copy_async path skips it entirely). Flush the L2 range so a
+    // later NoC / other-agent read of the destination sees the copied data. Runs on both async and sync paths.
+    if (bytes != 0) {
+        flush_l2_cache_range(static_cast<uintptr_t>(dst_l1_addr), static_cast<size_t>(bytes));
+    }
+#endif
 }
 
 template <bool guaranteed_16B_aligned, bool copy_async, bool use_read_datamover, uint32_t max_transfer_size>
