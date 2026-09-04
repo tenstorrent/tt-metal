@@ -704,11 +704,20 @@ class TtPrefillRuntime:
             # buffer is ones-initialised, so the replay would silently apply a temperature of 1.0 --
             # a wrong softmax scale that still produces plausible output. Fail instead; wiring the
             # scale into the packed record (or deriving it on-device) is follow-up work.
-            assert self._trace_metadata.llama4_scale is None, (
-                "the traced runtime path consumes chunk metadata on-device and cannot refresh the "
-                "llama4 query-scale buffer, which is derived on host from actual_start; run Mistral "
-                "through the host-scalar path until the scale is carried in the metadata record"
-            )
+            #
+            # MISTRAL4_LLAMA4_PERF_UNSAFE=1 opts into replaying with exactly that stale buffer, to
+            # unblock end-to-end traced perf collection (issue #55126). Temperature 1.0 is then
+            # applied: EXACT below 8192 tokens of context, WRONG above it. Perf numbers only -- never
+            # read PCC, logits or generated text from such a run. The default still asserts, so
+            # correctness work fails loudly instead of silently producing plausible wrong output.
+            if self._trace_metadata.llama4_scale is not None:
+                assert os.environ.get("MISTRAL4_LLAMA4_PERF_UNSAFE") == "1", (
+                    "the traced runtime path consumes chunk metadata on-device and cannot refresh the "
+                    "llama4 query-scale buffer, which is derived on host from actual_start; run Mistral "
+                    "through the host-scalar path until the scale is carried in the metadata record, or "
+                    "set MISTRAL4_LLAMA4_PERF_UNSAFE=1 for a PERF-ONLY run (issue #55126)"
+                )
+                logger.warning("PERF-ONLY #55126: llama4 query scale unrefreshed (temp 1.0); WRONG above 8192 ctx")
             self._metadata_from_msg(metadata_msg)
             self._controller.replay()
             ttnn.deallocate(input_tensor)
