@@ -6,16 +6,36 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/endpoints.h"
+#ifdef ENABLE_GLOBAL_CB
+#include "api/remote_circular_buffer.h"
+#endif
 
 // Gathers this core's batch-block rows of width(K)-sharded A into full_in0 (sender-major layout).
+//
+// in1 (weights) arrive one of two ways:
+//   - default: the in1 CB is globally allocated over the L1-resident weight shard, so the
+//     reader only has to declare its tiles available.
+//   - ENABLE_GLOBAL_CB: the weights are pushed into a DRAM-sender GlobalCircularBuffer by the
+//     tensor prefetcher. This receiver's [Bc*K, Nc] slab arrives as num_k_blocks remote pages,
+//     each a whole number of rows (num_k_blocks == 1 is the whole slab in one page). The reader
+//     waits for a page, hands its tiles to compute through the local alias CB, and releases it
+//     only after compute signals (via the sync CB) that it has finished reading -- releasing
+//     earlier would let the prefetcher overwrite weights still in use. This kernel runs only on
+//     the B core range set, so every core is a receiver.
 void kernel_main() {
-    constexpr uint32_t in0_cb_index = get_compile_time_arg_val(0);
-    constexpr uint32_t full_in0_cb_index = get_compile_time_arg_val(1);
-    constexpr uint32_t block_slice_tiles = get_compile_time_arg_val(2);
-    constexpr uint32_t tile_size_bytes = get_compile_time_arg_val(3);
-    constexpr uint32_t num_senders = get_compile_time_arg_val(4);
-    constexpr uint32_t in1_cb_index = get_compile_time_arg_val(5);
-    constexpr uint32_t in1_num_tiles = get_compile_time_arg_val(6);
+    // CB indices come in as named args so op fusion can remap them onto the hardware slots it
+    // pool-allocates across phases (see models/experimental/ops/descriptors/fusion/docs/op_fusion.md).
+    constexpr uint32_t in0_cb_index = get_named_compile_time_arg_val("cb_in0");
+    constexpr uint32_t full_in0_cb_index = get_named_compile_time_arg_val("cb_full_in0");
+    constexpr uint32_t in1_cb_index = get_named_compile_time_arg_val("cb_in1");
+    constexpr uint32_t remote_cb_index = get_named_compile_time_arg_val("cb_in1_remote");
+    constexpr uint32_t sync_cb_index = get_named_compile_time_arg_val("cb_sync");
+
+    constexpr uint32_t block_slice_tiles = get_compile_time_arg_val(0);
+    constexpr uint32_t tile_size_bytes = get_compile_time_arg_val(1);
+    constexpr uint32_t num_senders = get_compile_time_arg_val(2);
+    constexpr uint32_t in1_page_tiles = get_compile_time_arg_val(3);
+    constexpr uint32_t num_k_blocks = get_compile_time_arg_val(4);
 
     const uint32_t b_idx = get_arg_val<uint32_t>(0);
 
@@ -27,8 +47,15 @@ void kernel_main() {
     CircularBuffer full_in0_cb(full_in0_cb_index);
     UnicastEndpoint sender;
 
-    in1_cb.reserve_back(in1_num_tiles);
-    in1_cb.push_back(in1_num_tiles);
+#ifdef ENABLE_GLOBAL_CB
+    // Publish the first page before the gather so the prefetcher's transfer overlaps it.
+    in1_cb.reserve_back(in1_page_tiles);
+    experimental::remote_cb_wait_front(remote_cb_index, 1);
+    in1_cb.push_back(in1_page_tiles);
+#else
+    in1_cb.reserve_back(in1_page_tiles);
+    in1_cb.push_back(in1_page_tiles);
+#endif
     full_in0_cb.reserve_back(num_senders * block_slice_tiles);
 
     // in0 shard is at the same L1 offset on every core.
@@ -46,4 +73,27 @@ void kernel_main() {
     noc.async_read_barrier();
 
     full_in0_cb.push_back(num_senders * block_slice_tiles);
+
+#ifdef ENABLE_GLOBAL_CB
+    CircularBuffer sync_cb(sync_cb_index);
+    // Page p-1's credit is returned only after page p has been published, so the reader runs a
+    // page ahead of the credit return and the remote read pointer lags by one page. That is what
+    // makes the wait below mean "the page I still owe a credit for, plus the new one": it can
+    // never reach past this weight's own pages into a transfer nobody has queued.
+    for (uint32_t page = 1; page < num_k_blocks; ++page) {
+        in1_cb.reserve_back(in1_page_tiles);
+        experimental::remote_cb_wait_front(remote_cb_index, 2);
+        in1_cb.push_back(in1_page_tiles);
+        sync_cb.wait_front(1);
+        sync_cb.pop_front(1);
+        experimental::remote_cb_pop_front(remote_cb_index, 1);
+    }
+    // Compute signals here once it has finished reading every in1 tile of the last page.
+    sync_cb.wait_front(1);
+    sync_cb.pop_front(1);
+    experimental::remote_cb_pop_front(remote_cb_index, 1);
+    // Persist the remote read pointer so the next invocation resumes at the right ring offset.
+    experimental::update_remote_cb_config_in_l1(remote_cb_index);
+    noc.async_atomic_barrier();
+#endif
 }
