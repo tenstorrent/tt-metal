@@ -771,11 +771,11 @@ are the shipped arm's.
 
 Branch `ttmodelmanager/glm47-flash-probe`. Not pushed.
 
-* **`c35a0aa2bf0a84b2cfba2656dda6afe2b74578d6`** -- the whole stage as one commit: implementation
+* **`3fdafd7b4da5598b2da4e603864393f1c054b957`** -- the whole stage as one commit: implementation
   (`tt/optimized_decoder.py`, `tt/model.py`, `tt/generator.py`,
-  `tt/generator_vllm.py`), 10 new adapter tests, all three serving arms, every
-  probe script and artifact, this report, and all four `$stage-review`
-  responses (OV-009, OV-011, OV-012, OV-013). It also preserves the
+  `tt/generator_vllm.py`), 13 new adapter tests, all three serving arms, every
+  probe script and artifact, this report, and all five `$stage-review`
+  responses (OV-009, OV-011, OV-012, OV-013, OV-014). It also preserves the
   vLLM-integration stage's runner artifacts at
   `doc/vllm_integration/readiness_vllm_stage09/`, repoints that stage's report
   at them, and corrects that report's "~22 ms/token of vLLM-path overhead"
