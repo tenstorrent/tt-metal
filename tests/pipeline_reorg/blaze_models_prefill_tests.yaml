@@ -627,7 +627,12 @@
   test_group: module
   skus:
     bh_sc1_high_power:
-      timeout: 58
+      # 44, down from the 58 #51968 set: run 33743294300 / job 100612454398 measured this job end to end
+      # at 13.2 min (total_test_time 794.6 s), so 58 was 4.4x the measured wall time and 44 is still 3.3x.
+      # Trimmed to fit the traced twin below into a models/bh_sc1_high_power budget that main leaves with
+      # zero headroom (166 used of 166). If a tp_sharded or cold-cache run ever needs more than 44, raise
+      # this back and take the room from the traced twin instead -- that one measured 6.5 min.
+      timeout: 44
   owner_id: U07N3CUUN05  # Iva Potkonjak
   team: models
   sp_config: sc1
@@ -654,7 +659,11 @@
   test_group: module
   skus:
     bh_sc1_high_power:
-      timeout: 33
+      # 15, not the untraced twin's 58: run 33743294300 / job 100612454484 measured this job end to end
+      # at 6.5 min (total_test_time 389.8 s), so this is ~2.3x the measured wall time. Replay is where the
+      # saving is -- 0.64-0.70 s/chunk traced vs ~1.68 s/chunk untraced -- and weight load dominates the
+      # rest. bh_sc1_high_power is a contended budget; do not pad this without a measurement.
+      timeout: 15
   owner_id: U07N3CUUN05  # Iva Potkonjak
   team: models
   sp_config: sc1
