@@ -790,6 +790,24 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_RelayDFB_HostRelationshipValidation
     }
 
     {
+        // An entry size the 1024 B ring does not divide: 384 B leaves a 256 B trailing gap, so the
+        // relay depth is the 2 whole entries the ring holds. Depth 3 (rounding the gap up into an
+        // entry) is what gets rejected.
+        Program program = CreateProgram();
+        AttachPrefetcherPipe(program, pipe, pipe.all_cores(), 384);
+        experimental::dfb::DataflowBufferConfig ceil_depth{.entry_size = 384, .num_entries = 3};
+        EXPECT_THROW(
+            experimental::CreatePrefetcherPipeRelayDataflowBuffer(program, receiver_cores, ceil_depth, 0),
+            std::exception);
+        experimental::dfb::DataflowBufferConfig floor_depth{.entry_size = 384, .num_entries = 2};
+        const uint32_t relay_host_id =
+            experimental::CreatePrefetcherPipeRelayDataflowBuffer(program, receiver_cores, floor_depth, 0);
+        const auto* relay_dfb = program.impl().get_dataflow_buffer(relay_host_id).get();
+        ASSERT_NE(relay_dfb, nullptr);
+        EXPECT_EQ(relay_dfb->borrowed_addr_, pipe.buffer_address());
+    }
+
+    {
         Program program = CreateProgram();
         experimental::dfb::DataflowBufferConfig config{.entry_size = 256, .num_entries = 4};
         EXPECT_THROW(
@@ -825,8 +843,9 @@ static uint32_t run_prefetcher_pipe_relay_cross_program(
     const CoreRangeSet sender_cores = CoreRangeSet(CoreRange(sender_core));
     const CoreRangeSet receiver_cores = pipe.receiver_cores();
     const uint32_t recv_entry_size = receiver_entry_size_override.value_or(entry_size);
+    // Floor: an entry size the ring does not divide leaves a trailing gap that holds no entry, and
+    // the relay borrows only the whole entries.
     const uint32_t recv_num_entries = pipe.ring_size() / recv_entry_size;
-    TT_FATAL(pipe.ring_size() % recv_entry_size == 0, "receiver entry size must divide ring");
 
     // --- Program A: sender push ---
     {
@@ -1016,6 +1035,28 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_RelayDFB_CrossProgram_DifferentEntr
     EXPECT_EQ(
         run_prefetcher_pipe_relay_cross_program(
             mesh_device, pipe, e1, ring_depth_e1, total_entries_e1, /*batch_size=*/1, e2),
+        1u);
+}
+
+TEST_F(PrefetcherPipeFixture, PrefetcherPipe_RelayDFB_EntrySizeNotDividingRing) {
+    // A relay over an entry size the ring does not divide: 384 B entries in a 1024 B ring leave a
+    // 768 B usable limit and a 256 B trailing gap, so the relay borrows the 2 whole entries the
+    // ring holds. The second push reaches the usable limit and credits the gap along with its
+    // payload, which is what both the receiver and its relay have to skip at the wrap.
+    auto mesh_device = devices_[0];
+    constexpr uint32_t entry_size = 384;
+    constexpr uint32_t ring_bytes = 1024;
+    constexpr uint32_t whole_entries = ring_bytes / entry_size;  // 2
+    const std::pair<CoreCoord, CoreRangeSet> mapping = {CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0}, {1, 0}))};
+    auto pipe = experimental::CreatePrefetcherPipe(mesh_device.get(), mapping.first, mapping.second, ring_bytes);
+    EXPECT_EQ(
+        run_prefetcher_pipe_relay_cross_program(
+            mesh_device,
+            pipe,
+            entry_size,
+            /*ring_depth=*/whole_entries,
+            /*total_entries=*/whole_entries,
+            /*batch_size=*/1),
         1u);
 }
 

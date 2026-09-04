@@ -1471,15 +1471,17 @@ void detail::ProgramImpl::register_prefetcher_pipe_relay_dfb(
     auto relay_dfb = get_dataflow_buffer(relay_dfb_host_id);
     TT_FATAL(relay_dfb != nullptr, "Relay DFB host id {} does not exist", relay_dfb_host_id);
     TT_FATAL(relay_dfb->borrows_memory(), "PrefetcherPipe relay DFB {} must use borrowed memory", relay_dfb_host_id);
-    TT_FATAL(
-        pipe.ring_size() % relay_dfb->config.entry_size == 0,
-        "PrefetcherPipe relay entry size {} must divide PrefetcherPipe ring size {}",
-        relay_dfb->config.entry_size,
-        pipe.ring_size());
+    // Floor, not exact division: an entry size the ring does not divide leaves a trailing gap that
+    // holds no entry, and the receiver stops at the same floored limit
+    // (align_local_dfb_to_prefetcher_pipe_checkpoint), so the relay must borrow exactly the whole
+    // entries the ring holds and leave that gap alone.
     TT_FATAL(
         relay_dfb->config.num_entries == pipe.ring_size() / relay_dfb->config.entry_size,
-        "PrefetcherPipe relay depth {} must equal ring_size/entry_size ({})",
+        "PrefetcherPipe relay depth {} must equal the whole entries the ring holds, ring_size / entry_size = {} / {} "
+        "= {}",
         relay_dfb->config.num_entries,
+        pipe.ring_size(),
+        relay_dfb->config.entry_size,
         pipe.ring_size() / relay_dfb->config.entry_size);
     TT_FATAL(
         relay_dfb->core_ranges == receiver_cores.merge_ranges(),

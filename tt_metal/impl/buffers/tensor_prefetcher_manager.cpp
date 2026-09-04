@@ -81,24 +81,56 @@ enum class LayoutMode : uint32_t {
     ReceiverContiguous = 1,
 };
 
+// How to resolve a weight whose two candidate layouts describe the same bytes: one shard per bank,
+// feeding that bank's single receiver. There K-row-major and receiver-contiguous read identically
+// (n_per_recv == n_per_bank, one slab at offset 0), so the bytes cannot settle it.
+//
+// What still differs is what each sizer accepts. K-row-major *ceils* K into block_count blocks, so
+// it takes a K the block count does not divide (the short last block over-reads inside the bank,
+// which is that receiver's own data); receiver-contiguous requires exact division, because in
+// general the over-read would cross into the next receiver's slab. K-row-major also gets a whole
+// stage half per K-row where receiver-contiguous gets a third, its loop keeping 3 slots rather
+// than 2. In exchange, receiver-contiguous is the loop with dynamic multi-block batching.
+//
+// So a GlobalCircularBuffer keeps the K-row-major reading it has always had, and PrefetcherPipe
+// delivery -- which consumes receiver-contiguous only -- gets the other. (K-row-major's third fit
+// rung, chunking a too-wide K-row across receivers, is not among the differences: its M is capped
+// at num_receivers, so at one receiver per bank neither layout can chunk N.)
+enum class LayoutTieBreak : uint8_t {
+    PreferKRowMajor,
+    PreferReceiverContiguous,
+};
+
 // Detection keys on how the weight was allocated, NOT the shard count: receiver-contiguous
 // weights are created with an NdShardSpec (num_shards == ring_size), K-row-major weights use a
 // legacy (WIDTH_SHARDED) shard spec. Counting shards is ambiguous when total_receivers ==
 // num_banks (one receiver per bank, num_shards == num_banks == total_receivers): the count tie
 // would route a recv-contig tensor down the K-row path, where compute_tensor_layout_krow_major
 // calls shard_spec() and TT_FATALs because the buffer only has an NdShardSpec.
-LayoutMode detect_layout_mode(const MeshTensor& t, const Buffer& buf, uint32_t total_receivers) {
+LayoutMode detect_layout_mode(
+    const MeshTensor& t, const Buffer& buf, uint32_t total_receivers, LayoutTieBreak tie_break) {
+    const auto& bds_opt = buf.buffer_distribution_spec();
+    const bool one_shard_per_receiver = t.nd_shard_spec().has_value() && bds_opt.has_value() &&
+                                        static_cast<uint32_t>(bds_opt->num_shards()) == total_receivers;
+
     // Legacy ShardSpec path: one wide shard per bank by construction. Some WIDTH_SHARDED
     // tensors also carry an NdShardSpec-like descriptor through BDS, so prefer the explicit
     // legacy shard spec before classifying a tensor as receiver-contiguous.
+    //
+    // The exception is the tie above: with one receiver per bank, a bank's whole shard IS that
+    // receiver's slab, and ttnn hands back a legacy ShardSpec for such an NdShardSpec anyway
+    // (num_shards == num_dram_banks canonicalizes to WIDTH_SHARDED), so keying on the spec kind
+    // cannot separate the two layouts here -- and does not need to, since they name the same bytes.
     if (buf.has_shard_spec()) {
+        if (tie_break == LayoutTieBreak::PreferReceiverContiguous && one_shard_per_receiver) {
+            return LayoutMode::ReceiverContiguous;
+        }
         return LayoutMode::KRowMajor;
     }
 
     if (t.nd_shard_spec().has_value()) {
-        const auto& bds_opt = buf.buffer_distribution_spec();
         TT_FATAL(
-            bds_opt.has_value() && static_cast<uint32_t>(bds_opt->num_shards()) == total_receivers,
+            one_shard_per_receiver,
             "Receiver-contiguous Tensor prefetcher weight must have num_shards == total_receivers "
             "(ring_size = {}); got {} shards.",
             total_receivers,
@@ -376,9 +408,10 @@ TensorPrefetcherTensorLayout compute_tensor_layout(
     uint32_t total_receivers,
     uint32_t ring_half,
     uint32_t stage_third,
+    LayoutTieBreak tie_break,
     ContextId context_id) {
     const auto* ref_buffer = t.mesh_buffer().get_reference_buffer();
-    const LayoutMode mode = detect_layout_mode(t, *ref_buffer, total_receivers);
+    const LayoutMode mode = detect_layout_mode(t, *ref_buffer, total_receivers, tie_break);
     if (mode == LayoutMode::KRowMajor) {
         // KRowMajor is single-sender-per-bank only, so receivers_per_bank is the bank's
         // full receiver count and the bank receiver counts must be uniform. (Receiver-
@@ -395,40 +428,24 @@ TensorPrefetcherTensorLayout compute_tensor_layout(
     return compute_tensor_layout_recv_contig(t, block_count, stage_third, context_id);
 }
 
-// Preconditions of the PrefetcherPipe delivery path: receiver-contiguous, batched, and a block
-// size the receiver ring is a whole multiple of. They are properties of the page stream the sender
-// produces, so they are checked against the computed layout rather than against the caller's spec
-// -- which is why this runs here, after compute_tensor_layout, rather than in queue().
-void validate_prefetcher_pipe_delivery(
-    const TensorPrefetcherTensorLayout& layout,
-    const experimental::TensorPrefetcherInput& input,
-    uint32_t per_recv_capacity_bytes,
-    uint32_t tensor_idx) {
+// The one precondition of the PrefetcherPipe delivery path: every receiver owns a private ring, so
+// the sender must have a private stream of whole blocks to put in it, which is the
+// receiver-contiguous layout. It is a property of the page stream the sender produces, so it is
+// checked against the computed layout rather than against the caller's spec -- which is why this
+// runs here, after compute_tensor_layout, rather than in queue().
+//
+// Neither the rotation nor the ring's block capacity is checked: streaming credits every receiver
+// the same amount per round exactly as batched delivery does (it varies only which DRAM block
+// feeds a receiver), and a ring that holds a single block only costs a consumer its lookahead --
+// the generic one-whole-page floor in serialize_request_pages is what keeps the sender's poll from
+// spinning forever. A block size the ring does not divide is fine too: the trailing remainder
+// becomes a gap that holds no block, and both endpoints credit it at the wrap.
+void validate_prefetcher_pipe_delivery(const TensorPrefetcherTensorLayout& layout, uint32_t tensor_idx) {
     TT_FATAL(
         layout.layout_mode == static_cast<uint32_t>(LayoutMode::ReceiverContiguous),
         "Tensor prefetcher: PrefetcherPipe delivery supports receiver-contiguous tensors only, but input tensor {} "
         "resolved to the K-row-major layout. Shard it so each receiver owns a disjoint contiguous shard.",
         tensor_idx);
-    TT_FATAL(
-        input.rotation.empty(),
-        "Tensor prefetcher: PrefetcherPipe delivery does not support the streaming rotation yet; input tensor {} was "
-        "queued with a {}-entry rotation table.",
-        tensor_idx,
-        input.rotation.size());
-    // A block size the ring does not divide is fine -- the trailing remainder becomes a gap that
-    // holds no block, and both endpoints credit it at the wrap. What the ring must hold is two
-    // whole blocks: a consumer streams through a two-block window (publish the current one, ack the
-    // previous one), so a ring with room for one deadlocks it.
-    TT_FATAL(
-        per_recv_capacity_bytes / layout.page_bytes_per_recv >= 2,
-        "Tensor prefetcher: input tensor {} pushes {} B per receiver per block, but the PrefetcherPipes' "
-        "per-receiver ring holds only {} B -- room for {} whole block(s). Consumers keep one block of lookahead, so "
-        "the ring needs room for at least two ({} B).",
-        tensor_idx,
-        layout.page_bytes_per_recv,
-        per_recv_capacity_bytes,
-        per_recv_capacity_bytes / layout.page_bytes_per_recv,
-        2 * layout.page_bytes_per_recv);
 }
 
 }  // namespace
@@ -930,6 +947,8 @@ std::vector<std::vector<std::vector<uint8_t>>> TensorPrefetcherManager::serializ
     };
     std::vector<PagePlan> plans(1);
 
+    const bool pipe_delivery = target.transport == TENSOR_PREFETCHER_TRANSPORT_PREFETCHER_PIPE;
+
     for (size_t tensor_idx = 0; tensor_idx < data_tensors.size(); ++tensor_idx) {
         const auto& input = data_tensors[tensor_idx];
         const bool streaming = !input.rotation.empty();
@@ -969,6 +988,7 @@ std::vector<std::vector<std::vector<uint8_t>>> TensorPrefetcherManager::serializ
             total_receivers,
             ring_half_,
             stage_third_,
+            pipe_delivery ? LayoutTieBreak::PreferReceiverContiguous : LayoutTieBreak::PreferKRowMajor,
             context_id);
         // Streaming is a per-tensor delivery attribute carried in the layout flag; the appended
         // rotation participates in dedup (slot_equal), so tensors that differ only in rotation get
@@ -980,8 +1000,8 @@ std::vector<std::vector<std::vector<uint8_t>>> TensorPrefetcherManager::serializ
             "the supplied target uses a split or incompatible sender topology.",
             tensor_idx);
 
-        if (target.transport == TENSOR_PREFETCHER_TRANSPORT_PREFETCHER_PIPE) {
-            validate_prefetcher_pipe_delivery(layout, input, target.per_recv_capacity_bytes, tensor_idx);
+        if (pipe_delivery) {
+            validate_prefetcher_pipe_delivery(layout, tensor_idx);
         }
 
         // The sender's free-space poll counts whole per-receiver pages; if the target's per-receiver
