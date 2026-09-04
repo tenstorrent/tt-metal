@@ -188,7 +188,8 @@ silently broken model, never a crash.
 
 ## Definition of done (recipe §8)
 
-- [x] Every module has a `*_vs_ref` test at or above its PCC threshold — 34 host + 43 device tests
+- [x] Every module has a `*_vs_ref` test at or above its PCC threshold — **36 host + 49 device tests
+      plus the two-process serving gate**, all green from a single clean `./run_bringup.sh`
 - [x] Full model runs at the target mesh with real weights; per-layer KV PCC recorded above
 - [x] Adapter implements all four abstract methods, registered in `ADAPTER_PATHS`, manifest exists
 - [x] Runtime satisfies `ADDING_A_PREFILL_MODEL.md` §2 and asserts on out-of-contract chunk ranges

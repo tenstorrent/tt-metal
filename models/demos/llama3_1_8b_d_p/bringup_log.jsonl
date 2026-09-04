@@ -45,3 +45,4 @@
 {"t":"2026-09-04T22:14Z","ev":"judgment","stage":"P3","kind":"recipe_gap","issue":"producer waited for 244=61x4 layer acks while the 32-layer model sent 128: it ignores PREFILL_MANIFEST and reads NUM_LAYERS from env","fix":"export PREFILL_NUM_LAYERS=32 in the serving script so both processes agree, not just the manifest","failed":["common/prefill/runners/prefill_producer (layer ack count)"]}
 {"t":"2026-09-04T22:15Z","ev":"verify","stage":"P3","result":"pass","failed":[]}
 {"t":"2026-09-04T22:16Z","ev":"judgment","stage":"P3","kind":"spec_gap","issue":"at the spec's own numerics (bfp8 attn + bfp4 mlp) end-to-end per-layer KV is K=0.9938 V=0.9677, under acceptance.per_layer_kv 0.99","fix":"recorded both dtype regimes in README; the e2e_chunked 0.93 gate passes, per_layer_kv 0.99 needs bf16 weights","failed":[]}
+{"t":"2026-09-04T22:38Z","ev":"verify","stage":"P4","result":"pass","failed":[]}
