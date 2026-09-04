@@ -7,6 +7,7 @@
 #include <cstdint>
 #include "llk_math_binary_api.h"  // legacy CB-id API + unified llk_math_eltwise_binary_{init_,}impl
 #include "api/compute/experimental/2_0/internal/llk_descriptor.h"
+#include "sanitizer/api.h"
 
 /*************************************************************************
  * LLK ELTWISE BINARY -- LLKOperand (id-free, compile-time NTTP) overloads
@@ -25,6 +26,7 @@ template <
     MathFidelity math_fidelity = MathFidelity::LoFi,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
 inline void llk_math_eltwise_binary_init(const std::uint32_t acc_to_dest = 0) {
+    SAN_HOOK(unsupported());
     llk_math_eltwise_binary_init_impl<eltwise_binary_type, src_b_bcast_type, math_fidelity, binary_reuse_dest>(
         DESC_A.shape, acc_to_dest);
 }
@@ -37,6 +39,7 @@ template <
     MathFidelity math_fidelity,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
 inline void llk_math_eltwise_binary(std::uint32_t dst_index, const bool clear_fp32_dst_acc = true) {
+    SAN_HOOK(unsupported());
     llk_math_eltwise_binary_impl<
         eltwise_binary_type,
         src_b_bcast_type,

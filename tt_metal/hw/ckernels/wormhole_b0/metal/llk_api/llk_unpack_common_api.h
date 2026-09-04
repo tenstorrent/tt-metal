@@ -276,6 +276,7 @@ inline void llk_unpack_reconfig_data_format(
  * @param srca_new_operand New operand id whose tile shape to program srcA for.
  */
 inline void llk_unpack_reconfig_tile_shape_srca(const std::uint32_t srca_new_operand) {
+    SAN_HOOK(unsupported());
     const std::uint32_t srca_operand_id = get_operand_id(srca_new_operand);
     const std::uint32_t num_faces = get_operand_num_faces(srca_operand_id);
     const std::uint32_t face_r_dim = get_operand_face_r_dim(srca_operand_id);
@@ -293,6 +294,7 @@ inline void llk_unpack_reconfig_tile_shape_srca(const std::uint32_t srca_new_ope
  */
 inline void llk_unpack_reconfig_tile_shape_srca(
     const std::uint32_t srca_old_operand, const std::uint32_t srca_new_operand) {
+    SAN_HOOK(unsupported());
     const std::uint32_t old_srca_operand_id = get_operand_id(srca_old_operand);
     const std::uint32_t new_srca_operand_id = get_operand_id(srca_new_operand);
 
@@ -311,6 +313,7 @@ inline void llk_unpack_reconfig_tile_shape_srca(
  * @param srcb_new_operand New operand id whose tile shape to program srcB for.
  */
 inline void llk_unpack_reconfig_tile_shape_srcb(const std::uint32_t srcb_new_operand) {
+    SAN_HOOK(unsupported());
     const std::uint32_t srcb_operand_id = get_operand_id(srcb_new_operand);
     const std::uint32_t num_faces = get_operand_num_faces(srcb_operand_id);
     const std::uint32_t face_r_dim = get_operand_face_r_dim(srcb_operand_id);
@@ -328,6 +331,7 @@ inline void llk_unpack_reconfig_tile_shape_srcb(const std::uint32_t srcb_new_ope
  */
 inline void llk_unpack_reconfig_tile_shape_srcb(
     const std::uint32_t srcb_old_operand, const std::uint32_t srcb_new_operand) {
+    SAN_HOOK(unsupported());
     const std::uint32_t old_srcb_operand_id = get_operand_id(srcb_old_operand);
     const std::uint32_t new_srcb_operand_id = get_operand_id(srcb_new_operand);
 
@@ -341,4 +345,7 @@ inline void llk_unpack_reconfig_tile_shape_srcb(
 /**
  * Mark srcB as holding dummy-valid data so the math thread can proceed without a real srcB unpack.
  */
-inline void llk_unpack_set_srcb_dummy_valid() { _llk_unpack_set_srcb_dummy_valid_(); }
+inline void llk_unpack_set_srcb_dummy_valid() {
+    SAN_HOOK(unsupported());
+    _llk_unpack_set_srcb_dummy_valid_();
+}

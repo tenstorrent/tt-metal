@@ -5,6 +5,7 @@
 #pragma once
 #include "llk_pack_common_api.h"
 #include "llk_pack_rows.h"
+#include "sanitizer/api.h"
 
 /*************************************************************************
  * LLK PACK ROWS
@@ -22,7 +23,10 @@
  * This function prepares the packer hardware to pack a specified number of rows
  * from the destination register to L1 memory in row-major format.
  */
-inline void llk_pack_rows_init(const std::uint32_t num_rows) { _llk_pack_rows_init_(num_rows); }
+inline void llk_pack_rows_init(const std::uint32_t num_rows) {
+    SAN_HOOK(unsupported());
+    _llk_pack_rows_init_(num_rows);
+}
 
 /**
  * @brief Pack rows from a destination register to L1 memory.
@@ -36,6 +40,7 @@ inline void llk_pack_rows_init(const std::uint32_t num_rows) { _llk_pack_rows_in
  */
 inline void llk_pack_rows(
     const std::uint32_t dst_index, const std::uint32_t output, const std::uint32_t output_index = 0) {
+    SAN_HOOK(unsupported());
     const std::uint8_t output_id = get_output_id(output);
     const std::uint32_t pack_addr = get_output_tile_address<true, PackMode::Default>(output_id, output_index);
     LLK_ASSERT(
@@ -53,4 +58,7 @@ inline void llk_pack_rows(
  * Restores packer addrmods and counters to a safe default state.
  * Should be called after the pack rows operation is complete.
  */
-inline void llk_pack_rows_uninit() { _llk_pack_rows_uninit_(); }
+inline void llk_pack_rows_uninit() {
+    SAN_HOOK(unsupported());
+    _llk_pack_rows_uninit_();
+}
