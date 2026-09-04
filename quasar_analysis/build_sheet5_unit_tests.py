@@ -851,15 +851,29 @@ def verify():
 
 # --------------------------------------------------------------------------------------------------
 def main():
+    global XLSX
+
     ap = argparse.ArgumentParser()
     ap.add_argument("--check", action="store_true", help="parse and report, write nothing")
     ap.add_argument("--verify", action="store_true", help="re-read the written workbook and check it")
+    ap.add_argument(
+        "--xlsx",
+        metavar="PATH",
+        help="the workbook to append sheet 5 to (default: %s). Sheet 1 is read from this same file, so "
+        "pointing at another copy derives the sheet from that copy's own sheet 1." % os.path.relpath(XLSX, REPO),
+    )
     ap.add_argument(
         "--tsv",
         metavar="PATH",
         help="also write the sheet as TSV for import as a Google Sheets tab (File > Import > Upload)",
     )
     args = ap.parse_args()
+
+    if args.xlsx:
+        XLSX = os.path.abspath(args.xlsx)
+        if not os.path.isfile(XLSX):
+            raise SystemExit("no such workbook: %s" % XLSX)
+        print("workbook: %s" % XLSX)
 
     if args.verify:
         verify()
