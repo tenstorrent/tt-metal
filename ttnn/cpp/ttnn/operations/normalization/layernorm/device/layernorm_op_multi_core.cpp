@@ -67,6 +67,10 @@ constexpr bool uses_centred_values_buffer(bool rms_norm, bool fuse_pre_add, bool
     return !rms_norm || fuse_pre_add || large_tensor;
 }
 
+// Blackhole measurements show that the affine multicast rendezvous is amortised at 20 active
+// cores for the fused pre-add replay path.
+constexpr std::uint32_t kLayerNormAffineMcastMinCores = 20;
+
 // Kernel identities within the ProgramSpec.
 const m2::KernelSpecName READER{"reader"};
 const m2::KernelSpecName READER_MCAST_RECEIVER{"reader_mcast_receiver"};
@@ -384,8 +388,8 @@ LayerNormInterleavedPlan LayerNormMultiCoreProgramFactory::select_plan(
         }
     }
     const bool affine_mcast_core_set_safe = all_cores.bounding_box().size() == num_cores;
-    plan.affine_mcast =
-        plan.fused_pre_add_replay && num_cores >= 20 && num_tile_rows % num_cores == 0 && affine_mcast_core_set_safe;
+    plan.affine_mcast = plan.fused_pre_add_replay && num_cores >= kLayerNormAffineMcastMinCores &&
+                        num_tile_rows % num_cores == 0 && affine_mcast_core_set_safe;
 
     if (plan.use_welford && !rms_norm && !plan.large_tensor) {
         const std::uint32_t read_ahead_input = residual.has_value() ? 2 * plan.width_block_tiles : 3 * plan.input_tiles;
