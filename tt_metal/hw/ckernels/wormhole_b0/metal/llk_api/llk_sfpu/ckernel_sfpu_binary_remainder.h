@@ -106,13 +106,14 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(
 
     // Compute correction: r / b in float32
     sfpi::vFloat correction_f = r_f * inv_b_f;
+    // Fill the multiply's dependency slot with the independent high divisor chunk.
+    sfpi::vFloat b2 = sfpi::convert<sfpi::vFloat>(b >> 22, sfpi::RoundMode::Nearest);
     auto correction = sfpi::convert<sfpi::vUInt16>(correction_f, sfpi::RoundMode::Nearest);
     correction_f = sfpi::convert<sfpi::vFloat>(correction, sfpi::RoundMode::Nearest);
 
     // Recompute chunks from the retained divisor magnitude.
     b0 = sfpi::convert<sfpi::vFloat>(sfpi::vMag((b << 21) >> 21), sfpi::RoundMode::Nearest);
     b1 = sfpi::convert<sfpi::vFloat>(sfpi::vMag((b << 10) >> 21), sfpi::RoundMode::Nearest);
-    sfpi::vFloat b2 = sfpi::convert<sfpi::vFloat>(b >> 22, sfpi::RoundMode::Nearest);
 
     // tmp = correction * (b2<<22 + b1<<11 + b0)
     // Issue the independent products before consuming them in the bias additions.
@@ -137,8 +138,10 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(
     r -= tmp;
 
     // Final adjustment. The corrected remainder cannot be INT_MIN.
+    // Reuse the subtraction for both the comparison and the adjusted result.
+    sfpi::vInt r_minus_b = r - b;
     v_if(r < 0) { r += b; }
-    v_elseif(r >= b) { r -= b; }
+    v_elseif(r_minus_b >= 0) { r = r_minus_b; }
     v_endif;
 
     return r;
