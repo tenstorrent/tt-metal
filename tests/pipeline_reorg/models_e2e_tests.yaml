@@ -478,7 +478,7 @@
     bh_quietbox_2:
       timeout: 45
       tier: 1
-      release_ready: false
+      release_ready: true
   owner_id: U08HL8X1ECD # Aniruddha Tupe
   team: models
 
@@ -700,7 +700,7 @@
     bh_quietbox_2:
       timeout: 22
       tier: 1
-      release_ready: false
+      release_ready: true
   owner_id: U088413NP0Q # Ashai Reddy
   team: models
 
@@ -929,7 +929,7 @@
     bh_quietbox_2:
       timeout: 20
       tier: 1
-      release_ready: false
+      release_ready: true
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
 
