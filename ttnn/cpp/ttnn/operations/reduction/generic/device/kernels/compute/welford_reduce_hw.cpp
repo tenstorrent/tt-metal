@@ -149,6 +149,12 @@ void kernel_main() {
                 // Collapse the 32 equal-count column statistics into one stable
                 // leaf on SFPU. The writer then merges one record per input tile
                 // instead of executing soft-float arithmetic for every column.
+                // Centre on column zero before summing: even a constant finite
+                // input can overflow a sum of 32 absolute means.
+                copy_dest_values_init();
+                copy_dest_values<DataFormat::Float32>(mean_dst, input_dst);
+                sfpu_bcast_col_init();
+                sfpu_sub_bcast_col(mean_dst, input_dst);
                 copy_dest_values_init();
                 copy_dest_values<DataFormat::Float32>(mean_dst, retained_input_dst);
 
@@ -160,6 +166,7 @@ void kernel_main() {
 
                 sfpu_bcast_col_init();
                 sfpu_sub_bcast_col(mean_dst, retained_input_dst);
+                sfpu_add_bcast_col(retained_input_dst, input_dst);
                 square_tile_init();
                 square_tile(mean_dst);
                 add_binary_tile_init();

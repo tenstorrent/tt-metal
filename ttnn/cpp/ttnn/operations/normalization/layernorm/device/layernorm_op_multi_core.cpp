@@ -569,13 +569,14 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
                                      !input_is_row_major && in_data_format == tt::DataFormat::Float32 &&
                                      out_data_format == tt::DataFormat::Float32 &&
                                      !operation_attributes.fused_activation.has_value();
-    if (use_welford) {
+    const bool large_tensor_needed = selected_plan.large_tensor;
+    const bool uses_reciprocal_lut = use_welford && large_tensor_needed;
+    if (uses_reciprocal_lut) {
         TT_FATAL(tensor_args.recip_tensor.has_value(), "Reciprocal tensor not provided for Welford layernorm");
         recip_tensor = tensor_args.recip_tensor;
         reciprocal_buffer_size_bytes = recip_tensor->buffer()->aligned_size_per_bank();
     }
 
-    const bool large_tensor_needed = selected_plan.large_tensor;
     const bool compact_fp32_finalizer = selected_plan.compact_fp32_finalizer;
     const bool compact_fp32_pre_add = compact_fp32_finalizer && b.has_value();
     TT_FATAL(
@@ -751,8 +752,8 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
         add_dfb(INB, in1_t, inb_single_tile_size, inb_data_format);
     }
 
-    // Reciprocal LUT, borrowed from the caller-supplied reciprocal tensor rather than allocated.
-    if (use_welford) {
+    // Only the large Welford kernel consumes a caller-supplied reciprocal LUT.
+    if (uses_reciprocal_lut) {
         spec.dataflow_buffers.push_back(m2::DataflowBufferSpec{
             .unique_id = RECIPROCALS,
             .entry_size = reciprocal_buffer_size_bytes,
@@ -840,7 +841,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     if (beta.has_value()) {
         spec.tensor_parameters.push_back(m2::TensorParameter{.unique_id = BETA_T, .spec = beta.value().tensor_spec()});
     }
-    if (use_welford) {
+    if (uses_reciprocal_lut) {
         spec.tensor_parameters.push_back(
             m2::TensorParameter{.unique_id = RECIP, .spec = recip_tensor.value().tensor_spec()});
     }
@@ -1140,7 +1141,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     if (!rms_norm || fuse_pre_add || large_tensor_needed) {
         bind_self_loop(compute, XMM, "xmm");
     }
-    if (use_welford) {
+    if (uses_reciprocal_lut) {
         bind_self_loop(compute, RECIPROCALS, "reciprocals");
     }
     if (large_tensor_needed && !use_welford) {
@@ -1371,7 +1372,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     if (beta.has_value()) {
         run_args.tensor_args.emplace(BETA_T, beta.value().mesh_tensor());
     }
-    if (use_welford) {
+    if (uses_reciprocal_lut) {
         run_args.tensor_args.emplace(RECIP, recip_tensor.value().mesh_tensor());
     }
 

@@ -94,19 +94,47 @@ def create_recip_tensor(device, w, use_welford):
 
 
 @run_for_wormhole_b0_or_blackhole()
-def test_layer_norm_welford_requires_reciprocal_tensor(device, expect_error):
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
+@pytest.mark.parametrize("provide_reciprocal", [False, True])
+def test_layer_norm_compact_optional_reciprocal_tensor(device, dtype, provide_reciprocal):
     torch.manual_seed(17)
     h, w = 32, 64
-    input_tensor = ttnn.from_torch(torch.randn((h, w), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-    weight = ttnn.from_torch(torch.randn((w,), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-    bias = ttnn.from_torch(torch.randn((w,), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    torch_input = torch.randn((h, w), dtype=dtype)
+    input_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+    config = ttnn.init_device_compute_kernel_config(
+        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True
+    )
+    output = ttnn.layer_norm(
+        input_tensor,
+        program_config=ttnn.LayerNormDefaultProgramConfig(use_welford=True),
+        compute_kernel_config=config,
+        recip_tensor=create_recip_tensor(device, w, provide_reciprocal),
+    )
+    reference = torch.nn.functional.layer_norm(torch_input.to(torch.float64), [w])
+    assert_output_accuracy(reference, ttnn.to_torch(output), use_welford=True)
+
+
+@run_for_wormhole_b0_or_blackhole()
+def test_layer_norm_streaming_welford_requires_reciprocal_tensor(device, expect_error):
+    torch.manual_seed(17)
+    h, w = 32, 64
+    input_tensor = ttnn.from_torch(torch.randn((h, w), dtype=torch.float32), layout=ttnn.TILE_LAYOUT, device=device)
+    weight = ttnn.from_torch(torch.randn((w,), dtype=torch.float32), layout=ttnn.TILE_LAYOUT, device=device)
+    bias = ttnn.from_torch(torch.randn((w,), dtype=torch.float32), layout=ttnn.TILE_LAYOUT, device=device)
+    # FP32 residual with tiled affine parameters selects the large kernel,
+    # irrespective of whether the small row would otherwise fit in L1.
+    config = ttnn.init_device_compute_kernel_config(
+        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True
+    )
 
     with expect_error(RuntimeError, "Reciprocal tensor not provided for Welford layernorm"):
         ttnn.layer_norm(
             input_tensor,
+            residual_input_tensor=input_tensor,
             weight=weight,
             bias=bias,
             program_config=ttnn.LayerNormDefaultProgramConfig(use_welford=True),
+            compute_kernel_config=config,
         )
 
 
@@ -427,13 +455,21 @@ def test_layer_norm_with_weight_and_bias_row_major(device, h, w, use_welford):
         pytest.param(True, True, id="gamma_beta"),
     ],
 )
-def test_layer_norm_fp32_residual_with_row_major_affine(device, has_gamma, has_beta):
+@pytest.mark.parametrize("repeat_rows_per_core", [False, True], ids=["single_row", "repeated_rows"])
+def test_layer_norm_fp32_residual_with_row_major_affine(device, has_gamma, has_beta, repeat_rows_per_core):
     """Every row-major affine variant must select a matching full-precision finaliser."""
     torch.manual_seed(11)
-    h, w = 32, 32
+    grid = device.compute_with_storage_grid_size()
+    tile_rows = 2 * grid.x * grid.y + 1 if repeat_rows_per_core else 1
+    h, w = 32 * tile_rows, 32
     base = 1_000_000.0
-    torch_input = base + 64.0 * torch.randn((h, w), dtype=torch.float32)
-    torch_residual = base + 64.0 * torch.randn((h, w), dtype=torch.float32)
+    # More tile rows than cores forces DST/DFB reuse. Vary both mean and
+    # variance across tile rows to expose stale statistics on later iterations.
+    row_id = (torch.arange(h, dtype=torch.float32) // 32).unsqueeze(1)
+    row_base = base + 128.0 * row_id
+    row_scale = 64.0 + 8.0 * (row_id % 7)
+    torch_input = row_base + row_scale * torch.randn((h, w), dtype=torch.float32)
+    torch_residual = row_base + row_scale * torch.randn((h, w), dtype=torch.float32)
     torch_weight = torch.randn((w,), dtype=torch.float32) if has_gamma else None
     torch_bias = torch.randn((w,), dtype=torch.float32) if has_beta else None
     reference = torch.nn.functional.layer_norm(
@@ -468,7 +504,6 @@ def test_layer_norm_fp32_residual_with_row_major_affine(device, has_gamma, has_b
         weight=weight,
         bias=bias,
         program_config=ttnn.LayerNormDefaultProgramConfig(use_welford=True),
-        recip_tensor=create_recip_tensor(device, w, use_welford=True),
         compute_kernel_config=compute_kernel_config,
     )
 

@@ -28,6 +28,19 @@ def enabled_program_cache(device):
         device.disable_and_clear_program_cache()
 
 
+@pytest.mark.parametrize("ttnn_op", [ttnn.var, ttnn.std], ids=["var", "std"])
+@pytest.mark.parametrize("correction", [False, True])
+@pytest.mark.parametrize("value", [1e38, -1e38])
+def test_std_var_hw_large_constant(device, ttnn_op, correction, value):
+    # W=128 selects Blackhole's SFPU leaf combine. The lane means are finite,
+    # but summing them before dividing by 32 would overflow.
+    torch_input = torch.full((1, 1, 32, 128), value, dtype=torch.float32)
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    output = ttnn.to_torch(ttnn_op(input_tensor, dim=(-2, -1), keepdim=True, correction=correction))
+    assert torch.isfinite(output).all()
+    assert torch.count_nonzero(output) == 0
+
+
 @pytest.mark.parametrize("batch_size", [1, 16])
 @pytest.mark.parametrize("h", [32, 64])
 @pytest.mark.parametrize("w", [32, 64])
