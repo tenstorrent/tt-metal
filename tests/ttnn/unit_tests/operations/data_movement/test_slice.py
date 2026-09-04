@@ -741,6 +741,58 @@ def test_slice_output_tensor_tile(device):
     assert_with_pcc(torch_output, ttnn_output, 0.99)
 
 
+@pytest.mark.parametrize("steps", [(1, 1, 2, 2), (1, 1, 1, 1)], ids=["strided", "unaligned_begins"])
+def test_slice_output_tensor_tile_via_rm_path(device, steps):
+    # A step, or a begin that isn't tile-aligned, sends a TILE input down the rm_only path, which
+    # retilizes the input to ROW_MAJOR before the device op. The caller's output tensor stays
+    # tile-paged, so it cannot be the device op's destination — the row-major factories would page
+    # it by row. The result must still land in the caller's buffer, via the closing copy.
+    starts = (0, 0, 0, 0) if steps != (1, 1, 1, 1) else (0, 0, 16, 0)
+    ends = (1, 3, 640, 640)
+
+    torch_input = torch.rand(1, 3, 640, 640, dtype=torch.bfloat16)
+    torch_output = torch_input[
+        starts[0] : ends[0] : steps[0],
+        starts[1] : ends[1] : steps[1],
+        starts[2] : ends[2] : steps[2],
+        starts[3] : ends[3] : steps[3],
+    ]
+
+    ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    ttnn_output = ttnn.from_torch(
+        torch.zeros_like(torch_output),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+
+    ttnn.slice(ttnn_input, starts=starts, ends=ends, steps=steps, output_tensor=ttnn_output)
+
+    # Read back the caller's tensor, not slice's return value: the point is that the data landed
+    # in the preallocated buffer, in tile order.
+    assert_equal(torch_output, ttnn.to_torch(ttnn_output))
+
+
+def test_slice_output_tensor_rm_dtype_mismatch_rejected(device, expect_error):
+    # compute_output_specs pins the output's dtype to the input's, but that check used to sit in the
+    # TILE-only branch of validate_on_program_cache_miss. A row-major input therefore accepted a
+    # mismatched pre-allocated output and the writer filled it with input-dtype bytes. The layout
+    # comparison now runs for every input layout, so this is rejected rather than miswritten.
+    torch_input = torch.rand(1, 3, 64, 64, dtype=torch.bfloat16)
+    ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    ttnn_output = ttnn.from_torch(
+        torch.zeros(1, 3, 32, 64),
+        device=device,
+        dtype=ttnn.float32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+
+    with expect_error(RuntimeError, "needs a layout of"):
+        ttnn.slice(ttnn_input, starts=(0, 0, 0, 0), ends=(1, 3, 32, 64), steps=(1, 1, 1, 1), output_tensor=ttnn_output)
+
+
 @pytest.mark.parametrize(
     "input_shape, input_start, input_ends",
     (
