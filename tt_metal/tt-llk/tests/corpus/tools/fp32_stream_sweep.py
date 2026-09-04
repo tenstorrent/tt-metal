@@ -47,7 +47,10 @@ def run_band_leg(args, node, start, count, out_sha_file, log_file):
         LANEMK_STREAM=f"{start},{count},{out_sha_file}",
     )
     inner = (
-        f"{shlex.quote(args.venv)} -m pytest -o addopts= -q -s "
+        # --compile-consumer: use the prebuilt ELFs in RUNNER_TEMP; never invoke the
+        # toolchain (galaxy hosts have none). The ELFs must be compiled beforehand
+        # (build_identity_gate.sh / a --compile-producer pass into --runner-temp).
+        f"{shlex.quote(args.venv)} -m pytest -o addopts= -q -s --compile-consumer "
         f"{shlex.quote(node)} > {shlex.quote(str(log_file))} 2>&1"
     )
     cmd = ["flock", "-x", f"/tmp/tt-dev-{args.chip}.lock", "-c", inner]
