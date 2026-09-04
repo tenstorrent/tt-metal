@@ -36,6 +36,16 @@ class PhysicalSystemDescriptor;
 // Experimental API — under tt-metalium/experimental, so it lives in the experimental namespace.
 namespace tt::tt_metal::experimental::tt_fabric {
 
+// What a host filter dropped, so the caller can log one line and the builder stays quiet.
+//
+// A caller that asked for a pod out of a datacenter descriptor wants to see that it got a pod. The
+// counts are the cheapest way to notice that a filter matched far less than intended.
+struct FilterReport {
+    std::size_t fsd_host_count = 0;            // hosts in the descriptor before filtering
+    std::size_t retained_host_count = 0;       // hosts kept
+    std::size_t dropped_connection_count = 0;  // cables with an endpoint on a dropped host
+};
+
 // Convenience, proto-free entry point: parse an FSD textproto file and return the ready-to-use C++
 // PhysicalSystemDescriptor. Consumers with only a file path (e.g. tt-run / generate_rank_bindings) can use this
 // and need no protobuf headers on their include path.
@@ -43,9 +53,9 @@ namespace tt::tt_metal::experimental::tt_fabric {
 // host_filter (optional): restrict the descriptor to these hostnames before building. In the wild an FSD often
 // covers a whole superpod (e.g. SC36) or an aggregated datacenter (exabox), so a consumer wanting a single pod
 // passes just that pod's hostnames. Empty = no filter (use the whole FSD). Throws if a requested hostname is
-// absent from the FSD.
+// absent from the FSD. Names are matched canonically — see filter_factory_descriptor.
 ::tt::tt_metal::PhysicalSystemDescriptor build_physical_descriptor_from_file(
-    const std::string& fsd_path, const std::vector<std::string>& host_filter = {});
+    const std::string& fsd_path, const std::vector<std::string>& host_filter = {}, FilterReport* report = nullptr);
 
 // Parse a Factory System Descriptor textproto file from disk.
 // Throws std::runtime_error if the file cannot be read or parsed.
@@ -53,9 +63,29 @@ namespace tt::tt_metal::experimental::tt_fabric {
 
 // Restrict an FSD to a subset of hosts by hostname, densely renumbering host_ids and filtering board_types /
 // eth_connections to match (connections touching a filtered-out host are dropped). Useful for carving a single
-// pod out of a superpod/datacenter FSD before building. Empty hostnames returns the FSD unchanged; throws if a
-// requested hostname is not present.
+// pod out of a superpod/datacenter FSD before building. Empty hostnames returns the FSD unchanged.
+//
+// Names are matched through `tt::tt_metal::canonical_host_for_node_id` on both sides, because the requested
+// names come from a live descriptor whose host keys may be FQDNs while the descriptor's author wrote short
+// names, or the reverse. Matching raw strings silently retains nothing in that case. This is the same
+// canonicalization the mapper keys addresses on, which it has to be: the filter and the address join must
+// agree on the spelling of a host or the ingest retains cables it cannot then place.
+//
+// Throws if a requested name is absent from the descriptor (reporting all of them at once, not the first),
+// or if two descriptor hosts share a canonical name — the latter would otherwise pull two machines in under
+// one requested name and double every chip in the mesh.
 ::tt::scaleout_tools::fsd::proto::FactorySystemDescriptor filter_factory_descriptor(
+    const ::tt::scaleout_tools::fsd::proto::FactorySystemDescriptor& fsd,
+    const std::vector<std::string>& hostnames,
+    FilterReport* report = nullptr);
+
+// Run filter_factory_descriptor's checks without building the filtered copy.
+//
+// Exists so a caller can find out whether an ingest would fail *before* committing to it. The FSD host
+// filter uses this: on a multi-rank job the failure has to be agreed on across ranks and thrown by all of
+// them together, so it cannot be discovered halfway through the ingest that only some ranks reach.
+// Throws exactly what filter_factory_descriptor would. Empty hostnames is a no-op.
+void validate_host_filter(
     const ::tt::scaleout_tools::fsd::proto::FactorySystemDescriptor& fsd, const std::vector<std::string>& hostnames);
 
 // Build a PhysicalSystemDescriptor proto from a FactorySystemDescriptor (desired-state), fully offline.
