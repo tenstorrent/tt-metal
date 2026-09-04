@@ -321,6 +321,8 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
             {"scaler_bits", scaler_bits},
             {"use_welford", 1u},
             {"enable_fp32_sfpu", 0u},
+            // Welford is compute-bound: batching the reader's tiles measures flat, so it stays off.
+            {"tiles_per_batch", 1u},
         };
         reader_rta_names = {"col_start_tile_id", "curr_col_in_batch", "num_cols"};
     } else {
@@ -328,7 +330,8 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
         reader_source =
             "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
             "reader_unary_reduce_universal_start_id.cpp";
-        reader_ct_args = {{"scaler_bits", scaler_bits}};
+        // Welford is compute-bound: batching the reader's tiles measures flat, so it stays off.
+        reader_ct_args = {{"scaler_bits", scaler_bits}, {"tiles_per_batch", 1u}};
         reader_rta_names = {"num_tiles", "start_id"};
     }
 
