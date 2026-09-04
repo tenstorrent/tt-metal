@@ -32,6 +32,7 @@ if sys.argv[1:2] == ["sandbox"]:
         time.sleep(30)
     print(os.environ.get("PROBE_ERROR", ""), file=sys.stderr)
     raise SystemExit(int(os.environ.get("PROBE_STATUS", "0")))
+record["prompt_files_at_start"] = [path.name for path in Path(os.environ["TMPDIR"]).glob("autodebug-prompt.*")]
 record["prompt"] = sys.stdin.read()
 Path("session.json").write_text(json.dumps(record))
 raise SystemExit(int(os.environ.get("SESSION_STATUS", "0")))
@@ -45,6 +46,9 @@ class SandboxTests(unittest.TestCase):
         self.root = Path(temporary.name).resolve()
         self.workspace = self.root / "checkout with spaces"
         self.workspace.mkdir()
+        (self.workspace / "source path").mkdir()
+        self.prompt_dir = self.root / "prompt files"
+        self.prompt_dir.mkdir()
         bin_dir = self.root / "bin"
         bin_dir.mkdir()
         for name in ("codex", "claude"):
@@ -55,12 +59,16 @@ class SandboxTests(unittest.TestCase):
         for name in list(self.env):
             if name.startswith("AUTODEBUG_") or name == "CLAUDECODE":
                 self.env.pop(name)
-        self.env.update(PATH=f"{bin_dir}{os.pathsep}{self.env['PATH']}", CODEX_HOME=str(self.root / "config"))
+        self.env.update(
+            PATH=f"{bin_dir}{os.pathsep}{self.env['PATH']}",
+            CODEX_HOME=str(self.root / "config"),
+            TMPDIR=str(self.prompt_dir),
+        )
 
-    def launch(self, *, agent="codex", **env):
+    def launch(self, *, agent="codex", shell="bash", focus_paths=(), **env):
         return subprocess.run(
             [
-                "bash",
+                shell,
                 str(SCRIPTS / "autodebug.sh"),
                 "--agent",
                 agent,
@@ -69,6 +77,7 @@ class SandboxTests(unittest.TestCase):
                 "--effort",
                 "high",
                 "--",
+                *focus_paths,
                 "Investigate the sample failure",
             ],
             cwd=self.workspace,
@@ -195,6 +204,30 @@ class SandboxTests(unittest.TestCase):
                 self.assertTrue(prompt.startswith("You are the AutoDebug investigator,"))
                 self.assertIn("Do not invoke the AutoDebug launcher again.", prompt)
                 self.assertIn("Investigate the sample failure", prompt)
+
+    def test_system_bash_handles_focus_and_agent_names(self):
+        # /bin/bash is Bash 3.2 on the macOS CI runner.
+        for agent in ("CoDeX", "ClAuDe"):
+            for focus_paths in ((), ("source path",)):
+                with self.subTest(agent=agent, focus_paths=focus_paths):
+                    result = self.launch(agent=agent, shell="/bin/bash", focus_paths=focus_paths)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(result.stderr, "")
+                    prompt = self.session()["prompt"]
+                    self.assertIn("Investigate the sample failure", prompt)
+                    self.assertEqual("`source path`" in prompt, bool(focus_paths))
+
+    def test_prompt_is_unlinked_before_child_starts(self):
+        for shell in ("bash", "/bin/bash"):
+            for agent in ("codex", "claude"):
+                for status in ("0", "7"):
+                    with self.subTest(shell=shell, agent=agent, status=status):
+                        result = self.launch(agent=agent, shell=shell, SESSION_STATUS=status)
+                        self.assertEqual(result.returncode, int(status), result.stderr)
+                        session = self.session()
+                        self.assertIn("Investigate the sample failure", session["prompt"])
+                        self.assertEqual(session["prompt_files_at_start"], [])
+                        self.assertEqual(list(self.prompt_dir.iterdir()), [])
 
 
 if __name__ == "__main__":

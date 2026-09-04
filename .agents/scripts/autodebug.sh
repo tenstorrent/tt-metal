@@ -138,8 +138,13 @@ print(
 print(rendered.strip())
 PY
 
-case "${AGENT,,}" in
-    codex)
+# Keep the prompt readable on stdin without leaving its file behind after exec.
+exec <"$PROMPT_FILE"
+rm -f "$PROMPT_FILE"
+trap - EXIT
+
+case "$AGENT" in
+    [cC][oO][dD][eE][xX])
         command -v codex >/dev/null 2>&1 || die "codex executable not found"
         SANDBOX="$(python3 "$SCRIPT_DIR/codex_sandbox.py")"
         exec codex --ask-for-approval never exec \
@@ -149,16 +154,15 @@ case "${AGENT,,}" in
             --skip-git-repo-check \
             --color never \
             --cd "$RUN_DIR" \
-            - <"$PROMPT_FILE"
+            -
         ;;
-    claude)
+    [cC][lL][aA][uU][dD][eE])
         command -v claude >/dev/null 2>&1 || die "claude executable not found"
         exec claude -p \
             --output-format text \
             --model "$CLAUDE_MODEL" \
             --effort "$EFFORT" \
-            --permission-mode auto \
-            <"$PROMPT_FILE"
+            --permission-mode auto
         ;;
     *)
         die "--agent must be codex or claude, got: $AGENT"
