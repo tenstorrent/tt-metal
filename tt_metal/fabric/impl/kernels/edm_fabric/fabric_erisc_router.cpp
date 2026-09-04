@@ -48,7 +48,7 @@
 
 using namespace tt::tt_fabric;
 
-// Type alias for cleaner access to 2D mesh routing constants
+// Type alias for the 1D low-latency hop fields.
 using LowLatencyFields = tt::tt_fabric::RoutingFieldsConstants::LowLatency;
 
 /*

@@ -544,9 +544,6 @@ private:
     // Returns std::nullopt if not in multi-host context
     LocalMeshBinding initialize_local_mesh_binding();
 
-    template <uint8_t dim, bool compressed>
-    void write_all_to_all_routing_fields(MeshId mesh_id) const;
-
     // Top level function responsible for generating intermesh connectivity
     // based on the MGD and Physical State of the system.
     // This function will annotate physical connections between physical meshes (exit nodes)
