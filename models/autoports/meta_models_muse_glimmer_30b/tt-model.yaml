@@ -179,6 +179,12 @@ card:
 
     ## Performance
 
+    For P150 and P150x2 qualification, a same-topology median latency
+    regression of at most 5% across three stable samples may ship when it is
+    documented. Cross-topology differences are reported directly rather than
+    classified as regressions. Correctness, structured tool calls, full-context
+    stability, memory headroom, and clean shutdown remain hard release gates.
+
     Existing release latency sweep for the four-chip `p150x4` profile, measured
     on QB2/P300x2: one request at a time (batch 1), 512 output tokens, input
     length swept to the full context. Decode rate is per user. Retried points
@@ -197,5 +203,6 @@ card:
 
     The last row saturates the advertised context (130,560 + 512 = 131,072).
     Serve one request at a time: concurrency at long context is admission-limited
-    by the KV cache. The release passed the bounded latency gate: 2% per metric,
-    plus a 5 ms absolute TTFT allowance for short-input measurement variance.
+    by the KV cache. This historical four-chip release passed its original
+    bounded latency gate: 2% per metric, plus a 5 ms absolute TTFT allowance for
+    short-input measurement variance.

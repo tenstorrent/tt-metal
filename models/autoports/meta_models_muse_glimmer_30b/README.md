@@ -63,9 +63,12 @@ port printed by the command.
 
 The P150 and P150x2 release tables will be generated from the tool-calling API
 sweep and committed here before publication. A minor, measured performance
-degradation is acceptable; correctness, valid structured tool calls, stable
-serving, and clean shutdown are hard gates. Any regression must be reported,
-and unexplained or material regressions block publication.
+degradation is acceptable: a same-topology median regression of at most 5%
+across three stable samples may ship when it is documented. Cross-topology
+deltas are informational rather than regressions. Correctness, valid structured
+tool calls, stable full-context serving, memory headroom, and clean shutdown are
+hard gates; an unexplained or larger same-topology regression blocks
+publication.
 
 The existing four-chip batch-1 baseline uses 512 output tokens:
 
