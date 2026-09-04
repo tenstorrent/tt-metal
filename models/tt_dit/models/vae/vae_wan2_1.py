@@ -968,7 +968,6 @@ class WanResample(Module):
         feat_cache: list[ttnn.Tensor] | None = None,
         feat_idx: list[int] = [0],
         logical_w: int = 0,
-        full_t: bool = False,
     ) -> tuple[ttnn.Tensor, int, int]:
         assert x_BTHWC.layout == ttnn.ROW_MAJOR_LAYOUT, f"WanResample expects ROW_MAJOR input, got {x_BTHWC.layout}"
         B, T, H, W, C = x_BTHWC.shape
@@ -1097,7 +1096,7 @@ class WanResample(Module):
                     )
                     feat_cache[idx] = cache_x_BTHWC
                     feat_idx[0] += 1
-            elif full_t:
+            else:
                 # Full-T mode: the whole clip is encoded in one pass, so there is no feat_cache
                 # to carry temporal context across chunks. Reproduce the cached path's arithmetic
                 # in a single call: frame 0 passes through untouched (the cached path only stores
@@ -1112,10 +1111,6 @@ class WanResample(Module):
                     x_first_BTHWC = x_conv_BTHWC[:, :1, :, :, :]
                     x_time_BTHWC = self.time_conv(x_conv_BTHWC, logical_h, logical_w=logical_w)
                     x_conv_BTHWC = ttnn.concat([x_first_BTHWC, x_time_BTHWC], dim=1)
-            else:
-                # No cache and not a full-T pass: match huggingface's WanResample module, which
-                # returns x untouched when feat_cache is None (see test_wan_resample).
-                pass
 
         return x_conv_BTHWC, logical_h, logical_w
 
@@ -1772,7 +1767,6 @@ class WanEncoder3D(Module):
                     feat_cache,
                     feat_idx,
                     logical_w=logical_w,
-                    full_t=feat_cache is None,
                 )
                 x_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.TILE_LAYOUT)
             elif isinstance(down_block, WanResidualBlock):
