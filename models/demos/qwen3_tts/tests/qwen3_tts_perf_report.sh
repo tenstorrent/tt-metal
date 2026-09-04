@@ -48,7 +48,7 @@ TEST=models/demos/qwen3_tts/tests/test_qwen3_tts_perf_report.py
 : "${OUTDIR:=models/demos/qwen3_tts/ops_list/perf_report}"
 
 # window name -> pytest -k selector
-ALL_WINDOWS=(prefill_demo prefill_32 prefill_64 prefill_128 decode_talker decode_cp decode_frame)
+ALL_WINDOWS=(prefill_demo prefill_32 prefill_64 prefill_128 decode_talker decode_cp decode_frame speaker_encoder)
 selector_for() {
   case $1 in
     prefill_demo) echo "test_prefill[demo]" ;;
@@ -58,6 +58,7 @@ selector_for() {
     decode_talker) echo "test_decode_talker" ;;
     decode_cp)     echo "test_decode_cp" ;;
     decode_frame)  echo "test_decode_frame" ;;
+    speaker_encoder) echo "test_speaker_encoder" ;;
     *) echo "" ;;
   esac
 }

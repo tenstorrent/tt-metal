@@ -207,8 +207,9 @@ def test_full_encoder_op_count_and_accuracy(device, monkeypatch):
     assert off["relu"] - fuse["relu"] == 3 * (SCALE - 1) + 2  # +entry TDNN, +ASP
     # 6 cascade adds per block; each block's residual add survives.
     assert off["add"] - fuse["add"] == 3 * (SCALE - 2)
-    # ASP on device: its ReLU fuses into the matmul, tanh stays a real device op.
-    assert off["relu"] - asp["relu"] == 3 * (SCALE - 1) + 2
+    # ASP on device: tdnn ReLU is one explicit op after the split linears (no wide
+    # concat/repeat); tanh stays a real device op.
+    assert off["relu"] - asp["relu"] == 3 * (SCALE - 1) + 1  # +entry TDNN; ASP tdnn relu explicit
     assert off["tanh"] == asp["tanh"] == 1
 
     # Round-trips are the real cost. Before fusion there is one per host conv:
