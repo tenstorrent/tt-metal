@@ -1324,7 +1324,11 @@ def append_device_data(
     logger.info("Appending device data")
 
     device_perf_report = Path(logFolder) / PROFILER_CPP_DEVICE_PERF_REPORT
-    use_perf_csv = device_perf_report.is_file() and not force_legacy_device_logs
+    # Compute-core sampling drops cores *before* per-op aggregation. The C++ fast path aggregates
+    # cores in-device, so cpp_device_perf_report.csv has no per-core rows left to sample; an opt-in
+    # sampled capture must take the legacy per-core parse for the sampling to have any effect.
+    sample_requested = bool(os.environ.get("TT_METAL_PROFILER_COMPUTE_CORE_SAMPLE"))
+    use_perf_csv = device_perf_report.is_file() and not force_legacy_device_logs and not sample_requested
 
     if use_perf_csv:
         if device_analysis_types:
@@ -1346,7 +1350,13 @@ def append_device_data(
                 host_ops_by_device, logFolder, device_analysis_types, traceReplays
             )
     else:
-        if device_perf_report.is_file() and force_legacy_device_logs:
+        if device_perf_report.is_file() and sample_requested and not force_legacy_device_logs:
+            logger.info(
+                f"Using legacy device-log parsing because compute-core sampling "
+                f"(TT_METAL_PROFILER_COMPUTE_CORE_SAMPLE) is not supported on the "
+                f"{PROFILER_CPP_DEVICE_PERF_REPORT} fast path."
+            )
+        elif device_perf_report.is_file() and force_legacy_device_logs:
             logger.info(
                 f"Forcing legacy device-log parsing even though {PROFILER_CPP_DEVICE_PERF_REPORT} exists in {logFolder}."
             )
