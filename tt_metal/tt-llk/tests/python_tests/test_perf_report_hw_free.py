@@ -22,6 +22,7 @@ from types import SimpleNamespace
 
 import pandas as pd
 import pytest
+from helpers.counters import _parse_perf_cfg
 from helpers.llk_params import ApproximationMode, DestAccumulation, PerfRunType
 from helpers.perf.core import (
     PerfConfig,
@@ -787,3 +788,55 @@ def test_catalog_check_skips_a_base_name_with_no_entry():
     # The static gate already fails a perf test missing from the catalog, and
     # combine globs whatever is on disk, so this must not fail a partial run.
     _assert_matches_catalog(_frame(), "perf_absent_from_catalog", "x.csv")
+
+
+def _cfg_header(*lines):
+    return "\n".join(f"constexpr std::uint32_t PERF_CFG_{line};" for line in lines)
+
+
+def test_perf_cfg_matches_the_device_header():
+    # Parity with the values counters.py used to hand-copy from counters.h.
+    assert _parse_perf_cfg(
+        (
+            Path(os.environ["TT_METAL_HOME"])
+            / "tt_metal/tt-llk/tests/helpers/include/counters.h"
+        ).read_text()
+    ) == {
+        "VALID_BIT": 1 << 31,
+        "L1_MUX_SHIFT": 17,
+        "L1_MUX_MASK": 0x7,
+        "COUNTER_SHIFT": 8,
+        "COUNTER_MASK": 0x1FF,
+        "BANK_MASK": 0xFF,
+    }
+
+
+def test_perf_cfg_accepts_every_literal_form():
+    # Same value written four legal ways, including a hex shift operand.
+    assert _parse_perf_cfg(
+        _cfg_header(
+            "A = 1u << 31",
+            "B = 1 << 0x1Fu",
+            "C = 0x80000000u",
+            "D = 2147483648",
+        )
+    ) == {"A": 1 << 31, "B": 1 << 31, "C": 1 << 31, "D": 1 << 31}
+
+
+def test_perf_cfg_rejects_anything_it_cannot_parse():
+    # Silent mis-parsing is the failure this module exists to prevent, so a form
+    # outside the documented grammar must raise rather than yield a wrong number.
+    for expr in (
+        "A = (1u << 31)",
+        "A = 1u << 31 | 0x7u",
+        "A = VALID_BIT",
+        "A = 1u + 1u",
+    ):
+        with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+            RuntimeError, match="not a plain literal or shift"
+        ):
+            _parse_perf_cfg(_cfg_header(expr))
+
+
+def test_perf_cfg_missing_constant_is_absent_not_zero():
+    assert "VALID_BIT" not in _parse_perf_cfg(_cfg_header("BANK_MASK = 0xFFu"))

@@ -47,17 +47,20 @@ def _metal_root() -> Path:
     )
 
 
+_C_LITERAL = r"0[xX][0-9a-fA-F]+|\d+"
+
+
 def _parse_perf_cfg(text: str) -> dict:
     """PERF_CFG_* constants from counters.h: a literal or literal << literal, u/U suffixes allowed."""
     cfg = {}
     for name, expr in re.findall(r"PERF_CFG_([A-Z0-9_]+)\s*=\s*([^;]+);", text):
-        expr = re.sub(r"(0[xX][0-9a-fA-F]+|\d+)[uUlL]+", r"\1", expr).strip()
-        m = re.fullmatch(r"(0[xX][0-9a-fA-F]+|\d+)(?:\s*<<\s*(\d+))?", expr)
+        expr = re.sub(rf"({_C_LITERAL})[uUlL]+", r"\1", expr).strip()
+        m = re.fullmatch(rf"({_C_LITERAL})(?:\s*<<\s*({_C_LITERAL}))?", expr)
         if m is None:
             raise RuntimeError(
                 f"PERF_CFG_{name} in counters.h is not a plain literal or shift: {expr!r}"
             )
-        cfg[name] = int(m.group(1), 0) << int(m.group(2) or "0")
+        cfg[name] = int(m.group(1), 0) << int(m.group(2) or "0", 0)
     return cfg
 
 
