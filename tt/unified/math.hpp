@@ -1739,14 +1739,22 @@ struct Strategy<FPUFusion> {
 
         // Neither of these touches DST, so they program once for every subblock.
         //
-        // The same descriptor gap Strategy<BcastFusion> had, in the second place the
-        // broadcast path appears: these two carry the formats and the mode and never the
-        // tile geometry. Inert for every kernel in tree today -- they are all one geometry
-        // throughout, so the memo compare early-outs and nothing is programmed -- and it has
-        // no mixed-geometry coverage, because a matmul-with-bias body of two geometries is
-        // not something this repo can build yet. Fixed here anyway rather than left as a
-        // known hole one line wide.
-        unpack_geometry_to(acc_dfb, bias_dfb);
+        // A KNOWN HOLE, deliberately left: these two carry the formats and the mode and
+        // never the tile geometry, so this pass has the same gap Strategy<BcastFusion> had
+        // and a mixed-geometry matmul-with-bias would read through the init's descriptor.
+        //
+        // The one-line fix was written, measured and backed out. It costs +0.44% on EVERY
+        // L1-mode matmul cell and nothing on any Dst-mode one, which is not the work -- the
+        // benchmark passes no bias, so the call never runs there. It is code PRESENCE:
+        // via_bias is a runtime bool, so bias_finish is emitted whenever !kBiasFolded and
+        // dead-code-eliminated when it folds true. Attribution is exact -- the same sweep
+        // with only the bcast call in it moves the l1 cells -0.01%.
+        //
+        // So it is 0.44% on every L1 matmul for a line no kernel in tree can reach, and it
+        // has no mixed-geometry coverage either. It goes back in with a body that exercises
+        // it, or beside the matmul entry's own missing descriptor call, which has the same
+        // code-size question and can be measured once with real coverage behind it. See
+        // test_unified_pass_order.py.
         ckernel::reconfig_data_format(acc_dfb, bias_dfb);
         ckernel::add_bcast_rows_init_short(acc_dfb, bias_dfb);
         pack_to(out_dfb);  // this drains the accumulator into the output

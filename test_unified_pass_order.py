@@ -42,14 +42,26 @@ behind the SFPU pass -- 6/16 and 8/16 at wt=1, 0/64 on both faces at wt=4. So th
 geometry ahead of a matmul breaks it.
 
 And it is the SAME missing call, not a stale memo. The matmul strategy has two
-`unpack_geometry_to(node.in1_dfb, node.in0_dfb)` sites (math.hpp:1789 and :2010) and BOTH sit
+`unpack_geometry_to(node.in1_dfb, node.in0_dfb)` sites (math.hpp:1797 and :2018) and BOTH sit
 behind a bias epilogue or an `if (reload)` accumulator path, so neither runs for a plain
-single matmul. The unconditional entry -- math.hpp:1953, whose own comment says it programs
-the block dimensions "rather than trusting matmul_init to still be in effect" -- calls
-`matmul_block_init` with no descriptor call beside it. So a matmul programs its block
-dimensions per pass and its operand geometry never, and it is right only while nothing has
-moved what matmul_init left. That is the next thing to fix, and rows 4 and 5 are the two
-witnesses for it.
+single matmul. The unconditional entry is math.hpp:1961, and its own comment has already
+named this defect: it programs the block dimensions per pass rather than trusting matmul_init
+because "a broadcast, a reduction or an SFPU pass reconfigures the unpack and math units for
+itself, so a matmul that FOLLOWS one -- as attention's second matmul does -- would otherwise
+run against another op's state and return garbage". Exactly right, and the call it reaches
+for carries the block dimensions and the formats and not the tile descriptors. So a matmul
+programs its block dimensions per pass and its operand geometry never, and it is right only
+while nothing has moved what matmul_init left. That is the next thing to fix, and rows 4 and
+5 are the two witnesses for it.
+
+Whatever fixes it should be measured the way the bcast fix was. The bcast call itself is free
+on the matmul sweep and costs +0.6% on the d64 prefill configs, which is the work. The
+matching one-liner in `bias_finish` was backed out instead: +0.44% on every L1-mode matmul
+cell for a call the sweep never executes, because `via_bias` is a runtime bool so the whole
+epilogue is EMITTED for L1 mode and elided for Dst. A descriptor call on the matmul entry
+path is on every matmul in the sweep, so its cost will be real rather than layout, and it
+wants the same A/B plus an A/A control -- the noise floor on this baseline is worst-cell
+1.4%, which is larger than any per-cell number either fix produced.
 
 Still distinct from the matmul limitation A3 records: that one is two matmul SHAPES in one
 body, and rows 4 and 5 have a single matmul with a non-matmul pass in front.
