@@ -282,6 +282,21 @@ void AllocatorImpl::clear_hybrid_remote_occupied_ranges() {
     hybrid_remote_occupied_ranges_.clear();
 }
 
+bool AllocatorImpl::try_begin_hybrid_allocation(const std::vector<AllocatorImpl*>& device_allocators) {
+    bool expected = false;
+    if (!hybrid_allocation_in_progress_.compare_exchange_strong(expected, true)) {
+        return false;
+    }
+    set_hybrid_device_allocators(device_allocators);
+    return true;
+}
+
+void AllocatorImpl::end_hybrid_allocation() {
+    clear_hybrid_remote_occupied_ranges();
+    clear_hybrid_device_allocators();
+    hybrid_allocation_in_progress_.store(false);
+}
+
 std::vector<std::pair<DeviceAddr, DeviceAddr>> AllocatorImpl::get_l1_allocated_ranges(
     BankManager::AllocatorDependencies::AllocatorID allocator_id) const {
     std::lock_guard<std::mutex> lock(mutex_);

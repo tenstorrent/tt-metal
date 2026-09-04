@@ -19,15 +19,12 @@
 #include "impl/context/metal_context.hpp"
 #include "impl/debug/inspector/inspector.hpp"
 #include <tt-metalium/distributed_context.hpp>
-#include <tt-metalium/experimental/fabric/control_plane.hpp>
-#include <tt-metalium/experimental/fabric/topology_mapper.hpp>
 
 #include <algorithm>
 #include <cstring>
 #include <map>
 #include <mutex>
 #include <optional>
-#include <set>
 
 namespace per_core_allocation = tt::tt_metal::experimental::per_core_allocation;
 
@@ -44,97 +41,28 @@ namespace {
 // The reservations are all-gathered over the co-owning ranks so every rank subtracts the same set
 // and picks the same address. Co-owners also then fail together rather than one OOMing alone.
 
-// The MPI ranks driving at least one device of `mesh_device`, sorted; empty when this rank drives
-// the whole mesh.
-//
-// get_fabric_node_id() is a global control-plane lookup, so it answers for non-local coordinates;
-// the topology mapper maps each chip to its host rank, and the control plane's global bindings map
-// (mesh, host rank) to an MPI rank.
-std::vector<int> compute_coowner_ranks(MeshDevice* mesh_device) {
-    const auto& view = mesh_device->get_view();
-    if (view.num_devices() == view.get_devices().size()) {
-        return {};  // every coordinate is local: nothing is co-owned
-    }
-
-    const auto& control_plane = MetalContext::instance(mesh_device->impl().get_context_id()).get_control_plane();
-
-    // (mesh id, host rank) -> MPI rank, inverted from the control plane's global bindings.
-    std::map<std::pair<uint32_t, uint32_t>, int> rank_of_binding;
-    for (const auto& [rank, binding] : control_plane.get_global_logical_bindings()) {
-        rank_of_binding[{*binding.first, *binding.second}] = *rank;
-    }
-
-    std::set<int> ranks;
-    std::optional<uint32_t> fabric_mesh_id;
-    for (const auto& coord : MeshCoordinateRange(mesh_device->shape())) {
-        const auto fabric_node_id = mesh_device->get_fabric_node_id(coord);
-
-        // Every device gathered over must belong to one fabric mesh: only devices of the same
-        // mesh share an allocator address space, and a submesh straddling a boundary would pull
-        // ranks from both meshes into the sub-context, where they never reach the collective
-        // together.
-        const uint32_t coord_mesh_id = *fabric_node_id.mesh_id;
-        if (!fabric_mesh_id.has_value()) {
-            fabric_mesh_id = coord_mesh_id;
-        }
+// Holds the mesh allocator's HYBRID allocation span open for one MeshBuffer, and fails loudly if
+// another is already open (see AllocatorImpl::try_begin_hybrid_allocation).
+class HybridAllocationScope {
+public:
+    HybridAllocationScope(AllocatorImpl* allocator, const std::vector<AllocatorImpl*>& device_allocators) :
+        allocator_(allocator) {
         TT_FATAL(
-            coord_mesh_id == *fabric_mesh_id,
-            "Cannot gather per-core reservations for this mesh: it spans fabric meshes {} and {} (coordinate {} is "
-            "chip {} of mesh {}). Co-owner gathering assumes one fabric mesh, since only devices of the same mesh "
-            "share an allocator address space.",
-            *fabric_mesh_id,
-            coord_mesh_id,
-            coord,
-            fabric_node_id.chip_id,
-            coord_mesh_id);
+            allocator_->try_begin_hybrid_allocation(device_allocators),
+            "A per-core (HYBRID) allocation is already in progress on this mesh. Per-core allocation passes "
+            "state into the allocator around each allocation, so allocations on one mesh must be serialized -- "
+            "issue them from a single thread.");
+    }
+    ~HybridAllocationScope() { allocator_->end_hybrid_allocation(); }
 
-        // Resolve through the topology mapper, the same source get_global_logical_bindings() below
-        // is keyed against, so the two views cannot disagree about who owns a chip. MeshGraph
-        // answers the same question from the MGD's declared host_topology instead.
-        //
-        // Note the chip id, not the coordinate: get_host_rank_for_chip converts to a PARENT-mesh
-        // coordinate internally, while `coord` here is submesh-local. get_fabric_node_id resolves
-        // that through the submesh's own handle first, which is what makes the lookup valid.
-        const auto host_rank =
-            control_plane.get_topology_mapper().get_host_rank_for_chip(fabric_node_id.mesh_id, fabric_node_id.chip_id);
-        TT_FATAL(
-            host_rank.has_value(),
-            "Cannot determine the co-owners of this mesh: chip {} of mesh {} has no host rank.",
-            fabric_node_id.chip_id,
-            *fabric_node_id.mesh_id);
-        auto it = rank_of_binding.find({*fabric_node_id.mesh_id, **host_rank});
-        TT_FATAL(
-            it != rank_of_binding.end(),
-            "Cannot determine the co-owners of this mesh: mesh {} host rank {} is not bound to any MPI rank.",
-            *fabric_node_id.mesh_id,
-            **host_rank);
-        ranks.insert(it->second);
-    }
-    if (ranks.size() <= 1) {
-        return {};
-    }
-    return {ranks.begin(), ranks.end()};
-}
+    HybridAllocationScope(const HybridAllocationScope&) = delete;
+    HybridAllocationScope& operator=(const HybridAllocationScope&) = delete;
+    HybridAllocationScope(HybridAllocationScope&&) = delete;
+    HybridAllocationScope& operator=(HybridAllocationScope&&) = delete;
 
-// Sub-context over `ranks`, created once and cached. create_sub_context is collective over its
-// members; co-owners reach their first lockstep allocation on a submesh together, so the first
-// call is made by all members at the same point.
-const std::shared_ptr<multihost::DistributedContext>& coowner_context(const std::vector<int>& ranks) {
-    static std::mutex cache_mutex;
-    static std::map<std::vector<int>, std::shared_ptr<multihost::DistributedContext>> cache;
-    std::lock_guard<std::mutex> lock(cache_mutex);
-    auto it = cache.find(ranks);
-    if (it == cache.end()) {
-        auto mutable_ranks = ranks;  // create_sub_context takes a mutable span
-        it = cache
-                 .emplace(
-                     ranks,
-                     multihost::DistributedContext::get_current_world()->create_sub_context(
-                         ttsl::Span<int>(mutable_ranks.data(), mutable_ranks.size())))
-                 .first;
-    }
-    return it->second;
-}
+private:
+    AllocatorImpl* allocator_;
+};
 
 // This rank's per-bank (per-core) reservations across the devices it drives, flattened to
 // [start, end, start, end, ...].
@@ -314,22 +242,24 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
         // can query their per-bank ranges and avoid regions occupied on any device.
         auto* mesh_allocator = mesh_device->allocator_impl().get();
         bool is_hybrid = mesh_allocator->get_config().allocator_mode == AllocatorMode::HYBRID;
+        // Open for the whole span the allocator's hybrid state is live: set, gather, place.
+        std::optional<HybridAllocationScope> hybrid_scope;
         if (is_hybrid) {
             std::vector<AllocatorImpl*> device_allocators;
             device_allocators.reserve(mesh_device->get_view().num_devices());
             for (auto* device : mesh_device->get_view().get_devices()) {
                 device_allocators.push_back(device->allocator_impl().get());
             }
-            mesh_allocator->set_hybrid_device_allocators(device_allocators);
+            hybrid_scope.emplace(mesh_allocator, device_allocators);
 
             // The loop above sees only local devices, so trade per-bank reservations with the
             // co-owners and let each subtract the same occupied set. No collective on a mesh this
             // rank drives alone. Done here rather than in AllocatorImpl because allocate_buffer()
             // holds the allocator mutex, under which a collective must not run.
             if (device_local_config.buffer_type == BufferType::L1) {
-                const auto coowners = compute_coowner_ranks(mesh_device);
+                const auto& coowners = mesh_device->impl().coowner_ranks();
                 if (!coowners.empty()) {
-                    const auto& ctx = coowner_context(coowners);
+                    const auto& ctx = mesh_device->impl().coowner_context();
                     const uint32_t num_banks = mesh_allocator->get_num_banks(BufferType::L1);
                     mesh_allocator->set_hybrid_remote_occupied_ranges(
                         allgather_remote_ranges(local_per_core_ranges(device_allocators, num_banks), coowners, *ctx));
@@ -348,10 +278,7 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
             device_local_config.bottom_up,
             device_local_config.sub_device_id);
 
-        if (is_hybrid) {
-            mesh_allocator->clear_hybrid_device_allocators();
-            mesh_allocator->clear_hybrid_remote_occupied_ranges();
-        }
+        hybrid_scope.reset();  // ends the span exactly where the placement does
 
         mesh_buffer = std::shared_ptr<MeshBuffer>(new MeshBuffer(
             mesh_buffer_config, device_local_config, device_local_size, mesh_device, std::move(backing_buffer)));

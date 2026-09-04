@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -49,6 +50,21 @@ public:
     // Empty on a single-rank mesh.
     void set_hybrid_remote_occupied_ranges(std::vector<std::pair<DeviceAddr, DeviceAddr>> ranges);
     void clear_hybrid_remote_occupied_ranges();
+
+    // Claim/release the HYBRID allocation span. The two setters above pass state into
+    // allocate_buffer, so a hybrid allocation is a set -> allocate -> teardown protocol rather
+    // than one atomic call, and per-method locking cannot make it safe: a second thread's
+    // teardown lands between the first's set and its allocate, the first then places without the
+    // per-core reservations, and its buffer overlaps one on the same core. Concurrent hybrid
+    // allocations on a mesh are therefore unsupported, and this reports the violation instead of
+    // leaving it silent.
+    //
+    // try_begin returns false when a span is already open; the caller is expected to fail. Fails
+    // rather than blocking because on a co-owned mesh the span contains a collective, and a
+    // blocking guard would park every other thread behind a rank that never arrives. LOCKSTEP
+    // mode sets none of this state and is unaffected.
+    [[nodiscard]] bool try_begin_hybrid_allocation(const std::vector<AllocatorImpl*>& device_allocators);
+    void end_hybrid_allocation();
 
     void deallocate_buffer(Buffer* buffer);
     void deallocate_buffers();
@@ -175,6 +191,10 @@ private:
 
     // HYBRID mode: per-bank ranges occupied on co-owning ranks' devices (see the setter).
     std::vector<std::pair<DeviceAddr, DeviceAddr>> hybrid_remote_occupied_ranges_;
+
+    // Set while a HYBRID allocation span is open (see try_begin_hybrid_allocation). Not a mutex:
+    // a same-thread re-entry must report a bug, not deadlock or hit try_lock's UB.
+    std::atomic<bool> hybrid_allocation_in_progress_{false};
 
     // config_ is stored in a unique_ptr because AllocatorConfig is currently an incomplete type in API directory.
     //
