@@ -1870,7 +1870,10 @@
 # "not eval" filter deselects them here, keeping the job to the deterministic PCC gates and off the
 # extra downloads.
 - name: xtts-v2 unit tests
-  cmd: pytest models/experimental/xtts/tests/pcc/ -k "not eval" --timeout=900
+  cmd: |
+    set -e
+    uv pip install -r models/experimental/xtts/requirements.txt
+    pytest models/experimental/xtts/tests/pcc/ -k "not eval" --timeout=900
   model: xtts-v2
   model_family: XTTS
   skus:

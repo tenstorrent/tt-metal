@@ -334,8 +334,10 @@ def _generate_chunked(tt, chunks, cond_wav, spk_wav_tt, cfg):
 
 def _take_on_device(sd, ref_decoder_full, chunks, cond_wav, spk_wav, cfg, seed_offset):
     """Open a fresh device, synthesize the full take, then close the device."""
-    extra = {"trace_region_size": cfg.session_trace_region} if len(chunks) > 1 else {}
-    device = ttnn.open_device(device_id=cfg.device_id, l1_small_size=cfg.l1_small_size, **extra)
+    # Both branches capture setup/decode/vocoder traces, so the trace region is unconditional.
+    device = ttnn.open_device(
+        device_id=cfg.device_id, l1_small_size=cfg.l1_small_size, trace_region_size=cfg.session_trace_region
+    )
     try:
         tt = TtXtts(device, sd, ref_decoder_full)
         spk_wav_tt = ttnn.from_torch(

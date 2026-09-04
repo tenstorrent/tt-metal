@@ -1133,6 +1133,7 @@
 - name: xtts-v2 e2e tests
   cmd: |
     set -e
+    uv pip install -r models/experimental/xtts/requirements.txt
     pytest models/experimental/xtts/tests/perf/test_e2e_perf.py --timeout=900
     python models/experimental/xtts/demo/xtts_demo.py
   model: xtts-v2

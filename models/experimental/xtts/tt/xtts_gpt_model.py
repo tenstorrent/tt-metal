@@ -246,8 +246,11 @@ class TtXttsGptModel(LightweightModule):
         prompt_ln, kv = self.stack.forward_prefill(prefix)
         ttnn.deallocate(prompt_ln)
         prompt_len = kv[0][0].shape[2]
-        # fill_cache corrupts first tile when prompt tiles is odd and heads=16; pad +1 tile.
-        pad_row = (prompt_len // TILE) % 2 == 1 and prompt_len + TILE <= self.max_seq
+        # fill_cache corrupts the first tile when prompt tiles is odd and heads=16 (measured at 9,
+        # 11 and 13 tiles); pad +1 tile. Ceil, not floor: a prompt that is not tile-aligned still
+        # occupies ceil(len/TILE) tiles, and flooring would miss the pad for e.g. 260 rows.
+        prompt_tiles = -(-prompt_len // TILE)
+        pad_row = prompt_tiles % 2 == 1 and prompt_len + TILE <= self.max_seq
         for i, (k, v) in enumerate(kv):
             kw = ttnn.pad(k, [(0, 0), (0, 0), (0, TILE), (0, 0)], value=0.0) if pad_row else k
             vw = ttnn.pad(v, [(0, 0), (0, 0), (0, TILE), (0, 0)], value=0.0) if pad_row else v

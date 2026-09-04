@@ -260,7 +260,10 @@ class TtTracedDecoder:
                 run += 1
             if run > 8:
                 seq = seq[: len(seq) - run + 2]
-        cut = min(max(len(seq), 1), max(steps_run - 1, 1))
+        # No floor at 1: a step-0 STOP means empty output (match eager generate(); never emit 1025
+        # as a code). cut is also bounded by steps_run-1 because latents_buf[i] holds the latent of
+        # code i-1, so cut codes need cut+1 replayed steps.
+        cut = min(len(seq), max(steps_run - 1, 0))
         codes_out = torch.tensor([codes[:cut]], dtype=torch.long)
         return codes_out, lat[:, 1 : cut + 1, :].to(torch.bfloat16), decode_replay_s
 
