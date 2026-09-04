@@ -60,7 +60,6 @@ set(TTNN_CORE_SRCS
 
 set(TTNNCPP_SRCS
     # FIXME: Move these out to appropriate sub targets
-    cpp/ttnn/kernel_lib/host/mcast_host.cpp
     cpp/ttnn/operations/compute_throttle_utils.cpp
     cpp/ttnn/operations/trace.cpp
     cpp/ttnn/graph/capture_program_config_registry.cpp
@@ -68,7 +67,6 @@ set(TTNNCPP_SRCS
     cpp/ttnn/operations/generic/generic_op.cpp
     cpp/ttnn/operations/generic/device/generic_op_program_factory.cpp
     cpp/ttnn/operations/generic/device/generic_op_device_operation.cpp
-    cpp/ttnn/operations/generic/device/generic_op_spec_factory.cpp
     cpp/ttnn/operations/experimental/fusion/device/fusion_dispatch_op_device_operation.cpp
     cpp/ttnn/operations/data_movement/reshape_view/reshape_common.cpp
     cpp/ttnn/operations/experimental/ccl/rms_allgather/device/rms_allgather_device_operation.cpp
@@ -96,6 +94,11 @@ set(TTNNCPP_SRCS
     cpp/ttnn/operations/copy/typecast/device/typecast_rm_chunked_program_factory.cpp
     cpp/ttnn/operations/copy/typecast/device/typecast_sharded_program_factory.cpp
     cpp/ttnn/operations/copy/typecast/typecast.cpp
+    # Keep these two at the end: TTNNCPP_SRCS order drives the unity-build batching,
+    # and inserting higher up reshuffles the blobs, which collides same-named
+    # anonymous-namespace helpers in unrelated files (e.g. the dit_fused factories).
+    cpp/ttnn/kernel_lib/host/mcast_host.cpp
+    cpp/ttnn/operations/generic/device/generic_op_spec_factory.cpp
 )
 
 ####################################################################################################
