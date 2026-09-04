@@ -1,0 +1,15 @@
+# Minimal PGD for adjacency-guided placement tests.
+#
+# One MESH grouping of two ASICs. Locations are UNSPECIFIED so the grouping is free to land on any
+# connected pair of chips, which is what gives the search more than one candidate to choose between.
+groupings {
+  name: "1x2_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 1 location { asic_location: ASIC_LOCATION_UNSPECIFIED } }
+  ]
+  row_major_mesh {
+    dims: [1, 2]
+  }
+}

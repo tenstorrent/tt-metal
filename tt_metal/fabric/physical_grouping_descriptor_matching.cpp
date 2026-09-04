@@ -1981,21 +1981,55 @@ AdjacencyGraph<AsicID> filter_mapped_placements_in_physical_graph(
     return AdjacencyGraph<AsicID>(std::move(free_adjacency));
 }
 
-// TODO: the seam domain — the free chips with an ethernet link into a placed region.
-// Must be computed from the UNFILTERED physical graph: the filtered one has already deleted the
-// region's own chips, so the links out of it are gone with them.
-// std::set<AsicID> free_chips_bordering_region(...);
+// The seam domain: the free chips with an ethernet link into `region`, each mapped to how many links
+// it has into it. A mesh placed on any of these chips touches the region.
+//
+// Must be computed from the UNFILTERED physical graph. The filtered one has already deleted the
+// region's own chips, so the links out of it are gone with them and this would come back empty.
+std::map<AsicID, std::size_t> free_chips_bordering_region(
+    const std::unordered_set<AsicID>& region,
+    const std::unordered_set<AsicID>& occupied,
+    const AdjacencyGraph<AsicID>& physical_graph) {
+    std::map<AsicID, std::size_t> boundary;
+    for (const AsicID& region_chip : region) {
+        // Parallel links are duplicate neighbour entries, so this counts links and not chips.
+        for (const AsicID& neighbor : physical_graph.get_neighbors(region_chip)) {
+            if (!occupied.contains(neighbor)) {
+                ++boundary[neighbor];
+            }
+        }
+    }
+    return boundary;
+}
 
-// The distinct already-placed neighbours of `mesh_id`. mesh_level_graph carries channel multiplicity as
-// duplicate neighbour entries, so the raw neighbour list would count one neighbour several times.
-std::set<GlobalMeshId> placed_neighbors_of(
+// The number of ethernet links running between two disjoint footprints, counting parallel links
+// separately. Also derived from the unfiltered graph, for the same reason as above.
+std::size_t count_links_between(
+    const std::unordered_set<AsicID>& region_a,
+    const std::unordered_set<AsicID>& region_b,
+    const AdjacencyGraph<AsicID>& physical_graph) {
+    std::size_t links = 0;
+    for (const AsicID& chip : region_a) {
+        for (const AsicID& neighbor : physical_graph.get_neighbors(chip)) {
+            if (region_b.contains(neighbor)) {
+                ++links;
+            }
+        }
+    }
+    return links;
+}
+
+// The already-placed neighbours of `mesh_id`, each mapped to the number of mesh-level edges joining
+// them. mesh_level_graph carries channel multiplicity as duplicate neighbour entries, so that count is
+// how many ethernet links the seam between the two meshes has to carry.
+std::map<GlobalMeshId, std::size_t> placed_neighbors_of(
     const GlobalMeshId& mesh_id,
     const AssignedMeshes& assignment,
     const AdjacencyGraph<GlobalMeshId>& mesh_level_graph) {
-    std::set<GlobalMeshId> placed;
+    std::map<GlobalMeshId, std::size_t> placed;
     for (const GlobalMeshId& neighbor : mesh_level_graph.get_neighbors(mesh_id)) {
         if (assignment_has_mesh(assignment, neighbor)) {
-            placed.insert(neighbor);
+            ++placed[neighbor];
         }
     }
     return placed;
@@ -2034,12 +2068,14 @@ std::optional<GlobalMeshId> select_next_mesh(
 }
 
 // The candidate placements for `mesh_id` given what is already placed: every placement of every grouping
-// variant accepted for this mesh that is disjoint from the regions already taken. Disjointness is
-// enforced by the solve rather than filtered afterwards, so an overlapping placement is never
-// constructed.
+// variant accepted for this mesh that is disjoint from the regions already taken and that meets every
+// mesh-level edge to an already-placed neighbour with enough ethernet links.
 //
-// TODO: adjacency is NOT enforced yet — the pool still contains placements that touch none of
-// `mesh_id`'s placed neighbours, so a candidate that satisfies no mesh-level edge is still offered.
+// Disjointness is enforced by the solve rather than filtered afterwards, so an overlapping placement is
+// never constructed. Adjacency is enforced in two halves, because the solver counts mapped nodes and the
+// requirement is on links: a cardinality constraint bounds how many of this mesh's chips must sit on the
+// neighbour's boundary, which is necessary but not sufficient, and the exact link count is then checked
+// on each finished placement.
 std::vector<PsdPlacement> next_step_pool(
     const GlobalMeshId& mesh_id,
     const AssignedMeshes& assignment,
@@ -2060,18 +2096,86 @@ std::vector<PsdPlacement> next_step_pool(
     const AdjacencyGraph<AsicID> free_physical_graph =
         filter_mapped_placements_in_physical_graph(occupied, physical_graph);
 
-    // TODO: derive the adjacency constraints for this mesh from its placed neighbours
-    // (placed_neighbors_of(mesh_id, assignment, mesh_level_graph)) and add them below.
-    (void)mesh_level_graph;
-    // One constraint object per variant: enumerate_distinct_placements_for_grouping adds the
-    // variant's own trait and host-alignment constraints to it in place, and those must not leak
-    // into the next variant's solve.
-    MappingConstraints<LogicalChipId, AsicID> constraints;
+    // One seam per already-placed neighbour, found in a single pass over the assignment. Derived once
+    // here because it depends only on the assignment, not on which grouping variant we are about to try.
+    struct Seam {
+        const std::unordered_set<AsicID>* neighbor_asics;
+        // Free chips bordering the neighbour's region. Keys are candidate chips for this mesh; values
+        // are how many links each one has into the region, which the bound below needs.
+        std::map<AsicID, std::size_t> boundary;
+        std::size_t required_links = 0;
+        std::size_t min_boundary_chips = 0;
+    };
+    // Channel count per mesh-level edge out of `mesh_id`, keyed by neighbour. Multiplicity is carried as
+    // duplicate neighbour entries, so counting them gives the links each seam has to carry. Built up
+    // front so the single walk over the assignment below is a lookup per placed mesh.
+    std::map<GlobalMeshId, std::size_t> required_links_by_neighbor;
+    for (const GlobalMeshId& neighbor : mesh_level_graph.get_neighbors(mesh_id)) {
+        ++required_links_by_neighbor[neighbor];
+    }
+
+    std::vector<Seam> seams;
+    seams.reserve(required_links_by_neighbor.size());
+    for (const PlacedMesh& placed : assignment) {
+        const auto required_it = required_links_by_neighbor.find(placed.mesh_id);
+        if (required_it == required_links_by_neighbor.end()) {
+            // Placed, but shares no mesh-level edge with this mesh, so it constrains nothing here.
+            continue;
+        }
+        const std::size_t required_links = required_it->second;
+        std::map<AsicID, std::size_t> boundary =
+            free_chips_bordering_region(placed.placement.asics, occupied, physical_graph);
+        std::size_t max_links_per_chip = 0;
+        for (const auto& [chip, links] : boundary) {
+            max_links_per_chip = std::max(max_links_per_chip, links);
+        }
+        if (max_links_per_chip == 0) {
+            // Nothing free borders this neighbour, so no placement of this mesh can reach it.
+            return {};
+        }
+        // One chip carries at most max_links_per_chip links, so meeting required_links takes at least
+        // this many of our chips on the boundary. A necessary condition only — a placement satisfying it
+        // can still fall short once the links are actually counted, which is what the check below is for.
+        Seam seam;
+        seam.neighbor_asics = &placed.placement.asics;
+        seam.boundary = std::move(boundary);
+        seam.required_links = required_links;
+        seam.min_boundary_chips = (required_links + max_links_per_chip - 1) / max_links_per_chip;
+        seams.push_back(std::move(seam));
+    }
 
     std::vector<PsdPlacement> pool;
     for (const GroupingInfo& grouping : groupings_it->second) {
         const std::vector<uint32_t>& grouping_nodes = grouping.adjacency_graph.get_nodes();
         if (grouping_nodes.empty()) {
+            continue;
+        }
+
+        // One constraint object per variant: enumerate_distinct_placements_for_grouping adds the
+        // variant's own trait and host-alignment constraints to it in place, and those must not leak
+        // into the next variant's solve.
+        MappingConstraints<LogicalChipId, AsicID> constraints;
+
+        // Seam constraints are per variant too, since they are written over this variant's nodes.
+        bool variant_feasible = true;
+        for (const Seam& seam : seams) {
+            if (seam.min_boundary_chips > grouping_nodes.size()) {
+                // This variant does not have enough chips to carry the seam however it is placed.
+                variant_feasible = false;
+                break;
+            }
+            MappingConstraints<LogicalChipId, AsicID>::CardinalityPairSet seam_pairs;
+            for (const LogicalChipId node : grouping_nodes) {
+                for (const auto& [chip, links] : seam.boundary) {
+                    seam_pairs.emplace(node, chip);
+                }
+            }
+            if (!constraints.add_cardinality_constraint(seam_pairs, seam.min_boundary_chips)) {
+                variant_feasible = false;
+                break;
+            }
+        }
+        if (!variant_feasible) {
             continue;
         }
 
@@ -2086,6 +2190,18 @@ std::vector<PsdPlacement> next_step_pool(
             candidate.mesh_node_to_asic_position = grouping.mesh_node_to_asic_position;
             for (const auto& [grouping_node, asic_id] : mapping.target_to_global) {
                 candidate.asics.insert(asic_id);
+            }
+            // The cardinality constraint bounds how many of our chips touch the neighbour, not how many
+            // links they carry between them, so the real count is settled here.
+            bool seams_satisfied = true;
+            for (const Seam& seam : seams) {
+                if (count_links_between(candidate.asics, *seam.neighbor_asics, physical_graph) < seam.required_links) {
+                    seams_satisfied = false;
+                    break;
+                }
+            }
+            if (!seams_satisfied) {
+                continue;
             }
             pool.push_back(std::move(candidate));
         }
@@ -2131,7 +2247,7 @@ AssignedMeshes place_remaining_meshes(
     //    variants rather than the mesh id, so every instance of the same mesh definition shares one entry —
     //    a descriptor with many identical meshes then solves each shape once per distinct occupancy instead
     //    of once per mesh. The key has to cover everything the pool depends on, so it must grow to include
-    //    the placed neighbours once the seam constraint starts narrowing the pool.
+    //    the placed neighbours' footprints, since the seam constraints are derived from them.
     //  - Better: enumerate each grouping variant once against the FULL physical graph before the search
     //    starts, and at each node filter that master list by occupancy instead of re-solving. Held as
     //    bitsets over ASIC index, disjointness is a few word ANDs per candidate, so the per-node cost drops

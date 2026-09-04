@@ -1,0 +1,25 @@
+# A PGD grouping that matches a 1x2 mesh topologically but cannot be placed on the two-pair PSD.
+#
+# The shape is the same 1x2 line as test_1x2_mesh_grouping.textproto, so it still matches an MGD
+# 1x2 mesh during topology matching. The difference is that its chips are pinned to ASIC locations
+# 1 and 2, which in test_4asic_2mesh.textproto are chips 101 and 102 -- one from each pair, with no
+# link between them:
+#
+#     100 == 101      102 == 103
+#             '--------'
+#          pinned here, but not linked
+#
+# Both locations exist in that PSD, so the grouping survives the slot-count prefilter and reaches
+# topology matching. It only fails later, at the point of embedding into the PSD, which is exactly
+# the case where the matcher should fall back to the MGD's own grouping.
+groupings {
+  name: "1x2_Mesh_Gap"
+  preset_type: MESH
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_1 } },
+    { id: 1 location { asic_location: ASIC_LOCATION_2 } }
+  ]
+  row_major_mesh {
+    dims: [1, 2]
+  }
+}
