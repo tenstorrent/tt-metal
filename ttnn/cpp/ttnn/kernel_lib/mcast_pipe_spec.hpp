@@ -98,8 +98,8 @@ struct McastArgsSpec {
 //   auto sender = mc.sender(noc);
 #define MCAST_ARGS(prefix)                  \
     ::dataflow_kernel_lib::McastArgsSpec<   \
-        sem::prefix##_data_ready,           \
-        sem::prefix##_consumer_ready,       \
+        sem::prefix##_data_ready_t::id,     \
+        sem::prefix##_consumer_ready_t::id, \
         get_arg(args::prefix##_active),     \
         get_arg(args::prefix##_num_active), \
         get_arg(args::prefix##_flags),      \
@@ -108,8 +108,8 @@ struct McastArgsSpec {
 // Rotating variant: `span` is the round count (== the broadcast span), which sizes the RT block.
 #define MCAST_ARGS_ROTATING(prefix, span)   \
     ::dataflow_kernel_lib::McastArgsSpec<   \
-        sem::prefix##_data_ready,           \
-        sem::prefix##_consumer_ready,       \
+        sem::prefix##_data_ready_t::id,     \
+        sem::prefix##_consumer_ready_t::id, \
         get_arg(args::prefix##_active),     \
         get_arg(args::prefix##_num_active), \
         get_arg(args::prefix##_flags),      \
