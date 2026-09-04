@@ -366,6 +366,16 @@ class DFlashDrafter:
         h.deallocate(True)
         logits = ttnn.linear(h_drafts, self.lm_head, compute_kernel_config=self._ckc)
         h_drafts.deallocate(True)
+        # Greedy ids via the model's PROVEN on-device sampling module when
+        # available (force-argmax over vocab-SHARDED logits; it applies the
+        # invalid/padded-vocab mask that a naive per-shard argmax gets wrong,
+        # and it is the same path serving uses at B=32). enable_trace=False so
+        # its ops inline into OUR single fused trace instead of nesting one.
+        sampler = getattr(self, "_sampler", None)
+        if sampler is not None:
+            tt_tokens, _lp = sampler.sample(logits, enable_trace=False)
+            logits.deallocate(True)
+            return tt_tokens
         if self.tp > 1:
             logits = ccl_allgather(logits, self.mesh_config, self.ccl_manager)
         ids = ttnn.argmax(logits[:, :, :, : self.vocab], dim=-1)
@@ -478,6 +488,12 @@ class DFlashFusedDecoder:
         self.v_pt = ttnn.from_torch(
             pt, device=self.mesh_device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self._mapper
         )
+        # Reuse the model's on-device sampling module for BOTH the draft ids
+        # and the verify posterior (proven force-argmax over sharded logits;
+        # see tt/model.py sampling init and the batched-prefill call site in
+        # tt_transformers generator.py). Falls back to gathered ttnn.argmax.
+        self._sampler = getattr(target_model, "sampling", None)
+        drafter._sampler = self._sampler
         # persistent tap buffers for the verify's copy-mode capture —
         # lazily allocated by the hook on the compile pass (shape-proof).
         self.tap_bufs = [None for _ in drafter.target_layer_ids]
@@ -565,10 +581,15 @@ class DFlashFusedDecoder:
         )  # [1,1,1,K] uint32
         flat = ttnn.reshape(draft_ids, (1, K))
         vx = ttnn.concat([self.anchor_tok, flat], dim=-1)  # [1, K+1] uint32
+        # sharded verify logits when the sampling module can consume them
+        self.target._dflash_sharded_logits = self._sampler is not None
         logits, hidden = self.target.ttnn_verify_forward(
             x=vx, current_pos=self.v_pu, current_pos_cache=self.v_pi, page_table=self.v_pt, kv_cache=self.kv_layers
         )
-        vidx = ttnn.argmax(logits[:, :, :, : d.vocab], dim=-1)
+        if self._sampler is not None:
+            vidx, _lp = self._sampler.sample(logits, enable_trace=False)
+        else:
+            vidx = ttnn.argmax(logits[:, :, :, : d.vocab], dim=-1)
         # tap fc (buffers were filled by the verify's copy-mode hook)
         cat = ttnn.concat(self.tap_bufs, dim=3)
         fc_out = ttnn.linear(cat, d.fc, compute_kernel_config=d._ckc)

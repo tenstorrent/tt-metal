@@ -1112,7 +1112,13 @@ class Gemma4Model:
         # lm_head deallocates its input.
         if is_decode and return_hidden:
             # Spec-decode reads full-vocab logits on host — never keep sharded.
-            logits = self._apply_lm_head(hidden_states, is_decode=True, keep_sharded_for_sampling=False)
+            # dFlash verify can consume SHARDED logits (the on-device sampling
+            # module handles the gather + force-argmax itself).
+            logits = self._apply_lm_head(
+                hidden_states,
+                is_decode=True,
+                keep_sharded_for_sampling=getattr(self, "_dflash_sharded_logits", False),
+            )
             return logits, post_norm_hidden
 
         # Slice to the last token tile before lm_head when caller only wants
