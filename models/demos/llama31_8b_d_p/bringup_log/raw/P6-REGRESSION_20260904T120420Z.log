@@ -1,0 +1,249 @@
+2026-09-04 12:04:22.993 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mstojkovic/.cache/ttnn,model_cache_path=/home/mstojkovic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.14, pytest-9.0.3, pluggy-1.6.0 -- /home/mstojkovic/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mstojkovic/tt-metal
+configfile: pytest.ini
+plugins: timeout-2.4.0, anyio-4.15.0, cov-7.0.0, github-actions-annotate-failures-0.3.0, repeat-0.9.4, dash-2.15.0, benchmark-5.2.3, split-0.11.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 136 items
+
+models/demos/llama31_8b_d_p/tests/unit/test_attention_vs_ref.py::test_attention_vs_ref[blackhole-s128-bf8_b-mesh_device0] 2026-09-04 12:04:27.176 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:224)
+2026-09-04 12:04:27.176 | info     |             UMD | Cluster constructor started. (cluster.cpp:406)
+2026-09-04 12:04:27.193 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-09-04 12:04:27.193 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-09-04 12:04:27.294 | info     |             UMD | Established firmware bundle version: 19.12.0 (topology_discovery.cpp:576)
+2026-09-04 12:04:27.299 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-09-04 12:04:28.735 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31}/[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 30, 31, 16, 17, 18, 19, 20, 21, 22, 23] and remote chip ids {} (cluster.cpp:173)
+2026-09-04 12:04:28.735 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-09-04 12:04:28.735 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-09-04 12:04:28.735 | info     |             UMD | Cluster constructor completed. (cluster.cpp:665)
+2026-09-04 12:04:28.754 | info     |             UMD | Starting devices in cluster (cluster.cpp:1205)
+2026-09-04 12:04:28.793 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1213)
+2026-09-04 12:04:32.647 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
+2026-09-04 12:04:32.647 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
+2026-09-04 12:04:32.665 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4, 3:16, 4:12} (topology_mapper_utils.cpp:3368)
+2026-09-04 12:04:32.665 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:24, 5:8} (topology_mapper_utils.cpp:3376)
+2026-09-04 12:04:33.457 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 12:04:34.171 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 12:04:34.846 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 12:04:35.334 | INFO     | llama31_8b_d_p.tests.unit.test_attention_vs_ref:test_attention_vs_ref:333 - [G-ATTN] block bf8_b seq=128: PCC=0.9997364 floor=0.9998805 ratio=2.21x (threshold 0.999, raw budget 8.0x applies=True)
+2026-09-04 12:04:35.334 | INFO     | llama31_8b_d_p.tests.unit.test_attention_vs_ref:test_attention_vs_ref:338 - [G-ATTN] block bf8_b seq=128 attribution: fused SDPA alone PCC=0.9998549 vs its own floor 0.9999949 (excess 1.400e-04 = 28.6x); floor error 1.195e-04; floor+SDPA predicts block PCC 0.9997405 vs measured 0.9997364; SDPA-attributed residual ratio 1.03x
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_attention_vs_ref.py::test_attention_stage_budgets[blackhole-s512-bf8_b-mesh_device0] 2026-09-04 12:04:36.398 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 12:04:36.497 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 12:04:37.165 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 12:04:37.643 | INFO     | llama31_8b_d_p.tests.unit.test_attention_vs_ref:_record:414 - [G-ATTN] stage qkv_proj_q   bf8_b seq=512: PCC=0.9999728 floor=0.9999742 ratio=1.06x
+2026-09-04 12:04:37.647 | INFO     | llama31_8b_d_p.tests.unit.test_attention_vs_ref:_record:414 - [G-ATTN] stage qkv_proj_k   bf8_b seq=512: PCC=0.9999727 floor=0.9999741 ratio=1.06x
+2026-09-04 12:04:37.651 | INFO     | llama31_8b_d_p.tests.unit.test_attention_vs_ref:_record:414 - [G-ATTN] stage qkv_proj_v   bf8_b seq=512: PCC=0.9999726 floor=0.9999741 ratio=1.06x
+2026-09-04 12:04:37.700 | INFO     | llama31_8b_d_p.tests.unit.test_attention_vs_ref:_record:414 - [G-ATTN] stage rope_q       bf8_b seq=512: PCC=0.9999954 floor=0.9999982 ratio=2.50x
+2026-09-04 12:04:37.715 | INFO     | llama31_8b_d_p.tests.unit.test_attention_vs_ref:_record:414 - [G-ATTN] stage rope_k       bf8_b seq=512: PCC=0.9999954 floor=0.9999982 ratio=2.48x
+2026-09-04 12:04:37.781 | INFO     | llama31_8b_d_p.tests.unit.test_attention_vs_ref:_record:414 - [G-ATTN] stage sdpa_fused   bf8_b seq=512: PCC=0.9998361 floor=0.9999939 ratio=26.72x  (fused kernel — excluded from the 3x budget, §2.3)
+2026-09-04 12:04:37.807 | INFO     | llama31_8b_d_p.tests.unit.test_attention_vs_ref:_record:414 - [G-ATTN] stage concat_heads bf8_b seq=512: PCC=0.9999986 floor=0.9999986 ratio=1.00x
+2026-09-04 12:04:37.847 | INFO     | llama31_8b_d_p.tests.unit.test_attention_vs_ref:_record:414 - [G-ATTN] stage o_proj       bf8_b seq=512: PCC=0.9999727 floor=0.9999741 ratio=1.06x
+2026-09-04 12:04:37.847 | INFO     | llama31_8b_d_p.tests.unit.test_attention_vs_ref:test_attention_stage_budgets:487 - [G-ATTN] stage summary bf8_b: hand-written stages 1.00x-2.50x of their floors; fused SDPA 26.72x of its modelled floor
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_attention_vs_ref.py::test_sdpa_standalone_probe[blackhole-s128-mesh_device0] 2026-09-04 12:04:38.918 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 12:04:39.011 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 12:04:39.028 | INFO     | llama31_8b_d_p.tests.unit.test_attention_vs_ref:test_sdpa_standalone_probe:547 - [G-ATTN] SDPA probe seq=128: PCC=0.9998309 modelled_floor=0.9999969 ratio=54.86x (the floor model does not describe a fused kernel's interior, §2.3)
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_attention_vs_ref.py::test_attention_unswizzled_qk_negative_control[blackhole-bf8_b-mesh_device0] 2026-09-04 12:04:40.061 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 12:04:40.154 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 12:04:40.417 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 12:04:40.747 | INFO     | llama31_8b_d_p.tests.unit.test_attention_vs_ref:test_attention_unswizzled_qk_negative_control:580 - [G-ATTN] control (bf8_b): Q/K without the Meta permute -> PCC=0.51174
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_attention_vs_ref.py::test_attention_rotates_only_q_and_k[blackhole-mesh_device0] 2026-09-04 12:04:41.810 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 12:04:41.903 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 12:04:42.228 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 12:04:42.486 | INFO     | llama31_8b_d_p.tests.unit.test_attention_vs_ref:test_attention_rotates_only_q_and_k:606 - [G-ATTN] rotation invariant: vs Q,K-rotated ref PCC=0.9998275; vs Q,K,V-rotated ref PCC=0.71785
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_attention_vs_ref.py::test_attention_refuses_to_build_weightless[blackhole-mesh_device0] 2026-09-04 12:04:43.540 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 12:04:43.632 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 12:04:43.633 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="tensor_cache_path"
+2026-09-04 12:04:43.633 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 12:04:43.633 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="tensor_cache_path"
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_attention_vs_ref.py::test_attention_refuses_a_derived_sdpa_grid[blackhole-mesh_device0] 2026-09-04 12:04:44.659 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 12:04:44.756 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 12:04:44.756 | INFO     | llama31_8b_d_p.tests.unit.test_attention_vs_ref:test_attention_refuses_a_derived_sdpa_grid:649 - [G-ATTN] compute grid = (12, 10); CCL offset x = 11; pinned SDPA grid x = 8
+2026-09-04 12:04:44.756 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="ccl_core_grid_offset.x >= sdpa_grid.x"
+2026-09-04 12:04:44.756 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="ccl_core_grid_offset.x >= sdpa_grid.x"
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_attention_vs_ref.py::test_attention_refuses_cached_len[blackhole-mesh_device0] 2026-09-04 12:04:45.813 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 12:04:45.907 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 12:04:46.093 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 12:04:46.315 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] NotImplementedError message="chunk-position-aware SDPA"
+2026-09-04 12:04:46.318 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] NotImplementedError message="chunk-position-aware SDPA"
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_ccl_semaphores.py::test_semaphore_inventory_is_exact[blackhole-mesh_device0] 2026-09-04 12:04:47.363 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 12:04:47.456 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 12:04:47.459 | INFO     | llama31_8b_d_p.tests.unit.test_ccl_semaphores:test_semaphore_inventory_is_exact:52 - [G-SEMAPHORE] inventory at construction: {'rs': 6, 'ag': 4, 'barrier': 2, 'ring_attention': 2} (total 14)
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_ccl_semaphores.py::test_semaphores_survive_dozens_of_getter_cycles[blackhole-mesh_device0] 2026-09-04 12:04:48.499 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 12:04:48.592 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 12:04:48.596 | INFO     | llama31_8b_d_p.tests.unit.test_ccl_semaphores:test_semaphores_survive_dozens_of_getter_cycles:79 - [G-SEMAPHORE] after 32 layers x 4 collectives: {'rs': 6, 'ag': 4, 'barrier': 2, 'ring_attention': 2}
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_ccl_semaphores.py::test_ping_pong_cycles_and_is_two_deep[blackhole-mesh_device0] 2026-09-04 12:04:49.632 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 12:04:49.724 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 12:04:49.727 | INFO     | llama31_8b_d_p.tests.unit.test_ccl_semaphores:test_ping_pong_cycles_and_is_two_deep:107 - [G-SEMAPHORE] rs/ag/barrier ping-pong all cycle with period 2 (DEC-026)
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_ccl_semaphores.py::test_reset_skips_barrier_and_ring_attention[blackhole-mesh_device0] 2026-09-04 12:04:50.764 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 12:04:50.858 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_ccl_semaphores.py::test_semaphores_would_multiply_if_built_per_layer[blackhole-mesh_device0] 2026-09-04 12:04:51.890 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 12:04:51.983 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 12:04:51.989 | INFO     | llama31_8b_d_p.tests.unit.test_ccl_semaphores:test_semaphores_would_multiply_if_built_per_layer:143 - [G-SEMAPHORE] control: 3 managers -> 42 semaphores (correct code: 14)
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_decoder_layer_vs_ref.py::test_decoder_layer_vs_ref[blackhole-s128-bf8_b-mesh_device0] 2026-09-04 12:04:53.049 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 12:04:53.142 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 12:04:56.375 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 12:04:58.219 | INFO     | llama31_8b_d_p.tests.unit.test_decoder_layer_vs_ref:test_decoder_layer_vs_ref:320 - [G-LAYER] bf8_b seq=128: PCC=0.9997665 floor=0.9998709 raw_ratio=1.81x (threshold 0.999, raw budget 8.0x applies=True)
+2026-09-04 12:04:58.220 | INFO     | llama31_8b_d_p.tests.unit.test_decoder_layer_vs_ref:test_decoder_layer_vs_ref:325 - [G-LAYER] bf8_b seq=128 attribution: floor+deviceSDPA predicts PCC=0.9997835 vs measured 0.9997665; floor error=1.291e-04; kernel excess through the layer=8.738e-05 (0.68x the floor error); SDPA-attributed residual ratio=1.13x
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_decoder_layer_vs_ref.py::test_decoder_layer_swapped_norm_gains_negative_control[blackhole-bf8_b-mesh_device0] 2026-09-04 12:04:59.403 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 12:04:59.497 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 12:05:00.773 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 12:05:02.390 | INFO     | llama31_8b_d_p.tests.unit.test_decoder_layer_vs_ref:test_decoder_layer_swapped_norm_gains_negative_control:362 - [G-LAYER] control (bf8_b): norm gains swapped -> PCC=0.99864
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_decoder_layer_vs_ref.py::test_decoder_layer_real_weights_real_input_swapped_norms[blackhole-mesh_device0] 2026-09-04 12:05:03.516 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 12:05:03.610 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 12:05:04.112 | INFO     | llama31_8b_d_p.tests.unit.test_decoder_layer_vs_ref:test_decoder_layer_real_weights_real_input_swapped_norms:416 - [G-LAYER] real weights + real embedding input: max|x|=0.0596 (RMS 0.01060), max|attn_out|=0.3948, max|out|=2.0207; residual attenuation ||y||/||attn_out||=3.40x
+2026-09-04 12:05:04.113 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 12:05:05.852 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 12:05:09.830 | INFO     | llama31_8b_d_p.tests.unit.test_decoder_layer_vs_ref:test_decoder_layer_real_weights_real_input_swapped_norms:439 - [G-LAYER] real weights + real input (bf8_b): correct=0.9998649 floor=0.9999647 ratio=3.82x; norm gains swapped=0.66830 (recipe measured 0.9471 for this control)
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_decoder_layer_vs_ref.py::test_layer_is_causal[blackhole-mesh_device0] 2026-09-04 12:05:10.939 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 12:05:11.030 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 12:05:12.107 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 12:05:13.299 | INFO     | llama31_8b_d_p.tests.unit.test_decoder_layer_vs_ref:test_layer_is_causal:526 - [G-LAYER] causality: max|delta| rows[:-1]=0.000e+00, last row=8.969e+00
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_decoder_layer_vs_ref.py::test_delta_probe_runs_and_survives_garbage[blackhole-mesh_device0] 2026-09-04 12:05:14.418 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 12:05:14.494 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 12:05:14.507 | INFO     | models.demos.llama31_8b_d_p.tt.layer:_delta_stats:72 - [delta-probe L 0] real_tensor: L2=361.042  mean|x|=0.7963  signed_mean=-0.00302  max|x|=4.719
+2026-09-04 12:05:14.507 | WARNING  | models.demos.llama31_8b_d_p.tt.layer:_delta_stats:79 - [delta-probe] failed at L7 not_a_tensor: get_device_tensors(): incompatible function arguments. The following argument types are supported:
+    1. get_device_tensors(tensor: ttnn._ttnn.tensor.Tensor) -> list[ttnn._ttnn.tensor.Tensor]
+
+Invoked with types: object
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_embedding_vs_ref.py::test_embedding_vs_ref[blackhole-s128-mesh_device0] 2026-09-04 12:05:15.542 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 12:05:15.619 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 12:05:15.684 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 12:05:15.713 | INFO     | llama31_8b_d_p.tests.unit.test_embedding_vs_ref:test_embedding_vs_ref:95 - [EMBED] s128: PCC vs fp32 table=0.9999986 floor=0.9999986 ratio=1.00x; max|delta| vs the bf16-table reference=0.000e+00 (must be exactly 0)
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_embedding_vs_ref.py::test_embedding_row_map_negative_control[blackhole-mesh_device0] 2026-09-04 12:05:16.753 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 12:05:16.845 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 12:05:16.909 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 12:05:16.939 | INFO     | llama31_8b_d_p.tests.unit.test_embedding_vs_ref:test_embedding_row_map_negative_control:123 - [EMBED] control: ids shifted by one row -> PCC=-0.00088, bit-equal=False
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_embedding_vs_ref.py::test_embedding_refuses_to_build_weightless[blackhole-mesh_device0] 2026-09-04 12:05:17.987 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 12:05:18.081 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 12:05:18.082 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="tensor_cache_path"
+2026-09-04 12:05:18.082 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 12:05:18.082 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="tensor_cache_path"
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_embedding_vs_ref.py::test_embedding_refuses_a_wrong_shaped_table[blackhole-mesh_device0] 2026-09-04 12:05:19.141 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 12:05:19.235 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 12:05:19.262 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] AssertionError message="expected"
+2026-09-04 12:05:19.262 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 12:05:19.262 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] AssertionError message="expected"
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_kv_cache_vs_ref.py::test_kv_cache_write_vs_ref[blackhole-s128-bf8_b-mesh_device0] 2026-09-04 12:05:20.297 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 12:05:20.391 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 12:05:20.485 | INFO     | llama31_8b_d_p.tests.unit.test_kv_cache_vs_ref:test_kv_cache_write_vs_ref:227 - [G-KV] round trip bf8_b seq=128: worst of 8 heads — K PCC=0.9999743 floor=0.9999743 ratio=1.00x (head 4); V PCC=0.9999753 floor=0.9999753 ratio=1.00x (head 6)
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_kv_cache_vs_ref.py::test_kv_cache_positional_readback_bit_exact[blackhole-bf8_b-mesh_device0] 2026-09-04 12:05:21.513 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 12:05:21.605 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 12:05:21.622 | INFO     | llama31_8b_d_p.tests.unit.test_kv_cache_vs_ref:test_kv_cache_positional_readback_bit_exact:288 - [G-KV] positional read-back bf8_b: 128 rows across 4 chunks at kv_actual [0, 32, 64, 96] — bit-identical (torch.equal, rtol=atol=0), max encoded value 127 <= 128 (the measured exact-integer ceiling for this dtype)
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_kv_cache_vs_ref.py::test_kv_cache_no_collateral_writes[blackhole-bf8_b-mesh_device0] 2026-09-04 12:05:22.675 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 12:05:22.768 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 12:05:22.784 | INFO     | llama31_8b_d_p.tests.unit.test_kv_cache_vs_ref:test_kv_cache_no_collateral_writes:354 - [G-KV] no collateral writes bf8_b: written rows exact; pad tail (352 positions) exactly zero; the other 3 (user, layer) slots exactly zero — all via torch.equal
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_kv_cache_vs_ref.py::test_kv_cache_dtype_delta[blackhole-mesh_device0] 2026-09-04 12:05:23.846 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 12:05:23.923 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 12:05:24.031 | INFO     | llama31_8b_d_p.tests.unit.test_kv_cache_vs_ref:test_kv_cache_dtype_delta:398 - [G-KV] dtype delta (seq=512, head 0): bf8_b K=0.9999756 V=0.9999757; bf16 K=0.9999986 V=0.9999986; cost of bf8_b = 17.8x on K, 17.7x on V. Cache bytes per token per head: 128 at bf8_b vs 256 at bf16 (DEC-021)
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_kv_cache_vs_ref.py::test_kv_cache_refuses_batched_write[blackhole-mesh_device0] 2026-09-04 12:05:25.078 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 12:05:25.171 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 12:05:25.173 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] AssertionError message="one user per call"
+2026-09-04 12:05:25.173 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] AssertionError message="one user per call"
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_kv_cache_vs_ref.py::test_kv_cache_refuses_bad_write_target[blackhole-slot_oob-mesh_device0] 2026-09-04 12:05:26.209 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 12:05:26.303 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 12:05:26.304 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] AssertionError message="slot_idx 2 out of range"
+2026-09-04 12:05:26.305 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] AssertionError message="slot_idx 2 out of range"
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_kv_cache_vs_ref.py::test_kv_cache_refuses_unaligned_capacity[blackhole-mesh_device0] 2026-09-04 12:05:27.366 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 12:05:27.459 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 12:05:27.459 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] AssertionError message="seq_local must be tile-aligned"
+2026-09-04 12:05:27.459 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] AssertionError message="seq_local must be tile-aligned"
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_kv_cache_vs_ref.py::test_kv_cache_geometry[blackhole-mesh_device0] 2026-09-04 12:05:28.506 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 12:05:28.601 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 12:05:28.611 | INFO     | llama31_8b_d_p.tests.unit.test_kv_cache_vs_ref:test_kv_cache_geometry:487 - [G-KV] geometry: per-chip (64, 1, 384, 128) bf8_b TILE, 2 users x 32 layers = 64 slots, sp=1, DRAM shard [1, 1, 32, 128]
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_lm_head_vs_ref.py::test_lm_head_vs_ref[blackhole-bf8_b-mesh_device0] 2026-09-04 12:05:29.668 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 12:05:29.747 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 12:05:37.380 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 12:05:41.525 | INFO     | llama31_8b_d_p.tests.unit.test_lm_head_vs_ref:test_lm_head_vs_ref:96 - [LM-HEAD] bf8_b: PCC=0.9999728 floor=0.9999742 ratio=1.05x (budget 3.0x); top-1 ref=88291 dev=88291
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_lm_head_vs_ref.py::test_lm_head_vocab_row_map_negative_control[blackhole-mesh_device0] 2026-09-04 12:05:42.807 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 12:05:43.491 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 12:05:46.216 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 12:05:49.673 | INFO     | llama31_8b_d_p.tests.unit.test_lm_head_vs_ref:test_lm_head_vocab_row_map_negative_control:121 - [LM-HEAD] control: vocab rolled by one -> PCC=0.00078, top-1 88291 -> 88292
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_lm_head_vs_ref.py::test_lm_head_refuses_to_build_weightless[blackhole-mesh_device0] 2026-09-04 12:05:50.844 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 12:05:50.936 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 12:05:50.936 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="tensor_cache_path"
+2026-09-04 12:05:50.936 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 12:05:50.936 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="tensor_cache_path"
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_lm_head_vs_ref.py::test_lm_head_refuses_a_transposed_weight[blackhole-mesh_device0] 2026-09-04 12:05:51.970 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 12:05:52.062 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 12:05:52.063 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] AssertionError message="tie_word_embeddings is false"
+2026-09-04 12:05:54.551 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 12:05:54.551 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] AssertionError message="tie_word_embeddings is false"
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_mesh_config.py::test_ccl_manager_constructs_on_card[blackhole-mesh_device0] 2026-09-04 12:05:55.738 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 12:05:55.831 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 12:05:55.832 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 12:05:55.834 | INFO     | llama31_8b_d_p.tests.unit.test_mesh_config:test_ccl_manager_constructs_on_card:142 - [G-MESH] compute grid = (12, 10); num_links = 1
+2026-09-04 12:05:55.834 | INFO     | llama31_8b_d_p.tests.unit.test_mesh_config:test_ccl_manager_constructs_on_card:143 - [G-MESH] ring_attention_ccl_core_grid_offset = (11, 0)
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_mesh_config.py::test_ccl_manager_allocates_semaphores_once[blackhole-mesh_device0] 2026-09-04 12:05:56.888 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 12:05:56.974 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 12:05:56.977 | INFO     | llama31_8b_d_p.tests.unit.test_mesh_config:test_ccl_manager_allocates_semaphores_once:171 - [G-MESH] semaphores rs/ag/barrier/ring = (6, 4, 2, 2), total 14
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_mlp_vs_ref.py::test_mlp_vs_ref[blackhole-s32-bf8_b-mesh_device0] 2026-09-04 12:05:58.036 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 12:05:58.129 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 12:06:00.590 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 12:06:01.956 | INFO     | llama31_8b_d_p.tests.unit.test_mlp_vs_ref:test_mlp_vs_ref:151 - [G-MLP] bf8_b seq=32: PCC=0.9999133 floor=0.9999213 ratio=1.10x (threshold 0.999, max ratio 3.0x)
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_mlp_vs_ref.py::test_mlp_silu_on_wrong_branch_negative_control[blackhole-bf8_b-mesh_device0] 2026-09-04 12:06:03.056 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 12:06:03.150 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 12:06:04.155 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 12:06:05.460 | INFO     | llama31_8b_d_p.tests.unit.test_mlp_vs_ref:test_mlp_silu_on_wrong_branch_negative_control:178 - [G-MLP] control (bf8_b): SiLU on `up` -> PCC=0.64715
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_mlp_vs_ref.py::test_mlp_compute_kernel_config_ab[blackhole-bf8_b-mesh_device0] 2026-09-04 12:06:06.560 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 12:06:06.636 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 12:06:09.287 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 12:06:10.597 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 12:06:11.924 | INFO     | llama31_8b_d_p.tests.unit.test_mlp_vs_ref:test_mlp_compute_kernel_config_ab:210 - [G-MLP] A/B bf8_b: fp32_dest_acc_en=True PCC=0.9999144 (1.10x) vs False PCC=0.9925127 (96.13x); floor=0.9999221; cost of False = 87.43x
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_mlp_vs_ref.py::test_mlp_fused_vs_separate_silu[blackhole-bf8_b-mesh_device0] 2026-09-04 12:06:13.036 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 12:06:13.126 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 12:06:15.804 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 12:06:17.097 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 12:06:18.420 | INFO     | llama31_8b_d_p.tests.unit.test_mlp_vs_ref:test_mlp_fused_vs_separate_silu:243 - [G-MLP] SiLU spelling bf8_b: fused PCC=0.9999144 (1.10x) vs separate ttnn.silu PCC=0.9999144 (1.10x); floor=0.9999221
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_mlp_vs_ref.py::test_mlp_refuses_to_build_weightless[blackhole-mesh_device0] 2026-09-04 12:06:19.524 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 12:06:19.618 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 12:06:19.619 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="tensor_cache_path"
+2026-09-04 12:06:19.619 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 12:06:19.619 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="tensor_cache_path"
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_mlp_vs_ref.py::test_mlp_refuses_scatter_output[blackhole-mesh_device0]

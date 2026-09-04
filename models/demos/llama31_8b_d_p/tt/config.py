@@ -262,7 +262,7 @@ def derive_head_dim(hf) -> int:
     """`head_dim = hidden_size // num_attention_heads` — the package's ONE derivation (`DEC-032`).
 
     Llama's `config.json` has **no `head_dim` key** (`bringup_log/00_MODEL_CARD.md` §2), so the
-    templates' `hf_config.head_dim` (`models/demos/gpt_oss_d_p/tt/model.py:65`) does not work here.
+    templates' `hf_config.head_dim` (`models/demos/gpt_oss_d_p/tt/model.py:64`) does not work here.
     `DEC-020` requires exactly one derivation in the package; it lives beside the other config
     helpers so `tt/rope.py` can keep the signature `bringup_log/03_OUTLINE.md` §2.5 gives it and
     P6.2's `ModelArgs` can expose the same value by calling this rather than re-deriving it.

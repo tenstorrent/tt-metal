@@ -16,6 +16,8 @@ entry naming the blocker) · `NOT-RUN` (needs the reason). A gate with no raw lo
 | G-MLP | P5.4 | dense SwiGLU (`down(silu(gate)*up)`), `(1,1)` | PCC >= 0.999 @bf8_b, >= 0.9995 @bf16, **<= 3x floor** at each | bf8_b **0.9999133 / 0.9999144 / 0.9999144** (floor 0.9999213/0.9999221/0.9999222 -> **1.10 / 1.10 / 1.10x**); bf16 **0.9999851 / 0.9999852 / 0.9999852** (floor 0.9999929 -> **2.11 / 2.10 / 2.09x**); control **0.64715 / 0.64722** | PASS | 2026-09-04 | `raw/G-MLP_20260904T093653Z.log` |
 | G-ATTN | P5.5 | GQA + full RoPE + causal SDPA + `o_proj`, `(1,1)` | PCC >= 0.999; own stages <= 3x floor; block <= 8x | bf8_b block **0.9997364 / 0.9997080 / 0.9996723** (raw **2.21 / 2.17 / 2.22x**); bf16 block **0.9998463 / 0.9998275 / 0.9998029** (raw **12.32 / 11.82 / 12.17x**, SDPA-attributed residual **1.10 / 1.01 / 0.70x**); stages **1.00-2.50x**; fused SDPA **26.7-28.6x** in-pipeline, **52.8-55.0x** standalone; control **0.51174** | PASS-WITH-DEVIATION (`DEC-042`) | 2026-09-04 | `raw/G-ATTN_20260904T095359Z.log` |
 | G-KV | P5.6 | KV cache **primitive**: write correctness, position map, no collateral writes | PCC >= 0.99 @bf8_b, <= 3x floor; positional read-back **bit-exact** | bf8_b worst-of-8-heads K **0.9999743** / V **0.9999752** (**1.00x** the floor at every head and both seq lens); bf16 **0.9999986** (**1.00x**); 128 positions x 4 `kv_actual` offsets **bit-identical**; pad tail + 3 other (user, layer) slots **exactly zero**; bf8_b costs **17.8x** on K / **17.7x** on V vs bf16 | PASS | 2026-09-04 | `raw/G-KV_20260904T100312Z.log` |
+| G-LAYER | P6.1 | one decoder layer, norm->attn->residual->norm->MLP->residual (integration check) | PCC >= 0.999, <= 8x floor | bf8_b **0.9997665 / 0.9998273 / 0.9998736** (floors 0.9998709/0.9998953/0.9999138 -> **1.81 / 1.65 / 1.47x**); bf16 **0.9998774 / 0.9999172 / 0.9999480** (floors 0.9999826/0.9999859/0.9999885 -> **7.05 / 5.86 / 4.51x**); SDPA-attributed residual **1.13-1.15x** / **2.01-2.14x**; real weights + real input **0.9998649** (floor 0.9999647 -> **3.82x**); controls **0.99864** / **0.99993** / **0.66830** | PASS | 2026-09-04 | `raw/G-LAYER_20260904T113153Z.log` |
+| G-WEIGHTS | P6.2 | no missing/unused keys; cache-only rebuild identical; loader bit-exact | exact | **291/291** keys, 0 missing, 0 unused (all 32 layers); **12/12** device tensors `max\|delta\| = 0.000e+00` through transpose + Q/K Meta swizzle + dtype ladder; **12/12** SHA-256 identical on a cache-only rebuild; 3/3 controls discriminate | PASS | 2026-09-04 | `raw/G-WEIGHTS_20260904T113320Z.log` |
 
 ```
 STATUS after P0: gates PASS=1 FAIL=0 DEVIATION=0 BLOCKED=0 | next: P1 (reference)
@@ -974,3 +976,141 @@ The measured numbers are identical to the first runs in every case; the earlier 
 (`G-MLP_20260904T093653Z`, `G-ATTN_20260904T095359Z`, `G-KV_20260904T100312Z`) are kept because the
 detail blocks above quote them, and because §0.2 rule 4 is right that a log records what actually
 ran. **These re-run logs are the ones the verdicts rest on.**
+
+### G-LAYER — one decoder layer vs an fp32 torch reference
+- **Command:** `pytest models/demos/llama31_8b_d_p/tests/unit/test_decoder_layer_vs_ref.py -x -q`
+- **Mesh / device:** `(1,1)`, Blackhole. TP=1, so **no collective executes** — the layer never calls
+  one by construction (`04_CCL_PLAN.md` §4) and both sublayer tails are no-ops at `tp == 1`.
+- **Inputs (distribution AND scale — `R-018`):** three arms.
+  1. **Gate arm:** `x` **standard normal** `[1, 1, S, 4096]`, `S ∈ {128, 512, 2048}`; seven
+     projections `randn * 0.02`; two norm gains `1 + randn * 0.02`. Both weight dtypes.
+  2. **Real-weight arm:** real layer-0 weights (all nine tensors) with a `randn` input — recorded
+     because it is what showed the control was weak, not because it gates anything.
+  3. **Real-weight, real-input arm:** real layer-0 weights **and** real `embed_tokens` rows
+     (RMS **0.0106**, i.e. ~100x smaller than `randn`), which is what layer 0 actually receives.
+- **Reference dtype policy:** fp32 weights, fp32 activations, fp32 arithmetic; explicit causal mask
+  `triu(full((S,S), -inf), 1)`; KV heads `repeat_interleave`d by the GQA group. The staged reference
+  in the test is **bit-exact** against both the `G-REF` oracle and HF `LlamaDecoderLayer`
+  (PCC 1.000000000, `max|Δ| = 0.0`), so the gate is scored against math that was already gated.
+- **Noise floor (computed):** the same fp32 layer with its **inputs and weights** rounded to the
+  device dtypes and everything else in fp32. Internal intermediates are **not** quantised.
+- **Threshold:** PCC ≥ 0.999 and ≤ 8x the floor (`BRINGUP_RECIPE.md:1372`, Appendix A `:1854`),
+  applied per `DEC-051`: the raw ratio asserted at bf8_b, and the **SDPA-attributed residual**
+  asserted at ≤ 8x at both dtypes.
+- **Measured:**
+
+  | dtype | S | PCC | floor | raw ratio | kernel excess (x floor err) | attributed residual |
+  |---|---|---|---|---|---|---|
+  | bf8_b | 128 | 0.9997665 | 0.9998709 | 1.81x | 0.68x | **1.13x** |
+  | bf8_b | 512 | 0.9998273 | 0.9998953 | 1.65x | 0.51x | **1.14x** |
+  | bf8_b | 2048 | 0.9998736 | 0.9999138 | 1.47x | 0.31x | **1.15x** |
+  | bf16 | 128 | 0.9998774 | 0.9999826 | 7.05x | 5.04x | **2.01x** |
+  | bf16 | 512 | 0.9999172 | 0.9999859 | 5.86x | 3.83x | **2.03x** |
+  | bf16 | 2048 | 0.9999480 | 0.9999885 | 4.51x | 2.37x | **2.14x** |
+
+  Real weights + real input, bf8_b, S=512: **0.9998649** against a floor of **0.9999647** — **3.82x**.
+  This is the number comparable with recipe §2.1's table (also measured on real weights).
+- **Verdict:** **PASS** — and note that unlike `G-ATTN` the **raw 8x holds at both dtypes**
+  (worst 7.05x). `R-015`'s wall does not reach layer level: the layer adds two norms and three more
+  quantised projections to the floor's error budget while the fused kernel's absolute slack is
+  unchanged, so the kernel's share falls. `DEC-051` carries the arithmetic.
+- **Negative controls (three, and only the third discriminates — `DEC-058`, `R-018`):**
+  - random weights, norm gains swapped: **0.99864** (bf8_b) / **0.99873** (bf16) — rejected by the
+    gate's assertion, but by 1.4e-3;
+  - real layer-0 weights, `randn` input, gains swapped: **0.99993** — *further* from failing,
+    because the residual attenuates the sublayers by ~65x at that input scale;
+  - real layer-0 weights, **real** embedding input, gains swapped: **0.66830** (recipe quotes
+    0.9471), attenuation 3.40x. This is the control the verdict rests on.
+- **Additional assertions:** causality on the **device** layer — perturbing the last token leaves
+  rows `[:-1]` at `max|Δ| = 0.000e+00` while the last row moves by 8.969; the `LLAMA_DELTA_PROBE`
+  helper runs on a real tensor and warns rather than raising on garbage (the package's one
+  `except Exception`).
+- **Deviations:** none from the threshold. `DEC-051` (attribution method), `DEC-054` (signature),
+  `DEC-058` (control input scale) are the phase's judgement calls.
+- **What this gate does not prove.** It is an **integration** check
+  (`BRINGUP_RECIPE.md:1375`): it cannot localise a sublayer fault, and it may not substitute for
+  `G-RMS`/`G-ROPE`/`G-MLP`/`G-ATTN`, all of which are met on their own. It also runs at TP=1, so
+  neither module's TP collective has ever executed (P8), and it writes no KV cache — at TP=1 the
+  packed cache refuses the model's 8 local KV heads outright (`00_MODEL_CARD.md` §4.1, `R-001`).
+
+### G-WEIGHTS — real-checkpoint weight loading, bit-exact
+- **Command:** `pytest models/demos/llama31_8b_d_p/tests/unit/test_weight_loading.py -x -q`
+- **Mesh / device:** one card, `(1,1)`. Cache-only at TP > 1 is the P8 extension
+  (`BRINGUP_RECIPE.md:1411`).
+- **Inputs (distribution):** not a synthetic distribution — the inputs **are** the real
+  Llama-3.1-8B-Instruct checkpoint tensors at their stored dtype, `torch.bfloat16` (measured and
+  logged by `torch_dtype_of`, matching `00_MODEL_CARD.md` §2). Stated rather than omitted because
+  §1.4 requires it.
+- **Reference dtype policy:** the **same torch tensor object** drives both sides — the device path
+  and `quantize_like_device` — with **no fp32 detour**, so a bf16→bf8_b vs fp32→bf8_b double-rounding
+  difference cannot be mistaken for a loader fault. Every comparison is `torch.equal`
+  (`rtol = atol = 0`), never PCC: recipe §2.5 measured a completely wrong mapping still scoring
+  PCC 0.99890, and a transpose or swizzle applied twice is that class of bug
+  (`BRINGUP_RECIPE.md:1408-1409`).
+- **Noise floor:** not applicable, and that is the point — a bit-exactness gate has no floor because
+  the tolerance is zero. The nearest equivalent, recorded instead: `max|Δ| = 0.000e+00` on all
+  twelve tensors.
+- **Threshold:** exact, in three parts (`BRINGUP_RECIPE.md:1404-1411`).
+- **Measured:**
+  - **(a) no missing, no unused.** Checkpoint keys **291**, expected **291**, missing **0**,
+    unused **0** — over all 32 layers, read from `model.safetensors.index.json` with no tensor data
+    loaded. Both difference sets printed (both empty).
+  - **(c) every device weight bit-exact.** All **12/12** tensors of a one-layer model at
+    `max|Δ| = 0.000e+00` *through* the loader's transpose, the Q/K Meta swizzle and the dtype ladder:
+    `embed_tokens` `(128256, 4096)` bf16; both layer norms and `model.norm` `(1,1,128,32)` bf16;
+    `q_proj` `(1,1,4096,4096)` and `k_proj`/`v_proj` `(1,1,4096,1024)` and `o_proj`
+    `(1,1,4096,4096)` bf8_b; `gate_proj`/`up_proj` `(1,1,4096,14336)` and `down_proj`
+    `(1,1,14336,4096)` bf8_b; `lm_head` `(1,1,4096,128256)` bf8_b. Per-tensor SHA-256 logged.
+    `DEC-055` records why this is all twelve of one layer rather than a sample of 32.
+  - **(b) cache-only rebuild bit-identical.** 12/12 SHA-256 identical between a checkpoint build and
+    a rebuild from an **empty** `state_dict` against the same `tensor_cache_bfp8_1x1` directory;
+    12 cache files written.
+- **Verdict:** **PASS**
+- **Negative controls (three, all discriminate):**
+  1. **Meta-renamed keys** (`map_hf_to_meta_keys`): 291 keys in, **0** still consumable by this
+     package (`layers.0.attention.wq.weight`, …), and `Model` **raises** rather than building on
+     `None`s. This replaces the recipe's "bypass `map_hf_to_meta_keys`" wording, which is
+     inapplicable because this package does not apply that map — `DEC-046`.
+  2. **Double Meta swizzle:** with Q/K pre-`reverse_permute`d, `q_proj` and `k_proj` stop being
+     bit-equal to the clean load while `v_proj` and `o_proj` stay equal — i.e. the check sees a
+     transform applied twice, which is exactly what PCC would not (`DEC-047`).
+  3. **Cross-dtype cache:** a bf16 build wrote **12** cache files into `tensor_cache_bf16_1x1` and
+     **0** into `tensor_cache_bfp8_1x1`; ttnn additionally suffixes each file
+     `_dtype_<DT>_layout_<L>.tensorbin`, so both defences hold (`DEC-048`).
+- **Refusals asserted:** `weight_cache_path` with `TT_CACHE_PATH` unset (closes `R-003`);
+  `load_state_dict(convert_to_meta_format=True)` (`DEC-047`); a `transformers` config **object**
+  passed as `hf_config` (recipe P1 trap 1 — the test also re-asserts that this version's config has
+  no `rope_theta` attribute).
+- **Deviations:** `DEC-046` (no Meta key mapping, control inverted), `DEC-047`, `DEC-048`,
+  `DEC-055` (one layer for the per-tensor and cache halves).
+- **What this gate does not prove.** The **32-layer** cache-only rebuild, and any rebuild at TP > 1
+  where the cached tensor is sharded — `G-WEIGHTS (P8 ext)` owns both. It also says nothing about
+  whether the loaded weights are *numerically useful*; `G-MODEL`'s top-1 against HF is what closes
+  that.
+
+### G-MODEL — full stack hidden states + top-1 agreement (P6.3)
+- **Command:** `pytest models/demos/llama31_8b_d_p/tests/unit/test_model_vs_ref.py -x -q`
+- **Mesh / device:** (1,1), Blackhole. **Input:** real tokenized-prompt token ids, real checkpoint.
+  **Reference dtype policy:** fp32 HF `LlamaForCausalLM`, eager; floor from inputs and weights only
+  (no intermediates) — see the correction below.
+- **Threshold (per the phase text, `DEC-053`):** at 2 and 4 layers PCC ≥ 0.999 and ≤ 8x floor; at full
+  depth per-layer step ≤ 4x from L3; 100% top-1 at every depth.
+- **Measured:**
+  - 2 layers / s128: **0.9997314** (floor 0.9998795, **2.23x**), top-1 agrees
+  - 4 layers / s128: **2.36x**, top-1 agrees
+  - **32 layers / s512: 0.9984849**, top-1 **374 == 374**, worst per-layer step **1.27x** (budget 4x),
+    curve smooth and monotone with **no step anywhere**
+  - **Floor correction (`R-021`):** the gate's floor used HF's own class, which computes RoPE cos/sin
+    internally in fp32, so it omitted the bf16 rounding the device pays on those tables in all 32
+    layers. `1 - floor` = 5.4300e-04 (fp32 tables) vs **9.9160e-04** (bf16 tables) → the same
+    measurement is **2.79x** against the incomplete floor and **1.53x** against the correct one. The
+    omitted term is 45% of the correct floor error. A staged chain reproduced the gate's floor exactly
+    (0.9994570) with fp32 tables, isolating the cause to that single term.
+- **Negative control:** layer weights rotated by one → **0.16180**.
+- **Verdict:** **PASS** (phase text). Recorded honestly: the full-depth absolute PCC 0.9984849 is
+  **below** the 0.999 that Appendix A's compressed row appeared to require at all depths — that
+  conflict is `R-020` and is fixed in the kit rather than worked around here.
+- **What this does NOT prove:** §2.3.1's kernel attribution does not hold at this depth (`R-022`): the
+  substituted chain scored 0.9981153, *worse* than the device, so the subtraction over-removes and the
+  attributed residual came out at 0.63x. What it does establish is the fused kernel's **share**:
+  58.9% of total model-scale error.

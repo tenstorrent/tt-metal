@@ -430,6 +430,80 @@ what a floor is.
 
 ### 2.3 The limit of the floor model: it does not describe a **fused** kernel's interior
 
+#### 2.2.1 A negative control is only as strong as its input scale
+
+A control that breaks the right thing can still pass if the input makes the breakage irrelevant.
+Measured on a decoder layer: swapping the two norm gains — a genuinely wrong model — scores **0.99993
+on `randn` input** and **0.66830 on real embedding-scale input**. Same control, same bug, and on the
+synthetic input it is indistinguishable from correct.
+
+The reason is the residual stream. Feed a block an input whose scale is far from what the model
+actually produces and the residual path dominates the output, so a sublayer's error is diluted to
+nothing. **Drive residual-block controls at the scale the model really sees** (real embedding rows, or
+activations measured from the reference), and say in the gate block which you used. A control that
+cannot fail is worse than no control, because it is recorded as evidence.
+
+#### 2.2.4 An absolute PCC threshold is meaningless without a stated depth
+
+Error accumulates with depth, so one absolute number cannot gate a 2-layer stack and a 32-layer one.
+Measured on the same model, same seq len: **0.9997314 at 2 layers** and **0.9984849 at 32** — the
+second is below a 0.999 threshold the first clears comfortably, while the *per-layer step* never
+exceeds 1.27x against a 4x budget, top-1 still agrees, and the corrected ratio is 1.53x. Nothing is
+wrong with the model; the threshold was simply written without a depth.
+
+**So: annotate every absolute threshold with the depth and sequence length it was measured at, and
+gate depth-varying quantities on a per-layer or per-step basis instead.** This is the same trap as a
+mutual-PCC gate with no stated depth — an unqualified absolute threshold silently becomes a measure of
+depth rather than of correctness, and a verdict can then hinge on which sentence of the recipe a
+reader happens to follow.
+
+#### 2.2.2 Input scale changes the MEASUREMENT, not just the control
+
+§2.2.1 says a control run at an unrealistic input scale can fail to discriminate. The same effect
+distorts the gate's own number, and in the direction that flatters you.
+
+Measured on one decoder layer, real weights, two input scales:
+
+| input | layer error ratio | norm-swap control |
+|---|---|---|
+| `randn` | **1.47-1.81x** | 0.99993 — does not discriminate |
+| real embedding scale | **3.83x** | 0.66830 — discriminates |
+
+Both are the same module. On `randn` the residual path dominates, so the sublayer's error is diluted
+and the gate reads roughly half the error the assembled model will actually see. The 3.83x figure is
+the honest one: it matches the **marginal per-layer ratio** measured inside the full 32-layer model
+(3.31x median over L5-L30), while the `randn` arm matches nothing downstream.
+
+**So a per-module gate driven at synthetic scale is measuring an easier problem than the model faces.**
+Record both arms — synthetic for reproducibility without a checkpoint, real scale for the number that
+predicts model behaviour — and state which each is. A model-level ratio that looks alarming next to
+your module gates may simply be the module gates having been generous.
+
+#### 2.2.3 A reference computed at higher precision than the device makes the floor optimistic
+
+**This is the single most likely cause of an unexplained model-level ratio, and it is not
+theoretical.** In one run a 32-layer `G-MODEL` read **2.79x** and looked like a model defect. It was a
+floor defect: the reference computed RoPE cos/sin in fp32 while the device stores them bf16, so the
+floor omitted that rounding in **all 32 layers**. Completing the floor:
+
+| floor definition | `1 - floor` | ratio of the *same* measurement |
+|---|---|---|
+| fp32 RoPE tables (what the gate used) | 5.4300e-04 | **2.79x** |
+| bf16 RoPE tables (what the device stores) | 9.9160e-04 | **1.53x** |
+
+The omitted term was **45% of the correct floor error**, and the corrected ratio lands inside the
+1.0-2.4x band every other gate occupies. What isolated it: a staged chain reproduced the gate's
+reference floor *exactly* (0.9994570 vs 0.9994570) with fp32 tables, which pins the cause to that one
+term rather than to anything in the model. Check this **before** suspecting your own code.
+
+If the reference implementation performs a step in fp32 that the device performs in a reduced dtype,
+that step's rounding is absent from the floor and present in the measurement, so the ratio is
+pessimistic by an amount you have not accounted for. Concretely: HF's Llama classes compute RoPE
+cos/sin **internally in fp32**, while the device stores them bf16 — so a floor built by quantising
+"inputs and weights" never sees that rounding. Either quantise the reference's internal tables to the
+device dtype as well, or measure the floor both ways and report the size of the gap. Do not leave it
+implicit; it is indistinguishable from a real defect in your own code.
+
 #### 2.3.1 An error-ratio budget is NOT portable across dtypes — gate on the attributed residual
 
 A fixed-error stage breaks the ratio metric, and the failure runs the *wrong way*: it penalises the
@@ -457,8 +531,29 @@ Two ways out, and prefer the second:
    predicts the block PCC to 5-6 decimal places (bf8_b at S=512: predicted 0.9997079, measured
    0.9997080).
 
-This applies to every gate whose module contains a fused kernel — attention, the decoder layer, and
-the full model all contain the same SDPA. Do not carry one 8x number across them.
+**Where this bites, measured — and it is narrower than it looks.** The wall is a property of the
+*block*, not of everything containing the kernel. At layer level the same SDPA is diluted by the MLP,
+two norms and two residual adds, all of which contribute their own floor error: `G-LAYER` measures
+1.47-1.81x at bf8_b and 4.51-7.05x at bf16, so the raw 8x budget **holds at both dtypes**. An earlier
+draft of this section asserted that the decoder layer and the full model "inherit the same correction";
+that was an over-generalisation from one block-level measurement and is not what the device says.
+
+So: apply §2.3.1's attributed-residual gating where a fused kernel *dominates* the module's error
+budget — which you determine by measuring the kernel standalone, not by noting that it is present.
+Record the attributed residual at layer level too (1.13-1.15x at bf8_b, 2.01-2.14x at bf16), because
+it stays comparable across dtypes even where the raw ratio also passes.
+
+**But the attribution has a depth limit — do not use it at model scale.** Subtracting a fused kernel's
+excess is validated at *block* level, where floor error plus kernel excess predicts the block PCC to
+5-6 decimals. At 32-layer depth it breaks: measured, the substituted chain scored **0.9981153, worse
+than the device's 0.9984849**, so the subtraction over-removes and the attributed residual came out at
+**0.63x** — below 1.0, which §2.3 itself defines as a broken floor rather than a kernel beating
+arithmetic. The reason is that the substitution perturbs every downstream layer's input, so the errors
+stop being independent.
+
+At model scale the attribution still earns its keep, but as a **share** rather than a residual: the
+same run established the fused kernel as **58.9% of total model-scale error**, which tells you where
+the budget goes. Gate the model on the raw ratio against a *correctly completed* floor (§2.2.3).
 
 
 The floor model above is only valid for ops whose interior arithmetic you can mirror. It breaks on
@@ -1853,7 +1948,7 @@ while sitting far off the noise floor is a finding, not a `PASS`.
 | `G-KV` | P5.6 | cache **primitive**: write correctness, no collateral writes | PCC ≥ 0.99 @bf8_b, ≤ 3x floor; positional read-back **bit-exact** | (1,1) |
 | `G-LAYER` | P6.1 | decoder layer (integration check) | **PCC ≥ 0.999**, ≤ 8x floor | (1,1) |
 | `G-WEIGHTS` | P6.2 | no missing/unused keys; cache-only rebuild identical; loader bit-exact | exact | 1 card |
-| `G-MODEL` | P6.3 | full stack hidden states; top-1 (integration check) | **≥ 0.999**, ≤ 8x floor, per-layer step ≤ 4x from L3; 100% top-1 | (1,1) |
+| `G-MODEL` | P6 | full stack hidden states; top-1 agreement | **at 2 and 4 layers:** PCC ≥ 0.999 and ≤ 8x floor. **at full depth:** per-layer step ≤ 4x from L3, and record the absolute PCC against a *measured full-depth floor* rather than against the reduced-depth threshold. **100% top-1 at every depth.** | (1,1) |
 | `G-CHUNK` | P7 | chunked ≡ one-shot for **deltas 1–2** (indexed RoPE, chunk write), and both vs the fp32 golden | ≥ 0.999 mutual **per layer** (expect exact); ≥ 0.99 K / ≥ 0.98 V vs golden; L0 ratio ≤ 3x; step ≤ 4x | (1,1) |
 | `G-GOLDEN` | P7 | golden trace structure is sound over all layers | clean table; generator + verifier exit 0; streamed driver == HF's own loop bit-exactly | host (imports no ttnn) |
 | `G-RUNTIME` | P7 | the runtime satisfies the engine's §2 contract, statically | every name and parameter present; every refusal matched on its message | none |

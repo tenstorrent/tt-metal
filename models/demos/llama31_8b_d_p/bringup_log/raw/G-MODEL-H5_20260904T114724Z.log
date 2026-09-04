@@ -1,0 +1,70 @@
+2026-09-04 11:47:27.583 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mstojkovic/.cache/ttnn,model_cache_path=/home/mstojkovic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.14, pytest-9.0.3, pluggy-1.6.0 -- /home/mstojkovic/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mstojkovic/tt-metal
+configfile: pytest.ini
+plugins: timeout-2.4.0, anyio-4.15.0, cov-7.0.0, github-actions-annotate-failures-0.3.0, repeat-0.9.4, dash-2.15.0, benchmark-5.2.3, split-0.11.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 9 items / 8 deselected / 1 selected
+
+models/demos/llama31_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_full_depth_attribution[blackhole-mesh_device0] 2026-09-04 11:47:30.235 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:224)
+2026-09-04 11:47:30.235 | info     |             UMD | Cluster constructor started. (cluster.cpp:406)
+2026-09-04 11:47:30.253 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-09-04 11:47:30.253 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-09-04 11:47:30.345 | info     |             UMD | Established firmware bundle version: 19.12.0 (topology_discovery.cpp:576)
+2026-09-04 11:47:30.350 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-09-04 11:47:31.790 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31}/[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 30, 31, 16, 17, 18, 19, 20, 21, 22, 23] and remote chip ids {} (cluster.cpp:173)
+2026-09-04 11:47:31.790 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-09-04 11:47:31.790 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-09-04 11:47:31.790 | info     |             UMD | Cluster constructor completed. (cluster.cpp:665)
+2026-09-04 11:47:31.809 | info     |             UMD | Starting devices in cluster (cluster.cpp:1205)
+2026-09-04 11:47:33.532 | warning  |             UMD | AICLK settled at 1343 MHz, within 5% of the requested 1350 MHz but not an exact match. Proceeding. (tt_device.cpp:256)
+2026-09-04 11:47:33.544 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1213)
+2026-09-04 11:47:37.385 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
+2026-09-04 11:47:37.385 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
+2026-09-04 11:47:37.403 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4, 3:16, 4:12} (topology_mapper_utils.cpp:3368)
+2026-09-04 11:47:37.403 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:24, 5:8} (topology_mapper_utils.cpp:3376)
+2026-09-04 11:47:38.026 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 11:47:38.735 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 11:47:39.566 | INFO     | models.demos.llama31_8b_d_p.tt.model_config:_load_safetensors:199 - loaded 291 checkpoint tensors from /home/mstojkovic/models/Llama-3.1-8B-Instruct
+2026-09-04 11:48:45.156 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 11:49:13.873 | INFO     | models.demos.llama31_8b_d_p.tt.model:__init__:166 - Llama model built: 32 layers, mesh (1, 1), tp=1, sp=1, lm_head=True
+2026-09-04 11:50:38.415 | INFO     | llama31_8b_d_p.tests.unit.test_model_vs_ref:test_model_full_depth_attribution:692 - [G-MODEL] H5 attribution, 32 layers, s512, bf8_b weights / bf16 activations, real prompt tokens: measured=0.9984849 floor(bf16 rope)=0.9990084 floor(fp32 rope)=0.9994570 predicted=0.9981153
+2026-09-04 11:50:38.415 | INFO     | llama31_8b_d_p.tests.unit.test_model_vs_ref:test_model_full_depth_attribution:697 - [G-MODEL] H5 attribution: floor error=9.916e-04; fused-SDPA excess over 32 layers=8.931e-04 (0.90x the floor error, 58.9% of the total); raw ratio=1.53x; **SDPA-attributed residual=0.63x**
+2026-09-04 11:50:38.415 | INFO     | llama31_8b_d_p.tests.unit.test_model_vs_ref:test_model_full_depth_attribution:703 - [G-MODEL] H5 chain cross-check: the staged chain's floor is 0.9990084 with bf16 RoPE tables and 0.9994570 with fp32 ones; the gate's HF-built floor computes RoPE in fp32 internally and measured 0.9994570, so the fp32-table chain is the comparable one
+PASSED
+
+=============================== warnings summary ===============================
+python_env/lib/python3.12/site-packages/pydantic/_internal/_config.py:291
+  /home/mstojkovic/tt-metal/python_env/lib/python3.12/site-packages/pydantic/_internal/_config.py:291: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.9/migration/
+    warnings.warn(DEPRECATION_MESSAGE, DeprecationWarning)
+
+models/demos/llama31_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_full_depth_attribution[blackhole-mesh_device0]
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+models/demos/llama31_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_full_depth_attribution[blackhole-mesh_device0]
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /home/mstojkovic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+180.24s call     models/demos/llama31_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_full_depth_attribution[blackhole-mesh_device0]
+8.70s setup    models/demos/llama31_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_full_depth_attribution[blackhole-mesh_device0]
+0.02s teardown models/demos/llama31_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_full_depth_attribution[blackhole-mesh_device0]
+=========================== short test summary info ============================
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_full_depth_attribution[blackhole-mesh_device0]
+=========== 1 passed, 8 deselected, 3 warnings in 190.42s (0:03:10) ============
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+2026-09-04 11:50:40.734 | info     |    BuildKernels | JIT cache stats: 111/111 hits (100.0%) [111 cached, 16 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-09-04 11:50:40.734 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-09-04 11:50:40.951 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:550)
+2026-09-04 11:50:40.951 | info     |             UMD | Closing devices in cluster (cluster.cpp:1218)
+2026-09-04 11:50:48.724 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1227)
+2026-09-04 11:50:48.725 | info     |             UMD | Cluster destructor started. (cluster.cpp:933)
+2026-09-04 11:50:48.725 | info     |             UMD | Cluster destructor completed. (cluster.cpp:936)

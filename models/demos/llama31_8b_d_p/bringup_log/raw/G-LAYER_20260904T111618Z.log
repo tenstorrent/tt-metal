@@ -1,0 +1,150 @@
+2026-09-04 11:16:21.275 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mstojkovic/.cache/ttnn,model_cache_path=/home/mstojkovic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.14, pytest-9.0.3, pluggy-1.6.0 -- /home/mstojkovic/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mstojkovic/tt-metal
+configfile: pytest.ini
+plugins: timeout-2.4.0, anyio-4.15.0, cov-7.0.0, github-actions-annotate-failures-0.3.0, repeat-0.9.4, dash-2.15.0, benchmark-5.2.3, split-0.11.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 12 items
+
+models/demos/llama31_8b_d_p/tests/unit/test_decoder_layer_vs_ref.py::test_decoder_layer_vs_ref[blackhole-s128-bf8_b-mesh_device0] 2026-09-04 11:16:25.070 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:224)
+2026-09-04 11:16:25.070 | info     |             UMD | Cluster constructor started. (cluster.cpp:406)
+2026-09-04 11:16:25.088 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-09-04 11:16:25.088 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-09-04 11:16:25.180 | info     |             UMD | Established firmware bundle version: 19.12.0 (topology_discovery.cpp:576)
+2026-09-04 11:16:25.184 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-09-04 11:16:26.621 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31}/[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 30, 31, 16, 17, 18, 19, 20, 21, 22, 23] and remote chip ids {} (cluster.cpp:173)
+2026-09-04 11:16:26.621 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-09-04 11:16:26.621 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-09-04 11:16:26.621 | info     |             UMD | Cluster constructor completed. (cluster.cpp:665)
+2026-09-04 11:16:26.640 | info     |             UMD | Starting devices in cluster (cluster.cpp:1205)
+2026-09-04 11:16:28.520 | warning  |             UMD | AICLK settled at 1343 MHz, within 5% of the requested 1350 MHz but not an exact match. Proceeding. (tt_device.cpp:256)
+2026-09-04 11:16:28.539 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1213)
+2026-09-04 11:16:32.373 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
+2026-09-04 11:16:32.373 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
+2026-09-04 11:16:32.391 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4, 3:16, 4:12} (topology_mapper_utils.cpp:3368)
+2026-09-04 11:16:32.391 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:24, 5:8} (topology_mapper_utils.cpp:3376)
+2026-09-04 11:16:33.012 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 11:16:33.709 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 11:16:36.969 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 11:16:38.945 | INFO     | llama31_8b_d_p.tests.unit.test_decoder_layer_vs_ref:test_decoder_layer_vs_ref:312 - [G-LAYER] bf8_b seq=128: PCC=0.9997665 floor=0.9998709 raw_ratio=1.81x (threshold 0.999, raw budget 8.0x applies=True)
+2026-09-04 11:16:38.946 | INFO     | llama31_8b_d_p.tests.unit.test_decoder_layer_vs_ref:test_decoder_layer_vs_ref:317 - [G-LAYER] bf8_b seq=128 attribution: floor+deviceSDPA predicts PCC=0.9997835 vs measured 0.9997665; floor error=1.291e-04; kernel excess through the layer=8.738e-05 (0.68x the floor error); SDPA-attributed residual ratio=1.13x
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_decoder_layer_vs_ref.py::test_decoder_layer_swapped_norm_gains_negative_control[blackhole-bf8_b-mesh_device0] 2026-09-04 11:16:40.114 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 11:16:40.207 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 11:16:41.495 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 11:16:43.235 | INFO     | llama31_8b_d_p.tests.unit.test_decoder_layer_vs_ref:test_decoder_layer_swapped_norm_gains_negative_control:354 - [G-LAYER] control (bf8_b): norm gains swapped -> PCC=0.99864
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_decoder_layer_vs_ref.py::test_layer_is_causal[blackhole-mesh_device0] 2026-09-04 11:16:44.364 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 11:16:44.458 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 11:16:45.574 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 11:16:46.848 | INFO     | llama31_8b_d_p.tests.unit.test_decoder_layer_vs_ref:test_layer_is_causal:436 - [G-LAYER] causality: max|delta| rows[:-1]=0.000e+00, last row=8.969e+00
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_decoder_layer_vs_ref.py::test_delta_probe_runs_and_survives_garbage[blackhole-mesh_device0] 2026-09-04 11:16:47.973 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 11:16:48.066 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 11:16:48.076 | INFO     | models.demos.llama31_8b_d_p.tt.layer:_delta_stats:72 - [delta-probe L 0] real_tensor: L2=361.042  mean|x|=0.7963  signed_mean=-0.00302  max|x|=4.719
+2026-09-04 11:16:48.076 | WARNING  | models.demos.llama31_8b_d_p.tt.layer:_delta_stats:79 - [delta-probe] failed at L7 not_a_tensor: get_device_tensors(): incompatible function arguments. The following argument types are supported:
+    1. get_device_tensors(tensor: ttnn._ttnn.tensor.Tensor) -> list[ttnn._ttnn.tensor.Tensor]
+
+Invoked with types: object
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_decoder_layer_vs_ref.py::test_decoder_layer_vs_ref[blackhole-s128-bf16-mesh_device0] 2026-09-04 11:16:49.124 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 11:16:49.219 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 11:16:51.934 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 11:16:53.146 | INFO     | llama31_8b_d_p.tests.unit.test_decoder_layer_vs_ref:test_decoder_layer_vs_ref:312 - [G-LAYER] bf16 seq=128: PCC=0.9998774 floor=0.9999826 raw_ratio=7.05x (threshold 0.999, raw budget 8.0x applies=False)
+2026-09-04 11:16:53.146 | INFO     | llama31_8b_d_p.tests.unit.test_decoder_layer_vs_ref:test_decoder_layer_vs_ref:317 - [G-LAYER] bf16 seq=128 attribution: floor+deviceSDPA predicts PCC=0.9998950 vs measured 0.9998774; floor error=1.738e-05; kernel excess through the layer=8.757e-05 (5.04x the floor error); SDPA-attributed residual ratio=2.01x
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_decoder_layer_vs_ref.py::test_decoder_layer_swapped_norm_gains_negative_control[blackhole-bf16-mesh_device0] 2026-09-04 11:16:54.311 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 11:16:54.403 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 11:16:55.643 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 11:16:56.858 | INFO     | llama31_8b_d_p.tests.unit.test_decoder_layer_vs_ref:test_decoder_layer_swapped_norm_gains_negative_control:354 - [G-LAYER] control (bf16): norm gains swapped -> PCC=0.99873
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_decoder_layer_vs_ref.py::test_decoder_layer_vs_ref[blackhole-s512-bf8_b-mesh_device0] 2026-09-04 11:16:57.986 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 11:16:58.079 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 11:17:01.426 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 11:17:03.319 | INFO     | llama31_8b_d_p.tests.unit.test_decoder_layer_vs_ref:test_decoder_layer_vs_ref:312 - [G-LAYER] bf8_b seq=512: PCC=0.9998273 floor=0.9998953 raw_ratio=1.65x (threshold 0.999, raw budget 8.0x applies=True)
+2026-09-04 11:17:03.319 | INFO     | llama31_8b_d_p.tests.unit.test_decoder_layer_vs_ref:test_decoder_layer_vs_ref:317 - [G-LAYER] bf8_b seq=512 attribution: floor+deviceSDPA predicts PCC=0.9998418 vs measured 0.9998273; floor error=1.047e-04; kernel excess through the layer=5.349e-05 (0.51x the floor error); SDPA-attributed residual ratio=1.14x
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_decoder_layer_vs_ref.py::test_decoder_layer_vs_ref[blackhole-s512-bf16-mesh_device0] 2026-09-04 11:17:04.519 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 11:17:04.612 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 11:17:07.548 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 11:17:08.889 | INFO     | llama31_8b_d_p.tests.unit.test_decoder_layer_vs_ref:test_decoder_layer_vs_ref:312 - [G-LAYER] bf16 seq=512: PCC=0.9999172 floor=0.9999859 raw_ratio=5.86x (threshold 0.999, raw budget 8.0x applies=False)
+2026-09-04 11:17:08.889 | INFO     | llama31_8b_d_p.tests.unit.test_decoder_layer_vs_ref:test_decoder_layer_vs_ref:317 - [G-LAYER] bf16 seq=512 attribution: floor+deviceSDPA predicts PCC=0.9999318 vs measured 0.9999172; floor error=1.412e-05; kernel excess through the layer=5.409e-05 (3.83x the floor error); SDPA-attributed residual ratio=2.03x
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_decoder_layer_vs_ref.py::test_decoder_layer_vs_ref[blackhole-s2048-bf8_b-mesh_device0] 2026-09-04 11:17:10.085 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 11:17:10.178 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 11:17:15.002 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 11:17:17.631 | INFO     | llama31_8b_d_p.tests.unit.test_decoder_layer_vs_ref:test_decoder_layer_vs_ref:312 - [G-LAYER] bf8_b seq=2048: PCC=0.9998736 floor=0.9999138 raw_ratio=1.47x (threshold 0.999, raw budget 8.0x applies=True)
+2026-09-04 11:17:17.631 | INFO     | llama31_8b_d_p.tests.unit.test_decoder_layer_vs_ref:test_decoder_layer_vs_ref:317 - [G-LAYER] bf8_b seq=2048 attribution: floor+deviceSDPA predicts PCC=0.9998867 vs measured 0.9998736; floor error=8.623e-05; kernel excess through the layer=2.711e-05 (0.31x the floor error); SDPA-attributed residual ratio=1.15x
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_decoder_layer_vs_ref.py::test_decoder_layer_vs_ref[blackhole-s2048-bf16-mesh_device0] 2026-09-04 11:17:18.823 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 11:17:18.917 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 11:17:23.326 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 11:17:25.370 | INFO     | llama31_8b_d_p.tests.unit.test_decoder_layer_vs_ref:test_decoder_layer_vs_ref:312 - [G-LAYER] bf16 seq=2048: PCC=0.9999480 floor=0.9999885 raw_ratio=4.51x (threshold 0.999, raw budget 8.0x applies=False)
+2026-09-04 11:17:25.370 | INFO     | llama31_8b_d_p.tests.unit.test_decoder_layer_vs_ref:test_decoder_layer_vs_ref:317 - [G-LAYER] bf16 seq=2048 attribution: floor+deviceSDPA predicts PCC=0.9999612 vs measured 0.9999480; floor error=1.152e-05; kernel excess through the layer=2.733e-05 (2.37x the floor error); SDPA-attributed residual ratio=2.14x
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_decoder_layer_vs_ref.py::test_staged_reference_matches_g_ref 2026-09-04 11:17:26.894 | INFO     | llama31_8b_d_p.tests.unit.test_decoder_layer_vs_ref:test_staged_reference_matches_g_ref:383 - [G-LAYER] staged reference vs the G-REF oracle: PCC=1.000000000 max|delta|=0.000e+00; cos tables agree to 0.000e+00 (tt/rope.py's llama3_freqs vs the test's own transcription)
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_decoder_layer_vs_ref.py::test_staged_reference_matches_hf_decoder_layer 2026-09-04 11:17:29.274 | INFO     | llama31_8b_d_p.tests.unit.test_decoder_layer_vs_ref:test_staged_reference_matches_hf_decoder_layer:408 - [G-LAYER] staged reference vs HF LlamaDecoderLayer: PCC=1.000000000
+PASSED
+
+=============================== warnings summary ===============================
+python_env/lib/python3.12/site-packages/pydantic/_internal/_config.py:291
+  /home/mstojkovic/tt-metal/python_env/lib/python3.12/site-packages/pydantic/_internal/_config.py:291: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.9/migration/
+    warnings.warn(DEPRECATION_MESSAGE, DeprecationWarning)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /home/mstojkovic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+8.84s setup    models/demos/llama31_8b_d_p/tests/unit/test_decoder_layer_vs_ref.py::test_decoder_layer_vs_ref[blackhole-s128-bf8_b-mesh_device0]
+7.60s call     models/demos/llama31_8b_d_p/tests/unit/test_decoder_layer_vs_ref.py::test_decoder_layer_vs_ref[blackhole-s2048-bf8_b-mesh_device0]
+6.60s call     models/demos/llama31_8b_d_p/tests/unit/test_decoder_layer_vs_ref.py::test_decoder_layer_vs_ref[blackhole-s2048-bf16-mesh_device0]
+5.37s call     models/demos/llama31_8b_d_p/tests/unit/test_decoder_layer_vs_ref.py::test_decoder_layer_vs_ref[blackhole-s512-bf8_b-mesh_device0]
+5.36s call     models/demos/llama31_8b_d_p/tests/unit/test_decoder_layer_vs_ref.py::test_decoder_layer_vs_ref[blackhole-s128-bf8_b-mesh_device0]
+4.41s call     models/demos/llama31_8b_d_p/tests/unit/test_decoder_layer_vs_ref.py::test_decoder_layer_vs_ref[blackhole-s512-bf16-mesh_device0]
+4.05s call     models/demos/llama31_8b_d_p/tests/unit/test_decoder_layer_vs_ref.py::test_decoder_layer_vs_ref[blackhole-s128-bf16-mesh_device0]
+3.12s call     models/demos/llama31_8b_d_p/tests/unit/test_decoder_layer_vs_ref.py::test_decoder_layer_swapped_norm_gains_negative_control[blackhole-bf8_b-mesh_device0]
+2.53s call     models/demos/llama31_8b_d_p/tests/unit/test_decoder_layer_vs_ref.py::test_decoder_layer_swapped_norm_gains_negative_control[blackhole-bf16-mesh_device0]
+2.47s call     models/demos/llama31_8b_d_p/tests/unit/test_decoder_layer_vs_ref.py::test_layer_is_causal[blackhole-mesh_device0]
+2.18s call     models/demos/llama31_8b_d_p/tests/unit/test_decoder_layer_vs_ref.py::test_staged_reference_matches_hf_decoder_layer
+1.22s call     models/demos/llama31_8b_d_p/tests/unit/test_decoder_layer_vs_ref.py::test_staged_reference_matches_g_ref
+1.15s setup    models/demos/llama31_8b_d_p/tests/unit/test_decoder_layer_vs_ref.py::test_decoder_layer_vs_ref[blackhole-s512-bf16-mesh_device0]
+1.14s setup    models/demos/llama31_8b_d_p/tests/unit/test_decoder_layer_vs_ref.py::test_decoder_layer_vs_ref[blackhole-s2048-bf8_b-mesh_device0]
+1.13s setup    models/demos/llama31_8b_d_p/tests/unit/test_decoder_layer_vs_ref.py::test_decoder_layer_vs_ref[blackhole-s128-bf16-mesh_device0]
+1.13s setup    models/demos/llama31_8b_d_p/tests/unit/test_decoder_layer_vs_ref.py::test_decoder_layer_vs_ref[blackhole-s512-bf8_b-mesh_device0]
+1.12s setup    models/demos/llama31_8b_d_p/tests/unit/test_decoder_layer_vs_ref.py::test_delta_probe_runs_and_survives_garbage[blackhole-mesh_device0]
+1.12s setup    models/demos/llama31_8b_d_p/tests/unit/test_decoder_layer_vs_ref.py::test_decoder_layer_vs_ref[blackhole-s2048-bf16-mesh_device0]
+1.12s setup    models/demos/llama31_8b_d_p/tests/unit/test_decoder_layer_vs_ref.py::test_layer_is_causal[blackhole-mesh_device0]
+1.12s setup    models/demos/llama31_8b_d_p/tests/unit/test_decoder_layer_vs_ref.py::test_decoder_layer_swapped_norm_gains_negative_control[blackhole-bf16-mesh_device0]
+1.11s setup    models/demos/llama31_8b_d_p/tests/unit/test_decoder_layer_vs_ref.py::test_decoder_layer_swapped_norm_gains_negative_control[blackhole-bf8_b-mesh_device0]
+0.21s setup    models/demos/llama31_8b_d_p/tests/unit/test_decoder_layer_vs_ref.py::test_staged_reference_matches_g_ref
+0.20s setup    models/demos/llama31_8b_d_p/tests/unit/test_decoder_layer_vs_ref.py::test_staged_reference_matches_hf_decoder_layer
+0.02s teardown models/demos/llama31_8b_d_p/tests/unit/test_decoder_layer_vs_ref.py::test_decoder_layer_swapped_norm_gains_negative_control[blackhole-bf16-mesh_device0]
+0.02s teardown models/demos/llama31_8b_d_p/tests/unit/test_decoder_layer_vs_ref.py::test_decoder_layer_vs_ref[blackhole-s128-bf8_b-mesh_device0]
+=========================== short test summary info ============================
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_decoder_layer_vs_ref.py::test_decoder_layer_vs_ref[blackhole-s128-bf8_b-mesh_device0]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_decoder_layer_vs_ref.py::test_decoder_layer_swapped_norm_gains_negative_control[blackhole-bf8_b-mesh_device0]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_decoder_layer_vs_ref.py::test_layer_is_causal[blackhole-mesh_device0]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_decoder_layer_vs_ref.py::test_delta_probe_runs_and_survives_garbage[blackhole-mesh_device0]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_decoder_layer_vs_ref.py::test_decoder_layer_vs_ref[blackhole-s128-bf16-mesh_device0]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_decoder_layer_vs_ref.py::test_decoder_layer_swapped_norm_gains_negative_control[blackhole-bf16-mesh_device0]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_decoder_layer_vs_ref.py::test_decoder_layer_vs_ref[blackhole-s512-bf8_b-mesh_device0]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_decoder_layer_vs_ref.py::test_decoder_layer_vs_ref[blackhole-s512-bf16-mesh_device0]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_decoder_layer_vs_ref.py::test_decoder_layer_vs_ref[blackhole-s2048-bf8_b-mesh_device0]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_decoder_layer_vs_ref.py::test_decoder_layer_vs_ref[blackhole-s2048-bf16-mesh_device0]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_decoder_layer_vs_ref.py::test_staged_reference_matches_g_ref
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_decoder_layer_vs_ref.py::test_staged_reference_matches_hf_decoder_layer
+=================== 12 passed, 1 warning in 67.06s (0:01:07) ===================
+2026-09-04 11:17:31.113 | info     |    BuildKernels | JIT cache stats: 429/429 hits (100.0%) [429 cached, 756 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-09-04 11:17:31.113 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-09-04 11:17:31.331 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:550)
+2026-09-04 11:17:31.331 | info     |             UMD | Closing devices in cluster (cluster.cpp:1218)
+2026-09-04 11:17:39.126 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1227)
+2026-09-04 11:17:39.127 | info     |             UMD | Cluster destructor started. (cluster.cpp:933)
+2026-09-04 11:17:39.127 | info     |             UMD | Cluster destructor completed. (cluster.cpp:936)

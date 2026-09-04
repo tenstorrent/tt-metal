@@ -1,13 +1,13 @@
 # 07 — Risks and open questions
 
-The register and the sections must agree. Re-checked at every phase boundary (last: end of P5.6,
+The register and the sections must agree. Re-checked at every phase boundary (last: end of P6,
 2026-09-04).
 
 | Id | Severity | Phase found | Summary | Status | Owner |
 |---|---|---|---|---|---|
 | R-001 | medium | P0 | `(1,1)` gates test a KV-head count the deployment mesh never produces | open — scoped to P8 | P8 (`G-KV-TP8`) |
 | R-002 | low | P0 | Checkpoint identity established against the in-repo config, not against the live gated HF repo | mitigated | P0 (`DEC-001`) |
-| R-003 | medium | P0 | Pre-existing tilized weight caches inside `$HF_MODEL` (`ttnn_cache/`, `P150/`) | open | P6 (`G-WEIGHTS`) |
+| R-003 | medium | P0 | Pre-existing tilized weight caches inside `$HF_MODEL` (`ttnn_cache/`, `P150/`) | **closed** as of P6.2 — `weight_cache_path` refuses to fall back to the checkpoint dir (`DEC-048`), gated by `G-WEIGHTS` | closed (`DEC-048`) |
 | R-004 | low | P0 | `CHUNK_SIZE` / `MAX_SEQ_LEN` not yet chosen | open — deferred by `DEC-004` | P7 (`G-CHUNK`) |
 | R-005 | high | P1 | `rope_theta` is absent from the `transformers` 5.12.1 config object; `getattr` with a default silently substitutes a wrong theta | **mitigated and enforced** as of P5.3 | closed by `tt/rope.py` + `G-ROPE` |
 | R-006 | medium | P1 | The hand-written oracle and HF could share a misreading of the architecture | open — inherent | P0 card / P6 (`G-MODEL`) |
@@ -19,8 +19,14 @@ The register and the sections must agree. Re-checked at every phase boundary (la
 | R-012 | medium | P5.1 | The repo root ignores `*.log`, so every gate raw log — the run's whole evidence base — was untracked through P0-P4 | mitigated by a nested `.gitignore` (`DEC-037`); **the kit half is now closed** — see the entry | kit maintainer / repo maintainer |
 | R-013 | medium | P5.6 | Recipe §2.5's "keep probe values <= 256" is a **bf16** rule; at `bfloat8_b` — the dtype the recipe mandates for the KV cache — the exact-integer ceiling is **128**, so a probe built to the stated rule fails on a correct cache | mitigated in-package (`DEC-044`); the kit's rule is still wrong | kit maintainer; P8/P10 probe authors |
 | R-014 | low | P5.6 | The repo-root `expect_error` fixture matches `message` as a **regex** while its docstring describes a substring, so any refusal message containing `*`, `(`, `)`, `.` or `+` silently never matches | worked around (`DEC-045`: metachar-free substrings) | repo maintainer (`conftest.py:948`) |
-| R-015 | medium | P5.5 | `G-ATTN`'s **8x block budget** (Appendix A) is arithmetically unreachable at bf16 given the fused SDPA kernel's own slack, which §2.3 of the same recipe measures at 71x — the two numbers cannot both hold for any correct implementation | mitigated (`DEC-042`: gate on the SDPA-attributed residual, raw 8x asserted at bf8_b) | kit maintainer; **P6 owns the same arithmetic for `G-LAYER` (8x) and `G-MODEL` (8x / 4x step)** |
+| R-015 | medium | P5.5 | `G-ATTN`'s **8x block budget** (Appendix A) is arithmetically unreachable at bf16 given the fused SDPA kernel's own slack, which §2.3 of the same recipe measures at 71x — the two numbers cannot both hold for any correct implementation | mitigated (`DEC-042`); **P6's half is measured and the wall does NOT bite at layer or model level** — `G-LAYER` raw 4.51-7.05x at bf16 and 1.47-1.81x at bf8_b, `G-MODEL` 2.23x, all inside 8x (`DEC-051`) | kit maintainer (`G-ATTN` only) |
 | R-016 | low | P5.5 | `verify_citations.py`'s doc-ref pass only checks that a cited line is **in range**, not that it contains anything relevant, so a wrong-but-in-range `path:line` is reported as `resolved` | mitigated by promoting the load-bearing refs into `CITES` (content-checked); the pass itself is unchanged | kit maintainer |
+| R-017 | medium | P6 | The kit's recipe grew 1986 -> 2017 lines **after** P5 was gated, so every prose `BRINGUP_RECIPE.md:NNNN` ref written in P0-P5 shifted; only the content-checked `CITES` half was updated, and pass 2 range-checks the rest | open — P6's own 427 refs are content-checked; earlier phases' prose refs are not rewritten | kit maintainer; P9 |
+| R-018 | medium | P6.1 | A negative control on a residual block is only as strong as the **input scale**: the same norm-swap control measures 0.99993 on a `randn` input and 0.66830 on real embedding-scale input | mitigated in P6.1 (`DEC-058`); open as guidance | P7/P8/P10 control authors; kit maintainer (§1.4) |
+| R-019 | medium | P6.3 | `transformers` 5.12.1's `output_hidden_states` tuple ends with the **post-final-norm** stream, not the last layer's output, and `CausalLMOutputWithPast` has no `last_hidden_state` — norming it again is nearly idempotent and reads as a plausible wrong PCC (0.9916 vs the true 0.9997) | mitigated in-package (`DEC-052`: forward hooks only) | P7 (golden-KV generator); kit maintainer (a sixth P1 trap) |
+| R-020 | medium | P6.3 | `G-MODEL`'s absolute PCC threshold is scoped to the **reduced-depth** runs by the phase text (`:1420-1422`) and to all depths by the Appendix A row (`:1856`); at 32 layers the measured post-norm PCC is 0.9984849 | resolved in-package (`DEC-053`); the kit's wording is still ambiguous | kit maintainer |
+| R-021 | **high** | P6.3 | `G-MODEL`'s floor omitted the bf16 rounding of the RoPE tables the device stores while `G-LAYER`'s floor included it — worth **45%** of the floor error at 32 layers, and the whole difference between a reported 2.79x and **1.53x** | **fixed in-package** (the floor now quantises cos/sin); both numbers recorded (`DEC-053`) | kit maintainer (§2.2 wording); P7/P8 for their own floors |
+| R-022 | medium | P6.3 | §2.3.1's additive kernel attribution **over-subtracts at 32-layer depth**: the substituted chain scores 0.9981153, worse than the device's 0.9984849, giving an attributed residual of **0.63x** (< 1.0) | open as a method limit; worked around (gate on the raw ratio against a complete floor) | kit maintainer; P7/P8 |
 
 ---
 
@@ -308,3 +314,178 @@ shifts a section now produces a `MISMATCH`. Prior phases' recipe refs remain unv
 consists only of a closing bracket, and/or resolve a doc ref by checking that the *citing sentence's*
 backticked identifier appears within a few lines of the target. Owner: kit maintainer. A discipline
 note is worth as much: **never read line numbers out of a multi-file `cat -n`.**
+
+## R-017 — An out-of-band recipe edit silently invalidated every prose `path:line` into it
+**Fact.** `models/demos/common/bringup/BRINGUP_RECIPE.md` grew from **1986 to 2017 lines** in
+`cbb38d0aa7a` ("bringup kit: make the seven human-in-the-loop points explicit HUMAN GATES"), a
+commit landed **after** P5 was gated and committed (`e3604f24811`). That commit updated the 56
+`RCP` entries in this package's `scripts/verify_citations.py` — so the **content-checked** half of
+the citation surface is current — and did **not** touch the `BRINGUP_RECIPE.md:NNNN` references
+written in prose inside the package's modules, tests and logs. Measured in this package right now:
+**146 distinct prose refs** into the recipe, of which **20 land on a blank or purely structural
+line** (a fence, a table rule) and are therefore certainly wrong; the rest land on prose and are
+individually unverified. `verify_citations.py` reports all of them `resolved`, because pass 2
+**range**-checks a doc ref (`R-016`) and a longer file is still long enough.
+
+Two of them can be dated precisely: `tests/unit/test_attention_vs_ref.py` cites
+`BRINGUP_RECIPE.md:1770` for `G-ATTN`'s Appendix A threshold, and line 1770 was **already blank** in
+P5's own committed tree — while the same commit's `CITES` entry for that row said `1265`/`1818`.
+So the prose refs were interpolated at write time (exactly what `R-016` records) *and* then shifted
+by the later kit edit.
+**Impact.** Bounded but corrosive: no number and no verdict changes, and every load-bearing claim is
+also in `CITES`. What is damaged is the thing §1.6 says an unverified citation costs — "worse than
+no citation, because it reads as authoritative". A reader following
+`BRINGUP_RECIPE.md:1259-1274` from `tt/layer.py` lands 116 lines from the paragraph being cited.
+**Status.** open. P6's own refs are correct and **all** content-checked: 427 `CITES` entries, up
+from 359, including one per recipe reference P6 makes. P5's and earlier phases' prose refs are
+untouched — rewriting a gated phase's files to fix a comment would put its raw-log evidence out of
+step with the tree for a cosmetic gain (§0.2 rule 4). The single exception, fixed because it was
+wrong rather than stale: `tt/config.py:265` cited
+`models/demos/gpt_oss_d_p/tt/model.py:65` for `hf_config.head_dim`, which is at `:64`; it is now in
+`CITES` so it cannot drift again.
+**How to close.** Three things, none of which this package can do alone:
+1. the kit should treat the recipe's line numbers as an interface — either stop citing it by line
+   from downstream packages (cite `§2.3.1` / `Gate G-LAYER` instead), or ship an anchor map;
+2. `verify_citations.py`'s pass 2 should **content**-check refs into the recipe the way `CITES` does,
+   by requiring the citing sentence's backticked identifier to appear near the target (`R-016`'s
+   own suggested fix);
+3. a kit edit that shifts line numbers should say so in its commit message, since every executed
+   run's logs cite it.
+Owner: kit maintainer; P9 for the in-package sweep.
+
+## R-018 — A negative control on a residual block is only as strong as the input **scale**
+**Fact.** Measured in P6.1 (`DEC-058`), three arms of the same norm-swap control:
+`randn` input + random weights -> **0.99864**; `randn` input + **real** layer-0 weights ->
+**0.99993**; **real `embed_tokens` rows** + real layer-0 weights -> **0.66830**. The mechanism is
+the recipe's own (`BRINGUP_RECIPE.md:1388-1389`): a perturbation of `s` in `y = r + s` is attenuated
+by `||y||/||s||`. A norm removes its input's scale, so a sublayer's output magnitude is nearly
+independent of the input's while the residual's *is* the input's — and `randn` is ~100x larger than
+what layer 0 actually receives (`embed_tokens` rows have an RMS of **0.0106**). The measured
+attenuation is ~65x with `randn` and 3.40x with real embeddings.
+**Impact.** A control built on a residual block with an out-of-scale input **cannot fail**, and it
+reads as a passing control. This is not hypothetical: P6.1's first two attempts both "passed" while
+discriminating by 1.4e-3 and 7e-5 respectively. Recipe §2.1(b)'s "input distribution is a red
+herring" is correct about the **floor** and does not transfer to a control's power, which is a
+different quantity.
+**Status.** mitigated in P6.1 (`DEC-058`), open as guidance for later phases.
+**How to close.** Every later gate whose control perturbs a residual block must state the input's
+**scale** next to its distribution, and drive at least one arm at the scale the model presents to
+that block. Owed by: **P7** (`G-CHUNK`'s mutual-PCC controls), **P8** (`G-KV-TP8`'s rotated-column
+control at model level, `G-TP-PARITY`), **P10** (`G-KV-TABLE`). The kit should add the scale to
+§1.4's four mandatory fields — "input distribution" is currently satisfiable by naming a
+distribution alone. Owner: P7/P8/P10 authors; kit maintainer for §1.4.
+
+## R-019 — `transformers` 5.12.1's `output_hidden_states` ends with the **post-norm** stream
+**Fact.** For an `n`-layer Llama the tuple is `(embeddings, L0, ..., L[n-2], POST-FINAL-NORM)`:
+length `n+1`, and the **last** element is `model.norm`'s output, not the last layer's — which
+appears nowhere in it. `LlamaForCausalLM`'s output object also exposes no `last_hidden_state`
+(`LlamaModel.forward` builds one at
+`python_env/lib/python3.12/site-packages/transformers/models/llama/modeling_llama.py:421`,
+`LlamaForCausalLM` consumes it at `:484`). Verified by hooking every module (`DEC-052`).
+**Impact.** Taking `hidden_states[-1]` as a pre-norm layer output and norming it computes RMSNorm
+**twice**, which is nearly idempotent and therefore produces a *plausible* number rather than
+garbage: it cost P6.3 a debugging pass on a reported hidden-state PCC of **0.9916270** where the
+device was correct and measures 0.9997314. The symptom that gave it away is worth recording: the
+hidden-state PCC was 20x **worse** than the logits PCC computed from those same hidden states, which
+is arithmetically impossible.
+**Status.** mitigated in-package: `tests/unit/test_model_vs_ref.py` reads every HF tensor through
+explicit forward hooks and passes `output_hidden_states` nowhere (`DEC-052`).
+**How to close.** P7's `scripts/generate_golden_kv_cache.py` reads the same oracle and must use
+hooks too (it needs per-layer post-RoPE K and raw V, which are *inside* the attention module and not
+in that tuple at all, so this is a fortunate constraint rather than a burden). The kit's P1 trap
+list should carry it as a sixth trap: it is the same class as trap 3 (`attention_mask=None` is
+silently non-causal) — an HF default that produces a plausible wrong answer. Owner: P7; kit
+maintainer.
+
+## R-020 — `G-MODEL`'s absolute PCC threshold is scoped to reduced depth by the phase text and to all depths by Appendix A
+**Fact.** `BRINGUP_RECIPE.md:1420-1422` attaches "hidden-state PCC >= 0.999, <= 8x the floor, and
+top-1 token agreement = 100%" to the **reduced layer count** runs (`n_layers=2`, then 4), and
+`:1424-1425` states the full 32-layer run's own gate as "record the per-layer hidden-state PCC curve
+into `bringup_log/raw/` and gate the **step** between consecutive layers at **<= 4x** from layer 3
+onward". Appendix A's single row (`:1856`) compresses all of it into
+">= 0.999, <= 8x floor, per-layer step <= 4x from L3; 100% top-1", which reads as if the absolute
+threshold also applied at depth 32.
+**Impact.** It decides a verdict. Measured at 32 layers, seq 512, bf8_b weights: the post-final-norm
+hidden PCC is **0.9984849** — below 0.999 — while the reduced-depth runs the phase text gates are
+0.9997314 (L2/s128) and pass comfortably, the per-layer step never exceeds **1.27x** against a
+budget of 4x, top-1 agrees with HF, and the curve is smooth with no step anywhere. Reading the
+Appendix row literally makes this a `FAIL` that stops the bring-up (§0 rule 1); reading the phase
+text makes it a `PASS` with the absolute number recorded.
+**Status.** resolved in-package by `DEC-053`, which follows the phase text, asserts the step and
+top-1 as stated, **adds** a measured full-depth floor so the absolute number has a reference rather
+than a bare comparison, and records everything either way.
+**How to close.** The kit should make Appendix A's `G-MODEL` row say which threshold applies at which
+depth — e.g. ">= 0.999 and <= 8x floor **at 2 and 4 layers**; step <= 4x from L3 **at full depth**;
+100% top-1". More generally, an absolute PCC threshold that is not annotated with a depth is the
+trap `LANDMINES.md` already records one row above it ("a mutual-PCC gate with no stated depth ...
+measures depth, not the op") — the same applies to an absolute one. Owner: kit maintainer.
+
+## R-021 — Two gates disagreed about what a floor is, and it was worth 45% of the floor error at depth
+**Fact.** `G-LAYER`'s floor quantises the RoPE cos/sin tables to bf16 (`cos_q`, `sin_q` in
+`tests/unit/test_decoder_layer_vs_ref.py`), because that is what the device stores —
+`tt/rope.py::build_prefill_rope` delegates to `models/tt_transformers/tt/common.py:534`, which builds
+**bf16** tensors and takes no dtype argument. `G-MODEL`'s floor was the HF `LlamaForCausalLM` class
+itself with device-valued weights, and HF computes its rotary tables **internally in fp32**. So the
+model-level floor omitted one rounding the device pays on every layer, while the layer-level floor
+did not.
+
+**Measured, at 32 layers / seq 512 / bf8_b weights** (`raw/G-MODEL-H5_20260904T114724Z.log`):
+
+| floor | `1 - floor` | raw ratio of the same measurement |
+|---|---|---|
+| fp32 RoPE tables (HF's internal, what the gate first used) | 5.4300e-04 | **2.79x** |
+| bf16 RoPE tables (what the device holds) | 9.9160e-04 | **1.53x** |
+
+The omitted rounding is **4.4860e-04**, i.e. **45% of the correct floor error** — because the same
+tables are applied in all 32 layers, so their rounding accumulates with depth while a
+single-layer measurement barely sees it. **This one omission is the entire difference between a
+reported 2.79x and 1.53x**, and 2.79x was the number that triggered `HUMAN GATE H5`.
+**Impact.** No verdict changes: both 2.79x and 1.53x clear the 8x model budget, and every other
+`G-MODEL` assertion (top-1, per-layer step, the control) is untouched. What was wrong is the
+**interpretation**: an incomplete floor makes a correct implementation look further from the
+arithmetic limit than it is, which is the failure mode §2.2's "keep one definition of the floor
+helpers" exists to prevent — and the two definitions here were not two *copies* of a helper, they
+were two different **models** of what the device stores, which the shared-helper rule does not catch.
+**Status.** **fixed in-package.** `_build_hf_model(quantise=True)` now hooks
+`model.model.rotary_emb` and quantises its output, so the model floor and the layer floor agree.
+Both numbers are recorded in `06_GATES.md`'s `G-MODEL` block and in `DEC-053`; the corrected floor is
+the one the ratio is asserted against, and the correction is a floor *completion* mandated by §2.2,
+not a threshold change (no threshold in this package moved).
+**How to close.** Two things for the kit. (1) §2.2 should say that "inputs" includes **every constant
+the device stores** — RoPE tables, masks, scales — not just activations and weights, and that a
+reference implementation which computes such constants internally at higher precision produces an
+optimistic floor. (2) The floor's *definition* deserves the same "one definition" treatment as the
+helpers: a per-package list of what gets quantised, asserted identical across gates. A cheap
+in-package check that would have caught it: the same module's floor computed two ways must agree —
+which is exactly the cross-check `test_model_full_depth_attribution` now performs
+(`abs(floor_fp32 - 0.9994570) < 1e-6` proves the staged chain reproduces the HF-built floor, and the
+bf16/fp32 pair exposes the gap). Owner: kit maintainer; P7/P8 must apply the corrected floor
+definition to `G-CHUNK`, `G-MESH-KV` and `G-KV-TP8`.
+
+## R-022 — §2.3.1's additive attribution over-subtracts at 32-layer depth
+**Fact.** At layer level the additive model is excellent: floor error plus the fused kernel's excess
+predicts the layer PCC to 5-6 decimals, and the attributed residual is 1.13-1.15x (bf8_b) /
+2.01-2.14x (bf16) — `DEC-051`. Applied at **model** scale over 32 layers it breaks: substituting the
+device's real SDPA into the (otherwise fp32) floor chain at every layer gives a predicted PCC of
+**0.9981153**, which is **worse than the device's own 0.9984849**. The implied kernel excess is
+8.931e-04 (58.9% of the total measured error), and subtracting it leaves an attributed residual of
+**0.63x** — below 1.0, which recipe §2.3 itself calls "a broken floor, not a kernel beating
+arithmetic".
+**Impact.** The attributed residual is **not** a usable gate quantity at depth, so the number
+`G-MODEL` asserts is the raw ratio against a *correct* floor (1.53x), with the residual recorded as
+a diagnostic. It would be a real error to read 0.63x as "the model is better than its floor".
+**The mechanism, as far as this run can establish it.** The additive model assumes the error sources
+are independent. In the real device path the fused kernel receives inputs that are **already**
+bf16-rounded and carry 1..k-1 layers of accumulated error, and its own error is partly correlated
+with — and partly cancels against — that upstream error. In the substituted chain the kernel
+receives fp32-precision inputs, so its error is measured in isolation and then added on top of a
+floor that never interacted with it. Over one layer the difference is negligible; over 32 it is
+larger than the term being subtracted.
+**Status.** open as a method limitation; worked around in-package (assert the raw ratio against the
+corrected floor; record the residual and log a warning when it falls below 1.0).
+**How to close.** The kit should scope §2.3.1 the way its own amended text scopes the ratio wall —
+by measurement, not by presence of the kernel — and add that the attributed residual is validated
+**at block and layer scale** and is not known to be additive across many layers. A depth at which it
+demonstrably holds would be worth stating. Owner: kit maintainer. Downstream: P7's `G-CHUNK` and P8's
+`G-MESH-KV` both compare accumulated 32-layer quantities and should gate on the raw ratio against a
+complete floor rather than on an attributed residual.

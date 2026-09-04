@@ -1738,3 +1738,544 @@ something stubbed; or find that the reference and the repo disagree.
   `tests/unit/test_{mesh_config,mlp_vs_ref,attention_vs_ref,kv_cache_vs_ref}.py` today, plus
   `G-RUNTIME`'s nine refusals and `G-SP-RING`'s `TT_FATAL` in later phases. Worth a kit note: this
   is a repo-wide trap, not a Llama one.
+
+### DEC-046 — `ModelArgs` does **not** apply `map_hf_to_meta_keys`; the package's key convention is HF names
+- **Phase / module:** P6.2 / `tt/model_config.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** recipe P6.2 specifies the loader as "state-dict loading (`load_state_dict` via
+  safetensors, then `map_hf_to_meta_keys` / `convert_hf_qkv_to_meta_format` from
+  `models/tt_transformers/tt/load_checkpoints.py`)" (`BRINGUP_RECIPE.md:1397`). Applying that map to
+  this package's state dict makes **every** module weight go missing.
+- **Question:** does `ModelArgs.load_state_dict` rename the checkpoint's keys into Meta form, as the
+  recipe says, or leave them in HF form, as every module written in P5 expects?
+- **The conflict, concretely.** `map_hf_to_meta_keys`
+  (`models/tt_transformers/tt/load_checkpoints.py:800`) rewrites `model.` -> ``,
+  `self_attn` -> `attention`, `q_proj` -> `wq`, `mlp` -> `feed_forward`, `gate_proj` -> `w1`,
+  `input_layernorm` -> `attention_norm`, `lm_head` -> `output`, `embed_tokens` -> `tok_embeddings`.
+  The P5 modules split on the **HF** names: `tt/attention/weights.py` reads
+  `substate(state_dict, "q_proj")["weight"]`, `tt/mlp.py` reads `"gate_proj"` / `"up_proj"` /
+  `"down_proj"`, and `tt/layer.py` splits `"self_attn"` / `"mlp"` / `"input_layernorm"` /
+  `"post_attention_layernorm"`. Measured: after the map, **0 of 291** checkpoint keys are names this
+  package consumes.
+- **Options considered:**
+  1. **Apply the map and rewrite the P5 modules to Meta names.** Follows the recipe literally. Costs
+     a rename across five gated modules and seven gated test files, re-running six P5 gates, for no
+     numerical change — and it would make the package's key names differ from the HF anchor each
+     module's docstring names, which is the thing the docstring-anchor convention exists to prevent.
+  2. **Apply the map and translate back inside each module.** Two naming systems, one of them
+     invisible. This is the "silent mix" recipe P1 trap 2 exists to forbid, one level up.
+  3. **Do not apply it.** The checkpoint's keys are already `model.layers.N.self_attn.q_proj.weight`
+     — exactly what the modules split — so the loader's key transform is the identity, and
+     `expected_state_dict_keys()` states the contract explicitly instead of leaving it implicit.
+- **Choice:** option 3, and the recipe's negative control is **inverted rather than dropped**.
+- **Why:** `map_hf_to_meta_keys` exists for `models/tt_transformers`, which loads Meta-format
+  checkpoints and whose modules are named `wq`/`w1`/`attention_norm`. This package loads an **HF**
+  checkpoint into modules whose docstrings anchor to `transformers.models.llama.modeling_llama`, so
+  a Meta rename would be a translation into a convention nothing here uses. The recipe's control —
+  "bypass `map_hf_to_meta_keys` and every key must go missing" (`BRINGUP_RECIPE.md:1409`) — is
+  sound in intent (prove the loader is name-sensitive) and inapplicable as written (there is nothing
+  to bypass). `G-WEIGHTS` therefore **applies** the map and requires every expected key to go
+  missing, which discriminates identically.
+- **Evidence:** `map_hf_to_meta_keys`' replacement table
+  (`models/tt_transformers/tt/load_checkpoints.py:800`); measured at `G-WEIGHTS`
+  (`test_meta_key_mapping_negative_control`): 291 keys in, **0** still consumable, first three
+  `layers.0.attention.wk.weight` / `wo` / `wq`; and `test_model_refuses_meta_renamed_state_dict`,
+  where a Meta-renamed dict makes `Model` raise rather than build on `None`s.
+- **Confidence:** high.
+- **Falsifier:** a module in this package that reads a Meta-form key. `G-CLEAN` can grep for
+  `wq`/`w1`/`attention_norm` across `tt/` to keep it that way.
+- **Revisit if:** the package is ever pointed at a Meta-format checkpoint (then the map belongs in
+  `load_state_dict`, behind an explicit format argument), or P10's adapter is handed a state dict by
+  the engine in Meta form.
+- **Blast radius:** `tt/model_config.py`, every module's `state_dict` contract, `G-WEIGHTS`'s
+  negative control.
+
+---
+
+### DEC-047 — `load_state_dict(convert_to_meta_format=True)` refuses: the Q/K swizzle has exactly one home
+- **Phase / module:** P6.2 / `tt/model_config.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** `bringup_log/03_OUTLINE.md` §2.3 pins the signature as
+  `load_state_dict(weights_path, dummy_weights=False, convert_to_meta_format=True)`, copied from
+  `models/demos/gpt_oss_d_p/tt/model_config.py:106`, which **does** call
+  `convert_hf_qkv_to_meta_format` there. But `tt/attention/weights.py` already calls it at load
+  (`DEC-011`, P5.5), for the stated reason that a weight must not be able to reach the device
+  un-swizzled via a path that forgot.
+- **Question:** where does the HF->Meta Q/K `reverse_permute` happen — in the checkpoint loader, in
+  the attention weight loader, or (the failure) both?
+- **Options considered:**
+  1. **Loader only** (the gpt-oss arrangement). Then `tt/attention/weights.py` must stop swizzling,
+     and any caller that builds `Attention` from a raw checkpoint slice — every P5 unit test does —
+     silently gets an HF-layout weight and a RoPE that is wrong at every position.
+  2. **Attention only** (the status quo since P5.5). One home, and it is the one on the path every
+     weight takes.
+  3. **Both**, i.e. keep the outline's default. `reverse_permute` applied twice is **not** the
+     identity: it is a different permutation of the head dim, so Q/K reach the device in a third
+     layout. The device runs, the PCC is plausible, and nothing raises.
+- **Choice:** option 2, with the parameter **kept in the signature and refused when `True`**.
+- **Why:** keeping the parameter preserves the outline's contract for a P7/P10 caller that copied it
+  from the template, and refusing turns option 3 from a silent wrongness into a `NotImplementedError`
+  naming the reason. Deleting the parameter would make the same mistake a `TypeError` at a random
+  call site instead of an explained refusal at the one place the decision lives.
+- **Evidence:** `models/tt_transformers/tt/load_checkpoints.py:451` matches on the key substrings
+  `"q_proj.weight"` / `"k_proj.weight"`, so a second application hits the same two tensors;
+  `reverse_permute` (`:891`) and `permute` (`:895`) are inverses, and applying `reverse_permute`
+  twice equals neither. Measured at `G-WEIGHTS` (`test_double_meta_swizzle_is_caught`): with Q/K
+  pre-swizzled, `q_proj` and `k_proj` stop being bit-equal to the clean load while `v_proj` and
+  `o_proj` are untouched — i.e. the bit-exact check sees it, which is why part (c) of that gate is
+  bit-equality and not PCC.
+- **Confidence:** high.
+- **Falsifier:** a `G-ATTN` or `G-MODEL` PCC that improves when the loader also swizzles.
+- **Revisit if:** the package moves to `ttnn.experimental.rotary_embedding_hf`, which removes the
+  permute entirely (`DEC-011`, `DEC-033`) and makes this parameter meaningless rather than refused.
+- **Blast radius:** `tt/model_config.py`, `tt/attention/weights.py`, `G-WEIGHTS`, `G-ATTN`,
+  `G-MODEL`.
+
+---
+
+### DEC-048 — The weight-cache root is `$TT_CACHE_PATH` and **refuses** to fall back to the checkpoint directory
+- **Phase / module:** P6.2 / `tt/model_config.py::weight_cache_path`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** the template defaults the cache root to the checkpoint directory —
+  `models/demos/gpt_oss_d_p/tt/model_config.py:160` is `Path(cache_dir) if cache_dir else
+  Path(self.model_path)` — and on this box `$HF_MODEL` already contains `ttnn_cache/` and `P150/`
+  from an unrelated package (`07_RISKS.md` R-003).
+- **Question:** what happens when `TT_CACHE_PATH` is unset — silently write tilized weights into the
+  checkpoint directory, or refuse?
+- **Options considered:**
+  1. **The template's fallback.** Writes ~8 GB of tilized, mesh-shape-specific tensors into a
+     read-mostly checkpoint directory that already holds two foreign caches, where the next run of
+     either package may find them.
+  2. **A package-local default** (e.g. `<pkg>/.cache`). Convenient, and it puts build artefacts
+     inside the source tree, which `G-CLEAN` would then have to exempt.
+  3. **Refuse**, with a message naming the variable and the reason.
+- **Choice:** option 3. The path is `<$TT_CACHE_PATH>/tensor_cache_<dtype>_<rows>x<cols>`, and
+  `cache_root=` overrides it for tests (`tmp_path`).
+- **Why:** a tilized tensor is already sharded **and** already cast, so a cache is only valid for
+  one (dtype, mesh shape) pair; the recipe's symptom for a stale hit is "one layer runs on garbage"
+  three phases later (`BRINGUP_RECIPE.md:939`, Appendix B). Both keys are therefore in the
+  directory name, and the root is required rather than guessed — the failure mode of guessing is
+  silent and cross-package, which is the worst combination.
+- **Evidence:** `G-WEIGHTS`'s `test_weight_cache_path_refuses_the_checkpoint_dir` (raises with
+  `TT_CACHE_PATH` unset) and `test_cache_written_at_another_dtype_is_not_reused` (a bf16 build wrote
+  12 files into `tensor_cache_bf16_1x1` and **0** into `tensor_cache_bfp8_1x1`; ttnn additionally
+  suffixes every file with `_dtype_<DT>_layout_<L>.tensorbin`, so both defences hold).
+- **Confidence:** high.
+- **Falsifier:** a runner or an engine that cannot set an environment variable and needs the
+  fallback. P10's manifest can set `TT_CACHE_PATH` (the `TT_` prefix is one `tt-run` forwards —
+  Appendix B), so this is not that case.
+- **Revisit if:** P8 finds the mesh shape alone insufficient (e.g. two different TP values on one
+  shape), in which case TP joins the path.
+- **Blast radius:** `tt/model_config.py`, every module's `tensor_cache_path`, `G-WEIGHTS` and its
+  P8 TP=8 extension, `07_RISKS.md` R-003.
+
+---
+
+### DEC-049 — The final norm always runs; `skip_lm_head` skips only the head
+- **Phase / module:** P6.3 / `tt/model.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** the template returns **pre**-norm hidden states when `skip_lm_head=True`
+  (`models/demos/gpt_oss_d_p/tt/model.py:236` returns before the norm at `:240`), and prefill's
+  product is the KV cache, so nothing there needed the norm.
+- **Question:** what does `prefill_forward(skip_lm_head=True)` return — the residual stream as the
+  last layer left it, or the final-normed stream?
+- **Options considered:**
+  1. **Pre-norm** (the template). `G-MODEL` would then have to re-implement RMSNorm on the host to
+     compare against anything HF produces, or score against a quantity no reference exposes.
+  2. **Post-norm.** Matches `LlamaModel.last_hidden_state` exactly
+     (`.../transformers/models/llama/modeling_llama.py:421` is `hidden_states = self.norm(...)`
+     immediately before it is returned), so the gate compares two tensors that mean the same thing.
+- **Choice:** option 2. The norm is applied unconditionally; `skip_lm_head` controls the head only.
+- **Why:** the gate has to compare against *something a reference produces*, and the only
+  hidden-state tensor HF exposes is post-norm. It is also the cheaper end of the trade: one
+  `ttnn.rms_norm` over `[1,1,S,4096]` per forward, against a host-side reimplementation of the norm
+  in every test that wants hidden states. **And the measurement says the post-norm stream is the
+  harder test, not the easier one:** at full depth the last layer's pre-norm output scores
+  0.9995853 while the post-norm output scores 0.9984849 — the norm divides out the massive-activation
+  channels that dominate the pre-norm correlation and exposes the rest, so gating on pre-norm would
+  have flattered the model by ~2.7x in error terms.
+- **Evidence:** `.../modeling_llama.py:421` and `:484` (`LlamaForCausalLM` consumes
+  `outputs.last_hidden_state` and does not re-expose it); the full-depth curve in
+  `raw/G-MODEL_per_layer_pcc.json` (`per_layer_pcc["31"]` vs `final_post_norm_pcc`).
+- **Confidence:** high.
+- **Falsifier:** a P7/P10 caller that needs the pre-norm stream (a KV-migration consumer would not —
+  the cache holds post-RoPE K and raw V, neither of which passes through the final norm).
+- **Revisit if:** the final norm ever becomes measurably expensive at long context, in which case it
+  becomes an argument rather than an unconditional step.
+- **Blast radius:** `tt/model.py`, `G-MODEL`, P7's runtime (which calls `prefill_forward` per chunk
+  and discards the hidden states).
+
+---
+
+### DEC-050 — Two per-layer seams: `on_layer_complete(idx)` for P10, `on_layer_output(idx, hidden)` for the bring-up
+- **Phase / module:** P6.3 / `tt/model.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** the template has one seam, `on_layer_complete(layer_idx)`
+  (`models/demos/gpt_oss_d_p/tt/model.py:195`, called at `:210`), and
+  `bringup_log/03_OUTLINE.md` §2.11 pins it as "the seam P10's per-layer KV migration hooks attach
+  to". `G-MODEL`'s per-layer PCC curve needs the **tensor**, which that signature does not carry.
+- **Question:** widen the existing seam to `(layer_idx, hidden_states)`, or add a second one?
+- **Options considered:**
+  1. **Widen it.** One seam, but P10's migration ack path then receives a live device tensor it has
+     no business holding, and every P10 hook has to accept and ignore it.
+  2. **Add `on_layer_output(layer_idx, hidden_states)`.** Two callbacks, each with one job: an ack
+     seam that carries an index, and a numerical-probe seam that carries the tensor.
+  3. **No seam; re-run the model once per layer depth.** 32 forwards to draw one curve, and each
+     rebuild would perturb nothing but the wall clock. Rejected on cost, not on correctness.
+- **Choice:** option 2.
+- **Why:** the two callers want different things at different lifetimes. P10's hook fires to
+  acknowledge that a layer's KV is migratable and must stay cheap; the curve probe reads a
+  4096-wide activation to the host, which is the opposite of cheap and must not end up on the
+  serving path by accident. Keeping them separate means P10 cannot inherit a host readback.
+- **Evidence:** `models/demos/gpt_oss_d_p/tt/model.py:195` and `:210` (the template's seam and its
+  call site); the curve itself, `raw/G-MODEL_per_layer_pcc.json`, 32 entries from one forward.
+- **Confidence:** high.
+- **Falsifier:** P10 needing the tensor after all (e.g. to checksum a layer's output before
+  migrating its KV), which would make one widened seam the right shape.
+- **Revisit if:** P7 or P10 wants a third per-layer hook — three callbacks is a sign the seam should
+  become an object.
+- **Blast radius:** `tt/model.py`'s `prefill_forward` signature, `G-MODEL`, P10's adapter.
+
+---
+
+### DEC-051 — `G-LAYER`'s error-ratio budget: attribute the fused kernel **through the layer**, and assert both
+- **Phase / module:** P6.1 / `tests/unit/test_decoder_layer_vs_ref.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** `07_RISKS.md` R-015 hands P6 the same arithmetic that made `G-ATTN` a
+  `PASS-WITH-DEVIATION` (`DEC-042`): Appendix A sets `G-LAYER` at "PCC >= 0.999, <= 8x floor"
+  (`BRINGUP_RECIPE.md:1854`, stated at `:1372`), and the layer contains the fused SDPA kernel that
+  recipe §2.3 measures at 71x its own floor and that accounted for the whole of `G-ATTN`'s block
+  gap. The gate's assertion had to be written **before** the number existed.
+- **Question:** how is the fused kernel's fixed slack attributed at layer level — and is
+  §2.3.1's subtraction even valid there, given the residual add attenuates a perturbation of the
+  attention branch by `||y||/||s||` (`BRINGUP_RECIPE.md:1388-1389` measures 1.12x-1.73x)?
+- **Options considered:**
+  1. **Copy `DEC-042` verbatim**: measure SDPA standalone, subtract its excess from the layer's
+     total in the layer's output space. Cheap, and **wrong at layer level** — the kernel's error
+     reaches the layer output attenuated by the residual add and then reshaped by the MLP, so
+     subtracting the raw excess over-corrects by an unknown factor.
+  2. **Model the attenuation** with the recipe's `||y||/||s||` and scale the excess. Introduces a
+     modelled constant into a gate whose whole point is measurement.
+  3. **Substitute the device's real SDPA output into the floor layer** and let the substitution
+     propagate through `o_proj`, the residual add, the second norm and the MLP. The resulting
+     `predicted` PCC contains the kernel's real error, attenuated exactly as the arithmetic
+     attenuates it, with nothing modelled. Then
+     `residual = ((1 - measured) - ((1 - predicted) - (1 - floor))) / (1 - floor)`.
+- **Choice:** option 3, asserted at <= 8x at **both** dtypes, plus the raw ratio asserted where
+  `DEC-042` says a raw ratio is meaningful (bf8_b), and the raw ratio recorded at both.
+- **Why:** it is §2.3.1's instruction — "measure the fused kernel standalone, subtract its excess
+  and the floor error from the block's total, and require the remainder ... to sit near 1x"
+  (`BRINGUP_RECIPE.md:452`) — with the one term §2.3.1 could not have known about at block level
+  (the residual attenuation) handled by construction rather than by a correction factor.
+- **Measured, and the finding is that the wall does not bite here:**
+
+  | dtype | S | layer PCC | floor | raw ratio | kernel excess / floor err | attributed residual |
+  |---|---|---|---|---|---|---|
+  | bf8_b | 128 / 512 / 2048 | 0.9997665 / 0.9998273 / 0.9998736 | 0.9998709 / 0.9998953 / 0.9999138 | **1.81 / 1.65 / 1.47x** | 0.68 / 0.51 / 0.31x | **1.13 / 1.14 / 1.15x** |
+  | bf16 | 128 / 512 / 2048 | 0.9998774 / 0.9999172 / 0.9999480 | 0.9999826 / 0.9999859 / 0.9999885 | **7.05 / 5.86 / 4.51x** | 5.04 / 3.83 / 2.37x | **2.01 / 2.03 / 2.14x** |
+
+  So the **raw 8x holds at both dtypes at layer level** — 7.05x is the worst case — where at block
+  level it reached 12.32x (`DEC-042`). The reason is arithmetic and worth stating: a layer adds two
+  norms and three more bf8_b/bf16 projections to the floor's error budget while the fused kernel's
+  absolute slack is unchanged, so the kernel's *share* of the total falls. `G-LAYER` is therefore a
+  plain `PASS`, not a `PASS-WITH-DEVIATION`, and `RAW_BLOCK_BUDGET_APPLIES[bf16] = False` — declared
+  before the measurement — turns out to have been unnecessary caution rather than a needed escape.
+  It is left in place and *not* flipped to `True`: changing a threshold after seeing the number it
+  gates is the error `BRINGUP_RECIPE.md:1899` names in both directions, and the residual assertion
+  it sits beside is the tighter of the two anyway (2.14x against a budget of 8x).
+- **Evidence:** `raw/G-LAYER_20260904T113153Z.log`, all six block cases with their attribution lines. The
+  additive model's own check: `predicted` vs `measured` agree to 5-6 decimals in every case
+  (bf8_b S=512: predicted 0.9998418, measured 0.9998273).
+- **Confidence:** high.
+- **Falsifier:** the attributed residual exceeding ~3x while the kernel's excess is unchanged —
+  then the additive attribution is wrong and the gap is not the kernel's. Equally: if the raw bf16
+  ratio ever exceeds 8x at layer level, this table is the record of what changed.
+- **Revisit if:** the SDPA kernel changes, or P8's ring SDPA replaces it on the SP path (it has its
+  own slack, measured at 7.98x in the recipe's run).
+- **Blast radius:** `tests/unit/test_decoder_layer_vs_ref.py`, `06_GATES.md`'s `G-LAYER` verdict,
+  `07_RISKS.md` R-015's P6 half.
+
+---
+
+### DEC-052 — Read the HF oracle through forward hooks, never through `output_hidden_states`
+- **Phase / module:** P6.3 / `tests/unit/test_model_vs_ref.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** the first `G-MODEL` run measured a hidden-state PCC of **0.9916270** at 2 layers
+  while the last-position **logits** PCC on the same forward was **0.9996040**. A model whose
+  hidden states are 20x worse than the logits computed from them is arithmetically impossible, so
+  one of the two comparisons was measuring the wrong thing.
+- **Question:** what exactly is element `i` of `transformers` 5.12.1's `output_hidden_states` tuple?
+- **What it actually is, measured:** for an `n`-layer model the tuple is
+  `(embeddings, L0_out, ..., L[n-2]_out, POST-FINAL-NORM)` — length `n+1`, and its **last** element
+  is `model.norm`'s output, *not* the last layer's. Verified by hooking every module: for `n = 2`,
+  `hidden_states[0] == embed_tokens` output, `hidden_states[1] == layers[0]` output, and
+  `hidden_states[2] == norm` output, while `layers[1]`'s output appears **nowhere** in the tuple.
+  `LlamaForCausalLM`'s `CausalLMOutputWithPast` also exposes **no** `last_hidden_state`
+  (`LlamaModel.forward` builds one at
+  `python_env/lib/python3.12/site-packages/transformers/models/llama/modeling_llama.py:421` and
+  `LlamaForCausalLM` consumes it at `:484` without re-exposing it), so there is nothing to
+  cross-check the tuple against from the causal-LM head.
+- **The bug it caused, so the next reader recognises it:** taking `hidden_states[-1]` as the last
+  layer's pre-norm output and applying `model.norm` to it computes the norm **twice**. RMSNorm is
+  nearly idempotent on an already-normalised tensor — it rescales by roughly the gain — so the
+  result is *plausible*: PCC 0.9916, not garbage. The device was correct throughout; on the real
+  reference the same layer scores 0.9999551. Diagnosing it took a per-channel comparison that
+  showed the "device error" was a uniform ~8x on Llama's massive-activation channels (788, 1384,
+  4062 at the BOS positions), i.e. a missing normalisation, not a kernel fault.
+- **Options considered:**
+  1. **Use `hidden_states[:-1]` for the layers and `hidden_states[-1]` for the post-norm stream.**
+     Correct today, and it silently breaks if a future `transformers` appends the last layer's
+     output too — with the same plausible-looking failure.
+  2. **Register forward hooks** on `model.model.layers[i]` and on `model.model.norm`. Explicit,
+     version-independent, and it yields the last layer's pre-norm output, which the tuple does not
+     contain at all.
+- **Choice:** option 2, for every HF read in the file — reduced-depth, full-depth, floor and control
+  alike. `output_hidden_states` is not passed anywhere.
+- **Why:** the gate compares tensors across two implementations, and the one thing it cannot afford
+  is ambiguity about *which* tensor. A hook names the module it came from.
+- **Evidence:** the measurement above; `.../modeling_llama.py:421` and `:484`. The corrected gate
+  measures L2/s128 hidden PCC **0.9997314** against a floor of 0.9998795 (2.23x).
+- **Confidence:** high — it is a direct measurement of the installed version.
+- **Falsifier:** a `transformers` release where the hook-captured layer output and
+  `hidden_states[i+1]` disagree; the hooks would still be right.
+- **Revisit if:** never for correctness; only if hooking becomes impossible (a compiled/graph HF
+  path), in which case run `model.model` directly and norm its `last_hidden_state` yourself.
+- **Blast radius:** `tests/unit/test_model_vs_ref.py` (every reference read), `G-MODEL`'s numbers,
+  and P7's golden-KV generator, which will read the same oracle.
+
+---
+
+### DEC-054 — Three public surfaces deviate from `03_OUTLINE.md`, each in named places
+- **Phase / module:** P6.1-P6.3 / `tt/model_config.py`, `tt/layer.py`, `tt/model.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** `bringup_log/03_OUTLINE.md` §2.3, §2.10 and §2.11 pin the constructors and forward
+  signatures for these three files, and P3's convention list says "deviating is a `DEC`"
+  (`BRINGUP_RECIPE.md:927`). Implementing them produced four deviations.
+- **Question / choice, one row each:**
+
+  | Outline | Implemented | Why |
+  |---|---|---|
+  | `ModelArgs(..., instruct=True, cache_hf=False)` | both dropped | Neither has a consumer in this iteration: `instruct` selects a chat template and nothing here tokenizes through `ModelArgs` (`G-MODEL` uses `AutoTokenizer` directly, `DEC-056`), and `cache_hf` is unread in the template it came from too. Recipe §0 rule 5: no dead parameters. Adding a tokenizer to `ModelArgs` would also make the class import `transformers`, which every dimension-only test currently avoids. |
+  | `ModelArgs` has no key-set accessor | `expected_state_dict_keys(n_layers=None)` added | `G-WEIGHTS` must assert "no missing **and** no unused keys" against something; deriving it from the same constants the loader uses is the only version that cannot drift from the loader on a rename. A hand-written list in the test would. |
+  | `DecoderLayer(..., dtype=ttnn.bfloat16, max_local_batch_size=1)` | `weight_dtype=bfloat8_b`, `activation_dtype=bfloat16`; `max_local_batch_size` dropped; `attention_config=`/`program_config=` added | One `dtype` argument for two different dtypes is how `DEC-022`'s ladder gets flattened by accident — the sublayers take both separately, so the layer does too. `max_local_batch_size` is unread (it exists in the template for the MoE capacity calculation). The two configs are passed in so `tt/model.py` builds them **once** for all 32 layers; `None` builds them locally, which is what the standalone layer test uses. |
+  | `Model.prefill_forward(..., on_layer_complete=None)` | `on_layer_output=` added | `DEC-050`. |
+- **Why (the common thread):** each deviation either removes a parameter with no reader or adds one
+  a gate needs. None changes a tensor, a shape or a dtype, so no earlier gate's evidence is
+  affected.
+- **Evidence:** `models/demos/gpt_oss_d_p/tt/layer.py:46`'s signature (the source of the dropped
+  arguments, where `max_local_batch_size` and `dtype` are likewise unread by the dense path);
+  `bringup_log/03_OUTLINE.md` §2.3, §2.10, §2.11.
+- **Confidence:** high.
+- **Falsifier:** P7 or P10 calling one of these constructors with `instruct=`, `cache_hf=`,
+  `dtype=` or `max_local_batch_size=` because it copied the outline. A `TypeError` at the call site,
+  not a silent wrong value.
+- **Revisit if:** the package grows a tokenizer-owning surface (P10's request mode may), which is
+  where `instruct` belongs.
+- **Blast radius:** `bringup_log/03_OUTLINE.md` §2.3/§2.10/§2.11 as written; P7's runtime and P10's
+  adapter, which construct these three classes.
+
+---
+
+### DEC-055 — `G-WEIGHTS` proves the per-tensor and cache-only halves on **one** layer, and the key set on all 32
+- **Phase / module:** P6.2 / `tests/unit/test_weight_loading.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** the recipe asks for "(c) a **sample** of device weights ... bit-exact"
+  (`BRINGUP_RECIPE.md:1407`) and a cache-only rebuild producing bit-identical device tensors
+  (`:1406`), without saying how much of the model either covers.
+- **Question:** how much of the model does `G-WEIGHTS` build with real weights — one layer, or 32?
+- **Options considered:**
+  1. **All 32 layers, twice** (once from the checkpoint, once from cache). ~290 tensors per build;
+     re-proves one loader code path 32 times, at a cost of minutes of host I/O per run and a
+     permanent tax on every regression.
+  2. **One layer, and every tensor in it** — 12 tensors: embedding, both norm gains, four attention
+     projections, three MLP projections, the final norm and the LM head. Plus the **key set** over
+     all 32 layers, which is where a per-layer rename would show up and which needs no tensor data
+     at all (it reads `model.safetensors.index.json`).
+  3. A "sample" in the literal sense — a few tensors. Weaker than option 2 for the same cost.
+- **Choice:** option 2. Every weight of a one-layer model, `rtol = atol = 0`, plus 291-key set
+  equality across the whole checkpoint.
+- **Why:** the loader is written once and parameterised by layer index, so per-layer repetition
+  tests the `for` loop, not the loader. What *is* layer-specific is the **key names**, and those are
+  covered exhaustively and for free. Checking all twelve tensors rather than a sample also turns
+  part (c) into the honest proof of part (a)'s "every expected key is **consumed**": a key that no
+  module read could not produce a bit-matching device tensor.
+- **Evidence:** `raw/G-WEIGHTS_20260904T113320Z.log` — 291 checkpoint keys, 291 expected, 0 missing, 0 unused;
+  12/12 tensors at `max|delta| = 0.000e+00` through the transpose, the Q/K Meta swizzle and the
+  bf8_b/bf16 dtype ladder; 12/12 SHA-256-identical after a cache-only rebuild from an empty
+  `state_dict`.
+- **Confidence:** high on the loader; the **32-layer** cache-only rebuild remains untested at any
+  mesh shape, which is what `G-WEIGHTS`'s P8 extension covers (`BRINGUP_RECIPE.md:1411` scopes
+  cache-only at TP > 1 there).
+- **Falsifier:** a layer-index-dependent loader path — e.g. a per-layer cache subdirectory collision
+  — which a 32-layer run would catch and this does not. The cache path is
+  `.../model.layers.<i>/...`, so a collision would be a bit-identity failure in the P8 extension.
+- **Revisit if:** the loader gains a per-layer branch of any kind.
+- **Blast radius:** `G-WEIGHTS`'s runtime and coverage; `08_INTEGRATION`-style coverage claims.
+
+---
+
+### DEC-056 — `G-MODEL`'s input distribution is **real tokenized prompt text**
+- **Phase / module:** P6.3 / `tests/unit/test_model_vs_ref.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** the recipe requires "**top-1 token agreement = 100%** on the last position"
+  (`BRINGUP_RECIPE.md:1421-1422`) but does not say what the input tokens are, and recipe §1.4
+  requires every numeric gate to state its input distribution.
+- **Question:** what token ids does the gate feed — uniform random over the 128256-way vocab, or
+  real text?
+- **Options considered:**
+  1. **Uniform random ids.** No dependency, and it puts the model far off-distribution: the top-1
+     logit gap on noise can be arbitrarily small, so a 100% top-1 requirement becomes a coin flip
+     on bf8_b rounding — the gate would be flaky for reasons unrelated to correctness.
+  2. **A fixed English prompt through the checkpoint's own tokenizer**, tiled to the sequence
+     length. Adds an `AutoTokenizer.from_pretrained($HF_MODEL)` call (the checkpoint ships
+     `tokenizer.json`), and makes the top-1 an actual next-token prediction.
+  3. **Hard-coded token ids** copied from a tokenizer run. No dependency, but a magic array nobody
+     can audit against the text it claims to be.
+- **Choice:** option 2, with the prompt a module-level constant so it is visible and fixed.
+- **Why:** top-1 agreement is only meaningful where the reference itself is confident. Measured, it
+  is: the reference's top-2 logit gap is **3.9214** at 2 layers, and the two implementations agree
+  on the argmax at every depth tested. The tiling repeats the tokenizer's BOS, which turns out to be
+  a feature — Llama's massive activations live at BOS positions, so the input exercises the highest
+  dynamic range in the model at more than one position (that is what made `DEC-052`'s double-norm
+  bug visible at all).
+- **Evidence:** `raw/G-MODEL_<ts>.log` — top-1 agrees at L2/L4, seq 128/512, and at full depth
+  (ref 374 == device 374); the rotated-weight control moves it (`DEC-050`'s sibling assertion).
+  Note the top-**5** is not required to agree and does not: at L2/s128 rank 4 differs
+  (ref `31240`, device `50294`), which is what a 0.9996 logits PCC looks like and is why the gate is
+  on top-1.
+- **Confidence:** high.
+- **Falsifier:** a top-1 disagreement traceable to the prompt rather than the model — visible as a
+  reference top-2 gap near zero, which is logged every run.
+- **Revisit if:** the gate ever needs to run on a weightless box (it cannot — it is
+  `requires_hf_reference` by construction) or a tokenizer-free machine.
+- **Blast radius:** `G-MODEL`'s inputs; P7's golden-KV scripts, which should use the same prompt
+  so the two are comparable.
+
+---
+
+### DEC-057 — `G-LAYER`'s norm-swap control also runs on the **real** layer-0 gains
+- **Phase / module:** P6.1 / `tests/unit/test_decoder_layer_vs_ref.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** the recipe's negative control for `G-LAYER` is "swap the two norm gains (measured
+  **0.9471**)" (`BRINGUP_RECIPE.md:1373`). Run on this gate's random weights it measures
+  **0.99864** (bf8_b) / **0.99873** (bf16) — below the 0.999 threshold, so it discriminates, but by
+  1.4e-3 and nowhere near the recipe's figure.
+- **Question:** is the control wrong, is the recipe's number wrong, or is the *input* wrong?
+- **The cause, and it is the input.** `random_layer_weights` draws each norm gain as
+  `1 + randn * 0.02` (`tests/unit/test_reference_model.py`), so the two gains are within ~2% of each
+  other **and** of the identity vector. Swapping two nearly-identical vectors is a nearly-zero
+  perturbation; no correct implementation could fail it by much. The recipe's 0.9471 is only
+  reachable with gains that actually differ.
+- **Options considered:**
+  1. **Keep the random-weight control only.** It technically satisfies "the same assertion must
+     reject it", with a margin thin enough that a small precision change on either side could flip
+     it — a control that can pass by accident.
+  2. **Make the random gains more distinct** (e.g. `randn` without the `1 +`). Strengthens the
+     control and makes the gate's *positive* arm run on gains no Llama layer has, changing every
+     floor in the file.
+  3. **Add a second arm on the real layer-0 gains**, keeping the random-weight arm as the
+     checkpoint-free one. Both numbers recorded.
+- **Choice:** option 3, and the real-gain arm asserts < 0.99 rather than < 0.999.
+- **Why:** the two arms answer different questions. The random arm proves the *assertion* is wired
+  to the norms at all, on a box with no checkpoint. The real arm is the one that reproduces the
+  recipe's finding, because the real `input_layernorm` and `post_attention_layernorm` gains are not
+  interchangeable vectors, and it is the arm whose margin makes the control trustworthy.
+- **Evidence:** `raw/G-LAYER_20260904T113153Z.log` — the real-gain arm logs both gains' norms and their cosine
+  similarity alongside the correct and swapped PCCs.
+- **Confidence:** high.
+- **Falsifier:** the real-gain arm also landing near 0.999, which would mean the two real gains are
+  interchangeable and the control cannot be strengthened this way.
+- **Revisit if:** P8's TP=8 layer gate reuses this control (it should, and at TP=8 the gains are
+  replicated so the numbers should be unchanged).
+- **Blast radius:** `tests/unit/test_decoder_layer_vs_ref.py`'s controls, `G-LAYER`'s block.
+
+---
+
+### DEC-058 — Supersedes `DEC-057`: what makes a residual-block control weak is the input **scale**, not the gains
+- **Phase / module:** P6.1 / `tests/unit/test_decoder_layer_vs_ref.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** `DEC-057` diagnosed the weak norm-swap control as "the random gains are all ~1, so
+  swapping them is a nearly-zero perturbation" and added an arm using the real layer-0 gains. That
+  arm was **measured and the diagnosis was wrong**: with real gains (norms 8.994 / 8.595, cosine
+  **0.494** — genuinely different vectors) the swap moved the PCC only from 0.9999969 to
+  **0.99993**, i.e. *further* from collapsing than the random-gain arm.
+- **Question:** why can a wrong norm gain barely move a decoder layer's output, and what input makes
+  the control discriminate?
+- **The measurement that settles it.** Three arms, same code, same swap:
+
+  | input | weights | max&#124;x&#124; | max&#124;attn_out&#124; | attenuation | swapped-gain PCC |
+  |---|---|---|---|---|---|
+  | `randn` | random `*0.02`, random gains | ~4 | ~0.5 | small | 0.99864 |
+  | `randn` | **real** layer-0, all nine tensors | 5.16 | **0.08** | ~65x | **0.99993** |
+  | **real `embed_tokens` rows** | **real** layer-0, all nine tensors | 0.0596 (RMS 0.0106) | 0.3948 | **3.40x** | **0.66830** |
+
+  The mechanism is `BRINGUP_RECIPE.md:1388-1389`'s own: for `y = r + s` a perturbation of `s` is
+  attenuated in `y` by `||y||/||s||`. A norm **removes its input's scale**, so a sublayer's output
+  magnitude is nearly independent of the input's — while the residual's magnitude *is* the input's.
+  Feed a standard-normal `x` (~100x larger than what layer 0 receives, since `embed_tokens` rows
+  have an RMS around 0.0106) and the residual drowns both sublayers; feed the real embedding rows
+  and the layer amplifies 0.06 to 2.02, the sublayers dominate, and a wrong gain is no longer
+  absorbed. The recipe's remark that the masking is "real but small" (1.12x-1.73x) holds for the
+  inputs *it* measured; at a 100x input-scale mismatch the same mechanism gives ~65x and swallows
+  the control whole.
+- **Options considered:**
+  1. Keep `DEC-057`'s real-**gain** arm. It passes only because `< 0.99` was asserted against a
+     number that measured 0.99993 — i.e. it does not pass at all, and it was never a control.
+  2. Rescale a standard-normal input to the embedding's RMS. Gets the magnitude right and the
+     *structure* wrong: real embedding rows carry the massive-activation channels (788, 1384, 4062)
+     that dominate every downstream norm, and a Gaussian of the same RMS does not.
+  3. Drive the arm with **real layer-0 weights and real `embed_tokens` rows** for a fixed token
+     sequence — the actual layer-0 input.
+- **Choice:** option 3, asserting the gate's own `PCC >= 0.999` must reject the swap.
+- **Why:** it is the only arm in which the layer is doing what it does in the model, and it is
+  therefore the only arm whose *failure* would mean something. It collapses to **0.66830**, past the
+  recipe's quoted 0.9471, with a 0.33 margin instead of 1.4e-3.
+- **Evidence:** `raw/G-LAYER_20260904T113153Z.log`, the three arms above. The correct arm on real weights and a
+  real input measures **0.9998649** against a floor of **0.9999647** (**3.82x**) — the only
+  real-weight, real-input layer number in this gate, and the one comparable with recipe §2.1's
+  table, which was also measured on real weights.
+- **Confidence:** high. The three-row table is a controlled experiment: one variable changes per row.
+- **Falsifier:** an arm with a real-scale input where the swap does *not* collapse. That would mean
+  the norms are not wired to the sublayers the way the code says.
+- **Revisit if:** any later gate builds a negative control on a residual block — P8's TP=8 layer
+  gate and P7's chunked gate both would. **The general rule this produces:** a control on `r + s`
+  must be driven at the scale the model actually presents to that block, or the residual absorbs it.
+- **Blast radius:** `tests/unit/test_decoder_layer_vs_ref.py`; `G-LAYER`'s control; the design of
+  every later residual-block control. Supersedes `DEC-057`.
+
+---
+
+### DEC-053 — `G-MODEL`'s verdict follows the phase text, not Appendix A's compressed row
+- **Phase / module:** P6.3 / `tt/model.py` (written by the orchestrator after the P6 session was
+  stopped mid-run; the analysis and all numbers are the session's, recorded in `R-020`/`R-021`/`R-022`)
+- **Date (UTC):** 2026-09-04
+- **Trigger:** at 32 layers / seq 512 / bf8_b weights the post-final-norm hidden PCC is **0.9984849**,
+  which is *below* the 0.999 the recipe states — but the recipe states it in two places that disagree
+  about the depth it applies at.
+- **Question:** does the absolute PCC threshold gate the full-depth run, or only the reduced-depth runs?
+- **The conflict:** the phase text (`BRINGUP_RECIPE.md:1420-1425`) attaches `PCC >= 0.999, <= 8x floor,
+  100% top-1` to the **reduced** layer counts (2, then 4) and gates the full 32-layer run on the
+  **per-layer step (<= 4x from L3)**. Appendix A's single row compressed all of it into one
+  unqualified line, which reads as though the absolute threshold also applies at depth 32. Literally,
+  Appendix A makes this a `FAIL` that stops the bring-up; the phase text makes it a `PASS`.
+- **Choice:** follow the **phase text**. Assert the step and top-1 as stated at full depth, and record
+  the absolute number against a *measured full-depth floor* so it has a reference instead of a bare
+  comparison to a reduced-depth threshold.
+- **Why:** the phase text is the specific instruction and Appendix A is a summary of it; a summary that
+  loses a qualifier does not create a requirement. And the evidence says the model is fine: the
+  per-layer step never exceeds **1.27x** against a 4x budget, the curve is smooth with no step
+  anywhere, **top-1 agrees with HF**, and once the floor is corrected for the bf16 RoPE tables the
+  device actually holds (`R-021`) the ratio is **1.53x** — inside the 1.0-2.4x band every other gate
+  in this run occupies. The 2.79x that prompted this was a floor defect, not a model defect.
+- **Evidence:** `R-020` (the textual conflict, with both line ranges), `R-021` (the floor correction:
+  `1 - floor` 5.4300e-04 with fp32 RoPE tables vs 9.9160e-04 with bf16, the omitted term being 45% of
+  the correct floor error, and a staged chain reproducing the gate's floor exactly at 0.9994570),
+  `R-022` (why §2.3.1's attribution over-subtracts at this depth, residual 0.63x).
+- **Confidence:** high on the verdict, medium on the threshold *design* — hence the recipe fix below.
+- **Falsifier:** a full-depth run whose per-layer step exceeds 4x, or whose top-1 disagrees, or whose
+  corrected ratio leaves the band. None of those hold.
+- **Revisit if:** the absolute number is ever needed as a release criterion, in which case it must be
+  re-derived at the target depth and sequence length rather than inherited.
+- **Blast radius:** `G-MODEL` only. **Fixed upstream in the kit:** Appendix A's `G-MODEL` row is now
+  scoped by depth, and new §2.2.4 states the general rule — an absolute PCC threshold without a stated
+  depth silently becomes a measure of depth rather than of correctness.

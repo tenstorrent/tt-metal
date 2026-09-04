@@ -1,0 +1,183 @@
+2026-09-04 11:35:08.734 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mstojkovic/.cache/ttnn,model_cache_path=/home/mstojkovic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.14, pytest-9.0.3, pluggy-1.6.0 -- /home/mstojkovic/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mstojkovic/tt-metal
+configfile: pytest.ini
+plugins: timeout-2.4.0, anyio-4.15.0, cov-7.0.0, github-actions-annotate-failures-0.3.0, repeat-0.9.4, dash-2.15.0, benchmark-5.2.3, split-0.11.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 8 items
+
+models/demos/llama31_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_vs_ref[blackhole-s128-L2-mesh_device0] 2026-09-04 11:35:11.373 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:224)
+2026-09-04 11:35:11.374 | info     |             UMD | Cluster constructor started. (cluster.cpp:406)
+2026-09-04 11:35:11.391 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-09-04 11:35:11.391 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-09-04 11:35:11.492 | info     |             UMD | Established firmware bundle version: 19.12.0 (topology_discovery.cpp:576)
+2026-09-04 11:35:11.497 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-09-04 11:35:12.931 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31}/[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 30, 31, 16, 17, 18, 19, 20, 21, 22, 23] and remote chip ids {} (cluster.cpp:173)
+2026-09-04 11:35:12.931 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-09-04 11:35:12.931 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-09-04 11:35:12.931 | info     |             UMD | Cluster constructor completed. (cluster.cpp:665)
+2026-09-04 11:35:12.950 | info     |             UMD | Starting devices in cluster (cluster.cpp:1205)
+2026-09-04 11:35:13.517 | warning  |             UMD | AICLK settled at 1337 MHz, within 5% of the requested 1350 MHz but not an exact match. Proceeding. (tt_device.cpp:256)
+2026-09-04 11:35:13.714 | warning  |             UMD | AICLK settled at 1343 MHz, within 5% of the requested 1350 MHz but not an exact match. Proceeding. (tt_device.cpp:256)
+2026-09-04 11:35:14.588 | warning  |             UMD | AICLK settled at 1343 MHz, within 5% of the requested 1350 MHz but not an exact match. Proceeding. (tt_device.cpp:256)
+2026-09-04 11:35:14.602 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1213)
+2026-09-04 11:35:18.459 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
+2026-09-04 11:35:18.459 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
+2026-09-04 11:35:18.477 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4, 3:16, 4:12} (topology_mapper_utils.cpp:3368)
+2026-09-04 11:35:18.477 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:24, 5:8} (topology_mapper_utils.cpp:3376)
+2026-09-04 11:35:19.102 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 11:35:19.811 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 11:35:20.624 | INFO     | models.demos.llama31_8b_d_p.tt.model_config:_load_safetensors:199 - loaded 21 checkpoint tensors from /home/mstojkovic/models/Llama-3.1-8B-Instruct
+2026-09-04 11:35:55.206 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 11:36:01.583 | INFO     | models.demos.llama31_8b_d_p.tt.model:__init__:166 - Llama model built: 2 layers, mesh (1, 1), tp=1, sp=1, lm_head=True
+2026-09-04 11:36:01.739 | INFO     | llama31_8b_d_p.tests.unit.test_model_vs_ref:test_model_vs_ref:317 - [G-MODEL] L2 s128: hidden PCC=0.9997314 floor=0.9998795 ratio=2.23x (threshold 0.999, raw budget 8.0x)
+2026-09-04 11:36:01.739 | INFO     | llama31_8b_d_p.tests.unit.test_model_vs_ref:test_model_vs_ref:321 - [G-MODEL] L2 s128: last-position logits PCC=0.9996040; top-1 ref=73463 dev=73463 (ref top-2 logit gap 3.9214); top-5 ref=[73463, 32171, 87751, 31240, 38685] dev=[73463, 32171, 87751, 50294, 38685]
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_is_causal[blackhole-mesh_device0] 2026-09-04 11:36:02.917 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 11:36:03.010 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 11:36:03.659 | INFO     | models.demos.llama31_8b_d_p.tt.model_config:_load_safetensors:199 - loaded 21 checkpoint tensors from /home/mstojkovic/models/Llama-3.1-8B-Instruct
+2026-09-04 11:36:03.659 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 11:36:10.844 | INFO     | models.demos.llama31_8b_d_p.tt.model:__init__:166 - Llama model built: 2 layers, mesh (1, 1), tp=1, sp=1, lm_head=True
+2026-09-04 11:36:10.993 | INFO     | llama31_8b_d_p.tests.unit.test_model_vs_ref:test_model_is_causal:360 - [G-MODEL] causality: max|delta| rows[:-1]=0.000e+00, last row=1.750e+01
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_rotated_layer_weights_negative_control[blackhole-mesh_device0] 2026-09-04 11:36:12.010 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 11:36:12.102 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 11:36:12.739 | INFO     | models.demos.llama31_8b_d_p.tt.model_config:_load_safetensors:199 - loaded 39 checkpoint tensors from /home/mstojkovic/models/Llama-3.1-8B-Instruct
+2026-09-04 11:36:27.887 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 11:36:36.792 | INFO     | models.demos.llama31_8b_d_p.tt.model:__init__:166 - Llama model built: 4 layers, mesh (1, 1), tp=1, sp=1, lm_head=True
+2026-09-04 11:36:36.831 | INFO     | llama31_8b_d_p.tests.unit.test_model_vs_ref:test_model_rotated_layer_weights_negative_control:386 - [G-MODEL] control: per-layer weights rotated -> hidden PCC=0.16180; top-1 98501 -> 68968
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_model_vs_ref.py::test_hf_and_quantised_floor_differ[blackhole-mesh_device0] 2026-09-04 11:36:38.009 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 11:36:38.699 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 11:36:39.377 | INFO     | models.demos.llama31_8b_d_p.tt.model_config:_load_safetensors:199 - loaded 21 checkpoint tensors from /home/mstojkovic/models/Llama-3.1-8B-Instruct
+2026-09-04 11:37:14.118 | INFO     | llama31_8b_d_p.tests.unit.test_model_vs_ref:test_hf_and_quantised_floor_differ:417 - [G-MODEL] floor sanity: fp32 vs device-valued weights PCC=0.9998795 (1 - floor = 1.205e-04); identical tensors would give exactly 1.0
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_full_depth_per_layer_curve[blackhole-mesh_device0] 2026-09-04 11:37:15.228 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 11:37:15.322 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 11:37:15.978 | INFO     | models.demos.llama31_8b_d_p.tt.model_config:_load_safetensors:199 - loaded 291 checkpoint tensors from /home/mstojkovic/models/Llama-3.1-8B-Instruct
+2026-09-04 11:40:43.544 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 11:41:11.805 | INFO     | models.demos.llama31_8b_d_p.tt.model:__init__:166 - Llama model built: 32 layers, mesh (1, 1), tp=1, sp=1, lm_head=True
+2026-09-04 11:41:12.597 | INFO     | llama31_8b_d_p.tests.unit.test_model_vs_ref:test_model_full_depth_per_layer_curve:501 - [G-MODEL] full-depth curve L 0: PCC=0.9999073 (1-PCC=9.271e-05)  floor=0.9999355 ratio=1.44x
+2026-09-04 11:41:12.597 | INFO     | llama31_8b_d_p.tests.unit.test_model_vs_ref:test_model_full_depth_per_layer_curve:501 - [G-MODEL] full-depth curve L 1: PCC=0.9999551 (1-PCC=4.487e-05)  floor=0.9999777 ratio=2.01x  step=0.48x
+2026-09-04 11:41:12.597 | INFO     | llama31_8b_d_p.tests.unit.test_model_vs_ref:test_model_full_depth_per_layer_curve:501 - [G-MODEL] full-depth curve L 2: PCC=0.9999567 (1-PCC=4.335e-05)  floor=0.9999776 ratio=1.93x  step=0.97x
+2026-09-04 11:41:12.597 | INFO     | llama31_8b_d_p.tests.unit.test_model_vs_ref:test_model_full_depth_per_layer_curve:501 - [G-MODEL] full-depth curve L 3: PCC=0.9999579 (1-PCC=4.205e-05)  floor=0.9999773 ratio=1.86x  step=0.97x
+2026-09-04 11:41:12.597 | INFO     | llama31_8b_d_p.tests.unit.test_model_vs_ref:test_model_full_depth_per_layer_curve:501 - [G-MODEL] full-depth curve L 4: PCC=0.9999576 (1-PCC=4.243e-05)  floor=0.9999771 ratio=1.85x  step=1.01x
+2026-09-04 11:41:12.597 | INFO     | llama31_8b_d_p.tests.unit.test_model_vs_ref:test_model_full_depth_per_layer_curve:501 - [G-MODEL] full-depth curve L 5: PCC=0.9999576 (1-PCC=4.238e-05)  floor=0.9999768 ratio=1.82x  step=1.00x
+2026-09-04 11:41:12.597 | INFO     | llama31_8b_d_p.tests.unit.test_model_vs_ref:test_model_full_depth_per_layer_curve:501 - [G-MODEL] full-depth curve L 6: PCC=0.9999574 (1-PCC=4.260e-05)  floor=0.9999764 ratio=1.81x  step=1.01x
+2026-09-04 11:41:12.597 | INFO     | llama31_8b_d_p.tests.unit.test_model_vs_ref:test_model_full_depth_per_layer_curve:501 - [G-MODEL] full-depth curve L 7: PCC=0.9999568 (1-PCC=4.318e-05)  floor=0.9999758 ratio=1.78x  step=1.01x
+2026-09-04 11:41:12.597 | INFO     | llama31_8b_d_p.tests.unit.test_model_vs_ref:test_model_full_depth_per_layer_curve:501 - [G-MODEL] full-depth curve L 8: PCC=0.9999544 (1-PCC=4.562e-05)  floor=0.9999751 ratio=1.83x  step=1.06x
+2026-09-04 11:41:12.597 | INFO     | llama31_8b_d_p.tests.unit.test_model_vs_ref:test_model_full_depth_per_layer_curve:501 - [G-MODEL] full-depth curve L 9: PCC=0.9999496 (1-PCC=5.036e-05)  floor=0.9999738 ratio=1.92x  step=1.10x
+2026-09-04 11:41:12.597 | INFO     | llama31_8b_d_p.tests.unit.test_model_vs_ref:test_model_full_depth_per_layer_curve:501 - [G-MODEL] full-depth curve L10: PCC=0.9999361 (1-PCC=6.394e-05)  floor=0.9999732 ratio=2.39x  step=1.27x
+2026-09-04 11:41:12.597 | INFO     | llama31_8b_d_p.tests.unit.test_model_vs_ref:test_model_full_depth_per_layer_curve:501 - [G-MODEL] full-depth curve L11: PCC=0.9999320 (1-PCC=6.797e-05)  floor=0.9999723 ratio=2.46x  step=1.06x
+2026-09-04 11:41:12.597 | INFO     | llama31_8b_d_p.tests.unit.test_model_vs_ref:test_model_full_depth_per_layer_curve:501 - [G-MODEL] full-depth curve L12: PCC=0.9999296 (1-PCC=7.037e-05)  floor=0.9999722 ratio=2.53x  step=1.04x
+2026-09-04 11:41:12.597 | INFO     | llama31_8b_d_p.tests.unit.test_model_vs_ref:test_model_full_depth_per_layer_curve:501 - [G-MODEL] full-depth curve L13: PCC=0.9999259 (1-PCC=7.410e-05)  floor=0.9999715 ratio=2.60x  step=1.05x
+2026-09-04 11:41:12.597 | INFO     | llama31_8b_d_p.tests.unit.test_model_vs_ref:test_model_full_depth_per_layer_curve:501 - [G-MODEL] full-depth curve L14: PCC=0.9999203 (1-PCC=7.969e-05)  floor=0.9999705 ratio=2.70x  step=1.08x
+2026-09-04 11:41:12.597 | INFO     | llama31_8b_d_p.tests.unit.test_model_vs_ref:test_model_full_depth_per_layer_curve:501 - [G-MODEL] full-depth curve L15: PCC=0.9999105 (1-PCC=8.953e-05)  floor=0.9999689 ratio=2.88x  step=1.12x
+2026-09-04 11:41:12.597 | INFO     | llama31_8b_d_p.tests.unit.test_model_vs_ref:test_model_full_depth_per_layer_curve:501 - [G-MODEL] full-depth curve L16: PCC=0.9998961 (1-PCC=1.039e-04)  floor=0.9999661 ratio=3.07x  step=1.16x
+2026-09-04 11:41:12.597 | INFO     | llama31_8b_d_p.tests.unit.test_model_vs_ref:test_model_full_depth_per_layer_curve:501 - [G-MODEL] full-depth curve L17: PCC=0.9998749 (1-PCC=1.251e-04)  floor=0.9999610 ratio=3.20x  step=1.20x
+2026-09-04 11:41:12.598 | INFO     | llama31_8b_d_p.tests.unit.test_model_vs_ref:test_model_full_depth_per_layer_curve:501 - [G-MODEL] full-depth curve L18: PCC=0.9998604 (1-PCC=1.396e-04)  floor=0.9999559 ratio=3.17x  step=1.12x
+2026-09-04 11:41:12.598 | INFO     | llama31_8b_d_p.tests.unit.test_model_vs_ref:test_model_full_depth_per_layer_curve:501 - [G-MODEL] full-depth curve L19: PCC=0.9998401 (1-PCC=1.599e-04)  floor=0.9999516 ratio=3.31x  step=1.15x
+2026-09-04 11:41:12.598 | INFO     | llama31_8b_d_p.tests.unit.test_model_vs_ref:test_model_full_depth_per_layer_curve:501 - [G-MODEL] full-depth curve L20: PCC=0.9998157 (1-PCC=1.843e-04)  floor=0.9999443 ratio=3.31x  step=1.15x
+2026-09-04 11:41:12.598 | INFO     | llama31_8b_d_p.tests.unit.test_model_vs_ref:test_model_full_depth_per_layer_curve:501 - [G-MODEL] full-depth curve L21: PCC=0.9997821 (1-PCC=2.179e-04)  floor=0.9999337 ratio=3.29x  step=1.18x
+2026-09-04 11:41:12.598 | INFO     | llama31_8b_d_p.tests.unit.test_model_vs_ref:test_model_full_depth_per_layer_curve:501 - [G-MODEL] full-depth curve L22: PCC=0.9997520 (1-PCC=2.480e-04)  floor=0.9999241 ratio=3.27x  step=1.14x
+2026-09-04 11:41:12.598 | INFO     | llama31_8b_d_p.tests.unit.test_model_vs_ref:test_model_full_depth_per_layer_curve:501 - [G-MODEL] full-depth curve L23: PCC=0.9997154 (1-PCC=2.846e-04)  floor=0.9999113 ratio=3.21x  step=1.15x
+2026-09-04 11:41:12.598 | INFO     | llama31_8b_d_p.tests.unit.test_model_vs_ref:test_model_full_depth_per_layer_curve:501 - [G-MODEL] full-depth curve L24: PCC=0.9996743 (1-PCC=3.257e-04)  floor=0.9998989 ratio=3.22x  step=1.14x
+2026-09-04 11:41:12.598 | INFO     | llama31_8b_d_p.tests.unit.test_model_vs_ref:test_model_full_depth_per_layer_curve:501 - [G-MODEL] full-depth curve L25: PCC=0.9996384 (1-PCC=3.616e-04)  floor=0.9998857 ratio=3.16x  step=1.11x
+2026-09-04 11:41:12.598 | INFO     | llama31_8b_d_p.tests.unit.test_model_vs_ref:test_model_full_depth_per_layer_curve:501 - [G-MODEL] full-depth curve L26: PCC=0.9995939 (1-PCC=4.061e-04)  floor=0.9998655 ratio=3.02x  step=1.12x
+2026-09-04 11:41:12.598 | INFO     | llama31_8b_d_p.tests.unit.test_model_vs_ref:test_model_full_depth_per_layer_curve:501 - [G-MODEL] full-depth curve L27: PCC=0.9995416 (1-PCC=4.584e-04)  floor=0.9998466 ratio=2.99x  step=1.13x
+2026-09-04 11:41:12.598 | INFO     | llama31_8b_d_p.tests.unit.test_model_vs_ref:test_model_full_depth_per_layer_curve:501 - [G-MODEL] full-depth curve L28: PCC=0.9995052 (1-PCC=4.948e-04)  floor=0.9998267 ratio=2.85x  step=1.08x
+2026-09-04 11:41:12.598 | INFO     | llama31_8b_d_p.tests.unit.test_model_vs_ref:test_model_full_depth_per_layer_curve:501 - [G-MODEL] full-depth curve L29: PCC=0.9994382 (1-PCC=5.618e-04)  floor=0.9998015 ratio=2.83x  step=1.14x
+2026-09-04 11:41:12.598 | INFO     | llama31_8b_d_p.tests.unit.test_model_vs_ref:test_model_full_depth_per_layer_curve:501 - [G-MODEL] full-depth curve L30: PCC=0.9993796 (1-PCC=6.204e-04)  floor=0.9997767 ratio=2.78x  step=1.10x
+2026-09-04 11:41:12.598 | INFO     | llama31_8b_d_p.tests.unit.test_model_vs_ref:test_model_full_depth_per_layer_curve:501 - [G-MODEL] full-depth curve L31: PCC=0.9995853 (1-PCC=4.147e-04)  floor=0.9997722 ratio=1.82x  step=0.67x
+2026-09-04 11:41:12.599 | INFO     | llama31_8b_d_p.tests.unit.test_model_vs_ref:test_model_full_depth_per_layer_curve:512 - [G-MODEL] full-depth s512: post-norm hidden PCC=0.9984849 floor=0.9994570 ratio=2.79x (budget 8.0x); last pre-norm layer L31 PCC=0.9995853 floor=0.9997722 ratio=1.82x
+2026-09-04 11:41:12.599 | INFO     | llama31_8b_d_p.tests.unit.test_model_vs_ref:test_model_full_depth_per_layer_curve:519 - [G-MODEL] full-depth s512: last-position logits PCC=0.9995528; top-1 ref=374 dev=374; worst gated step L10 = 1.27x (budget 4.0x); steps L1-L2 (ungated) = 0.48x / 0.97x
+2026-09-04 11:41:12.600 | INFO     | llama31_8b_d_p.tests.unit.test_model_vs_ref:test_model_full_depth_per_layer_curve:551 - [G-MODEL] per-layer curve written to /home/mstojkovic/tt-metal/models/demos/llama31_8b_d_p/bringup_log/raw/G-MODEL_per_layer_pcc.json
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_vs_ref[blackhole-s128-L4-mesh_device0] 2026-09-04 11:41:14.285 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 11:41:15.041 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 11:41:15.708 | INFO     | models.demos.llama31_8b_d_p.tt.model_config:_load_safetensors:199 - loaded 39 checkpoint tensors from /home/mstojkovic/models/Llama-3.1-8B-Instruct
+2026-09-04 11:42:01.687 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 11:42:10.733 | INFO     | models.demos.llama31_8b_d_p.tt.model:__init__:166 - Llama model built: 4 layers, mesh (1, 1), tp=1, sp=1, lm_head=True
+2026-09-04 11:42:10.773 | INFO     | llama31_8b_d_p.tests.unit.test_model_vs_ref:test_model_vs_ref:317 - [G-MODEL] L4 s128: hidden PCC=0.9996251 floor=0.9998412 ratio=2.36x (threshold 0.999, raw budget 8.0x)
+2026-09-04 11:42:10.773 | INFO     | llama31_8b_d_p.tests.unit.test_model_vs_ref:test_model_vs_ref:321 - [G-MODEL] L4 s128: last-position logits PCC=0.9994005; top-1 ref=98501 dev=98501 (ref top-2 logit gap 0.6728); top-5 ref=[98501, 91374, 91741, 51591, 114912] dev=[98501, 91374, 91741, 51591, 114912]
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_vs_ref[blackhole-s512-L2-mesh_device0] 2026-09-04 11:42:11.944 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 11:42:12.036 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 11:42:12.680 | INFO     | models.demos.llama31_8b_d_p.tt.model_config:_load_safetensors:199 - loaded 21 checkpoint tensors from /home/mstojkovic/models/Llama-3.1-8B-Instruct
+2026-09-04 11:42:48.032 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 11:42:54.552 | INFO     | models.demos.llama31_8b_d_p.tt.model:__init__:166 - Llama model built: 2 layers, mesh (1, 1), tp=1, sp=1, lm_head=True
+2026-09-04 11:42:54.608 | INFO     | llama31_8b_d_p.tests.unit.test_model_vs_ref:test_model_vs_ref:317 - [G-MODEL] L2 s512: hidden PCC=0.9997425 floor=0.9998279 ratio=1.50x (threshold 0.999, raw budget 8.0x)
+2026-09-04 11:42:54.608 | INFO     | llama31_8b_d_p.tests.unit.test_model_vs_ref:test_model_vs_ref:321 - [G-MODEL] L2 s512: last-position logits PCC=0.9998226; top-1 ref=112465 dev=112465 (ref top-2 logit gap 1.0623); top-5 ref=[112465, 112342, 103602, 65173, 96245] dev=[112465, 112342, 103602, 96245, 104131]
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_vs_ref[blackhole-s512-L4-mesh_device0] 2026-09-04 11:42:55.777 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 11:42:56.465 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 11:42:57.130 | INFO     | models.demos.llama31_8b_d_p.tt.model_config:_load_safetensors:199 - loaded 39 checkpoint tensors from /home/mstojkovic/models/Llama-3.1-8B-Instruct
+2026-09-04 11:43:44.184 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 11:43:52.664 | INFO     | models.demos.llama31_8b_d_p.tt.model:__init__:166 - Llama model built: 4 layers, mesh (1, 1), tp=1, sp=1, lm_head=True
+2026-09-04 11:43:52.744 | INFO     | llama31_8b_d_p.tests.unit.test_model_vs_ref:test_model_vs_ref:317 - [G-MODEL] L4 s512: hidden PCC=0.9996185 floor=0.9997965 ratio=1.87x (threshold 0.999, raw budget 8.0x)
+2026-09-04 11:43:52.745 | INFO     | llama31_8b_d_p.tests.unit.test_model_vs_ref:test_model_vs_ref:321 - [G-MODEL] L4 s512: last-position logits PCC=0.9997921; top-1 ref=63075 dev=63075 (ref top-2 logit gap 1.0257); top-5 ref=[63075, 78794, 49028, 59850, 42831] dev=[63075, 78794, 49028, 59850, 42831]
+PASSED
+
+=============================== warnings summary ===============================
+python_env/lib/python3.12/site-packages/pydantic/_internal/_config.py:291
+  /home/mstojkovic/tt-metal/python_env/lib/python3.12/site-packages/pydantic/_internal/_config.py:291: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.9/migration/
+    warnings.warn(DEPRECATION_MESSAGE, DeprecationWarning)
+
+models/demos/llama31_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_vs_ref[blackhole-s128-L2-mesh_device0]
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+models/demos/llama31_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_vs_ref[blackhole-s128-L2-mesh_device0]
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /home/mstojkovic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+237.82s call     models/demos/llama31_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_full_depth_per_layer_curve[blackhole-mesh_device0]
+56.45s call     models/demos/llama31_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_vs_ref[blackhole-s512-L4-mesh_device0]
+55.89s call     models/demos/llama31_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_vs_ref[blackhole-s128-L4-mesh_device0]
+42.72s call     models/demos/llama31_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_vs_ref[blackhole-s512-L2-mesh_device0]
+42.07s call     models/demos/llama31_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_vs_ref[blackhole-s128-L2-mesh_device0]
+35.52s call     models/demos/llama31_8b_d_p/tests/unit/test_model_vs_ref.py::test_hf_and_quantised_floor_differ[blackhole-mesh_device0]
+24.89s call     models/demos/llama31_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_rotated_layer_weights_negative_control[blackhole-mesh_device0]
+8.63s setup    models/demos/llama31_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_vs_ref[blackhole-s128-L2-mesh_device0]
+7.98s call     models/demos/llama31_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_is_causal[blackhole-mesh_device0]
+1.88s setup    models/demos/llama31_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_vs_ref[blackhole-s128-L4-mesh_device0]
+1.70s setup    models/demos/llama31_8b_d_p/tests/unit/test_model_vs_ref.py::test_hf_and_quantised_floor_differ[blackhole-mesh_device0]
+1.69s setup    models/demos/llama31_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_vs_ref[blackhole-s512-L4-mesh_device0]
+1.10s setup    models/demos/llama31_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_is_causal[blackhole-mesh_device0]
+1.09s setup    models/demos/llama31_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_rotated_layer_weights_negative_control[blackhole-mesh_device0]
+1.09s setup    models/demos/llama31_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_vs_ref[blackhole-s512-L2-mesh_device0]
+1.09s setup    models/demos/llama31_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_full_depth_per_layer_curve[blackhole-mesh_device0]
+0.02s teardown models/demos/llama31_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_vs_ref[blackhole-s128-L2-mesh_device0]
+0.02s teardown models/demos/llama31_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_vs_ref[blackhole-s512-L4-mesh_device0]
+0.02s teardown models/demos/llama31_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_vs_ref[blackhole-s512-L2-mesh_device0]
+0.02s teardown models/demos/llama31_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_full_depth_per_layer_curve[blackhole-mesh_device0]
+0.02s teardown models/demos/llama31_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_vs_ref[blackhole-s128-L4-mesh_device0]
+0.02s teardown models/demos/llama31_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_is_causal[blackhole-mesh_device0]
+0.02s teardown models/demos/llama31_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_rotated_layer_weights_negative_control[blackhole-mesh_device0]
+0.02s teardown models/demos/llama31_8b_d_p/tests/unit/test_model_vs_ref.py::test_hf_and_quantised_floor_differ[blackhole-mesh_device0]
+=========================== short test summary info ============================
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_vs_ref[blackhole-s128-L2-mesh_device0]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_is_causal[blackhole-mesh_device0]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_rotated_layer_weights_negative_control[blackhole-mesh_device0]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_model_vs_ref.py::test_hf_and_quantised_floor_differ[blackhole-mesh_device0]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_full_depth_per_layer_curve[blackhole-mesh_device0]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_vs_ref[blackhole-s128-L4-mesh_device0]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_vs_ref[blackhole-s512-L2-mesh_device0]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_vs_ref[blackhole-s512-L4-mesh_device0]
+================== 8 passed, 3 warnings in 523.20s (0:08:43) ===================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+2026-09-04 11:43:54.722 | info     |    BuildKernels | JIT cache stats: 145/145 hits (100.0%) [145 cached, 427 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-09-04 11:43:54.722 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-09-04 11:43:54.941 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:550)
+2026-09-04 11:43:54.941 | info     |             UMD | Closing devices in cluster (cluster.cpp:1218)
+2026-09-04 11:44:02.700 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1227)
+2026-09-04 11:44:02.700 | info     |             UMD | Cluster destructor started. (cluster.cpp:933)
+2026-09-04 11:44:02.701 | info     |             UMD | Cluster destructor completed. (cluster.cpp:936)
