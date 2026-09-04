@@ -1,6 +1,7 @@
 {
   "last_scan_date": "2026-09-04",
   "scanned_run_ids": [
+    "30227858718",
     "30387358745",
     "30493606319",
     "30515701001",
@@ -9,27 +10,27 @@
     "30587963164",
     "30618649345",
     "30675480001",
+    "30737004712",
     "30765286317",
     "30789033630",
-    "30227858718",
-    "30737004712",
     "31197186569",
-    "31229408018",
-    "31249794076",
     "31197332405",
+    "31229408018",
+    "31229899895",
+    "31249794076",
     "31285846176",
     "31362719766",
-    "31229899895",
-    31566814739,
-    31596449343,
+    "31566814739",
+    "31596449343",
     "32028413134",
     "32053638633",
-    32101971921,
-    32613186861,
+    "32101971921",
+    "32251268376",
+    "32613186861",
     "32749061648",
-    32926104552,
-    32936855493,
-    32926101915,
+    "32926101915",
+    "32926104552",
+    "32936855493",
     "33040738562",
     "33158955938",
     "33244209984",
@@ -37,8 +38,8 @@
     "33300580035",
     "33375429322",
     "33433754247",
-    "33799208648",
-    "33710037838"
+    "33710037838",
+    "33799208648"
   ],
   "workflows_sampled": [
     "merge-gate.yaml",
@@ -290,10 +291,16 @@
     {
       "branch": "silencer/dedupe-fabric-trim-routing-planes-warning",
       "pattern": "ControlPlane trim_ethernet_channels_not_mapped_to_live_routing_planes() 'routing planes are available' warning fired twice (~570ms apart) during dispatch-fallback fabric enable, due to redundant DeviceManager::initialize_fabric_config() call already performed inside MetalEnvImpl::set_fabric_config()",
-      "status": "pr-opened-dispatch-requested",
+      "status": "ready-for-review-inconclusive-validation",
       "validation_workflow": "models-t1-e2e-tests",
-      "note": "Observed in models-t1-e2e-tests run 33710037838, job 100508882668 (TT-DiT LTX-2.3 Fast T2V e2e tests [bh_sc1]): 4 warnings from control_plane.cpp:1064-1073 printed twice at 03:24:18.691 and 03:24:19.260. Root cause: device_manager.cpp:286 called ctx_.initialize_fabric_config() redundantly right after set_fabric_config(), which already calls initialize_fabric_config() internally for any is_tt_fabric_config() config (metal_env.cpp:329-332). Removed the redundant call. Awaiting CI validation."
+      "note": "Observed in models-t1-e2e-tests run 33710037838, job 100508882668 (TT-DiT LTX-2.3 Fast T2V e2e tests [bh_sc1]): 4 warnings from control_plane.cpp:1064-1073 printed twice at 03:24:18.691 and 03:24:19.260. Root cause: device_manager.cpp:286 called ctx_.initialize_fabric_config() redundantly right after set_fabric_config(), which already calls initialize_fabric_config() internally for any is_tt_fabric_config() config (metal_env.cpp:329-332). Removed the redundant call. Awaiting CI validation. | Reconciled 2026-09 run: dispatched models-t1-e2e-tests (33805720412) succeeded, but log re-grep for target warning was inconclusive (tail sample of job 100818028084 did not cover fabric-init phase). Posted honest comment and marked PR ready for review; awaiting human review."
+    },
+    {
+      "branch": "silencer/dedupe-conv3d-blocking-fallback-warning",
+      "title": "Dedupe repeated conv3d blocking-fallback warnings in tt_dit",
+      "status": "pr-opened-dispatch-requested",
+      "note": "Opened 2026-09 run. get_conv3d_config() in models/tt_dit/utils/conv3d.py logged an unguarded WARNING every call for fallback/none-match blocking keys; static per-run shapes meant identical lines repeated 4-60x per key in a single job (sampled from t3000-perf-tests run 32251268376 job 96071192614, wh_llmbox_perf QwenImage). Mirrored existing dedup pattern already used in matmul.py (_warned_matmul_signatures) via new _warned_conv3d_signatures set. Dispatched models-t2-e2e-tests (model=qwenimage) against branch for validation."
     }
   ],
-  "backlog_cursor": "Phase B target this run: dedupe redundant DeviceManager fabric-config reinit causing duplicate ControlPlane routing-planes warnings (branch silencer/dedupe-fabric-trim-routing-planes-warning). UMD-sourced Sysmem/AICLK warnings in same job ruled out as out-of-scope (tt-umd submodule). Next run: check validation result for this PR, or continue scanning untried workflows (single-card, blackhole, t3000-perf)."
+  "backlog_cursor": "Phase A: PR #55405 reconciled (comment posted + marked ready for review); memory updated to ready-for-review-inconclusive-validation. Phase B: opened new PR silencer/dedupe-conv3d-blocking-fallback-warning (conv3d.py fallback-warning dedup), dispatched models-t2-e2e-tests qwenimage for validation. bge_m3-N150-func LOAD REPORT noise re-confirmed non-viable (transformers-library origin, not tt-metal source) - do not re-investigate. Next run: check conv3d PR validation result; continue workflow rotation with single-card-demo-tests, blackhole-sanity-tests, or t3000-demo-tests for a fresh target."
 }
