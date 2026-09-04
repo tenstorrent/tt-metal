@@ -47,3 +47,43 @@
       timeout: 5
   team: ttnn
   owner_id: U07M7QZ0BQA # Camilo Vega -- Slack member ID
+
+# Eltwise infra coverage: broadcast classes and tensor-scalar variants, not accuracy.
+#
+# Eltwise accuracy lives in the sanity and L2-nightly eltwise groups, and neither runs on a PR
+# (pr-gate and merge-gate only invoke smoke-level workflows, and sanity-tests-pr.yaml is gated
+# to forks). So an eltwise infrastructure break currently lands on main and is first seen when
+# nightly sanity goes red. This entry gates the machinery itself -- a broadcast class that stops
+# dispatching, a reader stride that goes wrong, a scalar path that stops being taken.
+#
+# Selection is by test name rather than by file, so it stays small as those files grow:
+#   subtile ......................... the five test_binary_subtile_*_bcast cases: no bcast, row,
+#                                     col, scalar, and row_b_col_a
+#   where_bcast ..................... ternary broadcast over independent H and W per operand
+#   program_cache_..._shapes ........ the broadcast-vs-cache-key interaction, where a wrong key
+#                                     silently reuses a program built for different strides
+#   test_where_tss / tst / tts ...... the tensor-scalar variants, which are the ones that get
+#                                     missed when only the all-tensor form is exercised
+#   test_gelu / silu / 01_volume_sin  SFPU dispatch liveness
+#
+# 221 tests, 21s of pytest and 28s wall-clock on an N300 including device bring-up, against the
+# 5-minute budget. Hardware only. Blackhole eltwise coverage in the merge gate comes from the
+# tt-nn-validation-basic gtest suite (tests/ttnn/unit_tests/gtests/test_eltwise.cpp), which runs
+# on bh_p150b_civ2_viommu as well as wh_n150_civ2.
+- name: "ttnn eltwise infra"
+  cmd: >-
+    pytest --timeout 60 -xv
+    tests/ttnn/unit_tests/operations/eltwise/test_binary_bcast.py
+    tests/ttnn/unit_tests/operations/eltwise/test_binary_scalar.py
+    tests/ttnn/unit_tests/operations/eltwise/test_ternary.py
+    tests/ttnn/unit_tests/operations/eltwise/test_where.py
+    tests/ttnn/unit_tests/operations/eltwise/test_unary.py
+    -k "subtile or where_bcast or program_cache_different_broadcast_shapes
+    or test_where_tss or test_where_tst or test_where_tts
+    or test_gelu or test_silu or test_01_volume_sin"
+    -m "not disable_fast_runtime_mode"
+  skus:
+    wh_n300_civ2:
+      timeout: 5
+  team: ttnn
+  owner_id: U09BX3N0N95 # Mateusz Nowak
