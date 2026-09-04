@@ -26,8 +26,12 @@ Description:
         tools/triage/debug_risc.py --loc=1,1 --risc=brisc
         tools/triage/debug_risc.py --dev=0 --loc=e0,0 --risc=erisc0 --gdb-command=backtrace
 
-    Attaching halts the core and detaching from it (GDB 'detach' or 'quit') resumes it. A core left
-    halted keeps the program running on it stopped, so this script warns if GDB leaves it that way.
+    Attaching halts the core. On Wormhole and Blackhole it then stays halted: continuing a core that
+    was halted and read from is a known hardware bug (tt-exalens#908), so tt-triage turns every
+    continue into a no-op and this script keeps it that way. GDB's continue and detach do nothing
+    there, the program on that core does not progress once it has been attached to, and the device
+    needs a tt-smi reset afterwards - the script says so before handing over to GDB. Everywhere else
+    detaching resumes the core, and the script warns if GDB left it halted.
 
     When the GDB client exits, so does this script - the session was the output, so there is no
     triage result to report.
@@ -64,6 +68,17 @@ script_config = ScriptConfig(
     # must never take part in a regular tt-triage run. It is started directly instead.
     disabled=True,
 )
+
+
+def can_resume_core(device: Device) -> bool:
+    """Whether GDB will be able to resume the core it attaches to.
+
+    tt-triage patches BabyRiscDebugHardware.cont and continue_without_debug to no-ops on Wormhole and
+    Blackhole (tt-exalens#908: halting a core, reading it and continuing breaks it). That patch stays
+    in place here - the hardware bug is real, and a debugger is no reason to work around it - so on
+    those architectures the GDB server drops every continue and a detach leaves the core halted.
+    """
+    return not (device.is_wormhole() or device.is_blackhole())
 
 
 def find_device(run_checks: RunChecks) -> Device:
@@ -135,8 +150,9 @@ def get_elfs(dispatcher_data: DispatcherData, location: OnChipCoordinate, risc_n
 def start_gdb_server(context: Context, port: int | None) -> GdbServer:
     """Start the GDB server, on the given port or on a free port picked by the OS."""
     try:
-        # ServerSocket picks (and binds) a free port under a lock when no port is given, so nothing
-        # else can take it in between.
+        # With no port given, ServerSocket asks the OS for a free one. It probes with a throwaway
+        # socket and then binds a second one, and its lock is process-local, so another process can
+        # still claim the port in that gap. Rare, and it surfaces as the clean error below.
         server = ServerSocket(port)
         server.start()
         # debug_only_with_elfs limits the served processes to the cores we registered an ELF for,
@@ -159,6 +175,12 @@ def find_process_id(gdb_server: GdbServer, risc_location: RiscLocation) -> int:
     raise TTTriageError(f"GDB server does not serve a process for {risc_location}.")
 
 
+def quote_gdb_path(path: str) -> str:
+    """Quote a path for GDB's command parser, which would otherwise split it on whitespace."""
+    escaped = path.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
 def make_gdb_client_command(
     port: int,
     process_id: int,
@@ -175,7 +197,8 @@ def make_gdb_client_command(
         f"attach {process_id}",
     ]
     for path, offset in zip(elf_paths, offsets):
-        commands.append(f"add-symbol-file {path}" if offset is None else f"add-symbol-file {path} {offset}")
+        quoted = quote_gdb_path(path)
+        commands.append(f"add-symbol-file {quoted}" if offset is None else f"add-symbol-file {quoted} {offset}")
     commands.append("set confirm on")
     commands.extend(extra_commands)
 
@@ -247,10 +270,29 @@ def run(args, context: Context):
         utils.INFO(
             f"  Attaching to process {process_id}: {risc_name} on {location.to_user_str()} of device {device.id}"
         )
-        utils.INFO("  The core is halted while GDB is attached. Detach or quit GDB to resume it.")
+        if can_resume_core(device):
+            utils.INFO("  The core is halted while GDB is attached. Detach or quit GDB to resume it.")
+        else:
+            utils.WARN(
+                "  The core stays halted for good once GDB attaches: continuing a core that was halted and "
+                "read from breaks it on this architecture (tt-exalens#908), so GDB's continue and detach do "
+                "nothing. Whatever runs on this core will not progress - reset the device with tt-smi when "
+                "you are done."
+            )
         exit_code = run_gdb_client(argv)
     finally:
         gdb_server.stop()
+
+    # Where the core cannot be resumed at all, it is halted by definition and we already said so.
+    if can_resume_core(device):
+        try:
+            if risc_debug.is_halted():
+                utils.WARN(
+                    f"  {risc_name} on {location.to_user_str()} is still halted - GDB left it that way, so "
+                    f"whatever runs on it stays stopped. Attach again and 'detach' to resume it."
+                )
+        except Exception as e:
+            utils.WARN(f"  Could not read the halted state of {risc_name} on {location.to_user_str()}: {e}")
 
     # The session was the output, so there is nothing for the triage framework to report. Leave with
     # the exit code of the GDB client, before run_script gets to print its result table.
