@@ -136,8 +136,7 @@ def test_moe_grouped_topk(
         topk_groups=topk_groups,
         n_activated_experts=n_activated_experts,
         route_scale=route_scale,
-        # Explicit: these inputs are deliberately tie-free (distinct_logits), so both settings agree
-        # and this matrix says nothing about tie order. That contract lives in the _ties suite.
+        # These inputs are tie-free (distinct_logits). Stable sort is validated in the _ties suite.
         stable_sort=False,
         epsilon=epsilon,
         score_func=score_func,
