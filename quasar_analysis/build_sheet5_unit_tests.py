@@ -654,6 +654,39 @@ def build_sheet_xml(rows):
 SHEET_NAME = "5 - Unit tests (Quasar run)"
 
 
+def write_tsv(rows, path):
+    """
+    The same sheet as a tab-separated file, for importing as a new tab in Google Sheets
+    (File > Import > Upload > Replace/Insert new sheet, separator: Tab).
+
+    TSV rather than CSV on purpose: 647 of the cells contain commas -- the verbatim TTNN attribute
+    strings are full of them -- and none contains a tab or a newline, so TSV needs no quoting at all
+    and cannot be mis-split. Verified before writing rather than assumed.
+
+    Row 1 is the two-level header flattened into one line ("group - column"), because a spreadsheet
+    import has no notion of the merged header band the xlsx uses. Row 2 onward are the test rows,
+    numbered as in the workbook.
+    """
+    flat = ["#"]
+    group_of = {}
+    for label, lo, hi in GROUPS:
+        for j in range(lo, hi + 1):
+            group_of[j] = label
+    for j, (head, _w, _k) in enumerate(COLS):
+        flat.append("%s - %s" % (group_of[j], head) if j in group_of else head)
+
+    lines = ["\t".join(flat)]
+    for n, r in enumerate(rows):
+        cells = [str(n + 1)] + [str(c) for c in r]
+        for c in cells:
+            assert "\t" not in c and "\n" not in c and "\r" not in c, "a cell would break the TSV: %r" % c[:80]
+        lines.append("\t".join(cells))
+
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(lines) + "\n")
+    print("wrote %s (%d rows x %d columns, tab-separated, UTF-8)" % (path, len(rows) + 1, len(flat)))
+
+
 def write_workbook(rows):
     src = zipfile.ZipFile(XLSX)
     parts = {n: src.read(n) for n in src.namelist()}
@@ -821,6 +854,11 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--check", action="store_true", help="parse and report, write nothing")
     ap.add_argument("--verify", action="store_true", help="re-read the written workbook and check it")
+    ap.add_argument(
+        "--tsv",
+        metavar="PATH",
+        help="also write the sheet as TSV for import as a Google Sheets tab (File > Import > Upload)",
+    )
     args = ap.parse_args()
 
     if args.verify:
@@ -843,6 +881,8 @@ def main():
     if args.check:
         print("--check: nothing written")
         return
+    if args.tsv:
+        write_tsv(rows, args.tsv)
     write_workbook(rows)
     print("appended %r to %s (backup at %s.bak)" % (SHEET_NAME, os.path.basename(XLSX), os.path.basename(XLSX)))
     verify()
