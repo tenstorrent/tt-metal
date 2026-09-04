@@ -223,6 +223,10 @@ pytest models/experimental/xtts/tests/pcc/test_tt_trace.py           # full pipe
 **Every PCC gate is 0.99**, including the end-to-end spectrogram in `test_tt_inference.py`.
 Measured values are in [§6.1](#61-pcc-results).
 
+Every test here needs the checkpoint. If it cannot be loaded they **fail** rather than skip, so a
+hub outage cannot turn the CI gate green on a build it never exercised. Set
+`XTTS_SKIP_WITHOUT_WEIGHTS=1` to skip them instead when working offline.
+
 ### 5.2 Performance tests
 
 ```bash
@@ -416,12 +420,12 @@ when the text fits, otherwise sentence-chunked with one `traced_session` capture
 |----:|-------:|-------:|-------:|--------:|------:|----------:|----------:|--------:|--------:|-----------:|----:|
 | 32 | 1 | 32 | 64 | 352 | 89 | 4.13 | 47.9 | 162.7 | 6.146 | 0.599 | 0.145 |
 | 64 | 1 | 64 | 96 | 384 | 143 | 6.63 | 49.3 | 160.7 | 6.222 | 0.948 | 0.143 |
-| 96 | 2 | 96 | 128 | 416 | 355 | 16.47 | 50.0 | 160.4 | 6.236 | 2.357 | 0.143 |
-| 128 | 2 | 96 | 128 | 416 | 355 | 16.47 | 50.0 | 161.4 | 6.197 | 2.344 | 0.142 |
-| 192 | 3 | 96 | 128 | 416 | 531 | 24.64 | 50.1 | 159.7 | 6.261 | 3.540 | 0.144 |
-| 256 | 4 | 96 | 128 | 416 | 706 | 32.76 | 50.0 | 160.4 | 6.233 | 4.688 | 0.143 |
-| 320 | 5 | 96 | 128 | 416 | 887 | 41.16 | 50.0 | 160.7 | 6.222 | 5.878 | 0.143 |
-| 352 | 5 | 96 | 128 | 416 | 887 | 41.16 | 50.0 | 159.5 | 6.268 | 5.919 | 0.144 |
+| 96 | 2 | 96 | 128 | 416 | 364 | 16.89 | 48.3 | 159.9 | 6.252 | 2.416 | 0.143 |
+| 128 | 2 | 96 | 128 | 416 | 364 | 16.89 | 48.3 | 158.8 | 6.295 | 2.431 | 0.144 |
+| 192 | 3 | 96 | 128 | 416 | 537 | 24.92 | 48.2 | 160.3 | 6.237 | 3.559 | 0.143 |
+| 256 | 4 | 96 | 128 | 416 | 721 | 33.46 | 48.2 | 160.1 | 6.244 | 4.782 | 0.143 |
+| 320 | 5 | 96 | 128 | 416 | 902 | 41.87 | 48.3 | 159.0 | 6.291 | 6.028 | 0.144 |
+| 352 | 5 | 96 | 128 | 416 | 902 | 41.87 | 48.3 | 159.0 | 6.291 | 6.024 | 0.144 |
 
 XTTS is non-streaming. *TTFT* is time to first code (`setup + decode/n`); time to first audio is
 the first chunk's replay. One code = 46.4 ms of audio. `pad_to` is the padded text length actually
@@ -429,8 +433,9 @@ prefilled. ISL 96/128 and 320/352 are the same sentence groups (the sweep grows 
 a time).
 
 From ISL 96 up, chunking pins `max_seq` at 416, so ms/code is flat (~6.2) and ISL is no longer a
-cost axis — replay grows with chunk count at ≈1.18 s each (0.599 s at ISL 32 → 5.919 s at ISL 352).
-TTFT stays ~50 ms. RTF stays ~0.143 across the whole sweep.
+cost axis — replay grows with chunk count at ≈1.2 s each (0.599 s at ISL 32 → 6.024 s at ISL 352).
+TTFT stays ~48 ms. RTF stays ~0.143 across the whole sweep. Every chunk is padded to 96 with its
+real length masked out of decode attention, exactly as the demo runs it.
 
 A wrapped prompt must end in `[STOP]`. Trimming to a tile-aligned length can drop it; without it
 the sampler drones to the code cap.
