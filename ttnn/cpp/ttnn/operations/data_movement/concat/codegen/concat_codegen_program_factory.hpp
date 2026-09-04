@@ -22,10 +22,12 @@ inline constexpr uint32_t kConcatNonWidthBatch = 4;
 // with a separate, unscaled read_batch=1 (N-way), so only write_batch (and the
 // CB depth it drives) is scaled for L1 fit.
 inline constexpr uint32_t kConcatWidthWriteBatch = 4;
-// The non-width N-way reader spends 3 + 3*N runtime-arg words and the width N-way
-// reader 2 + 3*N in the same order, so at N=64 both sit comfortably under the
-// portable runtime-argument bound. One ceiling covers both N-way builders.
-inline constexpr uint32_t kConcatMaxNwayInputs = 64;
+// Bounded by dataflow-RISC stack, not by runtime-arg words. The width N-way reader
+// holds four uint32_t[N] plus a bool[N] = 17*N bytes of frame, against a guaranteed
+// MEM_{BRISC,NCRISC}_STACK_MIN_SIZE of 256 B on both Blackhole and Wormhole; the
+// linker enforces that minimum against static .data/.bss only, never against runtime
+// frames. 8 inputs is 136 B, half the guarantee. Wider concat routes to native.
+inline constexpr uint32_t kConcatMaxNwayInputs = 8;
 
 struct ConcatCbPlan {
     uint32_t batch;
@@ -44,6 +46,33 @@ struct ConcatCbPlan {
 // (concat_codegen_supported.cpp) and the factory, so they cannot drift.
 std::optional<ConcatCbPlan> plan_concat_cb(uint32_t page_size, uint32_t max_batch, uint64_t l1_budget_bytes);
 
+// The CB geometry every builder actually programs, under an explicit L1 budget.
+// Reproduces each of the four builders' page/scratch arithmetic exactly once, so the
+// routing gate and the factory cannot disagree about what will fit. `scratch_page` is 0
+// for the non-width builders, which have no scratch CB.
+struct ConcatCbSelection {
+    uint32_t cb_page;
+    uint32_t scratch_page;
+    uint32_t batch;
+    uint32_t depth;
+};
+
+// Single authority for the output spec. The gate, the hash and compute_output_specs all
+// need the output's page size before the output buffer exists, so they project it from
+// here rather than from a Buffer.
+tt::tt_metal::TensorSpec concat_output_spec(
+    const std::vector<Tensor>& input_tensors, uint32_t dim, const tt::tt_metal::MemoryConfig& output_mem_config);
+
+// nullopt when the selected builder's CBs do not fit `l1_budget_bytes`. The budget is the
+// caller's choice of frontier: the routing gate passes the STATIC per-core budget so its
+// answer cannot move under it, the factory passes the LIVE one so the program it builds
+// fits what is actually free. Both get the same arithmetic.
+std::optional<ConcatCbSelection> plan_concat_cbs(
+    const std::vector<Tensor>& input_tensors,
+    uint32_t dim,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    uint64_t l1_budget_bytes);
+
 struct ConcatCodegenParams {
     uint32_t dim{};
     uint32_t num_inputs{};
@@ -51,6 +80,12 @@ struct ConcatCodegenParams {
     uint32_t total_out_sticks{};
     tt::tt_metal::MemoryConfig output_mem_config;
 };
+
+// Single authority for the prim's derived attributes. The routing sites build them from the
+// tensors and validate recomputes them from the same function, so a disagreement means the
+// attributes were fabricated rather than derived.
+ConcatCodegenParams concat_codegen_params(
+    const std::vector<Tensor>& input_tensors, uint32_t dim, const tt::tt_metal::MemoryConfig& output_mem_config);
 
 struct ConcatCodegenInputs {
     std::vector<Tensor> input_tensors;

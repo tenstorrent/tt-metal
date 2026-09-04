@@ -16,6 +16,7 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/work_split.hpp>
 
@@ -41,6 +42,79 @@ std::optional<ConcatCbPlan> plan_concat_cb(uint32_t page_size, uint32_t max_batc
         return ConcatCbPlan{1, 1};
     }
     return std::nullopt;
+}
+
+TensorSpec concat_output_spec(
+    const std::vector<Tensor>& input_tensors, uint32_t dim, const MemoryConfig& output_mem_config) {
+    const Tensor& ref = input_tensors.at(0);
+    ttnn::Shape output_shape = ref.logical_shape();
+    output_shape[dim] = 0;
+    for (const auto& t : input_tensors) {
+        output_shape[dim] += t.logical_shape()[dim];
+    }
+    return TensorSpec(output_shape, TensorLayout(ref.dtype(), PageConfig(ref.layout()), output_mem_config));
+}
+
+ConcatCodegenParams concat_codegen_params(
+    const std::vector<Tensor>& input_tensors, uint32_t dim, const MemoryConfig& output_mem_config) {
+    const ttnn::Shape& out_shape = concat_output_spec(input_tensors, dim, output_mem_config).logical_shape();
+    uint64_t total_out_elems = 1;
+    for (int i = 0; i < out_shape.rank(); ++i) {
+        total_out_elems *= out_shape[i];
+    }
+    return ConcatCodegenParams{
+        .dim = dim,
+        .num_inputs = static_cast<uint32_t>(input_tensors.size()),
+        .stick_size = static_cast<uint32_t>(out_shape[-1] * input_tensors.front().element_size()),
+        .total_out_sticks = static_cast<uint32_t>(total_out_elems / out_shape[-1]),
+        .output_mem_config = output_mem_config,
+    };
+}
+
+std::optional<ConcatCbSelection> plan_concat_cbs(
+    const std::vector<Tensor>& input_tensors,
+    uint32_t dim,
+    const MemoryConfig& output_mem_config,
+    uint64_t l1_budget_bytes) {
+    IDevice* device = input_tensors[0].device();
+    const uint32_t out_alignment = device->allocator()->get_alignment(output_mem_config.buffer_type());
+    // align(page, alignment) is what Buffer::aligned_page_size() computes; projected rather
+    // than read off a Buffer because the gate and the hash both run before the output exists.
+    const uint32_t out_page = tt::align(
+        static_cast<uint32_t>(concat_output_spec(input_tensors, dim, output_mem_config).compute_page_size_bytes()),
+        out_alignment);
+
+    uint32_t max_in_page = 0;
+    for (const auto& t : input_tensors) {
+        max_in_page = std::max(max_in_page, static_cast<uint32_t>(t.buffer()->aligned_page_size()));
+    }
+
+    const uint32_t ndim = input_tensors[0].logical_shape().rank();
+    if (dim != ndim - 1) {
+        const uint32_t cb_page = std::max(out_page, max_in_page);
+        const auto plan = plan_concat_cb(cb_page, kConcatNonWidthBatch, l1_budget_bytes);
+        if (!plan.has_value()) {
+            return std::nullopt;
+        }
+        return ConcatCbSelection{.cb_page = cb_page, .scratch_page = 0, .batch = plan->batch, .depth = plan->depth};
+    }
+
+    uint32_t scratch_page = max_in_page;
+    if (input_tensors.size() == 2) {
+        // The 2-tensor width kernel composes an unaligned second stick through scratch, and
+        // doing that directly into the assembly CB corrupts it -- seen on an 8+16+16+10 B bf16
+        // cascade. One L1 CB granule of headroom is what keeps the composition in bounds.
+        scratch_page += device->allocator()->get_alignment(BufferType::L1);
+    }
+    if (scratch_page > l1_budget_bytes) {
+        return std::nullopt;
+    }
+    const auto plan = plan_concat_cb(out_page, kConcatWidthWriteBatch, l1_budget_bytes - scratch_page);
+    if (!plan.has_value()) {
+        return std::nullopt;
+    }
+    return ConcatCbSelection{
+        .cb_page = out_page, .scratch_page = scratch_page, .batch = plan->batch, .depth = plan->depth};
 }
 
 namespace {
@@ -149,7 +223,8 @@ ProgramDescriptor create_descriptor_rm(
     const std::vector<Tensor>& input_tensors,
     Tensor& output,
     uint32_t dim,
-    uint32_t total_out_sticks) {
+    uint32_t total_out_sticks,
+    const ConcatCbSelection& cbs) {
     const Tensor& in0 = input_tensors[0];
     const Tensor& in1 = input_tensors[1];
     Buffer* src0 = in0.buffer();
@@ -157,11 +232,8 @@ ProgramDescriptor create_descriptor_rm(
     Buffer* dst = output.buffer();
 
     const uint32_t out_page = static_cast<uint32_t>(dst->aligned_page_size());
-    const uint32_t cb_page = std::max(
-        {out_page, static_cast<uint32_t>(src0->aligned_page_size()), static_cast<uint32_t>(src1->aligned_page_size())});
-    const auto plan = plan_concat_cb(cb_page, kConcatNonWidthBatch, operations::data_movement::get_max_l1_space(in0));
-    TT_FATAL(plan.has_value(), "ConcatCodegen: RM concat CB page ({} B) does not fit per-core L1", cb_page);
-    const uint32_t batch = plan->batch;
+    const uint32_t cb_page = cbs.cb_page;
+    const uint32_t batch = cbs.batch;
 
     const uint32_t accum = num_accum_sticks(output.logical_shape(), dim);
     const uint32_t ppb_0 = accum * in0.logical_shape()[dim];
@@ -172,7 +244,7 @@ ProgramDescriptor create_descriptor_rm(
 
     ProgramDescriptor desc;
     desc.cbs.push_back(CBDescriptor{
-        .total_size = plan->depth * cb_page,
+        .total_size = cbs.depth * cb_page,
         .core_ranges = split.all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = kConcatCbIn,
@@ -235,7 +307,11 @@ ProgramDescriptor create_descriptor_rm(
 
 // build_concat_rm_width: 2-tensor RM, width dim. reader_concat_rm_width_interleaved.cpp.
 ProgramDescriptor create_descriptor_rm_width(
-    IDevice* device, const std::vector<Tensor>& input_tensors, Tensor& output, uint32_t total_out_sticks) {
+    IDevice* device,
+    const std::vector<Tensor>& input_tensors,
+    Tensor& output,
+    uint32_t total_out_sticks,
+    const ConcatCbSelection& cbs) {
     const Tensor& in0 = input_tensors[0];
     const Tensor& in1 = input_tensors[1];
     Buffer* src0 = in0.buffer();
@@ -249,23 +325,15 @@ ProgramDescriptor create_descriptor_rm_width(
     const uint32_t out_page = static_cast<uint32_t>(dst->aligned_page_size());
     const uint32_t in1_noc_alignment = src1->alignment();
 
-    // Scratch CB granularity headroom: composing an unaligned second stick directly
-    // into the assembly CB corrupts it, seen on an 8+16+16+10 B bf16 cascade.
-    const uint32_t l1_cb_granularity = device->allocator()->get_alignment(BufferType::L1);
-    const uint32_t scratch_page = std::max(in0_page, in1_page) + l1_cb_granularity;
-
-    const uint64_t l1_budget = operations::data_movement::get_max_l1_space(in0);
-    TT_FATAL(scratch_page <= l1_budget, "ConcatCodegen: RM width-concat scratch CB does not fit per-core L1");
-    const auto plan = plan_concat_cb(out_page, kConcatWidthWriteBatch, l1_budget - scratch_page);
-    TT_FATAL(plan.has_value(), "ConcatCodegen: RM width-concat CB page ({} B) does not fit per-core L1", out_page);
-    const uint32_t write_batch = plan->batch;
+    const uint32_t scratch_page = cbs.scratch_page;
+    const uint32_t write_batch = cbs.batch;
 
     const ConcatCoreSplit split = concat_split_work(device, total_out_sticks);
     const tt::DataFormat cb_data_format = datatype_to_dataformat_converter(output.dtype());
 
     ProgramDescriptor desc;
     desc.cbs.push_back(CBDescriptor{
-        .total_size = plan->depth * out_page,
+        .total_size = cbs.depth * out_page,
         .core_ranges = split.all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = kConcatCbIn, .data_format = cb_data_format, .page_size = out_page}}},
@@ -330,7 +398,8 @@ ProgramDescriptor create_descriptor_rm_nonwidth_nway(
     const std::vector<Tensor>& input_tensors,
     Tensor& output,
     uint32_t dim,
-    uint32_t total_out_sticks) {
+    uint32_t total_out_sticks,
+    const ConcatCbSelection& cbs) {
     const uint32_t n_inputs = static_cast<uint32_t>(input_tensors.size());
     const Tensor& in0 = input_tensors[0];
     Buffer* src0 = in0.buffer();
@@ -338,10 +407,8 @@ ProgramDescriptor create_descriptor_rm_nonwidth_nway(
 
     const uint32_t in_page = static_cast<uint32_t>(src0->aligned_page_size());
     const uint32_t out_page = static_cast<uint32_t>(dst->aligned_page_size());
-    const uint32_t cb_page = std::max(in_page, out_page);
-    const auto plan = plan_concat_cb(cb_page, kConcatNonWidthBatch, operations::data_movement::get_max_l1_space(in0));
-    TT_FATAL(plan.has_value(), "ConcatCodegen: RM N-way concat CB page ({} B) does not fit per-core L1", cb_page);
-    const uint32_t batch = plan->batch;
+    const uint32_t cb_page = cbs.cb_page;
+    const uint32_t batch = cbs.batch;
 
     const uint32_t accum = num_accum_sticks(output.logical_shape(), dim);
     std::vector<uint32_t> sticks_per_block(n_inputs);
@@ -354,7 +421,7 @@ ProgramDescriptor create_descriptor_rm_nonwidth_nway(
 
     ProgramDescriptor desc;
     desc.cbs.push_back(CBDescriptor{
-        .total_size = plan->depth * cb_page,
+        .total_size = cbs.depth * cb_page,
         .core_ranges = split.all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = kConcatCbIn, .data_format = cb_data_format, .page_size = cb_page}}},
@@ -409,33 +476,31 @@ ProgramDescriptor create_descriptor_rm_nonwidth_nway(
 
 // build_concat_rm_width_nway: N>2 RM, width dim. reader_concat_rm_width_nway.cpp.
 ProgramDescriptor create_descriptor_rm_width_nway(
-    IDevice* device, const std::vector<Tensor>& input_tensors, Tensor& output, uint32_t total_out_sticks) {
+    IDevice* device,
+    const std::vector<Tensor>& input_tensors,
+    Tensor& output,
+    uint32_t total_out_sticks,
+    const ConcatCbSelection& cbs) {
     const uint32_t n_inputs = static_cast<uint32_t>(input_tensors.size());
     Buffer* dst = output.buffer();
     const uint32_t out_page = static_cast<uint32_t>(dst->aligned_page_size());
 
     std::vector<uint32_t> stick_sizes(n_inputs);
     std::vector<uint32_t> page_sizes(n_inputs);
-    uint32_t scratch_page = 0;
     for (uint32_t i = 0; i < n_inputs; ++i) {
         Buffer* buf = input_tensors[i].buffer();
         stick_sizes[i] = static_cast<uint32_t>(buf->page_size());
         page_sizes[i] = static_cast<uint32_t>(buf->aligned_page_size());
-        scratch_page = std::max(scratch_page, page_sizes[i]);
     }
 
-    const uint64_t l1_budget = operations::data_movement::get_max_l1_space(input_tensors[0]);
-    TT_FATAL(scratch_page <= l1_budget, "ConcatCodegen: RM N-way width-concat scratch CB does not fit per-core L1");
-    const auto plan = plan_concat_cb(out_page, kConcatWidthWriteBatch, l1_budget - scratch_page);
-    TT_FATAL(
-        plan.has_value(), "ConcatCodegen: RM N-way width-concat CB page ({} B) does not fit per-core L1", out_page);
-    const uint32_t write_batch = plan->batch;
+    const uint32_t scratch_page = cbs.scratch_page;
+    const uint32_t write_batch = cbs.batch;
     const ConcatCoreSplit split = concat_split_work(device, total_out_sticks);
     const tt::DataFormat cb_data_format = datatype_to_dataformat_converter(output.dtype());
 
     ProgramDescriptor desc;
     desc.cbs.push_back(CBDescriptor{
-        .total_size = plan->depth * out_page,
+        .total_size = cbs.depth * out_page,
         .core_ranges = split.all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = kConcatCbIn, .data_format = cb_data_format, .page_size = out_page}}},
@@ -513,12 +578,35 @@ ProgramDescriptor ConcatCodegenProgramFactory::create_descriptor(
     const bool is_width = (dim == ndim - 1);
     const uint32_t total_out_sticks = operation_attributes.total_out_sticks;
 
+    // The one live-L1 sample for this program. Every builder is handed the result rather than
+    // re-reading the frontier, so all CBs in a program are sized against a single observation,
+    // and ConcatCodegenDeviceOperation::compute_program_hash mixes the same selection in --
+    // a frontier that moves the plan is a different cache key, never a silent CB overlap.
+    const auto cbs = plan_concat_cbs(
+        input_tensors,
+        dim,
+        operation_attributes.output_mem_config,
+        operations::data_movement::get_max_l1_space(input_tensors[0]));
+    TT_FATAL(cbs.has_value(), "ConcatCodegen: circular-buffer plan does not fit the free per-core L1");
+
+    // The projected output page the gate and the hash were computed from must be the page the
+    // allocated buffer actually uses. Only checkable here, once the output exists.
+    const uint32_t projected_out_page = tt::align(
+        static_cast<uint32_t>(
+            concat_output_spec(input_tensors, dim, operation_attributes.output_mem_config).compute_page_size_bytes()),
+        device->allocator()->get_alignment(operation_attributes.output_mem_config.buffer_type()));
+    TT_FATAL(
+        projected_out_page == static_cast<uint32_t>(output.buffer()->aligned_page_size()),
+        "ConcatCodegen: projected output page ({} B) disagrees with the allocated buffer's ({} B)",
+        projected_out_page,
+        output.buffer()->aligned_page_size());
+
     if (input_tensors.size() == 2) {
-        return is_width ? create_descriptor_rm_width(device, input_tensors, output, total_out_sticks)
-                        : create_descriptor_rm(device, input_tensors, output, dim, total_out_sticks);
+        return is_width ? create_descriptor_rm_width(device, input_tensors, output, total_out_sticks, *cbs)
+                        : create_descriptor_rm(device, input_tensors, output, dim, total_out_sticks, *cbs);
     }
-    return is_width ? create_descriptor_rm_width_nway(device, input_tensors, output, total_out_sticks)
-                    : create_descriptor_rm_nonwidth_nway(device, input_tensors, output, dim, total_out_sticks);
+    return is_width ? create_descriptor_rm_width_nway(device, input_tensors, output, total_out_sticks, *cbs)
+                    : create_descriptor_rm_nonwidth_nway(device, input_tensors, output, dim, total_out_sticks, *cbs);
 }
 
 }  // namespace ttnn::prim

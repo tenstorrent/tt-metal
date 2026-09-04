@@ -15,6 +15,7 @@
 
 #include "concat.hpp"
 #include "concat_force.hpp"
+#include "codegen/concat_codegen_program_factory.hpp"
 
 namespace ttnn::operations::data_movement::detail {
 
@@ -106,6 +107,10 @@ void bind_concat(nb::module_& mod) {
                 ttnn.Tensor: the output tensor. Takes neither `groups` nor `sub_core_grids`: no
                 generated builder honours either.
         )doc");
+
+    // Exported so the routing tests exercise the real ceiling instead of a copy of it that
+    // stops testing the boundary the moment the C++ value moves.
+    mod.attr("CONCAT_MAX_NWAY_INPUTS") = ttnn::prim::kConcatMaxNwayInputs;
 }
 
 }  // namespace ttnn::operations::data_movement::detail

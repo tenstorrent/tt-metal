@@ -19,9 +19,19 @@
 
 namespace ttnn::operations::data_movement::concat_codegen {
 
+uint32_t usable_l1_bytes(const tt::tt_metal::IDevice* device) {
+    return device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+}
+
 namespace {
 
 // Two-input width-dim demotion: the staged-copy volume past which codegen loses to native.
+//
+// Calibration: measured on Wormhole only. The predicate around it is arch-adaptive -- the grid
+// comes from the live device, so max_sticks_per_core differs between a WH 8x8 and a BH 13x10 --
+// but this byte threshold does not, and Blackhole has never been swept. It demotes the
+// unaligned-width two-input class as a whole, including the cases inside it where codegen still
+// wins, in exchange for never losing badly on the ones where the byte-copy loop dominates.
 //
 // Mechanism: reader_concat_rm_width_interleaved.cpp
 // gates a batched direct-write fast path on both input rows filling their
@@ -34,8 +44,10 @@ namespace {
 // programs (transpose -> concat -> transpose). So this is fallback-vs-fallback:
 // codegen wins on dispatch count while the staged-copy volume is small, and
 // loses once the byte-copy loop dominates native's extra dispatches. The
-// crossover is a volume threshold (S >= 2400 B), not the alignment condition
+// crossover is a volume threshold, not the alignment condition
 // itself -- alignment only selects which regime (staged vs. fast-path) applies.
+constexpr uint64_t kStagedCopyDemotionBytes = 2400;
+
 bool rm_width_2in_unaligned_staged_copy_volume(const std::vector<Tensor>& input_tensors, uint32_t dim) {
     if (input_tensors.size() != 2) {
         return false;
@@ -80,29 +92,12 @@ bool rm_width_2in_unaligned_staged_copy_volume(const std::vector<Tensor>& input_
     const uint32_t max_sticks_per_core = std::get<4>(split);
 
     const uint64_t staged_volume = static_cast<uint64_t>(max_sticks_per_core) * staged_row_bytes;
-    return staged_volume >= 2400;
+    return staged_volume >= kStagedCopyDemotionBytes;
 }
 
 bool dtype_in_scope(tt::tt_metal::DataType dtype) {
     return dtype == tt::tt_metal::DataType::BFLOAT16 || dtype == tt::tt_metal::DataType::INT32 ||
            dtype == tt::tt_metal::DataType::UINT32;
-}
-
-// Projected per-core CB fit for the non-width RM builders (build_concat_rm /
-// build_concat_rm_nonwidth_nway): one CB sized to the largest of every
-// input's and the projected output's aligned RM page. Mirrors
-// concat_codegen_program_factory.cpp's create_descriptor_rm{,_nonwidth_nway}
-// so the gate and the factory cannot drift.
-bool nonwidth_cb_fits(const std::vector<Tensor>& input_tensors, const tt::tt_metal::MemoryConfig& output_mem_config) {
-    tt::tt_metal::IDevice* device = input_tensors[0].device();
-    const uint32_t stick_size = input_tensors[0].logical_shape()[-1] * input_tensors[0].element_size();
-    const uint32_t out_alignment = device->allocator()->get_alignment(output_mem_config.buffer_type());
-    uint32_t cb_page = tt::align(stick_size, out_alignment);
-    for (const auto& t : input_tensors) {
-        cb_page = std::max(cb_page, static_cast<uint32_t>(t.buffer()->aligned_page_size()));
-    }
-    return ttnn::prim::plan_concat_cb(cb_page, ttnn::prim::kConcatNonWidthBatch, get_max_l1_space(input_tensors[0]))
-        .has_value();
 }
 
 // Mirrors reader_concat_rm_width_nway.cpp's runtime direct-write predicate: a
@@ -127,35 +122,6 @@ bool width_nway_all_direct(const std::vector<Tensor>& input_tensors) {
     return true;
 }
 
-// Projected per-core CB fit for the width RM builders (build_concat_rm_width /
-// build_concat_rm_width_nway): the write-batched output CB plus a fixed-size
-// scratch CB. Mirrors concat_codegen_program_factory.cpp's
-// create_descriptor_rm_width{,_nway}.
-bool width_cb_fits(const std::vector<Tensor>& input_tensors, const tt::tt_metal::MemoryConfig& output_mem_config) {
-    tt::tt_metal::IDevice* device = input_tensors[0].device();
-    uint32_t out_width = 0;
-    uint32_t scratch_page = 0;
-    for (const auto& t : input_tensors) {
-        out_width += t.logical_shape()[-1];
-        scratch_page = std::max(scratch_page, static_cast<uint32_t>(t.buffer()->aligned_page_size()));
-    }
-    if (input_tensors.size() == 2) {
-        // build_concat_rm_width's scratch CB carries an extra L1-granularity
-        // margin the 2-tensor kernel needs; the N-way kernel does not.
-        scratch_page += device->allocator()->get_alignment(tt::tt_metal::BufferType::L1);
-    }
-    const uint32_t out_stick = out_width * input_tensors[0].element_size();
-    const uint32_t out_alignment = device->allocator()->get_alignment(output_mem_config.buffer_type());
-    const uint32_t out_page = tt::align(out_stick, out_alignment);
-
-    const uint64_t l1_budget = get_max_l1_space(input_tensors[0]);
-    if (scratch_page > l1_budget) {
-        return false;
-    }
-    return ttnn::prim::plan_concat_cb(out_page, ttnn::prim::kConcatWidthWriteBatch, l1_budget - scratch_page)
-        .has_value();
-}
-
 }  // namespace
 
 bool supported_by_codegen(
@@ -175,6 +141,13 @@ bool supported_by_codegen(
         // readers' block-cycling cursor cannot advance past, and a zero-width output turns the
         // stick count into a division by zero. Native answers these shapes.
         if (t.logical_shape().volume() == 0) {
+            return false;
+        }
+        // Every stick computation here and in the kernels is in logical extents, but an
+        // interleaved row-major buffer's page is padded_shape[-1] * element_size. When the two
+        // differ the width builders would assemble padded sticks at logical offsets and write
+        // silently wrong data, so decline rather than reinterpret.
+        if (t.padded_shape() != t.logical_shape()) {
             return false;
         }
     }
@@ -214,9 +187,29 @@ bool supported_by_codegen(
         }
     }
 
-    const bool is_width = (dim == ndim - 1);
-    return is_width ? width_cb_fits(input_tensors, output_mem_config)
-                    : nonwidth_cb_fits(input_tensors, output_mem_config);
+    return ttnn::prim::plan_concat_cbs(input_tensors, dim, output_mem_config, usable_l1_bytes(first.device()))
+        .has_value();
+}
+
+bool fits_live_l1(
+    const std::vector<Tensor>& input_tensors, uint32_t dim, const tt::tt_metal::MemoryConfig& output_mem_config) {
+    const Tensor& first = input_tensors[0];
+    const uint64_t live = get_max_l1_space(first);
+    // get_max_l1_space() is read before this call's own output is allocated, and the CBs are
+    // sized from that output's page -- so the output's per-core footprint has to come off the
+    // budget here or the plan is measured against L1 it will not have.
+    const auto out_spec = ttnn::prim::concat_output_spec(input_tensors, dim, output_mem_config);
+    const uint32_t pending_output = get_pending_l1_output_reservation(
+        first,
+        out_spec.padded_shape(),
+        output_mem_config,
+        first.dtype(),
+        first.layout(),
+        /*require_constructible=*/true);
+    if (pending_output >= live) {
+        return false;
+    }
+    return ttnn::prim::plan_concat_cbs(input_tensors, dim, output_mem_config, live - pending_output).has_value();
 }
 
 bool is_demoted(const std::vector<Tensor>& input_tensors, uint32_t dim) {
@@ -228,11 +221,8 @@ bool is_demoted(const std::vector<Tensor>& input_tensors, uint32_t dim) {
     // reserved output page, one barrier, no copy) whenever every input's stick
     // fills its page exactly and lands at an offset that is a multiple of the
     // shared transport alignment. Only the remaining per-input scratch-staged
-    // byte copy pays the measured regression (phase-7 seeds: {32,32}/{32,64}/
-    // {32,96} dim=-1; {1,32,32}/{1,32,64}/{1,32,32} dim=2; {1,1,32,32}x3
-    // dim=-1 -- all of them 64 B-aligned Blackhole sticks that, prior to the
-    // kernel fix, fell through to the byte-copy path unconditionally). Demote
-    // width-dim N-way concat only when that fallback would actually fire.
+    // byte copy pays the measured regression, so demote width-dim N-way
+    // concat only when that fallback would actually fire.
     const uint32_t ndim = input_tensors[0].logical_shape().rank();
     const bool is_width = (dim == ndim - 1);
     if (!is_width || input_tensors.size() <= 2) {

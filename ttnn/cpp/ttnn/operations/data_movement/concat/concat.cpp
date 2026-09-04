@@ -314,26 +314,6 @@ ttnn::Shape compute_output_shape(const std::vector<ttnn::Tensor>& tensors, int d
     return shape_out;
 }
 
-ttnn::prim::ConcatCodegenParams make_codegen_params(
-    const std::vector<ttnn::Tensor>& input_tensors,
-    int dim,
-    const ttnn::Shape& logical_output_shape,
-    const MemoryConfig& mem_config) {
-    uint64_t total_out_elems = 1;
-    for (int i = 0; i < logical_output_shape.rank(); i++) {
-        total_out_elems *= logical_output_shape[i];
-    }
-    return ttnn::prim::ConcatCodegenParams{
-        .dim = static_cast<uint32_t>(dim),
-        .num_inputs = static_cast<uint32_t>(input_tensors.size()),
-        .stick_size = static_cast<uint32_t>(logical_output_shape[-1] * input_tensors.front().element_size()),
-        .total_out_sticks = static_cast<uint32_t>(total_out_elems / logical_output_shape[-1]),
-        .output_mem_config = mem_config,
-    };
-}
-
-}  // namespace
-
 // The existing implementation, taking an already-normalized `dim`. Self-recursive rather than
 // re-entering ttnn::concat: the chunking below is a fixup for this path's own transpose fallback
 // overflowing L1, so a chunk is this path's problem. Routing chunks separately would also stop
@@ -474,6 +454,8 @@ ttnn::Tensor concat_native(
     return res;
 }
 
+}  // namespace
+
 ttnn::Tensor concat_force_native(
     const std::vector<ttnn::Tensor>& input_tensors,
     int dim,
@@ -497,15 +479,15 @@ ttnn::Tensor concat_force_codegen(
     TT_FATAL(
         concat_codegen::supported_by_codegen(input_tensors, static_cast<uint32_t>(norm_dim), mem_config),
         "concat_force_codegen invoked for a case the codegen path does not support (requires 2 to {} "
-        "unsharded ROW_MAJOR inputs of one dtype among bfloat16/int32/uint32 and equal rank, an "
-        "interleaved output, and a projected circular-buffer plan that fits per-core L1; inputs beyond "
-        "two must additionally share one memory config). This entry never falls back to native, "
+        "unsharded ROW_MAJOR inputs of one dtype among bfloat16/int32/uint32, of equal rank and with "
+        "no shape padding, an interleaved output, and a projected circular-buffer plan that fits the "
+        "static per-core L1 budget; inputs beyond two must additionally share one memory config). "
+        "This entry never falls back to native, "
         "because a forced leg that quietly served native would make any comparison against native "
         "vacuous. Use ttnn::concat if you want the case routed.",
         ttnn::prim::kConcatMaxNwayInputs);
-    ttnn::Shape logical_output_shape = compute_output_shape(input_tensors, norm_dim);
     return ttnn::prim::concat_codegen(
-        input_tensors, make_codegen_params(input_tensors, norm_dim, logical_output_shape, mem_config));
+        input_tensors, ttnn::prim::concat_codegen_params(input_tensors, static_cast<uint32_t>(norm_dim), mem_config));
 }
 
 }  // namespace ttnn::operations::data_movement::detail
@@ -538,10 +520,11 @@ ttnn::Tensor concat(
 
     if (concat_codegen::supported_execution_controls(groups, sub_core_grids) &&
         concat_codegen::supported_by_codegen(input_tensors, static_cast<uint32_t>(norm_dim), mem_config) &&
+        concat_codegen::fits_live_l1(input_tensors, static_cast<uint32_t>(norm_dim), mem_config) &&
         !concat_codegen::is_demoted(input_tensors, static_cast<uint32_t>(norm_dim))) {
-        ttnn::Shape logical_output_shape = detail::compute_output_shape(input_tensors, norm_dim);
         return ttnn::prim::concat_codegen(
-            input_tensors, detail::make_codegen_params(input_tensors, norm_dim, logical_output_shape, mem_config));
+            input_tensors,
+            ttnn::prim::concat_codegen_params(input_tensors, static_cast<uint32_t>(norm_dim), mem_config));
     }
 
     return detail::concat_native(input_tensors, norm_dim, mem_config, groups, sub_core_grids);

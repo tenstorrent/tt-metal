@@ -42,21 +42,55 @@ void ConcatCodegenDeviceOperation::validate_on_program_cache_miss(
         ttnn::operations::data_movement::concat_codegen::supported_by_codegen(
             input_tensors, operation_attributes.dim, operation_attributes.output_mem_config),
         "Input is not supported by ConcatCodegen");
+
+    // num_inputs/stick_size/total_out_sticks are computed host-side and reach the factory
+    // unchecked; total_out_sticks in particular becomes the writer's page count, which strides
+    // start_id + i with no bound of its own. A value larger than the output holds is an
+    // out-of-bounds device write, so recompute all three and refuse any disagreement. Bogus
+    // values hash differently, so this always runs on such a call.
+    const auto expected =
+        concat_codegen_params(input_tensors, operation_attributes.dim, operation_attributes.output_mem_config);
+    TT_FATAL(
+        operation_attributes.num_inputs == expected.num_inputs,
+        "ConcatCodegen num_inputs ({}) disagrees with the input list ({}).",
+        operation_attributes.num_inputs,
+        expected.num_inputs);
+    TT_FATAL(
+        operation_attributes.stick_size == expected.stick_size,
+        "ConcatCodegen stick_size ({} B) disagrees with the output row ({} B).",
+        operation_attributes.stick_size,
+        expected.stick_size);
+    TT_FATAL(
+        operation_attributes.total_out_sticks == expected.total_out_sticks,
+        "ConcatCodegen total_out_sticks ({}) disagrees with the output shape ({}).",
+        operation_attributes.total_out_sticks,
+        expected.total_out_sticks);
 }
 
 ConcatCodegenDeviceOperation::spec_return_value_t ConcatCodegenDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto& input_tensors = tensor_args.input_tensors;
-    const Tensor& ref_input = input_tensors.at(0);
-    ttnn::Shape output_shape = ref_input.logical_shape();
-    output_shape[operation_attributes.dim] = 0;
-    for (const auto& input : input_tensors) {
-        output_shape[operation_attributes.dim] += input.logical_shape()[operation_attributes.dim];
-    }
-    return tt::tt_metal::TensorSpec(
-        output_shape,
-        tt::tt_metal::TensorLayout(
-            ref_input.dtype(), tt::tt_metal::PageConfig(ref_input.layout()), operation_attributes.output_mem_config));
+    return concat_output_spec(
+        tensor_args.input_tensors, operation_attributes.dim, operation_attributes.output_mem_config);
+}
+
+ttsl::hash::hash_t ConcatCodegenDeviceOperation::compute_program_hash(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    // create_output_tensors() runs before the hash (device_operation.hpp), so the frontier read
+    // here is the same one create_descriptor will see, with this call's output already counted.
+    const auto cbs = plan_concat_cbs(
+        tensor_args.input_tensors,
+        operation_attributes.dim,
+        operation_attributes.output_mem_config,
+        operations::data_movement::get_max_l1_space(tensor_args.input_tensors.at(0)));
+    return ttsl::hash::hash_objects_with_default_seed(
+        ttsl::hash::type_hash<ConcatCodegenDeviceOperation>,
+        operation_attributes,
+        tensor_args,
+        cbs.has_value(),
+        cbs.has_value() ? cbs->cb_page : 0,
+        cbs.has_value() ? cbs->scratch_page : 0,
+        cbs.has_value() ? cbs->batch : 0,
+        cbs.has_value() ? cbs->depth : 0);
 }
 
 ConcatCodegenDeviceOperation::tensor_return_value_t ConcatCodegenDeviceOperation::create_output_tensors(
@@ -77,6 +111,9 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensor> ConcatCodegenDeviceOp
 ConcatCodegenDeviceOperation::tensor_return_value_t concat_codegen(
     const std::vector<Tensor>& input_tensors, const ConcatCodegenParams& params) {
     using OperationType = ConcatCodegenDeviceOperation;
+    // create_output_tensors() dereferences at(0) before validate runs, so an empty list would
+    // throw std::out_of_range from inside the framework rather than report what is wrong.
+    TT_FATAL(!input_tensors.empty(), "ConcatCodegen needs 1 or more input tensors!");
     return ttnn::device_operation::launch<OperationType>(
         params, OperationType::tensor_args_t{.input_tensors = input_tensors});
 }

@@ -330,3 +330,131 @@ def test_concat_codegen_declines_zero_volume(device, expect_error):
     xs = _inputs([[1, 32, 0], [1, 32, 0]], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device)
     with expect_error(RuntimeError, "does not support"):
         _force_codegen(xs, dim=2)
+
+
+def _l1_sharded_config(shard_shape):
+    core = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    spec = ttnn.ShardSpec(core, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, spec)
+
+
+def test_concat_codegen_declines_above_input_ceiling(device, expect_error):
+    # The N-way readers hold 17 bytes of dataflow-RISC frame per input against a 256 B guaranteed
+    # stack, so the ceiling is a memory-safety bound, not a runtime-argument one.
+    n = ttnn._ttnn.operations.data_movement.CONCAT_MAX_NWAY_INPUTS + 1
+    xs = _inputs([[1, 32, 32]] * n, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device)
+    with expect_error(RuntimeError, "does not support"):
+        _force_codegen(xs, dim=2)
+
+
+def test_concat_codegen_declines_sharded_input(device, expect_error):
+    # Every builder addresses its inputs as interleaved pages through TensorAccessorArgs.
+    sharded = _l1_sharded_config([32, 32])
+    xs = [
+        ttnn.from_torch(
+            torch.rand(1, 32, 32, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=sharded,
+        )
+        for _ in range(2)
+    ]
+    with expect_error(RuntimeError, "does not support"):
+        _force_codegen(xs, dim=2)
+
+
+def test_concat_codegen_declines_sharded_output(device, expect_error):
+    xs = _inputs([[1, 32, 32], [1, 32, 32]], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device)
+    with expect_error(RuntimeError, "does not support"):
+        _force_codegen(xs, dim=2, memory_config=_l1_sharded_config([32, 64]))
+
+
+def test_concat_codegen_declines_mixed_memory_config_above_two_inputs(device, expect_error):
+    # The N-way readers share one TensorAccessorArgs ABI across all inputs, so a DRAM input and an
+    # L1 input in the same list would be addressed with the wrong bank geometry.
+    def make(mem):
+        return ttnn.from_torch(
+            torch.rand(1, 32, 32, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=mem,
+        )
+
+    xs = [make(ttnn.DRAM_MEMORY_CONFIG), make(ttnn.L1_MEMORY_CONFIG), make(ttnn.DRAM_MEMORY_CONFIG)]
+    with expect_error(RuntimeError, "does not support"):
+        _force_codegen(xs, dim=2)
+
+
+def test_concat_codegen_declines_mismatched_dtype(device, expect_error):
+    xs = [
+        ttnn.from_torch(
+            torch.rand(1, 32, 32, dtype=torch.bfloat16), dtype=d, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+        )
+        if d is ttnn.bfloat16
+        else ttnn.from_torch(
+            torch.randint(0, 100, (1, 32, 32), dtype=torch.int32), dtype=d, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+        )
+        for d in (ttnn.bfloat16, ttnn.int32)
+    ]
+    with expect_error(RuntimeError, "does not support"):
+        _force_codegen(xs, dim=2)
+
+
+# Every CB in every plan is sized from the output's page, so an L1-resident output is the case
+# where the budget the plan is measured against and the memory the output itself takes are the
+# same L1. Nothing in this file passed a memory_config before, leaving that whole path unrun.
+_L1_OUTPUT_BRANCHES = [
+    ([[1, 32, 32], [1, 64, 32]], {"dim": 1}, "two_input_nonwidth"),
+    ([[1, 32, 32], [1, 32, 64]], {"dim": 2}, "two_input_width"),
+    ([[1, 32, 32], [1, 64, 32], [1, 32, 32]], {"dim": 1}, "nway_nonwidth"),
+    ([[1, 32, 32], [1, 32, 64], [1, 32, 32]], {"dim": 2}, "nway_width"),
+]
+
+
+@pytest.mark.parametrize(
+    "shapes,kwargs", [(c[0], c[1]) for c in _L1_OUTPUT_BRANCHES], ids=[c[2] for c in _L1_OUTPUT_BRANCHES]
+)
+def test_concat_codegen_l1_interleaved_output(device, shapes, kwargs):
+    xs = _inputs(shapes, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device)
+    golden = ttnn.to_torch(_force_native(xs, **kwargs, memory_config=ttnn.L1_MEMORY_CONFIG))
+    out = _force_codegen(xs, **kwargs, memory_config=ttnn.L1_MEMORY_CONFIG)
+    assert out.memory_config().buffer_type == ttnn.BufferType.L1
+    assert_equal(golden, ttnn.to_torch(out))
+
+
+def test_concat_codegen_declines_execution_controls(device):
+    # No builder honours sub_core_grids -- every one of them places work over the full
+    # compute_with_storage_grid_size -- so a caller asking for a core subset must reach native.
+    shapes, dim = [[1, 32, 32], [1, 32, 64]], 2
+    xs = _inputs(shapes, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device)
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
+    golden = ttnn.to_torch(_force_native(xs, dim=dim, sub_core_grids=grid))
+    entries_before = device.num_program_cache_entries()
+    out = ttnn.concat(xs, dim=dim, sub_core_grids=grid)
+    assert_equal(golden, ttnn.to_torch(out))
+    msg = "routed a sub_core_grids request to codegen, which ignores it"
+    assert device.num_program_cache_entries() == entries_before, msg
+
+
+def test_concat_codegen_replans_when_l1_occupancy_changes(device):
+    # The CB plan is derived from live L1, which the attributes do not describe. If it is not on
+    # the program hash, the plan built against a clear frontier is reused after a large L1
+    # allocation and its CB addresses overlap the resident tensor. Dispatch the same spec across
+    # three different frontiers and require bit-exactness on all of them.
+    shapes, dim = [[1, 32, 32], [1, 32, 64]], 2
+    xs = _inputs(shapes, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device)
+    golden = ttnn.to_torch(_force_native(xs, dim=dim))
+
+    assert_equal(golden, ttnn.to_torch(_force_codegen(xs, dim=dim)))
+    hog = ttnn.from_torch(
+        torch.zeros(1, 1, 512, 1024, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    assert_equal(golden, ttnn.to_torch(_force_codegen(xs, dim=dim)))
+    ttnn.deallocate(hog)
+    assert_equal(golden, ttnn.to_torch(_force_codegen(xs, dim=dim)))

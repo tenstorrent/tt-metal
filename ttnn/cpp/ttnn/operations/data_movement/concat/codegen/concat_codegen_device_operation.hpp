@@ -7,6 +7,8 @@
 #include <variant>
 #include <vector>
 
+#include <tt_stl/reflection.hpp>
+
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/data_movement/concat/codegen/concat_codegen_program_factory.hpp"
 #include "ttnn/types.hpp"
@@ -29,6 +31,12 @@ struct ConcatCodegenDeviceOperation {
     static spec_return_value_t compute_output_specs(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
     static tensor_return_value_t create_output_tensors(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+
+    // The CB plan is derived from live L1, which the attributes do not describe. Without this
+    // override a program cached against a clear frontier is reused after a large L1 allocation,
+    // with CB addresses that now overlap the resident tensor.
+    static ttsl::hash::hash_t compute_program_hash(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
