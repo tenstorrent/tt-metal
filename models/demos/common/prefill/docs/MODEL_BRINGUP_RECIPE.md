@@ -165,7 +165,7 @@ Decoder bringup stages:
 
 - **D3 — Implement 1 Decoder as composition of big blocks (Attn, MLP, Emb,...)**
 
-  Bringup previously defined modules on target device straight away (no need for single chip bringup first). Where no single ttnn op matches the block, write the mathematical equivalent out of the ttnn ops that do exist — there is no `ttnn.mlp`, and an MLP is a matmul, an activation and a second matmul, so compose it rather than dropping to CPU. Fall back to pytorch CPU only when the math cannot be expressed in ttnn at all; if the fallback is inevitable, take it, log it and move on.
+  Bringup previously defined modules on target device straight away (no need for single chip bringup first). Where no single ttnn op matches the block, write the mathematical equivalent out of the ttnn ops that do exist — there is no `ttnn.mlp`, and an MLP is a matmul, an activation and a second matmul, so compose it rather than dropping to CPU. Fall back to pytorch CPU only when the math cannot be expressed in ttnn at all; if the fallback is inevitable, take it, log it as a `fallback` (§7) and move on.
 
 
 When each stage is finished - goals:
@@ -191,7 +191,7 @@ enters as a finished block; only the parts around it are new.
 
 - **M3 — Implement the whole-model components**
 
-  Bringup embedding, final norm, lm head and the N-layer stack on target device. Same rule as D3: where no single ttnn op matches the block, write the mathematical equivalent out of the ttnn ops that do exist before considering a fallback. Fall back to pytorch CPU only when the math cannot be expressed in ttnn at all; if the fallback is inevitable, take it, log it and move on.
+  Bringup embedding, final norm, lm head and the N-layer stack on target device. Same rule as D3: where no single ttnn op matches the block, write the mathematical equivalent out of the ttnn ops that do exist before considering a fallback. Fall back to pytorch CPU only when the math cannot be expressed in ttnn at all; if the fallback is inevitable, take it, log it as a `fallback` (§7) and move on.
 
 
 When each stage is finished - goals:
@@ -322,8 +322,8 @@ Rows marked **SHARED** are the exception: those tests are already model-agnostic
 `common/prefill`. Do **not** rewrite them per model — select the model with env and run them as they
 are.
 
-**A stage is complete when, and only when, every test in its Testing table passes.** No stage is
-entered before the previous stage's table is green.
+**A stage is complete when, and only when, every test in its Testing table passes** and the
+stage's log lines are written (§7). No stage is entered before the previous stage's table is green.
 
 ---
 
@@ -398,7 +398,7 @@ the model does not have.
    matmul, so compose it. Same for every other block with no one-call equivalent: decompose it
    before reaching for a fallback.
 4. Fall back to torch on CPU only where the math cannot be expressed in ttnn at all. If the fallback
-   is inevitable, take it, log it, and move on — a new kernel is out of scope for bring-up.
+   is inevitable, take it, log it as a `fallback` (§7), and move on — a new kernel is out of scope for bring-up.
 
 **Testing** — the decoder test suite written in D2. No new tests.
 
@@ -459,7 +459,7 @@ cannot.
    is hybrid, and the KV cache sized for N layers rather than 1.
 3. Same rule as D3: where no single ttnn op matches a block, compose the mathematical equivalent
    from the ttnn ops that do exist before reaching for a fallback. Torch CPU only where the math
-   cannot be expressed in ttnn at all — log it and move on if it is inevitable.
+   cannot be expressed in ttnn at all — log it as a `fallback` (§7) and move on if it is inevitable.
 
 **Testing** — the model test suite written in M2, plus the decoder test suite as a regression.
 
@@ -555,7 +555,116 @@ because of its external dependency.
 
 ---
 
-## 7. Definition of done in terms of this model bringup
+## 7. Logging
+
+The bring-up writes an append-only log so the *process* can be measured, not just the result: which
+stages cost the most reiterations, which test in a Testing table is the real bottleneck, and where
+the agent had to leave the script.
+
+**File:** `models/demos/<model>/bringup_log.jsonl` — one JSON object per line, **appended, never
+rewritten**. No line is edited or deleted after it is written, including lines that record a wrong
+turn. The log is committed with the model.
+
+### 7.1 When to write
+
+Five triggers, all mechanical — there is no "worth logging?" judgment to make:
+
+| Trigger | Event |
+|---|---|
+| Entering a stage | `enter` |
+| Every run of the stage's Testing table, pass or fail | `verify` |
+| Going off-script: something the recipe, spec, or donor did not cover, **and you solved it** | `judgment` |
+| Falling back to torch CPU for a block (D3/M3 step 4) | `fallback` |
+| Dropping a Testing-table row the model does not have | `skip` |
+
+**Log successful resolutions only.** Unsuccessful attempts are not logged — the `verify` failures
+already record that the stage was fighting back, and how many times.
+
+### 7.2 Records
+
+`t` is ISO-8601 UTC to the minute. `stage` is one of `D1 D2 D3 M1 M2 M3 P1 P2 P3 P4`.
+
+| Event | Fields | Notes |
+|---|---|---|
+| `start` | `model`, `mesh`, `recipe_sha` | Once, first line. `recipe_sha` is the git sha of this file, so a run is attributable to the version of the recipe it followed. |
+| `enter` | `t`, `stage` | Written before any work in the stage. Its timestamp is the clock start. |
+| `verify` | `t`, `stage`, `result`: `pass`\|`fail`, `failed`: `[]` | `failed` holds pytest node ids and must be non-empty when `result` is `fail`. |
+| `judgment` | `t`, `stage`, `kind`, `issue`, `fix`, `failed`: `[]` | `failed` is the tests that were failing, if any — a judgment call need not have started as a test failure. |
+| `fallback` | `t`, `stage`, `block`, `why` | `block` is the module path that went to CPU, e.g. `rope.indexed_cache`. |
+| `skip` | `t`, `stage`, `row`, `why` | `row` is the Testing-table reference being dropped. |
+
+```jsonc
+{"ev":"start","model":"minimax_m3","mesh":"8x4","recipe_sha":"883d2d9"}
+{"t":"2026-09-02T09:00Z","ev":"enter","stage":"D3"}
+{"t":"2026-09-02T12:00Z","ev":"verify","stage":"D3","result":"fail",
+ "failed":["tests/unit/test_ring_joint_cache_read_sp_vs_ref.py::test_sp8"]}
+{"t":"2026-09-02T15:00Z","ev":"judgment","stage":"D3","kind":"donor_wrong",
+ "issue":"donor program config assumed q_chunk 256, PCC stalled at 0.91 at sp=8",
+ "fix":"set q_chunk_size to seq_local per SP row (128)",
+ "failed":["tests/unit/test_ring_joint_cache_read_sp_vs_ref.py::test_sp8"]}
+{"t":"2026-09-02T17:00Z","ev":"verify","stage":"D3","result":"pass","failed":[]}
+{"t":"2026-09-02T17:05Z","ev":"fallback","stage":"D3","block":"rope.indexed_cache",
+ "why":"no ttnn gather on tile layout; built the whole-cache index on host once"}
+```
+
+Wrapped above for reading only — in the file each object is a single line.
+
+### 7.3 `kind` — a closed vocabulary
+
+Free text does not aggregate, so every `judgment` is filed under exactly one of these. Pick the
+cause, not the symptom.
+
+| `kind` | Means | Reading it |
+|---|---|---|
+| `spec_gap` | A value the work needed was absent or ambiguous in the prefill spec. | The spec template (§1.2) is missing a field. |
+| `recipe_gap` | This document was silent, ambiguous, or wrong. | Fix the doc. |
+| `donor_wrong` | The donor conflicted with the spec, or its pattern did not transfer. | The donor map (§1.1) points somewhere bad. |
+| `ttnn_gap` | No ttnn op existed; the math had to be composed, or could not be. | Op-coverage backlog. Pairs with a `fallback` when it could not be. |
+| `model_quirk` | The model itself does something the reference implementations do not. | Genuine per-model cost, not a process defect. |
+| `env` | Build, mesh bring-up, fabric, or tooling. | Infra, not bring-up. |
+
+### 7.4 Length cap
+
+`issue`, `fix`, and `why` are each **one sentence, on one line, at most 160 characters**. The cap is
+enforced, not advisory — `bringup_digest.py --lint` fails a longer field.
+
+It exists because these fields are read side by side across a dozen bring-ups: entries have to be
+comparable at a glance, and a field that can hold a paragraph will hold a paragraph. If 160
+characters cannot carry the point, the detail belongs in the module's docstring or `README.md` —
+`fix` says *what changed*, and the code says why in full.
+
+### 7.5 What is never logged
+
+Derived by the digest, so the agent does not track it:
+
+- **Reiterations** — the count of failing `verify` events in a stage. A Testing table that goes
+  green on its first run scores **0**. This is the headline number: it is what separates a stage
+  that is understood from one that is being guessed at.
+- **Elapsed time** — `enter` to first passing `verify`.
+- **Bottleneck test** — the node id appearing most often across all `failed` lists in a stage.
+
+### 7.6 Reading the log
+
+```
+models/demos/common/prefill/tools/bringup_digest.py            # all models
+models/demos/common/prefill/tools/bringup_digest.py --lint     # malformed records only
+```
+
+```
+stage  models  green  reiters  worst  hours  top failing test
+-------------------------------------------------------------
+D1          4      4      0.2      1    1.8  -
+D2          4      4      0.5      2    3.6  test_ep_moe_vs_ref.py::test_ep8 (2)
+D3          4      3      9.8     17    7.8  test_ring_joint_cache_read_sp_vs_ref.py::test_sp8 (14)
+```
+
+A stage with a high `reiters` average across models is a stage this recipe does not yet explain well
+enough — that is the point of the log. A high `spec_gap` or `recipe_gap` count is the same signal
+aimed at the inputs instead of the stages.
+
+---
+
+## 8. Definition of done in terms of this model bringup
 
 - [ ] Every module has a `*_vs_ref` test at or above its `unit_pcc` threshold
 - [ ] Full model runs at target mesh shape with real weights; per-layer KV PCC recorded in `README.md`
@@ -563,6 +672,7 @@ because of its external dependency.
 - [ ] Runtime satisfies `ADDING_A_PREFILL_MODEL.md` §2 and asserts on out-of-contract chunk ranges
 - [ ] Two-terminal producer PCC passes
 - [ ] `README.md` records architecture, reuse-vs-fresh, PCC status, run commands, and known gaps
+- [ ] `bringup_log.jsonl` is committed and `bringup_digest.py --lint` is clean
 
 Explicitly **not** required to call bring-up done: perf numbers, registration in a CI tier, and
 top-1 / logits agreement with HF. KV-cache PCC is a proxy for correctness, not a substitute for that
