@@ -11,14 +11,14 @@ CONTINUE_ON_FAILURE=0
 
 usage() {
 	cat << EOF
-Usage: $0 [-l <logdir>] [--deployment] [--continue-on-failure] [--no-eth-links]
+Usage: $0 [--output <logdir>] [--deployment] [--continue-on-failure] [--no-eth-links]
 
 Run the deployment test suite (Ethernet, DRAM, PCIe read/write).
 Must be run from the repository root with the tests already built.
 Everything printed to the console is also written to a single log file per run.
 
 Optional:
-    -l <logdir>                             Directory where the log file is written
+    --output <logdir>                       Directory where the log file is written
                                             (default: current directory)
     --deployment                            Run $DEPLOYMENT_CYCLES deployment cycles, each starting with a
                                             board reset. Stops after a cycle fails.
@@ -36,20 +36,20 @@ Environment variables:
 
 Examples:
     Regular run (all tests, $ITERS iterations each, logs in ./logs):
-        $0 -l ./logs
+        $0 --output ./logs
 
     Deployment run ($DEPLOYMENT_CYCLES reset cycles, one iteration per test per cycle):
-        $0 -l ./logs --deployment
+        $0 --output ./logs --deployment
 
     Deployment run on a partially cabled system, without stopping on failure:
-        $0 -l ./logs --continue-on-failure --no-eth-links
+        $0 --output ./logs --continue-on-failure --no-eth-links
 EOF
 }
 
 while [ -n "$1" ]
 do
 	case "$1" in
-	-l)
+	--output)
 		if [ -z "$2" ]; then echo "Missing argument to $1"; exit 1; fi
 		LOGDIR="$2"
 		shift
@@ -269,7 +269,9 @@ then
 		fi
 	done
 
-	emit_banner "DEPLOYMENT RESULTS SUMMARY (${cycles_run}/${DEPLOYMENT_CYCLES} cycles ran)"
+	emit_banner "DEPLOYMENT TEST SUITE - RESULTS SUMMARY (${cycles_run}/${DEPLOYMENT_CYCLES} cycles ran)"
+	emit "$(printf '%-20s %s' 'Host:'            "$(hostname)")"
+	emit "$RULE_LIGHT"
 	emit "$(printf '%-20s %s' 'Ethernet tests:'  "$depl_eth_pass/$cycles_run cycles passed")"
 	emit "$(printf '%-20s %s' 'DRAM tests:'      "$depl_dram_pass/$cycles_run cycles passed")"
 	emit "$(printf '%-20s %s' 'PCIe read test:'  "$depl_pcie_read_pass/$cycles_run cycles passed")"
