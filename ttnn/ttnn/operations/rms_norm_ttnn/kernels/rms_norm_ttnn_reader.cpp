@@ -284,6 +284,31 @@ FORCE_INLINE void stage_per_channel_chunk(const Acc& acc, uint32_t first_wt) {
     }
 }
 
+// ---- native activations: publish a resident shard's pages, once -------------
+// The shard IS the per-core block, so the only thing to do is make its pages
+// visible to the compute kernel -- there is no NoC read for it at all.  A RAGGED
+// width shard (Wt not a multiple of the shard's tile width) ends each of its
+// tile-rows in whole PAD tiles whose L1 content is undefined; zero them once so
+// they contribute exactly 0 to sum(t^2), which is the same pad-lane invariant the
+// ROW_MAJOR staging rings get at boot.  A1: the residual's shard gets the
+// identical treatment -- same geometry, same pad tiles, same invariant -- which is
+// the whole reason this is a function with the CB as a template parameter rather
+// than the seed's inline block.
+template <uint32_t CB, uint32_t WT_CHUNK, uint32_t IN_SHARD_PAGES>
+FORCE_INLINE void publish_native_shard(uint32_t w_real, uint32_t tile_bytes) {
+    if (w_real < WT_CHUNK) {
+        const uint32_t pad_tiles = WT_CHUNK - w_real;
+        Noc noc;
+        DataflowBuffer dfb(CB);
+        for (uint32_t r = 0; r * WT_CHUNK < IN_SHARD_PAGES; ++r) {
+            noc.async_write_zeros(dfb, pad_tiles * tile_bytes, {.offset_bytes = (r * WT_CHUNK + w_real) * tile_bytes});
+        }
+        noc.write_zeros_l1_barrier();
+    }
+    cb_reserve_back(CB, IN_SHARD_PAGES);
+    cb_push_back(CB, IN_SHARD_PAGES);
+}
+
 void kernel_main() {
     // ---- compile-time knobs (all from rms_norm_ttnn_program_descriptor.py) -----
     constexpr uint32_t IS_TILE = get_compile_time_arg_val(0);
@@ -585,33 +610,15 @@ void kernel_main() {
 
     const uint32_t x_tile_bytes = get_tile_size(cb_input_tiles);
 
-    // ---- native activations: publish the resident shards, once --------------
-    // The shard IS the per-core block, so the only thing to do is make its pages
-    // visible to the compute kernel.  A RAGGED width shard (Wt not a multiple of
-    // the shard's tile width) ends each of its tile-rows in whole PAD tiles whose
-    // L1 content is undefined; zero them once so they contribute exactly 0 to
-    // sum(t^2) (the same pad-lane invariant the ROW_MAJOR staging ring gets).
-    // A1: the residual's shard gets the identical treatment -- same geometry, same
-    // pad tiles, same invariant.
-    auto publish_native = [&](uint32_t cb) {
-        if (w_real < WT_CHUNK) {
-            const uint32_t pad_tiles = WT_CHUNK - w_real;
-            Noc noc;
-            DataflowBuffer dfb(cb);
-            for (uint32_t r = 0; r * WT_CHUNK < IN_SHARD_PAGES; ++r) {
-                noc.async_write_zeros(
-                    dfb, pad_tiles * x_tile_bytes, {.offset_bytes = (r * WT_CHUNK + w_real) * x_tile_bytes});
-            }
-            noc.write_zeros_l1_barrier();
-        }
-        cb_reserve_back(cb, IN_SHARD_PAGES);
-        cb_push_back(cb, IN_SHARD_PAGES);
-    };
     if constexpr (NATIVE_X) {
         MaybeDeviceZoneScope("reader_native_publish");
-        publish_native(cb_input_tiles);
+        // A TEMPLATE on the CB id, not a lambda taking one: `cb_reserve_back` and
+        // `DataflowBuffer` want a compile-time buffer index (a runtime one costs an
+        // indexed lookup where the seed had an immediate), and this sits on the
+        // measured native paths.  Two instantiations, one per stream.
+        publish_native_shard<cb_input_tiles, WT_CHUNK, IN_SHARD_PAGES>(w_real, x_tile_bytes);
         if constexpr (NATIVE_R) {
-            publish_native(cb_residual_tiles);
+            publish_native_shard<cb_residual_tiles, WT_CHUNK, IN_SHARD_PAGES>(w_real, x_tile_bytes);
         }
     }
 

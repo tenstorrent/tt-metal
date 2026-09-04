@@ -137,13 +137,19 @@ from eval.sharding import shard_config  # noqa: E402
 _SHARDED_PERF = [
     ((1, 1, 7168, 1024), ([896, 128], (8, 8)), ttnn.TensorMemoryLayout.BLOCK_SHARDED, False),
     ((1, 1, 32, 5120), ([32, 160], (8, 4)), ttnn.TensorMemoryLayout.WIDTH_SHARDED, True),
+    # The spec's TIGHTEST sharded reference: 28619 ns at subblock_w = 1 for the
+    # weight-only 64-core block shard.  Carried here as a seed-parity row -- the
+    # gamma-only program is the seed's, so this must reproduce it.
+    ((1, 1, 8192, 1024), ([1024, 128], (8, 8)), ttnn.TensorMemoryLayout.BLOCK_SHARDED, False),
+    ((1, 1, 32, 7168), ([32, 256], (7, 4)), ttnn.TensorMemoryLayout.WIDTH_SHARDED, False),
+    ((1, 1, 32, 1024), ([32, 128], (8, 1)), ttnn.TensorMemoryLayout.WIDTH_SHARDED, False),
 ]
 
 
 @pytest.mark.parametrize(
     "shape, shard, memory_layout, fp32_dest",
     _SHARDED_PERF,
-    ids=["block_7168x1024", "width_32x5120"],
+    ids=["block_7168x1024", "width_32x5120", "block_8192x1024", "width_32x7168", "width_32x1024"],
 )
 @pytest.mark.parametrize("mode", ["gamma", "gamma_bias_residual"])
 def test_sharded_operand_cost(device, shape, shard, memory_layout, fp32_dest, mode):
@@ -181,3 +187,177 @@ def test_sharded_operand_cost(device, shape, shard, memory_layout, fp32_dest, mo
         )
     out = rms_norm_ttnn(ttnn_x, **kwargs)
     assert list(out.shape) == list(shape)
+
+
+@pytest.mark.parametrize(
+    "shape, shard, memory_layout, fp32_dest",
+    _SHARDED_PERF,
+    ids=["block_7168x1024", "width_32x5120", "block_8192x1024", "width_32x7168", "width_32x1024"],
+)
+@pytest.mark.parametrize("op", ["seed", "ttnn"], ids=["seed", "ttnn"])
+def test_sharded_seed_parity(device, shape, shard, memory_layout, fp32_dest, op):
+    """Seed parity on the SHARDED geometries the feature spec pins by name.
+
+    The interleaved parity rows above cover the row-split scheme; these cover the
+    HEIGHT-local and the cross-core-combine schemes, which is where a change to
+    the L1 solve (the BLOCK_ROWS / rounds trade) would show up as a different
+    number for the same program.
+    """
+    torch.manual_seed(0)
+    width = shape[-1]
+    x = torch.randn(shape, dtype=torch.float32).to(torch.bfloat16)
+    mc = shard_config(shard[0], shard[1], memory_layout, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    ttnn_x = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mc)
+    torch.manual_seed(1)
+    g = ttnn.from_torch(
+        torch.randn(1, 1, 1, width, dtype=torch.float32).to(torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    cfg = _config()
+    cfg.fp32_dest_acc_en = fp32_dest
+    kwargs = {"epsilon": 1e-12, "compute_kernel_config": cfg, "memory_config": ttnn_x.memory_config()}
+    out = rms_norm_seed(ttnn_x, gamma=g, **kwargs) if op == "seed" else rms_norm_ttnn(ttnn_x, weight=g, **kwargs)
+    assert list(out.shape) == list(shape)
+
+
+# ---------------------------------------------------------------------------
+# 4. STRUCTURAL seed parity — the gate, not the perf ratio
+# ---------------------------------------------------------------------------
+#
+# "When an optional input is omitted: the compiled program MUST be equivalent to
+# the seed's for that configuration -- same buffers, same code path, same
+# blocking."  A perf ratio can only ever be evidence FOR that; this asserts it
+# directly, and it runs without the profiler, deterministically, on the host.
+#
+# What is compared, and why each half matters:
+#   * the CB set -- {buffer_index -> (total_size, page_size)} -- because that is
+#     the whole L1 footprint and the whole blocking decision made visible.  A
+#     stray CB, a depth that grew, or a BLOCK_ROWS the operand-aware budget
+#     solved differently all show up here.
+#   * the writer's compile-time args, IDENTICALLY (the writer takes no operand,
+#     so not one of its args may move), and the compute + reader args as a
+#     PREFIX (the new args are APPENDED, which is the whole reason they were
+#     appended rather than inserted -- see the CB index note at 19..23).
+#
+# Both descriptors are built on the host from the same tensors; nothing is
+# dispatched, so this is cheap enough to sweep over every scheme.
+
+from ttnn.operations.rms_norm.rms_norm_program_descriptor import (  # noqa: E402
+    create_program_descriptor as seed_descriptor,
+)
+from ttnn.operations.rms_norm_ttnn.rms_norm_ttnn_program_descriptor import (  # noqa: E402
+    _PC_NONE,
+    READER_CT_SCALARS,
+    create_program_descriptor as ttnn_descriptor,
+)
+
+_ML = ttnn.TensorMemoryLayout
+
+#: (shape, layout, memory_layout, shard-or-None) — one per internal scheme:
+#: the row split, the interleaved width split, HEIGHT (local reduce),
+#: WIDTH / BLOCK (cross-core combine, identity and compact), and the ROW_MAJOR
+#: BAND.  If the operand-free program is the seed's, it is the seed's on all of
+#: them, not just on the easy one.
+_PARITY_CASES = [
+    ((1, 1, 64, 128), ttnn.TILE_LAYOUT, _ML.INTERLEAVED, None),
+    ((1, 1, 8192, 1024), ttnn.TILE_LAYOUT, _ML.INTERLEAVED, None),
+    ((1, 1, 32, 7168), ttnn.TILE_LAYOUT, _ML.INTERLEAVED, None),  # width split
+    ((1, 1, 32, 16384), ttnn.TILE_LAYOUT, _ML.INTERLEAVED, None),  # wide, L1-tight
+    ((1, 1, 32, 50), ttnn.TILE_LAYOUT, _ML.INTERLEAVED, None),  # masked reduce
+    ((1, 1, 64, 128), ttnn.ROW_MAJOR_LAYOUT, _ML.INTERLEAVED, None),
+    ((1, 1, 32, 50), ttnn.ROW_MAJOR_LAYOUT, _ML.INTERLEAVED, None),
+    ((1, 1, 256, 512), ttnn.TILE_LAYOUT, _ML.HEIGHT_SHARDED, None),
+    ((1, 1, 32, 1024), ttnn.TILE_LAYOUT, _ML.WIDTH_SHARDED, ([32, 128], (8, 1))),
+    ((1, 1, 32, 7168), ttnn.TILE_LAYOUT, _ML.WIDTH_SHARDED, ([32, 256], (7, 4))),
+    ((1, 1, 1024, 512), ttnn.TILE_LAYOUT, _ML.WIDTH_SHARDED, ([1024, 128], (4, 1))),  # compact
+    ((1, 1, 8192, 1024), ttnn.TILE_LAYOUT, _ML.BLOCK_SHARDED, ([1024, 128], (8, 8))),
+    ((1, 1, 256, 512), ttnn.ROW_MAJOR_LAYOUT, _ML.BLOCK_SHARDED, None),  # BAND
+    ((1, 1, 256, 512), ttnn.ROW_MAJOR_LAYOUT, _ML.WIDTH_SHARDED, None),  # BAND
+]
+
+_PARITY_IDS = [
+    f"{'x'.join(str(d) for d in shape)}-{'TILE' if lay == ttnn.TILE_LAYOUT else 'RM'}"
+    f"-{str(ml).split('.')[-1]}" + ("-pinned" if sh else "")
+    for shape, lay, ml, sh in _PARITY_CASES
+]
+
+
+def _cb_signature(descriptor):
+    out = {}
+    for cb in descriptor.cbs:
+        fd = cb.format_descriptors[0]
+        # `data_format` is a C++ enum the binding cannot convert back to Python,
+        # so it is not read here.  (total_size, page_size) already pins the page
+        # count AND the element width, which is what the blocking decision is.
+        out[fd.buffer_index] = (cb.total_size, fd.page_size)
+    return out
+
+
+@pytest.mark.parametrize("shape, layout, memory_layout, shard", _PARITY_CASES, ids=_PARITY_IDS)
+@pytest.mark.parametrize("mode", ["no_gamma", "gamma"])
+def test_program_is_structurally_the_seeds(device, shape, layout, memory_layout, shard, mode):
+    from eval.sharding import auto_shard_config, shard_config
+
+    dtype = ttnn.bfloat16
+    torch.manual_seed(0)
+    if memory_layout == _ML.INTERLEAVED:
+        mc = ttnn.DRAM_MEMORY_CONFIG
+    elif shard is not None:
+        mc = shard_config(shard[0], shard[1], memory_layout, layout=layout, dtype=dtype, device=device)
+    else:
+        mc = auto_shard_config(list(shape), memory_layout, layout=layout, dtype=dtype, device=device)
+
+    x = ttnn.from_torch(
+        torch.zeros(shape, dtype=torch.bfloat16), dtype=dtype, layout=layout, device=device, memory_config=mc
+    )
+    out = ttnn.allocate_tensor_on_device(ttnn.Shape(list(shape)), dtype, layout, device, mc)
+    g = None
+    if mode == "gamma":
+        g = ttnn.from_torch(
+            torch.zeros(1, 1, 1, shape[-1], dtype=torch.bfloat16), dtype=dtype, layout=layout, device=device
+        )
+    cfg = _config()
+
+    seed = seed_descriptor(x, out, gamma=g, epsilon=1e-12, compute_kernel_config=cfg)
+    mine = ttnn_descriptor(x, out, weight=g, epsilon=1e-12, compute_kernel_config=cfg, program_config=_PC_NONE)
+
+    assert _cb_signature(mine) == _cb_signature(seed), (
+        "the CB set diverged from the seed's -- that is the whole L1 footprint and the whole "
+        "blocking decision, so a difference here means the operand-aware budget solved a "
+        "configuration that supplies no operand differently"
+    )
+    # The writer takes no operand at all, so not one of its args may move.
+    assert list(mine.kernels[1].compile_time_args) == list(
+        seed.kernels[1].compile_time_args
+    ), "the writer takes no operand; not one of its CT args may move"
+    # The compute kernel's four new args are appended AFTER the seed's 19, and it
+    # carries no accessor block, so the seed's list is a plain prefix.
+    seed_compute = list(seed.kernels[2].compile_time_args)
+    my_compute = list(mine.kernels[2].compile_time_args)
+    assert my_compute[: len(seed_compute)] == seed_compute, (
+        f"the compute kernel's new CT args must be APPENDED, not inserted "
+        f"(seed n={len(seed_compute)}, mine n={len(my_compute)})"
+    )
+    # The reader is the one kernel whose list is NOT a plain prefix, and that is
+    # structural rather than a slip: its scalars are followed by TensorAccessorArgs
+    # BLOCKS, so the operands' scalars have to sit before them.  The two halves are
+    # therefore checked separately:
+    #   scalars   0 .. SEED_READER_SCALARS-1 must be identical (the seed's own
+    #             meaning at the seed's own index), and
+    #   accessors the seed's blocks (x, then gamma-or-null) must be the leading
+    #             blocks of mine (x, gamma-or-null, bias-null, residual-null).
+    SEED_READER_SCALARS = 21  # rms_norm_reader.cpp reads TensorAccessorArgs<21>()
+    seed_reader = list(seed.kernels[0].compile_time_args)
+    my_reader = list(mine.kernels[0].compile_time_args)
+    assert (
+        my_reader[:SEED_READER_SCALARS] == seed_reader[:SEED_READER_SCALARS]
+    ), "a reader scalar CT arg the seed owns changed value or moved index"
+    seed_accessors = seed_reader[SEED_READER_SCALARS:]
+    my_accessors = my_reader[READER_CT_SCALARS:]
+    assert my_accessors[: len(seed_accessors)] == seed_accessors, (
+        "the reader's accessor blocks diverged: the seed's (x, gamma) blocks must be the "
+        "LEADING blocks of this op's (x, gamma, bias, residual)"
+    )
+    assert len(seed.semaphores) == len(mine.semaphores)

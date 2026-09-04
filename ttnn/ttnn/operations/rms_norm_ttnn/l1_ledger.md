@@ -291,9 +291,33 @@ one fresh-cache profiled run per variant (`--profile`, DEVICE KERNEL DURATION ns
 | `(1,1,32,7168)` wide decode | 7455 → 7499 (**0.99×**) | 9180 → 9248 (**0.99×**) | 10744 | 9337 | 12670 |
 
 **Seed parity holds** on every operand-free and gamma-only cell: 0.99×–1.04×, inside the ~2% noise
-band. That is the measurement behind "the operand-free program is the seed's" — the programs are
-byte-identical by construction (every new CB, CT arg and blocking term is multiplied by its `HAS_*`
-flag), and this says so on device rather than by argument.
+band.
+
+But a perf ratio is only *evidence* for "the operand-free program is the seed's", so that claim is
+also **asserted structurally**, deterministically, on the host —
+`test_rms_norm_ttnn_perf.py::test_program_is_structurally_the_seeds` builds BOTH descriptors from
+the same tensors and compares the CB set page-for-page (`{index → (total_size, page_size)}` — the
+whole L1 footprint and the whole blocking decision made visible) plus the CT args. 28 cells over 14
+geometries, one per internal scheme: row split, interleaved width split, HEIGHT (local reduce),
+WIDTH identity **and** compact, BLOCK, the ROW_MAJOR BAND, the masked-reduce shapes and the
+L1-tight wide ones. All identical.
+
+The three kernels are compared differently, and the asymmetry is structural:
+the **writer** takes no operand, so not one of its args may move (asserted byte-identical); the
+**compute** kernel carries no accessor block, so the seed's 19 args are a plain prefix of this op's
+23; the **reader**'s scalars are followed by `TensorAccessorArgs` BLOCKS, so the operands' scalars
+necessarily sit *before* them — its two halves are checked separately (scalars 0..20 identical at
+the seed's own indices, and the seed's `(x, gamma)` accessor blocks the leading blocks of this op's
+`(x, gamma, bias, residual)`).
+
+Where the numbers do differ, the attribution is known rather than guessed: on the two SMALLEST
+width-sharded decode shapes — `(1,1,32,7168)` 28c and `(1,1,32,1024)` 8c, 3.8–5.8 µs kernels — the
+op runs 1.2–2.0% slower than the seed across three runs each, while the CB set and every CT arg are
+**identical** (verified above) and the larger shapes are at parity to 0.1–0.3%. With the program
+proven the same, the residue is kernel-binary size (this file's kernels carry the bias / residual /
+program-config branches even where `if constexpr` elides them), i.e. i-cache fill on a kernel short
+enough to notice it. The only way to remove it would be to split the kernels per operand set, which
+trades one 1.5% decode regression for a combinatorial build matrix.
 
 **The residual is at the DRAM roofline on the prefill profile**: it takes the activation crossings
 from 2 (x in, out) to 3 (x, r, out), i.e. 1.50× the bytes, and measures 1.42× the time
