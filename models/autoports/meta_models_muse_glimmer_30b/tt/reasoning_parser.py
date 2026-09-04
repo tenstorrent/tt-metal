@@ -187,7 +187,6 @@ def reached_visible_channel(text: str) -> bool:
     return any(recipient != REASONING_RECIPIENT for recipient, _ in split_channels(text))
 
 
-@ReasoningParserManager.register_module(name="muse_glimmer", force=True)
 class MuseGlimmerReasoningParser(ReasoningParser):
     """Route Muse Glimmer's ``self`` channel to ``reasoning_content``."""
 
@@ -365,6 +364,18 @@ class MuseGlimmerReasoningParser(ReasoningParser):
         if not segments:
             return "" if want_reasoning else text
         return "".join(body for recipient, body in segments if (recipient == REASONING_RECIPIENT) is want_reasoning)
+
+
+# vLLM 0.24's decorator form records a lazy module import.  Parser plugins are
+# loaded from a file path, however, so the temporary module name used by the
+# loader is not necessarily importable later.  Register the already-defined
+# class eagerly to make both the plugin verifier and the live parser lookup
+# independent of that implementation detail.
+ReasoningParserManager.register_module(
+    name="muse_glimmer",
+    force=True,
+    module=MuseGlimmerReasoningParser,
+)
 
 
 def iter_channel_recipients(text: str) -> Iterable[str]:

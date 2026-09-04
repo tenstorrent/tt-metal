@@ -68,6 +68,13 @@ def _parser(head_text: str = "") -> MuseGlimmerReasoningParser:
     return MuseGlimmerReasoningParser(_FakeTokenizer(head_text))
 
 
+def test_parser_is_eagerly_registered_for_file_path_plugins():
+    from vllm.reasoning import ReasoningParserManager
+
+    assert ReasoningParserManager.reasoning_parsers["muse_glimmer"] is MuseGlimmerReasoningParser
+    assert ReasoningParserManager.get_reasoning_parser("muse_glimmer") is MuseGlimmerReasoningParser
+
+
 def test_split_channels_finds_both_headers():
     assert [recipient for recipient, _ in split_channels(REASONED)] == ["self", "user"]
     assert [recipient for recipient, _ in split_channels(DIRECT)] == ["user"]
