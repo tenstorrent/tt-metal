@@ -170,6 +170,17 @@ def _decode_in0_block_w(k, n, num_cores, dtype=None):
     in0 = _find_largest_divisor(k_tiles_per_core, max_div=_DECODE_IN0_BLOCK_W_MAX)
     while in0 > 1 and _estimate_decode_l1_bytes_for_in0(n_tiles, in0, dtype) > budget:
         in0 = _find_largest_divisor(k_tiles_per_core, max_div=in0 - 1)
+    # A block may span several activation shards, so the multicast block count is no longer tied
+    # to the shard grid. Widen past k_tiles_per_core while the in1 triple-buffer still fits; never
+    # return less than the width above, or a wide-N projection's block count gets worse.
+    k_tiles = max(1, k // TILE_SIZE)
+    for bw in range(min(16, k_tiles), in0, -1):
+        if k_tiles % bw:
+            continue
+        if k_tiles_per_core % bw and bw % k_tiles_per_core:
+            continue
+        if _estimate_decode_l1_bytes_for_in0(n_tiles, bw, dtype) <= budget:
+            return bw
     return in0
 
 
