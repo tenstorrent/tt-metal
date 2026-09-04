@@ -124,13 +124,13 @@ struct Dram {
 
 Dram open_dram() {
     return Dram{
-        TensorAccessor(ct.dram_in_args, ct.dram_in_base_addr),
-        TensorAccessor(ct.dram_out_args, ct.dram_out_base_addr),
-        TensorAccessor(ct.dram_fwd_args, ct.dram_fwd_base_addr),
-        TensorAccessor(ct.dram_meta_args, ct.dram_meta_base_addr),
-        TensorAccessor(ct.dram_counts_args, ct.dram_counts_base_addr),
-        TensorAccessor(ct.dram_region_args, ct.dram_region_base_addr),
-        TensorAccessor(ct.dram_expert_offsets_args, ct.dram_expert_offsets_base_addr)};
+        TensorAccessor(ct.dram_in_args, get_arg_val<uint32_t>(cmbf2d::RDR_RT_DRAM_IN)),
+        TensorAccessor(ct.dram_out_args, get_arg_val<uint32_t>(cmbf2d::RDR_RT_DRAM_OUT)),
+        TensorAccessor(ct.dram_fwd_args, get_arg_val<uint32_t>(cmbf2d::RDR_RT_DRAM_FWD)),
+        TensorAccessor(ct.dram_meta_args, get_arg_val<uint32_t>(cmbf2d::RDR_RT_DRAM_META)),
+        TensorAccessor(ct.dram_counts_args, get_arg_val<uint32_t>(cmbf2d::RDR_RT_DRAM_COUNTS)),
+        TensorAccessor(ct.dram_region_args, get_arg_val<uint32_t>(cmbf2d::RDR_RT_DRAM_REGION)),
+        TensorAccessor(ct.dram_expert_offsets_args, get_arg_val<uint32_t>(cmbf2d::RDR_RT_DRAM_EXPERT_OFFSETS))};
 }
 
 // Control tensors, read once. All three are one row per page of `num_routed_experts` uint32: expert_offsets

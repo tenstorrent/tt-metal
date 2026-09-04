@@ -23,14 +23,20 @@ namespace cmbf2d {
 
 // Scalars packed before the variable-length blocks, i.e. the index the destinations start at. Asserted
 // against the field list below, so it cannot drift out of step with it.
-constexpr uint32_t UNTILIZER_SCALAR_CT_ARGS = 21;
+constexpr uint32_t UNTILIZER_SCALAR_CT_ARGS = 17;
+
+// One base address per DRAM buffer an untilizer reads, bound as runtime args in this order. Runtime for the
+// same reason the reader's are: the address belongs to an allocation, not to the program.
+enum UntilizerRtArg : uint32_t {
+    UNT_RT_DRAM_IN,
+    UNT_RT_DRAM_COUNTS,
+    UNT_RT_DRAM_REGION,
+    UNT_RT_DRAM_EXPERT_OFFSETS,
+    UNT_RT_ARGS,
+};
 
 struct UntilizerCtArgs {
     uint32_t token_size_bytes;
-    uint32_t dram_in_base_addr;
-    uint32_t dram_counts_base_addr;
-    uint32_t dram_region_base_addr;
-    uint32_t dram_expert_offsets_base_addr;
     uint32_t num_routed_experts;
     uint32_t experts_per_chip;
     uint32_t my_expert_base;
@@ -57,13 +63,8 @@ struct UntilizerCtArgs {
         const op::CombineFabric2dInputs& tensor_args,
         const ttnn::MeshCoordinate& coord,
         const std::vector<op::Assignment>& work,
-        const op::UntilizerPlan& plan,
-        const op::DramBuffers& dram) :
+        const op::UntilizerPlan& plan) :
         token_size_bytes(op::token_size_bytes(tensor_args)),
-        dram_in_base_addr(static_cast<uint32_t>(dram.in->address())),
-        dram_counts_base_addr(static_cast<uint32_t>(dram.counts->address())),
-        dram_region_base_addr(static_cast<uint32_t>(dram.region->address())),
-        dram_expert_offsets_base_addr(static_cast<uint32_t>(dram.expert_offsets->address())),
         num_routed_experts(op::num_routed_experts(tensor_args)),
         experts_per_chip(args.experts_per_chip),
         my_expert_base(plan.my_expert_base),
@@ -98,10 +99,6 @@ struct UntilizerCtArgs {
     std::vector<uint32_t> to_ct_word_arr() const {
         std::vector<uint32_t> word_arr{
             token_size_bytes,
-            dram_in_base_addr,
-            dram_counts_base_addr,
-            dram_region_base_addr,
-            dram_expert_offsets_base_addr,
             num_routed_experts,
             experts_per_chip,
             my_expert_base,
@@ -124,31 +121,27 @@ struct UntilizerCtArgs {
 #else
     constexpr UntilizerCtArgs() :
         token_size_bytes(get_compile_time_arg_val(0)),
-        dram_in_base_addr(get_compile_time_arg_val(1)),
-        dram_counts_base_addr(get_compile_time_arg_val(2)),
-        dram_region_base_addr(get_compile_time_arg_val(3)),
-        dram_expert_offsets_base_addr(get_compile_time_arg_val(4)),
-        num_routed_experts(get_compile_time_arg_val(5)),
-        experts_per_chip(get_compile_time_arg_val(6)),
-        my_expert_base(get_compile_time_arg_val(7)),
-        dispatch_group_size(get_compile_time_arg_val(8)),
-        my_dg_index(get_compile_time_arg_val(9)),
-        num_destinations(get_compile_time_arg_val(10)),
-        walks_down(get_compile_time_arg_val(11)),
-        my_index(get_compile_time_arg_val(12)),
-        num_peers(get_compile_time_arg_val(13)),
-        num_consumers(get_compile_time_arg_val(14)),
-        ring_batches(get_compile_time_arg_val(15)),
-        control_addr(get_compile_time_arg_val(16)),
-        produced_addr(get_compile_time_arg_val(17)),
-        tiles_per_row(get_compile_time_arg_val(18)),
-        tile_bytes(get_compile_time_arg_val(19)),
-        block_tiles(get_compile_time_arg_val(20)) {}
+        num_routed_experts(get_compile_time_arg_val(1)),
+        experts_per_chip(get_compile_time_arg_val(2)),
+        my_expert_base(get_compile_time_arg_val(3)),
+        dispatch_group_size(get_compile_time_arg_val(4)),
+        my_dg_index(get_compile_time_arg_val(5)),
+        num_destinations(get_compile_time_arg_val(6)),
+        walks_down(get_compile_time_arg_val(7)),
+        my_index(get_compile_time_arg_val(8)),
+        num_peers(get_compile_time_arg_val(9)),
+        num_consumers(get_compile_time_arg_val(10)),
+        ring_batches(get_compile_time_arg_val(11)),
+        control_addr(get_compile_time_arg_val(12)),
+        produced_addr(get_compile_time_arg_val(13)),
+        tiles_per_row(get_compile_time_arg_val(14)),
+        tile_bytes(get_compile_time_arg_val(15)),
+        block_tiles(get_compile_time_arg_val(16)) {}
 
     static constexpr uint32_t destination_base = UNTILIZER_SCALAR_CT_ARGS;
-    static constexpr uint32_t consumer_base = destination_base + get_compile_time_arg_val(10);  // num_destinations
+    static constexpr uint32_t consumer_base = destination_base + get_compile_time_arg_val(6);  // num_destinations
     static constexpr uint32_t accessor_base =
-        consumer_base + UNT_PEER_WORDS * get_compile_time_arg_val(14);  // num_consumers
+        consumer_base + UNT_PEER_WORDS * get_compile_time_arg_val(10);  // num_consumers
 
     // One accessor per DRAM buffer the program factory chained on, in that order.
     static constexpr auto dram_in_args = TensorAccessorArgs<accessor_base>();

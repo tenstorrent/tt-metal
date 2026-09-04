@@ -38,10 +38,10 @@ struct Dram {
 
 Dram open_dram() {
     return Dram{
-        TensorAccessor(ct.dram_in_args, ct.dram_in_base_addr),
-        TensorAccessor(ct.dram_counts_args, ct.dram_counts_base_addr),
-        TensorAccessor(ct.dram_region_args, ct.dram_region_base_addr),
-        TensorAccessor(ct.dram_expert_offsets_args, ct.dram_expert_offsets_base_addr)};
+        TensorAccessor(ct.dram_in_args, get_arg_val<uint32_t>(cmbf2d::UNT_RT_DRAM_IN)),
+        TensorAccessor(ct.dram_counts_args, get_arg_val<uint32_t>(cmbf2d::UNT_RT_DRAM_COUNTS)),
+        TensorAccessor(ct.dram_region_args, get_arg_val<uint32_t>(cmbf2d::UNT_RT_DRAM_REGION)),
+        TensorAccessor(ct.dram_expert_offsets_args, get_arg_val<uint32_t>(cmbf2d::UNT_RT_DRAM_EXPERT_OFFSETS))};
 }
 
 cmbf2d::ControlTables read_control_tables(const Dram& dram) {

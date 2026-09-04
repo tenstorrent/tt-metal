@@ -378,7 +378,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         rdr.defines.emplace_back("TILE", dispatched_is_tiled(tensor_args) ? "1" : "0");
         rdr.compile_time_args =
             cmbf2d::ReaderCtArgs(
-                args, tensor_args, coord, self, work, l1, plan, dram, untilizers_for_stream(groups, stream, sems, l1))
+                args, tensor_args, coord, self, work, l1, plan, untilizers_for_stream(groups, stream, sems, l1))
                 .to_ct_word_arr();
         for (auto* buf : {dram.in, dram.out, dram.fwd, dram.meta, dram.counts, dram.region, dram.expert_offsets}) {
             tt::tt_metal::TensorAccessorArgs(buf).append_to(rdr.compile_time_args);
@@ -387,7 +387,11 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
             .noc = tt::tt_metal::NOC::NOC_0,
         };
-        desc.kernels.push_back(std::move(rdr));  // no fabric connection => no rt args
+        // Buffer bindings, in cmbf2d::ReaderRtArg order, so the framework rewrites them on a cache hit.
+        rdr.emplace_runtime_args(
+            self.worker_logical,
+            {dram.in, dram.out, dram.fwd, dram.meta, dram.counts, dram.region, dram.expert_offsets});
+        desc.kernels.push_back(std::move(rdr));
 
         std::vector<uint32_t> rt_raw{1u};  // num_connections
         tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
@@ -432,8 +436,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             kernel.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
             kernel.core_ranges = core;
             kernel.compile_time_args =
-                cmbf2d::UntilizerCtArgs(args, tensor_args, coord, work_by_stream.at(first), plan, dram)
-                    .to_ct_word_arr();
+                cmbf2d::UntilizerCtArgs(args, tensor_args, coord, work_by_stream.at(first), plan).to_ct_word_arr();
             for (auto* buf : {dram.in, dram.counts, dram.region, dram.expert_offsets}) {
                 tt::tt_metal::TensorAccessorArgs(buf).append_to(kernel.compile_time_args);
             }
@@ -441,6 +444,8 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
                 .noc = tt::tt_metal::NOC::NOC_0,
             };
+            // Buffer bindings, in cmbf2d::UntilizerRtArg order, so the framework rewrites them on a cache hit.
+            kernel.emplace_runtime_args(groups[g][j].logical, {dram.in, dram.counts, dram.region, dram.expert_offsets});
             desc.kernels.push_back(std::move(kernel));
 
             tt::tt_metal::KernelDescriptor untilize;
