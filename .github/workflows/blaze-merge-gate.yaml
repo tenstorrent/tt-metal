@@ -235,11 +235,9 @@ jobs:
                   exit 0
                   ;;
                 skipped)
-                  # Every job guarded off (eg. a "[SKIP CI]" title on the blaze
-                  # side). Nothing ran, so there is nothing to fail on.
-                  echo "::notice::tt-blaze CI was skipped: ${run_url}"
-                  echo "- ⏭️ tt-blaze — skipped ([run ${run_id}](${run_url}))" >> "$GITHUB_STEP_SUMMARY"
-                  exit 0
+                  echo "::error::tt-blaze CI was skipped, so the required merge-gate validation did not run. ${run_url}"
+                  echo "- ❌ tt-blaze — skipped; no validation ran ([run ${run_id}](${run_url}))" >> "$GITHUB_STEP_SUMMARY"
+                  exit 1
                   ;;
                 *)
                   echo "::error::tt-blaze CI concluded '${conclusion}' — this tt-metal change breaks tt-blaze, or the blaze run itself is broken. ${run_url}"
