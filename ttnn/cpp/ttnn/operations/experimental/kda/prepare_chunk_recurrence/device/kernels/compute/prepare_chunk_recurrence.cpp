@@ -287,6 +287,68 @@ inline void multiply_by_column(DataflowBuffer& a, DataflowBuffer& col, DataflowB
 // sum(N^i, i=0..15) = (I+N+N^2+N^3)(I+N^4+N^8+N^12), then form the bottom-left block
 // D^-1 N_21 A^-1. Here N is the negated strictly-lower Akk, so (I-N)^-1 is the requested T_inv.
 // The diagonal blocks share every full-tile operation, for eight matmuls total.
+inline void copy_tile_to_buffer(DataflowBuffer& src, uint32_t src_tile, DataflowBuffer& o) {
+    const uint32_t src_id = src.get_id();
+    const uint32_t o_id = o.get_id();
+
+    o.reserve_back(1);
+    pack_reconfig_data_format(o_id);
+    reconfig_data_format_srca(src_id);
+    copy_init(src_id);
+    tile_regs_acquire();
+    copy_tile(src_id, src_tile, 0);
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_tile(0, o_id, 0);
+    tile_regs_release();
+    o.push_back(1);
+}
+
+// TEMPORARY, pending #55420. #54937 replaced this inverse with invert_block_ps4, which is exact in
+// algebra but loses conditioning at Kimi-K3's real decay magnitudes: 10 of 18 KDA layers fall below
+// 0.999 against the torch reference on a single chip (worst 0.7508), and the model goes uncorrelated
+// from layer 5 on. Horner never materializes a power above N^1, which is why it survives the same
+// inputs, at 30 tile matmuls per chunk instead of 8. Delete this and the call below when #55420 lands.
+inline void invert_horner(
+    DataflowBuffer& negative_strict_lower_akk,
+    uint32_t tile,
+    DataflowBuffer& inverse,
+    DataflowBuffer& identity,
+
+    // intermediate
+    DataflowBuffer& scratch_0,
+    DataflowBuffer& scratch_1,
+    DataflowBuffer& scratch_2,
+    DataflowBuffer& product) {
+    DataflowBuffer& matrix = scratch_2;
+    DataflowBuffer* total = &scratch_0;
+    DataflowBuffer* next_total = &scratch_1;
+
+    copy_tile_to_buffer(negative_strict_lower_akk, tile, matrix);
+    matrix.wait_front(1);
+
+    // S <- I + N, the first partial sum. N stays resident for every later step, so it is never
+    // popped inside the loop the way the doubling path pops its running power.
+    elementwise_binary<ElementwiseBinaryOp::Add>(identity, matrix, *total, 1);
+    total->wait_front(1);
+
+    for (uint32_t step = 0; step < 30; ++step) {
+        matmul_blocks<1, 1, 1, false>(matrix, *total, product);
+        product.wait_front(1);
+        elementwise_binary<ElementwiseBinaryOp::Add>(identity, product, *next_total, 1);
+        next_total->wait_front(1);
+        total->pop_front(1);
+        product.pop_front(1);
+        DataflowBuffer* consumed = total;
+        total = next_total;
+        next_total = consumed;
+    }
+
+    copy_tile_to_buffer(*total, 0, inverse);
+    total->pop_front(1);
+    matrix.pop_front(1);
+}
+
 inline void invert_block_ps4(
     DataflowBuffer& negative_strict_lower_akk,
     DataflowBuffer& inverse,
@@ -599,15 +661,16 @@ inline void prepare_t_inv(
         lower_akk.pop_front(chunk_matrix_tiles);
     }
 
-    invert_block_ps4(
+    invert_horner(
         akk,
+        0,
         t_inv,
         identity,
-        block_masks,
-        /*inner_sum=*/scratch_0,
-        /*n2=*/scratch_1,
-        /*n3=*/scratch_2,
-        /*outer_sum=*/product);
+        /*power_workspace=*/scratch_0,
+        /*sum_workspace=*/scratch_1,
+        /*next_power_workspace=*/scratch_2,
+        product);
+    akk.pop_front(chunk_matrix_tiles);
 }
 
 template <uint32_t Ct, uint32_t Kt>
