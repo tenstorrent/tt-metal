@@ -23,8 +23,20 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensor, CompressedTensorAssigner
-from models.demos.deepseek_v3_b1.compressed_tensor.tile_utils import ttnn_quantize_fn
 from models.demos.deepseek_v3_b1.micro_ops.dram_streaming_matmul_compressed.op import DRAMStreamingMatmulCompressed
+from models.demos.deepseek_v3_b1.tests.unit_tests.compressed_determinism_utils import (
+    DET_ITERS,
+    FMT_TO_IDX,
+    K27_FORMAT_RATIOS,
+    K27_FORMATS,
+    K27_HIDDEN,
+    K27_MOE_INTERMEDIATE,
+    K27_PER_DEVICE_MOE_N,
+    assert_tile_counts,
+    build_stream_format_pattern,
+    describe_mismatch,
+    quantize_per_tile,
+)
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_dram_streaming_matmul import shuffle_tensor_tiles
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_matmul_custom_compressed import scale_tiles_for_mixed_formats
 from models.demos.deepseek_v3_b1.weights.transforms.moe import shuffle_dram_assignment as _shuffle_dram_assignment
@@ -886,93 +898,31 @@ def test_dram_matmul_bspm_cache_roundtrip(device, tmp_path):
 # per-core metadata and re-allocates the in1 CB backing tensor on every call, so each
 # iteration is a full host-side program build + device run, not a replay of one program.
 
-_FMT_TO_IDX = {fmt: idx for idx, fmt in enumerate(["bfp8", "bfp4", "bfp2", "bfp0"])}
+# ======================================================================================
+# Determinism tests with an explicitly specified tile-format distribution
+# ======================================================================================
+#
+# The tests above get their tile formats from CompressedTensorAssigner, which picks a
+# format per tile from the data. That makes the bfp4/bfp2/bfp0 mix data-dependent and
+# unrepeatable across shapes, which is no good for chasing non-determinism.
+#
+# The helpers in compressed_determinism_utils let a test state the format of every tile
+# directly. This file adds the one piece specific to the DRAM path: lifting a stream-order
+# pattern into the tile order that the shuffled DRAM tensor uses.
+#
+# Note on what an iteration covers: DRAMStreamingMatmulCompressed.op() rebuilds its
+# per-core metadata and re-allocates the in1 CB backing tensor on every call, so each
+# iteration is a full host-side program build + device run, not a replay of one program.
+#
+# Two knobs used by the tt-blaze port of this kernel have no equivalent in
+# DRAMStreamingMatmulCompressed, so the tests here cannot reproduce them:
+# k_parallel_per_bank=2 (gate/up split K across the two cores in a bank; the metal op only
+# splits N) and subblock_n=2 (down groups two N columns per streamed block; the metal op
+# walks one N column at a time). Both change the DRAM stream order, so they are a genuine
+# coverage gap on the metal op, not an oversight here. They are covered on the blaze side.
 
-# Shape used by the determinism tests — the DeepSeek R1 expert gate_proj shape, matching
-# the mixed-format tests above. Override for a quicker local run.
+# Shape used by the general determinism tests. Override for a quicker local run.
 _DET_M, _DET_K, _DET_N = 1, 7168, 2048
-
-# Iterations per case. Bump for a longer soak: DRAM_MM_DETERMINISM_ITERS=500 pytest ...
-_DET_ITERS = int(os.environ.get("DRAM_MM_DETERMINISM_ITERS", "50"))
-
-# --- Kimi K2.7-Code production configuration -------------------------------------
-#
-# Taken from a real 16-host K2.7-Code decode run (tt-blaze `blaze.models.cli`, BSPM
-# `target_3_5_32x32_native`). Blaze runs its own port of this kernel rather than
-# DRAMStreamingMatmulCompressed, but both consume the same per-tile format metadata and
-# the same DRAM stream order, so the shapes and the format mix carry over.
-#
-# The K2.7 MoE makes three DRAM compressed-matmul calls per layer, at two distinct
-# geometries (moe_intermediate 2048 is TP-sharded over 8 devices):
-#   gate, up:  K=7168, N=256  per device, subblock_k=56, one N tile column per core
-#   down:      K=256,  N=7168 per device, subblock_k=8,  14 N tile columns per core
-#
-# Two blaze-side knobs have no equivalent in DRAMStreamingMatmulCompressed, so the tests
-# below cannot reproduce them: k_parallel_per_bank=2 (gate/up split K across the two cores
-# in a bank; the metal op only splits N) and subblock_n=2 (down groups two N columns per
-# streamed block; the metal op walks one N column at a time). Both change the DRAM stream
-# order, so they are a genuine coverage gap on the metal op, not an oversight here.
-_K27_HIDDEN = 7168
-_K27_MOE_INTERMEDIATE = 2048
-_K27_MOE_TP = 8
-_K27_PER_DEVICE_MOE_N = _K27_MOE_INTERMEDIATE // _K27_MOE_TP  # 256
-
-# Measured over all 384 experts x 3 projections of layer 1 of the shipped
-# target_3_5_32x32_native map: bfp4 54.95 %, bfp2 41.08 %, bfp0 3.96 %, bfp8 0 %.
-# The uniform "alternate"/"random" patterns give bfp0 ~8x its production share, so a mix
-# drawn at these ratios is the one that resembles what the model actually streams.
-_K27_FORMATS = ["bfp4", "bfp2", "bfp0"]
-_K27_FORMAT_RATIOS = [0.5495, 0.4108, 0.0396]
-
-
-def build_stream_format_pattern(num_stream_tiles, formats, pattern, period=2, seed=0, ratios=None):
-    """Build the per-tile format code sequence for one DRAM shard, in kernel stream order.
-
-    Stream order within a shard is column-major: for each N column, the Kt tiles are
-    contiguous. Tiles are consumed by the compute kernel in pairs (see ``pack_tile_pairs``),
-    so where a format change lands relative to a pair boundary is what the ``pattern``
-    argument controls:
-
-    - ``"alternate"``: format changes on every tile — half the changes fall *inside* a pair.
-    - ``"pairs"``:     format changes every 2 tiles — each pair is homogeneous, changes only
-                       ever land on a pair boundary.
-    - ``"blocks"``:    format changes every ``period`` tiles (pass ``period=subblock_k`` to
-                       keep each streamed subblock single-format).
-    - ``"random"``:    seeded i.i.d. draw from ``formats``, uniform.
-    - ``"ratios"``:    seeded i.i.d. draw from ``formats`` at the probabilities in ``ratios``.
-                       Use it to match a real BSPM allocation's format mix (see
-                       ``_K27_FORMAT_RATIOS``); the uniform patterns above over-represent
-                       whichever format production uses least.
-
-    Args:
-        num_stream_tiles: Kt * per_N_tiles for one DRAM shard.
-        formats: format names to cycle through, e.g. ``["bfp4", "bfp2"]``.
-        pattern: one of "alternate", "pairs", "blocks", "random", "ratios".
-        period: run length for ``pattern="blocks"``.
-        seed: RNG seed for ``pattern="random"`` and ``pattern="ratios"``.
-        ratios: per-format probabilities for ``pattern="ratios"``, same order as ``formats``.
-
-    Returns:
-        int8 array of length ``num_stream_tiles`` holding COMPRESSED_FORMATS indices.
-    """
-    codes = np.array([_FMT_TO_IDX[f] for f in formats], dtype=np.int8)
-    i = np.arange(num_stream_tiles)
-    if pattern == "alternate":
-        return codes[i % len(codes)]
-    if pattern == "pairs":
-        return codes[(i // 2) % len(codes)]
-    if pattern == "blocks":
-        assert period >= 1, f"period must be >= 1, got {period}"
-        return codes[(i // period) % len(codes)]
-    if pattern == "random":
-        return codes[np.random.default_rng(seed).integers(0, len(codes), size=num_stream_tiles)]
-    if pattern == "ratios":
-        assert ratios is not None, 'pattern="ratios" needs a ratios argument'
-        assert len(ratios) == len(formats), f"ratios ({len(ratios)}) must match formats ({len(formats)})"
-        p = np.asarray(ratios, dtype=np.float64)
-        p = p / p.sum()
-        return codes[np.random.default_rng(seed).choice(len(codes), size=num_stream_tiles, p=p)]
-    raise ValueError(f"Unknown pattern: {pattern}")
 
 
 def stream_pattern_to_logical_assignment(stream_codes, kt, per_n_tiles, num_banks):
@@ -1014,42 +964,6 @@ def stream_pattern_to_logical_assignment(stream_codes, kt, per_n_tiles, num_bank
     return logical, shuffled
 
 
-def quantize_per_tile(tensor_f32, logical_assignment, tile_w=32):
-    """Host golden: quantize/dequantize each tile with the format its assignment names.
-
-    BFP block exponents are tile-aligned, so quantizing the whole tensor once per format
-    and then selecting per tile is equivalent to quantizing tile by tile, and far faster.
-    """
-    out = tensor_f32.clone()
-    mask_codes = np.repeat(np.repeat(logical_assignment, tile_w, axis=0), tile_w, axis=1)
-    mask_codes = torch.from_numpy(mask_codes.astype(np.int16))
-    for fmt, code in _FMT_TO_IDX.items():
-        sel = mask_codes == code
-        if not bool(sel.any()):
-            continue
-        out = torch.where(sel, ttnn_quantize_fn(tensor_f32, fmt), out)
-    return out
-
-
-def _describe_mismatch(output, reference, logical_assignment, per_core_n_tiles, tile_w=32):
-    """Localize a determinism failure to cores / tile columns / tile formats."""
-    diff = output != reference
-    bad_cols = torch.nonzero(diff.any(dim=0).flatten()).flatten().tolist()
-    bad_tile_cols = sorted({c // tile_w for c in bad_cols})
-    bad_cores = sorted({tc // per_core_n_tiles for tc in bad_tile_cols})
-    idx_to_fmt = {v: k for k, v in _FMT_TO_IDX.items()}
-    fmts_in_bad_cols = sorted(
-        {idx_to_fmt[int(code)] for tc in bad_tile_cols for code in np.unique(logical_assignment[:, tc])}
-    )
-    return (
-        f"{int(diff.sum())} / {diff.numel()} elements differ, "
-        f"max |diff| = {(output.float() - reference.float()).abs().max().item()}; "
-        f"{len(bad_tile_cols)} tile column(s) affected on core(s) {bad_cores}; "
-        f"formats present in affected columns: {fmts_in_bad_cols}; "
-        f"first affected tile columns: {bad_tile_cols[:16]}"
-    )
-
-
 def _run_determinism_case(
     device,
     formats,
@@ -1077,7 +991,7 @@ def _run_determinism_case(
     ``formats`` then only says which formats must be present.
     """
     tile_w = 32
-    num_iterations = num_iterations or _DET_ITERS
+    num_iterations = num_iterations or DET_ITERS
 
     primary_cores_list = device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
     num_banks = len(primary_cores_list)
@@ -1144,12 +1058,8 @@ def _run_determinism_case(
     # The requested mix must actually be on device, tile for tile.
     counts = ct.tile_counts
     total = logical_assignment.size
-    logger.info(f"tile counts: {counts} ({ {f: f'{100 * counts.get(f, 0) / total:.2f}%' for f in _FMT_TO_IDX} })")
-    for fmt in _FMT_TO_IDX:
-        expected = int((logical_assignment == _FMT_TO_IDX[fmt]).sum())
-        assert counts.get(fmt, 0) == expected, f"format {fmt}: packed {counts.get(fmt, 0)} tiles, expected {expected}"
-    for fmt in formats:
-        assert counts.get(fmt, 0) > 0, f"format {fmt} was requested but no tile uses it: {counts}"
+    logger.info(f"tile counts: {counts} ({ {f: f'{100 * counts.get(f, 0) / total:.2f}%' for f in FMT_TO_IDX} })")
+    assert_tile_counts(counts, logical_assignment, formats)
 
     # --- Golden, quantized with the same per-tile formats ---------------------------
     torch_expected = (torch_a.float() @ quantize_per_tile(torch_b, logical_assignment)).bfloat16()[..., :N]
@@ -1215,7 +1125,7 @@ def _run_determinism_case(
             assert passing, f"Iteration {i}: PCC vs golden failed: {pcc_message}"
             reference = output.clone()
         elif not torch.equal(output, reference):
-            divergences.append((i, _describe_mismatch(output, reference, logical_assignment, per_core_n_tiles)))
+            divergences.append((i, describe_mismatch(output, reference, logical_assignment, per_core_n_tiles)))
             # Keep going: how often it diverges, and whether it is always the same tiles,
             # is the interesting part.
 
@@ -1296,8 +1206,8 @@ def test_dram_matmul_compressed_determinism_4cores(device, formats):
 
 _K27_PROJ_CONFIGS = {
     # proj: (K, N, subblock_k, cores_per_bank) -> per_core_N tiles on an 8-bank part
-    "gate_up": (_K27_HIDDEN, _K27_PER_DEVICE_MOE_N, 56, 1),  # 1 N tile column per core
-    "down": (_K27_PER_DEVICE_MOE_N, _K27_HIDDEN, 8, 2),  # 14 N tile columns per core
+    "gate_up": (K27_HIDDEN, K27_PER_DEVICE_MOE_N, 56, 1),  # 1 N tile column per core
+    "down": (K27_PER_DEVICE_MOE_N, K27_HIDDEN, 8, 2),  # 14 N tile columns per core
 }
 
 
@@ -1307,13 +1217,13 @@ def test_dram_matmul_compressed_determinism_k27_production(device, proj):
     K, N, subblock_k, cores_per_bank = _K27_PROJ_CONFIGS[proj]
     _run_determinism_case(
         device,
-        _K27_FORMATS,
+        K27_FORMATS,
         "ratios",
         K=K,
         N=N,
         subblock_k=subblock_k,
         cores_per_bank=cores_per_bank,
-        ratios=_K27_FORMAT_RATIOS,
+        ratios=K27_FORMAT_RATIOS,
     )
 
 
@@ -1328,7 +1238,7 @@ def test_dram_matmul_compressed_determinism_k27_production_alternating(device, p
     K, N, subblock_k, cores_per_bank = _K27_PROJ_CONFIGS[proj]
     _run_determinism_case(
         device,
-        _K27_FORMATS,
+        K27_FORMATS,
         "alternate",
         K=K,
         N=N,
@@ -1370,11 +1280,11 @@ def _load_k27_bspm_assignment(proj, kt, tiles_w, require_formats, max_experts_sc
 
     tile_w = 32
     if proj == "gate_up":
-        proj_idx, full_rows, full_cols = 0, _K27_HIDDEN // tile_w, _K27_MOE_INTERMEDIATE // tile_w
+        proj_idx, full_rows, full_cols = 0, K27_HIDDEN // tile_w, K27_MOE_INTERMEDIATE // tile_w
     else:
-        proj_idx, full_rows, full_cols = 2, _K27_MOE_INTERMEDIATE // tile_w, _K27_HIDDEN // tile_w
+        proj_idx, full_rows, full_cols = 2, K27_MOE_INTERMEDIATE // tile_w, K27_HIDDEN // tile_w
 
-    wanted = [_FMT_TO_IDX[f] for f in require_formats]
+    wanted = [FMT_TO_IDX[f] for f in require_formats]
     for expert_idx in range(max_experts_scanned):
         full = load_bspm_for_expert(
             str(bspm_path), expert_idx=expert_idx, proj_idx=proj_idx, tile_rows=full_rows, tile_cols=full_cols
@@ -1398,11 +1308,11 @@ def test_dram_matmul_compressed_determinism_k27_bspm(device, proj):
     num_banks = device.dram_grid_size().x
     n_padded = pad_to_dram_banks(N, tile_w, tile_w * num_banks * cores_per_bank)
     assignment = _load_k27_bspm_assignment(
-        proj, kt=K // tile_w, tiles_w=n_padded // tile_w, require_formats=_K27_FORMATS
+        proj, kt=K // tile_w, tiles_w=n_padded // tile_w, require_formats=K27_FORMATS
     )
     _run_determinism_case(
         device,
-        _K27_FORMATS,
+        K27_FORMATS,
         "bspm",
         K=K,
         N=N,
