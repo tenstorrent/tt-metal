@@ -266,11 +266,18 @@ MISTRAL4_UNTRACED_MAX_OUT_OF_BAND = 1
 # carries fixed overhead that does not scale with the window and understates throughput by 17-30%
 # (see test_mistral4_prefill_transformer_chunked_no_pcc's docstring).
 MISTRAL4_TRACED_BASELINE_CHUNK_TIMES_S: dict[tuple[int, int, int], list[float]] = {
-    # Deliberately empty: not gateable yet. Over seven CI runs the depth-independent cost held to
-    # +/-1% while the per-unit-KV cost -- the MLA/SDPA term this row exists to catch -- spanned 65%,
-    # so any fixed baseline fails the next run. AICLK, topology, device count and code are ruled
-    # out; within a session it repeats to 0.003 s, so it is per-session. Arm this once that is
-    # understood; the untraced twin below shows the machinery works.
+    # Deliberately empty: not gateable on a pool-scheduled leg. Over seven CI runs the
+    # depth-independent cost held to +/-1% while the per-unit-KV cost -- the MLA/SDPA term this row
+    # exists to catch -- came out in two clusters, ~7.8 and ~11-13 ms, a 1.5x split.
+    #
+    # It is the BOARD, not the run: two back-to-back runs on one galaxy reproduce b to 0.13%
+    # (7.76 / 7.75), and that box sits in the fast cluster. AICLK (1343 MHz everywhere), fabric
+    # mapping (byte-identical), topology, device count and code are all ruled out. So bh_sc1 holds at
+    # least two performance classes of galaxy and this leg gets a random one -- no absolute per-chunk
+    # baseline can survive that, and the same applies to any other perf row on the pool.
+    #
+    # Arm this once the leg is pinned to one class (or the pool is made homogeneous); the untraced
+    # twin below shows the machinery works.
     # (36, 20, 10): [...],
 }
 MISTRAL4_UNTRACED_BASELINE_CHUNK_TIMES_S: dict[tuple[int, int, int], list[float]] = {
