@@ -69,6 +69,7 @@ def _run_case(
     dilation=(1, 1),  # max pool only
     ceil_mode=False,
     dtype="bf16",  # "bf16" | "bf8b" (bf8b forces TILE layout; golden runs on the quantized input)
+    out_layout="rm",  # "rm" | "tile" output layout (tiled output runs single-lane by policy)
     perf_label=None,  # perf mode: skip the golden check, run PERF_ITERS labeled iterations instead
 ):
     pattern = pattern or PATTERN
@@ -140,7 +141,8 @@ def _run_case(
         + (f" pattern={pattern}" if pattern != PATTERN else "")
         + (f" d={dilation}" if dilation != [1, 1] else "")
         + (" ceil" if ceil_mode else "")
-        + (f" {dtype}" if dtype != "bf16" else ""),
+        + (f" {dtype}" if dtype != "bf16" else "")
+        + (" out=TILE" if out_layout == "tile" else ""),
         flush=True,
     )
 
@@ -163,6 +165,7 @@ def _run_case(
             stride=stride,
             padding=padding,
             ceil_mode=ceil_mode,
+            output_layout=ttnn.TILE_LAYOUT if out_layout == "tile" else ttnn.ROW_MAJOR_LAYOUT,
             **(dict(dilation=dilation) if pool == "max" else {}),  # avg_pool2d takes no dilation
         )
         ttnn.synchronize_device(device)
@@ -377,6 +380,48 @@ UNIT_CASES = [
     ("stick1_1core_T1", dict(in_h=8, in_w=4, kernel=(8, 4), stride=(1, 1), padding=(0, 0), cores=1)),
     ("sticks2_k3_s4_2cores_T2", dict(in_h=8, in_w=8, stride=(4, 4), cores=2)),  # 2 output sticks per core
     ("sticks6_b3_1core_T2", dict(batch=3, in_h=8, in_w=4, stride=(4, 4), cores=1)),  # 6 output sticks
+    # TILE output layout runs single-lane by policy (the tiled-output path is not lane-aware: at
+    # num_threads=4 DFB_FAST_TILIZE has in_ntiles_c entries -> TT_FATAL for C<128, hang at C=128;
+    # found by resnet50/quasar/tests/ops/test_max_pool2d_correctness.py on the ZeBu emulator).
+    (
+        "tiled_out_max_k3x3_T1",
+        dict(
+            out_layout="tile",
+            sim_skip="craq-sim UnimplementedFunctionality: tensix_execute_pacr_stride (tiled-output pack)",
+        ),
+    ),
+    (
+        "tiled_out_max_k3x3_c128_T1",
+        dict(
+            channels=128,
+            in_h=8,
+            in_w=4,
+            out_layout="tile",
+            sim_skip="craq-sim UnimplementedFunctionality: tensix_execute_pacr_stride (tiled-output pack)",
+        ),
+    ),
+    (
+        "tiled_out_avg_k3x3_T1",
+        dict(
+            pool="avg",
+            stride=(1, 1),
+            padding=(0, 0),
+            out_layout="tile",
+            sim_skip="craq-sim UnimplementedFunctionality: tensix_execute_pacr_stride (tiled-output pack)",
+        ),
+    ),
+    (
+        "tiled_out_avg_k7x7_large_T1",
+        dict(
+            pool="avg",
+            kernel=(7, 7),
+            stride=(2, 2),
+            padding=(0, 0),
+            cores=1,
+            out_layout="tile",
+            sim_skip="craq-sim UnimplementedFunctionality: tensix_execute_pacr_stride (tiled-output pack)",
+        ),
+    ),
     ("bf8b_k3x3", dict(dtype="bf8b", cores=1, sim_skip="Metal-2.0 DFB bfp8 unsupported (program_spec.cpp:1731)")),
     (
         "bf8b_k7x7_large",
