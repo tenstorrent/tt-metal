@@ -6,6 +6,8 @@ Add `-e` or `--export-compile-commands` to `./build_metal.sh` to generate `compi
 
 Kernels are compiled and linked in runtime with `runtime/sfpi/compiler/bin/riscv32-tt-elf-g++`, and they naturally aren't part of the CMake project, so code indexing doesn't work there.
 
+> Looking for **static analysis (clang-tidy)** on kernel code rather than IDE indexing? See [kernel-clang-tidy.md](./kernel-clang-tidy.md) — it reuses the same capture idea as approach 2 below, but keeps the real wrapper TUs (so TRISC roles stay distinct) and translates the flags so clang can genuinely parse the code.
+
 ## 1. Create a fake CMake target to enable kernel code indexing
 Add `--enable-fake-kernels-target` to `build_metal.sh`
 

@@ -66,6 +66,16 @@ on:
         type: string
         default: ""
         description: "Discriminator for the AI summaries when the calling workflow is invoked more than once per run"
+      enable-kernel-clang-tidy:
+        required: false
+        type: boolean
+        default: false
+        description: "EXPERIMENT: capture the target group's runtime JIT kernel compiles with bear and run clang-tidy on them post-hoc. Non-blocking; findings are uploaded as an artifact. Default off, no overhead when disabled."
+      clang-tidy-target-group:
+        required: false
+        type: string
+        default: ""
+        description: "Exact matrix test-group name to capture + lint (e.g. 'ttnn eltwise group 1'). Required when enable-kernel-clang-tidy is true."
     outputs:
       matrix:
         description: "Filtered matrix of legs that ran (consumed by ai_summary/run for INFRA_FAILURE reconciliation)"
@@ -316,6 +326,46 @@ jobs:
           fi
           echo "perf_ready=$perf_ready" >> "$GITHUB_OUTPUT"
 
+      # EXPERIMENT (kernel clang-tidy, PROTOTYPE — NOT a merge gate): the steps guarded by
+      # inputs.enable-kernel-clang-tidy capture the real runtime JIT kernel compiles of ONE
+      # matrix leg with `bear` and run clang-tidy on them after the tests finish. Coverage is
+      # exactly the kernels that leg's pytest run JIT-compiled — real compile-time args, real
+      # generated headers from the tt-metal-cache dir — no more, no less. Every step is
+      # best-effort / continue-on-error and findings are uploaded as an artifact rather than
+      # failing the job. See tech_reports/code-indexing/kernel-clang-tidy.md. All steps are
+      # skipped (zero overhead) when the experiment is disabled.
+      - name: Install bear and clang-tidy (kernel clang-tidy)
+        id: kernel-tidy-tools
+        if: ${{ inputs.enable-kernel-clang-tidy && !startsWith(matrix.test-group.sku, 'sim_') && matrix.test-group.name == format('{0} [{1}]', inputs.clang-tidy-target-group, matrix.test-group.sku) }}
+        continue-on-error: true
+        run: |
+          # Best-effort: if bear or clang-tidy can't be installed, leave a clear signal and
+          # let the tests run un-instrumented rather than failing the leg.
+          tidy_ready=false
+          if ! command -v bear >/dev/null 2>&1; then
+            apt-get update || true
+            apt-get install -y bear || true
+          fi
+          # Any reasonably recent clang-tidy works; the CI/dev images ship one for host lint.
+          tidy_bin=""
+          for v in 21 20 19 18 17 ""; do
+            cand="clang-tidy${v:+-$v}"
+            if command -v "$cand" >/dev/null 2>&1; then tidy_bin="$cand"; break; fi
+          done
+          if [ -z "$tidy_bin" ]; then
+            apt-get update || true
+            apt-get install -y clang-tidy || true
+            command -v clang-tidy >/dev/null 2>&1 && tidy_bin="clang-tidy"
+          fi
+          if command -v bear >/dev/null 2>&1 && [ -n "$tidy_bin" ]; then
+            tidy_ready=true
+            echo "kernel clang-tidy tools ready: $(bear --version | head -1), $($tidy_bin --version | sed -n 2p)"
+          else
+            echo "::warning::bear and/or clang-tidy unavailable; kernel clang-tidy capture will be skipped."
+          fi
+          echo "tidy_ready=$tidy_ready" >> "$GITHUB_OUTPUT"
+          echo "KERNEL_TIDY_BIN=$tidy_bin" >> "$GITHUB_ENV"
+
       - name: ${{ matrix.test-group.name }} tests
         if: ${{ !startsWith(matrix.test-group.sku, 'sim_') }}
         timeout-minutes: ${{ inputs.timeout-minutes-override > 0 && inputs.timeout-minutes-override || matrix.test-group.timeout }}
@@ -366,6 +416,26 @@ jobs:
                 echo "::warning::perf recording not available; running '$TEST_GROUP_NAME' without profiling."
               fi
               RUNNER=(bash -c "$TEST_GROUP_CMD")
+            fi
+
+            # EXPERIMENT (kernel clang-tidy): when this leg is the selected target, wrap the
+            # run in `bear` to capture every runtime JIT compiler invocation. Two env vars are
+            # required for the capture to see anything:
+            #   TT_METAL_FORCE_JIT_COMPILE=1 — a JIT cache hit spawns no compiler process
+            #     (JitBuildState::need_compile), so bear would record nothing for cached kernels.
+            #   CCACHE_DISABLE=1 — this job enables kernel ccache (setup-job
+            #     enable-kernel-ccache), and a ccache hit also skips the real compiler exec;
+            #     disabling makes ccache a pass-through so the compile still happens and is
+            #     observable. Both make this leg slower; that's inherent to the capture.
+            KERNEL_TIDY_THIS="${{ inputs.enable-kernel-clang-tidy && matrix.test-group.name == format('{0} [{1}]', inputs.clang-tidy-target-group, matrix.test-group.sku) }}"
+            KERNEL_TIDY_READY="${{ steps.kernel-tidy-tools.outputs.tidy_ready }}"
+            if [ "$KERNEL_TIDY_THIS" = "true" ] && [ "$KERNEL_TIDY_READY" = "true" ]; then
+              echo "kernel clang-tidy capture ENABLED for '$TEST_GROUP_NAME'"
+              export TT_METAL_FORCE_JIT_COMPILE=1
+              export CCACHE_DISABLE=1
+              RUNNER=(bear --output /work/kernel_tidy_raw_compile_commands.json -- "${RUNNER[@]}")
+            elif [ "$KERNEL_TIDY_THIS" = "true" ]; then
+              echo "::warning::kernel clang-tidy tools not ready; running '$TEST_GROUP_NAME' without capture."
             fi
 
             python3 tools/tt-power-sidecar/tt_power_sidecar.py \
@@ -420,6 +490,52 @@ jobs:
                 eval "$cmd --lf --lfnf=all --tb=long -v" || true
                 exit 1
               '
+
+      # EXPERIMENT (kernel clang-tidy): translate the captured SFPI-GCC compile commands into
+      # clang-compatible ones and run clang-tidy over them. Non-blocking by design
+      # (continue-on-error): this is an exploratory prototype riding on real but partial
+      # coverage (whatever kernels this pytest run happened to JIT-compile), not a merge gate.
+      # The generated headers referenced by the commands live in the durable tt-metal-cache
+      # dir, which persists in this container across steps — nothing is cleaned in between.
+      - name: Run clang-tidy on captured JIT kernel compiles (kernel clang-tidy)
+        if: ${{ !cancelled() && inputs.enable-kernel-clang-tidy && !startsWith(matrix.test-group.sku, 'sim_') && matrix.test-group.name == format('{0} [{1}]', inputs.clang-tidy-target-group, matrix.test-group.sku) && steps.kernel-tidy-tools.outputs.tidy_ready == 'true' }}
+        continue-on-error: true
+        timeout-minutes: 45
+        run: |
+          if [ ! -s /work/kernel_tidy_raw_compile_commands.json ]; then
+            echo "::warning::no kernel compile commands captured (bear output missing/empty); skipping clang-tidy."
+            exit 0
+          fi
+          python3 scripts/build_kernel_clang_tidy_commands.py \
+            --input /work/kernel_tidy_raw_compile_commands.json \
+            --output-dir /work/kernel_tidy \
+            --clang-tidy "$KERNEL_TIDY_BIN" \
+            --config-file "$PWD/tt_metal/jit_build/kernel_clang_tidy/.clang-tidy" \
+            --run --jobs 8 | tee /work/kernel_tidy/summary.txt || true
+          {
+            echo '<details><summary>Kernel clang-tidy (prototype, non-blocking)</summary>'
+            echo ''
+            echo '```'
+            cat /work/kernel_tidy/summary.txt 2>/dev/null || echo "no summary produced"
+            echo '```'
+            echo ''
+            echo '</details>'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload kernel clang-tidy findings (kernel clang-tidy)
+        if: ${{ !cancelled() && inputs.enable-kernel-clang-tidy && !startsWith(matrix.test-group.sku, 'sim_') && matrix.test-group.name == format('{0} [{1}]', inputs.clang-tidy-target-group, matrix.test-group.sku) }}
+        continue-on-error: true
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: kernel-clang-tidy-${{ matrix.test-group.name }}
+          # /docker-job/ is the host-side mount of the container's /work/ directory.
+          path: |
+            ${{ github.workspace }}/docker-job/kernel_tidy_raw_compile_commands.json
+            ${{ github.workspace }}/docker-job/kernel_tidy/compile_commands.json
+            ${{ github.workspace }}/docker-job/kernel_tidy/findings.txt
+            ${{ github.workspace }}/docker-job/kernel_tidy/summary.txt
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Upload power report
         if: ${{ !cancelled() && !startsWith(matrix.test-group.sku, 'sim_') }}
