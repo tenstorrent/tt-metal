@@ -165,10 +165,16 @@ void kernel_main() {
     // if max out sticks is non-zero then this will be used as the number of out sticks for every core
     // otherwise the runtime args are referenced for core-specific number of out sticks, for Pool2D
     // runtime args are used while for grid sample the max out sticks is set
-    uint32_t num_out_sticks_per_thread =
-        max_out_sticks_per_core ? max_out_sticks_per_core : get_arg(args::out_nhw_per_thread);
-    // Whole-cluster stick count, needed by the tiled-output tile-boundary math below.
-    const uint32_t num_out_sticks_this_cluster = num_out_sticks_per_thread * get_num_threads();
+    const uint32_t num_out_sticks_this_cluster =
+        max_out_sticks_per_core ? max_out_sticks_per_core : get_arg(args::out_nhw_this_core);
+    // This lane's share. The reader deals sticks round-robin (stick i -> lane i % T), so lane t owns
+    // quotient + 1 sticks for t < sticks % T and quotient otherwise; a lane past the stick count runs
+    // zero iterations (1 stick/core at T=4 leaves lanes 1..3 idle). The thread count never has to
+    // divide the stick count. get_num_threads()/get_my_thread_id() are 1/0 off Quasar.
+    const uint32_t num_threads = get_num_threads();
+    const uint32_t num_out_sticks_per_thread =
+        num_out_sticks_this_cluster / num_threads +
+        (get_my_thread_id() < num_out_sticks_this_cluster % num_threads ? 1u : 0u);
     uint32_t last_tile_height =
         num_out_sticks_this_cluster % TILE_HEIGHT == 0 ? TILE_HEIGHT : num_out_sticks_this_cluster % TILE_HEIGHT;
 
