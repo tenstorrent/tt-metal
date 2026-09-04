@@ -10,7 +10,7 @@
 #include <utility>
 
 namespace tt::umd {
-class TlbWindow;
+class IoWindow;
 }
 
 namespace tt::tt_metal::distributed {
@@ -144,7 +144,7 @@ public:
      * @param fifo_size Size of the circular FIFO buffer in bytes. Must be PCIe-aligned.
      * @param config_buffer_address LIM address on the sender L2CPU for the socket metadata.
      *                              Must be L1-aligned, at least required_config_buffer_size()
-     *                              bytes, and within the L2CPU's static TLB window.
+     *                              bytes, and within the L2CPU's LIM window.
      */
     D2HSocket(
         MeshDevice& mesh_device, const MeshCoreCoord& sender_l2cpu, uint32_t fifo_size, uint32_t config_buffer_address);
@@ -384,7 +384,7 @@ private:
     uint32_t config_buffer_address_ = 0;
     uint32_t pcie_alignment_ = 0;
     uint32_t bytes_acked_device_offset_ = 0;
-    tt::umd::TlbWindow* sender_core_tlb_ = nullptr;
+    std::unique_ptr<tt::umd::IoWindow> sender_core_window_;
     std::shared_ptr<tt::tt_metal::experimental::PinnedMemory> pinned_memory_ = nullptr;
     std::shared_ptr<uint32_t[]> host_buffer_ = nullptr;
     uint32_t* bytes_sent_ptr_ = nullptr;
