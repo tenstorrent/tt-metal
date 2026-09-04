@@ -130,30 +130,23 @@ FactoryParameters get_factory_parameters(
     uint32_t in_h,
     uint32_t in_w,
     const Layout& output_layout,
-    bool single_reader_stream,
-    uint32_t out_nhw_per_core_gcd) {
+    bool single_reader_stream) {
     uint32_t multi_buffering_factor = 2;
     bool split_reader = !single_reader_stream;
     TT_FATAL((split_reader && return_indices) || !return_indices, "split_reader must be true for MPWI");
     const bool is_quasar = tt::tt_metal::hal::get_arch() == tt::ARCH::QUASAR;
     // SPMD threads per cluster (reader AND compute KernelSpecs — symmetric STRIDED pairs producer
     // thread i with consumer thread i, giving each (DM, NEO) team a private lane). Gen1 stays 1.
-    // Sticks are dealt whole to lanes, so the count must divide every core's output stick count:
-    // take the largest legal count (4, 2, 1) that does. Shapes with too few sticks per core (a
-    // batch-1 global avg pool is 1 stick/core) run single-lane instead of failing; the factory
-    // still TT_FATALs at the division site if this invariant is ever broken.
+    // Any per-core stick count is legal: the reader deals sticks round-robin (stick i -> lane i % T)
+    // and each compute lane derives its own share (quotient, +1 for the first sticks % T lanes), so
+    // a remainder just leaves the tail lanes with one stick fewer -- or idle, for shapes with fewer
+    // sticks than lanes (a batch-1 global avg pool is 1 stick/core). The lane count never degrades.
     // TILE output stays single-lane (deliberate gap, not a shape accident): the tiled-output path
     // keeps a 32-stick tilize accumulation across sticks and sizes DFB_FAST_TILIZE at in_ntiles_c
     // entries, neither of which is lane-aware -- at num_threads=4 it TT_FATALs on the DFB entry
     // count for in_ntiles_c < 4 and hangs otherwise (seen on the ZeBu emulator, 2026-09-04).
     const bool tiled_output = output_layout == Layout::TILE;
-    const uint32_t max_threads_per_cluster = is_quasar && !return_indices && !tiled_output ? 4 : 1;
-    uint32_t num_threads_per_cluster = max_threads_per_cluster;
-    if (out_nhw_per_core_gcd != 0) {
-        while (out_nhw_per_core_gcd % num_threads_per_cluster != 0) {
-            num_threads_per_cluster /= 2;
-        }
-    }
+    const uint32_t num_threads_per_cluster = is_quasar && !return_indices && !tiled_output ? 4 : 1;
 
     // For block float formats (BFLOAT8_B, BFLOAT4_B), convert to BFLOAT16 for buffer size calculations
     // since block float formats don't have a fixed datum size per element (they use block compression)

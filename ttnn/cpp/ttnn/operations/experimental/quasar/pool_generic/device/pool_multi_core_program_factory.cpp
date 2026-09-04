@@ -32,7 +32,6 @@
 #include <cstdint>
 #include <filesystem>
 #include <limits>
-#include <numeric>
 #include <optional>
 #include <string>
 #include <utility>
@@ -573,8 +572,9 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
     const uint32_t bf16_scalar = get_bf16_pool_scalar(pool_type, kernel_h, kernel_w, divisor_override);
     const uint32_t bf16_init_value = get_bf16_pool_init_value(pool_type);
 
-    // Output sticks owned by each core (mirrors the legacy per-core loop). Used twice: here for the
-    // thread-count policy (the count must divide every core's sticks) and below for the per-core RTAs.
+    // Output sticks owned by each core (mirrors the legacy per-core loop); the compute RTA. The lanes
+    // split it themselves (reader: stick i -> lane i % T; compute: quotient + 1 for the first
+    // sticks % T lanes), so no divisibility by the thread count is required.
     const uint32_t total_out_nhw = in_n * out_h * out_w;
     const auto out_nhw_for_core = [&](uint32_t core_i) -> uint32_t {
         uint32_t total_out_nhw_processed = 0;
@@ -587,11 +587,6 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
             total_out_nhw_processed < total_out_nhw ? total_out_nhw - total_out_nhw_processed : 0;
         return std::min(max_out_nhw_per_core, remaining_out_nhw);
     };
-    uint32_t out_nhw_per_core_gcd = 0;
-    for (uint32_t core_i = 0; core_i < ncores; core_i++) {
-        out_nhw_per_core_gcd = std::gcd(out_nhw_per_core_gcd, out_nhw_for_core(core_i));
-    }
-
     FactoryParameters params = get_factory_parameters(
         num_shards_c,
         input.dtype(),
@@ -606,15 +601,13 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         output_layout,
         // Symmetric lanes: one multi-threaded reader (not split readers) so STRIDED pairs reader
         // thread i with compute thread i. MPWI keeps its asymmetric reader0/reader1 structure.
-        /*single_reader_stream=*/!return_indices,
-        out_nhw_per_core_gcd);
-    // Host-side record of the lane count actually programmed (TT_LOGGER_LEVEL=Debug). A silently
-    // degraded thread count looks like a valid run, so make it observable without a kernel probe.
+        /*single_reader_stream=*/!return_indices);
+    // Host-side record of the lane count programmed (TT_LOGGER_LEVEL=Debug), observable without a
+    // kernel probe.
     log_debug(
         tt::LogOp,
-        "quasar pool2d: num_threads_per_cluster={} (per-core out_nhw gcd={}, max_out_nhw_per_core={}, ncores={})",
+        "quasar pool2d: num_threads_per_cluster={} (max_out_nhw_per_core={}, ncores={})",
         params.num_threads_per_cluster,
-        out_nhw_per_core_gcd,
         max_out_nhw_per_core,
         ncores);
 
@@ -1187,9 +1180,9 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
     };
 
     // Per-kernel RTA schemas: readers consume core_nhw_index (+ start_row/start_col for
-    // mpwi); compute consumes out_nhw_per_thread (+ start_row/start_col for mpwi).
+    // mpwi); compute consumes out_nhw_this_core (+ start_row/start_col for mpwi).
     Group<std::string> reader_rta_names = {"core_nhw_index"};
-    Group<std::string> compute_rta_names = {"out_nhw_per_thread"};
+    Group<std::string> compute_rta_names = {"out_nhw_this_core"};
     if (return_indices) {
         reader_rta_names.push_back("start_row");
         reader_rta_names.push_back("start_col");
@@ -1523,19 +1516,12 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
 
         const uint32_t core_nhw_index = is_block_sharded ? core_y_i : is_width_sharded ? 0 : core_i;
         const uint32_t out_nhw_this_core = out_nhw_for_core(core_i);
-        // Sticks are dealt whole to (reader thread, NEO) lanes; validate at the division site.
-        TT_FATAL(
-            out_nhw_this_core % params.num_threads_per_cluster == 0,
-            "pool2d with num_threads={}: output stick count {} on core {} is not divisible by the thread count",
-            params.num_threads_per_cluster,
-            out_nhw_this_core,
-            core_i);
 
         KernelRunArgs::RuntimeArgValues& reader0_rtas = reader0_run.runtime_arg_values;
         KernelRunArgs::RuntimeArgValues& reader1_rtas = reader1_run.runtime_arg_values;
         KernelRunArgs::RuntimeArgValues& compute_rtas = compute_run.runtime_arg_values;
         reader0_rtas["core_nhw_index"][node] = core_nhw_index;
-        compute_rtas["out_nhw_per_thread"][node] = out_nhw_this_core / params.num_threads_per_cluster;
+        compute_rtas["out_nhw_this_core"][node] = out_nhw_this_core;
         if (reader1.has_value()) {
             reader1_rtas["core_nhw_index"][node] = core_nhw_index;
         }

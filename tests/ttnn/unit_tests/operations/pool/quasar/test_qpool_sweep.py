@@ -14,8 +14,9 @@ stride 1, batch 2, tall/wide inputs, a natural wide-reduction case (C=280 = 9 ti
 block/width sharding. A craq-sim-sized subset of the WH/BH nightly pool coverage.
 
 Case constraints (asserted per case): N*H*W % 32 == 0; torch golden needs padding <= kernel/2
-(num_threads is chosen by the factory as the largest of {4, 2, 1} dividing every core's output
-stick count, so any per-core count is legal — see the *_T1 / *_T2 unit cases); total volume is kept
+(num_threads is always 4 on Quasar: sticks are dealt round-robin to lanes and each compute lane
+derives its own share, so any per-core count is legal — see the stick*/sticks* unit cases, which
+pin remainders and idle lanes); total volume is kept
 <= ~16KB to dodge the open craq-sim halo corruption class (large kernels run single-core: halo
 exchange scales with kernel size). Cases print their banner BEFORE running so a hang names the
 case in flight; OOM/ERROR are caught per-case.
@@ -290,9 +291,7 @@ MATRIX_CASES = [
 
 # Special-case axes from the regular WH/BH unit test (tests/.../pool/test_maxpool2d.py) at
 # craq-sim-feasible sizes: the unit test's shapes are model-scale (600x600, C=32768), far beyond
-# the functional sim, so each AXIS is kept and the geometry shrunk (single-core, NHW % 32 == 0,
-# out sticks % 4 == 0 — NOTE: the unit test's ceil_mode shapes often produce stick counts that do
-# NOT divide num_threads=4 and would hit the factory divisibility TT_FATAL; those are resized).
+# the functional sim, so each AXIS is kept and the geometry shrunk (single-core, NHW % 32 == 0).
 # All 12 cases pass exact-PCC on WH silicon (2026-09-01). sim_skip evidence: HANG/MISMATCH is
 # bit-identical at num_threads=1 (threading exonerated); bf8b is a Metal-2.0 runtime gap on the
 # quasar path (program_spec.cpp:1731 is_data_format_supported TT_FATAL), fine on WH.
@@ -366,16 +365,18 @@ UNIT_CASES = [
         ),
     ),
     ("c24_k3x3", dict(channels=24, cores=1)),
-    # Thread-count policy (pool_utils get_factory_parameters): num_threads = largest of {4, 2, 1}
-    # dividing every core's output stick count. The matrix/sweep cases all land on T=4; these pin
-    # the T=1 and T=2 lanes. gap_* mirror the resnet50 global avg pool (batch 1, width-sharded,
-    # 1 output stick per core) which TT_FATALed under a fixed T=4.
+    # Lane policy (pool_utils get_factory_parameters): num_threads is always 4; the reader deals
+    # sticks round-robin (stick i -> lane i % 4) and each compute lane takes quotient (+1 for the
+    # first sticks % 4 lanes). The matrix/sweep cases all have stick counts divisible by 4; these
+    # pin the remainder paths: 1 stick (lanes 1..3 idle), 2 and 3 sticks (idle tail lanes), 6 and
+    # 10 sticks (lanes 0..1 own one stick more than lanes 2..3). gap_* mirror the resnet50 global
+    # avg pool (batch 1, width-sharded, 1 output stick per core).
     (
-        "gap_b1_width_avg_T1",
+        "gap_b1_width_avg_1stick",
         dict(pool="avg", in_h=4, in_w=8, kernel=(4, 8), stride=(1, 1), padding=(0, 0), shard="width", grid_yx=(1, 2)),
     ),
     (
-        "gap_b1_width_max_T1",
+        "gap_b1_width_max_1stick",
         dict(
             in_h=4,
             in_w=8,
@@ -387,9 +388,11 @@ UNIT_CASES = [
             sim_skip="craq-sim HANG (whole-window max class; avg twin passes on sim, exact on WH)",
         ),
     ),
-    ("stick1_1core_T1", dict(in_h=8, in_w=4, kernel=(8, 4), stride=(1, 1), padding=(0, 0), cores=1)),
-    ("sticks2_k3_s4_2cores_T2", dict(in_h=8, in_w=8, stride=(4, 4), cores=2)),  # 2 output sticks per core
-    ("sticks6_b3_1core_T2", dict(batch=3, in_h=8, in_w=4, stride=(4, 4), cores=1)),  # 6 output sticks
+    ("stick1_1core", dict(in_h=8, in_w=4, kernel=(8, 4), stride=(1, 1), padding=(0, 0), cores=1)),
+    ("sticks2_k3_s4_2cores", dict(in_h=8, in_w=8, stride=(4, 4), cores=2)),  # 2 output sticks per core
+    ("sticks3_k3_s3x4_1core", dict(in_h=8, in_w=4, stride=(3, 4), cores=1)),  # 3 sticks: lane 3 idle
+    ("sticks6_b3_1core", dict(batch=3, in_h=8, in_w=4, stride=(4, 4), cores=1)),  # 6 sticks: 2,2,1,1
+    ("sticks10_b5_1core", dict(batch=5, in_h=8, in_w=4, stride=(4, 4), cores=1)),  # 10 sticks: 3,3,2,2
     # TILE output layout runs single-lane by policy (the tiled-output path is not lane-aware: at
     # num_threads=4 DFB_FAST_TILIZE has in_ntiles_c entries -> TT_FATAL for C<128, hang at C=128;
     # found by resnet50/quasar/tests/ops/test_max_pool2d_correctness.py on the ZeBu emulator).
