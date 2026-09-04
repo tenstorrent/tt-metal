@@ -266,6 +266,15 @@ FSD path only.
 
 ### 6.3 Hostname consolidation (ingest remap)
 
+> **Superseded — do not build the alias helpers below.** `get_local_discovery_hostname` already
+> prefers `ClusterDescriptor::get_host_id()`, so for a filled descriptor the live PSD key *is* the FSD
+> hostname and there is nothing to remap. 199 of 266 asset YAMLs carry the field; the 27 unfilled
+> cluster descriptors should be filled rather than aliased around
+> ([`PLAN_physical_node_id.md`](PLAN_physical_node_id.md) §10). Pick E2E fixtures whose descriptors are
+> filled. The pseudocode is kept only as the spec for the one-time script that **writes** the field.
+> Note it also assumes a rank-suffix strip that the shipped canonicalization does not do
+> ([`PLAN_physical_node_id.md`](PLAN_physical_node_id.md) §3.1).
+
 New helpers, next to the mock host alias — not in discovery, not in the builder's default path.
 
 ```
