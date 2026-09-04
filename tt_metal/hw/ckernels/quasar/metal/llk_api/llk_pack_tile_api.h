@@ -104,13 +104,15 @@ inline void llk_pack(
  * Call between cb_reserve_back and cb_push_back on an output buffer that is being pushed but whose packed
  * data is not needed. Like llk_unpack_dummy on the unpack thread, this is a required Quasar primitive: the
  * PACR_STRIDE is a real packer TDMA that orders the PUSH_TILES after its WAIT_TILES on pack_output
- * (TEN-4746 / #48552). PACK_STRIDE_NO_WRITE suppresses the L1 store and every row is masked, so the output
- * buffer is left untouched; ClrDatValid is 0, so the DEST valid bits are preserved for a later real pack.
- * The strided-pack config is restored to pass-through afterwards so a subsequent pack-untilize (also
- * PACR_STRIDE) is unaffected.
+ * (TEN-4746 / #48552). PACK_STRIDE_NO_WRITE=1 is the enable that makes masked rows skipped rather than
+ * written with the mask value; with every row masked (PACK_STRIDE_ROW_MASK=0xF) the two together suppress
+ * the store entirely, so the output buffer is left untouched. ClrDatValid is 0, so the DEST valid bits are
+ * preserved for a later real pack. The strided-pack config is restored to pass-through afterwards so a
+ * subsequent pack-untilize (also PACR_STRIDE) is unaffected.
  *
- * With the store suppressed the buffer descriptor is never dereferenced, so a fixed table-select of 0 is
- * used: this primitive needs no pack init and does not touch the BFD allocator or the DFB.
+ * With the store suppressed the buffer descriptor is never read, so PACR_STRIDE's descriptor operand is a
+ * literal 0 (a 5-bit index into the 32-entry bd_table, not a table select). This primitive needs no pack
+ * init and touches neither the BFD allocator nor the DFB.
  *
  * @param pack_output  The output dataflow buffer whose WAIT/PUSH this orders; not used to address L1.
  */
@@ -119,9 +121,10 @@ inline void llk_pack_dummy(const std::uint32_t pack_output) {
     cfg_rmw(THCON_PACKER0_REG3_PACK_STRIDE_NO_WRITE_RMW, 1);
     cfg_rmw(THCON_PACKER0_REG3_PACK_STRIDE_ROW_MASK_RMW, 0xF);
 
-    // Src/dst index 0, no increment, table-select 0 (never dereferenced since the store is suppressed),
-    // Packer0, ClrDatValid=0 (must not clear DEST valids).
-    TTI_PACR_STRIDE(0, 0, 0, 0, 0, 0 /*buf_desc_sel*/, 0 /*Packer0*/, 0 /*ClrDatValid*/);
+    // Absolute src/dst index 0, no increment, Packer0, ClrDatValid=0 (must not clear DEST valids). Arg 6 is
+    // a 5-bit index into the 32-entry bd_table; a literal 0 is safe only because NO_WRITE suppresses the
+    // store so the descriptor is never read (0 otherwise falls in the unpack partition [0,16), not pack's).
+    TTI_PACR_STRIDE(0, 0, 0, 0, 0, 0 /*bd_table index*/, 0 /*Packer0*/, 0 /*ClrDatValid*/);
 
     // Restore pass-through so a later real pack-untilize (PACR_STRIDE) is unaffected.
     cfg_rmw(THCON_PACKER0_REG3_PACK_STRIDE_NO_WRITE_RMW, 0);
