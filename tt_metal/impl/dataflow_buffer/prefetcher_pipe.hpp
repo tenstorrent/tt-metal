@@ -208,8 +208,10 @@ uint8_t AttachPrefetcherPipe(
  * @brief Create and register the local DFB used to relay a PrefetcherPipe to TRISC.
  *
  * The local DFB borrows the PrefetcherPipe data ring. `prefetcher_pipe_id` must already be
- * Attached on `receiver_core_spec`. Relay entry_size / depth must match this Attach's
- * dense entry_size and `ring_size / entry_size`.
+ * Attached on `receiver_core_spec`. Relay entry_size must match this Attach's dense entry_size,
+ * and depth must be `ring_size / entry_size` — the whole entries the ring holds. An entry size
+ * that does not divide the ring is allowed: the trailing remainder is a gap holding no entry, and
+ * the relay leaves it alone just as the receiver does.
  *
  * @return Program-unique host DFB id (distinct from `prefetcher_pipe_id`).
  */

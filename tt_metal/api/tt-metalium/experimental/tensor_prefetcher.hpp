@@ -151,13 +151,17 @@ void QueueTensorPrefetcherRequest(
 //     size;
 //   - banks appear once each, and receiver sets are disjoint across every pipe;
 //   - every tensor must resolve to the receiver-contiguous layout (each receiver owning a disjoint
-//     contiguous shard);
-//   - no streaming rotation (pass an empty `rotation`);
-//   - each tensor's per-receiver bytes-per-block must leave the ring room for two whole blocks
-//     (consumers keep one block of lookahead). The block size need not equal the pipes'
-//     `entry_size` nor divide the ring: the sender re-grids its write cursor per tensor, and any
-//     trailing remainder of the ring is a gap both endpoints credit at the wrap. The ring itself is
-//     fixed at creation and never resizes.
+//     contiguous shard). One receiver per bank qualifies: a bank's whole shard is then that
+//     receiver's slab, which is why such a weight is read as receiver-contiguous here even though
+//     ttnn reports it as legacy WIDTH_SHARDED (the two layouts name the same bytes, and a GCB still
+//     reads it as K-row-major).
+//
+// Everything else carries over: the streaming `rotation` works the same way it does for a GCB, and
+// a tensor's per-receiver block size need not equal the pipes' `entry_size` nor divide the ring --
+// the sender re-grids its write cursor per tensor, and any trailing remainder of the ring is a gap
+// both endpoints credit at the wrap. The ring itself is fixed at creation and never resizes, so
+// size it for the consumer: one block is enough for the transport, while a consumer that keeps a
+// block of lookahead (a streaming matmul) needs two.
 void QueueTensorPrefetcherRequest(
     distributed::MeshDevice& mesh_device,
     const std::vector<TensorPrefetcherBankPipes>& prefetcher_pipes,

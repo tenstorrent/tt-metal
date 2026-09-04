@@ -513,15 +513,16 @@ uint32_t CreatePrefetcherPipeRelayDataflowBuffer(
         "CreatePrefetcherPipeRelayDataflowBuffer: relay cores {} must be a subset of receiver cores {}",
         receiver_cores.str(),
         pipe.receiver_cores().str());
-    TT_FATAL(
-        pipe.ring_size() % config.entry_size == 0,
-        "CreatePrefetcherPipeRelayDataflowBuffer: entry size {} must divide PrefetcherPipe ring size {}",
-        config.entry_size,
-        pipe.ring_size());
+    // Checked here as well as in register_prefetcher_pipe_relay_dfb below so a bad depth fails
+    // before CreateDataflowBuffer leaves a stray DFB in the program. Floor division: see the note
+    // there on the trailing gap an entry size that does not divide the ring leaves behind.
     TT_FATAL(
         config.num_entries == pipe.ring_size() / config.entry_size,
-        "CreatePrefetcherPipeRelayDataflowBuffer: depth {} must equal ring_size/entry_size ({})",
+        "CreatePrefetcherPipeRelayDataflowBuffer: depth {} must equal the whole entries the ring holds, ring_size / "
+        "entry_size = {} / {} = {}",
         config.num_entries,
+        pipe.ring_size(),
+        config.entry_size,
         pipe.ring_size() / config.entry_size);
 
     auto relay_config = config;
