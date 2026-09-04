@@ -2123,6 +2123,7 @@ class ttMLA:
                 populated_global,
                 block_cyclic_chunk_local=block_cyclic_chunk_local,
                 metadata=metadata,
+                overlap_resources=overlap_resources,
             )
 
         storage = kvpe_cache.storage
@@ -2233,6 +2234,7 @@ class ttMLA:
         *,
         block_cyclic_chunk_local: int,
         metadata=None,
+        overlap_resources=None,
     ) -> MlaKvCache:
         """_gather_kvpe_prefix for an SP*TP-DEDUPED cache: ONE full-mesh snake gather.
 
@@ -2291,8 +2293,7 @@ class ttMLA:
             ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
             ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
         ), f"full-mesh KVPE gather requires a 2D fabric config, got {fabric}"
-        gathered = ttnn.experimental.high_bw_all_gather(
-            storage,
+        gather_kwargs = dict(
             dim=2,
             output_tensor=self._sparse_kv_gather_buffer,
             num_links=self.ccl_num_links,
@@ -2300,6 +2301,14 @@ class ttMLA:
             **slot_meta_kwargs,
             **extent_kwargs,
         )
+        if overlap_resources is not None:
+            gather_kwargs.update(
+                subdevice_id=overlap_resources.gather_subdevice_id,
+                sub_core_grids=overlap_resources.gather_core_grid,
+                ready_semaphore=overlap_resources.ready_semaphore,
+                data_valid_semaphore=overlap_resources.data_valid_semaphore,
+            )
+        gathered = ttnn.experimental.high_bw_all_gather(storage, **gather_kwargs)
         return MlaKvCache(
             format=kvpe_cache.format,
             storage=gathered,
