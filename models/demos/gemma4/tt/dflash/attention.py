@@ -82,6 +82,57 @@ def build_attention_mask_additive_device(
     return ttnn.unsqueeze_to_4D(ttnn.unsqueeze_to_4D(mask))  # [1,1,q_len,total]
 
 
+def build_attention_mask_additive_device_dynamic(
+    mesh_device,
+    ctx_len: int,
+    q_len: int,
+    is_causal: bool,
+    sliding_window: int | None,
+    context_valid_len_tt: ttnn.Tensor,
+) -> ttnn.Tensor:
+    """Same as ``build_attention_mask_additive_device``, plus one more masking condition:
+    context columns whose index is >= ``context_valid_len_tt`` are ALSO marked invisible.
+
+    For a fixed-size context window (``ctx_len`` always the drafter's block_size, padded
+    with the tail ``block_size - produced`` rows being meaningless -- see generate.py),
+    this masks out exactly the padding rows while leaving the real ``produced`` rows (the
+    FIRST ``context_valid_len`` columns, matching how the context accumulator's real
+    content occupies the earliest rows) visible under the ordinary causal/sliding rules.
+    Noise columns (index >= ctx_len) are never affected by this condition.
+
+    ``context_valid_len_tt`` is an ON-DEVICE scalar tensor (``[1,1]`` int32), not a Python
+    int -- its VALUE can differ every call without changing the mask's SHAPE, which is
+    exactly what makes this trace-replay-compatible (a captured trace can't have its op
+    graph depend on a Python-int branch, but it CAN depend on a tensor's contents)."""
+    total = ctx_len + q_len
+    query_position = ttnn.arange(total - q_len, total, 1, device=mesh_device, dtype=ttnn.int32)
+    key_position = ttnn.arange(0, total, 1, device=mesh_device, dtype=ttnn.int32)
+    query_col = ttnn.reshape(query_position, [q_len, 1])
+    key_row = ttnn.reshape(key_position, [1, total])
+    query_full = ttnn.repeat(query_col, ttnn.Shape([1, total]))
+    key_full = ttnn.repeat(key_row, ttnn.Shape([q_len, 1]))
+
+    visible = ttnn.ones([q_len, total], dtype=ttnn.int32, device=mesh_device)
+    if is_causal:
+        visible = ttnn.logical_and(visible, ttnn.le(key_full, query_full))
+    if sliding_window is not None:
+        visible = ttnn.logical_and(visible, ttnn.lt(ttnn.subtract(query_full, key_full), sliding_window))
+        if not is_causal:
+            visible = ttnn.logical_and(visible, ttnn.lt(ttnn.subtract(key_full, query_full), sliding_window))
+
+    valid_len_col = ttnn.repeat(ttnn.reshape(context_valid_len_tt, [1, 1]), ttnn.Shape([q_len, 1]))
+    valid_len_full = ttnn.repeat(valid_len_col, ttnn.Shape([1, total]))
+    is_valid_context_col = ttnn.lt(key_full, valid_len_full)  # key_position < context_valid_len
+    is_noise_col = ttnn.ge(key_full, ctx_len)  # noise columns are unaffected by context padding
+    visible = ttnn.logical_and(visible, ttnn.logical_or(is_valid_context_col, is_noise_col))
+
+    visible = ttnn.to_layout(ttnn.typecast(visible, ttnn.bfloat16), ttnn.TILE_LAYOUT)
+    zero = ttnn.zeros([q_len, total], dtype=ttnn.bfloat16, device=mesh_device, layout=ttnn.TILE_LAYOUT)
+    neg = ttnn.full([q_len, total], fill_value=-1e4, dtype=ttnn.bfloat16, device=mesh_device, layout=ttnn.TILE_LAYOUT)
+    mask = ttnn.where(visible, zero, neg)
+    return ttnn.unsqueeze_to_4D(ttnn.unsqueeze_to_4D(mask))  # [1,1,q_len,total]
+
+
 def _apply_rope_single(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
     return ttnn.add(ttnn.multiply(x, cos), ttnn.multiply(rotate_half_ttnn(x), sin))
 
