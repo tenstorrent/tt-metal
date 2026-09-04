@@ -1,0 +1,8 @@
+# Model artifacts are resolved from the Hugging Face cache at the pinned revisions
+# (see common.py); never commit them -- the checkpoint alone is 1.8 GB and the repo
+# pre-commit hook rejects anything over 500 KB.
+*.pt
+*.pth
+*.bin
+*.npz
+*.safetensors
