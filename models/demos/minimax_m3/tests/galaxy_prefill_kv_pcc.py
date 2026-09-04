@@ -92,7 +92,7 @@ def plan(n_tokens, chunk_size, chunked):
     return n_chunks, chunk, n_chunks * chunk
 
 
-def check_kv_pcc(runtime, kv_cache, golden_dir, n_tokens, num_layers, hf_config):
+def check_kv_pcc(runtime, kv_cache, golden_dir, n_tokens, num_layers, hf_config, slot_id=0):
     """Per-layer K / V / index_k PCC: device cache (gather_layer) vs the golden trace. The device
     stores K / index_k Meta-RoPE swizzled over the rotary slice; the golden is HF half-split, so
     permute the golden's rotary slice (identity tail) before comparing. V is raw (no swizzle).
@@ -117,7 +117,7 @@ def check_kv_pcc(runtime, kv_cache, golden_dir, n_tokens, num_layers, hf_config)
     logger.info(f"[kv-pcc] per-layer K / V / index_k vs golden ({golden_dir}):")
     mins = {"k": 1.0, "v": 1.0, "index_k": 1.0}
     for L in range(num_layers):
-        dev_k, dev_v, dev_ik = runtime.gather_layer(kv_cache, slot_id=0, layer_idx=L, n_tokens=n_tokens)
+        dev_k, dev_v, dev_ik = runtime.gather_layer(kv_cache, slot_id=slot_id, layer_idx=L, n_tokens=n_tokens)
         with safe_open(str(kv_dir / f"layer_{L}.safetensors"), framework="pt") as h:
             keys = set(h.keys())
             g_k = h.get_tensor(f"key_cache_layer_{L}").float()[:, :, :n_tokens, :][..., src]  # HF -> Meta
@@ -208,7 +208,10 @@ def main():
         )
 
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
-    mesh = ttnn.open_mesh_device(ttnn.MeshShape(rows, cols))
+    # PREFILL_USE_TRACE needs a DRAM trace region to hold one captured trace per KV-length bucket;
+    # default 0 leaves the eager path byte-identical (no region reserved).
+    _trace_region = int(os.getenv("PREFILL_TRACE_REGION_SIZE", "0"))
+    mesh = ttnn.open_mesh_device(ttnn.MeshShape(rows, cols), trace_region_size=_trace_region)
     print(f"[prefill-pcc] mesh opened {tuple(mesh.shape)} ndev={mesh.get_num_devices()}", flush=True)
     try:
         model_args = ModelArgs(mesh_device=mesh)  # HF_MODEL
@@ -268,14 +271,17 @@ def main():
             )
             print("[prefill-pcc] loading real bf16 weights + EP placement (slow: bf16 source read) ...", flush=True)
             state_dict = ModelArgs.load_state_dict(model_args.weights_path)
+        num_users = int(os.getenv("PREFILL_NUM_USERS", "1"))
+        use_trace = os.getenv("PREFILL_USE_TRACE") == "1"
         cfg = TtPrefillRuntimeConfig(
             num_layers=num_layers,
             max_seq_len=total,
             mesh_shape=(rows, cols),
             chunk_size=chunk,
-            num_users=1,
+            num_users=num_users,
             expert_weight_dtype=expert_dtype,
             weight_cache_path=cache_path,
+            use_trace=use_trace,
         )
         runtime = TtPrefillRuntime(mesh, hf_config, state_dict, cfg)
         del state_dict
@@ -283,11 +289,99 @@ def main():
         # The runtime is stateless w.r.t. the cache (engine-owned model): allocate it here and pass it
         # into every runtime call (compile / prefill_chunk / gather_layer), mirroring the prefill engine.
         kv_cache = allocate_kv_caches(
-            mesh, num_layers=num_layers, max_seq_len=total, num_users=1, head_dim=hf_config.head_dim
+            mesh, num_layers=num_layers, max_seq_len=total, num_users=num_users, head_dim=hf_config.head_dim
         )
 
         print(f"[prefill-pcc] compiling ({num_layers}L, SP=8 × TP=4 + EP=32) ...", flush=True)
         runtime.compile(kv_cache)
+
+        # Request-mode eager path: more than one user prefills each into its own slot (the write/read slot
+        # is device-valued whenever num_users > 1), times the multi-user pass, then PCCs every slot against
+        # the golden unless PREFILL_SKIP_PCC is set. All slots share one golden, so a mis-targeted slot
+        # corrupts only that user's KV and craters only its PCC. The traced multi-user path is the trace pool
+        # below (PREFILL_USE_TRACE), so defer to it when set.
+        if num_users > 1 and not use_trace:
+            two_padded = token_ids + [0] * (total - n_tokens)
+            reps = int(os.getenv("PREFILL_TPS_ITERS", "3"))
+            passes = []
+            for r in range(reps):
+                t0 = time.perf_counter()
+                for uid in range(num_users):
+                    for c in range(n_chunks):
+                        a = c * chunk
+                        inp = runtime.make_chunk_input(two_padded[a : a + chunk])
+                        runtime.prefill_chunk(
+                            inp, kv_cache, slot_id=uid, actual_start=a, actual_end=min(a + chunk, n_tokens)
+                        )
+                ttnn.synchronize_device(mesh)
+                passes.append(time.perf_counter() - t0)
+                tok = num_users * n_chunks * chunk
+                print(
+                    f"[prefill-pcc] {num_users}-user eager pass {r}: {passes[-1] * 1000:.1f} ms "
+                    f"({tok / passes[-1]:.0f} tok/s, {num_users}u x {n_chunks} chunks)",
+                    flush=True,
+                )
+            steady = statistics.median(passes[1:]) if reps > 1 else passes[0]
+            print(
+                f"[prefill-pcc] {num_users}-user eager steady-state (pass>=1): {steady * 1000:.1f} ms/seq "
+                f"({num_users * n_chunks * chunk / steady:.0f} tok/s, {num_users}u)",
+                flush=True,
+            )
+            if os.environ.get("PREFILL_SKIP_PCC") == "1":
+                print("[prefill-pcc] PREFILL_SKIP_PCC=1 -> skipping per-slot KV PCC", flush=True)
+            else:
+                for uid in range(num_users):
+                    print(f"[prefill-pcc] --- user {uid} (slot {uid}) KV PCC vs golden ---", flush=True)
+                    check_kv_pcc(runtime, kv_cache, golden_dir, n_tokens, num_layers, hf_config, slot_id=uid)
+            print("[prefill-pcc] DONE", flush=True)
+            return 0
+
+        # --- Serving-path trace (PREFILL_USE_TRACE=1): drive the runner's exact contract — capture_trace()
+        # once, then prefill_chunk() per chunk (which picks the depth bucket, re-targets the user slot, and
+        # replays). Exercises the same runtime code the real prefill_runner uses, so this isolation PCC/perf
+        # gate validates the served path, not a parallel API. Replay amortization shows as pass>=1 tok/s;
+        # num_users > 1 replays each user's slot from the one captured pool via the device-valued slot.
+        if use_trace:
+            padded = token_ids + [0] * (total - n_tokens)
+            runtime.capture_trace(kv_cache)
+            repeats = int(os.getenv("PREFILL_TPS_ITERS", "3"))
+            passes = []
+            for r in range(repeats):
+                t0 = time.perf_counter()
+                for u in range(num_users):
+                    for c in range(n_chunks):
+                        a = c * chunk
+                        inp = runtime.make_chunk_input(padded[a : a + chunk])
+                        runtime.prefill_chunk(
+                            inp, kv_cache, slot_id=u, actual_start=a, actual_end=min(a + chunk, n_tokens), request_id=c
+                        )
+                ttnn.synchronize_device(mesh)
+                passes.append(time.perf_counter() - t0)
+                tok = num_users * n_chunks * chunk
+                print(
+                    f"[prefill-pcc] TRACE pass {r}: {passes[-1] * 1000:.1f} ms "
+                    f"({tok / passes[-1]:.0f} tok/s, {num_users}u x {n_chunks} chunks)",
+                    flush=True,
+                )
+            steady = statistics.median(passes[1:]) if repeats > 1 else passes[0]
+            print(
+                f"[prefill-pcc] TRACE steady-state (pass>=1): {steady * 1000:.1f} ms/seq "
+                f"({num_users * n_chunks * chunk / steady:.0f} tok/s, {num_users}u)",
+                flush=True,
+            )
+            if os.environ.get("PREFILL_SKIP_PCC") == "1":
+                print("[prefill-pcc] PREFILL_SKIP_PCC=1 -> skipping KV PCC (perf only)", flush=True)
+            elif num_users > 1:
+                # Each user's replay fills its own slot via the device-valued read+write slot; PCC every
+                # slot vs the golden — a mis-targeted read or write corrupts that user's KV and craters it.
+                for uid in range(num_users):
+                    print(f"[prefill-pcc] --- traced user {uid} (slot {uid}) KV PCC vs golden ---", flush=True)
+                    check_kv_pcc(runtime, kv_cache, golden_dir, n_tokens, num_layers, hf_config, slot_id=uid)
+            else:
+                check_kv_pcc(runtime, kv_cache, golden_dir, n_tokens, num_layers, hf_config)
+            runtime.release_trace_pool()
+            print("[prefill-pcc] DONE", flush=True)
+            return 0
 
         # --- throughput. Each iteration re-fills slot 0 (valid for the PCC check after the loop) and
         # times two distinct full-prefill passes, each with syncs placed so it pays for no extra barrier:

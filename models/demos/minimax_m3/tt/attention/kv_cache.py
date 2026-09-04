@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import torch
 
@@ -39,6 +39,100 @@ class MiniMaxKVCache(KvCaches):
     num_layers: int
     max_seq_len: int
     sp: int
+
+    # Device-valued slot metadata for request-mode tracing (populated only when num_users > 1). A captured
+    # trace reads these tensors by address, so set_read_user re-targets a user's slot in place without
+    # recapture; `_slot_frozen` blocks the host update during capture (a host copy inside a trace is illegal).
+    #   _read_slot_start — cache-read partition-slice begin [slot,0,0,0], one per layer. `_read_slot_end` is a
+    #                      constant companion (the reader ignores its value).
+    #   _write_slot      — KV-write user slot (update_padded_kv_cache tensor form); one scalar, all layers.
+    #   _write_kv_actual — KV-write prior-length scalar, one per distinct depth (bucket).
+    _read_slot_start: dict = field(default_factory=dict, repr=False)
+    _read_slot_end: object = field(default=None, repr=False)
+    _write_slot: object = field(default=None, repr=False)
+    _write_kv_actual: dict = field(default_factory=dict, repr=False)
+    _slot_frozen: bool = field(default=False, repr=False)
+
+    def _begin_index_tensor(self, values, mesh_device):
+        return ttnn.from_torch(
+            torch.tensor(values, dtype=torch.int32),
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    def _meta_scalar(self, val, mesh_device):
+        # 1-element uint32 replicated-DRAM scalar; update_padded_kv_cache's tensor form reads element [0].
+        return ttnn.from_torch(
+            torch.tensor([val], dtype=torch.int64).reshape(1, 1, 1, 1),
+            device=mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+
+    @staticmethod
+    def _host_scalar(val):
+        return ttnn.from_torch(
+            torch.tensor([val], dtype=torch.int64).reshape(1, 1, 1, 1),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+
+    def read_slot_start(self, layer_idx, slot, mesh_device):
+        """Persistent [slot,0,0,0] begin tensor for `layer_idx`, reused across chunks/users. Re-targets to
+        `slot` in place unless frozen — during capture the warm forward's value must be read as-is."""
+        t = self._read_slot_start.get(layer_idx)
+        if t is None:
+            self._read_slot_start[layer_idx] = t = self._begin_index_tensor([slot, 0, 0, 0], mesh_device)
+        elif not self._slot_frozen:
+            ttnn.copy_host_to_device_tensor(
+                ttnn.from_torch(
+                    torch.tensor([slot, 0, 0, 0], dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT
+                ),
+                t,
+            )
+        return t
+
+    def read_slot_end(self, max_rows, head_dim, mesh_device):
+        if self._read_slot_end is None:
+            self._read_slot_end = self._begin_index_tensor(
+                [self.num_users * self.num_layers, 1, max_rows, head_dim], mesh_device
+            )
+        return self._read_slot_end
+
+    def write_slot_tensor(self, slot_idx, mesh_device):
+        """Persistent user-slot scalar for the traceable KV write. Updated in place unless frozen."""
+        if self._write_slot is None:
+            self._write_slot = self._meta_scalar(slot_idx, mesh_device)
+        elif not self._slot_frozen:
+            ttnn.copy_host_to_device_tensor(self._host_scalar(slot_idx), self._write_slot)
+        return self._write_slot
+
+    def write_kv_actual_tensor(self, kv_actual, mesh_device):
+        """Persistent prior-KV-length scalar, keyed by depth (bucket), so it is never updated after creation —
+        each bucket reads its own depth and is shared across users (no set_read_user)."""
+        t = self._write_kv_actual.get(kv_actual)
+        if t is None:
+            self._write_kv_actual[kv_actual] = t = self._meta_scalar(kv_actual, mesh_device)
+        return t
+
+    def set_read_user(self, user_id):
+        """Point every device-valued slot tensor at `user_id` (read begins + the KV-write slot). Call before
+        replaying a captured trace for a different user (host update outside the trace). kv_actual is not
+        touched — depth is a per-bucket constant shared across users."""
+        for layer_idx, t in self._read_slot_start.items():
+            slot = user_id * self.num_layers + layer_idx
+            ttnn.copy_host_to_device_tensor(
+                ttnn.from_torch(
+                    torch.tensor([slot, 0, 0, 0], dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT
+                ),
+                t,
+            )
+        if self._write_slot is not None:
+            ttnn.copy_host_to_device_tensor(self._host_scalar(user_id), self._write_slot)
 
 
 def allocate_kv_caches(
@@ -112,23 +206,38 @@ def allocate_kv_caches(
     )
 
 
-def _write_one(cache, tensor, *, slot_idx, layer_idx, num_layers, kv_actual, sp_axis):
+def _write_one(kv_cache, cache, tensor, *, slot_idx, layer_idx, num_layers, kv_actual, sp_axis):
     """Write one SP-sharded chunk tensor into a packed cache via update_padded_kv_cache.
 
     The op requires TILE layout and input.dtype == cache.dtype, so cast a copy to the cache's dtype when
     needed (the original stays live for the attention op that follows). At ``kv_actual % 32 == 0`` chunk
     boundaries the per-device write offset is contiguous (block-cyclic degenerates to a reshape).
+
+    With more than one user this takes the op's traceable tensor form: slot/kv_actual are read on-device
+    from persistent scalars (kv_cache), so a captured trace re-targets the write slot per user.
     """
     src = tensor if tensor.dtype == cache.dtype else ttnn.typecast(tensor, cache.dtype)
-    ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
-        cache,
-        src,
-        slot_idx=slot_idx,
-        layer_idx=layer_idx,
-        num_layers=num_layers,
-        kv_actual_global=kv_actual,
-        cluster_axis=sp_axis,
-    )
+    if kv_cache.num_users > 1:
+        mesh_device = cache.device()
+        ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+            cache,
+            src,
+            kv_cache.write_slot_tensor(slot_idx, mesh_device),
+            kv_cache.write_kv_actual_tensor(kv_actual, mesh_device),
+            layer_idx=layer_idx,
+            num_layers=num_layers,
+            cluster_axis=sp_axis,
+        )
+    else:
+        ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+            cache,
+            src,
+            slot_idx=slot_idx,
+            layer_idx=layer_idx,
+            num_layers=num_layers,
+            kv_actual_global=kv_actual,
+            cluster_axis=sp_axis,
+        )
     if src is not tensor:
         src.deallocate(True)
 
@@ -141,6 +250,7 @@ def write_kv_chunk(kv_cache: MiniMaxKVCache, tt_k, tt_v, *, slot_idx, layer_idx,
     in place. ``kv_actual`` is the cumulative valid prefix before this chunk (0 for non-chunked).
     """
     _write_one(
+        kv_cache,
         kv_cache.k,
         tt_k,
         slot_idx=slot_idx,
@@ -150,6 +260,7 @@ def write_kv_chunk(kv_cache: MiniMaxKVCache, tt_k, tt_v, *, slot_idx, layer_idx,
         sp_axis=sp_axis,
     )
     _write_one(
+        kv_cache,
         kv_cache.v,
         tt_v,
         slot_idx=slot_idx,
@@ -167,6 +278,7 @@ def write_index_k_chunk(kv_cache: MiniMaxKVCache, tt_index_k, *, slot_idx, layer
     REPLICATED across the TP cols (so each col writes the same data into its replicated cache slot).
     """
     _write_one(
+        kv_cache,
         kv_cache.index_k,
         tt_index_k,
         slot_idx=slot_idx,
