@@ -33,6 +33,7 @@
 #include <tt-metalium/tt_metal.hpp>
 
 #include "device_fixture.hpp"
+#include "tests/tt_metal/tt_metal/api/dram_sender_fixture.hpp"
 #include "distributed/mesh_device_impl.hpp"
 #include "impl/buffers/drisc_l1_arena.hpp"
 #include "impl/buffers/prefetcher_pipe_dram_sender_internal.hpp"
@@ -44,26 +45,7 @@
 
 namespace tt::tt_metal {
 
-// Slow dispatch, like DramSenderGCBFixture: BlackholeSingleCardFixture is slow-dispatch-only.
-// Slow dispatch materializes a program's PrefetcherPipe dense index per core in
-// ConfigureDeviceWithProgram, so the DRISC sender and the worker receivers can share one Program.
-class PrefetcherPipeDramSenderFixture : public BlackholeSingleCardFixture {
-protected:
-    void SetUp() override {
-        BlackholeSingleCardFixture::SetUp();
-        if (devices_.empty()) {
-            return;
-        }
-        mesh_device_ = devices_[0].get();
-        if (!MetalContext::instance(mesh_device_->impl().get_context_id())
-                 .hal()
-                 .has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
-            GTEST_SKIP() << "DRAM programmable cores not enabled";
-        }
-    }
-
-    distributed::MeshDevice* mesh_device_{};
-};
+class PrefetcherPipeDramSenderFixture : public DramSenderFixture {};
 
 namespace {
 
@@ -74,8 +56,9 @@ constexpr uint32_t kEntrySize = 256;  // multiple of L1_ALIGNMENT (16 on Blackho
 constexpr uint32_t kRingDepth = 4;
 
 // A Tensor-prefetcher delivery target: the per-bank pipe groups the factory returns, plus the
-// bank-major flattening the rest of this file drives the senders through. The
-// TensorPrefetcherPipes wrapper one layer up derives the same flattening from the same groups.
+// bank-major flattening the rest of this file drives the senders through. That flattening comes
+// from prefetcher_pipe_sender_receiver_mapping, the same helper the ttnn wrapper one layer up
+// uses, so this test cannot disagree with it about pipe order; `pipes` indexes alongside it.
 struct PipeSet {
     std::vector<experimental::TensorPrefetcherBankPipes> banks;
     // One entry per pipe, bank-major: that pipe's sender core and its receivers.
@@ -97,10 +80,10 @@ PipeSet make_pipe_set(
         num_entries,
         BufferType::L1,
         /*support_multi_receiver_shards=*/!dual_senders_per_bank);
+    set.mapping = experimental::prefetcher_pipe_sender_receiver_mapping(set.banks);
+    set.pipes.reserve(set.mapping.size());
     for (const auto& bank : set.banks) {
         for (const auto& pipe : bank.pipes) {
-            set.mapping.emplace_back(
-                experimental::prefetcher_pipe_sender_core(*pipe), experimental::prefetcher_pipe_receiver_cores(*pipe));
             set.pipes.push_back(pipe);
         }
     }

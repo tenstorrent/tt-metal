@@ -28,9 +28,13 @@
 #include "api/tensor/tensor_accessor.h"
 #include "api/debug/dprint.h"
 
+#include "prefetcher_validator_common.h"
+
 namespace {
 
-constexpr uint32_t kExtraPollCycles = 1u << 18;  // ~262k spin iterations
+// Long enough to cover a sender's round trip to publish one more entry after this receiver's last
+// pop -- the window in which an overshoot would show up -- while still ending the test if none does.
+constexpr uint32_t kExtraPollCycles = 1u << 18;
 
 }  // namespace
 
@@ -83,31 +87,20 @@ void kernel_main() {
             pipe.wait_front(1);
             const uint32_t page_addr = pipe.get_read_ptr().get_address();
 
-            // Page row h = tiles (blk*kw + h, n_col_start + n) for n in [0, n_per_recv). One
-            // accessor call per tile keeps bank-routing logic out of this kernel. Batched delivery,
-            // so the FIFO position is the physical block.
-            uint32_t scratch_cursor = scratch_addr;
-            for (uint32_t h = 0; h < k_block_w_tiles; ++h) {
-                const uint32_t k_row = blk * k_block_w_tiles + h;
-                const uint32_t row_page_base = k_row * total_n_tiles + n_col_start;
-                for (uint32_t n = 0; n < n_per_recv_tiles; ++n) {
-                    const uint64_t src_noc = accessor.get_noc_addr(row_page_base + n);
-                    noc_async_read(src_noc, scratch_cursor, tile_bytes);
-                    scratch_cursor += tile_bytes;
-                }
-            }
-            noc_async_read_barrier();
+            // Batched delivery, so the FIFO position is the physical block.
+            prefetcher_validator::read_expected_block_tiles(
+                accessor,
+                scratch_addr,
+                tile_bytes,
+                /*phys_blk=*/blk,
+                k_block_w_tiles,
+                total_n_tiles,
+                n_col_start,
+                n_per_recv_tiles);
 
-            volatile tt_l1_ptr uint32_t* received = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_addr);
-            volatile tt_l1_ptr uint32_t* expected = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch_addr);
             const uint32_t words = page_bytes / sizeof(uint32_t);
-            uint32_t mismatch_word = words;
-            for (uint32_t w = 0; w < words; ++w) {
-                if (received[w] != expected[w]) {
-                    mismatch_word = w;
-                    break;
-                }
-            }
+            const uint32_t mismatch_word =
+                prefetcher_validator::first_mismatching_word(page_addr, scratch_addr, page_bytes);
             if (mismatch_word != words) {
                 DPRINT(
                     "PIPE_VALIDATOR_MISMATCH layer={} blk={} bank={} recv_idx={} word={} got=0x{:x} exp=0x{:x}\n",
@@ -138,17 +131,11 @@ void kernel_main() {
 
     DPRINT("PIPE_VALIDATOR_LOOP_DONE bank={} recv_idx={}\n", bank_id, recv_idx_in_bank);
 
-    // Bounded-poll for an extra entry (sender overshoot). entries_sent sits one L1_ALIGNMENT below
-    // entries_acked in this receiver's own config page, the same relationship wait_front relies on.
-    volatile tt_l1_ptr uint32_t* pages_acked_ptr = pipe.local_pages_acked_ptr();
-    volatile tt_l1_ptr uint32_t* pages_sent_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reinterpret_cast<uint32_t>(pages_acked_ptr) - L1_ALIGNMENT);
+    // Bounded-poll for an entry the sender pushed past the last one this receiver consumed.
     for (uint32_t spin = 0; spin < kExtraPollCycles; ++spin) {
         invalidate_l1_cache();
-        const uint32_t sent = *pages_sent_ptr;
-        const uint32_t acked = *pages_acked_ptr;
-        if (sent != acked) {
-            DPRINT("PIPE_VALIDATOR_OVERFLOW: sender pushed an extra entry; sent={} acked={}\n", sent, acked);
+        if (pipe.has_unconsumed_entries()) {
+            DPRINT("PIPE_VALIDATOR_OVERFLOW: sender pushed an extra entry past the expected last one\n");
             while (true) {
                 ;
             }
