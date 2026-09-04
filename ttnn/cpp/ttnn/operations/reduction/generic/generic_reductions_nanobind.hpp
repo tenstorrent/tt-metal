@@ -81,8 +81,11 @@ inline std::string get_generic_reduction_doc(
 
         Memory Support:
             - Interleaved: DRAM and L1
-            - Sharded (L1): Width, Height, and ND sharding
+            - Sharded (L1): Width, Height, Block, and ND sharding
+            - Sharded (DRAM): Width, Height, and ND sharding
             - Output sharding will mirror the input
+            - Not supported: DRAM block sharding; sharded ROW_MAJOR inputs; and sharded
+              reduction along a dimension other than -1 / -2
         )doc",
         op_name,
         qualified_name,
