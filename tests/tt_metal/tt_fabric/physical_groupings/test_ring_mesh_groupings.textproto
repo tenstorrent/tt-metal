@@ -1,0 +1,28 @@
+# PGD for the inter-mesh connectivity test: the two mesh shapes that alternate around the ring.
+#
+#     1x2_Mesh:   [ ]---[ ]        1x1_Mesh:   [ ]
+#
+# Both leave ASIC locations UNSPECIFIED so a grouping can land anywhere on the ring, which is what
+# lets the search choose between packing same-shape meshes together and interleaving them.
+groupings {
+  name: "1x2_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 1 location { asic_location: ASIC_LOCATION_UNSPECIFIED } }
+  ]
+  row_major_mesh {
+    dims: [1, 2]
+  }
+}
+
+groupings {
+  name: "1x1_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_UNSPECIFIED } }
+  ]
+  row_major_mesh {
+    dims: [1, 1]
+  }
+}

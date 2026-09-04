@@ -1,0 +1,63 @@
+# Four meshes in a ring, alternating two shapes, so every mesh-level edge crosses a shape boundary.
+#
+#   A0 (1x2) --- B0 (1x1) --- A1 (1x2) --- B1 (1x1) --- back to A0
+#
+# This is the shape of the heterogeneous pipeline case: placing the two A meshes next to each other
+# packs neatly and stays disjoint, but strands the A--B seams. Only a placement that interleaves the
+# shapes around the ring satisfies every edge.
+#
+# 2 + 1 + 2 + 1 = 6 chips, which is exactly the ring in test_6asic_ring.textproto, so the placement
+# has to use every chip and has no spare room to hide a bad choice.
+
+# --- Meshes ---------------------------------------------------------------
+
+mesh_descriptors {
+  name: "A"  # 1x2
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 2 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+mesh_descriptors {
+  name: "B"  # 1x1
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 1 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+# --- Graph ----------------------------------------------------------------
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "A" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "B" mesh_id: 1 } }
+  instances { mesh { mesh_descriptor: "A" mesh_id: 2 } }
+  instances { mesh { mesh_descriptor: "B" mesh_id: 3 } }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "A" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "B" mesh_id: 1 } }
+    channels { count: 2 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "B" mesh_id: 1 } }
+    nodes { mesh { mesh_descriptor: "A" mesh_id: 2 } }
+    channels { count: 2 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "A" mesh_id: 2 } }
+    nodes { mesh { mesh_descriptor: "B" mesh_id: 3 } }
+    channels { count: 2 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "B" mesh_id: 3 } }
+    nodes { mesh { mesh_descriptor: "A" mesh_id: 0 } }
+    channels { count: 2 policy: RELAXED }
+  }
+}
+
+# --- Instantiation --------------------------------------------------------
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
