@@ -17,6 +17,7 @@
 #include <fmt/format.h>
 #include <fmt/ranges.h>
 #include <tt-logger/tt-logger.hpp>
+#include <tt_stl/assert.hpp>
 
 #include <protobuf/factory_system_descriptor.pb.h>
 
@@ -167,6 +168,42 @@ void agree_or_throw_fsd_host_filter(
         maxes[2]);
     log_error(tt::LogFabric, "{}", message);
     throw std::runtime_error(message);
+}
+
+void align_factory_descriptor_with_live(
+    ::tt::tt_metal::PhysicalSystemDescriptor& fsd, const ::tt::tt_metal::PhysicalSystemDescriptor& live) {
+    std::map<std::string, std::string> live_by_canonical;
+    for (const auto& hostname : live.get_all_hostnames()) {
+        live_by_canonical.emplace(::tt::tt_metal::canonical_host_for_node_id(hostname), hostname);
+    }
+
+    auto& fsd_ranks = fsd.get_host_to_rank_map();
+    for (auto& [fsd_hostname, rank] : fsd_ranks) {
+        const auto live_hostname = live_by_canonical.find(::tt::tt_metal::canonical_host_for_node_id(fsd_hostname));
+        TT_FATAL(
+            live_hostname != live_by_canonical.end(),
+            "Factory descriptor host '{}' has no live counterpart. The descriptor should already have been "
+            "filtered to the live host set.",
+            fsd_hostname);
+        rank = live.get_rank_for_hostname(live_hostname->second);
+    }
+
+    // This process's own host, under the descriptor's spelling of it.
+    const auto my_canonical = ::tt::tt_metal::canonical_host_for_node_id(live.my_host_name());
+    std::string my_fsd_hostname;
+    for (const auto& [fsd_hostname, rank] : fsd_ranks) {
+        if (::tt::tt_metal::canonical_host_for_node_id(fsd_hostname) == my_canonical) {
+            my_fsd_hostname = fsd_hostname;
+            break;
+        }
+    }
+    TT_FATAL(
+        !my_fsd_hostname.empty(),
+        "The local host '{}' is not in the factory descriptor, so there is nothing here to map onto.",
+        live.my_host_name());
+
+    fsd.set_discovery_data(
+        my_fsd_hostname, live.get_rank_for_hostname(live.my_host_name()), live.get_all_hostnames_unique());
 }
 
 void throw_on_fsd_chips_absent_from_live(

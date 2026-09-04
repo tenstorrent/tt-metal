@@ -102,7 +102,8 @@ public:
         const MeshGraph& mesh_graph,
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
         const LocalMeshBinding& local_mesh_binding,
-        std::chrono::duration<float> timeout = std::chrono::duration<float>(60.0f));
+        std::chrono::duration<float> timeout = std::chrono::duration<float>(60.0f),
+        const tt::tt_metal::PhysicalSystemDescriptor* live_descriptor = nullptr);
 
     // Construct a TopologyMapper with many-to-many ASIC pinning groups (MGD AsicPinningGroup shape).
     // Each group lists fabric nodes and allowed ASIC positions; any node in the group may map to any
@@ -114,7 +115,8 @@ public:
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
         const LocalMeshBinding& local_mesh_binding,
         const std::vector<::tt::tt_metal::experimental::tt_fabric::PinningConstraint>& pinning_groups,
-        std::chrono::duration<float> timeout = std::chrono::duration<float>(60.0f));
+        std::chrono::duration<float> timeout = std::chrono::duration<float>(60.0f),
+        const tt::tt_metal::PhysicalSystemDescriptor* live_descriptor = nullptr);
 
     // Construct a TopologyMapper from a pre-provided logical mesh chip to physical chip mapping.
     // Skips discovery and builds fabric node id to asic id mapping directly from the provided mapping.
@@ -125,7 +127,8 @@ public:
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
         const LocalMeshBinding& local_mesh_binding,
         const std::map<FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping,
-        std::chrono::duration<float> timeout = std::chrono::duration<float>(60.0f));
+        std::chrono::duration<float> timeout = std::chrono::duration<float>(60.0f),
+        const tt::tt_metal::PhysicalSystemDescriptor* live_descriptor = nullptr);
 
     /**
      * @brief Get logical mesh graph connectivity
@@ -472,6 +475,17 @@ private:
 
     const MeshGraph& mesh_graph_;
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor_;
+
+    // Where the real UMD identities come from, which is not always the descriptor being solved on.
+    //
+    // The solve runs entirely on addresses, so it does not care whether its descriptor was discovered or
+    // built from a factory system descriptor. But `asic_id` and `physical_chip_id` are UMD facts, and a
+    // factory descriptor has neither: its ASIC labels are file order. So those two fields are resolved
+    // from this descriptor by address, after the solve.
+    //
+    // Aliases `physical_system_descriptor_` unless a caller passes a separate live descriptor, which makes
+    // the resolution an identity on the discovered path and leaves it byte-for-byte as it was.
+    const tt::tt_metal::PhysicalSystemDescriptor& live_descriptor_;
     const LocalMeshBinding& local_mesh_binding_;
     const std::vector<::tt::tt_metal::experimental::tt_fabric::PinningConstraint> pinning_groups_;
     bool generate_mapping_locally_ = false;

@@ -1,13 +1,25 @@
 # Plan: FSD-backed topology map + Control Plane downed-links API
 
-**Status:** In progress. Landed: §5.5's mapper identity, via [`PLAN_physical_node_id.md`](PLAN_physical_node_id.md) slices 1–4, so the mapper is already keyed on `PhysicalNodeId` and §5.2's canonicalization exists as a function to call; §6's `diff_physical_system_descriptors` with its offline tests; `LinkHealth` (§2–§3) with `test_link_health.cpp`; and the host filter with its rank-agreement protocol (§5.1–§5.4), minus §5.3 cases 5–7. Not yet written: the ControlPlane wiring and forwarders (§7), and the `test_fsd_psd_e2e.cpp` half of §8.
+**Status:** In progress. Landed: §5.5's mapper identity, via [`PLAN_physical_node_id.md`](PLAN_physical_node_id.md) slices 1–4, so the mapper is keyed on `PhysicalNodeId` and §5.2's canonicalization exists as a function to call; §6's `diff_physical_system_descriptors` with its offline tests; `LinkHealth` (§2–§3) with `test_link_health.cpp`; the host filter with its rank-agreement protocol (§5.1–§5.4), minus §5.3 cases 5–7; and §7's ControlPlane wiring and forwarders. Not yet written: the `test_fsd_psd_e2e.cpp` half of §8.
 
-**§7 is the only thing left that makes any of this reachable.** `LinkHealth` and the host filter are both
-built and both unreferenced outside their tests: nothing constructs a `LinkHealth`, and nothing calls
-`fsd_host_filter_from_live`. §7 is what loads a factory descriptor at init, filters it, maps on it, and
-hangs a `LinkHealth` off the result.
+**The feature is now reachable end to end.** Setting `TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH` makes
+ControlPlane init derive a host filter from live, agree on it across ranks, build a PSD from the factory
+descriptor, solve the mesh on *that*, and hang a `LinkHealth` off the result. With no such path set,
+nothing changes: `descriptor_to_map_on()` returns the discovered descriptor and every forwarder is a
+null-safe no-op.
 
-`LinkHealth` is built but nothing constructs it yet — §7's wiring is what puts it on the ControlPlane. Two coverage gaps in its tests, both from the fixture rather than the class: `test_link_health.cpp` runs on the T3K mock, which is a single mesh on a single host, so the intermesh path (§4) and the cross-host merge (§5.4) are exercised only by construction, not by a test. Both need a multi-mesh mock fixture.
+**How the mapper gets real UMD identities.** The solve runs on addresses, so it does not care which
+descriptor it was handed, but `asic_id` and `physical_chip_id` are UMD facts a factory descriptor does not
+have — its ASIC labels are file order. `TopologyMapper` therefore takes an optional live descriptor and
+resolves those two fields from it by `(host_id, tray, loc)` *after* the solve. On the discovered path that
+live descriptor is the same object as the one being solved on, which makes the resolution an identity and
+leaves the existing behaviour byte-for-byte, confirmed by unchanged golden mappings.
+
+Coverage gaps, both from fixtures rather than the code: `test_link_health.cpp` runs on the T3K mock, a
+single mesh on a single host, so the intermesh path (§4) and the cross-host merge (§5.4) are exercised only
+by construction; and `FactoryDescriptorControlPlaneFixture` runs one rank against a matching descriptor, so
+it proves the healthy path and the identity resolution but not a *downed* link. Both need a multi-mesh mock
+fixture, which is §8's `test_fsd_psd_e2e.cpp`.
 **Umbrella:** [tenstorrent/tt-metal#52859](https://github.com/tenstorrent/tt-metal/issues/52859)
 **Contract:** [`README_downed_links_contract.md`](README_downed_links_contract.md)
 **Depends on (already on main):** RTOptions FSD path ([#53451](https://github.com/tenstorrent/tt-metal/pull/53451)), `build_physical_descriptor_from_file` ([#53857](https://github.com/tenstorrent/tt-metal/pull/53857)), `filter_factory_descriptor`
