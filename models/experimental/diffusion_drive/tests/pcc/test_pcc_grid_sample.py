@@ -21,19 +21,9 @@ import pytest
 import torch
 import torch.nn.functional as F
 
+from models.common.utility_functions import comp_pcc
 from models.experimental.diffusion_drive.reference.model import DiffusionDriveConfig, GridSampleCrossBEVAttention
 from models.experimental.diffusion_drive.tt.ttnn_grid_sample_attention import TtnnGridSampleCrossBEVAttention
-
-
-def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
-    a = a.float().flatten()
-    b = b.float().flatten()
-    a = a - a.mean()
-    b = b - b.mean()
-    denom = (a.norm() * b.norm()).item()
-    if denom < 1e-12:
-        return 1.0
-    return (a @ b).item() / denom
 
 
 @pytest.mark.timeout(300)
@@ -55,7 +45,7 @@ def test_grid_sample_primitive_pcc(device) -> None:
     out = ttnn.grid_sample(v_tt, g_tt)
     o = ttnn.to_torch(out).reshape(B, K, T, C).permute(0, 3, 1, 2)
 
-    pcc = _pcc(o, ref)
+    pcc = comp_pcc(ref, o)[1]
     assert pcc >= 0.99, f"grid_sample primitive PCC {pcc:.6f} < 0.99"
 
 
@@ -80,5 +70,5 @@ def test_grid_sample_attention_pcc(device) -> None:
     with torch.no_grad():
         ttnn_out = ttnn_mod(queries, traj_points, bev_feature, (H, W))
 
-    pcc = _pcc(ttnn_out, ref_out)
+    pcc = comp_pcc(ref_out, ttnn_out)[1]
     assert pcc >= 0.99, f"grid_sample attention PCC {pcc:.6f} < 0.99"

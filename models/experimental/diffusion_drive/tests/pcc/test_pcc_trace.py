@@ -21,19 +21,9 @@ from __future__ import annotations
 import pytest
 import torch
 
+from models.common.utility_functions import comp_pcc
 from models.experimental.diffusion_drive.reference.model import DiffusionDriveConfig, load_model
 from models.experimental.diffusion_drive.tt.ttnn_diffusion_drive import TtnnDiffusionDriveModel
-
-
-def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
-    a = a.float().flatten()
-    b = b.float().flatten()
-    a = a - a.mean()
-    b = b - b.mean()
-    denom = (a.norm() * b.norm()).item()
-    if denom < 1e-12:
-        return 1.0
-    return (a @ b).item() / denom
 
 
 @pytest.mark.timeout(300)
@@ -75,7 +65,7 @@ def test_backbone_trace_matches_eager(device, model_config, checkpoint_path, mis
     torch.manual_seed(1234)  # same noise stream
     traced_out = ttnn_model.execute_compiled(features)
 
-    pcc = _pcc(traced_out["trajectory"], eager_out["trajectory"])
+    pcc = comp_pcc(eager_out["trajectory"], traced_out["trajectory"])[1]
     print(f"traced-vs-eager trajectory PCC = {pcc:.6f}")
     assert pcc >= 0.99, f"traced trajectory PCC {pcc:.6f} < 0.99"
 
