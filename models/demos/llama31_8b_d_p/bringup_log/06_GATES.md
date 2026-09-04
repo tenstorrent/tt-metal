@@ -18,6 +18,11 @@ entry naming the blocker) · `NOT-RUN` (needs the reason). A gate with no raw lo
 | G-KV | P5.6 | KV cache **primitive**: write correctness, position map, no collateral writes | PCC >= 0.99 @bf8_b, <= 3x floor; positional read-back **bit-exact** | bf8_b worst-of-8-heads K **0.9999743** / V **0.9999752** (**1.00x** the floor at every head and both seq lens); bf16 **0.9999986** (**1.00x**); 128 positions x 4 `kv_actual` offsets **bit-identical**; pad tail + 3 other (user, layer) slots **exactly zero**; bf8_b costs **17.8x** on K / **17.7x** on V vs bf16 | PASS | 2026-09-04 | `raw/G-KV_20260904T100312Z.log` |
 | G-LAYER | P6.1 | one decoder layer, norm->attn->residual->norm->MLP->residual (integration check) | PCC >= 0.999, <= 8x floor | bf8_b **0.9997665 / 0.9998273 / 0.9998736** (floors 0.9998709/0.9998953/0.9999138 -> **1.81 / 1.65 / 1.47x**); bf16 **0.9998774 / 0.9999172 / 0.9999480** (floors 0.9999826/0.9999859/0.9999885 -> **7.05 / 5.86 / 4.51x**); SDPA-attributed residual **1.13-1.15x** / **2.01-2.14x**; real weights + real input **0.9998649** (floor 0.9999647 -> **3.82x**); controls **0.99864** / **0.99993** / **0.66830** | PASS | 2026-09-04 | `raw/G-LAYER_20260904T113153Z.log` |
 | G-WEIGHTS | P6.2 | no missing/unused keys; cache-only rebuild identical; loader bit-exact | exact | **291/291** keys, 0 missing, 0 unused (all 32 layers); **12/12** device tensors `max\|delta\| = 0.000e+00` through transpose + Q/K Meta swizzle + dtype ladder; **12/12** SHA-256 identical on a cache-only rebuild; 3/3 controls discriminate | PASS | 2026-09-04 | `raw/G-WEIGHTS_20260904T113320Z.log` |
+| G-MODEL | P6.3 | full stack hidden states; top-1 agreement | at 2 and 4 layers PCC >= 0.999 and <= 8x floor; at full depth per-layer step <= 4x from L3; 100% top-1 at every depth (`DEC-053`) | L2/s128 **0.9997314** (floor 0.9998795 -> **2.23x**); L4/s128 **2.36x**; **L32/s512 0.9984849**, worst step **1.27x**, top-1 374 == 374; corrected floor -> **1.53x** (`R-021`); control **0.16180** | PASS | 2026-09-04 | `raw/G-MODEL_20260904T115256Z.log`, `raw/G-MODEL-H5_20260904T114724Z.log`, `raw/G-MODEL_per_layer_pcc.json` |
+| G-CHUNK | P7 | chunked == one-shot for **deltas 1-2** (indexed RoPE, advancing chunk write), and both vs the fp32 golden | >= 0.999 mutual **per layer** (expect exact); >= 0.99 K / >= 0.98 V vs golden; L0 ratio <= 3x; step <= 4x from L3; delta 1 alone **bit-exact** | delta 1 in isolation **`torch.equal`, max\|delta\| = 0.0** on all 4 chunks; mutual **1.0000000** on K and V at **32/32** layers; vs golden K min **0.9990570** (L13) / V min **0.9957049** (L26); L0 K **1.10x** its complete floor (1.35x storage), V **1.02x** (1.70x storage); worst gated step K **1.90x** (L13), V **1.44x** (L11); controls **0.72466** (delta 1, K-only) and **0.22048 / 0.04473** (delta 2) | PASS | 2026-09-04 | `raw/G-CHUNK_20260904T132854Z.log`, `raw/G-CHUNK_per_layer_pcc.json` (earlier identical runs: `raw/G-CHUNK_20260904T124825Z.log`, `raw/G-CHUNK_20260904T131500Z.log`) |
+| G-GOLDEN | P7 | the fp32 golden trace's structure and content over all 32 layers | clean per-layer table; generator + verifier exit 0; streamed driver == `LlamaModel`'s own loop bit-exactly; a zeroed and a deleted layer must both exit non-zero | 32 layers / 512 tokens / **fp32**, 128.0 MB; streamed vs `LlamaModel` `max\|delta\|` **0.0** on K, V and the post-norm hidden over **all 32** layers (`torch.equal`); verifier **exit 0**; zeroed-layer control **exit 1** with 7 named problems; deleted-layer control **exit 1** | PASS | 2026-09-04 | `raw/G-GOLDEN-GEN_20260904T123642Z.log`, `raw/G-GOLDEN_20260904T125230Z.log` |
+| G-RUNTIME | P7 | the runtime satisfies the engine's **real** call site, statically; every refusal loud and matched | every unguarded name and parameter present; every refusal matched on its message; the audit itself must reject a doc-faithful runtime | **37/37** tests, no device, 8.2 s. Engine call site: **11** runtime attributes, **2** `config` fields (`is_last_rank`, `use_trace`), **9** called methods, **6** `getattr`-guarded hooks. Audit of `TtPrefillRuntime`: **0** missing attributes, **0** missing config fields, **0** signature problems. Control `_BrokenRuntime`: **3** missing methods, **1** missing config field, **4** signature problems including `metadata_msg`. **25** refusals asserted against **25** `raise` statements | PASS | 2026-09-04 | `raw/G-RUNTIME_20260904T131649Z.log` |
+| G-CHUNK-ATTN | P7 -> **P8** | chunk *k* attending the prefix read back out of the cache (**delta 3**) | >= 0.999 at layer 1; deep layers by step <= 4x; both vs golden | **not measured** — needs the ring path and TP=8, neither of which P7 owns. The configuration is **refused** at two levels rather than approximated | **BLOCKED** (`R-023`, owner **P8**) | 2026-09-04 | n/a — see `raw/G-RUNTIME_20260904T125242Z.log` for the refusal that stands in its place |
 
 ```
 STATUS after P0: gates PASS=1 FAIL=0 DEVIATION=0 BLOCKED=0 | next: P1 (reference)
@@ -1114,3 +1119,349 @@ ran. **These re-run logs are the ones the verdicts rest on.**
   substituted chain scored 0.9981153, *worse* than the device, so the subtraction over-removes and the
   attributed residual came out at 0.63x. What it does establish is the fused kernel's **share**:
   58.9% of total model-scale error.
+
+---
+
+### G-GOLDEN — the fp32 golden KV trace: structure, content, and equality with HF's own loop (P7)
+- **Commands (two, both host-only):**
+  ```
+  HF_MODEL=... PREFILL_TRACE_DIR=/home/mstojkovic/prefill_traces/llama31_8b_d_p/s512 \
+    python models/demos/llama31_8b_d_p/scripts/generate_golden_kv_cache.py --tokens 512
+  python models/demos/llama31_8b_d_p/scripts/verify_golden_kv.py $PREFILL_TRACE_DIR
+  ```
+- **Mesh / device:** none. Both scripts **import no ttnn** — asserted by the gate design, and the
+  reason `verify_golden_kv.py` scores nothing against the device (`DEC-060`, `R-025`).
+- **Inputs:** the package's bring-up prompt, tokenized with the checkpoint's own tokenizer and
+  **tiled to exactly 512 tokens** — the same prompt and the same tiling `G-MODEL` uses
+  (`DEC-056`), so a golden trace and a top-1 run see the same tokens. The 512 ids are recorded
+  verbatim in `metadata.json`, which is what makes `G-CHUNK` reproducible against a regenerated
+  trace.
+- **Reference dtype policy:** **fp32 throughout** (`DEC-059`) — weights cast to `float32` as they
+  come off the safetensors shards, all math in fp32, K and V saved fp32. Never through
+  `from_pretrained`, which would load at the checkpoint's `torch_dtype` (bf16) and hand back a
+  reference sharing the device's own rounding. There is no `--dtype` flag, so a bf16 golden cannot
+  be written by accident. Attention is `eager` **with an explicit
+  `transformers.masking_utils.create_causal_mask`**, asserted non-`None` — `eager_attention_forward`
+  applies only the mask it is handed, so a `None` mask is a silently non-causal reference.
+- **Computed noise floor:** not applicable — this gate has no device measurement. The floor that the
+  golden *supports* is `G-CHUNK`'s, and `G-CHUNK` records both a storage and a complete version of
+  it (`DEC-064`).
+- **Threshold:** the verifier exits 0 over all 32 layers and prints a per-layer table; the streamed
+  driver equals `LlamaModel`'s own loop at `rtol=atol=0`; a zeroed layer and a deleted layer must
+  both make the verifier exit non-zero (`BRINGUP_RECIPE.md:1588-1590`).
+- **Measured:**
+  - **32 layers, 512 tokens, fp32, 128.0 MB** (expected 128.0 MB); every layer `[1, 8, 512, 128]`
+    for both K and V; every element finite over the **whole** tensor, not a leading sample.
+  - **The streamed driver is bit-identical to `LlamaModel`'s own loop.** Over all 32 layers,
+    `max|delta|` = **0.0** on K, **0.0** on V and **0.0** on the post-final-norm hidden state, all
+    via `torch.equal`. Streamed pass 37.6 s; cross-check pass 61.8 s.
+  - Per-layer table, over all 32 layers: K RMS **1.44134 → 2.19652**, K `absmax`
+    **9.96930 → 32.69120**; V RMS **0.03345 → 0.58581**, V `absmax` **0.47060 → 5.70590**. No
+    all-zero token row anywhere — the smallest row norm in the whole trace is **0.01076** (V, layer
+    0) and the smallest K row norm is **2.21719**.
+  - No two of the 64 tensors are bit-identical (SHA-256 over each), so the streamed driver did not
+    write the same layer twice.
+- **Verdict:** **PASS**
+- **Negative controls (both required by the gate, both discriminate):**
+  1. **Layer 7's K and V zeroed** — structurally perfect, contents wrong. Verifier **exit 1** with
+     **seven** named problems (RMS 0, std 0, an all-zero row, for each of K and V, plus "layer 7 V
+     is bit-identical to layer 7 K"). Worth noting: the template verifier
+     (`models/demos/gpt_oss_d_p/scripts/verify_golden_kv.py:111`) **passes** this control — it
+     checks shape, dtype and the finiteness of the first 1000 elements and nothing else — so the
+     content checks in this package's version are what make the gate's own control meaningful.
+  2. **Layer 13's file deleted** — verifier **exit 1**, "layer 13: layer_13.safetensors is missing".
+- **Deviations:** `DEC-059` (fp32, against both templates' bf16), `DEC-060` (the file follows the
+  gate text, not P7 step 2 — `R-025`), `DEC-066` (the trace lives outside the repo — `R-026`),
+  `DEC-069` (this stays a script gate, so the P7 regression does not cover it).
+- **What this gate does NOT prove.** Nothing about the device. It proves the reference is a
+  reference: fp32, causal, complete, and not an artifact of this package's own streaming driver.
+  Whether the *device* reproduces it is `G-CHUNK`'s question, and at TP=8 `G-KV-TP8`/`G-MESH-KV`'s.
+
+---
+
+### G-CHUNK — chunked KV production == one-shot (deltas 1-2), and both vs the fp32 golden (P7)
+- **Command:**
+  ```
+  HF_MODEL=... PREFILL_TRACE_DIR=/home/mstojkovic/prefill_traces/llama31_8b_d_p/s512 \
+    pytest models/demos/llama31_8b_d_p/tests/unit/test_attention_chunked_vs_ref.py -x -q
+  ```
+- **Mesh / device:** **(1,1)**, Blackhole. 32 layers, seq 512, `CHUNK_SIZE = 128` → **4 chunks** at
+  write offsets `{0, 128, 256, 384}` (`DEC-061`). Cache dtype `bfloat8_b`, weights `bfloat8_b`,
+  activations `bfloat16`.
+- **Raw log:** `raw/G-CHUNK_20260904T132854Z.log` (4 tests, 69 s) + `raw/G-CHUNK_per_layer_pcc.json`.
+  Two earlier runs (`..._124825Z`, `..._131500Z`) produced **identical** numbers to seven decimal
+  places; the test file changed between them twice (a DRAM-lifetime fix, then the delta-1 bit-equality
+  test), so all three are kept and this one is what the verdict rests on.
+- **Delta 1, in isolation, on bit-equality rather than PCC.** The indexed RoPE applied per chunk with
+  `kv_actual_global ∈ {0, 128, 256, 384}` is **bit-identical** to the contiguous builder over the
+  whole sequence: `max|delta| = 0.0` on every chunk, `torch.equal → True`. This is an *addressing*
+  claim — the op derives each chunk's start row on device from one runtime argument — and §2.5 says
+  an address claim gated on PCC is not gated, so it is gated on `torch.equal`. The sub-test needs
+  neither the checkpoint nor the trace, so it runs on a weightless box and is the cheapest first
+  check for anyone debugging a chunked number. It also closes `R-007`'s second half: the indexed
+  RoPE had no Llama-shaped numerical test anywhere.
+- **What makes the decomposition exact.** Both KV producers are fed *the same hidden states*,
+  captured from **one** one-shot forward of the real 32-layer model through the `on_layer_output`
+  seam (`DEC-050`). Given identical inputs, deltas 1 and 2 are the **entire** difference between
+  them: the one-shot arm uses the contiguous RoPE over the whole sequence and one write at
+  `kv_actual = 0`; the chunked arm uses the **indexed** RoPE with `kv_actual_global = c * 128` and a
+  write at the same offset. Nothing re-runs the attention core, so delta 3 is absent by construction.
+- **Why it runs on one card.** A model-level KV write cannot at TP=1 — the model emits all 8 local
+  KV heads and the per-chip slot holds one. The cache is therefore driven through `write_kv_chunk`
+  **one head at a time, head `h` → layer slot `h`**: the same op, the same DRAM `NdShard` geometry
+  and the same `head_dim = 128` a chip performs at TP=8 (`BRINGUP_RECIPE.md:1574`).
+- **Inputs:** the golden trace's own 512 `token_ids` — real prompt tokens, real checkpoint weights.
+  The hidden states the producers see are the ones the assembled model actually produces, i.e. the
+  real-scale arm §2.2.2 and `R-018` say predicts model behaviour, not a synthetic one.
+- **Reference dtype policy:** the fp32 golden (`G-GOLDEN`, `DEC-059`). The device's K is
+  Meta-swizzled over `head_dim` (the loader `reverse_permute`s Q/K), so **the golden and the floor
+  are permuted HF → Meta before comparison, and the permutation is applied *before* quantising** —
+  `bfloat8_b` shares one exponent per 16-element block of the last dim, so the block boundaries move
+  with the permutation. V is not swizzled and is compared as-is.
+- **Thresholds (`BRINGUP_RECIPE.md:1578-1584`):** mutual PCC ≥ **0.999 per layer** (expected exact);
+  vs golden ≥ **0.99** K / ≥ **0.98** V; layer-0 error ratio ≤ **3x**; per-layer error step ≤ **4x**
+  from layer 3.
+- **Computed noise floor — two definitions, both recorded (`DEC-064`, applying `R-021` to P7):**
+
+  | layer 0 | K | V |
+  |---|---|---|
+  | measured (both producers, identical) | **0.9999617** | **0.9999369** |
+  | **storage** floor — the golden quantised to bf8_b, which is what `:1583` names | 0.9999716 | 0.9999628 |
+  | ratio to the storage floor | 1.35x | 1.70x |
+  | **complete** floor — bf16 input, bf16 norm gain, bf8_b projection weight, bf16 RoPE tables, bf8_b store | 0.9999651 | 0.9999382 |
+  | **ratio to the complete floor (the asserted one)** | **1.10x** | **1.02x** |
+
+  Both clear 3x, so no verdict turns on the choice — but they differ by 23% on K and 67% on V, and
+  the storage floor is the one that inflates, because it omits the projection weight's rounding that
+  the device pays on every K and V it produces. No internal intermediate is quantised (§2.2's
+  conservative reading), and the complete floor's ratios sit at 1.02-1.10x rather than below 1.0, so
+  the floor is complete without being over-complete.
+- **Measured:**
+  - **chunked == one-shot, exactly, at every layer.** Mutual PCC = **1.0000000** on K and on V for
+    **32/32** layers; the worst of 64 comparisons is 1.0000000. The indexed RoPE is not merely close
+    to the contiguous one, it is **bit-identical**: a standalone probe rotating the same tensor both
+    ways gave `max|delta| = 0.0` and `torch.equal → True` across all four chunk offsets.
+  - **vs the fp32 golden**, per layer, both producers identical to 7 decimal places:
+    K min **0.9990570** (L13), max 0.9999662 (L1); V min **0.9957049** (L26), max 0.9999369 (L0).
+    The curve decays with depth as the hidden state accumulates the model's own error (`G-MODEL`
+    measures 0.9984849 on that hidden state at 32 layers), which is what the step gate exists for.
+  - **per-layer error step:** worst gated K step **1.90x** at L13; worst gated V step **1.44x** at
+    L11. Budget 4x. No step anywhere in either curve.
+  - Full curves in `raw/G-CHUNK_per_layer_pcc.json`.
+- **Verdict:** **PASS**
+- **Negative controls — two, one per delta (`DEC-065`, `R-027`):**
+
+  | control | breaks | mutual K | mutual V |
+  |---|---|---|---|
+  | rope every chunk at `kv_actual_global = 0` | delta 1 | **0.72466** | 1.00000 — *invariant* |
+  | write every chunk at `kv_actual = 0` | delta 2 | **0.22048** | **0.04473** |
+
+  The recipe specifies only the first and quotes **two** numbers for it (0.706 / 0.655). Its K
+  figure and this run's 0.72466 agree to within 3%, so it is the same experiment — but **V cannot
+  move under it**, because V is never rotated and both producers see identical hidden states. The
+  delta-1 control therefore *asserts* V is unchanged (turning the invariant into a check), and
+  delta 2 gets its own control. A single control for a two-delta gate would have left a dropped
+  `kv_actual` — the most likely chunked-prefill bug there is — completely ungated.
+- **Deviations:** `DEC-061` (the chunk geometry), `DEC-064` (the floor definition), `DEC-065` (two
+  controls), `DEC-066` (the trace lives outside the repo).
+- **What this gate does NOT prove.** Four things, and they are not small:
+  1. **Delta 3** — a chunk-*k* query attending the cached prefix. `BLOCKED`, `R-023`, owner P8.
+  2. **The model → cache path.** The write is driven head-by-head from the *stage* level, not from
+     `Model.prefill_forward` with a cache attached, because at TP=1 that op refuses. `R-001`,
+     `G-KV-TP8`.
+  3. **The block-cyclic reorder.** At `sp = 1` it is the identity, so local row == global position
+     and the inverse gather is never exercised. `G-MESH-KV`.
+  4. **`tt/tt_prefill_runtime.py`.** This gate calls the modules directly; the runtime is not
+     instantiated anywhere in P7 (`R-029`).
+
+---
+
+### G-RUNTIME — the runtime against the engine's real call site, statically (P7)
+- **Command:** `pytest models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py -q`
+- **Raw log:** `raw/G-RUNTIME_20260904T131649Z.log` (first run: `raw/G-RUNTIME_20260904T125242Z.log`, identical)
+- **Mesh / device:** **none** (`BRINGUP_RECIPE.md:1954` gives this gate device "none"). 37 tests,
+  8.2 s, no mesh opened. The two `__init__` refusals are reached with a `_MeshStub` exposing only
+  `.shape` — both run before any `ttnn` object is constructed — and the per-chunk refusals with an
+  `object.__new__` instance carrying only the three attributes those checks read (`DEC-068`). The
+  code under test is the real method on the real class with the real messages; only the state it
+  reads is supplied directly.
+- **Inputs:** the engine's own source, parsed with `ast`. **Not the contract doc** — that is the
+  whole point of the gate (`BRINGUP_RECIPE.md:1593-1596`).
+- **Reference dtype policy:** not applicable; no numbers are measured.
+- **Threshold:** every unguarded name the engine touches exists on the runtime with a signature that
+  binds the engine's actual call; every `runtime.config` field the engine reads exists; every
+  refusal raises and is matched on its message; and **the audit itself must reject** a runtime
+  written to the doc.
+- **Measured — what the engine actually does, read out of `prefill_runner.py`:**
+  - **11** attributes accessed on the runtime handle; **9** methods called; **2** fields read off
+    `runtime.config` (`is_last_rank` at `:301`, **`use_trace`** at `:303`, `:745`, `:773`); **6**
+    hooks reached only behind `getattr`/`hasattr` (`capture_trace`, `kv_migration_base_address`,
+    `kv_migration_stages`, `release_trace`, `trace_metadata_msg`, `warmup_ack_count`).
+  - **`prefill_chunk` is called with 2 positional arguments and six keywords** —
+    `slot_id, actual_start, actual_end, request_id, d2h_service, metadata_msg`
+    (`prefill_runner.py:286`). The doc's §2 signature (`ADDING_A_PREFILL_MODEL.md:129`) lists
+    neither of the last two.
+  - **`build_kv_chunk_table` is called five times, with `path` positional on three of them
+    (`:644`, `:655`, `:674`) and keyword on two (`:570`, `:699`)**, plus a `**stage_layout` splat —
+    so the parameter must be positional-or-keyword. The recipe's P10 warning names the two
+    `prefill_chunk` parameters but not this.
+  - Audit of `TtPrefillRuntime`: **0** missing attributes, **0** missing config fields, **0**
+    signature problems.
+- **Verdict:** **PASS**
+- **Negative controls (three, all discriminate):**
+  1. **The audit's own control.** `_BrokenRuntime` is a runtime written faithfully to the doc:
+     `metadata_msg` absent, `set_layer_completion_sink` / `set_d2h_ack_service` /
+     `build_kv_chunk_table` absent, `config.use_trace` absent. The same audit function reports
+     **3** missing methods, **1** missing config field and **4** signature problems, including
+     *"prefill_chunk cannot accept the engine's call at prefill_runner.py:286 ... got an unexpected
+     keyword argument 'metadata_msg'"* — the exact `TypeError` that would otherwise arrive on the
+     first served chunk, after the mesh is open and 15 GB of weights are loaded.
+  2. **The audit's precondition.** A separate test asserts the walk actually found a
+     `runtime.prefill_chunk` call, a `runtime.compile` call, at least one `config` access and at
+     least one guarded hook — so an audit over a moved or renamed engine file cannot report a clean
+     pass by finding nothing (the failure mode `R-016` describes for citations).
+  3. **A refusal census.** The module's `raise` statements are counted with `ast` (**25**) and
+     compared against the refusal list this file asserts, so a deleted `raise` shows up as a failing
+     count rather than as silently-lost coverage.
+- **The 25 refusals, all matched on a metachar-free message substring** (`expect_error`'s `message`
+  is a **regex**, not the substring its docstring describes — `R-014`, `DEC-045`): six config-geometry
+  refusals (a chunk size that does not divide `max_seq_len`, one below `TILE_SIZE x sp`, a capacity
+  that is not a multiple of it, `sp_axis == tp_axis`, zero users, zero layers); two construction
+  refusals (a mesh of the wrong shape; **`tp != num_key_value_heads`**, tested at `(1,1)`, `(4,4)`
+  and `(4,2)`); eight `prefill_chunk` argument refusals (`d2h_service`, `metadata_msg`, an
+  unsupported chunk size, a slot out of range, an empty range, a range wider than one chunk, a chunk
+  past capacity, an unaligned `actual_start`); **the delta-3 refusal** (`actual_start > 0` on the
+  dense path, naming P8 and `R-023`); three cache-resolution refusals; `make_chunk_input` on a short
+  chunk; `compile` on a non-first rank; and five unimplemented engine hooks (`R-024`).
+- **Deployment geometry, asserted with its arithmetic (`DEC-061`, closes `R-004`):**
+  `chunk_size = 8192`, `max_seq_len = 131072`, mesh `(4,8)` → `sp = 4`, `tp = 8`;
+  `8192 % (32 x 4) = 8192 % 128 = 0`; `131072 / 8192 = 16` chunks exactly.
+- **Deviations:** `DEC-062` (no cache ownership; `compile(kv_caches)` required, against the outline's
+  `=None`), `DEC-063` (the unimplemented hooks are present and raise), `DEC-067` (a 4D per-chip
+  `make_chunk_input`, following the outline over the template), `DEC-068` (device-free access to the
+  instance methods).
+- **What this gate does NOT prove — and this is the largest gap P7 leaves.** **The runtime has never
+  been instantiated** (`R-029`). `G-RUNTIME` is static by design and the `tp == num_key_value_heads`
+  equality forbids `(1,1)`, so `__init__` past its refusals, `_build_indexed_rope`,
+  `make_chunk_input`, `compile` past its rank check and the whole happy path of `prefill_chunk` have
+  not executed. What *is* proved is that the class cannot fail with a `TypeError` on the engine's
+  call, that all 25 refusals fire with their stated messages, and that the deployment arithmetic is
+  right. P8's first act should be to build one and call `compile()` — which warms a second chunk at
+  `actual_start = chunk` and so exercises delta 3 immediately.
+
+---
+
+### G-CHUNK-ATTN — chunk *k* attending the cached prefix (delta 3): **BLOCKED**, owner P8
+- **Command:** none run. The gate belongs to `tests/unit/test_sp_attention_chunked.py`, a P8 file.
+- **Mesh / device:** `(4,8)` with the ring fabric — neither of which P7 owns.
+- **Threshold (unchanged, for P8):** ≥ 0.999 at layer 1; deep layers gated by step ≤ 4x; both vs the
+  golden (`BRINGUP_RECIPE.md:1958`).
+- **Verdict:** **BLOCKED** — `07_RISKS.md` `R-023`, which names **P8** as the owner, as
+  `BRINGUP_RECIPE.md:1598-1600` requires.
+- **Why it is not weakened into `G-CHUNK`.** The recipe forbids both available shortcuts explicitly,
+  and the third — running a cache-backed chunk on the dense path anyway — is the dangerous one: plain
+  `is_causal` SDPA assumes Q row 0 aligns with K row 0, so the mask is off by `actual_start` and the
+  answer is *plausible* rather than obviously wrong.
+- **What stands in its place.** Two refusals, both asserted:
+  `tt/attention/prefill.py::attention_forward` refuses `cached_len > 0` (P5.5), and
+  `tt/tt_prefill_runtime.py::prefill_chunk` refuses `actual_start > 0` on the dense path with a
+  message naming P8, this gate and `R-023` (`G-RUNTIME`'s
+  `test_prefill_chunk_refuses_a_cache_backed_chunk_on_the_dense_path`).
+
+---
+
+```
+STATUS after P6: gates PASS=13 FAIL=0 DEVIATION=1 BLOCKED=0 | next: P7 (chunked prefill + golden KV)
+```
+_(Filled in by the P7 session: the P6 session recorded `G-LAYER`, `G-WEIGHTS` and `G-MODEL` as detail
+blocks and put `G-LAYER`/`G-WEIGHTS` in the summary table, but left the `G-MODEL` summary row and
+this two-line checkpoint unwritten — §1.5 requires one after every phase. The `G-MODEL` row above is
+transcribed from that session's own detail block and raw logs; no number is new.)_
+
+```
+STATUS after P7: gates PASS=16 FAIL=0 DEVIATION=1 BLOCKED=1 | next: P8 (multi-device: TP, SP and the CCL gates)
+Per-phase regression gate: whole package suite **177 passed, 0 failed** in 18m46s (`raw/P7-REGRESSION_20260904T133027Z.log`)
+Citations after P7: **488/488 verified, 0 mismatched; 811/811 doc refs resolved**, exit 0
+(`raw/G-CITE_20260904T135004Z.log`). CITES grew 427 -> 488 (**+61**): every P7 reference is
+content-checked, including all 17 into the recipe's own P7 section and Appendix A rows, and all 20
+into the engine's own source (`prefill_runner.py` x19, `prefill_producer.py` x1) — the two files
+whose line numbers this phase's whole design rests on (R-016, R-017).
+Open DECs needing review: DEC-021 (bf8_b KV dtype — measured at G-KV, stands), DEC-025 (residual
+scheme A; P8 owns the switch), DEC-026 (barrier depth 2 — G-RACE's first move if it fails),
+DEC-027 (mesh descriptor not yet pinned; G-FABRIC-MATRIX picks it), DEC-038/DEC-041 (the
+scatter_output seams still refuse), DEC-042/R-015 (G-ATTN's 8x block budget — settled at layer and
+model level, still unreachable at bf16 for the block alone), **DEC-059** (the fp32 golden is 128 MB
+at 512 tokens and would be 32 GB at the deployment 128k — revisit before a long-context trace),
+**DEC-061** (chunk 8192 is functionally derived but its *performance* is unmeasured; P8/P10 may
+revise), **DEC-063** (the six engine hooks that raise — P10 replaces the bodies), **DEC-064** (P8's
+G-KV-TP8 and G-MESH-KV should use the same floor term list), **DEC-066** (the golden trace is not in
+the repo — a CI question), **DEC-067** (the 4D make_chunk_input shape is first exercised on device in
+P8), **DEC-069** (G-GOLDEN stays a script gate, so the regression does not cover it)
+Closed this phase: **R-004** (CHUNK_SIZE and MAX_SEQ_LEN chosen with their arithmetic — DEC-061),
+**R-007** (the indexed RoPE now has a Llama-shaped test: **bit-identical** to the contiguous
+builder at four chunk offsets, `torch.equal`, and mutual PCC exactly 1.0000000 on all 32 layers at
+the KV level; the `sp > 1` block-cyclic path stays open under R-001), **R-021's P7 obligation** (the
+corrected floor definition is applied at G-CHUNK, with both floors recorded).
+Opened this phase: R-023 (delta 3 BLOCKED, owner P8), R-024 (six engine hooks raise, owner P10),
+R-025 (the recipe describes verify_golden_kv.py two incompatible ways), R-026 (the 128 MB golden
+trace is not in the repo), R-027 (the recipe's delta-1 control quotes a V number no correct
+implementation can produce), R-028 (P7 step 4's named template is the delta-3 test P7 is forbidden to
+run), **R-029 (high: TtPrefillRuntime has never been instantiated)**.
+```
+
+**STOPPED HERE, ON A GATE BOUNDARY.** Supersedes the end-of-P5.6 stop note above.
+**P0-P6 and all of P7 are complete and gated; P8 (multi-device) is next**, then P10, then P9.
+
+P7's three gates are recorded: `G-CHUNK` **PASS**, `G-GOLDEN` **PASS**, `G-RUNTIME` **PASS**, and
+`G-CHUNK-ATTN` is **BLOCKED** with `R-023` naming P8 as its owner — which
+`BRINGUP_RECIPE.md:1598-1600` requires by construction, not as a concession.
+
+New in the tree: `tt/tt_prefill_runtime.py`, `scripts/generate_golden_kv_cache.py`,
+`scripts/verify_golden_kv.py`, `tests/unit/test_attention_chunked_vs_ref.py`,
+`tests/unit/test_prefill_runtime_chunked.py`. `scripts/verify_citations.py` gained 61 `CITES` entries.
+**No P0-P6 module was touched**: every file under `tt/` that existed before this phase is
+byte-identical to the state P6 gated (`git status` shows four modified files — the three
+append-only logs and `scripts/verify_citations.py`, which §1.6 requires extending every phase).
+So the 13 gates P0-P6 recorded still hold against this tree without re-running, and the P7
+regression re-ran them anyway.
+
+What P8 can rely on, and what it must not assume:
+
+1. **Deltas 1 and 2 are exact, not merely close.** The indexed RoPE is **bit-identical** to the
+   contiguous builder — `max|delta| = 0.0` on every chunk, `torch.equal → True`, gated as an
+   *address* claim rather than a PCC one (§2.5) — and the chunked KV producer scores mutual PCC
+   **1.0000000** against the one-shot producer on K and V at **32/32** layers. So if a P8
+   chunked-attention number is wrong, the RoPE offset and the write offset are **not** where to look
+   — the ring SDPA's cache read is. Both facts hold at `sp = 1` only; the block-cyclic reorder is
+   still the identity here.
+2. **The runtime has never run.** `R-029`, and it is the biggest thing P7 leaves open.
+   `G-RUNTIME` proves the class satisfies the engine's real call site and that all 25 refusals fire;
+   it proves nothing executes. **P8's first act on the `(4,8)` mesh should be to build a
+   `TtPrefillRuntime` and call `compile()`** — that warms a chunk at `actual_start = chunk_size`, so
+   it is also the cheapest possible smoke test of the ring path.
+3. **The golden trace is the shared reference for every later KV gate.** 32 layers, 512 tokens,
+   fp32, proved bit-identical to `LlamaModel`'s own loop. `G-KV-TP8`, `G-CHUNK-ATTN` and `G-MESH-KV`
+   should all score against **this** trace so their numbers are comparable to `G-CHUNK`'s, and it is
+   regenerated by one command (`R-026` explains why it is not committed).
+4. **Use the complete floor, not the storage floor** (`DEC-064`, and `R-021` requires it). At layer 0
+   the two differ by 23% on K and 67% on V, and the storage floor is the one that inflates the ratio.
+   The term list is: bf16 producer input, bf16 norm gain, bf8_b projection weight quantised **in the
+   transposed Meta-swizzled orientation**, bf16 RoPE tables, bf8_b store quantised **after** the
+   HF→Meta permutation. No internal intermediate.
+5. **Permute before quantising.** `bfloat8_b` shares one exponent per 16-element block of the last
+   dim, so quantising in HF order and then permuting to Meta is **not** the same tensor as permuting
+   and then quantising. The device does the latter. Every K comparison in P8 has this hazard.
+6. **`G-CHUNK` still says nothing about the model → cache path or the block-cyclic reorder.** At
+   `sp = 1` the reorder is the identity and the write is driven head-by-head from the stage level.
+   `R-001` is unchanged; `G-KV-TP8` and `G-MESH-KV` own both.
+7. **Two refusals stand where delta 3 will go**, and P8 must remove them deliberately rather than
+   route around them: `attention_forward` refuses `cached_len > 0`, and `prefill_chunk` refuses
+   `actual_start > 0` on the dense path. Both name `G-CHUNK-ATTN` and `R-023` in their messages.
+8. **The engine's call site is wider than its contract doc, and the AST walk is the source of
+   truth.** It is re-derived at test time, so a P10 session should read `G-RUNTIME`'s gate block and
+   `R-024`'s table rather than `ADDING_A_PREFILL_MODEL.md` §2: two methods and one `config` field
+   the doc never mentions are called unguarded, and `build_kv_chunk_table`'s `path` is positional at
+   three of its five call sites.
+9. **A negative control must be able to fail for the *specific* thing it names.** `G-CHUNK` needed
+   two controls where the recipe specified one, because the specified control cannot move V at all
+   (`R-027`). Count the things a gate claims and count the controls.

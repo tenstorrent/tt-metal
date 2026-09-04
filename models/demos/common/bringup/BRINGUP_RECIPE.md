@@ -443,6 +443,14 @@ nothing. **Drive residual-block controls at the scale the model really sees** (r
 activations measured from the reference), and say in the gate block which you used. A control that
 cannot fail is worse than no control, because it is recorded as evidence.
 
+#### 2.2.3a Permute before you quantise, not after
+
+`bfloat8_b`'s shared exponent covers each 16-element block of the **last** dimension, so
+`permute(quantise(x)) != quantise(permute(x))`. Any comparison that reorders a head dimension — every
+K comparison against an HF golden, since HF and the device disagree on lane order — must apply the
+permutation **before** the quantiser, or the floor it computes belongs to a different tensor than the
+one measured. Not hypothetical: it is a live hazard for every K gate from the KV cache onward.
+
 #### 2.2.4 An absolute PCC threshold is meaningless without a stated depth
 
 Error accumulates with depth, so one absolute number cannot gate a 2-layer stack and a 32-layer one.
@@ -1545,19 +1553,37 @@ in-test fp32 reference matches HF at PCC 1.0, and state the dtype policy. See P1
    `LlamaModel`'s own loop at `rtol=atol=0`, so the streaming is not itself the thing under test.
    The trace directory comes from `$PREFILL_TRACE_DIR` — the engine already owns that variable, so
    do not invent a package one.
-2. `scripts/verify_golden_kv.py` — compare a device KV read-back against the golden, per layer,
+`verify_golden_kv.py` — a **host-only** structural and content check of the golden trace itself: every
+layer present, correctly shaped, finite, non-constant, and byte-identical to the reference loop. It
+**imports no ttnn**. The device-vs-golden scoring lives in `G-CHUNK`, which already holds a device
+context. (An earlier draft asked this same script to "compare a device KV read-back" six lines above
+saying it imports no ttnn — a file that reads a device cannot do that, and resolving it cost a
+session half an hour.)
    reporting min/mean PCC per layer for K and V.
 3. `tt/tt_prefill_runtime.py` — the chunked runtime. Build it to the engine's contract *now* so P10
    is wiring, not rework: `compile(kv_cache)`, `make_chunk_input(token_ids)`,
    `prefill_chunk(input, kv_cache, *, slot_id, actual_start, actual_end, request_id=0,
    d2h_service=..., metadata_msg=...)`, plus `mesh_device` and a `config` exposing
+
+**And the gap is wider than two parameters — audit the engine's call sites, do not trust its doc or
+this list.** An AST walk of the runner found, beyond `d2h_service` and `metadata_msg`:
+`set_layer_completion_sink` and `set_d2h_ack_service` called **unguarded** and absent from the
+contract doc entirely; `runtime.config.use_trace` read in three places and missing from the doc's
+config-field list; and `build_kv_chunk_table`'s `path` passed **positionally** at three of its five
+call sites and by keyword at the other two. A runtime written to the doc *plus* this warning still
+fails. Write a static audit that walks the engine's own call sites and asserts your runtime satisfies
+them — it is device-free, runs in seconds, and turns a first-served-chunk `TypeError` on a galaxy into
+a unit-test failure.
    `chunk_size/max_seq_len/first_layer_idx/is_first_rank/is_last_rank`. Full contract:
    `models/demos/common/prefill/docs/ADDING_A_PREFILL_MODEL.md` §2 — but see the P10 warning about
    what that section omits, and write the signature with the extra two parameters from the start.
    Template: `models/demos/gpt_oss_d_p/tt/tt_prefill_runtime.py:96`.
    **The runtime must not own the KV cache** — the engine allocates it and passes it in.
 4. `tests/unit/test_attention_chunked_vs_ref.py` — the chunked-vs-one-shot equivalence test
-   (template: `models/demos/minimax_m3/tests/unit/test_attention_chunked_vs_ref.py`).
+write `tests/unit/test_attention_chunked_vs_ref.py` for **deltas 1 and 2 only**. Do **not** use
+`models/demos/minimax_m3/tests/unit/test_attention_chunked_vs_ref.py` as the template: that file runs
+chunk 1 with `cached_len = chunk` on a multi-device mesh, which *is* delta 3 — the one this phase must
+record `BLOCKED`. Following it walks straight into the attention path's own refusal.
 
 **A chunked prefill differs from a one-shot in exactly three places.** Name them, because P7 can
 measure two of them and not the third:
@@ -1580,10 +1606,19 @@ run on one card even though a *model-level* KV write cannot (P0). So:
   accumulated-depth statistic — see P8's `G-CHUNK-ATTN` for what happens when depth gets folded into
   a mutual-PCC number.
 - both paths vs the fp32 golden: **≥ 0.99** (K) / **≥ 0.98** (V, consistently the weaker of the
-  two), with the layer-0 error ratio **≤ 3x** the bf8_b storage floor and the per-layer error
+assert the layer-0 ratio against a **complete** floor (§2.2.3) — one that quantises every tensor the
+device stores on that path: the bf8_b projection weights, the bf16 input, the bf16 norm gain and the
+bf16 RoPE tables, not just the cache write. Record the cache-write-only ("storage") floor beside it
+for reference. They are not close: measured, they differ by **23% on K and 67% on V**, and the storage
+floor is the optimistic one, so using it manufactures findings exactly as §2.2.3's worked example does.
   **step ≤ 4x** from layer 3.
 - negative control: rope every chunk at `kv_actual_global = 0` and the mutual PCC must collapse
-  (measured 0.706 / 0.655).
+rope every chunk at `kv_actual_global = 0` and the mutual **K** PCC must collapse (measured
+**0.72466**). **Do not expect V to move at all** — this gate feeds both producers the same hidden
+states and V is never rotated, so no RoPE control can perturb it; an earlier draft quoted a V figure
+of 0.655 that no correct implementation can produce. And one control is not enough for a two-delta
+gate: add a second that drops a `kv_actual` offset, which moves both (measured K **0.22048**,
+V **0.04473**).
 
 **Gate `G-GOLDEN`:** `verify_golden_kv.py` runs clean over all 32 layers and prints a per-layer
 table; the table goes into `bringup_log/raw/`. It imports no ttnn — the device-vs-golden scoring

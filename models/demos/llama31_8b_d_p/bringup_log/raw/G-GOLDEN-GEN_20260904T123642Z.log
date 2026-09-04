@@ -1,0 +1,38 @@
+[golden] 32 layers, 512 tokens, 8 KV heads, head_dim=128, store dtype=float32
+[golden] checkpoint /home/mstojkovic/models/Llama-3.1-8B-Instruct -> trace /home/mstojkovic/prefill_traces/llama31_8b_d_p/s512
+[golden] layer  0: K (1, 8, 512, 128) V (1, 8, 512, 128) written
+[golden] layer  1: K (1, 8, 512, 128) V (1, 8, 512, 128) written
+[golden] layer  2: K (1, 8, 512, 128) V (1, 8, 512, 128) written
+[golden] layer  3: K (1, 8, 512, 128) V (1, 8, 512, 128) written
+[golden] layer  4: K (1, 8, 512, 128) V (1, 8, 512, 128) written
+[golden] layer  5: K (1, 8, 512, 128) V (1, 8, 512, 128) written
+[golden] layer  6: K (1, 8, 512, 128) V (1, 8, 512, 128) written
+[golden] layer  7: K (1, 8, 512, 128) V (1, 8, 512, 128) written
+[golden] layer  8: K (1, 8, 512, 128) V (1, 8, 512, 128) written
+[golden] layer  9: K (1, 8, 512, 128) V (1, 8, 512, 128) written
+[golden] layer 10: K (1, 8, 512, 128) V (1, 8, 512, 128) written
+[golden] layer 11: K (1, 8, 512, 128) V (1, 8, 512, 128) written
+[golden] layer 12: K (1, 8, 512, 128) V (1, 8, 512, 128) written
+[golden] layer 13: K (1, 8, 512, 128) V (1, 8, 512, 128) written
+[golden] layer 14: K (1, 8, 512, 128) V (1, 8, 512, 128) written
+[golden] layer 15: K (1, 8, 512, 128) V (1, 8, 512, 128) written
+[golden] layer 16: K (1, 8, 512, 128) V (1, 8, 512, 128) written
+[golden] layer 17: K (1, 8, 512, 128) V (1, 8, 512, 128) written
+[golden] layer 18: K (1, 8, 512, 128) V (1, 8, 512, 128) written
+[golden] layer 19: K (1, 8, 512, 128) V (1, 8, 512, 128) written
+[golden] layer 20: K (1, 8, 512, 128) V (1, 8, 512, 128) written
+[golden] layer 21: K (1, 8, 512, 128) V (1, 8, 512, 128) written
+[golden] layer 22: K (1, 8, 512, 128) V (1, 8, 512, 128) written
+[golden] layer 23: K (1, 8, 512, 128) V (1, 8, 512, 128) written
+[golden] layer 24: K (1, 8, 512, 128) V (1, 8, 512, 128) written
+[golden] layer 25: K (1, 8, 512, 128) V (1, 8, 512, 128) written
+[golden] layer 26: K (1, 8, 512, 128) V (1, 8, 512, 128) written
+[golden] layer 27: K (1, 8, 512, 128) V (1, 8, 512, 128) written
+[golden] layer 28: K (1, 8, 512, 128) V (1, 8, 512, 128) written
+[golden] layer 29: K (1, 8, 512, 128) V (1, 8, 512, 128) written
+[golden] layer 30: K (1, 8, 512, 128) V (1, 8, 512, 128) written
+[golden] layer 31: K (1, 8, 512, 128) V (1, 8, 512, 128) written
+[golden] streamed driver: 32 layers in 37.6s
+[golden] LlamaModel cross-check: 32 layers bit-identical (max|delta| K=0.0e+00 V=0.0e+00 hidden=0.0e+00) in 61.8s
+[golden] wrote 32 layer files (0.13 GB) + metadata.json to /home/mstojkovic/prefill_traces/llama31_8b_d_p/s512
+[golden] next: python3 models/demos/llama31_8b_d_p/scripts/verify_golden_kv.py /home/mstojkovic/prefill_traces/llama31_8b_d_p/s512

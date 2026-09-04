@@ -1,0 +1,189 @@
+2026-09-04 12:52:45.714 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mstojkovic/.cache/ttnn,model_cache_path=/home/mstojkovic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.14, pytest-9.0.3, pluggy-1.6.0 -- /home/mstojkovic/tt-metal/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mstojkovic/tt-metal
+configfile: pytest.ini
+plugins: timeout-2.4.0, anyio-4.15.0, cov-7.0.0, github-actions-annotate-failures-0.3.0, repeat-0.9.4, dash-2.15.0, benchmark-5.2.3, split-0.11.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 37 items
+
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_engine_call_site_is_readable 2026-09-04 12:52:48.128 | INFO     | llama31_8b_d_p.tests.unit.test_prefill_runtime_chunked:test_engine_call_site_is_readable:261 - [G-RUNTIME] engine call site: 11 runtime attributes, 2 config attributes ['is_last_rank', 'use_trace'], 9 called methods ['build_kv_chunk_table', 'capture_trace', 'compile', 'kv_migration_base_address', 'kv_migration_stages', 'prefill_chunk', 'set_d2h_ack_service', 'set_layer_ack_channel', 'set_layer_completion_sink'], 6 guarded hooks ['capture_trace', 'kv_migration_base_address', 'kv_migration_stages', 'release_trace', 'trace_metadata_msg', 'warmup_ack_count']
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_runtime_satisfies_the_engine_call_site 2026-09-04 12:52:48.330 | INFO     | llama31_8b_d_p.tests.unit.test_prefill_runtime_chunked:test_runtime_satisfies_the_engine_call_site:278 - [G-RUNTIME] audit of TtPrefillRuntime: {'missing_attributes': [], 'missing_config_attributes': [], 'signature_problems': []}
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_audit_rejects_a_runtime_written_to_the_doc 2026-09-04 12:52:48.530 | INFO     | llama31_8b_d_p.tests.unit.test_prefill_runtime_chunked:test_audit_rejects_a_runtime_written_to_the_doc:293 - [G-RUNTIME] audit of _BrokenRuntime (control): {'missing_attributes': ['build_kv_chunk_table (engine reads it at prefill_runner.py:570)', 'set_d2h_ack_service (engine reads it at prefill_runner.py:746)', 'set_layer_completion_sink (engine reads it at prefill_runner.py:752)'], 'missing_config_attributes': ['config.use_trace (engine reads it at prefill_runner.py:303)'], 'signature_problems': ['build_kv_chunk_table is called by the engine but does not exist', "prefill_chunk cannot accept the engine's call at prefill_runner.py:286 (2 positional + ['slot_id', 'actual_start', 'actual_end', 'request_id', 'd2h_service', 'metadata_msg']): got an unexpected keyword argument 'metadata_msg'", 'set_d2h_ack_service is called by the engine but does not exist', 'set_layer_completion_sink is called by the engine but does not exist']}
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_doc_required_names_are_present PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_engine_call_site_is_wider_than_the_doc 2026-09-04 12:52:48.916 | INFO     | llama31_8b_d_p.tests.unit.test_prefill_runtime_chunked:test_engine_call_site_is_wider_than_the_doc:340 - [G-RUNTIME] engine-called methods the doc's section 2 does not list: ['set_d2h_ack_service', 'set_layer_completion_sink']; config fields the engine reads: ['is_last_rank', 'use_trace'] (the doc lists ['chunk_size', 'max_seq_len', 'first_layer_idx', 'is_first_rank', 'is_last_rank'])
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_deployment_chunk_geometry 2026-09-04 12:52:49.108 | INFO     | llama31_8b_d_p.tests.unit.test_prefill_runtime_chunked:test_deployment_chunk_geometry:369 - [G-RUNTIME] deployment geometry: chunk=8192 max_seq_len=131072 -> 16 chunks; 8192 % (TILE_SIZE x sp = 128) = 0
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_multiple_chunk_sizes_are_ordered_largest_first PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_config_refuses_bad_geometry[chunk_not_dividing] 2026-09-04 12:52:49.485 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="must divide max_seq_len"
+2026-09-04 12:52:49.485 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="must divide max_seq_len"
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_config_refuses_bad_geometry[extra_chunk_not_dividing] 2026-09-04 12:52:49.673 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="must divide max_seq_len"
+2026-09-04 12:52:49.673 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="must divide max_seq_len"
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_config_refuses_bad_geometry[chunk_below_tile_x_sp] 2026-09-04 12:52:49.860 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="must be a multiple of TILE_SIZE"
+2026-09-04 12:52:49.860 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="must be a multiple of TILE_SIZE"
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_config_refuses_bad_geometry[capacity_not_multiple] 2026-09-04 12:52:50.047 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="must divide max_seq_len"
+2026-09-04 12:52:50.048 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="must divide max_seq_len"
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_config_refuses_bad_geometry[same_axis] 2026-09-04 12:52:50.235 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="must differ"
+2026-09-04 12:52:50.235 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="must differ"
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_config_refuses_bad_geometry[no_users] 2026-09-04 12:52:50.422 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="num_users must be at least 1"
+2026-09-04 12:52:50.422 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="num_users must be at least 1"
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_config_refuses_zero_layers 2026-09-04 12:52:50.609 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="num_layers must be at least 1"
+2026-09-04 12:52:50.610 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="num_layers must be at least 1"
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_runtime_refuses_a_mesh_of_the_wrong_shape 2026-09-04 12:52:50.796 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="config.mesh_shape"
+2026-09-04 12:52:50.796 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="config.mesh_shape"
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_runtime_refuses_tp_not_equal_to_kv_heads[single_card] 2026-09-04 12:52:50.999 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="tp == num_key_value_heads"
+2026-09-04 12:52:50.999 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="tp == num_key_value_heads"
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_runtime_refuses_tp_not_equal_to_kv_heads[tp4] 2026-09-04 12:52:51.196 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="tp == num_key_value_heads"
+2026-09-04 12:52:51.196 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="tp == num_key_value_heads"
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_runtime_refuses_tp_not_equal_to_kv_heads[tp2] 2026-09-04 12:52:51.384 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="tp == num_key_value_heads"
+2026-09-04 12:52:51.384 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="tp == num_key_value_heads"
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_prefill_chunk_refuses_bad_arguments[d2h_service] 2026-09-04 12:52:51.572 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] NotImplementedError message="emits no D2H layer-ack records"
+2026-09-04 12:52:51.572 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] NotImplementedError message="emits no D2H layer-ack records"
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_prefill_chunk_refuses_bad_arguments[metadata_msg] 2026-09-04 12:52:51.759 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] NotImplementedError message="trace-safe metadata tensor"
+2026-09-04 12:52:51.759 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] NotImplementedError message="trace-safe metadata tensor"
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_prefill_chunk_refuses_bad_arguments[unsupported_chunk_size] 2026-09-04 12:52:51.945 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="has no indexed RoPE table"
+2026-09-04 12:52:51.945 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="has no indexed RoPE table"
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_prefill_chunk_refuses_bad_arguments[slot_out_of_range] 2026-09-04 12:52:52.131 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="out of range"
+2026-09-04 12:52:52.131 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="out of range"
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_prefill_chunk_refuses_bad_arguments[empty_range] 2026-09-04 12:52:52.320 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="not a non-empty range"
+2026-09-04 12:52:52.320 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="not a non-empty range"
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_prefill_chunk_refuses_bad_arguments[range_wider_than_chunk] 2026-09-04 12:52:52.508 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="not a non-empty range"
+2026-09-04 12:52:52.508 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="not a non-empty range"
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_prefill_chunk_refuses_bad_arguments[past_capacity] 2026-09-04 12:52:52.694 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="runs past the per-user"
+2026-09-04 12:52:52.694 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="runs past the per-user"
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_prefill_chunk_refuses_bad_arguments[unaligned_start] 2026-09-04 12:52:52.880 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="must be tile-aligned"
+2026-09-04 12:52:52.881 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="must be tile-aligned"
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_prefill_chunk_refuses_a_cache_backed_chunk_on_the_dense_path 2026-09-04 12:52:53.066 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] NotImplementedError message="must attend the prefix read back out of"
+2026-09-04 12:52:53.066 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] NotImplementedError message="must attend the prefix read back out of"
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_prefill_chunk_refuses_a_missing_or_foreign_cache 2026-09-04 12:52:53.263 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="needs the engine-owned KV cache"
+2026-09-04 12:52:53.263 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="needs the engine-owned KV cache"
+2026-09-04 12:52:53.263 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] TypeError message="must be a LlamaKVCache"
+2026-09-04 12:52:53.264 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] TypeError message="must be a LlamaKVCache"
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_prefill_chunk_accepts_a_one_element_sequence_of_caches PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_make_chunk_input_refuses_a_short_chunk 2026-09-04 12:52:53.636 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="must be exactly chunk_size"
+2026-09-04 12:52:53.636 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="must be exactly chunk_size"
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_compile_refuses_a_non_first_rank 2026-09-04 12:52:53.821 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] NotImplementedError message="pipeline rank needs the D2D activation spec"
+2026-09-04 12:52:53.821 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] NotImplementedError message="pipeline rank needs the D2D activation spec"
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_unimplemented_engine_hooks_refuse_loudly[layer_ack] 2026-09-04 12:52:54.005 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] NotImplementedError message="set_layer_ack_channel is P10"
+2026-09-04 12:52:54.006 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] NotImplementedError message="set_layer_ack_channel is P10"
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_unimplemented_engine_hooks_refuse_loudly[completion_sink] 2026-09-04 12:52:54.192 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] NotImplementedError message="multi-rank pipeline path"
+2026-09-04 12:52:54.192 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] NotImplementedError message="multi-rank pipeline path"
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_unimplemented_engine_hooks_refuse_loudly[d2h_ack] 2026-09-04 12:52:54.377 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] NotImplementedError message="belongs to the trace path"
+2026-09-04 12:52:54.377 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] NotImplementedError message="belongs to the trace path"
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_unimplemented_engine_hooks_refuse_loudly[chunk_table] 2026-09-04 12:52:54.562 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] NotImplementedError message="build_kv_chunk_table is P10"
+2026-09-04 12:52:54.562 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] NotImplementedError message="build_kv_chunk_table is P10"
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_unimplemented_engine_hooks_refuse_loudly[migration_base] 2026-09-04 12:52:54.749 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] NotImplementedError message="kv_migration_base_address is P10"
+2026-09-04 12:52:54.749 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] NotImplementedError message="kv_migration_base_address is P10"
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_every_raise_in_the_module_is_covered 2026-09-04 12:52:54.937 | INFO     | llama31_8b_d_p.tests.unit.test_prefill_runtime_chunked:test_every_raise_in_the_module_is_covered:573 - [G-RUNTIME] tt_prefill_runtime.py contains 25 raise statements at lines [508, 526, 539, 551, 566, 583, 106, 158, 167, 172, 174, 210, 218, 311, 347, 408, 413, 424, 426, 431, 436, 443, 479, 500, 162]
+PASSED
+
+=============================== warnings summary ===============================
+python_env/lib/python3.12/site-packages/pydantic/_internal/_config.py:291
+  /home/mstojkovic/tt-metal/python_env/lib/python3.12/site-packages/pydantic/_internal/_config.py:291: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.9/migration/
+    warnings.warn(DEPRECATION_MESSAGE, DeprecationWarning)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /home/mstojkovic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+0.20s setup    models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_runtime_refuses_tp_not_equal_to_kv_heads[single_card]
+0.20s setup    models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_prefill_chunk_refuses_a_missing_or_foreign_cache
+0.20s setup    models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_engine_call_site_is_readable
+0.20s setup    models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_runtime_refuses_tp_not_equal_to_kv_heads[tp4]
+0.19s setup    models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_deployment_chunk_geometry
+0.19s setup    models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_runtime_satisfies_the_engine_call_site
+0.19s setup    models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_audit_rejects_a_runtime_written_to_the_doc
+0.19s setup    models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_doc_required_names_are_present
+0.19s setup    models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_config_refuses_bad_geometry[chunk_not_dividing]
+0.19s setup    models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_multiple_chunk_sizes_are_ordered_largest_first
+0.19s setup    models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_prefill_chunk_refuses_bad_arguments[empty_range]
+0.19s setup    models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_runtime_refuses_tp_not_equal_to_kv_heads[tp2]
+0.19s setup    models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_prefill_chunk_accepts_a_one_element_sequence_of_caches
+0.19s setup    models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_config_refuses_bad_geometry[extra_chunk_not_dividing]
+0.19s setup    models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_prefill_chunk_refuses_bad_arguments[d2h_service]
+0.19s setup    models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_prefill_chunk_refuses_bad_arguments[range_wider_than_chunk]
+0.19s setup    models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_engine_call_site_is_wider_than_the_doc
+0.19s setup    models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_config_refuses_bad_geometry[same_axis]
+0.19s setup    models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_config_refuses_bad_geometry[no_users]
+0.19s setup    models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_config_refuses_bad_geometry[capacity_not_multiple]
+0.19s setup    models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_config_refuses_zero_layers
+0.19s setup    models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_prefill_chunk_refuses_bad_arguments[metadata_msg]
+0.19s setup    models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_unimplemented_engine_hooks_refuse_loudly[migration_base]
+0.19s setup    models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_config_refuses_bad_geometry[chunk_below_tile_x_sp]
+0.19s setup    models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_runtime_refuses_a_mesh_of_the_wrong_shape
+=========================== short test summary info ============================
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_engine_call_site_is_readable
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_runtime_satisfies_the_engine_call_site
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_audit_rejects_a_runtime_written_to_the_doc
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_doc_required_names_are_present
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_engine_call_site_is_wider_than_the_doc
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_deployment_chunk_geometry
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_multiple_chunk_sizes_are_ordered_largest_first
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_config_refuses_bad_geometry[chunk_not_dividing]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_config_refuses_bad_geometry[extra_chunk_not_dividing]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_config_refuses_bad_geometry[chunk_below_tile_x_sp]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_config_refuses_bad_geometry[capacity_not_multiple]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_config_refuses_bad_geometry[same_axis]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_config_refuses_bad_geometry[no_users]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_config_refuses_zero_layers
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_runtime_refuses_a_mesh_of_the_wrong_shape
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_runtime_refuses_tp_not_equal_to_kv_heads[single_card]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_runtime_refuses_tp_not_equal_to_kv_heads[tp4]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_runtime_refuses_tp_not_equal_to_kv_heads[tp2]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_prefill_chunk_refuses_bad_arguments[d2h_service]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_prefill_chunk_refuses_bad_arguments[metadata_msg]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_prefill_chunk_refuses_bad_arguments[unsupported_chunk_size]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_prefill_chunk_refuses_bad_arguments[slot_out_of_range]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_prefill_chunk_refuses_bad_arguments[empty_range]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_prefill_chunk_refuses_bad_arguments[range_wider_than_chunk]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_prefill_chunk_refuses_bad_arguments[past_capacity]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_prefill_chunk_refuses_bad_arguments[unaligned_start]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_prefill_chunk_refuses_a_cache_backed_chunk_on_the_dense_path
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_prefill_chunk_refuses_a_missing_or_foreign_cache
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_prefill_chunk_accepts_a_one_element_sequence_of_caches
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_make_chunk_input_refuses_a_short_chunk
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_compile_refuses_a_non_first_rank
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_unimplemented_engine_hooks_refuse_loudly[layer_ack]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_unimplemented_engine_hooks_refuse_loudly[completion_sink]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_unimplemented_engine_hooks_refuse_loudly[d2h_ack]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_unimplemented_engine_hooks_refuse_loudly[chunk_table]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_unimplemented_engine_hooks_refuse_loudly[migration_base]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py::test_every_raise_in_the_module_is_covered
+======================== 37 passed, 1 warning in 8.22s =========================

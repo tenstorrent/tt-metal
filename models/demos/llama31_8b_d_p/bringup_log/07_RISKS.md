@@ -1,6 +1,6 @@
 # 07 — Risks and open questions
 
-The register and the sections must agree. Re-checked at every phase boundary (last: end of P6,
+The register and the sections must agree. Re-checked at every phase boundary (last: end of P7,
 2026-09-04).
 
 | Id | Severity | Phase found | Summary | Status | Owner |
@@ -11,7 +11,7 @@ The register and the sections must agree. Re-checked at every phase boundary (la
 | R-004 | low | P0 | `CHUNK_SIZE` / `MAX_SEQ_LEN` not yet chosen | open — deferred by `DEC-004` | P7 (`G-CHUNK`) |
 | R-005 | high | P1 | `rope_theta` is absent from the `transformers` 5.12.1 config object; `getattr` with a default silently substitutes a wrong theta | **mitigated and enforced** as of P5.3 | closed by `tt/rope.py` + `G-ROPE` |
 | R-006 | medium | P1 | The hand-written oracle and HF could share a misreading of the architecture | open — inherent | P0 card / P6 (`G-MODEL`) |
-| R-007 | medium | P2 | `ttnn.experimental.deepseek_prefill.update_padded_kv_cache` and `rotary_embedding_indexed` are consumed from `deepseek_v3_d_p`'s substrate; no Llama-specific test exists upstream | **write path covered** as of P5.6 (`G-KV`, bit-exact at `head_dim = 128`); the indexed RoPE is still untested numerically | P7 (`G-CHUNK`), P8 |
+| R-007 | medium | P2 | `ttnn.experimental.deepseek_prefill.update_padded_kv_cache` and `rotary_embedding_indexed` are consumed from `deepseek_v3_d_p`'s substrate; no Llama-specific test exists upstream | **closed as of P7** — the write path was bit-exact at P5.6 (`G-KV`) and the indexed RoPE is now **bit-identical** to the contiguous builder at `sp = 1`, four chunk offsets, `torch.equal` (`G-CHUNK`). The `sp > 1` block-cyclic path is still untested and is `R-001`'s, not this one's | closed (`G-KV` + `G-CHUNK`); `sp > 1` -> P8 |
 | R-008 | low | P2 | The kit ships fewer example files than its own README and `WHY_THESE_EXAMPLES.md` advertise | open — affects the kit, not the model | kit maintainer |
 | R-009 | medium | P2 | No in-repo template implements a **dense, bias-free, full-RoPE** attention block; `tt/attention/` is an adaptation with three features deleted | **mitigated** as of P5.5 (`G-ATTN`: every hand-written stage 1.00-2.50x of its floor, block 0.999+) | closed by `G-ATTN`; P6 re-checks at layer level |
 | R-010 | low | P2 | `compute_llama3_parameters` hard-codes low/high frequency factors instead of reading the config | mitigated in-package (P5.3 assert); open upstream | P5.3 (`G-ROPE`) |
@@ -27,6 +27,13 @@ The register and the sections must agree. Re-checked at every phase boundary (la
 | R-020 | medium | P6.3 | `G-MODEL`'s absolute PCC threshold is scoped to the **reduced-depth** runs by the phase text (`:1420-1422`) and to all depths by the Appendix A row (`:1856`); at 32 layers the measured post-norm PCC is 0.9984849 | resolved in-package (`DEC-053`); the kit's wording is still ambiguous | kit maintainer |
 | R-021 | **high** | P6.3 | `G-MODEL`'s floor omitted the bf16 rounding of the RoPE tables the device stores while `G-LAYER`'s floor included it — worth **45%** of the floor error at 32 layers, and the whole difference between a reported 2.79x and **1.53x** | **fixed in-package** (the floor now quantises cos/sin); both numbers recorded (`DEC-053`) | kit maintainer (§2.2 wording); P7/P8 for their own floors |
 | R-022 | medium | P6.3 | §2.3.1's additive kernel attribution **over-subtracts at 32-layer depth**: the substituted chain scores 0.9981153, worse than the device's 0.9984849, giving an attributed residual of **0.63x** (< 1.0) | open as a method limit; worked around (gate on the raw ratio against a complete floor) | kit maintainer; P7/P8 |
+| R-023 | medium | P7 | **Delta 3** — chunk *k*'s queries attending the prefix read back out of the cache — cannot run in P7: it needs the ring path and TP=8. `G-CHUNK-ATTN` is recorded `BLOCKED` | open by construction; the runtime **refuses** the configuration rather than running a mask that is off by `actual_start` | **P8** (`G-CHUNK-ATTN`, `G-SP-RING`) |
+| R-024 | medium | P7 | Six engine-called runtime hooks (migration, layer-ack, trace) are present and **raise**; a migration or trace run therefore fails rather than silently publishing nothing | open — deliberate stubs, each naming P10 in its message, all covered by `G-RUNTIME` | **P10** (`G-KV-TABLE`, `G-LOOPBACK`, `G-REQUEST`) |
+| R-025 | medium | P7 | The recipe describes `verify_golden_kv.py` as a **device**-vs-golden scorer (`:1548-1549`) and, six lines later, as importing **no ttnn** (`:1588-1590`) | resolved in-package by following the gate (`DEC-060`); the kit's two passages still contradict | kit maintainer |
+| R-026 | medium | P7 | The 128 MB fp32 golden trace is **not in the repo**; `G-CHUNK`'s evidence depends on regenerating it from `$HF_MODEL` | mitigated: one command, ~100 s, and `metadata.json`'s `token_ids` pin the inputs (`DEC-066`) | P8/P10 (they score against the same trace) |
+| R-027 | low | P7 | The recipe's delta-1 negative control quotes **two** numbers (0.706 / 0.655) for a control that in the gate's own decomposition can move only **K** — V is never rotated | resolved in-package: two controls, one per delta (`DEC-065`); K measured 0.72466 against the quoted 0.706 | kit maintainer |
+| R-028 | low | P7 | Recipe P7 step 4 names `models/demos/minimax_m3/tests/unit/test_attention_chunked_vs_ref.py` as the template for the P7 test of the same name — but that file is precisely the **delta-3** cache-read test the same phase forbids P7 to run | worked around: the P7 file implements deltas 1-2 as the `G-CHUNK` gate text specifies, and the named template becomes P8's | kit maintainer |
+| R-029 | **high** | P7 | `TtPrefillRuntime` has **never been instantiated**: `G-RUNTIME` is a static audit and the `tp == num_key_value_heads` equality forbids `(1,1)`, so no line of its happy path has executed | open — stated in the `G-RUNTIME` gate block as what the gate does not prove | **P8** (first instantiation), P10 |
 
 ---
 
@@ -489,3 +496,157 @@ by measurement, not by presence of the kernel — and add that the attributed re
 demonstrably holds would be worth stating. Owner: kit maintainer. Downstream: P7's `G-CHUNK` and P8's
 `G-MESH-KV` both compare accumulated 32-layer quantities and should gate on the raw ratio against a
 complete floor rather than on an attributed residual.
+
+## R-023 — Delta 3 cannot run in P7, and the runtime refuses it rather than approximating it
+**Fact.** A chunked prefill differs from a one-shot in exactly three places
+(`BRINGUP_RECIPE.md:1562`): the indexed RoPE and its per-chunk offset (delta 1), the advancing
+cache-write offset (delta 2), and **chunk *k*'s queries attending the prefix read back out of the
+cache** (delta 3). P7 owns the first two and measured both exactly. Delta 3 needs the ring-joint
+SDPA over the block-cyclic cache (`tt/attention/dense_sp.py`, which `raise`s) at TP=8 on the `(4,8)`
+mesh — neither of which P7 has.
+**Impact.** `G-CHUNK` proves that the chunked KV *producer* is bit-identical to the one-shot
+producer, and it proves nothing about whether a chunk-2 query attends chunks 0-1 correctly. The
+consequence is bounded and named: after `G-CHUNK`, the KV cache written by a multi-chunk prefill is
+verified; the *attention output* of a multi-chunk prefill is not verified at all.
+**Why it is not weakened into `G-CHUNK`.** `BRINGUP_RECIPE.md:1598-1601` forbids both available
+shortcuts: "Do **not** weaken `G-CHUNK` to cover it, do not move P7 to a multi-device mesh to make
+it run". The third option — running a cache-backed chunk on the dense path anyway — is the dangerous
+one, because plain `is_causal` SDPA assumes Q row 0 aligns with K row 0 and so produces a mask off
+by `actual_start`: a *plausible* wrong answer, not a crash.
+**Status.** open by construction. Two refusals stand between this gap and a wrong number:
+`tt/attention/prefill.py::attention_forward` refuses `cached_len > 0`, and
+`tt/tt_prefill_runtime.py::prefill_chunk` refuses `actual_start > 0` on the dense path with a message
+naming P8, `G-CHUNK-ATTN` and this risk id. Both are asserted (`G-RUNTIME`'s
+`test_prefill_chunk_refuses_a_cache_backed_chunk_on_the_dense_path`, `G-ATTN`'s own refusal test).
+**How to close.** **P8 owns it**, as gate `G-CHUNK-ATTN`: ">= 0.999 at layer 1; deep layers gated by
+step <= 4x; both vs golden" (`BRINGUP_RECIPE.md:1958`). It should score against the same trace this
+phase generated, so the chunked-attention numbers are comparable to `G-CHUNK`'s producer numbers.
+Owner: P8.
+
+## R-024 — Six engine-called runtime hooks are deliberate stubs that raise
+**Fact.** The `G-RUNTIME` AST walk over `models/demos/common/prefill/runners/prefill_runner.py`
+found nine methods the engine calls on a runtime handle. Three are implemented (`compile`,
+`prefill_chunk`, and `make_chunk_input` which the engine does not call but the contract requires).
+The other six are present and raise `NotImplementedError`:
+
+| hook | engine call site | guarded? | owner |
+|---|---|---|---|
+| `build_kv_chunk_table` | `prefill_runner.py:570`, `:644`, `:699` | no | P10 (`G-KV-TABLE`) |
+| `kv_migration_base_address` | `:616` | `hasattr` | P10 (`G-LOOPBACK`) |
+| `set_layer_ack_channel` | `:768` | no | P10 (`G-REQUEST`) |
+| `set_layer_completion_sink` | `:752` | no | not in this iteration (multi-rank) |
+| `set_d2h_ack_service` | `:746` | no | not in this iteration (trace) |
+| `kv_migration_stages` | `:613`, `:615` | `hasattr` | not implemented (single cache) |
+
+**Impact.** Each of the unguarded four is reachable only when the corresponding engine env var is
+set (`PREFILL_ENABLE_MIGRATION`, `PREFILL_ENABLE_LAYER_ACK`, `PREFILL_USE_TRACE`), so a default
+single-rank serving run touches none of them. With them set, the run **fails loudly at setup** with
+a message naming P10 — which is the intended behaviour and is strictly better than the alternative
+that was considered and rejected (`DEC-063`): a `build_kv_chunk_table` that returned its `path`
+argument would let a migration run publish an empty table and report success.
+**One cost is real and recorded.** Defining `kv_migration_base_address` makes the engine's
+`hasattr` at `:616` true, so the engine's own diagnostic at `:619-623` is no longer reachable. The
+replacement message is more specific (it names P10 and this risk), so the trade was taken.
+**Status.** open — deliberate. All six refusals are asserted on their messages by
+`G-RUNTIME`'s `test_unimplemented_engine_hooks_refuse_loudly` and the module's 25 `raise`
+statements are counted by `test_every_raise_in_the_module_is_covered`.
+**How to close.** P10 implements `build_kv_chunk_table`, `kv_migration_base_address` and
+`set_layer_ack_channel` (the last is one line — `tt/model.py`'s `on_layer_complete` seam already
+exists, `DEC-050`). The two remaining hooks stay refusals: multi-rank pipeline parallel and
+trace/2CQ are explicit non-goals (`BRINGUP_RECIPE.md:16`). Owner: P10.
+
+## R-025 — The recipe describes `verify_golden_kv.py` two incompatible ways, six lines apart
+**Fact, quoted.** `BRINGUP_RECIPE.md:1548-1549`: "`scripts/verify_golden_kv.py` — compare a device KV
+read-back against the golden, per layer, reporting min/mean PCC per layer for K and V."
+`BRINGUP_RECIPE.md:1588-1590`: "**Gate `G-GOLDEN`:** `verify_golden_kv.py` runs clean over all 32
+layers and prints a per-layer table ... **It imports no ttnn** — the device-vs-golden scoring lives
+in `G-CHUNK`." A file that compares a device read-back must import ttnn.
+**Impact.** It decides what the file *is*, and therefore what `G-GOLDEN` measures. Followed
+literally, step 2 makes `G-GOLDEN` a second device gate that duplicates `G-CHUNK` and gives two
+gates two ways to disagree about the same PCC; followed as the gate states, it is a host-only
+structural check with its own negative controls. Half an hour was spent establishing which, and the
+tiebreakers were outside the P7 section: Appendix A (`:1953`) gives `G-GOLDEN` device "host (imports
+no ttnn)", and both in-repo templates
+(`models/demos/minimax_m3/scripts/verify_golden_kv.py:26`,
+`models/demos/gpt_oss_d_p/scripts/verify_golden_kv.py:111`) are host-only checkers.
+**Status.** resolved in-package (`DEC-060`): the gate text wins. The kit's two passages still
+contradict each other.
+**How to close.** Rewrite P7 step 2 to match the gate — something like "`scripts/verify_golden_kv.py`
+— check the golden trace's structure **and content** over every layer, per-layer table, no ttnn;
+the device-vs-golden PCC is `G-CHUNK`'s." Owner: kit maintainer.
+
+## R-026 — The golden trace is 128 MB and lives outside the repo
+**Fact.** 32 layers x 512 tokens x 8 KV heads x 128 head_dim x 2 tensors x 4 bytes = **128 MB**, and
+the repo's `pre-commit` `check-large-files` hook rejects anything over 500 KB. The trace therefore
+lives at `$PREFILL_TRACE_DIR` (this run: `/home/mstojkovic/prefill_traces/llama31_8b_d_p/s512`) and
+is not committed.
+**Impact.** `G-CHUNK`'s numbers cannot be re-derived from the repo alone. They *can* be re-derived
+from the repo plus `$HF_MODEL` by one command in ~100 s, and the inputs are pinned: `metadata.json`
+records the 512 `token_ids`, the prompt, the reference dtype policy, and the `rtol=atol=0`
+`LlamaModel` cross-check. The generator's own run is in `raw/G-GOLDEN-GEN_20260904T123642Z.log`.
+**Why it is not worked around.** The only gitignored directory inside the package is `generated/`,
+which is where ttnn writes its inspector, watcher and fabric artifacts; putting a 128 MB reference
+trace there would mix evidence with scratch. Compressing does not help — fp32 K/V does not compress.
+**Status.** mitigated, not closed (`DEC-066`).
+**How to close.** Either accept it (the trace is a derived artifact with a pinned recipe, like a
+weight cache), or commit a **small** structural fixture (2 layers, 64 tokens, ~1 MB) so CI can
+exercise the plumbing without the reference. The second is not a substitute for the reference.
+Owner: P8/P10, which score against the same trace and will feel it first.
+
+## R-027 — The recipe's delta-1 control quotes a V number no correct implementation can produce
+**Fact.** `BRINGUP_RECIPE.md:1585-1586` specifies one negative control for `G-CHUNK`: "rope every
+chunk at `kv_actual_global = 0` and the mutual PCC must collapse (measured 0.706 / 0.655)". Two
+numbers implies two quantities. But `G-CHUNK`'s decomposition — mandated four lines earlier
+(`:1571-1574`, "feed **the same hidden states** ... to both KV producers") — feeds both producers
+identical hidden states, and **V is never rotated**. So freezing the RoPE offset cannot move V by
+any amount.
+**Measured.** delta-1 control: mutual **K = 0.72466**, mutual **V = 1.00000**. The K figure agrees
+with the recipe's 0.706 to within 3%, which is good evidence this is the same experiment; the second
+quoted number is presumably from a variant that re-ran the layer stack per chunk, where a wrong K
+corrupts attention and therefore the *next* layer's V.
+**Impact.** Small but real: an implementer who takes 0.655 as a target will believe the control is
+broken and go looking. Worse, a single control for a two-delta gate leaves delta 2 ungated — and a
+dropped `kv_actual` is the most likely chunked-prefill bug there is.
+**Status.** resolved in-package (`DEC-065`): two controls, one per delta. delta 2 (write every chunk
+at `kv_actual = 0`) measures **K = 0.22048, V = 0.04473**, and the delta-1 control now *asserts* V is
+unchanged, turning the "V is never rotated" invariant into a check.
+**How to close.** The kit should quote the delta-1 control as a **K-only** discriminator, and require
+a second control for delta 2. Owner: kit maintainer.
+
+## R-028 — P7 step 4's named template is the delta-3 test P7 is forbidden to run
+**Fact.** `BRINGUP_RECIPE.md:1559-1560` (P7 step 4) says: "`tests/unit/test_attention_chunked_vs_ref.py`
+— the chunked-vs-one-shot equivalence test (template:
+`models/demos/minimax_m3/tests/unit/test_attention_chunked_vs_ref.py`)". That template runs chunk 0
+then chunk 1 **with `cached_len=chunk`**, i.e. it is exactly the cache-read path — delta 3 — on an
+`(8,4)` mesh. Twenty-five lines later the same phase says delta 3 "cannot run here", must be recorded
+`BLOCKED`, and that P7 must not move to a multi-device mesh to make it run.
+**Impact.** An agent following step 4's template will write the delta-3 test, discover
+`attention_forward` refuses `cached_len > 0`, and then have to decide whether the refusal or the
+recipe is wrong. That is a genuine fork in the road at the point where the phase is most expensive to
+back out of.
+**Status.** worked around. `tests/unit/test_attention_chunked_vs_ref.py` here implements the
+**`G-CHUNK` gate text** (two KV producers on identical hidden states, deltas 1-2), and the minimax
+file becomes the template for P8's `tests/unit/test_sp_attention_chunked.py`, which is what
+`bringup_log/03_OUTLINE.md` §2.15's gate table already assigned it to.
+**How to close.** Step 4 should name the template as P8's and describe the P7 file as the two-producer
+comparison the gate text specifies. Owner: kit maintainer.
+
+## R-029 — `TtPrefillRuntime` has never been instantiated
+**Fact.** `G-RUNTIME` is a static gate — Appendix A gives it device "none"
+(`BRINGUP_RECIPE.md:1954`) — and the runtime refuses construction unless
+`tp == num_key_value_heads == 8`, which no `(1,1)` mesh satisfies. So `__init__` past its two
+refusals, `_build_indexed_rope`, `make_chunk_input`, `compile` past its rank check, and the whole
+happy path of `prefill_chunk` have **not executed**.
+**Impact.** This is the largest untested surface P7 leaves. What *is* proved is that the class cannot
+fail with a `TypeError` on the engine's call (every unguarded name present, every parameter bindable
+— the failure mode recipe P10 warning 1 records, which costs a mesh open and a 15 GB weight load to
+discover), that all 25 refusals fire with their stated messages, and that the deployment chunk
+arithmetic is right. What is not proved is that any of it *runs*.
+**Mitigation that exists.** The parts of the runtime that are pure delegation are covered elsewhere:
+the indexed RoPE builder is proved bit-identical to the contiguous one on device (P7's own probe and
+`G-CHUNK`, mutual PCC exactly 1.0 on all 32 layers), the cache write is `G-KV`'s, and the model
+forward is `G-MODEL`'s. The runtime's own contribution is the wiring between them.
+**Status.** open, and stated in the `G-RUNTIME` gate block rather than left implicit.
+**How to close.** P8's first act on the `(4,8)` mesh should be to build a `TtPrefillRuntime` and run
+`compile()` — which is also the cheapest possible smoke test of the ring path, since `compile` warms
+a second chunk at `actual_start = chunk` and therefore exercises delta 3 immediately. Owner: P8.
