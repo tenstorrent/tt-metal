@@ -2,20 +2,15 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Production-fidelity coverage for moe_grouped_topk in Kimi-K2.6's configuration.
+"""Fidelity coverage for moe_grouped_topk
 
-Every existing test runs one call on a device that has done nothing else. Production runs the op
-59 times per forward, thousands of times per chunk, on Tensix cores whose destination registers,
-SFPU configuration and constant registers hold whatever the previous operation left. uint16 indices
-travel through 32-bit DEST with an undefined high half, and nothing clears DEST between programs.
+In production, Tensix cores' destination registers, SFPU configuration and constant registers hold
+whatever the previous operation left. uint16 indices travel through 32-bit DEST with an undefined
+high half, and nothing clears DEST between programs.
 
 These tests recreate that: many distinct calls back to back, DEST deliberately polluted with
 adversarial bit patterns immediately before the gate, padding boundaries inside a tile and inside
-a face, the production token count, more height tiles than cores, a top-k straddling zero, and
-trace capture with replay. Inputs are the realistic distribution the broad matrix uses, and every
-assertion is exact element-wise index order on rows the hardware can order unambiguously -- rows
-whose top k+1 keys are separated by more than the datapath's ~8e-4 relative resolution. None of
-this depends on stable tie order, so a failure here is a new defect, not #33492.
+a face, more height tiles than cores, a top-k straddling zero, and trace capture with replay.
 """
 
 import pytest
@@ -39,10 +34,8 @@ SCORE_FUNC = "sigmoid"
 INPUT_DTYPE = ttnn.bfloat16
 
 # Relative key gap below which the sort datapath cannot separate two keys (measured ~8e-4 on
-# Blackhole by test_moe_grouped_topk_stable.py). Rows are only asserted where every gap among the
-# top k+1 exceeds this, so order is unambiguous and a mismatch is a defect rather than a rounding.
+# Blackhole).
 SORT_RESOLUTION = 2e-3
-# A test whose strict rows fall below this fraction is asserting too little to mean anything.
 MIN_STRICT_FRACTION = 0.5
 
 ENGINES = pytest.mark.parametrize("stable_sort", [True, False], ids=["stable", "unstable"])
