@@ -20,6 +20,47 @@ target_link_libraries(
         TT::Metalium
 )
 
+# Test-wide precompiled header: extends TT::CommonPCH's content with gtest/gmock and the
+# heavy tt-metalium headers that nearly every test TU parses (host_api/distributed/
+# metal_context/tt_cluster). Compiled once and reused by the test targets below in place
+# of metal_common_pch, which lacks all of these.
+add_library(metal_test_pch STATIC)
+add_library(TT::TestPCH ALIAS metal_test_pch)
+file(GENERATE OUTPUT metal_test_pch.cpp CONTENT "/*dummy test pch file*/\n")
+target_sources(metal_test_pch PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/metal_test_pch.cpp)
+target_precompile_headers(
+    metal_test_pch
+    PUBLIC
+        <fmt/core.h>
+        <fmt/format.h>
+        <nlohmann/json.hpp>
+        <algorithm>
+        <cstddef>
+        <cstdint>
+        <functional>
+        <map>
+        <memory>
+        <optional>
+        <tuple>
+        <unordered_map>
+        <variant>
+        <vector>
+        <reflect>
+        <tt_stl/reflection.hpp>
+        <gtest/gtest.h>
+        <gmock/gmock.h>
+        <tt-metalium/host_api.hpp>
+        <tt-metalium/tt_metal.hpp>
+        <tt-metalium/distributed.hpp>
+        <tt-metalium/mesh_device.hpp>
+        ${PROJECT_SOURCE_DIR}/tt_metal/impl/context/metal_context.hpp
+        ${PROJECT_SOURCE_DIR}/tt_metal/llrt/tt_cluster.hpp
+)
+target_link_libraries(metal_test_pch PRIVATE test_common_libs)
+if(COMMAND tt_configure_ccache_for_pch)
+    tt_configure_ccache_for_pch(metal_test_pch)
+endif()
+
 if(TT_METAL_BUILD_TESTS)
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/tt_metal)
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/scale_out)

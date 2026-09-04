@@ -34,6 +34,7 @@
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <umd/device/types/cluster_types.hpp>
+#include <umd/device/types/host_memory.hpp>
 
 namespace tt {
 namespace llrt {
@@ -47,8 +48,6 @@ namespace tt_metal {
 class Hal;
 }
 }  // namespace tt
-
-static constexpr std::uint32_t SW_VERSION = 0x00020000;
 
 using tt_target_dram = std::tuple<int, int, int>;
 
@@ -73,8 +72,6 @@ public:
     Cluster(llrt::RunTimeOptions& rtoptions);
     ~Cluster();
 
-    // For TG Galaxy systems, mmio chips are gateway chips that are only used for dispatch, so user_devices are meant
-    // for user facing host apis
     std::unordered_map<ChipId, EthCoord> get_user_chip_ethernet_coordinates() const;
     size_t number_of_user_devices() const;
     std::set<ChipId> user_exposed_chip_ids() const;
@@ -137,8 +134,7 @@ public:
     std::optional<int> get_physical_slot(ChipId chip) const;
 
     //! device driver and misc apis
-    void verify_sw_fw_versions(int device_id, std::uint32_t sw_version, std::vector<std::uint32_t>& fw_versions) const;
-    std::optional<tt::umd::semver_t> get_ethernet_firmware_version() const;
+    std::optional<tt::umd::SemVer> get_ethernet_firmware_version() const;
 
     void deassert_risc_reset_at_core(
         const tt_cxy_pair& core, const tt::umd::RiscType& soft_resets, bool staggered_start = true) const;
@@ -259,7 +255,11 @@ public:
     std::unique_ptr<tt::umd::SysmemBuffer> allocate_sysmem_buffer(
         ChipId device_id, size_t sysmem_buffer_size, bool map_to_noc = false) const;
     std::unique_ptr<tt::umd::SysmemBuffer> map_sysmem_buffer(
-        ChipId device_id, void* buffer, size_t sysmem_buffer_size, bool map_to_noc = false) const;
+        ChipId device_id,
+        void* buffer,
+        size_t sysmem_buffer_size,
+        bool map_to_noc = false,
+        tt::umd::DeviceBufferAccess device_access = tt::umd::DeviceBufferAccess::READ_WRITE) const;
 
     int get_device_aiclk(const ChipId& chip_id) const;
 
@@ -304,12 +304,10 @@ public:
 
     // Internal routing for SD and FD enables launching user ethernet kernels and FD tunneling for all devices in the
     // cluster. When using multiple devices in a cluster, this should be the flow:
-    //       CreateDevice(0)
-    //       CreateDevice(1)
+    //       auto unit_meshes = MeshDevice::create_unit_meshes({0, 1});
     //       set_internal_routing_info_for_ethernet_cores(true);
     //       set_internal_routing_info_for_ethernet_cores(false);
-    //       CloseDevice(0)
-    //       CloseDevice(1)
+    //       unit_meshes.clear();  // or let RAII close them / MeshDevice::close
     void set_internal_routing_info_for_ethernet_cores(
         const tt::tt_fabric::ControlPlane& control_plane,
         bool enable_internal_routing,
@@ -368,6 +366,8 @@ public:
 
     // Returns whether IOMMU is enabled on the system (cached at init time)
     bool is_iommu_enabled() const;
+    // Returns whether device-read-only page pinning is available.
+    bool is_read_only_page_pinning_supported() const;
 
     tt::tt_metal::ClusterType get_cluster_type() const;
 
@@ -463,6 +463,9 @@ private:
 
     // Cached system IOMMU status to avoid slow queries at MeshDevice construction
     bool iommu_enabled_ = false;
+    // Cached device-read-only pinning support. Reading the KMD version parses sysfs, and this is queried once per
+    // tensor shard on the transfer path, so it must not be recomputed per call.
+    bool read_only_page_pinning_supported_ = false;
 
     // There is an entry for every device that can be targeted (MMIO and remote)
     std::unordered_map<ChipId, metal_SocDescriptor> sdesc_per_chip_;

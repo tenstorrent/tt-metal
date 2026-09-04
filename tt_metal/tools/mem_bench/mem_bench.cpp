@@ -7,9 +7,9 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include "impl/context/metal_context.hpp"
 #include <iostream>
 #include <map>
+#include <memory>
 #include <numeric>
 #include <optional>
 #include <span>
@@ -17,15 +17,16 @@
 #include <vector>
 
 #include <tt_stl/assert.hpp>
+#include <tt-metalium/mesh_command_queue.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include "context.hpp"
-#include "device.hpp"
 #include "device_utils.hpp"
 #include "host_utils.hpp"
+#include "impl/program/program_impl.hpp"
 #include "tt-metalium/program.hpp"
 #include "tt_metal/impl/dispatch/util/size_literals.hpp"
 #include "tt_metal/impl/dispatch/vector_aligned.hpp"
 #include "work_thread.hpp"
-#include <llrt/tt_cluster.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -35,11 +36,12 @@ using namespace tt::tt_metal::tools::mem_bench;
 std::optional<int> g_user_device_id;
 
 // Read L1 counters (cycles, bytes rd, bytes wr) and increment test_results
-void read_inc_data_from_cores(const Context& ctx, IDevice* device, const CoreRange& cores, TestResult& test_results) {
+void read_inc_data_from_cores(
+    const Context& ctx, distributed::MeshDevice* device, const CoreRange& cores, TestResult& test_results) {
     auto dev_cycles = read_cores(device, cores, ctx.device_address.cycles);
     auto dev_bytes_read = read_cores(device, cores, ctx.device_address.rd_bytes);
     auto dev_bytes_written = read_cores(device, cores, ctx.device_address.wr_bytes);
-    auto dev_clk = tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(device->id()) * 1e6;  // Hz
+    auto dev_clk = device->get_clock_rate_mhz() * 1e6;  // Hz
 
     double total_cycles = std::reduce(dev_cycles.begin(), dev_cycles.end(), 0ULL);
 
@@ -162,9 +164,9 @@ TestResult mem_bench_copy_multithread(benchmark::State& state) {
 TestResult mem_bench_copy_with_active_kernel(benchmark::State& state) {
     TestResult results;
     auto device_ids = get_device_ids_for_single_device(g_user_device_id);
-    auto devices = tt::tt_metal::detail::CreateDevices(device_ids);
+    auto devices = distributed::MeshDevice::create_unit_meshes(device_ids);
     const uint32_t device_id = device_ids.empty() ? 0 : device_ids[0];
-    IDevice* device = devices[device_id];
+    distributed::MeshDevice* device = devices[device_id].get();
     Context ctx{
         devices,
         static_cast<uint32_t>(state.range(0)),  // Total size
@@ -182,8 +184,8 @@ TestResult mem_bench_copy_with_active_kernel(benchmark::State& state) {
     }
 
     auto src_data = generate_random_src_data(ctx.total_size);
-    auto* hugepage = get_hugepage(device->id(), 0);
-    auto hugepage_size = get_hugepage_size(device->id());
+    auto* hugepage = get_hugepage(device_id, 0);
+    auto hugepage_size = get_hugepage_size(device_id);
 
     for ([[maybe_unused]] auto _ : state) {
         auto pgm = CreateProgram();
@@ -199,7 +201,7 @@ TestResult mem_bench_copy_with_active_kernel(benchmark::State& state) {
             1,
             [device, &pgm](int /*thread_idx*/) {
                 // Program
-                tt::tt_metal::detail::LaunchProgram(device, pgm, true);
+                LaunchProgram(*device, std::move(pgm), true);
             },
             [&]() {
                 if (ctx.enable_host_copy_with_kernels) {
@@ -224,7 +226,6 @@ TestResult mem_bench_copy_with_active_kernel(benchmark::State& state) {
     }
 
     report_device_bw(state, results);
-    tt::tt_metal::detail::CloseDevices(devices);
     return results;
 }
 
@@ -233,9 +234,9 @@ TestResult mem_bench_copy_with_active_kernel(benchmark::State& state) {
 TestResult mem_bench_copy_active_kernel_different_page(benchmark::State& state) {
     TestResult results;
     auto device_ids = get_device_ids_for_single_device(g_user_device_id);
-    auto devices = tt::tt_metal::detail::CreateDevices(device_ids);
+    auto devices = distributed::MeshDevice::create_unit_meshes(device_ids);
     const uint32_t device_id = device_ids.empty() ? 0 : device_ids[0];
-    IDevice* device = devices[device_id];
+    distributed::MeshDevice* device = devices[device_id].get();
     Context ctx{
         devices,
         static_cast<uint32_t>(state.range(0)),  // Total size
@@ -248,11 +249,11 @@ TestResult mem_bench_copy_active_kernel_different_page(benchmark::State& state) 
     };
 
     auto src_data = generate_random_src_data(ctx.total_size);
-    auto device_hugepage_size = get_hugepage_size(device->id());
+    auto device_hugepage_size = get_hugepage_size(device_id);
 
     // 2nd open device is not required
-    auto* host_hugepage = get_hugepage(device->id() + 1, 0);
-    auto host_hugepage_size = get_hugepage_size(device->id() + 1);
+    auto* host_hugepage = get_hugepage(device_id + 1, 0);
+    auto host_hugepage_size = get_hugepage_size(device_id + 1);
 
     for ([[maybe_unused]] auto _ : state) {
         auto pgm = CreateProgram();
@@ -264,7 +265,7 @@ TestResult mem_bench_copy_active_kernel_different_page(benchmark::State& state) 
             1,
             [device, &pgm](int /*thread_idx*/) {
                 // Program
-                tt::tt_metal::detail::LaunchProgram(device, pgm, true);
+                LaunchProgram(*device, std::move(pgm), true);
             },
             [&]() {
                 // Host copy while waiting for program
@@ -284,13 +285,12 @@ TestResult mem_bench_copy_active_kernel_different_page(benchmark::State& state) 
     state.SetBytesProcessed(ctx.total_size * state.iterations());
 
     report_device_bw(state, results);
-    tt::tt_metal::detail::CloseDevices(devices);
     return results;
 }
 
 // Common Multi MMIO device test.
 TestResult mem_bench_multi_mmio_devices(
-    benchmark::State& state, std::map<ChipId, IDevice*>& devices, const Context& ctx) {
+    benchmark::State& state, std::map<ChipId, std::shared_ptr<distributed::MeshDevice>>& devices, const Context& ctx) {
     TestResult results;
 
     // One thread to wait for program on each device
@@ -298,13 +298,13 @@ TestResult mem_bench_multi_mmio_devices(
     for ([[maybe_unused]] auto _ : state) {
         std::map<int, Program> programs;                  // device : programs
         std::map<int, CoreRange> configured_core_ranges;  // device : cores
-        for (auto [device_id, device] : devices) {
+        for (const auto& [device_id, device] : devices) {
             programs[device_id] = CreateProgram();
             Program& pgm = programs[device_id];
             auto device_hugepage_size = get_hugepage_size(device_id);
             configured_core_ranges.insert(
                 {device_id,
-                 configure_kernels(device, pgm, ctx, 0, ctx.number_reader_kernels, false, device_hugepage_size)
+                 configure_kernels(device.get(), pgm, ctx, 0, ctx.number_reader_kernels, false, device_hugepage_size)
                      .value()});
         }
 
@@ -313,19 +313,19 @@ TestResult mem_bench_multi_mmio_devices(
             [devices, &programs](int /*thread_idx*/) {
                 // Program
                 for (auto& [device_id, pgm] : programs) {
-                    tt::tt_metal::detail::LaunchProgram(devices.at(device_id), pgm, false);
+                    LaunchProgram(*devices.at(device_id), std::move(pgm), false);
                 }
             },
             []() {});
 
         // Wait all programs to complete
-        for (auto& [device_id, pgm] : programs) {
-            tt::tt_metal::detail::WaitProgramDone(devices.at(device_id), pgm);
+        for (const auto& device_entry : devices) {
+            device_entry.second->mesh_command_queue().finish();
         }
 
         // Read counters from each core
         for (auto& [device_id, core_range] : configured_core_ranges) {
-            read_inc_data_from_cores(ctx, devices.at(device_id), core_range, results);
+            read_inc_data_from_cores(ctx, devices.at(device_id).get(), core_range, results);
         }
 
         // This test does not report host bw
@@ -343,7 +343,7 @@ TestResult mem_bench_multi_mmio_devices(
 TestResult mem_bench_multi_mmio_devices_reading_same_node(benchmark::State& state) {
     // Node 0
     auto device_ids = get_device_ids_for_multi_device_same_node(g_user_device_id);
-    auto devices = tt::tt_metal::detail::CreateDevices(device_ids);
+    auto devices = distributed::MeshDevice::create_unit_meshes(device_ids);
 
     Context ctx{
         devices,
@@ -356,16 +356,13 @@ TestResult mem_bench_multi_mmio_devices_reading_same_node(benchmark::State& stat
         0,                                      // Iterations is managed by the benchmark framework
     };
 
-    TestResult results = mem_bench_multi_mmio_devices(state, devices, ctx);
-    tt::tt_metal::detail::CloseDevices(devices);
-
-    return results;
+    return mem_bench_multi_mmio_devices(state, devices, ctx);
 }
 
 // Multi MMIO devices reading on different NUMA nodes.
 TestResult mem_bench_multi_mmio_devices_reading_different_node(benchmark::State& state) {
     auto device_ids = get_device_ids_for_multi_device_different_nodes(g_user_device_id);
-    auto devices = tt::tt_metal::detail::CreateDevices(device_ids);
+    auto devices = distributed::MeshDevice::create_unit_meshes(device_ids);
 
     Context ctx{
         devices,
@@ -378,10 +375,7 @@ TestResult mem_bench_multi_mmio_devices_reading_different_node(benchmark::State&
         0,                                      // Iterations is managed by the benchmark framework
     };
 
-    TestResult results = mem_bench_multi_mmio_devices(state, devices, ctx);
-    tt::tt_metal::detail::CloseDevices(devices);
-
-    return results;
+    return mem_bench_multi_mmio_devices(state, devices, ctx);
 }
 
 // Benchmark memcpy_to_device while device is reading (prefetching) and writing (dispatching data back to host)
@@ -389,9 +383,9 @@ TestResult mem_bench_multi_mmio_devices_reading_different_node(benchmark::State&
 // Second half will be written to by device
 TestResult mem_bench_copy_with_read_and_write_kernel(benchmark::State& state) {
     auto device_ids = get_device_ids_for_single_device(g_user_device_id);
-    auto devices = tt::tt_metal::detail::CreateDevices(device_ids);
+    auto devices = distributed::MeshDevice::create_unit_meshes(device_ids);
     const uint32_t device_id = device_ids.empty() ? 0 : device_ids[0];
-    IDevice* device = devices[device_id];
+    distributed::MeshDevice* device = devices[device_id].get();
     Context ctx{
         devices,
         static_cast<uint32_t>(state.range(0)),  // Total size
@@ -404,8 +398,8 @@ TestResult mem_bench_copy_with_read_and_write_kernel(benchmark::State& state) {
     };
 
     auto src_data = generate_random_src_data(ctx.total_size);
-    auto* hugepage = get_hugepage(device->id(), 0);
-    auto hugepage_size = get_hugepage_size(device->id());
+    auto* hugepage = get_hugepage(device_id, 0);
+    auto hugepage_size = get_hugepage_size(device_id);
 
     // Don't need to separate device results
     // Readers will have 0 bytes written
@@ -428,7 +422,7 @@ TestResult mem_bench_copy_with_read_and_write_kernel(benchmark::State& state) {
             1,
             [device, &pgm](int /*thread_idx*/) {
                 // Program
-                tt::tt_metal::detail::LaunchProgram(device, pgm, true);
+                LaunchProgram(*device, std::move(pgm), true);
             },
             [&]() {
                 // Host copy while waiting for program
@@ -448,7 +442,6 @@ TestResult mem_bench_copy_with_read_and_write_kernel(benchmark::State& state) {
 
     state.SetBytesProcessed(ctx.total_size * state.iterations());
     report_device_bw(state, results);
-    tt::tt_metal::detail::CloseDevices(devices);
     return results;
 }
 

@@ -394,6 +394,48 @@ def test_topk_preallocated_dtype_raise(value_dtype, index_dtype, device, expect_
         ttnn.topk(ttnn_input, k=k, dim=-1, largest=True, sorted=True, output_tensor=(value_tensor, index_tensor))
 
 
+@pytest.mark.parametrize(
+    "W, input_dtype, index_dtype, raises",
+    [
+        (64, ttnn.bfloat16, ttnn.uint16, False),
+        (64, ttnn.bfloat16, ttnn.uint32, False),
+        (UINT16_MAX + 1, ttnn.bfloat16, ttnn.uint32, False),
+        (UINT16_MAX + 1, ttnn.bfloat16, ttnn.uint16, True),
+        (64, ttnn.float32, ttnn.uint16, True),
+    ],
+    ids=["w64_u16", "w64_u32", "w65536_u32", "w65536_u16_raises", "fp32_u16_raises"],
+)
+def test_topk_preallocated_indices_width(W, input_dtype, index_dtype, raises, device, expect_error):
+    # index_dtype is the preallocated output indices tensor. A 16-bit one on an input that needs
+    # 32 bits is rejected; wider than needed is legal. fp32 needs 32 bits at any width.
+    torch.manual_seed(0)
+    k = 32
+    shape = [1, 1, 32, W]
+    torch_dtype = torch.float32 if input_dtype == ttnn.float32 else torch.bfloat16
+
+    torch_input = torch.randn(shape, dtype=torch_dtype)
+    ttnn_input = ttnn.from_torch(torch_input, input_dtype, layout=ttnn.Layout.TILE, device=device)
+    value_tensor = ttnn.from_torch(
+        torch.zeros([1, 1, 32, k], dtype=torch_dtype), input_dtype, layout=ttnn.Layout.TILE, device=device
+    )
+    index_tensor = ttnn.from_torch(
+        torch.zeros([1, 1, 32, k], dtype=torch.int32), index_dtype, layout=ttnn.Layout.TILE, device=device
+    )
+
+    if raises:
+        with expect_error(RuntimeError, "must be 32-bit"):
+            ttnn.topk(ttnn_input, k=k, dim=-1, largest=True, sorted=True, output_tensor=(value_tensor, index_tensor))
+        return
+
+    values, indices = ttnn.topk(
+        ttnn_input, k=k, dim=-1, largest=True, sorted=True, output_tensor=(value_tensor, index_tensor)
+    )
+
+    assert indices.dtype == index_dtype
+    gathered = torch.gather(torch_input, -1, ttnn.to_torch(indices).to(torch.int64))
+    assert_equal(gathered, ttnn.to_torch(values))
+
+
 def test_topk_fp32_input_with_uint16_indices_tensor_raise(device, expect_error):
     # fp32 input forces UINT32 index CBs; a UINT16 indices_tensor would silently produce wrong indices.
     torch.manual_seed(0)

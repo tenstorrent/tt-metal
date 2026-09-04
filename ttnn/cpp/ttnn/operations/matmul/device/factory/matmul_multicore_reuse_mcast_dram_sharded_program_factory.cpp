@@ -36,9 +36,10 @@ using tt::tt_metal::ProgramDescriptor;
 namespace ttnn::prim {
 namespace reuse_dram_sharded_optimized_helpers {
 
+using dram_sharded_helpers::get_dram_bank_reader_assignments;
 using dram_sharded_helpers::get_max_page_size_and_num_pages;
-using dram_sharded_helpers::get_optimal_dram_bank_to_reader_assignment;
 using dram_sharded_helpers::move_common_entries;
+using dram_sharded_helpers::validate_num_workers_per_dram_bank;
 
 static ProgramDescriptor create_program_dram_sharded_descriptor(
     tt::tt_metal::IDevice* device,
@@ -58,6 +59,7 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
     uint32_t in0_last_ktile_w,
     uint32_t per_core_M,
     uint32_t per_core_N_storage,
+    uint32_t workers_per_bank,
     std::optional<UnaryWithParam> fused_activation,
     const tt::tt_metal::MeshTensor& in0_tensor,
     const tt::tt_metal::MeshTensor& in1_tensor,
@@ -110,13 +112,17 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
         std::swap(start_core_noc, end_core_noc);
     }
 
-    // get the dram readers
-    std::vector<CoreCoord> all_worker_cores_ordered;
-    CoreRangeSet all_worker_cores;
-    get_optimal_dram_bank_to_reader_assignment(device, all_worker_cores_ordered, all_worker_cores, in1_noc);
+    validate_num_workers_per_dram_bank(workers_per_bank);
+    TT_FATAL(
+        workers_per_bank == 1 || device->arch() == tt::ARCH::BLACKHOLE,
+        "Multiple workers per DRAM bank are currently supported only on Blackhole");
+    TT_FATAL(
+        workers_per_bank == 1 || in1_noc == tt::tt_metal::NOC::NOC_0,
+        "Multiple workers per DRAM bank currently require a NOC0 data-movement kernel");
 
-    // dram banks
-    uint32_t num_dram_banks = all_worker_cores_ordered.size();
+    auto reader_assignments =
+        get_dram_bank_reader_assignments(device, in1_noc, workers_per_bank, input_all_storage_cores);
+    uint32_t num_dram_banks = reader_assignments.size() / workers_per_bank;
 
     // Remove cores assigned to padding-only DRAM banks from the workers category
     uint32_t in1_shard_width_tiles = in1_tensor.shard_spec()->shape[1] / in1_tile.get_tile_shape()[1];
@@ -126,23 +132,39 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
         uint32_t padding_width_tiles = in1_tensor_padded_width_tiles - N;
         uint32_t only_padding_banks = padding_width_tiles / in1_shard_width_tiles;
         TT_FATAL(
-            only_padding_banks < all_worker_cores_ordered.size(),
-            "Padding banks count {} must be less than workers count {}",
+            only_padding_banks < num_dram_banks,
+            "Padding banks count {} must be less than DRAM bank count {}",
             only_padding_banks,
-            all_worker_cores_ordered.size());
-        for (uint32_t i = 0; i < only_padding_banks; ++i) {
-            all_worker_cores_ordered.pop_back();
-        }
-        std::set<CoreRange> new_workers_set;
-        for (const auto& worker_core : all_worker_cores_ordered) {
-            new_workers_set.insert(CoreRange(worker_core));
-        }
-        all_worker_cores = CoreRangeSet(new_workers_set);
-        num_dram_banks = all_worker_cores_ordered.size();
+            num_dram_banks);
+        num_dram_banks -= only_padding_banks;
+        reader_assignments.resize(num_dram_banks * workers_per_bank);
     }
 
-    uint32_t per_core_N_compute = div_up(N, num_dram_banks);
+    TT_FATAL(
+        in1_shard_width_tiles % workers_per_bank == 0,
+        "DRAM-sharded matmul weight shard width {} tiles per bank must be divisible by workers_per_bank {}",
+        in1_shard_width_tiles,
+        workers_per_bank);
+
+    std::vector<CoreCoord> all_worker_cores_ordered;
+    all_worker_cores_ordered.reserve(reader_assignments.size());
+    std::set<CoreRange> worker_ranges;
+    for (const auto& assignment : reader_assignments) {
+        all_worker_cores_ordered.push_back(assignment.worker_core);
+        worker_ranges.insert(CoreRange(assignment.worker_core));
+    }
+    CoreRangeSet all_worker_cores(worker_ranges);
+    const uint32_t num_workers = all_worker_cores_ordered.size();
+
+    uint32_t per_core_N_compute = div_up(N, num_workers);
     uint32_t per_core_N_in1_sender = per_core_N_compute;
+    TT_FATAL(
+        workers_per_bank == 1 || in1_shard_width_tiles == workers_per_bank * per_core_N_in1_sender,
+        "Multi-reader DRAM-sharded matmul requires weight shard width {} tiles to equal {} workers times {} reader "
+        "tiles",
+        in1_shard_width_tiles,
+        workers_per_bank,
+        per_core_N_in1_sender);
 
     auto subblock_hw = operations::matmul::bmm_op_utils::get_matmul_subblock_params(
         per_core_M, per_core_N_compute, false, false, fp32_dest_acc_en);
@@ -237,7 +259,7 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
     get_max_page_size_and_num_pages(
         device, per_core_N_in1_sender, bias_aligned_tile_size, bias_buffer_page_size, bias_buffer_num_pages);
 
-    uint32_t num_worker_cores = num_dram_banks;
+    uint32_t num_worker_cores = num_workers;
 
     // move conflict coord from mcast receiver to mcast sender
     std::vector<CoreCoord> input_all_storage_cores_vec = corerange_to_cores(input_all_storage_cores);
@@ -332,19 +354,24 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
         (std::uint32_t)out_block_tiles,                               // out_block_num_tiles
         (std::uint32_t)per_core_N_compute * output_single_tile_size,  // out_tensor_stride_w_bytes
         (std::uint32_t)per_core_N_storage * output_single_tile_size,  // out_reshard_tensor_stride_w_bytes
-        (std::uint32_t)per_core_M};
+        (std::uint32_t)per_core_M,
+        (std::uint32_t)workers_per_bank,
+        (std::uint32_t)in1_shard_width_tiles,
+        (std::uint32_t)per_core_N_in1_sender};
     if (bias.has_value()) {
         in1_sender_writer_compile_time_args.push_back(bias_buffer_page_size);
         in1_sender_writer_compile_time_args.push_back(bias_buffer_num_pages);
         in1_sender_writer_compile_time_args.push_back((std::uint32_t)1);
     }
-
     std::map<std::string, std::string> mm_kernel_defines;
     std::map<std::string, std::string> mm_kernel_in0_sender_define;
     std::map<std::string, std::string> mm_kernel_in1_sender_writer_defines;
     if (bias.has_value()) {
         mm_kernel_defines["FUSE_BIAS"] = "1";
         mm_kernel_in1_sender_writer_defines["FUSE_BIAS"] = "1";
+    }
+    if (workers_per_bank > 1) {
+        mm_kernel_in1_sender_writer_defines["SPLIT_DRAM_BANK"] = "1";
     }
     if (fused_activation.has_value()) {
         if (fused_activation.value().op_type == UnaryOpType::RELU) {
@@ -709,7 +736,6 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
     }
 
     // Compute and in1 sender/writer runtime args
-    uint32_t bank_id = 0;
     std::vector<uint32_t> bank_ids;
     bank_ids.reserve(all_worker_cores_ordered.size());
     uint32_t curr_storage_core_idx = 0;
@@ -757,8 +783,12 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
     }
 
     // Worker cores: in1 sender/writer runtime args
+    constexpr std::size_t num_shards_to_write_back_arg_index = 6;
+    constexpr std::size_t fixed_writer_arg_count = 11;
     for (uint32_t i = 0; i < all_worker_cores_ordered.size(); ++i) {
         auto core = all_worker_cores_ordered[i];
+        const auto& reader_assignment = reader_assignments[i];
+        const uint32_t bank_id = reader_assignment.bank_id;
 
         bool is_worker_core = true;
         std::vector<uint32_t> mm_in1_sender_writer_args;
@@ -778,8 +808,7 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
         }
         mm_in1_sender_writer_args.push_back((std::uint32_t)bank_id);
         mm_in1_sender_writer_args.push_back((std::uint32_t)vc);
-
-        bank_id = (bank_id + 1) % num_dram_banks;
+        mm_in1_sender_writer_args.push_back(reader_assignment.worker_index);
 
         if (per_core_N_in1_sender < per_core_N_storage) {
             TT_FATAL(curr_storage_core_idx < num_cores_written_back, "Worker {} has no storage area assigned", core);
@@ -866,7 +895,15 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
                 }
             }
 
-            mm_in1_sender_writer_args.insert(mm_in1_sender_writer_args.begin() + 5, num_cores_write_back);
+            mm_in1_sender_writer_args.insert(
+                mm_in1_sender_writer_args.begin() + num_shards_to_write_back_arg_index, num_cores_write_back);
+        }
+
+        // A worker can legitimately have no output storage shard to reshard, for example when the reader count exceeds
+        // the output shard count. The kernel still materializes its fixed writer-argument views before the zero-count
+        // write-back loop, so provide neutral placeholders for those slots.
+        if (mm_in1_sender_writer_args.size() < fixed_writer_arg_count) {
+            mm_in1_sender_writer_args.resize(fixed_writer_arg_count, 0);
         }
 
         // Build variant args: positions [1] and [2] are buffer addresses
@@ -877,10 +914,6 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
             in1_writer_args[2] = *bias;
         }
         in1_sender_writer_kernel_desc.emplace_runtime_args(core, in1_writer_args);
-        TT_FATAL(
-            mm_in1_sender_writer_args.size() >= 10,
-            "Kernel requires at least 10 runtime args, got {}",
-            mm_in1_sender_writer_args.size());
     }
 
     TT_FATAL(
@@ -996,6 +1029,7 @@ ProgramDescriptor MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::create
     const auto& in0_block_w = program_config.in0_block_w;
     const auto& per_core_M = program_config.per_core_M;
     const auto& per_core_N = program_config.per_core_N;
+    const auto& workers_per_bank = program_config.num_workers_per_dram_bank;
     const auto& fused_activation = program_config.fused_activation;
 
     const auto& untilize_out = operation_attributes.untilize_out;
@@ -1034,6 +1068,7 @@ ProgramDescriptor MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::create
         in0_last_ktile_w,
         per_core_M,
         per_core_N,
+        workers_per_bank,
         fused_activation,
         a_mesh,
         b,

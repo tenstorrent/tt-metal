@@ -114,12 +114,9 @@ ttnn::device_operation::ProgramArtifacts RepeatAndInterleaveEltwiseMulProgramFac
     // invokes.
     //
     // in1_transposed carries the transposed in1 tile from compute to the reader, which slices it
-    // into single rows. Under REPEAT_INTERLEAVE_IN1 compute both pushes the tile and pops it
-    // (ssm_eltwise_mul.cpp) while the reader also pops it, so the buffer has two consumer
-    // endpoints on one node. Gen1 tolerates that — a DFB lowers to a plain circular buffer whose
-    // FIFO pointers any endpoint can drive — but it forfeits the FIFO's own protection, so it
-    // must be declared with the multi-binding option. Outside that configuration nothing touches
-    // the buffer and the two kernels that name it split the endpoints one apiece.
+    // into single rows. Compute produces and the reader consumes, one endpoint apiece, in every
+    // configuration — the same shape as out. Outside REPEAT_INTERLEAVE_IN1 neither kernel touches
+    // the buffer, but the endpoints stay as they are because every DFB needs both.
     Group<DataflowBufferSpec> dataflow_buffers = {
         DataflowBufferSpec{
             .unique_id = IN0,
@@ -150,7 +147,6 @@ ttnn::device_operation::ProgramArtifacts RepeatAndInterleaveEltwiseMulProgramFac
             .entry_size = interm_single_tile_size,
             .num_entries = interm_num_entries,
             .data_format_metadata = interm_data_format,
-            .advanced_options = {.allow_instance_multi_binding = repeat_interleave_in1},
         },
         DataflowBufferSpec{
             .unique_id = IN1_BCAST_ROW,
@@ -281,16 +277,6 @@ ttnn::device_operation::ProgramArtifacts RepeatAndInterleaveEltwiseMulProgramFac
             .endpoint_type = DFBEndpointType::CONSUMER,
         },
     };
-    if (repeat_interleave_in1) {
-        // Compute pops the transposed in1 tile it produced, so it is a consumer endpoint too.
-        // Shares the accessor name with the producer binding above, so the kernel still sees a
-        // single dfb::in1_transposed handle in every configuration.
-        compute_dfb_bindings.push_back(DFBBinding{
-            .dfb_spec_name = IN1_TRANSPOSED,
-            .accessor_name = "in1_transposed",
-            .endpoint_type = DFBEndpointType::CONSUMER,
-        });
-    }
 
     // Compute hw_config — Style B (the legacy factory set a Metal ComputeConfigDescriptor directly,
     // with no TTNN ComputeKernelConfig behind it). Build ComputeGen1Config field by field: the three

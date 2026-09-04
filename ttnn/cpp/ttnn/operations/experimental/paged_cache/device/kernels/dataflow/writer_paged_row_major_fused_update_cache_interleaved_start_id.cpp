@@ -62,9 +62,6 @@ void kernel_main() {
     }
     constexpr uint32_t head_offset_t = Wt * St;
 
-    const uint32_t cache_tile_bytes = get_tile_size(cache_cb_id);
-    const DataFormat cache_data_format = get_dataformat(cache_cb_id);
-
     constexpr uint32_t TILE_HEIGHT = 32;
 
     const auto s0 = TensorAccessor(s0_args, cache_addr);
@@ -75,6 +72,8 @@ void kernel_main() {
     CircularBuffer cb_untilized_input(untilized_input_cb_id);
     CircularBuffer cb_index(cb_index_id);
     CircularBuffer cb_page_table(page_table_cb_id);
+
+    const uint32_t cache_tile_bytes = cb_cache.get_tile_size();
 
     uint32_t cache_id = cache_start_id;
     uint32_t update_idx = 0;

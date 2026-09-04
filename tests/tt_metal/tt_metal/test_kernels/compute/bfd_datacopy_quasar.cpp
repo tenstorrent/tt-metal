@@ -65,13 +65,13 @@ void kernel_main() {
     // Outer loop: repeat the whole three-input block copy num_loops times. Each operand switch
     // bump-allocates a fresh unpack BFD, wrapping the partition once its 16 ids are exhausted.
     for (std::uint32_t loop = 0; loop < num_loops; ++loop) {
-        copy_tile_to_dst_init_short(dfb::in0);
+        copy_init(dfb::in0);
         copy_block(dfb_in0, dfb::in0, dfb_out, tiles_per_input);
 
-        copy_tile_to_dst_init_short(dfb::in1);
+        copy_init(dfb::in1);
         copy_block(dfb_in1, dfb::in1, dfb_out, tiles_per_input);
 
-        copy_tile_to_dst_init_short(dfb::in2);
+        copy_init(dfb::in2);
         copy_block(dfb_in2, dfb::in2, dfb_out, tiles_per_input);
     }
 }

@@ -16,6 +16,7 @@
 #include <umd/device/types/xy_pair.hpp>
 #include "tt_metal/third_party/umd/device/api/umd/device/types/xy_pair.hpp"
 #include "tt_stl/assert.hpp"
+#include "hostdev/profiler_common.h"
 
 namespace tt::tt_metal {
 
@@ -33,6 +34,22 @@ inline bool wrap_ge(uint32_t a, uint32_t b) {
     int32_t diff = static_cast<int32_t>(a - b);
     return (diff << shift) >= 0;
 }
+
+// Same wrapping comparison as above, for the device profiler marker timestamp. That timestamp is narrower than the
+// uint64_t carrying it (the device discards the wall-clock bits that do not fit the marker, see
+// PROFILER_MARKER_TS_BITS), so it wraps and a plain <= would misorder events across the wrap.
+//
+// Wrapping (a - b) as a SIGNED offset, by sign-extending the difference at the timestamp's real width. Valid whenever
+// a and b are within half a wrap window (hours) of each other, which always holds because we only compare timestamps
+// within a single short (seconds-wide) batch. Used both for comparison (below) and to sort a batch that may straddle
+// the wrap: sorting by ts_sub(ts, ref) against a fixed per-chip reference is a valid strict-weak-ordering.
+inline int64_t ts_sub(uint64_t a, uint64_t b) {
+    constexpr uint32_t shift = 64 - kernel_profiler::PROFILER_MARKER_TS_BITS;
+    return static_cast<int64_t>((a - b) << shift) >> shift;
+}
+
+// Wrapping >= (RFC 1982): a is at-or-after b.
+inline bool ts_wrap_ge(uint64_t a, uint64_t b) { return ts_sub(a, b) >= 0; }
 
 NOCDebugState::LockedBufferInfo::LockType get_lock_type(NocDebuggingEventMetadata::NocDebugEventType event_type) {
     if (event_type == NocDebuggingEventMetadata::NocDebugEventType::CB_LOCK ||
@@ -415,6 +432,22 @@ void NOCDebugState::reset_state() {
     cores.clear();
 }
 
+NOCDebugState::StateSummary NOCDebugState::get_state_summary() const {
+    StateSummary summary;
+    {
+        std::lock_guard<std::mutex> lock{pending_events_mutex_};
+        summary.pending_events = pending_events_.size();
+    }
+    std::unique_lock<std::mutex> lock{cores_mutex};
+    // Iterate the map directly (do NOT use get_state, which would insert empty entries).
+    for (const auto& [core, state] : cores) {
+        for (size_t processor_id = 0; processor_id < CoreDebugState::MAX_PROCESSORS; ++processor_id) {
+            summary.issues += state.issue[processor_id].issues.size();
+        }
+    }
+    return summary;
+}
+
 std::string NOCDebugState::get_issue_description(const NOCDebugIssueType& issue_type) {
     if (issue_type.base_type == NOCDebugIssueBaseType::READ_BARRIER) {
         return "read";
@@ -470,12 +503,13 @@ void NOCDebugState::print_aggregated_errors() const {
     };
     std::map<std::string, CoreIssues> issues_by_core;
 
-    for (const auto& [core, state] : cores) {
+    for (auto& [core, state] : cores) {
         for (size_t proc = 0; proc < CoreDebugState::MAX_PROCESSORS; ++proc) {
-            const auto& issue = state.issue[proc];
+            auto& issue = state.issue[proc];
             if (!issue.any_issue()) {
                 continue;
             }
+            issue.unreported.clear();
 
             std::string core_key = fmt::format("Device {} ({},{}) Processor {}", core.chip, core.x, core.y, proc);
             CoreIssues& core_issues = issues_by_core[core_key];
@@ -578,25 +612,62 @@ void NOCDebugState::print_aggregated_errors() const {
     log_error(tt::LogMetal, "");
 }
 
+void NOCDebugState::report_new_issues() const {
+    std::lock_guard<std::mutex> lock{cores_mutex};
+
+    for (auto& [core, state] : cores) {
+        for (size_t proc = 0; proc < CoreDebugState::MAX_PROCESSORS; ++proc) {
+            auto& unreported = state.issue[proc].unreported;
+            for (const auto& issue_type : unreported) {
+                log_error(
+                    tt::LogMetal,
+                    "[NOC issue] Device {} ({},{}) Processor {}: {}",
+                    core.chip,
+                    core.x,
+                    core.y,
+                    proc,
+                    get_issue_description(issue_type));
+            }
+            unreported.clear();
+        }
+    }
+}
+
 void NOCDebugState::push_event(size_t chip_id, uint64_t timestamp, int processor_id, const NOCDebugEvent& event) {
     std::lock_guard<std::mutex> lock{pending_events_mutex_};
     pending_events_.push_back({chip_id, timestamp, processor_id, event});
 }
 
-void NOCDebugState::process_accumulated_events_all_chips() {
-    std::lock_guard<std::mutex> cores_lock{cores_mutex};
-
-    // Store them immediately because the main thread will still insert events while we are
-    // processing the current batch
-    std::vector<PendingEvent> to_process;
-    {
-        std::lock_guard<std::mutex> lock{pending_events_mutex_};
-        to_process = std::move(pending_events_);
-        pending_events_.clear();
+void NOCDebugState::process_events_locked(std::vector<PendingEvent>& to_process) {
+    // Caller must hold cores_mutex. Sort by (chip, then wrap-aware time within that chip) and fold each event into
+    // the per-core state machine. Timestamps are only comparable WITHIN a chip.
+    std::unordered_map<size_t, uint64_t> chip_ref;
+    for (const auto& e : to_process) {
+        auto [it, inserted] = chip_ref.try_emplace(e.chip_id, e.timestamp);
+        if (!inserted && detail::ts_wrap_ge(e.timestamp, it->second)) {
+            it->second = e.timestamp;
+        }
     }
-    // process in global sorted order
-    std::sort(to_process.begin(), to_process.end(), [](const PendingEvent& a, const PendingEvent& b) {
-        return a.timestamp < b.timestamp;
+
+    // The linearisation above is only correct while every event sits within half a wrap window of the reference.
+    constexpr int64_t implausible_span = int64_t(1) << (kernel_profiler::PROFILER_MARKER_TS_BITS - 2);
+    for (const auto& e : to_process) {
+        if (detail::ts_sub(e.timestamp, chip_ref.at(e.chip_id)) < -implausible_span) {
+            log_warning(
+                tt::LogMetal,
+                "NOC debug: a batch of {} events spans more than a quarter of the device timestamp wrap window; "
+                "event ordering within it may be wrong. Process events more often (see "
+                "TT_METAL_NOC_DEBUG_FULL_READ_INTERVAL_MS).",
+                to_process.size());
+            break;
+        }
+    }
+    std::sort(to_process.begin(), to_process.end(), [&chip_ref](const PendingEvent& a, const PendingEvent& b) {
+        if (a.chip_id != b.chip_id) {
+            return a.chip_id < b.chip_id;
+        }
+        const uint64_t ref = chip_ref.at(a.chip_id);
+        return detail::ts_sub(a.timestamp, ref) < detail::ts_sub(b.timestamp, ref);
     });
     for (const PendingEvent& entry : to_process) {
         std::visit(
@@ -638,6 +709,65 @@ void NOCDebugState::process_accumulated_events_all_chips() {
                 }
             },
             entry.event);
+    }
+}
+
+void NOCDebugState::process_accumulated_events_all_chips() {
+    std::lock_guard<std::mutex> cores_lock{cores_mutex};
+
+    // Move the whole queue out immediately because another thread may still push events while we process this batch.
+    std::vector<PendingEvent> to_process;
+    {
+        std::lock_guard<std::mutex> lock{pending_events_mutex_};
+        to_process = std::move(pending_events_);
+        pending_events_.clear();
+    }
+    // Process everything: this is called only at a quiescent point (a user read at a kernel boundary, or device
+    // close), where every core has flushed, so the batch is a complete snapshot and no watermark is needed.
+    process_events_locked(to_process);
+}
+
+void NOCDebugState::process_accumulated_events_up_to(uint64_t margin_ticks) {
+    std::lock_guard<std::mutex> cores_lock{cores_mutex};
+
+    std::vector<PendingEvent> batch;
+    {
+        std::lock_guard<std::mutex> lock{pending_events_mutex_};
+        batch = std::move(pending_events_);
+        pending_events_.clear();
+    }
+
+    // Bounded-lateness watermark. This runs mid-run (from the background full read), where the snapshot is NOT
+    // guaranteed complete: a momentarily-stalled core may not yet have recorded an older event.
+    std::unordered_map<size_t, uint64_t> chip_latest;
+    for (const auto& e : batch) {
+        auto [it, inserted] = chip_latest.try_emplace(e.chip_id, e.timestamp);
+        if (!inserted && detail::ts_wrap_ge(e.timestamp, it->second)) {
+            it->second = e.timestamp;
+        }
+    }
+
+    std::vector<PendingEvent> to_process;
+    std::vector<PendingEvent> retained;
+    to_process.reserve(batch.size());
+    for (const auto& e : batch) {
+        // May underflow past zero; that is fine, ts_wrap_ge only looks at the low PROFILER_MARKER_TS_BITS of the
+        // difference, so the value stays correct modulo the timestamp width without masking it back down.
+        const uint64_t watermark = chip_latest.at(e.chip_id) - margin_ticks;
+        // Process if the event is at/before the watermark; the retained tail (newer than watermark, i.e. within
+        // margin_ticks of the latest) waits for the next call.
+        if (detail::ts_wrap_ge(watermark, e.timestamp)) {
+            to_process.push_back(e);
+        } else {
+            retained.push_back(e);
+        }
+    }
+
+    process_events_locked(to_process);
+
+    if (!retained.empty()) {
+        std::lock_guard<std::mutex> lock{pending_events_mutex_};
+        pending_events_.insert(pending_events_.end(), retained.begin(), retained.end());
     }
 }
 

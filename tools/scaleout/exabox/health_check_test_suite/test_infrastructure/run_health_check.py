@@ -39,11 +39,12 @@ from pathlib import Path
 
 from utils.diag_execution import run_diag_subprocess
 from utils.jira_client import (
-    _build_failure_body,
     add_comment_to_jira,
     artifact_upload_name,
     attach_files_to_jira,
     attach_log_to_jira,
+    build_failure_body,
+    build_recovery_body,
     create_jira_ticket,
     find_open_ticket_for_node,
     transition_jira_ticket,
@@ -174,6 +175,17 @@ def parse_args() -> argparse.Namespace:
         "(slurm launch mode only; ignored under orchestration)",
     )
     p.add_argument(
+        "--last-iteration",
+        choices=("true", "false"),
+        default="true",
+        help="Whether this is the final attempt of the launcher's retry loop "
+        "(orchestration only). When false a failure is not the verdict yet — the "
+        "launcher reruns the suite, power cycling the node first if it is "
+        "configured to — so the run is recorded as a discarded pre-reboot row and "
+        "JIRA ticketing plus the real CSV upload are left to the final attempt. "
+        "Defaults to true, so a single run and the Slurm path behave as before.",
+    )
+    p.add_argument(
         "--exclude",
         choices=("true", "false"),
         default="false",
@@ -195,6 +207,7 @@ def parse_args() -> argparse.Namespace:
     args.upload_sftp = args.upload_sftp == "true"
     args.cleanup = args.cleanup == "true"
     args.reboot_on_failure = args.reboot_on_failure == "true"
+    args.last_iteration = args.last_iteration == "true"
     args.exclude = args.exclude == "true"
     return args
 
@@ -262,6 +275,16 @@ def _clean_version(value: str | None) -> str:
     """Map the collector's "N/A" sentinel (and None) to empty string so it
     doesn't surface as a real version bucket in the dashboards."""
     return "" if value in (None, "", "N/A") else value
+
+
+def collect_run_artifacts(artifacts_dir: Path | None, *, node: str, slurm_job_id: str) -> tuple[list[Path], list[str]]:
+    """A run's result files plus the ``[^name]`` attachment names JIRA renders
+    inline, so the failure and recovery paths attach and name the same set."""
+    result_files: list[Path] = []
+    if artifacts_dir and artifacts_dir.is_dir():
+        result_files = sorted(p for p in artifacts_dir.rglob("*") if p.is_file())
+    attachment_names = [f"{node}-{slurm_job_id}.log"] + [artifact_upload_name(p, slurm_job_id) for p in result_files]
+    return result_files, attachment_names
 
 
 # ---------------------------------------------------------------------------
@@ -391,14 +414,53 @@ def main() -> int:
             )
             effective_code = 0
 
+    # Retry-aware reporting, orchestration only. There the launcher owns the retry
+    # loop: it holds the node's Allocation for the whole sequence and reruns this
+    # suite (power cycling the node in between when its BMC support is enabled), so
+    # a failure on a non-final attempt is not the verdict yet. Report it the way the
+    # Slurm self-heal reports a pre-reboot run — a discarded row, so the attempt
+    # stays visible without counting against the node in fleet stats — and leave
+    # ticketing and the real upload to whichever attempt runs last.
+    #
+    # Ticketing here instead would open a ticket for every transient fault the
+    # retry is meant to absorb, and then close it again on the next attempt.
+    if effective_code != 0 and launch_mode == "orchestration" and not args.last_iteration:
+        log.info(
+            "Test failed (exit %d) on a non-final attempt; the launcher will rerun "
+            "the suite on %s. Recording a discarded pre-reboot row and skipping "
+            "JIRA ticketing.",
+            effective_code,
+            node,
+        )
+        pre_reboot_csv = run_csv_analysis(
+            json_report=json_report,
+            node=node,
+            slurm_job_id=slurm_job_id,
+            ticket_key=None,
+            versions=versions,
+            telemetry=telemetry_summary,
+            discard=1,
+            discard_reason="reboot_pending",
+            run_id_suffix="-pre-reboot",
+        )
+        if pre_reboot_csv and args.upload_sftp and sftp_user and sftp_host:
+            upload_csv_sftp(pre_reboot_csv, sftp_user, sftp_host, log_dir=log_dir, launch_mode=launch_mode)
+        if args.cleanup and pre_reboot_csv:
+            remove_path(tempfile.gettempdir(), pre_reboot_csv)
+        return effective_code
+
     # Reboot-and-rerun self-heal. This is the one behavior that can't be shared
     # between the deployments: it drives Slurm (scontrol reboot + requeue), which
-    # orchestration has no equivalent for, so there we say so and ticket instead.
+    # orchestration has no equivalent for — there the launcher power cycles the
+    # node out of band and the branch above defers to it.
     restart_count = slurm_restart_count()
+    # Set only when self-heal tried but couldn't reboot/requeue; surfaced on the ticket.
+    reboot_failure: str | None = None
     if effective_code != 0 and args.reboot_on_failure and launch_mode != "slurm":
         log.warning(
             "--reboot-on-failure is not supported in %s launch mode (reboot-and-requeue "
-            "needs Slurm); proceeding to JIRA ticketing",
+            "needs Slurm; the launcher's power cycle is driven by --last-iteration); "
+            "proceeding to JIRA ticketing",
             launch_mode,
         )
     elif should_reboot(
@@ -431,10 +493,14 @@ def main() -> int:
             upload_csv_sftp(pre_reboot_csv, sftp_user, sftp_host, log_dir=log_dir, launch_mode=launch_mode)
         if args.cleanup and pre_reboot_csv:
             remove_path(tempfile.gettempdir(), pre_reboot_csv)
-        if reboot_and_requeue(node, slurm_job_id):
+        reboot_failure = reboot_and_requeue(node, slurm_job_id)
+        if reboot_failure is None:
             log.info("Reboot armed and job requeued; exiting so the node reboots and reruns")
             return effective_code
-        log.warning("Reboot/requeue could not be issued; proceeding to JIRA ticketing")
+        log.error(
+            "Self-heal reboot FAILED (%s); node was NOT rebooted or requeued, " "proceeding to JIRA ticketing",
+            reboot_failure,
+        )
 
     # JIRA ticket creation (failure only)
     ticket_key = None
@@ -450,12 +516,7 @@ def main() -> int:
         else:
             # Files this run will reference with [^name] so JIRA renders them
             # inline with the comment/description.
-            result_files = []
-            if artifacts_dir and artifacts_dir.is_dir():
-                result_files = sorted(p for p in artifacts_dir.rglob("*") if p.is_file())
-            attachment_names = [f"{node}-{slurm_job_id}.log"] + [
-                artifact_upload_name(p, slurm_job_id) for p in result_files
-            ]
+            result_files, attachment_names = collect_run_artifacts(artifacts_dir, node=node, slurm_job_id=slurm_job_id)
 
             existing_key = find_open_ticket_for_node(
                 node=node,
@@ -470,7 +531,7 @@ def main() -> int:
                 comment_body = (
                     f"Fabric System Health Check failed again on node {node} "
                     f"(recurring failure).\n\n"
-                    + _build_failure_body(
+                    + build_failure_body(
                         node=node,
                         slurm_job_id=slurm_job_id,
                         exit_code=exit_code,
@@ -479,6 +540,7 @@ def main() -> int:
                         test_output=full_output,
                         attachment_names=attachment_names,
                         restart_count=restart_count,
+                        reboot_failure=reboot_failure,
                         grafana_base_url=args.grafana_base_url,
                     )
                 )
@@ -511,6 +573,7 @@ def main() -> int:
                     telemetry_summary=prom_output,
                     attachment_names=attachment_names,
                     restart_count=restart_count,
+                    reboot_failure=reboot_failure,
                     grafana_base_url=args.grafana_base_url,
                 )
                 if ticket_key:
@@ -558,16 +621,47 @@ def main() -> int:
                     node,
                     recovered_key,
                 )
+                # Attach this passing run's artifacts so the closed ticket carries
+                # the recovery evidence (telemetry, Grafana, CSVs) next to the logs.
+                result_files, attachment_names = collect_run_artifacts(
+                    artifacts_dir, node=node, slurm_job_id=slurm_job_id
+                )
                 add_comment_to_jira(
                     ticket_key=recovered_key,
                     body=(
-                        f"Fabric System Health Check passed on node {node} "
+                        f"*(/) Fabric System Health Check PASSED on node {node} "
                         f"(Slurm job {slurm_job_id}); the node has recovered. "
-                        f"Closing this ticket automatically."
+                        f"Closing this ticket automatically.*\n\n"
+                        + build_recovery_body(
+                            node=node,
+                            slurm_job_id=slurm_job_id,
+                            versions=versions,
+                            telemetry_summary=prom_output,
+                            test_output=full_output,
+                            attachment_names=attachment_names,
+                            restart_count=restart_count,
+                            grafana_base_url=args.grafana_base_url,
+                        )
                     ),
                     jira_base_url=args.jira_base_url,
                     jira_bearer_token=jira_bearer_token,
                 )
+                attach_log_to_jira(
+                    ticket_key=recovered_key,
+                    test_output=full_output,
+                    node=node,
+                    slurm_job_id=slurm_job_id,
+                    jira_base_url=args.jira_base_url,
+                    jira_bearer_token=jira_bearer_token,
+                )
+                if result_files:
+                    attach_files_to_jira(
+                        ticket_key=recovered_key,
+                        files=result_files,
+                        slurm_job_id=slurm_job_id,
+                        jira_base_url=args.jira_base_url,
+                        jira_bearer_token=jira_bearer_token,
+                    )
                 transition_jira_ticket(
                     ticket_key=recovered_key,
                     jira_base_url=args.jira_base_url,

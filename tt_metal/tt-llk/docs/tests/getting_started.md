@@ -537,19 +537,33 @@ After finishing compilation and execution of your tests with coverage enabled, r
 
 The harness can compile Layer-1 LLK headers (`_llk_*` / `ckernel::sfpu::*`) that live **outside** this public repo. It cannot run metal compute-API wrappers or fused-op `op.hpp` files (those need CBs and the metal JIT).
 
+## The supported surface
+
+External suites import from **`tt_llk_harness`** and from nowhere else. Everything under `helpers` is implementation and may be renamed, split, or restructured without notice.
+
+| | promise |
+| --- | --- |
+| Names in `tt_llk_harness.__all__` | The contract. Removing one, or changing what it means, is a breaking change: it needs a deprecation period with both spellings working, and a migration note in this section. |
+| `tt_llk_harness.goldens`, `tt_llk_harness.params` | Catalogues that grow with the LLKs under test. Both spellings work — `params.DEST_INDEX` and `from tt_llk_harness.params import DEST_INDEX` — so an in-tree test can be lifted into an external suite without rewriting its parameter references. Adding an entry is not breaking; removing or renaming one is. |
+| Anything else under `helpers` | Implementation. No promises. |
+
+`tt_llk_harness.require_version(major, minor)` fails fast and legibly instead of surfacing as an `AttributeError` mid-run. Compatible means *same major, minor no older than requested* — a newer major is a rejection, not an upgrade, since a major bump only happens for a breaking change that has completed its deprecation period. `HARNESS_API_VERSION` is kept honest mechanically: `tests/out_of_tree/` pins the exported surface *per version*, so a surface that grows has nowhere to be recorded except under a version that does not exist yet — additions need a new minor entry, a removal that has completed its deprecation needs a new major one. Editing an existing entry in place is still possible, and is the thing to look for in review.
+
+This is enforced, not just documented: `tests/out_of_tree/` is a consumer that uses only the facade, and it runs in the PR pipeline via `tests/python_tests/test_out_of_tree_contract.py`. A change that breaks external suites fails there, in the PR that makes it, rather than during a later tt-metal uplift. If a real consumer needs something the facade lacks, add it to `__all__` — do not reach into `helpers`. The fixture's driver uses the letter-named Wormhole/Blackhole LLK headers, so what CI exercises is the contract on those two architectures; Quasar uses semantic header names and would need its own driver, as the in-tree suite already does.
+
 An external pytest suite should:
 
 1. Put `tests/python_tests` on `sys.path` and load the shared plugin:
    ```python
    sys.path.insert(0, str(llk_python_tests))
-   pytest_plugins = ["helpers.llk_pytest_plugin"]
+   pytest_plugins = ["tt_llk_harness.plugin"]
    ```
    Invoke pytest with that suite as the rootdir (so `pytest_plugins` is legal). Set `LLK_HOME` if it cannot be inferred. `CHIP_ARCH` is optional on a live card (`check_context()`); export it for compile-only / no-device.
    Test files should not touch `sys.path`. The plugin prepends `<rootdir>/python_tests` so suite-local packages (e.g. `goldens/`) import without per-test boilerplate. Keep suite-local Python packages there, not under a `helpers/` overlay (that name is reserved for the harness).
 
 2. Register proprietary search dirs on `TestConfig` (before or after `setup_build`):
    ```python
-   from helpers.test_config import TestConfig
+   from tt_llk_harness import TestConfig
    TestConfig.add_include_dirs(
        repo_root,
        proprietary_llk_api_dir,

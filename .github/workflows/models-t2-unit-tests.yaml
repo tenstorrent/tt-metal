@@ -35,6 +35,7 @@ on:
           - vit
           - motif
           - bge_m3
+          - deepseek-v3
       sku:
         description: "Select SKU to test (not all models are configured for all SKUs. If a combination is non-existent no test will be run)"
         required: false

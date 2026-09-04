@@ -113,12 +113,7 @@ tt::tt_metal::ClusterType Cluster::get_cluster_type_from_cluster_desc(
         cluster_desc = temp_cluster_desc.get();
     }
     tt::tt_metal::ClusterType cluster_type = tt::tt_metal::ClusterType::INVALID;
-    for (const auto& chip_id : cluster_desc->get_all_chips()) {
-        if (cluster_desc->get_board_type(chip_id) == BoardType::GALAXY) {
-            cluster_type = tt::tt_metal::ClusterType::TG;
-            break;
-        }
-    }
+
     const auto num_chips = cluster_desc->get_all_chips().size();
     TT_FATAL(num_chips > 0, "No chips detected in the cluster");
     const auto board_type = cluster_desc->get_board_type(*cluster_desc->get_all_chips().begin());
@@ -217,10 +212,12 @@ bool Cluster::is_base_routing_fw_enabled(tt::tt_metal::ClusterType cluster_type)
     return (
         cluster_type == tt::tt_metal::ClusterType::INVALID || cluster_type == tt::tt_metal::ClusterType::N150 ||
         cluster_type == tt::tt_metal::ClusterType::N300 || cluster_type == tt::tt_metal::ClusterType::T3K ||
-        cluster_type == tt::tt_metal::ClusterType::N300_2x2 || cluster_type == tt::tt_metal::ClusterType::TG);
+        cluster_type == tt::tt_metal::ClusterType::N300_2x2);
 }
 
 bool Cluster::is_iommu_enabled() const { return this->iommu_enabled_; }
+
+bool Cluster::is_read_only_page_pinning_supported() const { return this->read_only_page_pinning_supported_; }
 
 Cluster::Cluster(llrt::RunTimeOptions& rtoptions) : rtoptions_(rtoptions) {
     ZoneScoped;
@@ -261,7 +258,7 @@ void Cluster::detect_arch_and_target() {
 }
 
 // TODO: remove this when we deprecate TG
-bool Cluster::is_galaxy_cluster() const { return this->cluster_type_ == tt::tt_metal::ClusterType::TG; }
+bool Cluster::is_galaxy_cluster() const { return false; }
 
 bool Cluster::is_ubb_galaxy() const { return Cluster::is_ubb_galaxy(this->cluster_type_); }
 
@@ -335,6 +332,7 @@ void Cluster::initialize_device_drivers() {
 
     // Cache IOMMU status (expensive to query repeatedly)
     this->iommu_enabled_ = false;
+    this->read_only_page_pinning_supported_ = false;
     if (this->target_type_ == tt::TargetDevice::Silicon) {
         const auto& mmio_ids = this->driver_->get_target_mmio_device_ids();
         if (!mmio_ids.empty()) {
@@ -342,6 +340,11 @@ void Cluster::initialize_device_drivers() {
             auto* pci = this->driver_->get_chip(mmio_id)->get_tt_device()->get_pci_device();
             if (pci) {
                 this->iommu_enabled_ = pci->is_iommu_enabled();
+            }
+            // Ask through the same handle map_sysmem_buffer() goes through, rather than re-deriving the
+            // IOMMU and KMD version gate here.
+            if (auto* sysmem_manager = this->driver_->get_chip(mmio_id)->get_sysmem_manager()) {
+                this->read_only_page_pinning_supported_ = sysmem_manager->is_read_only_page_pinning_supported();
             }
         }
     }
@@ -555,13 +558,7 @@ Cluster::~Cluster() {
 }
 
 std::unordered_map<ChipId, EthCoord> Cluster::get_user_chip_ethernet_coordinates() const {
-    auto user_chip_ethernet_coordinates = this->get_cluster_desc()->get_chip_locations();
-    if (this->is_galaxy_cluster()) {
-        std::erase_if(user_chip_ethernet_coordinates, [this](const auto& entry) {
-            return this->get_cluster_desc()->get_board_type(entry.first) != BoardType::GALAXY;
-        });
-    }
-    return user_chip_ethernet_coordinates;
+    return this->get_cluster_desc()->get_chip_locations();
 }
 
 std::unordered_map<ChipId, EthCoord> Cluster::get_all_chip_ethernet_coordinates() const {
@@ -579,26 +576,10 @@ ChipId Cluster::get_physical_chip_id_from_eth_coord(const EthCoord& eth_coord) c
 }
 
 size_t Cluster::number_of_user_devices() const {
-    if (this->cluster_type_ == tt::tt_metal::ClusterType::TG) {
-        const auto& chips = this->driver_->get_target_device_ids();
-        return std::count_if(chips.begin(), chips.end(), [&](const auto& id) {
-            return this->get_cluster_desc()->get_board_type(id) == BoardType::GALAXY;
-        });
-    }
     return this->driver_->get_target_device_ids().size();
 }
 
 std::set<ChipId> Cluster::user_exposed_chip_ids() const {
-    if (this->cluster_type_ == tt::tt_metal::ClusterType::TG) {
-        std::set<ChipId> galaxy_boards;
-        const auto& chips = this->driver_->get_target_device_ids();
-        for (const auto& id : chips) {
-            if (this->get_cluster_desc()->get_board_type(id) == BoardType::GALAXY) {
-                galaxy_boards.insert(id);
-            }
-        }
-        return galaxy_boards;
-    }
     return this->driver_->get_target_device_ids();
 }
 
@@ -1080,34 +1061,19 @@ std::unique_ptr<tt::umd::SysmemBuffer> Cluster::allocate_sysmem_buffer(
 }
 
 std::unique_ptr<tt::umd::SysmemBuffer> Cluster::map_sysmem_buffer(
-    ChipId device_id, void* buffer, size_t sysmem_buffer_size, bool map_to_noc) const {
+    ChipId device_id,
+    void* buffer,
+    size_t sysmem_buffer_size,
+    bool map_to_noc,
+    tt::umd::DeviceBufferAccess device_access) const {
     tt::umd::SysmemManager* sysmem_manager = this->driver_->get_chip(device_id)->get_sysmem_manager();
     if (!sysmem_manager) {
         TT_THROW("Failed to get SysmemManager for device {}", device_id);
     }
-    return sysmem_manager->map_sysmem_buffer(buffer, sysmem_buffer_size, map_to_noc);
+    return sysmem_manager->map_sysmem_buffer(buffer, sysmem_buffer_size, map_to_noc, device_access);
 }
 
-void Cluster::verify_sw_fw_versions(
-    int device_id, std::uint32_t sw_version, std::vector<std::uint32_t>& fw_versions) const {
-    umd::semver_t sw(umd::semver_t::from_wormhole_eth_firmware_tag(sw_version)),
-        fw_first_eth_core(umd::semver_t::from_wormhole_eth_firmware_tag(fw_versions.at(0)));
-    log_info(
-        tt::LogDevice,
-        "Software version {}, Ethernet FW version {} (Device {})",
-        sw.to_string(),
-        fw_first_eth_core.to_string(),
-        device_id);
-    for (std::uint32_t& fw_version : fw_versions) {
-        umd::semver_t fw(umd::semver_t::from_wormhole_eth_firmware_tag(fw_version));
-
-        TT_FATAL(fw == fw_first_eth_core, "FW versions are not the same across different ethernet cores");
-        TT_FATAL(sw.major == fw.major, "SW/FW major version number out of sync");
-        TT_FATAL(sw.minor <= fw.minor, "SW version is newer than FW version");
-    }
-}
-
-std::optional<tt::umd::semver_t> Cluster::get_ethernet_firmware_version() const {
+std::optional<tt::umd::SemVer> Cluster::get_ethernet_firmware_version() const {
     return this->driver_->get_ethernet_firmware_version();
 }
 
@@ -1645,7 +1611,7 @@ bool Cluster::supports_ethernet_link_retraining() const {
         return true;
     }
     if (this->arch_ == tt::ARCH::BLACKHOLE) {
-        return this->get_ethernet_firmware_version() >= tt::umd::semver_t(1, 9, 0);
+        return this->get_ethernet_firmware_version() >= tt::umd::SemVer(1, 9, 0);
     }
     return false;
 }

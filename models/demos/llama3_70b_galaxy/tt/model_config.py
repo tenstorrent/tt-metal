@@ -508,6 +508,21 @@ class CheckpointType(Enum):
 
 
 class TtModelArgs:
+    # Keep concurrent slots that share a request seed on salt 0 (see
+    # SeedManager.salt_duplicate_seeds). #53077 salts them apart to separate n>1
+    # completions of one prompt, but these models are served through vLLM v1, whose
+    # ParentRequest._get_child_sampling_params already hands child i `seed + i`
+    # (vllm/v1/engine/parallel_sampling.py) -- so n>1 children never arrive here
+    # sharing a seed. Every duplicate seed that does arrive is independent requests
+    # that must reproduce identically, which the vLLM TT sampling suite asserts
+    # (test_uniform_seed_deterministic and friends: 32 same-seed requests -> 32
+    # identical outputs, observed as 32 DIFFERENT outputs with salting on).
+    #
+    # CLASS attribute, not set in _set_params_from_dict: TtQwenModelArgs overrides that
+    # method without calling super(), so an instance assignment there reaches Llama only
+    # and Qwen3-32B silently keeps the salting default.
+    salt_duplicate_seeds = False
+
     OP_KEYS = (
         # Embedding
         "EMB_WEIGHTS",
@@ -2922,22 +2937,15 @@ class TtModelArgs:
         )
 
     def create_tokenizer(self):
-        """Create and return a Tokenizer instance based on the checkpoint type."""
-        if self.checkpoint_type == CheckpointType.Meta:
-            # Use the Meta Tokenizer
-            from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
+        """Create and return a HuggingFace tokenizer."""
+        from transformers import AutoTokenizer
 
-            return Tokenizer(self.tokenizer_path)
-        else:
-            # Create a HuggingFace AutoTokenizer
-            from transformers import AutoTokenizer
+        tokenizer = AutoTokenizer.from_pretrained(self.TOKENIZER_PATH)
 
-            tokenizer = AutoTokenizer.from_pretrained(self.TOKENIZER_PATH)
-
-            # Add meta-compatible stop token list to the HF tokenizer
-            if not "stop_tokens" in tokenizer.__dict__:
-                tokenizer.stop_tokens = [tokenizer.eos_token_id]
-            return tokenizer
+        # Add meta-compatible stop token list to the HF tokenizer
+        if not "stop_tokens" in tokenizer.__dict__:
+            tokenizer.stop_tokens = [tokenizer.eos_token_id]
+        return tokenizer
 
     def encode_prompt(self, prompt_text, system_prompt_text=None, instruct=True, add_special_tokens=True):
         if instruct:

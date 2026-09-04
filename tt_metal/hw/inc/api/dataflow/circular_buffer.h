@@ -255,6 +255,9 @@ private:
     }
 };
 
+template <>
+inline constexpr bool noc_zero_l1_endpoint_v<CircularBuffer> = true;
+
 #ifdef ARCH_QUASAR
 #include "internal/tt-2xx/noc_zero_l1.inl"
 #else
