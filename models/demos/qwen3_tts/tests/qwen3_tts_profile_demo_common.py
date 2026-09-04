@@ -789,3 +789,36 @@ def capture_talker_decode_trace(device, model, decode_ctx: Dict[str, Any]) -> Di
     ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
     ttnn.synchronize_device(device)
     return {"trace_id": trace_id, "hidden_out": hidden_out, "logits_out": logits_out}
+
+
+def capture_speaker_encoder_forward_trace(device, model, main_weights) -> Dict[str, Any]:
+    """Capture the ECAPA forward trace the demo uses with ``QWEN3_TTS_SE_TRACE=1``.
+
+    ``SpeakerEncoder.capture_forward_trace`` forces device conv/ASP for the capture
+    region so every conv is on device inside the Metal trace. The partial
+    ``speaker_tdnn`` / ``speaker_block`` tests in ``test_qwen3_tts_profile_single_layer``
+    profile untraced slices with synthetic weights and default host-fuse — they miss
+    most conv work (entry TDNN conv runs on the host; one SERes2Net block is not the
+    full encoder).
+    """
+    from models.demos.qwen3_tts.tt.server import encode_reference_audio
+
+    se = model.speaker_encoder
+    _, audio_data = encode_reference_audio(str(DEFAULT_REF_AUDIO), main_weights)
+    mel = se.compute_mel_spectrogram(audio_data)
+    mel_len = int(mel.shape[-1])
+
+    se.capture_forward_trace(mel_len)
+    trace = se._fwd_traces[mel_len]
+
+    mel_host = ttnn.from_torch(mel.permute(0, 2, 1).contiguous(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    ttnn.copy_host_to_device_tensor(mel_host, trace["input_tt"])
+    ttnn.execute_trace(device, trace["trace_id"], cq_id=0, blocking=True)
+    ttnn.synchronize_device(device)
+
+    return {
+        "trace_id": trace["trace_id"],
+        "input_tt": trace["input_tt"],
+        "mel_len": mel_len,
+        "mel_host": mel_host,
+    }
