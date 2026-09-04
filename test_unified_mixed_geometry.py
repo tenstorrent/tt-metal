@@ -81,7 +81,7 @@ VARIANTS = [
     # The matmul path. One shape per body, because two matmul shapes in one body is a
     # separate limitation -- see the kernel, and A3.
     ("matmul, row-form", True, False, False, None, True, True, "matmul"),
-    # B4's rank-1 update, which the padded inner-dimension check is what admits.
+    # B4's rank-1 update, which checking the inner dimension in TILES is what admits.
     ("outer product, k (x) delta", False, False, False, True, True, True, "outer"),
 ]
 
@@ -195,7 +195,11 @@ def main(argv=None):
     try:
         measured = [
             measure(
-                device, c[1], c[2], c[3], args.rel_err,
+                device,
+                c[1],
+                c[2],
+                c[3],
+                args.rel_err,
                 fpu=(len(c) > 7 and c[7] == "fpu"),
                 matmul=(len(c) > 7 and c[7] == "matmul"),
                 outer=(len(c) > 7 and c[7] == "outer"),
