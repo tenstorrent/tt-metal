@@ -3115,9 +3115,9 @@ static std::vector<DFBAllocInfo> allocate_dfbs_on_core(
             MetalContext::instance().hal().get_arch_num_circular_buffers());
         // Same faced-tile geometry carry as the CB pass above, else full-tile 16/4.
         uint32_t dfb_face_r_dim = 16, dfb_num_faces = 4;
-        if (cfg.unpack_face_geometry.has_value()) {
-            dfb_face_r_dim = cfg.unpack_face_geometry->face_r_dim;
-            dfb_num_faces = cfg.unpack_face_geometry->num_faces;
+        if (cfg.tile.has_value()) {
+            dfb_face_r_dim = cfg.tile->get_face_shape()[0];
+            dfb_num_faces = cfg.tile->get_num_faces();
         }
         core->init_cb_sync(
             static_cast<uint8_t>(device_slot),
