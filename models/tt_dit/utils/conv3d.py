@@ -5,6 +5,7 @@
 import collections
 import hashlib
 import math
+import os
 from itertools import repeat
 from typing import NamedTuple
 
@@ -455,6 +456,54 @@ _BLOCKINGS = {
     (4, 8, 1024, 4096, (1, 3, 3), 19, 5, 4): (256, 64, 1, 4, 4),  # ups_ups (kT=1) — 1235us
     (4, 8, 1024, 1024, (3, 3, 3), 21, 10, 8): (128, 64, 5, 4, 8),  # ups_post_res — 2012us
     (4, 8, 1024, 128, (3, 3, 3), 21, 10, 8): (128, 64, 7, 8, 4),  # ups_final — 277us
+    # ===================================================================
+    # Wan2.1 VAE, BH Galaxy 4x32 (quad), 1080p, VAE H on the 32 axis / W on the 4 axis
+    # (h_factor=32, w_factor=4). HR latent 256x160 -> per-device latent 8x40, pixels 64x320.
+    # Per-device (H,W) by stage: 8x40 -> 16x80 -> 32x160 -> 64x320; padded +2 for 3x3 kernels.
+    # Decode is chunked at t_chunk_size=28 (T_res=30, doubling to 56/58 and 112/114) with a
+    # T=1 first chunk (T=3/2/4/6); encode is the single-frame source image (T=3 / T=1).
+    # Swept 2026-09-03 on a 1x1 submesh (hw_product=32, max_t_block=8, 500 combos); the
+    # comment gives swept us vs the _DEFAULT_BLOCKINGS fallback us it replaces.
+    # Not covered: the encoder's stride-2 (3,1,1) tconvs at T=1 (every combo failed to run
+    # standalone at T_in=1); they keep the channel-key fallback.
+    # ===================================================================
+    # --- decode, t_chunk_size=28 ---
+    (32, 4, 32, 384, (3, 3, 3), 30, 8, 40): (32, 384, 3, 2, 16),  # conv_in — 92us (table 242us)
+    (32, 4, 384, 384, (3, 3, 3), 30, 8, 40): (128, 96, 3, 8, 4),  # lat_mid_res — 652us (table 1212us)
+    (32, 4, 384, 768, (3, 1, 1), 30, 8, 40): (384, 384, 3, 4, 8),  # up0_tconv — 164us (table 1773us)
+    (32, 4, 384, 192, (1, 3, 3), 56, 16, 80): (384, 96, 1, 16, 2),  # up0_spatial — 622us (table 1287us)
+    (32, 4, 192, 384, (3, 3, 3), 58, 16, 80): (96, 128, 4, 8, 4),  # up1_res0 — 2330us (table 5275us)
+    (32, 4, 384, 384, (3, 3, 3), 58, 16, 80): (128, 96, 3, 16, 2),  # up1_res — 4316us (table 9146us)
+    (32, 4, 384, 768, (3, 1, 1), 58, 16, 80): (384, 384, 3, 4, 8),  # up1_tconv — 929us (table 14692us)
+    (32, 4, 384, 192, (1, 3, 3), 112, 32, 160): (384, 96, 1, 8, 4),  # up1_spatial — 4796us (table 6753us)
+    (32, 4, 192, 192, (3, 3, 3), 114, 32, 160): (96, 96, 8, 8, 4),  # up2_res — 10600us (table 18464us)
+    (32, 4, 192, 96, (1, 3, 3), 112, 64, 320): (192, 96, 1, 16, 2),  # up2_spatial — 7727us (table 9338us)
+    (32, 4, 96, 96, (3, 3, 3), 114, 64, 320): (96, 96, 7, 2, 16),  # up3_res — 11425us (table 20588us)
+    (32, 4, 96, 3, (3, 3, 3), 114, 64, 320): (96, 32, 3, 2, 16),  # conv_out — 10019us (table 17913us)
+    # --- decode, first chunk (t=1) ---
+    (32, 4, 32, 384, (3, 3, 3), 3, 8, 40): (32, 128, 1, 4, 8),  # conv_in — 29us (table 41us)
+    (32, 4, 384, 384, (3, 3, 3), 3, 8, 40): (96, 64, 1, 4, 8),  # lat_mid_res — 113us (table 177us)
+    (32, 4, 384, 768, (3, 1, 1), 3, 8, 40): (192, 256, 1, 8, 4),  # up0_tconv — 28us (table 85us)
+    (32, 4, 384, 192, (1, 3, 3), 2, 16, 80): (192, 96, 1, 4, 8),  # up0_spatial — 54us (table 213us)
+    (32, 4, 192, 384, (3, 3, 3), 4, 16, 80): (64, 128, 2, 8, 4),  # up1_res0 — 179us (table 230us)
+    (32, 4, 384, 384, (3, 3, 3), 4, 16, 80): (128, 96, 2, 8, 4),  # up1_res — 278us (table 446us)
+    (32, 4, 384, 768, (3, 1, 1), 4, 16, 80): (384, 384, 1, 2, 16),  # up1_tconv — 76us (table 598us)
+    (32, 4, 384, 192, (1, 3, 3), 4, 32, 160): (384, 96, 1, 16, 2),  # up1_spatial — 214us (table 363us)
+    (32, 4, 192, 192, (3, 3, 3), 6, 32, 160): (96, 96, 4, 8, 4),  # up2_res — 505us (table 766us)
+    (32, 4, 192, 96, (1, 3, 3), 4, 64, 320): (192, 96, 1, 16, 2),  # up2_spatial — 288us (table 335us)
+    (32, 4, 96, 96, (3, 3, 3), 6, 64, 320): (96, 96, 4, 2, 16),  # up3_res — 461us (table 788us)
+    (32, 4, 96, 3, (3, 3, 3), 6, 64, 320): (96, 32, 4, 2, 16),  # conv_out — 452us (table 734us)
+    # --- encode, single source frame ---
+    (32, 4, 32, 96, (3, 3, 3), 3, 64, 320): (32, 96, 1, 2, 16),  # enc_conv_in — 176us
+    (32, 4, 96, 96, (3, 3, 3), 3, 64, 320): (96, 96, 1, 2, 16),  # down0_res — 198us (table 222us)
+    (32, 4, 96, 96, (1, 3, 3), 1, 64, 320): (96, 96, 1, 2, 16),  # down0_spatial — 74us
+    (32, 4, 96, 192, (3, 3, 3), 3, 32, 160): (96, 96, 1, 2, 16),  # down1_res0 — 108us
+    (32, 4, 192, 192, (3, 3, 3), 3, 32, 160): (96, 96, 1, 4, 8),  # down1_res — 237us (table 294us)
+    (32, 4, 192, 192, (1, 3, 3), 1, 32, 160): (192, 96, 1, 2, 16),  # down1_spatial — 48us
+    (32, 4, 192, 384, (3, 3, 3), 3, 16, 80): (64, 128, 1, 8, 4),  # down2_res0 — 127us (table 128us)
+    (32, 4, 384, 384, (3, 3, 3), 3, 16, 80): (128, 96, 1, 8, 4),  # down2_res — 222us (table 234us)
+    (32, 4, 384, 384, (1, 3, 3), 1, 16, 80): (384, 96, 1, 2, 16),  # down2_spatial — 56us
+    (32, 4, 384, 32, (3, 3, 3), 3, 8, 40): (96, 32, 1, 4, 8),  # enc_conv_out — 35us
 }
 
 # Fallback table: (C_in, C_out, kernel) -> blocking.
@@ -471,6 +520,12 @@ _DEFAULT_BLOCKINGS = {
     (192, 384, (3, 3, 3)): (64, 128, 1, 8, 4),
     (384, 384, (3, 3, 3)): (96, 96, 1, 8, 4),
     (384, 768, (3, 3, 3)): (96, 96, 1, 8, 4),
+    # Wan VAE decoder upsample3d time_conv (T-doubling, 384->768, kT=3 only). Without this
+    # entry it fell to the hardcoded (Cin, 32, 1, 1, 1) default: 1x1x1 output blocks and 24
+    # C_out passes per position -> 295 ms/op at 1080p, 4x slower than a full 3x3x3 conv on
+    # the same tensor (~10% of the whole decode, Tracy 2026-09-02). Mirrors the proven
+    # (3,3,3) sibling blocking; the 9x smaller (3,1,1) patch leaves headroom to go bigger.
+    (384, 768, (3, 1, 1)): (96, 96, 1, 8, 4),
     # LTX-2.3 22B VAE decoder + latent upsampler conservative fallbacks. These
     # channel combos all have swept exact _BLOCKINGS entries for 2x4/4x8 1080p;
     # they remain here as the cross-mesh/cross-resolution fallback (the hardcoded
@@ -631,6 +686,14 @@ def get_conv3d_config(
             C_in_block=C_in_block,
             compute_with_storage_grid_size=grid_size,
         )
+
+    # Emulating another mesh's per-device tile on a smaller mesh (e.g. a 4x32 chip's 8x40 latent
+    # reproduced on a 4x8 by shrinking the global latent): the tile matches but the mesh factors
+    # do not, so the exact lookup would miss. CONV3D_BLOCKING_FACTORS=h,w substitutes the target
+    # mesh's factors in the key. Unset in production.
+    forced = os.environ.get("CONV3D_BLOCKING_FACTORS")
+    if forced:
+        h_factor, w_factor = (int(v) for v in forced.split(","))
 
     blocking_key = (h_factor, w_factor, in_channels, out_channels, kernel_size, T, H, W)
     channel_key = (in_channels, out_channels, kernel_size)

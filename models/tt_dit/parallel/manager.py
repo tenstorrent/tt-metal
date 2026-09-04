@@ -775,6 +775,8 @@ class CCLManager:
         logical_h: int = 0,
         t_front_pad: int = 0,
     ) -> ttnn.Tensor:
+        # Always pass a barrier_sem: 2D Phase 2 (H→W) uses it even when persistent skips the
+        # fabric startup barrier. Unlike all_gather, do not pass None when persistent.
         barrier_sem = self.get_barrier_semaphore(axes[0])
 
         persistent_buf = None

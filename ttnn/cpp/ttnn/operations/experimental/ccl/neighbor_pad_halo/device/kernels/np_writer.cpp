@@ -302,7 +302,7 @@ void kernel_main() {
                     for (uint32_t rr = r; g < W_COALESCE && rr < outer_dim_size; rr += NP_NUM_DRAM_BANKS) {
                         g++;
                     }
-                    cb_wait_front(send_cb_id, g);
+                    cb_wait_front(send_cb_id, 1);
                     const uint32_t l1_read_addr = get_read_ptr(send_cb_id);
                     const uint64_t dst_noc_addr = get_noc_addr(base + r, dst_accessor);
                     pkt_hdr->to_noc_unicast_write(tt::tt_fabric::NocUnicastCommandHeader{dst_noc_addr}, g * stick_size);
@@ -310,7 +310,7 @@ void kernel_main() {
                     conn.send_payload_without_header_non_blocking_from_address(l1_read_addr, g * stick_size);
                     conn.send_payload_flush_non_blocking_from_address((uint32_t)pkt_hdr, sizeof(PACKET_HEADER_TYPE));
                     noc_async_writes_flushed();
-                    cb_pop_front(send_cb_id, g);
+                    cb_pop_front(send_cb_id, 1);
                     r += g * NP_NUM_DRAM_BANKS;
                 }
             }
