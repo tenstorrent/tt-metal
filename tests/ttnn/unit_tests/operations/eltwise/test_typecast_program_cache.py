@@ -34,7 +34,7 @@ routes:
   - tiled + sub_core_grids     -> TypecastSubgridProgramFactory
   - L1-sharded, equal tile size-> TypecastShardedProgramFactory  (borrowed DFBs + output self-loop)
   - L1-sharded, tile mismatch  -> TypecastProgramFactory         (non-optimized-sharded fallback)
-  - ROW_MAJOR, any memory      -> TypecastRowMajorChunkedProgramFactory (with or without sub_core_grids)
+  - ROW_MAJOR interleaved      -> TypecastRowMajorChunkedProgramFactory
 
 Run on Wormhole / Blackhole:
     pytest tests/ttnn/unit_tests/operations/eltwise/test_typecast_program_cache.py
@@ -42,6 +42,7 @@ Run on Wormhole / Blackhole:
 
 import pytest
 import torch
+
 import ttnn
 
 # First dispatch is the cache miss that builds the program; the rest must be hits.
@@ -49,15 +50,14 @@ _NUM_DISPATCHES = 3
 
 # Multi-tile, multi-core so the per-core runtime-arg loop and the work split both run wide.
 _SHAPE = (1, 1, 128, 128)
-_NARROW_ROW_SHAPE = (1, 1, 128, 32)
 
 # 4 cores in a row: 16 tiles / 4 cores divides evenly, which the subgrid factory requires.
 _CORE_RANGE_SET = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
 
 
-def _height_sharded_config(row_width=128):
+def _height_sharded_config():
     """HEIGHT-sharded L1 config over _CORE_RANGE_SET: 128 rows / 4 cores = 32 rows per shard."""
-    shard_spec = ttnn.ShardSpec(_CORE_RANGE_SET, [32, row_width], ttnn.ShardOrientation.ROW_MAJOR)
+    shard_spec = ttnn.ShardSpec(_CORE_RANGE_SET, [32, 128], ttnn.ShardOrientation.ROW_MAJOR)
     return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
 
 
@@ -107,11 +107,11 @@ def _run_cache_hit_dispatches(device, make_input, output_dtype, golden, typecast
     assert len(output_addrs) == _NUM_DISPATCHES, f"outputs reused addresses: {sorted(output_addrs)}"
 
 
-def _bf16_to_fp32_input(device, memory_config, layout, shape=_SHAPE):
+def _bf16_to_fp32_input(device, memory_config, layout):
     """bfloat16 -> float32 is a widening conversion, so the golden comparison is exact."""
 
     def make_input(i):
-        torch_input = torch.randn(shape, dtype=torch.bfloat16) + float(i)
+        torch_input = torch.randn(_SHAPE, dtype=torch.bfloat16) + float(i)
         tt_input = ttnn.from_torch(
             torch_input,
             dtype=ttnn.bfloat16,
@@ -217,35 +217,4 @@ def test_typecast_row_major_chunked_program_cache_hit(device):
         output_dtype=ttnn.float32,
         golden=lambda t: t.to(torch.float32),
         typecast_kwargs={"memory_config": ttnn.DRAM_MEMORY_CONFIG},
-    )
-
-
-def test_typecast_row_major_subgrid_program_cache_hit(device):
-    """ROW_MAJOR typecast restricts its work split to sub_core_grids and preserves cache rebinding."""
-    torch.manual_seed(0)
-
-    _run_cache_hit_dispatches(
-        device,
-        make_input=_bf16_to_fp32_input(device, ttnn.DRAM_MEMORY_CONFIG, ttnn.ROW_MAJOR_LAYOUT),
-        output_dtype=ttnn.float32,
-        golden=lambda t: t.to(torch.float32),
-        typecast_kwargs={"memory_config": ttnn.DRAM_MEMORY_CONFIG, "sub_core_grids": _CORE_RANGE_SET},
-    )
-
-
-@pytest.mark.parametrize("use_sub_core_grids", [False, True])
-def test_typecast_row_major_sharded_program_cache_hit(use_sub_core_grids, device):
-    """ROW_MAJOR sharded typecast uses tile-sized chunk staging and preserves cache rebinding."""
-    torch.manual_seed(0)
-    sharded_config = _height_sharded_config(row_width=_NARROW_ROW_SHAPE[-1])
-    typecast_kwargs = {"memory_config": sharded_config}
-    if use_sub_core_grids:
-        typecast_kwargs["sub_core_grids"] = _CORE_RANGE_SET
-
-    _run_cache_hit_dispatches(
-        device,
-        make_input=_bf16_to_fp32_input(device, sharded_config, ttnn.ROW_MAJOR_LAYOUT, shape=_NARROW_ROW_SHAPE),
-        output_dtype=ttnn.float32,
-        golden=lambda t: t.to(torch.float32),
-        typecast_kwargs=typecast_kwargs,
     )

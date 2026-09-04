@@ -7,7 +7,6 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 
 #include <tt-metalium/hal.hpp>
-#include <cstdint>
 
 using namespace tt::tt_metal;
 
@@ -49,21 +48,13 @@ bool can_use_sharded_optimized_factory(const TypecastParams& args, const Typecas
         }
     }
 
-    // Restricted grids use the generic factory; the optimized path runs directly on every shard core.
-    return !args.sub_core_grids.has_value();
+    return !args.sub_core_grids
+                .has_value();  // Typecast operation has no sub_core_grids support for optimized 2D sharded input path.
 }
 }  // namespace
 
 TypecastDeviceOperation::program_factory_t TypecastDeviceOperation::select_program_factory(
     const TypecastParams& args, const TypecastInputs& tensor_args) {
-    // Row-major pages can be smaller than a hardware tile, while eltwise_typecast.cpp always uses
-    // full-tile copy/pack LLKs. The chunked factory stages every row chunk in tile-sized DFB pages,
-    // including for sharded inputs and restricted grids.
-    if (tensor_args.input.layout() == Layout::ROW_MAJOR) {
-        log_debug(tt::LogOp, "Using TypecastRowMajorChunkedProgramFactory");
-        return TypecastRowMajorChunkedProgramFactory{};
-    }
-
     if (tensor_args.input.is_sharded()) {
         if (can_use_sharded_optimized_factory(args, tensor_args)) {
             log_debug(tt::LogOp, "Using TypecastShardedProgramFactory");
@@ -72,10 +63,14 @@ TypecastDeviceOperation::program_factory_t TypecastDeviceOperation::select_progr
         log_debug(tt::LogOp, "Using TypecastProgramFactory");
         return TypecastProgramFactory{};
     }
-
     if (args.sub_core_grids.has_value()) {
         log_debug(tt::LogOp, "Using TypecastSubgridProgramFactory");
         return TypecastSubgridProgramFactory{};
+    }
+
+    if (tensor_args.input.layout() == Layout::ROW_MAJOR) {
+        log_debug(tt::LogOp, "Using TypecastRowMajorChunkedProgramFactory");
+        return TypecastRowMajorChunkedProgramFactory{};
     }
 
     log_debug(tt::LogOp, "Using TypecastProgramFactory");
@@ -101,6 +96,12 @@ void TypecastDeviceOperation::validate_on_program_cache_miss(
         input_tensor.buffer() != nullptr,
         "Operands to Typecast need to be allocated in buffers on the device. Buffer is null.");
 
+    if (input_tensor.layout() == Layout::ROW_MAJOR) {
+        TT_FATAL(
+            args.sub_core_grids.has_value() == false,
+            "Typecast operation does not support sub_core_grids when input tensor is in Row-Major layout.");
+    }
+
     const TensorMemoryLayout& input_tensor_memory_layout = input_tensor.memory_config().memory_layout();
     TT_FATAL(
         input_tensor_memory_layout == out_memory_config.memory_layout(),
@@ -109,8 +110,8 @@ void TypecastDeviceOperation::validate_on_program_cache_miss(
         out_memory_config.memory_layout());
 
     if (input_tensor.is_sharded()) {
-        const std::uint32_t l1_alignment = hal::get_l1_alignment();
-        const std::uint32_t page_size_bytes = input_tensor.buffer()->page_size();
+        const uint32_t l1_alignment = hal::get_l1_alignment();
+        const uint32_t page_size_bytes = input_tensor.buffer()->page_size();
         TT_FATAL(
             page_size_bytes == input_tensor.buffer()->aligned_page_size(),
             "Typecast operation requires sharded input tensor page size ({} bytes) to be aligned to L1 ({} bytes)",

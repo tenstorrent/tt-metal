@@ -44,6 +44,15 @@ std::optional<CoreRangeSet> resolve_sub_device_workers(
     return input.device()->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id.value());
 }
 
+void validate_scalar_promotion_typecast(const Tensor& input, const std::optional<CoreRangeSet>& sub_core_grids) {
+    TT_FATAL(
+        input.layout() != Layout::ROW_MAJOR || !input.is_sharded(),
+        "INT32 scalar promotion does not support row-major sharded tensors");
+    TT_FATAL(
+        !sub_core_grids.has_value() || (input.layout() == Layout::TILE && !input.is_sharded()),
+        "INT32 scalar promotion on a restricted grid requires a tiled interleaved tensor");
+}
+
 }  // namespace
 
 // nextafter
@@ -541,6 +550,7 @@ Tensor remainder(
     if (input.dtype() == DataType::INT32 && std::holds_alternative<float>(scalar)) {
         operation_sub_core_grids = resolve_sub_device_workers(input, sub_core_grids, sub_device_id);
         operation_sub_device_id = std::nullopt;
+        validate_scalar_promotion_typecast(input, operation_sub_core_grids);
         operation_input =
             ttnn::typecast(input, DataType::FLOAT32, std::nullopt, std::nullopt, operation_sub_core_grids);
     }
@@ -557,6 +567,7 @@ Tensor remainder(
 
         const Tensor operation_output = ttnn::unary_remainder(
             operation_input, scalar, output_tensor->memory_config(), std::nullopt, operation_sub_core_grids);
+        validate_scalar_promotion_typecast(operation_output, operation_sub_core_grids);
         return ttnn::typecast(
             operation_output, output_tensor->dtype(), std::nullopt, output_tensor, operation_sub_core_grids);
     }
@@ -603,7 +614,15 @@ Tensor fmod(
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<CoreRangeSet>& sub_core_grids,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
-    if (input.dtype() == DataType::INT32 && !std::holds_alternative<float>(scalar)) {
+    if (input.dtype() == DataType::INT32 && std::holds_alternative<float>(scalar)) {
+        const auto operation_sub_core_grids = resolve_sub_device_workers(input, sub_core_grids, sub_device_id);
+        validate_scalar_promotion_typecast(input, operation_sub_core_grids);
+        const Tensor operation_input =
+            ttnn::typecast(input, DataType::FLOAT32, std::nullopt, std::nullopt, operation_sub_core_grids);
+        const float scalar_f = std::get<float>(scalar);
+        return ttnn::unary_fmod(operation_input, scalar_f, output_mem_config, std::nullopt, operation_sub_core_grids);
+    }
+    if (input.dtype() == DataType::INT32 || sub_device_id.has_value()) {
         return ttnn::detail::invoke_binary_ng(
             input,
             scalar,
@@ -618,13 +637,8 @@ Tensor fmod(
             sub_core_grids,
             sub_device_id);
     }
-    const auto operation_sub_core_grids = resolve_sub_device_workers(input, sub_core_grids, sub_device_id);
-    const Tensor operation_input =
-        input.dtype() == DataType::INT32
-            ? ttnn::typecast(input, DataType::FLOAT32, std::nullopt, std::nullopt, operation_sub_core_grids)
-            : input;
-    float scalar_f = std::visit([](auto v) -> float { return static_cast<float>(v); }, scalar);
-    return ttnn::unary_fmod(operation_input, scalar_f, output_mem_config, std::nullopt, operation_sub_core_grids);
+    const float scalar_f = std::visit([](auto value) -> float { return static_cast<float>(value); }, scalar);
+    return ttnn::unary_fmod(input, scalar_f, output_mem_config, std::nullopt, sub_core_grids);
 }
 
 Tensor floor_div(

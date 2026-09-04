@@ -8,7 +8,6 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_align.hpp>
-#include <cstdint>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
@@ -36,14 +35,14 @@ KernelSpec::CompilerOptions::Defines make_typecast_defines(
         "TYPECAST_LLK_INIT",
         fmt::format(
             "typecast_tile_init<{0}u, {1}u>",
-            static_cast<std::uint32_t>(tt::tt_metal::datatype_to_dataformat_converter(input_dtype)),
-            static_cast<std::uint32_t>(tt::tt_metal::datatype_to_dataformat_converter(output_dtype))));
+            static_cast<uint32_t>(tt::tt_metal::datatype_to_dataformat_converter(input_dtype)),
+            static_cast<uint32_t>(tt::tt_metal::datatype_to_dataformat_converter(output_dtype))));
     defines.emplace(
         "TYPECAST_LLK",
         fmt::format(
             "typecast_tile<{0}u, {1}u>",
-            static_cast<std::uint32_t>(tt::tt_metal::datatype_to_dataformat_converter(input_dtype)),
-            static_cast<std::uint32_t>(tt::tt_metal::datatype_to_dataformat_converter(output_dtype))));
+            static_cast<uint32_t>(tt::tt_metal::datatype_to_dataformat_converter(input_dtype)),
+            static_cast<uint32_t>(tt::tt_metal::datatype_to_dataformat_converter(output_dtype))));
     return defines;
 }
 
@@ -92,25 +91,24 @@ ttnn::device_operation::ProgramArtifacts TypecastProgramFactory::create_program_
     const bool is_row_major = input.layout() == Layout::ROW_MAJOR;
 
     const tt::DataFormat cb_data_format_input = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
-    const std::uint32_t single_tile_size_input = tt::tile_size(cb_data_format_input);
+    const uint32_t single_tile_size_input = tt::tile_size(cb_data_format_input);
     const tt::DataFormat cb_data_format_output = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    const std::uint32_t single_tile_size_output = tt::tile_size(cb_data_format_output);
+    const uint32_t single_tile_size_output = tt::tile_size(cb_data_format_output);
 
     const auto* device = input.device();
 
     // Get number of pages (tiles for TILE layout, rows for ROW_MAJOR layout)
-    const std::uint32_t num_pages = input.buffer()->num_pages();
+    const uint32_t num_pages = input.buffer()->num_pages();
 
     // Set DFB entry size correctly based on layout
     // - For TILE layout: entry = one 32x32 tile
     // - For ROW_MAJOR layout: entry = one full row including padding
-    const std::uint32_t input_page_size = is_row_major ? input.buffer()->page_size() : single_tile_size_input;
-    const std::uint32_t output_page_size = is_row_major ? output.buffer()->page_size() : single_tile_size_output;
+    const uint32_t input_page_size = is_row_major ? input.buffer()->page_size() : single_tile_size_input;
+    const uint32_t output_page_size = is_row_major ? output.buffer()->page_size() : single_tile_size_output;
 
+    const CoreCoord compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     auto [num_cores, all_cores, core_group_1, core_group_2, num_items_per_core_group_1, num_items_per_core_group_2] =
-        args.sub_core_grids.has_value()
-            ? tt::tt_metal::split_work_to_cores(args.sub_core_grids.value(), num_pages, is_row_major)
-            : tt::tt_metal::split_work_to_cores(device->compute_with_storage_grid_size(), num_pages, is_row_major);
+        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_pages, is_row_major);
     (void)num_cores;
 
     // ---- Resource names ----
@@ -123,8 +121,8 @@ ttnn::device_operation::ProgramArtifacts TypecastProgramFactory::create_program_
     const KernelSpecName COMPUTE_GROUP_1{"compute_group_1"};
     const KernelSpecName COMPUTE_GROUP_2{"compute_group_2"};
 
-    constexpr std::uint32_t num_input_pages = 2;
-    constexpr std::uint32_t num_output_pages = 2;
+    constexpr uint32_t num_input_pages = 2;
+    constexpr uint32_t num_output_pages = 2;
     const DataflowBufferSpec in_dfb{
         .unique_id = IN_DFB,
         .entry_size = input_page_size,
@@ -162,7 +160,7 @@ ttnn::device_operation::ProgramArtifacts TypecastProgramFactory::create_program_
     };
 
     const auto typecast_defines = make_typecast_defines(input_dtype, output_dtype);
-    const auto make_compute = [&](const KernelSpecName& id, std::uint32_t per_core_block_cnt) {
+    const auto make_compute = [&](const KernelSpecName& id, uint32_t per_core_block_cnt) {
         return KernelSpec{
             .unique_id = id,
             .source = kComputeSource,
@@ -200,9 +198,9 @@ ttnn::device_operation::ProgramArtifacts TypecastProgramFactory::create_program_
 
     KernelRunArgs reader_run_args{.kernel = READER};
     KernelRunArgs writer_run_args{.kernel = WRITER};
-    std::uint32_t num_items_written = 0;
+    uint32_t num_items_written = 0;
     for (const auto& core : cores_vec) {
-        std::uint32_t num_items_per_core = 0;
+        uint32_t num_items_per_core = 0;
         if (core_group_1.contains(core)) {
             num_items_per_core = num_items_per_core_group_1;
         } else if (core_group_2.contains(core)) {
@@ -252,18 +250,18 @@ ttnn::device_operation::ProgramArtifacts TypecastSubgridProgramFactory::create_p
     TT_FATAL(sub_core_grids.has_value(), "sub_core_grids cannot be null");
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
-    std::uint32_t single_tile_size = tt::tile_size(cb_data_format);
+    uint32_t single_tile_size = tt::tile_size(cb_data_format);
     tt::DataFormat cb_data_format_output = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    std::uint32_t single_tile_size_output = tt::tile_size(cb_data_format_output);
+    uint32_t single_tile_size_output = tt::tile_size(cb_data_format_output);
 
     const auto* device = input.device();
 
-    std::uint32_t ntiles = input.physical_volume() / tt::constants::TILE_HW;
-    std::uint32_t ncores = sub_core_grids->num_cores();
+    uint32_t ntiles = input.physical_volume() / tt::constants::TILE_HW;
+    uint32_t ncores = sub_core_grids->num_cores();
 
     TT_FATAL(ncores != 0, "number of cores cannot be 0");
 
-    for (std::uint32_t core_id = ncores; core_id >= 1; core_id--) {
+    for (uint32_t core_id = ncores; core_id >= 1; core_id--) {
         if (ntiles % ncores == 0) {
             break;
         }
@@ -287,8 +285,8 @@ ttnn::device_operation::ProgramArtifacts TypecastSubgridProgramFactory::create_p
     const KernelSpecName WRITER{"writer"};
     const KernelSpecName COMPUTE{"compute"};
 
-    constexpr std::uint32_t num_input_tiles = 2;
-    constexpr std::uint32_t num_output_tiles = 2;
+    constexpr uint32_t num_input_tiles = 2;
+    constexpr uint32_t num_output_tiles = 2;
     const DataflowBufferSpec in_dfb{
         .unique_id = IN_DFB,
         .entry_size = single_tile_size,
@@ -325,7 +323,7 @@ ttnn::device_operation::ProgramArtifacts TypecastSubgridProgramFactory::create_p
         .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
     };
 
-    std::uint32_t ntiles_per_core = ntiles / ncores;
+    uint32_t ntiles_per_core = ntiles / ncores;
     const KernelSpec compute{
         .unique_id = COMPUTE,
         .source = kComputeSource,
@@ -335,13 +333,13 @@ ttnn::device_operation::ProgramArtifacts TypecastSubgridProgramFactory::create_p
             {DFBBinding{.dfb_spec_name = IN_DFB, .accessor_name = "in", .endpoint_type = DFBEndpointType::CONSUMER},
              DFBBinding{.dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::PRODUCER}},
         .compile_time_args =
-            {{"per_core_block_cnt", static_cast<std::uint32_t>(ntiles_per_core)}, {"per_core_block_dim", 1u}},
+            {{"per_core_block_cnt", static_cast<uint32_t>(ntiles_per_core)}, {"per_core_block_dim", 1u}},
         .hw_config = ComputeHardwareConfig{make_compute_config(args, make_unpack_modes(args, IN_DFB, cb_data_format))},
     };
 
     KernelRunArgs reader_run_args{.kernel = READER};
     KernelRunArgs writer_run_args{.kernel = WRITER};
-    std::uint32_t tile_start_id = 0;
+    uint32_t tile_start_id = 0;
     for (auto core : cores) {
         AddRuntimeArgsForNode(
             reader_run_args.runtime_arg_values, core, {{"num_pages", ntiles_per_core}, {"start_id", tile_start_id}});
