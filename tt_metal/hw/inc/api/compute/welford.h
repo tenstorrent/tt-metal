@@ -106,6 +106,7 @@ template <bool accumulate_m2, bool initialize_anchor = false, bool dual_accumula
 ALWI void two_pass_stats_update_shifted_rows(
     std::uint32_t input_dst_idx, std::uint32_t start_row, std::uint32_t num_rows) {
     ASSERT(start_row + num_rows <= TILE_WIDTH);
+    ASSERT(!initialize_anchor || num_rows > 0);
     MATH((llk_math_two_pass_sfpu_update_shifted_rows<accumulate_m2, initialize_anchor, dual_accumulator>(
         input_dst_idx, start_row, num_rows)));
 }
