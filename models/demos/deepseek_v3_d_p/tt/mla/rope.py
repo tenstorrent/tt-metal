@@ -195,6 +195,43 @@ def _llama4_scale_geometry(hf_config: PretrainedConfig, mesh_device: ttnn.MeshDe
     return heads_local, width, shard_dims
 
 
+def _llama4_scale_host_for(
+    hf_config: PretrainedConfig,
+    mesh_device: ttnn.MeshDevice,
+    kv_actual_isl: int,
+    chunk_size_global: int,
+    sp_axis: int,
+) -> torch.Tensor:
+    """The host query-scale tensor for one chunk offset, in the allocator's shape.
+
+    Shared by the per-chunk writer below and RotarySetup.make_llama4_scale_buffer's populated mode --
+    the seven-argument llama4_scale_host call has to agree in both, and a mismatch surfaces only as a
+    copy_host_to_device_tensor failure at runtime.
+
+    Cast to bf16 BEFORE materializing: llama4_scale_host returns an fp32 stride-0 expand of a [S]
+    vector, so .contiguous() alone would write the whole tensor in fp32 and leave from_torch to
+    convert it -- twice the peak for a value both callers land on device as bf16 anyway. The fp32
+    computation itself is still fp32, which is what its docstring asks for.
+    """
+    rope_scaling = hf_config.rope_scaling
+    sp = mesh_device.shape[sp_axis]
+    heads_local, width, _ = _llama4_scale_geometry(hf_config, mesh_device, sp_axis)
+    assert chunk_size_global % sp == 0, f"sp ({sp}) must divide chunk_size_global ({chunk_size_global})"
+    return (
+        llama4_scale_host(
+            kv_actual_isl,
+            sp,
+            chunk_size_global // sp,
+            heads_local,
+            width,
+            rope_scaling["llama_4_scaling_beta"],
+            rope_scaling["original_max_position_embeddings"],
+        )
+        .to(torch.bfloat16)
+        .contiguous()
+    )
+
+
 def refresh_llama4_scale(
     buf: Optional[ttnn.Tensor],
     hf_config: PretrainedConfig,
@@ -210,15 +247,9 @@ def refresh_llama4_scale(
     """
     if buf is None:
         return
-    rope_scaling = hf_config.rope_scaling
-    beta = rope_scaling["llama_4_scaling_beta"]
-    orig_max = rope_scaling["original_max_position_embeddings"]
-    sp = mesh_device.shape[sp_axis]
-    heads_local, width, shard_dims = _llama4_scale_geometry(hf_config, mesh_device, sp_axis)
-    assert chunk_size_global % sp == 0, f"sp ({sp}) must divide chunk_size_global ({chunk_size_global})"
-
+    _, _, shard_dims = _llama4_scale_geometry(hf_config, mesh_device, sp_axis)
     host = ttnn.from_torch(
-        llama4_scale_host(kv_actual_isl, sp, chunk_size_global // sp, heads_local, width, beta, orig_max).contiguous(),
+        _llama4_scale_host_for(hf_config, mesh_device, kv_actual_isl, chunk_size_global, sp_axis),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=shard_dims, mesh_shape=mesh_device.shape),
@@ -243,20 +274,32 @@ class RotarySetup:
         self.sp_factor = mesh_device.shape[sp_axis]
         self.use_nope = bool(getattr(hf_config, "mla_use_nope", False))  # Kimi-K3 path: no rope
 
-    def make_llama4_scale_buffer(self, chunk_size_global: int) -> Optional[ttnn.Tensor]:
+    def make_llama4_scale_buffer(
+        self, chunk_size_global: int, kv_actual_isl: Optional[int] = None
+    ) -> Optional[ttnn.Tensor]:
         """Allocate Mistral's persistent query-scale buffer, or None for other variants.
 
         Here because it is the same kind of object as cos/sin -- position-derived, SP-sharded on the
         same axis -- but NOT returned in the rope_tensors dict: everything in there is build-once
         static and this is rewritten every chunk. It belongs to ChunkMetadata. Ones-initialised so an
         unrefreshed buffer is a no-op rather than garbage.
+
+        ``kv_actual_isl`` returns the buffer already carrying that offset's scale, in one host build
+        rather than ones-then-refresh. Used for the per-offset set the traced path pre-builds (#55126).
         """
         rope_scaling = getattr(self.hf_config, "rope_scaling", None) or {}
         if rope_scaling.get("llama_4_scaling_beta") is None:
             return None
         heads_local, width, shard_dims = _llama4_scale_geometry(self.hf_config, self.mesh_device, self.sp_axis)
+        host = (
+            torch.ones(1, heads_local, chunk_size_global, width, dtype=torch.bfloat16)
+            if kv_actual_isl is None
+            else _llama4_scale_host_for(
+                self.hf_config, self.mesh_device, kv_actual_isl, chunk_size_global, self.sp_axis
+            )
+        )
         return ttnn.from_torch(
-            torch.ones(1, heads_local, chunk_size_global, width, dtype=torch.bfloat16),
+            host,
             device=self.mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat16,
