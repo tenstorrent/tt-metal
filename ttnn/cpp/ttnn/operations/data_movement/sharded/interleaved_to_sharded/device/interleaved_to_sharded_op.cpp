@@ -35,10 +35,8 @@ std::pair<bool, std::string> InterleavedToShardedDeviceOperation::validate_input
     // Use the normalized memory config for validation so that convertible ND specs are accepted.
     auto resolved_output_mem_config = output_mem_config;
     if (output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::ND_SHARDED) {
-        // Normalize from the input alone. compute_output_specs returns the caller's own spec verbatim
-        // when a pre-allocated output is supplied, so passing tensor_args through would make the
-        // rejection below test the caller's layout instead of the computed one, and would reduce the
-        // memory-config comparison further down to comparing the tensor against itself.
+        // Normalize from the input alone: with a pre-allocated output, compute_output_specs just hands
+        // back the caller's own spec, so the checks below would end up testing that tensor against itself.
         auto output_spec =
             compute_output_specs(operation_attributes, tensor_args_t{input_tensor, /*output_tensor=*/std::nullopt});
         if (output_spec.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::ND_SHARDED) {
@@ -149,30 +147,14 @@ ttsl::hash::hash_t InterleavedToShardedDeviceOperation::compute_program_hash(
     // keep_l1_aligned is deliberately absent: the factory hardcodes it to true and never reads the
     // attribute, so keying on it would split the cache between byte-identical programs.
     //
-    // Tensors are keyed as whole TensorSpecs rather than as a projection of selected fields, because a
-    // Metal 2.0 port declares one TensorParameter per tensor from its TensorSpec, and on a cache hit
-    // ValidateTensorArgs REJECTS -- it does not rebuild -- a tensor whose spec differs from the one
-    // baked in at program creation, comparing dtype, page config, memory config and alignment exactly.
-    // Under a projection, two tensors differing only in a dropped field would share a key, hit, and
-    // then throw from report_tensor_arg_mismatch; hashing the spec wholesale keeps the key and that
-    // accept/reject predicate in agreement by construction.
-    //
-    // The spec also subsumes the shape terms this key used to carry explicitly: TensorSpec hashes as
-    // (logical_shape, tensor_layout) and padded_shape is a pure function of that pair, so both the tile
-    // branch's padded reads and the row-major branch's logical reads (the reader's row stride from
-    // logical_shape()[-1], the last core's shard height from logical_volume(), neither patched on a
-    // cache hit) stay pinned. What it adds over the projection is alignment, which the shape pair does
-    // not determine -- a TILE input with logical [1, 1, 64, 64] passes validate_alignment_tile with
-    // either Alignment{32, 32} or Alignment{64, 64}, and both pad to [1, 1, 64, 64].
+    // Key on the whole TensorSpec instead of picking out fields: once this is ported to Metal 2.0, a
+    // cache hit is rejected outright if any spec field differs, and alignment is the one the old
+    // shape pair left free. The spec still covers the shapes that used to be hashed explicitly.
     auto hash = tt::tt_metal::operation::hash_operation<InterleavedToShardedDeviceOperation>(
         operation_attributes.output_mem_config, operation_attributes.output_dtype, input_tensor.tensor_spec());
 
-    // The factory derives its shard spec, core ranges, CB sizes and every per-core index from the
-    // output tensor, so the output spec has to be keyed too. When absent it needs no term of its own:
-    // compute_output_specs then builds it from the input's logical shape and layout plus the two
-    // attributes above, all already hashed. When supplied by the caller it does, because validate_inputs
-    // pins only its logical shape, memory config, dtype, layout and tile -- not its alignment, which
-    // validate_alignment_rm leaves free for a height-sharded row-major tensor.
+    // The factory reads its shard spec, core ranges and CB sizes off the output, so key that too --
+    // but only when the caller supplies one, since otherwise it's derived from what's already hashed.
     if (tensor_args.output_tensor.has_value()) {
         hash = ttsl::hash::hash_objects(hash, tensor_args.output_tensor->tensor_spec());
     }

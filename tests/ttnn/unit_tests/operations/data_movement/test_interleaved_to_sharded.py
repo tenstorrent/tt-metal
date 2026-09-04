@@ -317,13 +317,9 @@ def test_interleaved_to_sharded_rejects_pure_nd(device, tensor_shape, nd_shard_s
 def test_interleaved_to_sharded_rejects_pure_nd_with_preallocated_output(
     device, tensor_shape, nd_shard_shape, nd_shard_grid, output_shard_shape, output_shard_grid, expect_error
 ):
-    """A pure-ND output config must be rejected even when the caller supplies a pre-allocated output.
+    """A pure-ND output config must be rejected even when a pre-allocated output is supplied.
 
-    validate_inputs used to derive its ND normalization from compute_output_specs(attrs, tensor_args),
-    and that returns the caller's own spec verbatim when a pre-allocated output is present. The ND
-    rejection therefore tested the pre-allocated tensor's (2D) layout instead of the computed one, and
-    the memory-config comparison below it degenerated into comparing that tensor against itself, so
-    this call was accepted rather than rejected.
+    validate_inputs used to read the ND check off the caller's own spec, so this was wrongly accepted.
     """
     nd_shard_spec = ttnn.NdShardSpec(nd_shard_shape, nd_shard_grid, orientation=ttnn.ShardOrientation.ROW_MAJOR)
     output_mem_config = ttnn.MemoryConfig(ttnn.BufferType.L1, nd_shard_spec)
@@ -332,8 +328,7 @@ def test_interleaved_to_sharded_rejects_pure_nd_with_preallocated_output(
     ttnn_input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     ttnn_input_tensor = ttnn.to_device(ttnn_input_tensor, device)
 
-    # Deliberately valid on its own terms -- matching shape, dtype and layout -- so that the ND output
-    # config is the only thing left for the op to object to.
+    # Valid on its own terms, so the ND output config is the only thing left to object to.
     preallocated_output = ttnn.allocate_tensor_on_device(
         ttnn_input_tensor.shape,
         ttnn_input_tensor.dtype,
