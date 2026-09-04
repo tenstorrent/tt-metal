@@ -19,9 +19,9 @@
 
 // mesh_graph.hpp only forward-declares ClusterType; the MeshGraph constructor takes it by value.
 #include "cluster.hpp"
-#include "hostdevcommon/fabric_common.h"
 #include "llrt/rtoptions.hpp"
 #include "tt_metal/fabric/axis_route_topology.hpp"
+#include "tt_metal/fabric/routing_2d_table_builder.hpp"
 
 namespace tt::tt_fabric::axis_topology_sweep_tests {
 namespace {
@@ -201,10 +201,7 @@ TEST(AxisTopologySweep, EveryDeclaredShapeFitsThe2DRouteTable) {
             const auto x = static_cast<uint32_t>(shape[1]);
             checked++;
 
-            EXPECT_TRUE(Routing2DCodec::shape_fits_route_table(y, x))
-                << path.filename().string() << " mesh " << *mesh_id << " shape " << y << "x" << x
-                << " cannot be packed into the destination-major 2D route table";
-            EXPECT_TRUE(Routing2DCodec::route_table_regions_fit(y, x))
+            EXPECT_TRUE(is_valid_2d_route_table_shape(y, x))
                 << path.filename().string() << " mesh " << *mesh_id << " shape " << y << "x" << x
                 << " cannot fit action maps and multicast trees in the 2D route-table slot";
             EXPECT_LE(y + x, kMaximumActionMapBytes) << path.filename().string() << " mesh " << *mesh_id << " shape "
