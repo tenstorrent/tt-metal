@@ -599,7 +599,9 @@ uint64_t Kernel::compute_hash() const {
         hasher.update(static_cast<uint64_t>(it->second.logical_dfb_id));
         hasher.update(static_cast<uint64_t>(it->second.is_relay ? 1 : 0));
         hasher.update(static_cast<uint64_t>(it->second.prefetcher_pipe_id));
-        hash_llk_metadata(it->second.llk_metadata);
+        if (!it->second.is_relay) {
+            hash_llk_metadata(it->second.llk_metadata);
+        }
     }
     for (const auto& it : sorted_iters(this->semaphore_binding_handles_)) {
         hasher.update(it->first);

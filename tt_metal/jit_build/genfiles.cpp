@@ -341,14 +341,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             // constructor can O(1)-align to the durable checkpoint; CrossNode relays
             // use the single-arg form (NO_PREFETCHER_PIPE default, no align needed).
             content << "constexpr RelayDFBBindingToken " << entry.name << "{" << entry.id;
-            if (entry.metadata.has_value()) {
-                content << ", "
-                        << (entry.prefetcher_pipe_id != 0xFF
-                                ? std::to_string(static_cast<uint32_t>(entry.prefetcher_pipe_id))
-                                : "RelayDFBBindingToken::NO_PREFETCHER_PIPE")
-                        << ", ";
-                emit_llk_metadata(content, *entry.metadata);
-            } else if (entry.prefetcher_pipe_id != 0xFF) {
+            if (entry.prefetcher_pipe_id != 0xFF) {
                 content << ", " << static_cast<uint32_t>(entry.prefetcher_pipe_id);
             }
             content << "};\n";

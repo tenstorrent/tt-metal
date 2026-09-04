@@ -2692,7 +2692,9 @@ tt::tt_metal::DataflowBufferBindingHandleMap MakeDataflowBufferBindingHandles(
         handle.logical_dfb_id = static_cast<uint16_t>(slot);
         handle.is_relay = dfb_name_to_is_relay.at(dfb_binding.dfb_spec_name);
         handle.prefetcher_pipe_id = dfb_name_to_prefetcher_pipe_id.at(dfb_binding.dfb_spec_name);
-        handle.llk_metadata = LLKMetadataFromDfb(*dfb_by_name.at(dfb_binding.dfb_spec_name));
+        if (!handle.is_relay) {
+            handle.llk_metadata = LLKMetadataFromDfb(*dfb_by_name.at(dfb_binding.dfb_spec_name));
+        }
         out.emplace(dfb_binding.accessor_name, handle);
     }
     return out;

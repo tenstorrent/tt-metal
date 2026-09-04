@@ -91,7 +91,7 @@ KernelHandle CreateKernelFromString(
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     const DramConfig& config);
 
-// Metal 2.0: DFB accessor names -> device-slot binding (optionally typed as relay and carrying LLK metadata).
+// Metal 2.0: DFB accessor names -> device-slot binding. Normal DFBs may carry LLK metadata; relays do not.
 // prefetcher_pipe_id is 0xFF (RelayDFBBindingToken::NO_PREFETCHER_PIPE) except for
 // PrefetcherPipe relays, where it names the persistent slot baked into the token so
 // the TRISC constructor can O(1)-align the borrowed iface to the durable checkpoint.
