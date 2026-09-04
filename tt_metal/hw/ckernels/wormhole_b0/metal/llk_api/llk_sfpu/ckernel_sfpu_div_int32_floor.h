@@ -107,7 +107,10 @@ sfpi_inline void calculate_div_int32_body(
     a_s = sfpi::abs(a_s);
     sfpi::vInt r = a_s - qb;
     sfpi::vFloat r_f = sfpi::convert<sfpi::vFloat>(sfpi::abs(r), sfpi::RoundMode::Nearest);
-
+    v_if(r_f < 0.0f) {
+        r_f = 0x1.0p31f;
+    }
+    v_endif;
     // Compute correction value in float32.
     sfpi::vFloat correction_f = r_f * inv_b_f;
     sfpi::vFloat b2 = sfpi::convert<sfpi::vFloat>(b >> 22, sfpi::RoundMode::Nearest);
