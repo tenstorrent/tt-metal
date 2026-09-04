@@ -376,21 +376,26 @@ void kernel_main() {
     uint32_t scalar_start;
     uint32_t scalar_value;
     uint32_t scalar_end;
-    uint32_t counter = 0;  // scalar-config cursor, advanced by fill_scalar (!one_scalar_per_core only)
     // HAS_CONFIG <=> !one_scalar_per_core (host-emitted). Gated rather than `if constexpr` because
     // the body references dfb::config_cb / tensor::config, which are only declared when HAS_CONFIG.
 #ifdef HAS_CONFIG
     {
-        uint32_t config_l1_addr = config_cb.get_write_ptr();  // producer face; see raw-view note below
+        uint32_t config_l1_addr = config_cb.get_write_ptr();  // producer face
         if constexpr (config_in_dram) {
             {
                 // Inlined load_config_tensor_if_in_dram: the scalar config tensor flows in via its
-                // Metal 2.0 TensorBinding (tensor::config) instead of a CTA-baked DRAM address.
+                // Metal 2.0 TensorBinding (tensor::config) instead of a CTA-baked DRAM address. The
+                // DFB has one full-page slot per reader thread, so this lane stages and reads back its
+                // own copy at its write cursor.
                 Noc cfg_noc;
                 const auto config_accessor = TensorAccessor(tensor::config);
                 cfg_noc.async_read(config_accessor, config_cb, config_page_size, {.page_id = core_nhw_index}, {});
                 cfg_noc.async_read_barrier();
             }
+        } else {
+            // L1 path: shared raw view (num_threads * k entries) of the per-core config page -- undo
+            // the lane stagger to recover the table base (same pattern as reader_indices / in_shard).
+            config_l1_addr -= my_lane * config_cb.get_entry_size();
         }
         config_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(config_l1_addr);
         scalar_start = config_ptr[0];
@@ -421,13 +426,8 @@ void kernel_main() {
                 continue;
             }
             if constexpr (!one_scalar_per_core) {
-                fill_scalar<
-                    one_scalar_per_core,
-                    in_scalar_cb_id,
-                    reader_nindices,
-                    /*split_reader=*/false,
-                    multi_buffering_factor>(
-                    in_scalar_cb, scalar_start, scalar_end, scalar_value, scalar_index, counter, config_ptr);
+                fill_scalar<one_scalar_per_core, in_scalar_cb_id, reader_nindices>(
+                    in_scalar_cb, scalar_start, scalar_end, scalar_value, scalar_index, stick_idx, config_ptr);
             }
             read_kernel_with_top_left_index<
                 in_nblocks_c,
