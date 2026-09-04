@@ -11,15 +11,99 @@
 #include <variant>
 #include <vector>
 
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include <tt-metalium/global_circular_buffer.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include "ttnn/tensor/tensor.hpp"
 
-namespace tt::tt_metal::distributed {
+namespace tt::tt_metal {
+class Program;
+namespace distributed {
 class MeshDevice;
 }
+}  // namespace tt::tt_metal
 
 namespace ttnn::operations::experimental {
+
+// One Tensor-prefetcher delivery target: the PrefetcherPipes of every DRAM sender core, all
+// sharing one entry size and ring geometry. A PrefetcherPipe is one sender and a bank may be
+// driven by two of them, so a target that spans the DRAM banks is a per-bank group of pipes; this
+// bundles those groups with the geometry every pipe in them agrees on, which is what the
+// prefetcher and the consumer op both name.
+//
+// Order is semantic and is the one CreatePrefetcherPipesForTensorPrefetcher returned: within a
+// bank, the first pipe owns that bank's leading receivers (bank-local slab index 0). Everything
+// that enumerates pipes here does so bank-major, so a pipe's position in `attach()`'s ids matches
+// its position in `sender_receiver_core_mapping()`.
+//
+// Copyable: the pipes are shared. Keep a copy alive for as long as any program has Attached them
+// or the prefetcher may still deliver into them -- an attached Program holds a non-owning pointer
+// to each pipe, and dropping the last copy frees the rings and config pages.
+struct TensorPrefetcherPipes {
+    // Declared rather than aggregate-implicit so this type is not an aggregate. tt_stl's json
+    // serializer has two unconstrained-against-each-other specializations -- one keyed on
+    // attribute_names, one on being an aggregate -- and a type satisfying both is an ambiguous
+    // partial specialization. Staying a non-aggregate leaves only the attribute_names one, which
+    // is also the only one that can work here: the aggregate walk would descend into `banks` and
+    // the forward-declared PrefetcherPipe.
+    TensorPrefetcherPipes() = default;
+    TensorPrefetcherPipes(
+        std::vector<tt::tt_metal::experimental::TensorPrefetcherBankPipes> banks,
+        uint32_t entry_size,
+        uint32_t num_entries);
+
+    std::vector<tt::tt_metal::experimental::TensorPrefetcherBankPipes> banks;
+    // Per-receiver push granularity the pipes were created with, shared by every pipe. It is the
+    // size the receivers start at, not a constraint: an Attach and a queued tensor may use any
+    // entry size the ring can hold, and the DRAM sender snaps its cursor onto that grid. With
+    // `num_entries` it fixes `ring_size()`, which never changes.
+    uint32_t entry_size = 0;
+    // Entries of `entry_size` a receiver's ring holds.
+    uint32_t num_entries = 0;
+
+    // Bytes of ring per receiver.
+    uint32_t ring_size() const { return entry_size * num_entries; }
+    uint32_t num_banks() const { return static_cast<uint32_t>(banks.size()); }
+    // Pipes across every bank, which is one per DRAM sender core.
+    uint32_t num_pipes() const { return static_cast<uint32_t>(mapping_.size()); }
+    // Every receiver across every pipe. This is the core set a consumer program attaches.
+    CoreRangeSet receiver_cores() const;
+    // Sender core (DRAM-logical, x == bank id) -> its receivers. One entry per pipe, bank-major.
+    const std::vector<std::pair<tt::tt_metal::CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping() const {
+        return mapping_;
+    }
+    // Attach every pipe to `program` on its own receiver cores, at `entry_size` bytes per entry --
+    // the size that program's kernels consume, which need not be the size the pipes were created
+    // at: a differing size makes the device-side constructor run the resize handshake against the
+    // sender. Returns the program-local pipe id per pipe, bank-major; a receiver core's kernel
+    // takes the id of the one pipe it belongs to (as a runtime argument, since one kernel serves
+    // receivers of different pipes).
+    std::vector<uint8_t> attach(tt::tt_metal::Program& program, uint32_t entry_size) const;
+    // Attach at the creation-time entry size, for a consumer that reads entries as the pipes were
+    // built to deliver them.
+    std::vector<uint8_t> attach(tt::tt_metal::Program& program) const;
+    // Each pipe's receiver-side config page address, bank-major. Identity rather than geometry:
+    // two live pipes over the same receivers never share one.
+    const std::vector<uint32_t>& config_addresses() const { return config_addresses_; }
+
+    // Reflection for op attribute hashing. The core mapping plus the config addresses identify
+    // *these* pipes, not merely pipes of this shape -- a consuming op bakes each ring address into
+    // its program, so a same-geometry replacement must not hit that op's program cache.
+    //
+    // A consuming op on the default reflection path hashes this on every dispatch, so both members
+    // are derived once at construction rather than rebuilt per call.
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("sender_receiver_core_mapping", "config_addresses", "entry_size", "num_entries");
+    auto attribute_values() const {
+        return std::forward_as_tuple(mapping_, config_addresses_, entry_size, num_entries);
+    }
+
+private:
+    // Bank-major views of `banks`, fixed at construction: the pipes a group holds never change.
+    std::vector<std::pair<tt::tt_metal::CoreCoord, CoreRangeSet>> mapping_;
+    std::vector<uint32_t> config_addresses_;
+};
 
 // One tensor to prefetch: either (tensor, block_count) or (tensor, block_count, rotation).
 // block_count is the number of K-blocks to divide the tensor's K dimension into. rotation
@@ -65,12 +149,27 @@ void start_tensor_prefetcher(tt::tt_metal::distributed::MeshDevice* mesh_device)
 // and the calling thread's current command queue is mid trace-capture, the request is captured
 // and re-sent on every execute_trace of that trace; when false the request is always sent
 // immediately.
+// Exactly one of `global_cb` / `prefetcher_pipes` must be supplied; whichever it is selects the
+// delivery transport. See the metal-level QueueTensorPrefetcherRequest overloads for the extra
+// preconditions PrefetcherPipe delivery imposes (receiver-contiguous, batched, and a block size the
+// fixed ring holds two of).
 void queue_tensor_prefetcher_request(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     const std::vector<TensorPrefetcherQueueTensor>& tensors,
-    const tt::tt_metal::experimental::GlobalCircularBuffer& global_cb,
+    const std::optional<tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb = std::nullopt,
+    const std::optional<TensorPrefetcherPipes>& prefetcher_pipes = std::nullopt,
     const std::optional<tt::tt_metal::distributed::MeshCoordinateRangeSet>& device_subset = std::nullopt,
     bool capture_into_trace = false);
+
+// Create the PrefetcherPipes whose senders are programmable DRAM cores, as a delivery target for
+// the Tensor prefetcher. Sender placement matches create_global_circular_buffer_for_tensor_prefetcher.
+TensorPrefetcherPipes create_prefetcher_pipes_for_tensor_prefetcher(
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
+    uint32_t entry_size,
+    uint32_t num_entries,
+    tt::tt_metal::BufferType buffer_type = tt::tt_metal::BufferType::L1,
+    bool support_multi_receiver_shards = false);
 
 // Fence the prefetcher against a command queue: every prefetch request queued after this
 // call waits until all work previously enqueued on that queue has completed on device before

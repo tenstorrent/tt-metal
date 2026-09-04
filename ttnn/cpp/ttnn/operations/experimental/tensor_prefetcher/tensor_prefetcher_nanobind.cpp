@@ -9,6 +9,8 @@
 #include <nanobind/stl/pair.h>
 #include <nanobind/stl/vector.h>
 
+#include <tt-metalium/experimental/prefetcher_pipe.hpp>
+
 #include "ttnn-nanobind/bind_function.hpp"
 #include "tensor_prefetcher.hpp"
 #include "ttnn/global_circular_buffer.hpp"
@@ -16,6 +18,16 @@
 namespace ttnn::operations::experimental {
 
 void bind_tensor_prefetcher(nb::module_& mod) {
+    // Opaque to Python: the delivery target create_prefetcher_pipes_for_tensor_prefetcher returns
+    // and queue_tensor_prefetcher_request / the validator accept. Copies share the same pipes.
+    nb::class_<TensorPrefetcherPipes>(mod, "TensorPrefetcherPipes")
+        .def("entry_size", [](const TensorPrefetcherPipes& p) { return p.entry_size; })
+        .def("num_entries", [](const TensorPrefetcherPipes& p) { return p.num_entries; })
+        .def("ring_size", &TensorPrefetcherPipes::ring_size)
+        .def("receiver_cores", &TensorPrefetcherPipes::receiver_cores)
+        .def("num_banks", &TensorPrefetcherPipes::num_banks)
+        .def("num_pipes", &TensorPrefetcherPipes::num_pipes);
+
     ttnn::bind_function<"is_tensor_prefetcher_supported", "ttnn.experimental.">(
         mod,
         R"doc(
@@ -83,6 +95,13 @@ void bind_tensor_prefetcher(nb::module_& mod) {
                     matching order, else it deadlocks.
                 global_cb (GlobalCircularBuffer): a DRAM-sender GCB (created via
                     ttnn.experimental.create_global_circular_buffer_for_tensor_prefetcher).
+                    Supply exactly one of global_cb / prefetcher_pipes.
+                prefetcher_pipes (TensorPrefetcherPipes): DRAM-sender PrefetcherPipes (created via
+                    ttnn.experimental.create_prefetcher_pipes_for_tensor_prefetcher) to deliver into
+                    instead of a GCB. Receiver-contiguous batched tensors only. A tensor's
+                    per-receiver block size need not equal the pipes' entry_size; it only has to
+                    leave the ring room for two whole blocks, since consumers keep one block of
+                    lookahead.
                 device_subset (Optional[MeshCoordinateRangeSet]): subset of the mesh that
                     processes this request. Defaults to the full mesh.
                 capture_into_trace (bool): whether this request may be captured into a trace.
@@ -99,8 +118,9 @@ void bind_tensor_prefetcher(nb::module_& mod) {
         &queue_tensor_prefetcher_request,
         nb::arg("mesh_device"),
         nb::arg("tensors"),
-        nb::arg("global_cb"),
+        nb::arg("global_cb") = std::nullopt,
         nb::kw_only(),
+        nb::arg("prefetcher_pipes") = std::nullopt,
         nb::arg("device_subset") = std::nullopt,
         nb::arg("capture_into_trace") = false);
 
@@ -171,6 +191,40 @@ void bind_tensor_prefetcher(nb::module_& mod) {
         nb::arg("size"),
         nb::arg("buffer_type") = tt::tt_metal::BufferType::L1,
         nb::arg("support_multi_receiver_shards") = true);
+
+    ttnn::bind_function<"create_prefetcher_pipes_for_tensor_prefetcher", "ttnn.experimental.">(
+        mod,
+        R"doc(
+            Create the PrefetcherPipes whose senders are programmable DRAM cores (Blackhole DRISCs),
+            as an alternative Tensor prefetcher delivery target to a DRAM-sender
+            GlobalCircularBuffer. Sender placement, the dual-sender receiver split, and slab
+            numbering match create_global_circular_buffer_for_tensor_prefetcher, so a tensor laid
+            out for one transport is laid out for the other.
+
+            Consumers Attach the returned object and read it through the device-side PrefetcherPipe
+            (wait_front / get_read_ptr / pop_front). Keep the returned object alive for as long as
+            any program uses it: destroying it frees the durable rings and their config.
+
+            Args:
+                mesh_device: The mesh device to create the buffer on.
+                bank_to_receivers: List of (bank_id, receivers) pairs.
+                entry_size: Push granularity in bytes the pipes start life at. With num_entries
+                    it fixes the ring size, which never changes. A later queued tensor may use a
+                    different per-receiver block size as long as the ring holds two of them.
+                num_entries: Ring depth, in entries, per receiver.
+                buffer_type: Buffer type (L1 or L1_SMALL).
+                support_multi_receiver_shards: If True, a bank's shard may feed multiple receivers,
+                    which forces a single sender per bank. Defaults to False (receiver-contiguous),
+                    letting a bank with two or more receivers split them across two DRISC senders.
+        )doc",
+        &create_prefetcher_pipes_for_tensor_prefetcher,
+        nb::keep_alive<0, 1>(),
+        nb::arg("mesh_device"),
+        nb::arg("bank_to_receivers"),
+        nb::arg("entry_size"),
+        nb::arg("num_entries"),
+        nb::arg("buffer_type") = tt::tt_metal::BufferType::L1,
+        nb::arg("support_multi_receiver_shards") = false);
 
     ttnn::bind_function<"create_global_circular_buffer_for_matmul_1d", "ttnn.experimental.">(
         mod,

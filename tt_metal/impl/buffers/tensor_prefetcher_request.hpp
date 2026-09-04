@@ -19,8 +19,9 @@
 //                 [wait_cq.cq_index] reaches wait_cq.cq_wait_value (wrap-safe).
 //
 // Request pages are per-sender: the host serializes one page per DRAM sender core. The
-// pages share identical header/entry/geometry bytes, but each carries only that sender's
-// slice of the per-receiver streaming rotation table (see below), so worker_loop sends
+// entry and geometry bytes are identical across senders, but the header carries that
+// sender's target state address and slab base, and a streaming page carries only that
+// sender's slice of the per-receiver rotation table (see below) -- so worker_loop sends
 // sender s's page to that sender's socket rather than broadcasting one page to all.
 //
 // For a PREFETCH page the payload region (kRequestPageBytes) has two halves that grow
@@ -43,16 +44,16 @@
 //   uniform: layout slot i starts at kRequestPageBytes - (i + 1) * layout_stride, with the
 //   geometry at the slot start and the rotation table at slot_start +
 //   sizeof(TensorPrefetcherTensorLayout) (layout slot 0 is flush against the end of the
-//   payload). The kernel reconstructs num_receivers (and thus the stride) from the GCB
-//   sender state block.
+//   payload). The stride is sized for the largest receiver count over the request's senders,
+//   which the kernel reads from the header (max_num_receivers).
 //
 // The kernel walks header.prefetch.num_entries entries in order; for each it reads the
 // address from the entry and the geometry from the referenced layout, then runs the
 // per-tensor chunk loop.
 //
 // When one Queue call has more tensors than fit in a single page, the host emits
-// multiple PREFETCH pages (each an independent request); the per-GCB fifo_wr_ptr persists
-// in the sender state block across requests, so the page split is invisible to the receiver.
+// multiple PREFETCH pages (each an independent request); the target's per-sender write cursor
+// persists across requests, so the page split is invisible to the receiver.
 
 #pragma once
 
@@ -112,6 +113,15 @@ struct TensorPrefetcherTensorLayout {
     uint32_t streaming = 0;
 } __attribute__((packed));
 
+// Delivery transport for a request, carried in the page header. Per-request rather than per-tensor
+// because a page names exactly one target (target_state_addr), so every tensor in it is delivered
+// the same way. It selects how the kernel interprets target_state_addr: a DramSenderStateBlock for
+// a GlobalCircularBuffer, a PrefetcherPipe sender config page for a pipe.
+enum TensorPrefetcherTransport : uint8_t {
+    TENSOR_PREFETCHER_TRANSPORT_GLOBAL_CB = 0,
+    TENSOR_PREFETCHER_TRANSPORT_PREFETCHER_PIPE = 1,
+};
+
 // One prefetched tensor: its bank-local address plus an index into the page's layout
 // table. The kernel resolves the layout via layout_index (see header comment for the
 // offset formula).
@@ -131,14 +141,35 @@ struct TensorPrefetcherBaseCmd {
     TensorPrefetcherCmdId cmd_id;  // 1 byte
 } __attribute__((packed));
 
-// PREFETCH payload. The leading pad keeps the 32-bit fields 4-byte aligned past the
-// one-byte base (mirrors the pad fields in cq_commands.hpp commands); the resulting
-// 12-byte header then keeps the entry table 4-byte aligned.
+// PREFETCH payload. Field order and widths keep every field naturally aligned past the one-byte
+// base (u16 at offsets 2 and 4, u32 at offset 8, mirroring the pad fields in cq_commands.hpp
+// commands); the resulting 12-byte header then keeps the entry table 4-byte aligned.
+//
+// The two set-level facts (max_num_receivers, recv_index_base) ride here rather than in the
+// target's DRISC L1 state: they describe how the *host laid out this page* and how this sender's
+// receivers sit inside the target, not the endpoint the transport maintains, and the kernel needs
+// max_num_receivers before it can index the layout table at all. Carrying them per request also
+// keeps a page self-describing for both transports.
 struct TensorPrefetcherPrefetchCmd {
-    uint8_t pad1;
-    uint16_t num_entries;     // number of valid TensorPrefetcherEntry entries
-    uint32_t num_layouts;     // number of valid TensorPrefetcherTensorLayout table entries
-    uint32_t gcb_state_addr;  // DRISC L1 base of the target GCB's sender state block
+    // Fits in the byte that pads cmd_id out to the 16-bit fields, so the header stays 12 bytes and
+    // the entry table that follows stays 4-byte aligned.
+    TensorPrefetcherTransport transport;
+    uint16_t num_entries;  // number of valid TensorPrefetcherEntry entries
+    // Number of valid TensorPrefetcherTensorLayout table entries. uint16 is ample: the table is
+    // bounded by kRequestPageBytes / layout_stride, well under 300 even at the smallest stride.
+    uint16_t num_layouts;
+    // Largest receiver count over the senders this request targets. The layout-slot stride is
+    // sized for it so every sender's page packs identically; the kernel needs it to index the
+    // layout table. Uniform across the request's senders, unlike the per-sender receiver count.
+    uint8_t max_num_receivers;
+    // Bank-local slab index of this sender's first receiver, so a bank's two senders can split its
+    // receiver set: local receiver r reads slab recv_index_base + r. 0 for a single sender.
+    uint8_t recv_index_base;
+    // DRISC L1 base of this sender's target state, whose meaning follows the `transport` above: a
+    // DramSenderStateBlock for TENSOR_PREFETCHER_TRANSPORT_GLOBAL_CB, or a PrefetcherPipe sender
+    // config page for TENSOR_PREFETCHER_TRANSPORT_PREFETCHER_PIPE. One address per request, so all
+    // tensors in a request target the same object.
+    uint32_t target_state_addr;
 } __attribute__((packed));
 
 // WAIT_CQ payload.

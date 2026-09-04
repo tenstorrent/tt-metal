@@ -20,6 +20,8 @@
 #include <optional>
 #include <vector>
 
+#include <tt-metalium/experimental/prefetcher_pipe.hpp>
+
 namespace tt::tt_metal {
 
 class MeshTensor;
@@ -131,6 +133,34 @@ void StartTensorPrefetcher(distributed::MeshDevice& mesh_device, const TensorPre
 void QueueTensorPrefetcherRequest(
     distributed::MeshDevice& mesh_device,
     const GlobalCircularBuffer& gcb,
+    const std::optional<distributed::MeshCoordinateRangeSet>& device_subset,
+    const std::vector<TensorPrefetcherInput>& input_tensors,
+    distributed::MeshCommandQueue* trace_capture_cq = nullptr);
+
+// Queue one prefetch request against PrefetcherPipes instead of a GlobalCircularBuffer. The target
+// object is what selects the delivery transport; everything else behaves as documented above, and
+// requests against a GCB and against PrefetcherPipes may be interleaved on one running prefetcher.
+//
+// `prefetcher_pipes` must be what CreatePrefetcherPipesForTensorPrefetcher returned for the same
+// mesh device: each group's pipe order is what assigns its senders their bank-local slab bases.
+// Consumers of the delivered pages Attach each pipe on its own receivers and read through the
+// device-side experimental::PrefetcherPipe.
+//
+// Additional preconditions for this transport, all TT_FATAL with the offending values:
+//   - every pipe has a DRAM sender on its group's bank, and they share one entry size and ring
+//     size;
+//   - banks appear once each, and receiver sets are disjoint across every pipe;
+//   - every tensor must resolve to the receiver-contiguous layout (each receiver owning a disjoint
+//     contiguous shard);
+//   - no streaming rotation (pass an empty `rotation`);
+//   - each tensor's per-receiver bytes-per-block must leave the ring room for two whole blocks
+//     (consumers keep one block of lookahead). The block size need not equal the pipes'
+//     `entry_size` nor divide the ring: the sender re-grids its write cursor per tensor, and any
+//     trailing remainder of the ring is a gap both endpoints credit at the wrap. The ring itself is
+//     fixed at creation and never resizes.
+void QueueTensorPrefetcherRequest(
+    distributed::MeshDevice& mesh_device,
+    const std::vector<TensorPrefetcherBankPipes>& prefetcher_pipes,
     const std::optional<distributed::MeshCoordinateRangeSet>& device_subset,
     const std::vector<TensorPrefetcherInput>& input_tensors,
     distributed::MeshCommandQueue* trace_capture_cq = nullptr);

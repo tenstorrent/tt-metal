@@ -5,17 +5,21 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <unordered_map>
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/hal_types.hpp>
 #include "impl/dataflow_buffer/dataflow_buffer.hpp"
 
 #include <variant>
 
 namespace tt::tt_metal {
 
+class DriscL1Allocation;
+class IDevice;
 class Program;
 
 namespace distributed {
@@ -23,6 +27,18 @@ class MeshDevice;
 }
 
 namespace experimental {
+
+// Defined in tt-metalium/experimental/global_circular_buffer.hpp; the DRAM-sender flavour of a
+// PrefetcherPipe names the same Worker/Dram distinction as a GlobalCircularBuffer.
+enum class SenderCoreType : uint8_t;
+
+// Forward declaration for the DRAM-sender extension, defined in
+// impl/buffers/prefetcher_pipe_dram_sender_internal.hpp. DRAM-sender mode is opt-in and is not
+// part of the public PrefetcherPipe API surface; existing callers see the original interface
+// unchanged.
+namespace prefetcher_pipe_dram_sender {
+struct PrefetcherPipeDramSenderInternals;
+}  // namespace prefetcher_pipe_dram_sender
 
 class PrefetcherPipe {
 public:
@@ -71,9 +87,61 @@ public:
     CoreCoord sender_core() const { return sender_core_; }
     distributed::MeshDevice* get_device() const { return device_; }
 
+    // Worker for a pipe built by CreatePrefetcherPipe, Dram for one whose sender is a
+    // programmable DRAM core (CreatePrefetcherPipesForTensorPrefetcher).
+    SenderCoreType sender_core_type() const { return sender_core_type_; }
+
+    // The entry size a DRAM-sender pipe is created at: the ring is this many bytes times the
+    // requested depth, and it is what word[5] (applied_entry_size) starts out holding, so a
+    // consumer attaching at this size skips the resize handshake on the first program. Later
+    // Attaches and later requests may use any size the ring can hold; a size the ring does not
+    // divide leaves a trailing gap both endpoints credit at the wrap. 0 for a worker-sender
+    // pipe, which is sized in bytes and resizes normally.
+    uint32_t initial_entry_size() const { return initial_entry_size_; }
+
 private:
+    // Tag selecting the DRAM-sender constructor. Private so the only way in is
+    // CreatePrefetcherPipesForTensorPrefetcher, which owns the bank -> sender-core mapping.
+    struct DramSenderTag {};
+
+    friend struct prefetcher_pipe_dram_sender::PrefetcherPipeDramSenderInternals;
+
+    /**
+     * DRAM-sender PrefetcherPipe: the sender is a programmable DRAM core (a Blackhole DRISC)
+     * rather than a worker core.
+     *
+     * Differences from the worker-sender ctor above:
+     *   - The data ring and the config pages are sharded over receivers only. A DRAM core holds
+     *     no ring slice, and its logical coord is not a worker coord, so it cannot share a
+     *     persistent-L1 arena allocation with the receivers.
+     *   - The sender's config page lives in DRISC L1 on its own core alone, written directly over
+     *     NOC, and is never Attached: DRAM cores are not dispatched to, so the DRISC kernel builds
+     *     its sender interface from an explicit config-page address instead of a launch-message
+     *     slot.
+     *   - Credit counters cross L1 address spaces. The sender's remote-counter base and each
+     *     receiver's ack target are page-relative deltas the host computes so that a sender's
+     *     `base + 2*r*L1_ALIGNMENT` lands on receiver r's own page, and a receiver's ack lands
+     *     in DRISC L1.
+     */
+    PrefetcherPipe(
+        distributed::MeshDevice* mesh_device,
+        CoreCoord dram_sender_logical,
+        const CoreRangeSet& receiver_cores,
+        uint32_t ring_size,
+        uint32_t initial_entry_size,
+        BufferType buffer_type,
+        DramSenderTag);
+
     void setup_buffers(BufferType buffer_type);
     void build_config_pages();
+    // DRAM-sender flavour of build_config_pages: receiver pages only, and returned rather than
+    // cached in config_pages_ because the sender's virtual DRAM coord -- and so the pages -- vary
+    // with each device's harvesting.
+    std::unordered_map<CoreCoord, std::vector<uint32_t>> build_dram_sender_receiver_config_pages(
+        IDevice* target_device) const;
+    // Reserve this pipe's DRISC L1 config page on its sender core, then compose and stamp it on
+    // every device.
+    void initialize_dram_sender_config_page();
     void write_config_to_device();
     void release_allocations() noexcept;
 
@@ -91,6 +159,16 @@ private:
     uint32_t credit_reset_offset_ = 0;
     uint32_t credit_reset_size_ = 0;
     std::unordered_map<CoreCoord, std::vector<uint32_t>> config_pages_;
+
+    // ---- DRAM-sender state (unset for a worker-sender PrefetcherPipe) ----
+    // The opaque-enum declaration above makes SenderCoreType a complete type here, so the member
+    // needs no integer stand-in; only the enumerator names need the experimental header, and the
+    // constructors that spell them live in the .cpp.
+    SenderCoreType sender_core_type_{};
+    uint32_t initial_entry_size_ = 0;
+    // This pipe's sender config page in the DRISC L1 arena, reserved on its sender core alone so
+    // sibling pipes on other banks can hold the same offset. Null for a worker-sender pipe.
+    std::shared_ptr<DriscL1Allocation> drisc_config_page_alloc_;
 };
 
 /**

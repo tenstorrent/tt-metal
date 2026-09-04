@@ -466,7 +466,10 @@ public:
         CrossNodeReceiverDFBInterface& iface = interface_.receiver;
         const uint32_t entry_size = iface.fifo_page_size;
         const uint32_t payload_bytes = num_entries * entry_size;
-        ASSERT(iface.fifo_rd_ptr + payload_bytes <= iface.fifo_limit_page_aligned);
+        // A read window may straddle the wrap (the caller keeps a lookahead over the ring end);
+        // only asking for more than the ring holds is a bug. units_for_read is already wrap-aware,
+        // and the GlobalCB twin (remote_cb_wait_front) allows the same straddle.
+        ASSERT(payload_bytes <= iface.fifo_limit_page_aligned - iface.fifo_start_addr);
         const uint32_t rd_offset = iface.fifo_rd_ptr - iface.fifo_start_addr;
         const uint32_t units_needed = units_for_read(iface, rd_offset, payload_bytes);
 
@@ -509,6 +512,17 @@ public:
     }
 
     FORCE_INLINE uint32_t get_entry_size() { return interface_.sender.fifo_page_size; }
+
+    // True while the sender has published entries this receiver has not yet popped. Reads both
+    // halves of this receiver's counter pair -- entries_sent sits one L1_ALIGNMENT below
+    // entries_acked, the relationship wait_front() relies on -- so the pair layout stays inside
+    // the class. Receiver participants only; caller invalidates the L1 cache first.
+    FORCE_INLINE bool has_unconsumed_entries() {
+        auto* acked_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(interface_.receiver.aligned_pages_acked_ptr);
+        auto* sent_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(interface_.receiver.aligned_pages_acked_ptr - L1_ALIGNMENT);
+        return *sent_ptr != *acked_ptr;
+    }
 
 #if defined(KERNEL_BUILD) && !defined(COMPILE_FOR_TRISC)
     // -----------------------------------------------------------------------
@@ -571,13 +585,18 @@ private:
         CrossNodeReceiverDFBInterface& iface = interface_.receiver;
         const uint32_t entry_size = iface.fifo_page_size;
         const uint32_t payload_bytes = num_entries * entry_size;
-        ASSERT(iface.fifo_rd_ptr + payload_bytes <= iface.fifo_limit_page_aligned);
+        // A pop may straddle the wrap, matching wait_front and the GlobalCB twin
+        // (remote_cb_pop_front); only popping more than the ring holds is a bug.
+        ASSERT(payload_bytes <= iface.fifo_limit_page_aligned - iface.fifo_start_addr);
         const uint32_t rd_offset = iface.fifo_rd_ptr - iface.fifo_start_addr;
         const uint32_t num_units = units_for_read(iface, rd_offset, payload_bytes);
-        iface.fifo_rd_ptr += payload_bytes;
-        if (iface.fifo_rd_ptr >= iface.fifo_limit_page_aligned) {
-            iface.fifo_rd_ptr = iface.fifo_start_addr;
-        }
+        // Carry the remainder past the wrap rather than snapping to the base: a batched pop that
+        // crosses the usable limit resumes that many bytes into the ring. units_for_read has
+        // already credited the trailing gap this crossing skips.
+        const uint32_t next_rd_ptr = iface.fifo_rd_ptr + payload_bytes;
+        iface.fifo_rd_ptr = next_rd_ptr >= iface.fifo_limit_page_aligned
+                                ? iface.fifo_start_addr + (next_rd_ptr - iface.fifo_limit_page_aligned)
+                                : next_rd_ptr;
 
         // Posted: peer visibility is eventual; senders discover the ack by polling
         // pages_acked (reserve_back / barrier). Matches push_back's posted sent-incs.
