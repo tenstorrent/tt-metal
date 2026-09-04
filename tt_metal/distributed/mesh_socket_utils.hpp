@@ -53,6 +53,10 @@ void write_socket_configs(
     SocketEndpoint socket_endpoint,
     const std::shared_ptr<MeshDevice>& peer_device = nullptr);
 
+// The endpoint's config-block address; per-core-aware (address() is undefined
+// for per-core buffers).
+DeviceAddr get_socket_config_buffer_address(const MeshSocket& socket_endpoint);
+
 SocketPeerDescriptor generate_local_endpoint_descriptor(
     const MeshSocket& socket_endpoint, std::optional<multihost::DistributedContextId> context_id = std::nullopt);
 

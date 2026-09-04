@@ -11,6 +11,7 @@
 #include <tt-metalium/experimental/per_core_allocation/allocator_mode.hpp>
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/system_mesh.hpp>
+#include <tt-metalium/tt_metal.hpp>
 
 using namespace tt::tt_metal::distributed::multihost;
 
@@ -241,10 +242,26 @@ std::shared_ptr<MeshBuffer> create_socket_config_buffer(
     auto shard_params =
         ShardSpecBuffer(all_cores, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {static_cast<uint32_t>(num_cores), 1});
 
+    // Per-core sockets keep their config block per-core too: the peer learns the
+    // address through the descriptor handshake, and the block stops fragmenting
+    // the lockstep book on every other core.
+    auto sharding_args = BufferShardingArgs(shard_params, TensorMemoryLayout::HEIGHT_SHARDED);
+    if (socket_mem_config.per_core_allocation) {
+        TT_FATAL(
+            num_cores == 1,
+            "Per-core socket config allocation (v1) supports exactly one endpoint core per socket; got {}.",
+            num_cores);
+        TT_FATAL(
+            tt::tt_metal::MetalContext::instance().rtoptions().get_allocator_mode_hybrid(),
+            "Per-core socket allocation requires the device to be opened with AllocatorMode::HYBRID "
+            "(set TT_METAL_ALLOCATOR_MODE_HYBRID=1 before opening the device).");
+        experimental::per_core_allocation::set_per_core_allocation(sharding_args, true);
+    }
+
     DeviceLocalBufferConfig buffer_specs = {
         .page_size = config_buffer_size,
         .buffer_type = BufferType::L1,
-        .sharding_args = BufferShardingArgs(shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
+        .sharding_args = sharding_args,
         .bottom_up = std::nullopt,
         .sub_device_id = is_sender ? socket_mem_config.sender_sub_device : socket_mem_config.receiver_sub_device,
     };
@@ -335,13 +352,19 @@ void write_socket_configs(
     SocketEndpoint socket_endpoint,
     const std::shared_ptr<MeshDevice>& peer_device) {
     auto* mesh_device = config_buffer->device();
-    const auto& core_to_core_id = config_buffer->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id;
     bool is_sender = socket_endpoint == SocketEndpoint::SENDER;
     // The peer descriptor has already been validated to use the same socket
     // config. Keep using the local descriptor's config here so rank-scoped
     // metadata generated from the local MeshSocket stays available even though
     // the serialized peer descriptor does not carry that extra context.
     const auto& config = local_descriptor.config;
+    // Per-core buffers carry no page mapping (v1: exactly one endpoint core, so
+    // the core-to-slot index is always 0); only lockstep buffers provide one.
+    static const std::unordered_map<CoreCoord, uint32_t> kSingleCoreId;
+    const bool config_is_per_core = config.socket_mem_config.per_core_allocation;
+    const auto& core_to_core_id = config_is_per_core
+                                      ? kSingleCoreId
+                                      : config_buffer->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id;
     auto grouped_connections = group_socket_connections(config, socket_endpoint);
     auto peer_config_buf_addr = peer_descriptor.config_buffer_address;
     const SocketSenderSize sender_size;
@@ -397,7 +420,7 @@ void write_socket_configs(
             for (const auto& [sender_core_coord, connections] : cores_map) {
                 MeshCoreCoord sender_core = {device_coord, sender_core_coord};
 
-                uint32_t idx = core_to_core_id.at(sender_core.core_coord);
+                uint32_t idx = config_is_per_core ? 0 : core_to_core_id.at(sender_core.core_coord);
                 // write sender_socket_md (only once per sender core)
                 uint32_t md_offset = idx * sender_total_size_bytes / sizeof(uint32_t);
                 config_data[md_offset++] = 0;                                    // bytes_sent
@@ -434,7 +457,22 @@ void write_socket_configs(
                     config_data[receiver_enc_offset + 3] = recv_virtual_core.x;  // downstream_noc_x
                 }
             }
-            distributed::WriteShard(mesh_device->mesh_command_queue(0), config_buffer, config_data, device_coord, true);
+            if (config.socket_mem_config.per_core_allocation) {
+                // WriteShard resolves lockstep addresses only; per-core blocks are
+                // written straight at their per-core L1 address (h2d_socket pattern).
+                const CoreCoord core = cores_map.begin()->first;
+                std::span<const uint8_t> bytes(
+                    reinterpret_cast<const uint8_t*>(config_data.data()), config_data.size() * sizeof(config_data[0]));
+                tt::tt_metal::detail::WriteToDeviceL1(
+                    mesh_device->get_device(device_coord),
+                    core,
+                    static_cast<uint32_t>(
+                        experimental::per_core_allocation::get_per_core_address(*config_buffer, device_coord, core)),
+                    bytes);
+            } else {
+                distributed::WriteShard(
+                    mesh_device->mesh_command_queue(0), config_buffer, config_data, device_coord, true);
+            }
         }
     } else {
         std::vector<receiver_socket_md> config_data(
@@ -464,7 +502,7 @@ void write_socket_configs(
                     fabric_config,
                     SocketEndpoint::RECEIVER);
 
-                uint32_t idx = core_to_core_id.at(recv_core.core_coord);
+                uint32_t idx = config_is_per_core ? 0 : core_to_core_id.at(recv_core.core_coord);
                 auto& md = config_data[idx];
                 md.bytes_sent = 0;
                 md.bytes_acked = 0;
@@ -479,7 +517,21 @@ void write_socket_configs(
                 md.d2d.upstream_bytes_acked_addr = peer_config_buf_addr + sender_size.md_size_bytes +
                                                    sender_size.ack_size_bytes * receiver_ids_per_sender.at(connection);
             }
-            distributed::WriteShard(mesh_device->mesh_command_queue(0), config_buffer, config_data, device_coord, true);
+            if (config.socket_mem_config.per_core_allocation) {
+                // Same as the sender branch: per-core blocks bypass WriteShard.
+                const CoreCoord core = cores_map.begin()->first;
+                std::span<const uint8_t> bytes(
+                    reinterpret_cast<const uint8_t*>(config_data.data()), config_data.size() * sizeof(config_data[0]));
+                tt::tt_metal::detail::WriteToDeviceL1(
+                    mesh_device->get_device(device_coord),
+                    core,
+                    static_cast<uint32_t>(
+                        experimental::per_core_allocation::get_per_core_address(*config_buffer, device_coord, core)),
+                    bytes);
+            } else {
+                distributed::WriteShard(
+                    mesh_device->mesh_command_queue(0), config_buffer, config_data, device_coord, true);
+            }
         }
     }
 }
@@ -498,6 +550,25 @@ DeviceAddr get_receiver_data_buffer_address(const MeshSocket& receiver_socket) {
         data_buffer, receiver_core.device_coord, receiver_core.core_coord);
 }
 
+DeviceAddr get_socket_config_buffer_address(const MeshSocket& socket_endpoint) {
+    // Per-core config blocks have one valid address per endpoint core; the plain
+    // address() accessor is undefined for them. Mirrors get_receiver_data_buffer_address.
+    const auto& config = socket_endpoint.get_config();
+    const auto& config_buffer = *socket_endpoint.get_config_buffer();
+    if (!config.socket_mem_config.per_core_allocation) {
+        return config_buffer.address();
+    }
+    TT_FATAL(
+        !config.socket_connection_config.empty(),
+        "Per-core socket has no connections; cannot resolve config buffer address.");
+    const auto& connection = config.socket_connection_config.front();
+    const auto& endpoint_core = socket_endpoint.get_socket_endpoint_type() == SocketEndpoint::SENDER
+                                    ? connection.sender_core
+                                    : connection.receiver_core;
+    return experimental::per_core_allocation::get_per_core_address(
+        config_buffer, endpoint_core.device_coord, endpoint_core.core_coord);
+}
+
 SocketPeerDescriptor generate_local_endpoint_descriptor(
     const MeshSocket& socket_endpoint, std::optional<DistributedContextId> context_id) {
     const auto& config = socket_endpoint.get_config();
@@ -513,7 +584,7 @@ SocketPeerDescriptor generate_local_endpoint_descriptor(
 
     SocketPeerDescriptor local_endpoint_desc = {
         .config = config,
-        .config_buffer_address = socket_endpoint.get_config_buffer()->address(),
+        .config_buffer_address = get_socket_config_buffer_address(socket_endpoint),
         .data_buffer_address = is_sender ? 0 : get_receiver_data_buffer_address(socket_endpoint),
         .exchange_tag = tag};
     return local_endpoint_desc;
