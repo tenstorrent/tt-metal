@@ -81,11 +81,12 @@ void report_result(const string& target_name, string_view op, const string& cmd,
     }
 }
 
-// Opt-in precompiled headers for TRISC kernel targets (TT_METAL_JIT_PCH=1).
+// Opt-in precompiled headers for kernel targets (TT_METAL_JIT_PCH=1).
 //
-// trisck.cc re-parses a fixed prelude (see trisc_pch.h) in every TRISC target.
-// That prelude accounts for roughly half of a TRISC target's compile time and is
-// identical across kernels, so precompiling it about halves the compile step.
+// Each kernel source re-parses a fixed prelude -- the includes ahead of the
+// generated per-kernel body -- in every target built from it. Those preludes are
+// identical across kernels and account for roughly half of a target's compile
+// time, so precompiling them about halves the compile step.
 //
 // Two GCC constraints shape the implementation:
 //  - A PCH is silently ignored once the first token has been seen, so it must be
@@ -103,8 +104,21 @@ bool jit_pch_enabled() {
     return enabled;
 }
 
-// Path of the umbrella header, relative to the tt-metal root.
-constexpr std::string_view PCH_UMBRELLA_REL = "tt_metal/hw/firmware/src/tt-1xx/trisc_pch.h";
+// Umbrella header for a kernel source's shareable prelude, relative to the tt-metal
+// root. Each one mirrors the includes its source parses before reaching the generated
+// per-kernel body; a source with no entry here simply compiles without a PCH.
+std::string_view pch_umbrella_for(std::string_view kernel_src) {
+    if (kernel_src == "trisck.cc") {
+        return "tt_metal/hw/firmware/src/tt-1xx/trisc_pch.h";
+    }
+    if (kernel_src == "brisck.cc") {
+        return "tt_metal/hw/firmware/src/tt-1xx/brisc_pch.h";
+    }
+    if (kernel_src == "ncrisck.cc") {
+        return "tt_metal/hw/firmware/src/tt-1xx/ncrisc_pch.h";
+    }
+    return {};
+}
 
 // Returns the header path to force-include for this compile recipe, building the
 // PCH on first use. Returns empty if a PCH is unavailable, in which case the
@@ -117,12 +131,14 @@ std::string ensure_pch(
     const std::string& root,
     const std::string& out_root,
     const std::string& target_name,
+    std::string_view umbrella_rel,
     const std::string& opt_level,
     const std::string& cflags,
     const std::string& includes,
     const std::vector<std::string>& defines) {
     tt::StableHasher hasher;
     hasher.update(target_name);
+    hasher.update(std::string(umbrella_rel));
     hasher.update(opt_level);
     hasher.update(cflags);
     hasher.update(includes);
@@ -131,8 +147,9 @@ std::string ensure_pch(
     }
     const uint64_t key = hasher.digest();
 
+    const fs::path umbrella = fs::path(std::string(umbrella_rel));
     const fs::path dir = fs::path(out_root) / "pch" / target_name / fmt::format("{:016x}", key);
-    const fs::path header = dir / "trisc_pch.h";
+    const fs::path header = dir / umbrella.filename();
 
     // One PCH per key, built once per process. The lock is held across the build
     // so concurrent compiles wait rather than racing on the same output; with a
@@ -147,7 +164,7 @@ std::string ensure_pch(
     bool ok = false;
     std::error_code ec;
     fs::create_directories(dir, ec);
-    fs::copy_file(fs::path(root) / PCH_UMBRELLA_REL, header, fs::copy_options::overwrite_existing, ec);
+    fs::copy_file(fs::path(root) / umbrella, header, fs::copy_options::overwrite_existing, ec);
     if (ec) {
         log_warning(
             tt::LogBuildKernels, "PCH: could not stage {}: {}; compiling without it", header.string(), ec.message());
@@ -772,7 +789,10 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
     const std::string temp_d_path = fs::path(obj_temp_path).replace_extension("d").string();
 
     std::vector<std::string> defines = recipe.defines;
-    if (jit_pch_enabled() && fs::path(this->srcs_[src_index]).filename() == "trisck.cc") {
+    const std::string kernel_src_name = fs::path(this->srcs_[src_index]).filename().string();
+    // pch_umbrella_for returns a view of a string literal, so this outlives the call.
+    const std::string_view pch_umbrella = jit_pch_enabled() ? pch_umbrella_for(kernel_src_name) : std::string_view{};
+    if (!pch_umbrella.empty()) {
         // The PCH is built from the same recipe minus any force-included headers:
         // those are per-kernel, and a PCH that consumed them could not be shared.
         std::vector<std::string> pch_defines;
@@ -789,6 +809,7 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
             env_.get_root_path(),
             env_.get_out_root_path(),
             target_name_,
+            pch_umbrella,
             recipe.compiler_opt_level,
             cflags,
             recipe.includes,
