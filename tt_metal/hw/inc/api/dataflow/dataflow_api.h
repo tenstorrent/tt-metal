@@ -871,6 +871,29 @@ inline void noc_async_write(
 
 // clang-format off
 /**
+ * Same as \a noc_async_write, but for a dst_noc_addr that is routed through the PCIe core. Sets
+ * NOC_RET_ADDR_MID before the write and clears it after, since \a noc_async_write does not otherwise touch
+ * that register on write_cmd_buf.
+ *
+ * Return value: None
+ *
+ * | Argument            | Description                             | Data type   | Valid range                        | required   |
+ * |---------------------|-----------------------------------------|-------------|------------------------------------|------------|
+ * | src_local_l1_addr   | Source address in local L1 memory       | uint32_t    | 0..1MB                             | True       |
+ * | dst_noc_addr        | PCIe-routed NOC address                 | uint64_t    | Results of a PCIe NOC encoding     | True       |
+ * | size                | Size of data transfer in bytes          | uint32_t    | 0..1MB                             | True       |
+ * | noc                 | Which NOC to use for the transaction    | uint8_t     | 0 or 1                             | False      |
+ */
+// clang-format on
+inline void noc_async_write_pcie(
+    uint32_t src_local_l1_addr, uint64_t dst_noc_addr, uint32_t size, uint8_t noc = noc_index) {
+    noc_cmd_buf_set_ret_addr_mid_pcie(noc, write_cmd_buf, dst_noc_addr);
+    noc_async_write(src_local_l1_addr, dst_noc_addr, size, noc);
+    noc_cmd_buf_clear_ret_addr_mid(noc, write_cmd_buf);
+}
+
+// clang-format off
+/**
  * Initiates an asynchronous multicast write for a single packet with size <= NOC_MAX_BURST_SIZE (i.e. maximum packet size).
  * Refer to \a noc_async_write_multicast for more details.
  */

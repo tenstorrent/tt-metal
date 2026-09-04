@@ -469,6 +469,18 @@ inline __attribute__((always_inline)) void noc_cmd_buf_clear_targ_addr_mid(uint3
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_MID, 0);
 }
 
+// Same as noc_cmd_buf_set_targ_addr_mid_pcie(), but for NOC_RET_ADDR_MID (a write's destination address).
+inline __attribute__((always_inline)) void noc_cmd_buf_set_ret_addr_mid_pcie(
+    uint32_t noc, uint32_t cmd_buf, uint64_t addr) {
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_MID, (uint32_t)(addr >> 32) & NOC_PCIE_MASK);
+}
+
+// Clears NOC_RET_ADDR_MID back to 0. Call after every noc_cmd_buf_set_ret_addr_mid_pcie() use so later,
+// ordinary transactions on cmd_buf aren't misrouted.
+inline __attribute__((always_inline)) void noc_cmd_buf_clear_ret_addr_mid(uint32_t noc, uint32_t cmd_buf) {
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_MID, 0);
+}
+
 // Debug only: returns NOC_AT_LEN_BE for cmd_buf (transaction length). Requires NOC_LOGGING_ENABLED.
 inline __attribute__((always_inline)) uint32_t noc_debug_read_at_len_be(uint32_t noc, uint32_t cmd_buf) {
     return NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_AT_LEN_BE);
@@ -583,7 +595,8 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write(
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_cmd_field);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, src_addr);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, (uint32_t)dest_addr);
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_MID, (uint32_t)(dest_addr >> 32) & NOC_PCIE_MASK);
+    // NOC_RET_ADDR_MID is not written here: it is 0 for every on-chip dest_addr. Callers targeting the PCIe
+    // core must set it via noc_cmd_buf_set_ret_addr_mid_pcie() before calling this, and clear it after.
     NOC_CMD_BUF_WRITE_REG(
         noc, cmd_buf, NOC_RET_ADDR_COORDINATE, (uint32_t)(dest_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, len_bytes);
