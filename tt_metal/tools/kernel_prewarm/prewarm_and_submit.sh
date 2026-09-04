@@ -41,7 +41,13 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 [[ $# -gt 0 ]] || { echo "usage: prewarm_and_submit.sh -e <env.yaml> [-w dir] [-t sec] [-c] -- <command...>" >&2; exit 2; }
-CMD="$*"
+# Re-quote each argument so word boundaries survive being passed as one command string to the broker;
+# otherwise e.g. a `pytest -k "a and b"` expression would re-split into separate shell words.
+CMD=""
+for _arg in "$@"; do
+  printf -v _q '%q' "$_arg"
+  CMD="${CMD:+$CMD }$_q"
+done
 
 # A yaml value may be bare or quoted (key: "val" / key: val); strip surrounding quotes and whitespace.
 _yaml_get() {
@@ -54,8 +60,20 @@ CACHE="$(_yaml_get TT_METAL_CACHE "$ENV_FILE")"; CACHE="${CACHE:-${TT_METAL_CACH
 HOME_DIR="$(_yaml_get TT_METAL_HOME "$ENV_FILE")"; HOME_DIR="${HOME_DIR:-${TT_METAL_HOME:-$WORKSPACE}}"
 
 # The manifest sits at the cache root (a sibling of the per-build_key tt-metal-cache<key> subtree), so a
-# missing/empty file means no build_key has ever been captured here -- a genuinely cold cache.
-MANIFEST="${CACHE:+$CACHE/kernel_prewarm.manifest}"
+# missing/empty file means no build_key has ever been captured here -- a genuinely cold cache. When
+# TT_METAL_CACHE is unset the runtime uses JitBuildEnv's default root (build.cpp get_default_root_path):
+# $HOME/.cache/tt-metal-cache, else /tmp/tt-metal-cache. Resolve the same location for the growth check
+# rather than leaving it empty (which aborts every run in the supported default-cache config). Do NOT
+# inject this into stages 2/3 -- an explicit TT_METAL_CACHE without the runtime's trailing slash would
+# change the out_kernel_root layout; the tool and the real run derive it themselves from an unset var.
+if [[ -n "$CACHE" ]]; then
+  MANIFEST_ROOT="$CACHE"
+elif [[ -n "${HOME:-}" ]]; then
+  MANIFEST_ROOT="$HOME/.cache/tt-metal-cache"
+else
+  MANIFEST_ROOT="/tmp/tt-metal-cache"
+fi
+MANIFEST="$MANIFEST_ROOT/kernel_prewarm.manifest"
 
 TOOL="$HOME_DIR/build_Release/tools/kernel_prewarm"
 [[ -x "$TOOL" ]] || TOOL="$WORKSPACE/build_Release/tools/kernel_prewarm"
@@ -78,11 +96,19 @@ else
 fi
 
 # Stage 2: off-device compile (device free). Builds every manifest recipe, incl. device-init kernels.
-if [[ -x "$TOOL" ]]; then
-  echo "== stage 2/3: off-device compile (device free; cache=${CACHE:-default}) =="
+# The whole point of the wrapper is to keep compilation out of the reservation, so a missing tool is a
+# setup failure: submitting anyway would compile cold while holding the shared device.
+if [[ ! -x "$TOOL" ]]; then
+  echo "prewarm_and_submit.sh: kernel_prewarm tool not found under build_Release/tools -- build it first (submitting now would compile cold inside the reservation); aborting" >&2
+  exit 1
+fi
+echo "== stage 2/3: off-device compile (device free; cache=${CACHE:-default}) =="
+# Pass TT_METAL_CACHE only when set: an empty value reads as an explicit (empty) cache dir and resolves
+# the wrong root. Leaving it unset lets the tool derive the same default the real run (stage 3) uses.
+if [[ -n "$CACHE" ]]; then
   env TT_METAL_CACHE="$CACHE" TT_METAL_HOME="$HOME_DIR" "$TOOL"
 else
-  echo "prewarm_and_submit.sh: kernel_prewarm tool not found under build_Release/tools; submitting without compile" >&2
+  env TT_METAL_HOME="$HOME_DIR" "$TOOL"
 fi
 
 # Stage 3: the real run, now warm -- zero compilation inside the reservation.
