@@ -780,4 +780,10 @@ Branch `ttmodelmanager/glm47-flash-probe`. Not pushed.
   `doc/vllm_integration/readiness_vllm_stage09/`, repoints that stage's report
   at them, and corrects that report's "~22 ms/token of vLLM-path overhead"
   claim in place.
-* the follow-up commit recording this line.
+* the follow-up commit recording that line.
+* **`42aed86ac92f5f15d6b8929baeee079a4caed81b`** -- stage close-out under the owner's review budget: the
+  "Known limitations" section (items still open from the last `$stage-review`
+  round, recorded with their next step rather than fixed), plus two stale
+  published counts corrected from the committed logs (reduced adapter suite 25
+  -> 28 passed, new adapter tests 10 -> 13) and Limitation 8's provenance list
+  rewritten against what each artifact records.
