@@ -40,9 +40,8 @@ constexpr uint16_t source_mesh_id = get_compile_time_arg_val(14);
 constexpr bool is_fabric_2d = get_compile_time_arg_val(15);
 constexpr uint32_t fabric_direction_mask = get_compile_time_arg_val(16);
 constexpr uint32_t max_pages_per_packet = get_compile_time_arg_val(17);
-constexpr uint32_t custom_fabric2d_route_words = get_compile_time_arg_val(18);
-constexpr bool use_multicast_initialization = get_compile_time_arg_val(19);
-constexpr auto output_tensor_args = TensorAccessorArgs<20>();
+constexpr bool use_multicast_initialization = get_compile_time_arg_val(18);
+constexpr auto output_tensor_args = TensorAccessorArgs<19>();
 constexpr uint32_t mux_ct_base = output_tensor_args.next_compile_time_args_offset();
 // This flag is specialized per stream by the host. Endpoint streams without a physical egress compile against the
 // routing-plane-manager ABI even when other streams in the same program use a worker mux.
@@ -50,16 +49,11 @@ constexpr bool stream_uses_mux = get_compile_time_arg_val(mux_ct_base) != 0;
 constexpr uint32_t mux_num_clients = get_compile_time_arg_val(mux_ct_base + 1);
 constexpr uint32_t compile_safe_mux_num_clients = mux_num_clients == 0 ? 1 : mux_num_clients;
 constexpr bool has_fabric_connections = fabric_direction_mask != 0;
-constexpr bool has_custom_fabric2d_routes = custom_fabric2d_route_words != 0;
-static_assert(!has_custom_fabric2d_routes || is_fabric_2d, "Custom routes require Fabric2D");
 // Base record: offset, block range/stride, completion, mesh and chip. Fabric2D adds the destination's harvested drain
-// coordinate. Only programs that actually split an antipode add route metadata and the words used by that route.
+// coordinate.
 constexpr uint32_t target_drain_args = is_fabric_2d ? 2 : 0;
-constexpr uint32_t target_custom_route_args = has_custom_fabric2d_routes ? 2 + custom_fabric2d_route_words : 0;
-constexpr uint32_t target_runtime_args = 7 + target_drain_args + target_custom_route_args;
+constexpr uint32_t target_runtime_args = 7 + target_drain_args;
 constexpr uint32_t target_drain_args_idx = 7;
-constexpr uint32_t target_custom_route_args_idx = target_drain_args_idx + target_drain_args;
-constexpr uint32_t default_initial_direction = static_cast<uint32_t>(tt::tt_fabric::eth_chan_directions::COUNT);
 constexpr auto fabric_directions =
     ttnn::operations::ccl::common::fabric_direction_mask_to_directions(fabric_direction_mask);
 using Fabric2DConnections = tt::tt_fabric::RoutingPlaneConnectionManager;
@@ -71,24 +65,6 @@ using DirectFabricConnections = std::conditional_t<is_fabric_2d, Fabric2DConnect
 using FabricConnections = std::conditional_t<stream_uses_mux, FabricMuxConnection, DirectFabricConnections>;
 constexpr bool fabric2d_multicast_initialization_is_safe = is_fabric_2d && use_multicast_initialization;
 
-FORCE_INLINE uint32_t get_custom_route_num_commands(size_t target_arg_idx) {
-    if constexpr (has_custom_fabric2d_routes) {
-        return get_arg_val<uint32_t>(target_arg_idx + target_custom_route_args_idx);
-    }
-    return 0;
-}
-
-FORCE_INLINE uint32_t get_custom_route_initial_direction(size_t target_arg_idx) {
-    if constexpr (has_custom_fabric2d_routes) {
-        return get_arg_val<uint32_t>(target_arg_idx + target_custom_route_args_idx + 1);
-    }
-    return default_initial_direction;
-}
-
-FORCE_INLINE size_t get_custom_route_packed_args_idx(size_t target_arg_idx) {
-    return target_arg_idx + target_custom_route_args_idx + 2;
-}
-
 [[noreturn]] FORCE_INLINE void fail_stop_invalid_fabric_route() {
     // ASSERT gives watcher builds a precise failure signal. The explicit trap and spin remain the production fallback:
     // an invalid route must not inject on an arbitrary egress and corrupt the collective's completion count.
@@ -98,51 +74,11 @@ FORCE_INLINE size_t get_custom_route_packed_args_idx(size_t target_arg_idx) {
     }
 }
 
-template <typename PacketHeader>
-FORCE_INLINE void set_target_unicast_route(
-    volatile PacketHeader* packet_header,
-    const ccl_routing_utils::line_unicast_route_info_t& route_info,
-    uint32_t custom_route_num_commands,
-    size_t custom_route_args_idx) {
-    if constexpr (std::is_base_of_v<tt::tt_fabric::HybridMeshPacketHeader, PacketHeader>) {
-        if (custom_route_num_commands == 0) {
-            tt::tt_fabric::fabric_set_unicast_route(packet_header, route_info.dst_chip_id, route_info.dst_mesh_id);
-        }
-        if (custom_route_num_commands != 0) {
-            if (custom_route_num_commands > tt::tt_fabric::FabricHeaderConfig::MESH_ROUTE_BUFFER_SIZE) {
-                fail_stop_invalid_fabric_route();
-            }
-            packet_header->dst_start_node_id =
-                (static_cast<uint32_t>(route_info.dst_mesh_id) << 16) | route_info.dst_chip_id;
-            packet_header->mcast_params_64 = 0;
-            packet_header->is_mcast_active = 0;
-            packet_header->routing_fields.value = 0;
-            for (uint32_t command = 0; command < tt::tt_fabric::FabricHeaderConfig::MESH_ROUTE_BUFFER_SIZE; ++command) {
-                constexpr uint32_t commands_per_word = 8;
-                uint8_t route_command = 0;
-                if (command < custom_route_num_commands) {
-                    const uint32_t packed_word =
-                        get_arg_val<uint32_t>(custom_route_args_idx + command / commands_per_word);
-                    route_command = static_cast<uint8_t>((packed_word >> ((command % commands_per_word) * 4)) & 0xf);
-                }
-                packet_header->route_buffer[command] = route_command;
-            }
-            return;
-        }
-    } else {
-        if (custom_route_num_commands != 0) {
-            fail_stop_invalid_fabric_route();
-        }
-        ccl_routing_utils::fabric_set_line_unicast_route(packet_header, route_info);
-    }
-}
-
 inline FabricMuxSender& select_connection(
     FabricMuxConnection& fabric_connection,
     [[maybe_unused]] int device_offset,
     [[maybe_unused]] uint16_t dest_mesh_id,
-    [[maybe_unused]] uint16_t dest_chip_id,
-    [[maybe_unused]] uint32_t initial_direction) {
+    [[maybe_unused]] uint16_t dest_chip_id) {
     return fabric_connection.sender;
 }
 
@@ -160,11 +96,8 @@ inline tt::tt_fabric::WorkerToFabricEdmSender& select_connection(
     Fabric2DConnections& fabric_connections,
     [[maybe_unused]] int device_offset,
     uint16_t dest_mesh_id,
-    uint16_t dest_chip_id,
-    uint32_t initial_direction) {
-    const uint32_t direction = initial_direction == default_initial_direction
-                                   ? static_cast<uint32_t>(get_next_hop_router_direction(dest_mesh_id, dest_chip_id))
-                                   : initial_direction;
+    uint16_t dest_chip_id) {
+    const uint32_t direction = static_cast<uint32_t>(get_next_hop_router_direction(dest_mesh_id, dest_chip_id));
     return select_connection_by_direction(fabric_connections, direction);
 }
 
@@ -172,8 +105,7 @@ inline tt::tt_fabric::WorkerToFabricEdmSender& select_connection(
     FabricConnectionManager& fabric_connections,
     int device_offset,
     [[maybe_unused]] uint16_t dest_mesh_id,
-    [[maybe_unused]] uint16_t dest_chip_id,
-    [[maybe_unused]] uint32_t initial_direction) {
+    [[maybe_unused]] uint16_t dest_chip_id) {
     return (device_offset > 0) ? fabric_connections.get_forward_connection()
                                : fabric_connections.get_backward_connection();
 }
@@ -251,11 +183,7 @@ void send_initialization(
             auto* packet_header = device_offset > 0 ? pkt_hdr_sema_forward : pkt_hdr_sema_backward;
             const uint32_t packet_header_address =
                 device_offset > 0 ? packet_header_buffer_addr_sema_forward : packet_header_buffer_addr_sema_backward;
-            set_target_unicast_route(
-                packet_header,
-                route_info,
-                get_custom_route_num_commands(target_arg_idx),
-                get_custom_route_packed_args_idx(target_arg_idx));
+            ccl_routing_utils::fabric_set_line_unicast_route(packet_header, route_info);
             packet_header->to_noc_unicast_atomic_inc(
                 tt::tt_fabric::NocUnicastAtomicIncCommandHeader{target_init_semaphore_noc_addr, 1});
             send_mux_packet_blocking(fabric_connection, packet_header_address, sizeof(PacketHeader));
@@ -395,19 +323,11 @@ void send_initialization(
         auto* packet_header = device_offset > 0 ? pkt_hdr_sema_forward : pkt_hdr_sema_backward;
         const uint32_t packet_header_address =
             device_offset > 0 ? packet_header_buffer_addr_sema_forward : packet_header_buffer_addr_sema_backward;
-        set_target_unicast_route(
-            packet_header,
-            route_info,
-            get_custom_route_num_commands(target_arg_idx),
-            get_custom_route_packed_args_idx(target_arg_idx));
+        ccl_routing_utils::fabric_set_line_unicast_route(packet_header, route_info);
         packet_header->to_noc_unicast_atomic_inc(
             tt::tt_fabric::NocUnicastAtomicIncCommandHeader{target_init_semaphore_noc_addr, 1});
-        auto& connection = select_connection(
-            fabric_connections,
-            device_offset,
-            route_info.dst_mesh_id,
-            route_info.dst_chip_id,
-            get_custom_route_initial_direction(target_arg_idx));
+        auto& connection =
+            select_connection(fabric_connections, device_offset, route_info.dst_mesh_id, route_info.dst_chip_id);
         connection.wait_for_empty_write_slot();
         connection.send_payload_flush_blocking_from_address(packet_header_address, sizeof(PacketHeader));
     }
@@ -677,14 +597,6 @@ void kernel_main() {
                 target_drain_sync_core_x = get_arg_val<uint32_t>(device_offsets_idx++);
                 target_drain_sync_core_y = get_arg_val<uint32_t>(device_offsets_idx++);
             }
-            uint32_t custom_route_num_commands = 0;
-            uint32_t custom_route_initial_direction = default_initial_direction;
-            if constexpr (has_custom_fabric2d_routes) {
-                custom_route_num_commands = get_arg_val<uint32_t>(device_offsets_idx++);
-                custom_route_initial_direction = get_arg_val<uint32_t>(device_offsets_idx++);
-            }
-            const size_t custom_route_args_idx = device_offsets_idx;
-            device_offsets_idx += custom_fabric2d_route_words;
             const uint64_t target_output_semaphore_noc_addr =
                 is_fabric_2d
                     ? safe_get_noc_addr(target_drain_sync_core_x, target_drain_sync_core_y, global_semaphore_addr)
@@ -698,15 +610,13 @@ void kernel_main() {
                 pkt_hdr = pkt_hdr_backward;
             }
             if (device_offset != 0) {
-                set_target_unicast_route(pkt_hdr, route_info, custom_route_num_commands, custom_route_args_idx);
+                ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr, route_info);
             }
-            auto* target_connection = device_offset == 0 ? nullptr
-                                                         : &select_connection(
-                                                               fabric_connections,
-                                                               device_offset,
-                                                               route_info.dst_mesh_id,
-                                                               route_info.dst_chip_id,
-                                                               custom_route_initial_direction);
+            auto* target_connection =
+                device_offset == 0
+                    ? nullptr
+                    : &select_connection(
+                          fabric_connections, device_offset, route_info.dst_mesh_id, route_info.dst_chip_id);
 
             auto calculate_params = [&](int b) {
                 const uint32_t o = b / (concat_num_tiles * inner_dims_size);
