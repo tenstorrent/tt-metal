@@ -1426,7 +1426,7 @@
     export TT_MESH_ID=0
     export TT_MESH_HOST_RANK=0
     export TT_METAL_SHM_TRACKING_DISABLED=1
-    export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/models/tt_dit/tests/models/wan2_2/scaleout_configs/single_galaxy/mesh_graph_descriptor.textproto"
+    export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto"
     # This leg owns the T2V generative-quality gate on a single BH galaxy: the bh_sc1 unit leg sets
     # WAN_SKIP_VBENCH=1, and no other e2e entry covers T2V on this SKU (the wh_galaxy_perf entry
     # pins an nl4 config and bh_sc4 is the quad). Pinned to the 4x8 ring config at 720p, which is
@@ -1454,7 +1454,7 @@
     export TT_MESH_ID=0
     export TT_MESH_HOST_RANK=0
     export TT_METAL_SHM_TRACKING_DISABLED=1
-    export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/models/tt_dit/tests/models/wan2_2/scaleout_configs/single_galaxy/mesh_graph_descriptor.textproto"
+    export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto"
     # Single-galaxy counterparts of the bh_sc4 quad legs above, on one rank instead of tt-run:
     # ring_bh_4x8 for perf (it requests a Blackhole-sized fabric packet payload, so it self-skips
     # on Wormhole only, not here), and the 4x8 linear pipeline case, which is the only 4x8 config
