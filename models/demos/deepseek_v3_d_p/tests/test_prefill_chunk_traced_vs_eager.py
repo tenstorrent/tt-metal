@@ -280,7 +280,13 @@ def test_prefill_chunk_traced_matches_eager(
 
     hf_config = config_only
     hf_config.max_seq_len = TOTAL_LEN
-    sp = tuple(mesh_device.shape)[0]
+    sp, tp = tuple(mesh_device.shape)
+    # The pytest fixture returns the cache ROOT; the per-mesh files live one level down under
+    # "{sp}x{tp}". run_chunked_transformer_updated does the same join (effective_cache_path), and the
+    # adapter's own weight_cache_path() builds the same shape for serving. Passing the root makes
+    # TtPrefillRuntime's completeness check look in a directory holding only the 8x4 subdir, which it
+    # correctly reports as an incomplete cache rather than loading placeholder weights.
+    weight_cache_path = weight_cache_path / f"{sp}x{tp}"
     token_ids = _chunk_token_ids(N_CHUNKS, hf_config.vocab_size)
 
     for c in range(N_CHUNKS):
