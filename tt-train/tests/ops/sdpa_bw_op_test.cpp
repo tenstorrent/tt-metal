@@ -863,38 +863,12 @@ TEST_F(SDPABackwardTest, NIGHTLY_CausalMask_LargerSequence) {
 
 // ========== No-Mask (AttentionMaskType::None) Tests ==========
 //
-// Every test above exercises Causal or Arbitrary masking (and, per
-// `generate_attn_mask`, "Arbitrary" here always happens to be a causal-shaped
-// mask too -- see the float-reference conditional added above this section).
-// None of them cover `AttentionMaskType::None` (genuinely unmasked,
-// bidirectional attention), which is what this port's MAE encoder/decoder
-// actually use in production (`ops_tt/attention.py`'s
-// `bidirectional_scaled_dot_product_attention`, `no_mask=True`) -- see
-// `tenstorrent/docs/m6-optimization-results.md`'s "Redundant Q/dO/O re-read
-// theory" section for why this gap matters specifically: it is the exact
-// scale/mask-type combination any KV-kernel redundant-reread fix would
-// touch, and this test-coverage gap is why that fix was not attempted
-// without first adding this test.
+// Bidirectional attention: no mask tensor and no on-device causal mask, every query row attends
+// to every key. The float and composite references above are also run unmasked for this mode.
 //
-// Shape chosen to match `main_pretrain_tt.full_vitl_real_contract()`'s real
-// encoder config exactly (B=24, H=16, D=64, S=544) rather than a shrunk
-// unit-test shape: `NC = batch*heads = 384` is the same total-row count the
-// real model uses (both encoder and decoder use B=24,H=16), and on this
-// host's real device grid (11x10 = 110 cores, confirmed via
-// `compute_with_storage_grid_size()`), `sdpa_bw_kv_program_factory.cpp`'s
-// `split_work_to_cores(grid, NC*St)` gives ~3072/110 ~= 27.9 rows/core with
-// `St=17` rows/group -- ~3.5 (batch,head) groups per core, matching the
-// ratio the M6 doc measured for both encoder (`~60/17`) and decoder
-// (`~307/88`) at real production scale. That ratio, not the absolute
-// sequence length, is what determines whether a core's assigned row range
-// crosses a group boundary -- the exact code path a redundant-reread fix
-// restructures -- so this shape is sufficient to catch that bug class even
-// though it uses the encoder's (not decoder's) sequence length; decoder
-// scale (S=2816) was not used here because `float_sdpa_backward`'s CPU
-// reference materializes a full `(B,H,S,S)` array (~14.6 TB in float32 at
-// decoder scale, ~433 MB at this encoder scale) -- infeasible at decoder
-// scale for a CPU-side unit test, not a limitation of the fix or this test's
-// coverage of the group-boundary bug class.
+// Shape mirrors a ViT-L MAE encoder (B=24, H=16, S=544, D=64). With NC*St = 384*17 rows spread
+// over the core grid, each core's row range spans several (batch, head) groups, which exercises
+// the group-boundary handling in the KV kernel's work split for the unmasked path.
 TEST_F(SDPABackwardTest, NIGHTLY_NoMask_ProductionEncoderShape) {
     SDPABackwardTestConfig config{
         .batch_size = 24U,

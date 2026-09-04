@@ -374,7 +374,7 @@ void py_module(nb::module_& m) {
             [](const autograd::TensorPtr& query,
                const autograd::TensorPtr& key,
                const autograd::TensorPtr& value,
-               const std::optional<tt::tt_metal::Tensor>& mask,
+               const std::optional<ttnn::Tensor>& mask,
                std::optional<ttml::metal::AttentionMaskType> mask_type) -> autograd::TensorPtr {
                 std::optional<autograd::TensorPtr> mask_ptr = std::nullopt;
                 if (mask.has_value()) {

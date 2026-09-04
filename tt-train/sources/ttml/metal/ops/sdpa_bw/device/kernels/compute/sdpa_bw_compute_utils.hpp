@@ -151,13 +151,11 @@ inline void transpose_tile_fpu(const uint32_t cb_input, /*output cb*/ const uint
 // Computes the per-row scalar u = sum(dO * O) needed for softmax backward.
 // This is part of the softmax gradient: dS = P * (dP - u), where u = sum(P * dP) per row.
 // Since O = P @ V, we have dP = dO @ V^T, and u = sum(dO * O) row-wise.
-//
-// Row-sum reduction uses sfpu_reduce<SUM, Float32, REDUCE_ROW> directly on the DST register
-// holding the elementwise dO*O accumulation, replacing a matmul-with-a-column-of-ones trick
-// that round-tripped through cb_mat_mul_reduction. Fuses accumulate+reduce into one tile_regs
-// cycle and stays at full FP32 in DST instead of routing through SrcA/SrcB.
-//
-// Computes u_scalar = rowsum(dO * O) and packs the result to cb_u_scalar_row.
+// The row-sum is done with sfpu_reduce directly on the DST tile holding the dO*O accumulation,
+// so accumulate + reduce happen in one tile_regs cycle at full FP32 (no CB round trip through a
+// matmul-with-ones tile). The result lands in column 0 of each row, which is what the
+// sub_bcast_cols consumer in compute_grad_scores reads.
+// Packs the result to cb_u_scalar_row.
 // When cb_u_scaler_output != 0, also packs a second copy to that CB (for DRAM flush
 // to the KV kernel). Both packs happen directly from DST at full FP32 precision,
 // avoiding a separate copy-pack cycle.
@@ -165,7 +163,6 @@ void compute_u_scalar_row(
     const uint32_t cb_grad_output,
     const uint32_t cb_attn_output,
     /*output result*/ const uint32_t cb_u_scalar_row,
-    /*unused*/ const uint32_t cb_mat_mul_reduction,
     const uint32_t tiles_per_row,
     const uint32_t scaler_bits,
     const uint32_t cb_u_scaler_output) {
@@ -184,10 +181,8 @@ void compute_u_scalar_row(
             /* dst_reg_idx*/ accum_register);
     }
 
-    // Row-sum reduction directly on DST, same cycle as the accumulation above -- no CB
-    // roundtrip needed. Sequential FPU (mul_tiles accumulate) then SFPU (reduce) on the same
-    // DST tile within one cycle matches the existing safe pattern already used elsewhere in
-    // this file (e.g. apply_softmax_statistics_on_dst's broadcast+sub+exp sequence).
+    // FPU accumulate then SFPU reduce on the same DST tile within one tile_regs cycle (same
+    // pattern as apply_softmax_statistics_on_dst).
     sfpu_reduce_init<PoolType::SUM, DataFormat::Float32>();
     sfpu_reduce<PoolType::SUM, DataFormat::Float32, ReduceDim::REDUCE_ROW>(accum_register);
     tile_regs_commit();
