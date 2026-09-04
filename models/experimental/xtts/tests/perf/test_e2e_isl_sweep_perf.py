@@ -77,7 +77,12 @@ def _prepare_chunks(text, lang=LANG):
         for clean in (re.sub(SENTENCE_FINAL_PUNCT_RE, "", ct.strip()) for ct in chunk_texts)
     ]
     pad_to = -(-max(w.shape[1] for _, w in wrapped_chunks) // TILE) * TILE
-    chunks = [(clean, F.pad(w, (0, pad_to - w.shape[1]), value=STOP_TEXT_TOKEN)) for clean, w in wrapped_chunks]
+    # The real length rides along so decode masks the STOP padding, matching the demo. Without it
+    # a short chunk reads its padding as more text and decodes to the cap, which would benchmark a
+    # regime the demo never runs.
+    chunks = [
+        (clean, F.pad(w, (0, pad_to - w.shape[1]), value=STOP_TEXT_TOKEN), w.shape[1]) for clean, w in wrapped_chunks
+    ]
     return chunks, pad_to
 
 
@@ -143,8 +148,8 @@ def _run_chunked(tt, chunks, cond_wav, spk_wav_tt, gen, budget):
         n_codes = 0
         audio_s = 0.0
         ttfa_s = None
-        for j, (_, w) in enumerate(chunks):
-            wav_t, codes_j, perf = session.run(w)
+        for j, (_, w, real) in enumerate(chunks):
+            wav_t, codes_j, perf = session.run(w, real)
             setup_s += perf["setup_replay_s"]
             decode_s += perf["decode_replay_s"]
             vocoder_s += perf["vocoder_replay_s"]
@@ -237,7 +242,7 @@ def _run_isl_case(text_len):
             wrapped[:, -1] = STOP_TEXT_TOKEN
             result = _run_single(tt, wrapped, wav, spk_wav_tt, gen, budget)
         else:
-            for i, (clean, w) in enumerate(chunks):
+            for i, (clean, w, _real) in enumerate(chunks):
                 logger.info(f"  [{i + 1}/{len(chunks)}] {w.shape[1]:3d} tokens  {clean!r}")
             result = _run_chunked(tt, chunks, wav, spk_wav_tt, gen, budget)
     finally:

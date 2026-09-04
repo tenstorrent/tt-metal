@@ -140,7 +140,9 @@ class TtXtts(LightweightModule):
         text_dev = gpt.text_ids_to_device(text_ids)
         gpt.alloc_static_kv(max_seq)
         # Padding exists only to tile-align the prompt; keep decode from attending to it.
-        gpt.set_text_padding(NUM_LATENTS, text_real_len or text_ids.shape[1], text_ids.shape[1])
+        gpt.set_text_padding(
+            NUM_LATENTS, text_ids.shape[1] if text_real_len is None else text_real_len, text_ids.shape[1]
+        )
 
         def _setup():
             """Compute speaker emb and prefill for setup capture."""
@@ -314,7 +316,9 @@ class TtXttsTracedSession:
         ttnn.copy(text_tmp, self.text_dev)
         if text_tmp.is_allocated():
             ttnn.deallocate(text_tmp)
-        self.tt.gpt.set_text_padding(NUM_LATENTS, real_len or text_ids.shape[1], text_ids.shape[1])
+        self.tt.gpt.set_text_padding(
+            NUM_LATENTS, text_ids.shape[1] if real_len is None else real_len, text_ids.shape[1]
+        )
         t0 = time.perf_counter()
         ttnn.execute_trace(dev, self.setup_tid, blocking=True)
         setup_replay_s = time.perf_counter() - t0
