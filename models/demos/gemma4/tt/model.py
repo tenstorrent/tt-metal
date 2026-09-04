@@ -1097,6 +1097,9 @@ class Gemma4Model:
                     self._dflash_tap_idx += 1
                 else:
                     self._dflash_taps.append(ttnn.clone(hidden_states))
+                    keep = getattr(self, "_dflash_tap_keep", None)
+                    if keep and len(self._dflash_taps) > keep:
+                        self._dflash_taps.pop(0).deallocate(True)
 
         # Free the per-layer-type decode RoPE tensors shared across the loop.
         for cos_pos, sin_pos in decode_rope_presliced.values():
@@ -1312,7 +1315,7 @@ class Gemma4Model:
         """
         return {lt: self.tt_kv_cache[idx] for lt, idx in self.last_kv_layer_by_type.items()}
 
-    def dflash_capture_taps(self, layer_ids, buffers=None):
+    def dflash_capture_taps(self, layer_ids, buffers=None, keep_last=None):
         """Arm (list of layer indices) or disarm (None) dFlash tap capture.
 
         ``buffers``: optional list of persistent device tensors (one per tap
