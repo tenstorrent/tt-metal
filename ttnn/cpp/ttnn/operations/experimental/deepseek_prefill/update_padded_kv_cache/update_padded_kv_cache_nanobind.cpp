@@ -50,7 +50,8 @@ void bind_update_padded_kv_cache(nb::module_& mod) {
                     across `cluster_axis` with `sp_factor` slots per chip. Outermost dim equals
                     ``num_slots * num_layers``. Layout/dtype must match ``input``: block-float
                     (bfloat8_b/bfloat4_b) requires TILE; FP8_E4M3 requires ROW_MAJOR (Blackhole).
-                    Seq dims stay 32-aligned in both layouts.
+                    Seq dims stay 32-aligned in both layouts, and TILE layout requires the standard
+                    32x32 tile.
                 input (ttnn.Tensor): 4D input slab on device, same layout, dtype and head dim as
                     cache. Per-chip seq length = chunk_local.
                 slot_idx (int | ttnn.Tensor): scalar form: user slot in the batched prefill cache.

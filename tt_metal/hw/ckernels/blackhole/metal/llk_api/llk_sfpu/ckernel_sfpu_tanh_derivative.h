@@ -12,8 +12,6 @@
 #include "cmath_common.h"
 #include "llk_math_eltwise_sfpu_op.h"
 
-using namespace sfpi;
-
 namespace ckernel {
 namespace sfpu {
 
@@ -22,40 +20,34 @@ namespace sfpu {
 // Kept for backward compatibility. Use calculate_tanh_derivative_sech2 instead.
 template <bool APPROXIMATION_MODE, int WITH_PRECOMPUTED_TANH = 0, int ITERATIONS = 8>
 inline void calculate_tanh_derivative() {
-    vUInt l0 = l_reg[LRegs::LReg0];
-    vUInt l1 = l_reg[LRegs::LReg1];
-    vUInt l2 = l_reg[LRegs::LReg2];
+    sfpi::vLut8si si0 = l_reg[sfpi::LRegs::LReg0];
+    sfpi::vLut8si si1 = l_reg[sfpi::LRegs::LReg1];
+    sfpi::vLut8si si2 = l_reg[sfpi::LRegs::LReg2];
 
     // tanh'(x) = 1 - (tanh(x))^2
     for (int d = 0; d < ITERATIONS; d++) {
-        vFloat val = dst_reg[0];
+        sfpi::vFloat val = sfpi::dst_reg[0];
 
         if constexpr (!WITH_PRECOMPUTED_TANH) {
-            val = lut(val, l0, l1, l2);
+            val = sfpi::lut(val, si0, si1, si2);
         }
 
         val = val * (-val) + 1.0f;
-        dst_reg[0] = val;
+        sfpi::dst_reg[0] = val;
 
-        dst_reg++;
+        sfpi::dst_reg++;
     }
 
-    l_reg[LRegs::LReg0] = l0;
-    l_reg[LRegs::LReg1] = l1;
-    l_reg[LRegs::LReg2] = l2;
+    sfpi::l_reg[LRegs::LReg0] = si0;
+    sfpi::l_reg[LRegs::LReg1] = si1;
+    sfpi::l_reg[LRegs::LReg2] = si2;
 }
 
 template <bool APPROXIMATION_MODE>
 inline void tanh_derivative_init() {
-    uint imm0;
-    uint imm1;
-    uint imm2;
-    imm0 = 0x1DFF;  // 0.90625*x
-    imm1 = 0x481A;  // 0.09375*x + 0.8125
-    imm2 = 0xFF00;  // 1
-    _sfpu_load_imm16_(0, imm0);
-    _sfpu_load_imm16_(1, imm1);
-    _sfpu_load_imm16_(2, imm2);
+    sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vLut8si(0.90625f, 0.0f);
+    sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::vLut8si(0.09375f, 0.8125f);
+    sfpi::l_reg[sfpi::LRegs::LReg2] = sfpi::vLut8si(0.0f, 1.0f);
 }
 
 // =============================================================================

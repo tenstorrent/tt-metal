@@ -155,22 +155,22 @@ template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_tanh() {
     if constexpr (APPROXIMATION_MODE) {
         // SFPU microcode
-        sfpi::vUInt l0 = l_reg[sfpi::LRegs::LReg0];
-        sfpi::vUInt l1 = l_reg[sfpi::LRegs::LReg1];
-        sfpi::vUInt l2 = l_reg[sfpi::LRegs::LReg2];
+        sfpi::vLut8si si0 = l_reg[sfpi::LRegs::LReg0];
+        sfpi::vLut8si si1 = l_reg[sfpi::LRegs::LReg1];
+        sfpi::vLut8si si2 = l_reg[sfpi::LRegs::LReg2];
 
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vFloat val = sfpi::dst_reg[0];
-            val = sfpi::lut(val, l0, l1, l2);
+            val = sfpi::lut(val, si0, si1, si2);
             sfpi::dst_reg[0] = val;
 
             sfpi::dst_reg++;
         }
 
-        l_reg[sfpi::LRegs::LReg0] = l0;
-        l_reg[sfpi::LRegs::LReg1] = l1;
-        l_reg[sfpi::LRegs::LReg2] = l2;
+        l_reg[sfpi::LRegs::LReg0] = si0;
+        l_reg[sfpi::LRegs::LReg1] = si1;
+        l_reg[sfpi::LRegs::LReg2] = si2;
     } else if constexpr (is_fp32_dest_acc_en) {  // APPROXIMATION_MODE is false
         for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vFloat val = sfpi::dst_reg[0];
@@ -210,9 +210,9 @@ template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void tanh_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     if constexpr (APPROXIMATION_MODE) {
-        sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vUInt(0x1DFF);  // 0.90625*x
-        sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::vUInt(0x481A);  // 0.09375*x + 0.8125
-        sfpi::l_reg[sfpi::LRegs::LReg2] = sfpi::vUInt(0xFF00);  // 1
+        sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vLut8si(0.90625f, 0.0f);
+        sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::vLut8si(0.09375f, 0.8125f);
+        sfpi::l_reg[sfpi::LRegs::LReg2] = sfpi::vLut8si(0.0f, 1.0f);
     } else {
         if constexpr (is_fp32_dest_acc_en) {
             sfpi::vConstFloatPrgm0 = 2.0f * 1.442695f;      // 2 * log2(e) == 2 / ln(2)
