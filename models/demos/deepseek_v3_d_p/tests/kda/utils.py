@@ -331,11 +331,7 @@ def make_kimi_k3_device_case(
             mesh_shape=tuple(mesh_device.shape),
         ),
     )
-    default_program_config = kimi_k3_program_config(
-        tp_ccl_topology=(
-            ttnn.Topology.Ring if tuple(mesh_device.shape)[sequence_parallel_axis] == 1 else ttnn.Topology.Linear
-        )
-    )
+    default_program_config = kimi_k3_program_config()
     selected_program_config = program_config or default_program_config
     if summary_group_chunks is not None:
         selected_program_config = replace(

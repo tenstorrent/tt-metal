@@ -22,6 +22,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
 from models.demos.deepseek_v3_d_p.tt.kda.convolution import exchange_convolution_carry
 from models.demos.deepseek_v3_d_p.tt.kda.recurrence import KDARecurrence
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights, load_kda_weights
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.tt_transformers.tt.ccl import TT_CCL
 
 
@@ -101,7 +102,8 @@ class ttKDA:
         )
         if uses_grouped_scan and config.head_k_dim != config.head_v_dim:
             raise ValueError("grouped KDA affine prefix currently requires K == V")
-        self.tp_ccl_topology = program_config.tp_ccl_topology
+        # Throwaway Fabric2D prototype: topology is a fact of the active fabric, not a tuning knob.
+        self.tp_ccl_topology = per_axis_topology()[self.tensor_parallel_axis]
         self.gated_rms_output_dtype = program_config.gated_rms_output_dtype
         if weights is not None and state_dict is not None:
             raise ValueError("pass either constructed KDAWeights or host state_dict, not both")
@@ -369,7 +371,7 @@ class ttKDA:
             compute_kernel_config=self.output_projection_compute_config,
         )
         if self.tensor_parallel_size > 1:
-            cluster_axis = None if self.sequence_parallel_size == 1 else self.tensor_parallel_axis
+            cluster_axis = self.tensor_parallel_axis
             output = ttnn.experimental.reduce_scatter_minimal_async(
                 output,
                 dim=-1,
