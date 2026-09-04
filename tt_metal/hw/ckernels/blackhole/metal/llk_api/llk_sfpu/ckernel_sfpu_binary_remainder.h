@@ -60,12 +60,16 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(
     sfpi::vFloat r_f = sfpi::convert<sfpi::vFloat>(sfpi::abs(r), sfpi::RoundMode::Nearest);
     v_if(r_f < 0.0f) { r_f = TWO_POW_31; }
     v_endif;
-    sfpi::vMag correction = sfpi::convert<sfpi::vUInt16>(r_f * inv_b_f, sfpi::RoundMode::Nearest);
+    sfpi::vFloat correction_f = r_f * inv_b_f;
+    // Fill the multiply's dependency slot with the independent divisor split.
+    sfpi::vMag b_high = b >> 23;
+    sfpi::vMag correction = sfpi::convert<sfpi::vUInt16>(correction_f, sfpi::RoundMode::Nearest);
 
     // Compute correction * b (full 32-bit result from 24-bit multiplies)
-    sfpi::vInt tmp_lo = sfpi::fractional_mul(correction, b);
+    // Issue the low product last to separate the high products from their sum.
+    sfpi::vInt b_hi = sfpi::fractional_mul(correction, b_high);
     sfpi::vInt tmp_hi = sfpi::fractional_mul(correction, b, sfpi::FractionalHalf::High);
-    sfpi::vInt b_hi = sfpi::fractional_mul(correction, b >> 23);
+    sfpi::vInt tmp_lo = sfpi::fractional_mul(correction, b);
     sfpi::vInt tmp = tmp_lo + ((tmp_hi + b_hi) << 23);
 
     // r=INT_MIN represents the valid positive magnitude 2**31. Subtracting
@@ -76,8 +80,10 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(
 
     // Final adjustment to ensure r is in [0, b). The corrected remainder
     // cannot be INT_MIN.
+    // Reuse the subtraction for both the comparison and the adjusted result.
+    sfpi::vInt r_minus_b = r - b;
     v_if(r < 0) { r += b; }
-    v_elseif(r >= b) { r -= b; }
+    v_elseif(r_minus_b >= 0) { r = r_minus_b; }
     v_endif;
 
     return r;
@@ -103,18 +109,11 @@ sfpi_inline void calculate_remainder_int32_body(
     // Compute unsigned remainder
     sfpi::vInt r = compute_unsigned_remainder_int32(a_signed, b_signed);
 
-    // Remainder sign handling
+    // First form the truncating remainder, then adjust to the divisor's sign.
     sfpi::vInt sign = a_signed ^ b_signed;
-    v_if(r != 0) {
-        v_if(sign < 0) {
-            // When signs differ, floor(a/b) = trunc(a/b) - 1, so remainder needs adjustment
-            v_if(a_signed < 0) { r = b_signed - r; }
-            v_else { r += b_signed; }
-            v_endif;
-        }
-        v_elseif(a_signed < 0 && b_signed < 0) { r = -r; }
-        v_endif;
-    }
+    v_if(a_signed < 0) { r = -r; }
+    v_endif;
+    v_if(r != 0 && sign < 0) { r += b_signed; }
     v_endif;
 
     sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = r;

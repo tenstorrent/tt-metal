@@ -1377,13 +1377,30 @@ def test_binary_remainder_fmod_int32_min(ttnn_op, device):
     assert_equal(expected, actual)
 
 
-@pytest.mark.parametrize(
-    "ttnn_op",
-    [
-        ttnn.remainder,
-        ttnn.fmod,
-    ],
-)
+@pytest.mark.parametrize("ttnn_op", [ttnn.remainder, ttnn.fmod])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+def test_binary_remainder_fmod_int32_sign_adjustment(ttnn_op, layout, device):
+    """Cover all operand sign combinations, zero remainders, and INT_MIN divisors."""
+    numerators = torch.tensor([-(2**31), -5, -4, -1, 0, 1, 4, 5], dtype=torch.int32)
+    divisors = torch.tensor([-(2**31), -5, -4, -1, 1, 4, 5, 2**31 - 1], dtype=torch.int32)
+    # Repeat all 64 operand pairs across a full tile.
+    pairs = torch.cartesian_prod(numerators, divisors).repeat(16, 1)
+    torch_a = pairs[:, 0].reshape(32, 32).contiguous()
+    torch_b = pairs[:, 1].reshape(32, 32).contiguous()
+    input_a = ttnn.from_torch(
+        torch_a, dtype=ttnn.int32, layout=layout, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    input_b = ttnn.from_torch(
+        torch_b, dtype=ttnn.int32, layout=layout, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    # Widen to avoid PyTorch's INT_MIN % -1 trap; its remainder is representable.
+    golden_function = ttnn.get_golden_function(ttnn_op)
+    expected = golden_function(torch_a.to(torch.int64), torch_b.to(torch.int64), device=device).to(torch.int32)
+    actual = ttnn.to_torch(ttnn_op(input_a, input_b))
+    assert_equal(expected, actual)
+
+
+@pytest.mark.parametrize("ttnn_op", [ttnn.remainder, ttnn.fmod])
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize(
     "divisor", [-1, *INT32_MIN_THRESHOLD_DIVISORS, 239823930, 2**30, -(2**30), 2**31 - 1, -(2**31)]
