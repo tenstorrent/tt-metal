@@ -20,9 +20,9 @@ Everything printed to the console is also written to a single log file per run.
 Optional:
     -l <logdir>                             Directory where the log file is written
                                             (default: current directory)
-    --deployment                            Run $DEPLOYMENT_CYCLES deployment cycles with a board reset
-                                            between each. Stops before starting a new cycle
-                                            if the previous one failed. Forces ITERS=1.
+    --deployment                            Run $DEPLOYMENT_CYCLES deployment cycles, each starting with a
+                                            board reset. Stops after a cycle fails.
+                                            Forces ITERS=1.
     --continue-on-failure                   Run all $DEPLOYMENT_CYCLES cycles even if a cycle fails
                                             (implies --deployment)
     --no-eth-links                          Do not require a specific number of Ethernet links per
@@ -219,9 +219,26 @@ run_tests() {
 	return 0
 }
 
+RESET_CMD="tt-smi -glx_reset"
+
 if [ "$DEPLOYMENT" -eq 1 ]
 then
 	ITERS=1
+	MODE="deployment ($DEPLOYMENT_CYCLES cycles, $RESET_CMD before each)"
+else
+	MODE="single pass ($ITERS iterations per test)"
+fi
+
+emit_banner "DEPLOYMENT TEST RUN"
+emit "$(printf '%-12s %s' 'Date:' "$(date)")"
+emit "$(printf '%-12s %s' 'Host:' "$(hostname)")"
+emit "$(printf '%-12s %s' 'Tests:' 'Ethernet, DRAM, PCIe read, PCIe write')"
+emit "$(printf '%-12s %s' 'Mode:' "$MODE")"
+emit "$(printf '%-12s %s' 'Run log:' "$RUN_LOG")"
+emit "$RULE_HEAVY"
+
+if [ "$DEPLOYMENT" -eq 1 ]
+then
 	deployment_failures=0
 	cycles_run=0
 	depl_eth_pass=0
@@ -229,13 +246,10 @@ then
 	depl_pcie_read_pass=0
 	depl_pcie_write_pass=0
 
-	RESET_CMD="tt-smi -glx_reset"
-	emit "Run log: $RUN_LOG"
-	run_reset "Resetting boards before deployment ($RESET_CMD)..."
-
 	for cycle in $(seq 1 "$DEPLOYMENT_CYCLES")
 	do
 		emit_banner "DEPLOYMENT CYCLE $cycle/$DEPLOYMENT_CYCLES"
+		run_reset "Resetting boards ($RESET_CMD)..."
 		if run_tests
 		then
 			emit_banner "CYCLE $cycle PASSED"
@@ -248,14 +262,10 @@ then
 		depl_dram_pass=$((depl_dram_pass + last_dram_ok))
 		depl_pcie_read_pass=$((depl_pcie_read_pass + last_pcie_read_ok))
 		depl_pcie_write_pass=$((depl_pcie_write_pass + last_pcie_write_ok))
-		if [ "$cycle" -lt "$DEPLOYMENT_CYCLES" ]
+		if [ "$CONTINUE_ON_FAILURE" -eq 0 ] && [ "$deployment_failures" -gt 0 ]
 		then
-			run_reset "Resetting boards ($RESET_CMD)..."
-			if [ "$CONTINUE_ON_FAILURE" -eq 0 ] && [ "$deployment_failures" -gt 0 ]
-			then
-				emit "Stopping: cycle $cycle failed."
-				break
-			fi
+			emit "Stopping: cycle $cycle failed."
+			break
 		fi
 	done
 
@@ -278,5 +288,4 @@ then
 	exit 0
 fi
 
-emit "Run log: $RUN_LOG"
 run_tests
