@@ -45,6 +45,7 @@ Config via env:
     default 1800; scaled by the number of chips a run spans via `_adaptive_pcc_timeout` —
     set BRINGUP_MCP_TIMEOUT_MODE=fixed to restore the flat wall)
 """
+
 from __future__ import annotations
 
 import json
@@ -460,8 +461,7 @@ def _run_pcc(component: str) -> dict:
     _timeout = _adaptive_pcc_timeout(shard)
     if _timeout != _TIMEOUT:
         print(
-            f"  [timeout] {key}: PCC run wall {_timeout}s (base {_TIMEOUT}s, "
-            f"TP={_SHARD_TP} DP={_SHARD_DP})",
+            f"  [timeout] {key}: PCC run wall {_timeout}s (base {_TIMEOUT}s, " f"TP={_SHARD_TP} DP={_SHARD_DP})",
             flush=True,
         )
     rc = _cli._run_focused_pytest(model_id=_MODEL_ID, test_files=[tf], timeout_s=_timeout)
@@ -471,10 +471,7 @@ def _run_pcc(component: str) -> dict:
         # previous XML). `_classify_failure` only returns HANG when it sees that
         # phrase — without folding it in, this path is OTHER and the component is
         # re-queued forever. Same phrases the existing detector already keys off.
-        hang = (
-            f"focused pytest WALL-CLOCK BUDGET EXHAUSTED at {_timeout}s "
-            f"— killing process group (likely a hang)"
-        )
+        hang = f"focused pytest WALL-CLOCK BUDGET EXHAUSTED at {_timeout}s " f"— killing process group (likely a hang)"
         return {
             "ran": True,
             "passed": False,
