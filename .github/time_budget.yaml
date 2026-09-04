@@ -363,8 +363,8 @@ models:
     wh_llmbox_perf: 180
     wh_galaxy_perf: 55
     wh_n150: 105
-    # +25 for Qwen3.5-9B e2e tests (wh_n300). Prior sum was 50/60; 60 would fail load-test-matrix.
-    wh_n300: 75
+    # +20 for Qwen3.5-9B e2e tests (wh_n300), measured 16 min. Prior sum was 50/60.
+    wh_n300: 70
     bh_p150: 33
     bh_p300: 8
     bh_quietbox_2: 120 # raised for cherry-picked Qwen3.6-27B teacher-forced accuracy (70); needs #tt-metal-infra sign-off
@@ -395,8 +395,8 @@ models:
     wh_llmbox_perf: 58
     wh_n150: 75
     wh_n150_civ2: 12
-    # +33 for Qwen3.5-9B unit tests (wh_n300). Prior sum was 23/33; 33 would fail load-test-matrix.
-    wh_n300: 56
+    # +30 for Qwen3.5-9B unit tests (wh_n300), measured 26 min. Prior sum was 23/33.
+    wh_n300: 53
     bh_p150: 50 # raised for cherry-picked Qwen3.5-9B P150 unit tests (25); needs #tt-metal-infra sign-off
     bh_p300: 30
     bh_quietbox_2: 21

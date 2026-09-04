@@ -508,10 +508,9 @@
   model: qwen3.5-9b
   model_family: Qwen
   skus:
-    # 25 is the tier-3 budget cap, not a measured time -- land a measured value + slack after the
-    # first green scheduled run.
+    # Measured 16 min on the first green run (actions/runs/33774115934); 20 leaves ~25% slack.
     wh_n300:
-      timeout: 25
+      timeout: 20
       tier: 3
       release_ready: false
   owner_id: U08HL8X1ECD # Aniruddha Tupe
