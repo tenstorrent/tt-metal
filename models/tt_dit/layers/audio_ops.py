@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import math
+import os
 from typing import Sequence
 
 import torch
@@ -23,13 +24,25 @@ from ..utils.tensor import local_device_to_torch
 # Per-mesh cache of constant zeros buffers, keyed by id(mesh_device).
 _ZEROS_CACHE: dict = {}
 
+# TODO: Cleanup and centralize logging.
 # Dedup noisy construction / fallback warnings across every call in this process.
 _ONCE_WARNINGS: set = set()
+_ENABLE_MM_LOG = os.environ.get("TT_DIT_ENABLE_MM_LOG", "true").lower() in ("1", "true")
+
+
+def log_warning(message):
+    if _ENABLE_MM_LOG:
+        logger.warning(message)
+
+
+def log_info(message):
+    if _ENABLE_MM_LOG:
+        logger.info(message)
 
 
 def _warn_once(key, message: str) -> None:
     if key not in _ONCE_WARNINGS:
-        logger.warning(message)
+        log_warning(message)
         _ONCE_WARNINGS.add(key)
 
 
@@ -380,7 +393,7 @@ def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache):
         # all -- slower, but bit-equal to the conv1d path in fp32, so purely an availability fallback.
         # `exc` is None when MAC is a cached winner tried before anything else has failed this call.
         reason = f" ({exc})" if exc is not None else ""
-        logger.warning(f"depthwise conv1d failed at T_pad={T_pad}, C={C}, K={K}, stride={stride}; MAC fallback{reason}")
+        log_warning(f"depthwise conv1d failed at T_pad={T_pad}, C={C}, K={K}, stride={stride}; MAC fallback{reason}")
         return _depthwise_tap_mac(x_BTC, taps, stride, T_out=T_out, dtype=dtype)
 
     # Which candidate fits depends only on (C, K, stride), so it's stable across calls: cache the
