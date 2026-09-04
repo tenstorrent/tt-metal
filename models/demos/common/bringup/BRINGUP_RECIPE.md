@@ -312,6 +312,14 @@ re-resolves every backtick-quoted `path:line` in the logs, the recipe, the READM
 own docstrings. Run it as part of every doc gate.
 
 It is not busywork. On its first run it caught five wrong `path:line` refs in this document and
+
+**Know its limit.** The `CITES` list *content*-checks (a needle must be on that line); the document
+scan only **range**-checks (the file must be long enough). So a citation that is wrong but in range is
+reported `resolved`. That is not hypothetical: one session found **21 of its own citations wrong and in
+range** — eight carried a constant +209 offset from reading line numbers out of a `cat -n` spanning two
+files, and seventeen were interpolated from a table-of-contents grep instead of being read. Put every
+load-bearing reference in `CITES`, including references *into the recipe itself*, and never take a line
+number from anything but the file it belongs to.
 five in P0's own output, and it went on finding more in every later phase. **An unverified `path:line` is
 worse than no citation, because it reads as authoritative.** Two things it must handle: abbreviated
 refs (a bare basename continuing an earlier full citation), and *citation shadowing* — once the
@@ -367,7 +375,11 @@ correct kernel can actually reach as *investigate*, never *pass*.
 ### 2.2 The method that works: gate on the gap to the **noise floor**
 
 For each gate, compute the floor in torch: **round inputs and weights to the device dtype, do all
-remaining math in fp32, and PCC that against the fp32 reference.** That number is
+remaining math in fp32, and PCC that against the fp32 reference.** For a multi-stage module,
+quantise the module's **inputs and weights only, not its internal intermediates** — the device does
+store bf16 intermediates, so quantising those too lowers the floor and flatters every ratio it gates.
+Take the conservative reading, and whichever you take, state it in the gate block, because the choice
+moves every number. That figure is
 implementation-independent, distribution-stable, and is the best any correct kernel can do.
 
 Then record three things and gate on the **gap**:
@@ -395,17 +407,51 @@ what a floor is.
 
 ### 2.3 The limit of the floor model: it does not describe a **fused** kernel's interior
 
+#### 2.3.1 An error-ratio budget is NOT portable across dtypes — gate on the attributed residual
+
+A fixed-error stage breaks the ratio metric, and the failure runs the *wrong way*: it penalises the
+**more accurate** configuration. Measured on one attention block, same code, two storage dtypes:
+
+| dtype | measured PCC | floor | err ratio | floor error | kernel excess | kernel share |
+|---|---|---|---|---|---|---|
+| bf8_b | 0.9997080 | 0.9998657 | **2.17x** | 0.0001343 | 0.0001577 | 54.0% |
+| bf16 | 0.9998275 | 0.9999854 | **11.82x** | 0.0000146 | 0.0001579 | 91.5% |
+
+bf16 has the higher absolute PCC and the five-times-worse ratio. The reason is arithmetic: the fused
+kernel contributes a roughly **fixed absolute** error (0.0001577 vs 0.0001579 — the same number), while
+`err_ratio = (1 - measured)/(1 - floor)` shrinks its denominator as the storage dtype improves. Same
+slack, smaller divisor, inflated ratio.
+
+**So a single block-level ratio budget across dtypes is unsatisfiable by any correct implementation.**
+Two ways out, and prefer the second:
+
+1. State the budget **per dtype**, measured.
+2. **Gate on the fused-kernel-attributed residual.** Because `1 - PCC` behaves like a variance,
+   independent error sources add: measure the fused kernel standalone, subtract its excess and the
+   floor error from the block's total, and require the remainder — everything you actually wrote — to
+   sit near 1x. On the block above that residual is **0.70-1.10x at both dtypes**, i.e. portable,
+   while the raw ratio is not. The additive model is not hand-waving: floor error plus kernel excess
+   predicts the block PCC to 5-6 decimal places (bf8_b at S=512: predicted 0.9997079, measured
+   0.9997080).
+
+This applies to every gate whose module contains a fused kernel — attention, the decoder layer, and
+the full model all contain the same SDPA. Do not carry one 8x number across them.
+
+
 The floor model above is only valid for ops whose interior arithmetic you can mirror. It breaks on
 fused kernels, and you must expect that rather than debug it:
 
 `ttnn.transformer.scaled_dot_product_attention` alone (bf16 Q/K/V, GQA 32/8, `head_dim` 128)
-measures **0.9999204** against a modelled floor of **0.9999989** — a **71x** gap. Sweeping
+measures **0.9999204** against a modelled floor of **0.9999989** — a **71x (measured on iid standard-normal Q/K; the same op measures 27-29x on real post-RoPE activations, which are correlated across the head dim — the *floor* is distribution-stable but a fused kernel's *ratio* is not, so state the distribution whenever you quote one)** gap. Sweeping
 `q_chunk`/`k_chunk` over {32,128,256} moves it by under 4%; `exp_approx_mode` not at all. And that
 one term is the *entire* block-level gap of `G-ATTN`: every stage implemented in this package
 measures **1.00–1.47x** of its own floor. (The SP ring op is better but not free: **7.98x**.)
 
 So do not read a large block-level gap as "our code is wrong" before isolating the fused kernel.
-The sanctioned handling: **separate error budgets per stage**, measured rather than assumed, plus a
+The sanctioned handling: **separate error budgets per stage**, each floor computed from **that stage's own quantised inputs**
+(a floor propagated through the chain carries the upstream stages' rounding and is meaningless — it
+produced a reported 0.01x for a pure layout op, and **any ratio below 1.0 is a broken floor, not a
+kernel beating arithmetic**)**, measured rather than assumed, plus a
 **permanent standalone probe** of the fused kernel so its slack is *named and tracked*. A budget
 that lumps the kernel's 71x in with our stages' 1.5x can absorb a real regression without anyone
 noticing.
@@ -479,7 +525,12 @@ Two related facts, so you do not go looking:
 - **`bfloat16` is exact only up to 256.** A positional read-back probe using integer position ids at
   `max_seq_len=384` failed with *greatest relative difference 1/257*: **257 is not representable in
   bf16 and rounds to 256**, so 64 of 384 rows "mismatched" while the cache was perfectly correct.
-  Any probe that encodes indices, positions or ids as tensor *values* must keep every value ≤ 256,
+encode positions as values that are **exactly representable in the cache's own dtype**, and measure
+that ceiling rather than assuming it. Measured on this box with ideal per-block exponents: the first
+inexact integer is **129 for `bfloat8_b`** and 257 for `bfloat16`. An earlier draft of this recipe gave
+the bf16 figure as a blanket rule, and a `G-KV` probe built to it **failed on a correct cache** —
+the recipe's own warning ("a failing probe is not evidence of a failing module") firing against the
+recipe's own rule. Past the ceiling, split the id across lanes.
   or split the id across lanes. (The fix here: 4 chunks of 64 with the head id in its own lane
   block, which also covers more `kv_actual` offsets than a single 3×128 sweep would.) **A failing probe is
   not evidence of a failing module until the probe's own numerics are checked.**
@@ -1211,7 +1262,7 @@ o_proj) vs an in-test **fp32** torch reference, identical random weights, seq_le
 (`torch.triu(full((S,S), -inf), diagonal=1)`) and `repeat_interleave` the KV heads by the GQA group
 — copy the reference from `models/demos/gpt_oss_d_p/tests/unit/test_attention_vs_ref.py::_torch_attention`,
 removing the sink column and the sliding term. Negative control: Q/K weights loaded *without* the
-Meta `reverse_permute` (measured **0.9475** — note how *high* a badly broken variant scores, which
+Meta `reverse_permute` (measured **0.9475 (*caveat: not reproducible with the obvious construction — unswizzling both Q and K through the real loader measures **0.51174**. The original figure is either a different variant or a different reference space and the draft did not say which; treat 0.5 as the number to expect and your own control as the authority*)** — note how *high* a badly broken variant scores, which
 is the whole argument of §2.1). Assert as an invariant that only Q and K are rotated.
 
 **Expect the block to sit further off its floor than its parts, and attribute it before debugging

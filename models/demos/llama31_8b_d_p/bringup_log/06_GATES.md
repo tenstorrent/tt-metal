@@ -13,6 +13,9 @@ entry naming the blocker) · `NOT-RUN` (needs the reason). A gate with no raw lo
 | G-MESH | P5.1 | `MeshConfig` arithmetic + refusals; `CCLManager` builds and allocates its semaphores once | exact asserts | 16/16 tests pass; `shard_size(4096)=512`, `shard_size(14336)=1792`; grid **(12,10)**, CCL offset **(11,0)**; semaphores **6/4/2/2 = 14**, unchanged after 128 barrier cycles; 4/4 sub-axis-TP shapes refused | PASS | 2026-09-04 | `raw/G-MESH_20260904T085727Z.log` |
 | G-RMS | P5.2 | plain RMSNorm vs an fp32 torch reference, `(1,1)` | PCC >= 0.9999; gap to the floor recorded | random weights **0.9999957 / 0.9999958 / 0.9999957** (floor 0.9999973/0.9999973/0.9999972 -> **1.56 / 1.57 / 1.54x**); real layer-0 weights **0.9999971** x3 (floor 0.9999986 -> **2.11 / 2.13 / 2.12x**) | PASS | 2026-09-04 | `raw/G-RMS_20260904T090144Z.log` |
 | G-ROPE | P5.3 | llama3-scaled RoPE + the Meta convention, `(1,1)` | PCC >= 0.999; control must collapse | **0.9999969 / 0.9999964 / 0.9999959** (floor 0.9999983/0.9999982/0.9999980 -> **1.76 / 1.95 / 2.08x**); control **0.01367**; tables bit-identical to the test's own Meta tables | PASS | 2026-09-04 | `raw/G-ROPE_20260904T091040Z.log` |
+| G-MLP | P5.4 | dense SwiGLU (`down(silu(gate)*up)`), `(1,1)` | PCC >= 0.999 @bf8_b, >= 0.9995 @bf16, **<= 3x floor** at each | bf8_b **0.9999133 / 0.9999144 / 0.9999144** (floor 0.9999213/0.9999221/0.9999222 -> **1.10 / 1.10 / 1.10x**); bf16 **0.9999851 / 0.9999852 / 0.9999852** (floor 0.9999929 -> **2.11 / 2.10 / 2.09x**); control **0.64715 / 0.64722** | PASS | 2026-09-04 | `raw/G-MLP_20260904T093653Z.log` |
+| G-ATTN | P5.5 | GQA + full RoPE + causal SDPA + `o_proj`, `(1,1)` | PCC >= 0.999; own stages <= 3x floor; block <= 8x | bf8_b block **0.9997364 / 0.9997080 / 0.9996723** (raw **2.21 / 2.17 / 2.22x**); bf16 block **0.9998463 / 0.9998275 / 0.9998029** (raw **12.32 / 11.82 / 12.17x**, SDPA-attributed residual **1.10 / 1.01 / 0.70x**); stages **1.00-2.50x**; fused SDPA **26.7-28.6x** in-pipeline, **52.8-55.0x** standalone; control **0.51174** | PASS-WITH-DEVIATION (`DEC-042`) | 2026-09-04 | `raw/G-ATTN_20260904T095359Z.log` |
+| G-KV | P5.6 | KV cache **primitive**: write correctness, position map, no collateral writes | PCC >= 0.99 @bf8_b, <= 3x floor; positional read-back **bit-exact** | bf8_b worst-of-8-heads K **0.9999743** / V **0.9999752** (**1.00x** the floor at every head and both seq lens); bf16 **0.9999986** (**1.00x**); 128 positions x 4 `kv_actual` offsets **bit-identical**; pad tail + 3 other (user, layer) slots **exactly zero**; bf8_b costs **17.8x** on K / **17.7x** on V vs bf16 | PASS | 2026-09-04 | `raw/G-KV_20260904T100312Z.log` |
 
 ```
 STATUS after P0: gates PASS=1 FAIL=0 DEVIATION=0 BLOCKED=0 | next: P1 (reference)
@@ -591,3 +594,383 @@ What P5.4 can rely on, and what it must not assume:
 7. **Run `pre-commit run --files ...` before recording any `path:line`** — and note `DEC-034`: the
    `prefer-expect-error` hook is a `pygrep`, so it fires on the fixture's name in comments and
    docstrings too, not only on a call.
+
+---
+
+### G-MLP — dense SwiGLU vs an fp32 torch reference
+- **Command:** `pytest models/demos/llama31_8b_d_p/tests/unit/test_mlp_vs_ref.py -x -q`
+- **Mesh / device:** `(1,1)`, Blackhole. TP=1, so the module's TP all-reduce tail
+  (`bringup_log/04_CCL_PLAN.md` §5 row 2) is **not executed** — see "what this does NOT prove".
+- **Input distribution:** `x` **standard normal**, `[1, 1, S, 4096]` with `S ∈ {32, 512, 4096}`;
+  the three projection weights `randn * 0.02`, the scale both templates use
+  (`models/demos/gpt_oss_d_p/tests/unit/test_attention_vs_ref.py:169`,
+  `models/demos/minimax_m3/tests/unit/test_kv_cache_write_vs_ref.py:98`). At that scale `gate` and
+  `up` land at std ~1.3, so SiLU is exercised across the curved part of its range rather than in a
+  locally-linear tail — stated because the distribution must never be chosen to pass.
+- **Reference dtype policy:** fp32 weights, fp32 activations, fp32 arithmetic,
+  `torch.nn.functional.silu`. Identical random weights drive both sides.
+- **Noise floor (computed):** per dtype, and per recipe §2.2's literal definition — quantise the
+  **inputs and weights** to the device dtype, all remaining math in fp32. bf8_b weights are
+  quantised in the `[1, 1, in, out]` orientation the device stores them in, because `bfloat8_b`
+  shares an exponent per tile and quantising HF's `[out, in]` would block along the wrong axis.
+  The bf16 *intermediates* the device also stores are deliberately **not** quantised: that is the
+  conservative reading, since quantising them would lower the floor and flatter every ratio below.
+  - bf8_b: **0.9999213 / 0.9999221 / 0.9999222** at S = 32 / 512 / 4096
+  - bf16: **0.9999929** at all three
+- **Threshold:** PCC >= **0.999** @bf8_b and >= **0.9995** @bf16, **and <= 3x the floor at each
+  dtype** (`BRINGUP_RECIPE.md:1769`). Unlike `G-RMS`, Appendix A states a ratio bound for this gate,
+  so the ratio is **asserted**, not merely recorded.
+- **Measured:** 14/14 tests pass.
+  - bf8_b: **0.9999133 / 0.9999144 / 0.9999144** -> **1.10x / 1.10x / 1.10x** the floor
+  - bf16: **0.9999851 / 0.9999852 / 0.9999852** -> **2.11x / 2.10x / 2.09x** the floor
+  - Both dtypes run and both are recorded, as `BRINGUP_RECIPE.md:1769` requires. bf8_b clears its
+    threshold comfortably, so `DEC-021`'s "keep bf16 if bf8_b misses" contingency is not needed.
+  - PCC is flat in sequence length to 7 decimal places, which is what a token-pointwise block
+    should do; the S=32 bf8_b value differs only because a 32-row activation is one tile tall.
+- **Negative control:** SiLU applied to `up` instead of `gate` — the mistake that proves the fused
+  unary is on the argument the code claims — scores **0.64715** (bf8_b) / **0.64722** (bf16). The
+  recipe measured **0.6462** for the same mistake. Driven by swapping the `gate_proj` / `up_proj`
+  entries of the state dict, so the control runs the **real module** and not a hand-copied device
+  path that could drift from it.
+- **Two A/Bs, recorded as measurements (direction asserted, not a fitted threshold):**
+  1. **`fp32_dest_acc_en`, recipe §2.4 reproduced on this box, at module level:**
+     bf8_b `True` **0.9999144** (1.10x) vs `False` **0.9925127** (**96.13x** the floor);
+     bf16 `True` **0.9999852** (2.10x) vs `False` **0.9917324** (**1167.80x**). The recipe's table
+     predicts 96x and 1168x for the bare `ttnn.linear` — matched to three significant figures
+     through a three-matmul module. This is the single most valuable number in the gate: an
+     inherited `fp32_dest_acc_en=False` from
+     `models/demos/gpt_oss_d_p/tt/attention/config.py:71` would still have cleared a 0.99 gate at
+     bf8_b (0.99251) and even the 0.999 bf8_b threshold is what rejects it.
+  2. **The SwiGLU spelling** (`DEC-039`): fused `input_tensor_a_activations=[SILU]` vs a separate
+     `ttnn.silu` are **numerically identical** at both dtypes (0.9999144 / 0.9999852 either way).
+     The fused keyword is bound (`ttnn/cpp/ttnn/operations/eltwise/binary/binary_nanobind.cpp:1469`)
+     but **absent from `ttnn.mul.__doc__`**, so availability had to be established by calling it.
+- **Refusals (counted with the controls):** an empty `state_dict` with no `tensor_cache_path` raises
+  `ValueError` rather than building three `None` projections (Appendix B's "cache-only build
+  silently wrong"), and `scatter_output=True` raises `NotImplementedError` rather than half-wiring
+  residual scheme B (`DEC-038`). Both via the repo-root `expect_error` fixture (`conftest.py:948`),
+  because the `prefer-expect-error` hook forbids the alternative in `tests/`.
+- **Verdict:** **PASS**
+- **Deviations:** none to the gate. Two new decisions: `DEC-038` (the `scatter_output` refusal) and
+  `DEC-039` (the fused-SiLU spelling, with its measurement).
+- **What this does NOT prove:**
+  - **The TP collective.** At `(1,1)` `tp == 1` and `MLP.__call__`'s all-reduce tail is skipped
+    entirely, so `bringup_log/04_CCL_PLAN.md` §5 row 2 has still never executed in this package.
+    `G-TP-PARITY` (P8) owns it. This is the recipe's own "a gate that passes on a mesh the
+    deployment never uses" caveat (`BRINGUP_RECIPE.md:576-578`) applied to a collective rather than
+    to a head count.
+  - **Column/row-parallel sharding.** At TP=1 `column_parallel` and `row_parallel` produce the same
+    (unsharded) tensor, so this gate cannot tell the two mappers apart. `G-TP-PARITY` and
+    `G-WEIGHTS` (P8 ext) own that.
+  - **The cache-only build.** `tensor_cache_path` is exercised only as the *absence* that makes the
+    weightless build refuse; no tilized weight is written or reloaded here. `G-WEIGHTS` (P6.2) owns
+    the round trip.
+  - **Real weights.** All numbers above are on random weights. A trained `gate_proj` is not
+    standard-normal, and `G-RMS` measured that the floor itself moves between random and real
+    weights; for the MLP the real-weight comparison arrives with `G-LAYER` / `G-MODEL`.
+
+---
+
+### G-ATTN — the GQA attention block vs an fp32 torch reference
+- **Command:** `pytest models/demos/llama31_8b_d_p/tests/unit/test_attention_vs_ref.py -x -q`
+- **Mesh / device:** `(1,1)`, Blackhole (compute grid **(12,10)**). TP=1, so the module's TP
+  all-reduce tail is not executed — `bringup_log/04_CCL_PLAN.md` §5 row 1 is P8's.
+- **Input distribution:** `x` **standard normal** `[1, 1, S, 4096]` with `S ∈ {128, 512, 2048}`; the
+  four projection weights `randn * 0.02`, the scale both templates use
+  (`models/demos/gpt_oss_d_p/tests/unit/test_attention_vs_ref.py:169`). The standalone SDPA probe
+  uses iid standard-normal Q/K/V. `reset_seeds`.
+- **Reference dtype policy:** fp32 weights, fp32 activations, fp32 arithmetic. The causal mask is
+  built **explicitly** (`torch.triu(full((S,S), -inf), diagonal=1)`) and the KV heads are
+  `repeat_interleave`d by the GQA group — the device does neither, because
+  `ttnn.transformer.scaled_dot_product_attention` is causal and group-aware internally
+  (`nqh >= nkv && nqh % nkv == 0`,
+  `ttnn/cpp/ttnn/operations/transformer/sdpa/device/sdpa_device_operation.cpp:98`). cos/sin come
+  from **one** frequency set (`tt/rope.py::llama3_freqs`): the reference takes the HF pair, the
+  device takes the Meta pair via `build_prefill_rope`, so the test cannot silently compare two
+  different RoPEs.
+- **Noise floor (computed):** per dtype, and — for the stage budgets — **locally per stage**. A
+  chained floor (quantise once, propagate) carries upstream rounding and inflates `1 - floor`; it
+  put `concat_heads`, a pure layout op, at **0.01x**, which is not a kernel beating arithmetic but a
+  broken floor. Each stage's floor is now computed from that stage's own quantised inputs.
+  - block floor: bf8_b **0.9998805 / 0.9998657 / 0.9998521**; bf16 **0.9999875 / 0.9999854 / 0.9999838**
+- **Threshold:** PCC >= **0.999**; stages this package implements **<= 3x**; block **<= 8x**
+  (`BRINGUP_RECIPE.md:1770`). See **Deviations** for how the block budget is applied.
+- **Measured:** 17/17 tests pass.
+
+  | dtype | S | block PCC | raw ratio | SDPA-attributed residual |
+  |---|---|---|---|---|
+  | bf8_b | 128 | 0.9997364 | 2.21x | 1.03x |
+  | bf8_b | 512 | 0.9997080 | 2.17x | 1.00x |
+  | bf8_b | 2048 | 0.9996723 | 2.22x | 0.96x |
+  | bf16 | 128 | 0.9998463 | 12.32x | 1.10x |
+  | bf16 | 512 | 0.9998275 | 11.82x | 1.01x |
+  | bf16 | 2048 | 0.9998029 | 12.17x | 0.70x |
+
+  Per-stage, **stage-isolated** (each stage fed the reference's own quantised input, so the number
+  is the stage and not the accumulation), at S=512:
+
+  | stage | bf8_b PCC / ratio | bf16 PCC / ratio |
+  |---|---|---|
+  | `qkv_proj_q` | 0.9999728 / **1.06x** | 0.9999958 / **1.52x** |
+  | `qkv_proj_k` | 0.9999727 / **1.06x** | 0.9999958 / **1.51x** |
+  | `qkv_proj_v` | 0.9999726 / **1.06x** | 0.9999958 / **1.52x** |
+  | `rope_q` | 0.9999954 / **2.50x** | 0.9999954 / **2.50x** |
+  | `rope_k` | 0.9999954 / **2.48x** | 0.9999954 / **2.48x** |
+  | `concat_heads` | 0.9999986 / **1.00x** | 0.9999986 / **1.00x** |
+  | `o_proj` | 0.9999727 / **1.06x** | 0.9999958 / **1.52x** |
+  | `sdpa_fused` (**not** in the 3x budget) | 0.9998361 / **26.72x** | 0.9998361 / **26.72x** |
+
+  Every hand-written stage is **1.00x-2.50x** of its floor; the recipe's own run measured
+  1.00-1.47x for the same set. The RoPE stages are dtype-independent, as they must be — they touch
+  no weight.
+- **The fused kernel, isolated and tracked (recipe §2.3):**
+  - **standalone probe**, iid bf16 Q/K/V, GQA 32/8, head_dim 128: PCC **0.9998309 / 0.9998127 /
+    0.9998087** against modelled floors 0.9999969 / 0.9999966 / 0.9999964 — **54.86x / 54.95x /
+    52.83x**. The recipe measured 0.9999204 at 71x; same order, same conclusion. Kept permanently
+    so the slack stays a named term.
+  - **in-pipeline**, on the block's own post-RoPE tensors: **26.7x-28.6x** (lower than the iid probe
+    because real post-RoPE Q/K are correlated across the head dim).
+  - **the attribution is quantitative, not rhetorical.** `1 - PCC` is variance-like, so independent
+    error sources add to first order. floor error + the kernel's own excess predicts the block PCC
+    to 5-6 decimals: bf8_b S=512 predicted **0.9997079** vs measured **0.9997080**; bf16 S=512
+    predicted **0.9998277** vs measured **0.9998275**. Subtracting it leaves a residual of
+    **0.70x-1.10x** — this package's code, sitting *at* its floor.
+- **Negative control:** Q/K weights reaching the device **without** the Meta `reverse_permute`
+  scores **0.51174** (bf8_b) / **0.51178** (bf16). Constructed by pre-applying
+  `models/tt_transformers/tt/load_checkpoints.py:895` `permute`, the exact inverse of the loader's
+  `reverse_permute` (`:891`), so the control runs the **real loader** rather than bypassing it.
+  **This is a discrepancy with the recipe, and in the safe direction:** `BRINGUP_RECIPE.md:1214`
+  expects ~**0.9475** for the same mistake, i.e. a control that barely fires; measured here it
+  collapses to 0.51. At head_dim 128 with full rotary the unswizzled weight scrambles 128 channels
+  per head, and both Q *and* K are unswizzled — which may be the difference from whatever variant
+  produced 0.9475. Either way the control discriminates, and the recipe's warning about *how high*
+  a broken variant can score is unaffected: 0.9475 would still have cleared a 0.99 gate.
+- **Invariants and refusals (counted with the controls), all fired:**
+  1. **Only Q and K are rotated.** Scored against a reference that also rotates V: **0.71785**,
+     versus **0.9998275** for the correct reference. A V-rotating reference must and does fit worse.
+  2. **A derived SDPA program grid is refused at construction.** On this (12,10) box the CCL offset
+     is `grid.x - 1 = 11` and the pinned SDPA grid is 8, so `11 >= 8` holds; `ProgramConfig(sdpa_grid_x=12)`
+     raises, naming
+     `ttnn/cpp/ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_device_operation.cpp:421`.
+     This is the landmine that otherwise passes **every** single-card gate and fails only at SP > 1.
+  3. **`cached_len > 0` on the dense path is refused** (`NotImplementedError` naming the
+     chunk-position-aware SDPA), rather than running an `is_causal` mask that is off by `cached_len`
+     and silently wrong.
+  4. **A weightless build is refused** — no `state_dict` and no `tensor_cache_path` raises rather
+     than building four `None` projections.
+- **Verdict:** **PASS-WITH-DEVIATION** — `DEC-042`.
+- **Deviations:**
+  - **`DEC-042`** — the 8x block budget is asserted raw at **bf8_b** (where it holds at 2.17-2.22x)
+    and, at both dtypes, on the **SDPA-attributed residual** (0.70-1.10x against the same 8x). The
+    raw bf16 ratio, 11.8-12.3x, is recorded and not asserted. The arithmetic in `DEC-042` shows an
+    8x raw budget at bf16 is unreachable for **any** correct implementation given this kernel: it
+    would require the kernel at <= ~17x its own floor, and the recipe's own §2.3 measurement of it
+    is 71x. Note the direction of the paradox — bf16 has the *higher* absolute PCC and the *worse*
+    ratio, because a smaller floor error divides the same fixed slack.
+  - **`DEC-040`** — `ProgramConfig` delegates the compute-kernel config to `tt/config.py` instead of
+    holding the outline's four local fields.
+  - **`DEC-041`** — attention's `apply_reduce_scatter` refuses (scheme B seam), and is deliberately
+    untested because nothing in this iteration calls it.
+  - **`DEC-043`** — the head-split op's Python keyword is `num_heads`, not `num_q_heads` as
+    `DEC-019` and `03_OUTLINE.md` §2.7 both spell it.
+- **What this does NOT prove:**
+  - **The TP collective, or any sharding.** At `(1,1)` `tp == 1`: `apply_allreduce` returns its
+    input untouched, and `column_parallel` / `row_parallel` produce the same unsharded tensor, so
+    this gate cannot tell the two mappers apart. `G-TP-PARITY` and `G-WEIGHTS` (P8 ext) own that.
+  - **The GQA head->column map.** At TP=1 all 32 Q and all 8 KV heads live on one chip, so the
+    per-chip `nq=4 / nkv=1` configuration the deployment actually runs is never built here. The
+    group *arithmetic* is exercised (SDPA sees 32/8, group 4); the *distribution* is not.
+  - **The KV-cache write.** `kv_cache=None` throughout — `G-KV` owns the primitive and `G-KV-TP8`
+    the model -> cache path.
+  - **The indexed RoPE.** `apply_rope`'s `kv_actual_global` branch is wired and never taken here;
+    `G-CHUNK` (P7) owns it.
+  - **Real weights.** All numbers are on random weights; `G-LAYER` / `G-MODEL` bring the real ones.
+  - **Long context.** The longest gated sequence is 2048, well inside
+    `original_max_position_embeddings` = 8192, so the *scaled* band of the llama3 RoPE tables is
+    never exercised on device (the band structure is proved on the host by `G-ROPE`).
+
+---
+
+### G-KV — the KV-cache primitive: write, read back, and write nothing else
+- **Command:** `pytest models/demos/llama31_8b_d_p/tests/unit/test_kv_cache_vs_ref.py -x -q`
+- **Mesh / device:** `(1,1)`, Blackhole. `sp = 1`, so the **block-cyclic layout degenerates to the
+  identity** (local row == global position) and no inverse reorder is needed for read-back — which
+  is also precisely why this gate cannot test the reorder.
+- **Input distribution:** two payloads, deliberately different.
+  - *PCC half:* realistic **post-RoPE K** and **raw V** — standard-normal `x [S, 4096]`,
+    `randn * 0.02` k/v projections, the package's own llama3 RoPE tables — at `S ∈ {128, 512}`,
+    all 8 KV heads, one per layer slot. A cache round trip should be measured on the values it will
+    actually hold.
+  - *Bit-exact half:* an integer payload where **every row names its own global position**, plus a
+    head-id lane block and a chunk-id lane block. 4 chunks x 32 tokens = 128 positions at
+    `kv_actual ∈ {0, 32, 64, 96}`.
+- **Reference dtype policy:** fp32 reference; only the tensor the device *stores* is quantised, for
+  the floor.
+- **Noise floor (computed):** `quantize_like_device(ref, cache_dtype)` against the fp32 reference,
+  per head. The write is a copy, not arithmetic, so the device should land *on* it — it does.
+  - bf8_b: **0.9999743**-**0.9999754** (K), **0.9999752**-**0.9999753** (V)
+  - bf16: **0.9999986**
+- **Threshold:** PCC >= **0.99** at the cache dtype and **<= 3x its floor**
+  (`BRINGUP_RECIPE.md:1771`); the layout claims on **bit-equality** (`torch.equal`, `rtol=atol=0`),
+  never PCC (§2.5).
+- **Measured:** 15/15 tests pass.
+  - **Round trip, worst of 8 heads:** bf8_b `S=128` K **0.9999743** / V **0.9999753**; `S=512`
+    K **0.9999754** / V **0.9999752**. bf16 **0.9999986** throughout. **Every head at both seq
+    lengths measures a ratio of 1.00x** — exactly at its floor, as a pure copy must.
+  - **Positional read-back, bit-exact:** 128 rows across 4 chunks, `torch.equal` at both dtypes,
+    and re-checked after **every** chunk write, so "an earlier chunk is unchanged after a later
+    chunk's write" is asserted 10 times (chunks 0..k for each k) rather than once.
+  - **No collateral writes, bit-exact:** writing `(user 0, layer 1)` of a 2-user x 2-layer cache
+    leaves the **352-position pad tail** exactly zero and all **3** other `(user, layer)` slots
+    exactly zero, at both dtypes. Target `(0, 1)` rather than `(0, 0)` on purpose, so a
+    `slot = user * num_layers + layer` bug would show.
+  - **Geometry, asserted exactly:** per-chip `(64, 1, 384, 128)` bf8_b TILE for 2 users x 32 layers,
+    DRAM `NdShardSpec` `[1, 1, 32, 128]`, and `NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK == 32` — the
+    producer's block geometry, kept so P10 can reuse its packed-GQA read-back
+    (`BRINGUP_RECIPE.md:1241-1243`).
+  - **The dtype delta `DEC-021` owed:** bf8_b K **0.9999756** / V **0.9999757** versus bf16
+    **0.9999986** / **0.9999986** — **17.8x** the error on K and **17.7x** on V, for half the bytes
+    (128 vs 256 per token per head). Measured, not assumed; `DEC-021` stands.
+- **Negative controls / refusals — five, all fired:**
+  1. **The bit-exactness assertion itself is the control for the position map**, and it *caught a
+     real failure*: the first version of the probe, built to `BRINGUP_RECIPE.md:1260-1262`'s stated
+     "<= 256" ceiling, failed at bf8_b on chunk 2's **odd** rows with `max|delta| = 1.0`. The cache
+     was correct; the probe was not. Measured, the first inexact integer is **129** at bf8_b and
+     **257** at bf16 — §2.5's ceiling is the **bf16** ceiling, and the cache dtype is bf8_b.
+     `DEC-044`. This is §2.5's own warning ("a failing probe is not evidence of a failing module
+     until the probe's own numerics are checked") firing against §2.5's own rule.
+  2. `write_kv_chunk` with `batch = 2` raises — the op ignores the leading dim and would silently
+     write only `slot_idx`.
+  3. `slot_idx` out of range raises (a silent OOB write into another user's cache).
+  4. `layer_idx` out of range raises.
+  5. A non-tile-aligned `kv_actual` raises (breaks the block-cyclic per-device write); and
+     `max_seq_len = 48` at `sp = 1` raises because `seq_local` would not be tile-aligned.
+- **Verdict:** **PASS**
+- **Deviations:** `DEC-044` (probe ceiling 128, not 256 — the probe changed, no threshold did) and
+  `DEC-045` (`expect_error`'s `message` is matched as a **regex**, not the substring its docstring
+  describes, so `"multiple of TILE_SIZE*sp"` silently never matched; the matcher now uses a
+  metachar-free substring).
+- **What this does NOT prove** — stated here rather than left for the `PASS` to imply:
+  - **The model -> cache path.** At `(1,1)` the model emits all 8 KV heads on one chip while the
+    per-chip cache holds exactly **one**, and the write op refuses the mismatch outright
+    (`TT_FATAL: cache and input num-heads dim must match`,
+    `ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/update_padded_kv_cache/device/update_padded_kv_cache_device_operation.cpp:230`).
+    This gate therefore drives the op **one head at a time**, into its own layer slot. `G-KV-TP8`
+    (P8) owns the real path; `07_RISKS.md` R-001 is the standing gap. `bringup_log/00_MODEL_CARD.md`
+    §4.3 states the general rule: a gate that passes on a mesh the deployment never uses can be
+    testing a configuration the model cannot produce.
+  - **The block-cyclic reorder.** At `sp = 1` it is the identity. `G-KV-TP8` and `G-MESH-KV` own it.
+  - **The head -> mesh-column map.** There is one column here. That map is a layout claim and must
+    be gated on bit-equality at TP=8 — recipe §2.5 measured a *rotated* map still scoring PCC
+    0.99890, which is why `G-KV-TP8` has a rotated-column control.
+  - **Cache reads.** Nothing here reads the cache back *for attention*; `attention/prefill.py`
+    refuses `cached_len > 0` and `G-CHUNK-ATTN` (P8) owns the read path.
+  - **Positions past 128.** The bit-exact probe stops at 127 (`DEC-044`). A deployment chunk is far
+    longer, so `G-KV-TP8`'s probe must split the position id across lane blocks rather than raise
+    the ceiling.
+
+---
+
+```
+STATUS after P5.4-P5.6: gates PASS=10 FAIL=0 DEVIATION=1 BLOCKED=0 | next: P6 (layer and model assembly)
+Per-phase regression gate: whole package suite **93 passed, 0 failed**
+(`raw/P5-REGRESSION_20260904T100738Z.log`)
+Citations after P5.6: **330/330 verified, 0 mismatched; 629/629 doc refs resolved**, exit 0
+(`raw/G-CITE_20260904T101355Z.log`). CITES grew 279 -> 330: every load-bearing P5.4-P5.6 ref was
+promoted into the content-checked list, because the doc-ref pass only range-checks (R-016).
+Open DECs needing review: DEC-004 (chunk size deferred to P7), DEC-012 (checkpoint loader moves to
+ModelArgs in P6.2), DEC-013/DEC-018 (import gpt_oss_d_p/utils; no utils/ package),
+DEC-021 (bf8_b KV dtype — the owed delta is now MEASURED at G-KV: 17.8x on K, 17.7x on V, for half
+the bytes; the decision stands), DEC-025 (residual scheme A), DEC-026 (barrier depth 2 — G-RACE's
+first move if it fails), DEC-027 (descriptor not yet pinned; G-FABRIC-MATRIX picks it),
+DEC-029 (four dead CCLManager members dropped), DEC-030/DEC-040 (compute-kernel config home; P6.2
+may want to own it), DEC-032 (derive_head_dim moves into ModelArgs at P6.2),
+DEC-038/DEC-041 (the scatter_output seams refuse; P8 owns scheme B),
+DEC-042/R-015 (**the one that needs a decision, not just review**: G-ATTN's 8x block budget is
+unreachable at bf16 for any correct implementation given the fused SDPA kernel; P6's G-LAYER (8x)
+and G-MODEL (8x + 4x step) contain the same kernel and will meet the same wall),
+DEC-044/R-013 (bf8_b's exact-integer ceiling is 128, not the recipe's 256 — P8/P10 probes must
+split the id across lanes), DEC-045/R-014 (expect_error's message is a regex)
+Closed this phase: R-009 (the dense/bias-free/full-RoPE adaptation is now measured, G-ATTN),
+R-007 (write half — the KV write path is bit-exact at head_dim 128), R-012 (kit half — the recipe
+now carries the raw-log .gitignore guidance)
+```
+
+**STOPPED HERE, ON A GATE BOUNDARY.** Supersedes the end-of-P5.3 stop note above.
+**P0-P4 and all of P5 (P5.1-P5.6) are complete and gated; P6 (layer and model assembly) is next.**
+This session's scope was P5.4, P5.5 and P5.6 only — `tt/layer.py` and `tt/model.py` are deliberately
+not written.
+
+All six P5 gates are recorded: `G-MESH`, `G-RMS`, `G-ROPE`, `G-MLP`, `G-KV` are `PASS` and `G-ATTN`
+is `PASS-WITH-DEVIATION` (`DEC-042`), so `BRINGUP_RECIPE.md:1267-1269`'s "all of G-MESH, G-RMS,
+G-ROPE, G-MLP, G-ATTN, G-KV must be PASS before P6" is satisfied under §1.4's definition of the
+verdicts.
+
+Device code now exists: `tt/{config,ccl,rms_norm,rope,mlp}.py` and
+`tt/attention/{__init__,config,weights,operations,prefill,kv_cache,dense_sp}.py`, with
+`tests/unit/{test_mesh_config,test_ccl_semaphores,test_rms_norm_vs_ref,test_rope_vs_ref,
+test_mlp_vs_ref,test_attention_vs_ref,test_kv_cache_vs_ref}.py`.
+
+What P6 can rely on, and what it must not assume:
+
+1. **No collective has ever executed in this package.** Every P5 gate ran at `(1,1)`, where
+   `tp == 1` and both module tails (`MLP.__call__`, `attention/operations.apply_allreduce`) return
+   their input untouched. `bringup_log/04_CCL_PLAN.md` §5 rows 1-2 are still unexercised, and so are
+   `column_parallel` / `row_parallel` as *distinct* mappers. `tt/layer.py` must not read a P5 `PASS`
+   as evidence that the TP path works.
+2. **`Attention` takes an `AttentionConfig`, not the raw `hf` dict** — the one deliberate exception
+   to the module signature convention (`bringup_log/03_OUTLINE.md` §5). `tt/layer.py` builds that
+   config **once** and shares it across all 32 layers: there is no per-layer `dataclasses.replace`,
+   because Llama has no sliding-window alternation.
+3. **`ProgramConfig.get_compute_kernel_config` now takes `mesh_device`** (`DEC-040`), and
+   `ProgramConfig.validate_grid(mesh_device)` runs at `Attention.__init__`. Build the program config
+   once per model, not per layer.
+4. **`attention_forward` refuses `cached_len > 0`** and `MLP`/`operations.apply_reduce_scatter`
+   refuse `scatter_output=True`. All three refusals are load-bearing, not stubs: P6 must not route
+   around them.
+5. **The KV cache is proved as a primitive only.** `write_kv_chunk` is bit-exact at `head_dim = 128`
+   and writes nothing it should not, but the **model -> cache** path has never run — at TP=1 the op
+   refuses the model's 8 local KV heads outright. If `tt/model.py` wires a cache write, its first
+   real test is P8's `G-KV-TP8`.
+6. **`G-LAYER` and `G-MODEL` will hit `R-015`.** Both blocks contain
+   `ttnn.transformer.scaled_dot_product_attention`, whose slack accounts for the whole of `G-ATTN`'s
+   block gap (26.7-28.6x in-pipeline, 52.8-55.0x standalone). `G-MODEL`'s **4x per-layer step** is
+   the tighter constraint and needs the same attribution `DEC-042` sets out — decide it before
+   measuring, not after.
+7. **Stage floors must be computed locally.** A floor propagated through a quantised chain carries
+   the upstream stages' rounding and produces ratios below 1.0 (measured: `concat_heads` at 0.01x),
+   which is a broken floor, not a kernel beating arithmetic. `G-ATTN`'s stage helper is the pattern.
+8. **Never read a `path:line` out of a multi-file `cat -n`** (R-016), and pick refusal-message
+   substrings with no regex metacharacters (`DEC-045`).
+
+---
+
+### Re-run after the citation corrections (end of P5.6)
+
+Every `path:line` in this session's modules and log entries was re-resolved and **21 were wrong**
+(R-016): four refs into `models/demos/gpt_oss_d_p/tt/attention/operations.py` carried a **+209 line
+offset** — they had been read out of a `cat -n weights.py operations.py` whose numbering ran across
+both files — and seventeen refs into `BRINGUP_RECIPE.md` had been **interpolated from the section
+headings rather than read**, e.g. Appendix A's `G-ATTN` row cited as `:1731` when it is at `:1770`.
+The verifier's doc-ref pass reported all of the in-range ones as `resolved`, because that pass
+checks the line *number*, not the line's *content*.
+
+All are corrected, and `CITES` now content-checks **every** recipe reference this package makes
+(`RCP` entries, 359 total citations, up from 279 at the end of P5.3) so a future recipe edit that
+shifts a section produces a `MISMATCH` rather than a silent lie.
+
+Because the modules changed after the first gate runs — docstrings and comments only, no executable
+line — all three gates and the regression were **re-run** so the recorded evidence matches the tree:
+
+| Gate | Result | Raw log |
+|---|---|---|
+| `G-MLP` | 14 passed, 0 failed | `raw/G-MLP_20260904T101937Z.log` |
+| `G-ATTN` | 17 passed, 0 failed | `raw/G-ATTN_20260904T102107Z.log` |
+| `G-KV` | 15 passed, 0 failed | `raw/G-KV_20260904T102206Z.log` |
+| per-phase regression | **93 passed, 0 failed** | `raw/P5-REGRESSION_20260904T102256Z.log` |
+| citations | 359/359 verified, 631/631 doc refs resolved, exit 0 | `raw/G-CITE_20260904T102606Z.log` |
+
+The measured numbers are identical to the first runs in every case; the earlier raw logs
+(`G-MLP_20260904T093653Z`, `G-ATTN_20260904T095359Z`, `G-KV_20260904T100312Z`) are kept because the
+detail blocks above quote them, and because §0.2 rule 4 is right that a log records what actually
+ran. **These re-run logs are the ones the verdicts rest on.**

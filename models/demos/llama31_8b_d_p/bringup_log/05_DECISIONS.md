@@ -1383,3 +1383,358 @@ something stubbed; or find that the reference and the repo disagree.
 - **Revisit if:** the kit adds guidance on this, or a root `.gitignore` exception lands.
 - **Blast radius:** the size of the package's commits (14 logs, ~180 KB today, all well under the
   500 KB hook limit); `G-CLEAN`'s file inventory, which gains one `.gitignore`; nothing numeric.
+
+---
+
+### DEC-038 — `MLP(scatter_output=True)` refuses rather than running scheme B's tail
+- **Phase / module:** P5.4 / `tt/mlp.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** `BRINGUP_RECIPE.md:992-994` requires the `scatter_output` seam wired "from day one",
+  and in the same sentence requires any module that "cannot honour it" to **refuse** loudly. For the
+  MLP specifically both halves are technically available — `MeshConfig.reduce_scatter` exists
+  (`tt/config.py`) and the template implements the branch
+  (`models/demos/minimax_m3/tt/dense_mlp.py:100-109`) — so the question is not capability.
+- **Question:** wire the reduce-scatter branch (it is six lines and it would run), or accept the
+  parameter and raise on `True`?
+- **Options considered:**
+  1. **Implement the branch.** `MLP` would return `[1,1,S_loc,512]` on `scatter_output=True`. Cheap,
+     matches the template exactly, and it would go **untested**: `G-MLP` runs at `(1,1)` where
+     `tp == 1` and the whole tail is skipped, so the branch would ship as code that has never
+     executed on this box — the same "dormant branch" state that produced the
+     `rms_norm_post_all_gather` double-`stats` bug (`DEC-031`).
+  2. **Accept and refuse.** The parameter exists, the derived value is named
+     (`_SCHEME_A_SCATTER_OUTPUT`), and `True` raises `NotImplementedError` naming `DEC-025` and P8.
+  3. **Do not accept the parameter at all.** Cleanest today, and it makes the scheme-B switch a
+     signature change in every module rather than a flag — exactly what the recipe says to avoid.
+- **Choice:** option 2.
+- **Why:** a `True` that reduce-scatters *only in the MLP* is not scheme B, it is a mixed residual —
+  attention still all-reduces to full emb (`bringup_log/04_CCL_PLAN.md` §5 rows 1 and 3), the norms
+  still expect full emb, so the layer's second residual add would put a 512-wide tensor against a
+  4096-wide stream. That is the "half-wired scheme" the recipe's refusal clause is about. The
+  refusal is *testable* today (`test_mlp_refuses_scatter_output`), whereas the branch is not, and a
+  refusal that fires is better evidence than a branch that has never run.
+- **Evidence:** `BRINGUP_RECIPE.md:992-994` (wire the seam, refuse what you cannot honour);
+  `DEC-025` (scheme A, and `scatter_output` is its seam); `bringup_log/04_CCL_PLAN.md` §5 row 4
+  ("scheme B seam; **refuses** until P8"); `models/demos/minimax_m3/tt/dense_mlp.py:100-109` (the
+  branch not taken); `DEC-031` (what a dormant copied branch cost the last time).
+- **Confidence:** high.
+- **Falsifier:** P8 enabling scheme B and finding that the MLP was the only module that needed
+  changing — i.e. that the mixed-residual objection was wrong. The other modules' tails
+  (`bringup_log/04_CCL_PLAN.md` §5 rows 1, 3, 6) are what make it right.
+- **Revisit if:** P8 wires scheme B, or long-context DRAM pressure forces it earlier
+  (`DEC-025`'s own falsifier).
+- **Blast radius:** `tt/mlp.py`, `tests/unit/test_mlp_vs_ref.py`; the same decision is owed for
+  `attention/operations.apply_reduce_scatter` in P5.5 (`DEC-041`).
+
+---
+
+### DEC-039 — SwiGLU spelling: the fused `input_tensor_a_activations` unary, measured bit-for-bit against `ttnn.silu`
+- **Phase / module:** P5.4 / `tt/mlp.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** `BRINGUP_RECIPE.md:1142-1143` offers two spellings for the activation — "`ttnn.silu(gate) * up`,
+  or `ttnn.mul(..., input_tensor_a_activations=[ttnn.UnaryOpType.SILU])` **if available — check, and
+  log which**".
+- **Question:** is the fused unary available on this build, and if so does it cost accuracy?
+- **Options considered:**
+  1. **`ttnn.silu(gate)` then `ttnn.mul`.** Two ops, one extra full-size `[1,1,S,1792]` intermediate.
+  2. **Fused:** `ttnn.mul(gate, up, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])`. One op.
+- **Checked, because "if available" needed an answer rather than an assumption:** the keyword is
+  **bound and working** — `ttnn.mul(a, b, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])`
+  returns a tensor on this box — but it is **not in `ttnn.mul.__doc__`**. `multiply` is registered
+  through `bind_binary_operation_with_fast_approx`
+  (`ttnn/cpp/ttnn/operations/eltwise/binary/binary_nanobind.cpp:2082`), whose argument list does
+  include `input_tensor_a_activations` (`:1469`) while its generated docstring lists only
+  `fast_and_approximate_mode`, `memory_config` and `output_tensor`. So `hasattr`/docstring probing
+  says "unavailable" and the call says "available"; only the call is right.
+  `ttnn.UnaryOpType.SILU` exists. The alias `activations=` also accepts it but applies the unary to
+  the **output**, which is a different function — do not reach for it.
+- **Choice:** the **fused** form, default `fused_silu=True`, with the separate spelling kept as an
+  argument so `G-MLP` measures both.
+- **Why:** measured on this box at seq 512, the two spellings are **numerically identical** —
+  bf8_b `0.9999144` vs `0.9999144`, bf16 `0.9999852` vs `0.9999852`, both at 1.10x / 2.10x of the
+  same floor — so the choice is free on accuracy and the fused form wins on op count and on one
+  fewer live `[1,1,S,1792]` intermediate at 4096 tokens. Recording it as a `DEC` is the point: the
+  recipe asked which, and "they are the same number" is the answer.
+- **Evidence:** `raw/G-MLP_20260904T093653Z.log` (`[G-MLP] SiLU spelling` lines, both dtypes);
+  `ttnn/cpp/ttnn/operations/eltwise/binary/binary_nanobind.cpp:1469` (the binding), `:2082`
+  (`multiply` registered through that binder); `BRINGUP_RECIPE.md:1142-1143`.
+- **Confidence:** high — this is a measurement, not a judgement.
+- **Falsifier:** a shape or dtype where the two spellings diverge, or a `ttnn` release that drops
+  the undocumented keyword (which is the real risk of depending on it — hence the retained
+  `fused_silu=False` path rather than deleting it).
+- **Revisit if:** the keyword is removed or documented differently, or a perf pass measures the op
+  count difference and finds it does not matter.
+- **Blast radius:** `tt/mlp.py`'s `__call__` only. The negative control
+  (`test_mlp_silu_on_wrong_branch_negative_control`) is what keeps either spelling honest about
+  *which* argument the unary lands on.
+
+---
+
+### DEC-040 — `ProgramConfig` delegates the compute-kernel config instead of holding its own four fields
+- **Phase / module:** P5.5 / `tt/attention/config.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** `bringup_log/03_OUTLINE.md` §2.7 pins `ProgramConfig` with four compute fields
+  (`math_fidelity: str = "HiFi4"`, `math_approx_mode`, `fp32_dest_acc_en`, `packer_l1_acc`) and a
+  no-argument `get_compute_kernel_config(self)`, copying
+  `models/demos/gpt_oss_d_p/tt/attention/config.py:69-72` and `:102-108`. That is a **second**
+  definition of the thing `DEC-030` made single.
+- **Question:** keep the outline's four local fields, or call
+  `tt/config.py::default_compute_kernel_config`?
+- **Options considered:**
+  1. **The outline's signature verbatim.** Matches the template and needs no device handle. It also
+     recreates precisely the condition `BRINGUP_RECIPE.md:1032-1035` blames: "Give it one, reachable
+     home here rather than burying it inside an attention config — the only in-repo precedent
+     buries it, which is plausibly how one package ended up with `fp32_dest_acc_en=False` in one
+     place and the correct value in another."
+  2. **Delegate entirely**, no local fields. Then `G-ATTN` cannot A/B §2.4's block-level 38.7x /
+     107.6x claim, which the recipe asks for ("A/B it in-suite so a regression shows up as a number
+     rather than a mystery").
+  3. **Delegate, keeping `fp32_dest_acc_en` as the one local field**, and take `mesh_device` as an
+     argument because the factory needs the arch.
+- **Choice:** option 3. `get_compute_kernel_config(mesh_device)` returns
+  `default_compute_kernel_config(mesh_device, fp32_dest_acc_en=self.fp32_dest_acc_en)`.
+- **Why:** three of the four fields had exactly one correct value and no gate needed them variable,
+  so holding them locally could only ever create a second place for them to be wrong. The fourth is
+  the one recipe §2.4 says to measure, so it stays — as a measurement knob with a docstring saying
+  so, the same shape `tt/rms_norm.py` and `tt/mlp.py` already use. The signature change
+  (`self` -> `self, mesh_device`) is the cost, and it is paid once at each call site inside
+  `attention/prefill.py`.
+- **Evidence:** `BRINGUP_RECIPE.md:1032-1035` (one reachable home, and the diagnosis of the
+  precedent); `models/demos/gpt_oss_d_p/tt/attention/config.py:102-108` (the buried copy);
+  `DEC-030`; `bringup_log/03_OUTLINE.md` §2.7 (the signature deviated from); the `G-MLP` A/B
+  measuring 96.13x / 1167.80x for `False` on this box, which is why the knob is worth keeping.
+- **Confidence:** high.
+- **Falsifier:** a per-op need for a different `math_fidelity` inside attention — e.g. a
+  measurement showing LoFi is enough for the SDPA QK matmul — which would want a second factory
+  argument rather than four resurrected fields.
+- **Revisit if:** P6.2's `ModelArgs` takes over the compute-config home (`DEC-030`'s own open
+  question), or a perf pass wants per-op fidelity.
+- **Blast radius:** `tt/attention/config.py`, `tt/attention/prefill.py`,
+  `tests/unit/test_attention_vs_ref.py`; `bringup_log/03_OUTLINE.md` §2.7's stated signature is now
+  out of date and this entry is the record of why.
+
+---
+
+### DEC-041 — attention's `apply_reduce_scatter` refuses, for the same reason the MLP's does
+- **Phase / module:** P5.5 / `tt/attention/operations.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** `bringup_log/04_CCL_PLAN.md` §5 row 3 lists this call site as "scheme B seam;
+  **refuses** until P8", and `bringup_log/03_OUTLINE.md` §2.7 lists the function in
+  `operations.py`'s interface.
+- **Question:** same question as `DEC-038`, for the other module that closes with a TP collective.
+- **Choice:** the function exists, is named in `operations.py`, and raises `NotImplementedError`
+  naming `DEC-025`, P8 and the CCL-plan row.
+- **Why:** identical to `DEC-038` — a reduce-scatter in attention while the norms, the residual add
+  and the MLP all still work in full emb is a mixed residual, not scheme B. Recording it as its own
+  entry rather than folding it into `DEC-038` because the blast radii differ: the attention seam is
+  also what P8's scheme-B work has to touch alongside the ring path, and `04_CCL_PLAN.md` numbers
+  the two call sites separately (rows 3 and 4).
+- **Evidence:** `DEC-038`; `DEC-025`; `bringup_log/04_CCL_PLAN.md` §5 rows 3-4;
+  `BRINGUP_RECIPE.md:992-994`.
+- **Confidence:** high.
+- **Falsifier:** as `DEC-038` — P8 finding that a per-module switch is coherent after all.
+- **Revisit if:** P8 wires scheme B.
+- **Blast radius:** `tt/attention/operations.py`. Note that unlike the MLP's, this refusal is
+  **not** covered by a test: nothing calls it, so a test would be asserting that a function this
+  package never invokes raises. Recorded here rather than papered over with a test that proves
+  nothing about the model.
+
+---
+
+### DEC-042 — `G-ATTN`'s 8x block budget: hold it at bf8_b, gate bf16 on the SDPA-attributed residual
+- **Phase / module:** P5.5 / `tests/unit/test_attention_vs_ref.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** `BRINGUP_RECIPE.md:1770` sets `G-ATTN` at "PCC >= 0.999; own stages <= 3x floor,
+  block <= 8x". Measured on this box, the block clears 0.999 at both dtypes and clears 8x at
+  **bf8_b** but **not** at bf16:
+
+  | dtype | S | block PCC | block floor | raw ratio | 8x? |
+  |---|---|---|---|---|---|
+  | bf8_b | 128 / 512 / 2048 | 0.9997364 / 0.9997080 / 0.9996723 | 0.9998805 / 0.9998657 / 0.9998521 | **2.21x / 2.17x / 2.22x** | yes |
+  | bf16 | 128 / 512 / 2048 | 0.9998463 / 0.9998275 / 0.9998029 | 0.9999875 / 0.9999854 / 0.9999838 | **12.32x / 11.82x / 12.17x** | **no** |
+
+  Note the direction: bf16 has the **higher** absolute PCC and the **worse** ratio, because a
+  smaller floor error makes the same fixed slack a larger multiple.
+- **Question:** is the module wrong, is the threshold wrong, or is the *metric* being applied to
+  something the recipe says it does not describe?
+- **The attribution, measured rather than argued.** Recipe §2.3: "the floor model ... does not
+  describe a **fused** kernel's interior ... So do not read a large block-level gap as 'our code is
+  wrong' before isolating the fused kernel." Isolated in the same test, on the same tensors:
+  - every stage this package implements sits at **1.00x-2.50x** of its own **locally computed**
+    floor, at both dtypes (recipe's own run: 1.00-1.47x);
+  - `ttnn.transformer.scaled_dot_product_attention` alone sits at **26.7x-28.6x** of its modelled
+    floor on the block's own post-RoPE tensors, and at **52.8x-55.0x** on iid standard-normal Q/K/V
+    (recipe's own run: 71x);
+  - `1 - PCC` is variance-like, so independent error sources add to first order. Subtracting the
+    fused kernel's own excess from the block error predicts the block PCC to 5-6 decimal places —
+    bf8_b S=512: predicted **0.9997079**, measured **0.9997080**; bf16 S=512: predicted
+    **0.9998277**, measured **0.9998275** — and leaves an **SDPA-attributed residual ratio of
+    0.70x-1.10x** across all six cases. That residual is this package's code, and it is *at* the
+    floor.
+
+  So the excess is **entirely** the fused kernel, quantitatively, not by assertion. And the 8x block
+  budget is arithmetically unreachable at bf16 given that kernel: 8x would need the kernel's excess
+  under `7 x 1.46e-5 = 1.02e-4`, i.e. the kernel at <= ~17x its own floor. It measures 26.7x here
+  and the recipe measured 71x. **A block budget of 8x at bf16 is inconsistent with the recipe's own
+  §2.3 measurement of the same kernel** — the two numbers cannot both be met by any correct
+  implementation.
+- **Options considered:**
+  1. **Assert 8x at both dtypes.** The gate FAILs, which under §0 rule 1 stops the whole bring-up,
+     on a module whose every hand-written stage is at its floor. Wrong answer to a metric problem.
+  2. **Raise the budget to 13x.** Fitting a threshold to a measurement already seen — the recipe's
+     own named error, "the same error with a friendlier face" (`BRINGUP_RECIPE.md:1815-1817`).
+  3. **Drop bf16 from the gate.** Loses the measurement the recipe asks for and hides the finding.
+  4. **Keep 0.999 and the 3x stage budgets at both dtypes; assert the raw 8x where it holds
+     (bf8_b, the package's weight dtype); and at both dtypes assert the SDPA-attributed
+     residual <= 8x**, logging the raw ratio, the kernel's excess and the additive prediction every
+     run.
+- **Choice:** option 4.
+- **Why:** it is the recipe's own sanctioned handling in §2.3 — "separate error budgets per stage,
+  measured rather than assumed, plus a permanent standalone probe of the fused kernel so its slack
+  is named and tracked" — expressed as an assertion instead of a paragraph. Nothing is loosened: the
+  residual assertion is **tighter** than the raw 8x (measured 0.70x-1.10x against a budget of 8x),
+  so a real regression in any stage this package wrote still trips it at bf16, which is exactly what
+  §2.3 warns a lumped budget would absorb. The raw ratio is recorded at both dtypes so the finding
+  is visible rather than defined away.
+- **Verdict recorded:** `PASS-WITH-DEVIATION`, because the literal Appendix A wording is not met at
+  bf16 and this entry is the deviation.
+- **Evidence:** `raw/G-ATTN_20260904T095359Z.log` (all six block cases with their attribution
+  lines, the eight stage lines per dtype, and the three standalone-probe lines);
+  `BRINGUP_RECIPE.md:1770` (the threshold), `:396-412` (§2.3, the fused-kernel caveat and the
+  sanctioned handling), `:1799-1802` (do not refit a threshold after seeing the number).
+- **Confidence:** high on the attribution (it is a measurement that predicts to 5 decimals); medium
+  on the remedy being what the recipe's author would choose — the alternative reading is that the
+  8x budget was only ever meant for bf8_b and the bf16 row simply is not gated on a ratio, which is
+  the same thing this entry does with the residual assertion added.
+- **Falsifier:** the SDPA kernel improving (or being replaced) such that the raw bf16 ratio drops
+  under 8x — at which point `RAW_BLOCK_BUDGET_APPLIES[bfloat16]` should flip to `True` and this
+  entry retires. Equally falsifiable the other way: if the residual ratio ever exceeds ~2x while the
+  kernel's excess is unchanged, the additive attribution is wrong and the block gap is not the
+  kernel's.
+- **Revisit if:** the SDPA kernel changes; `G-LAYER` / `G-MODEL` (whose budgets are 8x and 4x) hit
+  the same wall, in which case this is a recipe-wide issue rather than a `G-ATTN` one.
+- **Blast radius:** `tests/unit/test_attention_vs_ref.py`'s block assertions;
+  `bringup_log/06_GATES.md`'s `G-ATTN` verdict; the same arithmetic will apply to `G-LAYER` and
+  `G-MODEL` in P6, since both contain this kernel.
+
+---
+
+### DEC-043 — Correction to `DEC-019`'s evidence: the head-split op's keyword is `num_heads`, not `num_q_heads`
+- **Phase / module:** P5.5 / `tt/attention/operations.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** implementing `split_qkv_heads_prefill` from `DEC-019` /
+  `bringup_log/03_OUTLINE.md` §2.7, both of which spell the call as
+  `ttnn.experimental.nlp_create_qkv_heads(q, ttnn.concat([k, v], dim=3), num_q_heads=4, num_kv_heads=1, transpose_k_heads=False)`.
+- **What is wrong:** there is no `num_q_heads` keyword. The binding is
+  `nb::arg("input")`, `nb::arg("input_kv")`, `nb::arg("num_heads")`, `nb::arg("num_kv_heads")`,
+  `nb::arg("transpose_k_heads")`, `nb::arg("kv_tied")`, `nb::arg("memory_config")`,
+  `nb::arg("output_tensors")` —
+  `ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads/nlp_create_qkv_heads_nanobind.cpp:27-35`.
+  The C++ *function* parameter is named `num_q_heads`
+  (`.../nlp_create_qkv_heads.cpp:12`), which is where the outline's spelling came from; the Python
+  keyword is not. Written as documented it is a `TypeError` on the first call — loud, so it cost
+  minutes rather than a session, but it means `DEC-019`'s "evidence" was never executed.
+- **Choice:** call it `num_heads=`, keep everything else `DEC-019` decided (the two-tensor
+  `(q, cat(k, v))` form, `transpose_k_heads=False`), and record the correction rather than editing
+  `DEC-019` — the log is append-only.
+- **Why this is worth an entry at all:** `DEC-019` presents the call as verified against a
+  `path:line`, and the citation is to the C++ overload rather than to the binding. A citation that
+  resolves to a real line and still does not support the claim is the failure mode §1.6 exists to
+  catch, and `verify_citations.py` cannot catch this one — the line exists and contains the string.
+- **Evidence:** `ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads/nlp_create_qkv_heads_nanobind.cpp:30`
+  (`nb::arg("num_heads")`); `ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads/nlp_create_qkv_heads.cpp:12`
+  (the C++ parameter that is named `num_q_heads`); `raw/G-ATTN_20260904T095359Z.log` (the working
+  call, in the head-split stage lines).
+- **Confidence:** high — the call runs.
+- **Falsifier:** none; it is an API fact.
+- **Revisit if:** the op's binding is renamed.
+- **Blast radius:** `tt/attention/operations.py`; `bringup_log/03_OUTLINE.md` §2.7's stated call;
+  `DEC-019`'s evidence line.
+
+---
+
+### DEC-044 — The probe's exact-integer ceiling is **128** at `bfloat8_b`, not §2.5's 256
+- **Phase / module:** P5.6 / `tests/unit/test_kv_cache_vs_ref.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** `G-KV`'s bit-exact positional read-back, built to `BRINGUP_RECIPE.md:1260-1262`'s
+  stated rule — "encode positions as values **<= 256** or bf16 rounds 257 to 256 and the probe fails
+  on a correct cache (§2.5)" — with 4 chunks of 64 covering positions 0..255. It **failed** at
+  `bfloat8_b`: `chunk 2 is not bit-identical ... (max|delta| = 1.0); rows [1, 3, 5, 7, 9, 11, 13, 15]`
+  — the **odd** positions of the 128..191 range.
+- **Question:** is the cache wrong, or is the probe?
+- **The probe. Measured, not reasoned:** quantising the integers 0..511 through
+  `quantize_like_device` with each 16-lane block held **constant** (so the shared exponent is
+  already ideal) gives a first inexact integer of **129** at `bfloat8_b` and **257** at
+  `bfloat16`. §2.5's 256 is the **bf16** ceiling; `bfloat8_b`'s is **128**. Above it, bf8_b's
+  7-bit-per-block magnitude resolution is 2, so odd integers round to their even neighbour —
+  exactly the observed `max|delta| = 1.0` on odd rows.
+- **Why this is not a footnote:** §2.5's rule is stated in the same recipe that mandates
+  `bfloat8_b` as the KV cache dtype (P5.6, "every threshold in Appendix A assumes it"), so a probe
+  written to the stated ceiling is guaranteed to fail on the very dtype the gate is supposed to
+  measure. And it fails in the shape §2.5 itself warns about — "A failing probe is **not** evidence
+  of a failing module until the probe's own numerics are checked". The trap caught its own author's
+  fix.
+- **Options considered:**
+  1. **Run the bit-exact probe only at bf16.** Leaves the deployment dtype's addressing ungated.
+  2. **Split the position id across lanes** (§2.5's other suggested fix): low 7 bits in one lane
+     block, high bits in another. Works, and doubles the probe's own arithmetic — more code that can
+     be wrong in a test whose whole job is to be obviously right.
+  3. **Halve the chunk: 4 chunks of 32 = 128 positions, ids 0..127.** Keeps 4 distinct `kv_actual`
+     offsets {0, 32, 64, 96} (all tile-aligned), keeps the whole probe inside **both** dtypes'
+     exact range, and needs no encoding.
+- **Choice:** option 3, with the per-dtype ceiling recorded in the test as a named, measured
+  constant (`EXACT_INTEGER_CEILING = {bfloat8_b: 128, bfloat16: 256}`) and asserted against the
+  payload, so the next person to widen the probe is stopped by an assertion rather than by a
+  mysterious `max|delta| = 1.0`.
+- **What it costs:** the probe covers 128 global positions instead of 256. The pad tail grows from
+  128 to 256 untouched positions, so the "no collateral writes" half gets *stronger*, and the
+  `kv_actual` coverage (4 offsets) is unchanged — which is the constraint §2.5 actually cared about.
+- **Evidence:** `raw/G-KV_20260904T100312Z.log` (both dtypes bit-identical, ceiling logged per
+  dtype); the measurement above, run on this box; `BRINGUP_RECIPE.md:1260-1262` (the rule as
+  stated), `:477-487` (§2.5).
+- **Confidence:** high — it is a measured property of the dtype.
+- **Falsifier:** a `bfloat8_b` implementation with 8-bit block mantissas, which would move the
+  ceiling to 256 and make §2.5's rule correct for both dtypes.
+- **Revisit if:** the probe needs to cover more than 128 positions (then option 2, split lanes), or
+  `G-KV-TP8` needs global positions past 128 — which it will, at `(1,8)` with a real chunk size, and
+  it must use the split-lane encoding rather than raising the ceiling.
+- **Blast radius:** `tests/unit/test_kv_cache_vs_ref.py`; `G-KV-TP8`'s probe design (P8);
+  `G-KV-TABLE`'s (P10) — every bit-exact probe over a bf8_b tensor in this package.
+
+---
+
+### DEC-045 — `expect_error`'s `message` is a regex, so refusal messages are matched on a metachar-free substring
+- **Phase / module:** P5.6 / `tests/unit/test_kv_cache_vs_ref.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** `test_kv_cache_refuses_unaligned_capacity` failed with
+  `AssertionError: Regex pattern did not match` while the assertion it was checking had fired
+  correctly with the expected text. The message asked for was
+  `"must be a multiple of TILE_SIZE*sp"`, which as a **regex** means `TILE_SIZ` followed by zero or
+  more `E` followed by `sp` — and therefore does not match the literal string it was copied from.
+- **Question:** change the module's message, or the test's matcher?
+- **What is actually going on:** the repo-root `expect_error` fixture (`conftest.py:948`) documents
+  its argument as prose — "`message` must appear in the real device error text (the TT_FATAL line),
+  since that's what the triager matches" — which reads as a substring check. It is implemented as a
+  regex match, so any assertion message containing `*`, `(`, `)`, `[`, `.` or `+` is a live trap.
+  Assertion and `TT_FATAL` text is full of parenthesised values (`kv_actual (16) must be...`), so
+  this will recur for every refusal test in this package.
+- **Choice:** match on a **metachar-free substring** of the real message
+  (`"seq_local must be tile-aligned"`), and note the reason at the call site. The module's message
+  is not changed — it is the more useful text for a human reader, and rewording device-facing errors
+  to suit a test matcher is the wrong direction.
+- **Why not escape it instead:** `re.escape` at the call site would work, and would look like
+  ordinary noise to the next reader; a one-line comment naming the cause is what stops the same
+  hour being spent twice. The convention for this package is therefore: **pick a substring with no
+  regex metacharacters**, which every message in `tt/` has.
+- **Evidence:** `conftest.py:948` (the fixture and its substring-implying docstring), `:962` (the
+  match that raised `Regex pattern did not match`); the failing run's own output;
+  `LANDMINES.md`'s `prefer-expect-error` row, which covers the hook but not this.
+- **Confidence:** high.
+- **Falsifier:** the fixture being changed to a literal substring check upstream, which would make
+  the whole entry moot (and would be the better fix).
+- **Revisit if:** a refusal's only distinctive text contains a metacharacter — then escape, and say
+  so.
+- **Blast radius:** every `expect_error` call in this package —
+  `tests/unit/test_{mesh_config,mlp_vs_ref,attention_vs_ref,kv_cache_vs_ref}.py` today, plus
+  `G-RUNTIME`'s nine refusals and `G-SP-RING`'s `TT_FATAL` in later phases. Worth a kit note: this
+  is a repo-wide trap, not a Llama one.

@@ -35,6 +35,11 @@ PKG = "models/demos/llama31_8b_d_p"
 LL = PKG
 # P8: the ring-joint SDPA device op — cited by tt/attention/dense_sp.py and tt/attention/config.py.
 RJ = "ttnn/cpp/ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_device_operation.cpp"
+# P5.4-P5.6: the recipe itself, CONTENT-checked. Pass 2 already scans it for outbound refs, but it
+# only range-checks refs *into* it — and this session found that four of its own first-draft refs
+# into the recipe were in range and wrong (R-016). Every recipe ref this package makes now has a
+# needle here, so a recipe edit that shifts a section is a MISMATCH rather than a silent lie.
+RCP = "models/demos/common/bringup/BRINGUP_RECIPE.md"
 
 # (file, line, substring that MUST appear on that line)
 
@@ -373,6 +378,121 @@ CITES = [
         1306,
         "!kv_pad_rotation_enabled || use_streaming_compute",
     ),
+    # --- P5.4-P5.6 (this session): every NEW path:line claim in tt/mlp.py, tt/attention/* and the
+    # three gate tests. Promoted into CITES rather than left to pass 2, because pass 2 only checks
+    # that a doc ref's line is IN RANGE — it cannot tell a right line from a wrong one. Four refs
+    # in this session's first draft of tt/attention/operations.py were "resolved" by pass 2 while
+    # pointing at the wrong lines (they carried a +209 offset from a `cat -n a.py b.py` read); only
+    # the out-of-range ones were caught. Content-checking is what CITES is for.
+    # P5.4 — tt/mlp.py
+    (f"{M3}/tt/dense_mlp.py", 92, "swiglu(gate, up, self.swiglu_cfg)"),
+    (f"{M3}/tt/dense_mlp.py", 99, "if self.mesh_config.tp > 1"),
+    (f"{M3}/tt/dense_mlp.py", 100, "if self.scatter_output"),
+    (f"{M3}/tt/dense_mlp.py", 109, "out = scattered"),
+    ("ttnn/cpp/ttnn/operations/eltwise/binary/binary_nanobind.cpp", 1469, 'nb::arg("input_tensor_a_activations")'),
+    (
+        "ttnn/cpp/ttnn/operations/eltwise/binary/binary_nanobind.cpp",
+        2082,
+        'bind_binary_operation_with_fast_approx<"multiply">',
+    ),
+    # P5.5 — tt/attention/{config,weights,operations,prefill,__init__,dense_sp}.py
+    (f"{GO}/tt/attention/config.py", 38, "softmax scale 1/sqrt(head_dim)"),
+    (f"{GO}/tt/attention/config.py", 62, "prefill_q_chunk_size_small: int = 32"),
+    (f"{GO}/tt/attention/config.py", 66, "prefill_threshold: int = 2048"),
+    (f"{GO}/tt/attention/config.py", 102, "def get_compute_kernel_config"),
+    (f"{GO}/tt/attention/config.py", 108, ")"),
+    (f"{GO}/tt/attention/operations.py", 14, "def apply_qkv_projection"),
+    (f"{GO}/tt/attention/operations.py", 46, "memory_config=ttnn.DRAM_MEMORY_CONFIG"),
+    (f"{GO}/tt/attention/operations.py", 88, "is_decode_mode=is_decode_mode"),
+    (f"{GO}/tt/attention/operations.py", 105, "def apply_output_projection"),
+    (f"{GO}/tt/attention/operations.py", 121, "return out"),
+    (f"{GO}/tt/attention/operations.py", 132, "RACES on"),
+    (f"{GO}/tt/attention/operations.py", 135, "Remove this gate once the fused-op sync is fixed"),
+    (f"{GO}/tt/attention/operations.py", 258, "local_hidden = hidden_size // mesh_config.tp"),
+    (f"{GO}/tt/attention/operations.py", 269, "tensor = tensor_sliced"),
+    (f"{GO}/tt/attention/prefill.py", 162, "post-RoPE K + raw V"),
+    (f"{GO}/tt/attention/prefill.py", 165, "write_kv_chunk casts its own copy"),
+    (f"{GO}/tt/attention/prefill.py", 168, "write_kv_chunk("),
+    (f"{GO}/tt/attention/prefill.py", 270, ")"),
+    (f"{GO}/tt/attention/prefill.py", 300, "apply_allgather_and_slice"),
+    (f"{GO}/tt/attention/__init__.py", 79, 'layer_types[layer_idx] == "sliding_attention"'),
+    (f"{GO}/tt/attention/__init__.py", 81, "(layer_idx % 2) == 0"),
+    (f"{GO}/tt/attention/dense_sp.py", 30, "def _gather_seq_len"),
+    (f"{GO}/tt/attention/dense_sp.py", 38, "return max(halo, ttnn.TILE_SIZE)"),
+    (f"{GO}/tt/attention/dense_sp.py", 138, "matching update_padded_kv_cache's write"),
+    (f"{GO}/tt/attention/dense_sp.py", 141, "kv_cache_batch_idx=slot_idx * num_layers + layer_idx"),
+    (f"{GO}/tt/attention/weights.py", 70, "o_proj_cache_suffix"),
+    (f"{GO}/tt/attention/weights.py", 133, "o_proj_bias = torch.cat"),
+    (f"{GO}/tt/attention/weights.py", 142, "sinks_for_sdpa = None"),
+    (f"{TT}/tt/load_checkpoints.py", 458, 'elif "q_proj.weight" in key or "k_proj.weight" in key'),
+    (f"{TT}/tt/load_checkpoints.py", 895, "def permute(tensor, n_heads, dim1, dim2)"),
+    (
+        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/sdpa_device_operation.cpp",
+        108,
+        "q_chunk_size % tt::constants::TILE_WIDTH == 0",
+    ),
+    (RJ, 421, "ccl_core_grid_offset.x >="),
+    (
+        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_program_factory.cpp",
+        1304,
+        "use_streaming_compute",
+    ),
+    (
+        "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads/nlp_create_qkv_heads.cpp",
+        12,
+        "const Tensor& input_tensor_q",
+    ),
+    (
+        "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads/nlp_create_qkv_heads.cpp",
+        22,
+        "if (input_tensor_kv.has_value())",
+    ),
+    (
+        "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads/" "nlp_create_qkv_heads_nanobind.cpp",
+        30,
+        'nb::arg("num_heads")',
+    ),
+    (f"{GO}/tests/unit/test_attention_vs_ref.py", 117, "def _torch_attention"),
+    (f"{GO}/tests/unit/test_attention_vs_ref.py", 169, '"q": torch.randn(NQ * HEAD_DIM, HIDDEN) * 0.02'),
+    # P5.6 — tt/attention/kv_cache.py and its gate
+    (f"{GO}/tt/attention/kv_cache.py", 135, "src.deallocate(True)"),
+    (f"{GO}/tt/attention/kv_cache.py", 152, ")"),
+    (f"{M3}/tests/unit/test_kv_cache_write_vs_ref.py", 10, "post-RoPE K"),
+    (f"{M3}/tests/unit/test_kv_cache_write_vs_ref.py", 98, '"q": torch.rand(NQ * HEAD_DIM, HIDDEN) * 0.02'),
+    (f"{M3}/tests/unit/test_kv_cache_write_vs_ref.py", 128, "half = ROTARY_DIM // 2"),
+    (f"{M3}/tests/unit/test_kv_cache_write_vs_ref.py", 135, "ref_index_k = ref_index_k[..., src]"),
+    # `expect_error`'s `message` is a **regex**, not a substring — `DEC-045`. This is the line.
+    ("conftest.py", 962, "pytest.raises(error, match=message)"),
+    # --- P5.4-P5.6: every `BRINGUP_RECIPE.md:N` this package cites, content-checked (R-016) ------
+    (RCP, 199, "A gate with no raw log did not happen"),
+    (RCP, 408, "does not describe a **fused** kernel's interior"),
+    (RCP, 451, "separate error budgets per stage"),
+    (RCP, 455, "standalone probe"),
+    (RCP, 490, "0.9925392"),
+    (RCP, 491, "0.9917529"),
+    (RCP, 492, "38.7x worse"),
+    (RCP, 493, "107.6x worse"),
+    (RCP, 495, "already enables"),
+    (RCP, 498, "two to three orders of magnitude"),
+    (RCP, 627, "a test of the model"),
+    (RCP, 629, "say so in the gate block"),
+    (RCP, 1043, "make any module that cannot honour it"),
+    (RCP, 1085, "Give it one, reachable home here"),
+    (RCP, 1193, "input_tensor_a_activations"),
+    (RCP, 1247, "11 >= 8"),
+    (RCP, 1251, "explicit named field defaulting to"),
+    (RCP, 1254, "at construction"),
+    (RCP, 1265, "0.9475"),
+    (RCP, 1292, "Matching it is what lets"),
+    (RCP, 54, "G-MOCK-MIG"),
+    (RCP, 528, "encode positions as values"),
+    (RCP, 1320, "must be `PASS` before P6"),
+    (RCP, 760, "dense SwiGLU"),
+    (RCP, 1821, "GQA + RoPE + causal SDPA"),
+    (RCP, 525, "positional read-back"),
+    (RCP, 1823, "decoder layer (integration check)"),
+    (RCP, 1825, "per-layer step"),
+    (RCP, 1868, "never *raise* one after seeing"),
 ]
 
 # DOCS — every markdown file whose `path:line` references should be range-checked.

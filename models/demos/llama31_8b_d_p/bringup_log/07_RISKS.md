@@ -1,6 +1,6 @@
 # 07 — Risks and open questions
 
-The register and the sections must agree. Re-checked at every phase boundary (last: end of P2,
+The register and the sections must agree. Re-checked at every phase boundary (last: end of P5.6,
 2026-09-04).
 
 | Id | Severity | Phase found | Summary | Status | Owner |
@@ -11,12 +11,16 @@ The register and the sections must agree. Re-checked at every phase boundary (la
 | R-004 | low | P0 | `CHUNK_SIZE` / `MAX_SEQ_LEN` not yet chosen | open — deferred by `DEC-004` | P7 (`G-CHUNK`) |
 | R-005 | high | P1 | `rope_theta` is absent from the `transformers` 5.12.1 config object; `getattr` with a default silently substitutes a wrong theta | **mitigated and enforced** as of P5.3 | closed by `tt/rope.py` + `G-ROPE` |
 | R-006 | medium | P1 | The hand-written oracle and HF could share a misreading of the architecture | open — inherent | P0 card / P6 (`G-MODEL`) |
-| R-007 | medium | P2 | `ttnn.experimental.deepseek_prefill.update_padded_kv_cache` and `rotary_embedding_indexed` are consumed from `deepseek_v3_d_p`'s substrate; no Llama-specific test exists upstream | open | P5.6 (`G-KV`), P7 |
+| R-007 | medium | P2 | `ttnn.experimental.deepseek_prefill.update_padded_kv_cache` and `rotary_embedding_indexed` are consumed from `deepseek_v3_d_p`'s substrate; no Llama-specific test exists upstream | **write path covered** as of P5.6 (`G-KV`, bit-exact at `head_dim = 128`); the indexed RoPE is still untested numerically | P7 (`G-CHUNK`), P8 |
 | R-008 | low | P2 | The kit ships fewer example files than its own README and `WHY_THESE_EXAMPLES.md` advertise | open — affects the kit, not the model | kit maintainer |
-| R-009 | medium | P2 | No in-repo template implements a **dense, bias-free, full-RoPE** attention block; `tt/attention/` is an adaptation with three features deleted | open | P5.5 (`G-ATTN`) |
+| R-009 | medium | P2 | No in-repo template implements a **dense, bias-free, full-RoPE** attention block; `tt/attention/` is an adaptation with three features deleted | **mitigated** as of P5.5 (`G-ATTN`: every hand-written stage 1.00-2.50x of its floor, block 0.999+) | closed by `G-ATTN`; P6 re-checks at layer level |
 | R-010 | low | P2 | `compute_llama3_parameters` hard-codes low/high frequency factors instead of reading the config | mitigated in-package (P5.3 assert); open upstream | P5.3 (`G-ROPE`) |
 | R-011 | low | P5.2 | `gpt_oss_d_p`'s dormant distributed-RMSNorm branch passes `stats` twice and would raise `TypeError` if enabled | open upstream; not carried into this package (`DEC-031`) | upstream `gpt_oss_d_p`, plus P8 if scheme B is taken |
-| R-012 | medium | P5.1 | The repo root ignores `*.log`, so every gate raw log — the run's whole evidence base — was untracked through P0-P4 | mitigated by a nested `.gitignore` (`DEC-037`); the kit does not warn about it | kit maintainer / repo maintainer |
+| R-012 | medium | P5.1 | The repo root ignores `*.log`, so every gate raw log — the run's whole evidence base — was untracked through P0-P4 | mitigated by a nested `.gitignore` (`DEC-037`); **the kit half is now closed** — see the entry | kit maintainer / repo maintainer |
+| R-013 | medium | P5.6 | Recipe §2.5's "keep probe values <= 256" is a **bf16** rule; at `bfloat8_b` — the dtype the recipe mandates for the KV cache — the exact-integer ceiling is **128**, so a probe built to the stated rule fails on a correct cache | mitigated in-package (`DEC-044`); the kit's rule is still wrong | kit maintainer; P8/P10 probe authors |
+| R-014 | low | P5.6 | The repo-root `expect_error` fixture matches `message` as a **regex** while its docstring describes a substring, so any refusal message containing `*`, `(`, `)`, `.` or `+` silently never matches | worked around (`DEC-045`: metachar-free substrings) | repo maintainer (`conftest.py:948`) |
+| R-015 | medium | P5.5 | `G-ATTN`'s **8x block budget** (Appendix A) is arithmetically unreachable at bf16 given the fused SDPA kernel's own slack, which §2.3 of the same recipe measures at 71x — the two numbers cannot both hold for any correct implementation | mitigated (`DEC-042`: gate on the SDPA-attributed residual, raw 8x asserted at bf8_b) | kit maintainer; **P6 owns the same arithmetic for `G-LAYER` (8x) and `G-MODEL` (8x / 4x step)** |
+| R-016 | low | P5.5 | `verify_citations.py`'s doc-ref pass only checks that a cited line is **in range**, not that it contains anything relevant, so a wrong-but-in-range `path:line` is reported as `resolved` | mitigated by promoting the load-bearing refs into `CITES` (content-checked); the pass itself is unchanged | kit maintainer |
 
 ---
 
@@ -201,3 +205,106 @@ trackable.
 `.gitignore` exception (it currently discusses only the `check-large-files` hook, which implies
 committing without saying how), and `scripts/new_bringup.sh` should scaffold that file alongside
 `bringup_log/raw/`. Owner: kit maintainer.
+
+**Re-checked at the end of P5.6: the kit half is closed.** `BRINGUP_RECIPE.md:197-215` now carries
+the whole thing — the blanket `*.log` diagnosis, the exact `!*.log` file to scaffold, the
+"verify `git ls-files <pkg>/bringup_log/raw/ | wc -l` is non-zero" step, and the note that
+`scripts/new_bringup.sh` writes it for you. The in-package `.gitignore` from `DEC-037` is what that
+guidance asks for, so nothing in the package changes. What remains open is only the repo-root
+`*.log` rule itself, which is a repo-wide decision and not this package's to make.
+
+## R-013 — `bfloat8_b` is exact only to 128, so §2.5's "<= 256" probe rule is wrong for the KV cache
+**Fact.** `BRINGUP_RECIPE.md:1260-1262` and §2.5 (`:477-482`) both give the ceiling for an
+integer-valued probe payload as **256**, justified by `bfloat16`. Measured on this box, quantising
+the integers 0..511 through `quantize_like_device` with each 16-lane block already held **constant**
+(the ideal case for a shared exponent): the first inexact integer is **129** at `bfloat8_b` and
+**257** at `bfloat16`. The recipe mandates `bfloat8_b` for the KV cache (P5.6, "every threshold in
+Appendix A assumes it").
+**Impact.** A `G-KV` positional probe written exactly as the recipe specifies **fails on a correct
+cache**. It did, here: 4 chunks of 64 covering positions 0..255, `bfloat8_b`, chunk 2, odd rows,
+`max|delta| = 1.0` — bf8_b's 7-bit block magnitude gives a resolution of 2 above 128, so odd
+integers land on their even neighbour. This is §2.5's own trap ("a failing probe is not evidence of
+a failing module until the probe's own numerics are checked") firing against §2.5's own rule, and it
+costs a debugging session to anyone who trusts the stated number.
+**Status.** mitigated in-package (`DEC-044`): the probe is 4 chunks of 32 = 128 positions, and the
+per-dtype ceiling is a named, measured constant asserted against the payload, so the next author is
+stopped by an assertion rather than by a mystery.
+**How to close.** The kit should state the ceiling **per dtype** — 128 at bf8_b, 256 at bf16 — and
+note that a bf8_b probe additionally needs each 16-lane block held constant. Owner: kit maintainer.
+Downstream: `G-KV-TP8` (P8) and `G-KV-TABLE` (P10) both probe positions well past 128 and must use
+§2.5's split-lane encoding rather than raising the ceiling.
+
+## R-014 — `expect_error`'s `message` is a regex, not the substring its docstring describes
+**Fact.** `conftest.py:948`'s docstring says "`message` must appear in the real device error text
+(the TT_FATAL line), since that's what the triager matches"; `conftest.py:962` implements it as
+`pytest.raises(error, match=message)`, i.e. a regex search.
+**Impact.** Any refusal message containing a regex metacharacter silently fails to match, and the
+test fails with `Regex pattern did not match` while the code under test behaved correctly. Hit here
+on `"must be a multiple of TILE_SIZE*sp"` — the `E*` made it unmatchable. Assertion and `TT_FATAL`
+text is full of parenthesised values (`kv_actual (16) must be tile-aligned`), so this is a standing
+trap for every refusal test, and the four gates whose whole content is a refusal (`G-MESH`,
+`G-RUNTIME`, `G-SP-RING`, plus the `scatter_output` seam) are the most exposed.
+**Status.** worked around (`DEC-045`): this package matches on a metachar-free substring and says
+why at the call site.
+**How to close.** Either fix the docstring or `re.escape` the argument in the fixture — the latter
+would match the documented behaviour and break nothing, since a literal is a valid regex.
+Owner: repo maintainer. A kit note under `LANDMINES.md`'s existing `prefer-expect-error` row would
+also have saved the time.
+
+## R-015 — `G-ATTN`'s 8x block budget contradicts §2.3's own measurement of the fused SDPA kernel
+**Fact.** Appendix A sets `G-ATTN` at "block <= 8x" its noise floor
+(`BRINGUP_RECIPE.md:1770`). §2.3 (`:396-412`) separately measures
+`ttnn.transformer.scaled_dot_product_attention` **alone** at **71x** its modelled floor and states
+that the floor model "does not describe a fused kernel's interior". Both cannot hold: measured here,
+the block sits at **2.17-2.22x** at bf8_b and **11.82-12.32x** at bf16, and the excess is
+**entirely** the kernel — floor error plus the kernel's own excess predicts the block PCC to 5-6
+decimals, leaving a residual of **0.70-1.10x**. For the raw bf16 ratio to reach 8x the kernel would
+have to sit under ~17x its own floor.
+**Impact.** A correct implementation fails a stated Appendix A threshold, which under §0 rule 1
+("no forward progress on a `FAIL`") stops the bring-up. Note the counter-intuitive direction: the
+**better** absolute PCC (bf16, 0.9998) has the **worse** ratio, because a smaller floor error
+divides the same fixed slack — so the metric penalises the more accurate configuration.
+**Status.** mitigated (`DEC-042`): the raw 8x is asserted at bf8_b, the package's weight dtype, and
+both dtypes are gated on the **SDPA-attributed residual** — which is tighter than the raw budget
+(0.70-1.10x measured against 8x) and still catches a regression in any stage this package wrote.
+**How to close.** The kit should either state the block budgets **per weight dtype**, or define the
+block budget on the fused-kernel-attributed residual as `DEC-042` does, or state a separate
+allowance for blocks containing a fused kernel. Owner: kit maintainer. **P6 owns the same
+arithmetic**: `G-LAYER` (8x) and `G-MODEL` (8x, plus a 4x per-layer step) both contain this kernel,
+and both will meet this wall — `G-MODEL`'s 4x depth step is the tighter of the two.
+
+## R-016 — The citation verifier's doc-ref pass range-checks rather than content-checks
+**Fact.** `scripts/verify_citations.py`'s `CITES` list checks that a *substring* appears on the
+cited line; its second pass, over every backtick-quoted `path:line` in the logs and docstrings,
+checks only that the line number is **within the file**.
+**Impact.** A wrong-but-in-range citation is reported as `resolved`, which is exactly the state
+§1.6 calls "worse than no citation, because it reads as authoritative". **21 of this session's own
+citations were wrong**, in two distinct ways:
+
+* **A multi-file `cat -n`.** Eight refs into `models/demos/gpt_oss_d_p/tt/attention/operations.py`
+  carried a **+209 line offset**, because they were read out of a `cat -n weights.py operations.py`
+  whose numbering ran straight across both files. Four overshot the file and were caught as
+  `DOC OUT OF RANGE`; the other four — `operations.py:223`, `:250-256`, `:340`, `:351` — were in
+  range, wrong, and reported clean.
+* **Interpolated, not read.** Seventeen refs into `BRINGUP_RECIPE.md` were estimated from the
+  section headings a TOC grep had produced, rather than read from the cited line. Every one of them
+  landed in the right *section* and the wrong *line*: Appendix A's `G-ATTN` row cited as `:1731`
+  when it is at `:1770`, the `scatter_output` refusal as `:971-973` when it is at `:992`, the
+  positional-probe rule as `:1250-1254` when it is at `:1260`. All in range; all reported
+  `resolved`.
+
+**This is not confined to this session.** Spot-checking the recipe refs written in P0-P5.3 shows the
+same pattern — `:1728` cited for `G-RMS`'s Appendix A row (that row is at `:1767`; `:1728` is a P9
+README checklist item), `:1720-1753` cited for "the 32 gate rows in Appendix A" (that range is P9's
+cleanliness checklist), `:900-902` cited for the semaphore-reuse warning (which is at `:921-923`),
+`:1817-1819` cited for Appendix C item 2 (which is at `:1858-1860`). Those entries are in
+append-only logs written by other phases and are **not** rewritten here; they are recorded so a
+maintainer can fix them in one pass.
+**Status.** mitigated for this package's own refs by promoting every load-bearing P5.4-P5.6
+citation into `CITES` — **359** content-checked entries, up from 279 at the end of P5.3, including
+one per `BRINGUP_RECIPE.md` reference the package makes (the `RCP` block), so a recipe edit that
+shifts a section now produces a `MISMATCH`. Prior phases' recipe refs remain unverified.
+**How to close.** Two cheap options for the kit: have pass 2 warn when a cited line is blank or
+consists only of a closing bracket, and/or resolve a doc ref by checking that the *citing sentence's*
+backticked identifier appears within a few lines of the target. Owner: kit maintainer. A discipline
+note is worth as much: **never read line numbers out of a multi-file `cat -n`.**

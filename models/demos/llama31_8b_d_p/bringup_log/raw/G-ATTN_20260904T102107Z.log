@@ -1,0 +1,198 @@
+2026-09-04 10:21:10.436 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mstojkovic/.cache/ttnn,model_cache_path=/home/mstojkovic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.14, pytest-9.0.3, pluggy-1.6.0 -- /home/mstojkovic/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mstojkovic/tt-metal
+configfile: pytest.ini
+plugins: timeout-2.4.0, anyio-4.15.0, cov-7.0.0, github-actions-annotate-failures-0.3.0, repeat-0.9.4, dash-2.15.0, benchmark-5.2.3, split-0.11.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 17 items
+
+models/demos/llama31_8b_d_p/tests/unit/test_attention_vs_ref.py::test_attention_vs_ref[blackhole-s128-bf8_b-mesh_device0] 2026-09-04 10:21:14.392 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:224)
+2026-09-04 10:21:14.392 | info     |             UMD | Cluster constructor started. (cluster.cpp:406)
+2026-09-04 10:21:14.409 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-09-04 10:21:14.409 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-09-04 10:21:14.505 | info     |             UMD | Established firmware bundle version: 19.12.0 (topology_discovery.cpp:576)
+2026-09-04 10:21:14.510 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-09-04 10:21:15.943 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31}/[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 30, 31, 16, 17, 18, 19, 20, 21, 22, 23] and remote chip ids {} (cluster.cpp:173)
+2026-09-04 10:21:15.943 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-09-04 10:21:15.943 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-09-04 10:21:15.943 | info     |             UMD | Cluster constructor completed. (cluster.cpp:665)
+2026-09-04 10:21:15.961 | info     |             UMD | Starting devices in cluster (cluster.cpp:1205)
+2026-09-04 10:21:17.657 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1213)
+2026-09-04 10:21:21.503 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
+2026-09-04 10:21:21.503 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
+2026-09-04 10:21:21.521 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4, 3:16, 4:12} (topology_mapper_utils.cpp:3368)
+2026-09-04 10:21:21.521 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:24, 5:8} (topology_mapper_utils.cpp:3376)
+2026-09-04 10:21:22.149 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 10:21:22.848 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 10:21:23.519 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 10:21:24.032 | INFO     | llama31_8b_d_p.tests.unit.test_attention_vs_ref:test_attention_vs_ref:333 - [G-ATTN] block bf8_b seq=128: PCC=0.9997364 floor=0.9998805 ratio=2.21x (threshold 0.999, raw budget 8.0x applies=True)
+2026-09-04 10:21:24.033 | INFO     | llama31_8b_d_p.tests.unit.test_attention_vs_ref:test_attention_vs_ref:338 - [G-ATTN] block bf8_b seq=128 attribution: fused SDPA alone PCC=0.9998549 vs its own floor 0.9999949 (excess 1.400e-04 = 28.6x); floor error 1.195e-04; floor+SDPA predicts block PCC 0.9997405 vs measured 0.9997364; SDPA-attributed residual ratio 1.03x
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_attention_vs_ref.py::test_attention_stage_budgets[blackhole-s512-bf8_b-mesh_device0] 2026-09-04 10:21:25.099 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 10:21:25.193 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 10:21:25.872 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 10:21:26.352 | INFO     | llama31_8b_d_p.tests.unit.test_attention_vs_ref:_record:414 - [G-ATTN] stage qkv_proj_q   bf8_b seq=512: PCC=0.9999728 floor=0.9999742 ratio=1.06x
+2026-09-04 10:21:26.356 | INFO     | llama31_8b_d_p.tests.unit.test_attention_vs_ref:_record:414 - [G-ATTN] stage qkv_proj_k   bf8_b seq=512: PCC=0.9999727 floor=0.9999741 ratio=1.06x
+2026-09-04 10:21:26.359 | INFO     | llama31_8b_d_p.tests.unit.test_attention_vs_ref:_record:414 - [G-ATTN] stage qkv_proj_v   bf8_b seq=512: PCC=0.9999726 floor=0.9999741 ratio=1.06x
+2026-09-04 10:21:26.407 | INFO     | llama31_8b_d_p.tests.unit.test_attention_vs_ref:_record:414 - [G-ATTN] stage rope_q       bf8_b seq=512: PCC=0.9999954 floor=0.9999982 ratio=2.50x
+2026-09-04 10:21:26.422 | INFO     | llama31_8b_d_p.tests.unit.test_attention_vs_ref:_record:414 - [G-ATTN] stage rope_k       bf8_b seq=512: PCC=0.9999954 floor=0.9999982 ratio=2.48x
+2026-09-04 10:21:26.487 | INFO     | llama31_8b_d_p.tests.unit.test_attention_vs_ref:_record:414 - [G-ATTN] stage sdpa_fused   bf8_b seq=512: PCC=0.9998361 floor=0.9999939 ratio=26.72x  (fused kernel — excluded from the 3x budget, §2.3)
+2026-09-04 10:21:26.514 | INFO     | llama31_8b_d_p.tests.unit.test_attention_vs_ref:_record:414 - [G-ATTN] stage concat_heads bf8_b seq=512: PCC=0.9999986 floor=0.9999986 ratio=1.00x
+2026-09-04 10:21:26.552 | INFO     | llama31_8b_d_p.tests.unit.test_attention_vs_ref:_record:414 - [G-ATTN] stage o_proj       bf8_b seq=512: PCC=0.9999727 floor=0.9999741 ratio=1.06x
+2026-09-04 10:21:26.552 | INFO     | llama31_8b_d_p.tests.unit.test_attention_vs_ref:test_attention_stage_budgets:487 - [G-ATTN] stage summary bf8_b: hand-written stages 1.00x-2.50x of their floors; fused SDPA 26.72x of its modelled floor
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_attention_vs_ref.py::test_sdpa_standalone_probe[blackhole-s128-mesh_device0] 2026-09-04 10:21:27.628 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 10:21:27.721 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 10:21:27.739 | INFO     | llama31_8b_d_p.tests.unit.test_attention_vs_ref:test_sdpa_standalone_probe:547 - [G-ATTN] SDPA probe seq=128: PCC=0.9998309 modelled_floor=0.9999969 ratio=54.86x (the floor model does not describe a fused kernel's interior, §2.3)
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_attention_vs_ref.py::test_attention_unswizzled_qk_negative_control[blackhole-bf8_b-mesh_device0] 2026-09-04 10:21:28.794 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 10:21:28.887 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 10:21:29.176 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 10:21:29.504 | INFO     | llama31_8b_d_p.tests.unit.test_attention_vs_ref:test_attention_unswizzled_qk_negative_control:580 - [G-ATTN] control (bf8_b): Q/K without the Meta permute -> PCC=0.51174
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_attention_vs_ref.py::test_attention_rotates_only_q_and_k[blackhole-mesh_device0] 2026-09-04 10:21:30.554 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 10:21:30.647 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 10:21:30.981 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 10:21:31.240 | INFO     | llama31_8b_d_p.tests.unit.test_attention_vs_ref:test_attention_rotates_only_q_and_k:606 - [G-ATTN] rotation invariant: vs Q,K-rotated ref PCC=0.9998275; vs Q,K,V-rotated ref PCC=0.71785
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_attention_vs_ref.py::test_attention_refuses_to_build_weightless[blackhole-mesh_device0] 2026-09-04 10:21:32.304 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 10:21:32.399 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 10:21:32.399 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="tensor_cache_path"
+2026-09-04 10:21:32.399 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 10:21:32.400 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="tensor_cache_path"
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_attention_vs_ref.py::test_attention_refuses_a_derived_sdpa_grid[blackhole-mesh_device0] 2026-09-04 10:21:33.454 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 10:21:33.547 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 10:21:33.547 | INFO     | llama31_8b_d_p.tests.unit.test_attention_vs_ref:test_attention_refuses_a_derived_sdpa_grid:649 - [G-ATTN] compute grid = (12, 10); CCL offset x = 11; pinned SDPA grid x = 8
+2026-09-04 10:21:33.547 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="ccl_core_grid_offset.x >= sdpa_grid.x"
+2026-09-04 10:21:33.547 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="ccl_core_grid_offset.x >= sdpa_grid.x"
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_attention_vs_ref.py::test_attention_refuses_cached_len[blackhole-mesh_device0] 2026-09-04 10:21:34.585 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 10:21:34.676 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 10:21:34.894 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 10:21:35.111 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] NotImplementedError message="chunk-position-aware SDPA"
+2026-09-04 10:21:35.113 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] NotImplementedError message="chunk-position-aware SDPA"
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_attention_vs_ref.py::test_attention_vs_ref[blackhole-s128-bf16-mesh_device0] 2026-09-04 10:21:36.151 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 10:21:36.243 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 10:21:36.765 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 10:21:37.017 | INFO     | llama31_8b_d_p.tests.unit.test_attention_vs_ref:test_attention_vs_ref:333 - [G-ATTN] block bf16 seq=128: PCC=0.9998463 floor=0.9999875 ratio=12.32x (threshold 0.999, raw budget 8.0x applies=False)
+2026-09-04 10:21:37.018 | INFO     | llama31_8b_d_p.tests.unit.test_attention_vs_ref:test_attention_vs_ref:338 - [G-ATTN] block bf16 seq=128 attribution: fused SDPA alone PCC=0.9998549 vs its own floor 0.9999949 (excess 1.400e-04 = 28.6x); floor error 1.248e-05; floor+SDPA predicts block PCC 0.9998475 vs measured 0.9998463; SDPA-attributed residual ratio 1.10x
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_attention_vs_ref.py::test_attention_stage_budgets[blackhole-s512-bf16-mesh_device0] 2026-09-04 10:21:38.079 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 10:21:38.172 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 10:21:38.762 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 10:21:39.045 | INFO     | llama31_8b_d_p.tests.unit.test_attention_vs_ref:_record:414 - [G-ATTN] stage qkv_proj_q   bf16 seq=512: PCC=0.9999958 floor=0.9999972 ratio=1.52x
+2026-09-04 10:21:39.050 | INFO     | llama31_8b_d_p.tests.unit.test_attention_vs_ref:_record:414 - [G-ATTN] stage qkv_proj_k   bf16 seq=512: PCC=0.9999958 floor=0.9999972 ratio=1.51x
+2026-09-04 10:21:39.053 | INFO     | llama31_8b_d_p.tests.unit.test_attention_vs_ref:_record:414 - [G-ATTN] stage qkv_proj_v   bf16 seq=512: PCC=0.9999958 floor=0.9999972 ratio=1.52x
+2026-09-04 10:21:39.092 | INFO     | llama31_8b_d_p.tests.unit.test_attention_vs_ref:_record:414 - [G-ATTN] stage rope_q       bf16 seq=512: PCC=0.9999954 floor=0.9999982 ratio=2.50x
+2026-09-04 10:21:39.102 | INFO     | llama31_8b_d_p.tests.unit.test_attention_vs_ref:_record:414 - [G-ATTN] stage rope_k       bf16 seq=512: PCC=0.9999954 floor=0.9999982 ratio=2.48x
+2026-09-04 10:21:39.163 | INFO     | llama31_8b_d_p.tests.unit.test_attention_vs_ref:_record:414 - [G-ATTN] stage sdpa_fused   bf16 seq=512: PCC=0.9998361 floor=0.9999939 ratio=26.72x  (fused kernel — excluded from the 3x budget, §2.3)
+2026-09-04 10:21:39.189 | INFO     | llama31_8b_d_p.tests.unit.test_attention_vs_ref:_record:414 - [G-ATTN] stage concat_heads bf16 seq=512: PCC=0.9999986 floor=0.9999986 ratio=1.00x
+2026-09-04 10:21:39.229 | INFO     | llama31_8b_d_p.tests.unit.test_attention_vs_ref:_record:414 - [G-ATTN] stage o_proj       bf16 seq=512: PCC=0.9999958 floor=0.9999973 ratio=1.52x
+2026-09-04 10:21:39.229 | INFO     | llama31_8b_d_p.tests.unit.test_attention_vs_ref:test_attention_stage_budgets:487 - [G-ATTN] stage summary bf16: hand-written stages 1.00x-2.50x of their floors; fused SDPA 26.72x of its modelled floor
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_attention_vs_ref.py::test_sdpa_standalone_probe[blackhole-s512-mesh_device0] 2026-09-04 10:21:40.313 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 10:21:40.415 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 10:21:40.485 | INFO     | llama31_8b_d_p.tests.unit.test_attention_vs_ref:test_sdpa_standalone_probe:547 - [G-ATTN] SDPA probe seq=512: PCC=0.9998127 modelled_floor=0.9999966 ratio=54.95x (the floor model does not describe a fused kernel's interior, §2.3)
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_attention_vs_ref.py::test_attention_unswizzled_qk_negative_control[blackhole-bf16-mesh_device0] 2026-09-04 10:21:41.559 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 10:21:41.649 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 10:21:41.917 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 10:21:42.138 | INFO     | llama31_8b_d_p.tests.unit.test_attention_vs_ref:test_attention_unswizzled_qk_negative_control:580 - [G-ATTN] control (bf16): Q/K without the Meta permute -> PCC=0.51178
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_attention_vs_ref.py::test_attention_vs_ref[blackhole-s512-bf8_b-mesh_device0] 2026-09-04 10:21:43.197 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 10:21:43.291 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 10:21:44.035 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 10:21:44.400 | INFO     | llama31_8b_d_p.tests.unit.test_attention_vs_ref:test_attention_vs_ref:333 - [G-ATTN] block bf8_b seq=512: PCC=0.9997080 floor=0.9998657 ratio=2.17x (threshold 0.999, raw budget 8.0x applies=True)
+2026-09-04 10:21:44.400 | INFO     | llama31_8b_d_p.tests.unit.test_attention_vs_ref:test_attention_vs_ref:338 - [G-ATTN] block bf8_b seq=512 attribution: fused SDPA alone PCC=0.9998361 vs its own floor 0.9999939 (excess 1.577e-04 = 26.7x); floor error 1.343e-04; floor+SDPA predicts block PCC 0.9997079 vs measured 0.9997080; SDPA-attributed residual ratio 1.00x
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_attention_vs_ref.py::test_sdpa_standalone_probe[blackhole-s2048-mesh_device0] 2026-09-04 10:21:45.480 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 10:21:45.575 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 10:21:46.410 | INFO     | llama31_8b_d_p.tests.unit.test_attention_vs_ref:test_sdpa_standalone_probe:547 - [G-ATTN] SDPA probe seq=2048: PCC=0.9998087 modelled_floor=0.9999964 ratio=52.83x (the floor model does not describe a fused kernel's interior, §2.3)
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_attention_vs_ref.py::test_attention_vs_ref[blackhole-s512-bf16-mesh_device0] 2026-09-04 10:21:47.452 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 10:21:47.549 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 10:21:48.187 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 10:21:48.458 | INFO     | llama31_8b_d_p.tests.unit.test_attention_vs_ref:test_attention_vs_ref:333 - [G-ATTN] block bf16 seq=512: PCC=0.9998275 floor=0.9999854 ratio=11.82x (threshold 0.999, raw budget 8.0x applies=False)
+2026-09-04 10:21:48.458 | INFO     | llama31_8b_d_p.tests.unit.test_attention_vs_ref:test_attention_vs_ref:338 - [G-ATTN] block bf16 seq=512 attribution: fused SDPA alone PCC=0.9998361 vs its own floor 0.9999939 (excess 1.577e-04 = 26.7x); floor error 1.459e-05; floor+SDPA predicts block PCC 0.9998277 vs measured 0.9998275; SDPA-attributed residual ratio 1.01x
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_attention_vs_ref.py::test_attention_vs_ref[blackhole-s2048-bf8_b-mesh_device0] 2026-09-04 10:21:49.520 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 10:21:49.605 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 10:21:51.131 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 10:21:52.480 | INFO     | llama31_8b_d_p.tests.unit.test_attention_vs_ref:test_attention_vs_ref:333 - [G-ATTN] block bf8_b seq=2048: PCC=0.9996723 floor=0.9998521 ratio=2.22x (threshold 0.999, raw budget 8.0x applies=True)
+2026-09-04 10:21:52.480 | INFO     | llama31_8b_d_p.tests.unit.test_attention_vs_ref:test_attention_vs_ref:338 - [G-ATTN] block bf8_b seq=2048 attribution: fused SDPA alone PCC=0.9998073 vs its own floor 0.9999932 (excess 1.858e-04 = 28.2x); floor error 1.479e-04; floor+SDPA predicts block PCC 0.9996662 vs measured 0.9996723; SDPA-attributed residual ratio 0.96x
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_attention_vs_ref.py::test_attention_vs_ref[blackhole-s2048-bf16-mesh_device0] 2026-09-04 10:21:53.564 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 10:21:53.663 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 10:21:55.166 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 10:21:56.330 | INFO     | llama31_8b_d_p.tests.unit.test_attention_vs_ref:test_attention_vs_ref:333 - [G-ATTN] block bf16 seq=2048: PCC=0.9998029 floor=0.9999838 ratio=12.17x (threshold 0.999, raw budget 8.0x applies=False)
+2026-09-04 10:21:56.330 | INFO     | llama31_8b_d_p.tests.unit.test_attention_vs_ref:test_attention_vs_ref:338 - [G-ATTN] block bf16 seq=2048 attribution: fused SDPA alone PCC=0.9998073 vs its own floor 0.9999932 (excess 1.858e-04 = 28.2x); floor error 1.620e-05; floor+SDPA predicts block PCC 0.9997980 vs measured 0.9998029; SDPA-attributed residual ratio 0.70x
+PASSED
+
+=============================== warnings summary ===============================
+python_env/lib/python3.12/site-packages/pydantic/_internal/_config.py:291
+  /home/mstojkovic/tt-metal/python_env/lib/python3.12/site-packages/pydantic/_internal/_config.py:291: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.9/migration/
+    warnings.warn(DEPRECATION_MESSAGE, DeprecationWarning)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /home/mstojkovic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+8.66s setup    models/demos/llama31_8b_d_p/tests/unit/test_attention_vs_ref.py::test_attention_vs_ref[blackhole-s128-bf8_b-mesh_device0]
+2.91s call     models/demos/llama31_8b_d_p/tests/unit/test_attention_vs_ref.py::test_attention_vs_ref[blackhole-s2048-bf8_b-mesh_device0]
+2.70s call     models/demos/llama31_8b_d_p/tests/unit/test_attention_vs_ref.py::test_attention_vs_ref[blackhole-s2048-bf16-mesh_device0]
+1.39s call     models/demos/llama31_8b_d_p/tests/unit/test_attention_vs_ref.py::test_attention_stage_budgets[blackhole-s512-bf8_b-mesh_device0]
+1.20s call     models/demos/llama31_8b_d_p/tests/unit/test_attention_vs_ref.py::test_attention_vs_ref[blackhole-s128-bf8_b-mesh_device0]
+1.15s setup    models/demos/llama31_8b_d_p/tests/unit/test_attention_vs_ref.py::test_attention_unswizzled_qk_negative_control[blackhole-bf16-mesh_device0]
+1.15s setup    models/demos/llama31_8b_d_p/tests/unit/test_attention_vs_ref.py::test_sdpa_standalone_probe[blackhole-s2048-mesh_device0]
+1.14s setup    models/demos/llama31_8b_d_p/tests/unit/test_attention_vs_ref.py::test_sdpa_standalone_probe[blackhole-s512-mesh_device0]
+1.13s setup    models/demos/llama31_8b_d_p/tests/unit/test_attention_vs_ref.py::test_attention_unswizzled_qk_negative_control[blackhole-bf8_b-mesh_device0]
+1.13s setup    models/demos/llama31_8b_d_p/tests/unit/test_attention_vs_ref.py::test_attention_vs_ref[blackhole-s2048-bf16-mesh_device0]
+1.13s setup    models/demos/llama31_8b_d_p/tests/unit/test_attention_vs_ref.py::test_attention_refuses_a_derived_sdpa_grid[blackhole-mesh_device0]
+1.13s setup    models/demos/llama31_8b_d_p/tests/unit/test_attention_vs_ref.py::test_attention_stage_budgets[blackhole-s512-bf16-mesh_device0]
+1.13s setup    models/demos/llama31_8b_d_p/tests/unit/test_attention_vs_ref.py::test_sdpa_standalone_probe[blackhole-s128-mesh_device0]
+1.12s setup    models/demos/llama31_8b_d_p/tests/unit/test_attention_vs_ref.py::test_attention_refuses_to_build_weightless[blackhole-mesh_device0]
+1.12s setup    models/demos/llama31_8b_d_p/tests/unit/test_attention_vs_ref.py::test_attention_vs_ref[blackhole-s512-bf8_b-mesh_device0]
+1.12s setup    models/demos/llama31_8b_d_p/tests/unit/test_attention_vs_ref.py::test_attention_vs_ref[blackhole-s2048-bf8_b-mesh_device0]
+1.12s call     models/demos/llama31_8b_d_p/tests/unit/test_attention_vs_ref.py::test_attention_vs_ref[blackhole-s512-bf8_b-mesh_device0]
+1.12s setup    models/demos/llama31_8b_d_p/tests/unit/test_attention_vs_ref.py::test_attention_stage_budgets[blackhole-s512-bf8_b-mesh_device0]
+1.11s setup    models/demos/llama31_8b_d_p/tests/unit/test_attention_vs_ref.py::test_attention_vs_ref[blackhole-s512-bf16-mesh_device0]
+1.11s setup    models/demos/llama31_8b_d_p/tests/unit/test_attention_vs_ref.py::test_attention_refuses_cached_len[blackhole-mesh_device0]
+1.11s setup    models/demos/llama31_8b_d_p/tests/unit/test_attention_vs_ref.py::test_attention_vs_ref[blackhole-s128-bf16-mesh_device0]
+1.11s setup    models/demos/llama31_8b_d_p/tests/unit/test_attention_vs_ref.py::test_attention_rotates_only_q_and_k[blackhole-mesh_device0]
+1.08s call     models/demos/llama31_8b_d_p/tests/unit/test_attention_vs_ref.py::test_attention_stage_budgets[blackhole-s512-bf16-mesh_device0]
+0.92s call     models/demos/llama31_8b_d_p/tests/unit/test_attention_vs_ref.py::test_attention_vs_ref[blackhole-s512-bf16-mesh_device0]
+0.84s call     models/demos/llama31_8b_d_p/tests/unit/test_attention_vs_ref.py::test_sdpa_standalone_probe[blackhole-s2048-mesh_device0]
+=========================== short test summary info ============================
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_attention_vs_ref.py::test_attention_vs_ref[blackhole-s128-bf8_b-mesh_device0]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_attention_vs_ref.py::test_attention_stage_budgets[blackhole-s512-bf8_b-mesh_device0]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_attention_vs_ref.py::test_sdpa_standalone_probe[blackhole-s128-mesh_device0]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_attention_vs_ref.py::test_attention_unswizzled_qk_negative_control[blackhole-bf8_b-mesh_device0]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_attention_vs_ref.py::test_attention_rotates_only_q_and_k[blackhole-mesh_device0]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_attention_vs_ref.py::test_attention_refuses_to_build_weightless[blackhole-mesh_device0]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_attention_vs_ref.py::test_attention_refuses_a_derived_sdpa_grid[blackhole-mesh_device0]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_attention_vs_ref.py::test_attention_refuses_cached_len[blackhole-mesh_device0]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_attention_vs_ref.py::test_attention_vs_ref[blackhole-s128-bf16-mesh_device0]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_attention_vs_ref.py::test_attention_stage_budgets[blackhole-s512-bf16-mesh_device0]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_attention_vs_ref.py::test_sdpa_standalone_probe[blackhole-s512-mesh_device0]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_attention_vs_ref.py::test_attention_unswizzled_qk_negative_control[blackhole-bf16-mesh_device0]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_attention_vs_ref.py::test_attention_vs_ref[blackhole-s512-bf8_b-mesh_device0]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_attention_vs_ref.py::test_sdpa_standalone_probe[blackhole-s2048-mesh_device0]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_attention_vs_ref.py::test_attention_vs_ref[blackhole-s512-bf16-mesh_device0]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_attention_vs_ref.py::test_attention_vs_ref[blackhole-s2048-bf8_b-mesh_device0]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_attention_vs_ref.py::test_attention_vs_ref[blackhole-s2048-bf16-mesh_device0]
+======================== 17 passed, 1 warning in 44.95s ========================
+2026-09-04 10:21:58.158 | info     |    BuildKernels | JIT cache stats: 286/286 hits (100.0%) [286 cached, 842 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-09-04 10:21:58.158 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-09-04 10:21:58.376 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:550)
+2026-09-04 10:21:58.376 | info     |             UMD | Closing devices in cluster (cluster.cpp:1218)
+2026-09-04 10:22:06.327 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1227)
+2026-09-04 10:22:06.327 | info     |             UMD | Cluster destructor started. (cluster.cpp:933)
+2026-09-04 10:22:06.327 | info     |             UMD | Cluster destructor completed. (cluster.cpp:936)
