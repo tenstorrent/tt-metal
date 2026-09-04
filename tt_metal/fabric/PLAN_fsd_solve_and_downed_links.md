@@ -1,6 +1,8 @@
 # Plan: FSD-backed topology map + Control Plane downed-links API
 
-**Status:** In progress. Landed: §5.5's mapper identity, via [`PLAN_physical_node_id.md`](PLAN_physical_node_id.md) slices 1–4, so the mapper is already keyed on `PhysicalNodeId` and §5.2's canonicalization exists as a function to call; and §6's `diff_physical_system_descriptors` with its offline tests. Not yet written: `LinkHealth` (§2–§3), the host filter and its rank-agreement protocol (§5.1–§5.4), the ControlPlane wiring and forwarders (§7), and the `test_link_health.cpp` / `test_fsd_psd_e2e.cpp` halves of §8.
+**Status:** In progress. Landed: §5.5's mapper identity, via [`PLAN_physical_node_id.md`](PLAN_physical_node_id.md) slices 1–4, so the mapper is already keyed on `PhysicalNodeId` and §5.2's canonicalization exists as a function to call; §6's `diff_physical_system_descriptors` with its offline tests; and `LinkHealth` (§2–§3) with `test_link_health.cpp`. Not yet written: the host filter and its rank-agreement protocol (§5.1–§5.4), the ControlPlane wiring and forwarders (§7), and the `test_fsd_psd_e2e.cpp` half of §8.
+
+`LinkHealth` is built but nothing constructs it yet — §7's wiring is what puts it on the ControlPlane. Two coverage gaps in its tests, both from the fixture rather than the class: `test_link_health.cpp` runs on the T3K mock, which is a single mesh on a single host, so the intermesh path (§4) and the cross-host merge (§5.4) are exercised only by construction, not by a test. Both need a multi-mesh mock fixture.
 **Umbrella:** [tenstorrent/tt-metal#52859](https://github.com/tenstorrent/tt-metal/issues/52859)
 **Contract:** [`README_downed_links_contract.md`](README_downed_links_contract.md)
 **Depends on (already on main):** RTOptions FSD path ([#53451](https://github.com/tenstorrent/tt-metal/pull/53451)), `build_physical_descriptor_from_file` ([#53857](https://github.com/tenstorrent/tt-metal/pull/53857)), `filter_factory_descriptor`
@@ -126,6 +128,14 @@ flowchart TB
 ---
 
 ## 2. `LinkHealth`
+
+**Built.** `link_health.hpp` / `link_health.cpp`, covered by `test_link_health.cpp`. One departure from
+the sketch below: it does **not** forward-declare `TopologyMapper` but includes `topology_mapper.hpp`,
+because the mapper lookups it needs are declared there and the header is already public API. Two
+optional-returning lookups were added to `TopologyMapper` for it —
+`find_fabric_node_id_from_physical_node_id` and `find_physical_node_id_from_fabric_node_id` — since a
+descriptor can hold ASICs the mesh graph solve never placed, and walking every ASIC in a descriptor has
+to tell that apart from the programming error the throwing overloads treat it as.
 
 Inputs: `const TopologyMapper&` (expected PSD + mesh graph + asic→node) and `const PhysicalSystemDescriptor&` live. No default ctor. Non-copyable / non-movable. `link_health.hpp` forward-declares `TopologyMapper`.
 

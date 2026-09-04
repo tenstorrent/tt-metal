@@ -195,10 +195,28 @@ FabricNodeId TopologyMapper::get_fabric_node_id_from_physical_node_id(
     return it->second->fabric_node_id;
 }
 
+std::optional<FabricNodeId> TopologyMapper::find_fabric_node_id_from_physical_node_id(
+    const tt::tt_metal::PhysicalNodeId& physical_node_id) const {
+    auto it = physical_node_id_to_mapping_.find(physical_node_id);
+    if (it == physical_node_id_to_mapping_.end() || !it->second->is_mapped) {
+        return std::nullopt;
+    }
+    return it->second->fabric_node_id;
+}
+
 tt::tt_metal::PhysicalNodeId TopologyMapper::get_physical_node_id_from_fabric_node_id(
     const FabricNodeId& fabric_node_id) const {
     auto it = fabric_node_id_to_mapping_.find(fabric_node_id);
     TT_FATAL(it != fabric_node_id_to_mapping_.end(), "Fabric node id {} not found in mapping", fabric_node_id);
+    return it->second->physical_node_id;
+}
+
+std::optional<tt::tt_metal::PhysicalNodeId> TopologyMapper::find_physical_node_id_from_fabric_node_id(
+    const FabricNodeId& fabric_node_id) const {
+    auto it = fabric_node_id_to_mapping_.find(fabric_node_id);
+    if (it == fabric_node_id_to_mapping_.end()) {
+        return std::nullopt;
+    }
     return it->second->physical_node_id;
 }
 
@@ -648,7 +666,8 @@ std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> TopologyMapper::build_f
     return mapping;
 }
 
-std::map<MeshId, std::map<tt::tt_metal::PhysicalNodeId, MeshHostRankId>> TopologyMapper::build_physical_node_id_to_mesh_rank_mapping() {
+std::map<MeshId, std::map<tt::tt_metal::PhysicalNodeId, MeshHostRankId>>
+TopologyMapper::build_physical_node_id_to_mesh_rank_mapping() {
     std::map<MeshId, std::map<tt::tt_metal::PhysicalNodeId, MeshHostRankId>> mapping;
     const auto& global_context = this->distributed_context_.get();
     const std::size_t world_size = *global_context.size();
@@ -1254,7 +1273,8 @@ MeshContainer<ChipId> TopologyMapper::get_chip_ids(MeshId mesh_id, std::optional
 }
 
 void TopologyMapper::rebuild_host_rank_structs_from_mapping(
-    const std::map<MeshId, std::map<tt::tt_metal::PhysicalNodeId, MeshHostRankId>>& /* physical_node_id_to_mesh_rank */) {
+    const std::
+        map<MeshId, std::map<tt::tt_metal::PhysicalNodeId, MeshHostRankId>>& /* physical_node_id_to_mesh_rank */) {
     // Derive per-mesh host sets and per-host coord ranges from current mapping
     std::map<MeshId, std::unordered_set<MeshHostRankId>> mesh_to_hosts;
     std::map<MeshId, std::map<MeshHostRankId, MeshCoordinateRange>> mesh_host_to_range;

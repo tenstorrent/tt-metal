@@ -161,12 +161,38 @@ public:
     FabricNodeId get_fabric_node_id_from_physical_node_id(const tt::tt_metal::PhysicalNodeId& physical_node_id) const;
 
     /**
+     * @brief Look up a fabric node ID without failing when there is not one
+     *
+     * Returns nullopt for both of the ways a lookup can come up empty: the descriptor has no ASIC at
+     * that address, and it has one that the mesh graph solve never placed. Callers that walk every
+     * ASIC in a descriptor -- rather than only the mapped ones -- need to tell those apart from a
+     * programming error, which is what the throwing overload above treats them as.
+     *
+     * @param physical_node_id
+     * @return std::optional<FabricNodeId>
+     */
+    std::optional<FabricNodeId> find_fabric_node_id_from_physical_node_id(
+        const tt::tt_metal::PhysicalNodeId& physical_node_id) const;
+
+    /**
      * @brief Get the physical node ID (host_id, tray, loc) mapped to a fabric node ID
      *
      * @param fabric_node_id
      * @return tt::tt_metal::PhysicalNodeId
      */
     tt::tt_metal::PhysicalNodeId get_physical_node_id_from_fabric_node_id(const FabricNodeId& fabric_node_id) const;
+
+    /**
+     * @brief Look up a physical node ID without failing when there is not one
+     *
+     * A mesh graph can name nodes the solve did not place, and those have no address. Returns
+     * nullopt for them rather than treating the query as a programming error.
+     *
+     * @param fabric_node_id
+     * @return std::optional<tt::tt_metal::PhysicalNodeId>
+     */
+    std::optional<tt::tt_metal::PhysicalNodeId> find_physical_node_id_from_fabric_node_id(
+        const FabricNodeId& fabric_node_id) const;
 
     /**
      * @brief Get physical chip ID from a physical node ID mapped by the topology mapper
@@ -408,7 +434,8 @@ private:
      * @return std::map<MeshId, std::map<tt::tt_metal::PhysicalNodeId, MeshHostRankId>> Map from mesh ID to
      * ASIC ID to mesh host rank (ordered for deterministic iteration)
      */
-    std::map<MeshId, std::map<tt::tt_metal::PhysicalNodeId, MeshHostRankId>> build_physical_node_id_to_mesh_rank_mapping();
+    std::map<MeshId, std::map<tt::tt_metal::PhysicalNodeId, MeshHostRankId>>
+    build_physical_node_id_to_mesh_rank_mapping();
 
     /**
      * @brief Build the mapping between fabric node IDs and host ranks
