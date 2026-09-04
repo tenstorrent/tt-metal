@@ -49,16 +49,8 @@ enum eth_chan_directions : std::uint8_t {
 // never collide with a real register.
 static constexpr uint32_t k_unused_stream_id = 32;
 
-template <size_t ArraySize>
-struct routing_table_t {
-    chan_id_t dest_entry[ArraySize];
-};
-
-struct port_direction_t {
-    chan_id_t directions[eth_chan_directions::COUNT];
-};
-
-// 3 bit expression
+// Three-bit encodings for the packed first-hop direction tables. These are independent of the
+// destination-major 2D action maps below.
 enum class compressed_routing_values : std::uint8_t {
     COMPRESSED_EAST = 0,
     COMPRESSED_WEST = 1,
@@ -69,7 +61,7 @@ enum class compressed_routing_values : std::uint8_t {
     COMPRESSED_INVALID_ROUTING_TABLE_ENTRY = 6,  // Maps to INVALID_ROUTING_TABLE_ENTRY (0xFF)
 };
 
-// Compressed routing table base structure using 3 bits
+// First-hop direction table packed at three bits per destination.
 template <std::uint32_t ArraySize>
 struct __attribute__((packed)) direction_table_t {
     static constexpr std::uint32_t BITS_PER_COMPRESSED_ENTRY = 3;
@@ -124,9 +116,8 @@ struct FabricHeaderConfig {
     static_assert(LOW_LATENCY_EXTENSION_WORDS <= 3, "Only supports up to 3 extension words (64 hops)");
 };
 
-// Centralized routing field constants (single source of truth)
+// Centralized 1D low-latency routing field constants.
 struct RoutingFieldsConstants {
-    // 1D Constants (Low Latency)
     struct LowLatency {
         static constexpr uint32_t FIELD_WIDTH = 2;
         static constexpr uint32_t FIELD_MASK = 0b11;
@@ -137,32 +128,6 @@ struct RoutingFieldsConstants {
         static constexpr uint32_t BASE_HOPS = 16;               // Hops per 32-bit word
         static constexpr uint32_t FWD_ONLY_FIELD = 0xAAAAAAAA;  // 32-bit pattern (all FORWARD_ONLY)
         static constexpr uint32_t WR_ONLY_FIELD = 0x55555555;   // 32-bit pattern (all WRITE_ONLY)
-    };
-
-    // 2D Constants (Mesh)
-    struct Mesh {
-        static constexpr uint32_t FIELD_WIDTH = 8;       // 8 bits per hop command
-        static constexpr uint32_t FIELD_MASK = 0b1111;   // 4-bit mask
-
-        // Basic direction commands (bit-per-direction encoding, matching eth_chan_directions)
-        static constexpr uint8_t NOOP = 0b00000;
-        static constexpr uint8_t FORWARD_EAST = 0b00001;
-        static constexpr uint8_t FORWARD_WEST = 0b00010;
-        static constexpr uint8_t FORWARD_NORTH = 0b00100;
-        static constexpr uint8_t FORWARD_SOUTH = 0b01000;
-
-        // Multicast combinations (OR of direction bits for write-and-forward)
-        static constexpr uint8_t WRITE_AND_FORWARD_EW = FORWARD_EAST | FORWARD_WEST;    // 0b0011
-        static constexpr uint8_t WRITE_AND_FORWARD_NS = FORWARD_NORTH | FORWARD_SOUTH;  // 0b1100
-        static constexpr uint8_t WRITE_AND_FORWARD_NE = FORWARD_NORTH | FORWARD_EAST;   // 0b0101
-        static constexpr uint8_t WRITE_AND_FORWARD_NW = FORWARD_NORTH | FORWARD_WEST;   // 0b0110
-        static constexpr uint8_t WRITE_AND_FORWARD_SE = FORWARD_SOUTH | FORWARD_EAST;   // 0b1001
-        static constexpr uint8_t WRITE_AND_FORWARD_SW = FORWARD_SOUTH | FORWARD_WEST;   // 0b1010
-        static constexpr uint8_t WRITE_AND_FORWARD_NEW = FORWARD_NORTH | WRITE_AND_FORWARD_EW;          // 0b0111
-        static constexpr uint8_t WRITE_AND_FORWARD_SEW = FORWARD_SOUTH | WRITE_AND_FORWARD_EW;          // 0b1011
-        static constexpr uint8_t WRITE_AND_FORWARD_NSE = WRITE_AND_FORWARD_NS | FORWARD_EAST;           // 0b1101
-        static constexpr uint8_t WRITE_AND_FORWARD_NSW = WRITE_AND_FORWARD_NS | FORWARD_WEST;           // 0b1110
-        static constexpr uint8_t WRITE_AND_FORWARD_NSEW = WRITE_AND_FORWARD_NS | WRITE_AND_FORWARD_EW;  // 0b1111
     };
 };
 
@@ -761,10 +726,6 @@ inline void encode_1d_sparse_multicast(HopMaskType hop_mask, uint32_t& buffer) {
     }
 }
 
-//=============================================================================
-// 2D Routing Encoders
-//=============================================================================
-
 }  // namespace routing_encoding
 
 // ============================================================================
@@ -892,9 +853,8 @@ struct routing_l1_info_t {
     RouterStateManager state_manager{};  // 32 bytes
     uint16_t my_mesh_id = 0;           // Current mesh ID // 2 bytes
     uint16_t my_device_id = 0;         // Current chip ID // 2 bytes
-    // NOTE: Compressed version has additional overhead (2x slower) to read values,
-    //       but raw data is too huge (2048 bytes) to fit in L1 memory.
-    //       Need to evaluate once actual workloads are available
+    // First-hop directions are packed at three bits per destination: 256 * 3 / 8 = 96 bytes for
+    // intra-mesh routing and 1024 * 3 / 8 = 384 bytes for inter-mesh routing.
     direction_table_t<MAX_MESH_SIZE> intra_mesh_direction_table{};   // 96 bytes
     direction_table_t<MAX_NUM_MESHES> inter_mesh_direction_table{};  // 384 bytes
 
@@ -941,15 +901,6 @@ static_assert(
     sizeof(routing_l1_info_t) == 2704,
     "routing_l1_info_t must be 2704 bytes: base(516) + union(1160) + exit(1024) + coords(2) + shape(2)");
 
-struct worker_routing_l1_info_t {
-    routing_l1_info_t routing_info{};
-    tensix_fabric_connections_l1_info_t fabric_connections{};
-};
-
-struct fabric_routing_l1_info_t {
-    routing_l1_info_t routing_info;
-};
-
 // Fabric connection synchronization region in L1
 // Used for multi-RISC synchronization when opening fabric connections
 // Memory layout: [lock(4) | initialized(4) | connection_object(128) | padding(8)] = 144 bytes
@@ -971,27 +922,19 @@ static constexpr uint32_t FABRIC_CONNECTION_OBJECT_SIZE = 128;
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
 
 #if defined(COMPILE_FOR_ERISC)
-#define ROUTING_PATH_BASE MEM_AERISC_FABRIC_ROUTING_PATH_BASE
 #define ROUTING_PATH_BASE_1D MEM_AERISC_FABRIC_ROUTING_PATH_BASE_1D
-#define ROUTING_PATH_BASE_2D MEM_AERISC_FABRIC_ROUTING_PATH_BASE_2D
 #define ROUTING_TABLE_BASE MEM_AERISC_ROUTING_TABLE_BASE
 #define EXIT_NODE_TABLE_BASE MEM_AERISC_EXIT_NODE_TABLE_BASE
 #elif defined(COMPILE_FOR_IDLE_ERISC)
-#define ROUTING_PATH_BASE MEM_IERISC_FABRIC_ROUTING_PATH_BASE
 #define ROUTING_PATH_BASE_1D MEM_IERISC_FABRIC_ROUTING_PATH_BASE_1D
-#define ROUTING_PATH_BASE_2D MEM_IERISC_FABRIC_ROUTING_PATH_BASE_2D
 #define ROUTING_TABLE_BASE MEM_IERISC_ROUTING_TABLE_BASE
 #define EXIT_NODE_TABLE_BASE MEM_IERISC_EXIT_NODE_TABLE_BASE
 #elif defined(COMPILE_FOR_DISPATCH_ENGINE)
-#define ROUTING_PATH_BASE MEM_DISPATCH_TENSIX_ROUTING_PATH_BASE
 #define ROUTING_PATH_BASE_1D MEM_DISPATCH_TENSIX_ROUTING_PATH_BASE
-#define ROUTING_PATH_BASE_2D MEM_DISPATCH_TENSIX_ROUTING_PATH_BASE
 #define ROUTING_TABLE_BASE MEM_DISPATCH_TENSIX_ROUTING_TABLE_BASE
 #define EXIT_NODE_TABLE_BASE MEM_DISPATCH_TENSIX_EXIT_NODE_TABLE_BASE
 #else
-#define ROUTING_PATH_BASE MEM_TENSIX_ROUTING_PATH_BASE
 #define ROUTING_PATH_BASE_1D MEM_TENSIX_ROUTING_PATH_BASE_1D
-#define ROUTING_PATH_BASE_2D MEM_TENSIX_ROUTING_PATH_BASE_2D
 #define ROUTING_TABLE_BASE MEM_TENSIX_ROUTING_TABLE_BASE
 #define EXIT_NODE_TABLE_BASE MEM_TENSIX_EXIT_NODE_TABLE_BASE
 #endif
