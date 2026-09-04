@@ -21,7 +21,13 @@ RUN_TAG="${RUN_TAG:-pp4}"
 OUT="$S/logs/${RUN_TAG}"
 mkdir -p "$OUT"
 
-export TT_METAL_CACHE="${TT_METAL_CACHE:-/tmp/tt-metal-cache-pp}"
+# Per-USER by default. This is the JIT kernel cache and the harness WRITES to it, so a fixed
+# shared path under /tmp becomes the first thing that breaks for the second person to run this
+# harness on a shared box: the directory belongs to whoever ran first, mode 775, and everyone
+# else gets "Permission denied". It is doubly confusing because this path is NOT in env.sh, so
+# grepping env.sh for the previous owner's name turns up the /data artifacts instead -- which are
+# world-readable and were never the problem.
+export TT_METAL_CACHE="${TT_METAL_CACHE:-/tmp/tt-metal-cache-pp-$(id -un)}"
 export PREFILL_MANIFEST=$TT_METAL_HOME/models/demos/deepseek_v3_d_p/tt/runners/manifests/mistral4.json
 # Per-stage weights: byte-identical to the 32dev/8x1 cache (the device-count component of the cache
 # path is namespacing only), hardlinked into the 8dev namespace each rank resolves.

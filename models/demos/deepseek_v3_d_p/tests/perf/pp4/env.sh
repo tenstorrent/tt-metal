@@ -34,6 +34,19 @@ export GOLDEN_5120="${GOLDEN_5120:-/data/kmabee/mistral4_golden_traces/_timing_5
 export GOLDEN_10240="${GOLDEN_10240:-/data/kmabee/mistral4_golden_traces/_timing_10240_36L}"
 export GOLDEN_56320="${GOLDEN_56320:-/data/kmabee/mistral4_golden_traces/mistral4_56320_36L}"
 
+# --- shared-box notes (read this before debugging a "Permission denied") -----------------------
+# Every path ABOVE is read-only to the harness and world-readable, so a second user can point at
+# another user's copies as-is and does not need to rebuild any of them. The paths that must be
+# WRITABLE are not here: TT_METAL_CACHE (set per-user in run_pp4_model.sh / run_pp4_probe.sh),
+# M4_PERF_OUT / M4_PROFILE_OUT below (under your own checkout), and /dev/shm/tt_h2d_stream_service_
+# <PREFILL_H2D_SERVICE_ID>.bin -- whose id is FIXED, so two users cannot run this harness at the
+# same time and a stale descriptor owned by someone else cannot be removed (/dev/shm is sticky).
+#
+# The caches above are not other-writable either, which only matters on a cache MISS (the runner
+# writes the tensor it could not find) or for the host ref cache on a correctness run. An EACCES
+# under a cache directory during a perf run therefore means the {sp}x{tp} / {N}dev path resolved to
+# something that is not there -- not that the permissions need changing.
+
 # --- outputs (created under the repo root by default; both are large) ----------------------------
 export M4_PERF_OUT="${M4_PERF_OUT:-$TT_METAL_HOME/mistral4_perf_$(hostname)}"
 export M4_PROFILE_OUT="${M4_PROFILE_OUT:-$TT_METAL_HOME/mistral4_perf_profile}"

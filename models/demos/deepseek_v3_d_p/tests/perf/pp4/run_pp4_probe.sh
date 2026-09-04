@@ -5,7 +5,13 @@ S="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$S/env.sh"
 cd "$TT_METAL_HOME"
 source "$TT_METAL_HOME/python_env/bin/activate"
-export TT_METAL_CACHE="${TT_METAL_CACHE:-/tmp/tt-metal-cache-pp}"
+# Per-USER by default. This is the JIT kernel cache and the harness WRITES to it, so a fixed
+# shared path under /tmp becomes the first thing that breaks for the second person to run this
+# harness on a shared box: the directory belongs to whoever ran first, mode 775, and everyone
+# else gets "Permission denied". It is doubly confusing because this path is NOT in env.sh, so
+# grepping env.sh for the previous owner's name turns up the /data artifacts instead -- which are
+# world-readable and were never the problem.
+export TT_METAL_CACHE="${TT_METAL_CACHE:-/tmp/tt-metal-cache-pp-$(id -un)}"
 export PREFILL_MANIFEST=$TT_METAL_HOME/models/demos/deepseek_v3_d_p/tt/runners/manifests/mistral4.json
 # Prefer the host-specific binding: the [8,1] column->device map is per-galaxy and a wrong map does
 # not error, it just builds stages that are not columns.
