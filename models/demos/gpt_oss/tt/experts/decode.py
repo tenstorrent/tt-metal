@@ -252,6 +252,18 @@ def _decode_forward_batched(
     num_experts = config.num_experts
     output_tile = ttnn.Tile([32, 32])
 
+    # 0. Work on a full 32-row tile. The tile is 32 rows tall regardless of the user count, so a
+    #    partial batch costs nothing extra, and the broadcast adds/muls below (bias over tokens,
+    #    routing weights over hidden) only support full-tile row counts. The padding rows carry zero
+    #    hidden states and zero routing weights, so they contribute exactly nothing and are dropped
+    #    by the final reshape back to num_tokens rows.
+    real_tokens = num_tokens
+    if num_tokens < ttnn.TILE_SIZE:
+        pad_rows = ttnn.TILE_SIZE - num_tokens
+        hidden_states = ttnn.pad(hidden_states, padding=[(0, 0), (0, 0), (0, pad_rows), (0, 0)], value=0.0)
+        routing_weights = ttnn.pad(routing_weights, padding=[(0, pad_rows), (0, 0)], value=0.0)
+        num_tokens = ttnn.TILE_SIZE
+
     # 1. Union-of-experts sparsity mask [1, 1, 1, E], ROW_MAJOR bf16 (+0.0 == inactive).
     expert_hit = ttnn.sum(routing_weights, dim=0, keepdim=True)  # [1, E]
     expert_hit_4d = ttnn.reshape(expert_hit, (1, 1, 1, num_experts))
@@ -325,6 +337,8 @@ def _decode_forward_batched(
     bias_contrib = ttnn.reshape(bias_contrib, (1, 1, num_tokens, config.hidden_size))
     next_states = ttnn.add(next_states, bias_contrib, output_tensor=next_states)
     bias_contrib.deallocate(True)
+    if real_tokens != num_tokens:
+        routing_weights.deallocate(True)  # the padded copy; the caller owns the original
 
     # Tensor parallel all-reduce (sums the per-device intermediate slices and the rank-0 bias)
     if tp > 1:
@@ -338,7 +352,7 @@ def _decode_forward_batched(
 
     next_states = ttnn.reshape(
         next_states,
-        (1, 1, num_tokens, config.hidden_size),
-        (1, 1, max(32, num_tokens), config.hidden_size),
+        (1, 1, real_tokens, config.hidden_size),
+        (1, 1, ttnn.TILE_SIZE, config.hidden_size),
     )
     return next_states

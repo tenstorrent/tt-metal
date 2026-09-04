@@ -69,21 +69,13 @@ def decode_forward(
     num_local_kv_heads = mesh_config.shard_size(config.num_kv_heads)
     head_dim = config.head_dim
 
-    # One user per core, row-major over an 8-wide grid: user b lives on core (b % 8, b // 8).
-    # This placement is load-bearing, not cosmetic. Three consumers of the Q/K/V shards read
-    # "their" user's data from a core they compute themselves rather than from the shard spec:
-    #   * rotary_embedding_llama (decode) borrows cos/sin/trans_mat from the shard resident in
-    #     the local core's L1; RotarySetup places those on CoreGrid(8, 8) / (b % 8, b // 8).
-    #   * paged SDPA decode's reducer/output core for batch b is (b % grid.x, b // grid.x) with
-    #     the (8, 8) program-config grid, and it reads Q from that core's L1 shard.
-    #   * the KV-update reshard below uses the same 8-wide batch grid (get_kv_memory_config).
-    # With a bare L1_HEIGHT_SHARDED_MEMORY_CONFIG the op falls back to the *device* compute grid,
-    # which is 8 wide on Wormhole but 13 wide on Blackhole, so for batch > 8 users the shards of
-    # user b land on (b % 13, b // 13) and every downstream op silently reads another user's
-    # Q/K/V (no TT_FATAL). Batch 1 only worked because core (0, 0) coincides. Mirrors the
-    # tt_transformers Blackhole fix (model_config.py CREATE_QKV_DECODE_SHARD, CoreGrid(4, 8)).
-    grid_size = ttnn.CoreCoord(8, 8)
-    batch_grid = ttnn.num_cores_to_corerangeset(batch_size, grid_size, row_wise=True)
+    # One user per core on the grid RoPE and SDPA decode expect (see ProgramConfig.get_decode_user_grid).
+    # This placement is load-bearing: with a bare L1_HEIGHT_SHARDED_MEMORY_CONFIG the op falls back to
+    # the *device* compute grid, which is 8 wide on Wormhole but 13 wide on Blackhole, so for a batch
+    # that is a multiple of 32 user b would land on (b % 13, b // 13) while RotarySetup's cos/sin and
+    # the paged SDPA reducer live at (b % 8, b // 8): every downstream op silently reads another user's
+    # Q/K/V (no TT_FATAL). Batch 1 only worked because core (0, 0) coincides.
+    batch_grid, _ = program_config.get_decode_user_grid(mesh_device, batch_size)
     qkv_heads_mem_config = ttnn.create_sharded_memory_config(
         shape=(ttnn.TILE_SIZE, head_dim),
         core_grid=batch_grid,
@@ -137,29 +129,16 @@ def decode_forward(
     # Use local heads per device, not global heads
     padded_heads = ((num_local_heads + 31) // 32) * 32
 
+    # SDPA writes to DRAM; reshard onto a rectangular one-core-per-user grid for nlp_concat_heads_decode
+    # (it needs a single CoreRange as input grid; the RoPE/SDPA user grid is not one for 8 < B < 32 on
+    # Blackhole's 13-wide compute grid).
     height_sharded_mem_config = ttnn.create_sharded_memory_config(
         shape=(padded_heads, head_dim),  # Shape per shard (tile-aligned)
-        core_grid=batch_grid,
+        core_grid=program_config.get_decode_concat_grid(batch_size),
         strategy=ttnn.ShardStrategy.HEIGHT,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
     )
-    # SDPA decode reads user b's Q from the L1 of its reducer core (b % grid.x, b // grid.x) of the
-    # SDPA program grid. When that grid is wider than the 8-wide batch grid Q was created on (full
-    # Blackhole grid for multi-user decode, see ProgramConfig.get_decode_sdpa_grid), reshard Q onto it.
-    sdpa_grid = program_config.get_decode_sdpa_grid(mesh_device, batch_size)
-    if sdpa_grid.x != grid_size.x and batch_size > sdpa_grid.x:
-        q_sdpa_mem_config = ttnn.create_sharded_memory_config(
-            shape=(padded_heads, head_dim),
-            core_grid=ttnn.num_cores_to_corerangeset(batch_size, sdpa_grid, row_wise=True),
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
-        )
-        tt_q_resharded = ttnn.to_memory_config(tt_q, q_sdpa_mem_config)
-        tt_q.deallocate(True)
-        tt_q = tt_q_resharded
-
     # Scaled dot-product attention
     if page_table is not None:
         tt_sdpa_tensor = ttnn.transformer.paged_scaled_dot_product_attention_decode(

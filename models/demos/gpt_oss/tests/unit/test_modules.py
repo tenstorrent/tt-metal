@@ -11,6 +11,7 @@ from models.common.utility_functions import is_blackhole
 from models.tt_transformers.tt.common import gather_cos_sin, precompute_freqs
 from models.tt_transformers.tt.load_checkpoints import convert_hf_qkv_to_meta_format
 
+from ...tt.attention.config import ProgramConfig as AttentionProgramConfig
 from ...tt.layer import DecoderLayer
 from ...tt.model import create_rope_setup
 from ...utils.general_utils import throughput_experts_supported_on_arch
@@ -680,6 +681,7 @@ def setup_decoder_layer(setup, reference_layer, local_batch_size, seq_len, layer
         (1, 1),  # decode
         (128, 1),  # decode
         (32, 1),  # decode, 32 users on one mesh row (TP only, low-latency experts on the whole tile)
+        (16, 1),  # decode, 16 users: exercises the device-grid (13-wide on Blackhole) per-user placement
         (1, 128),  # prefill
         (1, 1024),  # prefill 1k
         (1, 4096),  # prefill 4k
@@ -688,6 +690,7 @@ def setup_decoder_layer(setup, reference_layer, local_batch_size, seq_len, layer
         "decode_low_latency",
         "decode_high_throughput",
         "decode_b32",
+        "decode_b16",
         "prefill_128",
         "prefill_1024",
         "prefill_4096",
@@ -889,10 +892,12 @@ def test_decoder(
         sin_meta, device=setup["mesh_device"], mesh_mapper=mesh_mapper, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
     )
 
-    # For decode mode, convert cos/sin to HEIGHT_SHARDED to match Q/K/V from nlp_create_qkv_heads_decode
+    # For decode mode, convert cos/sin to HEIGHT_SHARDED on the per-user grid Q/K/V use (the same rule
+    # RotarySetup and attention/decode.py follow; rotary_embedding_llama reads cos/sin from the core that
+    # holds the user's Q shard, so the grids must agree — 8 wide for batches <= 8 or multiples of 32,
+    # the device compute grid otherwise, e.g. 13 wide for 16 users on Blackhole).
     if mode == "decode":
-        grid_size = ttnn.CoreCoord(8, 8)  # Safe limit: max 8 per dimension to avoid Galaxy hangs
-        batch_grid = ttnn.num_cores_to_corerangeset(local_batch_size, grid_size, row_wise=True)
+        batch_grid, _ = AttentionProgramConfig.get_decode_user_grid(setup["mesh_device"], local_batch_size)
         mem_config = ttnn.create_sharded_memory_config(
             shape=(ttnn.TILE_SIZE, config.head_dim),
             core_grid=batch_grid,

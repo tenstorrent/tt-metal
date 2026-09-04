@@ -31,6 +31,12 @@ def compute_per_device_vocab(vocab_size, num_tp):
     return 1 << (per_device - 1).bit_length()  # next power of 2
 
 
+def _corerange_cores(core_range):
+    """Row-major list of (x, y) core coordinates of a ttnn.CoreRange."""
+    start, end = core_range.start, core_range.end
+    return [(x, y) for y in range(start.y, end.y + 1) for x in range(start.x, end.x + 1)]
+
+
 def create_rope_setup(
     mesh_device,
     hf_config,
@@ -124,18 +130,6 @@ class Model:
         self.max_local_batch_size = max_local_batch_size
         self.users_row_sharded = users_row_sharded
 
-        # Decode places one user per core on an 8-wide grid (attention/decode.py) and RotarySetup
-        # must put that user's cos/sin/trans_mat shard on the same core. RotarySetup only uses the
-        # 8-wide CoreGrid(8, 8) layout on Blackhole when the batch is a multiple of 32; for other
-        # batch sizes it lays users out row-wise over the *device* grid (13 wide on Blackhole), which
-        # coincides with the 8-wide layout only while all users fit in the first row (<= 8). Anything
-        # in between would silently rotate user b with user b''s angles, so refuse it up front.
-        if "blackhole" in ttnn.get_arch_name() and 8 < max_local_batch_size and max_local_batch_size % 32 != 0:
-            raise ValueError(
-                f"max_local_batch_size={max_local_batch_size} is not supported on Blackhole: use <= 8 or a "
-                "multiple of 32 users per mesh row (pad the batch) so the RoPE and QKV shard grids agree."
-            )
-
         self.ccl_manager = ccl_manager
 
         # Use mode-aware MeshConfig (stores separate configs for prefill and decode)
@@ -155,6 +149,25 @@ class Model:
             datatype=ttnn.bfloat16,
             shard_batch_to_mesh_dim=0,
         )
+
+        # Attention decode places user b's Q/K/V shard on the core RotarySetup put user b's cos/sin/trans_mat
+        # on (rotary_embedding_llama reads them from the local core's L1). Both derive the placement from
+        # the same rule (ProgramConfig.get_decode_user_grid mirrors RotarySetup.get_batch_grid); fail at
+        # construction rather than silently rotating users with each other's angles if they ever diverge.
+        if not users_row_sharded:
+            from .attention.config import ProgramConfig as _AttnProgramConfig
+
+            user_cores, _ = _AttnProgramConfig.get_decode_user_grid(mesh_device, max_local_batch_size)
+            rope_grid = self.rope_setup.batch_grid
+            if isinstance(rope_grid, ttnn.CoreRangeSet):
+                expected = [c for cr in user_cores.ranges() for c in _corerange_cores(cr)]
+                actual = [c for cr in rope_grid.ranges() for c in _corerange_cores(cr)][: len(expected)]
+                if expected != actual:
+                    raise RuntimeError(
+                        f"RoPE core placement {actual[:4]}... does not match attention's per-user grid "
+                        f"{expected[:4]}... for max_local_batch_size={max_local_batch_size}; update "
+                        "ProgramConfig.get_decode_user_grid to mirror RotarySetup.get_batch_grid"
+                    )
 
         # Keep references for compatibility
         self.cos_matrix = self.rope_setup.cos_matrix

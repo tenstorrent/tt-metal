@@ -11,7 +11,7 @@ Inference implementation for GPT-OSS models on Tenstorrent Wormhole accelerators
 
 **Current Status**: This model is under active development.
 - ✅ Supported: batch size 1 on all meshes; batch 128 (32 users per mesh row, `users_row_sharded`) on Wormhole Galaxy
-- ✅ Supported: batch size 32 on single-row 1×8 meshes (TP=8, EP=1), e.g. 8× Blackhole P150 — see *Multi-user decode on single-row meshes*
+- ✅ Supported: any batch size up to 32 on single-row 1×8 meshes (TP=8, EP=1), e.g. 8× Blackhole P150 — see *Multi-user decode on single-row meshes*
 - 🚧 In Progress: Extended sequence lengths, batched (multi-user) prefill on single-row meshes
 
 ## Multi-user decode on single-row meshes
@@ -36,9 +36,15 @@ computed in one call. The activation footprint stays identical to batch 1 (M is 
 tile either way).
 
 Constraints: users are not row-sharded; the decode batch must equal `max_batch_size` (pad unused
-slots); on Blackhole `max_batch_size` must be ≤ 8 or a multiple of 32 so that the per-user
-Q/K/V shard grid (8 wide) agrees with the RoPE cos/sin placement; prefill of the 32 users runs
-sequentially through the generator (one user per forward).
+slots); any `max_batch_size` ≤ 32 works — the per-user Q/K/V / KV-cache / SDPA core placement
+(`ProgramConfig.get_decode_user_grid`) follows RotarySetup's cos/sin placement and the model checks
+the two agree at construction; prefill of the users runs sequentially through the generator (one
+user per forward).
+
+Prefill runs each 32-token tile through the experts routed to at least one of its tokens
+(`experts/prefill.py`, routing-aware `sparse_matmul` mask) rather than through every expert, which
+is worth ~1.3× on gpt-oss-120b prefill/TTFT; grouping tokens per expert (one GEMM per expert with
+variable M, as the Galaxy throughput path does) is the remaining lever.
 
 ```bash
 export HF_MODEL=/path/to/gpt-oss-120b
@@ -59,6 +65,32 @@ Measured on 8× Blackhole P150 (1×8, greedy, ~128-token prompts, 200 generated 
 
 TTFT at batch 32 is the per-user share of 32 sequential prefills (one user per forward); packing
 several users into one prefill forward is the main open item for multi-user TTFT.
+
+### Multi-user regression sweep
+
+`tests/test_multi_user_regression.py` runs the tt-inference-server benchmark ISL/OSL pairs
+(128/128, 128/1024, 1024/128, 2048/128, 4096/128, 8192/128, 8192/1024, 16384/128, 32768/128) for
+batch {1, 2, 4, 8, 16, 32} with a per-user context of min(64K, 512K/B) (pairs above it are skipped,
+as the server caps concurrency). Every cell is gated on token ids, on every user's first token being
+`<|channel|>`, on QA keyword accuracy at ISL 128 (32 distinct prompts) and on a degeneracy
+heuristic; it records prefill, TTFT (first / mean / last user), decode step mean/p50/p99, tok/s
+and board telemetry to `generated/gpt_oss_multi_user_regression/<model>_<mesh>.jsonl`.
+
+```bash
+export HF_MODEL=/path/to/gpt-oss-120b TT_CACHE_PATH=/path/to/cache/gpt-oss-120b
+# one process per batch size (function-scoped mesh device; pytest -k "batch1" also matches batch16)
+pytest "models/demos/gpt_oss/tests/test_multi_user_regression.py::test_multi_user_regression[blackhole-1x8-batch32]" \
+    --timeout 3600 --timeout-method thread
+```
+
+Knobs (env): `GPT_OSS_REGRESSION_PAIRS="128:128,1024:128"`, `_KV_TOKENS` (total KV budget, default
+512K), `_PAGE_TABLE_SEED`, `_DECODE_TRACE=0`, `_DECODE_K_CHUNK`, `_TAG` (results file suffix) and
+`_COOLDOWN_C` / `_COOLDOWN_TIMEOUT_S`: waits for all boards to cool below the threshold before each
+prefill and before the first decode step. On the 8× P150 box the hottest board reaches ~88 °C during
+long prefills and throttles to 800 MHz, and a traced decode step launched while a board is
+deep-throttled has deadlocked inside paged SDPA decode; `GPT_OSS_REGRESSION_COOLDOWN_C=84` avoided
+that for the whole sweep. All prefill lengths are compiled eagerly before the first trace is
+captured, because programs compiled while a trace is live can be overwritten by a later replay.
 
 ## Quick Start
 

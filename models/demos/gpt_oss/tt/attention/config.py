@@ -47,13 +47,6 @@ class ProgramConfig:
     prefill_k_chunk_size_large: int = 256
     prefill_threshold: int = 2048
 
-    # Multi-user decode: optionally let SDPA use the whole device compute grid when it has more cores
-    # than the default 8x8 (Blackhole: 13x10 = 130 cores -> 4 cores per user at batch 32 instead of 2).
-    # Q is resharded onto that grid right before SDPA (decode.py); the 8-wide grid stays for RoPE / KV
-    # update. Off by default: measured no step-time gain for gpt-oss-20b at batch 32 (8K context) on
-    # P150x8, so the standard 8x8 grid is kept. Kept as a knob for long-context tuning.
-    decode_sdpa_full_grid_for_batch: bool = False
-
     # Compute config
     math_fidelity: str = "HiFi4"
     math_approx_mode: bool = False
@@ -104,21 +97,56 @@ class ProgramConfig:
         if self.math_fidelity not in valid_fidelities:
             raise ValueError(f"math_fidelity must be one of {valid_fidelities}, got {self.math_fidelity}")
 
-    def get_decode_sdpa_grid(self, mesh_device, batch_size: int = 1) -> ttnn.CoreCoord:
-        """Core grid for SDPA decode. 8x8 by default (one user per core row-major, matching the
-        Q/K/V shard placement); the full device grid for multi-user decode when it is larger and
-        the flag allows it, so each user gets more K/V-chunk workers."""
-        grid = ttnn.CoreCoord(8, 8)
-        if self.decode_sdpa_full_grid_for_batch and batch_size > 8:
-            device_grid = mesh_device.compute_with_storage_grid_size()
-            if device_grid.x * device_grid.y > grid.x * grid.y:
-                grid = ttnn.CoreCoord(device_grid.x, device_grid.y)
-        return grid
+    @staticmethod
+    def get_decode_user_grid(mesh_device, batch_size: int):
+        """Per-user core placement for decode: (cores holding user b's Q/K/V shard, SDPA program grid).
+
+        Three consumers read a user's data from a core they *compute* rather than from the shard spec,
+        so they must all agree: rotary_embedding_llama borrows cos/sin/trans_mat from the shard resident
+        in the local core's L1 (RotarySetup places them, see models/tt_transformers/tt/rope.py
+        get_batch_grid); paged SDPA decode's reducer/output core for batch b is (b % grid.x, b // grid.x)
+        of its program grid and reads Q from that core's L1; and nlp_create_qkv_heads_decode places user
+        b on the b-th core (row-major) of the grid it is given. RotarySetup's rule is: an 8x8 grid when
+        the batch is a multiple of 32, otherwise the device compute grid (8x8 on Wormhole, 13x10 on
+        Blackhole), row-major. Mirror it here and pick the SDPA grid with the matching width. Up to 8
+        users both layouts coincide (first row), so the 8x8 SDPA grid is kept for them.
+        """
+        device_grid = mesh_device.compute_with_storage_grid_size()
+        grid_8x8 = ttnn.CoreCoord(8, 8)
+        if batch_size % 32 == 0 or batch_size <= 8 or device_grid.x == grid_8x8.x:
+            sdpa_grid = grid_8x8
+        else:
+            sdpa_grid = ttnn.CoreCoord(device_grid.x, device_grid.y)
+        user_cores = ttnn.num_cores_to_corerangeset(batch_size, sdpa_grid, row_wise=True)
+        return user_cores, sdpa_grid
+
+    @staticmethod
+    def get_decode_concat_grid(batch_size: int):
+        """Single-rectangle core grid with one core per user for nlp_concat_heads_decode's input.
+
+        The op derives its output grid from the bounding box of the input grid, so the input must be
+        exactly one CoreRange (16 users laid out row-major on a 13-wide grid, 13 + 3, is not). Pick the
+        widest w <= 8 that divides the batch with at most 8 rows; every practical batch (powers of two,
+        multiples of 8) gets a full rectangle, and a batch that fits in one row stays a row.
+        """
+        if batch_size <= 8:
+            return ttnn.num_cores_to_corerangeset(batch_size, ttnn.CoreCoord(8, 8), row_wise=True)
+        for width in range(8, 0, -1):
+            if batch_size % width == 0 and batch_size // width <= 8:
+                return ttnn.CoreRangeSet(
+                    {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(width - 1, batch_size // width - 1))}
+                )
+        raise ValueError(
+            f"batch size {batch_size}: nlp_concat_heads_decode needs one core per user on a single rectangle of "
+            "at most 8x8 cores and no w <= 8 with batch/w <= 8 divides this batch; pad the batch to a multiple "
+            "of 8 or a power of two (<= 32)."
+        )
 
     def get_decode_sdpa_config(self, mesh_device, batch_size: int = 1) -> ttnn.SDPAProgramConfig:
         """Get SDPA config for decode mode"""
+        _, sdpa_grid = self.get_decode_user_grid(mesh_device, batch_size)
         return ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=self.get_decode_sdpa_grid(mesh_device, batch_size),
+            compute_with_storage_grid_size=sdpa_grid,
             q_chunk_size=self.decode_q_chunk_size,
             k_chunk_size=self.decode_k_chunk_size,
             exp_approx_mode=False,

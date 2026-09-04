@@ -89,6 +89,12 @@ def _process_prefill_chunk(
     # Note: prefill_sparsity is cached and reused, don't deallocate it
     prefill_sparsity_reshaped = ttnn.reshape(prefill_sparsity, (1, config.num_experts))
     routing_weights = ttnn.mul(routing_weights, prefill_sparsity_reshaped, output_tensor=routing_weights)
+    # Routing-aware sparsity for the fused gate/up projection: a 32-token group only needs the experts routed to
+    # at least one of its tokens (for GPT-OSS-120B top-4 that is ~83 of 128 on average, vs all 128 with the dense
+    # EP mask), and sparse_matmul's prefill cost is dominated by the per-(group, expert) pair overhead. The down
+    # projection keeps the per-expert EP mask: its pairs are few and large, so per-group sparsity would only add
+    # pairs. nnz is left to the kernel for the gate/up call -- it must equal count_nonzero exactly when given.
+    group_mask = _group_expert_mask(routing_weights, seq_len, config.num_experts)  # [1, S/32, 1, E] row-major
     # Note: permute/reshape operations return views - do not deallocate originals
     routing_weights = ttnn.permute(routing_weights, (1, 0))
     routing_weights = ttnn.reshape(routing_weights, (batch_size, config.num_experts, seq_len, 1))
@@ -107,6 +113,7 @@ def _process_prefill_chunk(
 
     # Process each split and stream-concatenate to avoid holding all split outputs.
     next_states_reduced_acc = None
+    group_offset = 0
     for hidden_split, routing_split in zip(hidden_list, routing_list):
         split_len = hidden_split.shape[2]
         group_size = split_len // TILE_SIZE
@@ -115,14 +122,18 @@ def _process_prefill_chunk(
         # hidden_split, so deallocating hidden_4D below releases the split itself (intended).
         hidden_4D = ttnn.unsqueeze_to_4D(hidden_split)
         hidden_4D = ttnn.reshape(hidden_4D, (1, group_size, TILE_SIZE, config.hidden_size))
-        sparsity_repeated = ttnn.repeat(prefill_sparsity, (1, 1, group_size, 1))
+        split_mask = ttnn.slice(
+            group_mask, [0, group_offset, 0, 0], [1, group_offset + group_size, 1, config.num_experts]
+        )
+        group_offset += group_size
 
         # Fused gate/up projection: [1, G, 32, H] x [1, E, H, 2 * Ip] -> [1, G, 1, E, 32, 2 * Ip]
+        # (skipped (group, expert) pairs are zero-filled by the op)
         gate_up = ttnn.sparse_matmul(
             hidden_4D,
             weights.gate_up_proj,
-            sparsity=sparsity_repeated,
-            nnz=experts_per_ep * group_size,
+            sparsity=split_mask,
+            nnz=None,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             output_tile=output_tile,
             program_config=program_config.get_prefill_gate_up_config(
@@ -131,6 +142,7 @@ def _process_prefill_chunk(
             dtype=activation_dtype,
         )
         hidden_4D.deallocate(True)
+        split_mask.deallocate(True)
         # Note: transpose/reshape operations return views - do not deallocate originals
         gate_up = ttnn.transpose(gate_up, 1, 3)
         gate_up = ttnn.reshape(gate_up, (batch_size, config.num_experts, split_len, 2 * ip))
@@ -178,8 +190,23 @@ def _process_prefill_chunk(
             next_states_reduced.deallocate(True)
             next_states_reduced_acc = next_states_concat
         routing_split.deallocate(True)
+    group_mask.deallocate(True)
 
     return next_states_reduced_acc
+
+
+def _group_expert_mask(routing_weights, seq_len, num_experts):
+    """[S, E] dense routing weights (0 for unselected experts) -> [1, S/32, 1, E] row-major bf16 mask with 1.0 where
+    any token of the 32-token group routes to the expert (the sparse_matmul sparsity layout for a [1, G, 32, K] input).
+    """
+    groups = seq_len // 32
+    grouped = ttnn.reshape(routing_weights, (1, groups, 32, num_experts))  # tile-aligned view
+    used = ttnn.sum(grouped, dim=2, keepdim=True)  # [1, G, 1, E], > 0 iff some token in the group uses e
+    mask = ttnn.gt(used, 0.0)
+    used.deallocate(True)
+    mask_rm = ttnn.to_layout(mask, ttnn.ROW_MAJOR_LAYOUT)
+    mask.deallocate(True)
+    return mask_rm
 
 
 def prefill_forward(
