@@ -691,7 +691,10 @@ public:
         uint32_t units_needed = 0;
         if (P == 1) {
             const uint32_t payload_bytes = num_entries * entry_size;
-            ASSERT(iface.fifo_rd_ptr + payload_bytes <= iface.fifo_limit_page_aligned);
+            // A read window may straddle the wrap (the caller keeps a lookahead over the ring end);
+            // only asking for more than the ring holds is a bug. units_for_read is already wrap-aware,
+            // and the GlobalCB twin (remote_cb_wait_front) allows the same straddle.
+            ASSERT(payload_bytes <= iface.fifo_limit_page_aligned - iface.fifo_start_addr);
             const uint32_t rd_offset = iface.fifo_rd_ptr - iface.fifo_start_addr;
             units_needed = units_for_read(iface, rd_offset, payload_bytes);
         } else {
