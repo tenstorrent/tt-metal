@@ -511,6 +511,22 @@ class DFlashFusedDecoder:
         self.v_pt = ttnn.from_torch(
             pt, device=self.mesh_device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self._mapper
         )
+        # BOUNDED sliding target: hybrid per-layer tables, each layer's user row
+        # replicated across the K+1 verify candidates (the batch-alias trick).
+        # Without these the verify falls through to the model's batch-1 set and
+        # decode_forward slices row b>=1 of a 1-row table -- the same failure the
+        # MTP fused body had (see spec_decode._capture_fused_trace). None when
+        # the target has no per-layer tables installed (unbounded: unchanged).
+        self.v_ptl = None
+        installed = getattr(target_model, "_active_page_tables_per_layer", None)
+        if installed:
+            self.v_ptl = []
+            for lpt in installed:
+                if lpt is None or not hasattr(lpt, "dim"):
+                    self.v_ptl.append(lpt)
+                    continue
+                row = lpt[0:1] if lpt.dim() > 1 else lpt.unsqueeze(0)
+                self.v_ptl.append(row.repeat(K + 1, 1).to(torch.int32))
         # Reuse the model's on-device sampling module for BOTH the draft ids
         # and the verify posterior (proven force-argmax over sharded logits;
         # see tt/model.py sampling init and the batched-prefill call site in
@@ -640,7 +656,12 @@ class DFlashFusedDecoder:
         # sharded verify logits when the sampling module can consume them
         self.target._dflash_sharded_logits = self._sampler is not None
         logits, hidden = self.target.ttnn_verify_forward(
-            x=vx, current_pos=self.v_pu, current_pos_cache=self.v_pi, page_table=self.v_pt, kv_cache=self.kv_layers
+            x=vx,
+            current_pos=self.v_pu,
+            current_pos_cache=self.v_pi,
+            page_table=self.v_pt,
+            kv_cache=self.kv_layers,
+            page_tables_per_layer=self.v_ptl,
         )
         if self._sampler is not None:
             vidx, _lp = self._sampler.sample(logits, enable_trace=False)
