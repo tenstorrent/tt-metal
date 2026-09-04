@@ -1738,6 +1738,15 @@ struct Strategy<FPUFusion> {
         constexpr uint32_t kSubTiles = kSub.tiles();
 
         // Neither of these touches DST, so they program once for every subblock.
+        //
+        // The same descriptor gap Strategy<BcastFusion> had, in the second place the
+        // broadcast path appears: these two carry the formats and the mode and never the
+        // tile geometry. Inert for every kernel in tree today -- they are all one geometry
+        // throughout, so the memo compare early-outs and nothing is programmed -- and it has
+        // no mixed-geometry coverage, because a matmul-with-bias body of two geometries is
+        // not something this repo can build yet. Fixed here anyway rather than left as a
+        // known hole one line wide.
+        unpack_geometry_to(acc_dfb, bias_dfb);
         ckernel::reconfig_data_format(acc_dfb, bias_dfb);
         ckernel::add_bcast_rows_init_short(acc_dfb, bias_dfb);
         pack_to(out_dfb);  // this drains the accumulator into the output
@@ -2202,6 +2211,16 @@ struct Strategy<BcastFusion> {
 
         // Point the unpacker at this pair, then program the broadcast mode. Both are
         // hoisted: neither buffer changes across the loop.
+        //
+        // The DESCRIPTORS first, and for the same reason fpu_seed_init needs them: the two
+        // calls below carry the operands' data FORMATS and the broadcast mode, and neither
+        // has ever carried tile geometry. Without this the pass reads through whatever the
+        // init happened to program, so a body of all-32x32 broadcasts came back wrong purely
+        // because its init named a row-form pair -- measured, and it is
+        // test_unified_pass_order.py's first finding. Two operands, so the two-argument
+        // form: the one-argument one would program srcB from the block's buffer, which is
+        // exactly the mistake the mid-body re-init makes.
+        unpack_geometry_to(node.block_dfb, node.vec_dfb);
         ckernel::reconfig_data_format(node.block_dfb, node.vec_dfb);
         Ops::init(node.block_dfb, node.vec_dfb);
 
