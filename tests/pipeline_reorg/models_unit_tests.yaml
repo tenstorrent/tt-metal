@@ -243,8 +243,9 @@
   model: qwen3.5-9b
   model_family: Qwen
   skus:
+    # Measured 26 min on the first green run (actions/runs/33774111206); 30 leaves ~15% slack.
     wh_n300:
-      timeout: 33
+      timeout: 30
       tier: 3
   owner_id: U08HL8X1ECD # Aniruddha Tupe
   team: models
