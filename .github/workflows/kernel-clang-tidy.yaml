@@ -1,0 +1,308 @@
+name: "Kernel clang-tidy"
+
+# Post-hoc clang-tidy on runtime-JIT-compiled kernel code (prototype).
+#
+# Dedicated caller for the opt-in experiment wired into
+# ./.github/workflows/ttnn-sanity-tests-impl.yaml (enable-kernel-clang-tidy):
+# run one ttnn test group normally, let the JIT build log every real kernel
+# compile command (TT_METAL_LOG_KERNELS_COMPILE_COMMANDS=1, all kernel-compile
+# caches defeated for that leg only), translate the SFPI-GCC commands for
+# clang, and run clang-tidy on them after the tests finish. Findings are
+# non-blocking by design — this is not a merge gate.
+# See tech_reports/code-indexing/kernel-clang-tidy.md.
+#
+# Structure mirrors code-coverage.yaml: child impl workflow does the
+# capture + lint and uploads kernel-clang-tidy-* artifacts; the report job
+# aggregates them into an HTML report (browsable per-group pages + index),
+# uploads it as an artifact, and can publish it to GitHub Pages.
+#
+# Publishing target: tenstorrent/tt-metal-clangsa-results under
+# kernel-clang-tidy/ — the same results repo + PAT the Clang Static Analyzer
+# workflow publishes to. NOT tt-metal-code-coverage: code-coverage.yaml
+# force-orphan-pushes that repo's gh-pages nightly, so anything co-published
+# there would be wiped. CAVEAT: clang-static-analyzer.yaml currently publishes
+# with force_orphan: true, which wipes this subdirectory on its next nightly
+# run; a dedicated results repo is the promotion path if this graduates.
+#
+# To lint more coverage: add another run-*-tests job calling an impl workflow
+# that supports enable-kernel-clang-tidy, and the report job will pick up its
+# kernel-clang-tidy-* artifacts automatically.
+
+on:
+  workflow_dispatch:
+    inputs:
+      target-group:
+        description: >-
+          Exact ttnn matrix test-group name to capture + lint (must exist in
+          tests/pipeline_reorg/ttnn_sanity_tests.yaml for the chosen SKU)
+        required: false
+        type: string
+        default: "trace allocation tracker"
+      enabled-skus:
+        description: "Comma-separated SKUs passed to the ttnn impl (the capture leg is '<target-group> [<sku>]')"
+        required: false
+        type: string
+        default: "wh_n300_civ2"
+      publish-html:
+        description: >-
+          Publish the HTML report to tenstorrent/tt-metal-clangsa-results
+          (kernel-clang-tidy/). Always published on main; use this to publish
+          from a branch run.
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+
+  build-artifact:
+    needs: check-harbor
+    if: ${{ !cancelled() }}
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      contents: read
+      packages: write
+    secrets: inherit
+    with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+      build-inplace-wheel: true
+      tracy: false
+      skip-tt-train: false
+      platform: "Ubuntu 22.04"
+
+  run-ttnn-tests:
+    needs: [check-harbor, build-artifact]
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' }}
+    uses: ./.github/workflows/ttnn-sanity-tests-impl.yaml
+    secrets: inherit
+    with:
+      enabled-skus: ${{ inputs.enabled-skus || 'wh_n300_civ2' }}
+      docker-image: ${{ needs.build-artifact.outputs.ci-test-docker-image }}
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enable-kernel-clang-tidy: true
+      clang-tidy-target-group: ${{ inputs.target-group || 'trace allocation tracker' }}
+
+  report:
+    name: "Aggregate & publish kernel clang-tidy report"
+    # Run even when a test leg failed: the tidy artifact uploads are
+    # !cancelled() in the impl, so findings may exist regardless.
+    needs: [run-ttnn-tests]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Download kernel clang-tidy artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: kernel-clang-tidy-*
+          path: artifacts
+          merge-multiple: false
+
+      - name: Generate HTML report + step summary
+        env:
+          ARTIFACTS_DIR: artifacts
+          SITE_DIR: site
+        run: |
+          python3 - <<'EOF'
+          import datetime, html, json, os, pathlib, re
+
+          artifacts = pathlib.Path(os.environ["ARTIFACTS_DIR"])
+          site = pathlib.Path(os.environ["SITE_DIR"])
+          site.mkdir(parents=True, exist_ok=True)
+
+          sha = os.environ.get("GITHUB_SHA", "unknown")
+          repo_url = "{}/{}".format(
+              os.environ.get("GITHUB_SERVER_URL", "https://github.com"),
+              os.environ.get("GITHUB_REPOSITORY", "tenstorrent/tt-metal"),
+          )
+
+          # clang-tidy diagnostic: /abs/path:12:5: warning: message [check-name]
+          DIAG_RE = re.compile(
+              r"^(?P<path>/[^:\s][^:]*):(?P<line>\d+):(?P<col>\d+): "
+              r"(?P<sev>warning|error): (?P<msg>.*?)(?: \[(?P<check>[^\[\]\s]+)\])?$"
+          )
+          # findings.txt entry separator written by build_kernel_clang_tidy_commands.py
+          ENTRY_RE = re.compile(r"^==== (?P<tu>.+) \(dir: .*, rc: (?P<rc>-?\d+)\) ====$")
+
+          CSS = """
+            body { font-family: sans-serif; max-width: 1100px; margin: 2rem auto; padding: 0 1rem; }
+            table { border-collapse: collapse; width: 100%; margin-bottom: 1.5rem; }
+            th, td { border: 1px solid #ccc; padding: 0.4rem 0.8rem; text-align: left; vertical-align: top; }
+            th { background: #f4f4f4; }
+            code { background: #f6f6f6; padding: 0.1rem 0.3rem; }
+            .sev-error { color: #b00020; font-weight: bold; }
+            .sev-warning { color: #8a6d00; }
+            .meta { color: #666; font-size: 0.85rem; margin-top: 1.5rem; }
+          """
+
+          def page(title, body):
+              return (
+                  "<!DOCTYPE html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">"
+                  f"<title>{html.escape(title)}</title><style>{CSS}</style></head>"
+                  f"<body><h1>{html.escape(title)}</h1>{body}"
+                  f"<p class=\"meta\">Generated {datetime.datetime.now(datetime.timezone.utc):%Y-%m-%d %H:%M UTC}"
+                  f" &mdash; commit <code>{sha[:7]}</code></p></body></html>"
+              )
+
+          def blob_link(path, line):
+              # Map container-absolute kernel paths back to repo-relative ones.
+              # Generated TUs (tt-metal-cache) have no stable blob to link to.
+              if "tt-metal-cache" in path:
+                  return None
+              for marker in ("/work/", "/tt-metal/"):
+                  if marker in path:
+                      rel = path.split(marker, 1)[1]
+                      return f"{repo_url}/blob/{sha}/{rel}#L{line}"
+              return None
+
+          groups = []
+          for adir in sorted(artifacts.iterdir()) if artifacts.exists() else []:
+              if not adir.is_dir():
+                  continue
+              name = adir.name
+              if name.startswith("kernel-clang-tidy-"):
+                  name = name[len("kernel-clang-tidy-"):]
+              slug = re.sub(r"[^A-Za-z0-9._-]+", "-", name).strip("-") or "group"
+
+              findings_file = adir / "findings.txt"
+              raw_diags = 0
+              entries = 0
+              failed_entries = 0
+              # (path, line, col, sev, msg, check) -> set of TUs it appeared in
+              uniq = {}
+              cur_tu = None
+              if findings_file.exists():
+                  for raw in findings_file.read_text(errors="replace").splitlines():
+                      m = ENTRY_RE.match(raw)
+                      if m:
+                          cur_tu = m.group("tu")
+                          entries += 1
+                          if m.group("rc") != "0":
+                              failed_entries += 1
+                          continue
+                      m = DIAG_RE.match(raw)
+                      if m:
+                          raw_diags += 1
+                          key = (m["path"], int(m["line"]), int(m["col"]), m["sev"], m["msg"], m["check"] or "")
+                          uniq.setdefault(key, set()).add(cur_tu or "?")
+
+              gdir = site / slug
+              gdir.mkdir(parents=True, exist_ok=True)
+              # Keep the raw capture next to the rendered page.
+              for f in ("findings.txt", "summary.txt", "compile_commands.json"):
+                  if (adir / f).exists():
+                      (gdir / f).write_bytes((adir / f).read_bytes())
+
+              by_check = {}
+              for key in uniq:
+                  by_check.setdefault(key[5] or "(no check tag)", []).append(key)
+
+              body = "<p>"
+              body += f"{len(uniq)} unique finding(s) ({raw_diags} raw diagnostics) across {entries} linted TU(s)"
+              if failed_entries:
+                  body += f"; <span class=\"sev-error\">{failed_entries} TU(s) had parse/config errors</span>"
+              body += ".</p><p>Raw output: <a href=\"findings.txt\">findings.txt</a>"
+              if (gdir / "summary.txt").exists():
+                  body += " &middot; <a href=\"summary.txt\">summary.txt</a>"
+              if (gdir / "compile_commands.json").exists():
+                  body += " &middot; <a href=\"compile_commands.json\">compile_commands.json</a>"
+              body += "</p>"
+
+              for check in sorted(by_check, key=lambda c: (-len(by_check[c]), c)):
+                  keys = sorted(by_check[check])
+                  body += f"<h2><code>{html.escape(check)}</code> &mdash; {len(keys)}</h2>"
+                  body += ("<table><thead><tr><th>Location</th><th>Severity</th>"
+                           "<th>Message</th><th>TUs</th></tr></thead><tbody>")
+                  for path, line, col, sev, msg, _ in keys:
+                      loc = f"{path}:{line}:{col}"
+                      link = blob_link(path, line)
+                      loc_code = f"<code>{html.escape(loc)}</code>"
+                      loc_html = f"<a href=\"{html.escape(link)}\">{loc_code}</a>" if link else loc_code
+                      ntus = len(uniq[(path, line, col, sev, msg, _)])
+                      body += (
+                          f"<tr><td>{loc_html}</td>"
+                          f"<td class=\"sev-{sev}\">{sev}</td>"
+                          f"<td>{html.escape(msg)}</td>"
+                          f"<td>{ntus}</td></tr>"
+                      )
+                  body += "</tbody></table>"
+              if not uniq:
+                  body += "<p><em>No findings parsed.</em></p>"
+
+              (gdir / "index.html").write_text(page(f"Kernel clang-tidy — {name}", body))
+              groups.append({
+                  "name": name,
+                  "slug": slug,
+                  "unique": len(uniq),
+                  "raw": raw_diags,
+                  "entries": entries,
+                  "failed_entries": failed_entries,
+              })
+
+          # Top-level index
+          if groups:
+              rows = "".join(
+                  f"<tr><td><a href=\"{g['slug']}/index.html\">{html.escape(g['name'])}</a></td>"
+                  f"<td>{g['unique']}</td><td>{g['raw']}</td><td>{g['entries']}</td><td>{g['failed_entries']}</td></tr>"
+                  for g in groups
+              )
+              body = (
+                  "<table><thead><tr><th>Test group</th><th>Unique findings</th><th>Raw diagnostics</th>"
+                  "<th>Linted TUs</th><th>TUs with parse errors</th></tr></thead>"
+                  f"<tbody>{rows}</tbody></table>"
+              )
+          else:
+              body = (
+                  "<p><em>No kernel-clang-tidy-* artifacts were produced by this run.</em> "
+                  "Check that the target group name matches a matrix leg exactly and that "
+                  "the leg's tests JIT-compiled any kernels.</p>"
+              )
+          (site / "index.html").write_text(page("tt-metal Kernel clang-tidy", body))
+          (site / "meta.json").write_text(json.dumps({
+              "date": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+              "commit": sha,
+              "groups": groups,
+          }) + "\n")
+
+          # Step summary
+          with open(os.environ.get("GITHUB_STEP_SUMMARY", "/dev/null"), "a") as out:
+              out.write("## Kernel clang-tidy (prototype, non-blocking)\n\n")
+              if groups:
+                  out.write("| Test group | Unique findings | Raw diagnostics | Linted TUs | Parse errors |\n")
+                  out.write("|---|---|---|---|---|\n")
+                  for g in groups:
+                      out.write(f"| {g['name']} | {g['unique']} | {g['raw']} "
+                                f"| {g['entries']} | {g['failed_entries']} |\n")
+                  out.write("\nHTML report: `kernel-clang-tidy-report-html` artifact.\n")
+              else:
+                  out.write("_No kernel-clang-tidy artifacts were produced by this run._\n")
+          EOF
+
+      - name: Upload HTML report
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          # Deliberately NOT matching the kernel-clang-tidy-* download pattern,
+          # so a re-run of this job never ingests its own output as a group.
+          name: kernel-clang-tidy-report-html
+          path: site
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Add .nojekyll
+        if: ${{ inputs.publish-html || github.ref == 'refs/heads/main' }}
+        run: touch site/.nojekyll
+
+      - name: Publish to tenstorrent/tt-metal-clangsa-results (gh-pages)
+        if: ${{ inputs.publish-html || github.ref == 'refs/heads/main' }}
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          personal_token: ${{ secrets.CLANGSA_RESULTS_PAT }}
+          external_repository: tenstorrent/tt-metal-clangsa-results
+          publish_branch: gh-pages
+          publish_dir: site
+          # Subdirectory publish (no force_orphan): only kernel-clang-tidy/ is
+          # synced; the CSA reports at the repo root are left alone.
+          destination_dir: kernel-clang-tidy
+          commit_message: "kernel clang-tidy report from tt-metal @ ${{ github.sha }}"

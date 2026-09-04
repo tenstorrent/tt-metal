@@ -171,6 +171,29 @@ uploads `kernel-clang-tidy-<group>` as an artifact (raw + translated
 compile_commands.json, findings.txt, summary.txt). It is a prototype riding on
 partial, run-dependent coverage — explicitly not a merge gate.
 
+The dedicated caller is `.github/workflows/kernel-clang-tidy.yaml`
+(structured after `code-coverage.yaml`): build → run one ttnn test group via
+`ttnn-sanity-tests-impl.yaml` with the experiment enabled → a report job that
+downloads every `kernel-clang-tidy-*` artifact, renders an HTML report
+(per-group pages with findings deduplicated across TUs, grouped by check, and
+linked to the source at the tested commit; plus an index), uploads it as the
+`kernel-clang-tidy-report-html` artifact, and publishes it to
+`tenstorrent/tt-metal-clangsa-results` gh-pages under `kernel-clang-tidy/`
+(on main, or when dispatched with `publish-html: true`). Launch with:
+
+```sh
+gh workflow run kernel-clang-tidy.yaml --ref <branch> \
+  -f target-group='trace allocation tracker' -f enabled-skus=wh_n300_civ2 \
+  -f publish-html=true
+```
+
+Publishing-target note: `code-coverage.yaml` force-orphan-pushes
+`tt-metal-code-coverage` nightly (wiping anything co-published there), and
+`clang-static-analyzer.yaml` currently does the same to
+`tt-metal-clangsa-results` — so the published `kernel-clang-tidy/` subdir
+survives only until the next CSA nightly. A dedicated results repo is the
+promotion path; the run's own HTML artifact is always retained regardless.
+
 ## Coverage and known gaps
 
 * **Coverage = what the run compiled.** One test lints one test's kernels; a

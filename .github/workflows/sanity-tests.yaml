@@ -113,16 +113,6 @@ on:
         type: boolean
         default: true
         description: "Publish the AI run summary. A caller that invokes this workflow more than once per run must pass false on all but one invocation, or the reports collide on the artifact name."
-      enable-kernel-clang-tidy:
-        required: false
-        type: boolean
-        default: false
-        description: "EXPERIMENT: capture the selected ttnn test group's runtime JIT kernel compiles with bear and run clang-tidy on them post-hoc (non-blocking). See ttnn-sanity-tests-impl.yaml."
-      clang-tidy-target-group:
-        required: false
-        type: string
-        default: ""
-        description: "Exact ttnn matrix test-group name to capture + lint (e.g. 'trace allocation tracker'). Required when enable-kernel-clang-tidy is true."
   workflow_dispatch:
     inputs:
       with-retries:
@@ -237,16 +227,6 @@ on:
         type: string
         default: ""
         description: "Commit SHA to test (default: HEAD)"
-      enable-kernel-clang-tidy:
-        required: false
-        default: false
-        type: boolean
-        description: "EXPERIMENT: post-hoc clang-tidy on the selected ttnn group's JIT kernel compiles (non-blocking)"
-      clang-tidy-target-group:
-        required: false
-        type: string
-        default: ""
-        description: "Exact ttnn test-group name to capture + lint (e.g. 'trace allocation tracker')"
   push:
     branches: ["main"]
   schedule:
@@ -448,8 +428,6 @@ jobs:
       enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
       ref: ${{ inputs.ref || github.sha }}
-      enable-kernel-clang-tidy: ${{ inputs.enable-kernel-clang-tidy || false }}
-      clang-tidy-target-group: ${{ inputs.clang-tidy-target-group || '' }}
 
   t3000-sanity-tests:
     if: ${{ always() && !cancelled() && needs.build-artifact.result == 'success' && needs.generate-sku-matrix.outputs.run-wormhole == 'true' && toJSON(inputs.run-t3000-sanity-tests) != 'false' }}
