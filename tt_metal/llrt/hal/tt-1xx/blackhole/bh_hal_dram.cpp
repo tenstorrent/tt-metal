@@ -125,6 +125,7 @@ HalCoreInfoType create_dram_mem_map() {
         false /*supports_cbs*/,
         false /*supports_dfbs*/,
         false /*supports_receiving_multicast_cmds*/,
+        false /*supports_sending_fds_go_cmds*/,
         dram_dev_msgs::create_factory(),
         dram_fabric_telemetry::create_factory(),
         dram_realtime_profiler_msgs::create_factory()};

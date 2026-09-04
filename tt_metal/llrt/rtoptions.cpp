@@ -87,6 +87,7 @@ enum class EnvVarID {
     TT_METAL_DISPATCH_DATA_COLLECTION,  // Enable dispatch debug data collection
     TT_METAL_GTEST_ETH_DISPATCH,        // Use Ethernet cores for dispatch in tests
     TT_METAL_TENSIX_DISPATCH_CORES,     // Quasar: force interim Tensix dispatch cores from core descriptor YAML
+    TT_METAL_DISABLE_FDS,               // Quasar: force worker completion onto the NOC path
     TT_METAL_SKIP_LOADING_FW,           // Skip firmware loading
     TT_METAL_DISABLE_XIP_DUMP,          // Disable XIP dump
 
@@ -645,6 +646,12 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
                 tt::LogDevice,
                 "TT_METAL_TENSIX_DISPATCH_CORES=1: using interim Tensix dispatch cores from core descriptor YAML");
             break;
+
+        // TT_METAL_DISABLE_FDS
+        // Quasar: use NOC atomics for worker completion instead of FDS.
+        // Default: false (use FDS when fast dispatch runs on dispatch engines)
+        // Usage: export TT_METAL_DISABLE_FDS=1
+        case EnvVarID::TT_METAL_DISABLE_FDS: this->quasar_disable_fds = is_env_enabled(value); break;
 
         // TT_METAL_SKIP_LOADING_FW
         // Skip loading firmware during device initialization.

@@ -147,6 +147,7 @@ HalCoreInfoType create_active_eth_mem_map(bool is_base_routing_fw_enabled) {
         false /*supports_cbs*/,
         false /*supports_dfbs*/,
         false /*supports_receiving_multicast_cmds*/,
+        false /*supports_sending_fds_go_cmds*/,
         active_eth_dev_msgs::create_factory(),
         active_eth_fabric_telemetry::create_factory(),
         active_eth_realtime_profiler_msgs::create_factory()};

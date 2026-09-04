@@ -287,6 +287,7 @@ HalCoreInfoType create_tensix_mem_map() {
         true /*supports_cbs*/,
         true /*supports_dfbs*/,
         true /*supports_receiving_multicast_cmds*/,
+        false /*supports_sending_fds_go_cmds*/,
         tensix_dev_msgs::create_factory(),
         tensix_fabric_telemetry::create_factory(),
         tensix_realtime_profiler_msgs::create_factory()};

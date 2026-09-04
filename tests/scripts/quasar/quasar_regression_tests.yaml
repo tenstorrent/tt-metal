@@ -513,3 +513,23 @@ unit_tests_dispatch:
   - filter: "*QuasarDispatchSInstantiatedAndRunning*"
     config: 2x3_DISPATCH
     back2back: true
+
+  - filter: "*WorkerCompletionTransport*"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "*WorkerCompletionTransport*"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_DISABLE_FDS: 1
+
+  - filter: "*WorkerGoTransportSingleCQ*"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "*WorkerGoTransportSingleCQ*"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_DISABLE_FDS: 1

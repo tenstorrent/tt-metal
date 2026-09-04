@@ -134,6 +134,7 @@ HalCoreInfoType create_idle_eth_mem_map() {
         false /*supports_cbs*/,
         false /*supports_dfbs*/,
         false /*supports_receiving_multicast_cmds*/,
+        false /*supports_sending_fds_go_cmds*/,
         idle_eth_dev_msgs::create_factory(),
         idle_eth_fabric_telemetry::create_factory(),
         idle_eth_realtime_profiler_msgs::create_factory()};
