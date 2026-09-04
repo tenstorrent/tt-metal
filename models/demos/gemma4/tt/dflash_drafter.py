@@ -58,7 +58,7 @@ class DFlashDrafter:
         ccl_manager,
         tensor_cache_path=None,
         dtype=ttnn.bfloat16,
-        max_ctx=8192,
+        max_ctx=262144 + 2048,
     ):
         """
         Args:
@@ -178,6 +178,11 @@ class DFlashDrafter:
         # Drafter-specific RoPE tables (theta differs from the target's),
         # persistent on device in ROW_MAJOR for per-iteration position gathers
         # (house pattern: rope_caches_2d) — no per-draft host uploads.
+        # max_ctx sizes the tables by ABSOLUTE position and must cover the
+        # model's full context: ttnn.embedding gathers past the table return
+        # GARBAGE rope rows SILENTLY, which collapses draft acceptance to ~1.0
+        # at any ISL above the table (measured: 1.85 -> 1.05 at 131k with an
+        # 8k table). Cheap: [max_pos, head_dim] bf16 = ~67 MB at 256k.
         cos, sin = _rope_tables(self.head_dim, float(cfg.get("rope_theta", 1e6)), max_ctx + 64)
         mk2 = dict(device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self._replicate)
         self._cos_2d = ttnn.from_torch(cos, **mk2)
@@ -465,10 +470,14 @@ class DFlashFusedDecoder:
         self.ctx_dev = ttnn.from_torch(z(1, 1, ctx_cap, H, dtype=torch.bfloat16), **mkT)
         self.mirror = torch.zeros(ctx_cap, H, dtype=torch.bfloat16)
         self.ctx_len = 0
-        # static ctx rope (row r == absolute position r at B=1)
-        cos, sin = _rope_tables(drafter.head_dim, float(drafter.cfg.get("rope_theta", 1e6)), ctx_cap)
-        self.cos_ctx = ttnn.from_torch(cos.unsqueeze(0).unsqueeze(0), **mkT)
-        self.sin_ctx = ttnn.from_torch(sin.unsqueeze(0).unsqueeze(0), **mkT)
+        # Sliding window: mirror row r holds ABSOLUTE position win_first + r
+        # (4/5 drafter layers are sliding-2048 by architecture, so a window is
+        # the natural context). Row->position is a per-iteration device input;
+        # ctx rope is gathered in-graph from the drafter's rope tables, so no
+        # static row==position assumption and no per-iter rope upload.
+        self.win_first = 0
+        mkU0 = dict(device=self.mesh_device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self._mapper)
+        self.ctx_pos = ttnn.from_torch(torch.zeros(1, ctx_cap, dtype=torch.int64), **mkU0)
         self.anchor_row = ttnn.from_torch(z(1, 1, 1, H, dtype=torch.bfloat16), **mkT)
         S = ctx_cap + K + 1
         self.mask_full = ttnn.from_torch(z(1, 1, K + 1, S, dtype=torch.bfloat16), **mkT)
@@ -494,6 +503,12 @@ class DFlashFusedDecoder:
         # tt_transformers generator.py). Falls back to gathered ttnn.argmax.
         self._sampler = getattr(target_model, "sampling", None)
         drafter._sampler = self._sampler
+        # The drafter's mask-token noise rows are created lazily by the
+        # UNTRACED draft() path; the fused decoder may be the only consumer
+        # (e.g. the ISL sweep), so materialize them here.
+        if drafter._mask_rows is None or drafter._mask_rows.shape[2] != K:
+            _mrows = drafter._embed_w_host[[drafter.mask_token_id] * K].to(torch.bfloat16).unsqueeze(0).unsqueeze(0)
+            drafter._mask_rows = ttnn.from_torch(_mrows, **mkT)
         # persistent tap buffers for the verify's copy-mode capture —
         # lazily allocated by the hook on the compile pass (shape-proof).
         self.tap_bufs = [None for _ in drafter.target_layer_ids]
@@ -538,10 +553,19 @@ class DFlashFusedDecoder:
         h.deallocate(True)
         # masks: block queries at positions [start .. start+K], keys = padded ctx
         # rows (positions == row index; rows >= ctx_len masked) then the block
-        ctx_len = self.ctx_len
+        win_len = self.ctx_len - self.win_first
+        ctx_positions = torch.arange(self.win_first, self.win_first + self.cap)
+        h = ttnn.from_torch(
+            ctx_positions.clamp(min=0).reshape(1, -1).to(torch.int64),
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.uint32,
+            mesh_mapper=self._mapper,
+        )
+        ttnn.copy_host_to_device_tensor(h, self.ctx_pos)
+        h.deallocate(True)
         qpos = torch.arange(start, start + K + 1)[:, None]
-        kpos = torch.cat([torch.arange(self.cap), torch.arange(start, start + K + 1)])[None, :]
-        kvalid = torch.cat([torch.arange(self.cap) < ctx_len, torch.ones(K + 1, dtype=torch.bool)])[None, :]
+        kpos = torch.cat([ctx_positions, torch.arange(start, start + K + 1)])[None, :]
+        kvalid = torch.cat([torch.arange(self.cap) < win_len, torch.ones(K + 1, dtype=torch.bool)])[None, :]
         vis_full = kvalid.expand(K + 1, -1)
         mf = torch.where(vis_full, 0.0, float("-inf")).to(torch.bfloat16)
         w = self.drafter.sliding_window
@@ -576,8 +600,11 @@ class DFlashFusedDecoder:
         sin_blk = ttnn.unsqueeze_to_4D(ttnn.embedding(self.blk_pos, d._sin_2d, layout=ttnn.TILE_LAYOUT))
         noise = ttnn.concat([self.anchor_row, d._mask_rows], dim=2)
         h_ctx = d._rms(self.ctx_dev, d.hidden_norm_w)
+        hd = d.head_dim
+        cos_ctx = ttnn.reshape(ttnn.embedding(self.ctx_pos, d._cos_2d, layout=ttnn.TILE_LAYOUT), (1, 1, self.cap, hd))
+        sin_ctx = ttnn.reshape(ttnn.embedding(self.ctx_pos, d._sin_2d, layout=ttnn.TILE_LAYOUT), (1, 1, self.cap, hd))
         draft_ids = d.block_forward(
-            noise, h_ctx, self.cos_ctx, self.sin_ctx, cos_blk, sin_blk, self.mask_full, self.mask_slide, self.cap
+            noise, h_ctx, cos_ctx, sin_ctx, cos_blk, sin_blk, self.mask_full, self.mask_slide, self.cap
         )  # [1,1,1,K] uint32
         flat = ttnn.reshape(draft_ids, (1, K))
         vx = ttnn.concat([self.anchor_tok, flat], dim=-1)  # [1, K+1] uint32
@@ -598,17 +625,43 @@ class DFlashFusedDecoder:
     # ---------------------------------------------------------------- lifecycle
 
     def prefill_ingest(self, taps, n):
-        """Fill the mirror from prefill taps (list of 6 [1,1,rows,H] device
-        tensors, clone-mode) via the device fc; rows [:n] enter the mirror."""
+        """Fill the mirror window from prefill taps.
+
+        ``taps`` is one group of len(target_layer_ids) tensors per prefill
+        FORWARD -- a chunked long prefill fires the hook once per chunk, so
+        several groups arrive (the hook's keep_last cap bounds how many are
+        retained; dropped early chunks are outside the window by construction).
+        Only the last ``cap`` rows are kept.
+        """
         d = self.drafter
-        cat = ttnn.concat([t[:, :, :n, :] for t in taps], dim=3)
-        for t in taps:
-            t.deallocate(True)
-        proj = ttnn.linear(cat, d.fc, compute_kernel_config=d._ckc)
-        cat.deallocate(True)
-        host = ttnn.to_torch(ttnn.get_device_tensors(proj)[0] if self._tp > 1 else proj)
-        proj.deallocate(True)
-        self.mirror[:n] = host.reshape(-1, host.shape[-1])[:n].to(torch.bfloat16)
+        n_taps = len(d.target_layer_ids)
+        assert len(taps) % n_taps == 0, f"taps {len(taps)} not a multiple of {n_taps}"
+        groups = [taps[i : i + n_taps] for i in range(0, len(taps), n_taps)]
+        seen = 0
+        chunks = []
+        for gi, g in enumerate(groups):
+            avail = int(g[0].shape[2])
+            remaining = n - seen
+            if remaining <= 0:
+                for t in g:
+                    t.deallocate(True)
+                continue
+            # never slice past what this forward actually produced; the final
+            # chunk is tile-padded so its valid rows are what remains of n
+            rv = min(avail, remaining)
+            cat = ttnn.concat([t[:, :, :rv, :] for t in g], dim=3)
+            for t in g:
+                t.deallocate(True)
+            proj = ttnn.linear(cat, d.fc, compute_kernel_config=d._ckc)
+            cat.deallocate(True)
+            host = ttnn.to_torch(ttnn.get_device_tensors(proj)[0] if self._tp > 1 else proj)
+            proj.deallocate(True)
+            chunks.append(host.reshape(-1, host.shape[-1])[:rv])
+            seen += rv
+        rows = torch.cat(chunks, dim=0) if len(chunks) > 1 else chunks[0]
+        keep = min(self.cap, rows.shape[0], n)
+        self.mirror[:keep] = rows[-keep:].to(torch.bfloat16)
+        self.win_first = n - keep
         self.ctx_len = n
         self._upload_ctx()
 
@@ -625,6 +678,16 @@ class DFlashFusedDecoder:
         self._out = self._body()
         ttnn.end_trace_capture(self.mesh_device, tid, cq_id=0)
         self.trace = tid
+
+    def restore_model_logits_mode(self):
+        """Leave the target in its default gathered-logits mode.
+
+        The fused body sets ``_dflash_sharded_logits`` so the verify can hand
+        back pre-gather logits for the sampling module; anything else reading
+        full-vocab logits from this model afterwards (host argmax, a control
+        arm, the plain demo path) must not inherit that.
+        """
+        self.target._dflash_sharded_logits = False
 
     def _read_ids(self, t):
         src = ttnn.get_device_tensors(t)[0] if self._tp > 1 else t
@@ -651,7 +714,15 @@ class DFlashFusedDecoder:
         # commit taps: fc_out rows [0..produced) are positions [start..start+produced)
         src = ttnn.get_device_tensors(fc_out)[0] if self._tp > 1 else fc_out
         rows = ttnn.to_torch(src).reshape(-1, self.mirror.shape[-1])[:produced].to(torch.bfloat16)
-        self.mirror[self.start : self.start + produced] = rows
+        win_len = self.ctx_len - self.win_first
+        if win_len + produced <= self.cap:
+            self.mirror[win_len : win_len + produced] = rows
+        else:
+            shift = win_len + produced - self.cap
+            keep_n = self.cap - produced
+            self.mirror[:keep_n] = self.mirror[shift : shift + keep_n].clone()
+            self.mirror[keep_n:] = rows
+            self.win_first += shift
         self.ctx_len = self.start + produced
         self._upload_ctx()
         accepted = [self.anchor] if False else drafts[:acc]
