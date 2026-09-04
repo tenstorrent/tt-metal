@@ -306,6 +306,22 @@ constexpr std::array<bool, MAX_NUM_RECEIVER_CHANNELS> is_receiver_channel_servic
     static_cast<bool>(NAMED_CT_ARG("IS_RECEIVER_CHANNEL_1_SERVICED")),
     static_cast<bool>(NAMED_CT_ARG("IS_RECEIVER_CHANNEL_2_SERVICED")),
 };
+constexpr bool any_sender_channel_serviced = []() {
+    for (bool serviced : is_sender_channel_serviced) {
+        if (serviced) {
+            return true;
+        }
+    }
+    return false;
+}();
+constexpr bool any_receiver_channel_serviced = []() {
+    for (bool serviced : is_receiver_channel_serviced) {
+        if (serviced) {
+            return true;
+        }
+    }
+    return false;
+}();
 
 // ============================================================================
 // RISC configuration
@@ -817,6 +833,14 @@ constexpr bool ENABLE_CHANNEL_TRIMMING_RESOURCE_USAGE_CAPTURE =
 constexpr size_t RESOURCE_USAGE_CAPTURE_OUTPUT_L1_ADDRESS =
     ENABLE_CHANNEL_TRIMMING_RESOURCE_USAGE_CAPTURE
         ? get_named_compile_time_arg_val("RESOURCE_USAGE_CAPTURE_OUTPUT_L1_ADDRESS")
+        : 0;
+constexpr uint32_t PACKED_DOWNSTREAM_VC0_SENDER_CHANNEL_IDS =
+    ENABLE_CHANNEL_TRIMMING_RESOURCE_USAGE_CAPTURE && is_2d_fabric
+        ? get_named_compile_time_arg_val("PACKED_DOWNSTREAM_VC0_SENDER_CHANNEL_IDS")
+        : 0;
+constexpr uint32_t PACKED_DOWNSTREAM_VC1_SENDER_CHANNEL_IDS =
+    ENABLE_CHANNEL_TRIMMING_RESOURCE_USAGE_CAPTURE && is_2d_fabric
+        ? get_named_compile_time_arg_val("PACKED_DOWNSTREAM_VC1_SENDER_CHANNEL_IDS")
         : 0;
 
 using ChannelTrimmingUsagePtr = tt::tt_fabric::FabricDatapathUsageL1Ptr<
