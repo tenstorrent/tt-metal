@@ -120,6 +120,40 @@ flowchart TD
 
 Each speed lever is only tried when the cheaper one above it is used up, and every change is kept **only** if it's faster *and* still gives the right answers. You don't pick these — the tool does. (TP, step 5, only kicks in for a big matrix-multiply that's still slow after the earlier steps.)
 
+## Optional: drive it from the dashboard (web UI)
+
+Prefer not to SSH into machines and babysit `tmux`? A companion web dashboard —
+**"Bring Up"** — runs everything in this guide from a browser, across several
+machines at once. It just issues the same `python -m scripts.tt_hw_planner …`
+commands remotely, so this README stays the source of truth for stages/flags.
+
+**What it does**
+- **Provision a machine from scratch** — clone this fork + `feature/tt-hw-planner`,
+  `git submodule update`, `build_metal.sh`, `create_venv.sh --skip-compat-check`,
+  install `tt-lang`, then verify `tt_hw_planner` — with a live build log.
+- **Bring up → optimize** — pick a model (or search HuggingFace by name), a machine,
+  `--box`/`--mesh`, choose stages (`auto-up` → `emit-e2e` → `optimize`) and flags,
+  and launch. Each run streams its log in its own card.
+- **Many models at once** — launch different models on different devices
+  concurrently; each run has its own live log, **RUN_REPORT.md** viewer, and an
+  embedded live **optimize dashboard**.
+- **Sync the tool** — one-click `git fetch` + `pull --ff-only` of this repo on a
+  target machine.
+- Optional **Telegram** control + notifications.
+
+**Run it**
+```bash
+git clone git@github.com:apande-TT/cc-dashboard.git
+cd cc-dashboard
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+uvicorn app:app --host 127.0.0.1 --port 8001
+```
+Open <http://127.0.0.1:8001>. It reads the machines in your `~/.ssh/config`; use
+each machine's **Connect** button once (installs your SSH key) so it can drive
+that machine. See the dashboard repo's README for `.env`/Claude-auth setup.
+
+
 ## Before you start — prerequisites
 Do these once, in order, in a **fresh standalone clone** (not a linked git worktree). Following the commands literally works — the known traps are baked in. If something is still missing, the tool stops and prints the exact fix.
 
@@ -280,7 +314,7 @@ Cell legend: **`✓win`** = beat baseline (kept) · **`·try`** = measured, no g
 
 > **Important — one-time precondition for `optimize`.** For an existing model, `optimize` runs in a throwaway git **worktree**, which is a *clean checkout of your current branch* — it only sees **committed** files. So before you run it:
 > 1. Be on the branch that has the **`tt_hw_planner` tool committed** (`scripts/tt_hw_planner/` **and** `models/experimental/perf_automation/`) — e.g. check out the tool's branch.
-> 2. Make sure the **model's code is committed on that same branch** — bring the modelbaseline profile.
+> 2. Make sure the **model's code is committed on that same branch** — bring the model baseline profile.
 >
 > If the tool or the model is only *uncommitted/untracked* on the branch you run from, the worktree won't contain it and the run fails before profiling. (This doesn't apply to `--in-place`, or to a model this tool brought up — those edit in place.)
 
