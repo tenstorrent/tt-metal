@@ -14,6 +14,8 @@
 //   [0] config_page_addr  - DRISC L1 address of this sender's PrefetcherPipe config page
 //   [1] num_entries       - entries to push per receiver
 //   [2] data_l1_base      - DRISC L1 base of the host-preloaded pattern
+//   [3] entry_bytes       - push granularity for this batch; may differ from the size the pipe was
+//                           created with, which is what makes this a block-size change
 //
 // The pattern is laid out per receiver: receiver r's entry i is at
 // data_l1_base + (r * num_entries + i) * entry_size, so each receiver gets distinct bytes and a
@@ -33,6 +35,7 @@ void kernel_main() {
     constexpr uint32_t config_page_addr = get_compile_time_arg_val(0);
     constexpr uint32_t num_entries = get_compile_time_arg_val(1);
     constexpr uint32_t data_l1_base = get_compile_time_arg_val(2);
+    constexpr uint32_t entry_bytes = get_compile_time_arg_val(3);
 
     experimental::PipeSenderCtx ctx;
     experimental::pipe_load_sender_ctx(ctx, config_page_addr);
@@ -40,6 +43,11 @@ void kernel_main() {
     // DRISC needs stream mode for NIU-initiated NoC traffic, including the credit atomics the
     // receivers send back to this core's counters.
     experimental::drisc_set_stream_mode();
+
+    // Snap onto this batch's entry grid and publish the pad credits the receivers' own resize
+    // waits for. A no-op when the cursor already sits on the grid, which it does whenever this
+    // batch uses the same entry size as the last one.
+    experimental::pipe_set_entry_size(ctx, entry_bytes, noc_index);
 
     for (uint32_t i = 0; i < num_entries; ++i) {
         experimental::pipe_reserve_back(ctx, 1);

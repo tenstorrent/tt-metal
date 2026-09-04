@@ -33,6 +33,7 @@
 #include "experimental/drisc_mode.h"
 #include "experimental/gddr_dma.h"
 #include "hostdev/remote_dfb_config_layout.h"
+#include "internal/prefetcher_pipe_dram_sender.h"
 #include "tt_metal/impl/buffers/dram_sender_state_block.hpp"
 #include "tt_metal/impl/buffers/tensor_prefetcher_request.hpp"
 
@@ -440,11 +441,19 @@ void kernel_main() {
                 reinterpret_cast<volatile tt_l1_ptr uint8_t*>(g) + sizeof(TensorPrefetcherTensorLayout));
 
             if (is_pipe) {
-                // Rebuild the interface from the PrefetcherPipe config page each tensor. There is no
-                // resize step: this transport is created at a fixed entry size that the host has
-                // already checked equals t_page_bytes_per_recv, so no padding credit is possible.
-                // The write cursor comes from the durable per-receiver counters, which is what makes
-                // it resume correctly across requests and across programs.
+                // Snap every receiver's derived write cursor onto this tensor's entry grid before
+                // rebuilding the interface, publishing the skipped bytes as pad credits. The
+                // consumer's PrefetcherPipe constructor runs the matching snap when its Attach
+                // entry size differs from the one last applied and blocks on exactly these credits,
+                // so a tensor whose per-receiver block size differs from the previous one still
+                // starts every entry on an entry boundary. Idempotent when the cursors already sit
+                // on the grid, which is every tensor in a same-block-size run.
+                experimental::PipeSenderCtx pipe_ctx;
+                experimental::pipe_load_sender_ctx(pipe_ctx, target_state_addr);
+                experimental::pipe_set_entry_size(pipe_ctx, t_page_bytes_per_recv, noc_index);
+                // Rebuild the interface from the PrefetcherPipe config page each tensor. The write
+                // cursor comes from the durable per-receiver counters, which is what makes it
+                // resume correctly across requests and across programs.
                 load_pipe_sender_state(target_state_addr, t_page_bytes_per_recv, iface);
             } else {
                 // Set the sender fifo page size to one full per-receiver page. When resize skips

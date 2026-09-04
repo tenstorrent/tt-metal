@@ -446,8 +446,9 @@ def _setup_weight_and_pipes_recv_contig(
 
     Same weight allocation and the same bank->receiver pairing: both DRAM-sender factories share
     build_dram_sender_mapping, so a tensor laid out for a GCB is laid out for PrefetcherPipes. The
-    only difference is the target object, created at entry_size == the per-receiver block size
-    (this transport does not resize mid-flight)."""
+    only difference is the target object, created at entry_size == the per-receiver block size so
+    the ring is a whole number of blocks (a later request may push a different block size, as long
+    as it too divides the ring)."""
     is_shard_contiguous = distribution_strategy == ttnn.ShardDistributionStrategy.CONTIGUOUS_1D
     tile_bytes = _bytes_per_tile(dtype)
     num_dram_banks = device.dram_grid_size().x
@@ -560,8 +561,13 @@ def test_validator_pipe_cursor_persists_across_requests(device, K, N, dtype, rec
 
 
 @pytest.mark.parametrize("K,N,dtype,recv_per_bank", [(2048, 3584, ttnn.bfloat8_b, 2)])
-def test_validator_pipe_rejects_mismatched_entry_size(device, K, N, dtype, recv_per_bank, expect_error):
-    """entry_size must equal the tensor's per-receiver block size: this transport never resizes."""
+def test_validator_pipe_rejects_block_size_not_dividing_ring(device, K, N, dtype, recv_per_bank, expect_error):
+    """A pushed block size need not match the pipes' entry_size, but the ring must be whole blocks.
+
+    The DRAM sender derives each receiver's write cursor as (entries_sent % ring_units) with no
+    trailing-gap term, so a ring with a remainder would put it on a different grid than the
+    receivers after the first wrap.
+    """
     tt_weight, _pipes, push_page_size, ring_size = _setup_weight_and_pipes_recv_contig(
         device, K, N, dtype, recv_per_bank
     )
@@ -571,16 +577,16 @@ def test_validator_pipe_rejects_mismatched_entry_size(device, K, N, dtype, recv_
         (b, _bank_receivers_strided(b, recv_per_bank, num_dram_banks, ring_cols=ring_cols))
         for b in range(num_dram_banks)
     ]
-    wrong_entry_size = push_page_size * 2
+    # Three half-blocks of ring: a legal pipe geometry, but one and a half of this tensor's blocks.
     bad_pipes = ttnn.experimental.create_prefetcher_pipes_for_tensor_prefetcher(
         device,
         bank_to_receivers,
-        entry_size=wrong_entry_size,
-        num_entries=_GCB_DEPTH_PAGES,
+        entry_size=push_page_size // 2,
+        num_entries=3,
         support_multi_receiver_shards=True,
     )
     with tensor_prefetcher_session(device):
-        with expect_error(RuntimeError, "entry_size"):
+        with expect_error(RuntimeError, "does not divide"):
             ttnn.experimental.queue_tensor_prefetcher_request(
                 device, [(tt_weight, ring_size)], prefetcher_pipes=bad_pipes
             )
