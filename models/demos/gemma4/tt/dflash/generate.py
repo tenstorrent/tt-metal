@@ -32,7 +32,7 @@ from __future__ import annotations
 import torch
 
 import ttnn
-from models.demos.gemma4.tt.dflash.context import compute_context
+from models.demos.gemma4.tt.dflash.context import ContextAccumulator, split_fc_slices
 from models.demos.gemma4.tt.dflash.drafter import dflash_drafter_forward
 from models.demos.gemma4.tt.dflash.lm_head import argmax_last_dim, compute_dflash_argmax
 from models.demos.gemma4.tt.dflash.rope_cache import (
@@ -54,21 +54,29 @@ def _slice_seq(t, n):
     return ttnn.slice(t, [0, 0, 0, 0], [1, 1, n, t.shape[-1]])
 
 
-def _tap_context(model, weights, config, forward_fn):
+def _tap_context(model, weights, fc_slices, forward_fn):
     """Run ``forward_fn`` (a prefill or verify call) with ``model.layer_probe`` attached,
-    returning (forward_fn's own return value, context tensor built from the taps)."""
-    tapped = {}
+    returning (forward_fn's own return value, context tensor built from the taps).
+
+    Uses ContextAccumulator (FC-decomposed, accumulate-as-you-go) instead of collecting
+    full hidden-state tensors into a Python dict -- confirmed PCC 0.9996 against the
+    dict-based compute_context for a real prefill (bf16 summation-order noise, not a
+    correctness difference; see context.py). A dict that grows across calls is exactly
+    the shape a Metal trace can't replay; an accumulator that always holds at most one
+    running total is the shape one can -- this doesn't itself enable tracing yet (the
+    loop below still runs eager), but it's the prerequisite piece for the fused trace a
+    later step will build."""
+    accumulator = ContextAccumulator(fc_slices, weights.hidden_norm)
 
     def _probe(layer_idx, hidden_states):
-        if layer_idx in config.target_layer_ids:
-            tapped[layer_idx] = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
+        accumulator.tap(hidden_states, layer_idx)
 
     model.layer_probe = _probe
     try:
         result = forward_fn()
     finally:
         model.layer_probe = None
-    context = compute_context(weights, [tapped[i] for i in config.target_layer_ids])
+    context = accumulator.finalize()
     return result, context
 
 
@@ -130,6 +138,9 @@ def dflash_generate(
     # gather over the real prompt's context uses gather_rope_on_device directly instead
     # (a one-off, non-repeating call -- see rope_cache.py).
     rope_idx_buf = make_rope_gather_index_buffer(mesh_device, 2 * block_size)
+    # weights.fc sliced into one [hidden,hidden] block per tapped layer -- constant for
+    # the whole session, built once (see context.py::ContextAccumulator).
+    fc_slices = split_fc_slices(weights, config.target_layer_ids, config.hidden_size)
 
     replicate = ttnn.ReplicateTensorToMesh(mesh_device)
     page_table_tt = ttnn.from_torch(
@@ -148,7 +159,7 @@ def dflash_generate(
         )
         return logits
 
-    prefill_logits, context_padded = _tap_context(model, weights, config, _prefill)
+    prefill_logits, context_padded = _tap_context(model, weights, fc_slices, _prefill)
     # prefill_logits is a 32-row tile (get_last_token slices to the tile containing
     # ctx_len-1, see model.py) -- slice down to just that one real row on device before
     # arguing, so the (262144-wide) vocab is never read to host.
@@ -236,7 +247,7 @@ def dflash_generate(
         def _verify():
             return dflash_verify(model, mesh_device, tt_kv_cache, verify_buffers, candidate_ids, start_pos=start)
 
-        (posterior, _), next_context_padded = _tap_context(model, weights, config, _verify)
+        (posterior, _), next_context_padded = _tap_context(model, weights, fc_slices, _verify)
         accept, bonus, committed = greedy_accept_from_posterior(candidate_ids, posterior)
         produced = min(accept + 1, verify_size)
 
