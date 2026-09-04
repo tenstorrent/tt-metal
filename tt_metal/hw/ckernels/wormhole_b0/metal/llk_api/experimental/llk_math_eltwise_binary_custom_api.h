@@ -38,14 +38,9 @@ inline void llk_math_eltwise_binary_sub_bcast_cols_custom(
 
 /**
  * @brief Initialises the cancellation-resistant LayerNorm column subtraction.
- * @param operandA CB id of the input tiles.
- * @param operandB CB id of the split-mean statistics tile.
  * @note Run before @ref llk_math_sub_bcast_cols_compensated on this thread.
  */
-inline void llk_math_sub_bcast_cols_compensated_init(
-    [[maybe_unused]] const std::uint32_t operandA, [[maybe_unused]] const std::uint32_t operandB) {
-    _llk_math_sub_bcast_cols_compensated_init_();
-}
+inline void llk_math_sub_bcast_cols_compensated_init() { _llk_math_sub_bcast_cols_compensated_init_(); }
 
 /**
  * @brief Runs cancellation-resistant column subtraction over consecutive destination tiles.

@@ -38,7 +38,7 @@ namespace ckernel {
 ALWI void sub_bcast_cols_compensated_init(
     std::uint32_t input_cb, std::uint32_t split_mean_cb, std::uint32_t call_line = __builtin_LINE()) {
     state_configure(input_cb, split_mean_cb, call_line);
-    MATH((llk_math_sub_bcast_cols_compensated_init(input_cb, split_mean_cb)));
+    MATH((llk_math_sub_bcast_cols_compensated_init()));
     UNPACK((llk_unpack_AB_sub_bcast_col_init_custom(input_cb, split_mean_cb)));
 }
 
