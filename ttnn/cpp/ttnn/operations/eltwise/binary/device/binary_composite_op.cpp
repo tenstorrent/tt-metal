@@ -560,7 +560,10 @@ Tensor remainder(
     if (operation_input.dtype() != DataType::INT32 && !output_dtype.has_value() &&
         !operation_sub_device_id.has_value() && post_activations.empty() && lhs_activations.empty() &&
         rhs_activations.empty()) {
-        if (!output_tensor.has_value() || output_tensor->dtype() == operation_input.dtype()) {
+        // Native floating inputs already support mixed floating-point outputs in
+        // unary_remainder; only promoted INT32 inputs need the separate typecast.
+        if (input.dtype() != DataType::INT32 || !output_tensor.has_value() ||
+            output_tensor->dtype() == operation_input.dtype()) {
             return ttnn::unary_remainder(
                 operation_input, scalar, output_mem_config, output_tensor, operation_sub_core_grids);
         }
