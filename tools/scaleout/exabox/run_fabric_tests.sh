@@ -583,12 +583,8 @@ RUN_TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 REPORT_RUN_ID="${RUN_TIMESTAMP}_$$"
 SUMMARY_REPORT="/tmp/tt_fabric_pairwise_validation_summary_${REPORT_RUN_ID}.log"
 DETAIL_REPORT="/tmp/tt_fabric_pairwise_validation_detailed_${REPORT_RUN_ID}.log"
-
-# Drop leftovers so a report from a previous run into the same output dir
-# cannot be mistaken for this run's.
-rm -f \
-    "$OUTPUT_DIR_ABS/pairwise_validation_summary.log" \
-    "$OUTPUT_DIR_ABS/pairwise_validation_detailed.log"
+SUMMARY_REPORT_NAME="pairwise_validation_summary_${RUN_TIMESTAMP}.log"
+DETAIL_REPORT_NAME="pairwise_validation_detailed_${RUN_TIMESTAMP}.log"
 
 LOG_FILE="$OUTPUT_DIR_ABS/fabric_tests_${RUN_TIMESTAMP}.log"
 Z_RANKFILE=""   # 4x32z OpenMPI rankfile; set below when CONFIG=4x32z
@@ -1275,7 +1271,7 @@ if [[ "$TEST_BINARY" == *test_tt_fabric ]] &&
         -o ConnectTimeout=15
     )
     REPORT_SOURCES=("$SUMMARY_REPORT" "$DETAIL_REPORT")
-    REPORT_NAMES=("pairwise_validation_summary.log" "pairwise_validation_detailed.log")
+    REPORT_NAMES=("$SUMMARY_REPORT_NAME" "$DETAIL_REPORT_NAME")
 
     for i in "${!REPORT_SOURCES[@]}"; do
         report="${REPORT_SOURCES[$i]}"
