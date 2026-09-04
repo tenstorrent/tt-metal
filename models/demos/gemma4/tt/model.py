@@ -578,6 +578,12 @@ class Gemma4Model:
         # tt_transformers' Generator reads this attribute via _get_sampling_contract.
         self.sampling_dp = mesh_device.shape[0] if is_mesh else 1
 
+        # dFlash residual-tap capture (armed by dflash_capture_taps; consumed by
+        # the dFlash drafter — see tt/dflash_drafter.py).
+        self._dflash_tap_layers = None
+        self._dflash_taps = []
+        self._dflash_tap_buffers = None
+
         # On-device sampling (greedy/top-k/top-p) — avoids reading full vocab logits to CPU
         self.sampling = None
         if is_mesh and tp > 1:
@@ -952,6 +958,8 @@ class Gemma4Model:
                 sin_pos = ttnn.unsqueeze_to_4D(ttnn.embedding(position_idx, sin_2d, layout=ttnn.TILE_LAYOUT))
                 decode_rope_presliced[lt] = (cos_pos, sin_pos)
 
+        # copy-mode dFlash taps index buffers per forward
+        self._dflash_tap_idx = 0
         for i, layer in enumerate(self.layers):
             # Per-layer RoPE: sliding and global layers have different cos/sin
             rope_presliced = False
@@ -1068,6 +1076,27 @@ class Gemma4Model:
             # The K/V are kept alive on device (not deallocated) when keep_kv=True
             if keep_kv and layer.self_attn._last_kv is not None:
                 shared_kv_store[i] = layer.self_attn._last_kv
+
+            # dFlash tap capture: stash the post-layer residual at the drafter's
+            # tap layers (dflash_capture_taps(...) arms it; pop_dflash_taps()
+            # drains). Two modes:
+            #  - clone-append (untraced paths only: clone allocates);
+            #  - copy-into-persistent-buffers (trace-safe: allocation-free, the
+            #    buffers are boot-owned — used inside the fused dFlash trace).
+            if self._dflash_tap_layers is not None and i in self._dflash_tap_layers:
+                if self._dflash_tap_buffers is not None:
+                    j = self._dflash_tap_idx
+                    if self._dflash_tap_buffers[j] is None:
+                        # lazy first-use allocation (compile pass, pre-capture):
+                        # guarantees the buffer matches the real tap shape. The
+                        # copy runs too so its program is compiled BEFORE the
+                        # trace capture replays this hook via the copy path
+                        # ("cannot load new binaries during trace capture").
+                        self._dflash_tap_buffers[j] = ttnn.clone(hidden_states)
+                    ttnn.copy(hidden_states, self._dflash_tap_buffers[j])
+                    self._dflash_tap_idx += 1
+                else:
+                    self._dflash_taps.append(ttnn.clone(hidden_states))
 
         # Free the per-layer-type decode RoPE tensors shared across the loop.
         for cos_pos, sin_pos in decode_rope_presliced.values():
@@ -1276,6 +1305,24 @@ class Gemma4Model:
         sliding-attention layer — the EAGLE/MTP ``shared_kv_states`` contract.
         """
         return {lt: self.tt_kv_cache[idx] for lt, idx in self.last_kv_layer_by_type.items()}
+
+    def dflash_capture_taps(self, layer_ids, buffers=None):
+        """Arm (list of layer indices) or disarm (None) dFlash tap capture.
+
+        ``buffers``: optional list of persistent device tensors (one per tap
+        layer, shape == the forward's hidden). When given, taps are ttnn.copy'd
+        into them (allocation-free — safe inside a metal trace); otherwise taps
+        are cloned (untraced paths only).
+        """
+        self._dflash_tap_layers = set(layer_ids) if layer_ids is not None else None
+        self._dflash_taps = []
+        self._dflash_tap_idx = 0
+        self._dflash_tap_buffers = buffers
+
+    def pop_dflash_taps(self):
+        """Drain captured taps: list of [1,1,rows,H] device tensors, tap order."""
+        taps, self._dflash_taps = self._dflash_taps, []
+        return taps
 
     def ttnn_verify_forward(
         self, x, current_pos, current_pos_cache=None, page_table=None, kv_cache=None, page_tables_per_layer=None
