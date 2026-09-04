@@ -260,6 +260,12 @@ UNTRACED_PERF_MARGIN = 0.05
 # samples center the baseline better; they will not shrink the spread itself.
 MISTRAL4_TRACED_PERF_MARGIN = 0.05
 
+# Mistral's untraced row needs a wider band than Kimi's 5% and an allowance for one isolated chunk.
+# Measured over eight CI runs; see MISTRAL4_UNTRACED_BASELINE_CHUNK_TIMES_S for the derivation. 5%
+# would flake on ordinary variation (a +7% chunk was observed with nothing else out of band).
+MISTRAL4_UNTRACED_PERF_MARGIN = 0.08
+MISTRAL4_UNTRACED_MAX_OUT_OF_BAND = 1
+
 # Mistral-Small-4-119B chunked-prefill perf baselines. Same shape and the same two-table split as the
 # Kimi tables above, and for the same reason: traced and untraced are different regimes, so a baseline
 # from one can never gate the other.
@@ -273,86 +279,72 @@ MISTRAL4_TRACED_PERF_MARGIN = 0.05
 # carries fixed overhead that does not scale with the window and understates throughput by 17-30%
 # (see test_mistral4_prefill_transformer_chunked_no_pcc's docstring).
 MISTRAL4_TRACED_BASELINE_CHUNK_TIMES_S: dict[tuple[int, int, int], list[float]] = {
-    # test_mistral4_prefill_transformer_chunked_no_pcc[...-L36-chunks20-ten_iters-traced], 102,400
-    # tokens. Per-chunk median-of-medians over runs 33804792151, 33804828393 and 33813802101.
+    # EMPTY ON PURPOSE, and this is a measurement result, not an omission. Do not paste a run's
+    # medians in here without reading the next paragraph.
     #
-    # THREE runs, and the third is the whole story. Two runs agreed to <=2.0% per chunk, which looked
-    # like plenty given within-run per-chunk stddev of 0.000-0.003 s (<=1% of median). Arming on those
-    # two FAILED the very next run, 33813802101, on 7 of 20 chunks -- all on the FAST side, all in the
-    # deep half.
+    # Seven L36/chunks20/ten_iters traced CI runs (33804792151, 33804828393, 33813802101,
+    # 33879561794, 33887175238, 33887219279, 33887245566). Splitting each run's medians into
+    # a + b*c -- see print_duration_table's depth split -- gives:
     #
-    # The reason the two-run agreement was misleading: within-run stddev measures replay determinism
-    # inside one session, which is genuinely excellent. It says nothing about session-to-session
-    # variation, and THAT is what this row has. Each run carries a whole-run offset that GROWS with
-    # chunk depth -- runs 1 vs 2 differ by +1.25% mean over chunks 10-19, runs 2 vs 3 by -3.83%, worst
-    # single chunk -4.3%. Depth is the part of the work that scales (chunk c attends to KV[0:c*CHUNK]),
-    # so a per-session clock/thermal/allocation difference shows up amplified in the deep chunks and
-    # barely at all in chunk 0 (-0.7%).
+    #     a (depth-independent)  125.4 126.4 125.7 126.1 126.3 126.8 125.4 ms   -> +/-1%
+    #     b (per unit of KV)      12.64 12.90 12.02 11.01 11.17 11.66  7.82 ms  -> 65% spread
     #
-    # This is the trap the untraced table below warns about, in the other direction: do not read a
-    # tight within-run stddev as evidence that one or two runs pin the baseline.
-    (36, 20, 10): [
-        0.135,
-        0.143,
-        0.149,
-        0.162,
-        0.175,
-        0.187,
-        0.201,
-        0.213,
-        0.223,
-        0.235,
-        0.255,
-        0.257,
-        0.270,
-        0.288,
-        0.299,
-        0.313,
-        0.332,
-        0.346,
-        0.354,
-        0.373,
-    ],
+    # ALL of the run-to-run variance is in b, the MLA/SDPA term this row exists to gate. Everything
+    # else -- MoE, the ten matmuls, dispatch -- is stable to 1%. Per-chunk absolute time is a + b*c,
+    # so a b that moves 34% reads as 0% at chunk 0 and 26% at chunk 19: a baseline armed from two
+    # runs failed 7 of 20 chunks on the next run, and re-cut from three runs failed 19 of 20 on the
+    # one after. Covering all seven observed runs needs a +/-22% band, which is wider than the
+    # regressions this row is for (context depth costs 5.46x across the KV ramp).
+    #
+    # Ruled out as causes: AICLK (median 1343 MHz in every run), resolved fabric topology (7212 Ring
+    # / 70 Linear, identical), device count, and the code itself (the two runs either side of the
+    # 34% step differ by one test-file-only commit). Within a session the traced row is near-perfectly
+    # repeatable -- per-chunk stddev 0.000-0.003 s -- so this is a per-session property, consistent
+    # with KV-cache DRAM placement or read bandwidth rather than clock or cabling.
+    #
+    # ARM THIS once that variance is understood; the machinery is ready and the untraced twin below
+    # is already armed. tests/perf/test_mla_perf.py reproduces RingJointSDPA on its own and has no
+    # Mistral rows yet -- adding one is the cheap way to confirm or kill the DRAM hypothesis without
+    # a 35-minute full-model run.
+    # (36, 20, 10): [...],
 }
 MISTRAL4_UNTRACED_BASELINE_CHUNK_TIMES_S: dict[tuple[int, int, int], list[float]] = {
-    # Same row, notrace. Per-chunk median-of-medians over runs 33804792151, 33804828393, 33813802101.
-    # Flat ~0.69 s/chunk at every depth -- untraced measures host dispatch, not attention, so it has
-    # no depth ramp and cannot see an MLA/SDPA regression at all. It is gated to catch an
-    # eager-dispatch regression, which is a different failure.
+    # L36/chunks20/ten_iters notrace, 102,400 tokens. Per-chunk median-of-medians over EIGHT CI runs
+    # (33799453086, 33804792151, 33804828393, 33813802101, 33879561794, 33887175238, 33887219279,
+    # 33887245566). Flat ~0.69 s/chunk: the depth split measures b ~= 0 (-0.54 to +0.50 ms), because
+    # untraced is host-dispatch bound. That is the honest scope of this gate -- it catches an
+    # eager-dispatch regression and CANNOT see an MLA/SDPA regression at depth. Its traced twin is the
+    # one for that, and is record-only until the variance documented above is resolved.
     #
-    # Run 33799453086 is DELIBERATELY EXCLUDED, though it produced a full table. Its traced row died
-    # with "Device 17: All NOCs hung", and both of its untraced outliers -- chunk 17 at 0.924 s (+32%)
-    # and chunk 14 at 0.738 s -- are the only two samples in the whole set that strain a +/-5% band.
-    # Measurements from a session that ended in a device hang are not noise to average in; including
-    # it left chunk 14 using 97% of its band. Excluding it, the worst sample across all three healthy
-    # runs uses 81%.
+    # Armed at MISTRAL4_UNTRACED_PERF_MARGIN (8%) with one isolated chunk tolerated. Both numbers are
+    # measured: over the eight runs, six sat entirely inside +/-8%, and two had exactly ONE chunk land
+    # high -- chunk 17 of 33799453086 at +32%, chunk 12 of 33887245566 at +66%. Those are host-side
+    # spikes, not device work (untraced per-chunk stddev is already 52-55% of the median), and they are
+    # always a single chunk. Requiring all 20 in band flakes 2-in-8; tolerating one does not, and any
+    # regression broad enough to move two chunks still fails.
     #
-    # Within a run the untraced spread is still enormous -- max per-chunk stddev 0.36-0.38 s, 52-55%
-    # of the median, on 12 of 20 chunks. Only the MEDIAN is stable, and only across runs.
-    #
-    # If this goes flaky, re-center on the median over MORE runs before widening; a band that needs
-    # more than 10% is a regression, not noise.
+    # If this goes flaky, re-center the median over more runs before touching either number.
     (36, 20, 10): [
-        0.687,
-        0.694,
-        0.694,
-        0.690,
-        0.683,
-        0.694,
-        0.706,
-        0.698,
-        0.703,
-        0.694,
-        0.690,
-        0.689,
-        0.688,
         0.691,
+        0.698,
+        0.694,
+        0.692,
+        0.688,
         0.693,
-        0.693,
+        0.697,
+        0.702,
+        0.700,
+        0.692,
+        0.694,
+        0.690,
+        0.699,
+        0.690,
+        0.702,
         0.694,
         0.696,
-        0.689,
+        0.696,
         0.694,
+        0.692,
     ],
 }
 
@@ -1283,24 +1275,36 @@ def test_mistral4_prefill_transformer_chunked_padded(
 
 
 def mistral4_chunked_perf_gate(use_trace, num_layers, n_chunks, num_iters, perf_margin=None):
-    """``(baseline_chunk_times_s, margin)`` for one Mistral parametrization, mirroring
-    ``kimi_chunked_perf_gate``.
+    """``(baseline_chunk_times_s, margin, max_out_of_band)`` for one Mistral parametrization,
+    mirroring ``kimi_chunked_perf_gate`` but with a third element Kimi does not need.
 
     No ``preload_isl`` axis: the Mistral rows always start from an empty cache, so there is no
     preload depth to disqualify a baseline. Everything else is the same contract -- a baseline of
     None leaves the run record-only, and the mode picks both the table and the default margin so a
     traced baseline can never arm an untraced run.
 
-    Both tables are empty today, so every row is record-only. That is deliberate: the first CI run of
-    the gated row is what produces the numbers to put in them.
+    The untraced table is armed; the traced one is deliberately empty and stays record-only. Both
+    tables' comments carry the measurement that decided this: over seven CI runs the traced row's
+    depth-independent cost held to +/-1% while its per-unit-KV cost spanned 65%, so no fixed traced
+    baseline survives contact with the next run, whereas the untraced row is stable to 8% once one
+    isolated noise chunk is tolerated.
+
+    ``max_out_of_band`` is the third element for that reason and is 0 for traced: the untraced row's
+    observed failure mode is one chunk spiking while the rest sit in band, which is host noise; a
+    traced row has no such mode (its within-run stddev is 0.000-0.003 s), so if traced is ever armed
+    it should be armed with no allowance.
     """
-    table, default_margin = (
-        (MISTRAL4_TRACED_BASELINE_CHUNK_TIMES_S, MISTRAL4_TRACED_PERF_MARGIN)
+    table, default_margin, max_oob = (
+        (MISTRAL4_TRACED_BASELINE_CHUNK_TIMES_S, MISTRAL4_TRACED_PERF_MARGIN, 0)
         if use_trace
-        else (MISTRAL4_UNTRACED_BASELINE_CHUNK_TIMES_S, UNTRACED_PERF_MARGIN)
+        else (
+            MISTRAL4_UNTRACED_BASELINE_CHUNK_TIMES_S,
+            MISTRAL4_UNTRACED_PERF_MARGIN,
+            MISTRAL4_UNTRACED_MAX_OUT_OF_BAND,
+        )
     )
     baseline = table.get((num_layers, n_chunks, num_iters))
-    return baseline, (default_margin if perf_margin is None else perf_margin)
+    return baseline, (default_margin if perf_margin is None else perf_margin), max_oob
 
 
 @pytest.mark.parametrize("use_trace", [False, True], ids=["notrace", "traced"])
@@ -1361,7 +1365,9 @@ def test_mistral4_prefill_transformer_chunked_no_pcc(
     from the rendered table, not `iter N done ... in Xs` -- the iteration total carries fixed overhead
     that does not scale with the window, so window/iter_total understates throughput by 17-30%.
     """
-    baseline_chunk_times_s, perf_margin = mistral4_chunked_perf_gate(use_trace, num_layers, n_chunks, num_iters)
+    baseline_chunk_times_s, perf_margin, max_out_of_band = mistral4_chunked_perf_gate(
+        use_trace, num_layers, n_chunks, num_iters
+    )
     run_chunked_transformer_updated(
         variant,
         config_only,
@@ -1378,9 +1384,11 @@ def test_mistral4_prefill_transformer_chunked_no_pcc(
         # chunks51 is 261,120 tokens; sized per-row so the longest sweep needs no env var and the
         # other variants' baselines keep the 100k default.
         seq_cache=max(SEQ_CACHE_NOPCC, n_chunks * CHUNK),
-        # Record-only until the tables carry this key; see mistral4_chunked_perf_gate.
+        # Untraced is armed; traced is record-only until its variance is understood. See
+        # mistral4_chunked_perf_gate and the two baseline tables.
         baseline_chunk_times_s=baseline_chunk_times_s,
         perf_margin=perf_margin,
+        max_out_of_band=max_out_of_band,
     )
 
 
@@ -1459,6 +1467,7 @@ def run_chunked_transformer_updated(
     routing_use_l1_small_for_semaphores=False,
     baseline_chunk_times_s=None,
     perf_margin=None,
+    max_out_of_band=0,
     preload_isl=0,
     check_pcc=False,
     use_trace=False,
@@ -1547,7 +1556,43 @@ def run_chunked_transformer_updated(
                     )
             rows.append(row)
 
+        # Least-squares split of the per-chunk medians into a + b*c. `a` is the depth-INDEPENDENT cost
+        # (MoE, the matmuls, dispatch, fixed overhead); `b` is the per-unit-KV cost, i.e. MLA/SDPA
+        # growing because chunk c attends to KV[0:c*CHUNK]. Logged for every row, gated or not,
+        # because the two behave completely differently run to run and the split is what makes that
+        # visible: over 7 Mistral L36/chunks20 CI runs `a` held to +/-1% while `b` spanned 7.82-12.90
+        # ms (65%), so ALL of the run-to-run spread in a traced row lives in `b`. Reading only the
+        # per-chunk medians, that shows up as "0% at chunk 0, 26% at chunk 19" and looks like noise
+        # that grows with depth; it is one parameter moving. Untraced `b` measures ~0 (host-dispatch
+        # bound), which is why an untraced row cannot see an MLA regression at all.
+        medians = [statistics.median([row[c] for row in samples]) for c in range(n_chunks)]
+        if n_chunks >= 3:
+            xs = list(range(n_chunks))
+            xb, yb = statistics.mean(xs), statistics.mean(medians)
+            denom = sum((x - xb) ** 2 for x in xs)
+            b_fit = sum((x - xb) * (y - yb) for x, y in zip(xs, medians)) / denom if denom else 0.0
+            logger.info(
+                f"depth split: a = {(yb - b_fit * xb) * 1000:.1f} ms (depth-independent), "
+                f"b = {b_fit * 1000:.2f} ms per chunk of KV depth (MLA/SDPA scaling)"
+            )
+
+        # A regression moves the whole row; the isolated single-chunk spikes this row actually
+        # exhibits do not. Over 8 Mistral untraced CI runs, two runs each had exactly ONE chunk land
+        # 32-66% high (chunk 17 of run 33799453086, chunk 12 of run 33887245566) while every other
+        # chunk sat inside a +/-8% band -- host-side noise, not device work, given untraced per-chunk
+        # stddev is already 52-55% of the median. Requiring all 20 chunks in band would flake on that
+        # 2-in-8; tolerating one isolated chunk does not, and still fails any regression broad enough
+        # to move two.
+        if gated and len(failures) <= max_out_of_band and failures:
+            logger.warning(
+                f"{len(failures)} chunk(s) out of band, within the {max_out_of_band} tolerated as "
+                f"isolated noise; NOT failing the run. Out-of-band: {failures}"
+            )
+            failures = []
+
         margin_note = f", baseline gate +/- {margin * 100:.1f}%" if gated else ", record-only (no baseline)"
+        if gated and max_out_of_band:
+            margin_note += f", up to {max_out_of_band} isolated chunk(s) tolerated"
         logger.info(f"chunk timing stats computed over {len(samples)} iterations (iter 0 omitted){margin_note}")
         return failures, render_table(headers, rows)
 
