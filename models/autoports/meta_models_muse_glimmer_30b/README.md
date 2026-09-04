@@ -66,54 +66,72 @@ port printed by the command.
 The live OpenAI API sweep uses a system-plus-user agentic-coding prompt with
 real source context and requires the exact structured `record_latency_probe`
 call on every response. Each table cell is the median of three measured calls
-after a per-shape warmup; `output` is the model's actual completion length.
+after a per-shape warmup; OSL is the model's actual completion length. Every
+latency/performance table uses the standard column order: ISL, OSL,
+concurrency, decode tok/s/u, TTFT, E2EL.
 
 ### P150 tool-calling API
 
-| input | output | TTFT | derived TPOT | end-to-end | tokens/s/user | result |
-|---:|---:|---:|---:|---:|---:|:---:|
-| 512 | 135 | 613.7 ms | 95.20 ms | 13.37 s | 10.50 | pass |
-| 1,024 | 189 | 731.9 ms | 96.61 ms | 18.89 s | 10.35 | pass |
-| 4,096 | 171 | 1.58 s | 98.80 ms | 18.38 s | 10.12 | pass |
-| 8,192 | 168 | 2.84 s | 100.34 ms | 19.59 s | 9.97 | pass |
-| 16,384 | 117 | 5.77 s | 102.65 ms | 17.67 s | 9.74 | pass |
-| 32,768 | 167 | 12.21 s | 109.75 ms | 30.43 s | 9.11 | pass |
-| 65,536 | 168 | 27.75 s | 122.28 ms | 48.17 s | 8.18 | pass |
-| 130,560 | 162 | 69.59 s | 147.03 ms | 93.26 s | 6.80 | pass |
+| ISL | OSL | concurrency | decode tok/s/u | TTFT | E2EL |
+|---:|---:|---:|---:|---:|---:|
+| 512 | 135 | 1 | 10.50 | 613.7 ms | 13.37 s |
+| 1,024 | 189 | 1 | 10.35 | 731.9 ms | 18.89 s |
+| 4,096 | 171 | 1 | 10.12 | 1.58 s | 18.38 s |
+| 8,192 | 168 | 1 | 9.97 | 2.84 s | 19.59 s |
+| 16,384 | 117 | 1 | 9.74 | 5.77 s | 17.67 s |
+| 32,768 | 167 | 1 | 9.11 | 12.21 s | 30.43 s |
+| 65,536 | 168 | 1 | 8.18 | 27.75 s | 48.17 s |
+| 130,560 | 162 | 1 | 6.80 | 69.59 s | 93.26 s |
 
 ### P150x2 tool-calling API
 
-| input | output | TTFT | derived TPOT | end-to-end | tokens/s/user | result |
-|---:|---:|---:|---:|---:|---:|:---:|
-| 512 | 135 | 283.8 ms | 35.48 ms | 5.04 s | 28.19 | pass |
-| 1,024 | 180 | 364.2 ms | 36.13 ms | 6.83 s | 27.68 | pass |
-| 4,096 | 278 | 7.80 s | 12.01 ms | 11.13 s | 83.26 | pass |
-| 8,192 | 147 | 1.70 s | 37.06 ms | 7.11 s | 26.98 | pass |
-| 16,384 | 128 | 3.54 s | 37.91 ms | 8.36 s | 26.37 | pass |
-| 32,768 | 168 | 7.49 s | 40.00 ms | 14.17 s | 25.00 | pass |
-| 65,536 | 110 | 16.99 s | 43.41 ms | 21.72 s | 23.04 | pass |
-| 130,560 | 135 | 42.03 s | 51.18 ms | 48.89 s | 19.54 | pass |
+| ISL | OSL | concurrency | decode tok/s/u | TTFT | E2EL |
+|---:|---:|---:|---:|---:|---:|
+| 512 | 135 | 1 | 28.19 | 283.8 ms | 5.04 s |
+| 1,024 | 180 | 1 | 27.68 | 364.2 ms | 6.83 s |
+| 4,096 | 278 | 1 | 83.26 | 7.80 s | 11.13 s |
+| 8,192 | 147 | 1 | 26.98 | 1.70 s | 7.11 s |
+| 16,384 | 128 | 1 | 26.37 | 3.54 s | 8.36 s |
+| 32,768 | 168 | 1 | 25.00 | 7.49 s | 14.17 s |
+| 65,536 | 110 | 1 | 23.04 | 16.99 s | 21.72 s |
+| 130,560 | 135 | 1 | 19.54 | 42.03 s | 48.89 s |
 
 At P150x2 ISL 4096, the reasoning/tool parser buffers early output until late
 in the completion. Client-visible TTFT therefore absorbs decode work and the
-derived TPOT is correspondingly low; the fixed-OSL control below is the
-authority for raw device-path TPOT.
+API-derived decode rate is correspondingly inflated; the fixed-OSL control
+below is the authority for raw device-path decode throughput. All 48 measured
+tool-calling samples across P150 and P150x2 passed the structured-call gate.
 
 ### Fixed-OSL device control
 
-Every row below generated exactly 512 tokens. These runs bypass the API parser
-and provide the comparable underlying device-path latency.
+Every row below generated exactly 512 tokens at concurrency 1. These runs
+bypass the API parser and provide comparable underlying device-path latency.
 
-| input | P150 TTFT | P150 TPOT | P150 E2E | P150x2 TTFT | P150x2 TPOT | P150x2 E2E |
-|---:|---:|---:|---:|---:|---:|---:|
-| 128 | 177.3 ms | 97.74 ms | 50.12 s | 81.0 ms | 36.55 ms | 18.76 s |
-| 1,024 | 318.8 ms | 100.00 ms | 51.42 s | 214.2 ms | 37.95 ms | 19.61 s |
-| 4,096 | 1.13 s | 103.53 ms | 54.03 s | 729.0 ms | 39.61 ms | 20.97 s |
-| 8,192 | 2.29 s | 106.17 ms | 56.54 s | 1.49 s | 40.84 ms | 22.36 s |
-| 16,384 | 5.01 s | 111.44 ms | 61.96 s | 3.31 s | 43.29 ms | 25.43 s |
-| 32,768 | 10.99 s | 121.55 ms | 73.10 s | 7.21 s | 48.24 ms | 31.85 s |
-| 65,536 | 25.33 s | 141.48 ms | 97.62 s | 16.45 s | 58.06 ms | 46.12 s |
-| 130,560 | 63.56 s | 180.15 ms | 155.62 s | 39.33 s | 77.74 ms | 79.06 s |
+#### P150 fixed-OSL control
+
+| ISL | OSL | concurrency | decode tok/s/u | TTFT | E2EL |
+|---:|---:|---:|---:|---:|---:|
+| 128 | 512 | 1 | 10.23 | 177.3 ms | 50.12 s |
+| 1,024 | 512 | 1 | 10.00 | 318.8 ms | 51.42 s |
+| 4,096 | 512 | 1 | 9.66 | 1.13 s | 54.03 s |
+| 8,192 | 512 | 1 | 9.42 | 2.29 s | 56.54 s |
+| 16,384 | 512 | 1 | 8.97 | 5.01 s | 61.96 s |
+| 32,768 | 512 | 1 | 8.23 | 10.99 s | 73.10 s |
+| 65,536 | 512 | 1 | 7.07 | 25.33 s | 97.62 s |
+| 130,560 | 512 | 1 | 5.55 | 63.56 s | 155.62 s |
+
+#### P150x2 fixed-OSL control
+
+| ISL | OSL | concurrency | decode tok/s/u | TTFT | E2EL |
+|---:|---:|---:|---:|---:|---:|
+| 128 | 512 | 1 | 27.36 | 81.0 ms | 18.76 s |
+| 1,024 | 512 | 1 | 26.35 | 214.2 ms | 19.61 s |
+| 4,096 | 512 | 1 | 25.25 | 729.0 ms | 20.97 s |
+| 8,192 | 512 | 1 | 24.48 | 1.49 s | 22.36 s |
+| 16,384 | 512 | 1 | 23.10 | 3.31 s | 25.43 s |
+| 32,768 | 512 | 1 | 20.73 | 7.21 s | 31.85 s |
+| 65,536 | 512 | 1 | 17.22 | 16.45 s | 46.12 s |
+| 130,560 | 512 | 1 | 12.86 | 39.33 s | 79.06 s |
 
 A minor, measured performance degradation is acceptable: a same-topology
 median regression of at most 5% across three stable samples may ship when it is
@@ -126,16 +144,16 @@ same-topology regression blocks publication.
 
 The existing four-chip batch-1 baseline uses 512 output tokens:
 
-| input tokens | TTFT | TPOT | end-to-end | tokens/s/user |
-|---:|---:|---:|---:|---:|
-| 128 | 69.5 ms | 23.60 ms | 12.1 s | 42.38 |
-| 1,024 | 144.6 ms | 24.99 ms | 12.9 s | 40.02 |
-| 4,096 | 454.5 ms | 26.64 ms | 14.1 s | 37.54 |
-| 8,192 | 912.8 ms | 27.86 ms | 15.1 s | 35.90 |
-| 16,384 | 2.08 s | 30.26 ms | 17.5 s | 33.05 |
-| 32,768 | 4.48 s | 35.29 ms | 22.5 s | 28.34 |
-| 65,536 | 10.17 s | 45.10 ms | 33.2 s | 22.17 |
-| 130,560 | 25.12 s | 64.76 ms | 58.2 s | 15.44 |
+| ISL | OSL | concurrency | decode tok/s/u | TTFT | E2EL |
+|---:|---:|---:|---:|---:|---:|
+| 128 | 512 | 1 | 42.38 | 69.5 ms | 12.1 s |
+| 1,024 | 512 | 1 | 40.02 | 144.6 ms | 12.9 s |
+| 4,096 | 512 | 1 | 37.54 | 454.5 ms | 14.1 s |
+| 8,192 | 512 | 1 | 35.90 | 912.8 ms | 15.1 s |
+| 16,384 | 512 | 1 | 33.05 | 2.08 s | 17.5 s |
+| 32,768 | 512 | 1 | 28.34 | 4.48 s | 22.5 s |
+| 65,536 | 512 | 1 | 22.17 | 10.17 s | 33.2 s |
+| 130,560 | 512 | 1 | 15.44 | 25.12 s | 58.2 s |
 
 The last row saturates the 131,072-token context with 512 generated tokens.
 See [tool calling](doc/tool_calling/README.md) and the

@@ -187,6 +187,9 @@ card:
 
     ## Performance
 
+    Every latency/performance table uses the standard column order: ISL, OSL,
+    concurrency, decode tok/s/u, TTFT, E2EL.
+
     For P150 and P150x2 qualification, a same-topology median latency
     regression of at most 5% across three stable samples may ship when it is
     documented. Cross-topology differences are reported directly rather than
@@ -198,16 +201,16 @@ card:
     length swept to the full context. Decode rate is per user. Retried points
     show the median of three independent runs.
 
-    | input tokens | output tokens | TTFT | TPOT | end-to-end | tokens/s/user |
+    | ISL | OSL | concurrency | decode tok/s/u | TTFT | E2EL |
     |---:|---:|---:|---:|---:|---:|
-    | 128 | 512 | 69.5 ms | 23.60 ms | 12.1 s | 42.38 |
-    | 1,024 | 512 | 144.6 ms | 24.99 ms | 12.9 s | 40.02 |
-    | 4,096 | 512 | 454.5 ms | 26.64 ms | 14.1 s | 37.54 |
-    | 8,192 | 512 | 912.8 ms | 27.86 ms | 15.1 s | 35.90 |
-    | 16,384 | 512 | 2.08 s | 30.26 ms | 17.5 s | 33.05 |
-    | 32,768 | 512 | 4.48 s | 35.29 ms | 22.5 s | 28.34 |
-    | 65,536 | 512 | 10.17 s | 45.10 ms | 33.2 s | 22.17 |
-    | 130,560 | 512 | 25.12 s | 64.76 ms | 58.2 s | 15.44 |
+    | 128 | 512 | 1 | 42.38 | 69.5 ms | 12.1 s |
+    | 1,024 | 512 | 1 | 40.02 | 144.6 ms | 12.9 s |
+    | 4,096 | 512 | 1 | 37.54 | 454.5 ms | 14.1 s |
+    | 8,192 | 512 | 1 | 35.90 | 912.8 ms | 15.1 s |
+    | 16,384 | 512 | 1 | 33.05 | 2.08 s | 17.5 s |
+    | 32,768 | 512 | 1 | 28.34 | 4.48 s | 22.5 s |
+    | 65,536 | 512 | 1 | 22.17 | 10.17 s | 33.2 s |
+    | 130,560 | 512 | 1 | 15.44 | 25.12 s | 58.2 s |
 
     The last row saturates the advertised context (130,560 + 512 = 131,072).
     Serve one request at a time: concurrency at long context is admission-limited
@@ -215,19 +218,34 @@ card:
     bounded latency gate: 2% per metric, plus a 5 ms absolute TTFT allowance for
     short-input measurement variance.
 
-    New lower-device fixed-OSL qualification, measured at batch 1 with exactly
-    512 generated tokens per row:
+    New lower-device fixed-OSL qualification, measured at concurrency 1 with
+    exactly 512 generated tokens per row:
 
-    | input | P150 TTFT | P150 TPOT | P150 E2E | P150x2 TTFT | P150x2 TPOT | P150x2 E2E |
-    |---:|---:|---:|---:|---:|---:|---:|
-    | 128 | 177.3 ms | 97.74 ms | 50.12 s | 81.0 ms | 36.55 ms | 18.76 s |
-    | 1,024 | 318.8 ms | 100.00 ms | 51.42 s | 214.2 ms | 37.95 ms | 19.61 s |
-    | 4,096 | 1.13 s | 103.53 ms | 54.03 s | 729.0 ms | 39.61 ms | 20.97 s |
-    | 8,192 | 2.29 s | 106.17 ms | 56.54 s | 1.49 s | 40.84 ms | 22.36 s |
-    | 16,384 | 5.01 s | 111.44 ms | 61.96 s | 3.31 s | 43.29 ms | 25.43 s |
-    | 32,768 | 10.99 s | 121.55 ms | 73.10 s | 7.21 s | 48.24 ms | 31.85 s |
-    | 65,536 | 25.33 s | 141.48 ms | 97.62 s | 16.45 s | 58.06 ms | 46.12 s |
-    | 130,560 | 63.56 s | 180.15 ms | 155.62 s | 39.33 s | 77.74 ms | 79.06 s |
+    **P150**
+
+    | ISL | OSL | concurrency | decode tok/s/u | TTFT | E2EL |
+    |---:|---:|---:|---:|---:|---:|
+    | 128 | 512 | 1 | 10.23 | 177.3 ms | 50.12 s |
+    | 1,024 | 512 | 1 | 10.00 | 318.8 ms | 51.42 s |
+    | 4,096 | 512 | 1 | 9.66 | 1.13 s | 54.03 s |
+    | 8,192 | 512 | 1 | 9.42 | 2.29 s | 56.54 s |
+    | 16,384 | 512 | 1 | 8.97 | 5.01 s | 61.96 s |
+    | 32,768 | 512 | 1 | 8.23 | 10.99 s | 73.10 s |
+    | 65,536 | 512 | 1 | 7.07 | 25.33 s | 97.62 s |
+    | 130,560 | 512 | 1 | 5.55 | 63.56 s | 155.62 s |
+
+    **P150x2**
+
+    | ISL | OSL | concurrency | decode tok/s/u | TTFT | E2EL |
+    |---:|---:|---:|---:|---:|---:|
+    | 128 | 512 | 1 | 27.36 | 81.0 ms | 18.76 s |
+    | 1,024 | 512 | 1 | 26.35 | 214.2 ms | 19.61 s |
+    | 4,096 | 512 | 1 | 25.25 | 729.0 ms | 20.97 s |
+    | 8,192 | 512 | 1 | 24.48 | 1.49 s | 22.36 s |
+    | 16,384 | 512 | 1 | 23.10 | 3.31 s | 25.43 s |
+    | 32,768 | 512 | 1 | 20.73 | 7.21 s | 31.85 s |
+    | 65,536 | 512 | 1 | 17.22 | 16.45 s | 46.12 s |
+    | 130,560 | 512 | 1 | 12.86 | 39.33 s | 79.06 s |
 
     The live OpenAI API qualification used real source-code context and required
     an exact structured function call at every length: P150 passed 24/24 measured
