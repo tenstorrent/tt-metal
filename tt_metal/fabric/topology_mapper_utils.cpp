@@ -3626,8 +3626,8 @@ MultiMeshSolutionEnumerator::MultiMeshSolutionEnumerator(
     asic_id_to_mesh_rank_(asic_id_to_mesh_rank),
     fabric_node_id_to_mesh_rank_(fabric_node_id_to_mesh_rank),
     unique_shapes_(unique_shapes),
-    inter_mesh_constraints_(build_inter_mesh_constraints(
-        config, adjacency_map_physical, adjacency_map_logical, asic_id_to_mesh_rank)),
+    inter_mesh_constraints_(
+        build_inter_mesh_constraints(config, adjacency_map_physical, adjacency_map_logical, asic_id_to_mesh_rank)),
     inter_mesh_validation_mode_(determine_inter_mesh_validation_mode(config)) {}
 
 std::optional<TopologyMappingResult> MultiMeshSolutionEnumerator::next() {
@@ -3635,18 +3635,29 @@ std::optional<TopologyMappingResult> MultiMeshSolutionEnumerator::next() {
     const auto& mesh_logical_graph = adjacency_map_logical_.mesh_level_graph_;
     const auto& mesh_physical_graph = adjacency_map_physical_.mesh_level_graph_;
     while (true) {
-        // One warm solve on the persistent session. On the first call this also encodes the hard CNF and
-        // primes the minimal-host cap. UNBOUNDED (no budget give-up): a failed result means a genuine UNSAT
-        // -> the enumeration is exhausted.
-        MappingResult<MeshId, MeshId> placement = session_.next(
-            mesh_logical_graph,
-            mesh_physical_graph,
-            inter_mesh_constraints_,
-            excluded_,
-            inter_mesh_validation_mode_,
-            /*quiet_mode=*/true,
-            TopologyMappingSolverEngine::Auto,
-            unique_shapes_);
+        // Inter-mesh solve. The FIRST solve (emitted_ == 0) -- for single-solve AND the first solution of an
+        // enumeration -- uses the single-shot solve_topology_mapping, which runs the full capped ladder (capacity
+        // precheck -> full-packing fast path -> general fallback -> conflict budget) so a tight minimal-host cap is
+        // FOUND by unit propagation instead of falsely downgraded; excluded_ is empty on the first solve and the
+        // forbidden-pair constraint drives any intra-completion retry. Subsequent solves (emitted_ > 0, enumeration
+        // only) use the streaming session's GENERAL encoding so every partial-fill placement stays enumerable; their
+        // exhaustion is a genuine "no more solutions" (the emitted_ == 0 downgrade guard below no longer fires). A
+        // failed FIRST solve means the cap is genuinely infeasible -> the relax/downgrade below.
+        MappingResult<MeshId, MeshId> placement = emitted_ == 0 ? ::tt::tt_fabric::solve_topology_mapping(
+                                                                      mesh_logical_graph,
+                                                                      mesh_physical_graph,
+                                                                      inter_mesh_constraints_,
+                                                                      inter_mesh_validation_mode_,
+                                                                      /*quiet_mode=*/true)
+                                                                : session_.next(
+                                                                      mesh_logical_graph,
+                                                                      mesh_physical_graph,
+                                                                      inter_mesh_constraints_,
+                                                                      excluded_,
+                                                                      inter_mesh_validation_mode_,
+                                                                      /*quiet_mode=*/true,
+                                                                      TopologyMappingSolverEngine::Auto,
+                                                                      unique_shapes_);
         if (!placement.success) {
             // Mirror the single-solve path (map_multi_mesh_to_physical): the minimal-host cap is best-effort --
             // if the capped encoding is UNSAT drop the hard cap (the SOFT minimize bias stays on) and re-encode a
