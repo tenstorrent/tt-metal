@@ -214,6 +214,8 @@ class TtMoe(LightweightModule):
         shared_expert_situ_beta: float | None = None,
         shared_expert_situ_linear_beta: float | None = None,
         shared_expert_clamped_silu_glu_limit: float | None = None,
+        gate_score_func: str | None = None,
+        gate_hash_table: torch.Tensor | None = None,
         gate_fallback_mode: GateComputeMode = GateComputeMode.HOST_ALL,
         weight_cache_path: Optional[Path] = None,
         layer_idx: int = 0,
@@ -265,6 +267,10 @@ class TtMoe(LightweightModule):
             shared_expert_clamped_silu_glu_limit: clamp limit, required when
                 shared_expert_activation == "clamped_silu_glu".
             gate_weights: Dict with "weight" and "e_score_correction_bias" keys for gate
+            gate_score_func: Router affinity applied to the raw logits. None keeps
+                TtMoEGateConfig's default. Read by the grouped-topk gate and by both hash gates.
+            gate_hash_table: tid2eid table, (vocab_size, num_experts_per_tok). Required by the
+                HASH_HOST / HASH_DEVICE gate modes. Not cached -- the gate replicates it.
             gate_fallback_mode: Fallback mode for gate (default: HOST_ALL)
             overlap_shared_expert_with_dispatch: If True, run the shared expert and dispatch
                 on disjoint sub-devices so they overlap on-chip. If False, skip sub-device
@@ -365,6 +371,8 @@ class TtMoe(LightweightModule):
         gate_config.ccl_config["NUM_LINKS"] = self.col_num_links if isinstance(num_links, tuple) else num_links
         # The gate all-reduce runs on the TP axis (cluster_axis=TP_AXIS), so it follows col_topology.
         gate_config.ccl_config["TOPOLOGY"] = self.col_topology
+        if gate_score_func is not None:
+            gate_config.score_func = gate_score_func
 
         # Handle cache-only case (gate_weights=None)
         if gate_weights is not None:
@@ -384,6 +392,7 @@ class TtMoe(LightweightModule):
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.gate",
             is_balanced=is_balanced,
+            hash_table=gate_hash_table,
         )
 
         self.routing_setup = TtMoERoutingSetup(
@@ -586,6 +595,7 @@ class TtMoe(LightweightModule):
         padding_side: str = "right",
         actual_start: Optional[int] = None,
         metadata: Optional[tuple] = None,
+        input_ids: Optional[torch.Tensor] = None,
     ) -> tuple[ttnn.Tensor, Optional[TtMoEIntermediates]]:
         """
         Forward pass through the full MoE pipeline.
@@ -610,6 +620,10 @@ class TtMoe(LightweightModule):
                 illegal inside a trace capture, and a config baked in at capture time would be wrong
                 for every later chunk. Ignored unless padding awareness is active (actual_isl set and
                 a DEVICE_FP32 gate).
+            input_ids: host token ids for the whole sequence, flat, one per row of x. Required by
+                the HASH_HOST / HASH_DEVICE gate modes, which select experts by tid2eid[input_ids].
+                HASH_DEVICE ships them per forward, so it is illegal inside a trace capture and
+                assumes sequential SP placement (not is_balanced).
 
         Returns:
             Tuple of (final_output, intermediates):
@@ -680,6 +694,7 @@ class TtMoe(LightweightModule):
             padding_side=padding_side,
             padding_config=padding_config,
             actual_start=actual_start or 0,
+            input_ids=input_ids,
         )
 
         tt_expert_offsets, tt_expert_token_counts, tt_expert_region_offsets, _ = self.routing_setup(
