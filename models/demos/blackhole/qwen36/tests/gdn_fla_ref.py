@@ -33,7 +33,6 @@ def _load_fla_naive():
         pass
     candidates = [
         os.environ.get("FLA_REPO"),
-        "/home/ttuser/atupe/flash-linear-attention",
         os.path.expanduser("~/flash-linear-attention"),
     ]
     for p in candidates:

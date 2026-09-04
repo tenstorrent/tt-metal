@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Pure-torch reference for the Qwen3.5/3.6 MTP (multi-token prediction) drafter head.
 
-Shared by the device PCC test (tests/test_mtp_tp.py) and the off-device acceptance oracle
-(tests/mtp_cpu_check.py) so both score the drafter against the same math:
+Shared by the device PCC test (tests/test_mtp_tp.py) and its own CPU self-consistency pin
+(tests/test_mtp_torch_ref.py) so both score the drafter against the same math:
 
     h'  = fc( concat[ enorm(embed(token)), hnorm(hidden) ] )
     h'' = DecoderLayer(h')                  # one gated full-attention layer + SwiGLU MLP

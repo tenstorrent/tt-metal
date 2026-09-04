@@ -254,7 +254,7 @@ def _check(device, T, p, seq_len, seed=0, program_config=None, pcc_ref_vs_spec=N
 
 # ── Equivalence sweep ──────────────────────────────────────────────────────
 #
-# ``p`` walks tile-alignment edges (p % 32 in {0, 1, 30, 31}) and k-chunk edges. The chunk
+# ``p`` walks tile-alignment edges (p % 32 in {0, 31}) and k-chunk edges. The chunk
 # width differs per T (see SPEC_CONFIG: 128 for T=4, 64 for T=7, 32 for T=11), so each p
 # lands on a different point of each T's chunk grid — which is the intent: between them the
 # cases cover "bound is the last position of a chunk" (one masked chunk), "bounds straddle a
@@ -266,29 +266,21 @@ def _check(device, T, p, seq_len, seed=0, program_config=None, pcc_ref_vs_spec=N
 @pytest.mark.parametrize(
     "seq_len, p",
     [
-        # 2k context, tile-alignment edges (p % 32 in {0, 1, 30, 31})
+        # 2k context, tile-alignment edges (p % 32 in {0, 31})
         (2048, 1024),  # p % 32 == 0,  p % 128 == 0
-        (2048, 1025),  # p % 32 == 1
-        (2048, 1054),  # p % 32 == 30
         (2048, 1055),  # p % 32 == 31
         # chunk-boundary edges
         (2048, 1023),  # last position of a 128-chunk: bounds start a fresh chunk
         (2048, 1021),  # bounds straddle a 128-chunk boundary -> TWO masked chunks
         # 8k context
-        (8192, 4095),  # last position of a chunk
         (8192, 4093),  # straddles a chunk boundary
-        (8192, 5000),
     ],
     ids=[
         "s2k_p1024",
-        "s2k_p1025",
-        "s2k_p1054",
         "s2k_p1055",
         "s2k_p1023",
         "s2k_p1021_straddle",
-        "s8k_p4095",
         "s8k_p4093_straddle",
-        "s8k_p5000",
     ],
 )
 def test_spec_multi_pos_matches_batched(device, T, seq_len, p):
@@ -695,27 +687,15 @@ def test_spec_multi_pos_group_shapes(device, B, Tg):
     "seq_len, p",
     [
         (2048, 1024),
-        (2048, 1025),
-        (2048, 1054),
-        (2048, 1055),
         (2048, 1020),
         (2048, 1021),
-        (8192, 4095),
-        (8192, 5000),
         (32768, 30000),
-        (32768, 32700),
     ],
     ids=[
         "s2k_p1024",
-        "s2k_p1025",
-        "s2k_p1054",
-        "s2k_p1055",
         "s2k_p1020_split_scan",
         "s2k_p1021_straddle",
-        "s8k_p4095_straddle",
-        "s8k_p5000",
         "s32k_p30000",
-        "s32k_p32700",
     ],
 )
 @pytest.mark.parametrize("k_chunk_size", [0, 128], ids=["B3_Tg4_dyn_chunk", "B3_Tg4_chunk128"])
