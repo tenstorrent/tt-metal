@@ -73,11 +73,11 @@ void kernel_main() {
         dfb_x_obj.wait_front(onetile);  // comes from the reader
         dfb_xabs_obj.reserve_back(onetile);
 
-        copy_tile_init(cb_x);
+        copy_init(cb_x);
         copy_tile(cb_x, 0, dst0);
 
         if (do_mask_h && need_to_do_mask_h(tile_idx, ht, wt)) {
-            copy_tile_init(cb_mask_h_w);
+            copy_init(cb_mask_h_w);
             copy_tile(cb_mask_h_w, 0, dst1);
 
             mask_tile_init();
@@ -85,7 +85,7 @@ void kernel_main() {
         }
 
         if (do_mask_w && ((tile_idx + 1) % wt) == 0) {
-            copy_tile_init(cb_mask_h_w);
+            copy_init(cb_mask_h_w);
             copy_tile(cb_mask_h_w, 1, dst1);
 
             mask_tile_init();
@@ -118,7 +118,7 @@ void kernel_main() {
             dfb_correct_xpow_obj.wait_front(onetile);
             dfb_xpowadd_obj.reserve_back(onetile);
 
-            copy_tile_init(cb_correct_xpow);
+            copy_init(cb_correct_xpow);
             copy_tile(cb_correct_xpow, 0, dst0);
             tile_regs_commit();
 

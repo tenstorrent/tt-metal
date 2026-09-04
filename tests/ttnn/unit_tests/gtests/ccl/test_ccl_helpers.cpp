@@ -2,9 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cstdint>
 #include <algorithm>
+#include <array>
 #include <cstddef>
+#include <cstdint>
 #include <vector>
 
 #include "gtest/gtest.h"
@@ -13,9 +14,79 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
+#include "ttnn/operations/ccl/shared_with_host/snake_ring.hpp"
+#include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/kernels/ring_attention_rank_mapping.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/arch.hpp>
 #include "common/tt_backend_api_types.hpp"
+
+namespace {
+
+void check_snake_ring_bijection(uint32_t rows, uint32_t cols, ttnn::ccl::snake_ring::Orientation orientation) {
+    const uint32_t ring_size = rows * cols;
+    std::vector<bool> seen_tensor_ranks(ring_size, false);
+    for (uint32_t transport_rank = 0; transport_rank < ring_size; ++transport_rank) {
+        const uint32_t row = ttnn::ccl::snake_ring::coordinate_row(transport_rank, rows, cols, orientation);
+        const uint32_t col = ttnn::ccl::snake_ring::coordinate_col(transport_rank, rows, cols, orientation);
+        ASSERT_LT(row, rows);
+        ASSERT_LT(col, cols);
+        EXPECT_EQ(ttnn::ccl::snake_ring::index_from_coordinate(row, col, rows, cols, orientation), transport_rank);
+
+        const uint32_t tensor_rank = ttnn::ccl::snake_ring::row_major_index(transport_rank, rows, cols, orientation);
+        EXPECT_EQ(tensor_rank, row * cols + col);
+        ASSERT_LT(tensor_rank, ring_size);
+        EXPECT_FALSE(seen_tensor_ranks[tensor_rank]);
+        seen_tensor_ranks[tensor_rank] = true;
+
+        const uint32_t lane_count = orientation == ttnn::ccl::snake_ring::Orientation::Row ? rows : cols;
+        if (transport_rank + 1 < ring_size || lane_count % 2 == 0) {
+            const uint32_t next_rank = (transport_rank + 1) % ring_size;
+            const uint32_t next_row = ttnn::ccl::snake_ring::coordinate_row(next_rank, rows, cols, orientation);
+            const uint32_t next_col = ttnn::ccl::snake_ring::coordinate_col(next_rank, rows, cols, orientation);
+            const uint32_t raw_row_delta = row > next_row ? row - next_row : next_row - row;
+            const uint32_t raw_col_delta = col > next_col ? col - next_col : next_col - col;
+            const uint32_t cyclic_row_delta = std::min(raw_row_delta, rows - raw_row_delta);
+            const uint32_t cyclic_col_delta = std::min(raw_col_delta, cols - raw_col_delta);
+            EXPECT_EQ(cyclic_row_delta + cyclic_col_delta, 1u);
+        }
+    }
+    EXPECT_TRUE(std::all_of(seen_tensor_ranks.begin(), seen_tensor_ranks.end(), [](bool seen) { return seen; }));
+}
+
+}  // namespace
+
+TEST(CclHelpers, SnakeRingMappingsAreBijectionsWithRowMajorTensorRanks) {
+    constexpr std::array<std::array<uint32_t, 2>, 4> mesh_shapes{{{2, 2}, {2, 4}, {8, 4}, {3, 2}}};
+    for (const auto& shape : mesh_shapes) {
+        check_snake_ring_bijection(shape[0], shape[1], ttnn::ccl::snake_ring::Orientation::Row);
+        check_snake_ring_bijection(shape[0], shape[1], ttnn::ccl::snake_ring::Orientation::Column);
+    }
+}
+
+TEST(CclHelpers, RingAttentionRankMappingKeepsAxisIdentityAndPlacesFullMeshInRowMajorOrder) {
+    for (uint32_t transport_rank = 0; transport_rank < 6; ++transport_rank) {
+        EXPECT_EQ(
+            (ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<false>(
+                transport_rank, 0, 0, ttnn::ccl::snake_ring::Orientation::Column)),
+            transport_rank);
+    }
+
+    constexpr std::array<uint32_t, 4> row_snake_2x2{0, 1, 3, 2};
+    for (uint32_t transport_rank = 0; transport_rank < row_snake_2x2.size(); ++transport_rank) {
+        EXPECT_EQ(
+            (ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<true>(
+                transport_rank, 2, 2, ttnn::ccl::snake_ring::Orientation::Row)),
+            row_snake_2x2[transport_rank]);
+    }
+
+    constexpr std::array<uint32_t, 6> column_snake_3x2{0, 2, 4, 5, 3, 1};
+    for (uint32_t transport_rank = 0; transport_rank < column_snake_3x2.size(); ++transport_rank) {
+        EXPECT_EQ(
+            (ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<true>(
+                transport_rank, 3, 2, ttnn::ccl::snake_ring::Orientation::Column)),
+            column_snake_3x2[transport_rank]);
+    }
+}
 
 TEST(CclHelpers, CreateEriscDatamoverBuilder_Chan4_PageSize2048_RRBufferSharingMode) {
     std::size_t num_channels = 4;

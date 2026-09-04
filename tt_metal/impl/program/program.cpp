@@ -2412,10 +2412,9 @@ void ProgramImpl::generate_dispatch_commands(distributed::MeshDevice* mesh_devic
     uint64_t command_hash = *mesh_device->get_active_sub_device_manager_id();
     MetalContext& metal_ctx = MetalContext::instance(extract_context_id(mesh_device));
 
-    uint64_t device_hash =
-        BuildEnvManager::get_instance(extract_context_id(mesh_device))
-            .get_device_build_env(mesh_device->build_id())
-            .build_key();
+    uint64_t device_hash = BuildEnvManager::get_instance(extract_context_id(mesh_device))
+                               .get_device_build_env(mesh_device->build_id())
+                               .build_key();
     if (not metal_ctx.hal().is_coordinate_virtualization_enabled()) {
         ttsl::hash::hash_combine(device_hash, mesh_device->id());
     }
@@ -2454,10 +2453,9 @@ void ProgramImpl::generate_trace_dispatch_commands(distributed::MeshDevice* mesh
     uint64_t command_hash = *mesh_device->get_active_sub_device_manager_id();
     MetalContext& metal_ctx = MetalContext::instance(extract_context_id(mesh_device));
 
-    uint64_t device_hash =
-        BuildEnvManager::get_instance(extract_context_id(mesh_device))
-            .get_device_build_env(mesh_device->build_id())
-            .build_key();
+    uint64_t device_hash = BuildEnvManager::get_instance(extract_context_id(mesh_device))
+                               .get_device_build_env(mesh_device->build_id())
+                               .build_key();
     if (not metal_ctx.hal().is_coordinate_virtualization_enabled()) {
         device_hash = (device_hash << 32) | (mesh_device->id());
     }
@@ -2561,12 +2559,13 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         this->set_cb_data_fmt_and_tile(kernel->logical_coreranges(), build_options);
         this->set_dfb_data_fmt_and_tile(kernel->logical_coreranges(), build_options);
 
-        // Blackhole-only: Fp8_e4m3 / Lf8 dataformats require fp32_dest_acc_en=true in the associated compute
-        // kernel. This is due to FP8/LF8 being considered "A" exp width formats, instead of "B" exp width
-        // formats that are supported mostly in tt-metal. This conservative check fires whenever a compute
-        // kernel shares a core with any FP8 CB — the old Program API has no way to know which CB
+        // Blackhole and Quasar: Fp8_e4m3 / Lf8 dataformats require fp32_dest_acc_en=true in the associated
+        // compute kernel. This is due to FP8/LF8 being considered "A" exp width formats, instead of "B" exp
+        // width formats that are supported mostly in tt-metal. This conservative check fires whenever a
+        // compute kernel shares a core with any FP8 CB — the old Program API has no way to know which CB
         // a given kernel actually reads, so we err on the side of catching the misconfiguration.
-        if (build_options.build_env.get_arch() == tt::ARCH::BLACKHOLE &&
+        if ((build_options.build_env.get_arch() == tt::ARCH::BLACKHOLE ||
+             build_options.build_env.get_arch() == tt::ARCH::QUASAR) &&
             kernel->get_kernel_processor_class() == HalProcessorClassType::COMPUTE &&
             std::any_of(
                 build_options.hlk_desc.buf_dataformat_arr.begin(),
@@ -2574,7 +2573,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                 is_fp8_format)) {
             TT_FATAL(
                 build_options.fp32_dest_acc_en,
-                "Blackhole: Fp8_e4m3 / Lf8 require fp32_dest_acc_en=true in ComputeConfig. The DEST "
+                "Fp8_e4m3 / Lf8 require fp32_dest_acc_en=true in ComputeConfig. The DEST "
                 "register must be in 32-bit (family-agnostic) mode when any CB on the same core uses "
                 "an 8-bit float format. Kernel: {}",
                 kernel->name());

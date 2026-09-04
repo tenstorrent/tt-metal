@@ -1611,6 +1611,7 @@ ENV_BLOCKLIST = frozenset(
         "TT_MESH_HOST_RANK",  # Host rank within mesh from rank binding
         "TT_MESH_GRAPH_DESC_PATH",  # Path to mesh graph descriptor from config
         "TT_RUN_ORIGINAL_CWD",  # Always set to ORIGINAL_CWD by tt-run
+        "TT_RUN_RANK",  # Global MPI world rank from rank binding
         "TT_RUN_SUBCONTEXT_ID",  # Set when using merged rank-bindings mapping
         "TT_RUN_SUBCONTEXT_SIZES",
         "TT_METAL_MOCK_CLUSTER_DESC_PATH",  # Mock cluster path for testing
@@ -1696,6 +1697,8 @@ def get_rank_environment(
             ),
             # Pass the original CWD to subprocesses so they can resolve relative paths correctly
             "TT_RUN_ORIGINAL_CWD": str(ORIGINAL_CWD),
+            # Global MPI world rank; read by tt-triage (tools/triage/utils.py, inspector_data.py)
+            "TT_RUN_RANK": str(binding.rank),
         }
     )
 
@@ -2280,6 +2283,7 @@ def legacy_flow(
         - LD_LIBRARY_PATH: Library search path
         - TT_MESH_GRAPH_DESC_PATH: Path to mesh graph descriptor
         - TT_RUN_ORIGINAL_CWD: Directory where tt-run was launched (for subprocess path resolution)
+        - TT_RUN_RANK: Global MPI world rank (used by tt-triage to identify the rank)
         - HOME: Passed through (required by OpenMPI for process management)
         - USER: Passed through (required by OpenMPI for process identity)
         - PATH: Passed through from caller (enables venv tools like pytest on remote hosts)
@@ -2307,7 +2311,7 @@ def legacy_flow(
         - TT_VISIBLE_DEVICES: Must be set per-rank via env_overrides in rank bindings to ensure
           correct device visibility. Cluster descriptors and rank bindings configure this per-rank.
         - TT_MESH_ID, TT_MESH_HOST_RANK, TT_MESH_GRAPH_DESC_PATH: Derived from rank bindings/config
-        - TT_RUN_ORIGINAL_CWD, TT_METAL_MOCK_CLUSTER_DESC_PATH: Set by tt-run internally
+        - TT_RUN_ORIGINAL_CWD, TT_RUN_RANK, TT_METAL_MOCK_CLUSTER_DESC_PATH: Set by tt-run internally
 
         Note: TT_METAL_HOME, TT_METAL_RUNTIME_ROOT, and TT_METAL_CACHE ARE passed through from
         the parent environment to support NFS-based distributed workloads where all MPI ranks

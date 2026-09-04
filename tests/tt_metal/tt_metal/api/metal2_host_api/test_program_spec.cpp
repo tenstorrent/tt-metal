@@ -2547,7 +2547,6 @@ TEST_F(ProgramSpecTestQuasar, CPU_ComputeGen2ConfigDefaultsMapToInternalDefaults
     EXPECT_FALSE(built.fp32_dest_acc_en);
     EXPECT_FALSE(built.dst_full_sync_en);      // double_buffer_dest defaults true -> !true
     EXPECT_FALSE(built.math_approx_mode);      // sfpu_precision_mode defaults Precise
-    EXPECT_FALSE(built.enable_2x_src_format);  // enable_2x_src_register defaults false
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_ComputeGen2ConfigInversionAndEnumMapToInternal) {

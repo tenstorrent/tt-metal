@@ -59,7 +59,8 @@ struct IndexerScoreDeviceOperation {
         std::optional<uint32_t> cache_batch_idx,
         std::optional<uint32_t> kv_len,
         std::vector<uint32_t> seq_shard_axes,
-        std::optional<BlockCyclicLayout> block_cyclic);
+        std::optional<BlockCyclicLayout> block_cyclic,
+        uint32_t key_stripe_split = 1);
 };
 
 }  // namespace ttnn::operations::experimental::indexer_score
@@ -77,6 +78,9 @@ namespace ttnn::experimental {
 // from the mesh shape on that axis, so a caller cannot pass an sp that disagrees with the device.
 // block_cyclic_chunk_local must be q_isl (seq sharded only on the SP axis) or tp*q_isl (tp = mesh/sp). Both
 // set together, or neither = contiguous K (no remap); sp==1 is the identity.
+//
+// block_cyclic_cache_tp_sharded (KV dedup): the cache is striped across ALL sp*tp devices, gathered TP-inner then
+// SP-outer, so the remap decodes (sp*tp, chunk_local/tp) while the causal geometry stays on (sp, chunk_local).
 //
 // SEQ SHARD AXES: seq_shard_axes names the mesh axes the query seq is sharded over, outermost (SP ring)
 // first: [] = linear device order, [sp] = 1D SP ring, [sp, tp] = 2D SP + TP sub-shard. Seq sharded across
@@ -101,7 +105,8 @@ ttnn::Tensor indexer_score_dsa(
     std::optional<uint32_t> kv_len = std::nullopt,
     const std::optional<std::vector<uint32_t>>& seq_shard_axes = std::nullopt,
     std::optional<uint32_t> block_cyclic_sp_axis = std::nullopt,
-    std::optional<uint32_t> block_cyclic_chunk_local = std::nullopt);
+    std::optional<uint32_t> block_cyclic_chunk_local = std::nullopt,
+    bool block_cyclic_cache_tp_sharded = false);
 
 // MiniMax-M3 MSA (ttnn.experimental.indexer_score_msa):
 //   score[b, g, s, t] = sum_{h in group g} (q[b,h,s,:] . k[b,t,:]) * scale
@@ -136,16 +141,19 @@ ttnn::Tensor indexer_score_msa(
 // co-schedules the ring_attention all-gather + the indexer compute, overlapping fabric transport with scoring:
 // the reader gates each K band on only the SP shards its tiles land in (per-band overlap, not a coarse whole-
 // gather barrier), then scores exactly as indexer_score_dsa. Same score semantics +
-// block-cyclic remap as indexer_score_dsa. Ring runs over `cluster_axis` (the SP mesh axis) on `topology`
-// (Linear on a non-torus grid). `ag_multi_device_global_semaphore` are the all-gather's own out-ready
-// semaphores; `ag_sub_device_id` scopes the AG worker cores (kept disjoint from the compute rectangle).
+// block-cyclic remap as indexer_score_dsa. An integer `cluster_axis` keeps the existing independent axis ring.
+// Explicit nullopt selects one direct-neighbor snake ring over the complete 2D mesh, with canonical row-major
+// tensor and causal ranks; that mode requires Ring topology, no `seq_subshard_axis` or `block_cyclic_sp_axis`,
+// and accepts `block_cyclic_chunk_local` alone with SP equal to the mesh size and chunk_local equal to Q's local
+// sequence extent. `ag_multi_device_global_semaphore` are the all-gather's own out-ready semaphores;
+// `ag_sub_device_id` scopes the AG worker cores (kept disjoint from the compute rectangle).
 ttnn::Tensor ring_indexer_score_dsa(
     const ttnn::Tensor& q,
     const ttnn::Tensor& k,
     const ttnn::Tensor& weights,
     const ttnn::Tensor& k_local,
     const std::vector<tt::tt_metal::GlobalSemaphore>& ag_multi_device_global_semaphore,
-    uint32_t cluster_axis,
+    std::optional<uint32_t> cluster_axis,
     ttnn::ccl::Topology topology,
     uint32_t num_links = 1,
     std::optional<tt::tt_metal::SubDeviceId> ag_sub_device_id = std::nullopt,
@@ -156,6 +164,7 @@ ttnn::Tensor ring_indexer_score_dsa(
     std::optional<uint32_t> kv_len = std::nullopt,
     std::optional<uint32_t> seq_subshard_axis = std::nullopt,
     std::optional<uint32_t> block_cyclic_sp_axis = std::nullopt,
-    std::optional<uint32_t> block_cyclic_chunk_local = std::nullopt);
+    std::optional<uint32_t> block_cyclic_chunk_local = std::nullopt,
+    bool block_cyclic_cache_tp_sharded = false);
 
 }  // namespace ttnn::experimental

@@ -46,10 +46,9 @@ ttnn::Tensor untilize_native(
     const std::optional<MemoryConfig>& memory_config,
     bool use_multicore,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    // If the input tensor is not sharded, on DRAM and logical shape != padded shape, then unpad the input tensor.
+    // If the input tensor is not sharded, and logical shape != padded shape, then unpad the input tensor.
     // conv op_slicing logic requires the padding information to be present in the input tensor.
-    if (!input_tensor.is_sharded() && input_tensor.memory_config().is_dram() &&
-        input_tensor.logical_shape() != input_tensor.padded_shape()) {
+    if (!input_tensor.is_sharded() && input_tensor.logical_shape() != input_tensor.padded_shape()) {
         ttnn::Shape output_tensor_end(ttsl::SmallVector<uint32_t>(input_tensor.logical_shape().rank(), 0));
         int logical_rank = input_tensor.logical_shape().rank();
         for (int index = -1; index >= -logical_rank; --index) {
@@ -66,8 +65,24 @@ ttnn::Tensor untilize_native(
 
     uint32_t num_tiles_per_row = input_tensor.padded_shape()[-1] / tt::constants::TILE_WIDTH;
 
+    // Reserve the output buffer's per-core L1 up front: it is allocated after this check
+    // but before the CBs are placed, so leaving it out overestimates the CB budget and can
+    // pick a factory whose static CBs then clash with it (issue #21358).
+    const uint32_t pending_l1_output_bytes = operations::data_movement::get_pending_l1_output_reservation(
+        input_tensor,
+        input_tensor.padded_shape(),
+        memory_config.value_or(input_tensor.memory_config()),
+        input_tensor.dtype(),
+        Layout::ROW_MAJOR);
+
     bool enough_space_height = operations::data_movement::is_enough_space(
-        input_tensor, input_single_tile_size, output_single_tile_size, num_tiles_per_row);
+        input_tensor,
+        input_single_tile_size,
+        output_single_tile_size,
+        num_tiles_per_row,
+        /*staging_bytes_per_tile=*/0,
+        /*fixed_staging_bytes=*/0,
+        pending_l1_output_bytes);
 
     auto base_untilize = [=](const ttnn::Tensor& input_tensor) {
         auto pf_type = ttnn::operations::data_movement::get_pf_type(

@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ring_attention_all_gather_async_device_operation_types.hpp"
+#include "kernels/ring_attention_rank_mapping.hpp"
 #include "ttnn/device_operation.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/program_descriptors.hpp>
@@ -14,6 +15,20 @@
 #include <vector>
 
 namespace ttnn::experimental::prim {
+
+// These indices/arg-slots must track the factory's kernel push order and runtime-arg layout in
+// lockstep; override_runtime_arguments() re-applies the semaphore address at these positions.
+namespace ring_attention_all_gather_async_dynamic {
+inline constexpr uint32_t kNumSendersPerLink = 2;
+inline constexpr uint32_t kReaderForwardKernelIdx = 0;
+inline constexpr uint32_t kWriterForwardKernelIdx = 1;
+inline constexpr uint32_t kReaderBackwardKernelIdx = 2;
+inline constexpr uint32_t kWriterBackwardKernelIdx = 3;
+inline constexpr uint32_t kReaderSemaphoreArg = 2;
+inline constexpr uint32_t kWriterSemaphoreArg = 4;
+inline constexpr uint32_t kForwardSemaphoreIdx = 1;
+inline constexpr uint32_t kBackwardSemaphoreIdx = 0;
+}  // namespace ring_attention_all_gather_async_dynamic
 
 struct RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory {
     using operation_attributes_t = RingAttentionAllGatherAsyncParams;
@@ -27,10 +42,24 @@ struct RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory {
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value,
         const ttnn::MeshCoordinateRangeSet& tensor_coords);
+
+    static void override_runtime_arguments(
+        tt::tt_metal::Program& program,
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& tensor_return_value,
+        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn {
+
+struct RingAttentionRankMapping {
+    bool full_mesh = false;
+    ttnn::ccl::snake_ring::Orientation orientation = ttnn::ccl::snake_ring::Orientation::Row;
+    uint32_t mesh_rows = 0;
+    uint32_t mesh_cols = 0;
+};
 
 // Sparse cyclic predecessor exchange used by chunked GPT-OSS sliding attention.
 // Each device sends one local tile-row range to its logical next device and
@@ -49,18 +78,19 @@ namespace ring_attention_all_gather_async_detail {
 // All-gather reader runtime-arg layout: [0]=dim, [1]=ring_size, [2]=out_ready_sem,
 // followed by one tensor-descriptor block per gathered input.
 constexpr uint32_t kReaderRuntimeArgHeaderCount = 3;
+constexpr uint32_t kReaderReadySemaphoreFieldOffset = 2;
 // All-gather writer runtime-arg layout: [0]=dim, [1]=sem_noc0_x, [2]=sem_noc0_y, [3]=ring_size,
 // [4]=out_ready_sem, followed by one tensor-descriptor block per gathered input.
 constexpr uint32_t kWriterRuntimeArgHeaderCount = 5;
-// Per-input fields: Wt, Ht, out_Wt, out_Ht, batch_head_size, tile_id_start, tile_id_end,
-// input_batch_base (offset 7), valid_pages_per_batch_head (offset 8), worker link (offset 9).
-constexpr uint32_t kTensorDescriptorFieldCount = 10;
-constexpr uint32_t kInputBatchBaseFieldOffset = 7;
+constexpr uint32_t kWriterReadySemaphoreFieldOffset = 4;
+// Per-input fields: Wt, Ht, out_Wt, out_Ht, batch_head_size, input_batch_base,
+// valid_pages_per_batch_head, and worker link.
+constexpr uint32_t kTensorDescriptorFieldCount = 8;
+constexpr uint32_t kInputBatchBaseFieldOffset = 5;
 // Per-(batch,head) page count each worker is allowed to gather. Defaults to the full input
 // (input_Ht * input_Wt); the fused ring_joint_sdpa path patches it down to the logical_n-valid
 // slab prefix so the gather moves only kv_actual-sized data, not the whole oversized cache.
-constexpr uint32_t kValidPagesFieldOffset = 8;
-constexpr uint32_t kWorkerLinkFieldOffset = 9;
+constexpr uint32_t kValidPagesFieldOffset = 6;
 constexpr uint32_t kNeighborReaderRuntimeArgHeaderCount = 1;
 constexpr uint32_t kNeighborReaderTensorDescriptorFieldCount = 5;
 constexpr uint32_t kNeighborReaderInputTileStartFieldOffset = 2;
@@ -73,9 +103,21 @@ constexpr uint32_t kNeighborWriterInputTileStartFieldOffset = 2;
 constexpr uint32_t kNeighborWriterInputTileEndFieldOffset = 3;
 constexpr uint32_t kNeighborWriterInputOriginPageFieldOffset = 4;
 
+constexpr uint32_t kRingDirectionCount = 2;
+
+// Kernel order appended by ring_attention_all_gather_async_multi_core_with_workers_helper.
+// Fused consumers add these offsets to the number of kernels they emit before the all-gather.
+constexpr uint32_t kReaderForwardKernelOffset = 0;
+constexpr uint32_t kWriterForwardKernelOffset = 1;
+constexpr uint32_t kReaderBackwardKernelOffset = 2;
+constexpr uint32_t kWriterBackwardKernelOffset = 3;
+
 inline uint32_t input_batch_base_pages(uint32_t batch_idx, uint32_t num_heads, uint32_t Ht, uint32_t Wt) {
     return batch_idx * num_heads * Ht * Wt;
 }
+
+bool uses_output_bank_owned_schedule(
+    const std::vector<Tensor>& input_tensors, const std::vector<Tensor>& output_tensors, int32_t dim);
 
 }  // namespace ring_attention_all_gather_async_detail
 
@@ -83,10 +125,10 @@ inline uint32_t input_batch_base_pages(uint32_t batch_idx, uint32_t num_heads, u
 // ring-attention all-gather worker pipeline to `desc`.
 //
 // `desc` may already contain entries from a parent op (e.g., ring_joint_sdpa).
-// Semaphore IDs assigned by this helper start at `desc.semaphores.size()` at
-// entry and are sequential. The descriptor framework auto-patches buffer
-// addresses on cache hits so callers do not need to retain kernel handles or
-// implement an override_runtime_arguments path.
+// Semaphore IDs are selected per worker core without colliding with existing
+// descriptors. The descriptor framework auto-patches buffer addresses on cache
+// hits so callers do not need to retain kernel handles or implement an
+// override_runtime_arguments path.
 void ring_attention_all_gather_async_multi_core_with_workers_helper(
     tt::tt_metal::ProgramDescriptor& desc,
     const std::vector<Tensor>& input_tensor,
@@ -97,6 +139,8 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     int32_t dim,
     uint32_t num_links,
     uint32_t ring_size,
+    // Communication-order rank. In full-mesh mode this must be the snake transport rank,
+    // never the canonical row-major tensor rank.
     uint32_t ring_index,
     ttnn::ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
@@ -130,7 +174,16 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     // cache slot as slot * kv_cache_num_layers + kv_cache_layer_idx (slot = slot_id[0]), matching
     // update_padded_kv_cache. Defaults (1, 0) reduce to slot, so single-layer callers are unaffected.
     uint32_t kv_cache_num_layers = 1,
-    uint32_t kv_cache_layer_idx = 0);
+    uint32_t kv_cache_layer_idx = 0,
+    // Even-ring split-forwarding gate. The parent fused op owns this protocol decision: a fused
+    // consumer must implement the split-shard second-half wait (RingSDPAOpReceiver) to enable it.
+    // The helper still applies the legacy even-ring topology/size gate on top, so standalone
+    // callers retain their prior behavior with the default.
+    bool split_forwarding_enabled = true,
+    // Opt-in two-stage fused readiness: every received shard signals once at its row midpoint and
+    // once when complete. Only consumers that interpret the doubled semaphore protocol may enable it.
+    bool partial_readiness_enabled = false,
+    RingAttentionRankMapping rank_mapping = {});
 
 void ring_attention_neighbor_halo_exchange_helper(
     tt::tt_metal::ProgramDescriptor& desc,

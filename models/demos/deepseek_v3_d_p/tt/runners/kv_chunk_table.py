@@ -25,7 +25,7 @@ from models.demos.common.prefill.runners.migration import (
 )
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
-    PREFILL_CHUNK_OUTPUT_TOKENS,
+    PREFILL_CHUNK_TOKENS,
     create_kv_chunk_address_table_kimi,
     merged_num_layers,
     populate_kv_chunk_address_table_dflash,
@@ -97,6 +97,7 @@ def build_and_serialize_kv_chunk_table(
     num_my_layers=None,
     stage_layouts=None,
     index_layer_ids=None,
+    tp_shard_kv=False,
 ) -> str:
     """Build the MLA block-cyclic KV chunk address table and serialize it to ``path`` for the
     inference server's SET_TABLE. Returns the path on success.
@@ -108,7 +109,7 @@ def build_and_serialize_kv_chunk_table(
     max_seq_len) lists the wrong, block-cyclically-scattered chunks and fails its PCC check.
 
     ``chunk_size_global`` is the block-cyclic period; the kimi builder hardcodes it as
-    PREFILL_CHUNK_OUTPUT_TOKENS, so a non-default period is rejected here rather than mismapped.
+    PREFILL_CHUNK_TOKENS, so a non-default period is rejected here rather than mismapped.
 
     ``index_kv_cache`` (sparse/DSA models only): when given, a single MERGED table describes BOTH
     caches — config 0 = the KVPE cache, config 1 = the index-key cache — sharing one device-group
@@ -124,10 +125,15 @@ def build_and_serialize_kv_chunk_table(
     ``first_layer_idx`` / ``num_my_layers`` / ``stage_layouts`` (pipeline-parallel only): this rank owns
     layers [first_layer_idx, first_layer_idx + num_my_layers); ``stage_layouts`` holds ONE all-gathered
     per-stage layout per block-cyclic cache (config order), so rank 0 builds one table spanning every
-    stage while the collectives ran on all ranks. Leave it None to gather inline (single-rank / tests)."""
-    assert chunk_size_global == PREFILL_CHUNK_OUTPUT_TOKENS, (
+    stage while the collectives ran on all ranks. Leave it None to gather inline (single-rank / tests).
+
+    ``tp_shard_kv`` (KV dedup): the table addresses each (row, col) device individually instead of one
+    group per SP row. MUST match the layout the caches were allocated with, or every address is wrong.
+    Merged (KVPE + index) table only. ``tp_axis`` names the TP mesh axis in either case — it is the
+    dflash head-count geometry and is not itself the dedup switch."""
+    assert chunk_size_global == PREFILL_CHUNK_TOKENS, (
         f"create_kv_chunk_address_table_kimi assumes a block-cyclic period of "
-        f"PREFILL_CHUNK_OUTPUT_TOKENS={PREFILL_CHUNK_OUTPUT_TOKENS}, but chunk_size_global={chunk_size_global}. "
+        f"PREFILL_CHUNK_TOKENS={PREFILL_CHUNK_TOKENS}, but chunk_size_global={chunk_size_global}. "
         f"A different period would mismap every position; re-introduce a parametrized builder if needed."
     )
 
@@ -154,7 +160,14 @@ def build_and_serialize_kv_chunk_table(
             path=path,
             stage_layouts=stage_layouts,
             index_layer_ids=index_layer_ids,
+            tp_shard_kv=tp_shard_kv,
         )
+
+    # Only the sparse (DSA) path TP-shards its KV, so tp_shard_kv here is a caller mismatch, not a layout.
+    assert not tp_shard_kv, (
+        "tp_shard_kv is only supported on the merged sparse/DSA table (index_kv_cache given); "
+        "got tp_shard_kv=True with a single-config dense KVPE cache."
+    )
 
     # Single config: the KVPE cache is the only one described, so its layout is the only one gathered.
     stage_layout = stage_layouts[0] if stage_layouts else None
@@ -199,6 +212,7 @@ def _build_and_serialize_merged_kv_chunk_table(
     chunk_size_global=None,
     stage_layouts=None,
     index_layer_ids=None,
+    tp_shard_kv=False,
 ) -> str:
     """Build ONE KvChunkAddressTable over every cache this rank owns and serialize it to ``path``.
     ``caches`` is a tagged list of ``(kind, payload)``: ``("kvpe", tensor)`` / ``("index", tensor)`` for
@@ -321,6 +335,8 @@ def _build_and_serialize_merged_kv_chunk_table(
     for name, cache, head_idx in entries:
         cfg, config_id = configs[name], table.config_id_of(name)
         if head_idx is None:  # MLA/kimi block-cyclic model cache
+            # Every block-cyclic cache shares the dedup layout, so all such configs resolve to the same
+            # device groups (add_device_group dedups, so they are registered once and shared).
             populate_kv_chunk_address_table_kimi(
                 lookup_table=table,
                 config=cfg,
@@ -334,6 +350,7 @@ def _build_and_serialize_merged_kv_chunk_table(
                 config_id=config_id,
                 stage_layout=layout_of[name],
                 layer_rows=index_layer_ids if name == index_config_name else None,
+                tp_axis=tp_axis if tp_shard_kv else None,
             )
         else:  # one global kv-head of the drafter's K or V cache
             populate_kv_chunk_address_table_dflash(

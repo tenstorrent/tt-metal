@@ -17,6 +17,7 @@
 
 #if defined(KERNEL_BUILD) && !defined(COMPILE_FOR_TRISC)
 #include "api/dataflow/noc.h"
+#include "noc_address_backend.h"
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
@@ -350,9 +351,9 @@ public:
         const uint8_t noc_id = noc.get_noc_id();
         const uint32_t noc_x = xy_base[2 * receiver_idx];
         const uint32_t noc_y = xy_base[2 * receiver_idx + 1];
-        const uint32_t noc_xy = uint32_t(NOC_XY_ENCODING(DYNAMIC_NOC_X(noc_id, noc_x), DYNAMIC_NOC_Y(noc_id, noc_y)));
         *local_sent += num_units;
-        const uint64_t remote_addr = get_noc_addr_helper(noc_xy, (uint32_t)local_sent);
+        const uint64_t remote_addr =
+            noc_address_backend::worker_address(noc_x, noc_y, (uint32_t)(uintptr_t)local_sent, noc_id);
         noc_semaphore_inc<true>(remote_addr, num_units, noc_id);
     }
 

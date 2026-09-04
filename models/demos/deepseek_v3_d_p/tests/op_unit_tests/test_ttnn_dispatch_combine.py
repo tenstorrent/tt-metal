@@ -22,7 +22,7 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import Deep
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
 from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
 from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
-from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
+from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
 from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.combine import TorchCombineModule
 from models.demos.deepseek_v3_d_p.reference.tt.moe.dispatch import TorchDispatchModule
@@ -50,6 +50,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
 )
 from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert_dispatch_table, log_validation_results
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
+from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS_PER_CHIP
 
 
 def run_dispatch_combine(
@@ -377,7 +378,7 @@ def run_dispatch_combine(
 DISPATCH_COMBINE_MODELS = [
     ("dsv3", DeepSeekV3Config, False),
     ("glm_51", GLM51Config, True),
-    ("kimi_k26", KimiK26Config, True),
+    ("kimi_k2_7", KimiK27Config, True),
     ("minimax_m27", MiniMaxM27Config, True),
     ("dsv4_pro", DeepSeekV4ProConfig, True),
     ("dsv4_flash", DeepSeekV4FlashConfig, True),
@@ -713,7 +714,7 @@ def test_ttnn_dispatch_combine_top4(
     topology = per_axis_topology(device_params["fabric_config"])[sp_axis]
     run_dispatch_combine(
         mesh_device=mesh_device,
-        seq_len_per_chip=1600,
+        seq_len_per_chip=PREFILL_CHUNK_TOKENS_PER_CHIP,
         emb_dim=7168,
         num_routed_experts=64,
         num_experts_per_tok=4,

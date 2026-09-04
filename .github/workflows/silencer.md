@@ -130,7 +130,6 @@ safe-outputs:
       - blackhole-e2e-tests
       - galaxy-profiler-tests
       - galaxy-multi-user-isolation-tests
-      - galaxy-deepseek-tests
       - galaxy-unit-tests
       - models-t1-device-perf-tests
       - galaxy-integration-tests

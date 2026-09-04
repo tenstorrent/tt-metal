@@ -344,7 +344,8 @@ void kernel_main() {
 #ifdef FUSE_PRE_ADD
     compute_kernel_hw_startup(dfb_in0, dfb_in1, dfb_in_id);
 #else
-    unary_op_init_common(dfb_in_id, dfb_ex_partial_id);
+    compute_kernel_hw_startup(dfb_in_id, dfb_ex_partial_id);
+    copy_init(dfb_in_id);
 #endif
 
     // ---------------------------------------------------------------------------

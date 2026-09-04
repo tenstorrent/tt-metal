@@ -21,9 +21,6 @@
 
 namespace {
 
-// Two pool pops per CQ (prefetch, then dispatch) land on the same core.
-constexpr size_t num_fd_kernels_per_cq = 2;
-
 std::vector<tt::tt_metal::CoreCoord> get_quasar_tensix_fallback_dispatch_cores_from_yaml(
     tt::tt_metal::MetalEnvImpl& env,
     tt::ChipId device_id,
@@ -56,7 +53,7 @@ void expand_quasar_dispatch_engine_pool_for_fd_assignment(
     }
     const std::vector<tt::tt_metal::CoreCoord> available_des = std::move(logical_cores);
     logical_cores.clear();
-    logical_cores.reserve(static_cast<size_t>(num_hw_cqs) * num_fd_kernels_per_cq);
+    logical_cores.reserve(static_cast<size_t>(num_hw_cqs) * 2);
     for (uint8_t cq_id = 0; cq_id < num_hw_cqs; ++cq_id) {
         const size_t de_index = static_cast<size_t>(cq_id) % available_des.size();
         const auto& de = available_des[de_index];
@@ -126,34 +123,6 @@ std::vector<CoreCoord> get_quasar_soc_dispatch_engine_logical_cores(const metal_
     return logical_cores;
 }
 
-std::vector<CoreCoord> get_quasar_dispatch_core_per_cq(
-    tt::ARCH arch, const std::vector<CoreCoord>& dispatch_core_pool, uint8_t num_hw_cqs) {
-    if (arch != tt::ARCH::QUASAR || dispatch_core_pool.empty()) {
-        return {};
-    }
-    TT_FATAL(
-        dispatch_core_pool.size() == num_fd_kernels_per_cq * num_hw_cqs,
-        "Dispatch core pool holds {} cores, expected {} ({} FD kernels per CQ over {} CQs)",
-        dispatch_core_pool.size(),
-        num_fd_kernels_per_cq * num_hw_cqs,
-        num_fd_kernels_per_cq,
-        num_hw_cqs);
-
-    std::vector<CoreCoord> cq_dispatch_cores;
-    cq_dispatch_cores.reserve(num_hw_cqs);
-    for (uint8_t cq_id = 0; cq_id < num_hw_cqs; ++cq_id) {
-        const CoreCoord& prefetch_core = dispatch_core_pool[num_fd_kernels_per_cq * cq_id];
-        const CoreCoord& dispatch_core = dispatch_core_pool[num_fd_kernels_per_cq * cq_id + 1];
-        TT_FATAL(
-            prefetch_core == dispatch_core,
-            "Expected prefetch and dispatch cores to be the same, got prefetch core {} and dispatch core {}",
-            prefetch_core,
-            dispatch_core);
-        cq_dispatch_cores.push_back(dispatch_core);
-    }
-    return cq_dispatch_cores;
-}
-
 void validate_quasar_dispatch_cores_for_fd(
     tt::tt_metal::MetalEnvImpl& env,
     ChipId device_id,
@@ -213,16 +182,18 @@ CoreType resolve_dispatch_core_type(
 namespace {
 
 const std::vector<CoreCoord>& get_sd_cq_dispatch_cores(const tt::tt_metal::IDevice* device) {
-    auto& env = MetalEnvAccessor(MetalContext::instance().get_env()).impl();
-    const auto& dispatch_core_config = MetalContext::instance().get_dispatch_core_config();
+    auto& context = MetalContext::instance(extract_context_id(device));
+    auto& env = MetalEnvAccessor(context.get_env()).impl();
+    const auto& dispatch_core_config = context.get_dispatch_core_config();
     return env.get_quasar_dispatch_cores(device->id(), device->num_hw_cqs(), dispatch_core_config);
 }
 
 }  // namespace
 
 CoreType resolve_sd_cq_kernel_core_type(const tt::tt_metal::IDevice* device) {
-    auto& env = MetalEnvAccessor(MetalContext::instance().get_env()).impl();
-    const auto& dispatch_core_config = MetalContext::instance().get_dispatch_core_config();
+    auto& context = MetalContext::instance(extract_context_id(device));
+    auto& env = MetalEnvAccessor(context.get_env()).impl();
+    const auto& dispatch_core_config = context.get_dispatch_core_config();
     return tt::tt_metal::resolve_dispatch_core_type(env, device->id(), dispatch_core_config);
 }
 
@@ -269,7 +240,8 @@ bool sd_cq_kernel_tests_should_skip(const tt::tt_metal::IDevice* device) {
     if (device->arch() != tt::ARCH::QUASAR) {
         return false;
     }
-    auto& env = MetalEnvAccessor(MetalContext::instance().get_env()).impl();
+    auto& context = MetalContext::instance(extract_context_id(device));
+    auto& env = MetalEnvAccessor(context.get_env()).impl();
     if (env.get_rtoptions().get_use_quasar_tensix_dispatch_cores()) {
         return false;
     }

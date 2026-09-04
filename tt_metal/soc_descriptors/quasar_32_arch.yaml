@@ -1,6 +1,6 @@
 # grid is the full NOC coordinate-space extent and must contain every core's coords
 grid:
-  x_size: 11
+  x_size: 10
   y_size: 8
 
 arc:
@@ -46,9 +46,6 @@ harvested_workers:
 
 router_only:
   [0-2]
-
-dispatch:
-  [10-1, 10-6, 1-6]
 
 worker_l1_size:
   4194304

@@ -27,8 +27,6 @@ DispatchMemMap::DispatchMemMap(
     settings(DispatchSettings(
         num_hw_cqs,
 
-        cq_layout.num_cqs_per_core,
-
         core_type,
 
         is_galaxy_cluster,

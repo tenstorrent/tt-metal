@@ -20,7 +20,7 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSe
 from models.demos.deepseek_v3_d_p.reference.glm_5_2_config import GLM52Config
 from models.demos.deepseek_v3_d_p.reference.gpt_oss.modeling_gpt_oss import GptOssTopKRouter
 from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
-from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
+from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.reference.minimax_m2_7.modeling_minimax_m2 import MiniMaxM2SparseMoeBlock
 from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
@@ -50,6 +50,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
 )
 from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_validation_results
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
+from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS_PER_CHIP
 from models.demos.deepseek_v3_d_p.utils.test_utils import adjust_shapes_for_testing, get_input_mem_config
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import GOLDEN_LONGBOOK_TRACE, load_trace_gate_input
 
@@ -58,7 +59,7 @@ from models.demos.deepseek_v3_d_p.utils.transformer_helpers import GOLDEN_LONGBO
 # SCORE_FUNC, so each model is fully described by its config class.
 GATE_MODELS = {
     "dsv3": DeepSeekV3Config,
-    "kimi_k2_6": KimiK26Config,
+    "kimi_k2_7": KimiK27Config,
     "kimi_k3": KimiK3Config,
     "glm_5_2": GLM52Config,
     "minimax_m2_7": MiniMaxM27Config,
@@ -69,7 +70,7 @@ GATE_MODELS = {
 
 # Per-chip sequence every gate case runs at. Must be passed at construction: TtMoEGateConfig keeps
 # only the tuned matmul configs keyed to sp_dim, so assigning it afterwards drops to default tiling.
-GATE_SP_DIM = 640
+GATE_SP_DIM = PREFILL_CHUNK_TOKENS_PER_CHIP
 
 
 def _gate_config(gate_model: str) -> TtMoEGateConfig:
@@ -241,8 +242,8 @@ GALAXY_TP4_MESH_CONFIG = pytest.param(
 REGULAR_GATE_CASES = [
     pytest.param("dsv3", GateComputeMode.HOST_ALL, id="dsv3-host_all"),
     pytest.param("dsv3", GateComputeMode.DEVICE_FP32, id="dsv3-device_fp32"),
-    pytest.param("kimi_k2_6", GateComputeMode.HOST_ALL, id="kimi_k2_6-host_all"),
-    pytest.param("kimi_k2_6", GateComputeMode.DEVICE_FP32, id="kimi_k2_6-device_fp32"),
+    pytest.param("kimi_k2_7", GateComputeMode.HOST_ALL, id="kimi_k2_7-host_all"),
+    pytest.param("kimi_k2_7", GateComputeMode.DEVICE_FP32, id="kimi_k2_7-device_fp32"),
     pytest.param("kimi_k3", GateComputeMode.HOST_ALL, id="kimi_k3-host_all"),
     pytest.param("kimi_k3", GateComputeMode.DEVICE_FP32, id="kimi_k3-device_fp32"),
     pytest.param("glm_5_2", GateComputeMode.HOST_ALL, id="glm_5_2-host_all"),

@@ -299,7 +299,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
     const int32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
     const uint32_t num_links,
-    const uint32_t cluster_axis,
+    const std::optional<uint32_t> cluster_axis,
     const MeshDevice& mesh_device,
     const ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,

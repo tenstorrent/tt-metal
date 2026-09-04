@@ -17,8 +17,10 @@
     tests/ttnn/unit_tests/operations/data_movement/test_tilize_with_val_padding.py::test_run_tilize_with_val_padding_test
     tests/ttnn/unit_tests/operations/data_movement/test_untilize.py::test_untilize_single_core_interleaved_to_interleaved
     tests/ttnn/unit_tests/operations/data_movement/test_untilize.py::test_untilize_codegen
+    tests/ttnn/unit_tests/operations/data_movement/test_untilize.py::test_untilize_block_per_node_cb_size
     tests/ttnn/unit_tests/operations/data_movement/test_untilize_with_unpadding.py::test_untilize_with_unpadding_height_sharded
     tests/ttnn/unit_tests/operations/data_movement/test_untilize_with_unpadding.py::test_untilize_with_unpadding_rank_gt_4_uses_output_tensor_end
+    tests/ttnn/unit_tests/operations/data_movement/test_untilize_with_unpadding.py::test_untilize_with_unpadding_block_per_node_cb_size
     tests/ttnn/unit_tests/operations/data_movement/test_pad.py::test_pad
     tests/ttnn/unit_tests/operations/data_movement/test_fill_pad.py::test_fill_pad_complex_sharding
     tests/ttnn/unit_tests/operations/data_movement/test_concat.py::test_tiled_concat
@@ -37,6 +39,8 @@
     tests/ttnn/unit_tests/operations/data_movement/test_full.py::test_full_int
     tests/ttnn/unit_tests/operations/data_movement/test_dropout.py::test_dopout
     tests/ttnn/unit_tests/operations/data_movement/test_non_zero_indices.py::test_non_zero_indices_ttnn
+  ai_summary:
+    authoritative_job_status: true
   skus:
     wh_n300_civ2:
       timeout: 5
@@ -268,6 +272,8 @@
   # device. Exporting it here rather than relying on the directory conftest's fixture also makes
   # the requirement visible, and satisfies the requires_hybrid_allocator marker on those tests.
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/base_functionality tests/ttnn/unit_tests/benchmarks tests/ttnn/unit_tests/tensor -xv -m "not disable_fast_runtime_mode" && TT_METAL_ALLOCATOR_MODE_HYBRID=1 pytest --timeout 300 tests/ttnn/unit_tests/per_core_allocation -xv'
+  ai_summary:
+    authoritative_job_status: true
   skus:
     wh_n300_civ2:
       timeout: 40
