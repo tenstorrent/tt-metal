@@ -117,6 +117,14 @@ struct operation_attributes_t {
     // K), which selects the classic program factory and stays byte-identical.
     std::optional<FusedRingConfig> fused_ring{std::nullopt};
     bool has_fused_ring() const { return fused_ring.has_value(); }
+    // KV dedup: KEYS striped this many times finer than the queries are sharded. Deliberately NOT folded into
+    // block_cyclic -- device_causal_geometry indexes by SP-ring rank, so that would shift the causal diagonal.
+    uint32_t key_stripe_split{1};  // 1 = pre-dedup. HASHED: it bakes the reader's invP divisors.
+    // The (stripes, per-stripe chunk) pair the invP remap decodes with; the product is the global chunk either way.
+    uint32_t key_stripes() const { return block_cyclic.has_value() ? block_cyclic->sp * key_stripe_split : 1; }
+    uint32_t key_stripe_chunk() const {
+        return block_cyclic.has_value() ? block_cyclic->chunk_local / key_stripe_split : 0;
+    }
 };
 
 struct tensor_args_t {
