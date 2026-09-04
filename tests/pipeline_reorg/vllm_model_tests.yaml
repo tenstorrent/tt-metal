@@ -387,14 +387,9 @@
   # BH Qwen demo (text_qwen_demo.py).
   tt-config: '{"dispatch_core_axis": "col", "sample_on_device_mode": "all", "fabric_config": "FABRIC_2D_TORUS_XY", "worker_l1_size": 1345000, "trace_region_size": 184915840}'
   additional-server-args: "--data_parallel_size 4 --max_num_seqs 8 --async-scheduling"
-  # Off pending a re-qualification run on BH Galaxy: the penalty and structured-output
-  # failures this was originally gated on predate the sampling fixes in this PR and have
-  # not been re-measured on device since. Seed determinism stays unsupported on BH (the
-  # full ttnn.sampling pipeline does not run there; see SAMPLING_AG_CONFIG in
-  # qwen_model_config.py), so the filter below is not dead config -- it is the exclusion
-  # set to keep when flipping sampling-tests to true, and is unread until then.
-  sampling-tests: false
-  sampling-test-filter: "not test_seeding_and_variety and not test_mixed_params_batch"
+  sampling-tests: true
+  # Whole suite is ~6 min on a dev-box BH Galaxy (73 tests); 15 leaves headroom.
+  sampling-test-timeout: 15
   multimodal: false
   skus:
     bh_galaxy:
