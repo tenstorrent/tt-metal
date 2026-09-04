@@ -72,18 +72,44 @@ reference the generated headers there (`chlkc_*.cpp`, `chlkc_descriptors.h`,
 those sources. Object files do not need to survive (they don't; the JIT build
 uses temp names) — only sources/headers matter, and those are durable.
 
-### Gotcha: bear 3.0.x breaks inside (some) CI containers
+### Gotcha: bear + `http_proxy` (why bear failed in CI)
 
 The first CI iteration of this flow used `bear` and failed instantly with
-`wrapper: failed with: gRPC call failed: failed to connect to all addresses` —
-bear 3.0.x's intercept architecture has every wrapped process report back to a
-supervisor over a gRPC localhost channel, and that connection fails inside the
-CI test containers, killing the wrapped command **before pytest even starts**
-(observed with bear 3.0.18, the only version packaged for Ubuntu 22.04). That
-is why the default capture is the build system's own compile-command logging
-(`TT_METAL_LOG_KERNELS_COMPILE_COMMANDS=1`): no wrapper process, nothing to
-intercept, structurally incapable of failing the test run. Bear remains a
-supported `--input` source for local use where it works.
+`wrapper: failed with: gRPC call failed: failed to connect to all addresses`,
+killing the wrapped command **before pytest even started** (bear's nonzero
+exit then failed the leg). The verified mechanism, for anyone using bear
+locally:
+
+* bear ≥3.x runs an intercept supervisor as a **gRPC server on
+  `127.0.0.1:<random port>`**; the `wrapper`/`libexec.so` clients in every
+  intercepted process (including the initial one that launches the wrapped
+  command) connect back over that channel.
+* gRPC's C core routes **all** channels — including loopback ones — through
+  `http_proxy`/`https_proxy` unless the target host appears in `no_proxy`.
+* The CI runners inject
+  `http_proxy=http://proxy.restricted-proxy.svc.cluster.local:3128` into the
+  job container, with a `no_proxy` list that does **not** contain
+  `localhost`/`127.0.0.1` (visible verbatim in the job's `docker create`
+  command). So bear's client tried to reach its own loopback supervisor via
+  the cluster proxy, which cannot connect back into the container — hence
+  "failed to connect to all addresses" within milliseconds.
+* This is a documented upstream failure mode: Bear issues
+  [#296](https://github.com/rizsotto/Bear/issues/296) ("the solution was to
+  remove the HTTP proxy environment variables"),
+  [#635](https://github.com/rizsotto/Bear/issues/635), and PR
+  [#631](https://github.com/rizsotto/Bear/pull/631) (merged 2025), which makes
+  bear strip the proxy variables from its gRPC channel **by default** — a fix
+  newer than 3.0.18, the only version packaged for Ubuntu 22.04.
+
+It is *not* a container/namespace limitation per se: the supervisor and the
+intercepted compilers all run in one process tree inside one job container.
+Local workaround if you want bear: `no_proxy="$no_proxy,localhost,127.0.0.1"
+NO_PROXY="$NO_PROXY,localhost,127.0.0.1" bear -- <cmd>` (or unset the proxy
+vars, or use a bear release containing the #631 fix).
+
+CI still uses the log-based capture regardless: no wrapper process means
+capture is structurally incapable of failing the test run, and there is no
+third-party interception dependency at all.
 
 ### Gotcha: every kernel-compile cache silently defeats the capture
 

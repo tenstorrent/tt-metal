@@ -146,13 +146,23 @@ NOISE_SUPPRESSIONS = [
 #   <cache>/<key>/kernels/<kernel_name>/<hash>/<target>/
 KERNEL_DIR_RE = re.compile(r"/kernels/(?P<kname>[^/]+)/(?P<khash>[^/]+)/(?P<target>[^/]+)/?$")
 
-# jit_build/build.cpp compile_one logs "    g++ compile cmd: <space-joined argv>"
-# when TT_METAL_LOG_KERNELS_COMPILE_COMMANDS=1 (at info level, so the run needs
-# TT_LOGGER_LEVEL=info). The logger appends a "(build.cpp:NNN)" source-location
-# suffix. argv elements are joined with single spaces and never quoted; kernel
-# compile argv elements contain no spaces in practice (paths, -D defines,
-# comma-joined CTAs), so a plain split() recovers the elements verbatim --
-# including defines that carry literal quote characters, which shlex would eat.
+# jit_build/build.cpp logs, under TT_METAL_LOG_KERNELS_COMPILE_COMMANDS=1 (at
+# info level, so the run needs TT_LOGGER_LEVEL=info), two distinct line kinds:
+#   "    g++ compile cmd: <space-joined argv>"   (compile_one, build.cpp)
+#   "    g++ link cmd: cd <dir> && <shell cmd>"  (link,        build.cpp)
+# Only the compile lines are wanted: link commands have no source file and no
+# -c, and feeding one to clang-tidy would error out (or worse, quietly produce
+# a bogus result). This regex matches the literal "g++ compile cmd: " label
+# ONLY, so link lines are discarded at the parse stage. Two further layers
+# enforce the same invariant downstream: entries_from_log requires a .cc/.cpp
+# source token (a link line has only .o/.elf), and is_sfpi_compile requires
+# "-c" present and "-E" absent. Exercised explicitly by --self-test.
+#
+# The logger appends a "(build.cpp:NNN)" source-location suffix. argv elements
+# are joined with single spaces and never quoted; kernel compile argv elements
+# contain no spaces in practice (paths, -D defines, comma-joined CTAs), so a
+# plain split() recovers the elements verbatim -- including defines that carry
+# literal quote characters, which shlex would eat.
 LOG_CMD_RE = re.compile(r"g\+\+ compile cmd: (?P<cmd>.+?)(?:\s*\(build\.cpp:\d+\))?\s*$")
 
 
@@ -318,6 +328,67 @@ def run_tidy_entry(tidy_bin, cfg, header_filter, entry):
 FINDING_RE = re.compile(r"(?:warning|error): .*\[([A-Za-z0-9.,\-]+)\]\s*$")
 
 
+def self_test():
+    """Fixture-based assertions for the parse/filter/transform invariants.
+
+    Run with --self-test. Covers, explicitly rather than implicitly:
+      * link-command log lines are discarded (never reach clang-tidy),
+      * duplicate compile lines dedupe,
+      * preprocess (-E) and link argvs are rejected by is_sfpi_compile,
+      * the GCC->clang flag translation drops/maps what it must.
+    """
+    import tempfile
+
+    gxx = "/opt/tenstorrent/sfpi/compiler/bin/riscv-tt-elf-g++"
+    out_dir = "/home/u/.cache/tt-metal-cache/k/1/kernels/reduce_h/42/trisc1"
+    compile_argv = [
+        gxx, "-O3", "-std=c++17", "-ftt-nttp", "-flto=auto", "-MMD", "-mcpu=tt-wh-tensix",
+        "-I.", "-I..", "-DARCH_WORMHOLE", '-DFULL_KERNEL_NAME="reduce_h/42"',
+        "-DKERNEL_COMPILE_TIME_ARGS=1,2,3", "-c", "-o", f"{out_dir}/._7_0_trisck.o",
+        "-MF", f"{out_dir}/._7_0_trisck.d", "/repo/tt_metal/hw/firmware/src/tt-1xx/trisck.cc",
+    ]
+    compile_line = (
+        "2026-01-01 00:00:01.000 | info     |    BuildKernels |     g++ compile cmd: "
+        + " ".join(compile_argv) + " (build.cpp:686)\n"
+    )
+    link_line = (
+        "2026-01-01 00:00:02.000 | info     |    BuildKernels |     g++ link cmd: "
+        f"cd {out_dir}/ && {gxx} -O3 -Wl,--just-symbols=/x/trisc1_weakened.elf -mcpu=tt-wh "
+        f"-flto=auto -T/x/kernel_trisc1.ld -Wl,--emit-relocs ._7_0_trisck.o /x/substitutes.o "
+        f"-o {out_dir}/trisc1.elf (build.cpp:777)\n"
+    )
+    with tempfile.NamedTemporaryFile("w", suffix=".log", delete=False) as f:
+        f.write("2026-01-01 00:00:00.000 | info     | Metal | unrelated (foo.cpp:1)\n")
+        f.write(compile_line)
+        f.write(compile_line)  # duplicate (forced recompile) -> must dedupe
+        f.write(link_line)     # link -> must be discarded
+        log_path = f.name
+
+    entries = entries_from_log(log_path)
+    os.unlink(log_path)
+    assert len(entries) == 1, f"expected 1 entry (compile only, deduped), got {len(entries)}"
+    assert entries[0]["file"].endswith("trisck.cc")
+    assert entries[0]["directory"] == out_dir
+
+    # The link argv must also be rejected by the secondary filter (bear-mode path).
+    link_argv = link_line.split("g++ link cmd: ", 1)[1].split()
+    assert not is_sfpi_compile(link_argv), "link argv must not classify as a compile"
+    # ... and so must a preprocess invocation.
+    pre_argv = [gxx, "-E", "-c", "x.cpp"]
+    assert not is_sfpi_compile(pre_argv), "-E argv must not classify as a compile"
+    assert is_sfpi_compile(entries[0]["arguments"]), "compile argv must classify as a compile"
+
+    out = transform(entries[0]["arguments"], "clang++")
+    assert "--target=riscv32-unknown-elf" in out and "-march=rv32im" in out
+    assert "-std=c++20" in out and "-std=c++17" not in out
+    for banned in ("-ftt-nttp", "-flto=auto", "-MMD", "-MF", "-o", "-mcpu=tt-wh-tensix"):
+        assert banned not in out, f"{banned} must be dropped"
+    assert '-DFULL_KERNEL_NAME="reduce_h/42"' in out, "defines must pass through verbatim"
+
+    print("[kernel-clang-tidy] self-test PASSED")
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     src_group = ap.add_mutually_exclusive_group(required=True)
@@ -326,7 +397,8 @@ def main():
         "--input-log",
         help="Run log captured with TT_METAL_LOG_KERNELS_COMPILE_COMMANDS=1 and TT_LOGGER_LEVEL=info",
     )
-    ap.add_argument("--output-dir", required=True, help="Where to write the translated compile_commands.json (and findings)")
+    src_group.add_argument("--self-test", action="store_true", help="Run built-in fixture assertions and exit")
+    ap.add_argument("--output-dir", help="Where to write the translated compile_commands.json (and findings); required except with --self-test")
     ap.add_argument("--clang", default="clang++", help="clang driver name to put in the translated commands")
     ap.add_argument("--dedupe", choices=["kernel-role", "none"], default="kernel-role",
                     help="kernel-role (default): one entry per (kernel, RISC target); none: keep every captured config")
@@ -341,6 +413,11 @@ def main():
     ap.add_argument("--fail-on-findings", action="store_true",
                     help="Exit nonzero if any finding is emitted (default: report only)")
     args = ap.parse_args()
+
+    if args.self_test:
+        return self_test()
+    if not args.output_dir:
+        ap.error("--output-dir is required (except with --self-test)")
 
     if args.input_log:
         raw = entries_from_log(args.input_log)
