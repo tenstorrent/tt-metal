@@ -359,8 +359,7 @@ private:
         const std::shared_ptr<MeshDevice>& mesh_device,
         const PinnedBufferInfo& data_info,
         const PinnedBufferInfo& bytes_sent_info) const;
-    void init_sender_tlb(
-        const std::shared_ptr<MeshDevice>& mesh_device, std::optional<uint32_t> device_id = std::nullopt);
+    void init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device);
 
     void wait_for_bytes(uint32_t num_bytes);
     void pop_bytes(uint32_t num_bytes);
