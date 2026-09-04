@@ -142,7 +142,12 @@ FactoryParameters get_factory_parameters(
     // take the largest legal count (4, 2, 1) that does. Shapes with too few sticks per core (a
     // batch-1 global avg pool is 1 stick/core) run single-lane instead of failing; the factory
     // still TT_FATALs at the division site if this invariant is ever broken.
-    const uint32_t max_threads_per_cluster = is_quasar && !return_indices ? 4 : 1;
+    // TILE output stays single-lane (deliberate gap, not a shape accident): the tiled-output path
+    // keeps a 32-stick tilize accumulation across sticks and sizes DFB_FAST_TILIZE at in_ntiles_c
+    // entries, neither of which is lane-aware -- at num_threads=4 it TT_FATALs on the DFB entry
+    // count for in_ntiles_c < 4 and hangs otherwise (seen on the ZeBu emulator, 2026-09-04).
+    const bool tiled_output = output_layout == Layout::TILE;
+    const uint32_t max_threads_per_cluster = is_quasar && !return_indices && !tiled_output ? 4 : 1;
     uint32_t num_threads_per_cluster = max_threads_per_cluster;
     if (out_nhw_per_core_gcd != 0) {
         while (out_nhw_per_core_gcd % num_threads_per_cluster != 0) {
