@@ -42,6 +42,7 @@ in `registry.py`; you rarely touch a checker and never the C++.**
 | `reconfig-stall` | reconfig/uninit config write missing a unit-draining stall (walks every write; models unit re-arm) | `NO_UNIT_DRAIN` / `THCON_ONLY` / `DRAIN_REARMED` / `PARTIAL_MATH_DRAIN` |
 | `srcreg-bank` | SrcA/SrcB data-valid handshake control points; raw `SETDVALID` on Blackhole (ISA-unsupported); both halves of the Dest→Src gate (`MOVD2A`/`MOVD2B` wait mask, and which bank the dummy publication waits on) | `RAW_SETDVALID_BH` / `DVALID_SET` / `DVALID_CLEAR` / `DEST2SRC_NO_MATH_DRAIN` / `DEST2SRC_WRONG_SRC_GATE` / `DEST2SRC_DRAIN_REARMED` / `DEST2SRC_NO_MATH_DRAIN_UNCONFIRMED` / `DEST2SRC_WAIT_UNSEEN` / `DEST2SRC_WAIT_UNRELATED` / `DUMMY_PUBLISH_SERIALIZING` / `DUMMY_PUBLISH_SETDVALID_UNSEQUENCED` / `DUMMY_PUBLISH_BOTH_BANKS_WAITLIKE` / `DUMMY_PUBLISH_PACKED_WAIT_WRONG_ARCH` |
 | `mailbox-sync` | in-tree RISC↔RISC mailbox FIFO endpoints + writer↔reader pairing by directed channel | `PAIRED_CHANNEL` / `UNPAIRED_ENDPOINT` / `UNRESOLVED_ENDPOINT` |
+| `mop-replay` | an instruction word whose execution point is its MOP/replay SLOT, not its line (slotted words + Src flips, records that capture without issuing, unresolved buffer indices); models neither expander | `MOP_SLOTTED_SRC_FLIP` / `MOP_SLOTTED_WORD` / `MOP_WORD_SLOT_UNATTRIBUTED` / `REPLAY_RECORD_NOEXEC` / `REPLAY_RECORD_EXEC_UNRESOLVED` / `REPLAY_INDEX_UNRESOLVED` |
 | `cb-sync` † | circular-buffer reserve/push & wait/pop credit balance per CB (within a function) | `CB_RESERVE_PUSH_IMBALANCE` / `CB_WAIT_POP_IMBALANCE` |
 | `noc-sync` † | NoC credit signal (`noc_semaphore_inc/set_remote/mcast`) with no preceding write flush/barrier | `NOC_SIGNAL_NO_FLUSH` |
 | `noc-atomic-exit` † | non-posted NoC atomic (`noc_semaphore_inc` / remote `up`) left in flight at kernel exit (no following `noc_async_atomic_barrier` / `noc_async_full_barrier`) | `NO_ATOMIC_BARRIER_AT_EXIT` |
@@ -85,13 +86,17 @@ evidence line (so a shared word whose partner writer is in a changed file still
 surfaces). The whole tree is still parsed for cross-file context; only output is
 scoped. Use it for a PR-scoped audit.
 
-### Coverage: 8 of 9 classes have a committed checker (11 checkers — the NoC class has 4)
+### Coverage: 8 of 9 classes have a committed checker (12 checkers — the NoC class has 4, plus cross-cutting `mop-replay`)
 Only `instruction-latency` has no committed checker (its surface is the SFPU files
 that don't parse under clang, and its verdict needs an out-of-tree version-pinned
 `sfpi-gcc` table → stays fully LLM-driven). The split of the other 8 by *where
 their surface lives*:
 - **In tt-llk (findings on a plain run):** `mmio-race`, `cfg-word-overlap`,
-  `semaphore-handshake`, `reconfig-stall`, `srcreg-bank`, `mailbox-sync`.
+  `semaphore-handshake`, `reconfig-stall`, `srcreg-bank`, `mailbox-sync`, `mop-replay`.
+  `mop-replay` is not a tenth hazard class — it is a **cross-cutting** recall
+  surface (a word's execution point is its MOP/replay slot, not its line) whose
+  findings feed `srcreg-bank`, `semaphore-handshake`, `mailbox-sync` and
+  `instruction-latency`.
   `srcreg-bank`/`mailbox-sync` are narrow recallers (control-point/endpoint
   inventory + the mechanical ISA flags); their kernel-layer surface stays with
   the skills' ttnn-widened grep.
