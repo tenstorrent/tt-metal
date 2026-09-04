@@ -579,6 +579,14 @@ void DispatchKernel::CreateKernel() {
         {"IS_D_VARIANT", std::to_string(static_config_.is_d_variant.value())},
         {"IS_H_VARIANT", std::to_string(static_config_.is_h_variant.value())},
     };
+
+    if (GetCoreType() == CoreType::DISPATCH &&
+        descriptor_.hal().get_supports_sending_fds_go_cmds(
+            descriptor_.hal().get_programmable_core_type_index(HalProgrammableCoreType::DISPATCH)) &&
+        !descriptor_.rtoptions().get_disable_fds()) {
+        defines["FDS_WORKER_DONE"] = "1";
+    }
+
     if (!is_hd()) {
         defines["FABRIC_RELAY"] = "1";
         if (static_config_.is_2d_fabric.value_or(false)) {

@@ -22,6 +22,7 @@ set(UNIT_TESTS_DISPATCH_BASIC_SOURCES
     test_service_core_manager.cpp
     dispatch_buffer/test_sub_device.cpp
     dispatch_program/test_dispatch.cpp
+    dispatch_program/test_quasar_worker_completion.cpp
     dispatch_program/test_dataflow_cb.cpp
     dispatch_program/test_global_circular_buffers.cpp
     dispatch_program/test_realtime_profiler_sanity.cpp
