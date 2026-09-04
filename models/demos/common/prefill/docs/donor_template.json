@@ -42,7 +42,6 @@
   "kv_cache": {
     "_comment": "COUPLED CLUSTER. All seven roles must come from the SAME donor package. Sourcing them from different packages produces silent PCC loss or wrong migration addresses, never a crash.",
     "_how_to_fill": "1) Set donor_package. 2) For each role below, find the file that plays it inside that package and record the path RELATIVE to the package root. Package layouts differ - locate the files, do not assume a path. Use sub_entry_roles to know what to look for.",
-    "_layout_invariants": "Not here. See MODEL_BRINGUP_RECIPE.md section 4.1 for the constants all seven roles must agree on, and the four things you are allowed to vary.",
     "donor_package": "",
     "sub_entry_paths": {
       "layout_and_allocation": "",

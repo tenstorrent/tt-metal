@@ -27,10 +27,10 @@ Two JSON files. Everything the agent needs comes from one of them; nothing is in
 *How this repo builds a prefill model.* For each part that is copied rather than written fresh, it
 names the existing file to copy from: weight loading, dense MLP, MoE wrapper, attention, rope, the
 runtime, migration hooks, and the KV cache cluster (one donor package resolving seven coupled roles).
-Every entry is copy-and-adapt; the donor is a template, not a reference.
+Every entry is copy-and-adapt — see §2.1 for how far that goes.
 
 Pointers that never vary by model are **not** in this file — they live in
-[Fixed references](#2b-fixed-references) below.
+[Fixed references](#3-fixed-references) below.
 
 ### 1.2 Prefill spec — `TODO: template not written yet` (binding)
 
@@ -69,29 +69,18 @@ Reading it before writing a part serves two purposes:
   cache-populate run wrote. Deviating from these does not raise an error — it degrades PCC, corrupts
   output nondeterministically, or silently misses the cache.
 
-The point is speed and safety, not transcription. **Use a donor as a guideline, not a source to copy
-word for word.** Take its structure, its sharding and CCL placement, its program configs, its
-lifetime and deallocation discipline. Do not carry over its model-specific content: attention math,
-config constants, the HF weight-name map, or anything the spec fixes.
+**Start from the donor's file: copy it into the new package and adapt it.** It is a template, not a
+reference you merely consult — but adapting is the point, not transcribing. Take its structure, its
+sharding and CCL placement, its program configs, its lifetime and deallocation discipline. Do not
+carry over its model-specific content: attention math, config constants, the HF weight-name map, or
+anything the spec fixes.
 
 A donor is advisory (§1.3). If following one would violate the spec, the donor is the wrong choice.
 
-### 2.2 Picking the package
+### 2.2 What the donor map covers
 
-By attention family, since that is what determines whether the structure transfers at all:
-
-| Attention family | Donor |
-|---|---|
-| GQA (± sinks, sliding, alternation) | `models/demos/gpt_oss_d_p` |
-| Hybrid / linear-attn / sparse (MSA, DSA) | `models/demos/minimax_m3` |
-| MLA (+ MoE) | `models/demos/deepseek_v3_d_p` |
-
-One donor per entry. Given a menu, an agent averages across styles and produces something that
-matches no package's conventions.
-
-### 2.3 What the donor map covers
-
-`donor_template.json` holds a pointer per part whose donor depends on the model:
+`donor_template.json` is the single source for which package each part comes from — filled per
+bring-up, one pointer per part whose donor depends on the model:
 
 | Entry | What you are reading it for |
 |---|---|
@@ -101,7 +90,7 @@ matches no package's conventions.
 | `compute.moe_wrapper` | thin wrapper over the imported EP substrate: router, activation, shared expert |
 | `compute.attention` | head split, projection sharding, program configs, output-proj CCL tail — **not** the attention math |
 | `compute.rope` | variant plumbing, and the whole-cache indexed rope built once |
-| `kv_cache` | one donor package resolving seven coupled roles — see §4 |
+| `kv_cache` | one donor package resolving seven coupled roles — see §5 |
 | `serving.runtime` | `compile` / `make_chunk_input` / `prefill_chunk` and its chunk-range assertions |
 | `migration.hooks` | `kv_migration_base_address` / `kv_migration_stages` / `set_layer_ack_channel` |
 
@@ -111,12 +100,12 @@ below.
 
 ---
 
-## 2b. Fixed references
+## 3. Fixed references
 
 Pointers that do NOT vary from model to model. Take them as-is; the donor map
 (`donor_template.json`) carries only the entries whose donor depends on the model.
 
-> Provisional home. These belong in their per-stage sections (S5, S6, S8, ...) and will be moved
+> Provisional home. These belong in their per-stage sections (D3, M3, P1, ...) and will be moved
 > there once those sections are written. Kept in one block for now so the donor template stays clean.
 
 | What | Pointer | Mode | Note |
@@ -132,9 +121,9 @@ Pointers that do NOT vary from model to model. Take them as-is; the donor map
 | Runtime contract | `models/demos/common/prefill/docs/ADDING_A_PREFILL_MODEL.md` | contract | Section 2 is the authority |
 | Reference trimming | `models/demos/deepseek_v3_d_p/reference/kimi_k3/modeling_kimi_k3_mla.py` | pattern | Provenance header with upstream line numbers; why each replacement was made |
 | Reference purity | `models/demos/deepseek_v3_d_p/reference/kda/README.md` | contract | A reference imports torch only. No ttnn, no device code, no mesh fixtures, no checkpoints |
-| PCC test scaffold | `models/demos/gpt_oss_d_p/tests/unit/test_attention_vs_ref.py` | pattern | Identical random weights both sides, shared rope, `comp_pcc`, single card, no checkpoint or network. The instrument every other PCC number depends on |
+| PCC test scaffold | `models/demos/gpt_oss_d_p/tests/unit/test_attention_vs_ref.py` | pattern | Identical random weights both sides, shared rope, `comp_pcc`, no checkpoint or network. The instrument every other PCC number depends on. The donor runs it on one card; bring-up runs every PCC test on the target mesh |
 | Config diff test | `models/demos/deepseek_v3_d_p/tests/torch/test_kimi_k3_mla_reference.py` | pattern | Asserts every constant equals the vendored `config.json` |
-| KV table test | `models/demos/gpt_oss_d_p/tests/test_kv_cache_table.py` | pattern | Host-only address math. Cheapest check that allocator and address table agree |
+| KV table test | `models/demos/gpt_oss_d_p/tests/test_kv_cache_table.py` | pattern | Isolates address-table correctness: no model run, no fabric migrate. Needs a galaxy |
 | Mesh KV-PCC | `models/demos/gpt_oss_d_p/tests/galaxy_prefill_kv_pcc.py` | pattern | Golden trace layout, env knobs, per-layer PCC reporting |
 | CPU golden cache | `models/demos/deepseek_v3_d_p/utils/transformer_helpers.py:762` | import | `ReferenceCacheKey` + `check_/save_/load_reference_cache`. Caches e2e snapshots + KV so a CPU forward runs once, not per test. Worked usage: `tests/test_prefill_transformer.py` (check :258, save :361, load :630) |
 | Golden trace generation | `models/demos/deepseek_v3_d_p/tt/runners/generate_prompt_trace.py` | pattern | Only if no golden trace is staged for this model yet |
@@ -149,7 +138,7 @@ Per-module goldens are cheap to regenerate and are deliberately not cached.
 
 ---
 
-## 3. Stages and order
+## 4. Stages and order
 
 Three ladders, run in order and one at a time: the decoder (D1-D4), then the whole model around it
 (M1-M4), then the prefill pipeline (P1-P4). D and M have the same four-step shape — torch golden,
@@ -265,12 +254,12 @@ address-table math encode it), **allocation + write** are implemented in D3 (the
 even one-shot), and the **cache read** arrives in P2. GPT-OSS shipped it the same way — KV cache at
 P2 of its stack, chunked ring SDPA at P6.
 
-## 4. KV cache allocation (the critical decision)
+## 5. KV cache allocation (the critical decision)
 
 The highest-leverage decision in the build: bound simultaneously to the attention op, the SP/TP
 split, DRAM bank geometry, and the migration address walk.
 
-### 4.1 Do not invent a layout
+### 5.1 Do not invent a layout
 
 The layout is already **canonical by convention** across the prefill packages, because the chunked
 ring SDPA and the migration address-table walk both read it. `gpt_oss_d_p/tt/attention/kv_cache.py`
@@ -303,7 +292,7 @@ Varies per model — the only things to change:
 `init_kvpe_cache` is MLA-specific (single latent cache) — the GQA packages deliberately do not use
 it, but they do reuse its NdShard spec so `update_padded_kv_cache` works unchanged.
 
-### 4.2 What the human must define
+### 5.2 What the human must define
 
 Four decisions. Everything else follows from the fixed layout above.
 
@@ -334,7 +323,7 @@ mesh-mapped, not at allocation — every chip is allocated the same zeroed buffe
 
 ---
 
-## 5. Stage detail
+## 6. Stage detail
 
 One subsection per stage. Fill in individually.
 
@@ -363,7 +352,7 @@ vendored `config.json`.
    implemented in this stage.
 2. Fix each block's constructor and `__call__` signature — this is the interface commitment the
    tests are written against.
-3. Decide the KV cache layout (§4.2). It is encoded by both the attention read path and the address
+3. Decide the KV cache layout (§5.2). It is encoded by both the attention read path and the address
    table, so it cannot wait.
 4. Write a PCC test per block and one for the whole decoder, driving reference and TT module with
    identical random weights.
@@ -394,8 +383,8 @@ decoder block passes its PCC test.
 ### D4 — Decoder torch fallbacks to ttnn
 
 **Steps**
-1. Replace one torch fallback with ttnn at a time, re-running the suite after each.
-2. If no ttnn op exists for a fallback, stop and report — a new kernel is out of scope for bring-up.
+1. Replace one torch fallback with ttnn at a time. Rewrite each block in torch as mathematical equivalent in ttnn operations. Re-run the edited block PCC check and e2e check after each block rewrite.
+2. If you can't map torch implementation to ttnn operations, log this and move on — a new kernel is currently out of scope for bring-up.
 
 **Goal** No torch left in the decoder path.
 
@@ -452,7 +441,9 @@ passes its e2e PCC test.
 ### M4 — Model torch fallbacks to ttnn
 
 **Steps**
-1. Replace remaining torch fallbacks with ttnn, one at a time.
+1. Replace remaining torch fallbacks with ttnn, one at a time. Rewrite each block in torch as mathematical equivalent in ttnn operations. Re-run the edited block PCC check and e2e check after each block rewrite.
+2. If you can't map torch implementation to ttnn operations, log this and move on — a new kernel is currently out of scope for bring-up.
+
 
 **Goal** Everything runs on TT hardware.
 
@@ -470,24 +461,57 @@ passes.
 
 **Goal** The model runs on real checkpoint weights at the target mesh shape.
 
-**Verified by** Per-layer KV PCC against the golden trace. The random-weight suites from D4 and M4
-still pass.
+**Verified by** — port the donor's `tests/galaxy_prefill_kv_pcc.py` and run it one-shot:
+
+```bash
+PREFILL_TRACE_DIR=<golden> PREFILL_CHUNKED=0 \
+  python3 models/demos/<model>/tests/galaxy_prefill_kv_pcc.py
+```
+
+Every layer's K/V must clear the spec's PCC threshold, and the random-weight suites from D4 and M4
+must still pass.
 
 ---
 
 ### P2 — Chunked prefill
 
 **Steps**
-1. Implement the KV cache read path (the cache-backed SDPA over the block-cyclic layout).
-2. Implement the runtime: `compile`, `make_chunk_input`, `prefill_chunk`, with assertions on
+1. Wrap the cache-read op. It is a shared ttnn primitive —
+   `ttnn.transformer.ring_joint_scaled_dot_product_attention` — which gathers KV across the SP axis
+   internally by online softmax, so there is no explicit all-gather. Both donors wrap it the same
+   way, in `tt/attention/dense_sp.py`; copy that wrapper. Q is the current chunk, K/V is the
+   accumulated prefix `[0:logical_n]` read straight out of the block-cyclic cache.
+2. Thread the model's attention features into the op: attention sinks, per-layer sliding window,
+   and whatever else the spec lists. A donor without that feature will not show you the argument.
+3. Take the persistent ring-gather scratch buffers from the CCL manager
+   (`get_ring_gather_buffer`) rather than allocating per call.
+4. Implement the runtime: `compile`, `make_chunk_input`, `prefill_chunk`, with assertions on
    `actual_start` / `actual_end` so an out-of-contract chunk fails loudly.
 
-`TODO` — wiring detail for the cache-read op, once done for one model.
+Two constraints worth knowing before you start: the cache must be **bf8** on this path (the sliding
+ring path and its gather buffers are bf8, and the donor asserts it), and no cache re-layout is
+needed — the ring reads the same block-cyclic layout the write op already produced (§5.1).
+
+Validate the ring building block on its own before wiring it into the model; M3 has
+`test_ring_joint_sp_vs_ref.py` and `test_ring_joint_cache_read_sp_vs_ref.py` for exactly that.
 
 **Goal** Multi-chunk prefill produces the same KV as an equal-length one-shot run.
 
-**Verified by** Chunked per-layer KV PCC against the golden trace, and a chunked-vs-one-shot
-comparison at equal length.
+**Verified by** two things, in this order.
+
+1. The ring op in isolation — port M3's pair, which exist for exactly this:
+
+```bash
+pytest models/demos/minimax_m3/tests/unit/test_ring_joint_sp_vs_ref.py
+pytest models/demos/minimax_m3/tests/unit/test_ring_joint_cache_read_sp_vs_ref.py
+```
+
+2. The same P1 script in chunked mode, which must produce the per-layer PCC P1 did:
+
+```bash
+PREFILL_TRACE_DIR=<golden> PREFILL_CHUNKED=1 PREFILL_CHUNK_SIZE=<spec> \
+  python3 models/demos/<model>/tests/galaxy_prefill_kv_pcc.py
+```
 
 ---
 
@@ -498,13 +522,29 @@ comparison at equal length.
 2. Write the adapter: `load_hf_config`, `weight_cache_path`, `allocate_kv_cache`, `build_runtime`.
    Keep imports lazy — the producers import this module too.
 3. Add the `ADAPTER_PATHS` line and the manifest JSON.
-4. Run `prefill_runner` and `prefill_producer` in two terminals with matching env.
+4. Add a KV read-back branch for your cache layout in
+   `prefill_producer.py::_read_slot_kv_and_check_pcc`. It dispatches on `ADAPTER.name` — today
+   `minimax_m3`, `gpt_oss_d_p`, and an MLA fallback — and is deliberately **not**
+   adapter-pluggable, so a third layout needs a branch there and its own decode.
 
-**Goal** The engine serves chunks pushed by the producer. No inference server and no decode side
-are needed.
+**Goal** The engine serves chunks pushed by the producer and the KV it wrote reads back correct. No
+inference server and no decode side are needed.
 
-**Verified by** `PREFILL_PRODUCER_CHECK_PCC=1` on the producer, with the runner started under
-`PREFILL_MOCK_MIGRATION=1`.
+**Verified by** a model-agnostic test that already exists — it spawns the runner and the producer
+itself:
+
+```bash
+PREFILL_MODEL=<model> PREFILL_TRACE_DIR=<golden> \
+  pytest models/demos/common/prefill/tests/test_producer_runner_e2e.py::test_producer_runner_pcc
+```
+
+Three scenarios must pass: `single_user_full_depth` (11 x 5120, the deepest correctness gate),
+`round_robin_4users` (deterministic interleave), `random_8users` (seeded chaotic interleave with slot
+recycling). Look for `[producer] KV cache PCC PASSED`; the threshold is
+`PREFILL_STANDALONE_CHUNKED_PCC`, producer default `0.93`.
+
+The manual two-terminal equivalent is Gate 1 in
+[`PREFILL_MIGRATION_TESTING.md`](PREFILL_MIGRATION_TESTING.md) — use it to debug, not as the gate.
 
 ---
 
@@ -515,14 +555,30 @@ are needed.
 2. Implement `kv_migration_base_address` (or `kv_migration_stages` for several caches) and
    `set_layer_ack_channel`.
 
-**Goal** Another process can locate this model's KV bytes from the published table.
+**Goal** Another process can locate this model's KV bytes from the published table and copy them.
 
-**Verified by** The host-only address-math test; `PREFILL_MIGRATION_EXPORT_TO_FILE=1` producing a
-table and device map that validate offline; the mock/loopback migration manifests running.
+**Verified by** two things.
+
+1. The address table in isolation — no model run, no fabric migrate. Port the donor's test:
+
+```bash
+pytest models/demos/<model>/tests/test_kv_cache_table.py -k smoke
+pytest models/demos/<model>/tests/test_kv_cache_table.py -k readback
+```
+
+`smoke` checks the multi-config layout, block-cyclic SP positions and the DRAM bank walk;
+`readback` checks the bytes match the live device cache after a write. Both also cover the protobuf
+round-trip preserving lookups.
+
+2. The real DRAM -> transport -> DRAM copy: Gate 2 (loopback migration) in
+[`PREFILL_MIGRATION_TESTING.md`](PREFILL_MIGRATION_TESTING.md). Loopback means
+`dest_endpoint_id` is the endpoint's own id, so source and destination slots share one table. This
+needs the tt-llm-engine binaries (`migration_endpoint`, `migration_worker`) built against the same
+tt-metal — the only gate in the ladder with an external dependency.
 
 ---
 
-## 6. Definition of done
+## 7. Definition of done
 
 - [ ] Every module has a `*_vs_ref` test at or above its `unit_pcc` threshold
 - [ ] Full model runs at target mesh shape with real weights; per-layer KV PCC recorded in `README.md`
