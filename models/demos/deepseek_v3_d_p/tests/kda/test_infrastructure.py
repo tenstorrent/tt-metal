@@ -126,11 +126,11 @@ def test_cached_and_in_memory_layers_match(device: ttnn.Device, tmp_path: Path) 
 @pytest.mark.use_module_device
 def test_program_config_resolution(device: ttnn.Device) -> None:
     config = make_small_kda_test_config()
-    program_config = replace(KDAProgramConfig(), qkv_channel_chunk_size=128, tp_ccl_topology=ttnn.Topology.Ring)
+    program_config = replace(KDAProgramConfig(), qkv_channel_chunk_size=128)
     layer = ttKDA(device, config, random_weights(config), program_config=program_config)
 
     assert layer.qkv_convolution_program_config.channel_chunk_size == 96
-    assert layer.tp_ccl_topology == ttnn.Topology.Ring
+    assert layer.tp_ccl_topology == ttnn.Topology.Linear
 
 
 @pytest.mark.parametrize(
