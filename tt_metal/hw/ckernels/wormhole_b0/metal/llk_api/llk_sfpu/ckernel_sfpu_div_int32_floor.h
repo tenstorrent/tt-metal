@@ -135,27 +135,33 @@ sfpi_inline void calculate_div_int32_body(
     mid += MANTISSA_ALIGNMENT_OFFSET;
     top += MANTISSA_ALIGNMENT_OFFSET;
 
-    sfpi::vInt tmp{sfpi::exman(low) + (sfpi::exman(mid) << 11) + (sfpi::exman(top) << 22)};
+    // Keep this sum order together with q += cor below: current SFPI register
+    // allocation avoids extra moves with this combination. Recheck assembly for
+    // both rounding modes before commuting these integer additions.
+    sfpi::vInt tmp{(sfpi::exman(mid) << 11) + sfpi::exman(low) + (sfpi::exman(top) << 22)};
     sfpi::vUInt cor = correction;
     // When q is zero, qb is also zero, so r=INT_MIN represents the valid
     // positive magnitude 2**31 rather than a negative remainder.
-    v_if(r >= 0 || q == 0) {
+    // The conjunction avoids the predicate-complement instruction needed by ||.
+    v_if(r < 0 && q != 0) {
         tmp = -tmp;
         cor = -cor;
     }
     v_endif;
-    q -= cor;
-    r += tmp;
+    q += cor;
+    r -= tmp;
 
     // Since the correction might have been rounded, we may need to correct one
     // additional bit.  The corrected remainder cannot be INT_MIN.
+    // Reuse the subtraction for both the upper comparison and the adjusted remainder.
+    sfpi::vInt r_minus_b = r - b;
     v_if(r < 0) {
         q -= 1;
         r += b;
     }
-    v_elseif(r >= b) {
+    v_elseif(r_minus_b >= 0) {
         q += 1;
-        r -= b;
+        r = r_minus_b;
     }
     v_endif;
 
