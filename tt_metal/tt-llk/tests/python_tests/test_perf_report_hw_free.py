@@ -915,3 +915,40 @@ def test_non_rendezvous_zones_are_exempt():
         ("pack", "UNINIT", 2, 950, 1000)
     ]
     ProfilerData(_zones(*events)).raw()
+
+
+# trisc.cpp wraps every thread's kernel in ZONE_SCOPED("KERNEL"), so on hardware the phases
+# are always nested inside a longer zone on their own thread.
+def _wrapped_events(init_ends, loop_starts):
+    events = [(t, "KERNEL", 9, 90, 1100) for t in _THREADS]
+    events += [(t, "INIT", 0, 100, init_ends[t]) for t in _THREADS]
+    events += [(t, "TILE_LOOP", 1, loop_starts[t], 1000) for t in _THREADS]
+    return events
+
+
+def test_zones_nested_in_a_wrapper_are_not_an_overlap():
+    events = _wrapped_events(
+        {t: 200 for t in _THREADS},
+        {t: 210 for t in _THREADS},
+    )
+    ProfilerData(_zones(*events)).raw()
+    ProfilerData(_zones(*events)).frame()
+
+
+def test_a_wrapper_does_not_mask_an_overlap_inside_it():
+    events = _wrapped_events(
+        {"unpack": 200, "math": 400, "pack": 200},
+        {"unpack": 210, "math": 410, "pack": 210},
+    )
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        AssertionError,
+        match="the last INIT closed at 400 but the first TILE_LOOP opened at 210",
+    ):
+        ProfilerData(_zones(*events)).raw()
+
+
+def test_wrapper_on_threads_without_phases_is_not_an_overlap():
+    # ISOLATE run types: every thread emits KERNEL, only the measured one emits phases.
+    events = [(t, "KERNEL", 9, 90, 1100) for t in _THREADS]
+    events += [("math", "INIT", 0, 100, 200), ("math", "TILE_LOOP", 1, 210, 1000)]
+    ProfilerData(_zones(*events)).raw()
