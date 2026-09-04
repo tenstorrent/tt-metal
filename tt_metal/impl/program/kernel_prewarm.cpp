@@ -49,22 +49,27 @@ const char* env_or_null(const char* name) {
     return (v != nullptr && v[0] != '\0') ? v : nullptr;
 }
 
+// True only for an explicit truthy value (1/true/on). Every prewarm control env var uses this same
+// spelling, so an explicit 0/false/off disables rather than accidentally enabling on mere presence.
+bool env_truthy(const char* name) {
+    const char* v = env_or_null(name);
+    if (v == nullptr) {
+        return false;
+    }
+    std::string_view s{v};
+    return s == "1" || s == "true" || s == "on";
+}
+
 // Prewarm is opt-in: capture-arming and the device-init auto-launch both stay off until
 // TT_METAL_KERNEL_PREWARM is set truthy, so a stock device init is byte-for-byte the pre-prewarm
 // behavior. The self-bootstrapping default-on path is not adopted on main until it is proven safe;
 // the prewarm tool is invoked explicitly instead (TT_METAL_KERNEL_PREWARM=1 opts the auto-path in).
-bool prewarm_globally_disabled() {
-    const char* v = std::getenv("TT_METAL_KERNEL_PREWARM");
-    if (v == nullptr) {
-        return true;
-    }
-    std::string_view s{v};
-    return !(s == "1" || s == "true" || s == "on");
-}
+bool prewarm_globally_disabled() { return !env_truthy("TT_METAL_KERNEL_PREWARM"); }
 
 // Runtime-settable so one process can flip capture-only ON for a manifest-capture warmup pass and OFF
-// for the batch compile + real run (the in-process cold-start). Initial value is the env flag.
-std::atomic<bool> g_capture_only{env_or_null("TT_METAL_KERNEL_CAPTURE_ONLY") != nullptr};
+// for the batch compile + real run (the in-process cold-start). Initial value is the env flag, parsed
+// with the same truthy spelling as TT_METAL_KERNEL_PREWARM so 0/false/off disables it.
+std::atomic<bool> g_capture_only{env_truthy("TT_METAL_KERNEL_CAPTURE_ONLY")};
 
 // out_kernel_root is "<cache_root>/<build_key>/kernels/"; the manifest lives at the cache root so a
 // single file serves every build_key (arch + compile config) on this machine -- entries are

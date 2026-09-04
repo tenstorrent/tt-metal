@@ -2772,6 +2772,15 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
     }
 
     bool remote_enabled = jit_server::JitCompileRpcClient::enabled();
+    // Capture-only lives only in the local-build branch below (it skips the model gcc and appends the
+    // manifest recipe). The remote branch would run a real remote compile and record nothing, so the
+    // prewarm wrapper's manifest-growth gate would see no growth and abort. Fail fast instead of
+    // silently producing an empty manifest.
+    TT_FATAL(
+        !(remote_enabled && kernel_prewarm::capture_only()),
+        "TT_METAL_KERNEL_CAPTURE_ONLY is not supported together with the remote JIT server "
+        "(TT_METAL_JIT_SERVER_ENABLE): manifest capture only exists on the local build path. "
+        "Disable one of them.");
     std::vector<std::shared_future<void>> events;
 
     auto prep_kernel = [&](const std::shared_ptr<Kernel>& kernel) {
@@ -2899,8 +2908,8 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                         kernel->read_binaries(device, binary_root);
                         kernel->register_kernel_elf_paths_with_watcher(*device, binary_root);
                         Inspector::program_kernel_compile_finished(this, device, kernel, build_options, binary_root);
-                        // Record this kernel in the self-bootstrapping prewarm manifest (default-on;
-                        // TT_METAL_KERNEL_PREWARM=0 opts out). capture_needed() dedups against the
+                        // Record this kernel in the opt-in prewarm manifest (off by default;
+                        // TT_METAL_KERNEL_PREWARM=1/true/on opts in). capture_needed() dedups against the
                         // on-disk manifest from the cheap (build_key, name/hash) key, so only kernels
                         // not already recorded pay the build_kernel_descriptor read -- a cold cache
                         // records the full set, warm runs add only new kernels. Read-only on the
