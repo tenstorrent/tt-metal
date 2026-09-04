@@ -35,8 +35,13 @@ import ttnn
 from models.demos.gemma4.tt.dflash.context import compute_context
 from models.demos.gemma4.tt.dflash.drafter import dflash_drafter_forward
 from models.demos.gemma4.tt.dflash.lm_head import argmax_last_dim, compute_dflash_argmax
-from models.demos.gemma4.tt.dflash.rope_cache import build_dflash_rope_cache_2d, gather_rope_on_device
-from models.demos.gemma4.tt.dflash.verify import dflash_verify, greedy_accept_from_posterior
+from models.demos.gemma4.tt.dflash.rope_cache import (
+    build_dflash_rope_cache_2d,
+    gather_rope_on_device,
+    gather_rope_on_device_buffered,
+    make_rope_gather_index_buffer,
+)
+from models.demos.gemma4.tt.dflash.verify import dflash_verify, greedy_accept_from_posterior, make_verify_buffers
 
 
 def _to_tt(mesh_device, x, dtype=ttnn.bfloat16):
@@ -107,6 +112,25 @@ def dflash_generate(
     max_seq_len = input_ids_padded.shape[-1]
     cos_2d, sin_2d = build_dflash_rope_cache_2d(mesh_device, head_dim, config.rope_theta, max_seq_len)
 
+    # Persistent, reused-every-iteration device buffers (see verify.py's module
+    # docstring): allocated once here, refreshed in place via
+    # copy_host_to_device_tensor inside the loop below instead of a fresh
+    # ttnn.from_torch(..., device=...) allocation each call.
+    verify_buffers = make_verify_buffers(mesh_device, page_table_torch, block_size)
+    pre_draft_buf = ttnn.from_torch(
+        torch.zeros((1, block_size), dtype=torch.int64),
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint32,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    # The steady state (every iteration after the first) never needs more than
+    # 2*block_size positions -- context_len maxes out at block_size once past the
+    # initial prefill-seeded block. The first iteration's (potentially much larger)
+    # gather over the real prompt's context uses gather_rope_on_device directly instead
+    # (a one-off, non-repeating call -- see rope_cache.py).
+    rope_idx_buf = make_rope_gather_index_buffer(mesh_device, 2 * block_size)
+
     replicate = ttnn.ReplicateTensorToMesh(mesh_device)
     page_table_tt = ttnn.from_torch(
         page_table_torch, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32, mesh_mapper=replicate
@@ -158,22 +182,27 @@ def dflash_generate(
 
         if verify_size > 1:
             pre_draft_ids = torch.tensor([[output_ids[-1]] + [mask_token_id] * (verify_size - 1)], dtype=torch.long)
-            pre_draft_ids_tt = ttnn.from_torch(
-                pre_draft_ids,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                dtype=ttnn.uint32,
-                device=mesh_device,
-                mesh_mapper=replicate,
+            ttnn.copy_host_to_device_tensor(
+                ttnn.from_torch(pre_draft_ids, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32, mesh_mapper=replicate),
+                pre_draft_buf,
             )
-            noise_tt = model.raw_embed(pre_draft_ids_tt)
-            ttnn.deallocate(pre_draft_ids_tt)
+            noise_tt = model.raw_embed(pre_draft_buf)
             if len(noise_tt.shape) != 4:
                 noise_tt = ttnn.unsqueeze_to_4D(noise_tt)
             if noise_tt.layout != ttnn.TILE_LAYOUT:
                 noise_tt = ttnn.to_layout(noise_tt, ttnn.TILE_LAYOUT)
 
             positions = list(range(start - context_len, start + verify_size))
-            cos_tt, sin_tt = gather_rope_on_device(mesh_device, positions, cos_2d, sin_2d, head_dim)
+            if len(positions) <= rope_idx_buf.shape[-1]:
+                cos_tt, sin_tt = gather_rope_on_device_buffered(
+                    mesh_device, rope_idx_buf, positions, cos_2d, sin_2d, head_dim
+                )
+            else:
+                # Only the very first iteration's context (the real prompt) can be large
+                # enough to exceed the steady-state buffer -- a one-off, non-repeating
+                # gather, so a fresh allocation here doesn't stand in the way of tracing
+                # the (much more frequently replayed) later iterations.
+                cos_tt, sin_tt = gather_rope_on_device(mesh_device, positions, cos_2d, sin_2d, head_dim)
 
             drafter_out = dflash_drafter_forward(
                 context_tt,
@@ -205,7 +234,7 @@ def dflash_generate(
         candidate_ids = [output_ids[-1]] + draft_tokens
 
         def _verify():
-            return dflash_verify(model, mesh_device, tt_kv_cache, page_table_torch, candidate_ids, start_pos=start)
+            return dflash_verify(model, mesh_device, tt_kv_cache, verify_buffers, candidate_ids, start_pos=start)
 
         (posterior, _), next_context_padded = _tap_context(model, weights, config, _verify)
         accept, bonus, committed = greedy_accept_from_posterior(candidate_ids, posterior)
