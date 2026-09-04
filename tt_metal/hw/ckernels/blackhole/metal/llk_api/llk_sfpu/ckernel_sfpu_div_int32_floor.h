@@ -60,8 +60,10 @@ sfpi_inline void calculate_div_int32_body(
     // 22 bits, so we can compute qb = (q1<<10 + 0) * (b1<<22 + b0)
     //                               = (q1<<10) * b0
 
-    sfpi::vInt qb{sfpi::fractional_mul(q_m, b) << 10};
+    sfpi::vInt qb{sfpi::fractional_mul(q_m, b)};
+    // Fill the multiply's dependency slot with the independent quotient shift.
     sfpi::vInt q{q_m << 10};
+    qb <<= 10;
 
     // Compute remainder.
     sfpi::vInt r = a - qb;
@@ -73,10 +75,12 @@ sfpi_inline void calculate_div_int32_body(
 
     // Compute correction value in float32.
     sfpi::vFloat correction_f = r_f * inv_b_f;
+    // Split b while the correction multiply completes, before consuming its result.
+    sfpi::vMag b_high = b >> 23;
     sfpi::vMag correction = sfpi::convert<sfpi::vUInt16>(correction_f, sfpi::RoundMode::Nearest);
 
     // Compute tmp = correction * b.
-    sfpi::vInt b1 = sfpi::fractional_mul(correction, b >> 23);
+    sfpi::vInt b1 = sfpi::fractional_mul(correction, b_high);
     sfpi::vInt tmp_hi = sfpi::fractional_mul(correction, b, sfpi::FractionalHalf::High);
     sfpi::vInt tmp_lo = sfpi::fractional_mul(correction, b);
     tmp_hi += b1;
@@ -86,15 +90,15 @@ sfpi_inline void calculate_div_int32_body(
     // Apply correction and adjust remainder.
     // When q is zero, qb is also zero, so r=INT_MIN represents the valid
     // positive magnitude 2**31 rather than a negative remainder.
+    // Normalize the correction's sign so q and r can be updated unconditionally.
+    sfpi::vInt cor = correction;
     v_if(r < 0 && q != 0) {
-        q -= correction;
-        r += tmp;
-    }
-    v_else {
-        q += correction;
-        r -= tmp;
+        cor = -cor;
+        tmp = -tmp;
     }
     v_endif;
+    q += cor;
+    r -= tmp;
 
     // Since the correction might have been rounded, we may need to correct one
     // additional bit.  The corrected remainder cannot be INT_MIN.
