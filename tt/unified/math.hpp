@@ -768,34 +768,53 @@ enum class TransposeB { No, Yes };
 // shape than the output takes.
 template <typename SA, typename SB, TransposeB Tr = TransposeB::No>
 struct MatmulGeometry {
+    // IN TILES, which is the only unit in which the two sides have to agree.
+    //
+    // There used to be a second check here, in ELEMENTS -- A's columns times its tile WIDTH
+    // against B's rows times its tile HEIGHT -- to catch operands that agreed on tile counts
+    // and disagreed on geometry. It refused a shape the hardware computes correctly, and it
+    // had no formulation that did not: `[K,1] x [1,V]`, the rank-1 update every
+    // linear-attention decode step is built from, wants a 32x1 LHS tile, and metal's
+    // TILE_FACE_HW_CHOICES has no tile one column wide. So k lives in a 32x32 tile with
+    // columns 1..31 zero, its logical 32 columns can never equal the RHS's logical 1 row, and
+    // padding the comparison to a fixed 32 to admit that also invented agreement between a
+    // 16-wide A and a 32-tall B. Expressed in each shape's OWN tile extent, which is the unit
+    // that means anything, the elements check IS this one -- logical_cols_v is
+    // `cols * tile::cols`, so dividing back through leaves `cols`. One check, not two.
+    //
     static_assert(
         SA::cols == SB::rows, "matmul inner dimension disagrees: operand A's columns must equal operand B's rows");
     static_assert(SA::leading == SB::leading, "matmul operands disagree on their leading (batch) extent");
 
-    // And again in ELEMENTS, which the tile-count check above cannot see. Equal tile counts
-    // at different tile geometry pass it and are still not a valid product: a 1x32-tiled
-    // Shape<1, 1> has one column of 32 elements, and as the RHS it has one row of ONE.
+    // AND THE TILE SHAPES, which is what recovers the checking the elements comparison used
+    // to do. Tile counts agreeing says nothing about the geometry inside them, and only one
+    // shape of geometry disagreement is rescuable.
     //
-    // WHAT THIS CHECK IS FOR, stated carefully, because it is easy to attribute to the wrong
-    // measurement. A product whose inner dimensions differ in elements is not wrong at the
-    // hardware -- it computes the full 32-element inner product the tile descriptors describe
-    // -- and it can even be the RESULT the author wants, if the surplus columns of the wider
-    // operand happen to be zero. That is a fact about operand CONTENTS, and no type can see
-    // it. So the check refuses the shape rather than trusting an invisible promise.
-    //
-    // It is NOT what fixed the 4.6e32 out-of-bounds read. That was the host never telling the
-    // device its buffers' tile geometry, so a 64-byte page was unpacked as a 2048-byte tile;
-    // `d690e91e182` and `e9cfa6dc2f3` fixed it, and with the geometry declared the same
-    // 32x32-by-1x32 shape measures PCC 1.00000 on an n150. See
-    // unified_blaze_integration_spec.md B3's table, and B4 for what this check therefore
-    // costs: the rank-1 update every linear-attention decode step is built from has no
-    // in-model spelling, and wants a named `outer(a, b)` verb rather than a weaker check
-    // here.
+    // The hardware sums A[r,i] * B[i,c] over a whole tile step along i. When A's tile is WIDER
+    // than B's tile is tall, the surplus sits in A's columns and the author can zero them --
+    // that is the rank-1 update, `[K,1] x [1,V]` as a 32x32 LHS against a 1x32 RHS, and the
+    // contract is stated at the call site because nothing else can see it. When B's tile is
+    // TALLER than A's is wide there is nothing to zero: A has no columns out there at all, so
+    // real values of B multiply whatever SrcA happens to hold. That is unrescuable, and it is
+    // the case a fixed 32-element padding of the old check quietly admitted.
     static_assert(
-        logical_cols_v<SA> == logical_rows_v<SB>,
-        "matmul inner dimension disagrees in ELEMENTS: operand A's columns times its tile WIDTH must "
-        "equal operand B's rows times its tile HEIGHT. Equal tile counts are not enough when the two "
-        "operands are tiled differently");
+        SB::tile::rows <= SA::tile::cols,
+        "matmul tile shapes are incompatible: operand B's tile is TALLER than operand A's tile is wide, "
+        "so the inner dimension reads columns of A that its tile does not have. Equal extents are the "
+        "clean case; A wider than B is tall is the padded one, and needs A's surplus columns to be "
+        "zero. This is neither");
+    static_assert(
+        SA::tile::cols == SB::tile::cols,
+        "matmul tile shapes are incompatible: the output inherits operand A's tile, and its COLUMNS "
+        "come from operand B, so the two tiles must be the same width or the result claims an extent "
+        "it does not hold");
+
+    // WHAT IS LEFT TO THE AUTHOR, and all that is left: whether the surplus columns of a
+    // wider A are zero. `[K,1] x [1,V]` is the product intended only because k's columns
+    // 1..31 are, which is a fact about CONTENTS -- the reason B4 also proposed a named
+    // `outer(a, b)` verb to say so where the author can act on it. See
+    // unified_blaze_integration_spec.md B4 and B3a.
+
 
     static constexpr uint32_t rt_dim = SA::rows;  // output rows  (A rows)
     static constexpr uint32_t ct_dim = SB::cols;  // output cols  (B cols)
