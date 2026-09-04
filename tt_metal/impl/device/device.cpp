@@ -24,6 +24,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <map>
 #include <optional>
@@ -120,6 +121,13 @@ void Device::initialize_smc_dispatch_telemetry_control() {
         context_->dispatch_mem_map().get_device_command_queue_addr(
             CommandQueueDeviceAddrType::DISPATCH_TELEMETRY, /*cq_id=*/0);
     smc_dispatch_telemetry_control_.num_hw_cqs = this->num_hw_cqs_;
+    const CoreCoord compute_grid = this->compute_with_storage_grid_size();
+    const size_t worker_core_count = compute_grid.x * compute_grid.y;
+    TT_FATAL(
+        worker_core_count <= std::numeric_limits<uint16_t>::max(),
+        "Compute grid has {} worker cores, which exceeds the uint16_t SMC num_worker_cores field",
+        worker_core_count);
+    smc_dispatch_telemetry_control_.num_worker_cores = static_cast<uint16_t>(worker_core_count);
     write_smc_dispatch_telemetry_control(*tt_device, smc_dispatch_telemetry_control_);
 }
 
