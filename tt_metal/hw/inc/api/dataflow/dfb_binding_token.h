@@ -26,6 +26,7 @@
 // does not have to pull in the whole DataflowBuffer implementation. See
 // api/dataflow/dataflow_buffer.h for the DataflowBuffer class these tokens construct.
 //
+// Support for LLKOperandFrom.
 namespace binding_details {
 template <const auto& Token>
 struct LLKOperandExtractor;
