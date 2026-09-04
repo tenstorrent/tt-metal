@@ -798,6 +798,21 @@ inline uint64_t noc_v3_cq_src_local[NOC_V3_STATE_CMD_BUFS] = {};
 // interpretation of the dest state (and the resolve at issue time).
 inline bool noc_v3_cq_dest_mcast[NOC_V3_STATE_CMD_BUFS] = {};
 
+// Quasar DM kernels do not zero .bss on load (dmk.cc: "TODO: initialize globals
+// and bss"), so these arrays start as whatever L1 held. A stale dest_mcast
+// flag routes a unicast through the multicast decode -> garbage rectangle ->
+// unbalanced acks -> hang (or the ndests assert under a watcher build). Every
+// CQ kernel calls this once at entry so the latch state is deterministic.
+inline __attribute__((always_inline)) void noc_v3_cq_state_reset() {
+    for (uint32_t i = 0; i < NOC_V3_STATE_CMD_BUFS; ++i) {
+        noc_v3_cq_dest_base[i] = 0;
+        noc_v3_cq_dest_local[i] = 0;
+        noc_v3_cq_src_base[i] = 0;
+        noc_v3_cq_src_local[i] = 0;
+        noc_v3_cq_dest_mcast[i] = false;
+    }
+}
+
 // Multicast descriptors keep their local address in the low bits, corners
 // above - the same OR-composability as an operand, split by a constant mask.
 inline constexpr uint64_t NOC_V3_CQ_MCAST_LOCAL_MASK = noc_att::DESCRIPTOR_LOCAL_LIMIT - 1;

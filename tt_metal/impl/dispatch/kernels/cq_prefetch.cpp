@@ -2968,6 +2968,9 @@ inline uint32_t relay_cb_get_cmds(uintptr_t& data_ptr, uint32_t& downstream_data
 }
 
 void kernel_main_h() {
+#if defined(NOC_ATT_ENABLED)
+    noc_v3_cq_state_reset();  // kernel .bss is not zeroed on Quasar; make the CQ latch state deterministic
+#endif
     uintptr_t cmd_ptr = cmddat_q_base;
     uintptr_t fence = cmddat_q_base;
     bool done = false;
@@ -3030,6 +3033,9 @@ void kernel_main_h() {
 }
 
 void kernel_main_d() {
+#if defined(NOC_ATT_ENABLED)
+    noc_v3_cq_state_reset();  // kernel .bss is not zeroed on Quasar; make the CQ latch state deterministic
+#endif
     PrefetchExecBufState exec_buf_state;
 
     h_cmddat_q_reader.init();
