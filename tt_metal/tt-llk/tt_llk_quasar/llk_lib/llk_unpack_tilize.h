@@ -30,6 +30,9 @@ inline void _llk_unpack_tilize_set_src_offset_(const TensorShape& tensor_shape, 
 {
     const std::uint32_t src_addr_offset_face_rows = l1_base_idx * tensor_shape.num_faces_c_dim;
 
+    constexpr std::uint32_t WAIT_UNP_RES = (UNP_SEL == p_unpacr::UNP_B) ? p_stall::UNPACK1 : p_stall::UNPACK0;
+    TTI_STALLWAIT(p_stall::STALL_CFG, 0, 0, WAIT_UNP_RES);
+
     if constexpr (UNP_SEL == p_unpacr::UNP_A || UNP_SEL == p_unpacr::UNP_DEST)
     {
         cfg_rmw(THCON_UNPACKER0_REG0_TILIZE_SRC_ADDR_OFFSET_RMW, src_addr_offset_face_rows);
