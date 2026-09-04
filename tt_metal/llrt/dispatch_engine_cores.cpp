@@ -21,16 +21,16 @@
 
 namespace {
 
-std::vector<tt::tt_metal::CoreCoord> get_quasar_tensix_fallback_dispatch_cores_from_yaml(
+std::vector<tt::tt_metal::xy_pair> get_quasar_tensix_fallback_dispatch_cores_from_yaml(
     tt::tt_metal::MetalEnvImpl& env,
     tt::ChipId device_id,
     uint8_t num_hw_cqs,
     const tt::tt_metal::DispatchCoreConfig& dispatch_core_config) {
     const tt::core_descriptor_t& core_desc = env.get_core_descriptor_config(device_id, num_hw_cqs, dispatch_core_config);
     if (!core_desc.relative_dispatch_cores.empty()) {
-        const tt::tt_metal::CoreCoord grid_size =
+        const tt::tt_metal::xy_pair grid_size =
             env.get_cluster().get_soc_desc(device_id).get_grid_size(tt::CoreType::TENSIX);
-        std::vector<tt::tt_metal::CoreCoord> logical_cores;
+        std::vector<tt::tt_metal::xy_pair> logical_cores;
         logical_cores.reserve(core_desc.relative_dispatch_cores.size());
         for (const tt::tt_metal::RelativeCoreCoord& rel_coord : core_desc.relative_dispatch_cores) {
             logical_cores.push_back(tt::tt_metal::get_core_coord_from_relative(rel_coord, grid_size));
@@ -47,11 +47,11 @@ std::vector<tt::tt_metal::CoreCoord> get_quasar_tensix_fallback_dispatch_cores_f
 // num_hw_cqs are unused; if fewer DEs than CQs, later CQs cycle through the DEs again.
 // Free DMs are auto-assigned at CreateDispatchEngineKernel time.
 void expand_quasar_dispatch_engine_pool_for_fd_assignment(
-    std::vector<tt::tt_metal::CoreCoord>& logical_cores, uint8_t num_hw_cqs) {
+    std::vector<tt::tt_metal::xy_pair>& logical_cores, uint8_t num_hw_cqs) {
     if (logical_cores.empty() || num_hw_cqs == 0) {
         return;
     }
-    const std::vector<tt::tt_metal::CoreCoord> available_des = std::move(logical_cores);
+    const std::vector<tt::tt_metal::xy_pair> available_des = std::move(logical_cores);
     logical_cores.clear();
     logical_cores.reserve(static_cast<size_t>(num_hw_cqs) * 2);
     for (uint8_t cq_id = 0; cq_id < num_hw_cqs; ++cq_id) {
@@ -77,7 +77,7 @@ std::size_t MetalEnvImpl::QuasarDispatchCoresCacheKeyHash::operator()(const Quas
            (static_cast<std::size_t>(key.use_tensix_fallback) << 25);
 }
 
-const std::vector<CoreCoord>& MetalEnvImpl::get_quasar_dispatch_cores(
+const std::vector<xy_pair>& MetalEnvImpl::get_quasar_dispatch_cores(
     ChipId device_id, uint8_t num_hw_cqs, const DispatchCoreConfig& dispatch_core_config) {
     TT_FATAL(
         get_cluster().arch() == tt::ARCH::QUASAR,
@@ -95,7 +95,7 @@ const std::vector<CoreCoord>& MetalEnvImpl::get_quasar_dispatch_cores(
         return quasar_dispatch_cores_cache_.at(key);
     }
 
-    std::vector<CoreCoord> logical_cores;
+    std::vector<xy_pair> logical_cores;
     if (use_tensix_fallback) {
         logical_cores = get_quasar_tensix_fallback_dispatch_cores_from_yaml(
             *this, device_id, num_hw_cqs, dispatch_core_config);
@@ -113,9 +113,9 @@ const std::vector<CoreCoord>& MetalEnvImpl::get_quasar_dispatch_cores(
 
 namespace tt::tt_metal::detail {
 
-std::vector<CoreCoord> get_quasar_soc_dispatch_engine_logical_cores(const metal_SocDescriptor& soc_desc) {
+std::vector<xy_pair> get_quasar_soc_dispatch_engine_logical_cores(const metal_SocDescriptor& soc_desc) {
     const auto dispatch_noc0_cores = soc_desc.get_cores(tt::CoreType::DISPATCH, tt::CoordSystem::NOC0);
-    std::vector<CoreCoord> logical_cores;
+    std::vector<xy_pair> logical_cores;
     logical_cores.reserve(dispatch_noc0_cores.size());
     for (size_t index = 0; index < dispatch_noc0_cores.size(); ++index) {
         logical_cores.emplace_back(static_cast<uint32_t>(index), 0);
@@ -181,7 +181,7 @@ CoreType resolve_dispatch_core_type(
 
 namespace {
 
-const std::vector<CoreCoord>& get_sd_cq_dispatch_cores(const tt::tt_metal::IDevice* device) {
+const std::vector<xy_pair>& get_sd_cq_dispatch_cores(const tt::tt_metal::IDevice* device) {
     auto& env = MetalEnvAccessor(MetalContext::instance().get_env()).impl();
     const auto& dispatch_core_config = MetalContext::instance().get_dispatch_core_config();
     return env.get_quasar_dispatch_cores(device->id(), device->num_hw_cqs(), dispatch_core_config);
@@ -195,7 +195,7 @@ CoreType resolve_sd_cq_kernel_core_type(const tt::tt_metal::IDevice* device) {
     return tt::tt_metal::resolve_dispatch_core_type(env, device->id(), dispatch_core_config);
 }
 
-CoreCoord dispatch_engine_core(const tt::tt_metal::IDevice* device, uint32_t index) {
+xy_pair dispatch_engine_core(const tt::tt_metal::IDevice* device, uint32_t index) {
     TT_FATAL(device->arch() == tt::ARCH::QUASAR, "dispatch_engine_core is only valid on Quasar");
     const auto& cores = get_sd_cq_dispatch_cores(device);
     TT_FATAL(
@@ -207,30 +207,30 @@ CoreCoord dispatch_engine_core(const tt::tt_metal::IDevice* device, uint32_t ind
     return cores[index];
 }
 
-CoreCoord dispatch_engine_virtual_core(const tt::tt_metal::IDevice* device, uint32_t index) {
-    const CoreCoord logical_core = dispatch_engine_core(device, index);
+xy_pair dispatch_engine_virtual_core(const tt::tt_metal::IDevice* device, uint32_t index) {
+    const xy_pair logical_core = dispatch_engine_core(device, index);
     return device->virtual_core_from_logical_core(logical_core, CoreType::DISPATCH);
 }
 
-CoreCoord sd_cq_prefetch_core(const tt::tt_metal::IDevice* device) {
+xy_pair sd_cq_prefetch_core(const tt::tt_metal::IDevice* device) {
     // Only the Quasar dispatch-engine path uses synthetic dispatch cores. WH/BH and the Quasar
     // interim Tensix path (TT_METAL_TENSIX_DISPATCH_CORES=1, resolves to WORKER) keep the legacy
     // hardcoded worker logical core.
     if (resolve_sd_cq_kernel_core_type(device) == CoreType::DISPATCH) {
         return dispatch_engine_core(device, 0);
     }
-    return CoreCoord{0, 0};
+    return xy_pair{0, 0};
 }
 
-CoreCoord sd_cq_dispatch_core(const tt::tt_metal::IDevice* device) {
+xy_pair sd_cq_dispatch_core(const tt::tt_metal::IDevice* device) {
     if (resolve_sd_cq_kernel_core_type(device) == CoreType::DISPATCH) {
         return dispatch_engine_core(device, 0);
     }
     // Legacy interim placement: Quasar shares core {0,0} with prefetch; WH/BH uses a separate core.
-    return (device->arch() == tt::ARCH::QUASAR) ? CoreCoord{0, 0} : CoreCoord{4, 0};
+    return (device->arch() == tt::ARCH::QUASAR) ? xy_pair{0, 0} : xy_pair{4, 0};
 }
 
-CoreCoord sd_cq_virtual_core(const tt::tt_metal::IDevice* device, const CoreCoord& logical_core) {
+xy_pair sd_cq_virtual_core(const tt::tt_metal::IDevice* device, const xy_pair& logical_core) {
     return device->virtual_core_from_logical_core(logical_core, resolve_sd_cq_kernel_core_type(device));
 }
 

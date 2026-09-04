@@ -32,7 +32,7 @@ inline const std::string& get_product_name(tt::ARCH arch, uint32_t num_harvested
     return product_name.at(arch).at(num_harvested_on_axis);
 }
 
-inline const tt::tt_metal::CoreCoord& get_compute_grid_size(
+inline const tt::tt_metal::xy_pair& get_compute_grid_size(
     tt::tt_metal::MetalEnvImpl& env,
     ChipId device_id,
     const uint8_t num_hw_cqs,
@@ -41,7 +41,7 @@ inline const tt::tt_metal::CoreCoord& get_compute_grid_size(
     return core_desc.compute_grid_size;
 }
 
-inline const std::vector<tt::tt_metal::CoreCoord>& get_logical_compute_cores(
+inline const std::vector<tt::tt_metal::xy_pair>& get_logical_compute_cores(
     tt::tt_metal::MetalEnvImpl& env,
     ChipId device_id,
     const uint8_t num_hw_cqs,
@@ -50,7 +50,7 @@ inline const std::vector<tt::tt_metal::CoreCoord>& get_logical_compute_cores(
     return core_desc.logical_compute_cores;
 }
 
-inline const std::vector<tt::tt_metal::CoreCoord>& get_logical_dispatch_cores(
+inline const std::vector<tt::tt_metal::xy_pair>& get_logical_dispatch_cores(
     tt::tt_metal::MetalEnvImpl& env,
     ChipId device_id,
     const uint8_t num_hw_cqs,
@@ -62,7 +62,7 @@ inline const std::vector<tt::tt_metal::CoreCoord>& get_logical_dispatch_cores(
     return core_desc.logical_dispatch_cores;
 }
 
-inline const std::vector<tt::tt_metal::CoreCoord>& get_logical_fabric_mux_cores(
+inline const std::vector<tt::tt_metal::xy_pair>& get_logical_fabric_mux_cores(
     tt::tt_metal::MetalEnvImpl& env,
     ChipId device_id,
     const uint8_t num_hw_cqs,
@@ -80,7 +80,7 @@ const std::tuple<uint32_t, CoreRange>& get_physical_worker_grid_config(
 // When FabricTensix is DISABLED, wormhole_b0_80_arch.yaml omits fabric_mux_cores, but the same tensix
 // locations are still reserved for fabric mux on boards that use the fabric-mux descriptor layout.
 // Used for heuristics (e.g. real-time profiler spare-core selection) that must not collide with mux rows/columns.
-std::vector<tt::tt_metal::CoreCoord> get_logical_fabric_mux_cores_wh_b0_worker_fabric_mux_yaml_overlay(
+std::vector<tt::tt_metal::xy_pair> get_logical_fabric_mux_cores_wh_b0_worker_fabric_mux_yaml_overlay(
     tt::tt_metal::MetalEnvImpl& env,
     ChipId device_id,
     uint8_t num_hw_cqs,

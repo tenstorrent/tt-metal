@@ -29,6 +29,7 @@ struct to_json_t;
 namespace tt::tt_metal {
 
 using CoreCoord = tt_xy_pair;
+using xy_pair = tt_xy_pair;
 
 class CoreRangeSet;
 
