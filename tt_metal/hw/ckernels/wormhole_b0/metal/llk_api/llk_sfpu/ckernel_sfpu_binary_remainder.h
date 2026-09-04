@@ -80,8 +80,11 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(
 
     // hi = q2 * b0 + q1 * b1 (high part)
     // lo = q1 * b0 (low part)
-    sfpi::vFloat hi = q2 * b0 + MANTISSA_ALIGNMENT_OFFSET;
-    sfpi::vFloat lo = q1 * b0 + MANTISSA_ALIGNMENT_OFFSET;
+    // Interleave independent products and bias additions to avoid multiply-use NOPs.
+    sfpi::vFloat hi = q2 * b0;
+    sfpi::vFloat lo = q1 * b0;
+    hi += MANTISSA_ALIGNMENT_OFFSET;
+    lo += MANTISSA_ALIGNMENT_OFFSET;
     hi = q1 * b1 + hi;
 
     sfpi::vUInt qb = sfpi::exman(lo) << 11;
@@ -109,9 +112,13 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(
     sfpi::vFloat b2 = sfpi::convert<sfpi::vFloat>(b >> 22, sfpi::RoundMode::Nearest);
 
     // tmp = correction * (b2<<22 + b1<<11 + b0)
-    sfpi::vFloat low = correction_f * b0 + MANTISSA_ALIGNMENT_OFFSET;
-    sfpi::vFloat mid = correction_f * b1 + MANTISSA_ALIGNMENT_OFFSET;
-    sfpi::vFloat top = correction_f * b2 + MANTISSA_ALIGNMENT_OFFSET;
+    // Issue the independent products before consuming them in the bias additions.
+    sfpi::vFloat low = correction_f * b0;
+    sfpi::vFloat mid = correction_f * b1;
+    sfpi::vFloat top = correction_f * b2;
+    low += MANTISSA_ALIGNMENT_OFFSET;
+    mid += MANTISSA_ALIGNMENT_OFFSET;
+    top += MANTISSA_ALIGNMENT_OFFSET;
 
     sfpi::vInt tmp{sfpi::exman(low) + (sfpi::exman(mid) << 11) + (sfpi::exman(top) << 22)};
     // r=INT_MIN represents the valid positive magnitude 2**31. Subtracting

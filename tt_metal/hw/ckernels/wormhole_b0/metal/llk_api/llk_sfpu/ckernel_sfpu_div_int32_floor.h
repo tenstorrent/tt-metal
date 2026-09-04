@@ -57,17 +57,20 @@ sfpi_inline void calculate_div_int32_body(
     scale = sfpi::as<sfpi::vFloat>((254 << 23) - sfpi::as<sfpi::vInt>(scale));
     inv_b_f = t * inv_b_f + inv_b_f;
 
+    // Fill reciprocal dependency slots with the independent numerator conversion.
+    sfpi::vInt a_s = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>();
+
     // Halley's Method
     sfpi::vFloat e = inv_b_f * neg_b_f + 1.0f;
-
-    sfpi::vInt a_s = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>();
+    sfpi::vMag a = sfpi::abs(a_s);
 
     // Continue Halley's Method
     e = e * e + e;
 
+    sfpi::vFloat a_f = sfpi::convert<sfpi::vFloat>(a, sfpi::RoundMode::Nearest);
+
     // Final step of Halley's Method
     inv_b_f = e * inv_b_f + inv_b_f;
-    sfpi::vFloat a_f = sfpi::convert<sfpi::vFloat>(sfpi::abs(a_s), sfpi::RoundMode::Nearest);
 
     // Apply scale
     inv_b_f = inv_b_f * scale;
@@ -95,8 +98,11 @@ sfpi_inline void calculate_div_int32_body(
     sfpi::vUInt q = q_m << 11;
 
     sfpi::vFloat MANTISSA_ALIGNMENT_OFFSET = 8388608.0f;
-    sfpi::vFloat hi = q2 * b0 + MANTISSA_ALIGNMENT_OFFSET;
-    sfpi::vFloat lo = q1 * b0 + MANTISSA_ALIGNMENT_OFFSET;
+    // Interleave independent products and bias additions to avoid multiply-use NOPs.
+    sfpi::vFloat hi = q2 * b0;
+    sfpi::vFloat lo = q1 * b0;
+    hi += MANTISSA_ALIGNMENT_OFFSET;
+    lo += MANTISSA_ALIGNMENT_OFFSET;
     hi = q1 * b1 + hi;
 
     sfpi::vInt qb = sfpi::vInt(sfpi::exman(lo)) << 11;
@@ -121,9 +127,13 @@ sfpi_inline void calculate_div_int32_body(
     // correction should fit into 11 bits, thus:
     // tmp = correction * (b2<<22 + b1<<11 + b0)
 
-    sfpi::vFloat low = correction_f * b0 + MANTISSA_ALIGNMENT_OFFSET;
-    sfpi::vFloat mid = correction_f * b1 + MANTISSA_ALIGNMENT_OFFSET;
-    sfpi::vFloat top = correction_f * b2 + MANTISSA_ALIGNMENT_OFFSET;
+    // Issue the independent products before consuming them in the bias additions.
+    sfpi::vFloat low = correction_f * b0;
+    sfpi::vFloat mid = correction_f * b1;
+    sfpi::vFloat top = correction_f * b2;
+    low += MANTISSA_ALIGNMENT_OFFSET;
+    mid += MANTISSA_ALIGNMENT_OFFSET;
+    top += MANTISSA_ALIGNMENT_OFFSET;
 
     sfpi::vInt tmp{sfpi::exman(low) + (sfpi::exman(mid) << 11) + (sfpi::exman(top) << 22)};
     sfpi::vUInt cor = correction;
