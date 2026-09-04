@@ -252,8 +252,8 @@ CoreRanges compute_core_ranges_mcast_1d_row_wise(
         }
     }
 
-    cr.num_cores_x_mcast = grid.grid_size.x;
-    cr.num_cores_y_mcast = grid.grid_size.y;
+    cr.num_cores_x = grid.grid_size.x;
+    cr.num_cores_y = grid.grid_size.y;
     return cr;
 }
 
@@ -316,8 +316,8 @@ CoreRanges compute_core_ranges_mcast_1d_col_wise(
         }
     }
 
-    cr.num_cores_x_mcast = grid.grid_size.x;
-    cr.num_cores_y_mcast = grid.grid_size.y;
+    cr.num_cores_x = grid.grid_size.x;
+    cr.num_cores_y = grid.grid_size.y;
     return cr;
 }
 
@@ -348,8 +348,8 @@ CoreRanges compute_core_ranges_2d(const GridParams& grid, const WorkerDistributi
                 {(std::size_t)start_core.x + workers.num_cores_all_to_all, (std::size_t)start_core.y},
                 {(std::size_t)start_core.x + num_cores_x - 1, (std::size_t)start_core.y + num_cores_y - 1}));
         }
-        cr.num_cores_x_mcast = num_cores_x;
-        cr.num_cores_y_mcast = 1;
+        cr.num_cores_x = num_cores_x;
+        cr.num_cores_y = 1;
     } else {
         cr.sender_cores = {
             {(std::size_t)start_core.x, (std::size_t)start_core.y},
@@ -369,8 +369,8 @@ CoreRanges compute_core_ranges_2d(const GridParams& grid, const WorkerDistributi
                 {(std::size_t)start_core.x, (std::size_t)start_core.y + workers.num_cores_all_to_all},
                 {(std::size_t)start_core.x + num_cores_x - 1, (std::size_t)start_core.y + num_cores_y - 1}));
         }
-        cr.num_cores_x_mcast = 1;
-        cr.num_cores_y_mcast = num_cores_y;
+        cr.num_cores_x = 1;
+        cr.num_cores_y = num_cores_y;
     }
     return cr;
 }
@@ -406,9 +406,8 @@ CoreRanges CoreRanges::compute(const GridParams& grid, const WorkerDistribution&
     }
 
     const CoreRange bbox = grid.shard_spec.grid.bounding_box();
-    cr.mcast_dest_cores = CoreRangeSet(bbox);
-    cr.inactive_cores = cr.mcast_dest_cores.subtract(cr.all_cores);
-    cr.num_mcast_dests = (grid.mcast_1d ? bbox.size() : grid.num_blocks) - 1;
+    cr.bounding_box_cores = CoreRangeSet(bbox);
+    cr.inactive_cores = cr.bounding_box_cores.subtract(cr.all_cores);
 
     return cr;
 }
@@ -452,6 +451,82 @@ KernelLayout KernelLayout::compute(
     }
 
     return layout;
+}
+
+std::optional<LayerNormMcast> create_reduction_ready_mcast(
+    IDevice* device,
+    const CoreRangeSet& grid,
+    CoreCoord global_sender,
+    bool enabled,
+    bool per_line,
+    bool row_wise,
+    NOC noc,
+    ProgramDescriptor::SemaphoreDescriptors& semaphores) {
+    if (!enabled) {
+        return std::nullopt;
+    }
+    const ttnn::kernel_lib::host::McastConfig config{
+        .noc = noc, .handshake = true, .base_sem_id = static_cast<uint32_t>(semaphores.size())};
+    std::optional<LayerNormMcast> mcast;
+    if (per_line) {
+        mcast.emplace(
+            std::in_place_type<ttnn::kernel_lib::host::Mcast1D>,
+            device,
+            grid,
+            row_wise ? ttnn::kernel_lib::host::Mcast1DShape::PerRow : ttnn::kernel_lib::host::Mcast1DShape::PerColumn,
+            ttnn::kernel_lib::host::Mcast1DFixedSenderConfig{.starting_sender_index = 0},
+            config);
+    } else {
+        mcast.emplace(
+            std::in_place_type<ttnn::kernel_lib::host::Mcast2D>,
+            device,
+            grid,
+            ttnn::kernel_lib::host::Mcast2DFixedSenderConfig{.sender = global_sender},
+            config);
+    }
+    auto owned = std::visit([](const auto& value) { return value.owned_semaphores(); }, *mcast);
+    semaphores.insert(semaphores.end(), owned.begin(), owned.end());
+    return mcast;
+}
+
+std::optional<LayerNormMcast> create_final_statistics_mcast(
+    IDevice* device,
+    const CoreRangeSet& grid,
+    CoreCoord global_sender,
+    bool enabled,
+    bool per_line,
+    bool row_wise,
+    ttnn::kernel_lib::host::DataReadyMode data_ready,
+    NOC noc,
+    ProgramDescriptor::SemaphoreDescriptors& semaphores) {
+    if (!enabled) {
+        return std::nullopt;
+    }
+    const ttnn::kernel_lib::host::McastConfig config{
+        .noc = noc,
+        .handshake = false,
+        .data_ready = data_ready,
+        .base_sem_id = static_cast<uint32_t>(semaphores.size())};
+    std::optional<LayerNormMcast> mcast;
+    if (per_line) {
+        mcast.emplace(
+            std::in_place_type<ttnn::kernel_lib::host::Mcast1D>,
+            device,
+            grid,
+            row_wise ? ttnn::kernel_lib::host::Mcast1DShape::PerRow : ttnn::kernel_lib::host::Mcast1DShape::PerColumn,
+            ttnn::kernel_lib::host::Mcast1DFixedSenderConfig{.starting_sender_index = 0},
+            config);
+    } else {
+        mcast.emplace(
+            std::in_place_type<ttnn::kernel_lib::host::Mcast2D>,
+            device,
+            grid,
+            ttnn::kernel_lib::host::Mcast2DFixedSenderConfig{.sender = global_sender},
+            config);
+    }
+    auto owned = std::visit([](const auto& value) { return value.owned_semaphores(); }, *mcast);
+    semaphores.insert(semaphores.end(), owned.begin(), owned.end());
+    return mcast;
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -621,8 +696,7 @@ CompileTimeArgs CompileTimeArgs::build(const CompileTimeArgsContext& ctx) {
 
     // Reader sender compile time args
     args.reader_sender = {
-        ctx.reduce_receiver_semaphore_id,
-        ctx.reduce_sender_semaphore_id,
+        ctx.all_to_all_worker_done_semaphore_id,
         grid.num_blocks,
         ctx.block_ht,
         ctx.block_ht * ctx.single_tile_size,
@@ -632,20 +706,18 @@ CompileTimeArgs CompileTimeArgs::build(const CompileTimeArgsContext& ctx) {
         workers.num_rows_per_all_to_all_worker_last,
         workers.num_rows_per_all_to_all_worker_last * ctx.single_tile_size,
         (uint32_t)grid.row_wise,
-        core_ranges.num_cores_x_mcast,
-        core_ranges.num_cores_y_mcast,
+        core_ranges.num_cores_x,
+        core_ranges.num_cores_y,
         (uint32_t)grid.use_two_stage_reduce,
         workers.num_blocks_first_stage,
         workers.num_blocks_second_stage,
-        ctx.reduce_second_stage_semaphore_id,
+        ctx.first_stage_reduce_done_semaphore_id,
         (uint32_t)ctx.rms_norm,
-        (uint32_t)ctx.use_welford,
-        core_ranges.num_mcast_dests};
+        (uint32_t)ctx.use_welford};
 
     // Reader receiver all-to-all compile time args
     args.reader_receiver_all_to_all = {
-        ctx.reduce_receiver_semaphore_id,
-        ctx.reduce_sender_semaphore_id,
+        ctx.all_to_all_worker_done_semaphore_id,
         grid.num_blocks,
         ctx.block_ht,
         1,  // is_all_to_all_worker
@@ -653,19 +725,18 @@ CompileTimeArgs CompileTimeArgs::build(const CompileTimeArgsContext& ctx) {
         workers.num_rows_per_all_to_all_worker,
         workers.num_rows_per_all_to_all_worker_last,
         (uint32_t)grid.row_wise,
-        core_ranges.num_cores_x_mcast,
-        core_ranges.num_cores_y_mcast,
+        core_ranges.num_cores_x,
+        core_ranges.num_cores_y,
         (uint32_t)grid.use_two_stage_reduce,
         workers.num_blocks_first_stage,
         workers.num_blocks_second_stage,
-        ctx.reduce_second_stage_semaphore_id,
+        ctx.first_stage_reduce_done_semaphore_id,
         (uint32_t)ctx.rms_norm,
         (uint32_t)ctx.use_welford};
 
     // Reader receiver (not all-to-all) compile time args
     args.reader_receiver = {
-        ctx.reduce_receiver_semaphore_id,
-        ctx.reduce_sender_semaphore_id,
+        ctx.all_to_all_worker_done_semaphore_id,
         grid.num_blocks,
         ctx.block_ht,
         0,  // is_all_to_all_worker
@@ -673,14 +744,36 @@ CompileTimeArgs CompileTimeArgs::build(const CompileTimeArgsContext& ctx) {
         workers.num_rows_per_all_to_all_worker,
         workers.num_rows_per_all_to_all_worker_last,
         (uint32_t)grid.row_wise,
-        1,  // num_cores_x_mcast (dummy for non-all-to-all)
-        1,  // num_cores_y_mcast (dummy for non-all-to-all)
+        1,  // num_x (dummy for non-all-to-all)
+        1,  // num_y (dummy for non-all-to-all)
         0,  // use_two_stage_reduce
         0,  // num_blocks_first_stage
         0,  // num_blocks_second_stage
-        ctx.reduce_second_stage_semaphore_id,
+        ctx.first_stage_reduce_done_semaphore_id,
         (uint32_t)ctx.rms_norm,
         (uint32_t)ctx.use_welford};
+
+    const auto append_mcast_args = [](const std::optional<LayerNormMcast>& mcast, auto& destination) {
+        if (!mcast.has_value()) {
+            ttnn::kernel_lib::host::append_absent_mcast_compile_time_args_to(destination);
+        } else {
+            std::visit(
+                [&destination](const auto& value) { value.append_compile_time_args_to(destination); }, mcast.value());
+        }
+    };
+    const auto append_stage_mcast_args = [&](auto& destination) {
+        if (ctx.is_pre_all_gather) {
+            append_mcast_args(ctx.reduction_ready_mcast, destination);
+        } else if (ctx.is_post_all_gather) {
+            append_mcast_args(ctx.final_statistics_mcast, destination);
+        } else {
+            append_mcast_args(ctx.reduction_ready_mcast, destination);
+            append_mcast_args(ctx.final_statistics_mcast, destination);
+        }
+    };
+    append_stage_mcast_args(args.reader_sender);
+    append_stage_mcast_args(args.reader_receiver_all_to_all);
+    append_stage_mcast_args(args.reader_receiver);
 
     // Writer sender compile time args
     args.writer_sender = {
@@ -1410,7 +1503,7 @@ void add_cb_descriptors(
     if (!core_ranges.inactive_cores.empty()) {
         for (auto& cb_desc : program_descriptor.cbs) {
             if (cb_desc.buffer == nullptr && cb_desc.core_ranges == core_ranges.all_cores) {
-                cb_desc.core_ranges = core_ranges.mcast_dest_cores;
+                cb_desc.core_ranges = core_ranges.bounding_box_cores;
             }
         }
     }
@@ -1517,124 +1610,85 @@ std::vector<uint32_t> build_compute_args(
     return args;
 }
 
-std::vector<uint32_t> build_reader_sender_args(
-    const CoreCoord& core, const CoreIndices& idx, const RuntimeArgsContext& ctx, IDevice* device) {
-    // Compute mcast range
-    CoreCoord mcast_start, mcast_end;
-    if (ctx.grid.mcast_1d) {
-        CoreCoord top_left = {(std::size_t)ctx.core_ranges.start_core.x, (std::size_t)ctx.core_ranges.start_core.y};
-        CoreCoord bottom_right = {
-            (std::size_t)ctx.core_ranges.start_core.x + ctx.grid.grid_size.x - 1,
-            (std::size_t)ctx.core_ranges.start_core.y + ctx.grid.grid_size.y - 1};
-        mcast_start = device->worker_core_from_logical_core(top_left);
-        mcast_end = device->worker_core_from_logical_core(bottom_right);
-    } else {
-        if (ctx.grid.row_wise) {
-            CoreCoord left_plus_one = {(std::size_t)ctx.core_ranges.start_core.x + 1, (std::size_t)core.y};
-            CoreCoord right = {
-                (std::size_t)ctx.core_ranges.start_core.x + ctx.grid.grid_size.x - 1, (std::size_t)core.y};
-            mcast_start = device->worker_core_from_logical_core(left_plus_one);
-            mcast_end = device->worker_core_from_logical_core(right);
-        } else {
-            CoreCoord top_plus_one = {(std::size_t)core.x, (std::size_t)ctx.core_ranges.start_core.y + 1};
-            CoreCoord bottom = {
-                (std::size_t)core.x, (std::size_t)ctx.core_ranges.start_core.y + ctx.grid.grid_size.y - 1};
-            mcast_start = device->worker_core_from_logical_core(top_plus_one);
-            mcast_end = device->worker_core_from_logical_core(bottom);
+void append_mcast_runtime_args(std::vector<uint32_t>& args, const CoreCoord& core, const RuntimeArgsContext& ctx) {
+    const auto append = [&args, &core](const std::optional<LayerNormMcast>& mcast) {
+        if (mcast.has_value()) {
+            std::visit([&](const auto& value) { value.append_runtime_args_to(args, core); }, mcast.value());
         }
-    }
-    if (ctx.reader_noc == NOC::NOC_1) {
-        std::swap(mcast_start, mcast_end);
-    }
-
-    std::vector<uint32_t> args;
-    args.reserve(7 + ctx.mcast_noc_x.size() + ctx.mcast_noc_y.size());
-    args.push_back(mcast_start.x);
-    args.push_back(mcast_start.y);
-    args.push_back(mcast_end.x);
-    args.push_back(mcast_end.y);
-
-    if (ctx.grid.mcast_1d) {
-        args.push_back(core.x - ctx.core_ranges.start_core.x);
-        args.push_back(core.y - ctx.core_ranges.start_core.y);
-        args.insert(args.end(), ctx.mcast_noc_x.begin(), ctx.mcast_noc_x.end());
-        args.insert(args.end(), ctx.mcast_noc_y.begin(), ctx.mcast_noc_y.end());
+    };
+    if (ctx.is_pre_all_gather) {
+        append(ctx.reduction_ready_mcast);
+    } else if (ctx.is_post_all_gather) {
+        append(ctx.final_statistics_mcast);
     } else {
-        if (ctx.grid.row_wise) {
+        append(ctx.reduction_ready_mcast);
+        append(ctx.final_statistics_mcast);
+    }
+}
+
+std::vector<uint32_t> build_reader_sender_args(
+    const CoreCoord& core, const CoreIndices& idx, const RuntimeArgsContext& ctx) {
+    std::vector<uint32_t> args;
+    if (!ctx.is_post_all_gather) {
+        args.reserve(3 + ctx.remote_noc_x.size() + ctx.remote_noc_y.size());
+        if (ctx.grid.mcast_1d) {
+            args.push_back(core.x - ctx.core_ranges.start_core.x);
+            args.push_back(core.y - ctx.core_ranges.start_core.y);
+            args.insert(args.end(), ctx.remote_noc_x.begin(), ctx.remote_noc_x.end());
+            args.insert(args.end(), ctx.remote_noc_y.begin(), ctx.remote_noc_y.end());
+        } else if (ctx.grid.row_wise) {
             args.push_back(core.x - ctx.core_ranges.start_core.x);
             args.push_back(0);
-            args.insert(args.end(), ctx.mcast_noc_x.begin(), ctx.mcast_noc_x.end());
-            args.push_back(ctx.mcast_noc_y[idx.height_index]);
+            args.insert(args.end(), ctx.remote_noc_x.begin(), ctx.remote_noc_x.end());
+            args.push_back(ctx.remote_noc_y[idx.height_index]);
         } else {
             args.push_back(0);
             args.push_back(core.y - ctx.core_ranges.start_core.y);
-            args.push_back(ctx.mcast_noc_x[idx.height_index]);
-            args.insert(args.end(), ctx.mcast_noc_y.begin(), ctx.mcast_noc_y.end());
+            args.push_back(ctx.remote_noc_x[idx.height_index]);
+            args.insert(args.end(), ctx.remote_noc_y.begin(), ctx.remote_noc_y.end());
         }
     }
+    append_mcast_runtime_args(args, core, ctx);
     return args;
 }
 
 std::vector<uint32_t> build_reader_receiver_all_to_all_args(
     const CoreCoord& core, const CoreIndices& idx, const RuntimeArgsContext& ctx) {
     std::vector<uint32_t> args;
-    args.reserve(6 + ctx.mcast_noc_x.size() + ctx.mcast_noc_y.size());
+    if (!ctx.is_post_all_gather) {
+        args.reserve(6 + ctx.remote_noc_x.size() + ctx.remote_noc_y.size());
+        const bool is_last_all_to_all_worker =
+            ctx.grid.use_two_stage_reduce
+                ? idx.width_index_two_stage == ctx.workers.num_cores_all_to_all_first_stage - 1
+                : idx.width_index == ctx.workers.num_cores_all_to_all - 1;
+        args.push_back(is_last_all_to_all_worker);
+        args.push_back(idx.all_to_all_worker_tile_offset_bytes);
+        args.push_back(ctx.grid.use_two_stage_reduce && idx.width_index < ctx.workers.num_cores_all_to_all_first_stage);
 
-    bool is_last_all_to_all_worker;
-    if (ctx.grid.use_two_stage_reduce) {
-        is_last_all_to_all_worker = idx.width_index_two_stage == ctx.workers.num_cores_all_to_all_first_stage - 1;
-    } else {
-        is_last_all_to_all_worker = idx.width_index == ctx.workers.num_cores_all_to_all - 1;
-    }
-    args.push_back(is_last_all_to_all_worker);
-    args.push_back(idx.all_to_all_worker_tile_offset_bytes);
-
-    bool is_second_stage_reader =
-        ctx.grid.use_two_stage_reduce && idx.width_index < ctx.workers.num_cores_all_to_all_first_stage;
-    args.push_back((uint32_t)is_second_stage_reader);
-
-    if (ctx.grid.mcast_1d) {
-        args.push_back(core.x - ctx.core_ranges.start_core.x);
-        args.push_back(core.y - ctx.core_ranges.start_core.y);
-        args.insert(args.end(), ctx.mcast_noc_x.begin(), ctx.mcast_noc_x.end());
-        args.insert(args.end(), ctx.mcast_noc_y.begin(), ctx.mcast_noc_y.end());
-    } else {
-        if (ctx.grid.row_wise) {
+        if (ctx.grid.mcast_1d) {
+            args.push_back(core.x - ctx.core_ranges.start_core.x);
+            args.push_back(core.y - ctx.core_ranges.start_core.y);
+            args.insert(args.end(), ctx.remote_noc_x.begin(), ctx.remote_noc_x.end());
+            args.insert(args.end(), ctx.remote_noc_y.begin(), ctx.remote_noc_y.end());
+        } else if (ctx.grid.row_wise) {
             args.push_back(core.x - ctx.core_ranges.start_core.x);
             args.push_back(0);
-            args.insert(args.end(), ctx.mcast_noc_x.begin(), ctx.mcast_noc_x.end());
-            args.push_back(ctx.mcast_noc_y[idx.height_index]);
+            args.insert(args.end(), ctx.remote_noc_x.begin(), ctx.remote_noc_x.end());
+            args.push_back(ctx.remote_noc_y[idx.height_index]);
         } else {
             args.push_back(0);
             args.push_back(core.y - ctx.core_ranges.start_core.y);
-            args.push_back(ctx.mcast_noc_x[idx.height_index]);
-            args.insert(args.end(), ctx.mcast_noc_y.begin(), ctx.mcast_noc_y.end());
+            args.push_back(ctx.remote_noc_x[idx.height_index]);
+            args.insert(args.end(), ctx.remote_noc_y.begin(), ctx.remote_noc_y.end());
         }
     }
+    append_mcast_runtime_args(args, core, ctx);
     return args;
 }
 
-std::vector<uint32_t> build_reader_receiver_not_all_to_all_args(const CoreIndices& idx, const RuntimeArgsContext& ctx) {
+std::vector<uint32_t> build_reader_receiver_not_all_to_all_args(const CoreCoord& core, const RuntimeArgsContext& ctx) {
     std::vector<uint32_t> args;
-    args.reserve(7);
-    args.push_back(false);  // is_last_all_to_all_worker
-    args.push_back(idx.all_to_all_worker_tile_offset_bytes);
-    args.push_back(0);  // is_second_stage_reader
-    args.push_back(0);
-    args.push_back(0);
-
-    if (ctx.grid.mcast_1d) {
-        args.push_back(ctx.mcast_noc_x[0]);
-        args.push_back(ctx.mcast_noc_y[0]);
-    } else {
-        if (ctx.grid.row_wise) {
-            args.push_back(ctx.mcast_noc_x[0]);
-            args.push_back(ctx.mcast_noc_y[idx.height_index]);
-        } else {
-            args.push_back(ctx.mcast_noc_x[idx.height_index]);
-            args.push_back(ctx.mcast_noc_y[0]);
-        }
-    }
+    append_mcast_runtime_args(args, core, ctx);
     return args;
 }
 
@@ -1701,8 +1755,7 @@ std::vector<uint32_t> build_writer_args(
     return args;
 }
 
-RuntimeArgsResult RuntimeArgsResult::build(
-    const std::vector<CoreCoord>& cores, RuntimeArgsContext& ctx, IDevice* device) {
+RuntimeArgsResult RuntimeArgsResult::build(const std::vector<CoreCoord>& cores, RuntimeArgsContext& ctx) {
     RuntimeArgsResult result;
 
     uint32_t current_storage_core = 0;
@@ -1723,13 +1776,13 @@ RuntimeArgsResult RuntimeArgsResult::build(
 
         // Reader runtime args
         if (idx.width_index == 0) {
-            auto reader_args = build_reader_sender_args(core, idx, ctx, device);
+            auto reader_args = build_reader_sender_args(core, idx, ctx);
             result.reader_sender.emplace_back(core, reader_args);
         } else if (is_all_to_all) {
             auto reader_args = build_reader_receiver_all_to_all_args(core, idx, ctx);
             result.reader_receiver_all_to_all.emplace_back(core, reader_args);
         } else {
-            auto reader_args = build_reader_receiver_not_all_to_all_args(idx, ctx);
+            auto reader_args = build_reader_receiver_not_all_to_all_args(core, ctx);
             result.reader_receiver.emplace_back(core, reader_args);
         }
 

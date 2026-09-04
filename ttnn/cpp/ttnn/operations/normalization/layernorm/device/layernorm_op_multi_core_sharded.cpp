@@ -224,27 +224,6 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
     // Build ProgramDescriptor
     ProgramDescriptor program_descriptor;
 
-    // Create semaphore descriptors
-    uint32_t reduce_sender_semaphore_id = 0;
-    uint32_t reduce_receiver_semaphore_id = 1;
-    uint32_t reduce_second_stage_semaphore_id = 2;
-
-    program_descriptor.semaphores.push_back(SemaphoreDescriptor{
-        .id = reduce_sender_semaphore_id,
-        .core_type = tt::CoreType::WORKER,
-        .core_ranges = core_ranges.mcast_dest_cores,
-        .initial_value = 0});
-    program_descriptor.semaphores.push_back(SemaphoreDescriptor{
-        .id = reduce_receiver_semaphore_id,
-        .core_type = tt::CoreType::WORKER,
-        .core_ranges = core_ranges.mcast_dest_cores,
-        .initial_value = 0});
-    program_descriptor.semaphores.push_back(SemaphoreDescriptor{
-        .id = reduce_second_stage_semaphore_id,
-        .core_type = tt::CoreType::WORKER,
-        .core_ranges = core_ranges.mcast_dest_cores,
-        .initial_value = 0});
-
     // Get kernel defines using helper
     auto kernel_defines = KernelDefines::build(
         b.has_value(),
@@ -269,14 +248,64 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
         writer_noc = NOC::NOC_1;
     }
 
+    // Synchronization configuration: reduction_ready_mcast broadcasts local-statistics readiness.
+    // all_to_all_worker_done_semaphore_id collects completed all-to-all reductions.
+    // first_stage_reduce_done_semaphore_id coordinates the optional second-stage reduction.
+    // final_statistics_mcast broadcasts the completed global statistics.
+    const bool is_plain_sharded = !is_pre_all_gather && !is_post_all_gather;
+    const bool reduction_ready_enabled =
+        !is_post_all_gather && (is_pre_all_gather ? grid.shard_spec.grid.num_cores() > 1 : grid.use_mcast);
+    auto reduction_ready_mcast = create_reduction_ready_mcast(
+        device,
+        is_pre_all_gather ? grid.shard_spec.grid : core_ranges.bounding_box_cores,
+        core_ranges.start_core,
+        reduction_ready_enabled,
+        is_pre_all_gather ? grid.use_two_stage_reduce : !grid.mcast_1d,
+        grid.row_wise,
+        reader_noc,
+        program_descriptor.semaphores);
+
+    uint32_t all_to_all_worker_done_semaphore_id = 0;
+    if (reduction_ready_mcast.has_value()) {
+        all_to_all_worker_done_semaphore_id =
+            std::visit([](const auto& mcast) { return mcast.next_base_sem_id(); }, *reduction_ready_mcast);
+        program_descriptor.semaphores.push_back(SemaphoreDescriptor{
+            .id = all_to_all_worker_done_semaphore_id,
+            .core_type = tt::CoreType::WORKER,
+            .core_ranges = core_ranges.bounding_box_cores,
+            .initial_value = 0});
+    }
+    uint32_t first_stage_reduce_done_semaphore_id = 0;
+    if (!is_post_all_gather && grid.use_two_stage_reduce) {
+        first_stage_reduce_done_semaphore_id = static_cast<uint32_t>(program_descriptor.semaphores.size());
+        program_descriptor.semaphores.push_back(SemaphoreDescriptor{
+            .id = first_stage_reduce_done_semaphore_id,
+            .core_type = tt::CoreType::WORKER,
+            .core_ranges = core_ranges.bounding_box_cores,
+            .initial_value = 0});
+    }
+
+    auto final_statistics_mcast = create_final_statistics_mcast(
+        device,
+        core_ranges.bounding_box_cores,
+        core_ranges.start_core,
+        is_post_all_gather || (is_plain_sharded && grid.use_mcast),
+        !grid.mcast_1d,
+        grid.row_wise,
+        is_post_all_gather ? ttnn::kernel_lib::host::DataReadyMode::Flag
+                           : ttnn::kernel_lib::host::DataReadyMode::Counter,
+        reader_noc,
+        program_descriptor.semaphores);
+
     // Build compile-time args using helper
     CompileTimeArgsContext ct_ctx{
-        .reduce_receiver_semaphore_id = reduce_receiver_semaphore_id,
-        .reduce_sender_semaphore_id = reduce_sender_semaphore_id,
-        .reduce_second_stage_semaphore_id = reduce_second_stage_semaphore_id,
+        .all_to_all_worker_done_semaphore_id = all_to_all_worker_done_semaphore_id,
+        .first_stage_reduce_done_semaphore_id = first_stage_reduce_done_semaphore_id,
         .grid = &grid,
         .workers = &workers,
         .core_ranges = &core_ranges,
+        .reduction_ready_mcast = reduction_ready_mcast,
+        .final_statistics_mcast = final_statistics_mcast,
         .block_ht = block_ht,
         .block_wt = block_wt,
         .subblock_wt = subblock_wt,
@@ -292,6 +321,8 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .legacy_reduction = legacy_reduction,
         .legacy_rsqrt = legacy_rsqrt,
+        .is_pre_all_gather = is_pre_all_gather,
+        .is_post_all_gather = is_post_all_gather,
         .gamma_cb_data_format = gamma_cb_data_format,
         .beta_cb_data_format = beta_cb_data_format,
         .gamma_buffer = gamma.has_value() ? gamma.value().buffer() : nullptr,
@@ -345,16 +376,16 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
     auto bfloat_cinv_one = bfloat16(1.0f);
     auto bfloat_winv = bfloat16(winv);
 
-    // Build mcast NOC coordinates
-    std::vector<uint32_t> mcast_noc_x, mcast_noc_y;
-    mcast_noc_x.reserve(grid.grid_size.x);
-    mcast_noc_y.reserve(grid.grid_size.y);
+    // Build NOC coordinate tables for the explicit all-to-all exchange.
+    std::vector<uint32_t> remote_noc_x, remote_noc_y;
+    remote_noc_x.reserve(grid.grid_size.x);
+    remote_noc_y.reserve(grid.grid_size.y);
     CoreCoord core_start_offset = grid.grid_offset.value_or(CoreCoord{0, 0});
     for (uint32_t x = core_start_offset.x; x < grid.grid_size.x + core_start_offset.x; ++x) {
-        mcast_noc_x.push_back(device->worker_core_from_logical_core({x, core_start_offset.y}).x);
+        remote_noc_x.push_back(device->worker_core_from_logical_core({x, core_start_offset.y}).x);
     }
     for (uint32_t y = core_start_offset.y; y < grid.grid_size.y + core_start_offset.y; ++y) {
-        mcast_noc_y.push_back(device->worker_core_from_logical_core({core_start_offset.x, y}).y);
+        remote_noc_y.push_back(device->worker_core_from_logical_core({core_start_offset.x, y}).y);
     }
 
     // A non-tile-aligned width split across multiple cores is supported on every path. The non-Welford
@@ -377,8 +408,10 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
         .grid = grid,
         .workers = workers,
         .core_ranges = core_ranges,
-        .mcast_noc_x = std::move(mcast_noc_x),
-        .mcast_noc_y = std::move(mcast_noc_y),
+        .reduction_ready_mcast = reduction_ready_mcast,
+        .final_statistics_mcast = final_statistics_mcast,
+        .remote_noc_x = std::move(remote_noc_x),
+        .remote_noc_y = std::move(remote_noc_y),
         .packed_cinv_value = pack_two_bfloat16_into_uint32({bfloat_cinv, bfloat_cinv}),
         .packed_cinv_value_one = pack_two_bfloat16_into_uint32({bfloat_cinv_one, bfloat_cinv_one}),
         .packed_winv_value = pack_two_bfloat16_into_uint32({bfloat_winv, bfloat_winv}),
@@ -392,14 +425,14 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
         .Kt = Kt,
         .logical_K = logical_K,
         .last_core_width_index = last_core_width_index,
+        .is_pre_all_gather = is_pre_all_gather,
         .is_post_all_gather = is_post_all_gather,
         .num_distributed_devices = num_distributed_devices,
-        .reader_noc = reader_noc,
         .storage_core_noc_x = std::move(storage_core_noc_x),
         .storage_core_noc_y = std::move(storage_core_noc_y),
         .num_storage_cores = (uint32_t)all_storage_cores.num_cores()};
 
-    auto runtime_args = RuntimeArgsResult::build(cores, rt_ctx, device);
+    auto runtime_args = RuntimeArgsResult::build(cores, rt_ctx);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Build Kernel Descriptors

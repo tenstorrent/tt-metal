@@ -9,6 +9,7 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
 
 struct RemoteCoord {
     uint32_t x;
@@ -17,31 +18,32 @@ struct RemoteCoord {
 
 // split REDUCE across cores
 void kernel_main() {
-    constexpr uint32_t num_blocks = get_compile_time_arg_val(2);
-    constexpr uint32_t block_h = get_compile_time_arg_val(3);
-    constexpr uint32_t block_h_size_bytes = get_compile_time_arg_val(4);
-    constexpr uint32_t num_all_to_all_workers_first_stage = get_compile_time_arg_val(5);
-    constexpr uint32_t num_tiles_per_worker = get_compile_time_arg_val(6);
-    constexpr uint32_t num_tiles_per_worker_bytes = get_compile_time_arg_val(7);
-    constexpr uint32_t num_tiles_per_worker_last = get_compile_time_arg_val(8);
-    constexpr uint32_t num_tiles_per_worker_last_bytes = get_compile_time_arg_val(9);
-    constexpr bool row_major = (bool)get_compile_time_arg_val(10);
-    constexpr uint32_t num_x = get_compile_time_arg_val(11);
-    constexpr uint32_t num_y = get_compile_time_arg_val(12);
-    constexpr bool use_two_stage_reduce = (bool)get_compile_time_arg_val(13);
-    constexpr uint32_t num_blocks_first_stage = get_compile_time_arg_val(14);
-    constexpr uint32_t num_blocks_second_stage = get_compile_time_arg_val(15);
-    constexpr bool rms_norm = get_compile_time_arg_val(17) == 1;
+    constexpr uint32_t num_blocks = get_compile_time_arg_val(1);
+    constexpr uint32_t block_h = get_compile_time_arg_val(2);
+    constexpr uint32_t block_h_size_bytes = get_compile_time_arg_val(3);
+    constexpr uint32_t num_all_to_all_workers_first_stage = get_compile_time_arg_val(4);
+    constexpr uint32_t num_tiles_per_worker = get_compile_time_arg_val(5);
+    constexpr uint32_t num_tiles_per_worker_bytes = get_compile_time_arg_val(6);
+    constexpr uint32_t num_tiles_per_worker_last = get_compile_time_arg_val(7);
+    constexpr uint32_t num_tiles_per_worker_last_bytes = get_compile_time_arg_val(8);
+    constexpr bool row_major = (bool)get_compile_time_arg_val(9);
+    constexpr uint32_t num_x = get_compile_time_arg_val(10);
+    constexpr uint32_t num_y = get_compile_time_arg_val(11);
+    constexpr bool use_two_stage_reduce = (bool)get_compile_time_arg_val(12);
+    constexpr uint32_t num_blocks_first_stage = get_compile_time_arg_val(13);
+    constexpr uint32_t num_blocks_second_stage = get_compile_time_arg_val(14);
+    constexpr uint32_t first_stage_reduce_done_semaphore_id = get_compile_time_arg_val(15);
+    constexpr bool rms_norm = get_compile_time_arg_val(16) == 1;
 
-    const uint32_t mcast_dest_noc_start_x = get_arg_val<uint32_t>(0);
-    const uint32_t mcast_dest_noc_start_y = get_arg_val<uint32_t>(1);
-    const uint32_t mcast_dest_noc_end_x = get_arg_val<uint32_t>(2);
-    const uint32_t mcast_dest_noc_end_y = get_arg_val<uint32_t>(3);
-    const uint32_t start_x = get_arg_val<uint32_t>(4);
-    const uint32_t start_y = get_arg_val<uint32_t>(5);
+    const uint32_t start_x = get_arg_val<uint32_t>(0);
+    const uint32_t start_y = get_arg_val<uint32_t>(1);
 
-    tt_l1_ptr uint32_t* in0_remote_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(6));
-    tt_l1_ptr uint32_t* in0_remote_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(6 + num_x));
+    tt_l1_ptr uint32_t* remote_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(2));
+    tt_l1_ptr uint32_t* remote_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(2 + num_x));
+
+    constexpr uint32_t operation_ct_args_end = 18;
+    constexpr uint32_t operation_rt_args_end = 2 + num_x + num_y;
+    constexpr dataflow_kernel_lib::McastArgs<operation_ct_args_end, operation_rt_args_end> reduce_mcast_args;
 
     constexpr uint32_t dfb_ex_partial2 = tt::CBIndex::c_11;
     constexpr uint32_t dfb_ex2 = tt::CBIndex::c_12;
@@ -49,10 +51,9 @@ void kernel_main() {
     constexpr uint32_t dfb_ex2_global = tt::CBIndex::c_14;
 
     Noc noc;
-    Semaphore<> reduce_receiver_sem(get_compile_time_arg_val(0));
-    Semaphore<> reduce_sender_sem(get_compile_time_arg_val(1));
-    Semaphore<> reduce_second_stage_sem(get_compile_time_arg_val(16));
+    Semaphore<> first_stage_reduce_done_sem(first_stage_reduce_done_semaphore_id);
     UnicastEndpoint remote_ep;
+    auto reduce_pipe = reduce_mcast_args.optional_sender(noc);
 
     DataflowBuffer dfb_ex_partial2_obj(dfb_ex_partial2);
     const uint32_t single_tile_size_bytes = dfb_ex_partial2_obj.get_tile_size();
@@ -60,7 +61,7 @@ void kernel_main() {
     RemoteCoord remote_coords[num_blocks];
     uint32_t x = start_x, y = start_y;
     for (uint32_t i = 0; i < num_blocks; ++i) {
-        remote_coords[i] = {in0_remote_noc_x[x], in0_remote_noc_y[y]};
+        remote_coords[i] = {remote_noc_x[x], remote_noc_y[y]};
         if constexpr (row_major) {
             ++x;
             if (x == num_x) {
@@ -100,16 +101,7 @@ void kernel_main() {
 
                 // inc semaphore of other cores, tell other all-to-all workers to start
                 if constexpr (num_blocks > 1) {
-                    reduce_sender_sem.set(VALID);
-                    reduce_receiver_sem.wait(num_blocks - 1);
-                    reduce_receiver_sem.set(0);
-                    reduce_sender_sem.set_multicast(
-                        noc,
-                        mcast_dest_noc_start_x,
-                        mcast_dest_noc_start_y,
-                        mcast_dest_noc_end_x,
-                        mcast_dest_noc_end_y,
-                        num_blocks - 1);
+                    reduce_pipe->send_signal();
                 }
 
                 // read data from other cores
@@ -148,8 +140,8 @@ void kernel_main() {
                     // sync with second-stage all-to-all workers
                     if constexpr (use_two_stage_reduce) {
                         if (i == 0) {
-                            reduce_second_stage_sem.wait(num_blocks_second_stage - 1);
-                            reduce_second_stage_sem.set(0);
+                            first_stage_reduce_done_sem.wait(num_blocks_second_stage - 1);
+                            first_stage_reduce_done_sem.set(0);
                         }
 
                         uint32_t curr_block_index = block_index_stride;

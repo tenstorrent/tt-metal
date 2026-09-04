@@ -8,6 +8,7 @@
 #include <optional>
 #include <string>
 #include <tuple>
+#include <variant>
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
@@ -15,6 +16,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/host/mcast_host.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 
 namespace ttnn::prim::sharded_layernorm_helpers {
@@ -81,11 +83,10 @@ struct CoreRanges {
     CoreRangeSet all_to_all_cores;
     CoreRangeSet all_to_all_workers_except_sender;
     CoreRangeSet not_all_to_all_workers;
-    CoreRangeSet mcast_dest_cores;
+    CoreRangeSet bounding_box_cores;
     CoreRangeSet inactive_cores;
-    uint32_t num_mcast_dests = 0;
-    uint32_t num_cores_x_mcast = 0;
-    uint32_t num_cores_y_mcast = 0;
+    uint32_t num_cores_x = 0;
+    uint32_t num_cores_y = 0;
 
     static CoreRanges compute(const GridParams& grid, const WorkerDistribution& workers);
 };
@@ -111,6 +112,31 @@ struct KernelLayout {
     static KernelLayout compute(
         const GridParams& grid, const WorkerDistribution& workers, const CoreRanges& core_ranges);
 };
+
+using LayerNormMcast = std::variant<ttnn::kernel_lib::host::Mcast1D, ttnn::kernel_lib::host::Mcast2D>;
+
+// Creates the signal-only, handshaked multicast used when local reduction statistics become ready.
+std::optional<LayerNormMcast> create_reduction_ready_mcast(
+    IDevice* device,
+    const CoreRangeSet& grid,
+    CoreCoord global_sender,
+    bool enabled,
+    bool per_line,
+    bool row_wise,
+    NOC noc,
+    ProgramDescriptor::SemaphoreDescriptors& semaphores);
+
+// Creates the multicast used to distribute final reduced statistics.
+std::optional<LayerNormMcast> create_final_statistics_mcast(
+    IDevice* device,
+    const CoreRangeSet& grid,
+    CoreCoord global_sender,
+    bool enabled,
+    bool per_line,
+    bool row_wise,
+    ttnn::kernel_lib::host::DataReadyMode data_ready,
+    NOC noc,
+    ProgramDescriptor::SemaphoreDescriptors& semaphores);
 
 //////////////////////////////////////////////////////////////////////////////
 // Kernel paths, defines, and compile-time args helpers
@@ -197,14 +223,15 @@ struct CBSizeParams {
 // Context needed to build compile-time args for all kernels
 struct CompileTimeArgsContext {
     // Semaphore IDs
-    uint32_t reduce_receiver_semaphore_id = 0;
-    uint32_t reduce_sender_semaphore_id = 0;
-    uint32_t reduce_second_stage_semaphore_id = 0;
+    uint32_t all_to_all_worker_done_semaphore_id = 0;
+    uint32_t first_stage_reduce_done_semaphore_id = 0;
 
     // Grid and worker params
     const GridParams* grid = nullptr;
     const WorkerDistribution* workers = nullptr;
     const CoreRanges* core_ranges = nullptr;
+    const std::optional<LayerNormMcast>& reduction_ready_mcast;
+    const std::optional<LayerNormMcast>& final_statistics_mcast;
 
     // Block dimensions
     uint32_t block_ht = 0;
@@ -226,6 +253,8 @@ struct CompileTimeArgsContext {
     bool fp32_dest_acc_en = false;
     bool legacy_reduction = false;
     bool legacy_rsqrt = false;
+    bool is_pre_all_gather = false;
+    bool is_post_all_gather = false;
 
     // Data formats
     tt::DataFormat gamma_cb_data_format = tt::DataFormat::Float16_b;
@@ -427,10 +456,12 @@ struct RuntimeArgsContext {
     const GridParams& grid;
     const WorkerDistribution& workers;
     const CoreRanges& core_ranges;
+    const std::optional<LayerNormMcast>& reduction_ready_mcast;
+    const std::optional<LayerNormMcast>& final_statistics_mcast;
 
-    // NOC coordinates for multicast
-    std::vector<uint32_t> mcast_noc_x;
-    std::vector<uint32_t> mcast_noc_y;
+    // Worker NoC coordinates used by the explicit all-to-all exchange.
+    std::vector<uint32_t> remote_noc_x;
+    std::vector<uint32_t> remote_noc_y;
 
     // Packed values for writer
     uint32_t packed_cinv_value = 0;
@@ -452,9 +483,9 @@ struct RuntimeArgsContext {
     uint32_t last_core_width_index = 0;
 
     // Flags
+    bool is_pre_all_gather = false;
     bool is_post_all_gather = false;
     uint32_t num_distributed_devices = 1;
-    tt::tt_metal::NOC reader_noc = tt::tt_metal::NOC::NOC_0;
 
     // Storage core info for write-back
     std::vector<uint32_t> storage_core_noc_x;
@@ -493,7 +524,7 @@ struct RuntimeArgsResult {
     KernelDescriptor::RuntimeArgs compute_all_to_all;
     KernelDescriptor::RuntimeArgs compute_not_all_to_all;
 
-    static RuntimeArgsResult build(const std::vector<CoreCoord>& cores, RuntimeArgsContext& ctx, IDevice* device);
+    static RuntimeArgsResult build(const std::vector<CoreCoord>& cores, RuntimeArgsContext& ctx);
 };
 
 }  // namespace ttnn::prim::sharded_layernorm_helpers

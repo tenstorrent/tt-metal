@@ -8,6 +8,7 @@
 #include "layernorm_dataflow_utils.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
 
 namespace df = norm::layernorm::device::kernels::dataflow;
 
@@ -38,36 +39,32 @@ void kernel_main() {
     // ---------------------------------------------------------------------------
     // Compile-time arguments
     // ---------------------------------------------------------------------------
-    constexpr uint32_t num_blocks = get_compile_time_arg_val(2);
-    constexpr uint32_t block_h = get_compile_time_arg_val(3);
-    constexpr uint32_t block_h_size_bytes = get_compile_time_arg_val(4);
-    constexpr uint32_t num_all_to_all_workers_first_stage = get_compile_time_arg_val(5);
-    constexpr uint32_t num_tiles_per_worker = get_compile_time_arg_val(6);
-    constexpr uint32_t num_tiles_per_worker_bytes = get_compile_time_arg_val(7);
-    constexpr uint32_t num_tiles_per_worker_last = get_compile_time_arg_val(8);
-    constexpr uint32_t num_tiles_per_worker_last_bytes = get_compile_time_arg_val(9);
-    constexpr bool row_major = (bool)get_compile_time_arg_val(10);
-    constexpr uint32_t num_x = get_compile_time_arg_val(11);
-    constexpr uint32_t num_y = get_compile_time_arg_val(12);
-    constexpr bool use_two_stage_reduce = (bool)get_compile_time_arg_val(13);
-    constexpr uint32_t num_blocks_first_stage = get_compile_time_arg_val(14);
-    constexpr uint32_t num_blocks_second_stage = get_compile_time_arg_val(15);
-    constexpr bool rms_norm = get_compile_time_arg_val(17) == 1;
-    constexpr bool use_welford = get_compile_time_arg_val(18) == 1;
-    constexpr uint32_t num_mcast_dests = get_compile_time_arg_val(19);
-
+    constexpr uint32_t all_to_all_worker_done_semaphore_id = get_compile_time_arg_val(0);
+    constexpr uint32_t num_blocks = get_compile_time_arg_val(1);
+    constexpr uint32_t block_h = get_compile_time_arg_val(2);
+    constexpr uint32_t block_h_size_bytes = get_compile_time_arg_val(3);
+    constexpr uint32_t num_all_to_all_workers_first_stage = get_compile_time_arg_val(4);
+    constexpr uint32_t num_tiles_per_worker = get_compile_time_arg_val(5);
+    constexpr uint32_t num_tiles_per_worker_bytes = get_compile_time_arg_val(6);
+    constexpr uint32_t num_tiles_per_worker_last = get_compile_time_arg_val(7);
+    constexpr uint32_t num_tiles_per_worker_last_bytes = get_compile_time_arg_val(8);
+    constexpr bool row_major = (bool)get_compile_time_arg_val(9);
+    constexpr uint32_t num_x = get_compile_time_arg_val(10);
+    constexpr uint32_t num_y = get_compile_time_arg_val(11);
+    constexpr bool use_two_stage_reduce = (bool)get_compile_time_arg_val(12);
+    constexpr uint32_t num_blocks_first_stage = get_compile_time_arg_val(13);
+    constexpr uint32_t num_blocks_second_stage = get_compile_time_arg_val(14);
+    constexpr uint32_t first_stage_reduce_done_semaphore_id = get_compile_time_arg_val(15);
+    constexpr bool rms_norm = get_compile_time_arg_val(16) == 1;
+    constexpr bool use_welford = get_compile_time_arg_val(17) == 1;
     // ---------------------------------------------------------------------------
     // Runtime arguments
     // ---------------------------------------------------------------------------
-    const uint32_t mcast_dest_noc_start_x = get_arg_val<uint32_t>(0);
-    const uint32_t mcast_dest_noc_start_y = get_arg_val<uint32_t>(1);
-    const uint32_t mcast_dest_noc_end_x = get_arg_val<uint32_t>(2);
-    const uint32_t mcast_dest_noc_end_y = get_arg_val<uint32_t>(3);
-    const uint32_t start_x = get_arg_val<uint32_t>(4);
-    const uint32_t start_y = get_arg_val<uint32_t>(5);
+    const uint32_t start_x = get_arg_val<uint32_t>(0);
+    const uint32_t start_y = get_arg_val<uint32_t>(1);
 
-    df::L1Ptr in0_remote_noc_x = (df::L1Ptr)(get_arg_addr(6));
-    df::L1Ptr in0_remote_noc_y = (df::L1Ptr)(get_arg_addr(6 + num_x));
+    df::L1Ptr remote_noc_x = (df::L1Ptr)(get_arg_addr(2));
+    df::L1Ptr remote_noc_y = (df::L1Ptr)(get_arg_addr(2 + num_x));
 
     // ---------------------------------------------------------------------------
     // CB definitions
@@ -84,12 +81,20 @@ void kernel_main() {
     // ---------------------------------------------------------------------------
     // Set up experimental API objects
     // ---------------------------------------------------------------------------
+    constexpr uint32_t operation_ct_args_end = 18;
+    constexpr uint32_t operation_rt_args_end = 2 + num_x + num_y;
+    constexpr dataflow_kernel_lib::McastArgs<operation_ct_args_end, operation_rt_args_end> reduction_ready_mcast_args;
+
     Noc noc;
-    Semaphore<> reduce_receiver_sem(get_compile_time_arg_val(0));
-    Semaphore<> reduce_sender_sem(get_compile_time_arg_val(1));
-    Semaphore<> reduce_second_stage_sem(get_compile_time_arg_val(16));
+    Semaphore<> all_to_all_worker_done_sem(all_to_all_worker_done_semaphore_id);
+    Semaphore<> first_stage_reduce_done_sem(first_stage_reduce_done_semaphore_id);
     UnicastEndpoint remote_ep;
-    MulticastEndpoint mcast_ep;
+    auto reduction_ready_pipe = reduction_ready_mcast_args.optional_sender(noc);
+    constexpr dataflow_kernel_lib::McastArgs<
+        reduction_ready_mcast_args.next_compile_time_args_offset(),
+        reduction_ready_mcast_args.next_runtime_args_offset()>
+        final_statistics_mcast_args;
+    auto final_statistics_pipe = final_statistics_mcast_args.optional_sender(noc);
 
     // RMSNorm only allocates cb_ex_partial2; the host skips cb_ex_partial.
     DataflowBuffer dfb_partial_size_ref(rms_norm ? dfb_ex_partial2 : dfb_ex_partial);
@@ -98,7 +103,7 @@ void kernel_main() {
     // Compute the NOC coordinates for remote cores that interact with this core
     df::RemoteNocCoords<num_blocks> remote_coords{};
     df::compute_single_stage_noc_addrs<row_major, num_blocks>(
-        remote_coords, in0_remote_noc_x, in0_remote_noc_y, start_x, start_y, num_x, num_y);
+        remote_coords, remote_noc_x, remote_noc_y, start_x, start_y, num_x, num_y);
 
     // ============================================================================
     // Main kernel worker function
@@ -125,16 +130,7 @@ void kernel_main() {
         dfb_partial_obj.wait_front(block_h * num_tiles_scaler);
 
         if constexpr (num_blocks > 1) {
-            reduce_sender_sem.set(VALID);
-            reduce_receiver_sem.wait(num_blocks - 1);
-            reduce_receiver_sem.set(0);
-            reduce_sender_sem.set_multicast(
-                noc,
-                mcast_dest_noc_start_x,
-                mcast_dest_noc_start_y,
-                mcast_dest_noc_end_x,
-                mcast_dest_noc_end_y,
-                num_mcast_dests);
+            reduction_ready_pipe->send_signal();
         }
 
         // ============================================================================
@@ -183,8 +179,8 @@ void kernel_main() {
             // ---------------------------------------------------------------------------
             if constexpr (use_two_stage_reduce) {
                 if (i == 0) {
-                    reduce_second_stage_sem.wait(num_blocks_second_stage - 1);
-                    reduce_second_stage_sem.set(0);
+                    first_stage_reduce_done_sem.wait(num_blocks_second_stage - 1);
+                    first_stage_reduce_done_sem.set(0);
                 }
 
                 uint32_t curr_block_index = block_index_stride;
@@ -216,8 +212,8 @@ void kernel_main() {
         dfb_partial_obj.pop_front(block_h * num_tiles_scaler);
 
         if constexpr (num_all_to_all_workers_first_stage > 1) {
-            reduce_receiver_sem.wait(num_all_to_all_workers_first_stage - 1);
-            reduce_receiver_sem.set(0);
+            all_to_all_worker_done_sem.wait(num_all_to_all_workers_first_stage - 1);
+            all_to_all_worker_done_sem.set(0);
         }
 
         // ============================================================================
@@ -256,36 +252,18 @@ void kernel_main() {
         uint32_t l1_read_addr_ex_global = dfb_ex_global_obj.get_read_ptr();
         dfb_ex_global_obj.push_back(block_h * num_tiles_scaler);
         if constexpr (num_blocks > 1) {
-            uint32_t mcast_src_offset = 0;
+            uint32_t statistics_src_offset = 0;
             for (uint32_t block = 0; block < num_all_to_all_workers_first_stage; ++block) {
-                reduce_sender_sem.set(block + 2);
-
                 uint32_t num_tiles_bytes = block == num_all_to_all_workers_first_stage - 1
                                                ? num_tiles_per_worker_last_bytes
                                                : num_tiles_per_worker_bytes;
 
-                noc.async_write_multicast(
-                    dfb_ex_global_obj,
-                    mcast_ep,
-                    num_tiles_scaler * num_tiles_bytes,
-                    num_mcast_dests,
-                    {.offset_bytes = mcast_src_offset},
-                    {.noc_x_start = mcast_dest_noc_start_x,
-                     .noc_y_start = mcast_dest_noc_start_y,
-                     .noc_x_end = mcast_dest_noc_end_x,
-                     .noc_y_end = mcast_dest_noc_end_y,
-                     .addr = l1_read_addr_ex_global + mcast_src_offset},
-                    true);
-                reduce_sender_sem.set_multicast(
-                    noc,
-                    mcast_dest_noc_start_x,
-                    mcast_dest_noc_start_y,
-                    mcast_dest_noc_end_x,
-                    mcast_dest_noc_end_y,
-                    num_mcast_dests);
+                final_statistics_pipe->send(
+                    l1_read_addr_ex_global + statistics_src_offset,
+                    l1_read_addr_ex_global + statistics_src_offset,
+                    num_tiles_scaler * num_tiles_bytes);
 
-                mcast_src_offset += num_tiles_scaler * num_tiles_bytes;
-                noc.async_write_barrier();
+                statistics_src_offset += num_tiles_scaler * num_tiles_bytes;
             }
         }
     };
