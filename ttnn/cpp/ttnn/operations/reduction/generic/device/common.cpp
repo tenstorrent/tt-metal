@@ -89,8 +89,10 @@ void validate_rm_preconditions(
         static_cast<int>(input.memory_config().memory_layout()),
         static_cast<int>(output.memory_config().memory_layout()));
     TT_FATAL(
-        math_op == tt::tt_metal::ReduceOpMath::SUM,
-        "{} RM path only supports SUM (mean lowered from AVG), got {}",
+        math_op == tt::tt_metal::ReduceOpMath::SUM ||
+            (dim == tt::tt_metal::ReduceOpDim::H &&
+             (math_op == tt::tt_metal::ReduceOpMath::MAX || math_op == tt::tt_metal::ReduceOpMath::MIN)),
+        "{} RM path only supports SUM (mean lowered from AVG), or MAX/MIN on the H path, got {}",
         dim_label,
         math_op);
     TT_FATAL(!negate, "{} RM path does not currently support 'negate'", dim_label);

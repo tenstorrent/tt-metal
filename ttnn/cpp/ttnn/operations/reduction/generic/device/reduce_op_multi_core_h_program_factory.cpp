@@ -457,6 +457,9 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
             // {1, Ht} is the un-split reduce.
             {"num_h_slices", tile_h_split ? num_h_slices : 1u},
             {"slice_Ht", tile_h_split ? slice_Ht : Ht},
+            // Identity for the split's past-the-end tiles; unused where the reader never pads.
+            {"padding_identity_bits", plan.padding_identity_bits},
+            {"elem_bytes", plan.src_datum_size},
         };
         reader_rta_names = {"col_start_tile_id", "curr_col_in_batch", "num_cols"};
         // Pass DEST config so reader can compute DEST_AUTO_LIMIT

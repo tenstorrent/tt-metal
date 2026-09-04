@@ -12,6 +12,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
+#include "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/reduce_rm_dataflow_common.hpp"
 
 void kernel_main() {
     // Start id in column major order. This should be the start of a column.
@@ -31,6 +32,9 @@ void kernel_main() {
     // {1, Ht} is the un-split reduce.
     constexpr auto num_h_slices = get_arg(args::num_h_slices);
     constexpr auto slice_Ht = get_arg(args::slice_Ht);
+    // Reduction identity for the split's past-the-end tiles: 0 for SUM, -inf for MAX, +inf for MIN.
+    constexpr auto padding_identity_bits = get_arg(args::padding_identity_bits);
+    constexpr auto elem_bytes = get_arg(args::elem_bytes);
 
     // Welford must process one column at a time because the SFPU can only maintain
     // a single running mean/M2 state. DEST_AUTO_LIMIT interleaves multiple columns
@@ -81,9 +85,13 @@ void kernel_main() {
                             {.page_id = nc * HtWt + ht * Wt + wt},
                             {.offset_bytes = 0});
                         noc.async_read_barrier();
-                    } else {
-                        // slice_Ht is rounded up; pad past Ht with the SUM identity.
+                    } else if constexpr (padding_identity_bits == 0) {
+                        // slice_Ht is rounded up; pad past Ht with the reduction identity. Zero
+                        // keeps the NoC zero API, which needs no datum size (block-float has none).
                         dataflow_kernel_lib::zero_tile(dfb_in0);
+                    } else {
+                        rm_fill_buffer_with_identity_pattern(
+                            dfb_in0.get_write_ptr(), tile_bytes, elem_bytes, padding_identity_bits);
                     }
                     dfb_in0.push_back(onetile);
                 }

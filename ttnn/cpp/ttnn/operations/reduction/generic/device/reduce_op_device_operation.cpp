@@ -46,17 +46,19 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
         "Block-float output is TILE-only, got output_layout {} with dtype {}",
         operation_attributes.output_layout,
         operation_attributes.output_dtype);
-    // TILE H-axis split stage 1: tiled compute, ROW_MAJOR SUM partials (one row per slice).
+    // TILE H-axis split stage 1: tiled compute, ROW_MAJOR partials (one row per slice).
     // dim must be H: compute_output_specs sizes H from num_h_slices. num_h_slices > 1 is what
-    // makes the factory pick the RM writer.
+    // makes the factory pick the RM writer. MAX/MIN compose over slices the same way SUM does.
     const bool tile_h_split = tensor_args.layout() == Layout::TILE && operation_attributes.num_h_slices > 1 &&
                               operation_attributes.dim == tt::tt_metal::ReduceOpDim::H &&
                               operation_attributes.output_layout == Layout::ROW_MAJOR &&
-                              operation_attributes.math_op == tt::tt_metal::ReduceOpMath::SUM;
+                              (operation_attributes.math_op == tt::tt_metal::ReduceOpMath::SUM ||
+                               operation_attributes.math_op == tt::tt_metal::ReduceOpMath::MAX ||
+                               operation_attributes.math_op == tt::tt_metal::ReduceOpMath::MIN);
     TT_FATAL(
         operation_attributes.num_h_slices == 1 || operation_attributes.row_major_h_dense_path || tile_h_split,
         "num_h_slices > 1 (H-axis split) requires the row-major H dense path, or a TILE H-reduce "
-        "emitting ROW_MAJOR SUM partials (got layout {}, dim {}, output_layout {}, math_op {})",
+        "emitting ROW_MAJOR SUM/MAX/MIN partials (got layout {}, dim {}, output_layout {}, math_op {})",
         tensor_args.layout(),
         operation_attributes.dim,
         operation_attributes.output_layout,
@@ -84,11 +86,14 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
             "{} only supports BFLOAT16 and FLOAT32, got {}",
             path_name,
             tensor_args.dtype());
-        // After dispatcher lowering, only SUM reaches the factory (mean=AVG → SUM + scaler).
-        // MAX/MIN are excluded from the RM path entirely; they take the tilize+tile-reduce path.
+        // After dispatcher lowering, mean arrives as SUM + scaler. MAX/MIN reach the H path only as
+        // the TILE split's stage-2 collapse; the W path has no caller for them.
         TT_FATAL(
-            operation_attributes.math_op == tt::tt_metal::ReduceOpMath::SUM,
-            "{}: math_op must be SUM (mean lowered from AVG), got {}",
+            operation_attributes.math_op == tt::tt_metal::ReduceOpMath::SUM ||
+                (operation_attributes.row_major_h_dense_path &&
+                 (operation_attributes.math_op == tt::tt_metal::ReduceOpMath::MAX ||
+                  operation_attributes.math_op == tt::tt_metal::ReduceOpMath::MIN)),
+            "{}: math_op must be SUM (mean lowered from AVG), or MAX/MIN on the H path, got {}",
             path_name,
             operation_attributes.math_op);
         TT_FATAL(

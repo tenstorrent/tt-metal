@@ -423,6 +423,9 @@ _SUM_METRICS_FP32 = dict(
 _OPS = {
     "mean": (torch.mean, ttnn.mean),
     "sum": (torch.sum, ttnn.sum),
+    # amax/amin, not max/min: torch's max/min return a (values, indices) tuple for a single dim.
+    "max": (torch.amax, ttnn.max),
+    "min": (torch.amin, ttnn.min),
 }
 
 
@@ -751,7 +754,7 @@ def test_rm_reduce_h_axis_split(device, reduce_op, fast_and_approximate_mode, ou
     )
 
 
-@pytest.mark.parametrize("reduce_op", ["mean", "sum"])
+@pytest.mark.parametrize("reduce_op", ["mean", "sum", "max", "min"])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
 @pytest.mark.parametrize("fast_and_approximate_mode", [False, True])
 @pytest.mark.parametrize(
@@ -767,22 +770,36 @@ def test_rm_reduce_h_axis_split(device, reduce_op, fast_and_approximate_mode, ou
         (1, 1, 1064, 256),  # Ht=34, wide Wt=8, near the threshold, non-aligned H
         (2, 3, 1024, 40),  # NC=6, Ht=32 — exactly at the threshold
         (1, 1, 3136, 145),  # non-aligned W → the RM writer's last-tile clamp
+        (1, 1, 9216, 160),  # Ht=288, the fp32 max/min threshold
     ],
 )
 def test_tile_reduce_h_axis_split(device, reduce_op, dtype, fast_and_approximate_mode, output_layout, shape):
     """H reduce on tall TILE input — tiled stage 1, RM stage 2. TILE input defaults to TILE output."""
+    selects = reduce_op in ("max", "min")
     if fast_and_approximate_mode and reduce_op != "mean":
         pytest.skip("fast_and_approximate_mode only affects mean")
+    if selects and output_layout is not None:
+        pytest.skip("output_layout is only supported for sum and mean")
+    if shape[2] > 4096 and not selects and dtype == ttnn.bfloat16:
+        pytest.skip("bf16 accumulation over this many rows exceeds the shared tolerance below")
+    if selects and dtype != ttnn.bfloat16:
+        pytest.skip("max/min take the split on bf16 only; fp32 would tf32-truncate in stage 2")
+    if reduce_op == "min":
+        pytest.skip("min lowers to -MAX(-x) and the split rejects negate")
     torch.manual_seed(0)
     torch_input = torch.rand(shape, dtype=_torch_dtype(dtype))
     torch_ref = _golden(torch_input, reduce_op, dim=-2, keepdim=False)
 
     tt_input = ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
     assert tt_input.layout == ttnn.TILE_LAYOUT
-    tt_input = ttnn.fill_implicit_tile_padding(tt_input, -42.0)
+    # Poison the implicit padding with a value that would win the reduction if it leaked: the input
+    # is torch.rand, so +42 beats every max and -42 beats every min.
+    tt_input = ttnn.fill_implicit_tile_padding(tt_input, 42.0 if reduce_op == "max" else -42.0)
 
     ttnn_op = _OPS[reduce_op][1]
-    op_kwargs = {"dim": -2, "keepdim": False, "output_layout": output_layout}
+    op_kwargs = {"dim": -2, "keepdim": False}
+    if not selects:
+        op_kwargs["output_layout"] = output_layout
     if reduce_op == "mean":
         op_kwargs["fast_and_approximate_mode"] = fast_and_approximate_mode
     tt_output = ttnn_op(tt_input, **op_kwargs)
@@ -790,6 +807,12 @@ def test_tile_reduce_h_axis_split(device, reduce_op, dtype, fast_and_approximate
     # op's natural layout the way they do on the RM path.
     assert tt_output.layout == (output_layout or ttnn.TILE_LAYOUT)
     output = ttnn.to_torch(tt_output)
+
+    if selects:
+        # max/min select an input element rather than accumulating, so the split must reproduce the
+        # un-split result exactly; any drift is a real bug, not tolerance.
+        assert torch.equal(torch_ref, output), f"max/min mismatch: {(torch_ref - output).abs().max()}"
+        return
 
     if dtype == ttnn.float32:
         # Only mean has an accurate fp32 SFPU reduce; the FPU path truncates to TF32, doubling rtol.
