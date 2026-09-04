@@ -403,14 +403,20 @@ def test_layer_norm_with_weight_and_bias_row_major(device, h, w, use_welford):
 
 
 def test_layer_norm_fp32_residual_with_row_major_affine(device):
-    """Row-major affine tensors must select matching reader and compute kernels."""
+    """Row-major affine tensors must select a matching full-precision finaliser."""
     torch.manual_seed(11)
     h, w = 32, 32
-    torch_input = torch.randn((h, w), dtype=torch.float32)
-    torch_residual = torch.randn((h, w), dtype=torch.float32)
+    base = 1_000_000.0
+    torch_input = base + 64.0 * torch.randn((h, w), dtype=torch.float32)
+    torch_residual = base + 64.0 * torch.randn((h, w), dtype=torch.float32)
     torch_weight = torch.randn((w,), dtype=torch.float32)
     torch_bias = torch.randn((w,), dtype=torch.float32)
-    reference = torch.nn.functional.layer_norm(torch_input + torch_residual, [w], torch_weight, torch_bias)
+    reference = torch.nn.functional.layer_norm(
+        torch_input.to(torch.float64) + torch_residual.to(torch.float64),
+        [w],
+        torch_weight.to(torch.float64),
+        torch_bias.to(torch.float64),
+    )
 
     input_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
     residual_tensor = ttnn.from_torch(torch_residual, layout=ttnn.TILE_LAYOUT, device=device)
@@ -433,7 +439,11 @@ def test_layer_norm_fp32_residual_with_row_major_affine(device):
         compute_kernel_config=compute_kernel_config,
     )
 
-    assert_output_accuracy(reference, ttnn.to_torch(output), use_welford=True)
+    actual = ttnn.to_torch(output).to(torch.float64)
+    error = actual - reference
+    assert torch.isfinite(actual).all()
+    assert error.abs().max() < 0.025
+    assert error.abs().mean() < 0.004
 
 
 @pytest.mark.parametrize("h", [24, 32, 2048])

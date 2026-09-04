@@ -50,6 +50,12 @@ void kernel_main() {
     constexpr auto dfb_in = dfb::in;    // input x or a for fused pre-add (x=a+b)
 #ifdef FUSE_PRE_ADD
     constexpr auto dfb_inb = dfb::inb;  // input b for fused pre-add
+#ifdef COMPACT_FP32_PRE_ADD
+    constexpr auto dfb_in_fp32 = dfb::in_fp32;
+    constexpr auto dfb_inb_fp32 = dfb::inb_fp32;
+    DataflowBuffer dfb_in_fp32_obj(dfb_in_fp32);
+    DataflowBuffer dfb_inb_fp32_obj(dfb_inb_fp32);
+#endif
 #endif
     constexpr auto dfb_out = dfb::out;  // output
 #ifdef FUSE_GAMMA
@@ -159,8 +165,6 @@ void kernel_main() {
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
 #ifdef FUSE_PRE_ADD
         // x = in + b
-        add_init(dfb_in, dfb_inb);
-        reconfig_data_format(dfb_in, dfb_inb);
         pack_reconfig_data_format(dfb_x);
         for (auto block : generic::blocks(Wt, blk)) {
             // In/inb come from the reader and need to be
@@ -169,27 +173,53 @@ void kernel_main() {
             // can be handled the same way.
             dfb_in_obj.wait_front(block.full_block_size());
             dfb_inb_obj.wait_front(block.full_block_size());
+            dfb_x_obj.reserve_back(block.full_block_size());
+#ifdef WELFORD_FP32_ALIAS
+            // Must be done in the compute kernel: on the fuse_pre_add path compute is the
+            // producer of dfb_x via the add -> pack sequence below; the reader never writes
+            // dfb_x. Push the alias alongside dfb_x so Welford's wait_front on dfb_x_welford
+            // sees the tiles.
+            dfb_x_welford_obj.reserve_back(block.full_block_size());
+#endif
+#ifdef COMPACT_FP32_PRE_ADD
+            dfb_in_fp32_obj.wait_front(block.full_block_size());
+            dfb_inb_fp32_obj.wait_front(block.full_block_size());
+            copy_init(dfb_in_fp32);
+            for (auto i : block.local()) {
+                tile_regs_acquire();
+                copy_tile(dfb_in_fp32, i, 0);
+                reconfig_data_format_srca(dfb_in_fp32, dfb_inb_fp32);
+                copy_init(dfb_inb_fp32);
+                copy_tile(dfb_inb_fp32, i, 1);
+                add_binary_tile_init();
+                add_binary_tile(0, 1, 0);
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_tile(0, dfb_x);
+                tile_regs_release();
+                reconfig_data_format_srca(dfb_inb_fp32, dfb_in_fp32);
+                copy_init(dfb_in_fp32);
+            }
+            dfb_in_fp32_obj.pop_front(block.full_block_size());
+            dfb_inb_fp32_obj.pop_front(block.full_block_size());
+#else
+            add_init(dfb_in, dfb_inb);
+            reconfig_data_format(dfb_in, dfb_inb);
             tile_regs_acquire();
             for (auto i : block.local()) {
                 add_tiles(dfb_in, dfb_inb, i, i, i);
             }
             tile_regs_commit();
+#endif
             dfb_in_obj.pop_front(block.full_block_size());
             dfb_inb_obj.pop_front(block.full_block_size());
-
-            dfb_x_obj.reserve_back(block.full_block_size());
-#ifdef WELFORD_FP32_ALIAS
-            // Must be done in the compute kernel: on the fuse_pre_add path compute is the
-            // producer of dfb_x via the add_tiles -> pack_tile sequence below; the reader
-            // never writes dfb_x. Push the alias alongside dfb_x so Welford's wait_front on
-            // dfb_x_welford sees the tiles.
-            dfb_x_welford_obj.reserve_back(block.full_block_size());
-#endif
+#ifndef COMPACT_FP32_PRE_ADD
             tile_regs_wait();
             for (auto i : block.local()) {
                 pack_tile(i, dfb_x);
             }
             tile_regs_release();
+#endif
             dfb_x_obj.push_back(block.full_block_size());  // push the sum into the same buffer
 #ifdef WELFORD_FP32_ALIAS
             dfb_x_welford_obj.push_back(block.full_block_size());

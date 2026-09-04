@@ -342,7 +342,11 @@ LayerNormInterleavedPlan LayerNormMultiCoreProgramFactory::select_plan(
             plan.width_block_tiles = std::min(plan.width_block_tiles, without_weights_max);
         }
     }
-    plan.compact_fp32_finalizer = fp32_sfpu_finalizer && !residual.has_value() && !plan.large_tensor;
+    // The large-tensor reader cannot consume row-major affine tensors. Keep fused FP32 calls with
+    // row-major affine parameters on the small kernel and use its retained-input SFPU finaliser.
+    const bool compact_fp32_finalizer_supports_residual = row_major_affine;
+    plan.compact_fp32_finalizer = fp32_sfpu_finalizer && !plan.large_tensor &&
+                                  (!residual.has_value() || compact_fp32_finalizer_supports_residual);
     if (large_tensor_kernel_allowed && fp32_sfpu_finalizer && !plan.compact_fp32_finalizer) {
         plan.large_tensor = true;
     }
@@ -573,6 +577,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
 
     const bool large_tensor_needed = selected_plan.large_tensor;
     const bool compact_fp32_finalizer = selected_plan.compact_fp32_finalizer;
+    const bool compact_fp32_pre_add = compact_fp32_finalizer && b.has_value();
     TT_FATAL(
         !large_tensor_needed || !use_row_major_kernel || input_is_row_major,
         "The LayerNorm large-tensor reader and compute kernel do not support row-major affine tensors with tiled "
@@ -765,10 +770,12 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
             fuse_pre_add ? single_tile_size : in_single_tile_size,
             fuse_pre_add ? interm_data_format : in_data_format);
     }
-    if (fp32_sfpu_finalizer && large_tensor_needed) {
+    if ((fp32_sfpu_finalizer && large_tensor_needed) || compact_fp32_pre_add) {
         add_dfb(IN_FP32, in0_t, in_single_tile_size, in_data_format);
         if (fuse_pre_add) {
             add_dfb(INB_FP32, in1_t, inb_single_tile_size, inb_data_format);
+        }
+        if (fp32_sfpu_finalizer && large_tensor_needed && fuse_pre_add) {
             add_dfb(PRE_ADD_FP32, im6_t, single_tile_size, interm_data_format);
         }
     }
@@ -784,7 +791,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     if (welford_fp32_alias && !fuse_pre_add) {
         input_aliases.push_back(X_WELFORD);
     }
-    if (fp32_sfpu_finalizer && large_tensor_needed) {
+    if ((fp32_sfpu_finalizer && large_tensor_needed) || compact_fp32_pre_add) {
         input_aliases.push_back(IN_FP32);
     }
     if (input_aliases.size() > 1) {
@@ -792,7 +799,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     }
     if (fuse_pre_add) {
         std::vector<m2::DFBSpecName> residual_aliases{INB};
-        if (fp32_sfpu_finalizer && large_tensor_needed) {
+        if ((fp32_sfpu_finalizer && large_tensor_needed) || compact_fp32_pre_add) {
             residual_aliases.push_back(INB_FP32);
         }
         if (residual_aliases.size() > 1) {
@@ -899,6 +906,9 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     if (fp32_sfpu_finalizer && large_tensor_needed) {
         reader.compiler_options.defines.emplace("FP32_SFPU_FINALIZER", "1");
     }
+    if (compact_fp32_pre_add) {
+        reader.compiler_options.defines.emplace("COMPACT_FP32_PRE_ADD", "1");
+    }
     if (fused_pre_add_replay) {
         reader.compiler_options.defines.emplace("FUSED_PRE_ADD_REPLAY", "1");
     }
@@ -925,7 +935,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     if (welford_fp32_alias && !fuse_pre_add) {
         bind_dfb(reader, X_WELFORD, "x_welford", m2::DFBEndpointType::PRODUCER);
     }
-    if (fp32_sfpu_finalizer && large_tensor_needed) {
+    if ((fp32_sfpu_finalizer && large_tensor_needed) || compact_fp32_pre_add) {
         bind_dfb(reader, IN_FP32, "in_fp32", m2::DFBEndpointType::PRODUCER);
         if (fuse_pre_add) {
             bind_dfb(reader, INB_FP32, "inb_fp32", m2::DFBEndpointType::PRODUCER);
@@ -1073,6 +1083,9 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     if (compact_fp32_finalizer) {
         compute.compiler_options.defines.emplace("COMPACT_FP32_FINALIZER", "1");
     }
+    if (compact_fp32_pre_add) {
+        compute.compiler_options.defines.emplace("COMPACT_FP32_PRE_ADD", "1");
+    }
     if (fused_pre_add_replay) {
         compute.compiler_options.defines.emplace("FUSED_PRE_ADD_REPLAY", "1");
     }
@@ -1144,11 +1157,13 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
         bind_self_loop(compute, EX_WELFORD, "ex_welford");
         bind_self_loop(compute, EX2_WELFORD, "ex2_welford");
     }
-    if (fp32_sfpu_finalizer && large_tensor_needed) {
+    if ((fp32_sfpu_finalizer && large_tensor_needed) || compact_fp32_pre_add) {
         bind_dfb(compute, IN_FP32, "in_fp32", m2::DFBEndpointType::CONSUMER);
         if (fuse_pre_add) {
             bind_dfb(compute, INB_FP32, "inb_fp32", m2::DFBEndpointType::CONSUMER);
-            bind_self_loop(compute, PRE_ADD_FP32, "pre_add_fp32");
+            if (fp32_sfpu_finalizer && large_tensor_needed) {
+                bind_self_loop(compute, PRE_ADD_FP32, "pre_add_fp32");
+            }
         }
     }
     if (compact_fp32_finalizer || (fp32_sfpu_finalizer && large_tensor_needed)) {
@@ -1191,10 +1206,12 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
             unpack_to_dest.push_back(EX_WELFORD);
             unpack_to_dest.push_back(EX2_WELFORD);
         }
-        if (fp32_sfpu_finalizer && large_tensor_needed) {
+        if ((fp32_sfpu_finalizer && large_tensor_needed) || compact_fp32_pre_add) {
             unpack_to_dest.push_back(IN_FP32);
             if (fuse_pre_add) {
                 unpack_to_dest.push_back(INB_FP32);
+            }
+            if (fp32_sfpu_finalizer && large_tensor_needed && fuse_pre_add) {
                 unpack_to_dest.push_back(PRE_ADD_FP32);
             }
         }
