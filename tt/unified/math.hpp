@@ -221,6 +221,39 @@ inline void pack_geometry_to(uint32_t dfb_id) {
 #endif
 }
 
+// RECORDING what the kernel-entry init already programmed, without programming it again.
+//
+// compute_init and matmul_init both go through calls that carry the tile descriptors --
+// init_sfpu, and compute_kernel_hw_startup -- so by the time the first pass runs, the
+// hardware already holds that geometry. The memo did not know, so the first pass of a
+// HOMOGENEOUS kernel reprogrammed what was already in place. Measured before this: a flat
+// 0.14us per kernel, which reads as +4.5% on the smallest matmul cell and +0.1% on the
+// largest -- the signature of a one-off rather than per-tile work, and it was this single
+// redundant llk_unpack_hw_configure.
+//
+// These must agree with what those inits actually program, which is why they take the
+// operands in the same order the init passed them: compute_kernel_hw_startup<Reverse>
+// resolves src_a_cb = icb1, src_b_cb = icb0, and init_sfpu programs both sides from `in`.
+// Getting that order wrong would leave the memo describing a state the hardware is not in,
+// which is worse than not memoising at all -- hence no default and no one-argument form.
+inline void unpack_geometry_assume(uint32_t dfb_a, uint32_t dfb_b) {
+#if defined(TT_U_HAVE_DFB_TILE_GEOMETRY)
+    detail::g_unpack_geometry_a = unpack_tile_geometry(dfb_a);
+    detail::g_unpack_geometry_b = unpack_tile_geometry(dfb_b);
+#else
+    (void)dfb_a;
+    (void)dfb_b;
+#endif
+}
+
+inline void pack_geometry_assume(uint32_t dfb_id) {
+#if defined(TT_U_HAVE_PACK_TILE_GEOMETRY)
+    detail::g_pack_geometry = pack_tile_geometry(dfb_id);
+#else
+    (void)dfb_id;
+#endif
+}
+
 inline void pack_to(uint32_t dfb_id) {
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
     if (detail::g_pack_configured == dfb_id) {
@@ -1550,6 +1583,9 @@ void operator/(const A&, const B&) {
 inline void compute_init(uint32_t in_dfb, uint32_t out_dfb) {
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
     ckernel::init_sfpu(in_dfb, out_dfb);
+    // init_sfpu programs BOTH source registers from `in`, and the packer from `out`.
+    unpack_geometry_assume(in_dfb, in_dfb);
+    pack_geometry_assume(out_dfb);
 #else
     (void)in_dfb;
     (void)out_dfb;
@@ -1570,6 +1606,10 @@ inline void matmul_init(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t out_dfb) {
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
     using Geometry = MatmulGeometry<SA, SB, Tr>;
     ckernel::compute_kernel_hw_startup<ckernel::SrcOrder::Reverse>(in0_dfb, in1_dfb, out_dfb);
+    // SrcOrder::Reverse means in1 went to srcA and in0 to srcB, so the memo records them
+    // that way round -- the same order Strategy<FPUFusion>'s own calls use.
+    unpack_geometry_assume(in1_dfb, in0_dfb);
+    pack_geometry_assume(out_dfb);
     ckernel::matmul_block_init(
         in0_dfb, in1_dfb, Geometry::transpose, Geometry::ct_dim, Geometry::rt_dim, Geometry::kt_dim);
 #else
@@ -1851,6 +1891,12 @@ struct Strategy<FPUFusion> {
         // ct_dim apart no matter how the output is cut. Only the extents change. Note that
         // ct_dim serves as B's column count AND as DST's row stride, which is precisely why
         // a partial-width subblock has to be a single row.
+        //
+        // The operands' DESCRIPTORS first, for the reason Strategy<FPUFusion>::run spells
+        // out: matmul_block_init carries the block dimensions and not the tile geometry, so
+        // a matmul that follows a pass which programmed its own geometry reads through that
+        // pass's descriptors. Reversed order, matching matmul's srcA/srcB mapping.
+        unpack_geometry_to(node.in1_dfb, node.in0_dfb);
         ckernel::matmul_block_init(node.in0_dfb, node.in1_dfb, kTranspose, kSub.cols, kSub.rows, G::kt_dim);
 
         // One reserve and one push around the whole block. pack_block advances the
@@ -1958,6 +2004,23 @@ struct Strategy<FPUFusion> {
         // matmul_init still has to run once at kernel entry, for the hardware startup it
         // carries, and that part must NOT be repeated: compute_kernel_hw_startup is MMIO
         // plus a pack-sync init, and calling it a second time mid-kernel hangs the device.
+        //
+        // AND THE OPERANDS' DESCRIPTORS, which the paragraph above was right about and did
+        // not reach. matmul_block_init programs the block dimensions and the formats; the
+        // tile geometry came from matmul_init's compute_kernel_hw_startup at kernel entry
+        // and from nowhere else, so a matmul that follows a pass which programmed its own
+        // geometry -- a bcast, a reduce, an SFPU or FPU expression -- ran against that
+        // pass's tile descriptors and returned garbage. Which is the same "another op's
+        // state" this site already names, one level lower down.
+        //
+        // This is exactly the call matmul_init makes for the unpack side, and it has to be
+        // spelled reversed to match: compute_kernel_hw_startup<SrcOrder::Reverse> resolves
+        // src_a_cb = icb1 and src_b_cb = icb0 and then calls
+        // llk_unpack_hw_configure(src_a_cb, src_b_cb), so in1 is srcA and in0 is srcB. The
+        // two-argument form is required for the same reason -- the one-argument one would
+        // program both source registers from in1's buffer, which is the mistake a mid-body
+        // init_sfpu makes and why that looks like a repair at kt=1 and is not one at kt=4.
+        unpack_geometry_to(node.in1_dfb, node.in0_dfb);
         ckernel::matmul_block_init(node.in0_dfb, node.in1_dfb, kTranspose, kSub.cols, kSub.rows, G::kt_dim);
 
         // Two ways to apply a fused bias, kept side by side only long enough to measure:

@@ -24,26 +24,31 @@
 //                 descriptors beside their formats, and both bodies are exact.
 //
 //   PO_SFPU_MM    an SFPU pass over 32x32 operands, followed by a row-form matmul that
-//                 named its own shapes, breaks the MATMUL. PO_MM_ONLY is the same matmul
-//                 alone and is exact; PO_MM_SFPU runs the two in the other order and both
-//                 are exact.
+//                 named its own shapes, broke the MATMUL -- FIXED. PO_MM_ONLY is the same
+//                 matmul alone and was always exact; PO_MM_SFPU runs the two in the other
+//                 order and was always exact both ways.
 //
 //                 PO_BCAST_MM used to be the control here -- a bcast in front instead of
-//                 the SFPU pass, and exact. It is BROKEN now, and fixing the bcast is what
-//                 broke it: the bcast was harmless only because it programmed nothing.
-//                 So this is not "the SFPU path reprograms and the FPU path does not
-//                 notice" -- any pass that programs operand geometry ahead of a matmul
-//                 breaks it, and the matmul's own restore does not put back what
-//                 matmul_init had.
+//                 the SFPU pass, and exact. Fixing the bcast BROKE it, because the bcast
+//                 was harmless only by virtue of programming nothing, and that is what
+//                 settled the shape of this: not "the SFPU path reprograms and the FPU path
+//                 does not notice", but any pass that programs operand geometry ahead of a
+//                 matmul. Strategy<FPUFusion>::run and ::run_banded now program their
+//                 operands' descriptors at entry, beside the block dimensions they already
+//                 programmed there, and every body is exact at both tile counts.
+//
+//                 That also retires PO_REINIT below as a workaround: there is nothing left
+//                 for a mid-body re-init to repair.
 //
 // This is DISTINCT from the matmul limitation A3 already records. That one is two matmul
 // SHAPES in one body; PO_SFPU_MM has a single matmul, and what precedes it is not a matmul.
 //
-// NOT FIXABLE FROM A KERNEL. `u::compute_init` naming the matmul's own operands, inserted
-// between the two passes, makes PO_SFPU_MM WORSE rather than better (measured through
-// blaze: 0.599 -> 0.396), and matmul_init cannot be run twice -- compute_kernel_hw_startup
-// is MMIO plus a pack-sync init and the second call hangs. PO_REINIT is that attempt, kept
-// so the negative result is in tree rather than in a commit message.
+// IT WAS NOT FIXABLE FROM A KERNEL, which is why the fix is in the library. `u::compute_init`
+// naming the matmul's own operands, inserted between the two passes, made PO_SFPU_MM WORSE
+// rather than better (measured through blaze: 0.599 -> 0.396), and matmul_init cannot be run
+// twice -- compute_kernel_hw_startup is MMIO plus a pack-sync init and the second call hangs.
+// PO_REINIT is that attempt, kept so the negative result is in tree rather than in a commit
+// message.
 //
 // Compile-time args, all named: a dfb_<name> per buffer. No runtime args -- the tensors are
 // bound, so their addresses ride along with the accessors.
