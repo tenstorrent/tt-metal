@@ -13,6 +13,7 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_p
 from models.demos.deepseek_v3_d_p.tests.kda.utils import random_weights
 from models.demos.deepseek_v3_d_p.tt.kda.kda import ttKDA
 from models.demos.deepseek_v3_d_p.tt.kda.weights import load_kda_weights
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.tt_transformers.tt.ccl import TT_CCL
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate, assert_equal
 
@@ -153,7 +154,13 @@ def test_tp_layer_with_nonsquare_state_matches_reference(mesh_device: ttnn.MeshD
     )
     golden_output, golden_state = kda_forward_reference(hidden, state_dict, config)
 
-    layer = ttKDA(mesh_device, config, state_dict, tt_ccl=TT_CCL(mesh_device))
+    layer = ttKDA(
+        mesh_device,
+        config,
+        state_dict,
+        tt_ccl=TT_CCL(mesh_device),
+        topology=per_axis_topology(),
+    )
     initial_state = layer.allocate_state(batch_size=1)
     hidden_tt = ttnn.from_torch(
         hidden,

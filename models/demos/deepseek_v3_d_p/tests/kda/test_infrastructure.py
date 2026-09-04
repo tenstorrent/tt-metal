@@ -11,7 +11,7 @@ import torch
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import kda_state_dict_sha256
-from models.demos.deepseek_v3_d_p.tests.kda.utils import make_small_kda_test_config, random_weights
+from models.demos.deepseek_v3_d_p.tests.kda.utils import LINEAR_TOPOLOGY, make_small_kda_test_config, random_weights
 from models.demos.deepseek_v3_d_p.tt.kda.config import KDAProgramConfig, KDARecurrenceProgramConfig
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights, load_kda_weights
@@ -106,13 +106,21 @@ def test_cached_and_in_memory_layers_match(device: ttnn.Device, tmp_path: Path) 
     cache_prefix = "layer_0.kda"
     KDAWeights.build_ttnn_cache(state_dict, tmp_path, cache_prefix, config, device)
 
-    in_memory_layer = ttKDA(device, config, state_dict)
+    in_memory_layer = ttKDA(device, config, state_dict, topology=LINEAR_TOPOLOGY)
     cached_layer = ttKDA(
         device,
         config,
         weights=KDAWeights.from_cache(tmp_path, cache_prefix, config, device),
+        topology=LINEAR_TOPOLOGY,
     )
-    cache_only_layer = ttKDA(device, config, None, weight_cache_path=tmp_path, layer_idx=0)
+    cache_only_layer = ttKDA(
+        device,
+        config,
+        None,
+        weight_cache_path=tmp_path,
+        layer_idx=0,
+        topology=LINEAR_TOPOLOGY,
+    )
     outputs = {
         "in-memory": _forward(in_memory_layer, hidden, in_memory_layer.allocate_state()),
         "preloaded-cache": _forward(cached_layer, hidden, cached_layer.allocate_state()),
@@ -127,9 +135,16 @@ def test_cached_and_in_memory_layers_match(device: ttnn.Device, tmp_path: Path) 
 def test_program_config_resolution(device: ttnn.Device) -> None:
     config = make_small_kda_test_config()
     program_config = replace(KDAProgramConfig(), qkv_channel_chunk_size=128)
-    layer = ttKDA(device, config, random_weights(config), program_config=program_config)
+    layer = ttKDA(
+        device,
+        config,
+        random_weights(config),
+        program_config=program_config,
+        topology=LINEAR_TOPOLOGY,
+    )
 
     assert layer.qkv_convolution_program_config.channel_chunk_size == 96
+    assert layer.sp_ccl_topology == ttnn.Topology.Linear
     assert layer.tp_ccl_topology == ttnn.Topology.Linear
 
 

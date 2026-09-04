@@ -11,6 +11,7 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
+    LINEAR_TOPOLOGY,
     collect_mesh_accuracy_and_determinism_results,
     make_small_kda_test_config,
     random_weights,
@@ -60,7 +61,7 @@ def test_layer_matches_reference_and_is_deterministic(device: ttnn.Device) -> No
         torch.bfloat16
     )
     golden_output, golden_state = kda_forward_reference(hidden, weights, config)
-    layer = ttKDA(device, config, weights)
+    layer = ttKDA(device, config, weights, topology=LINEAR_TOPOLOGY)
     hidden_tt = _hidden_to_device(hidden, device)
 
     def run() -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
@@ -87,7 +88,7 @@ def test_layer_matches_reference_and_is_deterministic(device: ttnn.Device) -> No
 
 def test_allocate_state_contract(device: ttnn.Device) -> None:
     config = make_small_kda_test_config()
-    layer = ttKDA(device, config, random_weights(config))
+    layer = ttKDA(device, config, random_weights(config), topology=LINEAR_TOPOLOGY)
     first = layer.allocate_state()
     second = layer.allocate_state()
 
@@ -102,7 +103,7 @@ def test_forward_contract(device: ttnn.Device) -> None:
     weights = random_weights(config)
     hidden = torch.randn(1, 64, config.hidden_size, generator=torch.Generator().manual_seed(109)).to(torch.bfloat16)
     golden_output, golden_state = kda_forward_reference(hidden, weights, config)
-    layer = ttKDA(device, config, weights)
+    layer = ttKDA(device, config, weights, topology=LINEAR_TOPOLOGY)
     input_state = layer.allocate_state()
     input_recurrent_before = ttnn.to_torch(input_state.recurrent)
     input_convolution_before = ttnn.to_torch(input_state.convolution)
@@ -145,6 +146,55 @@ def test_forward_contract(device: ttnn.Device) -> None:
 
 
 @pytest.mark.parametrize(
+    "sp_axis,tp_axis,expected_sp,expected_tp",
+    [
+        pytest.param(0, 1, ttnn.Topology.Linear, ttnn.Topology.Ring, id="sp0-tp1"),
+        pytest.param(1, 0, ttnn.Topology.Ring, ttnn.Topology.Linear, id="sp1-tp0"),
+    ],
+)
+def test_layer_selects_topology_by_physical_axis(
+    device: ttnn.Device,
+    sp_axis: int,
+    tp_axis: int,
+    expected_sp: ttnn.Topology,
+    expected_tp: ttnn.Topology,
+) -> None:
+    config = make_small_kda_test_config()
+    layer = ttKDA(
+        device,
+        config,
+        random_weights(config),
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        topology=(ttnn.Topology.Linear, ttnn.Topology.Ring),
+    )
+
+    assert layer.sp_ccl_topology == expected_sp
+    assert layer.tp_ccl_topology == expected_tp
+
+
+def test_layer_requires_topology(device: ttnn.Device, expect_error) -> None:
+    config = make_small_kda_test_config()
+    with expect_error(TypeError, "topology"):
+        ttKDA(device, config, random_weights(config))
+
+
+@pytest.mark.parametrize(
+    "topology",
+    [
+        pytest.param(ttnn.Topology.Linear, id="scalar"),
+        pytest.param((ttnn.Topology.Linear,), id="short-tuple"),
+        pytest.param((ttnn.Topology.Linear, ttnn.Topology.Linear, ttnn.Topology.Linear), id="long-tuple"),
+        pytest.param((ttnn.Topology.Linear, "Ring"), id="invalid-member"),
+    ],
+)
+def test_layer_rejects_malformed_topology(topology: object, device: ttnn.Device, expect_error) -> None:
+    config = make_small_kda_test_config()
+    with expect_error(ValueError, "2-tuple of ttnn.Topology"):
+        ttKDA(device, config, random_weights(config), topology=topology)
+
+
+@pytest.mark.parametrize(
     "case",
     [
         pytest.param("axes", id="sp-and-tp-axes-must-be-distinct"),
@@ -159,11 +209,11 @@ def test_layer_rejects_invalid_construction(case: str, device: ttnn.Device, expe
 
     if case == "axes":
         with expect_error(ValueError, "requires distinct 2D SP/TP axes"):
-            ttKDA(device, config, state_dict, sp_axis=0, tp_axis=0)
+            ttKDA(device, config, state_dict, sp_axis=0, tp_axis=0, topology=LINEAR_TOPOLOGY)
     elif case == "weight_sources":
-        weights = ttKDA(device, config, state_dict).weights
+        weights = ttKDA(device, config, state_dict, topology=LINEAR_TOPOLOGY).weights
         with expect_error(ValueError, "either constructed KDAWeights or host state_dict"):
-            ttKDA(device, config, state_dict, weights=weights)
+            ttKDA(device, config, state_dict, weights=weights, topology=LINEAR_TOPOLOGY)
     elif case == "grouped_nonsquare":
         nonsquare_config = replace(config, head_v_dim=64)
         base_program_config = KDAProgramConfig()
@@ -172,9 +222,15 @@ def test_layer_rejects_invalid_construction(case: str, device: ttnn.Device, expe
             recurrence=replace(base_program_config.recurrence, local_scan_strategy="grouped"),
         )
         with expect_error(ValueError, "grouped KDA affine prefix currently requires K == V"):
-            ttKDA(device, nonsquare_config, random_weights(nonsquare_config), program_config=program_config)
+            ttKDA(
+                device,
+                nonsquare_config,
+                random_weights(nonsquare_config),
+                program_config=program_config,
+                topology=LINEAR_TOPOLOGY,
+            )
     else:
-        layer = ttKDA(device, config, state_dict)
+        layer = ttKDA(device, config, state_dict, topology=LINEAR_TOPOLOGY)
         with expect_error(ValueError, "batch_size=1"):
             layer.allocate_state(batch_size=2)
 
@@ -193,7 +249,7 @@ def test_layer_rejects_invalid_construction(case: str, device: ttnn.Device, expe
 )
 def test_layer_rejects_invalid_forward(case: str, device: ttnn.Device, expect_error) -> None:
     config = make_small_kda_test_config()
-    layer = ttKDA(device, config, random_weights(config))
+    layer = ttKDA(device, config, random_weights(config), topology=LINEAR_TOPOLOGY)
     hidden_shape = (1, 32, config.hidden_size)
     state = layer.allocate_state()
 

@@ -25,8 +25,11 @@ from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import (
 from models.demos.deepseek_v3_d_p.tt.kda.config import KDAProgramConfig, kimi_k3_program_config
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.tt_transformers.tt.ccl import TT_CCL
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate
+
+LINEAR_TOPOLOGY = (ttnn.Topology.Linear, ttnn.Topology.Linear)
 
 
 @dataclass(frozen=True)
@@ -349,6 +352,7 @@ def make_kimi_k3_device_case(
         sp_axis=sequence_parallel_axis,
         tp_axis=tensor_parallel_axis,
         program_config=selected_program_config,
+        topology=per_axis_topology(),
     )
     return layer, hidden
 
