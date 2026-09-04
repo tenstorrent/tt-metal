@@ -80,3 +80,17 @@
       timeout: 6
   owner_id: U03BJ1L3LUQ # Mo Memarian
   team: runtime
+
+- name: Perf counter analysis
+  cmd: run_perf_counter_analysis_test
+  skus:
+    wh_n150_civ2:
+      timeout: 1
+    wh_n300_civ2:
+      timeout: 1
+    bh_p100a_civ2_viommu:
+      timeout: 1
+    bh_p150b_civ2_viommu:
+      timeout: 1
+  owner_id: U03BJ1L3LUQ # Mo Memarian
+  team: runtime
