@@ -877,8 +877,12 @@ chased further, per this review round's budget.
 
 VS-011 committed as `81fb16698ae` ("glm47-flash autoport: vLLM stage-review
 fixes (VS-011)"), branch `ttmodelmanager/glm47-flash-probe`, on top of
-`e95eb76d725` (VS-010). Registration commit for this stage remains
-`9f2ec5d` on `ttmodelmanager/glm47-flash-registration` in the sibling
+`e95eb76d725` (VS-010), followed by two small housekeeping commits on the
+same branch: `d94fac5fb16` (reordered this file's VS-010/VS-011 sections into
+chronological order and recorded this SHA line) and `4e0fd88db07` (moved the
+VS-011 disclosure in `README.md` to below the Headline table so the required
+primary TTFT/decode-t/s/u ordering holds). Registration commit for this stage
+remains `9f2ec5d` on `ttmodelmanager/glm47-flash-registration` in the sibling
 `vllm-tt-plugin` checkout (unchanged by this review round).
 
 ---
