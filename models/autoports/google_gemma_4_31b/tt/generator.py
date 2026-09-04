@@ -811,6 +811,7 @@ class Gemma4Generator(Generator):
         return_all_logits: bool = False,
         return_device_logits: bool = False,
         release_decode_traces: bool = True,
+        start_pos: Sequence[int] | None = None,
         **kwargs: Any,
     ) -> torch.Tensor | ttnn.Tensor:
         # The vLLM adapter passes release_decode_traces=False for prefills
@@ -829,9 +830,13 @@ class Gemma4Generator(Generator):
             page_table = None
         page_table, kv_cache, external_state = self._resolve_cache_pair(page_table, kv_cache)
         self._cache_dirty = getattr(self, "_cache_dirty", False) or not external_state
+        if start_pos is not None:
+            start_pos = [int(offset) for offset in start_pos]
+            if not any(start_pos):
+                start_pos = None
         if return_device_logits:
             return self.model.prefill_forward_device_logits(
-                tokens, page_table=page_table, kv_cache=kv_cache, prompt_lens=prompt_lens
+                tokens, page_table=page_table, kv_cache=kv_cache, prompt_lens=prompt_lens, start_pos=start_pos
             )
         return self.model.prefill_forward(
             tokens,
@@ -839,6 +844,7 @@ class Gemma4Generator(Generator):
             kv_cache=kv_cache,
             prompt_lens=prompt_lens,
             return_all_logits=return_all_logits,
+            start_pos=start_pos,
         )
 
     def decode_forward(

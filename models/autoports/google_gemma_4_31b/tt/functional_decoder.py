@@ -415,8 +415,11 @@ class FunctionalDecoder(LightweightModule):
         batch_size=1,
         user_id=0,
         valid_seq_len=None,
+        chunk_start=0,
     ):
         """Host-free decoder composition shared by prefill and decode."""
+        if chunk_start:
+            raise NotImplementedError("resumed prefill (chunk_start > 0) requires the multichip decoder")
         residual = hidden_states
         normed = self.layer.input_layernorm.forward(hidden_states)
         attn_input = normed
@@ -485,11 +488,21 @@ class FunctionalDecoder(LightweightModule):
         batch_size: int = 1,
         user_id=0,
         valid_seq_len: int | None = None,
+        chunk_start: int = 0,
     ):
-        """Run paged causal prefill and populate ``kv_cache`` on device."""
+        """Run paged causal prefill and populate ``kv_cache`` on device.
+
+        ``chunk_start`` is this call's absolute start position inside the
+        prompt: scheduler-driven chunked prefill splits one prompt across
+        several engine steps, and every step after the first arrives with the
+        prefix ``[0, chunk_start)`` already in the KV cache. ``rope_mats`` must
+        already be sliced to ``[chunk_start, chunk_start + len)``.
+        """
         logical_seq_len = int(valid_seq_len if valid_seq_len is not None else hidden_states.shape[-2] // batch_size)
         if not 1 <= logical_seq_len <= self.contract.max_position_embeddings:
             raise ValueError(f"logical prefill length must be in [1, {self.contract.max_position_embeddings}]")
+        if chunk_start and batch_size > 1:
+            raise ValueError("resumed prefill (chunk_start > 0) supports a single user per call")
         if batch_size > 1:
             outputs = []
             for batch_idx in range(batch_size):
@@ -539,6 +552,7 @@ class FunctionalDecoder(LightweightModule):
             batch_size=batch_size,
             user_id=user_id,
             valid_seq_len=logical_seq_len,
+            chunk_start=chunk_start,
         )
         if owns_padding:
             sliced = ttnn.slice(output, [0, 0, 0, 0], [1, 1, logical_seq_len, output.shape[-1]])

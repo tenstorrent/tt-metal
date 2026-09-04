@@ -44,6 +44,12 @@ class ModelCapabilities(TypedDict, total=False):
     supports_prefix_caching: bool
     supports_async_decode: bool
     supports_sample_on_device: bool
+    supports_chunked_prefill: bool
+    """One prompt may be prefilled across several engine steps: prefill_forward
+    honours a nonzero per-row ``start_pos`` (the already-computed token count)."""
+    resumed_prefill_token_alignment: int
+    """Alignment every resumed-prefill offset must satisfy. The plugin never
+    reads it; the operator keeps vLLM's max_num_batched_tokens a multiple of it."""
 
 
 class VllmGeneratorAdapter(Protocol):

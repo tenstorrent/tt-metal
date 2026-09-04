@@ -499,7 +499,10 @@ class FusedDecoder(FunctionalDecoder):
         batch_size=1,
         user_id=0,
         valid_seq_len=None,
+        chunk_start=0,
     ):
+        if chunk_start:
+            raise NotImplementedError("resumed prefill (chunk_start > 0) requires the multichip decoder")
         residual = hidden_states
         normed = self.layer.input_layernorm.forward(hidden_states)
         attn_input = normed

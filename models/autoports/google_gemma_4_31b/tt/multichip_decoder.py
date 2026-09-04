@@ -1211,8 +1211,18 @@ class MultichipDecoder(OptimizedDecoder):
         user_id,
         valid_seq_len,
         residual=None,
+        chunk_start=0,
     ):
-        """TP-local prefill with the optimized BFP8 cache-fill contract."""
+        """TP-local prefill with the optimized BFP8 cache-fill contract.
+
+        ``chunk_start > 0`` resumes a prompt whose prefix ``[0, chunk_start)``
+        was prefilled by earlier engine steps (scheduler-driven chunked
+        prefill). The caller passes RoPE tables already sliced to the chunk's
+        absolute positions. Cross-chunk attention: full-attention layers read
+        the whole prefix back from the paged cache; sliding layers attend a
+        square ``[previous-window tail | chunk]`` carried in BF16 between
+        calls (``_stash_sliding_prefill_tail``).
+        """
         attention = self.layer.self_attn
         config, weights = attention.config, attention.weights
         qkv = apply_qkv_projection(hidden_states, weights)
@@ -1246,6 +1256,38 @@ class MultichipDecoder(OptimizedDecoder):
         k_cache, v_cache = kv_cache
         block_size = effective_block_size(k_cache, config.head_dim, local_kv_heads)
         modulo = {"cache_position_modulo": config.cache_position_modulo} if config.cache_position_modulo else {}
+        # paged_fill_cache addresses the cache by the input's row index, so a
+        # resumed chunk must be re-based onto its absolute positions:
+        #   - bounded sliding ring: the writer wraps row indices modulo the
+        #     window, so chunk-local and absolute indices land on identical ring
+        #     slots iff chunk_start is a multiple of the window. Enforce that
+        #     instead of rotating the table.
+        #   - full attention: virtual block 0 of a sliced page table is the
+        #     block holding chunk_start (same trick as the streaming prefill).
+        fill_page_table = page_table
+        fill_batch_idx = user_id
+        owns_fill_table = False
+        if chunk_start:
+            if config.cache_position_modulo is not None:
+                if chunk_start % config.cache_position_modulo:
+                    raise ValueError(
+                        f"resumed sliding prefill needs chunk_start aligned to the sliding window "
+                        f"({config.cache_position_modulo}), got {chunk_start}; set vLLM "
+                        f"max_num_batched_tokens to a multiple of it"
+                    )
+            else:
+                if chunk_start % block_size:
+                    raise ValueError(
+                        f"resumed full-attention prefill needs chunk_start aligned to the effective "
+                        f"page block ({block_size}), got {chunk_start}"
+                    )
+                fill_page_table = ttnn.slice(
+                    page_table,
+                    [user_id, chunk_start // block_size],
+                    [user_id + 1, page_table.shape[1]],
+                )
+                fill_batch_idx = 0
+                owns_fill_table = True
         if config.cache_position_modulo is not None and valid_seq_len < k.shape[-2]:
             self._fill_bounded_sliding_cache_exact(
                 k_cache,
@@ -1263,19 +1305,51 @@ class MultichipDecoder(OptimizedDecoder):
             k_fill = ttnn.typecast(k, k_cache.dtype) if k.dtype != k_cache.dtype else k
             v_fill = ttnn.typecast(v, v_cache.dtype) if v.dtype != v_cache.dtype else v
             ttnn.experimental.paged_fill_cache(
-                k_cache, k_fill, page_table, batch_idx=user_id, block_size=block_size, **modulo
+                k_cache, k_fill, fill_page_table, batch_idx=fill_batch_idx, block_size=block_size, **modulo
             )
             ttnn.experimental.paged_fill_cache(
-                v_cache, v_fill, page_table, batch_idx=user_id, block_size=block_size, **modulo
+                v_cache, v_fill, fill_page_table, batch_idx=fill_batch_idx, block_size=block_size, **modulo
             )
             if k_fill is not k:
                 k_fill.deallocate(True)
             if v_fill is not v:
                 v_fill.deallocate(True)
+        if owns_fill_table:
+            fill_page_table.deallocate(True)
+        if config.is_sliding and user_id == 0 and not chunk_start:
+            # Keep the last window of BF16 K/V for a possible resumed chunk.
+            # Must precede the dispatch here because the long-sequence sliding
+            # path consumes K/V internally; a resumed chunk instead stashes
+            # after its SDPA has read the previous carry (in the branch below).
+            self._stash_sliding_prefill_tail(k, v, config, valid_seq_len=valid_seq_len, chunk_start=chunk_start)
 
         seq_len = q.shape[-2]
         concatenated = None
-        if seq_len > PREFILL_SDPA_MAX_SEQ and config.is_sliding:
+        if chunk_start and config.is_sliding:
+            # Resumed chunk on a sliding layer: the previous window is not in
+            # this call's tensors, so attend [carried tail | chunk] with the
+            # windowed causal SDPA. Never reads the BFP8 ring. Stash the new
+            # carry only after the SDPA has consumed the previous one — the
+            # persistent buffers are refreshed in place.
+            sdpa = self._sliding_chunk_sdpa_with_tail(q, k, v, config, chunk_start=chunk_start)
+            if user_id == 0:
+                self._stash_sliding_prefill_tail(k, v, config, valid_seq_len=valid_seq_len, chunk_start=chunk_start)
+        elif chunk_start:
+            # Resumed chunk on a full-attention layer: the prefix K/V exist
+            # only in the paged cache. chunked SDPA reads [0, chunk_start +
+            # local end) through the user's full page table.
+            k.deallocate(True)
+            v.deallocate(True)
+            k = None
+            v = None
+            read_k_cache = self._paged_cache_read_view(k_cache, local_kv_heads, config.head_dim)
+            read_v_cache = self._paged_cache_read_view(v_cache, local_kv_heads, config.head_dim)
+            concatenated = self._chunked_full_attention_concatenated(
+                q, read_k_cache, read_v_cache, page_table, user_id, config.head_dim, base_offset=chunk_start
+            )
+            q = None
+            sdpa = None
+        elif seq_len > PREFILL_SDPA_MAX_SEQ and config.is_sliding:
             # Sliding attention must retain the prompt K/V sources, but its
             # bounded SDPA chunks can still be written directly into the final
             # TP-local head layout.  Avoid materializing both the accumulated
@@ -1452,8 +1526,16 @@ class MultichipDecoder(OptimizedDecoder):
             write_chunk.deallocate(True)
         return output
 
-    def _chunked_full_attention_concatenated(self, q, k_cache, v_cache, page_table, user_id, head_dim):
-        """Stream full-attention chunks into the final TP-local head layout."""
+    def _chunked_full_attention_concatenated(self, q, k_cache, v_cache, page_table, user_id, head_dim, base_offset=0):
+        """Stream full-attention chunks into the final TP-local head layout.
+
+        ``base_offset`` re-bases the causal window for a resumed prompt: query
+        rows are absolute positions ``[base_offset, base_offset + seq_len)``
+        and every SDPA call reads the paged prefix ``[0, chunk_start_idx +
+        rows)``. The op requires ``chunk_start_idx`` to be a multiple of both
+        SDPA chunk sizes, so with a nonzero offset the config is pinned to
+        power-of-two chunks that divide any window-aligned offset.
+        """
         num_heads, seq_len = q.shape[1], q.shape[2]
         user_page_table = page_table
         owns_page_table = False
@@ -1461,6 +1543,17 @@ class MultichipDecoder(OptimizedDecoder):
             user_page_table = ttnn.slice(page_table, [user_id, 0], [user_id + 1, page_table.shape[1]])
             owns_page_table = True
         program_config = _prefill_sdpa_config(head_dim, seq_len)
+        if base_offset:
+            # min(chunk, seq_len) may produce a non-power-of-two (e.g. 96 for a
+            # padded tail), which cannot divide the absolute chunk_start_idx.
+            q_chunk = 1 << min(int(program_config.q_chunk_size), seq_len).bit_length() - 1
+            k_chunk = 1 << min(int(program_config.k_chunk_size), seq_len).bit_length() - 1
+            program_config = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=program_config.compute_with_storage_grid_size,
+                q_chunk_size=max(32, q_chunk),
+                k_chunk_size=max(32, k_chunk),
+                exp_approx_mode=False,
+            )
         output_rm = ttnn.allocate_tensor_on_device(
             shape=(1, 1, seq_len, num_heads * head_dim),
             dtype=q.dtype,
@@ -1476,7 +1569,7 @@ class MultichipDecoder(OptimizedDecoder):
                 k_cache,
                 v_cache,
                 user_page_table,
-                chunk_start_idx=start,
+                chunk_start_idx=base_offset + start,
                 scale=1.0,
                 program_config=program_config,
             )
@@ -1562,6 +1655,116 @@ class MultichipDecoder(OptimizedDecoder):
         output_rm.deallocate(True)
         return output
 
+    def _stash_sliding_prefill_tail(self, k, v, config, *, valid_seq_len, chunk_start):
+        """Keep this chunk's last sliding window of BF16 K/V for a resumed chunk.
+
+        A continuation chunk needs the previous ``sliding_window`` tokens of
+        K/V, which exist on device only in the BFP8 ring by then. Carrying them
+        in BF16 sidesteps that quantisation (the measured chunked-prefill
+        accuracy hazard) and the ring-rotation read. The persistent pair is
+        allocated once, on the first single-user prefill — necessarily a
+        first-of-its-shape prefill, which the vLLM adapter already runs with
+        decode traces released — and refreshed with in-place copies afterwards,
+        so warm-shape prefills keep their transients-only contract.
+
+        Only a chunk whose length is a whole multiple of the window can be
+        resumed from (a continuation's length is the scheduler token budget,
+        which the alignment guards pin to such a multiple); anything else
+        invalidates the carry instead of stashing a partial window.
+        """
+        window = int(config.cache_position_modulo or config.sliding_window)
+        hist = math.ceil(window / ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+        if valid_seq_len < hist or valid_seq_len % hist:
+            self._sliding_tail_next_start = None
+            return
+        k_slice = ttnn.slice(k, [0, 0, valid_seq_len - hist, 0], [1, k.shape[1], valid_seq_len, k.shape[3]])
+        v_slice = ttnn.slice(v, [0, 0, valid_seq_len - hist, 0], [1, v.shape[1], valid_seq_len, v.shape[3]])
+        tail = getattr(self, "_sliding_prefill_tail", None)
+        if tail is None:
+            tail = (
+                ttnn.clone(k_slice, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+                ttnn.clone(v_slice, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+            )
+            self._sliding_prefill_tail = tail
+        else:
+            ttnn.copy(k_slice, tail[0])
+            ttnn.copy(v_slice, tail[1])
+        # A window-length chunk makes these full-range slices, which alias the
+        # caller's K/V; deallocating an alias would free the SDPA inputs.
+        if valid_seq_len - hist > 0 or int(k.shape[-2]) != hist:
+            k_slice.deallocate(True)
+            v_slice.deallocate(True)
+        self._sliding_tail_next_start = chunk_start + valid_seq_len
+
+    def _sliding_chunk_sdpa_with_tail(self, q, k, v, config, *, chunk_start):
+        """Windowed SDPA for a resumed chunk: attend a square [tail | chunk].
+
+        The chunked paged SDPA op is causal-only, so a sliding layer cannot
+        read its prefix window from the cache. Instead the previous chunk's
+        last ``sliding_window`` BF16 K/V rows (carried by
+        ``_stash_sliding_prefill_tail``) are prepended to this chunk's K/V and
+        the ordinary causal + sliding-window SDPA runs on the square slice. Q
+        is front-padded with ``hist`` filler rows (outputs dropped; causality
+        keeps them from influencing kept rows) because the op requires
+        Q.seq == K.seq. Kept rows ``[hist, hist + seq_len)`` are query
+        positions ``[chunk_start, chunk_start + seq_len)`` with their full
+        window covered.
+        """
+        window = int(config.cache_position_modulo or config.sliding_window)
+        hist = math.ceil(window / ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+        tail = getattr(self, "_sliding_prefill_tail", None)
+        next_start = getattr(self, "_sliding_tail_next_start", None)
+        if tail is None or next_start != chunk_start:
+            raise RuntimeError(
+                f"resumed sliding prefill at position {chunk_start} has no carried window "
+                f"(carry is valid for a chunk starting at {next_start}); prompt chunks must "
+                f"arrive in order from position 0"
+            )
+        num_heads, seq_len = q.shape[1], q.shape[-2]
+        if hist + seq_len > PREFILL_SDPA_MAX_SEQ:
+            raise ValueError(
+                f"resumed sliding chunk of {seq_len} rows exceeds the SDPA sequence cliff "
+                f"({PREFILL_SDPA_MAX_SEQ}) once the {hist}-row window is prepended; lower "
+                f"vLLM max_num_batched_tokens"
+            )
+        k_tail, v_tail = tail
+        owns_q_pad = seq_len != hist
+        if seq_len >= hist:
+            # Filler rows are a copy of the chunk's leading rows (cheapest legal
+            # Q content). A full-range slice aliases q, hence owns_q_pad above.
+            q_pad = ttnn.slice(q, [0, 0, 0, 0], [1, num_heads, hist, config.head_dim])
+        else:
+            q_zeros = ttnn.zeros(
+                [1, num_heads, hist - seq_len, config.head_dim],
+                dtype=q.dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=q.device(),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            q_pad = ttnn.concat([q_zeros, q], dim=2)
+            q_zeros.deallocate(True)
+        q_cat = ttnn.concat([q_pad, q], dim=2)
+        if owns_q_pad:
+            q_pad.deallocate(True)
+        # The tails are the persistent carry buffers: concat reads them, never free them here.
+        k_cat = ttnn.concat([k_tail, k], dim=2)
+        v_cat = ttnn.concat([v_tail, v], dim=2)
+        sdpa_full = ttnn.transformer.scaled_dot_product_attention(
+            q_cat,
+            k_cat,
+            v_cat,
+            is_causal=True,
+            scale=1.0,
+            sliding_window_size=window,
+            program_config=_prefill_sdpa_config(config.head_dim, hist + seq_len),
+        )
+        q_cat.deallocate(True)
+        k_cat.deallocate(True)
+        v_cat.deallocate(True)
+        sdpa = ttnn.slice(sdpa_full, [0, 0, hist, 0], [1, num_heads, hist + seq_len, config.head_dim])
+        sdpa_full.deallocate(True)
+        return sdpa
+
     def _chunked_mlp_residual(self, residual):
         """Stream the complete long-prefill MLP residual branch by row chunks."""
         seq_len, hidden = residual.shape[-2], residual.shape[-1]
@@ -1642,6 +1845,7 @@ class MultichipDecoder(OptimizedDecoder):
         batch_size=1,
         user_id=0,
         valid_seq_len=None,
+        chunk_start=0,
     ):
         """Host-free replicated-residual composition for both layer kinds."""
         self.layer.shared_mlp.is_decode = is_decode
@@ -1671,6 +1875,7 @@ class MultichipDecoder(OptimizedDecoder):
                 user_id=user_id,
                 valid_seq_len=valid_seq_len,
                 residual=residual if batch_size == 1 else None,
+                chunk_start=chunk_start,
             )
         if is_decode:
             normed.deallocate(True)

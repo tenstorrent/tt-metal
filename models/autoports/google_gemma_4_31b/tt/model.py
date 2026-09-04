@@ -509,13 +509,19 @@ class Gemma4FullModel:
             )
         return result
 
-    def _prefill_rope(self, logical_len: int) -> dict[str, tuple[ttnn.Tensor, ttnn.Tensor]]:
+    def _prefill_rope(self, logical_len: int, start: int = 0) -> dict[str, tuple[ttnn.Tensor, ttnn.Tensor]]:
+        """Cos/sin tables for absolute positions ``[start, logical_len)``.
+
+        A resumed prefill chunk starts mid-prompt, so its rotary tables must be
+        sliced at the chunk's absolute offset, not at zero.
+        """
+        length = logical_len - start
         result = {}
         for layer_kind, tables in self.decode_rope.items():
             tiled = []
             for table in tables:
-                sliced = ttnn.slice(table, [0, 0], [logical_len, table.shape[-1]])
-                view = ttnn.reshape(sliced, [1, 1, logical_len, table.shape[-1]])
+                sliced = ttnn.slice(table, [start, 0], [logical_len, table.shape[-1]])
+                view = ttnn.reshape(sliced, [1, 1, length, table.shape[-1]])
                 tiled.append(ttnn.to_layout(view, ttnn.TILE_LAYOUT))
             result[layer_kind] = tuple(tiled)
         return result
@@ -666,9 +672,17 @@ class Gemma4FullModel:
         kv_cache: Sequence[Sequence[ttnn.Tensor]],
         user_id: int,
         prompt_len: int,
+        chunk_start: int = 0,
     ) -> ttnn.Tensor:
-        hidden = self.embed_tokens(tokens[:, :prompt_len], mode="prefill")
-        rope = self._prefill_rope(prompt_len)
+        """Run the decoder stack over prompt positions ``[chunk_start, prompt_len)``.
+
+        ``chunk_start > 0`` is a resumed prefill: the prefix is already in the
+        KV cache from earlier engine steps, and this call processes only the
+        chunk's tokens at their absolute positions.
+        """
+        hidden = self.embed_tokens(tokens[:, chunk_start:prompt_len], mode="prefill")
+        rope = self._prefill_rope(prompt_len, start=chunk_start)
+        chunk_len = prompt_len - chunk_start
         try:
             for layer, layer_kind, cache, table in zip(self.layers, self.layer_kinds, kv_cache, page_tables):
                 previous = hidden
@@ -678,7 +692,8 @@ class Gemma4FullModel:
                     page_table=table,
                     kv_cache=cache,
                     user_id=user_id,
-                    valid_seq_len=prompt_len,
+                    valid_seq_len=chunk_len,
+                    chunk_start=chunk_start,
                 )
                 previous.deallocate(True)
             return hidden
@@ -686,6 +701,31 @@ class Gemma4FullModel:
             for tables in rope.values():
                 for table in tables:
                     table.deallocate(True)
+
+    def _resolve_chunk_start(self, start_pos, user_id: int, prompt_len: int) -> int:
+        """Validate one user's resumed-prefill offset against the chunk contract.
+
+        Offsets must land on a sliding-window boundary: the bounded ring fill
+        and the BF16 window carry are both correct only there, and there is no
+        safe way to honour an arbitrary offset (reading the wrong prefix, not
+        failing, is what an unaligned chunked SDPA does). vLLM produces aligned
+        offsets whenever ``max_num_batched_tokens`` is a multiple of the
+        window, so this raises on misconfiguration, not on normal traffic.
+        """
+        if start_pos is None:
+            return 0
+        start = int(start_pos[user_id])
+        if start == 0:
+            return 0
+        if not 0 < start < prompt_len:
+            raise ValueError(f"resumed prefill start {start} must lie inside the prompt (length {prompt_len})")
+        alignment = math.ceil(int(self.hf_config.sliding_window) / ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+        if start % alignment:
+            raise ValueError(
+                f"resumed prefill start {start} must be a multiple of {alignment}; "
+                f"set vLLM max_num_batched_tokens to a multiple of it"
+            )
+        return start
 
     def prefill_forward(
         self,
@@ -695,24 +735,30 @@ class Gemma4FullModel:
         kv_cache,
         prompt_lens: list[int],
         return_all_logits: bool = False,
+        start_pos: Sequence[int] | None = None,
     ) -> torch.Tensor:
         if tokens.ndim != 2 or len(prompt_lens) != tokens.shape[0]:
             raise ValueError("prefill requires tokens [batch, seq] and one prompt length per row")
+        if start_pos is not None and len(start_pos) != len(prompt_lens):
+            raise ValueError("start_pos must carry one resumed-prefill offset per prompt row")
         page_tables = self._normalize_page_tables(page_table)
         outputs = []
         for user_id, prompt_len in enumerate(prompt_lens):
             prompt_len = int(prompt_len)
             if not 1 <= prompt_len <= self.config.max_seq_len or prompt_len > tokens.shape[1]:
                 raise ValueError(f"invalid logical prompt length {prompt_len}")
+            chunk_start = self._resolve_chunk_start(start_pos, user_id, prompt_len)
+            local_last = (prompt_len - chunk_start) - 1
             hidden = self.prefill_hidden(
                 tokens[user_id : user_id + 1],
                 page_tables=page_tables,
                 kv_cache=kv_cache,
                 user_id=user_id,
                 prompt_len=prompt_len,
+                chunk_start=chunk_start,
             )
             if not return_all_logits:
-                tile_start = ((prompt_len - 1) // 32) * 32
+                tile_start = (local_last // 32) * 32
                 tile_end = min(tile_start + 32, hidden.shape[-2])
                 if tile_start == 0 and tile_end == hidden.shape[-2]:
                     # A full-range slice aliases its input.  Hand ownership of
@@ -728,11 +774,11 @@ class Gemma4FullModel:
                     hidden.deallocate(True)
                 logits = self._terminal(last_hidden)
                 host = self.logits_to_torch(logits).reshape(1, -1, self.vocab_size)
-                outputs.append(host[:, (prompt_len - 1) - tile_start : (prompt_len - 1) - tile_start + 1])
+                outputs.append(host[:, local_last - tile_start : local_last - tile_start + 1])
                 logits.deallocate(True)
             else:
                 logits = self._terminal(hidden)
-                outputs.append(self.logits_to_torch(logits).reshape(1, prompt_len, self.vocab_size))
+                outputs.append(self.logits_to_torch(logits).reshape(1, prompt_len - chunk_start, self.vocab_size))
                 logits.deallocate(True)
         if return_all_logits and len({output.shape[1] for output in outputs}) != 1:
             max_len = max(output.shape[1] for output in outputs)
@@ -746,12 +792,15 @@ class Gemma4FullModel:
         page_table,
         kv_cache,
         prompt_lens: list[int],
+        start_pos: Sequence[int] | None = None,
     ) -> ttnn.Tensor:
         """Prefill mixed prompt rows and return one sampler-ready TP-sharded row per user."""
         if tokens.ndim != 2 or tokens.shape[0] != len(prompt_lens):
             raise ValueError("device-logit prefill requires tokens [batch, seq] and one prompt length per row")
         if not 1 <= tokens.shape[0] <= self.config.max_batch_size:
             raise ValueError(f"device-logit prefill batch must be in [1, {self.config.max_batch_size}]")
+        if start_pos is not None and len(start_pos) != len(prompt_lens):
+            raise ValueError("start_pos must carry one resumed-prefill offset per prompt row")
 
         page_tables = self._normalize_page_tables(page_table)
         row_logits = []
@@ -759,16 +808,19 @@ class Gemma4FullModel:
             prompt_len = int(requested_len)
             if not 1 <= prompt_len <= tokens.shape[1] or prompt_len > self.config.max_seq_len:
                 raise ValueError(f"invalid logical prompt length {prompt_len}")
+            chunk_start = self._resolve_chunk_start(start_pos, user_id, prompt_len)
+            local_last = (prompt_len - chunk_start) - 1
             hidden = self.prefill_hidden(
                 tokens[user_id : user_id + 1],
                 page_tables=page_tables,
                 kv_cache=kv_cache,
                 user_id=user_id,
                 prompt_len=prompt_len,
+                chunk_start=chunk_start,
             )
-            tile_start = ((prompt_len - 1) // 32) * 32
+            tile_start = (local_last // 32) * 32
             tile_end = min(tile_start + 32, hidden.shape[-2])
-            local_index = (prompt_len - 1) - tile_start
+            local_index = local_last - tile_start
             if tile_start == 0 and tile_end == hidden.shape[-2]:
                 # Short prompts occupy the complete logical tensor. TTNN returns
                 # an alias for that full-range slice, so _terminal must receive

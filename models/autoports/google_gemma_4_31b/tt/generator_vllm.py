@@ -67,6 +67,13 @@ class Gemma4ForCausalLM(GenerativeTestModelBase):
         "supports_sample_on_device": True,
         "sample_on_device_policy": "greedy_only",
         "supports_device_sampling_penalties": False,
+        # prefill_forward honours the scheduler's per-row start_pos: a prompt
+        # split across engine steps resumes with offset RoPE/KV fills, paged
+        # cross-chunk SDPA on the full-attention layers, and a carried BF16
+        # window on the sliding layers. Offsets must be sliding-window aligned
+        # (1024) — set vLLM max_num_batched_tokens to a multiple of it.
+        "supports_chunked_prefill": True,
+        "resumed_prefill_token_alignment": 1024,
     }
     sample_on_device_policy = "greedy_only"
     _HYBRID_KV_CACHE_GROUPS_ENABLED = True
@@ -171,9 +178,10 @@ class Gemma4ForCausalLM(GenerativeTestModelBase):
         max_num_seqs: int,
     ) -> int:
         del model_name, num_devices, tt_data_parallel
-        # vLLM disables chunked prefill on TT.  A newly-admitted request must
-        # therefore reserve its whole prompt in each hybrid cache group before
-        # the first model call.  Gemma 4 has five 10-layer sliding groups and
+        # Whether prefill runs whole or split across engine steps (chunked
+        # prefill), the pool must hold every block of one full-context prompt
+        # by the time its prefill completes, so the sizing is the same either
+        # way.  Gemma 4 has five 10-layer sliding groups and
         # one 10-layer global group. Page-size unification keeps sliding blocks
         # at 64 tokens and widens the global view to 128 tokens.
         sliding_groups = 5
@@ -287,10 +295,21 @@ class Gemma4ForCausalLM(GenerativeTestModelBase):
         prompt_lens: Iterable[int] | torch.Tensor | None = None,
         sampling_params=None,
         page_tables_per_layer=None,
+        start_pos=None,
         **_: Any,
     ):
         kv_cache = self._require_kv_cache(kv_cache)
         prompt_lens_list = _to_int_list(prompt_lens, default=int(tokens.shape[1]))
+        # Scheduler-driven chunked prefill: start_pos rows carry each request's
+        # already-computed token count and prompt_lens the chunk's END. All-zero
+        # offsets are the ordinary whole-prompt prefill.
+        start_pos_list = None
+        if start_pos is not None:
+            start_pos_list = [int(offset) for offset in start_pos]
+            if len(start_pos_list) != len(prompt_lens_list):
+                raise ValueError("start_pos must carry one offset per prompt row")
+            if not any(start_pos_list):
+                start_pos_list = None
         # Steady-state serving keeps the decode traces alive across requests:
         # a release forces the next decode step to re-capture both traces,
         # which costs several full decode forwards plus two captures and
@@ -314,19 +333,40 @@ class Gemma4ForCausalLM(GenerativeTestModelBase):
             prefill_mode = "greedy"
         else:
             prefill_mode = "sampled"
-        prefill_shape = (tuple(sorted(prompt_lens_list)), prefill_mode)
+        # The key describes the device shapes this call actually runs: each
+        # row's exact CHUNK length (the pre-layer ops compile per exact row
+        # count) plus its absolute start (the cross-chunk SDPA compiles per
+        # (length, start) with the scalar chunk_start_idx). Keying on whole
+        # prompt lengths would keep every non-tail chunk of a split prompt
+        # "cold"; chunk keys make them all warm after the first long prompt,
+        # leaving only each request's final tail chunk shape-unique — parity
+        # with unsplit serving. Unsplit calls produce the old key, (len, 0).
+        starts = start_pos_list or [0] * len(prompt_lens_list)
+        chunk_key = tuple(sorted((end - start, start) for start, end in zip(starts, prompt_lens_list)))
+        prefill_shape = (chunk_key, prefill_mode)
         if not self._keep_decode_traces or prefill_shape not in self._warm_prefill_shapes:
             self._release_decode_state()
         page_tables, _ = self._page_tables_to_tt(page_tables_per_layer, page_table)
         if sampling_params is None:
-            self._require_host_sampling_compat()
-            return self.generator.prefill_forward(
+            # Under scheduler-driven chunked prefill the plugin deliberately
+            # withholds sampling_params whenever the batch holds an
+            # intermediate chunk (device sampling would advance RNG state for
+            # rows that emit no token) and host-handles the returned logits,
+            # discarding the intermediate rows. That makes the host path a
+            # normal serving path, so it must not require the compat env.
+            if start_pos_list is None and not self.model_capabilities.get("supports_chunked_prefill"):
+                self._require_host_sampling_compat()
+            host_logits = self.generator.prefill_forward(
                 tokens.to(torch.long),
                 page_table=page_tables,
                 kv_cache=kv_cache,
                 prompt_lens=prompt_lens_list,
                 return_all_logits=False,
+                release_decode_traces=False,
+                start_pos=start_pos_list,
             )
+            self._warm_prefill_shapes.add(prefill_shape)
+            return host_logits
 
         top_k, top_p, temperature = sampling
         logits = self.generator.prefill_forward(
@@ -336,6 +376,7 @@ class Gemma4ForCausalLM(GenerativeTestModelBase):
             prompt_lens=prompt_lens_list,
             return_device_logits=True,
             release_decode_traces=False,
+            start_pos=start_pos_list,
         )
         output_buffer = self.generator._new_token_buffer(len(prompt_lens_list))
         sampled, _ = self.generator._sample_eager(
