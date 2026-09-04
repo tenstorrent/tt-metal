@@ -27,6 +27,7 @@ captured in a sidecar JSON file. The importer consumes that sidecar offline and
 populates the visualizer comparison tables.
 """
 
+import datetime
 import json
 import math
 import re
@@ -65,9 +66,6 @@ else:
 
 SUPPORTED_REPORT_VERSION = 1
 
-# The autouse fixture runs per test, so only tell the user about a missing report_name once.
-_warned_about_missing_report_name = False
-
 
 def run_pytest_graph_report_fixture(request) -> Generator[None, None, None]:
     """Pytest fixture for automatic graph capture and report generation.
@@ -81,20 +79,19 @@ def run_pytest_graph_report_fixture(request) -> Generator[None, None, None]:
     """
     import ttnn
 
-    report_path = getattr(ttnn.CONFIG, "report_path", None)
-    report_name = getattr(ttnn.CONFIG, "report_name", None)
-    if report_path is None or not report_name or str(report_name).strip() == "":
-        # Only a run that asked for a report is missing anything; no report_name is the default state.
-        if getattr(ttnn.CONFIG, "enable_graph_report", False) or getattr(ttnn.CONFIG, "enable_comparison_mode", False):
-            global _warned_about_missing_report_name
-            if not _warned_about_missing_report_name:
-                _warned_about_missing_report_name = True
-                logger.warning(
-                    "enable_graph_report/enable_comparison_mode is set but report_name is not, so no report will be "
-                    "written. Set report_name in TTNN_CONFIG_OVERRIDES or TTNN_CONFIG_PATH to generate one."
-                )
-        yield
+    if getattr(ttnn.CONFIG, "report_name", None) is not None:
+        yield from _run_pytest_graph_report_fixture(request)
         return
+
+    # A report was asked for but not named, so name it after the test. It has to happen here: this fixture is
+    # autouse from the root conftest, so it runs before any deeper conftest (tests/ttnn) could set report_name.
+    report_name = f"{request.node.nodeid}: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    with ttnn.manage_config("report_name", report_name):
+        yield from _run_pytest_graph_report_fixture(request)
+
+
+def _run_pytest_graph_report_fixture(request) -> Generator[None, None, None]:
+    import ttnn
 
     if ttnn.graph.is_graph_capture_active():
         yield
@@ -102,7 +99,7 @@ def run_pytest_graph_report_fixture(request) -> Generator[None, None, None]:
 
     enable_graph_report = getattr(ttnn.CONFIG, "enable_graph_report", False)
     enable_comparison_mode = getattr(ttnn.CONFIG, "enable_comparison_mode", False)
-    report_path = Path(report_path)
+    report_path = Path(ttnn.CONFIG.report_path)
     enable_detailed_buffer_report = getattr(ttnn.CONFIG, "enable_detailed_buffer_report", False)
 
     # Ensure we are torn down before device fixtures: request whichever device
