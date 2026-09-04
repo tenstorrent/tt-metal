@@ -3579,13 +3579,19 @@ class ModelArgs:
         before the multicast, so those shards cross the NoC twice. The multicast overlaps the
         block's weight read, so the chain is exposed only while a hop costs more than the weight
         a worker reads for that block: once bw x per_worker_N covers it, a wider block buys
-        nothing and still pays the gather. Sweeping in0_block_w over 11 decode shapes on P300
-        (Llama-3.2-1B, Llama-3.1-8B and Qwen3-32B at one, four and eight devices) puts a hop at
-        about HOP_IN_WEIGHT_TILES weight tiles: with that bound the rule picks the measured
-        optimum on 8 of the 11 and one step short on the other 3, and no width slower than
-        stock on any.
+        nothing and still pays the gather. Sweeping every legal in0_block_w over 21 decode shapes
+        on P300 (Llama-3.2-1B, Llama-3.1-8B, Qwen3-8B and Qwen3-32B at one, four and eight
+        devices) puts a hop at about HOP_IN_WEIGHT_TILES weight tiles: the rule then picks the
+        measured optimum on 20 of the 21, one step short on the last, and no width slower than
+        stock on any. 100 and 112 give the same result, so it sits in a plateau rather than on a
+        cliff.
+
+        The constant is a hardware ratio, one hop's fixed cost over the time a worker takes to
+        stream one weight tile, so it moves with the bank count, the DRAM bandwidth and the NoC,
+        not with the model. Anything that changes the fixed cost of a hop moves it down and this
+        has to be refitted.
         """
-        HOP_IN_WEIGHT_TILES = 80
+        HOP_IN_WEIGHT_TILES = 100
         k_tiles = k // ttnn.TILE_SIZE
         per_core_k = k_tiles // num_cores
         per_worker_n = math.ceil(n / (ttnn.TILE_SIZE * self.dram_grid_size.x))
