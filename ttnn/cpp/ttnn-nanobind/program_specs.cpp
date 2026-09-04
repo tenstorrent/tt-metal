@@ -4,6 +4,8 @@
 
 #include "program_specs.hpp"
 
+#include "ttnn/types.hpp"
+
 #include <cstdint>
 #include <filesystem>
 #include <optional>
