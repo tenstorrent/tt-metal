@@ -554,10 +554,13 @@ jobs:
         with:
           name: kernel-clang-tidy-${{ matrix.test-group.name }}
           # /docker-job/ is the host-side mount of the container's /work/ directory.
-          path: |
-            ${{ github.workspace }}/docker-job/kernel_tidy/compile_commands.json
-            ${{ github.workspace }}/docker-job/kernel_tidy/findings.txt
-            ${{ github.workspace }}/docker-job/kernel_tidy/summary.txt
+          # Single glob line ON PURPOSE: with a multiline `path:` here, the runner's
+          # host->container workspace path translation was applied only to the FIRST line
+          # (observed in run 33827663605: the with: block showed host /opt/runner/_work/...
+          # paths, the one uploaded file resolved via the container's /__w/... mount, and the
+          # untranslated lines matched nothing — "least common ancestor is /", 1 of 3 files
+          # uploaded). One glob covers compile_commands.json, findings.txt, and summary.txt.
+          path: ${{ github.workspace }}/docker-job/kernel_tidy/*
           if-no-files-found: warn
           retention-days: 14
 
