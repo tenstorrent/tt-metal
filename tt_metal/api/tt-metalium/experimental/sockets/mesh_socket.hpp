@@ -162,6 +162,9 @@ public:
     std::shared_ptr<MeshBuffer> get_data_buffer() const;
     // Access the config buffer associated with this socket.
     std::shared_ptr<MeshBuffer> get_config_buffer() const;
+    // The config block's L1 address at this endpoint's core; valid for both
+    // lockstep and per-core config allocations.
+    DeviceAddr get_config_buffer_address() const;
     // Access the underlying configuration of the instantiated socket (connectivity of senders/receivers and the socket
     // memory config).
     const SocketConfig& get_config() const;

@@ -349,6 +349,8 @@ std::shared_ptr<MeshBuffer> MeshSocket::get_data_buffer() const {
 
 std::shared_ptr<MeshBuffer> MeshSocket::get_config_buffer() const { return config_buffer_; }
 
+DeviceAddr MeshSocket::get_config_buffer_address() const { return get_socket_config_buffer_address(*this); }
+
 const SocketConfig& MeshSocket::get_config() const { return config_; }
 
 tt::tt_fabric::FabricNodeId MeshSocket::get_fabric_node_id(SocketEndpoint endpoint, const MeshCoordinate& coord) const {
