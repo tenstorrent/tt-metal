@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"
+#include "ttnn/operations/experimental/tensor_prefetcher/tensor_prefetcher.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "tt-metalium/global_circular_buffer.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -27,6 +28,11 @@ struct MatmulParams {
     std::optional<tt::tt_metal::Tile> output_tile = std::nullopt;
     std::optional<tt::tt_metal::experimental::GlobalCircularBuffer> global_cb = std::nullopt;
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt;
+    // Alternative in1 transport to `global_cb`: DRAM-sender PrefetcherPipes the Tensor prefetcher
+    // delivers weight K-blocks into. At most one of the two may be set. Keep the pipes alive for as
+    // long as the program cache may hold a program built against them -- the Program holds a
+    // non-owning pointer to each pipe and the in1 CB is laid over its ring.
+    std::optional<ttnn::operations::experimental::TensorPrefetcherPipes> prefetcher_pipes = std::nullopt;
 };
 
 struct MatmulInputs {

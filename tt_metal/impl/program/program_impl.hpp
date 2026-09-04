@@ -310,6 +310,14 @@ public:
         const CoreRangeSet& core_range_set,
         const CircularBufferConfig& config,
         const experimental::GlobalCircularBuffer& global_circular_buffer);
+    // Local CB laid over a PrefetcherPipe's ring and registered as that pipe's relay, so compute
+    // consumes the delivered pages in place. `prefetcher_pipe_id` must already be Attached on
+    // `core_range_set`.
+    CBHandle add_circular_buffer(
+        const CoreRangeSet& core_range_set,
+        const CircularBufferConfig& config,
+        const experimental::PrefetcherPipe& prefetcher_pipe,
+        uint8_t prefetcher_pipe_id);
 
     uint32_t add_dataflow_buffer(
         const CoreRangeSet& core_range_set, const experimental::dfb::DataflowBufferConfig& config);
@@ -377,6 +385,16 @@ public:
     // only on receiver cores and consumed by PrefetcherPipe::bind_relay().
     void register_prefetcher_pipe_relay_dfb(
         const CoreRangeSet& receiver_cores, uint8_t prefetcher_pipe_id, uint32_t relay_dfb_host_id);
+
+    // Point every receiver core's participant for `prefetcher_pipe_id` at `relay_device_slot`, the
+    // device-side id (DFB slot or CB index) kernels bind the relay through. `relay_entry_size` is
+    // that relay's page size and must divide the pipe entry, so one delivered entry publishes a
+    // whole number of relay pages.
+    void set_prefetcher_pipe_relay_slot(
+        const CoreRangeSet& receiver_cores,
+        uint8_t prefetcher_pipe_id,
+        uint8_t relay_device_slot,
+        uint32_t relay_entry_size);
 
     // Allocates TCs and remapper configs, cannot be done on creation because we need to determine if a set of DFBs on a
     // core require remapper being enabled

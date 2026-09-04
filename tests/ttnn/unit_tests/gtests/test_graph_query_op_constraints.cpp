@@ -783,7 +783,8 @@ TEST_P(MatmulOpIfTest, Matmul) {
             std::nullopt,   // output_tile
             std::nullopt,   // optional_output_tensor
             std::nullopt,   // global_cb
-            std::nullopt);  // sub_device_id
+            std::nullopt,   // sub_device_id
+            std::nullopt);  // prefetcher_pipes
 
         log_info(
             tt::LogTest, "query status = {}, error_message = {}", query.status, query.error_message.value_or("none"));

@@ -22,9 +22,11 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <span>
 #include <utility>
 #include <vector>
 
+#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
@@ -33,6 +35,8 @@
 #include <tt-metalium/tt_metal.hpp>
 
 #include "device_fixture.hpp"
+#include "tests/tt_metal/tt_metal/api/cross_node_dfb_test_utils.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "distributed/mesh_device_impl.hpp"
 #include "impl/buffers/drisc_l1_arena.hpp"
 #include "impl/buffers/prefetcher_pipe_dram_sender_internal.hpp"
@@ -69,9 +73,19 @@ namespace {
 
 constexpr const char* kSenderKernel = "tests/tt_metal/tt_metal/test_kernels/misc/prefetcher_pipe_dram_smoke_sender.cpp";
 constexpr const char* kReceiverKernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/prefetcher_pipe_receiver.cpp";
+constexpr const char* kRelayCbReaderKernel =
+    "tests/tt_metal/tt_metal/test_kernels/dataflow/prefetcher_pipe_relay_cb_reader.cpp";
+constexpr const char* kRelayCbConsumerKernel =
+    "tests/tt_metal/tt_metal/test_kernels/compute/prefetcher_pipe_relay_cb_consumer.cpp";
 
 constexpr uint32_t kEntrySize = 256;  // multiple of L1_ALIGNMENT (16 on Blackhole)
 constexpr uint32_t kRingDepth = 4;
+
+// The relay circular buffer is paged at the delivered entry, as the matmul's in1 CB is: one page
+// is one K-block, and the consumer addresses the tiles inside it by index.
+constexpr uint32_t kRelayCbIndex = 1;
+constexpr uint32_t kRelayTileBytes = 64;
+constexpr uint32_t kRelayTilesPerEntry = kEntrySize / kRelayTileBytes;
 
 // A Tensor-prefetcher delivery target: the per-bank pipe groups the factory returns, plus the
 // bank-major flattening the rest of this file drives the senders through. The
@@ -212,6 +226,52 @@ void run_push_and_pop(
                 .processor = DataMovementProcessor::RISCV_0,
                 .noc = NOC::RISCV_0_default,
                 .compile_args = {pipe_id, entry_size, num_entries, 0u}});
+    }
+
+    distributed::MeshWorkload workload;
+    workload.add_program(distributed::MeshCoordinateRange({0, 0}, {0, 0}), std::move(program));
+    distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), workload, /*blocking=*/false);
+    distributed::Finish(mesh_device.mesh_command_queue());
+}
+
+// One push/consume cycle through a relay circular buffer: the DRISC senders push, each receiver's
+// DM turns delivered entries into CB credit, and its TRISC drains the CB page by page, recording
+// the first word of every page at `result_addr`.
+void run_relay_cb_program(
+    distributed::MeshDevice& mesh_device, const PipeSet& set, uint32_t num_entries, uint32_t result_addr) {
+    Program program = CreateProgram();
+
+    const uint32_t pattern_base = static_cast<uint32_t>(drisc_pattern_base(mesh_device));
+
+    for (size_t s = 0; s < set.pipes.size(); ++s) {
+        experimental::PrefetcherPipe& pipe = *set.pipes[s];
+        const auto config_page_addr = static_cast<uint32_t>(experimental::sender_state_drisc_l1_base(pipe));
+        const uint32_t entry_size = pipe.initial_entry_size();
+        const uint8_t pipe_id = experimental::AttachPrefetcherPipe(program, pipe, set.mapping[s].second, entry_size);
+        CreateKernel(
+            program,
+            kSenderKernel,
+            set.mapping[s].first,
+            DramConfig{.noc = NOC::NOC_0, .compile_args = {config_page_addr, num_entries, pattern_base, entry_size}});
+
+        CircularBufferConfig relay_cb_config(pipe.ring_size(), {{kRelayCbIndex, tt::DataFormat::UInt32}});
+        relay_cb_config.set_page_size(kRelayCbIndex, entry_size);
+        experimental::CreateCircularBuffer(program, set.mapping[s].second, relay_cb_config, pipe, pipe_id);
+
+        CreateKernel(
+            program,
+            kRelayCbReaderKernel,
+            set.mapping[s].second,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = NOC::RISCV_0_default,
+                .compile_args = {pipe_id, kRelayCbIndex, num_entries}});
+        const KernelHandle consumer = CreateKernel(
+            program,
+            kRelayCbConsumerKernel,
+            set.mapping[s].second,
+            ComputeConfig{.compile_args = {kRelayCbIndex, pipe_id, num_entries, kRelayTilesPerEntry, kRelayTileBytes}});
+        SetRuntimeArgs(program, consumer, set.mapping[s].second, {result_addr});
     }
 
     distributed::MeshWorkload workload;
@@ -444,6 +504,61 @@ TEST_F(PrefetcherPipeDramSenderFixture, AttachRejectsEntrySizeThatDoesNotDivideR
         experimental::AttachPrefetcherPipe(program, *set.pipes[0], receiver_cores, kRingIndivisibleEntrySize));
     EXPECT_NO_THROW(experimental::AttachPrefetcherPipe(program, *set.pipes[0], receiver_cores, kEntrySize / 2));
     EXPECT_NO_THROW(experimental::AttachPrefetcherPipe(program, *set.pipes[0], receiver_cores, kEntrySize));
+}
+
+TEST_F(PrefetcherPipeDramSenderFixture, RelayCircularBufferFeedsCompute) {
+    // A classic circular buffer laid over the pipe ring and registered as its relay: compute reads
+    // the delivered pages in place through the ordinary CB API, one page per delivered entry, and
+    // addresses the tiles inside a page by index. This is the bridge the 1D matmul's in1 CB uses.
+    //
+    // Two programs, so the durable pipe cursor has to survive a CB whose pointers firmware resets
+    // every launch. The second batch carries different pattern bytes, so a receiver that restarted
+    // at ring slot 0 would report the first batch's words again.
+    constexpr uint32_t kNumReceivers = 2;
+    constexpr uint32_t kEntriesPerRun = 2;
+    constexpr uint32_t kNumRuns = 2;
+    constexpr uint32_t kTilesPerRun = kEntriesPerRun * kRelayTilesPerEntry;
+    const CoreRangeSet receiver_cores(CoreRange({0, 0}, {kNumReceivers - 1, 0}));
+
+    const PipeSet set =
+        make_pipe_set(*mesh_device_, {{/*bank_id=*/0, receiver_cores}}, /*dual_senders_per_bank=*/false);
+    const CoreCoord sender_logical = set.mapping.at(0).first;
+
+    // [pages_consumed, one word per page].
+    constexpr uint32_t kResultPageSize = 64;
+    auto result_buffer =
+        cross_node_dfb_test::make_cross_node_data_buffer(*mesh_device_, receiver_cores, kResultPageSize, 1);
+    const auto result_addr = static_cast<uint32_t>(result_buffer->address());
+
+    const auto receivers = receivers_in_slab_order(receiver_cores);
+    for (uint32_t run = 0; run < kNumRuns; ++run) {
+        const uint32_t entry_label = run * kEntriesPerRun;
+        preload_pattern(*mesh_device_, sender_logical, kEntriesPerRun, kNumReceivers, entry_label);
+        run_relay_cb_program(*mesh_device_, set, kEntriesPerRun, result_addr);
+
+        for (uint32_t r = 0; r < receivers.size(); ++r) {
+            std::vector<uint32_t> result(1 + kTilesPerRun, 0);
+            slow_dispatch::ReadFromL1(
+                *mesh_device_,
+                receivers[r],
+                result_addr,
+                std::span<uint8_t>(reinterpret_cast<uint8_t*>(result.data()), result.size() * sizeof(uint32_t)),
+                CoreType::WORKER);
+            ASSERT_EQ(result[0], kEntriesPerRun)
+                << "receiver " << receivers[r].str() << " run " << run << " consumed the wrong page count";
+            for (uint32_t e = 0; e < kEntriesPerRun; ++e) {
+                for (uint32_t t = 0; t < kRelayTilesPerEntry; ++t) {
+                    const uint32_t word_in_entry = t * kRelayTileBytes / sizeof(uint32_t);
+                    const uint32_t expected = pattern_word(r, entry_label + e, word_in_entry);
+                    const uint32_t got = result[1 + e * kRelayTilesPerEntry + t];
+                    EXPECT_EQ(got, expected)
+                        << "receiver " << receivers[r].str() << " run " << run << " entry " << e << " tile " << t
+                        << ": expected 0x" << std::hex << expected << ", got 0x" << got << std::dec;
+                }
+            }
+        }
+    }
+    expect_credits_drained(*mesh_device_, set, credit_units(*mesh_device_, kNumRuns * kEntriesPerRun * kEntrySize));
 }
 
 TEST_F(PrefetcherPipeDramSenderFixture, BlockSizeChangeAcrossPrograms) {

@@ -136,6 +136,15 @@ public:
     friend bool operator!=(const CircularBufferConfig& lhs, const CircularBufferConfig& rhs);
 
 private:
+    // Point this CB at L1 the caller already owns, with no Buffer behind it: `address` is the base
+    // and `max_size` the bytes reserved there. For transports that allocate their own persistent L1
+    // and hand out a raw address (a PrefetcherPipe ring). There is no shadow Buffer, so the address
+    // is stamped once and never re-read - a backing store that can move must use the Buffer /
+    // MeshTensor overloads instead. Private, with only the circular buffer such a transport
+    // constructs as a friend, so it cannot become a general-purpose way to point a CB anywhere.
+    CircularBufferConfig& set_globally_allocated_address(uint32_t address, uint32_t max_size);
+    friend class CircularBufferImpl;
+
     void set_config(const std::map<uint8_t, tt::DataFormat>& data_format_spec);
     void validate_total_size(uint32_t total_size);
 
