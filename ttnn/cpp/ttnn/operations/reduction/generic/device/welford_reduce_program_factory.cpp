@@ -60,7 +60,8 @@ WelfordReducePlan WelfordReduceDeviceOperation::WelfordReduceProgramFactory::sel
     plan.scratch_format =
         plan.fp32_dest_acc_en && !plan.narrow_scratch_to_bf16 ? DataFormat::Float32 : DataFormat::Float16_b;
     plan.combined_format = plan.narrow_scratch_to_bf16 ? DataFormat::Float16_b : DataFormat::Float32;
-    plan.use_sfpu_leaf_combine = plan.reduce_hw && tensor_arg.device()->arch() == tt::ARCH::BLACKHOLE &&
+    const auto arch = tensor_arg.device()->arch();
+    plan.use_sfpu_leaf_combine = plan.reduce_hw && (arch == tt::ARCH::BLACKHOLE || arch == tt::ARCH::WORMHOLE_B0) &&
                                  plan.fp32_dest_acc_en && plan.W % plan.tile_width == 0 &&
                                  static_cast<std::uint64_t>(plan.W) * plan.reduce_batch_size >= 128;
 

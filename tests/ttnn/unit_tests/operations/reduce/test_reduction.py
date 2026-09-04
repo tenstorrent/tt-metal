@@ -32,7 +32,7 @@ def enabled_program_cache(device):
 @pytest.mark.parametrize("correction", [False, True])
 @pytest.mark.parametrize("value", [1e38, -1e38])
 def test_std_var_hw_large_constant(device, ttnn_op, correction, value):
-    # W=128 selects Blackhole's SFPU leaf combine. The lane means are finite,
+    # W=128 selects the SFPU leaf combine on Wormhole and Blackhole. The lane means are finite,
     # but summing them before dividing by 32 would overflow.
     torch_input = torch.full((1, 1, 32, 128), value, dtype=torch.float32)
     input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
@@ -49,11 +49,21 @@ def test_std_var_hw_large_constant(device, ttnn_op, correction, value):
         ((2, 1, 65, 128), (-2, -1)),
         ((2, 3, 33, 128), (1, 2, 3)),
         ((1, 1, 32, 10528), (-2, -1)),
+        ((1, 4, 33, 32), (1, 2, 3)),
+        ((1, 1, 33, 96), (-2, -1)),
+        ((1, 1, 33, 129), (-2, -1)),
     ],
-    ids=["partial_height", "batch_merge", "uneven_tree"],
+    ids=[
+        "partial_height",
+        "batch_merge",
+        "uneven_tree",
+        "batch_selector_boundary",
+        "below_selector_boundary",
+        "partial_width_fallback",
+    ],
 )
 def test_std_var_hw_compact_lane_combine(device, enabled_program_cache, dtype, correction, shape, dim):
-    # Full-width leaves select the Blackhole SFPU combine. Distinct lane means
+    # Exercise the shared Wormhole/Blackhole SFPU combine and its scalar fallbacks. Distinct lane means
     # and nonzero lane variances exercise both terms and their relative scaling.
     torch.manual_seed(123)
     values = torch.randn(shape) + (torch.arange(shape[-1]) % 32).float() + 1024
