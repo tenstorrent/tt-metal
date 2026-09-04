@@ -1,0 +1,25 @@
+{
+  "_comment": [
+    "Model manifest for the disaggregated-prefill runner (ADDING_A_PREFILL_MODEL.md sec 3).",
+    "Point a rank binding's global_env at it with PREFILL_MANIFEST=<this file>; prefill_runner",
+    "applies this env map with setdefault, so global_env (and, for a bare python runner, an",
+    "exported shell variable) still wins. Only the 'env' block is read (_apply_manifest_env).",
+    "PREFILL_SP is the mesh ROWS and PREFILL_TP the COLS (prefill_runner.py:69-71).",
+    "PREFILL_TP MUST stay 8: the packed cache holds one KV head per chip (R-027).",
+    "PREFILL_FABRIC_MODE=1d_ring is not optional with the Ring topology this package runs -- Ring",
+    "collectives need the cyclic torus route, and the engine would otherwise pick FABRIC_1D at",
+    "sp<=8 (runner_utils.py:37). It also needs TT_MESH_GRAPH_DESC_PATH pointed at",
+    "tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto,",
+    "which tt-run/the shell must export -- a manifest cannot set it (DEC-020 / DEC-081).",
+    "CHUNK_SIZE and MAX_SEQ_LEN are deliberately NOT set here: they are per-run workload knobs that",
+    "must match the producer exactly, and a default hidden in the model manifest is how they drift."
+  ],
+  "env": {
+    "PREFILL_MODEL": "llama31_8b_d_p",
+    "PREFILL_NUM_LAYERS": "32",
+    "PREFILL_SP": "4",
+    "PREFILL_TP": "8",
+    "PREFILL_FABRIC_MODE": "1d_ring",
+    "PREFILL_TOPOLOGY": "ring"
+  }
+}

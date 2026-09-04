@@ -1,0 +1,177 @@
+2026-09-04 00:06:40.308 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mstojkovic/.cache/ttnn,model_cache_path=/home/mstojkovic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-09-04 00:06:40.372 | INFO     | __main__:main:1055 - [producer] service_id='llama_prefill' users=1 chunks=[4,4] max_requests=1 duration=infs p_gap=0.0 p_burst=0.0 mid_end=0.0 interleave=random verify=True seed=1234
+2026-09-04 00:06:40.381 | info     |             UMD | Cluster constructor started. (cluster.cpp:406)
+2026-09-04 00:06:40.398 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-09-04 00:06:40.398 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-09-04 00:06:40.495 | info     |             UMD | Established firmware bundle version: 19.12.0 (topology_discovery.cpp:576)
+2026-09-04 00:06:40.499 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-09-04 00:06:40.816 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-09-04 00:06:41.121 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-09-04 00:06:41.428 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-09-04 00:06:41.734 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-09-04 00:06:42.039 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-09-04 00:06:42.342 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-09-04 00:06:42.645 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-09-04 00:06:42.947 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-09-04 00:06:43.249 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-09-04 00:06:43.550 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-09-04 00:06:43.851 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-09-04 00:06:44.151 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-09-04 00:06:44.451 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-09-04 00:06:44.752 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-09-04 00:06:45.051 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-09-04 00:06:45.350 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-09-04 00:06:45.651 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-09-04 00:06:45.951 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-09-04 00:06:46.251 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-09-04 00:06:46.551 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-09-04 00:06:46.852 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-09-04 00:06:47.151 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-09-04 00:06:47.452 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-09-04 00:06:47.751 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-09-04 00:06:48.051 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-09-04 00:06:48.351 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-09-04 00:06:48.649 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-09-04 00:06:48.949 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-09-04 00:06:49.249 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-09-04 00:06:49.548 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-09-04 00:06:49.849 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-09-04 00:06:50.149 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-09-04 00:06:50.149 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31}/[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 30, 31, 16, 17, 18, 19, 20, 21, 22, 23] and remote chip ids {} (cluster.cpp:173)
+2026-09-04 00:06:50.149 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-09-04 00:06:50.149 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-09-04 00:06:50.149 | info     |             UMD | Cluster constructor completed. (cluster.cpp:665)
+2026-09-04 00:06:50.419 | INFO     | __main__:main:1063 - [producer] attached; payload=2048B
+2026-09-04 00:06:50.425 | INFO     | __main__:_read_kv_chunk_table:143 - [producer] read KV chunk table /tmp/prefill_kv_chunk_table.pb: entries=32768 num_layers=32 num_slots=1 max_seq_len=2048 chunk_n_tokens=32
+2026-09-04 00:06:50.425 | INFO     | __main__:_connect_layer_ack_channel:203 - [producer] connected LayerAck channel /tt_prefill_layer_acks_llama_prefill
+2026-09-04 00:06:50.427 | INFO     | __main__:push_chunk:1090 - [producer] push slot=0 cidx=0 start=0 end=512
+2026-09-04 00:06:50.427 | INFO     | __main__:push_chunk:1090 - [producer] push slot=0 cidx=1 start=512 end=1024
+2026-09-04 00:06:50.427 | INFO     | __main__:push_chunk:1090 - [producer] push slot=0 cidx=2 start=1024 end=1536
+2026-09-04 00:06:50.427 | INFO     | __main__:push_chunk:1090 - [producer] push slot=0 cidx=3 start=1536 end=2048
+2026-09-04 00:06:50.835 | INFO     | __main__:main:1110 - [producer] DONE wall=0.0s pushes=4 requests=1 tokens=2048 throughput=834670 tok/s push_ms p50=0.1 p90=0.2 p99=0.2
+2026-09-04 00:06:50.836 | INFO     | __main__:_drain_layer_acks:216 - [producer] layer acks 64/128
+2026-09-04 00:06:50.846 | INFO     | __main__:_drain_layer_acks:216 - [producer] layer acks 65/128
+2026-09-04 00:06:50.856 | INFO     | __main__:_drain_layer_acks:216 - [producer] layer acks 66/128
+2026-09-04 00:06:50.866 | INFO     | __main__:_drain_layer_acks:216 - [producer] layer acks 68/128
+2026-09-04 00:06:50.876 | INFO     | __main__:_drain_layer_acks:216 - [producer] layer acks 70/128
+2026-09-04 00:06:50.886 | INFO     | __main__:_drain_layer_acks:216 - [producer] layer acks 71/128
+2026-09-04 00:06:50.896 | INFO     | __main__:_drain_layer_acks:216 - [producer] layer acks 73/128
+2026-09-04 00:06:50.907 | INFO     | __main__:_drain_layer_acks:216 - [producer] layer acks 74/128
+2026-09-04 00:06:50.917 | INFO     | __main__:_drain_layer_acks:216 - [producer] layer acks 76/128
+2026-09-04 00:06:50.927 | INFO     | __main__:_drain_layer_acks:216 - [producer] layer acks 78/128
+2026-09-04 00:06:50.937 | INFO     | __main__:_drain_layer_acks:216 - [producer] layer acks 79/128
+2026-09-04 00:06:50.948 | INFO     | __main__:_drain_layer_acks:216 - [producer] layer acks 81/128
+2026-09-04 00:06:50.958 | INFO     | __main__:_drain_layer_acks:216 - [producer] layer acks 83/128
+2026-09-04 00:06:50.968 | INFO     | __main__:_drain_layer_acks:216 - [producer] layer acks 84/128
+2026-09-04 00:06:50.978 | INFO     | __main__:_drain_layer_acks:216 - [producer] layer acks 86/128
+2026-09-04 00:06:50.989 | INFO     | __main__:_drain_layer_acks:216 - [producer] layer acks 87/128
+2026-09-04 00:06:50.999 | INFO     | __main__:_drain_layer_acks:216 - [producer] layer acks 89/128
+2026-09-04 00:06:51.009 | INFO     | __main__:_drain_layer_acks:216 - [producer] layer acks 91/128
+2026-09-04 00:06:51.020 | INFO     | __main__:_drain_layer_acks:216 - [producer] layer acks 92/128
+2026-09-04 00:06:51.030 | INFO     | __main__:_drain_layer_acks:216 - [producer] layer acks 94/128
+2026-09-04 00:06:51.040 | INFO     | __main__:_drain_layer_acks:216 - [producer] layer acks 96/128
+2026-09-04 00:06:51.051 | INFO     | __main__:_drain_layer_acks:216 - [producer] layer acks 97/128
+2026-09-04 00:06:51.061 | INFO     | __main__:_drain_layer_acks:216 - [producer] layer acks 99/128
+2026-09-04 00:06:51.071 | INFO     | __main__:_drain_layer_acks:216 - [producer] layer acks 100/128
+2026-09-04 00:06:51.081 | INFO     | __main__:_drain_layer_acks:216 - [producer] layer acks 102/128
+2026-09-04 00:06:51.092 | INFO     | __main__:_drain_layer_acks:216 - [producer] layer acks 104/128
+2026-09-04 00:06:51.102 | INFO     | __main__:_drain_layer_acks:216 - [producer] layer acks 105/128
+2026-09-04 00:06:51.112 | INFO     | __main__:_drain_layer_acks:216 - [producer] layer acks 107/128
+2026-09-04 00:06:51.123 | INFO     | __main__:_drain_layer_acks:216 - [producer] layer acks 109/128
+2026-09-04 00:06:51.133 | INFO     | __main__:_drain_layer_acks:216 - [producer] layer acks 110/128
+2026-09-04 00:06:51.143 | INFO     | __main__:_drain_layer_acks:216 - [producer] layer acks 112/128
+2026-09-04 00:06:51.153 | INFO     | __main__:_drain_layer_acks:216 - [producer] layer acks 113/128
+2026-09-04 00:06:51.164 | INFO     | __main__:_drain_layer_acks:216 - [producer] layer acks 115/128
+2026-09-04 00:06:51.174 | INFO     | __main__:_drain_layer_acks:216 - [producer] layer acks 117/128
+2026-09-04 00:06:51.184 | INFO     | __main__:_drain_layer_acks:216 - [producer] layer acks 118/128
+2026-09-04 00:06:51.195 | INFO     | __main__:_drain_layer_acks:216 - [producer] layer acks 120/128
+2026-09-04 00:06:51.205 | INFO     | __main__:_drain_layer_acks:216 - [producer] layer acks 122/128
+2026-09-04 00:06:51.215 | INFO     | __main__:_drain_layer_acks:216 - [producer] layer acks 123/128
+2026-09-04 00:06:51.226 | INFO     | __main__:_drain_layer_acks:216 - [producer] layer acks 125/128
+2026-09-04 00:06:51.236 | INFO     | __main__:_drain_layer_acks:216 - [producer] layer acks 127/128
+2026-09-04 00:06:51.246 | INFO     | __main__:_drain_layer_acks:216 - [producer] layer acks 128/128
+2026-09-04 00:06:51.246 | INFO     | __main__:_drain_layer_acks:224 - [producer] drained 128/128 layer acks in 0.41s
+2026-09-04 00:06:51.247 | INFO     | __main__:_read_device_map:189 - [producer] read device map /tmp/prefill_kv_device_map.json: 32 chips
+2026-09-04 00:06:51.333 | info     |             UMD | Cluster constructor started. (cluster.cpp:406)
+2026-09-04 00:06:51.351 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-09-04 00:06:51.351 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-09-04 00:06:51.445 | info     |             UMD | Established firmware bundle version: 19.12.0 (topology_discovery.cpp:576)
+2026-09-04 00:06:51.451 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-09-04 00:06:51.753 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-09-04 00:06:52.052 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-09-04 00:06:52.350 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-09-04 00:06:52.648 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-09-04 00:06:52.945 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-09-04 00:06:53.242 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-09-04 00:06:53.540 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-09-04 00:06:53.838 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-09-04 00:06:54.136 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-09-04 00:06:54.434 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-09-04 00:06:54.733 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-09-04 00:06:55.031 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-09-04 00:06:55.330 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-09-04 00:06:55.629 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-09-04 00:06:55.928 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-09-04 00:06:56.226 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-09-04 00:06:56.526 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-09-04 00:06:56.825 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-09-04 00:06:57.123 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-09-04 00:06:57.423 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-09-04 00:06:57.721 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-09-04 00:06:58.019 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-09-04 00:06:58.317 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-09-04 00:06:58.615 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-09-04 00:06:58.915 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-09-04 00:06:59.214 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-09-04 00:06:59.512 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-09-04 00:06:59.813 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-09-04 00:07:00.112 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-09-04 00:07:00.410 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-09-04 00:07:00.708 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-09-04 00:07:01.007 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-09-04 00:07:01.007 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31}/[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 30, 31, 16, 17, 18, 19, 20, 21, 22, 23] and remote chip ids {} (cluster.cpp:173)
+2026-09-04 00:07:01.007 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-09-04 00:07:01.007 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-09-04 00:07:01.007 | info     |             UMD | Cluster constructor completed. (cluster.cpp:665)
+2026-09-04 00:07:01.248 | INFO     | __main__:_read_slot_kv_and_check_pcc_gpt_oss:596 -   layer  0: K=0.99996 V=0.99994
+2026-09-04 00:07:01.462 | INFO     | __main__:_read_slot_kv_and_check_pcc_gpt_oss:596 -   layer  1: K=0.99996 V=0.99981
+2026-09-04 00:07:01.667 | INFO     | __main__:_read_slot_kv_and_check_pcc_gpt_oss:596 -   layer  2: K=0.99976 V=0.99947
+2026-09-04 00:07:01.881 | INFO     | __main__:_read_slot_kv_and_check_pcc_gpt_oss:596 -   layer  3: K=0.99988 V=0.99931
+2026-09-04 00:07:02.094 | INFO     | __main__:_read_slot_kv_and_check_pcc_gpt_oss:596 -   layer  4: K=0.99988 V=0.99914
+2026-09-04 00:07:02.304 | INFO     | __main__:_read_slot_kv_and_check_pcc_gpt_oss:596 -   layer  5: K=0.99979 V=0.99903
+2026-09-04 00:07:02.517 | INFO     | __main__:_read_slot_kv_and_check_pcc_gpt_oss:596 -   layer  6: K=0.99980 V=0.99871
+2026-09-04 00:07:02.728 | INFO     | __main__:_read_slot_kv_and_check_pcc_gpt_oss:596 -   layer  7: K=0.99972 V=0.99843
+2026-09-04 00:07:02.943 | INFO     | __main__:_read_slot_kv_and_check_pcc_gpt_oss:596 -   layer  8: K=0.99939 V=0.99723
+2026-09-04 00:07:03.157 | INFO     | __main__:_read_slot_kv_and_check_pcc_gpt_oss:596 -   layer  9: K=0.99892 V=0.99538
+2026-09-04 00:07:03.364 | INFO     | __main__:_read_slot_kv_and_check_pcc_gpt_oss:596 -   layer 10: K=0.99847 V=0.99377
+2026-09-04 00:07:03.582 | INFO     | __main__:_read_slot_kv_and_check_pcc_gpt_oss:596 -   layer 11: K=0.99771 V=0.99152
+2026-09-04 00:07:03.794 | INFO     | __main__:_read_slot_kv_and_check_pcc_gpt_oss:596 -   layer 12: K=0.99802 V=0.98900
+2026-09-04 00:07:04.011 | INFO     | __main__:_read_slot_kv_and_check_pcc_gpt_oss:596 -   layer 13: K=0.99647 V=0.98796
+2026-09-04 00:07:04.228 | INFO     | __main__:_read_slot_kv_and_check_pcc_gpt_oss:596 -   layer 14: K=0.99664 V=0.98891
+2026-09-04 00:07:04.441 | INFO     | __main__:_read_slot_kv_and_check_pcc_gpt_oss:596 -   layer 15: K=0.99711 V=0.98626
+2026-09-04 00:07:04.656 | INFO     | __main__:_read_slot_kv_and_check_pcc_gpt_oss:596 -   layer 16: K=0.99731 V=0.98980
+2026-09-04 00:07:04.868 | INFO     | __main__:_read_slot_kv_and_check_pcc_gpt_oss:596 -   layer 17: K=0.99646 V=0.98685
+2026-09-04 00:07:05.084 | INFO     | __main__:_read_slot_kv_and_check_pcc_gpt_oss:596 -   layer 18: K=0.99668 V=0.99069
+2026-09-04 00:07:05.299 | INFO     | __main__:_read_slot_kv_and_check_pcc_gpt_oss:596 -   layer 19: K=0.99716 V=0.99036
+2026-09-04 00:07:05.508 | INFO     | __main__:_read_slot_kv_and_check_pcc_gpt_oss:596 -   layer 20: K=0.99691 V=0.98991
+2026-09-04 00:07:05.727 | INFO     | __main__:_read_slot_kv_and_check_pcc_gpt_oss:596 -   layer 21: K=0.99655 V=0.98916
+2026-09-04 00:07:05.940 | INFO     | __main__:_read_slot_kv_and_check_pcc_gpt_oss:596 -   layer 22: K=0.99664 V=0.98998
+2026-09-04 00:07:06.155 | INFO     | __main__:_read_slot_kv_and_check_pcc_gpt_oss:596 -   layer 23: K=0.99690 V=0.98939
+2026-09-04 00:07:06.369 | INFO     | __main__:_read_slot_kv_and_check_pcc_gpt_oss:596 -   layer 24: K=0.99730 V=0.99041
+2026-09-04 00:07:06.580 | INFO     | __main__:_read_slot_kv_and_check_pcc_gpt_oss:596 -   layer 25: K=0.99732 V=0.98945
+2026-09-04 00:07:06.794 | INFO     | __main__:_read_slot_kv_and_check_pcc_gpt_oss:596 -   layer 26: K=0.99707 V=0.98620
+2026-09-04 00:07:07.006 | INFO     | __main__:_read_slot_kv_and_check_pcc_gpt_oss:596 -   layer 27: K=0.99715 V=0.99008
+2026-09-04 00:07:07.221 | INFO     | __main__:_read_slot_kv_and_check_pcc_gpt_oss:596 -   layer 28: K=0.99722 V=0.98445
+2026-09-04 00:07:07.435 | INFO     | __main__:_read_slot_kv_and_check_pcc_gpt_oss:596 -   layer 29: K=0.99749 V=0.98685
+2026-09-04 00:07:07.643 | INFO     | __main__:_read_slot_kv_and_check_pcc_gpt_oss:596 -   layer 30: K=0.99713 V=0.98851
+2026-09-04 00:07:07.861 | INFO     | __main__:_read_slot_kv_and_check_pcc_gpt_oss:596 -   layer 31: K=0.99860 V=0.99410
+2026-09-04 00:07:07.861 | INFO     | __main__:_read_slot_kv_and_check_pcc_gpt_oss:599 - [producer] slot 0 llama31_8b_d_p packed-GQA KV PCC over [0,2048) across 32/32 local layers -> K=0.99646 V=0.98445 (min 0.984451)
+2026-09-04 00:07:07.862 | SUCCESS  | __main__:_verify_resident_slots:887 - [producer] KV cache PCC PASSED (min 0.984451 >= 0.93 across 1 slots; per cache: k=0.996456, v=0.984451)
+2026-09-04 00:07:07.862 | INFO     | __main__:main:1144 - [producer] sending SHUTDOWN sentinel (metadata=-1,-1,-1)
+2026-09-04 00:07:07.863 | INFO     | __main__:main:1147 - [producer] exiting; SHUTDOWN sentinel sent — runner will drain and shut down.
+[producer] kv_cache_pcc_complete slots_checked=1 min_pcc=0.984451 k_pcc=0.996456 v_pcc=0.984451
+2026-09-04 00:07:08.259 | info     |             UMD | Cluster destructor started. (cluster.cpp:933)
+2026-09-04 00:07:08.259 | info     |             UMD | Cluster destructor completed. (cluster.cpp:936)
+2026-09-04 00:07:10.209 | info     |             UMD | Cluster destructor started. (cluster.cpp:933)
+2026-09-04 00:07:10.209 | info     |             UMD | Cluster destructor completed. (cluster.cpp:936)

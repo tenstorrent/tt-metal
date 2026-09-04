@@ -322,8 +322,26 @@ def test_runtime_satisfies_the_engine_contract(mesh_device, reset_seeds, expect_
         runtime.compile(kv_cache)
     with expect_error(AssertionError, "does not own a KV cache"):
         runtime.prefill_chunk(runtime.make_chunk_input([0] * CHUNK), None, slot_id=0, actual_start=0, actual_end=CHUNK)
-    with expect_error(NotImplementedError, "P10's deliverable"):
+    # P7 asserted here that `build_kv_chunk_table` refused with "P10's deliverable". **P10 landed it**
+    # (`tt/runners/kv_chunk_table.py`, `R-030` closed), so that refusal is correctly gone and this is
+    # replaced by its opposite — the same move P8 made when it implemented the `dense_sp` stub.
+    # Two things are asserted instead, and together they keep the hook under test on a mesh that
+    # cannot build a real table:
+    #   1. it no longer raises the P10 placeholder (a regression to a stub would fail here), and
+    #   2. it now gets far enough to resolve the cache, where `(1,1)`'s TP=1 hits R-027's refusal.
+    # The table's real behaviour is gated on the `(4,8)` galaxy by `G-KV-TABLE`
+    # (`tests/unit/test_kv_chunk_table.py`), bit-exactly.
+    with expect_error(AssertionError, "ONE KV head per chip"):
         runtime.build_kv_chunk_table(kv_cache, "/tmp/does-not-matter")
+    from models.demos.llama31_8b_d_p.tt.runners.kv_chunk_table import build_and_serialize_kv_chunk_table
+
+    assert callable(
+        build_and_serialize_kv_chunk_table
+    ), "the module build_kv_chunk_table forwards to is missing; it stopped being a stub in P10"
+    # DEC-109: the multi-rank merge is not implemented and must RAISE rather than publish a table
+    # that addresses one rank's DRAM under every rank's layer ids (R-040).
+    with expect_error(NotImplementedError, "R-040"):
+        runtime.build_kv_chunk_table(kv_cache, "/tmp/does-not-matter", first_layer_idx=16)
     with expect_error(NotImplementedError, "set_layer_ack_channel"):
         runtime.prefill_chunk(
             runtime.make_chunk_input([0] * CHUNK),

@@ -468,6 +468,7 @@ class TtPrefillRuntime:
         get_last_token: int = -1,
         d2h_service=None,
         record_dev=None,
+        metadata_msg=None,
     ) -> Optional[ttnn.Tensor]:
         """Prefill ONE chunk into user ``slot_id``'s slice of ``kv_cache``. Call in order.
 
@@ -489,7 +490,14 @@ class TtPrefillRuntime:
                 "llama31_8b_d_p emits layer acks through set_layer_ack_channel, not the D2H path; "
                 "run with PREFILL_ENABLE_LAYER_ACK=0 or wire a D2H ack into this runtime"
             )
-        del record_dev  # accepted for the common-runner contract; the D1H record path is unused
+        # `record_dev` and `metadata_msg` are accepted for the common-runner contract and unused.
+        # `metadata_msg` in particular is NOT optional to accept: `prefill_runner._compute_and_send`
+        # (`:290`) passes it on EVERY chunk, so a runtime that omits it dies with a TypeError on the
+        # first request rather than at startup. It is the on-device [slot, start, end] metadata
+        # tensor, which only a pipelined rank forwards over D2D and only a trace-capturing runtime
+        # keeps persistent; a single-rank runtime has already been handed those three values as
+        # arguments. See DEC-106.
+        del record_dev, metadata_msg
         assert self.model_built, "build the model before prefill_chunk()"
         chunk_size = self.config.default_chunk_size if chunk_size is None else chunk_size
         assert chunk_size in self.rope_indexed, f"chunk_size={chunk_size} not in supported {tuple(self.rope_indexed)}"
@@ -572,20 +580,86 @@ class TtPrefillRuntime:
         """K's base DRAM address — the anchor the engine all-gathers to merge pipeline stages."""
         return int(self._resolve_kv(kv_cache).k.buffer_address())
 
-    def build_kv_chunk_table(self, kv_cache, path: str, **kwargs) -> str:
-        """Not implemented here — P10 owns it (``tt/runners/kv_chunk_table.py``).
+    def build_kv_chunk_table(
+        self,
+        kv_cache,
+        path: str,
+        *,
+        first_layer_idx: Optional[int] = None,
+        num_my_layers: Optional[int] = None,
+        stage_layout=None,
+        stage_layouts=None,
+        chunk_size: Optional[int] = None,
+    ) -> str:
+        """Build + serialize the multi-config KV chunk address table to ``path``; return ``path``.
 
-        Raising rather than returning an empty table is deliberate: the engine publishes whatever
-        this returns to the migration worker, and a table that is structurally valid but wrong
-        migrates the wrong DRAM ranges, which presents as a corrupted decode long after prefill.
+        A thin forwarder, as the contract asks — the geometry lives in
+        ``tt/runners/kv_chunk_table.py`` (``P10.4``, closes ``R-030``). Issues no comms: the engine
+        publishes whatever comes back.
+
+        **The layer arguments are checked, not discarded.** The template ``del``\ s them
+        (``models/demos/gpt_oss_d_p/tt/tt_prefill_runtime.py:388``), which is correct for the
+        single-rank path both packages actually run and silently wrong the first time someone runs a
+        pipelined rank: this rank's table covers *its own* ``num_layers`` layers numbered from 0,
+        while a merged multi-rank table has to renumber them onto the global range and splice in the
+        other ranks' base addresses. That merge is **not implemented here** (``R-040``; Gate 1, the
+        only migration gate this bring-up runs, is single-rank by construction), so a call that
+        actually needs it raises instead of publishing a table that addresses one rank's DRAM under
+        every rank's layer ids.
+
+        ``chunk_size`` is the block-cyclic period the cache was **written** with. It defaults to
+        ``config.default_chunk_size``; pass it only if this runtime served a request at one of its
+        ``additional_chunk_sizes``, because a table built at the wrong period points at the right
+        DRAM in the wrong order and PCCs as noise rather than failing.
         """
-        del kv_cache, path, kwargs
-        raise NotImplementedError(
-            "llama31_8b_d_p has no KV chunk-address table yet: it belongs in "
-            "tt/runners/kv_chunk_table.py, which is P10's deliverable (03_OUTLINE.md §3.21). Run "
-            "with PREFILL_ENABLE_MIGRATION=0 until then. The geometry it must encode is fixed and "
-            "gated: NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK=32, shard row [1, 1, 32, 128], "
-            "ROUND_ROBIN_1D over mesh_device.dram_grid_size().x banks (G-KV)."
+        from .runners.kv_chunk_table import build_and_serialize_kv_chunk_table
+
+        cfg = self.config
+        if first_layer_idx is not None and first_layer_idx != cfg.first_layer_idx:
+            raise NotImplementedError(
+                f"build_kv_chunk_table was asked for a table starting at global layer "
+                f"{first_layer_idx}, but this runtime's first layer is {cfg.first_layer_idx}. "
+                f"Merging pipeline stages into one table is not implemented (R-040): Gate 1 "
+                f"(PREFILL_MOCK_MIGRATION=1) is single-rank only, and Gate 2 is out of scope for "
+                f"this bring-up (DEC-070). See bringup_log/08_PREFILL_INTEGRATION.md."
+            )
+        if num_my_layers is not None and num_my_layers != cfg.num_layers:
+            raise NotImplementedError(
+                f"build_kv_chunk_table was asked to describe {num_my_layers} layers but this "
+                f"runtime built {cfg.num_layers}; the multi-rank merge is not implemented (R-040)."
+            )
+        layouts = stage_layouts if stage_layouts is not None else ([stage_layout] if stage_layout else None)
+        if layouts:
+            for layout in layouts:
+                stages = len(layout) if layout is not None else 0
+                if stages > 1:
+                    raise NotImplementedError(
+                        f"build_kv_chunk_table received a gathered stage layout spanning {stages} "
+                        f"pipeline ranks. Merging them into one table is not implemented (R-040); "
+                        f"each rank's DRAM base differs, so the table would address rank 0's "
+                        f"buffers under every rank's layer ids and migrate the wrong bytes. Run "
+                        f"single-rank."
+                    )
+
+        kv = self._resolve_kv(kv_cache)
+        chunk_size = cfg.default_chunk_size if chunk_size is None else chunk_size
+        assert chunk_size in self.chunk_sizes, (
+            f"chunk_size={chunk_size} is not one of this runtime's supported sizes "
+            f"{self.chunk_sizes}; the table's block-cyclic period must be the one the cache was "
+            f"written with"
+        )
+        return build_and_serialize_kv_chunk_table(
+            mesh_device=self.mesh_device,
+            kv_cache=kv,
+            seq_len=cfg.max_seq_len,
+            num_layers=cfg.num_layers,
+            mesh_shape=cfg.mesh_shape,
+            sp_axis=cfg.sp_axis,
+            num_users=cfg.num_users,
+            chunk_size=chunk_size,
+            num_kv_heads=self.hf_config.num_key_value_heads,
+            head_dim=self.hf_config.head_dim,
+            path=path,
         )
 
     # -------------------------------------------------------------------------------------

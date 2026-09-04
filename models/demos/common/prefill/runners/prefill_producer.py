@@ -500,13 +500,23 @@ def run_schedule(cfg: ProducerConfig, *, push_fn, now_fn=time.perf_counter, slee
     )
 
 
+# Models whose KV cache is the plain packed-GQA block-cyclic layout `_read_slot_kv_and_check_pcc_gpt_oss`
+# reads: per-chip [users*layers, 1, seq_local, head_dim], 32-token DRAM-bank blocks, one KV head per TP
+# column, and a table config per head. Adding a name here instead of writing a fourth reader is only
+# valid while that model's NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK and shard row match gpt-oss's; each
+# member is expected to assert that in its own tests.
+_PACKED_GQA_MODELS = ("gpt_oss_d_p", "llama31_8b_d_p")
+
+
 def _read_slot_kv_and_check_pcc(table, device_map: dict, slot_id: int, real_len: int, trace_dir):
     golden_cap = int(os.environ.get("PREFILL_PCC_GOLDEN_LEN", "0"))
     if golden_cap:
         real_len = min(real_len, golden_cap)
     if ADAPTER.name == "minimax_m3":
         return _read_slot_kv_and_check_pcc_m3(table, device_map, slot_id, real_len, trace_dir)
-    if ADAPTER.name == "gpt_oss_d_p":
+    # Packed per-head K/V in a block-cyclic DRAM NdShard: one reader, one config layout
+    # (k_h0..k_hN-1, v_h0..v_hN-1), shared by every model that keeps that geometry.
+    if ADAPTER.name in _PACKED_GQA_MODELS:
         return _read_slot_kv_and_check_pcc_gpt_oss(table, device_map, slot_id, real_len, trace_dir)
     return _read_slot_kv_and_check_pcc_mla(table, device_map, slot_id, real_len, trace_dir)
 
@@ -587,7 +597,8 @@ def _read_slot_kv_and_check_pcc_gpt_oss(table, device_map: dict, slot_id: int, r
 
     min_pcc = min(mins.values())
     logger.info(
-        f"[producer] slot {slot_id} GPT-OSS KV PCC over [0,{real_len}) across {checked}/{NUM_LAYERS} local layers -> "
+        f"[producer] slot {slot_id} {ADAPTER.name} packed-GQA KV PCC over [0,{real_len}) across "
+        f"{checked}/{NUM_LAYERS} local layers -> "
         f"K={mins['k']:.5f} V={mins['v']:.5f} (min {min_pcc:.6f})"
     )
     if checked == 0:

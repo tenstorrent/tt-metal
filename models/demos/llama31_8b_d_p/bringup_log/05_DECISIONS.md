@@ -2654,3 +2654,366 @@ Template: `BRINGUP_RECIPE.md` §1.3.
   the wrong axis.
 - **Revisit if:** `num_key_value_heads` changes, i.e. a different model.
 - **Blast radius:** `tests/unit/test_kv_cache_tp8.py`, `06_GATES.md`, `R-027`, `R-029`.
+
+---
+
+## P10 — Disaggregated-prefill integration (DEC-100 .. DEC-111)
+
+> Numbering continues from `DEC-100` as instructed, leaving `DEC-088`-`DEC-099` unused. P8 wrote
+> `DEC-080`-`DEC-087`. The pre-existing out-of-band `DEC-070` (Gate 2 out of scope) is settled and
+> is the premise of `DEC-105` and `R-040`. P10 ran **before** P9 — see `BRINGUP_RECIPE.md` F.12.
+
+### DEC-100 — `load_hf_config` returns a **subclass** of the frozen `LlamaHFConfig`, because the engine mutates it
+- **Phase / module:** P10.1 / `tt/model_config.py`, `tt/runners/adapters/llama.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** the engine's contract says "The engine sets `.max_seq_len` on the returned config"
+  (`ADDING_A_PREFILL_MODEL.md` §1), and it does so on the line after `load_hf_config`
+  (`models/demos/common/prefill/runners/prefill_runner.py:477`). `LlamaHFConfig` is
+  `@dataclass(frozen=True)` (`tt/model_config.py:57`, `DEC-009`).
+- **Question:** how does a frozen config satisfy a contract that requires assigning an attribute to it?
+- **What actually happens if nothing is done:** CPython's generated frozen `__setattr__` is
+  `if type(self) is cls or name in fields: raise FrozenInstanceError`. The name `max_seq_len` is
+  **not** a field, but `type(self) is LlamaHFConfig`, so the first clause fires and the runner dies
+  with `FrozenInstanceError: cannot assign to field 'max_seq_len'` — at startup, before any device
+  op. Verified by direct experiment before writing the fix.
+- **Options considered:**
+  1. Un-freeze `LlamaHFConfig`. Rejected: `DEC-009` froze it so that no module can mutate a dimension
+     another module already read, and that guarantee is worth more than this one attribute.
+  2. Return a plain `dict`/`SimpleNamespace`. Rejected: `DEC-009` explicitly refuses to hand modules
+     anything but the normalised object, and `TtPrefillRuntime.__init__` asserts on it — a namespace
+     would re-open the `getattr(cfg, "rope_theta", DEFAULT)` trap (`R-014`).
+  3. A plain subclass, `RuntimeLlamaHFConfig(LlamaHFConfig)` (`tt/model_config.py:179`), built by
+     `runtime_llama_hf_config` (`:206`) from the fields `llama_hf_config` already resolved.
+- **Choice:** option 3.
+- **Why:** it is the *exact* fix, not a workaround. On a subclass instance `type(self) is not cls`,
+  so the frozen `__setattr__` falls through to `super().__setattr__` **only** for names that are not
+  declared fields. Every declared dimension stays immutable — asserted by
+  `tests/unit/test_prefill_adapter.py::test_load_hf_config_keeps_every_declared_dimension_frozen`,
+  which requires `cfg.rope_theta = 1.0` and `cfg.head_dim = 64` to still raise. `DEC-009`'s invariant
+  survives in full; only the engine's own undeclared per-run knob gets through.
+- **Evidence:** the two tests above plus `test_load_hf_config_returns_the_normalised_object_and_accepts_max_seq_len`;
+  `raw/G-ADAPTER_20260904T000808Z.log`. The runner then ran end to end
+  (`raw/G-REQUEST-runner_20260904T000335Z.log.gz`).
+- **Confidence:** high — mechanism read from CPython's dataclass source and reproduced in isolation.
+- **Falsifier:** a Python release that makes frozen `__setattr__` unconditional would break this; the
+  test above fails loudly if so, rather than the runner failing at startup.
+- **Revisit if:** `max_seq_len` ever needs to be a real dimension (then declare it and re-freeze).
+- **Blast radius:** `tt/model_config.py`, the adapter, nothing else. No `tt/` module reads
+  `max_seq_len` off the config — they take it as an argument.
+
+---
+
+### DEC-101 — A **second** config class (`tt/model_dims.py`) for the engine's `model_config`, not a reuse of `LlamaHFConfig`
+- **Phase / module:** P10.1 / `tt/model_dims.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** `PrefillModelAdapter.model_config` is typed `type` — a **class** of constants
+  (`models/demos/common/prefill/adapter.py:115`) — while this package's dimensions live on a frozen
+  dataclass *instance* built by `llama_hf_config()`.
+- **Question:** point `model_config` at something existing, or add a constants class?
+- **Options considered:**
+  1. `model_config = LlamaHFConfig` (the class). Rejected: its attributes are dataclass *fields*, not
+     values; `LlamaHFConfig.HEAD_DIM` does not exist and `LlamaHFConfig.head_dim` is a
+     `dataclasses.Field`, so every engine read would return the wrong kind of object.
+  2. Reuse `ModelArgs`. Rejected: it needs a mesh device and a checkpoint; two of the three engine
+     call sites run with neither (`runner_utils.py:41` reads `FABRIC_PAYLOAD_SIZE` **before**
+     `open_mesh_device`, and the producer never opens a device at all).
+  3. A new zero-import constants class, `Llama31_8BConfig` (`tt/model_dims.py:32`), mirroring
+     `models/demos/deepseek_v3_d_p/reference/gpt_oss_120b_config.py` and its eight siblings.
+- **Choice:** option 3.
+- **Why:** it is what every other model in the tree does, and it is the only form the three call
+  sites can consume. The obvious objection — two places now state `head_dim` — is answered
+  mechanically rather than by discipline:
+  `tests/unit/test_prefill_adapter.py::test_model_dims_match_the_bundled_config` asserts all
+  **fourteen** constants against `llama_config_dims()`, i.e. against the same `config.json`
+  `llama_hf_config()` reads. Drift fails a test, not a deployment.
+- **Evidence:** that test; `raw/G-ADAPTER_20260904T000808Z.log` prints the resolved values.
+- **Confidence:** high.
+- **Falsifier:** if the engine ever accepts an instance, option 1 becomes available and this class
+  should be deleted.
+- **Blast radius:** `tt/model_dims.py` (new), the adapter's `model_config`, one test.
+
+---
+
+### DEC-102 — The adapter imports **nothing heavy**, including the `is_blackhole` helper the template imports at module scope
+- **Phase / module:** P10.1 / `tt/runners/adapters/llama.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** contract checklist item 3, "No reference-modeling / heavy imports at module load
+  (lazy inside methods)".
+- **Question:** is the template's level of import-lightness enough?
+- **Measured, before deciding:** the template
+  (`models/demos/gpt_oss_d_p/tt/runners/adapters/gpt_oss.py`) imports
+  `models.common.utility_functions` and its own reference config at module scope. Importing it in a
+  fresh interpreter costs **2.501 s** and pulls in **`ttnn` and `torch`**. Ours costs **0.039 s** and
+  pulls in **neither** (`raw/G-ADAPTER_20260904T000808Z.log`, "[3] import-light"). 64x.
+- **Choice:** module scope is limited to stdlib + `loguru` + the engine's own light `adapter` module
+  + this package's zero-import `tt/model_dims.py`. `is_blackhole` moves inside `weight_cache_path`;
+  `ttnn` inside `build_runtime` / `_cache_dtype`; the reference model classes stay lazy properties.
+- **Why it is worth diverging from the template for:** two real consumers pay this cost.
+  (a) The H2D producer imports the selected adapter in a process that never opens a device.
+  (b) `models/demos/deepseek_v3_d_p/tests/conftest.py:33` builds `TEST_VARIANTS` by calling
+  `get_adapter(name)` for **every** entry in `ADAPTER_PATHS` at collection time — so registering this
+  adapter (`DEC-105`'s sibling edit) puts our import cost, and any import-time failure, into that
+  entire suite. An adapter that imported `tt/model.py` would drag a device stack into a suite that
+  never asked for one.
+- **Evidence:** the measurement above, plus three tests that keep it true rather than merely
+  observed: `test_adapter_module_imports_nothing_heavy` (subprocess-measured, because a pytest
+  process that already imported ttnn cannot observe it), `test_model_dims_module_imports_nothing_at_all`
+  (AST: zero import statements), and `test_adapter_module_scope_has_no_package_device_imports` (AST:
+  no module-scope `ttnn`/`torch`/`transformers`/`tt.*` import).
+- **Confidence:** high.
+- **Falsifier / revisit if:** a future method genuinely needs a module-scope import; then the
+  1.0 s budget in the test is the thing to argue with.
+- **Blast radius:** the adapter module and `tt/model_dims.py`. P9 gates on this property.
+
+---
+
+### DEC-103 — `FABRIC_PAYLOAD_SIZE = EMB_SIZE = 4096`, by repo convention rather than measurement
+- **Phase / module:** P10.1 / `tt/model_dims.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** `model_config.FABRIC_PAYLOAD_SIZE` becomes
+  `FabricRouterConfig.max_packet_payload_size_bytes` (`common/prefill/runners/runner_utils.py:41`),
+  and it is a number not read from `config.json` — so §1.3 requires a `DEC`.
+- **What the tree does:** **nine** model config classes set `FABRIC_PAYLOAD_SIZE = EMB_SIZE`
+  verbatim, with the comment "must stay in sync with migration code"
+  (`models/demos/deepseek_v3_d_p/reference/gpt_oss_120b_config.py:18` and siblings; values range
+  2880 → 7168). None derives it from a measurement.
+- **Choice:** follow the convention: `4096`, Llama-3.1-8B's `hidden_size`.
+- **Why:** the convention is unanimous, our value sits inside the range other models already run at,
+  and inventing a different rule for one model would be the actual risk. Not a tuned number.
+- **Evidence:** the nine call sites; and the value was exercised end to end — the `(4,8)` fabric came
+  up `FABRIC_1D_RING` and served four chunks with it (`raw/G-REQUEST-runner_...log.gz`).
+- **Confidence:** medium on the *rule* (nobody in-tree documents why EMB_SIZE), high that it works.
+- **Falsifier / revisit if:** a fabric packet-size error appears, or a perf pass finds the payload
+  size matters. `tests/unit/test_prefill_adapter.py` asserts the identity so a silent change fails.
+- **Blast radius:** `tt/model_dims.py`, the fabric router config at mesh-open.
+
+---
+
+### DEC-104 — `params.kv_only_last_layer` is **logged and ignored**, not asserted against
+- **Phase / module:** P10.1 / `tt/runners/adapters/llama.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** the engine defaults `PREFILL_KV_ONLY_LAST_LAYER` to `1`
+  (`prefill_runner.py`), so `params.kv_only_last_layer` arrives `True` on every default run, and this
+  package implements no such mode.
+- **Question:** implement it, refuse it, or accept and ignore it?
+- **What it means:** a DeepSeek-family optimisation — build the last decoder block "KV only" (attn
+  norm + the KV write, no MLP, no tail) because chunked prefill's product is the KV cache
+  (`models/demos/deepseek_v3_d_p/tt/tt_prefill_transformer.py:214`, `:247`). `gpt_oss_d_p` also does
+  not implement it and silently drops it.
+- **Choice:** accept it, log an INFO naming this `DEC`, and run the last layer normally.
+- **Why not refuse:** refusing would make the engine's **default** configuration an error, forcing
+  every operator to set `PREFILL_KV_ONLY_LAST_LAYER=0` for no correctness reason.
+  **Why not silent:** this package's whole method is that an ignored knob is a trap. Correctness is
+  genuinely unaffected — the LM head is never built (`with_lm_head=False`) and the last layer's KV is
+  written either way — so the only cost is one MLP per chunk, which the log states.
+- **Evidence:** the line is in the served run:
+  `[llama31_8b_d_p] params.kv_only_last_layer=True is NOT implemented by this runtime …`
+  (`raw/G-REQUEST-runner_20260904T000335Z.log.gz`, and again in the mock-migration run).
+- **Confidence:** high on correctness; the perf cost is unmeasured (one MLP of 32).
+- **Falsifier / revisit if:** a perf phase wants it; it is a `tt/layer.py` + `tt/model.py` change.
+- **Blast radius:** one INFO line; no numerical effect. **P9 should carry this as a known TODO.**
+
+---
+
+### DEC-105 — Add `llama31_8b_d_p` to the producer's packed-GQA read-back branch (a **shared-code** edit)
+- **Phase / module:** P10.5 / `models/demos/common/prefill/runners/prefill_producer.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** `G-MOCK-MIG`'s read-back is **not** adapter-dispatched. It branches on `ADAPTER.name`
+  in `_read_slot_kv_and_check_pcc` (`common/prefill/runners/prefill_producer.py:511`) and falls
+  through to the **MLA** reader (`:696`) for any unknown name.
+- **What happens without the edit:** the gate does not fail. It reads a merged-MLA cache layout out
+  of our packed K/V DRAM and reports *some* PCC — the single most dangerous failure mode available
+  in this phase, because a green gate would be checking the wrong bytes.
+- **Options considered:**
+  1. Write a fourth reader, `_read_slot_kv_and_check_pcc_llama`. Rejected: it would be a copy of
+     `_read_slot_kv_and_check_pcc_gpt_oss` (`:544`) with the name changed. Our cache layout is
+     **identical** to gpt-oss's by an explicit P2 commitment — same
+     `NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK = 32`, same `[1, 1, 32, head_dim]` shard row, same one
+     head per TP column, same `k_h0..k_hN-1, v_h0..v_hN-1` config order — and the only difference,
+     `head_dim` 64 → 128, is already a parameter that reader reads off `ADAPTER.model_config`.
+  2. Generalise the name check.
+- **Choice:** option 2. `_PACKED_GQA_MODELS = ("gpt_oss_d_p", "llama31_8b_d_p")`
+  (`prefill_producer.py:508`), plus one log f-string changed from the hard-coded "GPT-OSS" to
+  `{ADAPTER.name}` so a Llama gate transcript does not claim to be a GPT-OSS one. **Two lines
+  changed, one constant and one comment added; nothing else in the engine is touched.**
+- **Why this is safe to do to shared code:** the change is additive — `gpt_oss_d_p` still reaches the
+  same function through the same branch, and no other model's dispatch moves. The risk it introduces
+  is that the two layouts could *later* diverge, so that is closed by a test rather than a comment:
+  `tests/unit/test_prefill_adapter.py::test_our_dram_block_geometry_still_equals_gpt_oss` asserts
+  `OUR_BLOCK == GPT_OSS_BLOCK == 32` and says, in its failure message, to write a fourth reader
+  rather than widen the branch if it ever fires. A second test asserts our name is in the tuple at
+  all, so deleting the branch is also caught.
+- **Evidence:** the gate ran and produced the *same numbers* the runtime's own on-device read-back
+  produced in P8 — min K **0.99646** / V **0.98445**, identical to `G-MESH-KV`'s "chunked 4x512 @
+  2048 tok" row to five decimals, from two completely independent read paths in two processes
+  (`raw/G-MOCK-MIG-producer_20260904T000550Z.log`). That agreement is the strongest available
+  evidence that the branch is the right one.
+- **Confidence:** high.
+- **Falsifier:** if the two block geometries diverge, the test above fails and option 1 becomes
+  correct.
+- **Blast radius:** `prefill_producer.py` (shared), `G-MOCK-MIG`, `08_PREFILL_INTEGRATION.md`.
+
+---
+
+### DEC-106 — `prefill_chunk` accepts `metadata_msg`, which the §2 contract does not mention
+- **Phase / module:** P10 / `tt/tt_prefill_runtime.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** `ADDING_A_PREFILL_MODEL.md` §2 documents `prefill_chunk(input, kv_cache, *, slot_id,
+  actual_start, actual_end, request_id=0)`. The engine actually calls it with **two more** keywords:
+  `d2h_service` and `metadata_msg` (`common/prefill/runners/prefill_runner.py:364`, forwarded at
+  `:294`). `gpt_oss_d_p`'s runtime accepts `d2h_service` and `record_dev` but **not** `metadata_msg`.
+- **What it costs to miss:** a `TypeError` on the **first served chunk** — after the mesh is open,
+  the weights are loaded and `compile()` has run — i.e. the most expensive place in the run to find a
+  signature mismatch. It is invisible to every device-free test that only reads the doc.
+- **Choice:** accept `metadata_msg=None` and `del` it with a comment explaining what it is (the
+  on-device `[slot, start, end]` metadata tensor, which only a pipelined rank forwards over D2D and
+  only a trace-capturing runtime keeps persistent; a single-rank runtime already has those three
+  values as arguments).
+- **Why not just add it silently:** the general problem is that the doc and the call site can drift.
+  So `tests/unit/test_prefill_adapter.py::test_the_engine_call_site_passes_nothing_prefill_chunk_lacks`
+  **parses `prefill_runner.py` with `ast`**, collects every keyword any `.prefill_chunk(...)` call
+  passes, and requires our signature to accept all of them. A new engine keyword now fails a
+  device-free unit test instead of a galaxy run.
+- **Evidence:** that test, plus 4 chunks served in request mode
+  (`raw/G-REQUEST-runner_20260904T000335Z.log.gz`, `CHUNK_START c=0..3`).
+- **Confidence:** high.
+- **Revisit if:** the contract doc is updated; then this note can point at it instead.
+- **Blast radius:** one keyword on `prefill_chunk`; no behaviour change.
+
+---
+
+### DEC-107 — `sequence_parallel` is **derived** from the mesh, not exposed as a knob
+- **Phase / module:** P10.1 / `tt/runners/adapters/llama.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** `TtPrefillRuntimeConfig.sequence_parallel` defaults `False` (P7 left it off so the
+  runtime could not half-enable SP), but the deployment configuration requires `True`, and
+  `PrefillRunParams` has no field for it.
+- **Options considered:** a new `PREFILL_*` env var; or derive it.
+- **Choice:** `sequence_parallel = params.sp_factor > 1`.
+- **Why:** there is exactly one correct value per mesh, so a knob could only ever be set wrong.
+  `TtPrefillRuntime.__init__` already refuses `sequence_parallel=True` at `sp == 1` outright, and SP
+  prefill and the chunked cache-read path are the same switch (`DEC-056`) — so at `sp > 1` anything
+  but `True` silently gives up the served attention core, and at `sp == 1` anything but `False` is an
+  assertion. Deriving it also means **no new env var**, which P9's env-var table has to enumerate.
+- **Evidence:** the `(4,8)` served run took the chunked ring path and reproduced P8's chunked KV
+  numbers exactly (`DEC-105`'s evidence paragraph).
+- **Confidence:** high.
+- **Falsifier / revisit if:** someone wants the one-shot SP bootstrap on a multi-row mesh for
+  comparison; today that is expressed by setting `max_seq_len == chunk_size`, which the adapter
+  **warns** about explicitly rather than letting it change the attention core silently.
+- **Blast radius:** `build_runtime` only.
+
+---
+
+### DEC-108 — What the model manifest pins, and what it deliberately does not
+- **Phase / module:** P10.2 / `tt/runners/manifests/llama31_8b_d_p.json`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** the manifest's `env` block is applied with `setdefault`
+  (`common/prefill/runners/prefill_runner.py:31`), so anything put in it becomes this model's default
+  on every runner.
+- **Choice:** pin the six values that are properties of *the model and this machine* —
+  `PREFILL_MODEL`, `PREFILL_NUM_LAYERS=32`, `PREFILL_SP=4`, `PREFILL_TP=8`,
+  `PREFILL_FABRIC_MODE=1d_ring`, `PREFILL_TOPOLOGY=ring` — and pin **none** of the workload knobs
+  (`PREFILL_CHUNK_SIZE`, `PREFILL_MAX_SEQ_LEN`, `PREFILL_NUM_USERS`).
+- **Why `PREFILL_TP=8` is in there:** it is not a preference. The packed cache holds one KV head per
+  chip, so `TP != num_key_value_heads` is a `TT_FATAL` from C++ (`R-027`).
+- **Why `PREFILL_FABRIC_MODE=1d_ring` is in there — the non-obvious one:** the engine picks
+  `FABRIC_1D` whenever `sp <= 8` (`common/prefill/runners/runner_utils.py`), and `sp` is 4 here. But
+  every collective in this package runs `Topology.Ring`, which needs the **cyclic** route:
+  `FABRIC_1D_RING` plus the torus mesh-graph descriptor (`DEC-020` / `DEC-081`, and every P8 gate ran
+  that way). A `Ring` topology on a `FABRIC_1D` fabric does not error — it hangs. So the engine's
+  default is wrong for this model and the manifest has to override it.
+  `TT_MESH_GRAPH_DESC_PATH` is the other half and a manifest **cannot** set it (it is read before the
+  manifest is applied); the manifest's comment block says so, and it stays an operator/binding
+  responsibility.
+- **Why the workload knobs are excluded:** they must match the **producer** exactly or the H2D byte
+  layout disagrees, and a default hidden in a model manifest that the producer does not read is
+  precisely how that drift happens. `tests/unit/test_prefill_adapter.py::test_manifest_is_valid_and_selects_this_model`
+  asserts each of the three is absent.
+- **Evidence:** the resolved runner config block in `raw/G-REQUEST-runner_20260904T000335Z.log.gz`
+  shows `PREFILL_FABRIC_MODE = 1d_ring` and `Fabric config: FabricConfig.FABRIC_1D_RING`.
+- **Confidence:** high.
+- **Blast radius:** the manifest; every runner started with `PREFILL_MANIFEST` pointed at it.
+
+---
+
+### DEC-109 — `build_kv_chunk_table` **raises** on multi-rank arguments instead of discarding them
+- **Phase / module:** P10.4 / `tt/tt_prefill_runtime.py:583`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** the runner calls the hook with `first_layer_idx`, `num_my_layers` and
+  `stage_layout(s)` on the migration path. The template deletes them
+  (`models/demos/gpt_oss_d_p/tt/tt_prefill_runtime.py`, `del first_layer_idx, num_my_layers,
+  stage_layout`).
+- **Question:** ignore them (correct for the single-rank path both packages run), or check them?
+- **Choice:** check them, and raise `NotImplementedError` naming `R-040` when they describe a merge
+  we have not implemented — a `first_layer_idx` that is not ours, a `num_my_layers` that is not ours,
+  or a gathered layout spanning more than one rank.
+- **Why:** discarding them is correct **today** and silently wrong the first time anyone runs a
+  pipelined rank. This rank's table numbers its layers from 0 and carries only this rank's DRAM base;
+  a merged table must renumber onto the global range and splice in the other ranks' bases. Publishing
+  the un-merged table would address rank 0's buffers under every rank's layer ids — migrating the
+  wrong bytes, discovered as a corrupted decode. `R-040` already records that merge as untested; this
+  makes the code agree with the risk register instead of contradicting it.
+- **Evidence:** `tests/unit/test_kv_chunk_table.py::test_runtime_hook_refuses_a_multi_rank_merge`
+  exercises all three refusals (`raw/G-KV-TABLE_20260904T000847Z.log`).
+- **Confidence:** high.
+- **Falsifier / revisit if:** someone implements the merge — then these three checks are the exact
+  list of what has to start working.
+- **Blast radius:** the migration hook only; the single-rank path is unchanged (`G-MOCK-MIG` ran).
+
+---
+
+### DEC-110 — `G-REQUEST` / `G-MOCK-MIG` run at chunk **512**, `max_seq_len` **2048**, 4 chunks, 1 user
+- **Phase / module:** P10 / gates
+- **Date (UTC):** 2026-09-04
+- **Trigger:** the engine's defaults (chunk 5120, 11 chunks) do not fit any golden trace this package
+  has, and several constraints interact.
+- **The constraints, all simultaneously satisfied by (512, 2048, 4, 1):**
+  * `CHUNK_SIZE % (SP*32) == 0` → 512 % 128 == 0 at SP=4;
+  * `MAX_SEQ_LEN % CHUNK_SIZE == 0` → the block-cyclic period must tile the cache (`tt/rope.py`);
+  * `MAX_SEQ_LEN > CHUNK_SIZE` **strictly** — otherwise the ring op has no room and the run silently
+    takes the one-shot SP bootstrap instead of the served chunked path (`DEC-021`);
+  * `PREFILL_MAX_SEQ_LEN >= chunks * CHUNK_SIZE` → 2048 >= 4 x 512, or the runner asserts mid-run;
+  * the golden trace must be at least `chunks * CHUNK_SIZE` tokens — `p7_s2048` is exactly 2048.
+- **Why not larger:** the only longer golden is 2048 tokens, and a chunk size the package has never
+  measured would make the gate's PCC unattributable.
+- **Why this is the *interesting* configuration and not a soft one:** 4 x 512 @ 2048 is precisely the
+  case P8's `G-MESH-KV` measured on device (min K 0.99646 / V 0.98445), so the producer's device-less
+  read-back can be compared **number for number** against an independent on-device read of the same
+  product. It also exercises three cache-read chunks (`actual_start` 512/1024/1536), i.e. the ring
+  path, not just chunk 0.
+- **`num_users = 1`:** the deployment configuration, and all this package's KV gates ran at 1. Its
+  cost is stated in the gate's Deviations: cross-slot addressing in the table is exercised only by
+  `G-KV-TABLE` (2 users, device, bit-exact), not by `G-MOCK-MIG`.
+- **Evidence:** `06_GATES.md` `G-REQUEST` / `G-MOCK-MIG` blocks.
+- **Confidence:** high.
+- **Revisit if:** a longer golden is generated; re-run at 8192 (the runtime's default chunk) then.
+- **Blast radius:** the two gate runs.
+
+---
+
+### DEC-111 — `G-KV-TABLE` is a new gate: the address table proved by reading DRAM back through it
+- **Phase / module:** P10.4 / `tests/unit/test_kv_chunk_table.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** Appendix A has no gate for the KV chunk address table; `G-MOCK-MIG` is the only thing
+  that touches it, and `G-MOCK-MIG` is an end-to-end PCC against a golden.
+- **Question:** is `G-MOCK-MIG` enough?
+- **Why it is not:** `G-MOCK-MIG` scores a **correlation** over 32 layers of a single slot at
+  `num_users = 1`. It cannot distinguish "the table is right" from "the table is wrong in a way that
+  still correlates", it never exercises a second slot, and a `PASS` there depends on the model, the
+  weights, the golden and the ring attention all being right too — so a table bug arrives disguised
+  as a numerical one. Precedent: `DEC-087` added `G-KV-TP8` for the same reason.
+- **Choice:** a separate device gate that writes a **position/head/slot/layer-labelled** pattern
+  through the real writer on the real `(4,8)` galaxy, serializes the table, **re-imports it from
+  protobuf**, and reads every 32-token block back over `read_dram_umd` using the producer's own
+  `table.lookup` → `_resolve_unique_id` → `_decode_bfp8_chunk` path — asserting `torch.equal`, not a
+  PCC. 2 users x 2 layers x 8 heads x K and V x 512 tokens.
+- **Why bit-exact is available here:** every value is an integer ≤ 127, which `bfloat8_b` stores
+  exactly (its decoder is `magnitude(7 bits) * 2**(exponent-133)`, exponent shared across 16 *lanes*),
+  and the labelled 32-lane blocks never cross a shared exponent. This is an addressing claim, and an
+  addressing claim should not be scored with a correlation (Appendix E.1).
+- **Negative control:** reading head 0 through config 1 must **fail**, or the head→config mapping is
+  not under test.
+- **Evidence:** `raw/G-KV-TABLE_20260904T000847Z.log`, 2 passed.
+- **Confidence:** high.
+- **Blast radius:** new test file; new row in `06_GATES.md`. No production code.

@@ -923,8 +923,8 @@ Working template to mirror end to end: `models/demos/gpt_oss_d_p/tt/runners/` �
 5. **Wire the producer's KV read-back for your cache layout.** The device-less reader that powers
    `PREFILL_PRODUCER_CHECK_PCC` is **not** adapter-dispatched through the adapter object — it
    branches on `ADAPTER.name` in
-   `models/demos/common/prefill/runners/prefill_producer.py:503::_read_slot_kv_and_check_pcc`, which
-   today reads:
+   `models/demos/common/prefill/runners/prefill_producer.py`'s `_read_slot_kv_and_check_pcc`, which
+   at the time this recipe was written (before P10's edit, and at `:503`) read:
    ```python
    if ADAPTER.name == "minimax_m3":   return _read_slot_kv_and_check_pcc_m3(...)
    if ADAPTER.name == "gpt_oss_d_p":  return _read_slot_kv_and_check_pcc_gpt_oss(...)
@@ -1524,3 +1524,49 @@ mutually exclusive by construction and `True` is refused with a `TT_FATAL`. Cost
 op alone sits **7.98x** off its noise floor (against the single-card SDPA's **71x**, E.5), and end to
 end the chunked path carries **1.45x** the error of the one-shot path (min K 0.99695 vs 0.99789).
 Expect it, attribute it, and set any future KV threshold against the **chunked** number. `R-033`.
+
+
+### F.12 Phase order correction — run P10 (integration) BEFORE P9 (cleanliness)
+The recipe orders the phases P9 (cleanliness) then P10 (disaggregated-prefill integration). That is
+the wrong way round and this run swapped them.
+
+P9's gate is a whole-package sweep: no TODOs without a filed issue, every env var in the README's
+table, every `tt/` module owning a test, `README.md` complete, import hygiene on the adapter. **P10
+then adds `tt/runners/adapters/`, a manifest, a KV-chunk-table module and new env vars** — so a P9 run
+that precedes it is auditing a package that is about to change, and has to be redone. Worse, one of
+P9's own items (*"importing an adapter stays cheap — no reference-model, device or runtime imports at
+module load"*) is **unrunnable before P10**, because no adapter exists yet.
+
+**Run P10, then P9 as the final sweep.** The gate index in Appendix A keeps its numbering; only the
+execution order changes. Anyone re-running this recipe should do the same.
+
+
+### F.13 P10 executed: what changed in the two shared files, and the citations that moved
+P10 ran and made the two edits outside the package that step 5 and step 3 above authorise. The
+snippet in step 5 is therefore **historical** — the current dispatch is:
+
+```python
+_PACKED_GQA_MODELS = ("gpt_oss_d_p", "llama31_8b_d_p")   # prefill_producer.py:508
+...
+if ADAPTER.name == "minimax_m3":        return _read_slot_kv_and_check_pcc_m3(...)
+if ADAPTER.name in _PACKED_GQA_MODELS:  return _read_slot_kv_and_check_pcc_gpt_oss(...)
+return _read_slot_kv_and_check_pcc_mla(...)
+```
+
+with the reader's log line now naming `ADAPTER.name` instead of a hard-coded "GPT-OSS" (`DEC-105`).
+Line numbers in `prefill_producer.py` shifted by +8/+11 as a result — `_read_slot_kv_and_check_pcc`
+is now at `:511`, `_read_slot_kv_and_check_pcc_gpt_oss` at `:544`, `_read_slot_kv_and_check_pcc_mla`
+at `:696` — and `scripts/verify_citations.py` was updated accordingly (662/662, 745/745).
+
+**Two things the recipe's P10 section does not warn about, both of which cost a run to find:**
+
+1. **`ADDING_A_PREFILL_MODEL.md` §2's `prefill_chunk` signature is incomplete.** The engine also
+   always passes `d2h_service` **and `metadata_msg`** (`prefill_runner.py:364`). A runtime written to
+   the doc dies with a `TypeError` on its first served chunk, after the mesh is open and the weights
+   are loaded. `DEC-106`.
+2. **The engine mutates the config `load_hf_config` returns** (`prefill_runner.py:477`), so a frozen
+   dataclass cannot be returned as-is. `DEC-100`.
+
+**And one gate the recipe's Appendix A does not list but should:** `G-KV-TABLE`. `G-MOCK-MIG` scores
+a PCC over one slot and cannot separate a wrong address table from a numerical problem; `DEC-111`
+explains why that needed its own bit-exact gate, on the same reasoning `DEC-087` used for `G-KV-TP8`.

@@ -1,0 +1,163 @@
+=== G-ADAPTER: ADDING_A_PREFILL_MODEL.md closing checklist, item by item ===
+--- [4] registry: PREFILL_MODEL=llama31_8b_d_p resolves, and the pytest variant fixture sees it ---
+2026-09-04 00:08:11.289 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mstojkovic/.cache/ttnn,model_cache_path=/home/mstojkovic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+ADAPTER_PATHS['llama31_8b_d_p'] = 'models.demos.llama31_8b_d_p.tt.runners.adapters.llama:LlamaPrefillAdapter'
+get_adapter -> models.demos.llama31_8b_d_p.tt.runners.adapters.llama.LlamaPrefillAdapter name= llama31_8b_d_p
+abstract methods remaining: NONE
+model_config: Llama31_8BConfig FABRIC_PAYLOAD_SIZE= 4096 NUM_KEY_VALUE_HEADS= 8 HEAD_DIM= 128 ROTARY_DIM= 128
+hf_model_default: /home/mstojkovic/tt-metal/models/demos/llama31_8b_d_p/configs/Llama-3.1-8B-Instruct
+ttnn_cache_default: ''  prefill_trace_default: ''
+l1_small_size: 0  supports_dflash: False
+resolved weight_cache_path((4,8)): /home/mstojkovic/models/Llama-3.1-8B-Instruct/ttnn_cache/llama31_8b_d_p_bh_32dev/4x8/tensor_cache_bfp8
+pytest `variant` fixture registry (conftest.py:33) sees: ['deepseek_v32', 'deepseek_v3_d_p', 'glm_5_1', 'glm_5_2', 'gpt_oss_d_p', 'kimi_k2_6', 'kimi_k2_7', 'kimi_k3', 'llama31_8b_d_p', 'minimax_m3']
+  variant['llama31_8b_d_p'] -> LlamaPrefillAdapter
+nanobind: leaked 2 instances!
+ - leaked instance 0x7c634d134e28 of type "ttnn._ttnn.tensor.MemoryConfig"
+ - leaked instance 0x7c6263825548 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 35 types!
+ - leaked type "MathFidelity"
+ - leaked type "WorkerMode"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.types.Shape"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - ... skipped remainder
+nanobind: leaked 322 functions!
+ - leaked function "to_json"
+ - leaked function "item"
+ - leaked function ""
+ - leaked function "create_output_tensors"
+ - leaked function "push_current_command_queue_id_for_thread"
+ - leaked function ""
+ - leaked function "__init__"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "get_system_mesh_id"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html
+--- [3] import-light: adapter vs the gpt-oss template, in a fresh interpreter each ---
+  models.demos.common.prefill.adapter                             0.009s  heavy_modules=NONE
+  models.demos.llama31_8b_d_p.tt.runners.adapters.llama           0.039s  heavy_modules=NONE
+2026-09-04 00:08:17.077 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mstojkovic/.cache/ttnn,model_cache_path=/home/mstojkovic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+  models.demos.gpt_oss_d_p.tt.runners.adapters.gpt_oss            2.501s  heavy_modules=['torch', 'ttnn']
+
+--- [1][2][5] the contract test suite ---
+2026-09-04 00:08:20.452 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mstojkovic/.cache/ttnn,model_cache_path=/home/mstojkovic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+collecting ... collected 29 items
+
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_registered_in_adapter_paths_and_resolves PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_registry_entry_is_lazy PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_unknown_model_name_still_raises_listing_ours 2026-09-04 00:08:21.949 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] KeyError message="llama31_8b_d_p"
+2026-09-04 00:08:21.950 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] KeyError message="llama31_8b_d_p"
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_no_abstract_methods_remain PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_implements_the_four_contract_methods_itself[load_hf_config] PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_implements_the_four_contract_methods_itself[weight_cache_path] PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_implements_the_four_contract_methods_itself[allocate_kv_cache] PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_implements_the_four_contract_methods_itself[build_runtime] PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_identity_and_default_path_attributes PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_model_config_exposes_everything_the_engine_reads PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_model_dims_match_the_bundled_config PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_load_hf_config_returns_the_normalised_object_and_accepts_max_seq_len 2026-09-04 00:08:23.372 | INFO     | models.demos.llama31_8b_d_p.tt.runners.adapters.llama:load_hf_config:156 - Loading HF config for model='llama31_8b_d_p' from /home/mstojkovic/tt-metal/models/demos/llama31_8b_d_p/configs/Llama-3.1-8B-Instruct/config.json
+2026-09-04 00:08:23.372 | INFO     | models.demos.llama31_8b_d_p.tt.runners.adapters.llama:load_hf_config:159 - [llama31_8b_d_p] config: layers=32 hidden=4096 heads=32q/8kv head_dim=128 rope_theta=500000.0 rope_type=llama3 scaling=8.0
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_load_hf_config_keeps_every_declared_dimension_frozen 2026-09-04 00:08:23.535 | INFO     | models.demos.llama31_8b_d_p.tt.runners.adapters.llama:load_hf_config:156 - Loading HF config for model='llama31_8b_d_p' from /home/mstojkovic/tt-metal/models/demos/llama31_8b_d_p/configs/Llama-3.1-8B-Instruct/config.json
+2026-09-04 00:08:23.536 | INFO     | models.demos.llama31_8b_d_p.tt.runners.adapters.llama:load_hf_config:159 - [llama31_8b_d_p] config: layers=32 hidden=4096 heads=32q/8kv head_dim=128 rope_theta=500000.0 rope_type=llama3 scaling=8.0
+2026-09-04 00:08:23.536 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] FrozenInstanceError message="cannot assign to field"
+2026-09-04 00:08:23.536 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] FrozenInstanceError message="cannot assign to field"
+2026-09-04 00:08:23.536 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] FrozenInstanceError message="cannot assign to field"
+2026-09-04 00:08:23.536 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] FrozenInstanceError message="cannot assign to field"
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_load_hf_config_refuses_a_path_without_config_json 2026-09-04 00:08:23.691 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] AssertionError message="no config.json at"
+2026-09-04 00:08:23.691 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] AssertionError message="no config.json at"
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_weight_cache_path_matches_model_args PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_weight_cache_path_is_mesh_shape_and_dtype_specific PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_prefill_ttnn_cache_wins_over_the_model_args_roots PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_build_runtime_signature_is_keyword_only_as_the_engine_calls_it PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_allocate_kv_cache_signature_and_kvcaches_subclass PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_runtime_exposes_the_five_config_names_and_three_methods_the_engine_drives PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_prefill_chunk_accepts_every_kwarg_the_engine_passes PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_the_engine_call_site_passes_nothing_prefill_chunk_lacks PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_adapter_module_imports_nothing_heavy PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_model_dims_module_imports_nothing_at_all PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_adapter_module_scope_has_no_package_device_imports PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_manifest_is_valid_and_selects_this_model PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_producer_dispatches_our_name_to_the_packed_gqa_reader PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_our_dram_block_geometry_still_equals_gpt_oss PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_hf_to_meta_permutation_matches_the_producers_inline_copy PASSED
+
+=============================== warnings summary ===============================
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_load_hf_config_returns_the_normalised_object_and_accepts_max_seq_len
+  /home/mstojkovic/tt-metal/python_env/lib/python3.12/site-packages/pydantic/_internal/_config.py:291: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.9/migration/
+    warnings.warn(DEPRECATION_MESSAGE, DeprecationWarning)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /home/mstojkovic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+1.30s call     models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_runtime_exposes_the_five_config_names_and_three_methods_the_engine_drives
+0.20s setup    models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_prefill_chunk_accepts_every_kwarg_the_engine_passes
+0.20s setup    models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_model_dims_module_imports_nothing_at_all
+0.19s setup    models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_hf_to_meta_permutation_matches_the_producers_inline_copy
+0.19s setup    models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_adapter_module_imports_nothing_heavy
+0.19s setup    models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_adapter_module_scope_has_no_package_device_imports
+0.19s setup    models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_the_engine_call_site_passes_nothing_prefill_chunk_lacks
+0.19s setup    models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_producer_dispatches_our_name_to_the_packed_gqa_reader
+0.19s setup    models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_our_dram_block_geometry_still_equals_gpt_oss
+0.19s setup    models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_manifest_is_valid_and_selects_this_model
+0.16s setup    models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_load_hf_config_keeps_every_declared_dimension_frozen
+0.16s setup    models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_registered_in_adapter_paths_and_resolves
+0.16s setup    models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_weight_cache_path_is_mesh_shape_and_dtype_specific
+0.15s setup    models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_weight_cache_path_matches_model_args
+0.15s setup    models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_load_hf_config_refuses_a_path_without_config_json
+0.15s setup    models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_prefill_ttnn_cache_wins_over_the_model_args_roots
+0.15s setup    models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_build_runtime_signature_is_keyword_only_as_the_engine_calls_it
+0.15s setup    models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_allocate_kv_cache_signature_and_kvcaches_subclass
+0.15s setup    models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_registry_entry_is_lazy
+0.15s setup    models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_runtime_exposes_the_five_config_names_and_three_methods_the_engine_drives
+0.15s setup    models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_unknown_model_name_still_raises_listing_ours
+0.15s setup    models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_load_hf_config_returns_the_normalised_object_and_accepts_max_seq_len
+0.15s setup    models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_implements_the_four_contract_methods_itself[weight_cache_path]
+0.15s setup    models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_model_dims_match_the_bundled_config
+0.15s setup    models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_implements_the_four_contract_methods_itself[load_hf_config]
+=========================== short test summary info ============================
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_registered_in_adapter_paths_and_resolves
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_registry_entry_is_lazy
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_unknown_model_name_still_raises_listing_ours
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_no_abstract_methods_remain
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_implements_the_four_contract_methods_itself[load_hf_config]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_implements_the_four_contract_methods_itself[weight_cache_path]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_implements_the_four_contract_methods_itself[allocate_kv_cache]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_implements_the_four_contract_methods_itself[build_runtime]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_identity_and_default_path_attributes
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_model_config_exposes_everything_the_engine_reads
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_model_dims_match_the_bundled_config
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_load_hf_config_returns_the_normalised_object_and_accepts_max_seq_len
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_load_hf_config_keeps_every_declared_dimension_frozen
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_load_hf_config_refuses_a_path_without_config_json
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_weight_cache_path_matches_model_args
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_weight_cache_path_is_mesh_shape_and_dtype_specific
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_prefill_ttnn_cache_wins_over_the_model_args_roots
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_build_runtime_signature_is_keyword_only_as_the_engine_calls_it
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_allocate_kv_cache_signature_and_kvcaches_subclass
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_runtime_exposes_the_five_config_names_and_three_methods_the_engine_drives
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_prefill_chunk_accepts_every_kwarg_the_engine_passes
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_the_engine_call_site_passes_nothing_prefill_chunk_lacks
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_adapter_module_imports_nothing_heavy
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_model_dims_module_imports_nothing_at_all
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_adapter_module_scope_has_no_package_device_imports
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_manifest_is_valid_and_selects_this_model
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_producer_dispatches_our_name_to_the_packed_gqa_reader
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_our_dram_block_geometry_still_equals_gpt_oss
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py::test_hf_to_meta_permutation_matches_the_producers_inline_copy
+======================== 29 passed, 1 warning in 6.27s =========================

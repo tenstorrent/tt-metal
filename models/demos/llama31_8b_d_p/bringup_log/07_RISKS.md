@@ -806,8 +806,22 @@ relying on 4.0 for a long-context run.
 ### R-040 — The multi-rank KV-chunk-table merge is untested (consequence of DEC-070)
 > Numbered R-040 out of the P7 session's sequential range to avoid an id collision.
 
-**Status:** OPEN, accepted for this bring-up. **Owner:** whoever first runs pipelined (multi-rank)
-prefill for this model.
+**Status:** OPEN, accepted for this bring-up, **and now loud rather than latent (P10).**
+**Owner:** whoever first runs pipelined (multi-rank) prefill for this model.
+
+**P10 update.** `G-MOCK-MIG` ran and passed at one rank, so everything below still holds exactly as
+written. What changed is the failure mode: `TtPrefillRuntime.build_kv_chunk_table`
+(`tt/tt_prefill_runtime.py:583`) no longer *discards* the runner's `first_layer_idx` /
+`num_my_layers` / `stage_layout(s)` arguments the way the template does — it **raises
+`NotImplementedError` naming this risk** when they describe a merge that is not implemented
+(`DEC-109`, covered by `tests/unit/test_kv_chunk_table.py::test_runtime_hook_refuses_a_multi_rank_merge`).
+A first pipelined run therefore gets an error at table-publish time instead of a table that addresses
+rank 0's DRAM under every rank's layer ids. Those three refusals are also the precise checklist of
+what has to start working when someone implements the merge.
+
+One more piece of surface joined this risk in P10: `pipeline_activation_emb_tp_sharded = True` on the
+adapter (the emb-axis sharding of the cross-rank D2D hidden state). Single-rank runs build no D2D
+socket, so it is an assumption carried from `DEC-018`, not a measurement.
 
 Skipping Gate 2 (`DEC-070`) leaves exactly one piece of *our own* surface unexercised, and it is worth
 stating precisely rather than hiding behind "migration is out of scope":
@@ -971,7 +985,17 @@ proved host-only by `G-KV`'s `test_blockcyclic_positions_are_an_exact_inverse`),
 
 ## R-030 — `build_kv_chunk_table` raises; migration is not wireable until P10 (P7)
 
-**Status:** open by design. Owner: P10.
+**Status: CLOSED by P10.** `tt/runners/kv_chunk_table.py` implements the table and
+`tt/tt_prefill_runtime.py:583` forwards to it. Two independent gates cover it:
+`G-KV-TABLE` reads a labelled pattern back out of DRAM through the table **bit-exactly**
+(`rtol = atol = 0`, 2 users x 2 layers x 8 heads x K/V x 512 tokens, after a protobuf export/import
+round trip, with a negative control), and `G-MOCK-MIG` PCCs the real 32-layer KV against the fp32
+golden through it — reproducing P8's on-device numbers (min K 0.99646 / V 0.98445) to five decimal
+places from a different process. The geometry recorded below is exactly what got encoded, and
+`mesh_device.dram_grid_size().x` measured **8** as predicted. The successor risk is `R-040`
+(the multi-rank merge), which P10 turned from silent into loud — see `DEC-109`.
+
+_Original entry (P7):_ open by design. Owner: P10.
 
 `TtPrefillRuntime.build_kv_chunk_table` raises `NotImplementedError` naming
 `tt/runners/kv_chunk_table.py` (P10's deliverable per `03_OUTLINE.md` §3.21), so

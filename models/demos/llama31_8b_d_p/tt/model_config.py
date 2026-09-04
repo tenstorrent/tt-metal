@@ -176,6 +176,44 @@ def llama_hf_config(source) -> LlamaHFConfig:
     return out
 
 
+class RuntimeLlamaHFConfig(LlamaHFConfig):
+    """A :class:`LlamaHFConfig` that the prefill engine may stamp ``max_seq_len`` onto.
+
+    **This exists because the engine mutates the config it is handed.**
+    ``models/demos/common/prefill/runners/prefill_runner.py:475`` does::
+
+        hf_config = ADAPTER.load_hf_config()
+        hf_config.max_seq_len = MAX_SEQ_LEN
+
+    and ``ADDING_A_PREFILL_MODEL.md`` §1 states it as part of the contract ("The engine sets
+    ``.max_seq_len`` on the returned config"). :class:`LlamaHFConfig` is ``frozen=True``
+    (``DEC-009``), whose generated ``__setattr__`` raises ``FrozenInstanceError`` for **any**
+    attribute name — declared field or not — as long as ``type(self) is LlamaHFConfig``. So
+    returning a plain ``LlamaHFConfig`` from ``load_hf_config`` makes the runner die on its next
+    line, before a single device op. ``DEC-100``.
+
+    A subclass is the exact fix rather than a workaround: CPython's frozen ``__setattr__`` is
+    ``if type(self) is cls or name in fields: raise``, so on a subclass instance every **declared
+    dimension stays frozen** (``hidden_size``, ``rope_theta``, … all still raise) and only a new,
+    undeclared attribute like ``max_seq_len`` gets through. The invariant ``DEC-009`` bought — no
+    module can mutate a dimension another module already read — is preserved in full.
+
+    Do not add fields here. ``max_seq_len`` is deliberately *not* declared: it is the engine's
+    per-run knob, it is not a model dimension, and declaring it would re-freeze it.
+    """
+
+
+def runtime_llama_hf_config(source) -> RuntimeLlamaHFConfig:
+    """:func:`llama_hf_config`, but returning the engine-mutable subclass.
+
+    Every field is resolved and validated by :func:`llama_hf_config` first, so there is exactly one
+    normalisation path and this adds no second place for the ``rope_theta`` trap (``R-014``) to
+    reappear.
+    """
+    base = llama_hf_config(source)
+    return RuntimeLlamaHFConfig(**{f.name: getattr(base, f.name) for f in fields(base)})
+
+
 # ======================================================================================
 # P6.2 — real-checkpoint state-dict loading + weight-cache pathing (`ModelArgs`)
 # ======================================================================================

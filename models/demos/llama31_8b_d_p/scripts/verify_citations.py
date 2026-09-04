@@ -213,9 +213,9 @@ CITES = [
     (f"{CP}/adapter.py", 46, "class PrefillRunParams"),
     (f"{CP}/adapter.py", 277, "ADAPTER_PATHS"),
     (f"{CP}/adapter.py", 57, "mesh_shape"),
-    (f"{CP}/runners/prefill_producer.py", 503, "def _read_slot_kv_and_check_pcc"),
-    (f"{CP}/runners/prefill_producer.py", 534, "_read_slot_kv_and_check_pcc_gpt_oss"),
-    (f"{CP}/runners/prefill_producer.py", 685, "_read_slot_kv_and_check_pcc_mla"),
+    (f"{CP}/runners/prefill_producer.py", 511, "def _read_slot_kv_and_check_pcc"),
+    (f"{CP}/runners/prefill_producer.py", 544, "_read_slot_kv_and_check_pcc_gpt_oss"),
+    (f"{CP}/runners/prefill_producer.py", 696, "_read_slot_kv_and_check_pcc_mla"),
     (f"{CP}/runners/runner_utils.py", 78, "mesh_shape"),
     (f"{CP}/runners/prefill_producer.py", 83, "PREFILL_SP"),
     (f"{CP}/runners/prefill_producer.py", 84, "PREFILL_TP"),
@@ -703,13 +703,13 @@ CITES = [
     (f"{LL}/tt/lm_head.py", 42, "class LMHead"),
     (f"{LL}/tt/lm_head.py", 127, "def __call__"),
     # tt/model_config.py part 2 — ModelArgs
-    (f"{LL}/tt/model_config.py", 245, "def state_dict_uses_meta_keys"),
-    (f"{LL}/tt/model_config.py", 257, "class ModelArgs"),
-    (f"{LL}/tt/model_config.py", 298, "def load_state_dict"),
-    (f"{LL}/tt/model_config.py", 335, "def expected_state_dict_keys"),
-    (f"{LL}/tt/model_config.py", 348, "def audit_state_dict_keys"),
-    (f"{LL}/tt/model_config.py", 364, "def weight_cache_path"),
-    (f"{LL}/tt/model_config.py", 400, "def get_state_dict_prefix"),
+    (f"{LL}/tt/model_config.py", 283, "def state_dict_uses_meta_keys"),
+    (f"{LL}/tt/model_config.py", 295, "class ModelArgs"),
+    (f"{LL}/tt/model_config.py", 336, "def load_state_dict"),
+    (f"{LL}/tt/model_config.py", 373, "def expected_state_dict_keys"),
+    (f"{LL}/tt/model_config.py", 386, "def audit_state_dict_keys"),
+    (f"{LL}/tt/model_config.py", 402, "def weight_cache_path"),
+    (f"{LL}/tt/model_config.py", 438, "def get_state_dict_prefix"),
     (f"{M3}/tt/model_config.py", 214, "TT_CACHE_PATH"),
     (f"{GO}/tt/runners/adapters/gpt_oss.py", 75, "def weight_cache_path"),
     # tests/test_factory.py — the promoted helpers (DEC-046)
@@ -812,6 +812,47 @@ CITES = [
     (f"{GO}/tt/attention/dense_sp.py", 106, "ring_joint_scaled_dot_product_attention"),
     (f"{GO}/tests/galaxy_prefill_kv_pcc.py", 78, "def main"),
     (f"{M3}/tests/test_factory.py", 89, "def parametrize_mesh_with_fabric"),
+    # --- P10: disaggregated-prefill integration (adapter, manifest, KV chunk table) ------------
+    # The engine contract we implement, and the two call sites that mutate/dispatch on it.
+    (f"{CP}/adapter.py", 104, "class PrefillModelAdapter"),
+    (f"{CP}/adapter.py", 46, "class PrefillRunParams"),
+    (f"{CP}/adapter.py", 95, "class KvCaches"),
+    (f"{CP}/adapter.py", 277, "ADAPTER_PATHS = {"),
+    (f"{CP}/adapter.py", 291, "llama31_8b_d_p"),
+    (f"{CP}/adapter.py", 115, "model_config: type"),
+    (f"{CP}/adapter.py", 133, "supports_dflash: bool = False"),
+    # DEC-100: the runner stamps max_seq_len onto the config load_hf_config returned.
+    (f"{CP}/runners/prefill_runner.py", 477, "hf_config.max_seq_len = MAX_SEQ_LEN"),
+    # DEC-106: metadata_msg is passed on EVERY chunk, so prefill_chunk must accept it.
+    (f"{CP}/runners/prefill_runner.py", 364, "metadata_msg=metadata_msg"),
+    (f"{CP}/runners/prefill_runner.py", 294, "metadata_msg=metadata_msg"),
+    (f"{CP}/runners/prefill_runner.py", 31, "def _apply_manifest_env"),
+    (f"{CP}/runners/runner_utils.py", 41, "max_payload_size=model_cfg.FABRIC_PAYLOAD_SIZE"),
+    # The shared config-population + serialize helper our table builder plugs into.
+    (f"{CP}/runners/migration.py", 220, "def serialize_kv_chunk_table"),
+    (f"{CP}/runners/migration.py", 240, "def serialize_prebuilt_kv_chunk_table"),
+    # DEC-105: the producer's read-back is name-dispatched, not adapter-dispatched.
+    (f"{CP}/runners/prefill_producer.py", 508, "_PACKED_GQA_MODELS"),
+    (f"{CP}/runners/prefill_producer.py", 552, "mc = ADAPTER.model_config"),
+    # The registry-fed pytest `variant` fixture: registering us puts our import in that suite.
+    (f"{DS}/tests/conftest.py", 33, "TEST_VARIANTS = {name: get_adapter(name) for name in ADAPTER_PATHS}"),
+    (f"{DS}/tests/conftest.py", 365, "def variant"),
+    # Our P10 deliverables.
+    (f"{LL}/tt/model_dims.py", 32, "class Llama31_8BConfig"),
+    (f"{LL}/tt/model_config.py", 179, "class RuntimeLlamaHFConfig"),
+    (f"{LL}/tt/model_config.py", 206, "def runtime_llama_hf_config"),
+    (f"{LL}/tt/runners/adapters/llama.py", 58, "class LlamaKvCaches"),
+    (f"{LL}/tt/runners/adapters/llama.py", 76, "class LlamaPrefillAdapter"),
+    (f"{LL}/tt/runners/kv_chunk_table.py", 67, "def chunk_size_bytes"),
+    (f"{LL}/tt/runners/kv_chunk_table.py", 80, "def stable_config_name"),
+    (f"{LL}/tt/runners/kv_chunk_table.py", 110, "def build_kv_chunk_address_table"),
+    (f"{LL}/tt/runners/kv_chunk_table.py", 243, "def build_and_serialize_kv_chunk_table"),
+    (f"{LL}/tt/tt_prefill_runtime.py", 583, "def build_kv_chunk_table"),
+    (f"{LL}/tt/tt_prefill_runtime.py", 579, "def kv_migration_base_address"),
+    (f"{LL}/tt/attention/kv_cache.py", 53, "NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK = 32"),
+    # The template we mirrored, and the trap its docstring documents.
+    (f"{GO}/tt/runners/kv_chunk_table.py", 20, "import_from_protobuf"),
+    (f"{GO}/tt/attention/kv_cache.py", 27, "NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK = 32"),
 ]
 
 
@@ -825,6 +866,9 @@ DOCS = [
     "models/demos/llama31_8b_d_p/bringup_log/05_DECISIONS.md",
     "models/demos/llama31_8b_d_p/bringup_log/06_GATES.md",
     "models/demos/llama31_8b_d_p/bringup_log/07_RISKS.md",
+    # P10 addition: the integration log now carries load-bearing `path:line` refs into the
+    # engine (the adapter contract, the producer's name-dispatched read-back).
+    "models/demos/llama31_8b_d_p/bringup_log/08_PREFILL_INTEGRATION.md",
 ]
 # P6 addition (Appendix F.7 / `DEC-035`): the package's **own Python docstrings** carry as many
 # load-bearing `path:line` refs as the logs do, and none of them were checked. They are also where
