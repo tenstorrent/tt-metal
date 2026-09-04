@@ -10,6 +10,8 @@
 #include <cstdint>
 #include <tt_metal/impl/program/program_command_sequence.hpp>
 #include "distributed/mesh_device_impl.hpp"
+#include "impl/context/metal_context.hpp"
+#include "impl/context/metal_env_impl.hpp"
 #include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include <algorithm>
 #include <cstddef>
@@ -77,10 +79,7 @@ std::optional<MeshCoordinateRange> find_intersection(
 }  // namespace
 
 MeshWorkloadImpl::MeshWorkloadImpl() : id(get_next_counter()) {
-    // A MeshWorkload tracks maintains its own handles to kernels across all
-    // encapsulated programs
-    kernel_groups_.resize(MetalContext::instance().hal().get_programmable_core_type_count());
-    kernels_.resize(MetalContext::instance().hal().get_programmable_core_type_count());
+    // kernels_ / kernel_groups_ are sized in finalize_offsets from the mesh HAL.
     Inspector::mesh_workload_created(this);
 }
 
@@ -227,7 +226,7 @@ void MeshWorkloadImpl::generate_dispatch_commands(MeshCommandQueue& mesh_cq) {
     // These commands will be updated based on MeshDevice state when the
     // workload is enqueued.
     auto* mesh_device = mesh_cq.device();
-    uint32_t prefetcher_cache_sizeB = MetalContext::instance().dispatch_mem_map().ringbuffer_size();
+    uint32_t prefetcher_cache_sizeB = mesh_device->impl().metal_context().dispatch_mem_map().ringbuffer_size();
 
     bool use_prefetcher_cache =
         this->max_program_kernels_sizeB_ and this->max_program_kernels_sizeB_ <= prefetcher_cache_sizeB;
@@ -259,7 +258,7 @@ bool MeshWorkloadImpl::runs_on_noc_unicast_only_cores() {
 
 std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& MeshWorkloadImpl::get_kernels(
     uint32_t programmable_core_type_index) {
-    // Get all kernels across all programs in the MeshWorkload
+    // Sized by finalize_offsets from the mesh HAL; do not call before then.
     if (kernels_.at(programmable_core_type_index).empty()) {
         uint32_t device_range_idx = 0;
         for (auto& [device_range, program] : programs_) {
@@ -274,7 +273,7 @@ std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& MeshWorkloadImpl::get
 }
 
 std::vector<std::shared_ptr<KernelGroup>>& MeshWorkloadImpl::get_kernel_groups(uint32_t programmable_core_type_index) {
-    // Get all kernel groups across all programs in the MeshWorkload
+    // Sized by finalize_offsets from the mesh HAL; do not call before then.
     if (kernel_groups_.at(programmable_core_type_index).empty()) {
         uint32_t device_range_idx = 0;
         for (auto& [device_range, program] : programs_) {
@@ -354,9 +353,10 @@ uint32_t MeshWorkloadImpl::get_sem_base_addr(
     HalProgrammableCoreType programmable_core_type =
         ::tt::tt_metal::hal_programmable_core_type_from_core_type(core_type);
     uint32_t base_addr = program_dispatch::program_base_addr_on_core(*this, mesh_device.get(), programmable_core_type);
+    auto& env = mesh_device->impl().metal_env();
     return base_addr + get_program_config(
-                           MetalContext::instance().hal().get_programmable_core_type_index(programmable_core_type),
-                           tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch())
+                           env.get_hal().get_programmable_core_type_index(programmable_core_type),
+                           env.get_rtoptions().get_fast_dispatch())
                            .sem_offset;
 }
 
@@ -380,9 +380,10 @@ uint32_t MeshWorkloadImpl::get_cb_base_addr(
     HalProgrammableCoreType programmable_core_type =
         ::tt::tt_metal::hal_programmable_core_type_from_core_type(core_type);
     uint32_t base_addr = program_dispatch::program_base_addr_on_core(*this, mesh_device.get(), programmable_core_type);
+    auto& env = mesh_device->impl().metal_env();
     return base_addr + get_program_config(
-                           MetalContext::instance().hal().get_programmable_core_type_index(programmable_core_type),
-                           tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch())
+                           env.get_hal().get_programmable_core_type_index(programmable_core_type),
+                           env.get_rtoptions().get_fast_dispatch())
                            .cb_offset;
 }
 
@@ -405,6 +406,10 @@ void MeshWorkloadImpl::finalize_offsets(MeshDevice* mesh_device) {
     if (is_finalized()) {
         return;
     }
+
+    const uint32_t num_core_types = mesh_device->impl().metal_env().get_hal().get_programmable_core_type_count();
+    kernel_groups_.resize(num_core_types);
+    kernels_.resize(num_core_types);
 
     tt::tt_metal::detail::KernelsGetter kernels_getter =
         [this](uint32_t index) -> std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& {
