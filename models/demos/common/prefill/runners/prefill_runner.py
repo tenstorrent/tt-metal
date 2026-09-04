@@ -90,6 +90,14 @@ assert not (DFLASH_ENABLED and USE_TRACE), (
     "PREFILL_DFLASH=1 is incompatible with PREFILL_USE_TRACE=1: the DFlash drafter path is not "
     "trace-captured. Run DFlash with PREFILL_USE_TRACE=0."
 )
+assert not (USE_TRACE and not KV_ONLY_LAST_LAYER), (
+    "PREFILL_KV_ONLY_LAST_LAYER=0 is incompatible with PREFILL_USE_TRACE=1: without the kv-only last "
+    "layer the last rank runs the norm/LM-head tail, and TtLMHead.logit_to_host() calls "
+    "ttnn.synchronize_device() -- a host sync inside begin_trace_capture(), which TT_FATALs in "
+    "fd_mesh_command_queue as 'Event Synchronization is not supported during trace capture'. A prefill "
+    "runner ignores the emitted token anyway, so leave PREFILL_KV_ONLY_LAST_LAYER at its default 1 when "
+    "tracing (the kv-only last block still writes its KV cache)."
+)
 
 os.environ.setdefault("PREFILL_TTNN_CACHE", ADAPTER.ttnn_cache_default)
 
