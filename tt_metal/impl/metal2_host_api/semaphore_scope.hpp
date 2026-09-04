@@ -10,7 +10,6 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/hal.hpp>
 #include "impl/context/metal_context.hpp"
 #include "jit_build/jit_build_settings.hpp"
 
@@ -82,17 +81,18 @@ inline bool cached_geometry_ok(const SemaphoreSpec& sem, const SemaphoreBinderIn
 }
 
 // Check if the cached tier is available on this target device.
-inline bool is_gen2_target() { return tt::tt_metal::hal::get_arch() == tt::ARCH::QUASAR; }
+inline bool is_gen2_target(const MetalContext& metal_ctx) { return metal_ctx.hal().get_arch() == tt::ARCH::QUASAR; }
 
-inline bool cached_tier_available() {
-    return MetalContext::instance().rtoptions().get_target_device() != tt::TargetDevice::Emule;
+inline bool cached_tier_available(const MetalContext& metal_ctx) {
+    return metal_ctx.rtoptions().get_target_device() != tt::TargetDevice::Emule;
 }
 
 // Picks the fastest access path that keeps this semaphore's operations atomic. Every
 // binder is treated as a possible reader and writer.
-inline SemScope ResolveSemaphoreScope(const SemaphoreSpec& sem, const SemaphoreBinderInfo& binders) {
+inline SemScope ResolveSemaphoreScope(
+    const SemaphoreSpec& sem, const SemaphoreBinderInfo& binders, const MetalContext& metal_ctx) {
     // Gen1 (Wormhole/Blackhole)
-    if (!is_gen2_target()) {
+    if (!is_gen2_target(metal_ctx)) {
         return SemScope::LOCAL_NONATOMIC;
     }
 
@@ -104,7 +104,7 @@ inline SemScope ResolveSemaphoreScope(const SemaphoreSpec& sem, const SemaphoreB
     }
 
     // Gen2, all binders are DMs on the same 1 node as the semaphore
-    if (cached_tier_available() && cached_geometry_ok(sem, binders)) {
+    if (cached_tier_available(metal_ctx) && cached_geometry_ok(sem, binders)) {
         return SemScope::DM_LOCAL_CACHED;
     }
 
@@ -154,11 +154,12 @@ inline SemaphoreBinderCensus CollectSemaphoreBinders(
 }
 
 // Resolve every semaphore the program declares. Unbound ones resolve too.
-inline SemaphoreNameToScopeMap ResolveSemaphoreScopes(const ProgramSpec& spec, const SemaphoreBinderCensus& census) {
+inline SemaphoreNameToScopeMap ResolveSemaphoreScopes(
+    const ProgramSpec& spec, const SemaphoreBinderCensus& census, const MetalContext& metal_ctx) {
     SemaphoreNameToScopeMap scopes;
     scopes.reserve(spec.semaphores.size());
     for (const auto& sem : spec.semaphores) {
-        scopes[sem.unique_id] = ResolveSemaphoreScope(sem, SemaphoreBinders(census, sem.unique_id));
+        scopes[sem.unique_id] = ResolveSemaphoreScope(sem, SemaphoreBinders(census, sem.unique_id), metal_ctx);
     }
     return scopes;
 }

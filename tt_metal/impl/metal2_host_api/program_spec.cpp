@@ -3101,7 +3101,7 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
 
     // Pick each semaphore's access mechanism.
     const sem_solver::SemaphoreNameToScopeMap semaphore_name_to_scope =
-        sem_solver::ResolveSemaphoreScopes(spec, semaphore_binders);
+        sem_solver::ResolveSemaphoreScopes(spec, semaphore_binders, metal_ctx);
 
     // Create Kernels (arch-specific)
     for (const KernelSpec& kernel_spec : spec.kernels) {
