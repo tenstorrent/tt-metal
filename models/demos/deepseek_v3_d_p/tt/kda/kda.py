@@ -33,6 +33,15 @@ def _slice_width(tensor: ttnn.Tensor, start: int, end: int) -> ttnn.Tensor:
     return ttnn.slice(tensor, tuple(begin), tuple(stop), memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 
+def _slice_sequence(tensor: ttnn.Tensor, length: int) -> ttnn.Tensor:
+    return ttnn.slice(
+        tensor,
+        (0, 0, 0),
+        (tensor.shape[0], length, tensor.shape[2]),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+
 def _largest_divisor_at_most(value: int, limit: int) -> int:
     for divisor in range(limit, 0, -1):
         if value % divisor == 0:
@@ -190,6 +199,7 @@ class ttKDA:
         self,
         hidden_states: ttnn.Tensor,
         state: KdaState,
+        length: int,
     ) -> None:
         """Validate shape/type plus the documented SP state-distribution contract."""
         if len(hidden_states.shape) != 3 or hidden_states.shape[-1] != self.config.hidden_size:
@@ -204,6 +214,12 @@ class ttKDA:
             raise ValueError(
                 f"KDA prefill requires local T to be positive and divisible by {KDA_CHUNK_SIZE}, got T={sequence}"
             )
+        if not 0 < length <= sequence:
+            raise ValueError(f"KDA length must satisfy 0 < length <= T={sequence}, got {length}")
+        if length % KDA_CHUNK_SIZE != 0:
+            raise ValueError(f"KDA length must be divisible by {KDA_CHUNK_SIZE}, got {length}")
+        if length < sequence and self.sequence_parallel_size > 1:
+            raise ValueError("tail-padding prototypes currently require SP1")
         expected_recurrent = (batch, self.config.num_heads, self.config.head_k_dim, self.config.head_v_dim)
         expected_convolution = (batch, self.config.conv_kernel_size - 1, self._convolution_width)
         if tuple(state.recurrent.shape) != expected_recurrent:
@@ -380,6 +396,7 @@ class ttKDA:
         self,
         hidden_states: ttnn.Tensor,
         state: KdaState,
+        length: int | None = None,
     ) -> tuple[ttnn.Tensor, KdaState]:
         """Run prefill KDA and return replacement logical carries.
 
@@ -388,8 +405,17 @@ class ttKDA:
         is sequence-partitioned along SP and, when TP > 1, reduce-scattered on
         the hidden dimension; TP == 1 returns the full hidden dimension.
         """
-        self._validate_forward(hidden_states, state)
+        sequence = hidden_states.shape[1]
+        length = sequence if length is None else length
+        self._validate_forward(hidden_states, state, length)
         projected = self._project_inputs(hidden_states)
+        if length < sequence:
+            projected = _ProjectedInputs(
+                qkv=_slice_sequence(projected.qkv, length),
+                decay_rank=_slice_sequence(projected.decay_rank, length),
+                output_gate=_slice_sequence(projected.output_gate, length),
+                beta=_slice_sequence(projected.beta, length),
+            )
         q, k, v, new_convolution = self._convolve_qkv(projected.qkv, state.convolution)
         gate, beta = self._compute_gates(
             beta=projected.beta,
