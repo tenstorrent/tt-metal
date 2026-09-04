@@ -1026,6 +1026,11 @@ class Gemma4Model:
                 lt = self.hf_config.layer_types[i]
                 sliding = lt == "sliding_attention"
                 rope_packed = packed.get("rope_packed") or {}
+                # Per-type hot pages (ring vs full pool under bounded sliding);
+                # explicit None checks -- never truthiness on a ttnn.Tensor.
+                _hot = packed.get("hot_pt_sliding") if sliding else packed.get("hot_pt_full")
+                if _hot is None:
+                    _hot = packed.get("hot_pt")
                 layer_packed = {
                     "packed_p": packed["packed_p"],
                     "position_idx": packed["position_idx"],
@@ -1033,7 +1038,7 @@ class Gemma4Model:
                     "attn_mask": packed["attn_mask_sliding"] if sliding else packed["attn_mask_full"],
                     "rope_packed": rope_packed.get(lt),
                     "embed_idx": packed.get("embed_idx_sliding") if sliding else packed.get("embed_idx_full"),
-                    "hot_pt": packed.get("hot_pt"),
+                    "hot_pt": _hot,
                 }
 
             hidden_states = layer(
@@ -1340,6 +1345,9 @@ class Gemma4Model:
         embed_idx_full=None,
         embed_idx_sliding=None,
         hot_pt=None,
+        hot_pt_full=None,
+        hot_pt_sliding=None,
+        page_tables_per_layer=None,
     ):
         """Packed-query speculative verify — all P candidates in ONE batch=1 pass.
 
@@ -1391,7 +1399,18 @@ class Gemma4Model:
             "embed_idx_full": embed_idx_full,
             "embed_idx_sliding": embed_idx_sliding,
             "hot_pt": hot_pt,
+            # Bounded sliding: ring pools wrap the hot block, so the physical
+            # fill pages differ per layer TYPE (ring vs full pool). Falls back
+            # to the shared ``hot_pt`` when unset (unbounded callers).
+            "hot_pt_full": hot_pt_full,
+            "hot_pt_sliding": hot_pt_sliding,
         }
+
+        # Same per-layer page-table contract as ttnn_verify_forward: bounded
+        # sliding runs hybrid tables where each layer addresses its own pool.
+        if page_tables_per_layer is None:
+            page_tables_per_layer = getattr(self, "_active_page_tables_per_layer", None)
+        page_tables_per_layer = self._page_tables_to_ttnn(page_tables_per_layer)
 
         out = self(
             hidden_states=input_embeds,
@@ -1402,6 +1421,7 @@ class Gemma4Model:
             token_index=None if self.rope_caches_2d else 0,
             return_hidden=True,
             packed=packed,
+            page_tables_per_layer=page_tables_per_layer,
         )
         for cos_bp, sin_bp in rope_packed.values():
             cos_bp.deallocate(True)
@@ -1498,6 +1518,11 @@ class Gemma4Model:
         """
         if page_tables_per_layer is None:
             return None
+        # Already-device lists (e.g. the packed verify's width-matched tables)
+        # pass straight through -- there is nothing to allocate or track, and
+        # _host_page_tables_batch would return None for them.
+        if all(pt is None or isinstance(pt, ttnn.Tensor) for pt in page_tables_per_layer):
+            return page_tables_per_layer
         by_batch = getattr(self, "_persistent_pt_by_batch", None)
         if by_batch is None:
             by_batch = {}

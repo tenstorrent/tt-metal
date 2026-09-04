@@ -86,6 +86,35 @@ def auto_draft_len(prompt_len, default=3):
     return 5 if prompt_len is not None and prompt_len >= 1024 else default
 
 
+def auto_draft_len_batched(prompt_len, batch, default=3):
+    """Batch-aware draft length. Returns 0 when speculation should be OFF.
+
+    Speculation pays only while decode is bandwidth-bound; batch amortizes the
+    weight read, and the verify's B*(K+1) rows also cross a hard 32-row
+    tile/batch cliff. Measured on 31B / native galaxy column tp=8, short
+    prompts, traced greedy, AGGREGATE tok/s vs the plain batched baseline:
+
+        B   base    K=1    K=2    K=3    K=5    best
+        8   189.9   239.1  255.6  263.5  144.8  K=3 (1.39x)  B*(K+1)=32
+        16  357.7   460.9  260.5   -      -     K=1 (1.29x)  B*(K+1)=32
+        32  682.9   515.5  454.8  450.6  392.8  NONE (<=0.75x)
+
+    Every optimum sits exactly at B*(K+1) == 32, with a cliff beyond it, and at
+    B=32 even K=1 (64 rows) loses -- past the compute knee no K wins (ceiling
+    (1+aK)/(K+1) < 1). Policy: K = min(context_K, 32//B - 1); 0 => run plain
+    batched decode instead.
+    """
+    if batch is None or batch <= 1:
+        return auto_draft_len(prompt_len, default=default)
+    env = os.environ.get("GEMMA4_SPEC_DRAFT_LEN")
+    if env and env.strip().lower() not in ("auto", ""):
+        return int(env)
+    row_cap = 32 // int(batch) - 1
+    if row_cap < 1:
+        return 0
+    return min(auto_draft_len(prompt_len, default=default), row_cap)
+
+
 class SpeculativeDecoder:
     def __init__(
         self,
@@ -325,11 +354,20 @@ class SpeculativeDecoder:
         cache[key] = out
         return out
 
-    def _page_table_users(self, B):
+    def _page_table_users(self, B, width=None):
         # Distinct per-user page-table rows [B, blocks] for a true B-user batched
         # forward (each user attends to its OWN physical KV blocks). Requires
         # page_table_torch to have >= B rows.
-        pt = self.page_table_torch[:B].to(torch.int32)
+        #
+        # ``width`` trims the column count for the PACKED verify: its non-causal
+        # SDPA attends over the TABLE width, so columns past the mask's S_k are
+        # effectively unmasked -- the unwritten tail dilutes softmax (measured:
+        # the packed path drifted off greedy; width-matching restored exact
+        # greedy and +0.07 accepted/iter single-user).
+        pt = self.page_table_torch[:B]
+        if width is not None:
+            pt = pt[:, : min(int(width), int(pt.shape[1]))]
+        pt = pt.to(torch.int32)
         return ttnn.from_torch(
             pt, device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32, mesh_mapper=self._mapper
         )
@@ -495,36 +533,129 @@ class SpeculativeDecoder:
         self._pv_h_local = first_cfg.num_attention_heads // tp
         self._pv_window = target.hf_config.sliding_window
         self._pv_nkv = {}  # layer_type -> nkv_local (staging/cache head count)
+        # BOUNDED sliding support: a sliding layer's cache is a RING of
+        # ``cache_position_modulo`` slots, so its hot-block index is
+        # (c % ring) // bs (wrapping), its page-table row is the small ring
+        # pool, and its SDPA mask spans ring slots rather than absolute
+        # positions. Track ring + page row PER LAYER TYPE; the unbounded path
+        # keeps ring=None and the flat table for both types (byte-identical).
+        self._pv_ring = {}  # layer_type -> ring modulo (int) or None
+        _ring_rep = {}  # layer_type -> a representative layer index for its pool
         for i, layer in enumerate(target.layers):
             cfg = layer.self_attn.config
-            if cfg.cache_position_modulo is not None:
-                raise NotImplementedError("packed verify does not support bounded sliding KV caches")
+            lt = target.hf_config.layer_types[i]
+            mod = getattr(cfg, "cache_position_modulo", None)
+            if lt in self._pv_ring and self._pv_ring[lt] != (int(mod) if mod is not None else None):
+                # One mask + one hot table serve a whole TYPE; a mixed type
+                # (e.g. the drafter-layer exemption putting the last sliding
+                # layer on the full pool while its siblings ring) cannot be
+                # expressed. Run with GEMMA4_SPEC_UNBOUNDED_DRAFTER_LAYER=0.
+                raise NotImplementedError(
+                    f"packed verify needs uniform pools per layer type; layer {i} ({lt}) has "
+                    f"cache_position_modulo={mod} but its type resolved {self._pv_ring[lt]}. "
+                    "Disable the drafter-layer exemption (GEMMA4_SPEC_UNBOUNDED_DRAFTER_LAYER=0)."
+                )
+            self._pv_ring.setdefault(lt, int(mod) if mod is not None else None)
+            _ring_rep.setdefault(lt, i)
             if i in target.kv_shared_layer_map:
                 continue  # shares source layer's cache+staging; skips KV writes
+            # GEMMA4_PV_FALLBACK_WRITE=1: debug bisect -- skip staging so
+            # packed_decode_forward takes the per-position paged_update_cache
+            # loop (the write mechanism decode_forward already proves correct),
+            # isolating read-side (mask/page-table) defects from staging ones.
+            if os.environ.get("GEMMA4_PV_FALLBACK_WRITE") == "1":
+                layer.self_attn.kv_staging = None
+                nkv_local = 1 if layer.self_attn.weights.kv_replicated else cfg.num_key_value_heads // tp
+                self._pv_nkv[lt] = int(nkv_local)
+                continue
             layer.self_attn.kv_staging = init_kv_staging(
                 self.mesh_device, cfg, max_batch_size=1, block_size=self._pv_bs, blk=self._pv_blk
             )
-            lt = target.hf_config.layer_types[i]
             self._pv_nkv[lt] = int(layer.self_attn.kv_staging[0].shape[1])
-        self._pv_pages = (self.page_table_torch[0] if self.page_table_torch.dim() > 1 else self.page_table_torch).to(
-            torch.int64
-        )
+        flat = (self.page_table_torch[0] if self.page_table_torch.dim() > 1 else self.page_table_torch).to(torch.int64)
+        self._pv_pages = flat
+        # Per-type page rows. Every layer of a type carries the same block IDs
+        # (build_hybrid_page_tables allocates per-layer pools starting at 0), so
+        # one row per type addresses every layer of that type — the same
+        # assumption the flat ``_pv_pages`` already made for the unbounded case.
+        self._pv_pages_t = {lt: flat for lt in self._pv_ring}
+        installed = getattr(target, "_active_page_tables_per_layer", None)
+        if installed:
+            # Use each type's REPRESENTATIVE layer (uniform-pool guard above),
+            # not last_kv_layer_by_type: the last sliding layer is exactly the
+            # one a legacy exemption would put on the wrong pool.
+            for lt, idx in _ring_rep.items():
+                pt = installed[idx] if idx < len(installed) else None
+                if pt is not None and hasattr(pt, "dim"):
+                    row = pt[0] if pt.dim() > 1 else pt
+                    self._pv_pages_t[lt] = row.to(torch.int64)
         self._pv_ready = True
+
+    def _pv_tables_per_layer(self, S_k):
+        """Per-layer page tables for the packed verify, each trimmed so its
+        WIDTH matches its layer type's mask width.
+
+        The packed non-causal SDPA attends over the PAGE-TABLE width, not the
+        mask width: columns past the mask are effectively unmasked. Probe
+        (pv_sdpa_probe): ring mask + exact 32-entry table matches unbounded to
+        bf16 noise; the same mask over a zero-padded full-width table is
+        rel-2.17 wrong -- the padded tail aliases physical page 0's REAL K/V.
+        (Unbounded suffers a milder form: the un-written tail dilutes softmax
+        with zero-K/V columns -- the packed path's small greedy divergence.)
+
+        Sliding (ring) width is fixed; full width follows the S_k bucket.
+        Device tensors cached by (type, width); layers of a type share one.
+        """
+        cache = getattr(self, "_pv_pt_cache", None)
+        if cache is None:
+            cache = {}
+            self._pv_pt_cache = cache
+        per_layer = []
+        for lt in self.target.hf_config.layer_types[: len(self.target.layers)]:
+            ring = self._pv_ring.get(lt)
+            width = (ring // self._pv_bs) if ring else max(1, S_k // self._pv_bs)
+            row = self._pv_pages_t[lt]
+            width = min(width, int(row.shape[0]))
+            key = (lt, width)
+            t = cache.get(key)
+            if t is None:
+                t = self._pv_from_torch(row[:width].to(torch.int32).reshape(1, width), ttnn.int32)
+                cache[key] = t
+            per_layer.append(t)
+        return per_layer
+
+    def _pv_block(self, c, lt):
+        """Hot-block index at position ``c`` for a layer type: absolute for an
+        unbounded pool, wrapped into the ring for a bounded one."""
+        ring = self._pv_ring.get(lt)
+        slot = c % ring if ring else c
+        return slot // self._pv_bs
+
+    def _pv_nblocks(self, lt):
+        """Valid blocks in this type's pool (ring blocks when bounded)."""
+        ring = self._pv_ring.get(lt)
+        if ring:
+            return ring // self._pv_bs
+        return int(self._pv_pages_t[lt].shape[0])
 
     def _pv_seed_staging(self, c):
         """Seed every layer's staging block-slot 0 with the committed content of
         the hot block at position ``c`` (read from the cache — the only
         committed-cache read in the design, once per generation)."""
         bs, S2 = self._pv_bs, self._pv_s2
-        a = c // bs
-        self._pv_a_prev = a
+        # prev tracks the ABSOLUTE block; per-type (possibly ring-wrapped)
+        # indices derive from it in _pv_host_inputs / here.
+        self._pv_a_prev = c // bs
         if c % bs == 0:
             return  # fresh block — zeros are fine
-        blk_phys = int(self._pv_pages[a])
         for i, layer in enumerate(self.target.layers):
             if i in self.target.kv_shared_layer_map:
                 continue
+            lt = self.target.hf_config.layer_types[i]
+            blk_phys = int(self._pv_pages_t[lt][self._pv_block(c, lt)])
             staging = layer.self_attn.kv_staging
+            if staging is None:
+                continue  # GEMMA4_PV_FALLBACK_WRITE: per-position writes, no staging
             cache = self.tt_kv_cache[i]
             for kv in (0, 1):
                 stg = staging[kv]
@@ -556,13 +687,38 @@ class SpeculativeDecoder:
         S_k = ((c + P + self._pv_sk_bucket - 1) // self._pv_sk_bucket) * self._pv_sk_bucket
         j = torch.arange(S_k)
         rows_full = torch.empty(P, S_k)
-        rows_slide = torch.empty(P, S_k)
         for p in range(P):
             upper = c + p
             rows_full[p] = torch.where(j <= upper, 0.0, NEG)
-            rows_slide[p] = torch.where((j <= upper) & (j > upper - W), 0.0, NEG)
         mask_full = rows_full.repeat(H, 1).reshape(1, 1, H * P, S_k).to(torch.bfloat16)
-        mask_slide = rows_slide.repeat(H, 1).reshape(1, 1, H * P, S_k).to(torch.bfloat16)
+
+        ring = self._pv_ring.get("sliding_attention")
+        if ring:
+            # BOUNDED sliding: the mask spans RING SLOTS, not absolute
+            # positions. After the hot fill everything up to c+P-1 is written,
+            # so slot j holds pos_j = (c+P-1) - ((c+P-1-j) mod ring). Query p
+            # (absolute q = c+p) may attend slot j iff q-W < pos_j <= q AND
+            # pos_j >= 0 (early context: the ring's untouched tail is zeros,
+            # never valid keys). In distance form with d = (c+P-1-j) mod ring:
+            #   (P-1-p) <= d < (P-1-p)+W   and   d <= c+P-1.
+            # Slots holding FUTURE candidates (pos_j > q) fall below the lower
+            # bound and are masked, exactly like j > upper absolute-side.
+            S_r = ring  # ring is a multiple of 64 (power of two >= 1024)
+            jr = torch.arange(S_r)
+            rows_slide = torch.empty(P, S_r)
+            top = c + P - 1
+            d = torch.remainder(top - jr, ring)
+            for p in range(P):
+                lo = P - 1 - p
+                ok = (d >= lo) & (d < lo + W) & (d <= top)
+                rows_slide[p] = torch.where(ok, 0.0, NEG)
+            mask_slide = rows_slide.repeat(H, 1).reshape(1, 1, H * P, S_r).to(torch.bfloat16)
+        else:
+            rows_slide = torch.empty(P, S_k)
+            for p in range(P):
+                upper = c + p
+                rows_slide[p] = torch.where((j <= upper) & (j > upper - W), 0.0, NEG)
+            mask_slide = rows_slide.repeat(H, 1).reshape(1, 1, H * P, S_k).to(torch.bfloat16)
 
         # merge_idx over staging positions: committed prefix from staging
         # (identity, or +bs on a rollover — the prefix came from the spill
@@ -586,12 +742,27 @@ class SpeculativeDecoder:
         # every idle slot write staging KV into physical page 0 and corrupts the
         # committed cache. Chunked prefill can pad with 0 because valid_seq_len
         # bounds that fill; this path has no such bound.
-        hot = torch.full((1, BLK), -1, dtype=torch.int32)
-        hot[0, 0] = int(self._pv_pages[a])
-        if off + P > bs:
-            hot[0, 1] = int(self._pv_pages[a + 1])
+        # PER LAYER TYPE: a bounded (ring) pool wraps both the hot block index
+        # and its spill successor; an unbounded pool uses absolute indices. The
+        # unbounded/unbounded case yields two identical tensors — harmless.
+        hot_t = {}
+        for lt in self._pv_nkv:
+            nblk = self._pv_nblocks(lt)
+            a_t = self._pv_block(c, lt)
+            h = torch.full((1, BLK), -1, dtype=torch.int32)
+            h[0, 0] = int(self._pv_pages_t[lt][a_t])
+            if off + P > bs:
+                h[0, 1] = int(self._pv_pages_t[lt][(a_t + 1) % nblk if self._pv_ring.get(lt) else a_t + 1])
+            hot_t[lt] = h
 
-        return {"pos": pos, "mask_full": mask_full, "mask_slide": mask_slide, "embed": embed, "hot": hot, "S_k": S_k}
+        return {
+            "pos": pos,
+            "mask_full": mask_full,
+            "mask_slide": mask_slide,
+            "embed": embed,
+            "hot_t": hot_t,
+            "S_k": S_k,
+        }
 
     def _pv_from_torch(self, t, dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=True):
         return ttnn.from_torch(
@@ -610,10 +781,19 @@ class SpeculativeDecoder:
             "mask_full": self._pv_from_torch(h["mask_full"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT),
             "mask_slide": self._pv_from_torch(h["mask_slide"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT),
             "embed": {lt: self._pv_from_torch(e, ttnn.uint32) for lt, e in h["embed"].items()},
-            "hot": self._pv_from_torch(h["hot"], ttnn.int32),
+            "hot_t": {lt: self._pv_from_torch(t, ttnn.int32) for lt, t in h["hot_t"].items()},
+            "S_k": h["S_k"],
         }
 
     def _pv_call(self, dev, P):
+        kv_write_idxs = None
+        if os.environ.get("GEMMA4_PV_FALLBACK_WRITE") == "1":
+            # Debug bisect: per-position write positions for the fallback loop
+            # (paged_update_cache wraps them itself via cache_position_modulo).
+            c = int(dev["c"])
+            kv_write_idxs = [
+                self._pv_from_torch(torch.tensor([c + p], dtype=torch.int32), ttnn.int32) for p in range(P)
+            ]
         return self.target.ttnn_packed_verify_forward(
             x=dev["x"],
             position_idx=dev["pos"],
@@ -622,9 +802,16 @@ class SpeculativeDecoder:
             packed_p=P,
             page_table=dev.get("pt"),
             kv_cache=self.tt_kv_cache,
+            kv_write_idxs=kv_write_idxs,
             embed_idx_full=dev["embed"].get("full_attention"),
             embed_idx_sliding=dev["embed"].get("sliding_attention"),
-            hot_pt=dev["hot"],
+            hot_pt_full=dev["hot_t"].get("full_attention"),
+            hot_pt_sliding=dev["hot_t"].get("sliding_attention"),
+            # Width-matched per-layer tables (see _pv_tables_per_layer): the
+            # packed SDPA attends the TABLE width, so each layer's table must be
+            # exactly as wide as its type's mask. Applies unbounded too -- the
+            # full-width flat table's unwritten tail diluted softmax.
+            page_tables_per_layer=self._pv_tables_per_layer(dev["S_k"]),
         )
 
     def _verify_packed(self, tokens, positions):
@@ -637,14 +824,17 @@ class SpeculativeDecoder:
         h = self._pv_host_inputs(c, P)
         dev = self._pv_device_inputs(tokens, h)
         dev["pt"] = self._page_table(1)
+        dev["c"] = c
         logits, hidden = self._pv_call(dev, P)
         self._pv_a_prev = c // self._pv_bs
         lh = self._logits_to_host(logits).reshape(P, -1)
         logits.deallocate(True)
-        for t in (dev["x"], dev["pos"], dev["mask_full"], dev["mask_slide"], dev["hot"], dev["pt"]):
+        for t in (dev["x"], dev["pos"], dev["mask_full"], dev["mask_slide"], dev["pt"]):
             t.deallocate(True)
         for e in dev["embed"].values():
             e.deallocate(True)
+        for t in dev["hot_t"].values():
+            t.deallocate(True)
         return lh, hidden
 
     def _verify_packed_traced(self, tokens, positions):
@@ -685,11 +875,12 @@ class SpeculativeDecoder:
                     self._pv_from_torch(h["mask_slide"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=False),
                     tr["mask_slide"],
                 ),
-                (self._pv_from_torch(h["hot"], ttnn.int32, device=False), tr["hot"]),
             ):
                 ttnn.copy_host_to_device_tensor(src, dst)
             for lt, e in h["embed"].items():
                 ttnn.copy_host_to_device_tensor(self._pv_from_torch(e, ttnn.uint32, device=False), tr["embed"][lt])
+            for lt, t in h["hot_t"].items():
+                ttnn.copy_host_to_device_tensor(self._pv_from_torch(t, ttnn.int32, device=False), tr["hot_t"][lt])
             ttnn.execute_trace(self.mesh_device, tr["id"], cq_id=0, blocking=False)
         tr = self._pv_traces[key]
         self._pv_a_prev = c // self._pv_bs
@@ -1392,7 +1583,9 @@ class SpeculativeDecoder:
         write_idxs = [
             self._from_b(torch.tensor([cs[b] + p for b in range(B)], dtype=torch.int32), ttnn.int32) for p in range(P)
         ]
-        pt = self._page_table_users(B)
+        # Width-match the table to the masks' S_k (see _page_table_users).
+        _bs = int(self.tt_kv_cache[0][0].padded_shape[2])
+        pt = self._page_table_users(B, width=S_k // _bs)
         logits, vhidden = target.ttnn_packed_verify_forward(
             x=x,
             position_idx=position_idx,
@@ -1532,7 +1725,11 @@ class SpeculativeDecoder:
             "v_pos": self._from_b(v_pos_t, ttnn.uint32),
             "mask_full": self._from_b(mf, ttnn.bfloat16, ttnn.TILE_LAYOUT),
             "mask_slide": self._from_b(ms, ttnn.bfloat16, ttnn.TILE_LAYOUT),
-            "v_pt": self._page_table_users(B),
+            # Width-matched to S_k (see _page_table_users): the packed SDPA
+            # attends the TABLE width, and the unwritten tail dilutes softmax.
+            # The trace re-captures on S_k bucket growth, so the width is
+            # stable for the life of this trace.
+            "v_pt": self._page_table_users(B, width=S_k // int(self.tt_kv_cache[0][0].padded_shape[2])),
             "write_idxs": [
                 self._from_b(torch.tensor([cs[b] + p for b in range(B)], dtype=torch.int32), ttnn.int32)
                 for p in range(P)

@@ -629,8 +629,12 @@ def packed_decode_forward(
     H_local = config.num_attention_heads // tp
     head_dim = config.head_dim
     nkv_local = 1 if weights.kv_replicated else config.num_key_value_heads // tp
-    if config.cache_position_modulo is not None:
-        raise NotImplementedError("packed verify does not support bounded sliding KV caches")
+    # Bounded sliding is supported: the caller provides ring-aware inputs (the
+    # sliding mask spans RING slots, hot_pt names pages in the ring pool with a
+    # wrapped spill block, and page_table is this layer's own pool). The SDPA
+    # here is position-free -- causality/window live entirely in the explicit
+    # additive mask -- and the staging fill writes physical pages, so neither
+    # needs cache_position_modulo.
     if kv_cache is None:
         raise ValueError("packed_decode_forward requires a KV cache (it attends through the paged cache)")
     l1 = ttnn.L1_MEMORY_CONFIG
@@ -743,6 +747,13 @@ def packed_decode_forward(
             k_p = ttnn.to_memory_config(k_p, q_sharded_mem)
             v_p = ttnn.to_memory_config(v_p, q_sharded_mem)
             if page_table is not None:
+                # Bounded ring: wrap absolute write positions into the ring
+                # (same contract as decode_forward's paged_modulo_kwargs).
+                _mod = (
+                    {"cache_position_modulo": config.cache_position_modulo}
+                    if config.cache_position_modulo is not None
+                    else {}
+                )
                 ttnn.experimental.paged_update_cache(
                     k_cache_w,
                     k_p,
@@ -750,6 +761,7 @@ def packed_decode_forward(
                     page_table=page_table,
                     block_size=eff_bs,
                     num_kv_heads=nkv_local,
+                    **_mod,
                 )
                 ttnn.experimental.paged_update_cache(
                     v_cache_w,
@@ -758,6 +770,7 @@ def packed_decode_forward(
                     page_table=page_table,
                     block_size=eff_bs,
                     num_kv_heads=nkv_local,
+                    **_mod,
                 )
             else:
                 ttnn.experimental.paged_update_cache(k_cache_w, k_p, update_idxs_tensor=kv_write_idxs[p])

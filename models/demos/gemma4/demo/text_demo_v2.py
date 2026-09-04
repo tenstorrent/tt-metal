@@ -904,7 +904,6 @@ def _run_spec_decode(
     # positions. Off by default because it corrupts (and needlessly enlarges)
     # plain bounded decode -- see Gemma4Model._spec_unbounded_layer.
     if _spec_bounded:
-        os.environ.setdefault("GEMMA4_SPEC_UNBOUNDED_DRAFTER_LAYER", "1")
         # Ring headroom for the speculative writes at p+1..p+K: without it each
         # draft evicts a still-in-window token (measured: K=5 corrupts from the
         # first token at 32k, K=1 stays correct).
@@ -914,6 +913,13 @@ def _run_spec_decode(
         # makes those mutually satisfiable only every 8704 tokens, and SDPA
         # TT_FATALs on chunk_start_idx % q_chunk_size. 2048 satisfies both.
         os.environ.setdefault("GEMMA4_SPEC_RING_HEADROOM_BLOCKS", "16")
+        # NOTE: the last-sliding-layer exemption (GEMMA4_SPEC_UNBOUNDED_DRAFTER_LAYER)
+        # is intentionally NOT enabled any more. The drafter inherits the ring
+        # modulo and reads the ring directly (measured equivalent: 1.86/5 vs
+        # 1.94/5 at 32k), and the PACKED verify requires uniform per-type pools:
+        # one sliding layer on the full pool would receive the ring-shaped mask
+        # and ring hot pages against an absolute cache. Uniform rings also save
+        # the exemption's 0.54 GB/device at 256k.
 
     generator, tt_kv_cache, tokenizer = Gemma4Generator.from_pretrained(
         mesh_device=mesh_device,
@@ -1025,7 +1031,12 @@ def _run_spec_decode(
     # whole iteration is ONE metal trace replayed per step (K draft steps +
     # verify fused — avoids the distinct-CCL-trace interleave deadlock). Sampling
     # (temp>0) falls back to the host-readback generate for batch=1.
-    use_fused = batch_size == 1 and ((not temperature) or temperature <= 0)
+    # GEMMA4_SPEC_FUSED=0 forces the host generate() loop (draft + packed
+    # verify as separate calls) -- the validation vehicle for the packed
+    # verify's bounded-ring support before it is wired into the fused trace.
+    use_fused = (
+        batch_size == 1 and ((not temperature) or temperature <= 0) and os.environ.get("GEMMA4_SPEC_FUSED", "1") != "0"
+    )
     # The fused greedy path is HOST-DISPATCH bound when untraced (~10 tok/s/u —
     # SLOWER than plain decode); the single fused Metal trace removes that
     # overhead (>3x, exceeding plain decode). Default tracing to the demo's
@@ -1131,11 +1142,11 @@ def _run_spec_decode_batched(
 
     _spec_bounded = _spec_bounded_sliding(max_seq_len, mesh_device, model_path, paged_attention=True)
     if _spec_bounded:
-        # Same opt-ins the single-user spec path takes (see _run_spec_decode):
-        # the KV-shared drafter needs the last sliding layer unbounded, and the
-        # verify's speculative writes at p+1..p+K need ring headroom or they
+        # Same opt-in the single-user spec path takes (see _run_spec_decode):
+        # the verify's speculative writes at p+1..p+K need ring headroom or they
         # evict still-in-window tokens. Must be set BEFORE the model is built.
-        os.environ.setdefault("GEMMA4_SPEC_UNBOUNDED_DRAFTER_LAYER", "1")
+        # (The drafter-layer exemption is deliberately NOT set: packed verify
+        # needs uniform per-type pools -- see the note in _run_spec_decode.)
         os.environ.setdefault("GEMMA4_SPEC_RING_HEADROOM_BLOCKS", "16")
     generator, tt_kv_cache, tokenizer = Gemma4Generator.from_pretrained(
         mesh_device=mesh_device,
@@ -1210,6 +1221,22 @@ def _run_spec_decode_batched(
             f"lookahead (draft_len={draft_len}) within max_seq_len={max_seq_len} (max prompt_len={max_prompt})."
         )
         max_generated_tokens = max(1, _safe_gen)
+
+    # Batch-aware K: the verify's B*(K+1) rows hit a hard 32-row cliff and past
+    # the compute knee no K wins (see auto_draft_len_batched for the measured
+    # table). K == 0 => speculation cannot beat plain batched decode here.
+    from models.demos.gemma4.tt.spec_decode import auto_draft_len_batched
+
+    _auto_k = auto_draft_len_batched(max(prompt_lens) if prompt_lens else None, B)
+    if os.environ.get("GEMMA4_SPEC_DRAFT_LEN") is None and draft_len != _auto_k:
+        logger.info(f"Spec-decode batch-aware K: B={B} -> draft_len {draft_len} -> {_auto_k}")
+        draft_len = _auto_k
+    if draft_len < 1:
+        pytest.skip(
+            f"Speculative decode is a measured REGRESSION at B={B} (compute-bound; "
+            "aggregate 0.58-0.75x of plain batched decode at B=32 for every K). "
+            "Run plain batched decode instead, or force GEMMA4_SPEC_DRAFT_LEN."
+        )
 
     _, assistant = create_assistant_model(
         mesh_device=mesh_device,
