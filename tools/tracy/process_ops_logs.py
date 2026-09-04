@@ -926,17 +926,12 @@ def _enrich_ops_from_device_logs(
                 # Math Pipeline Utilization
                 assign_metric("Math Pipeline Utilization", per_op_stats.get("Math Pipeline Utilization", {}))
 
-                # Math-to-Pack Handoff Efficiency
-                assign_metric(
-                    "Math-to-Pack Handoff Efficiency", per_op_stats.get("Math-to-Pack Handoff Efficiency", {})
-                )
-
                 # Unpacker-to-Math Data Flow
                 assign_metric("Unpacker-to-Math Data Flow", per_op_stats.get("Unpacker-to-Math Data Flow", {}))
 
                 # Thread stall rates
                 for t in range(3):
-                    assign_metric(f"Thread {t} Stall Rate", per_op_stats.get(f"Thread {t} Stall Rate", {}))
+                    assign_metric(f"Thread {t} Issue Stall Rate", per_op_stats.get(f"Thread {t} Issue Stall Rate", {}))
 
                 # Pipeline wait metrics
                 pipeline_wait_names = [
@@ -1050,6 +1045,16 @@ def _enrich_ops_from_device_logs(
                 assign_metric("Packer L1 Efficiency", per_op_stats.get("Packer L1 Efficiency", {}))
                 assign_metric("NOC vs Compute Balance", per_op_stats.get("NOC vs Compute Balance", {}))
                 assign_metric("TDMA vs NOC L1 Share", per_op_stats.get("TDMA vs NOC L1 Share", {}))
+
+                # Assign anything the explicit list above missed (Quasar metrics, l1_client rates),
+                # skipping names already assigned under either suffix convention.
+                for metric_name, metric_dict in per_op_stats.items():
+                    if f"{metric_name} Avg (%)" in device_op or f"{metric_name} Avg" in device_op:
+                        continue
+                    catch_all_suffix = (
+                        "" if metric_name.endswith(("Instrn Issue Rate", "Instrn Per Issue-Ready Cycle")) else " (%)"
+                    )
+                    assign_metric(metric_name, metric_dict, suffix=catch_all_suffix)
 
         if perf_counter_df is not None and not perf_counter_df.empty:
             print_efficiency_metrics_summary(pd.DataFrame(host_ops_by_device[device]), device)
@@ -1380,6 +1385,10 @@ def get_device_data_generate_report(
                 for header in OPS_CSV_HEADER + PERF_COUNTER_CSV_HEADERS:
                     if header in csv_row_headers:
                         allHeaders.append(header)
+                # Dynamic l1_client columns must be in fieldnames or DictWriter raises.
+                allHeaders += sorted(
+                    h for h in csv_row_headers if str(h).startswith("L1_CLIENT_") and h not in allHeaders
+                )
                 writer = csv.DictWriter(allOpsCSV, fieldnames=allHeaders)
                 writer.writeheader()
                 for rowDict in rowDicts:
@@ -1762,7 +1771,11 @@ def generate_reports(
                     for header, value in device_perf_row.items():
                         if header in skip_headers:
                             continue
-                        if header not in OPS_CSV_HEADER and header not in _PERF_COUNTER_CSV_HEADERS_SET:
+                        if (
+                            header not in OPS_CSV_HEADER
+                            and header not in _PERF_COUNTER_CSV_HEADERS_SET
+                            and not header.startswith("L1_CLIENT_")
+                        ):
                             continue
                         if value in (None, ""):
                             continue
@@ -1872,6 +1885,8 @@ def generate_reports(
         for row in csv_rows:
             all_row_keys.update(row.keys())
         active_perf_headers = [h for h in PERF_COUNTER_CSV_HEADERS if h in all_row_keys]
+        # Quasar l1_client selections produce dynamically named columns.
+        active_perf_headers += sorted(h for h in all_row_keys if str(h).startswith("L1_CLIENT_"))
 
         ioHeaderIndex = OPS_CSV_HEADER.index("INPUTS")
         head_part = list(OPS_CSV_HEADER[:ioHeaderIndex])

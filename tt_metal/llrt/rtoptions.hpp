@@ -235,6 +235,8 @@ class RunTimeOptions {
     bool profiler_buffer_usage_enabled = false;
     bool profiler_noc_events_enabled = false;
     uint32_t profiler_perf_counter_mode = 0;
+    int32_t profiler_perf_counter_l1_sel = -1;
+    bool profiler_perf_counter_l1_sel_per_neo = false;
     std::string profiler_noc_events_report_path;
     bool profiler_disable_dump_to_files = false;
     bool profiler_disable_push_to_tracy = false;
@@ -559,10 +561,12 @@ public:
     bool get_feature_enabled(RunTimeDebugFeatures feature) const { return feature_targets[feature].enabled; }
     void set_feature_enabled(RunTimeDebugFeatures feature, bool enabled) { feature_targets[feature].enabled = enabled; }
     // Note: dprint cores are logical
-    const std::map<CoreType, std::vector<tt::tt_metal::CoreCoord>>& get_feature_cores(RunTimeDebugFeatures feature) const {
+    const std::map<CoreType, std::vector<tt::tt_metal::CoreCoord>>& get_feature_cores(
+        RunTimeDebugFeatures feature) const {
         return feature_targets[feature].cores;
     }
-    void set_feature_cores(RunTimeDebugFeatures feature, std::map<CoreType, std::vector<tt::tt_metal::CoreCoord>> cores) {
+    void set_feature_cores(
+        RunTimeDebugFeatures feature, std::map<CoreType, std::vector<tt::tt_metal::CoreCoord>> cores) {
         feature_targets[feature].cores = std::move(cores);
     }
     // An alternative to setting cores by range, a flag to enable all.
@@ -573,7 +577,8 @@ public:
         return feature_targets[feature].all_cores.at(core_type);
     }
     // Note: core range is inclusive
-    void set_feature_core_range(RunTimeDebugFeatures feature, tt::tt_metal::CoreCoord start, tt::tt_metal::CoreCoord end, CoreType core_type) {
+    void set_feature_core_range(
+        RunTimeDebugFeatures feature, tt::tt_metal::CoreCoord start, tt::tt_metal::CoreCoord end, CoreType core_type) {
         feature_targets[feature].cores[core_type] = std::vector<tt::tt_metal::CoreCoord>();
         for (uint32_t x = start.x; x <= end.x; x++) {
             for (uint32_t y = start.y; y <= end.y; y++) {
@@ -686,6 +691,8 @@ public:
     bool get_profiler_buffer_usage_enabled() const { return profiler_buffer_usage_enabled; }
     bool get_profiler_noc_events_enabled() const { return profiler_noc_events_enabled; }
     uint32_t get_profiler_perf_counter_mode() const { return profiler_perf_counter_mode; }
+    int32_t get_profiler_perf_counter_l1_sel() const { return profiler_perf_counter_l1_sel; }
+    bool get_profiler_perf_counter_l1_sel_per_neo() const { return profiler_perf_counter_l1_sel_per_neo; }
     std::string get_profiler_noc_events_report_path() const { return profiler_noc_events_report_path; }
     bool get_profiler_disable_dump_to_files() const { return profiler_disable_dump_to_files; }
     bool get_profiler_disable_push_to_tracy() const { return profiler_disable_push_to_tracy; }

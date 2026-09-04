@@ -216,7 +216,118 @@ COUNTER_TYPE_NAMES = {
     179: "L1_3_NOC_RING3_PORT_7_GRANT",
     # Cycles any thread is stalled (OR across threads).
     180: "ANY_THREAD_STALL",
+    # Quasar (A0): 4-thread INSTRN variants, new classes, OR-reduced stall reasons
+    181: "CFG_INSTRN_AVAILABLE_3",
+    182: "SYNC_INSTRN_AVAILABLE_3",
+    183: "THCON_INSTRN_AVAILABLE_3",
+    184: "UNPACK_INSTRN_AVAILABLE_3",
+    185: "PACK_INSTRN_AVAILABLE_3",
+    186: "THREAD_STALLS_3",
+    187: "THREAD_INSTRUCTIONS_3",
+    188: "MATH_INSTRN_AVAILABLE_0",
+    189: "MATH_INSTRN_AVAILABLE_1",
+    190: "MATH_INSTRN_AVAILABLE_2",
+    191: "MATH_INSTRN_AVAILABLE_3",
+    192: "XSEARCH_INSTRN_AVAILABLE_0",
+    193: "XSEARCH_INSTRN_AVAILABLE_1",
+    194: "XSEARCH_INSTRN_AVAILABLE_2",
+    195: "XSEARCH_INSTRN_AVAILABLE_3",
+    196: "INSTISSUE_INSTRN_AVAILABLE_0",
+    197: "INSTISSUE_INSTRN_AVAILABLE_1",
+    198: "INSTISSUE_INSTRN_AVAILABLE_2",
+    199: "INSTISSUE_INSTRN_AVAILABLE_3",
+    200: "TILE_COUNTER_STALL_PACK",
+    201: "TILE_COUNTER_STALL_UNPACK",
+    202: "SRCS_STALL_PACK",
+    203: "SRCS_STALL_SFPU",
+    204: "SRCS_STALL_UNPACK",
+    205: "DEST_STALL_PACK",
+    206: "DEST_STALL_SFPU",
+    207: "DEST_STALL_MATH",
+    208: "DEST_STALL_UNPACK",
+    209: "SFPU_DATA_HAZARD_STALL",
+    210: "FPU_DATA_HAZARD_STALL",
+    211: "SRCB_STALL_UNPACK",
+    212: "SRCA_STALL_UNPACK",
+    213: "DVALID_STALL_MATH",
+    214: "SRCA_STALL_MATH",
+    215: "QUASAR_L1_CLIENT_EVENT",
+    216: "UNPACK2_BUSY_THREAD0",
+    217: "MATH_NOT_D2S_STALLED",
+    218: "SRCB_WRITE_NOT_BLOCKED_OVR",
+    219: "SRCA_WRITE_NOT_BLOCKED_PORT",
+    220: "MATH_NOT_SCOREBOARD_STALLED",
 }
+
+# Quasar stall reasons are OR-reduced across the 4 threads.
+QUASAR_STALL_REASON_METRICS = {
+    "Tile Counter Stall Pack Rate": "TILE_COUNTER_STALL_PACK",
+    "Tile Counter Stall Unpack Rate": "TILE_COUNTER_STALL_UNPACK",
+    "Srcs Stall Pack Rate": "SRCS_STALL_PACK",
+    "Srcs Stall SFPU Rate": "SRCS_STALL_SFPU",
+    "Srcs Stall Unpack Rate": "SRCS_STALL_UNPACK",
+    "Dest Stall Pack Rate": "DEST_STALL_PACK",
+    "Dest Stall SFPU Rate": "DEST_STALL_SFPU",
+    "Dest Stall Math Rate": "DEST_STALL_MATH",
+    "Dest Stall Unpack Rate": "DEST_STALL_UNPACK",
+    "SFPU Data Hazard Stall Rate": "SFPU_DATA_HAZARD_STALL",
+    "FPU Data Hazard Stall Rate": "FPU_DATA_HAZARD_STALL",
+    "SrcB Stall Unpack Rate": "SRCB_STALL_UNPACK",
+    "SrcA Stall Unpack Rate": "SRCA_STALL_UNPACK",
+    "DValid Stall Math Rate": "DVALID_STALL_MATH",
+    "SrcA Stall Math Rate": "SRCA_STALL_MATH",
+}
+# Quasar renames signals the tt-1xx enums misdescribe; metrics written against the old names
+# resolve through these aliases so both arches compute identically.
+QUASAR_COUNTER_ALIASES = {
+    "DATA_HAZARD_STALLS_MOVD2A": "MATH_NOT_D2S_STALLED",
+    "SRCB_WRITE_ACTUAL": "SRCB_WRITE_NOT_BLOCKED_OVR",
+    "SRCA_WRITE_ACTUAL": "SRCA_WRITE_NOT_BLOCKED_PORT",
+    "AVAILABLE_MATH": "MATH_NOT_SCOREBOARD_STALLED",
+    **{f"FPU_INSTRN_AVAILABLE_{t}": f"MATH_INSTRN_AVAILABLE_{t}" for t in range(4)},
+}
+
+QUASAR_INSTRN_CLASSES = ("CFG", "SYNC", "THCON", "XSEARCH", "INSTISSUE", "MATH", "UNPACK", "PACK")
+
+
+# Verified against the A0 L1 RTL; events 2-6 are counter carries (one pulse per lane count or
+# order depth), events 1 and 7 are per-cycle indicators.
+QUASAR_L1_CLIENT_EVENT_NAMES = (
+    "UNUSED",
+    "SBANK_POP",
+    "ISSUE_STALL_CARRY",
+    "ISSUE_WORK_CARRY",
+    "FLEX_STALL_CARRY",
+    "FLEX_WORK_CARRY",
+    "PENDING_REQS_CARRY",
+    "ORDER_FIFO_ACTIVE",
+)
+
+
+def quasar_l1_client_label(sel):
+    """Human label for the l1_client event counter selection (subport*8 + event).
+
+    Unpack subports decompose as 4 units x 5 read ports and pack as 4 units x 3 write ports;
+    an emulator sweep under a matmul lit units 0-2 on both sides with unit 3 idle, matching
+    that decomposition. The decomposition is positional: which physical unpacker/bank each unit
+    maps to is not RTL-confirmed, so a zero only means the monitored port carried no traffic.
+    """
+    subport, event = divmod(int(sel), 8)
+    if subport < 4:
+        port = f"TRISC{subport}"
+    elif subport == 4:
+        port = "THCON"
+    elif subport < 25:
+        unit, rd_port = divmod(subport - 5, 5)
+        port = f"UNPACK{unit}_PORT{rd_port}"
+    else:
+        unit, wr_port = divmod(subport - 25, 3)
+        port = f"PACK{unit}_PORT{wr_port}"
+    return f"L1_CLIENT_{port}_{QUASAR_L1_CLIENT_EVENT_NAMES[event]}"
+
+
+# (class, thread) pairs already covered by the tt-1xx metric names above them.
+_QUASAR_CLASS_PAIRS_COVERED = {("CFG", 0), ("SYNC", 0), ("THCON", 0), ("MATH", 1), ("UNPACK", 0), ("PACK", 2)}
 
 
 # Perf counter headers are only included in CSV output when perf counter data is available.
@@ -257,27 +368,23 @@ PERF_COUNTER_CSV_HEADERS = [
     "Math Pipeline Utilization Median (%)",
     "Math Pipeline Utilization Max (%)",
     "Math Pipeline Utilization Avg (%)",
-    "Math-to-Pack Handoff Efficiency Min (%)",
-    "Math-to-Pack Handoff Efficiency Median (%)",
-    "Math-to-Pack Handoff Efficiency Max (%)",
-    "Math-to-Pack Handoff Efficiency Avg (%)",
     "Unpacker-to-Math Data Flow Min (%)",
     "Unpacker-to-Math Data Flow Median (%)",
     "Unpacker-to-Math Data Flow Max (%)",
     "Unpacker-to-Math Data Flow Avg (%)",
     # INSTRN_THREAD thread stall rates
-    "Thread 0 Stall Rate Min (%)",
-    "Thread 0 Stall Rate Median (%)",
-    "Thread 0 Stall Rate Max (%)",
-    "Thread 0 Stall Rate Avg (%)",
-    "Thread 1 Stall Rate Min (%)",
-    "Thread 1 Stall Rate Median (%)",
-    "Thread 1 Stall Rate Max (%)",
-    "Thread 1 Stall Rate Avg (%)",
-    "Thread 2 Stall Rate Min (%)",
-    "Thread 2 Stall Rate Median (%)",
-    "Thread 2 Stall Rate Max (%)",
-    "Thread 2 Stall Rate Avg (%)",
+    "Thread 0 Issue Stall Rate Min (%)",
+    "Thread 0 Issue Stall Rate Median (%)",
+    "Thread 0 Issue Stall Rate Max (%)",
+    "Thread 0 Issue Stall Rate Avg (%)",
+    "Thread 1 Issue Stall Rate Min (%)",
+    "Thread 1 Issue Stall Rate Median (%)",
+    "Thread 1 Issue Stall Rate Max (%)",
+    "Thread 1 Issue Stall Rate Avg (%)",
+    "Thread 2 Issue Stall Rate Min (%)",
+    "Thread 2 Issue Stall Rate Median (%)",
+    "Thread 2 Issue Stall Rate Max (%)",
+    "Thread 2 Issue Stall Rate Avg (%)",
     # INSTRN_THREAD pipeline wait metrics
     "SrcA Valid Wait Min (%)",
     "SrcA Valid Wait Median (%)",
@@ -473,6 +580,68 @@ PERF_COUNTER_CSV_HEADERS = [
     "PACK Instrn Avail Rate T2 Median (%)",
     "PACK Instrn Avail Rate T2 Max (%)",
     "PACK Instrn Avail Rate T2 Avg (%)",
+    # === Quasar (A0) ===
+    *[
+        f"{name} {stat} (%)"
+        for name in [
+            "Thread 3 Issue Stall Rate",
+            "Tile Counter Stall Pack Rate",
+            "Tile Counter Stall Unpack Rate",
+            "Srcs Stall Pack Rate",
+            "Srcs Stall SFPU Rate",
+            "Srcs Stall Unpack Rate",
+            "Dest Stall Pack Rate",
+            "Dest Stall SFPU Rate",
+            "Dest Stall Math Rate",
+            "Dest Stall Unpack Rate",
+            "SFPU Data Hazard Stall Rate",
+            "FPU Data Hazard Stall Rate",
+            "SrcB Stall Unpack Rate",
+            "SrcA Stall Unpack Rate",
+            "DValid Stall Math Rate",
+            "SrcA Stall Math Rate",
+        ]
+        for stat in ("Min", "Median", "Max", "Avg")
+    ],
+    *[
+        f"{cls} Instrn Avail Rate T{thread} {stat} (%)"
+        for cls in ("CFG", "SYNC", "THCON", "XSEARCH", "INSTISSUE", "MATH", "UNPACK", "PACK")
+        for thread in range(4)
+        if (cls, thread) not in {("CFG", 0), ("SYNC", 0), ("THCON", 0), ("MATH", 1), ("UNPACK", 0), ("PACK", 2)}
+        for stat in ("Min", "Median", "Max", "Avg")
+    ],
+    *[f"T3 Instrn Issue Rate {stat}" for stat in ("Min", "Median", "Max", "Avg")],
+    *[
+        f"{name} {stat} (%)"
+        for name in [
+            "Math Src Data Ready Rate",
+            "FPU SFPU Overlap",
+            *[f"Unpacker{u} Busy T{t} Util" for u in (0, 1) for t in range(4)],
+            *[f"{s} Write T{t} Share" for s in ("Srca", "Srcb") for t in (0, 1)],
+            *[
+                f"{r} Share"
+                for r in (
+                    "Tile Counter Stall Pack",
+                    "Tile Counter Stall Unpack",
+                    "Srcs Stall Pack",
+                    "Srcs Stall SFPU",
+                    "Srcs Stall Unpack",
+                    "Dest Stall Pack",
+                    "Dest Stall SFPU",
+                    "Dest Stall Math",
+                    "Dest Stall Unpack",
+                    "SFPU Data Hazard Stall",
+                    "FPU Data Hazard Stall",
+                    "SrcB Stall Unpack",
+                    "SrcA Stall Unpack",
+                    "DValid Stall Math",
+                    "SrcA Stall Math",
+                )
+            ],
+        ]
+        for stat in ("Min", "Median", "Max", "Avg")
+    ],
+    *[f"T{t} Instrn Per Issue-Ready Cycle {stat}" for t in range(4) for stat in ("Min", "Median", "Max", "Avg")],
     # === Write port blocking ===
     "SrcB Write Port Blocked Rate Min (%)",
     "SrcB Write Port Blocked Rate Median (%)",
@@ -609,6 +778,9 @@ def extract_perf_counters(events: List[Any]) -> Optional[pd.DataFrame]:
                     counter_type_name = counter_type_raw
                 else:
                     counter_type_name = COUNTER_TYPE_NAMES.get(counter_type_raw, f"UNKNOWN_{counter_type_raw}")
+                counter_sel = meta_dict.get("counter sel")
+                if counter_type_name == "QUASAR_L1_CLIENT_EVENT" and counter_sel is not None:
+                    counter_type_name = quasar_l1_client_label(counter_sel)
 
                 perf_counter_events.append(
                     {
@@ -699,12 +871,24 @@ def print_efficiency_metrics_summary(metrics_df: pd.DataFrame, device_id: int) -
         "Packer Efficiency",
         "FPU Execution Efficiency",
         "Math Pipeline Utilization",
-        "Math-to-Pack Handoff Efficiency",
         "Unpacker-to-Math Data Flow",
         # INSTRN_THREAD metrics
-        "Thread 0 Stall Rate",
-        "Thread 1 Stall Rate",
-        "Thread 2 Stall Rate",
+        "Thread 0 Issue Stall Rate",
+        "Thread 1 Issue Stall Rate",
+        "Thread 2 Issue Stall Rate",
+        "Thread 3 Issue Stall Rate",
+        "Math Src Data Ready Rate",
+        "FPU SFPU Overlap",
+        *[f"Unpacker{u} Busy T{t} Util" for u in (0, 1) for t in range(4)],
+        *[f"{s} Write T{t} Share" for s in ("Srca", "Srcb") for t in (0, 1)],
+        *QUASAR_STALL_REASON_METRICS,
+        *[n.replace(" Rate", " Share") for n in QUASAR_STALL_REASON_METRICS],
+        *[
+            f"{cls} Instrn Avail Rate T{thread}"
+            for cls in QUASAR_INSTRN_CLASSES
+            for thread in range(4)
+            if (cls, thread) not in _QUASAR_CLASS_PAIRS_COVERED
+        ],
         "SrcA Valid Wait",
         "SrcB Valid Wait",
         "SrcA Clear Wait",
@@ -790,6 +974,8 @@ def print_efficiency_metrics_summary(metrics_df: pd.DataFrame, device_id: int) -
         "T0 Instrn Issue Rate",
         "T1 Instrn Issue Rate",
         "T2 Instrn Issue Rate",
+        "T3 Instrn Issue Rate",
+        *[f"T{t} Instrn Per Issue-Ready Cycle" for t in range(4)],
         "Avg HF Cycles Per Instrn",
     ]
 
@@ -840,16 +1026,33 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
 
     # ---- Helper functions ----
 
-    def get_counter_series(counter_name):
+    _SERIES_INDEX = ["run_host_id", "trace_id_count", "core_x", "core_y", "risc_type"]
+
+    _present = set(perf_counter_df["counter type"].values)
+
+    def _resolve(counter_name):
+        if counter_name not in _present and QUASAR_COUNTER_ALIASES.get(counter_name) in _present:
+            return QUASAR_COUNTER_ALIASES[counter_name]
+        return counter_name
+
+    def _counter_column(counter_name, column):
+        counter_name = _resolve(counter_name)
         mask = perf_counter_df["counter type"] == counter_name
-        return perf_counter_df[mask].set_index(["run_host_id", "trace_id_count", "core_x", "core_y"])["value"]
+        sub = perf_counter_df[mask]
+        # risc_type keeps each NEO reader distinct; the launch cumcount keeps every launch its own
+        # aligned sample (the k-th occurrence of each counter on a reader is the k-th launch), so
+        # cross-counter arithmetic pairs within a launch and Min/Max are real measurements.
+        launch = sub.groupby(_SERIES_INDEX).cumcount()
+        return sub.set_index(_SERIES_INDEX + [launch.rename("launch")])[column]
+
+    def get_counter_series(counter_name):
+        return _counter_column(counter_name, "value")
 
     def get_counter_ref_cnt(counter_name):
-        mask = perf_counter_df["counter type"] == counter_name
-        return perf_counter_df[mask].set_index(["run_host_id", "trace_id_count", "core_x", "core_y"])["ref cnt"]
+        return _counter_column(counter_name, "ref cnt")
 
     def has_counter(counter_name):
-        return counter_name in perf_counter_df["counter type"].values
+        return _resolve(counter_name) in _present
 
     def compute_util_metric(counter_name, scale=100):
         """Compute value / ref_cnt * scale per core, aggregate by op."""
@@ -941,7 +1144,8 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
     math_counter = get_counter_series("MATH_COUNTER")
     math_ref_cnt = get_counter_ref_cnt("MATH_COUNTER")
     srca_write = get_counter_series("SRCA_WRITE_ACTUAL")
-    srcb_write = get_counter_series("SRCB_WRITE_NOT_BLOCKED_PORT")
+    # SRCB_WRITE_ACTUAL mirrors SRCA_WRITE_ACTUAL for unpacker0 and matches the device-only engine.
+    srcb_write = get_counter_series("SRCB_WRITE_ACTUAL")
     unpack0_busy = get_counter_series("UNPACK0_BUSY_THREAD0")
     unpack1_busy = get_counter_series("UNPACK1_BUSY_THREAD0")
     srca_write_avail = get_counter_series("SRCA_WRITE_AVAILABLE")
@@ -957,20 +1161,21 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
     fpu_util = (fpu_counter / fpu_ref_cnt * 100).replace([float("inf"), -float("inf")], nan)
     math_util = (math_counter / math_ref_cnt * 100).replace([float("inf"), -float("inf")], nan)
 
+    def _avg_count(series):
+        grouped = series.groupby(level=["run_host_id", "trace_id_count"])
+        if device_arch == "quasar":
+            # A multi-NEO multi-launch sum divided by core count overstates the average ~4x.
+            return (grouped.sum() / grouped.count()).to_dict()
+        return (grouped.sum() / total_compute_cores).to_dict()
+
     per_op_stats["SFPU Util"] = _group_to_stat_dict(sfpu_util)
-    per_op_counts["avg_sfpu_count"] = (
-        sfpu_counter.groupby(level=["run_host_id", "trace_id_count"]).sum() / total_compute_cores
-    ).to_dict()
+    per_op_counts["avg_sfpu_count"] = _avg_count(sfpu_counter)
 
     per_op_stats["FPU Util"] = _group_to_stat_dict(fpu_util)
-    per_op_counts["avg_fpu_count"] = (
-        fpu_counter.groupby(level=["run_host_id", "trace_id_count"]).sum() / total_compute_cores
-    ).to_dict()
+    per_op_counts["avg_fpu_count"] = _avg_count(fpu_counter)
 
     per_op_stats["MATH Util"] = _group_to_stat_dict(math_util)
-    per_op_counts["avg_math_count"] = (
-        math_counter.groupby(level=["run_host_id", "trace_id_count"]).sum() / total_compute_cores
-    ).to_dict()
+    per_op_counts["avg_math_count"] = _avg_count(math_counter)
 
     unpack0_eff = (srca_write / unpack0_busy * 100).replace([float("inf"), -float("inf")], nan)
     unpack1_eff = (srcb_write / unpack1_busy * 100).replace([float("inf"), -float("inf")], nan)
@@ -989,18 +1194,6 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
     else:
         math_pipe_util = pd.Series(dtype=float)
 
-    # Falls back to AVAILABLE_MATH / ref_cnt when packer unused.
-    if packer_busy is not None and packer_busy.sum() > 0:
-        math_pack_eff = (available_math / packer_busy * 100).replace([float("inf"), -float("inf")], nan)
-    elif available_math is not None:
-        avail_ref = get_counter_ref_cnt("AVAILABLE_MATH") if has_counter("AVAILABLE_MATH") else None
-        if avail_ref is not None:
-            math_pack_eff = (available_math / avail_ref * 100).replace([float("inf"), -float("inf")], nan)
-        else:
-            math_pack_eff = pd.Series(dtype=float)
-    else:
-        math_pack_eff = pd.Series(dtype=float)
-
     unpack_math_flow = (
         ((srca_write_avail + srcb_write_avail) / 2) / ((unpack0_busy + unpack1_busy) / 2) * 100
     ).replace([float("inf"), -float("inf")], nan)
@@ -1017,14 +1210,14 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
     per_op_stats["FPU Execution Efficiency"] = _group_to_stat_dict(fpu_exec_eff)
 
     per_op_stats["Math Pipeline Utilization"] = _group_to_stat_dict(math_pipe_util)
-    per_op_stats["Math-to-Pack Handoff Efficiency"] = _group_to_stat_dict(math_pack_eff)
     per_op_stats["Unpacker-to-Math Data Flow"] = _group_to_stat_dict(unpack_math_flow)
 
-    # === Thread stall metrics ===
-    for t in range(3):
+    # === Thread issue-stall metrics (0-2 on tt-1xx, 0-3 on Quasar). THREAD_STALLS counts
+    # issue-stage stalls only; math operand waits appear in the DVALID/SRCA stall-reason rates. ===
+    for t in range(4):
         name = f"THREAD_STALLS_{t}"
         if has_counter(name):
-            per_op_stats[f"Thread {t} Stall Rate"] = compute_util_metric(name)
+            per_op_stats[f"Thread {t} Issue Stall Rate"] = compute_util_metric(name)
 
     # Pipeline wait metrics
     pipeline_wait_counters = {
@@ -1125,7 +1318,7 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
     if has_counter("PACKER_DEST_READ_AVAILABLE") and has_counter(dest_grant_name):
         req = get_counter_series("PACKER_DEST_READ_AVAILABLE")
         grant = get_counter_series(dest_grant_name)
-        ratio = ((req - grant) / req * 100).replace([float("inf"), -float("inf")], nan)
+        ratio = ((req - grant) / req * 100).clip(lower=0).replace([float("inf"), -float("inf")], nan)
         per_op_stats["Dest Read Backpressure"] = _group_to_stat_dict(ratio)
 
     if has_counter("MATH_INSTRN_AVAILABLE") and has_counter("MATH_NOT_STALLED_DEST_WR_PORT"):
@@ -1133,12 +1326,12 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
         # Skip when the counter reads 0 for the whole op (would report bogus 100% stall rate).
         if unstalled.sum() > 0:
             avail = get_counter_series("MATH_INSTRN_AVAILABLE")
-            ratio = ((avail - unstalled) / avail * 100).replace([float("inf"), -float("inf")], nan)
+            ratio = ((avail - unstalled) / avail * 100).clip(lower=0).replace([float("inf"), -float("inf")], nan)
             per_op_stats["Math Dest Write Port Stall Rate"] = _group_to_stat_dict(ratio)
     if has_counter("MATH_INSTRN_AVAILABLE") and has_counter("AVAILABLE_MATH"):
         avail = get_counter_series("MATH_INSTRN_AVAILABLE")
         unstalled = get_counter_series("AVAILABLE_MATH")
-        ratio = ((avail - unstalled) / avail * 100).replace([float("inf"), -float("inf")], nan)
+        ratio = ((avail - unstalled) / avail * 100).clip(lower=0).replace([float("inf"), -float("inf")], nan)
         per_op_stats["Math Scoreboard Stall Rate"] = _group_to_stat_dict(ratio)
 
     # Per-thread total instruction issue rates (per cycle, not %).
@@ -1148,6 +1341,8 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
         per_op_stats["T1 Instrn Issue Rate"] = compute_util_metric("THREAD_INSTRUCTIONS_1", scale=1)
     if has_counter("THREAD_INSTRUCTIONS_2"):
         per_op_stats["T2 Instrn Issue Rate"] = compute_util_metric("THREAD_INSTRUCTIONS_2", scale=1)
+    if has_counter("THREAD_INSTRUCTIONS_3"):
+        per_op_stats["T3 Instrn Issue Rate"] = compute_util_metric("THREAD_INSTRUCTIONS_3", scale=1)
 
     # === L1 Bank 1 ===
     if has_counter("L1_1_NOC_RING1_OUTGOING_0") and has_counter("L1_1_NOC_RING1_OUTGOING_1"):
@@ -1211,6 +1406,69 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
         per_op_stats["UNPACK Instrn Avail Rate T0"] = compute_util_metric("UNPACK_INSTRN_AVAILABLE_0")
     if has_counter("PACK_INSTRN_AVAILABLE_2"):
         per_op_stats["PACK Instrn Avail Rate T2"] = compute_util_metric("PACK_INSTRN_AVAILABLE_2")
+
+    # === Quasar (A0): flat stall reasons and the full 4-thread class grid ===
+    for metric_name, counter_name in QUASAR_STALL_REASON_METRICS.items():
+        if has_counter(counter_name):
+            per_op_stats[metric_name] = compute_util_metric(counter_name)
+    for cls in QUASAR_INSTRN_CLASSES:
+        for thread in range(4):
+            if (cls, thread) in _QUASAR_CLASS_PAIRS_COVERED:
+                continue
+            counter_name = f"{cls}_INSTRN_AVAILABLE_{thread}"
+            if has_counter(counter_name):
+                per_op_stats[f"{cls} Instrn Avail Rate T{thread}"] = compute_util_metric(counter_name)
+    for name in perf_counter_df["counter type"].unique():
+        if str(name).startswith("L1_CLIENT_"):
+            scale = 400 if str(name).endswith("_CARRY") and "PENDING" not in str(name) else 100
+            per_op_stats[f"{name} Rate"] = compute_util_metric(name, scale=scale)
+
+    if has_counter("MATH_SRC_DATA_READY"):
+        per_op_stats["Math Src Data Ready Rate"] = compute_util_metric("MATH_SRC_DATA_READY")
+    for t_idx in range(4):
+        if has_counter(f"UNPACK0_BUSY_THREAD{t_idx}"):
+            per_op_stats[f"Unpacker0 Busy T{t_idx} Util"] = compute_util_metric(f"UNPACK0_BUSY_THREAD{t_idx}")
+        if has_counter(f"UNPACK1_BUSY_THREAD{t_idx}"):
+            per_op_stats[f"Unpacker1 Busy T{t_idx} Util"] = compute_util_metric(f"UNPACK1_BUSY_THREAD{t_idx}")
+    # MATH_COUNTER counts fpu-or-sfpu cycles, so overlap = FPU + SFPU - MATH.
+    if has_counter("FPU_COUNTER") and has_counter("SFPU_COUNTER") and has_counter("MATH_COUNTER"):
+        overlap = (
+            get_counter_series("FPU_COUNTER") + get_counter_series("SFPU_COUNTER") - get_counter_series("MATH_COUNTER")
+        )
+        ratio = (
+            (overlap / get_counter_ref_cnt("MATH_COUNTER") * 100)
+            .clip(lower=0)
+            .replace([float("inf"), -float("inf")], nan)
+        )
+        per_op_stats["FPU SFPU Overlap"] = _group_to_stat_dict(ratio)
+    # Instructions per non-stalled cycle, per thread.
+    for t_idx in range(4):
+        instr_name = f"THREAD_INSTRUCTIONS_{t_idx}"
+        stall_name = f"THREAD_STALLS_{t_idx}"
+        if has_counter(instr_name) and has_counter(stall_name):
+            instr = get_counter_series(instr_name)
+            active = (get_counter_ref_cnt(instr_name) - get_counter_series(stall_name)).clip(lower=1)
+            per_op_stats[f"T{t_idx} Instrn Per Issue-Ready Cycle"] = _group_to_stat_dict(
+                (instr / active).replace([float("inf"), -float("inf")], nan)
+            )
+    for src in ("SRCA", "SRCB"):
+        t0, t1 = f"{src}_WRITE_THREAD0", f"{src}_WRITE_THREAD1"
+        if has_counter(t0) and has_counter(t1):
+            total = get_counter_series(t0) + get_counter_series(t1)
+            for th, name in ((t0, f"{src.title()} Write T0 Share"), (t1, f"{src.title()} Write T1 Share")):
+                share = (get_counter_series(th) / total * 100).replace([float("inf"), -float("inf")], nan)
+                per_op_stats[name] = _group_to_stat_dict(share)
+
+    # Each stall reason as a share of the sum of all captured reasons.
+    _reason_names = [n for n in QUASAR_STALL_REASON_METRICS.values() if has_counter(n)]
+    if len(_reason_names) > 1:
+        reason_total = sum(get_counter_series(n) for n in _reason_names)
+        for metric_name, counter_name in QUASAR_STALL_REASON_METRICS.items():
+            if has_counter(counter_name):
+                share = (get_counter_series(counter_name) / reason_total * 100).replace(
+                    [float("inf"), -float("inf")], nan
+                )
+                per_op_stats[metric_name.replace(" Rate", " Share")] = _group_to_stat_dict(share)
 
     if has_counter("SRCB_WRITE_AVAILABLE") and has_counter("SRCB_WRITE_NOT_BLOCKED_PORT"):
         per_op_stats["SrcB Write Port Blocked Rate"] = compute_complement_metric(
@@ -1346,7 +1604,7 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
         if has_counter(stalls_name) and all(has_counter(r) for r in reason_names):
             total_stalls = get_counter_series(stalls_name)
             reason_sum = sum(get_counter_series(r) for r in reason_names)
-            ratio = (reason_sum / total_stalls).replace([float("inf"), -float("inf")], nan)
+            ratio = (reason_sum / total_stalls * 100).replace([float("inf"), -float("inf")], nan)
             per_op_stats[f"Stall Overlap T{t}"] = _group_to_stat_dict(ratio)
 
     # === Packer Load Imbalance ===
@@ -1382,21 +1640,33 @@ def compute_device_only_metrics(
                 "core_x": row["core_x"],
                 "core_y": row["core_y"],
                 "counter_type": row["counter type"],
+                "risc": row["risc_type"],
                 "value": row["value"],
                 "ref_cnt": row["ref cnt"],
             }
         )
 
     eff_df = pd.DataFrame(efficiency_records)
+    # Every launch is its own pivot row so per-launch ratios (and true Min/Max) survive.
+    eff_df["launch"] = eff_df.groupby(
+        ["run_host_id", "trace_id_count", "core_x", "core_y", "risc", "counter_type"]
+    ).cumcount()
 
+    # risc keeps each NEO reader its own row; launch keeps each capture window its own row.
     eff_pivot = eff_df.pivot_table(
-        index=["run_host_id", "trace_id_count", "core_x", "core_y"],
+        index=["run_host_id", "trace_id_count", "core_x", "core_y", "risc", "launch"],
         columns="counter_type",
         values=["value", "ref_cnt"],
-        aggfunc="first",
+        aggfunc="mean",
     ).reset_index()
 
     eff_pivot.columns = ["_".join(col).strip("_") if col[1] else col[0] for col in eff_pivot.columns.values]
+
+    for legacy, honest in QUASAR_COUNTER_ALIASES.items():
+        for kind in ("value", "ref_cnt"):
+            src, dst = f"{kind}_{honest}", f"{kind}_{legacy}"
+            if src in eff_pivot.columns and dst not in eff_pivot.columns:
+                eff_pivot[dst] = eff_pivot[src]
 
     def safe_div(num, denom):
         return (num / denom * 100) if denom > 0 else nan
@@ -1456,17 +1726,6 @@ def compute_device_only_metrics(
             axis=1,
         )
 
-    # Falls back to AVAILABLE_MATH / ref_cnt when packer unused.
-    if has_packer_busy:
-        eff_pivot["Math-to-Pack Handoff Efficiency"] = eff_pivot.apply(
-            lambda x: safe_div(x.get("value_AVAILABLE_MATH", 0), x.get("value_PACKER_BUSY", 0)),
-            axis=1,
-        )
-    elif "ref_cnt_AVAILABLE_MATH" in eff_pivot.columns:
-        eff_pivot["Math-to-Pack Handoff Efficiency"] = eff_pivot.apply(
-            lambda x: safe_div(x.get("value_AVAILABLE_MATH", 0), x.get("ref_cnt_AVAILABLE_MATH", 0)),
-            axis=1,
-        )
     eff_pivot["Unpacker-to-Math Data Flow"] = eff_pivot.apply(
         lambda x: safe_div(
             (x.get("value_SRCA_WRITE_AVAILABLE", 0) + x.get("value_SRCB_WRITE_AVAILABLE", 0)) / 2,
@@ -1478,20 +1737,23 @@ def compute_device_only_metrics(
         eff_pivot["Unpacker Write Efficiency"] = eff_pivot[
             ["Unpacker0 Write Efficiency", "Unpacker1 Write Efficiency"]
         ].mean(axis=1, skipna=True)
-    eff_pivot["FPU Execution Efficiency"] = eff_pivot.apply(
-        lambda x: (
-            (x.get("value_FPU_COUNTER", 0) / x.get("value_FPU_INSTRN_AVAILABLE_1", 1) * 100)
-            if x.get("value_FPU_INSTRN_AVAILABLE_1", 0) > 0
-            else nan
-        ),
-        axis=1,
-    )
+    if "value_FPU_COUNTER" in eff_pivot.columns:
+        eff_pivot["FPU Execution Efficiency"] = eff_pivot.apply(
+            lambda x: (
+                (x.get("value_FPU_COUNTER", 0) / x.get("value_FPU_INSTRN_AVAILABLE_1", 1) * 100)
+                if x.get("value_FPU_INSTRN_AVAILABLE_1", 0) > 0
+                else nan
+            ),
+            axis=1,
+        )
 
-    # Thread stall rates
-    for t in range(3):
+    # Thread stall rates (threads 0-2 on tt-1xx, 0-3 on Quasar)
+    for t in range(4):
         stall_col = f"value_THREAD_STALLS_{t}"
         ref_col = f"ref_cnt_THREAD_STALLS_{t}"
-        eff_pivot[f"Thread {t} Stall Rate"] = eff_pivot.apply(
+        if t == 3 and stall_col not in eff_pivot.columns:
+            continue
+        eff_pivot[f"Thread {t} Issue Stall Rate"] = eff_pivot.apply(
             lambda x, s=stall_col, r=ref_col: safe_div(x.get(s, 0), x.get(r, 0)),
             axis=1,
         )
@@ -1611,6 +1873,8 @@ def compute_device_only_metrics(
     # L1 back-pressure
     def safe_backpressure(req0_key, req1_key, grant0_key, grant1_key):
         def fn(x):
+            if any(k not in x for k in (req0_key, req1_key, grant0_key, grant1_key)):
+                return nan
             r0 = x.get(req0_key, 0)
             r1 = x.get(req1_key, 0)
             g0 = x.get(grant0_key, 0)
@@ -1659,6 +1923,8 @@ def compute_device_only_metrics(
 
     def safe_single_bp(req_key, grant_key):
         def fn(x):
+            if req_key not in x or grant_key not in x:
+                return nan
             r = x.get(req_key, 0)
             g = x.get(grant_key, 0)
             return max(0.0, (r - g) / r * 100) if r > 0 else nan
@@ -1697,6 +1963,8 @@ def compute_device_only_metrics(
 
     def safe_complement(counter_key, total_key):
         def fn(x):
+            if counter_key not in x or total_key not in x:
+                return nan
             v = x.get(counter_key, 0)
             t = x.get(total_key, 0)
             return max(0.0, (t - v) / t * 100) if t > 0 else nan
@@ -1705,6 +1973,8 @@ def compute_device_only_metrics(
 
     def safe_util(counter_key, ref_key):
         def fn(x):
+            if counter_key not in x or ref_key not in x:
+                return nan
             v = x.get(counter_key, 0)
             r = x.get(ref_key, 0)
             return (v / r * 100) if r > 0 else nan
@@ -1767,6 +2037,8 @@ def compute_device_only_metrics(
 
     def safe_bp_single(req_key, grant_key):
         def fn(x):
+            if req_key not in x or grant_key not in x:
+                return nan
             r = x.get(req_key, 0)
             g = x.get(grant_key, 0)
             return max(0.0, (r - g) / r * 100) if r > 0 else nan
@@ -1815,6 +2087,89 @@ def compute_device_only_metrics(
         ),
         axis=1,
     )
+    if "value_THREAD_INSTRUCTIONS_3" in eff_pivot.columns:
+        eff_pivot["T3 Instrn Issue Rate"] = eff_pivot.apply(
+            lambda x: (
+                x.get("value_THREAD_INSTRUCTIONS_3", 0) / x.get("ref_cnt_THREAD_INSTRUCTIONS_3", 1)
+                if x.get("ref_cnt_THREAD_INSTRUCTIONS_3", 0) > 0
+                else nan
+            ),
+            axis=1,
+        )
+
+    # Quasar (A0): flat stall reasons and the full 4-thread class grid.
+    for metric_name, counter_name in QUASAR_STALL_REASON_METRICS.items():
+        val_col = f"value_{counter_name}"
+        ref_col = f"ref_cnt_{counter_name}"
+        if val_col in eff_pivot.columns:
+            eff_pivot[metric_name] = eff_pivot.apply(safe_util(val_col, ref_col), axis=1)
+    for cls in QUASAR_INSTRN_CLASSES:
+        for thread in range(4):
+            if (cls, thread) in _QUASAR_CLASS_PAIRS_COVERED:
+                continue
+            val_col = f"value_{cls}_INSTRN_AVAILABLE_{thread}"
+            ref_col = f"ref_cnt_{cls}_INSTRN_AVAILABLE_{thread}"
+            if val_col in eff_pivot.columns:
+                eff_pivot[f"{cls} Instrn Avail Rate T{thread}"] = eff_pivot.apply(safe_util(val_col, ref_col), axis=1)
+    l1_client_rate_names = []
+    for col in list(eff_pivot.columns):
+        if str(col).startswith("value_L1_CLIENT_"):
+            name = str(col)[len("value_") :]
+            l1_client_rate_names.append(f"{name} Rate")
+            carry_scale = 4.0 if name.endswith("_CARRY") and "PENDING" not in name else 1.0
+            eff_pivot[f"{name} Rate"] = eff_pivot.apply(safe_util(col, f"ref_cnt_{name}"), axis=1) * carry_scale
+
+    if "value_MATH_SRC_DATA_READY" in eff_pivot.columns:
+        eff_pivot["Math Src Data Ready Rate"] = eff_pivot.apply(
+            safe_util("value_MATH_SRC_DATA_READY", "ref_cnt_MATH_SRC_DATA_READY"), axis=1
+        )
+    for t_idx in range(4):
+        for u in (0, 1):
+            col = f"value_UNPACK{u}_BUSY_THREAD{t_idx}"
+            if col in eff_pivot.columns:
+                eff_pivot[f"Unpacker{u} Busy T{t_idx} Util"] = eff_pivot.apply(
+                    safe_util(col, f"ref_cnt_UNPACK{u}_BUSY_THREAD{t_idx}"), axis=1
+                )
+    if all(f"value_{n}_COUNTER" in eff_pivot.columns for n in ("FPU", "SFPU", "MATH")):
+        # MATH_COUNTER counts fpu-or-sfpu cycles, so overlap = FPU + SFPU - MATH.
+        eff_pivot["FPU SFPU Overlap"] = eff_pivot.apply(
+            lambda x: (
+                max(0.0, (x["value_FPU_COUNTER"] + x["value_SFPU_COUNTER"] - x["value_MATH_COUNTER"]))
+                / x["ref_cnt_MATH_COUNTER"]
+                * 100
+                if x.get("ref_cnt_MATH_COUNTER", 0) > 0
+                else nan
+            ),
+            axis=1,
+        )
+    for t_idx in range(4):
+        icol, scol = f"value_THREAD_INSTRUCTIONS_{t_idx}", f"value_THREAD_STALLS_{t_idx}"
+        if icol in eff_pivot.columns and scol in eff_pivot.columns:
+            eff_pivot[f"T{t_idx} Instrn Per Issue-Ready Cycle"] = eff_pivot.apply(
+                lambda x, i=icol, s=scol, r=f"ref_cnt_THREAD_INSTRUCTIONS_{t_idx}": (
+                    x[i] / max(1.0, x.get(r, 0) - x[s]) if x.get(r, 0) > 0 else nan
+                ),
+                axis=1,
+            )
+    for src in ("SRCA", "SRCB"):
+        c0, c1 = f"value_{src}_WRITE_THREAD0", f"value_{src}_WRITE_THREAD1"
+        if c0 in eff_pivot.columns and c1 in eff_pivot.columns:
+            total = eff_pivot[c0] + eff_pivot[c1]
+            eff_pivot[f"{src.title()} Write T0 Share"] = (eff_pivot[c0] / total * 100).replace(
+                [float("inf"), -float("inf")], nan
+            )
+            eff_pivot[f"{src.title()} Write T1 Share"] = (eff_pivot[c1] / total * 100).replace(
+                [float("inf"), -float("inf")], nan
+            )
+
+    _reason_cols = [f"value_{n}" for n in QUASAR_STALL_REASON_METRICS.values() if f"value_{n}" in eff_pivot.columns]
+    if len(_reason_cols) > 1:
+        _reason_total = eff_pivot[_reason_cols].sum(axis=1)
+        for metric_name, counter_name in QUASAR_STALL_REASON_METRICS.items():
+            col = f"value_{counter_name}"
+            if col in eff_pivot.columns:
+                share = (eff_pivot[col] / _reason_total * 100).replace([float("inf"), -float("inf")], nan)
+                eff_pivot[metric_name.replace(" Rate", " Share")] = share
 
     # Packer engine granularity (WH only)
     if "value_PACKER_BUSY_0" in eff_pivot.columns:
@@ -1919,6 +2274,8 @@ def compute_device_only_metrics(
 
     def unpacker_l1_eff(x):
         """L1 grant to unpacker / unpacker busy cycles. How well L1 serves the unpacker."""
+        if "value_L1_0_UNPACKER_0_GRANT" not in x:
+            return nan
         grant = x.get("value_L1_0_UNPACKER_0_GRANT", 0)
         busy = x.get("value_UNPACK0_BUSY_THREAD0", 0)
         return (grant / busy * 100) if busy > 0 else nan
@@ -1927,6 +2284,8 @@ def compute_device_only_metrics(
 
     def packer_l1_eff(x):
         """L1 grant to packer port / packer busy cycles."""
+        if "value_L1_0_PORT1_GRANT" not in x:
+            return nan
         grant = x.get("value_L1_0_PORT1_GRANT", 0)
         busy = x.get("value_PACKER_BUSY", 0)
         return (grant / busy * 100) if busy > 0 else nan
@@ -1934,6 +2293,16 @@ def compute_device_only_metrics(
     eff_pivot["Packer L1 Efficiency"] = eff_pivot.apply(packer_l1_eff, axis=1)
 
     def noc_vs_compute(x):
+        if not any(
+            k in x
+            for k in (
+                "value_L1_0_NOC_RING0_OUTGOING_0",
+                "value_L1_0_NOC_RING0_OUTGOING_1",
+                "value_L1_0_NOC_RING0_INCOMING_0",
+                "value_L1_0_NOC_RING0_INCOMING_1",
+            )
+        ):
+            return nan
         """NOC cycles / (FPU + NOC cycles). >50% = NOC-bound, <50% = compute-bound."""
         noc = (
             x.get("value_L1_0_NOC_RING0_OUTGOING_0", 0)
@@ -1979,7 +2348,7 @@ def compute_device_only_metrics(
         if stalls_col in eff_pivot.columns and all(c in eff_pivot.columns for c in reason_cols):
             eff_pivot[f"Stall Overlap T{t}"] = eff_pivot.apply(
                 lambda x, sc=stalls_col, rc=reason_cols: (
-                    sum(x.get(c, 0) for c in rc) / x[sc] if x.get(sc, 0) > 0 else nan
+                    sum(x.get(c, 0) for c in rc) / x[sc] * 100 if x.get(sc, 0) > 0 else nan
                 ),
                 axis=1,
             )
@@ -2021,11 +2390,24 @@ def compute_device_only_metrics(
         "Packer Efficiency",
         "FPU Execution Efficiency",
         "Math Pipeline Utilization",
-        "Math-to-Pack Handoff Efficiency",
         "Unpacker-to-Math Data Flow",
-        "Thread 0 Stall Rate",
-        "Thread 1 Stall Rate",
-        "Thread 2 Stall Rate",
+        "Thread 0 Issue Stall Rate",
+        "Thread 1 Issue Stall Rate",
+        "Thread 2 Issue Stall Rate",
+        "Thread 3 Issue Stall Rate",
+        "Math Src Data Ready Rate",
+        "FPU SFPU Overlap",
+        *[f"Unpacker{u} Busy T{t} Util" for u in (0, 1) for t in range(4)],
+        *[f"{s} Write T{t} Share" for s in ("Srca", "Srcb") for t in (0, 1)],
+        *QUASAR_STALL_REASON_METRICS,
+        *[n.replace(" Rate", " Share") for n in QUASAR_STALL_REASON_METRICS],
+        *[
+            f"{cls} Instrn Avail Rate T{thread}"
+            for cls in QUASAR_INSTRN_CLASSES
+            for thread in range(4)
+            if (cls, thread) not in _QUASAR_CLASS_PAIRS_COVERED
+        ],
+        *l1_client_rate_names,
         "SrcA Valid Wait",
         "SrcB Valid Wait",
         "SrcA Clear Wait",
@@ -2099,6 +2481,8 @@ def compute_device_only_metrics(
         "T0 Instrn Issue Rate",
         "T1 Instrn Issue Rate",
         "T2 Instrn Issue Rate",
+        "T3 Instrn Issue Rate",
+        *[f"T{t} Instrn Per Issue-Ready Cycle" for t in range(4)],
         "Avg HF Cycles Per Instrn",
     ]
 
