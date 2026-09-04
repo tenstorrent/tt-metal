@@ -372,6 +372,13 @@ def _publish_cache(tt_model: Module, cache_dir: str | Path, key: str | None) -> 
             manifest |= {"content_key": key, "parameters": parameters}
         (staging / CACHE_DICT_FILE).write_text(json.dumps(manifest, indent=2, sort_keys=True))
 
+        # A concurrent process may have finished publishing this key while we prepared weights (a
+        # long, on-device window since load_model's completeness check). Its artifact is already
+        # complete — for a content key its bytes are ours by construction — so adopt it rather than
+        # delete a valid cache out from under a concurrent reader mid-load.
+        if _cache_is_complete(cache_dir, tt_model, key):
+            logger.info(f"cache at '{cache_dir}' was published concurrently; adopting it.")
+            return
         if cache_dir.exists():
             shutil.rmtree(cache_dir)
         os.replace(staging, cache_dir)
