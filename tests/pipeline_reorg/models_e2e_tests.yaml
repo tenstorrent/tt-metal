@@ -956,6 +956,26 @@
 # weights' device addresses and dynamic_load evicts them. The 4x8 galaxy rows need neither: 32
 # chips hold the whole pipeline resident. They also run Ring topology, the path the
 # ColParallelLinear addcmul bug does not affect. Add a bh_quietbox_2 leg once that fix lands.
+# PROBE: confirm the create_pipeline fix runs, on the 2x2 mesh, and stage scheduler/ as a
+# side effect. bh_quietbox_2 write access works (it staged the weights on 2026-09-02), unlike
+# bh_sc1's, so the pipeline's own scheduler/tokenizer fetch lands on the shared mount.
+- name: TT-DiT Flux.2-dev e2e pipeline probe
+  cmd: |
+    unset TT_METAL_WATCHER  # blocked by #50886
+    unset HF_HUB_OFFLINE
+    export NO_PROMPT=1
+    export TT_DIT_CACHE_DIR=/mnt/MLPerf/huggingface/tt_dit_cache/black-forest-labs/FLUX.2-dev
+    pytest --timeout 5400 -rs models/tt_dit/tests/models/flux2/test_pipeline_flux2.py -k bh_2x2
+  model: flux.2-dev
+  model_family: Flux
+  skus:
+    bh_quietbox_2:
+      timeout: 100
+      tier: 1
+      release_ready: false
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
 - name: TT-DiT Flux.2-dev multihost e2e tests
   # BLOCKED as of run 33690418331: the FLUX.2-dev snapshot pre-staged on this SKU's
   # /mnt/models/huggingface is incomplete -- it has transformer, text_encoder, tokenizer and vae
