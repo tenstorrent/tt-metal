@@ -16,7 +16,7 @@
 #include "device.hpp"
 #include "impl/allocator/allocator.hpp"
 #include "mesh_device_impl.hpp"
-#include "impl/context/metal_context.hpp"
+#include "impl/context/metal_env_impl.hpp"
 #include "impl/debug/inspector/inspector.hpp"
 #include <tt-metalium/distributed_context.hpp>
 
@@ -331,7 +331,7 @@ void MeshBuffer::initialize_device_buffers() {
     if (auto mesh_device = mesh_device_.lock();
         mesh_device != nullptr && std::holds_alternative<OwnedBufferState>(state_) &&
         device_local_config_.buffer_type == BufferType::L1 &&
-        MetalContext::instance(mesh_device->impl().get_context_id()).rtoptions().get_allocator_mode_hybrid()) {
+        mesh_device->impl().metal_env().get_rtoptions().get_allocator_mode_hybrid()) {
         auto* backing = get_backing_buffer();
         auto alloc_size = backing->aligned_size_per_bank();
         for (const auto& [coord, device_buffer] : buffers_) {
@@ -401,7 +401,7 @@ void MeshBuffer::deallocate() {
         // Check HYBRID mode via rtoptions rather than mesh_device->allocator_impl() because:
         // 1. allocator_impl() crashes on remote-only MeshDevices (sub_device_manager_tracker_ is null).
         // 2. During teardown, device state may be partially destroyed, causing segfaults.
-        if (MetalContext::instance(mesh_device->impl().get_context_id()).rtoptions().get_allocator_mode_hybrid()) {
+        if (mesh_device->impl().metal_env().get_rtoptions().get_allocator_mode_hybrid()) {
             // Unmirror lockstep L1 allocation from each device's lockstep allocator.
             // Skip per-device unmirror if the device has been closed (default_allocator_ reset
             // by Device::close()). This can happen at process teardown when the mesh device is

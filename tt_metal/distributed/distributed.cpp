@@ -16,6 +16,7 @@
 #include <internal/service/service_core_manager.hpp>
 #include "impl/internal/service/service_core_manager_impl.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/context/metal_env_impl.hpp"
 #include <tt-metalium/tt_metal.hpp>
 #include "llrt/tt_cluster.hpp"
 
@@ -33,7 +34,8 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
     //
     // No-mixing contract: a workload is entirely a service workload (every program on claimed service
     // cores) or entirely a normal one.
-    auto& svc = tt::tt_metal::MetalContext::instance().get_service_core_manager();
+    auto& mesh_impl = mesh_cq.device()->impl();
+    auto& svc = mesh_impl.metal_context().get_service_core_manager();
     auto& programs = mesh_workload.impl().get_programs();
     if (svc.impl().has_any_claims()) {
         // Classify the workload as service vs normal once and cache it on the workload, so steady-state
@@ -112,12 +114,12 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
         }
     }
 
-    auto& ctx = tt::tt_metal::MetalContext::instance();
-    if (ctx.rtoptions().get_fast_dispatch()) {
+    auto& env = mesh_impl.metal_env();
+    if (env.get_rtoptions().get_fast_dispatch()) {
         mesh_workload.impl().compile(mesh_cq.device());
         mesh_workload.impl().load_binaries(mesh_cq);
         mesh_workload.impl().generate_dispatch_commands(mesh_cq);
-    } else if (ctx.get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+    } else if (env.get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
         // Slow dispatch normally JIT-compiles inside LaunchProgram, but the SD mesh CQ
         // short-circuits for mock devices (no hardware to dispatch to). Compile here so
         // kernel artifacts are still produced; the SD CQ then no-ops the skipped dispatch.
@@ -128,7 +130,7 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
 }
 
 void EventSynchronize(const MeshEvent& event) {
-    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
+    if (!event.device()->impl().metal_env().get_rtoptions().get_fast_dispatch()) {
         return;
     }
     for (const auto& coord : event.device_range()) {
@@ -140,7 +142,7 @@ void EventSynchronize(const MeshEvent& event) {
 }
 
 bool EventQuery(const MeshEvent& event) {
-    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
+    if (!event.device()->impl().metal_env().get_rtoptions().get_fast_dispatch()) {
         return true;
     }
     bool event_completed = true;
