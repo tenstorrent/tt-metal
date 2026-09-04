@@ -11,6 +11,7 @@ from models.common.utility_functions import is_blackhole
 
 from ..utils.matmul import (
     get_agmm_config,
+    get_agmm_layout_override,
     get_fabric_agmm_config,
     get_fused_mmrs_config,
     get_matmul_config,
@@ -413,6 +414,15 @@ class ColParallelLinear(Module):
             # get_agmm_config resolves grid, blocking and workers together: an explicit core_grid /
             # default_block_size and swept (M, K, N) table entries keep the legacy derivation,
             # unswept shapes go through the v3 rule engine (see utils/agmm_rules.py).
+            # Per-shape layout override: shapes whose swept non-transposed layout beats the default
+            # forced-transposed one (agmm_layout_overrides in utils/matmul.py). Applied only when
+            # the caller left the layout at its defaults, and carries the swept num_workers_per_link
+            # so the model runs the exact configuration that was measured.
+            override_workers = None
+            if core_grid is None and force_transpose and default_block_size is None:
+                layout_override = get_agmm_layout_override(M, K, N)
+                if layout_override is not None:
+                    force_transpose, core_grid, override_workers = layout_override
             core_grid, matmul_config, num_workers_per_link = get_agmm_config(
                 M,
                 K,
@@ -427,6 +437,8 @@ class ColParallelLinear(Module):
                 use_addcmul=addcmul_a is not None,
                 force_transpose=force_transpose,
             )
+            if override_workers is not None:
+                num_workers_per_link = override_workers
 
             ag_persistent_buffer = self.ccl_manager.get_ag_ping_pong_buffer(
                 x.shape, -1, parallel_config.tensor_parallel.mesh_axis, dtype=x.get_dtype()

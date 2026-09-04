@@ -365,7 +365,10 @@ grid_12_9_configs = {
     # ran (the warned 8x8x8 fallback for M < N, the v3 rules otherwise). Each (M, 5120, 1280)
     # entry serves both the fused-addcmul to_out and the plain cross-attn to_q / to_out (they
     # share the table key) — compromise blockings within ~1% of both use cases' optima.
-    (1664, 5120, 3840): (5, 8, 10, (1, 2)),  # a2v-1080p qkv, 423.2 us (-8.9% vs 8x8x8)
+    # NON-TRANSPOSED full-width layout (see agmm_layout_overrides): this key's blocking was swept
+    # at force_transpose=False, and the override below flips the call site to match. 423.2 us was
+    # the best transposed blocking ((5, 8, 10, (1, 2))) if the override is ever removed.
+    (1664, 5120, 3840): (3, 8, 16, (1, 4)),  # a2v-1080p qkv, nt 12x9, 362.3 us (-14.4% vs transposed)
     (2656, 5120, 3840): (7, 5, 14, (1, 2)),  # a2v qkv, 579.7 us (-8.5% vs 8x8x8)
     (7200, 5120, 3840): (8, 5, 14, (2, 2)),  # SR-1080p qkv, 1456.9 us (-13.2% vs v3)
     (11520, 5120, 3840): (6, 8, 14, (2, 2)),  # SR qkv, 2159.2 us (pins the v3 pick)
@@ -373,7 +376,9 @@ grid_12_9_configs = {
     (2656, 5120, 1280): (8, 8, 5, (4, 1)),  # to_out 406.4 us / plain 377.7 us
     (7200, 5120, 1280): (10, 8, 5, (2, 1)),  # to_out 1063.1 us / plain 966.3 us (= v3 pick)
     (11520, 5120, 1280): (8, 8, 8, (2, 2)),  # to_out 1647.9 us / plain 1509.4 us (= old default)
-    (1664, 5120, 3456): (5, 8, 16, (1, 4)),  # a2v-1080p ff1, 380.6 us (-13.9% vs 8x8x8)
+    # NON-TRANSPOSED full-width layout, same coupling as the qkv entry above. 380.6 us was the
+    # best transposed blocking ((5, 8, 16, (1, 4))) if the override is ever removed.
+    (1664, 5120, 3456): (3, 8, 10, (3, 1)),  # a2v-1080p ff1, nt 12x9, 344.7 us (-9.4% vs transposed)
     (2656, 5120, 3456): (7, 8, 12, (1, 4)),  # a2v ff1, 503.5 us (-17.1% vs 8x8x8)
     (7200, 5120, 3456): (10, 4, 12, (2, 2)),  # SR-1080p ff1, 1362.5 us (-11.6% vs v3)
     (11520, 5120, 3456): (6, 8, 12, (2, 2)),  # SR ff1, 1971.2 us (pins the v3 pick)
@@ -641,6 +646,35 @@ def get_matmul_config(M, K, N, core_grid, default_block_size=None, use_heuristic
         subblock_w=subblock_w,
         compute_with_storage_grid_size=core_grid,
     )
+
+
+# Per-shape AGMM layout overrides: (M, K_global, N_per_device) -> (force_transpose, core_grid,
+# num_workers_per_link), for shapes whose swept NON-TRANSPOSED layout beats the default
+# forced-transposed orientation. Consulted by ColParallelLinear.forward when the caller left the
+# layout at its defaults. Only meaningful for M < N (the op auto-transposes above that), and the
+# grid table entry for the same (M, K, N) key MUST hold the blocking swept at THIS layout — the
+# table key does not encode orientation, so the entry and this override flip together.
+agmm_layout_overrides = {
+    # Aang a2v-1080p (4x32, TP4), swept 2026-09-04: nt full-width 12x9 beats the transposed
+    # winners by 14.4% (qkv) / 9.4% (ff1); the flag-only nt 11x10 layout is a wash for qkv and
+    # worse for ff1, so the explicit full-width grid is required.
+    (1664, 5120, 3840): (False, (12, 9), 6),  # to_qkv, (3,8,16) sb1x4, 362.3 us
+    (1664, 5120, 3456): (False, (12, 9), 6),  # ff1,    (3,8,10) sb3x1, 344.7 us
+}
+
+
+def get_agmm_layout_override(M, K, N):
+    """Layout override for an `all_gather_minimal_matmul_async` call site, or None.
+
+    Returns (force_transpose, core_grid, num_workers_per_link). Callers apply it only when they
+    were about to use the default layout (force_transpose=True, no explicit core_grid or block
+    size), and pass all three through together so the op runs the exact swept configuration.
+    """
+    hit = agmm_layout_overrides.get((M, K, N))
+    if hit is None:
+        return None
+    force_transpose, (grid_x, grid_y), num_workers_per_link = hit
+    return force_transpose, ttnn.CoreCoord(grid_x, grid_y), num_workers_per_link
 
 
 _logged_agmm_v3_signatures = set()
