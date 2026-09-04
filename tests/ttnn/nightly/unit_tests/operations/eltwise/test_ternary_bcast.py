@@ -323,3 +323,85 @@ def test_where_program_cache_same_input_volume_different_output_volume(device, i
         "the output-volume cases no longer collide in the program cache "
         f"(dispatches 2,3 added {deltas[1:]} entries); this test no longer covers issue 54235"
     )
+
+
+@pytest.mark.parametrize("variant", ["TTT", "TTS", "TST"])
+def test_where_sharded_program_cache_hit_repoints_cbs(device, isolate_program_cache, variant):
+    """
+    A sharded cache HIT must re-point the tensor-backed circular buffers at the CURRENT buffers.
+
+    For sharded tensors the buffer base address rides on the globally-allocated CB, not on a runtime
+    arg, so re-applying runtime args alone would leave the second dispatch reading and writing the
+    FIRST dispatch's buffers. Both calls use the same shape and shard spec, so they share one cache
+    entry, but they use different allocations: both sets of tensors (and both outputs) are kept alive
+    so the second set necessarily lands at different addresses.
+
+    Coverage note, established by disabling the CB re-point in override_runtime_arguments and
+    re-running: only TTT actually fails without it. TTS/TST stay correct on these shapes -- their
+    kernels reach the operands through the reader/writer address args rather than the CB backing --
+    so they are extra correctness coverage here, not a guard on the re-point path. TTT is the case
+    that regresses if the re-point is dropped.
+    """
+    shape = (1, 1, 32, 128)
+    mem_cfg = ttnn.create_sharded_memory_config(
+        shape=shape,
+        core_grid=ttnn.CoreGrid(x=4, y=1),
+        strategy=ttnn.ShardStrategy.BLOCK,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+
+    def make(seed):
+        torch.manual_seed(seed)
+        pred = torch.randint(0, 2, shape).to(torch.bfloat16)
+        true_t = torch.randn(shape, dtype=torch.bfloat16)
+        false_t = torch.randn(shape, dtype=torch.bfloat16)
+        to_dev = lambda x: ttnn.from_torch(
+            x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem_cfg
+        )
+        return (pred, true_t, false_t), (to_dev(pred), to_dev(true_t), to_dev(false_t))
+
+    # Both sets stay alive, so set 2 cannot reuse set 1's addresses.
+    host_1, dev_1 = make(1)
+    host_2, dev_2 = make(2)
+
+    # If the allocator ever handed out the same addresses, the CB re-point would be a no-op and this
+    # test would pass without exercising anything.
+    assert (
+        dev_1[0].buffer_address() != dev_2[0].buffer_address()
+    ), "both dispatches got the same predicate buffer address; this test cannot detect a stale CB"
+
+    deltas, results = [], []
+    outs = []  # keep the device outputs alive too, so dispatch 2's OUTPUT cannot reuse dispatch 1's
+    for (pred, true_t, false_t), (pred_tt, true_tt, false_tt) in ((host_1, dev_1), (host_2, dev_2)):
+        if variant == "TTT":
+            args, golden = (pred_tt, true_tt, false_tt), torch.where(pred.bool(), true_t, false_t)
+        elif variant == "TTS":
+            args, golden = (pred_tt, true_tt, -2.5), torch.where(pred.bool(), true_t, torch.full_like(true_t, -2.5))
+        else:  # TST
+            args, golden = (pred_tt, 1.5, false_tt), torch.where(pred.bool(), torch.full_like(false_t, 1.5), false_t)
+
+        device.cache_entries_counter.reset()
+        with device.cache_entries_counter.measure():
+            out = ttnn.where(*args, memory_config=mem_cfg)
+        outs.append(out)
+        deltas.append(device.cache_entries_counter.total)
+        results.append((ttnn.to_torch(out), golden))
+
+    # Without this the output CB could go stale undetected: if dispatch 1's output were freed first,
+    # dispatch 2 would reuse its address and a stale c_3 would still land on the right buffer.
+    assert (
+        outs[0].buffer_address() != outs[1].buffer_address()
+    ), "both dispatches got the same output buffer address; this test cannot detect a stale output CB"
+
+    assert deltas[0] == 1, (
+        f"first sharded dispatch added {deltas[0]} cache entries, expected exactly 1 "
+        "(program cache disabled, or the op did not compile a program?)"
+    )
+    assert deltas[1] == 0, (
+        f"the second sharded dispatch added {deltas[1]} entries instead of reusing the cached "
+        "program; this test no longer exercises the sharded cache-hit CB re-point path"
+    )
+
+    # The second result is the one that catches a stale CB address: it would return dispatch 1's data.
+    for result, golden in results:
+        assert_equal(golden, result)
