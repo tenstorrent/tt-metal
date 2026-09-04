@@ -42,7 +42,7 @@ class TtPrefillRuntimeConfig:
     # Derived from the opened fabric via tt_ccl.per_axis_topology() in the runner.
     topology: Union[ttnn.Topology, Tuple[ttnn.Topology, ttnn.Topology]] = ttnn.Topology.Linear
     capacity_factor: int = 2
-    gate_fallback_mode: GateComputeMode = GateComputeMode.HOST_ALL
+    gate_fallback_mode: GateComputeMode = GateComputeMode.DEVICE_FP32
     routed_expert_activations_dtype: ttnn.DataType = ttnn.bfloat8_b
     routed_expert_weights_dtype: ttnn.DataType = DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE
     shared_expert_activations_dtype: ttnn.DataType = ttnn.bfloat16

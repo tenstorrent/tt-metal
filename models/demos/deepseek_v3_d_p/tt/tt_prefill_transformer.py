@@ -140,7 +140,7 @@ class TtPrefillTransformer(LightweightModule):
         tp_axis: int = 1,
         is_balanced: bool = False,
         padding_side: str = "right",
-        gate_fallback_mode: GateComputeMode = GateComputeMode.HOST_ALL,
+        gate_fallback_mode: GateComputeMode = GateComputeMode.DEVICE_FP32,
         routed_expert_activations_dtype=ttnn.bfloat8_b,
         routed_expert_weights_dtype=DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE,
         shared_expert_activations_dtype=ttnn.bfloat16,
