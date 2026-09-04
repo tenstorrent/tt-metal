@@ -328,8 +328,7 @@ ttnn/ccl: complete AGMM program cache identity
 - Modify: `ttnn/cpp/ttnn-nanobind/device.cpp`
 - Modify: `tests/ttnn/unit_tests/base_functionality/test_device.py`
 - Create: `tests/tt_metal/tt_metal/tools/test_kernel_prewarm_wrapper.py`
-- Create: `tests/tt_metal/tt_metal/api/test_kernel_prewarm.cpp`
-- Modify: `tests/tt_metal/tt_metal/api/sources.cmake`
+- Modify: `tests/tt_metal/tt_metal/api/test_offline_kernel_compile.cpp`
 
 **Interfaces:**
 - Produces Python bindings:
@@ -365,7 +364,6 @@ subprocess.run(
     check=True,
 )
 assert recorded_command == "export TT_METAL_KERNEL_CAPTURE_ONLY=1; cd /tmp && env"
-assert recorded_timeout == "600"
 ```
 
 - [ ] **Step 2: Write the binding-surface regression**
@@ -382,11 +380,13 @@ def test_kernel_prewarm_control_bindings_exist():
     assert all(hasattr(ttnn._ttnn.device, name) for name in names)
 ```
 
-- [ ] **Step 3: Restore stale-code tests in a focused file**
+- [ ] **Step 3: Restore stale-code tests in their existing test file**
 
-Create `test_kernel_prewarm.cpp` with the helper kernel writer, ELF reader, and
-the two named `MeshDeviceFixture` tests from first parent `8672b35d9bed`.
-Use current headers:
+Restore the helper kernel writer, ELF reader, and the two named
+`MeshDeviceFixture` tests from first parent `8672b35d9bed` into
+`test_offline_kernel_compile.cpp`, where those tests originally lived. Adapt
+them to coexist with the current public offline-compile tests. Add the required
+current headers:
 
 ```cpp
 #include "device_fixture.hpp"
@@ -395,8 +395,9 @@ Use current headers:
 #include "tt_metal/jit_build/build_env_manager.hpp"
 ```
 
-Register the file in `tests/tt_metal/tt_metal/api/sources.cmake`. Keep temporary
-kernel files unique and remove them at test end.
+Keep temporary kernel files unique and remove them at test end. No CMake source
+registration change is needed because the file is already in the API test
+target.
 
 - [ ] **Step 4: Verify the host-visible tests are RED**
 
@@ -413,18 +414,16 @@ Expected: wrapper propagation and binding-surface tests fail.
 
 - [ ] **Step 5: Restore the wrapper export and nanobind functions**
 
-Set the wrapper's safe default reservation to:
-
-```bash
-TIMEOUT=600
-```
-
 Change stage one to:
 
 ```bash
 tt-device-mcp run "export TT_METAL_KERNEL_CAPTURE_ONLY=1; $CMD" \
   -w "$WORKSPACE" -t "$TIMEOUT" ${ENV_FILE:+-e "$ENV_FILE"} || true
 ```
+
+Leave the existing `TIMEOUT=1200` interface unchanged. It was not lost in the
+merge and is outside this surgical forward-port. Task 5 passes its chosen
+timeout explicitly when it invokes the wrapper.
 
 Add:
 
@@ -520,13 +519,14 @@ Require both Torch comparisons and program execution to pass.
 
 - [ ] **Step 5: Run a prewarmed LTX regression**
 
-Use the worktree's `prewarm_and_submit.sh -c` with the device YAML and its
-600-second default. Run:
+Use the worktree's `prewarm_and_submit.sh -c` with the device YAML and an
+explicit 600-second timeout for this validation. Run:
 
 ```bash
 tt_metal/tools/kernel_prewarm/prewarm_and_submit.sh \
   -e /home/smarton/ltx-rt-integration/device.env.yaml \
   -w /home/smarton/.claude/worktrees/ltx-rt-fixes-2026-09-03 \
+  -t 600 \
   -c -- \
   "/home/smarton/tt-metal/python_env/bin/python -m pytest models/tt_dit/tests/models/ltx/test_pipeline_ltx_distilled.py::test_pipeline_distilled -k bh_2x4sp1tp0 -s"
 ```
