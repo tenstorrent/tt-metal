@@ -220,11 +220,20 @@ grid_11_10_configs = {
     (2048, 6144, 9216): (8, 8, 10, (2, 2)),  # 972.7 μs  ff1 / qkv spatial
     (64, 6144, 4608): (2, 8, 8, (2, 2)),  # 196.3 μs  proj_mlp prompt
     # Aang proj_out at 4x32 (plain minimal_matmul after the TP gather; per-device M at SP=32),
-    # swept 2026-09-03 on bh_4x8_sp1_tp0. Best legal blockings (N_block <= N_tiles = 2).
-    (1664, 5120, 64): (12, 8, 2, (2, 2)),  # a2v-1080p, 79.8 us (-7.4% vs 8x8x8)
+    # swept 2026-09-03/04 on bh_4x8_sp1_tp0. Best legal blockings (N_block <= N_tiles = 2).
+    # 1080p Ms corrected 2026-09-04 against the real hg_stream 4x32 run: 1760 (a2v) / 7040 (SR),
+    # replacing the earlier 1664 / 7200 estimates, which never occur.
+    (1760, 5120, 64): (14, 8, 2, (2, 2)),  # a2v-1080p, 81.0 us (-4.3% vs 8x8x8)
     (2656, 5120, 64): (4, 8, 2, (2, 2)),  # a2v, 118.6 us (-6.9%)
-    (7200, 5120, 64): (3, 32, 2, (3, 1)),  # SR-1080p, 269.7 us (-8.1%)
+    (7040, 5120, 64): (4, 16, 2, (2, 2)),  # SR-1080p, 262.1 us (-10.1%)
     (11520, 5120, 64): (3, 20, 2, (3, 1)),  # SR, 414.5 us (-9.1%)
+    # Aang 1080p VAE decoder mid-block attention (dim 384; the 720p sibling is the 14400 entry
+    # above) and cross-attn to_kv at the run's prompt length 96. Swept 2026-09-04.
+    (10240, 384, 1152): (15, 3, 4, (1, 4)),  # VAE attn qkv, 119.7 us
+    (10240, 384, 384): (6, 3, 4, (2, 2)),  # VAE attn proj, 61.2 us
+    (40960, 384, 1152): (16, 3, 6, (2, 2)),  # VAE attn qkv, 461.6 us
+    (40960, 384, 384): (8, 3, 4, (2, 2)),  # VAE attn proj, 204.4 us
+    (96, 5120, 2560): (2, 4, 10, (2, 2)),  # cross-attn to_kv @ prompt 96, 119.3 us (-6.7%)
 }
 
 grid_12_9_configs = {
@@ -361,26 +370,29 @@ grid_12_9_configs = {
     (3424, 7168, 1344): (9, 8, 5, (3, 1)),  # to_out
     (3424, 5376, 7168): (6, 7, 12, (2, 2)),  # ff1
     # Aang (Wan2.2 family) at 4x32 — per-device M at SP=32 for a2v / SR / a2v-1080p / SR-1080p.
-    # Swept 2026-09-03 on bh_4x8_sp1_tp0 (sweep_mm_block_sizes.py); deltas are vs what previously
-    # ran (the warned 8x8x8 fallback for M < N, the v3 rules otherwise). Each (M, 5120, 1280)
-    # entry serves both the fused-addcmul to_out and the plain cross-attn to_q / to_out (they
-    # share the table key) — compromise blockings within ~1% of both use cases' optima.
+    # Swept 2026-09-03/04 on bh_4x8_sp1_tp0 (sweep_mm_block_sizes.py); deltas are vs what
+    # previously ran (the warned 8x8x8 fallback for M < N, the v3 rules otherwise). Each
+    # (M, 5120, 1280) entry serves both the fused-addcmul to_out and the plain cross-attn
+    # to_q / to_out (they share the table key) — compromise blockings within ~1% of both optima.
+    # 1080p Ms corrected 2026-09-04 against the real hg_stream 4x32 run: 1760 (a2v) / 7040 (SR),
+    # replacing the earlier 1664 / 7200 estimates, which never occur.
     # NON-TRANSPOSED full-width layout (see agmm_layout_overrides): this key's blocking was swept
-    # at force_transpose=False, and the override below flips the call site to match. 423.2 us was
-    # the best transposed blocking ((5, 8, 10, (1, 2))) if the override is ever removed.
-    (1664, 5120, 3840): (3, 8, 16, (1, 4)),  # a2v-1080p qkv, nt 12x9, 362.3 us (-14.4% vs transposed)
+    # at force_transpose=False, and the override below flips the call site to match. 426.6 us was
+    # the best transposed blocking ((5, 10, 14, (1, 2))) if the override is ever removed.
+    (1760, 5120, 3840): (4, 8, 16, (2, 2)),  # a2v-1080p qkv, nt 12x9, 404.9 us (-5.1% vs transposed)
     (2656, 5120, 3840): (7, 5, 14, (1, 2)),  # a2v qkv, 579.7 us (-8.5% vs 8x8x8)
-    (7200, 5120, 3840): (8, 5, 14, (2, 2)),  # SR-1080p qkv, 1456.9 us (-13.2% vs v3)
+    (7040, 5120, 3840): (8, 5, 14, (2, 2)),  # SR-1080p qkv, 1400.3 us (-15.7% vs v3)
     (11520, 5120, 3840): (6, 8, 14, (2, 2)),  # SR qkv, 2159.2 us (pins the v3 pick)
-    (1664, 5120, 1280): (6, 8, 5, (3, 1)),  # to_out 272.1 us / plain 250.8 us
+    (1760, 5120, 1280): (6, 8, 5, (3, 1)),  # to_out 280.0 us / plain 259.4 us
     (2656, 5120, 1280): (8, 8, 5, (4, 1)),  # to_out 406.4 us / plain 377.7 us
-    (7200, 5120, 1280): (10, 8, 5, (2, 1)),  # to_out 1063.1 us / plain 966.3 us (= v3 pick)
+    (7040, 5120, 1280): (10, 8, 5, (2, 1)),  # to_out 1069.6 us / plain 979.0 us
     (11520, 5120, 1280): (8, 8, 8, (2, 2)),  # to_out 1647.9 us / plain 1509.4 us (= old default)
-    # NON-TRANSPOSED full-width layout, same coupling as the qkv entry above. 380.6 us was the
-    # best transposed blocking ((5, 8, 16, (1, 4))) if the override is ever removed.
-    (1664, 5120, 3456): (3, 8, 10, (3, 1)),  # a2v-1080p ff1, nt 12x9, 344.7 us (-9.4% vs transposed)
+    # ff1 stays TRANSPOSED at 1760: its nt-12x9 win at the retired M=1664 does not carry (nt best
+    # 385.6 us vs 391.8 us transposed, -1.6% — inside the rerun band), matching the layout score's
+    # tie prediction at 55 M-tiles.
+    (1760, 5120, 3456): (5, 10, 14, (1, 2)),  # a2v-1080p ff1, 391.8 us (-12.1% vs 8x8x8)
     (2656, 5120, 3456): (7, 8, 12, (1, 4)),  # a2v ff1, 503.5 us (-17.1% vs 8x8x8)
-    (7200, 5120, 3456): (10, 4, 12, (2, 2)),  # SR-1080p ff1, 1362.5 us (-11.6% vs v3)
+    (7040, 5120, 3456): (8, 5, 12, (2, 2)),  # SR-1080p ff1, 1310.9 us (-13.8% vs v3)
     (11520, 5120, 3456): (6, 8, 12, (2, 2)),  # SR ff1, 1971.2 us (pins the v3 pick)
 }
 
@@ -655,11 +667,13 @@ def get_matmul_config(M, K, N, core_grid, default_block_size=None, use_heuristic
 # grid table entry for the same (M, K, N) key MUST hold the blocking swept at THIS layout — the
 # table key does not encode orientation, so the entry and this override flip together.
 agmm_layout_overrides = {
-    # Aang a2v-1080p (4x32, TP4), swept 2026-09-04: nt full-width 12x9 beats the transposed
-    # winners by 14.4% (qkv) / 9.4% (ff1); the flag-only nt 11x10 layout is a wash for qkv and
-    # worse for ff1, so the explicit full-width grid is required.
-    (1664, 5120, 3840): (False, (12, 9), 6),  # to_qkv, (3,8,16) sb1x4, 362.3 us
-    (1664, 5120, 3456): (False, (12, 9), 6),  # ff1,    (3,8,10) sb3x1, 344.7 us
+    # Aang a2v-1080p (4x32, TP4) at the run-confirmed M=1760, swept 2026-09-04: nt full-width
+    # 12x9 beats the transposed qkv winner by 5.1%. ff1 is NOT overridden at this M — its nt edge
+    # is -1.6%, inside the rerun band (the decisive nt wins seen at the retired M=1664 estimate
+    # came from 52 M-tiles splitting cleanly over 9 rows; 55 tiles is a near-tie, as the layout
+    # score predicts). The flag-only nt 11x10 layout is not competitive; the explicit full-width
+    # grid is required.
+    (1760, 5120, 3840): (False, (12, 9), 6),  # to_qkv, (4,8,16) sb2x2, 404.9 us
 }
 
 
@@ -929,10 +943,12 @@ fused_mmrs_configs = {
         # DRAM-swept @ M6/K4/N7 (-5%).
         (2656, 3456, 5120): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 6, 3, 8, 2, 2, None, 1, 5),  # a2v, 601.9 us
         (11520, 3456, 5120): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 6, 4, 8, 2, 2, None, 1, 5),  # SR, 2084.2 us
-        # Aang @1080p variants, swept 2026-08-24 (windowed). a2v-1080p has only 7 M tile-rows per
-        # core, so M_block drops to 4 to keep the window rotating.
-        (1664, 3456, 5120): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 4, 6, 8, 2, 2, None, 1, 5),  # a2v 1080p, 428.3 us
-        (7200, 3456, 5120): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 6, 4, 8, 2, 2, None, 1, 5),  # SR 1080p, 1378.2 us
+        # Aang @1080p variants at the run-confirmed Ms (1760 a2v / 7040 SR, corrected 2026-09-04
+        # from the earlier 1664 / 7200 estimates, which never occur). Swept windowed on
+        # bh_4x8_sp1_tp0; a2v-1080p has 7 M tile-rows per core, so M_block=4 keeps the window
+        # rotating.
+        (1760, 3456, 5120): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 4, 6, 8, 2, 2, None, 1, 5),  # a2v 1080p, 439.1 us
+        (7040, 3456, 5120): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 4, 4, 8, 2, 2, None, 1, 5),  # SR 1080p, 1300.2 us
         # Flux2 @1024px, swept 2026-08-24 (windowed). Windowed won both shapes outright:
         # 407.5 us vs 443.8 us best-DRAM for (1152,...), 339.9 us vs 345.4 us for (1024,...).
         # The pre-window (1152,...) M_block=12 entry was degenerate under the window (12-tile

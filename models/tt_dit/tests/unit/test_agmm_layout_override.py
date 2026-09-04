@@ -7,9 +7,9 @@
 The host test pins the config wiring: the override must hand back the exact swept layout, and the
 grid table entry for the same key must hold the blocking that was swept AT that layout (the table
 key does not encode orientation, so the two flip together). The device test runs ColParallelLinear
-end-to-end through the override path — the Aang a2v-1080p qkv / ff1 shapes at TP4 on a 4x8 ring —
-and checks numerics against torch, since the perf sweep that produced the entries measures time
-only.
+end-to-end at the Aang a2v-1080p M (run-confirmed 1760) on a 4x8 ring — qkv through the nt
+override, ff1 through the default transposed path — and checks numerics against torch, since the
+perf sweep that produced the entries measures time only.
 """
 
 import pytest
@@ -26,17 +26,9 @@ from ...utils.tensor import bf16_tensor
 from ...utils.test import mesh_device_config_to_string, ring_params_8k
 
 
-@pytest.mark.parametrize(
-    ("M, K, N_per_device, expected_blocks, expected_subblock"),
-    [
-        (1664, 5120, 3840, (3, 8, 16), (1, 4)),  # Aang a2v-1080p to_qkv
-        (1664, 5120, 3456, (3, 8, 10), (3, 1)),  # Aang a2v-1080p ff1
-    ],
-    ids=["qkv", "ff1"],
-)
-def test_layout_override_wiring(M, K, N_per_device, expected_blocks, expected_subblock):
+def test_layout_override_wiring():
     """The override and the grid table entry must resolve to the swept nt configuration."""
-    override = get_agmm_layout_override(M, K, N_per_device)
+    override = get_agmm_layout_override(1760, 5120, 3840)
     assert override is not None
     force_transpose, core_grid, num_workers_per_link = override
     assert force_transpose is False
@@ -44,9 +36,9 @@ def test_layout_override_wiring(M, K, N_per_device, expected_blocks, expected_su
     assert num_workers_per_link == 6
 
     grid, config, _workers = get_agmm_config(
-        M,
-        K,
-        N_per_device,
+        1760,
+        5120,
+        3840,
         full_grid=ttnn.CoreCoord(12, 10),
         cluster_size=4,
         num_links=2,
@@ -54,10 +46,12 @@ def test_layout_override_wiring(M, K, N_per_device, expected_blocks, expected_su
         force_transpose=force_transpose,
     )
     assert (grid.x, grid.y) == (12, 9)
-    assert (config.M_block_size, config.K_block_size, config.N_block_size) == expected_blocks
-    assert (config.subblock_h, config.subblock_w) == expected_subblock
+    assert (config.M_block_size, config.K_block_size, config.N_block_size) == (4, 8, 16)
+    assert (config.subblock_h, config.subblock_w) == (2, 2)
 
-    # Shapes without an override keep the default layout untouched.
+    # ff1 at this M is deliberately NOT overridden (nt was inside the rerun band), and shapes
+    # without an entry keep the default layout untouched.
+    assert get_agmm_layout_override(1760, 5120, 3456) is None
     assert get_agmm_layout_override(2656, 5120, 3840) is None
 
 
@@ -70,10 +64,10 @@ def test_layout_override_wiring(M, K, N_per_device, expected_blocks, expected_su
 @pytest.mark.parametrize(
     ("M, K, N, activation_fn, chunks"),
     [
-        (1664, 5120, 15360, None, 3),  # Aang a2v-1080p to_qkv: N/tp4 = 3840 hits the override
-        (1664, 5120, 13824, "gelu_tanh", None),  # Aang a2v-1080p ff1: N/tp4 = 3456 hits the override
+        (1760, 5120, 15360, None, 3),  # Aang a2v-1080p to_qkv: N/tp4 = 3840 hits the nt override
+        (1760, 5120, 13824, "gelu_tanh", None),  # Aang a2v-1080p ff1: no override, transposed path
     ],
-    ids=["qkv", "ff1"],
+    ids=["qkv_nt_override", "ff1_transposed"],
 )
 def test_col_parallel_linear_nt_override(
     mesh_device: ttnn.MeshDevice,

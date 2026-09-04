@@ -183,43 +183,44 @@ SHAPES = [
     # Aang MMRS ff2 shapes (same K/N family as Wan: K = 13824/tp4, N = 5120).
     (2656, 3456, 5120, 12, 8, False, "mmrs"),  # Aang a2v
     (11520, 3456, 5120, 12, 8, False, "mmrs"),  # Aang SR (super-resolution)
-    (1664, 3456, 5120, 12, 8, False, "mmrs"),  # Aang a2v @1080p
-    (7200, 3456, 5120, 12, 8, False, "mmrs"),  # Aang SR @1080p
     # Aang AGMM shapes at 4x32 (TP4 ring on axis 0, 2 links): per-device M = padded_seq/32 for
     # a2v / SR / a2v-1080p / SR-1080p. Same K/N family as the Wan2.2 720p rows above; 12x9 grid
     # matches the model (ColParallelLinear force_transpose=True reserves the mux row).
     (2656, 5120, 3840, 12, 9, True, "qkv"),  # Aang a2v — attn1.to_qkv (chunks=3)
-    (2656, 5120, 1280, 12, 9, True, "to_out"),  # Aang a2v — attn to_out (fused addcmul)
+    (2656, 5120, 1280, 12, 9, True, "to_out"),  # Aang a2v — attn to_out (fused addcmul; same shape as to_q)
     (2656, 5120, 3456, 12, 9, True, "ff1_gelu"),  # Aang a2v — ffn.ff1 (fused GELU)
     (11520, 5120, 3840, 12, 9, True, "qkv"),  # Aang SR
     (11520, 5120, 1280, 12, 9, True, "to_out"),  # Aang SR
     (11520, 5120, 3456, 12, 9, True, "ff1_gelu"),  # Aang SR
-    (1664, 5120, 3840, 12, 9, True, "qkv"),  # Aang a2v @1080p
-    (1664, 5120, 1280, 12, 9, True, "to_out"),  # Aang a2v @1080p
-    (1664, 5120, 3456, 12, 9, True, "ff1_gelu"),  # Aang a2v @1080p
-    (7200, 5120, 3840, 12, 9, True, "qkv"),  # Aang SR @1080p
-    (7200, 5120, 1280, 12, 9, True, "to_out"),  # Aang SR @1080p
-    (7200, 5120, 3456, 12, 9, True, "ff1_gelu"),  # Aang SR @1080p
     # Aang cross-attn to_q / to_out: same (M, K, N) as the fused to_out rows but plain epilogue
     # (no addcmul), which changes L1 pressure — swept as its own use case.
     (2656, 5120, 1280, 12, 9, True, "plain"),  # Aang a2v — attn2.to_q / attn2.to_out
     (11520, 5120, 1280, 12, 9, True, "plain"),  # Aang SR
-    (1664, 5120, 1280, 12, 9, True, "plain"),  # Aang a2v @1080p
-    (7200, 5120, 1280, 12, 9, True, "plain"),  # Aang SR @1080p
-    # Aang a2v-1080p qkv/ff1 at the non-transposed layouts. Swept 2026-09-04: nt full-width 12x9
-    # wins -14.4% (qkv, (3,8,16) sb1x4, 362.3 us) and -9.4% (ff1, (3,8,10) sb3x1, 344.7 us) over
-    # the transposed winners; the flag-only nt 11x10 is -2.3% (qkv) and +7.3% (ff1) — adopting the
-    # win needs force_transpose=False plus an explicit 12x9 grid at the call site, and replacing
-    # the transposed grid_12_9_configs entries for these two keys atomically with that flip.
-    (1664, 5120, 3840, 12, 9, True, "qkv_nt"),  # Aang a2v @1080p, nt full-width
-    (1664, 5120, 3840, 11, 10, True, "qkv_nt"),  # Aang a2v @1080p, nt default
-    (1664, 5120, 3456, 12, 9, True, "ff1_gelu_nt"),  # Aang a2v @1080p, nt full-width
-    (1664, 5120, 3456, 11, 10, True, "ff1_gelu_nt"),  # Aang a2v @1080p, nt default
-    # Aang proj_out (plain minimal_matmul after the TP gather; fp32 out in the model), 11x10 grid.
+    # Aang 1080p CORRECTED Ms from the real hg_stream 4x32 run (2026-09-04): a2v-1080p pads to
+    # M=1760/device (not 1664), SR-1080p to 7040 (not 7200). Same families as above, re-keyed.
+    (1760, 5120, 3840, 12, 9, True, "qkv"),
+    (1760, 5120, 1280, 12, 9, True, "to_out"),
+    (1760, 5120, 1280, 12, 9, True, "plain"),
+    (1760, 5120, 3456, 12, 9, True, "ff1_gelu"),
+    (1760, 5120, 64, 11, 10, False, "plain"),
+    (1760, 3456, 5120, 12, 8, False, "mmrs"),
+    (1760, 5120, 3840, 12, 9, True, "qkv_nt"),  # nt re-test: layout score says tie at 55 tiles
+    (1760, 5120, 3456, 12, 9, True, "ff1_gelu_nt"),
+    (7040, 5120, 3840, 12, 9, True, "qkv"),
+    (7040, 5120, 1280, 12, 9, True, "to_out"),
+    (7040, 5120, 1280, 12, 9, True, "plain"),
+    (7040, 5120, 3456, 12, 9, True, "ff1_gelu"),
+    (7040, 5120, 64, 11, 10, False, "plain"),
+    (7040, 3456, 5120, 12, 8, False, "mmrs"),
+    # Aang 1080p VAE decoder mid-block attention (dim 384; 720p sibling is the 14400 entry) and
+    # cross-attn to_kv at this run's prompt length (96, not 512).
+    (10240, 384, 1152, 11, 10, False, "plain"),
+    (10240, 384, 384, 11, 10, False, "plain"),
+    (40960, 384, 1152, 11, 10, False, "plain"),
+    (40960, 384, 384, 11, 10, False, "plain"),
+    (96, 5120, 2560, 11, 10, False, "cross_attn_kv"),
     (2656, 5120, 64, 11, 10, False, "plain"),  # Aang a2v
     (11520, 5120, 64, 11, 10, False, "plain"),  # Aang SR
-    (1664, 5120, 64, 11, 10, False, "plain"),  # Aang a2v @1080p
-    (7200, 5120, 64, 11, 10, False, "plain"),  # Aang SR @1080p
     # 12x8 won that grid sweep (1.313 ms vs 1.373 at 12x7 and 1.487 at 12x9); the longer durations
     # (M = 9216 / 13632) reuse its blocking rather than being swept -- warmup compiles one program per
     # combo and compile time grows with M, so M=9216 alone is ~75 min against ~9 min here, for a block
