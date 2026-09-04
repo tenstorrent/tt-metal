@@ -18,6 +18,9 @@
 //     dispatching says nothing about the next.
 //   - unary (abs, neg, exp): one shape. Unary has no broadcast axis; this is a liveness check
 //     on the SFPU dispatch path.
+//   - tensor-scalar (add, subtract, multiply; where TTS and TST): the scalar operand is packed
+//     into a runtime arg rather than read from a circular buffer and selects a different kernel
+//     triple, so the tensor-tensor cases above do not reach it.
 //   - ternary (where, TTT): one case per TernaryBroadcastType that has a TTT kernel triple in
 //     ternary_op_utils.cpp -- NONE, OUTER_BCAST, ROW_BCAST, COL_BCAST, ROW_COL_BCAST and
 //     SCALAR_BCAST. SCALAR_A_BCAST / SCALAR_B_BCAST are TTS/TST-only and are covered by the
@@ -343,6 +346,79 @@ TEST_F(EltwiseSmoke, WhereTernaryBroadcastClasses) {
             ASSERT_EQ(result[i], expected) << c.label << " at flat index " << i;
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Tensor-scalar variants. A scalar operand takes a different path through the
+// infra -- it is packed into a runtime arg rather than read from a circular
+// buffer, and it selects a different kernel triple -- so a tensor-tensor suite
+// says nothing about it. This is the variant that gets missed.
+// ---------------------------------------------------------------------------
+
+TEST_F(EltwiseSmoke, BinaryTensorScalar) {
+    auto& device = *device_;
+    // Non-square, so a H/W mix-up in the scalar path shows up as a shape assert.
+    const ttnn::Shape shape({2, 1, 128, 256});
+    const auto count = static_cast<size_t>(shape.volume());
+    const auto data = detail::coordinate_ramp(shape, 8, 1);
+    const auto input = detail::to_device_bf16(device, shape, data);
+
+    // 3 x 8 = 24 and 8 + 3 = 11, both exact in bfloat16, so these stay ASSERT_EQ.
+    const float scalar = 3.0f;
+    {
+        const auto result = detail::to_float_vector(ttnn::add(input, scalar));
+        ASSERT_EQ(result.size(), count);
+        for (size_t i = 0; i < count; i++) {
+            ASSERT_EQ(result[i], data[i] + scalar) << "add TS at flat index " << i;
+        }
+    }
+    {
+        const auto result = detail::to_float_vector(ttnn::subtract(input, scalar));
+        ASSERT_EQ(result.size(), count);
+        for (size_t i = 0; i < count; i++) {
+            ASSERT_EQ(result[i], data[i] - scalar) << "subtract TS at flat index " << i;
+        }
+    }
+    {
+        const auto result = detail::to_float_vector(ttnn::multiply(input, scalar));
+        ASSERT_EQ(result.size(), count);
+        for (size_t i = 0; i < count; i++) {
+            ASSERT_EQ(result[i], data[i] * scalar) << "multiply TS at flat index " << i;
+        }
+    }
+}
+
+TEST_F(EltwiseSmoke, WhereTensorScalarVariants) {
+    auto& device = *device_;
+    const ttnn::Shape shape({2, 1, 128, 128});
+    const auto count = static_cast<size_t>(shape.volume());
+
+    const auto predicate_data = detail::coordinate_ramp(shape, 2, 0);
+    const auto tensor_data = detail::coordinate_ramp(shape, 16, 1);
+    const auto predicate = detail::to_device_bf16(device, shape, predicate_data);
+    const auto values = detail::to_device_bf16(device, shape, tensor_data);
+
+    // Disjoint from tensor_data's [1, 16], so picking the wrong arm is unmistakable.
+    const float scalar = 101.0f;
+
+    {  // TTS: value_false is the scalar.
+        const auto result = detail::to_float_vector(ttnn::where(predicate, values, scalar));
+        ASSERT_EQ(result.size(), count);
+        for (size_t i = 0; i < count; i++) {
+            ASSERT_EQ(result[i], predicate_data[i] != 0.0f ? tensor_data[i] : scalar)
+                << "where TTS at flat index " << i;
+        }
+    }
+    {  // TST: value_true is the scalar.
+        const auto result = detail::to_float_vector(ttnn::where(predicate, scalar, values));
+        ASSERT_EQ(result.size(), count);
+        for (size_t i = 0; i < count; i++) {
+            ASSERT_EQ(result[i], predicate_data[i] != 0.0f ? scalar : tensor_data[i])
+                << "where TST at flat index " << i;
+        }
+    }
+    // TSS (both arms scalar) is covered by the test_where_tss selector in the pytest entry;
+    // it shares the scalar packing exercised above and needs no tensor operand to reach.
 }
 
 }  // namespace ttnn::operations::eltwise::test
