@@ -61,6 +61,12 @@ CASES = [
     pytest.param(9, 0, 0, id="9img_ticket_oom_2.87GB"),
     pytest.param(3, 3, 0, id="3img_3vid_ticket_oom_2.87GB"),
     pytest.param(6, 3, 3, id="6img_3vid_3aud_ticket_oom_0.72GB"),
+    # The post-bucketing rerun (issue comment 5514646226): the boundary moved to 8 VISUAL
+    # references, image and video weighing the same -- the per-reference cost is now the
+    # conditioner's replicated handoff residuals, not the DiT rows.
+    pytest.param(4, 3, 0, id="4img_3vid_rerun_pass"),
+    pytest.param(8, 0, 0, id="8img_rerun_oom"),
+    pytest.param(5, 3, 0, id="5img_3vid_rerun_oom"),
 ]
 
 MESHES = [
