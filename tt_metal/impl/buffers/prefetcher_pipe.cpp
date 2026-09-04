@@ -215,9 +215,8 @@ PrefetcherPipe::PrefetcherPipe(
         initial_entry_size,
         l1_alignment);
     TT_FATAL(
-        ring_size % initial_entry_size == 0,
-        "DRAM-sender PrefetcherPipe ring size {} must be a whole number of {}-byte entries; a partial trailing entry "
-        "would leave the sender's derived write cursor and the receiver's read cursor on different wrap points",
+        initial_entry_size <= ring_size,
+        "DRAM-sender PrefetcherPipe ring size {} must hold at least one {}-byte entry",
         ring_size,
         initial_entry_size);
     try {
@@ -482,18 +481,14 @@ PrefetcherPipe CreatePrefetcherPipe(
 
 uint8_t AttachPrefetcherPipe(
     Program& program, PrefetcherPipe& prefetcher_pipe, const CoreRangeSet& cores, uint32_t entry_size) {
-    // A DRAM sender derives each receiver's write cursor as (entries_sent % ring_units), with no
-    // trailing-gap term for a ring the entry size does not divide. An entry size that leaves a
-    // remainder would put the sender's cursor and the receiver's on different grids after the first
-    // wrap, so the two would disagree about where an entry starts.
+    // An entry size the ring does not divide leaves a trailing gap that holds no entry. Both
+    // endpoints stop at the page-aligned usable limit and credit the gap at the wrap, so the only
+    // requirement is that the ring hold an entry at all.
     TT_FATAL(
-        prefetcher_pipe.sender_core_type() != SenderCoreType::Dram || prefetcher_pipe.ring_size() % entry_size == 0,
-        "AttachPrefetcherPipe entry size {} must divide the DRAM-sender pipe's ring size {}. A DRAM sender addresses "
-        "its ring in whole entries, so an entry size that leaves a remainder ({} B) desynchronizes it from the "
-        "receivers after the first wrap",
+        entry_size > 0 && entry_size <= prefetcher_pipe.ring_size(),
+        "AttachPrefetcherPipe entry size {} must be greater than zero and fit the pipe's {} B ring",
         entry_size,
-        prefetcher_pipe.ring_size(),
-        prefetcher_pipe.ring_size() % entry_size);
+        prefetcher_pipe.ring_size());
     return program.impl().add_prefetcher_pipe_attachment(prefetcher_pipe, cores, entry_size);
 }
 

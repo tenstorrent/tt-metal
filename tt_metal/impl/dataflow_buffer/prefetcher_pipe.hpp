@@ -94,7 +94,8 @@ public:
     // The entry size a DRAM-sender pipe is created at: the ring is this many bytes times the
     // requested depth, and it is what word[5] (applied_entry_size) starts out holding, so a
     // consumer attaching at this size skips the resize handshake on the first program. Later
-    // Attaches and later requests may use any size that divides the ring. 0 for a worker-sender
+    // Attaches and later requests may use any size the ring can hold; a size the ring does not
+    // divide leaves a trailing gap both endpoints credit at the wrap. 0 for a worker-sender
     // pipe, which is sized in bytes and resizes normally.
     uint32_t initial_entry_size() const { return initial_entry_size_; }
 

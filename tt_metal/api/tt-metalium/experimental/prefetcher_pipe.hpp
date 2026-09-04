@@ -63,9 +63,10 @@ struct TensorPrefetcherBankPipes {
 //
 // `entry_size` is the per-receiver push granularity a pipe starts life at, and `num_entries` is how
 // many of them a receiver's ring holds; together they fix the ring size, which never changes. A
-// later Attach and a later queued tensor may use a different entry size as long as it divides the
-// ring: the DRAM sender snaps its write cursor onto the new grid and publishes the skipped bytes as
-// pad credits, which is the same resize handshake a worker sender runs.
+// later Attach and a later queued tensor may use any entry size the ring can hold: the DRAM sender
+// snaps its write cursor onto the new grid and publishes the skipped bytes as pad credits, which is
+// the same resize handshake a worker sender runs. A size the ring does not divide leaves a trailing
+// gap that holds no entry; both endpoints stop at it and credit it as padding at the wrap.
 //
 // The rings come from the persistent L1 arena, which refuses a core a live Program has sealed with
 // its own local circular buffers. Create the pipes before running any op on the receiver cores --

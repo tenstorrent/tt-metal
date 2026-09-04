@@ -585,13 +585,18 @@ private:
         CrossNodeReceiverDFBInterface& iface = interface_.receiver;
         const uint32_t entry_size = iface.fifo_page_size;
         const uint32_t payload_bytes = num_entries * entry_size;
-        ASSERT(iface.fifo_rd_ptr + payload_bytes <= iface.fifo_limit_page_aligned);
+        // A pop may straddle the wrap, matching wait_front and the GlobalCB twin
+        // (remote_cb_pop_front); only popping more than the ring holds is a bug.
+        ASSERT(payload_bytes <= iface.fifo_limit_page_aligned - iface.fifo_start_addr);
         const uint32_t rd_offset = iface.fifo_rd_ptr - iface.fifo_start_addr;
         const uint32_t num_units = units_for_read(iface, rd_offset, payload_bytes);
-        iface.fifo_rd_ptr += payload_bytes;
-        if (iface.fifo_rd_ptr >= iface.fifo_limit_page_aligned) {
-            iface.fifo_rd_ptr = iface.fifo_start_addr;
-        }
+        // Carry the remainder past the wrap rather than snapping to the base: a batched pop that
+        // crosses the usable limit resumes that many bytes into the ring. units_for_read has
+        // already credited the trailing gap this crossing skips.
+        const uint32_t next_rd_ptr = iface.fifo_rd_ptr + payload_bytes;
+        iface.fifo_rd_ptr = next_rd_ptr >= iface.fifo_limit_page_aligned
+                                ? iface.fifo_start_addr + (next_rd_ptr - iface.fifo_limit_page_aligned)
+                                : next_rd_ptr;
 
         // Posted: peer visibility is eventual; senders discover the ack by polling
         // pages_acked (reserve_back / barrier). Matches push_back's posted sent-incs.
