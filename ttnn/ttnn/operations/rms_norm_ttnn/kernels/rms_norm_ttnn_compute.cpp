@@ -753,12 +753,40 @@ void kernel_main() {
         ckl::PopPolicy::AtEnd,
         ckl::OperandKind::Block,
         ckl::DataFormatReconfig::Enabled);
-    // PerBlockSize reserve/push: `t` is appended a DEST-lane block at a time, so
-    // a chunk's tiles land at consecutive ring positions and the NEXT chunk
-    // continues where this one stopped -- which is what makes the ROW_RESIDENT
-    // hold (cb_x_sum spanning the whole tile-row) a plain accumulation rather
-    // than a second addressing scheme.
-    constexpr auto X_SUM_OUT = ckl::output(cb_x_sum, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize);
+    // ONE reserve and ONE push for the whole chunk -- `Upfront`/`AtEnd`, NOT the
+    // `PerBlockSize` pair pass B's stages use.
+    //
+    // WHY IT DIFFERS FROM PASS B, and it is a MEASURED difference, not a
+    // stylistic one.  D21 chose `PerBlockSize` for pass B deliberately: those
+    // chains' output feeds the ROW_MAJOR `untilize` consumer, which needs the
+    // per-block page handover, and there `PerBlockSize` measured within noise of
+    // `Upfront` (8860 vs 8901 ns).  cb_x_sum has NO such consumer -- it is
+    // compute-private and both of its readers (`square_block` in pass A,
+    // `normalize_block` in pass B) wait `Upfront` for the whole window -- so the
+    // incremental handover buys nothing and the flow-control steps are pure
+    // overhead: at WT_CHUNK 32 and PASS_B_BLK 8 that is 4 reserve/push pairs per
+    // (block, chunk) where 1 will do.
+    //
+    // MEASURED (blackhole p150b, bf16 / HiFi2 / fp32_dest_acc_en=False, THREE
+    // fresh-cache profiled runs per variant, median; the two distributions are
+    // DISJOINT on the first row, which is why 2.5% is reported at all on a shape
+    // whose run-to-run spread is ~2%):
+    //     (1,1,8192,1024) INTERLEAVED gamma_bias_residual  139758 -> 136361  1.025x
+    //     (1,1,32,5120)   WIDTH 32c   gamma_bias_residual    6824 ->   6730  1.014x
+    //     (1,1,8192,1024) INTERLEAVED residual only        125154 -> 124890  1.002x
+    //     (1,1,7168,1024) BLOCK 64c   gamma_bias_residual   33822 ->  33876  0.998x
+    // i.e. it wins where a bias makes pass B long enough that pass A's own
+    // flow-control is visible, and is flat where the shape is DRAM-bound.
+    //
+    // LEGAL AT EVERY REGIME, and the reason is the ring arithmetic rather than a
+    // sweep: `Upfront` reserves the chunk's whole window at the chain's start and
+    // `AtEnd` publishes it once, and cb_x_sum's write pointer sits at
+    // `c * WT_CHUNK` from the ring base in every regime -- RESIDENT (one chunk,
+    // front 0), ROW_RESIDENT (chunks accumulate to exactly the ring's
+    // `wt_core` pages, so free space is never less than WT_CHUNK), STREAM
+    // (`square_block` pops each chunk, so the front returns to 0).  No window
+    // ever straddles the wrap.
+    constexpr auto X_SUM_OUT = ckl::output(cb_x_sum, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd);
     // Pass B's x: held CBs are popped ONCE per row-block below (an explicit pop is
     // the sanctioned pattern for a lifetime no single PopPolicy can express), so
     // that a chunk's `AtEnd` cannot pop the base tiles the next chunk still needs.
