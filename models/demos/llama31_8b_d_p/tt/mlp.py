@@ -16,12 +16,12 @@ the TP tail at `:96-112`), with three changes:
 2. **An explicit `compute_kernel_config` on all three matmuls.**
    `models/demos/minimax_m3/tt/dense_mlp.py:89-90` and `:94` pass none. On a matmul
    `fp32_dest_acc_en=True` is bit-identical to the default and `False` costs 96x-1168x
-   (`BRINGUP_RECIPE.md:444-445`), so the risk is inheriting an explicit `False` and the defence is
+   (`BRINGUP_RECIPE.md:652-653`), so the risk is inheriting an explicit `False` and the defence is
    passing an explicit `True` from `tt/config.py`'s single factory (`DEC-030`).
 3. **`scatter_output=True` refuses.** M3 implements both residual schemes; this package takes
    scheme A (`DEC-025`) and the seam is wired but not honoured until P8 (`DEC-038`), because a
    module returning `emb/TP` while every other module returns full emb is a half-wired scheme, and
-   `BRINGUP_RECIPE.md:992-994` requires a loud refusal instead.
+   `BRINGUP_RECIPE.md:1207-1209` requires a loud refusal instead.
 
 **No biases.** `mlp_bias` is `false` (`bringup_log/00_MODEL_CARD.md` §2, §3), so unlike
 `models/demos/minimax_m3/tt/mlp.py` there is no bias tensor to fail loud about in cache-only mode —

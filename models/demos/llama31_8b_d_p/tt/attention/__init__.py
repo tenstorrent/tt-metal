@@ -69,7 +69,7 @@ class Attention:
             mesh_config: the model's `MeshConfig`.
             program_config: `ProgramConfig`. Its pinned SDPA grid is validated **here**, at
                 construction, so a derived grid fails at build time rather than at SP > 1 in P8
-                (`BRINGUP_RECIPE.md:1196-1204`).
+                (`BRINGUP_RECIPE.md:1411-1419`).
             layer_idx: this layer's index, used for the per-layer KV-cache write.
             transformation_mats: `{"prefill": tensor}` — the `[1,1,32,32]` Meta RoPE transformation
                 matrix from `tt/rope.py::build_transformation_mat`. `None` skips RoPE entirely,

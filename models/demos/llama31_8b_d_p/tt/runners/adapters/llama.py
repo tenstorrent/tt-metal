@@ -23,7 +23,7 @@ and, eagerly for *every* registered model, the DeepSeek test conftest
 `G-ADAPTER` measures it in a subprocess rather than trusting the convention.
 
 **Knobs come from `params`** (`PrefillRunParams`, `models/demos/common/prefill/adapter.py:46`),
-never from `os.environ` (`BRINGUP_RECIPE.md:1894`). The two exceptions are the two the engine's own
+never from `os.environ` (`BRINGUP_RECIPE.md:1897-1899`). The two exceptions are the two the engine's own
 contract defines as env overrides of *this class's* attributes — `PREFILL_HF_MODEL` over
 `hf_model_default` and `PREFILL_TTNN_CACHE` over `ttnn_cache_default`
 (`models/demos/common/prefill/adapter.py:116-117`) — and both are read exactly once, here.

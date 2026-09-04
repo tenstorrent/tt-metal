@@ -12,7 +12,7 @@ parametrisation and the after-a-real-harness-run assertion.
 
 The failure this exists to catch is any count becoming `n_layers x` the constant — a `CCLManager`
 built per layer instead of per model, which shows up as nondeterministic multi-device PCC rather
-than as an error (`BRINGUP_RECIPE.md:900-902`). `G-SEMAPHORE` produces no PCC, so §1.4's
+than as an error (`BRINGUP_RECIPE.md:1214-1216`). `G-SEMAPHORE` produces no PCC, so §1.4's
 floor/reference-dtype fields do not apply; its **negative control** is
 `test_semaphores_would_multiply_if_built_per_layer`, which constructs one manager per simulated
 layer and asserts the count the correct code must NOT produce.
@@ -163,7 +163,7 @@ def test_semaphores_would_multiply_if_built_per_layer(mesh_device):
 # =============================================================================================
 # The P8 half: the target mesh, and the state AFTER a real multi-layer run.
 #
-# `BRINGUP_RECIPE.md:1801-1803` asks for the inventory "at construction, after dozens of getter
+# `BRINGUP_RECIPE.md:1847-1848` asks for the inventory "at construction, after dozens of getter
 # cycles, and **after a real multi-layer harness run**". The first two are above and run on one
 # card; the third cannot: it needs a model, which needs `tp == num_key_value_heads == 8`. It is
 # also the only one of the three that could catch a `CCLManager` rebuilt inside `prefill_chunk` or

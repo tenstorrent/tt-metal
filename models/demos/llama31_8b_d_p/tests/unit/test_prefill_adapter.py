@@ -6,7 +6,7 @@
 
 **No device, no weights** (Appendix A gives `G-ADAPTER` device "—"): this gate is the checklist at
 the end of `models/demos/common/prefill/docs/ADDING_A_PREFILL_MODEL.md:246-255`, item by item, with
-evidence — plus the four things `BRINGUP_RECIPE.md:1935-1938` adds to it: zero abstract methods
+evidence — plus the four things `BRINGUP_RECIPE.md:1957-1962` adds to it: zero abstract methods
 left, `PREFILL_MODEL=llama31_8b_d_p` resolving through the registry, the registry-fed pytest
 `variant` fixture picking it up, every `model_config` constant equal to `config.json`, and the
 **measured** import cost.
@@ -120,7 +120,7 @@ def test_identity_and_default_paths_are_set(adapter):
 
 
 def test_model_config_constants_equal_config_json():
-    """`BRINGUP_RECIPE.md:1938`: every `model_config` constant equals `config.json`.
+    """`BRINGUP_RECIPE.md:1961-1962`: every `model_config` constant equals `config.json`.
 
     The class exists because the engine (`runner_utils.py:41`) and the producer's read-back
     (`prefill_producer.py:550`) both need dimensions with no device and no `ModelArgs` — so it is a
@@ -242,7 +242,7 @@ def _probe_import(*modules) -> tuple:
 
 
 def test_adapter_import_is_cheap_and_pulls_no_device_stack():
-    """`ADDING_A_PREFILL_MODEL.md:252` + `BRINGUP_RECIPE.md:1938` ("adapter import is measured")."""
+    """`ADDING_A_PREFILL_MODEL.md:252` + `BRINGUP_RECIPE.md:1961-1962` ("adapter import is measured")."""
     from loguru import logger
 
     elapsed, heavy = _probe_import(ADAPTER_MODULE)
@@ -291,6 +291,47 @@ def test_the_adapter_module_imports_nothing_heavy_at_module_scope():
     assert not offenders, f"module-scope heavy imports: {offenders} (imports found: {top_level})"
 
 
+TEMPLATE_ADAPTER_MODULE = "models.demos.gpt_oss_d_p.tt.runners.adapters.gpt_oss"
+# `G-CLEAN` item 8 wants the import cost "measured against the template as a ratio". Measured on
+# this box the template is ~65x this adapter (2452 ms vs 38 ms, five cold subprocesses each, spread
+# under 1 ms), so a 4x margin is two orders of magnitude of slack on a difference that is
+# structural rather than incidental: `models/demos/gpt_oss_d_p/tt/runners/adapters/gpt_oss.py:25`
+# imports `models.common.utility_functions` at module scope, which pulls `torch` **and** `ttnn`
+# (measured alone: 2488 ms) — the whole of the gap. The template's other module-scope import,
+# `models/demos/deepseek_v3_d_p/reference/gpt_oss_120b_config.py`, costs 0.6 ms and nothing heavy.
+TEMPLATE_IMPORT_RATIO_MAX = 0.25
+
+
+def test_the_adapter_import_is_cheaper_than_the_template_it_mirrors():
+    """`G-CLEAN` item 8 (`BRINGUP_RECIPE.md:2033-2036`) — the ratio, not just the absolute.
+
+    The comparison is the point: `ADDING_A_PREFILL_MODEL.md:252` requires an import-light adapter
+    because the H2D producers import every registered one, and the reference adapter does **not**
+    satisfy it. So this asserts two things — that this adapter is a fraction of the template's
+    cost, and that the template really does pull the device stack, which is also this test's
+    control: a probe that reported `heavy == []` for **both** modules would be blind.
+    """
+    from loguru import logger
+
+    ours, ours_heavy = _probe_import(ADAPTER_MODULE)
+    theirs, theirs_heavy = _probe_import(TEMPLATE_ADAPTER_MODULE)
+    ratio = ours / theirs
+    logger.info(
+        f"[G-CLEAN item 8] {ADAPTER_MODULE} {ours * 1000:.1f} ms (heavy {ours_heavy}) vs template "
+        f"{TEMPLATE_ADAPTER_MODULE} {theirs * 1000:.1f} ms (heavy {theirs_heavy}) -> ratio {ratio:.4f} "
+        f"({theirs / ours:.1f}x cheaper)"
+    )
+    assert theirs_heavy, (
+        "the template adapter reported no heavy module at import. Either it was fixed upstream — in "
+        "which case delete this control and re-derive the ratio — or the probe is blind."
+    )
+    assert ours_heavy == [], f"this adapter pulled {ours_heavy} at import"
+    assert ratio < TEMPLATE_IMPORT_RATIO_MAX, (
+        f"adapter import is {ratio:.3f} of the template's ({ours * 1000:.1f} ms vs "
+        f"{theirs * 1000:.1f} ms); budget is {TEMPLATE_IMPORT_RATIO_MAX}"
+    )
+
+
 # =============================================================================================
 # Checklist item 4 — registered in ADAPTER_PATHS, and reachable the three ways
 # =============================================================================================
@@ -300,7 +341,7 @@ def test_registered_in_adapter_paths():
 
 
 def test_prefill_model_resolves_through_the_registry():
-    """`BRINGUP_RECIPE.md:1938`: `PREFILL_MODEL=llama31_8b_d_p` resolves, and memoizes."""
+    """`BRINGUP_RECIPE.md:1961-1962`: `PREFILL_MODEL=llama31_8b_d_p` resolves, and memoizes."""
     from models.demos.common.prefill.adapter import get_adapter
 
     resolved = get_adapter(MODEL_NAME)
@@ -309,7 +350,7 @@ def test_prefill_model_resolves_through_the_registry():
 
 
 def test_the_registry_fed_variant_fixture_picks_it_up():
-    """`BRINGUP_RECIPE.md:1935` (`models/demos/deepseek_v3_d_p/tests/conftest.py:365`).
+    """`BRINGUP_RECIPE.md:1959-1960` (`models/demos/deepseek_v3_d_p/tests/conftest.py:365`).
 
     That conftest builds `TEST_VARIANTS = {name: get_adapter(name) for name in ADAPTER_PATHS}` at
     **import** time (`:33`), so registering this model puts its adapter into another package's test
@@ -555,7 +596,7 @@ def test_the_allocated_cache_is_the_engines_opaque_handle():
 
 
 def test_the_adapter_reads_no_knob_from_the_environment_except_the_two_the_contract_defines():
-    """`BRINGUP_RECIPE.md:1894`: "Read knobs from `params`, **never** from `os.environ`".
+    """`BRINGUP_RECIPE.md:1897-1899`: "Read knobs from `params`, **never** from `os.environ`".
 
     Three reads survive, and each is the engine's own documented override of a *class attribute*
     rather than a run knob: `PREFILL_HF_MODEL` over `hf_model_default` and `PREFILL_TTNN_CACHE` over

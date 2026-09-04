@@ -6,10 +6,10 @@
 
 **HF anchor:** none — this file holds no model math. It maps which mesh/fabric/topology
 combinations can run a collective **at all** on this box, and it must run **before every other P8
-gate** (`BRINGUP_RECIPE.md:1755-1757`), because two of the combinations below do not fail: they
+gate** (`BRINGUP_RECIPE.md:1742-1745`), because two of the combinations below do not fail: they
 **hang the machine**, and a hang is not contained. After one, every later collective on the box
 hangs too — including one that passed forty seconds earlier — until `tt-smi -r`
-(`BRINGUP_RECIPE.md:1706-1712`, `models/demos/common/bringup/LANDMINES.md` "Two overlapping live
+(`BRINGUP_RECIPE.md:1733-1739`, `models/demos/common/bringup/LANDMINES.md` "Two overlapping live
 submeshes").
 
 **So each case runs in its own subprocess with a timeout**, which is what turns a hang into a
@@ -54,7 +54,7 @@ import time
 # ---------------------------------------------------------------------------------------------
 # The single-galaxy torus descriptor.
 #
-# `BRINGUP_RECIPE.md:80-83` names `bh_galaxy_sp4_torus_xy_graph_descriptor.textproto` and
+# `BRINGUP_RECIPE.md:80-90` names `bh_galaxy_sp4_torus_xy_graph_descriptor.textproto` and
 # `32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto` as "BH Galaxy mesh descriptors ... The
 # Ring topology P8 needs the torus descriptor". **Neither is usable on one galaxy** and neither is
 # what this package uses (`DEC-071`):
@@ -232,7 +232,7 @@ CASES = [
     # create new connections". So **there is no ring fabric on this galaxy** (`DEC-079`).
     #
     # It also found that `ttnn.Topology.Ring` **collectives** run correctly on the plain `FABRIC_1D`
-    # fabric — bit-exact at `(1,8)` — which is the opposite of `BRINGUP_RECIPE.md:82-84`'s claim
+    # fabric — bit-exact at `(1,8)` — which is the opposite of `BRINGUP_RECIPE.md:80-90`'s claim
     # that they hang. These cases extend that finding to the shapes P8 actually uses, so the
     # topology the rest of the phase runs on is measured rather than assumed. Expectations written
     # before the addendum ran, from the `(1,8)` result.
@@ -335,7 +335,7 @@ def _run_collective(mesh, *, topology, links, axis):
     Device `(r, c)` holds a `[1,1,32,32]` tile filled with its index **along `axis`**; the gather
     concatenates on dim 3, so every device must come back holding `[0]*32 | [1]*32 | ...`. Integer
     payloads stay <= 31, well inside bf16's exact-integer ceiling of 256
-    (`BRINGUP_RECIPE.md:663-670`), so a mismatch cannot be the probe's own numerics.
+    (`BRINGUP_RECIPE.md:687-698`), so a mismatch cannot be the probe's own numerics.
     """
     import torch
 

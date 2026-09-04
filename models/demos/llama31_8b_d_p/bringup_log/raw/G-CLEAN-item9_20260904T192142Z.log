@@ -1,0 +1,41 @@
+# G-CLEAN item 9 — test inventory: every tt/ module and the test(s) that own it
+# command: for each tt/*.py, grep tests/ for an import of that module (dotted path for a
+#          module, 'from ...tt.attention import' for the package __init__ that holds a class)
+
+tt/ module                             owning test(s)
+-------------------------------------- --------------
+tt/__init__.py                         (none)
+tt/attention/__init__.py               tests/unit/test_kv_cache_tp8.py tests/unit/test_attention_vs_ref.py tests/unit/test_tp_parity.py
+tt/attention/config.py                 tests/unit/test_decoder_layer_vs_ref.py tests/unit/test_model_vs_ref.py
+tt/attention/dense_sp.py               tests/unit/test_dense_sp_vs_ref.py
+tt/attention/kv_cache.py               tests/galaxy_prefill_kv_pcc.py tests/unit/test_kv_cache_vs_ref.py tests/unit/test_prefill_adapter.py tests/unit/test_prefill_runtime_chunked.py tests/unit/test_attention_chunked_vs_ref.py tests/unit/test_dense_sp_vs_ref.py tests/unit/test_kv_chunk_table.py
+tt/attention/operations.py             tests/unit/test_kv_cache_tp8.py tests/unit/test_attention_chunked_vs_ref.py tests/unit/test_attention_vs_ref.py
+tt/attention/prefill.py                tests/galaxy_prefill_kv_pcc.py tests/unit/test_chunked_attention_ring.py tests/unit/test_decoder_layer_vs_ref.py tests/unit/test_attention_vs_ref.py tests/unit/test_model_vs_ref.py
+tt/attention/weights.py                tests/unit/test_attention_vs_ref.py
+tt/ccl.py                              tests/fabric_topology_matrix.py tests/test_factory.py tests/unit/test_kv_cache_tp8.py tests/unit/test_weight_loading.py tests/unit/test_ccl_semaphores.py tests/unit/test_mesh_config.py tests/unit/test_tp_parity.py tests/unit/test_dense_sp_vs_ref.py
+tt/config.py                           tests/fabric_topology_matrix.py tests/test_factory.py tests/unit/test_prefill_adapter.py tests/galaxy_prefill_kv_pcc.py tests/unit/test_kv_cache_vs_ref.py tests/unit/test_decoder_layer_vs_ref.py tests/unit/test_chunked_attention_ring.py tests/unit/test_kv_cache_tp8.py tests/unit/test_weight_loading.py tests/unit/test_embedding_vs_ref.py tests/unit/test_attention_vs_ref.py tests/unit/test_ccl_semaphores.py tests/unit/test_model_vs_ref.py tests/unit/test_attention_chunked_vs_ref.py tests/unit/test_lm_head_vs_ref.py tests/unit/test_mesh_config.py tests/unit/test_tp_parity.py tests/unit/test_rope_vs_ref.py tests/unit/test_dense_sp_vs_ref.py
+tt/embedding.py                        tests/unit/test_embedding_vs_ref.py
+tt/layer.py                            tests/unit/test_decoder_layer_vs_ref.py tests/unit/test_kv_cache_tp8.py tests/unit/test_model_vs_ref.py tests/unit/test_tp_parity.py
+tt/lm_head.py                          tests/unit/test_lm_head_vs_ref.py
+tt/mlp.py                              tests/unit/test_mlp_vs_ref.py tests/unit/test_tp_parity.py
+tt/model.py                            tests/unit/test_kv_cache_tp8.py tests/unit/test_weight_loading.py tests/unit/test_attention_chunked_vs_ref.py tests/unit/test_model_vs_ref.py
+tt/model_config.py                     tests/galaxy_prefill_kv_pcc.py tests/unit/test_chunked_attention_ring.py tests/unit/test_prefill_adapter.py tests/unit/test_weight_loading.py tests/unit/test_model_vs_ref.py tests/unit/test_ccl_semaphores.py
+tt/rms_norm.py                         tests/unit/test_rms_norm_vs_ref.py tests/unit/test_tp_parity.py
+tt/rope.py                             tests/unit/test_kv_cache_vs_ref.py tests/unit/test_decoder_layer_vs_ref.py tests/unit/test_kv_cache_tp8.py tests/unit/test_attention_chunked_vs_ref.py tests/unit/test_attention_vs_ref.py tests/unit/test_rope_vs_ref.py tests/unit/test_tp_parity.py
+tt/runners/__init__.py                 (none)
+tt/runners/adapters/__init__.py        (none)
+tt/runners/adapters/llama.py           tests/unit/test_prefill_adapter.py
+tt/runners/kv_chunk_table.py           tests/unit/test_prefill_runtime_chunked.py tests/unit/test_kv_chunk_table.py
+tt/tt_prefill_runtime.py               tests/galaxy_prefill_kv_pcc.py tests/unit/test_prefill_runtime_chunked.py tests/unit/test_prefill_adapter.py
+
+# 21 modules with code, 21 owned. The 3 files with '(none)' are 3-line __init__.py shims
+# carrying only the SPDX pair and no code:
+  3 models/demos/llama31_8b_d_p/tt/__init__.py
+  3 models/demos/llama31_8b_d_p/tt/runners/__init__.py
+  3 models/demos/llama31_8b_d_p/tt/runners/adapters/__init__.py
+  9 total
+# tt/attention/__init__.py is NOT a shim - it holds class Attention (135 lines) - and is
+# owned by test_attention_vs_ref.py, test_kv_cache_tp8.py and test_tp_parity.py.
+# No gap opened by P10 (tt/runners/adapters/llama.py -> test_prefill_adapter.py,
+# tt/runners/kv_chunk_table.py -> test_kv_chunk_table.py + test_prefill_runtime_chunked.py).
+# 'close gaps rather than flagging them' (BRINGUP_RECIPE.md:2037-2038): there are none to close.

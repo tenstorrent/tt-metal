@@ -5,7 +5,7 @@
 """Chunked KV production vs one-shot, and both vs the fp32 golden. Gate: `G-CHUNK`.
 
 **A chunked prefill differs from a one-shot in exactly three places**
-(`BRINGUP_RECIPE.md:1562-1569`). This file owns two of them:
+(`BRINGUP_RECIPE.md:1647-1654`). This file owns two of them:
 
 | delta | what changes | owner |
 |---|---|---|
@@ -15,14 +15,14 @@
 
 **Why the decomposition is exact rather than approximate.** Both KV producers are fed *the same
 hidden states* — captured from **one** one-shot forward of the real 32-layer model — so deltas 1 and
-2 are the entire difference between them (`BRINGUP_RECIPE.md:1571-1574`). Nothing here re-runs the
+2 are the entire difference between them (`BRINGUP_RECIPE.md:1656-1659`). Nothing here re-runs the
 attention core, which is why delta 3 is absent by construction rather than by omission.
 
 **Why this can run on one card at all.** A *model-level* KV write cannot: at TP=1 the model emits all
 8 local KV heads while the per-chip cache slot holds exactly one, and the write op refuses the
 mismatch (`bringup_log/00_MODEL_CARD.md` §4.1). So the cache is driven through `write_kv_chunk`
 **one head at a time, head `h` -> slot `h`** — the same op, the same DRAM `NdShard` geometry and the
-same `head_dim = 128` a chip performs at TP=8 (`BRINGUP_RECIPE.md:1574-1576`). What that does **not**
+same `head_dim = 128` a chip performs at TP=8 (`BRINGUP_RECIPE.md:1659-1661`). What that does **not**
 cover is the model -> cache path and the block-cyclic reorder (at `sp = 1` the reorder is the
 identity); `G-KV-TP8` and `G-MESH-KV` own those, and `R-001` carries the gap.
 
@@ -39,7 +39,7 @@ identity); `G-KV-TP8` and `G-MESH-KV` own those, and `R-001` carries the gap.
 * **Computed noise floor at layer 0 — two of them, and the difference is the point.** `R-021`
   requires P7 to apply the corrected floor definition: a floor that omits a rounding the device
   pays makes a correct implementation look further from the arithmetic limit than it is.
-  - the **storage floor**, which is what `BRINGUP_RECIPE.md:1583` names: quantise the golden to the
+  - the **storage floor**, which is what `BRINGUP_RECIPE.md:1670` names: quantise the golden to the
     cache dtype and nothing else;
   - the **complete floor**: the same producer in fp32 with the *bf16 embedding output*, the
     *bf16 norm gain*, the *device-valued `bfloat8_b` projection weight*, the *bf16 RoPE tables* and
@@ -48,7 +48,7 @@ identity); `G-KV-TP8` and `G-MESH-KV` own those, and `R-001` carries the gap.
   The storage floor omits the projection weight's rounding, which the device pays on every K and V
   it produces, so the ratio against it is inflated by construction. Both are recorded; the
   **complete** floor is the one the 3x budget is asserted against (`DEC-064`).
-* **Negative controls, one per delta** (`BRINGUP_RECIPE.md:1585-1586` asks for the delta-1 one):
+* **Negative controls, one per delta** (`BRINGUP_RECIPE.md:1674-1675` asks for the delta-1 one):
   - **delta 1** — rope every chunk at `kv_actual_global = 0`. The mutual **K** PCC must collapse.
     **V cannot move**: V is never rotated, so in this decomposition the delta-1 control is a
     K-only discriminator by construction. The recipe quotes a V number for it (0.655), which
@@ -93,7 +93,7 @@ WEIGHT_DTYPE = ttnn.bfloat8_b  # `DEC-022`
 ACTIVATION_DTYPE = ttnn.bfloat16  # `DEC-022`
 CACHE_DTYPE = ttnn.bfloat8_b  # `DEC-021`
 
-# `BRINGUP_RECIPE.md:1578-1584` — the four thresholds this gate asserts.
+# `BRINGUP_RECIPE.md:1663-1674` — the four thresholds this gate asserts.
 MUTUAL_PCC_THRESHOLD = 0.999  # chunked vs one-shot, PER LAYER (expect exact)
 GOLDEN_K_THRESHOLD = 0.99
 GOLDEN_V_THRESHOLD = 0.98
@@ -677,7 +677,7 @@ def test_chunked_kv_offset_negative_controls(mesh_device, control, reset_seeds):
 
     * `freeze_rope_offset` — delta 1: every chunk is roped as if it started at position 0. **K only**
       can move, because V is never rotated; the recipe's quoted control pair (0.706 / 0.655,
-      `BRINGUP_RECIPE.md:1585-1586`) is not reproducible in a decomposition that feeds both
+      `BRINGUP_RECIPE.md:1674-1675`) is not reproducible in a decomposition that feeds both
       producers the same hidden states, and the gate block says so.
     * `freeze_write_offset` — delta 2: every chunk is written at `kv_actual = 0`, so chunk 3
       overwrites chunk 0's rows. **Both** K and V must collapse.

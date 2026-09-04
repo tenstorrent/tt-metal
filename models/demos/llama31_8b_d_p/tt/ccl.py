@@ -17,12 +17,12 @@ ring-gather scratch. One instance serves all 32 layers and every chunk of a requ
    (`models/demos/gpt_oss_d_p/tt/ccl.py:44`). On this Blackhole Galaxy that grid is **(12, 10)**,
    not 8x8, so the ring-attention offset below is `x = 11`. Hard-coding 8x8 here breaks the ring
    SDPA's grid-offset assert. This is the **opposite** of the SDPA *program* grid, which stays a
-   pinned 8x8 (`BRINGUP_RECIPE.md:1155-1163`) — the two grids look alike and must not be unified.
+   pinned 8x8 (`BRINGUP_RECIPE.md:1409-1417`) — the two grids look alike and must not be unified.
 2. **Semaphores are allocated once**, never per layer or per chunk
    (`bringup_log/04_CCL_PLAN.md` §3: 6 RS + 4 AG + 2 barrier + 2 ring-attention = **14**).
 3. **Handing one out cycles a ping-pong index**, so back-to-back collectives never reuse a
    semaphore that may still be in flight. This is the single most common source of
-   nondeterministic multi-device PCC failures (`BRINGUP_RECIPE.md:900-902`).
+   nondeterministic multi-device PCC failures (`BRINGUP_RECIPE.md:1135-1137`).
 
 **Deletions for Llama:** none of the semaphore or scratch state — there is no `ep_axis` and no
 MoE-specific state in this file, and the ring-gather scratch is used by P8's SP path. Four dead

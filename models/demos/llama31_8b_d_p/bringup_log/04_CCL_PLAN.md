@@ -20,7 +20,7 @@ plan and `models/common/modules/mlp/mlp_2d.py:461` (`02_SURVEY.md` §2).
 | SP | **4**, on the **rows** (`sp_axis = 0`) | derived: `32 / 8 = 4`. TP is the only knob (`models/demos/minimax_m3/config.py:29-30`) |
 | `num_links` | **2** at `(4,8)`; **1** on any `(1,N)` submesh | `get_default_num_links` (`models/demos/gpt_oss_d_p/utils/general_utils.py:27`): `mesh_device.shape[0] == 1 -> 1` (`:33`), else `2` on Blackhole (`:35`) |
 | topology | `ttnn.Topology.Ring` at `(4,8)`; `Topology.Linear` selectable | §5 |
-| chunk / max_seq_len | deferred (`DEC-004`), constrained: `CHUNK_SIZE % (SP*32) == 0` → `% 128 == 0`, `MAX_SEQ_LEN % CHUNK_SIZE == 0`, `MAX_SEQ_LEN > CHUNK_SIZE` | `models/demos/common/prefill/docs/PREFILL_MIGRATION_TESTING.md:62`; `BRINGUP_RECIPE.md:1834` |
+| chunk / max_seq_len | deferred (`DEC-004`), constrained: `CHUNK_SIZE % (SP*32) == 0` → `% 128 == 0`, `MAX_SEQ_LEN % CHUNK_SIZE == 0`, `MAX_SEQ_LEN > CHUNK_SIZE` | `models/demos/common/prefill/docs/PREFILL_MIGRATION_TESTING.md:62`; `BRINGUP_RECIPE.md:2150` |
 
 ### 1.1 TP = 8 is an equality
 
@@ -198,7 +198,7 @@ Notes that the table cannot carry:
 - **Rows 1–5 are the whole steady-state cost: 4 barrier-consuming collectives per layer**
   (2 all-reduces = 2 RS + 2 AG), 128 per 32-layer forward. Row 5 fires once per request at most.
 - **Row 8 is a trap, not a feature.** It is the equal-length one-shot fallback
-  (`models/demos/gpt_oss_d_p/tt/attention/prefill.py:234-256`), and `BRINGUP_RECIPE.md:1834` names it:
+  (`models/demos/gpt_oss_d_p/tt/attention/prefill.py:234-256`), and `BRINGUP_RECIPE.md:2150` names it:
   if `max_seq_len == chunk_size` the ring op has no room and attention silently runs this *different*
   core, so P8/P10 must choose `max_seq_len > chunk_size` and **log which core actually ran**.
 - **Topology and fabric config must agree or the box hangs.** A `Topology.Ring` collective on a plain
@@ -237,7 +237,7 @@ Full reasoning in `DEC-025`. Summary, because the wrong reason is more persuasiv
 
 `scatter_output` is wired from day one (`models/demos/minimax_m3/tt/dense_mlp.py:38`) so switching is
 a flag, not a rewrite — and any module that cannot honour it **refuses `scatter_output=True` loudly**
-rather than half-wiring the scheme (`BRINGUP_RECIPE.md:971-973`). Rows 3, 4 and 6 of §5 are that seam.
+rather than half-wiring the scheme (`BRINGUP_RECIPE.md:1206-1208`). Rows 3, 4 and 6 of §5 are that seam.
 
 ---
 

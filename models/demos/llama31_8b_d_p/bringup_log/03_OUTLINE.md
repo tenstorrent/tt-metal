@@ -6,7 +6,7 @@ its `__init__.py` today). Date (UTC): 2026-09-04. Gate: `G-OUTLINE`.
 
 Nothing here is executed. What P3 buys is that P5–P10 never has to guess a signature, a shape or an
 owner — and that every gate in Appendix A has a file to live in before the phase that runs it starts
-(`BRINGUP_RECIPE.md:821` — "An unowned gate silently becomes a `NOT-RUN`").
+(`BRINGUP_RECIPE.md:1056` — "An unowned gate silently becomes a `NOT-RUN`").
 
 ---
 
@@ -29,7 +29,7 @@ smuggled in as table cells: the KV-cache dtype (`DEC-021`) and the activation dt
 
 ## 1. The committed file tree
 
-Derived from `BRINGUP_RECIPE.md:752-819`, with every deviation marked `[DEV-n]` and justified in §1.1.
+Derived from `BRINGUP_RECIPE.md:987-1054`, with every deviation marked `[DEV-n]` and justified in §1.1.
 `(exists)` = already in the tree from P0/P1. The phase column is the phase that *creates* the file.
 
 ```
@@ -100,21 +100,30 @@ models/demos/llama31_8b_d_p/
 ```
 
 **File count:** 57 tracked files at the end of P10 (excluding `bringup_log/` and `raw/`), of which 9
-exist today.
+exist today (i.e. at the end of **P3**, when this document was written).
+
+> **P9 check (`G-CLEAN`).** The delivered tree is **57** files, matching this contract
+> file-for-file, and **50** of them are not `__init__.py`. P9 added **no** file: the
+> generated needle-manifest it considered was dropped in favour of 20 hand-written `CITES` rows
+> (`DEC-120`), precisely so this count would not move. Two figures elsewhere are P3-era and do not
+> describe the delivered tree — `06_GATES.md`'s `G-OUTLINE` row says "41 files contracted (49/49
+> non-`__init__` tree files)" and `DEC-109` says "the P3 tree contracts 41 files". Both are left as
+> written (the ledger is append-only and they record what was true when measured); this note is the
+> correction.
 
 ### 1.1 Deviations from the recipe's tree, and why
 
 | id | Deviation | Reason |
 |---|---|---|
-| `[DEV-1]` | **No `BRINGUP_RECIPE.md` inside the package.** `BRINGUP_RECIPE.md:754` lists it. | The recipe for this bring-up lives in the kit (`models/demos/common/bringup/BRINGUP_RECIPE.md`) and this session may not modify anything outside the package, so a copy would immediately fork. `scripts/verify_citations.py`'s `DOC_PREFIXES["BRINGUP_RECIPE.md"]` points at the kit copy and the doc pass scans it. `DEC-002`, re-affirmed by `DEC-017`. |
-| `[DEV-2]` | **No `utils/` package.** `BRINGUP_RECIPE.md:786-788` lists `utils/general_utils.py` + `utils/substate.py`. | `get_cache_file_name`, `cache_file_exists`, `get_default_num_links` and `substate` are **imported** from `models/demos/gpt_oss_d_p/utils/` — agent-contract rule 4 ("reuse means *import*, not copy-paste"). `DEC-013`, `DEC-018`. |
-| `[DEV-3]` | **No `docs/`, no `scripts/__init__.py`.** Both were created by P0's literal step 1 (`BRINGUP_RECIPE.md:485`); neither appears in the P3 tree. | `DEC-002` flagged the recipe's self-conflict and deferred it here. `DEC-017` commits to the P3 spelling; both are deleted in **P5.1**, the first phase that touches the tree. Neither template ships them (`models/demos/gpt_oss_d_p/scripts/`, `models/demos/minimax_m3/scripts/` have no `__init__.py`). |
+| `[DEV-1]` | **No `BRINGUP_RECIPE.md` inside the package.** `BRINGUP_RECIPE.md:989` lists it. | The recipe for this bring-up lives in the kit (`models/demos/common/bringup/BRINGUP_RECIPE.md`) and this session may not modify anything outside the package, so a copy would immediately fork. `scripts/verify_citations.py`'s `DOC_PREFIXES["BRINGUP_RECIPE.md"]` points at the kit copy and the doc pass scans it. `DEC-002`, re-affirmed by `DEC-017`. |
+| `[DEV-2]` | **No `utils/` package.** `BRINGUP_RECIPE.md:1021-1023` lists `utils/general_utils.py` + `utils/substate.py`. | `get_cache_file_name`, `cache_file_exists`, `get_default_num_links` and `substate` are **imported** from `models/demos/gpt_oss_d_p/utils/` — agent-contract rule 4 ("reuse means *import*, not copy-paste"). `DEC-013`, `DEC-018`. |
+| `[DEV-3]` | **No `docs/`, no `scripts/__init__.py`.** Both were created by P0's literal step 1 (`BRINGUP_RECIPE.md:720`); neither appears in the P3 tree. | `DEC-002` flagged the recipe's self-conflict and deferred it here. `DEC-017` commits to the P3 spelling; both are deleted in **P5.1**, the first phase that touches the tree. Neither template ships them (`models/demos/gpt_oss_d_p/scripts/`, `models/demos/minimax_m3/scripts/` have no `__init__.py`). |
 | `[DEV-4]` | **`tt/runners/adapters/__init__.py` added.** Not in the recipe tree. | Required for `models.demos.llama31_8b_d_p.tt.runners.adapters.llama` to be importable by the registry (`models/demos/common/prefill/adapter.py:277`). The template has it: `models/demos/gpt_oss_d_p/tt/runners/adapters/__init__.py`. Not a judgement call; an omission in the recipe's tree. |
-| `[DEV-5]` | **`tt/embedding.py` and `tt/lm_head.py` are kept as separate files** even though the nearest template inlines both into `Model.__init__` (`models/demos/gpt_oss_d_p/tt/model.py:84` embedding, `:134` lm_head). | The recipe's tree lists them (`BRINGUP_RECIPE.md:775-776`) and P9 item 9 requires every `tt/` module to own a test. Two small files with two tests beat 90 inline lines in `model.py` that no test can reach directly. |
-| `[DEV-6]` | **`tests/unit/test_ccl_semaphores.py` is created in P5.1**, not P8, and holds only the device-free/one-card half until then. | `G-MESH` (P5.1) already requires "allocates its semaphores exactly once (assert the list lengths, and again after dozens of getter cycles)" (`BRINGUP_RECIPE.md:1025-1026`) — which is `G-SEMAPHORE`'s assertion. Writing it once, in the file that owns the gate, avoids the same assertion existing twice. |
+| `[DEV-5]` | **`tt/embedding.py` and `tt/lm_head.py` are kept as separate files** even though the nearest template inlines both into `Model.__init__` (`models/demos/gpt_oss_d_p/tt/model.py:84` embedding, `:134` lm_head). | The recipe's tree lists them (`BRINGUP_RECIPE.md:1010-1011`) and P9 item 9 requires every `tt/` module to own a test. Two small files with two tests beat 90 inline lines in `model.py` that no test can reach directly. |
+| `[DEV-6]` | **`tests/unit/test_ccl_semaphores.py` is created in P5.1**, not P8, and holds only the device-free/one-card half until then. | `G-MESH` (P5.1) already requires "allocates its semaphores exactly once (assert the list lengths, and again after dozens of getter cycles)" (`BRINGUP_RECIPE.md:1265-1266`) — which is `G-SEMAPHORE`'s assertion. Writing it once, in the file that owns the gate, avoids the same assertion existing twice. |
 
 Everything else is the recipe's tree verbatim, including the deliberate absence of a `reference/`
-package (`BRINGUP_RECIPE.md:829`).
+package (`BRINGUP_RECIPE.md:1064`).
 
 ---
 
@@ -221,7 +230,7 @@ Shapes are **per chip** at the deployment target `(4,8)`, TP=8 on the columns, S
      (`00_MODEL_CARD.md` §2); `DEC-020`.
 - **Cache-path contract.** `tensor_cache_<dtype>_<mesh_shape>` under `$TT_CACHE_PATH`. The dtype +
   mesh shape are both in the path because a tilized tensor is already sharded
-  (`BRINGUP_RECIPE.md:843-845`). Note the recipe cites
+  (`BRINGUP_RECIPE.md:1078-1080`). Note the recipe cites
   `models/demos/gpt_oss_d_p/tt/runners/adapters/gpt_oss.py:75` for this; that function encodes arch
   and `sp x tp` but **not** the dtype — `models/demos/gpt_oss_d_p/tt/model_config.py:157` is the one
   that encodes both. This package encodes both in both places.
@@ -241,7 +250,7 @@ Shapes are **per chip** at the deployment target `(4,8)`, TP=8 on the columns, S
 - **The one required change.** `models/demos/gpt_oss_d_p/tt/rms_norm.py:94` calls `ttnn.rms_norm`
   with **no** `compute_kernel_config`. This module passes one explicitly with
   `fp32_dest_acc_en=True` — measured worth ~25x of the op's error and ~7x of the module's
-  (`BRINGUP_RECIPE.md:412-418`; `DEC-014`).
+  (`BRINGUP_RECIPE.md:638-644`; `DEC-014`).
 
 ### 2.5 `tt/rope.py` — llama3-scaled RoPE tables
 
@@ -301,7 +310,7 @@ Shapes are **per chip** at the deployment target `(4,8)`, TP=8 on the columns, S
 - **Deviation from the template.** `models/demos/minimax_m3/tt/dense_mlp.py:89-90` and `:94` pass **no**
   `compute_kernel_config` to `ttnn.linear`. This module passes one explicitly. On a matmul the flag's
   `True` is bit-identical to the default and `False` costs 96x-1168x
-  (`BRINGUP_RECIPE.md:426-427`) — so the risk is inheriting an explicit `False`, and the defence is
+  (`BRINGUP_RECIPE.md:652-653`) — so the risk is inheriting an explicit `False`, and the defence is
   passing an explicit `True` everywhere.
 
 ### 2.7 `tt/attention/` — GQA, full RoPE, causal SDPA
@@ -337,7 +346,7 @@ Split exactly as `models/demos/gpt_oss_d_p/tt/attention/` (`__init__`, `config`,
   **dropped** (`sliding_window`, `rotary_dim`, and the `layer_types` plumbing the caller does — Llama
   has none: `00_MODEL_CARD.md` §3) and one field **inverted**:
   `models/demos/gpt_oss_d_p/tt/attention/config.py:71` sets `fp32_dest_acc_en: bool = False` and
-  carrying it forward costs two to three orders of magnitude (`BRINGUP_RECIPE.md:431-434`).
+  carrying it forward costs two to three orders of magnitude (`BRINGUP_RECIPE.md:657-660`).
 - **The pinned grid, and the assert that makes it fail early.** The SDPA program grid is an explicit
   named field defaulting to **8x8** (`models/demos/gpt_oss_d_p/tt/attention/config.py:96` does the
   same), and `__post_init__` asserts `sdpa_grid_x <= compute_grid.x - 1`. On this (12,10) box the CCL
@@ -437,7 +446,7 @@ Split exactly as `models/demos/gpt_oss_d_p/tt/attention/` (`__init__`, `config`,
   → `NotImplementedError` naming `G-CHUNK-ATTN` and P8, mirroring
   `models/demos/gpt_oss_d_p/tt/attention/prefill.py:257-270` rather than silently running the wrong
   core; (c) `scatter_output=True` before scheme B is wired → refuse
-  (`BRINGUP_RECIPE.md:971-973`).
+  (`BRINGUP_RECIPE.md:1206-1208`).
 - **Retained memory hygiene.** `deallocate(True)` after last use, and the input freed before the big
   output is allocated (`models/demos/minimax_m3/config.py:104-112` explains why).
 
@@ -462,7 +471,7 @@ Split exactly as `models/demos/gpt_oss_d_p/tt/attention/` (`__init__`, `config`,
   `NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK = 32` block geometry
   (`models/demos/gpt_oss_d_p/tt/attention/kv_cache.py:27`, used at `:87`) is **kept unchanged** —
   that is what lets P10 reuse the producer's existing packed-GQA read-back instead of writing a
-  fourth reader (`BRINGUP_RECIPE.md:1199-1204`).
+  fourth reader (`BRINGUP_RECIPE.md:1453-1458`).
 - **Asserts kept verbatim.** `batch == 1` per call
   (`models/demos/gpt_oss_d_p/tt/attention/kv_cache.py:149`) — the op ignores the leading dim and a
   batched tensor would write only `slot_idx`; `kv_actual % 32 == 0` (`:157`); slot and layer in range
@@ -564,7 +573,7 @@ Split exactly as `models/demos/gpt_oss_d_p/tt/attention/` (`__init__`, `config`,
   the optional on-device sampling (`models/demos/gpt_oss_d_p/tt/model.py:145-157`) — a decode
   feature, and decode is an explicit non-goal.
 - **`n_layers` is a required parameter**, not a nicety: `G-MODEL` runs at 2 and 4 layers before 32
-  (`BRINGUP_RECIPE.md:1305-1306`), and `with_lm_head=True` is the **default** so the top-1 half of
+  (`BRINGUP_RECIPE.md:1559-1560`), and `with_lm_head=True` is the **default** so the top-1 half of
   that gate is never conditional.
 - **`on_layer_complete(layer_idx)`** is preserved from the template (`:196`, called at `:210-211`): it is the seam P10's
   per-layer KV migration hooks attach to.
@@ -626,7 +635,7 @@ raises `FrozenInstanceError` at runner startup. Knobs come from `params`
 | `verify_golden_kv.py` | Structural check over all 32 layers; per-layer min/mean PCC table. **Imports no ttnn.** | `verify_trace(trace_dir)`; non-zero exit on a zeroed or deleted layer | `models/demos/minimax_m3/scripts/verify_golden_kv.py:26` |
 
 The trace directory comes from **`$PREFILL_TRACE_DIR`** — the engine already owns that variable, so
-the package does not invent one (`BRINGUP_RECIPE.md:1336-1337`).
+the package does not invent one (`BRINGUP_RECIPE.md:1590-1591`).
 
 ### 2.15 `tests/`
 
@@ -635,7 +644,7 @@ the package does not invent one (`BRINGUP_RECIPE.md:1336-1337`).
 the same edit that creates them (`DEC-008`); and `parametrize_mesh_with_fabric`-style
 submesh parametrisation lands in **P8** — but as `create_submesh` from a full `(4,8)`, **not** as the
 template's top-level partial mesh (`models/demos/minimax_m3/tests/test_factory.py:89`), which
-fabric-times-out on this galaxy (`BRINGUP_RECIPE.md:1402-1422`).
+fabric-times-out on this galaxy (`BRINGUP_RECIPE.md:1708-1728`).
 
 Every `tests/unit/test_*_vs_ref.py` has the same five-part shape, and a file missing any part is
 incomplete: identical random weights on both sides, an **fp32** reference in the test file, a
@@ -649,7 +658,7 @@ policy). Template: `models/demos/gpt_oss_d_p/tests/unit/test_attention_vs_ref.py
 
 Every row: the gate it owns, the mesh parametrisation, the reference it compares against, and the
 **negative control** — the deliberately wrong variant the same assertion must reject. A row without a
-control is not a gate test (`BRINGUP_RECIPE.md:276-281`); expected control values, where the recipe
+control is not a gate test (`BRINGUP_RECIPE.md:350-355`); expected control values, where the recipe
 measured one, are in brackets.
 
 | file | gate | mesh | reference | negative control |
@@ -686,7 +695,7 @@ measured one, are in brackets.
 ### 2.16 `README.md` (P9)
 
 - **Responsibility.** The package's front door, and a `G-CLEAN` deliverable rather than a courtesy.
-- **Required contents** (`BRINGUP_RECIPE.md:1714-1716`): the architecture table, the deployment path,
+- **Required contents** (`BRINGUP_RECIPE.md:2030-2032`): the architecture table, the deployment path,
   a **status table with measured PCC** (`G-MESH-KV`'s per-layer min K/V per run configuration), the
   run commands, the **env-var table** (four entries — `DEC-023`), a layout section, the "why not
   `models/common/`" answer (`02_SURVEY.md` §2, with both its citations), and a "what is **not**
@@ -773,11 +782,11 @@ Added in the same edit as its owner; an unowned gate silently becomes a `NOT-RUN
 | per-phase regression | every | `pytest models/demos/llama31_8b_d_p -q`, 0 failed | pytest |
 
 **32 Appendix A gate rows + 1 per-phase regression gate; 32/32 owned.** The four the recipe warns are easiest to
-leave unowned — `G-MESH`, `G-SEMAPHORE`, `G-WEIGHTS`, `G-TP-PARITY` (`BRINGUP_RECIPE.md:823-825`) —
+leave unowned — `G-MESH`, `G-SEMAPHORE`, `G-WEIGHTS`, `G-TP-PARITY` (`BRINGUP_RECIPE.md:1058-1060`) —
 each have a dedicated file above, because no `test_<module>_vs_ref.py` naturally covers them.
 
 Two files in the tree own **no** Appendix A gate and are there for the P9 test-inventory item
-(`BRINGUP_RECIPE.md:1721-1722`, "every `tt/` module has a corresponding test"):
+(`BRINGUP_RECIPE.md:2037-2038`, "every `tt/` module has a corresponding test"):
 `tests/unit/test_embedding_vs_ref.py` and `tests/unit/test_lm_head_vs_ref.py`. Both are ordinary
 `_vs_ref` PCC tests with a floor and a control; they are simply not gates.
 
@@ -785,7 +794,7 @@ Two files in the tree own **no** Appendix A gate and are there for the P9 test-i
 
 ## 5. Conventions honoured, and the two the templates do not actually follow
 
-`BRINGUP_RECIPE.md:831-855` lists eight conventions as "all observed in the templates". Six are;
+`BRINGUP_RECIPE.md:1066-1090` lists eight conventions as "all observed in the templates". Six are;
 two are not, and pretending otherwise would make the outline's signatures wrong.
 
 | Convention | Status here |
@@ -801,7 +810,7 @@ two are not, and pretending otherwise would make the outline's signatures wrong.
 
 ### 5.1 One recipe sentence the outline had to resolve rather than obey
 
-`BRINGUP_RECIPE.md:1022-1024` states both that "sub-axis TP (e.g. `MeshConfig((1,8), tp=4)`)
+`BRINGUP_RECIPE.md:1262-1264` states both that "sub-axis TP (e.g. `MeshConfig((1,8), tp=4)`)
 **raises**" and that "`MeshConfig` accepts any shape whose TP **divides** the column axis". `4`
 divides `8`, so the two halves of that sentence contradict each other. The outline takes the
 **refusal** as the binding requirement (it is the one stated as a gate assertion, and it is what

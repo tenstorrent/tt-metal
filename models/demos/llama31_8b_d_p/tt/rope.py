@@ -104,7 +104,7 @@ def llama3_freqs(hf, seq_len: int, *, scaled: bool = True):
 
     `scaled=False` disables the llama3 piecewise scaling and exists for one purpose: `G-ROPE` has
     to prove the scaling actually took effect, and a test that passes with scaling silently
-    disabled is worthless (`BRINGUP_RECIPE.md:1093-1095`).
+    disabled is worthless (`BRINGUP_RECIPE.md:1340-1349`).
     """
     theta, scale_factor, orig_context_len = rope_params(hf)
     return precompute_freqs(
@@ -165,7 +165,7 @@ def build_indexed_rope(mesh_device, hf, *, max_seq_len: int, chunk_size: int, sp
 
     Persistent: reused across all chunks, so do **not** deallocate it per chunk. Consumed in P7;
     written here because P5.3 owns "expose a chunk-offset table builder separately from the
-    contiguous one" (`BRINGUP_RECIPE.md:1091-1093`).
+    contiguous one" (`BRINGUP_RECIPE.md:1332-1334`).
 
     Returns `[cos, sin]`.
     """

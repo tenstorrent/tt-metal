@@ -1,0 +1,161 @@
+2026-09-04 19:57:17.384 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mstojkovic/.cache/ttnn,model_cache_path=/home/mstojkovic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-09-04 19:57:18.362 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:224)
+2026-09-04 19:57:18.362 | info     |             UMD | Cluster constructor started. (cluster.cpp:406)
+2026-09-04 19:57:18.379 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-09-04 19:57:18.379 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-09-04 19:57:18.474 | info     |             UMD | Established firmware bundle version: 19.12.0 (topology_discovery.cpp:576)
+2026-09-04 19:57:18.478 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-09-04 19:57:19.901 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31}/[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 30, 31, 16, 17, 18, 19, 20, 21, 22, 23] and remote chip ids {} (cluster.cpp:173)
+2026-09-04 19:57:19.901 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-09-04 19:57:19.901 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-09-04 19:57:19.901 | info     |             UMD | Cluster constructor completed. (cluster.cpp:665)
+2026-09-04 19:57:19.920 | info     |             UMD | Starting devices in cluster (cluster.cpp:1205)
+2026-09-04 19:57:20.687 | warning  |             UMD | AICLK settled at 1343 MHz, within 5% of the requested 1350 MHz but not an exact match. Proceeding. (tt_device.cpp:256)
+2026-09-04 19:57:20.691 | warning  |             UMD | AICLK settled at 1343 MHz, within 5% of the requested 1350 MHz but not an exact match. Proceeding. (tt_device.cpp:256)
+2026-09-04 19:57:21.568 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1213)
+============================= test session starts ==============================
+platform linux -- Python 3.12.14, pytest-9.0.3, pluggy-1.6.0 -- /home/mstojkovic/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mstojkovic/tt-metal
+configfile: pytest.ini
+plugins: timeout-2.4.0, anyio-4.15.0, cov-7.0.0, github-actions-annotate-failures-0.3.0, repeat-0.9.4, dash-2.15.0, benchmark-5.2.3, split-0.11.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 10 items
+
+models/demos/llama31_8b_d_p/tests/unit/test_rms_norm_vs_ref.py::test_rms_norm_vs_ref_random_weight[blackhole-s32-mesh_device0] 2026-09-04 19:57:25.629 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
+2026-09-04 19:57:25.629 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
+2026-09-04 19:57:25.647 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4, 3:16, 4:12} (topology_mapper_utils.cpp:3368)
+2026-09-04 19:57:25.647 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {3:4, 4:20, 5:8} (topology_mapper_utils.cpp:3376)
+2026-09-04 19:57:26.255 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 19:57:26.943 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 19:57:26.955 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 19:57:26.976 | INFO     | llama31_8b_d_p.tests.unit.test_rms_norm_vs_ref:test_rms_norm_vs_ref_random_weight:110 - [G-RMS] random-weight seq=32: PCC=0.9999957 floor=0.9999973 ratio=1.56x
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_rms_norm_vs_ref.py::test_rms_norm_vs_ref_real_weight[blackhole-s32-mesh_device0] 2026-09-04 19:57:27.964 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 19:57:28.059 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 19:57:28.067 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 19:57:28.072 | INFO     | llama31_8b_d_p.tests.unit.test_rms_norm_vs_ref:test_rms_norm_vs_ref_real_weight:137 - [G-RMS] real-weight   seq=32: PCC=0.9999971 floor=0.9999986 ratio=2.11x
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_rms_norm_vs_ref.py::test_rms_norm_zero_gain_negative_control[blackhole-mesh_device0] 2026-09-04 19:57:29.068 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 19:57:29.161 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 19:57:29.172 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 19:57:29.199 | INFO     | llama31_8b_d_p.tests.unit.test_rms_norm_vs_ref:test_rms_norm_zero_gain_negative_control:156 - [G-RMS] control: zero-gain max|out| = 0.0
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_rms_norm_vs_ref.py::test_rms_norm_compute_kernel_config_ab[blackhole-s32-mesh_device0] 2026-09-04 19:57:30.176 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 19:57:30.268 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 19:57:30.273 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 19:57:30.279 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 19:57:30.290 | INFO     | llama31_8b_d_p.tests.unit.test_rms_norm_vs_ref:test_rms_norm_compute_kernel_config_ab:182 - [G-RMS] A/B seq=32: fp32_dest_acc_en=True PCC=0.9999957 (1.56x) vs False PCC=0.9999707 (10.79x); floor=0.9999973; gain=6.90x
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_rms_norm_vs_ref.py::test_rms_norm_refuses_to_build_weightless[blackhole-mesh_device0] 2026-09-04 19:57:31.292 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 19:57:31.382 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 19:57:31.383 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="tensor_cache_path"
+2026-09-04 19:57:31.383 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 19:57:31.383 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="tensor_cache_path"
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_rms_norm_vs_ref.py::test_rms_norm_vs_ref_random_weight[blackhole-s512-mesh_device0] 2026-09-04 19:57:32.374 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 19:57:32.467 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 19:57:32.501 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 19:57:32.523 | INFO     | llama31_8b_d_p.tests.unit.test_rms_norm_vs_ref:test_rms_norm_vs_ref_random_weight:110 - [G-RMS] random-weight seq=512: PCC=0.9999958 floor=0.9999973 ratio=1.57x
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_rms_norm_vs_ref.py::test_rms_norm_vs_ref_real_weight[blackhole-s512-mesh_device0] 2026-09-04 19:57:33.521 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 19:57:33.614 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 19:57:33.643 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 19:57:33.665 | INFO     | llama31_8b_d_p.tests.unit.test_rms_norm_vs_ref:test_rms_norm_vs_ref_real_weight:137 - [G-RMS] real-weight   seq=512: PCC=0.9999971 floor=0.9999986 ratio=2.13x
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_rms_norm_vs_ref.py::test_rms_norm_compute_kernel_config_ab[blackhole-s512-mesh_device0] 2026-09-04 19:57:34.663 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 19:57:34.740 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 19:57:34.768 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 19:57:34.787 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 19:57:34.807 | INFO     | llama31_8b_d_p.tests.unit.test_rms_norm_vs_ref:test_rms_norm_compute_kernel_config_ab:182 - [G-RMS] A/B seq=512: fp32_dest_acc_en=True PCC=0.9999958 (1.57x) vs False PCC=0.9999633 (13.58x); floor=0.9999973; gain=8.66x
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_rms_norm_vs_ref.py::test_rms_norm_vs_ref_random_weight[blackhole-s4096-mesh_device0] 2026-09-04 19:57:35.795 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 19:57:35.887 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 19:57:36.329 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 19:57:36.626 | INFO     | llama31_8b_d_p.tests.unit.test_rms_norm_vs_ref:test_rms_norm_vs_ref_random_weight:110 - [G-RMS] random-weight seq=4096: PCC=0.9999957 floor=0.9999972 ratio=1.54x
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_rms_norm_vs_ref.py::test_rms_norm_vs_ref_real_weight[blackhole-s4096-mesh_device0] 2026-09-04 19:57:37.630 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-04 19:57:37.723 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-04 19:57:38.155 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 19:57:38.442 | INFO     | llama31_8b_d_p.tests.unit.test_rms_norm_vs_ref:test_rms_norm_vs_ref_real_weight:137 - [G-RMS] real-weight   seq=4096: PCC=0.9999971 floor=0.9999986 ratio=2.12x
+PASSED
+
+==================================== PASSES ====================================
+- generated xml file: /home/mstojkovic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+1.47s setup    models/demos/llama31_8b_d_p/tests/unit/test_rms_norm_vs_ref.py::test_rms_norm_vs_ref_random_weight[blackhole-s32-mesh_device0]
+1.08s setup    models/demos/llama31_8b_d_p/tests/unit/test_rms_norm_vs_ref.py::test_rms_norm_vs_ref_real_weight[blackhole-s512-mesh_device0]
+1.07s setup    models/demos/llama31_8b_d_p/tests/unit/test_rms_norm_vs_ref.py::test_rms_norm_zero_gain_negative_control[blackhole-mesh_device0]
+1.07s setup    models/demos/llama31_8b_d_p/tests/unit/test_rms_norm_vs_ref.py::test_rms_norm_refuses_to_build_weightless[blackhole-mesh_device0]
+1.07s setup    models/demos/llama31_8b_d_p/tests/unit/test_rms_norm_vs_ref.py::test_rms_norm_vs_ref_random_weight[blackhole-s512-mesh_device0]
+1.06s setup    models/demos/llama31_8b_d_p/tests/unit/test_rms_norm_vs_ref.py::test_rms_norm_vs_ref_random_weight[blackhole-s4096-mesh_device0]
+1.06s setup    models/demos/llama31_8b_d_p/tests/unit/test_rms_norm_vs_ref.py::test_rms_norm_vs_ref_real_weight[blackhole-s32-mesh_device0]
+1.06s setup    models/demos/llama31_8b_d_p/tests/unit/test_rms_norm_vs_ref.py::test_rms_norm_vs_ref_real_weight[blackhole-s4096-mesh_device0]
+1.06s setup    models/demos/llama31_8b_d_p/tests/unit/test_rms_norm_vs_ref.py::test_rms_norm_compute_kernel_config_ab[blackhole-s512-mesh_device0]
+1.05s setup    models/demos/llama31_8b_d_p/tests/unit/test_rms_norm_vs_ref.py::test_rms_norm_compute_kernel_config_ab[blackhole-s32-mesh_device0]
+0.76s call     models/demos/llama31_8b_d_p/tests/unit/test_rms_norm_vs_ref.py::test_rms_norm_vs_ref_random_weight[blackhole-s4096-mesh_device0]
+0.74s call     models/demos/llama31_8b_d_p/tests/unit/test_rms_norm_vs_ref.py::test_rms_norm_vs_ref_real_weight[blackhole-s4096-mesh_device0]
+0.07s call     models/demos/llama31_8b_d_p/tests/unit/test_rms_norm_vs_ref.py::test_rms_norm_compute_kernel_config_ab[blackhole-s512-mesh_device0]
+0.05s call     models/demos/llama31_8b_d_p/tests/unit/test_rms_norm_vs_ref.py::test_rms_norm_vs_ref_random_weight[blackhole-s512-mesh_device0]
+0.05s call     models/demos/llama31_8b_d_p/tests/unit/test_rms_norm_vs_ref.py::test_rms_norm_vs_ref_real_weight[blackhole-s512-mesh_device0]
+0.04s call     models/demos/llama31_8b_d_p/tests/unit/test_rms_norm_vs_ref.py::test_rms_norm_zero_gain_negative_control[blackhole-mesh_device0]
+0.03s call     models/demos/llama31_8b_d_p/tests/unit/test_rms_norm_vs_ref.py::test_rms_norm_vs_ref_random_weight[blackhole-s32-mesh_device0]
+0.02s call     models/demos/llama31_8b_d_p/tests/unit/test_rms_norm_vs_ref.py::test_rms_norm_compute_kernel_config_ab[blackhole-s32-mesh_device0]
+0.02s teardown models/demos/llama31_8b_d_p/tests/unit/test_rms_norm_vs_ref.py::test_rms_norm_compute_kernel_config_ab[blackhole-s32-mesh_device0]
+0.02s teardown models/demos/llama31_8b_d_p/tests/unit/test_rms_norm_vs_ref.py::test_rms_norm_vs_ref_real_weight[blackhole-s4096-mesh_device0]
+0.02s teardown models/demos/llama31_8b_d_p/tests/unit/test_rms_norm_vs_ref.py::test_rms_norm_vs_ref_random_weight[blackhole-s4096-mesh_device0]
+0.02s teardown models/demos/llama31_8b_d_p/tests/unit/test_rms_norm_vs_ref.py::test_rms_norm_vs_ref_real_weight[blackhole-s512-mesh_device0]
+0.02s teardown models/demos/llama31_8b_d_p/tests/unit/test_rms_norm_vs_ref.py::test_rms_norm_vs_ref_random_weight[blackhole-s512-mesh_device0]
+0.02s teardown models/demos/llama31_8b_d_p/tests/unit/test_rms_norm_vs_ref.py::test_rms_norm_compute_kernel_config_ab[blackhole-s512-mesh_device0]
+0.02s teardown models/demos/llama31_8b_d_p/tests/unit/test_rms_norm_vs_ref.py::test_rms_norm_vs_ref_random_weight[blackhole-s32-mesh_device0]
+=========================== short test summary info ============================
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_rms_norm_vs_ref.py::test_rms_norm_vs_ref_random_weight[blackhole-s32-mesh_device0]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_rms_norm_vs_ref.py::test_rms_norm_vs_ref_real_weight[blackhole-s32-mesh_device0]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_rms_norm_vs_ref.py::test_rms_norm_zero_gain_negative_control[blackhole-mesh_device0]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_rms_norm_vs_ref.py::test_rms_norm_compute_kernel_config_ab[blackhole-s32-mesh_device0]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_rms_norm_vs_ref.py::test_rms_norm_refuses_to_build_weightless[blackhole-mesh_device0]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_rms_norm_vs_ref.py::test_rms_norm_vs_ref_random_weight[blackhole-s512-mesh_device0]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_rms_norm_vs_ref.py::test_rms_norm_vs_ref_real_weight[blackhole-s512-mesh_device0]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_rms_norm_vs_ref.py::test_rms_norm_compute_kernel_config_ab[blackhole-s512-mesh_device0]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_rms_norm_vs_ref.py::test_rms_norm_vs_ref_random_weight[blackhole-s4096-mesh_device0]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_rms_norm_vs_ref.py::test_rms_norm_vs_ref_real_weight[blackhole-s4096-mesh_device0]
+============================= 10 passed in 13.03s ==============================
+nanobind: leaked 2 instances!
+ - leaked instance 0x7f6c40eca778 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x7f6c4106b408 of type "ttnn._ttnn.tensor.MemoryConfig"
+nanobind: leaked 20 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "Arch"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - ... skipped remainder
+nanobind: leaked 255 functions!
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "is_allocated"
+ - leaked function ""
+ - leaked function "buffer_aligned_page_size"
+ - leaked function ""
+ - leaked function "sfpu_nan"
+ - leaked function "deallocate"
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-09-04 19:57:39.846 | info     |    BuildKernels | JIT cache stats: 75/75 hits (100.0%) [75 cached, 147 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-09-04 19:57:39.846 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-09-04 19:57:40.058 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:550)
+2026-09-04 19:57:40.058 | info     |             UMD | Closing devices in cluster (cluster.cpp:1218)
+2026-09-04 19:57:47.780 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1227)
+2026-09-04 19:57:47.781 | info     |             UMD | Cluster destructor started. (cluster.cpp:933)
+2026-09-04 19:57:47.781 | info     |             UMD | Cluster destructor completed. (cluster.cpp:936)

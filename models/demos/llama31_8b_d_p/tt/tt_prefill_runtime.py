@@ -29,7 +29,7 @@ rather than trusting either prose.
 
 **What this runtime refuses, and why each refusal is load-bearing rather than a stub.** Recipe P7
 requires the unsupported single-card configuration to fail loudly instead of silently running a
-different attention core (`BRINGUP_RECIPE.md:1598-1624`):
+different attention core (`BRINGUP_RECIPE.md:1692-1697`):
 
 * **`tp != num_key_value_heads`** — refused at construction. The packed cache holds exactly one KV
   head per chip (`tt/attention/kv_cache.py`), so at any smaller TP the model emits more local KV
@@ -53,7 +53,7 @@ different attention core (`BRINGUP_RECIPE.md:1598-1624`):
   other three; P10 implemented them (`G-KV-TABLE`, `G-MOCK-MIG`), and `build_kv_chunk_table` still
   refuses a **pipeline-rank layer slice** rather than discarding the argument (`R-032`).
 
-**Deltas 1 and 2 are this file's, delta 3 is P8's** (`BRINGUP_RECIPE.md:1562-1569`):
+**Deltas 1 and 2 are this file's, delta 3 is P8's** (`BRINGUP_RECIPE.md:1647-1654`):
 
 | delta | what changes | where |
 |---|---|---|

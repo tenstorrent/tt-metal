@@ -21,7 +21,7 @@
    with no config versus 0.9999971 with `fp32_dest_acc_en=True`, against a 0.9999986 floor. The
    `G-RMS` gate A/Bs it in-suite so the claim is a number on this box, not a quotation.
 
-The `is_distributed` branch is **kept and defaults off** (`BRINGUP_RECIPE.md:1032-1033`). It is
+The `is_distributed` branch is **kept and defaults off** (`BRINGUP_RECIPE.md:1271-1274`). It is
 only reachable under residual scheme B, and `DEC-025` takes scheme A for this iteration, so the
 branch is dormant: a dormant branch is a claim about code that has never run, and it must not be
 counted as "the distributed norm works". Its raw `ttnn.all_gather` is the single sanctioned
@@ -111,7 +111,7 @@ class RMSNorm(nn.Module):
 
         `rms_norm_pre_all_gather` -> all-gather the `[1, 1, 32, 32*tp]` stats tensor ->
         `rms_norm_post_all_gather`. The all-gather is a raw `ttnn.all_gather` rather than
-        `MeshConfig.allgather`, which is the one exception `BRINGUP_RECIPE.md:921-923` grants and
+        `MeshConfig.allgather`, which is the one exception `BRINGUP_RECIPE.md:1156-1158` grants and
         `DEC-028` logs: this tensor needs a norm-specific width-sharded L1 memory config, and
         `ttnn.all_gather` is non-experimental, so it takes no ping-pong semaphores and carries none
         of the lifetime hazard the wrapper rule guards against.

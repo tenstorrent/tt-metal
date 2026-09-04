@@ -8,7 +8,7 @@
 Checks the trace `scripts/generate_golden_kv_cache.py` wrote is structurally sound and *carries
 content*, over every layer, and prints one row per layer. Exit 0 iff every check passes.
 
-**It scores nothing against the device.** `BRINGUP_RECIPE.md:1548-1549` describes this file as
+**It scores nothing against the device.** `BRINGUP_RECIPE.md:1595-1598` describes this file as
 comparing "a device KV read-back against the golden ... reporting min/mean PCC per layer", while
 `:1588-1590` — the `G-GOLDEN` gate that owns it — says it "imports no ttnn" and that "the
 device-vs-golden scoring lives in `G-CHUNK`". The two cannot both hold. This file follows the gate:
@@ -50,7 +50,7 @@ import torch
 from safetensors import safe_open
 
 REQUIRED_METADATA = ("token_ids", "n_tokens", "num_layers", "num_kv_heads", "head_dim", "dtype", "key_cache_shape")
-# The golden must be fp32 (`DEC-059`, recipe P7 step 1, `BRINGUP_RECIPE.md:1543`).
+# The golden must be fp32 (`DEC-059`, recipe P7 step 1, `BRINGUP_RECIPE.md:1587`).
 REQUIRED_DTYPE = torch.float32
 
 

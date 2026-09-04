@@ -1,0 +1,12 @@
+citations checked : 629
+  verified        : 629
+  mismatched      : 0
+  missing files   : 0
+doc refs scanned  : 1225
+  resolved        : 1225
+  unresolved      : 0
+raw artefacts cited: 146
+  present         : 146
+  missing         : 0
+recipe fingerprint: models/demos/common/bringup/BRINGUP_RECIPE.md (2235 lines)
+  MATCHES the version every prose ref was validated against

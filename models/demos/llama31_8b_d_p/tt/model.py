@@ -23,8 +23,8 @@ an explicit non-goal for this iteration.
    against exactly that tensor, so returning the pre-norm stream would force the gate to
    re-implement the norm on the host and score against a quantity no reference produces.
 2. **`n_layers` is a real parameter**, because `G-MODEL` runs at 2 and 4 layers before 32
-   (`BRINGUP_RECIPE.md:1420`), and `with_lm_head=True` is the **default** so the gate's
-   top-1 half is never conditional (`:1307-1308`).
+   (`BRINGUP_RECIPE.md:1559`), and `with_lm_head=True` is the **default** so the gate's
+   top-1 half is never conditional (`BRINGUP_RECIPE.md:1562`).
 3. **Two per-layer seams, not one** (`DEC-050`): `on_layer_complete(layer_idx)` is the template's
    migration/ack seam, kept verbatim for P10; `on_layer_output(layer_idx, hidden_states)` is the
    bring-up seam `G-MODEL`'s per-layer PCC curve needs. Overloading one callback with both jobs
@@ -87,7 +87,7 @@ class Model:
                 the path (`DEC-048`).
             max_seq_len: per-user KV capacity, passed to `AttentionConfig`.
             n_layers: layers to build. `None` = every layer in the config (32).
-            with_lm_head: build the LM head. Default `True` (`BRINGUP_RECIPE.md:1423`).
+            with_lm_head: build the LM head. Default `True` (`BRINGUP_RECIPE.md:1562`).
             sequence_parallel: the SP ring path (P8).
         """
         self.mesh_device = mesh_device

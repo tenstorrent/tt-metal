@@ -24,7 +24,7 @@ primitive: `allocate_kv_cache` builds the right geometry at the real `head_dim =
 * **Reference dtype policy:** fp32 reference throughout; only the tensor the device *stores* is
   quantised for the floor.
 * **Threshold:** PCC >= **0.99** at the cache dtype and **<= 3x its floor**
-  (`BRINGUP_RECIPE.md:1794`); the bf16 number is recorded too, which is the delta `DEC-021` owes.
+  (`BRINGUP_RECIPE.md:2071`); the bf16 number is recorded too, which is the delta `DEC-021` owes.
   Both should sit essentially **at** the floor, because the write is a copy, not arithmetic.
 * **Every layout, mapping and address claim is gated on bit-equality** (`torch.equal`,
   `rtol=atol=0`), never PCC — recipe §2.5: a *rotated* head->column map still scored PCC 0.99890.
@@ -60,7 +60,7 @@ from models.demos.llama31_8b_d_p.tt.attention.kv_cache import (
 from models.demos.llama31_8b_d_p.tt.config import derive_head_dim
 from models.demos.llama31_8b_d_p.tt.rope import llama3_freqs
 
-PCC_THRESHOLD = 0.99  # `BRINGUP_RECIPE.md:1794`
+PCC_THRESHOLD = 0.99  # `BRINGUP_RECIPE.md:2071`
 MAX_ERR_RATIO = 3.0
 WEIGHT_SCALE = 0.02
 
@@ -464,7 +464,7 @@ def test_kv_cache_geometry(mesh_device, reset_seeds):
     """The allocation's geometry, asserted exactly: shape, dtype, and the producer's block size.
 
     The `[1, 1, 32, head_dim]` DRAM shard is what lets P10 reuse the producer's existing packed-GQA
-    read-back instead of writing a fourth reader (`BRINGUP_RECIPE.md:1241-1243`), so the constant is
+    read-back instead of writing a fourth reader (`BRINGUP_RECIPE.md:1456-1458`), so the constant is
     part of the contract rather than an implementation detail.
     """
     hf = llama_config_dims()

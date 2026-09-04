@@ -232,7 +232,7 @@ class ModelArgs:
         The dtype and the mesh shape are both in the path because `ttnn.as_tensor` persists the
         **tilized, already-sharded, already-cast** tensor: a cache written at one mesh shape or one
         dtype is wrong at another, and the symptom is "one layer runs on garbage" three phases
-        later (`BRINGUP_RECIPE.md:934-937`, Appendix B). The template defaults the root to the
+        later (`BRINGUP_RECIPE.md:1073-1076`, Appendix B). The template defaults the root to the
         checkpoint directory (`models/demos/gpt_oss_d_p/tt/model_config.py:160`); this box's
         checkpoint already contains two foreign caches, so that default is refused rather than
         followed (`07_RISKS.md` R-003, `DEC-048`).

@@ -1,0 +1,75 @@
+# G-CLEAN item 6 (RE-RUN on the FINAL tree) — every environment-variable read, by AST scan
+# The first run (raw/G-CLEAN-item6_20260904T192142Z.log) predates item 5's docstring fix in
+# tests/test_factory.py, which added 5 lines and shifted PREFILL_FABRIC 228 -> 233 and
+# TT_MESH_GRAPH_DESC_PATH 253 -> 258. Both logs are kept: the first records what ran then,
+# this one is the evidence for the README's table, which describes the delivered tree.
+
+16 distinct variables, 31 sites
+
+## HF_MODEL
+   models/demos/llama31_8b_d_p/conftest.py:36  [os.getenv]
+   models/demos/llama31_8b_d_p/scripts/generate_golden_kv_cache.py:340  [os.environ.get]
+   models/demos/llama31_8b_d_p/tests/test_factory.py:57  [os.getenv]
+   models/demos/llama31_8b_d_p/tt/model_config.py:123  [os.getenv]
+   models/demos/llama31_8b_d_p/tt/runners/adapters/llama.py:341  [os.environ.get]
+## LLAMA_DELTA_PROBE
+   models/demos/llama31_8b_d_p/tt/layer.py:54  [os.environ.get via DELTA_PROBE_ENV_VAR]
+## PREFILL_CHUNKED
+   models/demos/llama31_8b_d_p/tests/galaxy_prefill_kv_pcc.py:353  [os.getenv]
+## PREFILL_CHUNK_SIZE
+   models/demos/llama31_8b_d_p/tests/galaxy_prefill_kv_pcc.py:354  [os.getenv]
+## PREFILL_FABRIC
+   models/demos/llama31_8b_d_p/tests/test_factory.py:233  [os.getenv]
+## PREFILL_HF_MODEL
+   models/demos/llama31_8b_d_p/tt/runners/adapters/llama.py:196  [os.environ.get]
+## PREFILL_KV_PCC_MIN_K
+   models/demos/llama31_8b_d_p/tests/galaxy_prefill_kv_pcc.py:526  [os.environ.get]
+## PREFILL_KV_PCC_MIN_V
+   models/demos/llama31_8b_d_p/tests/galaxy_prefill_kv_pcc.py:527  [os.environ.get]
+## PREFILL_MODEL
+   models/demos/llama31_8b_d_p/tests/unit/test_kv_chunk_table.py:48  [os.environ.setdefault]
+## PREFILL_NUM_LAYERS
+   models/demos/llama31_8b_d_p/tests/galaxy_prefill_kv_pcc.py:356  [os.getenv]
+## PREFILL_RACE_ITERS
+   models/demos/llama31_8b_d_p/tests/galaxy_prefill_kv_pcc.py:355  [os.getenv]
+## PREFILL_TOPOLOGY
+   models/demos/llama31_8b_d_p/tests/test_factory.py:194  [os.getenv]
+## PREFILL_TRACE_DIR
+   models/demos/llama31_8b_d_p/scripts/generate_golden_kv_cache.py:344  [environ[] read]
+   models/demos/llama31_8b_d_p/scripts/generate_golden_kv_cache.py:344  [os.environ.get]
+   models/demos/llama31_8b_d_p/scripts/verify_golden_kv.py:243  [environ[] read]
+   models/demos/llama31_8b_d_p/scripts/verify_golden_kv.py:243  [os.environ.get]
+   models/demos/llama31_8b_d_p/tests/galaxy_prefill_kv_pcc.py:336  [os.environ.get]
+   models/demos/llama31_8b_d_p/tests/unit/test_attention_chunked_vs_ref.py:114  [os.getenv]
+   models/demos/llama31_8b_d_p/tests/unit/test_chunked_attention_ring.py:172  [environ[] read]
+   models/demos/llama31_8b_d_p/tests/unit/test_chunked_attention_ring.py:270  [environ[] read]
+   models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py:478  [os.getenv]
+   models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py:488  [environ[] read]
+## PREFILL_TTNN_CACHE
+   models/demos/llama31_8b_d_p/tt/runners/adapters/llama.py:241  [os.environ.get]
+## TT_CACHE_PATH
+   models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py:467  [os.getenv]
+   models/demos/llama31_8b_d_p/tt/model_config.py:240  [os.getenv]
+   models/demos/llama31_8b_d_p/tt/runners/adapters/llama.py:241  [os.environ.get]
+## TT_MESH_GRAPH_DESC_PATH
+   models/demos/llama31_8b_d_p/tests/test_factory.py:258  [os.getenv]
+
+UNRESOLVED name expressions: 0
+
+# All 16 in README.md's env-var table, and every 'Read at' line number re-checked:
+   HF_MODEL                   README rows: 1
+   TT_CACHE_PATH              README rows: 1
+   PREFILL_TRACE_DIR          README rows: 1
+   PREFILL_HF_MODEL           README rows: 1
+   PREFILL_TTNN_CACHE         README rows: 1
+   PREFILL_MODEL              README rows: 1
+   PREFILL_CHUNKED            README rows: 1
+   PREFILL_CHUNK_SIZE         README rows: 1
+   PREFILL_NUM_LAYERS         README rows: 1
+   PREFILL_RACE_ITERS         README rows: 1
+   PREFILL_KV_PCC_MIN_K       README rows: 1
+   PREFILL_KV_PCC_MIN_V       README rows: 1
+   PREFILL_TOPOLOGY           README rows: 1
+   PREFILL_FABRIC             README rows: 1
+   TT_MESH_GRAPH_DESC_PATH    README rows: 1
+   LLAMA_DELTA_PROBE          README rows: 1

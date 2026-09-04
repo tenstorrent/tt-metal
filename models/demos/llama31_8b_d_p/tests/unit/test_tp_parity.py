@@ -8,7 +8,7 @@
 model math but that the **TP collectives are exact**: the same module, the same weights, the same
 input, run at TP=1 and at TP∈{2,4,8}, must agree. Collectives are mathematically exact up to
 reduction order, so a large drop here is a **sharding bug, not precision**
-(`BRINGUP_RECIPE.md:1786-1795`).
+(`BRINGUP_RECIPE.md:1827-1829`).
 
 **Device-vs-device, not device-vs-torch**, and that is the point: comparing the two device runs
 removes the reference's own error from both sides, so the residual is entirely the sharding and the
@@ -21,7 +21,7 @@ collective. It is a strictly sharper instrument than either arm's PCC against to
 `get_default_num_links` returns **1** for any single-row mesh
 (`models/demos/gpt_oss_d_p/utils/general_utils.py:33`), so every `(1,N)` shape runs `num_links=1`
 and never touches the deployment link count; `(2,8)` is the cheapest shape that exercises 2 links
-(`BRINGUP_RECIPE.md:1724-1732`).
+(`BRINGUP_RECIPE.md:1766-1771`).
 
 **This gate holds two overlapping submeshes in one process, which is the machine-hanging landmine.**
 Every hand-out goes through `SubmeshPool`, which calls `parent.quiesce_devices()` on both sides of
@@ -31,7 +31,7 @@ API rather than merely remembered (`DEC-077`; `G-FABRIC-MATRIX` case
 
 ## The one deviation from the recipe's wording, and its reason
 
-`BRINGUP_RECIPE.md:1791-1793` says: "At SP > 1 the multi-device output is a token slice, so compare
+`BRINGUP_RECIPE.md:1832-1834` says: "At SP > 1 the multi-device output is a token slice, so compare
 it against the corresponding slice of the `(1,1)` output". **That is true only for the token-wise
 modules.** `RMSNorm` and `MLP` act on each token row independently, so a sequence-sharded input does
 produce exactly the corresponding slice — and comparing it that way is the direct proof of the
@@ -75,8 +75,8 @@ from models.demos.llama31_8b_d_p.tt.rope import build_prefill_rope, build_transf
 WEIGHT_DTYPE = ttnn.bfloat8_b  # `DEC-022`
 ACTIVATION_DTYPE = ttnn.bfloat16  # `DEC-022`
 
-PARITY_PCC_THRESHOLD = 0.999  # `BRINGUP_RECIPE.md:1786-1787`
-CONTROL_PCC_CEILING = 0.95  # `BRINGUP_RECIPE.md:1793-1794`
+PARITY_PCC_THRESHOLD = 0.999  # `BRINGUP_RECIPE.md:2082`
+CONTROL_PCC_CEILING = 0.95  # `BRINGUP_RECIPE.md:2082`
 
 SEQ_LEN = 128  # 128 / 4 rows = 32, so the SP shard stays tile-aligned at every shape
 SHAPES = [(1, 2), (1, 4), (1, 8), (2, 8), (4, 8)]

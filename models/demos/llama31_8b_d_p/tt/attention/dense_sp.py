@@ -7,7 +7,7 @@
 **HF anchor:** `transformers.models.llama.modeling_llama.LlamaAttention.forward`'s attention core,
 distributed: chunk *k*'s local queries attend the **whole** accumulated prefix `[0, logical_n)`,
 which at SP > 1 lives spread across the SP axis and in the cache rather than in the live tensors.
-This is **delta 3** (`BRINGUP_RECIPE.md:1562-1569`), the one the dense path refuses.
+This is **delta 3** (`BRINGUP_RECIPE.md:1650-1654`), the one the dense path refuses.
 
 **Template:** `models/demos/gpt_oss_d_p/tt/attention/dense_sp.py:41` `dense_sp_attention`, itself
 ported from `models/demos/minimax_m3/tt/attention/dense_sp.py`. Llama needs it **simpler** than

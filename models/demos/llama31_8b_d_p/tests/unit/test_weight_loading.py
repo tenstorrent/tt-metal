@@ -9,9 +9,9 @@ on random weights** — or, worse, on a correctly-shaped tensor that has been tr
 often. Every assertion here is **bit-exact** (`rtol = atol = 0`), never PCC: recipe §2.5 measured a
 completely wrong head→column map still scoring PCC 0.99890, and a transpose or a Meta swizzle
 applied twice is exactly that class of bug — it produces a plausible tensor, so correlation is the
-wrong instrument (`BRINGUP_RECIPE.md:1408-1409`).
+wrong instrument (`BRINGUP_RECIPE.md:1547-1548`).
 
-What it proves, in the recipe's own three parts (`BRINGUP_RECIPE.md:1404-1411`):
+What it proves, in the recipe's own three parts (`BRINGUP_RECIPE.md:1543-1550`):
 
 * **(a) no missing and no silently-unused keys.** The checkpoint's key set — read from
   `model.safetensors.index.json`, so all 32 layers are covered without loading 16 GB — must equal
@@ -19,7 +19,7 @@ What it proves, in the recipe's own three parts (`BRINGUP_RECIPE.md:1404-1411`):
 * **(b) a cache-only rebuild is bit-identical.** Build once with the checkpoint and a
   `tensor_cache_path`; build again with an **empty** `state_dict` and the same path; every device
   tensor must be SHA-256-identical. The runner depends on this branch
-  (`BRINGUP_RECIPE.md:929-937`).
+  (`BRINGUP_RECIPE.md:1068-1076`).
 * **(c) every device weight is bit-exact against the checkpoint** *through* the loader's transpose,
   the Q/K Meta swizzle and the dtype ladder. Not a sample: all twelve tensors of a one-layer model,
   because a per-tensor check is also the honest proof that every key was **consumed** — an ignored
@@ -447,7 +447,7 @@ def test_state_dict_prefixes_match_the_checkpoint():
 # (d) `G-WEIGHTS`, the P8 extension: the cache-only rebuild **at TP=8**, where the cache is
 # actually sharded.
 #
-# `BRINGUP_RECIPE.md:1808-1810`: "`ttnn.as_tensor` caches the already-sharded tensor, so a stale or
+# `BRINGUP_RECIPE.md:1853-1856`: "`ttnn.as_tensor` caches the already-sharded tensor, so a stale or
 # wrong-shape cache presents as 'one layer runs on garbage' and is first visible here, not at
 # `G-WEIGHTS`". The `(1,1)` arm above cannot see it for two reasons, both structural:
 #

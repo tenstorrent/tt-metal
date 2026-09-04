@@ -1,7 +1,8 @@
 # 07 — Risks and open questions
 
-The register and the sections must agree. Re-checked at every phase boundary (last: end of P8,
-2026-09-04).
+The register and the sections must agree. Re-checked at every phase boundary (last: **end of P9**,
+2026-09-04 — the header said "end of P8" through the whole of P10, which `G-CLEAN` item 7's sweep
+of the logs is what caught).
 
 | Id | Severity | Phase found | Summary | Status | Owner |
 |---|---|---|---|---|---|
@@ -57,6 +58,12 @@ The register and the sections must agree. Re-checked at every phase boundary (la
 | R-050 | low | P10 | The runtime ignores `params.num_links` (`prefill_runner.py:489`) and derives its own from `get_default_num_links`; the two agree at `(4,8)` on Blackhole and diverge on Wormhole and on any single-row mesh | open — no model in this tree consumes the engine's field, so the wart is the field's existence. A `build_runtime` assertion would catch a divergence but would fire on an otherwise-correct Wormhole run | `common/prefill` maintainer; P9 to carry the note |
 | R-051 | low | P10 | The runner defaults `PREFILL_NUM_USERS` to **2** and the producer to **1**, for a value the engine's own doc lists among those that must agree | open — every P10 gate set it explicitly, so no measurement is affected; unset, the runner silently allocates and tables a 2-user cache the producer drives one slot of | `common/prefill` maintainer; P9 to note it must be set |
 | R-052 | low | P10 | `build_kv_chunk_table` has never run at the deployment capacity: 2,097,152 entries vs the 45,056 `G-MOCK-MIG` built, and `R-049` doubles it | open — a cost, not a correctness gap (`G-KV-TABLE` gates the arithmetic bit-exactly at two periods). One timing run closes it | perf phase |
+| R-053 | **high** | P9 | **247 of the package's 317 prose `BRINGUP_RECIPE.md:N` citations had silently drifted**, because the kit's recipe grew 1896 -> 2235 lines *during* the run and pass 2 only range-checks a prose ref | **fixed for the enumerated set** — every one re-pointed mechanically (`DEC-120`) and the recipe now carries a fingerprint pass, so the next drift is loud. What is **not** quantified is the separate class of refs that were wrong *when written* | kit maintainer (pass 2's design); P9 fixed the instance |
+| R-054 | medium | P9 | **431 abbreviated `` `:NNN` `` continuation refs are invisible to both verifier passes** — the regex needs a filename, so a bare colon-ref is never resolved, never range-checked and never counted | open — the shorthand is legitimate and the logs use it heavily (80 in `05_DECISIONS.md` alone); resolving it needs the scanner to carry the last full citation as state | kit maintainer (`examples/verify_citations.py`) |
+| R-055 | medium | P9 | The reference prefill adapter this package mirrors **violates the import-lightness its own contract doc requires**: `models/demos/gpt_oss_d_p/tt/runners/adapters/gpt_oss.py:25` imports `models.common.utility_functions` at module scope, pulling `torch` **and** `ttnn` (2488 ms measured alone) | open — **filed nothing** (`HUMAN GATE H7`). It costs every H2D producer and the DeepSeek conftest a full device-stack import; this package's own adapter is 64.6x cheaper and gated | `gpt_oss_d_p` owner |
+| R-056 | medium | P9 | **`HUMAN GATE H6` ran on its default.** "Which uncovered surface is acceptable to ship?" — no human was available to answer, so the default applied: list it, ship nothing on it | open by construction — the uncovered surfaces are enumerated in the entry and in `README.md`'s "Not implemented"; none of them is signed off | the person who owns shipping this |
+| R-057 | low | P9 | **`HUMAN GATE H7` ran on its default.** "Who owns the bugs found *outside* this package?" — default: log them, file nothing. **20 defects outside the package are logged and 0 issues are filed** | open by construction — the entry lists all 20 with their owners | the named component owners |
+| R-058 | low | P9 | The P10 ledger records **1169** doc refs; the committed tree reproduces **1168**, because the kit's recipe was edited again between P10's final citation pass and the commit that carried it | closed by measurement — P9 re-ran all three passes on the committed tree and records the numbers it actually got. The lesson is `R-017`'s: a gate number measured against an uncommitted dependency does not reproduce | kit maintainer |
 
 ---
 
@@ -104,7 +111,7 @@ Owner: P6.
 **Fact.** `DEC-004` defers the values; the constraints are recorded in `00_MODEL_CARD.md` §4:
 `CHUNK_SIZE % (SP*32) == 0` → `% 128` at SP=4, `MAX_SEQ_LEN % CHUNK_SIZE == 0`, and
 `MAX_SEQ_LEN > CHUNK_SIZE` so the cache-read path is actually exercised
-(`models/demos/common/prefill/docs/PREFILL_MIGRATION_TESTING.md:62`; `BRINGUP_RECIPE.md:1834`).
+(`models/demos/common/prefill/docs/PREFILL_MIGRATION_TESTING.md:62`; `BRINGUP_RECIPE.md:1861`).
 **Impact.** None before P7. If P7 picks values violating the arithmetic the symptom is a chunk-write
 assert, which is loud.
 **Status.** open, deferred deliberately.
@@ -228,7 +235,7 @@ B is ever taken.
 `G-OUTLINE` and `G-CCL-PLAN` were never in a commit. The gate ledger cites them by filename
 throughout.
 **Impact.** The recipe's central evidence rule — "A gate with no raw log did not happen"
-(`BRINGUP_RECIPE.md:199`) — and Appendix C item 2 (`BRINGUP_RECIPE.md:1840-1842`) were both
+(`BRINGUP_RECIPE.md:199`) — and Appendix C item 2 (`BRINGUP_RECIPE.md:1867-1869`) were both
 unsatisfiable by construction: on a fresh clone the ledger would cite 15 files that do not exist.
 Nothing about the *numbers* is affected; what was at risk is their auditability, which is the
 stated point of the whole logging protocol. The logs were never lost here only because the session
@@ -242,7 +249,7 @@ trackable.
 committing without saying how), and `scripts/new_bringup.sh` should scaffold that file alongside
 `bringup_log/raw/`. Owner: kit maintainer.
 
-**Re-checked at the end of P5.6: the kit half is closed.** `BRINGUP_RECIPE.md:197-215` now carries
+**Re-checked at the end of P5.6: the kit half is closed.** `BRINGUP_RECIPE.md:260-273` now carries
 the whole thing — the blanket `*.log` diagnosis, the exact `!*.log` file to scaffold, the
 "verify `git ls-files <pkg>/bringup_log/raw/ | wc -l` is non-zero" step, and the note that
 `scripts/new_bringup.sh` writes it for you. The in-package `.gitignore` from `DEC-037` is what that
@@ -250,7 +257,7 @@ guidance asks for, so nothing in the package changes. What remains open is only 
 `*.log` rule itself, which is a repo-wide decision and not this package's to make.
 
 ## R-013 — `bfloat8_b` is exact only to 128, so §2.5's "<= 256" probe rule is wrong for the KV cache
-**Fact.** `BRINGUP_RECIPE.md:1260-1262` and §2.5 (`:477-482`) both give the ceiling for an
+**Fact.** `BRINGUP_RECIPE.md:1475-1477` and §2.5 (`:477-482`) both give the ceiling for an
 integer-valued probe payload as **256**, justified by `bfloat16`. Measured on this box, quantising
 the integers 0..511 through `quantize_like_device` with each 16-lane block already held **constant**
 (the ideal case for a shared exponent): the first inexact integer is **129** at `bfloat8_b` and
@@ -289,7 +296,7 @@ also have saved the time.
 
 ## R-015 — `G-ATTN`'s 8x block budget contradicts §2.3's own measurement of the fused SDPA kernel
 **Fact.** Appendix A sets `G-ATTN` at "block <= 8x" its noise floor
-(`BRINGUP_RECIPE.md:1793`). §2.3 (`:396-412`) separately measures
+(`BRINGUP_RECIPE.md:2070`). §2.3 (`:396-412`) separately measures
 `ttnn.transformer.scaled_dot_product_attention` **alone** at **71x** its modelled floor and states
 that the floor model "does not describe a fused kernel's interior". Both cannot hold: measured here,
 the block sits at **2.17-2.22x** at bf8_b and **11.82-12.32x** at bf16, and the excess is
@@ -358,14 +365,14 @@ individually unverified. `verify_citations.py` reports all of them `resolved`, b
 **range**-checks a doc ref (`R-016`) and a longer file is still long enough.
 
 Two of them can be dated precisely: `tests/unit/test_attention_vs_ref.py` cites
-`BRINGUP_RECIPE.md:1793` for `G-ATTN`'s Appendix A threshold, and line 1770 was **already blank** in
+`BRINGUP_RECIPE.md:2070` for `G-ATTN`'s Appendix A threshold, and line 1770 was **already blank** in
 P5's own committed tree — while the same commit's `CITES` entry for that row said `1265`/`1818`.
 So the prose refs were interpolated at write time (exactly what `R-016` records) *and* then shifted
 by the later kit edit.
 **Impact.** Bounded but corrosive: no number and no verdict changes, and every load-bearing claim is
 also in `CITES`. What is damaged is the thing §1.6 says an unverified citation costs — "worse than
 no citation, because it reads as authoritative". A reader following
-`BRINGUP_RECIPE.md:1259-1274` from `tt/layer.py` lands 116 lines from the paragraph being cited.
+`BRINGUP_RECIPE.md:1303-1318` from `tt/layer.py` lands 116 lines from the paragraph being cited.
 **Status.** open. P6's own refs are correct and **all** content-checked: 427 `CITES` entries, up
 from 359, including one per recipe reference P6 makes. P5's and earlier phases' prose refs are
 untouched — rewriting a gated phase's files to fix a comment would put its raw-log evidence out of
@@ -387,7 +394,7 @@ Owner: kit maintainer; P9 for the in-package sweep.
 **Fact.** Measured in P6.1 (`DEC-058`), three arms of the same norm-swap control:
 `randn` input + random weights -> **0.99864**; `randn` input + **real** layer-0 weights ->
 **0.99993**; **real `embed_tokens` rows** + real layer-0 weights -> **0.66830**. The mechanism is
-the recipe's own (`BRINGUP_RECIPE.md:1388-1389`): a perturbation of `s` in `y = r + s` is attenuated
+the recipe's own (`BRINGUP_RECIPE.md:1527-1528`): a perturbation of `s` in `y = r + s` is attenuated
 by `||y||/||s||`. A norm removes its input's scale, so a sublayer's output magnitude is nearly
 independent of the input's while the residual's *is* the input's — and `randn` is ~100x larger than
 what layer 0 actually receives (`embed_tokens` rows have an RMS of **0.0106**). The measured
@@ -428,7 +435,7 @@ silently non-causal) — an HF default that produces a plausible wrong answer. O
 maintainer.
 
 ## R-020 — `G-MODEL`'s absolute PCC threshold is scoped to reduced depth by the phase text and to all depths by Appendix A
-**Fact.** `BRINGUP_RECIPE.md:1420-1422` attaches "hidden-state PCC >= 0.999, <= 8x the floor, and
+**Fact.** `BRINGUP_RECIPE.md:1559-1561` attaches "hidden-state PCC >= 0.999, <= 8x the floor, and
 top-1 token agreement = 100%" to the **reduced layer count** runs (`n_layers=2`, then 4), and
 `:1424-1425` states the full 32-layer run's own gate as "record the per-layer hidden-state PCC curve
 into `bringup_log/raw/` and gate the **step** between consecutive layers at **<= 4x** from layer 3
@@ -522,7 +529,7 @@ complete floor rather than on an attributed residual.
 
 ## R-023 — Delta 3 cannot run in P7, and the runtime refuses it rather than approximating it
 **Fact.** A chunked prefill differs from a one-shot in exactly three places
-(`BRINGUP_RECIPE.md:1562`): the indexed RoPE and its per-chunk offset (delta 1), the advancing
+(`BRINGUP_RECIPE.md:1647`): the indexed RoPE and its per-chunk offset (delta 1), the advancing
 cache-write offset (delta 2), and **chunk *k*'s queries attending the prefix read back out of the
 cache** (delta 3). P7 owns the first two and measured both exactly. Delta 3 needs the ring-joint
 SDPA over the block-cyclic cache (`tt/attention/dense_sp.py`, which `raise`s) at TP=8 on the `(4,8)`
@@ -531,7 +538,7 @@ mesh — neither of which P7 has.
 producer, and it proves nothing about whether a chunk-2 query attends chunks 0-1 correctly. The
 consequence is bounded and named: after `G-CHUNK`, the KV cache written by a multi-chunk prefill is
 verified; the *attention output* of a multi-chunk prefill is not verified at all.
-**Why it is not weakened into `G-CHUNK`.** `BRINGUP_RECIPE.md:1656-1660` forbids both available
+**Why it is not weakened into `G-CHUNK`.** `BRINGUP_RECIPE.md:1683-1687` forbids both available
 shortcuts: "Do **not** weaken `G-CHUNK` to cover it, do not move P7 to a multi-device mesh to make
 it run". The third option — running a cache-backed chunk on the dense path anyway — is the dangerous
 one, because plain `is_causal` SDPA assumes Q row 0 aligns with K row 0 and so produces a mask off
@@ -579,9 +586,9 @@ exists, `DEC-050`). The two remaining hooks stay refusals: multi-rank pipeline p
 trace/2CQ are explicit non-goals (`BRINGUP_RECIPE.md:16`). Owner: P10.
 
 ## R-025 — The recipe describes `verify_golden_kv.py` two incompatible ways, six lines apart
-**Fact, quoted.** `BRINGUP_RECIPE.md:1548-1549`: "`scripts/verify_golden_kv.py` — compare a device KV
+**Fact, quoted.** `BRINGUP_RECIPE.md:1595-1598`: "`scripts/verify_golden_kv.py` — compare a device KV
 read-back against the golden, per layer, reporting min/mean PCC per layer for K and V."
-`BRINGUP_RECIPE.md:1588-1590`: "**Gate `G-GOLDEN`:** `verify_golden_kv.py` runs clean over all 32
+`BRINGUP_RECIPE.md:1682-1684`: "**Gate `G-GOLDEN`:** `verify_golden_kv.py` runs clean over all 32
 layers and prints a per-layer table ... **It imports no ttnn** — the device-vs-golden scoring lives
 in `G-CHUNK`." A file that compares a device read-back must import ttnn.
 **Impact.** It decides what the file *is*, and therefore what `G-GOLDEN` measures. Followed
@@ -617,7 +624,7 @@ exercise the plumbing without the reference. The second is not a substitute for 
 Owner: P8/P10, which score against the same trace and will feel it first.
 
 ## R-027 — The recipe's delta-1 control quotes a V number no correct implementation can produce
-**Fact.** `BRINGUP_RECIPE.md:1585-1586` specifies one negative control for `G-CHUNK`: "rope every
+**Fact.** `BRINGUP_RECIPE.md:1674-1675` specifies one negative control for `G-CHUNK`: "rope every
 chunk at `kv_actual_global = 0` and the mutual PCC must collapse (measured 0.706 / 0.655)". Two
 numbers implies two quantities. But `G-CHUNK`'s decomposition — mandated four lines earlier
 (`:1571-1574`, "feed **the same hidden states** ... to both KV producers") — feeds both producers
@@ -637,7 +644,7 @@ unchanged, turning the "V is never rotated" invariant into a check.
 a second control for delta 2. Owner: kit maintainer.
 
 ## R-028 — P7 step 4's named template is the delta-3 test P7 is forbidden to run
-**Fact.** `BRINGUP_RECIPE.md:1559-1560` (P7 step 4) says: "`tests/unit/test_attention_chunked_vs_ref.py`
+**Fact.** `BRINGUP_RECIPE.md:1641-1642` (P7 step 4) says: "`tests/unit/test_attention_chunked_vs_ref.py`
 — the chunked-vs-one-shot equivalence test (template:
 `models/demos/minimax_m3/tests/unit/test_attention_chunked_vs_ref.py`)". That template runs chunk 0
 then chunk 1 **with `cached_len=chunk`**, i.e. it is exactly the cache-read path — delta 3 — on an
@@ -656,7 +663,7 @@ comparison the gate text specifies. Owner: kit maintainer.
 
 ## R-029 — `TtPrefillRuntime` has never been instantiated
 **Fact.** `G-RUNTIME` is a static gate — Appendix A gives it device "none"
-(`BRINGUP_RECIPE.md:1977`) — and the runtime refuses construction unless
+(`BRINGUP_RECIPE.md:2024`) — and the runtime refuses construction unless
 `tp == num_key_value_heads == 8`, which no `(1,1)` mesh satisfies. So `__init__` past its two
 refusals, `_build_indexed_rope`, `make_chunk_input`, `compile` past its rank check, and the whole
 happy path of `prefill_chunk` have **not executed**.
@@ -733,7 +740,7 @@ direction from src (M0, D0) to dst (M0, D3)", D0 -> D3 being the 4-device SP rin
 **Impact.** The entire phase runs on `FABRIC_1D` + `Topology.Linear`. `ttnn.Topology.Ring`
 *collectives* do work on `FABRIC_1D` (bit-exact at every P8 shape and both axes), so the choice is
 driven by the ring SDPA alone.
-**What the recipe says, and it is wrong here.** `BRINGUP_RECIPE.md:82-84`: "The Ring topology P8
+**What the recipe says, and it is wrong here.** `BRINGUP_RECIPE.md:80-90`: "The Ring topology P8
 needs the torus descriptor; a Ring topology on a plain `FABRIC_1D` fabric **hangs** rather than
 erroring." On this machine the torus descriptor is unusable and Ring-on-`FABRIC_1D` neither hangs nor
 errors — it returns bit-exact results.
@@ -769,7 +776,7 @@ construction.
 **How to close.** Two galaxies. **Owner:** user / P10.
 
 ## R-033 — The recipe's named mesh descriptors are multi-galaxy
-**Fact.** `BRINGUP_RECIPE.md:80-83` names `bh_galaxy_sp4_torus_xy_graph_descriptor.textproto` (4
+**Fact.** `BRINGUP_RECIPE.md:80-90` names `bh_galaxy_sp4_torus_xy_graph_descriptor.textproto` (4
 meshes of `[32,4]`, `host_topology [4,1]` — a 512-device super-pod) and
 `32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto` (`[32,4]`, `host_topology [4,1]` — a
 128-device quad galaxy) as the descriptors for a machine it describes as "Blackhole Galaxy, 32
@@ -895,7 +902,7 @@ at `T092212Z` / `T102256Z` and a `G-CITE` pair at `T092334Z` / `T102606Z`.
 both key on `path:line`, so a bare a bare backticked `raw/`-relative log name reference — the ledger's own evidence citation
 format — was scanned by neither, and four previous doc gates passed clean over these two lines.
 **Impact.** Two claims in the P5.4-P5.6 status block have no retrievable evidence. The recipe's rule
-is unambiguous: "A gate with no raw log did not happen" (`BRINGUP_RECIPE.md:199`). The *gates*
+is unambiguous: "A gate with no raw log did not happen" (`BRINGUP_RECIPE.md:221`). The *gates*
 themselves (`G-MLP`, `G-ATTN`, `G-KV`) each cite their own logs and those exist — what is
 unevidenced is the **per-phase regression count** and the **citation count** at that point, not a
 numeric gate.
@@ -917,7 +924,7 @@ the old line does not. **Owner:** P9.
   (`models/demos/common/prefill/docs/PREFILL_MIGRATION_TESTING.md:456-461`, `:587-596`). None is in
   this repository. `HUMAN GATE H4` ("ask whose bug a red gate would be") answers *the engine's*, and
   the doc agrees: the gate "verifies the *engine's* model-agnostic byte copy, not this model".
-- **What stays unproven, itemised** — this is the residual gap `BRINGUP_RECIPE.md:1968-1975` requires
+- **What stays unproven, itemised** — this is the residual gap `BRINGUP_RECIPE.md:1991-1996` requires
   a scoped-out gate to enumerate:
   1. the `MigrationLayerClient` attach and the `WORKER_READY` handshake
      (`models/demos/common/prefill/runners/migration.py:270-280`); this package calls neither — the
@@ -1113,3 +1120,150 @@ the old line does not. **Owner:** P9.
   log lines. No PCC is possible there (no golden that deep — `R-026`), so it is a timing measurement
   only, which is why it was not made a gate.
 - **Owner:** perf phase.
+
+## R-053 — 247 of 317 prose recipe citations had drifted, and every one reported `resolved`
+- **Severity:** high — not because any of them changes a number, but because `R-016` is right that
+  an unverified `path:line` reads as authoritative. A reader following one landed on unrelated text.
+- **Phase opened:** P9. **Status:** **fixed for the enumerated set**; the underlying pass-2 design
+  is unchanged and the "wrong when written" class is unquantified.
+- **What it is.** The kit's `BRINGUP_RECIPE.md` grew **1896 → 2235 lines** across the run: §2 gained
+  §2.2.1, §2.2.2, §2.2.3, §2.2.3a, §2.2.4 and §2.3.1, §0.3 gained the HUMAN GATES table, and P7/P8
+  gained corrections. Every insertion pushed everything after it down, so a citation written in P0-P5
+  points ~235 lines short of its target today. `verify_citations.py` pass 2 only **range**-checks a
+  prose ref, so all 247 reported `resolved`.
+- **How it was measured, mechanically rather than by reading.** For each ref, `git blame` on the
+  citing line gives the commit whose tree the author was reading; `git show <commit>:BRINGUP_RECIPE.md`
+  gives that version; `difflib.SequenceMatcher` over the two line lists maps the cited line to HEAD.
+  A move was applied **only** when every line of the range mapped through an `equal` block *and* the
+  old text was byte-identical to the new text at the mapped position — so the re-point is a fact
+  about where the same characters now live, not an inference. 205 moved that way; 42 more were
+  resolved by hand from a quoted fragment; 70 were already correct. Four of the hand fixes landed
+  exactly on lines `CITES` independently content-checks (2070, 1674, 90, 1429), which is the
+  corroboration that the method is right.
+- **The second class, and it is the one that matters.** Byte-identity proves a ref did not *drift*.
+  It cannot prove the ref was right when written, and `R-016` records that an earlier phase found
+  **21 of its own citations wrong-but-in-range**, seventeen of them interpolated from a
+  table-of-contents grep. So P9 sampled the population *after* the mechanical pass: **5 of 15**
+  randomly drawn refs were still wrong (33%), every one of them wrong at origin rather than drifted.
+  `test_tp_parity.py`'s `PARITY_PCC_THRESHOLD` was typical — it pointed at the ring-SDPA passage
+  rather than at `G-TP-PARITY`'s Appendix A row, and byte-identity had faithfully relocated the
+  wrong target.
+- **What P9 then did, and the residual, both measured.**
+  - **The code surface — 125 refs in `tt/`, `tests/`, `scripts/`, `README.md` — was read one by
+    one** and every wrong target re-derived by grepping the recipe for the phrase the citing prose
+    quotes or paraphrases. **57 were re-pointed.** A fresh random sample of 12 afterwards is
+    **12/12 correct**. This is the surface an engineer reads, so it is the one that got the hand
+    pass.
+  - **The four log files — 202 refs — got the mechanical pass only.** A random sample of 14
+    afterwards found **3 wrong or imprecise (21%)**, all three fixed. So the log files' residual
+    error rate is of order **20%, measured**, and roughly 40 refs there are still expected to be
+    wrong. That is stated rather than fixed, because closing it means reading 202 references and
+    this session had one device window left.
+- **How to close.** Two changes to the kit's verifier, both small: make pass 2 content-check by
+  storing a needle per prose ref (which is what `CITES` does, and what P9 did for the 20 lines it
+  re-pointed *to*), and keep the fingerprint pass so a recipe edit names the problem instead of
+  hiding it.
+- **Owner:** kit maintainer for the verifier's design; P9 fixed this package's instance.
+
+## R-054 — 431 abbreviated `` `:NNN` `` refs are invisible to both verifier passes
+- **Severity:** medium.
+- **Phase opened:** P9. **Status:** open.
+- **What it is.** `_REF` in `scripts/verify_citations.py` requires a filename before the colon, so
+  the continuation form every log uses — a full citation followed by `` `:477` `` for another line of
+  the same file — matches nothing. It is not resolved, not range-checked, and not counted in the
+  1168. Measured: **431** occurrences, 80 in `05_DECISIONS.md`, 39 in `07_RISKS.md`, 38 in
+  `03_OUTLINE.md`, 32 in `06_GATES.md`, and 11 in `tt/tt_prefill_runtime.py` alone.
+- **Why it matters.** These are not decorative. `prefill_runner.py:364` followed by `:477` and `:626`
+  is how the whole P10 contract mapping is written, and none of those three continuation refs is
+  checked by anything.
+- **How to close.** The scanner needs one piece of state: the last fully-qualified path seen in the
+  same paragraph, applied to a bare `:NNN`. That is ~10 lines, and it would have to report an
+  ambiguous case (a bare ref with no preceding full citation) rather than guess.
+- **Owner:** kit maintainer (`models/demos/common/bringup/examples/verify_citations.py`).
+
+## R-055 — the reference adapter breaks the import-lightness its own contract requires
+- **Severity:** medium, and it is outside this package.
+- **Phase opened:** P9 (`G-CLEAN` item 8). **Status:** open — **filed nothing** (`HUMAN GATE H7`).
+- **What it is.** `ADDING_A_PREFILL_MODEL.md:252` requires an adapter's module import to stay cheap,
+  because the H2D producer (`models/demos/common/prefill/runners/prefill_producer.py:89`) and the
+  DeepSeek test conftest (`models/demos/deepseek_v3_d_p/tests/conftest.py:33`) import **every**
+  registered adapter eagerly. Measured in five cold subprocesses each:
+  `models/demos/gpt_oss_d_p/tt/runners/adapters/gpt_oss.py` takes **2441.6 ms** and leaves `torch`
+  and `ttnn` in `sys.modules`; this package's adapter takes **37.8 ms** with nothing heavy — a ratio
+  of **0.0155**, i.e. the template is **64.6x** more expensive.
+- **Where it comes from.** Entirely one line: `gpt_oss.py:25` imports
+  `models.common.utility_functions`, which alone measures **2487.9 ms** and pulls both. The
+  template's other module-scope import,
+  `models/demos/deepseek_v3_d_p/reference/gpt_oss_120b_config.py`, costs **0.6 ms** and nothing
+  heavy — worth stating because the P10 hand-over note assumed the reference config was part of the
+  cost.
+- **Why P9 did not fix it.** It is another package's file and this session's scope is
+  `models/demos/llama31_8b_d_p/`. The fix is one line: move `is_blackhole` inside the method.
+- **How this package is protected.** `tests/unit/test_prefill_adapter.py` asserts the ratio in-suite
+  and uses the template's heavy import as its **control**: if the template is ever fixed, the test
+  fails and says so, rather than silently losing its discriminator.
+- **Owner:** the `gpt_oss_d_p` owner.
+
+## R-056 — HUMAN GATE H6 ran on its default: nothing is signed off
+- **Severity:** medium — a process gap, not a defect.
+- **Phase opened:** P9. **Status:** open by construction.
+- **The question, verbatim** (`BRINGUP_RECIPE.md:195`): *"Which uncovered surface is acceptable to
+  ship?"* Default if unanswered: *"list it, ship nothing on it."* No human was available in this
+  session, so the default applied.
+- **The uncovered surfaces, listed.** Each is already its own entry; this row exists so a reader
+  does not have to assemble the list: the deployment KV capacity has no PCC (`R-039`, `R-026`);
+  `Topology.Ring` end to end is unmeasurable here (`R-030`, `R-031`); multi-rank / multi-galaxy is
+  scoped out and refuses (`R-032`); the engine's real migration byte copy is unverified (`R-043`);
+  slot cross-talk is invisible because every gate ran one prompt (`R-044`); the address table has
+  never been built at deployment capacity (`R-052`); `G-RACE`'s hundreds of collectives are not
+  hundreds of thousands (`R-038`).
+- **How to close.** A person decides, per surface, ship or block. Nothing here should be read as a
+  sign-off.
+- **Owner:** whoever owns shipping this.
+
+## R-057 — HUMAN GATE H7 ran on its default: 20 external defects logged, 0 filed
+- **Severity:** low for this package, real for the tree.
+- **Phase opened:** P9. **Status:** open by construction.
+- **The question, verbatim** (`BRINGUP_RECIPE.md:196`): *"Who owns the bugs found outside this
+  package?"* Default if unanswered: *"log them; file nothing."* That default applied at every phase,
+  so this bring-up found and diagnosed the following and filed nothing:
+
+| # | Defect | Where | Entry |
+|---|---|---|---|
+| 1 | `getattr(cfg, "rope_theta", DEFAULT)` silently substitutes a wrong theta on transformers 5.x | `models/demos/gpt_oss_d_p/tt/model_config.py:76`, `tt_prefill_runtime.py:185` | `R-005` |
+| 2 | `compute_llama3_parameters` hard-codes low/high frequency factors instead of reading the config | `models/tt_transformers/tt/common.py:407-408` | `R-010` |
+| 3 | The dormant distributed-RMSNorm branch passes `stats` twice and raises `TypeError` if enabled | `models/demos/gpt_oss_d_p/tt/rms_norm.py:82`, `:89` | `R-011` |
+| 4 | The repo root's blanket `*.log` silently untracks every gate's evidence | repo `.gitignore` | `R-012` |
+| 5 | `expect_error`'s `message` is a **regex** while its docstring describes a substring | root `conftest.py:948` | `R-014` |
+| 6 | `reset_global_semaphores` skips the barrier and ring-attention semaphores (upstream TODO) | `models/demos/gpt_oss_d_p/tt/ccl.py:132` | `DEC-028` |
+| 7 | The cache-read path re-derives the block-cyclic map instead of sharing one | `models/demos/gpt_oss_d_p` | `R-034` |
+| 8 | `meta_head_index` is duplicated across packages | — | `R-035` |
+| 9 | The shared packed-GQA reader hard-codes one model's DRAM block constant | `prefill_producer.py` | `R-047` |
+| 10 | An exception in the engine's request loop leaves the runner unkillable by SIGTERM | `prefill_runner.py` | `R-048` |
+| 11 | The engine builds and publishes the mock-migration table **twice** | `prefill_runner.py` | `R-049` |
+| 12 | The runtime's `params.num_links` is ignored by every model in the tree; the field's purpose is unclear | `prefill_runner.py:489` | `R-050` |
+| 13 | Runner and producer default `PREFILL_NUM_USERS` differently (2 vs 1) for a "must agree" value | `prefill_runner.py:77`, `prefill_producer.py:361` | `R-051` |
+| 14 | Gate 1's documentation omits a hook the gate cannot run without | `PREFILL_MIGRATION_TESTING.md` | `R-046` |
+| 15 | `ADDING_A_PREFILL_MODEL.md` §2's `prefill_chunk` signature omits `d2h_service` and `metadata_msg` | the doc | `DEC-108` |
+| 16 | The reference adapter pulls `torch` + `ttnn` at module scope, breaking its own contract | `gpt_oss.py:25` | `R-055` |
+| 17 | The kit's `verify_citations.py` pass 2 range-checks instead of content-checking | kit | `R-016`, `R-053` |
+| 18 | The kit's recipe was edited three times while a phase session was citing it | kit | `R-017` |
+| 19 | The kit's "keep probe values ≤ 256" is a bf16 rule; at `bfloat8_b` the ceiling is **128** | kit §2.5 | `R-013` |
+| 20 | The kit's `LANDMINES.md` addition renders as its own table: two cells where the table has three | `LANDMINES.md` | `06_GATES.md`, P10 closing note |
+
+- **How to close.** A person with commit rights to each component decides which of these gets an
+  issue. Sixteen of the twenty are one-line fixes; four are design questions.
+- **Owner:** the named component owners.
+
+## R-058 — the P10 ledger's citation count does not reproduce on the committed tree
+- **Severity:** low, and it is instructive rather than harmful.
+- **Phase opened:** P9. **Status:** closed by measurement.
+- **What it is.** `06_GATES.md`'s `G-CITE (P10)` row records **1169** doc refs. Re-run on the
+  committed tree it is **1168**. The cause is `R-017` again: the kit's recipe grew **2188 → 2235**
+  lines between P8's commit and P10's, of which P10's citation pass saw only 23 — the remaining 24
+  landed after it, and took one reference with them.
+- **Why it is worth an entry.** "A gate with no raw log did not happen" has a corollary this run
+  found twice: a gate number measured against a dependency that is not itself pinned does not
+  reproduce. P9's answer is the fingerprint pass, which records the exact recipe bytes every prose
+  ref was validated against.
+- **Owner:** kit maintainer.

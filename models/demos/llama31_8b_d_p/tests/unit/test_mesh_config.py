@@ -4,7 +4,7 @@
 
 """`MeshConfig` arithmetic and refusals, plus a one-card `CCLManager` construction. Gate: `G-MESH`.
 
-Two halves, as `BRINGUP_RECIPE.md:1020-1027` specifies:
+Two halves, as `BRINGUP_RECIPE.md:1260-1267` specifies:
 
 * **(a) device-free** — `MeshConfig((1,8), tp=8)` yields `sp=1, tp=8, shard_size(4096)=512,
   shard_size(14336)=1792`, and sub-axis TP (`MeshConfig((1,8), tp=4)`) **raises**. Only sub-axis TP
@@ -15,7 +15,7 @@ Two halves, as `BRINGUP_RECIPE.md:1020-1027` specifies:
 
 Only (b) takes the `mesh_device` fixture. `G-MESH` produces no PCC, so §1.4's floor/reference-dtype
 fields do not apply; its **negative control is the refusal itself** — an op or configuration that
-must refuse counts as a control (`BRINGUP_RECIPE.md:277-279`).
+must refuse counts as a control (`BRINGUP_RECIPE.md:351-353`).
 
 Refusals use the repo-root `expect_error` fixture (`conftest.py:948`). The `prefer-expect-error`
 hook (`.pre-commit-config.yaml:51`) rejects pytest's own raises helper anywhere in a `tests/` file
@@ -63,7 +63,7 @@ def test_mesh_config_arithmetic_1x8():
 def test_mesh_config_arithmetic_deployment_4x8():
     """The deployment shape `(4,8)`/TP=8 -> SP=4, and it is the shape `_VALIDATED_*` names.
 
-    `BRINGUP_RECIPE.md:556-558` — a gate that only ever runs at a mesh the deployment never uses
+    `BRINGUP_RECIPE.md:791-793` — a gate that only ever runs at a mesh the deployment never uses
     can be testing a configuration the model cannot produce. This is the device-free half of the
     answer; `G-KV-TP8` and `G-MESH-KV` are the on-device half, in P8.
     """
@@ -133,7 +133,7 @@ def test_ccl_manager_constructs_on_card(mesh_device):
     On this Blackhole the compute grid is (12, 10), so the ring-attention CCL offset is
     `x = grid.x - 1 = 11`. The SDPA *program* grid stays pinned at 8x8 and must NOT be derived from
     this — `11 >= 8` passes the ring op's assert while a derived 12 would fail, and only at SP > 1
-    (`BRINGUP_RECIPE.md:1155-1163`).
+    (`BRINGUP_RECIPE.md:1409-1417`).
     """
     setup = TestFactory.setup_test(mesh_device)
     ccl = setup["ccl_manager"]
@@ -156,7 +156,7 @@ def test_ccl_manager_allocates_semaphores_once(mesh_device):
     """The semaphore inventory is allocated once and cycled — never `n_layers x` anything.
 
     `G-SEMAPHORE`'s assertion, run here too because `G-MESH` states it
-    (`BRINGUP_RECIPE.md:1025-1026`); `tests/unit/test_ccl_semaphores.py` owns the gate and the
+    (`BRINGUP_RECIPE.md:1265-1266`); `tests/unit/test_ccl_semaphores.py` owns the gate and the
     deeper cycling (`[DEV-6]` in `bringup_log/03_OUTLINE.md` §1.1).
     """
     ccl = CCLManager(mesh_device, num_links=1)

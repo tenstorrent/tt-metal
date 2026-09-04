@@ -8,7 +8,7 @@
 separate a wrong address table from a numerical problem: a table that reads the *next* head's column
 still scores 0.99890 on a position-labelled probe (`G-KV-TP8`, recipe §2.5). So a mapping claim is
 gated on **bit-equality**, never correlation — `torch.equal`, `rtol = atol = 0`
-(`BRINGUP_RECIPE.md:1962-1967`).
+(`BRINGUP_RECIPE.md:1988-1991`).
 
 Four claims, each with its own control:
 
@@ -33,7 +33,7 @@ correct cache.
 **Mesh:** the deployment `(4, 8)`. Appendix A gives this gate "target mesh", and it must be: the
 table's whole content is the SP x TP geometry, and `G-KV`'s `(1,1)` arm exercises a head count the
 model never emits (`R-001`). A top-level partial mesh dies in fabric bring-up on this galaxy
-(`BRINGUP_RECIPE.md:1672-1693`), so this opens the full mesh and shards nothing smaller.
+(`BRINGUP_RECIPE.md:1708-1727`), so this opens the full mesh and shards nothing smaller.
 
 Run:
     pytest models/demos/llama31_8b_d_p/tests/unit/test_kv_chunk_table.py -x -q
@@ -442,7 +442,7 @@ def test_negative_controls_every_confusable_lookup_must_differ(mesh_device, prob
     """**The controls.** Four wrong lookups, each of which a correct table must NOT satisfy.
 
     The recipe names the first ("a negative control that reads one head through another's config",
-    `BRINGUP_RECIPE.md:1965`); the other three cover the coordinates the same walk could confuse.
+    `BRINGUP_RECIPE.md:703-705`); the other three cover the coordinates the same walk could confuse.
     Every one is checked with `torch.equal` — the discriminator a mapping bug needs, since the
     rotated-head case still scores PCC 0.99890 (recipe §2.5).
     """

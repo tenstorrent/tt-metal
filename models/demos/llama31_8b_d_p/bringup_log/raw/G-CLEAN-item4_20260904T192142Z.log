@@ -1,0 +1,43 @@
+# G-CLEAN item 4 — every except handler in the package, and why each is off the correctness path
+# command: grep -rn 'except' models/demos/llama31_8b_d_p --include='*.py'  (code lines only)
+
+models/demos/llama31_8b_d_p/scripts/verify_golden_kv.py:99:    except (OSError, json.JSONDecodeError) as e:
+models/demos/llama31_8b_d_p/scripts/verify_golden_kv.py:170:        except Exception as e:  # a corrupt file is a trace failure, not a crash
+models/demos/llama31_8b_d_p/tt/layer.py:76:    except Exception as e:  # a probe must never break a run — but it must say so
+models/demos/llama31_8b_d_p/tt/rms_norm.py:28:exception to the "modules only call `MeshConfig` wrappers" rule (`DEC-028`).
+models/demos/llama31_8b_d_p/tests/galaxy_prefill_kv_pcc.py:122:        except (ValueError, OSError) as e:
+models/demos/llama31_8b_d_p/tests/unit/test_dense_sp_vs_ref.py:349:    except Exception as e:  # noqa: BLE001 — the message IS the measurement
+models/demos/llama31_8b_d_p/tests/unit/test_dense_sp_vs_ref.py:556:    except Exception as e:  # noqa: BLE001 — the message IS the measurement
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py:179:            except TypeError as e:
+models/demos/llama31_8b_d_p/tests/fabric_topology_matrix.py:432:    except Exception as e:  # noqa: BLE001 — the child's job is to report, the parent's to judge
+models/demos/llama31_8b_d_p/tests/fabric_topology_matrix.py:491:    except subprocess.TimeoutExpired:
+
+# 9 handlers. NONE is a bare 'except: pass'; every one logs, prints, or records the failure.
+#
+#  scripts/verify_golden_kv.py:99   (OSError, JSONDecodeError) -> prints FAIL, returns False.
+#  scripts/verify_golden_kv.py:170  Exception -> report.check(False, ...) then continue.
+#       Both are the G-GOLDEN verifier: a corrupt trace file is a trace FAILURE that must be
+#       reported per layer, not a traceback that hides the other 31 layers. Host-only script,
+#       exits non-zero on any check failure, and its two negative controls (a zeroed and a
+#       deleted layer) both exercise these paths.
+#  tt/layer.py:76                   Exception -> logger.warning.
+#       The ONE handler on a device path, and the one recipe rule 5 explicitly allows: the
+#       LLAMA_DELTA_PROBE bring-up probe must never break a run. It logs rather than passing
+#       silently, and test_decoder_layer_vs_ref.py:536 exercises the handler deliberately.
+#       The probe computes nothing the model consumes.
+#  tests/galaxy_prefill_kv_pcc.py:122  (ValueError, OSError) -> prints a WARNING to stderr.
+#       Raising RLIMIT_NPROC is a convenience; failing to raise it is not a correctness event.
+#  tests/fabric_topology_matrix.py:432 Exception -> prints 'RESULT <case> error <type>: <msg>'
+#       and returns 1. This is the harness's PRODUCT: the child's job is to report what the
+#       fabric did, the parent's to judge it against a stated expectation. Swallowing nothing.
+#  tests/fabric_topology_matrix.py:491 TimeoutExpired -> returns ('hang', ...).
+#       A hang IS the measurement (G-FABRIC-MATRIX's overlap-without-quiesce case).
+#  tests/unit/test_dense_sp_vs_ref.py:349,:556 Exception -> records str(e), then ASSERTS the
+#       refusal happened. The message is the measurement (the fp32_dest_acc_en=True TT_FATAL).
+#       If the op ever accepts True, the assert fires rather than the test passing quietly.
+#  tests/unit/test_prefill_runtime_chunked.py:179 TypeError from signature.bind -> appended to
+#       findings['signature_problems']. That list is what G-RUNTIME asserts is empty.
+
+# grep for the forbidden forms:
+$ grep -rn 'except.*:\s*pass' models/demos/llama31_8b_d_p --include='*.py'
+(no matches)

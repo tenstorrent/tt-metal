@@ -1,0 +1,28 @@
+trim trailing whitespace..................................................................Passed
+fix end of files..........................................................................Passed
+check yaml............................................................(no files to check)Skipped
+check for merge conflicts.................................................................Passed
+black.....................................................................................Passed
+autoflake.................................................................................Passed
+isort.....................................................................................Passed
+gersemi...............................................................(no files to check)Skipped
+yamllint..............................................................(no files to check)Skipped
+clang-format..........................................................(no files to check)Skipped
+tests: use the expect_error fixture instead of pytest.raises..............................Passed
+check for large files (>500 KB)...........................................................Passed
+validate-metalium-includes................................................................Passed
+Verify that there is no global torch import in ttnn.......................................Passed
+Forbid get_read_ptr on cb_reserve_back'd CBs (issue...................(no files to check)Skipped
+Prevent edits to frozen pybind11 sources under ttnn...................(no files to check)Skipped
+Convert .ipynb to .py for ttnn basic examples.............................................Passed
+Detect legacy device operation classes in newly added files...........(no files to check)Skipped
+Detect smuggled buffer-address runtime args in descriptor factories...(no files to check)Skipped
+Detect ProgramDescriptor rebuilds inside override_runtime_arguments...(no files to check)Skipped
+Validate golden bandwidth CSV column headers..........................(no files to check)Skipped
+tt-triage type checks.................................................(no files to check)Skipped
+llk: fix std::uint*_t and add cstdint include.........................(no files to check)Skipped
+autoflake (llk).......................................................(no files to check)Skipped
+isort (llk)...........................................................(no files to check)Skipped
+black (llk)...........................................................(no files to check)Skipped
+pylint (llk)..........................................................(no files to check)Skipped
+codespell (llk).......................................................(no files to check)Skipped

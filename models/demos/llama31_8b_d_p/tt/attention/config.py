@@ -20,7 +20,7 @@ this file holds no math). **Template:**
 
 **Inverted relative to the template:** `models/demos/gpt_oss_d_p/tt/attention/config.py:71` sets
 `fp32_dest_acc_en: bool = False`, and carrying that forward costs 38.7x on an attention block at
-bf8_b and 107.6x at bf16 (`BRINGUP_RECIPE.md:446-447`). Measured on this box at the MLP level it
+bf8_b and 107.6x at bf16 (`BRINGUP_RECIPE.md:654-655`). Measured on this box at the MLP level it
 costs 96x / 1168x (`bringup_log/06_GATES.md`, `G-MLP` A/B), so the default here is `True` and the
 compute config is **not** rebuilt locally — it comes from the package's single factory
 (`tt/config.py::default_compute_kernel_config`, `DEC-030`, `DEC-040`).
@@ -134,7 +134,7 @@ class ProgramConfig:
         `ttnn/cpp/ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_device_operation.cpp:421`
         requires that offset to be `>=` the SDPA program grid's `x`. Checking it here means a wrong
         grid fails when the `Attention` module is built, not two phases later at SP > 1 — the whole
-        point of the landmine (`BRINGUP_RECIPE.md:1196-1204`).
+        point of the landmine (`BRINGUP_RECIPE.md:1411-1419`).
         """
         grid = mesh_device.compute_with_storage_grid_size()
         ccl_offset_x = grid.x - 1
@@ -167,7 +167,7 @@ class ProgramConfig:
 
         `models/demos/gpt_oss_d_p/tt/attention/config.py:102-108` builds its own from four local
         fields, which is exactly the "buried in an attention config" pattern
-        `BRINGUP_RECIPE.md:1032-1035` blames for one package holding two different values of
+        `BRINGUP_RECIPE.md:1247-1250` blames for one package holding two different values of
         `fp32_dest_acc_en`. Only that one field is local here, and only so `G-ATTN` can measure it.
         """
         return default_compute_kernel_config(mesh_device, fp32_dest_acc_en=self.fp32_dest_acc_en)

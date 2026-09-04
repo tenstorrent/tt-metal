@@ -49,6 +49,8 @@ PRD = f"{CP}/runners/prefill_producer.py"
 MIG = f"{CP}/runners/migration.py"
 DOC_ADD = f"{CP}/docs/ADDING_A_PREFILL_MODEL.md"
 DOC_MIG = f"{CP}/docs/PREFILL_MIGRATION_TESTING.md"
+# The kit recipe. Not vendored into the package (`DEC-002`), so it is named once here.
+RECIPE = "models/demos/common/bringup/BRINGUP_RECIPE.md"
 GOX_TBL = f"{GO}/tt/runners/kv_chunk_table.py"
 GOX_ADP = f"{GO}/tt/runners/adapters/gpt_oss.py"
 GOX_RT = f"{GO}/tt/tt_prefill_runtime.py"
@@ -841,6 +843,54 @@ CITES = [
     (f"{CP}/runners/runner_utils.py", 41, "max_payload_size=model_cfg.FABRIC_PAYLOAD_SIZE,"),
 ]
 
+# ---------------------------------------------------------------------------------------------
+# P9 addition (`DEC-120`) — the recipe lines P9 re-pointed 247 prose refs onto.
+# Pass 2 only RANGE-checks a prose `path:line` (`R-016`), so a ref that drifts with an out-of-band
+# recipe edit stays green while pointing at unrelated text — which is exactly what P9 found across
+# 247 refs (`R-053`). Every line P9 re-pointed *to* is content-checked here, so the next drift is
+# loud on the first line rather than silent on all of them. §1.6: "Put every load-bearing reference
+# in `CITES`, including references *into the recipe itself*."
+CITES += [
+    (RECIPE, 80, "BH Galaxy mesh descriptors live in"),
+    (RECIPE, 193, "Which gates in an external component's ladder are"),
+    (RECIPE, 260, "Commit the raw logs, and check that you actually did"),
+    (RECIPE, 273, "if you hand-built the skeleton, you do not have it"),
+    (RECIPE, 1282, "Run it on both random weights and the real layer-0 norm gain"),
+    (RECIPE, 1287, "Running both is the resolution"),
+    (RECIPE, 1340, "Also assert the llama3 scaling actually took"),
+    (RECIPE, 1349, "a test that passes with scaling silently disabled is worthless"),
+    (RECIPE, 1428, "Negative control: Q/K weights loaded *without* the"),
+    (RECIPE, 1595, "compare a device KV read-back"),
+    (RECIPE, 1598, "reporting min/mean PCC per layer for K and V."),
+    (RECIPE, 1641, "the chunked-vs-one-shot equivalence test"),
+    (RECIPE, 1642, "for **deltas 1 and 2 only**"),
+    (RECIPE, 1650, "| delta | what changes | owned by |"),
+    (RECIPE, 1654, "read back out of the cache"),
+    (RECIPE, 1663, "chunked vs one-shot: PCC"),
+    (RECIPE, 1670, 'Record the cache-write-only ("storage") floor beside it'),
+    (RECIPE, 1675, "the mutual **K** PCC must collapse"),
+    (RECIPE, 2071, "cache **primitive**: write correctness"),
+    (RECIPE, 2082, "collectives are exact"),
+]
+
+# P9 (`DEC-121`, `R-055`): the one line that makes the reference adapter 64.6x more expensive
+# than this one. Content-checked because `G-CLEAN` item 8's whole finding rests on it, and
+# because P9 first wrote it as `:26` — off by one, which is precisely `R-053`'s failure mode.
+CITES += [
+    (f"{GO}/tt/runners/adapters/gpt_oss.py", 25, "from models.common.utility_functions import is_blackhole"),
+]
+
+# P9 (`DEC-124`): the four references `README.md` rests its two central answers on — why not
+# `models/common/`, and why TP is an equality. The README is the one file a reader is guaranteed
+# to open, and pass 2 only range-checks it.
+CITES += [
+    (f"{CM}/modules/mlp/mlp_2d.py", 461, "cluster_axis=0"),
+    (f"{CM}/models/llama3_8b/model.py", 890, "only supports 1D mesh topologies"),
+    (f"{GO}/tt/attention/kv_cache.py", 95, "Per-chip cache is one head"),
+    (f"{M3}/README.md", 48, "single_bh_galaxy_mesh_graph_descriptor.textproto"),
+]
+
+
 # DOCS — every markdown file whose `path:line` references should be range-checked.
 # Include your recipe and your README: leaving the recipe out is how a stale citation survived
 # a whole run in the original.
@@ -1020,7 +1070,7 @@ def scan_docs():
 # precisely how the ledger cites its evidence — was scanned by **neither**. That is not a
 # hypothetical gap: this pass found two dangling references on its first run, both written by an
 # earlier session (`07_RISKS.md` R-042). And the recipe's definition of a gate is exactly this
-# artefact: "A gate with no raw log did not happen" (`BRINGUP_RECIPE.md:199`), reinforced by
+# artefact: "A gate with no raw log did not happen" (`BRINGUP_RECIPE.md:244`), reinforced by
 # Appendix C item 2. A ledger row citing a file that is not there is a `PASS` with no evidence.
 #
 # `.log.gz` is accepted for `.log`, because oversized logs are gzipped rather than trimmed
@@ -1060,6 +1110,41 @@ def scan_artefacts():
     return bad
 
 
+# ---------------------------------------------------------------------------------------------
+# Pass 4 (P9, `DEC-120`) — pin the recipe, because pass 2 cannot check a prose ref's *content*.
+#
+# `R-017` fired three times in this run: the kit's recipe was edited while a phase session was
+# live, and every prose `BRINGUP_RECIPE.md:N` ref shifted. Pass 1 catches only the ~120 refs that
+# are in `CITES`; pass 2 range-checks the rest and reports them `resolved` while they point at
+# unrelated text. P9 measured the damage: 247 of 317 refs had drifted, none of them reported.
+#
+# This pass cannot tell whether a ref is *right*. It tells you when the ground moved, which is the
+# one thing nothing else in this script does. On a mismatch: re-validate every prose recipe ref
+# (P9 did it by mapping each ref through `git blame` + `difflib` against the recipe version the
+# citing line was written against), then update the fingerprint in the same commit.
+RECIPE_SHA256 = "b08634f97719ebea22620db845e83893f07e438576ddcdeea002f5ead1e990fd"
+RECIPE_LINES = 2235
+
+
+def check_recipe_fingerprint():
+    import hashlib
+
+    full = os.path.join(ROOT, RECIPE)
+    raw = open(full, "rb").read()
+    got = hashlib.sha256(raw).hexdigest()
+    n = raw.decode(errors="replace").count("\n")
+    print(f"recipe fingerprint: {RECIPE} ({n} lines)")
+    if got == RECIPE_SHA256 and n == RECIPE_LINES:
+        print("  MATCHES the version every prose ref was validated against")
+        return 0
+    print(f"  CHANGED  recorded {RECIPE_SHA256[:16]}... / {RECIPE_LINES} lines")
+    print(f"           found    {got[:16]}... / {n} lines")
+    print("  Every prose `BRINGUP_RECIPE.md:N` ref in this package is now UNVERIFIED: pass 2")
+    print("  range-checks them, so they will still report `resolved` while pointing elsewhere.")
+    print("  Re-validate them and update RECIPE_SHA256 / RECIPE_LINES in the same commit (R-017).")
+    return 1
+
+
 def main():
     ok = bad = missing = 0
     failures = []
@@ -1097,7 +1182,8 @@ def main():
             print("  " + f)
     doc_bad = scan_docs()
     artefact_bad = scan_artefacts()
-    return 0 if bad == 0 and missing == 0 and doc_bad == 0 and artefact_bad == 0 else 1
+    fingerprint_bad = check_recipe_fingerprint()
+    return 0 if bad == 0 and missing == 0 and doc_bad == 0 and artefact_bad == 0 and fingerprint_bad == 0 else 1
 
 
 if __name__ == "__main__":

@@ -63,7 +63,7 @@ gate, because there is no device tensor in it.
 
 Why this is load-bearing, not fussiness: a bf16-weight reference **shares the device's own
 rounding** and inflates every PCC downstream — measured in the recipe as 0.9999867 (bf16-weight
-reference) against 0.99995 (fp32-weight reference) for the *same device output* (`BRINGUP_RECIPE.md:320`).
+reference) against 0.99995 (fp32-weight reference) for the *same device output* (`BRINGUP_RECIPE.md:402`).
 The fp32 reference is strictly harder and it is the only one the noise-floor method is defined
 against: the floor *is* "quantise what the device stores, compute the rest in fp32"
 (`tests/test_factory.py::quantize_like_device`, from `models/demos/common/bringup/examples/noise_floor.py:33`).

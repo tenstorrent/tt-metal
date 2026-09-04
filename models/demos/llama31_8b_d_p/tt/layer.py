@@ -21,7 +21,7 @@ two deliberately kept.
   config is built by `tt/model.py` and shared unmodified by all 32 layers.
 
 **Kept, because both are load-bearing under long-context DRAM pressure**
-(`BRINGUP_RECIPE.md:1367-1368`):
+(`BRINGUP_RECIPE.md:1506-1507`):
 
 * the `ttnn.move(hidden_states)` re-allocation guard past 32k tokens
   (`models/demos/gpt_oss_d_p/tt/layer.py:138-140`) — it defragments the residual stream;
@@ -31,7 +31,7 @@ two deliberately kept.
 
 **The bring-up probe stays too** (`LLAMA_DELTA_PROBE`, `DEC-023`). A per-layer L2 / mean-abs /
 signed-mean of each residual delta is the fastest way to find *which* sublayer drifts in a 32-layer
-stack — a layer-level PCC cannot localise (`BRINGUP_RECIPE.md:1375-1379`), and a growing signed
+stack — a layer-level PCC cannot localise (`BRINGUP_RECIPE.md:1514-1521`), and a growing signed
 mean is the fingerprint of a directional bias accumulating in one sublayer. It is the one place in
 this package where a bare `except Exception` is allowed, because a probe must never break a run,
 and it logs rather than passing silently (recipe §0 rule 5).
@@ -62,7 +62,7 @@ def _delta_stats(tag, layer_idx, tensor):
     """Log device-0's shard of a residual delta: L2, mean|x|, signed mean, max|x|.
 
     A *growing signed mean* localises a directional bias to one sublayer, which is exactly what a
-    layer- or model-level PCC cannot do (`BRINGUP_RECIPE.md:1375-1379`). Output goes through
+    layer- or model-level PCC cannot do (`BRINGUP_RECIPE.md:1514-1521`). Output goes through
     `loguru`, so a gate run's `tee` captures it into `bringup_log/raw/`.
     """
     try:
@@ -126,7 +126,7 @@ class DecoderLayer:
             state_dict: this layer's HF keys, i.e. `self_attn.*`, `mlp.*`,
                 `input_layernorm.weight`, `post_attention_layernorm.weight` — the caller splits with
                 `substate(state_dict, f"model.layers.{i}")`. Splitting further is **this** module's
-                job, per the package convention (`BRINGUP_RECIPE.md:929-931`). Empty dict ->
+                job, per the package convention (`BRINGUP_RECIPE.md:1072-1073`). Empty dict ->
                 cache-only, which requires `tensor_cache_path`.
             layer_idx: this layer's index. Used for the per-layer KV write and by the delta probe.
             ccl_manager: the model's `CCLManager`. Required only when `tp > 1`.

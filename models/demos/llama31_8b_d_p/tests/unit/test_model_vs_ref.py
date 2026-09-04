@@ -9,7 +9,7 @@ no KV-cache write (at TP=1 the packed cache refuses the model's 8 local KV heads
 `bringup_log/00_MODEL_CARD.md` §4.1; P8's `G-KV-TP8` owns the first real write).
 
 **This is an integration check and it may not stand in for a sublayer gate**
-(`BRINGUP_RECIPE.md:1375-1392`). What it adds over `G-LAYER` is the three things only the whole
+(`BRINGUP_RECIPE.md:1514-1531`). What it adds over `G-LAYER` is the three things only the whole
 stack can get wrong: the **embedding→layer→norm→head wiring**, the **depth accumulation** of error,
 and — the one thing no PCC can substitute for — whether the model **predicts the same token** as
 HuggingFace with real weights.
@@ -79,9 +79,9 @@ from models.tt_transformers.tt.load_checkpoints import permute, reverse_permute
 WEIGHT_DTYPE = ttnn.bfloat8_b  # `DEC-022`
 ACTIVATION_DTYPE = ttnn.bfloat16  # `DEC-022`
 
-PCC_THRESHOLD = 0.999  # `BRINGUP_RECIPE.md:1421` (reduced depth), Appendix A `:1856`
-MAX_MODEL_ERR_RATIO = 8.0  # `BRINGUP_RECIPE.md:1421`
-MAX_LAYER_STEP = 4.0  # `BRINGUP_RECIPE.md:1425`, "from layer 3 onward"
+PCC_THRESHOLD = 0.999  # `BRINGUP_RECIPE.md:1559-1561` (reduced depth), Appendix A `BRINGUP_RECIPE.md:2074`
+MAX_MODEL_ERR_RATIO = 8.0  # `BRINGUP_RECIPE.md:1559-1561`
+MAX_LAYER_STEP = 4.0  # `BRINGUP_RECIPE.md:1564`, "from layer 3 onward"
 FIRST_GATED_STEP_LAYER = 3  # "from layer 3 onward", 0-based layer index
 
 REDUCED_DEPTHS = [2, 4]
@@ -368,7 +368,7 @@ def test_model_vs_ref(mesh_device, n_layers, seq_len, reset_seeds):
 def test_model_is_causal(mesh_device, reset_seeds):
     """**Self-check:** perturb the last token; every earlier row must be unchanged at `max|delta| = 0`.
 
-    Required by the recipe when HF is the oracle (`BRINGUP_RECIPE.md:1429-1431`) and asserted on the
+    Required by the recipe when HF is the oracle (`BRINGUP_RECIPE.md:1568-1571`) and asserted on the
     **device** stack, which is the only place it proves that `is_causal=True` actually reached the
     kernel in all layers.
     """
@@ -459,11 +459,11 @@ def test_model_full_depth_per_layer_curve(mesh_device, reset_seeds):
     """All 32 layers: the per-layer PCC curve against HF, the same curve against the computed floor,
     the error step, and top-1.
 
-    **What the recipe gates here, precisely.** `BRINGUP_RECIPE.md:1420-1422` attaches
+    **What the recipe gates here, precisely.** `BRINGUP_RECIPE.md:1559-1561` attaches
     "hidden-state PCC >= 0.999, <= 8x the floor, top-1 = 100%" to the **reduced layer count** runs;
-    `:1424-1425` states the full 32-layer run's own gate as "record the per-layer hidden-state PCC
+    `BRINGUP_RECIPE.md:1562-1565` states the full 32-layer run's own gate as "record the per-layer hidden-state PCC
     curve ... and gate the **step** between consecutive layers at **<= 4x** from layer 3 onward".
-    Appendix A's one-line row (`:1856`) compresses both into one cell, which reads as if the
+    Appendix A's one-line row (`BRINGUP_RECIPE.md:2074`) compresses both into one cell, which reads as if the
     absolute threshold also applied at depth 32. This test asserts the phase text's version — the
     step, plus top-1 and the ratio to a **measured** full-depth floor — and records the absolute
     number either way. `DEC-053` carries the reading and the measurement behind it.
@@ -599,9 +599,9 @@ def test_model_full_depth_per_layer_curve(mesh_device, reset_seeds):
 def test_model_full_depth_attribution(mesh_device, reset_seeds):
     """§2.3.1's attributed residual **at model scale**, which is what stays comparable across depths.
 
-    `BRINGUP_RECIPE.md:1420-1425` gates the full-depth run on the per-layer step; the raw ratio at
+    `BRINGUP_RECIPE.md:1559-1564` gates the full-depth run on the per-layer step; the raw ratio at
     32 layers measures **2.79x** against every other gate in this run landing between 1.0x and
-    2.4x, and `HUMAN GATE H5` (`:170`) says a ratio that clears its budget but sits off the floor
+    2.4x, and `HUMAN GATE H5` (`BRINGUP_RECIPE.md:194`) says a ratio that clears its budget but sits off the floor
     with no identified cause is a decision, not a clean PASS. §2.3.1 as amended (`:479-487`) asks
     for the attributed residual to be recorded at layer **and** model level for exactly this reason.
 

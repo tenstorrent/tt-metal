@@ -18,7 +18,7 @@ exactly two values — `head_dim` 64 -> **128** and `num_layers` 36 -> **32**
   (`models/demos/gpt_oss_d_p/tt/attention/kv_cache.py:27`, used at `:87`). Matching the producer's
   block geometry is what lets P10 reuse its existing packed-GQA read-back instead of writing a
   fourth reader; diverging is a `DEC` whose blast radius includes `G-MOCK-MIG`
-  (`BRINGUP_RECIPE.md:1241-1243`). `head_dim = 128` is parameterised by that shard spec and is
+  (`BRINGUP_RECIPE.md:1456-1458`). `head_dim = 128` is parameterised by that shard spec and is
   tile-aligned.
 * **Per-chip cache is exactly ONE KV head** — the hard-coded `1` at
   `models/demos/gpt_oss_d_p/tt/attention/kv_cache.py:95-99`. This is the equality that forces

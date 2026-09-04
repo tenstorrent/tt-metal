@@ -15,7 +15,7 @@ with a cache this file populated itself and a Q this file built itself — no pr
 model, its slack must be **named and tracked separately** from the stages this package writes, and a
 budget that lumps the two together can absorb a real regression. The single-card SDPA's standalone
 probe measured **52.8-55.0x** its floor at `G-ATTN`; this file is the ring op's equivalent, and the
-recipe's own figure for it is **7.98x** (`BRINGUP_RECIPE.md:1748-1751`).
+recipe's own figure for it is **7.98x** (`BRINGUP_RECIPE.md:1789-1791`).
 
 ## The geometry, and why the reference does not need to know the cache's internal layout
 
@@ -72,7 +72,7 @@ from models.demos.llama31_8b_d_p.tt.config import MeshConfig, derive_head_dim
 ACTIVATION_DTYPE = ttnn.bfloat16  # `DEC-022` — Q comes out of the projection in bf16
 CACHE_DTYPE = ttnn.bfloat8_b  # `DEC-021`
 
-# `BRINGUP_RECIPE.md:1765-1767`: PCC >= 0.99 vs an fp32 torch reference, with the ratio to its own
+# `BRINGUP_RECIPE.md:1806-1808`: PCC >= 0.99 vs an fp32 torch reference, with the ratio to its own
 # floor **reported** rather than asserted — §2.3 measures that a fused kernel does not sit at its
 # floor and §2.3.1 that a ratio budget is not portable, so a threshold on this op's ratio would be
 # a number invented here. The absolute 0.99 is the recipe's.

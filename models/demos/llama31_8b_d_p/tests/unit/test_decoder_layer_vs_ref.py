@@ -9,7 +9,7 @@ The layer: `x + Attention(input_layernorm(x))`, then `x + MLP(post_attention_lay
 (`bringup_log/04_CCL_PLAN.md` §5 rows 1-2 are P8's).
 
 **This is an integration check and it may not stand in for a sublayer gate**
-(`BRINGUP_RECIPE.md:1375-1392`). A layer PCC cannot localise: one bad sublayer moves an aggregate
+(`BRINGUP_RECIPE.md:1514-1531`). A layer PCC cannot localise: one bad sublayer moves an aggregate
 that a dozen other causes also move. `G-RMS`, `G-ROPE`, `G-MLP` and `G-ATTN` are what localise, and
 they are met on their own; what this file adds is the two things only assembly can get wrong — the
 **residual wiring** and the **norm→sublayer pairing**.
@@ -40,7 +40,7 @@ own modelled floor and whose slack accounted for the **entire** block-level gap 
 2. a **kernel-attributed prediction**: the same torch floor layer with the device's *real* SDPA
    output substituted for the torch SDPA at the same stage. Because the substitution propagates
    through the rest of the layer, this handles the residual-add attenuation
-   (`BRINGUP_RECIPE.md:1388-1389` measures it at 1.12x-1.73x) **exactly**, instead of assuming
+   (`BRINGUP_RECIPE.md:1527-1528` measures it at 1.12x-1.73x) **exactly**, instead of assuming
    independent errors add in the layer's output space;
 3. the residual `((1-measured) - kernel_excess)/(1-floor)`, asserted at <= 8x at **both** dtypes.
    Everything this package wrote lives in that residual.
@@ -81,8 +81,8 @@ SEQ_LENS = [128, 512, 2048]
 ACTIVATION_DTYPE = ttnn.bfloat16  # `DEC-022`
 WEIGHT_SCALE = 0.02
 
-PCC_THRESHOLD = 0.999  # `BRINGUP_RECIPE.md:1877` (Appendix A), stated at `:1370-1373`
-MAX_BLOCK_ERR_RATIO = 8.0  # `BRINGUP_RECIPE.md:1877`
+PCC_THRESHOLD = 0.999  # `BRINGUP_RECIPE.md:2072` (Appendix A), stated at `BRINGUP_RECIPE.md:1506-1510`
+MAX_BLOCK_ERR_RATIO = 8.0  # `BRINGUP_RECIPE.md:2072`
 
 # `DEC-051`, following `DEC-042`: the raw 8x holds at bf8_b — the package's weight dtype — and does
 # **not** hold at bf16, where a smaller floor error turns the same fixed fused-kernel slack into a
@@ -382,7 +382,7 @@ def test_decoder_layer_real_weights_real_input_swapped_norms(mesh_device, reset_
 
     A negative control on a residual block can only discriminate if the sublayer's output is
     comparable to the residual it is added to: for `y = r + s`, a perturbation of `s` is attenuated
-    in `y` by exactly `||y||/||s||` (`BRINGUP_RECIPE.md:1388-1389`). With a standard-normal input
+    in `y` by exactly `||y||/||s||` (`BRINGUP_RECIPE.md:1527-1528`). With a standard-normal input
     and the **real** weights that ratio is about **65x**, because `randn` is ~100x larger than what
     layer 0 actually receives — `embed_tokens` rows have an RMS around 0.01, and the norm removes
     the input's scale anyway, so the sublayer output is scale-invariant while the residual is not.
@@ -480,7 +480,7 @@ def test_staged_reference_matches_g_ref(reset_seeds):
 @torch.no_grad()
 def test_staged_reference_matches_hf_decoder_layer(reset_seeds):
     """And the same against HF's own `LlamaDecoderLayer`, which is what `G-LAYER` is nominally
-    scored against (`BRINGUP_RECIPE.md:1370-1371` allows either).
+    scored against (`BRINGUP_RECIPE.md:1509-1510` allows either).
 
     Host-only. Runs the HF module in fp32 with `_attn_implementation="eager"` and an **explicit**
     causal mask, because `attention_mask=None` is silently non-causal (recipe P1 trap 3).

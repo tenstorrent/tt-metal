@@ -243,7 +243,7 @@ and `DEC-013` (is `utils/` created at all, given the helpers are imported from
   public interface signature, (iii) input/output tensor shapes with dtype and layout, (iv) the
   template it mirrors (`path:line`); **every Appendix A gate maps to a named owner in the tree**; and
   the per-layer tensor-shape table is filled in with real numbers. Source: recipe P3 `G-OUTLINE`
-  (`BRINGUP_RECIPE.md:857-863`).
+  (`BRINGUP_RECIPE.md:1092-1098`).
 - **Measured:**
   - **32/32** Appendix A gate rows have a named owner (§4), plus the per-phase regression gate. The
     Appendix A table has 32 gate rows, not 33: `G-WEIGHTS` appears twice (P6.2 and its P8 extension)
@@ -261,7 +261,7 @@ and `DEC-013` (is `utils/` created at all, given the helpers are imported from
   - per-phase regression: `10 passed` in 13.76 s — unchanged from P1/P2, i.e. P3 broke nothing.
 - **Verdict:** **PASS**
 - **Negative control:** doc gates produce no PCC, so §1.4's four numeric fields are waived
-  (`BRINGUP_RECIPE.md:280-281`) — but the two mechanical checks both fired before they passed, which
+  (`BRINGUP_RECIPE.md:354-355`) — but the two mechanical checks both fired before they passed, which
   is what shows they discriminate.
   1. **The citation verifier caught one wrong line** in this phase's own first draft of `CITES`:
      `models/demos/gpt_oss_d_p/tt/attention/prefill.py:104` was claimed to hold
@@ -280,7 +280,7 @@ and `DEC-013` (is `utils/` created at all, given the helpers are imported from
   of which two are new judgement calls (`DEC-017`, `DEC-018`), one is a recipe omission that is not a
   judgement call at all (`[DEV-4]`: `tt/runners/adapters/__init__.py`, without which the registry
   cannot import the adapter), and three follow from earlier decisions. One recipe sentence had to be
-  *resolved* rather than obeyed (`03_OUTLINE.md` §5.1: `BRINGUP_RECIPE.md:1022-1024` requires both
+  *resolved* rather than obeyed (`03_OUTLINE.md` §5.1: `BRINGUP_RECIPE.md:1262-1264` requires both
   that sub-axis TP raises and that TP need only *divide* the axis — `4` divides `8`, so the two
   halves contradict each other; the refusal is taken as binding).
 - **What this does NOT prove:** that any of these interfaces or shapes are **right**. Nothing in P3
@@ -305,7 +305,7 @@ and `DEC-013` (is `utils/` created at all, given the helpers are imported from
   argument**; the semaphore-lifetime statement ("allocated once in `CCLManager.__init__`, cycled per
   call, never per layer") **and its depth**; and a list of **every** collective call site with its
   `cluster_axis`, `dim` and `topology`. Source: recipe P4 `G-CCL-PLAN`
-  (`BRINGUP_RECIPE.md:975-981`).
+  (`BRINGUP_RECIPE.md:1210-1216`).
 - **Measured:**
   - `(4, 8)`, TP=8 on `tp_axis = 1`, SP = `32 / 8 = 4` on `sp_axis = 0`, `num_links` 2 at `(4,8)` /
     1 on any `(1,N)` submesh. `TP == num_key_value_heads == 8` stated as an equality with both bounds.
@@ -322,7 +322,7 @@ and `DEC-013` (is `utils/` created at all, given the helpers are imported from
     written out and 4 barrier-consuming collectives per layer counted (128 per forward).
   - Collective op usage counts **re-measured** on this tree rather than quoted from the recipe:
     `all_gather_async` **29**, `reduce_scatter_minimal_async` **18**, `all_reduce_async` **2** —
-    identical to `BRINGUP_RECIPE.md:925-927`.
+    identical to `BRINGUP_RECIPE.md:1160-1162`.
   - All three BH-galaxy torus mesh-graph descriptors named in §7 exist (listed in the raw log).
   - `verify_citations.py`: `citations checked 253 / verified 253 / mismatched 0 / missing 0`;
     `doc refs scanned 404 / resolved 404 / unresolved 0`; exit 0. `CITES` grew by **28** this phase
@@ -330,7 +330,7 @@ and `DEC-013` (is `utils/` created at all, given the helpers are imported from
   - per-phase regression: `10 passed` in 13.77 s — unchanged.
 - **Verdict:** **PASS**
 - **Negative control:** doc gate, so §1.4's four numeric fields are waived
-  (`BRINGUP_RECIPE.md:280-281`). The structure check is the control and it **failed its first run**,
+  (`BRINGUP_RECIPE.md:354-355`). The structure check is the control and it **failed its first run**,
   on two real defects in this phase's own document:
   1. §1.1 asserted "TP = 8 is an equality" without ever writing the words
      `num_key_value_heads` — the token the recipe's own derivation turns on, and the one a reviewer
@@ -367,7 +367,7 @@ and `DEC-013` (is `utils/` created at all, given the helpers are imported from
 - **Command:** `pytest models/demos/llama31_8b_d_p/tests/unit/test_mesh_config.py
   models/demos/llama31_8b_d_p/tests/unit/test_ccl_semaphores.py -x -q`
 - **Mesh / device:** (a) none — device-free arithmetic; (b) `(1,1)`, Blackhole. Only (b) takes the
-  `mesh_device` fixture (`BRINGUP_RECIPE.md:1027`).
+  `mesh_device` fixture (`BRINGUP_RECIPE.md:1267`).
 - **Input distribution:** n/a — this gate has no numeric input. Its inputs are mesh shapes:
   `(1,1)`, `(1,2)`, `(1,4)`, `(1,8)`, `(2,8)`, `(4,8)`, `(8,4)`, and the four refused
   `(mesh, tp)` pairs below.
@@ -394,7 +394,7 @@ and `DEC-013` (is `utils/` created at all, given the helpers are imported from
 - **Negative control:** four, and all four fired.
   1. **Sub-axis TP refuses.** `MeshConfig((1,8), tp=4)`, `((1,8), tp=2)`, `((4,8), tp=4)` and
      `((1,8), tp=16)` all raise `ValueError: ... sub-axis TP is unsupported`. §1.4 admits a
-     configuration that must *refuse* as a control (`BRINGUP_RECIPE.md:277-278`).
+     configuration that must *refuse* as a control (`BRINGUP_RECIPE.md:351-352`).
   2. **Its complement.** `(1,2)`, `(1,4)`, `(2,8)`, `(8,4)` with matching TP must **warn and
      build** — without this, "raise on anything unusual" would satisfy control 1 while making
      every `(1,1)` P5 gate unrunnable.
@@ -421,7 +421,7 @@ and `DEC-013` (is `utils/` created at all, given the helpers are imported from
     arithmetic on a shape tuple, not a device open (P8 step 1).
 - **Notes:** `G-SEMAPHORE` is a **P8** gate and is *not* being recorded as PASS here; its
   one-card half runs in this file because `G-MESH` already requires the assertion
-  (`BRINGUP_RECIPE.md:1025-1026`) and writing it twice would let the two copies disagree
+  (`BRINGUP_RECIPE.md:1265-1266`) and writing it twice would let the two copies disagree
   (`03_OUTLINE.md` §1.1 `[DEV-6]`). The 16 tests above include those 5.
 
 ---
@@ -441,7 +441,7 @@ and `DEC-013` (is `utils/` created at all, given the helpers are imported from
   §2.1(a) measures 0.9999867 against 0.99995 for that mistake.
 - **Threshold:** PCC >= 0.9999 (`BRINGUP_RECIPE.md:1751`). The error ratio is **recorded, not
   asserted**: a correct module sits right on §2.2's 3x stage bound, so asserting it would gate on
-  the wrong side of the noise (`BRINGUP_RECIPE.md:1043-1046`).
+  the wrong side of the noise (`BRINGUP_RECIPE.md:1290-1293`).
 - **Noise floor (computed):** **0.9999973 / 0.9999973 / 0.9999972** with random weights;
   **0.9999986** at all three lengths with the real layer-0 weight. The floor **moves with the
   weight distribution** — a trained norm gain is a narrow positive distribution, not standard
@@ -504,7 +504,7 @@ and `DEC-013` (is `utils/` created at all, given the helpers are imported from
   `models/demos/gpt_oss_d_p/tests/unit/test_attention_vs_ref.py:83` `_build_cos_sin` does, so the
   test cannot silently compare two different RoPEs. For the floor, the three tensors the device
   stores — input, cos, sin — are quantised to bf16 and the rest stays fp32.
-- **Threshold:** PCC >= 0.999 (`BRINGUP_RECIPE.md:1752`), expecting ~0.99999.
+- **Threshold:** PCC >= 0.999 (`BRINGUP_RECIPE.md:1779`), expecting ~0.99999.
 - **Noise floor (computed):** **0.9999983 / 0.9999982 / 0.9999980**.
 - **Measured:** **0.9999969 / 0.9999964 / 0.9999959** at S = 32 / 512 / 4096 — **1.76x / 1.95x /
   2.08x** the floor. 11/11 tests pass.
@@ -527,7 +527,7 @@ and `DEC-013` (is `utils/` created at all, given the helpers are imported from
      frequencies, and **6 mid** strictly interpolated between the two. This is a **deviation from
      the recipe's stated control** and `DEC-036` records why: the recipe asks that the scaled and
      unscaled tables differ "for positions beyond `original_max_position_embeddings`"
-     (`BRINGUP_RECIPE.md:1093-1095`), and measured, `max|cos_scaled - cos_unscaled|` is
+     (`BRINGUP_RECIPE.md:1340-1349`), and measured, `max|cos_scaled - cos_unscaled|` is
      **1.99933 inside** the window and **1.99398 beyond** it — both saturated at the theoretical
      maximum of 2, because llama3 scaling divides long-wavelength frequencies at *every* position
      and `cos` oscillates. That assertion therefore cannot fail for the reason it exists. Both
@@ -644,12 +644,12 @@ What P5.4 can rely on, and what it must not assume:
   - bf8_b: **0.9999213 / 0.9999221 / 0.9999222** at S = 32 / 512 / 4096
   - bf16: **0.9999929** at all three
 - **Threshold:** PCC >= **0.999** @bf8_b and >= **0.9995** @bf16, **and <= 3x the floor at each
-  dtype** (`BRINGUP_RECIPE.md:1792`). Unlike `G-RMS`, Appendix A states a ratio bound for this gate,
+  dtype** (`BRINGUP_RECIPE.md:2069`). Unlike `G-RMS`, Appendix A states a ratio bound for this gate,
   so the ratio is **asserted**, not merely recorded.
 - **Measured:** 14/14 tests pass.
   - bf8_b: **0.9999133 / 0.9999144 / 0.9999144** -> **1.10x / 1.10x / 1.10x** the floor
   - bf16: **0.9999851 / 0.9999852 / 0.9999852** -> **2.11x / 2.10x / 2.09x** the floor
-  - Both dtypes run and both are recorded, as `BRINGUP_RECIPE.md:1792` requires. bf8_b clears its
+  - Both dtypes run and both are recorded, as `BRINGUP_RECIPE.md:2069` requires. bf8_b clears its
     threshold comfortably, so `DEC-021`'s "keep bf16 if bf8_b misses" contingency is not needed.
   - PCC is flat in sequence length to 7 decimal places, which is what a token-pointwise block
     should do; the S=32 bf8_b value differs only because a 32-row activation is one tile tall.
@@ -683,7 +683,7 @@ What P5.4 can rely on, and what it must not assume:
   - **The TP collective.** At `(1,1)` `tp == 1` and `MLP.__call__`'s all-reduce tail is skipped
     entirely, so `bringup_log/04_CCL_PLAN.md` §5 row 2 has still never executed in this package.
     `G-TP-PARITY` (P8) owns it. This is the recipe's own "a gate that passes on a mesh the
-    deployment never uses" caveat (`BRINGUP_RECIPE.md:576-578`) applied to a collective rather than
+    deployment never uses" caveat (`BRINGUP_RECIPE.md:791-793`) applied to a collective rather than
     to a head count.
   - **Column/row-parallel sharding.** At TP=1 `column_parallel` and `row_parallel` produce the same
     (unsharded) tensor, so this gate cannot tell the two mappers apart. `G-TP-PARITY` and
@@ -720,7 +720,7 @@ What P5.4 can rely on, and what it must not assume:
   broken floor. Each stage's floor is now computed from that stage's own quantised inputs.
   - block floor: bf8_b **0.9998805 / 0.9998657 / 0.9998521**; bf16 **0.9999875 / 0.9999854 / 0.9999838**
 - **Threshold:** PCC >= **0.999**; stages this package implements **<= 3x**; block **<= 8x**
-  (`BRINGUP_RECIPE.md:1793`). See **Deviations** for how the block budget is applied.
+  (`BRINGUP_RECIPE.md:2070`). See **Deviations** for how the block budget is applied.
 - **Measured:** 17/17 tests pass.
 
   | dtype | S | block PCC | raw ratio | SDPA-attributed residual |
@@ -765,7 +765,7 @@ What P5.4 can rely on, and what it must not assume:
   scores **0.51174** (bf8_b) / **0.51178** (bf16). Constructed by pre-applying
   `models/tt_transformers/tt/load_checkpoints.py:895` `permute`, the exact inverse of the loader's
   `reverse_permute` (`:891`), so the control runs the **real loader** rather than bypassing it.
-  **This is a discrepancy with the recipe, and in the safe direction:** `BRINGUP_RECIPE.md:1214`
+  **This is a discrepancy with the recipe, and in the safe direction:** `BRINGUP_RECIPE.md:1428-1430`
   expects ~**0.9475** for the same mistake, i.e. a control that barely fires; measured here it
   collapses to 0.51. At head_dim 128 with full rotary the unswizzled weight scrambles 128 channels
   per head, and both Q *and* K are unswizzled — which may be the difference from whatever variant
@@ -837,7 +837,7 @@ What P5.4 can rely on, and what it must not assume:
   - bf8_b: **0.9999743**-**0.9999754** (K), **0.9999752**-**0.9999753** (V)
   - bf16: **0.9999986**
 - **Threshold:** PCC >= **0.99** at the cache dtype and **<= 3x its floor**
-  (`BRINGUP_RECIPE.md:1794`); the layout claims on **bit-equality** (`torch.equal`, `rtol=atol=0`),
+  (`BRINGUP_RECIPE.md:2071`); the layout claims on **bit-equality** (`torch.equal`, `rtol=atol=0`),
   never PCC (§2.5).
 - **Measured:** 15/15 tests pass.
   - **Round trip, worst of 8 heads:** bf8_b `S=128` K **0.9999743** / V **0.9999753**; `S=512`
@@ -853,13 +853,13 @@ What P5.4 can rely on, and what it must not assume:
   - **Geometry, asserted exactly:** per-chip `(64, 1, 384, 128)` bf8_b TILE for 2 users x 32 layers,
     DRAM `NdShardSpec` `[1, 1, 32, 128]`, and `NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK == 32` — the
     producer's block geometry, kept so P10 can reuse its packed-GQA read-back
-    (`BRINGUP_RECIPE.md:1241-1243`).
+    (`BRINGUP_RECIPE.md:1456-1458`).
   - **The dtype delta `DEC-021` owed:** bf8_b K **0.9999756** / V **0.9999757** versus bf16
     **0.9999986** / **0.9999986** — **17.8x** the error on K and **17.7x** on V, for half the bytes
     (128 vs 256 per token per head). Measured, not assumed; `DEC-021` stands.
 - **Negative controls / refusals — five, all fired:**
   1. **The bit-exactness assertion itself is the control for the position map**, and it *caught a
-     real failure*: the first version of the probe, built to `BRINGUP_RECIPE.md:1260-1262`'s stated
+     real failure*: the first version of the probe, built to `BRINGUP_RECIPE.md:1475-1477`'s stated
      "<= 256" ceiling, failed at bf8_b on chunk 2's **odd** rows with `max|delta| = 1.0`. The cache
      was correct; the probe was not. Measured, the first inexact integer is **129** at bf8_b and
      **257** at bf16 — §2.5's ceiling is the **bf16** ceiling, and the cache dtype is bf8_b.
@@ -928,7 +928,7 @@ This session's scope was P5.4, P5.5 and P5.6 only — `tt/layer.py` and `tt/mode
 not written.
 
 All six P5 gates are recorded: `G-MESH`, `G-RMS`, `G-ROPE`, `G-MLP`, `G-KV` are `PASS` and `G-ATTN`
-is `PASS-WITH-DEVIATION` (`DEC-042`), so `BRINGUP_RECIPE.md:1267-1269`'s "all of G-MESH, G-RMS,
+is `PASS-WITH-DEVIATION` (`DEC-042`), so `BRINGUP_RECIPE.md:1482-1484`'s "all of G-MESH, G-RMS,
 G-ROPE, G-MLP, G-ATTN, G-KV must be PASS before P6" is satisfied under §1.4's definition of the
 verdicts.
 
@@ -1018,7 +1018,7 @@ ran. **These re-run logs are the ones the verdicts rest on.**
   (PCC 1.000000000, `max|Δ| = 0.0`), so the gate is scored against math that was already gated.
 - **Noise floor (computed):** the same fp32 layer with its **inputs and weights** rounded to the
   device dtypes and everything else in fp32. Internal intermediates are **not** quantised.
-- **Threshold:** PCC ≥ 0.999 and ≤ 8x the floor (`BRINGUP_RECIPE.md:1372`, Appendix A `:1854`),
+- **Threshold:** PCC ≥ 0.999 and ≤ 8x the floor (`BRINGUP_RECIPE.md:1511`, Appendix A `:1854`),
   applied per `DEC-051`: the raw ratio asserted at bf8_b, and the **SDPA-attributed residual**
   asserted at ≤ 8x at both dtypes.
 - **Measured:**
@@ -1052,7 +1052,7 @@ ran. **These re-run logs are the ones the verdicts rest on.**
 - **Deviations:** none from the threshold. `DEC-051` (attribution method), `DEC-054` (signature),
   `DEC-058` (control input scale) are the phase's judgement calls.
 - **What this gate does not prove.** It is an **integration** check
-  (`BRINGUP_RECIPE.md:1375`): it cannot localise a sublayer fault, and it may not substitute for
+  (`BRINGUP_RECIPE.md:1514`): it cannot localise a sublayer fault, and it may not substitute for
   `G-RMS`/`G-ROPE`/`G-MLP`/`G-ATTN`, all of which are met on their own. It also runs at TP=1, so
   neither module's TP collective has ever executed (P8), and it writes no KV cache — at TP=1 the
   packed cache refuses the model's 8 local KV heads outright (`00_MODEL_CARD.md` §4.1, `R-001`).
@@ -1060,7 +1060,7 @@ ran. **These re-run logs are the ones the verdicts rest on.**
 ### G-WEIGHTS — real-checkpoint weight loading, bit-exact
 - **Command:** `pytest models/demos/llama31_8b_d_p/tests/unit/test_weight_loading.py -x -q`
 - **Mesh / device:** one card, `(1,1)`. Cache-only at TP > 1 is the P8 extension
-  (`BRINGUP_RECIPE.md:1411`).
+  (`BRINGUP_RECIPE.md:1550`).
 - **Inputs (distribution):** not a synthetic distribution — the inputs **are** the real
   Llama-3.1-8B-Instruct checkpoint tensors at their stored dtype, `torch.bfloat16` (measured and
   logged by `torch_dtype_of`, matching `00_MODEL_CARD.md` §2). Stated rather than omitted because
@@ -1070,11 +1070,11 @@ ran. **These re-run logs are the ones the verdicts rest on.**
   difference cannot be mistaken for a loader fault. Every comparison is `torch.equal`
   (`rtol = atol = 0`), never PCC: recipe §2.5 measured a completely wrong mapping still scoring
   PCC 0.99890, and a transpose or swizzle applied twice is that class of bug
-  (`BRINGUP_RECIPE.md:1408-1409`).
+  (`BRINGUP_RECIPE.md:1547-1548`).
 - **Noise floor:** not applicable, and that is the point — a bit-exactness gate has no floor because
   the tolerance is zero. The nearest equivalent, recorded instead: `max|Δ| = 0.000e+00` on all
   twelve tensors.
-- **Threshold:** exact, in three parts (`BRINGUP_RECIPE.md:1404-1411`).
+- **Threshold:** exact, in three parts (`BRINGUP_RECIPE.md:1543-1550`).
 - **Measured:**
   - **(a) no missing, no unused.** Checkpoint keys **291**, expected **291**, missing **0**,
     unused **0** — over all 32 layers, read from `model.safetensors.index.json` with no tensor data
@@ -1167,7 +1167,7 @@ ran. **These re-run logs are the ones the verdicts rest on.**
   it (`DEC-064`).
 - **Threshold:** the verifier exits 0 over all 32 layers and prints a per-layer table; the streamed
   driver equals `LlamaModel`'s own loop at `rtol=atol=0`; a zeroed layer and a deleted layer must
-  both make the verifier exit non-zero (`BRINGUP_RECIPE.md:1588-1590`).
+  both make the verifier exit non-zero (`BRINGUP_RECIPE.md:1682-1684`).
 - **Measured:**
   - **32 layers, 512 tokens, fp32, 128.0 MB** (expected 128.0 MB); every layer `[1, 8, 512, 128]`
     for both K and V; every element finite over the **whole** tensor, not a leading sample.
@@ -1228,7 +1228,7 @@ ran. **These re-run logs are the ones the verdicts rest on.**
 - **Why it runs on one card.** A model-level KV write cannot at TP=1 — the model emits all 8 local
   KV heads and the per-chip slot holds one. The cache is therefore driven through `write_kv_chunk`
   **one head at a time, head `h` → layer slot `h`**: the same op, the same DRAM `NdShard` geometry
-  and the same `head_dim = 128` a chip performs at TP=8 (`BRINGUP_RECIPE.md:1574`).
+  and the same `head_dim = 128` a chip performs at TP=8 (`BRINGUP_RECIPE.md:1659`).
 - **Inputs:** the golden trace's own 512 `token_ids` — real prompt tokens, real checkpoint weights.
   The hidden states the producers see are the ones the assembled model actually produces, i.e. the
   real-scale arm §2.2.2 and `R-018` say predicts model behaviour, not a synthetic one.
@@ -1237,7 +1237,7 @@ ran. **These re-run logs are the ones the verdicts rest on.**
   are permuted HF → Meta before comparison, and the permutation is applied *before* quantising** —
   `bfloat8_b` shares one exponent per 16-element block of the last dim, so the block boundaries move
   with the permutation. V is not swizzled and is compared as-is.
-- **Thresholds (`BRINGUP_RECIPE.md:1578-1584`):** mutual PCC ≥ **0.999 per layer** (expected exact);
+- **Thresholds (`BRINGUP_RECIPE.md:1663-1674`):** mutual PCC ≥ **0.999 per layer** (expected exact);
   vs golden ≥ **0.99** K / ≥ **0.98** V; layer-0 error ratio ≤ **3x**; per-layer error step ≤ **4x**
   from layer 3.
 - **Computed noise floor — two definitions, both recorded (`DEC-064`, applying `R-021` to P7):**
@@ -1298,14 +1298,14 @@ ran. **These re-run logs are the ones the verdicts rest on.**
 ### G-RUNTIME — the runtime against the engine's real call site, statically (P7)
 - **Command:** `pytest models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py -q`
 - **Raw log:** `raw/G-RUNTIME_20260904T131649Z.log` (first run: `raw/G-RUNTIME_20260904T125242Z.log`, identical)
-- **Mesh / device:** **none** (`BRINGUP_RECIPE.md:1977` gives this gate device "none"). 37 tests,
+- **Mesh / device:** **none** (`BRINGUP_RECIPE.md:2024` gives this gate device "none"). 37 tests,
   8.2 s, no mesh opened. The two `__init__` refusals are reached with a `_MeshStub` exposing only
   `.shape` — both run before any `ttnn` object is constructed — and the per-chunk refusals with an
   `object.__new__` instance carrying only the three attributes those checks read (`DEC-068`). The
   code under test is the real method on the real class with the real messages; only the state it
   reads is supplied directly.
 - **Inputs:** the engine's own source, parsed with `ast`. **Not the contract doc** — that is the
-  whole point of the gate (`BRINGUP_RECIPE.md:1593-1596`).
+  whole point of the gate (`BRINGUP_RECIPE.md:1687-1690`).
 - **Reference dtype policy:** not applicable; no numbers are measured.
 - **Threshold:** every unguarded name the engine touches exists on the runtime with a signature that
   binds the engine's actual call; every `runtime.config` field the engine reads exists; every
@@ -1678,7 +1678,7 @@ way it is.
 - **Reference dtype policy:** the golden is **fp32** throughout, regenerated at 1024 tokens for this
   gate and re-proved bit-identical to `LlamaModel`'s own loop — `max|delta| = 0.0` on K, V **and** the
   post-norm hidden over all 32 layers. K is permuted HF -> Meta **before** any quantiser (§2.2.3a).
-- **Threshold, and it names a depth** (`BRINGUP_RECIPE.md:1768-1772`): **>= 0.999 at layer 1** — one
+- **Threshold, and it names a depth** (`BRINGUP_RECIPE.md:1795-1799`): **>= 0.999 at layer 1** — one
   attention layer, i.e. the per-op claim. Deep layers by the per-layer error **step** <= 4x from L3.
   Both arms vs the golden at `G-CHUNK`'s carried K >= 0.99 / V >= 0.98. The accumulated min over 32
   layers is **recorded and not gated**.
@@ -1930,7 +1930,7 @@ next**, then P9 (cleanliness). Two things P10 should read first:
 - **What pass 3 is and why it exists.** Passes 1 and 2 both key on `path:line`, so a bare
   `` `G-FOO_<timestamp>.log` `` under `raw/` — which is exactly how this ledger cites its evidence — was scanned
   by **neither**. The recipe's own definition of a gate is that artefact ("A gate with no raw log did
-  not happen", `BRINGUP_RECIPE.md:199`; Appendix C item 2), so a ledger row citing a file that is not
+  not happen", `BRINGUP_RECIPE.md:221`; Appendix C item 2), so a ledger row citing a file that is not
   there is a `PASS` with no evidence, and nothing was checking for it. Pass 3 checks it. It accepts
   `.log.gz` for `.log`, because oversized logs are gzipped losslessly (`R-040`).
 - **What it found, on its first run:** two dangling references in the **P5.4-P5.6** status block
@@ -1989,7 +1989,7 @@ exists — hence P8's third verifier pass.
 - **Threshold:** the checklist at `ADDING_A_PREFILL_MODEL.md:246-255`, item by item; **0** abstract
   methods left; `PREFILL_MODEL=llama31_8b_d_p` resolves through the registry; the registry-fed
   `variant` fixture picks it up; every `model_config` constant equals `config.json`; and the import
-  is **measured** with no heavy module in `sys.modules` (`BRINGUP_RECIPE.md:1935-1938`).
+  is **measured** with no heavy module in `sys.modules` (`BRINGUP_RECIPE.md:1982-1985`).
 - **Computed noise floor:** none applies. The one number with a threshold is the import time, whose
   budget is a *separator* rather than a measurement of anything: `DEC-101` states why 1.0 s, and the
   assertion that carries the claim is the `sys.modules` one.
@@ -2073,7 +2073,7 @@ exists — hence P8's third verifier pass.
 - **Reference dtype policy:** not applicable — this gate scores no tensor. It is a serving-liveness
   gate; the numbers are `G-MOCK-MIG`'s.
 - **Threshold:** every chunk accepted and served, the shutdown sentinel received, clean exit
-  (`BRINGUP_RECIPE.md:1953`).
+  (`BRINGUP_RECIPE.md:1977-1978`).
 - **Computed noise floor:** none — no numeric quantity is compared.
 - **Measured:**
 
@@ -2104,7 +2104,7 @@ exists — hence P8's third verifier pass.
   other half of `R-039` stands — the `sp_bootstrap` core is still reachable only at
   `max_seq_len == chunk_size`, which this configuration never satisfies, so that core has a gate and
   no deployment use. Note also that `max_seq_len > chunk_size` **strictly** in both arms, which is
-  the recipe's own warning (`BRINGUP_RECIPE.md:1948-1951`): at equality the SP bootstrap runs and
+  the recipe's own warning (`BRINGUP_RECIPE.md:1995-1998`): at equality the SP bootstrap runs and
   "anything you measure is measuring the wrong path". The runner logs which it is only indirectly;
   `G-MESH-KV`'s harness asserts the core by name and this one inherits that geometry.
 
@@ -2167,7 +2167,7 @@ exists — hence P8's third verifier pass.
   `kv_migration_base_address` answered, `allgather_kv_stage_layouts` ran, and the gathered list
   reached `assert_single_rank_stage` and was accepted.
 - **Verdict:** **PASS** — 0.986623 against 0.93 is **5.6x** the threshold's error budget on V.
-- **The explicit comparison the recipe asks for** (`BRINGUP_RECIPE.md:1956-1961`: this gate "is the
+- **The explicit comparison the recipe asks for** (`BRINGUP_RECIPE.md:1983-1985`: this gate "is the
   strongest evidence in the whole bring-up, because it is a second, device-less reader in a
   different process agreeing with the on-device `G-MESH-KV` number at the same shape. **Compare the
   two explicitly.**"):
@@ -2218,7 +2218,7 @@ exists — hence P8's third verifier pass.
 - **Raw log:** `raw/G-KV-TABLE_20260904T172909Z.log`
 - **Mesh / device:** the full `(4,8)` galaxy, `FABRIC_1D`. Appendix A gives this gate "target mesh"
   and it must be: the table's entire content is the SP x TP geometry. Opened as the **full** mesh,
-  never a top-level partial one (`BRINGUP_RECIPE.md:1672-1693`).
+  never a top-level partial one (`BRINGUP_RECIPE.md:1708-1727`).
 - **Inputs / input distribution:** a **labelled probe**, not random data. Each head's 128 lanes carry
   four 32-lane constant fields — `position % 128`, `position // 128 + 1`, `head + 1` (+16 for V),
   and `slot * num_layers + layer + 1` — so the bytes at any address fully determine
@@ -2233,7 +2233,7 @@ exists — hence P8's third verifier pass.
   tensor, so no reference precision enters; the secondary one compares against the exact host labels,
   which are integers representable in both dtypes.
 - **Threshold:** `torch.equal`, `rtol = atol = 0`, on every entry the table addresses; plus a control
-  that reads one head through another's config, which must **fail** (`BRINGUP_RECIPE.md:1962-1967`;
+  that reads one head through another's config, which must **fail** (`BRINGUP_RECIPE.md:2009-2014`;
   §2.5 — a rotated head-to-column mapping still scores PCC 0.99890, so PCC cannot be the
   discriminator).
 - **Computed noise floor:** none, by construction. A bit-equality claim has no floor: the
@@ -2554,3 +2554,305 @@ number and a raw log: `G-ADAPTER`, `G-REQUEST` (two arms), `G-MOCK-MIG` (two arm
 `G-LOOPBACK` scoped out by `DEC-103` with `R-043` enumerating what that costs. The regression is
 **246 passed, 0 failed** and the citation verifier is **604/604 · 1169/1169 · 128/128**.
 **P9 (cleanliness) is next, and it is the last phase.**
+
+---
+
+## Phase P9 — cleanliness
+
+| Gate | Phase | What it proves | Threshold | Measured | Verdict | Date (UTC) | Raw log |
+|---|---|---|---|---|---|---|---|
+| G-CLEAN | P9 | the whole-package cleanliness sweep, eleven items | all eleven pass, each with its command and output recorded | **11/11 pass**, and the sweep found six real defects (five in the logs, one in the code) — the largest being **247 of 317 prose recipe citations pointing at unrelated text while the verifier reported them `resolved`**. Items: (1) `pre-commit` clean on all 176 branch files; (2) SPDX pair on **54/54** `.py`, JSON + log markdown exempt with reasons (`DEC-123`); (3) **0** TODO/FIXME/XXX/HACK in package source; (4) **9** `except` handlers, none a silent `pass`, every one off the correctness path and logging; (5) **0** `print` in `tt/`, one stale docstring found and fixed; (6) **16** env vars by AST scan, 16/16 in the README (`DEC-122`); (7) `README.md` complete, all eight required sections (`DEC-124`); (8) adapter import **0.0155×** the template's — 37.8 ms vs 2441.6 ms, **64.6× cheaper**, asserted in-suite (`DEC-121`); (9) **21/21** `tt/` modules own a test, 0 gaps; (10) citations **629/629 · 1225/1225 · 146/146** + a new recipe-fingerprint pass (`DEC-120`); (11) regression **247 passed, 0 failed**, and `G-MOCK-MIG` arm 2 reproduced **every digit** | PASS | 2026-09-04 | `raw/G-CLEAN-item1_20260904T185713Z.log`, `raw/G-CLEAN-item2_20260904T192142Z.log`, `raw/G-CLEAN-item3_20260904T192142Z.log`, `raw/G-CLEAN-item4_20260904T192142Z.log`, `raw/G-CLEAN-item5_20260904T192142Z.log`, `raw/G-CLEAN-item6_20260904T192142Z.log`, `raw/G-CLEAN-item6_20260904T193831Z.log`, `raw/G-CLEAN-item8_20260904T191444Z.log`, `raw/G-CLEAN-item9_20260904T192142Z.log`, `raw/G-CLEAN-item10_20260904T195811Z.log`, `raw/P9-REGRESSION_20260904T193410Z.log.gz`, `raw/G-MOCK-MIG-P9RERUN-producer_20260904T193238Z.log`, `raw/G-MOCK-MIG-P9RERUN-runner_20260904T193238Z.log.gz`, `raw/G-RMS-P9RERUN_20260904T195714Z.log` |
+
+### G-CLEAN — the eleven-item cleanliness sweep
+- **Command:** eleven, one per item; each teed into `bringup_log/raw/G-CLEAN-item<N>_<stamp>.log`.
+- **Mesh / device:** none for items 1-10. Item 11 uses every shape the suite uses, plus the full
+  `(4,8)` galaxy for the `G-MOCK-MIG` arm-2 re-run.
+- **Threshold:** all eleven items pass (`BRINGUP_RECIPE.md:2043`).
+- **Verdict:** **PASS**
+- **Human gates:** `H6` (residual risk) and `H7` (upstream fixes) both **ran on their defaults** —
+  no human was available — and are recorded as `R-056` and `R-057` with the questions verbatim, as
+  `BRINGUP_RECIPE.md:198-200` requires. Nothing in this phase is a sign-off, and 20 external defects
+  are logged with 0 filed.
+
+#### Item 1 — `pre-commit` on every file this branch touches
+`pre-commit run --files $(git diff --name-only main...HEAD)` over **176** files: every hook Passed or
+Skipped, **0** Failed, on the first run. Re-run after each of P9's own edits; the only failure at any
+point was `trailing-whitespace` on a raw log P9 itself had just written (the column-aligned item-9
+inventory), fixed by the hook and re-run clean — which is exactly the sequence `LANDMINES.md`'s
+"Repo hooks" table predicts. Hooks were run **before** the two device runs, per the same table.
+
+#### Item 2 — the SPDX header pair
+**54/54** `.py` files carry both lines inside their first five (the shebang in the two `scripts/*.py`
+pushes them to lines 2 and 4). `README.md` carries them. **Exempt, with reasons** (`DEC-123`):
+`configs/Llama-3.1-8B-Instruct/config.json` must stay byte-identical to the checkpoint's
+(`md5 3cd5831d379b509d53afade0e24c36e9`, asserted by a test — a header would break the gate that
+proves the model identity); `tt/runners/manifests/llama31_8b_d_p.json` because JSON has no comment
+syntax, as `models/demos/gpt_oss_d_p/tt/runners/manifests/gpt_oss_d_p.json` also shows; and
+`bringup_log/*.md` because the kit's own five templates and `models/demos/minimax_m3/README.md`
+carry none either. **Item 2 as written — "every new file" — is unsatisfiable for a bundled JSON**,
+which is a recipe defect rather than a package one.
+
+#### Item 3 — TODO / FIXME / XXX / HACK
+**0** in this package's own source. The seven grep hits are all *references* to an upstream marker in
+another package — `models/demos/gpt_oss_d_p/tt/ccl.py:134`'s `reset_global_semaphores` TODO — in
+prose or in a content-checked `CITES` row (`DEC-028` owns the decision to live with it). Nothing here
+needs a filed issue.
+
+#### Item 4 — `except` handlers
+**9** handlers in the package, listed with a per-site justification in the raw log. **None** is a
+bare `except: pass` (`grep -rn 'except.*:\s*pass'` → no matches) and every one logs, prints or
+records the failure it caught. The only one on a device path is `tt/layer.py:76`, the
+`LLAMA_DELTA_PROBE` bring-up probe — the single case recipe §0 rule 5 allows, it logs a warning
+rather than passing silently, its handler is exercised deliberately by
+`tests/unit/test_decoder_layer_vs_ref.py:536`, and it computes nothing the model consumes. Four of
+the remaining eight are *the measurement*: `tests/fabric_topology_matrix.py:432`/`:491` turn a child
+error or a hang into a recorded `RESULT` line, and `tests/unit/test_dense_sp_vs_ref.py:349`/`:556`
+capture the ring op's `TT_FATAL` text and then **assert the refusal happened**.
+
+#### Item 5 — dead code, commented-out experiments, leftover `print`
+Unused imports and variables are enforced by the `autoflake` hook (item 1, Passed). **No `print` in
+`tt/`**; the 83 elsewhere are all in the three standalone scripts and the two `tests/` harnesses whose
+stdout *is* the gate transcript, two of which (`verify_citations.py`, `verify_golden_kv.py`) must not
+depend on `loguru` at all — `verify_golden_kv.py` imports no `ttnn` by gate contract. Eight of the 21
+`tt/` modules use `loguru`; none prints. No commented-out code: the largest comment block in the
+package (`tests/test_factory.py:205-227`) is the measured argument for `FABRIC_1D` + `Topology.Ring`
+on this galaxy, not a disabled experiment.
+
+**One real defect, found and fixed.** `tests/test_factory.py`'s `prefill_topology()` docstring said
+"`Ring` (deployment default)" while the `os.getenv` two lines above it defaults to `"linear"`.
+`DEC-079`/`DEC-097` pinned `Linear` in P8 because this galaxy has no ring fabric; the docstring
+pre-dated that and was never updated, so the file contradicted itself and the README. Reworded to
+name `Linear` as the default and say why. It is the only stale statement the sweep found in the code
+— which is worth stating, because it found five in the logs.
+
+#### Item 6 — the env-var table
+**16** distinct variables over **31** read sites, **0 unresolved**, all 16 in the README's table.
+Generated by an AST walk, not a grep, and the walk had to be written twice (`DEC-122`): the first
+version keyed on a literal first argument, reported **15**, and missed `LLAMA_DELTA_PROBE` — the
+package's own variable — because `tt/layer.py:54` reads it through a module constant. The second
+version resolves module-level string constants and **reports unresolved name expressions loudly**
+rather than returning a shorter answer. The recipe's warning that a hand list "misses the ones that
+matter" is right and incomplete: an automated list misses the same variable for a different reason.
+Three variables are new since P8 (`PREFILL_HF_MODEL`, `PREFILL_TTNN_CACHE`, `PREFILL_MODEL`), all
+three the engine's own; the package still invents **no** `PREFILL_*` variable of its own.
+
+The scan is logged **twice**, and the reason is a small instance of `R-041`'s lesson: the first
+run predates item 5's docstring fix, which added five lines to `tests/test_factory.py` and moved
+two of the reads (`PREFILL_FABRIC` 228 -> 233, `TT_MESH_GRAPH_DESC_PATH` 253 -> 258). The first log
+records what ran then and is kept unaltered; the re-run is the evidence for the README's table,
+which has to describe the delivered tree.
+
+#### Item 7 — `README.md`
+All eight required sections present (`BRINGUP_RECIPE.md:2030-2032`): architecture table, deployment
+path with the `TP == num_key_value_heads` arithmetic, status table with measured PCC, run commands,
+env-var table, layout, the "why not `models/common/`" answer with both its citations, and "what is
+not implemented". P8 left it a deliberate stub; this is the full file (`DEC-124`).
+
+Two things it now carries that the ledger alone could not:
+1. **`G-MOCK-MIG`'s numbers sit in the status table beside `G-MESH-KV`'s**, in the same table, with
+   the agreement stated — 0.996784 / 0.986623 device-lessly in a second process against
+   0.9967844 / 0.9866232 on device, and **the same argmin layers** (K L22, V L28). Two readers, two
+   processes, two position→address derivations. It is the package's strongest single line and it was
+   previously visible only to someone who read `06_GATES.md`.
+2. **A "known-imperfect in the record itself" section**, so a reader learns about `R-053`'s citation
+   defect from the README rather than from the risk register.
+
+#### Item 8 — adapter import cost, as a ratio
+Five cold subprocesses per module. `models.demos.llama31_8b_d_p.tt.runners.adapters.llama`:
+**37.7-38.0 ms**, heavy modules `[]`, 210 entries in `sys.modules`. The template it mirrors,
+`models.demos.gpt_oss_d_p.tt.runners.adapters.gpt_oss`: **2445-2466 ms**, heavy modules
+`['torch', 'ttnn']`, 3273 entries. **Ratio 0.0155 — the template is 64.6× more expensive.**
+
+The cost is attributable to **one line**: `gpt_oss.py:25` imports `models.common.utility_functions`,
+which alone measures **2487.9 ms** and pulls `torch` and `ttnn`. The template's other module-scope
+import, `models/demos/deepseek_v3_d_p/reference/gpt_oss_120b_config.py`, costs **0.6 ms** and nothing
+heavy — worth recording because the P10 hand-over named both as the cause and only one is. So the
+reference adapter breaks the import-lightness `ADDING_A_PREFILL_MODEL.md:252` requires of it, which
+is `R-055` and belongs to `HUMAN GATE H7`.
+
+Asserted in-suite (`DEC-121`) rather than measured once, with a 4× margin on a 64.6× difference, and
+the second assertion is the more important one: the template **must** report heavy modules. Without
+it, "no heavy module found" cannot be distinguished from "the probe is blind" — the failure mode
+§2.2.1 describes for controls and `DEC-111` hit for guards.
+
+#### Item 9 — test inventory
+**21 `tt/` modules with code, 21 owned.** Full mapping in
+`raw/G-CLEAN-item9_20260904T192142Z.log`; the summary:
+
+| `tt/` module | owning test(s) |
+|---|---|
+| `attention/__init__.py` (class `Attention`, 135 lines — **not** a shim) | `test_attention_vs_ref.py`, `test_kv_cache_tp8.py`, `test_tp_parity.py` |
+| `attention/config.py` | `test_decoder_layer_vs_ref.py`, `test_model_vs_ref.py` |
+| `attention/dense_sp.py` | `test_dense_sp_vs_ref.py` |
+| `attention/kv_cache.py` | `test_kv_cache_vs_ref.py` + 6 more |
+| `attention/operations.py` | `test_attention_vs_ref.py`, `test_attention_chunked_vs_ref.py`, `test_kv_cache_tp8.py` |
+| `attention/prefill.py` | `test_attention_vs_ref.py` + 4 more |
+| `attention/weights.py` | `test_attention_vs_ref.py` |
+| `ccl.py` | `test_ccl_semaphores.py` + 7 more |
+| `config.py` | `test_mesh_config.py` + 18 more |
+| `embedding.py` | `test_embedding_vs_ref.py` |
+| `layer.py` | `test_decoder_layer_vs_ref.py`, `test_model_vs_ref.py`, `test_tp_parity.py`, `test_kv_cache_tp8.py` |
+| `lm_head.py` | `test_lm_head_vs_ref.py` |
+| `mlp.py` | `test_mlp_vs_ref.py`, `test_tp_parity.py` |
+| `model.py` | `test_model_vs_ref.py`, `test_weight_loading.py`, `test_kv_cache_tp8.py`, `test_attention_chunked_vs_ref.py` |
+| `model_config.py` | `test_weight_loading.py` + 5 more |
+| `rms_norm.py` | `test_rms_norm_vs_ref.py`, `test_tp_parity.py` |
+| `rope.py` | `test_rope_vs_ref.py` + 6 more |
+| `runners/adapters/llama.py` | `test_prefill_adapter.py` |
+| `runners/kv_chunk_table.py` | `test_kv_chunk_table.py`, `test_prefill_runtime_chunked.py` |
+| `tt_prefill_runtime.py` | `test_prefill_runtime_chunked.py`, `test_prefill_adapter.py`, `galaxy_prefill_kv_pcc.py` |
+
+The three files owning nothing are `tt/__init__.py`, `tt/runners/__init__.py` and
+`tt/runners/adapters/__init__.py` — **three lines each, the SPDX pair and a blank**, no code to test.
+Item 9 says "close gaps rather than flagging them"; there were none to close.
+
+#### Item 10 — citations, and the phase's largest finding
+**629/629** content-checked citations (`CITES` 604 → 629), **1225/1225** doc refs, **146/146** cited
+raw artefacts, and a **new fourth pass** that fingerprints the recipe. Clean.
+
+**And the clean report is exactly what had to be checked rather than believed.** Item 10's own gate
+text says to expect "un-verified citations in prose that no earlier phase scanned", so P9 content-
+triaged every `BRINGUP_RECIPE.md:N` reference in the package: **247 of 317 were wrong**, every one
+reported `resolved` by pass 2, which only range-checks. The cause is mechanical: the kit's recipe
+grew **1896 → 2235 lines during the run**, so a citation written in P0-P5 points about 235 lines
+short of its target today. `R-053` and `DEC-120` carry the method and the numbers; the short version:
+
+- **205** were re-pointed by a provable rule — `git blame` on the citing line names the recipe
+  version its author was reading, `difflib` maps the cited line to HEAD, and the move is applied only
+  when the old and new text are **byte-identical**. Four of the hand-checked targets landed on lines
+  `CITES` independently content-checks, which is the corroboration.
+- **A second class survived that**: refs that were **wrong when written**. Sampled after the
+  mechanical pass, **5 of 15** were still wrong. So the **125 code-surface refs** (`tt/`, `tests/`,
+  `scripts/`, `README.md`) were read one at a time and **57 re-pointed**; a fresh sample of 12 is
+  **12/12 correct**. The **202 refs in `bringup_log/`** got the mechanical pass plus the fixes a
+  14-ref sample turned up, and their residual error rate is **~20%, measured** — about 40 wrong line
+  numbers still in the logs, recorded rather than fixed.
+- **Two automated approaches were built and discarded** before the byte-identity rule, and that is
+  the reusable part: a version-search variant *oscillated* (it re-moved refs the first pass had just
+  fixed correctly), and a token-overlap variant scored short recipe lines at 1.00 because its overlap
+  denominator was `min(|a|,|b|)`. Both looked convincing in their summary output.
+- **431 abbreviated `` `:NNN` `` continuation refs are checked by nothing** (`R-054`): the verifier's
+  regex needs a filename, so they are neither resolved, nor range-checked, nor counted. Two were
+  found wrong by hand during the code-surface pass and fixed.
+- **A placeholder citation survived all eleven phases.** `05_DECISIONS.md`'s `DEC-055` cited its
+  evidence as `` `raw/G-MODEL_<ts>.log` `` — the exact hazard `BRINGUP_RECIPE.md:249-251` warns about
+  ("a generic placeholder written in the citation form is indistinguishable from a citation") — and
+  both passes were blind to it. Named.
+- **The new pass 4** records the recipe's SHA-256 and line count and **fails the gate** if either
+  changes, printing the instruction to re-validate every prose ref. That is the mitigation `R-017`
+  has wanted since P6 and never had: the recipe was edited out of band **three times** during this
+  run, and the third time is why the P10 ledger's `1169` doc refs reproduces as `1168` on the
+  committed tree (`R-058`).
+
+#### Item 11 — re-run the suite, and reproduce two recorded numbers
+- **Regression:** `pytest models/demos/llama31_8b_d_p/tests -q -p no:randomly` on the final tree,
+  after every hook, with `HF_MODEL`, `TT_CACHE_PATH`, `PREFILL_MODEL=llama31_8b_d_p` and
+  `PREFILL_TRACE_DIR` at the 1024-token golden. **247 passed, 0 failed** in **22:39** (1359.28 s).
+  P10 stood at 246; P9 adds **one** — `test_the_adapter_import_is_cheaper_than_the_template_it_mirrors`
+  (`DEC-121`). No other test changed: P9's edits to `tests/` were citation line numbers inside
+  docstrings and comments.
+- **An earlier run was killed and its log deleted.** It had started before P9's last citation edits,
+  so its result would have belonged to a different tree — the same reasoning `DEC-090` applied in P8
+  and the P10 session applied to its first attempt. An incomplete regression is not evidence.
+- **`R-041` bit for the third time**, in the same place: the run rewrites
+  `raw/G-CHUNK_per_layer_pcc.json` with 1024-token content while P7's ledger row cites a 512-token
+  measurement. Backed up before and restored after, and the restored files are byte-identical to the
+  committed copies (`cmp` clean on all four). The workaround has now been needed in P8, P10 and P9;
+  the kit defect is real and is `R-041`.
+- **Numerical gate re-run — `G-MOCK-MIG` arm 2**, chosen because it is the branch that found
+  `DEC-111` and the one no document mentions (`PREFILL_ENABLE_MIGRATION=1` +
+  `PREFILL_MOCK_MIGRATION=1` takes the engine's real stage-gather path and calls
+  `kv_migration_base_address` with no worker binaries). **Every recorded digit reproduced:**
+  `KV cache PCC PASSED (min 0.986623 >= 0.93 across 1 slots; per cache: k=0.996784, v=0.986623)`
+  over `[0,1024)` across **32/32** local layers, per-layer min **K 0.996784 at L22** and
+  **V 0.986623 at L28** — the same values *and* the same argmin layers as P10 recorded and as
+  `G-MESH-KV` measured on device. The table built 16 configs / 45,056 entries; the LayerAck channel
+  registered 32 acks per chunk; producer rc 0, runner rc 0.
+  Raw: `raw/G-MOCK-MIG-P9RERUN-producer_20260904T193238Z.log`,
+  `raw/G-MOCK-MIG-P9RERUN-runner_20260904T193238Z.log.gz`, `raw/G-RMS-P9RERUN_20260904T195714Z.log` (gzipped, 848 KB > the hook's 500 KB limit;
+  compression is lossless so the evidence stays byte-exact).
+- **Second numerical gate — `G-RMS` in isolation.** Item 11 asks for **two**, so the cheapest gate
+  with recorded digits was re-run on the final tree: 10/10 tests, 13.0 s. Every digit reproduced,
+  including the floors and the ratios: random weights **0.9999957 / 0.9999958 / 0.9999957** against
+  floors 0.9999973 / 0.9999973 / 0.9999972 -> **1.56 / 1.57 / 1.54x**; real layer-0 gain
+  **0.9999971 x3** against 0.9999986 -> **2.11 / 2.13 / 2.12x**; zero-gain control
+  `max|out| = 0.0`; and the in-suite `fp32_dest_acc_en` A/B still shows the flag worth
+  **6.90 / 8.66x** at seq 32 / 512. Raw: `raw/G-RMS-P9RERUN_20260904T195714Z.log`.
+- **The citation verifier is the third re-run**, after every edit: it moved from 604/604 to
+  **629/629** as P9 promoted 25 references into `CITES`, and never reported a mismatch it did not
+  earn — it caught P9's own off-by-one on `models/demos/gpt_oss_d_p/tt/runners/adapters/gpt_oss.py`
+  (P9 wrote `:26`; the import is on `:25`) and the two deliberate placeholders in this very block,
+  which is the artefact pass P8 added doing precisely its job.
+
+#### What the sweep found in the **logs**, which is where the recipe says to expect it
+Six items, five of them in the logs and one in the code (item 5's docstring). In severity order:
+
+1. **`R-053` — 247 of 317 prose recipe citations wrong**, every one reported `resolved`. Item 10.
+2. **`R-054` — 431 abbreviated `` `:NNN` `` refs checked by nothing.** Item 10.
+3. **A placeholder in the citation form survived eleven phases.** `DEC-055`'s evidence line read
+   `` `raw/G-MODEL_<ts>.log` ``. `BRINGUP_RECIPE.md:249-251` warns about exactly this ("a generic
+   placeholder written in the citation form is indistinguishable from a citation") and both passes
+   were blind to it. Now names `raw/G-MODEL_20260904T115256Z.log`.
+4. **`07_RISKS.md`'s own header was stale.** It said "Re-checked at every phase boundary (last: end
+   of P8)" through the whole of P10, while P10 added `R-041` … `R-052` to it. Corrected to P9, with
+   the miss noted in place.
+5. **A P10 finding about the kit is itself false, and P9 could only tell by looking.** P10's closing
+   note records that `LANDMINES.md`'s new row "was appended after a blank line following the 'Repo
+   hooks' table, with **two** cells where that table has three … it therefore renders as its own
+   separate two-column table" and that its content belongs in "Method traps". On the committed tree
+   the row is at `models/demos/common/bringup/LANDMINES.md:59` — **inside** the two-column "Method
+   traps" table, third row, correctly formed and in the right place. Either the kit was fixed
+   between P10's reading and the commit, or the note was written from the diff rather than from the
+   file. **It is retracted here.** The lesson is the one `R-016` keeps making: a claim about another
+   file has to be read out of that file, and a phase that reports on a dependency it does not own
+   should re-check the claim against the committed state.
+6. **`06_GATES.md`'s `G-OUTLINE` row and `DEC-109` both say the P3 tree contracts 41 files**; it
+   contracts 57, and 57 were delivered. Both are P3-era measurements in append-only files and are
+   left as written; the correction is in `03_OUTLINE.md` §1's `P9 check` note. The P10 hand-over
+   asked P9 to fix "41" in `03_OUTLINE.md:102` — that sentence already said **57**, so the
+   hand-over item was itself misdirected at the wrong file.
+
+### P9-REGRESSION and G-CITE (P9) — the two cross-cutting rows
+
+| Gate | Phase | What it proves | Threshold | Measured | Verdict | Date (UTC) | Raw log |
+|---|---|---|---|---|---|---|---|
+| P9-REGRESSION | P9 | the whole package suite still passes after P9's own edits | 0 failed | **247 passed, 0 failed** in 22:39 (1359.28 s). P10 stood at 246; P9 adds **one** test, the import-cost ratio (`DEC-121`). An earlier run was **killed and its log deleted** because it had started before P9's last citation edits — `DEC-090`'s reasoning | PASS | 2026-09-04 | `raw/P9-REGRESSION_20260904T193410Z.log.gz` |
+| G-CITE (P9) | P9 | every `path:line`, every doc ref and every cited raw artefact resolves — **and, new in P9, the recipe those refs point into is pinned** | 0 mismatched, 0 unresolved, 0 missing artefacts | **629/629** content-checked (`CITES` 604 -> 629: 25 new rows, 20 of them the recipe lines P9 re-pointed onto, 4 the README's load-bearing refs, 1 the template import that item 8 rests on), **1225/1225** doc refs, **146/146** raw artefacts, and pass 4 reports the recipe fingerprint **MATCHES**. What it caught this phase is in item 10: **247 of 317** prose recipe refs were wrong and all of them had been reported `resolved` by pass 2 | PASS | 2026-09-04 | `raw/G-CLEAN-item10_20260904T195811Z.log` |
+
+```
+STATUS after P9: gates PASS=29 FAIL=0 DEVIATION=2 OUT-OF-SCOPE=1 BLOCKED=0 | next: none — P9 is the last phase
+Open DECs needing review: DEC-120 (247 prose recipe citations re-pointed mechanically; the log files'
+residual error rate is ~20%, measured, and unfixed), DEC-123 (SPDX exempts two JSON files and the log
+markdown), DEC-125 (a P10 finding about LANDMINES.md retracted)
+```
+
+`PASS=29` is P10's 28 plus `G-CLEAN`. `DEVIATION=2` (`G-ATTN`, `G-FABRIC-MATRIX`) and
+`OUT-OF-SCOPE=1` (`G-LOOPBACK`, `DEC-103`) are unchanged. The three cross-cutting rows —
+`P9-REGRESSION`, `G-CITE (P9)` and the per-phase regression before them — sit outside the
+Appendix A tally, as in every earlier phase.
+
+**Appendix C, item by item, at sign-off:**
+
+| # | Definition of done | State |
+|---|---|---|
+| 1 | the P3 tree, no dead files | **57/57**, file-for-file; 0 TODO markers, 0 dead branches, 0 commented-out code |
+| 2 | every Appendix A gate `PASS` / `PASS-WITH-DEVIATION` / scoped out, with raw logs | **31/31** gate names have a ledger row and a raw log; 2 deviations with a `DEC`, 1 scoped out with a `DEC` and a named risk |
+| 3 | `G-LOOPBACK` run, blocked, or out of scope by a `DEC` with a named residual gap | **out of scope** (`DEC-103`), residual gap `R-043` |
+| 4 | `bringup_log/` reads as a coherent narrative | 125 `DEC` entries, 58 risks, every judgement reconstructable — **but see the caveat below** |
+| 5 | `README.md` carries measured PCC, the `models/common/` answer, and "not implemented" | complete, plus a "known-imperfect" section (`DEC-124`) |
+| 6 | `07_RISKS.md` lists every gap with an owner, and its table agrees with its body | **58 rows / 58 sections**, checked mechanically; 4 deliberate supersede sections; 0 dangling `DEC-` or `R-` references anywhere in the logs or the README |
+| 7 | `verify_citations.py` reports 0 mismatched and 0 unresolved | **it does — and item 10 is the reason that is not sufficient.** 247 refs were wrong while this item was satisfied at every phase boundary. **Appendix C item 7 is a check on the verifier, not on the citations**, and a package can meet it with a fifth of its references pointing at unrelated text |
+
+**The caveat on item 4, stated plainly because this is the last review.** The narrative is complete
+and it is *long*: `05_DECISIONS.md` is 4,320 lines, `06_GATES.md` 2,859, `07_RISKS.md` 1,270 — **10,352
+lines of log** against **4,681 lines of `tt/`** and 11,142 of `tests/`, with no index and no summary of what a reader
+should read first. Every individual entry earns its place; the *set* is past the size where a new engineer
+will read it. That is a finding about the method, not about this run: the recipe mandates the entries
+and says nothing about navigability.
+
+**STOPPED HERE. P9 is the last phase, and the run is complete.** Every gate in Appendix A has a
+verdict, a number and a raw log. `G-CLEAN` is **PASS** on all eleven items. The suite is
+**247 passed, 0 failed**; citations are **629/629 · 1225/1225 · 146/146** with the recipe
+fingerprinted. The two human gates this phase owns, `H6` and `H7`, **ran on their defaults** and are
+`R-056` and `R-057`: nothing here is a sign-off, and 20 defects outside this package are logged with
+0 filed.

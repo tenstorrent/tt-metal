@@ -58,12 +58,12 @@ def default_compute_kernel_config(mesh_device, *, fp32_dest_acc_en: bool = _DEFA
     * the in-suite A/B that turns §2.4's table into a measurement on this box rather than a
       quotation (`G-RMS`, `G-MLP`, `G-ATTN`; `DEC-014`'s falsifier);
     * the SP ring SDPA in P8, the one op in this model where `False` is mandatory rather than a
-      preference (`BRINGUP_RECIPE.md:444-445`).
+      preference (`BRINGUP_RECIPE.md:670-671`).
 
     Built through `ttnn.init_device_compute_kernel_config` rather than by naming a class:
     `ttnn.BlackholeComputeKernelConfig` **does not exist** — `ttnn/ttnn/__init__.py:305` exports
     only the Wormhole name and `ttnn/ttnn/types.py:61` shows they are the same object — so an
-    "arch branch to pick the config class" would be a no-op (`BRINGUP_RECIPE.md:447-453`).
+    "arch branch to pick the config class" would be a no-op (`BRINGUP_RECIPE.md:673-679`).
     """
     return ttnn.init_device_compute_kernel_config(
         mesh_device.arch(),
@@ -110,7 +110,7 @@ class MeshConfig:
         `_VALIDATED_*` merely means untested, so it warns
         (`models/demos/minimax_m3/config.py:46-50`).
 
-        `BRINGUP_RECIPE.md:1022-1024` states both "sub-axis TP ... **raises**" and "`MeshConfig`
+        `BRINGUP_RECIPE.md:1262-1264` states both "sub-axis TP ... **raises**" and "`MeshConfig`
         accepts any shape whose TP **divides** the column axis". 4 divides 8, so the two halves
         contradict each other; `bringup_log/03_OUTLINE.md` §5.1 takes the refusal as binding,
         because it is the half stated as a gate assertion and the half that prevents a wrong

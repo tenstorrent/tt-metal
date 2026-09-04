@@ -12,7 +12,7 @@
 **Why this file exists at all.** Prefill's product is the KV cache, not logits — so the lm_head is
 not on the deployment critical path. It exists because `G-MODEL` gates **100% top-1 token
 agreement** against HF, and the recipe requires the model to be built `with_lm_head=True` by default
-so that half of the gate is never conditional (`BRINGUP_RECIPE.md:1420-1423`).
+so that half of the gate is never conditional (`BRINGUP_RECIPE.md:1559-1562`).
 
 **No vocab padding.** `models/demos/gpt_oss_d_p/tt/model.py:31` `compute_per_device_vocab` pads to a
 tile-aligned power of two because gpt-oss's vocab does not divide its mesh and because

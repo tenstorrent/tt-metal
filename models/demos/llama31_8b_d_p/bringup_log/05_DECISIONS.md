@@ -50,8 +50,8 @@ something stubbed; or find that the reference and the repo disagree.
 - **Phase / module:** P0 / package skeleton
 - **Date (UTC):** 2026-09-04
 - **Trigger:** the recipe specifies the skeleton twice and the two do not agree.
-  P0 step 1 (`BRINGUP_RECIPE.md:485`) says create `{tt,tests/unit,scripts,docs}` *with `__init__.py`
-  files*; the P3 target tree (`BRINGUP_RECIPE.md:752`) contains no `docs/` and no
+  P0 step 1 (`BRINGUP_RECIPE.md:720`) says create `{tt,tests/unit,scripts,docs}` *with `__init__.py`
+  files*; the P3 target tree (`BRINGUP_RECIPE.md:987`) contains no `docs/` and no
   `scripts/__init__.py`, and both template packages (`models/demos/minimax_m3/scripts`,
   `models/demos/gpt_oss_d_p/scripts`) ship `scripts/` without an `__init__.py`.
 - **Question:** which of the two spellings does P0 create?
@@ -75,7 +75,7 @@ something stubbed; or find that the reference and the repo disagree.
     outside the package; copying it in would fork it. `scripts/verify_citations.py`'s
     `DOC_PREFIXES["BRINGUP_RECIPE.md"]` is repointed at the kit copy so the shorthand still resolves,
     and the kit copy is scanned by the doc pass. Revisit at P3/P9.
-- **Evidence:** `BRINGUP_RECIPE.md:485`, `BRINGUP_RECIPE.md:752`; `models/demos/minimax_m3/tests/test_factory.py:14`
+- **Evidence:** `BRINGUP_RECIPE.md:720`, `BRINGUP_RECIPE.md:987`; `models/demos/minimax_m3/tests/test_factory.py:14`
   (`from ..config import MeshConfig` — M3 keeps `config.py` at the package root, another shape the
   P3 tree does not use).
 - **Confidence:** medium — this is a coin-flip between two recipe statements, not a technical call.
@@ -141,7 +141,7 @@ something stubbed; or find that the reference and the repo disagree.
   the measurement it will be compared to — not before the *phase* that gives it meaning.
 - **Evidence:** `models/demos/common/prefill/docs/PREFILL_MIGRATION_TESTING.md:62`
   ("Two shape constraints apply: `MAX_SEQ_LEN % CHUNK_SIZE == 0` and `CHUNK_SIZE % (SP*32) == 0`");
-  `BRINGUP_RECIPE.md:1834` (the "too good" symptom when `max_seq_len == chunk_size`).
+  `BRINGUP_RECIPE.md:1861` (the "too good" symptom when `max_seq_len == chunk_size`).
 - **Confidence:** high.
 - **Falsifier:** P7 discovering a constraint that P0 should have carried (e.g. a chunk-size ceiling
   from DRAM capacity at 32 layers), which would make the deferral a mistake rather than an ordering.
@@ -205,7 +205,7 @@ something stubbed; or find that the reference and the repo disagree.
   *same device output*. Two incomparable numbers, and the flattering one is the default. The fp32
   reference is strictly harder, and it is the only one the noise-floor method (§2.2) is defined
   against: the floor *is* "quantise what is stored, compute in fp32".
-- **Evidence:** `BRINGUP_RECIPE.md:320` (§2.1(a), the measured pair);
+- **Evidence:** `BRINGUP_RECIPE.md:402` (§2.1(a), the measured pair);
   `models/demos/common/bringup/examples/noise_floor.py:33` (`quantize_like_device`, host-only, so it is a pure
   quantiser and never a compute path).
 - **Confidence:** high.
@@ -266,7 +266,7 @@ something stubbed; or find that the reference and the repo disagree.
   written against guessed signatures is exactly the dead code `G-CLEAN` rejects. This is a **recipe
   ordering defect**, not a judgement call about the design — P1 step 2 asks for a device-side factory
   four phases before its dependencies exist.
-- **Evidence:** `BRINGUP_RECIPE.md:648-655` (P1 step 2) vs `BRINGUP_RECIPE.md:1011` (P5.1 creates
+- **Evidence:** `BRINGUP_RECIPE.md:883-890` (P1 step 2) vs `BRINGUP_RECIPE.md:1246` (P5.1 creates
   `tt/config.py` + `tt/ccl.py`); `models/demos/minimax_m3/tests/test_factory.py:14-17` (the template's imports).
 - **Confidence:** high.
 - **Falsifier:** a P2–P4 deliverable turning out to need `setup_test`.
@@ -292,7 +292,7 @@ something stubbed; or find that the reference and the repo disagree.
 - **Why:** keeps the tree exactly as P3 specifies while still executing the P0 requirement, one
   phase later than the step that states it. `G-CARD` records the same fact from the `md5sum`
   transcript, so P0's verdict does not depend on a P1 file.
-- **Evidence:** `BRINGUP_RECIPE.md:496` (the requirement); `BRINGUP_RECIPE.md:752-830` (the tree, which
+- **Evidence:** `BRINGUP_RECIPE.md:731` (the requirement); `BRINGUP_RECIPE.md:987-1065` (the tree, which
   has no config-bundle test).
 - **Confidence:** high.
 - **Falsifier:** a reviewer looking for the assertion under a name containing "config" and not
@@ -392,7 +392,7 @@ something stubbed; or find that the reference and the repo disagree.
 - **Date (UTC):** 2026-09-04
 - **Trigger:** the P3 tree says `utils/general_utils.py  # get_cache_file_name, get_default_num_links
   (copy from gpt_oss_d_p/utils)` and `utils/substate.py  # substate() state-dict prefix splitter`
-  (`BRINGUP_RECIPE.md:806-808`) — but agent-contract rule 4 says reuse means *import*, not
+  (`BRINGUP_RECIPE.md:1020-1023`) — but agent-contract rule 4 says reuse means *import*, not
   copy-paste, and a copy-paste needs a `DEC`.
 - **Question:** copy the three helpers into `models/demos/llama31_8b_d_p/utils/`, or import them from
   `models/demos/gpt_oss_d_p/utils/`?
@@ -515,9 +515,9 @@ something stubbed; or find that the reference and the repo disagree.
 - **Phase / module:** P3 / package skeleton
 - **Date (UTC):** 2026-09-04
 - **Trigger:** `DEC-002` deferred the recipe's self-conflict to P3, and `06_GATES.md`'s P2 status line
-  names it as the first thing P3 must settle. P0 step 1 (`BRINGUP_RECIPE.md:485`) says create
+  names it as the first thing P3 must settle. P0 step 1 (`BRINGUP_RECIPE.md:720`) says create
   `{tt,tests/unit,scripts,docs}` *with `__init__.py` files*; the P3 target tree
-  (`BRINGUP_RECIPE.md:752-819`) has no `docs/` and no `scripts/__init__.py`, and lists a package-local
+  (`BRINGUP_RECIPE.md:987-1054`) has no `docs/` and no `scripts/__init__.py`, and lists a package-local
   `BRINGUP_RECIPE.md` (`:754`) that `DEC-002` declined to create.
 - **Question:** which spelling does the committed tree use, and when do the two P0 artefacts go?
 - **Options considered:**
@@ -537,7 +537,7 @@ something stubbed; or find that the reference and the repo disagree.
   (`models/demos/gpt_oss_d_p/scripts/`, `models/demos/minimax_m3/scripts/` have no `__init__.py`;
   neither has a `docs/`). `scripts/verify_citations.py` is *run*, never imported, so removing
   `scripts/__init__.py` cannot break a call site.
-- **Evidence:** `BRINGUP_RECIPE.md:485` vs `BRINGUP_RECIPE.md:752-819`;
+- **Evidence:** `BRINGUP_RECIPE.md:720` vs `BRINGUP_RECIPE.md:987-1054`;
   `models/demos/gpt_oss_d_p/scripts/generate_golden_kv_cache.py` and
   `models/demos/minimax_m3/scripts/verify_golden_kv.py:26` both live in `__init__.py`-free `scripts/`
   directories; `03_OUTLINE.md` §1.1 `[DEV-1]`/`[DEV-3]`.
@@ -558,7 +558,7 @@ something stubbed; or find that the reference and the repo disagree.
 - **Trigger:** `DEC-013` (P2) chose to **import** `substate`, `get_cache_file_name`,
   `cache_file_exists` and `get_default_num_links` from `models/demos/gpt_oss_d_p/utils/` rather than
   copy them, against the recipe tree's `# (copy from gpt_oss_d_p/utils)` comment
-  (`BRINGUP_RECIPE.md:786-788`). P3 must say whether the directory exists at all.
+  (`BRINGUP_RECIPE.md:1021-1023`). P3 must say whether the directory exists at all.
 - **Question:** does the committed tree contain `utils/` (with an `__init__.py` and nothing else), or
   no `utils/` at all?
 - **Options considered:**
@@ -599,7 +599,7 @@ something stubbed; or find that the reference and the repo disagree.
   `models/demos/gpt_oss_d_p/tt/attention/weights.py:83-100` builds a **single fused** per-device
   `wqkv` (chunk q/k/v across TP, transpose, `torch.cat` per device, concat across devices) and
   `models/demos/gpt_oss_d_p/tt/attention/operations.py:25` runs **one** `ttnn.linear` on it. So
-  gpt-oss is the *fused* pattern, not the three-weight pattern. `BRINGUP_RECIPE.md:213-222` — the
+  gpt-oss is the *fused* pattern, not the three-weight pattern. `BRINGUP_RECIPE.md:287-296` — the
   recipe's own template `DEC` block — cites `models/demos/gpt_oss_d_p/tt/attention/weights.py` as
   evidence for the **three-weight** option and names `nlp_create_qkv_heads` as something only the
   *fused* option needs; both halves are backwards. `DEC-016` inherited that reading.
@@ -681,7 +681,7 @@ something stubbed; or find that the reference and the repo disagree.
 - **Phase / module:** P3 / `tt/attention/kv_cache.py` (measured in P5.6)
 - **Date (UTC):** 2026-09-04
 - **Trigger:** `03_OUTLINE.md` §3's shape table cannot be written without a cache dtype, and
-  `BRINGUP_RECIPE.md:1193-1197` says "`bfloat8_b` is the cache dtype (P3, and every threshold in
+  `BRINGUP_RECIPE.md:1447-1451` says "`bfloat8_b` is the cache dtype (P3, and every threshold in
   Appendix A assumes it); bf16 is a measurement mode... Log that delta as a `DEC` — the PCC cost
   measured, not assumed".
 - **Question:** which dtype does the cache hold, and how is the choice justified before P5.6 measures
@@ -700,7 +700,7 @@ something stubbed; or find that the reference and the repo disagree.
   mean either re-fitting thresholds (forbidden) or gating a bf16 cache on bf8_b numbers (meaningless).
   The choice is therefore made by the gate design, and what P3 owes is the *measurement plan*, not a
   guess at the cost.
-- **Evidence:** `BRINGUP_RECIPE.md:1193-1197`; Appendix A rows `G-KV` / `G-KV-TP8` / `G-MESH-KV`
+- **Evidence:** `BRINGUP_RECIPE.md:1447-1451`; Appendix A rows `G-KV` / `G-KV-TP8` / `G-MESH-KV`
   (`BRINGUP_RECIPE.md:1755`, `:1740`, `:1746`); `models/demos/gpt_oss_d_p/tt/attention/kv_cache.py:56`
   (`cache_dtype=ttnn.bfloat8_b` default) and `:72` (its comment: "bf8 matches the DeepSeek substrate
   + the device golden check").
@@ -742,7 +742,7 @@ something stubbed; or find that the reference and the repo disagree.
   from `G-MODEL` at 512.
 - **Evidence:** `models/demos/gpt_oss_d_p/tt/model.py:313-315` (the bf16-not-bf8 comment on the
   embedding output); `models/demos/gpt_oss_d_p/tt/attention/prefill.py:106-109` (the long-sequence
-  switch, not taken); Appendix A `G-MLP` "≥ 0.999 @bf8_b, ≥ 0.9995 @bf16" (`BRINGUP_RECIPE.md:1753`).
+  switch, not taken); Appendix A `G-MLP` "≥ 0.999 @bf8_b, ≥ 0.9995 @bf16" (`BRINGUP_RECIPE.md:2069`).
 - **Confidence:** high.
 - **Falsifier:** a long-context (>32k) prefill OOMing where the bf8_b activation switch would have
   fitted — which would make this a footprint decision wrongly made on numerics.
@@ -756,7 +756,7 @@ something stubbed; or find that the reference and the repo disagree.
 ### DEC-023 — One bring-up env var, `LLAMA_DELTA_PROBE`
 - **Phase / module:** P3 / `tt/layer.py` (executed in P6.1)
 - **Date (UTC):** 2026-09-04
-- **Trigger:** `BRINGUP_RECIPE.md:1249-1250` requires the per-layer residual-delta probe behind "one
+- **Trigger:** `BRINGUP_RECIPE.md:1503-1504` requires the per-layer residual-delta probe behind "one
   env var" and its output in `bringup_log/raw/`; introducing an env var is a mandatory `DEC` (§1.3)
   and must appear in the README's table.
 - **Question:** what is the variable called, and does the package add any others?
@@ -780,7 +780,7 @@ something stubbed; or find that the reference and the repo disagree.
 - **Evidence:** `models/demos/gpt_oss_d_p/tt/layer.py:19` (`_DELTA_PROBE = os.environ.get("GPT_OSS_DELTA_PROBE", "") != ""`)
   and `:22` (`_delta_stats`, whose `except Exception` is the one allowed instance under
   `BRINGUP_RECIPE.md:1708-1710` because it logs and must never break a run);
-  `BRINGUP_RECIPE.md:1249-1250`.
+  `BRINGUP_RECIPE.md:1503-1504`.
 - **Confidence:** high.
 - **Falsifier:** P9 item 6's grep finding a fifth `os.environ` read in the package that this decision
   did not anticipate.
@@ -792,7 +792,7 @@ something stubbed; or find that the reference and the repo disagree.
 ### DEC-024 — Replicate the embedding table; do not TP-shard the vocab
 - **Phase / module:** P4 / `tt/embedding.py` (executed in P6.2)
 - **Date (UTC):** 2026-09-04
-- **Trigger:** `BRINGUP_RECIPE.md:940` makes this an explicit `DEC`: "`Embedding` | after lookup |
+- **Trigger:** `BRINGUP_RECIPE.md:1175` makes this an explicit `DEC`: "`Embedding` | after lookup |
   `all_gather` if the vocab is TP-sharded | `DEC` — or replicate the embedding table and skip it".
   P4 must decide it because the answer adds or removes a collective.
 - **Question:** is `embed_tokens.weight` `[128256, 4096]` replicated on every chip, or sharded — and
@@ -833,7 +833,7 @@ something stubbed; or find that the reference and the repo disagree.
 ### DEC-025 — Residual layout: scheme A (replicated full-emb), on cost equivalence
 - **Phase / module:** P4 / every module
 - **Date (UTC):** 2026-09-04
-- **Trigger:** `BRINGUP_RECIPE.md:947-949` requires the choice to be made consciously in P4 and held
+- **Trigger:** `BRINGUP_RECIPE.md:1182-1184` requires the choice to be made consciously in P4 and held
   everywhere, because it touches every module's output layout and every norm's input layout.
 - **Question:** does the residual stream carry full `[1,1,S_loc,4096]` on every TP column (**A**), or
   `[1,1,S_loc,512]` = `emb/TP` (**B**)?
@@ -882,7 +882,7 @@ something stubbed; or find that the reference and the repo disagree.
 ### DEC-026 — Ship the barrier ping-pong at depth 2, and do not reset it between chunks
 - **Phase / module:** P4 / `tt/ccl.py`
 - **Date (UTC):** 2026-09-04
-- **Trigger:** `BRINGUP_RECIPE.md:905-909` requires a `DEC` "either way" on two coupled facts about
+- **Trigger:** `BRINGUP_RECIPE.md:1140-1144` requires a `DEC` "either way" on two coupled facts about
   the template's barrier semaphores: the ping-pong is only **2 deep**, and
   `reset_global_semaphores` deliberately **skips** the barrier and ring-attention semaphores — while
   chunked prefill **does** reuse one `CCLManager` across chunks.
@@ -900,7 +900,7 @@ something stubbed; or find that the reference and the repo disagree.
      a host-side call on the per-chunk path, and diverges from the substrate the write op comes from.
 - **Choice:** option 1. Depth stays **2**; `reset_global_semaphores` keeps skipping the barrier and
   ring-attention sets. **`G-RACE` is the measurement**, and if it fails, deepening 2 → 4 is the
-  documented **first** move — before suspecting the model (`BRINGUP_RECIPE.md:908-909`).
+  documented **first** move — before suspecting the model (`BRINGUP_RECIPE.md:1143-1144`).
 - **Why:** the arithmetic is thin but not obviously wrong — RS takes `barrier[0]`, the following AG
   takes `barrier[1]`, the next RS takes `barrier[0]` again, so every reuse has exactly one op of
   separation, 64 times per 32-layer forward under scheme A. The upstream TODO's reasoning ("one-shot
@@ -928,7 +928,7 @@ something stubbed; or find that the reference and the repo disagree.
 - **Phase / module:** P4 / `tt/ccl.py`, `tests/{fabric_topology_matrix,galaxy_prefill_kv_pcc}.py`
 - **Date (UTC):** 2026-09-04
 - **Trigger:** P4 must state a topology per collective call site, and a `Topology.Ring` collective on
-  a plain `FABRIC_1D` fabric **hangs rather than erroring** (`BRINGUP_RECIPE.md:82-83`). A hang on
+  a plain `FABRIC_1D` fabric **hangs rather than erroring** (`BRINGUP_RECIPE.md:80-90`). A hang on
   this box is not contained — every later collective hangs too, until `tt-smi -r`.
 - **Question:** what topology do the collectives use, how is the fabric configured to match, and which
   mesh-graph descriptor is pinned?
@@ -961,7 +961,7 @@ something stubbed; or find that the reference and the repo disagree.
   paired `Topology`); `models/demos/gpt_oss_d_p/tests/test_kv_cache_table.py:126` (the
   `device_params` `fabric_config` parametrisation for pytest);
   `models/demos/gpt_oss_d_p/utils/general_utils.py:33` (single-row meshes get 1 link, so `(1,N)` runs
-  never touch the deployment fabric); `BRINGUP_RECIPE.md:82-83`, `BRINGUP_RECIPE.md:1436-1442`.
+  never touch the deployment fabric); `BRINGUP_RECIPE.md:80-90`, `BRINGUP_RECIPE.md:1742-1748`.
 - **Confidence:** high on the coupling; low on which descriptor — that is explicitly unmeasured and
   is `G-FABRIC-MATRIX`'s output.
 - **Falsifier:** `G-FABRIC-MATRIX` finding a (mesh, topology, links) combination that works only with
@@ -982,7 +982,7 @@ something stubbed; or find that the reference and the repo disagree.
 - **Phase / module:** P4 / `tt/rms_norm.py`
 - **Date (UTC):** 2026-09-04
 - **Trigger:** the plan's rule is that modules only ever call `MeshConfig` wrappers, never a
-  collective op directly. `BRINGUP_RECIPE.md:921-923` grants exactly one exception — "`ttnn.all_gather`
+  collective op directly. `BRINGUP_RECIPE.md:1156-1158` grants exactly one exception — "`ttnn.all_gather`
   for the tiny RMSNorm stats tensor; if you use it, log a `DEC`" — and this package **ships that code
   path**, dormant, because it keeps the template's `is_distributed` branch.
 - **Question:** does the distributed-RMSNorm branch route its stats all-gather through
@@ -1009,7 +1009,7 @@ something stubbed; or find that the reference and the repo disagree.
 - **Evidence:** `models/demos/gpt_oss_d_p/tt/rms_norm.py:70` (`tt_gathered_stats = ttnn.all_gather(`),
   `:74` (`cluster_axis=1` — the TP axis, consistent with §4's TP-only rule), `:60-65` (the L1
   width-sharded memory config it needs), `:67` / `:82` (the pre/post pair that brackets it);
-  `BRINGUP_RECIPE.md:921-923` (the exception), `BRINGUP_RECIPE.md:1032-1033` (P5.2's instruction to
+  `BRINGUP_RECIPE.md:1156-1158` (the exception), `BRINGUP_RECIPE.md:1272-1273` (P5.2's instruction to
   keep the branch).
 - **Confidence:** high, with the caveat that the code is dormant — a dormant branch is a claim about
   code that has never run, which is why it must not be counted as "the distributed norm works".
@@ -1072,7 +1072,7 @@ something stubbed; or find that the reference and the repo disagree.
 - **Date (UTC):** 2026-09-04
 - **Trigger:** `tt/rms_norm.py` is the first module that needs a `compute_kernel_config`, and
   recipe §2.4 requires an explicit one on **every** op that accepts one. Neither
-  `BRINGUP_RECIPE.md:752-819`'s tree nor `03_OUTLINE.md` §1 gives that factory a home: the
+  `BRINGUP_RECIPE.md:967-1034`'s tree nor `03_OUTLINE.md` §1 gives that factory a home: the
   templates put it inside `AttentionConfig` (`models/demos/gpt_oss_d_p/tt/attention/config.py:103`),
   which only attention can reach.
 - **Question:** where does the single definition live, and with which four field values?
@@ -1099,7 +1099,7 @@ something stubbed; or find that the reference and the repo disagree.
   `models/common/models/llama32_1b/model.py:1026`, since an approximate SFPU is a precision
   regression this iteration has no reason to accept; `packer_l1_acc=False` because it is a
   performance knob and this iteration is functional-first (`BRINGUP_RECIPE.md:16-17`).
-- **Evidence:** recipe §2.4's two A/B tables (`BRINGUP_RECIPE.md:404-410`, `:420-427`);
+- **Evidence:** recipe §2.4's two A/B tables (`BRINGUP_RECIPE.md:630-636`, `:420-427`);
   `models/demos/gpt_oss_d_p/tt/attention/config.py:71` (the explicit `False` not to inherit);
   `models/demos/gpt_oss_d_p/tt/rms_norm.py:94` (the norm with no config at all);
   measured in-suite this phase, `raw/G-RMS_20260904T090144Z.log`: `fp32_dest_acc_en=True`
@@ -1120,7 +1120,7 @@ something stubbed; or find that the reference and the repo disagree.
 - **Phase / module:** P5.2 / `tt/rms_norm.py`
 - **Date (UTC):** 2026-09-04
 - **Trigger:** copying the `is_distributed` branch from
-  `models/demos/gpt_oss_d_p/tt/rms_norm.py:50-92`, which `BRINGUP_RECIPE.md:1032-1033` instructs to
+  `models/demos/gpt_oss_d_p/tt/rms_norm.py:50-92`, which `BRINGUP_RECIPE.md:1272-1273` instructs to
   keep.
 - **Question:** the template calls `ttnn.rms_norm_post_all_gather(x, tt_gathered_stats, ...,
   stats=tt_gathered_stats)` — the same tensor positionally **and** by keyword. Reproduce it, or fix
@@ -1199,7 +1199,7 @@ something stubbed; or find that the reference and the repo disagree.
      `CHUNK_SIZE` itself is still `DEC-004`'s deferral: the builder takes it as a parameter and P7
      picks the value.
   2. **`llama3_freqs(hf, seq_len, *, scaled=True)` gains a `scaled` flag.** `G-ROPE` is required to
-     prove the llama3 scaling took effect (`BRINGUP_RECIPE.md:1093-1095`), which needs the unscaled
+     prove the llama3 scaling took effect (`BRINGUP_RECIPE.md:1340-1349`), which needs the unscaled
      tables for comparison. The alternative — the test re-deriving unscaled frequencies itself —
      would compare the module against a second transcription of the same formula rather than
      against the same code path with scaling off.
@@ -1214,7 +1214,7 @@ something stubbed; or find that the reference and the repo disagree.
 - **Evidence:** `models/demos/gpt_oss_d_p/tt/rope.py:115` (`chunk_size` in the template's
   signature); `models/demos/deepseek_v3_d_p/tt/mla/utils.py:65` (`chunk_local` required);
   `models/tt_transformers/tt/common.py:534` and `:542` (bf16 hard-coded);
-  `BRINGUP_RECIPE.md:1093-1095` (the scaling assertion `scaled=False` serves).
+  `BRINGUP_RECIPE.md:1340-1349` (the scaling assertion `scaled=False` serves).
 - **Confidence:** high.
 - **Falsifier:** P7 finding it needs `sp` independent of the mesh shape — e.g. a chunk table built
   for a mesh other than the open one.
@@ -1282,8 +1282,8 @@ something stubbed; or find that the reference and the repo disagree.
   itself moves with the weight distribution. The real-weight run is also what makes the gate
   comparable to §2.1's 0.9999867/0.99995 pair, and it reproduces the recipe's expected 0.9999955 →
   measured **0.9999971** against the same 0.9999986 floor.
-- **Evidence:** `BRINGUP_RECIPE.md:1037-1040` (P5.2's instruction), `BRINGUP_RECIPE.md:254-256`
-  (§1.4's block naming real weights), `BRINGUP_RECIPE.md:997` (P5's "identical random weights");
+- **Evidence:** `BRINGUP_RECIPE.md:1282-1287` (P5.2's instruction), `BRINGUP_RECIPE.md:328-330`
+  (§1.4's block naming real weights), `BRINGUP_RECIPE.md:1232` (P5's "identical random weights");
   measured numbers in `raw/G-RMS_20260904T090144Z.log`.
 - **Confidence:** high.
 - **Falsifier:** the two weight sources landing on the same floor and the same ratio, which would
@@ -1297,7 +1297,7 @@ something stubbed; or find that the reference and the repo disagree.
 ### DEC-036 — `G-ROPE`'s scaling control asserts the **band structure**, not beyond-window divergence
 - **Phase / module:** P5.3 / `tests/unit/test_rope_vs_ref.py`
 - **Date (UTC):** 2026-09-04
-- **Trigger:** implementing `BRINGUP_RECIPE.md:1093-1095` literally — "the scaled `inv_freq` must
+- **Trigger:** implementing `BRINGUP_RECIPE.md:1340-1349` literally — "the scaled `inv_freq` must
   differ from the unscaled one for positions beyond `original_max_position_embeddings`" — and
   measuring that it does not discriminate.
 - **Question:** keep the recipe's assertion as the control, or assert something sharper?
@@ -1352,7 +1352,7 @@ something stubbed; or find that the reference and the repo disagree.
   them?
 - **Options considered:**
   1. **Leave them untracked.** Contradicts the recipe's own central rule — "A gate with no raw log
-     did not happen" (`BRINGUP_RECIPE.md:199`) — and Appendix C item 2, which requires every gate
+     did not happen" (`BRINGUP_RECIPE.md:244`) — and Appendix C item 2, which requires every gate
      "recorded in `bringup_log/06_GATES.md` **with raw logs**". A fresh clone of this branch would
      contain a ledger citing 15 files that do not exist, i.e. the evidence base advertised by the
      deliverable would be absent.
@@ -1370,7 +1370,7 @@ something stubbed; or find that the reference and the repo disagree.
   logs are deliberately local scratch — is contradicted by `LANDMINES.md`'s own advice to **gzip**
   an oversized raw log so it passes the `check-large-files` **commit** hook: that advice only makes
   sense if the logs are meant to be committed, which under the root ignore they cannot be.
-- **Evidence:** `.gitignore:7` (`*.log`); `BRINGUP_RECIPE.md:199` (the rule);
+- **Evidence:** `.gitignore:7` (`*.log`); `BRINGUP_RECIPE.md:244` (the rule);
   `BRINGUP_RECIPE.md:1840-1842` (Appendix C item 2); `LANDMINES.md`'s `check-large-files` row
   (gzip rather than trim, "so the evidence stays byte-exact"); `git check-ignore -v` and
   `git ls-files` output above.
@@ -1389,7 +1389,7 @@ something stubbed; or find that the reference and the repo disagree.
 ### DEC-038 — `MLP(scatter_output=True)` refuses rather than running scheme B's tail
 - **Phase / module:** P5.4 / `tt/mlp.py`
 - **Date (UTC):** 2026-09-04
-- **Trigger:** `BRINGUP_RECIPE.md:992-994` requires the `scatter_output` seam wired "from day one",
+- **Trigger:** `BRINGUP_RECIPE.md:1207-1209` requires the `scatter_output` seam wired "from day one",
   and in the same sentence requires any module that "cannot honour it" to **refuse** loudly. For the
   MLP specifically both halves are technically available — `MeshConfig.reduce_scatter` exists
   (`tt/config.py`) and the template implements the branch
@@ -1413,7 +1413,7 @@ something stubbed; or find that the reference and the repo disagree.
   4096-wide stream. That is the "half-wired scheme" the recipe's refusal clause is about. The
   refusal is *testable* today (`test_mlp_refuses_scatter_output`), whereas the branch is not, and a
   refusal that fires is better evidence than a branch that has never run.
-- **Evidence:** `BRINGUP_RECIPE.md:992-994` (wire the seam, refuse what you cannot honour);
+- **Evidence:** `BRINGUP_RECIPE.md:1207-1209` (wire the seam, refuse what you cannot honour);
   `DEC-025` (scheme A, and `scatter_output` is its seam); `bringup_log/04_CCL_PLAN.md` §5 row 4
   ("scheme B seam; **refuses** until P8"); `models/demos/minimax_m3/tt/dense_mlp.py:100-109` (the
   branch not taken); `DEC-031` (what a dormant copied branch cost the last time).
@@ -1431,7 +1431,7 @@ something stubbed; or find that the reference and the repo disagree.
 ### DEC-039 — SwiGLU spelling: the fused `input_tensor_a_activations` unary, measured bit-for-bit against `ttnn.silu`
 - **Phase / module:** P5.4 / `tt/mlp.py`
 - **Date (UTC):** 2026-09-04
-- **Trigger:** `BRINGUP_RECIPE.md:1142-1143` offers two spellings for the activation — "`ttnn.silu(gate) * up`,
+- **Trigger:** `BRINGUP_RECIPE.md:1357-1358` offers two spellings for the activation — "`ttnn.silu(gate) * up`,
   or `ttnn.mul(..., input_tensor_a_activations=[ttnn.UnaryOpType.SILU])` **if available — check, and
   log which**".
 - **Question:** is the fused unary available on this build, and if so does it cost accuracy?
@@ -1457,7 +1457,7 @@ something stubbed; or find that the reference and the repo disagree.
   recipe asked which, and "they are the same number" is the answer.
 - **Evidence:** `raw/G-MLP_20260904T093653Z.log` (`[G-MLP] SiLU spelling` lines, both dtypes);
   `ttnn/cpp/ttnn/operations/eltwise/binary/binary_nanobind.cpp:1469` (the binding), `:2082`
-  (`multiply` registered through that binder); `BRINGUP_RECIPE.md:1142-1143`.
+  (`multiply` registered through that binder); `BRINGUP_RECIPE.md:1306-1307`.
 - **Confidence:** high — this is a measurement, not a judgement.
 - **Falsifier:** a shape or dtype where the two spellings diverge, or a `ttnn` release that drops
   the undocumented keyword (which is the real risk of depending on it — hence the retained
@@ -1482,7 +1482,7 @@ something stubbed; or find that the reference and the repo disagree.
   `tt/config.py::default_compute_kernel_config`?
 - **Options considered:**
   1. **The outline's signature verbatim.** Matches the template and needs no device handle. It also
-     recreates precisely the condition `BRINGUP_RECIPE.md:1032-1035` blames: "Give it one, reachable
+     recreates precisely the condition `BRINGUP_RECIPE.md:1247-1250` blames: "Give it one, reachable
      home here rather than burying it inside an attention config — the only in-repo precedent
      buries it, which is plausibly how one package ended up with `fp32_dest_acc_en=False` in one
      place and the correct value in another."
@@ -1499,7 +1499,7 @@ something stubbed; or find that the reference and the repo disagree.
   so, the same shape `tt/rms_norm.py` and `tt/mlp.py` already use. The signature change
   (`self` -> `self, mesh_device`) is the cost, and it is paid once at each call site inside
   `attention/prefill.py`.
-- **Evidence:** `BRINGUP_RECIPE.md:1032-1035` (one reachable home, and the diagnosis of the
+- **Evidence:** `BRINGUP_RECIPE.md:1247-1250` (one reachable home, and the diagnosis of the
   precedent); `models/demos/gpt_oss_d_p/tt/attention/config.py:102-108` (the buried copy);
   `DEC-030`; `bringup_log/03_OUTLINE.md` §2.7 (the signature deviated from); the `G-MLP` A/B
   measuring 96.13x / 1167.80x for `False` on this box, which is why the knob is worth keeping.
@@ -1530,7 +1530,7 @@ something stubbed; or find that the reference and the repo disagree.
   also what P8's scheme-B work has to touch alongside the ring path, and `04_CCL_PLAN.md` numbers
   the two call sites separately (rows 3 and 4).
 - **Evidence:** `DEC-038`; `DEC-025`; `bringup_log/04_CCL_PLAN.md` §5 rows 3-4;
-  `BRINGUP_RECIPE.md:992-994`.
+  `BRINGUP_RECIPE.md:1156-1158`.
 - **Confidence:** high.
 - **Falsifier:** as `DEC-038` — P8 finding that a per-module switch is coherent after all.
 - **Revisit if:** P8 wires scheme B.
@@ -1544,7 +1544,7 @@ something stubbed; or find that the reference and the repo disagree.
 ### DEC-042 — `G-ATTN`'s 8x block budget: hold it at bf8_b, gate bf16 on the SDPA-attributed residual
 - **Phase / module:** P5.5 / `tests/unit/test_attention_vs_ref.py`
 - **Date (UTC):** 2026-09-04
-- **Trigger:** `BRINGUP_RECIPE.md:1793` sets `G-ATTN` at "PCC >= 0.999; own stages <= 3x floor,
+- **Trigger:** `BRINGUP_RECIPE.md:2070` sets `G-ATTN` at "PCC >= 0.999; own stages <= 3x floor,
   block <= 8x". Measured on this box, the block clears 0.999 at both dtypes and clears 8x at
   **bf8_b** but **not** at bf16:
 
@@ -1582,7 +1582,7 @@ something stubbed; or find that the reference and the repo disagree.
   1. **Assert 8x at both dtypes.** The gate FAILs, which under §0 rule 1 stops the whole bring-up,
      on a module whose every hand-written stage is at its floor. Wrong answer to a metric problem.
   2. **Raise the budget to 13x.** Fitting a threshold to a measurement already seen — the recipe's
-     own named error, "the same error with a friendlier face" (`BRINGUP_RECIPE.md:1838-1840`).
+     own named error, "the same error with a friendlier face" (`BRINGUP_RECIPE.md:2116-2118`).
   3. **Drop bf16 from the gate.** Loses the measurement the recipe asks for and hides the finding.
   4. **Keep 0.999 and the 3x stage budgets at both dtypes; assert the raw 8x where it holds
      (bf8_b, the package's weight dtype); and at both dtypes assert the SDPA-attributed
@@ -1600,7 +1600,7 @@ something stubbed; or find that the reference and the repo disagree.
   bf16 and this entry is the deviation.
 - **Evidence:** `raw/G-ATTN_20260904T095359Z.log` (all six block cases with their attribution
   lines, the eight stage lines per dtype, and the three standalone-probe lines);
-  `BRINGUP_RECIPE.md:1793` (the threshold), `:396-412` (§2.3, the fused-kernel caveat and the
+  `BRINGUP_RECIPE.md:2070` (the threshold), `:396-412` (§2.3, the fused-kernel caveat and the
   sanctioned handling), `:1799-1802` (do not refit a threshold after seeing the number).
 - **Confidence:** high on the attribution (it is a measurement that predicts to 5 decimals); medium
   on the remedy being what the recipe's author would choose — the alternative reading is that the
@@ -1656,7 +1656,7 @@ something stubbed; or find that the reference and the repo disagree.
 ### DEC-044 — The probe's exact-integer ceiling is **128** at `bfloat8_b`, not §2.5's 256
 - **Phase / module:** P5.6 / `tests/unit/test_kv_cache_vs_ref.py`
 - **Date (UTC):** 2026-09-04
-- **Trigger:** `G-KV`'s bit-exact positional read-back, built to `BRINGUP_RECIPE.md:1260-1262`'s
+- **Trigger:** `G-KV`'s bit-exact positional read-back, built to `BRINGUP_RECIPE.md:1475-1477`'s
   stated rule — "encode positions as values **<= 256** or bf16 rounds 257 to 256 and the probe fails
   on a correct cache (§2.5)" — with 4 chunks of 64 covering positions 0..255. It **failed** at
   `bfloat8_b`: `chunk 2 is not bit-identical ... (max|delta| = 1.0); rows [1, 3, 5, 7, 9, 11, 13, 15]`
@@ -1690,7 +1690,7 @@ something stubbed; or find that the reference and the repo disagree.
   128 to 256 untouched positions, so the "no collateral writes" half gets *stronger*, and the
   `kv_actual` coverage (4 offsets) is unchanged — which is the constraint §2.5 actually cared about.
 - **Evidence:** `raw/G-KV_20260904T100312Z.log` (both dtypes bit-identical, ceiling logged per
-  dtype); the measurement above, run on this box; `BRINGUP_RECIPE.md:1260-1262` (the rule as
+  dtype); the measurement above, run on this box; `BRINGUP_RECIPE.md:1475-1477` (the rule as
   stated), `:477-487` (§2.5).
 - **Confidence:** high — it is a measured property of the dtype.
 - **Falsifier:** a `bfloat8_b` implementation with 8-bit block mantissas, which would move the
@@ -1744,7 +1744,7 @@ something stubbed; or find that the reference and the repo disagree.
 - **Date (UTC):** 2026-09-04
 - **Trigger:** recipe P6.2 specifies the loader as "state-dict loading (`load_state_dict` via
   safetensors, then `map_hf_to_meta_keys` / `convert_hf_qkv_to_meta_format` from
-  `models/tt_transformers/tt/load_checkpoints.py`)" (`BRINGUP_RECIPE.md:1397`). Applying that map to
+  `models/tt_transformers/tt/load_checkpoints.py`)" (`BRINGUP_RECIPE.md:1536`). Applying that map to
   this package's state dict makes **every** module weight go missing.
 - **Question:** does `ModelArgs.load_state_dict` rename the checkpoint's keys into Meta form, as the
   recipe says, or leave them in HF form, as every module written in P5 expects?
@@ -1772,7 +1772,7 @@ something stubbed; or find that the reference and the repo disagree.
   checkpoints and whose modules are named `wq`/`w1`/`attention_norm`. This package loads an **HF**
   checkpoint into modules whose docstrings anchor to `transformers.models.llama.modeling_llama`, so
   a Meta rename would be a translation into a convention nothing here uses. The recipe's control —
-  "bypass `map_hf_to_meta_keys` and every key must go missing" (`BRINGUP_RECIPE.md:1409`) — is
+  "bypass `map_hf_to_meta_keys` and every key must go missing" (`BRINGUP_RECIPE.md:1548`) — is
   sound in intent (prove the loader is name-sensitive) and inapplicable as written (there is nothing
   to bypass). `G-WEIGHTS` therefore **applies** the map and requires every expected key to go
   missing, which discriminates identically.
@@ -1853,7 +1853,7 @@ something stubbed; or find that the reference and the repo disagree.
   `cache_root=` overrides it for tests (`tmp_path`).
 - **Why:** a tilized tensor is already sharded **and** already cast, so a cache is only valid for
   one (dtype, mesh shape) pair; the recipe's symptom for a stale hit is "one layer runs on garbage"
-  three phases later (`BRINGUP_RECIPE.md:939`, Appendix B). Both keys are therefore in the
+  three phases later (`BRINGUP_RECIPE.md:1078`, Appendix B). Both keys are therefore in the
   directory name, and the root is required rather than guessed — the failure mode of guessing is
   silent and cross-package, which is the worst combination.
 - **Evidence:** `G-WEIGHTS`'s `test_weight_cache_path_refuses_the_checkpoint_dir` (raises with
@@ -1948,7 +1948,7 @@ something stubbed; or find that the reference and the repo disagree.
   gap. The gate's assertion had to be written **before** the number existed.
 - **Question:** how is the fused kernel's fixed slack attributed at layer level — and is
   §2.3.1's subtraction even valid there, given the residual add attenuates a perturbation of the
-  attention branch by `||y||/||s||` (`BRINGUP_RECIPE.md:1388-1389` measures 1.12x-1.73x)?
+  attention branch by `||y||/||s||` (`BRINGUP_RECIPE.md:1527-1528` measures 1.12x-1.73x)?
 - **Options considered:**
   1. **Copy `DEC-042` verbatim**: measure SDPA standalone, subtract its excess from the layer's
      total in the layer's output space. Cheap, and **wrong at layer level** — the kernel's error
@@ -1965,7 +1965,7 @@ something stubbed; or find that the reference and the repo disagree.
   `DEC-042` says a raw ratio is meaningful (bf8_b), and the raw ratio recorded at both.
 - **Why:** it is §2.3.1's instruction — "measure the fused kernel standalone, subtract its excess
   and the floor error from the block's total, and require the remainder ... to sit near 1x"
-  (`BRINGUP_RECIPE.md:452`) — with the one term §2.3.1 could not have known about at block level
+  (`BRINGUP_RECIPE.md:496`) — with the one term §2.3.1 could not have known about at block level
   (the residual attenuation) handled by construction rather than by a correction factor.
 - **Measured, and the finding is that the wall does not bite here:**
 
@@ -1981,7 +1981,7 @@ something stubbed; or find that the reference and the repo disagree.
   plain `PASS`, not a `PASS-WITH-DEVIATION`, and `RAW_BLOCK_BUDGET_APPLIES[bf16] = False` — declared
   before the measurement — turns out to have been unnecessary caution rather than a needed escape.
   It is left in place and *not* flipped to `True`: changing a threshold after seeing the number it
-  gates is the error `BRINGUP_RECIPE.md:1922` names in both directions, and the residual assertion
+  gates is the error `BRINGUP_RECIPE.md:1969` names in both directions, and the residual assertion
   it sits beside is the tighter of the two anyway (2.14x against a budget of 8x).
 - **Evidence:** `raw/G-LAYER_20260904T113153Z.log`, all six block cases with their attribution lines. The
   additive model's own check: `predicted` vs `measured` agree to 5-6 decimals in every case
@@ -2050,7 +2050,7 @@ something stubbed; or find that the reference and the repo disagree.
 - **Date (UTC):** 2026-09-04
 - **Trigger:** `bringup_log/03_OUTLINE.md` §2.3, §2.10 and §2.11 pin the constructors and forward
   signatures for these three files, and P3's convention list says "deviating is a `DEC`"
-  (`BRINGUP_RECIPE.md:927`). Implementing them produced four deviations.
+  (`BRINGUP_RECIPE.md:1066`). Implementing them produced four deviations.
 - **Question / choice, one row each:**
 
   | Outline | Implemented | Why |
@@ -2080,7 +2080,7 @@ something stubbed; or find that the reference and the repo disagree.
 - **Phase / module:** P6.2 / `tests/unit/test_weight_loading.py`
 - **Date (UTC):** 2026-09-04
 - **Trigger:** the recipe asks for "(c) a **sample** of device weights ... bit-exact"
-  (`BRINGUP_RECIPE.md:1407`) and a cache-only rebuild producing bit-identical device tensors
+  (`BRINGUP_RECIPE.md:1546`) and a cache-only rebuild producing bit-identical device tensors
   (`:1406`), without saying how much of the model either covers.
 - **Question:** how much of the model does `G-WEIGHTS` build with real weights — one layer, or 32?
 - **Options considered:**
@@ -2104,7 +2104,7 @@ something stubbed; or find that the reference and the repo disagree.
   bf8_b/bf16 dtype ladder; 12/12 SHA-256-identical after a cache-only rebuild from an empty
   `state_dict`.
 - **Confidence:** high on the loader; the **32-layer** cache-only rebuild remains untested at any
-  mesh shape, which is what `G-WEIGHTS`'s P8 extension covers (`BRINGUP_RECIPE.md:1411` scopes
+  mesh shape, which is what `G-WEIGHTS`'s P8 extension covers (`BRINGUP_RECIPE.md:1550` scopes
   cache-only at TP > 1 there).
 - **Falsifier:** a layer-index-dependent loader path — e.g. a per-layer cache subdirectory collision
   — which a 32-layer run would catch and this does not. The cache path is
@@ -2118,7 +2118,7 @@ something stubbed; or find that the reference and the repo disagree.
 - **Phase / module:** P6.3 / `tests/unit/test_model_vs_ref.py`
 - **Date (UTC):** 2026-09-04
 - **Trigger:** the recipe requires "**top-1 token agreement = 100%** on the last position"
-  (`BRINGUP_RECIPE.md:1421-1422`) but does not say what the input tokens are, and recipe §1.4
+  (`BRINGUP_RECIPE.md:1560-1561`) but does not say what the input tokens are, and recipe §1.4
   requires every numeric gate to state its input distribution.
 - **Question:** what token ids does the gate feed — uniform random over the 128256-way vocab, or
   real text?
@@ -2138,8 +2138,11 @@ something stubbed; or find that the reference and the repo disagree.
   a feature — Llama's massive activations live at BOS positions, so the input exercises the highest
   dynamic range in the model at more than one position (that is what made `DEC-052`'s double-norm
   bug visible at all).
-- **Evidence:** `raw/G-MODEL_<ts>.log` — top-1 agrees at L2/L4, seq 128/512, and at full depth
+- **Evidence:** `raw/G-MODEL_20260904T115256Z.log` — top-1 agrees at L2/L4, seq 128/512, and at
+  full depth
   (ref 374 == device 374); the rotated-weight control moves it (`DEC-050`'s sibling assertion).
+  (P9: this row carried a `<ts>` placeholder in the citation form — indistinguishable from a real
+  citation to both verifier passes, which is the hazard `BRINGUP_RECIPE.md:249-251` names. Named.)
   Note the top-**5** is not required to agree and does not: at L2/s128 rank 4 differs
   (ref `31240`, device `50294`), which is what a 0.9996 logits PCC looks like and is why the gate is
   on top-1.
@@ -2157,7 +2160,7 @@ something stubbed; or find that the reference and the repo disagree.
 - **Phase / module:** P6.1 / `tests/unit/test_decoder_layer_vs_ref.py`
 - **Date (UTC):** 2026-09-04
 - **Trigger:** the recipe's negative control for `G-LAYER` is "swap the two norm gains (measured
-  **0.9471**)" (`BRINGUP_RECIPE.md:1373`). Run on this gate's random weights it measures
+  **0.9471**)" (`BRINGUP_RECIPE.md:1512`). Run on this gate's random weights it measures
   **0.99864** (bf8_b) / **0.99873** (bf16) — below the 0.999 threshold, so it discriminates, but by
   1.4e-3 and nowhere near the recipe's figure.
 - **Question:** is the control wrong, is the recipe's number wrong, or is the *input* wrong?
@@ -2209,7 +2212,7 @@ something stubbed; or find that the reference and the repo disagree.
   | `randn` | **real** layer-0, all nine tensors | 5.16 | **0.08** | ~65x | **0.99993** |
   | **real `embed_tokens` rows** | **real** layer-0, all nine tensors | 0.0596 (RMS 0.0106) | 0.3948 | **3.40x** | **0.66830** |
 
-  The mechanism is `BRINGUP_RECIPE.md:1388-1389`'s own: for `y = r + s` a perturbation of `s` is
+  The mechanism is `BRINGUP_RECIPE.md:1527-1528`'s own: for `y = r + s` a perturbation of `s` is
   attenuated in `y` by `||y||/||s||`. A norm **removes its input's scale**, so a sublayer's output
   magnitude is nearly independent of the input's — while the residual's magnitude *is* the input's.
   Feed a standard-normal `x` (~100x larger than what layer 0 receives, since `embed_tokens` rows
@@ -2253,7 +2256,7 @@ something stubbed; or find that the reference and the repo disagree.
   which is *below* the 0.999 the recipe states — but the recipe states it in two places that disagree
   about the depth it applies at.
 - **Question:** does the absolute PCC threshold gate the full-depth run, or only the reduced-depth runs?
-- **The conflict:** the phase text (`BRINGUP_RECIPE.md:1420-1425`) attaches `PCC >= 0.999, <= 8x floor,
+- **The conflict:** the phase text (`BRINGUP_RECIPE.md:1559-1564`) attaches `PCC >= 0.999, <= 8x floor,
   100% top-1` to the **reduced** layer counts (2, then 4) and gates the full 32-layer run on the
   **per-layer step (<= 4x from L3)**. Appendix A's single row compressed all of it into one
   unqualified line, which reads as though the absolute threshold also applies at depth 32. Literally,
@@ -2299,7 +2302,7 @@ something stubbed; or find that the reference and the repo disagree.
 - **Why:** recipe §2.1(a) is about exactly this. A reference held at the device's own storage dtype
   *shares the device's rounding*, so every PCC scored against it is flattered and the noise floor
   becomes unmeasurable (there is nothing left between the reference and the floor). The recipe states
-  it directly: `BRINGUP_RECIPE.md:1543`, "Store the golden at **fp32**, not the template's bf16: it is
+  it directly: `BRINGUP_RECIPE.md:1587`, "Store the golden at **fp32**, not the template's bf16: it is
   the reference".
 - **Evidence:** measured at `G-CHUNK`. The layer-0 storage floor — the golden quantised to bf8_b —
   is **0.9999716** on K and **0.9999628** on V. A bf16 golden would have sat *between* the fp32
@@ -2319,16 +2322,16 @@ something stubbed; or find that the reference and the repo disagree.
 - **Phase / module:** P7 / `scripts/verify_golden_kv.py`
 - **Date (UTC):** 2026-09-04
 - **Trigger:** the recipe describes this one file two incompatible ways.
-- **The conflict, quoted:** `BRINGUP_RECIPE.md:1548-1549` — "`scripts/verify_golden_kv.py` — compare
+- **The conflict, quoted:** `BRINGUP_RECIPE.md:1595-1598` — "`scripts/verify_golden_kv.py` — compare
   a device KV read-back against the golden, per layer, reporting min/mean PCC per layer for K and V".
-  `BRINGUP_RECIPE.md:1588-1590` — "**Gate `G-GOLDEN`:** `verify_golden_kv.py` runs clean over all 32
+  `BRINGUP_RECIPE.md:1682-1684` — "**Gate `G-GOLDEN`:** `verify_golden_kv.py` runs clean over all 32
   layers and prints a per-layer table ... **It imports no ttnn** — the device-vs-golden scoring lives
   in `G-CHUNK`." A file that compares a *device* read-back must import ttnn. The two cannot both hold.
 - **Question:** is this file a device-vs-golden scorer or a host-only structural checker?
 - **Choice:** the **gate text**. `verify_golden_kv.py` imports no ttnn and scores nothing against the
   device; the device-vs-golden PCC is `tests/unit/test_attention_chunked_vs_ref.py`'s (`G-CHUNK`).
 - **Why:** three reasons, in order of weight. (1) The gate is the thing with a verdict, and Appendix A
-  agrees with it (`BRINGUP_RECIPE.md:1976` gives `G-GOLDEN` device "host (imports no ttnn)"). (2) Both
+  agrees with it (`BRINGUP_RECIPE.md:2076` gives `G-GOLDEN` device "host (imports no ttnn)"). (2) Both
   in-repo templates are host-only structural checkers (`models/demos/minimax_m3/scripts/verify_golden_kv.py:26`,
   `models/demos/gpt_oss_d_p/scripts/verify_golden_kv.py:111`), so following the gate is also following
   the reuse rule. (3) A device scorer here would duplicate `G-CHUNK` and give two gates two ways to
@@ -2456,7 +2459,7 @@ something stubbed; or find that the reference and the repo disagree.
 ### DEC-064 — `G-CHUNK`'s layer-0 ratio is asserted against a **complete** floor, with the recipe's storage floor recorded beside it
 - **Phase / module:** P7 / `tests/unit/test_attention_chunked_vs_ref.py`
 - **Date (UTC):** 2026-09-04
-- **Trigger:** `BRINGUP_RECIPE.md:1583` names the layer-0 comparison "**≤ 3x** the bf8_b **storage
+- **Trigger:** `BRINGUP_RECIPE.md:1642` names the layer-0 comparison "**≤ 3x** the bf8_b **storage
   floor**", and `07_RISKS.md` `R-021` closes with "P7/P8 must apply the corrected floor definition to
   `G-CHUNK`". The two instructions are not the same floor.
 - **Question:** which floor does the 3x budget apply to?
@@ -2502,7 +2505,7 @@ something stubbed; or find that the reference and the repo disagree.
 ### DEC-065 — `G-CHUNK` gets **two** negative controls, one per delta, because the recipe's one cannot move V
 - **Phase / module:** P7 / `tests/unit/test_attention_chunked_vs_ref.py`
 - **Date (UTC):** 2026-09-04
-- **Trigger:** `BRINGUP_RECIPE.md:1585-1586` specifies one control — "rope every chunk at
+- **Trigger:** `BRINGUP_RECIPE.md:1674-1675` specifies one control — "rope every chunk at
   `kv_actual_global = 0` and the mutual PCC must collapse (measured 0.706 / 0.655)" — and quotes a
   **pair** of numbers, which implies it moves two quantities.
 - **The problem:** in this gate's decomposition both producers are fed *the same* hidden states, and
@@ -2549,7 +2552,7 @@ something stubbed; or find that the reference and the repo disagree.
   addressed by **`$PREFILL_TRACE_DIR`** only. `G-CHUNK` carries a `requires_golden_trace` skip marker
   in the same shape as `requires_hf_reference`, so the suite still runs without a trace.
 - **Why:** the recipe is explicit that the variable is the engine's and the package must not invent
-  one (`BRINGUP_RECIPE.md:1546-1547`), and the only gitignored directory inside the package
+  one (`BRINGUP_RECIPE.md:1590-1591`), and the only gitignored directory inside the package
   (`generated/`) is where ttnn writes its own inspector and watcher artifacts — putting a 128 MB
   reference trace there would mix evidence with scratch.
 - **The cost, stated:** the trace is **not** reproducible from the repo alone. It is reproducible from
@@ -2597,14 +2600,14 @@ something stubbed; or find that the reference and the repo disagree.
 ### DEC-068 — `G-RUNTIME` reaches the per-chunk refusals with a mesh stub and an unbuilt runtime, to stay device-free
 - **Phase / module:** P7 / `tests/unit/test_prefill_runtime_chunked.py`
 - **Date (UTC):** 2026-09-04
-- **Trigger:** Appendix A gives `G-RUNTIME` device **"none"** (`BRINGUP_RECIPE.md:1977`), but half its
+- **Trigger:** Appendix A gives `G-RUNTIME` device **"none"** (`BRINGUP_RECIPE.md:2024`), but half its
   refusals live in `prefill_chunk` and `compile`, which are instance methods — and the runtime cannot
   be instantiated on the machine P7 has, because `tp == num_key_value_heads` refuses `(1,1)`
   (`DEC-062`).
 - **Question:** move the gate to the mesh (which P7 is told not to do), or reach the methods without a
   device?
 - **Options considered:**
-  1. Run `G-RUNTIME` on the `(4,8)` mesh. Rejected: `BRINGUP_RECIPE.md:1623` says "do not move P7 to
+  1. Run `G-RUNTIME` on the `(4,8)` mesh. Rejected: `BRINGUP_RECIPE.md:1693-1695` says "do not move P7 to
      a multi-device mesh to make it run", and Appendix A gives this gate no device.
   2. Test only the refusals reachable from the config's `__post_init__`. Rejected: that leaves the
      delta-3 refusal — the one the recipe specifically requires — untested.
@@ -2662,7 +2665,7 @@ something stubbed; or find that the reference and the repo disagree.
 - **Date (UTC):** 2026-09-04
 - **Trigger:** recipe P8 step 2 requires the sweep, and two of its cases do not fail — they **hang**,
   and the hang is not contained: every later collective on the box hangs too, until `tt-smi -r`
-  (`BRINGUP_RECIPE.md:1706-1712`).
+  (`BRINGUP_RECIPE.md:1733-1739`).
 - **Question:** pytest with a per-test timeout, or a bespoke parent/child harness?
 - **Options considered:**
   1. pytest + `pytest-timeout`. The repo already has it (it fired at 300 s on `G-WEIGHTS`'s P8 arm).
@@ -2692,7 +2695,7 @@ something stubbed; or find that the reference and the repo disagree.
 ### DEC-071 — Neither mesh-graph descriptor the recipe names is usable on one galaxy
 - **Phase / module:** P8 / `tests/fabric_topology_matrix.py`, `tests/test_factory.py`
 - **Date (UTC):** 2026-09-04
-- **Trigger:** `BRINGUP_RECIPE.md:80-83` says "BH Galaxy mesh descriptors live in
+- **Trigger:** `BRINGUP_RECIPE.md:80-90` says "BH Galaxy mesh descriptors live in
   `tt_metal/fabric/mesh_graph_descriptors/` — e.g. `bh_galaxy_sp4_torus_xy_graph_descriptor.textproto`,
   `32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto`. The Ring topology P8 needs the torus
   descriptor". The user's hard scope limit for this session is **one** Blackhole Galaxy.
@@ -2915,7 +2918,7 @@ something stubbed; or find that the reference and the repo disagree.
 - **Choice:** `PREFILL_FABRIC` defaults to `1d` (`ttnn.FabricConfig.FABRIC_1D`), with `1d_ring` kept
   as an override for a torus-cabled machine.
 - **Why:** it is the only fabric this machine can initialise, and it is sufficient — see `DEC-081`.
-- **What the recipe says, and it is wrong here:** `BRINGUP_RECIPE.md:82-84`, "The Ring topology P8
+- **What the recipe says, and it is wrong here:** `BRINGUP_RECIPE.md:80-90`, "The Ring topology P8
   needs the torus descriptor; a Ring topology on a plain `FABRIC_1D` fabric **hangs** rather than
   erroring." On this box the torus descriptor cannot be used at all, and
   `ttnn.Topology.Ring` **collectives on `FABRIC_1D` do not hang** — they return bit-exact results at
@@ -3013,7 +3016,7 @@ something stubbed; or find that the reference and the repo disagree.
 ### DEC-083 — `G-TP-PARITY` shards the sequence only for the **token-wise** modules
 - **Phase / module:** P8 / `tests/unit/test_tp_parity.py`
 - **Date (UTC):** 2026-09-04
-- **Trigger:** `BRINGUP_RECIPE.md:1791-1793`: "At SP > 1 the multi-device output is a token slice, so
+- **Trigger:** `BRINGUP_RECIPE.md:1832-1834`: "At SP > 1 the multi-device output is a token slice, so
   compare it against the corresponding slice of the `(1,1)` output".
 - **Question:** does that hold for every module?
 - **Finding:** only for the token-wise ones. `RMSNorm` and `MLP` act on each token row
@@ -3267,7 +3270,7 @@ something stubbed; or find that the reference and the repo disagree.
 - **Date (UTC):** 2026-09-04
 - **Trigger:** `G-SP-RING` has to record the **verbatim** `TT_FATAL` text for two refusals
   (`fp32_dest_acc_en=True` and a wrong `kv_actual_isl`), because the message *is* the measurement —
-  the recipe asks for "the `TT_FATAL` text when `True` is refused" (`BRINGUP_RECIPE.md:1765-1767`).
+  the recipe asks for "the `TT_FATAL` text when `True` is refused" (`BRINGUP_RECIPE.md:1792-1794`).
   Everywhere else in this package a refusal is asserted with the repo-root `expect_error` fixture
   (`conftest.py:948`), which `LANDMINES.md` and `DEC-045` require.
 - **Question:** `expect_error(RuntimeError, "<substring>")`, or catch and log?
@@ -3661,7 +3664,7 @@ something stubbed; or find that the reference and the repo disagree.
 ### DEC-103 — `G-LOOPBACK` is **out of scope**, not blocked
 - **Phase / module:** P10 / `06_GATES.md`, `07_RISKS.md`
 - **Date (UTC):** 2026-09-04
-- **Trigger:** `BRINGUP_RECIPE.md:1968-1975` gives three legal outcomes for this gate: `PASS`,
+- **Trigger:** `BRINGUP_RECIPE.md:2015-2022` gives three legal outcomes for this gate: `PASS`,
   out-of-scope with a `DEC` **and a named residual risk**, or `BLOCKED` with a reason. It also says
   "Do not fake it."
 - **Question:** which of the three, and on what grounds?
@@ -3674,7 +3677,7 @@ something stubbed; or find that the reference and the repo disagree.
   1. `BLOCKED`. Honest about the missing binaries, but wrong about *whose* gate it is: a red
      `G-LOOPBACK` is overwhelmingly likely to be an engine or launcher failure, not a failure of this
      model. `HUMAN GATE H4` exists to ask exactly that question — "ask whose bug a red gate would
-     be" (`BRINGUP_RECIPE.md:1857`, §0.3) — and the doc itself says the gate "verifies the *engine's*
+     be" (`BRINGUP_RECIPE.md:193`, §0.3) — and the doc itself says the gate "verifies the *engine's*
      model-agnostic byte copy, not this model".
   2. **Out of scope by decision**, with the residual gap enumerated as a named risk.
   3. Simulate it — copy bytes host-side and call it a loopback. Explicitly forbidden.
@@ -3782,14 +3785,14 @@ something stubbed; or find that the reference and the repo disagree.
 ### DEC-106 — The serving gates run at chunk **256** / capacity **2816**, so `G-MOCK-MIG` is comparable to `G-MESH-KV`
 - **Phase / module:** P10 / `G-REQUEST`, `G-MOCK-MIG`
 - **Date (UTC):** 2026-09-04
-- **Trigger:** the gate geometry is a free choice, and `BRINGUP_RECIPE.md:1956-1961` makes a specific
+- **Trigger:** the gate geometry is a free choice, and `BRINGUP_RECIPE.md:2003-2008` makes a specific
   demand of it: `G-MOCK-MIG` "is the strongest evidence in the whole bring-up, because it is a
   second, device-less reader in a different process agreeing with the on-device `G-MESH-KV` number
   **at the same shape**. Compare the two explicitly."
 - **Constraints, all binding at once:**
   `CHUNK % (SP*32) == 0`; `MAX_SEQ_LEN % CHUNK == 0`; `MAX_SEQ_LEN >= chunks * CHUNK`;
   `MAX_SEQ_LEN > CHUNK` **strictly** (at equality the SP bootstrap core runs instead of the ring —
-  "anything you measure is measuring the wrong path", `BRINGUP_RECIPE.md:1948-1951`); and the PCC arm
+  "anything you measure is measuring the wrong path", `BRINGUP_RECIPE.md:1995-1998`); and the PCC arm
   must not read past the golden trace's **1024** tokens.
 - **Choice:** `PREFILL_CHUNK_SIZE=256`, `PREFILL_MAX_SEQ_LEN=2816`, `PREFILL_NUM_USERS=1`;
   11 producer chunks for `G-REQUEST` (2816 tokens, the doc's own chunk count) and **4** for
@@ -3902,7 +3905,7 @@ something stubbed; or find that the reference and the repo disagree.
 ### DEC-109 — The two-terminal gates are driven by **one script**, not two terminals
 - **Phase / module:** P10 / `G-REQUEST`, `G-MOCK-MIG`
 - **Date (UTC):** 2026-09-04
-- **Trigger:** `BRINGUP_RECIPE.md:1940-1952` specifies these gates as a two-terminal recipe, and this
+- **Trigger:** `BRINGUP_RECIPE.md:1987-1999` specifies these gates as a two-terminal recipe, and this
   session has no two terminals.
 - **Question:** how are the runner and the producer sequenced, given that the producer must not
   connect before the runner has exported its H2D descriptor, and the runner must be waited on
@@ -4114,3 +4117,203 @@ something stubbed; or find that the reference and the repo disagree.
   still report.
 - **Revisit if:** the recipe is edited again. `R-017` now records two instances.
 - **Blast radius:** every `BRINGUP_RECIPE.md` reference in the package; no behaviour.
+
+### DEC-120 — Re-point 247 drifted recipe citations mechanically, and pin the recipe by fingerprint
+- **Phase / module:** P9 / `bringup_log/*`, `tt/*`, `tests/*`, `scripts/verify_citations.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** `G-CLEAN` item 10 requires "0 mismatched, 0 unresolved" and the verifier reported
+  exactly that. Item 10's own gate text also says to expect the sweep to find "un-verified citations
+  in prose that no earlier phase scanned", so the clean report was checked rather than believed. A
+  content triage of every `BRINGUP_RECIPE.md:N` reference in the package found **247 of 317** wrong.
+- **Question:** the verifier is green, `Appendix C` item 7 is satisfied, and the refs are wrong. Fix
+  247 references, or record the class and move on?
+- **Options considered:**
+  1. **Record and move on.** Defensible on a time budget: no number in `06_GATES.md` changes.
+     Rejected because `R-016`'s own conclusion is that a wrong-but-authoritative `path:line` is worse
+     than none, and this package is about to become a template — a reader following a citation into
+     unrelated recipe text learns to distrust every citation in it.
+  2. **Re-point by reading each one.** 317 judgement calls, each of which could introduce a new
+     wrong ref. Rejected as both slow and unauditable.
+  3. **Re-point mechanically, and only where the result is provable.** Chosen.
+  4. Also considered and rejected: generating a 317-row needle manifest as a new file in `scripts/`.
+     It would have worked, but it adds a tree file the outline does not contract, and §1.6's answer
+     to this problem already exists — `CITES`. The 20 lines P9 re-pointed *to* went into `CITES`
+     instead, hand-written with real needles.
+- **Choice:** option 3, plus a fourth verifier pass that fingerprints the recipe.
+- **Why (the method, because it is the part worth reusing):** for each ref, `git blame` on the
+  citing **line** names the commit whose tree its author was reading; `git show <commit>:<recipe>`
+  is that text; `difflib.SequenceMatcher` over the two line lists maps the cited line to HEAD. The
+  move is applied **only** when every line of the cited range maps through an `equal` opcode *and*
+  the old text is byte-identical to the new at the mapped position. Under that rule the re-point is
+  not an inference — it is a statement about where the same characters now live. **205** refs moved
+  that way, **70** were already correct, and **42** were resolved by hand from a quoted fragment in
+  the citing prose.
+- **Evidence:** four of the hand-resolved targets land on lines `CITES` **independently**
+  content-checks — recipe `:2070` ("GQA + RoPE + causal SDPA", `G-ATTN`'s Appendix A row), `:1674`
+  ("negative control: rope every chunk at"), `:90` ("The Ring topology P8 needs the torus") and
+  `:1429` ("0.9475"). Two automated attempts were built and **discarded** before the byte-identity
+  rule: a version-search variant oscillated (it re-moved refs pass 1 had just fixed correctly), and
+  a token-overlap variant scored short recipe lines at 1.00 because the overlap denominator was
+  `min(|a|,|b|)`. Both are recorded because "the automation looked convincing and was wrong" is the
+  reusable part. Raw: `raw/G-CLEAN-item10_20260904T195811Z.log`.
+- **Confidence:** high on the 205 (byte-identity), high on the 42 (a quoted fragment located by
+  exact string search), and **explicitly low on the completeness of the claim** — see the falsifier.
+- **Falsifier:** a ref that was wrong **when written** rather than drifted. Byte-identity cannot see
+  that class, and it exists: `tests/unit/test_tp_parity.py`'s `PARITY_PCC_THRESHOLD` cited
+  `:1786-1787`, which byte-identity happily preserved, and a hand read found it pointing at the
+  ring-SDPA passage rather than at `G-TP-PARITY`'s Appendix A row. It is now `:2082`. The rate of
+  that class over the remaining refs is **not measured** and is recorded as `R-053`.
+- **Revisit if:** the recipe changes. The new pass makes that loud: `RECIPE_SHA256` /
+  `RECIPE_LINES` are the exact bytes every prose ref was validated against, and a mismatch fails the
+  gate with the instruction to re-validate. That is the mitigation `R-017` has been asking for since
+  P6 and never had.
+- **Blast radius:** every `BRINGUP_RECIPE.md` reference in the package, plus 20 new `CITES` rows and
+  one new verifier pass. **No behaviour, no threshold, no measurement.** Raw logs were deliberately
+  **excluded** from the rewrite (`BRINGUP_RECIPE.md:171-173`): they record what ran.
+
+### DEC-121 — `G-CLEAN` item 8's ratio is asserted in-suite, with the template's defect as the control
+- **Phase / module:** P9 / `tests/unit/test_prefill_adapter.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** item 8 says to measure the adapter's import cost "against the template as a ratio".
+  `G-ADAPTER` measured it absolutely (40.3 ms, 0 heavy modules); the ratio was outstanding.
+- **Question:** record the ratio in the ledger once, or assert it in the suite?
+- **Options considered:**
+  1. Measure once, record in `06_GATES.md`. Cheap, and a regression would be invisible.
+  2. Assert `ours < 0.25 * template`. Chosen. Measured five cold subprocesses per module: ours
+     37.7-38.0 ms (spread 0.3 ms), template 2445-2466 ms. A 4x margin on a 64.6x difference is two
+     orders of magnitude of slack, so this is not a timing-flaky test.
+- **Choice:** option 2, and additionally `assert theirs_heavy` — the template **must** report heavy
+  modules.
+- **Why the second assertion matters more than the first:** without it, "no heavy module found" is
+  indistinguishable from "the probe is looking for the wrong thing" — the failure mode §2.2.1
+  describes for controls and `DEC-111` hit for guards. The template genuinely pulls `torch` and
+  `ttnn`, so it is a free, real control for the cross-package probe. If someone fixes the template
+  upstream, this test fails and says exactly that, rather than silently losing its discriminator.
+- **Evidence:** measured **0.0155** (37.8 ms vs 2441.6 ms, 64.6x cheaper), and the cost attributed
+  to a single line: `models.common.utility_functions` alone measures **2487.9 ms** and pulls both,
+  while the template's other module-scope import
+  (`models/demos/deepseek_v3_d_p/reference/gpt_oss_120b_config.py`) costs **0.6 ms** and nothing
+  heavy. The P10 hand-over note named both as the cost; only one is. Raw:
+  `raw/G-CLEAN-item8_20260904T191444Z.log`.
+- **Confidence:** high.
+- **Falsifier:** the template being fixed, which trips the control deliberately.
+- **Revisit if:** `models.common.utility_functions` stops importing `ttnn`.
+- **Blast radius:** one test, +1 to the suite count, ~2.5 s of suite time (the template import).
+
+### DEC-122 — The env-var table is built by an AST scan that resolves module constants
+- **Phase / module:** P9 / `README.md`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** item 6 says to generate the list "with a grep, not by hand — a hand-written list
+  misses the ones that matter".
+- **Question:** a `grep` for `os.environ|os.getenv`, or an AST walk?
+- **Options considered:**
+  1. `grep`. Finds the call sites but not the variable *names* when the name is not a literal, and
+     cannot distinguish a read from a write.
+  2. AST walk keyed on a literal first argument. **This was written first and it was wrong**: it
+     reported 15 variables and missed `LLAMA_DELTA_PROBE`, because `tt/layer.py:54` reads
+     `os.environ.get(DELTA_PROBE_ENV_VAR, "")` through a module constant. A scan that only sees
+     literals silently drops exactly the package's own variable.
+  3. AST walk that additionally resolves module-level string constants and **reports unresolved name
+     expressions loudly**. Chosen. Result: **16** variables, 31 sites, **0 unresolved**.
+- **Choice:** option 3.
+- **Why:** the recipe's warning is right about hand lists and understates the problem — an
+  automated list can miss the same variable for a different reason, and the only defence is that the
+  scan says when it could not resolve something instead of returning a shorter answer.
+- **Evidence:** 15 vs 16 across the two scans, the difference being `LLAMA_DELTA_PROBE`; the P10
+  hand-over predicted the six pre-existing plus three new, i.e. 9 of the 16, because it was counting
+  what P10 touched rather than what the package reads.
+- **Confidence:** high — 0 unresolved name expressions, and `os.environ` is never handed to a
+  subprocess in this package except as `dict(os.environ, ...)` in the two import probes.
+- **Falsifier:** a read built from an f-string or a dict lookup, which the scan would report
+  unresolved rather than miss.
+- **Revisit if:** any new environment read is added.
+- **Blast radius:** the README table. No code.
+
+### DEC-123 — SPDX: the pair is asserted on all 54 `.py` files; JSON and the logs are exempt
+- **Phase / module:** P9 / `G-CLEAN` item 2
+- **Date (UTC):** 2026-09-04
+- **Trigger:** item 2 says "every new file has the SPDX header pair", which is unsatisfiable as
+  written for two of the package's file types.
+- **Question:** what does "every new file" mean for a `.json` and for a `bringup_log/*.md`?
+- **Options considered:**
+  1. Literal compliance. Impossible for `configs/Llama-3.1-8B-Instruct/config.json`, which must stay
+     **byte-identical** to the checkpoint's (`md5 3cd5831d379b509d53afade0e24c36e9`, asserted by a
+     test) — a header would break the gate that proves the identity. JSON has no comment syntax, so
+     the same applies to `tt/runners/manifests/llama31_8b_d_p.json`.
+  2. Header the log markdown. Possible, but the kit's own five templates carry no SPDX and neither
+     does `models/demos/minimax_m3/README.md`, so it would diverge from both the kit and the repo.
+  3. Assert the pair on every `.py` and state the exemptions. Chosen.
+- **Choice:** option 3. **54/54** `.py` files carry both lines within the first five (the shebang in
+  the two `scripts/*.py` pushes them to lines 2 and 4). `README.md` carries the pair, matching the
+  package's own convention.
+- **Why:** an exemption that is stated and reasoned is a cleanliness result; silent non-compliance is
+  not.
+- **Evidence:** the sweep in `raw/G-CLEAN-item2_20260904T192142Z.log`; `models/demos/gpt_oss_d_p/tt/runners/manifests/gpt_oss_d_p.json`
+  has no header either.
+- **Confidence:** high.
+- **Falsifier:** a repo hook that requires SPDX in JSON, which would make the config bundle
+  unrepresentable and is therefore a repo-level contradiction rather than a package defect.
+- **Revisit if:** the `licenses` pre-commit hook is extended to JSON.
+- **Blast radius:** none — documentation of a scope boundary.
+
+### DEC-124 — The README carries `G-MOCK-MIG` beside `G-MESH-KV`, and its own "known-imperfect" section
+- **Phase / module:** P9 / `README.md`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** item 7's list of required sections, plus the P10 hand-over's point 3: the two readers
+  agreeing from different processes is the package's strongest line and it lived only in the ledger.
+- **Question:** what belongs in the README versus `bringup_log/`?
+- **Options considered:**
+  1. A status table of the on-device numbers, as P8's stub had. Rejected as incomplete: it shows the
+     measurement without the thing that makes it credible.
+  2. The on-device rows **plus** the device-less second-process row, in the same table, with the
+     agreement stated. Chosen — 0.996784 / 0.986623 against 0.9967844 / 0.9866232, and the same
+     argmin layers (K L22, V L28), which is the part that makes the address table credible rather
+     than merely the values.
+  3. Also considered: leaving the citation-drift finding (`R-053`) in the risk register only.
+     Rejected. A reader of this README should not have to find out from `07_RISKS.md` that 247 of the
+     package's own citations were wrong until P9; the README says so and says what was done.
+- **Choice:** option 2, plus a short "Known-imperfect in the record itself" section.
+- **Why:** the README is the only file a reader is guaranteed to open. Two things belong there that a
+  ledger cannot carry: the strongest single piece of evidence, and the largest known weakness.
+- **Evidence:** `06_GATES.md`'s `G-MOCK-MIG` and `G-MESH-KV` rows; `R-053`, `R-054`.
+- **Confidence:** high.
+- **Falsifier:** a reviewer who reads the README and still asks "how do I know the KV numbers are not
+  the same code checking itself?"
+- **Revisit if:** a third reader is added.
+- **Blast radius:** `README.md` only.
+
+### DEC-125 — Retract P10's `LANDMINES.md` finding rather than carry it forward
+- **Phase / module:** P9 / `06_GATES.md` (the P10 closing note)
+- **Date (UTC):** 2026-09-04
+- **Trigger:** `G-CLEAN`'s sweep of the logs re-checked every claim the logs make about a file
+  outside this package, because `R-016`'s whole lesson is that an unverified reference to another
+  file reads as authoritative.
+- **Question:** P10's closing note asserts that `LANDMINES.md`'s new row is malformed — "**two**
+  cells where that table has three", rendering "as its own separate two-column table" — and that its
+  content belongs in "Method traps" instead. Is that true of the committed tree?
+- **Finding:** **no.** The row is at `models/demos/common/bringup/LANDMINES.md:59`, which is the
+  third data row of the two-column `| Trap | Why it bites |` **Method traps** table (header at
+  `:55`, separator at `:56`). It has two cells because that table has two columns. It is correctly
+  formed and already in the section P10 said it belonged in. The "Repo hooks" table P10 measured it
+  against ends at `:51`.
+- **Options considered:**
+  1. Leave it. The note is in an append-only file and it costs nothing. Rejected: it is a **false
+     statement about a file this package does not own**, in the same closing note a future kit
+     maintainer would read to decide whether to act.
+  2. Edit the P10 note. Rejected — append-only.
+  3. Retract it in the P9 gate block, with the line numbers, and say how it happened. Chosen.
+- **Choice:** option 3.
+- **Why:** the likely mechanism is worth more than the correction. P10's note reads like it was
+  written from a `git diff` of the kit rather than from the file: a diff shows the added row and the
+  hunk header, not which table it landed in. That is the same failure as reading a line number out
+  of a `cat -n` spanning two files (`R-016`, the +209 offset) — a claim derived from a *view* of the
+  file instead of the file.
+- **Evidence:** `models/demos/common/bringup/LANDMINES.md:55-60`;
+  `git diff 4a7400b478d 12120138b05 -- models/demos/common/bringup/LANDMINES.md` shows exactly one
+  added row.
+- **Confidence:** high — read directly out of the file at HEAD.
+- **Falsifier:** the kit having been edited between P10's session and its commit, which would make
+  P10's observation true of a state that no longer exists. That is not distinguishable from here,
+  and it is why the retraction says "either … or" rather than accusing.
+- **Revisit if:** the kit maintainer reports the row was fixed in that window.
+- **Blast radius:** one paragraph of `06_GATES.md`; nothing in the code and no gate number.

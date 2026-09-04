@@ -1,0 +1,33 @@
+# G-CLEAN item 5 — dead code, commented-out experiments, leftover print
+
+## unused imports / unused variables: enforced by the autoflake pre-commit hook (item 1, Passed)
+## no commented-out code: every '# ...' block in the package is prose or a citation. The
+##   largest is tests/test_factory.py:205-227, which is the measured argument for
+##   FABRIC_1D + Topology.Ring on this galaxy (DEC-079), not a disabled experiment.
+
+## print() by file — none in tt/, which is the rule that matters:
+$ grep -rn 'print(' models/demos/llama31_8b_d_p/tt/
+(no matches)
+
+## print() elsewhere, all of it in standalone harnesses whose stdout IS the gate transcript:
+   scripts/generate_golden_kv_cache.py: 10 print() calls
+   scripts/verify_golden_kv.py: 19 print() calls
+   scripts/verify_citations.py: 25 print() calls
+   tests/galaxy_prefill_kv_pcc.py: 21 print() calls
+   tests/fabric_topology_matrix.py: 17 print() calls
+   tests/unit/test_prefill_adapter.py: 1 - inside the subprocess SOURCE STRING of the import
+     probe (line 234), i.e. the child's JSON result. Not a leftover.
+## Rationale: scripts/ and the two tests/ harnesses are run directly and teed into
+##   bringup_log/raw/ (recipe 1.2). verify_citations.py and verify_golden_kv.py must not
+##   depend on loguru at all - verify_golden_kv.py imports no ttnn by gate contract.
+##   Modules use loguru: 8 of the 21 tt/ modules import it, none prints.
+
+## DEFECT FOUND AND FIXED: tests/test_factory.py:199 - the prefill_topology() docstring said
+##   'Ring (deployment default)' while os.getenv two lines above defaults to 'linear'
+##   (DEC-079/DEC-097 pinned Linear in P8; the docstring predates that and was never updated).
+##   Reworded to name Linear as the default and say why. This is the only stale statement the
+##   sweep found in the code.
+
+## tt/layer.py:71 and :76 both do 'from loguru import logger' - the second is inside the
+##   handler and is redundant in practice, but removing it would make the handler itself
+##   raise if the import were ever the failing statement. Kept deliberately.

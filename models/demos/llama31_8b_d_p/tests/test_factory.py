@@ -167,7 +167,7 @@ class TestFactory:
 # --------------------------------------------------------------------------------------------
 # P8: submeshes, and the fabric/topology pair that must be set together
 #
-# `BRINGUP_RECIPE.md:1672-1693`: on this galaxy a **top-level partial mesh** dies in fabric
+# `BRINGUP_RECIPE.md:1708-1727`: on this galaxy a **top-level partial mesh** dies in fabric
 # bring-up, because the routers on the opened devices wait for an ethernet handshake with
 # partners outside the mesh. So every P8 shape below `(4, 8)` is a **submesh** of the full mesh
 # (`tt_metal/api/tt-metalium/mesh_device.hpp:307`), measured by `G-FABRIC-MATRIX`.
@@ -196,7 +196,12 @@ _TORUS_DESCRIPTOR_BASENAME = "single_bh_galaxy_torus_xy_graph_descriptor.textpro
 
 
 def prefill_topology():
-    """`ttnn.Topology` for this run — `Ring` (deployment default) or `Linear` (`PREFILL_TOPOLOGY`)."""
+    """`ttnn.Topology` for this run: `Linear` by default on this machine, `Ring` via `PREFILL_TOPOLOGY`.
+
+    The default is `linear` because this galaxy has no ring fabric for the SP ring SDPA (`DEC-079`,
+    `DEC-097`, `R-030`) — an earlier draft of this docstring called `Ring` the "deployment default",
+    which contradicted the `os.getenv` two lines above it (found by `G-CLEAN` item 5).
+    """
     if _TOPOLOGY_NAME not in ("ring", "linear"):
         raise ValueError(f"PREFILL_TOPOLOGY must be 'ring' or 'linear', got {_TOPOLOGY_NAME!r}")
     return ttnn.Topology.Ring if _TOPOLOGY_NAME == "ring" else ttnn.Topology.Linear
@@ -204,7 +209,7 @@ def prefill_topology():
 
 # The fabric this galaxy actually has. **`FABRIC_1D`, even for Ring collectives** (`DEC-079`).
 #
-# `BRINGUP_RECIPE.md:80-84` says "The Ring topology P8 needs the torus descriptor; a Ring topology
+# `BRINGUP_RECIPE.md:80-90` says "The Ring topology P8 needs the torus descriptor; a Ring topology
 # on a plain `FABRIC_1D` fabric **hangs** rather than erroring". `G-FABRIC-MATRIX` measured both
 # halves of that on this box and **both are false here**:
 #
@@ -278,7 +283,7 @@ class SubmeshPool:
     overlapping submeshes on the same physical devices" and names `quiesce_devices()`.
     **Nothing enforces it**, and forgetting it does not fail — it hangs the machine, and the hang is
     not contained: every later collective on the box hangs too, including ones that just passed,
-    until `tt-smi -r` (`BRINGUP_RECIPE.md:1694-1712`, `LANDMINES.md`, and `G-FABRIC-MATRIX` case
+    until `tt-smi -r` (`BRINGUP_RECIPE.md:1740-1745`, `LANDMINES.md`, and `G-FABRIC-MATRIX` case
     `overlap_1x2_then_1x8_no_quiesce` measures it).
 
     So this pool quiesces on **both** sides of every hand-out (`DEC-077`): a barrier before the

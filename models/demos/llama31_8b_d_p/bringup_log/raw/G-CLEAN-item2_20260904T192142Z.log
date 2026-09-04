@@ -1,0 +1,12 @@
+# G-CLEAN item 2 — SPDX header pair on every .py file in the package
+# command: head -5 <file> | grep for both SPDX lines, over $(find ... -name '*.py')
+
+python files: 54   missing the pair: 0
+
+# exempt, with reasons (DEC-123):
+#   configs/Llama-3.1-8B-Instruct/config.json  - must stay byte-identical to the checkpoint's
+#   tt/runners/manifests/llama31_8b_d_p.json   - JSON has no comment syntax
+#   bringup_log/*.md, bringup_log/raw/*.json   - the kit's own five templates carry no SPDX
+# README.md carries the pair:
+<!-- SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc. -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->

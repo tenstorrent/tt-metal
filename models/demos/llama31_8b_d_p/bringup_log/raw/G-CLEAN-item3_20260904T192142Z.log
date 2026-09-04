@@ -1,0 +1,15 @@
+# G-CLEAN item 3 — TODO / FIXME / XXX / HACK
+# command: grep -rn 'TODO\|FIXME\|XXX\|HACK' models/demos/llama31_8b_d_p/ (excluding raw/)
+
+models/demos/llama31_8b_d_p/bringup_log/04_CCL_PLAN.md:132:(`models/demos/gpt_oss_d_p/tt/ccl.py:132`, an open upstream TODO whose own comment says one-shot
+models/demos/llama31_8b_d_p/bringup_log/07_RISKS.md:1225:| 6 | `reset_global_semaphores` skips the barrier and ring-attention semaphores (upstream TODO) | `models/demos/gpt_oss_d_p/tt/ccl.py:132` | `DEC-028` |
+models/demos/llama31_8b_d_p/scripts/verify_citations.py:275:    (f"{GO}/tt/ccl.py", 134, "TODO(P5): reset them here too"),
+models/demos/llama31_8b_d_p/bringup_log/05_DECISIONS.md:803:     What the nearest template does, with a standing TODO to shard it
+models/demos/llama31_8b_d_p/bringup_log/05_DECISIONS.md:819:  later, deferred" TODO) and `:84` (the `as_tensor` with **no** `mesh_mapper`, i.e. replication);
+models/demos/llama31_8b_d_p/bringup_log/05_DECISIONS.md:906:  separation, 64 times per 32-layer forward under scheme A. The upstream TODO's reasoning ("one-shot
+models/demos/llama31_8b_d_p/bringup_log/05_DECISIONS.md:913:  semaphores ... TODO"); `models/demos/minimax_m3/config.py:102` and `:124` (both halves of an
+models/demos/llama31_8b_d_p/bringup_log/05_DECISIONS.md:922:  upstream TODO at `models/demos/gpt_oss_d_p/tt/ccl.py:134` is closed.
+
+# Every hit above is a REFERENCE to an upstream marker in another package, in prose or in a
+# CITES row (models/demos/gpt_oss_d_p/tt/ccl.py:134 - reset_global_semaphores, DEC-028).
+# Zero TODO/FIXME/XXX/HACK markers in this package's own source.

@@ -19,7 +19,7 @@ are mapped into Meta layout by `_hf_to_meta` — the activation-space equivalent
 * **Input distribution:** standard normal, per head, over `[1, n_heads, S, 128]`.
 * **Reference dtype policy:** fp32 input, fp32 cos/sin, fp32 arithmetic. Only what the device
   *stores* — the bf16 input and the bf16 cos/sin — is quantised, and only for the floor.
-* **Threshold:** PCC >= 0.999 (`BRINGUP_RECIPE.md:1752`), expect ~0.99999. Ratio to the floor is
+* **Threshold:** PCC >= 0.999 (`BRINGUP_RECIPE.md:1339-1340`), expect ~0.99999. Ratio to the floor is
   recorded.
 * **Negative controls, two:** an HF-layout tensor fed straight into the Meta op must collapse
   (without it, 0.99999 could mean "both sides are wrong the same way"); and the llama3 scaling
@@ -212,7 +212,7 @@ def test_llama3_scaling_is_active():
     2. the scaled and unscaled cos tables actually differ, recorded **both** inside and beyond
        `original_max_position_embeddings`. Measured, the inside-window delta saturates at ~2.0 as
        well, because llama3 scaling divides the long-wavelength frequencies at *every* position and
-       `cos` oscillates — so `BRINGUP_RECIPE.md:1093-1095`'s framing ("the scaled `inv_freq` must
+       `cos` oscillates — so `BRINGUP_RECIPE.md:1340-1349`'s framing ("the scaled `inv_freq` must
        differ from the unscaled one for positions **beyond**
        `original_max_position_embeddings`") is not a discriminator on its own: an implementation
        that scaled everything, or nothing beyond the window, would pass it. Claim 1 is the sharp
@@ -304,7 +304,7 @@ def test_indexed_builder_structure_and_refusals(mesh_device, expect_error, reset
     constraints are asserted as refusals because violating them is the "chunk write asserts" row of
     Appendix B, and failing at table-build time is cheaper than failing inside the op.
 
-    Written in P5.3 rather than P7 because `BRINGUP_RECIPE.md:1091-1093` puts the builder here; the
+    Written in P5.3 rather than P7 because `BRINGUP_RECIPE.md:1332-1334` puts the builder here; the
     numbers belong to the phase that uses it.
     """
     hf = llama_config_dims()

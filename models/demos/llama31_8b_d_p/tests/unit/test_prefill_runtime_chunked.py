@@ -10,7 +10,7 @@ served chunk — the failure mode recipe P10 warning 1 records, which costs a me
 load to discover.
 
 **The audit walks `models/demos/common/prefill/runners/prefill_runner.py` with `ast`, not the
-contract doc** (`BRINGUP_RECIPE.md:1593-1596`). That is not pedantry: the doc's
+contract doc** (`BRINGUP_RECIPE.md:1687-1690`). That is not pedantry: the doc's
 `prefill_chunk(input_tensor, kv_cache, *, slot_id, actual_start, actual_end, request_id=0)`
 (`models/demos/common/prefill/docs/ADDING_A_PREFILL_MODEL.md:129`) omits `d2h_service` **and**
 `metadata_msg`, both of which the engine passes on every chunk
@@ -25,7 +25,7 @@ audit must report all three. An audit that passes everything is not an audit.
 
 **And then the refusals.** Recipe P7 requires the unsupported single-card configuration to fail
 loudly rather than silently run a different attention core
-(`BRINGUP_RECIPE.md:1598-1624`), and §1.4 requires every refusal to be matched on its message. Every
+(`BRINGUP_RECIPE.md:1692-1697`), and §1.4 requires every refusal to be matched on its message. Every
 `raise` in the module is exercised here.
 
 Note on the fixture: the repo's `expect_error` matches `message` as a **regex** despite its
@@ -308,7 +308,7 @@ def test_doc_required_names_are_present():
 def test_engine_call_site_is_wider_than_the_doc():
     """Measure the doc's gap rather than quoting it: two parameters, two methods, one config field.
 
-    `BRINGUP_RECIPE.md:1795-1798` names the two `prefill_chunk` parameters. The two undocumented
+    `BRINGUP_RECIPE.md:1630-1635` names the two `prefill_chunk` parameters. The two undocumented
     methods (`set_layer_completion_sink`, `set_d2h_ack_service`) and `config.use_trace` are what
     this AST walk added — `build_kv_chunk_table` and the two migration hooks *are* in the doc's
     optional-hook list.
@@ -427,7 +427,7 @@ def test_runtime_refuses_a_mesh_of_the_wrong_shape(expect_error):
 
 @pytest.mark.parametrize("mesh_shape", [(1, 1), (4, 4), (4, 2)], ids=["single_card", "tp4", "tp2"])
 def test_runtime_refuses_tp_not_equal_to_kv_heads(expect_error, mesh_shape):
-    """**The single-card refusal** (`BRINGUP_RECIPE.md:1598-1624`).
+    """**The single-card refusal** (`BRINGUP_RECIPE.md:1692-1697`).
 
     The packed cache holds exactly one KV head per chip, so `tp == num_key_value_heads` is an
     equality. Without this check the failure is a `TT_FATAL` from
@@ -552,7 +552,7 @@ def test_every_parameter_the_engine_always_passes_is_accepted_or_used():
 def test_prefill_chunk_refuses_a_cache_backed_chunk_on_the_dense_path(expect_error):
     """**Delta 3.** `actual_start > 0` without the SP ring path must refuse, naming P8.
 
-    `BRINGUP_RECIPE.md:1598-1625`: delta 3 cannot run in P7, `G-CHUNK` must not be weakened to
+    `BRINGUP_RECIPE.md:1692-1697`: delta 3 cannot run in P7, `G-CHUNK` must not be weakened to
     cover it, and the runtime must refuse the configuration loudly instead of running a causal mask
     that is off by `actual_start`.
     """

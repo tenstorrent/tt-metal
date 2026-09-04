@@ -125,7 +125,7 @@ def apply_reduce_scatter(tensor, mesh_config, ccl_manager):
     """Residual scheme B's seam: reduce-scatter only, leaving `[1,1,S,4096/TP]`. **Refuses.**
 
     Wired from day one so switching schemes is a flag rather than a rewrite
-    (`BRINGUP_RECIPE.md:992-994`), and refusing until P8 for the same reason `tt/mlp.py` does
+    (`BRINGUP_RECIPE.md:1207-1209`), and refusing until P8 for the same reason `tt/mlp.py` does
     (`DEC-038`, `DEC-041`): a reduce-scatter here while the norms and the residual add still expect
     full emb is not scheme B, it is a mixed residual. `bringup_log/04_CCL_PLAN.md` §5 row 3.
     """
