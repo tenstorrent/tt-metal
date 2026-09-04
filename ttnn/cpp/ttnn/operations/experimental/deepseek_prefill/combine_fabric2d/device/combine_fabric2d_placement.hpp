@@ -41,6 +41,7 @@ constexpr uint32_t untilizer_group_of(StreamId stream) { return stream % UNTILIZ
 // worker cores for L1 read ports; which way that goes is a measurement, so it is a knob. The ceiling here
 // only bounds the knob; whether a value fits is decided by placement, which knows the grid and the senders.
 uint32_t untilizers_per_group();
+constexpr uint32_t DEFAULT_UNTILIZERS_PER_GROUP = 5;
 constexpr uint32_t MAX_UNTILIZERS_PER_GROUP = 10;
 
 struct UntilizerPlacement {

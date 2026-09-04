@@ -202,7 +202,7 @@ DevicePlacement decide_device_placement(
 uint32_t untilizers_per_group() {
     static const uint32_t n = [] {
         const char* env = std::getenv("CMBF2D_UNTILIZERS_PER_GROUP");
-        const uint32_t v = env != nullptr ? static_cast<uint32_t>(std::atoi(env)) : MAX_UNTILIZERS_PER_GROUP;
+        const uint32_t v = env != nullptr ? static_cast<uint32_t>(std::atoi(env)) : DEFAULT_UNTILIZERS_PER_GROUP;
         TT_FATAL(
             v >= 1 && v <= MAX_UNTILIZERS_PER_GROUP,
             "CMBF2D_UNTILIZERS_PER_GROUP is {}, outside 1..{}",
