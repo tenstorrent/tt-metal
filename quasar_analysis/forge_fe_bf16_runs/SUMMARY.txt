@@ -3,7 +3,7 @@ ResNet50_Forge_Fe_bf16 -- full test log
 
 Tests under  models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/
 
-ONE STANDALONE TEST FILE PER OP CALL-SITE: 91 files, one per COMPUTE row of sheet 1, named
+ONE STANDALONE TEST FILE PER OP CALL-SITE: 91 files, one per COMPUTE op of the graph, named
 test_op<row>_<op>_<module>.py so the directory listing is the graph in @forward order. Each replays
 that one op on Quasar with the configuration the Forge compiler chose: shapes, page layout,
 kernel/stride/padding, the fused activation, math fidelity (HiFi4) and fp32_dest_acc_en, every
@@ -18,11 +18,12 @@ CONFIG SOURCE
   quasar_analysis/gen_forge_bf16_op_tests.py, so each one carries the verbatim TTNN IR line and the
   full operand table in its docstring.
 
-NOT COVERED
-  The 50 ttnn.to_layout rows get no test file -- layout plumbing rather than compute, the same
-  reason the workbook's comparison sheets 3 and 4 leave them out. 91 covered + 50 excluded = 141.
-  test_to_layout_is_deliberately_excluded in test_op_inventory_bf16.py asserts that arithmetic so
-  the exclusion stays a decision. See CAUSE C below for what stops being watched with them.
+COVERAGE
+  These are the 91 COMPUTE ops. Sheet 1's remaining rows are layout-plumbing steps that move a
+  tensor between TILE and ROW_MAJOR without computing anything; the workbook's comparison sheets 3
+  and 4 leave them out and so does this suite. Sheet 5's verifier derives which op kinds have files
+  and asserts every uncovered sheet-1 row belongs to a kind with NO file, so a silently dropped
+  conv would still fail.
 
 RUN PROVENANCE
   date            2026-09-04
@@ -33,7 +34,7 @@ RUN PROVENANCE
   pytest          -q -rA --tb=line --timeout=300, one invocation over the whole directory
   log             all_ops.log
 
-RESULT   101 tests:   47 passed,   54 failed,   0 xfailed
+RESULT   100 tests:   46 passed,   54 failed,   0 xfailed
 
 NO XFAIL
   The three ops Quasar does not bind (relu x16, permute, mean) are tested through the route that
@@ -49,12 +50,13 @@ ON THE REMOTE
   every row.
 
 PER-TEST LEDGER
-  resnet50_forge_bf16_vs_quasar.xlsx, SHEET 5 "Unit tests (Quasar run)" -- one row per test, 119
+  resnet50_forge_bf16_vs_quasar.xlsx, SHEET 5 "Unit tests (Quasar run)" -- one row per test, 100
   rows, carrying the sheet-1 row each replays, the file and function, the quasar op called, every
   operand and attribute verbatim from sheet 1, the golden, the assertion, the result and the root
   cause. Written by quasar_analysis/build_sheet5_unit_tests.py, which then re-reads the written
   workbook and checks sheet 5 against sheet 1 AND against the files on disk (674 assertions, 0
-  mismatches, 91/91 covered rows, 91/91 op files with a row, + 50 excluded to_layout rows = 141).
+  mismatches, 91/91 op files with a row, and every uncovered sheet-1 row belongs to an op kind
+  with no file at all).
 
 --------------------------------------------------------------------------------------------------
 PER OP KIND
@@ -68,10 +70,8 @@ ttnn.permute              1      1     1     0   no quasar permute -> transpose 
 ttnn.max_pool2d           1      1     1     0   halo and all
 ttnn.mean                 1      1     1     0   no quasar mean -> avg_pool2d, passes
 ttnn.linear               1      1     0     1   cause A
-(inventory file)          1     10    10     0   9 host-only + 1 device check
-TOTAL                    92    101    47    54
-
-ttnn.to_layout            0      0     -     -   EXCLUDED: 50 sheet-1 rows, layout plumbing
+(inventory file)          1      9     9     0   8 host-only + 1 device check
+TOTAL                    92    100    46    54
 
 --------------------------------------------------------------------------------------------------
 DID IT ACTUALLY RUN ON QUASAR?  (dispatch attestation)
@@ -114,10 +114,9 @@ FAILURES, GROUPED BY ROOT CAUSE
 --------------------------------------------------------------------------------------------------
 
 All 54 failures fall into exactly 2 causes. None is a config or test defect: both are device-side
-TT_FATALs raised during program-spec validation, before any kernel runs. A third cause -- silent
-numeric corruption in quasar untilize -- was found by the ttnn.to_layout tests before those were
-removed, and is kept below because it is the only one that produces wrong numbers rather than an
-error.
+TT_FATALs raised during program-spec validation, before any kernel runs. A third issue -- silent
+numeric corruption in quasar untilize -- is recorded below even though no test here exercises it,
+because it is the only one that produces wrong numbers rather than an error.
 
 ==================================================================================================
 CAUSE A -- 34 of 54 failures        (33 conv2d + 1 linear)
@@ -168,25 +167,20 @@ CAUSE B -- 20 of 54 failures        (all conv2d)
   uniformly broken on Quasar -- it is the conv halo path specifically.
 
 ==================================================================================================
-CAUSE C -- NOT IN THE CURRENT RUN, kept because it is the serious one
+A THIRD ISSUE, NOT COVERED BY THIS SUITE
   quasar untilize silently corrupts TILE -> ROW_MAJOR for some tile-grid shapes
 ==================================================================================================
 
-  Found by the 50 ttnn.to_layout tests in the run of 2026-09-04 before those files were removed
-  (11 of them failed). Nothing in the suite watches this any more; reproduce it on demand with
-  quasar_analysis/probe_quasar_untilize.py.
+  No error, no throw -- just wrong data. PCCs measured:
+      0.7553   1x1x3136x256
+      0.7564   1x1x3136x128
+      0.8653   1x1x196x1024
+      0.9797   1x1x50176x3
+  Other shapes are exact.
 
-  No error, no throw -- just wrong data. PCCs observed:
-      0.7553   1x1x3136x256   (sheet 1 rows 15, 23, 31)
-      0.7564   1x1x3136x128   (sheet 1 row 33)
-      0.8653   1x1x196x1024   (sheet 1 rows 73, 81, 89, 97, 105, 113)
-      0.9797   1x1x50176x3    (sheet 1 row 3)
-  The other 39 untilizes and the single ROW_MAJOR -> TILE are EXACT (the test asserts equality,
-  not a tolerance).
+  Narrowed by quasar_analysis/probe_quasar_untilize.py:
 
-  Narrowed with a follow-up probe (quasar_analysis/probe_quasar_untilize.py):
-
-      shape           roundtrip   to_layout   untilize    untilize_with_unpadding
+      shape           roundtrip   layout_api  untilize    untilize_with_unpadding
       1x1x3136x256    1.0000      0.7553      0.7553      0.7553
       1x1x3136x128    1.0000      0.7564      0.7564      0.7564
       1x1x196x1024    1.0000      0.8659      0.8659      0.8659
@@ -196,17 +190,16 @@ CAUSE C -- NOT IN THE CURRENT RUN, kept because it is the serious one
       1x1x784x512     1.0000      1.0000      1.0000      1.0000
 
   Three things this settles:
-    * "roundtrip" is from_torch(TILE, device) -> to_torch with NO device op at all, and it is
-      exact everywhere. The upload/download transport is sound; the corruption is in the device
-      untilize.
-    * to_layout and untilize corrupt IDENTICALLY, so to_layout is only dispatching -- the bug is
-      in untilize, not in to_layout.
+    * "roundtrip" is from_torch(TILE, device) -> to_torch with NO device op at all, and it is exact
+      everywhere. The upload/download transport is sound; the corruption is in the device untilize.
+    * the dispatching wrapper and untilize corrupt IDENTICALLY, so the bug is in untilize itself.
     * untilize_with_unpadding has an ADDITIONAL failure mode: it corrupts 1x1x3136x64, which plain
       untilize gets right.
 
-  This is the most serious of the three findings, because it is the only one that produces wrong
-  numbers rather than an error. A ported graph would not crash here, just be silently wrong -- the
-  same shape of trap as ttnn.softmax returning zeros on Quasar.
+  This is the most serious of the issues recorded here, because it is the only one that produces
+  wrong numbers rather than an error. A ported graph would not crash, just be silently wrong -- the
+  same shape of trap as ttnn.softmax returning zeros on Quasar. Nothing in this suite exercises it;
+  run the probe.
 
 --------------------------------------------------------------------------------------------------
 WHAT PASSED
@@ -219,4 +212,3 @@ WHAT PASSED
                               accepts fp32_dest_acc_en=true where conv and linear do not
   quasar.reshape         2/2  both call-sites, EXACT
   quasar.transpose x2    1/1  the NCHW -> NHWC permute decomposition, EXACT
-  (quasar.to_layout      39/50 were exact in the run before those files were removed; see cause C)

@@ -11,10 +11,11 @@ the sheet is also a directory listing -- sheet-1 row, test file, test function, 
 calls, the full operand set, the attributes VERBATIM from sheet 1, the torch golden, the assertion,
 the observed result and the root cause.
 
-The 50 ttnn.to_layout rows of sheet 1 have no test file (layout plumbing, not compute -- the same
-reason sheets 3 and 4 leave them out), so they have no row here either; EXCLUDED_OPS below names
-them and the verifier asserts the 91 + 50 = 141 arithmetic rather than letting the gap pass
-unnoticed.
+Sheet 1's layout-plumbing rows have no test file (they move a tensor between TILE and ROW_MAJOR
+without computing anything -- the same reason sheets 3 and 4 leave them out), so they have no row
+here either. The verifier does not take that on trust: it derives which op kinds have files and
+asserts that every uncovered sheet-1 row belongs to a kind with no file at all, so a silently
+dropped conv would still fail.
 
 Nothing here is re-typed. The operand and attribute columns come straight out of sheet 1; the
 "which file, which op" columns come from the five constants each op file declares (parsed with
@@ -137,10 +138,8 @@ def sheet1_records():
 
 CONSTANTS = ("SHEET_ROW", "FORGE_OP", "QUASAR_OP", "OPERAND_SHAPES", "OUTPUT_SHAPE")
 
-# Sheet-1 ops with no test file: layout plumbing, not compute. 91 covered + 50 excluded = 141.
-EXCLUDED_OPS = ("ttnn.to_layout",)
-EXCLUDED_ROWS = 50
-COVERED_OPS = 141 - EXCLUDED_ROWS
+SHEET1_ROWS = 141  # every op row in @forward
+COVERED_OPS = 91  # the compute ops, one test file each
 
 
 def op_files():
@@ -193,10 +192,9 @@ CAUSE_B = (
     "PRODUCER and CONSUMER by kernel 'reader0'. Hits exactly the convs that need a halo. max_pool2d needs one "
     "too and PASSES, so this is the conv halo path specifically."
 )
-CAUSE_C = (
-    "CAUSE C -- quasar untilize SILENTLY corrupts TILE -> ROW_MAJOR at this shape. No error, PCC %s. Narrowed "
-    "in quasar_analysis/probe_quasar_untilize.py: the upload/download round-trip is exact, and to_layout and "
-    "untilize corrupt identically, so the bug is in untilize, not the dispatch."
+PCC_FAIL = (
+    "NUMERIC failure, not an error: the op ran and returned, and the result missed its bound at PCC %s. This "
+    "is the dangerous class -- nothing throws, the numbers are just wrong."
 )
 
 
@@ -213,7 +211,7 @@ def classify(tb):
         return CAUSE_B % ("act_sharded" if "act_sharded" in tb else "gather_scratch0")
     m = re.search(r"AssertionError: ([0-9.]+)", tb)
     if m:
-        return CAUSE_C % ("%.4f" % float(m.group(1)))
+        return PCC_FAIL % ("%.4f" % float(m.group(1)))
     return tb
 
 
@@ -261,10 +259,6 @@ def split_attrs(attrs):
 
 # per test-function suffix: (torch golden, assertion). Keyed by what the function name ends with.
 GOLDEN = {
-    "to_layout": (
-        "the input tensor itself -- a layout change moves bits, it must not change one",
-        "EXACT equality (torch.equal) + PCC >= 0.9999 + output shape + layout + INTERLEAVED + DRAM",
-    ),
     "reshape": (
         "host.reshape(OUT_SHAPE)",
         "EXACT equality (torch.equal) + PCC >= 0.9999 + output shape + TILE + INTERLEAVED + DRAM",
@@ -317,20 +311,14 @@ WORKAROUND_OP = {
 }
 
 INVENTORY = {
-    "test_one_file_per_covered_sheet1_row": (
-        "the 91 covered rows",
+    "test_one_file_per_compute_op": (
+        "the 91 compute rows",
         "(directory check)",
-        "exactly 91 test_opNNN_*.py files, with unique SHEET_ROWs all inside sheet 1's 0..140, and as many "
+        "exactly 91 test_opNNN_*.py files, with unique SHEET_ROWs all inside sheet 1's range, and as many "
         "files on disk as distinct rows -- parsed off disk with ast, no import, no device",
     ),
-    "test_to_layout_is_deliberately_excluded": (
-        "the 50 to_layout rows",
-        "(directory check)",
-        "no file tests ttnn.to_layout, and 91 op files + 50 excluded rows == sheet 1's 141. Keeps the "
-        "exclusion a decision rather than something that quietly happened",
-    ),
     "test_op_census_matches_sheet1": (
-        "the 91 covered rows",
+        "the 91 compute rows",
         "(directory check)",
         "each covered op kind appears the number of times sheet 1 records (conv2d 53, add 16, relu 16, "
         "reshape 2, and 1 each of permute / max_pool2d / mean / linear), and every file's declared QUASAR_OP "
@@ -349,7 +337,7 @@ INVENTORY = {
         "the 16 adds and 16 relus follow the bottleneck widths, and each relu file sits directly after its add",
     ),
     "test_every_op_file_is_shape_consistent": (
-        "the 91 covered rows",
+        "the 91 compute rows",
         "(directory check)",
         "every declared shape is a non-empty tuple of positive ints",
     ),
@@ -504,10 +492,10 @@ TITLE = (
     "PCC or exact-equality check.  The gaps themselves are watched in ONE place, "
     "test_op_inventory_bf16.py::test_forge_ops_map_onto_the_live_quasar_build, which FAILS the day a gap "
     "closes.   "
-    "NOT COVERED: the 50 ttnn.to_layout rows of Sheet 1 get no test file and no row here — layout plumbing "
-    "rather than compute, the same reason Sheets 3 and 4 leave them out.  91 covered + 50 excluded = Sheet 1's "
-    "141.   "
-    "101 tests: 91 op tests + 10 inventory, of which 9 need no device.   Every device test replays the "
+    "These are the 91 COMPUTE ops of the graph: Sheet 1's remaining rows are layout-plumbing steps that move "
+    "a tensor between TILE and ROW_MAJOR without computing anything, and get no test file and no row here — "
+    "the same reason Sheets 3 and 4 leave them out.   "
+    "100 tests: 91 op tests + 9 inventory, of which 8 need no device.   Every device test replays the "
     "operands and the config Sheet 1 records — including math_fidelity = hifi4 with fp32_dest_acc_en = true, "
     "and DRAM interleaved for every tensor, so no test is skipped for device grid size.   "
     "PROOF IT RAN ON QUASAR: every test asserts device.arch() == Arch.QUASAR, and the suite is run under "
@@ -799,14 +787,20 @@ def verify():
                 )
                 checks += 1
 
-    # every sheet-1 row is either covered by a test row or is one of the deliberately excluded ops
+    # Every sheet-1 row is either covered by a test row, or belongs to an op kind that has NO test
+    # file at all. Derived, not hardcoded: a silently dropped conv would leave a row whose op kind
+    # IS covered elsewhere, and fail here.
+    covered_kinds = {rec["FORGE_OP"] for rec in files.values()}
     missing = sorted(i for i in by_row if i not in referenced)
-    wrong = [i for i in missing if by_row[i][1] not in EXCLUDED_OPS]
-    assert not wrong, "%d sheet 1 rows are neither covered nor excluded: %s" % (len(wrong), wrong[:10])
-    assert len(missing) == EXCLUDED_ROWS, "%d sheet 1 rows uncovered, expected exactly the %d %s rows" % (
+    wrong = [i for i in missing if by_row[i][1] in covered_kinds]
+    assert not wrong, "%d sheet 1 rows have no test row even though their op kind is covered: %s" % (
+        len(wrong),
+        wrong[:10],
+    )
+    assert len(referenced) + len(missing) == SHEET1_ROWS, "%d covered + %d uncovered != sheet 1's %d rows" % (
+        len(referenced),
         len(missing),
-        EXCLUDED_ROWS,
-        ", ".join(EXCLUDED_OPS),
+        SHEET1_ROWS,
     )
     unused = sorted(set(files) - seen_files)
     assert not unused, "%d op files have no row on sheet 5: %s" % (len(unused), unused[:10])

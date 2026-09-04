@@ -17,10 +17,10 @@ It carries NO fused activation: its output feeds a residual add, and the relu th
 emitted by Forge as a SEPARATE ttnn.relu op -- which Quasar has no binding for. 20 of the 53 convs
 are like this (the 16 conv3s and the 4 downsamples).
 
-Forge hands conv2d a channels-last flattened activation [1, 1, N*H*W, C] in ROW_MAJOR (produced by the
-ttnn.to_layout on sheet 1 row 35, which this suite does not test -- layout plumbing, see the README)
-and gets a TILE result back. The weight is the RAW OIHW tensor straight from host
-memory: this compile runs no prepare_conv2d_weights anywhere, so quasar.conv2d prepares it internally.
+Forge hands conv2d a channels-last flattened activation [1, 1, N*H*W, C] in ROW_MAJOR and gets a TILE
+result back, so this test builds the operand row-major and asserts the result is tiled. The weight is
+the RAW OIHW tensor straight from host memory: this compile runs no prepare_conv2d_weights anywhere,
+so quasar.conv2d prepares it internally.
 
 TTNN IR, verbatim from resnet50_forge_bf16_vs_quasar.xlsx sheet 1 ("Forge ops (bf16 only)"):
 

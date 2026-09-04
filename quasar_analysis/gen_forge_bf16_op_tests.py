@@ -512,10 +512,10 @@ def em_conv2d(rec, names, consumer):
         "torchvision ResNet-50 `%s`: %d -> %d channels, %dx%d kernel, stride %d, padding %d, over a %dx%d\n"
         "feature map, producing %dx%d. One of the 53 convs in the graph.\n\n"
         "%s\n\n"
-        "Forge hands conv2d a channels-last flattened activation [1, 1, N*H*W, C] in ROW_MAJOR (produced by the\n"
-        "ttnn.to_layout on sheet 1 row %d, which this suite does not test -- layout plumbing, see the README)\n"
-        "and gets a TILE result back. The weight is the RAW OIHW tensor straight from host\n"
-        "memory: this compile runs no prepare_conv2d_weights anywhere, so quasar.conv2d prepares it internally."
+        "Forge hands conv2d a channels-last flattened activation [1, 1, N*H*W, C] in ROW_MAJOR and gets a TILE\n"
+        "result back, so this test builds the operand row-major and asserts the result is tiled.%s The weight is\n"
+        "the RAW OIHW tensor straight from host memory: this compile runs no prepare_conv2d_weights anywhere,\n"
+        "so quasar.conv2d prepares it internally."
         % (
             tag.replace("_", "."),
             ic,
@@ -533,7 +533,7 @@ def em_conv2d(rec, names, consumer):
                 if fused
                 else "It carries NO fused activation: its output feeds a residual add, and the relu that follows is\nemitted by Forge as a SEPARATE ttnn.relu op -- which Quasar has no binding for. 20 of the 53 convs\nare like this (the 16 conv3s and the 4 downsamples)."
             ),
-            rec["idx"] - 1,
+            "",
         )
     )
     validates = (

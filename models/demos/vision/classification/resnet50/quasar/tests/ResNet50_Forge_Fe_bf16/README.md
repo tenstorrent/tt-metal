@@ -17,7 +17,7 @@ test, with the config it replays and the result it got.
 | memory | L1, HEIGHT/BLOCK **sharded**, pinned 56/49/25/16-core ranges | **DRAM, INTERLEAVED everywhere** — no shard spec, no core ranges |
 | math | `MathFidelity.HiFi2` | **`MathFidelity.HiFi4`, `fp32_dest_acc_en=true`** |
 | weights | pre-prepared by `prepare_conv2d_weights` in const-eval functions | **raw OIHW handed straight to the op** from host memory — no `prepare_conv2d_*` anywhere |
-| layout ops | 1 `to_layout` + 4 `to_memory_config` (resharding) | **50 `to_layout`** — an untilize before every conv |
+| layout ops | 4 `to_memory_config` (resharding) | a layout change around every conv |
 
 The two are different compiles of the same model, so they are different tables and different
 tests. Neither supersedes the other: the sharded one asks "does the optimised Forge output run on
@@ -38,7 +38,6 @@ module. Each file carries its own config table and its own operand builder.
 | Forge op | count | Quasar op | route | files |
 |---|---|---|---|---|
 | `ttnn.conv2d` | 53 | `quasar.conv2d` | direct | `test_op*_conv2d_*.py` |
-| `ttnn.to_layout` | 50 | `quasar.to_layout` | **not tested here** — layout plumbing | — |
 | `ttnn.add` | 16 | `quasar.add` | direct | `test_op*_add_*.py` |
 | `ttnn.relu` | 16 | — **none** — | fuse into the preceding `add` | `test_op*_relu_*.py` |
 | `ttnn.reshape` | 2 | `quasar.reshape` | direct | `test_op002_…`, `test_op139_…` |
@@ -46,23 +45,13 @@ module. Each file carries its own config table and its own operand builder.
 | `ttnn.max_pool2d` | 1 | `quasar.max_pool2d` | direct | `test_op006_max_pool2d_stem.py` |
 | `ttnn.mean` | 1 | — **none** — | `quasar.avg_pool2d` 7×7 | `test_op138_mean_global_avgpool.py` |
 | `ttnn.linear` | 1 | `quasar.linear` | direct | `test_op140_linear_fc.py` |
-| | **141** | | | **91 files, one per compute op** |
+| | **91** | | | **one file each** |
 
 (`ttnn.deallocate` and `ttnn.get_device` produce no tensor and are not rows on sheet 1.)
 
-**`ttnn.to_layout` is excluded.** Its 50 rows are layout plumbing rather than compute — the same
-reason the workbook's comparison sheets 3 and 4 leave them out — so they get no test file, and
-sheet 5 has no row for them. 91 of sheet 1's 141 rows are covered.
-`test_to_layout_is_deliberately_excluded` in `test_op_inventory_bf16.py` pins that down and asserts
-the 91 + 50 = 141 arithmetic, so the exclusion stays a decision rather than something that quietly
-happened.
-
-One thing goes with them, and it is worth knowing: the `to_layout` files were the only tests that
-exercised `quasar.untilize`, which **silently corrupts** some tile-grid shapes — no error, PCC 0.755
-on `[1,1,3136,256]`. That finding is written up under *Status* below and in
-`quasar_analysis/forge_fe_bf16_runs/SUMMARY.txt`, and `quasar_analysis/probe_quasar_untilize.py`
-still reproduces it on demand — but **nothing in this directory will catch a regression in it any
-more**.
+**These are the 91 compute ops of the graph.** Sheet 1 also carries layout-plumbing rows that move a
+tensor between TILE and ROW_MAJOR without computing anything; the workbook's comparison sheets 3 and
+4 leave those out, and so does this directory.
 
 **Three gaps**, the same three the optimised compile hits. `ttnn.experimental.quasar` binds
 data-movement ops, conv2d, the pools, the matmul family and a **binary** front-end. It binds **no
@@ -88,9 +77,9 @@ metal model fuses them (`quasar.add_(out, ds_out, activations=[UnaryWithParam(RE
 
 ## Layout — one file per op call-site
 
-The whole point of this directory: **91 standalone test files, one per compute row of sheet 1**
-(the 50 `ttnn.to_layout` rows are excluded — see above), laid out and named the way `../ops/` is — a flat directory of self-contained files, each with its own
-docstring, its own config constants and its own operand builder. No `conftest.py`, no shared helper
+The whole point of this directory: **91 standalone test files, one per compute op of the graph**,
+laid out and named the way `../ops/` is — a flat directory of self-contained files, each with its
+own docstring, its own config constants and its own operand builder. No `conftest.py`, no shared helper
 module, no config module. Hand any single file to the LLK team and it stands alone.
 
 ```
@@ -113,12 +102,11 @@ ResNet50_Forge_Fe_bf16/
 ```
 
 The file name carries the sheet-1 row and the module it replays, so the directory listing **is** the
-graph in order — with the `to_layout` rows missing from the numbering, which is exactly what the
-exclusion looks like. `ls test_op*conv2d*` or `pytest ... -k layer3` selects what you want without a
-table to consult.
+graph in @forward order; the numbering skips the rows this suite does not cover. `ls
+test_op*conv2d*` or `pytest ... -k layer3` selects what you want without a table to consult.
 
-**101 tests — one per op file, plus the inventory**: 91 op tests + 10 in
-`test_op_inventory_bf16.py`, of which **9 need no device**. No xfail, no skips.
+**100 tests — one per op file, plus the inventory**: 91 op tests + 9 in
+`test_op_inventory_bf16.py`, of which **8 need no device**. No xfail, no skips.
 
 ### What keeps 91 loose files honest
 
@@ -134,8 +122,8 @@ OUTPUT_SHAPE = (1, 1, 12544, 64)
 
 `test_op_inventory_bf16.py` **parses those back off disk with `ast`** — no import, no ttnn, no
 device — and checks the 91 files against ResNet-50 itself: there are exactly 91 of them with unique
-sheet rows inside 0..140 and no excluded op among them, the op census matches sheet 1 minus the
-exclusion, the 53 conv files' activation / weight / bias / output
+sheet rows in range, the op census matches sheet 1, the 53 conv files' activation / weight / bias /
+output
 shapes match a topology re-derived from first principles (layers `[3,4,6,3]`, widths
 `[64,128,256,512]`, expansion 4, stride on the 3×3), each conv file is named after the module it
 replays, and the 16 adds and 16 relus follow the bottleneck widths with each relu sitting directly
@@ -147,8 +135,8 @@ Each file's docstring also carries the **verbatim TTNN IR line** and the full op
 sheet 1, plus its observed status from the last run — so the provenance travels with the test.
 
 The files are generated from sheet 1 by `quasar_analysis/gen_forge_bf16_op_tests.py`; re-run it
-after a recompile and the whole directory is rebuilt, IR lines and all. `SKIP_OPS` there is what
-drops `to_layout`; its emitter is kept, so re-enabling those 50 files is a one-line change.
+after a recompile and the whole directory is rebuilt, IR lines and all. `SKIP_OPS` there controls
+which rows get a file.
 
 ---
 
@@ -266,7 +254,7 @@ directory, not from a separate env var.
 Useful selections:
 
 ```bash
-pytest ... test_op_inventory_bf16.py -k "not device"   # the 9 host-only checks, no device at all
+pytest ... test_op_inventory_bf16.py -k "not device"   # the 8 host-only checks, no device at all
 pytest ... -k conv2d                                   # all 53 convs
 pytest ... -k layer3                                   # everything in layer3
 pytest ... -k "fused or via_"                          # the three gap routes
@@ -300,16 +288,16 @@ three gaps closes.
 
 ## Status on 2026-09-04 (craq-sim, `Arch.QUASAR`, 8×4)
 
-**101 tests: 47 passed, 54 failed, 0 xfailed.** One test per op file, plus 10 in the inventory.
+**100 tests: 46 passed, 54 failed, 0 xfailed.** One test per op file, plus 9 in the inventory.
 
 * **Per-test ledger — `resnet50_forge_bf16_vs_quasar.xlsx`, sheet 5 "Unit tests (Quasar run)".**
-  101 rows: the sheet-1 row each test replays, the file and function, the quasar op it calls, every
+  100 rows: the sheet-1 row each test replays, the file and function, the quasar op it calls, every
   operand and attribute **verbatim from sheet 1**, the torch golden, the assertion, the result, the
   root cause, a copy-pasteable pytest command, and — last two columns — **SHA-pinned GitHub
   permalinks to the test file and to the run log**, so every row is auditable from the sheet alone.
   Built by `quasar_analysis/build_sheet5_unit_tests.py`, which re-reads the written workbook and
-  checks it against sheet 1 and the files on disk (**584 assertions, 0 mismatches, 91/91 covered
-  rows, + 50 excluded `to_layout` rows = 141**).
+  checks it against sheet 1 and the files on disk (**assertions re-derived from the written file,
+  0 mismatches, 91/91 op files with a row**).
 * **Everything is on the remote**, branch
   [`ctr-lelanchelian/resnet50-forge-fe-op-tests`](https://github.com/tenstorrent/tt-metal/tree/ctr-lelanchelian/resnet50-forge-fe-op-tests) — the 91 op files, the inventory, the
   generators, the attestation plugin, and the logs:
@@ -317,7 +305,7 @@ three gaps closes.
 
 | outcome | count | where |
 |---|---|---|
-| PASS | 47 | 16 adds, 16 fused add+RELU (the relu route), `max_pool2d`, `avg_pool2d` (the mean route), both reshapes, the transpose-decomposed permute, and the 10 inventory checks |
+| PASS | 46 | 16 adds, 16 fused add+RELU (the relu route), `max_pool2d`, `avg_pool2d` (the mean route), both reshapes, the transpose-decomposed permute, and the 9 inventory checks |
 | FAIL | 54 | 53 convs, the fc |
 | XFAIL | 0 | by design — see *There is no `xfail` anywhere in this suite* above |
 
@@ -339,17 +327,17 @@ and the attestation shows **all 54 reached the device before throwing**:
   **`max_pool2d` needs a halo too and it passes** — so this is the conv halo path specifically, not
   the halo as such.
 
-### A third finding, no longer watched by this suite
+### A third finding, not covered by this suite
 
-Before the `to_layout` files were removed, they showed that **`quasar.untilize` silently corrupts
-TILE → ROW_MAJOR** for some tile-grid shapes: no error, just wrong data — PCC 0.755 (`3136×256`),
-0.756 (`3136×128`), 0.865 (`196×1024`), 0.980 (`50176×3`); 39 of the 50 were exact. A follow-up
-probe showed the upload/download round-trip is exact everywhere, `to_layout` and `untilize` corrupt
-identically (so the bug is in `untilize`, not the dispatch), and `untilize_with_unpadding` has an
-extra failure mode of its own.
+**`quasar.untilize` silently corrupts TILE → ROW_MAJOR** at some tile-grid shapes: no error, just
+wrong data — PCC 0.755 on `[1,1,3136,256]`, 0.756 on `[1,1,3136,128]`, 0.865 on `[1,1,196,1024]`,
+0.980 on `[1,1,50176,3]`, while other shapes are exact. A probe narrows it: the upload/download
+round-trip is exact everywhere, `to_memory_config`-style dispatch is not involved, and
+`untilize_with_unpadding` has an extra failure mode of its own — so the fault is in `untilize`.
 
-It is the only one of the three that produces **wrong numbers rather than an error**, so it is worth
-keeping in view even though nothing here tests it now. Reproduce it with:
+It is the only Quasar issue found here that produces **wrong numbers rather than an error**, which
+is why the data-movement tests in this directory assert exact equality rather than a PCC tolerance.
+Nothing in this suite exercises it; reproduce it with:
 
 ```bash
 python quasar_analysis/probe_quasar_untilize.py

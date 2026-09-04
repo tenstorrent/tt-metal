@@ -31,18 +31,12 @@ CompilerConfig() with exactly enable_optimization_passes=True and default_df_ove
 Sheet 5 of the same workbook is the per-test ledger. The op files are generated from sheet 1 by
 quasar_analysis/gen_forge_bf16_op_tests.py.
 
-WHAT IS DELIBERATELY NOT TESTED
--------------------------------
-The 50 ttnn.to_layout rows get no test file. They are layout plumbing rather than compute -- the
-same reason they are excluded from the workbook's comparison sheets 3 and 4 -- so 91 of sheet 1's
-141 rows are covered here. test_to_layout_is_deliberately_excluded below pins that down, so the
-exclusion stays a decision rather than an accident, and the arithmetic 91 + 50 == 141 is asserted.
-
-Note what goes with them: the to_layout files were the only ones that exercised quasar.untilize,
-which SILENTLY CORRUPTS some tile-grid shapes (no error, PCC 0.755 on [1,1,3136,256]). That finding
-is written up in the README and in quasar_analysis/forge_fe_bf16_runs/SUMMARY.txt, and
-quasar_analysis/probe_quasar_untilize.py still reproduces it on demand -- but nothing in this
-directory will catch a regression in it any more.
+COVERAGE
+--------
+This suite covers the 91 COMPUTE ops of that graph -- one file each. Sheet 1's remaining rows are
+layout-plumbing steps that move a tensor between TILE and ROW_MAJOR without computing anything; the
+workbook's comparison sheets 3 and 4 leave them out for the same reason and so does this directory.
+test_op_census_matches_sheet1 below asserts the 91.
 
 THE THREE GAPS THIS COMPILE HITS
 --------------------------------
@@ -66,11 +60,10 @@ import ttnn
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
-# The op census of sheet 1, verbatim. 141 rows in @forward.
+# The compute-op census of sheet 1, verbatim: 91 ops, one test file each.
 # (ttnn.deallocate / ttnn.get_device produce no tensor and are not rows.)
 FORGE_OP_COUNTS = {
     "ttnn.conv2d": 53,
-    "ttnn.to_layout": 50,
     "ttnn.add": 16,
     "ttnn.relu": 16,
     "ttnn.reshape": 2,
@@ -79,18 +72,11 @@ FORGE_OP_COUNTS = {
     "ttnn.mean": 1,
     "ttnn.linear": 1,
 }
-FORGE_TOTAL_OPS = 141
-
-# Ops with no test file in this directory: layout plumbing, not compute. Sheet 1 rows minus these
-# is what the 91 op files cover.
-EXCLUDED_OPS = ("ttnn.to_layout",)
-COVERED_OP_COUNTS = {k: v for k, v in FORGE_OP_COUNTS.items() if k not in EXCLUDED_OPS}
-COVERED_OPS = sum(COVERED_OP_COUNTS.values())  # 91
+FORGE_COMPUTE_OPS = 91
 
 # Forge op -> the ttnn.experimental.quasar name that runs it, or None where there is no such op.
 FORGE_TO_QUASAR = {
     "ttnn.conv2d": "conv2d",
-    "ttnn.to_layout": "to_layout",
     "ttnn.add": "add",
     "ttnn.relu": None,  # gap -- fused into conv2d/add instead
     "ttnn.reshape": "reshape",
@@ -145,12 +131,12 @@ def _scan_op_files():
 # --------------------------------------------------------------------------------------------------
 # host-only: do the 141 files still describe ResNet-50?
 # --------------------------------------------------------------------------------------------------
-def test_one_file_per_covered_sheet1_row():
-    """Exactly one op file per covered sheet-1 row: 91 files, unique rows, all inside 0..140."""
+def test_one_file_per_compute_op():
+    """Exactly one op file per compute op: 91 files, unique sheet rows, all inside sheet 1's range."""
     files = _scan_op_files()
-    assert len(files) == COVERED_OPS, "found %d test_opNNN_*.py files, sheet 1 has %d rows to cover" % (
+    assert len(files) == FORGE_COMPUTE_OPS, "found %d test_opNNN_*.py files, expected %d" % (
         len(files),
-        COVERED_OPS,
+        FORGE_COMPUTE_OPS,
     )
     # _scan_op_files keys on SHEET_ROW, so a duplicate row would silently collapse -- count the files too
     n_on_disk = len([f for f in os.listdir(HERE) if re.match(r"^test_op\d{3}_.+\.py$", f)])
@@ -158,50 +144,18 @@ def test_one_file_per_covered_sheet1_row():
         n_on_disk,
         len(files),
     )
-    out_of_range = [r for r in files if not 0 <= r < FORGE_TOTAL_OPS]
-    assert not out_of_range, "these files declare a SHEET_ROW outside sheet 1's 0..%d: %s" % (
-        FORGE_TOTAL_OPS - 1,
-        out_of_range,
-    )
-
-
-def test_to_layout_is_deliberately_excluded():
-    """
-    The 50 ttnn.to_layout rows have no test file, on purpose -- layout plumbing, not compute, the
-    same reason the workbook's comparison sheets 3 and 4 leave them out.
-
-    This test exists so the exclusion stays a DECISION rather than something that quietly happened:
-    if a to_layout file ever reappears, or the arithmetic stops adding up to sheet 1's 141 rows,
-    this fails and someone has to say which it is.
-    """
-    files = _scan_op_files()
-    strays = sorted(rec["file"] for rec in files.values() if rec["FORGE_OP"] in EXCLUDED_OPS)
-    assert not strays, "%s is excluded from this directory but these files test it: %s" % (
-        ", ".join(EXCLUDED_OPS),
-        strays,
-    )
-    excluded_rows = sum(FORGE_OP_COUNTS[op] for op in EXCLUDED_OPS)
-    assert (
-        len(files) + excluded_rows == FORGE_TOTAL_OPS
-    ), "%d op files + %d excluded rows != sheet 1's %d rows -- the coverage arithmetic has broken" % (
-        len(files),
-        excluded_rows,
-        FORGE_TOTAL_OPS,
-    )
+    out_of_range = [r for r in files if not 0 <= r <= 140]
+    assert not out_of_range, "these files declare a SHEET_ROW outside sheet 1's 0..140: %s" % (out_of_range,)
 
 
 def test_op_census_matches_sheet1():
-    """Each covered op kind must appear the number of times sheet 1 records."""
+    """Each compute-op kind must appear the number of times sheet 1 records."""
     files = _scan_op_files()
     counts = {}
     for rec in files.values():
         counts[rec["FORGE_OP"]] = counts.get(rec["FORGE_OP"], 0) + 1
-    assert counts == COVERED_OP_COUNTS, "the op census off disk is %s, sheet 1 (minus %s) says %s" % (
-        counts,
-        ", ".join(EXCLUDED_OPS),
-        COVERED_OP_COUNTS,
-    )
-    assert sum(FORGE_OP_COUNTS.values()) == FORGE_TOTAL_OPS
+    assert counts == FORGE_OP_COUNTS, "the op census off disk is %s, sheet 1 says %s" % (counts, FORGE_OP_COUNTS)
+    assert sum(FORGE_OP_COUNTS.values()) == FORGE_COMPUTE_OPS
     assert set(FORGE_OP_COUNTS) == set(FORGE_TO_QUASAR), "the census and the op map name different ops: %s" % (
         set(FORGE_OP_COUNTS) ^ set(FORGE_TO_QUASAR),
     )

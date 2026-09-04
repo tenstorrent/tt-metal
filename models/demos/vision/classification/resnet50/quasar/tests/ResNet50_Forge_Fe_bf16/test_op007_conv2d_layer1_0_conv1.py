@@ -17,10 +17,10 @@ It carries a FUSED RELU (Conv2dConfig.activation = <op_type = relu>). 33 of the 
 the other 20 are the 16 bottleneck conv3s and the 4 downsamples, whose output feeds a residual add,
 where Forge emits relu as a separate op instead.
 
-Forge hands conv2d a channels-last flattened activation [1, 1, N*H*W, C] in ROW_MAJOR (produced by the
-ttnn.to_layout on sheet 1 row 6, which this suite does not test -- layout plumbing, see the README)
-and gets a TILE result back. The weight is the RAW OIHW tensor straight from host
-memory: this compile runs no prepare_conv2d_weights anywhere, so quasar.conv2d prepares it internally.
+Forge hands conv2d a channels-last flattened activation [1, 1, N*H*W, C] in ROW_MAJOR and gets a TILE
+result back, so this test builds the operand row-major and asserts the result is tiled. The weight is
+the RAW OIHW tensor straight from host memory: this compile runs no prepare_conv2d_weights anywhere,
+so quasar.conv2d prepares it internally.
 
 TTNN IR, verbatim from resnet50_forge_bf16_vs_quasar.xlsx sheet 1 ("Forge ops (bf16 only)"):
 

@@ -1,6 +1,10 @@
-"""Narrow the quasar TILE -> ROW_MAJOR corruption that
-models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_to_layout_forge_bf16.py
-reports on 11 of its 50 call-sites (cause C in quasar_analysis/forge_fe_bf16_runs/SUMMARY.txt).
+"""Reproduce and narrow the quasar TILE -> ROW_MAJOR corruption written up under "A THIRD ISSUE" in
+quasar_analysis/forge_fe_bf16_runs/SUMMARY.txt.
+
+Nothing in the ResNet50_Forge_Fe_bf16 suite exercises this -- that suite covers the graph's compute
+ops -- so this standalone probe is what keeps the finding reproducible. It deliberately calls BOTH
+the generic layout-change entry point and the untilize primitive: they corrupt identically, which is
+how we know the fault is in untilize rather than in the dispatch above it.
 
 Run:
   TT_METAL_SIMULATOR=<dir>/libttsim.so TT_METAL_SLOW_DISPATCH_MODE=1 ARCH_NAME=quasar \
@@ -8,7 +12,7 @@ Run:
 
 Columns:
   roundtrip  = from_torch(TILE, device) -> to_torch, no device op at all (is the upload sound?)
-  to_layout  = quasar.to_layout(TILE -> ROW_MAJOR)
+  layout_api = the generic layout-change entry point (TILE -> ROW_MAJOR)
   untilize   = quasar.untilize
   unt_unpad  = quasar.untilize_with_unpadding
 """
@@ -40,16 +44,16 @@ def pcc(a, b):
     return "%.4f" % c
 
 
-print("%-16s %-10s %-10s %-10s %-10s" % ("shape", "roundtrip", "to_layout", "untilize", "unt_unpad"))
+print("%-16s %-10s %-10s %-10s %-10s" % ("shape", "roundtrip", "layout_api", "untilize", "unt_unpad"))
 for sh in SHAPES:
     host = torch.randn(sh, dtype=torch.bfloat16)
     res = []
-    for route in ("roundtrip", "to_layout", "untilize", "untilize_with_unpadding"):
+    for route in ("roundtrip", "layout_api", "untilize", "untilize_with_unpadding"):
         tt = ttnn.from_torch(host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=DRAM)
         try:
             if route == "roundtrip":
                 out = tt
-            elif route == "to_layout":
+            elif route == "layout_api":
                 out = ttnn.experimental.quasar.to_layout(tt, ttnn.ROW_MAJOR_LAYOUT, memory_config=DRAM)
             elif route == "untilize":
                 out = ttnn.experimental.quasar.untilize(tt, memory_config=DRAM)

@@ -13,7 +13,7 @@
    "TransposeDeviceOperation",
    "TransposeDeviceOperation"
   ],
-  "device_op_ns": 341492117,
+  "device_op_ns": 300601542,
   "buffer_allocations": 3,
   "device_ids": [
    0
@@ -50,7 +50,7 @@
    "InterleavedToShardedDeviceOperation",
    "HaloDeviceOperation"
   ],
-  "device_op_ns": 258846611,
+  "device_op_ns": 46686970,
   "buffer_allocations": 10,
   "device_ids": [
    2
@@ -72,7 +72,7 @@
    "HaloDeviceOperation",
    "ShardedToInterleavedDeviceOperation"
   ],
-  "device_op_ns": 2917395414,
+  "device_op_ns": 3199984444,
   "buffer_allocations": 10,
   "device_ids": [
    3
@@ -92,7 +92,7 @@
    "TilizeDeviceOperation",
    "MatmulDeviceOperation"
   ],
-  "device_op_ns": 311125759,
+  "device_op_ns": 133178139,
   "buffer_allocations": 5,
   "device_ids": [
    4
@@ -113,7 +113,7 @@
    "InterleavedToShardedDeviceOperation",
    "HaloDeviceOperation"
   ],
-  "device_op_ns": 63127499,
+  "device_op_ns": 38862670,
   "buffer_allocations": 10,
   "device_ids": [
    5
@@ -134,7 +134,7 @@
    "TilizeDeviceOperation",
    "MatmulDeviceOperation"
   ],
-  "device_op_ns": 14168039,
+  "device_op_ns": 5477009,
   "buffer_allocations": 5,
   "device_ids": [
    6
@@ -155,7 +155,7 @@
    "TilizeDeviceOperation",
    "MatmulDeviceOperation"
   ],
-  "device_op_ns": 4408441,
+  "device_op_ns": 6238069,
   "buffer_allocations": 5,
   "device_ids": [
    7
@@ -176,7 +176,7 @@
   "device_ops": [
    "BinaryNgDeviceOperation"
   ],
-  "device_op_ns": 357178712,
+  "device_op_ns": 121299212,
   "buffer_allocations": 3,
   "device_ids": [
    8
@@ -196,7 +196,7 @@
   "device_ops": [
    "BinaryNgDeviceOperation"
   ],
-  "device_op_ns": 111541989,
+  "device_op_ns": 86758310,
   "buffer_allocations": 3,
   "device_ids": [
    9
@@ -216,7 +216,7 @@
    "TilizeDeviceOperation",
    "MatmulDeviceOperation"
   ],
-  "device_op_ns": 282003689,
+  "device_op_ns": 124777998,
   "buffer_allocations": 5,
   "device_ids": [
    10
@@ -237,7 +237,7 @@
    "InterleavedToShardedDeviceOperation",
    "HaloDeviceOperation"
   ],
-  "device_op_ns": 6010107,
+  "device_op_ns": 5829637,
   "buffer_allocations": 10,
   "device_ids": [
    11
@@ -258,7 +258,7 @@
    "TilizeDeviceOperation",
    "MatmulDeviceOperation"
   ],
-  "device_op_ns": 8572299,
+  "device_op_ns": 5500756,
   "buffer_allocations": 5,
   "device_ids": [
    12
@@ -279,7 +279,7 @@
   "device_ops": [
    "BinaryNgDeviceOperation"
   ],
-  "device_op_ns": 9474646,
+  "device_op_ns": 5308414,
   "buffer_allocations": 3,
   "device_ids": [
    13
@@ -299,7 +299,7 @@
   "device_ops": [
    "BinaryNgDeviceOperation"
   ],
-  "device_op_ns": 24287388,
+  "device_op_ns": 4372822,
   "buffer_allocations": 3,
   "device_ids": [
    14
@@ -319,7 +319,7 @@
    "TilizeDeviceOperation",
    "MatmulDeviceOperation"
   ],
-  "device_op_ns": 7915722,
+  "device_op_ns": 5955492,
   "buffer_allocations": 5,
   "device_ids": [
    15
@@ -340,7 +340,7 @@
    "InterleavedToShardedDeviceOperation",
    "HaloDeviceOperation"
   ],
-  "device_op_ns": 4358575,
+  "device_op_ns": 5260921,
   "buffer_allocations": 10,
   "device_ids": [
    16
@@ -361,7 +361,7 @@
    "TilizeDeviceOperation",
    "MatmulDeviceOperation"
   ],
-  "device_op_ns": 56731520,
+  "device_op_ns": 6020794,
   "buffer_allocations": 5,
   "device_ids": [
    17
@@ -382,7 +382,7 @@
   "device_ops": [
    "BinaryNgDeviceOperation"
   ],
-  "device_op_ns": 10790173,
+  "device_op_ns": 4428625,
   "buffer_allocations": 3,
   "device_ids": [
    18
@@ -402,7 +402,7 @@
   "device_ops": [
    "BinaryNgDeviceOperation"
   ],
-  "device_op_ns": 4492739,
+  "device_op_ns": 4167420,
   "buffer_allocations": 3,
   "device_ids": [
    19
@@ -422,7 +422,7 @@
    "TilizeDeviceOperation",
    "MatmulDeviceOperation"
   ],
-  "device_op_ns": 5733466,
+  "device_op_ns": 5615925,
   "buffer_allocations": 5,
   "device_ids": [
    20
@@ -443,7 +443,7 @@
    "InterleavedToShardedDeviceOperation",
    "HaloDeviceOperation"
   ],
-  "device_op_ns": 188159580,
+  "device_op_ns": 85984192,
   "buffer_allocations": 10,
   "device_ids": [
    21
@@ -464,7 +464,7 @@
    "TilizeWithValPaddingDeviceOperation",
    "MatmulDeviceOperation"
   ],
-  "device_op_ns": 359008339,
+  "device_op_ns": 108745900,
   "buffer_allocations": 5,
   "device_ids": [
    22
@@ -485,7 +485,7 @@
    "InterleavedToShardedDeviceOperation",
    "HaloDeviceOperation"
   ],
-  "device_op_ns": 42472059,
+  "device_op_ns": 39110815,
   "buffer_allocations": 10,
   "device_ids": [
    23
@@ -506,7 +506,7 @@
   "device_ops": [
    "BinaryNgDeviceOperation"
   ],
-  "device_op_ns": 4068874,
+  "device_op_ns": 5030586,
   "buffer_allocations": 3,
   "device_ids": [
    24
@@ -526,7 +526,7 @@
   "device_ops": [
    "BinaryNgDeviceOperation"
   ],
-  "device_op_ns": 12439331,
+  "device_op_ns": 5534001,
   "buffer_allocations": 3,
   "device_ids": [
    25
@@ -546,7 +546,7 @@
    "TilizeWithValPaddingDeviceOperation",
    "MatmulDeviceOperation"
   ],
-  "device_op_ns": 2490327537,
+  "device_op_ns": 94062573,
   "buffer_allocations": 5,
   "device_ids": [
    26
@@ -567,7 +567,7 @@
    "InterleavedToShardedDeviceOperation",
    "HaloDeviceOperation"
   ],
-  "device_op_ns": 9803528,
+  "device_op_ns": 5047208,
   "buffer_allocations": 10,
   "device_ids": [
    27
@@ -588,7 +588,7 @@
    "TilizeWithValPaddingDeviceOperation",
    "MatmulDeviceOperation"
   ],
-  "device_op_ns": 3943020,
+  "device_op_ns": 5801142,
   "buffer_allocations": 5,
   "device_ids": [
    28
@@ -609,7 +609,7 @@
   "device_ops": [
    "BinaryNgDeviceOperation"
   ],
-  "device_op_ns": 5101824,
+  "device_op_ns": 4394194,
   "buffer_allocations": 3,
   "device_ids": [
    29
@@ -629,7 +629,7 @@
   "device_ops": [
    "BinaryNgDeviceOperation"
   ],
-  "device_op_ns": 16108085,
+  "device_op_ns": 4066499,
   "buffer_allocations": 3,
   "device_ids": [
    30
@@ -649,7 +649,7 @@
    "TilizeWithValPaddingDeviceOperation",
    "MatmulDeviceOperation"
   ],
-  "device_op_ns": 18430443,
+  "device_op_ns": 5978050,
   "buffer_allocations": 5,
   "device_ids": [
    31
@@ -670,7 +670,7 @@
    "InterleavedToShardedDeviceOperation",
    "HaloDeviceOperation"
   ],
-  "device_op_ns": 8103315,
+  "device_op_ns": 5074516,
   "buffer_allocations": 10,
   "device_ids": [
    32
@@ -691,7 +691,7 @@
    "TilizeWithValPaddingDeviceOperation",
    "MatmulDeviceOperation"
   ],
-  "device_op_ns": 4295648,
+  "device_op_ns": 5644420,
   "buffer_allocations": 5,
   "device_ids": [
    33
@@ -712,7 +712,7 @@
   "device_ops": [
    "BinaryNgDeviceOperation"
   ],
-  "device_op_ns": 54390166,
+  "device_op_ns": 4256467,
   "buffer_allocations": 3,
   "device_ids": [
    34
@@ -732,7 +732,7 @@
   "device_ops": [
    "BinaryNgDeviceOperation"
   ],
-  "device_op_ns": 39235482,
+  "device_op_ns": 4226785,
   "buffer_allocations": 3,
   "device_ids": [
    35
@@ -752,7 +752,7 @@
    "TilizeWithValPaddingDeviceOperation",
    "MatmulDeviceOperation"
   ],
-  "device_op_ns": 10366308,
+  "device_op_ns": 5548250,
   "buffer_allocations": 5,
   "device_ids": [
    36
@@ -773,7 +773,7 @@
    "InterleavedToShardedDeviceOperation",
    "HaloDeviceOperation"
   ],
-  "device_op_ns": 6832906,
+  "device_op_ns": 4181667,
   "buffer_allocations": 10,
   "device_ids": [
    37
@@ -794,7 +794,7 @@
    "TilizeWithValPaddingDeviceOperation",
    "MatmulDeviceOperation"
   ],
-  "device_op_ns": 6875648,
+  "device_op_ns": 6755732,
   "buffer_allocations": 5,
   "device_ids": [
    38
@@ -815,7 +815,7 @@
   "device_ops": [
    "BinaryNgDeviceOperation"
   ],
-  "device_op_ns": 12676791,
+  "device_op_ns": 4099743,
   "buffer_allocations": 3,
   "device_ids": [
    39
@@ -835,7 +835,7 @@
   "device_ops": [
    "BinaryNgDeviceOperation"
   ],
-  "device_op_ns": 5586241,
+  "device_op_ns": 3945394,
   "buffer_allocations": 3,
   "device_ids": [
    40
@@ -855,7 +855,7 @@
    "TilizeWithValPaddingDeviceOperation",
    "MatmulDeviceOperation"
   ],
-  "device_op_ns": 4859615,
+  "device_op_ns": 5000903,
   "buffer_allocations": 5,
   "device_ids": [
    41
@@ -876,7 +876,7 @@
    "InterleavedToShardedDeviceOperation",
    "HaloDeviceOperation"
   ],
-  "device_op_ns": 24932091,
+  "device_op_ns": 6375795,
   "buffer_allocations": 10,
   "device_ids": [
    42
@@ -897,7 +897,7 @@
    "TilizeWithValPaddingDeviceOperation",
    "MatmulDeviceOperation"
   ],
-  "device_op_ns": 371317068,
+  "device_op_ns": 90645526,
   "buffer_allocations": 5,
   "device_ids": [
    43
@@ -918,7 +918,7 @@
    "InterleavedToShardedDeviceOperation",
    "HaloDeviceOperation"
   ],
-  "device_op_ns": 224083683,
+  "device_op_ns": 37906895,
   "buffer_allocations": 10,
   "device_ids": [
    44
@@ -939,7 +939,7 @@
   "device_ops": [
    "BinaryNgDeviceOperation"
   ],
-  "device_op_ns": 21025877,
+  "device_op_ns": 4819246,
   "buffer_allocations": 3,
   "device_ids": [
    45
@@ -959,7 +959,7 @@
   "device_ops": [
    "BinaryNgDeviceOperation"
   ],
-  "device_op_ns": 4213724,
+  "device_op_ns": 5258547,
   "buffer_allocations": 3,
   "device_ids": [
    46
@@ -979,7 +979,7 @@
    "TilizeWithValPaddingDeviceOperation",
    "MatmulDeviceOperation"
   ],
-  "device_op_ns": 98391466,
+  "device_op_ns": 94519685,
   "buffer_allocations": 5,
   "device_ids": [
    47
@@ -1000,7 +1000,7 @@
    "InterleavedToShardedDeviceOperation",
    "HaloDeviceOperation"
   ],
-  "device_op_ns": 5148129,
+  "device_op_ns": 5186121,
   "buffer_allocations": 10,
   "device_ids": [
    48
@@ -1021,7 +1021,7 @@
    "TilizeWithValPaddingDeviceOperation",
    "MatmulDeviceOperation"
   ],
-  "device_op_ns": 42603850,
+  "device_op_ns": 5028211,
   "buffer_allocations": 5,
   "device_ids": [
    49
@@ -1042,7 +1042,7 @@
   "device_ops": [
    "BinaryNgDeviceOperation"
   ],
-  "device_op_ns": 59759132,
+  "device_op_ns": 5834387,
   "buffer_allocations": 3,
   "device_ids": [
    50
@@ -1062,7 +1062,7 @@
   "device_ops": [
    "BinaryNgDeviceOperation"
   ],
-  "device_op_ns": 4611470,
+  "device_op_ns": 4624529,
   "buffer_allocations": 3,
   "device_ids": [
    51
@@ -1082,7 +1082,7 @@
    "TilizeWithValPaddingDeviceOperation",
    "MatmulDeviceOperation"
   ],
-  "device_op_ns": 4765817,
+  "device_op_ns": 4483241,
   "buffer_allocations": 5,
   "device_ids": [
    52
@@ -1103,7 +1103,7 @@
    "InterleavedToShardedDeviceOperation",
    "HaloDeviceOperation"
   ],
-  "device_op_ns": 5012776,
+  "device_op_ns": 8042763,
   "buffer_allocations": 10,
   "device_ids": [
    53
@@ -1124,7 +1124,7 @@
    "TilizeWithValPaddingDeviceOperation",
    "MatmulDeviceOperation"
   ],
-  "device_op_ns": 5149316,
+  "device_op_ns": 5341659,
   "buffer_allocations": 5,
   "device_ids": [
    54
@@ -1145,7 +1145,7 @@
   "device_ops": [
    "BinaryNgDeviceOperation"
   ],
-  "device_op_ns": 4252905,
+  "device_op_ns": 4861989,
   "buffer_allocations": 3,
   "device_ids": [
    55
@@ -1165,7 +1165,7 @@
   "device_ops": [
    "BinaryNgDeviceOperation"
   ],
-  "device_op_ns": 4540231,
+  "device_op_ns": 4214911,
   "buffer_allocations": 3,
   "device_ids": [
    56
@@ -1185,7 +1185,7 @@
    "TilizeWithValPaddingDeviceOperation",
    "MatmulDeviceOperation"
   ],
-  "device_op_ns": 5017525,
+  "device_op_ns": 4692205,
   "buffer_allocations": 5,
   "device_ids": [
    57
@@ -1206,7 +1206,7 @@
    "InterleavedToShardedDeviceOperation",
    "HaloDeviceOperation"
   ],
-  "device_op_ns": 6244005,
+  "device_op_ns": 4921353,
   "buffer_allocations": 10,
   "device_ids": [
    58
@@ -1227,7 +1227,7 @@
    "TilizeWithValPaddingDeviceOperation",
    "MatmulDeviceOperation"
   ],
-  "device_op_ns": 5823702,
+  "device_op_ns": 4756320,
   "buffer_allocations": 5,
   "device_ids": [
    59
@@ -1248,7 +1248,7 @@
   "device_ops": [
    "BinaryNgDeviceOperation"
   ],
-  "device_op_ns": 38601464,
+  "device_op_ns": 4406067,
   "buffer_allocations": 3,
   "device_ids": [
    60
@@ -1268,7 +1268,7 @@
   "device_ops": [
    "BinaryNgDeviceOperation"
   ],
-  "device_op_ns": 4379946,
+  "device_op_ns": 4588911,
   "buffer_allocations": 3,
   "device_ids": [
    61
@@ -1288,7 +1288,7 @@
    "TilizeWithValPaddingDeviceOperation",
    "MatmulDeviceOperation"
   ],
-  "device_op_ns": 4833494,
+  "device_op_ns": 4875050,
   "buffer_allocations": 5,
   "device_ids": [
    62
@@ -1309,7 +1309,7 @@
    "InterleavedToShardedDeviceOperation",
    "HaloDeviceOperation"
   ],
-  "device_op_ns": 5473448,
+  "device_op_ns": 5668166,
   "buffer_allocations": 10,
   "device_ids": [
    63
@@ -1330,7 +1330,7 @@
    "TilizeWithValPaddingDeviceOperation",
    "MatmulDeviceOperation"
   ],
-  "device_op_ns": 4800250,
+  "device_op_ns": 4687457,
   "buffer_allocations": 5,
   "device_ids": [
    64
@@ -1351,7 +1351,7 @@
   "device_ops": [
    "BinaryNgDeviceOperation"
   ],
-  "device_op_ns": 4270714,
+  "device_op_ns": 4655400,
   "buffer_allocations": 3,
   "device_ids": [
    65
@@ -1371,7 +1371,7 @@
   "device_ops": [
    "BinaryNgDeviceOperation"
   ],
-  "device_op_ns": 4328892,
+  "device_op_ns": 4389444,
   "buffer_allocations": 3,
   "device_ids": [
    66
@@ -1391,7 +1391,7 @@
    "TilizeWithValPaddingDeviceOperation",
    "MatmulDeviceOperation"
   ],
-  "device_op_ns": 6061161,
+  "device_op_ns": 5624235,
   "buffer_allocations": 5,
   "device_ids": [
    67
@@ -1412,7 +1412,7 @@
    "InterleavedToShardedDeviceOperation",
    "HaloDeviceOperation"
   ],
-  "device_op_ns": 5417645,
+  "device_op_ns": 5550623,
   "buffer_allocations": 10,
   "device_ids": [
    68
@@ -1433,7 +1433,7 @@
    "TilizeWithValPaddingDeviceOperation",
    "MatmulDeviceOperation"
   ],
-  "device_op_ns": 4433374,
+  "device_op_ns": 4572287,
   "buffer_allocations": 5,
   "device_ids": [
    69
@@ -1454,7 +1454,7 @@
   "device_ops": [
    "BinaryNgDeviceOperation"
   ],
-  "device_op_ns": 4366885,
+  "device_op_ns": 4508174,
   "buffer_allocations": 3,
   "device_ids": [
    70
@@ -1474,7 +1474,7 @@
   "device_ops": [
    "BinaryNgDeviceOperation"
   ],
-  "device_op_ns": 3992887,
+  "device_op_ns": 4375197,
   "buffer_allocations": 3,
   "device_ids": [
    71
@@ -1494,7 +1494,7 @@
    "TilizeWithValPaddingDeviceOperation",
    "MatmulDeviceOperation"
   ],
-  "device_op_ns": 4864364,
+  "device_op_ns": 4588911,
   "buffer_allocations": 5,
   "device_ids": [
    72
@@ -1515,7 +1515,7 @@
    "InterleavedToShardedDeviceOperation",
    "HaloDeviceOperation"
   ],
-  "device_op_ns": 4892858,
+  "device_op_ns": 5065017,
   "buffer_allocations": 10,
   "device_ids": [
    73
@@ -1536,7 +1536,7 @@
    "TilizeWithValPaddingDeviceOperation",
    "MatmulDeviceOperation"
   ],
-  "device_op_ns": 4681520,
+  "device_op_ns": 4869113,
   "buffer_allocations": 5,
   "device_ids": [
    74
@@ -1557,7 +1557,7 @@
    "InterleavedToShardedDeviceOperation",
    "Conv2dDeviceOperation"
   ],
-  "device_op_ns": 39052638,
+  "device_op_ns": 42151488,
   "buffer_allocations": 7,
   "device_ids": [
    75
@@ -1578,7 +1578,7 @@
   "device_ops": [
    "BinaryNgDeviceOperation"
   ],
-  "device_op_ns": 4055813,
+  "device_op_ns": 5038897,
   "buffer_allocations": 3,
   "device_ids": [
    76
@@ -1598,7 +1598,7 @@
   "device_ops": [
    "BinaryNgDeviceOperation"
   ],
-  "device_op_ns": 4245781,
+  "device_op_ns": 5397461,
   "buffer_allocations": 3,
   "device_ids": [
    77
@@ -1618,7 +1618,7 @@
    "TilizeWithValPaddingDeviceOperation",
    "MatmulDeviceOperation"
   ],
-  "device_op_ns": 94508998,
+  "device_op_ns": 112996431,
   "buffer_allocations": 5,
   "device_ids": [
    78
@@ -1639,7 +1639,7 @@
    "InterleavedToShardedDeviceOperation",
    "HaloDeviceOperation"
   ],
-  "device_op_ns": 5425956,
+  "device_op_ns": 5358281,
   "buffer_allocations": 10,
   "device_ids": [
    79
@@ -1660,7 +1660,7 @@
    "TilizeWithValPaddingDeviceOperation",
    "MatmulDeviceOperation"
   ],
-  "device_op_ns": 4384695,
+  "device_op_ns": 6424476,
   "buffer_allocations": 5,
   "device_ids": [
    80
@@ -1681,7 +1681,7 @@
   "device_ops": [
    "BinaryNgDeviceOperation"
   ],
-  "device_op_ns": 4834681,
+  "device_op_ns": 5298916,
   "buffer_allocations": 3,
   "device_ids": [
    81
@@ -1701,7 +1701,7 @@
   "device_ops": [
    "BinaryNgDeviceOperation"
   ],
-  "device_op_ns": 4288524,
+  "device_op_ns": 4286149,
   "buffer_allocations": 3,
   "device_ids": [
    82
@@ -1721,7 +1721,7 @@
    "TilizeWithValPaddingDeviceOperation",
    "MatmulDeviceOperation"
   ],
-  "device_op_ns": 5549436,
+  "device_op_ns": 4847742,
   "buffer_allocations": 5,
   "device_ids": [
    83
@@ -1742,7 +1742,7 @@
    "InterleavedToShardedDeviceOperation",
    "HaloDeviceOperation"
   ],
-  "device_op_ns": 7685386,
+  "device_op_ns": 5807079,
   "buffer_allocations": 10,
   "device_ids": [
    84
@@ -1763,7 +1763,7 @@
    "TilizeWithValPaddingDeviceOperation",
    "MatmulDeviceOperation"
   ],
-  "device_op_ns": 6373421,
+  "device_op_ns": 5062643,
   "buffer_allocations": 5,
   "device_ids": [
    85
@@ -1784,7 +1784,7 @@
   "device_ops": [
    "BinaryNgDeviceOperation"
   ],
-  "device_op_ns": 5732280,
+  "device_op_ns": 5416458,
   "buffer_allocations": 3,
   "device_ids": [
    86
@@ -1804,7 +1804,7 @@
   "device_ops": [
    "BinaryNgDeviceOperation"
   ],
-  "device_op_ns": 3932334,
+  "device_op_ns": 4457121,
   "buffer_allocations": 3,
   "device_ids": [
    87
@@ -1825,7 +1825,7 @@
    "ReduceDeviceOperation",
    "UntilizeWithUnpaddingDeviceOperation"
   ],
-  "device_op_ns": 430286646,
+  "device_op_ns": 332252557,
   "buffer_allocations": 4,
   "device_ids": [
    88
@@ -1861,7 +1861,7 @@
   "device_ops": [
    "MatmulDeviceOperation"
   ],
-  "device_op_ns": 967649,
+  "device_op_ns": 959337,
   "buffer_allocations": 4,
   "device_ids": [
    90
