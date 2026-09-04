@@ -1054,6 +1054,10 @@ class Gemma4Model:
                     "rope_packed": rope_packed.get(lt),
                     "embed_idx": packed.get("embed_idx_sliding") if sliding else packed.get("embed_idx_full"),
                     "hot_pt": packed.get("hot_pt"),
+                    # Loop-invariant KV-write slices, hoisted once per step. Only
+                    # valid when every layer shares ONE page table -- with
+                    # per-layer page tables the pt_b row differs per layer.
+                    "kv_write_pack": (packed.get("kv_write_pack") if page_tables_per_layer is None else None),
                 }
 
             hidden_states = layer(
@@ -1457,10 +1461,22 @@ class Gemma4Model:
             sin_bp = ttnn.unsqueeze_to_4D(ttnn.embedding(position_idx, sin_2d, layout=ttnn.TILE_LAYOUT))
             rope_packed[lt] = (cos_bp, sin_bp)
 
+        # The sequential KV write needs one page-table row and P position
+        # indices, and every layer needs the SAME ones. Build them once here,
+        # the same hoist rope_packed does just above. Bit-exact: identical
+        # values, computed once instead of once per layer.
+        kv_write_pack = None
+        if position_idx_cache is not None and page_table is not None:
+            kv_write_pack = (
+                ttnn.slice(page_table, [0, 0], [1, page_table.shape[1]]),
+                [ttnn.slice(position_idx_cache, [p], [p + 1]) for p in range(packed_p)],
+            )
+
         packed = {
             "packed_p": packed_p,
             "position_idx": position_idx,
             "position_idx_cache": position_idx_cache,
+            "kv_write_pack": kv_write_pack,
             "kv_write_idxs": kv_write_idxs,
             "attn_mask_full": attn_mask_full,
             "attn_mask_sliding": attn_mask_sliding,
@@ -1483,6 +1499,11 @@ class Gemma4Model:
         for cos_bp, sin_bp in rope_packed.values():
             cos_bp.deallocate(True)
             sin_bp.deallocate(True)
+        if kv_write_pack is not None:
+            pt_b, pos_bs = kv_write_pack
+            pt_b.deallocate(True)
+            for pos_b in pos_bs:
+                pos_b.deallocate(True)
         return out
 
     def compute_host_pli(self, token_id):

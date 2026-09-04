@@ -715,13 +715,22 @@ def _packed_kv_user_mem(q_sharded_mem):
     return k_mem, v_mem
 
 
-def _write_packed_kv_sequential(tt_k, tt_v, kv_cache, page_table, pos_cache, q_sharded_mem, head_dim, nkv_local, P):
+def _write_packed_kv_sequential(
+    tt_k, tt_v, kv_cache, page_table, pos_cache, q_sharded_mem, head_dim, nkv_local, P, kv_write_pack=None
+):
     """Race-safe write of P consecutive positions that share one paged block.
 
     Same serialization as decode ``sequential_kv_write``: one cache-update per
     position so concurrent RMWs of the same block tile cannot drop writes.
     ``tt_k``/``tt_v`` are prefill-split ``[1, nkv, n_seq, hd]`` (n_seq may be
     tile-padded past P).
+
+    ``kv_write_pack`` is an optional ``(pt_b, [pos_b_0..pos_b_{P-1}])`` the caller
+    built once for the whole step: the page-table row and the per-position index
+    slices are identical for every layer, so slicing them here just recomputes
+    the same values once per layer. Bit-exact -- same values, computed once.
+    Same hoist as the RoPE cos/sin gather. Ownership stays with the caller: do
+    NOT deallocate a supplied pack.
     """
     k_cache_w, v_cache_w = kv_cache
     eff_bs = effective_block_size(k_cache_w, head_dim, nkv_local)
@@ -741,13 +750,18 @@ def _write_packed_kv_sequential(tt_k, tt_v, kv_cache, page_table, pos_cache, q_s
         v_mem = k_mem
     nkv, hd = nkv_local, head_dim
     # All P page-table rows are replicas of the same user; slice once.
-    pt_b = ttnn.slice(page_table, [0, 0], [1, page_table.shape[1]])
+    owns_pack = kv_write_pack is None
+    if owns_pack:
+        pt_b = ttnn.slice(page_table, [0, 0], [1, page_table.shape[1]])
+        pos_bs = None
+    else:
+        pt_b, pos_bs = kv_write_pack
     for p in range(P):
         kb = ttnn.slice(k_src, [0, p, 0, 0], [1, p + 1, nkv, hd])
         vb = ttnn.slice(v_src, [0, p, 0, 0], [1, p + 1, nkv, hd])
         kb = ttnn.to_memory_config(kb, k_mem)
         vb = ttnn.to_memory_config(vb, v_mem)
-        pos_b = ttnn.slice(pos_cache, [p], [p + 1])
+        pos_b = ttnn.slice(pos_cache, [p], [p + 1]) if pos_bs is None else pos_bs[p]
         if use_fused:
             ttnn.experimental.paged_fused_update_cache(
                 k_cache_w,
@@ -774,9 +788,12 @@ def _write_packed_kv_sequential(tt_k, tt_v, kv_cache, page_table, pos_cache, q_s
                 block_size=eff_bs,
                 num_kv_heads=nkv_local,
             )
-        for t in (kb, vb, pos_b):
+        for t in (kb, vb):
             t.deallocate(True)
-    pt_b.deallocate(True)
+        if pos_bs is None:
+            pos_b.deallocate(True)
+    if owns_pack:
+        pt_b.deallocate(True)
     if k_src is not tt_k_bp:
         k_src.deallocate(True)
         v_src.deallocate(True)
@@ -805,6 +822,7 @@ def packed_decode_forward(
     kv_staging=None,
     embed_idx=None,
     hot_pt=None,
+    kv_write_pack=None,
 ):
     """Packed multi-token decode attention — P query positions/slot in one pass.
 
@@ -922,7 +940,16 @@ def packed_decode_forward(
         # instead of embedding-merge + paged_fill of the whole hot block.
         tt_q = ttnn.to_memory_config(tt_q, ttnn.DRAM_MEMORY_CONFIG)
         _write_packed_kv_sequential(
-            tt_k, tt_v, kv_cache, page_table, position_idx_cache, q_sharded_mem, head_dim, nkv_local, P
+            tt_k,
+            tt_v,
+            kv_cache,
+            page_table,
+            position_idx_cache,
+            q_sharded_mem,
+            head_dim,
+            nkv_local,
+            P,
+            kv_write_pack=kv_write_pack,
         )
         ttnn.deallocate(tt_k)
         ttnn.deallocate(tt_v)
