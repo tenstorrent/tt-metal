@@ -54,6 +54,10 @@ inline bool group_norm_core_owns_pad_tile(uint32_t m_index, uint32_t num_cores_p
 // reconfig_data_format calls. When all are bf16 those calls are no-ops and the kernel skips them.
 bool groupnorm_needs_fp32_reconfig(std::initializer_list<tt::DataFormat> reconfig_formats);
 
+// The SFPU local statistics combiner has only been performance-calibrated and validated on
+// Blackhole. Keep Wormhole on the existing dataflow-RISC combiner until it is profiled separately.
+bool groupnorm_use_sfpu_local_combine(bool use_welford, tt::ARCH arch, bool fp32_dest_acc_en, uint32_t tile_width);
+
 struct GroupNormInterleavedCbFootprint {
     std::uint64_t output = 0;
     std::uint64_t input_staging = 0;

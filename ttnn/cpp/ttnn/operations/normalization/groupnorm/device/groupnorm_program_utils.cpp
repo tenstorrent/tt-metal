@@ -150,6 +150,10 @@ bool groupnorm_legacy_rm_prefer_composite_for_perf(
     return num_cores <= kGroupnormLegacyRmMinCoresForOnChip || imbalanced;
 }
 
+bool groupnorm_use_sfpu_local_combine(bool use_welford, tt::ARCH arch, bool fp32_dest_acc_en, uint32_t tile_width) {
+    return use_welford && arch == tt::ARCH::BLACKHOLE && fp32_dest_acc_en && tile_width == 32;
+}
+
 int get_max_subblock(uint32_t n, uint32_t max_subblock_w) {
     if (n <= max_subblock_w) {
         return n;
