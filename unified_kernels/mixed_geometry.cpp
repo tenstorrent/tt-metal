@@ -80,12 +80,14 @@ void kernel_main() {
     // The LHS wants a 32x1 tile and there is no such tile -- metal's TILE_FACE_HW_CHOICES has
     // nothing one column wide -- so k lives in a 32x32 tile with columns 1..31 ZERO, and that
     // zero padding is what makes the product right: the hardware takes a full 32-element
-    // inner step and the surplus terms contribute nothing. The type cannot see it, which is
-    // why the check compares PADDED extents and the contract is the author's.
+    // inner step and the surplus terms contribute nothing. No type can see whether those
+    // columns are actually zero, so that much stays the author's contract; what the asserts
+    // do reach is that A is at least as WIDE as B is tall, which is what makes the surplus
+    // A's to zero rather than B's real values multiplying whatever SrcA holds.
     //
-    // Before that change this had no spelling at all: logical 32 columns against logical 1
-    // row, refused, with no third form satisfying both the check and the buffers' declared
-    // geometry.
+    // Under the old ELEMENTS check this had no spelling at all: logical 32 columns against
+    // logical 1 row, refused, with no third form satisfying both the check and the buffers'
+    // declared geometry. See B4.
     u::matmul_init<Blk, Row>(kDfbIn, kDfbInRow, kDfbOut);
 
     u::ComputeBlock k = u::noc_load(in_storage, in, 0).wait();
