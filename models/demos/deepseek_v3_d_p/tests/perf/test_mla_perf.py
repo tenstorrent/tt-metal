@@ -57,6 +57,35 @@ _CMD_K3_CHUNKED_8X4 = (
     f"pytest {_CHUNKED_TEST_PATH} " "-k 'deep-50k+5k and k3 and func and torus-xy-8x4 and scalar' --wrapper-invocation"
 )
 
+# Mistral Small 4: same 50k+5k scenario and mesh as the two Kimi rows, so the three are directly
+# comparable per forward. This is the op-level iteration target for the PP=4 prefill work --
+# RingJointSDPA is the only op in a Mistral4 layer that grows with KV depth (5.46x across the ramp),
+# so it is the one worth optimising for long context, and it cannot be iterated on through the full
+# model.
+#
+# The selector pins FOUR axes, one more than the K3 row. 'scalar' and 'no_determinism' are both
+# load-bearing for the same reason: run_device_perf profiles the whole -k selection into a single CSV
+# and the signpost filter keeps every MLA_START/MLA_END region, so any unpinned axis multiplies the
+# measured total by the number of cases it admits. 'no_determinism' matters here because
+# reference='func' is exactly the case determinism_check does NOT skip -- 'with_determinism' would
+# add DETERMINISM_REPS forwards.
+_CMD_MISTRAL4_CHUNKED_8X4 = (
+    f"pytest {_CHUNKED_TEST_PATH} "
+    "-k 'deep-50k+5k and mistral4 and func and torus-xy-8x4 and scalar and no_determinism' "
+    "--wrapper-invocation"
+)
+
+# Migration starting threshold, NOT a gate. Measured 2026-09-04 on bh-glx-120-b03u02, 8x4 TorusXY
+# certified, DDR 14000, single run: 3_301_775 ns, of which RingJointSDPA is 2_538_210 (76.9%) --
+# against DeepSeek's 50% at the same mesh, which is why this row is the lever for long context.
+#
+# The margin still admits any measurement, so the row reports rather than gates. That is deliberate:
+# this number is local, one run, and on DDR 14000 where the baselines in this file are cut at 16000
+# (the DeepSeek row measures +2.02% against its CI baseline on this same box). Replace BOTH with the
+# first certified TorusXY CI result before wiring this into a gating leg.
+_MISTRAL4_MLA_CHUNKED_NS_UNCALIBRATED = 3_301_775
+_RECORD_ONLY_MARGIN = 10.0
+
 
 def _ci_unsupported_param_combos(**params):
     on_ci = params["is_ci_env"] or params["is_ci_v2_env"]
@@ -171,4 +200,35 @@ def test_kimi_k3_mla_chunked_perf_galaxy():
         # tilize/typecast dispatched at construction.
         between_signposts=("MLA_START", "MLA_END"),
         comments="kimi_k3_chunked_50k+5k_glx_8x4_ground_truth",
+    )
+
+
+@_REQUIRE_HIGH_POWER
+@pytest.mark.timeout(0)
+def test_mistral4_mla_chunked_perf_galaxy():
+    """Mistral Small 4 chunked-prefill MLA perf on the 8x4 Galaxy: 50k KV-cache prefix + one fresh 5k
+    chunk. Same scenario and mesh as the two Kimi rows, so the three are comparable per forward.
+
+    RECORD-ONLY: the baseline is uncalibrated (see _MISTRAL4_MLA_CHUNKED_NS_UNCALIBRATED) and the
+    margin admits any measurement, so this row publishes a number without gating on it. It exists to
+    give the PP=4 op-level optimisation work a fast iteration target -- Tracy capture, pick the hot
+    op, reproduce it here -- instead of iterating on the full model. Wire it into CI only once a
+    certified TorusXY run has supplied a real threshold.
+    """
+    if not _is_galaxy_env():
+        pytest.skip("This test requires 8x4 mesh - galaxy. (set MESH_DEVICE=TG)")
+    _require_certified_torus_xy()
+
+    run_model_device_perf_test_with_merge(
+        command=_CMD_MISTRAL4_CHUNKED_8X4,
+        expected_device_perf_ns_per_iteration=_MISTRAL4_MLA_CHUNKED_NS_UNCALIBRATED,
+        subdir="mistral4_mla",
+        model_name="mistral4_mla_chunked_glx_8x4",
+        num_iterations=1,
+        batch_size=1,
+        margin=_RECORD_ONLY_MARGIN,
+        # Time only the forward: ops between MLA_START/MLA_END, excluding the one-time weight-load
+        # tilize/typecast dispatched at construction.
+        between_signposts=("MLA_START", "MLA_END"),
+        comments="mistral4_chunked_50k+5k_glx_8x4_record_only",
     )
