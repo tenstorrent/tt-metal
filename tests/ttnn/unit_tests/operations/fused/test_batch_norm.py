@@ -1240,3 +1240,63 @@ def test_batch_norm_running_statistics_drain(check_mean, check_var, fp32_dest_ac
             frobenius_threshold=frobenius_threshold,
             check_pcc=False,
         )
+
+
+def test_batch_norm_running_var_bessel_correction(device):
+    """
+    Test that ttnn.batch_norm training mode applies Bessel's correction factor m / (m - 1)
+    to running_var to match PyTorch's unbiased estimator update (correction=1).
+    Without Bessel's correction, this test fails with relative error ~5% when rtol=0.01.
+    """
+    input_shape = torch.Size([2, 1, 2, 2])
+    channels = input_shape[1]
+    momentum = 0.1
+    eps = 1e-5
+
+    in_data = torch.tensor([[[[1.0, 2.0], [3.0, 4.0]]], [[[5.0, 6.0], [7.0, 8.0]]]], dtype=torch.float32)
+    mean_data = torch.zeros(channels, dtype=torch.float32)
+    var_data = torch.ones(channels, dtype=torch.float32)
+
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
+    mean_tensor = ttnn.from_torch(
+        mean_data.view(1, channels, 1, 1), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    var_tensor = ttnn.from_torch(
+        var_data.view(1, channels, 1, 1), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device
+    )
+
+    # PyTorch reference
+    ref_mean = mean_data.clone()
+    ref_var = var_data.clone()
+    torch.nn.functional.batch_norm(
+        input=in_data,
+        running_mean=ref_mean,
+        running_var=ref_var,
+        training=True,
+        eps=eps,
+        momentum=momentum,
+    )
+
+    # TTNN
+    ttnn.batch_norm(
+        input_tensor,
+        running_mean=mean_tensor,
+        running_var=var_tensor,
+        training=True,
+        eps=eps,
+        momentum=momentum,
+    )
+
+    tt_updated_var = ttnn.to_torch(var_tensor).view(-1)
+
+    # Without Bessel's correction, tt_updated_var is 1.425 while ref_var is 1.500 (5.0% error).
+    # With Bessel's correction, tt_updated_var matches ref_var (1.500).
+    assert_numeric_metrics(
+        ref_var,
+        tt_updated_var,
+        rtol=0.01,
+        atol=1e-3,
+        check_pcc=False,
+    )
+
