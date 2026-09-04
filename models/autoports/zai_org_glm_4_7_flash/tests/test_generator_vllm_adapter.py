@@ -80,6 +80,81 @@ def adapter(device):
     generator.teardown()
 
 
+#: Deliberately NOT max_batch_size * BLOCKS_PER_USER (2048): a real vLLM pool
+#: is shared, not divided into equal per-request shares, so a fix here must
+#: not depend on that coincidence. 72 // 32 == 2, which is what the old buggy
+#: ``num_blocks // max_batch_size`` formula would have given (vs. the correct
+#: BLOCKS_PER_USER=64) -- wide enough for exactly one full-context request
+#: (64 blocks) plus a little slack, matching how vLLM would actually share a
+#: pool across many shorter concurrent requests and a few long ones.
+NUM_BLOCKS_SHARED_POOL = BLOCKS_PER_USER + 8
+
+
+@pytest.fixture(scope="module")
+def shared_pool_adapter(device):
+    """A second, independent reduced model on the same device, allocated with
+    a shared-pool-shaped (not equal-share-shaped) block count, to prove
+    blocks_per_user -- and therefore the per-request page-table width -- comes
+    from max_seq_len, not from dividing whatever pool size vLLM happens to
+    choose by max_batch_size (doc/vllm_integration/work_log.md VS-011)."""
+    generator = build_generator(
+        MODEL_DIR,
+        device,
+        layer_indices=[0, 1],
+        max_batch_size=MAX_BATCH_SIZE,
+        max_seq_len=MAX_SEQ_LEN,
+        defer_cache_and_traces=True,
+    )
+    model = GLM47FlashForCausalLM(generator)
+    kv_cache = model.allocate_kv_cache(
+        kv_cache_shape=(NUM_BLOCKS_SHARED_POOL, 1, BLOCK_SIZE, generator.model.layers[0].kvpe_dim),
+        dtype=torch.bfloat16,
+        num_layers=len(generator.model.layers),
+    )
+    model.warmup_model_prefill(kv_cache=kv_cache, can_sample_on_device=True, enable_trace=False)
+    model.warmup_model_decode(
+        kv_cache=kv_cache,
+        max_batch_size=MAX_BATCH_SIZE,
+        num_blocks=NUM_BLOCKS_SHARED_POOL,
+        can_sample_on_device=True,
+        enable_trace=False,
+    )
+    model.warmup_model_prefill(kv_cache=kv_cache, can_sample_on_device=True, enable_trace=True)
+    model.warmup_model_decode(
+        kv_cache=kv_cache,
+        max_batch_size=MAX_BATCH_SIZE,
+        num_blocks=NUM_BLOCKS_SHARED_POOL,
+        can_sample_on_device=True,
+        enable_trace=True,
+    )
+    yield model, kv_cache
+    generator.teardown()
+
+
+def test_blocks_per_user_is_max_seq_len_derived_not_pool_derived(shared_pool_adapter, expect_error):
+    """The regression test for VS-011: with a pool shaped like a real shared
+    vLLM allocation (NUM_BLOCKS_SHARED_POOL, not max_batch_size*BLOCKS_PER_USER),
+    blocks_per_user must still equal cdiv(max_seq_len, block_size) -- not
+    num_blocks // max_batch_size (which would be 72 // 32 == 2 here, nowhere
+    near enough to address a full-context request)."""
+    model, kv_cache = shared_pool_adapter
+    assert model.blocks_per_user == BLOCKS_PER_USER
+    assert model.generator.model.blocks_per_user == BLOCKS_PER_USER
+    assert model.generator.model.max_seq_len_physical >= MAX_SEQ_LEN
+
+    # A single request using the full per-request width (one full-context
+    # request's worth of blocks) must be accepted, not truncated.
+    full_width_table = torch.arange(0, BLOCKS_PER_USER, dtype=torch.int32).unsqueeze(0)
+    model._write_page_table_rows(full_width_table, at=[0])  # must not raise
+    assert torch.equal(model._pt_mirror[0, :BLOCKS_PER_USER], full_width_table[0])
+
+    # A table wider than blocks_per_user must be rejected, not silently
+    # truncated (the old behavior for exactly this case).
+    too_wide = torch.arange(0, BLOCKS_PER_USER + 1, dtype=torch.int32).unsqueeze(0)
+    with expect_error(ValueError, "refusing to truncate"):
+        model._write_page_table_rows(too_wide, at=[0])
+
+
 def _block_table_for(slot: int, blocks: int = BLOCKS_PER_USER) -> torch.Tensor:
     """A page table row that does not alias any other slot's blocks: block ids
     live in a private [slot*BLOCKS_PER_USER, (slot+1)*BLOCKS_PER_USER) range,

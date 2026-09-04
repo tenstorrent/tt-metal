@@ -1229,11 +1229,12 @@ class GLM47FlashGenerator(_ReadinessGenerator):
         ``TTSamplingParams``, or this package's ``SamplingParams``) at ``empty_slots``
         without disturbing other live slots. Thin wrapper over
         ``SamplingGenerator.apply_prefill_state`` (formats first: that method expects
-        already-padded lists). Request seeds are threaded through as given; this
-        generator does not yet track seed continuity across a later batch condense
-        (no ``slot_remap`` consumer here, matching the documented DeepSeek-V3 vLLM
-        adapter precedent), so seeded-reproducibility-only test failures after a
-        condense are a known, accepted gap rather than a crash or wrong token.
+        already-padded lists). Request seeds are threaded through as given; a
+        request's reproducibility across a later condense (a different
+        physical decode row) does not depend on anything registered here --
+        see :meth:`apply_decode_sampling_state`'s docstring for the
+        position-anchored mechanism that makes the seed stream row-independent.
+        ``slot_remap`` is still unconsumed, but that is no longer a seed gap.
         """
         if self.sampling is None:
             return

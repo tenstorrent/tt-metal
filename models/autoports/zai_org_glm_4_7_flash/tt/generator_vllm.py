@@ -38,12 +38,20 @@ row and slot are believed equal for a request's whole life:
   ``reset_batch`` -- request-owned, never row-identity-owned -- so cache
   correctness never depends on row/slot continuity in the first place.
 
-What this drops is per-request seed continuity across a condense (the seed
-manager's RNG-advance counter is keyed by slot, and this adapter does not
-permute it), the same accepted gap the DeepSeek-V3 TT adapter documents for
-an analogous reason (``models/demos/deepseek_v3/tt/generator_vllm.py``).
-Seed is not threaded through at all here (see :meth:`_slice_sampling_params_row`
-callers), so this is a documented, bounded limitation, not a silent one.
+Per-request seed reproducibility (added in VS-007, doc/vllm_integration/work_log.md)
+does not need ``slot_remap`` for the row-reassignment case specifically:
+``GLM47FlashGenerator.apply_decode_sampling_state`` anchors each seeded
+request's RNG counter to its absolute decode position (``start_pos``), not to
+a persisted per-slot counter, so a condense moving a request to a different
+physical row does not by itself break that request's reproducibility -- see
+that method's own docstring for the mechanism. This is a narrower, more
+precise fix than a blanket "seed continuity across condense is dropped"
+claim would suggest, and it does NOT close the separate, still-open,
+upstream-tracked full-occupancy determinism defect described in "Known
+limitations" (README.md / work_log.md VS-009): that defect reproduces even
+without any condense, is not yet root-caused to this mechanism or to any
+other, and remains a known limitation of the `--sampling-profile full`
+evidence, not of this adapter's condense handling specifically.
 
 Async decode
 ============
@@ -302,8 +310,36 @@ class GLM47FlashForCausalLM:
         # (assigned once, by reference, in GLM47FlashModel.from_pretrained) --
         # mutating it in place repoints every layer's own reference at once.
         model.paged_config.max_num_blocks = num_blocks
-        model.blocks_per_user = num_blocks // self.max_batch_size
-        self.blocks_per_user = model.blocks_per_user
+        # blocks_per_user is a PAGE-TABLE-WIDTH bound (the most blocks any one
+        # request's own block list can need), not an equal-share quota of the
+        # pool -- vLLM's paged allocator lets one request use far more than
+        # num_blocks/max_batch_size blocks as long as the *sum* in flight fits
+        # num_blocks; that admission accounting is vLLM's, not this adapter's.
+        # The correct width is exactly what GLM47FlashModel.from_pretrained
+        # already computed from the model's own max_seq_len (cdiv(max_seq_len,
+        # block_size)) before this method ever ran. An earlier version instead
+        # set it to ``num_blocks // max_batch_size`` (230 at this run's
+        # num_blocks=7362), which is unrelated to how wide a single request's
+        # block list can legitimately be: it silently truncated
+        # _write_page_table_rows to 230 columns (14,720 tokens) while still
+        # advertising max_model_len=202752, and max_seq_len_physical (used to
+        # clamp prefill_physical_len) inherited the same wrong, smaller bound
+        # -- a real capability reduction with no error, no evidence, and no
+        # hard physical limit behind it (doc/vllm_integration/work_log.md
+        # VS-011, caught by $stage-review). Recomputing it here from
+        # max_seq_len (not num_blocks) fixes both call sites at once and holds
+        # regardless of what num_blocks vLLM ends up choosing.
+        blocks_per_user = -(-model.max_seq_len // block_size)
+        if num_blocks < blocks_per_user:
+            raise ValueError(
+                f"vLLM's KV-cache pool ({num_blocks} blocks) is smaller than what a single request at "
+                f"max_seq_len={model.max_seq_len} needs ({blocks_per_user} blocks); no request could ever "
+                f"reach the advertised context. This is a hard physical limit, not something this adapter "
+                f"can paper over -- get_max_tokens_all_users must report a smaller max_model_len-compatible "
+                f"budget, or max_model_len must be reduced with evidence, not silently truncated per request."
+            )
+        model.blocks_per_user = blocks_per_user
+        self.blocks_per_user = blocks_per_user
         self._pt_mirror = torch.zeros((self.max_batch_size, self.blocks_per_user), dtype=torch.int32)
         kv_cache = model.allocate_kv_cache(dtype=model.cache_dtype)
 
@@ -383,7 +419,20 @@ class GLM47FlashForCausalLM:
     def _write_page_table_rows(self, rows: torch.Tensor, at: List[int]) -> None:
         """Scatter vLLM's row-ordered block table into the slot-ordered mirror."""
         rows = rows.to(torch.int32)
-        width = min(rows.shape[1], self.blocks_per_user)
+        if rows.shape[1] > self.blocks_per_user:
+            # Must never silently drop columns: a wider table than
+            # blocks_per_user (cdiv(max_seq_len, block_size), see
+            # allocate_kv_cache) means some request needs more blocks than the
+            # advertised max_seq_len allows for, or blocks_per_user was sized
+            # wrong again -- either way a truncated write would address the
+            # wrong physical blocks for the tail of that request's context
+            # (doc/vllm_integration/work_log.md VS-011).
+            raise ValueError(
+                f"page table has {rows.shape[1]} block columns but this model's per-request page-table "
+                f"width is {self.blocks_per_user} (cdiv(max_seq_len={self.generator.model.max_seq_len}, "
+                f"block_size={self.generator.model.paged_config.block_size})); refusing to truncate."
+            )
+        width = rows.shape[1]
         for i, slot in enumerate(at):
             self._pt_mirror[slot, :width] = rows[i, :width]
         # Pass a copy, not self._pt_mirror itself: refresh_page_table's
