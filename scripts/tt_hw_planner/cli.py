@@ -3996,6 +3996,25 @@ def _kill_agent_tree(proc, *, provider: str) -> None:
     _kill_process_tree(proc, label=f"auto:{provider}")
 
 
+def _scaled_timeout(base_timeout_s: int, bonus: int, *, step_s: int, max_extra_s: int) -> int:
+    """Scale a wall-clock budget by a difficulty ``bonus``: ``base + step_s*bonus``,
+    capped at ``base + max_extra_s``.
+
+    The single implementation of "bump a budget for harder work" — the agent budget
+    (`_agent_complexity_timeout`) and the per-run PCC pytest wall
+    (`bringup_mcp._adaptive_pcc_timeout`) both go through here, so there is one
+    formula rather than parallel copies. They keep their OWN step/cap, because an
+    agent's thinking budget and a device run's compile budget are unrelated
+    quantities that must be tunable apart.
+
+    A non-positive base (unbounded) or a non-positive bonus is returned unchanged:
+    the bonus only ever ADDS budget, and never introduces a ceiling where the
+    caller asked for none."""
+    if base_timeout_s <= 0 or bonus <= 0:
+        return base_timeout_s
+    return min(base_timeout_s + step_s * int(bonus), base_timeout_s + max_extra_s)
+
+
 def _agent_complexity_timeout(base_timeout_s: int, complexity_bonus: int) -> int:
     """Return the effective agent timeout for a component with the
     given complexity bonus (0..4 from `_component_complexity_bonus`).
@@ -4005,10 +4024,7 @@ def _agent_complexity_timeout(base_timeout_s: int, complexity_bonus: int) -> int
     complexity=4 component). Components with complexity=0 are
     unaffected — the user's `--auto-agent-timeout` value is preserved
     as the floor."""
-    if base_timeout_s <= 0 or complexity_bonus <= 0:
-        return base_timeout_s
-    bumped = base_timeout_s + 300 * int(complexity_bonus)
-    return min(bumped, base_timeout_s + 1200)
+    return _scaled_timeout(base_timeout_s, complexity_bonus, step_s=300, max_extra_s=1200)
 
 
 def _parse_stream_json_event(line: str) -> Optional[Dict[str, object]]:
@@ -4819,7 +4835,7 @@ def _run_focused_pytest(
             f"— killing process group. This is a genuine stub hang/deadlock ONLY if the last "
             f"stage below is stalled; a large or sharded model can legitimately need longer than "
             f"the wall for reference load + first-run kernel compile, in which case raise the base "
-            f"BRINGUP_MCP_TIMEOUT (it is already scaled by model size / mesh degree).",
+            f"BRINGUP_MCP_TIMEOUT (it is already scaled by how many chips the run spans).",
             file=sys.stderr,
         )
         if _LAST_PYTEST_STAGES:

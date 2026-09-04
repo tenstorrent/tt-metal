@@ -41,8 +41,8 @@ harness-skipped (manual).
 Config via env:
   BRINGUP_MCP_DEMO_DIR / BRINGUP_MCP_MODEL_ID / BRINGUP_MCP_STATE (required)
   BRINGUP_MCP_MAX_ATTEMPTS (base cap, default 2)
-  BRINGUP_MCP_PCC (default: pcc_targets.COMPONENT_PCC) · BRINGUP_MCP_TIMEOUT (base wall, default 1800;
-    scaled per run by model size and, in shard mode, mesh degree via `_adaptive_pcc_timeout` —
+  BRINGUP_MCP_PCC (default: pcc_targets.COMPONENT_PCC) · BRINGUP_MCP_TIMEOUT (base per-run wall,
+    default 1800; scaled by the number of chips a run spans via `_adaptive_pcc_timeout` —
     set BRINGUP_MCP_TIMEOUT_MODE=fixed to restore the flat wall)
 """
 from __future__ import annotations
@@ -386,63 +386,51 @@ def _ensure_shard_test(component: str) -> str | None:
         return None
 
 
-def _model_size_bonus() -> int:
-    """Coarse 0..3 size bucket for the model under bring-up, from the plan's declared
-    shape (top-level ``new_model_shape`` if present, else the largest ``hidden_size`` x
-    deepest ``num_hidden_layers`` across the component ``new_shape`` entries). A bigger
-    model means a slower reference load + first-run kernel compile, so it needs a longer
-    wall. Returns 0 (no bonus) when the shape is unknown — the flat base is kept."""
-    try:
-        doc = _status_doc()
-        shape = doc.get("new_model_shape")
-        shape = shape if isinstance(shape, dict) else {}
-        hidden = int(shape.get("hidden_size") or 0)
-        layers = int(shape.get("num_hidden_layers") or 0)
-        for c in doc.get("components") or []:
-            s = c.get("new_shape") if isinstance(c, dict) else None
-            if isinstance(s, dict):
-                hidden = max(hidden, int(s.get("hidden_size") or 0))
-                layers = max(layers, int(s.get("num_hidden_layers") or 0))
-        score = hidden * max(layers, 1)
-        if score >= 4096 * 48:  # ~30B-class and larger
-            return 3
-        if score >= 4096 * 32:  # ~7-13B-class
-            return 2
-        if score >= 2048 * 24:  # ~1-3B-class
-            return 1
+# Per extra chip a run spans, and the ceiling on that scaling. A sharded run pays a cold
+# kernel compile plus collectives for EVERY chip it opens, so its wall has to grow with the
+# mesh; the ceiling keeps a genuinely hung run bounded. Deliberately separate from the agent
+# budget's step/cap (see cli._scaled_timeout) -- a compile budget and a thinking budget are
+# unrelated quantities.
+_PCC_TIMEOUT_STEP_S = 900
+_PCC_TIMEOUT_MAX_EXTRA_S = 3600
+_TIMEOUT_MODE_ENV = "BRINGUP_MCP_TIMEOUT_MODE"
+_TIMEOUT_MODE_FIXED = "fixed"
+
+
+def _mesh_degree_bonus(shard: bool) -> int:
+    """Difficulty units for the mesh a run spans: one per chip beyond the first, 0 on a
+    single device.
+
+    Derived from the declared parallelism (TP x DP) rather than from anything about the
+    model, so no component/stage name or shape field is assumed -- a model that renames or
+    reshapes its parts still scales correctly."""
+    if not shard:
         return 0
-    except Exception:  # noqa: BLE001 -- an unknown shape must never break the run
-        return 0
+    return max(max(_SHARD_TP * _SHARD_DP, 1) - 1, 0)
 
 
 def _adaptive_pcc_timeout(shard: bool) -> int:
-    """Per-run pytest wall for ONE PCC run, scaled from the flat base
-    (``BRINGUP_MCP_TIMEOUT``, default 1800s) by the work the run actually does, so a big
-    model or a wide mesh is not hard-killed with rc=124 mid-compile and then misread as
-    an ``OTHER`` failure that re-queues the component forever. Mirrors the optimize/auto
-    convention (``cli._agent_complexity_timeout``): ``base + step*bonus``, hard-capped.
+    """Per-run pytest wall for ONE PCC run: the flat base (``BRINGUP_MCP_TIMEOUT``) scaled by
+    how many chips the run spans.
 
-    Two best-effort, model-agnostic bonuses:
-      * mesh bonus (shard only) — a sharded run compiles kernels for and runs collectives
-        across TP*DP chips; each chip beyond the first adds +1 unit.
-      * size bonus — a large hidden_size/layer count is a slower reference load + first-run
-        compile; 0..3 units (``_model_size_bonus``).
-    A single-device run of a small model gets bonus 0 and keeps the base, so nothing that
-    already passes within the flat wall is slowed down.
+    A sharded run compiles kernels for and runs collectives across every chip it opens, so it
+    legitimately outlasts a single-device run. Under one flat wall it was hard-killed with
+    rc=124 mid-compile, which parses as no report at all -> classified ``OTHER`` -> the
+    component never graduates and is re-queued forever. Scaling the wall lets the run finish
+    and produce a real pass/fail.
 
-    Escape hatch: ``BRINGUP_MCP_TIMEOUT_MODE=fixed`` restores the old flat behaviour."""
-    base = _TIMEOUT
-    if base <= 0 or os.environ.get("BRINGUP_MCP_TIMEOUT_MODE", "").strip().lower() == "fixed":
-        return base
-    bonus = _model_size_bonus()
-    if shard:
-        chips = max(_SHARD_TP * _SHARD_DP, 1)
-        bonus += max(chips - 1, 0)
-    if bonus <= 0:
-        return base
-    step = 600  # +10 min per unit -- one cold TTNN compile is minutes, not seconds
-    hard_cap = base + 6 * step  # never more than +60 min over the base wall
-    return min(base + step * bonus, hard_cap)
+    A single-device run gets bonus 0 and keeps the base unchanged, so nothing that already
+    passes within the flat wall is affected.
+
+    Escape hatch: ``BRINGUP_MCP_TIMEOUT_MODE=fixed`` restores the flat wall."""
+    if os.environ.get(_TIMEOUT_MODE_ENV, "").strip().lower() == _TIMEOUT_MODE_FIXED:
+        return _TIMEOUT
+    return _cli._scaled_timeout(
+        _TIMEOUT,
+        _mesh_degree_bonus(shard),
+        step_s=_PCC_TIMEOUT_STEP_S,
+        max_extra_s=_PCC_TIMEOUT_MAX_EXTRA_S,
+    )
 
 
 def _run_pcc(component: str) -> dict:
@@ -472,12 +460,30 @@ def _run_pcc(component: str) -> dict:
     _timeout = _adaptive_pcc_timeout(shard)
     if _timeout != _TIMEOUT:
         print(
-            f"  [timeout] {key}: PCC run wall {_timeout}s "
-            f"(base {_TIMEOUT}s{', shard TP=' + str(_SHARD_TP) + ' DP=' + str(_SHARD_DP) if shard else ''}"
-            f", size_bonus={_model_size_bonus()})",
+            f"  [timeout] {key}: PCC run wall {_timeout}s (base {_TIMEOUT}s, "
+            f"TP={_SHARD_TP} DP={_SHARD_DP})",
             flush=True,
         )
-    _cli._run_focused_pytest(model_id=_MODEL_ID, test_files=[tf], timeout_s=_timeout)
+    rc = _cli._run_focused_pytest(model_id=_MODEL_ID, test_files=[tf], timeout_s=_timeout)
+    if rc == 124:
+        # `_run_focused_pytest` prints WALL-CLOCK to the parent's stderr; JUnit is
+        # written at session end, so a kill mid-compile leaves no report (or a STALE
+        # previous XML). `_classify_failure` only returns HANG when it sees that
+        # phrase — without folding it in, this path is OTHER and the component is
+        # re-queued forever. Same phrases the existing detector already keys off.
+        hang = (
+            f"focused pytest WALL-CLOCK BUDGET EXHAUSTED at {_timeout}s "
+            f"— killing process group (likely a hang)"
+        )
+        return {
+            "ran": True,
+            "passed": False,
+            "failed": True,
+            "skipped": False,
+            "summary": hang,
+            "details": hang,
+            "skip_reason": "",
+        }
     report = _cli._scope_report_to_demo(_cli._parse_pytest_report(), _DEMO_DIR)
     skip_reason = ""
     for entry in (report.get("per_skipped") or {}).values():
