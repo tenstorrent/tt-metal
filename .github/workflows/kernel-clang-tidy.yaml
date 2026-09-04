@@ -29,6 +29,12 @@ name: "Kernel clang-tidy"
 # kernel-clang-tidy-* artifacts automatically.
 
 on:
+  # TEMPORARY (remove before merge): a workflow_dispatch-only workflow that
+  # exists solely on a feature branch is not registered by GitHub and cannot
+  # be dispatched (404). This branch-scoped push trigger bootstraps
+  # registration and doubles as the end-to-end verification run.
+  push:
+    branches: ["clang-tidy-jit-runtime-prototype"]
   workflow_dispatch:
     inputs:
       target-group:
@@ -290,12 +296,15 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+      # The github.event_name == 'push' leg is TEMPORARY (remove together with
+      # the bootstrap push trigger above): it lets the branch verification run
+      # exercise publishing end-to-end.
       - name: Add .nojekyll
-        if: ${{ inputs.publish-html || github.ref == 'refs/heads/main' }}
+        if: ${{ inputs.publish-html || github.ref == 'refs/heads/main' || github.event_name == 'push' }}
         run: touch site/.nojekyll
 
       - name: Publish to tenstorrent/tt-metal-clangsa-results (gh-pages)
-        if: ${{ inputs.publish-html || github.ref == 'refs/heads/main' }}
+        if: ${{ inputs.publish-html || github.ref == 'refs/heads/main' || github.event_name == 'push' }}
         uses: peaceiris/actions-gh-pages@v4
         with:
           personal_token: ${{ secrets.CLANGSA_RESULTS_PAT }}
