@@ -1342,6 +1342,7 @@ def run_matmul_1d_multiple_output_blocks_per_core(
     num_out_block_w,
     mcast_in0,
     uneven_width,
+    in0_shard_grid_size=None,
 ):
     if in_sharded or out_sharded:
         fuse_batch = True
@@ -1390,9 +1391,10 @@ def run_matmul_1d_multiple_output_blocks_per_core(
 
     if in_sharded:
         if mcast_in0:
+            shard_grid_size = in0_shard_grid_size or grid_size
             in0_memory_config = ttnn.create_sharded_memory_config(
                 (1, 1, m, k),
-                core_grid=ttnn.CoreGrid(y=grid_size[1], x=grid_size[0]),
+                core_grid=ttnn.CoreGrid(y=shard_grid_size[1], x=shard_grid_size[0]),
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
             )
@@ -1556,6 +1558,26 @@ def test_matmul_1d_multiple_output_blocks_per_core(
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
     assert device.cache_entries_counter.total == 1
+
+
+def test_matmul_1d_mcast_in0_partial_sender_grid(device):
+    """The dense 12-worker bounding box has four filler cores that must not be counted as ACK sources."""
+    torch.manual_seed(0)
+    run_matmul_1d_multiple_output_blocks_per_core(
+        device,
+        m=256,
+        k=1024,
+        n=1536,
+        has_bias=False,
+        grid_size=(8, 2),
+        in_sharded=True,
+        out_sharded=False,
+        num_out_block_h=1,
+        num_out_block_w=1,
+        mcast_in0=True,
+        uneven_width=1,
+        in0_shard_grid_size=(8, 1),
+    )
 
 
 @pytest.mark.parametrize("side", ["height", "width"])

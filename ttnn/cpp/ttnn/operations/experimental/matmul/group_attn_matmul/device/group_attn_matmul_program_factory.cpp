@@ -8,6 +8,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include "ttnn/cpp/ttnn/kernel_lib/host/mcast_host.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttnn::experimental::prim {
@@ -113,44 +114,28 @@ tt::tt_metal::ProgramDescriptor GroupAttnMatmulProgramFactory::create_descriptor
     CoreRangeSet mcast_receiver_cores = num_cores_to_corerangeset(
         Q_HEADS, operation_attributes.compute_with_storage_grid_size, operation_attributes.row_major);
     CoreRange mcast_receiver_cores_bounding_box = mcast_receiver_cores.bounding_box();
-    uint32_t mcast_num_dests = mcast_receiver_cores.num_cores();
-    uint32_t mcast_num_cores = mcast_receiver_cores_bounding_box.size();
-    CoreCoord top_left_core = mcast_receiver_cores_bounding_box.start_coord;
-    CoreCoord bottom_right_core = mcast_receiver_cores_bounding_box.end_coord;
-    CoreCoord top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
-    CoreCoord bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
-
-    CoreCoord mcast_sender_grid =
-        ((CoreRangeSet)num_cores_to_corerangeset(
-             TILE_HEIGHT, operation_attributes.compute_with_storage_grid_size, operation_attributes.row_major))
-            .bounding_box()
-            .grid_size();
-    std::vector<uint32_t> in1_mcast_sender_noc_x;
-    std::vector<uint32_t> in1_mcast_sender_noc_y;
-    in1_mcast_sender_noc_x.reserve(mcast_sender_grid.x);
-    in1_mcast_sender_noc_y.reserve(mcast_sender_grid.y);
-    for (uint32_t core_idx_x = 0; core_idx_x < mcast_sender_grid.x; ++core_idx_x) {
-        in1_mcast_sender_noc_x.push_back(device->worker_core_from_logical_core({core_idx_x, 0}).x);
+    // Partial bounding boxes contain filler cores whose reader exits without acknowledging; only the other active
+    // Q-head workers acknowledge each rotating sender.
+    const std::optional<uint32_t> in1_mcast_ack_count_override =
+        mcast_receiver_cores_bounding_box.size() > num_active_cores ? std::make_optional(num_active_cores - 1)
+                                                                    : std::nullopt;
+    const auto mcast_sender_cores = num_cores_to_corerangeset(
+        TILE_HEIGHT, operation_attributes.compute_with_storage_grid_size, operation_attributes.row_major);
+    const tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
+    const bool reader_noc_is_NOC_0 = reader_noc == tt::tt_metal::NOC::NOC_0;
+    const tt::tt_metal::NOC writer_noc = reader_noc_is_NOC_0 ? tt::tt_metal::NOC::NOC_1 : tt::tt_metal::NOC::NOC_0;
+    const ttnn::kernel_lib::host::Mcast2D in1_mcast(
+        device,
+        CoreRangeSet(mcast_receiver_cores_bounding_box),
+        ttnn::kernel_lib::host::Mcast2DRotatingSenderConfig{
+            .sender_grid = mcast_sender_cores,
+            .sender_order = operation_attributes.row_major ? ttnn::kernel_lib::host::Mcast2DSenderOrder::RowMajor
+                                                           : ttnn::kernel_lib::host::Mcast2DSenderOrder::ColumnMajor},
+        ttnn::kernel_lib::host::McastConfig{
+            .noc = reader_noc, .base_sem_id = 0, .ack_count_override = in1_mcast_ack_count_override});
+    for (const auto& sem : in1_mcast.owned_semaphores()) {
+        desc.semaphores.push_back(sem);
     }
-    for (uint32_t core_idx_y = 0; core_idx_y < mcast_sender_grid.y; ++core_idx_y) {
-        in1_mcast_sender_noc_y.push_back(device->worker_core_from_logical_core({0, core_idx_y}).y);
-    }
-
-    // ---- Semaphores (workload-scoped: IDs 0/1 reserved across all_device_cores) ----
-    constexpr uint32_t in1_mcast_sender_semaphore_id = 0;
-    constexpr uint32_t in1_mcast_receiver_semaphore_id = 1;
-    desc.semaphores.push_back(SemaphoreDescriptor{
-        .id = in1_mcast_sender_semaphore_id,
-        .core_type = tt::CoreType::WORKER,
-        .core_ranges = all_device_cores,
-        .initial_value = INVALID,
-    });
-    desc.semaphores.push_back(SemaphoreDescriptor{
-        .id = in1_mcast_receiver_semaphore_id,
-        .core_type = tt::CoreType::WORKER,
-        .core_ranges = all_device_cores,
-        .initial_value = INVALID,
-    });
 
     // ---- Circular buffers (sharded variants use CBDescriptor::buffer so the
     // framework patches the dynamic address on cache hit; CB total_size and
@@ -251,6 +236,7 @@ tt::tt_metal::ProgramDescriptor GroupAttnMatmulProgramFactory::create_descriptor
         operation_attributes.out_subblock_w,
     };
     tt::tt_metal::TensorAccessorArgs(*src1_buffer).append_to(reader_compile_time_args);
+    in1_mcast.append_compile_time_args_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {
         static_cast<uint32_t>(output_cb_index),
@@ -271,10 +257,6 @@ tt::tt_metal::ProgramDescriptor GroupAttnMatmulProgramFactory::create_descriptor
     if (output_is_sharded) {
         writer_defines.emplace_back("OUT_SHARDED", "1");
     }
-
-    tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
-    const bool reader_noc_is_NOC_0 = reader_noc == tt::tt_metal::NOC::NOC_0;
-    tt::tt_metal::NOC writer_noc = reader_noc_is_NOC_0 ? tt::tt_metal::NOC::NOC_1 : tt::tt_metal::NOC::NOC_0;
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source =
@@ -351,10 +333,6 @@ tt::tt_metal::ProgramDescriptor GroupAttnMatmulProgramFactory::create_descriptor
         const uint32_t kv_heads_id = KV_HEADS == 0 ? 0u : i / std::max<uint32_t>(Q_HEADS / KV_HEADS, 1u);
         const uint32_t has_work_for_q_heads = i < Q_HEADS;
         const uint32_t has_work_for_mcast_kv_heads = i < num_active_cores;
-        const uint32_t mcast_num_cores_for_core = mcast_num_cores - static_cast<uint32_t>(i < mcast_num_cores);
-        const uint32_t in1_mcast_num_dests =
-            Q_HEADS < TILE_HEIGHT ? std::min(mcast_num_cores_for_core, num_active_cores - 1) : mcast_num_dests - 1;
-
         std::vector<std::variant<uint32_t, Buffer*>> reader_runtime_args = {
             has_work_for_mcast_kv_heads,
             has_work_for_q_heads,
@@ -378,25 +356,8 @@ tt::tt_metal::ProgramDescriptor GroupAttnMatmulProgramFactory::create_descriptor
             out_last_subblock_w,
             in1_last_block_w_tile_read_bytes,
             in1_last_block_addr_skip,
-
-            static_cast<uint32_t>(reader_noc_is_NOC_0 ? top_left_core_physical.x : bottom_right_core_physical.x),
-            static_cast<uint32_t>(reader_noc_is_NOC_0 ? top_left_core_physical.y : bottom_right_core_physical.y),
-            static_cast<uint32_t>(reader_noc_is_NOC_0 ? bottom_right_core_physical.x : top_left_core_physical.x),
-            static_cast<uint32_t>(reader_noc_is_NOC_0 ? bottom_right_core_physical.y : top_left_core_physical.y),
-            in1_mcast_num_dests,
-            mcast_num_cores_for_core,
-            mcast_num_cores,
-            in1_mcast_sender_semaphore_id,
-            in1_mcast_receiver_semaphore_id,
-            in1_block_num_tiles * in1_single_tile_size,
-            i,  // in1_mcast_sender_id
-            static_cast<uint32_t>(in1_mcast_sender_noc_x.size()),
-            static_cast<uint32_t>(in1_mcast_sender_noc_y.size()),
         };
-        reader_runtime_args.insert(
-            reader_runtime_args.end(), in1_mcast_sender_noc_x.begin(), in1_mcast_sender_noc_x.end());
-        reader_runtime_args.insert(
-            reader_runtime_args.end(), in1_mcast_sender_noc_y.begin(), in1_mcast_sender_noc_y.end());
+        in1_mcast.append_runtime_args_to(reader_runtime_args, core);
         reader_desc.emplace_runtime_args(core, reader_runtime_args);
 
         writer_desc.emplace_runtime_args(

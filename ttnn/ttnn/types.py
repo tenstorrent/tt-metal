@@ -120,3 +120,18 @@ FaceGeometry = ttnn._ttnn.program_descriptor.FaceGeometry
 compute_program_descriptor_hash = ttnn._ttnn.operations.generic.compute_program_descriptor_hash
 
 TensorAccessorArgs = ttnn._ttnn.tensor_accessor_args.TensorAccessorArgs
+
+# Host-side mcast helper (counterpart of kernel_lib/mcast_pipe). Mcast1D = per-row/column families;
+# Mcast2D = one mcast over a single rectangle (matmul-1d: single sender -> whole grid).
+Mcast1D = ttnn._ttnn.mcast_host.Mcast1D
+Mcast1DShape = ttnn._ttnn.mcast_host.Mcast1DShape
+Mcast1DSenderPlacement = ttnn._ttnn.mcast_host.Mcast1DSenderPlacement
+Mcast1DFixedSenderConfig = ttnn._ttnn.mcast_host.Mcast1DFixedSenderConfig
+Mcast1DRotatingSenderConfig = ttnn._ttnn.mcast_host.Mcast1DRotatingSenderConfig
+Mcast2D = ttnn._ttnn.mcast_host.Mcast2D
+Mcast2DSenderOrder = ttnn._ttnn.mcast_host.Mcast2DSenderOrder
+Mcast2DFixedSenderConfig = ttnn._ttnn.mcast_host.Mcast2DFixedSenderConfig
+Mcast2DRotatingSenderConfig = ttnn._ttnn.mcast_host.Mcast2DRotatingSenderConfig
+McastConfig = ttnn._ttnn.mcast_host.McastConfig
+McastDataReady = ttnn._ttnn.mcast_host.McastDataReady
+MCAST_ACK_EQUALS_FANOUT = ttnn._ttnn.mcast_host.MCAST_ACK_EQUALS_FANOUT
