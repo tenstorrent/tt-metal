@@ -195,6 +195,11 @@ private:
     std::shared_ptr<distributed::multihost::DistributedContext> distributed_context_;
     // Active distributed context used by mesh command queues (split from distributed_context_).
     std::shared_ptr<distributed::multihost::DistributedContext> active_distributed_context_;
+    // Lazily computed; see coowner_ranks() / coowner_context(). Both die with the mesh, so a
+    // carved submesh does not leave a communicator behind.
+    mutable std::mutex coowner_mutex_;
+    mutable std::optional<std::vector<int>> coowner_ranks_;
+    mutable std::shared_ptr<distributed::multihost::DistributedContext> coowner_context_;
 
     friend class ::tt::tt_metal::experimental::DispatchContext;
 
@@ -391,6 +396,16 @@ public:
     IDevice* get_device(ChipId physical_device_id) const;
     IDevice* get_device(const MeshCoordinate& coord) const;
     tt_fabric::FabricNodeId get_fabric_node_id(const MeshCoordinate& coord) const;
+
+    // The MPI ranks driving at least one device of this mesh, sorted; empty when this rank drives
+    // all of them. Computed once -- the walk costs one control-plane lookup per device.
+    const std::vector<int>& coowner_ranks() const;
+
+    // Sub-context over coowner_ranks(), or null when this mesh is not co-owned. Created on first
+    // use, since building one per carved submesh up front would create communicators for the many
+    // slots that never allocate. All co-owners reach their first co-owned allocation together,
+    // which is what makes the lazy (collective) creation safe.
+    const std::shared_ptr<distributed::multihost::DistributedContext>& coowner_context() const;
 
     DeviceIds get_device_ids() const;
 

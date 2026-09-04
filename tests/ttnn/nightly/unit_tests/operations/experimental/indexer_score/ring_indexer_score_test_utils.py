@@ -25,11 +25,10 @@ RING = 4
 
 
 def ring_parent_shape():
-    """The system mesh shape, as a (rows, cols) tuple. Raises if it cannot host the ring-of-4 carve."""
+    """The system mesh shape, as a (rows, cols) tuple. Total -- a box too small for the ring reports its real
+    shape rather than raising, so this is safe in a collection-time `skipif` condition."""
     shape = ttnn._ttnn.multi_device.SystemMeshDescriptor().shape()
-    rows, cols = shape[0], shape[1]
-    assert cols >= RING, f"ring-of-4 needs a system mesh with axis-1 >= {RING}; got {rows}x{cols}"
-    return rows, cols
+    return shape[0], shape[1]
 
 
 SP_AXIS = 1  # the length-4 axis of the (1, 4) submesh
@@ -49,6 +48,8 @@ def _open_ring4_ccl():
     """Open the full system mesh with 2D fabric, carve a 1x4 submesh, load a worker sub-device, make 2 CCL
     semaphores (the two ring directions, as ring_attention_all_gather_async needs). Returns
     (submesh, parent, ccl_semaphores, worker_sub_device_id, stall_group)."""
+    rows, cols = ring_parent_shape()
+    assert cols >= RING, f"ring-of-4 needs a system mesh with axis-1 >= {RING}; got {rows}x{cols}"
     ttnn.set_fabric_config(
         ttnn.FabricConfig.FABRIC_2D,
         ttnn.FabricReliabilityMode.STRICT_INIT,
@@ -59,7 +60,7 @@ def _open_ring4_ccl():
     )
     parent = None
     try:
-        parent = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(*ring_parent_shape()))
+        parent = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(rows, cols))
         submesh = parent.create_submesh(ttnn.MeshShape(1, RING))
 
         grid = submesh.compute_with_storage_grid_size()
