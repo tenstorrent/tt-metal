@@ -4,7 +4,7 @@
 """MiniMax-M3 KV-cache golden PCC validation (bring-up only — never used in serving).
 
 Per-layer K / V / index_k PCC: the device cache (one ``runtime.read_slot_kv`` read-back, un-rotated per
-layer on host) vs the golden trace written
+layer on host via ``naturalize_kv_block``) vs the golden trace written
 by ``scripts/generate_golden_kv_cache.py`` (keys ``key/value/index_k_cache_layer_N``, HF layout). The
 device stores K / index_k Meta-RoPE swizzled over the rotary slice (``ModelArgs.load_state_dict`` ->
 ``convert_hf_qkv_to_meta_format_partial``), so we permute the golden's rotary slice (HF half-split ->
@@ -23,7 +23,22 @@ import torch
 from loguru import logger
 
 from models.common.utility_functions import comp_pcc
+from models.common.utils import blockcyclic_positions
 from models.demos.common.prefill.runners.runner_utils import resolve_trace_dir
+
+
+def naturalize_kv_block(
+    block: torch.Tensor, n_tokens: int, sp_factor: int, chunk_size: int, max_seq_len: int
+) -> torch.Tensor:
+    """Un-rotate a host cache block from on-device block-cyclic seq order to NATURAL token order.
+
+    ``block`` is ``[..., seq_cache, head_dim]`` (seq is dim -2), the ConcatMesh2dToTensor layout.
+    Inverse of the ``update_padded_kv_cache`` writer. Returns ``[..., n_tokens, head_dim]``.
+    """
+    p = blockcyclic_positions(sp_factor, chunk_size, max_seq_len)
+    nat = torch.empty_like(block)
+    nat[..., p, :] = block
+    return nat[..., :n_tokens, :]
 
 
 def _hf_to_meta_rotary_perm(head_dim: int, rotary_dim: int) -> torch.Tensor:
@@ -79,11 +94,12 @@ def kv_cache_pcc_check(
     # One slot read-back (device-side slice + one mesh compose per cache); each layer is un-rotated on
     # host below. Reading per layer would re-copy the packed cache num_layers times over PCIe.
     k_blk, v_blk, ik_blk = runtime.read_slot_kv(kv_cache, slot_id)
+    sp, chunk, seq = runtime.config.sp_factor, chunk_size, runtime.config.max_seq_len
     for L in range(num_layers):
         gL = first_layer_idx + L  # device layer L == global (golden) layer first_layer_idx + L
-        dev_k = runtime.naturalize_kv_block(k_blk[L], n_tokens).unsqueeze(0)
-        dev_v = runtime.naturalize_kv_block(v_blk[L], n_tokens).unsqueeze(0)
-        dev_ik = runtime.naturalize_kv_block(ik_blk[L], n_tokens).unsqueeze(0)
+        dev_k = naturalize_kv_block(k_blk[L], n_tokens, sp, chunk, seq).unsqueeze(0)
+        dev_v = naturalize_kv_block(v_blk[L], n_tokens, sp, chunk, seq).unsqueeze(0)
+        dev_ik = naturalize_kv_block(ik_blk[L], n_tokens, sp, chunk, seq).unsqueeze(0)
         with safe_open(str(kv_dir / f"layer_{gL}.safetensors"), framework="pt") as h:
             keys = set(h.keys())
             g_k = h.get_tensor(f"key_cache_layer_{gL}").float()[:, :, :n_tokens, :][..., src]  # HF -> Meta
