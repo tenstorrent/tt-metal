@@ -54,6 +54,7 @@ coverage -- a short matrix would otherwise look exactly like a pass.
 
 import argparse
 import copy
+import fnmatch
 import hashlib
 import json
 import os
@@ -74,10 +75,18 @@ METADATA_FIELDS = {"owner_id", "team"}
 # Per-SKU sub-keys that cannot change how a test executes.
 METADATA_SKU_FIELDS = {"timeout"}
 
+# A pytest per-test timeout, which is stripped from simulator legs: ttsim is
+# 10-50x slower than hardware, so a limit sized for silicon kills slow-but-correct
+# tests. The job's own timeout-minutes stays as the backstop. ttnn-sanity-tests-impl
+# does the same with `sed -E 's/[[:space:]]+--timeout[[:space:]]+[0-9]+//g'`.
+PYTEST_TIMEOUT_FLAG = re.compile(r"\s+--timeout\s+\d+")
+
 # Paths only the installed tt-metalium debs provide; a cmd touching one needs the
 # packages artifact rather than a build tree.
 PACKAGE_INSTALL_PREFIXES = ("/usr/share/tt-metalium", "/usr/libexec/tt-metalium")
 
+DEFAULT_CODEOWNERS = ".github/CODEOWNERS"
+DEFAULT_TTSIM_SKIP_LIST = "tests/pipeline_reorg/ttsim-skip-list.yaml"
 DEFAULT_SKU_CONFIG = ".github/sku_config.yaml"
 DEFAULT_PREPARE_SCRIPT = ".github/scripts/utils/prepare_test_matrix.py"
 
@@ -179,6 +188,93 @@ def load_review_only_skus(raw, sku_config_path):
     return names
 
 
+def load_ttsim_skips(path):
+    """
+    Load tests/pipeline_reorg/ttsim-skip-list.yaml as {arch: [test ids]}.
+
+    These are the tests that do not yet work under the simulator. The owning
+    pipeline passes them as pytest --deselect args on every sim_* leg (see
+    ttnn-sanity-tests-impl.yaml's "Load TTSim skip list" step) so the simulator
+    runs the same cmd as hardware minus the known-broken tests. Without them a
+    sim leg fails on a test its own pipeline knowingly skips.
+    """
+    if not os.path.exists(path):
+        return {}
+    with open(path, "r") as f:
+        skips = yaml.safe_load(f) or {}
+    if not isinstance(skips, dict):
+        raise GateError(f"{path} is not a mapping of arch -> test ids")
+    return {arch: list(ids or []) for arch, ids in skips.items()}
+
+
+def ttsim_skip_arch(sku):
+    """Which skip-list arch a sim SKU belongs to, or None when it has no list."""
+    if sku.startswith("sim_wh"):
+        return "wormhole_b0"
+    if sku.startswith("sim_bh"):
+        return "blackhole"
+    return None
+
+
+def deselect_args(sku, skips):
+    """The pytest --deselect args a sim leg should carry, as one shell-ready string."""
+    arch = ttsim_skip_arch(str(sku))
+    if arch is None:
+        return ""
+    return " ".join("--deselect=" + test_id for test_id in skips.get(arch) or [])
+
+
+def load_codeowners(path):
+    """
+    Parse CODEOWNERS into an ordered list of (pattern, owners).
+
+    Order is preserved because GitHub gives precedence to the *last* matching
+    pattern -- which is what makes `tests/pipeline_reorg/` a fallback beneath the
+    more specific per-file lines that follow it.
+    """
+    rules = []
+    if not os.path.exists(path):
+        return rules
+    with open(path, "r") as f:
+        for raw in f:
+            line = raw.split("#", 1)[0].strip()
+            if not line:
+                continue
+            parts = line.split()
+            rules.append((parts[0], parts[1:]))
+    return rules
+
+
+def codeowners_match(pattern, path):
+    """Match one CODEOWNERS pattern against a repo-relative path."""
+    pattern = pattern.lstrip("/")
+    if pattern.endswith("/"):
+        return path.startswith(pattern)
+    if pattern.startswith("**/"):
+        tail = pattern[3:]
+        return fnmatch.fnmatch(path, tail) or fnmatch.fnmatch(path, f"*/{tail}")
+    if "/" in pattern:
+        return fnmatch.fnmatch(path, pattern)
+    return fnmatch.fnmatch(os.path.basename(path), pattern)
+
+
+def owners_for(path, rules):
+    """
+    Owners of a path, honouring CODEOWNERS last-match-wins precedence.
+
+    Returns (individual logins, team slugs). Teams cannot be expanded with the
+    workflow token, so a path owned only by teams falls back to accepting any
+    approving review and letting the ruleset's own code-owner requirement decide.
+    """
+    owners = []
+    for pattern, entries in rules:
+        if codeowners_match(pattern, path):
+            owners = entries
+    individuals = {o.lstrip("@") for o in owners if o.startswith("@") and "/" not in o}
+    teams = {o.lstrip("@") for o in owners if o.startswith("@") and "/" in o}
+    return individuals, teams
+
+
 # ---------------------------------------------------------------------------
 # scope
 # ---------------------------------------------------------------------------
@@ -186,10 +282,12 @@ def load_review_only_skus(raw, sku_config_path):
 
 def parse_entries(text):
     """
-    Return the test entries in a tests yaml, or None when it holds no test matrix.
+    Return the test entries in a tests yaml, or None when it is not a list at all.
 
-    ttsim-skip-list.yaml is a per-arch mapping of test ids rather than a list of
-    entries, so there is nothing for the gate to prove there.
+    A missing, empty or comment-only file is an empty matrix, matching
+    prepare_test_matrix.py's placeholder handling. Any other non-list shape is
+    returned as None for the caller to judge: it is only legitimate for a file
+    declared as holding no test matrix, and is an error anywhere else.
     """
     if text is None:
         return []
@@ -198,7 +296,9 @@ def parse_entries(text):
         return []
     if not isinstance(entries, list):
         return None
-    return [entry for entry in entries if isinstance(entry, dict)]
+    if any(not isinstance(entry, dict) for entry in entries):
+        raise GateError("test matrix entries must be mappings")
+    return entries
 
 
 def entry_key(entry):
@@ -250,26 +350,25 @@ def behavioural_view(entry):
     return view
 
 
-def resolve_profile(path, entry, tracy_files):
+def resolve_profile(path, tracy_files):
     """
-    Which build flavour a leg needs, derived from the leg itself.
+    Which build flavour a leg needs.
 
-    Running under the simulator is a runtime concern, not a build flavour: a sim_*
-    leg needs exactly the build its command needs, same as the hardware legs of the
-    same entry. ttnn-sanity-tests-impl.yaml works this way too -- its sim legs take
-    the same wheel and the same container as its hardware legs, and differ only by
-    the runner-mode label and the extra setup-ttsim step.
+    Every build carries the wheel. Whether a test needs it cannot be read off the
+    command: ops_integration_tests.yaml runs `python3 scripts/...` and its pipeline
+    passes a wheel, runtime_unit_tests.yaml runs `python3 tests/scripts/...` and its
+    pipeline does not, and shell wrappers like run_ttnn_examples.sh hide python
+    altogether. Since a wheel that goes unused costs only build time while a missing
+    one fails the leg outright, the gate always builds one -- a strict superset of
+    what every owning pipeline provides.
 
-    Only the tracy case needs telling: nothing in a test entry says "this needs a
-    profiler build", and grepping cmds for "profiler" catches unrelated pipelines
-    (runtime_unit_tests.yaml and fabric_perf_tests.yaml both mention it). The rest
-    follows from the data -- a pytest command needs the wheel.
+    That leaves tracy as the only real distinction, and it has to be told: nothing in
+    a test entry says "this needs a profiler build", and matching cmds on "profiler"
+    also hits runtime_unit_tests.yaml and fabric_perf_tests.yaml.
     """
     if os.path.basename(path) in tracy_files:
         return "profiler"
-    if "pytest" in (entry.get("cmd") or ""):
-        return "python"
-    return "cpp"
+    return "default"
 
 
 def needs_packages(entry):
@@ -285,13 +384,28 @@ def needs_packages(entry):
     return any(prefix in cmd for prefix in PACKAGE_INSTALL_PREFIXES)
 
 
-def scope_file(path, base, review_only, tracy_files):
+def scope_file(path, base, review_only, tracy_files, non_matrix_files, unsupported_files):
     """Diff one tests yaml and return its scoping result."""
+    if os.path.basename(path) in non_matrix_files:
+        # Declared as holding no test matrix (e.g. ttsim-skip-list.yaml, a per-arch
+        # mapping of test ids). Nothing here for the gate to prove.
+        return {"no_entries": True, "run_legs": [], "review_legs": [], "metadata_only": []}
+
+    unsupported = os.path.basename(path) in unsupported_files
+
     old_entries = parse_entries(git_show(base, path))
     new_entries = parse_entries(open(path).read() if os.path.exists(path) else None)
 
-    if new_entries is None or old_entries is None:
-        return {"no_entries": True, "run_legs": [], "review_legs": [], "metadata_only": []}
+    # Reaching here with a non-list means a real test matrix was reshaped into
+    # something else. prepare_test_matrix.py errors on that shape, and so does the
+    # gate -- silently marking it "no tests" would pass the PR with zero coverage.
+    for entries, label in ((new_entries, path), (old_entries, f"{path}@{base}")):
+        if entries is None:
+            raise GateError(
+                f"{label} is not a list of test entries. If it legitimately holds no test "
+                "matrix, add its filename to NON_MATRIX_YAMLS in "
+                ".github/workflows/verify-changed-tests.yaml; otherwise fix the file."
+            )
 
     old_index = index_entries(old_entries, f"{path}@{base}")
     new_index = index_entries(new_entries, path)
@@ -322,10 +436,16 @@ def scope_file(path, base, review_only, tracy_files):
                 "sku": sku,
                 "team": team,
                 "reason": reason,
-                "profile": resolve_profile(path, entry, tracy_files),
+                "profile": resolve_profile(path, tracy_files),
                 "packages": needs_packages(entry),
             }
-            if sku in review_only:
+            if unsupported:
+                # The gate cannot build a runnable matrix for this pipeline, so the
+                # edit goes to its code owners instead of passing unverified.
+                leg["blocked_by"] = "unsupported_yaml"
+                review_legs.append(leg)
+            elif sku in review_only:
+                leg["blocked_by"] = "review_only_sku"
                 review_legs.append(leg)
             else:
                 run_legs.append(leg)
@@ -338,11 +458,11 @@ def scope_file(path, base, review_only, tracy_files):
     }
 
 
-def build_scope(base, files, review_only, tracy_files):
+def build_scope(base, files, review_only, tracy_files, non_matrix_files, unsupported_files):
     run_legs, review_legs, metadata_only, skipped = [], [], [], []
 
     for path in sorted(files):
-        scoped = scope_file(path, base, review_only, tracy_files)
+        scoped = scope_file(path, base, review_only, tracy_files, non_matrix_files, unsupported_files)
         if scoped["no_entries"]:
             skipped.append(path)
             continue
@@ -491,28 +611,50 @@ def load_matrices(matrix_dir):
     return matrices
 
 
-def filter_matrix(scope, matrices):
+def filter_matrix(scope, matrices, skips):
+    """
+    Narrow each changed yaml's matrix to the legs scoped from that same yaml.
+
+    The index is keyed by source yaml as well as by leg, because entries are
+    mirrored between pipelines: "t3k fabric tests" appears in both
+    fabric_sanity_tests.yaml and fabric_tests.yaml, and "fabric fast unit tests"
+    in both blackhole_e2e_tests.yaml and fabric_sanity_tests.yaml. A single global
+    index would read those as a collision and fail a legitimate edit, and could
+    match a leg against the other pipeline's row. Two mirrored definitions are two
+    entries, so touching both runs both.
+    """
     index = {}
     for source, rows in matrices.items():
         for row in rows:
-            key = row_key(row)
+            key = (source, row_key(row))
             if key in index:
-                raise GateError(f"{source}: two matrix rows share the key '{describe_row(key)}'")
+                raise GateError(
+                    f"{source}: two matrix rows share the key '{describe_row(row_key(row))}'. "
+                    "Mirrored definitions in different yamls are fine, but one yaml cannot "
+                    "hold the same entry twice."
+                )
             enriched = dict(row)
             enriched["source_yaml"] = source
             index[key] = enriched
 
     selected, missing = [], []
     for leg in scope["run_legs"]:
-        row = index.get(leg_row_key(leg))
+        source = Path(leg["file"]).stem
+        row = index.get((source, leg_row_key(leg)))
         if row is None:
-            missing.append(describe_row(leg_row_key(leg)))
+            missing.append(f"{describe_row(leg_row_key(leg))} [{source}]")
         else:
             row = dict(row)
             # Carry the build flavour onto the row so the runner can pick the matching
             # build artifact without re-deriving it.
             row["gate_profile"] = leg["profile"]
             row["gate_packages"] = leg["packages"]
+            if str(row.get("sku", "")).startswith("sim_"):
+                stripped = PYTEST_TIMEOUT_FLAG.sub("", row.get("cmd") or "")
+                if stripped != row.get("cmd"):
+                    row["gate_stripped_timeout"] = True
+                row["cmd"] = stripped
+                row["gate_pytest_deselect"] = deselect_args(row.get("sku", ""), skips)
             selected.append(row)
 
     if missing:
@@ -572,43 +714,75 @@ def fetch_reviews(repo, pr, token):
         raise GateError(f"could not reach the GitHub API: {err.reason}")
 
 
-def check_reviews(review_legs, repo, pr, head_sha):
+def check_reviews(review_legs, repo, pr, head_sha, codeowners_path):
+    """
+    Require an approving review from the edited yaml's own code owners.
+
+    Checked per file, because two blocked yamls can have different owners --
+    an approval from the models owners says nothing about a fabric edit.
+
+    dismiss_stale_reviews_on_push is false on main, so an approval survives later
+    pushes. Requiring it to sit on the current head stops an approval of one
+    galaxy edit from covering a different one pushed afterwards.
+
+    Where a path resolves to no individual owners -- unowned, or owned only by a
+    team, which the workflow token cannot expand -- this falls back to accepting
+    any approving review and leaves the question to the normal CODEOWNERS system,
+    which the ruleset enforces via require_code_owner_review.
+    """
     if not review_legs:
-        print("No review-only legs in scope.")
+        print("No legs need an owner review.")
         return 0
 
-    print("Legs the gate will not run, and so require an owner review:")
-    for leg in review_legs:
-        print(f"  - {leg['name']} | sku={leg['sku']} | {leg['file']}")
-
+    rules = load_codeowners(codeowners_path)
     reviews = fetch_reviews(repo, pr, os.environ.get("GH_TOKEN"))
+    approvers = {
+        (review.get("user") or {}).get("login")
+        for review in reviews
+        if review.get("state") == "APPROVED" and review.get("commit_id") == head_sha
+    } - {None}
 
-    # dismiss_stale_reviews_on_push is false on main, so an approval survives later
-    # pushes. Requiring the approval to sit on the current head stops an approval of
-    # one galaxy edit from covering a different one pushed afterwards.
-    #
-    # Who may approve is not decided here: CODEOWNERS already scopes these paths to
-    # their owning teams, and the main ruleset enforces that via
-    # require_code_owner_review.
-    approvers = sorted(
-        {
-            (review.get("user") or {}).get("login")
-            for review in reviews
-            if review.get("state") == "APPROVED" and review.get("commit_id") == head_sha
-        }
-        - {None}
-    )
+    by_file = {}
+    for leg in review_legs:
+        by_file.setdefault(leg["file"], []).append(leg)
 
-    if not approvers:
-        print(
-            f"::error::{len(review_legs)} leg(s) target hardware this gate does not run. "
-            f"They need an approving review on {head_sha} from a code owner of the "
-            "edited file(s).",
-            file=sys.stderr,
-        )
+    unmet = []
+    for path, legs in sorted(by_file.items()):
+        reasons = sorted({leg.get("blocked_by") or "review_only_sku" for leg in legs})
+        individuals, teams = owners_for(path, rules)
+        matched = sorted(approvers & individuals)
+
+        print(f"\n{path}  ({len(legs)} leg(s); {', '.join(reasons)})")
+        for leg in legs:
+            print(f"    - {leg['name']} | sku={leg['sku']}")
+
+        if individuals:
+            print(f"    code owners: {', '.join('@' + o for o in sorted(individuals))}")
+            if matched:
+                print(f"    approved by: {', '.join('@' + o for o in matched)}")
+            else:
+                unmet.append((path, sorted(individuals)))
+        else:
+            # No individual owner to match against; defer to the ruleset.
+            where = f"team-owned ({', '.join(sorted(teams))})" if teams else "no code owner"
+            print(f"    {where}; falling back to the normal CODEOWNERS review requirement")
+            if approvers:
+                print(f"    approved by: {', '.join('@' + o for o in sorted(approvers))}")
+            else:
+                unmet.append((path, []))
+
+    if unmet:
+        print("", file=sys.stderr)
+        for path, owners in unmet:
+            who = ", ".join("@" + o for o in owners) if owners else "a code owner"
+            print(
+                f"::error::{path} has legs this gate does not run. It needs an approving "
+                f"review on {head_sha} from {who}.",
+                file=sys.stderr,
+            )
         return 1
 
-    print(f"\nApproved on {head_sha} by: " + ", ".join(f"@{who}" for who in approvers))
+    print(f"\nAll {len(review_legs)} leg(s) needing review are approved on {head_sha}.")
     return 0
 
 
@@ -626,11 +800,13 @@ def run(args):
     """
     review_only = load_review_only_skus(args.review_skus, args.sku_config)
     tracy_files = set(split_list(args.tracy_files))
+    non_matrix_files = set(split_list(args.non_matrix_files))
+    unsupported_files = set(split_list(args.unsupported_files))
     base = merge_base(args.base)
     files = args.files if args.files is not None else changed_files(base)
     files = [f for f in files if f.startswith(TESTS_DIR + "/")]
 
-    scope = build_scope(base, files, review_only, tracy_files)
+    scope = build_scope(base, files, review_only, tracy_files, non_matrix_files, unsupported_files)
 
     # In a merge group the legs already ran on the PR head, so there is no matrix
     # to build and no review to re-check -- only the scope needs to resolve.
@@ -643,7 +819,7 @@ def run(args):
             if args.matrix_dir
             else build_matrices(scope, args.prepare_script, args.sku_config, args.work_dir)
         )
-        legs, sim_libs = filter_matrix(scope, matrices)
+        legs, sim_libs = filter_matrix(scope, matrices, load_ttsim_skips(args.ttsim_skip_list))
 
     scope["legs"] = legs
     scope["sim_libs"] = sim_libs
@@ -662,8 +838,7 @@ def run(args):
             ("review-leg-count", len(scope["review_legs"])),
             ("leg-digest", scope["leg_digest"]),
             ("changed-file-count", len(scope["changed_files"])),
-            ("needs-cpp", str("cpp" in profiles).lower()),
-            ("needs-python", str("python" in profiles).lower()),
+            ("needs-default", str("default" in profiles).lower()),
             ("needs-profiler", str("profiler" in profiles).lower()),
             ("matrix", json.dumps(legs)),
             ("sim-libs", json.dumps(sim_libs)),
@@ -678,7 +853,7 @@ def run(args):
             print(f"  - [{path}] {describe_row(row_key(row))}  [{row['source_yaml']}]")
 
     if dispatching and scope["review_legs"]:
-        return check_reviews(scope["review_legs"], args.repo, args.pr, args.head_sha)
+        return check_reviews(scope["review_legs"], args.repo, args.pr, args.head_sha, args.codeowners)
     return 0
 
 
@@ -703,6 +878,25 @@ def main(argv=None):
         default=os.environ.get("TRACY_BUILD_YAMLS", ""),
         help="Yaml basenames whose tests need a tracy build (default: $TRACY_BUILD_YAMLS)",
     )
+    parser.add_argument(
+        "--non-matrix-files",
+        default=os.environ.get("NON_MATRIX_YAMLS", ""),
+        help=(
+            "Yaml basenames that legitimately hold no test matrix, e.g. ttsim-skip-list.yaml "
+            "(default: $NON_MATRIX_YAMLS). Any other non-list yaml fails the gate."
+        ),
+    )
+    parser.add_argument(
+        "--unsupported-files",
+        default=os.environ.get("UNSUPPORTED_YAMLS", ""),
+        help=(
+            "Yaml basenames the gate cannot dispatch, e.g. vllm_model_tests.yaml whose "
+            "entries carry no cmd (default: $UNSUPPORTED_YAMLS). Edits to these are routed "
+            "to their code owners for review instead of being run."
+        ),
+    )
+    parser.add_argument("--codeowners", default=DEFAULT_CODEOWNERS)
+    parser.add_argument("--ttsim-skip-list", default=DEFAULT_TTSIM_SKIP_LIST)
     parser.add_argument("--prepare-script", default=DEFAULT_PREPARE_SCRIPT)
     parser.add_argument("--work-dir", default="gate-matrices")
     parser.add_argument("--matrix-dir", default=None, help="Pre-built matrices; omit to run prepare_test_matrix.py")
