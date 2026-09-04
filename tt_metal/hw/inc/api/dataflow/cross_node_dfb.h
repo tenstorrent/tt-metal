@@ -21,7 +21,6 @@
 #include "noc_address_backend.h"
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/dataflow_buffer.h"
-#include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/remote_circular_buffer.h"
 
@@ -36,6 +35,28 @@ static_assert(
 static_assert(
     offsetof(CrossNodeReceiverDFBInterface, remote_pages_acked_ptr) ==
     offsetof(RemoteReceiverCBInterface, remote_pages_acked_ptr));
+#endif
+
+namespace experimental {
+class CrossNodeDFB;
+}
+
+#if defined(KERNEL_BUILD) && !defined(COMPILE_FOR_TRISC)
+// dst_args_type must be visible before CrossNodeDFB::write_* method bodies.
+// RISC-V g++ parses those templates at class definition (-Wtemplate-body).
+template <>
+struct noc_traits_t<experimental::CrossNodeDFB> {
+    struct src_args_type {};
+    struct dst_args_type {
+        uint32_t receiver_idx{};
+    };
+
+    template <Noc::AddressType address_type>
+    static uint32_t src_addr(const experimental::CrossNodeDFB& src, const Noc& noc, const src_args_type& args);
+
+    template <Noc::AddressType address_type>
+    static uint64_t dst_addr(const experimental::CrossNodeDFB& dst, const Noc& noc, const dst_args_type& args);
+};
 #endif
 
 namespace experimental {
@@ -80,8 +101,9 @@ namespace experimental {
 //
 //  Standard receiver (NCRISC/BRISC consumes data):
 //    wait_front(n);
-//    rd_ptr = get_read_ptr();
-//    // process data at rd_ptr ...
+//    auto lock = scoped_read_lock(n);
+//    auto rd = lock.get_ptr();
+//    // process data at rd ...
 //    pop_front(n);                            // advance rd_ptr + NOC-ack sender
 //
 // ═══════════════════════════════════════════════════════════════════════
@@ -180,43 +202,24 @@ public:
     // Call push_back() after all writes.
     // ------------------------------------------------------------------
 
-    FORCE_INLINE void noc_unicast_write_l1(
-        uint32_t src_l1_addr,
-        uint32_t dest_l1_addr,
-        uint32_t len_bytes,
-        uint32_t noc_x,
-        uint32_t noc_y,
-        const Noc& noc) {
-        UnicastEndpoint dst;
-        noc.async_write<NocOptions::POSTED>(
-            CoreLocalMem<uint32_t>(src_l1_addr),
-            dst,
-            len_bytes,
-            {},
-            {.noc_x = noc_x, .noc_y = noc_y, .addr = dest_l1_addr});
-    }
-
-    // Broadcast: write n entries of identical data from src_l1_addr to all receivers
+    // Broadcast: write n entries of identical data from src to all receivers
     // at their current write position. Uses loop-unicast (hardware NOC multicast requires
     // a rectangular destination grid).
-    FORCE_INLINE void write_broadcast(uint32_t src_l1_addr, uint32_t num_entries, const Noc& noc = Noc{}) {
+    template <typename Src>
+    FORCE_INLINE void write_broadcast(
+        const Noc& noc,
+        const Src& src,
+        uint32_t num_entries,
+        const typename noc_traits_t<Src>::src_args_type& src_args = {}) {
         CrossNodeSenderDFBInterface& iface = interface_.sender;
         const uint32_t entry_size = iface.fifo_page_size;
         const uint32_t len_bytes = num_entries * entry_size;
         const uint32_t num_recv = cross_node_dfb_num_receivers(iface.num_receivers_and_remote_pages_sent_ptr);
-        volatile tt_l1_ptr uint32_t* xy_base =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(iface.receiver_noc_xy_ptr);
-
-        DPRINT("src_l1_addr: {}\n", src_l1_addr);
 
         for (uint32_t i = 0; i < num_recv; ++i) {
             const uint32_t wr_offset = derived_wr_offset(iface, i);
             assert_contiguous_write(iface, wr_offset, num_entries);
-            const uint32_t noc_x = xy_base[2 * i];
-            const uint32_t noc_y = xy_base[2 * i + 1];
-            const uint32_t dest_l1_addr = iface.fifo_start_addr + wr_offset;
-            DPRINT("noc_x: {} noc_y: {} dest: {}\n", noc_x, noc_y, dest_l1_addr);
-            noc_unicast_write_l1(src_l1_addr, dest_l1_addr, len_bytes, noc_x, noc_y, noc);
+            noc.async_write<NocOptions::POSTED>(src, *this, len_bytes, src_args, {.receiver_idx = i});
         }
     }
 
@@ -348,18 +351,20 @@ public:
         return cross_node_dfb_num_receivers(iface.num_receivers_and_remote_pages_sent_ptr);
     }
 
-    // Next collective write address, derived from receiver 0's credits. Collective
-    // pushes keep all receiver write positions in lockstep.
-    FORCE_INLINE uint32_t get_write_ptr() {
-        CrossNodeSenderDFBInterface& iface = interface_.sender;
-        return iface.fifo_start_addr + derived_wr_offset(iface, 0);
+    // Lock entries at the receiver's current front for direct CPU access.
+    [[nodiscard]] FORCE_INLINE auto scoped_read_lock(uint32_t num_entries = 1) {
+        const CrossNodeReceiverDFBInterface& iface = interface_.receiver;
+        ASSERT(iface.fifo_rd_ptr + num_entries * iface.fifo_page_size <= iface.fifo_limit_page_aligned);
+        return make_dfb_scoped_lock<false>(iface.fifo_rd_ptr, []() {});
     }
-
-    FORCE_INLINE uint32_t get_read_ptr() { return interface_.receiver.fifo_rd_ptr; }
 
     FORCE_INLINE uint32_t get_entry_size() { return interface_.sender.fifo_page_size; }
 
 private:
+#if defined(KERNEL_BUILD) && !defined(COMPILE_FOR_TRISC)
+    friend struct ::noc_traits_t<CrossNodeDFB>;
+#endif
+
     CrossNodeDFBInterface interface_;
 
 #if defined(KERNEL_BUILD) && !defined(COMPILE_FOR_TRISC)
@@ -449,5 +454,31 @@ private:
 };
 
 }  // namespace experimental
+
+#if defined(KERNEL_BUILD) && !defined(COMPILE_FOR_TRISC)
+template <Noc::AddressType address_type>
+FORCE_INLINE uint32_t noc_traits_t<experimental::CrossNodeDFB>::src_addr(
+    const experimental::CrossNodeDFB& src, const Noc&, const src_args_type&) {
+    static_assert(address_type == Noc::AddressType::LOCAL_L1, "CrossNodeDFB can only be used as a local L1 source");
+    ASSERT(!static_cast<bool>(
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src.interface_.receiver.config_ptr)[REMOTE_DFB_CFG_IS_SENDER]));
+    return src.interface_.receiver.fifo_rd_ptr;
+}
+
+template <Noc::AddressType address_type>
+FORCE_INLINE uint64_t noc_traits_t<experimental::CrossNodeDFB>::dst_addr(
+    const experimental::CrossNodeDFB& dst, const Noc& noc, const dst_args_type& args) {
+    static_assert(address_type == Noc::AddressType::NOC, "CrossNodeDFB can only be used as a NoC destination");
+    const CrossNodeSenderDFBInterface& iface = dst.interface_.sender;
+    ASSERT(
+        static_cast<bool>(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(iface.config_ptr)[REMOTE_DFB_CFG_IS_SENDER]));
+    ASSERT(args.receiver_idx < cross_node_dfb_num_receivers(iface.num_receivers_and_remote_pages_sent_ptr));
+    volatile tt_l1_ptr uint32_t* xy =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(iface.receiver_noc_xy_ptr) + 2 * args.receiver_idx;
+    const uint32_t local_address =
+        iface.fifo_start_addr + experimental::CrossNodeDFB::derived_wr_offset(iface, args.receiver_idx);
+    return noc_address_backend::worker_address(xy[0], xy[1], local_address, noc.get_noc_id());
+}
+#endif
 
 #endif  // !ARCH_QUASAR

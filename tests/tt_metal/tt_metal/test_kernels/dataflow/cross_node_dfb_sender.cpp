@@ -17,10 +17,7 @@
 //   [0] l1_staging_addr    - sender-local L1 scratch region pre-populated by the host
 
 #include "api/dataflow/cross_node_dfb.h"
-#include "api/dataflow/endpoints.h"
 #include "api/dataflow/noc.h"
-
-FORCE_INLINE uint32_t staging_addr(uint32_t staging_base, uint32_t byte_offset) { return staging_base + byte_offset; }
 
 void kernel_main() {
     constexpr uint8_t remote_dfb_id = get_compile_time_arg_val(0);
@@ -34,13 +31,13 @@ void kernel_main() {
     constexpr uint32_t pattern_multicast_counter = 0;
 
     const uint32_t staging_base = get_arg_val<uint32_t>(0);
+    const CoreLocalMem<uint8_t> staging(staging_base);
 
     Noc noc;
     // Spot-check: log first byte of each entry (host pre-populated staging)
     DPRINT("l1_staging_addr: 0x{:x}\n", staging_base);
 
     experimental::CrossNodeDFB gdfb(remote_dfb_id);
-    DPRINT("gdfb initial write_ptr: 0x{:x}\n", gdfb.get_write_ptr());
 
     DPRINT("Running write_primitive: {}\n", write_primitive);
 
@@ -56,8 +53,8 @@ void kernel_main() {
         for (uint32_t i = 0; i < num_entries; ++i) {
             DPRINT("Reserving back for broadcast\n");
             gdfb.reserve_back(1);
-            DPRINT("Done reserve back for broadcast to {}\n", staging_addr(staging_base, i * entry_size));
-            gdfb.write_broadcast(staging_addr(staging_base, i * entry_size), 1, noc);
+            DPRINT("Done reserve back for broadcast to {}\n", staging_base + i * entry_size);
+            gdfb.write_broadcast(noc, staging, 1, {.offset_bytes = i * entry_size});
             DPRINT("Done write broadcast\n");
             gdfb.flush_writes(noc);
             DPRINT("Done posted write flush\n");
@@ -69,7 +66,7 @@ void kernel_main() {
         // write_broadcast does not advance the write position, so one call covers the slot;
         // a single push_back(n) then publishes credit for the whole batch.
         gdfb.reserve_back(num_entries);
-        gdfb.write_broadcast(staging_base, num_entries, noc);
+        gdfb.write_broadcast(noc, staging, num_entries);
         gdfb.flush_writes(noc);
         gdfb.push_back(num_entries, noc);
     }
