@@ -3569,7 +3569,7 @@ class ModelArgs:
         )
 
     def dram_decode_in0_block_w(self, k: int, n: int, num_cores: int) -> int:
-        """in0_block_w for a DRAM-sharded decode matmul on Blackhole with one reader per bank.
+        """in0_block_w for a DRAM-sharded decode matmul with one reader per bank.
 
         The activation multicast is one semaphore-gated block per sender, chained across senders,
         and with one reader per bank it is the floor at narrow N (mirror #342); the cost is the block
@@ -3738,7 +3738,7 @@ class ModelArgs:
                 k % (ttnn.TILE_SIZE * num_cores) == 0
             ), f"k must be divisible by tile_size * num_cores: {k} % {ttnn.TILE_SIZE * num_cores} != 0"
             # assert n % (ttnn.TILE_SIZE * num_cores) == 0, f"n must be divisible by tile_size * num_cores: {n} % {ttnn.TILE_SIZE * num_cores} != 0"
-        if is_blackhole() and not self.is_galaxy and self.prefetcher is None:
+        if not self.is_galaxy and self.prefetcher is None:
             in0_block_w = self.dram_decode_in0_block_w(k, n, num_cores)
         else:
             in0_block_w = self.find_largest_divisor(k // (ttnn.TILE_SIZE * num_cores))
