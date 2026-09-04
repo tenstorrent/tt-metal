@@ -42,6 +42,14 @@ class ModelArgs:
         self.dummy_weights = dummy_weights
         self.max_batch_size = max_batch_size
         if self.max_batch_size > 32:
+            # More than 32 users needs users_row_sharded: each mesh row decodes its own 32-user
+            # slice (nlp_create_qkv_heads_decode / nlp_concat_heads_decode / on-device sampling all
+            # cap at 32 users per device).
+            if self.mesh_device.shape[0] == 1:
+                raise ValueError(
+                    f"max_batch_size={self.max_batch_size} exceeds the 32 users a single mesh row can decode; "
+                    "single-row meshes (e.g. 1x8) support batch sizes up to 32."
+                )
             assert (
                 self.max_batch_size % self.mesh_device.shape[0] == 0
             ), "max_batch_size must be divisible by the number of device rows"
@@ -181,11 +189,13 @@ class ModelArgs:
             "gpt-oss-120b": {
                 "T3K": [128],
                 "TG": [128],
+                "P150x8": [128],
             },
             "gpt-oss-20b": {
                 "T3K": [128],
                 "TG": [128],
-            }
+                "P150x8": [128],
+            },
             # exmaple : #base_model_name : {device_name : [sequence_lengths]}
         }
 
@@ -319,7 +329,8 @@ class ModelArgs:
     # older format is then rejected -> the run cold-loads and regenerates the cache, rather than
     # skipping the load and hard-failing in ttnn.as_tensor(None, ...) on a missing .tensorbin.
     # (Mirrors DeepSeek's WEIGHT_CACHE_FORMAT_VERSION in deepseek_v3/utils/weight_config.py.)
-    WEIGHT_CACHE_FORMAT_VERSION = 1
+    # v3: expert gate/up projections cached fused (experts/weights.py gate_up_proj_fused_tp*).
+    WEIGHT_CACHE_FORMAT_VERSION = 3
 
     def weight_cache_is_complete(self, dtype):
         """True when the on-disk ttnn weight cache for this (model, dtype, mesh shape) was

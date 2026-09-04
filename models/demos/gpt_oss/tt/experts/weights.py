@@ -16,15 +16,39 @@ from .config import ExpertConfig
 
 @dataclass(frozen=True)  # ✅ Make immutable to prevent accidental modification
 class ExpertWeights:
-    """Container for expert weight tensors - immutable after creation"""
+    """Container for expert weight tensors - immutable after creation.
 
-    gate_proj: ttnn.Tensor
-    up_proj: ttnn.Tensor
-    down_proj: ttnn.Tensor
-    gate_proj_bias: ttnn.Tensor
-    up_proj_bias: ttnn.Tensor
-    down_proj_bias: ttnn.Tensor
+    Gate and up projections are stored FUSED along the output dimension so the two projections run
+    as one sparse_matmul (the per-expert cost of that op is a fixed overhead, not bandwidth, so one
+    call with N = 2 * intermediate is ~half the price of two calls). Per device the fused output is
+    laid out as [gate (intermediate_padded_per_device) | up (intermediate_padded_per_device)], each
+    half zero-padded from intermediate_size_per_device up to a tile multiple so that the halves can
+    be split at a tile boundary and fed to SwiGLU / the down projection without any re-layout.
+    """
+
+    gate_up_proj: ttnn.Tensor  # [1, E, hidden, 2 * intermediate_padded_per_device] per device
+    down_proj: ttnn.Tensor  # [1, E, intermediate_size_per_device, hidden] per device
+    gate_up_proj_bias: ttnn.Tensor  # [1, E, 2 * intermediate_padded_per_device]
+    down_proj_bias: ttnn.Tensor  # [1, E, hidden]; only TP rank 0 holds non-zeros
     intermediate_size_per_device: int
+    intermediate_padded_per_device: int
+    # Expert-major copy of the fused gate/up bias, [E, 1, 2 * intermediate_padded_per_device]: broadcast
+    # directly onto [1, E, tokens, N] activations (prefill and multi-user decode) without a per-call
+    # ttnn.transpose. Stored bfloat8_b (the activations it is added to are bfloat8_b).
+    gate_up_proj_bias_t: ttnn.Tensor = None
+
+
+def _fuse_gate_up_per_device(gate, up, tp, local, padded):
+    """Interleave per-device gate and up column blocks: [..., tp * 2 * padded] laid out as
+    [gate_dev0 | up_dev0 | gate_dev1 | up_dev1 | ...] with each block zero-padded from `local` to `padded`
+    columns, so that column-parallel sharding across `tp` devices gives every device [gate | up]."""
+    out_shape = gate.shape[:-1] + (tp * 2 * padded,)
+    fused = gate.new_zeros(out_shape)
+    for d in range(tp):
+        base = d * 2 * padded
+        fused[..., base : base + local] = gate[..., d * local : (d + 1) * local]
+        fused[..., base + padded : base + padded + local] = up[..., d * local : (d + 1) * local]
+    return fused
 
 
 def load_expert_weights(
@@ -49,73 +73,60 @@ def load_expert_weights(
     Returns:
         ExpertWeights with loaded and sharded tensors
     """
-    # Calculate sharded dimensions
+    tp = mesh_config.decode.tp
     intermediate_size_per_device = mesh_config.shard_size(config.intermediate_size, mode=Mode.DECODE)
+    intermediate_padded_per_device = (
+        (intermediate_size_per_device + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
+    ) * ttnn.TILE_SIZE
+    fused_suffix = f"_fused_tp{tp}"
 
     if state_dict:
-        # Extract gate and up projections from fused weight
-        gate_proj = state_dict["gate_up_proj"][..., ::2].reshape(
-            1, config.num_experts, config.hidden_size, config.intermediate_size
-        )
-        up_proj = state_dict["gate_up_proj"][..., 1::2].reshape(
-            1, config.num_experts, config.hidden_size, config.intermediate_size
-        )
-        gate_proj_bias = state_dict["gate_up_proj_bias"][..., ::2].reshape(
-            1, config.num_experts, config.intermediate_size
-        )
-        up_proj_bias = state_dict["gate_up_proj_bias"][..., 1::2].reshape(
-            1, config.num_experts, config.intermediate_size
-        )
+        # HF stores gate/up interleaved along the last dim: even columns gate, odd columns up.
+        gate = state_dict["gate_up_proj"][..., ::2]  # [E, hidden, intermediate]
+        up = state_dict["gate_up_proj"][..., 1::2]
+        gate_bias = state_dict["gate_up_proj_bias"][..., ::2]  # [E, intermediate]
+        up_bias = state_dict["gate_up_proj_bias"][..., 1::2]
+        gate_up_proj = _fuse_gate_up_per_device(
+            gate, up, tp, intermediate_size_per_device, intermediate_padded_per_device
+        ).reshape(1, config.num_experts, config.hidden_size, tp * 2 * intermediate_padded_per_device)
+        gate_up_proj_bias = _fuse_gate_up_per_device(
+            gate_bias, up_bias, tp, intermediate_size_per_device, intermediate_padded_per_device
+        ).reshape(1, config.num_experts, tp * 2 * intermediate_padded_per_device)
+        gate_up_proj_bias_t = gate_up_proj_bias.permute(1, 0, 2).contiguous()  # [E, 1, tp * 2 * padded]
     else:
-        gate_proj = None
-        up_proj = None
-        gate_proj_bias = None
-        up_proj_bias = None
+        gate_up_proj = None
+        gate_up_proj_bias = None
+        gate_up_proj_bias_t = None
     # Get mesh mappers
     col_mesh_mapper = mesh_config.column_parallel(mesh_device)
     row_mesh_mapper = mesh_config.row_parallel(mesh_device)
 
-    # Load gate projection
-    gate_proj_tt = ttnn.as_tensor(
-        gate_proj,
+    gate_up_proj_tt = ttnn.as_tensor(
+        gate_up_proj,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=weight_dtype,
         mesh_mapper=col_mesh_mapper,
-        cache_file_name=get_cache_file_name(tensor_cache_path, "gate_proj"),
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-    # Load up projection
-    up_proj_tt = ttnn.as_tensor(
-        up_proj,
-        device=mesh_device,
-        layout=ttnn.TILE_LAYOUT,
-        dtype=weight_dtype,
-        mesh_mapper=col_mesh_mapper,
-        cache_file_name=get_cache_file_name(tensor_cache_path, "up_proj"),
+        cache_file_name=get_cache_file_name(tensor_cache_path, f"gate_up_proj{fused_suffix}"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     bias_dtype = ttnn.bfloat16
-    # Load gate bias
-    gate_proj_bias_tt = ttnn.as_tensor(
-        gate_proj_bias,
+    gate_up_proj_bias_tt = ttnn.as_tensor(
+        gate_up_proj_bias,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=bias_dtype,
         mesh_mapper=col_mesh_mapper,
-        cache_file_name=get_cache_file_name(tensor_cache_path, f"gate_proj_bias"),
+        cache_file_name=get_cache_file_name(tensor_cache_path, f"gate_up_proj_bias{fused_suffix}"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-
-    # Load up bias
-    up_proj_bias_tt = ttnn.as_tensor(
-        up_proj_bias,
+    gate_up_proj_bias_t_tt = ttnn.as_tensor(
+        gate_up_proj_bias_t,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
-        dtype=bias_dtype,
+        dtype=ttnn.bfloat8_b,
         mesh_mapper=col_mesh_mapper,
-        cache_file_name=get_cache_file_name(tensor_cache_path, f"up_proj_bias"),
+        cache_file_name=get_cache_file_name(tensor_cache_path, f"gate_up_proj_bias_t_bfp8{fused_suffix}"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
@@ -153,11 +164,11 @@ def load_expert_weights(
     )
 
     return ExpertWeights(
-        gate_proj=gate_proj_tt,
-        up_proj=up_proj_tt,
+        gate_up_proj=gate_up_proj_tt,
         down_proj=down_proj_tt,
-        gate_proj_bias=gate_proj_bias_tt,
-        up_proj_bias=up_proj_bias_tt,
+        gate_up_proj_bias=gate_up_proj_bias_tt,
         down_proj_bias=down_proj_bias_tt,
         intermediate_size_per_device=intermediate_size_per_device,
+        intermediate_padded_per_device=intermediate_padded_per_device,
+        gate_up_proj_bias_t=gate_up_proj_bias_t_tt,
     )

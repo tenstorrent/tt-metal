@@ -11,6 +11,7 @@ from .operations import (
     apply_expert_parallel_allreduce,
     apply_routing_weights,
     apply_sequence_parallel_allgather,
+    apply_swiglu,
     apply_tensor_parallel_allreduce,
     reduce_experts,
 )
@@ -69,139 +70,100 @@ def _process_prefill_chunk(
     ep,
     tp,
 ):
-    """Process a single chunk of the sequence in prefill mode."""
+    """Process a single chunk of the sequence in prefill mode.
+
+    The chunk is processed in `down_split_size` sub-splits along the sequence. For each split the fused
+    gate/up projection runs over the EP group's experts, the result is split into its gate and up halves,
+    SwiGLU is applied and the down projection follows; the per-expert outputs are weighted, reduced and
+    stream-concatenated. Working per split keeps the peak DRAM footprint at a few split-sized
+    [E, split, N] activations rather than chunk-sized ones.
+    """
     _, batch_size, seq_len, hidden_size = hidden_states.shape
     activation_dtype = ttnn.bfloat8_b
     TILE_SIZE = 32
-
-    # Reshape for prefill (group tokens into tiles)
-    # Note: unsqueeze_to_4D/reshape operations return views - do not deallocate originals
-    hidden_states_4D = ttnn.unsqueeze_to_4D(hidden_states)
-    hidden_states_4D = ttnn.reshape(hidden_states_4D, (1, seq_len // TILE_SIZE, TILE_SIZE, config.hidden_size))
-    group_size = seq_len // TILE_SIZE
-
-    # Prepare sparsity
-    # Note: prefill_sparsity is cached and reused, don't deallocate it
-    sparsity_repeated = ttnn.repeat(prefill_sparsity, (1, 1, group_size, 1))
-    sparsity_layout = sparsity_repeated
-
-    num_experts_per_tok = (config.num_experts // ep) * group_size
+    ip = weights.intermediate_padded_per_device
     output_tile = ttnn.Tile([32, 32])
-    # Gate projection
-    gate = ttnn.sparse_matmul(
-        hidden_states_4D,
-        weights.gate_proj,
-        sparsity=sparsity_layout,
-        nnz=num_experts_per_tok,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        output_tile=output_tile,
-        program_config=program_config.get_prefill_gate_up_config(
-            hidden_states_4D.shape[2], weights.gate_proj.shape[3], k=hidden_states_4D.shape[-1]
-        ),
-        dtype=activation_dtype,
-    )
-    # Note: transpose/reshape operations return views - do not deallocate originals
-    gate = ttnn.transpose(gate, 1, 3)
-    gate = ttnn.reshape(gate, (batch_size, config.num_experts, seq_len, weights.intermediate_size_per_device))
-    bias_transposed = ttnn.transpose(weights.gate_proj_bias, 1, 0)
-    gate = ttnn.add(gate, bias_transposed, output_tensor=gate)
+    experts_per_ep = config.num_experts // ep
 
-    # # Do partial swiglu before up projection to save memory (fused gate projection + swiglu gate activation)
-    # Part 1
-    gate = ttnn.clamp(gate, min=None, max=config.swiglu_limit, output_tensor=gate)
-    gate_alpha = ttnn.mul(gate, config.alpha)
-    gate_sigmoid = ttnn.sigmoid(gate_alpha)
-    gate_alpha.deallocate(True)
-    glu = ttnn.mul(gate, gate_sigmoid, output_tensor=gate)
-
-    gate_sigmoid.deallocate(True)
-
-    # Up projection
-    up = ttnn.sparse_matmul(
-        hidden_states_4D,
-        weights.up_proj,
-        sparsity=sparsity_layout,
-        nnz=num_experts_per_tok,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        output_tile=output_tile,
-        program_config=program_config.get_prefill_gate_up_config(
-            hidden_states_4D.shape[2], weights.up_proj.shape[3], k=hidden_states_4D.shape[-1]
-        ),
-        dtype=activation_dtype,
-    )
-    hidden_states_4D.deallocate(True)
-    # Note: sparsity_layout is created from repeat(prefill_sparsity), and prefill_sparsity
-    # is reused later (line 123, 151). Don't deallocate as repeat may return a view/alias.
-
-    # Note: transpose/reshape operations return views - do not deallocate originals
-    up = ttnn.transpose(up, 1, 3)
-    up = ttnn.reshape(up, (batch_size, config.num_experts, seq_len, weights.intermediate_size_per_device))
-    bias_transposed = ttnn.transpose(weights.up_proj_bias, 1, 0)
-    up = ttnn.add(up, bias_transposed, output_tensor=up)
-
-    # Apply SwiGLU (consumes gate and up internally)
-
-    # partial swiglu part 2
-    up = ttnn.clamp(up, min=-config.swiglu_limit, max=config.swiglu_limit, output_tensor=up)
-    up = ttnn.add(up, 1, output_tensor=up)
-    down_input = ttnn.mul(up, glu, output_tensor=up)
-    glu.deallocate(True)
-
-    # Disabled regular swiglu to save memory by deallocating gate early.
-    # down_input = apply_swiglu(gate, up, config)
-
-    # Note: reshape returns a view - do not deallocate original
-    down_input = ttnn.reshape(down_input, (1, config.num_experts, seq_len, weights.intermediate_size_per_device))
-
-    # Update routing weights and sparsity for down projection
-    num_experts_per_tok = config.num_experts // ep
+    # Routing weights: zero the experts owned by other EP groups, then [S, E] -> [B, E, S, 1]
+    # Note: prefill_sparsity is cached and reused, don't deallocate it
     prefill_sparsity_reshaped = ttnn.reshape(prefill_sparsity, (1, config.num_experts))
-    routing_weights = ttnn.mul(
-        routing_weights,
-        prefill_sparsity_reshaped,
-        output_tensor=routing_weights,
-    )
-
+    routing_weights = ttnn.mul(routing_weights, prefill_sparsity_reshaped, output_tensor=routing_weights)
     # Note: permute/reshape operations return views - do not deallocate originals
     routing_weights = ttnn.permute(routing_weights, (1, 0))
     routing_weights = ttnn.reshape(routing_weights, (batch_size, config.num_experts, seq_len, 1))
 
-    # Process down projection in splits if needed
+    # This function consumes hidden_states and routing_weights (the split copies, or the tensors
+    # themselves when there is a single split, are released as each split is processed).
     split_size = program_config.get_down_split_size(seq_len)
     if seq_len > split_size:
-        down_input_list = ttnn.split(down_input, split_size, dim=2)
-        down_input.deallocate(True)
-        routing_weights_list = ttnn.split(routing_weights, split_size, dim=2)
+        hidden_list = ttnn.split(hidden_states, split_size, dim=2)
+        hidden_states.deallocate(True)  # the splits are device copies; the chunk is dead from here on
+        routing_list = ttnn.split(routing_weights, split_size, dim=2)
         routing_weights.deallocate(True)
     else:
-        down_input_list = [down_input]
-        routing_weights_list = [routing_weights]
+        hidden_list = [hidden_states]
+        routing_list = [routing_weights]
 
     # Process each split and stream-concatenate to avoid holding all split outputs.
     next_states_reduced_acc = None
-    for i, down_input_split in enumerate(down_input_list):
+    for hidden_split, routing_split in zip(hidden_list, routing_list):
+        split_len = hidden_split.shape[2]
+        group_size = split_len // TILE_SIZE
+
+        # Group tokens into tiles: [1, B, split, H] -> [1, G, 32, H]. This reshape is a view of
+        # hidden_split, so deallocating hidden_4D below releases the split itself (intended).
+        hidden_4D = ttnn.unsqueeze_to_4D(hidden_split)
+        hidden_4D = ttnn.reshape(hidden_4D, (1, group_size, TILE_SIZE, config.hidden_size))
+        sparsity_repeated = ttnn.repeat(prefill_sparsity, (1, 1, group_size, 1))
+
+        # Fused gate/up projection: [1, G, 32, H] x [1, E, H, 2 * Ip] -> [1, G, 1, E, 32, 2 * Ip]
+        gate_up = ttnn.sparse_matmul(
+            hidden_4D,
+            weights.gate_up_proj,
+            sparsity=sparsity_repeated,
+            nnz=experts_per_ep * group_size,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            output_tile=output_tile,
+            program_config=program_config.get_prefill_gate_up_config(
+                hidden_4D.shape[2], weights.gate_up_proj.shape[3], k=hidden_4D.shape[-1]
+            ),
+            dtype=activation_dtype,
+        )
+        hidden_4D.deallocate(True)
+        # Note: transpose/reshape operations return views - do not deallocate originals
+        gate_up = ttnn.transpose(gate_up, 1, 3)
+        gate_up = ttnn.reshape(gate_up, (batch_size, config.num_experts, split_len, 2 * ip))
+        gate_up = ttnn.add(gate_up, weights.gate_up_proj_bias_t, output_tensor=gate_up)
+        # Split at the tile-aligned half: gate = [..., :Ip], up = [..., Ip:]
+        gate = ttnn.slice(gate_up, [0, 0, 0, 0], [batch_size, config.num_experts, split_len, ip])
+        up = ttnn.slice(gate_up, [0, 0, 0, ip], [batch_size, config.num_experts, split_len, 2 * ip])
+        gate_up.deallocate(True)
+
+        # SwiGLU (consumes gate and up): [B, E, split, Ip]; the zero-padded columns stay exactly 0.
+        down_input = apply_swiglu(gate, up, config)
+
         down = ttnn.sparse_matmul(
-            down_input_split,
+            down_input,
             weights.down_proj,
             sparsity=prefill_sparsity,
-            nnz=num_experts_per_tok,
+            nnz=experts_per_ep,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             output_tile=output_tile,
             is_input_a_sparse=True,
             program_config=program_config.get_prefill_down_config(
-                down_input_split.shape[2], weights.down_proj.shape[-1], k=down_input_split.shape[-1]
+                down_input.shape[2], weights.down_proj.shape[-1], k=down_input.shape[-1]
             ),
             dtype=activation_dtype,
         )
-        down_input_split.deallocate(True)
+        down_input.deallocate(True)
 
         # Apply bias and routing weights
-        split_seq_len = seq_len if seq_len < split_size else split_size
         # Note: reshape returns a view - do not deallocate original
-        next_states = ttnn.reshape(down, (batch_size, config.num_experts, split_seq_len, config.hidden_size))
+        next_states = ttnn.reshape(down, (batch_size, config.num_experts, split_len, config.hidden_size))
         bias_transposed = ttnn.transpose(weights.down_proj_bias, 1, 0)
         next_states = ttnn.add(next_states, bias_transposed, output_tensor=next_states)
-        next_states = apply_routing_weights(next_states, routing_weights_list[i])
+        next_states = apply_routing_weights(next_states, routing_split)
 
         # Reduce across experts
         next_states_reduced = reduce_experts(next_states)
@@ -215,7 +177,7 @@ def _process_prefill_chunk(
             next_states_reduced_acc.deallocate(True)
             next_states_reduced.deallocate(True)
             next_states_reduced_acc = next_states_concat
-        routing_weights_list[i].deallocate(True)
+        routing_split.deallocate(True)
 
     return next_states_reduced_acc
 

@@ -50,6 +50,13 @@ class ProgramConfig:
     # Core grid sizes for decode
     decode_gate_up_cores: tuple[int, int] = (3, 4)
     decode_down_cores: tuple[int, int] = (5, 6)
+    # Optional grid for the down projection when a decode step carries many users. With many active
+    # experts the per-expert compute dominates and a wider grid pays off, while with few users the
+    # 128-slot sparsity scan dominates and fewer multicast receivers are cheaper (measured on P150x8:
+    # 1 user 120 vs 174 us, 32 users 385 vs 289 us per layer for 5x6 vs 9x10). The crossover has not
+    # been measured; the threshold below is conservative.
+    decode_down_cores_batched: tuple[int, int] | None = None
+    decode_down_batched_min_tokens: int = 16
 
     # Core grid sizes for prefill
     prefill_gate_up_cores: tuple[int, int] = (3, 4)
@@ -75,6 +82,8 @@ class ProgramConfig:
         """Validate configuration on creation"""
         self._validate_cores("decode_gate_up_cores", self.decode_gate_up_cores)
         self._validate_cores("decode_down_cores", self.decode_down_cores)
+        if self.decode_down_cores_batched is not None:
+            self._validate_cores("decode_down_cores_batched", self.decode_down_cores_batched)
         self._validate_cores("prefill_gate_up_cores", self.prefill_gate_up_cores)
         self._validate_cores("prefill_down_cores", self.prefill_down_cores)
 
@@ -132,16 +141,25 @@ class ProgramConfig:
             MatmulMultiCoreReuseMultiCast1DProgramConfig
         """
         core_x, core_y = cores
-        num_cores = core_x * core_y
         Nt = int(math.ceil(n / 32))
-        # Ceiling division: per_core_N = ceil(Nt / num_cores). The kernel then
-        # computes num_blocks_x = ceil(Nt / per_core_N) and asserts it fits in
-        # num_cores. Using floor division here breaks when Nt is not a multiple
-        # of num_cores (e.g. tp=1 on a single Blackhole card: Nt=90, cores=12 →
-        # floor=7 → 13 blocks > 12 cores). For all current Wormhole configs Nt
-        # is divisible by num_cores so ceil and floor agree — no WH change.
-        per_core_N = (Nt + num_cores - 1) // num_cores
-
+        # The mcast_in0 sparse matmul hands out ceil(Nt / per_core_N) output blocks to the first
+        # cores of the grid in row-major order and multicasts in0 to the bounding box of those
+        # cores; the factory requires the two sets to be identical (a partially filled last row
+        # would leave receivers without work and hang). Pick the largest sub-rectangle (w <= core_x,
+        # h <= core_y) whose block count fills it exactly; ties prefer the wider shape (closest to
+        # the requested grid). For the shipped shapes (TP=8: Nt=24 on 6x4, Nt=90 on 5x6 or 9x10)
+        # this is the identity; for other TP factors it shrinks the grid (e.g. TP=4: Nt=46 -> 4x4,
+        # TP=1: Nt=180 -> 5x4) instead of tripping the factory's rectangularity check.
+        best = None
+        for w in range(core_x, 0, -1):
+            for h in range(core_y, 0, -1):
+                num_cores = w * h
+                pcn = (Nt + num_cores - 1) // num_cores
+                if (Nt + pcn - 1) // pcn != num_cores:
+                    continue
+                if best is None or num_cores > best[0] or (num_cores == best[0] and w > best[1]):
+                    best = (num_cores, w, h, pcn)
+        _, core_x, core_y, per_core_N = best  # num_cores == 1 always qualifies, so best is never None
         # The sparse matmul kernel asserts `Kt % in0_block_w == 0`. Different
         # tp factors produce different Kt (e.g. down's K = intermediate/tp:
         # tp=8 → Kt=12, tp=1 → Kt=90), and the configured in0_block_w may not
@@ -219,9 +237,12 @@ class ProgramConfig:
     def get_decode_down_config(
         self, m: int, n: int, k: int = None
     ) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
-        """Get program config for decode down projection"""
+        """Get program config for decode down projection (m = tokens in the step)"""
+        cores = self.decode_down_cores
+        if self.decode_down_cores_batched is not None and m >= self.decode_down_batched_min_tokens:
+            cores = self.decode_down_cores_batched
         return self._build_matmul_config(
-            self.decode_down_cores,
+            cores,
             m,
             n,
             in0_block_w=self.decode_down_in0_block_w,

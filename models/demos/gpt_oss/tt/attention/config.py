@@ -47,6 +47,13 @@ class ProgramConfig:
     prefill_k_chunk_size_large: int = 256
     prefill_threshold: int = 2048
 
+    # Multi-user decode: optionally let SDPA use the whole device compute grid when it has more cores
+    # than the default 8x8 (Blackhole: 13x10 = 130 cores -> 4 cores per user at batch 32 instead of 2).
+    # Q is resharded onto that grid right before SDPA (decode.py); the 8-wide grid stays for RoPE / KV
+    # update. Off by default: measured no step-time gain for gpt-oss-20b at batch 32 (8K context) on
+    # P150x8, so the standard 8x8 grid is kept. Kept as a knob for long-context tuning.
+    decode_sdpa_full_grid_for_batch: bool = False
+
     # Compute config
     math_fidelity: str = "HiFi4"
     math_approx_mode: bool = False
@@ -97,10 +104,21 @@ class ProgramConfig:
         if self.math_fidelity not in valid_fidelities:
             raise ValueError(f"math_fidelity must be one of {valid_fidelities}, got {self.math_fidelity}")
 
-    def get_decode_sdpa_config(self, mesh_device) -> ttnn.SDPAProgramConfig:
+    def get_decode_sdpa_grid(self, mesh_device, batch_size: int = 1) -> ttnn.CoreCoord:
+        """Core grid for SDPA decode. 8x8 by default (one user per core row-major, matching the
+        Q/K/V shard placement); the full device grid for multi-user decode when it is larger and
+        the flag allows it, so each user gets more K/V-chunk workers."""
+        grid = ttnn.CoreCoord(8, 8)
+        if self.decode_sdpa_full_grid_for_batch and batch_size > 8:
+            device_grid = mesh_device.compute_with_storage_grid_size()
+            if device_grid.x * device_grid.y > grid.x * grid.y:
+                grid = ttnn.CoreCoord(device_grid.x, device_grid.y)
+        return grid
+
+    def get_decode_sdpa_config(self, mesh_device, batch_size: int = 1) -> ttnn.SDPAProgramConfig:
         """Get SDPA config for decode mode"""
         return ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
+            compute_with_storage_grid_size=self.get_decode_sdpa_grid(mesh_device, batch_size),
             q_chunk_size=self.decode_q_chunk_size,
             k_chunk_size=self.decode_k_chunk_size,
             exp_approx_mode=False,

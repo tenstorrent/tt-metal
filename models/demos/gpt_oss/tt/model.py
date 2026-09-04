@@ -124,6 +124,18 @@ class Model:
         self.max_local_batch_size = max_local_batch_size
         self.users_row_sharded = users_row_sharded
 
+        # Decode places one user per core on an 8-wide grid (attention/decode.py) and RotarySetup
+        # must put that user's cos/sin/trans_mat shard on the same core. RotarySetup only uses the
+        # 8-wide CoreGrid(8, 8) layout on Blackhole when the batch is a multiple of 32; for other
+        # batch sizes it lays users out row-wise over the *device* grid (13 wide on Blackhole), which
+        # coincides with the 8-wide layout only while all users fit in the first row (<= 8). Anything
+        # in between would silently rotate user b with user b''s angles, so refuse it up front.
+        if "blackhole" in ttnn.get_arch_name() and 8 < max_local_batch_size and max_local_batch_size % 32 != 0:
+            raise ValueError(
+                f"max_local_batch_size={max_local_batch_size} is not supported on Blackhole: use <= 8 or a "
+                "multiple of 32 users per mesh row (pad the batch) so the RoPE and QKV shard grids agree."
+            )
+
         self.ccl_manager = ccl_manager
 
         # Use mode-aware MeshConfig (stores separate configs for prefill and decode)
@@ -516,6 +528,16 @@ class Model:
         """
         # For non-row-sharded b<32, token buffer is padded to 32 — only embed real tokens
         actual_batch = current_pos.shape[-1]
+        if not self.users_row_sharded and actual_batch != self.max_local_batch_size:
+            # KV-update shard grid, RoPE cos/sin batch and the sampling lanes are all sized from
+            # max_local_batch_size at construction; a partial batch must be padded by the caller
+            # (unused slots: any token, position -1 is skipped by the on-device position increment).
+            raise ValueError(
+                f"Decode got {actual_batch} users but the model was built for max_local_batch_size="
+                f"{self.max_local_batch_size}; pad the batch to the configured size. (If this fires from "
+                "Generator's decode-trace warmup, the warmup page table has fewer rows than the batch: "
+                "run with warmup_prefill=False and pass the full page table to the first prefill.)"
+            )
         if not self.users_row_sharded and tokens.shape[-1] > actual_batch:
             tokens_for_embed = tokens[:, :, :, :actual_batch]
         else:
