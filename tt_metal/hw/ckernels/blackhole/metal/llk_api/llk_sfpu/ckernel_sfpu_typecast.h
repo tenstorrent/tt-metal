@@ -1005,6 +1005,9 @@ inline void calculate_typecast_int8_to_int32() {
     }
 }
 
+// Also serves the Float16_b/Bfp8_b/Bfp4_b outputs. Those need no FP32_TO_FP16B round before the
+// store the way the uint path does, because every value here is in [-128, 127] and so is exact in
+// bfloat16's 8-bit significand.
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_typecast_int8_to_fp32() {
 #pragma GCC unroll 8

@@ -947,13 +947,18 @@ def test_typecast_int8_exhaustive(shape, layout, memory_config, tt_output_dtype,
         (torch.float32, ttnn.float32),
         (torch.bfloat16, ttnn.bfloat16),
         (torch.int32, ttnn.int32),
+        (torch.int32, ttnn.uint16),
+        (torch.int32, ttnn.uint32),
     ],
 )
 def test_typecast_to_int8_wraps(layout, pt_input_dtype, tt_input_dtype, device):
     """Narrowing to int8 truncates towards zero and wraps modulo 256, like the uint8 narrowing."""
-    values = torch.arange(-608, 608, dtype=torch.float32)
-    if pt_input_dtype != torch.int32:
-        values = values + 0.7
+    if tt_input_dtype in (ttnn.uint16, ttnn.uint32):
+        values = torch.arange(0, 512, dtype=torch.float32)
+    else:
+        values = torch.arange(-608, 608, dtype=torch.float32)
+        if pt_input_dtype != torch.int32:
+            values = values + 0.7
     torch_input = values.reshape(1, 1, -1, 32).to(pt_input_dtype)
 
     input_tensor = ttnn.from_torch(torch_input, dtype=tt_input_dtype, layout=layout, device=device)

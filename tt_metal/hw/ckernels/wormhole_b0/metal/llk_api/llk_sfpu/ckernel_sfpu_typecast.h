@@ -1031,6 +1031,9 @@ inline void calculate_typecast_int8_to_int32() {
     }
 }
 
+// Also serves the Float16_b/Bfp8_b/Bfp4_b outputs. Those need no FP32_TO_FP16B round before the
+// store the way the uint path does, because every value here is in [-128, 127] and so is exact in
+// bfloat16's 8-bit significand.
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_typecast_int8_to_fp32() {
 #pragma GCC unroll 8
@@ -1039,7 +1042,7 @@ inline void calculate_typecast_int8_to_fp32() {
         TTI_SFPXOR(0, p_sfpu::LREG12, p_sfpu::LREG0, 0);  // e = b ^ 0x80 in [0, 255]
         TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, 0);
         TTI_SFPADDI(TYPECAST_INT8_MINUS_128_IMM16, p_sfpu::LREG0, 0);
-        TTI_SFPNOP;                                                    // SFPADDI result is not readable next cycle
+        TTI_SFPNOP;  // SFPADDI result is not readable next cycle
         TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_2, 0);
     }
 }

@@ -52,6 +52,7 @@ void bind_global_typecast(nb::module_& mod) {
             Limitations:
                 -  ND Sharded tensors are not supported.
                 -  Narrowing to UINT8 or INT8 truncates towards zero and wraps modulo 256; it does not saturate.
+                -  Widening from INT8 sign-extends to INT32 and UINT32, but clamps negatives to 0 for UINT16.
                 -  If preallocated output tensor is used, it must match the input tensor's shape and layout.
         )doc";
 

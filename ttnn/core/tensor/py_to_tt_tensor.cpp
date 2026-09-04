@@ -52,7 +52,7 @@ bool can_exec_ops_on_device(DataType type) {
         case DataType::UINT16:
             // Tilize doesn't support uint16.
         case DataType::UINT8:
-            // Untilize doesn't support uint8
+            // https://github.com/tenstorrent/tt-metal/issues/21682 (typecast doesn't support uint8)
         case DataType::INT8:
             // https://github.com/tenstorrent/tt-metal/issues/50401 (tilize/untilize doesn't support int8)
         case DataType::FP8_E4M3:
