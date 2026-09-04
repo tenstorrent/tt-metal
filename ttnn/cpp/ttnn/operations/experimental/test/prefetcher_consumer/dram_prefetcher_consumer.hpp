@@ -13,20 +13,27 @@
 #include <tt-metalium/mesh_device.hpp>
 
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operations/experimental/tensor_prefetcher/tensor_prefetcher.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::experimental::test {
 
-// Bench-only companion to `ttnn.dram_prefetcher`. Loads a discard-only receiver kernel
-// on each receiver core of the supplied GCB; each receiver runs `wait_front(1);
-// pop_front(1);` in a loop `num_iters` times.
+// Bench-only companion to the Tensor prefetcher. Loads a discard-only receiver kernel on each
+// receiver core of the supplied delivery target; each receiver runs `wait_front(1); pop_front(1);`
+// in a loop `num_iters` times. Which target is supplied selects the transport, the same way
+// queue_tensor_prefetcher_request does, so one bench can measure either.
 struct DramPrefetcherConsumerDeviceOperation {
     struct operation_attributes_t {
         uint32_t num_iters;
+        // Per-receiver bytes one wait_front/pop_front covers: the GCB's receiver page size, or the
+        // entry size the PrefetcherPipes are Attached at. Either way it must be what the sender
+        // pushes per receiver per block.
         uint32_t page_size_bytes;
-        // optional<> because reflection-based profiler serialization needs a default-
-        // constructible attribute struct, and GlobalCircularBuffer has no default ctor.
+        // Exactly one of these is set. optional<> because reflection-based profiler serialization
+        // needs a default-constructible attribute struct, and GlobalCircularBuffer has no default
+        // ctor.
         std::optional<tt::tt_metal::experimental::GlobalCircularBuffer> global_cb;
+        std::optional<ttnn::operations::experimental::TensorPrefetcherPipes> prefetcher_pipes;
         ttnn::MeshDevice* mesh_device;
     };
 
@@ -68,5 +75,15 @@ void test_dram_prefetcher_consumer(
     uint32_t num_iters,
     uint32_t page_size_bytes,
     const tt::tt_metal::experimental::GlobalCircularBuffer& global_cb);
+
+// Same discard-only drain against a PrefetcherPipe target (bound as
+// `ttnn.experimental.test_tensor_prefetcher_pipe_consumer`), so the two transports can be benched
+// head to head. `num_iters` counts entries per receiver, and `page_size_bytes` is the entry size to
+// Attach at.
+void test_tensor_prefetcher_pipe_consumer(
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    uint32_t num_iters,
+    uint32_t page_size_bytes,
+    const ttnn::operations::experimental::TensorPrefetcherPipes& prefetcher_pipes);
 
 }  // namespace ttnn::operations::experimental::test
