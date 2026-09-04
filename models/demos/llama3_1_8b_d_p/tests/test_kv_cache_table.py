@@ -33,7 +33,11 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.mla.utils import block_cyclic_reorder
-from models.demos.llama3_1_8b_d_p.tt.attention.kv_cache import NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, allocate_kv_cache
+from models.demos.llama3_1_8b_d_p.tt.attention.kv_cache import (
+    NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
+    LlamaKVCache,
+    allocate_kv_cache,
+)
 from models.demos.llama3_1_8b_d_p.tt.runners.kv_chunk_table import (
     build_kv_chunk_address_table,
     chunk_size_bytes,
@@ -70,7 +74,16 @@ def test_kv_cache_table(mesh_device, device_params, num_layers, num_users, reset
     chunk_local = chunk_size // sp
     assert chunk_local % NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK == 0
 
-    kv_cache = allocate_kv_cache(
+    # Allocate through the production allocator to pin the layout, then build a POPULATED tensor with
+    # that same memory config. The comparison below is between two access paths to the SAME stored
+    # bytes — ttnn's own per-device read-back, and the table's computed DRAM address — so what is
+    # under test is purely the address arithmetic.
+    #
+    # Deliberately NOT allocate-then-``ttnn.copy``: a bf8 -> bf8 copy re-quantizes through an
+    # intermediate, so the cache ends up holding a second, slightly different quantization of the
+    # same numbers. That shows up as a few low bits differing (observed: 0.3125 vs 0.30859 on one
+    # element) and reads exactly like an addressing bug when it is not one.
+    empty = allocate_kv_cache(
         mesh_device,
         num_layers=num_layers,
         max_seq_len=seq_len,
@@ -79,11 +92,11 @@ def test_kv_cache_table(mesh_device, device_params, num_layers, num_users, reset
         head_dim=hd,
         num_kv_heads_local=n_kv_local,
     )
+    mem_config, cache_dtype = empty.k.memory_config(), empty.k.dtype
 
-    # A pattern that is distinct per (slot, layer, head, position, column) so any mis-addressing
-    # lands on visibly wrong data rather than a plausible neighbour.
-    def pattern(cache_name):
-        base = 0.0 if cache_name == "k" else 0.5
+    # A pattern distinct per (slot, layer, head, position, column), so any mis-addressing lands on
+    # visibly wrong data rather than a plausible neighbour.
+    def pattern(base):
         t = torch.zeros(num_users * num_layers, n_kv, seq_len, hd)
         for b in range(num_users * num_layers):
             for h in range(n_kv):
@@ -92,26 +105,38 @@ def test_kv_cache_table(mesh_device, device_params, num_layers, num_users, reset
                 t[b, h] = base + b * 1000.0 + h * 100.0 + pos * 0.01 + col * 0.0001
         return t
 
-    written = {}
-    for cache_name, cache_tensor in (("k", kv_cache.k), ("v", kv_cache.v)):
-        host = pattern(cache_name)
-        written[cache_name] = host
+    dims = [None, None]
+    dims[sp_axis], dims[tp_axis] = 2, 1
+
+    caches, stored = {}, {}
+    for name, base in (("k", 0.0), ("v", 0.5)):
         # Lay the host tensor out exactly as the device holds it: sequence block-cyclic on the SP
         # rows, KV heads sharded on the TP cols.
-        host_bc = block_cyclic_reorder(host, chunk_local, sp, seq_dim=2)
-        dims = [None, None]
-        dims[sp_axis], dims[tp_axis] = 2, 1
-        staged = ttnn.from_torch(
+        host_bc = block_cyclic_reorder(pattern(base), chunk_local, sp, seq_dim=2)
+        tensor = ttnn.from_torch(
             host_bc,
-            dtype=cache_tensor.dtype,
+            dtype=cache_dtype,
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=cache_tensor.memory_config(),
+            memory_config=mem_config,
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(rows, cols), dims=tuple(dims)),
         )
-        ttnn.copy(staged, cache_tensor)
-        staged.deallocate(True)
+        assert tensor.memory_config() == mem_config, "populated cache must use the allocator's memory config"
+        caches[name] = tensor
+        dts = ttnn.get_device_tensors(tensor)
+        stored[name] = [ttnn.to_torch(dts[i]).to(torch.bfloat16) for i in range(rows * cols)]
     ttnn.synchronize_device(mesh_device)
+
+    kv_cache = LlamaKVCache(
+        k=caches["k"],
+        v=caches["v"],
+        num_users=num_users,
+        num_layers=num_layers,
+        max_seq_len=seq_len,
+        sp=sp,
+        num_kv_heads_local=n_kv_local,
+        head_dim=hd,
+    )
 
     table = build_kv_chunk_address_table(
         mesh_device=mesh_device,
@@ -129,26 +154,29 @@ def test_kv_cache_table(mesh_device, device_params, num_layers, num_users, reset
     specs = config_specs(n_kv)
     assert table.num_configs() == len(specs) == 2 * n_kv
 
-    # Reference in the cache's own dtype, so the comparison is bit-exact rather than approximate.
-    def to_cache_dtype(t):
-        return ttnn.to_torch(ttnn.from_torch(t, dtype=kv_cache.k.dtype, layout=ttnn.TILE_LAYOUT)).to(torch.bfloat16)
-
-    ref_bf8 = {name: to_cache_dtype(t) for name, t in written.items()}
     chunk_shape = [1, 1, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, hd]
-
     checked = 0
     for config_id, (label, cache_name, head) in enumerate(specs):
+        col = head // n_kv_local  # TP column carrying this head
+        h_local = head % n_kv_local  # its index within that chip's head dim
         for slot in range(num_users):
             for layer in range(num_layers):
                 batch = slot * num_layers + layer
                 for position in range(0, seq_len, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
+                    # Invert the writer's map to find which chip and which of its local rows hold
+                    # this global position: the chunk index picks the row offset, the offset within
+                    # the chunk picks the SP row.
+                    seq_chunk, within = divmod(position, chunk_size)
+                    row, off = divmod(within, chunk_local)
+                    local_row = seq_chunk * chunk_local + off
+
                     raw = table.read_device_chunk(layer=layer, position=position, slot=slot, config_id=config_id)
                     chunk_tt = ttnn.experimental.disaggregation.tensor_from_bfp8_bytes(raw, chunk_shape)
                     got = ttnn.to_torch(chunk_tt).to(torch.bfloat16)
-                    want = ref_bf8[cache_name][
+                    want = stored[cache_name][row * cols + col][
                         batch : batch + 1,
-                        head : head + 1,
-                        position : position + NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
+                        h_local : h_local + 1,
+                        local_row : local_row + NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
                         :,
                     ]
                     assert_equal(got, want)

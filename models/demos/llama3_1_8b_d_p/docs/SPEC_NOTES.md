@@ -217,6 +217,33 @@ unsatisfiable, and nothing in the template surfaces the conflict.
 }
 ```
 
+### 6b. `per_layer_kv` is a single number, but K and V do not behave the same
+
+Measured on the real checkpoint, 32 layers, 2048 tokens, one-shot, `cache_dtype = bfloat8_b`
+(the spec's value), against an fp32 CPU reference:
+
+| tensor | min PCC | max PCC |
+|---|---|---|
+| K (post-RoPE) | 0.9983 | 0.9999 |
+| **V (raw)** | **0.9910** | 0.9998 |
+
+V is consistently the worse of the two, and its minimum sits just above the spec's
+`per_layer_kv = 0.99` gate. That is not a bug — V is stored raw with a wider dynamic range, while
+RoPE is norm-preserving and leaves K better conditioned for a block-float format — but it means the
+single threshold is effectively a **V** threshold, with a margin of ~0.001 at these settings. A
+longer context or a different prompt could dip a layer below it without anything having regressed.
+
+**Proposed:** split the gate, and tie it to the cache dtype the way §6 proposes for module PCC:
+
+```jsonc
+"acceptance": {
+  "pcc": {
+    "per_layer_kv": { "k": 0.995, "v": 0.99 },
+    "_note": "measured at cache_dtype bfloat8_b; V is the binding constraint. A single number gates on V."
+  }
+}
+```
+
 Same shape applies to the still-open `attn_weights` contest the spec records in `known_risks`
 (llm_perf says bfp4, tt_transformers' accuracy path says bfp8). This package makes the dtype a
 constructor argument on both the attention and the MLP so the question can be **measured** rather
@@ -314,6 +341,45 @@ Worth noting the recipe's own §"Duplication the canonical entries are hiding" a
 **Proposed:** either hoist `MeshConfig`/`CCLManager` into `common/prefill` (the recipe's stated P7
 intent), or make the fixed-reference table name ONE package per coupled group the way the KV cluster
 already does.
+
+---
+
+## 8c. The `model_config` contract is "``FABRIC_PAYLOAD_SIZE``, etc.", and `PREFILL_NUM_LAYERS` defaults to another model's depth
+
+**Severity: medium — one is a loud AttributeError; the other is not loud at all.**
+
+Two separate problems hit at P3, both in the adapter/engine boundary rather than the model.
+
+**(a) The `model_config` class contract is undocumented.** `ADDING_A_PREFILL_MODEL.md` says the
+adapter's `model_config` is a "static model-dimension constants class (must expose
+`FABRIC_PAYLOAD_SIZE`, etc.)". The "etc." is load-bearing: grepping the engine and the shared
+producer, what is actually read off it is
+
+    FABRIC_PAYLOAD_SIZE   HEAD_DIM   NUM_KEY_VALUE_HEADS   ROTARY_DIM
+
+(plus MLA-only `KV_LORA_RANK` / `QK_ROPE_HEAD_DIM` / `INDEX_HEAD_DIM`). A new model discovers each
+one by crashing on it. `FABRIC_PAYLOAD_SIZE` in particular is not an architecture constant a spec
+would naturally carry — it is the max fabric packet payload, conventionally set equal to the
+embedding dim.
+
+**Proposed:** state the required attribute set in `ADDING_A_PREFILL_MODEL.md` §1, or give
+`PrefillModelAdapter` a `ModelDims` Protocol so a missing attribute is a type error rather than a
+runtime one.
+
+**(b) `PREFILL_NUM_LAYERS` defaults to 61.** In `prefill_runner.py`:
+
+```python
+NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", 61))
+```
+
+61 is DeepSeek-V3's layer count. Any model that does not set the variable builds **61 layers**, not
+its own, and the first symptom is a log line reading `layers=[0, 61)` that is easy to skim past.
+Llama has 32; the KV cache, the slot packing and the layer split would all have been silently wrong.
+
+**Proposed:** default it to the model's own depth — the adapter already loads the HF config, so
+`hf_config.num_hidden_layers` is available before this is needed — and treat an explicit
+`PREFILL_NUM_LAYERS` as an override for partial-depth debugging only. Failing that, make it required
+and assert it against the config. This package pins it in its manifest.
 
 ---
 

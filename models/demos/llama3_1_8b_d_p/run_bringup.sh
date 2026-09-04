@@ -69,11 +69,13 @@ stage_m() {
 }
 
 stage_p() {
-    # P1/P2 need a real checkpoint (HF_MODEL); they skip cleanly without one.
+    # P1/P2 need a real checkpoint. Without HF_MODEL the test skips itself cleanly, so say so once
+    # here rather than reporting a skipped group as a pass.
     if [ -n "${HF_MODEL:-}" ]; then
-        PREFILL_CHUNKED=0 && export PREFILL_CHUNKED=0 && run p1_kv_pcc_oneshot "$TESTS/galaxy_prefill_kv_pcc.py"
-        export PREFILL_CHUNKED=1 && run p2_kv_pcc_chunked "$TESTS/galaxy_prefill_kv_pcc.py"
-        unset PREFILL_CHUNKED
+        export PREFILL_KV_PCC_SEQ_LEN="${PREFILL_KV_PCC_SEQ_LEN:-2048}"
+        PREFILL_CHUNKED=0 run p1_kv_pcc_oneshot "$TESTS/galaxy_prefill_kv_pcc.py" -k "8x4"
+        PREFILL_CHUNKED=1 PREFILL_CHUNK_SIZE="${PREFILL_CHUNK_SIZE:-512}" \
+            run p2_kv_pcc_chunked "$TESTS/galaxy_prefill_kv_pcc.py" -k "8x4"
     else
         echo "=== p1/p2 skipped (set HF_MODEL to a Llama-3.1-8B-Instruct checkpoint) ==="
     fi
@@ -81,15 +83,31 @@ stage_p() {
     run p4_kv_table "$TESTS/test_kv_cache_table.py" -k "8x4"
 }
 
-declare -A STAGES=([d1]=stage_d1 [d2]=stage_d2_d3 [d3]=stage_d2_d3 [m]=stage_m [p]=stage_p)
+stage_p3() {
+    # Two local processes (runner + producer); needs a real checkpoint and builds a golden trace.
+    if [ -z "${HF_MODEL:-}" ]; then
+        echo "=== p3 skipped (set HF_MODEL to a Llama-3.1-8B-Instruct checkpoint) ==="
+        return
+    fi
+    echo "=== p3_serving ==="
+    if "$HERE/scripts/run_serving_pcc.sh" > "$LOGDIR/p3_serving.log" 2>&1; then
+        echo "p3 serving PCC passed"
+    else
+        echo "FAILED (see $LOGDIR/p3_serving.log)"
+        grep -E "PCC|error|Error|Traceback" "$LOGDIR/p3_serving.log" | tail -5
+        FAILED+=("p3_serving")
+    fi
+}
+
+declare -A STAGES=([d1]=stage_d1 [d2]=stage_d2_d3 [d3]=stage_d2_d3 [m]=stage_m [p]=stage_p [p3]=stage_p3)
 
 if [ $# -eq 0 ]; then
-    stage_d1; stage_d2_d3; stage_m; stage_p
+    stage_d1; stage_d2_d3; stage_m; stage_p; stage_p3
 else
     seen=""
     for s in "$@"; do
         fn="${STAGES[${s,,}]:-}"
-        [ -z "$fn" ] && { echo "unknown stage '$s' (d1 d2 d3 m p)"; exit 2; }
+        [ -z "$fn" ] && { echo "unknown stage '$s' (d1 d2 d3 m p p3)"; exit 2; }
         case " $seen " in *" $fn "*) continue;; esac
         seen="$seen $fn"; "$fn"
     done

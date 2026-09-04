@@ -1,11 +1,13 @@
 {
-  "_comment": "Per-model manifest: point a rank binding at this with PREFILL_MANIFEST so the binding and mesh-graph descriptors stay model-agnostic. Applied with setdefault, so a binding's global_env still wins.",
+  "_comment": "Per-model manifest: point a rank binding at this with PREFILL_MANIFEST so the binding and mesh-graph descriptors stay model-agnostic. Applied with setdefault, so a binding's global_env still wins. PREFILL_NUM_LAYERS is mandatory here: the runner defaults it to 61 (DeepSeek's layer count), so a model that does not set it silently builds the wrong depth.",
   "env": {
     "PREFILL_MODEL": "llama3_1_8b_d_p",
     "PREFILL_SP": "8",
     "PREFILL_TP": "4",
     "PREFILL_CHUNK_SIZE": "4096",
     "PREFILL_NUM_USERS": "1",
-    "PREFILL_TOPOLOGY": "linear"
+    "PREFILL_TOPOLOGY": "linear",
+    "PREFILL_NUM_LAYERS": "32",
+    "PREFILL_MAX_SEQ_LEN": "131072"
   }
 }

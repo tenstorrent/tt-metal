@@ -25,3 +25,12 @@
 {"t":"2026-09-04T21:45Z","ev":"judgment","stage":"M3","kind":"donor_wrong","issue":"gpt_oss MeshConfig has no reduce_scatter, which minimax's 2D vocab-parallel embedding calls to sum per-row lookups across SP","fix":"added MeshConfig.reduce_scatter from the minimax donor; both embedding modes then reach PCC 1.0","failed":["tests/unit/test_parallel_embedding_vs_ref.py::test_parallel_embedding_vs_ref[2d-8x4]"]}
 {"t":"2026-09-04T21:49Z","ev":"verify","stage":"M3","result":"pass","failed":[]}
 {"t":"2026-09-04T21:50Z","ev":"enter","stage":"P1"}
+{"t":"2026-09-04T21:51Z","ev":"verify","stage":"P1","result":"pass","failed":[]}
+{"t":"2026-09-04T21:54Z","ev":"enter","stage":"P2"}
+{"t":"2026-09-04T21:57Z","ev":"verify","stage":"P2","result":"pass","failed":[]}
+{"t":"2026-09-04T21:58Z","ev":"judgment","stage":"P2","kind":"recipe_gap","issue":"recipe DoD requires bringup_digest.py --lint but common/prefill/tools/ does not exist in the repo","fix":"wrote models/demos/common/prefill/tools/bringup_digest.py to the spec in recipe sections 7.5-7.6","failed":[]}
+{"t":"2026-09-04T21:58Z","ev":"enter","stage":"P4"}
+{"t":"2026-09-04T21:58Z","ev":"verify","stage":"P4","result":"fail","failed":["tests/test_kv_cache_table.py::test_kv_cache_table"]}
+{"t":"2026-09-04T22:00Z","ev":"judgment","stage":"P4","kind":"ttnn_gap","issue":"bf8->bf8 ttnn.copy re-quantizes, so allocate-then-copy leaves a second quantization and the bit-exact table check fails","fix":"build the populated cache with from_torch at the allocator's memory config and compare the table read against ttnn's own read-back","failed":["tests/test_kv_cache_table.py::test_kv_cache_table"]}
+{"t":"2026-09-04T22:01Z","ev":"verify","stage":"P4","result":"pass","failed":[]}
+{"t":"2026-09-04T22:02Z","ev":"enter","stage":"P3"}

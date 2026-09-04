@@ -66,6 +66,21 @@ bank walk had to step over the head dim. See [`docs/SPEC_NOTES.md`](docs/SPEC_NO
 | **Whole model**, 4 layers — final hidden | 8x4 | 0.99991 | `unit/test_model_sp_vs_ref.py` |
 | **Whole model**, 4 layers — per-layer KV | 8x4 | 0.99976 – 0.99984 | `unit/test_model_sp_vs_ref.py` |
 
+### Real weights — per-layer KV vs the CPU golden (`tests/galaxy_prefill_kv_pcc.py`)
+
+Full 32 layers, 2048 tokens, `Meta-Llama-3.1-8B-Instruct`, at SP=8 x TP=4:
+
+| Mode | Gate | Result |
+|---|---|---|
+| **P1 one-shot** (`PREFILL_CHUNKED=0`) | 0.99 per layer | **32/32 pass** — K 0.9983 – 0.9999, V 0.9910 – 0.9998 |
+| **P2 chunked** (`PREFILL_CHUNKED=1`, 4 x 512) | same golden as P1 | **32/32 pass** |
+
+P2 passing against P1's golden is the statement that matters: chunk *n* attending the prefix chunks
+0..*n*-1 left in the cache produces the same KV as processing the whole sequence at once.
+
+The reference runs on CPU from the same checkpoint in the HF half-split convention; the device K is
+Meta-swizzled, so the comparison applies the head permutation (see `docs/SPEC_NOTES.md` §4).
+
 Host-only (no device): 34 tests in `tests/torch/` pin the vendored torch reference against upstream
 `transformers` — RMSNorm, MLP, llama3 rope frequencies, attention, decoder layer, whole model, the
 chunked==one-shot invariant, and the golden-cache round-trip.
@@ -85,8 +100,11 @@ chunked==one-shot invariant, and the golden-cache round-trip.
 
 ## Running
 
+`ttenv.sh` below is a machine-local, untracked helper that exports `TT_METAL_HOME`, `PYTHONPATH`
+and `LD_LIBRARY_PATH` for this checkout; use whatever your environment setup is.
+
 ```bash
-source ttenv.sh                                   # TT_METAL_HOME, PYTHONPATH, LD_LIBRARY_PATH
+source ttenv.sh
 
 ./models/demos/llama3_1_8b_d_p/run_bringup.sh          # everything, in recipe order
 ./models/demos/llama3_1_8b_d_p/run_bringup.sh d1       # host-only reference tests

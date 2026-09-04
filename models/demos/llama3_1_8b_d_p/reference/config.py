@@ -23,7 +23,19 @@ CONFIG_JSON = CONFIG_DIR / "config.json"
 
 
 class Llama31_8BConfig:
-    """Frozen architecture constants for Llama 3.1 8B Instruct (spec ``architecture`` block)."""
+    """Frozen architecture constants for Llama 3.1 8B Instruct (spec ``architecture`` block).
+
+    This class is also the adapter's ``model_config``, which the prefill ENGINE reads directly. The
+    contract is stated only as "must expose ``FABRIC_PAYLOAD_SIZE``, etc." in
+    ``ADDING_A_PREFILL_MODEL.md``; in practice the engine and the shared producer read
+    ``FABRIC_PAYLOAD_SIZE``, ``HEAD_DIM``, ``NUM_KEY_VALUE_HEADS`` and ``ROTARY_DIM``. They are named
+    in SCREAMING_CASE here to match that convention, which is why some values appear twice under
+    different names.
+    """
+
+    # --- read by the prefill engine / producer (the model_config contract) ---
+    EMB_SIZE = 4096  # embedding dimension
+    FABRIC_PAYLOAD_SIZE = EMB_SIZE  # max fabric packet payload; must stay in sync with migration code
 
     HIDDEN_SIZE = 4096
     NUM_LAYERS = 32
