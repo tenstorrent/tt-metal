@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
-#include <optional>
 
 #include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
@@ -55,9 +54,9 @@ void kernel_main() {
 
     constexpr uint32_t num_remote_senders = (num_blocks_inner_dim + num_blocks_per_shard - 1) / num_blocks_per_shard;
 
-    using In0McastArgs = dataflow_kernel_lib::McastArgs<14, 1>;
-    constexpr In0McastArgs in0_mcast_args;
+    constexpr dataflow_kernel_lib::McastArgs<14, 1> in0_mcast_args;
     operation_rt_args_idx = in0_mcast_args.next_runtime_args_offset();
+    static_assert(in0_mcast_args.active);
     static_assert(num_remote_senders <= in0_mcast_args.num_senders);
 
     MatmulOpReceiver fused_op_receiver;
@@ -73,16 +72,8 @@ void kernel_main() {
     Noc noc;
     DataflowBuffer dfb_in0(dfb_id_in0);
     DataflowBuffer dfb_in2(dfb_id_in2);
-    using In0SenderPipe = In0McastArgs::SenderPipe;
-    using In0ReceiverPipe = In0McastArgs::ReceiverPipe;
-    std::optional<In0SenderPipe> in0_sender_pipe;
-    std::optional<In0ReceiverPipe> in0_receiver_pipe;
-    if (in0_mcast_args.can_send()) {
-        in0_sender_pipe.emplace(in0_mcast_args.sender(noc));
-    }
-    if (in0_mcast_args.can_receive()) {
-        in0_receiver_pipe.emplace(in0_mcast_args.receiver(noc));
-    }
+    auto in0_sender_pipe = in0_mcast_args.optional_sender(noc);
+    auto in0_receiver_pipe = in0_mcast_args.optional_receiver(noc);
 
     dfb_in2.reserve_back(batch * in0_block_num_tiles);
 

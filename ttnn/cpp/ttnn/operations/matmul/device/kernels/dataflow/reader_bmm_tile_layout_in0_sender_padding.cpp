@@ -154,12 +154,10 @@ void kernel_main() {
     DataflowBuffer dfb_sparsity(dfb_id_sparsity);
     const auto s_sparsity = TensorAccessor(sparsity_args, sparsity_addr);
 
-#ifndef SKIP_MCAST
-    auto in0_pipe = in0_mcast_args.sender(noc);
+    auto in0_pipe = in0_mcast_args.optional_sender(noc);
 #ifdef IN0_SHARDED
     uint32_t in0_start_address = dfb_in0.get_write_ptr();
 #endif  // IN0_SHARDED
-#endif  // SKIP_MCAST
 
     uint32_t l1_write_addr_sparsity = 0;
     if constexpr (batchB > 0 && !use_indices) {
@@ -183,9 +181,9 @@ void kernel_main() {
                     ((reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_addr_sparsity))[bB]) != 0;
 
                 if constexpr (get_batch_from_reader) {
-#ifndef SKIP_MCAST
-                    in0_pipe.send_signal(is_batch_valid ? VALID : IGNORE_BATCH);
-#endif  // SKIP_MCAST
+                    if constexpr (in0_mcast_args.active) {
+                        in0_pipe->send_signal(is_batch_valid ? VALID : IGNORE_BATCH);
+                    }
 
                     // We need to pass the value to compute cores regardless of the value of is_batch_valid
                     ckernel::mailbox_write(ckernel::ThreadId::UnpackThreadId, is_batch_valid);
@@ -232,10 +230,8 @@ void kernel_main() {
 
                         uint32_t in0_write_offset = 0;
 
-#ifndef SKIP_MCAST
                         uint32_t in0_start_address =
                             dfb_in0.get_write_ptr();  // copy start address of block, to be used for mcasting
-#endif                                                // SKIP_MCAST
 
                         // Copy in0 block into CB, as the default kernel
                         uint32_t in0_tensor_row_start_tile_id = in0_tensor_current_inner_dim_block_start_tile_id;
@@ -282,10 +278,8 @@ void kernel_main() {
                         if constexpr (extract_shard_sub_blocks) {
                             uint32_t l1_write_addr_in0 = dfb_in0.get_write_ptr();
 
-#ifndef SKIP_MCAST
                             in0_start_address =
                                 l1_write_addr_in0;  // copy start address of block, to be used for mcasting
-#endif  // SKIP_MCAST
 
                             UnicastEndpoint self_ep;
                             uint32_t noc_shard_read_l1_addr = in0_tensor_current_inner_dim_block_start_addr;
@@ -330,9 +324,9 @@ void kernel_main() {
                         }
 #endif  // IN0_SHARDED
 
-#ifndef SKIP_MCAST
-                        in0_pipe.send(in0_start_address, in0_start_address, in0_block_size_bytes);
-#endif  // SKIP_MCAST
+                        if constexpr (in0_mcast_args.active) {
+                            in0_pipe->send(in0_start_address, in0_start_address, in0_block_size_bytes);
+                        }
 
                         // Common for sharded and interleaved paths
                         dfb_in0.push_back(in0_block_num_tiles);

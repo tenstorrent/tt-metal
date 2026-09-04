@@ -302,8 +302,9 @@ template <
     uint32_t CONSUMER_READY_SEM_ID,
     DataReadySignal DATA_READY_SIGNAL,
     uint32_t NUM_SENDERS>
-uint32_t ReceiverPipe<DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL, NUM_SENDERS>::
-    receive_signal(uint32_t round) {
+uint32_t
+ReceiverPipe<DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL, NUM_SENDERS>::receive_signal(
+    uint32_t round) {
     if constexpr (PRE_HANDSHAKE) {
         // tell the round-th sender "I am ready" (remote atomic inc on its counter)
         const uint32_t sender_index = round % NUM_SENDERS;
@@ -345,11 +346,29 @@ typename McastArgsImpl<true, CT_BASE, RT_BASE>::SenderPipe McastArgsImpl<true, C
 }
 
 template <uint32_t CT_BASE, uint32_t RT_BASE>
+std::optional<typename McastArgsImpl<true, CT_BASE, RT_BASE>::SenderPipe>
+McastArgsImpl<true, CT_BASE, RT_BASE>::optional_sender(const Noc& noc) const {
+    if (!can_send()) {
+        return std::nullopt;
+    }
+    return sender(noc);
+}
+
+template <uint32_t CT_BASE, uint32_t RT_BASE>
 typename McastArgsImpl<true, CT_BASE, RT_BASE>::ReceiverPipe McastArgsImpl<true, CT_BASE, RT_BASE>::receiver(
     const Noc& noc) const {
     ASSERT(can_receive());
     const uint32_t* coords = reinterpret_cast<const uint32_t*>(get_arg_addr(RT_BASE + (rotating ? 4 : 0)));
     return ReceiverPipe(noc, coords);
+}
+
+template <uint32_t CT_BASE, uint32_t RT_BASE>
+std::optional<typename McastArgsImpl<true, CT_BASE, RT_BASE>::ReceiverPipe>
+McastArgsImpl<true, CT_BASE, RT_BASE>::optional_receiver(const Noc& noc) const {
+    if (!can_receive()) {
+        return std::nullopt;
+    }
+    return receiver(noc);
 }
 
 template <uint32_t CT_BASE, uint32_t RT_BASE>
