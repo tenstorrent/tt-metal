@@ -7,8 +7,12 @@
 #include "api/compute/common.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/bcast.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/dataflow/circular_buffer.h"
-#include "ttnn/kernel/compute/dest_format_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
+
+namespace ckl = compute_kernel_lib;
 
 void kernel_main() {
     constexpr uint32_t onetile = 1;
@@ -27,6 +31,39 @@ void kernel_main() {
     constexpr uint32_t batch_per_core = get_compile_time_arg_val(11);
     constexpr uint32_t half_Wt = Wt / 2;
     (void)Ht;
+    constexpr auto bulk_block_input = [](uint32_t cb_id) {
+        return ckl::input(
+            cb_id,
+            ckl::WaitPolicy::Upfront,
+            ckl::PopPolicy::AtEnd,
+            ckl::InputTileMapping::Block,
+            ckl::DataFormatReconfig::Disabled);
+    };
+    constexpr auto held_block_input = [](uint32_t cb_id) {
+        return ckl::input(
+            cb_id,
+            ckl::WaitPolicy::Upfront,
+            ckl::PopPolicy::None,
+            ckl::InputTileMapping::Block,
+            ckl::DataFormatReconfig::Disabled);
+    };
+    constexpr auto bulk_output = [](uint32_t cb_id) {
+        return ckl::output(cb_id, ckl::ReservePolicy::None, ckl::PushPolicy::AtEnd, ckl::DataFormatReconfig::Disabled);
+    };
+    constexpr auto rotated_input = bulk_block_input(rotated_in_interm_cb_id);
+    constexpr auto in_input = ckl::input(
+        in_cb_id,
+        ckl::WaitPolicy::None,
+        ckl::PopPolicy::AtEnd,
+        ckl::InputTileMapping::Block,
+        ckl::DataFormatReconfig::Disabled);
+    constexpr auto sin_input = held_block_input(sin_cb_id);
+    constexpr auto cos_input = held_block_input(cos_cb_id);
+    constexpr auto sin_interm_input = bulk_block_input(sin_interm_cb_id);
+    constexpr auto cos_interm_input = bulk_block_input(cos_interm_cb_id);
+    constexpr auto sin_output = bulk_output(sin_interm_cb_id);
+    constexpr auto cos_output = bulk_output(cos_interm_cb_id);
+    constexpr auto rotary_output = bulk_output(out_cb_id);
 
     CircularBuffer in_cb(in_cb_id);
     CircularBuffer cos_cb(cos_cb_id);
@@ -63,79 +100,56 @@ void kernel_main() {
             in_cb.wait_front(Wt);
 
             // Process second half: multiply by -1 and store in rotated buffer
-            mul_bcast_scalar_init(in_cb_id, scalar_cb_id);
-            tile_regs_acquire();
-            for (uint32_t j = 0; j < half_Wt; ++j) {
-                mul_tiles_bcast_scalar(in_cb_id, scalar_cb_id, j + half_Wt, 0, j);
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            for (uint32_t j = 0; j < half_Wt; ++j) {
-                pack_tile(j, rotated_in_interm_cb_id, j);
-            }
-            tile_regs_release();
-
-            // Copy first half to second half of rotated buffer
-            tile_regs_acquire();
-            for (uint32_t j = 0; j < half_Wt; ++j) {
-                copy_tile_init_with_dt(in_cb_id);
-                copy_tile(in_cb_id, j, j + half_Wt);
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            for (uint32_t j = 0; j < half_Wt; ++j) {
-                pack_tile(j + half_Wt, rotated_in_interm_cb_id, j + half_Wt);
-            }
-            tile_regs_release();
-
+            ckl::eltwise_chain(
+                ckl::IterationShape::tiles(half_Wt).block_size(/*block_size=*/half_Wt),
+                ckl::BinaryFpu<
+                    ckl::BinaryFpuOp::Mul,
+                    ckl::input(
+                        in_cb_id,
+                        ckl::WaitPolicy::None,
+                        ckl::PopPolicy::None,
+                        ckl::InputTileMapping::Block,
+                        ckl::DataFormatReconfig::Enabled,
+                        ckl::TileAddressing::Offset),
+                    ckl::input(scalar_cb_id, ckl::BroadcastDim::Scalar, ckl::WaitPolicy::None, ckl::PopPolicy::None)>{
+                    half_Wt, 0u},
+                // Copy first half to second half of rotated buffer
+                ckl::CopyTile<
+                    ckl::input(in_cb_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::InputTileMapping::Block),
+                    ckl::Dst::D1>{},
+                ckl::PackTile<
+                    ckl::output(
+                        rotated_in_interm_cb_id,
+                        ckl::ReservePolicy::None,
+                        ckl::PushPolicy::None,
+                        ckl::DataFormatReconfig::Enabled,
+                        ckl::TileAddressing::Offset),
+                    ckl::Dst::D0>{0u},
+                ckl::PackTile<
+                    ckl::output(
+                        rotated_in_interm_cb_id,
+                        ckl::ReservePolicy::None,
+                        ckl::PushPolicy::None,
+                        ckl::DataFormatReconfig::Enabled,
+                        ckl::TileAddressing::Offset),
+                    ckl::Dst::D1>{half_Wt});
             rotated_in_interm_cb.push_back(Wt);
-            rotated_in_interm_cb.wait_front(Wt);
 
             // sin_interim = rotated * sin (broadcast rows)
             mul_bcast_rows_init(rotated_in_interm_cb_id, sin_cb_id);
-            tile_regs_acquire();
-            for (uint32_t j = 0; j < Wt; ++j) {
-                mul_tiles_bcast<BroadcastType::ROW>(rotated_in_interm_cb_id, sin_cb_id, j, j, j);
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            for (uint32_t j = 0; j < Wt; ++j) {
-                pack_tile(j, sin_interm_cb_id, j);
-            }
-            tile_regs_release();
-            sin_interm_cb.push_back(Wt);
-            rotated_in_interm_cb.pop_front(Wt);
+            ckl::eltwise_chain<ckl::InitReconfigOwner::Caller>(
+                ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/Wt),
+                ckl::BinaryFpu<ckl::BinaryFpuOp::Mul, rotated_input, ckl::input(sin_input, ckl::BroadcastDim::Row)>{},
+                ckl::PackTile<sin_output>{});
 
-            tile_regs_acquire();
-            for (uint32_t j = 0; j < Wt; ++j) {
-                mul_tiles_bcast<BroadcastType::ROW>(in_cb_id, cos_cb_id, j, j, j);
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            for (uint32_t j = 0; j < Wt; ++j) {
-                pack_tile(j, cos_interm_cb_id, j);
-            }
-            tile_regs_release();
-            cos_interm_cb.push_back(Wt);
-            in_cb.pop_front(Wt);
+            ckl::eltwise_chain<ckl::InitReconfigOwner::Caller>(
+                ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/Wt),
+                ckl::BinaryFpu<ckl::BinaryFpuOp::Mul, in_input, ckl::input(cos_input, ckl::BroadcastDim::Row)>{},
+                ckl::PackTile<cos_output>{});
 
             // out = cos_interim + sin_interim
-            sin_interm_cb.wait_front(Wt);
-            cos_interm_cb.wait_front(Wt);
-            add_init(cos_interm_cb_id, sin_interm_cb_id);
-            tile_regs_acquire();
-            for (uint32_t j = 0; j < Wt; ++j) {
-                add_tiles(cos_interm_cb_id, sin_interm_cb_id, j, j, j);
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            for (uint32_t j = 0; j < Wt; ++j) {
-                pack_tile(j, out_cb_id, j);
-            }
-            tile_regs_release();
-            out_cb.push_back(Wt);
-            sin_interm_cb.pop_front(Wt);
-            cos_interm_cb.pop_front(Wt);
+            ckl::add<cos_interm_input, sin_interm_input, rotary_output>(
+                ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/Wt));
         }
 
         sin_cb.pop_front(Wt);
