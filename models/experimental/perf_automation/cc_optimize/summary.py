@@ -39,7 +39,7 @@ state_dir = _tmpstate.state_dir
 #
 # So structural is its own column, and the specific gate kinds resolve to it rather than to `other`.
 # `host` keeps trace/2-CQ/dispatch work, which is what it always meant.
-_LEVEL_COLS = ("grid", "fidelity", "dtype", "shard", "host", "structural", "tp-fracture", "tt-lang", "cpp")
+_LEVEL_COLS = ("grid", "block", "fidelity", "dtype", "shard", "host", "structural", "tp-fracture", "tt-lang", "cpp")
 _ALL_COLS = _LEVEL_COLS + ("other",)  # "other" holds unclassifiable levers; rendered only when used
 _HOST_KINDS = {"trace", "fusion", "fuse", "cache"}
 # Every lever the gates mint is a structural one; they are named for WHICH restructure, so a report

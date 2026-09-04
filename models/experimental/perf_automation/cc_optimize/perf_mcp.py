@@ -18,6 +18,7 @@ Config via env (set in .mcp.json):
 from __future__ import annotations
 
 import atexit
+import collections
 import hashlib
 import json
 import os
@@ -542,14 +543,21 @@ _STRUCTURAL_RUNGS = {"structural", "gather", "fusion", "fuse", "sparse", "cache"
 # roofline ESTIMATE, ops are rarely purely one-bound, and `compute` is only ever computed for
 # matmuls -- used as a filter it silently deletes levers for a whole run (see _op_ladder_status).
 _RUNG_PRIORITY = {
-    "memory": ("grid", "dtype", "shard", "fidelity", "host", "structural", "tt-lang", "cpp"),
-    "compute": ("grid", "fidelity", "dtype", "shard", "host", "structural", "tt-lang", "cpp"),
+    "memory": ("grid", "block", "dtype", "shard", "fidelity", "host", "structural", "tt-lang", "cpp"),
+    "compute": ("grid", "block", "fidelity", "dtype", "shard", "host", "structural", "tt-lang", "cpp"),
     # Nothing on the knob rungs addresses dispatch: the op is waiting on the host loop that launches
     # it, so trace capture / 2-CQ leads and the knobs follow as the completeness sweep.
-    "dispatch": ("host", "grid", "fidelity", "dtype", "shard", "structural", "tt-lang", "cpp"),
-    "": ("grid", "dtype", "shard", "fidelity", "host", "structural", "tt-lang", "cpp"),
+    "dispatch": ("host", "grid", "block", "fidelity", "dtype", "shard", "structural", "tt-lang", "cpp"),
+    "": ("grid", "block", "dtype", "shard", "fidelity", "host", "structural", "tt-lang", "cpp"),
 }
-_KNOBS = ("grid", "fidelity", "dtype", "shard")
+# `block` sits immediately after `grid` because it is the half of the same decision that `grid` does
+# not make. Occupying every core says nothing about how the work is CARVED across them, and on
+# voxtral_mini_3b_2507 the difference is the whole remaining gap: its prefill projection already runs
+# on the full grid at the lowest fidelity and is still 12x off its floor, because naming a core grid
+# leaves ttnn a 1-D multicast with 1x1 subblocks. The run found this by hand -- one win was an
+# out_subblock table written into the model -- but a hand edit is not a rung, so the next op starts
+# from nothing.
+_KNOBS = ("grid", "block", "fidelity", "dtype", "shard")
 
 
 def ladder_order(bound_by: str = "") -> list:
@@ -567,6 +575,11 @@ _KNOB_ORDER = {b: tuple(r for r in order if r in _KNOBS) for b, order in _RUNG_P
 _KNOB_REASON = {
     "grid": lambda g, f, w: "occupy the FULL core grid (grid=%s) via a full-grid program_config; "
     "record_kernel_attempt(...,'grid',...) even on a no-gain" % (g or "unknown"),
+    "block": lambda g, f, w: "the grid is occupied; now SHAPE the work on it. Hand-write the matmul "
+    "program config rather than naming a core grid: choose in0_block_w, out_subblock_h/w and "
+    "per_core_M/N, and try BOTH multicast orientations (transpose_mcast). A named core grid gets a "
+    "1-D multicast with 1x1 subblocks, which is why a full-grid op can still sit far off its floor; "
+    "record_kernel_attempt(...,'block',...) even on a no-gain",
     "fidelity": lambda g, f, w: "lower the math fidelity (now %s) HiFi4->HiFi2->LoFi; "
     "record_kernel_attempt(...,'fidelity',...) to mark it tried (even on a PCC revert / no-gain)" % (f or "unknown"),
     "dtype": lambda g, f, w: "lower the weight dtype (now %s) to bf8_b/bf4_b; "
@@ -768,6 +781,23 @@ def _normalise_rung(rung) -> str:
 
 
 _MATMUL_SHAPE_PAT = r"(\d+)\s*x\s*(\d+)\s*x\s*(\d+)"
+
+
+def _matmul_m_tiles(open_op) -> int:
+    """How many TILE ROWS this matmul's M spans, or 0 when the op does not state a shape.
+
+    The question the block rung needs answered: an M of one tile row can be carved exactly one way,
+    so shaping it is not a lever. Read off the op's own reported shape via the shape pattern already
+    used for the warm-start table, and the tile height from agent.tp, which owns it -- no second
+    definition of either.
+    """
+    try:
+        from agent.tp import TILE
+
+        m = _re.search(_MATMUL_SHAPE_PAT, str((open_op or {}).get("shape") or (open_op or {}).get("op_code") or ""))
+        return (int(m.group(1)) + int(TILE) - 1) // int(TILE) if m else 0
+    except Exception:  # noqa: BLE001
+        return 0
 
 
 def _warm_start_for(model_root, op_code: str):
@@ -1384,17 +1414,11 @@ def _op_ladder_status(open_op: dict, op_code: str, attempts: list) -> tuple[bool
     any other gate 'fired'."""
     matches = [a for a in attempts if _op_match(op_code, a)]
     kinds = {(a.get("kernel_kind") or "").lower() for a in matches}
-    grid_tries = sum(
-        1 for a in matches if _normalise_rung(a.get("kernel_kind")) == "grid" and not a.get("measurement_failed")
-    )
-    dtype_tries = sum(
-        1 for a in matches if _normalise_rung(a.get("kernel_kind")) == "dtype" and not a.get("measurement_failed")
-    )
-    fidelity_tries = sum(
-        1 for a in matches if _normalise_rung(a.get("kernel_kind")) == "fidelity" and not a.get("measurement_failed")
-    )
-    shard_tries = sum(
-        1 for a in matches if _normalise_rung(a.get("kernel_kind")) == "shard" and not a.get("measurement_failed")
+    # Counted straight off _KNOBS, so a rung added to the ladder cannot be left uncounted here -- the
+    # four hand-written sums this replaces were one copy per knob, and a fifth would have been a knob
+    # that is offered forever because its tries never saturate.
+    _rung_tries = collections.Counter(
+        _normalise_rung(a.get("kernel_kind")) for a in matches if not a.get("measurement_failed")
     )
     grid = (open_op.get("grid") or "").lower()
     wdtype = (open_op.get("weight_dtype") or "").lower()
@@ -1454,7 +1478,7 @@ def _op_ladder_status(open_op: dict, op_code: str, attempts: list) -> tuple[bool
             "blocking, the residual here is redundant recompute, reducible ONLY by a KV-cache (NOT irreducible)."
             % ("WON a measured reduction" if _host_won else "tried %d time(s), the cap" % len(_host_tried)),
         )
-    tries = {"grid": grid_tries, "fidelity": fidelity_tries, "dtype": dtype_tries, "shard": shard_tries}
+    tries = {k: _rung_tries.get(k, 0) for k in _KNOBS}
     # A DEEPER RUNG ON FILE SPENDS THE SECOND-VARIANT ALLOWANCE. _MAX_KNOB_RETRIES exists so a
     # preferred knob can be tried twice -- the first attempt reads the profile, the second acts on what
     # it learned. That is for an op still ON the knob rungs. Counted per-knob with no reference to how
@@ -1467,12 +1491,20 @@ def _op_ladder_status(open_op: dict, op_code: str, attempts: list) -> tuple[bool
     _went_deeper = bool(kinds & (_STRUCTURAL_RUNGS | {"tt-lang", "cpp", "tp-fracture"}))
     applicable = {
         "grid": grid != "full",
+        # Only where there is something to carve. A matmul one tile row tall has a single sensible
+        # block shape, which is why the decode projections already sit at ~1.1x their floor while the
+        # prefill and encode ones -- tens of tile rows -- do not. M comes from the op's own reported
+        # shape; nothing here assumes which stage that is.
+        "block": is_matmul and _matmul_m_tiles(open_op) > 1,
         "fidelity": True,
         "dtype": is_matmul,
         "shard": True,
     }
     preferred = {
         "grid": True,
+        # The move to make once the cores are occupied: a full-grid op that is still far from its
+        # floor has a shaping problem, not an occupancy one.
+        "block": grid == "full",
         "fidelity": bound == "compute",
         "dtype": bound == "memory" and is_matmul and wdtype not in ("bf8_b", "bf4_b"),
         "shard": bound == "memory",
@@ -5269,7 +5301,9 @@ def _rung_allowance(op_signature: str, kernel_kind: str, attempts: list) -> tupl
     return tries, allowed
 
 
-_KNOB_RUNG_NAMES = {"grid", "dtype", "fidelity", "shard"}
+# Derived, not restated: a second literal list is how a rung joins the ladder and is still not
+# recognised as a knob by whatever reads this.
+_KNOB_RUNG_NAMES = frozenset(_KNOBS)
 
 
 @mcp.tool()
