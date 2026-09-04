@@ -404,7 +404,17 @@ UNIT_CASES = [
             sim_skip="craq-sim HANG at T=4 (uneven lane split); exact on ZeBu RTL at T=4 (pcc=1.0, 2026-09-04) and on WH -- sim artifact",
         ),
     ),
-    ("sticks6_b3_1core", dict(batch=3, in_h=8, in_w=4, stride=(4, 4), cores=1)),  # 6 sticks: 2,2,1,1
+    (
+        "sticks6_b3_1core",
+        dict(
+            batch=3,
+            in_h=8,
+            in_w=4,
+            stride=(4, 4),
+            cores=1,
+            sim_skip="craq-sim HANG at T=4 (uneven lane split); exact on ZeBu RTL at T=4 (pcc=1.0, 2026-09-04) and on WH -- sim artifact",
+        ),
+    ),  # 6 sticks: 2,2,1,1
     (
         "sticks10_b5_1core",  # 10 sticks: 3,3,2,2
         dict(
@@ -422,15 +432,44 @@ UNIT_CASES = [
     # by gap_b1_width_max_1stick on the ZeBu emulator (1 stick x 2 faces -> TT_FATAL at T=4).
     ("sticks2_c48_2cores", dict(channels=48, in_h=8, in_w=8, stride=(4, 4), cores=2)),
     # width-sharded twin: 32 channels per core = 2 faces x 3 sticks (stride 6 keeps NHW % 32 == 0)
-    ("sticks3_c64_width_1x2_s6", dict(in_h=16, in_w=2, stride=(6, 4), shard="width", grid_yx=(1, 2))),
+    (
+        "sticks3_c64_width_1x2_s6",
+        dict(
+            in_h=16,
+            in_w=2,
+            stride=(6, 4),
+            shard="width",
+            grid_yx=(1, 2),
+            sim_skip="craq-sim HANG at T=4 (uneven lane split); exact on ZeBu RTL at T=4 (pcc=1.0, 2026-09-04) and on WH -- sim artifact",
+        ),
+    ),
     # Per-stick scalars (avg with !one_scalar_per_core: count_include_pad=False with padding, or
     # ceil-mode overhang) use the scalar config DFB, a single-entry buffer before it became
     # lane-aware (num_threads entries / raw view + lane-base recovery in the reader). These run the
     # config-DFB path at T=4; the L1-config leg also covers the raw-view base math on lanes 1..3.
-    ("avg_k3x3_p1_excl_pad", dict(pool="avg", padding=(1, 1), count_include_pad=False, cores=1)),
+    (
+        "avg_k3x3_p1_excl_pad",
+        dict(
+            pool="avg",
+            padding=(1, 1),
+            count_include_pad=False,
+            cores=1,
+            sim_skip="craq-sim HANG at T=4 (uneven lane split); exact on ZeBu RTL at T=4 (pcc=0.99996, 2026-09-04) and on WH -- sim artifact",
+        ),
+    ),
     (
         "avg_ceil_k3x3_s2_b4",
-        dict(pool="avg", batch=4, in_h=8, in_w=4, stride=(2, 2), padding=(0, 0), ceil_mode=True, cores=1),
+        dict(
+            pool="avg",
+            batch=4,
+            in_h=8,
+            in_w=4,
+            stride=(2, 2),
+            padding=(0, 0),
+            ceil_mode=True,
+            cores=1,
+            sim_skip="craq-sim HANG at T=4 (uneven lane split); exact on ZeBu RTL at T=4 (pcc=0.99995, 2026-09-04) and on WH -- sim artifact",
+        ),
     ),
     # TILE output layout runs single-lane by policy (the tiled-output path is not lane-aware: at
     # num_threads=4 DFB_FAST_TILIZE has in_ntiles_c entries -> TT_FATAL for C<128, hang at C=128;
