@@ -10,6 +10,9 @@
 // host is factory-expected and missing from live, so the downed-link set becomes the rest of the
 // datacenter.
 //
+// Also holds the other decision made about a factory descriptor before the mapper runs: whether the chips
+// it declares are actually there.
+//
 // Internal header: ControlPlane is the only consumer, and nothing here needs to be installed.
 
 #pragma once
@@ -72,5 +75,26 @@ void agree_or_throw_fsd_host_filter(
     std::uint64_t host_checksum,
     std::uint64_t descriptor_fingerprint,
     bool local_ok);
+
+// Throw if the factory descriptor declares a whole ASIC that the live cluster does not have.
+//
+// A missing *cable* is the downed-link feature. A missing *chip* is a wrong allocation, and the two must
+// not be conflated: one pulled board is a pile of factory-expected cables that all read as downed, which
+// describes the failure in the least useful possible terms. So this runs at ControlPlane init, before the
+// mapper is built and before any link health exists, and it is fatal.
+//
+// Reports every absent chip rather than the first: one pulled board is several ASICs, and a per-chip abort
+// makes the operator re-run init once per chip to find the next one. The message is sorted, so ranks fed
+// the same descriptors throw identical text and there is no partial-abort deadlock.
+//
+// Only ASICs on hosts the live descriptor enumerates are considered. Callers are expected to have filtered
+// the factory descriptor to the live host set already, which makes that a no-op; it matters when discovery
+// was local-only, where every remote chip would otherwise look absent and every rank would fatal on a
+// healthy system.
+//
+// Deliberately not a check on ASIC ids: the two descriptors label chips from unrelated spaces (1..N in file
+// order versus UMD chip unique ids), so this joins on address like everything else on this path.
+void throw_on_fsd_chips_absent_from_live(
+    const ::tt::tt_metal::PhysicalSystemDescriptor& fsd, const ::tt::tt_metal::PhysicalSystemDescriptor& live);
 
 }  // namespace tt::tt_metal::experimental::tt_fabric
