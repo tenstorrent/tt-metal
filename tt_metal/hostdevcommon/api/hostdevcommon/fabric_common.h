@@ -240,12 +240,6 @@ struct Routing2DCodec {
         const uint32_t shift = (index % ACTIONS_PER_BYTE) * BITS_PER_ACTION;
         return static_cast<uint8_t>((packed_row[byte_index] >> shift) & 0b11);
     }
-    static inline void set_action_2bit(std::uint8_t* packed_row, uint32_t index, uint8_t action_2bit) {
-        const uint32_t byte_index = index / ACTIONS_PER_BYTE;
-        const uint32_t shift = (index % ACTIONS_PER_BYTE) * BITS_PER_ACTION;
-        packed_row[byte_index] =
-            static_cast<std::uint8_t>((packed_row[byte_index] & ~(0b11u << shift)) | ((action_2bit & 0b11u) << shift));
-    }
 
     // ---- Widen (2-bit -> one-hot action byte) -----------------------------------
     // STOP and X2_INVALID widen to 0; the caller pokes ACTION_LOCAL_DELIVER at its own coordinate
@@ -279,26 +273,11 @@ struct Routing2DCodec {
     static constexpr uint32_t MCAST_TREE_CAPACITY_BYTES = ROUTE_TABLE_CAPACITY.mcast_trees;
     static constexpr uint32_t ROUTE_TABLE_CAPACITY_BYTES = ROUTE_TABLE_CAPACITY.total;
 
-    // ---- Pack (host-side table generation) --------------------------------------
-    // The Y region occupies [0, table_bytes(y_size)) and the X region follows it, both as
-    // destination-major packed rows.
-    static constexpr uint32_t vectors_region_bytes(uint32_t y_size, uint32_t x_size) {
-        return table_bytes(y_size) + table_bytes(x_size);
-    }
-
     // ---- Multicast reverse-tree region -------------------------------------------
     // The fixed tree region follows the fixed vector region. Within it, Y precedes X and the X offset
     // depends only on the live Y tree's edge count.
     // An arborescence over n rows has n-1 edges; a single-row axis has none.
     static constexpr uint32_t mcast_tree_edge_count(uint32_t axis_size) { return axis_size > 1 ? axis_size - 1 : 0; }
-    static constexpr uint32_t mcast_tree_region_bytes(uint32_t y_size, uint32_t x_size) {
-        return MCAST_TREE_EDGE_BYTES * (mcast_tree_edge_count(y_size) + mcast_tree_edge_count(x_size));
-    }
-    // Whether vectors and trees fit their fixed regions.
-    static constexpr bool route_table_regions_fit(uint32_t y_size, uint32_t x_size) {
-        return vectors_region_bytes(y_size, x_size) <= ACTION_VECTOR_CAPACITY_BYTES &&
-               mcast_tree_region_bytes(y_size, x_size) <= MCAST_TREE_CAPACITY_BYTES;
-    }
 
     static constexpr uint32_t mcast_tree_x_offset(uint32_t y_size) {
         return MCAST_TREE_EDGE_BYTES * mcast_tree_edge_count(y_size);
@@ -318,74 +297,13 @@ struct Routing2DCodec {
         return static_cast<std::uint16_t>(
             region[byte_index] | (static_cast<std::uint16_t>(region[byte_index + 1]) << 8));
     }
-    static inline void set_mcast_tree_edge(std::uint8_t* region, uint32_t index, std::uint16_t packed_edge) {
-        const uint32_t byte_index = index * MCAST_TREE_EDGE_BYTES;
-        region[byte_index] = static_cast<std::uint8_t>(packed_edge & 0xFF);
-        region[byte_index + 1] = static_cast<std::uint8_t>((packed_edge >> 8) & 0xFF);
-    }
 
-    static inline std::uint8_t* y_row(std::uint8_t* table, uint32_t y_size, uint32_t dst_y) {
-        return table + dst_y * row_bytes(y_size);
-    }
     static inline const std::uint8_t* y_row(const std::uint8_t* table, uint32_t y_size, uint32_t dst_y) {
         return table + dst_y * row_bytes(y_size);
-    }
-    static inline std::uint8_t* x_row(std::uint8_t* table, uint32_t y_size, uint32_t x_size, uint32_t dst_x) {
-        return table + table_bytes(y_size) + dst_x * row_bytes(x_size);
     }
     static inline const std::uint8_t* x_row(
         const std::uint8_t* table, uint32_t y_size, uint32_t x_size, uint32_t dst_x) {
         return table + table_bytes(y_size) + dst_x * row_bytes(x_size);
-    }
-
-    // Unicast action-map bound only: both axes must be addressable and the packed vectors must fit
-    // the L1 slot. FabricContext separately checks the packet map, while route_table_regions_fit()
-    // checks both fixed regions.
-    static constexpr bool shape_fits_route_table(uint32_t y_size, uint32_t x_size) {
-        return y_size <= MAX_AXIS_SIZE && x_size <= MAX_AXIS_SIZE &&
-               vectors_region_bytes(y_size, x_size) <= ROUTE_TABLE_CAPACITY_BYTES;
-    }
-
-    template <typename YActionSource, typename XActionSource>
-    static inline bool pack_route_vectors(
-        std::uint8_t* out, uint32_t y_size, uint32_t x_size, YActionSource&& y_action, XActionSource&& x_action) {
-        if (!shape_fits_route_table(y_size, x_size)) {
-            return false;
-        }
-        const uint32_t region_bytes = vectors_region_bytes(y_size, x_size);
-        for (uint32_t i = 0; i < region_bytes; ++i) {
-            out[i] = 0;
-        }
-        for (uint32_t dst = 0; dst < y_size; ++dst) {
-            std::uint8_t* row = y_row(out, y_size, dst);
-            for (uint32_t cur = 0; cur < y_size; ++cur) {
-                uint8_t action = Y2_STOP;
-                if (cur != dst) {
-                    switch (y_action(cur, dst)) {
-                        case eth_chan_directions::NORTH: action = Y2_NORTH; break;
-                        case eth_chan_directions::SOUTH: action = Y2_SOUTH; break;
-                        case eth_chan_directions::Z: action = Y2_Z; break;
-                        default: return false;
-                    }
-                }
-                set_action_2bit(row, cur, action);
-            }
-        }
-        for (uint32_t dst = 0; dst < x_size; ++dst) {
-            std::uint8_t* row = x_row(out, y_size, x_size, dst);
-            for (uint32_t cur = 0; cur < x_size; ++cur) {
-                uint8_t action = X2_STOP;
-                if (cur != dst) {
-                    switch (x_action(cur, dst)) {
-                        case eth_chan_directions::EAST: action = X2_EAST; break;
-                        case eth_chan_directions::WEST: action = X2_WEST; break;
-                        default: return false;
-                    }
-                }
-                set_action_2bit(row, cur, action);
-            }
-        }
-        return true;
     }
 
     // ---- Decode (packet-side action selection) -----------------------------------
@@ -467,12 +385,16 @@ static_assert(
 static_assert(
     Routing2DCodec::action_bit(eth_chan_directions::Z) == Routing2DCodec::ACTION_Z, "2D action-map bit mismatch for Z");
 static_assert(
-    Routing2DCodec::vectors_region_bytes(64, 4) == Routing2DCodec::ACTION_VECTOR_CAPACITY_BYTES &&
-        Routing2DCodec::mcast_tree_region_bytes(64, 4) == Routing2DCodec::MCAST_TREE_CAPACITY_BYTES,
+    Routing2DCodec::table_bytes(64) + Routing2DCodec::table_bytes(4) == Routing2DCodec::ACTION_VECTOR_CAPACITY_BYTES &&
+        Routing2DCodec::MCAST_TREE_EDGE_BYTES *
+                (Routing2DCodec::mcast_tree_edge_count(64) + Routing2DCodec::mcast_tree_edge_count(4)) ==
+            Routing2DCodec::MCAST_TREE_CAPACITY_BYTES,
     "The 64x4 maximum must fill both fixed route-table regions exactly");
 static_assert(
-    Routing2DCodec::vectors_region_bytes(4, 64) == Routing2DCodec::ACTION_VECTOR_CAPACITY_BYTES &&
-        Routing2DCodec::mcast_tree_region_bytes(4, 64) == Routing2DCodec::MCAST_TREE_CAPACITY_BYTES,
+    Routing2DCodec::table_bytes(4) + Routing2DCodec::table_bytes(64) == Routing2DCodec::ACTION_VECTOR_CAPACITY_BYTES &&
+        Routing2DCodec::MCAST_TREE_EDGE_BYTES *
+                (Routing2DCodec::mcast_tree_edge_count(4) + Routing2DCodec::mcast_tree_edge_count(64)) ==
+            Routing2DCodec::MCAST_TREE_CAPACITY_BYTES,
     "The 4x64 maximum must fill both fixed route-table regions exactly");
 
 // ============================================================================
@@ -955,11 +877,6 @@ struct RouterStateManager {
 struct __attribute__((packed)) route_table_2d_t {
     std::uint8_t action_vectors[Routing2DCodec::ACTION_VECTOR_CAPACITY_BYTES];
     std::uint8_t mcast_trees[Routing2DCodec::MCAST_TREE_CAPACITY_BYTES];
-
-#if !defined(KERNEL_BUILD) && !defined(FW_BUILD)
-    // Fills action_vectors by probing ControlPlane's first-hop relation along each axis.
-    void calculate_chip_to_all_routing_fields(const FabricNodeId& src_fabric_node_id, uint16_t num_chips);
-#endif
 };
 static_assert(
     sizeof(route_table_2d_t) == Routing2DCodec::ROUTE_TABLE_CAPACITY_BYTES,

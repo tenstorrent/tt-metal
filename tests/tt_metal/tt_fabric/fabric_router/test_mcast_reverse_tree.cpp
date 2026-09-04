@@ -32,6 +32,7 @@
 #include "llrt/rtoptions.hpp"
 #include "tt_metal/fabric/axis_route_topology.hpp"
 #include "tt_metal/fabric/mcast_reverse_tree.hpp"
+#include "tt_metal/fabric/routing_2d_table_builder.hpp"
 #include "utils.hpp"
 
 namespace tt::tt_fabric::mcast_reverse_tree_tests {
@@ -285,9 +286,10 @@ void check_embed(const std::string& fixture) {
 
     const auto y_size = static_cast<std::uint32_t>(y_topo->axis_len);
     const auto x_size = static_cast<std::uint32_t>(x_topo->axis_len);
-    ASSERT_TRUE(Routing2DCodec::route_table_regions_fit(y_size, x_size)) << fixture;
+    ASSERT_TRUE(is_valid_2d_route_table_shape(y_size, x_size)) << fixture;
 
-    const auto tree_bytes = Routing2DCodec::mcast_tree_region_bytes(y_size, x_size);
+    const auto tree_bytes = Routing2DCodec::MCAST_TREE_EDGE_BYTES * (Routing2DCodec::mcast_tree_edge_count(y_size) +
+                                                                     Routing2DCodec::mcast_tree_edge_count(x_size));
     constexpr std::uint8_t kSentinel = 0xA5;
 
     const std::array<std::pair<std::uint32_t, std::uint32_t>, 4> corners = {
@@ -643,7 +645,9 @@ void check_maximum_embed(
     ASSERT_EQ(y_topo.axis_len, expected_y);
     ASSERT_EQ(x_topo.axis_len, expected_x);
     ASSERT_EQ(
-        Routing2DCodec::mcast_tree_region_bytes(expected_y, expected_x), Routing2DCodec::MCAST_TREE_CAPACITY_BYTES);
+        Routing2DCodec::MCAST_TREE_EDGE_BYTES *
+            (Routing2DCodec::mcast_tree_edge_count(expected_y) + Routing2DCodec::mcast_tree_edge_count(expected_x)),
+        Routing2DCodec::MCAST_TREE_CAPACITY_BYTES);
 
     std::vector<std::uint8_t> trees(Routing2DCodec::MCAST_TREE_CAPACITY_BYTES, 0);
     std::string failure;

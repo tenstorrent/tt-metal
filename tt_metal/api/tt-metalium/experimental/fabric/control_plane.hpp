@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <array>
 #include <unordered_set>
 
 // UMD: EthCoord is a UMD type alias used in the private method
@@ -496,12 +497,28 @@ private:
     // Takes RoutingTableGenerator table and converts to routing tables for each ethernet port
     void convert_fabric_routing_table_to_chip_routing_table();
 
+    using Routing2DActionVectors = std::array<std::uint8_t, Routing2DCodec::ACTION_VECTOR_CAPACITY_BYTES>;
+
     void write_routing_tables_to_eth_cores(MeshId mesh_id, ChipId chip_id) const;
-    void write_routing_info_to_devices(MeshId mesh_id, ChipId chip_id) const;
+    void write_routing_info_to_devices(
+        MeshId mesh_id,
+        ChipId chip_id,
+        const MeshShape& mesh_shape,
+        const RoutingTable& intra_mesh_routing_table,
+        const RoutingTable& inter_mesh_routing_table,
+        const Routing2DActionVectors* action_vectors_2d) const;
     void write_fabric_connections_to_tensix_cores(MeshId mesh_id, ChipId chip_id) const;
     // Helper functions to compute and embed routing path tables
     void compute_and_embed_1d_routing_path_table(MeshId mesh_id, routing_l1_info_t& routing_info) const;
-    void compute_and_embed_2d_routing_path_table(MeshId mesh_id, ChipId chip_id, routing_l1_info_t& routing_info) const;
+    Routing2DActionVectors compute_2d_routing_action_vectors(
+        MeshId mesh_id, const MeshShape& mesh_shape, const RoutingTable& intra_mesh_routing_table) const;
+    void compute_and_embed_2d_routing_path_table(
+        MeshId mesh_id,
+        ChipId chip_id,
+        const MeshShape& mesh_shape,
+        const Routing2DActionVectors& action_vectors,
+        const RoutingTable& inter_mesh_routing_table,
+        routing_l1_info_t& routing_info) const;
 
     // Helper to populate fabric connection info for both router and mux configurations
     void populate_fabric_connection_info(
