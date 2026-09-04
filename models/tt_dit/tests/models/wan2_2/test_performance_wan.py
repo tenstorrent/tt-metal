@@ -66,11 +66,6 @@ def t2v_metrics(mesh_device, height):
             }
     elif tuple(mesh_device.shape) == (4, 8) and height == 480:
         expected_metrics = {
-            # Raised 0.1 -> 0.12: text encoding measures 0.105-0.106 on a BH galaxy, vs the
-            # 0.0906 that set this target (PR #41965, 2026-04-13). ~17% regression, but 6ms
-            # in absolute terms. WH 4x8 measures 0.105-0.111 and is excluded from the CI leg
-            # with `not wh_4x8` for the same miss; that workaround can go once this sticks.
-            # TODO: restore 0.1 when the text-encoder regression is fixed.
             "encoder": 0.12,
             "denoising": 163.0,
             "vae": 18.2,
