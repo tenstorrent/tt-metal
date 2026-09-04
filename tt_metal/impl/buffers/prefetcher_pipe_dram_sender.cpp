@@ -36,7 +36,9 @@ std::vector<TensorPrefetcherBankPipes> CreatePrefetcherPipesForTensorPrefetcher(
     // Multi-receiver shards (the legacy interleaved layout) force one sender per bank; the
     // receiver-contiguous layout that disallows them is what lets a bank use two senders.
     const auto mapping = build_dram_sender_mapping(
-        &mesh_device, bank_to_receivers, /*dual_senders_per_bank=*/!support_multi_receiver_shards);
+        &mesh_device,
+        bank_to_receivers,
+        support_multi_receiver_shards ? DramSenderSplit::OnePerBank : DramSenderSplit::TwoPerBank);
     validate_dram_senders_across_mesh(&mesh_device, mapping);
 
     // build_dram_sender_mapping emits a bank's senders adjacently and keeps the banks in input
@@ -65,6 +67,23 @@ std::vector<TensorPrefetcherBankPipes> CreatePrefetcherPipesForTensorPrefetcher(
         bank_pipes.push_back(std::move(group));
     }
     return bank_pipes;
+}
+
+std::vector<std::pair<CoreCoord, CoreRangeSet>> prefetcher_pipe_sender_receiver_mapping(
+    const std::vector<TensorPrefetcherBankPipes>& banks) {
+    std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping;
+    size_t num_pipes = 0;
+    for (const auto& bank : banks) {
+        num_pipes += bank.pipes.size();
+    }
+    mapping.reserve(num_pipes);
+    for (const auto& bank : banks) {
+        for (const auto& pipe : bank.pipes) {
+            TT_FATAL(pipe != nullptr, "PrefetcherPipe group for DRAM bank {} holds a null pipe", bank.bank_id);
+            mapping.emplace_back(pipe->sender_core(), pipe->receiver_cores());
+        }
+    }
+    return mapping;
 }
 
 CoreCoord prefetcher_pipe_sender_core(const PrefetcherPipe& pipe) { return pipe.sender_core(); }

@@ -111,9 +111,9 @@ LayoutMode detect_layout_mode(const MeshTensor& t, const Buffer& buf, uint32_t t
 // Validate a streaming (receiver-contiguous) weight and return the shard distribution strategy that
 // governs how the host maps a receiver's (bank, bank-local slab index) to a global receiver position
 // when slicing the rotation table. This is the consumer's concept (a ring matmul calls it a "ring
-// position") — the GCB stays order-agnostic (see receiver_slab_indices). TT_FATALs on a
-// non-recv-contig (no BDS) tensor or an unsupported distribution strategy; only the two strategies
-// below reach the packing loop:
+// position") — the transport stays order-agnostic and only numbers slabs bank-locally (see
+// recv_index_bases_per_sender). TT_FATALs on a non-recv-contig (no BDS) tensor or an unsupported
+// distribution strategy; only the two strategies below reach the packing loop:
 //   ROUND_ROBIN_1D (strided):    global = bank + slab_idx * num_banks
 //   CONTIGUOUS_1D  (contiguous): global = bank * receivers_per_bank + slab_idx
 ShardDistributionStrategy shard_strategy_for_streaming_tensor(const MeshTensor& t, uint32_t tensor_idx) {
@@ -509,20 +509,19 @@ TensorPrefetcherManager::RequestTarget TensorPrefetcherManager::target_for(
 
     RequestTarget target;
     target.transport = TENSOR_PREFETCHER_TRANSPORT_PREFETCHER_PIPE;
-    size_t num_pipes = 0;
-    for (const auto& bank : prefetcher_pipes) {
-        num_pipes += bank.pipes.size();
-    }
-    target.mapping.reserve(num_pipes);
-    target.state_addr_per_sender.reserve(num_pipes);
-
     // Bank-major mapping: a group's pipes stay adjacent and in their own order, which is what
     // recv_index_bases_per_sender turns into each sender's bank-local slab base (0 for the first
-    // pipe of a bank, the first pipe's receiver count for the second).
-    std::unordered_set<uint32_t> seen_banks;
-    CoreRangeSet all_receivers;
-    uint32_t total_receivers = 0;
+    // pipe of a bank, the first pipe's receiver count for the second). Taken from the shared
+    // helper so this order is the one a consumer op's cache key sees, not a re-derivation of it.
+    target.mapping = experimental::prefetcher_pipe_sender_receiver_mapping(prefetcher_pipes);
+    target.state_addr_per_sender.reserve(target.mapping.size());
 
+    std::unordered_set<uint32_t> seen_banks;
+    std::unordered_set<CoreCoord> distinct_receivers;
+    uint32_t total_receivers = 0;
+    std::optional<uint32_t> first_entry_size;
+
+    size_t flat_pipe = 0;
     for (const auto& bank : prefetcher_pipes) {
         TT_FATAL(
             seen_banks.insert(bank.bank_id).second,
@@ -537,12 +536,8 @@ TensorPrefetcherManager::RequestTarget TensorPrefetcherManager::target_for(
             bank.bank_id,
             bank.pipes.size());
 
-        for (size_t p = 0; p < bank.pipes.size(); ++p) {
-            TT_FATAL(
-                bank.pipes[p] != nullptr,
-                "QueueTensorPrefetcherRequest was given a null PrefetcherPipe at bank {} pipe {}",
-                bank.bank_id,
-                p);
+        for (size_t p = 0; p < bank.pipes.size(); ++p, ++flat_pipe) {
+            // Null pipes were rejected by prefetcher_pipe_sender_receiver_mapping above.
             const experimental::PrefetcherPipe& pipe = *bank.pipes[p];
             TT_FATAL(
                 experimental::prefetcher_pipe_sender_core_type(pipe) == experimental::SenderCoreType::Dram,
@@ -551,7 +546,7 @@ TensorPrefetcherManager::RequestTarget TensorPrefetcherManager::target_for(
                 bank.bank_id,
                 p);
 
-            const CoreCoord sender = experimental::prefetcher_pipe_sender_core(pipe);
+            const CoreCoord& sender = target.mapping[flat_pipe].first;
             TT_FATAL(
                 static_cast<uint32_t>(sender.x) == bank.bank_id,
                 "QueueTensorPrefetcherRequest requires a bank's PrefetcherPipes to be driven from that bank, but "
@@ -564,12 +559,12 @@ TensorPrefetcherManager::RequestTarget TensorPrefetcherManager::target_for(
 
             const uint32_t entry_size = pipe.initial_entry_size();
             const uint32_t ring_size = pipe.ring_size();
-            if (target.mapping.empty()) {
-                target.initial_entry_size = entry_size;
+            if (!first_entry_size.has_value()) {
+                first_entry_size = entry_size;
                 target.per_recv_capacity_bytes = ring_size;
             }
             TT_FATAL(
-                entry_size == target.initial_entry_size && ring_size == target.per_recv_capacity_bytes,
+                entry_size == *first_entry_size && ring_size == target.per_recv_capacity_bytes,
                 "QueueTensorPrefetcherRequest requires one geometry across every pipe: bank {} pipe {} has entry size "
                 "{} B and ring size {} B, but the first pipe has {} B and {} B. One request stamps one layout for "
                 "every sender.",
@@ -577,23 +572,24 @@ TensorPrefetcherManager::RequestTarget TensorPrefetcherManager::target_for(
                 p,
                 entry_size,
                 ring_size,
-                target.initial_entry_size,
+                *first_entry_size,
                 target.per_recv_capacity_bytes);
 
-            const CoreRangeSet& receivers = experimental::prefetcher_pipe_receiver_cores(pipe);
-            all_receivers = all_receivers.merge(receivers);
+            const CoreRangeSet& receivers = target.mapping[flat_pipe].second;
+            for (const CoreCoord& receiver : corerange_to_cores(receivers)) {
+                distinct_receivers.insert(receiver);
+            }
             total_receivers += receivers.num_cores();
-            target.mapping.emplace_back(sender, receivers);
             target.state_addr_per_sender.push_back(
                 static_cast<uint32_t>(experimental::sender_state_drisc_l1_base(pipe)));
         }
     }
     TT_FATAL(
-        all_receivers.num_cores() == total_receivers,
+        distinct_receivers.size() == total_receivers,
         "QueueTensorPrefetcherRequest requires disjoint receiver sets across every PrefetcherPipe: {} receivers were "
         "listed but only {} are distinct.",
         total_receivers,
-        all_receivers.num_cores());
+        distinct_receivers.size());
     return target;
 }
 
@@ -858,11 +854,9 @@ std::vector<std::vector<std::vector<uint8_t>>> TensorPrefetcherManager::serializ
             std::numeric_limits<uint8_t>::max());
     }
 
-    // Per-sender bank-local slab index map, needed only when a tensor streams -- so it is built
-    // inside the guard below rather than for every request. It comes from the shared
-    // receiver_slab_indices_per_sender so both transports and the consumer agree on slab numbering;
-    // it is order-agnostic, and this function maps each receiver's (bank, slab index) to a global
-    // receiver position per tensor using that tensor's shard distribution.
+    // A streaming tensor needs each receiver's bank-local slab index, which is recv_index_bases[s]
+    // plus its position within sender s. The topology guard below is what makes that index usable
+    // as a global receiver position, so it runs only when some tensor streams.
     bool any_streaming = false;
     for (const auto& input : data_tensors) {
         if (!input.rotation.empty()) {
@@ -870,10 +864,7 @@ std::vector<std::vector<std::vector<uint8_t>>> TensorPrefetcherManager::serializ
             break;
         }
     }
-    std::vector<std::vector<uint32_t>> slab_idx_by_sender;
     if (any_streaming) {
-        slab_idx_by_sender = receiver_slab_indices_per_sender(mapping);
-
         // Both the strided and contiguous (bank, slab index) -> global position formulas are
         // bijections onto [0, total_receivers) only when the DRAM banks are dense 0..num_banks-1 and
         // every bank has exactly receivers_per_bank receivers. Guard that topology invariant once
@@ -1085,7 +1076,8 @@ std::vector<std::vector<std::vector<uint8_t>>> TensorPrefetcherManager::serializ
             sender_header->prefetch.target_state_addr = target.state_addr_per_sender[s];
             sender_header->prefetch.recv_index_base = static_cast<uint8_t>(recv_index_bases[s]);
             if (page_has_rotation) {
-                const auto& slab = slab_idx_by_sender[s];
+                const uint32_t slab_base = recv_index_bases[s];
+                const uint32_t num_local_receivers = mapping[s].second.num_cores();
                 const uint32_t bank = static_cast<uint32_t>(mapping[s].first.x);
                 for (uint32_t i = 0; i < plan.slots.size(); ++i) {
                     if (plan.slots[i].rotation.empty()) {
@@ -1099,9 +1091,9 @@ std::vector<std::vector<std::vector<uint8_t>>> TensorPrefetcherManager::serializ
                     // CONTIGUOUS_1D reach here (see shard_strategy_for_streaming_tensor).
                     const bool strided = plan.slots[i].strategy == ShardDistributionStrategy::ROUND_ROBIN_1D;
                     auto* rot = reinterpret_cast<uint32_t*>(page.data() + slot_start + kLayoutBytes);
-                    for (uint32_t r = 0; r < slab.size(); ++r) {
-                        const uint32_t g =
-                            strided ? (bank + slab[r] * num_banks_) : (bank * receivers_per_bank + slab[r]);
+                    for (uint32_t r = 0; r < num_local_receivers; ++r) {
+                        const uint32_t slab = slab_base + r;
+                        const uint32_t g = strided ? (bank + slab * num_banks_) : (bank * receivers_per_bank + slab);
                         rot[r] = plan.slots[i].rotation[g];
                     }
                 }

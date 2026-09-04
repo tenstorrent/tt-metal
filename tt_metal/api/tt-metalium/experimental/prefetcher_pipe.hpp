@@ -84,6 +84,14 @@ std::vector<TensorPrefetcherBankPipes> CreatePrefetcherPipesForTensorPrefetcher(
     BufferType buffer_type = BufferType::L1,
     bool support_multi_receiver_shards = false);
 
+// Flatten a bank-major group list into one (sender core, its receivers) entry per pipe, in the
+// order CreatePrefetcherPipesForTensorPrefetcher fixed: a bank's pipes stay adjacent and in their
+// own order. That order is what assigns each sender its bank-local slab base, so every layer that
+// walks the groups -- the prefetcher request path, a consumer op's cache key, a test -- must agree
+// on it. Derive it here rather than re-walking the groups.
+std::vector<std::pair<CoreCoord, CoreRangeSet>> prefetcher_pipe_sender_receiver_mapping(
+    const std::vector<TensorPrefetcherBankPipes>& banks);
+
 // Accessors usable through the forward declaration above, for callers that hold pipes but do not
 // include the impl header. Each returns the same value as the member of the same name.
 CoreCoord prefetcher_pipe_sender_core(const PrefetcherPipe& pipe);

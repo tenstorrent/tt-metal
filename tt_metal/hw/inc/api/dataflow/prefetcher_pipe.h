@@ -513,11 +513,15 @@ public:
 
     FORCE_INLINE uint32_t get_entry_size() { return interface_.sender.fifo_page_size; }
 
-    // This receiver's local entries_acked counter. entries_sent sits one L1_ALIGNMENT below it --
-    // the relationship wait_front() relies on -- so a consumer can compare the pair to detect a
-    // sender that published more than it consumed. Receiver participants only.
-    FORCE_INLINE volatile tt_l1_ptr uint32_t* local_pages_acked_ptr() {
-        return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(interface_.receiver.aligned_pages_acked_ptr);
+    // True while the sender has published entries this receiver has not yet popped. Reads both
+    // halves of this receiver's counter pair -- entries_sent sits one L1_ALIGNMENT below
+    // entries_acked, the relationship wait_front() relies on -- so the pair layout stays inside
+    // the class. Receiver participants only; caller invalidates the L1 cache first.
+    FORCE_INLINE bool has_unconsumed_entries() {
+        auto* acked_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(interface_.receiver.aligned_pages_acked_ptr);
+        auto* sent_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(interface_.receiver.aligned_pages_acked_ptr - L1_ALIGNMENT);
+        return *sent_ptr != *acked_ptr;
     }
 
 #if defined(KERNEL_BUILD) && !defined(COMPILE_FOR_TRISC)

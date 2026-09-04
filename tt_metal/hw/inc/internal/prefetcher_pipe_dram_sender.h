@@ -79,6 +79,12 @@ FORCE_INLINE volatile tt_l1_ptr uint32_t* pipe_local_sent_ptr(const PipeSenderCt
            (2 * r * L1_ALIGNMENT / sizeof(uint32_t));
 }
 
+// Receiver r's NOC address encoding, decoded from the config page's XY table.
+FORCE_INLINE uint32_t pipe_receiver_noc_xy(const PipeSenderCtx& ctx, uint32_t r, uint8_t noc) {
+    volatile tt_l1_ptr uint32_t* xy = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ctx.receiver_noc_xy_ptr);
+    return uint32_t(NOC_XY_ENCODING(DYNAMIC_NOC_X(noc, xy[2 * r]), DYNAMIC_NOC_Y(noc, xy[2 * r + 1])));
+}
+
 // Byte offset into the ring where receiver r's next entry goes, derived from its credit counter.
 // Matches the worker-sender path's wr_offset_from_sent().
 FORCE_INLINE uint32_t pipe_derived_wr_offset(const PipeSenderCtx& ctx, uint32_t r) {
@@ -86,11 +92,11 @@ FORCE_INLINE uint32_t pipe_derived_wr_offset(const PipeSenderCtx& ctx, uint32_t 
     return (sent_units % pipe_ring_units(ctx)) * L1_ALIGNMENT;
 }
 
-// Free entries at the most-backed-up receiver, without blocking. Lets a batching caller size its
-// next round the way poll_min_free_aligned_pages() does for a GlobalCircularBuffer.
-FORCE_INLINE uint32_t pipe_poll_min_free_entries(const PipeSenderCtx& ctx) {
+// Free credit units (L1_ALIGNMENT-sized) at the most-backed-up receiver, without blocking. Lets a
+// batching caller size its next round the way poll_min_free_aligned_pages() does for a
+// GlobalCircularBuffer.
+FORCE_INLINE uint32_t pipe_poll_min_free_units(const PipeSenderCtx& ctx) {
     const uint32_t ring_units = pipe_ring_units(ctx);
-    const uint32_t units_per_entry = pipe_units_per_entry(ctx);
     uint32_t min_free_units = ring_units;
     invalidate_l1_cache();
     for (uint32_t r = 0; r < ctx.num_receivers; ++r) {
@@ -105,12 +111,14 @@ FORCE_INLINE uint32_t pipe_poll_min_free_entries(const PipeSenderCtx& ctx) {
             min_free_units = free_units;
         }
     }
-    return min_free_units / units_per_entry;
+    return min_free_units;
 }
 
-// Spin until every receiver can take num_entries more entries.
+// Spin until every receiver can take num_entries more entries. The requirement is converted to
+// credit units once so the spin body carries no division.
 FORCE_INLINE void pipe_reserve_back(const PipeSenderCtx& ctx, uint32_t num_entries) {
-    while (pipe_poll_min_free_entries(ctx) < num_entries) {
+    const uint32_t needed_units = num_entries * pipe_units_per_entry(ctx);
+    while (pipe_poll_min_free_units(ctx) < needed_units) {
     }
 }
 
@@ -121,9 +129,7 @@ FORCE_INLINE void pipe_credit_receiver(const PipeSenderCtx& ctx, uint32_t r, uin
     if (units == 0) {
         return;
     }
-    volatile tt_l1_ptr uint32_t* xy = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ctx.receiver_noc_xy_ptr);
-    const uint32_t remote_noc_xy =
-        uint32_t(NOC_XY_ENCODING(DYNAMIC_NOC_X(noc, xy[2 * r]), DYNAMIC_NOC_Y(noc, xy[2 * r + 1])));
+    const uint32_t remote_noc_xy = pipe_receiver_noc_xy(ctx, r, noc);
     const uint32_t remote_sent_ptr = ctx.remote_counters_base + 2 * r * L1_ALIGNMENT;
     *pipe_local_sent_ptr(ctx, r) += units;
     // Posted, matching the worker-sender path: receivers discover credit by polling, and this
@@ -172,9 +178,7 @@ FORCE_INLINE void pipe_write_to_receiver(
     // Contiguous-write rule: a write must not straddle the ring wrap.
     ASSERT(wr_offset + bytes <= ctx.ring_bytes);
 
-    volatile tt_l1_ptr uint32_t* xy = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ctx.receiver_noc_xy_ptr);
-    const uint32_t remote_noc_xy =
-        uint32_t(NOC_XY_ENCODING(DYNAMIC_NOC_X(noc, xy[2 * r]), DYNAMIC_NOC_Y(noc, xy[2 * r + 1])));
+    const uint32_t remote_noc_xy = pipe_receiver_noc_xy(ctx, r, noc);
     const uint64_t dst = get_noc_addr_helper(remote_noc_xy, ctx.fifo_start_addr + wr_offset);
     noc_async_write_one_packet</*enable_noc_tracing=*/false, /*posted=*/true>(src_l1_addr, dst, bytes, noc);
 }

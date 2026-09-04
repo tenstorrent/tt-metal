@@ -15,38 +15,33 @@ namespace ttnn::operations::experimental {
 
 namespace metal_exp = tt::tt_metal::experimental;
 
-uint32_t TensorPrefetcherPipes::num_pipes() const {
-    uint32_t count = 0;
-    for (const auto& bank : banks) {
-        count += static_cast<uint32_t>(bank.pipes.size());
+TensorPrefetcherPipes::TensorPrefetcherPipes(
+    std::vector<tt::tt_metal::experimental::TensorPrefetcherBankPipes> banks,
+    uint32_t entry_size,
+    uint32_t num_entries) :
+    banks(std::move(banks)),
+    entry_size(entry_size),
+    num_entries(num_entries),
+    mapping_(metal_exp::prefetcher_pipe_sender_receiver_mapping(this->banks)) {
+    config_addresses_.reserve(mapping_.size());
+    for (const auto& bank : this->banks) {
+        for (const auto& pipe : bank.pipes) {
+            config_addresses_.push_back(metal_exp::prefetcher_pipe_config_address(*pipe));
+        }
     }
-    return count;
 }
 
 CoreRangeSet TensorPrefetcherPipes::receiver_cores() const {
-    CoreRangeSet cores;
-    for (const auto& bank : banks) {
-        for (const auto& pipe : bank.pipes) {
-            cores = cores.merge(metal_exp::prefetcher_pipe_receiver_cores(*pipe));
-        }
+    // One merge over every pipe's ranges: CoreRangeSet::merge rasterizes the whole bounding box,
+    // so folding pipe by pipe would redo that work per pipe.
+    std::vector<tt::tt_metal::CoreRange> ranges;
+    for (const auto& [_sender, receivers] : mapping_) {
+        ranges.insert(ranges.end(), receivers.ranges().begin(), receivers.ranges().end());
     }
-    return cores;
+    return CoreRangeSet().merge(ranges);
 }
 
-std::vector<std::pair<tt::tt_metal::CoreCoord, CoreRangeSet>> TensorPrefetcherPipes::sender_receiver_core_mapping()
-    const {
-    std::vector<std::pair<tt::tt_metal::CoreCoord, CoreRangeSet>> mapping;
-    mapping.reserve(num_pipes());
-    for (const auto& bank : banks) {
-        for (const auto& pipe : bank.pipes) {
-            mapping.emplace_back(
-                metal_exp::prefetcher_pipe_sender_core(*pipe), metal_exp::prefetcher_pipe_receiver_cores(*pipe));
-        }
-    }
-    return mapping;
-}
-
-std::vector<uint8_t> TensorPrefetcherPipes::attach(tt::tt_metal::Program& program, uint32_t entry_size) const {
+std::vector<uint8_t> TensorPrefetcherPipes::attach(tt::tt_metal::Program& program) const {
     std::vector<uint8_t> pipe_ids;
     pipe_ids.reserve(num_pipes());
     for (const auto& bank : banks) {
@@ -56,21 +51,6 @@ std::vector<uint8_t> TensorPrefetcherPipes::attach(tt::tt_metal::Program& progra
         }
     }
     return pipe_ids;
-}
-
-std::vector<uint8_t> TensorPrefetcherPipes::attach(tt::tt_metal::Program& program) const {
-    return attach(program, entry_size);
-}
-
-std::vector<uint32_t> TensorPrefetcherPipes::config_addresses() const {
-    std::vector<uint32_t> addresses;
-    addresses.reserve(num_pipes());
-    for (const auto& bank : banks) {
-        for (const auto& pipe : bank.pipes) {
-            addresses.push_back(metal_exp::prefetcher_pipe_config_address(*pipe));
-        }
-    }
-    return addresses;
 }
 
 bool is_tensor_prefetcher_supported(tt::tt_metal::distributed::MeshDevice* mesh_device) {

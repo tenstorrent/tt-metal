@@ -89,7 +89,7 @@ public:
 
     // Worker for a pipe built by CreatePrefetcherPipe, Dram for one whose sender is a
     // programmable DRAM core (CreatePrefetcherPipesForTensorPrefetcher).
-    SenderCoreType sender_core_type() const;
+    SenderCoreType sender_core_type() const { return sender_core_type_; }
 
     // The entry size a DRAM-sender pipe is created at: the ring is this many bytes times the
     // requested depth, and it is what word[5] (applied_entry_size) starts out holding, so a
@@ -133,9 +133,11 @@ private:
 
     void setup_buffers(BufferType buffer_type);
     void build_config_pages();
-    // DRAM-sender flavour of build_config_pages: receiver pages only, and they are rebuilt per
-    // device because the sender's virtual DRAM coord varies with that device's harvesting.
-    void build_dram_sender_receiver_config_pages(IDevice* target_device);
+    // DRAM-sender flavour of build_config_pages: receiver pages only, and returned rather than
+    // cached in config_pages_ because the sender's virtual DRAM coord -- and so the pages -- vary
+    // with each device's harvesting.
+    std::unordered_map<CoreCoord, std::vector<uint32_t>> build_dram_sender_receiver_config_pages(
+        IDevice* target_device) const;
     // Reserve this pipe's DRISC L1 config page on its sender core, then compose and stamp it on
     // every device.
     void initialize_dram_sender_config_page();
@@ -158,9 +160,10 @@ private:
     std::unordered_map<CoreCoord, std::vector<uint32_t>> config_pages_;
 
     // ---- DRAM-sender state (unset for a worker-sender PrefetcherPipe) ----
-    // Stored as uint8_t (0=Worker, 1=Dram) so the SenderCoreType enum stays in the experimental
-    // header; sender_core_type() converts.
-    uint8_t sender_core_type_value_ = 0;
+    // The opaque-enum declaration above makes SenderCoreType a complete type here, so the member
+    // needs no integer stand-in; only the enumerator names need the experimental header, and the
+    // constructors that spell them live in the .cpp.
+    SenderCoreType sender_core_type_{};
     uint32_t initial_entry_size_ = 0;
     // This pipe's sender config page in the DRISC L1 arena, reserved on its sender core alone so
     // sibling pipes on other banks can hold the same offset. Null for a worker-sender pipe.

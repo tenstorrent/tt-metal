@@ -162,11 +162,6 @@ private:
         TensorPrefetcherTransport transport = TENSOR_PREFETCHER_TRANSPORT_GLOBAL_CB;
         // Per-receiver ring capacity in bytes; a tensor's page_bytes_per_recv must fit.
         uint32_t per_recv_capacity_bytes = 0;
-        // PrefetcherPipe only: the entry size the pipes were created with, which every pipe in one
-        // request shares. A queued tensor's per-receiver block size need not match it -- the sender
-        // snaps onto the tensor's grid -- so this is a cross-pipe consistency check, not a
-        // per-tensor constraint. 0 for a GCB, which resizes its remote CB per tensor instead.
-        uint32_t initial_entry_size = 0;
     };
 
     void worker_loop();
