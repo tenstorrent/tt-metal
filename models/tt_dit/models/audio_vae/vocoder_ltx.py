@@ -400,6 +400,10 @@ class Vocoder(Module):
         """Free all captured decode traces (call on shutdown or before re-warming)."""
         for tracer in type(self)._forward_device._tracers_keyed.get(self, {}).values():
             tracer.release_trace()
+        # Per-shape tpad-mask device tensors also persist; a dispatch-skipped (capture-only) warm
+        # leaves them as garbage the next decode would reuse. Drop them so re-warming recomputes
+        # them (ltx-rt re-warm correctness delta, re-homed onto the @traced_function structure).
+        self._tpad_mask_cache.clear()
 
     def _host_to_device(self, mel_spec: torch.Tensor) -> ttnn.Tensor:
         """Host preprocessing + upload to a ROW_MAJOR full-T device tensor. Split out from
@@ -441,7 +445,7 @@ class Vocoder(Module):
 
         return ttnn.from_torch(x_BTC_torch, device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=self.dtype)
 
-    @traced_function(device=lambda self: self.mesh_device, prep_run=True, clone_prep_inputs=True)
+    @traced_function(device=lambda self: self.mesh_device, prep_run=False, clone_prep_inputs=False)
     def _forward_device(self, x_dev: ttnn.Tensor) -> ttnn.Tensor:
         """Pure-device graph: conv_pre → partition → ups/AMP stack → act_post → conv_post →
         T-gather. Fixed-shape device in/out, so this region is trace-capturable."""

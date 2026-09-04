@@ -182,9 +182,13 @@ class LTXAudioDecoderAdapter:
             mesh_device=self._mesh_device,
             dtype=ttnn.float32,
         )
+        # ltx-rt 608eb554 flips BWE/VAE audio-decode trace default off->on at the read-site
+        # (gated on the transformer being traced) so every traced run gets traced audio decode
+        # by default — a measured ~0.4s win (audio decode ~0.48s vs eager ~0.88s), replay
+        # bit-identical. LTX_BWE_TRACE=0 / LTX_VAE_TRACE=0 still force eager.
         self._vocoder_with_bwe.use_trace = self._traced and _env_flag("LTX_VOC_TRACE", default=True)
-        self._vocoder_with_bwe.use_trace_bwe = self._traced
-        self._mel_decoder.use_trace = self._traced and _env_flag("LTX_VAE_TRACE", default=False)
+        self._vocoder_with_bwe.use_trace_bwe = self._traced and _env_flag("LTX_BWE_TRACE", default=True)
+        self._mel_decoder.use_trace = self._traced and _env_flag("LTX_VAE_TRACE", default=True)
         if isinstance(audio_parallel_config, AudioTCParallelConfig):
             cfg_desc = f"T-shard={t_factor} axis{t_axis} + channel-TP={c_factor} axis{c_axis}"
         elif audio_parallel_config is not None:
@@ -262,6 +266,7 @@ class LTXAudioDecoderAdapter:
                 parallel_config=self._dit_parallel_config,
                 mesh_shape=tuple(self._mesh_device.shape),
                 mesh_device=self._mesh_device,
+                sources=[self._checkpoint_path],
                 get_torch_state_dict=self._audio_decoder_state_provider,
             )
 
@@ -273,6 +278,7 @@ class LTXAudioDecoderAdapter:
                 parallel_config=self._dit_parallel_config,
                 mesh_shape=tuple(self._mesh_device.shape),
                 mesh_device=self._mesh_device,
+                sources=[self._checkpoint_path],
                 get_torch_state_dict=self._vocoder_state_provider,
             )
 
