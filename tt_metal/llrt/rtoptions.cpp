@@ -286,15 +286,16 @@ bool is_env_enabled(const char* value) { return value && value[0] == '1'; }
 uint32_t parse_uint32_env(const char* name, const char* value) {
     TT_FATAL(value != nullptr && value[0] != '\0', "{} must not be empty", name);
     std::string text(value);
-    TT_FATAL(text[0] != '-', "{} must be a non-negative integer, got '{}'", name, text);
+    TT_FATAL(text[0] != '-', "{} must be a positive decimal integer, got '{}'", name, text);
     size_t parse_pos = 0;
     unsigned long long parsed = 0;
     try {
-        parsed = std::stoull(text, &parse_pos, 0);
+        parsed = std::stoull(text, &parse_pos, 10);
     } catch (const std::exception& e) {
-        TT_FATAL(false, "{} must be a non-negative integer, got '{}': {}", name, text, e.what());
+        TT_FATAL(false, "{} must be a positive decimal integer, got '{}': {}", name, text, e.what());
     }
     TT_FATAL(parse_pos == text.size(), "{} has trailing characters in '{}'", name, text);
+    TT_FATAL(parsed > 0, "{} must be greater than zero", name);
     TT_FATAL(parsed <= std::numeric_limits<uint32_t>::max(), "{} exceeds uint32_t max: {}", name, text);
     return static_cast<uint32_t>(parsed);
 }
