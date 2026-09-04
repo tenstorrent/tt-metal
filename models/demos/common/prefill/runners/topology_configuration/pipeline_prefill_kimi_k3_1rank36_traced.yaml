@@ -1,0 +1,43 @@
+# Kimi-K3 A/B baseline, 1 rank, 36 layers (AttnRes blocks 0-2), TRACED — the only difference from the 1rank36 baseline.
+# failure is far harder to attribute, and this exercises everything except the cross-rank sealed-set
+# handoff. Drive with prefill_producer.py on this host.
+rank_bindings:
+  - {rank: 0, mesh_id: 0, mesh_host_rank: 0, env_overrides: {}}
+mesh_graph_desc_path: tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_x_graph_descriptor.textproto
+global_env:
+  # FABRIC_2D, never a torus: `attn_res_gather_softmax` deadlocks under Topology::Ring
+  # (tenstorrent/tt-metal#54835), so every AttnRes read would hang on a wrapped axis.
+  PREFILL_FABRIC_MODE: "2d"
+  PREFILL_MANIFEST: "models/demos/deepseek_v3_d_p/tt/runners/manifests/kimi_k3.json"
+  PREFILL_MODEL: "kimi_k3"
+  # 36 = three complete 12-layer AttnRes blocks. 48 OOMs on one Galaxy (34.2 GB/chip, ~739 MiB per
+  # layer), which is why the smoke test is shallower than a real rank.. A split inside a block would leave a rank whose
+  # sealed set is incomplete.
+  PREFILL_NUM_LAYERS: "36"
+  PREFILL_MAX_SEQ_LEN: "56320"
+  # Single user. The default is 2, and both the KV ring and the MoE dispatch buffers are sized per
+  # user, so this is the cheapest way to buy back DRAM: 48 layers OOMed at 2 users on a 34.2 GB/chip
+  # Galaxy, dying at layer 44.
+  PREFILL_NUM_USERS: "1"
+  # NOT a memory lever, despite appearances. The dispatch buffers are the per-chunk OUTPUT of
+  # ttnn.prefill_dispatch, not a construction-time allocation: compute_constants passes
+  # max_dispatch_buffer_token_size as an integer for program-config sizing only. At cf=8,
+  # chunk 5120, SP=8 the transient is ~159 MiB, not gigabytes — which is why a 48-layer build
+  # OOMed byte-identically at cf=8 and cf=2, both times during weight loading and before this
+  # takes effect. Kept at 2 as a deliberate choice, not a workaround; lowering it risks
+  # dropping tokens under expert imbalance.
+  #
+  # The real per-layer cost is ~717 MiB/chip, of which ~496 MiB is the routed experts (already
+  # bfloat4_b) and ~170 MiB the bfloat16 KDA input projection. The gap against the ~517 MB/chip
+  # implied by dividing the on-disk tensorbins by 32 is not overhead: every non-expert weight is
+  # TP-sharded but SP-REPLICATED, so that division undercounts them 8x.
+  PREFILL_CAPACITY_FACTOR: "2"
+  PREFILL_H2D_SERVICE_ID: "ds_prefill"
+  PREFILL_GATE_FALLBACK_MODE: "DEVICE_FP32"
+  # L1_SMALL is not an env knob: the runner reads ADAPTER.l1_small_size, set to 4096 there.
+  PREFILL_ENABLE_LAYER_ACK: "1"
+  LOGURU_LEVEL: "INFO"
+  PREFILL_USE_TRACE: "1"
+  # D2H acks are not trace-capturable (the runner rejects the combination), so this uses the
+  # trace-safe host-callback backend. FIFO raised past the 341-record default: see #54869.
+  PREFILL_LAYER_ACK_FIFO_BYTES: "65536"

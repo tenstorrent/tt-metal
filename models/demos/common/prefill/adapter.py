@@ -132,6 +132,16 @@ class PrefillModelAdapter(ABC):
     # Whether this model ships a DFlash speculative drafter the prefill runner can build during prefill
     supports_dflash: bool = False
 
+    def pipeline_activation_planes(self, boundary_layer_idx: int) -> int:
+        """Planes on dim 1 of the D2D payload at a rank boundary placed before `boundary_layer_idx`.
+
+        One for every model whose cross-rank state is just the hidden activation. A model that also
+        carries per-token state produced by EARLIER layers overrides this: the receiving rank cannot
+        recompute what it does not hold, and the payload is the only channel. The count must be a
+        function of the boundary alone, so the transfer keeps a static shape and stays trace-capturable.
+        """
+        return 1
+
     # =====================================================================
     # Glue the engine calls. The adapter is a factory + descriptor only: it says
     # where this model's config / weights live and how to build its runtime. All
@@ -287,6 +297,7 @@ ADAPTER_PATHS = {
     "minimax_m3": "models.demos.minimax_m3.tt.runners.adapters.minimax_m3:MiniMaxM3PrefillAdapter",
     # GPT-OSS-120B: GQA (not MLA) + attention sinks + sliding/full alternation + EP MoE.
     "gpt_oss_d_p": "models.demos.gpt_oss_d_p.tt.runners.adapters.gpt_oss:GptOssPrefillAdapter",
+    "kimi_k3": "models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k3:KimiK3Adapter",
 }
 
 _ADAPTER_INSTANCES: dict = {}

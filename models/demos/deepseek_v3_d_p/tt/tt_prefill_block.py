@@ -12,6 +12,7 @@ from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.deepseek_v3_d_p.tt.kv_ack import zero_pad_and_ack
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import compute_constants, extract_mesh_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import TtMoe
@@ -96,7 +97,14 @@ class TtPrefillBlock(LightweightModule):
 
         if not TtDistributedRmsNorm.check_cache_complete(cache_path, f"{prefix}.attn_norm"):
             return False
-        if not ttMLA.check_cache_complete(cache_path, f"{prefix}.mla"):
+        if not ttMLA.check_cache_complete(
+            cache_path,
+            f"{prefix}.mla",
+            # #54836: a cache missing the MLA output gate reported complete, and `ttnn.as_tensor` then
+            # loaded a `torch.empty` placeholder as the weights. Reading the flag off `model_cfg` keeps
+            # every non-gated model's existing cache valid, since only Kimi-K3 sets USE_OUTPUT_GATE.
+            has_output_gate=bool(getattr(model_cfg, "USE_OUTPUT_GATE", False)),
+        ):
             return False
         if not TtDistributedRmsNorm.check_cache_complete(cache_path, f"{prefix}.ffn_norm"):
             return False
@@ -631,71 +639,27 @@ class TtPrefillBlock(LightweightModule):
                 mla_out, mla_indices = mla_out
         ttnn.deallocate(attn_norm_out)
 
-        # Chunked-prefill migration handoff. MLA's update_padded_kv_cache wrote this chunk as full
-        # 32-row tiles, leaving stale data between the last real token (actual_end) and the next
-        # 128-boundary; zero that pad window so the decode side reads clean zeros.
-        #
-        # Two ack transports share that zero, and exactly one is wired per run:
-        #   d2h_service (single host)   — the ack is a DEVICE op enqueued on the same CQ right after the
-        #       zero, so the record only reaches the host after the zero has executed; the ack (driven by
-        #       record arrival) implies zero-complete with NO host sync.
-        #   on_layer_complete (pipeline) — a HOST callback, so the zero must be flushed first: the
-        #       migration worker reads the cache over NoC out-of-band from the ttnn command queue and
-        #       without the flush could copy pre-zero data. layer_idx is GLOBAL (the scheduler orders acks
-        #       across pipeline ranks).
-        # cache_layer_idx is the LOCAL per-rank cache slot in both.
-        if d2h_service is not None or on_layer_complete is not None:
-            assert actual_end is not None or metadata is not None, "actual_end or metadata required for zero_pad"
-            assert d2h_service is None or metadata_msg is not None, "metadata_msg required when d2h_service is set"
-            # zero_padded_kv_cache is a DENSE (TILE) kvpe-cache op. A DSA-sparse model's kvpe cache is
-            # bf16/fp8 ROW_MAJOR (sparse_sdpa reads it natively) and the op asserts TILE, so skip it for
-            # sparse.
-            cache_tensor = kvpe_cache.storage
-            if cache_tensor.layout == ttnn.TILE_LAYOUT:
-                if metadata is not None:
-                    # Per-element-tensor (trace-safe) path: slot_idx (metadata[0]) + valid_global=actual_end
-                    # (metadata[2]), each its own 1-element uint32 tensor read on-device.
-                    ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
-                        cache_tensor,
-                        metadata[0],  # slot_idx tensor
-                        metadata[2],  # valid_global (= actual_end) tensor
-                        cache_layer_idx,
-                        self.mla.layer_num,
-                        seq_len_local * self.mla.sp_factor,
-                        self.mla.sp_axis,
-                    )
-                else:
-                    ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
-                        cache_tensor,
-                        cache_user_id,
-                        cache_layer_idx,
-                        self.mla.layer_num,
-                        actual_end,
-                        seq_len_local * self.mla.sp_factor,
-                        self.mla.sp_axis,
-                    )
-            if d2h_service is not None:
-                # Device-op ack, enqueued on the same CQ right after the zero: the record cannot reach the
-                # host before the zero has executed, so the ack implies zero-complete with no host sync —
-                # unlike the host-callback path below, which needs an explicit flush.
-                # Capture-safe only because metadata_msg is at a fixed address: the op registers it as a
-                # buffer binding, which trace replay does not re-patch. A traced caller must therefore
-                # pass a persistent record (TtPrefillRuntime._trace_metadata_msg), never the per-chunk
-                # socket tensor, whose address moves every chunk.
-                ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(d2h_service, metadata=metadata_msg)
-            else:
-                # Trace path: route the ack through the controller. At capture it splits the trace here (a host
-                # shm bump cannot live inside a trace); at replay the controller fires the ack between the two
-                # segments, after the first segment's writes flush (execute_trace blocking). Non-trace:
-                # synchronize then call directly. The controller takes precedence iff it carries an ack callback
-                # (runner trace path); the test path sets a controller WITHOUT an ack callback, so has_layer_ack()
-                # is False (and on_layer_complete is None there, so neither fires).
-                tc = getattr(self, "_trace_controller", None)
-                if tc is not None and tc.has_layer_ack():
-                    tc.layer_ack(self.mla.layer_idx)
-                else:
-                    ttnn.synchronize_device(self.mesh_device)
-                    on_layer_complete(self.mla.layer_idx)
+        # The pad-zero and the migration ack now live in `kv_ack.zero_pad_and_ack`, so a model whose
+        # blocks are not `TtPrefillBlock` can hand off to migration without duplicating them. Kimi-K3 is
+        # that model: only 24 of its 93 layers write a KV slab, so its block is its own class. Behaviour
+        # here is unchanged; every argument is what this function used to read inline.
+        zero_pad_and_ack(
+            kvpe_cache=kvpe_cache,
+            mesh_device=self.mesh_device,
+            cache_layer_idx=cache_layer_idx,
+            cache_user_id=cache_user_id,
+            layer_num=self.mla.layer_num,
+            sp_factor=self.mla.sp_factor,
+            sp_axis=self.mla.sp_axis,
+            global_layer_idx=self.mla.layer_idx,
+            seq_len_local=seq_len_local,
+            actual_end=actual_end,
+            metadata=metadata,
+            d2h_service=d2h_service,
+            metadata_msg=metadata_msg,
+            on_layer_complete=on_layer_complete,
+            trace_controller=getattr(self, "_trace_controller", None),
+        )
 
         if self.kv_only:
             # KV cache filled (by MLA), migration callback fired. The block
