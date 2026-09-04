@@ -167,11 +167,40 @@ def dflash_generate(
             anchor_buf,
         )
 
-    # The steady state (every iteration after the first) never needs more than
-    # 2*block_size positions -- context_len maxes out at block_size once past the
-    # initial prefill-seeded block. The first iteration's (potentially much larger)
-    # gather over the real prompt's context uses gather_rope_on_device directly instead
-    # (a one-off, non-repeating call -- see rope_cache.py).
+    # context_valid_len_buf: how many of the STEADY-STATE context window's block_size
+    # rows are real (the rest is masked-out padding, see attention.py's
+    # build_attention_mask_additive_device_dynamic) -- refreshed from host each
+    # iteration, since the real accepted-token count genuinely varies. This is the
+    # SECOND (and last) per-iteration host->device write, alongside anchor_buf; unlike
+    # anchor_buf it only matters from the second loop iteration onward (the first
+    # iteration's real, variably-sized prefill context uses the ordinary static mask).
+    context_valid_len_buf = ttnn.from_torch(
+        torch.zeros((1, 1), dtype=torch.int32),
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.int32,
+        mesh_mapper=mesh_mapper,
+    )
+
+    def _write_context_valid_len(n: int) -> None:
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(
+                torch.tensor([[n]], dtype=torch.int32),
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                dtype=ttnn.int32,
+                mesh_mapper=mesh_mapper,
+            ),
+            context_valid_len_buf,
+        )
+
+    # The steady state (every iteration after the first) always uses a FIXED-size
+    # (block_size-wide) context window -- real content in the first context_len rows,
+    # masked-out padding in the rest -- so its combined context+noise RoPE gather is
+    # ALWAYS exactly 2*block_size positions, fitting this one reusable buffer. The very
+    # first iteration's context is the real prompt's own (potentially much larger, and
+    # variably-sized) prefill output, handled separately below with the ordinary static
+    # mask and a one-off gather -- it runs exactly once per session, not in the
+    # frequently-replayed steady-state loop a future trace would cover.
     rope_idx_buf = make_rope_gather_index_buffer(mesh_device, 2 * block_size)
     # weights.fc sliced into one [hidden,hidden] block per tapped layer -- constant for
     # the whole session, built once (see context.py::ContextAccumulator).
@@ -223,31 +252,41 @@ def dflash_generate(
     acceptance_lengths = []
     start = ctx_len
     stopped = real_first_token in stop_tokens
+    first_iteration = True
 
     while len(output_ids) < max_new_tokens and not stopped:
         # ---- everything below builds each iteration's full op sequence using ONLY
-        # persistent buffers and on-device concatenation -- anchor_buf is the ONLY
-        # per-iteration host->device write (the anchor token id, genuinely only known
-        # after the previous iteration's host-side accept decision); the drafter's own
-        # draft-token predictions never round-trip to host to get fed back into verify's
-        # input, only read back once at the very end for the accept decision itself. ----
+        # persistent buffers and on-device concatenation -- anchor_buf (every iteration)
+        # and context_valid_len_buf (every iteration after the first) are the ONLY
+        # per-iteration host->device writes; the drafter's own draft-token predictions
+        # never round-trip to host to get fed back into verify's input, only read back
+        # once at the very end for the accept decision itself. ----
         noise_tt = model.raw_embed(ttnn.concat([anchor_buf, mask_tail_buf], dim=-1))
         if len(noise_tt.shape) != 4:
             noise_tt = ttnn.unsqueeze_to_4D(noise_tt)
         if noise_tt.layout != ttnn.TILE_LAYOUT:
             noise_tt = ttnn.to_layout(noise_tt, ttnn.TILE_LAYOUT)
 
-        positions = list(range(start - context_len, start + block_size))
-        if len(positions) <= rope_idx_buf.shape[-1]:
-            cos_tt, sin_tt = gather_rope_on_device_buffered(
-                mesh_device, rope_idx_buf, positions, cos_2d, sin_2d, head_dim
-            )
-        else:
-            # Only the very first iteration's context (the real prompt) can be large
-            # enough to exceed the steady-state buffer -- a one-off, non-repeating
-            # gather, so a fresh allocation here doesn't stand in the way of tracing
-            # the (much more frequently replayed) later iterations.
+        if first_iteration:
+            # The real prompt's own context -- variable width (ctx_len), the ordinary
+            # static mask, a one-off (non-reused) gather. Runs exactly once per session.
+            positions = list(range(start - context_len, start + block_size))
             cos_tt, sin_tt = gather_rope_on_device(mesh_device, positions, cos_2d, sin_2d, head_dim)
+            context_valid_len_tt = None
+        else:
+            # Steady state: context_tt is ALWAYS block_size-wide (real content in its
+            # first context_len rows, masked-out padding after), so its own RoPE
+            # positions are a FIXED-size block_size range STARTING at start-context_len
+            # (correct for the real rows; the padding rows' positions are unused, since
+            # masked) -- concatenated with noise's own fixed block_size range, this is
+            # ALWAYS exactly 2*block_size positions, fitting the reusable buffer exactly.
+            positions_context = list(range(start - context_len, start - context_len + block_size))
+            positions_noise = list(range(start, start + block_size))
+            cos_tt, sin_tt = gather_rope_on_device_buffered(
+                mesh_device, rope_idx_buf, positions_context + positions_noise, cos_2d, sin_2d, head_dim
+            )
+            _write_context_valid_len(context_len)
+            context_valid_len_tt = context_valid_len_buf
 
         drafter_out = dflash_drafter_forward(
             context_tt,
@@ -263,6 +302,7 @@ def dflash_generate(
             head_dim,
             config.rms_norm_eps,
             layer_configs,
+            context_valid_len_tt=context_valid_len_tt,
         )
         final_out = weights.norm(drafter_out)
         draft_ids_tt = compute_dflash_argmax(
@@ -322,10 +362,14 @@ def dflash_generate(
                 break
         acceptance_lengths.append(accept)
 
-        context_tt = _slice_seq(next_context_padded, produced)
-        ttnn.deallocate(next_context_padded)
+        # next_context_padded is ALREADY exactly block_size-wide (ttnn_verify_forward
+        # always processes exactly block_size candidates) -- no slicing needed; its
+        # first `produced` rows are real, the rest is padding the NEXT iteration's
+        # dynamic mask will exclude via context_valid_len_buf.
+        context_tt = next_context_padded
         context_len = produced
         start += produced
+        first_iteration = False
 
         if stopped or len(output_ids) >= max_new_tokens:
             break
