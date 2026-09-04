@@ -141,39 +141,67 @@ struct Dist {
     uint64_t n = 0;
     uint64_t min = UINT64_MAX;
     uint64_t max = 0;
+    // THE SOURCE OF TRUTH, AND IT IS AN INTEGER. Latency is `sum / n` -- two integers and one
+    // division, which is a number a reader can check against the CSV with a calculator. That
+    // is the whole reason this field replaced the incremental mean below.
+    uint64_t sum = 0;
+    // DERIVED, and exactly equal to sum/n. Kept as a field rather than an accessor so the
+    // existing call sites (format_table, format_csv, the ladder rows) compile unchanged.
     double mean = 0.0;
+    // NO LONGER MAINTAINED BY THIS STRUCT -- see the note on add(). The field stays because
+    // the transport retire path computes its own m2 and assigns it (host_transport.cpp and
+    // D2H2H2DSocket::append_transport_stats); removing it would break those.
     double m2 = 0.0;
 
     void add(uint64_t v) {
         ++n;
         min = std::min(min, v);
         max = std::max(max, v);
-        const double d = static_cast<double>(v) - mean;
-        mean += d / static_cast<double>(n);
-        m2 += d * (static_cast<double>(v) - mean);
+        sum += v;
+        mean = static_cast<double>(sum) / static_cast<double>(n);
+        // WELFORD REMOVED, DELIBERATELY.
+        //
+        // What was here kept a running mean and an m2 variance accumulator, updated per
+        // sample, and merge() below combined two threads' partials with the parallel form.
+        // The mean it produced was algebraically identical to sum/n -- the incremental
+        // shape existed only so the VARIANCE could be computed in one pass without
+        // catastrophic cancellation (durations ~1e4 ns, squared ~1e8, summed over ~1e5
+        // samples ~1e13, with the variance a small difference between huge numbers).
+        //
+        // The variance reached the output through exactly one column, rel_sd. Nothing in
+        // the bandwidth/latency numbers needs it, and a mean that is a float produced by a
+        // non-obvious combination cannot be validated by hand against the CSV -- which is
+        // the property these rows exist to have. So: plain integer sum, plain division.
+        //
+        //   const double d = static_cast<double>(v) - mean;
+        //   mean += d / static_cast<double>(n);
+        //   m2 += d * (static_cast<double>(v) - mean);
     }
 
+    // A PLAIN SUM REDUCTION. Work stealing scatters one core's messages across whichever
+    // workers serviced them, so per-worker partials must combine -- but sums do not care
+    // which worker recorded what, and neither do min/max. The n==0 special cases the
+    // parallel-Welford version needed are gone with it: adding zero and taking min against
+    // UINT64_MAX are already the right answers.
     void merge(const Dist& o) {
         if (o.n == 0) {
             return;
         }
-        if (n == 0) {
-            *this = o;
-            return;
-        }
-        const double na = static_cast<double>(n), nb = static_cast<double>(o.n);
-        const double delta = o.mean - mean;
-        const double tot = na + nb;
-        m2 += o.m2 + delta * delta * na * nb / tot;
-        mean += delta * nb / tot;
         n += o.n;
+        sum += o.sum;
         min = std::min(min, o.min);
         max = std::max(max, o.max);
+        mean = static_cast<double>(sum) / static_cast<double>(n);
+        //   const double na = ..., nb = ...;  const double delta = o.mean - mean;
+        //   m2 += o.m2 + delta * delta * na * nb / tot;
+        //   mean += delta * nb / tot;
     }
 
+    // ZERO FOR ANY DIST THIS STRUCT FILLED, because m2 is no longer accumulated above. Still
+    // meaningful for the transport retire Dist, which has its m2 assigned from elsewhere.
+    // The rel_sd column therefore reads 0 for every hop row -- that is "not measured", and it
+    // is why the stripped CSV does not carry the column at all.
     double stddev() const { return n > 1 ? std::sqrt(m2 / static_cast<double>(n - 1)) : 0.0; }
-    // Run-to-run precision on that path was 0.008%, which is what made sub-percent
-    // differences real. Keeping the relative spread available preserves that judgement.
     double rel_stddev() const { return mean > 0.0 ? stddev() / mean : 0.0; }
 };
 
@@ -194,6 +222,12 @@ struct TraceBucket {
 struct alignas(64) WorkerStats {
     Dist hop[kHopCount];
     uint64_t hop_wire_bytes[kHopCount] = {};
+    // PAYLOAD BYTES COUNTED AT EACH HOP, for the stripped CSV's bandwidth column. Bumped at
+    // the same site that records the hop's sample, under the same warmup gate, so
+    // `payload_bytes == samples * bytes_per_message` holds and is the row's integrity check.
+    // NOT reset by ladder_seal_window(): samples are archived into a window and zeroed there,
+    // these stay cumulative, and both end up as full-run totals.
+    uint64_t hop_payload_bytes[kHopCount] = {};
     uint64_t scanned = 0;
     uint64_t found = 0;
     uint64_t stolen = 0;
@@ -487,6 +521,13 @@ struct RunStats {
         }
         return t;
     }
+    uint64_t merged_payload_bytes(uint32_t h) const {
+        uint64_t t = 0;
+        for (const auto& w : per_worker) {
+            t += w.hop_payload_bytes[h];
+        }
+        return t;
+    }
     uint64_t total(uint64_t WorkerStats::*field) const {
         uint64_t t = 0;
         for (const auto& w : per_worker) {
@@ -511,6 +552,15 @@ struct RunStats {
 std::string format_table(const RunStats& s);
 std::string format_csv(const RunStats& s, const std::string& tag);
 std::string csv_header();
+
+// THE STRIPPED CSV. Four rows, eleven columns, every derived number reproducible by hand:
+//
+//   bandwidth_gb_per_s == payload_bytes / window_ns      (1 byte/ns == 1 GB/s, no scale factor)
+//   latency_us         == total_ns / samples / 1000
+//   payload_bytes      == samples * bytes_per_message    (the integrity check)
+//
+std::string basic_csv_header();
+std::string format_basic_csv(const RunStats& s, const std::string& tag);
 
 std::string sample_count_warning(const RunStats& s);
 
@@ -544,7 +594,7 @@ inline void trace_add(WorkerStats& ws, bool rec, uint64_t timed_start_ns, uint64
 std::string make_run_id();
 std::string utc_now_iso();
 
-std::string csv_schema_error(const std::string& path);
+std::string csv_schema_error(const std::string& path, const std::string& want_header);
 
 std::string rotate_csv(const std::string& path, std::string& error);
 

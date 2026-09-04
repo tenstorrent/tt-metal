@@ -52,7 +52,10 @@ std::string make_run_id() {
     return buf;
 }
 
-std::string csv_schema_error(const std::string& path) {
+// `want_header` is passed in rather than assumed, so the stripped writer validates against
+// ITS header instead of the wide one -- otherwise every append to a basic file would report a
+// schema mismatch against columns it never claimed to have.
+std::string csv_schema_error(const std::string& path, const std::string& want_header) {
     std::ifstream in(path);
     if (!in.good()) {
         return {};  // no file: the caller writes the header
@@ -61,7 +64,7 @@ std::string csv_schema_error(const std::string& path) {
     if (!std::getline(in, first) || first.empty()) {
         return {};  // empty file: same
     }
-    std::string want = csv_header();
+    std::string want = want_header;
     while (!want.empty() && (want.back() == '\n' || want.back() == '\r')) {
         want.pop_back();
     }
@@ -567,6 +570,84 @@ std::string format_trace_csv(const RunStats& s, const std::string& tag) {
             o << (t[i].ns_sum / t[i].n);
         }
         o << '\n';
+    }
+    return o.str();
+}
+
+// ===========================================================================
+// THE STRIPPED CSV
+//
+// Four rows, eleven columns, and every derived number reproducible from the raw columns in
+// the SAME row with a calculator:
+//
+//   bandwidth_gb_per_s == payload_bytes / total_ns    <- the three LEG rows
+//   bandwidth_gb_per_s == payload_bytes / window_ns   <- the END_TO_END row only
+//   latency_us         == total_ns / samples / 1000
+//   payload_bytes      == samples * bytes_per_message
+//
+// GB/s needs no scale factor: 1 byte/ns is 1e9 B/s is 1 GB/s decimal. The division is the
+// answer as written.
+//
+// The third identity is the integrity check. Bytes and samples are bumped at the same site
+// under the same warmup gate, so if that identity fails the row is counting two different
+// populations and nothing else in it should be believed.
+//
+// ONE WINDOW FOR EVERY ROW: window_ns is the run's completion-bounded bracket, repeated on
+// all four rows. That is deliberate, not a copy-paste artifact -- it is what makes the four
+// bandwidths directly comparable, since each is "bytes crossing THIS point" over the same
+// wall clock.
+//
+// WHICH PROCESS FILLS WHICH ROW: t6->host and host->remote_host are recorded by the sender,
+// remote_host->remote_t6 and END_TO_END by the receiver. Rows the local process did not
+// measure carry samples=0 and empty derived cells. host_ident says which side wrote them, so
+// a reader concatenating both files does not sum across roles.
+// ===========================================================================
+std::string basic_csv_header() {
+    return "stage,samples,payload_bytes,window_ns,bandwidth_gb_per_s,latency_us,total_ns,"
+           "bytes_per_message,cores,run_id,host_ident\n";
+}
+
+std::string format_basic_csv(const RunStats& s, const std::string& tag) {
+    (void)tag;
+    static constexpr uint32_t kRows[] = {kHopT6ToHost, kHopHostToRemoteHost, kHopRemoteHostToRemoteT6,
+                                         kHopOneWayTotal};
+    std::ostringstream o;
+    char line[512];
+    for (const uint32_t h : kRows) {
+        const Dist d = s.merged(h);
+        const uint64_t bytes = s.merged_payload_bytes(h);
+
+        // EMPTY, NOT ZERO, for anything this process did not measure. A zero bandwidth is a
+        // claim that nothing moved; an empty cell is "this row belongs to the other side".
+        char bw[32] = "";
+        char lat[32] = "";
+        // TWO DIFFERENT DENOMINATORS, AND USING ONE FOR BOTH IS THE BUG THIS REPLACES.
+        //
+        // A LEG's rate is bytes over the time spent INSIDE that leg: payload / total_ns.
+        // END_TO_END's rate is bytes over the run's completion-bounded window:
+        // payload / window_ns.
+        //
+        // Dividing every row by window_ns -- which is what this did -- makes all four
+        // columns print the SAME number, because in a backpressured pipeline every hop
+        // moves the same bytes through the same window. The three leg columns were the
+        // end-to-end value repeated three times, and a t6->host column computed that way
+        // can never say anything about t6->host.
+        const uint64_t denom = (h == kHopOneWayTotal) ? s.timed_ns : d.sum;
+        if (bytes > 0 && denom > 0) {
+            std::snprintf(bw, sizeof(bw), "%.6f",
+                          static_cast<double>(bytes) / static_cast<double>(denom));
+        }
+        if (d.n > 0) {
+            std::snprintf(lat, sizeof(lat), "%.3f",
+                          static_cast<double>(d.sum) / static_cast<double>(d.n) / 1000.0);
+        }
+        std::snprintf(line, sizeof(line),
+                      "%s,%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%s,%s,%" PRIu64 ",%u,%u,%s,%u\n",
+                      // END_TO_END rather than ONEWAY_TOTAL: it is the whole path, and the row
+                      // is read by people who did not name the hops.
+                      h == kHopOneWayTotal ? "END_TO_END" : hop_name(h), d.n, bytes, s.timed_ns, bw, lat,
+                      d.sum, s.payload_bytes, s.cores, s.run_id.c_str(), s.host_ident);
+        o << line;
     }
     return o.str();
 }

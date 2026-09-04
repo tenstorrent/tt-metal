@@ -141,6 +141,14 @@ void D2H2H2DSocket::add_sample_with_size(WorkerStats& ws, bool rec, uint32_t hop
     }
 }
 
+void D2H2H2DSocket::add_sample_with_payload(WorkerStats& ws, bool rec, uint32_t hop, uint64_t ns,
+                                            uint64_t payload) {
+    if (rec) {
+        ws.hop[hop].add(ns);
+        ws.hop_payload_bytes[hop] += payload;
+    }
+}
+
 // Rings the completion doorbell for a core whose TX control word we have finished with. Called
 // on EVERY path out of the TX handler, including the error paths -- a kernel blocked on a
 // completion that never comes is a hang, and a hang says far less than an error count.
@@ -342,6 +350,9 @@ uint64_t D2H2H2DSocket::service_rx(const Job& job, WorkerStats& ws, bool rec) {
     // that side report a confident zero.
     if (rec) {
         ws.timed_bytes += moved;
+        // The H2D row's bandwidth numerator. deliver_to_l1() recorded the sample for `stage`;
+        // this is the payload that crossed inside it.
+        ws.hop_payload_bytes[stage] += moved;
         // Receiving side: the trace is a DELIVERY curve here, where the tx side's is a send
         // curve. Same distinction the two roles' timed_bytes already carry.
         trace_add(ws, rec, timed_start_ns(), moved, stage_ns);
@@ -349,7 +360,9 @@ uint64_t D2H2H2DSocket::service_rx(const Job& job, WorkerStats& ws, bool rec) {
     const uint64_t total_ns = carried_ns + stage_ns;
 
     // This was the last hop: the sum that arrived plus our delivery.
-    add_sample(ws, rec, kHopOneWayTotal, total_ns);
+    // END_TO_END in the stripped CSV -- same bytes as the H2D row, since these are the bytes
+    // that completed the whole path.
+    add_sample_with_payload(ws, rec, kHopOneWayTotal, total_ns, moved);
     return moved;
 }
 
@@ -392,7 +405,7 @@ uint64_t D2H2H2DSocket::service_tx(const Job& job, WorkerStats& ws, bool rec) {
         // it is not a stage-4 sample -- the far sender's own push cost would have to arrive as
         // an increment, which needs an echo kernel that does not exist. Stage 4 therefore stays
         // empty rather than being filled with a running total mislabelled as one leg.
-        add_sample(ws, rec, kHopT6ToHost, accumulated);
+        add_sample_with_payload(ws, rec, kHopT6ToHost, accumulated, length);
     }
 
     const uint32_t reach = uva_host_reach(dest_uva, topo_);
@@ -817,6 +830,9 @@ bool D2H2H2DSocket::send_poll(SendSlot& slot, WorkerStats& ws, bool rec) {
             const uint64_t stage_ns = now_ns() - slot.t0;
             add_sample_with_size(ws, rec, kHopHostToRemoteHost, stage_ns,
                                  static_cast<uint64_t>(slot.r.length) + kNoticeBytes);
+            if (rec) {
+                ws.hop_payload_bytes[kHopHostToRemoteHost] += slot.r.length;
+            }
             const uint64_t moved = slot.r.length;
             ws.bytes += moved;
             ladder_note_message(ws, rec, moved);
@@ -1067,6 +1083,12 @@ void D2H2H2DSocket::append_transport_stats(RunStats& s) const {
         d.max = rs.max_ns;
         d.mean = rs.mean_ns;
         d.m2 = rs.m2;
+        // SUM MUST BE SET TOO, or this row loses its mean. Dist::sum is the source of truth
+        // now and Dist::merge() recomputes mean as sum/n -- a Dist assigned a mean but no sum
+        // would come back through merged() reading zero. RetireStats carries a mean, not a
+        // sum, so it is reconstituted here; that is the one place in the code where sum is
+        // derived from mean rather than the other way round.
+        d.sum = static_cast<uint64_t>(rs.mean_ns * static_cast<double>(rs.n));
         s.per_worker.push_back(w);
     }
 }
@@ -1116,8 +1138,10 @@ RunStats D2H2H2DSocket::collect() const {
 std::string D2H2H2DSocket::stall_dump(const char* where) const {
     std::ostringstream m;
     m << "\n  [STALL @ " << where << "]\n";
+    // `home=` dropped: home_done is never incremented, so a stall dump reported it as 0
+    // and invited the reader to conclude the return leg had stalled. There is no return leg.
     m << "    tx_done=" << counters_.tx_done.load() << " delivered=" << counters_.delivered.load()
-      << " home=" << counters_.home_done.load() << " routed_remote=" << counters_.routed_remote.load()
+      << " routed_remote=" << counters_.routed_remote.load()
       << " errors=" << counters_.errors.load() << "\n";
     m << "    sender: " << sender_state_.load() << "  (0=idle 1=credit-wait 2=payload 3=notice)\n";
     // credit_flushes IS THE DISCRIMINATOR for a credit-wait stall: a peer parked short of its

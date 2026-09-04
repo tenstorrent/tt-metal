@@ -50,7 +50,13 @@ enum : uint32_t {
     kArgDestUva = 0,     // TX: where these bytes are going
     kArgLength = 1,      // TX and RX: how many bytes
     kArgElapsed = 2,     // running sum of every stage measured so far
-    kArgOriginCore = 3,  // RX: which core to reply to on a round trip
+    // SLOT 3 IS OVERLOADED AND BOTH USES ARE LIVE. On the TX/immediate form the kernel
+    // writes its own core index here (host_scan.cpp reads region reg 3); on an RX store
+    // notice the same slot carries the DESTINATION UVA (host_scan.cpp reads it from
+    // kNoticeUvaOffset, service_rx reads it back as dest_uva). The old comment said "which
+    // core to reply to on a round trip", which is the one use that is dead -- do not delete
+    // this constant on the strength of that.
+    kArgOriginCore = 3,
     kArgCount = 4,
 };
 
@@ -102,17 +108,16 @@ struct SocketConfig {
 //              (the TX and the RX delivery), so a producer watching the total sees its target
 //              met at double rate and never waits (measured 134/160, 149/160).
 //   delivered  bytes written into a Tensix L1.
-//   home_done  replies delivered back to the ORIGINATING core -- the round-trip barrier.
-//              tx_done cannot serve: the turnaround arms a TX word of its own, and on one host
-//              the reply re-uses the origin core's TX register.
+//   (home_done / replies REMOVED -- the round-trip barrier they served went with libfabric.
+//    Nothing incremented them; every reader saw a structural 0. TODO_D2H2H2D.md P6.)
 struct SocketCounters {
     std::atomic<uint64_t> routed_local{0};
     std::atomic<uint64_t> routed_remote{0};
     std::atomic<uint64_t> routed_nowhere{0};
     std::atomic<uint64_t> delivered{0};
     std::atomic<uint64_t> tx_done{0};
-    std::atomic<uint64_t> home_done{0};
-    std::atomic<uint64_t> replies{0};
+    // std::atomic<uint64_t> home_done{0};   <- never incremented anywhere
+    // std::atomic<uint64_t> replies{0};     <- never incremented anywhere
     std::atomic<uint64_t> errors{0};
     std::atomic<uint64_t> rejects[8];
 
@@ -264,6 +269,9 @@ private:
     void retire_tx(uint32_t core);
     static void add_sample(WorkerStats& ws, bool rec, uint32_t hop, uint64_t ns);
     static void add_sample_with_size(WorkerStats& ws, bool rec, uint32_t hop, uint64_t ns, uint64_t amt);
+    // The hop's sample plus the payload that crossed it, under the one warmup gate. Feeds the
+    // stripped CSV's bandwidth column; see basic_csv_header().
+    static void add_sample_with_payload(WorkerStats& ws, bool rec, uint32_t hop, uint64_t ns, uint64_t payload);
     bool recording() const { return recording_.load(std::memory_order_relaxed); }
 
     bool recording_now();

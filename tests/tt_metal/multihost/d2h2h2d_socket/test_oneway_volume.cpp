@@ -52,7 +52,11 @@ struct Options {
     uint32_t iters = 16;
     uint64_t volume = 0;
     bool steady = false;
-    // Share of --volume discarded before the counters start. uint32_t steady_pct = 10;
+    // Share of --volume discarded before the counters start. The DECLARATION had been
+    // swallowed by this comment since the initial import, so the file never compiled --
+    // eight live use sites against a member that did not exist. Default 10 matches the
+    // --help text and the bare `--steady` case in the parser.
+    uint32_t steady_pct = 10;
     // THE H2D LEG'S IMPLEMENTATION. This program exists
     // to be compared against it row for row, so an option that changes what stage 3 measures
     // has to exist on both sides or the pair stops being a check on anything.
@@ -168,8 +172,11 @@ SHAPE
                            to the pre-2026-08-28 sender.
                            NOT the same as --send-window 1, which still spins.
   --no-pin                 do not pin worker threads to CPUs
-  --oneway                 t6 -> host -> [remote host] -> t6      (default)
-  --roundtrip              ... and all the way back again
+  --oneway                 t6 -> host -> [remote host] -> t6      (the only shape)
+
+                           (--roundtrip is NOT listed because it does not parse: no
+                           case sets o.roundtrip true. The return half went with
+                           libfabric -- see TODO_D2H2H2D.md P6.)
 
 ENVIRONMENT (applied first; any command-line flag overrides)
   TT_RDMA_CHIPS_PER_HOST   same as --chips-per-host
@@ -492,7 +499,7 @@ bool parse(int argc, char** argv, Options& o) {
         if (o.steady) {
             o.tag += "-steady";
         }
-        o.tag += o.roundtrip ? "-rt" : "-ow";
+        o.tag += "-ow";  // was `o.roundtrip ? "-rt" : "-ow"` -- o.roundtrip cannot be true
     }
     return true;
 }
@@ -829,8 +836,9 @@ int run_common(HostRegion& region, Options& o, Transport* transport, Deliverer* 
     }
 
     if (rx_side) {
-        wait_for(o.roundtrip ? sock->counters().home_done : sock->counters().delivered, msgs,
-                 15ull * 1000 * 1000 * 1000, "delivered");
+        // was `o.roundtrip ? ...home_done : ...delivered` -- home_done is never incremented
+        // by anything, so the round-trip arm would have waited out its whole deadline.
+        wait_for(sock->counters().delivered, msgs, 15ull * 1000 * 1000 * 1000, "delivered");
     }
 
     //   rx-side   our own delivered counter IS the arrival evidence, and it is local, so no
@@ -913,6 +921,21 @@ int run_common(HostRegion& region, Options& o, Transport* transport, Deliverer* 
     // by message count when no producer loop will -- so the condition matches t6_host_uva's
     // (`warmup_msgs > 0`) and the two files' columns mean the same thing again.
     stats.warmup_applied = o.warmup > 0;
+    // THE POPULATION BEHIND timed_ns, and it was never assigned -- the field defaulted to 0,
+    // so format_table()'s `xfers = timed_iters * cores * xfers_per_iter` came out zero and
+    // THREE of the bandwidth block's seven columns printed 0: iters, usec/xfer and
+    // Mxfers/sec. timed_mb_per_s was unaffected, which is why it went unnoticed.
+    //
+    // usec/xfer is the column that matters: timed_ns / (this * cores) is a message's whole
+    // RESIDENCE in the path -- 408.68 us at 16 KiB/x1 against 25.64 us of measured legs. That
+    // ratio is the queueing this program cannot otherwise show, because ONEWAY_TOTAL sums the
+    // three legs and omits diag:sendq-wait and the credit stall between them.
+    //
+    // PER-CORE, because the formula multiplies by `cores`. `iters` is already per-core (the
+    // kernel's loop count) and so is `warmup`, so the difference is the right quantity.
+    stats.timed_iters = o.iters - o.warmup;
+    // Left at its default of 1 deliberately. It is fabtests' show_perf() argument -- 1 one-way,
+    // 2 round trip -- and the round-trip path is refused at parse time, so 2 is unreachable.
     stats.ns_per_cycle = o.ns_per_cycle;
 
     // AFTER the identity fields, not before. Placed above the ladder block first, which is
@@ -945,9 +968,11 @@ int run_common(HostRegion& region, Options& o, Transport* transport, Deliverer* 
     std::printf("  nowhere   %llu   (selector named no configured host)\n",
                 (unsigned long long)cn.routed_nowhere.load());
     std::printf("  delivered %llu   (bytes written into a Tensix L1)\n", (unsigned long long)cn.delivered.load());
-    std::printf("  replies   %llu\n", (unsigned long long)cn.replies.load());
-    std::printf("  home      %llu   (replies delivered back to the originating core)\n",
-                (unsigned long long)cn.home_done.load());
+    // REPLIES / HOME REMOVED: nothing in the tree increments either counter, so both
+    // printed a confident 0 next to real numbers. The round-trip half went with libfabric.
+    //   std::printf("  replies   %llu\n", (unsigned long long)cn.replies.load());
+    //   std::printf("  home      %llu   (replies delivered back to the originating core)\n",
+    //               (unsigned long long)cn.home_done.load());
     std::printf("  errors    %llu\n", (unsigned long long)cn.errors.load());
     if (transport != nullptr) {
         // THE TRANSPORT'S FINAL STATE, not just its state 5 s into a stall. `retired` versus
@@ -991,16 +1016,23 @@ int run_common(HostRegion& region, Options& o, Transport* transport, Deliverer* 
             } else if (!archived.empty()) {
                 std::cout << "  rotated previous csv to " << archived << "\n";
             }
-        } else if (const std::string e = csv_schema_error(path); !e.empty()) {
+        } else if (const std::string e = csv_schema_error(path, basic_csv_header()); !e.empty()) {
             path += ".new";
             std::cerr << "  " << e << "\n  writing to " << path << " instead\n";
         }
         const bool fresh = truncate || !std::ifstream(path).good();
         std::ofstream f(path, truncate ? std::ios::trunc : std::ios::app);
         if (fresh) {
-            f << csv_header();
+            f << basic_csv_header();
         }
-        f << format_csv(stats, o.tag);
+        f << format_basic_csv(stats, o.tag);
+        // THE WIDE CSV IS OFF. Sixty columns of per-hop distribution, uncertainty bounds and
+        // rate flags, none of which can be checked by hand, and one of which (mb_per_s_mean)
+        // was a bandwidth derived from a latency histogram. Restore by swapping the two calls
+        // above back to csv_header() / format_csv() -- both still build.
+        //
+        //   f << csv_header();
+        //   f << format_csv(stats, o.tag);
         std::cout << "  csv " << (fresh ? "written to " : "appended to ") << path << "\n";
     }
 
@@ -1012,15 +1044,16 @@ int run_common(HostRegion& region, Options& o, Transport* transport, Deliverer* 
     // A round trip delivers TWICE per message -- outbound into the destination core, and the
     // reply into the originator. Checking only the outbound half is what let a run with
     // `replies 0` report PASS.
-    const uint64_t want_delivered = !rx_side ? 0 : (o.roundtrip ? msgs * 2 : msgs);
+    // was `o.roundtrip ? msgs * 2 : msgs`
+    const uint64_t want_delivered = !rx_side ? 0 : msgs;
     if (cn.delivered.load() < want_delivered) {
         ok = false;
         why << "delivered " << cn.delivered.load() << " of " << want_delivered << " into L1. ";
     }
-    if (o.roundtrip && cn.replies.load() < msgs) {
-        ok = false;
-        why << "only " << cn.replies.load() << " of " << msgs << " messages were turned around. ";
-    }
+    // if (o.roundtrip && cn.replies.load() < msgs) {          <- unreachable, both halves
+    //     ok = false;                                            dead: o.roundtrip cannot be
+    //     why << "only " << cn.replies.load() << " of " ...;      true and replies never moves
+    // }
     if (tx_side && cn.tx_done.load() < msgs) {
         ok = false;
         why << "sent " << cn.tx_done.load() << " of " << msgs << " messages. ";
