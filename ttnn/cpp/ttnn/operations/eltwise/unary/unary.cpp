@@ -53,10 +53,12 @@ Tensor unary_impl(
             output_dtype,
             input_dtype);
     }
-    bool preserve_fp32_precision = (input_dtype == DataType::FLOAT32);
+    // INT8 must unpack straight to Dest; going through SrcA would re-convert the raw byte.
+    bool preserve_fp32_precision = (input_dtype == DataType::FLOAT32) || (input_dtype == DataType::INT8);
     bool fp32_dest_acc_en = preserve_fp32_precision || output_dtype == DataType::UINT32 ||
                             output_dtype == DataType::INT32 || output_dtype == DataType::FLOAT32 ||
                             output_dtype == DataType::UINT8 || input_dtype == DataType::UINT8 ||
+                            output_dtype == DataType::INT8 || input_dtype == DataType::INT8 ||
                             input_dtype == DataType::UINT32 || input_dtype == DataType::INT32;
     bool bfp8_pack_precise =
         (op_chain.back().type() == unary::UnaryOpType::TYPECAST && output_dtype == DataType::BFLOAT8_B);

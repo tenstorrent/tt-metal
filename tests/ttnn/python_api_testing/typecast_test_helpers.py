@@ -108,3 +108,10 @@ def assert_integer_typecast_equal(expected, actual):
 
 def uses_exact_integer_typecast_check(_tt_input_dtype, tt_output_dtype):
     return tt_output_dtype in INTEGER_OUTPUT_DTYPES
+
+
+def narrow_to_8bit(x, signed):
+    v = (x.trunc() if x.is_floating_point() else x).to(torch.int64)
+    if signed:
+        return ((v + 128) % 256 - 128).to(torch.int8)
+    return (v % 256).to(torch.uint8)

@@ -179,8 +179,8 @@ void enumerate_core_rt_args(
     const uint32_t tile_width = output.tensor_spec().tile().get_width();
     const uint32_t tile_hw = tile_height * tile_width;
 
-    const auto input_df = datatype_to_dataformat_converter(input.dtype());
-    const auto output_df = datatype_to_dataformat_converter(output.dtype());
+    const auto input_df = cb_dataformat_for(input.dtype());
+    const auto output_df = cb_dataformat_for(output.dtype());
     const uint32_t input_tile_bytes = tile_size(input_df);
     const uint32_t output_tile_bytes = tile_size(output_df);
 
@@ -220,7 +220,7 @@ void enumerate_core_rt_args(
         auto compute_shard_pages = [&](const ShardSpec& spec,
                                        const auto& tensor) -> std::function<uint32_t(CoreCoord)> {
             if (is_row_major) {
-                auto df = datatype_to_dataformat_converter(tensor.dtype());
+                auto df = cb_dataformat_for(tensor.dtype());
                 uint32_t ts = tile_size(df);
                 uint32_t shard_bytes = spec.shape[0] * spec.shape[1] * datum_size(df);
                 uint32_t pages = shard_bytes / ts;
@@ -363,9 +363,9 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
 
     const bool is_row_major = input.layout() == Layout::ROW_MAJOR;
 
-    DataFormat cb_data_format = datatype_to_dataformat_converter(input.dtype());
+    DataFormat cb_data_format = cb_dataformat_for(input.dtype());
     uint32_t single_tile_size = tile_size(cb_data_format);
-    DataFormat cb_data_format_output = datatype_to_dataformat_converter(output.dtype());
+    DataFormat cb_data_format_output = cb_dataformat_for(output.dtype());
     uint32_t single_tile_size_output = tile_size(cb_data_format_output);
 
     Buffer* src_buffer = input.buffer();
@@ -384,7 +384,7 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
 
     auto shard_pages = [](const tt::tt_metal::ShardSpec& spec, const Tensor& t, bool rm) -> uint32_t {
         if (rm) {
-            auto df = datatype_to_dataformat_converter(t.dtype());
+            auto df = cb_dataformat_for(t.dtype());
             uint32_t ts = tile_size(df);
             uint32_t shard_bytes = spec.shape[0] * spec.shape[1] * datum_size(df);
             TT_ASSERT(

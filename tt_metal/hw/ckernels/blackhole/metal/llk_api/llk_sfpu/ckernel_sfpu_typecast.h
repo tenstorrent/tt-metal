@@ -12,6 +12,7 @@
 #include "ckernel_addrmod.h"
 #include "ckernel_defs.h"
 #include "ckernel_ops.h"
+#include "ckernel_sfpu_quant.h"  // for INT8_SIGN_MASK
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "sfpi.h"
 
@@ -26,13 +27,6 @@ constexpr std::uint16_t UINT16_LOW_MASK = 0xFFFF;
 // SFPSTORE mode that swaps the high and low 16 bits before writing, so a value computed in the low 16 bits
 // lands in the high 16 bits where the packer reads UInt16 out of a 32-bit dest word.
 constexpr std::uint32_t SFPSTORE_MODE_SWAP_HI_LO16 = 9;
-
-// Int8 tensors hold raw 2's complement bytes and are read through the UInt8 unpacker which zero-extends
-// the byte. The native Int8 unpacker decodes as sign-magnitude. So XOR with 0x80 to get
-//  e = s + 128, where s is the signed value:
-//  b <  128 (s = b): b ^ 0x80 = b + 128 = s + 128
-//  b >= 128 (s = b - 256): b ^ 0x80 = b - 128 = s + 128
-constexpr std::uint32_t TYPECAST_INT8_SIGN_MASK = 0x00000080;
 
 // -128.0f as the upper 16 bits
 constexpr std::uint32_t TYPECAST_INT8_MINUS_128_IMM16 = 0xC300;
@@ -1005,6 +999,9 @@ inline void calculate_typecast_int8_to_int32() {
     }
 }
 
+// Also serves the Float16_b/Bfp8_b/Bfp4_b outputs. Those need no FP32_TO_FP16B round before the
+// store the way the uint path does, because every value here is in [-128, 127] and so is exact in
+// bfloat16's 8-bit significand.
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_typecast_int8_to_fp32() {
 #pragma GCC unroll 8
@@ -1023,10 +1020,8 @@ inline void calculate_typecast_int8_to_uint16() {
     for (int d = 0; d < ITERATIONS; ++d) {
         TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
         TTI_SFPXOR(0, p_sfpu::LREG12, p_sfpu::LREG0, 0);  // e = b ^ 0x80 to get excess 128
-        TTI_SFPIADD(
-            -128 & 0xfff, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
-        TTI_SFPSETCC(0, p_sfpu::LREG0, 0, sfpi::SFPSETCC_MOD1_LREG_LT0);
-        TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+        TTI_SFPIADD(-128 & 0xfff, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_LT0);
+        TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);  // negatives clamp to 0
         TTI_SFPENCC(0, 0, 0, 0);
         TTI_SFPSTORE(p_sfpu::LREG0, SFPSTORE_MODE_SWAP_HI_LO16, ADDR_MOD_6, 0);
     }
@@ -1051,7 +1046,7 @@ template <bool APPROXIMATION_MODE>
 inline void init_typecast_int8_input() {
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
     math::reset_counters(p_setrwc::SET_ABD_F);
-    sfpi::vConstIntPrgm0 = TYPECAST_INT8_SIGN_MASK;
+    sfpi::vConstIntPrgm0 = INT8_SIGN_MASK;
 }
 
 }  // namespace sfpu

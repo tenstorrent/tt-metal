@@ -1053,9 +1053,8 @@ def test_requantize_per_channel_scalar_zero_point(device, shape, in_zero_point, 
         check_within_one_lsb(rq_comp, rq_fused)
         check_match_ratio(golden, rq_fused.to(torch.float32), ttnn.float32)
 
-        # int8 cannot widen with a plain typecast (#50401), so both routes above go through a
-        # scale-1 dequantize instead. int32 is the reference: the same values must requantize
-        # identically in either input dtype.
+        # int8 widens through a scale-1 dequantize instead of typecast on both routes above.
+        # int32 is the reference: the same values must requantize identically in either input dtype.
         if input_dtype == ttnn.int8:
             q_i32 = ttnn.from_torch(q_tr, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
             rq_i32 = ttnn.to_torch(
@@ -1155,8 +1154,8 @@ def test_requant_narrow_input_with_tensor_zero_point(
     out_zp_tt = convert_scalar_to_ttnn_tensor(device, out_zero_point, 1, ttnn.int32)
 
     output_dtype = input_dtype if narrow_output else ttnn.int32
-    # An int8 output is rejected here on purpose: reading int8 is handled, but the decomposed
-    # composite narrows with a typecast, which is not int8-safe (#50401). Pin the guard so that
+    # An int8 output is rejected here on purpose: reading int8 is handled, but the decomposed composite
+    # narrows with a typecast, which wraps modulo 256 instead of saturating. Pin the guard so that
     # relaxing it has to come with QUANT-LLK narrowing.
     if output_dtype == ttnn.int8:
         with expect_error(RuntimeError, "only supports int32 output"):

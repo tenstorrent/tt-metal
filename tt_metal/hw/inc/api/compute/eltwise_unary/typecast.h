@@ -65,6 +65,12 @@ inline constexpr bool _typecast_is_mx_format_(DataFormat fmt) {
  *
  * For input/output to be UInt32, Int32, or Float32, Dest must be in 32 bit mode.
  *
+ * For input/output to be Int8, the caller must additionally declare the circular buffers as UInt8 instead
+ * of Int8, so the raw 2's complement byte is zero-extended instead of being decoded as sign-magnitude.
+ * Additionally, the caller must put Dest in 32 bit mode and unpack straight to Dest, since going through
+ * SrcA re-converts the byte. The kernels below do the sign handling themselves on that raw byte. Int8 is
+ * not available on Quasar.
+ *
  * Return value: None
  *
  * | Argument       | Description                                                                | Type     | Valid Range                                           | Required |
@@ -80,6 +86,11 @@ ALWI void typecast_tile(uint32_t idst) {
     constexpr DataFormat out_format = static_cast<DataFormat>(OUT_DTYPE);
 
 #ifdef ARCH_QUASAR
+    // The shared Quasar kernel loads and stores Int8 as sign-magnitude, but callers configure Int8 CBs
+    // as UInt8. The byte would be decoded wrong with no error. Reject it here.
+    static_assert(
+        in_format != DataFormat::Int8 && out_format != DataFormat::Int8, "Int8 typecast is not supported on Quasar");
+
     // An MX endpoint is unpacked to / packed from Float16_b by the format, so at the SFPU level an MX
     // format behaves as Float16_b. Route through that effective format: MX <-> Float16_b (and MX <-> MX)
     // collapse to a pure format no-op, while MX <-> {Float32, Int32, ...} run the Float16_b <-> X SFPU
