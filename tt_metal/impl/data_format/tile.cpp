@@ -46,6 +46,54 @@ Tile::Tile(std::array<uint32_t, 2> tile_shape, bool transpose_tile) : tile_shape
         TT_THROW("Tile size is not valid for our hardware");
     }
 
+    this->init_derived_dims(transpose_tile);
+}
+
+Tile::Tile(std::array<uint32_t, 2> tile_shape, std::array<uint32_t, 2> face_shape, bool transpose_tile) :
+    tile_shape(tile_shape), face_shape(face_shape) {
+    const bool known_tile_shape =
+        std::any_of(TILE_FACE_HW_CHOICES.begin(), TILE_FACE_HW_CHOICES.end(), [&tile_shape](const auto& pair) {
+            return pair[0] == tile_shape;
+        });
+    TT_FATAL(known_tile_shape, "Tile size is not valid for our hardware");
+
+    // Face width is fixed in hardware: the LLK tensor-shape descriptor always reports MAX_FACE_C_DIM
+    // (see tt-llk/common/tensor_shape.h), so a face can only ever be shortened in rows.
+    TT_FATAL(
+        face_shape[1] == constants::FACE_WIDTH,
+        "face_shape width ({}) must equal FACE_WIDTH ({})",
+        face_shape[1],
+        constants::FACE_WIDTH);
+    TT_FATAL(
+        face_shape[0] > 0 && face_shape[0] <= constants::FACE_HEIGHT,
+        "face_shape height ({}) must be in [1, FACE_HEIGHT ({})]",
+        face_shape[0],
+        constants::FACE_HEIGHT);
+    TT_FATAL(
+        tile_shape[0] % face_shape[0] == 0 && tile_shape[1] % face_shape[1] == 0,
+        "face_shape ({}x{}) must tile evenly into tile_shape ({}x{})",
+        face_shape[0],
+        face_shape[1],
+        tile_shape[0],
+        tile_shape[1]);
+
+    // The LLK face grid is capped at MAX_NUM_FACES_R_DIM x MAX_NUM_FACES_C_DIM (2x2).
+    constexpr uint32_t max_faces_r = constants::TILE_HEIGHT / constants::FACE_HEIGHT;
+    constexpr uint32_t max_faces_c = constants::TILE_WIDTH / constants::FACE_WIDTH;
+    const uint32_t num_faces_r = tile_shape[0] / face_shape[0];
+    const uint32_t num_faces_c = tile_shape[1] / face_shape[1];
+    TT_FATAL(
+        num_faces_r <= max_faces_r && num_faces_c <= max_faces_c,
+        "face grid ({}x{}) exceeds the maximum supported face grid ({}x{})",
+        num_faces_r,
+        num_faces_c,
+        max_faces_r,
+        max_faces_c);
+
+    this->init_derived_dims(transpose_tile);
+}
+
+void Tile::init_derived_dims(bool transpose_tile) {
     if (transpose_tile) {
         transpose_within_face = true;
         transpose_of_faces = true;
