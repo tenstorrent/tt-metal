@@ -91,9 +91,8 @@ class ProfilerData:
     def _assert_zones_dont_overlap(starts: pd.DataFrame, ends: pd.DataFrame) -> None:
         """No thread may open a phase before every thread has closed the previous one, per run.
 
-        Phases are zone names in first-open order; a zone containing another zone on the same
-        thread (like KERNEL) is a wrapper, not a phase. START_PERF_MEASURE's entry rendezvous is
-        what makes this hold, so NON_RENDEZVOUS_MARKERS are exempt and Quasar is skipped.
+        Within a thread the entries are in program order, so a zone containing another there is
+        a wrapper (like KERNEL) rather than an overlap, and does not count as a phase.
         """
         if get_chip_architecture() == ChipArchitecture.QUASAR:
             return
