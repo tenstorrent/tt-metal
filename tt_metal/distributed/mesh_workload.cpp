@@ -11,6 +11,8 @@
 #include "impl/buffers/buffer_impl.hpp"
 #include <tt_metal/impl/program/program_command_sequence.hpp>
 #include "distributed/mesh_device_impl.hpp"
+#include "impl/context/metal_context.hpp"
+#include "impl/context/metal_env_impl.hpp"
 #include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include <algorithm>
 #include <cstddef>
@@ -77,13 +79,7 @@ std::optional<MeshCoordinateRange> find_intersection(
 
 }  // namespace
 
-MeshWorkloadImpl::MeshWorkloadImpl() : id(get_next_counter()) {
-    // A MeshWorkload tracks maintains its own handles to kernels across all
-    // encapsulated programs
-    kernel_groups_.resize(MetalContext::instance().hal().get_programmable_core_type_count());
-    kernels_.resize(MetalContext::instance().hal().get_programmable_core_type_count());
-    Inspector::mesh_workload_created(this);
-}
+MeshWorkloadImpl::MeshWorkloadImpl() : id(get_next_counter()) { Inspector::mesh_workload_created(this); }
 
 MeshWorkloadImpl::~MeshWorkloadImpl() { Inspector::mesh_workload_destroyed(this); }
 
@@ -269,7 +265,7 @@ void MeshWorkloadImpl::generate_dispatch_commands(MeshCommandQueue& mesh_cq) {
     // These commands will be updated based on MeshDevice state when the
     // workload is enqueued.
     auto* mesh_device = mesh_cq.device();
-    uint32_t prefetcher_cache_sizeB = MetalContext::instance().dispatch_mem_map().ringbuffer_size();
+    uint32_t prefetcher_cache_sizeB = mesh_device->impl().metal_context().dispatch_mem_map().ringbuffer_size();
 
     const uint32_t max_program_kernels_sizeB = get_finalized_metadata().max_program_kernels_sizeB;
     bool use_prefetcher_cache = max_program_kernels_sizeB and max_program_kernels_sizeB <= prefetcher_cache_sizeB;
@@ -287,9 +283,11 @@ bool MeshWorkloadImpl::runs_on_noc_unicast_only_cores() {
     return get_finalized_metadata().runs_on_noc_unicast_only_cores;
 }
 
+// kernels_ is sized to the programmable-core-type count by finalize_offsets, which reaches this
+// method only through the getter it hands to finalize_program_offsets. Any new caller that runs
+// before finalize_offsets sees an empty vector and throws from at().
 std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& MeshWorkloadImpl::get_kernels(
     uint32_t programmable_core_type_index) {
-    // Get all kernels across all programs in the MeshWorkload
     if (kernels_.at(programmable_core_type_index).empty()) {
         uint32_t device_range_idx = 0;
         for (auto& [device_range, program] : programs_) {
@@ -303,8 +301,8 @@ std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& MeshWorkloadImpl::get
     return kernels_.at(programmable_core_type_index);
 }
 
+// Same sizing guarantee, and the same failure mode for a premature caller, as get_kernels above.
 std::vector<std::shared_ptr<KernelGroup>>& MeshWorkloadImpl::get_kernel_groups(uint32_t programmable_core_type_index) {
-    // Get all kernel groups across all programs in the MeshWorkload
     if (kernel_groups_.at(programmable_core_type_index).empty()) {
         uint32_t device_range_idx = 0;
         for (auto& [device_range, program] : programs_) {
@@ -379,9 +377,9 @@ uint32_t MeshWorkloadImpl::get_sem_base_addr(
     HalProgrammableCoreType programmable_core_type =
         ::tt::tt_metal::hal_programmable_core_type_from_core_type(core_type);
     uint32_t base_addr = program_dispatch::program_base_addr_on_core(*this, mesh_device.get(), programmable_core_type);
+    auto& env = mesh_device->impl().metal_env();
     return base_addr +
-           get_program_config(MetalContext::instance().hal().get_programmable_core_type_index(programmable_core_type))
-               .sem_offset;
+           get_program_config(env.get_hal().get_programmable_core_type_index(programmable_core_type)).sem_offset;
 }
 
 uint32_t MeshWorkloadImpl::get_sem_size(
@@ -404,9 +402,9 @@ uint32_t MeshWorkloadImpl::get_cb_base_addr(
     HalProgrammableCoreType programmable_core_type =
         ::tt::tt_metal::hal_programmable_core_type_from_core_type(core_type);
     uint32_t base_addr = program_dispatch::program_base_addr_on_core(*this, mesh_device.get(), programmable_core_type);
+    auto& env = mesh_device->impl().metal_env();
     return base_addr +
-           get_program_config(MetalContext::instance().hal().get_programmable_core_type_index(programmable_core_type))
-               .cb_offset;
+           get_program_config(env.get_hal().get_programmable_core_type_index(programmable_core_type)).cb_offset;
 }
 
 uint32_t MeshWorkloadImpl::get_cb_size(
@@ -428,6 +426,12 @@ void MeshWorkloadImpl::finalize_offsets(MeshDevice* mesh_device) {
     if (is_finalized()) {
         return;
     }
+
+    // Sizing the kernel tables is what makes get_kernels / get_kernel_groups indexable, and the
+    // getters built below are their only callers. Keep that ordering if this function is reworked.
+    const uint32_t num_core_types = mesh_device->impl().metal_env().get_hal().get_programmable_core_type_count();
+    kernel_groups_.resize(num_core_types);
+    kernels_.resize(num_core_types);
 
     tt::tt_metal::detail::KernelsGetter kernels_getter =
         [this](uint32_t index) -> std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& {
