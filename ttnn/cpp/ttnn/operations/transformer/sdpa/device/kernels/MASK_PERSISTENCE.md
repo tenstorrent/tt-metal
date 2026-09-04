@@ -18,10 +18,6 @@ Output is bit-identical: the same mask tiles are reused, never produced differen
 counters (DPRINT build): 95.9% of chunks skip all mask work, 4.1% rewrite the block once, none
 generate tile-by-tile.
 
-These numbers are for this topology only (32-chip Blackhole 4x8 mesh, 1D ring fabric, W-sharded
-across 8 with TP4); other meshes, shard counts or resolutions change the chunk-to-core assignment
-and so the skip/refill balance.
-
 ## The problem
 
 Per work item (one 2-brick query chunk) the reader hands the compute kernel 2 x 168 = 336 mask
