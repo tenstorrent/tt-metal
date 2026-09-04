@@ -9,8 +9,8 @@ You have an AI model on HuggingFace. You want it to **run on Tenstorrent hardwar
 If you read nothing else:
 
 1. **Set up once** — build `ttnn`, install the agent dependencies, log into Claude. *(→ Before you start)*
-2. **Bring it up** — `auto-up <model> --box <B> --mesh <M>` rewrites the model into native TTNN and verifies every piece on the device. *(→ Section 1)*
-3. **Make it fast** — `optimize <model> --devices all` tunes it toward the hardware limit, keeping only verified speedups. *(→ Section 2)*
+2. **Bring it up** — `auto-up <model> --box <B> --mesh <M>` rewrites the model into native TTNN and verifies every piece on the device; `promote` resumes any leftovers, then `emit-e2e` wires the graduated pieces into the full end-to-end pipeline. *(→ Section 1)*
+3. **Make it fast** — `optimize <model> --devices all` tunes the whole pipeline toward the hardware limit (or `optimize <model> --module-level` tunes each graduated module first), keeping only verified speedups. *(→ Section 2)*
 
 That's the whole path. The rest of this guide is detail and troubleshooting. The diagram below shows the same flow, in full.
 
@@ -21,42 +21,45 @@ That's the whole path. The rest of this guide is detail and troubleshooting. The
 flowchart TD
   subgraph BG[" "]
   direction TB
-    IN(["auto-up &lt;model&gt; · --box T3K · --mesh 2x2"]) --> S1["STEP 1 · scaffold — clone closest demo family"]
-    S1 --> S2["STEP 2 · prepare-plan — REUSE / ADAPT / NEW split"]
-    S2 --> S3["STEP 3 · auto-onboard NEW family — unknown arch"]
-    S3 --> S4["STEP 4 · phase-1 autofill — CPU fallbacks + aliases"]
-    S4 --> S5["STEP 5 · build  ·  STEP 6 · iterate-loop engine"]
-    S5 --> CAP["capture real inputs — per-component HF I/O"]
+    IN(["auto-up &lt;model&gt; · --box T3K · --mesh 2x2 · --reverify (rerun-safe)"]) --> REG["registry sync + drift check — remote-first · non-fatal"]
+    REG --> S1["STEP 1 · plan + compat — REUSE / ADAPT / NEW split"]
+    S1 --> S2["STEP 2 · scaffold — clone closest demo family · inline auto-onboard if arch unknown"]
+    S2 --> S3["STEP 3 · LLM gate — does bring-up need an agent?"]
+    S3 --> S4["STEP 4 · phase-1 autofill — CPU torch fallbacks + aliases"]
+    S4 --> S5["STEP 5 · prepare — build the runnable pytest invocation"]
+    S5 --> S6["STEP 6 · bring-up cc engine — single agent driven by the bringup_mcp gate"]
+    S6 --> CAP["capture real inputs — per-component HF I/O"]
     CAP --> OVL1["load overlays — replay prior bring-up"]
     OVL1 --> PRE["pre-flight PCC · ttnn import check"]
     PRE --> RECON
 
-    subgraph ITER["AUTO-ITERATE · per component (N/24) · haiku → sonnet → opus"]
+    subgraph ITER["BRING-UP cc engine · per-component gate · single agent · PCC ≥ 0.99 on device"]
     direction TB
-      RECON["loop-start reconciliation"] --> PICK["pick TARGET component"]
-      PICK --> AG["🤖 spawn 4 parallel claude agents<br/>isolated worktrees · memory-aware"]
-      AG --> APP["apply responses + ttnn-import"]
+      RECON["loop-start reconciliation<br/>restore stale tests · reinject + recompose ready parents"] --> PICK["gate picks TARGET<br/>termination_check names {component · rung}"]
+      PICK --> AG["🤖 single claude agent · isolated worktree<br/>works next_target.rung — emit/repair · fix_harness · resolve_loader · shard"]
+      AG --> APP["record_result + ttnn-import<br/>native-only · torch-delegating stub refused"]
       APP --> PCC{"PCC ≥ 0.99<br/>on device?"}
-      PCC -->|pass| GRAD["graduate ✓ · .last_good_native"]
+      PCC -->|pass| GRAD["graduate ✓ · .last_good_native<br/>(shard → .last_good_sharded)"]
       GRAD --> OVL2["overlays index + patch"]
       OVL2 --> SW["regression + validation sweep<br/>compute split X / N on device"]
-      PCC -->|fail| RB["rollback .last_good_native<br/>reset · 5-attempt budget"]
-      RB --> WJ{"budget left?<br/>(waste-judge)"}
+      PCC -->|fail| RB["restore_best / rollback<br/>per-component attempt budget"]
+      RB --> WJ{"budget left?<br/>(brain G8 · extend-cap)"}
       WJ -->|retry| PICK
-      WJ -->|exhausted| DEC["decompose parent → children<br/>or no_emit + lock module"]
+      WJ -->|exhausted| DEC["decompose parent → children ·<br/>fallback-to-CPU · mark_manual + lock"]
       DEC --> PICK
     end
     SW --> MORE{"more components<br/>left?"}
     MORE -->|"yes · budget left"| RECON
-    MORE -->|"leftovers · iter budget capped"| PROM["promote — resume bring-up of the<br/>REMAINING components (fresh session · replays overlays)"]
+    MORE -->|"leftovers · iter budget capped"| PROM["promote — resume cc bring-up of the<br/>REMAINING components (fresh session · replays overlays)"]
     PROM --> RECON
-    MORE -->|"all graduated"| FC["final categorization — REUSE / ADAPT / NEW / SKIP"]
+    MORE -->|"all graduated"| FC["final categorization — ON_DEVICE / CPU_REUSE /<br/>KERNEL_MISSING / PENDING"]
 
     FC -. "optional · separate" .-> OVL3["overlays — apply (replay) · or dispose / drop"]
+    FC -. "optional · per-module" .-> MOPT["🤖 optimize --module-level — tune graduated modules one at a time<br/>module-scoped perf test · --then-e2e confirms in the pipeline"]
 
     subgraph E2E["EMIT-E2E — build the end-to-end pipeline"]
     direction TB
-      BLD["🤖 BUILDER wires graduated stubs → pipeline"] --> GR{"GRADER<br/>verdict?"}
+      BLD["🤖 BUILDER wires graduated stubs → pipeline<br/>+ exposes host_op_selftest()"] --> GR{"e2e gate · termination_check<br/>G1–G6 + host-op observer"}
       GR -->|FAIL| FIX["🤖 FIXER closes holes"]
       FIX --> GR
     end
@@ -83,6 +86,7 @@ flowchart TD
       CAT[("knob catalog<br/>GUIDELINES + LEARNED_* / GRADUATED_*")] -. "reuse known knob" .-> RECALL
       DIST -. "provisional · graduates on a different model" .-> CAT
     end
+    MOPT -. "reuses the ladder per module" .-> OTC
     OTC -->|"can_stop · every op at floor or ladder exhausted"| DONE(["model runs natively on device — correct AND fast"])
   end
 
@@ -97,14 +101,14 @@ flowchart TD
   classDef iter  fill:#ede9fe,stroke:#7c3aed,color:#111;
   classDef post  fill:#fae8ff,stroke:#a21caf,color:#111;
   classDef opt   fill:#ffedd5,stroke:#ea580c,color:#111;
-  class AG,BLD,FIX,PROM,L1,L2,L3,L4,L5,L6,RECALL,DIST agent;
+  class AG,BLD,FIX,PROM,MOPT,L1,L2,L3,L4,L5,L6,RECALL,DIST agent;
   class PCC,WJ,MORE,GR,OG,OTC gate;
   class OVL1,OVL2,OVL3,CAT ovl;
   class GRAD,CMT good;
   class RB,DEC,RV warn;
   class IN,DONE term;
-  class S1,S2,S3,S4,S5 build;
-  class CAP,PRE prep;
+  class S1,S2,S3,S4,S5,S6 build;
+  class CAP,PRE,REG prep;
   class RECON,PICK,APP,SW iter;
   class FC post;
   class PROF,REC opt;
@@ -147,7 +151,7 @@ git checkout -b xtts-v2-bringup
 git submodule update --init --recursive
 ```
 
-**5. Create the venv — `--skip-compat-check` is REQUIRED.** A harmless `fiftyone`/`sse-starlette` version clash otherwise makes the script exit 1 even though the venv is fine:
+**5. Create the venv — `--skip-compat-check` is REQUIRED.** A harmless dependency version clash otherwise makes the script exit 1 even though the venv is fine:
 ```bash
 ./create_venv.sh --skip-compat-check
 ```
@@ -168,9 +172,9 @@ export PATH="$HOME/.tenstorrent-venv/bin:$PATH"   # add this line to your ~/.bas
 tt-smi -s | head                                   # must show your board
 ```
 
-**8. Confirm transformers is 5.10.2** (the repo pin). If bring-up ever offers to install `transformers==5.8.1`, decline it or pass `--no-env-fix`:
+**8. Confirm transformers matches tt-metal's pin.** The version is **not** hardcoded — the tool reads it from `tt_metal/python_env/requirements-dev.txt`, so it tracks upstream bumps (`5.12.1` at the time of writing). `setup_env.sh` (step 10) checks this and prints the exact `uv pip install` fix; if bring-up offers to downgrade transformers, decline it or pass `--no-env-fix`:
 ```bash
-python -c "import transformers; print(transformers.__version__)"   # expect 5.10.2
+python -c "import transformers; print(transformers.__version__)"   # must match requirements-dev.txt
 ```
 
 **9. Clear any stale kernel cache:**
@@ -182,20 +186,21 @@ rm -rf ~/.cache/tt-metal-cache "$TT_METAL_HOME/.cache/tt-metal-cache"
 ```bash
 source models/experimental/perf_automation/setup_env.sh    # must print: environment ready
 ```
-It self-detects the checkout, installs any missing agent deps, and checks ttnn/torch, the `claude` CLI + auth, `tt-smi`, `transformers 5.10.2`, and tt-lang. If any line says **FAIL**, fix it before continuing. Safe to re-run anytime.
+It self-detects the checkout, installs any missing agent deps, and checks ttnn/torch, the `claude` CLI + auth, `tt-smi`, transformers against tt-metal's pin (read live from `requirements-dev.txt`), and tt-lang. If any line says **FAIL**, fix it before continuing. Safe to re-run anytime.
 
 **11. Now run the tool** — bring-up → emit-e2e → optimize, all on this branch (→ Section 1 & 2 below).
 
 ### tt-lang kernel rung — know this before `optimize`
-`tt-lang` (`ttl`, the optimize **rung-3** custom-kernel lever) ships **`cp312` wheels only**, but this venv is **Python 3.10** — so it cannot install, and the tool silently skips that rung.
+`tt-lang` (`ttl`, the optimize **rung-3** custom-kernel lever) ships **`cp312` wheels only**, but this venv is **Python 3.10** (`create_venv.sh` default) — so it cannot install, and the tool silently skips that rung.
 - **Bring-up does not need tt-lang at all**, and optimize still has the grid / dtype / C++ rungs. Staying on 3.10 is fine.
-- Only if you specifically want tt-lang kernels during optimize: rebuild the venv on **Python 3.12** (`~/.local/bin/python3.12`) — after confirming tt-metal supports 3.12.
+- Only if you specifically want tt-lang kernels during optimize: rebuild the venv on **Python 3.12** — `create_venv.sh` supports it (`./create_venv.sh --python-version 3.12`).
 
 ### Extra prerequisites before `optimize` (not needed for bring-up)
 - You are in a **standalone clone** (this is one) — never run `optimize` from a linked git worktree (kernel JIT mixes worktree `.cpp` with main-tree `.hpp` → no trace).
 - **Commit the model dir to git first** — optimize's REVERT needs a clean baseline.
 - Pass the right `--devices` for your board (e.g. `0,1`); a wrong partial spec trips a fabric error.
-- Perf measurement is **trace + 1 command queue** end to end (the tool opens the device with a single CQ).
+- Perf is measured **trace + 1 command queue** end to end — the tool opens the device with a single CQ; there is **no 2-CQ track**.
+- `TT_PERF_TRACE` selects the run mode: defaults to `1` (trace mode on) when unset; set `0` for eager mode.
 
 ### Handled automatically (don't chase these)
 profiler orphan-marker heal + `libtt_metal.so` rebuild, marker-buffer drain, CSV extraction, device reset (`tt-smi -r`), crash/hang/stale-CSV guards, git checkpoint/revert, fabric-wedge avoidance, the tt-lang auto-install attempt, and CPU stubs for GPU-only packages (`flash_attn`, `mamba_ssm`, …).
@@ -212,9 +217,10 @@ Get a model running correctly on the chip. Three commands, run in order.
 ```bash
 python -m scripts.tt_hw_planner auto-up <org>/<model> --box QB2 --mesh 2,2
 ```
-Plans, scaffolds a demo, captures real inputs, then iterates an LLM agent to port each component to native TTNN — PCC-testing every piece on the device and graduating the ones that pass. **When to use:** the first step for any new model. Only `--box` and `--mesh` are required; it auto-picks the agent model ladder (haiku → sonnet → opus) and iteration budget. It runs a while — use `tmux`/`nohup`.
+Plans, scaffolds a demo, captures real inputs, then runs the **cc engine** — a single Claude agent driven by the per-component `bringup_mcp` gate that ports each component to native TTNN, PCC-testing every piece on the device and graduating the ones that pass. **When to use:** the first step for any new model. Only `--box` and `--mesh` are required; it locks in the agent and iteration budget for you. It runs a while — use `tmux`/`nohup`.
 - `--box` = one of `N150 N300 T3K QB2 Galaxy GalaxyBH`
-- `--mesh` = chip layout, e.g. `2,2` (4 chips in a square) or `1,4` (4 in a row); `2,2` and `2x2` are equivalent.
+- `--mesh` = the **physical hardware chip arrangement**, e.g. `2,2` (4 chips in a square) or `1,4` (4 in a row); must be a *canonical* shape for `--box`, and `2,2` and `2x2` are equivalent. (This is the literal device mesh — different from optimize's `--mesh`, which is a TP×DP topology; see Section 2.)
+- `--reverify` = re-run every component's PCC gate from scratch (clears the graduation markers but keeps the ported code), so a rerun on an updated build re-earns graduation honestly instead of trusting a stale marker.
 
 **Step 2 · `promote` — resume if bring-up didn't finish**
 ```bash
@@ -226,7 +232,7 @@ python -m scripts.tt_hw_planner promote <org>/<model> --box QB2 --mesh 2,2
 ```bash
 python -m scripts.tt_hw_planner emit-e2e <org>/<model>
 ```
-Once all components are graduated, a BUILDER agent wires them into the end-to-end task pipeline and an independent GRADER re-verifies it on device (a FIXER closes any gaps). **When to use:** after everything is graduated, to produce a working end-to-end model. Handy flags: `--task <t>` / `--all-tasks` (multi-task models), `--max-iter`, `--pcc-target`.
+Once all components are graduated, a BUILDER agent wires them into the end-to-end task pipeline (exposing a `host_op_selftest()` hook), then a deterministic **e2e gate** — `termination_check` over gates G1–G6 (including the G5 host-op observer that proves the forward runs fully on device, and the G6 trace gate) — drives a FIXER loop until it passes on device. **When to use:** after everything is graduated, to produce a working end-to-end model. Handy flags: `--task <t>` / `--all-tasks` (multi-task models), `--max-grade-rounds`, `--pcc-target`.
 
 ### Overlays — save & replay a model's graduated work
 An **overlay** is the captured set of file changes a bring-up produced — the per-component `_stubs/` (the graduated native-TTNN code) plus any patches. When a run is worktree-isolated the tool **auto-captures** them, so a model can be **replayed later without re-running the LLM**.
@@ -240,7 +246,37 @@ Use **apply** to restore a previously brought-up model's graduated modules; **dr
 
 ## Section 2 · Optimize
 
-Once a model runs correctly, `optimize` profiles it on the device and climbs the speed ladder (grid → dtype → tt-lang → C++ → tensor-parallel → structural), committing **only** PCC-verified, genuinely faster changes.
+Once a model runs correctly, `optimize` profiles it on the device and climbs a per-op speed ladder — **cheap knobs (`grid` / `dtype` / `shard` i.e. tensor-parallel / `fidelity`) → algorithmic/structural restructure (the `host` lever — trace · fusion · gather · KV-cache — deliberately tried *before* any hand-written kernel) → tt-lang kernel → C++ Metalium kernel** — committing **only** PCC-verified, genuinely faster changes.
+
+The **knob** rung is not a fixed sequence. The tool classifies each op as **memory-**, **compute-**, or **dispatch-bound** (or **unknown/other** when the roofline can't tell), and uses that classification only to set the *priority* — which knob is tried first — **never to drop a knob**. Every applicable knob is still tried at least once: after the bound-appropriate knobs are exhausted, a completeness sweep offers each remaining one before the op may be declared done (a bound estimate is only a hint, and ops are rarely purely one-bound). Priority order per bound:
+- **memory-bound** (and **unknown/other**, the default): `grid → dtype → shard → fidelity`
+- **compute-bound** and **dispatch-bound**: `grid → fidelity → dtype → shard`
+
+(`grid` applies until the core grid is full; `dtype` only to matmuls; `shard` and `fidelity` always apply. `tp-fracture` — sharding a still-memory-bound matmul across the mesh — is offered after the knobs for eligible ops.)
+
+### How to read the optimize report (`RUN_REPORT.md`)
+Each optimize run writes a per-op ladder table into `RUN_REPORT.md` in the model dir. One row per op, one column per lever, and a final `best ms` (the op's best measured device time so far):
+```
+op                        grid   fidelity  dtype   shard   host   tt-lang   cpp    other    best ms
+Matmul 128x14336x4096     ·try   —         ✓win    ✓win    ·try   ·try      ·try   ·try     1061.00
+```
+Columns (this is the full lever set — the same ladder, one column each):
+- **`grid`** — core-grid occupancy (spreading work across more cores).
+- **`fidelity`** — math fidelity (HiFi ↔ LoFi).
+- **`dtype`** — weight/activation precision (`bf16 → bf8_b → bf4_b`; matmuls only).
+- **`shard`** — memory sharding / L1 pinning / memory-config changes (this is the tensor-parallel/sharding lever).
+- **`host`** — host- or dispatch-side work: **trace, fusion, gather, caching/KV-cache** (i.e. the structural/algorithmic rung is recorded here).
+- **`tt-lang`** — a custom kernel authored in the tt-lang DSL.
+- **`cpp`** — a custom C++ Metalium kernel.
+- **`other`** — catch-all for any lever that doesn't classify into the columns above; rendered only when something lands there.
+
+Cell legend: **`✓win`** = beat baseline (kept) · **`·try`** = measured, no gain · **`·wedge`** = wedged/crashed when tried · **`—`** = not attempted / not applicable.
+
+> **Important — two ways it runs: trace mode vs eager mode.** Every profiled/verification run executes in one of two modes:
+> - **Trace mode (the default).** The model's device command stream is captured once and replayed (`--enable_trace`), so timings reflect steady-state **on-device** performance with host/dispatch overhead removed. This is the fast path and the mode you want for real speed numbers.
+> - **Eager mode (`TT_PERF_TRACE=0`).** Every op is dispatched one at a time on each call (`--disable_trace`) — slower and includes host overhead, but it's the mode to use when trace isn't supported for a model or when tracing perturbs correctness (i.e. accuracy over raw speed).
+>
+> Trace mode stays on by default. Toggle it with the **`TT_PERF_TRACE`** env var (`1` = trace, `0` = eager) — `optimize` has no `--no-trace` flag of its own (that flag belongs to the bring-up commands).
 
 > **Important — one-time precondition for `optimize`.** For an existing model, `optimize` runs in a throwaway git **worktree**, which is a *clean checkout of your current branch* — it only sees **committed** files. So before you run it:
 > 1. Be on the branch that has the **`tt_hw_planner` tool committed** (`scripts/tt_hw_planner/` **and** `models/experimental/perf_automation/`) — e.g. check out the tool's branch.
@@ -267,10 +303,15 @@ python -m scripts.tt_hw_planner optimize \
 
 Options:
 - `--devices single | 0,1 | all` — which chip(s). Default `0,1`; use **`all`** on a multi-chip board (a *partial* subset can trip a fabric error); use `single` on a one-chip machine.
+- `--box` / `--mesh` — declared TT box + mesh shape (e.g. `--box p300c --mesh 2x2`) for **roofline calibration** — how close each op is to the hardware floor. **Note — this `--mesh` is not the bring-up one:** optimize uses it only for its **chip count**, then derives a kernel-viable **TP×DP** topology (`plan_parallelism` → `TP=cols`, `DP=rows`) rather than opening the literal physical arrangement.
 - `--metric device_ms | wall_ms | auto` — what to optimize for (on-device time is the usual choice).
 - `--in-place` — edit an existing demo's source directly instead of in a throwaway worktree (a tool-brought-up model is always in place).
-- `--max-rounds N` — cc engine: max `claude -p` optimization rounds per pipeline (default `20`). Use `1` for a single pass; the deterministic gate can still stop earlier once each op is at its floor.
+- `--max-rounds N` — cc engine: max `claude -p` optimization rounds per pipeline (**default `3`**; one round is a full continuous agent session that climbs the whole ladder). Use `1` for a single pass, raise for models with lots of headroom; the deterministic gate can still stop earlier once each op is at its floor.
+- `--target-band` / `--no-target-band` — **on by default.** Stop once the DRAM-bandwidth target band is reached (`IN_BAND → can_stop`), so a run ends at `min(band reached, --max-rounds)` — full-model uses the tok/s ceiling from active bytes, per-module each module's own roofline floor. Pass `--no-target-band` to keep optimizing past the band.
+- `--module-level` — optimize graduated native modules **one at a time** (against each module's per-component PCC test) instead of the full pipeline — a coarse per-module pre-pass that sidesteps the heavy e2e baseline. Combine with `--modules a,b,c` to restrict to a subset, `--then-e2e` to run one full-pipeline pass afterward confirming the per-module wins survive composition, and `--reverify` to re-optimize modules already marked optimized in a prior run (default skips them, so a restart resumes at the next unoptimized module).
+- `--hitl` — human-in-the-loop: the agent applies **one lever at a time**, then pauses at a block-level timing + rationale screen for your commit/revert/try decision before continuing (needs a live terminal).
 - `--e2e-only` — cc engine: skip all optimization and just measure + print the full-model end-to-end time. Use to recover the before/after number if a prior run was stopped or killed before its final measurement.
+- Advanced: `--perf-test path::test` (explicit perf test for models whose e2e overflows the profiler), `-k` / `--case` (pytest `-k` case override), and `--matmul-sweep` + `--matmul-sweep-pcc` / `--matmul-sweep-iters` / `--matmul-sweep-max-shapes` (a matmul fidelity×dtype pre-pass that writes a warm-start table; needs `--perf-test`).
 
 > **Where edits land:** for an existing tt-metal demo, `optimize` runs in a **throwaway git worktree on a new branch** and leaves your files untouched — it prints how to `diff`/`merge` the kept speedups.
 
@@ -286,7 +327,8 @@ python -m scripts.tt_hw_planner optimize <org>/<model> --devices all --sync-cata
 ## How to read what it prints
 During bring-up you'll see lines like:
 ```
-AUTO-ITERATE 6/24: `encoder_layer` GRADUATED  (test PASSED)
+BRING-UP (cc) round 12: target=`encoder_layer` rung=emit  (graduated 6)
+  | 03:12 | ✓ GRADUATED  | encoder_layer                | 6/24      | 18   |
   operations: 34/2862 on device (1%) ... on CPU (98%)
 ```
 - **"graduated"** = that piece now runs on the chip and gives the right answers.
@@ -320,3 +362,4 @@ The tool is designed to **stop and tell you the fix** rather than fail silently:
 ## Tips
 - Long runs: use `tmux` or `nohup` so they survive an SSH disconnect.
 - Want to watch everything live on screen? Prefix any command with `TT_HW_PLANNER_VERBOSE=1`.
+- Registry drift check (maintenance): `python -m scripts.tt_hw_planner sync-registry --check` — exits non-zero if any mapped backend / building-block path is missing from the checkout (add `--no-unmapped` to skip the reverse "unmapped reusable module" hints).
