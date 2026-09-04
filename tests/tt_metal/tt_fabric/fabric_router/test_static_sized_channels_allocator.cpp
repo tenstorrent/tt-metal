@@ -29,9 +29,7 @@ TEST(FabricStaticSizedChannelsAllocatorTest, MeshAssignsStrandedSlotsToLocalWork
             available_space,
             memory_regions);
 
-        // The uniform table depth is 2 and 5 slots are stranded, so worker injection gets all 7.
         EXPECT_EQ(allocator.get_sender_channel_number_of_slots(0, 0), 7);
-
         for (size_t channel = 1; channel < sender_channels[0]; ++channel) {
             EXPECT_EQ(allocator.get_sender_channel_number_of_slots(0, channel), 2);
         }
