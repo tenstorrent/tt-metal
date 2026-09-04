@@ -2,7 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import math
 import os
 import time
 from dataclasses import dataclass
@@ -17,7 +16,7 @@ import ttnn
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.dflash_drafter_config import DFlashDrafterConfig
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.tt_dflash_drafter import TtDFlashDrafter
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.utils import load_drafter_state_dict
-from models.demos.deepseek_v3_d_p.tt.mla.rope import ChunkMetadata
+from models.demos.deepseek_v3_d_p.tt.mla.rope import ChunkMetadata, _llama4_scale_geometry
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor
@@ -604,10 +603,13 @@ class TtPrefillRuntime:
             # Populated at allocation: one host build per offset, not two.
             self._llama4_scale_by_offset[offset] = self.model.rope_setup.make_llama4_scale_buffer(chunk, offset)
         ttnn.synchronize_device(self.mesh_device)
-        # Per-device bytes from the buffer's own logical shape / the SP factor it is sharded over, so
-        # the number logged cannot drift from the geometry _llama4_scale_geometry actually chose.
-        shape = list(self._trace_metadata.llama4_scale.shape)
-        per_dev_bytes = math.prod(shape) * 2 // self.config.mesh_shape[self.config.sp_axis]
+        # Per-device bytes from the geometry helper the ALLOCATOR uses, not from the tensor's .shape:
+        # whether a sharded mesh tensor reports its global or its per-device shape is precisely the
+        # ambiguity that made the findings doc's DRAM figure 4x too high, and a log line that restates
+        # it wrongly is worse than no log line at all.
+        heads_local, width, _ = _llama4_scale_geometry(self.hf_config, self.mesh_device, self.config.sp_axis)
+        chunk_local = chunk // self.config.mesh_shape[self.config.sp_axis]
+        per_dev_bytes = heads_local * chunk_local * width * 2
         logger.info(
             f"[trace] pre-built {n_offsets} llama4 query-scale buffers "
             f"(offsets 0..{(n_offsets - 1) * chunk} step {chunk}, "
@@ -783,13 +785,18 @@ class TtPrefillRuntime:
                 # multiply in the replay before it. That ordering is what makes an in-place refresh
                 # safe here, and it is the part _llama4_scale's docstring flags as unvalidated for
                 # the host-write path (copy_host_to_device_tensor does not carry the same guarantee).
-                assert actual_start is not None, (
-                    "use_trace: the llama4 query scale needs this chunk's actual_start on host to pick "
-                    "its pre-built buffer. The traced path reads the SCALARS on-device, but the caller "
-                    "still passes the offset (prefill_runner does); a None here means a caller that "
-                    "does not, and replaying with a stale scale would silently apply the previous "
-                    "chunk's temperature"
-                )
+                # A raise, not an assert, for the reason the guard this replaces spelled out:
+                # `python -O` strips asserts, and this one must not be strippable. Stripped, it would
+                # fall through to the RuntimeError below complaining about a missing offset, when the
+                # real fault is a caller that never passed one.
+                if actual_start is None:
+                    raise RuntimeError(
+                        "use_trace: the llama4 query scale needs this chunk's actual_start on host to "
+                        "pick its pre-built buffer. The traced path reads the SCALARS on-device, but "
+                        "the caller still passes the offset (prefill_runner does); a None here means a "
+                        "caller that does not, and replaying with a stale buffer would silently apply "
+                        "the previous chunk's temperature"
+                    )
                 src = self._llama4_scale_by_offset.get(actual_start)
                 if src is None:
                     raise RuntimeError(
