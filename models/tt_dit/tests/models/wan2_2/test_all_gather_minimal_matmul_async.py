@@ -737,9 +737,23 @@ def test_linear(
 @pytest.mark.parametrize(
     "mesh_device, device_params",
     [
-        [(2, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}],
+        pytest.param(
+            (2, 4),
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112},
+            marks=pytest.mark.skipif(ttnn.get_num_devices() != 8, reason="2x4 fabric requires an 8-device host"),
+            id="2x4",
+        ),
+        pytest.param(
+            (4, 8),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "fabric_router_config": create_fabric_router_config(4096),
+                "trace_region_size": 90112,
+            },
+            marks=pytest.mark.skipif(ttnn.get_num_devices() != 32, reason="4x8 fabric requires a 32-device host"),
+            id="4x8",
+        ),
     ],
-    ids=["2x4"],
     indirect=["mesh_device", "device_params"],
 )
 def test_linear_cache_identity(mesh_device):
