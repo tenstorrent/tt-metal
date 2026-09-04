@@ -16,6 +16,10 @@ from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import get_ddr_speed
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 from models.tt_transformers.tests.test_utils import merge_device_rows
 
+# A margin wide enough that no measurement can fail the row: what a perf test uses when it publishes
+# a number but has no baseline worth gating on yet. Replace it and the threshold together.
+RECORD_ONLY_MARGIN = 10.0
+
 
 def adjust_margin_for_ddr_speed(margin: float, expected_speed: int = 16000) -> float:
     """Return *margin* adjusted for the actual DDR speed reported by tt-smi.
