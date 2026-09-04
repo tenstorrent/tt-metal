@@ -21,6 +21,10 @@ if str(PERF) not in sys.path:
 
 _SRC = (PERF / "cc_optimize" / "perf_mcp.py").read_text(encoding="utf-8")
 
+# black reflows a long concatenation across lines, so an exact-text read of one cannot see it.
+# Collapsing runs of whitespace keeps token ORDER, which is what these last checks are about.
+_FLAT = " ".join(_SRC.split())
+
 
 def _slice(after: str, n: int = 1400) -> str:
     return _SRC[_SRC.index(after) : _SRC.index(after) + n]
@@ -61,13 +65,13 @@ def test_the_note_is_silent_when_there_is_no_adjacency():
 
 
 def test_the_note_reaches_the_directive():
-    assert "+ _chain_note +" in _SRC, "built but never used is the defect this fixes one level up"
+    assert "+ _chain_note +" in _FLAT, "built but never used is the defect this fixes one level up"
 
 
 def test_the_note_is_built_after_the_target_it_reads():
-    a = _SRC.index("next_target = (")
-    b = _SRC.index('_chain_note = ""')
-    c = _SRC.index("+ _chain_note +")
+    a = _FLAT.index("next_target = (")
+    b = _FLAT.index('_chain_note = ""')
+    c = _FLAT.index("+ _chain_note +")
     assert a < b < c
 
 
