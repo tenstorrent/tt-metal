@@ -555,6 +555,13 @@ class ttMLA:
         # ReuseIndexer (never computes). Absent indexer_types (v3.1 / v3.2 / GLM-5.1) every layer is
         # "full" -> current behavior, unchanged.
         self._indexer_reuse = indexer_layer_is_reused(config, layer_idx)
+        # Model-wide (not per-indexer-object): shared/reuse layers consume the FULL layer's
+        # indices, whose TP-presplit provenance is a property of the model config + geometry,
+        # identical on every layer. Keeping this on ttMLA (rather than reading the indexer
+        # object) makes the reuse path see the same contract as the producing layer.
+        self._indexer_indices_tp_presplit = self._needs_head_to_seq_reshard and getattr(
+            config, "indexer_skip_tp_regather", False
+        )
         if self._has_indexer:
             # The indexer assumes natural-order SP sharding (contiguous per-chip query blocks: its
             # device RoPE and the indexer_score per-device causal offset both index positions as
@@ -585,6 +592,16 @@ class ttMLA:
                     slot_num=slot_num,
                     layer_num=self.layer_num,
                     first_layer_idx=first_layer_idx,
+                    # Thin-head-shard models: _sparse_mla re-splits the indices over TP anyway, so
+                    # the indexer skips its TP regather and hands back the TP-seq-sharded rows
+                    # directly (shape guard adapts). Explicit per-model opt-in
+                    # (config.indexer_skip_tp_regather): head-count scoping is NOT sufficient —
+                    # Kimi-K2.6 is also 64-head, and with the skip active its padded chunked
+                    # no-trace path returned uncorrelated output (PCC ~ 0) and ~20% slower chunks
+                    # on the 8x4 blaze run, so the redundancy assumption does not hold for every
+                    # thin-shard model. Only models whose pipelines validated green with the skip
+                    # opt in (GLM-5.x today; see the PR's CI evidence).
+                    skip_tp_regather=self._indexer_indices_tp_presplit,
                 )
         else:
             self._indexer = NullIndexer()  # dense v3.1: forward calls .forward() -> None (dense path)
@@ -1705,13 +1722,22 @@ class ttMLA:
         if sp > 1 and indices.shape[2] == seq_len_local * sp:
             # Replicated full-glob indices → reshard rows onto the SP axis (inverse of all_gather).
             idx = ttnn.mesh_partition(indices, dim=2, cluster_axis=self.sp_axis)
-        if transpose_head_to_seq and idx.shape[2] != q_rm.shape[2]:
+        # Explicit contract, not shape inference: when the indexer skipped its TP regather
+        # (skip_tp_regather), the indices arrive already TP-seq-sharded — this partition is
+        # exactly the op the indexer elided, so running it again would double-split. A shape
+        # comparison happens to distinguish the two contracts today, but only by accident of
+        # current geometries; the flag cannot misfire.
+        indices_tp_presplit = self._indexer_indices_tp_presplit
+        if transpose_head_to_seq and not indices_tp_presplit:
             idx_seq_sharded = ttnn.mesh_partition(
                 idx, dim=2, cluster_axis=self.tp_axis
             )  # split seq across TP to match q
             if idx is not indices:
                 ttnn.deallocate(idx)
             idx = idx_seq_sharded
+        assert not (
+            indices_tp_presplit and not transpose_head_to_seq
+        ), "skip_tp_regather requires the head->seq resharded consumer branch"
         # k_chunk_size must be a multiple of 32 that divides TOPK (prod TOPK=2048 → 128).
         k_chunk = next((c for c in (128, 64, 32) if idx.shape[-1] % c == 0), 32)
         out = ttnn.transformer.sparse_sdpa(
