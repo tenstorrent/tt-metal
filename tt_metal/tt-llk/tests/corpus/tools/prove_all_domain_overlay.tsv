@@ -1,0 +1,10 @@
+# prove_all_domain_overlay.tsv -- PINNED RECORDED documented-domain z3 re-proofs.
+# Source: laneJO FORMAL-EQUIV-LEDGER.tsv supplementary rows (same pinned instrumented
+# sim ba23c3f16912 = craq-sim 1c47e9cd + JO value-observation patch; z3 proofs in
+# laneJO-evidence-20260831/smt2/). The BASE divergence of each op is RE-DERIVED LIVE by
+# prove_all's formal_equiv run; this overlay adds the documented-deliverable-domain
+# refinement (UNSAT on the contract domain) that upgrades DIVERGENCE-CERTIFIED ->
+# SMT-PROVEN-DOMAIN for exactly clamp-fresh and mulint32-fresh.
+op	domain_class	supp_row	jo_verdict	note
+clamp-fresh	SMT-PROVEN-DOMAIN	clamp-fresh-deliverable	PROVEN-EQUIV-ON-DOCUMENTED-DOMAIN	deliverable bf16 set (normals,+0,+/-Inf); base fp32 divergence only on undeliverable neg denormals
+mulint32-fresh	SMT-PROVEN-DOMAIN	mulint32-fresh-domain	PROVEN-EQUIV-ON-DOCUMENTED-DOMAIN	int32 operands in [1,40000]; SFPMUL24 limb identity proven on-domain, base 2^64 divergence out-of-contract

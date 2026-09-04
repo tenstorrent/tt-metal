@@ -1,0 +1,35 @@
+# prove_all_fast_ops.tsv -- the 31 'fast' ops = laneJO-covered distinct-hand-leg
+# (optimized sem != hand) board rows. Used to recompute the paper's
+# '36 fast -> 25 certified / 11 accuracy-gated' reconciliation (laneMD convention).
+op
+addcdiv
+addcmul
+addint
+atan2
+binary-bcast
+binary-float
+binarybitwise
+binaryfmod
+binarypow-fresh
+binaryremainder
+binopscalar
+clamp-fresh
+customadd-fresh
+divint32floor-fresh
+elu-fresh
+gcd-fresh
+isclose-fresh
+lcm-fresh
+leftshift-fresh
+log-fresh
+minmax-max
+minmax-min
+mulint32-fresh
+shift
+sigmoid-fresh
+snakebeta
+sqrt-fresh
+subint
+tanh-fresh
+typecast
+where
