@@ -50,6 +50,10 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
              *mesh_dispatch_coordinate) == operation_attributes.mesh_coords->end())) {
         return {};
     }
+    log_warning(
+        tt::LogOp,
+        "matmul_decode is falling back to the general block matmul LLKs: partial-width sharding is not supported by "
+        "custom_mm");
     // Ring gather is opt-in (`ring_gather`) on the L1-resident weight path, matching the
     // full-width factory. The two-hub gather remains the default; GCB (prefetcher) stays on
     // it because the reader<->prefetcher handshake is baked into reader_partial_width_sharded.cpp.
