@@ -17,6 +17,7 @@
 #endif
 
 #include "api/kernel_thread_globals.h"
+#include "internal/scoped_lock_cache_ops.h"  // scoped_lock_acquire/release_cache_ops
 
 #if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_MATH)
 #define DFB_IS_COMPUTE_MATH 1
@@ -460,8 +461,9 @@ inline DataflowBuffer::ScopedLockRegion DataflowBuffer::lock_acquire_impl(uint16
         RECORD_SCOPED_LOCK_EVENT(NocDebuggingEventMetadata::NocDebugEventType::DFB_LOCK, addr, entry);
         // TODO: with concurrent ALL consumers, this invalidates the same shared cache line once per
         // consumer; the redundant invalidations could be deduplicated (e.g. first-locker-per-round).
-        // invalidate_l2 also drops the matching L1 D$ line on all DM cores.
-        invalidate_l2_cache_range(addr, entry);
+        // Currently this invalidates the L2 range, which also drops the matching L1 D$ line on all
+        // DM cores.
+        scoped_lock_acquire_cache_ops(addr, entry);
         addr += stride;
         if (addr >= region.limit) {
             addr = region.base;
@@ -478,8 +480,8 @@ inline void DataflowBuffer::lock_release_impl(ScopedLockRegion region, uint16_t 
     for (uint16_t k = 0; k < num_entries; ++k) {
         // Flush on release only for a write lock. A read lock never writes.
         if constexpr (is_write) {
-            // flush_l2 writes back + drops the matching L1 D$ line on all DM cores.
-            flush_l2_cache_range(addr, entry);
+            // Currently this flushes l2, which writes back + drops the matching L1 D$ line on all DM cores.
+            scoped_lock_release_cache_ops(addr, entry);
         }
         RECORD_SCOPED_LOCK_EVENT(NocDebuggingEventMetadata::NocDebugEventType::DFB_UNLOCK, addr, entry);
         addr += stride;

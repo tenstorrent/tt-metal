@@ -130,13 +130,23 @@ public:
     [[nodiscard]] iterator end() const noexcept { return sentinel_addr_; }
 
     /** @brief The underlying typed L1 view, for callers wanting the full CoreLocalMem<T> surface
-     * (pointer arithmetic, scoped_lock, comparisons, ...).
+     * (pointer arithmetic, comparisons, ...).
      *
-     * For element access, prefer operator[] (bounds-checked); reach for this only when you need the
-     * raw underlying handle (e.g. local_mem().get_unsafe_ptr()).
+     * For element access, prefer operator[] (bounds-checked) within a scoped_lock() scope. Reach
+     * for this only when you need the raw underlying handle e.g. local_mem().get_unsafe_ptr()).
      */
     // Returned by value: CoreLocalMem<T> is trivially copyable and pointer-sized (matches begin()/end()).
     [[nodiscard]] pointer local_mem() const noexcept { return start_addr_; }
+
+    /** @brief Lock num_elements elements starting at element `offset`.
+     *
+     * @param offset       Index of the first element to lock.
+     * @param num_elements Number of T elements to lock.
+     */
+    [[nodiscard]] auto scoped_lock(uint32_t offset, uint32_t num_elements) const {
+        ASSERT(start_addr_ + offset + num_elements <= sentinel_addr_);
+        return (start_addr_ + offset).scoped_lock(num_elements);
+    }
 
 private:
     // Create a Scratchpad from an SRAM (L1) base address and size in bytes.
