@@ -156,6 +156,10 @@ ALWI void pack_block(std::uint32_t ifrom_dst, std::uint32_t icb, std::uint32_t n
  * ordering requirement and this compiles to a no-op. Each architecture supplies its own llk_pack_dummy();
  * this helper dispatches to it through PACK(...). This call is only available on the compute engine.
  *
+ * This is a temporary workaround, only needed because these kernels drive reserve/push loops directly over
+ * hand-written L1. It goes away once those loops are replaced by the real fix -- LocalTensorAccessors, which
+ * bypass the wait/pop and reserve/push loops entirely.
+ *
  * Return value: None
  *
  * | Argument | Description                                              | Data type | Valid range | required |
