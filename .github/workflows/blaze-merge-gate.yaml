@@ -62,10 +62,9 @@ on:
         default: main
       wait-timeout-minutes:
         description: >-
-          How long to wait for the tt-blaze run. 3 hours: tt-blaze's full merge
-          gate is a silicon matrix (unit + P150 + craq-sim + every gate-tier BH
-          Loudbox bucket), and the bulk of the wall clock is queue time for free
-          P150 / BH Loudbox runners rather than the tests themselves.
+          How long to wait for the tt-blaze run. Includes 1 hour of running the gate
+          and 2 hours to find runners, though most cases should find runners within 30 min
+          given blaze stats, especially at night. Internal timeouts make it fail fast on hangs.
         required: false
         type: number
         default: 180
@@ -263,8 +262,12 @@ jobs:
       # Cancelling this run (or the release pipeline around it) stops this job but
       # not the run it started, which would otherwise keep occupying constrained
       # P150/Loudbox runners for hours on behalf of a release nobody is cutting.
-      - name: Cancel the tt-blaze run if this job was cancelled
-        if: cancelled() && env.BLAZE_RUN_ID != ''
+      #
+      # failure() is here for the TIMEOUT path specifically: giving up on the wait
+      # exits 1, which is not cancelled(), so without this a timed-out gate leaves
+      # the blaze run holding those runners with nobody watching it anymore.
+      - name: Cancel the tt-blaze run if this job was cancelled or timed out
+        if: (cancelled() || failure()) && env.BLAZE_RUN_ID != ''
         env:
           GH_TOKEN: ${{ secrets.TT_BLAZE_PAT }}
         shell: bash
