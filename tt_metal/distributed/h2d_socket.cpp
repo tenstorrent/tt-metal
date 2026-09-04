@@ -13,6 +13,8 @@
 #include "tt_metal/distributed/shm_resource_tracker.hpp"
 #include "tt_metal/impl/buffers/h2d_socket_internal.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/context/metal_env_impl.hpp"
+#include "distributed/mesh_device_impl.hpp"
 #include "tt_metal/hw/inc/hostdev/socket.h"
 #include "tt_metal/llrt/tt_cluster.hpp"
 #include "tt_metal/llrt/tlb_config.hpp"  // kL2cpuLimBase / kL2cpuLimTlbEnd
@@ -41,7 +43,7 @@ void advance_h2d_simulator_socket_device(MeshDevice* mesh_device, const MeshCoor
         return;
     }
 
-    const auto& cluster = MetalContext::instance().get_cluster();
+    const auto& cluster = mesh_device->impl().metal_env().get_cluster();
 #ifdef TT_METAL_USE_EMULE
     if (cluster.get_target_device_type() == tt::TargetDevice::Emule) {
         tt::tt_metal::emule::pump_device();
@@ -59,8 +61,7 @@ void advance_h2d_simulator_socket_device(MeshDevice* mesh_device, const MeshCoor
 
 void H2DSocket::enable_mock_flow_control(const MeshDevice& mesh_device) {
     // Emule executes the receiver, so only Mock needs synthetic acknowledgements.
-    if (MetalContext::instance(extract_context_id(&mesh_device)).get_cluster().get_target_device_type() !=
-        tt::TargetDevice::Mock) {
+    if (mesh_device.impl().metal_env().get_cluster().get_target_device_type() != tt::TargetDevice::Mock) {
         return;
     }
 
@@ -168,7 +169,7 @@ void H2DSocket::init_config_buffer(const std::shared_ptr<MeshDevice>& mesh_devic
 
     // On a claimed service core the worker-grid BankManager can't reach L1; allocate from the service-core allocator.
     std::optional<DeviceAddr> preallocated_addr;
-    auto& svc = tt::tt_metal::MetalContext::instance().get_service_core_manager();
+    auto& svc = mesh_device->impl().metal_context().get_service_core_manager();
     auto* recv_device = mesh_device->get_device(recv_core_.device_coord);
     if (svc.claimed_cores(recv_device->id()).contains(recv_core_.core_coord)) {
         svc_config_l1_addr_ = svc.allocate_l1(recv_device, recv_core_.core_coord, config_buffer_size);
@@ -187,7 +188,7 @@ void H2DSocket::init_data_buffer(const std::shared_ptr<MeshDevice>& mesh_device,
         return;
     }
 
-    auto& svc = tt::tt_metal::MetalContext::instance().get_service_core_manager();
+    auto& svc = mesh_device->impl().metal_context().get_service_core_manager();
     auto* recv_device = mesh_device->get_device(recv_core_.device_coord);
     if (svc.claimed_cores(recv_device->id()).contains(recv_core_.core_coord)) {
         const uint64_t alloc_size = fifo_size_ + pcie_alignment;
@@ -219,10 +220,8 @@ void H2DSocket::init_data_buffer(const std::shared_ptr<MeshDevice>& mesh_device,
     // Read the mode through the mesh's own context rather than the default one: MeshBuffer::create
     // below resolves it the same way, and the two must agree or we hand per-core sharding args to a
     // lockstep allocator.
-    const bool per_core = buffer_type_ == BufferType::L1 &&
-                          tt::tt_metal::MetalContext::instance(tt::tt_metal::extract_context_id(mesh_device.get()))
-                              .rtoptions()
-                              .get_allocator_mode_hybrid();
+    const bool per_core =
+        buffer_type_ == BufferType::L1 && mesh_device->impl().metal_env().get_rtoptions().get_allocator_mode_hybrid();
     if (per_core) {
         shard_grid = CoreRangeSet(CoreRange(recv_core_.core_coord));
         num_data_cores = 1;
@@ -283,7 +282,7 @@ void H2DSocket::write_socket_metadata(
     if (is_l2cpu_) {
         // L2CPU has no MeshBuffer-backed config and no fast-dispatch path; write the
         // struct directly to the caller-provided LIM address.
-        const auto& cluster = MetalContext::instance().get_cluster();
+        const auto& cluster = mesh_device->impl().metal_env().get_cluster();
         const uint32_t device_id = mesh_device->get_device(recv_core_.device_coord)->id();
         cluster.write_core(&md, sizeof(md), tt_cxy_pair(device_id, recv_core_.core_coord), config_buffer_address_);
         return;
@@ -301,13 +300,11 @@ void H2DSocket::write_socket_metadata(
     }
 }
 
-void H2DSocket::init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_device, std::optional<uint32_t> device_id) {
-    TT_FATAL(mesh_device || device_id.has_value(), "Either mesh_device or device_id must be provided.");
+void H2DSocket::init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_device) {
+    TT_FATAL(mesh_device, "init_receiver_tlb requires a MeshDevice (owner path only; connectors use PCIeCoreWriter).");
 
-    uint32_t recv_device_id;
-    CoreCoord recv_virtual_core;
-
-    const auto& cluster = MetalContext::instance().get_cluster();
+    auto& env = mesh_device->impl().metal_env();
+    auto* cluster = &env.get_cluster();
 
     // Mock/emulated chips have no TLB manager (get_tlb_manager() == nullptr), so they can't take the
     // static-TLB path: the target_in_static_tlb guard below excludes them (which also keeps
@@ -322,30 +319,27 @@ void H2DSocket::init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_device
     // can't be inferred from coordinates here.
     const CoreType recv_umd_core_type = (recv_core_type_ == RecvCoreType::Dram) ? CoreType::DRAM : CoreType::TENSIX;
 
+    uint32_t recv_device_id;
+    CoreCoord recv_virtual_core;
     if (is_l2cpu_) {
         // recv_core_.core_coord is already a TRANSLATED L2CPU NOC coord, so no
         // logical->virtual translation is applied. The window is the static TLB
         // configure_static_tlbs() anchors at the LIM base.
-        TT_FATAL(mesh_device, "L2CPU H2D sockets require a mesh_device for TLB setup.");
         recv_device_id = mesh_device->get_device(recv_core_.device_coord)->id();
         recv_virtual_core = recv_core_.core_coord;
-        if (!cluster.is_mock_or_emulated()) {
-            receiver_core_tlb_ = cluster.get_driver()
+        if (!cluster->is_mock_or_emulated()) {
+            receiver_core_tlb_ = cluster->get_driver()
                                      ->get_chip(recv_device_id)
                                      ->get_tlb_manager()
                                      ->get_tlb_window(tt_xy_pair(recv_virtual_core.x, recv_virtual_core.y));
         }
-    } else if (mesh_device) {
+    } else {
         // Per-device translation (see metal_SocDescriptor::dram_bank_endpoint_coords): the
         // mesh-level translation validates that every device agrees and throws when they do not,
         // which a logical DRAM coord on a harvested mesh does not.
         IDevice* recv_device = mesh_device->get_device(recv_core_.device_coord);
         recv_device_id = recv_device->id();
         recv_virtual_core = recv_device->virtual_core_from_logical_core(recv_core_.core_coord, recv_umd_core_type);
-    } else {
-        recv_device_id = device_id.value();
-        recv_virtual_core = cluster.get_virtual_coordinate_from_logical_coordinates(
-            recv_device_id, recv_core_.core_coord, recv_umd_core_type);
     }
 
     // For DRAM-core recv, every host NOC write to the DRISC L1 needs the DRAM-L1
@@ -354,7 +348,7 @@ void H2DSocket::init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_device
     // Captured into the lambdas below so write() can keep passing local addresses.
     const uint64_t l1_offset = dram_l1_noc_offset_;
 
-    if (is_l2cpu_ && !cluster.is_mock_or_emulated()) {
+    if (is_l2cpu_ && !cluster->is_mock_or_emulated()) {
         // The L2CPU window is anchored at the LIM base, so absolute addresses are
         // converted to window-relative offsets before write_block(). Mock/emule
         // have no TLB manager and fall through to the write_core() writer below.
@@ -372,33 +366,30 @@ void H2DSocket::init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_device
     // static window, but it maps the DRAM-bank space at [0, 4 GB) while our writes
     // target device_addr + l1_offset (a high DRAM-L1 NOC address, e.g.
     // 0x2000000000+…) outside that window, so is_tlb_mapped reports false and we
-    // fall through to cluster.write_core. Also gated on owning a mesh_device
-    // (statically initialized TLBs) and Blackhole — on Wormhole B0 the device
-    // address space isn't fully statically mapped and a mapped window may still
-    // need a per-write driver reconfig.
+    // fall through to cluster.write_core. Also gated on Blackhole — on Wormhole B0
+    // the device address space isn't fully statically mapped and a mapped window
+    // may still need a per-write driver reconfig.
     const tt_xy_pair tlb_core(recv_virtual_core.x, recv_virtual_core.y);
     const bool target_in_static_tlb =
-        mesh_device && !cluster.is_mock_or_emulated() &&
-        MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE &&
-        cluster.get_driver()
+        !cluster->is_mock_or_emulated() && env.get_hal().get_arch() == tt::ARCH::BLACKHOLE &&
+        cluster->get_driver()
             ->get_chip(recv_device_id)
             ->get_tlb_manager()
             ->is_tlb_mapped(tlb_core, static_cast<uint64_t>(aligned_data_buf_start_) + l1_offset, fifo_size_);
 
     if (target_in_static_tlb) {
         receiver_core_tlb_ =
-            cluster.get_driver()->get_chip(recv_device_id)->get_tlb_manager()->get_tlb_window(tlb_core);
+            cluster->get_driver()->get_chip(recv_device_id)->get_tlb_manager()->get_tlb_window(tlb_core);
         pcie_writer = [this, l1_offset](void* data, uint32_t num_bytes, uint64_t device_addr) {
             receiver_core_tlb_->write_block(device_addr + l1_offset, data, num_bytes);
         };
     } else {
-        // Mesh device not owned, non-Blackhole, or no static window covers the
-        // target: use dynamic TLBs through UMD (the driver may reconfigure the TLB
-        // per write). Covers Wormhole B0 and the DRAM-recv L1 path described above.
-        pcie_writer = [recv_device_id, recv_virtual_core, l1_offset](
+        // Non-Blackhole, or no static window covers the target: use dynamic TLBs
+        // through UMD (the driver may reconfigure the TLB per write). Covers
+        // Wormhole B0 and the DRAM-recv L1 path described above.
+        pcie_writer = [cluster, recv_device_id, recv_virtual_core, l1_offset](
                           void* data, uint32_t num_bytes, uint64_t device_addr) {
-            const auto& cluster = MetalContext::instance().get_cluster();
-            cluster.write_core(
+            cluster->write_core(
                 data, num_bytes, tt_cxy_pair(recv_device_id, recv_virtual_core), device_addr + l1_offset);
         };
     }
@@ -413,7 +404,7 @@ H2DSocket::H2DSocket(
     recv_core_(recv_core),
     buffer_type_(buffer_type),
     fifo_size_(fifo_size),
-    pcie_alignment_(MetalContext::instance().hal().get_alignment(HalMemType::HOST)),
+    pcie_alignment_(mesh_device->impl().metal_env().get_hal().get_alignment(HalMemType::HOST)),
     pinned_memory_(nullptr),
     h2d_mode_(h2d_mode),
     mesh_device_(mesh_device.get()) {
@@ -470,8 +461,7 @@ H2DSocket::H2DSocket(
     uint64_t dram_l1_noc_offset) :
     recv_core_(recv_core),
     fifo_size_(fifo_size),
-    pcie_alignment_(
-        MetalContext::instance(extract_context_id(mesh_device.get())).hal().get_alignment(HalMemType::HOST)),
+    pcie_alignment_(mesh_device->impl().metal_env().get_hal().get_alignment(HalMemType::HOST)),
     pinned_memory_(nullptr),
     mesh_device_(mesh_device.get()),
     dram_l1_noc_offset_(dram_l1_noc_offset),
@@ -517,13 +507,11 @@ H2DSocket::H2DSocket(
 
     const CoreCoord virtual_core = mesh_device->get_device(recv_core_.device_coord)
                                        ->virtual_core_from_logical_core(recv_core_.core_coord, CoreType::DRAM);
-    MetalContext::instance(extract_context_id(mesh_device.get()))
-        .get_cluster()
-        .write_core(
-            mesh_device->get_device(recv_core_.device_coord)->id(),
-            tt_cxy_pair(mesh_device->get_device(recv_core_.device_coord)->id(), virtual_core),
-            std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(&md), sizeof(md)),
-            static_cast<uint64_t>(config_buffer_address_) + dram_l1_noc_offset_);
+    mesh_device->impl().metal_env().get_cluster().write_core(
+        mesh_device->get_device(recv_core_.device_coord)->id(),
+        tt_cxy_pair(mesh_device->get_device(recv_core_.device_coord)->id(), virtual_core),
+        std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(&md), sizeof(md)),
+        static_cast<uint64_t>(config_buffer_address_) + dram_l1_noc_offset_);
 }
 
 H2DSocket::H2DSocket(
@@ -535,7 +523,7 @@ H2DSocket::H2DSocket(
     H2DMode h2d_mode) :
     recv_core_(recv_l2cpu),
     fifo_size_(fifo_size),
-    pcie_alignment_(MetalContext::instance().hal().get_alignment(HalMemType::HOST)),
+    pcie_alignment_(mesh_device.impl().metal_env().get_hal().get_alignment(HalMemType::HOST)),
     pinned_memory_(nullptr),
     h2d_mode_(h2d_mode),
     mesh_device_(&mesh_device),
@@ -548,7 +536,7 @@ H2DSocket::H2DSocket(
 
     const uint32_t pcie_alignment = pcie_alignment_;
     TT_FATAL(
-        MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE,
+        mesh_device.impl().metal_env().get_hal().get_arch() == tt::ARCH::BLACKHOLE,
         "L2CPU H2D sockets are only supported on Blackhole architectures.");
     TT_FATAL(fifo_size_ > 0 && fifo_size_ % pcie_alignment == 0, "FIFO size must be non-zero and PCIe-aligned.");
     TT_FATAL(config_buffer_address != 0, "L2CPU config buffer LIM address must be non-zero.");
@@ -568,7 +556,7 @@ H2DSocket::H2DSocket(
     // coord, so a wrong value would silently write the socket blob to another
     // core and pick up that core's TLB base. Check membership rather than trust it.
     {
-        const auto& cluster = MetalContext::instance().get_cluster();
+        const auto& cluster = mesh_device.impl().metal_env().get_cluster();
         const uint32_t device_id = mesh_device_ptr->get_device(recv_core_.device_coord)->id();
         const auto l2cpu_cores =
             cluster.get_soc_desc(device_id).get_cores(tt::CoreType::L2CPU, tt::CoordSystem::TRANSLATED);
@@ -693,7 +681,7 @@ H2DSocket::~H2DSocket() noexcept {
         try {
             config_buffer_.reset();
             data_buffer_.reset();
-            auto& svc = tt::tt_metal::MetalContext::instance().get_service_core_manager();
+            auto& svc = mesh_device_->impl().metal_context().get_service_core_manager();
             auto* recv_device = mesh_device_->get_device(recv_core_.device_coord);
             if (svc_config_l1_addr_.has_value()) {
                 svc.deallocate_l1(recv_device, recv_core_.core_coord, svc_config_l1_addr_.value());
