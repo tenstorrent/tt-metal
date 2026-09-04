@@ -192,7 +192,8 @@ jobs:
     permissions:
       contents: read
     # TT_BLAZE_PAT -- the default GITHUB_TOKEN cannot dispatch another repo.
-    secrets: inherit
+    secrets:
+      TT_BLAZE_PAT: ${{ secrets.TT_BLAZE_PAT }}
     uses: ./.github/workflows/blaze-merge-gate.yaml
     with:
       # Artifacts belong to the TOP-LEVEL run, so `build-artifact`'s tarball and
@@ -202,9 +203,7 @@ jobs:
       # submodule out here so its JIT-compiled kernels match the libraries it
       # links against.
       metal-ref: ${{ github.sha }}
-      # TEMP FOR TEST RUN -- REVERT TO `main` BEFORE MERGING. Points at the
-      # tt-blaze branch carrying the guard removals, without which this gate
-      # reports green having run the Loudbox buckets only.
+      # Run tt-blaze's full merge gate from its main branch.
       blaze-ref: main
 
   # Run-level aggregate of per-job AI summaries from release-demo-tests-impl.

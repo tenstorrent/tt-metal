@@ -77,6 +77,9 @@ on:
         description: "PAT with actions:read+write on tenstorrent/tt-blaze."
         required: true
 
+permissions:
+  contents: read
+
 jobs:
   blaze-ci:
     name: tt-blaze CI (full merge gate)
