@@ -752,8 +752,8 @@ bool DmKernelDisablesImplicitSync(const DataMovementGen2Config& gen2_config, con
     return std::find(vec.begin(), vec.end(), dfb_name) != vec.end();
 }
 
-// The LLK geometry rules shared by DFBs and scratchpads. Format presence and arch support are per-object
-// and stay with the callers.
+// Scratchpads do not pass through CB descriptor generation, so validate their LLK geometry here.
+// DFB geometry keeps its existing validation semantics in compute_num_faces_rc_dims.
 template <typename Id>
 void ValidateLlkTileAndFaceGeometry(
     std::string_view kind,
@@ -764,22 +764,12 @@ void ValidateLlkTileAndFaceGeometry(
         return;
     }
     TT_FATAL(
-        face->face_r_dim > 0,
-        "{} '{}' has unpack_face_geometry_metadata.face_r_dim == 0; face_r_dim must be > 0",
-        kind,
-        unique_id);
-    TT_FATAL(
         face->face_r_dim <= constants::FACE_HEIGHT,
         "{} '{}' has unpack_face_geometry_metadata.face_r_dim ({}) which must be <= FACE_HEIGHT ({})",
         kind,
         unique_id,
         face->face_r_dim,
         constants::FACE_HEIGHT);
-    TT_FATAL(
-        face->num_faces > 0,
-        "{} '{}' has unpack_face_geometry_metadata.num_faces == 0; num_faces must be > 0",
-        kind,
-        unique_id);
     const Tile resolved_tile = tile.value_or(Tile{});
     const uint32_t num_faces_c_dim = std::min(resolved_tile.get_width() / constants::FACE_WIDTH, face->num_faces);
     TT_FATAL(
@@ -1826,8 +1816,6 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                 dfb.data_format_metadata.value(),
                 arch);
         }
-        ValidateLlkTileAndFaceGeometry(
-            "DFB", dfb.unique_id, dfb.tile_format_metadata, dfb.unpack_face_geometry_metadata);
     }
 
     for (const auto& scratchpad : spec.scratchpads) {

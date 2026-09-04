@@ -2130,9 +2130,10 @@ TEST_F(ProgramSpecTestQuasar, DFBInvalidFaceGeometryFails) {
     spec.dataflow_buffers = {dfb};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
 
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("face_r_dim == 0")));
+        [&] { program.impl().compile(mesh_device_.get()); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("face_r_dim must be > 0")));
 }
 
 TEST_F(ProgramSpecTestQuasar, DFBFaceGridDoesNotFitTileFails) {
@@ -2155,9 +2156,28 @@ TEST_F(ProgramSpecTestQuasar, DFBFaceGridDoesNotFitTileFails) {
     spec.dataflow_buffers = {dfb};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
 
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { program.impl().compile(mesh_device_.get()); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("face grid")));
+}
+
+TEST_F(ProgramSpecTestQuasar, DFBFaceRowsAboveFaceHeightCompileWhenCBGeometryFits) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    spec.dataflow_buffers[0].unpack_face_geometry_metadata =
+        FaceGeometry{.face_r_dim = constants::TILE_HEIGHT, .num_faces = 1};
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
+}
+
+TEST_F(ProgramSpecTestQuasar, DFBFaceGeometryOverridesRequestedTileForCBValidation) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    spec.dataflow_buffers[0].tile_format_metadata = Tile{{8, 16}};
+    spec.dataflow_buffers[0].unpack_face_geometry_metadata = FaceGeometry{.face_r_dim = 8, .num_faces = 2};
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_TooManyDFBsFailsValidation) {
