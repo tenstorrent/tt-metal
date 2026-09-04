@@ -1534,12 +1534,26 @@ void TernaryDeviceOperation::TernaryProgramFactory::override_runtime_arguments(
     //
     // Kernel push order in create_descriptor(): reader(0), writer(1), compute(2).
     //
-    // NOT refreshed here: the reader/writer COMMON runtime args, which carry the TensorAccessorArgs
-    // words.  On interleaved tensors that is vacuous -- TensorAccessorArgs::update_args_config()
-    // resets the config to None for any buffer without a BufferDistributionSpec and re-sets only
-    // IsDram, so the requested RuntimeTensorShape is discarded and no shape words are emitted at all.
-    // On the SHARDED path the words ARE emitted and nothing re-applies them, so they stay at the
-    // first-miss tensors. The shard specs feed compute_program_hash via get_shard_volumes()
+    // NOT refreshed here, and provably safe: the reader/writer COMMON runtime args, which carry the
+    // TensorAccessorArgs words.  They are a pure function of state compute_program_hash already pins,
+    // so a cache hit cannot find them stale.  Two cases:
+    //
+    //   Interleaved -- vacuous.  TensorAccessorArgs::update_args_config() resets the config to None
+    //   for any buffer without a BufferDistributionSpec and re-sets only IsDram, so the requested
+    //   RuntimeTensorShape is discarded and no runtime words are emitted at all.
+    //
+    //   Sharded -- the words are BufferDistributionSpec::tensor_shape_in_pages(), the shard-collapsed
+    //   view of the tensor (leading dims flattened into the height), never the dim factorization.  So
+    //   they are a function of (padded volume, H, W) -- all three hashed.  Measured identical across
+    //   an N/C swap for every strategy this op supports:
+    //     HEIGHT [4,1,256,256] vs [1,4,256,256] -> [256]  both (rank 1: total pages)
+    //     BLOCK  [4,1,256,256] vs [1,4,256,256] -> [32,8] both
+    //     WIDTH  [4,1,256,256] vs [1,4,256,256] -> [32,8] both
+    //   ND sharding cannot reach this path: get_shard_specs() reads memory_config().shard_spec(), the
+    //   2D spec, so an ND-sharded tensor never takes it.
+    //
+    // If ternary ever gains ND sharding, tensor_shape_in_pages() would carry the individual dims and
+    // this reasoning lapses -- the words would then need re-applying via GetCommonRuntimeArgs.
 
     const auto& [predicate_tensor, value_true_tensor, value_false_tensor, optional_output_tensor] = tensor_args;
     const TernaryVariant variant = operation_attributes.ternary_variant;
