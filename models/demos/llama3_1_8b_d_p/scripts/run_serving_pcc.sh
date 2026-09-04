@@ -40,6 +40,12 @@ fi
 
 export PREFILL_MANIFEST="$PKG/tt/runners/manifests/llama3_1_8b.json"
 export PREFILL_MODEL=llama3_1_8b_d_p
+# PREFILL_NUM_LAYERS must be EXPORTED, not just set in the manifest: the runner applies the manifest
+# at import, but the producer only honours a --manifest CLI argument and reads NUM_LAYERS from the
+# environment at import time. Left unset it defaults to 61 (DeepSeek's depth) on the producer side,
+# which then waits for 61*chunks layer acks that a 32-layer model never sends, and gives up after
+# 600s with "timed out at 128/244 acks".
+export PREFILL_NUM_LAYERS=32
 export PREFILL_HF_MODEL="$HF_MODEL"
 export PREFILL_TRACE_DIR="$TRACE_DIR"
 export PREFILL_SP=8 PREFILL_TP=4

@@ -233,6 +233,19 @@ RoPE is norm-preserving and leaves K better conditioned for a block-float format
 single threshold is effectively a **V** threshold, with a margin of ~0.001 at these settings. A
 longer context or a different prompt could dip a layer below it without anything having regressed.
 
+**And it gets worse at the spec's own weight dtypes.** The numbers above were measured with bf16
+weights, to isolate the KV path. Running the full serving gate at the package defaults — the spec's
+`attn_weights` / `dense_mlp_weights`, i.e. bfp8 attention and bfp4 MLP — the same 32 layers give:
+
+```
+[producer] slot 0 per-head GQA KV PCC over [0,2048) across 32/32 local layers -> K=0.99377 V=0.96774
+[producer] KV cache PCC PASSED (min 0.967737 >= 0.93 across 1 slots)
+```
+
+So at the spec's numerics the model **passes** the spec's `e2e_chunked` gate (0.93) and **fails** its
+`per_layer_kv` gate (0.99) — with the same weights, in the same run. Two acceptance numbers in the
+same block disagree about whether the configuration the spec asks for is acceptable.
+
 **Proposed:** split the gate, and tie it to the cache dtype the way §6 proposes for module PCC:
 
 ```jsonc
@@ -388,7 +401,25 @@ Llama has 32; the KV cache, the slot packing and the layer split would all have 
 **Proposed:** default it to the model's own depth — the adapter already loads the HF config, so
 `hf_config.num_hidden_layers` is available before this is needed — and treat an explicit
 `PREFILL_NUM_LAYERS` as an override for partial-depth debugging only. Failing that, make it required
-and assert it against the config. This package pins it in its manifest.
+and assert it against the config.
+
+**And the manifest does not save you.** Pinning `PREFILL_NUM_LAYERS` in the model manifest fixes the
+runner and *not* the producer: `prefill_runner.py` applies the manifest at module import, but
+`prefill_producer.py` only honours a `--manifest` CLI argument and reads `NUM_LAYERS` from the
+environment at import time. So the producer still ran at 61 and waited for `61 * chunks` layer acks
+that a 32-layer model never sends:
+
+```
+[producer] layer acks 128/244      # 128 = 32 * 4 sent, 244 = 61 * 4 expected
+[producer] timed out at 128/244 acks after 600.0s
+```
+
+Two symmetric problems: the wrong default, and the manifest reaching only one of the two processes
+that must agree. The doc's own warning — "the shared env must match on both so the byte layout
+agrees" — lists `PREFILL_MODEL`, `PREFILL_SP/TP`, `PREFILL_CHUNK_SIZE`, `PREFILL_NUM_USERS`,
+`PREFILL_MAX_SEQ_LEN`, `PREFILL_H2D_SERVICE_ID`, but **not** `PREFILL_NUM_LAYERS`, which is exactly
+as load-bearing. This package exports it explicitly in `scripts/run_serving_pcc.sh` and pins it in
+the manifest.
 
 ---
 

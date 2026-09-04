@@ -78,6 +78,26 @@ Full 32 layers, 2048 tokens, `Meta-Llama-3.1-8B-Instruct`, at SP=8 x TP=4:
 P2 passing against P1's golden is the statement that matters: chunk *n* attending the prefix chunks
 0..*n*-1 left in the cache produces the same KV as processing the whole sequence at once.
 
+**P1/P2 above run with bf16 weights** to isolate the math. The serving gate below runs the package
+defaults — the spec's numerics — and the difference is the whole story on dtypes:
+
+### Serving (P3) — `scripts/run_serving_pcc.sh`
+
+`prefill_runner` + `prefill_producer`, two local processes, real weights, 4 x 512-token chunks. The
+producer pushes over the H2D socket, waits on per-layer LayerAcks, then reads the KV back
+**device-lessly over UMD through the published address table** and PCCs it against the golden trace:
+
+```
+[producer] drained 128/128 layer acks in 0.39s
+[producer] slot 0 per-head GQA KV PCC over [0,2048) across 32/32 local layers -> K=0.99377 V=0.96774
+[producer] KV cache PCC PASSED (min 0.967737 >= 0.93 across 1 slots)
+```
+
+At the **spec's numerics** (attention bfp8, MLP bfp4) per-layer KV is K 0.9938 / V 0.9677. That
+clears the spec's `e2e_chunked` gate of 0.93 and does **not** clear its `per_layer_kv` gate of 0.99 —
+the same inconsistency the module-level bfp4 measurement shows (`docs/SPEC_NOTES.md` §6, §6b). Both
+dtypes are constructor arguments, so this is a measurement, not a wall.
+
 The reference runs on CPU from the same checkpoint in the HF half-split convention; the device K is
 Meta-swizzled, so the comparison applies the head permutation (see `docs/SPEC_NOTES.md` §4).
 
