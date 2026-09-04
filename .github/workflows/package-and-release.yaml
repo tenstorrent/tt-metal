@@ -167,7 +167,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform: ["Ubuntu 22.04", "Ubuntu 24.04"]
+        # TEMPORARY (dpopov): main platform only; bh_sc4 legs never run on 24.04.
+        platform: ["Ubuntu 22.04"]
     with:
       platform: ${{ matrix.platform }}
       dry-run: ${{ inputs.dry-run || false }}
