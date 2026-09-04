@@ -2,18 +2,11 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tie-ORDER coverage for moe_grouped_topk's single-group path, in Kimi-K2.6's configuration.
-
-The sibling suites check which experts are selected: ``test_moe_grouped_topk.py`` by set recall
-over deliberately distinct inputs, ``test_moe_grouped_topk_stable.py`` by set equality with a
-resolution tolerance. Neither sees ORDER, and order is the entire content of the stable-sort
-contract -- so a tie broken the wrong way is invisible to both.
+"""Tie-ORDER coverage for moe_grouped_topk's single-group path.
 
 Every input here plants EXACT ties: experts sharing a tie class are given the same logit and the
-same bias, so their biased scores are bitwise equal whatever the input dtype and whatever the
-datapath's comparison resolution. That sidesteps the ~8e-4 relative resolution the sibling file
-measured: equal is equal at any resolution. Each test asserts the returned indices element-wise
-against a stable-argsort golden, with no tolerance.
+same bias, so their biased scores are bitwise equal. Each test asserts the returned indices
+element-wise against a stable-argsort golden, with no tolerance.
 """
 
 import pytest
@@ -187,14 +180,6 @@ def build(pattern_name):
 # --------------------------------------------------------------------------------------------
 # Tests
 # --------------------------------------------------------------------------------------------
-
-
-# The LLK's stable arm orders a tie class correctly only while its members stay within reach of one
-# comparator. Once the insertion chain has to carry them across merges, the last slots come back
-# holding the HIGHEST-indexed members instead of the lowest. Tracked as tenstorrent/tt-metal#33492.
-BROKEN_ON_MAIN = pytest.mark.xfail(reason="stable tie order across the merge chain, #33492", strict=True)
-
-
 @pytest.mark.parametrize(
     "pattern",
     [
@@ -245,7 +230,7 @@ def test_tie_order_is_deterministic(device):
         assert torch.equal(first, again), f"run {i} differs from run 0"
 
 
-@BROKEN_ON_MAIN
+@pytest.mark.xfail(reason="stable tie order across the merge chain, #33492", strict=True)
 def test_tie_order_under_padding(device):
     """Ties plus right-padding: padded rows go to the sentinel, real rows keep stable order."""
     num_real = TOKENS // 2
