@@ -34,6 +34,7 @@ sfpi_inline sfpi::vFloat unsigned_remainder_recip(const sfpi::vMag& b) {
 // Computes the unsigned remainder: |a| - floor(|a| / |b|) * |b|, given |b| and 1/|b| precomputed.
 // Use 32-bit integer division from ckernel_sfpu_div_int32_floor.h
 // Returns: unsigned remainder r
+template <bool numerator_can_be_int_min = true>
 sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(
     const sfpi::vInt& a_signed, sfpi::vMag b, const sfpi::vFloat& inv_b_f) {
     // Get absolute value of a for unsigned remainder computation
@@ -41,8 +42,10 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(
 
     // Convert to float; handle 2^31 edge case where sign-magnitude conversion yields negative
     sfpi::vFloat a_f = sfpi::convert<sfpi::vFloat>(a, sfpi::RoundMode::Nearest);
-    v_if(a_f < 0.0f) { a_f = TWO_POW_31; }
-    v_endif;
+    if constexpr (numerator_can_be_int_min) {
+        v_if(a_f < 0.0f) { a_f = TWO_POW_31; }
+        v_endif;
+    }
 
     // Initial quotient approximation: q = a * (1/b)
     sfpi::vFloat q_f = a_f * inv_b_f + sfpi::vConstFloatPrgm0;
@@ -57,6 +60,8 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(
     // Compute correction for approximation error: correction = |r| / b.
     // abs(INT_MIN) remains INT_MIN, whose sign-magnitude conversion produces
     // -0.0 instead of the valid magnitude 2**31.
+    // Keep this repair independent of the numerator bound: it also covers a
+    // negative INT_MIN residual from an overshooting quotient approximation.
     sfpi::vFloat r_f = sfpi::convert<sfpi::vFloat>(sfpi::abs(r), sfpi::RoundMode::Nearest);
     v_if(r_f < 0.0f) { r_f = TWO_POW_31; }
     v_endif;
@@ -74,8 +79,14 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(
 
     // When q is zero, qb is also zero, so r=INT_MIN is the positive magnitude
     // 2**31. A negative residual with nonzero q instead needs a negative correction.
-    v_if(r < 0 && q != 0) { tmp = -tmp; }
-    v_endif;
+    if constexpr (numerator_can_be_int_min) {
+        v_if(r < 0 && q != 0) { tmp = -tmp; }
+        v_endif;
+    } else {
+        // A range-reduced unsigned numerator cannot produce the positive 2**31 residue.
+        v_if(r < 0) { tmp = -tmp; }
+        v_endif;
+    }
     r -= tmp;
 
     // Final adjustment to ensure r is in [0, b). The corrected remainder
@@ -91,9 +102,10 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(
 
 // Computes the unsigned remainder: |a| - floor(|a| / |b|) * |b|
 // Returns: unsigned remainder r
+template <bool numerator_can_be_int_min = true>
 sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(const sfpi::vInt& a_signed, const sfpi::vInt& b_signed) {
     sfpi::vMag b = sfpi::abs(b_signed);
-    return compute_unsigned_remainder_int32(a_signed, b, unsigned_remainder_recip(b));
+    return compute_unsigned_remainder_int32<numerator_can_be_int_min>(a_signed, b, unsigned_remainder_recip(b));
 }
 
 // Remainder = a - floor(a / b) * b
@@ -142,7 +154,7 @@ sfpi_inline void calculate_remainder_uint32_body(
     // pass). t = (uint32)a >> 1 is always < 2^31, so the helper sees valid [0, 2^31) operands; rt
     // is only used on the b < 2^31 lanes, but every lane pays the call.
     sfpi::vInt t = sfpi::vInt(sfpi::vUInt(a) >> 1);
-    sfpi::vInt rt = compute_unsigned_remainder_int32(t, b);
+    sfpi::vInt rt = compute_unsigned_remainder_int32<false>(t, b);
 
     // Reload a from DEST instead of keeping it live across the helper
     a = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];

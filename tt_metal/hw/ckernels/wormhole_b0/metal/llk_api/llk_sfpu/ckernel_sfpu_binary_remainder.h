@@ -59,8 +59,10 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(
     // Absolute value of a; handle edge case where sign-magnitude conversion yields negative
     sfpi::vMag a = sfpi::abs(a_signed);
     sfpi::vFloat a_f = sfpi::convert<sfpi::vFloat>(a, sfpi::RoundMode::Nearest);
-    v_if(a_f < 0.0f) { a_f = TWO_POW_31; }
-    v_endif;
+    if constexpr (numerator_can_be_int_min) {
+        v_if(a_f < 0.0f) { a_f = TWO_POW_31; }
+        v_endif;
+    }
 
     // Initial quotient approximation : q = a * 1/b
     sfpi::vFloat q_f = a_f * inv_b_f + sfpi::vConstFloatPrgm0;
@@ -96,6 +98,8 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(
 
     // abs(INT_MIN) remains INT_MIN, whose sign-magnitude conversion produces
     // -0.0 instead of the valid magnitude 2**31.
+    // Keep this repair independent of the numerator bound: it also covers a
+    // negative INT_MIN residual from an overshooting quotient approximation.
     sfpi::vFloat r_f = sfpi::convert<sfpi::vFloat>(sfpi::abs(r), sfpi::RoundMode::Nearest);
     v_if(r_f < 0.0f) { r_f = TWO_POW_31; }
     v_endif;
