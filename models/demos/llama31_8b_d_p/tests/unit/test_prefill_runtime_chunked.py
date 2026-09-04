@@ -25,7 +25,7 @@ audit must report all three. An audit that passes everything is not an audit.
 
 **And then the refusals.** Recipe P7 requires the unsupported single-card configuration to fail
 loudly rather than silently run a different attention core
-(`BRINGUP_RECIPE.md:1598-1601`), and §1.4 requires every refusal to be matched on its message. Every
+(`BRINGUP_RECIPE.md:1598-1624`), and §1.4 requires every refusal to be matched on its message. Every
 `raise` in the module is exercised here.
 
 Note on the fixture: the repo's `expect_error` matches `message` as a **regex** despite its
@@ -59,6 +59,7 @@ _ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)),
 ENGINE_SOURCE = os.path.join(_ROOT, "models", "demos", "common", "prefill", "runners", "prefill_runner.py")
 CONTRACT_DOC = os.path.join(_ROOT, "models", "demos", "common", "prefill", "docs", "ADDING_A_PREFILL_MODEL.md")
 RUNTIME_SOURCE = os.path.join(_ROOT, "models", "demos", "llama31_8b_d_p", "tt", "tt_prefill_runtime.py")
+TABLE_SOURCE = os.path.join(_ROOT, "models", "demos", "llama31_8b_d_p", "tt", "runners", "kv_chunk_table.py")
 
 # The five names `ADDING_A_PREFILL_MODEL.md:111-129` requires on the runtime, and the five it
 # requires on `runtime.config`. The engine's real call site is a different set; both are checked.
@@ -307,7 +308,7 @@ def test_doc_required_names_are_present():
 def test_engine_call_site_is_wider_than_the_doc():
     """Measure the doc's gap rather than quoting it: two parameters, two methods, one config field.
 
-    `BRINGUP_RECIPE.md:1772-1775` names the two `prefill_chunk` parameters. The two undocumented
+    `BRINGUP_RECIPE.md:1795-1798` names the two `prefill_chunk` parameters. The two undocumented
     methods (`set_layer_completion_sink`, `set_d2h_ack_service`) and `config.use_trace` are what
     this AST walk added — `build_kv_chunk_table` and the two migration hooks *are* in the doc's
     optional-hook list.
@@ -426,7 +427,7 @@ def test_runtime_refuses_a_mesh_of_the_wrong_shape(expect_error):
 
 @pytest.mark.parametrize("mesh_shape", [(1, 1), (4, 4), (4, 2)], ids=["single_card", "tp4", "tp2"])
 def test_runtime_refuses_tp_not_equal_to_kv_heads(expect_error, mesh_shape):
-    """**The single-card refusal** (`BRINGUP_RECIPE.md:1598-1601`).
+    """**The single-card refusal** (`BRINGUP_RECIPE.md:1598-1624`).
 
     The packed cache holds exactly one KV head per chip, so `tp == num_key_value_heads` is an
     equality. Without this check the failure is a `TT_FATAL` from
@@ -464,7 +465,6 @@ def _stub_cache(num_layers=32, max_seq_len=131072, sp=4):
     "kwargs, error, message",
     [
         ({"d2h_service": object()}, NotImplementedError, "emits no D2H layer-ack records"),
-        ({"metadata_msg": object()}, NotImplementedError, "trace-safe metadata tensor"),
         ({"chunk_size": 777}, ValueError, "has no indexed RoPE table"),
         ({"slot_id": 4}, ValueError, "out of range"),
         ({"actual_start": 0, "actual_end": 0}, ValueError, "not a non-empty range"),
@@ -474,7 +474,6 @@ def _stub_cache(num_layers=32, max_seq_len=131072, sp=4):
     ],
     ids=[
         "d2h_service",
-        "metadata_msg",
         "unsupported_chunk_size",
         "slot_out_of_range",
         "empty_range",
@@ -484,7 +483,7 @@ def _stub_cache(num_layers=32, max_seq_len=131072, sp=4):
     ],
 )
 def test_prefill_chunk_refuses_bad_arguments(expect_error, kwargs, error, message):
-    """Eight argument refusals, all before the cache is resolved or a single op is issued."""
+    """Seven argument refusals, all before the cache is resolved or a single op is issued."""
     runtime = _unbuilt_runtime(num_layers=32)
     call = {"slot_id": 0, "actual_start": 0, "actual_end": 8192}
     call.update(kwargs)
@@ -492,10 +491,68 @@ def test_prefill_chunk_refuses_bad_arguments(expect_error, kwargs, error, messag
         runtime.prefill_chunk(None, _stub_cache(), **call)
 
 
+def test_prefill_chunk_accepts_the_engines_always_present_metadata_msg(expect_error):
+    """**`metadata_msg` must be accepted, not refused** — the lesson of `DEC-108`.
+
+    The engine passes it on **every** chunk in request mode: it is the H2D socket's own metadata
+    tensor (`prefill_runner.py:156-159`), the same object the engine decoded into the `slot_id` /
+    `actual_start` / `actual_end` it passes alongside. It is not a trace artefact, and it is never
+    `None`. This runtime originally refused a non-`None` value, and `G-RUNTIME`'s AST audit passed
+    it clean — a static audit proves the signature **binds** the engine's call, not that the values
+    the engine binds into it are acceptable. The refusal surfaced only on the first served chunk,
+    after the mesh was open and 15 GB of weights were loaded: precisely the cost the gate exists to
+    avoid, arrived at from the opposite direction.
+
+    Asserted by getting *past* it: the call is driven to the next refusal in line (the unsupported
+    chunk size), which proves `metadata_msg` was consumed rather than rejected.
+    """
+    runtime = _unbuilt_runtime(num_layers=32)
+    with expect_error(ValueError, "has no indexed RoPE table"):
+        runtime.prefill_chunk(
+            None,
+            _stub_cache(),
+            slot_id=0,
+            actual_start=0,
+            actual_end=8192,
+            request_id=7,
+            metadata_msg=object(),  # never None in request mode
+            chunk_size=777,  # the refusal we EXPECT to reach
+        )
+
+
+def test_every_parameter_the_engine_always_passes_is_accepted_or_used():
+    """The general form of `DEC-108`, checked against the engine's own call site.
+
+    A parameter the engine **unconditionally** passes may be used or ignored, but never refused —
+    refusing it is a guaranteed crash on the first served chunk. `d2h_service` is the exception and
+    is listed as such: the engine passes `None` for it unless `PREFILL_LAYER_ACK_D2H=1`
+    (`prefill_runner.py:707`, `:730-736`), so a refusal there is reachable only when someone asks
+    for the path.
+    """
+    _attributes, _config, calls, _guarded = read_engine_call_site()
+    keywords = {kw for _line, _n, kws in calls["prefill_chunk"] for kw in kws if kw is not None}
+    assert keywords == {"slot_id", "actual_start", "actual_end", "request_id", "d2h_service", "metadata_msg"}, (
+        f"the engine's prefill_chunk keywords changed to {sorted(keywords)}; re-derive which of them "
+        f"can be None (DEC-108)"
+    )
+    source = inspect.getsource(TtPrefillRuntime.prefill_chunk)
+    body = source.split('"""')[-1]  # past the docstring: only what executes
+    for parameter in sorted(keywords - {"d2h_service"}):
+        assert f"{parameter} is not None" not in body, (
+            f"prefill_chunk refuses a non-None {parameter}, and the engine always passes one "
+            f"(prefill_runner.py:286-295). That is a TypeError-equivalent on the first served "
+            f"chunk (DEC-108)."
+        )
+    assert "d2h_service is not None" in body, (
+        "the d2h_service refusal was removed; the engine creates that service only under "
+        "PREFILL_LAYER_ACK_D2H=1 and this runtime does not implement the device record path (R-024)"
+    )
+
+
 def test_prefill_chunk_refuses_a_cache_backed_chunk_on_the_dense_path(expect_error):
     """**Delta 3.** `actual_start > 0` without the SP ring path must refuse, naming P8.
 
-    `BRINGUP_RECIPE.md:1598-1602`: delta 3 cannot run in P7, `G-CHUNK` must not be weakened to
+    `BRINGUP_RECIPE.md:1598-1625`: delta 3 cannot run in P7, `G-CHUNK` must not be weakened to
     cover it, and the runtime must refuse the configuration loudly instead of running a causal mask
     that is off by `actual_start`.
     """
@@ -538,41 +595,227 @@ def test_compile_refuses_a_non_first_rank(expect_error):
 @pytest.mark.parametrize(
     "method, args, message",
     [
-        ("set_layer_ack_channel", (None,), "set_layer_ack_channel is P10"),
         ("set_layer_completion_sink", (None,), "multi-rank pipeline path"),
         ("set_d2h_ack_service", (None,), "belongs to the trace path"),
-        ("build_kv_chunk_table", (None, "/tmp/table.pb"), "build_kv_chunk_table is P10"),
-        ("kv_migration_base_address", (None,), "kv_migration_base_address is P10"),
     ],
-    ids=["layer_ack", "completion_sink", "d2h_ack", "chunk_table", "migration_base"],
+    ids=["completion_sink", "d2h_ack"],
 )
 def test_unimplemented_engine_hooks_refuse_loudly(expect_error, method, args, message):
-    """Five hooks the engine calls **unguarded** on the paths its env vars enable.
+    """The two hooks the engine calls **unguarded** that this iteration does not implement.
 
-    Each is present so the audit passes and each raises so a migration or trace run fails rather
-    than publishing an empty table and reporting success (`R-024`). Called unbound with a `None`
-    self, because none of them touches instance state before raising — which is itself the property
-    that makes them safe stubs.
+    Each is present so the audit passes and each raises so a trace or pipelined run fails rather
+    than reporting success having registered nothing (`R-024`). Called unbound with a `None` self,
+    because neither touches instance state before raising — which is itself the property that makes
+    them safe stubs. The other three (`build_kv_chunk_table`, `kv_migration_base_address`,
+    `set_layer_ack_channel`) were on this list until P10 implemented them; their own refusals are
+    below.
     """
     with expect_error(NotImplementedError, message):
         getattr(TtPrefillRuntime, method)(None, *args)
+
+
+# =============================================================================================
+# G-RUNTIME (P10): the migration hooks the engine calls, and what they still refuse
+# =============================================================================================
+def test_set_layer_ack_channel_refuses_before_compile(expect_error):
+    """Acking `compile()`'s throwaway chunks would poison the producer's drain count.
+
+    The producer drains exactly `num_layers x chunks` acks (`prefill_producer.py:1115`) and gates
+    its whole PCC read-back on that drain (`:1057-1063`), so `num_layers` phantom acks per warmed
+    chunk size would make it finish one real chunk early and read a partially-written cache. The
+    engine already orders `compile` (`prefill_runner.py:501`) before this call (`:768`); the
+    assertion makes a reordering fail here rather than as a hang.
+    """
+    runtime = _unbuilt_runtime(num_layers=32)
+    runtime.compiled = False
+    with expect_error(AssertionError, "call compile.. before set_layer_ack_channel"):
+        runtime.set_layer_ack_channel(object())
+
+
+def test_set_layer_ack_channel_bumps_once_per_layer():
+    """The registered callback injects 1 per call — `num_layers` per chunk, the count the reader wants."""
+
+    class _Channel:
+        def __init__(self):
+            self.injected = 0
+
+        def inject(self, count):
+            self.injected += count
+
+    runtime = _unbuilt_runtime(num_layers=32)
+    runtime.compiled = True
+    channel = _Channel()
+    runtime.set_layer_ack_channel(channel)
+    assert runtime._on_layer_complete is not None, "set_layer_ack_channel registered no callback"
+    for layer_idx in range(runtime.config.num_layers):
+        runtime._on_layer_complete(layer_idx)
+    assert channel.injected == runtime.config.num_layers, (
+        f"one chunk injected {channel.injected} acks for {runtime.config.num_layers} layers; the "
+        f"producer drains num_layers x chunks and a mismatch hangs its drain"
+    )
+
+
+# `stage_layout` is the gathered **LIST** of one dict per rank — `allgather_kv_stage_layout` builds
+# it with `for rk in range(size)` (`migration.py:315-334`) and the engine passes `stage_layouts[0]`,
+# stage 0's per-rank list (`prefill_runner.py:634`). The first version of these tests asserted the
+# opposite and enshrined `DEC-111`'s bug; they now assert the engine's real shapes.
+_SINGLE_RANK_STAGE = [{"rank": 0, "first_layer": 0, "count": 32, "base_addr": 0x1000}]
+
+
+@pytest.mark.parametrize(
+    "kwargs, error, message",
+    [
+        ({"first_layer_idx": 8}, NotImplementedError, "pipeline rank that is not rank 0"),
+        ({"num_my_layers": 16}, NotImplementedError, "asked for 16 layers but this runtime"),
+        # A pipeline run: two ranks in the gathered list. THIS is the shape that can actually detect
+        # one, and it is the only one the engine's own path can produce (`DEC-111`).
+        (
+            {
+                "stage_layout": [
+                    {"rank": 0, "first_layer": 0, "count": 16},
+                    {"rank": 1, "first_layer": 16, "count": 16},
+                ]
+            },
+            NotImplementedError,
+            "carries 2 ranks",
+        ),
+        # One rank, but not the whole model.
+        ({"stage_layout": [{"rank": 0, "first_layer": 0, "count": 16}]}, NotImplementedError, "of this runtime's 32"),
+        # A bare dict: what the first draft believed the engine passed.
+        ({"stage_layout": {"first_layer": 0, "count": 32}}, TypeError, "must be the gathered LIST"),
+        ({"stage_layout": []}, TypeError, "non-empty sequence"),
+    ],
+    ids=["first_layer_idx", "num_my_layers", "two_ranks", "partial_rank", "bare_dict", "empty_list"],
+)
+def test_build_kv_chunk_table_refuses_a_pipeline_rank_slice(expect_error, kwargs, error, message):
+    """Recipe P10 step 4: the unimplemented multi-rank merge **raises**, naming `R-032`.
+
+    The template discards all three arguments with a `del`
+    (`models/demos/gpt_oss_d_p/tt/tt_prefill_runtime.py:388`), which on a pipelined runner would
+    publish a table claiming to cover the whole model while addressing only rank 0's layers.
+    Asserted against the table module's own guard, so no device is needed.
+    """
+    from models.demos.llama31_8b_d_p.tt.runners.kv_chunk_table import assert_single_rank_stage
+
+    call = {"num_layers": 32, "first_layer_idx": 0}
+    call.update(kwargs)
+    with expect_error(error, message):
+        assert_single_rank_stage(**call)
+
+
+def test_build_kv_chunk_table_accepts_the_shapes_the_engine_really_passes():
+    """The control for the refusals above — and it is the half `DEC-111` failed.
+
+    Three shapes, one per engine call site: the pure-mock path with `path` only
+    (`prefill_runner.py:570`, `:699`), and the gathered path with `first_layer_idx=0`,
+    `num_my_layers=<depth>` and `stage_layout=stage_layouts[0]` — the **list** with one entry
+    because there is one rank (`:644`, `:655`, `:674`). A guard that rejects any of these blocks
+    every real migration run, which is what the first version did, and `G-MOCK-MIG` could not see it
+    because the pure-mock path passes no `stage_layout` at all.
+    """
+    from models.demos.llama31_8b_d_p.tt.runners.kv_chunk_table import assert_single_rank_stage
+
+    assert_single_rank_stage(num_layers=32, first_layer_idx=0)
+    assert_single_rank_stage(num_layers=32, first_layer_idx=0, num_my_layers=32)
+    assert_single_rank_stage(num_layers=32, first_layer_idx=0, num_my_layers=32, stage_layout=_SINGLE_RANK_STAGE)
+
+
+def test_the_gathered_stage_layout_really_is_a_list_of_dicts():
+    """Read the engine's own builder, so this file's belief about the shape cannot drift again.
+
+    `DEC-111` was a wrong belief about a type, held by both the code and its test. An AST check on
+    the *producing* function is what makes the belief falsifiable.
+    """
+    import ast as _ast
+
+    source = open(os.path.join(_ROOT, "models", "demos", "common", "prefill", "runners", "migration.py")).read()
+    functions = {n.name: n for n in _ast.walk(_ast.parse(source)) if isinstance(n, _ast.FunctionDef)}
+    body = _ast.unparse(functions["allgather_kv_stage_layout"])
+    assert "stages = []" in body and "stages.append({" in body and "return stages" in body, (
+        "allgather_kv_stage_layout no longer builds a list of dicts; re-derive what the engine "
+        "passes as stage_layout before trusting assert_single_rank_stage (DEC-111)"
+    )
+    plural = _ast.unparse(functions["allgather_kv_stage_layouts"])
+    assert "allgather_kv_stage_layout(" in plural and "for stage in stages" in plural, (
+        "allgather_kv_stage_layouts is no longer one list per migratable stage, so stage_layouts[0] "
+        "may no longer be a per-rank list"
+    )
+
+
+def test_build_kv_chunk_table_refuses_more_than_one_block_cyclic_period(expect_error):
+    """`DEC-112`: a table describes ONE period, so two supported chunk sizes must refuse.
+
+    Unreachable through the engine (it never passes `chunk_size` to `prefill_chunk`,
+    `prefill_runner.py:287-296`), and the only silent-wrong-answer this module could produce: a
+    cache written at two periods has no single address map, and a table built for
+    `config.chunk_size` would hand out addresses that resolve, decode, and are wrong.
+    """
+    runtime = _unbuilt_runtime(num_layers=32, chunk_size=8192, additional_chunk_sizes=(4096,))
+    assert runtime.config.chunk_sizes == (8192, 4096)
+    with expect_error(NotImplementedError, "describes exactly one block-cyclic period"):
+        runtime.build_kv_chunk_table(_stub_cache(), "/tmp/unused_table.pb")
+
+
+def test_kv_migration_stages_is_deliberately_absent():
+    """Its mere presence switches the engine to the multi-stage merge path (`prefill_runner.py:613`).
+
+    Not an omission: this model migrates K and V, but the multi-stage path is the unimplemented
+    multi-rank merge in a different disguise (`R-032`), and the table takes each tensor's own
+    `buffer_address()` (`models/demos/gpt_oss_d_p/tt/runners/kv_chunk_table.py:138`) so it needs no
+    per-stage anchor.
+    """
+    assert not hasattr(TtPrefillRuntime, "kv_migration_stages"), (
+        "kv_migration_stages now exists, which moves the engine onto its multi-stage merge path "
+        "(prefill_runner.py:613-615) — implement the merge, or remove the hook"
+    )
+    assert hasattr(TtPrefillRuntime, "kv_migration_base_address"), (
+        "with neither migration hook the engine raises a RuntimeError naming the doc "
+        "(prefill_runner.py:619-623) and migration cannot run at all"
+    )
+
+
+def test_kv_migration_base_address_returns_the_k_cache_base():
+    """K's base, read off the cache the engine handed in — not a remembered address (`DEC-062`)."""
+
+    class _Tensor:
+        def __init__(self, address):
+            self._address = address
+
+        def buffer_address(self):
+            return self._address
+
+    runtime = _unbuilt_runtime(num_layers=32)
+    cache = LlamaKVCache(k=_Tensor(0x1000), v=_Tensor(0x2000), num_users=1, num_layers=32, max_seq_len=1024, sp=4)
+    assert runtime.kv_migration_base_address(cache) == 0x1000
+    assert runtime.kv_migration_base_address([cache]) == 0x1000
 
 
 def test_every_raise_in_the_module_is_covered():
     """A meta-check: count the `raise` statements in the module and the refusals asserted here.
 
     Recipe §1.4 asks for "every refusal loud and matched on its message"; the honest way to claim
-    *every* is to count them rather than to assert a subset and hope.
+    *every* is to count them rather than to assert a subset and hope. P10 replaced three `raise`
+    bodies with implementations and moved their refusals into `tt/runners/kv_chunk_table.py`, so the
+    runtime's floor drops from 18 to 15 and that module's own four are counted here too.
     """
     tree = ast.parse(open(RUNTIME_SOURCE).read())
     raises = [node for node in ast.walk(tree) if isinstance(node, ast.Raise)]
+    table_tree = ast.parse(open(TABLE_SOURCE).read())
+    table_raises = [node for node in ast.walk(table_tree) if isinstance(node, ast.Raise)]
     from loguru import logger
 
     logger.info(
         f"[G-RUNTIME] tt_prefill_runtime.py contains {len(raises)} raise statements at lines "
-        f"{[node.lineno for node in raises]}"
+        f"{[node.lineno for node in raises]}; tt/runners/kv_chunk_table.py contains "
+        f"{len(table_raises)} at lines {[node.lineno for node in table_raises]}"
     )
-    assert len(raises) >= 18, (
-        f"only {len(raises)} raise statements found; the refusal list in this file was written "
-        f"against 18 and one may have been deleted rather than covered"
+    assert len(raises) >= 16, (
+        f"only {len(raises)} raise statements found in the runtime; the refusal list in this file "
+        f"was written against 16 (15 after P10 replaced three bodies, plus DEC-112's period guard) "
+        f"and one may have been deleted rather than covered"
+    )
+    assert len(table_raises) >= 6, (
+        f"only {len(table_raises)} raise statements found in tt/runners/kv_chunk_table.py; the "
+        f"multi-rank refusals (R-032, six of them after DEC-111) and the shared-layout guard "
+        f"(DEC-099) are counted here"
     )

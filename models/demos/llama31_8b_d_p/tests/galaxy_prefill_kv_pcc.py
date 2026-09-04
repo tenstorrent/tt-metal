@@ -39,7 +39,7 @@ to match). The period is `chunk_local = chunk_global // sp`, so **the read-back 
 size the run used** — a one-shot run and a chunked run of the same prompt lay the same tokens out
 differently, and reading one with the other's period would produce a plausible, wrong PCC.
 
-`G-MESH-KV` therefore runs **more than one chunk size** (`BRINGUP_RECIPE.md:1781-1784`), which is
+`G-MESH-KV` therefore runs **more than one chunk size** (`BRINGUP_RECIPE.md:1804-1807`), which is
 also what makes the layout claim falsifiable: a read-back with the wrong period cannot score well at
 both.
 
@@ -47,7 +47,7 @@ both.
 
 `PREFILL_RACE_ITERS=3` runs the whole harness **three times in one process on one `CCLManager`** and
 requires the per-layer PCC tables to be **bit-identical**, logging all three SHA-256 hashes
-(`BRINGUP_RECIPE.md:1773-1777`). Non-determinism here means a semaphore is being reused while in
+(`BRINGUP_RECIPE.md:1796-1800`). Non-determinism here means a semaphore is being reused while in
 flight. Note the scope of a pass, as the recipe insists: a few hundred collectives is not hundreds
 of thousands, and it says nothing about multi-user slots.
 
@@ -100,7 +100,7 @@ from models.demos.llama31_8b_d_p.tt.tt_prefill_runtime import TtPrefillRuntime, 
 GALAXY_NUM_DEVICES = GALAXY_MESH_SHAPE[0] * GALAXY_MESH_SHAPE[1]
 DEFAULT_CHUNK_SIZE = 512
 
-# Carried from `G-CHUNK` / `G-KV-TP8` rather than picked here (`BRINGUP_RECIPE.md:1738-1741`): a
+# Carried from `G-CHUNK` / `G-KV-TP8` rather than picked here (`BRINGUP_RECIPE.md:1761-1764`): a
 # threshold chosen against this measurement could not fail.
 GOLDEN_K_THRESHOLD = 0.99
 GOLDEN_V_THRESHOLD = 0.98

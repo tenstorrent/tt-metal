@@ -81,8 +81,8 @@ SEQ_LENS = [128, 512, 2048]
 ACTIVATION_DTYPE = ttnn.bfloat16  # `DEC-022`
 WEIGHT_SCALE = 0.02
 
-PCC_THRESHOLD = 0.999  # `BRINGUP_RECIPE.md:1854` (Appendix A), stated at `:1370-1373`
-MAX_BLOCK_ERR_RATIO = 8.0  # `BRINGUP_RECIPE.md:1854`
+PCC_THRESHOLD = 0.999  # `BRINGUP_RECIPE.md:1877` (Appendix A), stated at `:1370-1373`
+MAX_BLOCK_ERR_RATIO = 8.0  # `BRINGUP_RECIPE.md:1877`
 
 # `DEC-051`, following `DEC-042`: the raw 8x holds at bf8_b — the package's weight dtype — and does
 # **not** hold at bf16, where a smaller floor error turns the same fixed fused-kernel slack into a

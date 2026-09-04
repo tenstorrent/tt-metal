@@ -500,14 +500,22 @@ def run_schedule(cfg: ProducerConfig, *, push_fn, now_fn=time.perf_counter, slee
     )
 
 
+# Models whose KV cache is a plain packed K/V pair, block-cyclic over the SP rows with one KV head
+# per TP column, and whose golden trace stores HF-layout [1, n_kv, seq, head_dim] K/V. They share
+# ONE reader: the layouts are identical, so a per-model copy would be a second thing to keep right.
+# A new entry needs: NUM_KEY_VALUE_HEADS / HEAD_DIM (and ROTARY_DIM, if != HEAD_DIM) on the
+# adapter's model_config, a 32-token DRAM block, and a table whose configs are k_h0..N-1, v_h0..N-1.
+_PACKED_GQA_MODELS = ("gpt_oss_d_p", "llama31_8b_d_p")
+
+
 def _read_slot_kv_and_check_pcc(table, device_map: dict, slot_id: int, real_len: int, trace_dir):
     golden_cap = int(os.environ.get("PREFILL_PCC_GOLDEN_LEN", "0"))
     if golden_cap:
         real_len = min(real_len, golden_cap)
     if ADAPTER.name == "minimax_m3":
         return _read_slot_kv_and_check_pcc_m3(table, device_map, slot_id, real_len, trace_dir)
-    if ADAPTER.name == "gpt_oss_d_p":
-        return _read_slot_kv_and_check_pcc_gpt_oss(table, device_map, slot_id, real_len, trace_dir)
+    if ADAPTER.name in _PACKED_GQA_MODELS:
+        return _read_slot_kv_and_check_pcc_packed_gqa(table, device_map, slot_id, real_len, trace_dir)
     return _read_slot_kv_and_check_pcc_mla(table, device_map, slot_id, real_len, trace_dir)
 
 
@@ -531,7 +539,7 @@ def _read_kv_slice(table, device_map, config_id, layer, slot_id, read_len, head_
     return torch.cat(rows, dim=0)[:read_len]
 
 
-def _read_slot_kv_and_check_pcc_gpt_oss(table, device_map: dict, slot_id: int, real_len: int, trace_dir):
+def _read_slot_kv_and_check_pcc_packed_gqa(table, device_map: dict, slot_id: int, real_len: int, trace_dir):
     from pathlib import Path
 
     from safetensors import safe_open
@@ -587,7 +595,8 @@ def _read_slot_kv_and_check_pcc_gpt_oss(table, device_map: dict, slot_id: int, r
 
     min_pcc = min(mins.values())
     logger.info(
-        f"[producer] slot {slot_id} GPT-OSS KV PCC over [0,{real_len}) across {checked}/{NUM_LAYERS} local layers -> "
+        f"[producer] slot {slot_id} {ADAPTER.name} packed-GQA KV PCC over [0,{real_len}) across "
+        f"{checked}/{NUM_LAYERS} local layers -> "
         f"K={mins['k']:.5f} V={mins['v']:.5f} (min {min_pcc:.6f})"
     )
     if checked == 0:

@@ -1,0 +1,13 @@
+{
+  "env": {
+    "PREFILL_MODEL": "llama31_8b_d_p",
+    "PREFILL_NUM_LAYERS": "32",
+    "PREFILL_SP": "4",
+    "PREFILL_TP": "8",
+    "PREFILL_CHUNK_SIZE": "8192",
+    "PREFILL_MAX_SEQ_LEN": "131072",
+    "PREFILL_FABRIC_MODE": "1d",
+    "PREFILL_USE_TRACE": "0",
+    "PREFILL_DFLASH": "0"
+  }
+}

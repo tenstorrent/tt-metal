@@ -160,7 +160,11 @@ gates**, so P7's whole evidence base briefly existed only against paths no longe
 
 1. **Commit only at a phase boundary, with no session live.** "Commits are authorised" is not
    "commit right now". Check for a running session first.
-2. **Never rename, move, or restructure while a session is live.** A rename is the worst case: it
+2. **Never rename, move, or restructure while a session is live — and that includes THIS DOCUMENT.**
+The rule was written about the worktree and is not enough: editing the specification a running session
+is citing turned 38 of its content-checked citations red at once, all shifted by the same +23 lines,
+and cost it a re-point pass across 20 files. If a finding must go in mid-phase, hold it and apply it
+at the phase boundary. A rename is the worst case: it
    invalidates in-flight path references silently and rewrites the provenance of raw logs.
 3. **After any path-affecting change, re-run the previous phase's *gates*** — not a smoke test.
    Import checks and a citation pass prove the tree is wired; they prove nothing about the gates.
@@ -1597,6 +1601,29 @@ session half an hour.)
    `prefill_chunk(input, kv_cache, *, slot_id, actual_start, actual_end, request_id=0,
    d2h_service=..., metadata_msg=...)`, plus `mesh_device` and a `config` exposing
 
+**A static audit proves the SHAPE of your interface, not the SEMANTICS of your guards — and that
+distinction cost a session three real bugs.** The audit above passes if every method the engine calls
+exists with a compatible signature. It cannot see what the method *does* with the values. Measured, in
+one run, all three of these passed the static audit and were caught only by running the engine's real
+branches:
+
+- a refusal on `metadata_msg` — a parameter the engine **always** sends — which killed the first
+  request-mode run on its first served chunk, after mesh open, weight load and `compile()`;
+- a guard demanding a `dict` for `stage_layout`, which the engine actually supplies as a **list of
+  per-rank dicts**; it would have blocked every real migration run;
+- two guards that **compared a value with itself**, so the protection they advertised did not exist at
+  all.
+
+The common cause is worth naming: all three were written from a parameter's **name** rather than from
+what the engine observably puts in it. So:
+
+1. Keep the static audit — it is cheap and it catches the shape errors.
+2. **Additionally run every engine branch you claim to support at least once**, including the ones
+   behind an env var, before recording the gate. A refusal is code; untested code.
+3. **Assert that each of your guards can actually fire.** A guard comparing a value with itself is the
+   same failure as a negative control that cannot fail (§2.2.1), one layer down — and neither a type
+   checker nor a static audit will tell you.
+
 **And the gap is wider than two parameters — audit the engine's call sites, do not trust its doc or
 this list.** An AST walk of the runner found, beyond `d2h_service` and `metadata_msg`:
 `set_layer_completion_sink` and `set_d2h_ack_service` called **unguarded** and absent from the
@@ -1862,24 +1889,36 @@ Working template to mirror end to end: `models/demos/gpt_oss_d_p/tt/runners/` �
 1. **`tt/runners/adapters/llama.py`** — subclass `PrefillModelAdapter`
    (`models/demos/common/prefill/adapter.py:104`). Set `name = "llama31_8b_d_p"`, `model_config`,
    `hf_model_default`, `ttnn_cache_default`, `prefill_trace_default`, `l1_small_size`,
-   `supports_dflash = False`. (`models/demos/gpt_oss_d_p/tt/runners/adapters/gpt_oss.py:45-49` shows
+   `supports_dflash = False`. (`models/demos/gpt_oss_d_p/tt/runners/adapters/gpt_oss.py:45-49 (which shows five of them; `l1_small_size` and `supports_dflash` are set by neither reference adapter, so choose them deliberately)` shows
    five of them, and what an empty default means: `ttnn_cache_default = ""` ⇒ no cache,
    `prefill_trace_default = ""` ⇒ trace must come from `PREFILL_TRACE_DIR`.) Implement
    `load_hf_config`, `weight_cache_path(mesh_shape)`,
    `allocate_kv_cache(*, mesh_device, hf_config, params)` returning a `KvCaches` subclass, and
    `build_runtime(*, mesh_device, hf_config, params)`. Read knobs from `params`
-   (`PrefillRunParams`, `adapter.py:46`), **never** from `os.environ`.
+   (`PrefillRunParams`, `adapter.py:46`), **never** from `os.environ`. **One documented exception:**
+`PrefillRunParams` carries no topology field, and the recipe's own named template reads
+`PREFILL_TOPOLOGY` from the environment. Either pin the topology in code (preferable — P8 measured
+that only `Linear` works on one galaxy) or read that single variable and say so in a DEC. Do not
+pretend `params` offers it.
    **Keep the module import-light** — no torch, no ttnn, no reference model at module scope,
    including via a convenience helper. The H2D producers import adapters, and P9 gates this.
 2. **`tt/runners/manifests/llama31_8b_d_p.json`** — `{ "env": { "PREFILL_MODEL": "llama31_8b_d_p" } }`.
-   Pin what the deployment needs (the mesh-graph descriptor for the torus, the fabric config) and
+Pin the model-wide knobs the manifest *can* set. It **cannot** set the mesh-graph descriptor path:
+the runner applies the manifest **after** `import ttnn`, which is already too late, and on a single
+galaxy no torus descriptor maps at all (P8). Export `TT_MESH_GRAPH_DESC_PATH` in the environment
+instead, before pytest or the runner starts.
    nothing that belongs to the caller (prompt, chunk count).
 3. **Register** in `ADAPTER_PATHS` in `models/demos/common/prefill/adapter.py`:
    `"llama31_8b_d_p": "models.demos.llama31_8b_d_p.tt.runners.adapters.llama:LlamaPrefillAdapter"`
    (the dict starts at `adapter.py:277`). One line; the import stays lazy.
 4. **`tt/runners/kv_chunk_table.py`** + the runtime's optional migration hooks
    (`build_kv_chunk_table`, `kv_migration_base_address`, `set_layer_ack_channel`) using
-   `serialize_kv_chunk_table` from `models/demos/common/prefill/runners/migration.py`. Anything you
+serialize the table with the helper that matches your table's shape. `serialize_kv_chunk_table`
+**builds a single-config table** from a `table_builder(config=..., chunk_size_bytes=..., num_users=...)`
+callback, so it cannot express a model whose table has several configs — use
+`serialize_prebuilt_kv_chunk_table` in the same module for that. (It also avoids a race the
+single-config path has: that one calls `export_to_protobuf_file` in place while the producer is
+already polling for the file.)
    do not implement — the multi-rank merge, for one — must **raise**, naming its risk id, rather than
    silently discarding an argument.
 5. **Wire the producer's KV read-back for your cache layout.** The device-less reader that powers
@@ -1888,12 +1927,20 @@ Working template to mirror end to end: `models/demos/gpt_oss_d_p/tt/runners/` �
    `models/demos/common/prefill/runners/prefill_producer.py`'s `_read_slot_kv_and_check_pcc`
    (`:511`):
    ```python
-   _PACKED_GQA_MODELS = ("gpt_oss_d_p", "llama31_8b_d_p")   # prefill_producer.py:508
-   ...
-   if ADAPTER.name == "minimax_m3":        return _read_slot_kv_and_check_pcc_m3(...)
-   if ADAPTER.name in _PACKED_GQA_MODELS:  return _read_slot_kv_and_check_pcc_gpt_oss(...)
-   return _read_slot_kv_and_check_pcc_mla(...)              # DeepSeek / Kimi merged MLA
-   ```
+# BEFORE (what you will find): a hard-coded single-model branch.
+if ADAPTER.name == "gpt_oss_d_p":
+    return _read_slot_kv_and_check_pcc_gpt_oss(...)
+return _read_slot_kv_and_check_pcc_mla(...)          # the MLA fallback -- WRONG for a packed K/V cache
+
+# AFTER (the change this step asks you to make): generalise the branch and rename the reader.
+_PACKED_GQA_MODELS = ("gpt_oss_d_p", "<your_model>")
+if ADAPTER.name in _PACKED_GQA_MODELS:
+    return _read_slot_kv_and_check_pcc_packed_gqa(...)
+```
+**Do not take line numbers from this block.** An earlier draft presented the *post-change* file as
+though it already existed, with citations to lines that only exist after the edit — which both leaked
+the answer and pointed at nothing. Read `prefill_producer.py` yourself and locate the dispatch by
+name.
    The MLA fallback (`:696`) is **wrong for Llama**, so without a branch this gate silently checks
    the wrong bytes. `_read_slot_kv_and_check_pcc_gpt_oss` (`:544`) is the **plain packed-K/V,
    block-cyclic GQA reader** — exactly Llama's layout — so read it first and, if your `kv_cache.py`
@@ -1910,7 +1957,7 @@ Working template to mirror end to end: `models/demos/gpt_oss_d_p/tt/runners/` �
 - **`G-ADAPTER`** — the checklist at the end of `ADDING_A_PREFILL_MODEL.md`, item by item, each with
   evidence. Plus: zero abstract methods left; `PREFILL_MODEL=llama31_8b_d_p` resolves through the
   registry; the registry-fed pytest `variant` fixture
-  (`models/demos/deepseek_v3_d_p/tests/conftest.py:365`) picks it up; every `model_dims` constant
+  (`models/demos/deepseek_v3_d_p/tests/conftest.py:365`) picks it up; every `model_config` constant
   equals `config.json`; and **adapter import is measured** — time it and assert no heavy module
   landed in `sys.modules`.
 - **`G-REQUEST`** — the two-terminal request-mode run from `ADDING_A_PREFILL_MODEL.md` §4:

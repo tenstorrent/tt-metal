@@ -141,7 +141,7 @@ something stubbed; or find that the reference and the repo disagree.
   the measurement it will be compared to — not before the *phase* that gives it meaning.
 - **Evidence:** `models/demos/common/prefill/docs/PREFILL_MIGRATION_TESTING.md:62`
   ("Two shape constraints apply: `MAX_SEQ_LEN % CHUNK_SIZE == 0` and `CHUNK_SIZE % (SP*32) == 0`");
-  `BRINGUP_RECIPE.md:1811` (the "too good" symptom when `max_seq_len == chunk_size`).
+  `BRINGUP_RECIPE.md:1834` (the "too good" symptom when `max_seq_len == chunk_size`).
 - **Confidence:** high.
 - **Falsifier:** P7 discovering a constraint that P0 should have carried (e.g. a chunk-size ceiling
   from DRAM capacity at 32 layers), which would make the deferral a mistake rather than an ordering.
@@ -701,7 +701,7 @@ something stubbed; or find that the reference and the repo disagree.
   The choice is therefore made by the gate design, and what P3 owes is the *measurement plan*, not a
   guess at the cost.
 - **Evidence:** `BRINGUP_RECIPE.md:1193-1197`; Appendix A rows `G-KV` / `G-KV-TP8` / `G-MESH-KV`
-  (`BRINGUP_RECIPE.md:1732`, `:1740`, `:1746`); `models/demos/gpt_oss_d_p/tt/attention/kv_cache.py:56`
+  (`BRINGUP_RECIPE.md:1755`, `:1740`, `:1746`); `models/demos/gpt_oss_d_p/tt/attention/kv_cache.py:56`
   (`cache_dtype=ttnn.bfloat8_b` default) and `:72` (its comment: "bf8 matches the DeepSeek substrate
   + the device golden check").
 - **Confidence:** high on the choice, **none yet on the cost** — the delta is unmeasured, which is
@@ -742,7 +742,7 @@ something stubbed; or find that the reference and the repo disagree.
   from `G-MODEL` at 512.
 - **Evidence:** `models/demos/gpt_oss_d_p/tt/model.py:313-315` (the bf16-not-bf8 comment on the
   embedding output); `models/demos/gpt_oss_d_p/tt/attention/prefill.py:106-109` (the long-sequence
-  switch, not taken); Appendix A `G-MLP` "≥ 0.999 @bf8_b, ≥ 0.9995 @bf16" (`BRINGUP_RECIPE.md:1730`).
+  switch, not taken); Appendix A `G-MLP` "≥ 0.999 @bf8_b, ≥ 0.9995 @bf16" (`BRINGUP_RECIPE.md:1753`).
 - **Confidence:** high.
 - **Falsifier:** a long-context (>32k) prefill OOMing where the bf8_b activation switch would have
   fitted — which would make this a footprint decision wrongly made on numerics.
@@ -767,7 +767,7 @@ something stubbed; or find that the reference and the repo disagree.
   2. A pytest `--delta-probe` flag instead. Would not work for the P8 galaxy harnesses and the P10
      two-terminal runs, which are not pytest.
   3. Reuse a `PREFILL_*` name. Those belong to the engine, and `tt-run` forwards only
-     `TT_/ARCH_/WH_/TTNN_/DEEPSEEK_/MESH_` prefixes anyway (`BRINGUP_RECIPE.md:1808`), so a
+     `TT_/ARCH_/WH_/TTNN_/DEEPSEEK_/MESH_` prefixes anyway (`BRINGUP_RECIPE.md:1831`), so a
      `PREFILL_`-prefixed package variable would be silently dropped under `tt-run`.
 - **Choice:** option 1. The package's **total** env-var surface is planned as four —
   `HF_MODEL` (pre-existing, repo-wide), `TT_CACHE_PATH` (pre-existing, repo-wide),
@@ -779,7 +779,7 @@ something stubbed; or find that the reference and the repo disagree.
   greppable and keeps it out of the engine's namespace.
 - **Evidence:** `models/demos/gpt_oss_d_p/tt/layer.py:19` (`_DELTA_PROBE = os.environ.get("GPT_OSS_DELTA_PROBE", "") != ""`)
   and `:22` (`_delta_stats`, whose `except Exception` is the one allowed instance under
-  `BRINGUP_RECIPE.md:1685-1687` because it logs and must never break a run);
+  `BRINGUP_RECIPE.md:1708-1710` because it logs and must never break a run);
   `BRINGUP_RECIPE.md:1249-1250`.
 - **Confidence:** high.
 - **Falsifier:** P9 item 6's grep finding a fifth `os.environ` read in the package that this decision
@@ -1371,7 +1371,7 @@ something stubbed; or find that the reference and the repo disagree.
   an oversized raw log so it passes the `check-large-files` **commit** hook: that advice only makes
   sense if the logs are meant to be committed, which under the root ignore they cannot be.
 - **Evidence:** `.gitignore:7` (`*.log`); `BRINGUP_RECIPE.md:199` (the rule);
-  `BRINGUP_RECIPE.md:1817-1819` (Appendix C item 2); `LANDMINES.md`'s `check-large-files` row
+  `BRINGUP_RECIPE.md:1840-1842` (Appendix C item 2); `LANDMINES.md`'s `check-large-files` row
   (gzip rather than trim, "so the evidence stays byte-exact"); `git check-ignore -v` and
   `git ls-files` output above.
 - **Confidence:** high on the diagnosis; medium on the remedy being the one a repo maintainer would
@@ -1544,7 +1544,7 @@ something stubbed; or find that the reference and the repo disagree.
 ### DEC-042 — `G-ATTN`'s 8x block budget: hold it at bf8_b, gate bf16 on the SDPA-attributed residual
 - **Phase / module:** P5.5 / `tests/unit/test_attention_vs_ref.py`
 - **Date (UTC):** 2026-09-04
-- **Trigger:** `BRINGUP_RECIPE.md:1770` sets `G-ATTN` at "PCC >= 0.999; own stages <= 3x floor,
+- **Trigger:** `BRINGUP_RECIPE.md:1793` sets `G-ATTN` at "PCC >= 0.999; own stages <= 3x floor,
   block <= 8x". Measured on this box, the block clears 0.999 at both dtypes and clears 8x at
   **bf8_b** but **not** at bf16:
 
@@ -1582,7 +1582,7 @@ something stubbed; or find that the reference and the repo disagree.
   1. **Assert 8x at both dtypes.** The gate FAILs, which under §0 rule 1 stops the whole bring-up,
      on a module whose every hand-written stage is at its floor. Wrong answer to a metric problem.
   2. **Raise the budget to 13x.** Fitting a threshold to a measurement already seen — the recipe's
-     own named error, "the same error with a friendlier face" (`BRINGUP_RECIPE.md:1815-1817`).
+     own named error, "the same error with a friendlier face" (`BRINGUP_RECIPE.md:1838-1840`).
   3. **Drop bf16 from the gate.** Loses the measurement the recipe asks for and hides the finding.
   4. **Keep 0.999 and the 3x stage budgets at both dtypes; assert the raw 8x where it holds
      (bf8_b, the package's weight dtype); and at both dtypes assert the SDPA-attributed
@@ -1600,7 +1600,7 @@ something stubbed; or find that the reference and the repo disagree.
   bf16 and this entry is the deviation.
 - **Evidence:** `raw/G-ATTN_20260904T095359Z.log` (all six block cases with their attribution
   lines, the eight stage lines per dtype, and the three standalone-probe lines);
-  `BRINGUP_RECIPE.md:1770` (the threshold), `:396-412` (§2.3, the fused-kernel caveat and the
+  `BRINGUP_RECIPE.md:1793` (the threshold), `:396-412` (§2.3, the fused-kernel caveat and the
   sanctioned handling), `:1799-1802` (do not refit a threshold after seeing the number).
 - **Confidence:** high on the attribution (it is a measurement that predicts to 5 decimals); medium
   on the remedy being what the recipe's author would choose — the alternative reading is that the
@@ -1943,7 +1943,7 @@ something stubbed; or find that the reference and the repo disagree.
 - **Date (UTC):** 2026-09-04
 - **Trigger:** `07_RISKS.md` R-015 hands P6 the same arithmetic that made `G-ATTN` a
   `PASS-WITH-DEVIATION` (`DEC-042`): Appendix A sets `G-LAYER` at "PCC >= 0.999, <= 8x floor"
-  (`BRINGUP_RECIPE.md:1854`, stated at `:1372`), and the layer contains the fused SDPA kernel that
+  (`BRINGUP_RECIPE.md:1877`, stated at `:1372`), and the layer contains the fused SDPA kernel that
   recipe §2.3 measures at 71x its own floor and that accounted for the whole of `G-ATTN`'s block
   gap. The gate's assertion had to be written **before** the number existed.
 - **Question:** how is the fused kernel's fixed slack attributed at layer level — and is
@@ -1981,7 +1981,7 @@ something stubbed; or find that the reference and the repo disagree.
   plain `PASS`, not a `PASS-WITH-DEVIATION`, and `RAW_BLOCK_BUDGET_APPLIES[bf16] = False` — declared
   before the measurement — turns out to have been unnecessary caution rather than a needed escape.
   It is left in place and *not* flipped to `True`: changing a threshold after seeing the number it
-  gates is the error `BRINGUP_RECIPE.md:1899` names in both directions, and the residual assertion
+  gates is the error `BRINGUP_RECIPE.md:1922` names in both directions, and the residual assertion
   it sits beside is the tighter of the two anyway (2.14x against a budget of 8x).
 - **Evidence:** `raw/G-LAYER_20260904T113153Z.log`, all six block cases with their attribution lines. The
   additive model's own check: `predicted` vs `measured` agree to 5-6 decimals in every case
@@ -2328,7 +2328,7 @@ something stubbed; or find that the reference and the repo disagree.
 - **Choice:** the **gate text**. `verify_golden_kv.py` imports no ttnn and scores nothing against the
   device; the device-vs-golden PCC is `tests/unit/test_attention_chunked_vs_ref.py`'s (`G-CHUNK`).
 - **Why:** three reasons, in order of weight. (1) The gate is the thing with a verdict, and Appendix A
-  agrees with it (`BRINGUP_RECIPE.md:1953` gives `G-GOLDEN` device "host (imports no ttnn)"). (2) Both
+  agrees with it (`BRINGUP_RECIPE.md:1976` gives `G-GOLDEN` device "host (imports no ttnn)"). (2) Both
   in-repo templates are host-only structural checkers (`models/demos/minimax_m3/scripts/verify_golden_kv.py:26`,
   `models/demos/gpt_oss_d_p/scripts/verify_golden_kv.py:111`), so following the gate is also following
   the reuse rule. (3) A device scorer here would duplicate `G-CHUNK` and give two gates two ways to
@@ -2597,14 +2597,14 @@ something stubbed; or find that the reference and the repo disagree.
 ### DEC-068 — `G-RUNTIME` reaches the per-chunk refusals with a mesh stub and an unbuilt runtime, to stay device-free
 - **Phase / module:** P7 / `tests/unit/test_prefill_runtime_chunked.py`
 - **Date (UTC):** 2026-09-04
-- **Trigger:** Appendix A gives `G-RUNTIME` device **"none"** (`BRINGUP_RECIPE.md:1954`), but half its
+- **Trigger:** Appendix A gives `G-RUNTIME` device **"none"** (`BRINGUP_RECIPE.md:1977`), but half its
   refusals live in `prefill_chunk` and `compile`, which are instance methods — and the runtime cannot
   be instantiated on the machine P7 has, because `tp == num_key_value_heads` refuses `(1,1)`
   (`DEC-062`).
 - **Question:** move the gate to the mesh (which P7 is told not to do), or reach the methods without a
   device?
 - **Options considered:**
-  1. Run `G-RUNTIME` on the `(4,8)` mesh. Rejected: `BRINGUP_RECIPE.md:1600` says "do not move P7 to
+  1. Run `G-RUNTIME` on the `(4,8)` mesh. Rejected: `BRINGUP_RECIPE.md:1623` says "do not move P7 to
      a multi-device mesh to make it run", and Appendix A gives this gate no device.
   2. Test only the refusals reachable from the config's `__post_init__`. Rejected: that leaves the
      delta-3 refusal — the one the recipe specifically requires — untested.
@@ -2662,7 +2662,7 @@ something stubbed; or find that the reference and the repo disagree.
 - **Date (UTC):** 2026-09-04
 - **Trigger:** recipe P8 step 2 requires the sweep, and two of its cases do not fail — they **hang**,
   and the hang is not contained: every later collective on the box hangs too, until `tt-smi -r`
-  (`BRINGUP_RECIPE.md:1683-1689`).
+  (`BRINGUP_RECIPE.md:1706-1712`).
 - **Question:** pytest with a per-test timeout, or a bespoke parent/child harness?
 - **Options considered:**
   1. pytest + `pytest-timeout`. The repo already has it (it fired at 300 s on `G-WEIGHTS`'s P8 arm).
@@ -3013,7 +3013,7 @@ something stubbed; or find that the reference and the repo disagree.
 ### DEC-083 — `G-TP-PARITY` shards the sequence only for the **token-wise** modules
 - **Phase / module:** P8 / `tests/unit/test_tp_parity.py`
 - **Date (UTC):** 2026-09-04
-- **Trigger:** `BRINGUP_RECIPE.md:1768-1770`: "At SP > 1 the multi-device output is a token slice, so
+- **Trigger:** `BRINGUP_RECIPE.md:1791-1793`: "At SP > 1 the multi-device output is a token slice, so
   compare it against the corresponding slice of the `(1,1)` output".
 - **Question:** does that hold for every module?
 - **Finding:** only for the token-wise ones. `RMSNorm` and `MLP` act on each token row
@@ -3267,7 +3267,7 @@ something stubbed; or find that the reference and the repo disagree.
 - **Date (UTC):** 2026-09-04
 - **Trigger:** `G-SP-RING` has to record the **verbatim** `TT_FATAL` text for two refusals
   (`fp32_dest_acc_en=True` and a wrong `kv_actual_isl`), because the message *is* the measurement —
-  the recipe asks for "the `TT_FATAL` text when `True` is refused" (`BRINGUP_RECIPE.md:1742-1744`).
+  the recipe asks for "the `TT_FATAL` text when `True` is refused" (`BRINGUP_RECIPE.md:1765-1767`).
   Everywhere else in this package a refusal is asserted with the repo-root `expect_error` fixture
   (`conftest.py:948`), which `LANDMINES.md` and `DEC-045` require.
 - **Question:** `expect_error(RuntimeError, "<substring>")`, or catch and log?
@@ -3324,3 +3324,793 @@ something stubbed; or find that the reference and the repo disagree.
 - **Confidence:** high.
 - **Blast radius:** `tt/attention/dense_sp.py`, `tt/attention/prefill.py`; `G-SP-RING`,
   `G-CHUNK-ATTN`.
+
+---
+
+### DEC-094 — `load_hf_config` reads the **bundled** config and refuses a disagreeing checkpoint
+- **Phase / module:** P10 / `tt/runners/adapters/llama.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** implementing the first abstract method. The template does
+  `AutoConfig.from_pretrained(PREFILL_HF_MODEL)`
+  (`models/demos/gpt_oss_d_p/tt/runners/adapters/gpt_oss.py:68`), and this package refuses config
+  *objects* outright (`tt/model_config.py:101-107`, `DEC-019`).
+- **Question:** where do the engine's dimensions come from, given that `ModelArgs` is supposed to be
+  the one place a config value is read (`DEC-019`) and the engine wants an attribute-shaped, mutable
+  object?
+- **Options considered:**
+  1. `AutoConfig.from_pretrained`, like the template. Reintroduces recipe P1 trap 1 (`R-005`) for
+     anything downstream that `getattr`s a moved attribute, and pulls `transformers` into the
+     adapter's import chain, which `G-ADAPTER` gates against.
+  2. Read `<PREFILL_HF_MODEL>/config.json` with `json` and wrap it. Import-light and correct, but
+     creates a **second** reader of config.json alongside `ModelArgs.load_bundled_config`.
+  3. Always use `ModelArgs.load_bundled_config()`, ignoring `PREFILL_HF_MODEL` entirely. One reader,
+     but silently ignores an env var the engine's contract says overrides `hf_model_default`, and
+     prints a path it did not read (`prefill_runner.py:375`).
+  4. Option 2 **plus an equality refusal**: read the pointed-at file, compare it to the bundled copy,
+     and raise naming the differing keys if they disagree.
+- **Choice:** option 4. The returned object is `LlamaHfConfig`, an attribute view whose `.dims` is
+  the raw dict every module downstream takes.
+- **Why:** it honours the env var, keeps one *authoritative* source (a second reader that can only
+  agree is not a second answer), and turns the dangerous case — a checkpoint whose dims differ from
+  the one every threshold and the whole weight cache were built against — into a startup
+  `ValueError` naming the keys instead of a silently different model.
+- **Evidence:** `DEC-001` (the bundled copy is byte-identical to the staged checkpoint's, asserted
+  by `tests/unit/test_reference_model.py`); `models/demos/common/prefill/adapter.py:116`
+  (`hf_model_default`: "config.json dir; PREFILL_HF_MODEL overrides");
+  `G-ADAPTER::test_load_hf_config_refuses_a_disagreeing_checkpoint_config` measures both halves.
+- **Confidence:** high.
+- **Falsifier:** a deployment that legitimately serves a differently-shaped Llama through this
+  adapter — at which point the dims must come from the checkpoint and every threshold is re-measured
+  anyway.
+- **Revisit if:** a second checkpoint is added to this package.
+- **Blast radius:** `tt/runners/adapters/llama.py`, `G-ADAPTER`, `G-REQUEST`, `G-MOCK-MIG`.
+
+---
+
+### DEC-095 — `weight_cache_path` mirrors **this package's** layout, not the engine's convention
+- **Phase / module:** P10 / `tt/runners/adapters/llama.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** the engine's own reference adapter returns
+  `$PREFILL_TTNN_CACHE/{name}_{arch}_{N}dev/{sp}x{tp}`
+  (`models/demos/gpt_oss_d_p/tt/runners/adapters/gpt_oss.py:89`), while every cache this box holds
+  was written to `$TT_CACHE_PATH/tensor_cache_bfp8_<sp>x<tp>` by `tt/model_config.py:250`.
+- **Question:** which layout does the adapter return?
+- **Options considered:**
+  1. The engine's convention. Consistent with the other adapters; means the first runner start
+     re-tilizes and re-writes 15 GB of weights into a new tree, and P8's populated cache — the one
+     `G-WEIGHTS`'s TP=8 arm proved SHA-256-identical on a cache-only rebuild — is dead.
+  2. This package's layout, i.e. mirror `ModelArgs.weight_cache_path`. The doc's instruction taken
+     literally: "Mirror the layout the cache-populate run wrote so the runner reads the same files"
+     (`ADDING_A_PREFILL_MODEL.md:68`).
+  3. Change `ModelArgs.weight_cache_path` to the engine's convention and repopulate. Touches a P6
+     file and invalidates a P8 gate's evidence for a cosmetic gain.
+- **Choice:** option 2, with `PREFILL_TTNN_CACHE` accepted as the root ahead of `TT_CACHE_PATH`, and
+  `G-ADAPTER` asserting the adapter's answer **equals** `ModelArgs`' for the same root and mesh.
+- **Why:** the doc's own words, and the cache-populate run is ours. The equality assertion is what
+  keeps the duplicated path string from drifting; without it this would be a copy-paste.
+- **What it costs:** the path does not carry the model name, so two models sharing a `TT_CACHE_PATH`
+  would collide. Stated rather than fixed: the mesh shape and dtype are in the path, the root is
+  per-model on this box (`~/.cache/llama31_8b_d_p`), and changing it now would invalidate P8's cache.
+- **Evidence, and the decisive half is measured on device.**
+  `raw/G-MESH-KV-oneshot_20260904T150307Z.log` line 33 shows P8 *writing*
+  `/home/mstojkovic/.cache/llama31_8b_d_p/tensor_cache_bfp8_4x8`;
+  `G-ADAPTER::test_weight_cache_path_mirrors_the_packages_own_layout` asserts the adapter returns
+  the same path; and `raw/G-REQUEST-runner_20260904T173723Z.log.gz` shows the runner *reading* it —
+  **290 `Loading cache` lines and 0 `Generating cache` lines**. Under the engine's own convention
+  every one of those 290 would have been a regeneration on the first start, which is the whole
+  argument, and it is a count rather than an inference.
+- **Confidence:** high.
+- **Falsifier:** a deployment that shares one `PREFILL_TTNN_CACHE` across models, where the missing
+  `{name}` segment would make two models read each other's tensors — the failure would be
+  "one layer runs on garbage" (Appendix B), which is why the root is per-model here.
+- **Revisit if:** this package is deployed alongside another under one cache root.
+- **Blast radius:** `tt/runners/adapters/llama.py`, `G-ADAPTER`, every runner start.
+
+---
+
+### DEC-096 — `PREFILL_KV_ONLY_LAST_LAYER` is **ignored with a warning**, not refused
+- **Phase / module:** P10 / `tt/runners/adapters/llama.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** `PrefillRunParams.kv_only_last_layer` is a field this runtime has no use for, and the
+  engine defaults it **on** (`prefill_runner.py:80`: `PREFILL_KV_ONLY_LAST_LAYER` defaults to `"1"`).
+- **Question:** recipe §0 rule 5 says nothing may be silently unimplemented, and this runtime writes
+  every layer's KV regardless. Refuse, ignore, or ignore loudly?
+- **Options considered:**
+  1. **Refuse** when it is set. Correct by the letter of the rule, and it makes the engine's
+     **default** configuration unrunnable — every operator would have to set
+     `PREFILL_KV_ONLY_LAST_LAYER=0` to serve this model at all.
+  2. **Ignore silently**, as the field is not read. Exactly the "knob a caller can believe in
+     wrongly" that `DEC-062` argued against for `skip_lm_head`.
+  3. **Ignore, and warn at build time**, naming what this runtime does instead.
+- **Choice:** option 3.
+- **Why:** writing every layer's KV is a *superset* of what the flag asks for, so ignoring it cannot
+  produce a wrong answer — and it is what both consumers of the cache actually require: the
+  producer's read-back PCCs every layer (`prefill_producer.py:565`) and migration copies every
+  layer's rows. So the flag can only ever ask for less coverage, never for different data. Option 1
+  would trade a real cost (an unrunnable default) for no correctness gain.
+- **Evidence:** `prefill_runner.py:80` (the default), `:491` (`kv_only_last_layer=is_last_rank and
+  KV_ONLY_LAST_LAYER`), `prefill_producer.py:565` (the reader's per-layer loop). The warning text is
+  in `tt/runners/adapters/llama.py`'s `build_runtime`.
+- **Confidence:** high.
+- **Falsifier:** a memory-constrained configuration where the cache cannot hold every layer — at
+  which point the flag has to change the *allocation*, not just the writes, and `allocate_kv_cache`
+  is where it would land.
+- **Revisit if:** `num_users` or `max_seq_len` grows enough that a 32-layer cache does not fit.
+- **Blast radius:** `tt/runners/adapters/llama.py`; nothing numerical.
+
+---
+
+### DEC-097 — `Topology.Linear` is pinned in the adapter, not read from an env var
+- **Phase / module:** P10 / `tt/runners/adapters/llama.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** `TtPrefillRuntimeConfig.topology` has to be set, `PrefillRunParams` carries no
+  topology field, and the reference adapter fills the gap by reading `PREFILL_TOPOLOGY` from
+  `os.environ` (`models/demos/gpt_oss_d_p/tt/runners/adapters/gpt_oss.py:140`) — which recipe P10
+  step 1 forbids ("Read knobs from `params`, **never** from `os.environ`").
+- **Question:** how does the deployment topology reach the runtime?
+- **Options considered:**
+  1. Read `PREFILL_TOPOLOGY`, like the template. Violates the recipe's instruction, and adds a fifth
+     undocumented-until-P9 env var to a package that has four (`DEC-023`).
+  2. Default `TtPrefillRuntimeConfig.topology` and pass nothing. The dataclass default is
+     `Topology.Ring`, which on this galaxy **aborts** the ring SDPA — so the runner would die inside
+     attention on its first chunk.
+  3. Pin `Topology.Linear` explicitly in the adapter, with the measurement as the comment.
+- **Choice:** option 3.
+- **Why:** on this machine the topology is not a choice. `FABRIC_1D_RING` cannot be initialised at
+  all, and `ttnn.transformer.ring_joint_scaled_dot_product_attention` under `Topology.Ring` asks the
+  fabric for the SP axis's wrap route and aborts at `tt_metal/fabric/fabric.cpp:171`
+  ("Could not find any forwarding direction from src (M0, D0) to dst (M0, D3)") — measured by
+  `G-FABRIC-MATRIX` and recorded as `DEC-079`/`DEC-081`, `R-030`/`R-031`. A knob whose only legal
+  value is one value is not a knob; making it an env var would invite someone to set the value that
+  crashes.
+- **What it costs:** a torus-cabled machine would need a code change rather than an export. Stated
+  in `07_RISKS.md` R-031, whose owner is a future phase on different hardware.
+- **Evidence:** `06_GATES.md` `G-FABRIC-MATRIX` and `G-SP-RING`; `tests/test_factory.py:194-235`
+  (the same coupling, behind one variable, for the package's own tests).
+- **Confidence:** high — measured, twice, on this box.
+- **Falsifier:** a machine whose torus descriptor maps, where `Ring` would be both available and
+  faster.
+- **Revisit if:** the deployment moves to a torus-cabled galaxy, or `PrefillRunParams` grows a
+  topology field.
+- **Blast radius:** `tt/runners/adapters/llama.py`; `G-REQUEST`, `G-MOCK-MIG`.
+
+---
+
+### DEC-098 — No cache-only build path in the adapter: it always loads the real checkpoint
+- **Phase / module:** P10 / `tt/runners/adapters/llama.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** the template gates its state-dict load behind an env var
+  (`GPT_OSS_WEIGHTS_FROM_CACHE=1`, `models/demos/gpt_oss_d_p/tt/runners/adapters/gpt_oss.py:147`),
+  and this package's `Model` supports a cache-only build with an empty state dict (`G-WEIGHTS`).
+- **Question:** should the adapter skip the ~15 GB safetensors read when the weight cache is
+  populated?
+- **Options considered:**
+  1. A new env var, mirroring the template. Costs a `DEC` and a `README` entry (recipe §1.3), and
+     adds a fifth package env var whose wrong setting is a silent failure mode.
+  2. **Derive** it: skip the load when `weight_cache_path` looks populated. A *partially* populated
+     cache then reaches the loader with no source for the missing tensor. The loader does fail loud
+     (`tt/model_config.py`, `DEC-048`), but the trigger becomes "how full is a directory", which is
+     not a property anything asserts.
+  3. Always load the checkpoint.
+- **Choice:** option 3.
+- **Why:** the cost is bounded and paid once per runner start (measured below), and neither
+  alternative buys correctness. Option 2's failure mode in particular is the one Appendix B calls
+  "cache-only build silently wrong".
+- **What it costs — and the measurement contradicted the assumption behind the question.** It is
+  **46 ms**, not the tens of seconds this decision was weighing. `ModelArgs.load_state_dict` reads
+  the shards through `safetensors`, which **memory-maps** them, so `load_state_dict` returns almost
+  immediately and a tensor's bytes are faulted in only when something touches them — and with the
+  weight cache populated (`DEC-095`) nothing does: the same run logged **290 `Loading cache` lines
+  and 0 `Generating cache` lines**, so no cached tensor ever consulted the state dict. The whole of
+  `build_runtime` -> `setup complete` is **13.2 s**, and most of that is `compile()`'s two warm-up
+  chunks (17:37:47.457 -> 17:37:49.446 for the second alone) plus the rope tables.
+  So option 1's env var and option 2's derivation would both have been complexity bought to avoid a
+  cost that does not exist on the populated-cache path. It *would* exist on an empty cache — where
+  the read is unavoidable anyway, because that is the run that populates it.
+- **Evidence:** `raw/G-REQUEST-runner_20260904T173723Z.log.gz` — first line 17:37:25.400,
+  `build_runtime` logging the weight load at 17:37:36.796, the runtime constructed at 17:37:36.842
+  (**46 ms** later), `setup complete` at 17:37:50.007; 290 `Loading cache` / 0 `Generating cache`.
+  `G-ADAPTER::test_build_runtime_refuses_a_missing_checkpoint` asserts the refusal when `HF_MODEL` is
+  unset, so the failure is a named `ValueError` rather than a `NoneType` path join.
+- **Confidence:** high.
+- **Falsifier:** a deployment that restarts runners often enough for 55 s to matter.
+- **Revisit if:** perf work starts, or the checkpoint moves off local disk.
+- **Blast radius:** `tt/runners/adapters/llama.py`; runner start-up time only.
+
+---
+
+### DEC-099 — The gpt-oss KV-chunk-table builder is **imported**, not copied
+- **Phase / module:** P10 / `tt/runners/kv_chunk_table.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** writing the block-cyclic address walk. Recipe P10 step 4 says to write
+  `tt/runners/kv_chunk_table.py`; agent-contract rule 4 says "Reuse means *import*, not copy-paste. A
+  copy-paste is a `DEC` with a justification."
+- **Question:** copy `models/demos/gpt_oss_d_p/tt/runners/kv_chunk_table.py:66`'s 140-line bank walk,
+  or import it?
+- **Options considered:**
+  1. **Copy** and adapt. What the recipe's file list implies and what every other package in the tree
+     has done. Two copies of the same DRAM address arithmetic, each gated by its own device test,
+     free to drift in between.
+  2. **Import** and wrap. Legal only because P5.6 deliberately kept this package's cache structurally
+     identical to gpt-oss's *for this purpose*: the same `NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK = 32`,
+     the same `[1, 1, 32, head_dim]` `NdShardSpec` with `ROUND_ROBIN_1D`, the same user-major
+     `slot = user * num_layers + layer` packing (`tt/attention/kv_cache.py:17-30`). `head_dim` and
+     `num_kv_heads` are already parameters there.
+  3. Move the builder into `models/demos/common/prefill/`. The right long-term home, and out of scope:
+     this session may not add files outside the package.
+- **Choice:** option 2, with two guards. `_assert_layout_still_shared()` raises if the two packages'
+  block constants ever diverge, and `G-KV-TABLE` reads every resulting address back over UMD and
+  compares **bit-exactly** to the live cache — so an upstream change to that walk fails here as a
+  wrong address, not as a slightly worse PCC.
+- **Why:** P5.6 paid for this on purpose (`bringup_log/03_OUTLINE.md` §2.7: "that is what lets P10
+  reuse the producer's existing packed-GQA read-back instead of writing a fourth reader" — the same
+  argument applies to the writer). Declining to reuse would make P5.6's constraint pointless.
+- **What it costs:** a cross-package dependency on another model's *runners* module, which is a
+  layering smell, and an upstream edit lands here unannounced. Recorded as `07_RISKS.md` R-045 with
+  the fix named (promote it to `models/demos/common/prefill/`, which needs an owner outside this
+  package — `H7`).
+- **Evidence:** `G-KV-TABLE`: 2048 chunks bit-identical over UMD at two block-cyclic periods, five
+  discriminating controls, protobuf round trip with 16 configs.
+- **Confidence:** high.
+- **Falsifier:** either package changing its DRAM shard geometry — which the assertion catches at
+  build time on our side and `G-KV-TABLE` catches on theirs.
+- **Revisit if:** the builder is promoted to `common/`, or this cache's layout changes.
+- **Blast radius:** `tt/runners/kv_chunk_table.py`, `tt/tt_prefill_runtime.py::build_kv_chunk_table`;
+  `G-KV-TABLE`, `G-MOCK-MIG`.
+
+---
+
+### DEC-100 — Serialized through `serialize_prebuilt_kv_chunk_table`, not the recipe's named helper
+- **Phase / module:** P10 / `tt/runners/kv_chunk_table.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** recipe P10 step 4 says to implement the migration hooks "using `serialize_kv_chunk_table`
+  from `models/demos/common/prefill/runners/migration.py`".
+- **What is wrong with that instruction:** `serialize_kv_chunk_table` (`migration.py:220`) *builds* a
+  **single-config** table — it constructs one `KvChunkAddressTableConfig`, hands it to a
+  `table_builder(config=..., chunk_size_bytes=..., num_users=...)` callback, and serializes the
+  result. This model's table has `2 x num_kv_heads = 16` configs (K head 0..7, then V head 0..7),
+  which that signature cannot express. The reference GQA implementation does not use it either; it
+  calls `ttnn.experimental.disaggregation.export_to_protobuf_file` directly
+  (`models/demos/gpt_oss_d_p/tt/runners/kv_chunk_table.py:206`).
+- **Options considered:**
+  1. Follow the recipe literally. Impossible without collapsing 16 configs into one, which would
+     lose the head->config mapping the migration contract is built on.
+  2. Call `export_to_protobuf_file` directly, like the template. Works, and writes the file
+     **in place** — a reader polling for the path (and `prefill_producer.py:128-134` polls exactly that
+     way) can import a half-written table.
+  3. `serialize_prebuilt_kv_chunk_table` (`migration.py:240`) — the *same module's* entry point for a
+     table that is already built. It routes through `_serialize_table_to_path` (`migration.py:39-42`),
+     which writes `<path>.tmp` and `os.replace`s it, so the publish is atomic.
+- **Choice:** option 3.
+- **Why:** it satisfies the recipe's actual intent (use the shared helper rather than hand-rolling
+  the boilerplate) with the one function in that module that fits a multi-config table, and it fixes a
+  real race the template has. `G-KV-TABLE` asserts the `.tmp` file does not survive.
+- **Evidence:** `migration.py:220-237` (the single-config signature), `:240-246` (the prebuilt one),
+  `:39-42` (the atomic replace); `prefill_producer.py:127-134` (the polling reader);
+  `G-KV-TABLE::test_protobuf_round_trip_preserves_every_lookup_and_every_config_name`.
+- **Confidence:** high.
+- **Falsifier:** none for this model; if `serialize_kv_chunk_table` grows a multi-config form, use it.
+- **Revisit if:** `migration.py` gains a multi-config builder.
+- **Blast radius:** `tt/runners/kv_chunk_table.py`; `G-KV-TABLE`, `G-MOCK-MIG`.
+
+---
+
+### DEC-101 — `G-ADAPTER`'s import budget is a **ceiling on the import chain**, not a perf target
+- **Phase / module:** P10 / `tests/unit/test_prefill_adapter.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** `BRINGUP_RECIPE.md:1938` requires "adapter import is **measured** — time it and assert
+  no heavy module landed in `sys.modules`". A time assertion needs a number, and a number not read
+  from a file needs a `DEC` (§1.3).
+- **Question:** what should the threshold be, and against what?
+- **Choice:** `1.0 s` in a **cold subprocess**, with the measured value logged; the load-bearing
+  assertion is the `sys.modules` one.
+- **Why this number:** it is not a tuned budget, it is a separator. Importing `ttnn` alone costs
+  seconds *and* opens the 32-device cluster on this box (visible in every gate log), and `torch` is
+  ~1 s by itself, so a run that walked the heavy chain cannot come in under a second. Measured:
+  **40 ms** for the adapter alone. Anything within an order of magnitude of that is proof; the
+  threshold is set 25x above the measurement so a slower machine or a cold page cache does not turn
+  the gate red for no reason.
+- **Why a subprocess:** in-process the assertion is vacuous — pytest has already imported `torch`
+  and `ttnn` before the first test runs, so `"torch" in sys.modules` is always true. The probe gets
+  a **negative control**: the same subprocess with `tt/model_config.py` added must report `torch`
+  and `ttnn`, which it does. Without that control, "no heavy module found" and "the probe looks in
+  the wrong place" are the same observation (`R-016`'s shape).
+- **Evidence:** `raw/G-ADAPTER_20260904T173636Z.log`
+  (`test_adapter_import_is_cheap_and_pulls_no_device_stack`, and the control immediately after).
+- **Confidence:** high.
+- **Falsifier:** a machine where `import torch` is under a second — then the time half is
+  meaningless and the `sys.modules` half still holds, which is why the latter is the assertion that
+  matters.
+- **Revisit if:** the adapter grows a legitimate module-scope dependency.
+- **Blast radius:** `G-ADAPTER`.
+
+---
+
+### DEC-102 — "the code does not mention X" assertions strip docstrings before searching
+- **Phase / module:** P10 / `tests/unit/test_prefill_adapter.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** three `G-ADAPTER` assertions failed on their **own prose**. This package's docstrings
+  cite the traps they avoid by name — `AutoConfig`, `get_num_devices` — so a substring search over
+  `inspect.getsource` matches the *warning* as readily as the offence. It is the same defect shape as
+  the repo's own `prefer-expect-error` hook, which fires on a docstring explaining that the file uses
+  `expect_error` instead (`LANDMINES.md`, "Repo hooks").
+- **Question:** weaken the prose, or make the check see only executable code?
+- **Options considered:**
+  1. **Reword the docstrings** to avoid the forbidden strings. What the repo hook's own guidance
+     recommends, and it makes the documentation worse to satisfy a test: the whole value of naming
+     `AutoConfig` in `load_hf_config`'s docstring is that the next reader learns why it is absent.
+  2. **Search only the executable code**: `ast.parse`, drop every docstring node, `ast.unparse`.
+     Comments go too, since `unparse` does not emit them.
+- **Choice:** option 2, as `_executable_code(obj)`.
+- **Why:** the claim being tested is about what the module *does*, and that is exactly what
+  `ast.unparse` of a docstring-stripped tree contains. It also made the `rope_theta` assertion
+  sharper: the naive version wanted the string absent, but `rope_theta` legitimately appears as a
+  **dict key** in `CONFIG_JSON_KEYS`, so the assertion was rewritten to find every three-argument
+  `getattr` — which *is* the trap — and require its name set to be `{"max_seq_len"}` (the one
+  attribute the engine genuinely assigns later).
+- **Evidence:** the three failures, in this session's first `G-ADAPTER` run; the passing form in
+  `raw/G-ADAPTER_20260904T173636Z.log`.
+- **Confidence:** high.
+- **Falsifier:** a heavy import hidden inside an `exec` or a string, which neither form catches; the
+  subprocess `sys.modules` probe does.
+- **Revisit if:** P9 adds more "the code must not contain X" checks — they should use this helper.
+- **Blast radius:** `G-ADAPTER` only.
+
+---
+
+### DEC-103 — `G-LOOPBACK` is **out of scope**, not blocked
+- **Phase / module:** P10 / `06_GATES.md`, `07_RISKS.md`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** `BRINGUP_RECIPE.md:1968-1975` gives three legal outcomes for this gate: `PASS`,
+  out-of-scope with a `DEC` **and a named residual risk**, or `BLOCKED` with a reason. It also says
+  "Do not fake it."
+- **Question:** which of the three, and on what grounds?
+- **What the gate needs, itemised:** the tt-llm-engine binaries `migration_endpoint` and
+  `migration_worker` built against this tt-metal tree, a `_migration_client*.so` on
+  `PREFILL_MIGRATION_CLIENT_DIR`, three shared-memory queue trios, and an MPI launcher able to place
+  two worker slots on this host (`PREFILL_MIGRATION_TESTING.md:456-493`, `:587-596`). None of it is
+  in this repository.
+- **Options considered:**
+  1. `BLOCKED`. Honest about the missing binaries, but wrong about *whose* gate it is: a red
+     `G-LOOPBACK` is overwhelmingly likely to be an engine or launcher failure, not a failure of this
+     model. `HUMAN GATE H4` exists to ask exactly that question — "ask whose bug a red gate would
+     be" (`BRINGUP_RECIPE.md:1857`, §0.3) — and the doc itself says the gate "verifies the *engine's*
+     model-agnostic byte copy, not this model".
+  2. **Out of scope by decision**, with the residual gap enumerated as a named risk.
+  3. Simulate it — copy bytes host-side and call it a loopback. Explicitly forbidden.
+- **Choice:** option 2. Recorded as `R-043`, which enumerates every property that stays unproven.
+- **Why:** it is the outcome the recipe's own reasoning points to, and it is what
+  `WHY_THESE_EXAMPLES.md` cites the integration coverage table for ("which is how `G-LOOPBACK` got
+  correctly scoped out instead of being recorded as a blocker"). Crucially, the *input* to that byte
+  copy — the address table it reads — is proved bit-exactly by `G-KV-TABLE`, and the doc's own hook
+  table says `dst-bytes` needs **no** model-specific surface
+  (`PREFILL_MIGRATION_TESTING.md:544`). So what is unproven is the transport, and the transport is
+  not ours.
+- **What stays unproven (R-043):** the `MigrationLayerClient` attach, the `WORKER_READY` handshake
+  (`migration.py:270-280`), `publish_serialized_table_and_wait_ready` — which this package's code
+  never calls, since the engine owns it — and whether a real worker can read the addresses this table
+  publishes. Also unproven: that `kv_migration_base_address` returns something the engine's stage
+  gather is happy with, since only the real path calls it.
+- **Evidence:** `PREFILL_MIGRATION_TESTING.md:14` ("+ tt-llm-engine binaries"), `:456-461`, `:534-550`.
+- **Confidence:** high on the scoping; the residual gap is real and stated.
+- **Falsifier:** a loopback run that fails on something in *this* package — most plausibly the
+  address table, which is why `G-KV-TABLE` gates it bit-exactly rather than by PCC.
+- **Revisit if:** the tt-llm-engine binaries become available on this box.
+- **Blast radius:** `G-LOOPBACK`, `R-043`; nothing in `tt/`.
+
+---
+
+### DEC-104 — The producer's packed-GQA read-back branch is generalised (shared code, outside the package)
+- **Phase / module:** P10 / `models/demos/common/prefill/runners/prefill_producer.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** recipe P10 step 5. The device-less KV reader that powers `PREFILL_PRODUCER_CHECK_PCC`
+  is **not** adapter-dispatched: it branches on `ADAPTER.name` inside
+  `_read_slot_kv_and_check_pcc` (`prefill_producer.py:511`) and falls through to
+  `_read_slot_kv_and_check_pcc_mla` (`:694`), which decodes a merged MLA latent+rope row. Without a
+  branch, `G-MOCK-MIG` would PCC **plausible but wrong bytes**.
+- **Question:** how little shared code can this be, and in what shape?
+- **Options considered:**
+  1. **A fourth reader** for this model. The doc's older wording implies it
+     (`ADDING_A_PREFILL_MODEL.md:241`, "a third layout needs a branch"), and it is wrong here: the
+     existing `_read_slot_kv_and_check_pcc_gpt_oss` is *already* this cache's layout — plain packed
+     K/V, block-cyclic on SP, one KV head per TP column, HF-layout golden — because P5.6 kept
+     gpt-oss's geometry deliberately (`tt/attention/kv_cache.py:17-30`).
+  2. **Add `"llama31_8b_d_p"` to the existing `==` check** as a second `if`. Two nearly identical
+     lines, and the next model makes three.
+  3. **Generalise the check** to a named tuple of models and rename the function to what it reads.
+- **Choice:** option 3, exactly as recipe P10 step 5 directs ("generalise the name check rather than
+  duplicating the function, and make the reader's log line name `ADAPTER.name` instead of a
+  hard-coded model"). Three edits, all in one function's neighbourhood:
+  `_PACKED_GQA_MODELS = ("gpt_oss_d_p", "llama31_8b_d_p")` with a comment stating what a new entry
+  must satisfy; `_read_slot_kv_and_check_pcc_gpt_oss` -> `_read_slot_kv_and_check_pcc_packed_gqa`;
+  and the summary log line now reads `{ADAPTER.name} packed-GQA KV PCC`.
+- **Why the rename is safe:** `grep` finds no other reference to the old name in the repository —
+  `migration_driver.py` reaches this layer only through `_read_slot_kv_and_check_pcc` (the
+  dispatcher) and `_read_kv_slice`, both unchanged.
+- **What was deliberately NOT changed:** `_read_kv_slice` still imports
+  `NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK` from `models.demos.minimax_m3` (`prefill_producer.py:531`),
+  i.e. one model's constant reads every model's cache. All three packages set it to 32, so it is
+  latent, and fixing it is a shared-code change with no gate of its own in this phase. Recorded as
+  `R-047`; our side asserts our value against the template's
+  (`tt/runners/kv_chunk_table.py::_assert_layout_still_shared`).
+- **Why the rotary permutation needs no work:** the reader permutes the **golden** HF -> Meta with
+  `perm[m] = half * (m % 2) + (m // 2)` over `ROTARY_DIM`, defaulting `ROTARY_DIM` to `HEAD_DIM`
+  (`prefill_producer.py:552-557`). For Llama the whole head is rotated, so that default is right and
+  the permutation is byte-identical to this package's own `meta_head_index`
+  (`tests/galaxy_prefill_kv_pcc.py:204`) — the same function `G-MESH-KV` scores against.
+- **Evidence:** `G-MOCK-MIG`'s per-layer numbers agreeing with `G-KV-TABLE` and `G-MESH-KV`; the
+  reader's log line naming `llama31_8b_d_p` in `raw/G-MOCK-MIG-producer_*.log`.
+- **Confidence:** high.
+- **Falsifier:** a packed-GQA model whose golden is stored in Meta order, or whose rotary dim is
+  narrower than its head dim — either would need the branch split after all.
+- **Revisit if:** a third packed-GQA model is registered, or the constant in `R-047` diverges.
+- **Blast radius:** `models/demos/common/prefill/runners/prefill_producer.py` (shared),
+  `models/demos/gpt_oss_d_p`'s own Gate-1 runs, `G-MOCK-MIG`.
+
+---
+
+### DEC-105 — `G-KV-TABLE`'s probe fixture is **function**-scoped, because the mesh is
+- **Phase / module:** P10 / `tests/unit/test_kv_chunk_table.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** the first draft cached the (expensive) probe write in a module-scoped fixture. Both
+  bit-exactness tests then failed with
+  `TT_FATAL @ tt_metal/distributed/mesh_device.cpp:845: id < mesh_command_queues_.size()` /
+  "cq_id 0 is out of range", from inside `ttnn.to_torch`.
+- **What was actually wrong:** the repo's `mesh_device` fixture is **function**-scoped, so the mesh is
+  closed and reopened between tests. A cached device tensor then belongs to a closed mesh, and the
+  next `from_device` on it finds no command queues. The message names neither the fixture nor the
+  stale tensor.
+- **Why it is worth a `DEC` rather than a silent fix:** the failure was *partial*. The tests that
+  only read **addresses** — `test_head_to_config_to_chip`, `test_table_geometry` — passed, because a
+  stale tensor's `buffer_address()` still returns a plausible number and the table builder is pure
+  host arithmetic. So a cross-fixture cache produces a suite where the addressing tests are green and
+  meaningless. Had the bit-exact tests not existed, the gate would have "passed" on a closed mesh.
+- **Choice:** rebuild the cache and rewrite the probe per test. Measured cost: 38 s for all 11 tests
+  at two periods, which is not worth optimising.
+- **Ruled out:** hoisting `mesh_device` to module scope. It would work, and it would diverge from
+  every other device test in the package and from `SubmeshPool`'s quiesce discipline (`DEC-077`).
+- **Evidence:** the failing run (2 failed, 9 passed) and the passing one
+  (`raw/G-KV-TABLE_20260904T172909Z.log`, 11 passed).
+- **Confidence:** high.
+- **Falsifier:** none — it is a lifetime rule, not a judgement.
+- **Revisit if:** the suite's device time becomes a problem.
+- **Blast radius:** `G-KV-TABLE`. **A note for P9 and for any later phase:** never cache a device
+  tensor across a function-scoped `mesh_device`.
+
+---
+
+### DEC-106 — The serving gates run at chunk **256** / capacity **2816**, so `G-MOCK-MIG` is comparable to `G-MESH-KV`
+- **Phase / module:** P10 / `G-REQUEST`, `G-MOCK-MIG`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** the gate geometry is a free choice, and `BRINGUP_RECIPE.md:1956-1961` makes a specific
+  demand of it: `G-MOCK-MIG` "is the strongest evidence in the whole bring-up, because it is a
+  second, device-less reader in a different process agreeing with the on-device `G-MESH-KV` number
+  **at the same shape**. Compare the two explicitly."
+- **Constraints, all binding at once:**
+  `CHUNK % (SP*32) == 0`; `MAX_SEQ_LEN % CHUNK == 0`; `MAX_SEQ_LEN >= chunks * CHUNK`;
+  `MAX_SEQ_LEN > CHUNK` **strictly** (at equality the SP bootstrap core runs instead of the ring —
+  "anything you measure is measuring the wrong path", `BRINGUP_RECIPE.md:1948-1951`); and the PCC arm
+  must not read past the golden trace's **1024** tokens.
+- **Choice:** `PREFILL_CHUNK_SIZE=256`, `PREFILL_MAX_SEQ_LEN=2816`, `PREFILL_NUM_USERS=1`;
+  11 producer chunks for `G-REQUEST` (2816 tokens, the doc's own chunk count) and **4** for
+  `G-MOCK-MIG` (4 x 256 = 1024 = exactly the golden's length).
+- **Why 256 and not 512:** `G-MESH-KV` measured **both** chunked arms, and its `chunk 256`,
+  4-chunk, 1024-token row is the one this reproduces token-for-token — same tokens, same golden, same
+  number of `prefill_chunk` calls, same `sp_ring` core. The recipe asks for a comparison; this makes
+  it an identity rather than an analogy. (256 % 128 = 0, 2816 / 256 = 11, 2816 > 256.)
+- **Why `num_users=1` and not the doc's 2:** with one prompt every slot's KV is byte-identical, so a
+  second user adds no discriminating power (`PREFILL_MIGRATION_TESTING.md:301-304`) — it would only
+  double the cache and the read-back. What *would* discriminate is two **different** prompts via
+  `PREFILL_PRODUCER_SLOT_TRACES`, and that needs a second golden trace: `R-044`.
+- **Why the deployment pair is run separately:** the manifest pins the real deployment geometry
+  (8192 / 131072), which no golden can score, so `G-REQUEST` gets a second arm at those values with
+  no PCC — which is also what closes half of `R-039`.
+- **Evidence:** `06_GATES.md` `G-MESH-KV` (chunked, chunk 256: min K 0.9967844 / V 0.9866232);
+  `G-MOCK-MIG`'s own row.
+- **Confidence:** high.
+- **Falsifier:** a `G-MOCK-MIG` number materially different from `G-MESH-KV`'s at the same shape —
+  which would mean the two readers disagree, and that is the whole point of running it.
+- **Revisit if:** a deeper golden trace is generated.
+- **Blast radius:** `G-REQUEST`, `G-MOCK-MIG`.
+
+---
+
+### DEC-107 — `kv_migration_stages` is deliberately **absent**, and `kv_migration_base_address` returns K's
+- **Phase / module:** P10 / `tt/tt_prefill_runtime.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** this model migrates **two** tensors (K and V), and the doc says the multi-cache hook
+  is for exactly that case: "Implement it instead of `kv_migration_base_address` when your model
+  migrates SEVERAL caches" (`ADDING_A_PREFILL_MODEL.md:158-162`).
+- **Question:** implement `kv_migration_stages`, or the single-base hook?
+- **What the engine does with each:** it selects the branch on `hasattr(runtime, "kv_migration_stages")`
+  (`prefill_runner.py:613`). With the hook present it gathers **one layout per stage** and passes them
+  back as `stage_layouts` (plural, `:634`); without it, it wraps the single base in one `KvCacheStage`
+  (`:617`) and passes `stage_layout` (singular).
+- **Choice:** do **not** define `kv_migration_stages`; define `kv_migration_base_address`, returning
+  `int(kv_cache.k.buffer_address())`. Asserted absent by
+  `G-RUNTIME::test_kv_migration_stages_is_deliberately_absent`, so it cannot reappear by accident.
+- **Why:** the multi-stage path exists to *merge* per-stage layouts, and the merge is the same
+  unimplemented multi-rank code the table builder refuses (`R-032`). Defining the hook would move
+  this runtime onto that path and hand it arguments it cannot honour — the recipe's "must raise
+  rather than silently discarding" applied one level up. And the table does not need it: each config
+  reads its own tensor's `buffer_address()`
+  (`models/demos/gpt_oss_d_p/tt/runners/kv_chunk_table.py:138`), so V's base reaches the table
+  directly and the anchor is only the engine's own bookkeeping.
+- **What it costs:** on the real-migration path the engine gathers a stage layout describing only K.
+  For a single rank that layout is used for nothing this package reads, but it is unverified —
+  `G-LOOPBACK` is where it would show, and that gate is scoped out (`DEC-103`, `R-043`).
+- **Evidence:** `prefill_runner.py:613-623`, `:634`; the template makes the same choice with the same
+  two-tensor cache (`models/demos/gpt_oss_d_p/tt/tt_prefill_runtime.py:370-373`).
+- **Confidence:** medium-high — the reasoning is solid, the real path is unrun.
+- **Falsifier:** a loopback run in which the engine's stage bookkeeping needs V's base.
+- **Revisit if:** `G-LOOPBACK` runs, or multi-rank is implemented.
+- **Blast radius:** `tt/tt_prefill_runtime.py`; `G-LOOPBACK` (unrun), `R-043`.
+
+---
+
+### DEC-108 — `metadata_msg` must be **accepted and ignored**, not refused — and `G-RUNTIME` cannot prove that
+- **Phase / module:** P10 / `tt/tt_prefill_runtime.py`, `tests/unit/test_prefill_runtime_chunked.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** the **first served chunk** of the first `G-REQUEST` attempt. The runner opened the
+  mesh, loaded 15 GB of weights, compiled, entered the request loop, logged
+  `CHUNK_START c=0 ... slot=0 [0,256)` — and died:
+
+  ```
+  File ".../tt_prefill_runtime.py", line 420, in prefill_chunk
+      raise NotImplementedError(
+  NotImplementedError: metadata_msg is the engine's trace-safe metadata tensor and needs
+  config.use_trace plus capture_trace, neither of which this runtime implements (risk R-024).
+  ```
+
+- **What was wrong.** P7 wrote that refusal believing `metadata_msg` belonged to the trace path, and
+  P7's own `G-RUNTIME` audit **passed it clean**. It is not a trace object at all: the engine reads
+  it straight out of the H2D socket (`prefill_runner.py:156-159`), decodes it into the very
+  `slot_id` / `actual_start` / `actual_end` it passes alongside (`:142-144`), and hands the raw
+  tensor down so that a **pipeline** rank can forward it verbatim over D2D (`:304-312`). On a
+  single, last rank nothing further happens to it. So in request mode it is **never `None`**, and a
+  runtime that refuses a non-`None` value cannot serve a single chunk.
+- **Choice:** accept and ignore it, exactly as `request_id` already was — `del request_id, metadata_msg` —
+  and do **not** deallocate it, because the engine owns it (it frees it on the shutdown sentinel,
+  `:359`). `d2h_service`'s refusal stays: that one really is `None` unless
+  `PREFILL_LAYER_ACK_D2H=1` (`:707`, `:730-736`).
+- **The method lesson, which is bigger than the bug.** `G-RUNTIME` is a **static** audit: it proves
+  the signature *binds* the engine's call. It cannot know which of the values the engine binds are
+  `None` in practice, so it cannot distinguish "accepted" from "accepted and then rejected at
+  runtime". A refusal placed on a parameter the engine always populates is exactly as fatal as a
+  missing parameter, and costs the same mesh open and weight load to discover — the failure the gate
+  was written to prevent, reached from the other side.
+- **What was added so it cannot recur:** two tests.
+  `test_prefill_chunk_accepts_the_engines_always_present_metadata_msg` drives a call carrying a
+  non-`None` `metadata_msg` **past** that point to the next refusal in line, proving it was consumed;
+  and `test_every_parameter_the_engine_always_passes_is_accepted_or_used` reads the engine's keyword
+  set out of the AST walk and asserts the runtime's body contains no `<param> is not None` refusal
+  for any of them **except** `d2h_service`, with the reason that exception is legal stated in the
+  assertion message.
+- **Evidence:** the failing runner log (`raw/G-REQUEST-runner_20260904T173012Z.log`, retained: it is
+  the evidence for this entry); `prefill_runner.py:142-159`, `:286-295`, `:304-312`, `:359`;
+  `raw/G-RUNTIME_20260904T173636Z.log` (72 passed with the two new tests).
+- **Confidence:** high.
+- **Falsifier:** a future engine that passes `metadata_msg=None` on some path — harmless here, since
+  the parameter is ignored either way.
+- **Revisit if:** this runtime ever implements the trace path, where `trace_metadata_msg` becomes the
+  forwarded object instead.
+- **Blast radius:** `tt/tt_prefill_runtime.py::prefill_chunk`, `G-RUNTIME`, `G-REQUEST`,
+  `G-MOCK-MIG` — and the recipe's description of what `G-RUNTIME` proves.
+
+---
+
+### DEC-109 — The two-terminal gates are driven by **one script**, not two terminals
+- **Phase / module:** P10 / `G-REQUEST`, `G-MOCK-MIG`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** `BRINGUP_RECIPE.md:1940-1952` specifies these gates as a two-terminal recipe, and this
+  session has no two terminals.
+- **Question:** how are the runner and the producer sequenced, given that the producer must not
+  connect before the runner has exported its H2D descriptor, and the runner must be waited on
+  afterwards?
+- **Options considered:**
+  1. Start both and hope. The producer's `H2DStreamService.connect` has a 60 s timeout
+     (`PREFILL_H2D_CONNECT_TIMEOUT`), so it would *usually* work — the runner needs ~90 s for the
+     mesh open, the 15 GB weight load and `compile()`, so it would usually **not**. A flaky gate is
+     worse than a slow one.
+  2. Sleep a fixed interval. Encodes today's weight-load time as a constant.
+  3. Poll the runner's log for `setup complete, entering request loop`, then run the producer in the
+     foreground, then `wait` on the runner and fail on either exit code.
+- **Choice:** option 3, as a shell script in the session scratchpad (**not** in the package: the P3
+  tree contracts 41 files and this is neither a deliverable nor something P9 should have to audit).
+  Both processes' stdout is `tee`d to `bringup_log/raw/<GATE>-{runner,producer}_<stamp>.log`, so the
+  evidence is exactly what two terminals would have produced.
+- **Why it is better than two terminals, not merely equivalent:** the barrier is a real
+  precondition rather than an operator's judgement, and it is itself a control — a runner that dies
+  during the weight load fails the gate as "never entered the loop" instead of as a producer connect
+  timeout, which is a different bug. The script also fails on the **runner's** exit code, which a
+  human watching two terminals routinely forgets: the producer exits 0 quite happily while the
+  runner is dying behind it, and `G-REQUEST`'s whole claim includes the runner's clean shutdown.
+- **What it costs:** the exact commands live in the ledger and in `08_PREFILL_INTEGRATION.md` §2
+  rather than in a runnable file in the tree, so reproducing the gates means reading them off the
+  ledger. Stated for P9.
+- **Evidence:** the four `raw/G-REQUEST*` and two `raw/G-MOCK-MIG*` logs, each pair carrying the same
+  timestamp; the `producer_rc=0 runner_rc=0` line the script prints.
+- **Confidence:** high.
+- **Falsifier:** a gate that needs three processes (Gate 2 does — endpoint, runner, driver), where
+  this shape would need extending rather than reusing.
+- **Revisit if:** `G-LOOPBACK` comes into scope.
+- **Blast radius:** `G-REQUEST`, `G-MOCK-MIG`; no package file.
+
+---
+
+### DEC-110 — One log string was reworded **after** its gate ran, and the transcript keeps the old text
+- **Phase / module:** P10 / `tt/runners/adapters/llama.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** `DEC-098`'s measurement. `build_runtime` logged
+  `loading real bf16 weights from ... (safetensors read) ...`, and the call it announces takes
+  **46 ms** and — with the weight cache populated — reads no bytes at all, because `safetensors`
+  memory-maps and nothing faults the pages in. A reader debugging a slow start-up would look in
+  exactly the wrong place.
+- **Question:** reword it (and diverge from the gate transcripts), or leave a misleading message
+  standing so the evidence matches the code byte-for-byte?
+- **Choice:** reword it to `mapping the bf16 checkpoint at ... (safetensors, lazy)`, and record the
+  divergence here and in `08_PREFILL_INTEGRATION.md` §5 rather than editing the transcript.
+- **Why:** raw logs record what happened; rewriting one to match new code would make the evidence
+  less trustworthy, which is `BRINGUP_RECIPE.md` §0.2 rule 4 ("Raw logs from before a rename keep
+  the old path. That is correct, not stale"). And nothing `G-REQUEST` or `G-MOCK-MIG` asserts depends
+  on the string — their claims are chunk counts, exit codes and PCCs.
+- **Scope note, stated rather than left for a reader to infer from timestamps:** the change
+  post-dates `raw/G-REQUEST-*`, `raw/G-MOCK-MIG-*` and `raw/G-KV-TABLE_*`. It is a `logger.info`
+  f-string with no other effect, and `P10-REGRESSION` ran after it. This is the same shape of note
+  `DEC-093` made in P8 for a one-line signature change, and it is made for the same reason.
+- **Confidence:** high.
+- **Blast radius:** one log line; no gate's assertion.
+
+---
+
+### DEC-111 — `stage_layout` is a **list of one dict per rank**, and the first guard got it wrong twice
+- **Phase / module:** P10 / `tt/runners/kv_chunk_table.py`, `tests/unit/test_prefill_runtime_chunked.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** an independent read of the new code against the engine's call sites, run *after*
+  `G-ADAPTER`, `G-REQUEST`, `G-MOCK-MIG`, `G-KV-TABLE` and `G-RUNTIME` had all passed. Both defects
+  below survived every one of them.
+- **Defect 1 — the type was wrong, and it would have blocked every real migration run.**
+  `assert_single_rank_stage` required `stage_layout` to be a **dict** and raised `TypeError`
+  otherwise. It is a **list**: `allgather_kv_stage_layout` builds `stages = []` and appends one dict
+  per rank in `for rk in range(size)`
+  (`models/demos/common/prefill/runners/migration.py:315-334`), `allgather_kv_stage_layouts` returns
+  one such list per migratable stage (`:287-291`), and the engine passes `stage_layouts[0]` — stage
+  0's **per-rank list** — as `stage_layout` (`prefill_runner.py:634`). Every other reader in the tree
+  iterates it: `models/demos/deepseek_v3_d_p/tt/tt_prefill_runtime.py:929` tests single-rank with
+  `all(len(layout) == 1 for layout in stage_layouts)` and
+  `models/demos/deepseek_v3_d_p/utils/kv_cache_utils.py:394` sums `s["count"]` over it.
+  So every `PREFILL_ENABLE_MIGRATION=1` run — real worker (`:674`), file export (`:655`) **and**
+  mock-with-migration (`:644`) — would have died with `TypeError` on a perfectly valid single-rank
+  configuration.
+- **Defect 2 — the multi-rank protection it advertised did not exist.** Two of the guards compared a
+  value with itself. `num_layers` is `config.num_layers`, which **is** `params.num_layers`, which
+  **is** this rank's `num_my_layers` (`prefill_runner.py:463`, `:481`) — and the engine passes that
+  same `num_my_layers` at `:647`. So `num_my_layers != num_layers` can never fire, and neither can
+  `stage_layout["count"] != num_layers`. The `first_layer_idx != 0` guard cannot fire either,
+  because only rank 0 builds the table (`:643`, `:654`, `:673`) and rank 0's first layer is 0. On a
+  4-rank pipeline all three guards would have passed and the builder would have emitted a table
+  declaring `num_layers = 8` for a 32-layer model. `R-032`'s stated mitigation was vacuous.
+- **Why no gate caught either.** `G-MOCK-MIG` ran `PREFILL_MOCK_MIGRATION=1` **without**
+  `PREFILL_ENABLE_MIGRATION=1`, which takes `prefill_runner.py:570` / `:699` — the only two call
+  sites that pass **no** `stage_layout` at all, so the guard returned early at its `None` check.
+  `G-RUNTIME` asserted the wrong contract in two of its own tests: it *required* a `TypeError` for a
+  list and *accepted* a bare dict as "the single-rank shapes the engine really passes". A test
+  written from the same wrong belief as the code cannot falsify it.
+- **Choice — the fix, and it is the same argument in both halves:** the gathered **list** is both
+  the real type and the only argument that carries information from other ranks. So the guard now
+  takes a sequence, refuses a bare `dict` naming this decision, refuses an empty one, and refuses
+  `len(stage_layout) != 1` — which *is* the multi-rank signal — before checking that the single
+  stage spans `[0, num_layers)`.
+- **And a gate arm that can see it:** `PREFILL_ENABLE_MIGRATION=1` **with**
+  `PREFILL_MOCK_MIGRATION=1` takes `prefill_runner.py:626` (the real `allgather_kv_stage_layouts`)
+  and `:644` (the build with `stage_layout=stage_layouts[0]`) and needs **no** tt-llm-engine
+  binaries, because the worker handshake is only in the `else` branch at `:673`. That is
+  `G-MOCK-MIG`'s second arm, and it also exercises `kv_migration_base_address` for the first time —
+  closing two items `R-043` had listed as unproven.
+- **Evidence:** `migration.py:287-291`, `:315-334`; `prefill_runner.py:613-634`, `:644-650`;
+  `models/demos/deepseek_v3_d_p/tt/tt_prefill_runtime.py:929`;
+  `models/demos/deepseek_v3_d_p/utils/kv_cache_utils.py:394`; `G-MOCK-MIG` arm 2's log.
+- **Confidence:** high — the type is read out of the producing function, and a new `G-RUNTIME` test
+  (`test_the_gathered_stage_layout_really_is_a_list_of_dicts`) now AST-checks that function so the
+  belief cannot drift again silently.
+- **Falsifier:** the engine changing `allgather_kv_stage_layout` to return a dict — which that new
+  test would report.
+- **Revisit if:** multi-rank is implemented; the `len == 1` check is where the merge goes.
+- **Blast radius:** `tt/runners/kv_chunk_table.py`, `G-RUNTIME`, `G-MOCK-MIG`; and `R-032`, whose
+  claimed mitigation was not real until now.
+- **The method point, and it is the same one as `DEC-108`.** Both defects are refusals written from
+  a parameter's **name** rather than from what the engine actually puts in it, and in both cases the
+  static audit passed and only a real run could tell. `DEC-108` was found by a served chunk;
+  this one by a second reader, because the run that would have found it is a *branch* no gate had
+  taken. **A refusal is code, and it needs its own positive test on the engine's real value** — an
+  assertion that a bad input raises is only half of it.
+
+---
+
+### DEC-112 — `build_kv_chunk_table` refuses more than one supported chunk size
+- **Phase / module:** P10 / `tt/tt_prefill_runtime.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** the same review. `TtPrefillRuntimeConfig` supports `additional_chunk_sizes`,
+  `prefill_chunk` takes a `chunk_size` override, and `config.max_chunk_size` is `chunk_sizes[0]` —
+  the *largest*, which need not be `config.chunk_size`.
+- **Question:** the table describes **one** block-cyclic period. What if the cache was written at
+  two?
+- **What goes wrong:** nothing crashes. A cache whose rows were laid out by two different periods
+  has no single position -> address map, and `build_kv_chunk_table` would emit a table for
+  `config.chunk_size` — addresses that resolve, decode as plausible KV, and are wrong. It is the
+  only silent-wrong-answer this module can produce, and `G-KV-TABLE` cannot see it because that gate
+  writes each period into its own fresh cache.
+- **Choice:** refuse when `len(config.chunk_sizes) != 1`.
+- **Why not support it:** a correct answer needs one table per period and a reader that knows which
+  period each position belongs to. That is real work with no caller: the engine never passes
+  `chunk_size` to `prefill_chunk` at all (`prefill_runner.py:287-296`) and the adapter never sets
+  `additional_chunk_sizes`, so the multi-size path exists only for this package's own harnesses.
+- **Evidence:** `G-RUNTIME::test_build_kv_chunk_table_refuses_more_than_one_block_cyclic_period`.
+- **Confidence:** high.
+- **Falsifier:** a deployment that serves two chunk sizes into one cache and migrates it.
+- **Blast radius:** `tt/tt_prefill_runtime.py::build_kv_chunk_table`; `G-RUNTIME`.
+
+---
+
+### DEC-113 — `load_hf_config` takes the bundled default with **no path arithmetic**
+- **Phase / module:** P10 / `tt/runners/adapters/llama.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** the same review. `hf_model_default` is a **repo-relative** string (as the template's
+  is, and as the engine prints it — `prefill_runner.py:375`), and the first version compared
+  `os.path.abspath(config_dir + "/config.json")` against the absolute `BUNDLED_CONFIG_PATH`.
+- **What goes wrong:** `abspath` resolves against the process **CWD**. Started from anywhere but the
+  repo root the comparison fails even with `PREFILL_HF_MODEL` unset, the code takes the
+  foreign-checkpoint branch, `os.path.isfile` fails, and it raises
+  `FileNotFoundError: PREFILL_HF_MODEL='models/demos/…' has no config.json` — naming an env var the
+  operator never set. Every gate in this phase ran from `$TT_METAL_HOME`, so none of them saw it.
+- **Choice:** when `PREFILL_HF_MODEL` is unset, return the bundled config **directly**, with no path
+  joined, no `abspath` and no comparison. Only an explicitly-set `PREFILL_HF_MODEL` reaches the
+  comparison, and that one is compared with `os.path.realpath` on both sides.
+- **Why this shape:** the default case had no need of path arithmetic in the first place —
+  `ModelArgs.load_bundled_config()` already knows where the file is (`tt/model_config.py:53`, built
+  from `_PKG_ROOT`). Deleting the arithmetic is better than making it CWD-independent.
+- **Evidence:** `G-ADAPTER` (unchanged: it exercises both branches, and
+  `test_load_hf_config_refuses_a_disagreeing_checkpoint_config` passes an absolute `tmp_path`).
+- **Confidence:** high.
+- **Note for P9:** `G-ADAPTER::test_identity_and_default_paths_are_set` still does
+  `os.path.isdir(adapter.hf_model_default)`, which passes only from the repo root — the same CWD
+  dependence, now only in a test. Left as-is because pytest is always run from the root here and
+  P9 item 1 runs from there too; flagged rather than hidden.
+- **Blast radius:** `tt/runners/adapters/llama.py::load_hf_config`.
+
+---
+
+### DEC-114 — Every recipe citation in the package was re-pointed after an out-of-band kit edit
+- **Phase / module:** P10 / `scripts/verify_citations.py` and 26 files across the package
+- **Date (UTC):** 2026-09-04
+- **Trigger:** the final `G-CITE` pass went from clean to **38 mismatched** with no change to any
+  package file. `BRINGUP_RECIPE.md` had grown 23 lines while this session was live — a new passage
+  after `:1599` about the very defects `DEC-108` and `DEC-111` record — and every reference past that
+  point shifted by exactly +23.
+- **Options considered:**
+  1. **Leave them.** Pass 1 stays red, Appendix C item 7 fails, and the phase cannot be recorded
+     clean. Not viable.
+  2. **Re-point only this phase's own refs.** Leaves P0-P8's prose refs wrong. They are *in range*,
+     so pass 2 reports them `resolved` — which is exactly the failure `R-016` describes and `R-042`
+     was opened for.
+  3. **Re-point every reference in the package**, mechanically, by the measured offset.
+- **Choice:** option 3. `BRINGUP_RECIPE.md:N` with `N >= 1600` -> `N + 23`, in `CITES` (**104** rows)
+  and in prose (**26** files), including the `N-M` range form. **Raw logs excluded**: they record
+  what ran, and rewriting one would make the evidence less trustworthy (`BRINGUP_RECIPE.md` §0.2
+  rule 4).
+- **Why mechanical rather than by hand:** the offset is a measured constant, and every one of the 38
+  content-checked failures reported the exact line its needle had moved to, so the constant is
+  confirmed 38 times over. A hand pass over 26 files is where the "+209 offset" error `§1.6` records
+  came from.
+- **What this touched that this phase does not own:** `README.md`, `03_OUTLINE.md`,
+  `04_CCL_PLAN.md` and fourteen P5-P8 test files. Their content is unchanged — only the line number
+  each reference points at. No `tt/` module was affected; the one `tt/` file this phase modified is
+  `tt_prefill_runtime.py`, for the migration hooks it owns.
+- **Evidence:** `raw/G-CITE_20260904T184140Z.log` (604/604, 1169/1169, 128/128); the 38 failures and
+  their reported target lines, all +23; `git diff models/demos/common/bringup/` (the 23-line
+  addition and its insertion point).
+- **Confidence:** high — the offset is verified by the verifier itself, 38 times.
+- **Falsifier:** a reference whose needle moved by something other than +23, which pass 1 would
+  still report.
+- **Revisit if:** the recipe is edited again. `R-017` now records two instances.
+- **Blast radius:** every `BRINGUP_RECIPE.md` reference in the package; no behaviour.

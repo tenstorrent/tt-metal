@@ -56,6 +56,7 @@ rather than while you write, and one of them is easy to hit hundreds of lines de
 |---|---|
 | Copying a PCC threshold from another model's README | It is a guess. Every threshold set that way in this run was 1-2 orders of magnitude too loose. |
 | Comparing PCCs across two different tests | Different inputs and different reference precision make them incomparable. This produced a confident, wrong conclusion that a full-layer PCC "launders" a sublayer — measured attenuation was only 1.1-1.7x. |
+| Writing a guard from a parameter's **name** rather than its observed payload | Three such guards passed a static contract audit and were caught only by running the engine's real branches: a refusal on a parameter the engine always sends, a guard demanding a `dict` where the engine supplies a **list of dicts**, and two that compared a value with itself so protected nothing. Assert every guard can fire, and take every branch you claim to support at least once. |
 | Assuming the noise floor models everything | It does not model a fused kernel's interior. SDPA alone sat 71x off its floor and accounted for the entire block gap, while hand-written stages sat at 1.0-1.5x. Attribute before blaming. |
 | Committing or renaming while a phase session is live | Mislabels history, breaks in-flight path references, and rewrites raw-log provenance. |
 | Verifying a rename with a smoke test | Import checks and a citation pass prove the tree is wired; they prove nothing about the gates. Re-run the previous phase's **gates**. |

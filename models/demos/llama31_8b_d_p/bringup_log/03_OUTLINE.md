@@ -99,7 +99,7 @@ models/demos/llama31_8b_d_p/
     └── galaxy_prefill_kv_pcc.py                P8   G-MESH-KV, G-RACE
 ```
 
-**File count:** 41 tracked files at the end of P10 (excluding `bringup_log/` and `raw/`), of which 9
+**File count:** 57 tracked files at the end of P10 (excluding `bringup_log/` and `raw/`), of which 9
 exist today.
 
 ### 1.1 Deviations from the recipe's tree, and why
@@ -534,7 +534,7 @@ Split exactly as `models/demos/gpt_oss_d_p/tt/attention/` (`__init__`, `config`,
   `deallocate(True)` calls — both load-bearing under long-context DRAM pressure.
 - **Env var.** `LLAMA_DELTA_PROBE` (`DEC-023`), documented in the README's table at P9. Its output
   goes to `bringup_log/raw/`. This is the one place a `try/except Exception` is allowed
-  (`BRINGUP_RECIPE.md:1685-1687`) because a probe must never break a run — and it logs.
+  (`BRINGUP_RECIPE.md:1708-1710`) because a probe must never break a run — and it logs.
 
 ### 2.11 `tt/model.py`
 
@@ -686,7 +686,7 @@ measured one, are in brackets.
 ### 2.16 `README.md` (P9)
 
 - **Responsibility.** The package's front door, and a `G-CLEAN` deliverable rather than a courtesy.
-- **Required contents** (`BRINGUP_RECIPE.md:1691-1693`): the architecture table, the deployment path,
+- **Required contents** (`BRINGUP_RECIPE.md:1714-1716`): the architecture table, the deployment path,
   a **status table with measured PCC** (`G-MESH-KV`'s per-layer min K/V per run configuration), the
   run commands, the **env-var table** (four entries — `DEC-023`), a layout section, the "why not
   `models/common/`" answer (`02_SURVEY.md` §2, with both its citations), and a "what is **not**
@@ -732,7 +732,7 @@ but refuses until P8.
 
 ## 4. Gate → owner map
 
-Every one of the 32 gate rows in Appendix A (`BRINGUP_RECIPE.md:1720-1753`), with the thing in the
+Every one of the 32 gate rows in Appendix A (`BRINGUP_RECIPE.md:1743-1776`), with the thing in the
 tree that owns it.
 Added in the same edit as its owner; an unowned gate silently becomes a `NOT-RUN`.
 
@@ -777,7 +777,7 @@ leave unowned — `G-MESH`, `G-SEMAPHORE`, `G-WEIGHTS`, `G-TP-PARITY` (`BRINGUP_
 each have a dedicated file above, because no `test_<module>_vs_ref.py` naturally covers them.
 
 Two files in the tree own **no** Appendix A gate and are there for the P9 test-inventory item
-(`BRINGUP_RECIPE.md:1698-1699`, "every `tt/` module has a corresponding test"):
+(`BRINGUP_RECIPE.md:1721-1722`, "every `tt/` module has a corresponding test"):
 `tests/unit/test_embedding_vs_ref.py` and `tests/unit/test_lm_head_vs_ref.py`. Both are ordinary
 `_vs_ref` PCC tests with a floor and a control; they are simply not gates.
 

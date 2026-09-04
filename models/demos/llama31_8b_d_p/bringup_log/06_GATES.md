@@ -34,6 +34,14 @@ entry naming the blocker) · `NOT-RUN` (needs the reason). A gate with no raw lo
 | G-WEIGHTS (P8 ext) | P8 | the cache-only rebuild **at TP=8**, where `ttnn.as_tensor` persists an already-sharded tensor | every device tensor SHA-256-identical | **354 device shards over 12 tensors, all SHA-256-identical** after a cache-only rebuild. **8** tensors genuinely sharded with **8 distinct** shard hashes each (the 8 TP columns, replicated across the 4 SP rows — the expected geometry), 4 replicated; `q_proj` and `lm_head` asserted sharded and the vocab table asserted replicated, so a silently-unsharded build fails rather than passes faster | PASS | 2026-09-04 | `raw/G-WEIGHTS-TP8_20260904T151945Z.log` |
 | P8-REGRESSION | P8 | the whole package suite still passes after P8's additions | 0 failed | **196 passed, 0 failed** in 21:23 (P7 stood at 177; P8 adds 19 tests). Run on the final tree with `-p no:randomly`, `PREFILL_TRACE_DIR` at the 1024-token trace so `G-CHUNK-ATTN` runs rather than skipping | PASS | 2026-09-04 | `raw/P8-REGRESSION_20260904T155300Z.log.gz` (an earlier identical-count run, `raw/P8-REGRESSION_20260904T152156Z.log.gz`, was mutated mid-flight by `black` and is superseded — `DEC-090`) |
 | G-CITE (P8) | P8 | every `path:line` and every cited **raw artefact** resolves | 0 mismatched, 0 unresolved, 0 missing artefacts | **539/539** content-checked citations (CITES 488 -> 539), **900/900** doc refs, and — from the **pass 3** this phase added — **98/100** cited raw artefacts present. The 2 missing are dangling P5.4-P5.6 references that pre-date this phase and were invisible to passes 1 and 2 (`R-042`) | PASS-WITH-DEVIATION (`R-042`) | 2026-09-04 | `raw/G-CITE_20260904T162457Z.log` |
+| G-ADAPTER | P10 | the engine's adapter contract: every abstract method, every default path, and an import that pulls no device stack | the `ADDING_A_PREFILL_MODEL.md` checklist item by item; 0 abstract methods left; every `model_config` constant == `config.json`; import **measured** with no heavy module | **28/28** tests, no device. 0 abstract methods; 4/4 implemented on this class. **9/9** `model_config` constants equal `config.json` (+ `HEAD_DIM` = `derive_head_dim` = 128, and `config.json` asserted to have no `head_dim` key). Import: **40.3 ms**, heavy modules `[]` (budget 1.0 s, `DEC-101`); control (adapter + `tt/model_config.py`) reports `torch` **and** `ttnn`, so the probe discriminates. `PREFILL_MODEL=llama31_8b_d_p` resolves and memoizes; `TEST_VARIANTS["llama31_8b_d_p"]` is our instance. `weight_cache_path((4,8))` **equals** `ModelArgs`' answer; `(1,8)` differs. 3/3 refusals fire (`use_trace`, `dflash`, unset `HF_MODEL`); a disagreeing `config.json` is refused naming `num_hidden_layers` | PASS | 2026-09-04 | `raw/G-ADAPTER_20260904T173636Z.log` |
+| G-REQUEST | P10 | request-mode serving through the engine, end to end, on the target mesh | every chunk accepted and served; the shutdown sentinel received; clean exit on both sides | **arm 1 (gate geometry, chunk 256 / cache 2816):** 11/11 chunks served `[0,256)`…`[2560,2816)`, sentinel received after 11 chunks, `shutdown complete`, **producer rc 0 / runner rc 0**; 2816 tokens, 11 pushes, p50 0.1 ms / p99 225.8 ms, 16.0 s of device time. **arm 2 (the real deployment geometry, chunk 8192 / cache 131072):** 2/2 chunks served `[0,8192)`, `[8192,16384)`, sentinel received, both rc 0, 13.6 s — the pair `R-039` recorded as never run | PASS | 2026-09-04 | `raw/G-REQUEST-runner_20260904T173723Z.log`, `raw/G-REQUEST-producer_20260904T173723Z.log`, `raw/G-REQUEST-DEPLOYMENT-runner_20260904T174126Z.log`, `raw/G-REQUEST-DEPLOYMENT-producer_20260904T174126Z.log` |
+| G-MOCK-MIG | P10 | prefill writes correct KV **and** `build_kv_chunk_table` is right, read back device-lessly in a **second process** (the doc's Gate 1) | producer PCC >= 0.93 (`PREFILL_STANDALONE_CHUNKED_PCC`, the engine's number); measured per-layer minimum recorded | **Two arms, identical numbers.** `KV cache PCC PASSED (min 0.986623 >= 0.93 across 1 slots; per cache: k=0.996784, v=0.986623)` over `[0,1024)` across **32/32** local layers; per-layer min **K 0.996784 (L22)**, **V 0.986623 (L28)** — 5.6x the threshold's error budget on V, and it agrees with `G-MESH-KV`'s on-device chunk-256 row **to 6 decimals and on both argmin layers** (0.9967844 / L22, 0.9866232 / L28): two readers, two processes, two read paths. LayerAck drain **128/128** = 32 layers x 4 chunks, in 0.42 s. **Arm 2** adds `PREFILL_ENABLE_MIGRATION=1`, which takes the engine's real stage-gather path (`prefill_runner.py:626`, `:644`) and calls `kv_migration_base_address` — the branch `DEC-111` would have crashed on, and the one arm 1 cannot reach; same PCC to every digit | PASS | 2026-09-04 | `raw/G-MOCK-MIG-producer_20260904T173939Z.log`, `raw/G-MOCK-MIG-runner_20260904T173939Z.log.gz`, `raw/G-MOCK-MIG-STAGED-producer_20260904T180914Z.log`, `raw/G-MOCK-MIG-STAGED-runner_20260904T180914Z.log.gz` |
+| G-KV-TABLE | P10 | the address table **alone**, isolated from every numerical question | **bit-exact** over UMD read-back (`torch.equal`, `rtol=atol=0`); a control that reads one head through another's config must fail | **11/11** tests on the full `(4,8)` mesh, 38.0 s. **2048 chunks bit-identical** (1024 per block-cyclic period, at periods 512 and 128) against both the live device tensor *and* the labelled host probe. 16 configs (k_h0-7, v_h0-7), 1024 entries each period, 4352 B/chunk, `chunk_n_tokens` 32. head->config->chip: every config's device group is a **single** chip and it is exactly `MeshCoordinate(sp_row, head)`, compared on fabric-node ids. UMD path == the table's own control-plane `read_device_chunk` on 8 sampled entries. Protobuf round trip preserves every address, size, device group **and** the zero-padded config names `00..15` | PASS | 2026-09-04 | `raw/G-KV-TABLE_20260904T172909Z.log` |
+| G-LOOPBACK | P10 | the real DRAM -> transport -> DRAM migration copy (the doc's Gate 2) | `dst-bytes` identical | **not run.** It needs the tt-llm-engine binaries (`migration_endpoint`, `migration_worker`, `_migration_client*.so`), none of which is in this tree, and it verifies the **engine's** model-agnostic byte copy rather than this model — `HUMAN GATE H4`'s question ("whose bug would a red gate be?") answers *the engine's* | **OUT OF SCOPE** by `DEC-103`; residual gap enumerated as `R-043` | 2026-09-04 | n/a — `G-KV-TABLE` proves the table the copy reads, bit-exactly, over the same UMD path the worker uses |
+| G-RUNTIME (P10 ext) | P10 | the migration hooks the engine calls, and what they still refuse | every unguarded name present with a binding signature; every refusal matched on its message; **no refusal on a value the engine really sends** | **48/48** tests (P7 stood at 37; P10 adds 6 and removes 1). The removed one is the finding: `metadata_msg` was **refused** and the engine passes it on every chunk, so the runner died on its first served chunk after the mesh open and the weight load (`DEC-108`). Two tests now stand in its place — one drives a non-`None` `metadata_msg` past that point to the next refusal, one reads the engine's keyword set out of the AST and forbids a `<param> is not None` refusal for any of them except `d2h_service`. New: `set_layer_ack_channel` refuses before `compile()` and injects exactly `num_layers` acks per chunk; `assert_single_rank_stage` refuses a non-zero `first_layer_idx`, a partial `num_my_layers`, a multi-rank `stage_layout` and a `stage_layouts` list, and accepts the three single-rank shapes; `kv_migration_stages` asserted **absent**; `kv_migration_base_address` returns K's. **`DEC-111` then found the same class of defect twice more**, after every P10 gate had passed: `stage_layout` is a **list** of per-rank dicts and the guard demanded a dict (which would have blocked every `PREFILL_ENABLE_MIGRATION=1` run), and two of its guards compared a value with itself (so `R-032`'s advertised protection did not exist). Both are now refused on the gathered list's **length**, the only argument carrying other ranks' data, and a new test AST-checks the *producing* function so the type belief cannot drift again. Refusal census: **22** `raise` in the runtime + **7** in `tt/runners/kv_chunk_table.py` | PASS | 2026-09-04 | `raw/G-RUNTIME_20260904T180813Z.log` |
+| P10-REGRESSION | P10 | the whole package suite still passes after P10's additions | 0 failed | **246 passed, 0 failed** in 23:40 (P8 stood at 196; P10 adds 50 — `G-ADAPTER` 28, `G-KV-TABLE` 11, `G-RUNTIME` +11). Second run: the first was killed at ~67 tests when the review that found `DEC-111` landed mid-flight, so its result belonged to pre-fix code (`DEC-090`'s reasoning, applied earlier) | PASS | 2026-09-04 | `raw/P10-REGRESSION_20260904T181140Z.log.gz` |
+| G-CITE (P10) | P10 | every `path:line` and every cited raw artefact resolves | 0 mismatched, 0 unresolved, 0 missing artefacts | **604/604** content-checked citations (`CITES` 539 -> 604), **1169/1169** doc refs, **128/128** raw artefacts. First fully clean run of all three passes. It caught **13** of this phase's own citations wrong, and **one P7 citation that this phase's own edit to `prefill_producer.py` invalidated** (`_read_slot_kv_and_check_pcc_mla` moved 511 -> 694) — the latter only because that row is content-checked; as prose it would have resolved in range and stayed wrong | PASS | 2026-09-04 | `raw/G-CITE_20260904T184140Z.log` |
 
 ```
 STATUS after P0: gates PASS=1 FAIL=0 DEVIATION=0 BLOCKED=0 | next: P1 (reference)
@@ -366,7 +374,7 @@ and `DEC-013` (is `utils/` created at all, given the helpers are imported from
 - **Reference dtype policy:** n/a — no reference tensor. The "reference" is arithmetic stated in
   `00_MODEL_CARD.md` §4 and re-derived from the bundled `config.json` in the test rather than
   restated as a literal.
-- **Threshold:** exact asserts (`BRINGUP_RECIPE.md:1726`). No PCC, so §1.4's floor field does not
+- **Threshold:** exact asserts (`BRINGUP_RECIPE.md:1749`). No PCC, so §1.4's floor field does not
   apply.
 - **Noise floor (computed):** n/a.
 - **Measured:**
@@ -431,7 +439,7 @@ and `DEC-013` (is `utils/` created at all, given the helpers are imported from
   activations and a bf16 norm weight in its stored `(1, 1, 128, 32)` shape (`DEC-022`). A
   bf16-weight reference would share the device's own rounding and flatter the number — recipe
   §2.1(a) measures 0.9999867 against 0.99995 for that mistake.
-- **Threshold:** PCC >= 0.9999 (`BRINGUP_RECIPE.md:1728`). The error ratio is **recorded, not
+- **Threshold:** PCC >= 0.9999 (`BRINGUP_RECIPE.md:1751`). The error ratio is **recorded, not
   asserted**: a correct module sits right on §2.2's 3x stage bound, so asserting it would gate on
   the wrong side of the noise (`BRINGUP_RECIPE.md:1043-1046`).
 - **Noise floor (computed):** **0.9999973 / 0.9999973 / 0.9999972** with random weights;
@@ -496,7 +504,7 @@ and `DEC-013` (is `utils/` created at all, given the helpers are imported from
   `models/demos/gpt_oss_d_p/tests/unit/test_attention_vs_ref.py:83` `_build_cos_sin` does, so the
   test cannot silently compare two different RoPEs. For the floor, the three tensors the device
   stores — input, cos, sin — are quantised to bf16 and the rest stays fp32.
-- **Threshold:** PCC >= 0.999 (`BRINGUP_RECIPE.md:1729`), expecting ~0.99999.
+- **Threshold:** PCC >= 0.999 (`BRINGUP_RECIPE.md:1752`), expecting ~0.99999.
 - **Noise floor (computed):** **0.9999983 / 0.9999982 / 0.9999980**.
 - **Measured:** **0.9999969 / 0.9999964 / 0.9999959** at S = 32 / 512 / 4096 — **1.76x / 1.95x /
   2.08x** the floor. 11/11 tests pass.
@@ -602,7 +610,7 @@ What P5.4 can rely on, and what it must not assume:
    (`DEC-032`); `tt/mlp.py` does not need it, but `tt/attention/` (P5.5) does, and it must call it
    rather than reach for `hf_config.head_dim`, which does not exist.
 4. **`G-MLP` gates both dtypes** — `>= 0.999 @bf8_b` and `>= 0.9995 @bf16`, **and `<= 3x` the
-   computed floor at each** (`BRINGUP_RECIPE.md:1730`). Unlike `G-RMS`, that ratio bound is
+   computed floor at each** (`BRINGUP_RECIPE.md:1753`). Unlike `G-RMS`, that ratio bound is
    *asserted*, so compute a separate floor per dtype: quantise the weights at the dtype under test
    and the activations at bf16 (`DEC-022`).
 5. **The negative control is SiLU on `up` instead of `gate`** (recipe: 0.6462). It is what proves
@@ -636,12 +644,12 @@ What P5.4 can rely on, and what it must not assume:
   - bf8_b: **0.9999213 / 0.9999221 / 0.9999222** at S = 32 / 512 / 4096
   - bf16: **0.9999929** at all three
 - **Threshold:** PCC >= **0.999** @bf8_b and >= **0.9995** @bf16, **and <= 3x the floor at each
-  dtype** (`BRINGUP_RECIPE.md:1769`). Unlike `G-RMS`, Appendix A states a ratio bound for this gate,
+  dtype** (`BRINGUP_RECIPE.md:1792`). Unlike `G-RMS`, Appendix A states a ratio bound for this gate,
   so the ratio is **asserted**, not merely recorded.
 - **Measured:** 14/14 tests pass.
   - bf8_b: **0.9999133 / 0.9999144 / 0.9999144** -> **1.10x / 1.10x / 1.10x** the floor
   - bf16: **0.9999851 / 0.9999852 / 0.9999852** -> **2.11x / 2.10x / 2.09x** the floor
-  - Both dtypes run and both are recorded, as `BRINGUP_RECIPE.md:1769` requires. bf8_b clears its
+  - Both dtypes run and both are recorded, as `BRINGUP_RECIPE.md:1792` requires. bf8_b clears its
     threshold comfortably, so `DEC-021`'s "keep bf16 if bf8_b misses" contingency is not needed.
   - PCC is flat in sequence length to 7 decimal places, which is what a token-pointwise block
     should do; the S=32 bf8_b value differs only because a 32-row activation is one tile tall.
@@ -712,7 +720,7 @@ What P5.4 can rely on, and what it must not assume:
   broken floor. Each stage's floor is now computed from that stage's own quantised inputs.
   - block floor: bf8_b **0.9998805 / 0.9998657 / 0.9998521**; bf16 **0.9999875 / 0.9999854 / 0.9999838**
 - **Threshold:** PCC >= **0.999**; stages this package implements **<= 3x**; block **<= 8x**
-  (`BRINGUP_RECIPE.md:1770`). See **Deviations** for how the block budget is applied.
+  (`BRINGUP_RECIPE.md:1793`). See **Deviations** for how the block budget is applied.
 - **Measured:** 17/17 tests pass.
 
   | dtype | S | block PCC | raw ratio | SDPA-attributed residual |
@@ -829,7 +837,7 @@ What P5.4 can rely on, and what it must not assume:
   - bf8_b: **0.9999743**-**0.9999754** (K), **0.9999752**-**0.9999753** (V)
   - bf16: **0.9999986**
 - **Threshold:** PCC >= **0.99** at the cache dtype and **<= 3x its floor**
-  (`BRINGUP_RECIPE.md:1771`); the layout claims on **bit-equality** (`torch.equal`, `rtol=atol=0`),
+  (`BRINGUP_RECIPE.md:1794`); the layout claims on **bit-equality** (`torch.equal`, `rtol=atol=0`),
   never PCC (§2.5).
 - **Measured:** 15/15 tests pass.
   - **Round trip, worst of 8 heads:** bf8_b `S=128` K **0.9999743** / V **0.9999753**; `S=512`
@@ -1290,7 +1298,7 @@ ran. **These re-run logs are the ones the verdicts rest on.**
 ### G-RUNTIME — the runtime against the engine's real call site, statically (P7)
 - **Command:** `pytest models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py -q`
 - **Raw log:** `raw/G-RUNTIME_20260904T131649Z.log` (first run: `raw/G-RUNTIME_20260904T125242Z.log`, identical)
-- **Mesh / device:** **none** (`BRINGUP_RECIPE.md:1954` gives this gate device "none"). 37 tests,
+- **Mesh / device:** **none** (`BRINGUP_RECIPE.md:1977` gives this gate device "none"). 37 tests,
   8.2 s, no mesh opened. The two `__init__` refusals are reached with a `_MeshStub` exposing only
   `.shape` — both run before any `ttnn` object is constructed — and the per-chunk refusals with an
   `object.__new__` instance carrying only the three attributes those checks read (`DEC-068`). The
@@ -1366,9 +1374,9 @@ ran. **These re-run logs are the ones the verdicts rest on.**
 - **Command:** none run. The gate belongs to `tests/unit/test_sp_attention_chunked.py`, a P8 file.
 - **Mesh / device:** `(4,8)` with the ring fabric — neither of which P7 owns.
 - **Threshold (unchanged, for P8):** ≥ 0.999 at layer 1; deep layers gated by step ≤ 4x; both vs the
-  golden (`BRINGUP_RECIPE.md:1958`).
+  golden (`BRINGUP_RECIPE.md:1981`).
 - **Verdict:** **BLOCKED** — `07_RISKS.md` `R-023`, which names **P8** as the owner, as
-  `BRINGUP_RECIPE.md:1598-1600` requires.
+  `BRINGUP_RECIPE.md:1598-1623` requires.
 - **Why it is not weakened into `G-CHUNK`.** The recipe forbids both available shortcuts explicitly,
   and the third — running a cache-backed chunk on the dense path anyway — is the dangerous one: plain
   `is_causal` SDPA assumes Q row 0 aligns with K row 0, so the mask is off by `actual_start` and the
@@ -1425,7 +1433,7 @@ run), **R-029 (high: TtPrefillRuntime has never been instantiated)**.
 
 P7's three gates are recorded: `G-CHUNK` **PASS**, `G-GOLDEN` **PASS**, `G-RUNTIME` **PASS**, and
 `G-CHUNK-ATTN` is **BLOCKED** with `R-023` naming P8 as its owner — which
-`BRINGUP_RECIPE.md:1598-1600` requires by construction, not as a concession.
+`BRINGUP_RECIPE.md:1598-1623` requires by construction, not as a concession.
 
 New in the tree: `tt/tt_prefill_runtime.py`, `scripts/generate_golden_kv_cache.py`,
 `scripts/verify_golden_kv.py`, `tests/unit/test_attention_chunked_vs_ref.py`,
@@ -1482,7 +1490,7 @@ What P8 can rely on, and what it must not assume:
 ## P8 — Multi-device: TP, SP and the CCL gates
 
 `G-FABRIC-MATRIX` ran **first**, before every numerical multi-device gate, as
-`BRINGUP_RECIPE.md:1732-1734` requires — and it is the reason the rest of the phase is configured the
+`BRINGUP_RECIPE.md:1755-1757` requires — and it is the reason the rest of the phase is configured the
 way it is.
 
 ### G-FABRIC-MATRIX — which (mesh, topology, links, axis) combinations can run a collective
@@ -1552,7 +1560,7 @@ way it is.
 - **Mesh / device:** `(1, 8)` **submesh** of the full `(4,8)` galaxy. TP=8, **SP=1** — deliberately,
   because at `sp = 1` the block-cyclic sequence layout is the identity and the only thing under test
   is the head/feature distribution, so a failure can only be the mapper
-  (`BRINGUP_RECIPE.md:1735-1737`). `Topology.Linear`, `FABRIC_1D`, `num_links=1`.
+  (`BRINGUP_RECIPE.md:1758-1760`). `Topology.Linear`, `FABRIC_1D`, `num_links=1`.
 - **Inputs / input distribution:**
   - **arm A (head->column, and the write offset)** — a synthetic **labelled** probe, not a random
     one: lane block `[0,64)` of each head carries the position `s % 128`, lane block `[64,128)`
@@ -1670,7 +1678,7 @@ way it is.
 - **Reference dtype policy:** the golden is **fp32** throughout, regenerated at 1024 tokens for this
   gate and re-proved bit-identical to `LlamaModel`'s own loop — `max|delta| = 0.0` on K, V **and** the
   post-norm hidden over all 32 layers. K is permuted HF -> Meta **before** any quantiser (§2.2.3a).
-- **Threshold, and it names a depth** (`BRINGUP_RECIPE.md:1745-1749`): **>= 0.999 at layer 1** — one
+- **Threshold, and it names a depth** (`BRINGUP_RECIPE.md:1768-1772`): **>= 0.999 at layer 1** — one
   attention layer, i.e. the per-op claim. Deep layers by the per-layer error **step** <= 4x from L3.
   Both arms vs the golden at `G-CHUNK`'s carried K >= 0.99 / V >= 0.98. The accumulated min over 32
   layers is **recorded and not gated**.
@@ -1813,7 +1821,7 @@ way it is.
   is asserted to cover every global position exactly once before any scoring happens.
 - **HUMAN GATE H5 considered and resolved, not waved through.** The ring path carrying **2.74x** the
   one-shot path's K error is higher than the recipe's own measurement of the same quantity (1.45x,
-  `BRINGUP_RECIPE.md:1725-1728`), which is the shape of thing §0.3's H5 says to investigate rather
+  `BRINGUP_RECIPE.md:1748-1751`), which is the shape of thing §0.3's H5 says to investigate rather
   than record as clean. It resolves arithmetically and the resolution is §2.3.1's, not a new one:
   the two runs **agree on the chunked number** (chunked min K 0.9967119 here vs the recipe's
   0.99695) and differ on the *baseline* (one-shot min K 0.9987994 here vs the recipe's 0.99789 —
@@ -1860,7 +1868,7 @@ STATUS after P8: gates PASS=24 FAIL=0 DEVIATION=2 BLOCKED=0 | next: P10 (disaggr
 Open DECs needing review: DEC-079/DEC-081 (this galaxy has no ring fabric; the whole phase ran on
 FABRIC_1D + Topology.Linear, so every P8 number is a Linear measurement — R-030, R-031),
 DEC-083 (G-TP-PARITY shards the sequence only for the token-wise modules, a stated deviation from
-BRINGUP_RECIPE.md:1768-1770), DEC-085 (meta_head_index duplicated between the script and the tests),
+BRINGUP_RECIPE.md:1791-1793), DEC-085 (meta_head_index duplicated between the script and the tests),
 DEC-087 (G-WEIGHTS's P8 arm does not hash the replicated vocab table on devices 1-30)
 ```
 
@@ -1964,3 +1972,585 @@ authoritative runs.
 **Kit consequence:** re-running a gate must replace its ledger citation, not leave the first
 attempt's. Timestamped filenames make the mismatch findable only if something checks that the file
 exists — hence P8's third verifier pass.
+
+## P10 — Disaggregated-prefill integration
+
+### G-ADAPTER — the engine's adapter contract, and an import that stays cheap
+- **Command:** `pytest models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py -q -p no:randomly`
+- **Raw log:** `raw/G-ADAPTER_20260904T173636Z.log` (the same run as `G-RUNTIME`'s; the two files are
+  collected together because P10 changed both and a split run would gate two different trees)
+- **Mesh / device:** **none.** Appendix A gives this gate device "—", and it holds: the checklist is
+  about the adapter's *contract*, and every device claim it could make belongs to `G-KV-TABLE`,
+  `G-REQUEST` or `G-MOCK-MIG`. The one `PrefillRunParams`-driven call it makes (`build_runtime` with
+  `mesh_device=None`) reaches only the three refusals, which fire before anything is touched.
+- **Inputs / input distribution:** not applicable — no tensors. The inputs are `config.json`, the
+  registry, the manifest JSON, and the engine's own source read with `ast` and `inspect`.
+- **Reference dtype policy:** not applicable; no numbers are measured except a wall-clock import.
+- **Threshold:** the checklist at `ADDING_A_PREFILL_MODEL.md:246-255`, item by item; **0** abstract
+  methods left; `PREFILL_MODEL=llama31_8b_d_p` resolves through the registry; the registry-fed
+  `variant` fixture picks it up; every `model_config` constant equals `config.json`; and the import
+  is **measured** with no heavy module in `sys.modules` (`BRINGUP_RECIPE.md:1935-1938`).
+- **Computed noise floor:** none applies. The one number with a threshold is the import time, whose
+  budget is a *separator* rather than a measurement of anything: `DEC-101` states why 1.0 s, and the
+  assertion that carries the claim is the `sys.modules` one.
+- **Measured — 28/28 tests, 12.7 s, no mesh opened:**
+
+  | checklist item (`ADDING_A_PREFILL_MODEL.md`) | evidence |
+  |---|---|
+  | every abstract method implemented (incl. `allocate_kv_cache`) — `:248` | `__abstractmethods__` empty; the engine's abstract set is exactly the expected four, and all four are defined **on this class** (not inherited) |
+  | `name`, `model_config` and the default paths set — `:249` | `llama31_8b_d_p`; `Llama31_8BConfig`; `hf_model_default` is a real directory holding a real `config.json`; `ttnn_cache_default` and `prefill_trace_default` deliberately `""` |
+  | `build_runtime` returns a §2 runtime, cache passed in — `:250-251` | it constructs `TtPrefillRuntime`; the class has all five doc-required names and **no** `owns_kv_cache` (`DEC-062`) |
+  | no heavy imports at module load — `:252` | **40.3 ms**, heavy modules `[]` |
+  | registered in `ADAPTER_PATHS` — `:253` | `adapter.py:291`, one line; `get_adapter` resolves and memoizes; `TEST_VARIANTS["llama31_8b_d_p"]` is an instance |
+  | weight cache populated, golden trace staged — `:254` | the resolved cache dir holds `.tensorbin` files; the trace's `metadata.json` reports 8 KV heads, head_dim 128, fp32, 32 layers, and all 32 `layer_*.safetensors` exist |
+  | request-mode producer PCC passes — `:255` | `G-MOCK-MIG` |
+
+  Plus the recipe's four additions: **9/9** `model_config` constants equal `config.json`
+  (`hidden_size`, `intermediate_size`, `num_hidden_layers`, `vocab_size`, `num_attention_heads`,
+  `num_key_value_heads`, `rms_norm_eps`, `rope_theta`, `max_position_embeddings`), with `HEAD_DIM`
+  checked against `derive_head_dim` **and** `config.json` asserted to carry no `head_dim` key;
+  `FABRIC_PAYLOAD_SIZE == hidden_size`, which is the one value the engine itself reads
+  (`runner_utils.py:41`); `ROTARY_DIM` absent and therefore defaulting to `HEAD_DIM`, which is what
+  the producer's reader assumes (`prefill_producer.py:552`).
+
+  Refusals asserted (4): `params.use_trace`, `params.dflash_enabled`, an unset `HF_MODEL`, and a
+  `PREFILL_HF_MODEL` whose `config.json` disagrees with the bundled copy — the last one naming the
+  differing key (`num_hidden_layers`) rather than failing generically. Also asserted: the adapter
+  reads **only** `PREFILL_HF_MODEL`, `PREFILL_TTNN_CACHE`, `TT_CACHE_PATH` and `HF_MODEL` from the
+  environment (an AST walk over every `.get`/`.getenv` literal), which is the mechanical form of
+  "knobs come from `params`".
+- **Verdict:** **PASS**
+- **Negative controls (four, all discriminate):**
+  1. **The import probe's own control.** The same cold subprocess importing the adapter *and*
+     `tt/model_config.py` reports `torch` and `ttnn`. Without it, "no heavy module found" and "the
+     probe looks in the wrong place" are the same observation (`R-016`'s shape).
+  2. **A disagreeing checkpoint config** must be refused, and its byte-identical twin accepted —
+     both halves run, so the check is not simply "always raise".
+  3. **The weight-cache path must be mesh-specific:** `(1,8)` and `(4,8)` must differ, so a `(1,1)`
+     cache cannot be picked up at TP=8 (the "one layer runs on garbage" failure, Appendix B).
+  4. **The `getattr` census** must be empty except `max_seq_len`: a three-argument `getattr` on any
+     *dimension* is the `R-005` trap, and the assertion names it.
+- **Deviations:** `DEC-094` (bundled config + equality refusal instead of `AutoConfig`), `DEC-095`
+  (this package's weight-cache layout, not the engine's convention), `DEC-096`
+  (`kv_only_last_layer` ignored with a warning), `DEC-097` (`Topology.Linear` pinned in code),
+  `DEC-098` (no cache-only build), `DEC-101` (the import budget), `DEC-102` (docstring-stripped
+  source searches).
+- **Notes.** Three of this gate's assertions failed on their **own prose** on the first run: the
+  package's docstrings name `AutoConfig` and `get_num_devices` in order to explain why they are
+  absent, and a substring search over `inspect.getsource` cannot tell a warning from an offence.
+  `DEC-102` records the fix (`ast.unparse` of a docstring-stripped tree) and why the docstrings were
+  not weakened instead. It is the same defect shape as the repo's own `prefer-expect-error` hook.
+
+### G-REQUEST — request-mode serving through the engine, on the target mesh
+- **Command (two processes, twice — the second at the real deployment geometry):**
+  ```
+  # terminal A — runner
+  PREFILL_MANIFEST=models/demos/llama31_8b_d_p/tt/runners/manifests/llama31_8b_d_p.json \
+  PREFILL_MODEL=llama31_8b_d_p PREFILL_SP=4 PREFILL_TP=8 PREFILL_NUM_LAYERS=32 \
+  PREFILL_CHUNK_SIZE=256 PREFILL_MAX_SEQ_LEN=2816 PREFILL_NUM_USERS=1 \
+  PREFILL_H2D_SERVICE_ID=llama_prefill \
+    python -m models.demos.common.prefill.runners.prefill_runner
+  # terminal B — producer
+  <same shared env> PREFILL_PRODUCER_CHUNKS=11 PREFILL_SEND_SHUTDOWN=1 \
+    python -m models.demos.common.prefill.runners.prefill_producer
+  ```
+  Arm 2 replaces `PREFILL_CHUNK_SIZE=8192 PREFILL_MAX_SEQ_LEN=131072 PREFILL_PRODUCER_CHUNKS=2`.
+  The full matrix is `bringup_log/08_PREFILL_INTEGRATION.md` §2. Driven from one shell script so the
+  hand-off is deterministic (`DEC-109`), which is the two terminals with a `grep` between them.
+- **Raw logs:** `raw/G-REQUEST-runner_20260904T173723Z.log`,
+  `raw/G-REQUEST-producer_20260904T173723Z.log`,
+  `raw/G-REQUEST-DEPLOYMENT-runner_20260904T174126Z.log`,
+  `raw/G-REQUEST-DEPLOYMENT-producer_20260904T174126Z.log`.
+  Also retained: `raw/G-REQUEST-runner_20260904T173012Z.log`, the **failed** first attempt — it is
+  `DEC-108`'s evidence and deleting it would erase the finding.
+- **Mesh / device:** the deployment `(4,8)`, SP=4 x TP=8, `FABRIC_1D` (chosen by the engine for
+  `sp <= 8`, `runner_utils.py:37`, and pinned to `1d` by the manifest), `Topology.Linear` in the
+  runtime (`DEC-097`), `num_links=2` (`prefill_runner.py:489`).
+- **Inputs / input distribution:** the 1024-token golden trace's own `token_ids`, tiled by the
+  producer's pool to the pushed length (`prefill_producer.py:903-906` pads with token id 1 past the
+  trace). Real bf16 checkpoint weights, loaded from the safetensors shards on every start
+  (`DEC-098`).
+- **Reference dtype policy:** not applicable — this gate scores no tensor. It is a serving-liveness
+  gate; the numbers are `G-MOCK-MIG`'s.
+- **Threshold:** every chunk accepted and served, the shutdown sentinel received, clean exit
+  (`BRINGUP_RECIPE.md:1953`).
+- **Computed noise floor:** none — no numeric quantity is compared.
+- **Measured:**
+
+  | arm | chunk / cache | chunks | served | sentinel | producer rc | runner rc | device time |
+  |---|---|---|---|---|---|---|---|
+  | gate geometry | 256 / 2816 | 11 | `[0,256)` … `[2560,2816)`, all 11 | received after 11 chunks | **0** | **0** | 16.0 s (2816 tok) |
+  | **deployment** | **8192 / 131072** | 2 | `[0,8192)`, `[8192,16384)` | received after 2 chunks | **0** | **0** | 13.6 s (16384 tok) |
+
+  Producer side, arm 1: `pushes=11 requests=1 tokens=2816`, `push_ms p50=0.1 p90=206.4 p99=225.8`.
+  Both runners logged `shutdown complete`.
+
+  One number worth extracting from the runner log because it settles `DEC-095`: **290
+  `Loading cache` lines and 0 `Generating cache` lines.** The adapter's `weight_cache_path` mirrors
+  `ModelArgs`' layout rather than the engine's `{name}_{arch}_{N}dev/{sp}x{tp}` convention, and this
+  is the measurement that says why — under the engine's convention all 290 tensors would have been
+  re-tilized on the first start.
+- **Verdict:** **PASS**
+- **Negative control:** this gate's control is the run it already failed. The **first** attempt died
+  on chunk 0 with `NotImplementedError: metadata_msg is the engine's trace-safe metadata tensor`
+  (`DEC-108`) — so "every chunk served" is a discriminating claim rather than a formality, and the
+  log that proves it is retained. Two structural controls sit alongside it: the driver asserts the
+  runner reached `setup complete, entering request loop` before starting the producer (so a runner
+  that died during weight load cannot look like a serving failure), and it fails the gate on either
+  process's non-zero exit rather than on the producer's alone.
+- **Deviations:** `DEC-106` (the geometry), `DEC-109` (one driver script instead of two terminals).
+- **Notes — what arm 2 settles.** `R-039` recorded that "the deployment pair itself has never been
+  run". It has now: chunk 8192 into a 131072-token cache, through the engine, on the real mesh. The
+  other half of `R-039` stands — the `sp_bootstrap` core is still reachable only at
+  `max_seq_len == chunk_size`, which this configuration never satisfies, so that core has a gate and
+  no deployment use. Note also that `max_seq_len > chunk_size` **strictly** in both arms, which is
+  the recipe's own warning (`BRINGUP_RECIPE.md:1948-1951`): at equality the SP bootstrap runs and
+  "anything you measure is measuring the wrong path". The runner logs which it is only indirectly;
+  `G-MESH-KV`'s harness asserts the core by name and this one inherits that geometry.
+
+### G-MOCK-MIG — KV correctness and the chunk table, read device-lessly in another process
+- **Command — two arms, and the second one exists because of `DEC-111`:**
+  - **arm 1 (the doc's Gate 1 as written):** `PREFILL_MOCK_MIGRATION=1` and
+    `PREFILL_ENABLE_LAYER_ACK=1` on the runner, `PREFILL_PRODUCER_CHECK_PCC=1` and
+    `PREFILL_PRODUCER_CHUNKS=4` on the producer. This takes `prefill_runner.py:570` (and, thanks to
+    `R-049`, `:699` as well), which passes **no** `stage_layout`.
+  - **arm 2 (the stage-gather path):** the same plus `PREFILL_ENABLE_MIGRATION=1`. This takes
+    `:626` (the real `allgather_kv_stage_layouts`), calls `kv_migration_base_address` at `:617`, and
+    builds the table at `:644` with `stage_layout=stage_layouts[0]`. It needs **no** tt-llm-engine
+    binaries — the worker handshake is only in the `else` branch at `:673` — and nothing in the doc
+    says this arm exists. It is the branch `DEC-111`'s wrong `stage_layout` type would have crashed
+    on, and arm 1 cannot reach it.
+- **Raw logs:** `raw/G-MOCK-MIG-producer_20260904T173939Z.log`,
+  `raw/G-MOCK-MIG-runner_20260904T173939Z.log.gz` (arm 1);
+  `raw/G-MOCK-MIG-STAGED-producer_20260904T180914Z.log`,
+  `raw/G-MOCK-MIG-STAGED-runner_20260904T180914Z.log.gz` (arm 2)
+- **Mesh / device:** the deployment `(4,8)`, single rank. `PREFILL_MOCK_MIGRATION=1` is single-rank
+  only by the engine's own check (`prefill_runner.py:691-697`).
+- **Inputs / input distribution:** the golden trace's 1024 `token_ids`, pushed as **4 chunks of
+  256**, real bf16 checkpoint weights. The read-back covers `[0, 1024)`, i.e. exactly the golden's
+  extent — nothing is scored against padding.
+- **Reference dtype policy:** the **fp32** golden trace, bit-identical to `LlamaModel`'s own loop
+  (`G-GOLDEN`), with K permuted HF -> Meta *before* any quantiser (§2.2.3a). The device cache is
+  `bfloat8_b` (`DEC-021`). The permutation is the producer's own
+  (`prefill_producer.py:552-557`), and it is byte-identical to this package's `meta_head_index` for
+  Llama because `ROTARY_DIM == HEAD_DIM`.
+- **Threshold:** producer PCC >= **0.93** — `PREFILL_STANDALONE_CHUNKED_PCC`, **the engine's own
+  default**, not ours (`BRINGUP_RECIPE.md`, Appendix A.2: "`0.93` is the disaggregated producer's own
+  default ... and is the engine's number, not ours"). The measured per-layer minimum is recorded
+  rather than just the pass.
+- **Computed noise floor:** not recomputed here — it is `G-KV-TP8`'s layer-0 **complete** floor, the
+  same producer and the same dtypes, which that gate measured against L0 K 0.9999617 (**1.10x**) and
+  L0 V 0.9999369 (**1.02x**), i.e. a floor of ~0.9999652 on K and ~0.9999381 on V. Recomputing it in
+  this process would mean rebuilding the whole fp32 reference chain outside pytest for no new
+  information, and P8 set the same precedent for `G-MESH-KV`.
+  **The ratio, at the precision available:** this gate's L0 is K **0.99996** / V **0.99994**, so the
+  error ratios are **~1.15x** and **~0.97x** — layer 0 sits *at* its floor, from a completely
+  different reader. The producer prints 5 decimals, which bounds those ratios at 1.01-1.29x (K) and
+  0.89-1.05x (V); the honest statement is "1x within the printed precision", and it independently
+  corroborates `G-KV-TP8`'s floor rather than assuming it. Depth, not the reader, is what moves the
+  number: L22's K and L28's V match `G-MESH-KV` exactly (below).
+- **Measured:**
+  ```
+  [producer] slot 0 llama31_8b_d_p packed-GQA KV PCC over [0,1024) across 32/32 local layers
+             -> K=0.99678 V=0.98662 (min 0.986623)
+  [producer] KV cache PCC PASSED (min 0.986623 >= 0.93 across 1 slots; per cache: k=0.996784, v=0.986623)
+  [producer] kv_cache_pcc_complete slots_checked=1 min_pcc=0.986623 k_pcc=0.996784 v_pcc=0.986623
+  ```
+  Per-layer minima: **K 0.996784 at layer 22**, **V 0.986623 at layer 28**. Layer 0 K 0.99996 /
+  V 0.99994, degrading monotonically-ish with depth as `G-CHUNK` and `G-MESH-KV` both found.
+  LayerAck drain: **128/128** in 0.42 s = 32 layers x 4 chunks exactly.
+
+  **Arm 2 reproduces every digit** — `min_pcc=0.986623 k_pcc=0.996784 v_pcc=0.986623`, drain
+  `128/128` in 0.41 s — through the engine's stage-gather branch, whose runner log carries
+  `[mock-migration] merged KV chunk table -> /tmp/llama_kv_chunk_table.pb (no migration worker)`
+  from `_serve_request:651`, i.e. immediately after the `:644` build. That line is the evidence that
+  `kv_migration_base_address` answered, `allgather_kv_stage_layouts` ran, and the gathered list
+  reached `assert_single_rank_stage` and was accepted.
+- **Verdict:** **PASS** — 0.986623 against 0.93 is **5.6x** the threshold's error budget on V.
+- **The explicit comparison the recipe asks for** (`BRINGUP_RECIPE.md:1956-1961`: this gate "is the
+  strongest evidence in the whole bring-up, because it is a second, device-less reader in a
+  different process agreeing with the on-device `G-MESH-KV` number at the same shape. **Compare the
+  two explicitly.**"):
+
+  | | reader | process | read path | min K | argmin | min V | argmin |
+  |---|---|---|---|---|---|---|---|
+  | `G-MESH-KV` (P8) | `tests/galaxy_prefill_kv_pcc.py` | the runtime's own | `ttnn.to_torch` on `get_device_tensors`, un-block-cyclic'd host-side | **0.9967844** | L22 | **0.9866232** | L28 |
+  | `G-MOCK-MIG` (P10) | `prefill_producer` | a **separate** one, no mesh open | `table.lookup` -> `read_dram_umd` -> bf8_b tile decode | **0.996784** | L22 | **0.986623** | L28 |
+
+  The two agree **to every digit the producer prints (6 decimals) and on both argmin layers**. They
+  share the golden trace and the model code and nothing else: different processes, different
+  position -> address derivations (one re-derives the block-cyclic map in Python, the other walks the
+  protobuf table the runtime published), different byte decoders. That is the strongest form the
+  comparison can take, and it also means the **table** and the **cache** are independently right —
+  a wrong table would have to be wrong in exactly the way that reproduces a correct read.
+  One difference worth noting: `G-MESH-KV` ran with `max_seq_len == 1024` and this ran with
+  **2816**, so the agreement additionally holds across a different cache capacity (and therefore a
+  different rope table extent and a different DRAM bank sweep).
+- **Negative controls (three):**
+  1. **The read-back branch itself.** Without `llama31_8b_d_p` in `_PACKED_GQA_MODELS` the dispatcher
+     falls through to the **MLA** reader (`prefill_producer.py:694`), which decodes a merged
+     latent+rope row — plausible bytes, wrong ones. Measured discrimination: the reader's own log
+     line now names `llama31_8b_d_p packed-GQA`, and had the branch been missing the gate would have
+     scored a differently-shaped tensor. `DEC-104`.
+  2. **The ack drain.** `128/128` is `num_layers x chunks`; the producer refuses to read at all
+     without the channel (`prefill_producer.py:1065-1071`) precisely because an H2D push returning is
+     not the layers being written. A runtime acking once per *chunk* instead of once per *layer*
+     would hang the drain at 4/128 — so the count is a control on `set_layer_ack_channel`, and
+     `G-RUNTIME` asserts the same property in isolation.
+  3. **The address table** has its own five controls in `G-KV-TABLE`, which is the whole reason that
+     gate exists: one PCC over one slot cannot separate a wrong table from a numerical problem.
+  4. **Arm 2 against arm 1.** Two different engine branches, two different sets of arguments into
+     `build_kv_chunk_table` (one with a gathered stage layout, one without), and the same PCC to
+     every printed digit. That is a control on the *arguments*: a table built differently under the
+     stage-gather path would not reproduce arm 1's number. It is also the control that was missing
+     when `DEC-111` shipped — arm 1 alone cannot distinguish "the guard is right" from "the guard is
+     never reached".
+- **Deviations:** `DEC-106` (geometry, chosen so this comparison is an identity rather than an
+  analogy); `DEC-111` (arm 2 added after the fact, with the defect it found).
+- **Notes.** Two undocumented requirements cost this gate a run each and are recorded as `R-046`:
+  the doc's hook table gives Gate 1 only `build_kv_chunk_table`, but the producer's PCC path also
+  needs `set_layer_ack_channel`; and the Gate-1 binding the doc prints omits
+  `PREFILL_ENABLE_LAYER_ACK=1`, which defaults to `0` on the mock path — so the documented
+  configuration exits 1 with "LayerAck channel missing".
+
+### G-KV-TABLE — the address table alone, bit-exactly
+- **Command:** `pytest models/demos/llama31_8b_d_p/tests/unit/test_kv_chunk_table.py -q -p no:randomly`
+- **Raw log:** `raw/G-KV-TABLE_20260904T172909Z.log`
+- **Mesh / device:** the full `(4,8)` galaxy, `FABRIC_1D`. Appendix A gives this gate "target mesh"
+  and it must be: the table's entire content is the SP x TP geometry. Opened as the **full** mesh,
+  never a top-level partial one (`BRINGUP_RECIPE.md:1672-1693`).
+- **Inputs / input distribution:** a **labelled probe**, not random data. Each head's 128 lanes carry
+  four 32-lane constant fields — `position % 128`, `position // 128 + 1`, `head + 1` (+16 for V),
+  and `slot * num_layers + layer + 1` — so the bytes at any address fully determine
+  `(position, head, slot, layer, K-or-V)`. 32 lanes is a multiple of `bfloat8_b`'s 16-element
+  exponent block, so every block is homogeneous and the value survives the dtype exactly. Every
+  label is **< 128**, `bfloat8_b`'s measured exact-integer ceiling — **not** the recipe's blanket
+  256, which is the bf16 ceiling (`DEC-044`, `R-013`). Written through the real `write_kv_chunk`, in
+  `SEQ_LEN // period` chunks with `kv_actual` advancing, so the cache holds the layout a chunked
+  prefill of that period actually produces.
+- **Reference dtype policy:** not applicable, and that is the point — **both comparands are device
+  bytes**. The primary assertion compares the UMD read against `ttnn.to_torch` of the same live
+  tensor, so no reference precision enters; the secondary one compares against the exact host labels,
+  which are integers representable in both dtypes.
+- **Threshold:** `torch.equal`, `rtol = atol = 0`, on every entry the table addresses; plus a control
+  that reads one head through another's config, which must **fail** (`BRINGUP_RECIPE.md:1962-1967`;
+  §2.5 — a rotated head-to-column mapping still scores PCC 0.99890, so PCC cannot be the
+  discriminator).
+- **Computed noise floor:** none, by construction. A bit-equality claim has no floor: the
+  discriminator is exact, which is precisely why §2.5 requires it for a mapping claim.
+- **Measured — 11/11 tests, 38.0 s:**
+
+  | claim | measured |
+  |---|---|
+  | geometry | **16 configs** (`k_h0..7`, `v_h0..7`), **1024 entries** per period, **4352 B/chunk** = `(128/32) x 1088`, `chunk_n_tokens` 32, `num_layers` 2, `num_slots` 2, `max_sequence_length` 512 |
+  | position -> address | **2048 chunks bit-identical** — 1024 at period 512 and 1024 at period 128 — against **both** the live device tensor and the host probe, `torch.equal` |
+  | head -> config -> chip | every config's device group holds **exactly one** chip, and it is `MeshCoordinate(sp_row, head)` compared on `(mesh_id, chip_id)` — never on values |
+  | K/V separation | configs `0..7` decode to K's labels, `8..15` to V's (the probe's head field differs by 16) |
+  | two resolution paths agree | the device-map + `read_dram_umd` path (the producer's) and the table's own control-plane `read_device_chunk` return **identical bytes** on 8 sampled entries |
+  | protobuf round trip | every address, size and device-group index preserved, **and** the config names come back as `00..15` — zero-padded, so `std::map` order equals numeric `config_id` order |
+- **Verdict:** **PASS**
+- **Negative controls (five, every one discriminates):** each reads a *confusable* neighbour of a
+  correct lookup and must not return the same bytes.
+
+  | control | what it confuses | `max|delta|` |
+  |---|---|---|
+  | `rotated_head` | head `c` through head `c+1`'s config — **the recipe's named control** | 1.0 |
+  | `k_through_v` | K's chunk through V's config, same head | 16.0 |
+  | `next_layer` | layer 0 through layer 1's row (the user-major packing's neighbour) | 1.0 |
+  | `next_position` | one 32-token block along | 32.0 |
+  | `next_slot` | slot 0 through slot 1 (the users share one tensor) | 2.0 |
+
+  The deltas are small **on purpose** — they are label distances, not error magnitudes — and that is
+  exactly why the gate is `torch.equal` and not PCC: `rotated_head` differs by 1.0 in one 32-lane
+  field out of four, which is the perturbation §2.5 measured at PCC 0.99890.
+  A sixth, structural control: the file's inverse block-cyclic map is checked against
+  `tests/galaxy_prefill_kv_pcc.py`'s forward map at every one of the 512 positions and asserted
+  injective, so a wrong inverse cannot make both sides of the live-cache comparison read the same
+  wrong rows.
+- **Deviations:** `DEC-099` (the address walk is imported from `gpt_oss_d_p`, not copied),
+  `DEC-100` (serialized through `serialize_prebuilt_kv_chunk_table`, not the helper the recipe
+  names — which cannot express 16 configs), `DEC-105` (function-scoped probe fixture).
+- **Notes — a partial failure that would have read as a pass.** The first draft cached the probe in a
+  **module**-scoped fixture. The repo's `mesh_device` fixture is function-scoped, so the mesh closes
+  between tests and the cached tensors belonged to a closed mesh:
+  `TT_FATAL @ tt_metal/distributed/mesh_device.cpp:845 ... cq_id 0 is out of range`. The tests that
+  only read **addresses** passed anyway — a stale tensor's `buffer_address()` still returns a
+  plausible number and the builder is pure host arithmetic — so a suite without the bit-exact arms
+  would have gone green on a closed mesh. `DEC-105`.
+  **What this gate does NOT prove:** that a real migration *worker* can use these addresses. It
+  proves they are right and readable over the same UMD path the worker uses; the worker itself is
+  `G-LOOPBACK`'s, which is out of scope (`DEC-103`, `R-043`).
+
+### G-RUNTIME (P10 extension) — the migration hooks, and the refusal that was wrong
+- **Command:** `pytest models/demos/llama31_8b_d_p/tests/unit/test_prefill_runtime_chunked.py -q -p no:randomly`
+- **Raw log:** `raw/G-RUNTIME_20260904T173636Z.log`
+- **Mesh / device:** **none**, as in P7. The three P10 hooks are reached with the same
+  `object.__new__` instance carrying only the attributes they read (`DEC-068`), and
+  `assert_single_rank_stage` is pure host arithmetic.
+- **Inputs:** the engine's own source, parsed with `ast` — **not** the contract doc.
+- **Reference dtype policy / noise floor:** not applicable; nothing numeric is measured.
+- **Threshold (extended):** everything P7's row required, **plus** — new, and the reason this
+  extension exists — **no refusal on a parameter the engine unconditionally passes**.
+- **Measured:** **48/48** tests, 22.0 s with `G-ADAPTER` in the same run. P7 stood at 37; P10 adds 12
+  and removes 2 (both of the removed ones asserted a **wrong** contract — see below).
+  - **Removed:** the `metadata_msg` refusal test. That refusal was **wrong**, and P7's own audit
+    passed it clean (`DEC-108`).
+  - **`set_layer_ack_channel`:** refuses before `compile()` (acking the warm-up chunks would put
+    `num_layers` phantom acks per warmed size into the channel and finish the producer's drain a
+    chunk early); and the registered callback injects **exactly `num_layers` per chunk** — 32, which
+    is what makes `G-MOCK-MIG`'s `128/128 = 32 x 4` drain the arithmetic it is.
+  - **`build_kv_chunk_table`'s multi-rank refusals — rewritten by `DEC-111`, having been wrong in
+    both directions.** 6 refused shapes (`first_layer_idx=8`; `num_my_layers=16` against a
+    32-layer runtime; a gathered list carrying **2 ranks**; a single stage covering 16 of 32 layers;
+    a bare `dict`, which is what the first draft believed the engine passed; and an empty list) and
+    3 accepted ones — the exact shapes the engine passes at `prefill_runner.py:570` (`path` only)
+    and `:644` (`first_layer_idx=0`, `num_my_layers=32`, and `stage_layout` as the gathered **list**
+    with one entry). The template `del`s all three arguments
+    (`models/demos/gpt_oss_d_p/tt/tt_prefill_runtime.py:388`).
+  - **The type belief itself is now tested**, not assumed: `test_the_gathered_stage_layout_really_is_a_list_of_dicts`
+    AST-walks `allgather_kv_stage_layout` and requires it to build a list it appends dicts to. That
+    is the check that would have caught `DEC-111` without a device.
+  - **`DEC-112`:** `build_kv_chunk_table` refuses more than one supported chunk size, because a
+    table describes exactly one block-cyclic period and a cache written at two has no single
+    address map — the only silent-wrong-answer path in the module.
+  - **`kv_migration_stages` asserted absent** and `kv_migration_base_address` asserted present, so
+    the engine's branch selection (`prefill_runner.py:613`) cannot flip by accident (`DEC-107`).
+  - **`kv_migration_base_address`** returns K's `buffer_address()`, read off the cache the engine
+    passed in — checked with both the bare cache and a one-element sequence.
+  - Refusal census: **22** `raise` statements in the runtime **+ 7** in
+    `tt/runners/kv_chunk_table.py`, counted with `ast` so a deleted refusal fails the count rather
+    than quietly losing coverage. (P10 turned three of the runtime's `raise` bodies into
+    implementations and added `DEC-112`'s; the table module's seven are `DEC-099`'s layout guard and
+    `DEC-111`'s six multi-rank refusals.)
+- **Verdict:** **PASS**
+- **Negative controls (four; P7's three plus one new):**
+  1. `_BrokenRuntime`, the doc-faithful runtime, still reported on three counts.
+  2. The audit's precondition: the walk must find a `prefill_chunk` call, a `compile` call, a
+     `config` access and a guarded hook.
+  3. The refusal census.
+  4. **New:** `test_every_parameter_the_engine_always_passes_is_accepted_or_used` reads the engine's
+     `prefill_chunk` keyword set out of the AST walk (asserting it is exactly the expected six, so a
+     changed engine fails loudly) and then requires the runtime's **body** — docstring excluded —
+     to contain no `<param> is not None` refusal for any of them **except** `d2h_service`, whose
+     exemption is justified in the assertion message. This is the control that would have caught
+     `DEC-108` statically.
+  5. **New, and it is `DEC-111`'s:** every refusal now has a **positive** counterpart asserting the
+     engine's real value is *accepted*. `test_build_kv_chunk_table_accepts_the_shapes_the_engine_really_passes`
+     is the one that was missing — the first version's "accepted" test passed a bare dict, i.e. the
+     same wrong belief the code held, so the pair could not falsify each other.
+- **Deviations:** `DEC-108` (a refusal that had to be removed), `DEC-111` (a refusal that was wrong
+  in both directions and a test that enshrined it), `DEC-112` (the period guard), plus P7's
+  `DEC-062`, `DEC-063`, `DEC-067`, `DEC-068` — with `DEC-063` now only half-standing: three of its
+  six hooks are implemented.
+- **What this extension does NOT prove, and it is the lesson worth carrying.** A static audit shows
+  that the runtime's signature **binds** the engine's call. It cannot show that the *values* the
+  engine binds are acceptable, because it never runs the body. `metadata_msg` bound fine and then
+  raised, and the cost of finding out was a mesh open, a 15 GB weight load, a `compile()` and a
+  served chunk — the exact expense `G-RUNTIME` exists to avoid, reached from the other side. Control
+  4 closes this particular hole; the general point is that a gate whose device column is "none"
+  cannot be the last word on a runtime, and `G-REQUEST` is what actually proves it serves.
+
+  **And `DEC-111` sharpens it further: a gate is only as good as the branches it takes.** Every P10
+  gate passed with a `stage_layout` guard that would have rejected every real migration run and
+  provided none of the multi-rank protection it advertised, because the only arm anyone had run was
+  the one arm that passes no `stage_layout` at all. Two things followed: `G-MOCK-MIG` grew arm 2
+  (the stage-gather path, which needs no extra binaries and which nothing in the engine's docs
+  mentions), and this file grew the rule that **every refusal needs a positive test on the engine's
+  real value**, not just a negative one on a plausible wrong value.
+
+### G-LOOPBACK — the real migration copy: **OUT OF SCOPE**
+- **Command:** none run.
+- **Mesh / device:** would be the target mesh **plus** the tt-llm-engine `migration_endpoint` and two
+  `migration_worker` processes.
+- **Threshold (unchanged, for whoever runs it):** `--verify-migration dst-bytes` — every destination
+  chunk byte-identical to its source.
+- **Verdict:** **OUT OF SCOPE** by `DEC-103`, with the residual gap enumerated as `07_RISKS.md`
+  **R-043**. Not `BLOCKED`: `HUMAN GATE H4` asks whose bug a red gate would be, and the answer here
+  is the engine's — the doc itself says the gate "verifies the *engine's* model-agnostic byte copy,
+  not this model", and its hook table gives `dst-bytes` **no** model-specific surface
+  (`PREFILL_MIGRATION_TESTING.md:544`).
+- **What stands in its place:** `G-KV-TABLE` proves the addresses the copy would read, **bit-exactly**,
+  over the same `read_dram_umd` path the worker uses, and `G-MOCK-MIG` proves the bytes at those
+  addresses are the right KV. **`G-MOCK-MIG` arm 2 then took most of the runner's real migration
+  path as well** — `allgather_kv_stage_layouts` (`prefill_runner.py:626`),
+  `kv_migration_base_address` (`:617`) and the merged-table build (`:644`) — because
+  `PREFILL_ENABLE_MIGRATION=1` with `PREFILL_MOCK_MIGRATION=1` needs no worker binaries, the
+  handshake being only in the `else` branch at `:673`. Nothing in the engine's documents mentions
+  that arm, and adding it is what found `DEC-111`. What is left unproven is **the transport itself**:
+  `publish_serialized_table_and_wait_ready`, the two worker processes, and the destination
+  read-back — itemised in `R-043`.
+- **Not faked.** `BRINGUP_RECIPE.md:1973` says "Do not fake it", and nothing here simulates a copy.
+
+### P10-REGRESSION — the whole package suite after P10's additions
+- **Command:** `pytest models/demos/llama31_8b_d_p/tests -q -p no:randomly`, with
+  `PREFILL_TRACE_DIR` at the **1024**-token golden trace, `TT_CACHE_PATH` and `HF_MODEL` set, and
+  `PREFILL_MODEL=llama31_8b_d_p` (which `tests/unit/test_kv_chunk_table.py` would otherwise
+  `setdefault` itself — set explicitly so the producer import in that file cannot resolve another
+  model's adapter).
+- **Mesh / device:** every shape the suite uses — `(1,1)` for P5-P7, submeshes and the full `(4,8)`
+  galaxy for P8 and P10.
+- **Threshold:** 0 failed (Appendix A's per-phase regression gate).
+- **Measured:** **246 passed, 0 failed**, 1420.59 s (23:40). P8 stood at 196, so P10 adds **50**
+  tests: `G-ADAPTER` **28**, `G-KV-TABLE` **11**, and `G-RUNTIME` **+11** (37 -> 48). `G-REQUEST` and
+  `G-MOCK-MIG` are two-process transcripts, not pytest, so they are not in this count — the same gap
+  `DEC-069` records for `G-GOLDEN`, `G-FABRIC-MATRIX` and `G-MESH-KV`, and it now covers five gates.
+- **Verdict:** **PASS**
+- **Notes, three of them worth a reader's attention:**
+  1. **This is the second run.** The first (started 17:49) was **killed at ~67 tests**, because the
+     independent review that found `DEC-111` landed while it was executing and its result would have
+     belonged to pre-fix code — the same reasoning `DEC-090` applied in P8, applied earlier this
+     time. Its partial log was deleted rather than kept: an incomplete regression is not evidence,
+     and a truncated log in `raw/` invites exactly the mis-citation `R-042` is about.
+  2. **`R-041` bit again, in the same place.** Running with `PREFILL_TRACE_DIR` at the 1024-token
+     trace rewrote `raw/G-CHUNK_per_layer_pcc.json` with 1024-token content while P7's ledger row
+     cites a 512-token measurement (`seq_len` 512 -> 1024, 210 lines). Backed up before the run and
+     restored after, and the restored file is byte-identical to P7's (`md5 2e89817a…`). The other
+     three per-layer JSONs the run touched (`G-CHUNK-ATTN`, `G-KV-TP8`, `G-MODEL`) differ from the
+     committed copies by **one line each** — a trailing newline the `end-of-file-fixer` hook added,
+     with no content change, verified key-by-key.
+  3. Run on the final tree, `-p no:randomly`, after every formatting hook, with
+     `PREFILL_MODEL=llama31_8b_d_p` exported so `tests/unit/test_kv_chunk_table.py`'s
+     `setdefault` before the producer import cannot resolve another model's adapter.
+
+### G-CITE (P10) — every `path:line` and every cited raw artefact resolves
+- **Command:** `python models/demos/llama31_8b_d_p/scripts/verify_citations.py`
+- **Threshold:** 0 mismatched, 0 unresolved, 0 missing artefacts (recipe §1.6, Appendix C item 7).
+- **Measured:** **604/604** content-checked citations (`CITES` grew 539 -> 604: 65 new rows, every one
+  of them a reference into the engine, its two contract documents, the imported table builder or the
+  recipe's own P10 section — the boundary this phase is entirely about, and pass 2 only
+  range-checks it). **1169/1169** doc refs resolved. **128/128** cited raw artefacts present.
+- **Verdict:** **PASS** — and it is the first fully clean run of all three passes: P8 finished
+  `PASS-WITH-DEVIATION` on two dangling P5 artefacts (`R-042`), which the orchestrator has since
+  repointed to the surviving authoritative logs.
+- **What it caught this phase, and both were real:**
+  1. **13 of this phase's own citations were wrong** on the first run — every one a line number
+     estimated before an edit shifted it, exactly the failure mode `§1.6` describes. Each was
+     corrected from the verifier's own "needle actually on lines" report, and the same corrections
+     were applied to the prose refs that quote the same numbers (which pass 2 would have reported
+     `resolved`, because they were wrong **but in range** — `R-016`).
+  2. **A P7 citation that this phase's own edit invalidated.** `DEC-104` renamed the producer's
+     packed-GQA reader and inserted `_PACKED_GQA_MODELS` above the dispatcher, which moved
+     `_read_slot_kv_and_check_pcc_mla` from line 511 to 694 — and a P7 `CITES` row pointed at 511.
+     Because that row is *content*-checked it failed loudly; had it been prose it would have
+     resolved in range and stayed silently wrong. The row now cites 694 with a comment naming the
+     cause.
+- **Negative control:** the two findings above are the control — the verifier failed on this
+  session's own work before it passed, on a tree that a formatting pass and a full regression had
+  already been run against. Plus `runner_utils.py` was cited by **basename** in two places and came
+  back `unresolved` until a full-path `CITES` row existed for it: the resolver builds its
+  basename index from `CITES` plus doc refs, so an abbreviated reference to a file nothing cites in
+  full cannot resolve. That is the right behaviour and it is why the two rows were added
+  content-checked rather than the refs spelled out.
+
+```
+STATUS after P10: gates PASS=28 FAIL=0 DEVIATION=2 OUT-OF-SCOPE=1 BLOCKED=0 | next: P9 (cleanliness)
+Open DECs needing review: DEC-095 (the weight-cache path carries no model name, so two models under
+one PREFILL_TTNN_CACHE would collide), DEC-096 (PREFILL_KV_ONLY_LAST_LAYER ignored with a warning
+rather than refused), DEC-097 (Topology.Linear pinned in code because this galaxy has no ring
+fabric — a torus machine needs an edit, R-031), DEC-098 (no cache-only build path — measured at 46 ms, not the tens of
+seconds the decision assumed, because safetensors mmaps and the populated cache never touches it), DEC-099 (the address walk is imported from
+models/demos/gpt_oss_d_p, a cross-package dependency — R-045), DEC-103 (G-LOOPBACK scoped out —
+R-043), DEC-104 (shared engine code changed: the producer's read-back branch)
+```
+
+`PASS=28` is P8's 24 plus `G-ADAPTER`, `G-REQUEST`, `G-MOCK-MIG` and `G-KV-TABLE`.
+`OUT-OF-SCOPE=1` is `G-LOOPBACK` (`DEC-103`), which Appendix C item 3 permits explicitly and which
+`R-043` enumerates. `DEVIATION=2` is unchanged from P8 (`G-ATTN`, `G-FABRIC-MATRIX`). `BLOCKED=0`.
+The two cross-cutting rows sit outside the Appendix A tally, as in every earlier phase:
+`P10-REGRESSION` and `G-CITE (P10)`.
+
+**Every gate Appendix A assigns to P10 has a recorded number and a raw log**, and the three that
+produce numbers carry an input distribution, a reference dtype policy, a floor (or a stated reason
+there is none) and a negative control. **P9 (cleanliness) is next, and it is the last phase.**
+
+Six things P9 should read before starting:
+
+1. **`DEC-108` and `DEC-111` are the phase's most important findings, and both are about method.**
+   Three times, a **refusal** was written from a parameter's *name* rather than from what the engine
+   actually puts in it — `metadata_msg` (always non-`None`; found by a served chunk) and
+   `stage_layout` (a list, not a dict; found by an independent review *after* every P10 gate had
+   passed). `G-RUNTIME`'s static audit passed all three, and in `DEC-111`'s case its own tests
+   asserted the wrong contract, so code and test could not falsify each other. Two rules came out of
+   it, and P9 should apply them to anything it touches: **every refusal needs a positive test on the
+   engine's real value**, and **a gate is only as good as the branches it takes** — the guard that
+   would have blocked every real migration run survived because no arm had taken that branch.
+2. **Three env-var reads are new**, all of them the engine's own variables rather than invented
+   ones: `PREFILL_HF_MODEL` and `PREFILL_TTNN_CACHE` (`tt/runners/adapters/llama.py`) and
+   `PREFILL_MODEL` (`tests/unit/test_kv_chunk_table.py`, a `setdefault` before the producer import).
+   P9 item 6's grep will also surface `HF_MODEL`, `TT_CACHE_PATH` and `PREFILL_TRACE_DIR`, which
+   pre-date this phase. The package still invents **no** `PREFILL_*` variable of its own: the
+   topology that would have needed one is pinned in code (`DEC-097`).
+3. **The README's status table** should carry `G-MOCK-MIG`'s numbers next to `G-MESH-KV`'s, because
+   the two agreeing to 6 decimals from different processes is the strongest single line in the
+   package's evidence.
+4. **P9 item 8 wants the import cost "measured against the template as a ratio".** `G-ADAPTER`
+   measures it absolutely (40.3 ms, 0 heavy modules, with a control). The ratio against
+   `models/demos/gpt_oss_d_p/tt/runners/adapters/gpt_oss.py` is still to do — note that the template
+   imports `models.common.utility_functions` and a reference config at module scope, so the ratio
+   will favour this one.
+5. **P9 item 9 (every `tt/` module owns a test).** P10 adds three modules:
+   `tt/runners/adapters/llama.py` -> `tests/unit/test_prefill_adapter.py`,
+   `tt/runners/kv_chunk_table.py` -> `tests/unit/test_kv_chunk_table.py` **and**
+   `tests/unit/test_prefill_runtime_chunked.py` (the multi-rank refusals), and the two
+   `__init__.py`s, which own nothing by convention. No gap opened.
+6. **`G-MOCK-MIG` has two arms now, and arm 2 needs no extra binaries.**
+   `PREFILL_ENABLE_MIGRATION=1` + `PREFILL_MOCK_MIGRATION=1` drives the engine's real stage-gather
+   branch (`prefill_runner.py:626`, `:644`) and `kv_migration_base_address`. No document mentions
+   it. If P9 re-runs one numerical gate (item 11), this is the one worth the device time.
+7. **The delivered tree matches `03_OUTLINE.md`'s tree exactly — 57 files — but the outline's own
+   prose says "41 tracked files at the end of P10" (`03_OUTLINE.md:102`).** Counting the file lines
+   in its tree gives 57, and `find` over the package (excluding `bringup_log/`, `generated/` and
+   `__pycache__`) gives 57. So P10 delivered the contracted tree file-for-file and the figure in the
+   prose is an arithmetic error, not a deviation. P9 should correct the sentence rather than the
+   tree. P10's own additions are the five the outline lists under `tt/runners/` plus
+   `tests/unit/test_prefill_adapter.py` and `tests/unit/test_kv_chunk_table.py` — seven, all of them
+   contracted.
+8. **`R-041` bit again, in the same place.** Running the suite with `PREFILL_TRACE_DIR` at the
+   1024-token trace overwrites `raw/G-CHUNK_per_layer_pcc.json`, whose P7 ledger row cites a
+   512-token measurement. It was backed up before this run and restored after, exactly as `DEC-091`
+   did in P8 — which means the workaround has now been needed twice and the kit defect is real.
+
+### Note — the kit's recipe was edited **out of band while this session was live** (`R-017` again)
+Between this phase's last clean citation pass and its final one, `BRINGUP_RECIPE.md` grew **23
+lines** (a new passage after `:1599` about the very defects `DEC-108` and `DEC-111` record) and
+`LANDMINES.md` grew a row. Nothing in this package changed. The effect was immediate and mechanical:
+**38 of this phase's content-checked citations into the recipe went red at once**, every one of them
+shifted by exactly +23.
+
+They were re-pointed mechanically — every `BRINGUP_RECIPE.md:N` with `N >= 1600`, in `CITES` (104
+rows rewritten) and in prose (26 files), plus the range forms — and the final pass is clean:
+**604/604 · 1169/1169 · 128/128**. Raw logs were **excluded** from the rewrite: they record what ran
+(`BRINGUP_RECIPE.md` §0.2 rule 4).
+
+**The rewrite reached beyond this phase's own files**, and that is worth flagging for a reviewer of
+the diff: `README.md`, `03_OUTLINE.md`, `04_CCL_PLAN.md` and fourteen P5-P8 test files all carry
+recipe references past `:1600` and all were shifted. Nothing about those files' *content* changed —
+only the line number each reference points at — and no `tt/` module was touched by it (the only
+`tt/` file this phase modified is `tt_prefill_runtime.py`, for the migration hooks it owns). The
+alternative was to leave earlier phases' citations wrong-but-in-range, which is precisely what
+`R-016` says is worse than no citation at all.
+
+Three things worth stating rather than absorbing:
+
+1. **This is `R-017` recurring, and it is now the second time.** P6 recorded it when the recipe grew
+   1986 -> 2017 lines after P5 was gated. The register's mitigation — "promote the load-bearing refs
+   into `CITES`" — is what made this instance *findable in seconds* instead of invisible: pass 1
+   content-checks, so all 38 failed loudly and each reported the line its needle had moved to. The
+   prose refs that pass 2 only range-checks would have stayed silently wrong, which is exactly
+   `R-016`. The mitigation worked; the underlying hazard did not go away.
+2. **§0.2's rule is about the worktree and should be about the *recipe* too.** "Never rename, move,
+   or restructure while a session is live" is written for the package. An edit to the specification
+   a live phase is citing has the same effect and is not covered: it invalidated 38 references
+   without touching a single file the phase owns.
+3. **The `LANDMINES.md` addition is malformed.** It was appended after a blank line following the
+   "Repo hooks that will block your commit" table, with **two** cells where that table has three
+   (`Hook | What it rejects | What to write instead`). It therefore renders as its own separate
+   two-column table rather than a row of the one above it — and its content is a *method* trap, so
+   the "Method traps" table immediately below is where it belongs. Recorded, not fixed: the kit is
+   not this session's to edit.
+
+**STOPPED HERE, ON A GATE BOUNDARY.** Every gate Appendix A assigns to P10 has run, with a recorded
+number and a raw log: `G-ADAPTER`, `G-REQUEST` (two arms), `G-MOCK-MIG` (two arms), `G-KV-TABLE`, and
+`G-LOOPBACK` scoped out by `DEC-103` with `R-043` enumerating what that costs. The regression is
+**246 passed, 0 failed** and the citation verifier is **604/604 · 1169/1169 · 128/128**.
+**P9 (cleanliness) is next, and it is the last phase.**

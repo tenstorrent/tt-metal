@@ -19,7 +19,7 @@ not executed here — `bringup_log/04_CCL_PLAN.md` §5 row 2 is P8's.
   device also stores are deliberately **not** quantised — the conservative reading, since
   quantising them would lower the floor and flatter every ratio.
 * **Thresholds:** PCC >= 0.999 @bf8_b and >= 0.9995 @bf16, **and <= 3x the floor at each dtype**
-  (`BRINGUP_RECIPE.md:1769`). Unlike `G-RMS` the ratio bound is *asserted* here, because Appendix A
+  (`BRINGUP_RECIPE.md:1792`). Unlike `G-RMS` the ratio bound is *asserted* here, because Appendix A
   states one for this gate.
 * **Negative control:** SiLU applied to `up` instead of `gate` must collapse (the recipe measured
   0.6462). Driven by swapping the `gate_proj` / `up_proj` entries of the state dict, so the control
@@ -45,7 +45,7 @@ SEQ_LENS = [32, 512, 4096]
 ACTIVATION_DTYPE = ttnn.bfloat16  # `DEC-022`
 WEIGHT_SCALE = 0.02
 
-# Per-dtype absolute threshold, `BRINGUP_RECIPE.md:1769`.
+# Per-dtype absolute threshold, `BRINGUP_RECIPE.md:1792`.
 PCC_THRESHOLD = {ttnn.bfloat8_b: 0.999, ttnn.bfloat16: 0.9995}
 # Recipe §2.2's stage budget, asserted for this gate.
 MAX_ERR_RATIO = 3.0

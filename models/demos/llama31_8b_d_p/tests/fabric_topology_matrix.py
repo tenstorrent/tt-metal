@@ -6,10 +6,10 @@
 
 **HF anchor:** none — this file holds no model math. It maps which mesh/fabric/topology
 combinations can run a collective **at all** on this box, and it must run **before every other P8
-gate** (`BRINGUP_RECIPE.md:1732-1734`), because two of the combinations below do not fail: they
+gate** (`BRINGUP_RECIPE.md:1755-1757`), because two of the combinations below do not fail: they
 **hang the machine**, and a hang is not contained. After one, every later collective on the box
 hangs too — including one that passed forty seconds earlier — until `tt-smi -r`
-(`BRINGUP_RECIPE.md:1683-1689`, `models/demos/common/bringup/LANDMINES.md` "Two overlapping live
+(`BRINGUP_RECIPE.md:1706-1712`, `models/demos/common/bringup/LANDMINES.md` "Two overlapping live
 submeshes").
 
 **So each case runs in its own subprocess with a timeout**, which is what turns a hang into a
@@ -94,7 +94,7 @@ CASES = [
         axis=1,
         expect="error",
         why="a top-level partial mesh: the opened devices' fabric routers wait on partners outside "
-        "the mesh (fabric_firmware_initializer.cpp:200). BRINGUP_RECIPE.md:1649-1670.",
+        "the mesh (fabric_firmware_initializer.cpp:200). BRINGUP_RECIPE.md:1672-1693.",
     ),
     dict(
         id="toplevel_2x8_fabric1d",
@@ -105,7 +105,7 @@ CASES = [
         links=1,
         axis=1,
         expect="error",
-        why="same as above at the shape P8 step 3 needs for 2-link Ring. BRINGUP_RECIPE.md:1649-1670.",
+        why="same as above at the shape P8 step 3 needs for 2-link Ring. BRINGUP_RECIPE.md:1672-1693.",
     ),
     # --- submeshes of the full (4,8): the form this package actually uses ------------------------
     dict(
@@ -141,7 +141,7 @@ CASES = [
         expect="ok",
         why="the shape whose apparent failure was misdiagnosed as a routing problem when the real "
         "variable was submesh overlap; running it ALONE is what falsified that story. "
-        "BRINGUP_RECIPE.md:1690-1700.",
+        "BRINGUP_RECIPE.md:1713-1723.",
     ),
     dict(
         id="submesh_1x8_ring_l1_ax1",
@@ -152,7 +152,7 @@ CASES = [
         links=1,
         axis=1,
         expect="ok",
-        why="G-KV-TP8's mesh with the deployment topology. BRINGUP_RECIPE.md:1697-1698 measured "
+        why="G-KV-TP8's mesh with the deployment topology. BRINGUP_RECIPE.md:1720-1721 measured "
         "(1,8)+Ring passing at 1 and 2 links.",
     ),
     dict(
@@ -167,7 +167,7 @@ CASES = [
         why="`get_default_num_links` returns 1 for ANY single-row mesh "
         "(models/demos/gpt_oss_d_p/utils/general_utils.py:33), so every (1,N) case above runs "
         "num_links=1 and never touches the deployment fabric. (2,8) is the cheapest shape that "
-        "exercises 2-link Ring. BRINGUP_RECIPE.md:1701-1709.",
+        "exercises 2-link Ring. BRINGUP_RECIPE.md:1724-1732.",
     ),
     dict(
         id="full_4x8_ring_l2_ax1",
@@ -219,7 +219,7 @@ CASES = [
         why="two overlapping submeshes live at once with no barrier between their phases. "
         "mesh_device.hpp:296-305 requires one and names quiesce_devices(); nothing enforces it. "
         "THE WORST LANDMINE IN THE SET: the hang is not contained and poisons the box until "
-        "tt-smi -r. BRINGUP_RECIPE.md:1671-1689.",
+        "tt-smi -r. BRINGUP_RECIPE.md:1694-1712.",
     ),
     # --- ADDENDUM, added after the first sweep -------------------------------------------------
     # The first sweep found that **every** `FABRIC_1D_RING` case fails on this machine: the only

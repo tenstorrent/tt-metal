@@ -19,7 +19,7 @@ are mapped into Meta layout by `_hf_to_meta` — the activation-space equivalent
 * **Input distribution:** standard normal, per head, over `[1, n_heads, S, 128]`.
 * **Reference dtype policy:** fp32 input, fp32 cos/sin, fp32 arithmetic. Only what the device
   *stores* — the bf16 input and the bf16 cos/sin — is quantised, and only for the floor.
-* **Threshold:** PCC >= 0.999 (`BRINGUP_RECIPE.md:1729`), expect ~0.99999. Ratio to the floor is
+* **Threshold:** PCC >= 0.999 (`BRINGUP_RECIPE.md:1752`), expect ~0.99999. Ratio to the floor is
   recorded.
 * **Negative controls, two:** an HF-layout tensor fed straight into the Meta op must collapse
   (without it, 0.99999 could mean "both sides are wrong the same way"); and the llama3 scaling

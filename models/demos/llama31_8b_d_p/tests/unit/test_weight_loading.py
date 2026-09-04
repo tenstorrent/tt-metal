@@ -447,7 +447,7 @@ def test_state_dict_prefixes_match_the_checkpoint():
 # (d) `G-WEIGHTS`, the P8 extension: the cache-only rebuild **at TP=8**, where the cache is
 # actually sharded.
 #
-# `BRINGUP_RECIPE.md:1785-1787`: "`ttnn.as_tensor` caches the already-sharded tensor, so a stale or
+# `BRINGUP_RECIPE.md:1808-1810`: "`ttnn.as_tensor` caches the already-sharded tensor, so a stale or
 # wrong-shape cache presents as 'one layer runs on garbage' and is first visible here, not at
 # `G-WEIGHTS`". The `(1,1)` arm above cannot see it for two reasons, both structural:
 #

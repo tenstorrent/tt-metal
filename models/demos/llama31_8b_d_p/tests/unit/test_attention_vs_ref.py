@@ -28,7 +28,7 @@ all-reduce tail is not executed (`bringup_log/04_CCL_PLAN.md` §5 row 1 is P8's)
   orthogonal, so `q·kᵀ` — and therefore the block output — is unchanged; only the **stage-level**
   Q/K comparisons need the reference permuted, exactly as
   `models/demos/minimax_m3/tests/unit/test_kv_cache_write_vs_ref.py:128-135` does it.
-* **Thresholds** (`BRINGUP_RECIPE.md:1770`): whole block PCC >= **0.999** and **<= 8x** its floor;
+* **Thresholds** (`BRINGUP_RECIPE.md:1793`): whole block PCC >= **0.999** and **<= 8x** its floor;
   each stage **this package implements** <= **3x** its own floor. The stage budgets are measured
   **stage-isolated** — each stage is fed the *reference's* input, quantised to the device dtype —
   because a stage fed the previous stage's device output would be measuring the accumulation, not
@@ -72,12 +72,12 @@ SEQ_LENS = [128, 512, 2048]
 ACTIVATION_DTYPE = ttnn.bfloat16  # `DEC-022`
 WEIGHT_SCALE = 0.02
 
-BLOCK_PCC_THRESHOLD = 0.999  # `BRINGUP_RECIPE.md:1770`
+BLOCK_PCC_THRESHOLD = 0.999  # `BRINGUP_RECIPE.md:1793`
 MAX_BLOCK_ERR_RATIO = 8.0
 MAX_STAGE_ERR_RATIO = 3.0
 SDPA_PROBE_PCC_THRESHOLD = 0.999  # the fused kernel measured 0.9999204 in the recipe's own run
 
-# `BRINGUP_RECIPE.md:1770`'s 8x block budget, applied to the raw ratio. It holds at bf8_b — the
+# `BRINGUP_RECIPE.md:1793`'s 8x block budget, applied to the raw ratio. It holds at bf8_b — the
 # package's weight dtype (`DEC-022`) and the dtype recipe §2.4's own attention-block row leads with
 # — and it does **not** hold at bf16, where a smaller floor error makes the same fused-kernel slack
 # a bigger multiple. `DEC-042` records the measurement, the attribution and the arithmetic; both

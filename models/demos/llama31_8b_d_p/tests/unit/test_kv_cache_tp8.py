@@ -9,11 +9,11 @@ the model emits **8** local KV heads into a slot that holds **one** — a shape 
 never produces and the write op rejects outright. So `G-KV` drove the op one synthetic head at a
 time and `07_RISKS.md` R-001 carried the gap: nothing had ever proved that the *model's* K and V,
 sharded by the weight loader's `column_parallel` mapper, land on the chips the cache expects. That
-is this file (`BRINGUP_RECIPE.md:1735-1741`, `:1735-1741`).
+is this file (`BRINGUP_RECIPE.md:1758-1764`, `:1735-1741`).
 
 **Why `(1, 8)` and not `(4, 8)`.** At `sp = 1` the block-cyclic sequence layout is the **identity**,
 so the only thing under test is the head/feature distribution and a failure can only be the mapper
-(`BRINGUP_RECIPE.md:1735-1737`). The block-cyclic reorder is `G-MESH-KV`'s at SP=4. The `(1,8)` mesh
+(`BRINGUP_RECIPE.md:1758-1760`). The block-cyclic reorder is `G-MESH-KV`'s at SP=4. The `(1,8)` mesh
 is a **submesh** of the full galaxy, never a top-level open (`G-FABRIC-MATRIX`).
 
 **The mapping is gated on bit-equality, never PCC** (recipe §2.5). The rotated-column control below
@@ -34,7 +34,7 @@ head `c` to build the `[1, 8, S, 128]` tensor it scores, which is the very claim
 
 **Why arm B carries `G-CHUNK`'s thresholds rather than picking fresh ones.** A threshold chosen
 here would be fitted to this measurement and could not fail; carrying P7's makes the TP split's cost
-readable directly (`BRINGUP_RECIPE.md:1738-1741`).
+readable directly (`BRINGUP_RECIPE.md:1761-1764`).
 
 **RoPE and the labelled probe.** Arm A runs **V** with RoPE on — V is never rotated, so its lanes
 survive the full path — and **K** with `transformation_mats=None`, because RoPE is
@@ -91,7 +91,7 @@ WEIGHT_DTYPE = ttnn.bfloat8_b  # `DEC-022`
 ACTIVATION_DTYPE = ttnn.bfloat16  # `DEC-022`
 CACHE_DTYPE = ttnn.bfloat8_b  # `DEC-021`
 
-# Carried from `G-CHUNK` verbatim (`BRINGUP_RECIPE.md:1738-1741`).
+# Carried from `G-CHUNK` verbatim (`BRINGUP_RECIPE.md:1761-1764`).
 GOLDEN_K_THRESHOLD = 0.99
 GOLDEN_V_THRESHOLD = 0.98
 MAX_L0_ERR_RATIO = 3.0

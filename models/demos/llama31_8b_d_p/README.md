@@ -9,7 +9,7 @@ against a torch/HF reference with the collectives living **inside** the modules.
 > **This file is a stub carrying P8's obligations only.** Phase P9 (cleanliness) owns the full
 > README — the "why not `models/common/`" answer, the run instructions, the env-var table and the
 > complete "not implemented" section. What is here is the status table `G-MESH-KV` requires
-> (`BRINGUP_RECIPE.md:1781-1784`) plus the machine facts a reader needs to reproduce it. The
+> (`BRINGUP_RECIPE.md:1804-1807`) plus the machine facts a reader needs to reproduce it. The
 > authoritative record is [`bringup_log/`](bringup_log/): `06_GATES.md` for the numbers,
 > `05_DECISIONS.md` for the reasoning, `07_RISKS.md` for what is still open.
 

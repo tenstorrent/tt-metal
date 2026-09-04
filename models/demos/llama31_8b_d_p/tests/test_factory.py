@@ -167,7 +167,7 @@ class TestFactory:
 # --------------------------------------------------------------------------------------------
 # P8: submeshes, and the fabric/topology pair that must be set together
 #
-# `BRINGUP_RECIPE.md:1649-1670`: on this galaxy a **top-level partial mesh** dies in fabric
+# `BRINGUP_RECIPE.md:1672-1693`: on this galaxy a **top-level partial mesh** dies in fabric
 # bring-up, because the routers on the opened devices wait for an ethernet handshake with
 # partners outside the mesh. So every P8 shape below `(4, 8)` is a **submesh** of the full mesh
 # (`tt_metal/api/tt-metalium/mesh_device.hpp:307`), measured by `G-FABRIC-MATRIX`.
@@ -278,7 +278,7 @@ class SubmeshPool:
     overlapping submeshes on the same physical devices" and names `quiesce_devices()`.
     **Nothing enforces it**, and forgetting it does not fail — it hangs the machine, and the hang is
     not contained: every later collective on the box hangs too, including ones that just passed,
-    until `tt-smi -r` (`BRINGUP_RECIPE.md:1671-1689`, `LANDMINES.md`, and `G-FABRIC-MATRIX` case
+    until `tt-smi -r` (`BRINGUP_RECIPE.md:1694-1712`, `LANDMINES.md`, and `G-FABRIC-MATRIX` case
     `overlap_1x2_then_1x8_no_quiesce` measures it).
 
     So this pool quiesces on **both** sides of every hand-out (`DEC-077`): a barrier before the
@@ -318,7 +318,7 @@ def submesh_pool(mesh_device):
     assert tuple(mesh_device.shape) == GALAXY_MESH_SHAPE, (
         f"the submesh pool expects the FULL {GALAXY_MESH_SHAPE} mesh as its parent, got "
         f"{tuple(mesh_device.shape)}; opening a partial shape top-level is the fabric-init trap "
-        f"(BRINGUP_RECIPE.md:1649-1670)"
+        f"(BRINGUP_RECIPE.md:1672-1693)"
     )
     pool = SubmeshPool(mesh_device)
     yield pool

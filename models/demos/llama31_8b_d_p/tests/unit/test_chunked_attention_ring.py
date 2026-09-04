@@ -10,7 +10,7 @@ twice with the same weights and the same tokens and two different attention core
 `G-CHUNK` (P7) proved deltas **1** (the indexed RoPE offset) and **2** (the advancing cache-write
 offset) exactly, on one card, by feeding both KV producers the same hidden states. It could not
 touch delta 3, which needs the ring path and TP=8, so it was recorded `BLOCKED` with `07_RISKS.md`
-R-023 naming P8 as the owner (`BRINGUP_RECIPE.md:1633-1637`). **This file is that gate.**
+R-023 naming P8 as the owner (`BRINGUP_RECIPE.md:1656-1660`). **This file is that gate.**
 
 ## The two arms, and the one model that runs both
 
@@ -30,7 +30,7 @@ passes but the numbers look too good | you measured the SP bootstrap because
 ## Why the threshold names a depth, and what is gated where
 
 A mutual-PCC claim ("path A == path B") is a **per-op** claim. Applied to a 32-layer accumulated
-statistic it measures depth, not the op (`BRINGUP_RECIPE.md:1745-1749`, and the same trap
+statistic it measures depth, not the op (`BRINGUP_RECIPE.md:1768-1772`, and the same trap
 `G-CHUNK`/`G-MODEL` carry). So:
 
 * **layer 1** — one attention layer has run, so the mutual K PCC there is the per-op claim.
@@ -83,7 +83,7 @@ from models.demos.llama31_8b_d_p.tt.attention.prefill import select_attention_co
 from models.demos.llama31_8b_d_p.tt.config import derive_head_dim
 from models.demos.llama31_8b_d_p.tt.model_config import ModelArgs
 
-# `BRINGUP_RECIPE.md:1745-1749`.
+# `BRINGUP_RECIPE.md:1768-1772`.
 PER_OP_PCC_THRESHOLD = 0.999  # at layer 1, and only there
 MAX_LAYER_STEP = 4.0
 FIRST_GATED_STEP_LAYER = 3  # "from layer 3", 0-based, as `G-CHUNK` uses

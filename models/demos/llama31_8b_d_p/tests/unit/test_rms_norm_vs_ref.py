@@ -16,7 +16,7 @@ The block: `out = x / sqrt(mean(x^2) + eps) * weight`, hidden 4096, `eps` from
   measured 0.9999867 versus 0.99995 on the same device output (recipe §2.1(a)).
 * **Noise floor:** computed in-test — quantise exactly what the device *stores* (bf16 activations,
   bf16 norm weight, `DEC-022`) and do the rest in fp32.
-* **Threshold:** PCC >= 0.9999 (`BRINGUP_RECIPE.md:1728`). The error ratio to the floor is
+* **Threshold:** PCC >= 0.9999 (`BRINGUP_RECIPE.md:1751`). The error ratio to the floor is
   **recorded, not asserted**: a correct module sits right on §2.2's 3x stage bound, so asserting it
   would gate on the wrong side of the noise (`BRINGUP_RECIPE.md:1043-1046`).
 * **Negative control:** a zero-gain probe must produce `max|out| = 0.0`. A Gemma `(1 + weight)`
