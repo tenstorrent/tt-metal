@@ -18,25 +18,25 @@ using namespace ckernel;
  *
  * The Z counter walks tiles across a single row of tiles, but it does not advance between rows. To tilize more than
  * one row of tiles, program this register to account for the offset of every row already completed. The offset is
- * in units of datums, so it is the number of datums in a row of tiles.
+ * in units of 16 datums (one face row), so it is the number of face rows in a row of tiles.
  *
  * @tparam UNP_SEL: Selects which unpacker resource to use, values = <p_unpacr::UNP_A/UNP_B/UNP_DEST>
  * @param tensor_shape: Tile shape info: num faces, face row/col dim, etc.
- * @param l1_base_idx: Offset of the current row of tiles, scaled to datums here.
+ * @param l1_base_idx: Offset of the current row of tiles.
  * @note Call this once per row of tiles, before the @ref _llk_unpack_tilize_ calls that tilize that row.
  */
 template <std::uint32_t UNP_SEL>
 inline void _llk_unpack_tilize_set_src_offset_(const TensorShape& tensor_shape, const std::uint32_t l1_base_idx)
 {
-    const std::uint32_t src_addr_offset_datums = l1_base_idx * tensor_shape.num_faces_c_dim;
+    const std::uint32_t src_addr_offset_face_rows = l1_base_idx * tensor_shape.num_faces_c_dim;
 
     if constexpr (UNP_SEL == p_unpacr::UNP_A || UNP_SEL == p_unpacr::UNP_DEST)
     {
-        cfg_rmw(THCON_UNPACKER0_REG0_TILIZE_SRC_ADDR_OFFSET_RMW, src_addr_offset_datums);
+        cfg_rmw(THCON_UNPACKER0_REG0_TILIZE_SRC_ADDR_OFFSET_RMW, src_addr_offset_face_rows);
     }
     else
     {
-        cfg_rmw(THCON_UNPACKER1_REG0_TILIZE_SRC_ADDR_OFFSET_RMW, src_addr_offset_datums);
+        cfg_rmw(THCON_UNPACKER1_REG0_TILIZE_SRC_ADDR_OFFSET_RMW, src_addr_offset_face_rows);
     }
 }
 
@@ -140,7 +140,8 @@ inline void _llk_unpack_tilize_init_(
  * @brief Unpacks and tilizes a single full 32x32 tile; works for UNP_A, UNP_B, UNP_DEST.
  *
  * @tparam UNP_SEL: Selects which unpacker resource to use, values = <p_unpacr::UNP_A/UNP_B/UNP_DEST>
- * @param l1_tile_idx: Index into the L1 buffer for a tile.
+ * @param l1_tile_idx: Within-row column index into the L1 buffer. The L1 base is carried by
+ *        @ref _llk_unpack_tilize_set_src_offset_, which the caller must set for the tile row.
  * @note Call @ref _llk_unpack_tilize_init_ with matching template args before this function.
  */
 template <std::uint32_t UNP_SEL>
@@ -238,7 +239,8 @@ inline void _llk_unpack_tilize_block_init_(const std::uint32_t buf_desc_id, cons
  * DST_Z_STRIDE=NUM_FACES). Call once per tile row, then call @ref _llk_unpack_dest_dvalid_section_done_
  * after all rows.
  *
- * @param l1_tile_idx: Index into the L1 buffer for the start of the current tile row.
+ * @param l1_tile_idx: Within-row column index into the L1 buffer. The L1 base is carried by
+ *        @ref _llk_unpack_tilize_set_src_offset_, which the caller must set for the tile row.
  * @param dest_tile_idx: Tile index within DEST for the first tile of this row.
  * @note Call @ref _llk_unpack_tilize_block_init_ before this function to program the MOP.
  */
