@@ -28,9 +28,7 @@ def score_activation(logits: torch.Tensor, score_func: str) -> torch.Tensor:
 
 
 def select_descending(scores, n, stable):
-    """Indices of the top ``n`` scores. ``stable`` breaks ties by lowest index, as torch documents
-    for ``sort(stable=True)`` and as ``moe_grouped_topk(stable_sort=True)`` promises; ``torch.topk``
-    itself is NOT stable, so the two cannot share one call."""
+    """Indices of the top ``n`` scores. ``stable`` breaks ties by lowest index``"""
     if stable:
         return torch.argsort(scores, dim=-1, descending=True, stable=True)[..., :n]
     return torch.topk(scores, n, dim=-1, sorted=True).indices
