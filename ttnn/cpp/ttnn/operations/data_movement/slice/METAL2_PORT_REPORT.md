@@ -4,22 +4,40 @@
 
 ## Outcome
 
-**`PORTED`** — `SliceTileProgramFactory` converted to `CustomProgramSpecFactoryConcept`, together with
-the two kernels it binds. The op's other four factories remain on `ProgramDescriptorFactoryConcept` and
-are enumerated for a later pass in `METAL2_PORT_PLAN.md` (*Deferred / Flagged*). The op builds and runs
-with its factories on mixed concepts, as designed.
+**`PORTED`** — **two** of slice's five factories converted to `CustomProgramSpecFactoryConcept`, in two
+separate passes, together with the kernels they bind:
+
+| Pass | Factory | Kernels converted | Notable |
+|---|---|---|---|
+| 1 | `SliceTileProgramFactory` | 2 owned | forced the `ccl/mesh_partition` change (below) |
+| 2 | `SliceTileTensorArgsProgramFactory` | 1 owned + **1 borrowed fork bound unmodified** | rung-1 fork reuse, a self-loop DFB, 4 tensor bindings |
+
+The remaining three (`SliceRmProgramFactory`, `SliceRmShardedProgramFactory`,
+`SliceRmStrideProgramFactory`) stay on `ProgramDescriptorFactoryConcept` and are enumerated in
+`METAL2_PORT_PLAN.md` (*Deferred / Flagged*). The op builds and runs with its factories on mixed
+concepts, as designed.
 
 **Verification.** Confirmed baseline `tests/ttnn/unit_tests/operations/data_movement/test_slice.py`:
 
 | | build | tests | legality checks live |
 |---|---|---|---|
 | pre-port | SUCCESS | **448 passed, 38 skipped** | ✓ 81 × `program_spec.cpp`, 81 × `program_run_args.cpp` |
-| post-port | SUCCESS | **448 passed, 38 skipped** | ✓ 188 × each |
+| after pass 1 | SUCCESS | **448 passed, 38 skipped** | ✓ 188 × each |
+| after pass 2 | SUCCESS | **448 passed, 38 skipped** | ✓ 200 × each |
 
-Test-name sets are identical between the two runs (diffed, empty). The single `TT_FATAL` in both logs is
-an expected negative-path assertion, present pre- and post-port. Run wall-clock differed (218 s → 99 s)
-purely from JIT kernel-cache warmth — **not** a performance claim; this port makes no perf assertion
+Test-name sets are identical across all three runs (diffed, empty). The single `TT_FATAL` in every log is
+an expected negative-path assertion, present throughout. The rising marker count (81 → 188 → 200) is an
+independent signal that each pass routed more programs through the Metal 2.0 spec path. Run wall-clock
+varied with JIT kernel-cache warmth only — **not** a performance claim; this port makes no perf assertion
 either way.
+
+**Each factory's cache-hit path is genuinely exercised**, which matters because on this concept the
+override owns the tensor bindings and an omission fails *only* on cache hits:
+- Pass 1: `test_slice_override_addr_change_interleaved[tile]` runs the op twice at **different input
+  buffer addresses**, asserts a real cache hit, and PCC-checks the second result.
+- Pass 2: 9 × `test_slice_tensor_args`, 16 × `test_slice_tensor_args_device_path`, 21 ×
+  `test_slice_tensor_args_upper_dim_offset` (which exercises the device-side Horner offset loop), and
+  49 × `test_slice_subcores`.
 
 **The realized concept was proven, not assumed.** A factory whose `override_runtime_arguments` has the
 wrong return type falls back to `ProgramSpecFactoryConcept` *silently*, and the override never runs. A
@@ -45,10 +63,12 @@ git log -1 --format='%h %cs %s' -- docs/source/tt-metalium/tt_metal/apis/host_ap
 
 **`CustomProgramSpecFactoryConcept`**, as the audit chose. Not re-decided.
 
-The override returns a `TensorArgument` for **every** `TensorParameter` bound to an io tensor — `INPUT`
-and `OUTPUT`, both on every dispatch. None deliberately skipped. This matches what the ported-from
-override did: `patch_slice_program_addresses` refreshed the input base (as a common-RTA slot) and the
-output base (as writer RTA slot 0) on every cache hit.
+Both ported factories return a `TensorArgument` for **every** `TensorParameter` bound to an io tensor,
+on every dispatch — pass 1: `input`, `output`; pass 2: `input`, `start`, `end`, `output`. None
+deliberately skipped. That matches what the ported-from override did in both cases:
+`patch_slice_program_addresses` refreshed the read-side bases (common-RTA slots — one for pass 1, three
+for pass 2, `slice_program_factory_rm_sharded.cpp:396-403`) and the output base (writer RTA slot 0, via
+`patch_slot0`) on every cache hit.
 
 **One subtlety consciously dropped**, per the recipe's instruction to preserve-or-consciously-drop it:
 the legacy `patch_slot0` helper (`slice_program_factory_rm_sharded.cpp:372-378`) deliberately **skipped
@@ -96,8 +116,8 @@ complete and be inert.
 file outside the op directory changed:
 - `ccl/mesh_partition/device/mesh_partition_program_factory.cpp` — `create_at` now `if constexpr`-branches
   on the ported factory and builds its `Program` via `MakeProgramFromSpec` + `SetProgramRunArgs`;
-  `override_runtime_arguments` routes it through `UpdateProgramRunArgs`. The other four factories keep the
-  `Program{descriptor}` / `patch_slice_program_addresses` path unchanged.
+  `override_runtime_arguments` routes it through `UpdateProgramRunArgs`. The still-unported factories keep
+  the `Program{descriptor}` / `patch_slice_program_addresses` path unchanged.
 - The branch predicate is a local concept, `detail::IsSliceSpecFactory`, keyed on the presence of
   `create_program_artifacts` rather than on a list of factory names — so the next slice factory to
   migrate needs **no** further edit here, which was the point of the recommendation below.
@@ -188,13 +208,20 @@ here.)*
    assertion by the op owners if rank-1 tiled tensors ever become representable. Note the same shape
    appears in `slice_tile_dynamic_args`, which this port leaves untouched.
 
-3. **`patch_slice_program_addresses`' `SliceTileProgramFactory` arm is now dead code.** The shared
-   function (`slice_program_factory_rm_sharded.cpp:383-411`) still carries an
-   `if constexpr (… SliceTileProgramFactory || … SliceTileTensorArgsProgramFactory)` branch. Nothing
-   routes the ported factory there any more — slice's own dispatch goes through the new override, and
-   MeshPartition now branches before the call. **Left exactly as it is**: the branch is shared with the
-   still-unported `SliceTileTensorArgsProgramFactory`, and narrowing the condition would be a cleanup
-   bundled into a port. Whoever ports the tensor-args factory retires the whole arm.
+3. **`patch_slice_program_addresses`' tile arm is now entirely dead, and so is `slice_tile_dynamic_args`.**
+   After pass 2 *both* tile factories are ported, so nothing can reach the
+   `if constexpr (… SliceTileProgramFactory || … SliceTileTensorArgsProgramFactory)` branch
+   (`slice_program_factory_rm_sharded.cpp:383-411`): slice's own dispatch goes through the new overrides,
+   and MeshPartition branches before the call. The helper that branch calls,
+   `slice_tile_dynamic_args` (defined in `slice_program_factory_tile.cpp`, declared in its header), now
+   has **no caller anywhere**.
+
+   **Both left exactly as they are.** Deleting them is a cleanup, not a forced consequence of the port —
+   the code still compiles and the deletion would bundle a tidy-up into a port diff. This is the one
+   piece of genuinely dead code the two passes leave behind, and it is a clean, self-contained follow-up:
+   remove the tile arm from the `if constexpr`, drop `slice_tile_dynamic_args` and its declaration. It
+   should probably go with whichever change next touches `slice_program_factory_rm_sharded.cpp` — most
+   likely the port of the sharded factory itself, which owns that file.
 
 ## Successes
 
@@ -227,6 +254,27 @@ here.)*
 - **[Recipe — the atomic unit is one ProgramFactory]** with its "don't raise a which-factory question"
   instruction was the right call for a five-factory op. Picking `SliceTileProgramFactory` autonomously and
   enumerating the rest kept this pass tractable; the instruction to *not* ask saved a round trip.
+
+- **[Caution: Porting a shared kernel] rung 1 worked exactly as specified — pass 2.** The borrowed
+  eltwise writer already had a `_metal2` sibling, and every instruction in the rung-1 bullet earned its
+  place: the **locational `ls`** (rather than a tree-wide filename grep, which would have surfaced
+  out-of-bounds quasar `_metal2` files and no useful sibling); the **fit check** before committing to
+  reuse; and the framing that the fork's names are *"now your constraint, not a free choice."* The fit
+  was exact — `args::num_pages` / `args::start_id` / `dfb::out` / `tensor::dst` map onto the legacy
+  writer's four slots with nothing left over, and slice supplies no `defines` so neither of the fork's
+  `#ifdef`s needed feeding. Nothing created, nothing modified in the peer directory, and no pointer
+  comment to add (the original already carries one). Total cost: one `ls`, one read, one table.
+
+  Worth noting *why* it was exact, since it is the entry's own argument for its naming rule: the fork was
+  named from the **kernel's** vocabulary rather than a consumer's locals, so a second consumer arriving
+  months later fit it without a rename. That is the rule paying off in the wild, not in theory.
+
+- **[Pattern: Unity-build hygiene for anonymous-namespace symbols] predicted a failure precisely — and
+  it is a *second-port* failure, which is why it still bit.** See Friction → Gap 7 for the placement
+  problem, but the entry itself was exactly right, down to the mechanism: two factories of the same op,
+  anonymous namespaces merged by the unity build, helper names duplicated. The compiler error was the
+  entry's scenario verbatim (*"functions that differ only in their return type cannot be overloaded"*),
+  and the prescribed fix — prefix per-factory symbols — resolved it in one edit.
 
 - **The repo already enforces two of the recipe's anti-patterns as pre-commit hooks, and the recipe
   never mentions them.** The commit ran `Detect smuggled buffer-address runtime args in descriptor
@@ -350,9 +398,29 @@ here.)*
    **Suggested fix:** add `Findings` to the enumerated structure, or change the Scope-discipline wording
    to name the section that is actually meant.
 
+7. **The unity-build collision is a *second-port* hazard, and nothing signposts it where a porter will
+    be standing.** [Pattern: Unity-build hygiene for anonymous-namespace symbols] describes this failure
+    exactly and prescribes the right fix — but it is structurally invisible on the *first* port of an op,
+    because there is nothing yet to collide with. It fires on the second, and the second port is
+    precisely when the porter is most likely to work by copying the shape of the first — which is what
+    reproduces the duplicate names. I hit it: `resolve_work_split` and `add_per_node_run_args` existed in
+    both tile factories' anonymous namespaces, and the first pair differed *only* in return type, which
+    is not even a legal overload.
+
+    The recipe's [atomic-unit note] is where a porter decides to do one factory at a time, and it is
+    where this belongs. **Suggested fix:** one clause there — *"when you port a second factory of the
+    same op, prefix its file-local helper and constant names; the anonymous namespaces merge in the unity
+    build, and helpers copied from your first pass will collide. See [Unity-build hygiene]."* Cheap, and
+    it lands the warning at the moment the multi-pass decision is made rather than in a catalog entry the
+    porter has no reason to re-read.
+
+    Mitigating note in the recipe's favour: the failure is **loud** (a compile error naming both the
+    function and the reason), so it costs a build cycle, not a debugging session. That is why this is a
+    Gap and not something stronger.
+
 ### Confusion
 
-7. **The "prove the legality checks are live" step cannot be run as written, before the port.** The recipe
+8. **The "prove the legality checks are live" step cannot be run as written, before the port.** The recipe
    says: *"Rebuild, run one test, and grep the log for `METAL2_CHECKS_FORCED` — **two markers present**
    means both translation units are fresh."* But `BuildProgramFromSpec` and `SetProgramRunArgs` only
    execute when something builds a Metal 2.0 program. Pre-port, the op you are about to port is by
@@ -370,7 +438,13 @@ here.)*
    proof runs *after* the first ported build, or name a known-ported op's test as the pre-port probe;
    and (b) give the disambiguating command, or tell the porter to use two distinct marker strings.
 
-8. **`Buffer*`-in-an-`RTArgList` reads as an anti-pattern check failure when it is the thing being
+   **Minor corollary:** the self-audit's scaffolding check,
+   `git diff "$BASE" | grep -nE 'METAL2_CHECKS_FORCED|DO NOT COMMIT'`, expects no output — but it scans
+   the *whole* diff, including `METAL2_PORT_REPORT.md`. Any report that discusses this step (i.e. exactly
+   the friction the recipe asks for) trips its own check. Scoping that grep to code files, as the
+   neighbouring ephemeral-`.md` check already does, would fix it.
+
+9. **`Buffer*`-in-an-`RTArgList` reads as an anti-pattern check failure when it is the thing being
    removed.** The self-audit says to search the factory for *"`emplace_runtime_args` / a bare `Buffer*`"*
    and expect zero hits. In this op **every** address travels that way pre-port — the audit's own Recipe
    note 3 makes the same observation about the roll-up vocabulary. Post-port the check is clean for the
@@ -380,7 +454,7 @@ here.)*
    port one factory at a time. **Suggested fix:** note in the self-audit that on a partial-op port the
    sweeps are scoped to the ported factory's files, and say which files those are.
 
-9. **Doc-size note, offered as calibration rather than a complaint.** The mandatory reading before the
+10. **Doc-size note, offered as calibration rather than a complaint.** The mandatory reading before the
    first edit is ~62k tokens of recipe plus the brief, the audit, `ttnn_factory.md`, `port_patterns.md`
    and parts of `migration_guide.md` — comfortably inside a 1M primary session (as the recipe intends),
    but it front-loads a large fixed cost onto every port, including a two-kernel one like this. The
@@ -390,12 +464,28 @@ here.)*
 
 ## Open items for downstream
 
-- **Shared kernel touches:** **none for this factory.** Both sources are bound only by
-  `SliceTileProgramFactory` and were converted in place. Census run and disambiguated —
-  see `METAL2_PORT_PLAN.md` → *Shared kernels*. The op's *other* factories do have a shared-kernel case
-  (`SliceTileTensorArgsProgramFactory` borrows `eltwise/unary`'s
-  `writer_unary_interleaved_start_id.cpp`, which already has a `_metal2` fork to bind at rung 1); that is
-  the next porter's item, not this pass's.
+- **Shared kernel touches.**
+
+  *Pass 1 — none.* Both of `SliceTileProgramFactory`'s sources are bound only by that factory and were
+  converted in place. Census run and disambiguated (see `METAL2_PORT_PLAN.md` → *Shared kernels*),
+  including the same-basename trap.
+
+  *Pass 2 — one, taken at **rung 1 (reused an existing fork)**:*
+  - **(a) Kernel:** `ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp`
+    (borrowed by `SliceTileTensorArgsProgramFactory`).
+  - **(b) Rung taken:** **reused the existing fork** at
+    `ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id_metal2.cpp`.
+    **No new file created**, nothing modified in the peer directory, and no pointer comment added — the
+    legacy original already carries one. The fork's vocabulary (`dfb::out`, `tensor::dst`,
+    `args::num_pages`, `args::start_id`) was adopted as-is; it fit exactly, with no rename on either side.
+  - **(c) Remaining unmigrated consumers of the legacy copy** (the sunset list — **not** authorization to
+    convert it in place; issue **#52228** tracks it): `experimental/transformer/nlp_concat_heads_boltz`,
+    `experimental/transformer/nlp_concat_heads`, `experimental/matmul/attn_matmul`, `embedding` (fused),
+    `examples/example` (multi-core and single-core), `data_movement/reshape_on_device`,
+    `data_movement/tilize` (four factories), `data_movement/concat`, `eltwise/unary_backward/tanh_bw`.
+    Slice's tensor-args factory is now **off** that list; the other 14 consumers remain.
+  - The fork's own header also names a **third** copy under `copy/typecast/` that should be consolidated
+    onto it. That is pre-existing and untouched by this port.
 
 - **Two near-identical writer kernels are now both on Metal 2.0 and could be consolidated.** Slice's own
   `device/kernels/dataflow/writer_unary_interleaved_start_id.cpp` (converted by this port) and

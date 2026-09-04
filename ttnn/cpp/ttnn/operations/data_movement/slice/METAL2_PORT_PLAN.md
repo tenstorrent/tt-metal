@@ -3,10 +3,16 @@
 Port plan for `slice`, ported from `ProgramDescriptorFactoryConcept` to Metal 2.0.
 Written during the inventory and planning steps; committed alongside the port for review.
 
-**Scope of this pass:** `SliceTileProgramFactory` only — one of the op's five factories.
-Per the recipe's atomic-unit note, a factory is the unit of a port; the other four stay on
-`ProgramDescriptorFactoryConcept` and the op keeps building and running. The remaining four are
-enumerated under [Deferred / Flagged](#deferred--flagged) for the next pass.
+**Scope:** two of the op's five factories, ported one at a time in separate passes —
+**`SliceTileProgramFactory`** (pass 1) and **`SliceTileTensorArgsProgramFactory`** (pass 2).
+Per the recipe's atomic-unit note, a factory is the unit of a port; the other three stay on
+`ProgramDescriptorFactoryConcept` and the op keeps building and running with its factories on mixed
+concepts. The remaining three are enumerated under [Deferred / Flagged](#deferred--flagged).
+
+Pass 1's inventory and plan are below; **pass 2 has its own section at the end**
+([Pass 2 — `SliceTileTensorArgsProgramFactory`](#pass-2--slicetiletensorargsprogramfactory)), since
+the two factories differ materially: pass 2 borrows a kernel from another op (rung-1 fork reuse),
+carries a self-loop DFB, and binds four tensors instead of two.
 
 ---
 
@@ -280,4 +286,129 @@ was never read across dispatches. Recorded as friction, not as an improvement.
   | `SliceRmProgramFactory` | 2 owned | RM reader hardcodes its DFB index in-kernel (no host CTA to drop); vararg blocks at runtime-computed addresses |
   | `SliceRmShardedProgramFactory` | 1 owned | Two **borrowed-memory** DFBs, two **DM self-loops** (Gen1-legal, Quasar-uplift debt); hosts the shared `patch_slice_program_addresses` |
   | `SliceRmStrideProgramFactory` | 4 owned | Runtime kernel-source selection on rank (4D vs ND) — all four sources must convert together |
-  | `SliceTileTensorArgsProgramFactory` | 1 owned + 1 **borrowed** | Binds the existing `writer_unary_interleaved_start_id_metal2.cpp` fork (rung 1); `c_1` needs a self-loop |
+
+---
+
+# Pass 2 — `SliceTileTensorArgsProgramFactory`
+
+Selected by `use_tensor_args` — the **first** check in `select_program_factory`
+(`slice_device_operation.cpp:317-319`), ahead of the layout branch, so this factory is chosen purely by
+that flag. Picked as pass 2 because it exercises three recipe paths pass 1 did not: **rung-1 shared-kernel
+fork reuse**, a **self-loop DFB**, and **four tensor bindings** (two of them optional-in-the-signature).
+
+## Legacy Inventory
+
+### Kernels
+
+| unique_id | source | core_ranges | CTAs (positional) | RTAs | CRTAs | opt_level | config |
+|---|---|---|---|---|---|---|---|
+| reader | `slice/…/reader_unary_unpad_dims_interleaved_start_id_tensor_args.cpp` (owned) | `all_cores` | `{src0_cb_index, tensor_cb_index, num_dims, tile_width, tile_height}` + 3 chained `TensorAccessorArgs` (`tile_tensor_args.cpp:80-84`) | `[start_id, num_tiles, id_per_dim×num_dims]` | `[Buffer* src, Buffer* start, Buffer* end, unpadded×num_dims, padded×num_dims, input_shape×num_dims]` (`:180-186`) | absent → **O2** (DM) | `ReaderConfigDescriptor{}` |
+| writer | `eltwise/unary/…/writer_unary_interleaved_start_id.cpp` (**borrowed**) | `all_cores` | `{src0_cb_index}` + `TensorAccessorArgs(dst)` (`:86-87`) | `[Buffer* dst, num_tiles, num_tiles_written]` | none | absent → **O2** (DM) | `WriterConfigDescriptor{}` |
+
+No compute kernel, so rule 2 of [Compiler options] does not fire; both DM defaults already land on Metal 2.0's `O2`.
+
+### CBs
+
+| index | total_size | data_format | page_size | tile |
+|---|---|---|---|---|
+| `src0_cb_index = 0` | `2 * single_tile_size` | input dtype | `single_tile_size` | not set |
+| `tensor_cb_index = 1` | `single_tile_size` | input dtype | `single_tile_size` | not set |
+
+### Shared kernels — **the rung-1 case**
+
+| Kernel | Kind | Rung | Detail |
+|---|---|---|---|
+| `eltwise/unary/…/writer_unary_interleaved_start_id.cpp` | **borrowed** | **1 — reuse the existing fork** | `ls` of the original's directory shows the sibling `writer_unary_interleaved_start_id_metal2.cpp` (non-quasar). Bound as-is; **not** re-forked, **not** modified. The original already carries its pointer comment, so nothing to add there either. |
+| `slice/…/reader_unary_unpad_dims_interleaved_start_id_tensor_args.cpp` | owned, not shared | n/a | Basename census returned only this factory (plus a prose hit in the brief, discarded). Converted in place. |
+
+**Fork fit check** (the recipe requires this before committing to reuse — the fork's vocabulary becomes
+*my* constraint, since other ops bind it):
+
+| Fork provides | Legacy writer wanted | Fit |
+|---|---|---|
+| `args::num_pages` | RTA slot 1 = `num_tiles_per_core` | ✓ |
+| `args::start_id` | RTA slot 2 = `num_tiles_written` | ✓ |
+| `dfb::out` | CTA 0 = `src0_cb_index` | ✓ |
+| `tensor::dst` | RTA slot 0 = `dst_buffer` | ✓ |
+| `#ifdef OUT_SHARDED`, `#ifdef BACKWARDS` | slice sets **no** kernel `defines` | ✓ nothing to supply |
+
+Exact fit — no rename needed on either side, and no reason to reach for rung 2 or 3.
+
+## Planned Spec Shape
+
+- **KernelSpecs** (2): `TTA_READER` (owned source), `TTA_WRITER` (**the `_metal2` fork's path**).
+- **DataflowBufferSpecs** (2): `"tiles"` (entry_size = tile, 2 entries), `"index"` (entry_size = tile, 1 entry).
+- **TensorParameters** (4): `input`, `start`, `end`, `output` — all strict, relaxations `none`.
+- **WorkUnitSpecs** (1): `{reader, writer}` over `all_cores`.
+- **SemaphoreSpecs / op-owned tensors**: none.
+
+### DFB endpoint census — re-derived
+
+| DFB | Touchers on a node | Disposition |
+|---|---|---|
+| `tiles` (`c_0`) | reader `reserve_back`/`push_back` (**locked producer**, `reader_…_tensor_args.cpp:117,120`); writer `wait_front`/`pop_front` (**locked consumer**) | 2 touchers, one locked to each role → **1P + 1C**, no flag |
+| `index` (`c_1`) | reader only — and it drives **all four** FIFO calls (`:52,58,59,66` and `:69,75,76,83`) | 1 toucher → **self-loop**: bind the reader PRODUCER **and** CONSUMER, one shared accessor name |
+
+Agrees with the brief. The self-loop is on a **DM** kernel — legal on Gen1, rejected on Gen2, so it is
+Quasar-uplift debt for that later audit, not a blocker here. Note it is *not* stacked with the
+multi-binding flag; the catalog explicitly calls that combination the tell of a mis-slotted 1:1.
+
+### Binding names
+
+| Resource | Spec name | Reader | Writer |
+|---|---|---|---|
+| tiles DFB | `"tiles"` | `dfb::in0` (PRODUCER) | `dfb::out` (CONSUMER) — **fork-dictated** |
+| index DFB | `"index"` | `dfb::index` (PRODUCER **and** CONSUMER) | — |
+| `input` | `"input"` | `tensor::src` | — |
+| `start` | `"start"` | `tensor::start` | — |
+| `end` | `"end"` | `tensor::end` | — |
+| `output` | `"output"` | — | `tensor::dst` — **fork-dictated** |
+
+## Dropped Plumbing
+
+| legacy location | legacy form | Metal 2.0 replacement |
+|---|---|---|
+| `tile_tensor_args.cpp:182-184` — reader CRTA slots 0,1,2 | three `Buffer*` pushes | three `TensorBinding`s + `TensorArgument`s |
+| `:151,168` — writer RTA slot 0 | `Buffer*` | `TensorBinding{OUTPUT,"dst"}` |
+| `:82-84` — reader CTAs | 3 chained `TensorAccessorArgs`, incl. the `next_compile_time_args_offset()` chain at `reader_…:17-19` | binding mechanism end-to-end |
+| `:87` — writer CTAs | `TensorAccessorArgs(dst)` | binding mechanism |
+| `:80` — reader CTAs 0,1 | `src0_cb_index`, `tensor_cb_index` | two `DFBBinding`s |
+| `:86` — writer CTA 0 | `src0_cb_index` | `DFBBinding{TILES,"out",CONSUMER}` |
+| `:80` — reader CTAs 2,3,4 | positional `num_dims`, `tile_width`, `tile_height` | **named** CTAs |
+| reader RTA 0,1 / writer RTA 1,2 | positional | **named** RTAs |
+
+### Retained as varargs
+
+| Channel | Block | Count | Why |
+|---|---|---|---|
+| reader RTA | `id_per_dim` | `num_dims` | indexed-collection element in a `num_dims`-bounded loop; **mutated**, so copied to a local (same forced pattern as pass 1) |
+| reader CRTA | unpadded, padded, **input_shape** — three blocks | `3 × num_dims` | all three indexed by dimension. `input_shape` is read three ways (`[num_dims-1]`, `[num_dims-2]`, and `[i]` in the Horner loop) — unambiguously a collection |
+
+The three CRTA blocks are addressed kernel-side through three small named accessors over
+`get_common_vararg`, preserving the legacy pointer names (`num_unpadded_tiles`, `num_padded_tiles`,
+`input_shape_arg`) so the reads at the use sites still say what they mean.
+
+## Applied Patterns
+
+- **[Caution: Porting a shared kernel] — rung 1 (reuse existing fork).** Bound
+  `writer_unary_interleaved_start_id_metal2.cpp`; created nothing, modified nothing in the peer directory.
+- **[Pattern: Sync-free and single-ended CBs → self-loop DFB]** — the `index` staging buffer.
+- **[Pattern: Two-toucher DFB → assign 1P+1C]** — the `tiles` buffer (census re-derived, not transcribed).
+- **[Pattern: Unity-build hygiene for anonymous-namespace symbols]** — see Deferred, item 1.
+
+## Deferred / Flagged (pass 2)
+
+1. **The unity-build collision is a *second-port* hazard, and it bit.** Modelling this factory on pass 1
+   reproduced `resolve_work_split` and `add_per_node_run_args` in a second anonymous namespace in the same
+   unity-build target. The first collided outright — *"functions that differ only in their return type
+   cannot be overloaded"* — because the two differ only in return type (`TileWorkSplit` vs
+   `TensorArgsWorkSplit`). Fixed per the catalog by prefixing both
+   (`resolve_tensor_args_work_split`, `add_tensor_args_per_node_run_args`); the spec-name constants were
+   already `TTA_`-prefixed and did not collide.
+2. **`patch_slice_program_addresses`' tile arm is now fully dead.** With both tile factories ported,
+   nothing can reach the `if constexpr (SliceTileProgramFactory || SliceTileTensorArgsProgramFactory)`
+   branch (`slice_program_factory_rm_sharded.cpp:383-411`), and `slice_tile_dynamic_args`
+   (`slice_program_factory_tile.cpp`, declared in its header) has **no remaining caller**. Both are left
+   in place — deleting them is a cleanup, not a forced consequence — and routed to the report.
+3. **`mesh_partition` needed no edit this pass**, because pass 1's predicate keys on the presence of
+   `create_program_artifacts` rather than naming a factory. Confirms that design choice paid off.
