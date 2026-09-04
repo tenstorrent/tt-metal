@@ -30,7 +30,8 @@ while :; do
   for op in $ops; do
     [ "$ni" -lt "${#nodes[@]}" ] || break        # more ops than idle nodes: next pass refills
     node="${nodes[$ni]%% *}"; part="${nodes[$ni]##* }"; ni=$((ni + 1))
-    jid=$(salloc --no-shell --immediate=10 -J lanemk_op -w "$node" -p "$part" 2>&1 |
+    jid=$(salloc --no-shell --immediate=10 --time="${LANEMK_JOB_TIME:-720}" \
+      -J lanemk_op -w "$node" -p "$part" 2>&1 |
       grep -oE 'allocation [0-9]+' | grep -oE '[0-9]+')
     [ -n "$jid" ] || { echo "salloc failed on $node for $op"; continue; }
     echo "submit $op -> $node (job $jid)"
