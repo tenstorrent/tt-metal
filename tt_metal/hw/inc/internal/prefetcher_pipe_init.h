@@ -111,20 +111,27 @@ FORCE_INLINE void align_local_dfb_to_prefetcher_pipe_checkpoint(
     local.fifo_rd_ptr = fifo_ptr_units;
 }
 
-// launch-msg lookup + checkpoint snap for a PrefetcherPipe relay local DFB.
-// Called from the DataflowBuffer(RelayDFBBindingToken) constructor on TRISC:
-// the token bakes prefetcher_pipe_id at compile time, so this indexes the dense
-// launch-msg persistent region directly and snaps get_local_cb_interface(relay_dfb_id)
-// to the durable checkpoint using this launch's [config_page_addr, entry_size] from the slot.
-FORCE_INLINE void align_local_dfb_to_prefetcher_pipe_slot(uint32_t relay_dfb_id, uint32_t prefetcher_pipe_id) {
+// Base of this launch's dense PrefetcherPipe region: word[0] holds the program's slot count, then
+// UINT32_WORDS_PER_REMOTE_DFB_CONFIG words per slot ([config_page_addr, entry_size, relay_dfb_id]).
+// The region is program-wide but written per core: a slot for a pipe this core does not participate
+// in is left zero-filled, so a live slot is one whose config_page_addr is non-zero.
+FORCE_INLINE volatile tt_l1_ptr uint32_t* prefetcher_pipe_config_region() {
     const uint32_t launch_index = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
     const auto* launch_msg = GET_MAILBOX_ADDRESS_DEV(launch[launch_index]);
     const auto& kernel_config = launch_msg->kernel_config;
     ASSERT(kernel_config.prefetcher_pipe_offset != REMOTE_DFB_OFFSET_NONE);
 
     const uint32_t kernel_config_base = kernel_config.kernel_config_base[PROGRAMMABLE_CORE_TYPE];
-    volatile tt_l1_ptr uint32_t* region =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kernel_config_base + kernel_config.prefetcher_pipe_offset);
+    return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kernel_config_base + kernel_config.prefetcher_pipe_offset);
+}
+
+// launch-msg lookup + checkpoint snap for a PrefetcherPipe relay local DFB.
+// Called from the DataflowBuffer(RelayDFBBindingToken) constructor on TRISC:
+// the token bakes prefetcher_pipe_id at compile time, so this indexes the dense
+// launch-msg persistent region directly and snaps get_local_cb_interface(relay_dfb_id)
+// to the durable checkpoint using this launch's [config_page_addr, entry_size] from the slot.
+FORCE_INLINE void align_local_dfb_to_prefetcher_pipe_slot(uint32_t relay_dfb_id, uint32_t prefetcher_pipe_id) {
+    volatile tt_l1_ptr uint32_t* region = prefetcher_pipe_config_region();
     ASSERT(prefetcher_pipe_id < region[0]);
 
     volatile tt_l1_ptr uint32_t* slot =
@@ -133,6 +140,34 @@ FORCE_INLINE void align_local_dfb_to_prefetcher_pipe_slot(uint32_t relay_dfb_id,
     // (CreatePrefetcherPipeRelayDataflowBuffer); catches a mismatched token.
     ASSERT(slot[2] == relay_dfb_id);
     align_local_dfb_to_prefetcher_pipe_checkpoint(relay_dfb_id, /*config_page_addr=*/slot[0], /*entry_size=*/slot[1]);
+}
+
+// The dense slot id of the pipe this core relays through local DFB `relay_dfb_id`, for a binding
+// that carries PREFETCHER_PIPE_ID_BY_RELAY rather than a slot id: one relay DFB spans the receivers
+// of several pipes, so which pipe a core belongs to is a per-core fact and the same kernel binary
+// runs on all of them. The host registers at most one pipe per core against a given relay DFB, so
+// the scan has exactly one live match.
+FORCE_INLINE uint32_t prefetcher_pipe_id_for_relay(uint32_t relay_dfb_id) {
+    volatile tt_l1_ptr uint32_t* region = prefetcher_pipe_config_region();
+    const uint32_t num_slots = region[0];
+    uint32_t found_id = num_slots;
+    for (uint32_t slot_id = 0; slot_id < num_slots; ++slot_id) {
+        volatile tt_l1_ptr uint32_t* slot =
+            region + REMOTE_DFB_REGION_HEADER_WORDS + slot_id * UINT32_WORDS_PER_REMOTE_DFB_CONFIG;
+        // slot[0] is the config page address, zero on a slot this core does not participate in.
+        if (slot[0] != 0 && slot[2] == relay_dfb_id) {
+            ASSERT(found_id == num_slots);  // two pipes relaying through one DFB on one core
+            found_id = slot_id;
+        }
+    }
+    ASSERT(found_id < num_slots);  // host declared no pipe on this core for this relay DFB
+    return found_id;
+}
+
+// Checkpoint snap for a relay local DFB whose binding does not name a pipe id.
+// Same effect as align_local_dfb_to_prefetcher_pipe_slot, after resolving the slot at runtime.
+FORCE_INLINE void align_local_dfb_to_prefetcher_pipe_by_relay(uint32_t relay_dfb_id) {
+    align_local_dfb_to_prefetcher_pipe_slot(relay_dfb_id, prefetcher_pipe_id_for_relay(relay_dfb_id));
 }
 
 #if defined(KERNEL_BUILD) && !defined(COMPILE_FOR_TRISC)

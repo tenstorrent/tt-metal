@@ -735,6 +735,7 @@ void py_module(nb::module_& mod) {
             core_grid (ttnn.CoreGrid): the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to `None`.
             output_tile (List of [int], optional): Specifies the output tile configuration. Defaults to `None`.
             optional_output_tensor (ttnn.Tensor, optional): User provided on-device output tensor where the result of matmul is to be written. Defaults to `None`.
+            prefetcher_pipes (ttnn.experimental.TensorPrefetcherPipes, optional): DRAM-sender PrefetcherPipes the Tensor prefetcher delivers in1 K-blocks into, as an alternative to :attr:`global_cb`. Supported for ``MatmulMultiCoreReuseMultiCast1DProgramConfig`` with ``mcast_in0=True``. Keep the pipes alive for as long as the program cache may hold a program built against them. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -807,7 +808,8 @@ void py_module(nb::module_& mod) {
             nb::arg("output_tile") = nb::none(),
             nb::arg("optional_output_tensor") = nb::none(),
             nb::arg("global_cb") = nb::none(),
-            nb::arg("sub_device_id") = nb::none()));
+            nb::arg("sub_device_id") = nb::none(),
+            nb::arg("prefetcher_pipes") = nb::none()));
 
     ttnn::bind_function<"linear", "ttnn.experimental.quasar.">(
         mod,
@@ -859,6 +861,7 @@ void py_module(nb::module_& mod) {
             core_grid (ttnn.CoreGrid, optional): the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to `None`.
             output_tile (List of [int], optional): Specifies the output tile configuration. Defaults to `None`.
             optional_output_tensor (ttnn.Tensor, optional): User provided on-device output tensor where the result of linear is to be written. Defaults to `None`.
+            prefetcher_pipes (ttnn.experimental.TensorPrefetcherPipes, optional): DRAM-sender PrefetcherPipes the Tensor prefetcher delivers in1 K-blocks into, as an alternative to :attr:`global_cb`. Supported for ``MatmulMultiCoreReuseMultiCast1DProgramConfig`` with ``mcast_in0=True``. Keep the pipes alive for as long as the program cache may hold a program built against them. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -880,7 +883,8 @@ void py_module(nb::module_& mod) {
             nb::arg("output_tile") = nb::none(),
             nb::arg("optional_output_tensor") = nb::none(),
             nb::arg("global_cb") = nb::none(),
-            nb::arg("sub_device_id") = nb::none()));
+            nb::arg("sub_device_id") = nb::none(),
+            nb::arg("prefetcher_pipes") = nb::none()));
 
     ttnn::bind_function<"matmul_batched_weights", "ttnn.experimental.quasar.">(
         mod,

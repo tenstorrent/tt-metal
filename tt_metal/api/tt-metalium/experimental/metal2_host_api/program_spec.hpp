@@ -92,6 +92,11 @@ struct ProgramSpec {
     // (The actual MeshTensors are supplied via ProgramRunArgs.)
     Group<TensorParameter> tensor_parameters;
 
+    // PrefetcherPipe parameter declarations
+    // Provides ids and geometry for the pipes a relay DFB is laid over
+    // (The actual PrefetcherPipes are supplied via ProgramRunArgs.)
+    Group<PrefetcherPipeParameter> prefetcher_pipe_parameters;
+
     // WorkUnit specifications:
     // A valid ProgramSpec has at least one WorkUnitSpec.
     // Each kernel must be referenced by at least one WorkUnitSpec.

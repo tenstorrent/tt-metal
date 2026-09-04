@@ -13,6 +13,7 @@
 
 #include <tt-metalium/experimental/metal2_host_api/advanced_options.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include <tt-metalium/experimental/metal2_host_api/prefetcher_pipe_parameter.hpp>
 #include <tt-metalium/experimental/metal2_host_api/utility/table.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 #include <tt-metalium/face_geometry.hpp>
@@ -128,6 +129,24 @@ struct DataflowBufferSpec {
     //
     // (TODO: this should become std::variant<TensorParamName, BufferParameterName>.)
     std::optional<TensorParamName> borrowed_from = std::nullopt;
+
+    // Build the DFB on the rings of one or more PrefetcherPipes: a relay.
+    //
+    // A PrefetcherPipe's ring is durable L1 filled by a sender outside this Program (a DRAM core
+    // running the Tensor prefetcher, say). Naming pipe parameters here lays the DFB directly over
+    // those rings, so its consumer reads the delivered entries in place with the ordinary DFB API
+    // while the producer kernel only turns arrivals into DFB credit. The producer opens the pipe
+    // itself (experimental::PrefetcherPipe on the device side) and owns its credits.
+    //
+    // Each name refers to a PrefetcherPipeParameter declared on the ProgramSpec; the pipe objects
+    // themselves arrive with ProgramRunArgs::prefetcher_pipe_args. The parameters' node sets
+    // partition this DFB: each one names the part its pipe feeds, and together they must cover the
+    // DFB exactly. A parameter's ring must be `num_entries` whole `entry_size` entries, and pipes
+    // sharing a relay DFB must ring at one address (the DFB has a single base address).
+    //
+    // Non-empty makes the DFB a borrowed-memory relay, so it is mutually exclusive with
+    // `borrowed_from`: the ring address comes from the pipes, not from a TensorParameter.
+    std::vector<PrefetcherPipeParamName> prefetcher_pipe_relays;
 
     //////////////////////////////
     // Advanced options (see advanced_options.hpp)

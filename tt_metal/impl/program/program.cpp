@@ -94,6 +94,7 @@
 #include <internal/service/service_core_manager.hpp>
 #include "impl/internal/service/service_core_manager_impl.hpp"
 #include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
+#include "hostdev/remote_dfb_constants.h"
 
 namespace tt {
 enum CBIndex : std::uint8_t;
@@ -811,6 +812,84 @@ const std::vector<std::pair<uint32_t, std::string>>& ProgramImpl::get_dfb_borrow
     }
     return metal2_registry_->dfb_borrowed_bindings;
 }
+
+void ProgramImpl::register_prefetcher_pipe_parameter(
+    const std::string& name, const CoreRangeSet& receiver_nodes, uint32_t ring_size) {
+    if (!metal2_registry_) {
+        metal2_registry_ = Metal2NameRegistry{};
+    }
+    auto [it, inserted] = metal2_registry_->prefetcher_pipe_parameters.try_emplace(
+        name, RegisteredPrefetcherPipeParameter{.receiver_nodes = receiver_nodes, .ring_size = ring_size});
+    TT_FATAL(inserted, "Duplicate PrefetcherPipe parameter name: {}", name);
+}
+
+const ProgramImpl::RegisteredPrefetcherPipeParameter* ProgramImpl::get_prefetcher_pipe_parameter(
+    const std::string& name) const {
+    if (!metal2_registry_) {
+        return nullptr;
+    }
+    auto it = metal2_registry_->prefetcher_pipe_parameters.find(name);
+    if (it == metal2_registry_->prefetcher_pipe_parameters.end()) {
+        return nullptr;
+    }
+    return &it->second;
+}
+
+std::vector<std::string> ProgramImpl::get_registered_prefetcher_pipe_parameter_names() const {
+    std::vector<std::string> names;
+    if (metal2_registry_) {
+        names.reserve(metal2_registry_->prefetcher_pipe_parameters.size());
+        for (const auto& [name, entry] : metal2_registry_->prefetcher_pipe_parameters) {
+            names.push_back(name);
+        }
+    }
+    return names;
+}
+
+void ProgramImpl::register_prefetcher_pipe_relay_binding(
+    uint32_t dfb_id, const std::string& prefetcher_pipe_param_name) {
+    const auto* declared = get_prefetcher_pipe_parameter(prefetcher_pipe_param_name);
+    TT_FATAL(
+        declared != nullptr,
+        "Program {} relays PrefetcherPipe parameter '{}', which it does not declare",
+        this->id,
+        prefetcher_pipe_param_name);
+    const uint8_t prefetcher_pipe_id = reserve_prefetcher_pipe_relay_slot(declared->receiver_nodes, dfb_id);
+    metal2_registry_->prefetcher_pipe_relay_bindings.push_back(PrefetcherPipeRelayBinding{
+        .dfb_id = dfb_id,
+        .prefetcher_pipe_param_name = prefetcher_pipe_param_name,
+        .prefetcher_pipe_id = prefetcher_pipe_id});
+}
+
+const std::vector<ProgramImpl::PrefetcherPipeRelayBinding>& ProgramImpl::get_prefetcher_pipe_relay_bindings() const {
+    static const std::vector<PrefetcherPipeRelayBinding> empty;
+    if (!metal2_registry_) {
+        return empty;
+    }
+    return metal2_registry_->prefetcher_pipe_relay_bindings;
+}
+
+void ProgramImpl::bind_prefetcher_pipe_parameter(
+    const std::string& name, const experimental::PrefetcherPipeImpl& pipe) {
+    TT_FATAL(metal2_registry_.has_value(), "Program {} declares no PrefetcherPipe parameters", this->id);
+    auto it = metal2_registry_->prefetcher_pipe_parameters.find(name);
+    TT_FATAL(
+        it != metal2_registry_->prefetcher_pipe_parameters.end(),
+        "Program {} has no PrefetcherPipe parameter '{}'",
+        this->id,
+        name);
+    // A pipe's config address travels in the launch message, which is baked into this Program's
+    // dispatch commands the first time they are generated. Re-supplying the same pipe is how a
+    // cached Program re-enqueues; a different one would need those commands rebuilt.
+    TT_FATAL(
+        it->second.bound_pipe == nullptr || it->second.bound_pipe == &pipe,
+        "PrefetcherPipe parameter '{}' is already bound to another pipe in program {}. A pipe binds "
+        "once per Program: its config address reaches the device in the launch message, not in a "
+        "runtime argument. Build a new Program to deliver from a different pipe.",
+        name,
+        this->id);
+    it->second.bound_pipe = &pipe;
+}
 // ============================================================================
 
 std::vector<detail::KernelMeta> detail::collect_kernel_meta(const Program& program, IDevice* device) {
@@ -1367,9 +1446,18 @@ uint8_t detail::ProgramImpl::add_cross_node_dfb(experimental::CrossNodeDFB gdfb)
     return remote_dfb_id;
 }
 
-uint8_t detail::ProgramImpl::add_prefetcher_pipe_attachment(
-    experimental::PrefetcherPipeImpl& prefetcher_pipe, const CoreRangeSet& cores, uint32_t entry_size) {
-    TT_FATAL(this->compiled_.empty(), "Cannot attach PrefetcherPipe to an already compiled program {}", this->id);
+uint8_t detail::ProgramImpl::allocate_prefetcher_pipe_slot() {
+    // A slot reaches the device through the launch-message dense index, whose region is sized from
+    // the slot count at finalize -- so finalize, not compile, is the deadline for handing one out.
+    TT_FATAL(!this->finalized_, "Cannot attach PrefetcherPipe to an already finalized program {}", this->id);
+    // A Metal 2.0 Program reserves its slots when its ProgramSpec is built and binds the pipes
+    // from ProgramRunArgs afterwards: its kernels take their slot from the relay DFB's id at run
+    // time (PREFETCHER_PIPE_ID_BY_RELAY), so no pipe is named in a binary. A legacy Program bakes
+    // the id into its binding tokens when it compiles, so it must attach first.
+    TT_FATAL(
+        created_from_spec() || this->compiled_.empty(),
+        "Cannot attach PrefetcherPipe to an already compiled program {}",
+        this->id);
 
     for (const auto& [core, remote_bits] : per_core_remote_cb_indices_) {
         TT_FATAL(
@@ -1379,9 +1467,30 @@ uint8_t detail::ProgramImpl::add_prefetcher_pipe_attachment(
     }
 
     TT_FATAL(
-        next_prefetcher_pipe_slot_ < std::numeric_limits<uint8_t>::max(),
-        "PrefetcherPipe id would wrap uint8_t (ids are [0, 255); 0xFF is NO_PREFETCHER_PIPE)");
+        next_prefetcher_pipe_slot_ < PREFETCHER_PIPE_ID_BY_RELAY,
+        "PrefetcherPipe id would wrap into the reserved sentinels (ids are [0, {}); {:#x} is "
+        "NO_PREFETCHER_PIPE and {:#x} is PREFETCHER_PIPE_BY_RELAY)",
+        PREFETCHER_PIPE_ID_BY_RELAY,
+        PREFETCHER_PIPE_ID_NONE,
+        PREFETCHER_PIPE_ID_BY_RELAY);
 
+    return next_prefetcher_pipe_slot_++;
+}
+
+void detail::ProgramImpl::validate_prefetcher_pipe_entry_size(uint32_t entry_size, uint32_t ring_size) const {
+    const uint32_t l1_alignment = MetalContext::instance(this->get_context_id()).hal().get_alignment(HalMemType::L1);
+    TT_FATAL(entry_size > 0, "PrefetcherPipe entry_size must be > 0");
+    TT_FATAL(
+        entry_size % l1_alignment == 0,
+        "PrefetcherPipe entry_size {} must be a multiple of L1_ALIGNMENT {}",
+        entry_size,
+        l1_alignment);
+    TT_FATAL(
+        entry_size <= ring_size, "PrefetcherPipe entry_size {} must not exceed ring_size {}", entry_size, ring_size);
+}
+
+uint8_t detail::ProgramImpl::add_prefetcher_pipe_attachment(
+    const experimental::PrefetcherPipeImpl& prefetcher_pipe, const CoreRangeSet& cores, uint32_t entry_size) {
     TT_FATAL(cores.num_cores() > 0, "AttachPrefetcherPipe requires a non-empty core set");
     const CoreRangeSet& all_cores = prefetcher_pipe.all_cores();
     TT_FATAL(
@@ -1404,20 +1513,9 @@ uint8_t detail::ProgramImpl::add_prefetcher_pipe_attachment(
         attached_receiver_count,
         receiver_cores.num_cores());
 
-    const uint32_t l1_alignment = MetalContext::instance(this->get_context_id()).hal().get_alignment(HalMemType::L1);
-    TT_FATAL(entry_size > 0, "PrefetcherPipe entry_size must be > 0");
-    TT_FATAL(
-        entry_size % l1_alignment == 0,
-        "PrefetcherPipe entry_size {} must be a multiple of L1_ALIGNMENT {}",
-        entry_size,
-        l1_alignment);
-    TT_FATAL(
-        entry_size <= prefetcher_pipe.ring_size(),
-        "PrefetcherPipe entry_size {} must not exceed ring_size {}",
-        entry_size,
-        prefetcher_pipe.ring_size());
+    validate_prefetcher_pipe_entry_size(entry_size, prefetcher_pipe.ring_size());
 
-    const uint8_t prefetcher_pipe_id = next_prefetcher_pipe_slot_++;
+    const uint8_t prefetcher_pipe_id = allocate_prefetcher_pipe_slot();
 
     for (const auto& core_range : cores.ranges()) {
         for (const auto& core : core_range) {
@@ -1453,18 +1551,29 @@ const experimental::PrefetcherPipeImpl& detail::ProgramImpl::get_prefetcher_pipe
 }
 
 std::optional<uint8_t> detail::ProgramImpl::get_prefetcher_pipe_id_for_relay(uint32_t relay_dfb_host_id) const {
+    std::optional<uint8_t> found;
     for (const auto& [prefetcher_pipe_id, registered_relay_host_id] : prefetcher_pipe_relay_host_ids_) {
-        if (registered_relay_host_id == relay_dfb_host_id) {
-            return prefetcher_pipe_id;
+        if (registered_relay_host_id != relay_dfb_host_id) {
+            continue;
         }
+        if (found.has_value()) {
+            // Several pipes relay through this one DFB, each on its own cores. No single id is
+            // right for every core running the consumer's kernel, so the binding tells the kernel
+            // to find its slot from the DFB's relay id at run time.
+            return PREFETCHER_PIPE_ID_BY_RELAY;
+        }
+        found = prefetcher_pipe_id;
     }
-    return std::nullopt;
+    return found;
 }
 
 void detail::ProgramImpl::register_prefetcher_pipe_relay_dfb(
     const CoreRangeSet& receiver_cores, uint8_t prefetcher_pipe_id, uint32_t relay_dfb_host_id) {
+    TT_FATAL(!this->finalized_, "Cannot register a PrefetcherPipe relay on an already finalized program {}", this->id);
     TT_FATAL(
-        this->compiled_.empty(), "Cannot register a PrefetcherPipe relay on an already compiled program {}", this->id);
+        created_from_spec() || this->compiled_.empty(),
+        "Cannot register a PrefetcherPipe relay on an already compiled program {}",
+        this->id);
 
     const experimental::PrefetcherPipeImpl& pipe = get_prefetcher_pipe_attachment(prefetcher_pipe_id);
 
@@ -1483,9 +1592,16 @@ void detail::ProgramImpl::register_prefetcher_pipe_relay_dfb(
         pipe.ring_size(),
         relay_dfb->config.entry_size,
         pipe.ring_size() / relay_dfb->config.entry_size);
+    const CoreRangeSet relay_cores = receiver_cores.merge_ranges();
+    // Subset, not equality: one relay DFB may serve several pipes, each covering part of its nodes.
+    // Whether those parts add up to the whole DFB is checked once, in
+    // validate_prefetcher_pipe_relay_coverage, after every pipe has been registered.
     TT_FATAL(
-        relay_dfb->core_ranges == receiver_cores.merge_ranges(),
-        "Relay DFB core ranges must match the declared relay receiver cores");
+        relay_dfb->core_ranges.contains(relay_cores),
+        "Relay DFB {} spans nodes {}, which do not cover the declared relay receiver cores {}",
+        relay_dfb_host_id,
+        relay_dfb->core_ranges,
+        relay_cores);
     TT_FATAL(
         pipe.receiver_cores().merge(receiver_cores).num_cores() == pipe.receiver_cores().num_cores(),
         "PrefetcherPipe relay cores must be a subset of the PrefetcherPipe receiver cores");
@@ -1500,7 +1616,35 @@ void detail::ProgramImpl::register_prefetcher_pipe_relay_dfb(
         "PrefetcherPipe slot {} already has relay DFB host id {}",
         prefetcher_pipe_id,
         relay_it != prefetcher_pipe_relay_host_ids_.end() ? relay_it->second : 0);
+
+    // A core reads one ring through the relay DFB, so at most one pipe may claim it: the kernels
+    // resolve their pipe from the DFB's relay id, and two claimants would make that ambiguous.
+    CoreRangeSet& covered_cores = prefetcher_pipe_relay_covered_cores_[relay_dfb_host_id];
+    const bool relay_already_bound = covered_cores.num_cores() > 0;
+    const CoreRangeSet overlap = covered_cores.intersection(relay_cores);
+    TT_FATAL(
+        overlap.num_cores() == 0,
+        "PrefetcherPipe slot {} would relay through DFB {} on cores {}, which another pipe already "
+        "relays through it on",
+        prefetcher_pipe_id,
+        relay_dfb_host_id,
+        overlap);
+
+    // Every pipe sharing a relay DFB must own the same ring: the DFB has one borrowed base address
+    // for all of its nodes.
+    if (relay_already_bound) {
+        TT_FATAL(
+            relay_dfb->borrowed_addr_ == pipe.buffer_address(),
+            "PrefetcherPipe slot {} rings at {:#x}, but relay DFB {} is already laid over a ring at "
+            "{:#x}; pipes sharing a relay DFB must share one ring address",
+            prefetcher_pipe_id,
+            pipe.buffer_address(),
+            relay_dfb_host_id,
+            relay_dfb->borrowed_addr_);
+    }
+
     prefetcher_pipe_relay_host_ids_[prefetcher_pipe_id] = relay_dfb_host_id;
+    covered_cores = covered_cores.merge(relay_cores);
 
     relay_dfb->set_borrowed_memory_base_addr(pipe.buffer_address());
     const uint8_t relay_device_slot = static_cast<uint8_t>(relay_dfb->device_slot);
@@ -1534,6 +1678,129 @@ void detail::ProgramImpl::register_prefetcher_pipe_relay_dfb(
             participant->relay_dfb_id,
             core.str());
         participant->relay_dfb_id = relay_device_slot;
+    }
+}
+
+uint8_t detail::ProgramImpl::reserve_prefetcher_pipe_relay_slot(
+    const CoreRangeSet& receiver_cores, uint32_t relay_dfb_host_id) {
+    TT_FATAL(receiver_cores.num_cores() > 0, "A PrefetcherPipe relay requires a non-empty node set");
+
+    auto relay_dfb = get_dataflow_buffer(relay_dfb_host_id);
+    TT_FATAL(relay_dfb != nullptr, "Relay DFB host id {} does not exist", relay_dfb_host_id);
+    TT_FATAL(relay_dfb->borrows_memory(), "PrefetcherPipe relay DFB {} must use borrowed memory", relay_dfb_host_id);
+    const CoreRangeSet relay_cores = receiver_cores.merge_ranges();
+    // Subset, not equality: one relay DFB may serve several pipes, each covering part of its nodes.
+    // Whether those parts add up to the whole DFB is checked once, in
+    // validate_prefetcher_pipe_relay_coverage, after every relay has been reserved.
+    TT_FATAL(
+        relay_dfb->core_ranges.contains(relay_cores),
+        "Relay DFB {} spans nodes {}, which do not cover the declared relay receiver cores {}",
+        relay_dfb_host_id,
+        relay_dfb->core_ranges,
+        relay_cores);
+    TT_FATAL(
+        relay_dfb->device_slot < std::numeric_limits<uint8_t>::max(),
+        "Relay DFB device slot {} cannot be represented in PrefetcherPipe receiver metadata",
+        relay_dfb->device_slot);
+
+    // A core reads one ring through the relay DFB, so at most one pipe may claim it: the kernels
+    // resolve their pipe from the DFB's relay id, and two claimants would make that ambiguous.
+    CoreRangeSet& covered_cores = prefetcher_pipe_relay_covered_cores_[relay_dfb_host_id];
+    const CoreRangeSet overlap = covered_cores.intersection(relay_cores);
+    TT_FATAL(
+        overlap.num_cores() == 0,
+        "A PrefetcherPipe relay through DFB {} claims cores {}, which another pipe already relays "
+        "through it on",
+        relay_dfb_host_id,
+        overlap);
+
+    const uint8_t prefetcher_pipe_id = allocate_prefetcher_pipe_slot();
+    const auto relay_device_slot = static_cast<uint8_t>(relay_dfb->device_slot);
+    // Placeholder participants: the slot, the relay it publishes credit through and the DFB's
+    // entry size are all known now, and finalize needs them to size the dense index and to mark
+    // the launch messages. The config-page address arrives with the pipe.
+    for (const CoreCoord& core : corerange_to_cores(relay_cores)) {
+        per_core_prefetcher_pipes_[core].push_back(
+            {prefetcher_pipe_id, /*config_page_addr=*/0, relay_dfb->config.entry_size, relay_device_slot});
+    }
+    prefetcher_pipe_relay_host_ids_[prefetcher_pipe_id] = relay_dfb_host_id;
+    covered_cores = covered_cores.merge(relay_cores);
+    return prefetcher_pipe_id;
+}
+
+void detail::ProgramImpl::bind_prefetcher_pipe_relay(
+    uint8_t prefetcher_pipe_id, const experimental::PrefetcherPipeImpl& pipe, uint32_t entry_size) {
+    // No finalize guard: this only fills fields the per-enqueue dispatch commands carry, and on the
+    // Metal 2.0 path the run args arrive after the workload has been laid out.
+    auto relay_it = prefetcher_pipe_relay_host_ids_.find(prefetcher_pipe_id);
+    TT_FATAL(
+        relay_it != prefetcher_pipe_relay_host_ids_.end(),
+        "PrefetcherPipe slot {} was never reserved in program {}",
+        prefetcher_pipe_id,
+        this->id);
+    auto relay_dfb = get_dataflow_buffer(relay_it->second);
+    TT_FATAL(relay_dfb != nullptr, "Relay DFB host id {} does not exist", relay_it->second);
+
+    validate_prefetcher_pipe_entry_size(entry_size, pipe.ring_size());
+    // Floor, not exact division: an entry size the ring does not divide leaves a trailing gap that
+    // holds no entry, and the receiver stops at the same floored limit
+    // (align_local_dfb_to_prefetcher_pipe_checkpoint), so the relay must borrow exactly the whole
+    // entries the ring holds and leave that gap alone.
+    TT_FATAL(
+        relay_dfb->config.num_entries == pipe.ring_size() / relay_dfb->config.entry_size,
+        "PrefetcherPipe relay depth {} must equal the whole entries the ring holds, ring_size / entry_size = {} / {} "
+        "= {}",
+        relay_dfb->config.num_entries,
+        pipe.ring_size(),
+        relay_dfb->config.entry_size,
+        pipe.ring_size() / relay_dfb->config.entry_size);
+    // Every pipe sharing a relay DFB must own the same ring: the DFB has one borrowed base address
+    // for all of its nodes.
+    TT_FATAL(
+        relay_dfb->borrowed_addr_ == 0 || relay_dfb->borrowed_addr_ == pipe.buffer_address(),
+        "PrefetcherPipe slot {} rings at {:#x}, but relay DFB {} is already laid over a ring at {:#x}; pipes "
+        "sharing a relay DFB must share one ring address",
+        prefetcher_pipe_id,
+        pipe.buffer_address(),
+        relay_it->second,
+        relay_dfb->borrowed_addr_);
+
+    relay_dfb->set_borrowed_memory_base_addr(pipe.buffer_address());
+    for (const CoreCoord& core : corerange_to_cores(pipe.receiver_cores())) {
+        auto participant_it = per_core_prefetcher_pipes_.find(core);
+        TT_FATAL(
+            participant_it != per_core_prefetcher_pipes_.end(),
+            "PrefetcherPipe slot {} has no reserved participant on receiver core {}",
+            prefetcher_pipe_id,
+            core.str());
+        auto& participants = participant_it->second;
+        auto participant = std::find_if(participants.begin(), participants.end(), [prefetcher_pipe_id](const auto& a) {
+            return a.prefetcher_pipe_id == prefetcher_pipe_id;
+        });
+        TT_FATAL(
+            participant != participants.end(),
+            "PrefetcherPipe slot {} is not reserved on receiver core {}",
+            prefetcher_pipe_id,
+            core.str());
+        participant->config_page_addr = pipe.config_address();
+        participant->entry_size = entry_size;
+    }
+    prefetcher_pipe_attachments_[prefetcher_pipe_id] = &pipe;
+}
+
+void detail::ProgramImpl::validate_prefetcher_pipe_relay_coverage() const {
+    for (const auto& [relay_dfb_host_id, covered_cores] : prefetcher_pipe_relay_covered_cores_) {
+        auto relay_dfb = get_dataflow_buffer(relay_dfb_host_id);
+        TT_FATAL(relay_dfb != nullptr, "Relay DFB host id {} does not exist", relay_dfb_host_id);
+        const CoreRangeSet uncovered = relay_dfb->core_ranges.subtract(covered_cores);
+        TT_FATAL(
+            uncovered.num_cores() == 0,
+            "Relay DFB {} runs on nodes {} but no PrefetcherPipe relays through it on {}; every node "
+            "of a relay DFB must be a receiver of one of its pipes, or its kernels there would read "
+            "an unbacked ring",
+            relay_dfb_host_id,
+            relay_dfb->core_ranges,
+            uncovered);
     }
 }
 

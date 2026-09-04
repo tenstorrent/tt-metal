@@ -29,6 +29,8 @@
 #include <tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include <tt-metalium/experimental/prefetcher_pipe.hpp>
+#include "ttnn/operations/experimental/tensor_prefetcher/tensor_prefetcher.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt;
@@ -5233,6 +5235,12 @@ const m2::TensorParamName RO_OUT_TENSOR{"out"};
 const m2::TensorParamName RO_BIAS_TENSOR{"bias"};
 const m2::TensorParamName RO_SPARSITY_TENSOR{"sparsity"};
 
+// One PrefetcherPipeParameter per pipe delivering in1, named by its index in the flattened
+// bank-major pipe order (the order that also fixes each sender's slab base).
+m2::PrefetcherPipeParamName prefetcher_pipe_param_name(size_t flat_pipe_index) {
+    return m2::PrefetcherPipeParamName{"in1_prefetcher_pipe_" + std::to_string(flat_pipe_index)};
+}
+
 const m2::SemaphoreSpecName RO_IN0_SENDER_SEM{"in0_sender"};
 const m2::SemaphoreSpecName RO_IN0_RECEIVER_SEM{"in0_receiver"};
 const m2::SemaphoreSpecName RO_IN1_SENDER_SEM{"in1_sender"};
@@ -5423,7 +5431,8 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
     bool output_is_sharded,
     bool untilize_out,
     bool row_broadcast_bias,
-    CoreCoord sub_device_start_core) {
+    CoreCoord sub_device_start_core,
+    const std::optional<ttnn::operations::experimental::TensorPrefetcherPipes>& prefetcher_pipes) {
     using tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids;
 
     bool in0_transpose_tile = in0_tile.get_transpose_of_faces() && in0_tile.get_transpose_within_face();
@@ -5533,6 +5542,20 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
 
     CoreRangeSet all_cores_with_work =
         num_cores_to_corerangeset_in_subcoregrids(start_core, num_cores_with_work, matmul_core_rect, row_major);
+    // in1 delivered by the Tensor prefetcher into DRAM-sender PrefetcherPipes: the in1 DFB is laid
+    // over the pipes' rings instead of being filled from the weight tensor, so every worker with
+    // matmul work must be a receiver of exactly one pipe (the DFB's nodes are those workers).
+    const bool use_pipes = prefetcher_pipes.has_value();
+    if (use_pipes) {
+        const CoreRangeSet receivers = prefetcher_pipes->receiver_cores();
+        TT_FATAL(
+            receivers.merge_ranges() == all_cores_with_work.merge_ranges(),
+            "mcast_in0 prefetcher_pipes receivers {} must be exactly this matmul's workers with work {}: the in1 "
+            "relay DataflowBuffer covers those workers and each one reads one pipe's ring",
+            receivers,
+            all_cores_with_work);
+    }
+
     CoreRange in0_mcast_receiver_cores_bounding_box = all_cores_with_work.bounding_box();
     uint32_t in0_mcast_receiver_num_cores = in0_mcast_receiver_cores_bounding_box.size();
     uint32_t in0_mcast_receiver_num_dests = std::min(in0_mcast_receiver_num_cores, num_cores);
@@ -5678,16 +5701,42 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
         mm_kernel_in0_sender_defines["SKIP_MCAST"] = "1";
     }
     mm_kernel_in1_sender_writer_defines["SKIP_MCAST"] = "1";
+    if (use_pipes) {
+        // in1 arrives in the relay DFB already; the reader publishes it and the compute kernel pages
+        // it by K-block instead of by tile.
+        mm_kernel_in1_sender_writer_defines["ENABLE_PREFETCHER_PIPE"] = "1";
+        mm_kernel_defines["ENABLE_PREFETCHER_PIPE"] = "1";
+    }
 
     // ---- Tensor parameters (replace buffer-address RTAs + TensorAccessorArgs) ----
     // The sparsity TensorParameter is inert for resnet50 (batchB == 0; never read); it aliases the
     // in0 spec so the kernels' tensor::sparsity binding resolves and is supplied in0 at runtime.
     m2::Group<m2::TensorParameter> tensor_parameters = {
         m2::TensorParameter{.unique_id = RO_IN0_TENSOR, .spec = in0_tensor.tensor_spec()},
-        m2::TensorParameter{.unique_id = RO_IN1_TENSOR, .spec = in1_tensor.tensor_spec()},
         m2::TensorParameter{.unique_id = RO_OUT_TENSOR, .spec = out_tensor.tensor_spec()},
         m2::TensorParameter{.unique_id = RO_SPARSITY_TENSOR, .spec = in0_tensor.tensor_spec()},
     };
+    // Under pipe delivery nothing reads the weight tensor -- its K-blocks arrive in the relay DFB --
+    // and a declared-but-unused TensorParameter is a spec error, so it is not declared at all.
+    if (!use_pipes) {
+        tensor_parameters.push_back(m2::TensorParameter{.unique_id = RO_IN1_TENSOR, .spec = in1_tensor.tensor_spec()});
+    }
+
+    // ---- PrefetcherPipe parameters ----
+    // A pipe is a user-managed resource with a lifetime of its own, so the spec declares only its
+    // geometry and the pipe object arrives with the run args, the way a TensorParameter is filled
+    // by a MeshTensor. One relay DFB below is laid over all of them.
+    m2::Group<m2::PrefetcherPipeParameter> prefetcher_pipe_params;
+    if (use_pipes) {
+        for (const auto& bank : prefetcher_pipes->banks) {
+            for (const auto& pipe : bank.pipes) {
+                prefetcher_pipe_params.push_back(m2::PrefetcherPipeParameter{
+                    .unique_id = prefetcher_pipe_param_name(prefetcher_pipe_params.size()),
+                    .receiver_nodes = pipe->receiver_cores(),
+                    .ring_size = pipe->ring_size()});
+            }
+        }
+    }
     if (bias_tensor.has_value()) {
         tensor_parameters.push_back(
             m2::TensorParameter{.unique_id = RO_BIAS_TENSOR, .spec = bias_tensor->tensor_spec()});
@@ -5736,7 +5785,17 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
             .data_format_metadata = in1_data_format,
             .tile_format_metadata = in1_tile,
         };
-        if (in1_is_sharded) {
+        if (use_pipes) {
+            // One entry is one whole K-block: that is what a pipe delivers, what this program
+            // Attaches at, and what compute consumes, so the DFB spans the ring exactly. The block
+            // is unpadded -- it never came through DRAM, so the interleaved reader's per-tile DRAM
+            // alignment does not apply to it.
+            in1_dfb.entry_size = in1_block_tiles * in1_single_tile_size;
+            in1_dfb.num_entries = prefetcher_pipes->ring_size() / in1_dfb.entry_size;
+            for (const auto& param : prefetcher_pipe_params) {
+                in1_dfb.prefetcher_pipe_relays.push_back(param.unique_id);
+            }
+        } else if (in1_is_sharded) {
             in1_dfb.borrowed_from = RO_IN1_TENSOR;
         }
         dataflow_buffers.push_back(std::move(in1_dfb));
@@ -6084,10 +6143,14 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
                 .endpoint_type = m2::DFBEndpointType::CONSUMER});
         }
         std::vector<m2::TensorBinding> tb = {
-            m2::TensorBinding{.tensor_parameter_name = RO_IN1_TENSOR, .accessor_name = "in1"},
             m2::TensorBinding{.tensor_parameter_name = RO_OUT_TENSOR, .accessor_name = "out"},
             m2::TensorBinding{.tensor_parameter_name = RO_SPARSITY_TENSOR, .accessor_name = "sparsity"},
         };
+        // The pipe build of this kernel never names tensor::in1 (the weight arrives in the relay
+        // DFB), and there is no in1 TensorParameter to bind on that path.
+        if (!use_pipes) {
+            tb.insert(tb.begin(), m2::TensorBinding{.tensor_parameter_name = RO_IN1_TENSOR, .accessor_name = "in1"});
+        }
         if (bias_tensor.has_value()) {
             b.push_back(m2::DFBBinding{
                 .dfb_spec_name = RO_BIAS_DFB,
@@ -6437,11 +6500,22 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
     run_args.kernel_run_args.push_back(std::move(in1_sender_writer_run_args));
 
     run_args.tensor_args.emplace(RO_IN0_TENSOR, in0_tensor);
-    run_args.tensor_args.emplace(RO_IN1_TENSOR, in1_tensor);
+    if (!use_pipes) {
+        run_args.tensor_args.emplace(RO_IN1_TENSOR, in1_tensor);
+    }
     run_args.tensor_args.emplace(RO_OUT_TENSOR, out_tensor);
     run_args.tensor_args.emplace(RO_SPARSITY_TENSOR, in0_tensor);  // inert alias
     if (bias_tensor.has_value()) {
         run_args.tensor_args.emplace(RO_BIAS_TENSOR, *bias_tensor);
+    }
+
+    if (use_pipes) {
+        size_t flat_pipe = 0;
+        for (const auto& bank : prefetcher_pipes->banks) {
+            for (const auto& pipe : bank.pipes) {
+                run_args.prefetcher_pipe_args.insert({prefetcher_pipe_param_name(flat_pipe++), std::cref(*pipe)});
+            }
+        }
     }
 
     m2::ProgramSpec spec{
@@ -6450,6 +6524,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
         .dataflow_buffers = std::move(dataflow_buffers),
         .semaphores = std::move(semaphores),
         .tensor_parameters = std::move(tensor_parameters),
+        .prefetcher_pipe_parameters = std::move(prefetcher_pipe_params),
         .work_units = std::move(work_units),
     };
 
@@ -7567,7 +7642,8 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseMcast1DProgramFacto
             output.memory_config().is_sharded(),
             untilize_out,
             fused_matmul_bias_row_broadcastable(bias),
-            sub_device_start_core);
+            sub_device_start_core,
+            operation_attributes.prefetcher_pipes);
     }
     return CMAKE_UNIQUE_NAMESPACE::create_program_mcast_in1_artifacts(
         a,
