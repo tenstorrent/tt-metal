@@ -1,0 +1,27 @@
+{"ev":"start","model":"llama3_1_8b_d_p","mesh":"8x4","recipe_sha":"6e82a44a328"}
+{"t":"2026-09-04T20:35Z","ev":"enter","stage":"D1"}
+{"t":"2026-09-04T20:40Z","ev":"judgment","stage":"D1","kind":"env","issue":"worktree of the recipe branch is 88 commits ahead of the prebuilt main, and had no submodules","fix":"git submodule update --init --recursive, then a full Release rebuild in the worktree","failed":[]}
+{"t":"2026-09-04T21:05Z","ev":"judgment","stage":"D1","kind":"donor_wrong","issue":"rope donor gpt_oss_d_p/tt/rope.py implements YaRN; Llama 3.1 uses llama3 smooth-ramp scaling with no mscale","fix":"wrote llama3_inv_freq fresh and pinned it against transformers ROPE_INIT_FUNCTIONS['llama3']","failed":[]}
+{"t":"2026-09-04T21:05Z","ev":"judgment","stage":"D1","kind":"spec_gap","issue":"spec v0 rope block cannot express llama3 scaling: it needs low_freq_factor and high_freq_factor, not beta_fast/beta_slow","fix":"took the two factors from the vendored config.json and recorded the gap in docs/SPEC_NOTES.md","failed":[]}
+{"t":"2026-09-04T21:20Z","ev":"verify","stage":"D1","result":"pass","failed":[]}
+{"t":"2026-09-04T21:25Z","ev":"enter","stage":"D2"}
+{"t":"2026-09-04T21:25Z","ev":"judgment","stage":"D2","kind":"recipe_gap","issue":"recipe fixes per-chip cache shape dim1 at literal 1, true only when TP == n_kv_heads; Llama has 8 KV heads at TP=4","fix":"allocate_kv_cache takes num_kv_heads_local = n_kv_heads // tp (2 here) and asserts it against the write","failed":[]}
+{"t":"2026-09-04T21:25Z","ev":"skip","stage":"D2","row":"minimax_m3/tests/unit/test_qk_norm_vs_ref.py","why":"Llama has no QK-norm (spec attention.features is empty)"}
+{"t":"2026-09-04T21:25Z","ev":"skip","stage":"D2","row":"minimax_m3/tests/unit/test_fused_gate_vs_ref.py","why":"dense model: no MoE router to test"}
+{"t":"2026-09-04T21:25Z","ev":"skip","stage":"D2","row":"minimax_m3/tests/unit/test_ep_moe_vs_ref.py","why":"dense model: no expert-parallel MoE"}
+{"t":"2026-09-04T21:26Z","ev":"verify","stage":"D2","result":"pass","failed":[]}
+{"t":"2026-09-04T21:26Z","ev":"enter","stage":"D3"}
+{"t":"2026-09-04T21:26Z","ev":"verify","stage":"D3","result":"fail","failed":["tests/unit/test_kv_cache_gqa_sp_vs_ref.py::test_kv_cache_gqa_sp_vs_ref"]}
+{"t":"2026-09-04T21:27Z","ev":"judgment","stage":"D3","kind":"recipe_gap","issue":"multi-chunk block-cyclic cache read-back gave PCC 0.06: row-concatenation is natural order only for a single chunk","fix":"added block_cyclic_to_natural using the writer map g(c,lr)=(lr//C)*sp*C + c*C + lr%C","failed":["tests/unit/test_kv_cache_gqa_sp_vs_ref.py::test_kv_cache_gqa_sp_vs_ref"]}
+{"t":"2026-09-04T21:27Z","ev":"judgment","stage":"D3","kind":"env","issue":"mixing fabric configs or mesh shapes in one pytest process kills fabric bring-up with a misleading ethernet-handshake timeout","fix":"run_bringup.sh runs one group per fabric config and mesh shape","failed":[]}
+{"t":"2026-09-04T21:27Z","ev":"skip","stage":"D3","row":"test_attention_vs_ref.py (1,4) case","why":"a 4-chip submesh of this plain-MESH Galaxy cannot train its fabric links; TP-without-SP is not a spec target"}
+{"t":"2026-09-04T21:36Z","ev":"verify","stage":"D3","result":"pass","failed":[]}
+{"t":"2026-09-04T21:37Z","ev":"enter","stage":"M1"}
+{"t":"2026-09-04T21:38Z","ev":"verify","stage":"M1","result":"pass","failed":[]}
+{"t":"2026-09-04T21:38Z","ev":"enter","stage":"M2"}
+{"t":"2026-09-04T21:39Z","ev":"verify","stage":"M2","result":"pass","failed":[]}
+{"t":"2026-09-04T21:39Z","ev":"enter","stage":"M3"}
+{"t":"2026-09-04T21:44Z","ev":"verify","stage":"M3","result":"fail","failed":["tests/unit/test_parallel_embedding_vs_ref.py::test_parallel_embedding_vs_ref[2d-8x4]"]}
+{"t":"2026-09-04T21:45Z","ev":"judgment","stage":"M3","kind":"donor_wrong","issue":"gpt_oss MeshConfig has no reduce_scatter, which minimax's 2D vocab-parallel embedding calls to sum per-row lookups across SP","fix":"added MeshConfig.reduce_scatter from the minimax donor; both embedding modes then reach PCC 1.0","failed":["tests/unit/test_parallel_embedding_vs_ref.py::test_parallel_embedding_vs_ref[2d-8x4]"]}
+{"t":"2026-09-04T21:49Z","ev":"verify","stage":"M3","result":"pass","failed":[]}
+{"t":"2026-09-04T21:50Z","ev":"enter","stage":"P1"}

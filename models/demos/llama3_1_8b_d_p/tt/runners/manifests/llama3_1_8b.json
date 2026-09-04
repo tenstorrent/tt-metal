@@ -1,0 +1,11 @@
+{
+  "_comment": "Per-model manifest: point a rank binding at this with PREFILL_MANIFEST so the binding and mesh-graph descriptors stay model-agnostic. Applied with setdefault, so a binding's global_env still wins.",
+  "env": {
+    "PREFILL_MODEL": "llama3_1_8b_d_p",
+    "PREFILL_SP": "8",
+    "PREFILL_TP": "4",
+    "PREFILL_CHUNK_SIZE": "4096",
+    "PREFILL_NUM_USERS": "1",
+    "PREFILL_TOPOLOGY": "linear"
+  }
+}

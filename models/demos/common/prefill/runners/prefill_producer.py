@@ -506,8 +506,11 @@ def _read_slot_kv_and_check_pcc(table, device_map: dict, slot_id: int, real_len:
         real_len = min(real_len, golden_cap)
     if ADAPTER.name == "minimax_m3":
         return _read_slot_kv_and_check_pcc_m3(table, device_map, slot_id, real_len, trace_dir)
-    if ADAPTER.name == "gpt_oss_d_p":
-        return _read_slot_kv_and_check_pcc_gpt_oss(table, device_map, slot_id, real_len, trace_dir)
+    # Per-head GQA k/v cache layout: configs 0..N-1 are K heads, N..2N-1 are V heads, bf8 chunks.
+    # gpt_oss_d_p and llama3_1_8b_d_p share it exactly, so they share the reader — everything that
+    # differs (head count, head dim, rotary width) is read off ADAPTER.model_config.
+    if ADAPTER.name in ("gpt_oss_d_p", "llama3_1_8b_d_p"):
+        return _read_slot_kv_and_check_pcc_gqa_per_head(table, device_map, slot_id, real_len, trace_dir)
     return _read_slot_kv_and_check_pcc_mla(table, device_map, slot_id, real_len, trace_dir)
 
 
@@ -531,14 +534,15 @@ def _read_kv_slice(table, device_map, config_id, layer, slot_id, read_len, head_
     return torch.cat(rows, dim=0)[:read_len]
 
 
-def _read_slot_kv_and_check_pcc_gpt_oss(table, device_map: dict, slot_id: int, real_len: int, trace_dir):
+def _read_slot_kv_and_check_pcc_gqa_per_head(table, device_map: dict, slot_id: int, real_len: int, trace_dir):
     from pathlib import Path
 
     from safetensors import safe_open
 
-    from models.demos.gpt_oss_d_p.tt.attention.kv_cache import NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
     from tests.ttnn.utils_for_testing import comp_pcc
 
+    # 32 in every package (the DRAM ND-shard's contiguous-token block); not model-specific.
+    NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK = 32
     mc = ADAPTER.model_config
     n_kv, head_dim = mc.NUM_KEY_VALUE_HEADS, mc.HEAD_DIM
     rotary_dim = getattr(mc, "ROTARY_DIM", head_dim)
@@ -587,7 +591,7 @@ def _read_slot_kv_and_check_pcc_gpt_oss(table, device_map: dict, slot_id: int, r
 
     min_pcc = min(mins.values())
     logger.info(
-        f"[producer] slot {slot_id} GPT-OSS KV PCC over [0,{real_len}) across {checked}/{NUM_LAYERS} local layers -> "
+        f"[producer] slot {slot_id} per-head GQA KV PCC over [0,{real_len}) across {checked}/{NUM_LAYERS} local layers -> "
         f"K={mins['k']:.5f} V={mins['v']:.5f} (min {min_pcc:.6f})"
     )
     if checked == 0:
