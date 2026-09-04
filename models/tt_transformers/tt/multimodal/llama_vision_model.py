@@ -738,10 +738,14 @@ class CrossAttentionTransformer(torch.nn.Module):
         tt_h = self.configuration.prepare_residual_tensor_prefill(
             h,
         )
+        # Build the rope matrices for the padded bucket, not the exact prompt length.
+        # Otherwise every distinct prompt length otherwise materialises its own cos/sin tensors and
+        # its own rotary_embedding_llama programs, compiled on the first real request after the decode
+        # trace is live.
         rot_mats = get_rot_mats(
             head_dim=self.configuration.head_dim,
             device=self.mesh_device,
-            seq_len=S,
+            seq_len=padded_seq_len,
             theta=self.configuration.rope_theta,
             rope_scaling=self.configuration.rope_scaling,
         )

@@ -2477,6 +2477,36 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             )
 
     # Note: This function is called by vLLM
+    def warmup_vision_encoder(self):
+        """Run the vision encoder once per supported image canvas so its programs exist before any trace.
+
+        The encoder's programs are keyed on the image geometry: 1, 2 or 4 chunks through the image
+        blocks, and the tile aspect ratio through the tile position embeddings. A request with a new
+        geometry otherwise compiles the whole encoder path (image blocks, positional embeddings, pad
+        and concat, the vision projection) while the decode trace is live - measured on
+        Llama-3.2-11B-Vision T3K batch-1 as 60+ buffers alive across trace replays, arriving with
+        the second and third distinct images. One blank image per supported canvas covers every
+        geometry the transform can produce.
+        """
+        from PIL import Image as PIL_Image
+
+        for model in self.model:
+            transform = getattr(model, "image_transform", None)
+            if transform is None or not hasattr(model, "compute_vision_tokens_masks"):
+                continue
+            base_transform = getattr(transform, "func", transform)
+            resolutions = base_transform.find_supported_resolutions(
+                max_num_chunks=model.max_num_chunks, patch_size=base_transform.size
+            )
+            for height, width in dict.fromkeys(tuple(r) for r in resolutions):
+                logger.info(f"Warming up vision encoder for a {width}x{height} image")
+                model.compute_vision_tokens_masks(
+                    batch_images=[[PIL_Image.new("RGB", (width, height))]],
+                    batch_masks=[[[0, -1]]],
+                    total_len=128,
+                    prefill_len=128,
+                )
+
     def prefill_forward_llama_vision(
         self,
         vision_images,
