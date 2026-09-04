@@ -29,6 +29,8 @@
   cmd: |
     mkdir -p generated/test_reports
     build/tt-train/tests/ttml_tests --gtest_output=xml:generated/test_reports/ctest_report.xml --gtest_filter="-*NIGHTLY*"
+  ai_summary:
+    authoritative_job_status: true
   skus:
     bh_p100:
       timeout: 30

@@ -8,6 +8,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-logger/tt-logger.hpp>
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 namespace tt::tt_metal {
 
@@ -28,8 +29,8 @@ constexpr auto kIdmaBasic =
 constexpr auto kIdma1DStrided =
     "tests/tt_metal/tt_metal/data_movement/quasar_examples/quasar_idma/kernels/idma_1d_strided_example.cpp";
 
-static void run_kernel(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+void run_kernel(
+    distributed::MeshDevice& mesh_device,
     const std::string& kernel_path,
     experimental::KernelSpec::CompileTimeArgs compile_time_args) {
     const experimental::KernelSpecName DM_KERNEL{"idma"};
@@ -54,16 +55,16 @@ static void run_kernel(
         .kernels = {dm_kernel_spec},
         .work_units = {main_wu},
     };
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
 
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{.kernel = DM_KERNEL}};
     experimental::SetProgramRunArgs(program, params);
 
     distributed::MeshWorkload workload;
-    distributed::MeshCoordinateRange device_range(mesh_device->shape());
+    distributed::MeshCoordinateRange device_range(mesh_device.shape());
     workload.add_program(device_range, std::move(program));
-    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    distributed::MeshCommandQueue& cq = mesh_device.mesh_command_queue();
     distributed::EnqueueMeshWorkload(cq, workload, true);
 }
 
@@ -75,26 +76,24 @@ struct IdmaSrcDstBuffers {
     std::shared_ptr<distributed::MeshBuffer> dst;
 };
 
-IdmaSrcDstBuffers make_idma_src_dst_buffers(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t total_bytes) {
+IdmaSrcDstBuffers make_idma_src_dst_buffers(distributed::MeshDevice& mesh_device, uint32_t total_bytes) {
     distributed::DeviceLocalBufferConfig local_buffer_config = {
         .page_size = total_bytes, .buffer_type = tt::tt_metal::BufferType::L1};
     distributed::ReplicatedBufferConfig buffer_config = {.size = total_bytes};
     return {
-        .src = distributed::MeshBuffer::create(buffer_config, local_buffer_config, mesh_device.get()),
-        .dst = distributed::MeshBuffer::create(buffer_config, local_buffer_config, mesh_device.get()),
+        .src = distributed::MeshBuffer::create(buffer_config, local_buffer_config, &mesh_device),
+        .dst = distributed::MeshBuffer::create(buffer_config, local_buffer_config, &mesh_device),
     };
 }
 
 // Basic: 16 elements * 8 B = 128 B linear copy from src to dst
-bool run_idma_basic_test(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+bool run_idma_basic_test(distributed::MeshDevice& mesh_device) {
     constexpr CoreCoord core = {0, 0};
     constexpr uint32_t num_elements = 16;
     constexpr uint32_t elem_size = 8;
     constexpr uint32_t total_bytes = num_elements * elem_size;
     constexpr uint32_t num_words = total_bytes / sizeof(uint32_t);
 
-    IDevice* device = mesh_device->get_devices()[0];
     auto buffers = make_idma_src_dst_buffers(mesh_device, total_bytes);
     const uint32_t src_base = buffers.src->address();
     const uint32_t dst_base = buffers.dst->address();
@@ -103,12 +102,12 @@ bool run_idma_basic_test(const std::shared_ptr<distributed::MeshDevice>& mesh_de
     for (uint32_t i = 0; i < num_words; i++) {
         src_data[i] = 0xA0000000 + i;
     }
-    tt_metal::detail::WriteToDeviceL1(device, core, src_base, src_data);
+    slow_dispatch::WriteToL1(mesh_device, core, src_base, src_data);
 
     run_kernel(mesh_device, kIdmaBasic, {{"src_addr", src_base}, {"dst_addr", dst_base}});
 
     std::vector<uint32_t> dst_data;
-    tt_metal::detail::ReadFromDeviceL1(device, core, dst_base, total_bytes, dst_data);
+    slow_dispatch::ReadFromL1(mesh_device, core, dst_base, total_bytes, dst_data);
 
     bool pass = (dst_data == src_data);
     if (!pass) {
@@ -128,7 +127,7 @@ bool run_idma_basic_test(const std::shared_ptr<distributed::MeshDevice>& mesh_de
 
 // 1D strided: 10 elements, src_stride=16 B, dst linear.
 // dst[i] = src[i * src_stride] (every other 8 B element from src)
-bool run_idma_1d_strided_test(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+bool run_idma_1d_strided_test(distributed::MeshDevice& mesh_device) {
     constexpr CoreCoord core = {0, 0};
     constexpr uint32_t num_elements = 10;
     constexpr uint32_t elem_size = 8;
@@ -142,13 +141,11 @@ bool run_idma_1d_strided_test(const std::shared_ptr<distributed::MeshDevice>& me
     constexpr uint32_t src_num_words = (num_elements * src_stride) / sizeof(uint32_t);
     constexpr uint32_t dst_num_words = (num_elements * elem_size) / sizeof(uint32_t);
 
-    IDevice* device = mesh_device->get_devices()[0];
-
     std::vector<uint32_t> src_data(src_num_words);
     for (uint32_t i = 0; i < src_num_words; i++) {
         src_data[i] = 0xB0000000 + i;
     }
-    tt_metal::detail::WriteToDeviceL1(device, core, src_base, src_data);
+    slow_dispatch::WriteToL1(mesh_device, core, src_base, src_data);
 
     // Build expected: for each element i, copy elem_size bytes from src_base + i*src_stride
     constexpr uint32_t words_per_elem = elem_size / sizeof(uint32_t);     // 2
@@ -163,7 +160,7 @@ bool run_idma_1d_strided_test(const std::shared_ptr<distributed::MeshDevice>& me
     run_kernel(mesh_device, kIdma1DStrided, {{"src_addr", src_base}, {"dst_addr", dst_base}});
 
     std::vector<uint32_t> dst_data;
-    tt_metal::detail::ReadFromDeviceL1(device, core, dst_base, num_elements * elem_size, dst_data);
+    slow_dispatch::ReadFromL1(mesh_device, core, dst_base, num_elements * elem_size, dst_data);
 
     bool pass = (dst_data == expected);
     if (!pass) {
@@ -194,7 +191,7 @@ TEST_F(QuasarIdmaOps, IDMA_Basic) {
         GTEST_SKIP() << "Test requires Quasar simulator";
     }
     // Host writes pattern to src, kernel copies 16*8=128 B to dst, host verifies dst==src
-    EXPECT_TRUE(unit_tests::dm::quasar_idma::run_idma_basic_test(devices_[0]));
+    EXPECT_TRUE(unit_tests::dm::quasar_idma::run_idma_basic_test(this->device()));
 }
 
 TEST_F(QuasarIdmaOps, IDMA_1D_Strided) {
@@ -202,7 +199,7 @@ TEST_F(QuasarIdmaOps, IDMA_1D_Strided) {
         GTEST_SKIP() << "Test requires Quasar simulator";
     }
     // Host writes pattern to src, kernel copies 10 elements with src_stride=16 B to dst linearly
-    EXPECT_TRUE(unit_tests::dm::quasar_idma::run_idma_1d_strided_test(devices_[0]));
+    EXPECT_TRUE(unit_tests::dm::quasar_idma::run_idma_1d_strided_test(this->device()));
 }
 
 }  // namespace tt::tt_metal

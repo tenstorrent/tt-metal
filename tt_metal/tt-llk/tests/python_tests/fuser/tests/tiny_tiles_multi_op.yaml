@@ -13,10 +13,6 @@ operands:
     dims: [48, 128]
     format: "Float16_b"
     tile_dims: [16, 32]
-  - name: "datacopy_in_B"
-    dims: [48, 128]
-    format: "Float16_b"
-    tile_dims: [16, 32]
   - name: "datacopy_out"
     dims: [48, 128]
     format: "Float16_b"
@@ -82,8 +78,7 @@ operands:
 operations:
   - math:
       - type: "Fpu"
-        src_a: "datacopy_in_A"
-        src_b: "datacopy_in_B"
+        in0: "datacopy_in_A"
         operation: "Datacopy"
         unpacker: "UnpackerA"
         math_fidelity: "LoFi"
@@ -97,8 +92,8 @@ operations:
         packer: "Packer"
   - math:
       - type: "Fpu"
-        src_a: "elwadd_in_A"
-        src_b: "elwadd_in_B"
+        in0: "elwadd_in_A"
+        in1: "elwadd_in_B"
         operation: "Elwadd"
         unpacker: "UnpackerAB"
         math_fidelity: "LoFi"
@@ -108,8 +103,8 @@ operations:
         packer: "Packer"
   - math:
       - type: "Fpu"
-        src_a: "reduce_in_A"
-        src_b: "reduce_in_B"
+        in0: "reduce_in_A"
+        in1: "reduce_in_B"
         operation: "Reduce"
         reduce_dim: "REDUCE_ROW"
         reduce_pool: "SUM"
@@ -121,8 +116,8 @@ operations:
         packer: "Packer"
   - math:
       - type: "Fpu"
-        src_a: "elwmul_in_A"
-        src_b: "elwmul_in_B"
+        in0: "elwmul_in_A"
+        in1: "elwmul_in_B"
         operation: "Elwmul"
         unpacker: "UnpackerAB"
         math_fidelity: "LoFi"
@@ -132,14 +127,14 @@ operations:
         packer: "Packer"
   - math:
       - type: "Fpu"
-        src_a: "matmul_in_A"
-        src_b: "matmul_in_B"
+        in0: "matmul_in_A"
+        in1: "matmul_in_B"
         operation: "Matmul"
         unpacker: "MatmulUnpacker"
         math_fidelity: "HiFi2"
       - type: "Fpu"
-        src_a: "elwadd_fused_in_A"
-        src_b: "elwadd_fused_in_B"
+        in0: "elwadd_fused_in_A"
+        in1: "elwadd_fused_in_B"
         operation: "Elwadd"
         unpacker: "UnpackerAB"
         math_fidelity: "LoFi"

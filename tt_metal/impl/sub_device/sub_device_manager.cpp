@@ -47,8 +47,7 @@ static_assert(
 
 std::atomic<uint64_t> SubDeviceManager::next_sub_device_manager_id_ = 0;
 
-SubDeviceManager::SubDeviceManager(
-    ttsl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size, IDevice* device) :
+SubDeviceManager::SubDeviceManager(ttsl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size, IDevice* device) :
     id_(next_sub_device_manager_id_++), sub_devices_(sub_devices.begin(), sub_devices.end()), device_(device) {
     TT_ASSERT(device != nullptr, "Device must not be null");
     context_id_ = extract_context_id(device);

@@ -109,7 +109,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla_wrapper(
     int32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
     uint32_t num_links,
-    uint32_t cluster_axis,
+    std::optional<uint32_t> cluster_axis,
     const MeshDevice& mesh_device,
     ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
@@ -387,6 +387,8 @@ void bind_sdpa(nb::module_& mod) {
             block_cyclic_chunk_local (int, optional): the per-shard chunk length (chunk_size_global / sp).
                 Required iff block_cyclic_sp_axis is set. Cross-checked against q's per-chip seq length: must be
                 q_isl or tp*q_isl (tp = mesh_size/sp) — the only two values it can legally take.
+            block_cyclic_cache_tp_sharded (bool): True = the cache is striped across ALL sp*tp devices (linear chip =
+                sp_coord*tp + tp_coord), so stripes = sp*tp and per-stripe chunk = block_cyclic_chunk_local/tp.
         Returns:
             ttnn.Tensor: [1, H, S, v_dim] ROW-MAJOR, DRAM interleaved; dtype matches q (bf16->bf16, fp8->fp8).
         )doc",
@@ -402,7 +404,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("cache_batch_idx") = nb::none(),
         nb::arg("block_cyclic_sp_axis") = nb::none(),
-        nb::arg("block_cyclic_chunk_local") = nb::none());
+        nb::arg("block_cyclic_chunk_local") = nb::none(),
+        nb::arg("block_cyclic_cache_tp_sharded") = false);
 
     ttnn::bind_function<"sparse_sdpa_msa", "ttnn.transformer.">(
         mod,
@@ -720,7 +723,7 @@ void bind_sdpa(nb::module_& mod) {
             dim (int): Dimension for ring all-gather.
             multi_device_global_semaphore (List[ttnn.GlobalSemaphore]): Global semaphores for CCL synchronization.
             num_links (int): Number of CCL links.
-            cluster_axis (int): Mesh axis for all-gather.
+            cluster_axis (int, optional): Mesh axis for an axis ring. Pass None for one full-mesh snake ring.
             mesh_device (ttnn.MeshDevice): Multi-device mesh.
             topology (ttnn.ccl.Topology): Communication topology.
             subdevice_id (Optional[tt.tt_metal.SubDeviceId]): Sub-device identifier. Defaults to None.

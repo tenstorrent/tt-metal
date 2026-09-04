@@ -124,7 +124,9 @@ ttnn::device_operation::ProgramArtifacts MorehDotOperation::ProgramFactory::crea
     KernelSpec compute{
         .unique_id = COMPUTE,
         .source = COMPUTE_KERNEL_PATH,
-        .compiler_options = {.defines = {{"REDUCE_OP", "PoolType::SUM"}, {"REDUCE_DIM", "ReduceDim::REDUCE_ROW"}}},
+        .compiler_options =
+            {.defines = {{"REDUCE_OP", "PoolType::SUM"}, {"REDUCE_DIM", "ReduceDim::REDUCE_ROW"}},
+             .opt_level = KernelBuildOptLevel::O3},
         .dfb_bindings =
             {
                 DFBBinding{.dfb_spec_name = IN0, .accessor_name = "in0", .endpoint_type = DFBEndpointType::CONSUMER},

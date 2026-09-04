@@ -1,42 +1,49 @@
-# Test image, package payload: the build's .deb packages installed into the
-# image a hardware test job already pulls, so the job downloads no artifact and
-# runs no install step. Built by .github/workflows/build-prebuilt-tests-image.yaml, which
-# puts the packages artifact at artifact/ in the build context.
+# Test image: the build's .deb packages installed into the image a hardware test
+# job already pulls, so the job downloads no artifact and runs no install step.
+# Built by .github/workflows/build-prebuilt-tests-image.yaml, which puts the
+# packages artifact at artifact/ in the build context.
 
 # The producer always passes BASE; the default is only so this builds standalone.
 ARG BASE=ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-24.04-ci-test-amd64:latest
 FROM ${BASE}
 
-# Which validation packages to install; mirrors smoke.yaml's `product` input.
+# Which consumer this image is for. smoke.yaml and basic.yaml install the same
+# set; sdk-examples.yaml installs the -dev and -examples packages instead, plus
+# libprotobuf-dev which it otherwise pulls from the network on every leg.
+ARG PROFILE=smoke
+# Which product's packages to add; mirrors the consumers' `product` input.
 ARG PRODUCT=tt-metalium
 
 SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 
-# Bind-mounted, not COPYed: a COPY layer would carry the whole ~636 MB of debs
-# (and the .ddebs) in the image forever, which is most of the saving.
+# Bind-mounted, not COPYed: a COPY layer would keep the whole deb set in the
+# image forever, which is most of the saving.
 #
-# Same package set smoke.yaml installs, and for the same reason: apt will not
-# resolve dependencies from files on disk unless told about all of them.
-# tt-metalium-jit is absent on use-system-sfpi builds, hence nullglob.
+# tt-metalium-jit is absent on use-system-sfpi builds, hence nullglob. The
+# product-specific set is checked separately, or a misspelled PRODUCT would be
+# satisfied by the tt-metalium packages alone and publish without its payload.
 RUN --mount=type=bind,source=artifact,target=/tmp/pkgs \
     shopt -s nullglob \
-    && pkgs=( \
-        /tmp/pkgs/tt-metalium_*.deb \
-        /tmp/pkgs/tt-metalium-jit_*.deb \
-        /tmp/pkgs/tt-metalium-validation_*.deb \
-        "/tmp/pkgs/${PRODUCT}"_*.deb \
-        "/tmp/pkgs/${PRODUCT}"-validation_*.deb \
-    ) \
-    && if [ "${#pkgs[@]}" -eq 0 ]; then echo "No packages matched in artifact/" >&2; exit 1; fi \
-    && product=( "/tmp/pkgs/${PRODUCT}"_*.deb "/tmp/pkgs/${PRODUCT}"-validation_*.deb ) \
-    && if [ "${#product[@]}" -eq 0 ]; then \
-        echo "No packages matched PRODUCT=${PRODUCT} in artifact/" >&2; \
-        echo "Without this the tt-metalium packages alone satisfy the check above" >&2; \
-        echo "and the image publishes without the payload the caller asked for." >&2; \
-        exit 1; \
-       fi \
+    && case "${PROFILE}:${PRODUCT}" in \
+        smoke:tt-metalium|smoke:tt-nn) \
+            base=( /tmp/pkgs/tt-metalium_*.deb /tmp/pkgs/tt-metalium-jit_*.deb /tmp/pkgs/tt-metalium-validation_*.deb ); \
+            product=( "/tmp/pkgs/${PRODUCT}"_*.deb "/tmp/pkgs/${PRODUCT}"-validation_*.deb ); \
+            extra=() ;; \
+        examples:tt-metalium) \
+            base=( /tmp/pkgs/tt-metalium_*.deb /tmp/pkgs/tt-metalium-jit_*.deb /tmp/pkgs/tt-metalium-dev_*.deb ); \
+            product=( /tmp/pkgs/tt-metalium-examples_*.deb ); \
+            extra=( libprotobuf-dev ) ;; \
+        examples:tt-nn) \
+            base=( /tmp/pkgs/tt-metalium_*.deb /tmp/pkgs/tt-metalium-jit_*.deb /tmp/pkgs/tt-metalium-dev_*.deb ); \
+            product=( /tmp/pkgs/tt-nn_*.deb /tmp/pkgs/tt-nn-dev_*.deb /tmp/pkgs/tt-nn-examples_*.deb ); \
+            extra=( libprotobuf-dev ) ;; \
+        *) echo "Unsupported PROFILE=${PROFILE} PRODUCT=${PRODUCT}" >&2; exit 1 ;; \
+       esac \
+    && if [ "${#base[@]}" -eq 0 ]; then echo "No packages matched in artifact/" >&2; exit 1; fi \
+    && if [ "${#product[@]}" -eq 0 ]; then echo "No packages matched PRODUCT=${PRODUCT} in artifact/" >&2; exit 1; fi \
     && apt-get update \
-    && apt-get install -y "${pkgs[@]}" \
+    && if [ "${#extra[@]}" -gt 0 ]; then DEBIAN_FRONTEND=noninteractive TZ=UTC apt-get install -y -q "${extra[@]}"; fi \
+    && apt-get install -y "${base[@]}" "${product[@]}" \
     && rm -rf /var/lib/apt/lists/* \
     && dpkg-query -W -f='${Package} ${Version}\n' | grep -E '^tt-' \
         > /etc/prebuilt-tests-manifest

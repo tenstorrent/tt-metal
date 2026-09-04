@@ -632,6 +632,10 @@ class LlamaForCausalLM(Generator):
         "supports_async_decode": True,
         "supports_sample_on_device": True,
         "max_device_top_k": 32,
+        # prefill_forward_single_user_text already routes a nonzero start_pos to
+        # the chunked SDPA, and the generator floors the offset to what that op
+        # needs, so a prompt split across engine steps needs no new prefill code.
+        "supports_chunked_prefill": True,
     }
 
     @classmethod
@@ -720,6 +724,10 @@ class QwenForCausalLM(Generator):
         "supports_async_decode": True,
         "supports_sample_on_device": True,
         "max_device_top_k": 32,
+        # prefill_forward_single_user_text already routes a nonzero start_pos to
+        # the chunked SDPA, and the generator floors the offset to what that op
+        # needs, so a prompt split across engine steps needs no new prefill code.
+        "supports_chunked_prefill": True,
     }
 
     @classmethod
@@ -802,6 +810,10 @@ class MistralForCausalLM(Generator):
         "supports_async_decode": True,
         "supports_sample_on_device": True,
         "max_device_top_k": 32,
+        # prefill_forward_single_user_text already routes a nonzero start_pos to
+        # the chunked SDPA, and the generator floors the offset to what that op
+        # needs, so a prompt split across engine steps needs no new prefill code.
+        "supports_chunked_prefill": True,
     }
 
     @classmethod
