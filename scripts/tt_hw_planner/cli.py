@@ -4816,11 +4816,14 @@ def _run_focused_pytest(
     except subprocess.TimeoutExpired:
         print(
             f"  focused pytest WALL-CLOCK BUDGET EXHAUSTED at {timeout_s}s "
-            f"— killing process group (likely a hang/deadlock inside the new stub).",
+            f"— killing process group. This is a genuine stub hang/deadlock ONLY if the last "
+            f"stage below is stalled; a large or sharded model can legitimately need longer than "
+            f"the wall for reference load + first-run kernel compile, in which case raise the base "
+            f"BRINGUP_MCP_TIMEOUT (it is already scaled by model size / mesh degree).",
             file=sys.stderr,
         )
         if _LAST_PYTEST_STAGES:
-            print("  Last reported stage(s) before hang:", file=sys.stderr)
+            print("  Last reported stage(s) before kill:", file=sys.stderr)
             for tname, stg in _LAST_PYTEST_STAGES.items():
                 print(f"    {tname}: stage={stg}", file=sys.stderr)
 

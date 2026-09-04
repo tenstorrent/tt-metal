@@ -41,7 +41,9 @@ harness-skipped (manual).
 Config via env:
   BRINGUP_MCP_DEMO_DIR / BRINGUP_MCP_MODEL_ID / BRINGUP_MCP_STATE (required)
   BRINGUP_MCP_MAX_ATTEMPTS (base cap, default 2)
-  BRINGUP_MCP_PCC (default: pcc_targets.COMPONENT_PCC) · BRINGUP_MCP_TIMEOUT (default 1800)
+  BRINGUP_MCP_PCC (default: pcc_targets.COMPONENT_PCC) · BRINGUP_MCP_TIMEOUT (base wall, default 1800;
+    scaled per run by model size and, in shard mode, mesh degree via `_adaptive_pcc_timeout` —
+    set BRINGUP_MCP_TIMEOUT_MODE=fixed to restore the flat wall)
 """
 from __future__ import annotations
 
@@ -384,6 +386,65 @@ def _ensure_shard_test(component: str) -> str | None:
         return None
 
 
+def _model_size_bonus() -> int:
+    """Coarse 0..3 size bucket for the model under bring-up, from the plan's declared
+    shape (top-level ``new_model_shape`` if present, else the largest ``hidden_size`` x
+    deepest ``num_hidden_layers`` across the component ``new_shape`` entries). A bigger
+    model means a slower reference load + first-run kernel compile, so it needs a longer
+    wall. Returns 0 (no bonus) when the shape is unknown — the flat base is kept."""
+    try:
+        doc = _status_doc()
+        shape = doc.get("new_model_shape")
+        shape = shape if isinstance(shape, dict) else {}
+        hidden = int(shape.get("hidden_size") or 0)
+        layers = int(shape.get("num_hidden_layers") or 0)
+        for c in doc.get("components") or []:
+            s = c.get("new_shape") if isinstance(c, dict) else None
+            if isinstance(s, dict):
+                hidden = max(hidden, int(s.get("hidden_size") or 0))
+                layers = max(layers, int(s.get("num_hidden_layers") or 0))
+        score = hidden * max(layers, 1)
+        if score >= 4096 * 48:  # ~30B-class and larger
+            return 3
+        if score >= 4096 * 32:  # ~7-13B-class
+            return 2
+        if score >= 2048 * 24:  # ~1-3B-class
+            return 1
+        return 0
+    except Exception:  # noqa: BLE001 -- an unknown shape must never break the run
+        return 0
+
+
+def _adaptive_pcc_timeout(shard: bool) -> int:
+    """Per-run pytest wall for ONE PCC run, scaled from the flat base
+    (``BRINGUP_MCP_TIMEOUT``, default 1800s) by the work the run actually does, so a big
+    model or a wide mesh is not hard-killed with rc=124 mid-compile and then misread as
+    an ``OTHER`` failure that re-queues the component forever. Mirrors the optimize/auto
+    convention (``cli._agent_complexity_timeout``): ``base + step*bonus``, hard-capped.
+
+    Two best-effort, model-agnostic bonuses:
+      * mesh bonus (shard only) — a sharded run compiles kernels for and runs collectives
+        across TP*DP chips; each chip beyond the first adds +1 unit.
+      * size bonus — a large hidden_size/layer count is a slower reference load + first-run
+        compile; 0..3 units (``_model_size_bonus``).
+    A single-device run of a small model gets bonus 0 and keeps the base, so nothing that
+    already passes within the flat wall is slowed down.
+
+    Escape hatch: ``BRINGUP_MCP_TIMEOUT_MODE=fixed`` restores the old flat behaviour."""
+    base = _TIMEOUT
+    if base <= 0 or os.environ.get("BRINGUP_MCP_TIMEOUT_MODE", "").strip().lower() == "fixed":
+        return base
+    bonus = _model_size_bonus()
+    if shard:
+        chips = max(_SHARD_TP * _SHARD_DP, 1)
+        bonus += max(chips - 1, 0)
+    if bonus <= 0:
+        return base
+    step = 600  # +10 min per unit -- one cold TTNN compile is minutes, not seconds
+    hard_cap = base + 6 * step  # never more than +60 min over the base wall
+    return min(base + step * bonus, hard_cap)
+
+
 def _run_pcc(component: str) -> dict:
     """Run ONE component's PCC test on device via the SAME runner the fsm loop uses and scope the
     report to this demo. Returns {ran, passed, failed, skipped, summary, details, skip_reason}.
@@ -408,7 +469,15 @@ def _run_pcc(component: str) -> dict:
             "details": "",
             "skip_reason": "",
         }
-    _cli._run_focused_pytest(model_id=_MODEL_ID, test_files=[tf], timeout_s=_TIMEOUT)
+    _timeout = _adaptive_pcc_timeout(shard)
+    if _timeout != _TIMEOUT:
+        print(
+            f"  [timeout] {key}: PCC run wall {_timeout}s "
+            f"(base {_TIMEOUT}s{', shard TP=' + str(_SHARD_TP) + ' DP=' + str(_SHARD_DP) if shard else ''}"
+            f", size_bonus={_model_size_bonus()})",
+            flush=True,
+        )
+    _cli._run_focused_pytest(model_id=_MODEL_ID, test_files=[tf], timeout_s=_timeout)
     report = _cli._scope_report_to_demo(_cli._parse_pytest_report(), _DEMO_DIR)
     skip_reason = ""
     for entry in (report.get("per_skipped") or {}).values():

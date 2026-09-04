@@ -1661,8 +1661,8 @@ def test_pytest_kill_uses_kill_process_tree() -> None:
 
     src = _planner_source()
 
-    stages_idx = src.find('"  Last reported stage(s) before hang:"')
-    assert stages_idx > 0, "pytest hang-timeout block (anchored on 'Last reported " "stage(s) before hang:') must exist"
+    stages_idx = src.find('"  Last reported stage(s) before kill:"')
+    assert stages_idx > 0, "pytest hang-timeout block (anchored on 'Last reported " "stage(s) before kill:') must exist"
 
     kill_block = src[stages_idx : stages_idx + 1200]
     assert "_kill_process_tree(" in kill_block, (
