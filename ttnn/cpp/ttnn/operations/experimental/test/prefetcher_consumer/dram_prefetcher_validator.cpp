@@ -344,23 +344,18 @@ void test_tensor_prefetcher_pipe_validator(
     TT_FATAL(receiver_cores.num_cores() > 0, "TensorPrefetcherPipes has no receiver cores");
 
     const ValidatorGeometry geom = compute_validator_geometry(source_tensor, sr_mapping);
-    const uint32_t entry_size = prefetcher_pipes.entry_size;
-    TT_FATAL(
-        geom.page_bytes_per_recv == entry_size,
-        "Validator: this tensor delivers {} B per receiver per block, but the PrefetcherPipes were created with "
-        "entry_size {} B. Create them with entry_size == the per-receiver block size.",
-        geom.page_bytes_per_recv,
-        entry_size);
 
     Program program = CreateProgram();
 
     // No remote CB: a PrefetcherPipe consumer Attaches instead, which hands each receiver core a
-    // program-local slot id. The Attach uses the pipes' own entry size, so the device constructor
-    // stays on its same-epoch fast path and publishes no padding credits.
+    // program-local slot id. Attach at this tensor's per-receiver block size rather than the size
+    // the pipes were created at -- that is what the sender is about to push, and when the two
+    // differ it is also what makes the device-side constructor run the resize handshake, which is
+    // the behaviour under test.
     //
     // attach() and sender_receiver_core_mapping() both enumerate the pipes bank-major, so a plan's
     // sender_index (an index into sr_mapping) is also the index of that sender's pipe id.
-    const std::vector<uint8_t> pipe_ids = prefetcher_pipes.attach(program);
+    const std::vector<uint8_t> pipe_ids = prefetcher_pipes.attach(program, geom.page_bytes_per_recv);
     TT_FATAL(
         pipe_ids.size() == sr_mapping.size(),
         "Validator: attached {} pipes for {} senders; each receiver plan indexes its sender's pipe id",
