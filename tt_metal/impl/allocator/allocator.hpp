@@ -13,7 +13,6 @@
 
 #include "impl/allocator/allocator_types.hpp"
 #include "impl/allocator/bank_manager.hpp"
-#include "impl/allocator/persistent_l1_arena.hpp"
 
 namespace tt::tt_metal {
 
@@ -157,10 +156,6 @@ public:
     void mirror_lockstep_allocation(DeviceAddr address, DeviceAddr size);
     void unmirror_lockstep_allocation(DeviceAddr address);
 
-    // Device-global L1 arena for allocations that outlive individual programs.
-    PersistentL1Arena& persistent_l1() { return persistent_l1_; }
-    const PersistentL1Arena& persistent_l1() const { return persistent_l1_; }
-
     // We likely won't need to perform heap allocation just to expose the user side of Allocator,
     // this is to ease transition so we keep the pointer-to-allocator semantics.
     const std::unique_ptr<Allocator>& view() const;
@@ -209,8 +204,6 @@ private:
     //
     // TODO(river): revert this to inplace storage if we can shove Allocator into impl.
     std::unique_ptr<AllocatorConfig> config_;
-
-    PersistentL1Arena persistent_l1_;
 
     // External view of the allocator, this shouldn't need to be a unique_ptr, but currently kept as so to preserve API
     // stability
