@@ -20,8 +20,8 @@ void bind_tensor_prefetcher(nb::module_& mod) {
         mod,
         R"doc(
             Return True if the Tensor prefetcher (DRISC) is supported on `mesh_device`,
-            i.e. programmable DRAM cores are available (Blackhole with firmware >= 19.12.0.0
-            and either no harvested DRAM channels or a single device). When this returns False,
+            i.e. programmable DRAM cores are available (Blackhole with firmware >= 19.12.0.0).
+            When this returns False,
             start_tensor_prefetcher would raise, so callers can use this to skip instead.
 
             Args:
@@ -209,14 +209,14 @@ void bind_tensor_prefetcher(nb::module_& mod) {
     ttnn::bind_function<"tensor_prefetcher_block_count_for_matmul_1d", "ttnn.experimental.">(
         mod,
         R"doc(
-            Compute and validate the block_count to pair with a receiver-contiguous DRAM weight
-            in queue_tensor_prefetcher_request for a gather_in0 or mcast_in0 1D matmul fed via
+            Compute and validate the block_count to pair with a DRAM weight in
+            queue_tensor_prefetcher_request for a gather_in0 or mcast_in0 1D matmul fed via
             global_cb. Gather returns the receiver/ring count. Mcast returns
             weight_K_tiles / in0_block_w and uses natural FIFO order.
 
             Args:
                 program_config: The 1D matmul program config that will consume the weight.
-                weight: The receiver-contiguous (NdShardSpec) DRAM weight tensor.
+                weight: The DRAM weight tensor, in either layout.
                 global_cb: The DRAM-sender GCB the prefetcher and matmul share.
 
             Returns:

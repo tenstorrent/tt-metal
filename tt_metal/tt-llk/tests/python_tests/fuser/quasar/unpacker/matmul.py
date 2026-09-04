@@ -5,16 +5,17 @@
 from typing import List, Tuple
 
 import torch
+from fuser.base_unpacker import Unpacker
 from fuser.block_data import BlockData
 from fuser.fpu_node import FpuNode
-from fuser.fused_loop import FusedLoop, LoopBlock
-from fuser.fused_operation import FusedOperation
-from fuser.fused_unpacker import Unpacker
 from fuser.fuser_config import GlobalConfig
+from fuser.l1_operation import L1Operation
+from fuser.operand import BfdResource, bfd_current
+from fuser.tile_loop import LoopBlock, TileLoop
 
 
 class MatmulUnpacker(Unpacker):
-    loop: FusedLoop = LoopBlock()
+    loop: TileLoop = LoopBlock()
     per_block_init = True
 
     def get_headers(self) -> List[str]:
@@ -27,34 +28,63 @@ class MatmulUnpacker(Unpacker):
         self,
         tensor_a: torch.Tensor,
         tensor_b: torch.Tensor,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: FpuNode,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         return tensor_a, tensor_b
 
-    def init(
+    def perf_set_valid(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
-        buf_desc_id_a = compute_unit.src_a.buf_desc_id
-        buf_desc_id_b = compute_unit.src_b.buf_desc_id
+        num_cols = compute_unit.src_a.tile_shape.total_col_dim()
+        kt_dim = compute_unit.src_a.dimensions[1] // num_cols
+        rt_dim = block.block_tiles_y
+        ct_dim = block.block_tiles_x
+        return f"_perf_unpack_matmul_mock(1, {rt_dim}, {kt_dim}, {ct_dim});\n"
+
+    def perf_clear_valid(
+        self,
+        operation: L1Operation,
+        config: GlobalConfig,
+        compute_unit: FpuNode,
+        block: BlockData,
+    ) -> str:
+        num_cols = compute_unit.src_a.tile_shape.total_col_dim()
+        kt_dim = compute_unit.src_a.dimensions[1] // num_cols
+        rt_dim = block.block_tiles_y
+        ct_dim = block.block_tiles_x
+        return f"_perf_math_matmul_mock(1, {rt_dim}, {kt_dim}, {ct_dim});\n"
+
+    def init(
+        self,
+        operation: L1Operation,
+        config: GlobalConfig,
+        compute_unit: FpuNode,
+        block: BlockData,
+    ) -> str:
+        bfd_program = compute_unit.src_a.bfd_alloc_and_program(
+            BfdResource.UNP1
+        ) + compute_unit.src_b.bfd_alloc_and_program(BfdResource.UNP0)
+        id_a = bfd_current(BfdResource.UNP1)
+        id_b = bfd_current(BfdResource.UNP0)
         rt_dim = block.block_tiles_y
         ct_dim = block.block_tiles_x
         num_cols = compute_unit.src_a.tile_shape.total_col_dim()
         kt_dim = compute_unit.src_a.dimensions[1] // num_cols
 
         return (
-            f"_llk_unpack_matmul_init_<false>"
-            f"({buf_desc_id_a}, {buf_desc_id_b}, {ct_dim}, {rt_dim}, {kt_dim});\n"
+            bfd_program + f"_llk_unpack_matmul_init_<false>"
+            f"({id_a}, {id_b}, {ct_dim}, {rt_dim}, {kt_dim});\n"
         )
 
     def unpack(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: FpuNode,
         block: BlockData,
@@ -67,7 +97,7 @@ class MatmulUnpacker(Unpacker):
             compute_unit.src_b.dimensions[1]
             // compute_unit.src_b.tile_shape.total_col_dim()
         )
-        output_ct_dim = compute_unit.src_a.tile_count_x
+        output_ct_dim = compute_unit.src_b.tile_count_x
 
         return (
             f"{{\n"
@@ -83,7 +113,7 @@ class MatmulUnpacker(Unpacker):
 
     def uninit(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: FpuNode,
         block: BlockData,

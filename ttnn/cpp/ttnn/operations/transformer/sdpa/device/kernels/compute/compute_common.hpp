@@ -51,8 +51,8 @@ void max_block_inplace(uint32_t in0, uint32_t in1) {
     CircularBuffer cb_in0(in0);
     CircularBuffer cb_in1(in1);
     // inputs come in full, outputs go out full
-    copy_tile_to_dst_init_short(in0);
-    copy_tile_to_dst_init_short(in1);
+    copy_init(in0);
+    copy_init(in1);
     binary_max_tile_init();
     constexpr uint32_t dst_reg_0 = 0;
     constexpr uint32_t dst_reg_1 = 1;
@@ -82,7 +82,7 @@ void max_block(uint32_t in0, uint32_t in1, uint32_t out_cb, uint32_t num_tiles) 
     CircularBuffer cb_in1(in1);
     CircularBuffer cb_out(out_cb);
     // inputs come in full, outputs go out full
-    copy_tile_to_dst_init_short(in0);
+    copy_init(in0);
     binary_max_tile_init();
 
     constexpr uint32_t dst_reg_0 = 0;
@@ -234,7 +234,7 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_
         reduce_uninit();
         if (do_eltwise_max) {
             reconfig_data_format_srca(prev_cb);
-            copy_tile_to_dst_init_short(prev_cb);
+            copy_init(prev_cb);
             copy_tile(prev_cb, i, prev_max_dst_idx);
             binary_max_tile(reduce_dst_idx, prev_max_dst_idx, reduce_dst_idx, vector_mode);
         }
@@ -249,9 +249,15 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_
 }
 
 #ifdef TRISC_MATH
-template <bool legacy_compat = true>
+template <bool legacy_compat = true, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 void recip_tile_first_column(uint32_t idst) {
-    SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_recip_first_column, (legacy_compat), idst, VectorMode::C);
+    SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        is_fp32_dest_acc_en,
+        calculate_recip_first_column,
+        (legacy_compat, is_fp32_dest_acc_en),
+        idst,
+        VectorMode::C);
 }
 #endif
 
@@ -263,7 +269,7 @@ void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
     // Precondition: in_cb has num_tiles produced
     // Postcondition: in_cb has num_tiles produced
     reconfig_data_format_srca(in_cb);
-    copy_tile_to_dst_init_short(in_cb);
+    copy_init(in_cb);
     recip_tile_init();
     pack_reconfig_data_format(in_cb);
 
@@ -648,13 +654,13 @@ void mul_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
 
 #if defined(TRISC_MATH) || defined(TRISC_PACK)
 
-template <bool SDPA_EXP_APPROX_MODE, uint16_t scale_bf16>
+template <bool SDPA_EXP_APPROX_MODE, uint16_t scale_bf16, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 void exp_tile_first_column(uint32_t idst) {
     SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         calculate_exponential_first_column,
-        (SDPA_EXP_APPROX_MODE, scale_bf16),
+        (SDPA_EXP_APPROX_MODE, scale_bf16, is_fp32_dest_acc_en),
         idst,
         VectorMode::C);
 }
@@ -695,10 +701,16 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
 }
 
 #ifdef TRISC_MATH
-template <VectorMode vector_mode = VectorMode::C>
+template <VectorMode vector_mode = VectorMode::C, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 void fused_max_sub_exp_add_tile(uint32_t idst, int scale_bf16) {
-    SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_fused_max_sub_exp_add_tile, idst, vector_mode, scale_bf16);
+    SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        is_fp32_dest_acc_en,
+        calculate_fused_max_sub_exp_add_tile,
+        (is_fp32_dest_acc_en),
+        idst,
+        vector_mode,
+        scale_bf16);
 }
 #endif
 
@@ -742,7 +754,7 @@ void correction_block(
 
     for (uint32_t i = 0; i < num_head_tiles; i++) {
         tile_regs_acquire();
-        copy_tile_to_dst_init_short(cb_worker_max);
+        copy_init(cb_worker_max);
         exp_tile_init<EXP_APPROX_MODE>();
         copy_tile(cb_prev_max, i, dst_reg_0);
         copy_tile(cb_worker_max, i, dst_reg_1);
@@ -777,7 +789,7 @@ void move_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
     // Postcondition: in_cb has num_tiles consumed
     // Postcondition: out_cb has num_tiles produced
 
-    copy_tile_to_dst_init_short(in_cb);
+    copy_init(in_cb);
 
     cb_in.wait_front(num_tiles);
     cb_out.reserve_back(num_tiles);
@@ -804,7 +816,7 @@ void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
     // Precondition: out_cb has num_tiles free
     // Postcondition: in_cb has num_tiles consumed
     // Postcondition: out_cb has num_tiles produced
-    copy_tile_to_dst_init_short(in_cb);
+    copy_init(in_cb);
     cb_in.wait_front(num_tiles);
     cb_out.reserve_back(num_tiles);
 #pragma GCC unroll 0
@@ -825,7 +837,7 @@ void log_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
     pack_reconfig_data_format(out_cb);
     CircularBuffer cb_in(in_cb);
     CircularBuffer cb_out(out_cb);
-    copy_tile_to_dst_init_short(in_cb);
+    copy_init(in_cb);
     log_tile_init();
     cb_in.wait_front(num_tiles);
     cb_out.reserve_back(num_tiles);
@@ -878,7 +890,7 @@ void sigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_binop_with_scalar,
-            (APPROX, ADD_UNARY, 8 /* ITERATIONS */),
+            (APPROX, ADD_UNARY, 8 /* ITERATIONS */, DST_ACCUM_MODE),
             0 /*dst_index*/,
             VectorMode::C,
             0x3F800000 /*scalar*/));
@@ -893,11 +905,13 @@ void sigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num
 }
 
 #ifdef TRISC_MATH
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 void softplus_tile_first_column(uint32_t idst, uint beta, uint beta_reciprocal, uint threshold) {
-    SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(
+    SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         calculate_softplus_first_column,
+        (is_fp32_dest_acc_en),
         idst,
         VectorMode::C,
         beta,
@@ -1124,7 +1138,7 @@ void matmul_reduce(uint32_t in1_cb, const uint32_t& out_cb) {
 
 /**
  * Batch-stamp a single tile onto a range of positions in out_cb using L1 accumulate.
- * Caller must have already called copy_tile_to_dst_init_short and llk_pack_reconfig_l1_acc(1).
+ * Caller must have already called copy_init and llk_pack_reconfig_l1_acc(1).
  *
  * @tparam dst_batch  Max tiles per DST cycle (DST register capacity, typically 8 for fp16b half-sync).
  */
@@ -1159,7 +1173,7 @@ void apply_padded_mask_lightweight_runtime(
 
     reconfig_data_format_srca(neginf_cb);
     pack_reconfig_data_format(out_cb);
-    copy_tile_to_dst_init_short(neginf_cb);
+    copy_init(neginf_cb);
     PACK((llk_pack_reconfig_l1_acc(1)));
 
     for (uint32_t row = 0; row < num_rows; row++) {
@@ -1191,7 +1205,7 @@ void apply_partial_mask_lightweight(
     uint32_t row_base = 0) {  // first out_cb tile-row of this query band; nonzero when heads span >1 DEST band
     reconfig_data_format_srca(mask_cb);
     pack_reconfig_data_format(out_cb);
-    copy_tile_to_dst_init_short(mask_cb);
+    copy_init(mask_cb);
     PACK((llk_pack_reconfig_l1_acc(1)));
 
     for (uint32_t row = 0; row < num_rows; row++) {
@@ -1229,7 +1243,7 @@ void apply_causal_mask_lightweight(
     uint32_t straddle_jump = 0) {
     reconfig_data_format_srca(mask_cb);
     pack_reconfig_data_format(out_cb);
-    copy_tile_to_dst_init_short(mask_cb);
+    copy_init(mask_cb);
     PACK((llk_pack_reconfig_l1_acc(1)));
 
     for (uint32_t row = 0; row < num_rows; row++) {
@@ -1525,7 +1539,9 @@ template <
     bool lightweight_mask_enabled = false,
     bool chunked_enabled = false,
     uint32_t chunked_q_local_padded_Nt = 0,
-    uint32_t chunked_chunk_size_t = 0>
+    uint32_t chunked_chunk_size_t = 0,
+    bool use_windowed_narrowing = false,
+    uint32_t cb_windowed_k_range = 0>
 void sdpa_inner_loop(
     const uint32_t Skt,
     const uint32_t qk_in0_block_w,
@@ -1656,9 +1672,22 @@ void sdpa_inner_loop(
             k_chunk_end = iter_k_chunk_end;
         }
 
+        // Windowed K-range narrowing: this Q chunk's [k_lo, k_hi) comes from the reader's ctrl CB —
+        // read via the UNPACK mailbox so all three TRISCs agree — and overrides BOTH bounds. The
+        // reader streams exactly this many K/V chunks and the writer produces exactly this many mask
+        // chunks; any disagreement deadlocks the CBs.
+        uint32_t k_chunk_start = iter_k_chunk_start;
+        if constexpr (use_windowed_narrowing) {
+            CircularBuffer cb_k_range_obj(cb_windowed_k_range);
+            cb_k_range_obj.wait_front(1);
+            k_chunk_start = ckernel::read_tile_value(cb_windowed_k_range, 0, 0);
+            k_chunk_end = ckernel::read_tile_value(cb_windowed_k_range, 0, 1);
+            cb_k_range_obj.pop_front(1);
+        }
+
         uint32_t processed_k_chunks = 0;
 
-        for (uint32_t k_chunk = iter_k_chunk_start; k_chunk < k_chunk_end; ++k_chunk) {
+        for (uint32_t k_chunk = k_chunk_start; k_chunk < k_chunk_end; ++k_chunk) {
             uint32_t kv_global_start_tile = 0;  // RING only: abs K-tile index of this k_chunk's start
             if constexpr (sdpa_type == RING) {
                 const bool kv_chunk_is_joint = k_chunk >= num_local_k_chunks;
@@ -2084,7 +2113,9 @@ template <
     bool is_chunked,
     uint32_t scale_fp32,
     uint32_t sliding_window_size,
-    bool lightweight_mask_enabled = false>
+    bool lightweight_mask_enabled = false,
+    bool use_windowed_narrowing = false,
+    uint32_t cb_windowed_k_range = 0>
 void sdpa_standard(
     const uint32_t Skt,
     const uint32_t qk_in0_block_w,
@@ -2143,7 +2174,12 @@ void sdpa_standard(
         is_chunked,
         scale_fp32,
         sliding_window_size,
-        lightweight_mask_enabled>(
+        lightweight_mask_enabled,
+        false,  // chunked_enabled (not used)
+        0,      // chunked_q_local_padded_Nt (not used)
+        0,      // chunked_chunk_size_t (not used)
+        use_windowed_narrowing,
+        cb_windowed_k_range>(
         Skt,
         qk_in0_block_w,
         qk_subblock_w,

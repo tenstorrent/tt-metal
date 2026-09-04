@@ -28,9 +28,7 @@ public:
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_addr_), value);
     }
 
-    void set(uint32_t value) const {
-        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_addr_), value);
-    }
+    void consume(uint32_t value) const { noc_semaphore_inc(get_noc_addr(l1_addr_), uint32_t{0} - value); }
 
 private:
     address_t l1_addr_;
@@ -46,12 +44,18 @@ void kernel_main() {
     constexpr uint32_t input_page_size = get_compile_time_arg_val(0);
     constexpr uint32_t output_chunk_size = get_compile_time_arg_val(1);
     constexpr uint32_t output_chunks_per_page = get_compile_time_arg_val(2);
-    constexpr uint32_t output_chunks_per_stripe = get_compile_time_arg_val(3);
-    constexpr uint32_t num_devices = get_compile_time_arg_val(4);
-    constexpr uint32_t cb0_id = get_compile_time_arg_val(5);
-    constexpr uint32_t cb_page_size = get_compile_time_arg_val(6);
-    constexpr uint32_t slice_step = get_compile_time_arg_val(7);
-    constexpr auto input_tensor_args = TensorAccessorArgs<8>();
+    constexpr uint32_t num_devices = get_compile_time_arg_val(3);
+    constexpr uint32_t cb0_id = get_compile_time_arg_val(4);
+    constexpr uint32_t cb_page_size = get_compile_time_arg_val(5);
+    constexpr uint32_t slice_step = get_compile_time_arg_val(6);
+    // The maximum per-rank output slot is structural even for selected-prefix gathers, so its
+    // stripe width stays baked and keeps the iterator arithmetic constexpr.
+    constexpr uint32_t static_output_chunks_per_stripe = get_compile_time_arg_val(7);
+    constexpr bool linearized_mesh_ring = get_compile_time_arg_val(8) != 0;
+    constexpr auto snake_orientation = static_cast<ttnn::ccl::snake_ring::Orientation>(get_compile_time_arg_val(9));
+    constexpr uint32_t mesh_rows = get_compile_time_arg_val(10);
+    constexpr uint32_t mesh_cols = get_compile_time_arg_val(11);
+    constexpr auto input_tensor_args = TensorAccessorArgs<12>();
     constexpr auto output_tensor_args = TensorAccessorArgs<input_tensor_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t inputs_per_cb_page = cb_page_size / input_page_size;
@@ -73,21 +77,43 @@ void kernel_main() {
     const uint32_t final_count = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t input_page_id_start = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t input_page_id_end = get_arg_val<uint32_t>(arg_idx++);
+    const address_t ready_sem_addr = get_arg_val<uint32_t>(arg_idx++);
     const address_t data_valid_sem_addr = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t output_chunks_per_stripe = get_arg_val<uint32_t>(arg_idx++);
 
     auto input_tensor_accessor = TensorAccessor(input_tensor_args, input_tensor_address);
     auto output_tensor_accessor = TensorAccessor(output_tensor_args, output_tensor_address);
 
     Noc noc;
     CircularBuffer cb(cb0_id);
+    const DynamicL1Semaphore ready_sem(ready_sem_addr);
     const DynamicL1Semaphore data_valid_sem(data_valid_sem_addr);
 
-    OutputStripeIterator<output_chunks_per_stripe, output_chunks_per_page, output_chunk_size, num_devices, slice_step>
+    OutputStripeIterator<
+        output_chunks_per_page,
+        output_chunk_size,
+        num_devices,
+        slice_step,
+        static_output_chunks_per_stripe,
+        linearized_mesh_ring,
+        snake_orientation,
+        mesh_rows,
+        mesh_cols>
         it;
 
     ///////////////////////////////////////////////////
     // MAIN
     ///////////////////////////////////////////////////
+
+    // A remote writer can reach this device before this device has completed
+    // earlier input/output transfers on its own command queue. Gate the local
+    // writer's CB producer until the downstream device announces that its
+    // corresponding collective program has started. Each invocation owns and
+    // consumes one readiness credit.
+    if (num_iters > 0) {
+        ready_sem.wait_min(1);
+        ready_sem.consume(1);
+    }
 
     uint32_t stripe = initial_stripe;
     for (uint32_t iter = 0; iter < num_iters; ++iter) {
@@ -119,7 +145,7 @@ void kernel_main() {
             const uint32_t start = last ? final_start : slice_start;
             const uint32_t count = last ? final_count : slice_count;
             const uint32_t base_chunk = (iter - 1) * slice_count + (start - slice_start) / slice_step;
-            it.init(stripe, start, count);
+            it.init(stripe, start, count, output_chunks_per_stripe);
             for (uint32_t chunks_read = 0; chunks_read < count;) {
                 const uint32_t batch = std::min(outputs_per_cb_page, count - chunks_read);
                 data_valid_sem.wait_min(base_chunk + chunks_read + batch);
@@ -166,7 +192,9 @@ void kernel_main() {
     // CLEANUP
     ///////////////////////////////////////////////////
 
-    // Completion: wait for every chunk upstream delivers (relayed + sink), then reset for reuse.
+    // Completion: wait for every chunk upstream delivers (relayed + sink),
+    // then atomically consume this invocation's credits.
     data_valid_sem.wait_min(total_chunks);
-    data_valid_sem.set(0);
+    data_valid_sem.consume(total_chunks);
+    noc.async_atomic_barrier();
 }

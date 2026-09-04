@@ -40,12 +40,10 @@ FORCE_INLINE void enhanced_noc_async_read(
                                        ? NOC_MAX_BURST_SIZE
                                        : (max_transfer_size == 0 ? NOC_MAX_BURST_SIZE + 1 : max_transfer_size);
     noc.async_read<NocOptions::DEFAULT, page_size>(
-        UnicastEndpoint{},
+        PrecomposedUnicastEndpoint{},
         CoreLocalMem<uint32_t>(dst_l1_addr),
         bytes,
-        {.noc_x = (uint32_t)NOC_UNICAST_ADDR_X(src_noc_addr),
-         .noc_y = (uint32_t)NOC_UNICAST_ADDR_Y(src_noc_addr),
-         .addr = (uint32_t)NOC_LOCAL_ADDR_OFFSET(src_noc_addr)},
+        {.noc_addr = src_noc_addr},
         {.offset_bytes = 0});
 }
 
@@ -65,12 +63,10 @@ FORCE_INLINE void enhanced_noc_async_write(
                                        : (max_transfer_size == 0 ? NOC_MAX_BURST_SIZE + 1 : max_transfer_size);
     noc.async_write<NocOptions::DEFAULT, page_size>(
         CoreLocalMem<uint32_t>(src_l1_addr),
-        UnicastEndpoint{},
+        PrecomposedUnicastEndpoint{},
         bytes,
         {.offset_bytes = 0},
-        {.noc_x = (uint32_t)NOC_UNICAST_ADDR_X(dst_noc_addr),
-         .noc_y = (uint32_t)NOC_UNICAST_ADDR_Y(dst_noc_addr),
-         .addr = (uint32_t)NOC_LOCAL_ADDR_OFFSET(dst_noc_addr)});
+        {.noc_addr = dst_noc_addr});
 }
 
 template <uint32_t max_transfer_size, bool only_writes>
@@ -341,8 +337,10 @@ FORCE_INLINE void noc_async_write_sharded(
         uint32_t sharded_dest_id = dest_id * pages_per_row + offset / page_size;
         uint32_t sharded_offset = offset % page_size;
         uint32_t num_pages = div_up(size + sharded_offset, page_size);
+        // Explicit counter; a derived `size - i*page_size` would underflow because iter 0 is a partial page.
+        uint32_t remaining = size;
         for (uint32_t i = 0; i < num_pages; i++) {
-            uint32_t write_size = std::min(size - i * page_size, page_size - sharded_offset);
+            uint32_t write_size = std::min(remaining, page_size - sharded_offset);
             noc.async_write(
                 CoreLocalMem<uint32_t>(l1_addr),
                 tensor,
@@ -352,6 +350,7 @@ FORCE_INLINE void noc_async_write_sharded(
             sharded_dest_id++;
             sharded_offset = 0;
             l1_addr += write_size;
+            remaining -= write_size;
         }
     }
 }
@@ -387,8 +386,10 @@ FORCE_INLINE void noc_async_read_sharded(
         uint32_t sharded_src_id = src_id * pages_per_row + offset / page_size;
         uint32_t sharded_offset = offset % page_size;
         uint32_t num_pages = div_up(size + sharded_offset, page_size);
+        // Explicit counter; a derived `size - i*page_size` would underflow because iter 0 is a partial page.
+        uint32_t remaining = size;
         for (uint32_t i = 0; i < num_pages; i++) {
-            uint32_t read_size = std::min(size - i * page_size, page_size - sharded_offset);
+            uint32_t read_size = std::min(remaining, page_size - sharded_offset);
             noc.async_read(
                 tensor,
                 CoreLocalMem<uint32_t>(l1_addr),
@@ -398,6 +399,7 @@ FORCE_INLINE void noc_async_read_sharded(
             sharded_src_id++;
             sharded_offset = 0;
             l1_addr += read_size;
+            remaining -= read_size;
         }
     }
 }

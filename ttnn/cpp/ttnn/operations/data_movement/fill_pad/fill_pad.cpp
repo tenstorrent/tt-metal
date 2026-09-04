@@ -29,7 +29,9 @@ Tensor fill_implicit_tile_padding(
     }
     Tensor output_tensor;
     // if input_tensor is rank > 3, then we need to reshape it to rank 3 such that the last 2 dims are the same
-    if (mutable_input_tensor.logical_shape().rank() > 3) {
+    // Rank>3 interleaved tensors are collapsed to rank-3 before fill_pad. Sharded tensors keep
+    // their rank so NdShardSpec stays aligned with logical_shape (reshard cannot collapse shard rank).
+    if (mutable_input_tensor.logical_shape().rank() > 3 && !mutable_input_tensor.is_sharded()) {
         ttnn::Shape original_shape = mutable_input_tensor.logical_shape();
 
         uint32_t third_dim = 1;

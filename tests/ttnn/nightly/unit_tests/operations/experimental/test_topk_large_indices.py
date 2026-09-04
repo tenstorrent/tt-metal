@@ -35,6 +35,17 @@ def _make_large_index_input(num_rows: int, n: int, k: int) -> torch.Tensor:
     return values
 
 
+def _make_spread_large_index_input(n: int, k: int) -> torch.Tensor:
+    """Place k unique winners across the row so index decoding is checked in every segment."""
+    values = torch.zeros((1, n), dtype=torch.bfloat16)
+    stride = n // k
+    winner_indices = torch.arange(k, dtype=torch.int64) * stride + stride // 2
+    hi16 = (0x3F80 + np.arange(k, dtype=np.uint32)).astype(np.uint32)
+    winner_values = torch.from_numpy((hi16 << 16).view(np.float32).copy()).to(torch.bfloat16)
+    values[0, winner_indices] = winner_values
+    return values
+
+
 def _to_device(torch_input: torch.Tensor, device) -> ttnn.Tensor:
     return ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
@@ -106,6 +117,76 @@ def test_topk_large_indices_random_bfloat16_ties_return_distinct_indices(device)
     actual_values = torch.gather(torch_input.float()[0, 0], dim=-1, index=indices)
     ref_values, _ = torch.topk(torch_input.float()[0, 0], k, dim=-1, largest=True, sorted=True)
     assert_equal(actual_values.sort(dim=-1).values, ref_values.sort(dim=-1).values)
+
+
+@pytest.mark.parametrize(
+    "k,num_chunks,tail_trim",
+    [
+        (512, 1, 0),
+        (512, 2, 0),
+        (512, 31, 0),
+        (512, 32, 17),  # chunk id 31 and a partial final chunk
+        (512, 33, 0),  # first width that keeps the classic body for small K
+        (1024, 1, 0),
+        (1024, 31, 0),
+        (1024, 32, 0),
+        (1024, 33, 0),
+        (1024, 64, 0),
+        (1024, 65, 0),
+        (2048, 1, 0),
+        (2048, 25, 0),  # GLM warm-context chunk count
+        (2048, 31, 0),
+        (2048, 32, 0),
+        (2048, 33, 1),
+        (2048, 64, 0),
+        (2048, 65, 0),
+        (2048, 250, 0),  # GLM long-context chunk count
+    ],
+)
+def test_topk_large_indices_fused_segment_boundaries(device, k, num_chunks, tail_trim):
+    # The input has num_chunks K-wide chunks; tail_trim shortens the final chunk.
+    n = num_chunks * k - tail_trim
+    torch_input = _make_large_index_input(num_rows=1, n=n, k=k)
+    tt_indices = ttnn.experimental.topk_large_indices(_to_device(torch_input, device), k=k)
+
+    _assert_topk_matches_torch(torch_input, tt_indices, k)
+
+
+@pytest.mark.parametrize(
+    "k,llk_k,num_chunks,tail_trim",
+    [
+        (512, 512, 32, 7),  # fused end-to-end: winners span all chunk stamps
+        (768, 1024, 40, 7),  # snapped K: segmented mode and a multi-chunk partial final segment
+        (2048, 2048, 40, 7),  # direct segmented mode with winners in both segments
+    ],
+)
+def test_topk_large_indices_spread_winners_decode_global_indices(device, k, llk_k, num_chunks, tail_trim):
+    n = num_chunks * llk_k - tail_trim
+    torch_input = _make_spread_large_index_input(n=n, k=k)
+    tt_indices = ttnn.experimental.topk_large_indices(_to_device(torch_input, device), k=k)
+
+    _assert_topk_matches_torch(torch_input, tt_indices, k)
+
+
+def test_topk_large_indices_program_cache_separates_compute_body_modes(device):
+    k = 512
+    fused_input = _make_large_index_input(num_rows=1, n=32 * k, k=k)
+    classic_input = _make_large_index_input(num_rows=1, n=33 * k, k=k)
+
+    device.enable_program_cache()
+    device.clear_program_cache()
+    try:
+        fused = ttnn.experimental.topk_large_indices(_to_device(fused_input, device), k=k)
+        entries_after_fused = device.num_program_cache_entries()
+        classic = ttnn.experimental.topk_large_indices(_to_device(classic_input, device), k=k)
+        entries_after_classic = device.num_program_cache_entries()
+
+        assert entries_after_fused > 0
+        assert entries_after_classic == entries_after_fused + 1
+        _assert_topk_matches_torch(fused_input, fused, k)
+        _assert_topk_matches_torch(classic_input, classic, k)
+    finally:
+        device.disable_and_clear_program_cache()
 
 
 @pytest.mark.parametrize(
@@ -181,8 +262,8 @@ TOPK_LARGE_INDICES_PERF_MARGIN = 0.01
 # regressions and unexpected speedups that should trigger baseline review.
 TOPK_LARGE_INDICES_PRODUCTION_PERF_CONFIGS = [
     # (case_id, num_rows, allocated_length, valid_length, k, expected_duration_ns)
-    ("prefill", 640, 51200, None, 1536, 1_683_850),
-    ("bounded_cache", 2, 102400, 56320, 1536, 316_890),
+    ("prefill", 640, 51200, None, 1536, 1_286_400),
+    ("bounded_cache", 2, 102400, 56320, 1536, 242_560),
 ]
 
 
@@ -434,9 +515,10 @@ def test_topk_large_indices_valid_length_mixed_prefix_ignores_finite_tail(device
 
 def test_topk_large_indices_valid_length_program_cache_reuse_while_growing(device):
     # A serving loop grows valid_length each step; because valid_length is a runtime arg (hash-excluded),
-    # every step must reuse a single cached program.
-    k = 1536
-    n = 102400
+    # every step must reuse a single cached program. Exercise the exact fused-segment boundary and the
+    # first partial chunk of the next segment while high-valued stale data remains at the physical row's end.
+    k = 2048
+    n = 65 * k
     torch_input = _make_large_index_input(num_rows=2, n=n, k=k)
     tt_input = _to_device(torch_input, device)
 
@@ -444,19 +526,49 @@ def test_topk_large_indices_valid_length_program_cache_reuse_while_growing(devic
     device.clear_program_cache()
     try:
         entries = []
-        for valid_length in (2048, 20480, 56320, n):
-            ttnn.experimental.topk_large_indices(tt_input, k=k, valid_length=valid_length)
+        for valid_length in (31 * k, 32 * k, 32 * k + 17, 33 * k, n):
+            tt_indices = ttnn.experimental.topk_large_indices(tt_input, k=k, valid_length=valid_length)
             entries.append(device.num_program_cache_entries())
+
+            indices = ttnn.to_torch(tt_indices, dtype=torch.uint32).to(torch.int64)
+            assert indices.min() >= 0
+            assert indices.max() < valid_length
+            for row_indices in indices:
+                assert row_indices.unique().numel() == k
+
         assert entries[0] > 0
         assert max(entries) == min(entries)  # no recompile as valid_length grew
     finally:
         device.disable_and_clear_program_cache()
 
 
+@pytest.mark.parametrize("k", [512, 1024, 2048])
+def test_topk_large_indices_short_valid_length_emits_sentinels(device, k):
+    # Sparse MLA keeps a fixed maximum top-k shape while its cache is shorter than k.  The valid
+    # prefix supplies the real indices and the remaining output slots must be the sparse-SDPA sentinel.
+    valid_length = 496
+    # Keep one full output-width of finite stale data beyond the requested top-k, so every k exercises
+    # that the runtime prefix bound—not just the sentinel padding—excludes the physical tail.
+    n = 2 * k
+    torch_input = _make_bf16_exact_input(num_rows=1, n=n)
+    tt_indices = ttnn.experimental.topk_large_indices(_to_device(torch_input, device), k=k, valid_length=valid_length)
+    _, valid_indices = torch.topk(
+        torch_input[:, :valid_length].float(), valid_length, dim=-1, largest=True, sorted=True
+    )
+    expected = torch.cat(
+        [
+            valid_indices,
+            torch.full((1, k - valid_length), 0xFFFFFFFF, dtype=torch.int64),
+        ],
+        dim=-1,
+    )
+    _assert_indices(tt_indices, expected, [1, k])
+
+
 @pytest.mark.parametrize(
     "k,n,valid_length",
     [
-        (512, 1024, 496),  # valid_length < k
+        (512, 1024, 0),  # valid_length must be positive
         (512, 1024, 2048),  # valid_length > n
     ],
 )

@@ -107,7 +107,7 @@ void kernel_main() {
             // and corrupt the per-128 amax.
             reconfig_data_format_srca(cb_in_id);
             pack_reconfig_data_format(cb_tile_id);
-            copy_tile_init(cb_in_id);
+            copy_init(cb_in_id);
             cb_in.wait_front(tiles_per_block);
             cb_tile.reserve_back(tiles_per_block);
             for (uint32_t k = 0; k < tiles_per_block; ++k) {
@@ -128,13 +128,13 @@ void kernel_main() {
             // ----- Phase 2: block amax -> scale (col 0) and 1/scale (col 0) -----
             cb_tile.wait_front(tiles_per_block);  // read by index; popped after the divide
             for (uint32_t block_h_idx = 0; block_h_idx < block_ht; ++block_h_idx) {
-                // Abs the block row's tiles into cb_abs. Force the SrcA tile-dim/stride reconfig
-                // (is_tile_dim_reconfig_en=true): the default reconfig keeps the prior element
-                // stride, so after a bf16 tilize the fp32 cb_tile would be read with a 2-byte
-                // stride and copy_tile would misread it (corrupting the amax for bf16 input).
-                reconfig_data_format_srca</*is_tile_dim_reconfig_en=*/true>(cb_tile_id);
+                // Abs the block row's tiles into cb_abs. Use reconfig_full_operand_srca so the SrcA tile/face
+                // geometry is reprogrammed for cb_tile too (not just the format): after a bf16 tilize the fp32
+                // cb_tile would otherwise be read with a stale geometry and copy_tile would misread it
+                // (corrupting the amax for bf16 input).
+                reconfig_full_operand_srca(cb_tile_id);
                 pack_reconfig_data_format(cb_abs_id);
-                copy_tile_init(cb_tile_id);
+                copy_init(cb_tile_id);
                 cb_abs.reserve_back(block_wt);
                 abs_tile_init();
                 for (uint32_t k = 0; k < block_wt; ++k) {

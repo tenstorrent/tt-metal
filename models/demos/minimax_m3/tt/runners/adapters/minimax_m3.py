@@ -4,7 +4,7 @@
 """``MiniMaxM3PrefillAdapter`` — the MiniMax-M3 plug-in for the model-agnostic prefill runner.
 
 The prefill runner (``models/demos/common/prefill/runners/prefill_runner.py``) is model-agnostic: it
-owns rank topology, the H2D socket, and the request/standalone loops, and drives a model through a
+owns rank topology, the H2D socket, and the request serving loop, and drives a model through a
 ``PrefillModelAdapter`` (see ``models/demos/common/prefill/adapter.py``). This adapter is pure glue:
 it says where M3's config / weights / trace live and how to build its runtime; all operational behavior
 (running a chunk, the KV layout, PCC) lives on ``TtPrefillRuntime`` (``tt/tt_prefill_runtime.py``).
@@ -14,9 +14,10 @@ architecture (GQA + block-sparse MSA) with a REGULAR TP-head-sharded triple KV c
 not the DeepSeek merged/replicated kvpe cache. Single-rank AND pipeline-parallel (multi-galaxy D2D)
 prefill are wired: the runtime slices the model by rank (first_layer_idx / is_first_rank / is_last_rank),
 and the D2D activation ships emb-replicated across TP (pipeline_activation_emb_tp_sharded=False) to match
-M3's SP residual layout. KV-chunk-table migration IS wired for the single-rank case: the multi-tensor
-cache is described by a multi-config table (one config per (tensor, head-shard); see
-``tt/runners/kv_chunk_table.py``); pipelined migration is not yet wired (same limit as DeepSeek).
+M3's SP residual layout. KV-chunk-table migration is wired for BOTH: the multi-tensor cache is described
+by a multi-config table (one config per (tensor, head-shard); see ``tt/runners/kv_chunk_table.py``), and
+with a pipeline the gathered stage layouts merge every stage's layers into one table at global layer
+indices (one layout per cache — k, v, index_k — via ``kv_migration_stages``).
 
 Import-safety: the heavy stack (TtPrefillRuntime / Model / transformers AutoConfig / weight loading) is
 imported lazily inside the methods that need it, so ``import ...adapters.minimax_m3`` stays cheap enough
@@ -25,7 +26,7 @@ for the H2D producer (which reads only path/trace attributes).
 Env the operator sets (mirrors the rest of the M3 ecosystem):
   HF_MODEL / PREFILL_HF_MODEL   real MiniMax-M3 checkpoint dir (VL-wrapped config + bf16 safetensors)
   TT_CACHE_PATH                 tilized weight-cache root (defaults to the checkpoint dir)
-  PREFILL_TRACE_DIR             golden trace dir (metadata.json + kv_cache/) for PREFILL_STANDALONE_PCC
+  PREFILL_TRACE_DIR             golden trace dir (metadata.json + kv_cache/) for KV-PCC validation
 """
 
 from __future__ import annotations
@@ -82,9 +83,12 @@ class MiniMaxM3PrefillAdapter(PrefillModelAdapter):
 
     l1_small_size = 0
 
-    # M3's sequence-parallel residual keeps the full embedding on every TP col (emb replicated, seq
-    # SP-sharded), so the D2D hidden state ships emb-replicated across TP.
-    pipeline_activation_emb_tp_sharded = False
+    # The D2D hidden state ships in the residual stream's layer-boundary layout (see tt/residual.py).
+    @property
+    def pipeline_activation_emb_tp_sharded(self):
+        from models.demos.minimax_m3.tt.residual import use_sharded_residual
+
+        return use_sharded_residual()
 
     # ------------------------------------------------------------------
     # HF config
@@ -190,6 +194,7 @@ class MiniMaxM3PrefillAdapter(PrefillModelAdapter):
             is_first_rank=params.is_first_rank,
             is_last_rank=params.is_last_rank,
             pipeline_activation_emb_tp_sharded=self.pipeline_activation_emb_tp_sharded,
+            use_trace=params.use_trace,
         )
         return TtPrefillRuntime(
             mesh_device=mesh_device,

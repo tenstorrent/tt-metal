@@ -48,6 +48,85 @@ def test_tiled_concat(device, concat_spec, dtype):
     assert_equal(torch_output_tensor, output)
 
 
+# Width concat of tile-layout tensors whose last dim is not tile-aligned.
+# These route through the native tiled-unaligned concat (untilize -> row assembly -> retilize
+# streamed in 32-row bands), which must drop each input's width padding, zero-fill the
+# output's, and stay bit-exact -- with no row-major intermediates or DRAM staging.
+@pytest.mark.parametrize(
+    "shapes",
+    [
+        [[96, 100], [96, 60], [96, 7]],  # unequal unaligned widths
+        [[32, 5], [32, 5], [32, 5]],  # output narrower than one tile
+        [[32, 31], [32, 33]],  # unaligned inputs, tile-aligned output (31 + 33 = 64)
+        [[64, 100], [64, 64], [64, 100]],  # mix of unaligned and aligned inputs
+        [[50, 100], [50, 100]],  # height not tile-aligned either
+        [[2, 3, 64, 100], [2, 3, 64, 100]],  # rank 4
+        [[1, 7, 100], [1, 7, 100]],  # rank 3, tiny height
+        [[2500, 100]] * 5,  # tall, many inputs, uneven core split
+    ],
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+def test_tiled_concat_unaligned_width(device, shapes, dtype):
+    torch_dtype = torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32
+    torch_input_tensors = [torch.rand(shape, dtype=torch_dtype) for shape in shapes]
+    torch_output_tensor = torch.concat(torch_input_tensors, dim=-1)
+
+    input_tensors = [
+        ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
+        for torch_input_tensor in torch_input_tensors
+    ]
+
+    output = ttnn.concat(input_tensors, dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
+    output = ttnn.to_torch(output)
+
+    assert_equal(torch_output_tensor, output)
+
+
+def test_tiled_concat_unaligned_width_program_cache(device):
+    shapes = [[64, 100], [64, 60]]
+    entries_after_first = None
+    live_tensors = []
+    for iteration in range(2):
+        torch_inputs = [torch.rand(shape, dtype=torch.bfloat16) for shape in shapes]
+        inputs = [
+            ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
+            for x in torch_inputs
+        ]
+        live_tensors.extend(inputs)
+
+        output = ttnn.concat(inputs, dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        assert_equal(torch.concat(torch_inputs, dim=-1), ttnn.to_torch(output))
+
+        if iteration == 0:
+            entries_after_first = device.num_program_cache_entries()
+        else:
+            assert (
+                device.num_program_cache_entries() == entries_after_first
+            ), "second invocation must reuse the cached program"
+
+
+@pytest.mark.parametrize(
+    "shapes, dtype",
+    [
+        ([[64, 100], [64, 100]], ttnn.int32),
+        ([[32, 33]] * 40, ttnn.bfloat16),  # above the native path's input-count cap
+    ],
+)
+def test_tiled_concat_unaligned_width_fallback(device, shapes, dtype):
+    torch_input_tensors = [random_torch_tensor(dtype, shape) for shape in shapes]
+    torch_output_tensor = torch.concat(torch_input_tensors, dim=-1)
+
+    input_tensors = [
+        ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
+        for torch_input_tensor in torch_input_tensors
+    ]
+
+    output = ttnn.concat(input_tensors, dim=-1)
+    output = ttnn.to_torch(output)
+
+    assert_equal(torch_output_tensor, output)
+
+
 @pytest.mark.parametrize("height", [20, 32])
 @pytest.mark.parametrize("width", [4, 32])
 @pytest.mark.parametrize("dim", [0, 1])
@@ -531,3 +610,21 @@ def test_concat_int32_2d_dim1_regression(device):
 
     tt_output_torch = ttnn.to_torch(tt_output)
     assert torch.equal(torch_output, tt_output_torch)
+
+
+@pytest.mark.parametrize("width", [32, 20])
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+def test_concat_fp32_last_dim_mantissa_not_truncated(device, width, layout):
+    """fp32 concat on the last dim must be bitwise exact, aligned or not."""
+    shape = (1, 1, 32, width)
+    numel = 32 * width
+    k = torch.arange(numel, dtype=torch.int64) % 23 + 1
+    torch_input = (1.0 + torch.pow(2.0, -k.to(torch.float64))).to(torch.float32).reshape(shape)
+    torch_output = torch.cat([torch_input, torch_input], dim=3)
+
+    tt_a = ttnn.from_torch(torch_input, layout=layout, device=device, dtype=ttnn.float32)
+    tt_b = ttnn.from_torch(torch_input, layout=layout, device=device, dtype=ttnn.float32)
+    tt_output = ttnn.concat([tt_a, tt_b], dim=3)
+
+    assert tt_output.dtype == ttnn.float32
+    assert_equal(torch_output, ttnn.to_torch(tt_output))

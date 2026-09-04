@@ -561,12 +561,13 @@ void py_module(nb::module_& mod) {
 
     matmul_multi_core_reuse_multicast_dram_sharded_program_config
         .def(
-            nb::init<std::size_t, std::size_t, std::size_t, std::optional<UnaryWithParam>>(),
+            nb::init<std::size_t, std::size_t, std::size_t, std::optional<UnaryWithParam>, std::size_t>(),
             nb::kw_only(),
             nb::arg("in0_block_w").noconvert(),
             nb::arg("per_core_M").noconvert(),
             nb::arg("per_core_N").noconvert(),
-            nb::arg("fused_activation") = nb::none())
+            nb::arg("fused_activation") = nb::none(),
+            nb::arg("num_workers_per_dram_bank") = 1)
         .def_rw("in0_block_w", &MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig::in0_block_w, R"doc(
             Block width for both input tensors along the K dimension (shared inner dimension).
 
@@ -596,17 +597,29 @@ void py_module(nb::module_& mod) {
             matmul operation. This can provide significant performance benefits by avoiding
             additional memory round-trips in DRAM-based operations.
         )doc")
+        .def_rw(
+            "num_workers_per_dram_bank",
+            &MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig::num_workers_per_dram_bank,
+            R"doc(
+            Number of Tensix reader/compute workers assigned to each DRAM bank.
+
+            The default of 1 preserves the established cross-architecture path. Values of 2 or 3
+            split each bank's width shard evenly across multiple workers on Blackhole. All readers
+            for one bank use NOC0 and the same allocator-selected DRAM endpoint. The per-bank shard
+            width in tiles must equal this value times the reader width.
+        )doc")
         .def("__repr__", [](const MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig& config) {
             // Include fused_activation in the repr for full visibility during tracing/debugging.
             std::string fused_activation_repr =
                 config.fused_activation.has_value() ? fmt::format("{}", config.fused_activation.value()) : "None";
             return fmt::format(
                 "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w={}, per_core_M={}, per_core_N={}, "
-                "fused_activation={})",
+                "fused_activation={}, num_workers_per_dram_bank={})",
                 config.in0_block_w,
                 config.per_core_M,
                 config.per_core_N,
-                fused_activation_repr);
+                fused_activation_repr,
+                config.num_workers_per_dram_bank);
         });
 
     auto matmul_multi_core_reuse_multicast_batched_dram_sharded_program_config =
@@ -1071,7 +1084,8 @@ void py_module(nb::module_& mod) {
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): the compute kernel configuration for the matmul operation. Defaults to `None`.
             core_grid (ttnn.CoreGrid, optional): the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to `None`.
             output_tile (List of [int], optional): Specifies the output tile configuration. Defaults to `None`.
-            optional_output_tensor (ttnn.Tensor, optional): User provided on-device output tensor where the result of matmul is to be written. Defaults to `None`.
+            optional_output_tensor (ttnn.Tensor, optional): User provided on-device output tensor where the result of matmul is to be written. Defaults to `None`. Its shape must match the expanded output shape from the table below (skipped positions are zero-filled), or, when `nnz` is provided, may instead be the compact shape `[1, nnz, M, N]`: the results of the `nnz` active batch pairs are then packed contiguously in sparsity scan order, with skipped positions omitted rather than zero-filled. When the compact shape coincides with the expanded shape (e.g. `nnz == E` in the both-sparse mode), the output is treated as compact; under the exact-nnz contract no batch is skipped there, so the two layouts are identical. The tensor's tile must equal the output tile derived from the inputs, `[in0 tile height, in1 tile width]`. In indexed/gather mode (see `indices`) the expected shape is instead the indexed output shape, i.e. the expanded shape with the sparse-group axis shortened to `num_active`.
+            indices (ttnn.Tensor, optional): enables INDEXED/GATHER mode. A ROW_MAJOR ``UINT16`` tensor listing the ``num_active`` sparse-group ids to compute (e.g. the top-k expert ids). When provided, the kernels iterate ONLY those ids (``bB = indices[i]``) instead of scanning every sparse group, and the output's group axis becomes COMPACT with length ``num_active`` (``output_shape[-3] = num_active``) rather than the full group count ``E``; output slot ``i`` holds the result for group ``indices[i]``, so the ids need not be sorted. Requirements: `is_input_b_sparse` must be True; the tensor must be device-resident on the same device as the inputs and occupy a single ROW_MAJOR stick (all dimensions except the last must be 1); ``num_active`` must be <= the number of sparse groups ``E``; and every id must be < ``E`` (out-of-range ids are only caught on-device, asserting loudly under watcher). `nnz` must not be supplied together with `indices` -- the indexed loop count comes from ``num_active``, so an `nnz` would be silently ignored. `sparsity` is still a required operand but is NOT read by the kernels in this mode (the indexed loop visits only active groups, so there is no per-slot validity scan or multicast). Defaults to `None` (the group axis is scanned densely). Use this when only a few groups are active per call to avoid the full-group multicast cost.
 
         Returns:
             ttnn.Tensor: the output tensor with sparse results.
@@ -1182,7 +1196,8 @@ void py_module(nb::module_& mod) {
             nb::arg("output_tile") = nb::none(),
             nb::arg("optional_output_tensor") = nb::none(),
             nb::arg("global_cb") = nb::none(),
-            nb::arg("sub_device_id") = nb::none()));
+            nb::arg("sub_device_id") = nb::none(),
+            nb::arg("indices") = nb::none()));
 
     // Bind MatmulParams for descriptor-based operations
     nb::class_<ttnn::prim::MatmulParams>(mod, "MatmulParams")

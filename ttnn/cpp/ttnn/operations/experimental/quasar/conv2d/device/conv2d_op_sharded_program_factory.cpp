@@ -156,7 +156,6 @@ ActivationReuseConfig calculate_activation_reuse_params(
     config.num_cores_with_non_meaningful_work = tt::div_up(total_remaining_tiles_to_push, single_core_height_ntiles);
 
     std::vector<CoreCoord> all_input_cores;
-    all_input_cores.reserve(input_cores.num_cores());
     for (const CoreRange& range : input_cores.ranges()) {
         for (const CoreCoord& core : range) {
             all_input_cores.push_back(core);
@@ -677,7 +676,13 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     // mcast-loop deadlock that is documented BH-specific ("works on WH, hangs on BH"); Quasar may not need it.
     // RISK: if the Quasar block-sharded 2D-mcast loop also deadlocks under SyncHalf, this trades the 0x19 for a
     // hang -- if so, revert to forcing SyncFull for block_sharded on Quasar.
-    if ((block_sharded || height_sharded) && !arch_is_quasar) {
+    // [#48552 WH EXPERIMENT] Do NOT force SyncFull on HEIGHT-sharded for WH/BH. The mainline ttnn.conv2d
+    // control PASSES on these exact shapes/config with SyncHalf + fast_tilize (test_regular_conv2d_wh_control),
+    // so forcing SyncFull here (which routes off fast_tilize onto the datacopy tilize_block, per the comment
+    // above) is precisely what deadlocks the WH height-sharded/split path in tilize_block's per-tile MATH<->PACK
+    // DEST handshake. Let height-sharded fall through to the config default (SyncHalf) -> fast_tilize, matching
+    // mainline. Block-sharded keeps SyncFull (the original #47797 BH-mcast-loop reason). Quasar already excluded.
+    if (block_sharded && !arch_is_quasar) {
         dst_full_sync_en = true;
     }
 
@@ -1071,26 +1076,6 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         (height_sharded || block_sharded) && !is_conv_1d_depthwise_conv && !enable_split_reader &&
         !enable_activation_reuse && (in0_num_blocks_w == 1) && (num_blocks_weight_w_per_core == 1);
 
-    // [#48552 DEBUG -- remove before merge] When the split env is set but this conv did NOT run tilize-only,
-    // Program A produces a normal conv output [M, N] instead of the tilized activation [M, full_K], and the
-    // chained Program B matmul then under-reserves its in0 CB (the RBFAIL dfb=0 need=M*full_K cap=M*N). Dump
-    // each gate so we can see WHICH condition is false and align conv2d.cpp's split decision with it.
-    if ((std::getenv("TT_METAL_QSR_CONV_SPLIT_PROGRAM") != nullptr) || split_program_unpack_tilize) {
-        log_debug(
-            tt::LogOp,
-            "[QSR-SPLIT #48552] split_program_tilize_only={} | height_sharded={} not_depthwise={} "
-            "not_split_reader={} not_act_reuse={} in0_num_blocks_w={}(want 1) num_blocks_weight_w_per_core={}(want "
-            "1) a_mem_layout={}",
-            split_program_tilize_only,
-            height_sharded,
-            !is_conv_1d_depthwise_conv,
-            !enable_split_reader,
-            !enable_activation_reuse,
-            in0_num_blocks_w,
-            num_blocks_weight_w_per_core,
-            static_cast<int>(a.memory_config().memory_layout()));
-    }
-
     // Program A (tilize-only) EXPERIMENT: the pure tilize (conv_tilize_only_metal2.cpp) faults with ERROR_TRISC1
     // 0x19 mid-stream (after several 4-wide blocks tilize cleanly, config identical to the PASSING standalone
     // tilize), which matches the residual Quasar tilize DEST-bank-release LLK issue in HALF sync (syncfull=0 —
@@ -1284,17 +1269,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     // Convenience accessor for CB sizing.
     auto cb = [&](Conv2dCb name) -> const CBInfo& { return get_cb_info_by_name(cb_info, name); };
 
-    // QSR: the packer RELU (llk_pack_relu_config(ReluConfig::zero())) leaves ~one 16x16 face per output tile
-    // UNCLAMPED on Quasar -- proven by bisect (test_conv2d_correctness_bisect): a height-sharded conv is
-    // correct with the activation off (PCC 0.99997) but drops to 0.8547 with RELU on, uniform / tap-count-
-    // independent / fidelity-independent, with stale negatives surviving (output absmax > golden). WH is fine.
-    // Route RELU through the SFPU activation path on Quasar instead (full DEST tile; the same path GELU uses)
-    // by NOT taking the packer-relu fast-path here -- the `!pack_relu` branch below then merges the SFPU relu
-    // defines (SFPU_OP_*_ACTIVATION), applied per output tile in the compute kernel after the bias add.
-    // TODO(LLK): fix the Quasar packer relu face coverage so the faster packer clamp can be used again.
-    // (arch_is_quasar is declared earlier, near the out_subblock 1x1 workaround.)
-    bool pack_relu =
-        fused_activation.has_value() && fused_activation.value().op_type == unary::UnaryOpType::RELU && !arch_is_quasar;
+    bool pack_relu = fused_activation.has_value() && fused_activation.value().op_type == unary::UnaryOpType::RELU;
 
     const bool check_skip_compute = input_cores != output_cores;
     // populate_skipped_work_cores is only reachable with split reader (deferred), so it is always false.
@@ -1391,27 +1366,16 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     // ---- compute defines ----
     std::map<std::string, std::string> compute_defines;
     if (fused_activation.has_value() && !pack_relu) {
-        // Pass the activation input dtype: several unary ops (RELU, SIGNBIT, ...) branch float-vs-int in
-        // get_op_init_and_func and TT_FATAL if it is absent. On Quasar RELU takes this SFPU path (packer-relu
-        // is disabled above), so the dtype is now required. The activation runs on the accumulated conv
-        // result that becomes the output, so use the output dtype (bf16 => the float relu_tile path).
+        // Non-RELU fused activations (GELU, SILU, ...) take the SFPU path. RELU uses packer relu
+        // (`pack_relu` above) and skips this branch. Pass the activation input dtype: several unary
+        // ops branch float-vs-int in get_op_init_and_func and TT_FATAL if it is absent. The
+        // activation runs on the accumulated conv result that becomes the output, so use the output
+        // dtype.
         compute_defines.merge(ttnn::operations::unary::utils::get_defines(
             fused_activation.value().op_type, fused_activation.value().params, "ACTIVATION", "i", output.dtype()));
     }
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
         device->arch(), output_cores.num_cores(), compute_defines, ttnn::get_throttle_level(compute_kernel_config));
-
-    // UnpackToDestEn bypass (tt-metal #49445): when TT_METAL_QSR_TILIZE_UNPACK_TO_DEST is set, inject
-    // QSR_TILIZE_UNPACK_TO_DEST so tilize.h routes the tilize unpacker straight into DEST (UNP_DEST) and turns
-    // the MATH A2D datacopy into a no-MOP sync forwarder — sidestepping the faulting Quasar tilize datacopy MOP
-    // (the 0x19: the semaphore-scheme tilize never frees the FPU dest-dvalid ring; unpack-to-dest removes the
-    // ring-advancing MOVA2D). Applies to any Quasar tilize_block path (the fused conv kernel AND the split
-    // Program-A tilize-only kernel) — excludes depthwise (no tilize_block) and the unpack-tilize reduce probe
-    // (uses tilizeA_B_reduce, not tilize_block).
-    if (arch_is_quasar && !is_conv_1d_depthwise_conv && !split_program_unpack_tilize &&
-        (std::getenv("TT_METAL_QSR_TILIZE_UNPACK_TO_DEST") != nullptr)) {
-        compute_defines.insert({"QSR_TILIZE_UNPACK_TO_DEST", "1"});
-    }
 
     // ============================================================================
     //  Build the ProgramSpec
@@ -1536,6 +1500,8 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         } else if (split_program_tilize_only) {
             // OPTION B / Program A: the tilize writes STRAIGHT INTO the borrowed OUT (sized to M*K below,
             // borrowed_from OUTPUT — the op's output IS the tilized activation). No separate ACT_TILIZED DFB.
+            // (fix #3 tried a fresh intermediate DFB + writer here; REVERTED — it still deadlocked identically
+            // in fast_tilize_block, so the borrowed output was NOT the cause. See the WH split memory.)
         } else if (split_tilize_matmul) {
             // OPTION C: hold ALL height blocks of tilized activation at once (num_blocks_act_h_per_core x
             // one block) so Phase 1 can tilize every block before Phase 2's matmul consumes them. NB: the

@@ -24,7 +24,10 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/device/mock_allocator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/device/device_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/device/dispatch.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/allocator/persistent_l1_arena.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/per_core_allocation/buffer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/range_lockstep_allocation/buffer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/range_lockstep_allocation/memory_config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/per_core_allocation/memory_config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/per_core_allocation/mesh_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/buffer.cpp
@@ -37,6 +40,8 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/drisc_l1_arena.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/tensor_prefetcher_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/global_circular_buffer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/buffers/cross_node_dfb.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/buffers/prefetcher_pipe.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/global_semaphore.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/semaphore.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/bfloat2.cpp
@@ -66,6 +71,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/allocator_state.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/bank_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/l1_banking_allocator.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/allocator/trace_allocation_tracker.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/program/program.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/program/dispatch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/program/kernel_compile_utils.cpp
@@ -91,6 +97,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/dispatch_query_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/dispatch_core_common.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/dispatch_engine_kernel.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/internal/cluster_noc_helpers.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/internal/service/service_core_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/simple_trace_allocator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/dispatch_core_manager.cpp

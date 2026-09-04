@@ -48,8 +48,15 @@ SubDeviceManagerTracker::SubDeviceManagerTracker(
 
 SubDeviceManagerTracker::~SubDeviceManagerTracker() {
     active_sub_device_manager_ = nullptr;
-    for (auto sub_device_manager = sub_device_managers_.begin(); sub_device_manager != sub_device_managers_.end();) {
-        this->remove_sub_device_manager((sub_device_manager++)->first);
+    for (auto it = sub_device_managers_.begin(); it != sub_device_managers_.end();) {
+        if (it->second.get() == default_sub_device_manager_) {
+            ++it;
+        } else {
+            this->remove_sub_device_manager((it++)->first);
+        }
+    }
+    if (default_sub_device_manager_ != nullptr) {
+        this->remove_sub_device_manager(default_sub_device_manager_->id());
     }
     default_sub_device_manager_ = nullptr;
 }
@@ -76,11 +83,15 @@ void SubDeviceManagerTracker::reset_sub_device_state(const std::unique_ptr<SubDe
     // Dynamic resolution of device types is unclean and poor design. This will be cleaned up
     // when MeshCommandQueue + HWCommandQueue are unified under the same API
     if (dynamic_cast<distributed::MeshDevice*>(device_)) {
-        // Multi CQ support for MeshDevice is not currently available
         distributed::MeshDevice* mesh_device = dynamic_cast<distributed::MeshDevice*>(device_);
-        for (uint8_t cq_id = 0; cq_id < mesh_device->num_hw_cqs(); ++cq_id) {
+        // The worker launch message ring buffer and the GO mailboxes are shared by every hardware CQ, so
+        // exactly one CQ resets them. That has to be the last CQ: reset_worker_state drains each of the
+        // preceding CQs, so by the time the last one runs, no other CQ can still have workers in flight
+        // whose GO mailboxes would be remapped out from under them.
+        const uint8_t num_hw_cqs = mesh_device->num_hw_cqs();
+        for (uint8_t cq_id = 0; cq_id < num_hw_cqs; ++cq_id) {
             mesh_device->impl().mesh_command_queue_base(cq_id).reset_worker_state(
-                cq_id == 0,
+                /*reset_launch_msg_state=*/cq_id + 1 == num_hw_cqs,
                 num_sub_devices,
                 sub_device_manager->noc_mcast_unicast_data(),
                 sub_device_manager->get_core_go_message_mapping(),
@@ -94,7 +105,7 @@ void SubDeviceManagerTracker::reset_sub_device_state(const std::unique_ptr<SubDe
 
 void SubDeviceManagerTracker::load_sub_device_manager(SubDeviceManagerId sub_device_manager_id) {
     TT_FATAL(
-        tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch(),
+        tt::tt_metal::MetalContext::instance(extract_context_id(device_)).rtoptions().get_fast_dispatch(),
         "Using sub device managers is unsupported with slow dispatch");
     if (active_sub_device_manager_->id() == sub_device_manager_id) {
         return;
@@ -109,9 +120,10 @@ void SubDeviceManagerTracker::load_sub_device_manager(SubDeviceManagerId sub_dev
     this->reset_sub_device_state(sub_device_manager->second);
     const auto& default_allocator = default_sub_device_manager_->allocator(SubDeviceId{0});
     default_allocator->reset_allocator_size(BufferType::L1);
-    // Shrink the global allocator size to make room for sub-device allocators
-    auto local_l1_size = sub_device_manager->second->local_l1_size();
-    default_allocator->shrink_allocator_size(BufferType::L1, local_l1_size, /*bottom_up=*/true);
+    // Reserve the full bottom-up span through the shifted sub-device regions:
+    // persistent arena occupancy followed by sub-device-local L1.
+    const auto bottom_reservation_size = sub_device_manager->second->global_l1_bottom_reservation_size();
+    default_allocator->shrink_allocator_size(BufferType::L1, bottom_reservation_size, /*bottom_up=*/true);
     active_sub_device_manager_ = sub_device_manager->second.get();
 }
 

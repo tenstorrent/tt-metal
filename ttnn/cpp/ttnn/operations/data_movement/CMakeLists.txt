@@ -19,6 +19,8 @@ file(
     clone/device/kernels/*.cpp
     concat/device/kernels/*.cpp
     common/kernels/*.hpp
+    common/kernels/codegen/*.cpp
+    common/kernels/codegen/*.h
     fill_pad/device/kernels/*.cpp
     fill_pad/device/kernels/*.hpp
     fill_rm/device/kernels/*.cpp
@@ -36,8 +38,8 @@ file(
     permute/device/kernels/*.cpp
     reshape_on_device/device/kernels/*.cpp
     repeat/device/kernels/*.cpp
+    repeat_interleave/codegen/kernels/*.cpp
     repeat/codegen/kernels/*.cpp
-    repeat/codegen/kernels/*.h
     roll/device/kernels/*.cpp
     reshape_view/device/device/*.cpp
     scatter/device/kernels/*.hpp
@@ -51,6 +53,8 @@ file(
     tilize_with_val_padding/device/kernels/*.cpp
     transpose/device/kernels/*.cpp
     untilize/device/kernels/*.cpp
+    untilize/codegen/kernels/*.cpp
+    untilize/codegen/kernels/*.h
     untilize_with_unpadding/device/kernels/*.cpp
 )
 target_sources(
@@ -107,6 +111,7 @@ target_sources(
             concat/device/concat_block_sharded_program_factory.hpp
             concat/device/concat_s2s_rm_program_factory.hpp
             concat/device/concat_s2s_tiled_program_factory.hpp
+            concat/device/concat_tiled_unaligned_program_factory.hpp
             # copy/
             copy/copy_nanobind.hpp
             # data_movement nanobind

@@ -11,6 +11,7 @@
 #include <random>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "impl/program/program_impl.hpp"
 #include <algorithm>
 #include <cmath>
 #include <functional>
@@ -46,6 +47,7 @@
 #include <umd/device/types/arch.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/int8.hpp>
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 namespace tt::tt_metal {
 
@@ -105,6 +107,7 @@ const map<std::string, std::map<std::string, std::string>> sfpu_op_to_op_name = 
 const map<std::string, std::map<std::string, std::string>> sfpu_binary_op_to_op_name = {
     {"div_binary", {{"SFPU_OP_INIT_0", "div_binary_tile_init();"}, {"SFPU_OP_CHAIN_0", "div_binary_tile(0, 1, 0);"}}},
     {"mul_float", {{"SFPU_OP_INIT_0", "mul_binary_tile_init();"}, {"SFPU_OP_CHAIN_0", "mul_binary_tile(0, 1, 0);"}}},
+    {"atan2", {{"SFPU_OP_INIT_0", "atan2_binary_tile_init();"}, {"SFPU_OP_CHAIN_0", "atan2_binary_tile(0, 1, 0);"}}},
     // add_int: Int8 L1 inputs are promoted to sign-magnitude Int32 in DEST via copy_tile + fp32_dest_acc;
     // add_int_tile<Int32> (sign-mag on Quasar via ARCH_QUASAR) then adds in sign-mag space. Result in DST[0].
     {"add_int",
@@ -221,6 +224,10 @@ bfloat16 sfpu_binary_function(const std::string& op_name, const bfloat16& lhs, c
     }
     if (op_name == "mul_float") {
         return bfloat16(static_cast<float>(lhs) * static_cast<float>(rhs));
+    }
+    if (op_name == "atan2") {
+        // Compute API convention: the first operand is y and the second is x.
+        return bfloat16(std::atan2(static_cast<float>(lhs), static_cast<float>(rhs)));
     }
     if (op_name == "binary_max") {
         return bfloat16(std::max(static_cast<float>(lhs), static_cast<float>(rhs)));
@@ -341,6 +348,11 @@ std::pair<vector<uint32_t>, vector<uint32_t>> generate_packed_sfpu_binary_inputs
         auto lhs = generate_div_operand(numel, seed);
         auto rhs = generate_div_operand(numel, seed + 1);
         return {lhs, rhs};
+    }
+    if (op_name == "atan2") {
+        return {
+            generate_packed_uniform_random_vector<uint32_t, bfloat16>(-5.0f, 5.0f, numel, seed),
+            generate_packed_uniform_random_vector<uint32_t, bfloat16>(-5.0f, 5.0f, numel, seed + 1)};
     }
     if (op_name == "binary_max" || op_name == "binary_min") {
         auto lhs = generate_packed_uniform_random_vector<uint32_t, bfloat16>(-4.0f, 4.0f, numel, seed);
@@ -672,26 +684,22 @@ experimental::KernelSpec::CompilerOptions::Defines to_kernel_defines(const std::
 /// keeps the Gen1+Gen2 data-movement config and the MeshWorkload dispatch path. Callers supply the
 /// compute `defines` (op selection / chain) and the packed SRC bytes, and verify the returned DST bytes.
 std::vector<uint32_t> run_sfpu_pipeline(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    distributed::MeshDevice& mesh_device,
     const SfpuConfig& test_config,
     const std::map<std::string, std::string>& defines,
     const std::vector<uint32_t>& packed_input) {
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device.mesh_command_queue();
     const size_t in_bytes = test_config.num_tiles * tt::tile_size(test_config.l1_input_data_format);
     const size_t out_bytes = test_config.num_tiles * tt::tile_size(test_config.l1_output_data_format);
 
-    tt::tt_metal::InterleavedBufferConfig in_dram{
-        .device = mesh_device->get_devices()[0],
-        .size = in_bytes,
-        .page_size = in_bytes,
-        .buffer_type = tt::tt_metal::BufferType::DRAM};
-    tt::tt_metal::InterleavedBufferConfig out_dram{
-        .device = mesh_device->get_devices()[0],
-        .size = out_bytes,
-        .page_size = out_bytes,
-        .buffer_type = tt::tt_metal::BufferType::DRAM};
-    auto input_dram_buffer = CreateBuffer(in_dram);
-    auto output_dram_buffer = CreateBuffer(out_dram);
+    auto input_dram_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = in_bytes},
+        {.page_size = in_bytes, .buffer_type = BufferType::DRAM},
+        &mesh_device);
+    auto output_dram_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = out_bytes},
+        {.page_size = out_bytes, .buffer_type = BufferType::DRAM},
+        &mesh_device);
 
     // Every parametrization of these tests uses a single-core CoreRangeSet of {0, 0};
     // MakeProgramFromSpec models the kernel set per single-core WorkUnit.
@@ -716,7 +724,7 @@ std::vector<uint32_t> run_sfpu_pipeline(
         make_dfb_spec(OUT_DFB, test_config, test_config.l1_output_data_format);
 
     experimental::DataMovementHardwareConfig reader_hw_config;
-    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+    if (mesh_device.arch() == tt::ARCH::QUASAR) {
         reader_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
     } else {
         reader_hw_config = experimental::DataMovementGen1Config{
@@ -738,7 +746,7 @@ std::vector<uint32_t> run_sfpu_pipeline(
     };
 
     experimental::DataMovementHardwareConfig writer_hw_config;
-    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+    if (mesh_device.arch() == tt::ARCH::QUASAR) {
         writer_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
     } else {
         writer_hw_config = experimental::DataMovementGen1Config{
@@ -765,7 +773,7 @@ std::vector<uint32_t> run_sfpu_pipeline(
         unpack_modes = {{IN_DFB, tt::tt_metal::UnpackMode::UnpackToDest}};
     }
     const bool fp32_dest_acc_en = test_config.en_32bit_dest;
-    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+    if (mesh_device.arch() == tt::ARCH::QUASAR) {
         compute_hw_config = experimental::ComputeGen2Config{
             .sfpu_precision_mode =
                 test_config.approx_mode ? tt::tt_metal::Precision::Approximate : tt::tt_metal::Precision::Precise,
@@ -819,7 +827,7 @@ std::vector<uint32_t> run_sfpu_pipeline(
         .work_units = {wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
 
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -849,12 +857,12 @@ std::vector<uint32_t> run_sfpu_pipeline(
     };
     experimental::SetProgramRunArgs(program_run, params);
 
-    tt_metal::detail::WriteToBuffer(input_dram_buffer, packed_input);
+    distributed::EnqueueWriteMeshBuffer(cq, input_dram_buffer, packed_input, /*blocking=*/true);
     distributed::EnqueueMeshWorkload(cq, workload, false);
     distributed::Finish(cq);
 
     std::vector<uint32_t> dest_buffer_data;
-    tt_metal::detail::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
+    distributed::EnqueueReadMeshBuffer(cq, dest_buffer_data, output_dram_buffer, /*blocking=*/true);
     return dest_buffer_data;
 }
 
@@ -863,8 +871,7 @@ std::vector<uint32_t> run_sfpu_pipeline(
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool run_sfpu_all_same_buffer(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const SfpuConfig& test_config) {
+bool run_sfpu_all_same_buffer(distributed::MeshDevice& mesh_device, const SfpuConfig& test_config) {
     const size_t byte_size = test_config.num_tiles * test_config.tile_byte_size;
 
     // Input
@@ -965,17 +972,16 @@ std::vector<uint32_t> sfpu_quasar_run(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const experimental::ProgramSpec& spec,
     const experimental::ProgramRunArgs& params,
-    const std::vector<std::pair<std::shared_ptr<tt::tt_metal::Buffer>, const std::vector<uint32_t>*>>& inputs,
-    const std::shared_ptr<tt::tt_metal::Buffer>& out_buf) {
-    auto* device = mesh_device->get_devices()[0];
+    const std::vector<std::pair<std::shared_ptr<distributed::MeshBuffer>, const std::vector<uint32_t>*>>& inputs,
+    const std::shared_ptr<distributed::MeshBuffer>& out_buf) {
     auto program = experimental::MakeProgramFromSpec(*mesh_device, spec);
     experimental::SetProgramRunArgs(program, params);
     for (const auto& [buf, data] : inputs) {
-        tt_metal::detail::WriteToBuffer(buf, *data);
+        slow_dispatch::WriteToBuffer(*buf, *data);
     }
-    tt_metal::detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true);
+    LaunchProgram(*mesh_device, std::move(program), /*wait_until_cores_done=*/true);
     std::vector<uint32_t> dest;
-    tt_metal::detail::ReadFromBuffer(out_buf, dest);
+    slow_dispatch::ReadFromBuffer(*out_buf, dest);
     return dest;
 }
 
@@ -993,24 +999,21 @@ std::vector<uint32_t> sfpu_quasar_run(
 /// @return
 bool run_sfpu_binary_two_input_buffer(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, const SfpuConfig& test_config) {
-    auto* device = mesh_device->get_devices()[0];
     const size_t per_buffer_byte_size_input = test_config.num_tiles * tt::tile_size(test_config.l1_input_data_format);
     const size_t per_buffer_byte_size_output = test_config.num_tiles * tt::tile_size(test_config.l1_output_data_format);
 
-    tt::tt_metal::InterleavedBufferConfig dram_config_input{
-        .device = device,
-        .size = per_buffer_byte_size_input,
-        .page_size = per_buffer_byte_size_input,
-        .buffer_type = tt::tt_metal::BufferType::DRAM};
-    tt::tt_metal::InterleavedBufferConfig dram_config_output{
-        .device = device,
-        .size = per_buffer_byte_size_output,
-        .page_size = per_buffer_byte_size_output,
-        .buffer_type = tt::tt_metal::BufferType::DRAM};
-
-    auto input0_dram_buffer = CreateBuffer(dram_config_input);
-    auto input1_dram_buffer = CreateBuffer(dram_config_input);
-    auto output_dram_buffer = CreateBuffer(dram_config_output);
+    auto input0_dram_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = per_buffer_byte_size_input},
+        {.page_size = per_buffer_byte_size_input, .buffer_type = tt::tt_metal::BufferType::DRAM},
+        mesh_device.get());
+    auto input1_dram_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = per_buffer_byte_size_input},
+        {.page_size = per_buffer_byte_size_input, .buffer_type = tt::tt_metal::BufferType::DRAM},
+        mesh_device.get());
+    auto output_dram_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = per_buffer_byte_size_output},
+        {.page_size = per_buffer_byte_size_output, .buffer_type = tt::tt_metal::BufferType::DRAM},
+        mesh_device.get());
 
     const bool is_int8_op = sfpu_util::is_int8_binary_sfpu_op(test_config.sfpu_op);
     const size_t element_size = is_int8_op ? sizeof(int8_t) : sizeof(bfloat16);
@@ -1045,6 +1048,8 @@ bool run_sfpu_binary_two_input_buffer(
         }
     } else if (test_config.sfpu_op == "binary_max" || test_config.sfpu_op == "binary_min") {
         sfpu_defines["SFPU_OP_BINARY_MAX_MIN_INCLUDE"] = "1";
+    } else if (test_config.sfpu_op == "atan2") {
+        sfpu_defines["SFPU_OP_BINARY_ATAN2_INCLUDE"] = "1";
     } else {
         sfpu_defines["SFPU_OP_BINARY_DIV_INCLUDE"] = "1";
     }
@@ -1179,16 +1184,22 @@ bool run_sfpu_ternary_three_input_buffer(
     const size_t per_buffer_byte_size = test_config.num_tiles * test_config.tile_byte_size;
     auto* device = mesh_device->get_devices()[0];
 
-    tt::tt_metal::InterleavedBufferConfig dram_config{
-        .device = device,
-        .size = per_buffer_byte_size,
-        .page_size = per_buffer_byte_size,
-        .buffer_type = tt::tt_metal::BufferType::DRAM};
-
-    auto input0_dram_buffer = CreateBuffer(dram_config);
-    auto input1_dram_buffer = CreateBuffer(dram_config);
-    auto input2_dram_buffer = CreateBuffer(dram_config);
-    auto output_dram_buffer = CreateBuffer(dram_config);
+    auto input0_dram_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = per_buffer_byte_size},
+        {.page_size = per_buffer_byte_size, .buffer_type = tt::tt_metal::BufferType::DRAM},
+        mesh_device.get());
+    auto input1_dram_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = per_buffer_byte_size},
+        {.page_size = per_buffer_byte_size, .buffer_type = tt::tt_metal::BufferType::DRAM},
+        mesh_device.get());
+    auto input2_dram_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = per_buffer_byte_size},
+        {.page_size = per_buffer_byte_size, .buffer_type = tt::tt_metal::BufferType::DRAM},
+        mesh_device.get());
+    auto output_dram_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = per_buffer_byte_size},
+        {.page_size = per_buffer_byte_size, .buffer_type = tt::tt_metal::BufferType::DRAM},
+        mesh_device.get());
 
     const size_t numel = per_buffer_byte_size / sizeof(bfloat16);
     const int seed = std::chrono::system_clock::now().time_since_epoch().count();
@@ -1413,12 +1424,12 @@ bool run_sfpu_ternary_three_input_buffer(
             }
         }
 
-        tt_metal::detail::WriteToBuffer(input0_dram_buffer, packed_in0);
-        tt_metal::detail::WriteToBuffer(input1_dram_buffer, packed_in1);
-        tt_metal::detail::WriteToBuffer(input2_dram_buffer, packed_in2);
+        distributed::EnqueueWriteMeshBuffer(cq, input0_dram_buffer, packed_in0, /*blocking=*/true);
+        distributed::EnqueueWriteMeshBuffer(cq, input1_dram_buffer, packed_in1, /*blocking=*/true);
+        distributed::EnqueueWriteMeshBuffer(cq, input2_dram_buffer, packed_in2, /*blocking=*/true);
         distributed::EnqueueMeshWorkload(cq, workload, false);
         distributed::Finish(cq);
-        tt_metal::detail::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
+        distributed::EnqueueReadMeshBuffer(cq, dest_buffer_data, output_dram_buffer, /*blocking=*/true);
     }
 
     return sfpu_util::is_close_packed_sfpu_output(dest_buffer_data, packed_golden, test_config.sfpu_op);
@@ -1431,10 +1442,7 @@ bool run_sfpu_ternary_three_input_buffer(
 /// MX <-> float pairs issue no SFPU op (the unpack/pack gasket performs the conversion); the kernel
 /// chain still runs copy_tile + pack_tile, so the conversion happens symmetrically on both threads.
 bool run_sfpu_typecast(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
-    tt::DataFormat in_fmt,
-    tt::DataFormat out_fmt,
-    size_t num_tiles) {
+    distributed::MeshDevice& mesh_device, tt::DataFormat in_fmt, tt::DataFormat out_fmt, size_t num_tiles) {
     const size_t numel = num_tiles * tt::constants::TILE_HW;
     const int seed = std::chrono::system_clock::now().time_since_epoch().count();
     auto vals = sfpu_util::generate_typecast_input(numel, seed, in_fmt, out_fmt);
@@ -1492,10 +1500,7 @@ bool run_sfpu_typecast(
 }  // namespace unit_tests::compute::sfpu
 
 void run_quasar_sfpu_unpack_to_dest_fp32(
-    const std::shared_ptr<distributed::MeshDevice>& dev,
-    size_t num_tiles,
-    const std::string& sfpu_op,
-    bool dst_full_sync_en) {
+    distributed::MeshDevice& dev, size_t num_tiles, const std::string& sfpu_op, bool dst_full_sync_en) {
     CoreRange core_range({0, 0}, {0, 0});
     CoreRangeSet core_range_set({core_range});
     unit_tests::compute::sfpu::SfpuConfig cfg{
@@ -1516,10 +1521,7 @@ void run_quasar_sfpu_unpack_to_dest_fp32(
 }
 
 void run_quasar_sfpu_unpack_to_dest_16b(
-    const std::shared_ptr<distributed::MeshDevice>& dev,
-    size_t num_tiles,
-    const std::string& sfpu_op,
-    bool dst_full_sync_en) {
+    distributed::MeshDevice& dev, size_t num_tiles, const std::string& sfpu_op, bool dst_full_sync_en) {
     CoreRange core_range({0, 0}, {0, 0});
     CoreRangeSet core_range_set({core_range});
     unit_tests::compute::sfpu::SfpuConfig cfg{
@@ -1569,7 +1571,7 @@ TEST_P(SingleCoreSingleMeshDeviceSfpuParameterizedFixture, TensixSfpuCompute) {
         .approx_mode = false};
     log_info(tt::LogTest, "Testing SFPU_OP={} num_tiles={}", sfpu_op, num_tiles);
     for (auto& device : this->devices_) {
-        EXPECT_TRUE(run_sfpu_all_same_buffer(device, test_config));
+        EXPECT_TRUE(run_sfpu_all_same_buffer(*device, test_config));
     }
 }
 
@@ -1655,7 +1657,7 @@ TEST_P(SingleCoreSingleMeshDeviceSfpuParameterizedApproxFixture, TensixSfpuCompu
         .approx_mode = true};
     log_info(tt::LogTest, "Testing SFPU_OP={} num_tiles={}", sfpu_op, num_tiles);
     for (auto& device : this->devices_) {
-        EXPECT_TRUE(run_sfpu_all_same_buffer(device, test_config));
+        EXPECT_TRUE(run_sfpu_all_same_buffer(*device, test_config));
     }
 }
 INSTANTIATE_TEST_SUITE_P(
@@ -1714,7 +1716,7 @@ TEST_P(SingleCoreSingleMeshDeviceSfpuParameterized32BitDestFixture, TensixSfpuCo
         .en_32bit_dest = true};
     log_info(tt::LogTest, "Testing SFPU_OP={} num_tiles={}", sfpu_op, num_tiles);
     for (auto& device : this->devices_) {
-        EXPECT_TRUE(run_sfpu_all_same_buffer(device, test_config));
+        EXPECT_TRUE(run_sfpu_all_same_buffer(*device, test_config));
     }
 }
 
@@ -1785,7 +1787,7 @@ TEST_P(SingleCoreSingleMeshDeviceSfpuParameterized32BitDestApproxFixture, Tensix
         .en_32bit_dest = true};
     log_info(tt::LogTest, "Testing SFPU_OP={} num_tiles={}", sfpu_op, num_tiles);
     for (auto& device : this->devices_) {
-        EXPECT_TRUE(run_sfpu_all_same_buffer(device, test_config));
+        EXPECT_TRUE(run_sfpu_all_same_buffer(*device, test_config));
     }
 }
 INSTANTIATE_TEST_SUITE_P(
@@ -1868,6 +1870,7 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::Values(
         std::make_tuple(1, "div_binary"),
         std::make_tuple(1, "mul_float"),
+        std::make_tuple(1, "atan2"),
         std::make_tuple(1, "add_int"),
         std::make_tuple(1, "mul_int"),
         std::make_tuple(1, "gt_int"),
@@ -1922,7 +1925,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarSfpuRelu) {
         for (const bool dst_full_sync_en : {true, false}) {
             SCOPED_TRACE(
                 std::string("num_tiles=") + std::to_string(num_tiles) + (dst_full_sync_en ? " SyncFull" : " SyncHalf"));
-            run_quasar_sfpu_unpack_to_dest_fp32(this->devices_.at(0), num_tiles, "relu", dst_full_sync_en);
+            run_quasar_sfpu_unpack_to_dest_fp32(this->device(), num_tiles, "relu", dst_full_sync_en);
         }
     }
 }
@@ -1936,7 +1939,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarSfpuUnpackToDest16b) {
                 "Quasar SFPU 16b->DEST: num_tiles={} {}",
                 num_tiles,
                 dst_full_sync_en ? "SyncFull" : "SyncHalf");
-            run_quasar_sfpu_unpack_to_dest_16b(this->devices_.at(0), num_tiles, "relu", dst_full_sync_en);
+            run_quasar_sfpu_unpack_to_dest_16b(this->device(), num_tiles, "relu", dst_full_sync_en);
         }
     }
 }
@@ -1977,7 +1980,7 @@ TEST_P(SingleCoreSingleMeshDeviceSfpuTypecastFixture, TensixSfpuTypecast) {
         unit_tests::sfpu_util::typecast_device_format_name(in_fmt),
         unit_tests::sfpu_util::typecast_device_format_name(out_fmt));
     for (auto& device : this->devices_) {
-        EXPECT_TRUE(unit_tests::compute::sfpu::run_sfpu_typecast(device, in_fmt, out_fmt, 1));
+        EXPECT_TRUE(unit_tests::compute::sfpu::run_sfpu_typecast(*device, in_fmt, out_fmt, 1));
     }
 }
 

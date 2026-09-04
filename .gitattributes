@@ -1,4 +1,8 @@
 
 /cmake/version.cmake export-subst
 
-.github/workflows/*.lock.yml linguist-generated=true merge=ours
+.github/workflows/*.lock.yml linguist-generated=true
+
+# Properly highlight all Dockerfiles
+Dockerfile.* linguist-language=Dockerfile
+*.dockerignore -linguist-language

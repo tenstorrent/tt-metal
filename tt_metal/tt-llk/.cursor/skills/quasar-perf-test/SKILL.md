@@ -1,6 +1,6 @@
 ---
 name: quasar-perf-test
-description: Create, extend, debug, and validate Quasar LLK performance tests and their PerfRunType kernel paths. Use when adding perf_[op]_quasar.py, wiring PerfConfig, implementing UNPACK_ISOLATE / MATH_ISOLATE / PACK_ISOLATE / L1_CONGESTION, or investigating implausible Quasar perf metrics and dvalid handshakes.
+description: Create, extend, debug, and validate Quasar LLK performance tests, their PerfRunType kernel paths, and tile/dimension sweep coverage. Use when adding perf_[op]_quasar.py, wiring PerfConfig, implementing UNPACK_ISOLATE / MATH_ISOLATE / PACK_ISOLATE / L1_CONGESTION, choosing PERF_TILE_SIZES or dest-fill matrices, or investigating implausible Quasar perf metrics and dvalid handshakes.
 ---
 
 # Quasar Perf Test
@@ -12,11 +12,13 @@ Create or repair a Quasar performance test while preserving its functional
 `PerfConfig`, and give every applicable `PerfRunType` a balanced single-stage
 or congestion path.
 
-This skill covers two related workflows:
+This skill covers three related workflows:
 
 - **Create**: add a perf harness for an existing correctness test.
 - **Repair or extend**: implement or debug run-type behavior in an existing
   Quasar kernel.
+- **Sweep coverage**: choose tile shapes and dest-fill matrices with the
+  shared helpers in `helpers/param_config.py`.
 
 ## Choose the workflow
 
@@ -24,7 +26,9 @@ This skill covers two related workflows:
    **Create a perf test**.
 2. If the perf harness exists but run types are missing, hanging, or producing
    implausible metrics, follow **Repair PerfRunType paths**.
-3. In either case, finish with **Validation**.
+3. If adding or changing tile sizes, input dimensions, or fidelity, follow
+   **Perf sweep coverage**.
+4. In all cases, finish with **Validation**.
 
 ## Create a perf test
 
@@ -46,8 +50,9 @@ This skill covers two related workflows:
    - `run_types=PERF_RUN_TYPES_QUASAR` from `helpers.llk_params`
    - a fixed `loop_factor=32`, unless the operation has an established value
    - a fixed `is_perf=True`
-   - stable dimensions and exact destination fill when normalization depends
-     on shape
+   - `DestSync.Half` and `ImpliedMathFormat.Yes` only
+   - tile sizes and dest-fill matrices from **Perf sweep coverage**, not a
+     single hardcoded tile or the full functional dimension grid
 7. Pass `perf_report` and `is_perf=True` to the correctness helper.
 8. Add keyword-only `is_perf=False` and `perf_report=None` to that helper.
    Build shared `test_config_kwargs`, then:
@@ -56,14 +61,60 @@ This skill covers two related workflows:
    if is_perf:
        if perf_report is None:
            raise ValueError("perf_report must be provided when is_perf=True")
-       PerfConfig(run_types=run_types, **test_config_kwargs).run(perf_report)
+   configuration = create_test_or_perf_config(
+       is_perf=is_perf,
+       run_types=run_types,
+       test_config_kwargs=test_config_kwargs,
+   )
+   if is_perf:
+       configuration.run(perf_report)
        return
    ```
 
 9. Keep the correctness path on `TestConfig` with an explicit
    `PERF_RUN_TYPE(PerfRunType.L1_TO_L1)`.
-10. Preserve dynamic shape coverage in correctness tests. Use fixed,
-    comparable workloads only for the perf path.
+10. Preserve dynamic shape coverage in correctness tests. Perf reuses the
+    functional generator with `is_perf=True`; it must not pin one tile shape.
+
+## Perf sweep coverage
+
+Helpers live in `tests/python_tests/helpers/param_config.py`. Drive every
+`is_perf` composite generator through them. Do not hardcode `(16, 16)` or
+`(32, 32)` as the only perf tile.
+
+**Tile shapes.** Intersect the functional tile-size list with `PERF_TILE_SIZES`
+via `select_perf_tile_sizes()`:
+
+| Class | Size | Why |
+|---|---|---|
+| 4-face | `(32, 32)` | Default FPU/pack/unpack path |
+| 1-face | `(16, 16)` | MX-legal single-face path |
+| 2-face narrow | `(32, 16)` | Different face grid / strides |
+| Tiny | `(1, 32)` | Tiny-tile MOP (shared with 2/4/8×32) |
+
+Skip sizes the functional set does not include (for example `pack_untilize`
+keeps `(32, 32)` and `(1, 32)`). Keep existing MX, unpack-to-dest, and 32-bit
+dest filters. Do not add all of `(1, 2, 4, 8, 16)×32`.
+
+**Input matrices.** Call `generate_perf_input_dimensions(dest_acc, dest_sync,
+tile_shape)` for every selected tile. That emits dest-full tall `(max_tiles, 1)`
+and wide `(1, max_tiles)` in **tile counts**, then multiplies by the tile
+shape. Do not match `PERF_INPUT_DIMENSIONS` element sizes such as `[256, 32]`
+against a non-32×32 tile — those assume 32×32 and drop the wide orientation.
+
+Do not copy the 50-way dest-fitting `generate_unary_input_dimensions` grid.
+Dest-full tall/wide is the unary throughput case. Skip dest index and SFPU
+`tile_indices`; those are register offsets, not distinct MOPs.
+
+**Matmul.** Use dest-full tall and wide output grids (`mt,nt` =
+`(1, max_tiles)` and `(max_tiles, 1)`) × `kt={1, 4}` so both `ct>=rt` and
+`ct<rt` addr_mod branches and unpack-heavy vs math-heavy K are covered. MX
+inputs are LoFi-only; Float16 / Float16_b still sweep LoFi–HiFi4.
+
+**Check coverage** with `compare_test_and_perf.py --dir quasar`. Composite
+splits name `list` as the input matrix and `tuple` as `tile_dimensions`.
+Ignore `DestSync.Full`, `implied_math_format`, `run_types`, `loop_factor`,
+and `is_perf` when judging coverage.
 
 ## C++ structure
 
@@ -104,7 +155,7 @@ may bypass math entirely.
 ## Repair PerfRunType paths
 
 1. Read the C++ kernel, correctness harness, perf harness, and latest
-   `perf_data/<test>/<test>.post.csv`.
+   `perf_data/latest/<test>/<test>.post.csv`.
 2. Map every producer/consumer handshake:
    - SrcA and SrcB dvalid between unpack and math
    - destination dvalid between unpack/math and pack
@@ -211,7 +262,10 @@ From the `tt-llk` root:
 4. Inspect every focused `TILE_LOOP` CSV row.
 5. Run the shared non-perf correctness test, including unpack-to-dest and
    destination-accumulation variants when applicable.
-6. Check edited files for lint errors and run `git diff --check`.
+6. If tile sizes or dimensions changed, run
+   `compare_test_and_perf.py --dir quasar` and confirm the composite `tuple`
+   (tile) and `list` (matrix) axes match **Perf sweep coverage**.
+7. Check edited files for lint errors and run `git diff --check`.
 
 Do not:
 

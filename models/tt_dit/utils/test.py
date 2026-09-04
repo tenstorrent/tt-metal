@@ -7,9 +7,9 @@ import pytest
 import ttnn
 
 
-def create_fabric_router_config():
+def create_fabric_router_config(max_packet_payload_size_bytes=8192):
     config = ttnn.FabricRouterConfig()
-    config.max_packet_payload_size_bytes = 8192
+    config.max_packet_payload_size_bytes = max_packet_payload_size_bytes
     return config
 
 
@@ -31,9 +31,21 @@ line_params = {"fabric_config": ttnn.FabricConfig.FABRIC_1D}
 ring_params = {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}
 line_params_8k = {**line_params, "fabric_router_config": create_fabric_router_config()}
 ring_params_8k = {**ring_params, "fabric_router_config": create_fabric_router_config()}
+ring_params_4k = {**ring_params, "fabric_router_config": create_fabric_router_config(4096)}
 line_params_req_exact_devices = {**line_params, "require_exact_physical_num_devices": True}
 ring_params_req_exact_devices = {**ring_params, "require_exact_physical_num_devices": True}
 ring_params_8k_req_exact_devices = {**ring_params_8k, "require_exact_physical_num_devices": True}
+
+
+def is_global_rank_zero():
+    """True when this process should do once-per-run host work (e.g. benchmark reporting).
+
+    In a multi-process (multihost) run only rank 0 qualifies; in a single-process
+    run there is no distributed context and every caller qualifies. Multihost ranks
+    time the same collective pipeline, so per-rank benchmark records are duplicates,
+    and concurrent writes to the shared benchmark output path race with each other.
+    """
+    return not ttnn.distributed_context_is_initialized() or int(ttnn.distributed_context_get_rank()) == 0
 
 
 def skip_if_unsupported_num_links(mesh_device, num_links):

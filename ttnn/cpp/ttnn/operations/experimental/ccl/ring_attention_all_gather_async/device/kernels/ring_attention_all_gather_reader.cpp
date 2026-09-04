@@ -12,6 +12,7 @@
 #include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/metadata_scalar_read.hpp"
 #include "ring_attention_all_gather_metadata.hpp"
+#include "ring_attention_rank_mapping.hpp"
 #include "ring_attention_prefetch_utils.hpp"
 #include <cstdint>
 #include <utility>
@@ -22,7 +23,7 @@ using ttnn::ccl::Topology;
 ///////////////////////////////////////////////////
 // COMPILE TIME ARGS
 ///////////////////////////////////////////////////
-constexpr uint32_t my_chip_id = get_compile_time_arg_val(0);
+constexpr uint32_t my_transport_rank = get_compile_time_arg_val(0);
 constexpr uint32_t cb_output_id = get_compile_time_arg_val(1);
 constexpr uint32_t packet_size_in_pages = get_compile_time_arg_val(2);  // 2
 constexpr uint32_t input_tensor_page_size = get_compile_time_arg_val(3);
@@ -35,6 +36,15 @@ constexpr bool direction = get_compile_time_arg_val(9);  // 1 is forward, 0 is b
 constexpr bool fuse_op = get_compile_time_arg_val(10);
 constexpr bool has_metadata = get_compile_time_arg_val(11);
 constexpr uint32_t cb_meta_id = get_compile_time_arg_val(12);
+constexpr uint32_t num_links = get_compile_time_arg_val(13);
+// Host-derived even-ring split-forwarding gate: the parent fused op owns this protocol decision and
+// passes the same flag to both all-gather directions and its own receiver, so producer and consumer
+// cannot disagree. Standalone (non-fused) callers get the legacy even-ring topology gate from the host.
+constexpr bool split_forwarding_enabled = get_compile_time_arg_val(14);
+constexpr bool full_mesh_rank_mapping = get_compile_time_arg_val(15);
+constexpr auto snake_orientation = static_cast<ttnn::ccl::snake_ring::Orientation>(get_compile_time_arg_val(16));
+constexpr uint32_t mesh_rows = get_compile_time_arg_val(17);
+constexpr uint32_t mesh_cols = get_compile_time_arg_val(18);
 
 // Prefetch: batch multiple packets of DRAM reads before a single barrier.
 // This keeps more reads in flight across interleaved DRAM banks, hiding latency.
@@ -42,7 +52,7 @@ constexpr uint32_t cb_meta_id = get_compile_time_arg_val(12);
 constexpr uint32_t PREFETCH_PACKETS = 4;
 
 void kernel_main() {
-    constexpr uint32_t page_size_base_idx = 13;
+    constexpr uint32_t page_size_base_idx = ttnn::ring_attention_all_gather::kReaderFixedCompileTimeArgCount;
     constexpr auto inputs_args = make_tensor_accessor_args_tuple<num_inputs, page_size_base_idx + num_inputs>();
     constexpr auto outputs_args = make_tensor_accessor_args_tuple<
         num_inputs,
@@ -70,6 +80,8 @@ void kernel_main() {
     std::array<uint32_t, num_inputs> input_batch_head_count;
     std::array<uint32_t, num_inputs> input_tile_id_start;
     std::array<uint32_t, num_inputs> input_tile_id_end;
+    std::array<uint32_t, num_inputs> input_valid_pages;
+    std::array<uint32_t, num_inputs> worker_link;
     // Phase-1 input page base: nonzero only for single-slot gather (skip to the sliced input slot).
     // The slice is always emitted into output slot 0, whatever the output batch size.
     std::array<uint32_t, num_inputs> input_batch_base;
@@ -80,16 +92,19 @@ void kernel_main() {
         output_tensor_Wt[input_idx] = get_arg_val<uint32_t>(arg_idx++);
         output_tensor_Ht[input_idx] = get_arg_val<uint32_t>(arg_idx++);
         input_batch_head_count[input_idx] = get_arg_val<uint32_t>(arg_idx++);
-        input_tile_id_start[input_idx] = get_arg_val<uint32_t>(arg_idx++);
-        input_tile_id_end[input_idx] = get_arg_val<uint32_t>(arg_idx++);
+        (void)get_arg_val<uint32_t>(arg_idx++);  // structural tile_id_start placeholder
+        (void)get_arg_val<uint32_t>(arg_idx++);  // structural tile_id_end placeholder
         input_batch_base[input_idx] = get_arg_val<uint32_t>(arg_idx++);
         // valid_pages_per_batch_head (slot 8): clamp the gather to the logical_n-valid slab prefix so
         // only kv_actual-sized data moves. Uniform across cores/devices, so producer/consumer page
         // counts and the ring slice protocol stay matched. Default (full input) leaves it unchanged.
         const uint32_t valid_pages = get_arg_val<uint32_t>(arg_idx++);
-        if (valid_pages < input_tile_id_end[input_idx]) {
-            input_tile_id_end[input_idx] = valid_pages;
-        }
+        worker_link[input_idx] = get_arg_val<uint32_t>(arg_idx++);
+        input_valid_pages[input_idx] = valid_pages;
+        const auto link_page_range =
+            ring_attention_all_gather::compute_link_page_range(valid_pages, num_links, worker_link[input_idx]);
+        input_tile_id_start[input_idx] = link_page_range.start;
+        input_tile_id_end[input_idx] = link_page_range.end;
     }
 
     auto inputs_tuple = make_tensor_accessor_tuple(inputs_args, arg_idx);
@@ -120,8 +135,14 @@ void kernel_main() {
             meta_noc, kv_meta_args, kv_actual_isl_addr, cb_meta.get_write_ptr());
         const uint32_t gather_valid_Ht =
             ring_attention_all_gather::compute_gather_valid_Ht(kv_actual, chunk_local_tiles, ring_size);
-        ring_attention_all_gather::clamp_input_ranges_to_gather_extent(
-            gather_valid_Ht, input_tensor_Ht, input_tensor_Wt, input_tile_id_end);
+        ring_attention_all_gather::update_link_page_ranges_for_gather_extent(
+            gather_valid_Ht,
+            num_links,
+            input_tensor_Wt,
+            input_valid_pages,
+            worker_link,
+            input_tile_id_start,
+            input_tile_id_end);
     }
 
     OpSignaler op_signaler;
@@ -185,6 +206,13 @@ void kernel_main() {
         }
     }
 
+    // Mirror the writer's split-forwarding (see ring_attention_all_gather_writer.cpp): on an even ring the diametric
+    // slice is relayed half per direction. The gate is a host-derived compile-time flag (see top of file).
+    if (split_forwarding_enabled && direction == 1) {
+        slices_expected++;
+        writes_expected++;
+    }
+
     while (slices_received < slices_expected) {
         // Do i expect more from the backward direction?
         // In the linear case, I expect num_targets_backward_direction slices from the left
@@ -202,19 +230,25 @@ void kernel_main() {
         // Got it
         slices_received++;
 
-        int sender_chip_id;
-        uint32_t actual_sender_chip_id;
+        int sender_transport_rank_signed;
+        uint32_t sender_transport_rank;
         if constexpr (direction == 1) {
-            sender_chip_id = my_chip_id + slices_received;
-            actual_sender_chip_id = (sender_chip_id >= (int)ring_size) ? sender_chip_id - ring_size : sender_chip_id;
+            sender_transport_rank_signed = my_transport_rank + slices_received;
+            sender_transport_rank = (sender_transport_rank_signed >= (int)ring_size)
+                                        ? sender_transport_rank_signed - ring_size
+                                        : sender_transport_rank_signed;
         } else {
-            sender_chip_id = my_chip_id - slices_received;
-            actual_sender_chip_id = (sender_chip_id < 0) ? ring_size + sender_chip_id : sender_chip_id;
+            sender_transport_rank_signed = my_transport_rank - slices_received;
+            sender_transport_rank = (sender_transport_rank_signed < 0) ? ring_size + sender_transport_rank_signed
+                                                                       : sender_transport_rank_signed;
         }
+        const uint32_t sender_tensor_rank =
+            ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
+                sender_transport_rank, mesh_rows, mesh_cols, snake_orientation);
 
         if constexpr (fuse_op) {
             // Signal matmul to go
-            op_signaler.synchronize_workers_and_signal_op(actual_sender_chip_id);
+            op_signaler.synchronize_workers_and_signal_op(sender_transport_rank);
         }
         // Direction == backward: Should I forward what I got from the left to my right?
         // In the linear case, if I have any targets to my right, always forward
@@ -224,21 +258,36 @@ void kernel_main() {
         // In the ring case, if I have received on the right less than my targets on the left, forward
         if ((topology == Topology::Linear && writes_expected > 0) ||
             (topology == Topology::Ring && (slices_received < (writes_expected + 1)))) {
+            // The last slice we relay is the diametric shard of our downstream neighbor
+            const bool is_split_forwarded_slice = split_forwarding_enabled && (slices_received == writes_expected);
             for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
-                uint32_t tiles_read = input_tile_id_start[input_idx];
-                uint32_t tiles_to_read = input_tile_id_end[input_idx];
-
-                uint32_t output_tile_id_start = 0;
-                uint32_t pages_read_in_row = input_tile_id_start[input_idx] % input_tensor_Wt[input_idx];
-                uint32_t row_offset =
-                    (input_tile_id_start[input_idx] / input_tensor_Wt[input_idx]) * output_tensor_Wt[input_idx];
                 uint32_t slice_Wt = input_tensor_Wt[input_idx];
                 uint32_t stride_Wt = output_tensor_Wt[input_idx];
+
+                // Packet-aligned midpoint of this input's per-batch-head page range (matches the writer)
+                const uint32_t total_pages = input_tile_id_end[input_idx] - input_tile_id_start[input_idx];
+                const uint32_t num_packets = (total_pages + packet_size_in_pages - 1) / packet_size_in_pages;
+                const uint32_t first_half_pages = (num_packets / 2) * packet_size_in_pages;
+                const bool split_this_input = is_split_forwarded_slice;
+                uint32_t relay_start = input_tile_id_start[input_idx];
+                uint32_t relay_end = input_tile_id_end[input_idx];
+                if (split_this_input) {
+                    if (direction == 0) {
+                        relay_end = input_tile_id_start[input_idx] + first_half_pages;
+                    } else {
+                        relay_start = input_tile_id_start[input_idx] + first_half_pages;
+                    }
+                }
+
+                uint32_t tiles_read = relay_start;
+                uint32_t tiles_to_read = relay_end;
+                uint32_t output_tile_id_start = 0;
+                uint32_t pages_read_in_row = relay_start % slice_Wt;
+                uint32_t row_offset = (relay_start / slice_Wt) * stride_Wt;
                 if (gather_dim == 3) {
-                    output_tile_id_start = actual_sender_chip_id * input_tensor_Wt[input_idx];
+                    output_tile_id_start = sender_tensor_rank * input_tensor_Wt[input_idx];
                 } else {
-                    output_tile_id_start =
-                        actual_sender_chip_id * input_tensor_Ht[input_idx] * input_tensor_Wt[input_idx];
+                    output_tile_id_start = sender_tensor_rank * input_tensor_Ht[input_idx] * input_tensor_Wt[input_idx];
                 }
                 for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; bh_idx++) {
                     prefetch_batch_read_tiles<
@@ -262,11 +311,10 @@ void kernel_main() {
                             }
                             return pid;
                         });
-                    pages_read_in_row = input_tile_id_start[input_idx] % input_tensor_Wt[input_idx];
-                    row_offset =
-                        (input_tile_id_start[input_idx] / input_tensor_Wt[input_idx]) * output_tensor_Wt[input_idx];
-                    tiles_read = input_tile_id_start[input_idx];
-                    tiles_to_read = input_tile_id_end[input_idx];
+                    pages_read_in_row = relay_start % slice_Wt;
+                    row_offset = (relay_start / slice_Wt) * stride_Wt;
+                    tiles_read = relay_start;
+                    tiles_to_read = relay_end;
                     output_tile_id_start += output_tensor_Wt[input_idx] * output_tensor_Ht[input_idx];
                 }
             }

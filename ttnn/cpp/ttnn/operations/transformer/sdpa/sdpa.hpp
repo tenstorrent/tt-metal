@@ -25,7 +25,15 @@ ttnn::Tensor scaled_dot_product_attention(
     std::optional<operations::transformer::SDPAProgramConfig> program_config = std::nullopt,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     const std::optional<ttnn::Tensor>& attention_sink = std::nullopt,
-    const std::optional<ttnn::Tensor>& cu_window_seqlens = std::nullopt);
+    const std::optional<ttnn::Tensor>& cu_window_seqlens = std::nullopt,
+    /// Windowed mode only. Global row index of Q row 0, for a Q holding a contiguous slice of a longer
+    /// sequence: Q and the output are indexed locally while cu_window_seqlens and K/V stay global, so this
+    /// locates the slice among the windows. Must be a multiple of TILE_HEIGHT and satisfy offset+Sq <= Sk.
+    uint32_t windowed_q_token_offset = 0,
+    /// Windowed mode only. Per-device form of the offset above: a 1-element int32/uint32 ROW_MAJOR device
+    /// tensor, read at runtime rather than baked into the program. Shard it on the sequence-parallel axis
+    /// so every device runs the SAME program yet sees its own origin. Overrides the scalar when set.
+    const std::optional<ttnn::Tensor>& windowed_q_token_offset_tensor = std::nullopt);
 
 /// Chunked SDPA over paged K/V: one Q chunk per call, K/V in paged layout.
 /// Two overloads: legacy (chunk_start_idx as int) or flexible (chunk_start_idx_tensor on device).
@@ -115,7 +123,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
     int32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
     uint32_t num_links,
-    uint32_t cluster_axis,
+    std::optional<uint32_t> cluster_axis,
     const MeshDevice& mesh_device,
     ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,

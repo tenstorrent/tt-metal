@@ -132,6 +132,13 @@ struct p_setadc
 
     constexpr static std::uint32_t CH_0 = 0;
     constexpr static std::uint32_t CH_1 = 1;
+
+    // Thread-id override for the *_THREAD_OVERRIDE macros in ckernel_common_ops.h: picks whose ADC set
+    // the write lands on. 0 means the issuing thread.
+    constexpr static std::uint32_t THREAD_OVRD_NONE   = 0;
+    constexpr static std::uint32_t THREAD_OVRD_UNPACK = 1;
+    constexpr static std::uint32_t THREAD_OVRD_MATH   = 2;
+    constexpr static std::uint32_t THREAD_OVRD_PACK   = 3;
 };
 
 struct p_pacr
@@ -265,6 +272,9 @@ struct p_zeroacc
     constexpr static std::uint32_t CLR_ALL      = 0b011;
     constexpr static std::uint32_t CLR_HALF_32B = 0b110;
     constexpr static std::uint32_t CLR_ALL_32B  = 0b111;
+    // Value for the row-select operand -- `where` on Blackhole, `dst` on Wormhole -- that clears nothing,
+    // leaving the instruction a no-op apart from applying its AddrMode to the address counters.
+    constexpr static std::uint32_t WHERE_NOP = 0xff;
 };
 
 struct p_zerosrc
@@ -317,9 +327,10 @@ struct p_elwise
     constexpr static std::uint32_t SRCB_BCAST_ROW = 0x2;
     constexpr static std::uint32_t SRCB_BCAST_ALL = 0x3;
 
-    constexpr static std::uint32_t CLR_A  = 0x1;
-    constexpr static std::uint32_t CLR_B  = 0x2;
-    constexpr static std::uint32_t CLR_AB = 0x3;
+    constexpr static std::uint32_t CLR_NONE = 0x0;
+    constexpr static std::uint32_t CLR_A    = 0x1;
+    constexpr static std::uint32_t CLR_B    = 0x2;
+    constexpr static std::uint32_t CLR_AB   = 0x3;
 };
 
 struct p_sfpu

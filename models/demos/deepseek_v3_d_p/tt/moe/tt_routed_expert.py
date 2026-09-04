@@ -24,6 +24,21 @@ from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping
 
+# Model configs are torch-only and so name their activation as a string; this is the one place
+# that maps those names onto the kernel enum. Keys match the HF ``hidden_act`` spelling.
+ROUTED_EXPERT_ACTIVATION_BY_NAME = {
+    "silu": ttnn.RoutedExpertActivation.Silu,
+    "swiglu_oai": ttnn.RoutedExpertActivation.SwiGluOai,
+    "situ": ttnn.RoutedExpertActivation.SituGlu,
+}
+
+# Activations whose fused kernel path carries the bias branch (gate/up bias before the
+# activation, down bias after the down matmul). SiLU has no bias branch.
+_BIAS_CAPABLE_ACTIVATIONS = (
+    ttnn.RoutedExpertActivation.SwiGluOai,
+    ttnn.RoutedExpertActivation.SituGlu,
+)
+
 COMPUTE_KERNEL_CONFIG_LOFI = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.LoFi,
     math_approx_mode=False,
@@ -32,17 +47,47 @@ COMPUTE_KERNEL_CONFIG_LOFI = ttnn.WormholeComputeKernelConfig(
 )
 
 
+# The default routed-expert weight dtype, in one place. It used to be spelled as a literal at each
+# site that builds or checks the cache, so A/B-ing expert precision meant editing every one and
+# hoping none was missed -- and missing one is not a crash, it is a cache BUILT at one dtype and
+# CHECKED at another, which loads the empty placeholder as the weights and yields a meaningless PCC.
+# Callers wanting a different precision pass `routed_expert_weights_dtype` explicitly.
+#
+# Not yet used by `load_and_compute_layer_by_layer` (utils/transformer_helpers.py), which still
+# carries a literal and whose four call sites do not override it; changing this constant leaves that
+# loader on the old dtype. That file belongs to another PR in this split, so it is a follow-up.
+DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE = ttnn.bfloat4_b
+
+
 class TtRoutedExpert(LightweightModule):
     @staticmethod
-    def check_cache_complete(cache_path: Path, cache_name_prefix: str, experts_per_chip: int) -> bool:
-        """Check if all routed expert weight cache files exist."""
+    def check_cache_complete(
+        cache_path: Path,
+        cache_name_prefix: str,
+        experts_per_chip: int,
+        weights_dtype: ttnn.DataType = DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE,
+    ) -> bool:
+        """True iff every routed-expert tensorbin exists AT `weights_dtype`.
+
+        The glob pins ``_dtype_{name}_`` because as_tensor encodes the dtype in the filename
+        (`..._dtype_BFLOAT4_B_layout_TILE.tensorbin`). A dtype-blind glob accepts a stale
+        bfloat4_b cache for a bfloat8_b request, reports complete, and then cache-only
+        construction finds no matching file and dumps the EMPTY PLACEHOLDER as the weights --
+        random experts, plausible-looking text, and a PCC number that means nothing. Same
+        reasoning and same fix as TtIndexer.check_cache_complete; the routed experts are where
+        it actually bites, because their dtype is the one people vary.
+
+        The default matches the routed-expert default (bfloat4_b) so existing callers are
+        unaffected; any caller that builds at a different dtype must pass the same value here.
+        """
         from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import pattern_exists
 
+        dtype_name = weights_dtype.name
         for local_expert_idx in range(experts_per_chip):
             for proj in ["gate", "up", "down"]:
-                pattern = f"{cache_name_prefix}.local_{local_expert_idx}_{proj}*.tensorbin"
-                if not pattern_exists(pattern, "RoutedExpert"):
-                    logger.debug(f"TTNN cache missing: {cache_name_prefix}.local_{local_expert_idx}_{proj}")
+                stem = f"{cache_name_prefix}.local_{local_expert_idx}_{proj}"
+                if not pattern_exists(f"{stem}_dtype_{dtype_name}_*.tensorbin", "RoutedExpert"):
+                    logger.debug(f"TTNN cache missing: {stem} ({dtype_name})")
                     return False
         return True
 
@@ -249,7 +294,7 @@ class TtRoutedExpert(LightweightModule):
         torch_weights: list[dict] = None,
         torch_biases: list[dict] = None,
         activations_dtype=ttnn.bfloat8_b,
-        weights_dtype=ttnn.bfloat4_b,
+        weights_dtype=DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE,
         compute_kernel_config: ttnn.WormholeComputeKernelConfig = COMPUTE_KERNEL_CONFIG_LOFI,
         weight_cache_path: Optional[Path] = None,
         cache_name_prefix: Optional[str] = None,
@@ -282,9 +327,10 @@ class TtRoutedExpert(LightweightModule):
                           global ids. Required.
             activation: Required ttnn.RoutedExpertActivation selecting the fused kernel's
                           activation. Pass RoutedExpertActivation.Silu for the DeepSeek path
-                          (byte-identical) or RoutedExpertActivation.SwiGluOai for the
-                          MiniMax-M3 / gpt-oss clamped swigluoai activation. Keyword-only and
-                          without a default so the caller must choose explicitly.
+                          (byte-identical), RoutedExpertActivation.SwiGluOai for the
+                          MiniMax-M3 / gpt-oss clamped swigluoai activation, or
+                          RoutedExpertActivation.SituGlu for Kimi K3's SiTU-GLU. Keyword-only
+                          and without a default so the caller must choose explicitly.
         """
         super().__init__()
         self.mesh_device = mesh_device
@@ -302,20 +348,33 @@ class TtRoutedExpert(LightweightModule):
         # Activation variant for the fused unified_routed_expert_moe kernel.
         # Required RoutedExpertActivation, chosen explicitly by the caller (no
         # silent default): pass ttnn.RoutedExpertActivation.Silu for the DeepSeek
-        # path (byte-identical) or .SwiGluOai for the MiniMax-M3 / gpt-oss clamped
-        # swigluoai activation. Enforcing presence avoids silently running the
-        # wrong activation when a caller forgets to set it.
+        # path (byte-identical), .SwiGluOai for the MiniMax-M3 / gpt-oss clamped
+        # swigluoai activation, or .SituGlu for Kimi K3's SiTU-GLU. Enforcing presence
+        # avoids silently running the wrong activation when a caller forgets to set it.
         if activation is None:
             raise ValueError(
-                "TtRoutedExpert requires an explicit `activation` (ttnn.RoutedExpertActivation.Silu or .SwiGluOai)"
+                "TtRoutedExpert requires an explicit `activation` "
+                "(ttnn.RoutedExpertActivation.Silu, .SwiGluOai or .SituGlu)"
             )
         self.activation = activation
 
-        # Optional per-expert projection biases (gpt-oss). Only supported with
-        # SwiGluOai (the kernel adds gate/up bias before the clamp and down bias
+        # Every non-SiLU activation lives in the fused Blackhole kernel only; the Wormhole
+        # fallback in forward() calls routed_expert_ffn, which has no activation parameter and
+        # always computes SiLU. Reject here rather than silently returning SiLU output.
+        if activation != ttnn.RoutedExpertActivation.Silu and not is_blackhole():
+            raise NotImplementedError(
+                f"TtRoutedExpert {activation} is only supported on the Blackhole fused path; "
+                "the fallback path computes SiLU"
+            )
+
+        # Optional per-expert projection biases (gpt-oss). Supported by any fused binary
+        # activation (the kernel adds gate/up bias before the activation and down bias
         # after the down matmul). Converted + distributed like the weights below.
-        if torch_biases is not None and activation != ttnn.RoutedExpertActivation.SwiGluOai:
-            raise ValueError("TtRoutedExpert expert biases are only supported with RoutedExpertActivation.SwiGluOai")
+        if torch_biases is not None and activation not in _BIAS_CAPABLE_ACTIVATIONS:
+            raise ValueError(
+                "TtRoutedExpert expert biases require a fused binary activation "
+                "(RoutedExpertActivation.SwiGluOai or .SituGlu); the SiLU path has no bias branch."
+            )
 
         total_experts = self.num_devices * experts_per_chip
         logger.debug(f"Initializing TtRoutedExpert with experts_per_chip={experts_per_chip}")

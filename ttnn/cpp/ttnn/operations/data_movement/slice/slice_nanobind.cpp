@@ -65,6 +65,9 @@ void bind_slice(nb::module_& mod) {
         Note:
             Strided slicing (``slice_step != 1``) is not supported for ``bfloat8_b`` tensors.
 
+            TILE layout tensors must use the standard 32x32 tile, and a pre-allocated ``output_tensor`` must
+            carry the same tile as the input.
+
         Returns:
             ttnn.Tensor: the output tensor.
     )doc";

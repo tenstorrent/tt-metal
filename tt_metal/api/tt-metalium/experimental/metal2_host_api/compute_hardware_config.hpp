@@ -160,24 +160,6 @@ struct ComputeGen2Config {
     // Temporary configs (these will change!)
     ///////////////////////////////////////////
 
-    // When true, the unpacker packs two values into each source-register slot instead of one.
-    // The math engine reads twice as many elements per pass, effectively doubling throughput.
-    //
-    // This is currently ONLY supported for Mxfp4 data format. The setting is ignored for all
-    // other formats.
-    //
-    // WARNING: Only the matmul family of instructions work with this format:
-    //  - matmul (MVMUL/MVMULDI)
-    //  - the GAPOOL instruction that column reduce ops are built on
-    //
-    // Invoking other instructions on Mxfp4 data with the setting enabled will produce garbage
-    // math results! Enable this setting ONLY for kernels whose inputs are consumed solely by
-    // a matmul or a column reduce.
-    //
-    // This API is not final and subject to change!
-    // It should most likely become a per-DFB setting, similar to unpack_modes.
-    bool enable_2x_src_register = false;
-
     ///////////////////////////////////////////////////////////////////////////////////////////////
 };
 

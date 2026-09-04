@@ -7,7 +7,7 @@
 #include <optional>
 #include <variant>
 
-#include <tt-metalium/program_descriptors.hpp>
+#include "ttnn/metal_v2_artifacts.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 #include "layernorm_device_operation_types.hpp"
@@ -17,19 +17,24 @@
 namespace ttnn::prim {
 
 struct LayerNormMultiCoreProgramFactory {
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    // The framework calls this with three arguments. The fourth restricts the cores the program may
+    // touch: non-sharded layernorm splits its tile rows over whichever range it is given, so the
+    // parameter selects the work-split grid, defaulting to the device's whole compute grid.
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const LayerNormParams& operation_attributes,
         const LayerNormInputs& tensor_args,
         Tensor& tensor_return_value,
         const std::optional<CoreRangeSet>& core_range_set = std::nullopt);
 
-    // Returns the default core range for non-sharded LayerNorm if a
-    // core range override is not provided
+    // Returns the core range non-sharded LayerNorm distributes its tile rows over by default
     static CoreRangeSet default_core_range(tt::tt_metal::IDevice* device);
 };
 
 struct LayerNormShardedProgramFactory {
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    // The framework calls this with three arguments. The fourth restricts the cores the program may
+    // touch: sharded layernorm derives its cores from the input's shard spec, so the parameter only
+    // validates that the multicast bounding box of that shard grid lies inside the given range.
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const LayerNormParams& operation_attributes,
         const LayerNormInputs& tensor_args,
         Tensor& tensor_return_value,

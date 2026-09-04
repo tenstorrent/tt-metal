@@ -98,7 +98,8 @@ FORCE_INLINE void reload_from_cb_to_dst(
     uint32_t in0_block_w) {
     CircularBuffer mm_partials_cb(mm_partials_cb_id);
     // Reconfigure input
-    copy_tile_to_dst_init_short_with_dt(in1_cb_id, mm_partials_cb_id);
+    reconfig_data_format_srca(in1_cb_id, mm_partials_cb_id);
+    copy_init(mm_partials_cb_id);
     mm_partials_cb.wait_front(out_subblock_num_tiles);
 
     uint32_t start_dst_index = 0;
@@ -247,10 +248,24 @@ void kernel_main() {
     for (uint32_t b = 0; b < batch; b++) {
         if constexpr (get_batch_from_reader) {
             // Check whether this batch is valid
+#ifndef ARCH_QUASAR
             bool is_batch_valid = false;
             UNPACK(is_batch_valid = (bool)mailbox_read(ckernel::ThreadId::BriscThreadId);)
             MATH(is_batch_valid = (bool)mailbox_read(ckernel::ThreadId::BriscThreadId);)
             PACK(is_batch_valid = (bool)mailbox_read(ckernel::ThreadId::BriscThreadId);)
+#else
+            // Quasar: ckernel::ThreadId has no BRISC (WH/BH-only); the is_batch_valid writer is a DM RISC
+            // (DM2-7), read via mailbox_read((uint8_t)<dm_thread>). That DM->TRISC handoff is not yet wired
+            // on Quasar (prior bring-up saw the compute read its own slot -> 0x19 loopback), so rather than
+            // silently marking every batch valid (wrong output for a real sparsity caller), fail loudly at
+            // JIT if anyone enables batch-sparsity on Quasar. Wire the DM-thread read here once the DM/LLK
+            // team confirms the correct DM thread id and that the handoff works.
+            static_assert(
+                !get_batch_from_reader,
+                "get_batch_from_reader (batch sparsity) is unsupported on Quasar: it needs the DM->TRISC "
+                "is_batch_valid mailbox handoff, which is not wired yet. Do not enable it on Quasar.");
+            const bool is_batch_valid = true;  // unreachable when the static_assert holds (flag is false)
+#endif
             if (!is_batch_valid) {
                 continue;
             }
@@ -556,7 +571,7 @@ void kernel_main() {
 #endif
 #endif  // FUSE_BIAS
                     pack_untilize_dest_init<out_subblock_w, out_block_w>(out_cb_id);
-                    copy_tile_to_dst_init_short(mm_partials_cb_id);
+                    copy_init(mm_partials_cb_id);
                     for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
                         reblock_and_untilize<out_subblock_w, out_block_w>(
                             in1_num_subblocks, out_subblock_num_tiles, out_subblock_h, mm_partials_cb_id, out_cb_id);

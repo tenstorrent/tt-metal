@@ -5,12 +5,12 @@
 #include <tt-metalium/experimental/fabric/fabric_switch_manager.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/dispatch_core_common.hpp>
 
-#include <map>
 #include <vector>
 
 #include "impl/context/metal_context.hpp"
+#include "impl/device/device_manager.hpp"
 #include "hostdevcommon/common_values.hpp"
 
 namespace tt::tt_fabric {
@@ -36,10 +36,10 @@ void FabricSwitchManager::setup(FabricConfig fabric_config, FabricReliabilityMod
     // The workload calling setup() knows which fabric config it needs, so we use the provided config
     tt::tt_fabric::SetFabricConfig(fabric_config, fabric_reliability_mode);
 
-    // Cache the device map returned by CreateDevices to use directly in CloseDevices
     // TODO: Issue #34040 - If routers are in standby mode, we could skip full reinitialization
-    // and just reactivate them instead of calling CreateDevices.
-    switch_devices_ = tt::tt_metal::detail::CreateDevices(
+    // and just reactivate them instead of calling DeviceManager::initialize.
+    auto& ctx = tt::tt_metal::MetalContext::instance();
+    ctx.initialize_device_manager(
         switch_device_ids,
         1,  // num_command_queues
         DEFAULT_L1_SMALL_SIZE,
@@ -48,9 +48,13 @@ void FabricSwitchManager::setup(FabricConfig fabric_config, FabricReliabilityMod
         {},                      // l1_bank_remap
         DEFAULT_WORKER_L1_SIZE,  // worker_l1_size
         false,                   // init_profiler
-        true,                    // use_max_eth_core_count_on_all_devices
-        // TOD: for future optimization, switch meshes don't need dispatch fw.
-        true);  // initialize_fabric_and_dispatch_fw
+        true);                   // initialize_fabric_and_dispatch_fw
+
+    switch_devices_.clear();
+    switch_devices_.reserve(switch_device_ids.size());
+    for (tt::ChipId device_id : switch_device_ids) {
+        switch_devices_.push_back(ctx.device_manager()->get_active_device(device_id));
+    }
 }
 
 void FabricSwitchManager::teardown() {
@@ -63,8 +67,7 @@ void FabricSwitchManager::teardown() {
     // In the future, we could keep routers in standby mode instead of fully terminating
     // them, allowing faster reactivation without recompilation and re-handshake overhead.
     if (!switch_devices_.empty()) {
-        // Use the cached device map returned by CreateDevices
-        tt::tt_metal::detail::CloseDevices(switch_devices_);
+        tt::tt_metal::MetalContext::instance().device_manager()->close_devices(switch_devices_);
         tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
 
         switch_devices_.clear();

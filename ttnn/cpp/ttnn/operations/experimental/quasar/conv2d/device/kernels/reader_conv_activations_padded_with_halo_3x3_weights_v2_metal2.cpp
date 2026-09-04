@@ -58,7 +58,7 @@ void kernel_main() {
     }
 #else
     packed_reader_indices_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-        (uint32_t)NOC_LOCAL_ADDR_OFFSET(TensorAccessor(tensor::reader_indices).get_noc_addr(0)));
+        noc_address_backend::extract_local_address(TensorAccessor(tensor::reader_indices).get_noc_addr(0)));
     (void)core_index;
 #endif
 
@@ -99,7 +99,7 @@ void kernel_main() {
 
     // coalesce reads along weight_size_w. The resident activation shard is reached by L1 base address
     // from a local TensorAccessor (tensor::act_sharded), not a borrowed self-loop CB.
-    uint32_t act_l1_read_addr = (uint32_t)NOC_LOCAL_ADDR_OFFSET(TensorAccessor(tensor::act_sharded).get_noc_addr(0));
+    uint32_t act_l1_read_addr = noc_address_backend::extract_local_address(TensorAccessor(tensor::act_sharded).get_noc_addr(0));
 
     static_assert(coalesced_read_bytes <= NOC_MAX_BURST_SIZE);
     experimental::set_read_state<coalesced_read_bytes>(noc, act_l1_read_addr);
@@ -126,7 +126,12 @@ void kernel_main() {
     for (uint32_t bh = 0; bh < act_num_blocks_h; bh++) {
         if constexpr (activation_reuse_enabled) {
             l1_write_addr_act = cb_start_addr;
+#ifndef ARCH_QUASAR
+            // evil_set_write_ptr is WH/BH-only FIFO-cursor surgery (dataflow_buffer.h: "Not declared on
+            // Quasar"). cb_act is a concrete DataflowBuffer here, so two-phase lookup name-checks this even
+            // though the branch is dead on Quasar (activation_reuse is force-off in the factory). Guard it.
             cb_act.evil_set_write_ptr(l1_write_addr_act);
+#endif
         }
         uint32_t reader_offset = act_l1_read_addr;
         for (uint32_t outer = 0; outer < window_outer; outer++) {

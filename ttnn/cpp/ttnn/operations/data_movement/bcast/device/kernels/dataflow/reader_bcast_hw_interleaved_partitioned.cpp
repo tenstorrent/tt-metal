@@ -7,41 +7,33 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t src0_addr = get_arg_val<uint32_t>(0);
-    uint32_t src1_addr = get_arg_val<uint32_t>(1);
-    uint32_t num_tiles = get_arg_val<uint32_t>(2);
-    uint32_t HtWt = get_arg_val<uint32_t>(3);
-    uint32_t base_start_id_HtWt = get_arg_val<uint32_t>(4);
-    uint32_t curr_id_from_base = get_arg_val<uint32_t>(5);
-    uint32_t bcast_id = get_arg_val<uint32_t>(6);
+    uint32_t num_tiles = get_arg(args::num_tiles);
+    uint32_t HtWt = get_arg(args::HtWt);
+    uint32_t base_start_id_HtWt = get_arg(args::base_start_id_HtWt);
+    uint32_t curr_id_from_base = get_arg(args::curr_id_from_base);
+    uint32_t bcast_id = get_arg(args::bcast_id);
 
-#ifndef IN0_SHARDED
-    constexpr auto src0_args = TensorAccessorArgs<0>();
-    constexpr auto src1_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
-#else
-    constexpr auto src1_args = TensorAccessorArgs<0>();
-#endif
-
-    constexpr uint32_t cb_id_in0 = 0;
-    constexpr uint32_t cb_id_in1 = 1;
     constexpr uint32_t onetile = 1;
 
     Noc noc;
-    DataflowBuffer dfb_in0(cb_id_in0);
-    DataflowBuffer dfb_in1(cb_id_in1);
-    const uint32_t tile_bytes_0 = get_tile_size(cb_id_in0);
-    const uint32_t tile_bytes_1 = get_tile_size(cb_id_in1);
+    DataflowBuffer dfb_in0(dfb::in0);
+    DataflowBuffer dfb_in1(dfb::in1);
+    const uint32_t tile_bytes_0 = dfb_in0.get_tile_size();
+    const uint32_t tile_bytes_1 = dfb_in1.get_tile_size();
 
+    // src1 base address + layout arrive via the tensor binding (tensor::src1). src0 does too
+    // (tensor::src0) in the interleaved config; when in0 is sharded it is resident and dfb::in0 borrows
+    // the shard directly, so the reader just signals the resident tiles instead of reading them.
+    const auto s1 = TensorAccessor(tensor::src1);
 #ifndef IN0_SHARDED
-    const auto s0 = TensorAccessor(src0_args, src0_addr);
+    const auto s0 = TensorAccessor(tensor::src0);
 #else
     dfb_in0.reserve_back(num_tiles);
     dfb_in0.push_back(num_tiles);
 #endif
-
-    const auto s1 = TensorAccessor(src1_args, src1_addr);
 
 #ifdef BCAST_SCALAR
     dfb_in1.reserve_back(onetile);

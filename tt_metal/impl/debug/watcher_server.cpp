@@ -25,7 +25,6 @@
 #include <tt_stl/fmt.hpp>
 #include "context/metal_env_impl.hpp"
 #include "core_coord.hpp"
-#include "api/debug/ring_buffer.h"
 #include "debug_helpers.hpp"
 #include "hal_types.hpp"
 #include "llrt/hal.hpp"
@@ -40,6 +39,7 @@
 #include "rtoptions.hpp"
 #include "watcher_device_reader.hpp"
 #include "impl/dispatch/dispatch_engine_cores.hpp"
+#include "hostdev/debug_ring_buffer_common.h"
 
 using namespace tt::tt_metal;
 
@@ -130,7 +130,7 @@ void WatcherServer::Impl::attach_devices() {
         auto all_devices = env_.get_cluster().all_chip_ids();
         for (ChipId device_id : all_devices) {
             device_id_to_reader_.try_emplace(device_id, logfile_, device_id, kernel_names_, env_, watcher_server_);
-            log_info(LogLLRuntime, "Watcher attached device {}", device_id);
+            log_debug(LogLLRuntime, "Watcher attached device {}", device_id);
             fprintf(logfile_, "At %.3lfs attach device %d\n\n", get_elapsed_secs(), device_id);
             fflush(logfile_);  // Ensure attach message is committed before watcher server thread writes
         }
@@ -188,7 +188,7 @@ void WatcherServer::Impl::detach_devices() {
         for (ChipId device_id : all_devices) {
             TT_ASSERT(device_id_to_reader_.contains(device_id));
             device_id_to_reader_.erase(device_id);
-            log_info(LogLLRuntime, "Watcher detached device {}", device_id);
+            log_debug(LogLLRuntime, "Watcher detached device {}", device_id);
             fprintf(logfile_, "At %.3lfs detach device %d\n", get_elapsed_secs(), device_id);
         }
 
@@ -212,7 +212,7 @@ void WatcherServer::Impl::isolated_dump(std::vector<ChipId>& device_ids) {
     read_kernel_ids_from_file();
     for (ChipId device_id : device_ids) {
         device_id_to_reader_.try_emplace(device_id, logfile_, device_id, kernel_names_, env_, watcher_server_);
-        log_info(LogLLRuntime, "Watcher attached device {}", device_id);
+        log_debug(LogLLRuntime, "Watcher attached device {}", device_id);
         fprintf(logfile_, "At %.3lfs attach device %d\n", get_elapsed_secs(), device_id);
     }
     dump();
@@ -299,7 +299,7 @@ void WatcherServer::Impl::create_log_file() {
     fprintf(f, "Legend:\n");
 
     // Get processor info from shared helper
-    auto tensix_info = get_enable_symbols_info(HalProgrammableCoreType::TENSIX);
+    auto tensix_info = get_enable_symbols_info(env_.get_hal(), HalProgrammableCoreType::TENSIX);
 
     fprintf(
         f,
@@ -400,10 +400,13 @@ void WatcherServer::Impl::init_device(ChipId device_id) {
         data.assert_status().tripped() = dev_msgs::DebugAssertOK;
         data.assert_status().which() = DEBUG_SANITIZE_SENTINEL_OK_8;
 
-        // Initialize debug ring buffer to a known init val, we'll check against this to see if any
-        // data has been written.
-        data.debug_ring_buf().current_ptr() = DEBUG_RING_BUFFER_STARTING_INDEX;
-        data.debug_ring_buf().wrapped() = 0;
+        // Initialize debug ring buffer. Quasar/Blackhole MPSC buffer is already zeroed on create.
+        // WH SPSC buffer needs current_ptr set to -1 as sentinel.
+        if (hal.get_arch() == tt::ARCH::WORMHOLE_B0) {
+            auto* ring_buf = reinterpret_cast<debug_spsc_ring_buf_msg_t*>(data.debug_ring_buf().data().data());
+            ring_buf->current_ptr = DEBUG_RING_BUFFER_STARTING_INDEX;
+            ring_buf->wrapped = 0;
+        }
     }
 
     // Initialize Debug Delay feature

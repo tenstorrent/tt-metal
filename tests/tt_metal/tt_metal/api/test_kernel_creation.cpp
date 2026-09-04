@@ -57,8 +57,6 @@ TEST_F(MeshDispatchFixture, DISABLED_TensixIdleEthCreateKernelsOnDispatchCores) 
         GTEST_SKIP() << "This test is only supported in fast dispatch mode";
     }
     for (const auto& mesh_device : this->devices_) {
-        auto* device = mesh_device->get_devices()[0];
-
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -70,8 +68,8 @@ TEST_F(MeshDispatchFixture, DISABLED_TensixIdleEthCreateKernelsOnDispatchCores) 
         CoreType dispatch_core_type = get_core_type_from_config(dispatch_core_config);
         MetalEnvImpl& env_impl =
             MetalEnvAccessor(MetalContext::instance(mesh_device->impl().get_context_id()).get_env()).impl();
-        std::vector<CoreCoord> dispatch_cores =
-            tt::get_logical_dispatch_cores(env_impl, device->id(), device->num_hw_cqs(), dispatch_core_config);
+        std::vector<CoreCoord> dispatch_cores = tt::get_logical_dispatch_cores(
+            env_impl, mesh_device->get_device_ids()[0], mesh_device->num_hw_cqs(), dispatch_core_config);
         std::set<CoreRange> dispatch_core_ranges;
         for (CoreCoord core : dispatch_cores) {
             dispatch_core_ranges.emplace(core);
@@ -98,7 +96,7 @@ TEST_F(MeshDispatchFixture, DISABLED_TensixIdleEthCreateKernelsOnDispatchCores) 
 TEST_F(CompileProgramWithKernelPathEnvVarFixture, TensixKernelUnderMetalRootDir) {
     const std::string& kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_4.cpp";
     create_kernel(kernel_file);
-    detail::CompileProgram(this->device_, this->program_);
+    this->program_.impl().compile(&this->device());
 }
 
 TEST_F(CompileProgramWithKernelPathEnvVarFixture, TensixKernelUnderKernelRootDir) {
@@ -106,7 +104,7 @@ TEST_F(CompileProgramWithKernelPathEnvVarFixture, TensixKernelUnderKernelRootDir
     const std::string& new_kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/new_kernel.cpp";
     this->setup_kernel_dir(orig_kernel_file, new_kernel_file);
     this->create_kernel(new_kernel_file);
-    detail::CompileProgram(this->device_, this->program_);
+    this->program_.impl().compile(&this->device());
     this->cleanup_kernel_dir();
 }
 
@@ -114,7 +112,7 @@ TEST_F(CompileProgramWithKernelPathEnvVarFixture, TensixKernelUnderMetalRootDirA
     const std::string& kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_4.cpp";
     this->setup_kernel_dir(kernel_file, kernel_file);
     this->create_kernel(kernel_file);
-    detail::CompileProgram(this->device_, this->program_);
+    this->program_.impl().compile(&this->device());
     this->cleanup_kernel_dir();
 }
 

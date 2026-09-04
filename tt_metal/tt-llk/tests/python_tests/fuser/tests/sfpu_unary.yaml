@@ -6,9 +6,6 @@ operands:
   - name: "input_A"
     dims: [32, 128]
     format: "Float32"
-  - name: "input_B"
-    dims: [32, 128]
-    format: "Float32"
   - name: "datacopy_out"
     dims: [32, 128]
     format: "Float32"
@@ -16,8 +13,7 @@ operands:
 operations:
   - math:
       - type: "Fpu"
-        src_a: "input_A"
-        src_b: "input_B"
+        in0: "input_A"
         operation: "Datacopy"
         unpacker: "UnpackerA"
         math_fidelity: "LoFi"

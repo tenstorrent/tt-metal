@@ -32,6 +32,12 @@ inline DataflowBuffer::DataflowBuffer(uint16_t logical_dfb_id) : logical_dfb_id_
 inline DataflowBuffer::DataflowBuffer(uint16_t logical_dfb_id)
     : logical_dfb_id_(logical_dfb_id), local_dfb_interface_(get_local_dfb_interface(logical_dfb_id)) {
     dfb_ensure_ready(g_dfb_config_base_addr, static_cast<uint8_t>(logical_dfb_id));
+    // Declare this DFB's L1 extent to the NOC-debug tracker so a write into it without holding the
+    // lock can be flagged.
+    RECORD_SCOPED_LOCK_EVENT(
+        NocDebuggingEventMetadata::NocDebugEventType::DFB_REGION_START,
+        address_units_to_bytes(local_dfb_interface_.tc_slots[0].base_addr),
+        get_ring_span_bytes());
 }
 #endif
 
@@ -435,6 +441,54 @@ inline void DataflowBuffer::handle_final_credits(uint16_t transactions_issued, u
 }
 
 
+// Lock the `n` held entries. The locked region starts at the write pointer (scoped_write_lock) or the
+// read pointer (scoped_read_lock), with entries spaced by stride_size: for the ALL access pattern
+// stride_size == entry_size, so the locked entries are contiguous; for STRIDED stride_size > entry_size,
+// so they are non-contiguous. For each held entry, do two things:
+//     - cache op: invalidate the L2 range on acquire (both lock kinds); flush on release (write lock
+//       only)
+//     - record the scoped-lock event
+template <bool is_write>
+inline DataflowBuffer::ScopedLockRegion DataflowBuffer::lock_acquire_impl(uint16_t num_entries) {
+    const auto& s = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx];
+    const uint32_t stride = local_dfb_interface_.stride_size;
+    const uint32_t entry = local_dfb_interface_.entry_size;
+    // Snapshot the start pointer + this slot's wrap bounds so release replays the identical walk.
+    const ScopedLockRegion region{is_write ? s.wr_ptr : s.rd_ptr, s.base_addr, s.limit};
+    uint32_t addr = region.start;
+    for (uint16_t k = 0; k < num_entries; ++k) {
+        RECORD_SCOPED_LOCK_EVENT(NocDebuggingEventMetadata::NocDebugEventType::DFB_LOCK, addr, entry);
+        // TODO: with concurrent ALL consumers, this invalidates the same shared cache line once per
+        // consumer; the redundant invalidations could be deduplicated (e.g. first-locker-per-round).
+        // invalidate_l2 also drops the matching L1 D$ line on all DM cores.
+        invalidate_l2_cache_range(addr, entry);
+        addr += stride;
+        if (addr >= region.limit) {
+            addr = region.base;
+        }
+    }
+    return region;
+}
+
+template <bool is_write>
+inline void DataflowBuffer::lock_release_impl(ScopedLockRegion region, uint16_t num_entries) {
+    const uint32_t stride = local_dfb_interface_.stride_size;
+    const uint32_t entry = local_dfb_interface_.entry_size;
+    uint32_t addr = region.start;
+    for (uint16_t k = 0; k < num_entries; ++k) {
+        // Flush on release only for a write lock. A read lock never writes.
+        if constexpr (is_write) {
+            // flush_l2 writes back + drops the matching L1 D$ line on all DM cores.
+            flush_l2_cache_range(addr, entry);
+        }
+        RECORD_SCOPED_LOCK_EVENT(NocDebuggingEventMetadata::NocDebugEventType::DFB_UNLOCK, addr, entry);
+        addr += stride;
+        if (addr >= region.limit) {
+            addr = region.base;
+        }
+    }
+}
+
 // Consumer barrier: waits outbound write from DFB writes to arrive at their destination
 // Falls back to a full barrier when no txn_ids are assigned
 inline void DataflowBuffer::write_barrier_impl(const Noc &noc) const {
@@ -534,13 +588,18 @@ Noc::async_read(
     DataflowBuffer& dst,
     const typename noc_traits_t<Src>::src_args_type& src_args,
     const DataflowBufferArgs& dst_args) const {
+    // Implicit sync always issues one full-entry read at get_noc_write_addr() and advances wr_ptr by
+    // stride_size in commit_implicit_read(); offset_bytes is ignored, so a non-zero offset would
+    // land data in the wrong place while still posting a full entry's credit.
+    ASSERT(dst_args.offset_bytes == 0);
     uint32_t txn_id = dst.prepare_implicit_read();
     noc_async_read_set_trid(txn_id, noc_id_);
     while (noc_available_transactions(noc_id_, txn_id) < ((NOC_MAX_TRANSACTION_ID_COUNT + 1) / 2));
     // DPRINT("Issue the read\n");
     noc_async_read<NOC_MAX_BURST_SIZE + 1, true>(
         get_src_ptr<AddressType::NOC>(src, src_args),
-        dst.get_write_ptr(),
+        // Use cached addresses for NOC APIs
+        dst.get_noc_write_addr(),
         dst.get_entry_size(),
         noc_id_,
         NOC_UNICAST_WRITE_VC);
@@ -554,8 +613,12 @@ Noc::async_write(
     const Dst& dst,
     const DataflowBufferArgs& src_args,
     const typename noc_traits_t<Dst>::dst_args_type& dst_args) const {
+    // Same contract as async_read above: implicit sync always transfers get_entry_size() bytes from
+    // get_noc_read_addr() and ignores offset_bytes.
+    ASSERT(src_args.offset_bytes == 0);
     uint32_t txn_id = src.prepare_implicit_write();
-    auto src_addr = src.get_read_ptr();
+    // Use cached addresses for NOC APIs
+    auto src_addr = src.get_noc_read_addr();
     auto dst_noc_addr = get_dst_ptr<AddressType::NOC>(dst, dst_args);
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_TRID, src_addr, dst_noc_addr, size_bytes, -1, posted, noc_id_);
     DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc_id_, dst_noc_addr, src_addr, src.get_entry_size());
@@ -575,6 +638,13 @@ Noc::async_write(
         txn_id);
     src.commit_implicit_write();
 }
+
+#else  // COMPILE_FOR_TRISC
+
+template <bool>
+inline DataflowBuffer::ScopedLockRegion DataflowBuffer::lock_acquire_impl(uint16_t) { return {}; }
+template <bool>
+inline void DataflowBuffer::lock_release_impl(ScopedLockRegion, uint16_t) {}
 
 #endif  // !COMPILE_FOR_TRISC
 

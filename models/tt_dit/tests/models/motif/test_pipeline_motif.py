@@ -13,6 +13,7 @@ from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_dit.parallel.config import DiTParallelConfig, EncoderParallelConfig, VAEParallelConfig
 from models.tt_dit.pipelines.events import profiler_event_callback
 from models.tt_dit.pipelines.motif.pipeline_motif import MotifPipeline, MotifPipelineConfig
+from models.tt_dit.utils.test import line_params_req_exact_devices
 
 
 @pytest.mark.parametrize(
@@ -21,7 +22,8 @@ from models.tt_dit.pipelines.motif.pipeline_motif import MotifPipeline, MotifPip
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 50000000}],
+    [{**line_params_req_exact_devices, "l1_small_size": 32768, "trace_region_size": 50000000}],
+    ids=["line"],
     indirect=True,
 )
 @pytest.mark.parametrize(("width", "height", "num_inference_steps"), [(1024, 1024, 20)])

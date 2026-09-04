@@ -2048,6 +2048,7 @@ void verify_socket_configs_match(const SocketConfig& config_a, const SocketConfi
     EXPECT_EQ(config_a.socket_mem_config.fifo_size, config_b.socket_mem_config.fifo_size);
     EXPECT_EQ(config_a.socket_mem_config.sender_sub_device, config_b.socket_mem_config.sender_sub_device);
     EXPECT_EQ(config_a.socket_mem_config.receiver_sub_device, config_b.socket_mem_config.receiver_sub_device);
+    EXPECT_EQ(config_a.socket_mem_config.per_core_allocation, config_b.socket_mem_config.per_core_allocation);
     EXPECT_EQ(config_a.sender_mesh_id, config_b.sender_mesh_id);
     EXPECT_EQ(config_a.receiver_mesh_id, config_b.receiver_mesh_id);
     EXPECT_EQ(config_a.sender_rank, config_b.sender_rank);
@@ -2272,6 +2273,74 @@ TEST(SocketSerializationTest, PeerDesc) {
     EXPECT_EQ(deserialized_recv_socket_desc.config_buffer_address, recv_socket_peer_desc_l1.config_buffer_address);
     EXPECT_EQ(deserialized_send_socket_desc.data_buffer_address, send_socket_peer_desc_l1.data_buffer_address);
     EXPECT_EQ(deserialized_recv_socket_desc.data_buffer_address, recv_socket_peer_desc_l1.data_buffer_address);
+}
+
+// Verify that the per_core_allocation flag survives serialization round-trip and is a distinguishing attribute
+// (feeds the handshake equality check in validate_remote_desc).
+TEST(SocketSerializationTest, PeerDescPerCoreAllocation) {
+    std::size_t socket_fifo_size = 2048;
+    SocketConnection socket_connection(
+        MeshCoreCoord(MeshCoordinate(0, 0), CoreCoord(0, 0)), MeshCoreCoord(MeshCoordinate(1, 0), CoreCoord(0, 1)));
+
+    for (bool per_core : {false, true}) {
+        SocketMemoryConfig socket_mem_config(
+            BufferType::L1,
+            socket_fifo_size,
+            /*sender_sub_device=*/std::nullopt,
+            /*receiver_sub_device=*/std::nullopt,
+            /*per_core_allocation=*/per_core);
+        EXPECT_EQ(socket_mem_config.per_core_allocation, per_core);
+
+        SocketConfig socket_config({socket_connection}, socket_mem_config, tt_fabric::MeshId{0}, tt_fabric::MeshId{1});
+        SocketPeerDescriptor recv_desc = SocketPeerDescriptor{
+            .config = socket_config,
+            .config_buffer_address = 1 << 21,
+            .data_buffer_address = 1 << 22,
+        };
+
+        auto serialized = serialize_to_bytes(recv_desc);
+        SocketPeerDescriptor deserialized = deserialize_from_bytes(serialized);
+        EXPECT_EQ(deserialized.config.socket_mem_config.per_core_allocation, per_core);
+        verify_socket_configs_match(deserialized.config, recv_desc.config);
+    }
+}
+
+// ================== Per-Core Allocation Guardrail (Negative) Tests ==================
+// These run on the default LOCKSTEP fixture. The config-only guardrails (storage type + single receiver core)
+// are checked before the HYBRID-mode requirement, so they fire regardless of allocator mode; the HYBRID-mode
+// guardrail itself fires because this fixture opens the device in LOCKSTEP mode.
+
+TEST_F(MeshSocketTest, PerCoreAllocationRequiresHybridMode) {
+    auto md0 = mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0));
+    SocketConnection connection(
+        MeshCoreCoord(MeshCoordinate(0, 0), CoreCoord(0, 0)), MeshCoreCoord(MeshCoordinate(0, 0), CoreCoord(0, 1)));
+    SocketMemoryConfig mem_config(BufferType::L1, 1024, std::nullopt, std::nullopt, /*per_core_allocation=*/true);
+    SocketConfig socket_config({connection}, mem_config);
+    // Device opened in LOCKSTEP mode => per-core allocation must fail fast.
+    EXPECT_THROW(MeshSocket::create_socket_pair(md0, md0, socket_config), std::exception);
+}
+
+TEST_F(MeshSocketTest, PerCoreAllocationRejectsDramStorage) {
+    auto md0 = mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0));
+    SocketConnection connection(
+        MeshCoreCoord(MeshCoordinate(0, 0), CoreCoord(0, 0)), MeshCoreCoord(MeshCoordinate(0, 0), CoreCoord(0, 1)));
+    SocketMemoryConfig mem_config(BufferType::DRAM, 1024, std::nullopt, std::nullopt, /*per_core_allocation=*/true);
+    SocketConfig socket_config({connection}, mem_config);
+    EXPECT_THROW(MeshSocket::create_socket_pair(md0, md0, socket_config), std::exception);
+}
+
+TEST_F(MeshSocketTest, PerCoreAllocationRejectsMultipleReceiverCores) {
+    auto md0 = mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0));
+    // Two connections targeting two distinct receiver cores => v1 per-core restriction violated.
+    std::vector<SocketConnection> connections = {
+        SocketConnection(
+            MeshCoreCoord(MeshCoordinate(0, 0), CoreCoord(0, 0)), MeshCoreCoord(MeshCoordinate(0, 0), CoreCoord(0, 2))),
+        SocketConnection(
+            MeshCoreCoord(MeshCoordinate(0, 0), CoreCoord(1, 0)), MeshCoreCoord(MeshCoordinate(0, 0), CoreCoord(1, 2))),
+    };
+    SocketMemoryConfig mem_config(BufferType::L1, 1024, std::nullopt, std::nullopt, /*per_core_allocation=*/true);
+    SocketConfig socket_config(connections, mem_config);
+    EXPECT_THROW(MeshSocket::create_socket_pair(md0, md0, socket_config), std::exception);
 }
 
 }  // namespace tt::tt_metal::distributed

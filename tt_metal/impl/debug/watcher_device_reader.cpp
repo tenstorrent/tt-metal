@@ -19,6 +19,7 @@
 #include <core_coord.hpp>
 #include <fmt/base.h>
 #include <fmt/ranges.h>
+#include "internal/tt-2xx/quasar/tensix_neo_reg.h"
 #include "llrt/metal_soc_descriptor.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <umd/device/types/core_coordinates.hpp>
@@ -33,8 +34,7 @@
 #include "dispatch_core_common.hpp"
 #include "impl/dispatch/dispatch_engine_cores.hpp"
 #include "hal_types.hpp"
-#include "api/debug/ring_buffer.h"
-#include "impl/context/metal_context.hpp"
+#include "hostdev/debug_ring_buffer_common.h"
 #include "watcher_device_reader.hpp"
 #include <impl/debug/watcher_server.hpp>
 #include <llrt/tt_cluster.hpp>
@@ -43,20 +43,6 @@
 
 using namespace tt::tt_metal;
 using std::string;
-
-#define NOC_MCAST_ADDR_START_X(addr) (MetalContext::instance().hal().get_noc_mcast_addr_start_x(addr))
-#define NOC_MCAST_ADDR_START_Y(addr) (MetalContext::instance().hal().get_noc_mcast_addr_start_y(addr))
-#define NOC_MCAST_ADDR_END_X(addr) (MetalContext::instance().hal().get_noc_mcast_addr_end_x(addr))
-#define NOC_MCAST_ADDR_END_Y(addr) (MetalContext::instance().hal().get_noc_mcast_addr_end_y(addr))
-#define NOC_UNICAST_ADDR_X(addr) (MetalContext::instance().hal().get_noc_ucast_addr_x(addr))
-#define NOC_UNICAST_ADDR_Y(addr) (MetalContext::instance().hal().get_noc_ucast_addr_y(addr))
-#define NOC_LOCAL_ADDR(addr) (MetalContext::instance().hal().get_noc_local_addr(addr))
-#define NOC_OVERLAY_START_ADDR (MetalContext::instance().hal().get_noc_overlay_start_addr())
-#define NOC_STREAM_REG_SPACE_SIZE (MetalContext::instance().hal().get_noc_stream_reg_space_size())
-#define STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX \
-    (MetalContext::instance().hal().get_noc_stream_remote_dest_buf_size_reg_index())
-#define STREAM_REMOTE_DEST_BUF_START_REG_INDEX \
-    (MetalContext::instance().hal().get_noc_stream_remote_dest_buf_start_reg_index())
 
 namespace {  // Helper functions
 
@@ -118,15 +104,15 @@ const char* get_riscv_name(const Hal& hal, HalProgrammableCoreType core_type, ui
 }
 
 // Helper function to determine core type from virtual coord. TODO: Remove this once we fix code types.
-tt::CoreType core_type_from_virtual_core(tt::ChipId device_id, const CoreCoord& virtual_coord) {
-    if (tt::tt_metal::MetalContext::instance().get_cluster().is_worker_core(virtual_coord, device_id)) {
+tt::CoreType core_type_from_virtual_core(tt::Cluster& cluster, tt::ChipId device_id, const CoreCoord& virtual_coord) {
+    if (cluster.is_worker_core(virtual_coord, device_id)) {
         return tt::CoreType::WORKER;
     }
-    if (tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_core(virtual_coord, device_id)) {
+    if (cluster.is_ethernet_core(virtual_coord, device_id)) {
         return tt::CoreType::ETH;
     }
 
-    const metal_SocDescriptor& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
+    const metal_SocDescriptor& soc_desc = cluster.get_soc_desc(device_id);
 
     const std::vector<tt::umd::CoreCoord>& translated_dram_cores =
         soc_desc.get_cores(tt::CoreType::DRAM, tt::CoordSystem::TRANSLATED);
@@ -151,11 +137,12 @@ tt::CoreType core_type_from_virtual_core(tt::ChipId device_id, const CoreCoord& 
 }
 
 // Helper function to convert noc coord -> virtual coord. TODO: Remove this once we fix code types.
-CoreCoord virtual_noc_coordinate(tt::ChipId device_id, uint8_t noc_index, CoreCoord coord) {
-    if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::BLACKHOLE) {
+CoreCoord virtual_noc_coordinate(
+    const Hal& hal, tt::Cluster& cluster, tt::ChipId device_id, uint8_t noc_index, CoreCoord coord) {
+    if (cluster.arch() == tt::ARCH::BLACKHOLE) {
         return coord;
     }
-    auto grid_size = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id).grid_size;
+    auto grid_size = cluster.get_soc_desc(device_id).grid_size;
     if (coord.x >= grid_size.x || coord.y >= grid_size.y) {
         // Coordinate already in virtual space: NOC0 and NOC1 are the same
         return coord;
@@ -163,25 +150,26 @@ CoreCoord virtual_noc_coordinate(tt::ChipId device_id, uint8_t noc_index, CoreCo
     // the system this coordinate belongs to.
     // Use this to convert to NOC0 coordinates and then derive Virtual Coords from it.
     CoreCoord physical_coord = {
-        MetalContext::instance().hal().noc_coordinate(noc_index, grid_size.x, coord.x),
-        MetalContext::instance().hal().noc_coordinate(noc_index, grid_size.y, coord.y)};
-    return tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_physical_coordinates(
-        device_id, physical_coord);
+        hal.noc_coordinate(noc_index, grid_size.x, coord.x), hal.noc_coordinate(noc_index, grid_size.y, coord.y)};
+    return cluster.get_virtual_coordinate_from_physical_coordinates(device_id, physical_coord);
 }
 
 // Helper function to get string rep of noc target.
 string get_noc_target_str(
-    const Hal& hal,
+    MetalEnvImpl& env,
     tt::ChipId device_id,
     HalProgrammableCoreType programmable_core_type,
     int noc,
     dev_msgs::debug_sanitize_addr_msg_t::ConstView san) {
-    auto get_core_and_mem_type = [](tt::ChipId device_id, CoreCoord& noc_coord, int noc) -> std::pair<string, string> {
+    const auto& hal = env.get_hal();
+    auto& cluster = env.get_cluster();
+    auto get_core_and_mem_type = [&hal, &cluster](
+                                     tt::ChipId device_id, CoreCoord& noc_coord, int noc) -> std::pair<string, string> {
         // Get the virtual coord from the noc coord
-        CoreCoord virtual_core = virtual_noc_coordinate(device_id, noc, noc_coord);
+        CoreCoord virtual_core = virtual_noc_coordinate(hal, cluster, device_id, noc, noc_coord);
         tt::CoreType core_type;
         try {
-            core_type = core_type_from_virtual_core(device_id, virtual_core);
+            core_type = core_type_from_virtual_core(cluster, device_id, virtual_core);
         } catch (std::runtime_error& e) {
             // We may not be able to get a core type if the virtual coords are bad.
             return {"Unknown", ""};
@@ -208,9 +196,9 @@ string get_noc_target_str(
 
     if (san.is_multicast()) {
         CoreCoord target_virtual_noc_core_start = {
-            NOC_MCAST_ADDR_START_X(san.noc_addr()), NOC_MCAST_ADDR_START_Y(san.noc_addr())};
+            hal.get_noc_mcast_addr_start_x(san.noc_addr()), hal.get_noc_mcast_addr_start_y(san.noc_addr())};
         CoreCoord target_virtual_noc_core_end = {
-            NOC_MCAST_ADDR_END_X(san.noc_addr()), NOC_MCAST_ADDR_END_Y(san.noc_addr())};
+            hal.get_noc_mcast_addr_end_x(san.noc_addr()), hal.get_noc_mcast_addr_end_y(san.noc_addr())};
         auto type_and_mem = get_core_and_mem_type(device_id, target_virtual_noc_core_start, noc);
         out += fmt::format(
             "{} core range w/ virtual coords {}-{} {}",
@@ -219,13 +207,14 @@ string get_noc_target_str(
             target_virtual_noc_core_end.str(),
             type_and_mem.second);
     } else {
-        CoreCoord target_virtual_noc_core = {NOC_UNICAST_ADDR_X(san.noc_addr()), NOC_UNICAST_ADDR_Y(san.noc_addr())};
+        CoreCoord target_virtual_noc_core = {
+            hal.get_noc_ucast_addr_x(san.noc_addr()), hal.get_noc_ucast_addr_y(san.noc_addr())};
         auto type_and_mem = get_core_and_mem_type(device_id, target_virtual_noc_core, noc);
         out += fmt::format(
             "{} core w/ virtual coords {} {}", type_and_mem.first, target_virtual_noc_core.str(), type_and_mem.second);
     }
 
-    out += fmt::format("[addr=0x{:08x}]", NOC_LOCAL_ADDR(san.noc_addr()));
+    out += fmt::format("[addr=0x{:08x}]", hal.get_noc_local_addr(san.noc_addr()));
     return out;
 }
 
@@ -287,6 +276,8 @@ private:
     HalProgrammableCoreType programmable_core_type_;
     std::string core_str_;
     std::vector<std::byte> l1_read_buf_;
+    // Quasar MPSC head, read at snapshot time
+    uint32_t sem_head_ = 0;
     dev_msgs::mailboxes_t::ConstView mbox_data_;
     dev_msgs::launch_msg_t::ConstView launch_msg_;
     const WatcherDeviceReader& reader_;
@@ -298,6 +289,8 @@ private:
     void DumpPauseStatus() const;
     void DumpEthLinkStatus() const;
     void DumpRingBuffer(bool to_stdout = false) const;
+    void DumpMpscRingBuffer(bool to_stdout = false) const;
+    void EmitRingBuffer(const std::vector<std::string>& lines, bool to_stdout) const;
     void DumpRunState(uint32_t state) const;
     void DumpLaunchMessage() const;
     void DumpWaypoints(bool to_stdout = false) const;
@@ -317,6 +310,7 @@ private:
         HalProgrammableCoreType programmable_core_type,
         std::string core_str,
         std::vector<std::byte> l1_read_buf,
+        uint32_t sem_head,
         dev_msgs::Factory dev_msgs_factory,
         const WatcherDeviceReader& reader,
         DumpData& dump_data) :
@@ -324,6 +318,7 @@ private:
         programmable_core_type_(programmable_core_type),
         core_str_(std::move(core_str)),
         l1_read_buf_(std::move(l1_read_buf)),
+        sem_head_(sem_head),
         mbox_data_(dev_msgs_factory.create_view<dev_msgs::mailboxes_t>(l1_read_buf_.data())),
         launch_msg_(get_valid_launch_message(mbox_data_)),
         reader_(reader),
@@ -365,7 +360,7 @@ WatcherDeviceReader::WatcherDeviceReader(
     uint32_t core_count = hal.get_programmable_core_type_count();
     for (uint32_t i = 0; i < core_count; i++) {
         auto core_type = hal.get_programmable_core_type(i);
-        symbols_info_cache_.emplace(core_type, get_enable_symbols_info(core_type));
+        symbols_info_cache_.emplace(core_type, get_enable_symbols_info(env.get_hal(), core_type));
     }
 }
 
@@ -598,11 +593,24 @@ WatcherDeviceReader::Core WatcherDeviceReader::Core::Create(
     std::vector<std::byte> l1_read_buf(mailbox_read_size);
     reader.env.get_cluster().read_core(
         l1_read_buf.data(), l1_read_buf.size(), {static_cast<size_t>(reader.device_id), virtual_coord}, mailbox_addr);
+
+    // Quasar's MPSC head lives in a semaphore register rather than the mailbox. Read it here with the
+    // rest of the snapshot.
+    uint32_t sem_head = 0;
+    if (hal.get_arch() == tt::ARCH::QUASAR) {
+        reader.env.get_cluster().read_core(
+            &sem_head,
+            sizeof(sem_head),
+            {static_cast<size_t>(reader.device_id), virtual_coord},
+            TENSIX_GLOBAL_REGS_SEMAPHORE_REGS_SEMAPHORE_31__REG_ADDR);
+    }
+
     return Core(
         virtual_coord,
         programmable_core_type,
         std::move(core_str),
         std::move(l1_read_buf),
+        sem_head,
         dev_msgs_factory,
         reader,
         dump_data);
@@ -702,10 +710,12 @@ void WatcherDeviceReader::Core::Dump() const {
 void WatcherDeviceReader::Core::DumpL1Status() const {
     // Read L1 address 0, looking for memory corruption
     std::vector<uint32_t> data;
-    data = reader_.env.get_cluster().read_core(reader_.device_id, virtual_coord_, HAL_MEM_L1_BASE, sizeof(uint32_t));
+    const auto& hal = reader_.env.get_hal();
+    const auto l1_base = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
+    data = reader_.env.get_cluster().read_core(reader_.device_id, virtual_coord_, l1_base, sizeof(uint32_t));
     TT_ASSERT(programmable_core_type_ == HalProgrammableCoreType::TENSIX);
-    uint32_t core_type_idx = reader_.env.get_hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
-    auto fw_launch_value = reader_.env.get_hal().get_jit_build_config(core_type_idx, 0, 0).fw_launch_addr_value;
+    uint32_t core_type_idx = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+    auto fw_launch_value = hal.get_jit_build_config(core_type_idx, 0, 0).fw_launch_addr_value;
     if (data[0] != fw_launch_value) {
         LogRunningKernels();
         TT_THROW("Watcher found corruption at L1[0] on core {}: read {}", virtual_coord_.str(), data[0]);
@@ -732,47 +742,47 @@ void WatcherDeviceReader::Core::DumpNocSanitizeStatus(int noc) const {
             }
             break;
         case dev_msgs::DebugSanitizeNocAddrUnderflow:
-            error_msg = get_noc_target_str(reader_.env.get_hal(), reader_.device_id, programmable_core_type_, noc, san);
+            error_msg = get_noc_target_str(reader_.env, reader_.device_id, programmable_core_type_, noc, san);
             error_msg += string(san.is_target() ? " (NOC target" : " (Local L1") + " address underflow).";
             break;
         case dev_msgs::DebugSanitizeNocAddrOverflow:
-            error_msg = get_noc_target_str(reader_.env.get_hal(), reader_.device_id, programmable_core_type_, noc, san);
+            error_msg = get_noc_target_str(reader_.env, reader_.device_id, programmable_core_type_, noc, san);
             error_msg += string(san.is_target() ? " (NOC target" : " (Local L1") + " address overflow).";
             break;
         case dev_msgs::DebugSanitizeNocAddrZeroLength:
-            error_msg = get_noc_target_str(reader_.env.get_hal(), reader_.device_id, programmable_core_type_, noc, san);
+            error_msg = get_noc_target_str(reader_.env, reader_.device_id, programmable_core_type_, noc, san);
             error_msg += " (zero length transaction).";
             break;
         case dev_msgs::DebugSanitizeNocTargetInvalidXY:
-            error_msg = get_noc_target_str(reader_.env.get_hal(), reader_.device_id, programmable_core_type_, noc, san);
+            error_msg = get_noc_target_str(reader_.env, reader_.device_id, programmable_core_type_, noc, san);
             error_msg += " (NOC target address did not map to any known Tensix/Ethernet/DRAM/PCIE core).";
             break;
         case dev_msgs::DebugSanitizeNocMulticastNonWorker:
-            error_msg = get_noc_target_str(reader_.env.get_hal(), reader_.device_id, programmable_core_type_, noc, san);
+            error_msg = get_noc_target_str(reader_.env, reader_.device_id, programmable_core_type_, noc, san);
             error_msg += " (multicast to non-worker core).";
             break;
         case dev_msgs::DebugSanitizeNocMulticastInvalidRange:
-            error_msg = get_noc_target_str(reader_.env.get_hal(), reader_.device_id, programmable_core_type_, noc, san);
+            error_msg = get_noc_target_str(reader_.env, reader_.device_id, programmable_core_type_, noc, san);
             error_msg += " (multicast invalid range).";
             break;
         case dev_msgs::DebugSanitizeNocAlignment:
-            error_msg = get_noc_target_str(reader_.env.get_hal(), reader_.device_id, programmable_core_type_, noc, san);
+            error_msg = get_noc_target_str(reader_.env, reader_.device_id, programmable_core_type_, noc, san);
             error_msg += " (invalid address alignment in NOC transaction).";
             break;
         case dev_msgs::DebugSanitizeNocMixedVirtualandPhysical:
-            error_msg = get_noc_target_str(reader_.env.get_hal(), reader_.device_id, programmable_core_type_, noc, san);
+            error_msg = get_noc_target_str(reader_.env, reader_.device_id, programmable_core_type_, noc, san);
             error_msg += " (mixing virtual and virtual coordinates in Mcast).";
             break;
         case dev_msgs::DebugSanitizeInlineWriteDramUnsupported:
-            error_msg = get_noc_target_str(reader_.env.get_hal(), reader_.device_id, programmable_core_type_, noc, san);
+            error_msg = get_noc_target_str(reader_.env, reader_.device_id, programmable_core_type_, noc, san);
             error_msg += " (inline dw writes do not support DRAM destination addresses).";
             break;
         case dev_msgs::DebugSanitizeNocAddrMailbox:
-            error_msg = get_noc_target_str(reader_.env.get_hal(), reader_.device_id, programmable_core_type_, noc, san);
+            error_msg = get_noc_target_str(reader_.env, reader_.device_id, programmable_core_type_, noc, san);
             error_msg += string(san.is_target() ? " (NOC target" : " (Local L1") + " overwrites mailboxes).";
             break;
         case dev_msgs::DebugSanitizeNocLinkedTransactionViolation:
-            error_msg = get_noc_target_str(reader_.env.get_hal(), reader_.device_id, programmable_core_type_, noc, san);
+            error_msg = get_noc_target_str(reader_.env, reader_.device_id, programmable_core_type_, noc, san);
             error_msg += fmt::format(" (submitting a non-mcast transaction when there's a linked transaction).");
             break;
         case dev_msgs::DebugSanitizeL1AddrOverflow:
@@ -788,7 +798,7 @@ void WatcherDeviceReader::Core::DumpNocSanitizeStatus(int noc) const {
             error_msg += " (ethernet send with L1 source overflow).";
             break;
         case dev_msgs::DebugSanitizeCBOutOfBounds:
-            error_msg = get_noc_target_str(reader_.env.get_hal(), reader_.device_id, programmable_core_type_, noc, san);
+            error_msg = get_noc_target_str(reader_.env, reader_.device_id, programmable_core_type_, noc, san);
             error_msg += " (NOC transaction overflows a circular buffer).";
             break;
         case dev_msgs::DebugSanitizeNocInvalidTxnId:
@@ -852,7 +862,7 @@ void WatcherDeviceReader::Core::DumpAssertStatus() const {
     DumpWaypoints(true);
     DumpRingBuffer(true);
     LogRunningKernels();
-    MetalContext::instance().watcher_server()->set_exception_message(error_msg);
+    reader_.watcher_server.set_exception_message(error_msg);
     TT_THROW("Watcher detected tripped assert and stopped device.");
 }
 
@@ -900,42 +910,60 @@ void WatcherDeviceReader::Core::DumpEthLinkStatus() const {
 }
 
 void WatcherDeviceReader::Core::DumpRingBuffer(bool to_stdout) const {
-    auto ring_buf_data = mbox_data_.watcher().debug_ring_buf();
-    string out;
-    if (ring_buf_data.current_ptr() != DEBUG_RING_BUFFER_STARTING_INDEX) {
-        // Latest written idx is one less than the index read out of L1.
-        out += "\n\tdebug_ring_buffer=\n\t[";
-        int curr_idx = ring_buf_data.current_ptr();
-        size_t ring_buffer_elements = ring_buf_data.data().size();
-        for (int count = 1; count <= ring_buffer_elements; count++) {
-            out += fmt::format("0x{:08x},", ring_buf_data.data()[curr_idx]);
-            if (count % 8 == 0) {
-                out += "\n\t ";
-            }
-            if (curr_idx == 0) {
-                if (ring_buf_data.wrapped() == 0) {
-                    break;  // No wrapping, so no extra data available
-                }
-                curr_idx = ring_buffer_elements - 1;  // Loop
+    const auto& hal = reader_.env.get_hal();
 
-            } else {
-                curr_idx--;
-            }
-        }
-        // Remove the last comma
-        out.pop_back();
-        out += "]";
+    // On Quasar and Blackhole, use MPSC ring buffer format
+    if (hal.has_mpsc_ring_buffer()) {
+        DumpMpscRingBuffer(to_stdout);
+        return;
     }
 
-    // This function can either dump to stdout or the log file.
+    // WH: SPSC ring buffer - cast byte array wrapper to impl struct
+    const auto* ring_buf_data =
+        reinterpret_cast<const debug_spsc_ring_buf_msg_t*>(mbox_data_.watcher().debug_ring_buf().data().data());
+
+    EmitRingBuffer(FormatRingBuffer(reader_.env.get_hal(), *ring_buf_data, programmable_core_type_), to_stdout);
+}
+
+// Either dumps to stdout or to the log file.
+void WatcherDeviceReader::Core::EmitRingBuffer(const std::vector<std::string>& lines, bool to_stdout) const {
+    if (lines.empty()) {
+        return;
+    }
+    string out = "\n\tdebug_ring_buffer=\n\t" + fmt::format("{}", fmt::join(lines, "\n\t"));
     if (to_stdout) {
-        if (!out.empty()) {
-            out = string("Last ring buffer status: ") + out;
-            log_info(tt::LogMetal, "{}", out);
-        }
+        log_info(tt::LogMetal, "Last ring buffer status: {}", out);
     } else {
         fprintf(reader_.f, "%s", out.c_str());
     }
+}
+
+void WatcherDeviceReader::Core::DumpMpscRingBuffer(bool to_stdout) const {
+    const auto& hal = reader_.env.get_hal();
+    const auto* rb =
+        reinterpret_cast<const debug_mpsc_ring_buf_view_t*>(mbox_data_.watcher().debug_ring_buf().data().data());
+
+    uint32_t capacity = hal.get_ring_buffer_capacity();
+    uint32_t mask = capacity - 1;  // capacity is a power of two
+    // Quasar keeps head in a semaphore register, snapshotted alongside the mailbox.
+    uint32_t head = (hal.get_arch() == tt::ARCH::QUASAR) ? sem_head_ : rb->head;
+
+    // Scan every slot rather than min(head, capacity): the semaphore is 16-bit, so head wraps and
+    // cannot bound the live entries.
+    std::vector<uint32_t> data, thread_indices;  // newest first
+    data.reserve(capacity);
+    thread_indices.reserve(capacity);
+    for (uint32_t i = 0; i < capacity; i++) {
+        const auto& slot = rb->slots[(head - 1 - i) & mask];
+        // write_id is thread_idx + 1, so 0 means the slot was never written.
+        if (slot.write_id == 0) {
+            continue;
+        }
+        data.push_back(slot.data);
+        thread_indices.push_back(slot.write_id - 1);
+    }
+
+    EmitRingBuffer(FormatRingBuffer(reader_.env.get_hal(), data, thread_indices, programmable_core_type_), to_stdout);
 }
 
 void WatcherDeviceReader::Core::DumpRunState(uint32_t state) const {
@@ -1140,13 +1168,14 @@ void WatcherDeviceReader::Core::DumpSyncRegs() const {
         // Read back all of the stream state, most of it is unused
         std::vector<uint32_t> data;
         for (uint32_t operand = 0; operand < max_cbs; operand++) {
-            uint32_t base = NOC_OVERLAY_START_ADDR + ((operand_start_stream + operand) * NOC_STREAM_REG_SPACE_SIZE);
+            uint32_t base = hal.get_noc_overlay_start_addr() +
+                            ((operand_start_stream + operand) * hal.get_noc_stream_reg_space_size());
 
-            uint32_t rcvd_addr = base + (STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX * sizeof(uint32_t));
+            uint32_t rcvd_addr = base + (hal.get_noc_stream_remote_dest_buf_size_reg_index() * sizeof(uint32_t));
             data = reader_.env.get_cluster().read_core(reader_.device_id, virtual_coord_, rcvd_addr, sizeof(uint32_t));
             uint32_t rcvd = data[0];
 
-            uint32_t ackd_addr = base + (STREAM_REMOTE_DEST_BUF_START_REG_INDEX * sizeof(uint32_t));
+            uint32_t ackd_addr = base + (hal.get_noc_stream_remote_dest_buf_start_reg_index() * sizeof(uint32_t));
             data = reader_.env.get_cluster().read_core(reader_.device_id, virtual_coord_, ackd_addr, sizeof(uint32_t));
             uint32_t ackd = data[0];
 

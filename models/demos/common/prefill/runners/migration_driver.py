@@ -1,80 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 
-"""KV-migration test driver: prefills slots over H2D, then migrates their KV. Run this as a script.
-
-This is the ENTRY POINT for a migration run — the whole terminal-C side in one process. It owns
-everything migration: env/manifest/CLI config, the MigrationLayerClient attach, the optional
-cross-endpoint pairing, resolving the src->dst mapping, issuing the migrate() calls, and writing the two
-sidecar files consumers wait on.
-
-The H2D half is driven with ``prefill_producer``'s helpers — manifest, push schedule, ack drain, golden
-PCC — so the push path is defined in exactly one place. The dependency runs ONE way: ``prefill_producer``
-is the plain runner test and imports nothing from here, so a runner-only run can never pull migration in.
-Everything migration-specific lives in this file, including the optional src-KV dump for a decode-side
-consumer (``--dump-src-kv``).
-
-Contrast with ``runners.migration``, which is the RUNNER's passive setup half (publish the KV chunk
-table + device map to the migration worker and block on WORKER_READY). This module reuses that module's
-queue-name / client-import resolution but sends no SET_TABLE: by the time the producer runs, the runner
-has already driven the endpoint to WORKER_READY and released its setup client, leaving the cmd queue
-free — exactly the handoff the C++ PrefillScheduler relies on.
-
-Two topologies, selected by whether the destination endpoint id differs from our own:
-  * LOOPBACK (dest == src, the default): src and dst slots live in ONE table, routed to the endpoint's
-    internal B worker. The prefill RUNNER validates the migrated KV on-device (PREFILL_VALIDATE_MIGRATION=1
-    + validate_after_prefill) once it sees the DONE sentinel — the producer never PCCs migrated KV itself.
-  * CROSS-ENDPOINT P->D (dest != src): dst lives in the remote DECODE galaxy's table, an independent
-    address space. Requires the pairing/connect handshake below, and the decode side has no way to know
-    each slot's prompt length / last token, so we write a JSON handoff sidecar for it.
-
-Running it — migration must share the producer's process: it needs that run's resident-slot state, and it
-must migrate while the runner still holds the KV in device DRAM. Hence one entry point covering both, and
-the same three-terminal flow as before — terminal C just runs THIS module instead of prefill_producer::
-
-    export ENGINE=/path/to/tt-llm-engine TT_METAL_HOME=/path/to/tt-metal HOST=<this-host>
-    source $TT_METAL_HOME/python_env/bin/activate
-
-    # A) migration endpoint (leave running)
-    cd $ENGINE/disaggregation/migration
-    ./launch_migration_endpoints.sh --name_server_host $HOST \
-        --prefill_hosts $HOST --prefill_endpoint_id 1
-
-    # B) prefill runner (wait for WORKER_READY)
-    cd $TT_METAL_HOME
-    ./models/demos/common/prefill/runners/run_pipeline_prefill.sh \
-      models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_request_1rank.yaml \
-      $HOST:1
-
-    # C) prefill + migrate (this module). For a runner-only run, use prefill_producer instead.
-    python3 -m models.demos.common.prefill.runners.migration_driver \
-      --manifest models/demos/common/prefill/runners/producer_manifests/<MANIFEST>.yaml
-
-Env (all also settable from the producer manifest's typed ``migration:`` block — see
-``apply_manifest_env``; an explicitly exported env var always wins). Invoking this module IS the opt-in,
-so ``migration.issue`` is redundant here and a ``false`` is warned about rather than honoured:
-  PREFILL_MIGRATION_DEST_ENDPOINT_ID  destination endpoint id for migrate() (default 1). Equal to our
-                                    OWN id => loopback; a different id => cross-endpoint P->D.
-  PREFILL_MIGRATION_SRC_ENDPOINT_ID  our OWN endpoint id, i.e. the prefill side (default 1). Only used
-                                    to decide loopback vs cross-endpoint and to pick the pairing role.
-  PREFILL_MIGRATION_PAIRS           arbitrary any-src -> any-dst mapping as "src:dst,src:dst,..." (e.g.
-                                    "0:5,1:2,3:7"). When set, migrates exactly these pairs (each src must
-                                    be a resident/prefilled slot; dst must fit the KV table; duplicate src
-                                    fans out). Also settable via ``--migrations`` (CLI wins) or the
-                                    manifest ``migration.pairs`` list. Overrides DST_SLOT_OFFSET.
-  PREFILL_MIGRATION_DST_SLOT_OFFSET  offset fallback used ONLY when PREFILL_MIGRATION_PAIRS is unset:
-                                    dst_slot = src_slot + offset (default = PREFILL_NUM_USERS, i.e. src
-                                    slots [0,N) migrate to dst slots [N,2N); the KV table needs >= 2N slots).
-  PREFILL_MIGRATION_LAYERS          "0,3" => migrate ONLY those layer rows, one migrate() per layer;
-                                    unset (default) => the whole [0, num_layers) range in one shot.
-  PREFILL_MIGRATION_HANDOFF_PATH    path of the JSON handoff for a cross-endpoint decode consumer;
-                                    unset (default) => not written at all.
-  PREFILL_MIGRATION_TIMEOUT_MS      per-migration wait_complete timeout (default 3600000).
-  MIGRATION_DONE_FILE               path of the DONE sentinel the runner polls (default
-                                    /tmp/migration_done.sentinel).
-  Queues + client come from the runner's migration env, resolved via ``runners.migration``:
-  PREFILL_MIGRATION_{CMD,TABLE,RESP}_QUEUE and PREFILL_MIGRATION_CLIENT_DIR.
-"""
 
 import json
 import os
@@ -88,19 +14,13 @@ import ttnn
 
 
 def apply_manifest_env(manifest: dict) -> None:
-    """Map a producer manifest's typed ``migration:`` block onto the PREFILL_MIGRATION_* env vars this
-    module reads. Uses setdefault, so an explicitly exported env var (and the manifest's own verbatim
-    ``env:`` passthrough, which the producer applies first) still wins.
-
-    Called from the producer's ``_apply_manifest_env`` at import time, before anything reads the env.
-    """
     migration = manifest.get("migration") or {}
 
-    def sd(key, val):  # setdefault, stringified; skips None so an absent field leaves the default
+    def sd(key, val):
         if val is not None:
             os.environ.setdefault(key, str(val))
 
-    def sd_bool(key, val):  # YAML true/false -> the "1"/"0" the env parsing expects
+    def sd_bool(key, val):
         if val is not None:
             os.environ.setdefault(key, "1" if val else "0")
 
@@ -108,8 +28,6 @@ def apply_manifest_env(manifest: dict) -> None:
     sd("PREFILL_MIGRATION_DEST_ENDPOINT_ID", migration.get("dest_endpoint_id"))
     sd("PREFILL_MIGRATION_SRC_ENDPOINT_ID", migration.get("src_endpoint_id"))
     sd("PREFILL_MIGRATION_DST_SLOT_OFFSET", migration.get("dst_slot_offset"))
-    # Arbitrary src->dst mapping. Accept a "src:dst,src:dst" string, or a list of {src, dst} dicts /
-    # [src, dst] pairs / "src:dst" strings; all normalize to the PREFILL_MIGRATION_PAIRS env string.
     pairs = migration.get("pairs")
     if pairs is not None:
         if isinstance(pairs, str):
@@ -122,9 +40,8 @@ def apply_manifest_env(manifest: dict) -> None:
                 elif isinstance(p, (list, tuple)):
                     parts.append(f"{p[0]}:{p[1]}")
                 else:
-                    parts.append(str(p))  # already a "src:dst" string
+                    parts.append(str(p))
             sd("PREFILL_MIGRATION_PAIRS", ",".join(parts))
-    # Layer subset: accept "0,3" or [0, 3].
     layers = migration.get("layers")
     if layers is not None:
         sd("PREFILL_MIGRATION_LAYERS", layers if isinstance(layers, str) else ",".join(str(x) for x in layers))
@@ -140,27 +57,18 @@ def apply_manifest_env(manifest: dict) -> None:
 
 
 def _parse_layers(spec: str):
-    """PREFILL_MIGRATION_LAYERS / manifest ``layers`` -> a list of layer ids, or None for "all"."""
     spec = (spec or "").strip()
     return [int(x) for x in spec.split(",") if x.strip()] if spec else None
 
 
 class MigrationDriver:
-    """Issues producer-side KV migrations. Construct via ``create_driver`` (which applies the enable flag),
-    then ``attach()`` before prefill and ``run()`` after the ack drain."""
-
     def __init__(self, *, chunk_size: int, num_layers: int, default_dst_slot_offset: int):
         self.chunk_size = chunk_size
         self.num_layers = num_layers
         self.dest_endpoint_id = int(os.environ.get("PREFILL_MIGRATION_DEST_ENDPOINT_ID", "1"))
-        # Our OWN endpoint id (prefill side). dest == src => loopback (src/dst share one table);
-        # dest != src => cross-endpoint P->D (dst lives in the remote decode table). Drives which mapping
-        # invariants apply in _resolve_pairs and whether we do the pairing handshake.
         self.src_endpoint_id = int(os.environ.get("PREFILL_MIGRATION_SRC_ENDPOINT_ID", "1"))
         self.timeout_ms = int(os.environ.get("PREFILL_MIGRATION_TIMEOUT_MS", "3600000"))
         self.dst_slot_offset = int(os.environ.get("PREFILL_MIGRATION_DST_SLOT_OFFSET", str(default_dst_slot_offset)))
-        # PREFILL_MIGRATION_LAYERS="0,3" => extract only those layers (one migrate per layer) into a
-        # layer-id-indexed decode table; unset => migrate the whole [0, num_layers) range in one shot.
         self.layers = _parse_layers(os.environ.get("PREFILL_MIGRATION_LAYERS", ""))
         self.done_file = os.environ.get("MIGRATION_DONE_FILE", "/tmp/migration_done.sentinel")
         self.handoff_path = os.environ.get("PREFILL_MIGRATION_HANDOFF_PATH", "")
@@ -168,30 +76,14 @@ class MigrationDriver:
 
     @property
     def cross_endpoint(self) -> bool:
-        """True when the destination table lives in a DIFFERENT endpoint (P->D) rather than our own."""
         return self.dest_endpoint_id != self.src_endpoint_id
 
-    # ---------------------------------------------------------------- attach
-
     def attach(self) -> None:
-        """Attach the MigrationLayerClient and, when cross-endpoint, complete the pairing handshake.
-
-        Called BEFORE prefill so a missing endpoint fails fast (rather than after a long prefill), and so
-        the decode side's blocking connect_to rendezvous's promptly instead of risking a connect timeout
-        while we push chunks.
-        """
         self.client = self._attach_client()
         if self.cross_endpoint:
             self._pair_cross_endpoint()
 
     def _attach_client(self):
-        """Attach a MigrationLayerClient to the migration endpoint's queues.
-
-        Reuses ``runners.migration``'s queue-name / client-import resolution (PREFILL_MIGRATION_{CMD,TABLE,
-        RESP}_QUEUE + PREFILL_MIGRATION_CLIENT_DIR). Does NOT send SET_TABLE / device map / wait_ready: the
-        runner already drove the endpoint to WORKER_READY (migration.publish_table_and_wait_ready) and
-        released its setup client, leaving the cmd queue free for us. Returns the client (do NOT call
-        shutdown() on it: the endpoint's lifetime is owned by the launcher, not the producer)."""
         from models.demos.common.prefill.runners.migration import _import_migration_client, _resolve_queue_names
 
         cmd_q, table_q, resp_q = _resolve_queue_names()
@@ -200,11 +92,6 @@ class MigrationDriver:
         return client
 
     def _pair_cross_endpoint(self) -> None:
-        """Pair this prefill endpoint with the decode endpoint (P->D only).
-
-        Without this, both endpoints self-loopback and migrate() aborts "No remote table found for
-        destination". Convention matches the decode side + smoke test: lower id = PUBLISHER (accepts),
-        higher = CONNECTOR (initiates); both sides derive ONE service_name from the id pair."""
         publisher = min(self.src_endpoint_id, self.dest_endpoint_id)
         connector = max(self.src_endpoint_id, self.dest_endpoint_id)
         service_name = f"pd-migration-ep{publisher}-ep{connector}"
@@ -216,57 +103,22 @@ class MigrationDriver:
         self.client.connect_to(remote_endpoint_id=self.dest_endpoint_id, role=role, service_name=service_name)
         logger.success(f"[migration_driver] cross-endpoint pairing established with remote_ep={self.dest_endpoint_id}")
 
-    # ------------------------------------------------------------------- run
-
     def run(self, stats, *, num_slots: int = None, slot_traces: dict = None, pools_by_trace: dict = None) -> list:
-        """Resolve the mapping, migrate every pair, then publish the sidecars. Returns the resolved
-        ``(src_slot, dst_slot, real_len)`` triples.
-
-        Must run while the runner is alive (before any SHUTDOWN sentinel): the endpoint reads source KV
-        from device DRAM. ``stats`` is the producer's RunStats — only ``stats.resident`` (slot_id ->
-        (chunks_pushed, actual_isl)) is read. ``num_slots`` is the KV table's slot count when known, used
-        only to bounds-check loopback destinations. ``slot_traces`` / ``pools_by_trace`` are the producer's
-        per-slot prompt maps, needed only to write the cross-endpoint handoff.
-
-        The producer does NOT validate migrated KV — the RUNNER does, on-device, once it sees the DONE
-        sentinel (PREFILL_VALIDATE_MIGRATION=1).
-        """
         if self.client is None:
             raise RuntimeError("[migration_driver] run() called before attach()")
         triples = self._resolve_pairs(stats, num_slots=num_slots)
         self._issue(triples)
-        # Cross-endpoint P->D: write the decode-side JSON handoff BEFORE the DONE sentinel, so a consumer
-        # that wakes on DONE always finds a complete handoff.
         self._write_handoff(triples, slot_traces, pools_by_trace)
         self._write_done_sentinel(triples)
         return triples
 
     def _resolve_pairs(self, stats, *, num_slots: int = None) -> list:
-        """Resolve the concrete ``(src_slot, dst_slot, real_len)`` migrations to perform, ONE list shared by
-        both the migrate step and the DONE sentinel so the two can never drift apart.
-
-        Two ways to describe the mapping:
-          * Explicit — PREFILL_MIGRATION_PAIRS="src:dst,src:dst,..." (a manifest ``migration.pairs`` list or
-            the ``--migrations`` CLI flag both feed this env var). Drives ARBITRARY any-src -> any-dst
-            migrations; each src must be a resident slot (it has KV to migrate) and dst must fit the table.
-            Duplicate src is allowed (fan-out: migrate one slot to several dsts).
-          * Offset (fallback, no explicit pairs) — every resident src slot -> src + dst_slot_offset.
-
-        ``real_len`` is the SRC slot's resident non-pad token count (min(chunks_pushed*chunk_size,
-        actual_isl)), matching the KV the runner wrote; slots with no data are skipped. If ``num_slots`` is
-        known (from the KV table), dst is bounds-checked so a too-large dst fails here with a clear message
-        instead of a cryptic device-side error at migrate time."""
-
         def real_len_of(src: int) -> int:
-            chunks_pushed, actual_isl = stats.resident[src]
-            return min(chunks_pushed * self.chunk_size, actual_isl)
+            return stats.resident[src].real_len
 
         def check_dst(src: int, dst: int) -> None:
             if dst < 0:
                 raise ValueError(f"migration dst slot {dst} (src {src}) is negative")
-            # The bound below is the PREFILL table's slot count -- only meaningful for loopback (dst lives in
-            # this same table). Cross-endpoint dst lives in the DECODE table, whose size the producer doesn't
-            # know, so skip it there (a too-large dst still fails clearly device-side at migrate time).
             if not self.cross_endpoint and num_slots is not None and dst >= num_slots:
                 raise ValueError(
                     f"migration dst slot {dst} (src {src}) is out of range: the KV table has {num_slots} "
@@ -275,7 +127,7 @@ class MigrationDriver:
 
         spec = os.environ.get("PREFILL_MIGRATION_PAIRS", "").strip()
         triples = []
-        if spec:  # explicit arbitrary mapping
+        if spec:
             for tok in spec.split(","):
                 tok = tok.strip()
                 if not tok:
@@ -295,7 +147,7 @@ class MigrationDriver:
                     continue
                 check_dst(src, dst)
                 triples.append((src, dst, real_len))
-        else:  # no explicit mapping: uniform dst = src + offset over every resident slot
+        else:
             for src in sorted(stats.resident):
                 real_len = real_len_of(src)
                 if real_len <= 0:
@@ -304,13 +156,6 @@ class MigrationDriver:
                 check_dst(src, dst)
                 triples.append((src, dst, real_len))
 
-        # Reject mappings that sequential single-shot migration cannot execute correctly. Each migrate() reads
-        # its SRC slot from device DRAM at migrate time and there is no staging buffer, so:
-        #   * a dst that is ALSO a src (overlap) -> an earlier migration overwrites a slot a later pair still
-        #     reads (swaps 0:1,1:0, chains 0:1,1:2), migrating wrong KV;
-        #   * a duplicate dst -> only the last write survives, yet the DONE sentinel asks the runner to validate
-        #     EVERY pair.
-        # Disjoint src/dst sets — the intended case, e.g. 0:3,1:2 or src [0,N) -> dst [N,2N) — are unaffected.
         srcs = [s for (s, _, _) in triples]
         dsts = [d for (_, d, _) in triples]
         dup_dsts = sorted({d for d in dsts if dsts.count(d) > 1})
@@ -319,9 +164,6 @@ class MigrationDriver:
                 f"migration has duplicate dst slot(s) {dup_dsts}: multiple pairs target the same slot, so only "
                 f"the last survives while every pair would be validated. Give each migration a distinct dst."
             )
-        # src/dst overlap corrupts KV ONLY in loopback, where src and dst share one table so an earlier
-        # migration can overwrite a slot a later pair still reads. Cross-endpoint src (this prefill table) and
-        # dst (the decode table) are independent address spaces, so src N -> dst N is the normal case there.
         overlap = sorted(set(srcs) & set(dsts))
         if overlap and not self.cross_endpoint:
             raise ValueError(
@@ -333,20 +175,6 @@ class MigrationDriver:
         return triples
 
     def _issue(self, triples: list) -> int:
-        """Migrate each resolved ``(src_slot, dst_slot, real_len)`` triple's KV, blocking on completion.
-
-        ``self.layers`` selects which layer rows move:
-          * None (default): one single-shot migrate() over the whole ``[0, num_layers)`` layer range per
-            pair -- correct when the dest table is contiguous 0..N (loopback, or a full decode).
-          * A list (PREFILL_MIGRATION_LAYERS, e.g. [0, 3]): one migrate() PER listed layer, range
-            ``[L, L+1)``. Because migrate()'s layer range is symmetric (src row == dst row), this EXTRACTS
-            specific layers from the full contiguous SOURCE table (row i = layer i) into the SAME rows of a
-            layer-id-indexed dest -- the cross-endpoint P->D case where a reduced decode holds only {0,3}.
-            The list MUST match the decode side's gathered layer ids.
-
-        (The C++ PrefillScheduler streams per-layer migrations into a burst as each layer-ack lands,
-        overlapping prefill; the Python client binds no burst API, so this runs after the ack drain
-        instead.) Returns the number of pairs migrated."""
         layer_ranges = [(int(l), int(l) + 1) for l in self.layers] if self.layers else [(0, self.num_layers)]
         if self.layers:
             logger.info(f"[migration_driver] migrating layer subset {self.layers} (one migrate per layer)")
@@ -370,7 +198,7 @@ class MigrationDriver:
                     pos_start=0,
                     pos_end_exclusive=real_len,
                 )
-                self.client.wait_complete(token, self.timeout_ms)  # self-polls when no poll thread is running
+                self.client.wait_complete(token, self.timeout_ms)
             logger.success(
                 f"[migration_driver] MIGRATE slot {src_slot} -> {dst_slot} complete "
                 f"({len(layer_ranges)} layer range(s))"
@@ -380,19 +208,6 @@ class MigrationDriver:
         return migrated
 
     def _write_handoff(self, triples: list, slot_traces: dict, pools_by_trace: dict) -> None:
-        """Write the JSON handoff the DECODE-side consumer reads (blaze run_decode_from_migrated): one entry
-        per migrated pair as ``{"slots": [{dst_slot, prompt_len, last_prompt_token}, ...]}``. ``first_token``
-        is intentionally omitted -- the decode side derives it from the migrated KV.
-
-        This exists for CROSS-ENDPOINT P->D: unlike loopback (where the prefill-side runner validates the KV
-        on-device and needs no prompt metadata), the destination galaxy has no way to know each slot's prompt
-        length / last token, so it cannot pick the decode start position without this sidecar. ``real_len``
-        (element 2 of each triple) is exactly the resident prompt length that was migrated, and the src slot's
-        last prompt token is ``pool[real_len - 1]`` of the trace the producer already loaded.
-
-        Gated on ``PREFILL_MIGRATION_HANDOFF_PATH``: unset => write nothing, which is what a loopback run
-        wants since the runner validates on-device and needs no sidecar. Written atomically (tmp +
-        os.replace) so the decode side never reads a partial file."""
         if not self.handoff_path:
             return
         if slot_traces is None or pools_by_trace is None:
@@ -405,7 +220,6 @@ class MigrationDriver:
             pool = pools_by_trace[slot_traces[src]]
             last_tok = int(pool[real_len - 1]) if 1 <= real_len <= len(pool) else int(pool[-1])
             slots.append({"dst_slot": int(dst), "prompt_len": int(real_len), "last_prompt_token": last_tok})
-        # Safelist the configured directory and confirm both joined paths stay inside it before opening.
         base_dir = os.path.abspath(os.path.dirname(self.handoff_path) or ".")
         name = os.path.basename(self.handoff_path)
         handoff_path = os.path.abspath(os.path.join(base_dir, name))
@@ -423,27 +237,20 @@ class MigrationDriver:
             )
         with open(tmp, "w") as f:
             json.dump({"slots": slots}, f)
-        os.replace(tmp, handoff_path)  # atomic: the decode side never reads a half-written handoff
+        os.replace(tmp, handoff_path)
         logger.success(f"[migration_driver] wrote handoff {handoff_path} ({len(slots)} slot(s)): {slots}")
 
     def _write_done_sentinel(self, triples: list) -> list:
-        """Write the migration DONE sentinel — one ``src dst`` line per migrated pair — that the runner's
-        validate_after_prefill (PREFILL_VALIDATE_MIGRATION=1) polls for. This is the SAME handshake the
-        llm-engine scheduler/driver used (prefill_scheduler_driver wrote this file after migrating). Once it
-        appears, the runner PCC-validates each pair ON-DEVICE: src vs golden + dst vs golden (burst), and/or
-        dst==src (PREFILL_MIGRATE_PAIRWISE=1). Takes the SAME triples list ``_issue`` consumed, so the
-        sentinel matches exactly what was migrated. Returns the (src, dst) pairs written."""
         if not triples:
             raise ValueError(
                 "migration is enabled but the mapping resolved to zero pairs, so there is no DONE sentinel "
-                "to publish (an empty one would make the runner validate nothing and report success). "
+                "to publish (an empty one would report success while nothing moved). "
                 "Prefill itself succeeded — this is a CONFIG problem: either no slot ended up resident, or "
                 "every PREFILL_MIGRATION_PAIRS src was skipped for holding no data. Check that the producer "
                 "actually prefilled the src slots you asked to migrate, or turn migration off "
                 "(PREFILL_PRODUCER_ISSUE_MIGRATION=0 / migration.issue: false)."
             )
         pairs = [(src, dst) for (src, dst, _) in triples]
-        # Safelist the configured directory and confirm the joined path stays inside it before opening.
         base_dir = os.path.abspath(os.path.dirname(self.done_file) or ".")
         done_path = os.path.abspath(os.path.join(base_dir, os.path.basename(self.done_file)))
         if not done_path.startswith(base_dir + os.sep):
@@ -463,20 +270,82 @@ class MigrationDriver:
         return pairs
 
 
+def _cache_plan(table, migrated_layers) -> list:
+    from models.demos.common.prefill.runners import prefill_producer as producer
+
+    num_layers = int(producer.NUM_LAYERS)
+    n_model_configs = producer._num_model_configs(table)
+    adapter = producer.ADAPTER
+    rows_hook = getattr(adapter, "cache_layer_rows", None)
+    head_dim_hook = getattr(adapter, "cache_head_dim", None)
+    mc = adapter.model_config
+
+    full_layers = None
+    if table.num_configs() > 1:
+        try:
+            full_layers = producer._full_indexer_layer_indices(num_layers)
+        except Exception as e:
+            logger.debug(f"[migration_driver] no full-indexer layer map available ({e}); DSA convention off")
+
+    plan = []
+    for cfg_id in range(table.num_configs()):
+        cfg = table.config() if cfg_id == 0 else table.config(cfg_id)
+        is_index = cfg_id == 1 and n_model_configs > 1
+        n_rows = int(cfg.num_layers)
+        rows, why = None, ""
+        if rows_hook is not None:
+            mapped = rows_hook(cfg_id, num_layers)
+            if mapped:
+                rows, why = {int(l): int(r) for l, r in dict(mapped).items()}, "adapter cache_layer_rows()"
+        if rows is None and n_rows >= num_layers:
+            rows, why = {l: l for l in range(num_layers)}, "all-layers cache (row == global layer)"
+        if rows is None and full_layers is not None and len(full_layers) == n_rows:
+            rows, why = {lid: r for r, lid in enumerate(full_layers)}, "DSA index cache (row == full-indexer rank)"
+        if rows is None:
+            why = (
+                f"UNKNOWN axis -- {n_rows} row(s) for {num_layers} layers, no cache_layer_rows() hook, and "
+                f"a prefix cache looks like a compacted one from here"
+            )
+
+        head_dim = head_dim_hook(cfg_id) if head_dim_hook is not None else None
+        if head_dim is None and cfg_id == 0 and hasattr(mc, "KV_LORA_RANK") and hasattr(mc, "QK_ROPE_HEAD_DIM"):
+            head_dim = mc.KV_LORA_RANK + mc.QK_ROPE_HEAD_DIM
+        if head_dim is None and is_index:
+            head_dim = getattr(mc, "INDEX_HEAD_DIM", None)
+
+        unaddressed = []
+        if rows is not None and migrated_layers:
+            unaddressed = sorted(l for l, r in rows.items() if l != r and l in set(migrated_layers))
+            rows = {l: r for l, r in rows.items() if l == r} or None
+            if unaddressed:
+                why = f"{why}; a subset migration by global layer id cannot address layer(s) {unaddressed}"
+        plan.append(
+            {
+                "config_id": cfg_id,
+                "rows": rows,
+                "head_dim": None if head_dim is None else int(head_dim),
+                "kind": "index" if is_index else ("kvpe" if cfg_id == 0 else "other"),
+                "unaddressed": unaddressed,
+                "why": why,
+            }
+        )
+    return plan
+
+
+def _log_cache_plan(plan, tag: str) -> None:
+    for entry in plan:
+        cfg_id, rows = entry["config_id"], entry["rows"]
+        if rows is None:
+            logger.warning(f"[migration_driver] {tag}: cache config {cfg_id} SKIPPED -- {entry['why']}")
+        else:
+            log = logger.warning if entry["unaddressed"] else logger.info
+            log(
+                f"[migration_driver] {tag}: cache config {cfg_id} carries {len(rows)} layer(s) "
+                f"({entry['why']}; head_dim={entry['head_dim']})"
+            )
+
+
 def _dump_src_kv(dump_dir: str, table, stats, slot_traces: dict, layers) -> None:
-    """Save each source slot's KV to ``<dump_dir>/src_slot<N>.pt`` as ``{"ref_kvpe_list": [...]}`` indexed
-    BY LAYER, for a decode-side consumer to PCC its received copy against (blaze's
-    ``--migration-validate-src-kv-pt``). That check tests the TRANSFER rather than the model: comparing
-    decode's destination to the exact bytes prefill held beats comparing it to a golden trace, which would
-    also fold in any model error.
-
-    Read device-lessly over UMD via the runner's published table -- the same path the producer's PCC uses,
-    reusing its table lookup and cache decode. Rows outside ``layers`` stay None: they are never read, and
-    a full 78-layer slot would be ~10 GB. Values are stored in the DEVICE rope frame exactly as read, with
-    no re-interleave, because that is the frame decode compares in.
-
-    MLA only -- the M3 triple cache has no single kvpe tensor to write.
-    """
     import torch
 
     from models.demos.common.prefill.runners import prefill_producer as producer
@@ -494,49 +363,343 @@ def _dump_src_kv(dump_dir: str, table, stats, slot_traces: dict, layers) -> None
         logger.error("[migration_driver] no device map available; skipping the src-KV dump.")
         return
 
-    head_dim = producer.ADAPTER.model_config.KV_LORA_RANK + producer.ADAPTER.model_config.QK_ROPE_HEAD_DIM
     tokens_per_block = NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
     wanted = set(layers) if layers else set(range(producer.NUM_LAYERS))
     base_dir = os.path.abspath(os.path.expanduser(dump_dir))
     os.makedirs(base_dir, exist_ok=True)
 
-    for slot_id, (chunks_pushed, actual_isl) in sorted(stats.resident.items()):
-        real_len = min(chunks_pushed * producer.CHUNK_SIZE, actual_isl)
+    plan = _cache_plan(table, layers)
+    _log_cache_plan(plan, "src-KV dump")
+    dumpable = []
+    for entry in plan:
+        cfg_id, rows = entry["config_id"], entry["rows"]
+        if rows is None:
+            continue
+        if entry["head_dim"] is None:
+            logger.warning(
+                f"[migration_driver] src-KV dump: cache config {cfg_id} not dumped -- axis known, but no "
+                f"decode width (no cache_head_dim() hook)."
+            )
+            continue
+        selected = {l: r for l, r in rows.items() if l in wanted}
+        if not selected:
+            logger.warning(
+                f"[migration_driver] src-KV dump: cache config {cfg_id} carries none of layer(s) "
+                f"{sorted(wanted)}; not dumped."
+            )
+            continue
+        dumpable.append((cfg_id, selected, entry["head_dim"]))
+    if not any(cfg_id == 0 for cfg_id, _, _ in dumpable):
+        logger.error(
+            "[migration_driver] src-KV dump: cache config 0 is not readable (see the plan above), so there "
+            "is no reference to write; skipping the dump."
+        )
+        return
+
+    for slot_id, res in sorted(stats.resident.items()):
+        real_len = res.real_len
         if real_len <= 0:
             continue
-        read_len = ((real_len + tokens_per_block - 1) // tokens_per_block) * tokens_per_block  # round to a block
-        ref_kvpe_list = [None] * producer.NUM_LAYERS
-        for layer in sorted(wanted):
-            decoded_rows = []
-            for pos in range(0, read_len, tokens_per_block):
-                loc = table.lookup(layer, pos, slot_id)
-                unique_id = producer._resolve_unique_id(
-                    table.get_device_group(loc.device_group_index).fabric_node_ids, device_map
-                )
-                raw = ttnn.experimental.disaggregation.read_dram_umd(unique_id, loc.noc_addr, loc.size_bytes)
-                decoded_rows.append(producer._decode_kv_chunk(raw, head_dim))
-            device_kv = torch.cat(decoded_rows, dim=0)[:real_len]  # natural order (the table un-rotates)
-            ref_kvpe_list[layer] = device_kv.unsqueeze(0).unsqueeze(0)
-        # dump_dir is the safelisted base; only the derived basename varies. Confirm the join stays inside
-        # it before writing.
+        read_len = ((real_len + tokens_per_block - 1) // tokens_per_block) * tokens_per_block
+
+        refs = {}
+        for cfg_id, selected, head_dim in dumpable:
+            per_layer = [None] * producer.NUM_LAYERS
+            for layer, row in sorted(selected.items()):
+                if table.lookup(row, 0, slot_id, cfg_id).size_bytes == 0:
+                    continue
+                decoded_rows = []
+                for pos in range(0, read_len, tokens_per_block):
+                    loc = table.lookup(row, pos, slot_id, cfg_id)
+                    unique_id = producer._resolve_unique_id(
+                        table.get_device_group(loc.device_group_index).fabric_node_ids, device_map
+                    )
+                    raw = ttnn.experimental.disaggregation.read_dram_umd(unique_id, loc.noc_addr, loc.size_bytes)
+                    decoded_rows.append(producer._decode_kv_chunk(raw, head_dim))
+                device_kv = torch.cat(decoded_rows, dim=0)[:real_len]
+                per_layer[layer] = device_kv.unsqueeze(0).unsqueeze(0)
+            refs[cfg_id] = per_layer
+
         out = os.path.abspath(os.path.join(base_dir, f"src_slot{int(slot_id)}.pt"))
         if not out.startswith(base_dir + os.sep):
             raise ValueError(f"src-KV dump path {out!r} escapes its base directory {base_dir!r}")
-        torch.save({"ref_kvpe_list": ref_kvpe_list}, out)
+        blob = {"ref_cache_lists": refs, "ref_kvpe_list": refs[0]}
+        if 1 in refs:
+            blob["ref_index_k_list"] = refs[1]
+        torch.save(blob, out)
+        counts = ", ".join(f"cfg{c}={sum(t is not None for t in lst)}" for c, lst in sorted(refs.items()))
         logger.success(
             f"[migration_driver] slot {slot_id} src KV dumped -> {out} "
-            f"(layers {sorted(wanted)}, positions [0,{real_len}))"
+            f"(layers {sorted(wanted)}, positions [0,{real_len}), layer(s) per cache: {counts})"
         )
 
 
-def main() -> None:
-    """Prefill a set of slots over H2D, then migrate their KV — the whole terminal-C side of a migration
-    run in one process.
+def _verify_dst_vs_src_bytes(
+    table, device_map: dict, triples: list, layers, *, migrated_layers=None, max_report: int = 10
+) -> bool:
+    from models.demos.common.prefill.runners import prefill_producer as producer
 
-    The H2D half is driven with ``prefill_producer``'s helpers (manifest, schedule, ack drain, golden PCC);
-    the migration half is this module. The dependency runs THIS way on purpose: prefill_producer is the
-    plain runner test and knows nothing about migration, so a runner-only run can never drag migration in.
-    """
+    plan = _cache_plan(table, migrated_layers)
+    _log_cache_plan(plan, "verify bytes")
+    checkable = []
+    for entry in plan:
+        rows = entry["rows"]
+        if rows is None:
+            continue
+        picked = sorted((l, r) for l, r in rows.items() if not layers or l in set(layers))
+        if picked:
+            checkable.append((entry["config_id"], picked))
+    if not checkable:
+        logger.error(
+            "[migration_driver] verify bytes: no cache has an addressable axis (see the plan above), so "
+            "nothing would be compared. Treating as a FAILURE."
+        )
+        return False
+
+    failures, checked, skipped, tail_tokens = [], 0, 0, 0
+    for src, dst, real_len in triples:
+        for cfg_id, picked in checkable:
+            tcfg = table.config() if cfg_id == 0 else table.config(cfg_id)
+            stride = int(tcfg.chunk_n_tokens)
+            n_full = (real_len // stride) * stride
+            tail_tokens += real_len - n_full
+            logger.info(
+                f"[migration_driver] verify bytes: slot {src} -> {dst} config {cfg_id}: "
+                f"{len(picked)} layer(s) x {n_full // stride} chunk(s) of {stride} token(s) "
+                f"= {2 * len(picked) * (n_full // stride)} UMD read(s)"
+            )
+            for layer, row in picked:
+                mismatches_in_layer = 0
+                for pos in range(0, n_full, stride):
+                    src_loc = table.lookup(row, pos, src, cfg_id)
+                    dst_loc = table.lookup(row, pos, dst, cfg_id)
+                    try:
+                        src_uid = producer._resolve_unique_id(
+                            table.get_device_group(src_loc.device_group_index).fabric_node_ids, device_map
+                        )
+                        dst_uid = producer._resolve_unique_id(
+                            table.get_device_group(dst_loc.device_group_index).fabric_node_ids, device_map
+                        )
+                    except KeyError:
+                        skipped += 1
+                        continue
+                    read_umd = ttnn.experimental.disaggregation.read_dram_umd
+                    src_raw = read_umd(src_uid, src_loc.noc_addr, src_loc.size_bytes)
+                    dst_raw = read_umd(dst_uid, dst_loc.noc_addr, dst_loc.size_bytes)
+                    checked += 1
+                    if bytes(src_raw) != bytes(dst_raw):
+                        mismatches_in_layer += 1
+                        if len(failures) < max_report:
+                            failures.append((src, dst, cfg_id, layer, pos))
+                        elif len(failures) == max_report:
+                            failures.append(None)
+                if mismatches_in_layer:
+                    logger.error(
+                        f"[migration_driver] verify bytes: slot {src} -> {dst} config {cfg_id} layer {layer}: "
+                        f"{mismatches_in_layer} chunk(s) differ"
+                    )
+
+    if tail_tokens:
+        logger.warning(
+            f"[migration_driver] verify bytes: {tail_tokens} trailing token(s) across all pairs fell in a "
+            "partial chunk and were NOT compared (real_len is not chunk-aligned)."
+        )
+    if skipped:
+        logger.warning(
+            f"[migration_driver] verify bytes: {skipped} chunk(s) skipped — their chips are not in this "
+            "host's device map. This run verified only the layers resident on THIS host."
+        )
+    if failures:
+        shown = [f for f in failures if f is not None]
+        more = " (and more)" if any(f is None for f in failures) else ""
+        detail = "; ".join(f"slot{s}->slot{d} cfg{c} layer{l} pos{p}" for s, d, c, l, p in shown)
+        logger.error(f"[migration_driver] verify bytes FAILED: dst != src at {detail}{more}")
+        return False
+    if not checked:
+        logger.error(
+            "[migration_driver] verify bytes: nothing was compared (no chunk resolved to a local chip). "
+            "Treating as a FAILURE — a check that read nothing must not report success."
+        )
+        return False
+    logger.success(
+        f"[migration_driver] verify bytes PASSED: {len(triples)} pair(s), {checked} chunk(s) byte-identical "
+        "dst == src"
+    )
+    return True
+
+
+def _verify_dst_vs_golden(table, device_map: dict, triples: list, slot_traces: dict, threshold: float) -> bool:
+    from models.demos.common.prefill.runners import prefill_producer as producer
+
+    min_pcc, failures, checked = 1.0, [], 0
+    for src, dst, real_len in triples:
+        trace_dir = slot_traces.get(src)
+        if trace_dir is None:
+            logger.error(f"[migration_driver] verify golden: src slot {src} has no trace; skipping {src}->{dst}")
+            continue
+        logger.info(f"[migration_driver] verify golden: dst slot {dst} (migrated from {src}) over [0,{real_len})")
+        try:
+            slot_mins = producer._read_slot_kv_and_check_pcc(table, device_map, dst, real_len, trace_dir)
+        except Exception as e:
+            logger.error(f"[migration_driver] verify golden: dst slot {dst} read/PCC raised {type(e).__name__}: {e}")
+            failures.append((src, dst, float("nan")))
+            continue
+        checked += 1
+        pcc = min(slot_mins.values())
+        min_pcc = min(min_pcc, pcc)
+        per_cache = "".join(f" {cache}_pcc={value:.6f}" for cache, value in slot_mins.items())
+        print(f"[migration_driver] AFTER dst_slot={dst} (src={src}) min_pcc={pcc:.6f}{per_cache}")
+        if pcc < threshold:
+            failures.append((src, dst, pcc))
+
+    if failures:
+        detail = "; ".join(f"slot{s}->slot{d} pcc={p:.6f}" for s, d, p in failures)
+        logger.error(f"[migration_driver] verify golden FAILED (threshold {threshold}): {detail}")
+        return False
+    if not checked:
+        logger.error("[migration_driver] verify golden: no pair was checked; treating as a FAILURE.")
+        return False
+    logger.success(
+        f"[migration_driver] verify golden PASSED: {checked} migrated dst slot(s) >= {threshold} "
+        f"(min {min_pcc:.6f})"
+    )
+    return True
+
+
+def _verify_migrated_slots(
+    mode: str, *, table, triples, slot_traces, layers, migrated_layers, threshold, cross_endpoint
+) -> bool:
+    if mode == "off":
+        logger.info("[migration_driver] destination verification is OFF; this run proves TRANSPORT only.")
+        return True
+    if cross_endpoint:
+        logger.warning(
+            f"[migration_driver] --verify-migration={mode} ignored: this is a CROSS-ENDPOINT migration, so "
+            "the destination lives in the remote decode table and cannot be read from here. Verify it on "
+            "the decode side (e.g. against a --dump-src-kv reference)."
+        )
+        return True
+    if table is None:
+        logger.error(f"[migration_driver] --verify-migration={mode} needs the KV chunk table, which never appeared.")
+        return False
+    if not triples:
+        logger.error(f"[migration_driver] --verify-migration={mode} but zero pairs were migrated.")
+        return False
+
+    from models.demos.common.prefill.runners import prefill_producer as producer
+
+    device_map = producer._read_device_map(int(os.environ.get("PREFILL_H2D_CONNECT_TIMEOUT", "60")))
+    if not device_map:
+        logger.error(f"[migration_driver] --verify-migration={mode} needs the device map, which is unavailable.")
+        return False
+
+    ok = True
+    if mode in ("dst-bytes", "both"):
+        ok = _verify_dst_vs_src_bytes(table, device_map, triples, layers, migrated_layers=migrated_layers) and ok
+    if mode in ("dst-golden", "both"):
+        if migrated_layers:
+            logger.error(
+                f"[migration_driver] --verify-migration={mode} cannot run its GOLDEN half: "
+                f"PREFILL_MIGRATION_LAYERS migrated only layer(s) {sorted(set(migrated_layers))}, so every "
+                "other row of each dst slot was never written — and the golden reader "
+                "(prefill_producer._read_slot_kv_and_check_pcc) has no layer-subset parameter, so it would "
+                "PCC that unwritten memory and fail a correct migration. Use --verify-migration=dst-bytes, "
+                "which does honour the subset, or migrate the full depth (unset PREFILL_MIGRATION_LAYERS) "
+                "to get the golden check."
+            )
+            ok = False
+        else:
+            if layers:
+                logger.warning(
+                    f"[migration_driver] --verify-migration-layers {sorted(set(layers))} applies to the "
+                    "dst-bytes half only; the golden half reads the FULL depth (its reader takes no layer "
+                    "subset). Expect it to cost a full check_pcc pass per pair."
+                )
+            ok = _verify_dst_vs_golden(table, device_map, triples, slot_traces, threshold) and ok
+    return ok
+
+
+def _mr_bcast_triples(rank: int, triples: list) -> list:
+    items = list(triples) if rank == 0 else []
+    n = ttnn.distributed_context_allgather_int(len(items) if rank == 0 else 0)[0]
+    out = []
+    for k in range(n):
+        src, dst, real_len = items[k] if rank == 0 else (0, 0, 0)
+        src = ttnn.distributed_context_allgather_int(int(src))[0]
+        dst = ttnn.distributed_context_allgather_int(int(dst))[0]
+        real_len = ttnn.distributed_context_allgather_int(int(real_len))[0]
+        out.append((src, dst, real_len))
+    return out
+
+
+def _run_validator(rank: int, world_size: int, args) -> None:
+    from models.demos.common.prefill.runners import prefill_producer as producer
+
+    cfg = producer._config_from_env()
+    producer._require_shared_table_path(world_size)
+    timeout_s = int(os.environ.get("PREFILL_H2D_CONNECT_TIMEOUT", "60"))
+    driver = MigrationDriver(
+        chunk_size=producer.CHUNK_SIZE,
+        num_layers=producer.NUM_LAYERS,
+        default_dst_slot_offset=cfg.num_users,
+    )
+    verify_layers = _parse_layers(args.verify_migration_layers) or driver.layers
+    logger.info(
+        f"[migration_driver] validator rank={rank}/{world_size}: read-back only (no H2D feed, no migrate); "
+        f"src_pcc={cfg.verify} dst_verify={args.verify_migration}"
+    )
+
+    resident = producer._mr_bcast_resident(rank, {})
+    logger.info(f"[migration_driver] validator rank={rank}: GO received, {len(resident)} resident slot(s)")
+
+    try:
+        kv_table = producer._read_kv_chunk_table(timeout_s)
+    except Exception as e:
+        logger.error(f"[migration_driver] validator rank={rank}: KV table read raised {type(e).__name__}: {e}")
+        kv_table = None
+
+    stats = producer.RunStats(resident=resident, total_pushes=0, push_ms=[], completed=0, wall_s=0.0)
+    needs_traces = cfg.verify or args.verify_migration in ("dst-golden", "both")
+    slot_traces = producer._resolve_slot_prompts(cfg)[0] if needs_traces else {}
+
+    verify_ok = True
+    if cfg.verify:
+        if kv_table is None:
+            logger.error(f"[migration_driver] validator rank={rank}: no KV chunk table available; cannot PCC.")
+            verify_ok = False
+        else:
+            try:
+                verify_ok = producer._verify_resident_slots(kv_table, stats, cfg.pcc_threshold, slot_traces)
+            except Exception as e:
+                logger.error(f"[migration_driver] validator rank={rank}: KV read/PCC failed: {type(e).__name__}: {e}")
+                verify_ok = False
+
+    triples = _mr_bcast_triples(rank, [])
+    logger.info(f"[migration_driver] validator rank={rank}: {len(triples)} migrated pair(s) received")
+
+    try:
+        migration_ok = _verify_migrated_slots(
+            args.verify_migration,
+            table=kv_table,
+            triples=triples,
+            slot_traces=slot_traces,
+            layers=verify_layers,
+            migrated_layers=driver.layers,
+            threshold=cfg.pcc_threshold,
+            cross_endpoint=driver.cross_endpoint,
+        )
+    except Exception as e:
+        logger.error(f"[migration_driver] validator rank={rank}: destination verify raised {type(e).__name__}: {e}")
+        migration_ok = False
+
+    ok = verify_ok and migration_ok
+    producer._mr_allgather_verdict(ok)
+    logger.info(f"[migration_driver] validator rank={rank}: DONE src_pcc_ok={verify_ok} dst_verify_ok={migration_ok}")
+    if not ok:
+        sys.exit(1)
+
+
+def main() -> None:
     import argparse
 
     from models.demos.common.prefill.runners import prefill_producer as producer
@@ -566,27 +729,59 @@ def main() -> None:
         help="Directory to save each source slot's KV into as src_slot<N>.pt, for a decode-side consumer "
         "to PCC its received copy against. Honours the migrated layer subset. Off when unset.",
     )
+    parser.add_argument(
+        "--verify-migration",
+        choices=("off", "dst-bytes", "dst-golden", "both"),
+        default=os.environ.get("PREFILL_VERIFY_MIGRATION", "dst-bytes"),
+        help="Read the MIGRATED DESTINATION slots back after the migrate (loopback only). 'dst-bytes' "
+        "(default) asserts dst is byte-identical to src — golden-free, model-agnostic, and valid in the "
+        "pad/all-zero regions where PCC is undefined. 'dst-golden' PCCs each dst against the src's golden "
+        "trace, proving the copy carries model-correct data. 'both' runs each in turn. 'off' reports "
+        "transport only. Cost: dst-bytes reads BOTH slots, so it roughly doubles the UMD reads of a "
+        "check_pcc pass (a full-depth Kimi pair is ~215k reads); use --verify-migration-layers to "
+        "spot-check. Neither mode sees cross-talk unless PREFILL_PRODUCER_SLOT_TRACES gives the source "
+        "slots different prompts. Coverage is HOST-LOCAL either way (UMD reaches only this host's chips): "
+        "single-process it checks rank 0's layer slice alone, while under an MPI launcher each rank checks "
+        "its own host's slice and the verdicts are folded — see the module docstring.",
+    )
+    parser.add_argument(
+        "--verify-migration-layers",
+        default=os.environ.get("PREFILL_VERIFY_MIGRATION_LAYERS"),
+        help="Comma list of layer ids to verify (e.g. '0,30,60'), for a fast spot-check instead of the "
+        "full depth. Defaults to every layer the migrate covered. A subset makes a PASS a sample, not a "
+        "proof — the summary says so. Applies to the DST-BYTES half only: the golden half's reader takes "
+        "no layer subset and always walks the full depth. For the same reason 'dst-golden'/'both' are "
+        "REFUSED (not silently skipped) when PREFILL_MIGRATION_LAYERS migrated only part of the model — "
+        "the unmigrated dst rows hold nothing, so PCCing them would fail a correct migration. Use "
+        "'dst-bytes' for a partial-depth migration.",
+    )
     args = parser.parse_args()
 
-    # Manifest order matters: the producer applies `env:` first (so a raw PREFILL_* key wins) plus its own
-    # typed blocks, and hands back the parsed document; we then apply `migration:` from it. setdefault
-    # throughout, so an exported env var still beats both.
     manifest = producer._apply_manifest_env(args.manifest) if args.manifest else {}
     apply_manifest_env(manifest)
     if args.migrations is not None:
-        os.environ["PREFILL_MIGRATION_PAIRS"] = args.migrations  # CLI beats manifest + env
+        os.environ["PREFILL_MIGRATION_PAIRS"] = args.migrations
     producer._load_env_config()
 
+    if int(os.environ.get("OMPI_COMM_WORLD_SIZE", "1")) > 1:
+        logger.info(
+            f"[migration_driver] joining the distributed context "
+            f"({os.environ['OMPI_COMM_WORLD_SIZE']} rank(s) expected); this blocks until all of them arrive"
+        )
+    mr_rank, world_size = producer._mr_config()
+    if mr_rank != 0:
+        _run_validator(mr_rank, world_size, args)
+        return
+
     cfg = producer._config_from_env()
-    # Invoking THIS module is the opt-in, so migration.issue is redundant here. Warn rather than silently
-    # honour a `false` that would turn the whole invocation into a no-op.
+    producer._require_shared_table_path(world_size)
     if os.environ.get("PREFILL_PRODUCER_ISSUE_MIGRATION", "1") == "0":
         logger.warning(
             "[migration_driver] the manifest sets migration.issue: false, which is ignored when this module "
             "is the entry point — invoking it IS the opt-in. Run prefill_producer for a no-migration run."
         )
     driver = MigrationDriver(
-        chunk_size=producer.CHUNK_SIZE,  # module attrs, read AFTER _load_env_config() rebinds them
+        chunk_size=producer.CHUNK_SIZE,
         num_layers=producer.NUM_LAYERS,
         default_dst_slot_offset=cfg.num_users,
     )
@@ -604,8 +799,6 @@ def main() -> None:
     kv_table = producer._read_kv_chunk_table(timeout_s)
     ack_channel = producer._connect_layer_ack_channel(timeout_s)
 
-    # Attach + pair BEFORE pushing: a missing endpoint fails in seconds instead of after a multi-minute
-    # prefill, and a cross-endpoint pairing rendezvous's while the decode side is still blocked on it.
     driver.attach()
 
     slot_traces, slot_lengths, pools_by_trace = producer._resolve_slot_prompts(cfg)
@@ -632,8 +825,9 @@ def main() -> None:
     )
     producer._drain_layer_acks(ack_channel, producer.NUM_LAYERS * stats.total_pushes)
 
-    # Golden PCC + the src-KV dump run BEFORE migrating, so both land before the DONE sentinel a consumer
-    # may be waiting on. Migration only READS the source slots, so the order is equivalent.
+    if world_size > 1:
+        producer._mr_bcast_resident(mr_rank, stats.resident)
+
     verify_ok = True
     if cfg.verify and kv_table is not None:
         try:
@@ -649,16 +843,60 @@ def main() -> None:
         if kv_table is None:
             logger.error("[migration_driver] --dump-src-kv needs the KV chunk table, which never appeared.")
         else:
+            if world_size > 1:
+                logger.warning(
+                    f"[migration_driver] --dump-src-kv runs on rank 0 only, so {args.dump_src_kv} will hold "
+                    f"THIS host's layers and None for the rest (world_size={world_size}). Dump from a "
+                    "single-rank runner if the decode side needs every layer."
+                )
             _dump_src_kv(args.dump_src_kv, kv_table, stats, slot_traces, driver.layers)
 
-    driver.run(
-        stats,
-        num_slots=kv_table.config().num_slots if kv_table is not None else None,
-        slot_traces=slot_traces,
-        pools_by_trace=pools_by_trace,
-    )
+    triples = []
+    migrate_ok = True
+    try:
+        triples = driver.run(
+            stats,
+            num_slots=kv_table.config().num_slots if kv_table is not None else None,
+            slot_traces=slot_traces,
+            pools_by_trace=pools_by_trace,
+        )
+    except Exception as e:
+        logger.exception(f"[migration_driver] migration failed: {type(e).__name__}: {e}")
+        migrate_ok = False
 
-    # Optional graceful shutdown: sent LAST, because the UMD read-backs above need the mesh/DRAM alive.
+    if world_size > 1:
+        _mr_bcast_triples(mr_rank, triples)
+
+    verify_layers = _parse_layers(args.verify_migration_layers) or driver.layers
+    if verify_layers and args.verify_migration != "off":
+        logger.warning(
+            f"[migration_driver] verifying layer subset {sorted(set(verify_layers))} only — a PASS is a "
+            "SAMPLE of the migration, not a proof that every layer copied correctly."
+        )
+    try:
+        migration_ok = _verify_migrated_slots(
+            args.verify_migration,
+            table=kv_table,
+            triples=triples,
+            slot_traces=slot_traces,
+            layers=verify_layers,
+            migrated_layers=driver.layers,
+            threshold=cfg.pcc_threshold,
+            cross_endpoint=driver.cross_endpoint,
+        )
+    except Exception as e:
+        logger.exception(f"[migration_driver] destination verify raised {type(e).__name__}: {e}")
+        migration_ok = False
+    migration_ok = migration_ok and migrate_ok
+
+    local_ok = migration_ok and not (cfg.verify and not verify_ok)
+    all_ranks_ok = local_ok
+    if world_size > 1:
+        verdicts = producer._mr_allgather_verdict(local_ok)
+        for r, v in enumerate(verdicts):
+            logger.info(f"[migration_driver] rank={r}: ok={v}")
+        all_ranks_ok = all(verdicts)
+
     if os.environ.get("PREFILL_SEND_SHUTDOWN", "0") == "1":
         sentinel = struct.pack("<iii", -1, -1, -1)
         payload = producer._chunk_to_host_array([1] * producer.CHUNK_SIZE)
@@ -669,6 +907,14 @@ def main() -> None:
         logger.info("[migration_driver] exiting (the runner keeps its sync-op loop running).")
 
     if cfg.verify and not verify_ok:
+        logger.error("[migration_driver] FAILED: source KV PCC did not pass on rank 0.")
+    if not migrate_ok:
+        logger.error("[migration_driver] FAILED: the migrate step itself did not complete (see above).")
+    elif not migration_ok:
+        logger.error("[migration_driver] FAILED: migrated destination verification did not pass on rank 0.")
+    if local_ok and not all_ranks_ok:
+        logger.error("[migration_driver] FAILED: rank 0 passed but another rank's read-back did not.")
+    if not all_ranks_ok:
         sys.exit(1)
 
 

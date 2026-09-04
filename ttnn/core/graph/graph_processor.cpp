@@ -10,10 +10,12 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/cluster.hpp"
 #include "ttnn/reports.hpp"
+#include <tt_metal/impl/version.hpp>
 #include <boost/algorithm/string/replace.hpp>
 #include <cstdlib>
 
 #include <fstream>
+#include <optional>
 #include <sstream>
 #include <enchantum/enchantum.hpp>
 #include <memory>
@@ -29,6 +31,12 @@
 using namespace tt::tt_metal;
 
 namespace {
+
+inline bool from_bool_param(const std::string& value) {
+    return (
+        (value.length() == 4) && ('t' == value[0] || 'T' == value[0]) && ('r' == value[1] || 'R' == value[1]) &&
+        ('u' == value[2] || 'U' == value[2]) && ('e' == value[3] || 'E' == value[3]));
+}
 
 std::string tensorMemoryLayoutToString(TensorMemoryLayout layout) {
     switch (layout) {
@@ -54,11 +62,17 @@ nlohmann::json to_json(const ttnn::graph::GraphProcessor::Vertex& data) {
         ttnn::graph::kPageSize,
         ttnn::graph::kNumCores,
         ttnn::graph::kMaxSizePerBank,
+        ttnn::graph::kProgramFactoryIndex,
+    };
+    static const std::unordered_set<std::string> boolean_params = {
+        ttnn::graph::kProgramCacheHit,
     };
     nlohmann::json params_json;
     for (const auto& [key, value] : data.params) {
         if (integer_params.contains(key)) {
             params_json[key] = std::stoll(value);
+        } else if (boolean_params.contains(key)) {
+            params_json[key] = from_bool_param(value);
         } else {
             params_json[key] = value;
         }
@@ -151,12 +165,30 @@ std::string get_mesh_coordinate_mapping_content() {
 namespace ttnn::graph {
 
 std::atomic<bool> GraphProcessor::capture_detailed_buffer_tracing_{false};
+thread_local std::optional<GraphProcessor::PendingProgramFactory> GraphProcessor::pending_program_factory_;
 
 void GraphProcessor::enable_detailed_buffer_tracing() { capture_detailed_buffer_tracing_ = true; }
 
 void GraphProcessor::disable_detailed_buffer_tracing() { capture_detailed_buffer_tracing_ = false; }
 
 bool GraphProcessor::is_detailed_buffer_tracing_enabled() { return capture_detailed_buffer_tracing_; }
+
+bool GraphProcessor::has_active_instance() {
+    const auto& processors = tt::tt_metal::GraphTracker::instance().get_processors();
+    for (const auto& processor : processors) {
+        if (dynamic_cast<GraphProcessor*>(processor.get()) != nullptr) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void GraphProcessor::set_pending_program_factory(std::string type, std::size_t index, bool cache_hit) {
+    if (!has_active_instance()) {
+        return;
+    }
+    pending_program_factory_ = PendingProgramFactory{std::move(type), index, cache_hit};
+}
 
 GraphProcessor::GraphProcessor(RunMode mode) : run_mode(mode) { GraphProcessor::begin_capture(mode); }
 
@@ -334,6 +366,64 @@ void GraphProcessor::track_allocate_cb(
     }
 }
 
+void GraphProcessor::track_allocate_dataflow_buffer(
+    const tt::tt_metal::CoreRangeSet& core_range_set,
+    uint64_t addr,
+    uint64_t size,
+    bool borrows_memory,
+    const tt::tt_metal::IDevice* device) {
+    TT_ASSERT(device);
+    const std::lock_guard<std::mutex> lock(mutex);
+
+    track_device(device);
+
+    std::unordered_map<std::string, std::string> params = {
+        {kSize, std::to_string(size)},
+        {kAddress, std::to_string(addr)},
+        {kCoreRangeSet, core_range_set.str()},
+        {kBorrowsMemory, std::to_string(borrows_memory)},
+        {kDeviceId, std::to_string(device->id())}};
+    node_id counter = graph.size();
+    int stacking_level = static_cast<int>(current_op_id.size()) - 1;
+    {
+        graph.push_back(Vertex{
+            .counter = counter,
+            .node_type = kNodeDataflowBufferAllocate,
+            .params = std::move(params),
+            .connections = {},
+            .stacking_level = stacking_level});
+        graph[current_op_id.top()].connections.push_back(counter);
+    }
+}
+
+void GraphProcessor::track_allocate_scratchpad(
+    const tt::tt_metal::CoreRangeSet& core_range_set,
+    uint64_t addr,
+    uint64_t size,
+    const tt::tt_metal::IDevice* device) {
+    TT_ASSERT(device);
+    const std::lock_guard<std::mutex> lock(mutex);
+
+    track_device(device);
+
+    std::unordered_map<std::string, std::string> params = {
+        {kSize, std::to_string(size)},
+        {kAddress, std::to_string(addr)},
+        {kCoreRangeSet, core_range_set.str()},
+        {kDeviceId, std::to_string(device->id())}};
+    node_id counter = graph.size();
+    int stacking_level = static_cast<int>(current_op_id.size()) - 1;
+    {
+        graph.push_back(Vertex{
+            .counter = counter,
+            .node_type = kNodeScratchpadAllocate,
+            .params = std::move(params),
+            .connections = {},
+            .stacking_level = stacking_level});
+        graph[current_op_id.top()].connections.push_back(counter);
+    }
+}
+
 void GraphProcessor::track_deallocate_cb(const tt::tt_metal::IDevice* device) {
     TT_ASSERT(device);
     const std::lock_guard<std::mutex> lock(mutex);
@@ -489,6 +579,27 @@ void GraphProcessor::track_function_end_impl() {
         graph[current_op_id.top()].connections.push_back(counter);
     }
     last_finished_op_id = counter;
+
+    if (pending_program_factory_) {
+        auto& params = graph[function_start_id].params;
+        params[kProgramFactoryType] = pending_program_factory_->type;
+        params[kProgramFactoryIndex] = std::to_string(pending_program_factory_->index);
+        params[kProgramCacheHit] = pending_program_factory_->cache_hit ? "true" : "false";
+        const auto& processors = tt::tt_metal::GraphTracker::instance().get_processors();
+        // Reset after the last GraphProcessor copies.
+        bool last_graph_processor = true;
+        auto it = processors.rbegin();
+        while (it != processors.rend()) {
+            if (dynamic_cast<GraphProcessor*>(it->get()) != nullptr) {
+                last_graph_processor = (it->get() == this);
+                break;
+            }
+            ++it;
+        }
+        if (last_graph_processor) {
+            pending_program_factory_.reset();
+        }
+    }
 
     // Snapshot live buffer state after each top-level operation completes.
     // Only collected when detailed buffer tracing is enabled (report/visualization path)
@@ -682,6 +793,7 @@ void GraphProcessor::end_function_process(const std::vector<T>& tensor_vec) {
 
 void GraphProcessor::begin_capture(RunMode mode) {
     const std::lock_guard<std::mutex> lock(mutex);
+    pending_program_factory_.reset();
     graph.clear();
     buffer_id_to_counter.clear();
     captured_device_info.clear();
@@ -765,6 +877,11 @@ nlohmann::json GraphProcessor::get_report() const {
     const auto& world_ctx = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
     metadata[kReportRank] = *world_ctx->rank();
     metadata[kReportWorldSize] = *world_ctx->size();
+    metadata[kReportGitSha] = std::string(tt::tt_metal::kGitSha);
+    metadata[kReportGitShaShort] = std::string(tt::tt_metal::kGitShaShort);
+    metadata[kReportGitVersion] = std::string(tt::tt_metal::kVersionFull);
+    metadata[kReportBuildType] = std::string(tt::tt_metal::kBuildType);
+    metadata[kReportGitDirty] = tt::tt_metal::kGitDirty;
     report[kReportMetadata] = metadata;
 
     // Cluster descriptor (YAML content) - always try, returns empty if unavailable

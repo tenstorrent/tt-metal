@@ -252,6 +252,7 @@ Pointwise Unary
    ttnn.silu
    ttnn.sin
    ttnn.sinh
+   ttnn.softcap
    ttnn.softplus
    ttnn.softshrink
    ttnn.softsign
@@ -334,6 +335,7 @@ Pointwise Binary
    ttnn.rpow
    ttnn.rsub
    ttnn.rsub_
+   ttnn.situ_glu
    ttnn.squared_difference
    ttnn.squared_difference_
    ttnn.subalpha
@@ -634,6 +636,7 @@ KV Cache
    ttnn.kv_cache.update_cache_for_token_
    ttnn.fill_cache
    ttnn.update_cache
+   ttnn.experimental.indexed_fused_update_cache
 
 Backward operations
 ===================

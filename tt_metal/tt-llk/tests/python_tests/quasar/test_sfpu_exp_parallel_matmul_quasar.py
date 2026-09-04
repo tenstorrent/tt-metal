@@ -24,25 +24,27 @@ from helpers.llk_params import (
     ImpliedMathFormat,
     MathFidelity,
     MathOperation,
+    PerfRunType,
     Transpose,
     format_dict,
 )
 from helpers.matmul_sweep import generate_tile_dims
 from helpers.param_config import (
     DEST_SYNC_TILE_LIMITS,
-    generate_sfpu_format_dest_acc_combinations,
+    generate_quasar_srcs_format_dest_acc_combinations,
     parametrize,
     runtime,
 )
+from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
-from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     CRK_TILE_DIMM,
     DEST_SYNC,
     ENABLE_2X_FORMAT,
     ENABLE_DIRECT_INDEXING,
     IMPLIED_MATH_FORMAT,
+    LOOP_FACTOR,
     MATH_FIDELITY,
     NUM_FACES,
     TILE_COUNT,
@@ -50,7 +52,7 @@ from helpers.test_variant_parameters import (
 )
 from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test
-from test_eltwise_unary_sfpu_quasar import (
+from quasar.test_eltwise_unary_sfpu_quasar import (
     SFPU_UNARY_FORMATS,
     prepare_inputs_for_operation,
 )
@@ -74,21 +76,27 @@ def _matmul_output_fits_dest(
     return matmul_dims.output_tile_cnt <= max_tiles
 
 
-def generate_parallel_matmul_exp_combinations(formats_list: list[FormatConfig]):
+def generate_parallel_matmul_exp_combinations(
+    formats_list: list[FormatConfig], *, is_perf: bool = False
+):
     combinations = []
-    for fmt, dest_acc in generate_sfpu_format_dest_acc_combinations(formats_list):
-        if not fmt.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes:
-            continue
-        for dest_sync in (DestSync.Half, DestSync.Full):
-            for implied_math_format in (
-                ImpliedMathFormat.No,
-                ImpliedMathFormat.Yes,
-            ):
+    for fmt, dest_acc in generate_quasar_srcs_format_dest_acc_combinations(
+        formats_list
+    ):
+        dest_sync_modes = (DestSync.Half, DestSync.Full)
+        implied_math_modes = (
+            (ImpliedMathFormat.Yes,)
+            if is_perf
+            else (ImpliedMathFormat.No, ImpliedMathFormat.Yes)
+        )
+        dimension_profiles = (DIMENSION_PROFILES[1],) if is_perf else DIMENSION_PROFILES
+        for dest_sync in dest_sync_modes:
+            for implied_math_format in implied_math_modes:
                 for (
                     exp_input_dimensions,
                     input_A_dimensions,
                     input_B_dimensions,
-                ) in DIMENSION_PROFILES:
+                ) in dimension_profiles:
                     if not _matmul_output_fits_dest(
                         input_A_dimensions,
                         input_B_dimensions,
@@ -119,7 +127,13 @@ PARALLEL_MATMUL_EXP_COMBINATIONS = generate_parallel_matmul_exp_combinations(
 @parametrize(
     format_dest_acc_sync_implied_math=PARALLEL_MATMUL_EXP_COMBINATIONS,
 )
-def test_sfpu_exp_parallel_matmul_quasar(format_dest_acc_sync_implied_math):
+def test_sfpu_exp_parallel_matmul_quasar(
+    format_dest_acc_sync_implied_math,
+    run_types=(PerfRunType.L1_TO_L1,),
+    loop_factor=1,
+    is_perf=False,
+    perf_report=None,
+):
     (
         formats,
         dest_acc,
@@ -151,6 +165,7 @@ def test_sfpu_exp_parallel_matmul_quasar(format_dest_acc_sync_implied_math):
         spec_B=exp_spec,
         output_format=formats.output_format,
     )
+
     src_exp = prepare_inputs_for_operation(
         src_exp, MathOperation.Exp, formats.input_format, formats.output_format
     )
@@ -164,41 +179,43 @@ def test_sfpu_exp_parallel_matmul_quasar(format_dest_acc_sync_implied_math):
 
     matmul_dims = generate_tile_dims((input_A_dimensions, input_B_dimensions))
 
-    formats_config = data_formats(
-        input_format=formats.input_format,
-        input_format_B=formats.input_format,
-        output_format=formats.output_format,
-        is_fp32_dest_acc_en=dest_acc,
-        num_iterations=1,
-        unpacking_to_dest=False,
-        unpacking_to_srcs=True,
-    )[0]
-    pack_src_format = formats_config.pack_src
+    if not is_perf:
+        formats_config = data_formats(
+            input_format=formats.input_format,
+            input_format_B=formats.input_format,
+            output_format=formats.output_format,
+            is_fp32_dest_acc_en=dest_acc,
+            num_iterations=1,
+            unpacking_to_dest=False,
+            unpacking_to_srcs=True,
+        )[0]
+        pack_src_format = formats_config.pack_src
 
-    generate_matmul_golden = get_golden_generator(MatmulGolden)
-    golden_matmul = generate_matmul_golden(
-        src_A,
-        src_B,
-        formats.output_format,
-        MathFidelity.LoFi,
-        input_A_dimensions=input_A_dimensions,
-        input_B_dimensions=input_B_dimensions,
-        tilize=True,
-        input_A_format=formats.input_format,
-        input_B_format=formats.input_format,
-        math_format=pack_src_format,
-        dest_acc=dest_acc,
-    )
+        generate_matmul_golden = get_golden_generator(MatmulGolden)
+        golden_matmul = generate_matmul_golden(
+            src_A,
+            src_B,
+            formats.output_format,
+            MathFidelity.LoFi,
+            input_A_dimensions=input_A_dimensions,
+            input_B_dimensions=input_B_dimensions,
+            tilize=True,
+            input_A_format=formats.input_format,
+            input_B_format=formats.input_format,
+            math_format=pack_src_format,
+            dest_acc=dest_acc,
+        )
 
-    generate_exp_golden = get_golden_generator(UnarySFPUGolden)
-    golden_exp = generate_exp_golden(
-        MathOperation.Exp,
-        src_exp,
-        formats.output_format,
-        dest_acc,
-        formats.input_format,
-        exp_input_dimensions,
-    )
+        generate_exp_golden = get_golden_generator(UnarySFPUGolden)
+        golden_exp = generate_exp_golden(
+            MathOperation.Exp,
+            src_exp,
+            formats.output_format,
+            dest_acc,
+            formats.input_format,
+            exp_input_dimensions,
+            unpack_to_srcs=True,
+        )
 
     num_faces = 4
     torch_format = format_dict[formats.output_format]
@@ -222,10 +239,13 @@ def test_sfpu_exp_parallel_matmul_quasar(format_dest_acc_sync_implied_math):
         srcs_layout_operands=frozenset({"S", "Res"}),
     )
 
-    configuration = TestConfig(
-        "sources/quasar/sfpu_exp_parallel_matmul_quasar_test.cpp",
-        formats,
-        templates=[
+    if is_perf and perf_report is None:
+        raise ValueError("perf_report must be provided when is_perf=True")
+
+    test_config_kwargs = {
+        "test_name": "sources/quasar/sfpu_exp_parallel_matmul_quasar_test.cpp",
+        "formats": formats,
+        "templates": [
             MATH_FIDELITY(MathFidelity.LoFi),
             IMPLIED_MATH_FORMAT(implied_math_format),
             ENABLE_2X_FORMAT(False),
@@ -233,15 +253,25 @@ def test_sfpu_exp_parallel_matmul_quasar(format_dest_acc_sync_implied_math):
             DEST_SYNC(dest_sync),
             UNPACK_TRANS_FACES(Transpose.No),
         ],
-        runtimes=[
+        "runtimes": [
             CRK_TILE_DIMM(matmul_dims.ct_dim, matmul_dims.rt_dim, matmul_dims.kt_dim),
             NUM_FACES(num_faces, num_faces, num_faces),
             TILE_COUNT(tile_cnt_exp),
+            LOOP_FACTOR(loop_factor),
         ],
-        variant_stimuli=stimuli,
-        unpack_to_srcs=True,
-        dest_acc=dest_acc,
+        "variant_stimuli": stimuli,
+        "unpack_to_srcs": True,
+        "dest_acc": dest_acc,
+    }
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs=test_config_kwargs,
     )
+
+    if is_perf:
+        configuration.run(perf_report)
+        return
 
     outcome = configuration.run()
 

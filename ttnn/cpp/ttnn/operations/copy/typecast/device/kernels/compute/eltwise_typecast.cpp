@@ -19,7 +19,8 @@ void kernel_main() {
     DataflowBuffer dfb_in(dfb::in);
     DataflowBuffer dfb_out(dfb::out);
 
-    init_sfpu(dfb::in, dfb::out);
+    compute_kernel_hw_startup(dfb::in, dfb::out);
+    copy_init(dfb::in);
     for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
         dfb_out.reserve_back(per_core_block_dim);
         for (uint32_t tile_index = 0; tile_index < per_core_block_dim; ++tile_index) {

@@ -59,40 +59,49 @@ FORCE_INLINE uint32_t get_effective_chunk_width_in_tiles(
     return std::min(remaining_width, chunk_width_in_tiles);
 }
 
+// A tile advance decomposed into whole chunk-pieces / rows / columns
+struct TileAdvanceSteps {
+    uint32_t pieces;  // whole chunk-pieces to advance (added to mm_core_idx)
+    uint32_t rows;    // whole rows to advance within a chunk piece
+    uint32_t cols;    // remaining columns to advance
+};
+
+FORCE_INLINE TileAdvanceSteps
+decompose_tile_advance(uint32_t advance_by_tiles, const uint32_t subchunk_size, const uint32_t chunk_width_in_tiles) {
+    /**
+     * Decompose 'advance_by_tiles' into whole chunk-pieces, whole rows, and residual columns.
+     * This carries the (only) two divisions; call once per run, not per tile.
+     * Note: subchunk_size == mm_block_unit_ht * chunk_width_in_tiles
+     */
+    uint32_t pieces = 0;
+    if (advance_by_tiles >= subchunk_size) [[unlikely]] {
+        pieces = advance_by_tiles / subchunk_size;
+        advance_by_tiles -= pieces * subchunk_size;
+    }
+    uint32_t rows = 0;
+    if (advance_by_tiles >= chunk_width_in_tiles) {
+        rows = advance_by_tiles / chunk_width_in_tiles;
+        advance_by_tiles -= rows * chunk_width_in_tiles;
+    }
+    return {pieces, rows, advance_by_tiles};
+}
+
 FORCE_INLINE void get_next_tile_coordinates(
     uint32_t& tile_row_in_mm_M_unit_block,
     uint32_t& chunk_col_in_tiles,
     uint32_t& mm_core_idx,
-    uint32_t advance_by_tiles,
-    const uint32_t subchunk_size,
+    const TileAdvanceSteps& steps,
     const uint32_t chunk_width_in_tiles,
     const uint32_t mm_block_unit_ht) {
     /**
-     * Update the within-chunk-piece coordinates of a tile
-     * (row and column within a chunk piece and the corresponding core index)
-     * when moving by 'advance_by_tiles' tiles.
-     *
-     * First, check if 'advance_by_tiles' is at least as large as a full chunk piece
-     * and update the core index accordingly.
-     * Then, check if remaining 'advance_by_tiles' is at least as large as a full row
-     * and update the row index and core index accordingly.
-     * Finally, move the column index by the remaining number of tiles, and
-     * update the other coordinates if needed.
-     *
-     * Optimized to avoid modulo operations.
-     * Note: subchunk_size == mm_block_unit_ht * chunk_width_in_tiles
+     * Update the within-chunk-piece coordinates of a tile by a precomputed advance
+     * (see decompose_tile_advance). Division-free: only adds, compares and subtracts.
+     * Equivalent to the original divide-per-call form; the two divisions have been hoisted out.
      */
-    if (advance_by_tiles >= subchunk_size) [[unlikely]] {
-        const uint32_t move_by_pieces = advance_by_tiles / subchunk_size;
-        advance_by_tiles -= move_by_pieces * subchunk_size;
-        mm_core_idx += move_by_pieces;
-    }
+    mm_core_idx += steps.pieces;
 
-    if (advance_by_tiles >= chunk_width_in_tiles) {
-        const uint32_t move_by_rows = advance_by_tiles / chunk_width_in_tiles;
-        const uint32_t new_row = tile_row_in_mm_M_unit_block + move_by_rows;
-        advance_by_tiles -= move_by_rows * chunk_width_in_tiles;
-
+    if (steps.rows != 0) {
+        const uint32_t new_row = tile_row_in_mm_M_unit_block + steps.rows;
         if (new_row >= mm_block_unit_ht) {
             mm_core_idx += 1;
             tile_row_in_mm_M_unit_block = new_row - mm_block_unit_ht;
@@ -101,7 +110,7 @@ FORCE_INLINE void get_next_tile_coordinates(
         }
     }
 
-    uint32_t new_col = chunk_col_in_tiles + advance_by_tiles;
+    uint32_t new_col = chunk_col_in_tiles + steps.cols;
     if (new_col >= chunk_width_in_tiles) {
         tile_row_in_mm_M_unit_block += 1;
         new_col -= chunk_width_in_tiles;

@@ -208,7 +208,7 @@ template <uint32_t acc_cb, uint32_t mask_cb>
 inline void stamp_mask_tile(uint32_t slot, uint32_t k_tile, uint32_t diag_tile) {
     const bool is_diag = (k_tile == diag_tile);
     const uint32_t midx = is_diag ? 0u : 1u;  // 0 = diag strict-upper -inf, 1 = full -inf
-    copy_tile_to_dst_init_short(mask_cb);
+    copy_init(mask_cb);
     pack_reconfig_l1_acc(is_diag ? 1 : 0);  // diag accumulates (keeps score); full -inf overwrites
     tile_regs_acquire();
     copy_tile(mask_cb, midx, 0);
@@ -480,6 +480,15 @@ void kernel_main() {
                 }
             }
             span.set(group, band0 + band);
+            // kv_len is runtime-variable while the work split is compiled for K capacity. Cells
+            // wholly past that prefix have no K/output work. Head streaming still receives one
+            // q-mcast block per band, so drain it to keep the row rendezvous in lockstep.
+            if (span.k_tiles() == 0) {
+                if constexpr (stream_heads) {
+                    drain_phantom_band_q();
+                }
+                continue;
+            }
             // Fused + streamed k waits incrementally inside the matmul (overlap the DRAM read); all other
             // paths wait the whole chunk here.
             if constexpr (!fuse_single || !fused_stream_k) {
