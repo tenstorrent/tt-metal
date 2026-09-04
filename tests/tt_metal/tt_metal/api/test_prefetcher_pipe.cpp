@@ -1697,6 +1697,7 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_RelayDFB_HostRelationshipValidation
             EXPECT_EQ(handles.at("relay_dfb").prefetcher_pipe_id, 0u);
             EXPECT_TRUE(handles.at("relay_dfb").is_relay);
             EXPECT_EQ(handles.at("relay_dfb").logical_dfb_id, expected_slot);
+            EXPECT_FALSE(handles.at("relay_dfb").llk_metadata.has_value());
         } else {
             auto kernel = std::make_shared<ComputeKernel>(
                 program.impl().get_context_id(),
@@ -1711,11 +1712,12 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_RelayDFB_HostRelationshipValidation
                     uint16_t logical_id,
                     bool is_relay,
                     uint8_t prefetcher_pipe_id,
-                    const std::optional<LLKMetadata>&) {
+                    const std::optional<LLKMetadata>& llk_metadata) {
                     EXPECT_EQ(name, "relay_dfb");
                     EXPECT_EQ(logical_id, expected_slot);
                     EXPECT_TRUE(is_relay);
                     EXPECT_EQ(prefetcher_pipe_id, 0u);
+                    EXPECT_FALSE(llk_metadata.has_value());
                     saw_binding = true;
                 });
             EXPECT_TRUE(saw_binding);

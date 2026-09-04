@@ -72,8 +72,6 @@ struct RelayDFBBindingToken {
 
     explicit constexpr RelayDFBBindingToken(uint16_t id, uint8_t prefetcher_pipe_id = NO_PREFETCHER_PIPE) noexcept :
         id_(id), prefetcher_pipe_id_(prefetcher_pipe_id) {}
-    constexpr RelayDFBBindingToken(uint16_t id, uint8_t prefetcher_pipe_id, binding_details::LLKMetadata llk) noexcept :
-        id_(id), prefetcher_pipe_id_(prefetcher_pipe_id), llk_metadata_(llk) {}
 
     constexpr operator uint32_t() const noexcept { return id_; }
 
@@ -82,5 +80,4 @@ struct RelayDFBBindingToken {
 private:
     uint16_t id_;
     uint8_t prefetcher_pipe_id_;
-    binding_details::LLKMetadata llk_metadata_{};
 };
