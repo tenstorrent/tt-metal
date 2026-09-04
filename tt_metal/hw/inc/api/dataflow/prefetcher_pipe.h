@@ -143,14 +143,7 @@ namespace experimental {
 class PrefetcherPipe {
 public:
     FORCE_INLINE explicit PrefetcherPipe(uint8_t prefetcher_pipe_id) : prefetcher_pipe_id_(prefetcher_pipe_id) {
-        const uint32_t launch_index = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
-        const auto* launch_msg = GET_MAILBOX_ADDRESS_DEV(launch[launch_index]);
-        const auto& kernel_config = launch_msg->kernel_config;
-        ASSERT(kernel_config.prefetcher_pipe_offset != REMOTE_DFB_OFFSET_NONE);
-
-        const uint32_t kernel_config_base = kernel_config.kernel_config_base[PROGRAMMABLE_CORE_TYPE];
-        volatile tt_l1_ptr uint32_t* region =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kernel_config_base + kernel_config.prefetcher_pipe_offset);
+        volatile tt_l1_ptr uint32_t* region = prefetcher_pipe_config_region();
         ASSERT(prefetcher_pipe_id < region[0]);
 
         volatile tt_l1_ptr uint32_t* slot =
@@ -182,6 +175,16 @@ public:
         }
 #endif
     }
+
+#if defined(KERNEL_BUILD) && !defined(COMPILE_FOR_TRISC)
+    // Open the pipe this core relays through local DFB `relay_dfb_id`, for a kernel that cannot
+    // name a pipe id: one relay DFB spans the receivers of several pipes, so which pipe a core
+    // belongs to varies across the cores running this same binary. The host registers at most one
+    // pipe per core against a relay DFB, so the lookup is unambiguous.
+    FORCE_INLINE static PrefetcherPipe for_relay(uint8_t relay_dfb_id) {
+        return PrefetcherPipe(static_cast<uint8_t>(prefetcher_pipe_id_for_relay(relay_dfb_id)));
+    }
+#endif
 
     FORCE_INLINE ~PrefetcherPipe() { commit(); }
 

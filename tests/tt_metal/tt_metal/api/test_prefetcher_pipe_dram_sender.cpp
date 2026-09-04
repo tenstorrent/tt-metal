@@ -20,13 +20,19 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <optional>
+#include <span>
 #include <utility>
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/experimental/dispatch_context.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program.hpp>
@@ -34,6 +40,8 @@
 
 #include "device_fixture.hpp"
 #include "tests/tt_metal/tt_metal/api/dram_sender_fixture.hpp"
+#include "tests/tt_metal/tt_metal/api/cross_node_dfb_test_utils.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "distributed/mesh_device_impl.hpp"
 #include "impl/buffers/drisc_l1_arena.hpp"
 #include "impl/buffers/prefetcher_pipe_dram_sender_internal.hpp"
@@ -51,9 +59,18 @@ namespace {
 
 constexpr const char* kSenderKernel = "tests/tt_metal/tt_metal/test_kernels/misc/prefetcher_pipe_dram_smoke_sender.cpp";
 constexpr const char* kReceiverKernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/prefetcher_pipe_receiver.cpp";
+constexpr const char* kRelayDfbReaderKernel =
+    "tests/tt_metal/tt_metal/test_kernels/dataflow/prefetcher_pipe_relay_dfb_reader_metal2.cpp";
+constexpr const char* kRelayDfbConsumerKernel =
+    "tests/tt_metal/tt_metal/test_kernels/compute/prefetcher_pipe_relay_dfb_consumer_metal2.cpp";
 
 constexpr uint32_t kEntrySize = 256;  // multiple of L1_ALIGNMENT (16 on Blackhole)
 constexpr uint32_t kRingDepth = 4;
+
+// The relay is paged at the delivered entry, as the matmul's in1 buffer is: one page is one
+// K-block, and the consumer addresses the tiles inside it by index.
+constexpr uint32_t kRelayTileBytes = 64;
+constexpr uint32_t kRelayTilesPerEntry = kEntrySize / kRelayTileBytes;
 
 // A Tensor-prefetcher delivery target: the per-bank pipe groups the factory returns, plus the
 // bank-major flattening the rest of this file drives the senders through. That flattening comes
@@ -201,6 +218,93 @@ void run_push_and_pop(
     workload.add_program(distributed::MeshCoordinateRange({0, 0}, {0, 0}), std::move(program));
     distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), workload, /*blocking=*/false);
     distributed::Finish(mesh_device.mesh_command_queue());
+}
+
+// One push/consume cycle through a Metal 2.0 relay DataflowBuffer: one DFB declared in the
+// ProgramSpec over ALL the pipes' receivers, so a receiver's kernels find their pipe from the DFB's
+// relay id rather than from a baked-in pipe id. The DRISC senders join the same Program as ordinary
+// (non-Metal-2.0) kernels -- they read their config page out of DRISC L1 and never Attach -- which
+// they must, because the sender drains its credits before returning.
+void run_relay_dfb_spec_program(
+    distributed::MeshDevice& mesh_device, const PipeSet& set, uint32_t num_entries, uint32_t result_addr) {
+    namespace m2 = tt::tt_metal::experimental;
+
+    const m2::DFBSpecName relay_name{"relay"};
+    const m2::KernelSpecName reader_name{"relay_reader"};
+    const m2::KernelSpecName consumer_name{"relay_consumer"};
+
+    CoreRangeSet all_receivers;
+    m2::DataflowBufferSpec relay_dfb{
+        .unique_id = relay_name,
+        .entry_size = kEntrySize,
+        .num_entries = kRingDepth,
+        .data_format_metadata = tt::DataFormat::UInt32,
+    };
+    for (size_t s = 0; s < set.pipes.size(); ++s) {
+        relay_dfb.prefetcher_pipe_relays.push_back(
+            m2::PrefetcherPipeRelay{.pipe = set.pipes[s], .nodes = set.mapping[s].second});
+        all_receivers = all_receivers.merge(set.mapping[s].second);
+    }
+
+    m2::KernelSpec reader{
+        .unique_id = reader_name,
+        .source = std::filesystem::path(kRelayDfbReaderKernel),
+        .dfb_bindings = {m2::DFBBinding{
+            .dfb_spec_name = relay_name, .accessor_name = "relay", .endpoint_type = m2::DFBEndpointType::PRODUCER}},
+        .compile_time_args = {{"num_entries", num_entries}},
+        .hw_config = m2::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0},
+    };
+    m2::KernelSpec consumer{
+        .unique_id = consumer_name,
+        .source = std::filesystem::path(kRelayDfbConsumerKernel),
+        .dfb_bindings = {m2::DFBBinding{
+            .dfb_spec_name = relay_name, .accessor_name = "relay", .endpoint_type = m2::DFBEndpointType::CONSUMER}},
+        .compile_time_args =
+            {{"total_entries", num_entries},
+             {"tiles_per_entry", kRelayTilesPerEntry},
+             {"tile_bytes", kRelayTileBytes},
+             {"result_addr", result_addr}},
+        .hw_config = m2::ComputeGen1Config{},
+    };
+
+    m2::ProgramSpec spec;
+    spec.name = "prefetcher_pipe_relay_dfb";
+    spec.kernels = {std::move(reader), std::move(consumer)};
+    spec.dataflow_buffers = {std::move(relay_dfb)};
+    spec.work_units = {m2::WorkUnitSpec{
+        .name = "wu_receivers", .kernels = {reader_name, consumer_name}, .target_nodes = all_receivers}};
+
+    Program receiver_program = m2::MakeProgramFromSpec(mesh_device, spec);
+    // Every kernel arg is a compile-time arg, so there is nothing per-node to supply; the call is
+    // still what validates the (empty) schema against the spec.
+    m2::SetProgramRunArgs(receiver_program, m2::ProgramRunArgs{});
+
+    // MakeProgramFromSpec compiles, so a legacy DRISC kernel cannot join that Program. The senders
+    // go out as their own workload and the two run concurrently under asynchronous slow dispatch,
+    // which they must: a sender does not return until its receivers have acked everything.
+    Program sender_program = CreateProgram();
+    const uint32_t pattern_base = static_cast<uint32_t>(drisc_pattern_base(mesh_device));
+    for (size_t s = 0; s < set.pipes.size(); ++s) {
+        const auto config_page_addr = static_cast<uint32_t>(experimental::sender_state_drisc_l1_base(*set.pipes[s]));
+        CreateKernel(
+            sender_program,
+            kSenderKernel,
+            set.mapping[s].first,
+            DramConfig{.noc = NOC::NOC_0, .compile_args = {config_page_addr, num_entries, pattern_base, kEntrySize}});
+    }
+
+    const distributed::MeshCoordinateRange device_range({0, 0}, {0, 0});
+    experimental::DispatchContext::get().enable_asynchronous_slow_dispatch(&mesh_device);
+    {
+        distributed::MeshWorkload sender_workload;
+        sender_workload.add_program(device_range, std::move(sender_program));
+        distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), sender_workload, /*blocking=*/false);
+        distributed::MeshWorkload receiver_workload;
+        receiver_workload.add_program(device_range, std::move(receiver_program));
+        distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), receiver_workload, /*blocking=*/false);
+        distributed::Finish(mesh_device.mesh_command_queue());
+    }
+    experimental::DispatchContext::get().disable_asynchronous_slow_dispatch(&mesh_device);
 }
 
 // Read one entry-sized slot out of a receiver's ring.
@@ -529,6 +633,75 @@ TEST_F(PrefetcherPipeDramSenderFixture, BlockSizeChangeAcrossPrograms) {
         *mesh_device_,
         set,
         credit_units(*mesh_device_, kFirstBatch * kFirstEntrySize + kPadBytes + kSecondBatch * kSecondEntrySize));
+}
+
+TEST_F(PrefetcherPipeDramSenderFixture, Metal2RelayDataflowBufferSpansTwoPipes) {
+    // The Metal 2.0 form of the relay: ONE DataflowBuffer declared in the ProgramSpec over the
+    // rings of TWO pipes, one per DRAM bank. Each receiver core belongs to exactly one of them, so
+    // no pipe id can be baked into the shared kernel binaries -- both the DM producer and the TRISC
+    // consumer find their pipe by scanning the launch-msg index for this DFB's relay id.
+    //
+    // Two programs, so the durable pipe cursor has to survive a DFB whose pointers firmware resets
+    // every launch. The second batch carries different pattern bytes, so a receiver that restarted
+    // at ring slot 0 would report the first batch's words again.
+    constexpr uint32_t kReceiversPerBank = 2;
+    constexpr uint32_t kEntriesPerRun = 2;
+    constexpr uint32_t kNumRuns = 2;
+    constexpr uint32_t kTilesPerRun = kEntriesPerRun * kRelayTilesPerEntry;
+    const CoreRangeSet bank0_receivers(CoreRange({0, 0}, {kReceiversPerBank - 1, 0}));
+    const CoreRangeSet bank1_receivers(CoreRange({kReceiversPerBank, 0}, {2 * kReceiversPerBank - 1, 0}));
+    const CoreRangeSet all_receivers(CoreRange({0, 0}, {2 * kReceiversPerBank - 1, 0}));
+
+    const PipeSet set = make_pipe_set(
+        *mesh_device_,
+        {{/*bank_id=*/0, bank0_receivers}, {/*bank_id=*/1, bank1_receivers}},
+        /*dual_senders_per_bank=*/false);
+    ASSERT_EQ(set.pipes.size(), 2u) << "one sender per bank expected";
+
+    // [entries_consumed, one word per tile].
+    constexpr uint32_t kResultPageSize = 64;
+    auto result_buffer =
+        cross_node_dfb_test::make_cross_node_data_buffer(*mesh_device_, all_receivers, kResultPageSize, 1);
+    const auto result_addr = static_cast<uint32_t>(result_buffer->address());
+
+    for (uint32_t run = 0; run < kNumRuns; ++run) {
+        const uint32_t entry_label = run * kEntriesPerRun;
+        for (const auto& pipe : set.pipes) {
+            preload_pattern(
+                *mesh_device_,
+                experimental::prefetcher_pipe_sender_core(*pipe),
+                kEntriesPerRun,
+                kReceiversPerBank,
+                entry_label);
+        }
+        run_relay_dfb_spec_program(*mesh_device_, set, kEntriesPerRun, result_addr);
+
+        for (size_t s = 0; s < set.pipes.size(); ++s) {
+            const auto receivers = receivers_in_slab_order(set.mapping[s].second);
+            for (uint32_t r = 0; r < receivers.size(); ++r) {
+                std::vector<uint32_t> result(1 + kTilesPerRun, 0);
+                slow_dispatch::ReadFromL1(
+                    *mesh_device_,
+                    receivers[r],
+                    result_addr,
+                    std::span<uint8_t>(reinterpret_cast<uint8_t*>(result.data()), result.size() * sizeof(uint32_t)),
+                    CoreType::WORKER);
+                ASSERT_EQ(result[0], kEntriesPerRun)
+                    << "receiver " << receivers[r].str() << " run " << run << " consumed the wrong entry count";
+                for (uint32_t e = 0; e < kEntriesPerRun; ++e) {
+                    for (uint32_t t = 0; t < kRelayTilesPerEntry; ++t) {
+                        const uint32_t word_in_entry = t * kRelayTileBytes / sizeof(uint32_t);
+                        const uint32_t expected = pattern_word(r, entry_label + e, word_in_entry);
+                        const uint32_t got = result[1 + e * kRelayTilesPerEntry + t];
+                        EXPECT_EQ(got, expected) << "pipe " << s << " receiver " << receivers[r].str() << " run " << run
+                                                 << " entry " << e << " tile " << t << ": expected 0x" << std::hex
+                                                 << expected << ", got 0x" << got << std::dec;
+                    }
+                }
+            }
+        }
+    }
+    expect_credits_drained(*mesh_device_, set, credit_units(*mesh_device_, kNumRuns * kEntriesPerRun * kEntrySize));
 }
 
 }  // namespace tt::tt_metal

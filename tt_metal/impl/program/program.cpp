@@ -94,6 +94,7 @@
 #include <internal/service/service_core_manager.hpp>
 #include "impl/internal/service/service_core_manager_impl.hpp"
 #include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
+#include "hostdev/remote_dfb_constants.h"
 
 namespace tt {
 enum CBIndex : std::uint8_t;
@@ -1379,8 +1380,12 @@ uint8_t detail::ProgramImpl::add_prefetcher_pipe_attachment(
     }
 
     TT_FATAL(
-        next_prefetcher_pipe_slot_ < std::numeric_limits<uint8_t>::max(),
-        "PrefetcherPipe id would wrap uint8_t (ids are [0, 255); 0xFF is NO_PREFETCHER_PIPE)");
+        next_prefetcher_pipe_slot_ < PREFETCHER_PIPE_ID_BY_RELAY,
+        "PrefetcherPipe id would wrap into the reserved sentinels (ids are [0, {}); {:#x} is "
+        "NO_PREFETCHER_PIPE and {:#x} is PREFETCHER_PIPE_BY_RELAY)",
+        PREFETCHER_PIPE_ID_BY_RELAY,
+        PREFETCHER_PIPE_ID_NONE,
+        PREFETCHER_PIPE_ID_BY_RELAY);
 
     TT_FATAL(cores.num_cores() > 0, "AttachPrefetcherPipe requires a non-empty core set");
     const CoreRangeSet& all_cores = prefetcher_pipe.all_cores();
@@ -1453,12 +1458,20 @@ const experimental::PrefetcherPipe& detail::ProgramImpl::get_prefetcher_pipe_att
 }
 
 std::optional<uint8_t> detail::ProgramImpl::get_prefetcher_pipe_id_for_relay(uint32_t relay_dfb_host_id) const {
+    std::optional<uint8_t> found;
     for (const auto& [prefetcher_pipe_id, registered_relay_host_id] : prefetcher_pipe_relay_host_ids_) {
-        if (registered_relay_host_id == relay_dfb_host_id) {
-            return prefetcher_pipe_id;
+        if (registered_relay_host_id != relay_dfb_host_id) {
+            continue;
         }
+        if (found.has_value()) {
+            // Several pipes relay through this one DFB, each on its own cores. No single id is
+            // right for every core running the consumer's kernel, so the binding tells the kernel
+            // to find its slot from the DFB's relay id at run time.
+            return PREFETCHER_PIPE_ID_BY_RELAY;
+        }
+        found = prefetcher_pipe_id;
     }
-    return std::nullopt;
+    return found;
 }
 
 void detail::ProgramImpl::register_prefetcher_pipe_relay_dfb(
@@ -1481,9 +1494,16 @@ void detail::ProgramImpl::register_prefetcher_pipe_relay_dfb(
         "PrefetcherPipe relay depth {} must equal ring_size/entry_size ({})",
         relay_dfb->config.num_entries,
         pipe.ring_size() / relay_dfb->config.entry_size);
+    const CoreRangeSet relay_cores = receiver_cores.merge_ranges();
+    // Subset, not equality: one relay DFB may serve several pipes, each covering part of its nodes.
+    // Whether those parts add up to the whole DFB is checked once, in
+    // validate_prefetcher_pipe_relay_coverage, after every pipe has been registered.
     TT_FATAL(
-        relay_dfb->core_ranges == receiver_cores.merge_ranges(),
-        "Relay DFB core ranges must match the declared relay receiver cores");
+        relay_dfb->core_ranges.contains(relay_cores),
+        "Relay DFB {} spans nodes {}, which do not cover the declared relay receiver cores {}",
+        relay_dfb_host_id,
+        relay_dfb->core_ranges,
+        relay_cores);
     TT_FATAL(
         pipe.receiver_cores().merge(receiver_cores).num_cores() == pipe.receiver_cores().num_cores(),
         "PrefetcherPipe relay cores must be a subset of the PrefetcherPipe receiver cores");
@@ -1498,7 +1518,35 @@ void detail::ProgramImpl::register_prefetcher_pipe_relay_dfb(
         "PrefetcherPipe slot {} already has relay DFB host id {}",
         prefetcher_pipe_id,
         relay_it != prefetcher_pipe_relay_host_ids_.end() ? relay_it->second : 0);
+
+    // A core reads one ring through the relay DFB, so at most one pipe may claim it: the kernels
+    // resolve their pipe from the DFB's relay id, and two claimants would make that ambiguous.
+    CoreRangeSet& covered_cores = prefetcher_pipe_relay_covered_cores_[relay_dfb_host_id];
+    const bool relay_already_bound = covered_cores.num_cores() > 0;
+    const CoreRangeSet overlap = covered_cores.intersection(relay_cores);
+    TT_FATAL(
+        overlap.num_cores() == 0,
+        "PrefetcherPipe slot {} would relay through DFB {} on cores {}, which another pipe already "
+        "relays through it on",
+        prefetcher_pipe_id,
+        relay_dfb_host_id,
+        overlap);
+
+    // Every pipe sharing a relay DFB must own the same ring: the DFB has one borrowed base address
+    // for all of its nodes.
+    if (relay_already_bound) {
+        TT_FATAL(
+            relay_dfb->borrowed_addr_ == pipe.buffer_address(),
+            "PrefetcherPipe slot {} rings at {:#x}, but relay DFB {} is already laid over a ring at "
+            "{:#x}; pipes sharing a relay DFB must share one ring address",
+            prefetcher_pipe_id,
+            pipe.buffer_address(),
+            relay_dfb_host_id,
+            relay_dfb->borrowed_addr_);
+    }
+
     prefetcher_pipe_relay_host_ids_[prefetcher_pipe_id] = relay_dfb_host_id;
+    covered_cores = covered_cores.merge(relay_cores);
 
     relay_dfb->set_borrowed_memory_base_addr(pipe.buffer_address());
     const uint8_t relay_device_slot = static_cast<uint8_t>(relay_dfb->device_slot);
@@ -1532,6 +1580,22 @@ void detail::ProgramImpl::register_prefetcher_pipe_relay_dfb(
             participant->relay_dfb_id,
             core.str());
         participant->relay_dfb_id = relay_device_slot;
+    }
+}
+
+void detail::ProgramImpl::validate_prefetcher_pipe_relay_coverage() const {
+    for (const auto& [relay_dfb_host_id, covered_cores] : prefetcher_pipe_relay_covered_cores_) {
+        auto relay_dfb = get_dataflow_buffer(relay_dfb_host_id);
+        TT_FATAL(relay_dfb != nullptr, "Relay DFB host id {} does not exist", relay_dfb_host_id);
+        const CoreRangeSet uncovered = relay_dfb->core_ranges.subtract(covered_cores);
+        TT_FATAL(
+            uncovered.num_cores() == 0,
+            "Relay DFB {} runs on nodes {} but no PrefetcherPipe relays through it on {}; every node "
+            "of a relay DFB must be a receiver of one of its pipes, or its kernels there would read "
+            "an unbacked ring",
+            relay_dfb_host_id,
+            relay_dfb->core_ranges,
+            uncovered);
     }
 }
 

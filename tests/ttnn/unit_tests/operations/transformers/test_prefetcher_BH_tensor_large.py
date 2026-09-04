@@ -1455,3 +1455,292 @@ def test_tensor_prefetcher_mcast_in0(device, weight_layout, gcb_size_misalign_by
     assert (
         device.num_program_cache_entries() == cache_entries_after_first
     ), "second mcast_in0 invocation did not hit the program cache"
+
+
+# PrefetcherPipe delivery is receiver-contiguous only: a pipe sender pushes each receiver its own
+# shard and cannot slice one bank's shard across receivers the way the K-row-major layout needs.
+_MCAST_IN0_PIPE_LAYOUTS = {
+    "recv_contig_strided": ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+    "recv_contig_contiguous": ttnn.ShardDistributionStrategy.CONTIGUOUS_1D,
+}
+
+
+def _mcast_in0_pipe_program_config(ring_cols, ring_rows, in0_block_w, per_core_N):
+    """The mcast-in0 1D config the pipe tests run, parameterized by in1 K-block shape.
+
+    ``in0_block_w * per_core_N`` tiles is one delivered pipe entry, so these two are what a
+    block-size change varies.
+    """
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(ring_cols, ring_rows),
+        in0_block_w=in0_block_w,
+        out_subblock_h=1,
+        out_subblock_w=per_core_N,
+        out_block_h=1,
+        out_block_w=per_core_N,
+        per_core_M=1,
+        per_core_N=per_core_N,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=True,
+        gather_in0=False,
+        hop_cores=ttnn.CoreRangeSet([]),
+        num_global_cb_receivers=ring_rows,
+        untilize_out=False,
+        stream_in1=False,
+    )
+
+
+def _mcast_in0_pipe_setup(device, weight_layout, per_core_N=1, dtype=ttnn.bfloat16, in0_block_w=1):
+    """Weight, activation, program config and bank pairing for the mcast-in0 pipe tests.
+
+    Same shape as test_tensor_prefetcher_mcast_in0, so the two transports are compared on one
+    problem: block_count is K_tiles / in0_block_w. ``per_core_N`` and ``in0_block_w`` together set
+    how many tiles a delivered entry holds, which is one page of the in1 CB.
+    """
+    num_dram_banks = device.dram_grid_size().x
+    recv_per_bank = 2
+    receiver_count = num_dram_banks * recv_per_bank
+    ring_cols = num_dram_banks
+    ring_rows = recv_per_bank
+    receiver_cores = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(ring_cols - 1, ring_rows - 1))}
+    )
+
+    M = ttnn.TILE_SIZE
+    k_tiles = 2 * receiver_count
+    K = k_tiles * ttnn.TILE_SIZE
+    N = receiver_count * per_core_N * ttnn.TILE_SIZE
+    block_count = k_tiles // in0_block_w
+
+    torch.manual_seed(zlib.crc32(f"mcast_in0_pipes_{weight_layout}_{per_core_N}".encode()))
+    pt_weight = torch.randn(1, 1, K, N)
+    distribution_strategy = _MCAST_IN0_PIPE_LAYOUTS[weight_layout]
+    tt_weight = _make_recv_contig_weight(
+        device,
+        pt_weight,
+        num_dram_banks=num_dram_banks,
+        ring_size=receiver_count,
+        dtype=dtype,
+        distribution_strategy=distribution_strategy,
+    )
+    if distribution_strategy == ttnn.ShardDistributionStrategy.CONTIGUOUS_1D:
+        bank_to_receivers = [
+            (b, _bank_receivers_contiguous(b, recv_per_bank, ring_cols=ring_cols)) for b in range(num_dram_banks)
+        ]
+    else:
+        bank_to_receivers = [
+            (b, _bank_receivers_strided(b, recv_per_bank, num_dram_banks, ring_cols=ring_cols))
+            for b in range(num_dram_banks)
+        ]
+
+    pt_act = torch.randn(1, 1, M, K)
+    act_mem_config = ttnn.create_sharded_memory_config(
+        shape=(M, K // receiver_count),
+        core_grid=receiver_cores,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    tt_act = ttnn.from_torch(pt_act, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=act_mem_config)
+
+    program_config = _mcast_in0_pipe_program_config(ring_cols, ring_rows, in0_block_w, per_core_N)
+    output_mem_config = ttnn.create_sharded_memory_config(
+        shape=(M, N // receiver_count),
+        core_grid=receiver_cores,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    entry_size = in0_block_w * program_config.per_core_N * _bytes_per_tile(dtype)
+    return {
+        "k_tiles": k_tiles,
+        "receiver_count": receiver_count,
+        "pt_act": pt_act,
+        "pt_weight": pt_weight,
+        "tt_act": tt_act,
+        "tt_weight": tt_weight,
+        "bank_to_receivers": bank_to_receivers,
+        "program_config": program_config,
+        "output_mem_config": output_mem_config,
+        "entry_size": entry_size,
+        "block_count": block_count,
+        "num_dram_banks": num_dram_banks,
+        "recv_per_bank": recv_per_bank,
+        "ring_cols": ring_cols,
+    }
+
+
+def _quasar_pipe_program_config(program_config, ring_cols, ring_rows):
+    """The Quasar fork's twin of `program_config`.
+
+    Field-for-field the same 1D mcast config; the fork carries its own C++ type (and no stream_in1,
+    which pipe delivery does not use), so the object cannot be shared between the two ops.
+    """
+    return ttnn._ttnn.operations.experimental.quasar.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(ring_cols, ring_rows),
+        in0_block_w=program_config.in0_block_w,
+        out_subblock_h=program_config.out_subblock_h,
+        out_subblock_w=program_config.out_subblock_w,
+        out_block_h=program_config.out_block_h,
+        out_block_w=program_config.out_block_w,
+        per_core_M=program_config.per_core_M,
+        per_core_N=program_config.per_core_N,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=True,
+        gather_in0=False,
+        num_global_cb_receivers=ring_rows,
+        untilize_out=False,
+    )
+
+
+def _prefetch_and_quasar_linear(setup, pipes, quasar_config, block_count, compute_kernel_config, dtype):
+    """Queue the weight onto the pipes, then run the Quasar fork's linear against them.
+
+    The same two halves prefetch_and_linear issues for a GCB, with the pipes as the delivery target
+    and the fork's own program-config type.
+    """
+    ttnn.experimental.queue_tensor_prefetcher_request(
+        setup["tt_act"].device(),
+        [(setup["tt_weight"], block_count)],
+        prefetcher_pipes=pipes,
+        capture_into_trace=True,
+    )
+    return ttnn.experimental.quasar.linear(
+        setup["tt_act"],
+        setup["tt_weight"],
+        prefetcher_pipes=pipes,
+        program_config=quasar_config,
+        memory_config=setup["output_mem_config"],
+        compute_kernel_config=compute_kernel_config,
+        dtype=dtype,
+    )
+
+
+@pytest.mark.parametrize("weight_layout", list(_MCAST_IN0_PIPE_LAYOUTS), ids=list(_MCAST_IN0_PIPE_LAYOUTS))
+@pytest.mark.parametrize(
+    "num_entries,per_core_N",
+    [(2, 2), (3, 1), (4, 2)],
+    ids=["depth2_2tile", "depth3_1tile", "depth4_2tile"],
+)
+def test_tensor_prefetcher_mcast_in0_pipes_quasar(device, weight_layout, num_entries, per_core_N):
+    """The Metal 2.0 (Quasar-fork) mcast-in0 matmul consuming in1 from DRAM-sender PrefetcherPipes.
+
+    Same problem as test_tensor_prefetcher_mcast_in0 but over pipes, with the in1 DataflowBuffer
+    declared in the fork's ProgramSpec as a relay over every pipe's ring. One DFB spans all the
+    receivers, so the kernels resolve which pipe they belong to from the relay id at run time. ``per_core_N`` > 1 makes an entry
+    several tiles wide, which is the case the compute kernel's explicit in1 tile stride has to get
+    right; ``num_entries`` is the ring depth in K-blocks, and depth 3 does not divide a run's block
+    count, so the second run resumes mid-ring.
+    """
+    dtype = ttnn.bfloat16
+    setup = _mcast_in0_pipe_setup(device, weight_layout, per_core_N=per_core_N, dtype=dtype)
+    assert setup["block_count"] != setup["receiver_count"]
+    quasar_config = _quasar_pipe_program_config(setup["program_config"], setup["ring_cols"], setup["recv_per_bank"])
+
+    # Before any matmul runs on the receiver grid: pipe rings come from the persistent L1 arena,
+    # which refuses a core that a live Program (one a program-cache hit keeps alive) has sealed.
+    pipes = ttnn.experimental.create_prefetcher_pipes_for_tensor_prefetcher(
+        device,
+        setup["bank_to_receivers"],
+        entry_size=setup["entry_size"],
+        num_entries=num_entries,
+    )
+
+    # fp32_dest_acc_en stays off: the Metal 2.0 spec validator requires an explicit unpack_modes
+    # entry for an FP32 DFB a compute kernel consumes, and the fork's factory declares none for its
+    # intermediate buffer. With it off that buffer is bf16 and no choice is needed.
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+        dst_full_sync_en=True,
+    )
+    expected = setup["pt_act"].float() @ setup["pt_weight"].float()
+
+    cache_entries_after_first = None
+    with tensor_prefetcher_session(device):
+        for run in range(2):
+            tt_out = _prefetch_and_quasar_linear(
+                setup, pipes, quasar_config, setup["block_count"], compute_kernel_config, dtype
+            )
+            if run == 0:
+                cache_entries_after_first = device.num_program_cache_entries()
+
+            out_torch = ttnn.to_torch(tt_out)
+            passing, output_str = comp_pcc(expected, out_torch, 0.999)
+            logger.info(
+                f"[quasar mcast_in0_pipes {weight_layout} depth={num_entries} per_core_N={per_core_N} run={run}] "
+                f"{output_str}"
+            )
+            assert passing, f"quasar mcast_in0_pipes {weight_layout} run={run} PCC failed: {output_str}"
+
+    assert (
+        device.num_program_cache_entries() == cache_entries_after_first
+    ), "second quasar mcast_in0 pipes invocation did not hit the program cache"
+
+
+def test_tensor_prefetcher_mcast_in0_pipes_quasar_block_size_change(device):
+    """Two Quasar-fork matmuls with different in1 K-block sizes, back to back on one pipe set.
+
+    The relay DataflowBuffer's entry size is the matmul's K-block, so each program declares a
+    different one over the same rings and the endpoints resize onto that grid. The ring here is
+    three of the wider blocks and does not divide the weight, so the second matmul starts from a
+    mid-ring cursor. The pair runs twice so each config's second invocation hits the program cache.
+    """
+    dtype = ttnn.bfloat16
+    narrow = _mcast_in0_pipe_setup(device, "recv_contig_contiguous", dtype=dtype, in0_block_w=1)
+    wide_program_config = _mcast_in0_pipe_program_config(
+        narrow["ring_cols"], narrow["recv_per_bank"], in0_block_w=2, per_core_N=1
+    )
+    wide_block_bytes = 2 * narrow["entry_size"]
+
+    ring_blocks_of_wide = 3
+    num_entries = ring_blocks_of_wide * wide_block_bytes // narrow["entry_size"]
+    pipes = ttnn.experimental.create_prefetcher_pipes_for_tensor_prefetcher(
+        device,
+        narrow["bank_to_receivers"],
+        entry_size=narrow["entry_size"],
+        num_entries=num_entries,
+    )
+    weight_bytes_per_receiver = narrow["k_tiles"] * _bytes_per_tile(dtype)
+    assert weight_bytes_per_receiver % (num_entries * narrow["entry_size"]) != 0
+
+    configs = [
+        ("narrow", narrow["program_config"], narrow["block_count"]),
+        ("wide", wide_program_config, narrow["k_tiles"] // 2),
+    ]
+    # See test_tensor_prefetcher_mcast_in0_pipes_quasar on fp32_dest_acc_en.
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+        dst_full_sync_en=True,
+    )
+    expected = narrow["pt_act"].float() @ narrow["pt_weight"].float()
+
+    cache_entries_after_first = None
+    with tensor_prefetcher_session(device):
+        for run in range(2):
+            for label, program_config, block_count in configs:
+                quasar_config = _quasar_pipe_program_config(
+                    program_config, narrow["ring_cols"], narrow["recv_per_bank"]
+                )
+                tt_out = _prefetch_and_quasar_linear(
+                    narrow, pipes, quasar_config, block_count, compute_kernel_config, dtype
+                )
+                out_torch = ttnn.to_torch(tt_out)
+                passing, output_str = comp_pcc(expected, out_torch, 0.999)
+                logger.info(f"[quasar mcast_in0_pipes block_size_change {label} run={run}] {output_str}")
+                assert passing, f"quasar block_size_change {label} run={run} PCC failed: {output_str}"
+            if run == 0:
+                cache_entries_after_first = device.num_program_cache_entries()
+
+    assert (
+        device.num_program_cache_entries() == cache_entries_after_first
+    ), "second pass over the two Quasar block sizes did not hit the program cache"
