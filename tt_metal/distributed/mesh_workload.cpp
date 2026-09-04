@@ -78,10 +78,7 @@ std::optional<MeshCoordinateRange> find_intersection(
 
 }  // namespace
 
-MeshWorkloadImpl::MeshWorkloadImpl() : id(get_next_counter()) {
-    // kernels_ / kernel_groups_ are sized in finalize_offsets from the mesh HAL.
-    Inspector::mesh_workload_created(this);
-}
+MeshWorkloadImpl::MeshWorkloadImpl() : id(get_next_counter()) { Inspector::mesh_workload_created(this); }
 
 MeshWorkloadImpl::~MeshWorkloadImpl() { Inspector::mesh_workload_destroyed(this); }
 
@@ -256,9 +253,11 @@ bool MeshWorkloadImpl::runs_on_noc_unicast_only_cores() {
     return ret;
 }
 
+// kernels_ is sized to the programmable-core-type count by finalize_offsets, which reaches this
+// method only through the getter it hands to finalize_program_offsets. Any new caller that runs
+// before finalize_offsets sees an empty vector and throws from at().
 std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& MeshWorkloadImpl::get_kernels(
     uint32_t programmable_core_type_index) {
-    // Sized by finalize_offsets from the mesh HAL; do not call before then.
     if (kernels_.at(programmable_core_type_index).empty()) {
         uint32_t device_range_idx = 0;
         for (auto& [device_range, program] : programs_) {
@@ -272,8 +271,8 @@ std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& MeshWorkloadImpl::get
     return kernels_.at(programmable_core_type_index);
 }
 
+// Same sizing guarantee, and the same failure mode for a premature caller, as get_kernels above.
 std::vector<std::shared_ptr<KernelGroup>>& MeshWorkloadImpl::get_kernel_groups(uint32_t programmable_core_type_index) {
-    // Sized by finalize_offsets from the mesh HAL; do not call before then.
     if (kernel_groups_.at(programmable_core_type_index).empty()) {
         uint32_t device_range_idx = 0;
         for (auto& [device_range, program] : programs_) {
@@ -407,6 +406,8 @@ void MeshWorkloadImpl::finalize_offsets(MeshDevice* mesh_device) {
         return;
     }
 
+    // Sizing the kernel tables is what makes get_kernels / get_kernel_groups indexable, and the
+    // getters built below are their only callers. Keep that ordering if this function is reworked.
     const uint32_t num_core_types = mesh_device->impl().metal_env().get_hal().get_programmable_core_type_count();
     kernel_groups_.resize(num_core_types);
     kernels_.resize(num_core_types);
