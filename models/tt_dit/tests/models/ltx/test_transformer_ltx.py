@@ -12,6 +12,7 @@ shape/finiteness only.
 
 import os
 import time
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -1798,15 +1799,33 @@ def test_ltx_per_token_timestep_nonuniform(
     assert_quality(ref_video, out_tt, pcc=0.99, relative_rmse=0.03)
 
 
-def test_ring_sdpa_chunk_override_reaches_per_n_configs():
-    # LTX_SDPA_RING_CHUNK must override every per-N ring config, not just the miss fallback;
-    # otherwise a sweep silently leaves the tuned stages on their defaults.
-    mesh_key = (True, 8, 4)
-    fallback, per_n = attention_ltx.LTXAttention.resolve_ring_sdpa_chunks(mesh_key, None)
-    assert fallback == (128, 512)
-    assert per_n == {9728: (96, 256), 38912: (192, 512)}
+def test_ring_sdpa_chunk_override_reaches_per_n_configs(monkeypatch):
+    monkeypatch.setenv("LTX_SDPA_RING_CHUNK", "128,256")
+    monkeypatch.setattr(attention_ltx, "is_blackhole", lambda: True)
+    monkeypatch.setattr(attention_ltx, "DistributedRMSNorm", lambda **_kwargs: object())
+    monkeypatch.setattr(attention_ltx, "ColParallelLinear", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(attention_ltx, "bf16_tensor", lambda tensor, **_kwargs: tensor)
+    monkeypatch.setattr(ttnn, "init_device_compute_kernel_config", lambda *_args, **_kwargs: object())
 
-    fallback, per_n = attention_ltx.LTXAttention.resolve_ring_sdpa_chunks(mesh_key, "128,256")
-    assert fallback == (128, 256)
-    assert per_n == {9728: (128, 256), 38912: (128, 256)}
-    assert per_n.get(12345, fallback) == (128, 256)
+    mesh_device = SimpleNamespace(
+        compute_with_storage_grid_size=lambda: ttnn.CoreCoord(8, 8),
+        arch=lambda: ttnn.device.Arch.BLACKHOLE,
+    )
+    parallel_config = SimpleNamespace(
+        sequence_parallel=SimpleNamespace(factor=8, mesh_axis=0),
+        tensor_parallel=SimpleNamespace(factor=4, mesh_axis=1),
+    )
+
+    attention = attention_ltx.LTXAttention(
+        dim=128,
+        num_heads=8,
+        mesh_device=mesh_device,
+        parallel_config=parallel_config,
+    )
+
+    assert attention.ring_sdpa_program_config.q_chunk_size == 128
+    assert attention.ring_sdpa_program_config.k_chunk_size == 256
+    assert {n: (config.q_chunk_size, config.k_chunk_size) for n, config in attention._ring_pc_by_n.items()} == {
+        9728: (128, 256),
+        38912: (128, 256),
+    }

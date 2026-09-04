@@ -8,13 +8,21 @@
 #include <cctype>
 #include <chrono>
 #include <cstddef>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <thread>
+#include <utility>
 #include <variant>
 #include <vector>
+
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 #include <tt-metalium/experimental/offline_kernel_compile.hpp>
 #include <tt-metalium/experimental/mock_device/mock_device.hpp>
@@ -23,6 +31,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "common/executor.hpp"
 #include "device_fixture.hpp"
 #include "impl/program/kernel_prewarm.hpp"
 #include "jit_build/build.hpp"
@@ -60,6 +69,56 @@ struct ScopedTempDir {
     }
 
     fs::path path_;
+};
+
+constexpr const char* kSubprocessModeEnv = "TT_METAL_PREWARM_TEST_SUBPROCESS";
+constexpr const char* kShutdownActiveEnv = "TT_METAL_PREWARM_TEST_ACTIVE";
+constexpr const char* kShutdownDoneEnv = "TT_METAL_PREWARM_TEST_DONE";
+constexpr const char* kShutdownReleaseEnv = "TT_METAL_PREWARM_TEST_RELEASE";
+constexpr const char* kShutdownTeardownEnv = "TT_METAL_PREWARM_TEST_TEARDOWN";
+
+int run_test_subprocess(
+    const std::string& filter, const std::vector<std::pair<std::string, std::string>>& environment) {
+    const pid_t pid = ::fork();
+    if (pid == 0) {
+        for (const auto& [name, value] : environment) {
+            if (::setenv(name.c_str(), value.c_str(), /*overwrite=*/1) != 0) {
+                std::_Exit(120);
+            }
+        }
+        ::unsetenv("TT_METAL_KERNEL_MANIFEST_WRITE");
+        ::unsetenv("TT_METAL_KERNEL_PREWARM_MANIFEST");
+
+        const std::string filter_arg = "--gtest_filter=" + filter;
+        char* const args[] = {const_cast<char*>("/proc/self/exe"), const_cast<char*>(filter_arg.c_str()), nullptr};
+        ::execv("/proc/self/exe", args);
+        std::_Exit(121);
+    }
+    if (pid < 0) {
+        return -1;
+    }
+
+    int status = 0;
+    if (::waitpid(pid, &status, 0) != pid) {
+        return -1;
+    }
+    return status;
+}
+
+void expect_subprocess_success(int status) {
+    ASSERT_NE(status, -1) << "subprocess launch or wait failed";
+    ASSERT_TRUE(WIFEXITED(status)) << "subprocess terminated abnormally with status " << status;
+    EXPECT_EQ(WEXITSTATUS(status), 0) << "subprocess exited with code " << WEXITSTATUS(status);
+}
+
+class IsolatedKernelCacheMeshDeviceFixture : public MeshDeviceFixture {
+protected:
+    void SetUp() override {
+        if (std::getenv(kSubprocessModeEnv) == nullptr) {
+            GTEST_SKIP() << "behavior body runs only in a cache-isolated subprocess";
+        }
+        MeshDeviceFixture::SetUp();
+    }
 };
 
 class OfflineKernelCompileMockFixture : public ::testing::Test {
@@ -270,6 +329,180 @@ std::string with_trailing_slash(std::string path) {
 constexpr const char* kProbeTagV1 = "TTPREWARM_PROBE_AAAAAAAAAAAA";
 constexpr const char* kProbeTagV2 = "TTPREWARM_PROBE_BBBBBBBBBBBB";
 
+jit_server::CompileRequest make_shutdown_request(const fs::path& root) {
+    constexpr std::uint64_t build_key = 24680;
+    jit_build::TargetRecipe target{
+        .target_name = "shutdown_probe",
+        .compiler_opt_level = "O2",
+        .srcs = {(root / "shutdown_probe.cpp").string()},
+        .objs = {"shutdown_probe.o"},
+        .linker_script = (root / "dependency.hpp").string(),
+        .linker_opt_level = "O2",
+    };
+    return {
+        .build_key = build_key,
+        .kernel_name = "shutdown_probe/hash",
+        .gpp = (root / "blocking-compiler.sh").string(),
+        .targets = {std::move(target)},
+    };
+}
+
+void fail_if_prewarm_reaches_dependency_teardown() {
+    const char* active = std::getenv(kShutdownActiveEnv);
+    const char* done = std::getenv(kShutdownDoneEnv);
+    const char* teardown = std::getenv(kShutdownTeardownEnv);
+    if (teardown != nullptr) {
+        const int fd = ::open(teardown, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd >= 0) {
+            ::close(fd);
+        }
+    }
+    if (active != nullptr && done != nullptr && ::access(active, F_OK) == 0 && ::access(done, F_OK) != 0) {
+        std::_Exit(91);
+    }
+}
+
+void wait_for_file(const fs::path& path) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (!fs::exists(path) && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    ASSERT_TRUE(fs::exists(path)) << "timed out waiting for " << path;
+}
+
+TEST(KernelPrewarmShutdownChild, WritesManifest) {
+    if (std::getenv(kSubprocessModeEnv) == nullptr) {
+        GTEST_SKIP() << "behavior body runs only in the manifest-writer subprocess";
+    }
+
+    const fs::path root = std::getenv("TT_METAL_CACHE");
+    const fs::path out_root = root / "cache";
+    constexpr std::uint64_t build_key = 24680;
+    fs::create_directories(out_root);
+    kernel_prewarm::maybe_launch_prewarm(
+        (out_root / std::to_string(build_key) / "kernels").string() + "/", (root / "firmware").string(), build_key, "");
+    kernel_prewarm::append_manifest_entry(make_shutdown_request(root));
+}
+
+TEST(KernelPrewarmShutdownChild, StartsRealBatchAndReturnsWithoutBarrier) {
+    if (std::getenv(kSubprocessModeEnv) == nullptr) {
+        GTEST_SKIP() << "behavior body runs only in the shutdown subprocess";
+    }
+
+    const fs::path root = std::getenv("TT_METAL_CACHE");
+    const fs::path active = std::getenv(kShutdownActiveEnv);
+    const fs::path out_root = root / "cache";
+    constexpr std::uint64_t build_key = 24680;
+    const fs::path kernel_dir = out_root / std::to_string(build_key) / "kernels" / "shutdown_probe" / "hash";
+    const fs::path source = root / "shutdown_probe.cpp";
+    const fs::path object = kernel_dir / "shutdown_probe.o";
+    const fs::path dependency = root / "dependency.hpp";
+    const fs::path compiler = root / "blocking-compiler.sh";
+
+    fs::create_directories(kernel_dir);
+    fs::create_directories(out_root);
+    std::ofstream(source) << "void kernel_main() {}\n";
+    std::ofstream(dependency) << "#pragma once\n";
+    std::ofstream(object) << "old object\n";
+    std::ofstream(object.string() + ".dephash") << dependency << "\t0\n";
+    std::ofstream script(compiler);
+    script << "#!/usr/bin/env bash\n"
+              "set -eu\n"
+              "if mkdir \"${TT_METAL_PREWARM_TEST_ACTIVE}.lock\" 2>/dev/null; then\n"
+              "  : > \"${TT_METAL_PREWARM_TEST_ACTIVE}\"\n"
+              "  IFS= read -r _ < \"${TT_METAL_PREWARM_TEST_RELEASE}\"\n"
+              "  : > \"${TT_METAL_PREWARM_TEST_DONE}\"\n"
+              "fi\n"
+              "out=''\n"
+              "dep=''\n"
+              "while (($#)); do\n"
+              "  case \"$1\" in\n"
+              "    -o) shift; out=\"$1\" ;;\n"
+              "    -MF) shift; dep=\"$1\" ;;\n"
+              "  esac\n"
+              "  shift\n"
+              "done\n"
+              "[[ -z \"$out\" ]] || : > \"$out\"\n"
+              "[[ -z \"$dep\" ]] || printf '%s: %s\\n' \"$out\" \""
+           << dependency.string() << "\" > \"$dep\"\n";
+    script.close();
+    ASSERT_EQ(::chmod(compiler.c_str(), 0755), 0);
+
+    // Register this boundary after the executor but before the dependency cache. On the defective
+    // ordering, it observes the real batch after that cache has already been destroyed.
+    (void)detail::GetExecutor();
+    (void)detail::GetExecutorMutex();
+    ASSERT_EQ(std::atexit(fail_if_prewarm_reaches_dependency_teardown), 0);
+
+    kernel_prewarm::maybe_launch_prewarm(
+        (out_root / std::to_string(build_key) / "kernels").string() + "/", (root / "firmware").string(), build_key, "");
+    wait_for_file(active);
+}
+
+TEST(KernelPrewarmShutdownTest, ActiveBatchJoinsBeforeLazyBuildDependenciesTeardown) {
+    ScopedTempDir tree("ttprewarm_shutdown");
+    const fs::path active = tree.path_ / "active";
+    const fs::path done = tree.path_ / "done";
+    const fs::path release = tree.path_ / "release";
+    const fs::path teardown = tree.path_ / "teardown";
+    ASSERT_EQ(::mkfifo(release.c_str(), 0600), 0);
+
+    expect_subprocess_success(run_test_subprocess(
+        "KernelPrewarmShutdownChild.WritesManifest",
+        {
+            {kSubprocessModeEnv, "manifest"},
+            {"TT_METAL_CACHE", tree.path_.string()},
+        }));
+
+    const pid_t pid = ::fork();
+    ASSERT_GE(pid, 0) << "fork failed";
+    if (pid == 0) {
+        const std::vector<std::pair<std::string, std::string>> environment = {
+            {kSubprocessModeEnv, "shutdown"},
+            {"TT_METAL_CACHE", tree.path_.string()},
+            {kShutdownActiveEnv, active.string()},
+            {kShutdownDoneEnv, done.string()},
+            {kShutdownReleaseEnv, release.string()},
+            {kShutdownTeardownEnv, teardown.string()},
+        };
+        for (const auto& [name, value] : environment) {
+            if (::setenv(name.c_str(), value.c_str(), /*overwrite=*/1) != 0) {
+                std::_Exit(120);
+            }
+        }
+        const std::string filter_arg =
+            "--gtest_filter=KernelPrewarmShutdownChild.StartsRealBatchAndReturnsWithoutBarrier";
+        char* const args[] = {const_cast<char*>("/proc/self/exe"), const_cast<char*>(filter_arg.c_str()), nullptr};
+        ::execv("/proc/self/exe", args);
+        std::_Exit(121);
+    }
+
+    wait_for_file(active);
+    int status = 0;
+    bool child_exited = false;
+    const auto teardown_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (!fs::exists(teardown) && std::chrono::steady_clock::now() < teardown_deadline) {
+        const pid_t result = ::waitpid(pid, &status, WNOHANG);
+        ASSERT_NE(result, -1) << "waitpid failed";
+        if (result == pid) {
+            child_exited = true;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    {
+        std::ofstream unblock(release);
+        unblock << "continue\n";
+    }
+    if (!child_exited) {
+        ASSERT_EQ(::waitpid(pid, &status, 0), pid);
+    }
+
+    ASSERT_TRUE(WIFEXITED(status)) << "shutdown subprocess terminated abnormally";
+    EXPECT_EQ(WEXITSTATUS(status), 0) << "active prewarm crossed the lazy-build dependency teardown boundary";
+}
+
 TEST_F(OfflineKernelCompileMockFixture, CompileKernelOfflineEmitsExpectedSubtreeForReaderKernel) {
     if (offline_compile_unsupported_under_simulator()) {
         GTEST_SKIP() << "CompileKernelOffline has no precompiled firmware for the simulator build_key "
@@ -398,7 +631,7 @@ TEST_F(MeshDeviceFixture, RuntimeMissingPrecompiledErrorsOnPolicyError) {
     EXPECT_EQ(jit_srcs.delta(), 0u);
 }
 
-TEST_F(MeshDeviceFixture, OfflinePrewarmReflectsEditedKernelBody) {
+TEST_F(IsolatedKernelCacheMeshDeviceFixture, OfflinePrewarmReflectsEditedKernelBodyChild) {
     auto* device = this->devices_.at(0)->get_devices().at(0);
     const auto& build_env =
         BuildEnvManager::get_instance(extract_context_id(device)).get_device_build_env(device->build_id()).build_env;
@@ -423,6 +656,7 @@ TEST_F(MeshDeviceFixture, OfflinePrewarmReflectsEditedKernelBody) {
     // The body edit keeps the path and compile arguments stable, so the manifest key and kernel hash
     // are unchanged. Offline prewarm must compile the current source instead of a captured snapshot.
     write_probe_kernel(kernel_path, kProbeTagV2);
+    kernel_prewarm::wait_for_prewarm();
     const std::size_t built = kernel_prewarm::prewarm_manifest_offline(
         build_env.get_out_root_path(), with_trailing_slash(build_env.get_root_path()));
     ASSERT_GT(built, 0u) << "offline prewarm built nothing";
@@ -432,7 +666,29 @@ TEST_F(MeshDeviceFixture, OfflinePrewarmReflectsEditedKernelBody) {
     EXPECT_FALSE(blob_contains(elf_prewarm, kProbeTagV1)) << "prewarm served the stale kernel body";
 }
 
-TEST_F(MeshDeviceFixture, EditedKernelBodyForcesRecompileNotStaleCacheHit) {
+TEST(KernelPrewarmIsolationTest, OfflinePrewarmReflectsEditedKernelBody) {
+    fs::path tree_path;
+    int status = -1;
+    {
+        ScopedTempDir tree("ttprewarm_offline_isolated");
+        tree_path = tree.path_;
+        const fs::path cache = tree.path_ / "cache";
+        fs::create_directories(cache);
+        status = run_test_subprocess(
+            "IsolatedKernelCacheMeshDeviceFixture.OfflinePrewarmReflectsEditedKernelBodyChild",
+            {
+                {kSubprocessModeEnv, "offline"},
+                {"TT_METAL_CACHE", cache.string()},
+                {"TT_METAL_KERNEL_PREWARM", "1"},
+                {"TT_METAL_SLOW_DISPATCH_MODE", "1"},
+            });
+        EXPECT_TRUE(fs::exists(tree_path / "cache" / "tt-metal-cache"));
+    }
+    EXPECT_FALSE(fs::exists(tree_path));
+    expect_subprocess_success(status);
+}
+
+TEST_F(IsolatedKernelCacheMeshDeviceFixture, EditedKernelBodyForcesRecompileNotStaleCacheHitChild) {
     auto* device = this->devices_.at(0)->get_devices().at(0);
     const auto& build_env =
         BuildEnvManager::get_instance(extract_context_id(device)).get_device_build_env(device->build_id()).build_env;
@@ -463,6 +719,28 @@ TEST_F(MeshDeviceFixture, EditedKernelBodyForcesRecompileNotStaleCacheHit) {
     const std::string elf_v2 = read_kernel_elf_bytes(kernel_subdir);
     EXPECT_TRUE(blob_contains(elf_v2, kProbeTagV2)) << "recompiled binary does not reflect the edit";
     EXPECT_FALSE(blob_contains(elf_v2, kProbeTagV1)) << "stale kernel body survived the edit";
+}
+
+TEST(KernelPrewarmIsolationTest, EditedKernelBodyForcesRecompileNotStaleCacheHit) {
+    fs::path tree_path;
+    int status = -1;
+    {
+        ScopedTempDir tree("ttdephash_isolated");
+        tree_path = tree.path_;
+        const fs::path cache = tree.path_ / "cache";
+        fs::create_directories(cache);
+        status = run_test_subprocess(
+            "IsolatedKernelCacheMeshDeviceFixture.EditedKernelBodyForcesRecompileNotStaleCacheHitChild",
+            {
+                {kSubprocessModeEnv, "dephash"},
+                {"TT_METAL_CACHE", cache.string()},
+                {"TT_METAL_KERNEL_PREWARM", "1"},
+                {"TT_METAL_SLOW_DISPATCH_MODE", "1"},
+            });
+        EXPECT_TRUE(fs::exists(tree_path / "cache" / "tt-metal-cache"));
+    }
+    EXPECT_FALSE(fs::exists(tree_path));
+    expect_subprocess_success(status);
 }
 
 }  // namespace tt::tt_metal

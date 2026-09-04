@@ -4,7 +4,7 @@
 
 **Goal:** Forward-port only the audited production fixes, prove them on the local Blackhole LTX server, and push the tested commit to `origin/ltx-rt`.
 
-**Architecture:** Keep current `ltx-rt` implementations and add four narrow deltas: shared model paths, Ring-SDPA override routing, complete AGMM cache identity, and prewarm interfaces/tests lost in a merge. Tests isolate configuration selection and cache identity on the host, then exercise the affected compiled paths through the broker and live server.
+**Architecture:** Keep current `ltx-rt` implementations and add four narrow deltas: shared model paths, Ring-SDPA override routing, complete AGMM cache identity, and prewarm interfaces/tests lost in a merge. The prewarm delta also gives the background batch deterministic process-exit ownership before its lazy build dependencies. Tests isolate configuration selection, cache identity, process lifetime, and stale-kernel caches, then exercise the affected compiled paths through the broker and live server.
 
 **Tech Stack:** C++20, TT-Metal/TTNN, nanobind, Python/pytest, Bash, CMake through `build_metal.sh`, tt-device-mcp, FastAPI ltx-server.
 
@@ -16,7 +16,9 @@
 - Work only in `/home/smarton/.claude/worktrees/ltx-rt-fixes-2026-09-03` until deployment.
 - Do not port the gate-merge stack, unvalidated tuning knobs, or historical diagnostic instrumentation.
 - Do not key `fused_ternary_scalar`; current cache-hit code rewrites it as a runtime argument.
-- Device work uses `user-tt-device-mcp`; query the queue first and do not set `timeout_sec`.
+- Device work uses `user-tt-device-mcp`; query the queue first and do not pass
+  `timeout_sec` to broker MCP calls. The prewarm wrapper's own timeout
+  option/default is a separate interface and remains permitted.
 - Build through `/home/smarton/tt-workflows/scripts/build.sh`; enable ccache with `build_metal.sh -c`.
 - Keep host compilation outside broker reservations.
 - Use the three-stage prewarm flow for a cold full-pipeline build key.
@@ -228,8 +230,8 @@ common = dict(
     chunks=1,
 )
 plain = run_test_linear(submesh, activation=None, **common)
-gelu = run_test_linear(submesh, activation="gelu", **common)
-for result in (plain, gelu):
+gelu_tanh = run_test_linear(submesh, activation="gelu_tanh", **common)
+for result in (plain, gelu_tanh):
     assert result[0][0][0]["pcc"] > 0.9995
     assert result[0][0][0]["relative_rmse"] < 0.02
 ```
@@ -324,6 +326,9 @@ ttnn/ccl: complete AGMM program cache identity
 ### Task 4: Restore prewarm controls and stale-code coverage
 
 **Files:**
+- Modify: `tt_metal/impl/program/kernel_prewarm.cpp`
+- Modify: `tt_metal/jit_build/depend.hpp`
+- Modify: `tt_metal/jit_build/depend.cpp`
 - Modify: `tt_metal/tools/kernel_prewarm/prewarm_and_submit.sh:63-75`
 - Modify: `ttnn/cpp/ttnn-nanobind/device.cpp`
 - Modify: `tests/ttnn/unit_tests/base_functionality/test_device.py`
@@ -336,6 +341,8 @@ ttnn/ccl: complete AGMM program cache identity
   `kernel_prewarm_cold_start_needed() -> bool`,
   and `kernel_prewarm_offline_compile() -> int`.
 - Guarantees stage-one compound commands inherit capture-only mode.
+- Guarantees a process that does not reach a compile barrier joins an active
+  prewarm batch before the shared executor and dependency cache are destroyed.
 - Restores end-to-end stale-kernel binary coverage.
 
 - [ ] **Step 1: Write the wrapper propagation regression**
@@ -380,10 +387,19 @@ def test_kernel_prewarm_control_bindings_exist():
     assert all(hasattr(ttnn._ttnn.device, name) for name in names)
 ```
 
-- [ ] **Step 3: Restore stale-code tests in their existing test file**
+- [ ] **Step 3: Add the process-exit RED regression**
 
-Restore the helper kernel writer, ELF reader, and the two named
-`MeshDeviceFixture` tests from first parent `8672b35d9bed` into
+Add a host-only parent/child GTest. Seed a real portable compile recipe with a
+blocking compiler, prove the batch has entered that compiler, and let the child
+return normally without `wait_for_prewarm()`. The child must fail if the active
+batch reaches a teardown boundary registered after the executor but before the
+dependency cache. Do not add a production delay or a delay-control environment
+variable.
+
+- [ ] **Step 4: Restore stale-code tests in their existing test file**
+
+Restore the helper kernel writer, ELF reader, and the two named stale-kernel
+behaviors from first parent `8672b35d9bed` into
 `test_offline_kernel_compile.cpp`, where those tests originally lived. Adapt
 them to coexist with the current public offline-compile tests. Add the required
 current headers:
@@ -395,11 +411,13 @@ current headers:
 #include "tt_metal/jit_build/build_env_manager.hpp"
 ```
 
-Keep temporary kernel files unique and remove them at test end. No CMake source
-registration change is needed because the file is already in the API test
-target.
+Run each behavior body in an exec'd child process. Set a unique
+`TT_METAL_CACHE` before that child initializes Metal, disable inherited manifest
+overrides, join any background batch before explicit offline replay, and remove
+the complete temporary tree in the parent. No CMake source registration change
+is needed because the file is already in the API test target.
 
-- [ ] **Step 4: Verify the host-visible tests are RED**
+- [ ] **Step 5: Verify the host-visible tests are RED**
 
 Run:
 
@@ -412,7 +430,15 @@ PYTHONPATH="$PWD/ttnn:$PWD" /home/smarton/tt-metal/python_env/bin/python -m pyte
 
 Expected: wrapper propagation and binding-surface tests fail.
 
-- [ ] **Step 5: Restore the wrapper export and nanobind functions**
+- [ ] **Step 6: Add deterministic prewarm shutdown ownership**
+
+Before launching the background thread, construct its shared executor, executor
+mutex, and dependency-hash cache. After launch, register an `atexit` handler
+that calls the same mutex-serialized `wait_for_prewarm()` used by compile
+barriers. Keep the namespace-global `std::jthread` as a fallback, but do not
+claim its static destructor alone protects later-created dependencies.
+
+- [ ] **Step 7: Restore the wrapper export and nanobind functions**
 
 Change stage one to:
 
@@ -434,11 +460,13 @@ Add:
 and bind the three `KernelPrewarm*` functions in `device_module` using the
 docstrings from first parent `8672b35d9bed`.
 
-- [ ] **Step 6: Build and run host gates**
+- [ ] **Step 8: Build and run host gates**
 
 Run the stamped C++ build. Then run:
 
 ```bash
+build_Release/test/tt_metal/unit_tests_api \
+  --gtest_filter='KernelPrewarmShutdownTest.ActiveBatchJoinsBeforeLazyBuildDependenciesTeardown'
 PYTHONPATH="$PWD/ttnn:$PWD" /home/smarton/tt-metal/python_env/bin/python -m pytest \
   tests/tt_metal/tt_metal/tools/test_kernel_prewarm_wrapper.py \
   tests/ttnn/unit_tests/base_functionality/test_device.py \
@@ -449,7 +477,7 @@ git diff --check
 
 Expected: pass, and `ttnn._ttnn.__file__` resolves inside the integration worktree.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 9: Commit**
 
 Commit all prewarm repair files with subject:
 
@@ -489,44 +517,46 @@ normally; do not bypass, kill, or reset.
 - [ ] **Step 3: Run each stale-code regression separately**
 
 Through `tt_device_job_run` with owner `[claude]smarton`, the worktree as
-`workspace`, and the YAML as `env`, run:
+`workspace`, the YAML as `env`, and no `timeout_sec`, run:
 
 ```bash
 TT_METAL_SLOW_DISPATCH_MODE=1 build_Release/test/tt_metal/unit_tests_api \
-  --gtest_filter='MeshDeviceFixture.OfflinePrewarmReflectsEditedKernelBody'
+  --gtest_filter='KernelPrewarmIsolationTest.OfflinePrewarmReflectsEditedKernelBody'
 ```
 
 Then run:
 
 ```bash
 TT_METAL_SLOW_DISPATCH_MODE=1 build_Release/test/tt_metal/unit_tests_api \
-  --gtest_filter='MeshDeviceFixture.EditedKernelBodyForcesRecompileNotStaleCacheHit'
+  --gtest_filter='KernelPrewarmIsolationTest.EditedKernelBodyForcesRecompileNotStaleCacheHit'
 ```
 
 Require exit code zero for both.
 
 - [ ] **Step 4: Run the AGMM same-process regression**
 
-Through `tt_device_job_run`, run only the new `2x4` identity test:
+Through `tt_device_job_run` without `timeout_sec`, select the cache-identity
+test without a mesh-name filter:
 
 ```bash
 /home/smarton/tt-metal/python_env/bin/python -m pytest \
   models/tt_dit/tests/models/wan2_2/test_all_gather_minimal_matmul_async.py \
-  -k 'cache_identity and 2x4' -s
+  -k 'test_linear_cache_identity' -s -rs
 ```
 
-Require both Torch comparisons and program execution to pass.
+Require at least one passed parameter plus all of its plain and `gelu_tanh`
+Torch comparisons. A skipped-only result does not pass this gate.
 
 - [ ] **Step 5: Run a prewarmed LTX regression**
 
-Use the worktree's `prewarm_and_submit.sh -c` with the device YAML and an
-explicit 600-second timeout for this validation. Run:
+Use the worktree's `prewarm_and_submit.sh -c` with the device YAML. The wrapper
+may use its own default timeout; do not pass `timeout_sec` to any broker MCP
+call. Run:
 
 ```bash
 tt_metal/tools/kernel_prewarm/prewarm_and_submit.sh \
   -e /home/smarton/ltx-rt-integration/device.env.yaml \
   -w /home/smarton/.claude/worktrees/ltx-rt-fixes-2026-09-03 \
-  -t 600 \
   -c -- \
   "/home/smarton/tt-metal/python_env/bin/python -m pytest models/tt_dit/tests/models/ltx/test_pipeline_ltx_distilled.py::test_pipeline_distilled -k bh_2x4sp1tp0 -s"
 ```
@@ -586,17 +616,24 @@ cd /home/smarton/ltx-server
   --data-dir /home/smarton/ltx-server/data mint ltx-rt-fixes-validation
 ```
 
-Keep the raw key outside git.
+Capture the raw key outside git and export it for both validation commands:
+
+```bash
+export LTX_API_KEY='<minted-key>'
+```
 
 - [ ] **Step 5: Validate 720p and 1080p through the server**
 
-Run `tools/model_bringup/validate.py` twice against port 8081:
+Run `/home/smarton/ltx-server/tools/model_bringup/validate.py` twice against
+port 8081:
 
 ```bash
-python tools/model_bringup/validate.py --base-url http://127.0.0.1:8081 \
+/home/smarton/tt-metal/python_env/bin/python \
+  /home/smarton/ltx-server/tools/model_bringup/validate.py --base-url http://127.0.0.1:8081 \
   --model ltx-fast --seconds 6 --size 1280x704 \
   --output /home/smarton/ltx-rt-integration/media/ltx-fast-720p.mp4
-python tools/model_bringup/validate.py --base-url http://127.0.0.1:8081 \
+/home/smarton/tt-metal/python_env/bin/python \
+  /home/smarton/ltx-server/tools/model_bringup/validate.py --base-url http://127.0.0.1:8081 \
   --model ltx-fast --seconds 6 --size 1920x1088 \
   --output /home/smarton/ltx-rt-integration/media/ltx-fast-1080p.mp4
 ```

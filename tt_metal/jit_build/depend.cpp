@@ -287,6 +287,8 @@ bool dependencies_up_to_date(const std::string& out_dir, const std::string& obj)
     return up_to_date;
 }
 
+void initialize_file_hash_cache() { (void)FileHashCache::instance(); }
+
 void clear_file_hash_cache() { FileHashCache::instance().clear(); }
 
 }  // namespace tt::jit_build

@@ -31,6 +31,18 @@ only the merge-resolution losses:
 - Restore and adapt the two stale-code regressions:
   `OfflinePrewarmReflectsEditedKernelBody` and
   `EditedKernelBodyForcesRecompileNotStaleCacheHit`.
+- Give the background prewarm batch explicit process-exit ownership: join it
+  before the shared executor and lazy dependency-hash cache can be destroyed,
+  without reducing device-init overlap or concurrent barrier safety.
+- Add a host-only subprocess regression that starts a real, blocked prewarm
+  compile and returns normally without calling the compile barrier.
+- Run each stale-code behavior in a child process whose `TT_METAL_CACHE` is set
+  before Metal initializes, and remove its complete temporary cache tree.
+
+The process-lifetime work affects
+`tt_metal/impl/program/kernel_prewarm.cpp`,
+`tt_metal/jit_build/depend.{hpp,cpp}`, and
+`tests/tt_metal/tt_metal/api/test_offline_kernel_compile.cpp`.
 
 Do not replace current prewarm C++ implementation files with historical blobs.
 
@@ -110,9 +122,12 @@ The LTX file is the served file and has canonical SHA-256
 
 ### Device gates
 
-- Query the broker queue first and never set a custom timeout.
+- Query the broker queue first. Broker MCP calls must not pass `timeout_sec`;
+  the prewarm wrapper's separate timeout option and default remain permitted.
 - Run each restored stale-code prewarm regression separately.
-- Run the same-process AGMM activation-alias regression.
+- Run the same-process AGMM activation-alias regression by selecting
+  `test_linear_cache_identity` without a mesh-name filter, and require at least
+  one passed parameter so a skipped-only run cannot satisfy the gate.
 - Run one prewarmed current LTX transformer/pipeline regression on
   `bh_2x4sp1tp0`.
 
@@ -122,9 +137,11 @@ The LTX file is the served file and has canonical SHA-256
   discarding the pre-existing path repair.
 - Restart the local LTX server through its deployment lock.
 - Require healthy/ready status and an empty failed-job result.
-- Generate, download, and validate one 6-second 720p and one 6-second 1080p
-  `ltx-fast` video. Each output must contain video and audio streams, have the
-  requested dimensions and duration, and pass non-flat luma validation.
+- Mint, capture, and export `LTX_API_KEY`, then generate, download, and validate
+  one 6-second 720p and one 6-second 1080p `ltx-fast` video with
+  `/home/smarton/ltx-server/tools/model_bringup/validate.py`. Each output must
+  contain video and audio streams, have the requested dimensions and duration,
+  and pass non-flat luma validation.
 
 ### Review and push
 

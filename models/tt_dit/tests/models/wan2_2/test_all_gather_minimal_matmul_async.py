@@ -34,6 +34,30 @@ def assert_quality(torch_output, tt_output):
     }
 
 
+def _resolve_fused_activation(activation):
+    if activation is None:
+        return None
+    if activation == "gelu":
+        return (ttnn.UnaryOpType.GELU, False)
+    if activation == "gelu_tanh":
+        return ttnn.UnaryOpType.GELU_TANH
+    raise AssertionError(f"Unsupported activation: {activation}")
+
+
+def _apply_torch_activation(torch_output, activation):
+    if activation is None:
+        return torch_output
+    if activation == "gelu":
+        return torch.nn.functional.gelu(torch_output)
+    if activation == "gelu_tanh":
+        return torch.nn.functional.gelu(torch_output, approximate="tanh")
+    raise AssertionError(f"Unsupported activation: {activation}")
+
+
+def test_gelu_tanh_activation_helper_uses_production_variant():
+    assert _resolve_fused_activation("gelu_tanh") == ttnn.UnaryOpType.GELU_TANH
+
+
 def run_test_linear_impl(
     device,
     torch_input,
@@ -108,11 +132,7 @@ def run_test_linear_impl(
     else:
         persistent_output_buffers = []
 
-    activation_fn = None
-    if activation == "gelu":
-        activation_fn = (ttnn.UnaryOpType.GELU, False)
-    else:
-        assert activation is None, f"Unsupported activation: {activation}"
+    activation_fn = _resolve_fused_activation(activation)
 
     if fuse_addcmul:
         if sp_axis == 1:
@@ -157,8 +177,7 @@ def run_test_linear_impl(
         if fuse_addcmul:
             torch_output = torch.addcmul(torch_addcmul_a, torch_output, torch_addcmul_b, value=addcmul_scalar)
 
-        if activation == "gelu":
-            torch_output = torch.nn.functional.gelu(torch_output)
+        torch_output = _apply_torch_activation(torch_output, activation)
 
         torch_output = torch.chunk(torch_output, chunks, dim=-1)
 
@@ -739,8 +758,11 @@ def test_linear(
     [
         pytest.param(
             (2, 4),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112},
-            marks=pytest.mark.skipif(ttnn.get_num_devices() != 8, reason="2x4 fabric requires an 8-device host"),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "trace_region_size": 90112,
+                "require_exact_physical_num_devices": True,
+            },
             id="2x4",
         ),
         pytest.param(
@@ -749,8 +771,8 @@ def test_linear(
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
                 "fabric_router_config": create_fabric_router_config(4096),
                 "trace_region_size": 90112,
+                "require_exact_physical_num_devices": True,
             },
-            marks=pytest.mark.skipif(ttnn.get_num_devices() != 32, reason="4x8 fabric requires a 32-device host"),
             id="4x8",
         ),
     ],
@@ -780,8 +802,8 @@ def test_linear_cache_identity(mesh_device):
         chunks=1,
     )
     plain = run_test_linear(submesh, activation=None, **common)
-    gelu = run_test_linear(submesh, activation="gelu", **common)
-    for activation_results in (plain, gelu):
+    gelu_tanh = run_test_linear(submesh, activation="gelu_tanh", **common)
+    for activation_results in (plain, gelu_tanh):
         for iteration_results in activation_results:
             for chunk_results in iteration_results:
                 for device_result in chunk_results:
@@ -840,8 +862,7 @@ def run_test_linear_fsdp(
         torch_output = torch_input @ weight_input
         if bias_input is not None:
             torch_output = torch_output + bias_input
-        if activation == "gelu":
-            torch_output = torch.nn.functional.gelu(torch_output)
+        torch_output = _apply_torch_activation(torch_output, activation)
         torch_output_chunks = torch.chunk(torch_output, chunks, dim=-1)
 
     # --- K-sharding ---
@@ -923,11 +944,7 @@ def run_test_linear_fsdp(
             mesh_mapper=ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=b_shard_dims),
         )
 
-    activation_fn = None
-    if activation == "gelu":
-        activation_fn = (ttnn.UnaryOpType.GELU, False)
-    else:
-        assert activation is None, f"Unsupported activation: {activation}"
+    activation_fn = _resolve_fused_activation(activation)
 
     ccl_cores = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid.x - 1, core_grid.y - 1))}

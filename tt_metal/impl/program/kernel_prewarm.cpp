@@ -32,6 +32,7 @@
 #include <fmt/format.h>
 #include <tt-logger/tt-logger.hpp>
 
+#include "common/executor.hpp"
 #include "impl/jit_server/rpc.capnp.h"
 #include "jit_build/build.hpp"
 #include "jit_build/depend.hpp"
@@ -417,8 +418,9 @@ std::unordered_map<std::string, std::string> build_firmware_filename_map(const s
 }
 
 std::once_flag g_launch_once;
+std::mutex g_prewarm_join_mutex;
 // A process can exit without compiling a kernel covered by the batch, so no compile barrier joins it.
-// jthread also joins that completed or in-flight batch during static teardown.
+// The explicit exit handler joins before lazy build dependencies; jthread remains an auto-join fallback.
 std::jthread g_prewarm_thread;
 
 // True once a prewarm batch has been spawned for this process's build_key. Gates the op-by-op
@@ -574,6 +576,12 @@ std::size_t run_prewarm(
     return launched;
 }
 
+void initialize_prewarm_shutdown_dependencies() {
+    (void)detail::GetExecutorMutex();
+    (void)detail::GetExecutor();
+    jit_build::initialize_file_hash_cache();
+}
+
 }  // namespace
 
 const char* manifest_write_path() {
@@ -700,6 +708,9 @@ void maybe_launch_prewarm(
         }
 
         g_batch_launched.store(true, std::memory_order_release);
+        // These function-local statics must be registered for teardown before the prewarm exit
+        // handler. The handler is then newer and runs first in the shared LIFO atexit queue.
+        initialize_prewarm_shutdown_dependencies();
         g_prewarm_thread =
             std::jthread([reqs = std::move(requests), out_kernel_root, firmware_root, build_key, root_dir]() mutable {
                 try {
@@ -708,6 +719,10 @@ void maybe_launch_prewarm(
                     log_warning(tt::LogMetal, "kernel prewarm aborted: {}", e.what());
                 }
             });
+        if (std::atexit(wait_for_prewarm) != 0) {
+            log_warning(tt::LogMetal, "kernel prewarm: could not register early shutdown join; joining now");
+            wait_for_prewarm();
+        }
     });
 }
 
@@ -761,8 +776,7 @@ std::size_t prewarm_manifest_offline(const std::string& out_root, const std::str
 void wait_for_prewarm() {
     // ProgramImpl::compile may run on more than one thread; serialize the join so only one thread
     // joins the prewarm thread (joining a std::thread from two threads is UB).
-    static std::mutex join_mutex;
-    std::lock_guard<std::mutex> lk(join_mutex);
+    std::lock_guard<std::mutex> lk(g_prewarm_join_mutex);
     if (g_prewarm_thread.joinable()) {
         g_prewarm_thread.join();
     }
