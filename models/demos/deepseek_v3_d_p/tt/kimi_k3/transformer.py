@@ -35,7 +35,7 @@ from models.demos.deepseek_v3_d_p.tt.kimi_k3.kda_state import KdaStateCache
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.layer_schedule import KimiK3LayerSchedule
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.residual import TtAttnResResidual
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import mark_layer_cached
-from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl, per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
 
@@ -163,6 +163,11 @@ class TtKimiK3Transformer(LightweightModule):
                 hidden_size=model_cfg.EMB_SIZE,
                 eps=model_cfg.RMS_NORM_EPS,
                 tp_axis=tp_axis,
+                # Hand AttnRes the model's own CCL pools. Without this it falls back to one fixed,
+                # privately-allocated semaphore set, which is only safe while nothing else has a
+                # collective in flight on the same axis -- and Kimi-K3's KDA layers cycle tt_ccl's
+                # pools on exactly this axis between every AttnRes read.
+                tt_ccl=get_tt_ccl(mesh_device),
                 # The statistics fold engages at FOLD_MIN_CANDIDATES (4) sealed snapshots and swaps
                 # the collective for a permute/composite-all_reduce pair. A pipelined rank reaches
                 # that depth on its FIRST layer (it inherits `first_layer_idx // 12` snapshots),
