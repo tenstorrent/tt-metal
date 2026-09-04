@@ -12,7 +12,7 @@ from models.perf.benchmarking_utils import BenchmarkProfiler
 from tracy import signpost
 
 from tests.ttnn.utils_for_testing import assert_equal, assert_allclose, assert_with_pcc, assert_with_ulp
-from models.common.utility_functions import skip_for_slow_dispatch, run_for_blackhole, skip_for_wormhole_b0
+from models.common.utility_functions import skip_for_slow_dispatch, run_for_blackhole
 
 shapes = [[[1, 1, 32, 32]], [[3, 1, 320, 384]], [[1, 1, 128, 7328]]]
 
@@ -1057,7 +1057,6 @@ def test_tilize_row_major_to_tiny_tile(device, tensor_shape, shard_layout, tile_
     assert_equal(torch_input, ttnn.to_torch(tt_output))
 
 
-@skip_for_wormhole_b0("LLK for tiny tiles not fully supported on Wormhole B0")
 @pytest.mark.parametrize(
     "tensor_shape, shard_layout",
     [
@@ -1066,6 +1065,7 @@ def test_tilize_row_major_to_tiny_tile(device, tensor_shape, shard_layout, tile_
         ([1, 1, 64, 256], None),
         ([1, 1, 64, 128], None),
         ([1, 1, 16, 128], None),
+        ([1, 1, 8, 128], None),
         # Sharded input/output (invokes the sharded retile factory).
         ([1, 1, 32, 1024], ttnn.TensorMemoryLayout.WIDTH_SHARDED),
         ([1, 1, 1024, 32], ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
@@ -1126,7 +1126,6 @@ def test_tilize_retile(device, tensor_shape, shard_layout, input_tile_shape, out
 # The packer destination format must be reconfigured to match the output CB before
 # the tilize phase; without it the dtype conversion is silently skipped and the
 # output tensor carries data in the wrong format.
-@skip_for_wormhole_b0("LLK for tiny tiles not fully supported on Wormhole B0")
 @pytest.mark.parametrize(
     "in_dtype, out_dtype, min_pcc",
     [
