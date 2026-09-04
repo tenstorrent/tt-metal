@@ -24,6 +24,7 @@ void kernel_main() {
 
 #ifndef WELFORD_TWO_PASS
     constexpr auto scaler_bits = get_arg(args::scaler_bits);
+    constexpr auto tiles_per_batch = get_arg(args::tiles_per_batch);
 #endif
     constexpr bool sfpu_two_pass = get_arg(args::use_welford) != 0;
     constexpr auto fp32_mode = get_arg(args::enable_fp32_sfpu) != 0 ? ReduceFp32Mode::Accurate : ReduceFp32Mode::Fast;
@@ -56,6 +57,13 @@ void kernel_main() {
     DataflowBuffer dfb_in0(dfb::in0);
 
     const uint32_t tile_bytes = dfb_in0.get_tile_size();
+
+#ifdef WELFORD_TWO_PASS
+    constexpr bool batch_reads = false;
+#else
+    // Batch only when row_chunk matches the host's tiles_per_batch; SFPU shortens the chunk.
+    constexpr bool batch_reads = (row_chunk == tiles_per_batch);
+#endif
 
     uint32_t w = curr_col_in_batch;
 #ifndef WELFORD_TWO_PASS_L1_REPLAY
@@ -137,17 +145,33 @@ void kernel_main() {
             }
         } else {
             uint32_t chunk_end = std::min(i + row_chunk, num_cols);
+            uint32_t curr_id = col_start_tile_id;
             uint32_t reset_w = w;
             uint32_t reset_col_start = col_start_tile_id;
+            // Tail is shorter than the CB batch, so the reserve would not be contiguous.
+            const bool batch_chunk = batch_reads && ((chunk_end - i) == row_chunk);
             for (uint32_t j = 0; j < Ht; ++j) {
-                uint32_t curr_id = reset_curr_id + j * Wt;
                 w = reset_w;
                 col_start_tile_id = reset_col_start;
+                if (batch_chunk) {
+                    dfb_in0.reserve_back(row_chunk);
+                }
+                uint32_t slot = 0;
                 for (uint32_t k = i; k < chunk_end; ++k) {
-                    dfb_in0.reserve_back(onetile);
-                    noc.async_read(tensor_accessor, dfb_in0, tile_bytes, {.page_id = curr_id}, {.offset_bytes = 0});
-                    noc.async_read_barrier();
-                    dfb_in0.push_back(onetile);
+                    if (batch_chunk) {
+                        noc.async_read(
+                            tensor_accessor,
+                            dfb_in0,
+                            tile_bytes,
+                            {.page_id = curr_id},
+                            {.offset_bytes = slot * tile_bytes});
+                        ++slot;
+                    } else {
+                        dfb_in0.reserve_back(onetile);
+                        noc.async_read(tensor_accessor, dfb_in0, tile_bytes, {.page_id = curr_id}, {.offset_bytes = 0});
+                        noc.async_read_barrier();
+                        dfb_in0.push_back(onetile);
+                    }
 
                     ++w;
 
@@ -160,6 +184,11 @@ void kernel_main() {
                         ++col_start_tile_id;
                     }
                 }
+                if (batch_chunk) {
+                    noc.async_read_barrier();
+                    dfb_in0.push_back(row_chunk);
+                }
+                curr_id = reset_curr_id + (j + 1) * Wt;  // stride in H
             }
         }
 #endif
