@@ -34,29 +34,29 @@ Both API versions run the same test cases but use different underlying implement
 
 | Name                        | ID(s)                           | Description                                                                             |
 | ----------                  | -----                           | ----------------------------------------------------                                    |
-| DRAM Unary                  | 0-3, 40                         | Transactions between DRAM and a single Tensix core.                                     |
-| One to One                  | 4, 50, 150-151, 158             | Write transactions between two Tensix cores.                                            |
-| One From One                | 5, 51, 152-153, 159             | Read transactions between two Tensix cores.                                             |
+| DRAM Unary                  | 0-3, 40-43                         | Transactions between DRAM and a single Tensix core.                                     |
+| One to One                  | 4, 50, 150-151, 158, 160             | Write transactions between two Tensix cores.                                            |
+| One From One                | 5, 51, 152-153, 159, 161             | Read transactions between two Tensix cores.                                             |
 | One to all                  | 6-8, 52, 154-155, 170-172       | Writes transaction from one core to all cores.                                          |
 | One to all Multicast        | 9-14, 24-26, 53-54, 56, 100-102, 173-180 | Writes transaction from one core to all cores using multicast.                   |
-| One From All                | 15, 30, 156-157                 | Read transactions between one gatherer Tensix core and multiple sender Tensix cores.    |
-| Loopback                    | 16, 55                          | Does a loopback operation where one cores writes to itself.                             |
+| One From All                | 15, 30, 156-157, 162-165                 | Read transactions between one gatherer Tensix core and multiple sender Tensix cores.    |
+| Loopback                    | 16, 44-45, 55                          | Does a loopback operation where one cores writes to itself.                             |
 | Reshard Hardcoded           | 17-20                           | Uses existing reshard tests to analyse their bandwidth and latency. **(Slow Dispatch)** |
 | Conv Hardcoded              | 21-23                           | Uses existing conv tests to analyse their bandwidth and latency. **(Slow Dispatch)**    |
 | Interleaved Page Read/Write | 61-69, 71-75                    | Reads and writes pages between interleaved buffers and a Tensix core.                   |
-| One Packet Read/Write       | 80-83                           | Reads or writes packets between two Tensix cores.                                       |
-| DRAM Sharded Read           | 84-87                           | Reads from sharded DRAM into one core.                                                  |
-| Multi Interleaved           | 110-127                         | Reads and writes pages between interleaved DRAM buffers and multiple Tensix cores.      |
+| One Packet Read/Write       | 80-83, 90-93                           | Reads or writes packets between two Tensix cores.                                       |
+| DRAM Sharded Read           | 84-87, 94-97                           | Reads from sharded DRAM into one core.                                                  |
+| Multi Interleaved           | 110-130                         | Reads and writes pages between interleaved DRAM buffers and multiple Tensix cores.      |
 | Core Bidrectional           | 140-148                         | Tensix core reads from and writes to another Tensix core simultaneously.                |
 | Deinterleave                | 200-201                         | Tests deinterleaving. **(Slow Dispatch)**                                               |
-| All to all                  | 300-308                         | Write transactions from multiple cores to multiple cores.                               |
-| All from all                | 310-318                         | Read transactions from multiple cores to multiple cores.                                |
-| Atomic Semaphore Increment  | 319-320                         | Atomic semaphore increment + atomic barrier performance tests.                          |
-| Multicast Atomic Semaphore  | 321-328                         | Multicast atomic semaphore increment using `noc_semaphore_inc_multicast`.               |
+| All to all                  | 300-316                         | Write transactions from multiple cores to multiple cores.                               |
+| All from all                | 320-336                         | Read transactions from multiple cores to multiple cores.                                |
+| Atomic Semaphore Increment  | 340-341                         | Atomic semaphore increment + atomic barrier performance tests.                          |
+| Multicast Atomic Semaphore  | 342-353                         | Multicast atomic semaphore increment using `noc_semaphore_inc_multicast`.               |
 | I2S Hardcoded               | 400-405                         | Tests interleaved to sharded data movement operations for different memory layouts.     |
 | Inline Direct Write         | 500-501, 507                    | Inline DW transactions between two (unicast) or multiple (multicast) Tensix cores.      |
 | DRAM Neighbour Tests        | 502-505, 508-509                | Each core reads from its closest DRAM.                                                  |
-| Transaction ID              | 600-602, 610-611                | Tests the usage and effects of transaction IDs in NOC transactions.                     |
+| Transaction ID              | 600-602, 610-611, 620-622, 630-631                | Tests the usage and effects of transaction IDs in NOC transactions.                     |
 | PCIe Read Bandwidth         | 603, 605                        | Measures PCIe read bandwidth from host memory to L1 on a single Tensix core.            |
 | PCIe Write Bandwidth        | 604                             | Measures PCIe write bandwidth from L1 to host memory on a single Tensix core.           |
 | Matmul                      | 1000-1231                       | 1D v1, 1D v2, and 2D matmul DM tests across grid shapes, subblock dims, K depths, non-origin starts, and DRAM banks. Per-variant offsets: 1D v1 +0 (1000-1031), 1D v2 +100 (1100-1131), 2D +200 (1200-1231). 1D: in0 row multicast + in1 column multicast (row 0 reads its DRAM slice once, then multicasts down the column). 2D: in0 row multicast + in1 column multicast (all L1, no DRAM). Perf-characterization sweeps: 1029 (4x4 K=1 sub_r {1..256}), 1030 (4x4 K=8 (sub_r, sub_c) 2D), 1031 (8x7 K=8 (sub_r, sub_c) 2D). |
@@ -157,3 +157,87 @@ By default, per-core bandwidth is computed as `(Number of transactions × Transa
 DeviceTimestampedData("Per-core bytes", actual_bytes_pushed_by_this_core);
 ```
 When present, `gather_bw_per_core` uses this stamp as the numerator for that core, exposing sender-vs-receiver asymmetry on the heatmap. All five matmul multicast kernels (`in0_kernel.cpp`, `in0_kernel_v2.cpp`, `in0_kernel_2d.cpp`, `in1_kernel.cpp`, `in1_kernel_2d.cpp`) do this so the heatmaps correctly show which cores are doing the multicast work.
+
+## Data Movement Web Viewer
+
+The data movement web viewer is a static application that compiles the
+reported CSV files into interactive bandwidth and latency charts. It groups tests by
+directory, supports search and tags, lets the user select an architecture, and creates
+filters for sweep dimensions found in the CSV. It also displays the test-directory
+README, an optional communication-pattern diagram, and FAQ content. It is currently
+hosted in [tt-low-level-documentation](https://github.com/tenstorrent/tt-low-level-documentation).
+
+It is primarily meant to support generalizable performance sweep tests; it plots
+test results from most of our relevant tests, but not every single test. Some
+examples of what would not be present include Directed Ideal tests and hardcoded tests
+(e.g. reshard_hardcoded).
+
+Currently, only Blackhole and Wormhole test results are supported.
+
+The viewer reads its inputs from two repositories at runtime:
+
+- `tt-metal` supplies `python/test_mappings/test_information.yaml`,
+    `python/test_mappings/web_viewer_groups.yaml`, and the application files.
+- `tt-low-level-documentation` supplies the architecture-specific CSV files under
+    `data_movement_doc/perf_plots/<architecture>/csv/` and diagram images under
+    `data_movement_doc/web_images/`.
+
+### Adding a Test to the Viewer
+
+Adding a C++ test does not automatically make it visible in the viewer. Complete the
+following steps after adding the test and its test ID:
+
+1. Add the test to `python/test_mappings/test_information.yaml` with the correct
+     `name` and `directory`. Add `web_viewer_name` to expose it in the viewer. The
+     value of `name` must match the CSV basename produced by the reporter; the viewer
+     requests `<name>.csv`.
+2. If the test has a bandwidth convention, set `bandwidth_mode` (`per_core` or
+     `combined`) and `bandwidth_unit` (`bpc` or `gbps`) in the same entry. Add the
+     packet-test fields (`memory_type`, `mechanism`, and `pattern`) when applicable.
+     These metadata values are written into the CSV and become chart dimensions or
+     displayed constants.
+3. Add or update the matching directory entry in
+     `python/test_mappings/web_viewer_groups.yaml`. Set the sidebar `name` and useful
+     `tags`; optionally add an `image` path and group-specific `faq` entries. The group
+     key must be the same directory value used in `test_information.yaml`. Tag FAQ
+     entries belong under the top-level `tags` section, and general FAQ entries belong
+     under `universal`.
+4. Run the test with reporting enabled so that the CSV is generated through
+     `python/stats_reporter.py`. For example:
+     ```bash
+     pytest tests/tt_metal/tt_metal/data_movement/python/test_data_movement.py \
+             --gtest-filter="<test-filter>" --report
+     ```
+5. Publish the generated CSV for every supported architecture under the matching
+     `data_movement_doc/perf_plots/<architecture>/csv/` directory in `tt-low-level-documentation`.
+     Do not change the CSV filename, it should be identical to its `name` value
+     from the yaml.
+6. If adding an image, upload it to the `data_movement_doc/web_images/` directory
+    in `tt-low-level-documentation`.
+
+The chart code treats columns as follows: known internal and metric columns are
+reserved, columns with one value are shown as test information, and columns with
+multiple values become sweep dimensions. The preferred x-axis is transaction size,
+then grid dimensions, then master/subordinate grid dimensions. Consequently, a new
+CSV should have a header, numeric metric values, and stable dimension names. The
+reporter normally provides `Latency (cycles)` and either `Bandwidth (bytes/cycle)`,
+`Bandwidth (GB/s)`, or `Combined Bandwidth (bytes/cycle)`.
+
+### Maintaining the Viewer
+
+The app files are located on the `gh-pages` branch of `tt-low-level-documentation`;
+this branch must not be deleted.
+- Keep `test_information.yaml` and `web_viewer_groups.yaml` synchronized with test
+    directories and generated CSV names. Remove or rename published CSVs deliberately;
+    the viewer probes each known architecture and hides tests for which no CSV exists.
+- Update `KNOWN_ARCHITECTURES` and `ARCH_FREQ_GHZ` in `app.js` when adding
+    an architecture. Verify that its CSV directory and latency conversion frequency
+    are also available.
+- Update `METRIC_COLUMNS`, `INTERNAL_COLUMNS`, or `X_AXIS_EXCLUDED` when the CSV
+    schema gains a column that should not be plotted as a sweep dimension. Otherwise
+    the new column may become an unexpected filter or x-axis.
+- Keep the CDN dependency versions and Subresource Integrity hashes in
+    `index.html` together. The viewer currently uses Papa Parse for CSV,
+    js-yaml for mappings, and Plotly for charts.
+- If new useful information arises or there are consistent points of confusion regarding
+    any particular tests, they can be added as FAQs to `web_viewer_groups.yaml`.

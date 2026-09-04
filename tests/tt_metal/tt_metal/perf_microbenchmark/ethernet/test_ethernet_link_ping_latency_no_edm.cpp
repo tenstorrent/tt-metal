@@ -9,7 +9,6 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/tt_metal_profiler.hpp>
 #include <algorithm>
 #include <cstdlib>
 #include <exception>
@@ -89,15 +88,15 @@ private:
 };
 
 struct ChipSenderReceiverEthCore {
-    CoreCoord sender_core;
-    CoreCoord receiver_core;
+    tt::tt_metal::CoreCoord sender_core;
+    tt::tt_metal::CoreCoord receiver_core;
 };
 
 std::tuple<tt_metal::Program, tt_metal::Program> build(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& /*device0*/,
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& /*device1*/,
-    CoreCoord eth_sender_core,
-    CoreCoord eth_receiver_core,
+    tt::tt_metal::CoreCoord eth_sender_core,
+    tt::tt_metal::CoreCoord eth_receiver_core,
     std::size_t num_samples,
     std::size_t sample_page_size,
     std::size_t num_channels,
@@ -141,8 +140,8 @@ void run(
     tt_metal::KernelHandle local_kernel,
     tt_metal::KernelHandle remote_kernel,
 
-    CoreCoord eth_sender_core,
-    CoreCoord eth_receiver_core,
+    tt::tt_metal::CoreCoord eth_sender_core,
+    tt::tt_metal::CoreCoord eth_receiver_core,
     std::size_t num_samples,
     std::size_t sample_page_size,
     std::size_t /*max_channels_per_direction*/) {
@@ -252,7 +251,7 @@ int main(int argc, char** argv) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     do {
         TT_FATAL(eth_sender_core_iter != eth_sender_core_iter_end, "No active ethernet core found for device 0");
-        if (cluster.is_ethernet_link_up(device_0->get_devices()[0]->id(), *eth_sender_core_iter)) {
+        if (cluster.is_ethernet_link_up(device_0->get_device_ids()[0], *eth_sender_core_iter)) {
             std::tie(device_id, eth_receiver_core) =
                 device_0->get_devices()[0]->get_connected_ethernet_core(*eth_sender_core_iter);
             eth_sender_core = *eth_sender_core_iter;

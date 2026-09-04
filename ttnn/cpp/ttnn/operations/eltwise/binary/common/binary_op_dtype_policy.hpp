@@ -20,10 +20,18 @@ inline constexpr std::array float_only{DT::BFLOAT16, DT::FLOAT32, DT::BFLOAT8_B,
 
 inline constexpr std::array float_and_int32{DT::BFLOAT16, DT::FLOAT32, DT::BFLOAT8_B, DT::BFLOAT4_B, DT::INT32};
 
-inline constexpr std::array maximum_minimum{
-    DT::BFLOAT16, DT::FLOAT32, DT::BFLOAT8_B, DT::BFLOAT4_B, DT::UINT32, DT::INT32};
+inline constexpr std::array float_and_int32_uint32{
+    DT::BFLOAT16, DT::FLOAT32, DT::BFLOAT8_B, DT::BFLOAT4_B, DT::INT32, DT::UINT32};
 
 inline constexpr std::array int32_only{DT::INT32};
+
+// Allowed input (tensor A) dtypes for REQUANT/DEQUANT: an int32 quantized tile, or a
+// uint8/int8 quantized tile that reaches DST as a zero-extended byte before the SFPU casts it
+// to fp32. int8 is deliberately read through the UInt8 unpacker, so the byte in DST holds raw 2's
+// complement. QUANT is intentionally NOT mapped to this set: its input A is the original floating-point
+// tensor (float_only), and only its *output* can be uint8/int8. Both round via FP32_TO_UINT8.
+// Do not add BinaryOpType::QUANT here - that would wrongly accept integer inputs.
+inline constexpr std::array requant_dequant{DT::INT32, DT::UINT8, DT::INT8};
 
 inline constexpr std::array bitwise_shift{DT::UINT32, DT::UINT16, DT::INT32};
 

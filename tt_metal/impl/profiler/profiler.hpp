@@ -271,6 +271,16 @@ public:
     // Device-core Syncdata
     std::map<CoreCoord, SyncInfo> device_core_sync_info;
 
+    // Optional rt-profiler clock anchor (host_anchor TSC, device_anchor cycle, frequency GHz) set by
+    // RealtimeProfilerManager, kept in lockstep with the rt Tracy calibration so worker zones render against the same
+    // anchor. Valid because all cores share one device wall clock.
+    struct RealtimeSyncLine {
+        double host_anchor = 0.0;
+        double device_anchor = 0.0;
+        double frequency = 0.0;
+    };
+    std::optional<RealtimeSyncLine> realtime_sync_line;
+
     // DRAM Vector
     std::vector<uint32_t> profile_buffer;
 
@@ -289,6 +299,9 @@ public:
 
     // Freshen device logs
     void freshDeviceLog();
+
+    // Get the output dir for noc trace data
+    const std::filesystem::path& getNocTraceDataOutputDir() const { return noc_trace_data_output_dir; }
 
     // Change the output dir of device profile logs
     void setOutputDir(const std::string& new_output_dir);
@@ -310,10 +323,6 @@ public:
         ProfilerDataBufferSource data_source = ProfilerDataBufferSource::DRAM,
         const std::optional<ProfilerOptionalMetadata>& metadata = {},
         const std::optional<std::map<CoreCoord, std::set<tracy::RiscType>>>& riscs_to_include = {});
-
-    void dumpRoutingInfo() const;
-
-    void dumpClusterCoordinates() const;
 
     // Dump device results to files and tracy
     void dumpDeviceResults(bool is_mid_run_dump = false);

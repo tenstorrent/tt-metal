@@ -46,7 +46,7 @@ void DramPrefetcherValidatorDeviceOperation::validate_on_program_cache_hit(
 
 DramPrefetcherValidatorDeviceOperation::spec_return_value_t
 DramPrefetcherValidatorDeviceOperation::compute_output_specs(const operation_attributes_t&, const tensor_args_t&) {
-    return std::vector<ttnn::TensorSpec>{};
+    return std::vector<tt::tt_metal::TensorSpec>{};
 }
 
 DramPrefetcherValidatorDeviceOperation::tensor_return_value_t
@@ -54,20 +54,36 @@ DramPrefetcherValidatorDeviceOperation::create_output_tensors(const operation_at
     return std::vector<ttnn::Tensor>{};
 }
 
-tt::stl::hash::hash_t DramPrefetcherValidatorDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t DramPrefetcherValidatorDeviceOperation::compute_program_hash(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
-    // GlobalCircularBuffer / Tensor aren't reflection-hashable here; pick the bits that
-    // determine Program shape: scalar attrs, GCB identity, the source tensor's DRAM
-    // address (compile-time arg via TensorAccessorArgs), and its dataformat.
+    // Everything create_at reads has to be keyed, because override_runtime_arguments is a no-op here.
+    // The whole GlobalCircularBuffer goes in rather than just its config address: the sender/receiver
+    // core mapping becomes the kernels' core ranges and their compile- and runtime args, and the size
+    // and buffer type set the CB geometry, none of which a recycled config address distinguishes.
+    // On the tensor side, create_at derives k_tiles, total_n_tiles, n_per_recv_tiles, is_recv_contig,
+    // tile_bytes and the CB page sizes from the real shape, tile and memory config, and emits
+    // TensorAccessorArgs as compile-time args, so the address alone is not a sufficient identity.
     const auto* tensor_buffer = tensor_args.source_tensor.buffer();
     const tt::DataFormat dataformat = tt::tt_metal::datatype_to_dataformat_converter(tensor_args.source_tensor.dtype());
     return ttsl::hash::hash_objects_with_default_seed(
         ttsl::hash::type_hash<DramPrefetcherValidatorDeviceOperation>,
         attrs.num_layers,
         attrs.print_stride,
-        static_cast<uint64_t>(attrs.global_cb->config_address()),
+        attrs.streaming,
+        attrs.rotation,
+        attrs.global_cb.has_value() ? std::hash<tt::tt_metal::experimental::GlobalCircularBuffer>{}(*attrs.global_cb)
+                                    : std::size_t{0},
+        // std::hash covers the GCB's structure (core mapping, size, buffer type) but not which
+        // allocation it is. The remote CB is created against the GCB and bakes both of these addresses
+        // at build time, and UpdateDynamicCircularBufferAddress refuses to re-point a GCB-backed CB, so
+        // two same-shaped GCBs at different allocations must not share a program.
+        static_cast<uint64_t>(attrs.global_cb.has_value() ? attrs.global_cb->buffer_address() : 0),
+        static_cast<uint64_t>(attrs.global_cb.has_value() ? attrs.global_cb->config_address() : 0),
         static_cast<uint64_t>(tensor_buffer != nullptr ? tensor_buffer->address() : 0),
-        static_cast<uint32_t>(dataformat));
+        static_cast<uint32_t>(dataformat),
+        tensor_args.source_tensor.tensor_spec().page_config(),
+        tensor_args.source_tensor.padded_shape(),
+        tensor_args.source_tensor.memory_config());
 }
 
 ttnn::device_operation::CachedProgram<DramPrefetcherValidatorDeviceOperation::ProgramFactory::shared_variables_t>
@@ -143,12 +159,16 @@ DramPrefetcherValidatorDeviceOperation::ProgramFactory::create_at(
     // Layout detection: ND_SHARDED tensors with `num_shards == ring_size` are
     // the receiver-contiguous DRAM-core layout. Under ROUND_ROBIN_1D shard
     // distribution, the natural GCB pairing is strided (bank b feeds ring
-    // positions b, b + num_senders, ...). Legacy WIDTH_SHARDED keeps the
-    // row-major GCB (bank b -> contiguous block of ring positions).
+    // positions b, b + num_senders, ...). Under CONTIGUOUS_1D (shard-contiguous) shard
+    // distribution, bank b owns a contiguous run of shards, so it feeds the
+    // contiguous ring arc b*R .. b*R+R-1 (same pairing as legacy WIDTH_SHARDED).
     const bool is_recv_contig =
         source_tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::ND_SHARDED &&
         tensor_buffer->buffer_distribution_spec().has_value() &&
         tensor_buffer->buffer_distribution_spec()->num_shards() == ring_size;
+    const bool is_shard_contiguous_recv_contig =
+        is_recv_contig && tensor_buffer->buffer_distribution_spec()->shard_distribution_strategy() ==
+                              tt::tt_metal::ShardDistributionStrategy::CONTIGUOUS_1D;
 
     const CoreRangeSet receiver_cores = global_cb.receiver_cores();
 
@@ -172,6 +192,7 @@ DramPrefetcherValidatorDeviceOperation::ProgramFactory::create_at(
         num_blocks,
         num_senders,
         operation_attributes.print_stride,
+        operation_attributes.streaming ? 1u : 0u,
     };
     TensorAccessorArgs(*tensor_buffer).append_to(compile_args);
 
@@ -203,12 +224,26 @@ DramPrefetcherValidatorDeviceOperation::ProgramFactory::create_at(
                 bank_local_recv,
                 receivers_per_bank);
             // ring_pos formula differs by layout:
-            //   legacy K-row-major: bank b's slot k -> ring_pos = b * receivers_per_bank + k
-            //   recv-contig + strided GCB: bank b's slot k -> ring_pos = b + k * num_dram_banks
+            //   round-robin recv-contig + strided GCB: bank b's slot k -> ring_pos = b + k * num_dram_banks
+            //   shard-contiguous recv-contig and legacy K-row-major: bank b's slot k -> ring_pos = b *
+            //   receivers_per_bank + k
             // With dual senders, k is the bank-local receiver index across both senders.
-            const uint32_t ring_pos = is_recv_contig ? (bank_id + bank_local_recv * num_dram_banks)
-                                                     : (bank_id * receivers_per_bank + bank_local_recv);
+            const bool strided_pairing = is_recv_contig && !is_shard_contiguous_recv_contig;
+            const uint32_t ring_pos = strided_pairing ? (bank_id + bank_local_recv * num_dram_banks)
+                                                      : (bank_id * receivers_per_bank + bank_local_recv);
             const uint32_t n_col_start = ring_pos * n_per_recv_tiles;
+            // Lead physical block this receiver expects at FIFO position 0 under streaming:
+            // rotation[ring_pos] when a rotation was supplied (must match the prefetcher), else
+            // ring_pos for the identity (natural topology) order.
+            uint32_t lead_block = ring_pos;
+            if (!operation_attributes.rotation.empty()) {
+                TT_FATAL(
+                    ring_pos < operation_attributes.rotation.size(),
+                    "Validator rotation has {} entries but ring_pos {} indexes past it",
+                    operation_attributes.rotation.size(),
+                    ring_pos);
+                lead_block = operation_attributes.rotation[ring_pos];
+            }
             std::vector<uint32_t> rt_args = {
                 bank_id,
                 bank_local_recv,
@@ -217,6 +252,7 @@ DramPrefetcherValidatorDeviceOperation::ProgramFactory::create_at(
                 total_n_tiles,
                 n_per_recv_tiles,
                 n_col_start,
+                lead_block,
             };
             SetRuntimeArgs(program, kernel_id, recv_cores[r], rt_args);
         }
@@ -238,12 +274,16 @@ void test_dram_prefetcher_validator(
     const ttnn::Tensor& source_tensor,
     uint32_t num_layers,
     uint32_t print_stride,
-    const tt::tt_metal::experimental::GlobalCircularBuffer& global_cb) {
+    const tt::tt_metal::experimental::GlobalCircularBuffer& global_cb,
+    bool streaming,
+    const std::vector<uint32_t>& rotation) {
     using OperationType = DramPrefetcherValidatorDeviceOperation;
     OperationType::operation_attributes_t attrs{
         .num_layers = num_layers,
         .print_stride = print_stride,
         .global_cb = global_cb,
+        .streaming = streaming,
+        .rotation = rotation,
     };
     OperationType::tensor_args_t tensor_args{.source_tensor = source_tensor};
     ttnn::device_operation::launch<OperationType>(attrs, tensor_args);

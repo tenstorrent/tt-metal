@@ -7,6 +7,7 @@
 #include "kernels/conv3d_gather_tuning.hpp"
 #include "kernels/conv3d_weight_share.hpp"
 #include <tt-metalium/math.hpp>
+#include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -205,6 +206,10 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         }}},
     });
 
+    // fp32-exact output path: whenever the conv computes in fp32 with fp32 dest, the tail
+    // (bias add, untilize, and -- with multiple C_in blocks -- the partial reduction) reads its
+    // fp32 tiles back through UnpackToDestFp32 + SFPU instead of the TF32-rounding Src path.
+    bool use_fp32_exact = fp32_dest_acc_en && data_format == tt::DataFormat::Float32;
     // Use fp32 partials whenever we have multiple C_in blocks and fp32 dest is enabled.
     // This eliminates bf16 truncation between C_in block partial sums.
     bool use_fp32_partials = fp32_dest_acc_en && C_in_num_blocks > 1;
@@ -266,6 +271,22 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         });
     }
 
+    // fp32 running-partial accumulator for the exact reduction (see reduce_block_fp32_sfpu in
+    // the compute kernel); avoids round-tripping the running partial through the interm CB.
+    uint32_t cb_reduction_acc_tiled_id = 32;
+    if (use_fp32_partials && use_fp32_exact) {
+        cb_reduction_acc_tiled_id = next_cb_index++;
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = matmul_M_t * matmul_N_t * partial_tile_size,
+            .core_ranges = CoreRangeSet(core_grid),
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(cb_reduction_acc_tiled_id),
+                .data_format = partial_data_format,
+                .page_size = partial_tile_size,
+            }}},
+        });
+    }
+
     uint32_t cb_bias_tiled_id =
         32;  // Invalid value for cb index since there is only 32 of them and the indices go from 0 to 31
     if (use_bias) {
@@ -294,6 +315,11 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
     log_debug(tt::LogOp, "CB matmul_result_rm: page_size={} bytes, num_pages={}", tile_size, matmul_M_t * matmul_N_t);
 
     bool is_padding_zeros = operation_attributes.padding_mode == "zeros";
+    // validate() fatals on a halo buffer with any other padding mode, so presence is the whole test.
+    const bool halo_mode = tensor_args.halo_buffer.has_value();
+    // Logical-pad masking: opt-in.
+    const bool mask_mode = tensor_args.pad_offset_tensor.has_value() &&
+                           (operation_attributes.logical_h_mask != 0 || operation_attributes.logical_w_mask != 0);
 
     uint32_t in_row_size_bytes = input_tensor.buffer()->aligned_page_size();
     uint32_t out_row_size_bytes = output_tensor.buffer()->aligned_page_size();
@@ -330,6 +356,23 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         });
     }
 
+    // Tiny landing CB for the per-device [h_start, w_start] offset page (mask mode only).
+    uint32_t cb_pad_offset_id = 32;  // Invalid; set below if masking is enabled
+    if (mask_mode) {
+        const uint32_t pad_offset_page_bytes =
+            tt::round_up(2u * static_cast<uint32_t>(sizeof(uint32_t)), dram_read_alignment);
+        cb_pad_offset_id = next_cb_index++;
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = pad_offset_page_bytes,
+            .core_ranges = CoreRangeSet(core_grid),
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(cb_pad_offset_id),
+                .data_format = tt::DataFormat::UInt32,
+                .page_size = pad_offset_page_bytes,
+            }}},
+        });
+    }
+
     // L1 pre-fetch buffer for kernels > 1x1x1 with no dilation.
     // Gathers the spatial receptive field from DRAM once per spatial block, then vol2col reads from L1.
     // Budget: remaining L1 after other CBs and kernel code/stack, capped at 500 KB.
@@ -350,6 +393,9 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
     if (C_in_num_blocks > 1) {
         other_cbs_bytes += partial_tile_size * matmul_M_t * matmul_N_t;  // reduction (same format as partials)
         other_cbs_bytes += tile_size;                                    // worker_ack
+        if (use_fp32_partials && use_fp32_exact) {
+            other_cbs_bytes += partial_tile_size * matmul_M_t * matmul_N_t;  // reduction_acc
+        }
     }
     if (use_bias) {
         other_cbs_bytes += tile_size * matmul_N_t;  // bias
@@ -732,8 +778,19 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         coalesced_scratch_rows,
         cb_dram_read_scratch_id,
         static_cast<uint32_t>(enable_dram_read_staging),
-        dram_read_alignment};
+        dram_read_alignment,
+        static_cast<uint32_t>(halo_mode),
+        static_cast<uint32_t>(mask_mode),
+        operation_attributes.logical_h_mask,
+        operation_attributes.logical_w_mask,
+        cb_pad_offset_id};
     tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(reader_compile_time_args);
+    // Halo buffer accessor follows the input accessor (nullptr when not in halo mode, like bias).
+    tt::tt_metal::TensorAccessorArgs(halo_mode ? tensor_args.halo_buffer.value().buffer() : nullptr)
+        .append_to(reader_compile_time_args);
+    // Per-device offset accessor follows the halo accessor (nullptr when not masking).
+    tt::tt_metal::TensorAccessorArgs(mask_mode ? tensor_args.pad_offset_tensor.value().buffer() : nullptr)
+        .append_to(reader_compile_time_args);
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source = "ttnn/cpp/ttnn/operations/experimental/conv3d/device/kernels/reader_vol2col.cpp";
@@ -795,7 +852,27 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         semaphore_id,
         (uint32_t)use_fp32_partials,
         // Stream final output rows only for many small output writes when there is a writer tail to overlap.
-        (uint32_t)(enable_streaming_output ? 1 : 0)};
+        (uint32_t)(enable_streaming_output ? 1 : 0),
+        cb_reduction_acc_tiled_id,
+        (uint32_t)use_fp32_exact};
+
+    // Deliver every CB the fp32 tail reads UnpackToDestFp32 -- interm (untilize/bias read-back),
+    // bias, and, with multiple C_in blocks, reduction + acc. Without the flag the unpacker rounds
+    // their fp32 tiles to TF32 on the way into DST; for the bias specifically, an unflagged CB
+    // also breaks unary_bcast on Wormhole (see add_bias_inplace_sfpu in the compute kernel).
+    // Empty (default) when use_fp32_exact is off.
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode;
+    if (use_fp32_exact) {
+        unpack_to_dest_mode.assign(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+        unpack_to_dest_mode[cb_matmul_interm_tiled_id] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        if (use_bias) {
+            unpack_to_dest_mode[cb_bias_tiled_id] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        }
+        if (use_fp32_partials) {
+            unpack_to_dest_mode[cb_reduction_tiled_id] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+            unpack_to_dest_mode[cb_reduction_acc_tiled_id] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        }
+    }
 
     KernelDescriptor compute_desc;
     compute_desc.kernel_source = "ttnn/cpp/ttnn/operations/experimental/conv3d/device/kernels/compute.cpp";
@@ -806,6 +883,7 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .dst_full_sync_en = dst_full_sync_en,
+        .unpack_to_dest_mode = unpack_to_dest_mode,
         .math_approx_mode = math_approx_mode,
     };
 
@@ -835,7 +913,9 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         static_cast<uint32_t>(weight_share_mode),
         weights_mcast_sender_sem_id,
         weights_mcast_receiver_sem_id,
-        static_cast<uint32_t>(enable_streaming_output)};
+        static_cast<uint32_t>(enable_streaming_output),
+        operation_attributes.output_pad_h,
+        operation_attributes.output_pad_w};
     tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*weight_tensor.buffer()).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(bias_tensor.has_value() ? bias_tensor.value().buffer() : nullptr)
@@ -849,6 +929,9 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
     writer_desc.config = WriterConfigDescriptor{};
 
     tt::tt_metal::Buffer* input_buffer = input_tensor.buffer();
+    tt::tt_metal::Buffer* halo_buffer_ptr = halo_mode ? tensor_args.halo_buffer.value().buffer() : nullptr;
+    tt::tt_metal::Buffer* pad_offset_buffer_ptr =
+        mask_mode ? tensor_args.pad_offset_tensor.value().buffer() : nullptr;
     tt::tt_metal::Buffer* out_buffer = output_tensor.buffer();
     tt::tt_metal::Buffer* weight_buffer = weight_tensor.buffer();
     tt::tt_metal::Buffer* bias_buffer = bias_tensor.has_value() ? bias_tensor.value().buffer() : nullptr;
@@ -1179,19 +1262,27 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         const uint32_t num_workers = cw.has_work ? (uint32_t)worker_core_ids[group_id].size() : 0u;
 
         // Reader pos[0] is the input buffer address (patched on cache hit via emplace_runtime_args).
-        reader_desc.emplace_runtime_args(
-            core,
-            {input_buffer,
-             cw.c_in_block_start,
-             cw.c_in_block_end,
-             cw.c_out_block_start,
-             cw.c_out_block_end,
-             cw.t_out_start,
-             cw.t_out_end,
-             cw.h_out_start,
-             cw.h_out_end,
-             cw.w_out_start,
-             cw.w_out_end});
+        // Trailing halo buffer address (halo mode only) is read by the reader when its halo_mode CT flag set.
+        KernelDescriptor::RTArgList reader_args;
+        reader_args.reserve(12);
+        reader_args.push_back(input_buffer);
+        reader_args.push_back(cw.c_in_block_start);
+        reader_args.push_back(cw.c_in_block_end);
+        reader_args.push_back(cw.c_out_block_start);
+        reader_args.push_back(cw.c_out_block_end);
+        reader_args.push_back(cw.t_out_start);
+        reader_args.push_back(cw.t_out_end);
+        reader_args.push_back(cw.h_out_start);
+        reader_args.push_back(cw.h_out_end);
+        reader_args.push_back(cw.w_out_start);
+        reader_args.push_back(cw.w_out_end);
+        if (halo_mode) {
+            reader_args.push_back(halo_buffer_ptr);
+        }
+        if (mask_mode) {
+            reader_args.push_back(pad_offset_buffer_ptr);
+        }
+        reader_desc.emplace_runtime_args(core, reader_args);
 
         compute_desc.runtime_args.emplace_back(
             core,

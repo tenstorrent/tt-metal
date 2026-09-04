@@ -17,8 +17,8 @@ from models.demos.gemma4.config import MeshConfig, Mode
 
 from .weights import AttentionWeights, load_attention_weights
 from .kv_cache import init_kv_cache
-from .decode import decode_forward
-from .prefill import prefill_forward
+from .decode import decode_forward, packed_decode_forward
+from .prefill import flush_deferred_bounded_fills, prefill_forward
 
 
 class Gemma4AttentionConfig:
@@ -29,6 +29,8 @@ class Gemma4AttentionConfig:
         self.hidden_size = hf_config.hidden_size
         self.num_attention_heads = hf_config.num_attention_heads
         self.rms_norm_eps = hf_config.rms_norm_eps
+        # Propagated for weight-load policy (e.g. skip DRAM-shard on MoE for PCC).
+        self.enable_moe_block = bool(getattr(hf_config, "enable_moe_block", False))
 
         self.is_sliding = self.layer_type == "sliding_attention"
         self.use_kv_tying = getattr(hf_config, "attention_k_eq_v", False) and not self.is_sliding
@@ -117,6 +119,11 @@ class Gemma4Attention:
         else:
             self.kv_cache = None
 
+        # Persistent hot-block staging for the packed-verify loop-free KV write.
+        # Allocated lazily by the spec-decode driver (see tt/spec_decode.py);
+        # None means packed_decode_forward falls back to the per-position loop.
+        self.kv_staging = None
+
     def __call__(
         self,
         hidden_states,
@@ -134,6 +141,10 @@ class Gemma4Attention:
         user_id=0,
         valid_seq_len=None,
         sequential_kv_write=False,
+        rope_presliced=False,
+        packed=None,
+        chunk_start_idx=None,
+        chunk_page_table=None,
     ):
         """
         Attention forward pass — dispatches to on-device decode or prefill.
@@ -149,9 +160,43 @@ class Gemma4Attention:
             shared_kv: optional (tt_k, tt_v) from source layer for KV sharing (prefill only)
             keep_kv: if True, keep K/V alive for sharing with later layers (prefill only)
             is_kv_shared: if True, this layer shares KV from source (skip K/V proj + cache update)
+            packed: optional packed-verify dict (decode only) — keys packed_p,
+                position_idx, kv_write_idxs, attn_mask, rope_packed, embed_idx,
+                hot_pt; routes to packed_decode_forward (P positions, one pass)
         """
         cache = kv_cache or self.kv_cache
         cos_cache, sin_cache = rope_mats
+
+        # Do NOT release the sliding prefill tail on decode. Under vLLM
+        # ``async_scheduling``, another request's decode can interleave between
+        # APC continuation prefills of a different request; wiping the single
+        # per-layer stash here drops ``sliding_tail_in`` for ``chunk_start>0``
+        # (shield QB2: ``chunk_start=384 without sliding_tail_in``). Tails are
+        # released when a new prefill starts at ``chunk_start_idx==0`` (below)
+        # or when the generator explicitly clears them around trace capture.
+
+        if is_decode and packed is not None:
+            return packed_decode_forward(
+                hidden_states=hidden_states,
+                cos_cache=cos_cache,
+                sin_cache=sin_cache,
+                weights=self.weights,
+                kv_cache=cache,
+                config=self.config,
+                mesh_config=self.mesh_config,
+                mesh_device=self.mesh_device,
+                position_idx=packed["position_idx"],
+                kv_write_idxs=packed.get("kv_write_idxs"),
+                attn_mask=packed["attn_mask"],
+                packed_p=packed["packed_p"],
+                page_table=page_table,
+                ccl_manager=self.ccl_manager,
+                is_kv_shared=is_kv_shared,
+                rope_packed=packed.get("rope_packed"),
+                kv_staging=self.kv_staging,
+                embed_idx=packed.get("embed_idx"),
+                hot_pt=packed.get("hot_pt"),
+            )
 
         if is_decode:
             return decode_forward(
@@ -170,9 +215,20 @@ class Gemma4Attention:
                 is_kv_shared=is_kv_shared,
                 position_idx_cache=position_idx_cache,
                 sequential_kv_write=sequential_kv_write,
+                rope_presliced=rope_presliced,
             )
         else:
-            tt_out, kept_kv = prefill_forward(
+            # Sliding-window layers under generator-level chunked prefill carry a
+            # rolling K/V window tail across chunks (stored on this per-layer
+            # instance). Reset it at the start of a prefill (single-chunk, or the
+            # first generator chunk with chunk_start_idx==0). Traced multi-chunk
+            # passes a device tensor offset — the generator resets tails before
+            # the first chunk; do not int()-cast the tensor here.
+            if isinstance(chunk_start_idx, ttnn.Tensor):
+                pass
+            elif chunk_start_idx is None or int(chunk_start_idx) == 0:
+                self._release_sliding_prefill_tail()
+            tt_out, kept_kv, sliding_tail_out = prefill_forward(
                 hidden_states=hidden_states,
                 cos_cache=cos_cache,
                 sin_cache=sin_cache,
@@ -188,6 +244,53 @@ class Gemma4Attention:
                 batch_size=batch_size,
                 user_id=user_id,
                 valid_seq_len=valid_seq_len,
+                chunk_start_idx=chunk_start_idx,
+                chunk_page_table=chunk_page_table,
+                sliding_tail_in=getattr(self, "_sliding_prefill_tail", None),
             )
+            # prefill_forward consumed (deallocated) the incoming tail; stash the
+            # new one for the next chunk.
+            self._sliding_prefill_tail = sliding_tail_out
             self._last_kv = kept_kv
             return tt_out
+
+    def _release_sliding_prefill_tail(self, *, clear_persistent: bool = False):
+        """Drop the cross-chunk sliding tail for the next prefill's first chunk.
+
+        Traced multi-chunk binds persistent K/V ring buffers into the captured
+        graph. Soft release (default) keeps those buffers so runtime replay can
+        ``ttnn.copy`` into the same addresses. Hard clear (``clear_persistent``)
+        is only for sp0 compile↔capture: both passes must take the first-alloc
+        path — leaving persistent set makes capture hit ``ttnn.copy`` without
+        that program in cache (TT_FATAL !is_capturing_trace, WH-T3K nightly).
+        """
+        tail = getattr(self, "_sliding_prefill_tail", None)
+        persistent = getattr(self.config, "sliding_prefill_tail_persistent", None)
+        if clear_persistent:
+            seen: set[int] = set()
+            for group in (tail, persistent):
+                if group is None:
+                    continue
+                for t in group:
+                    tid = id(t)
+                    if tid in seen:
+                        continue
+                    seen.add(tid)
+                    try:
+                        t.deallocate(True)
+                    except Exception:
+                        pass
+            self._sliding_prefill_tail = None
+            self.config.sliding_prefill_tail_persistent = None
+            return
+        if tail is not None:
+            is_persistent = (
+                persistent is not None and len(tail) == 2 and len(persistent) == 2 and tail[0] is persistent[0]
+            )
+            if not is_persistent:
+                for t in tail:
+                    try:
+                        t.deallocate(True)
+                    except Exception:
+                        pass
+        self._sliding_prefill_tail = None

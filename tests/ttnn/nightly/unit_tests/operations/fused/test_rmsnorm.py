@@ -20,6 +20,9 @@ from models.common.utility_functions import is_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from tests.ttnn.nightly.unit_tests.operations.fused.utility_functions import ttnn_rms_norm
 
+# Module-scoped device: every test here shares one device configuration
+pytestmark = pytest.mark.use_module_device
+
 TEST_PADDING_VALUE = -42
 
 
@@ -163,7 +166,13 @@ def test_llama_4D_rms_norm(device, h, w):
     input_tensor = ttnn.from_torch(torch_input_tensor, device=device, layout=ttnn.TILE_LAYOUT)
     input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
     weight = ttnn.from_torch(torch_weight.reshape(1, 1, w // 32, 32), device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
-    output_tensor = ttnn_rms_norm(input_tensor, weight=weight)
+    compute_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi3,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+    output_tensor = ttnn_rms_norm(input_tensor, weight=weight, compute_kernel_config=compute_config)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 

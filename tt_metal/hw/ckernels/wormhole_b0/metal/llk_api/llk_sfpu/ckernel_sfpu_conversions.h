@@ -4,6 +4,11 @@
 
 #pragma once
 
+#include <cstdint>
+#include <limits>
+
+#include "sfpi.h"
+
 // Helper function for _sfpu_binary_power_
 // This function is based on _float32_to_int32_, but expects a positive input, which simplifies the code
 // and makes it faster
@@ -14,7 +19,7 @@ sfpi_inline sfpi::vInt _float_to_int32_positive_(sfpi::vFloat in) {
     v_elseif(exp > 30)  // overflow occurs above this range
     {
         // set to int32 max value in case of overflow
-        result = std::numeric_limits<int32_t>::max();
+        result = std::numeric_limits<std::int32_t>::max();
     }
     v_else {
         // extract mantissa

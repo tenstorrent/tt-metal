@@ -55,7 +55,7 @@ MatmulReduceScatterAsyncDeviceOperation::compute_output_specs(
     std::vector<Tensor> input_tensors = {tensor_args.input, tensor_args.weight};
 
     // Matmul shape
-    ttnn::TensorSpec matmul_output_specs = ttnn::prim::MatmulDeviceOperation::compute_output_specs(
+    tt::tt_metal::TensorSpec matmul_output_specs = ttnn::prim::MatmulDeviceOperation::compute_output_specs(
         args.matmul_struct, {.input_tensors = input_tensors})[0];
 
     // Reduce Scatter shape - use the device operation's compute_output_specs

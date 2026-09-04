@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <tt-metalium/vector_aligned.hpp>
+#include "impl/dispatch/vector_aligned.hpp"
 #include <tt_stl/span.hpp>
 #include <array>
 #include <atomic>
@@ -33,9 +33,9 @@ class SubDeviceManager {
 public:
     // Constructor used for the default/global device
     SubDeviceManager(
-        IDevice* device, std::unique_ptr<AllocatorImpl>&& global_allocator, tt::stl::Span<const SubDevice> sub_devices);
+        IDevice* device, std::unique_ptr<AllocatorImpl>&& global_allocator, ttsl::Span<const SubDevice> sub_devices);
     // Constructor used for regular sub-devices
-    SubDeviceManager(tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size, IDevice* device);
+    SubDeviceManager(ttsl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size, IDevice* device);
 
     SubDeviceManager(const SubDeviceManager& other) = delete;
     SubDeviceManager& operator=(const SubDeviceManager& other) = delete;
@@ -59,17 +59,19 @@ public:
 
     const std::unique_ptr<AllocatorImpl>& allocator(SubDeviceId sub_device_id) const;
     std::unique_ptr<AllocatorImpl>& sub_device_allocator(SubDeviceId sub_device_id);
+    const std::vector<std::unique_ptr<AllocatorImpl>>& allocators() const { return sub_device_allocators_; }
 
     std::shared_ptr<distributed::MeshTraceBuffer>& create_trace(const distributed::MeshTraceId& trace_id);
     void release_trace(const distributed::MeshTraceId& trace_id);
     std::shared_ptr<distributed::MeshTraceBuffer> get_trace(const distributed::MeshTraceId& trace_id);
+    DeviceAddr get_max_trace_high_water_mark() const;
 
     uint8_t num_sub_devices() const;
     bool has_allocations() const;
     DeviceAddr local_l1_size() const;
 
     const std::vector<SubDeviceId>& get_sub_device_stall_group() const;
-    void set_sub_device_stall_group(tt::stl::Span<const SubDeviceId> sub_device_ids);
+    void set_sub_device_stall_group(ttsl::Span<const SubDeviceId> sub_device_ids);
     void reset_sub_device_stall_group();
 
 private:

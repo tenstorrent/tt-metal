@@ -28,11 +28,10 @@ namespace tt::tt_metal {
 template <bool hugepage_write = false>
 class DeviceCommand {
 public:
-    DeviceCommand() = default;
-    DeviceCommand(void* cmd_region, uint32_t cmd_sequence_sizeB);
-
+    explicit DeviceCommand(MetalContext& ctx);
+    DeviceCommand(MetalContext& ctx, void* cmd_region, uint32_t cmd_sequence_sizeB);
     template <bool hp_w = hugepage_write, typename std::enable_if_t<!hp_w, int> = 0>
-    DeviceCommand(uint32_t cmd_sequence_sizeB);
+    DeviceCommand(MetalContext& ctx, uint32_t cmd_sequence_sizeB);
 
     DeviceCommand& operator=(const DeviceCommand& other);
     DeviceCommand& operator=(DeviceCommand&& other) noexcept;
@@ -52,9 +51,10 @@ public:
     vector_aligned<uint32_t> cmd_vector() const;
 
     void add_dispatch_wait(
-        uint32_t flags, uint32_t address, uint32_t stream, uint32_t count, uint8_t dispatcher_type = 0);
+        uint32_t flags, uint32_t address, uint32_t stream, uint32_t count, uint8_t cq_id, uint8_t dispatcher_type = 0);
 
-    void add_dispatch_wait_with_prefetch_stall(uint32_t flags, uint32_t address, uint32_t stream, uint32_t count);
+    void add_dispatch_wait_with_prefetch_stall(
+        uint32_t flags, uint32_t address, uint32_t stream, uint32_t count, uint8_t cq_id);
 
     void add_prefetch_relay_linear(uint32_t noc_xy_addr, DeviceAddr lengthB, DeviceAddr addr);
 
@@ -125,6 +125,8 @@ public:
 
     void add_notify_dispatch_s_go_signal_cmd(uint8_t wait, uint16_t index_bitmask);
 
+    void add_dispatch_rt_profiler_flush(uint32_t wait_count, uint32_t wait_stream);
+
     template <bool inline_data = false>
     void add_dispatch_write_paged(
         bool flush_prefetch,
@@ -157,12 +159,12 @@ public:
     void add_dispatch_set_num_worker_sems(uint32_t num_worker_sems, DispatcherSelect dispatcher_type);
 
     void add_dispatch_set_sub_device_worker_counts(
-        tt::stl::Span<const uint32_t> workers_per_sub_device, DispatcherSelect dispatcher_type);
+        ttsl::Span<const uint32_t> workers_per_sub_device, DispatcherSelect dispatcher_type);
 
     void add_dispatch_set_go_signal_noc_data(
         const vector_aligned<uint32_t>& noc_mcast_unicast_data, DispatcherSelect dispatcher_type);
 
-    void add_dispatch_set_write_offsets(tt::stl::Span<const uint32_t> write_offsets);
+    void add_dispatch_set_write_offsets(ttsl::Span<const uint32_t> write_offsets);
 
     void add_dispatch_terminate(DispatcherSelect dispatcher_type = DispatcherSelect::DISPATCH_MASTER);
 
@@ -222,7 +224,7 @@ public:
         uint16_t alignment,
         uint16_t num_sub_cmds,
         const std::vector<CQDispatchWritePackedLargeSubCmd>& sub_cmds,
-        const std::vector<tt::stl::Span<const uint8_t>>& data_collection,
+        const std::vector<ttsl::Span<const uint8_t>>& data_collection,
         std::vector<uint8_t*>*
             data_collection_buffer_ptr,  // optional. Stores the location each data segment was written to
         uint32_t offset_idx = 0,
@@ -243,7 +245,7 @@ public:
         uint16_t alignment,
         uint16_t num_sub_cmds,
         const std::vector<CQDispatchWritePackedLargeUnicastSubCmd>& sub_cmds,
-        const std::vector<tt::stl::Span<const uint8_t>>& data_collection,
+        const std::vector<ttsl::Span<const uint8_t>>& data_collection,
         std::vector<uint8_t*>*
             data_collection_buffer_ptr,  // optional. Stores the location each data segment was written to
         uint32_t offset_idx = 0,
@@ -311,12 +313,14 @@ private:
         }
     }
 
+    void init_from_context(MetalContext& ctx);
+
     uint32_t cmd_sequence_sizeB = 0;
     void* cmd_region = nullptr;
     uint32_t cmd_write_offsetB = 0;
-    uint32_t pcie_alignment =
-        tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::HOST);
-    uint32_t l1_alignment = tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::L1);
+    MetalContext* ctx_ = nullptr;
+    uint32_t pcie_alignment = 0;
+    uint32_t l1_alignment = 0;
 
     vector_aligned<uint32_t> cmd_region_vector;
 };

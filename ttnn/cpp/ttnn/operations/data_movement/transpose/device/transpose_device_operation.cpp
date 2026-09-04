@@ -205,13 +205,13 @@ void TransposeDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-TensorSpec TransposeDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec TransposeDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     const auto output_mem_config = derive_effective_output_memory_config(operation_attributes, tensor_args);
     const auto [output_shape, output_padded_shape] = transposed_shapes(input_tensor, operation_attributes.dim);
 
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_shape,
         TensorLayout::fromPaddedShape(
             input_tensor.dtype(),

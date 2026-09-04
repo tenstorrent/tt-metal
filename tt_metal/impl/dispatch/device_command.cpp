@@ -7,10 +7,11 @@
 #include <cstring>
 
 #include <random>
-#include <chrono>
 
 #include <tt_stl/aligned_allocator.hpp>
 #include <tt_stl/assert.hpp>
+#include "dispatch/dispatch_core_manager.hpp"
+#include "dispatch/dispatch_mem_map.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
 #include "dispatch/memcpy.hpp"
 #include "dispatch_settings.hpp"
@@ -19,8 +20,21 @@
 namespace tt::tt_metal {
 
 template <bool hugepage_write>
-DeviceCommand<hugepage_write>::DeviceCommand(void* cmd_region, uint32_t cmd_sequence_sizeB) :
+void DeviceCommand<hugepage_write>::init_from_context(MetalContext& ctx) {
+    this->ctx_ = &ctx;
+    this->pcie_alignment = ctx.hal().get_alignment(HalMemType::HOST);
+    this->l1_alignment = ctx.hal().get_alignment(HalMemType::L1);
+}
+
+template <bool hugepage_write>
+DeviceCommand<hugepage_write>::DeviceCommand(MetalContext& ctx) {
+    this->init_from_context(ctx);
+}
+
+template <bool hugepage_write>
+DeviceCommand<hugepage_write>::DeviceCommand(MetalContext& ctx, void* cmd_region, uint32_t cmd_sequence_sizeB) :
     cmd_sequence_sizeB(cmd_sequence_sizeB), cmd_region(cmd_region) {
+    this->init_from_context(ctx);
     TT_FATAL(
         cmd_sequence_sizeB % sizeof(uint32_t) == 0,
         "Command sequence size B={} is not {}-byte aligned",
@@ -30,7 +44,9 @@ DeviceCommand<hugepage_write>::DeviceCommand(void* cmd_region, uint32_t cmd_sequ
 
 template <bool hugepage_write>
 template <bool hp_w, typename std::enable_if_t<!hp_w, int>>
-DeviceCommand<hugepage_write>::DeviceCommand(uint32_t cmd_sequence_sizeB) : cmd_sequence_sizeB(cmd_sequence_sizeB) {
+DeviceCommand<hugepage_write>::DeviceCommand(MetalContext& ctx, uint32_t cmd_sequence_sizeB) :
+    cmd_sequence_sizeB(cmd_sequence_sizeB) {
+    this->init_from_context(ctx);
     TT_FATAL(
         cmd_sequence_sizeB % sizeof(uint32_t) == 0,
         "Command sequence size B={} is not {}-byte aligned",
@@ -47,6 +63,9 @@ DeviceCommand<hugepage_write>& DeviceCommand<hugepage_write>::operator=(const De
     }
     this->cmd_sequence_sizeB = other.cmd_sequence_sizeB;
     this->cmd_write_offsetB = other.cmd_write_offsetB;
+    this->ctx_ = other.ctx_;
+    this->pcie_alignment = other.pcie_alignment;
+    this->l1_alignment = other.l1_alignment;
     this->cmd_region_vector = other.cmd_region_vector;
     this->deepcopy(other);
     return *this;
@@ -56,6 +75,9 @@ template <bool hugepage_write>
 DeviceCommand<hugepage_write>& DeviceCommand<hugepage_write>::operator=(DeviceCommand&& other) noexcept {
     this->cmd_sequence_sizeB = other.cmd_sequence_sizeB;
     this->cmd_write_offsetB = other.cmd_write_offsetB;
+    this->ctx_ = other.ctx_;
+    this->pcie_alignment = other.pcie_alignment;
+    this->l1_alignment = other.l1_alignment;
     this->cmd_region_vector = std::move(other.cmd_region_vector);
     if constexpr (hugepage_write) {
         this->deepcopy(other);
@@ -70,6 +92,9 @@ template <bool hugepage_write>
 DeviceCommand<hugepage_write>::DeviceCommand(const DeviceCommand& other) :
     cmd_sequence_sizeB(other.cmd_sequence_sizeB),
     cmd_write_offsetB(other.cmd_write_offsetB),
+    ctx_(other.ctx_),
+    pcie_alignment(other.pcie_alignment),
+    l1_alignment(other.l1_alignment),
     cmd_region_vector(other.cmd_region_vector) {
     this->deepcopy(other);
 }
@@ -78,6 +103,9 @@ template <bool hugepage_write>
 DeviceCommand<hugepage_write>::DeviceCommand(DeviceCommand&& other) noexcept :
     cmd_sequence_sizeB(other.cmd_sequence_sizeB),
     cmd_write_offsetB(other.cmd_write_offsetB),
+    ctx_(other.ctx_),
+    pcie_alignment(other.pcie_alignment),
+    l1_alignment(other.l1_alignment),
     cmd_region_vector(std::move(other.cmd_region_vector)) {
     if constexpr (hugepage_write) {
         this->deepcopy(other);
@@ -108,7 +136,26 @@ vector_aligned<uint32_t> DeviceCommand<hugepage_write>::cmd_vector() const {
 
 template <bool hugepage_write>
 void DeviceCommand<hugepage_write>::add_dispatch_wait(
-    uint32_t flags, uint32_t address, uint32_t stream, uint32_t count, uint8_t dispatcher_type) {
+    uint32_t flags, uint32_t address, uint32_t stream, uint32_t count, uint8_t cq_id, uint8_t dispatcher_type) {
+    // If there are no stream registers (Quasar), translate stream flags to memory flags and calculate the L1 worker
+    // completion counter address from the stream index.
+    TT_ASSERT(this->ctx_ != nullptr, "DeviceCommand used without a MetalContext");
+    const auto& ctx = *this->ctx_;
+    if (!ctx.hal().has_stream_registers() &&
+        (flags & (CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM))) {
+        const auto& mem_map = ctx.dispatch_mem_map();
+        const uint32_t first_stream = mem_map.get_dispatch_stream_index(0);
+        const uint32_t completion_counter_offset = mem_map.get_completion_counter_offset(cq_id);
+        address = mem_map.get_dispatch_message_addr_start() + completion_counter_offset * this->l1_alignment +
+                  mem_map.get_sync_offset(stream - first_stream);
+        uint32_t new_flags = flags & ~(CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM);
+        new_flags |= CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_MEMORY;
+        if (flags & CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM) {
+            new_flags |= CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_MEMORY;
+        }
+        flags = new_flags;
+        stream = 0;
+    }
     auto initialize_wait_cmds = [&](CQPrefetchCmd* relay_wait, CQDispatchCmd* wait_cmd) {
         relay_wait->base.cmd_id = CQ_PREFETCH_CMD_RELAY_INLINE;
         relay_wait->relay_inline.dispatcher_type = dispatcher_type;
@@ -139,8 +186,8 @@ void DeviceCommand<hugepage_write>::add_dispatch_wait(
 
 template <bool hugepage_write>
 void DeviceCommand<hugepage_write>::add_dispatch_wait_with_prefetch_stall(
-    uint32_t flags, uint32_t address, uint32_t stream, uint32_t count) {
-    this->add_dispatch_wait(flags | CQ_DISPATCH_CMD_WAIT_FLAG_NOTIFY_PREFETCH, address, stream, count);
+    uint32_t flags, uint32_t address, uint32_t stream, uint32_t count, uint8_t cq_id) {
+    this->add_dispatch_wait(flags | CQ_DISPATCH_CMD_WAIT_FLAG_NOTIFY_PREFETCH, address, stream, count, cq_id);
     uint32_t increment_sizeB = tt::align(sizeof(CQPrefetchCmd), this->pcie_alignment);
     auto initialize_stall_cmd = [&](CQPrefetchCmd* stall_cmd) {
         *stall_cmd = {};
@@ -481,12 +528,15 @@ void DeviceCommand<hugepage_write>::add_dispatch_write_linear_h(
         initialize_write_cmd(write_cmd_dst);
     }
 
-    if constexpr (flush_prefetch && inline_data) {
-        TT_ASSERT(data != nullptr);
-        this->add_data(data, data_sizeB, data_sizeB);
-    }
-
-    if constexpr (!flush_prefetch) {
+    if constexpr (flush_prefetch) {
+        if constexpr (inline_data) {
+            TT_ASSERT(data != nullptr);
+            this->add_data(data, data_sizeB, data_sizeB);
+            // Align so the next command is written to a correctly aligned location. Mirrors
+            // DeviceCommandCalculator::add_dispatch_write_linear_h and add_dispatch_write_linear.
+            this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
+        }
+    } else {
         this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
     }
 }
@@ -532,6 +582,26 @@ void DeviceCommand<hugepage_write>::add_dispatch_go_signal_mcast(
         this->memcpy(mcast_cmd_dst, &mcast_cmd, sizeof(CQDispatchCmd));
     } else {
         initialize_mcast_cmd(mcast_cmd_dst);
+    }
+    this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
+}
+
+template <bool hugepage_write>
+void DeviceCommand<hugepage_write>::add_dispatch_rt_profiler_flush(uint32_t wait_count, uint32_t wait_stream) {
+    this->add_prefetch_relay_inline(true, sizeof(CQDispatchCmd), DispatcherSelect::DISPATCH_SUBORDINATE);
+    auto initialize_flush_cmd = [&](CQDispatchCmd* flush_cmd) {
+        *flush_cmd = {};
+        flush_cmd->base.cmd_id = CQ_DISPATCH_CMD_RT_PROFILER_FLUSH;
+        flush_cmd->rt_profiler_flush.wait_count = wait_count;
+        flush_cmd->rt_profiler_flush.wait_stream = wait_stream;
+    };
+    CQDispatchCmd* flush_cmd_dst = this->reserve_space<CQDispatchCmd*>(sizeof(CQDispatchCmd));
+    if constexpr (hugepage_write) {
+        alignas(MEMCPY_ALIGNMENT) CQDispatchCmd flush_cmd{};
+        initialize_flush_cmd(&flush_cmd);
+        this->memcpy(flush_cmd_dst, &flush_cmd, sizeof(CQDispatchCmd));
+    } else {
+        initialize_flush_cmd(flush_cmd_dst);
     }
     this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
 }
@@ -712,7 +782,7 @@ void DeviceCommand<hugepage_write>::add_dispatch_set_num_worker_sems(
 
 template <bool hugepage_write>
 void DeviceCommand<hugepage_write>::add_dispatch_set_sub_device_worker_counts(
-    tt::stl::Span<const uint32_t> workers_per_sub_device, DispatcherSelect dispatcher_type) {
+    ttsl::Span<const uint32_t> workers_per_sub_device, DispatcherSelect dispatcher_type) {
     TT_ASSERT(workers_per_sub_device.size() <= DispatchSettings::DISPATCH_MESSAGE_ENTRIES);
     auto data_sizeB = workers_per_sub_device.size() * sizeof(uint32_t);
     uint32_t lengthB = sizeof(CQDispatchCmd) + data_sizeB;
@@ -783,7 +853,7 @@ void DeviceCommand<hugepage_write>::add_dispatch_set_go_signal_noc_data(
 }
 
 template <bool hugepage_write>
-void DeviceCommand<hugepage_write>::add_dispatch_set_write_offsets(tt::stl::Span<const uint32_t> write_offsets) {
+void DeviceCommand<hugepage_write>::add_dispatch_set_write_offsets(ttsl::Span<const uint32_t> write_offsets) {
     TT_ASSERT(write_offsets.size() <= CQ_DISPATCH_MAX_WRITE_OFFSETS);
     size_t data_sizeB = write_offsets.size() * sizeof(uint32_t);
     size_t cmd_size = sizeof(CQDispatchCmd) + data_sizeB;
@@ -1078,7 +1148,7 @@ void DeviceCommand<hugepage_write>::add_dispatch_write_packed_large(
     uint16_t alignment,
     uint16_t num_sub_cmds,
     const std::vector<CQDispatchWritePackedLargeSubCmd>& sub_cmds,
-    const std::vector<tt::stl::Span<const uint8_t>>& data_collection,
+    const std::vector<ttsl::Span<const uint8_t>>& data_collection,
     std::vector<uint8_t*>*
         data_collection_buffer_ptr,  // optional. Stores the location each data segment was written to
     const uint32_t offset_idx,
@@ -1131,7 +1201,7 @@ void DeviceCommand<hugepage_write>::add_dispatch_write_packed_large_unicast(
     uint16_t alignment,
     uint16_t num_sub_cmds,
     const std::vector<CQDispatchWritePackedLargeUnicastSubCmd>& sub_cmds,
-    const std::vector<tt::stl::Span<const uint8_t>>& data_collection,
+    const std::vector<ttsl::Span<const uint8_t>>& data_collection,
     std::vector<uint8_t*>*
         data_collection_buffer_ptr,  // optional. Stores the location each data segment was written to
     const uint32_t offset_idx,
@@ -1322,7 +1392,7 @@ uint32_t DeviceCommand<hugepage_write>::random_padding_value() {
 template class DeviceCommand<true>;
 template class DeviceCommand<false>;
 
-template DeviceCommand<false>::DeviceCommand(uint32_t);
+template DeviceCommand<false>::DeviceCommand(MetalContext&, uint32_t);
 
 template void DeviceCommand<true>::add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(uint8_t, uint16_t, uint32_t, uint16_t, uint32_t, const std::vector<CQDispatchWritePackedUnicastSubCmd>&, const std::vector<std::pair<const void*, uint32_t>>&, uint32_t, const uint32_t, const bool, uint32_t);
 template void DeviceCommand<true>::add_dispatch_write_packed<CQDispatchWritePackedMulticastSubCmd>(uint8_t, uint16_t, uint32_t, uint16_t, uint32_t, const std::vector<CQDispatchWritePackedMulticastSubCmd>&, const std::vector<std::pair<const void*, uint32_t>>&, uint32_t, const uint32_t, const bool, uint32_t);

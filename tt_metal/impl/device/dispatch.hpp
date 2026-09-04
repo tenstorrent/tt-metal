@@ -11,13 +11,16 @@
 
 namespace tt::tt_metal {
 
+class MetalContext;
+
 // Used so the host knows how to properly copy data into user space from the completion queue (in hugepages)
 struct ReadCoreDataDescriptor {
     void* dst = nullptr;
     uint32_t size_bytes = 0;
 };
 
-uint32_t calculate_max_prefetch_data_size_bytes(const CoreType& dispatch_core_type, uint32_t num_subdevices);
+uint32_t calculate_max_prefetch_data_size_bytes(
+    const MetalContext& metal_ctx, const CoreType& dispatch_core_type, uint32_t num_subdevices);
 
 namespace device_dispatch {
 
@@ -28,8 +31,8 @@ struct CoreDispatchParams {
     IDevice* device = nullptr;
     uint32_t cq_id = 0;
     CoreType dispatch_core_type{CoreType::COUNT};
-    tt::stl::Span<const uint32_t> expected_num_workers_completed;
-    tt::stl::Span<const SubDeviceId> sub_device_ids;
+    ttsl::Span<const uint32_t> expected_num_workers_completed;
+    ttsl::Span<const SubDeviceId> sub_device_ids;
 };
 
 struct CoreReadDispatchParams : public CoreDispatchParams {};
@@ -46,8 +49,8 @@ void write_to_core(
     DeviceAddr address,
     uint32_t size_bytes,
     uint32_t cq_id,
-    tt::stl::Span<const uint32_t> expected_num_workers_completed,
-    tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+    ttsl::Span<const uint32_t> expected_num_workers_completed,
+    ttsl::Span<const SubDeviceId> sub_device_ids = {});
 
 // Like write_to_core, but skips validate_core_read_write_bounds. That is the only
 // functional difference: as with write_to_core, `address` is used verbatim as the full
@@ -61,8 +64,8 @@ void write_to_core_unchecked(
     DeviceAddr address,
     uint32_t size_bytes,
     uint32_t cq_id,
-    tt::stl::Span<const uint32_t> expected_num_workers_completed,
-    tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+    ttsl::Span<const uint32_t> expected_num_workers_completed,
+    ttsl::Span<const SubDeviceId> sub_device_ids = {});
 
 void issue_core_read_command_sequence(const CoreReadDispatchParams& dispatch_params);
 

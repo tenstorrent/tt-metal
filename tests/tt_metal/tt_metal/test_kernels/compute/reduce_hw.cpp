@@ -19,6 +19,10 @@ void kernel_main() {
     DataflowBuffer dfb_in_scaler(dfb::in_scaler);
     DataflowBuffer dfb_out(dfb::out);
     compute_kernel_hw_startup(dfb::in_data, dfb::in_scaler, dfb::out);
+    constexpr bool swap_operands = (REDUCE_DIM == ReduceDim::REDUCE_ROW) && (REDUCE_OP != PoolType::MAX);
+    if constexpr (swap_operands) {
+        reconfig_data_format(dfb::in_scaler, dfb::in_data);
+    }
     reduce_init<REDUCE_OP, REDUCE_DIM>(dfb::in_data, dfb::in_scaler, dfb::out);
 
     dfb_in_scaler.wait_front(onetile);

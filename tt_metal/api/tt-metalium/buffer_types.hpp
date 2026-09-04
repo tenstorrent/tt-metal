@@ -28,6 +28,10 @@ enum class ShardDistributionStrategy {
     ROUND_ROBIN_1D = 0,
     // Distribute a 2D grid of shards to a 2D grid of cores with one to one mapping.
     GRID_2D = 1,
+    // Distribute shards contiguously over a linearized list of cores: adjacent shards go to the
+    // same core until it is full. Shard s lands on core (s / shards_per_core) at slot
+    // (s % shards_per_core). Requires a uniform shards_per_core (num_shards % num_cores == 0).
+    CONTIGUOUS_1D = 2,
 };
 
 enum class BufferType {

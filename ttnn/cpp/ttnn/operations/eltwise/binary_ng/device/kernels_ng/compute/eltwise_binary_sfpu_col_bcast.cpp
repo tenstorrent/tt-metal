@@ -28,6 +28,9 @@
 #include "api/compute/bcast.h"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_common.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils.hpp"
+// DataflowBuffer for the op's own buffers; CircularBuffer (via eltwise_utils.hpp) is
+// still used for the shared preprocess_*_impl helper call sites (see PREPROCESS below).
+#include "api/dataflow/dataflow_buffer.h"
 
 ALWI void process_tile(
     tt::CBIndex cb_bcast,
@@ -47,33 +50,34 @@ ALWI void process_tile(
 #define CB_POST_BCAST cb_post_rhs
 #define CB_PRE_OTHER cb_pre_lhs
 #define CB_POST_OTHER cb_post_lhs
-#define EXP_CB_POST_BCAST exp_cb_post_rhs
-#define EXP_CB_POST_OTHER exp_cb_post_lhs
+#define EXP_CB_POST_BCAST exp_dfb_post_rhs
+#define EXP_CB_POST_OTHER exp_dfb_post_lhs
 #else
 #define CB_PRE_BCAST cb_pre_lhs
 #define CB_POST_BCAST cb_post_lhs
 #define CB_PRE_OTHER cb_pre_rhs
 #define CB_POST_OTHER cb_post_rhs
-#define EXP_CB_POST_BCAST exp_cb_post_lhs
-#define EXP_CB_POST_OTHER exp_cb_post_rhs
+#define EXP_CB_POST_BCAST exp_dfb_post_lhs
+#define EXP_CB_POST_OTHER exp_dfb_post_rhs
 #endif
-    CircularBuffer exp_cb_bcast(cb_bcast);
-    CircularBuffer exp_cb_llk_post(cb_llk_post);
-    CircularBuffer exp_cb_post_lhs(cb_post_lhs);
-    CircularBuffer exp_cb_post_rhs(cb_post_rhs);
-    CircularBuffer exp_cb_out(cb_out);
+    DataflowBuffer exp_dfb_bcast(cb_bcast);
+    DataflowBuffer exp_dfb_llk_post(cb_llk_post);
+    DataflowBuffer exp_dfb_post_lhs(cb_post_lhs);
+    DataflowBuffer exp_dfb_post_rhs(cb_post_rhs);
+    DataflowBuffer exp_dfb_out(cb_out);
 
-    exp_cb_bcast.wait_front(num_tiles_per_cycle);
+    exp_dfb_bcast.wait_front(num_tiles_per_cycle);
     pack_reconfig_data_format(cb_out, cb_llk_post);
-    unary_bcast_init<BroadcastType::COL>(cb_bcast, cb_llk_post);
-    exp_cb_llk_post.reserve_back(num_tiles_per_cycle);
+    compute_kernel_hw_startup(cb_bcast, cb_llk_post);
+    unary_bcast_init<BroadcastType::COL>(cb_bcast);
+    exp_dfb_llk_post.reserve_back(num_tiles_per_cycle);
     tile_regs_acquire();
     unary_bcast<BroadcastType::COL>(cb_bcast, 0, 0);
     tile_regs_commit();
 
     tile_regs_wait();
     pack_tile(0, cb_llk_post);
-    exp_cb_llk_post.push_back(num_tiles_per_cycle);
+    exp_dfb_llk_post.push_back(num_tiles_per_cycle);
     tile_regs_release();
 
     pack_reconfig_data_format(cb_llk_post, cb_out);
@@ -96,17 +100,19 @@ ALWI void process_tile(
             num_tiles_per_cycle);
         EXP_CB_POST_OTHER.wait_front(num_tiles_per_cycle);
 
-        exp_cb_out.reserve_back(num_tiles_per_cycle);
+        exp_dfb_out.reserve_back(num_tiles_per_cycle);
 
 #if (HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS)) and not(HAS_ACTIVATIONS(POST))
         BINARY_SFPU_INIT
 #endif
         tile_regs_acquire();
-        copy_tile_to_dst_init_short_with_dt(cb_post_rhs, cb_post_lhs);
+        reconfig_data_format_srca(cb_post_rhs, cb_post_lhs);
+        copy_init(cb_post_lhs);
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
             copy_tile(cb_post_lhs, i, i * 2);
         }
-        copy_tile_to_dst_init_short_with_dt(cb_post_lhs, cb_post_rhs);
+        reconfig_data_format_srca(cb_post_lhs, cb_post_rhs);
+        copy_init(cb_post_rhs);
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
             copy_tile(cb_post_rhs, i, i * 2 + 1);
 
@@ -128,11 +134,11 @@ ALWI void process_tile(
         }
         tile_regs_release();
 
-        exp_cb_out.push_back(num_tiles_per_cycle);
+        exp_dfb_out.push_back(num_tiles_per_cycle);
         EXP_CB_POST_OTHER.pop_front(num_tiles_per_cycle);
     }
     EXP_CB_POST_BCAST.pop_front(num_tiles_per_cycle);
-    exp_cb_bcast.pop_front(num_tiles_per_cycle);
+    exp_dfb_bcast.pop_front(num_tiles_per_cycle);
 }
 
 void kernel_main() {
@@ -169,7 +175,8 @@ void kernel_main() {
     constexpr auto cb_post_rhs = HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : cb_llk_post;
 #endif
 
-    unary_op_init_common(cb_post_lhs, cb_out);
+    compute_kernel_hw_startup(cb_post_lhs, cb_out);
+    copy_init(cb_post_lhs);
 #ifdef PACK_RELU
     PACK((llk_pack_relu_config(ReluConfig::zero())));
 #endif

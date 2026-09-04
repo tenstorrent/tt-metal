@@ -15,13 +15,13 @@ namespace ttnn::operations::data_movement::indexed_fill {
 
 namespace {
 
-const std::optional<tt::tt_metal::ShardSpec>& get_shard_spec(const TensorSpec& tensor_spec) {
+const std::optional<tt::tt_metal::ShardSpec>& get_shard_spec(const tt::tt_metal::TensorSpec& tensor_spec) {
     return tensor_spec.memory_config().shard_spec();
 }
 
 }  // namespace
 
-bool is_uneven(const TensorSpec& t) {
+bool is_uneven(const tt::tt_metal::TensorSpec& t) {
     if (!t.memory_config().is_sharded()) {
         return false;
     }
@@ -46,9 +46,9 @@ bool is_uneven(const TensorSpec& t) {
 }
 
 bool is_native_indexed_fill_sharding(
-    const TensorSpec& input_a_spec,
-    const TensorSpec& /*input_b_spec*/,
-    const TensorSpec& batch_id_spec,
+    const tt::tt_metal::TensorSpec& input_a_spec,
+    const tt::tt_metal::TensorSpec& /*input_b_spec*/,
+    const tt::tt_metal::TensorSpec& batch_id_spec,
     const tt::tt_metal::MemoryConfig& output_memory_config) {
     using tt::tt_metal::BufferType;
     using tt::tt_metal::TensorMemoryLayout;
@@ -111,8 +111,8 @@ bool is_native_indexed_fill_sharding(
 }
 
 bool is_shard_local_indexed_fill(
-    const TensorSpec& input_a_spec,
-    const TensorSpec& input_b_spec,
+    const tt::tt_metal::TensorSpec& input_a_spec,
+    const tt::tt_metal::TensorSpec& input_b_spec,
     const tt::tt_metal::MemoryConfig& output_memory_config) {
     using tt::tt_metal::BufferType;
     using tt::tt_metal::TensorMemoryLayout;

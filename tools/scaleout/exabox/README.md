@@ -1,12 +1,14 @@
 # BH Galaxy Exabox Validation
 
+> **Important — for the latest recommendations and step-by-step guides, use Confluence: [Exabox DCAMP Bringup](https://tenstorrent.atlassian.net/wiki/spaces/Exabox/pages/2509373472).** Those pages are the source of truth and are kept current for the full workflow — preflight, validation, fabric tests, dispatch tests, `recover.sh`, and troubleshooting/escalation. This README is a summary and may lag.
+
 Scripts for validating Blackhole Galaxy Exabox clusters before running workloads.
 
 ## Quick Reference
 
 **Last Known-Good Docker Image:**
 ```
-ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx:v0.66.0-dev20260115-28-g6eccf7061a
+ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx:v0.79.0-dev20260903-20-gcc9c295fdf0
 ```
 
 ## Full Hardware Qualification
@@ -80,7 +82,7 @@ ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx:<tag>
 
 Options for `<tag>`:
 - `latest` - most recent passing build from main (Note: Once quad systems are in CI, this will be consistently reliable. For now, use the known-good version below.)
-- `v0.66.0-dev20260115-28-g6eccf7061a` - **Last known-good version** (see [Quick Reference](#quick-reference) at the top)
+- **Last known-good version** - the tag in [Quick Reference](#quick-reference) at the top. `run_validation.sh` and `recover.sh` use it automatically when you omit `--image`; `run_fabric_tests.sh` and `run_dispatch_tests.sh` require it to be passed explicitly.
 
 To build an image from a custom branch (your own branch or one requested from a Metal developer), run the [upstream-tests workflow](https://github.com/tenstorrent/tt-metal/actions/workflows/upstream-tests.yaml). The workflow summary shows the image tag once complete.
 
@@ -124,8 +126,68 @@ The script returns exit codes enabling automated troubleshooting (e.g., Ansible 
 - `10` - ARC timeout
 - `11` - AICLK timeout
 - `12` - Network errors (MPI/SSH)
+- `13` - Device init error (PCIe hang / ARC firmware startup failure)
 - `50` - Inconclusive (manual review required)
 - `66` - Input error (file/directory not found)
+
+**Cluster health record:** after analyze, emit a portable JSON line (does not change analyze pass/fail):
+
+```bash
+python3 tools/scaleout/exabox/report_cluster_health.py \
+  --test-type physical \
+  --hosts <hosts> \
+  --analyzer-code "$ANALYSIS_RC" \
+  --artifact-dir validation_output/ \
+  --dry-run
+```
+
+Stdout is always one compact JSON object. Pass `--store-root DIR` (or set `CLUSTER_HEALTH_STORE_ROOT`) if your site persists files; there is no default directory. Layout is `DIR/<YYYY-MM-DD>/<record_id>.json` (one compact JSON line per file). The date directory is created `03770` (setgid, sticky, owner/group write — not world-writable) with DIR's group, so later users in that group can add records the same day instead of hitting the first writer's umask-masked `0755`. Only that directory is chmod'd; DIR and its ancestors are left as they are, so point DIR at a directory whose group already covers everyone who shares the store. Record files themselves follow the caller's umask, so a restrictive umask (`0077`) writes records your log shipper cannot read. Writes use a dotted temp in that same directory then an exclusive (no-clobber) link onto the final name; if that name already exists with different content the file is left in place and stdout omits `record_id`. Scrapers should glob `*.json` and ignore `*.tmp`. Optional `--cabling` / `--deployment` / `--fsd` / `--gsd` / `--rankfile` / `--rank-bindings` fill portable `topology` from native artifacts. Optional `--label key=value` stores opaque site aliases under `labels`. Non-passing records automatically include a concise `labels.failure_reason` derived from the test type and analyzer code; an explicit `--label failure_reason=...` overrides it with caller-specific context.
+
+Replay leftover dumps without re-running validation:
+
+```bash
+python3 tools/scaleout/exabox/report_cluster_health.py \
+  --from-artifact-dir /path/to/physical_or_nightly_tree \
+  --store-root DIR \
+  --triggered-by "$USER"
+```
+
+`--source` and `--trigger-kind` default to `backfill`. `--from` / `--to` (`YYYY-MM-DD`) filter on leftover **mtime**, not the record timestamp. There is no default window (the store is posterity). If a log shipper only keeps about ten days of data, pass a matching `--from` so you do not publish files that ingest will ignore.
+
+`--recursive` discovers wrapper logs under every nested `logs/` directory (for a tree of past runs) and `diag_report.json` files from single-node diag runs. Truncated wrappers that still have `HOSTS=` emit `status=degraded` with `labels.incomplete=true` instead of inventing an analyzer code. Recover outcomes use the last `Recovery succeeded on attempt` / `Recovery attempt … failed` line (including host-prefixed wrapper lines); `Recovery completed at` alone is not success. `Analysis exit code: N` may have a host/timestamp prefix. Repeatable `--label key=value` applies to every leftover in that invocation.
+
+Single-node Galaxy diag (`health_check_test_suite/run_diag.sh`) is unchanged: it still writes `diag_report.json`. Map that artifact into the same cluster health record after the fact. Clocks (`ts`, `duration_s`), host, tier, and board rev come from the JSON — do not pass them by hand.
+
+```bash
+python3 tools/scaleout/exabox/analyze_host_health_results.py \
+  --json /path/to/diag_report.json
+
+python3 tools/scaleout/exabox/report_cluster_health.py \
+  --from-diag-report /path/to/diag_report.json \
+  --dry-run
+```
+
+`--from-diag-report` sets `test_type=host`. PASS → `passed` (analyzer 0), WARN → `degraded` (2), FAIL → `failed` (1). Dry-run diag reports are refused. Optional `--label superpod=…` / `quad=…` / `ring=…` are still caller-supplied.
+
+`--dry-run` prints one JSON line per leftover (or one line for `--from-diag-report`) and never writes.
+
+Relabel existing hot/archive records from a caller-supplied canonical host
+snapshot with `migrate_cluster_health_labels.py`. Dry-run is the default;
+`--apply` requires a new backup directory and atomically replaces only records
+whose hierarchy changes. Record IDs, timestamps, status, hosts, artifacts, and
+orchestrator IDs are preserved.
+
+```bash
+python3 tools/scaleout/exabox/migrate_cluster_health_labels.py \
+  --snapshot /path/to/topology.snapshot.json \
+  --root /path/to/cluster-health \
+  --root /path/to/cluster-health-archive
+
+python3 tools/scaleout/exabox/migrate_cluster_health_labels.py \
+  --snapshot /path/to/topology.snapshot.json \
+  --root /path/to/cluster-health \
+  --apply --backup-root /path/to/new-backup-directory
+```
 
 ### Dispatch Tests
 
@@ -203,6 +265,25 @@ The script returns specific exit codes for automated workflows:
 
 For 4x32 topology, you **must** specify hosts in physical connectivity order. The 4 Galaxies are connected in a ring (`1 <-> 2 <-> 3 <-> 4 <-> 1`). If you see `TT_FATAL: Graph specified in MGD could not fit in the discovered physical topology`, see [Fabric Test Fails with "Graph could not fit in physical topology"](./TROUBLESHOOTING.md#fabric-test-fails-with-graph-could-not-fit-in-physical-topology) for diagnosis and resolution.
 
+**Automatic Ring Order from Descriptors:**
+
+Instead of manually figuring out the ring order, use `resolve_host_ring_order.py` to derive it from cabling + deployment descriptors (or an FSD):
+
+```bash
+# From cabling + deployment descriptors (same files used by physical validation):
+python3 tools/scaleout/exabox/resolve_host_ring_order.py \
+    --hosts host1,host2,host3,host4 \
+    --cabling /data/scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto \
+    --deployment /data/scaleout_configs/bh_glx_exabox/deployment_descriptor.textproto
+
+# Or from an FSD:
+python3 tools/scaleout/exabox/resolve_host_ring_order.py \
+    --hosts host1,host2,host3,host4 \
+    --fsd /data/scaleout_configs/merged_fsd.textproto
+```
+
+The tool outputs JSON with `ordered_hosts` — the hosts reordered so consecutive entries are physically connected. `run_fabric_tests.sh` can also call this automatically when `--cabling-descriptor-path` and `--deployment-descriptor-path` are provided.
+
 If these tests fail, raise the issue in the `#exabox-infra` Slack channel and tag the syseng and scaleout teams.
 
 **Exabox Physical Layout:**
@@ -211,33 +292,63 @@ If these tests fail, raise the issue in the `#exabox-infra` Slack channel and ta
 
 ## Quick Health Check (For Developers)
 
-For day-to-day use when you just need to verify a cluster is working.
+For day-to-day use when you just need to verify a cluster is working. `recover.sh` runs a distributed `tt-smi` reset, then cluster validation, then (on unrecoverable failure) auto-regenerates a degraded descriptor set — ~2 minutes end to end. Latest guidance: [Reference — Recover.sh](https://tenstorrent.atlassian.net/wiki/spaces/Exabox/pages/2509373523/Reference+Recover.sh+Quick+Reset+Validate) on Confluence.
 
-**Important: These scripts require a local build!**
+**Before you run (prerequisites):**
 
-Unlike the Docker-based qualification scripts above (`run_validation.sh`, `run_fabric_tests.sh`), the recovery scripts run binaries directly on the host and require you to build tt-metal first.
+- **Preflight must pass first** — chips visible (`tt-smi -l` shows 32 per host) and links up. Don't run `recover.sh` on a cluster that hasn't cleared preflight.
+- **Passwordless SSH to every host** via agent forwarding (see [SSH Setup](#ssh-setup)).
+- **MPI must reach all hosts.** Seed host keys and confirm reachability before running — this is the #1 cause of `recover.sh` hanging:
+  ```bash
+  export HOSTS=<comma-separated-hosts>
+  echo "$HOSTS" | tr ',' '\n' | xargs -I{} sh -c 'ssh-keyscan -H {} >> ~/.ssh/known_hosts 2>/dev/null'
+  mpirun --host "$HOSTS" hostname   # prints each hostname; if it hangs or prompts, fix SSH first
+  ```
 
-| Script Type | Requires Build? | Uses Docker? |
-|-------------|----------------|--------------|
-| `recover_*.sh` | **Yes** | No |
-| `run_validation.sh` | No | Yes |
-| `run_fabric_tests.sh` | No | Yes |
+**On Exabox, always run from the vetted pre-built path — no image, nothing to compile:**
+```bash
+cd /data/local-syseng-manual/tt-metal-recover
+./tools/scaleout/exabox/recover.sh --hosts <hosts> --mpi-if ens5f0np0
+# or for 8x16 configuration:
+./tools/scaleout/exabox/recover.sh --hosts <hosts> --config 8x16 --mpi-if ens5f0np0
+```
 
-**Build first:**
+This is the path everyone should use for a quick health check — it's already built and kept current, so you don't need to clone or build anything. (On another site the NIC name differs, so drop `--mpi-if` to auto-detect, or pin the right interface.)
+
+Look for `All Detected Links are healthy` in the output. No banner means it isn't done.
+
+**Rules — do / don't:**
+
+DO:
+- **Always run from the vetted path** `/data/local-syseng-manual/tt-metal-recover` — pre-built, no image needed.
+- **Pin the MPI interface** with `--mpi-if ens5f0np0` on Exabox (other sites: check `ip link`, or omit `--mpi-if` to auto-detect).
+- **If a run fails, power-cycle the affected hosts via `#bmc-bots` and re-run** before escalating — this clears most transient stalls and hangs.
+- **Confirm `All Detected Links are healthy`** before calling it done.
+
+DON'T:
+- **Don't run from your own checkout** (`/data/<user>/tt-metal`) unless you specifically need to test a local change — use the vetted path.
+- **Don't reach for image-based or hand-built runs** unless the vetted path can't do what you need.
+- **Don't flash or update firmware** on cluster machines — ever. They run debug FW (see [Do NOT Update Firmware on Cluster Machines](./TROUBLESHOOTING.md#do-not-update-firmware-on-cluster-machines)).
+- **Don't power-cycle on your own** — go through `#bmc-bots` (coordinate with the infra/cloud cluster managers).
+- **Don't combine `--skip-reset` with `--skip-validation`** — `recover.sh` fails fast with `Error: cannot use both --skip-reset and --skip-validation` (you must keep at least one of reset or validation).
+- **Don't declare success without the healthy-links banner.**
+
+**These scripts run a local build, not Docker.** Unlike the Docker-based qualification scripts above (`run_validation.sh`, `run_fabric_tests.sh`), the recovery scripts run binaries directly on the host, so a build has to exist somewhere. The vetted path above already provides one; only build tt-metal yourself if you're running from your own checkout (e.g. to test a local change) or on a site without the vetted path.
+
+| Script Type | Uses Docker? | Where the build comes from |
+|-------------|--------------|----------------------------|
+| `recover_*.sh` | No | Vetted pre-built path (Exabox), or your own `build_metal.sh` |
+| `run_validation.sh` | Yes | Docker image |
+| `run_fabric_tests.sh` | Yes | Docker image |
+
+**Building your own (only if not using the vetted path):**
 ```bash
 ./create_venv.sh
 source python_env/bin/activate
 ./build_metal.sh --build-metal-tests
 ```
 
-**Then run:**
-```bash
-./tools/scaleout/exabox/recover.sh --hosts <hosts>
-# or for 8x16 configuration:
-./tools/scaleout/exabox/recover.sh --hosts <hosts> --config 8x16
-```
-
-Look for `All Detected Links are healthy` in the output. If you see `could not access or execute an executable`, see [Recovery Script Fails](./TROUBLESHOOTING.md#recovery-script-fails-with-could-not-access-or-execute-an-executable).
+If you see `could not access or execute an executable`, the build is missing — use the vetted path or build first. See [Recovery Script Fails](./TROUBLESHOOTING.md#recovery-script-fails-with-could-not-access-or-execute-an-executable).
 
 **Tolerating missing cables:** by default, recovery fails if any expected cable is missing — either with `Encountered unrecoverable state` after 5 retrain attempts, or by early-exiting after a successful retrain without sending traffic. To validate the rest of the cluster when one or more cables are down, forward `--min-connections N` (relaxed mode, ASIC pair passes if it has at least N connections) via `--validation-args` and/or pass `--rerun-on-retrain` (rerun validation after a successful retrain so traffic actually runs).
 
@@ -299,6 +410,8 @@ A missing cable or bad port/connection will show up as a **consistently missing 
 | `analyze_validation_results.py` | Parse validation logs |
 | `analyze_dispatch_results.py` | Parse dispatch test logs |
 | `analyze_fabric_results.py` | Parse fabric test logs |
+| `analyze_host_health_results.py` | Map `diag_report.json` to a host analyzer code |
+| `report_cluster_health.py` | Emit cluster health JSON after analyze |
 | `mpi-docker` | MPI+Docker wrapper (`--help` for usage) |
 
 ## Config Files

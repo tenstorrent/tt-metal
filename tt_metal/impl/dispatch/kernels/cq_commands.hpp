@@ -60,7 +60,8 @@ enum CQDispatchCmdId : uint8_t {
     CQ_DISPATCH_SET_GO_SIGNAL_NOC_DATA = 17,
     CQ_DISPATCH_CMD_WRITE_PACKED_LARGE_UNICAST = 18,  // unicast packed large write with uint32_t length
     CQ_DISPATCH_SET_SUB_DEVICE_WORKER_COUNTS = 19,
-    CQ_DISPATCH_CMD_MAX_COUNT,  // for checking legal IDs
+    CQ_DISPATCH_CMD_RT_PROFILER_FLUSH = 20,  // dispatch_s: wait on the last program and signal its profiler record
+    CQ_DISPATCH_CMD_MAX_COUNT,               // for checking legal IDs
 };
 
 enum GoSignalMcastSettings : uint8_t {
@@ -167,10 +168,9 @@ struct CQPrefetchPagedToRingbufferCmd {
 } __attribute__((packed));
 
 struct CQPrefetchSetRingbufferOffsetCmd {
-    uint32_t offset;
-    uint16_t pad1;
-    uint8_t pad2;
     uint8_t update_wp;  // if set, the ringbuffer write pointer will be updated to the offset
+    uint16_t pad1;
+    uint32_t offset;
 } __attribute__((packed));
 
 // Current implementation limit is based on size of the l1_cache which stores the sub_cmds
@@ -312,7 +312,7 @@ get_packed_write_max_multicast_sub_cmds(uint32_t packed_write_max_unicast_sub_cm
     uint32_t packed_write_max_multicast_sub_cmds = packed_write_max_unicast_sub_cmds *
                                                    sizeof(CQDispatchWritePackedUnicastSubCmd) /
                                                    sizeof(CQDispatchWritePackedMulticastSubCmd);
-    return packed_write_max_multicast_sub_cmds;
+    return packed_write_max_multicast_sub_cmds < 1 ? 1 : packed_write_max_multicast_sub_cmds;
 }
 
 // Current implementation limit is based on size of the l1_cache which stores the sub_cmds
@@ -358,10 +358,12 @@ constexpr uint32_t CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER = 0x01;
 constexpr uint32_t CQ_DISPATCH_CMD_WAIT_FLAG_NOTIFY_PREFETCH = 0x02;
 // Wait for a count value on memory.
 constexpr uint32_t CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_MEMORY = 0x04;
-// Wait for a count value on a stream
-constexpr uint32_t CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM = 0x08;
+// Clear a count value in memory.
+constexpr uint32_t CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_MEMORY = 0x08;
+// Wait for a count value on a stream.
+constexpr uint32_t CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM = 0x10;
 // Clear a count value on a stream.
-constexpr uint32_t CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM = 0x10;
+constexpr uint32_t CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM = 0x20;
 
 struct CQDispatchWaitCmd {
     uint8_t flags;    // see above
@@ -393,11 +395,11 @@ struct CQDispatchSetUnicastOnlyCoresCmd {
 constexpr uint8_t CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET = 0xff;
 
 struct CQDispatchGoSignalMcastCmd {
-    uint32_t go_signal;
     uint8_t multicast_go_offset;  // Index of the multicast go to write to. CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET - no
                                   // multicast gos.
     uint8_t num_unicast_txns;
     uint8_t noc_data_start_index;
+    uint32_t go_signal;
     uint32_t wait_count;
     uint32_t wait_stream;  // Index of the stream to wait on
 } __attribute__((packed));
@@ -407,6 +409,13 @@ struct CQDispatchNotifySubordinateGoSignalCmd {
     uint8_t wait;  // if true, issue a write barrier before sending signal to dispatch_s
     uint16_t index_bitmask;
     uint32_t pad3;
+} __attribute__((packed));
+
+struct CQDispatchRtProfilerFlushCmd {
+    uint8_t pad1;
+    uint16_t pad2;
+    uint32_t wait_count;   // worker completion count to wait on
+    uint32_t wait_stream;  // stream index to wait on
 } __attribute__((packed));
 
 struct CQDispatchSetNumWorkerSemsCmd {
@@ -446,6 +455,7 @@ struct CQDispatchCmd {
         CQDispatchSetNumWorkerSemsCmd set_num_worker_sems;
         CQDispatchSetGoSignalNocDataCmd set_go_signal_noc_data;
         CQDispatchSetSubDeviceWorkerCountsCmd set_sub_device_worker_counts;
+        CQDispatchRtProfilerFlushCmd rt_profiler_flush;
     } __attribute__((packed));
 };
 
@@ -460,8 +470,12 @@ struct CQDispatchCmdLarge {
 
 //////////////////////////////////////////////////////////////////////////////
 
-static_assert(sizeof(CQPrefetchBaseCmd) == sizeof(uint8_t));  // if this fails, padding above needs to be adjusted
-static_assert(sizeof(CQDispatchBaseCmd) == sizeof(uint8_t));  // if this fails, padding above needs to be adjusted
-static_assert((sizeof(CQPrefetchCmd) & (CQ_DISPATCH_CMD_SIZE - 1)) == 0);
-static_assert((sizeof(CQPrefetchCmdLarge) & (CQ_DISPATCH_CMD_SIZE - 1)) == 0);
-static_assert((sizeof(CQDispatchCmd) & (CQ_DISPATCH_CMD_SIZE - 1)) == 0);
+// Base cmd size sets where every payload field lands: if this fails, adjust the padding above and
+// every load_aligned() field offset shifts with it.
+static_assert(sizeof(CQPrefetchBaseCmd) == sizeof(uint8_t));
+static_assert(sizeof(CQDispatchBaseCmd) == sizeof(uint8_t));
+// Exact, not a multiple: a union member growing past the largest would silently double every stride.
+static_assert(sizeof(CQPrefetchCmd) == CQ_DISPATCH_CMD_SIZE);
+static_assert(sizeof(CQPrefetchCmdLarge) == 2 * CQ_DISPATCH_CMD_SIZE);
+static_assert(sizeof(CQDispatchCmd) == CQ_DISPATCH_CMD_SIZE);
+static_assert(sizeof(CQDispatchCmdLarge) == 2 * CQ_DISPATCH_CMD_SIZE);

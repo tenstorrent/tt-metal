@@ -13,12 +13,14 @@ namespace ttml::metal::optimizers::sgd::device {
 
 void SGDDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    auto check_tensor = [](const ttnn::Tensor& tensor,
-                           const std::string& name,
-                           const tt::tt_metal::Layout required_layout,
-                           const tt::tt_metal::DataType required_dtype) {
+    const auto& param = tensor_args.param;
+    auto check_tensor = [&param](
+                            const ttnn::Tensor& tensor,
+                            const std::string& name,
+                            const tt::tt_metal::Layout required_layout,
+                            const tt::tt_metal::DataType required_dtype) {
         TT_FATAL(
-            tensor.storage_type() == tt::tt_metal::StorageType::DEVICE,
+            tensor.storage_type() == ttnn::StorageType::DEVICE,
             "SGD optimizer requires '{}' to be on DEVICE. Got storage type: '{}'",
             name,
             enchantum::to_string(tensor.storage_type()));
@@ -46,13 +48,30 @@ void SGDDeviceOperation::validate_on_program_cache_miss(
             enchantum::to_string(tensor.dtype()));
 
         TT_FATAL(
-            tensor.memory_config().memory_layout() == ttnn::TensorMemoryLayout::INTERLEAVED,
+            tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
             "Tensor '{}' must use INTERLEAVED memory layout, but got '{}'",
             name,
             enchantum::to_string(tensor.memory_config().memory_layout()));
+
+        // Logical shapes must match for element-for-element correspondence with the parameter;
+        // padding alone cannot tell apart tensors that round up to the same tile extent.
+        TT_FATAL(
+            tensor.logical_shape() == param.logical_shape(),
+            "Tensor '{}' must match the parameter's logical shape. Expected {}, got {}",
+            name,
+            param.logical_shape(),
+            tensor.logical_shape());
+
+        // Tile counts and reader/writer extents are derived solely from the parameter tensor, so any
+        // smaller companion tensor would be read or written past its allocation.
+        TT_FATAL(
+            tensor.padded_shape() == param.padded_shape(),
+            "Tensor '{}' must match the parameter's padded shape. Expected {}, got {}",
+            name,
+            param.padded_shape(),
+            tensor.padded_shape());
     };
 
-    const auto& param = tensor_args.param;
     const auto& grad = tensor_args.grad;
     const auto& momentum_buffer = tensor_args.momentum_buffer;
     check_tensor(param, "Parameter", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);

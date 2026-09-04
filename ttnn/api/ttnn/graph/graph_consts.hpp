@@ -30,9 +30,13 @@ constexpr auto kNumCores = "num_cores";
 constexpr auto kPageSize = "page_size";
 constexpr auto kCoreRangeSet = "core_range_set";
 constexpr auto kGloballyAllocated = "globally_allocated";
+constexpr auto kBorrowsMemory = "borrows_memory";
 constexpr auto kDeviceId = "device_id";
 constexpr auto kDurationNs = "duration_ns";
 constexpr auto kMaxSizePerBank = "max_size_per_bank";
+constexpr auto kProgramFactoryType = "program_factory_type";
+constexpr auto kProgramFactoryIndex = "program_factory_index";
+constexpr auto kProgramCacheHit = "program_cache_hit";
 
 // node names
 constexpr auto kNodeBuffer = "buffer";
@@ -40,6 +44,9 @@ constexpr auto kNodeBufferAllocate = "buffer_allocate";
 constexpr auto kNodeBufferDeallocate = "buffer_deallocate";
 constexpr auto kNodeTensor = "tensor";
 constexpr auto kNodeCBAllocate = "circular_buffer_allocate";
+constexpr auto kNodeDataflowBufferAllocate = "dataflow_buffer_allocate";
+constexpr auto kNodeScratchpadAllocate = "scratchpad_allocate";
+// Releases every kind of program-scope L1: circular buffers, dataflow buffers and scratchpads.
 constexpr auto kNodeCBDeallocateAll = "circular_buffer_deallocate_all";
 constexpr auto kNodeFunctionStart = "function_start";
 constexpr auto kNodeFunctionEnd = "function_end";
@@ -62,6 +69,11 @@ constexpr auto kReportTimestampNs = "capture_timestamp_ns";
 constexpr auto kReportTotalDurationNs = "total_duration_ns";
 constexpr auto kReportRank = "rank";
 constexpr auto kReportWorldSize = "world_size";
+constexpr auto kReportGitSha = "git_sha";
+constexpr auto kReportGitShaShort = "git_sha_short";
+constexpr auto kReportGitVersion = "version";
+constexpr auto kReportBuildType = "build_type";
+constexpr auto kReportGitDirty = "dirty";
 
 // device info keys
 constexpr auto kDeviceNumYCores = "num_y_cores";

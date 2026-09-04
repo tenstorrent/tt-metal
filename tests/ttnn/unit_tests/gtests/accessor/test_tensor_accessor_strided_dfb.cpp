@@ -18,6 +18,7 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "impl/program/program_impl.hpp"
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/distributed.hpp>
@@ -116,10 +117,9 @@ void run_strided_dfb_copy_test(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     uint32_t num_dfb_entries,
     KernelBuilderFn kernel_builder_fn) {
-    auto* device = mesh_device->get_devices().at(0);
-
     MemoryConfig mem_config(TensorMemoryLayout::INTERLEAVED, params.buffer_type);
-    TensorSpec tensor_spec(params.tensor_shape, TensorLayout(params.dtype, PageConfig(params.layout), mem_config));
+    tt::tt_metal::TensorSpec tensor_spec(
+        params.tensor_shape, TensorLayout(params.dtype, PageConfig(params.layout), mem_config));
 
     const auto src = tt::test_utils::generate_uniform_random_vector<T>(0, UINT8_MAX, params.tensor_shape.volume());
     auto input_tensor = Tensor::from_vector(src, tensor_spec, mesh_device);
@@ -149,8 +149,8 @@ void run_strided_dfb_copy_test(
     const std::string output_cta_str = build_cta_define(output_accessor_args);
 
     // Placeholder kernel specs — filled in by the arch-specific builder lambda
-    KernelSpec reader = MakeMinimalDMKernel("reader");  // overwritten by builder
-    KernelSpec writer = MakeMinimalDMKernel("writer");  // overwritten by builder
+    KernelSpec reader = MakeMinimalGen2DMKernel("reader");  // overwritten by builder
+    KernelSpec writer = MakeMinimalGen2DMKernel("writer");  // overwritten by builder
 
     // Let the arch-specific caller configure kernel specs and DFB bindings
     kernel_builder_fn(reader, writer);
@@ -202,7 +202,7 @@ void run_strided_dfb_copy_test(
     // -----------------------------------------------------------------------
     // Dispatch and verify
     // -----------------------------------------------------------------------
-    detail::LaunchProgram(device, program);
+    LaunchProgram(*mesh_device, std::move(program), /*wait_until_cores_done=*/true);
 
     const auto output_cpu = output_tensor.cpu(true);
     const auto output_shard = ttnn::distributed::get_device_tensors(output_cpu).front();
@@ -304,8 +304,8 @@ TEST_P(TensorAccessorStridedDFBTest, QuasarStridedPagesCopy) {
     constexpr uint8_t kNumDMThreads = 3;
 
     auto kernel_builder = [&](KernelSpec& reader, KernelSpec& writer) {
-        reader = MakeMinimalDMKernel("reader", kNumDMThreads);
-        writer = MakeMinimalDMKernel("writer", kNumDMThreads);
+        reader = MakeMinimalGen2DMKernel("reader", kNumDMThreads);
+        writer = MakeMinimalGen2DMKernel("writer", kNumDMThreads);
         // STRIDED with 3 threads: each thread owns every 3rd DFB entry
         reader.dfb_bindings.push_back(ProducerOf(experimental::DFBSpecName{"staging_dfb"}, "my_dfb"));
         writer.dfb_bindings.push_back(ConsumerOf(experimental::DFBSpecName{"staging_dfb"}, "my_dfb"));

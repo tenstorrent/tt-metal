@@ -10,7 +10,7 @@
 #include <tt_stl/span.hpp>
 
 #include <tt-metalium/tile.hpp>
-#include "tracy/Tracy.hpp"
+#include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 
 #include "mx_tile_pack.hpp"
 
@@ -65,32 +65,32 @@ constexpr tt::tt_metal::mx::FormatParams kMxFp8E4M3Params = {
 
 template <typename T>
 std::vector<uint32_t> pack_as_mxfp8_e5m2_tiles(
-    tt::stl::Span<const T> data, bool row_major_input, const std::optional<tt::tt_metal::Tile>& tile) {
-    ZoneScoped;
+    ttsl::Span<const T> data, bool row_major_input, const std::optional<tt::tt_metal::Tile>& tile) {
+    TTZoneScopedD(DATA_FORMAT);
     return tt::tt_metal::mx::pack_as_mx_tiles_impl(data, row_major_input, tile, kMxFp8E5M2Params);
 }
 
 template <typename T>
 std::vector<uint32_t> pack_as_mxfp8_e4m3_tiles(
-    tt::stl::Span<const T> data, bool row_major_input, const std::optional<tt::tt_metal::Tile>& tile) {
-    ZoneScoped;
+    ttsl::Span<const T> data, bool row_major_input, const std::optional<tt::tt_metal::Tile>& tile) {
+    TTZoneScopedD(DATA_FORMAT);
     return tt::tt_metal::mx::pack_as_mx_tiles_impl(data, row_major_input, tile, kMxFp8E4M3Params);
 }
 
 // Explicit instantiations — keep in sync with the supported input element types.
 template std::vector<uint32_t> pack_as_mxfp8_e5m2_tiles<float>(
-    tt::stl::Span<const float>, bool, const std::optional<tt::tt_metal::Tile>&);
+    ttsl::Span<const float>, bool, const std::optional<tt::tt_metal::Tile>&);
 template std::vector<uint32_t> pack_as_mxfp8_e4m3_tiles<float>(
-    tt::stl::Span<const float>, bool, const std::optional<tt::tt_metal::Tile>&);
+    ttsl::Span<const float>, bool, const std::optional<tt::tt_metal::Tile>&);
 
 std::vector<float> unpack_mxfp8_e5m2_tiles_into_float_vec(
-    tt::stl::Span<const uint32_t> mxfp8_tiles, bool row_major_output, const std::optional<tt::tt_metal::Tile>& tile) {
-    ZoneScoped;
+    ttsl::Span<const uint32_t> mxfp8_tiles, bool row_major_output, const std::optional<tt::tt_metal::Tile>& tile) {
+    TTZoneScopedD(DATA_FORMAT);
     return tt::tt_metal::mx::unpack_mx_tiles_into_float_vec_impl(mxfp8_tiles, row_major_output, tile, kMxFp8E5M2Params);
 }
 
 std::vector<float> unpack_mxfp8_e4m3_tiles_into_float_vec(
-    tt::stl::Span<const uint32_t> mxfp8_tiles, bool row_major_output, const std::optional<tt::tt_metal::Tile>& tile) {
-    ZoneScoped;
+    ttsl::Span<const uint32_t> mxfp8_tiles, bool row_major_output, const std::optional<tt::tt_metal::Tile>& tile) {
+    TTZoneScopedD(DATA_FORMAT);
     return tt::tt_metal::mx::unpack_mx_tiles_into_float_vec_impl(mxfp8_tiles, row_major_output, tile, kMxFp8E4M3Params);
 }

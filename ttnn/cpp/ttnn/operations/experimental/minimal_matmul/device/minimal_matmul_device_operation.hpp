@@ -18,7 +18,7 @@ namespace ttnn::experimental::prim {
 struct MinimalMatmulDeviceOperation {
     using operation_attributes_t = MinimalMatmulParams;
     using tensor_args_t = MinimalMatmulInputs;
-    using spec_return_value_t = std::vector<TensorSpec>;
+    using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
     using tensor_return_value_t = std::vector<Tensor>;
 
     using program_factory_t = std::variant<MinimalMatmulProgramFactory>;
@@ -44,7 +44,8 @@ struct MinimalMatmulDeviceOperation {
         int32_t dim = -1,
         std::optional<float> fused_ternary_scalar = std::nullopt,
         const std::optional<Tensor>& fused_ternary_input_a = std::nullopt,
-        const std::optional<Tensor>& fused_ternary_input_b = std::nullopt);
+        const std::optional<Tensor>& fused_ternary_input_b = std::nullopt,
+        bool fuse_swiglu = false);
 };
 
 }  // namespace ttnn::experimental::prim
@@ -64,6 +65,10 @@ std::vector<Tensor> minimal_matmul(
     int32_t dim = -1,
     std::optional<float> fused_ternary_scalar = std::nullopt,
     const std::optional<Tensor>& fused_ternary_input_a = std::nullopt,
-    const std::optional<Tensor>& fused_ternary_input_b = std::nullopt);
+    const std::optional<Tensor>& fused_ternary_input_b = std::nullopt,
+    bool fuse_swiglu = false,
+    // Fused concat (concat-free): when set, in0's K is input_tensor (prefix) then optional_input_tensor
+    // (suffix); the split point is input_tensor's K width and the weight is stacked [W_prefix; W_suffix].
+    const std::optional<Tensor>& optional_input_tensor = std::nullopt);
 
 }  // namespace ttnn::prim

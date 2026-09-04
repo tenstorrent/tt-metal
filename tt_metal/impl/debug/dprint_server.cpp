@@ -90,16 +90,16 @@ namespace {
 string logfile_path = "generated/dprint/";
 
 string GetRiscName(
-    const tt::Cluster& cluster,
-    const tt_metal::Hal& hal,
+    tt_metal::MetalEnvImpl& env,
     ChipId device_id,
     const umd::CoreDescriptor& logical_core,
     int risc_id,
     bool abbreviated = false) {
-    CoreCoord virtual_core =
+    const auto& cluster = env.get_cluster();
+    tt::tt_metal::CoreCoord virtual_core =
         cluster.get_virtual_coordinate_from_logical_coordinates(device_id, logical_core.coord, logical_core.type);
-    auto programmable_core_type = llrt::get_core_type(device_id, virtual_core);
-    return hal.get_processor_class_name(programmable_core_type, risc_id, abbreviated);
+    auto programmable_core_type = llrt::get_core_type(env, device_id, virtual_core);
+    return env.get_hal().get_processor_class_name(programmable_core_type, risc_id, abbreviated);
 }
 
 inline bool RiscEnabled(
@@ -107,6 +107,12 @@ inline bool RiscEnabled(
     const auto& processors = rtoptions.get_feature_processors(tt::llrt::RunTimeDebugFeatureDprint);
     return processors.contains(core_type, risc_index);
 }
+
+// Quasar DevicePrintMemoryLayout (tt_metal/hw/inc/internal/tt-2xx/quasar/device_print_mem.h) lays out two
+// contiguous sub-buffers: buffer_triscs (buffer_size_triscs) then buffer_dms (buffer_size_dms). The host
+// DPRINT server must use the same split when locating compute vs DM print regions in L1.
+constexpr uint16_t kQuasarDprintComputeSubbufferSize = 3264;  // buffer_size_triscs
+constexpr uint16_t kQuasarDprintDmSubbufferSize = 1632;       // buffer_size_dms
 
 // A null stream for when the print server is muted.
 class NullBuffer : public std::streambuf {
@@ -121,7 +127,7 @@ std::ostream null_stream(&null_buffer);
 void WriteInitMagic(
     tt::Cluster& cluster,
     ChipId device_id,
-    const CoreCoord& virtual_core,
+    const tt::tt_metal::CoreCoord& virtual_core,
     const tt::tt_metal::DPrintBufferInfo& buffer_info,
     bool enabled) {
     // TODO(AP): this could use a cleanup - need a different mechanism to know if a kernel is running on device.
@@ -189,7 +195,7 @@ public:
         const auto& hal = env_.get_hal();
         auto virtual_core =
             cluster.get_virtual_coordinate_from_logical_coordinates(device_id, print_core.coord, print_core.type);
-        auto programmable_core_type = llrt::get_core_type(device_id, virtual_core);
+        auto programmable_core_type = llrt::get_core_type(env_, device_id, virtual_core);
         const uint64_t structure_address =
             hal.get_dev_noc_addr(programmable_core_type, HalL1MemAddrType::DPRINT_BUFFERS);
         const uint32_t structure_size = hal.get_dev_size(programmable_core_type, HalL1MemAddrType::DPRINT_BUFFERS);
@@ -217,17 +223,21 @@ public:
                 programmable_core_type, static_cast<uint32_t>(HalProcessorClassType::DM)));
             const uint16_t compute_count = static_cast<uint16_t>(hal.get_processor_types_count(
                 programmable_core_type, static_cast<uint32_t>(HalProcessorClassType::COMPUTE)));
-            const uint16_t compute_size = 3264;
-            const uint16_t dm_size = 1632;
             TT_FATAL(
-                static_cast<uint32_t>(compute_size) + dm_size == structure_size,
+                static_cast<uint32_t>(kQuasarDprintComputeSubbufferSize) + kQuasarDprintDmSubbufferSize ==
+                    structure_size,
                 "Quasar TENSIX DPRINT buffer split (compute {} + DM {}) doesn't match region size {}",
-                compute_size,
-                dm_size,
+                kQuasarDprintComputeSubbufferSize,
+                kQuasarDprintDmSubbufferSize,
                 structure_size);
             return {
-                make_buffer(structure_address, compute_size, compute_count, dm_count),
-                make_buffer(structure_address + compute_size, dm_size, dm_count, 0),
+                make_buffer(
+                    structure_address, kQuasarDprintComputeSubbufferSize, compute_count, dm_count),
+                make_buffer(
+                    structure_address + kQuasarDprintComputeSubbufferSize,
+                    kQuasarDprintDmSubbufferSize,
+                    dm_count,
+                    0),
             };
         }
 
@@ -341,7 +351,7 @@ void DPrintServer::Impl::print_buffer_data(
     const auto& hal = env_.get_hal();
     auto virtual_core =
         cluster.get_virtual_coordinate_from_logical_coordinates(device_id, logical_core.coord, logical_core.type);
-    auto programmable_core_type = llrt::get_core_type(device_id, virtual_core);
+    auto programmable_core_type = llrt::get_core_type(env_, device_id, virtual_core);
     uint32_t risc_count = env_.get_hal().get_num_risc_processors(programmable_core_type);
     uint32_t programmable_core_type_idx = hal.get_programmable_core_type_index(programmable_core_type);
     DevicePrintParser::FormatMessageBuffer format_message_buffer;
@@ -496,7 +506,7 @@ void DPrintServer::Impl::print_buffer_data(
                                 const string& device_id_str = to_string(device_id);
                                 const string& core_coord_str = logical_core.coord.str();
                                 const string& risc_name =
-                                    GetRiscName(cluster, hal, device_id, logical_core, header->risc_id, true);
+                                    GetRiscName(env_, device_id, logical_core, header->risc_id, true);
                                 line_prefix = fmt::format("{}:{}:{}: ", device_id_str, core_coord_str, risc_name);
                             }
                             risc_data.line_prefix = line_prefix;
@@ -545,7 +555,8 @@ bool DPrintServer::Impl::poll_print_buffer(
     auto from_dev = cluster.read_core(device_id, virtual_core, read_write_pointer_address, eightbytes);
     uint32_t wpos = from_dev[0], rpos = from_dev[1];
 
-    if (wpos == DEBUG_PRINT_SERVER_DISABLED_MAGIC || wpos == DEBUG_PRINT_SERVER_STARTING_MAGIC || wpos == rpos) {
+    if (wpos == DEBUG_PRINT_SERVER_DISABLED_MAGIC || wpos == DEBUG_PRINT_SERVER_STARTING_MAGIC ||
+        rpos == DEVICE_PRINT_RESET_BUFFER_MAGIC || wpos == rpos) {
         return false;
     }
 
@@ -588,6 +599,12 @@ bool DPrintServer::Impl::poll_print_buffer(
             from_dev = cluster.read_core(device_id, virtual_core, read_write_pointer_address, eightbytes);
             wpos = from_dev[0];
             rpos = from_dev[1];
+
+            // Device should be much faster than host, but in case we are running simulation,
+            // we should check if device has reset buffer and we have caught up to it.
+            if (rpos == DEVICE_PRINT_RESET_BUFFER_MAGIC) {
+                return false;
+            }
             continue;
         }
 
@@ -609,7 +626,7 @@ bool DPrintServer::Impl::poll_one_core(
 
 void DPrintServer::Impl::init_print_buffers_for_core(ChipId device_id, const umd::CoreDescriptor& logical_core) {
     auto& cluster = env_.get_cluster();
-    CoreCoord virtual_core =
+    tt::tt_metal::CoreCoord virtual_core =
         cluster.get_virtual_coordinate_from_logical_coordinates(device_id, logical_core.coord, logical_core.type);
     for (auto& buffer_info : get_core_buffers(device_id, logical_core)) {
         WriteInitMagic(cluster, device_id, virtual_core, buffer_info, false);
@@ -618,9 +635,9 @@ void DPrintServer::Impl::init_print_buffers_for_core(ChipId device_id, const umd
 
 void DPrintServer::Impl::enable_print_buffers_for_core(ChipId device_id, const umd::CoreDescriptor& logical_core) {
     auto& cluster = env_.get_cluster();
-    CoreCoord virtual_core =
+    tt::tt_metal::CoreCoord virtual_core =
         cluster.get_virtual_coordinate_from_logical_coordinates(device_id, logical_core.coord, logical_core.type);
-    auto programmable_core_type = llrt::get_core_type(device_id, virtual_core);
+    auto programmable_core_type = llrt::get_core_type(env_, device_id, virtual_core);
     for (auto& buffer_info : get_core_buffers(device_id, logical_core)) {
         WriteInitMagic(cluster, device_id, virtual_core, buffer_info, true);
 
@@ -1005,7 +1022,7 @@ void DPrintServer::Impl::await() {
 void DPrintServer::Impl::init_device(ChipId device_id) {
     auto& cluster = env_.get_cluster();
     auto& control_plane = env_.get_control_plane();
-    CoreDescriptorSet all_cores = GetAllCores(cluster, control_plane, device_id);
+    CoreDescriptorSet all_cores = GetAllCores(env_.get_hal(), cluster, control_plane, device_id);
     // Initialize all print buffers on all cores on the device to have print disabled magic. We
     // will then write print enabled magic for only the cores the user has specified to monitor.
     // This way in the kernel code (dprint.h) we can detect whether the magic value is present and
@@ -1041,7 +1058,8 @@ void DPrintServer::Impl::attach_device(ChipId device_id) {
     // here are virtual.
     auto& cluster = env_.get_cluster();
     auto& control_plane = env_.get_control_plane();
-    tt::tt_metal::CoreDescriptorSet all_cores = tt::tt_metal::GetAllCores(cluster, control_plane, device_id);
+    tt::tt_metal::CoreDescriptorSet all_cores =
+        tt::tt_metal::GetAllCores(env_.get_hal(), cluster, control_plane, device_id);
     tt::tt_metal::CoreDescriptorSet dispatch_cores =
         tt::tt_metal::GetDispatchCores(env_, device_id, num_hw_cqs_, dispatch_core_config_);
 
@@ -1057,14 +1075,41 @@ void DPrintServer::Impl::attach_device(ChipId device_id) {
 
     // Core range depends on whether dprint_all_cores flag is set.
     std::vector<umd::CoreDescriptor> print_cores_sanitized;
+    print_cores_sanitized.reserve(all_cores.size() + dispatch_cores.size());
     const auto& hal = env_.get_hal();
     std::vector<CoreType> core_types_to_check = {CoreType::WORKER, CoreType::ETH};
     if (hal.has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
         core_types_to_check.push_back(CoreType::DRAM);
     }
+    // Quasar dispatch-engine cores are a distinct CoreType::DISPATCH (DM-only firmware/kernels).
+    if (hal.has_programmable_core_type(HalProgrammableCoreType::DISPATCH)) {
+        core_types_to_check.push_back(CoreType::DISPATCH);
+    }
+    // TT_METAL_DPRINT_CORES=dispatch records its "dispatch" selection under CoreType::WORKER. On the Quasar
+    // dispatch-engine path the cores returned by GetDispatchCores() are CoreType::DISPATCH and would never
+    // match the WORKER loop, so reroute that selection to the DISPATCH iteration (and clear it from WORKER)
+    // to match without double counting. On WH/BH and the Quasar interim Tensix path the dispatch cores are
+    // WORKER-typed and the original WORKER-loop handling is unchanged.
+    const bool dispatch_cores_are_dispatch_type =
+        !dispatch_cores.empty() && dispatch_cores.begin()->type == CoreType::DISPATCH;
+    const bool worker_selects_dispatch =
+        rtoptions.get_feature_all_cores(tt::llrt::RunTimeDebugFeatureDprint, CoreType::WORKER) ==
+        tt::llrt::RunTimeDebugClassDispatch;
     for (CoreType core_type : core_types_to_check) {
-        if (rtoptions.get_feature_all_cores(tt::llrt::RunTimeDebugFeatureDprint, core_type) ==
-            tt::llrt::RunTimeDebugClassAll) {
+        int cores_class = rtoptions.get_feature_all_cores(tt::llrt::RunTimeDebugFeatureDprint, core_type);
+        if (dispatch_cores_are_dispatch_type && worker_selects_dispatch) {
+            if (core_type == CoreType::WORKER) {
+                // The "dispatch" selection is rerouted to the DISPATCH iteration below. Skip the WORKER
+                // iteration entirely: matching a class name (e.g. "dispatch") makes ParseFeatureCoreRange
+                // return without populating cores[WORKER], so falling through to the explicit-cores branch
+                // would throw map::at on get_feature_cores(...).at(CoreType::WORKER).
+                continue;
+            }
+            if (core_type == CoreType::DISPATCH) {
+                cores_class = tt::llrt::RunTimeDebugClassDispatch;
+            }
+        }
+        if (cores_class == tt::llrt::RunTimeDebugClassAll) {
             // Print from all cores of the given type, cores returned here are guaranteed to be valid.
             for (umd::CoreDescriptor logical_core : all_cores) {
                 if (logical_core.type == core_type) {
@@ -1076,9 +1121,7 @@ void DPrintServer::Impl::attach_device(ChipId device_id) {
                 "DPRINT enabled on device {}, all {} cores.",
                 device_id,
                 tt::tt_metal::get_core_type_name(core_type));
-        } else if (
-            rtoptions.get_feature_all_cores(tt::llrt::RunTimeDebugFeatureDprint, core_type) ==
-            tt::llrt::RunTimeDebugClassDispatch) {
+        } else if (cores_class == tt::llrt::RunTimeDebugClassDispatch) {
             for (umd::CoreDescriptor logical_core : dispatch_cores) {
                 if (logical_core.type == core_type) {
                     print_cores_sanitized.push_back(logical_core);
@@ -1089,9 +1132,7 @@ void DPrintServer::Impl::attach_device(ChipId device_id) {
                 "DPRINT enabled on device {}, {} dispatch cores.",
                 device_id,
                 tt::tt_metal::get_core_type_name(core_type));
-        } else if (
-            rtoptions.get_feature_all_cores(tt::llrt::RunTimeDebugFeatureDprint, core_type) ==
-            tt::llrt::RunTimeDebugClassWorker) {
+        } else if (cores_class == tt::llrt::RunTimeDebugClassWorker) {
             // For worker cores, take all cores and remove dispatch cores.
             for (umd::CoreDescriptor logical_core : all_cores) {
                 if (!dispatch_cores.contains(logical_core)) {
@@ -1107,14 +1148,14 @@ void DPrintServer::Impl::attach_device(ChipId device_id) {
                 tt::tt_metal::get_core_type_name(core_type));
         } else {
             // No "all cores" option provided, which means print from the cores specified by the user
-            const std::vector<CoreCoord>& print_cores =
+            const std::vector<tt::tt_metal::CoreCoord>& print_cores =
                 rtoptions.get_feature_cores(tt::llrt::RunTimeDebugFeatureDprint).at(core_type);
 
             // We should also validate that the cores the user specified are valid worker cores.
             for (const auto& logical_core : print_cores) {
                 // Need to convert user-specified logical cores to virtual cores, this can throw
                 // if the user gave bad coords.
-                CoreCoord virtual_core;
+                tt::tt_metal::CoreCoord virtual_core;
                 bool valid_logical_core = true;
                 try {
                     virtual_core = env_.get_cluster().get_virtual_coordinate_from_logical_coordinates(
@@ -1235,7 +1276,8 @@ void DPrintServer::Impl::detach_device(ChipId device_id) {
     log_info(LogMetal, "DPRINT Server detached device {}", device_id);
 
     // When detaching a device, disable prints on it.
-    tt::tt_metal::CoreDescriptorSet all_cores = tt::tt_metal::GetAllCores(cluster, control_plane, device_id);
+    tt::tt_metal::CoreDescriptorSet all_cores =
+        tt::tt_metal::GetAllCores(env_.get_hal(), cluster, control_plane, device_id);
     for (const auto& logical_core : all_cores) {
         init_print_buffers_for_core(device_id, logical_core);
     }
@@ -1342,8 +1384,6 @@ void DPrintServer::Impl::flush_output_streams() {
 
 ostream* DPrintServer::Impl::get_output_stream(const RiscKey& risc_key) {
     ostream* output_stream = stream_;
-    auto& cluster = env_.get_cluster();
-    const auto& hal = env_.get_hal();
     const auto& rtoptions = env_.get_rtoptions();
     if (rtoptions.get_feature_one_file_per_risc(tt::llrt::RunTimeDebugFeatureDprint)) {
         if (!risc_to_file_stream_[risc_key]) {
@@ -1357,7 +1397,7 @@ ostream* DPrintServer::Impl::get_output_stream(const RiscKey& risc_key) {
                 tt::tt_metal::get_core_type_name(logical_core.type),
                 logical_core.coord.x,
                 logical_core.coord.y,
-                GetRiscName(cluster, hal, chip_id, logical_core, risc_id));
+                GetRiscName(env_, chip_id, logical_core, risc_id));
             risc_to_file_stream_[risc_key] = new ofstream(filename);
         }
         output_stream = risc_to_file_stream_[risc_key];

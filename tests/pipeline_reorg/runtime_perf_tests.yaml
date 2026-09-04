@@ -1,6 +1,8 @@
-# This file defines the test matrix for the Runtime performance (dispatch) tests.
-# These are Google Benchmark-based microbenchmarks measuring dispatch latency and
-# buffer R/W bandwidth, with golden comparison for regression detection.
+# This file defines the test matrix for the Runtime performance tests.
+# These are host-side microbenchmarks (dispatch latency, buffer R/W bandwidth,
+# JIT-build compile throughput, and PCIe mem_bench), most with golden comparison
+# for regression detection. The dispatch/buffer/PCIe benchmarks use Google
+# Benchmark; the JIT-build benchmark drives a gtest and gates via compile_stress_ci.py.
 #
 # Each entry represents a parallel job with the following keys:
 #   name: The display name for the job in GitHub Actions.
@@ -56,6 +58,40 @@
     wh_n300_civ2:
       timeout: 25
     bh_p150_perf:
+      timeout: 10
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
+# --- JIT Build (local host compile) Throughput Benchmark ---
+# Adapts DISABLED_TensixCompileStress into a runtime perf gate: real attached
+# device, no remote compile server, N cache-bypassing kernels compiled locally
+# per rep (kernels are compiled, not dispatched). The driver takes the fastest
+# rep and compares it against a per-arch golden (record mode until goldens are
+# armed). Auto-picks the golden from $ARCH_NAME.
+- name: runtime_perf_jit_build
+  cmd: |
+    mkdir -p generated/test_reports
+    ./tests/tt_metal/tt_metal/jit_build/compile_stress_ci.py \
+      --arch "$ARCH_NAME" --num-kernels 300 --repetitions 3
+  skus:
+    wh_n300_civ2:
+      timeout: 10
+    bh_p150_perf:
+      timeout: 10
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
+# --- PCIe host/device bandwidth (mem_bench) ---
+# Same command and CIv2 P150b SKU as the former metal-run-microbenchmarks
+# "BH P150 PCIe Performance" job. No golden gate yet; keep it off bare-metal
+# perf runners so it does not block the dispatch/buffer jobs
+# (https://github.com/tenstorrent/tt-metal/pull/28148#issuecomment-3275595011).
+- name: runtime_perf_pcie_mem_bench
+  cmd: |
+    mkdir -p generated/test_reports
+    ./build/tools/mem_bench --benchmark_filter='Device (Reading|Writing) Host'
+  skus:
+    bh_p150b_civ2_viommu:
       timeout: 10
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime

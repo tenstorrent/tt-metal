@@ -32,11 +32,17 @@ pytestmark = pytest.mark.use_module_device
 import torch
 from loguru import logger
 
+import math
+
 import ttnn
-from models.common.utility_functions import is_blackhole
 from tests.ttnn.utils_for_testing import measure_ulp_with_near_zero_atol
 from tests.ttnn.nightly.unit_tests.operations.fused.utility_functions import ttnn_layer_norm
-
+from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
+    ttnn_layer_norm_sharded,
+    ttnn_rms_norm_sharded,
+    make_sharded_norm_mem_config,
+    to_poisoned_sharded,
+)
 
 # Poison value to ensure Welford's algorithm ignores padded elements (#31982)
 PAD_VALUE = -42
@@ -159,10 +165,38 @@ def _build_layer_norm_shapes():
 
 _SHAPES = _build_layer_norm_shapes()
 
+# ---------------------------------------------------------------------------
+# Input distribution: rotated across the shapes
+# ---------------------------------------------------------------------------
+_BF16_DISTRIBUTIONS = ("uniform_01", "normal", "wide_uniform")
+_FP32_DISTRIBUTIONS = ("normal", "wide_uniform", "centered_uniform")
 
-@pytest.mark.parametrize("h, w, desc", _SHAPES, ids=[c[2] for c in _SHAPES])
+
+def _fuse_distribution_into_shapes(shapes, distributions, offset=0):
+    """Return (h, w, desc, distribution) rows, rotating `distributions` across `shapes`."""
+    return [(h, w, desc, distributions[(i + offset) % len(distributions)]) for i, (h, w, desc) in enumerate(shapes)]
+
+
+_SHAPES_BF16 = _fuse_distribution_into_shapes(_SHAPES, _BF16_DISTRIBUTIONS)
+# Offset so 37x41 (the only shape padded inside the reduction dim) avoids wide_uniform, whose
+# inflated near-zero atol would absorb padding contamination -- see the sharded tests below.
+_SHAPES_FP32 = _fuse_distribution_into_shapes(_SHAPES, _FP32_DISTRIBUTIONS, offset=1)
+
+# Fail at collection if a new shape shifts a padding probe onto wide_uniform.
+_WIDE_RANGE_DISTRIBUTIONS = ("wide_uniform",)
+for _rows in (_SHAPES_BF16, _SHAPES_FP32):
+    _unguarded = [desc for _, w, desc, dist in _rows if w % 32 and dist in _WIDE_RANGE_DISTRIBUTIONS]
+    assert not _unguarded, (
+        f"Non-tile-aligned shape(s) {_unguarded} assigned a wide-range distribution, which inflates "
+        f"the near-zero atol enough to hide padding contamination. Adjust the rotation offset."
+    )
+
+_IDS_BF16 = [f"{desc}-{dist}" for _, _, desc, dist in _SHAPES_BF16]
+_IDS_FP32 = [f"{desc}-{dist}" for _, _, desc, dist in _SHAPES_FP32]
+
+
+@pytest.mark.parametrize("h, w, desc, distribution", _SHAPES_BF16, ids=_IDS_BF16)
 @pytest.mark.parametrize("use_welford", [True, False])
-@pytest.mark.parametrize("distribution", ["uniform_01", "normal", "wide_uniform"])
 @pytest.mark.parametrize("fp32_dest_acc_en", [False, True], ids=["fp32_acc_off", "fp32_acc_on"])
 def test_layer_norm_ulp_bf16_no_weight_bias(device, h, w, desc, use_welford, distribution, fp32_dest_acc_en):
     """BF16 layer_norm ULP vs torch.nn.functional.layer_norm (no weight/bias).
@@ -196,9 +230,8 @@ def test_layer_norm_ulp_bf16_no_weight_bias(device, h, w, desc, use_welford, dis
     ), f"[BF16 no_wb {desc} use_welford={use_welford} dist={distribution} fp32_acc={fp32_dest_acc_en}] {msg}"
 
 
-@pytest.mark.parametrize("h, w, desc", _SHAPES, ids=[c[2] for c in _SHAPES])
+@pytest.mark.parametrize("h, w, desc, distribution", _SHAPES_BF16, ids=_IDS_BF16)
 @pytest.mark.parametrize("use_welford", [True, False])
-@pytest.mark.parametrize("distribution", ["uniform_01", "normal", "wide_uniform"])
 @pytest.mark.parametrize("wb_mode", ["wb", "weight_only", "bias_only"])
 @pytest.mark.parametrize("fp32_dest_acc_en", [False, True], ids=["fp32_acc_off", "fp32_acc_on"])
 def test_layer_norm_ulp_bf16_with_weight_bias(device, h, w, desc, use_welford, distribution, wb_mode, fp32_dest_acc_en):
@@ -253,23 +286,16 @@ def test_layer_norm_ulp_bf16_with_weight_bias(device, h, w, desc, use_welford, d
 
 
 # ---------------------------------------------------------------------------
-# FP32 tests
+# FP32 thresholds
 # ---------------------------------------------------------------------------
-
 _FP32_ULP_THRESHOLD = 2_500_000
 _FP32_NEAR_ZERO_ATOL_FRACTION = 0.004
 
 
-@pytest.mark.parametrize("h, w, desc", _SHAPES, ids=[c[2] for c in _SHAPES])
+@pytest.mark.parametrize("h, w, desc, distribution", _SHAPES_FP32, ids=_IDS_FP32)
 @pytest.mark.parametrize("use_welford", [True, False])
-@pytest.mark.parametrize("distribution", ["normal", "wide_uniform", "centered_uniform"])
 def test_layer_norm_ulp_fp32_no_weight_bias(device, h, w, desc, use_welford, distribution):
     """FP32 layer_norm ULP vs torch float32 golden (no weight/bias); fp32_dest_acc_en=True only."""
-    if is_blackhole() and use_welford and w == 4096:
-        # The large-tensor Welford layer_norm kernels produce nondeterministic FP32 output on
-        # Blackhole (back-to-back runs differ; failure disappears under watcher), so the
-        # determinism check in ttnn_layer_norm trips. Tracked in issue #46523.
-        pytest.skip("Blackhole large-tensor Welford layer_norm is nondeterministic (FP32); see #46523")
     torch.manual_seed(0)
     torch_input_tensor = _make_ln_input(h, w, torch.float32, distribution)
     golden = torch.nn.functional.layer_norm(torch_input_tensor, normalized_shape=[w])
@@ -290,9 +316,8 @@ def test_layer_norm_ulp_fp32_no_weight_bias(device, h, w, desc, use_welford, dis
     assert passed, f"[FP32 no_wb {desc} use_welford={use_welford} dist={distribution}] {msg}"
 
 
-@pytest.mark.parametrize("h, w, desc", _SHAPES, ids=[c[2] for c in _SHAPES])
+@pytest.mark.parametrize("h, w, desc, distribution", _SHAPES_FP32, ids=_IDS_FP32)
 @pytest.mark.parametrize("use_welford", [True, False])
-@pytest.mark.parametrize("distribution", ["normal", "wide_uniform", "centered_uniform"])
 @pytest.mark.parametrize("wb_mode", ["wb", "weight_only", "bias_only"])
 def test_layer_norm_ulp_fp32_with_weight_bias(device, h, w, desc, use_welford, distribution, wb_mode):
     """FP32 layer_norm ULP with weight/bias variants vs torch float32 golden; fp32_dest_acc_en=True only.
@@ -331,3 +356,203 @@ def test_layer_norm_ulp_fp32_with_weight_bias(device, h, w, desc, use_welford, d
     if not passed:
         logger.info(f"  {msg}")
     assert passed, f"[FP32 {wb_mode} {desc} use_welford={use_welford} dist={distribution}] {msg}"
+
+
+# BF16 caps for the sharded non-tile-aligned tests. These are far tighter than the generic
+# BF16-accumulation cap because normalizing over the padded width leaks only a moderate error
+# (a few percent), which the generic cap would absorb. Correctly masked output is within a few
+# ULP and a tiny absolute error of the golden, so a tight cap turns padding contamination into a
+# test failure rather than a silent pass.
+_SHARDED_NONALIGNED_BF16_ULP_THRESHOLD = 64
+_SHARDED_NONALIGNED_BF16_NEAR_ZERO_ATOL_FRACTION = 0.004
+
+
+def _assert_sharded_norm_ulp(golden, actual, dtype, log_prefix: str, spec: str, fail_prefix: str):
+    """Pick dtype-appropriate ULP/atol caps, measure ULP vs golden, log the per-case metrics, and assert.
+
+    The caps are intentionally tight so padding contamination is caught rather than absorbed. ULP is
+    measured in the output dtype, so FP32 inputs use the FP32 cap. That cap is loose in FP32-ULP terms
+    because the FPU mask multiply that zeroes the padding columns also rounds the final tile's valid
+    columns to TF32; the resulting TF32-precision error lands in the FP32 output and is large when
+    counted in FP32 ULP, so the cap is sized to absorb it. BF16 uses the dedicated tight
+    sharded-non-aligned cap rather than the loose BF16-accumulation cap.
+
+    The per-case metrics are logged at INFO regardless of pass/fail (accuracy characterization); the
+    failure detail is logged only on failure.
+    """
+    if dtype == torch.float32:
+        ulp_threshold, atol_fraction = _FP32_ULP_THRESHOLD, _FP32_NEAR_ZERO_ATOL_FRACTION
+    else:
+        ulp_threshold, atol_fraction = (
+            _SHARDED_NONALIGNED_BF16_ULP_THRESHOLD,
+            _SHARDED_NONALIGNED_BF16_NEAR_ZERO_ATOL_FRACTION,
+        )
+    passed, max_ulp, max_atol_err, atol_tol, msg, ulp_stats = measure_ulp_with_near_zero_atol(
+        golden, actual, ulp_threshold, atol_fraction
+    )
+    logger.info(
+        f"{log_prefix} | {spec} | ulp mean={ulp_stats['mean']:.3g} p95={ulp_stats['p95']:.3g} p99={ulp_stats['p99']:.3g} max={max_ulp:.4g}/{ulp_threshold} atol {max_atol_err:.4g}/{atol_tol:.4g} | {'ok' if passed else 'FAIL'}"
+    )
+    if ulp_stats["worst"]:
+        logger.info(f"  worst: {ulp_stats['worst']}")
+    if not passed:
+        logger.info(f"  {msg}")
+    assert passed, f"{fail_prefix} {msg}"
+
+
+def _run_sharded_norm_ulp(device, norm, w, num_cores_w, distribution, dtype, use_welford=False, residual=False):
+    """Run a sharded layer_norm / rms_norm over width w split across num_cores_w cores and compare ULP
+    vs the torch golden. The shard width is the per-core logical share rounded up to a whole tile, so a
+    non-tile-aligned width (or one that does not divide evenly across cores) leaves padding on the final
+    shard. That implicit tile padding is poisoned, so any path that folds the padded columns into its
+    statistics is observably wrong. residual=True fuses a second poisoned input (the norm is applied to
+    a + b). use_welford applies to layer_norm only.
+    """
+    torch.manual_seed(0)
+    h = 32
+    eps = 1e-12
+    shard_w = math.ceil(w / num_cores_w / 32) * 32
+    block_wt = shard_w // 32
+
+    torch_a = _make_ln_input(h, w, dtype, distribution)
+    torch_b = _make_ln_input(h, w, dtype, distribution) if residual else None
+    src = torch_a + torch_b if residual else torch_a
+    if norm == "layernorm":
+        golden = torch.nn.functional.layer_norm(src, normalized_shape=[w])
+    else:
+        ms = src.to(torch.float32).pow(2).mean(dim=-1, keepdim=True)
+        golden = (src.to(torch.float32) * torch.rsqrt(ms + eps)).to(dtype)
+
+    sharded_mem_config = make_sharded_norm_mem_config(num_cores_w=num_cores_w, h=h, shard_w=shard_w)
+    tt_a = to_poisoned_sharded(device, torch_a, sharded_mem_config, PAD_VALUE)
+    tt_b = to_poisoned_sharded(device, torch_b, sharded_mem_config, PAD_VALUE) if residual else None
+
+    if norm == "layernorm":
+        actual = ttnn_layer_norm_sharded(
+            device, tt_a, use_welford=use_welford, block_ht=h // 32, block_wt=block_wt, subblock_w=1, residual=tt_b
+        )
+    else:
+        actual = ttnn_rms_norm_sharded(device, tt_a, block_ht=h // 32, block_wt=block_wt, subblock_w=1, residual=tt_b)
+    # Discard padding before comparison.
+    actual = actual[..., :w]
+
+    spec = (
+        f"sharded {norm} shape_hw=({h},{w}) cores={num_cores_w} shard_w={shard_w} "
+        f"welford={use_welford} residual={residual} dist={distribution} dtype={dtype}"
+    )
+    _assert_sharded_norm_ulp(golden, actual, dtype, f"ttnn.{norm} ULP (sharded)", spec, f"[{spec}]")
+
+
+# The sharded padding tests are restricted to small-range distributions.
+# normal and centered_uniform are rotated across the width axis rather than crossed with it,
+# which keeps both distributions exercised on every test while halving the case count.
+_SHARDED_DISTRIBUTIONS = ("normal", "centered_uniform")
+
+
+def _fuse_distribution_into_widths(widths):
+    """Return (w, distribution) rows, rotating _SHARDED_DISTRIBUTIONS across `widths`."""
+    return [(w, _SHARDED_DISTRIBUTIONS[i % len(_SHARDED_DISTRIBUTIONS)]) for i, w in enumerate(widths)]
+
+
+# Widths that are not multiples of the tile width (32), each on a single core so the
+# whole logical row plus its tile padding lives in one shard.
+_NON_TILE_ALIGNED_WIDTHS = _fuse_distribution_into_widths([40, 72, 200])
+
+
+@pytest.mark.parametrize("w, distribution", _NON_TILE_ALIGNED_WIDTHS)
+# Both reduction paths must normalize over the logical width: the Welford path (reciprocal LUT)
+# and the legacy reduce path (1/N reduction scaler).
+@pytest.mark.parametrize("use_welford", [True, False])
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
+def test_layer_norm_ulp_sharded_non_tile_aligned_width(device, w, distribution, use_welford, dtype):
+    """Sharded layer_norm over a non-tile-aligned width vs torch golden, for BF16 and FP32 inputs.
+
+    LayerNorm normalizes over the logical width and must ignore the tile padding. This test exercises
+    the single-core sharded path; the interleaved path is covered by the 37x41 shape above, and the
+    multi-core case (a non-tile-aligned width split across cores, on the legacy and Welford reduce
+    paths) is covered by test_layer_norm_sharded_uneven_multicore_logical_width in
+    test_layer_norm_sharded.py. Poisoning the implicit tile padding with a large out-of-distribution
+    value makes any read of the padded columns observable: a kernel that normalizes over the logical
+    width is unaffected, while one that folds the padded columns into the mean/variance produces a
+    grossly wrong result.
+    """
+    _run_sharded_norm_ulp(
+        device, "layernorm", w, num_cores_w=1, distribution=distribution, dtype=dtype, use_welford=use_welford
+    )
+
+
+# Tile-aligned logical width split across two cores, where the shard rounding leaves a whole padding
+# tile on the final core, because all cores own the same number of tiles.
+# For example, w=96 results in 3 tiles, which when sharded on two cores results in two real tiles on
+# the first core, and one real tile + one padding tile on the second core (since sharding rules dictate
+# that all cores must get the same number of tiles).
+# Unlike the non-tile-aligned cases, no width tile is partially valid here: the whole final tile is
+# padding, and the op must still normalize over the logical width rather than the padded shard width.
+@pytest.mark.parametrize("use_welford", [True, False])
+def test_layer_norm_ulp_sharded_tile_aligned_width_split_across_cores(device, use_welford):
+    """Sharded layer_norm over a tile-aligned width (w=96) split across two cores vs torch golden."""
+    _run_sharded_norm_ulp(
+        device, "layernorm", w=96, num_cores_w=2, distribution="normal", dtype=torch.bfloat16, use_welford=use_welford
+    )
+
+
+# Widths that are not multiples of the tile width (32), each on a single core so the
+# whole logical row plus its tile padding lives in one shard. The distribution is rotated across
+# the width axis for the same reason as the layer_norm sharded test above.
+@pytest.mark.parametrize("w, distribution", _NON_TILE_ALIGNED_WIDTHS)
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
+def test_rms_norm_ulp_sharded_non_tile_aligned_width(device, w, distribution, dtype):
+    """Sharded rms_norm over a non-tile-aligned width vs torch golden, for BF16 and FP32 inputs.
+
+    RMSNorm normalizes over the mean of squares of the logical width and must ignore the tile
+    padding. Poisoning the implicit tile padding with a large out-of-distribution value makes any
+    read of the padded columns observable: a kernel that normalizes over the logical width is
+    unaffected, while one that folds the padded columns into the mean of squares produces a grossly
+    wrong result.
+    """
+    _run_sharded_norm_ulp(device, "rmsnorm", w, num_cores_w=1, distribution=distribution, dtype=dtype)
+
+
+# Block sharding requires every core to be assigned the same shard size,
+# and each shard must be tile-aligned. Therefore, each core's width is its share of the logical width
+# rounded up to a tile: shard_w = ceil(w / cores / 32) * 32, and the padded width is cores * shard_w.
+# w=40/72/200 are non-tile-aligned. w=96 is tile-aligned but still does not tile evenly when sharded
+# across two cores (96 / 2 = 48, which is not divisible by 32). Because the shard width is rounded up,
+# the logical columns can run out partway through the second core's block, leaving it with
+# a mix of tile kinds: fully-valid tiles, at most one partially-valid tile, and fully-padding tiles.
+# For example, for w=200 and 2 cores: shard_w = ceil(200/2/32)*32 = 128 (4 tiles per core), so the padded width is
+# 256. The first core's tiles (columns 0-127) are all fully valid. The second core's tiles (columns 128-255) are
+# valid only through column 199, so the four tiles are:
+# - Tiles 1 and 2 (columns 128-159 and 160-191) fully valid.
+# - Tile 3 (columns 192-223) partially valid (only 192-199 valid).
+# - Tile 4 (columns 224-255) fully padding.
+@pytest.mark.parametrize("w, distribution", _fuse_distribution_into_widths([40, 72, 96, 200]))
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
+def test_rms_norm_ulp_sharded_unevenly_split_width_across_cores(device, w, distribution, dtype):
+    """Sharded rms_norm over a width split across two cores vs torch golden.
+
+    Splitting the logical width across two shards places the padding in whichever shard holds the
+    final columns; the op must still normalize over the logical width and ignore that padding.
+    Poisoning the padding makes any read of the padded columns observable.
+    """
+    _run_sharded_norm_ulp(device, "rmsnorm", w, num_cores_w=2, distribution=distribution, dtype=dtype)
+
+
+@pytest.mark.parametrize("w, distribution", _NON_TILE_ALIGNED_WIDTHS)
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
+@pytest.mark.parametrize("norm", ["layernorm", "rmsnorm"])
+@pytest.mark.parametrize("num_cores_w", [1, 2])
+def test_norm_ulp_sharded_non_tile_aligned_residual(device, w, distribution, dtype, norm, num_cores_w):
+    """Sharded layer_norm / rms_norm with a fused residual add: the norm is applied to a + b (a = the
+    input tensor, b = the residual tensor), over a non-tile-aligned width.
+
+    Runs the legacy (non-Welford) reduce. That is the path where the fused residual interacts with
+    padding handling: it reads full width tiles, including the padding columns, and zeroes them with a
+    column mask, so the sum a + b (whose padding columns are themselves compute-produced) must still be
+    masked out of the statistics. Welford reduces only each core's logical column count and ignores the
+    padding, so a fused residual adds no new padding risk there.
+    Both a and b have their tile padding poisoned so any read of the padded columns is observable.
+    """
+    _run_sharded_norm_ulp(
+        device, norm, w, num_cores_w=num_cores_w, distribution=distribution, dtype=dtype, residual=True
+    )

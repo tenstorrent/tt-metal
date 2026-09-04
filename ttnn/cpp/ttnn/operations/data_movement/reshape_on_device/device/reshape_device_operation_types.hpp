@@ -15,7 +15,7 @@ struct ReshapeOnDeviceParams {
 };
 
 struct ReshapeOnDeviceInputs {
-    tt::tt_metal::Tensor input_tensor;
+    ttnn::Tensor input_tensor;
 };
 
 }  // namespace ttnn::prim

@@ -38,28 +38,28 @@ ALWI void copy_tile_init_with_dt(uint32_t icb, uint32_t transpose = 0) {
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format_srca(icb);
 #endif
-    copy_tile_to_dst_init_short(icb, transpose);
+    copy_init(icb, transpose);
 }
 
 ALWI void add_tiles_init_with_dt(uint32_t icb0 = 0, uint32_t icb1 = 1) {
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format(icb0, icb1);
 #endif
-    add_tiles_init(icb0, icb1);
+    add_init(icb0, icb1);
 }
 
 ALWI void sub_tiles_init_with_dt(uint32_t icb0 = 0, uint32_t icb1 = 1) {
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format(icb0, icb1);
 #endif
-    sub_tiles_init(icb0, icb1);
+    sub_init(icb0, icb1);
 }
 
 ALWI void mul_tiles_init_with_dt(uint32_t icb0 = 0, uint32_t icb1 = 1) {
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format(icb0, icb1);
 #endif
-    mul_tiles_init(icb0, icb1);
+    mul_init(icb0, icb1);
 }
 
 // Binary tile->CB orchestrators (in namespace ckernel).
@@ -137,6 +137,49 @@ ALWI void add_tiles_to_cb(
     }
 
     cb_out.push_back(onetile);
+}
+
+// Like add_tiles_to_cb, but also packs the same DST tile to a second output CB.
+ALWI void add_tiles_to_two_cbs(
+    uint32_t icb0,
+    uint32_t icb1,
+    uint32_t ocb0,
+    uint32_t ocb1,
+    uint32_t itile0 = 0,
+    uint32_t itile1 = 0,
+    uint32_t pop0 = 1,
+    uint32_t pop1 = 1) {
+    constexpr uint32_t onetile = 1;
+    constexpr int dst0 = 0;
+    CircularBuffer cb_in0(icb0);
+    CircularBuffer cb_in1(icb1);
+    CircularBuffer cb_out0(ocb0);
+    CircularBuffer cb_out1(ocb1);
+
+    cb_out0.reserve_back(onetile);
+    cb_out1.reserve_back(onetile);
+    cb_in0.wait_front(itile0 + 1);
+    cb_in1.wait_front(itile1 + 1);
+
+    tile_regs_acquire();
+    add_tiles_init_with_dt(icb0, icb1);
+    add_tiles(icb0, icb1, itile0, itile1, dst0);
+    tile_regs_commit();
+
+    tile_regs_wait();
+    pack_tile_with_dt(dst0, ocb0);
+    pack_tile_with_dt(dst0, ocb1);
+    tile_regs_release();
+
+    if (pop0) {
+        cb_in0.pop_front(pop0);
+    }
+    if (pop1) {
+        cb_in1.pop_front(pop1);
+    }
+
+    cb_out0.push_back(onetile);
+    cb_out1.push_back(onetile);
 }
 
 ALWI void sub_tiles_to_cb(

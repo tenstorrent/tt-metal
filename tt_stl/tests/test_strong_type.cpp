@@ -11,17 +11,17 @@
 #include <unordered_set>
 #include <utility>
 
-using MyIntId = tt::stl::StrongType<int, struct MyIntIdTag>;
-using MyStringId = tt::stl::StrongType<std::string, struct MyStringIdTag>;
+using MyIntId = ttsl::StrongType<int, struct MyIntIdTag>;
+using MyStringId = ttsl::StrongType<std::string, struct MyStringIdTag>;
 
-namespace tt::stl {
+namespace ttsl {
 namespace {
 
 using ::testing::ElementsAre;
 using ::testing::IsNull;
 using ::testing::UnorderedElementsAre;
 
-TEST(StrongTypeTest, Basic) {
+TEST(StrongTypeTest, CPU_Basic) {
     MyIntId my_int_id1(42);
     MyIntId my_int_id2(43);
 
@@ -32,7 +32,7 @@ TEST(StrongTypeTest, Basic) {
     EXPECT_EQ(my_int_id1, my_int_id2);
 }
 
-TEST(StrongTypeTest, GuaranteedUnique) {
+TEST(StrongTypeTest, CPU_GuaranteedUnique) {
     StrongType<int> one{1};
     StrongType<int> otherone{1};
 
@@ -45,7 +45,7 @@ TEST(StrongTypeTest, GuaranteedUnique) {
     EXPECT_EQ(*one, *otherone);
 }
 
-TEST(StrongTypeTest, UseInContainers) {
+TEST(StrongTypeTest, CPU_UseInContainers) {
     std::unordered_set<MyIntId> unordered;
     std::set<MyIntId> ordered;
 
@@ -60,13 +60,13 @@ TEST(StrongTypeTest, UseInContainers) {
     EXPECT_THAT(ordered, ElementsAre(MyIntId(1), MyIntId(2), MyIntId(3)));
 }
 
-TEST(StrongTypeTest, StreamingOperator) {
+TEST(StrongTypeTest, CPU_StreamingOperator) {
     std::stringstream ss;
     ss << MyStringId("hello world");
     EXPECT_EQ(ss.str(), "hello world");
 }
 
-TEST(StrongTypeTest, MoveOnlyType) {
+TEST(StrongTypeTest, CPU_MoveOnlyType) {
     using MoveOnlyType = StrongType<std::unique_ptr<int>, struct MoveOnlyTag>;
 
     MoveOnlyType from(std::make_unique<int>(42));
@@ -80,4 +80,4 @@ TEST(StrongTypeTest, MoveOnlyType) {
 }
 
 }  // namespace
-}  // namespace tt::stl
+}  // namespace ttsl

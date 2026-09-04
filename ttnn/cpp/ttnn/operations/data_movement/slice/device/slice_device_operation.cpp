@@ -15,6 +15,7 @@
 #include "ttnn/operations/data_movement/transpose/device/transpose_utils.hpp"
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/hal.hpp>
 
 using namespace tt::tt_metal;
 
@@ -103,6 +104,14 @@ void SliceDeviceOperation::validate_on_program_cache_miss(
         tensor_args.input.layout() == Layout::TILE || tensor_args.input.layout() == Layout::ROW_MAJOR,
         "Input tensor layout must be TILE or ROW_MAJOR but got {}",
         tensor_args.input.layout());
+    // use_tensor_args unconditionally selects SliceTileTensorArgsProgramFactory, which counts work as
+    // output.physical_volume() / TILE_HW and sizes its CBs with tile_size(). The public slice() entry
+    // point already refuses to take this path for a non-TILE input, but ttnn::prim::slice is callable
+    // directly, so re-check it here where the factory is actually chosen.
+    TT_FATAL(
+        !args.use_tensor_args || tensor_args.input.layout() == Layout::TILE,
+        "Tensor-args slice does not currently support non-TILE inputs, but got {} layout",
+        tensor_args.input.layout());
     TT_FATAL(
         tensor_args.input.padded_shape().rank() == args.slice_start.rank() &&
             args.slice_start.rank() == args.slice_end.rank(),
@@ -133,13 +142,42 @@ void SliceDeviceOperation::validate_on_program_cache_miss(
             args.slice_end[i]);
     }
     if (tensor_args.preallocated_output.has_value()) {
-        const auto output_shape_required = compute_output_specs(args, tensor_args).logical_shape();
+        const auto spec_required = compute_output_specs(args, tensor_args);
         const auto& out_tensor = tensor_args.preallocated_output.value();
+        // Padded, not logical: ttnn::slice pads the tile-path ends up to a tile boundary before
+        // calling here and views the result back down afterwards, so the caller's tensor legitimately
+        // carries a smaller logical shape than the spec. That licence is tile-only; see below.
         TT_FATAL(
-            out_tensor.padded_shape() == output_shape_required,
-            "The preallocated output tensor needs a shape of {}, however it is {}",
-            output_shape_required,
+            out_tensor.padded_shape() == spec_required.padded_shape(),
+            "The preallocated output tensor needs a padded shape of {}, however it is {}",
+            spec_required.padded_shape(),
             out_tensor.padded_shape());
+        // Row-major ends are passed through unpadded, so here the caller's logical shape has to match
+        // exactly too, and padded-versus-padded does not imply it: a sharded output's alignment is its
+        // shard width, so any logical width in the same shard column pads to the same value.
+        // SliceRmShardedProgramFactory sizes each row's copy from output.logical_shape()[-1] -- the one
+        // place any factory reads the logical shape -- so a short one there copies part of every row
+        // and leaves the remainder untouched, with no error.
+        if (tensor_args.input.layout() == Layout::ROW_MAJOR) {
+            TT_FATAL(
+                out_tensor.logical_shape() == spec_required.logical_shape(),
+                "The preallocated output tensor needs a logical shape of {}, however it is {}",
+                spec_required.logical_shape(),
+                out_tensor.logical_shape());
+        }
+        // create_output_tensors hands the program the caller's tensor verbatim, so the destination's
+        // page geometry has to be what the factories were built against. One comparison covers dtype,
+        // page_config, memory_config and alignment — including the fields compute_program_hash omits.
+        // page_config is the load-bearing one: the writer's TensorAccessorArgs bakes the destination's
+        // aligned page size in as a compile-time word, and for a tile-paged buffer that size is
+        // tile.get_tile_size(dtype), so two outputs differing only in tile would share one program
+        // whose writer addresses the wrong page offsets. A mismatch here is a caller error in every
+        // case, so reject it rather than key on it.
+        TT_FATAL(
+            out_tensor.tensor_spec().tensor_layout() == spec_required.tensor_layout(),
+            "The preallocated output tensor needs a layout of {}, however it is {}",
+            spec_required.tensor_layout(),
+            out_tensor.tensor_spec().tensor_layout());
     }
     auto output_tensor_shape = compute_output_specs(args, tensor_args).logical_shape();
     if (has_step) {  // if all ones modify before passing in to function
@@ -154,6 +192,15 @@ void SliceDeviceOperation::validate_on_program_cache_miss(
             args.slice_end.rank());
     }
     if (tensor_args.input.layout() == Layout::TILE) {
+        // Both tile factories derive their page sizes and tile counts from the architectural 32x32
+        // constants, and the tile is absent from compute_program_hash, so a non-standard tile would
+        // both compile a mis-sized program and alias onto a cached 32x32 one.
+        const auto tile = tensor_args.input.tensor_spec().tile();
+        TT_FATAL(
+            tile.get_height() == TILE_HEIGHT && tile.get_width() == TILE_WIDTH,
+            "slice does not currently support tiles other than 32x32, got {}x{}",
+            tile.get_height(),
+            tile.get_width());
         TT_FATAL(
             tensor_args.input.physical_volume() % TILE_HW == 0,
             "Input tensor physical volume ({}) must be divisible by TILE_HW ({})",
@@ -177,7 +224,7 @@ void SliceDeviceOperation::validate_on_program_cache_miss(
 SliceDeviceOperation::spec_return_value_t SliceDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
-    SmallVector<uint32_t> out_shape(input_tensor.logical_shape().rank());
+    ttsl::SmallVector<uint32_t> out_shape(input_tensor.logical_shape().rank());
 
     if (args.use_tensor_args) {
         TT_FATAL(
@@ -247,7 +294,7 @@ SliceDeviceOperation::spec_return_value_t SliceDeviceOperation::compute_output_s
             tt::tt_metal::MemoryConfig(output_mem_config.memory_layout(), output_mem_config.buffer_type(), derived);
     }
 
-    return ttnn::TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_tensor_shape,
         tt::tt_metal::TensorLayout(input_tensor.dtype(), PageConfig(input_tensor.layout()), output_mem_config));
 }
@@ -276,13 +323,16 @@ SliceDeviceOperation::program_factory_t SliceDeviceOperation::select_program_fac
     bool has_step = std::any_of(args.step.cbegin(), args.step.cend(), [](uint32_t s) { return s != 1; });
 
     if (input.layout() == Layout::ROW_MAJOR) {
-        // HEIGHT→HEIGHT no-step: fast CB path, no NOC read needed.
-        // WIDTH/BLOCK-sharded RM: SliceRmProgramFactory with per-shard page size via noc_async_*_sharded.
+        // Misaligned W-begin needs SliceRmProgramFactory's tt_memmove fixup (issue #50714).
+        const uint32_t begins_bytes_last =
+            args.slice_start.rank() > 0 ? args.slice_start[-1] * input.element_size() : 0u;
+        const bool w_begin_aligned = (begins_bytes_last % ::hal::get_l1_alignment()) == 0;
         const bool height_sharded_in_out_no_step =
             input.is_sharded() &&
             input.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED &&
             args.output_mem_config.is_sharded() &&
-            args.output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED && !has_step;
+            args.output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED && !has_step &&
+            w_begin_aligned;
         if (height_sharded_in_out_no_step) {
             return SliceRmShardedProgramFactory{};
         }
@@ -293,6 +343,92 @@ SliceDeviceOperation::program_factory_t SliceDeviceOperation::select_program_fac
     }
     // Layout::TILE — TensorAccessor at tile granularity handles all sharded buffer types natively.
     return SliceTileProgramFactory{};
+}
+
+ttsl::hash::hash_t SliceDeviceOperation::compute_program_hash(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    // Default hash has weak distribution for small-integer shape sequences (boost::hash_combine
+    // style), causing false cache hits when shapes differ but collide. Mix in full input/output
+    // specs and slice params so any two invocations with different core-grid sizes get distinct
+    // keys. Same pattern as concat fix in PR #45144 (issue #47602).
+    auto factory = select_program_factory(operation_attributes, tensor_args);
+    auto hash = tt::tt_metal::operation::hash_operation<SliceDeviceOperation>(
+        operation_attributes.slice_start,
+        operation_attributes.slice_end,
+        operation_attributes.step,
+        operation_attributes.use_tensor_args,
+        operation_attributes.slice_dim,
+        operation_attributes.num_devices,
+        operation_attributes.output_mem_config,
+        operation_attributes.sub_core_grids,
+        factory.index(),
+        tensor_args.start_tensor.has_value(),
+        tensor_args.end_tensor.has_value(),
+        tensor_args.preallocated_output.has_value());
+
+    const auto& input = tensor_args.input;
+    hash = ttsl::hash::hash_objects(
+        hash,
+        input.logical_shape().rank(),
+        input.logical_shape(),
+        input.padded_shape(),
+        input.layout(),
+        input.dtype(),
+        input.memory_config());
+
+    if (tensor_args.start_tensor.has_value()) {
+        const auto& st = tensor_args.start_tensor.value();
+        hash = ttsl::hash::hash_objects(
+            hash,
+            st.logical_shape().rank(),
+            st.logical_shape(),
+            st.padded_shape(),
+            st.layout(),
+            st.dtype(),
+            st.memory_config());
+    }
+
+    // SliceTileTensorArgsProgramFactory gives the end tensor its own TensorAccessorArgs in the reader's
+    // compile-time args, so its memory config picks the bank table and cannot be refreshed on a hit.
+    if (tensor_args.end_tensor.has_value()) {
+        const auto& et = tensor_args.end_tensor.value();
+        hash = ttsl::hash::hash_objects(
+            hash,
+            et.logical_shape().rank(),
+            et.logical_shape(),
+            et.padded_shape(),
+            et.layout(),
+            et.dtype(),
+            et.memory_config());
+    }
+
+    const auto output_spec = compute_output_specs(operation_attributes, tensor_args);
+    hash = ttsl::hash::hash_objects(
+        hash,
+        output_spec.logical_shape().rank(),
+        output_spec.logical_shape(),
+        output_spec.padded_shape(),
+        output_spec.layout(),
+        output_spec.data_type(),
+        output_spec.memory_config());
+
+    // compute_output_specs derives the spec above from operation_attributes.output_mem_config, but
+    // create_output_tensors hands the program the caller's tensor verbatim when one is supplied, and
+    // every factory bakes a TensorAccessorArgs for that destination buffer into its writer's
+    // compile-time args. Key on the real destination so it cannot alias a differently-placed one.
+    if (tensor_args.preallocated_output.has_value()) {
+        const auto& po = tensor_args.preallocated_output.value();
+        hash = ttsl::hash::hash_objects(
+            hash,
+            po.logical_shape().rank(),
+            po.logical_shape(),
+            po.padded_shape(),
+            po.layout(),
+            po.dtype(),
+            po.memory_config());
+    }
+
+    return hash;
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<SliceDeviceOperation::tensor_return_value_t>

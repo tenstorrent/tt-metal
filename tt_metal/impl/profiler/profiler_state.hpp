@@ -8,7 +8,7 @@
 
 namespace tt::tt_metal {
 
-// Get global device profiling state based on build flag and environment variables
+// Get global device profiling state for the given context.
 bool getDeviceProfilerState(ContextId context_id = DEFAULT_CONTEXT_ID);
 
 // Get if the device debug dump is enabled

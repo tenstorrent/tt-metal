@@ -163,7 +163,7 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(
 
         auto unary_writer_kernel = tt_metal::CreateKernel(
             program,
-            "tt_metal/kernels/dataflow/writer_unary.cpp",
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
             core,
             tt_metal::DataMovementConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});

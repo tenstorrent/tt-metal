@@ -20,6 +20,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import rotate_half
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tt.mla.rope import get_rot_transformation_mat
 from models.demos.deepseek_v3_d_p.tt.mla.utils import block_cyclic_reorder
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -64,17 +65,35 @@ def _rotated_chip_positions(kv_actual, sp, chunk_local):
     return positions
 
 
-@pytest.mark.parametrize("mesh_device", [(2, 2), (2, 4), (8, 4)], ids=["2x2", "2x4", "8x4"], indirect=True)
-@pytest.mark.parametrize(
-    "config_name, num_heads_local, new_isl_tiles_per_dev, cache_tokens_per_dev",
-    [
-        ("small", 2, 4, 512),  # small: 2 heads/dev, 4-tile chunk/dev
-        ("repr", 8, 20, 6400),  # representative: 8 heads/dev, 5k new isl + 50k cache on 8x4 (per-dev scaled)
-    ],
-    ids=["small", "repr"],
+_MESHES = [(2, 2), (2, 4), (8, 4)]
+_CONFIGS = [("small", 2, 4, 512), ("repr", 8, 20, 6400)]
+_CASES = [
+    pytest.param(
+        mesh,
+        *config,
+        tensor_kind,
+        scenario,
+        ttnn.bfloat16,
+        id=f"{mesh[0]}x{mesh[1]}-{config[0]}-{tensor_kind}-{scenario}-bf16",
+    )
+    for mesh in _MESHES
+    for config in _CONFIGS
+    for tensor_kind in ("Q", "KV")
+    for scenario in ("non_padded", "padded_partial")
+]
+_CASES.append(
+    pytest.param(
+        (2, 4), "small", 2, 4, 512, "Q", "padded_partial", ttnn.bfloat8_b, id="2x4-small-Q-padded_partial-bfp8"
+    )
 )
-@pytest.mark.parametrize("tensor_kind", ["Q", "KV"], ids=["Q", "KV"])
-@pytest.mark.parametrize("scenario", ["non_padded", "padded_partial"], ids=["non_padded", "padded_partial"])
+
+
+@pytest.mark.parametrize(
+    "mesh_device, config_name, num_heads_local, new_isl_tiles_per_dev, cache_tokens_per_dev, "
+    "tensor_kind, scenario, input_dtype",
+    _CASES,
+    indirect=["mesh_device"],
+)
 @pytest.mark.timeout(0)
 def test_rotary_embedding_indexed_multi_iteration_prefill(
     mesh_device,
@@ -84,6 +103,7 @@ def test_rotary_embedding_indexed_multi_iteration_prefill(
     cache_tokens_per_dev,
     tensor_kind,
     scenario,
+    input_dtype,
     is_ci_env,
     is_ci_v2_env,
 ):
@@ -102,7 +122,8 @@ def test_rotary_embedding_indexed_multi_iteration_prefill(
 
     Each iteration rotates a random chunk on device and PCCs every (chip, row) against a torch RoPE
     reference applied at that row's true global position. Also asserts program-cache reuse, proving
-    kv_actual_global is a runtime arg (not hashed)."""
+    kv_actual_global is a runtime arg (not hashed). The additional BFP8 Q case uses the same BF16
+    cos/sin and transformation matrix as the production path."""
     if (is_ci_env or is_ci_v2_env) and not (config_name == "small" and scenario == "padded_partial"):
         pytest.skip("CI runs only the small padded_partial case; the others are subsets of it")
 
@@ -129,7 +150,7 @@ def test_rotary_embedding_indexed_multi_iteration_prefill(
     assert cum_total <= cache_global, f"valid tokens ({cum_total}) must fit the cache ({cache_global})"
 
     logger.info(
-        f"tensor_kind={tensor_kind} n_heads={n_heads} sp={sp} tp={tp} chunk_local={C} "
+        f"tensor_kind={tensor_kind} dtype={input_dtype} n_heads={n_heads} sp={sp} tp={tp} chunk_local={C} "
         f"chunk_global={chunk_global} cache_global={cache_global}; "
         f"new_isl per iter={new_actual_isls} (cum_total={cum_total})"
     )
@@ -147,22 +168,26 @@ def test_rotary_embedding_indexed_multi_iteration_prefill(
     shard_dims[sp_axis] = 2  # SP-shard the seq dim; replicate across TP
     from_torch_kwargs = dict(
         device=mesh_device,
-        dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     cos_tt = ttnn.from_torch(
         cos_re,
+        dtype=ttnn.bfloat16,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
         **from_torch_kwargs,
     )
     sin_tt = ttnn.from_torch(
         sin_re,
+        dtype=ttnn.bfloat16,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
         **from_torch_kwargs,
     )
     trans_tt = ttnn.from_torch(
-        get_rot_transformation_mat(), mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device), **from_torch_kwargs
+        get_rot_transformation_mat(),
+        dtype=ttnn.bfloat16,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        **from_torch_kwargs,
     )
 
     input_shard_dims = [None, None]
@@ -187,6 +212,7 @@ def test_rotary_embedding_indexed_multi_iteration_prefill(
         torch_input = torch.randn(1, n_heads, chunk_global, ROPE_HEAD_DIM, dtype=torch.bfloat16)
         tt_input = ttnn.from_torch(
             torch_input,
+            dtype=input_dtype,
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=input_shard_dims),
             **from_torch_kwargs,
         )
@@ -201,6 +227,7 @@ def test_rotary_embedding_indexed_multi_iteration_prefill(
             kv_actual_global=kv_actual,
             cluster_axis=sp_axis,
         )
+        assert tt_out.dtype == input_dtype
         if entries_after_first is None:
             ttnn.synchronize_device(mesh_device)
             entries_after_first = mesh_device.num_program_cache_entries()
@@ -217,6 +244,7 @@ def test_rotary_embedding_indexed_multi_iteration_prefill(
         sin_sel = sin_full[0, 0, flat, :].unsqueeze(0).unsqueeze(0)
         ref = (torch_input * cos_sel) + (rotate_half(torch_input, meta_style=True) * sin_sel)
 
+        assert torch.isfinite(out_host).all()
         _, msg = assert_with_pcc(ref, out_host, 0.99)
         logger.info(f"  iter {it}: PCC {msg}")
         kv_actual += new_actual_isl
@@ -230,3 +258,127 @@ def test_rotary_embedding_indexed_multi_iteration_prefill(
         f"{entries_after_first} to {mesh_device.num_program_cache_entries()}"
     )
     logger.info(f"program cache entries: {mesh_device.num_program_cache_entries()}")
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="torus-xy-8x4",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.timeout(0)
+def test_rotary_embedding_indexed_metadata_matches_scalar(mesh_device):
+    """The per-element-tensor (traceable) path and the scalar path must produce bit-identical outputs.
+
+    Drives the traceable path from a 1-element uint32 DRAM tensor holding kv_actual_global (the reader
+    reads its element [0] on-device), and compares the rotated output against the same call done via
+    the original scalar kv_actual_global. Exact equality over chunk-0 and a mid-cache offset."""
+    sp_axis, tp_axis = 0, 1
+    sp = mesh_device.shape[sp_axis]
+    tile = ttnn.TILE_SIZE
+
+    n_heads = 1  # KV-rope shape (single head, SP-sharded)
+    new_isl_tiles_per_dev = 4
+    cache_tokens_per_dev = 512
+    C = new_isl_tiles_per_dev * tile  # per-device chunk (tokens)
+    chunk_global = C * sp
+    cache_global = cache_tokens_per_dev * sp
+
+    torch.manual_seed(0)
+    cos_full, sin_full = _make_cos_sin(cache_global, ROPE_HEAD_DIM)
+    cos_re = block_cyclic_reorder(cos_full, C, sp, seq_dim=2)
+    sin_re = block_cyclic_reorder(sin_full, C, sp, seq_dim=2)
+
+    shard_dims = [None, None]
+    shard_dims[sp_axis] = 2
+    from_torch_kwargs = dict(
+        device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    cos_tt = ttnn.from_torch(
+        cos_re,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
+        **from_torch_kwargs,
+    )
+    sin_tt = ttnn.from_torch(
+        sin_re,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
+        **from_torch_kwargs,
+    )
+    trans_tt = ttnn.from_torch(
+        get_rot_transformation_mat(), mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device), **from_torch_kwargs
+    )
+
+    input_shard_dims = [None, None]
+    input_shard_dims[sp_axis] = 2
+    concat_dims = [None, None]
+    concat_dims[sp_axis] = 2
+    concat_dims[tp_axis] = 1
+    composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=tuple(concat_dims), mesh_shape=mesh_device.shape)
+
+    # The traceable path reads kv_actual_global from element [0] of this 1-element uint32 DRAM tensor.
+    def _make_scalar_tensor(value):
+        return ttnn.from_torch(
+            torch.tensor([value], dtype=torch.int64).reshape(1, 1, 1, 1),
+            device=mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+
+    mesh_device.enable_program_cache()
+    # Two slab-aligned offsets (boundary_chip == 0) plus one NON-slab-aligned offset (C + one tile:
+    # boundary_chip == 1 with a whole-tile boundary_offset), so the boundary chip's cos/sin read straddles
+    # a slab — the hard indexing case for this op — is exercised through the metadata path too, not just
+    # slab-aligned cases. kv_actual_global is a runtime arg (not hashed), so every case reuses the same
+    # cached program regardless of alignment (asserted after the loop).
+    cases = [0, chunk_global, C + tile]
+    entries_after_first = None
+
+    for kv_actual in cases:
+        torch_input = torch.randn(1, n_heads, chunk_global, ROPE_HEAD_DIM, dtype=torch.bfloat16)
+        tt_input = ttnn.from_torch(
+            torch_input,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=input_shard_dims),
+            **from_torch_kwargs,
+        )
+
+        kv_t = _make_scalar_tensor(kv_actual)
+
+        out_scalar = ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(
+            tt_input, cos_tt, sin_tt, trans_tt, kv_actual_global=kv_actual, cluster_axis=sp_axis
+        )
+        out_meta = ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(
+            tt_input, cos_tt, sin_tt, trans_tt, kv_actual_global=kv_t, cluster_axis=sp_axis
+        )
+        ttnn.synchronize_device(mesh_device)
+
+        scalar_host = ttnn.to_torch(out_scalar, mesh_composer=composer).to(torch.float32)[:, :n_heads, :, :]
+        meta_host = ttnn.to_torch(out_meta, mesh_composer=composer).to(torch.float32)[:, :n_heads, :, :]
+        assert torch.equal(meta_host, scalar_host), (
+            f"kv_actual={kv_actual}: per-element-tensor-path output differs from scalar-path "
+            f"(max abs diff {(meta_host - scalar_host).abs().max().item()})"
+        )
+        logger.success(f"kv_actual={kv_actual}: per-element-tensor path == scalar path (bit-exact)")
+        # After the first chunk both programs (scalar + metadata, distinct by metadata.has_value()) are
+        # compiled; capture the count so we can assert no further growth across the remaining chunks.
+        if entries_after_first is None:
+            entries_after_first = mesh_device.num_program_cache_entries()
+        ttnn.deallocate(kv_t)
+        ttnn.deallocate(tt_input)
+
+    # The whole point of this path: kv_actual_global is a runtime arg (metadata address patched on cache
+    # hits), NOT part of the program hash, so successive chunks — including the non-slab-aligned one —
+    # must reuse the one cached metadata program rather than compile a new one each time.
+    assert mesh_device.num_program_cache_entries() == entries_after_first, (
+        f"program cache grew across chunks — the scalar+metadata programs should each compile once and be "
+        f"reused (kv_actual_global is a runtime arg, not hashed): {entries_after_first} -> "
+        f"{mesh_device.num_program_cache_entries()}"
+    )
+    logger.info(f"program cache stable at {entries_after_first} entries across {len(cases)} chunks")

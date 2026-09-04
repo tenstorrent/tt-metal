@@ -18,7 +18,7 @@
 namespace reference {
 template <typename T>
 std::vector<T> untilize_nchw(
-    tt::stl::Span<const T> in, const PhysicalSize& shape, std::optional<PhysicalSize> tile_shape) {
+    ttsl::Span<const T> in, const PhysicalSize& shape, std::optional<PhysicalSize> tile_shape) {
     std::vector<T> result;
     if (in.size() == 0) {
         return result;
@@ -56,7 +56,7 @@ std::vector<T> untilize_nchw(
 // Converts a linear non-zero-padded row-major tensor to 32-swizzled tilized row-major tensor
 template <typename T>
 std::vector<T> tilize_nchw(
-    tt::stl::Span<const T> in_rowmajor, const PhysicalSize& shape, std::optional<PhysicalSize> tile_shape) {
+    ttsl::Span<const T> in_rowmajor, const PhysicalSize& shape, std::optional<PhysicalSize> tile_shape) {
     std::vector<T> tilized_result;
     if (in_rowmajor.size() == 0) {
         return tilized_result;
@@ -92,7 +92,7 @@ std::vector<T> tilize_nchw(
 
 template <class T>
 std::vector<T> convert_to_tile_layout(
-    tt::stl::Span<const T> data,
+    ttsl::Span<const T> data,
     std::optional<PhysicalSize> tile_shape,
     std::optional<PhysicalSize> face_shape,
     const bool transpose_face,
@@ -178,7 +178,7 @@ std::vector<T> convert_to_tile_layout(
 
 template <class T>
 std::vector<T> convert_to_flat_layout(
-    tt::stl::Span<const T> data,
+    ttsl::Span<const T> data,
     std::optional<PhysicalSize> tile_shape,
     std::optional<PhysicalSize> face_shape,
     const bool transpose_face,
@@ -254,7 +254,7 @@ std::vector<T> convert_to_flat_layout(
 
 template <typename T>
 std::vector<T> convert_layout(
-    tt::stl::Span<const T> inp,
+    ttsl::Span<const T> inp,
     const PhysicalSize& shape,
     TensorLayoutType inL,
     TensorLayoutType outL,
@@ -346,7 +346,7 @@ using TilizeUntilizeParams = std::tuple<
 
 class TilizeUntilizeTestsFixture : public ::testing::TestWithParam<TilizeUntilizeParams> {};
 
-TEST_P(TilizeUntilizeTestsFixture, ConvertLayout) {
+TEST_P(TilizeUntilizeTestsFixture, CPU_ConvertLayout) {
     auto params = GetParam();
     int n_batches = std::get<0>(params);
     PhysicalSize shape = std::get<1>(params);
@@ -381,7 +381,7 @@ TEST_P(TilizeUntilizeTestsFixture, ConvertLayout) {
     auto run_for_type = [&](auto type) {
         using Type = decltype(type);
         const auto& data = get_test_data<Type>();
-        tt::stl::Span<const Type> input(data.data(), n_elements);
+        ttsl::Span<const Type> input(data.data(), n_elements);
 
         auto output = convert_layout(
             input, shape, from_layout, to_layout, tile_shape, face_shape, transpose_within_face, transpose_of_faces);
@@ -400,7 +400,7 @@ TEST_P(TilizeUntilizeTestsFixture, ConvertLayout) {
     run_for_type(uint32_t{});
 }
 
-TEST_P(TilizeUntilizeTestsFixture, TilizeUntilize) {
+TEST_P(TilizeUntilizeTestsFixture, CPU_TilizeUntilize) {
     auto params = GetParam();
     int n_batches = std::get<0>(params);
     PhysicalSize shape = std::get<1>(params);
@@ -422,13 +422,13 @@ TEST_P(TilizeUntilizeTestsFixture, TilizeUntilize) {
     auto run_for_type = [&](auto type) {
         using Type = decltype(type);
         const auto& data = get_test_data<Type>();
-        tt::stl::Span<const Type> input(data.data(), n_elements);
+        ttsl::Span<const Type> input(data.data(), n_elements);
 
         auto converted = convert_layout(
             input, shape, from_layout, to_layout, tile_shape, face_shape, transpose_within_face, transpose_of_faces);
 
         auto converted_back = convert_layout(
-            tt::stl::make_const_span(converted),
+            ttsl::make_const_span(converted),
             shape,
             to_layout,
             from_layout,
@@ -437,7 +437,7 @@ TEST_P(TilizeUntilizeTestsFixture, TilizeUntilize) {
             transpose_within_face,
             transpose_of_faces);
 
-        auto converted_back_span = tt::stl::make_const_span(converted_back);
+        auto converted_back_span = ttsl::make_const_span(converted_back);
         ASSERT_EQ(input.size(), converted_back.size());
         ASSERT_TRUE(std::equal(input.begin(), input.end(), converted_back_span.begin()));
     };
@@ -472,7 +472,7 @@ INSTANTIATE_TEST_SUITE_P(
 using ThrowableTilizeUntilizeParams = std::tuple<PhysicalSize, TensorLayoutType, TensorLayoutType, size_t>;
 
 class ThrowableTilizeUntilizeFixture : public ::testing::TestWithParam<ThrowableTilizeUntilizeParams> {};
-TEST_P(ThrowableTilizeUntilizeFixture, TilizeUntilize) {
+TEST_P(ThrowableTilizeUntilizeFixture, CPU_TilizeUntilize) {
     auto params = GetParam();
     PhysicalSize shape = std::get<0>(params);
     auto from_layout = std::get<1>(params);
@@ -487,7 +487,7 @@ TEST_P(ThrowableTilizeUntilizeFixture, TilizeUntilize) {
         using Type = decltype(type);
         std::vector<Type> input(input_size);
 
-        EXPECT_ANY_THROW(convert_layout(tt::stl::make_const_span(input), shape, from_layout, to_layout));
+        EXPECT_ANY_THROW(convert_layout(ttsl::make_const_span(input), shape, from_layout, to_layout));
     };
 
     // Test all interesting types
@@ -523,7 +523,7 @@ using NonSquareTilesParams =
 
 class NonSquareTilesTestFixture : public ::testing::TestWithParam<NonSquareTilesParams> {};
 
-TEST_P(NonSquareTilesTestFixture, ConvertLayout) {
+TEST_P(NonSquareTilesTestFixture, CPU_ConvertLayout) {
     auto params = GetParam();
     PhysicalSize shape = std::get<0>(params);
     auto from_layout = std::get<1>(params);
@@ -547,7 +547,7 @@ TEST_P(NonSquareTilesTestFixture, ConvertLayout) {
     auto run_for_type = [&](auto type) {
         using Type = decltype(type);
         const auto& data = get_test_data<Type>();
-        tt::stl::Span<const Type> input(data.data(), n_elements);
+        ttsl::Span<const Type> input(data.data(), n_elements);
 
         auto output =
             convert_layout(input, shape, from_layout, to_layout, tile_shape, face_shape, transpose, transpose);

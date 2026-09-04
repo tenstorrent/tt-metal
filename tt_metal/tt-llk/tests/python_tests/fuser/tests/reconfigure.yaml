@@ -1,0 +1,89 @@
+# Three stages that each use different data formats, forcing the unpack, math,
+# and pack pipelines to reconfigure between every stage. Goes from Float16_b
+# through Float16 to Float32.
+
+dest_acc: true
+
+operands:
+  - name: "input_A"
+    dims: [32, 32]
+    format: "Float16_b"
+  - name: "input_C"
+    dims: [32, 32]
+    format: "Float16_b"
+  - name: "output_A"
+    dims: [32, 32]
+    format: "Float16_b"
+
+  - name: "input_D"
+    dims: [32, 32]
+    format: "Float16_b"
+  - name: "output_B"
+    dims: [32, 32]
+    format: "Float16"
+
+  - name: "input_E"
+    dims: [32, 32]
+    format: "Float16"
+  - name: "output_C"
+    dims: [32, 32]
+    format: "Float32"
+
+operations:
+  - math:
+      - type: "Fpu"
+        operation: "Datacopy"
+        unpacker: "UnpackerA"
+        math_fidelity: "LoFi"
+        in0: "input_A"
+      - type: "UnarySfpu"
+        operation: "Exp"
+        approximation_mode: false
+        iterations: 32
+        dst_dest_tile_index: 0
+      - type: "UnarySfpu"
+        operation: "Tanh"
+        approximation_mode: false
+        iterations: 32
+        dst_dest_tile_index: 0
+      - type: "Fpu"
+        in0: "input_C"
+        operation: "Elwmul"
+        unpacker: "UnpackerA"
+        reuse_dest: "DEST_TO_SRCB"
+        math_fidelity: "LoFi"
+    block_size: [32, 32]
+
+    pack:
+      - output: "output_A"
+        packer: "Packer"
+  - math:
+      - type: "Fpu"
+        in0: "input_D"
+        in1: "output_A"
+        operation: "Elwmul"
+        unpacker: "UnpackerAB"
+        math_fidelity: "LoFi"
+      - type: "Fpu"
+        in0: "input_D"
+        operation: "Elwmul"
+        unpacker: "UnpackerA"
+        reuse_dest: "DEST_TO_SRCA"
+        acc_to_dest: true
+        math_fidelity: "LoFi"
+    block_size: [32, 32]
+
+    pack:
+      - output: "output_B"
+        packer: "Packer"
+  - math:
+      - type: "Fpu"
+        in0: "input_E"
+        in1: "output_B"
+        operation: "Matmul"
+        unpacker: "MatmulUnpacker"
+        math_fidelity: "LoFi"
+    block_size: [32, 32]
+    pack:
+      - output: "output_C"
+        packer: "Packer"

@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -13,12 +14,13 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
-#include <tt-logger/tt-logger.hpp>         // log_info: per-program schedule/mcast summary
+#include <tt-logger/tt-logger.hpp>  // log_info: per-program schedule/mcast summary
 #include <tt-metalium/mesh_workload.hpp>
 #include "hostdevcommon/kernel_structs.h"  // tt::CBIndex
 
 #include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"    // get_linearized_index_from_physical_coord
+#include "indexer_score_host_common.hpp"         // shared causal geometry / device index / persistent-cache args
 #include "kernels/indexer_score_cb.hpp"          // shared host/device CB-index argument layout (CbArg)
 #include "kernels/indexer_score_work_split.hpp"  // shared host/device causal work-split formula
 
@@ -32,6 +34,8 @@ constexpr uint32_t reader_q_addr = 0;
 constexpr uint32_t reader_k_addr = 1;
 constexpr uint32_t reader_w_addr = 2;
 constexpr uint32_t compute_chunk_start_tiles = 7;  // after 6 sched scalars + kv_len[6]
+constexpr uint32_t compute_straddle_q_tile = 8;    // mid-slab boundary-chip diagonal jump (q-tile-row)
+constexpr uint32_t compute_straddle_jump_tiles = 9;
 constexpr uint32_t writer_out_addr = 0;
 // Persistent-cache args, appended after each kernel's schedule/mcast args (hash-excluded, re-patched on a hit).
 constexpr uint32_t reader_num_scalars = 3 + 6;  // q/k/w addrs + schedule {row_group0..max_bands}
@@ -39,45 +43,17 @@ constexpr uint32_t mcast_args_per_dir = 8;      // role, rect (xs,ys,xe,ye), sen
 constexpr uint32_t reader_num_mcast_dirs = 2;   // K column, then Q/W row
 constexpr uint32_t reader_k_batch_offset = reader_num_scalars + reader_num_mcast_dirs * mcast_args_per_dir;  // 25
 constexpr uint32_t reader_kv_len_tiles = reader_k_batch_offset + 1;                                          // 26
-constexpr uint32_t compute_kv_len_tiles = 6;     // after the 6 schedule scalars {row_group0..max_bands}
-constexpr uint32_t writer_kv_len_tiles = 1 + 6;  // out_addr + the 6 schedule scalars {row_group0..max_bands}
+constexpr uint32_t compute_kv_len_tiles = 6;          // after the 6 schedule scalars {row_group0..max_bands}
+constexpr uint32_t writer_kv_len_tiles = 1 + 6;       // out_addr + the 6 schedule scalars {row_group0..max_bands}
 constexpr uint32_t writer_chunk_start_tiles = 1 + 7;  // after out_addr + 6 sched scalars + kv_len[7]; match writer
+constexpr uint32_t writer_straddle_q_tile = 1 + 8;    // mid-slab forced-local block jump (block-pool only)
+constexpr uint32_t writer_straddle_jump_tiles = 1 + 9;
 }  // namespace rt_arg
-
-// Per-device chunk_start (tiles): (base + rank*Sq) / TILE_WIDTH. Shared by create_at (device_index from
-// the coordinate) and override (stored device_index).
-inline uint32_t chunk_start_tiles_for(const operation_attributes_t& args, uint32_t device_index, uint32_t Sq) {
-    return (args.chunk_start_idx + device_index * Sq) / tt::constants::TILE_WIDTH;
-}
-
-// This device's linearized SP-ring index; 0 on a single device (no coordinate lookup needed).
-inline uint32_t device_index_for(
-    const operation_attributes_t& args, const ttnn::MeshCoordinate& coord, const Tensor& q) {
-    if (q.device_storage().get_coords().size() <= 1) {
-        return 0;
-    }
-    return ttnn::ccl::get_linearized_index_from_physical_coord(q, coord, args.cluster_axis);
-}
 
 // Patch one runtime-arg slot on a program-cache hit, asserting the slot exists.
 inline void patch_arg(tt::tt_metal::RuntimeArgsData& args, uint32_t index, uint32_t value, const char* name) {
     TT_FATAL(index < args.size(), "indexer_score override: {} index {} >= args size {}", name, index, args.size());
     args[index] = value;
-}
-
-// The two non-hashed runtime args derived from k's shape + the optionals. Single source for both create()
-// (bakes at miss) and override_runtime_arguments() (re-patches on a hit).
-struct PersistentCacheArgs {
-    uint32_t k_batch_page_offset;  // cache_batch_idx * Tt * Dt; 0 when not indexed
-    uint32_t kv_len_tiles;         // valid key prefix in tiles; full Tt when kv_len unset
-};
-inline PersistentCacheArgs persistent_cache_args(const operation_attributes_t& attrs, const Tensor& k) {
-    const auto& shape = k.logical_shape();
-    const uint32_t Tt = shape[2] / tt::constants::TILE_WIDTH;
-    const uint32_t Dt = shape[3] / tt::constants::TILE_WIDTH;
-    return {
-        .k_batch_page_offset = attrs.cache_batch_idx.value_or(0) * Tt * Dt,
-        .kv_len_tiles = attrs.kv_len.value_or(shape[2]) / tt::constants::TILE_WIDTH};
 }
 
 // Banded-product schedule: the work space (group_count q-row-groups x band_count k-bands) tiles onto a
@@ -102,9 +78,14 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     const uint32_t T = k.logical_shape()[2];
 
     // This device's SP-ring index and chunk_start (tiles), from the coordinate. chunk_t is a compute RUNTIME
-    // arg, so the binary is identical across coords and steps.
+    // arg, so the binary is identical across coords and steps. tp_index = its rank along the TP axis
+    // (seq_shard_axes[1], the 2D SP×TP query sub-shard); 0 when not sub-sharded or single-device.
     const uint32_t device_index = device_index_for(args, coord, q);
-    const uint32_t chunk_t = chunk_start_tiles_for(args, device_index, Sq);
+    const uint32_t tp_index = (args.tp_axis().has_value() && q.device_storage().get_coords().size() > 1)
+                                  ? ttnn::ccl::get_linearized_index_from_physical_coord(q, coord, args.tp_axis())
+                                  : 0u;
+    const auto geom = device_causal_geometry(args, device_index, tp_index, Sq);
+    const uint32_t chunk_t = geom.chunk_start_tiles;
 
     const uint32_t Sqt = Sq / tt::constants::TILE_HEIGHT;
     const uint32_t Tt = T / tt::constants::TILE_WIDTH;
@@ -281,22 +262,8 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     const tt::DataFormat acc_fmt = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     const uint32_t acc_tile = fp32_dest_acc_en ? fp32_tile : bf16_tile;
     // cb_qk buffers a batch of relu(q.kT) tiles so compute runs the batch's matmuls then mul+accumulates,
-    // hoisting the matmul<->eltwise reinit out of the per-head loop. QC==1 batches the whole group; QC>1 caps
-    // at one tile-row of heads (TILE_HEIGHT).
-    const uint32_t qk_batch_cap = (QC == 1) ? subblock_basis : tt::constants::TILE_HEIGHT;
-    const uint32_t qk_batch_heads = std::min<uint32_t>(subblock_basis, qk_batch_cap);  // multiple of qk_subblock_h
-    // Per-plane head count must be a whole multiple of qk_batch_heads or the last chunk over-reads (only
-    // reachable when the 32-cap engages; deployed cases never hit it).
-    TT_FATAL(
-        subblock_basis % qk_batch_heads == 0,
-        "per-plane head count {} not divisible by qk_batch_heads {} (QC>1 with >32 heads); reduce head_group_size, "
-        "q_chunk_size, or raise num_groups",
-        subblock_basis,
-        qk_batch_heads);
-    // Full-strip path batches the whole k chunk's columns per matmul<->mul switch (w is column-independent,
-    // the chunk is resident). Only for a single-chunk group (qk_batch_heads == basis) with KC >= 2.
-    const bool single_chunk = (qk_batch_heads == subblock_basis) && !stream_heads;
-    const uint32_t qk_col_batch = (KC >= 2 && single_chunk) ? KC : 1u;
+    // hoisting the matmul<->eltwise reinit out of the per-head loop (shared with the fused factory).
+    const auto [qk_batch_heads, qk_col_batch] = dsa_qk_batching(subblock_basis, QC, KC, stream_heads);
     // G>1 reuses the full-strip path (the fallback is not wired for groups); only fires if plane_heads
     // exceeds the batch cap (QC>1 with plane_heads>32).
     TT_FATAL(
@@ -333,9 +300,12 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     const uint32_t gate_scale_bits = (static_cast<uint32_t>(gate_scale_bf16) << 16) | gate_scale_bf16;
 
     std::vector<uint32_t> reader_ct = common_ct;
+    reader_ct.push_back(0u);  // fused_ring off
     tt::tt_metal::TensorAccessorArgs(*q.buffer()).append_to(reader_ct);
     tt::tt_metal::TensorAccessorArgs(*k.buffer()).append_to(reader_ct);
     tt::tt_metal::TensorAccessorArgs(*w.buffer()).append_to(reader_ct);  // q placeholder when synthesize_gate
+    // Keep the reader CT layout identical to the fused factory. This accessor is unused when fused_ring is off.
+    tt::tt_metal::TensorAccessorArgs(*k.buffer()).append_to(reader_ct);
     // multicast: on/off per direction (q_mcast_on covers q and w) then the 6 semaphore ids.
     reader_ct.push_back(k_mcast_on);
     reader_ct.push_back(q_mcast_on);
@@ -347,15 +317,41 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     reader_ct.push_back(q_valid_sem);
     // Fused single-head: reader reads q+w FIRST (the matmul gate needs them), then streams k (when no mcast).
     reader_ct.push_back(fuse_single ? 1u : 0u);
-    reader_ct.push_back(fused_stream_k ? 1u : 0u);  // fused: stream k (no mcast) vs whole mcast block
+    reader_ct.push_back(fused_stream_k ? 1u : 0u);        // fused: stream k (no mcast) vs whole mcast block
     reader_ct.push_back(args.synthesize_gate ? 1u : 0u);  // fill cb_w with gate_scale in L1 vs read DRAM
     reader_ct.push_back(gate_scale_bits);                 // bf16 pair, the in-kernel gate fill value
+    // invP KEY remap: keyed on key_stripes()/key_stripe_chunk(), NOT block_cyclic->{sp, chunk_local} -- under KV
+    // dedup the keys are striped finer than the queries, and the causal geometry above stays on the query pair.
+    const auto block_cyclic_ct = [&args, Tt]() {
+        std::array<uint32_t, 5> ct{0, 1, 1, 0, 0};
+        if (!args.has_block_cyclic()) {
+            return ct;
+        }
+        const uint32_t sp = args.key_stripes();
+        const uint32_t chunk_local = args.key_stripe_chunk() / tt::constants::TILE_WIDTH;
+        ct = {
+            1,
+            chunk_local,
+            sp,
+            (Tt / sp) - chunk_local,
+            chunk_local * (sp - 1),
+        };
+        return ct;
+    }();
+    reader_ct.insert(reader_ct.end(), block_cyclic_ct.begin(), block_cyclic_ct.end());
+    // Keep the shared reader's full-mesh rank-mapping CT tail canonical for the classic path.
+    reader_ct.insert(reader_ct.end(), {0u, 0u, 0u, 0u});
+    reader_ct.push_back(0u);  // partial all-gather readiness off (non-fused path)
 
     std::vector<uint32_t> writer_ct = common_ct;
+    writer_ct.push_back(0u);                             // fused_ring off
     const uint32_t out_elem_bytes = out.element_size();  // bf16 today
     // row-major page = one output row: T scores, or nblocks block-scores when pooling.
     const uint32_t out_row_elems = block_pool ? nblocks : T;
     writer_ct.push_back(out_row_elems * out_elem_bytes);
+    writer_ct.push_back(0u);  // shard-major mapping off
+    writer_ct.push_back(1u);  // unused block-cyclic run width
+    writer_ct.push_back(1u);  // unused SP size
     tt::tt_metal::TensorAccessorArgs(*out.buffer()).append_to(writer_ct);
 
     std::vector<uint32_t> compute_ct = common_ct;
@@ -367,6 +363,10 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     // bfp8 q falls back). GLM/DSv32 and bfp8-q MSA fall back, byte-identical.
     compute_ct.push_back(fuse_single ? 1u : 0u);
     compute_ct.push_back(fused_stream_k ? 1u : 0u);  // fused: incremental k wait (stream) vs whole-chunk
+    compute_ct.push_back(0u);                        // fused_ring off
+    compute_ct.push_back(0u);                        // shard-major block-cyclic mapping off
+    compute_ct.push_back(1u);                        // unused block-cyclic run width
+    compute_ct.push_back(1u);                        // unused SP size
 
     const std::string kdir = "ttnn/cpp/ttnn/operations/experimental/indexer_score/device/kernels/";
     auto reader_id = tt::tt_metal::CreateKernel(
@@ -393,28 +393,19 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     std::vector<CoreCoord> cores;
     cores.reserve(num_cores);
     for (uint32_t row = 0; row < rows_used; ++row) {
-        // physical bbox of this row across the used columns (q/w mcast rect); py constant along the row.
-        uint32_t q_xs = u32(phys[row][0].x), q_xe = u32(phys[row][0].x);
-        for (uint32_t bbox_col = 0; bbox_col < cols_used; ++bbox_col) {
-            q_xs = std::min<uint32_t>(q_xs, u32(phys[row][bbox_col].x));
-            q_xe = std::max<uint32_t>(q_xe, u32(phys[row][bbox_col].x));
-        }
-        const uint32_t q_py = u32(phys[row][0].y);
-        const uint32_t q_diag = std::min<uint32_t>(row, cols_used - 1);  // diagonal sender column
-        const CoreCoord q_sender = phys[row][q_diag];
+        // Q/W row mcast rect + diagonal sender (shared with the fused factory).
+        const auto qb = q_mcast_bbox(phys, row, cols_used);
+        const uint32_t q_xs = qb.xs, q_xe = qb.xe, q_py = qb.py, q_diag = qb.diag_col;
+        const CoreCoord q_sender = qb.sender;
         // This row's band-chunk block and its row base within the grid. The k-mcast spans only the block's
         // group_rows rows; row % group_rows is the group this row computes (same in every block).
         const uint32_t block = row / group_rows;
         const uint32_t block_base = block * group_rows;
         for (uint32_t col = 0; col < cols_used; ++col) {
-            // physical bbox of this column down the block's rows (k mcast rect); px constant down the column.
-            uint32_t k_ys = u32(phys[block_base][col].y), k_ye = u32(phys[block_base][col].y);
-            for (uint32_t bbox_row = block_base; bbox_row < block_base + group_rows; ++bbox_row) {
-                k_ys = std::min<uint32_t>(k_ys, u32(phys[bbox_row][col].y));
-                k_ye = std::max<uint32_t>(k_ye, u32(phys[bbox_row][col].y));
-            }
-            const uint32_t k_px = u32(phys[block_base][col].x);
-            const CoreCoord k_sender = phys[block_base][col];
+            // K column mcast rect + block-top sender (shared with the fused factory).
+            const auto kb = k_mcast_bbox(phys, block_base, col, group_rows);
+            const uint32_t k_ys = kb.ys, k_ye = kb.ye, k_px = kb.px;
+            const CoreCoord k_sender = kb.sender;
 
             const CoreCoord core{col, row};
             cores.push_back(core);
@@ -463,15 +454,19 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
             reader_rt.push_back(k_batch_page_offset);
             reader_rt.push_back(kv_len_tiles);
             tt::tt_metal::SetRuntimeArgs(program, reader_id, core, reader_rt);
-            // compute: schedule[0-5], then kv_len_tiles[6] + chunk_start_tiles[7] (both hash-excluded runtime).
+            // compute: schedule[0-5], kv_len_tiles[6], chunk_start_tiles[7], straddle[8,9] (hash-excluded runtime).
             std::vector<uint32_t> compute_rt(sched.begin(), sched.end());
-            compute_rt.push_back(kv_len_tiles);  // slot [6]
-            compute_rt.push_back(chunk_t);       // slot [7]
+            compute_rt.push_back(kv_len_tiles);              // slot [6]
+            compute_rt.push_back(chunk_t);                   // slot [7]
+            compute_rt.push_back(geom.straddle_q_tile);      // slot [8], mid-slab boundary-chip diagonal jump
+            compute_rt.push_back(geom.straddle_jump_tiles);  // slot [9]
             tt::tt_metal::SetRuntimeArgs(program, compute_id, core, compute_rt);
             std::vector<uint32_t> writer_rt = {out.buffer()->address()};
             writer_rt.insert(writer_rt.end(), sched.begin(), sched.end());
-            writer_rt.push_back(kv_len_tiles);  // slot [7], after out_addr + the 6 schedule scalars
-            writer_rt.push_back(chunk_t);       // slot [8], per-device chunk-start (tiles); block-pool forced-local
+            writer_rt.push_back(kv_len_tiles);              // slot [7], after out_addr + the 6 schedule scalars
+            writer_rt.push_back(chunk_t);                   // slot [8], per-device chunk-start (tiles); forced-local
+            writer_rt.push_back(geom.straddle_q_tile);      // slot [9], mid-slab forced-local block jump (pool only)
+            writer_rt.push_back(geom.straddle_jump_tiles);  // slot [10]
             tt::tt_metal::SetRuntimeArgs(program, writer_id, core, writer_rt);
         }
     }
@@ -483,7 +478,8 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
             .compute_kernel = compute_id,
             .writer_kernel = writer_id,
             .worker_cores = cores,
-            .device_index = device_index}};
+            .device_index = device_index,
+            .tp_index = tp_index}};
 }
 
 IndexerScoreProgramFactory::cached_mesh_workload_t IndexerScoreProgramFactory::create_mesh_workload(
@@ -519,7 +515,8 @@ void IndexerScoreProgramFactory::override_runtime_arguments(
         auto& reader_args = tt::tt_metal::GetRuntimeArgs(program, shared.reader_kernel);
         auto& compute_args = tt::tt_metal::GetRuntimeArgs(program, shared.compute_kernel);
         auto& writer_args = tt::tt_metal::GetRuntimeArgs(program, shared.writer_kernel);
-        const uint32_t chunk_t = chunk_start_tiles_for(args, shared.device_index, Sq);
+        const auto geom = device_causal_geometry(args, shared.device_index, shared.tp_index, Sq);
+        const uint32_t chunk_t = geom.chunk_start_tiles;
         for (const auto& core : shared.worker_cores) {
             auto& reader_rt = reader_args[core.x][core.y];
             patch_arg(reader_rt, rt_arg::reader_q_addr, tensors.q.buffer()->address(), "reader.q_addr");
@@ -529,9 +526,29 @@ void IndexerScoreProgramFactory::override_runtime_arguments(
             patch_arg(reader_rt, rt_arg::reader_kv_len_tiles, kv_len_tiles, "reader.kv_len_tiles");
             patch_arg(compute_args[core.x][core.y], rt_arg::compute_kv_len_tiles, kv_len_tiles, "compute.kv_len_tiles");
             patch_arg(compute_args[core.x][core.y], rt_arg::compute_chunk_start_tiles, chunk_t, "compute.chunk_start");
+            patch_arg(
+                compute_args[core.x][core.y],
+                rt_arg::compute_straddle_q_tile,
+                geom.straddle_q_tile,
+                "compute.straddle_q_tile");
+            patch_arg(
+                compute_args[core.x][core.y],
+                rt_arg::compute_straddle_jump_tiles,
+                geom.straddle_jump_tiles,
+                "compute.straddle_jump_tiles");
             patch_arg(writer_args[core.x][core.y], rt_arg::writer_out_addr, out.buffer()->address(), "writer.out_addr");
             patch_arg(writer_args[core.x][core.y], rt_arg::writer_kv_len_tiles, kv_len_tiles, "writer.kv_len_tiles");
             patch_arg(writer_args[core.x][core.y], rt_arg::writer_chunk_start_tiles, chunk_t, "writer.chunk_start");
+            patch_arg(
+                writer_args[core.x][core.y],
+                rt_arg::writer_straddle_q_tile,
+                geom.straddle_q_tile,
+                "writer.straddle_q_tile");
+            patch_arg(
+                writer_args[core.x][core.y],
+                rt_arg::writer_straddle_jump_tiles,
+                geom.straddle_jump_tiles,
+                "writer.straddle_jump_tiles");
         }
     }
 }

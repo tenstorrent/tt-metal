@@ -14,7 +14,7 @@ using namespace tt::tt_metal;
 namespace {
 
 // True if padded shape doesn't divide evenly into shard (or no spec).
-bool is_unevenly_sharded(const TensorSpec& t) {
+bool is_unevenly_sharded(const tt::tt_metal::TensorSpec& t) {
     const auto& shard_spec = t.memory_config().shard_spec();
     if (!shard_spec.has_value()) {
         return true;
@@ -85,7 +85,7 @@ bool is_replication_locally_contained(
 }
 
 bool is_native_repeat_sharding(
-    const TensorSpec& input_spec,
+    const tt::tt_metal::TensorSpec& input_spec,
     const std::optional<MemoryConfig>& output_memory_config,
     int32_t repeat_dim,
     uint32_t num_repeats) {
@@ -179,7 +179,10 @@ std::optional<ShardSpec> adjust_repeat_shard_spec_to_shape(
 }
 
 std::optional<ShardSpec> generate_repeat_shard_spec(
-    const Tensor& input_tensor, const ttnn::Shape& padded_out_shape, TensorMemoryLayout memory_layout) {
+    const Tensor& input_tensor,
+    const ttnn::Shape& padded_out_shape,
+    TensorMemoryLayout memory_layout,
+    std::optional<ShardOrientation> orientation_hint) {
     auto* device = input_tensor.device();
     auto compute_grid_size = device->compute_with_storage_grid_size();
     CoreRangeSet all_cores(CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1}));
@@ -238,7 +241,14 @@ std::optional<ShardSpec> generate_repeat_shard_spec(
 
     log_debug(
         tt::LogOp, "Repeat: synthesised shard spec ({}, {}) over {} cores", shard_shape[0], shard_shape[1], num_cores);
-    return ShardSpec(all_cores, shard_shape, ShardOrientation::ROW_MAJOR);
+    // Prefer explicit hint, then input's orientation, else ROW_MAJOR.
+    ShardOrientation orientation = ShardOrientation::ROW_MAJOR;
+    if (orientation_hint.has_value()) {
+        orientation = *orientation_hint;
+    } else if (input_tensor.shard_spec().has_value()) {
+        orientation = input_tensor.shard_spec()->orientation;
+    }
+    return ShardSpec(all_cores, shard_shape, orientation);
 }
 
 }  // namespace ttnn::operations::data_movement::repeat

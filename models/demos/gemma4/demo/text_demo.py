@@ -6,11 +6,23 @@ Gemma4 text generation demo.
 
 Simple prefill + decode loop following gpt-oss text_demo.py pattern.
 
+Long-context policy (see ``GEMMA4_LONG_CONTEXT_POLICY`` in generator_trace.py)
+matches ``text_demo_v2.py``: per-(model, device) bounded sliding / chunked
+prefill cutovers on QB2 (P150x4 / P300x2) and P150x8. Overrides:
+``GEMMA4_BOUNDED_SLIDING``, ``GEMMA4_GEN_PREFILL_CHUNK``, ``GEMMA4_DEMO_SINGLE_CHUNK``,
+``GEMMA4_MAX_SEQ_LEN``, ``GEMMA4_MAX_NEW_TOKENS``.
+
 Usage:
     pytest models/demos/gemma4/demo/text_demo.py -v --timeout=600
 
     # With fewer layers for testing:
     pytest models/demos/gemma4/demo/text_demo.py -v --timeout=600 -k "test_demo"
+
+    # Long-context (64k/128k/256k) on QB2 or P150x8:
+    MESH_DEVICE=P150x4 HF_MODEL=google/gemma-4-12B-it pytest \\
+        models/demos/gemma4/demo/text_demo.py -k long-context-128k -s --timeout 1800
+    MESH_DEVICE=P150x8 HF_MODEL=google/gemma-4-31B-it pytest \\
+        models/demos/gemma4/demo/text_demo.py -k long-context-128k -s --timeout 1800
 
     # Batch-32 batched prefill:
     pytest models/demos/gemma4/demo/text_demo.py::test_demo_batch_prefill -k "prefill_128-1x1" -v
@@ -24,6 +36,7 @@ Usage:
 """
 
 import gc
+import math
 import os
 import time
 
@@ -32,17 +45,48 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.gemma4.demo.sampling_utils import (
+    build_device_sampling_params,
+    log_sampling_mode,
+    model_can_sample_on_device,
+)
 from models.demos.gemma4.tests.test_factory import PREFILL_BUCKETS, parametrize_mesh_with_fabric
 from models.demos.gemma4.tt.common import create_tt_model
 from models.demos.gemma4.tt.generator import GEMMA4_MAX_BATCHED_PREFILL_SEQ_LEN, Gemma4Generator
+from models.demos.gemma4.tt.generator_trace import (
+    resolve_gemma4_bounded_sliding,
+    resolve_gemma4_demo_long_context,
+    should_auto_enable_chunked_bounded,
+)
 from models.demos.utils.llm_demo_utils import create_benchmark_data
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from models.tt_transformers.tt.common import PagedAttentionConfig, get_padded_prefill_len, sample_host
+from models.tt_transformers.tt.common import (
+    PagedAttentionConfig,
+    get_padded_prefill_len,
+    preprocess_inputs_prefill,
+    sample_host,
+)
 from models.tt_transformers.tt.generator import SUPPORTED_PREFILL_BATCH_SIZES
 from models.tt_transformers.tt.model_config import determine_device_name
 
 _TT_TRANSFORMERS_PROMPTS_DIR = "models/tt_transformers/demo/sample_prompts"
 _CONTEXT_CACHE_DIR = "models/tt_transformers/demo/context_cache"
+
+_MESH_DEVICE_SHAPES = {
+    # Logical SKU names (same mapping as tt_transformers / gemma3 demos).
+    "N150": (1, 1),
+    "N300": (1, 2),
+    "N150x4": (1, 4),
+    "T3K": (1, 8),
+    "TG": (8, 4),
+    "P150": (1, 1),
+    "P300": (1, 2),
+    "P150x4": (1, 4),
+    "P300x2": (1, 4),
+    "P300X2": (1, 4),
+    "P150x8": (1, 8),
+    "BHGLX": (8, 4),
+}
 
 
 def _snap_to_bucket(prompt_len, max_seq_len):
@@ -112,12 +156,87 @@ def _bucket_to_prompt_file(target_bucket):
         return f"{_TT_TRANSFORMERS_PROMPTS_DIR}/input_data_questions_prefill_256.json"
     if target_bucket < 1024:
         return f"{_TT_TRANSFORMERS_PROMPTS_DIR}/input_data_questions_prefill_256.json"
-    # Long-context files step in 1k/2k/.../128k. Cap at 128k (the largest
-    # source file); buckets above that reuse the 128k file and bucket-snap
+    # Long-context files step in 1k/2k/.../128k/256k. Cap at 256k (largest
+    # source file); buckets above that reuse the 256k file and bucket-snap
     # pads to the larger length.
-    long_size = min(target_bucket, 131072)
+    long_size = min(target_bucket, 262144)
     size_k = long_size // 1024
     return f"{_TT_TRANSFORMERS_PROMPTS_DIR}/input_data_long_{size_k}k.json"
+
+
+def _resolve_bounded_sliding(max_seq_len, mesh_device, model_path, *, paged_attention=True) -> bool:
+    """Match text_demo_v2: policy auto-enable, overridable via GEMMA4_BOUNDED_SLIDING."""
+    return resolve_gemma4_bounded_sliding(max_seq_len, mesh_device, model_path, paged_attention=paged_attention)
+
+
+def _right_size_page_max_num_blocks(batch_size, max_seq_len, page_params) -> int:
+    """Match text_demo_v2 page-pool right-sizing for batch=1 long-context."""
+    block_size = int(page_params["page_block_size"])
+    needed_blocks = batch_size * math.ceil(max_seq_len / block_size)
+    configured_blocks = page_params.get("page_max_num_blocks")
+    if batch_size <= 1 or configured_blocks is None:
+        return needed_blocks
+    return int(configured_blocks)
+
+
+def _install_hybrid_page_tables(model, model_args, batch_size, block_size, max_seq_len, num_layers=None):
+    """Install per-layer page tables required for bounded sliding KV."""
+    from models.demos.gemma4.tt.attention.kv_cache_hybrid import build_hybrid_page_tables
+
+    n_layers = num_layers or model_args.num_hidden_layers
+    sliding_mask = [model_args.layer_types[i] == "sliding_attention" for i in range(n_layers)]
+    per_layer_pts = build_hybrid_page_tables(
+        n_layers,
+        sliding_mask,
+        num_users=batch_size,
+        block_size=block_size,
+        max_seq_len=max_seq_len,
+        sliding_window=model_args.sliding_window,
+    )
+    model._active_page_tables_per_layer = per_layer_pts
+    logger.info(f"Bounded sliding: installed {len(per_layer_pts)} per-layer page tables")
+    return per_layer_pts
+
+
+def _mesh_shape_from_env():
+    """Resolve mesh shape from ``MESH_DEVICE`` as a hardcoded (rows, cols) tuple.
+
+    Named SKUs map explicitly (so ``2x4`` / ``BHGLX`` stay DP layouts). Unset /
+    unknown → ``(1, N)`` over all visible devices so a LoudBox opens full 1×8
+    TP instead of a 4-chip subset. Set ``MESH_DEVICE`` for non-line meshes.
+    """
+    env = os.environ.get("MESH_DEVICE")
+    if env in _MESH_DEVICE_SHAPES:
+        return _MESH_DEVICE_SHAPES[env]
+    if env and "x" in env.lower():
+        try:
+            rows, cols = env.lower().split("x", 1)
+            return (int(rows), int(cols))
+        except ValueError:
+            pass
+    try:
+        n = len(ttnn.get_device_ids())
+    except Exception:
+        n = 4
+    return (1, max(1, n))
+
+
+def _device_params():
+    """Blackhole needs a larger trace region; CQ / fabric knobs match ``text_demo_v2``.
+
+    ``GEMMA4_TRACE_REGION_SIZE``, ``GEMMA4_NUM_CQS``, ``GEMMA4_FABRIC``,
+    ``GEMMA4_CCL_PACKET_BYTES`` — see ``text_demo_v2._device_params``.
+    """
+    from models.demos.gemma4.demo.text_demo_v2 import _device_params as _v2_device_params
+
+    return _v2_device_params()
+
+
+def _host_sample_greedy(logits):
+    """Greedy argmax host sample; logits [B, vocab] or [B, 1, vocab] → [B, 1]."""
+    if logits.dim() == 3:
+        logits = logits[:, -1, :]
+    return logits.argmax(dim=-1, keepdim=True)
 
 
 def load_demo_prompt(target_bucket, instruct=True):
@@ -204,11 +323,16 @@ def _batch_page_params(batch_size, prefill_len, max_new_tokens, page_block_size=
 
 
 def _create_tt_page_table(global_batch_size, paged_attention_config: PagedAttentionConfig):
-    """Map virtual paged-attention blocks to physical blocks for a batch."""
-    max_num_blocks = paged_attention_config.max_num_blocks
-    permutation = torch.randperm(max_num_blocks)
-    reverse_permutation = torch.argsort(permutation)
-    return reverse_permutation.reshape(global_batch_size, max_num_blocks // global_batch_size).to(torch.int32)
+    """Identity logical→physical page table — matches ``text_demo_v2.create_tt_page_table``.
+
+    A random permutation here previously desynced chunked long-context KV fills
+    from decode and produced repetitive garbage ("lapped lapped…").
+    """
+    if paged_attention_config is None:
+        return None
+    n_blocks = paged_attention_config.max_num_blocks
+    cols = n_blocks // global_batch_size
+    return torch.arange(n_blocks, dtype=torch.int32)[: global_batch_size * cols].reshape(global_batch_size, cols)
 
 
 def load_batch_demo_prompts(batch_size, prefill_len, instruct=True):
@@ -296,14 +420,17 @@ def run_batch_generation(
 
     if page_params is None:
         page_params = _batch_page_params(batch_size, prefill_len, max_new_tokens)
+    page_max_num_blocks = _right_size_page_max_num_blocks(batch_size, max_seq_len, page_params)
     paged_attention_config = PagedAttentionConfig(
         block_size=int(page_params["page_block_size"]),
-        max_num_blocks=int(page_params["page_max_num_blocks"]),
+        max_num_blocks=page_max_num_blocks,
     )
     page_table = _create_tt_page_table(batch_size, paged_attention_config)
 
+    bounded_sliding = _resolve_bounded_sliding(max_seq_len, mesh_device, model_path)
     logger.info(
-        f"Creating Gemma4Generator (batch={batch_size}, max_seq_len={max_seq_len}, " f"prefill_len={prefill_len})..."
+        f"Creating Gemma4Generator (batch={batch_size}, max_seq_len={max_seq_len}, "
+        f"prefill_len={prefill_len}, bounded_sliding={bounded_sliding})..."
     )
     t0 = time.time()
     generator, tt_kv_cache, tokenizer = Gemma4Generator.from_pretrained(
@@ -312,8 +439,17 @@ def run_batch_generation(
         max_batch_size=batch_size,
         max_seq_len=max_seq_len,
         paged_attention_config=paged_attention_config,
+        bounded_sliding_kv_cache=bounded_sliding,
     )
     model_args = generator.model_args[0]
+    if bounded_sliding:
+        _install_hybrid_page_tables(
+            generator.model[0],
+            model_args,
+            batch_size=batch_size,
+            block_size=int(page_params["page_block_size"]),
+            max_seq_len=max_seq_len,
+        )
     if not hasattr(tokenizer, "stop_tokens"):
         tokenizer.stop_tokens = [tokenizer.eos_token_id]
     logger.info(f"Generator ready in {time.time() - t0:.1f}s")
@@ -447,6 +583,171 @@ def run_batch_generation(
     }
 
 
+def _run_generation_via_generator(
+    mesh_device,
+    model_path,
+    prompts,
+    max_new_tokens,
+    num_layers,
+    max_seq_len,
+    page_params,
+    bounded_sliding,
+    enable_decode_trace=True,
+):
+    """Long-context / policy path via ``Gemma4Generator`` (matches text_demo_v2).
+
+    Required for bounded sliding + auto multi-chunk prefill (e.g. 256k on 31B/12B/26B).
+    Page tables are identity (same as v2) — do not randomize.
+    """
+    is_ci_env = os.environ.get("CI") == "true"
+    batch_size = len(prompts)
+    assert batch_size == 1, "Generator long-context path is batch=1 in text_demo.py"
+
+    profiler = BenchmarkProfiler()
+    profiler.start("run")
+
+    block_size = int(page_params["page_block_size"])
+    page_max_num_blocks = _right_size_page_max_num_blocks(batch_size, max_seq_len, page_params)
+    paged_attention_config = PagedAttentionConfig(block_size=block_size, max_num_blocks=page_max_num_blocks)
+    page_table = _create_tt_page_table(batch_size, paged_attention_config)
+
+    lc = resolve_gemma4_demo_long_context(max_seq_len, mesh_device, model_path)
+    # Prefer caller-resolved bounded (same helper) but log the full runtime cutover.
+    logger.info(
+        f"Loading Gemma4 via Generator (layers={num_layers or 'all'}, max_seq_len={max_seq_len}, "
+        f"bounded_sliding={bounded_sliding}, prefill_chunk={lc['prefill_chunk']}, "
+        f"policy={lc['policy_source']})..."
+    )
+    generator, tt_kv_cache, tokenizer = Gemma4Generator.from_pretrained(
+        mesh_device=mesh_device,
+        model_path=model_path,
+        max_batch_size=batch_size,
+        max_seq_len=max_seq_len,
+        num_layers=num_layers,
+        paged_attention_config=paged_attention_config,
+        bounded_sliding_kv_cache=bounded_sliding,
+    )
+    model_args_list = generator.model_args
+    model_args = model_args_list[0]
+    if not hasattr(tokenizer, "stop_tokens"):
+        tokenizer.stop_tokens = [tokenizer.eos_token_id]
+
+    if bounded_sliding:
+        _install_hybrid_page_tables(
+            generator.model[0],
+            model_args,
+            batch_size=batch_size,
+            block_size=block_size,
+            max_seq_len=max_seq_len,
+            num_layers=num_layers,
+        )
+
+    from models.demos.gemma4.tt.generator_trace import chunked_prefill_trace_enabled
+
+    prefill_trace_max = int(os.environ.get("GEMMA4_PREFILL_TRACE_MAX_SEQ", 4096))
+    prefill_enable_trace = enable_decode_trace and (max_seq_len < prefill_trace_max or chunked_prefill_trace_enabled())
+    if enable_decode_trace and not prefill_enable_trace:
+        logger.info(
+            f"Prefill trace disabled (max_seq_len={max_seq_len} >= {prefill_trace_max}); "
+            f"decode stays traced. Set GEMMA4_PREFILL_TRACE_MAX_SEQ or "
+            f"GEMMA4_CHUNKED_PREFILL_TRACE=1 to override."
+        )
+
+    # Default on-device sample (product parity). Opt into host with GEMMA4_HOST_SAMPLE=1.
+    force_host = os.environ.get("GEMMA4_HOST_SAMPLE", "0").lower() in ("1", "true", "yes")
+    can_sample = (not force_host) and model_can_sample_on_device(generator.model[0])
+    # Generator long-context path is greedy-only today.
+    device_sampling_params = build_device_sampling_params({"temperature": 0}, can_sample=can_sample)
+    log_sampling_mode(can_sample, {"temperature": 0})
+
+    logger.info("Warming up prefill...")
+    generator.warmup_model_prefill(
+        kv_cache=tt_kv_cache,
+        enable_trace=prefill_enable_trace,
+        can_sample_on_device=can_sample,
+        greedy_only=True,
+    )
+    logger.info("Warmup complete")
+
+    input_tokens_prefill_pt, encoded_prompts, decoding_pos, prefill_lens = preprocess_inputs_prefill(
+        prompts, tokenizer, model_args_list, True, max_new_tokens, max_prefill_len=max_seq_len
+    )
+    max_encoded_prompt_len = max(len(p) for p in encoded_prompts)
+    assert max_new_tokens + max_encoded_prompt_len <= max_seq_len, (
+        f"prompt ({max_encoded_prompt_len}) + max_new_tokens ({max_new_tokens}) "
+        f"must be <= max_seq_len ({max_seq_len})"
+    )
+    input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(batch_size, -1)
+
+    logger.info("Starting prefill...")
+    profiler.start("inference_prefill")
+    prefill_out = generator.prefill_forward_text(
+        input_tokens_prefill_pt,
+        page_table=page_table,
+        kv_cache=tt_kv_cache,
+        prompt_lens=decoding_pos,
+        warmup_prefill=False,
+        enable_trace=prefill_enable_trace,
+        sampling_params=device_sampling_params,
+    )
+    if device_sampling_params is not None:
+        prefill_tokens, _ = prefill_out
+        prefilled_token = prefill_tokens.long()
+    else:
+        prefilled_token = _host_sample_greedy(prefill_out)
+    profiler.end("inference_prefill")
+
+    prefilled_flat = prefilled_token.view(batch_size, -1).squeeze(-1)
+    all_outputs = [encoded_prompts[b][: prefill_lens[b]] for b in range(batch_size)]
+    for user in range(batch_size):
+        all_outputs[user].append(int(prefilled_flat[user].item()))
+
+    current_pos = torch.tensor([decoding_pos[b] for b in range(batch_size)])
+    out_tok = prefilled_flat.reshape(batch_size, 1)
+    iteration = 0
+    logger.info("Starting decode loop...")
+    profiler.start("inference_decode")
+    while iteration < max_new_tokens:
+        profiler.start(f"inference_decode_time_{iteration}")
+        decode_out, _ = generator.decode_forward(
+            out_tok,
+            current_pos,
+            enable_trace=enable_decode_trace,
+            page_table=page_table,
+            kv_cache=tt_kv_cache,
+            sampling_params=device_sampling_params,
+        )
+        if device_sampling_params is not None:
+            out_tok = decode_out.long().view(batch_size, 1)
+        else:
+            out_tok = _host_sample_greedy(decode_out)
+        profiler.end(f"inference_decode_time_{iteration}")
+        current_pos += 1
+        for user in range(batch_size):
+            tok = int(out_tok[user, 0].item())
+            if tok not in tokenizer.stop_tokens:
+                all_outputs[user].append(tok)
+        if not is_ci_env:
+            for user in range(batch_size):
+                text = tokenizer.decode(all_outputs[user][prefill_lens[user] :])
+                text = ("..." + text[-97:]) if len(text) > 100 else text
+                logger.info(f"[User {user}] {text.replace(chr(10), ' ')}")
+        iteration += 1
+    profiler.end("inference_decode")
+    profiler.end("run")
+
+    generated_texts = []
+    for i, output in enumerate(all_outputs):
+        gen_text = tokenizer.decode(output[prefill_lens[i] :])
+        full = tokenizer.decode(output)
+        generated_texts.append(full)
+        logger.info(f"\n==USER {i} - GENERATION ONLY\n{gen_text.strip()}\n")
+
+    ttft_ms = profiler.get_duration("inference_prefill") * 1000
+    logger.info(f"Time to First Token (TTFT): {ttft_ms:.1f} ms")
+    return generated_texts
+
+
 def run_generation(
     mesh_device,
     model_path,
@@ -457,6 +758,7 @@ def run_generation(
     page_params=None,
     enable_decode_trace=True,
     target_prefill_len=None,
+    force_generator=False,
 ):
     """
     Run text generation with Gemma4.
@@ -473,14 +775,48 @@ def run_generation(
             (truncating the tokenized prompt if necessary). Used by the
             length-parametrized demo tests; otherwise the bucket is chosen
             dynamically via _snap_to_bucket.
+        force_generator: If True, always use ``Gemma4Generator`` (text_demo_v2 path).
+            Long-context rows pass this so 4k/32k match v2 multi-chunk policy.
 
     Returns:
         List of generated text strings
     """
     from transformers import AutoTokenizer
 
+    max_new_tokens = int(os.environ.get("GEMMA4_MAX_NEW_TOKENS", max_new_tokens))
+    max_seq_len = int(os.environ.get("GEMMA4_MAX_SEQ_LEN", max_seq_len))
+    _layers_env = os.environ.get("GEMMA4_NUM_LAYERS")
+    if _layers_env:
+        num_layers = int(_layers_env)
+
     is_ci_env = os.environ.get("CI") == "true"
     batch_size = 1  # Gemma4 demo is single-user
+
+    if page_params is None:
+        page_params = {"page_block_size": 64, "page_max_num_blocks": max_seq_len // 64}
+    page_params = dict(page_params)
+    page_params["page_max_num_blocks"] = _right_size_page_max_num_blocks(batch_size, max_seq_len, page_params)
+
+    bounded_sliding = _resolve_bounded_sliding(max_seq_len, mesh_device, model_path)
+    needs_chunk = should_auto_enable_chunked_bounded(
+        max_seq_len, mesh_device, model_path, bounded_sliding=bounded_sliding
+    )
+    # Long-context / policy path: Generator provides bounded sliding + multi-chunk
+    # prefill (hand-rolled ttnn_prefill_forward is single-chunk only).
+    # ``force_generator`` covers 4k/32k long-context rows that are below the
+    # 64k auto-cutover but must still match text_demo_v2.
+    if force_generator or bounded_sliding or needs_chunk or max_seq_len >= 65536:
+        return _run_generation_via_generator(
+            mesh_device=mesh_device,
+            model_path=model_path,
+            prompts=prompts,
+            max_new_tokens=max_new_tokens,
+            num_layers=num_layers,
+            max_seq_len=max_seq_len,
+            page_params=page_params,
+            bounded_sliding=bounded_sliding,
+            enable_decode_trace=enable_decode_trace,
+        )
 
     profiler = BenchmarkProfiler()
     profiler.start("run")
@@ -491,9 +827,6 @@ def run_generation(
     logger.info(f"Tokenizer loaded from {model_path}")
     profiler.end("loading_inputs")
 
-    # Paged attention config
-    if page_params is None:
-        page_params = {"page_block_size": 64, "page_max_num_blocks": max_seq_len // 64}
     paged_attention_config = PagedAttentionConfig(
         block_size=page_params["page_block_size"],
         max_num_blocks=page_params["page_max_num_blocks"],
@@ -505,7 +838,10 @@ def run_generation(
     )
 
     # Create model
-    logger.info(f"Creating model with {num_layers or 'all'} layers, max_seq_len={max_seq_len}...")
+    logger.info(
+        f"Creating model with {num_layers or 'all'} layers, max_seq_len={max_seq_len}, "
+        f"bounded_sliding={bounded_sliding}..."
+    )
     t0 = time.time()
     model_args, model, tt_kv_cache, state_dict = create_tt_model(
         mesh_device=mesh_device,
@@ -515,7 +851,17 @@ def run_generation(
         model_path=model_path,
         create_kv_cache=True,
         paged_attention_config=paged_attention_config,
+        bounded_sliding_kv_cache=bounded_sliding,
     )
+    if bounded_sliding:
+        _install_hybrid_page_tables(
+            model,
+            model_args,
+            batch_size=batch_size,
+            block_size=int(page_params["page_block_size"]),
+            max_seq_len=max_seq_len,
+            num_layers=num_layers,
+        )
     logger.info(f"Model created in {time.time() - t0:.1f}s")
 
     is_mesh = hasattr(mesh_device, "shape")
@@ -586,8 +932,8 @@ def run_generation(
             * model.embed_scale
         ).float()
 
-        # Get last token tile for first decode token
-        get_last_token = ((prompt_len - 1) // 32) * 32
+        # True last-token index for bounded ring fill; model tile-aligns lm_head.
+        get_last_token = prompt_len - 1
 
         def _build_prefill_embeds():
             """Build a fresh ttnn embeds tensor for ttnn_prefill_forward.
@@ -659,8 +1005,8 @@ def run_generation(
             logits_cpu = ttnn.to_torch(logits)
         logits.deallocate(True)
 
-        # Get logits at the actual last prompt position within the tile
-        pos_in_tile = (prompt_len - 1) - get_last_token
+        # Logits are the tile containing the last prompt token.
+        pos_in_tile = (prompt_len - 1) % 32
         next_token = logits_cpu[0, 0, pos_in_tile, :].argmax().item()
         profiler.end(f"inference_prefill", iteration=prompt_idx)
 
@@ -1028,6 +1374,32 @@ def test_demo_single_layer(device, model_path):
 
 _DEMO_PREFILL_LENGTHS = [128, 4096]
 
+# NOTE on long-context-4k/32k/64k/128k/256k (see GEMMA4_LONG_CONTEXT_POLICY):
+#   Coherence target: 4k–128k on QB2 + LoudBox (12B/31B) and P150 (≤12B).
+#   256k may allocate (bounded) but is not a coherence target.
+#   Per-(model, device) cutovers:
+#     QB2 (P150x4 / P300x2):
+#       31B: bounded @ 64k, chunked @ 256k
+#       12B/26B-A4B: unbounded through 128k; bounded(+chunked) @ 256k
+#       E2B/E4B: unbounded through 256k (HF native max_pos is 128k)
+#     P150x8:
+#       E2B/E4B/12B: unbounded through 256k
+#       26B-A4B/31B: unbounded through 64k; bounded @ 128k+ (chunk=2048);
+#         unbounded 128k multi-chunk collapses to "lapped…"
+#     P150 (≤12B): E2B/E4B unbounded through 256k; 12B bounded+chunked @ ≥64k
+#         through full HF 256k
+#   Override: GEMMA4_BOUNDED_SLIDING, GEMMA4_GEN_PREFILL_CHUNK,
+#   GEMMA4_DEMO_SINGLE_CHUNK (avoid for quality).
+#   Not gated by --max-prefill (unit-test bucket cap only).
+_LONG_CONTEXT_CASES = [
+    # (id, max_seq_len, page_block_size, page_max_num_blocks) — match text_demo_v2
+    ("long-context-4k", 4096, 64, 2048),
+    ("long-context-32k", 32 * 1024, 64, 512),
+    ("long-context-64k", 64 * 1024, 64, 1024),
+    ("long-context-128k", 128 * 1024, 64, 2048),
+    ("long-context-256k", 256 * 1024, 64, 4096),
+]
+
 
 @parametrize_mesh_with_fabric()
 @pytest.mark.parametrize("prefill_len", _DEMO_PREFILL_LENGTHS, ids=[f"prefill_{b}" for b in _DEMO_PREFILL_LENGTHS])
@@ -1041,6 +1413,8 @@ def test_demo(mesh_device, model_path, prefill_len, request):
     iterations so the full prefill→decode pipeline is exercised end-to-end.
     Wider per-length kernel coverage lives in the unit tests, which sweep
     the full PREFILL_BUCKETS list under --max-prefill.
+
+    Long-context 64k/128k/256k rows live in ``test_demo_long_context``.
 
     Filter by mesh shape:
         pytest -k "1x2"               # N300 / TP=2
@@ -1059,12 +1433,12 @@ def test_demo(mesh_device, model_path, prefill_len, request):
 
     # KV cache must hold the prefill plus the 200 decode tokens. Keep a small
     # floor so short-bucket runs still allocate a usable cache.
-    max_new_tokens = 200
-    max_seq_len = max(prefill_len + max_new_tokens, 4096)
+    max_new_tokens = int(os.environ.get("GEMMA4_MAX_NEW_TOKENS", 200))
+    max_seq_len = int(os.environ.get("GEMMA4_MAX_SEQ_LEN", max(prefill_len + max_new_tokens, 4096)))
     page_block_size = 64
     page_params = {
         "page_block_size": page_block_size,
-        "page_max_num_blocks": max_seq_len // page_block_size,
+        "page_max_num_blocks": math.ceil(max_seq_len / page_block_size),
     }
 
     results = run_generation(
@@ -1079,6 +1453,67 @@ def test_demo(mesh_device, model_path, prefill_len, request):
     )
     assert len(results) == 1
     logger.info(f"Full model output: {_shorten_for_log(results[0])}")
+
+
+@pytest.mark.parametrize(
+    "case_id, max_seq_len, page_block_size, page_max_num_blocks",
+    _LONG_CONTEXT_CASES,
+    ids=[c[0] for c in _LONG_CONTEXT_CASES],
+)
+@pytest.mark.parametrize("device_params", [_device_params()], indirect=True)
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        # MESH_DEVICE → (rows, cols); unset → (1, N) over all visible devices.
+        _mesh_shape_from_env()
+    ],
+    indirect=True,
+)
+def test_demo_long_context(
+    mesh_device, model_path, case_id, max_seq_len, page_block_size, page_max_num_blocks, request
+):
+    """Long-context demo rows aligned with ``text_demo_v2`` / ``GEMMA4_LONG_CONTEXT_POLICY``.
+
+    Uses ``MESH_DEVICE`` (P150x4 / P300x2 / P150x8 / 2x4 / …; unset → (1, N) visible).
+    Policy auto-enables bounded sliding / multi-chunk prefill per model × device.
+
+    Examples:
+        MESH_DEVICE=P150x4 HF_MODEL=google/gemma-4-12B-it pytest \\
+            models/demos/gemma4/demo/text_demo.py -k long-context-128k -s --timeout 1800
+        MESH_DEVICE=P150x8 HF_MODEL=google/gemma-4-31B-it pytest \\
+            models/demos/gemma4/demo/text_demo.py -k long-context-128k -s --timeout 1800
+        MESH_DEVICE=P300x2 GEMMA4_BOUNDED_SLIDING=1 HF_MODEL=google/gemma-4-26B-A4B pytest \\
+            models/demos/gemma4/demo/text_demo.py -k long-context-256k -s --timeout 7200
+    """
+    del case_id  # used only as pytest id
+    # Do NOT gate on --max-prefill (default 8192): that option is for unit-test
+    # PREFILL_BUCKETS / short demo buckets. Long-context rows are explicitly
+    # selected via ``-k long-context-*`` (same as text_demo_v2).
+
+    if os.environ.get("CI") == "true":
+        pytest.skip("CI: long-context rows are local/sweep only")
+
+    max_new_tokens = int(os.environ.get("GEMMA4_MAX_NEW_TOKENS", 200))
+    max_seq_len = int(os.environ.get("GEMMA4_MAX_SEQ_LEN", max_seq_len))
+    prompt = load_demo_prompt(max_seq_len, instruct=True)
+    page_params = {
+        "page_block_size": page_block_size,
+        "page_max_num_blocks": page_max_num_blocks,
+    }
+
+    results = run_generation(
+        mesh_device=mesh_device,
+        model_path=model_path,
+        prompts=[prompt],
+        max_new_tokens=max_new_tokens,
+        max_seq_len=max_seq_len,
+        page_params=page_params,
+        enable_decode_trace=True,
+        target_prefill_len=None,  # Generator path uses preprocess_inputs_prefill
+        force_generator=True,  # match text_demo_v2 for 4k…256k
+    )
+    assert len(results) == 1
+    logger.info(f"Long-context output: {_shorten_for_log(results[0])}")
 
 
 @parametrize_mesh_with_fabric()

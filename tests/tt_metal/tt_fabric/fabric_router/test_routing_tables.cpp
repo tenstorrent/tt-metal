@@ -8,7 +8,10 @@
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <filesystem>
 #include <algorithm>
+#include <cstdlib>
 #include <optional>
+#include <set>
+#include <string_view>
 #include <unordered_set>
 #include <utility>
 #include <yaml-cpp/yaml.h>
@@ -28,8 +31,9 @@
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <fmt/format.h>
+#include <enchantum/enchantum.hpp>
 #include <tt-metalium/experimental/fabric/topology_mapper_utils.hpp>
-#include <tt-metalium/experimental/internal/blitz_decode_pipeline.hpp>
+#include <internal/blitz_decode_pipeline.hpp>
 
 namespace {
 
@@ -187,12 +191,22 @@ TEST_F(ControlPlaneFixture, TestControlPlaneInitNoMGD) {
     EXPECT_NE(control_plane.get_mesh_graph().get_mesh_ids().size(), 0u);
 }
 
-// Verify that galaxy tray/ASIC corner pinnings are honored after control-plane init. Each galaxy
-// is a 2x2 arrangement of trays (ids 1..4); each tray is a 4x2 ASIC grid with asic_location==1 at
-// the outer corner. The NW corner (chip 0) of every galaxy mesh must land on a tray-corner ASIC
-// (asic_location==1) to prevent torus folding. A single 8x4 galaxy additionally pins all four
-// logical corners to all four tray corners (one per tray {1,2,3,4}).
-TEST_F(ControlPlaneFixture, TestGalaxyCornerPinnings) {
+// Galaxy layout validation: MGD host topology vs runtime, plus per-host rank-group tray/asic
+// checks for shapes 1x1, 1x2, 2x2, 2x4, 2x8, 4x4 (two-tray), 4x8, 4x16, 4x32, 8x16 (rank 0 only in multihost).
+// Four-tray 4x4 split-host layouts use TestGalaxy4x4SplitHostLayoutCheck instead.
+TEST_F(ControlPlaneFixture, TestGalaxyLayoutCheck) {
+    tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
+    tt::tt_metal::MetalContext::instance().set_fabric_config(
+        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    expect_mesh_graph_host_topology_matches_runtime(control_plane);
+    expect_galaxy_rank_group_checks(control_plane);
+}
+
+// Split-host 4x4 four-tray layout for subtorus_4x4_ring_ring_* MGDs (mesh-level trays {1,2,3,4}).
+TEST_F(ControlPlaneFixture, TestGalaxy4x4SplitHostLayoutCheck) {
     tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
     tt::tt_metal::MetalContext::instance().set_fabric_config(
         tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
@@ -201,54 +215,24 @@ TEST_F(ControlPlaneFixture, TestGalaxyCornerPinnings) {
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     expect_mesh_graph_host_topology_matches_runtime(control_plane);
 
-    const auto& mesh_graph = control_plane.get_mesh_graph();
-    const auto& topology_mapper = control_plane.get_topology_mapper();
-
-    auto mapped_position = [&](const FabricNodeId& fn, uint32_t& loc_out, uint32_t& tray_out) {
-        try {
-            (void)topology_mapper.get_asic_id_from_fabric_node_id(fn);
-            loc_out = *topology_mapper.get_asic_location_for_fabric_node_id(fn);
-            tray_out = *topology_mapper.get_tray_id_for_fabric_node_id(fn);
-        } catch (...) {
-            return false;
-        }
-        return true;
-    };
-    for (const auto& mesh_id : mesh_graph.get_mesh_ids()) {
-        const auto mesh_shape = mesh_graph.get_mesh_shape(mesh_id);
-        if (mesh_shape.dims() != 2 || (mesh_shape.mesh_size() % 32u) != 0u) {
-            continue;
-        }
-        const uint32_t s0 = mesh_shape[0];
-        const uint32_t s1 = mesh_shape[1];
-        uint32_t loc = 0;
-        uint32_t tray = 0;
-
-        if (mapped_position(FabricNodeId(mesh_id, 0), loc, tray)) {
-            EXPECT_EQ(loc, 1u) << "NW corner (mesh=" << *mesh_id
-                               << ", chip=0) must be anchored to a tray-corner ASIC (asic_location==1) to "
-                                  "prevent torus folding (bottom half placed on top).";
-        }
-
-        if (mesh_shape.mesh_size() == 32u) {
-            const uint32_t corners[4] = {0u, s1 - 1u, s1 * (s0 - 1u), (s1 * s0) - 1u};
-            std::unordered_set<uint32_t> trays;
-            uint32_t present = 0;
-            for (uint32_t c : corners) {
-                if (!mapped_position(FabricNodeId(mesh_id, c), loc, tray)) {
-                    continue;
-                }
-                ++present;
-                EXPECT_EQ(loc, 1u) << "single-galaxy corner (mesh=" << *mesh_id << ", chip=" << c
-                                   << ") must be a tray-corner ASIC (asic_location==1).";
-                trays.insert(tray);
-            }
-            if (present == 4u) {
-                EXPECT_EQ(trays, (std::unordered_set<uint32_t>{1u, 2u, 3u, 4u}))
-                    << "single-galaxy corners must cover all four trays {1,2,3,4} (one corner per tray).";
-            }
-        }
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().full_world_distributed_context();
+    const auto mpi_rank = *distributed_context.rank();
+    const auto mpi_size = *distributed_context.size();
+    if (mpi_size <= 1 || static_cast<int>(mpi_rank) == 0) {
+        expect_galaxy_4x4_split_host_mesh_checks(control_plane);
     }
+}
+
+// Galaxy corner folding: mesh endpoints (first/last logical chips) must map to tray-corner ASICs.
+TEST_F(ControlPlaneFixture, TestGalaxyCornerPins) {
+    tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
+    tt::tt_metal::MetalContext::instance().set_fabric_config(
+        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    expect_mesh_graph_host_topology_matches_runtime(control_plane);
+    expect_galaxy_corner_folding_check(control_plane);
 }
 
 TEST(MeshGraphValidation, TestT3kMeshGraphInit) {
@@ -261,6 +245,46 @@ TEST(MeshGraphValidation, TestT3kMeshGraphInit) {
         MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(1, 3)));
 }
 
+TEST(MeshGraphValidation, TestT3kCollapsedTorusYRetainsMeshDirections) {
+    const std::filesystem::path t3k_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.textproto";
+    auto mesh_graph = make_mesh_graph(t3k_mesh_graph_desc_path, tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y);
+    const auto& connectivity = mesh_graph.get_intra_mesh_connectivity().at(0);
+
+    // In a two-row mesh, the torus wrap neighbor is the same chip as the ordinary vertical neighbor. It must retain
+    // normal mesh directionality rather than collapsing both ends of the link onto NORTH.
+    EXPECT_EQ(connectivity.at(0).at(4).port_direction, RoutingDirection::S);
+    EXPECT_EQ(connectivity.at(4).at(0).port_direction, RoutingDirection::N);
+
+    // The torus on axis 0 comes from the fabric config (the T3K MGD declares LINE), so the N/S edge
+    // ports are reserved for the torus and excluded from inter-mesh use even though the collapsed
+    // axis realizes no wrap cable (issue #54650). The non-torus axis keeps its boundary ports.
+    const auto& edge_ports = mesh_graph.get_mesh_edge_ports_to_chip_id().at(0);
+    EXPECT_EQ(edge_ports.count({RoutingDirection::N, 0}), 0u);
+    EXPECT_EQ(edge_ports.count({RoutingDirection::S, 0}), 0u);
+    EXPECT_EQ(edge_ports.at({RoutingDirection::W, 0}), 0);
+}
+
+// Torus edge-port reservation is decided per axis by who declared the torus (issue #54650), pinned
+// on the mixed-origin case: the 4-stage 2x2 pipeline-ring MGD declares dim_types [RING, LINE], and
+// FABRIC_2D_TORUS_XY is requested on top. Axis 0's torus is MGD-declared, so it keeps its boundary
+// ports; axis 1's torus exists only in the fabric config, so its ports are reserved.
+TEST(MeshGraphValidation, Test2x2StageRingPortReservationByTorusOrigin) {
+    const std::filesystem::path mgd_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/"
+        "fabric_cpu_only_single_galaxy_2x2_ring_4stage_ring_mesh_graph_descriptor.textproto";
+    auto mesh_graph = make_mesh_graph(mgd_path, tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY);
+    for (const auto& mesh_id : mesh_graph.get_mesh_ids()) {
+        const auto& edge_ports = mesh_graph.get_mesh_edge_ports_to_chip_id().at(*mesh_id);
+        EXPECT_EQ(edge_ports.at({RoutingDirection::N, 0}), 0);
+        EXPECT_EQ(edge_ports.at({RoutingDirection::S, 0}), 2);
+        EXPECT_EQ(edge_ports.count({RoutingDirection::E, 0}), 0u);
+        EXPECT_EQ(edge_ports.count({RoutingDirection::W, 0}), 0u);
+    }
+}
+
 TEST_F(ControlPlaneFixture, TestT3kControlPlaneInit) {
     // Reset MetalContext's control plane to ensure it doesn't interfere with the test's custom control plane
     tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
@@ -270,8 +294,7 @@ TEST_F(ControlPlaneFixture, TestT3kControlPlaneInit) {
     const auto& distributed_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
     int world_size = *distributed_context->size();
     int rank = *distributed_context->rank();
-    std::filesystem::path root_dir = rtoptions.get_root_dir();
-    std::filesystem::path generated_dir = root_dir / "generated" / "fabric";
+    std::filesystem::path generated_dir = std::filesystem::path(rtoptions.get_logs_dir()) / "generated" / "fabric";
     std::string generated_filename =
         "asic_to_fabric_node_mapping_rank_" + std::to_string(rank + 1) + "_of_" + std::to_string(world_size) + ".yaml";
     std::filesystem::path generated_file = generated_dir / generated_filename;
@@ -441,8 +464,7 @@ TEST_P(T3kCustomMeshGraphControlPlaneFixture, TestT3kControlPlaneInit) {
     const auto& distributed_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
     int world_size = *distributed_context->size();
     int rank = *distributed_context->rank();
-    std::filesystem::path root_dir = rtoptions.get_root_dir();
-    std::filesystem::path generated_dir = root_dir / "generated" / "fabric";
+    std::filesystem::path generated_dir = std::filesystem::path(rtoptions.get_logs_dir()) / "generated" / "fabric";
     std::string generated_filename =
         "asic_to_fabric_node_mapping_rank_" + std::to_string(rank + 1) + "_of_" + std::to_string(world_size) + ".yaml";
     std::filesystem::path generated_file = generated_dir / generated_filename;
@@ -570,11 +592,10 @@ TEST_F(ControlPlaneFixture, TestSingleGalaxyControlPlaneInit) {
     auto physical_chip_id_0 = control_plane->get_physical_chip_id_from_fabric_node_id(fabric_node_id_0);
     const auto& chip_unique_ids = cluster.get_unique_chip_ids();
     uint64_t asic_id_0 = 0;
-    for (const auto& [chip_id, unique_id] : chip_unique_ids) {
-        if (chip_id == physical_chip_id_0) {
-            asic_id_0 = unique_id;
-            break;
-        }
+    auto it0 = std::find_if(
+        chip_unique_ids.begin(), chip_unique_ids.end(), [&](const auto& p) { return p.first == physical_chip_id_0; });
+    if (it0 != chip_unique_ids.end()) {
+        asic_id_0 = it0->second;
     }
     EXPECT_GT(asic_id_0, 0) << "ASIC ID should be greater than 0 for fabric node id 0";
     auto tray_id_0 = physical_system_descriptor->get_tray_id(tt::tt_metal::AsicID{asic_id_0});
@@ -586,11 +607,10 @@ TEST_F(ControlPlaneFixture, TestSingleGalaxyControlPlaneInit) {
     FabricNodeId fabric_node_id_1(MeshId{0}, 1);
     auto physical_chip_id_1 = control_plane->get_physical_chip_id_from_fabric_node_id(fabric_node_id_1);
     uint64_t asic_id_1 = 0;
-    for (const auto& [chip_id, unique_id] : chip_unique_ids) {
-        if (chip_id == physical_chip_id_1) {
-            asic_id_1 = unique_id;
-            break;
-        }
+    auto it1 = std::find_if(
+        chip_unique_ids.begin(), chip_unique_ids.end(), [&](const auto& p) { return p.first == physical_chip_id_1; });
+    if (it1 != chip_unique_ids.end()) {
+        asic_id_1 = it1->second;
     }
     EXPECT_GT(asic_id_1, 0) << "ASIC ID should be greater than 0 for fabric node id 1";
     auto tray_id_1 = physical_system_descriptor->get_tray_id(tt::tt_metal::AsicID{asic_id_1});
@@ -603,11 +623,11 @@ TEST_F(ControlPlaneFixture, TestSingleGalaxyControlPlaneInit) {
     FabricNodeId fabric_node_id_y_size(MeshId{0}, y_size);
     auto physical_chip_id_y_size = control_plane->get_physical_chip_id_from_fabric_node_id(fabric_node_id_y_size);
     uint64_t asic_id_y_size = 0;
-    for (const auto& [chip_id, unique_id] : chip_unique_ids) {
-        if (chip_id == physical_chip_id_y_size) {
-            asic_id_y_size = unique_id;
-            break;
-        }
+    auto it_ys = std::find_if(chip_unique_ids.begin(), chip_unique_ids.end(), [&](const auto& p) {
+        return p.first == physical_chip_id_y_size;
+    });
+    if (it_ys != chip_unique_ids.end()) {
+        asic_id_y_size = it_ys->second;
     }
     EXPECT_GT(asic_id_y_size, 0) << "ASIC ID should be greater than 0 for fabric node id " << y_size;
     auto tray_id_y_size = physical_system_descriptor->get_tray_id(tt::tt_metal::AsicID{asic_id_y_size});
@@ -616,6 +636,38 @@ TEST_F(ControlPlaneFixture, TestSingleGalaxyControlPlaneInit) {
     EXPECT_EQ(*asic_location_y_size, 2) << "Fabric node id " << y_size << " should map to ASIC location 2";
 
     check_asic_mapping_against_golden("TestSingleGalaxyControlPlaneInit", "ControlPlaneFixture_SingleGalaxy");
+}
+
+// Checks that auto-discovery still reports all 32 chips on a galaxy that only wraps on Y.
+TEST_F(ControlPlaneFixture, ProbeWormholeSingleGalaxyAutoDiscoveryFullCoverage) {
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const auto& dctx = tt::tt_metal::MetalContext::instance().full_world_distributed_context();
+
+    // Auto-discovery must map every physical chip, whatever fabric type it settles on.
+    const std::size_t expected_chips = cluster.number_of_devices();
+
+    auto check_full_coverage = [&](const std::string& label, tt::tt_fabric::FabricConfig cfg) {
+        SCOPED_TRACE(label);
+        std::unique_ptr<tt::tt_fabric::ControlPlane> cp;
+        ASSERT_NO_THROW(
+            cp = std::make_unique<tt::tt_fabric::ControlPlane>(cluster, rtoptions, hal, dctx, cfg, kReliabilityMode));
+
+        const auto mesh_ids = cp->get_user_physical_mesh_ids();
+        ASSERT_EQ(mesh_ids.size(), 1u) << "Auto-discovery should produce a single mesh on a single galaxy";
+
+        const auto mesh_shape = cp->get_physical_mesh_shape(mesh_ids.front());
+        EXPECT_EQ(mesh_shape.mesh_size(), expected_chips)
+            << "Auto-discovery dropped chips: got " << mesh_shape.mesh_size() << " of " << expected_chips;
+        EXPECT_TRUE(
+            mesh_shape == tt::tt_metal::distributed::MeshShape(8, 4) ||
+            mesh_shape == tt::tt_metal::distributed::MeshShape(4, 8))
+            << "Expected an 8x4 (or 4x8) mesh, got: " << mesh_shape[0] << "x" << mesh_shape[1];
+    };
+
+    check_full_coverage("FABRIC_1D_RING", tt::tt_fabric::FabricConfig::FABRIC_1D_RING);
+    check_full_coverage("FABRIC_2D", tt::tt_fabric::FabricConfig::FABRIC_2D);
 }
 
 TEST_F(ControlPlaneFixture, TestSingleGalaxyMeshAPIs) {
@@ -1470,13 +1522,8 @@ void validate_sp5_blitz_decode_pipeline_stages(
         auto pairs =
             control_plane.get_intermesh_exit_peer_fabric_node_id_pairs_between_meshes(curr_mesh_id, next_mesh_id);
 
-        bool found = false;
-        for (const auto& [exit_node, peer_node] : pairs) {
-            if (exit_node == exit_fn && peer_node == entry_fn) {
-                found = true;
-                break;
-            }
-        }
+        bool found = std::any_of(
+            pairs.begin(), pairs.end(), [&](const auto& p) { return p.first == exit_fn && p.second == entry_fn; });
         EXPECT_TRUE(found) << "Stages [" << i << "]->[" << (i + 1) << "]: exit (M" << *curr_mesh_id << "D"
                            << exit_chip_id << ") coord " << coord_str(curr.exit_node_coord)
                            << " is not physically connected to entry (M" << *next_mesh_id << "D" << entry_chip_id
@@ -2182,6 +2229,133 @@ TEST_F(ControlPlaneFixture, TestBlitzDecodePipelineBuilder) {
         stages.push_back({s.stage_index, s.entry_node_coord, s.exit_node_coord});
     }
     validate_sp5_blitz_decode_pipeline_stages(control_plane, mesh_graph, mesh_ids, stages);
+}
+
+// 4-stage pipeline ring of 2x2 RING+LINE stages on a single galaxy (issue #54650 shape class):
+// an MGD may declare RING on a 2-device dimension and everything must still come up —
+//  - the ring collapses onto the ordinary mesh edge without duplicating connections,
+//  - routing planes are not downgraded: both cables of a pair (the "direct" and the "wrap") serve
+//    the same direction as extra planes instead of being split across opposite directions,
+//  - the inter-mesh ring closes, including the mesh 3 -> mesh 0 loopback.
+TEST_F(ControlPlaneFixture, Test2x2StageRingPipelineOnSingleGalaxy) {
+    // Only meaningful with the 4-stage 2x2 pipeline-ring MGD; broad fixture filters (e.g.
+    // ControlPlaneFixture.*SingleGalaxy*) also run this against unrelated mocks.
+    const char* mgd_path_env = std::getenv("TT_MESH_GRAPH_DESC_PATH");
+    if (mgd_path_env == nullptr ||
+        std::string_view(mgd_path_env).find("2x2_ring_4stage_ring") == std::string_view::npos) {
+        GTEST_SKIP() << "Requires the single_galaxy_2x2_ring_4stage_ring MGD via --mesh-graph-descriptor";
+    }
+
+    tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
+
+    tt::tt_metal::MetalContext::instance().set_fabric_config(
+        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+    auto mesh_ids = mesh_graph.get_mesh_ids();
+    std::sort(mesh_ids.begin(), mesh_ids.end());
+    ASSERT_EQ(mesh_ids.size(), 4u);
+
+    const auto local_mesh_ids = control_plane.get_local_mesh_id_bindings();
+    auto is_local_mesh = [&](MeshId mesh_id) {
+        return std::find(local_mesh_ids.begin(), local_mesh_ids.end(), mesh_id) != local_mesh_ids.end();
+    };
+
+    for (const auto& mesh_id : mesh_ids) {
+        const auto mesh_shape = mesh_graph.get_mesh_shape(mesh_id);
+        ASSERT_EQ(mesh_shape[0], 2u);
+        ASSERT_EQ(mesh_shape[1], 2u);
+
+        const auto& connectivity = mesh_graph.get_intra_mesh_connectivity().at(*mesh_id);
+        for (ChipId chip_id = 0; chip_id < 4; chip_id++) {
+            // Every chip of a 2x2 has exactly its two mesh neighbors; the collapsed ring must not
+            // add a duplicate wrap connection or relabel the pair onto one direction.
+            ASSERT_EQ(connectivity.at(chip_id).size(), 2u);
+            std::set<RoutingDirection> directions;
+            for (const auto& [peer_chip_id, edge] : connectivity.at(chip_id)) {
+                directions.insert(edge.port_direction);
+
+                // Both physical cables of the pair count as routing planes in this one direction.
+                // Plane state only exists for the mesh this rank hosts.
+                if (is_local_mesh(mesh_id)) {
+                    const FabricNodeId fabric_node_id(mesh_id, chip_id);
+                    EXPECT_GE(control_plane.get_num_usable_routing_planes(fabric_node_id, edge.port_direction), 2u)
+                        << "mesh " << *mesh_id << " chip " << chip_id << " direction "
+                        << enchantum::to_string(edge.port_direction);
+                }
+            }
+            EXPECT_EQ(directions.size(), 2u) << "mesh " << *mesh_id << " chip " << chip_id
+                                             << ": the two neighbors must sit in two distinct directions";
+        }
+    }
+
+    // The inter-stage ring closes: every consecutive pair, including the 3 -> 0 loopback, has at
+    // least one realized inter-mesh link.
+    for (size_t i = 0; i < mesh_ids.size(); i++) {
+        const auto src = mesh_ids[i];
+        const auto dst = mesh_ids[(i + 1) % mesh_ids.size()];
+        const auto exit_pairs = control_plane.get_intermesh_exit_peer_fabric_node_id_pairs_between_meshes(src, dst);
+        EXPECT_FALSE(exit_pairs.empty()) << "no inter-mesh link between mesh " << *src << " and mesh " << *dst;
+    }
+}
+
+// Same 4-stage 2x2 pipeline ring, but every axis is declared LINE in the MGD and the fabric config
+// requests FABRIC_2D_TORUS_XY on top. Both planar axes are then config-driven torus axes, so ALL
+// N/S/E/W edge ports are reserved for the torus (issue #54650) and the declared inter-mesh
+// connections have exactly one direction class left: the ring must come up entirely on Z-direction
+// routers (Z pairs only with Z, and a Z label reads identically on both ends of a cable, so the
+// deadlock-avoidance setting can never mismatch across it).
+TEST_F(ControlPlaneFixture, Test2x2StageRingForcedOntoZByConfigTorus) {
+    // Only meaningful with the LINE,LINE 4-stage 2x2 pipeline-ring MGD; guard against broad
+    // fixture filters running this with unrelated mocks (where TORUS_XY may not even be valid).
+    const char* mgd_path_env = std::getenv("TT_MESH_GRAPH_DESC_PATH");
+    if (mgd_path_env == nullptr ||
+        std::string_view(mgd_path_env).find("2x2_line_4stage_ring") == std::string_view::npos) {
+        GTEST_SKIP() << "Requires the single_galaxy_2x2_line_4stage_ring MGD via --mesh-graph-descriptor";
+    }
+
+    tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
+
+    tt::tt_metal::MetalContext::instance().set_fabric_config(
+        tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY,
+        tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+
+    // The requested config stays latched — nothing rewrites it.
+    EXPECT_EQ(control_plane.get_fabric_config(), tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY);
+
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+    auto mesh_ids = mesh_graph.get_mesh_ids();
+    std::sort(mesh_ids.begin(), mesh_ids.end());
+    ASSERT_EQ(mesh_ids.size(), 4u);
+
+    // The ring closes on Z: every consecutive pair (including 3 -> 0) has inter-mesh links, and
+    // every inter-mesh-facing ethernet channel on this rank's mesh is a Z-direction router.
+    const auto local_mesh_ids = control_plane.get_local_mesh_id_bindings();
+    auto is_local_mesh = [&](MeshId mesh_id) {
+        return std::find(local_mesh_ids.begin(), local_mesh_ids.end(), mesh_id) != local_mesh_ids.end();
+    };
+    for (size_t i = 0; i < mesh_ids.size(); i++) {
+        const auto src = mesh_ids[i];
+        const auto dst = mesh_ids[(i + 1) % mesh_ids.size()];
+        const auto exit_pairs = control_plane.get_intermesh_exit_peer_fabric_node_id_pairs_between_meshes(src, dst);
+        EXPECT_FALSE(exit_pairs.empty()) << "no inter-mesh link between mesh " << *src << " and mesh " << *dst;
+        for (const auto& [exit_node, peer_node] : exit_pairs) {
+            if (!is_local_mesh(exit_node.mesh_id)) {
+                continue;  // per-channel direction state only exists for the mesh this rank hosts
+            }
+            const auto intermesh_chans = control_plane.get_intermesh_facing_eth_chans(exit_node);
+            EXPECT_FALSE(intermesh_chans.empty());
+            for (const auto& chan : intermesh_chans) {
+                EXPECT_EQ(control_plane.get_eth_chan_direction(exit_node, chan), eth_chan_directions::Z)
+                    << "inter-mesh channel " << +chan << " on " << exit_node << " is not a Z-direction router";
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

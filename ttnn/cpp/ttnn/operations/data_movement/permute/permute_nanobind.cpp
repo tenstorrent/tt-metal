@@ -38,7 +38,7 @@ void bind_permute(nb::module_& mod) {
         ttnn::overload_t(
             nb::overload_cast<
                 const ttnn::Tensor&,
-                const ttnn::SmallVector<int64_t>&,
+                const ttsl::SmallVector<int64_t>&,
                 const std::optional<ttnn::MemoryConfig>&,
                 float>(&ttnn::permute),
             nb::arg("input_tensor").noconvert(),
@@ -47,7 +47,7 @@ void bind_permute(nb::module_& mod) {
             nb::arg("memory_config") = nb::none(),
             nb::arg("pad_value") = 0.0f),
         ttnn::overload_t(
-            nb::overload_cast<const ttnn::Tensor&, const ttnn::SmallVector<int64_t>&, float>(&ttnn::permute),
+            nb::overload_cast<const ttnn::Tensor&, const ttsl::SmallVector<int64_t>&, float>(&ttnn::permute),
             nb::arg("input_tensor").noconvert(),
             nb::arg("dims"),
             nb::arg("pad_value") = 0.0f));

@@ -26,6 +26,7 @@
 #include "dispatch/dispatch_core_common.hpp"
 #include "dispatch/dispatch_core_manager.hpp"
 #include "dispatch/topology.hpp"
+#include "impl/dispatch/dispatch_engine_cores.hpp"
 #include "jit_build/build.hpp"
 #include "jit_build/build_env_manager.hpp"
 #include "llrt/llrt.hpp"
@@ -59,13 +60,21 @@ bool mock_firmware_sources_available_for(tt::ARCH arch) {
 }
 
 int firmware_wait_timeout_ms() {
+    // Default timeout for real silicon.
+    constexpr int kDefaultTimeoutMs = 10'000;
+    // Functional sim (.so) is slower than silicon; sometimes 10s is not enough, so use half a minute.
+    constexpr int kFunctionalSimTimeoutMs = 30'000;
+
     const auto& rtoptions = MetalContext::instance().rtoptions();
-    // RTL sim directory backends are event-driven and much slower than functional ttsim (.so).
-    // llrt treats timeout_ms==0 on sim as infinite wait.
-    if (rtoptions.get_simulator_enabled() && rtoptions.get_simulator_path().extension() != ".so") {
-        return 0;
+    if (rtoptions.get_simulator_enabled()) {
+        // RTL sim directory backends are event-driven and much slower than functional ttsim (.so).
+        // llrt treats timeout_ms==0 on sim as infinite wait.
+        if (rtoptions.get_simulator_path().extension() != ".so") {
+            return 0;
+        }
+        return kFunctionalSimTimeoutMs;
     }
-    return 10000;
+    return kDefaultTimeoutMs;
 }
 
 }  // namespace
@@ -161,8 +170,11 @@ void RiscFirmwareInitializer::run_async_build_phase(const std::set<tt::ChipId>& 
                 *refs.l1_bank_offset_map,
                 *refs.dram_bank_to_noc_xy,
                 *refs.l1_bank_to_noc_xy);
-            generate_worker_logical_to_virtual_map(
-                device_id, *refs.worker_logical_col_to_virtual_col, *refs.worker_logical_row_to_virtual_row);
+            // Quasar FW never loads the logical→virtual scratch table (WH/BH brisc/ncrisc only).
+            if (cluster_.arch() != ARCH::QUASAR) {
+                generate_worker_logical_to_virtual_map(
+                    device_id, *refs.worker_logical_col_to_virtual_col, *refs.worker_logical_row_to_virtual_row);
+            }
 
             // Register the build env unconditionally so JIT compilation (CompileProgram) works on mock
             // and emulated devices too. The build env is HAL/arch-derived and does not probe hardware.
@@ -235,8 +247,10 @@ void RiscFirmwareInitializer::teardown_simulator_ethernet_cores() {
     // If simulator is enabled, force a teardown of active ethernet cores for WH
     if (rtoptions_.get_simulator_enabled()) {
         if (hal_.get_eth_fw_is_cooperative()) {
-            auto all_devices = cluster_.all_chip_ids();
-            for (tt::ChipId device_id : all_devices) {
+            // A remote simulator chip is reached through its active Ethernet firmware. Asking that
+            // core to stop over its own remote-I/O path prevents the request from being flushed.
+            // Keep remote routing firmware alive until the shared simulator backend shuts down.
+            for (tt::ChipId device_id : cluster_.mmio_chip_ids()) {
                 for (const auto& logical_core : this->get_control_plane_().get_active_ethernet_cores(device_id)) {
                     CoreCoord virtual_core = cluster_.get_virtual_coordinate_from_logical_coordinates(
                         device_id, logical_core, CoreType::ETH);
@@ -252,8 +266,6 @@ void RiscFirmwareInitializer::teardown_simulator_ethernet_cores() {
 void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*init_done*/) {
     auto all_devices = cluster_.all_chip_ids();
 
-    teardown_simulator_ethernet_cores();
-
     if (!cluster_.is_mock_or_emulated()) {
         for (tt::ChipId device_id : all_devices) {
             assert_cores(device_id);
@@ -265,6 +277,9 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
             cluster_.set_internal_routing_info_for_ethernet_cores(this->get_control_plane_(), false);
         }
     }
+
+    // Keep simulator routing firmware alive until all cleanup that may access remote chips is done.
+    teardown_simulator_ethernet_cores();
 
     initialized_ = false;
 }
@@ -364,7 +379,8 @@ void RiscFirmwareInitializer::assert_active_ethernet_cores_to_reset(tt::ChipId d
         CoreCoord virtual_core =
             cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::ETH);
         if (rtoptions_.get_enable_2_erisc_mode()) {
-            llrt::internal_::return_to_base_firmware_and_wait_for_heartbeat(device_id, virtual_core);
+            llrt::internal_::return_to_base_firmware_and_wait_for_heartbeat(
+                descriptor_->env_impl(), device_id, virtual_core);
         }
         tt::umd::RiscType reset_val = tt::umd::RiscType::ALL_TENSIX & ~tt::umd::RiscType::ERISC0;
         cluster_.assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), reset_val);
@@ -398,6 +414,19 @@ void RiscFirmwareInitializer::assert_dram_cores(tt::ChipId device_id) {
         for (const auto& virtual_core : soc_d.get_metal_dram_cores(CoordSystem::TRANSLATED)) {
             cluster_.assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::BRISC);
         }
+    }
+}
+
+void RiscFirmwareInitializer::assert_dispatch_cores(tt::ChipId device_id) {
+    if (!hal_.has_programmable_core_type(HalProgrammableCoreType::DISPATCH) ||
+        rtoptions_.get_use_quasar_tensix_dispatch_cores()) {
+        return;
+    }
+    for (const CoreCoord& logical_dispatch_core :
+         detail::get_quasar_soc_dispatch_engine_logical_cores(cluster_.get_soc_desc(device_id))) {
+        CoreCoord virtual_core = cluster_.get_virtual_coordinate_from_logical_coordinates(
+            device_id, logical_dispatch_core, CoreType::DISPATCH);
+        cluster_.assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::ALL);
     }
 }
 
@@ -463,7 +492,11 @@ void RiscFirmwareInitializer::reset_cores(tt::ChipId device_id) {
         if (!id_and_cores.second.empty()) {
             try {
                 llrt::internal_::wait_until_cores_done(
-                    id_and_cores.first, dev_msgs::RUN_MSG_GO, id_and_cores.second, timeout_ms);
+                    descriptor_->metal_context(),
+                    id_and_cores.first,
+                    dev_msgs::RUN_MSG_GO,
+                    id_and_cores.second,
+                    timeout_ms);
             } catch (std::runtime_error&) {
                 log_warning(
                     tt::LogAlways,
@@ -475,6 +508,7 @@ void RiscFirmwareInitializer::reset_cores(tt::ChipId device_id) {
 
     assert_tensix_workers_impl(device_id);
     assert_dram_cores(device_id);
+    assert_dispatch_cores(device_id);
     if (has_flag(descriptor_->fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
         assert_inactive_ethernet_cores(device_id);
     }
@@ -488,6 +522,7 @@ void RiscFirmwareInitializer::assert_cores(tt::ChipId device_id) {
     }
     assert_inactive_ethernet_cores(device_id);
     assert_dram_cores(device_id);
+    assert_dispatch_cores(device_id);
 }
 
 CoreCoord RiscFirmwareInitializer::virtual_noc0_coordinate(tt::ChipId device_id, uint8_t noc_index, CoreCoord coord) {
@@ -778,7 +813,8 @@ void RiscFirmwareInitializer::erisc_send_exit_signal(tt::ChipId device_id, CoreC
         launch_msg.data(), launch_msg.size(), {static_cast<size_t>(device_id), virtual_core}, launch_addr);
 
     launch_msg.view().kernel_config().exit_erisc_kernel() = 1;
-    llrt::write_launch_msg_to_core(device_id, virtual_core, launch_msg.view(), go_msg.view(), false);
+    llrt::write_launch_msg_to_core(
+        descriptor_->env_impl(), device_id, virtual_core, launch_msg.view(), go_msg.view(), false);
 
     if (!is_idle_eth) {
         std::vector<uint32_t> clear_flag_data = {0};
@@ -877,6 +913,8 @@ dev_msgs::core_info_msg_t RiscFirmwareInitializer::populate_core_info_msg(
         core_info.core_magic_number() = dev_msgs::CoreMagicNumber::ACTIVE_ETH;
     } else if (programmable_core_type == HalProgrammableCoreType::DRAM) {
         core_info.core_magic_number() = dev_msgs::CoreMagicNumber::DRAM;
+    } else if (programmable_core_type == HalProgrammableCoreType::DISPATCH) {
+        core_info.core_magic_number() = dev_msgs::CoreMagicNumber::DISPATCH;
     } else {
         core_info.core_magic_number() = dev_msgs::CoreMagicNumber::IDLE_ETH;
     }
@@ -897,10 +935,15 @@ dev_msgs::core_info_msg_t RiscFirmwareInitializer::populate_core_info_msg(
     }
 
     const std::vector<tt::umd::CoreCoord>& eth_cores = soc_d.get_cores(CoreType::ETH, CoordSystem::NOC0);
+    const std::vector<tt::umd::CoreCoord> dispatch_cores =
+        hal_.has_programmable_core_type(HalProgrammableCoreType::DISPATCH)
+            ? soc_d.get_cores(CoreType::DISPATCH, CoordSystem::NOC0)
+            : std::vector<tt::umd::CoreCoord>{};
 
     TT_ASSERT(
-        pcie_cores.size() + dram_cores.size() + eth_cores.size() <= core_info.non_worker_cores().size(),
-        "Detected more pcie/dram/eth cores than fit in the device mailbox.");
+        pcie_cores.size() + dram_cores.size() + eth_cores.size() + dispatch_cores.size() <=
+            core_info.non_worker_cores().size(),
+        "Detected more pcie/dram/eth/dispatch cores than fit in the device mailbox.");
     TT_ASSERT(
         eth_cores.size() <= core_info.virtual_non_worker_cores().size(),
         "Detected more eth cores (virtual non-workers) than can fit in device mailbox.");
@@ -923,7 +966,8 @@ dev_msgs::core_info_msg_t RiscFirmwareInitializer::populate_core_info_msg(
             dev_msgs::AddressableCoreType::UNKNOWN);
     }
     int non_worker_cores_idx = 0;
-    bool skip_physical = cluster_.arch() == ARCH::BLACKHOLE and hal_.is_coordinate_virtualization_enabled();
+    const bool virtualizes_non_worker_cores = hal_.virtualizes_non_worker_cores();
+    bool skip_physical = hal_.is_coordinate_virtualization_enabled() and virtualizes_non_worker_cores;
     if (not skip_physical) {
         for (tt::umd::CoreCoord core : pcie_cores) {
             set_addressable_core(
@@ -938,8 +982,20 @@ dev_msgs::core_info_msg_t RiscFirmwareInitializer::populate_core_info_msg(
                 core_info.non_worker_cores()[non_worker_cores_idx++], core, dev_msgs::AddressableCoreType::ETH);
         }
     }
+    // DISPATCH cores (Quasar-only) are never virtualized, so always register them in the physical list.
+    for (tt::umd::CoreCoord core : dispatch_cores) {
+        set_addressable_core(
+            core_info.non_worker_cores()[non_worker_cores_idx++], core, dev_msgs::AddressableCoreType::DISPATCH);
+    }
 
     if (hal_.is_coordinate_virtualization_enabled()) {
+        const size_t num_virtual_non_worker_cores =
+            eth_cores.size() + (virtualizes_non_worker_cores ? pcie_cores.size() + dram_cores.size() : 0);
+        TT_FATAL(
+            num_virtual_non_worker_cores <= core_info.virtual_non_worker_cores().size(),
+            "Virtual non-worker cores ({}) exceed the mailbox capacity ({}) for this architecture",
+            num_virtual_non_worker_cores,
+            core_info.virtual_non_worker_cores().size());
         uint32_t virtual_non_worker_cores_idx = 0;
         for (tt::umd::CoreCoord core : eth_cores) {
             auto virtual_core = cluster_.get_virtual_coordinate_from_physical_coordinates(device_id, {core.x, core.y});
@@ -949,7 +1005,7 @@ dev_msgs::core_info_msg_t RiscFirmwareInitializer::populate_core_info_msg(
                 dev_msgs::AddressableCoreType::ETH);
         }
 
-        if (cluster_.arch() == ARCH::BLACKHOLE) {
+        if (virtualizes_non_worker_cores) {
             for (const CoreCoord& core : pcie_cores) {
                 auto virtual_core =
                     cluster_.get_virtual_coordinate_from_physical_coordinates(device_id, {core.x, core.y});
@@ -976,6 +1032,7 @@ dev_msgs::core_info_msg_t RiscFirmwareInitializer::populate_core_info_msg(
         cluster_.get_soc_desc(device_id).arch, cluster_.get_harvesting_mask(device_id));
     uint32_t max_along_axis =
         hal_.get_tensix_harvest_axis() == HalTensixHarvestAxis::ROW ? soc_d.grid_size.y : soc_d.grid_size.x;
+    harvested_axis_coord.reserve(max_along_axis);
     for (uint32_t idx = 0; idx < max_along_axis; idx++) {
         bool harvested_axis = (harvested_noc_coords >> idx) & 0x1;
         if (harvested_axis) {
@@ -992,7 +1049,7 @@ dev_msgs::core_info_msg_t RiscFirmwareInitializer::populate_core_info_msg(
             uint32_t end_virtual_grid;
             if (hal_.get_tensix_harvest_axis() == HalTensixHarvestAxis::ROW) {
                 end_virtual_grid = hal_.get_virtual_worker_start_y() + logical_grid_size.y;
-            } else if (cluster_.arch() == ARCH::BLACKHOLE) {
+            } else if (cluster_.arch() != ARCH::WORMHOLE_B0) {
                 end_virtual_grid = max_along_axis - 1;
             } else {
                 end_virtual_grid = hal_.get_virtual_worker_start_x() + logical_grid_size.x;
@@ -1027,7 +1084,8 @@ void RiscFirmwareInitializer::initialize_firmware(
         "Tensix cores require end_core to be specified for bank to noc table initialization.");
 
     initialize_device_bank_to_noc_tables(device_id, core_type, virtual_core, end_core);
-    if (core_type == HalProgrammableCoreType::TENSIX) {
+    // Quasar FW never loads the logical→virtual scratch table (WH/BH brisc/ncrisc only).
+    if (core_type == HalProgrammableCoreType::TENSIX && cluster_.arch() != ARCH::QUASAR) {
         initialize_worker_logical_to_virtual_tables(device_id, core_type, virtual_core, end_core.value());
     }
 
@@ -1049,7 +1107,7 @@ void RiscFirmwareInitializer::initialize_firmware(
         }
     };
     const auto write_initial_go_launch_msg = [&]() {
-        auto programmable_core_type = llrt::get_core_type(device_id, virtual_core);
+        auto programmable_core_type = llrt::get_core_type(descriptor_->env_impl(), device_id, virtual_core);
         uint32_t launch_addr = hal_.get_dev_addr(programmable_core_type, HalL1MemAddrType::LAUNCH);
         uint32_t go_addr = hal_.get_dev_addr(programmable_core_type, HalL1MemAddrType::GO_MSG);
         uint64_t launch_msg_buffer_read_ptr_addr =
@@ -1115,6 +1173,7 @@ void RiscFirmwareInitializer::initialize_firmware(
 
                     if (not rtoptions_.get_skip_loading_fw()) {
                         llrt::test_load_multicast_write_risc_binary(
+                            descriptor_->env_impl(),
                             binary_mem,
                             device_id,
                             start_core,
@@ -1139,7 +1198,8 @@ void RiscFirmwareInitializer::initialize_firmware(
                 for (const auto& logical_core : dispatch_core_manager_.get_all_logical_dispatch_cores(device_id)) {
                     auto virtual_dispatch_core = cluster_.get_virtual_coordinate_from_logical_coordinates(
                         device_id, logical_core, CoreType::WORKER);
-                    auto programmable_core_type = llrt::get_core_type(device_id, virtual_dispatch_core);
+                    auto programmable_core_type =
+                        llrt::get_core_type(descriptor_->env_impl(), device_id, virtual_dispatch_core);
                     cluster_.write_core(
                         init_launch_msg_data.data(),
                         init_launch_msg_data.size(),
@@ -1180,7 +1240,13 @@ void RiscFirmwareInitializer::initialize_firmware(
                             device_id, core_type_idx, processor_class, eriscv_id);
                         const ll_api::memory& binary_mem = llrt::get_risc_binary(fw_path);
                         llrt::test_load_write_read_risc_binary(
-                            binary_mem, device_id, virtual_core, core_type_idx, processor_class, eriscv_id);
+                            descriptor_->env_impl(),
+                            binary_mem,
+                            device_id,
+                            virtual_core,
+                            core_type_idx,
+                            processor_class,
+                            eriscv_id);
                     }
                 }
             }
@@ -1212,6 +1278,7 @@ void RiscFirmwareInitializer::initialize_firmware(
             } else {
                 constexpr uint32_t mailbox_index = 0;
                 tt::llrt::internal_::send_msg_to_eth_mailbox(
+                    descriptor_->env_impl(),
                     device_id,
                     virtual_core,
                     tt_metal::FWMailboxMsg::ETH_MSG_RELEASE_CORE,
@@ -1232,7 +1299,13 @@ void RiscFirmwareInitializer::initialize_firmware(
                             device_id, core_type_idx, processor_class, drisc_id);
                         const ll_api::memory& binary_mem = llrt::get_risc_binary(fw_path);
                         llrt::test_load_write_read_risc_binary(
-                            binary_mem, device_id, virtual_core, core_type_idx, processor_class, drisc_id);
+                            descriptor_->env_impl(),
+                            binary_mem,
+                            device_id,
+                            virtual_core,
+                            core_type_idx,
+                            processor_class,
+                            drisc_id);
                     }
                 }
             }
@@ -1256,6 +1329,42 @@ void RiscFirmwareInitializer::initialize_firmware(
             cluster_.write_core(&zero, sizeof(uint32_t), tt_cxy_pair(device_id, virtual_core), go_message_index_addr);
 
             // Write reset PC (register address, no L1 NOC offset needed)
+            cluster_.write_reg(
+                &jit_build_config.fw_launch_addr_value,
+                tt_cxy_pair(device_id, virtual_core),
+                jit_build_config.fw_launch_addr);
+            break;
+        }
+        case HalProgrammableCoreType::DISPATCH: {
+            cluster_.assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::ALL);
+            if (not rtoptions_.get_skip_loading_fw()) {
+                for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
+                    auto num_build_states = hal_.get_processor_types_count(core_type_idx, processor_class);
+                    for (uint32_t dm_id = 0; dm_id < num_build_states; dm_id++) {
+                        auto fw_path = BuildEnvManager::get_instance(ctx_id).get_firmware_binary_path(
+                            device_id, core_type_idx, processor_class, dm_id);
+                        const ll_api::memory& binary_mem = llrt::get_risc_binary(fw_path);
+                        uint32_t fw_size = binary_mem.get_text_size();
+                        hal_.set_iram_text_size(
+                            launch_msg,
+                            core_type,
+                            static_cast<HalProcessorClassType>(processor_class),
+                            dm_id,
+                            fw_size);
+                        llrt::test_load_write_read_risc_binary(
+                            descriptor_->env_impl(),
+                            binary_mem,
+                            device_id,
+                            virtual_core,
+                            core_type_idx,
+                            processor_class,
+                            dm_id);
+                    }
+                }
+            }
+            launch_msg.kernel_config().mode() = dev_msgs::DISPATCH_MODE_HOST;
+            prepare_initial_launch_msg();
+            write_initial_go_launch_msg();
             cluster_.write_reg(
                 &jit_build_config.fw_launch_addr_value,
                 tt_cxy_pair(device_id, virtual_core),
@@ -1292,7 +1401,8 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
                 core_info.data(),
                 core_info.size(),
                 {static_cast<size_t>(device_id), worker_core},
-                hal_.get_dev_addr(llrt::get_core_type(device_id, worker_core), HalL1MemAddrType::CORE_INFO));
+                hal_.get_dev_addr(
+                    llrt::get_core_type(descriptor_->env_impl(), device_id, worker_core), HalL1MemAddrType::CORE_INFO));
             not_done_cores.insert(worker_core);
         }
     }
@@ -1302,6 +1412,38 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
         device_id, CoreCoord(logical_grid_size.x - 1, logical_grid_size.y - 1), CoreType::WORKER);
     initialize_firmware(
         device_id, HalProgrammableCoreType::TENSIX, start_core, launch_msg.view(), go_msg.view(), end_core);
+
+    std::unordered_set<CoreCoord> dispatch_not_done_cores;
+    if (hal_.has_programmable_core_type(HalProgrammableCoreType::DISPATCH) &&
+        !rtoptions_.get_use_quasar_tensix_dispatch_cores() &&
+        cluster_.get_soc_desc(device_id).get_num_dispatch_engine_cores() > 0) {
+        log_debug(tt::LogMetal, "Initializing dispatch-engine cores");
+        auto dispatch_dev_msgs_factory = hal_.get_dev_msgs_factory(HalProgrammableCoreType::DISPATCH);
+        auto dispatch_core_info = populate_core_info_msg(device_id, HalProgrammableCoreType::DISPATCH);
+        auto dispatch_launch_msg = dispatch_dev_msgs_factory.create<dev_msgs::launch_msg_t>();
+        auto dispatch_go_msg = dispatch_dev_msgs_factory.create<dev_msgs::go_msg_t>();
+        dispatch_go_msg.view().signal() = dev_msgs::RUN_MSG_INIT;
+
+        for (const CoreCoord& logical_dispatch_core :
+             detail::get_quasar_soc_dispatch_engine_logical_cores(cluster_.get_soc_desc(device_id))) {
+            CoreCoord virtual_dispatch_core = cluster_.get_virtual_coordinate_from_logical_coordinates(
+                device_id, logical_dispatch_core, CoreType::DISPATCH);
+            dispatch_core_info.view().absolute_logical_x() = logical_dispatch_core.x;
+            dispatch_core_info.view().absolute_logical_y() = logical_dispatch_core.y;
+            cluster_.write_core_immediate(
+                dispatch_core_info.data(),
+                dispatch_core_info.size(),
+                {static_cast<size_t>(device_id), virtual_dispatch_core},
+                hal_.get_dev_addr(HalProgrammableCoreType::DISPATCH, HalL1MemAddrType::CORE_INFO));
+            initialize_firmware(
+                device_id,
+                HalProgrammableCoreType::DISPATCH,
+                virtual_dispatch_core,
+                dispatch_launch_msg.view(),
+                dispatch_go_msg.view());
+            dispatch_not_done_cores.insert(virtual_dispatch_core);
+        }
+    }
 
     for (const auto& eth_core : this->get_control_plane_().get_active_ethernet_cores(device_id)) {
         static std::vector<uint32_t> zero_vec_erisc_init(
@@ -1335,7 +1477,8 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
             core_info.data(),
             core_info.size(),
             {static_cast<size_t>(device_id), virtual_core},
-            hal_.get_dev_addr(llrt::get_core_type(device_id, virtual_core), HalL1MemAddrType::CORE_INFO));
+            hal_.get_dev_addr(
+                llrt::get_core_type(descriptor_->env_impl(), device_id, virtual_core), HalL1MemAddrType::CORE_INFO));
         initialize_firmware(
             device_id, HalProgrammableCoreType::ACTIVE_ETH, virtual_core, launch_msg.view(), go_msg.view());
         if (!hal_.get_eth_fw_is_cooperative()) {
@@ -1359,15 +1502,15 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
             core_info.data(),
             core_info.size(),
             {static_cast<size_t>(device_id), virtual_core},
-            hal_.get_dev_addr(llrt::get_core_type(device_id, virtual_core), HalL1MemAddrType::CORE_INFO));
+            hal_.get_dev_addr(
+                llrt::get_core_type(descriptor_->env_impl(), device_id, virtual_core), HalL1MemAddrType::CORE_INFO));
         initialize_firmware(
             device_id, HalProgrammableCoreType::IDLE_ETH, virtual_core, launch_msg.view(), go_msg.view());
         not_done_cores.insert(virtual_core);
     }
 
     std::unordered_set<CoreCoord> dram_not_done_cores;
-    bool has_dram_fw =
-        hal_.get_programmable_core_type_index(HalProgrammableCoreType::DRAM) < hal_.get_programmable_core_type_count();
+    bool has_dram_fw = hal_.has_programmable_core_type(HalProgrammableCoreType::DRAM);
     if (has_dram_fw) {
         log_debug(tt::LogMetal, "Initializing DRAM cores");
         auto dram_dev_msgs_factory = hal_.get_dev_msgs_factory(HalProgrammableCoreType::DRAM);
@@ -1417,11 +1560,15 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
     for (const auto& dram_core : dram_not_done_cores) {
         cluster_.deassert_risc_reset_at_core(tt_cxy_pair(device_id, dram_core), tt::umd::RiscType::BRISC);
     }
+    for (const auto& dispatch_core : dispatch_not_done_cores) {
+        cluster_.deassert_risc_reset_at_core(tt_cxy_pair(device_id, dispatch_core), tt::umd::RiscType::ALL);
+    }
 
     log_debug(LogDevice, "Waiting for firmware init complete");
     const int timeout_ms = firmware_wait_timeout_ms();
     try {
-        llrt::internal_::wait_until_cores_done(device_id, dev_msgs::RUN_MSG_INIT, not_done_cores, timeout_ms);
+        llrt::internal_::wait_until_cores_done(
+            descriptor_->metal_context(), device_id, dev_msgs::RUN_MSG_INIT, not_done_cores, timeout_ms);
     } catch (std::runtime_error&) {
         TT_THROW("Device {} init: failed to initialize FW! Try resetting the board.", device_id);
     }
@@ -1430,11 +1577,23 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
     if (!dram_not_done_cores.empty()) {
         log_debug(LogDevice, "Waiting for DRAM firmware init complete");
         try {
-            llrt::internal_::wait_until_cores_done(device_id, dev_msgs::RUN_MSG_INIT, dram_not_done_cores, timeout_ms);
+            llrt::internal_::wait_until_cores_done(
+                descriptor_->metal_context(), device_id, dev_msgs::RUN_MSG_INIT, dram_not_done_cores, timeout_ms);
         } catch (std::runtime_error&) {
             TT_THROW("Device {} init: failed to initialize DRAM FW!", device_id);
         }
         log_debug(LogDevice, "DRAM firmware init complete");
+    }
+
+    if (!dispatch_not_done_cores.empty()) {
+        log_info(LogDevice, "Waiting for dispatch-engine firmware init complete ({} cores)", dispatch_not_done_cores.size());
+        try {
+            llrt::internal_::wait_until_cores_done(
+                descriptor_->metal_context(), device_id, dev_msgs::RUN_MSG_INIT, dispatch_not_done_cores, timeout_ms);
+        } catch (std::runtime_error&) {
+            TT_THROW("Device {} init: failed to initialize dispatch-engine FW!", device_id);
+        }
+        log_info(LogDevice, "Dispatch-engine firmware init complete");
     }
 }
 

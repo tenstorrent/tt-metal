@@ -4,7 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 #include "api/debug/dprint.h"
@@ -50,8 +50,8 @@ void kernel_main() {
     constexpr uint32_t output_tensor_tile_size_bytes = get_tile_size(output_tensor_cb_index);
 
     Noc noc;
-    CircularBuffer input_cb(input_tensor_cb_index);
-    CircularBuffer output_cb(output_tensor_cb_index);
+    DataflowBuffer input_dfb(input_tensor_cb_index);
+    DataflowBuffer output_dfb(output_tensor_cb_index);
 
     for (uint32_t h = 0; h < Ht; h++) {
         for (uint32_t core_loop = 0; core_loop < core_loop_count; core_loop++) {
@@ -61,28 +61,28 @@ void kernel_main() {
             }
             // Read input data
             for (uint32_t w = 0; w < Wt_input; w++) {
-                input_cb.reserve_back(one_tile);
+                input_dfb.reserve_back(one_tile);
                 noc.async_read(
                     input_tensor_dram,
-                    input_cb,
+                    input_dfb,
                     input_tensor_tile_size_bytes,
                     {.page_id = h * Wt_input + w},
                     {.offset_bytes = 0});
                 noc.async_read_barrier();
-                input_cb.push_back(one_tile);
+                input_dfb.push_back(one_tile);
             }  // Wt_input loop
 
             // Write output data
-            output_cb.wait_front(one_tile);
+            output_dfb.wait_front(one_tile);
 
             noc.async_write(
-                output_cb,
+                output_dfb,
                 output_tensor_dram,
                 output_tensor_tile_size_bytes,
                 {.offset_bytes = 0},
                 {.page_id = h * Wt_index + current_index_tile_id});
             noc.async_write_barrier();
-            output_cb.pop_front(one_tile);
+            output_dfb.pop_front(one_tile);
 
         }  // core_loop_count loop
     }  // h loop

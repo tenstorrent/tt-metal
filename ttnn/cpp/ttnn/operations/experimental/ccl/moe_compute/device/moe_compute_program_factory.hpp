@@ -55,8 +55,8 @@ struct MoEComputeMeshWorkloadFactory {
         // Combine global semaphores (empty in ComputeOnly mode)
         std::vector<GlobalSemaphore> combine_global_semaphores;
 
-        // Path used to build this workload (Full = combine kernels built; ComputeOnly = bypassed).
-        MoEComputePath path = MoEComputePath::Full;
+        // Path used to build this workload (FullCcl/FullLocal = combine kernels built; ComputeOnly = bypassed).
+        MoEComputePath path = MoEComputePath::FullCcl;
     };
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
@@ -85,13 +85,25 @@ struct MoEComputeMeshWorkloadFactory {
 std::vector<ttnn::CoreCoord> get_moe_combine_cores(
     ttnn::MeshDevice* mesh_device,
     const uint32_t combine_token_parallel_cores,
-    const uint32_t combine_data_parallel_cores);
+    const uint32_t combine_data_parallel_cores,
+    const uint32_t hidden_size,
+    const CoreRangeSet& mux_core_range_set,
+    const uint32_t bh_ring_size);
+
+ttnn::CoreCoord get_moe_tilize_drain_core(
+    ttnn::MeshDevice* mesh_device,
+    const uint32_t combine_token_parallel_cores,
+    const uint32_t combine_data_parallel_cores,
+    const uint32_t hidden_size,
+    const CoreRangeSet& mux_core_range_set,
+    const uint32_t bh_ring_size);
 
 ttnn::CoreRange get_moe_worker_mcast_bounding_box(
     ttnn::MeshDevice* mesh_device,
     const uint32_t combine_token_parallel_cores,
     const uint32_t combine_data_parallel_cores,
     const uint32_t hidden_size,
-    const uint32_t bh_ring_size = 12);
+    const CoreRangeSet& mux_core_range_set,
+    const uint32_t bh_ring_size);
 
 }  // namespace ttnn::experimental::prim

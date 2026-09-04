@@ -14,7 +14,7 @@ on:
 jobs:
   test-calculate-version:
     name: Test Calculate Version Action
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
 
     steps:
       - name: Checkout code
@@ -137,7 +137,7 @@ jobs:
 
   test-version-bumping:
     name: Test Version Bumping Logic
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
 
     steps:
       - name: Checkout code
@@ -246,7 +246,7 @@ jobs:
 
   test-dev-tag-versioning:
     name: Test Dev Tag Minor Version Bumping
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
 
     steps:
       - name: Checkout code
@@ -396,7 +396,7 @@ jobs:
 
   test-dev-tag-consistency:
     name: Test Dev Tag Consistency
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
 
     steps:
       - name: Checkout code
@@ -551,7 +551,7 @@ jobs:
 
   test-edge-cases:
     name: Test Edge Cases
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
 
     steps:
       - name: Checkout code
@@ -621,7 +621,7 @@ jobs:
 
   integration-test:
     name: Integration Test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     needs: [test-calculate-version, test-version-bumping, test-edge-cases]
 
     steps:
@@ -681,7 +681,7 @@ jobs:
 
   test-force-bump-and-ignore-commits:
     name: Test Force Bump and Ignore Commits
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
 
     steps:
       - name: Checkout code
@@ -911,7 +911,7 @@ jobs:
 
   test-dev-tag-rc-comparison:
     name: Test Dev Tag RC vs Semver Comparison
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
 
     steps:
       - name: Checkout code
@@ -1105,7 +1105,7 @@ jobs:
 
   final-test-summary:
     name: Final Test Summary
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     needs: [test-calculate-version, test-version-bumping, test-dev-tag-versioning, test-dev-tag-consistency, test-edge-cases, integration-test, test-force-bump-and-ignore-commits, test-dev-tag-rc-comparison]
     steps:
       - name: Test summary

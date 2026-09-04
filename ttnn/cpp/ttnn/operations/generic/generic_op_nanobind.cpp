@@ -18,7 +18,7 @@
 namespace ttnn::operations::generic {
 
 // Defined in generic_op_device_operation.cpp
-tt::stl::hash::hash_t compute_program_descriptor_hash(const tt::tt_metal::ProgramDescriptor& program_descriptor);
+ttsl::hash::hash_t compute_program_descriptor_hash(const tt::tt_metal::ProgramDescriptor& program_descriptor);
 
 void bind_generic_operation(nb::module_& mod) {
     std::string doc =

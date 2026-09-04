@@ -29,7 +29,7 @@ on:
         type: boolean
         default: false
       run-hang-report-test:
-        description: "Run ONLY the hang report test (test-category unit). Default runs core triage tests (test-category smoke)."
+        description: "Run ONLY the hang report test (test-category unit). Default runs core triage tests (test-category merge_gate)."
         required: false
         type: boolean
         default: false
@@ -58,6 +58,7 @@ jobs:
     uses: ./.github/workflows/check-harbor.yaml
   build-artifact:
     needs: check-harbor
+    if: ${{ !cancelled() }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read
@@ -66,11 +67,12 @@ jobs:
     with:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
-      build-wheel: true
+      build-inplace-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
 
   triage-tests:
     needs: [check-harbor, build-artifact]
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' }}
     uses: ./.github/workflows/triage-tests-impl.yaml
     secrets: inherit
     with:
@@ -85,4 +87,4 @@ jobs:
       enable-watcher: ${{ inputs.enable-watcher }}
       enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts }}
-      test-category: ${{ inputs.run-hang-report-test && 'unit' || 'smoke' }}
+      test-category: ${{ inputs.run-hang-report-test && 'unit' || 'merge_gate' }}

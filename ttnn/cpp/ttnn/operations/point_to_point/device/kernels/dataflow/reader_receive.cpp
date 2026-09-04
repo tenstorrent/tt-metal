@@ -34,6 +34,8 @@ void kernel_main() {
     // reusing the last arg for fabric setup, therefore index overlaps.
     size_t conn_arg_idx = 9;
 
+    Noc noc;
+
     auto fabric_connection = FabricConnectionManager::build_from_args<
         FabricConnectionManager::BuildFromArgsMode::BUILD_AND_OPEN_CONNECTION_START_ONLY>(conn_arg_idx);
 
@@ -90,7 +92,7 @@ void kernel_main() {
             const uint32_t transfer_size_bytes = std::min(page_size_bytes - page_offset, packet_size_bytes);
             const uint32_t packet_l1_page_addr = packet_l1_addr + packet_page_idx * aligned_page_size_bytes;
 
-            tt_memmove<false, false, false, 0>(dest_addr, packet_l1_page_addr, transfer_size_bytes);
+            tt_memmove<false, false, false, 0>(noc, dest_addr, packet_l1_page_addr, transfer_size_bytes);
             ++packet_page_idx;
         }
         cb_push_back(receiver_cb_id, 1);

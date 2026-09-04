@@ -21,8 +21,14 @@ from vllm.model_executor.models.mistral3 import (
     Mistral3ProcessingInfo,
 )
 from vllm.multimodal import MULTIMODAL_REGISTRY
-from vllm.multimodal.inputs import MultiModalDataDict
 from vllm.multimodal.processing import BaseDummyInputsBuilder
+
+try:
+    # vLLM >= 0.24.0 exposes MultiModalDataDict from vllm.inputs; older
+    # versions export it from vllm.multimodal.inputs.
+    from vllm.inputs import MultiModalDataDict
+except ImportError:
+    from vllm.multimodal.inputs import MultiModalDataDict
 
 import ttnn
 from models.common.llama_models import create_vision_mask
@@ -624,6 +630,10 @@ class LlamaForCausalLM(Generator):
         "supports_prefix_caching": True,
         "supports_async_decode": True,
         "supports_sample_on_device": True,
+        # prefill_forward_single_user_text already routes a nonzero start_pos to
+        # the chunked SDPA, and the generator floors the offset to what that op
+        # needs, so a prompt split across engine steps needs no new prefill code.
+        "supports_chunked_prefill": True,
     }
 
     @classmethod
@@ -709,6 +719,10 @@ class QwenForCausalLM(Generator):
         "supports_prefix_caching": True,
         "supports_async_decode": True,
         "supports_sample_on_device": True,
+        # prefill_forward_single_user_text already routes a nonzero start_pos to
+        # the chunked SDPA, and the generator floors the offset to what that op
+        # needs, so a prompt split across engine steps needs no new prefill code.
+        "supports_chunked_prefill": True,
     }
 
     @classmethod
@@ -788,6 +802,10 @@ class MistralForCausalLM(Generator):
         "supports_prefix_caching": True,
         "supports_async_decode": True,
         "supports_sample_on_device": True,
+        # prefill_forward_single_user_text already routes a nonzero start_pos to
+        # the chunked SDPA, and the generator floors the offset to what that op
+        # needs, so a prompt split across engine steps needs no new prefill code.
+        "supports_chunked_prefill": True,
     }
 
     @classmethod

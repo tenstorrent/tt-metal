@@ -38,7 +38,6 @@ from ttnn.graph_report import (
     extract_operation_durations,
 )
 
-
 # ---------------------------------------------------------------------------
 # Python-level I/O tracking
 # ---------------------------------------------------------------------------
@@ -166,16 +165,20 @@ def _capture_python_stack_trace() -> list[str]:
     """
     frames = traceback.extract_stack()
     result = []
+
     for frame in frames:
-        path = pathlib.Path(frame.filename).resolve()
-        # Match against path relative to root so globs like **/_pytest/** work on absolute paths
         try:
-            path_for_match = path.relative_to(path.anchor)
-        except ValueError:
-            path_for_match = path
-        if any(path_for_match.match(p) for p in _STACK_TRACE_INTERNAL_PATTERNS):
+            filename = str(frame.filename)
+            path = pathlib.PurePath(filename)
+
+            # Match without filesystem resolution to avoid fragile behavior during capture
+            if any(path.match(p) for p in _STACK_TRACE_INTERNAL_PATTERNS):
+                continue
+
+            result.append(f'  File "{filename}", line {frame.lineno}, in {frame.name}\n    {frame.line}\n')
+        except Exception:
+            # Never let stack-trace capture break graph capture
             continue
-        result.append(f'  File "{frame.filename}", line {frame.lineno}, in {frame.name}\n    {frame.line}\n')
 
     return result[::-1]
 
@@ -202,7 +205,7 @@ def _collect_tensor_ids(value) -> list:
     return ids
 
 
-def begin_graph_capture(run_mode=None):
+def begin_graph_capture(run_mode=None, *, _internal=False):
     """Wrapper that clears Python I/O state before starting C++ capture.
 
     Automatically enables Python I/O recording so that
@@ -236,9 +239,15 @@ def begin_graph_capture(run_mode=None):
         import ttnn
 
         _python_io_data = []
-        # Preserve comparison records across per-op capture sessions (comparison mode
-        # without enable_graph_report). Only initialize once per test run.
-        if not _comparison_records_data:
+        # A user-initiated (non-internal) outermost capture starts a fresh comparison
+        # sidecar scope: any records left over from earlier comparison-mode activity
+        # in this process must not leak into this capture's sidecar. The per-op
+        # auto-capture inside the operation wrapper passes _internal=True so that
+        # comparison records still accumulate across per-op sessions (comparison mode
+        # without enable_graph_report, later drained by flush_comparison_records_to_db).
+        if not _internal:
+            _comparison_records_data = _new_comparison_records_data()
+        elif not _comparison_records_data:
             _comparison_records_data = _new_comparison_records_data()
         _python_io_recording_enabled = True
         _configure_python_stack_traces_for_outer_graph_capture(ttnn)
@@ -330,7 +339,51 @@ def _ttnn_tensor_summary(t) -> str:
     return f"ttnn.Tensor({', '.join(parts)})"
 
 
-def _safe_arg_str(v):
+# Cap on how many elements of a sequence argument are summarized individually. A captured
+# ttnn.concat takes as many operands as the model splits into -- 6 for a Qwen3-VL LM head -- so 32
+# records every sequence seen so far with room to spare, while bounding the cost of an argument
+# repr on a pathological call.
+_MAX_SEQUENCE_ELEMENTS = 32
+# How deep the element-wise walk goes. Every sequence argument observed in a capture so far is a
+# flat list of tensors (depth 1: ttnn.concat, the CCL ops); the limit exists to bound recursion on
+# an unexpected or self-referential structure, not to describe a shape we expect, so it is set a
+# few levels above the observed maximum. Crossing it is safe by construction: the walk elides
+# rather than falling back to str(), and _holds_tensor treats "too deep to search" as "assume a
+# tensor is in there".
+_MAX_SEQUENCE_DEPTH = 4
+
+
+def _tensor_types():
+    """(ttnn.Tensor, torch.Tensor) -- or just ttnn's when torch is not installed."""
+    import ttnn
+
+    try:
+        import torch
+
+        return (ttnn.Tensor, torch.Tensor)
+    except ImportError:
+        return (ttnn.Tensor,)
+
+
+def _holds_tensor(v, _depth=0):
+    """Is ``v`` a tensor, or a sequence holding one at any depth?
+
+    Mirrors ``_collect_tensor_ids``' recursive treatment: a tensor nested inside
+    ``[[tensor]]`` reaches ``str()`` just as readily as a top-level one.
+
+    The depth limit answers "maybe" as True: a sequence too deep to search cannot be
+    shown tensor-free, and summarizing one that turns out to hold only scalars is
+    harmless, where str()-ing one that holds a tensor is the device read this exists to
+    prevent.
+    """
+    if isinstance(v, _tensor_types()):
+        return True
+    if isinstance(v, (list, tuple)):
+        return True if _depth >= _MAX_SEQUENCE_DEPTH else any(_holds_tensor(e, _depth + 1) for e in v)
+    return False
+
+
+def _safe_arg_str(v, _depth=0):
     """Stringify a function argument without triggering graph-tracked operations."""
     import ttnn
 
@@ -343,7 +396,30 @@ def _safe_arg_str(v):
             return f"torch.Tensor(shape={list(v.shape)}, dtype={v.dtype})"
     except ImportError:
         pass
-    return str(v)
+    # A sequence holding tensors -- at any nesting depth -- must be summarized element-wise. str()
+    # on a list of ttnn.Tensors calls repr() on each one, which reads the whole tensor back to host
+    # (ttnn::to_string -> Tensor::cpu). That is expensive everywhere, dumps tensor contents into the
+    # report, and is outright fatal inside a device trace capture ("Reads are not supported during
+    # trace capture") -- which is how ttnn.concat, the one op taking a tensor list, killed capture
+    # runs. torch tensors in a sequence are summarized for the same no-dump reason (host-side, so
+    # noise rather than a fault).
+    if isinstance(v, (list, tuple)) and _holds_tensor(v):
+        open_, close = ("(", ")") if isinstance(v, tuple) else ("[", "]")
+        # Past the depth limit, elide rather than fall through to str(): the whole point is that a
+        # tensor below here must never be repr()'d.
+        if _depth >= _MAX_SEQUENCE_DEPTH:
+            return f"{open_}... {len(v)} element(s) below the summary depth limit{close}"
+        head = [_safe_arg_str(e, _depth + 1) for e in v[:_MAX_SEQUENCE_ELEMENTS]]
+        if len(v) > _MAX_SEQUENCE_ELEMENTS:
+            head.append(f"... +{len(v) - _MAX_SEQUENCE_ELEMENTS} more")
+        return f"{open_}{', '.join(head)}{close}"
+
+    # Recording arguments is diagnostic, so a value whose repr misbehaves (e.g. a binding whose
+    # std::string-returning __repr__ has no registered caster) must not take down the operation.
+    try:
+        return str(v)
+    except Exception as e:
+        return f"<unprintable {type(v).__name__}: {type(e).__name__}: {e}>"
 
 
 def record_python_operation(name, function_args, function_kwargs):
@@ -368,7 +444,10 @@ def record_python_operation(name, function_args, function_kwargs):
     }
 
     if _python_stack_traces_enabled:
-        record["python_stack_trace"] = _capture_python_stack_trace()
+        try:
+            record["python_stack_trace"] = _capture_python_stack_trace()
+        except Exception:
+            record["python_stack_trace"] = []
 
     _python_io_data.append(record)
 
@@ -583,8 +662,12 @@ def pretty_format(captured_graph):
             node_string = format_string.format("Add Tensor: " + str(node["params"]["tensor_id"]))
         elif node["node_type"] == "circular_buffer_allocate":
             node_string = format_string.format("Allocate Circular Buffer")
+        elif node["node_type"] == "dataflow_buffer_allocate":
+            node_string = format_string.format("Allocate Dataflow Buffer")
+        elif node["node_type"] == "scratchpad_allocate":
+            node_string = format_string.format("Allocate Kernel Scratchpad")
         elif node["node_type"] == "circular_buffer_deallocate_all":
-            node_string = format_string.format("Deallocate All Circular Buffers")
+            node_string = format_string.format("Deallocate All Program-Scope L1")
         else:
             raise ValueError(f"Unknown node type: {node['node_type']}")
 

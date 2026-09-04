@@ -37,7 +37,7 @@
 namespace tt::tt_metal {
 
 SubDeviceManagerTracker::SubDeviceManagerTracker(
-    IDevice* device, std::unique_ptr<AllocatorImpl>&& global_allocator, tt::stl::Span<const SubDevice> sub_devices) :
+    IDevice* device, std::unique_ptr<AllocatorImpl>&& global_allocator, ttsl::Span<const SubDevice> sub_devices) :
     device_(device) {
     TT_FATAL(device_ != nullptr, "SubDeviceManagerTracker requires a valid device");
     auto sub_device_manager = std::make_unique<SubDeviceManager>(device, std::move(global_allocator), sub_devices);
@@ -55,7 +55,7 @@ SubDeviceManagerTracker::~SubDeviceManagerTracker() {
 }
 
 SubDeviceManagerId SubDeviceManagerTracker::create_sub_device_manager(
-    tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) {
+    ttsl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) {
     auto sub_device_manager = std::make_unique<SubDeviceManager>(sub_devices, local_l1_size, device_);
     auto sub_device_manager_id = sub_device_manager->id();
     sub_device_managers_.insert_or_assign(sub_device_manager_id, std::move(sub_device_manager));
@@ -76,15 +76,19 @@ void SubDeviceManagerTracker::reset_sub_device_state(const std::unique_ptr<SubDe
     // Dynamic resolution of device types is unclean and poor design. This will be cleaned up
     // when MeshCommandQueue + HWCommandQueue are unified under the same API
     if (dynamic_cast<distributed::MeshDevice*>(device_)) {
-        // Multi CQ support for MeshDevice is not currently available
         distributed::MeshDevice* mesh_device = dynamic_cast<distributed::MeshDevice*>(device_);
-        for (uint8_t cq_id = 0; cq_id < mesh_device->num_hw_cqs(); ++cq_id) {
+        // The worker launch message ring buffer and the GO mailboxes are shared by every hardware CQ, so
+        // exactly one CQ resets them. That has to be the last CQ: reset_worker_state drains each of the
+        // preceding CQs, so by the time the last one runs, no other CQ can still have workers in flight
+        // whose GO mailboxes would be remapped out from under them.
+        const uint8_t num_hw_cqs = mesh_device->num_hw_cqs();
+        for (uint8_t cq_id = 0; cq_id < num_hw_cqs; ++cq_id) {
             mesh_device->impl().mesh_command_queue_base(cq_id).reset_worker_state(
-                cq_id == 0,
+                /*reset_launch_msg_state=*/cq_id + 1 == num_hw_cqs,
                 num_sub_devices,
                 sub_device_manager->noc_mcast_unicast_data(),
                 sub_device_manager->get_core_go_message_mapping(),
-                tt::stl::Span<const uint32_t>(workers_per_sub_device.data(), workers_per_sub_device.size()));
+                ttsl::Span<const uint32_t>(workers_per_sub_device.data(), workers_per_sub_device.size()));
         }
     } else {
         TT_FATAL(false, "Sub device managers are unsupported with non-mesh devices");
@@ -94,7 +98,7 @@ void SubDeviceManagerTracker::reset_sub_device_state(const std::unique_ptr<SubDe
 
 void SubDeviceManagerTracker::load_sub_device_manager(SubDeviceManagerId sub_device_manager_id) {
     TT_FATAL(
-        tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch(),
+        tt::tt_metal::MetalContext::instance(extract_context_id(device_)).rtoptions().get_fast_dispatch(),
         "Using sub device managers is unsupported with slow dispatch");
     if (active_sub_device_manager_->id() == sub_device_manager_id) {
         return;
@@ -141,6 +145,14 @@ SubDeviceManager* SubDeviceManagerTracker::get_default_sub_device_manager() cons
     return default_sub_device_manager_;
 }
 
+DeviceAddr SubDeviceManagerTracker::get_max_trace_high_water_mark() const {
+    DeviceAddr max_high_water_mark = 0;
+    for (const auto& entry : sub_device_managers_) {
+        max_high_water_mark = std::max(max_high_water_mark, entry.second->get_max_trace_high_water_mark());
+    }
+    return max_high_water_mark;
+}
+
 SubDeviceManagerId SubDeviceManagerTracker::get_active_sub_device_manager_id() const {
     return active_sub_device_manager_->id();
 }
@@ -150,7 +162,7 @@ SubDeviceManagerId SubDeviceManagerTracker::get_default_sub_device_manager_id() 
 }
 
 std::optional<DeviceAddr> SubDeviceManagerTracker::lowest_occupied_compute_l1_address(
-    tt::stl::Span<const SubDeviceId> sub_device_ids) const {
+    ttsl::Span<const SubDeviceId> sub_device_ids) const {
     constexpr uint32_t global_bank_id = 0;
     DeviceAddr lowest_addr = std::numeric_limits<DeviceAddr>::max();
     // Global bank id needs to look up a bank from the compute grid (not the storage grid)
@@ -166,7 +178,7 @@ std::optional<DeviceAddr> SubDeviceManagerTracker::lowest_occupied_compute_l1_ad
             std::is_reference_v<
                 std::invoke_result_t<decltype(&SubDeviceManager::get_sub_device_ids), SubDeviceManager>>,
             "Getting a span from get_sub_device_ids requires it to be a reference");
-        sub_device_ids = tt::stl::Span<const SubDeviceId>(active_sub_device_manager_->get_sub_device_ids());
+        sub_device_ids = ttsl::Span<const SubDeviceId>(active_sub_device_manager_->get_sub_device_ids());
     }
     for (const auto& sub_device_id : sub_device_ids) {
         const auto& allocator = this->get_active_sub_device_manager()->sub_device_allocator(sub_device_id);

@@ -6,6 +6,11 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include <tt-metalium/hal.hpp>
 #include <tt_stl/assert.hpp>
+// log_info / log_warning in native_tuning(). Included explicitly rather than left to arrive
+// transitively: this target is a unity build, so a missing include here still compiles.
+#include <tt-logger/tt-logger.hpp>
+
+#include <cstdlib>
 
 #include <fmt/core.h>
 #include <fmt/format.h>
@@ -123,7 +128,7 @@ std::string get_kernel_file_path(KernelName kernel_name, bool is_sfpu, bool is_w
             return fmt::format(
                 compute,
                 root,
-                is_where_op ? "eltwise_where_sfpu_scalar"
+                is_where_op ? "eltwise_where_sfpu_scalar.cpp"
                             : (is_sfpu ? "eltwise_binary_sfpu_scalar.cpp" : "eltwise_binary_scalar.cpp"));
         case KernelName::ComputeRowBcastNg:
             return fmt::format(
@@ -729,11 +734,11 @@ tt::tt_metal::ShardSpec adjust_to_shape(
     return ret;
 }
 
-const std::optional<tt::tt_metal::ShardSpec>& get_shard_spec(const TensorSpec& tensor_spec) {
+const std::optional<tt::tt_metal::ShardSpec>& get_shard_spec(const tt::tt_metal::TensorSpec& tensor_spec) {
     return tensor_spec.memory_config().shard_spec();
 }
 
-bool is_uneven(const TensorSpec& t) {
+bool is_uneven(const tt::tt_metal::TensorSpec& t) {
     if (not t.memory_config().is_sharded()) {
         return false;
     }
@@ -755,7 +760,8 @@ bool is_uneven(const TensorSpec& t) {
 // the check is based on user facing information, input tensors and output memory config
 // more info may be checked in other places, such as actual output is uneven or not
 // this function is called in both earlier and later stages of the program execution
-bool is_native_L1_sharding(const TensorSpec& a, const std::optional<TensorSpec>& b, const MemoryConfig& c) {
+bool is_native_L1_sharding(
+    const tt::tt_metal::TensorSpec& a, const std::optional<tt::tt_metal::TensorSpec>& b, const MemoryConfig& c) {
     if (!c.is_sharded()) {
         return false;
     }
@@ -856,7 +862,7 @@ ttnn::Shape compute_broadcasted_output(const ttnn::Shape& shape_a, const ttnn::S
     const int rank_a = shape_a.rank();
     const int rank_b = shape_b.rank();
     const int larger_rank = std::max(rank_a, rank_b);
-    SmallVector<uint32_t> output_shape(larger_rank, 1);
+    ttsl::SmallVector<uint32_t> output_shape(larger_rank, 1);
     for (int i = -1; i >= -larger_rank; --i) {
         auto dim_a = (i >= -rank_a) ? shape_a[i] : 1;
         auto dim_b = (i >= -rank_b) ? shape_b[i] : 1;
@@ -883,5 +889,85 @@ MemoryConfig compute_mem_config_actual(const ttnn::Tensor& input_tensor_a, const
         input_tensor_a.memory_config().memory_layout(),
         input_tensor_a.memory_config().buffer_type(),
         adjusted_shard_spec);
+}
+
+const NativeTuning& native_tuning() {
+    // Lambdas, not file-scope helpers: this is a unity build, so `env_bool`/`env_u32` at file scope
+    // would collide with any sibling in the same blob (an anonymous namespace does not help).
+    static const NativeTuning tuning = [] {
+        // Unset, empty and "0" all mean OFF -- the A/B reference arm depends on =0 meaning off.
+        const auto env_bool = [](const char* name) {
+            const char* v = std::getenv(name);
+            return v != nullptr && v[0] != '\0' && v[0] != '0';
+        };
+        // max_value is per-knob and required: strtol returns long, so 4294967296 passes `> 0` and then
+        // truncates to 0, and std::lcm(0, x) makes the gate divide by zero. Depth 40 is a normal sweep
+        // point; 40 reader threads is not -- hence different bounds.
+        const auto env_u32 = [](const char* name, uint32_t fallback, uint32_t max_value) {
+            const char* v = std::getenv(name);
+            if (v == nullptr || v[0] == '\0') {
+                return fallback;
+            }
+            char* end = nullptr;
+            const long parsed = std::strtol(v, &end, 10);
+            TT_FATAL(
+                end != nullptr && *end == '\0' && parsed > 0 && parsed <= static_cast<long>(max_value),
+                "{} must be a decimal integer in [1, {}], got '{}'",
+                name,
+                max_value,
+                v);
+            return static_cast<uint32_t>(parsed);
+        };
+        // 8 covers every legal thread count; depth's ceiling is the platform's uint8_t cliff at 255.
+        constexpr uint32_t kMaxThreads = 8;
+        constexpr uint32_t kMaxEntriesPerThread = 255;
+
+        NativeTuning t;
+        t.enabled = env_bool("TTNN_QSR_NATIVE");
+        t.implicit_sync = env_bool("TTNN_QSR_IMPLICIT_SYNC");
+        t.entries_per_thread = env_u32("TTNN_QSR_ENTRIES_PER_THREAD", 2, kMaxEntriesPerThread);
+        t.reader_threads = env_u32("TTNN_QSR_READER_THREADS", 1, kMaxThreads);
+        t.compute_threads = env_u32("TTNN_QSR_COMPUTE_THREADS", 1, kMaxThreads);
+        t.writer_threads = env_u32("TTNN_QSR_WRITER_THREADS", 1, kMaxThreads);
+
+        // Only when enabled: with the native path off nothing reads these, so an unconditional throw
+        // would have no protective value and would kill the fallback reference arm on any arch.
+        if (!t.enabled) {
+            const bool any_knob_set = t.implicit_sync || t.entries_per_thread != 2 || t.reader_threads != 1 ||
+                                      t.compute_threads != 1 || t.writer_threads != 1;
+            if (any_knob_set) {
+                log_warning(
+                    tt::LogOp,
+                    "TTNN_QSR_* tuning knobs are set but TTNN_QSR_NATIVE is off, so they have NO effect "
+                    "and the fallback factory will run. Set TTNN_QSR_NATIVE=1 to use them.");
+            }
+            return t;
+        }
+        // Also enforced in program_spec.cpp, but a throw here names the knob.
+        TT_FATAL(
+            t.compute_threads == 1 || t.compute_threads == 2 || t.compute_threads == 4,
+            "TTNN_QSR_COMPUTE_THREADS must be 1, 2 or 4, got {}",
+            t.compute_threads);
+        TT_FATAL(
+            t.reader_threads + t.writer_threads <= 6,
+            "TTNN_QSR_READER_THREADS + TTNN_QSR_WRITER_THREADS must be <= 6 (Quasar has 6 user DM "
+            "cores), got {} + {}",
+            t.reader_threads,
+            t.writer_threads);
+        // Once, so an A/B log is self-describing. num_entries is DERIVED (entries_per_thread x the
+        // endpoint's max(producers, consumers)), so the depth reaching the credit register is not this
+        // number.
+        log_info(
+            tt::LogOp,
+            "binary_ng Quasar-native ENABLED: R={} C={} W={} entries_per_thread={}. Sync is EXPLICIT; "
+            "TTNN_QSR_IMPLICIT_SYNC={} is parsed but NOT wired to the program.",
+            t.reader_threads,
+            t.compute_threads,
+            t.writer_threads,
+            t.entries_per_thread,
+            t.implicit_sync);
+        return t;
+    }();
+    return tuning;
 }
 }  // namespace ttnn::operations::experimental::quasar::binary_ng

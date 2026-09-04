@@ -120,8 +120,3 @@ def get_batch(split_ids: np.ndarray, seq_len: int, batch_size: int):
     x = np.stack([split_ids[i : i + seq_len] for i in ix], axis=0)  # [B, T]
     y = np.stack([split_ids[i + 1 : i + seq_len + 1] for i in ix], axis=0)  # [B, T] next-token targets
     return x.astype(np.uint32), y.astype(np.uint32)
-
-
-def build_causal_mask(T: int):
-    m = np.tril(np.ones((T, T), dtype=np.float32))
-    return m.reshape(1, 1, T, T)

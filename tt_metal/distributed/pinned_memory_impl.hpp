@@ -42,7 +42,11 @@ public:
      * @param map_to_noc Whether to map the buffer to the NOC
      */
     PinnedMemoryImpl(
-        const std::vector<IDevice*>& devices, void* host_buffer, size_t buffer_size, bool map_to_noc = false);
+        const std::vector<IDevice*>& devices,
+        void* host_buffer,
+        size_t buffer_size,
+        bool map_to_noc = false,
+        PinnedMemoryDeviceAccess access = PinnedMemoryDeviceAccess::ReadWrite);
 
     ~PinnedMemoryImpl();
 
@@ -70,6 +74,7 @@ public:
 
     // Utility methods
     size_t get_buffer_size() const { return buffer_size_; }
+    PinnedMemoryDeviceAccess get_device_access() const { return device_access_; }
     std::vector<ChipId> get_device_ids() const;
     bool has_device(ChipId device_id) const;
     bool usable_from_noc(ChipId device_id) const;
@@ -85,13 +90,27 @@ private:
     void drain_barrier_events();
 
     void initialize_from_devices(
-        const std::vector<IDevice*>& devices, void* host_buffer, size_t buffer_size, bool map_to_noc);
+        const std::vector<IDevice*>& devices,
+        void* host_buffer,
+        size_t buffer_size,
+        bool map_to_noc,
+        PinnedMemoryDeviceAccess access);
 
     size_t buffer_size_;
     bool map_to_noc_;
+    PinnedMemoryDeviceAccess device_access_ = PinnedMemoryDeviceAccess::ReadWrite;
     bool use_64bit_address_space_ = false;
     // Offset from the aligned mapped base to the actual host buffer start
     size_t host_offset_ = 0;
+
+    // Mock/emulated devices have no SysmemManager (MockChip::get_sysmem_manager()
+    // returns nullptr), so there is nothing to map host memory to. In that case we
+    // keep the host pointer only and hand out dummy device/NOC addresses: this lets
+    // H2D/D2H socket construction proceed (it just bakes these as compile-time args
+    // for JIT and never dereferences the buffer at compile time). The runtime
+    // write_tensor/read_tensor path is not exercised under mock.
+    bool is_mock_ = false;
+    void* mock_host_ptr_ = nullptr;
 
     // Map from device ID to SysmemBuffer (keyed by MMIO device ID)
     std::unordered_map<ChipId, std::unique_ptr<tt::umd::SysmemBuffer>> device_buffers_;

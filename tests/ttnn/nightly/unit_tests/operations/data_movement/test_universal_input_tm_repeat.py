@@ -9,7 +9,7 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc
 
 _TTNN_TO_TORCH_DTYPE = {
     ttnn.bfloat16: torch.bfloat16,
@@ -45,29 +45,33 @@ def _tile_align(shard_shape, layout):
     return (h, w)
 
 
-def _height_shard_config(shape, device, num_cores=4, layout=ttnn.TILE_LAYOUT):
+def _height_shard_config(
+    shape, device, num_cores=4, layout=ttnn.TILE_LAYOUT, orientation=ttnn.ShardOrientation.ROW_MAJOR
+):
     """Height-sharded MemoryConfig."""
     compute_grid = device.compute_with_storage_grid_size()
     num_cores = min(num_cores, compute_grid.x * compute_grid.y)
     shard_grid = ttnn.num_cores_to_corerangeset(num_cores, compute_grid, True)
     total_h, w = _padded_hw(shape, layout)
     shard_shape = _tile_align(((total_h + num_cores - 1) // num_cores, w), layout)
-    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, orientation)
     return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
 
 
-def _width_shard_config(shape, device, num_cores=4, layout=ttnn.TILE_LAYOUT):
+def _width_shard_config(
+    shape, device, num_cores=4, layout=ttnn.TILE_LAYOUT, orientation=ttnn.ShardOrientation.ROW_MAJOR
+):
     """Width-sharded MemoryConfig."""
     compute_grid = device.compute_with_storage_grid_size()
     num_cores = min(num_cores, compute_grid.x * compute_grid.y)
     shard_grid = ttnn.num_cores_to_corerangeset(num_cores, compute_grid, True)
     total_h, w = _padded_hw(shape, layout)
     shard_shape = _tile_align((total_h, (w + num_cores - 1) // num_cores), layout)
-    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, orientation)
     return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
 
 
-def _block_shard_config(shape, device, layout=ttnn.TILE_LAYOUT):
+def _block_shard_config(shape, device, layout=ttnn.TILE_LAYOUT, orientation=ttnn.ShardOrientation.ROW_MAJOR):
     """Block-sharded MemoryConfig (2x2 grid)."""
     compute_grid = device.compute_with_storage_grid_size()
     grid_x = min(2, compute_grid.x)
@@ -80,7 +84,7 @@ def _block_shard_config(shape, device, layout=ttnn.TILE_LAYOUT):
     shard_spec = ttnn.ShardSpec(
         ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_x - 1, grid_y - 1))}),
         shard_shape,
-        ttnn.ShardOrientation.ROW_MAJOR,
+        orientation,
     )
     return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, shard_spec)
 
@@ -146,6 +150,7 @@ def run_repeat_test(
     output_mem_config=None,
     dtype=ttnn.bfloat16,
     pcc=0.9999,
+    expected_shard_orientation=None,
 ):
     """Run repeat and assert PCC + output memory_layout."""
     torch.manual_seed(12345)
@@ -171,6 +176,11 @@ def run_repeat_test(
             assert (
                 actual.shard_spec is not None
             ), "Sharded output requested but result has no shard_spec (silent fallback?)"
+            if expected_shard_orientation is not None:
+                assert actual.shard_spec.orientation == expected_shard_orientation, (
+                    f"Expected output shard orientation {expected_shard_orientation}, "
+                    f"got {actual.shard_spec.orientation}"
+                )
     elif input_mem_config.is_sharded():
         # Sharded input → inherit layout or fallback to interleaved (non-alignable shapes).
         assert actual.memory_layout in (
@@ -446,6 +456,40 @@ def test_repeat_rm_sharded_to_sharded(shape, input_factory, output_layout, devic
         input_mem_config=input_factory(device),
         output_mem_config=out_mc,
     )
+
+
+# Shard rows whose byte-size doesn't divide `get_aligned_page_size()` — repeat writes
+# with `offset=k*original_page_size_bytes` then hit `sharded_offset!=0` in the helper.
+@pytest.mark.parametrize(
+    "last_dim, num_repeats, num_cores",
+    [
+        pytest.param(56, 3, 2, id="ld56_r3_c2"),
+        pytest.param(24, 6, 2, id="ld24_r6_c2"),
+    ],
+)
+def test_repeat_rm_width_sharded_last_dim_non_page_aligned_offset(last_dim, num_repeats, num_cores, device):
+    compute_grid = device.compute_with_storage_grid_size()
+    if num_cores > compute_grid.x * compute_grid.y:
+        pytest.skip(f"Device has {compute_grid.x * compute_grid.y} cores, test needs {num_cores}")
+    height = 4
+    shape = (1, 1, height, last_dim)
+    if last_dim % num_cores != 0:
+        pytest.skip(f"width {last_dim} not divisible by shard core count {num_cores}")
+    shard_grid = ttnn.num_cores_to_corerangeset(num_cores, compute_grid, True)
+    in_spec = ttnn.ShardSpec(shard_grid, (height, last_dim // num_cores), ttnn.ShardOrientation.ROW_MAJOR)
+    in_mc = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, in_spec)
+
+    torch.manual_seed(12345)
+    x = torch.rand(shape, dtype=torch.bfloat16)
+    ttnn_in = ttnn.from_torch(x, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=in_mc)
+    result = ttnn.repeat(
+        ttnn_in,
+        [1, 1, 1, num_repeats],
+        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1),
+    )
+    ref = x.repeat(1, 1, 1, num_repeats)
+    got = ttnn.to_torch(result.cpu().to(ttnn.ROW_MAJOR_LAYOUT))
+    assert_equal(ref, got)
 
 
 # DRAM-sharded input -> L1 interleaved (to_memory_config fallback path).
@@ -766,7 +810,7 @@ def test_repeat_default_memory_config(shape, repeat_shape, input_factory, device
     )
 
 
-# Sharded input → sharded output without shard_spec (native + composite paths).
+# Sharded input → sharded output without shard_spec; col_major_* cases cover orientation propagation.
 @pytest.mark.parametrize(
     "shape, repeat_shape, input_factory, output_layout",
     [
@@ -791,17 +835,48 @@ def test_repeat_default_memory_config(shape, repeat_shape, input_factory, device
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             id="uneven_block_in_height_out_nospec",
         ),
+        pytest.param(
+            (1, 1, 64, 64),
+            (1, 1, 1, 2),
+            lambda d: _block_shard_config((1, 1, 64, 64), d, orientation=ttnn.ShardOrientation.COL_MAJOR),
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            id="col_major_block_in_block_out_nospec",
+        ),
+        pytest.param(
+            (1, 1, 64, 64),
+            (1, 1, 1, 2),
+            lambda d: _block_shard_config((1, 1, 64, 64), d, orientation=ttnn.ShardOrientation.COL_MAJOR),
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            id="col_major_block_in_height_out_nospec",
+        ),
     ],
 )
 def test_repeat_sharded_in_sharded_out_nospec(shape, repeat_shape, input_factory, output_layout, device):
+    in_mc = input_factory(device)
     out_mc = ttnn.MemoryConfig(output_layout, ttnn.BufferType.L1)
+    # The output should preserve the input's shard orientation through the synthesis path.
+    expected_orientation = in_mc.shard_spec.orientation if in_mc.is_sharded() and in_mc.shard_spec else None
     run_repeat_test(
         shape,
         repeat_shape,
         device,
         input_layout=ttnn.TILE_LAYOUT,
-        input_mem_config=input_factory(device),
+        input_mem_config=in_mc,
         output_mem_config=out_mc,
+        expected_shard_orientation=expected_orientation,
+    )
+
+
+def test_repeat_native_col_major_height_sharded_to_sharded_nospec(device):
+    shape = (1, 1, 128, 128)
+    run_repeat_test(
+        shape,
+        (1, 1, 1, 2),
+        device,
+        input_layout=ttnn.TILE_LAYOUT,
+        input_mem_config=_height_shard_config(shape, device, orientation=ttnn.ShardOrientation.COL_MAJOR),
+        output_mem_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1),
+        expected_shard_orientation=ttnn.ShardOrientation.COL_MAJOR,
     )
 
 
@@ -976,3 +1051,135 @@ def test_repeat_composite_edge_cases(shape, repeat_shape, in_mc_fn, out_mc_fn, p
         input_mem_config=in_mc_fn(device),
         output_mem_config=out_mc_fn(device),
     )
+
+
+# Optional output tensor — one case per distinct prealloc path (no shape matrix).
+@pytest.mark.parametrize(
+    "layout",
+    [
+        pytest.param(ttnn.ROW_MAJOR_LAYOUT, id="RM"),
+        pytest.param(ttnn.TILE_LAYOUT, id="TILE"),
+    ],
+)
+def test_repeat_optional_output_tensor(device, layout):
+    """L1-interleaved direct-land happy path (one RM + one TILE)."""
+    shape = (1, 2, 32, 32)
+    repeat_shape = (1, 2, 1, 1)
+    out_shape = (1, 4, 32, 32)
+    torch_input = torch.arange(0, 1 * 2 * 32 * 32, dtype=torch.bfloat16).reshape(shape)
+    torch_result = torch_input.repeat(repeat_shape)
+
+    input_tensor = ttnn.from_torch(
+        torch_input, layout=layout, device=device, dtype=ttnn.bfloat16, memory_config=L1_INTERLEAVED
+    )
+    optional_output = ttnn.empty(out_shape, ttnn.bfloat16, layout, device, L1_INTERLEAVED)
+
+    output = ttnn.repeat(input_tensor, list(repeat_shape), optional_output_tensor=optional_output)
+    assert output.buffer_address() == optional_output.buffer_address()
+
+    assert_equal(torch_result, ttnn.to_torch(output))
+    assert_equal(torch_result, ttnn.to_torch(optional_output))
+
+
+def test_repeat_optional_output_aliases_input_raises(device, expect_error):
+    """Prealloc must be a distinct buffer; shared storage would corrupt on direct-write paths."""
+    shape = (1, 2, 32, 32)
+    torch_input = torch.arange(0, 1 * 2 * 32 * 32, dtype=torch.bfloat16).reshape(shape)
+    input_tensor = ttnn.from_torch(
+        torch_input, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.bfloat16, memory_config=L1_INTERLEAVED
+    )
+    with expect_error(RuntimeError, "must not alias the input buffer"):
+        ttnn.repeat(input_tensor, [1, 1, 1, 1], optional_output_tensor=input_tensor)
+
+
+def test_repeat_optional_output_sharded_i2s(device):
+    """Sharded prealloc lands via interleaved_to_sharded(..., i2s_out)."""
+    shape = (1, 1, 64, 64)
+    repeat_shape = (1, 1, 1, 2)
+    out_shape = (1, 1, 64, 128)
+    torch_input = torch.arange(0, 1 * 1 * 64 * 64, dtype=torch.bfloat16).reshape(shape)
+    torch_result = torch_input.repeat(repeat_shape)
+
+    input_tensor = ttnn.from_torch(
+        torch_input, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16, memory_config=L1_INTERLEAVED
+    )
+    out_mc = _height_shard_config(out_shape, device, num_cores=2, layout=ttnn.TILE_LAYOUT)
+    optional_output = ttnn.empty(out_shape, ttnn.bfloat16, ttnn.TILE_LAYOUT, device, out_mc)
+
+    output = ttnn.repeat(input_tensor, list(repeat_shape), memory_config=out_mc, optional_output_tensor=optional_output)
+    assert output.buffer_address() == optional_output.buffer_address()
+    assert output.is_sharded()
+    assert output.memory_config().memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+    assert_equal(torch_result, ttnn.to_torch(output))
+
+
+def test_repeat_optional_output_tile_rm_roundtrip_copy(device):
+    """TILE not tile-repeat-eligible → RM roundtrip then finalize_into_preallocated copy."""
+    # H=16 is not a multiple of TILE_HEIGHT, so is_tile_repeat_eligible is false.
+    shape = (1, 2, 16, 32)
+    repeat_shape = (1, 2, 1, 1)
+    out_shape = (1, 4, 16, 32)
+    torch_input = torch.arange(0, 1 * 2 * 16 * 32, dtype=torch.bfloat16).reshape(shape)
+    torch_result = torch_input.repeat(repeat_shape)
+
+    input_tensor = ttnn.from_torch(
+        torch_input, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16, memory_config=L1_INTERLEAVED
+    )
+    optional_output = ttnn.empty(out_shape, ttnn.bfloat16, ttnn.TILE_LAYOUT, device, L1_INTERLEAVED)
+
+    output = ttnn.repeat(input_tensor, list(repeat_shape), optional_output_tensor=optional_output)
+    assert output.buffer_address() == optional_output.buffer_address()
+    assert_equal(torch_result, ttnn.to_torch(output))
+    assert_equal(torch_result, ttnn.to_torch(optional_output))
+
+
+def test_repeat_optional_output_identity(device):
+    """All-ones repeat copies into the prealloc (no longer a bare return of input)."""
+    shape = (1, 2, 32, 32)
+    torch_input = torch.arange(0, 1 * 2 * 32 * 32, dtype=torch.bfloat16).reshape(shape)
+    input_tensor = ttnn.from_torch(
+        torch_input, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16, memory_config=L1_INTERLEAVED
+    )
+    optional_output = ttnn.empty(shape, ttnn.bfloat16, ttnn.TILE_LAYOUT, device, L1_INTERLEAVED)
+
+    output = ttnn.repeat(input_tensor, [1, 1, 1, 1], optional_output_tensor=optional_output)
+    assert output.buffer_address() == optional_output.buffer_address()
+    assert output.buffer_address() != input_tensor.buffer_address()
+    assert_equal(torch_input, ttnn.to_torch(output))
+    assert_equal(torch_input, ttnn.to_torch(optional_output))
+
+
+def test_repeat_optional_output_zero_reps(device):
+    """Zero-repetition + prealloc: zeros then finalize copy into the zero-volume dst."""
+    shape = (1, 1, 32, 32)
+    repeat_shape = (1, 0, 1, 1)
+    out_shape = (1, 0, 32, 32)
+    torch_input = torch.arange(0, 1 * 1 * 32 * 32, dtype=torch.bfloat16).reshape(shape)
+
+    input_tensor = ttnn.from_torch(
+        torch_input, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.bfloat16, memory_config=L1_INTERLEAVED
+    )
+    optional_output = ttnn.empty(out_shape, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device, L1_INTERLEAVED)
+
+    output = ttnn.repeat(input_tensor, list(repeat_shape), optional_output_tensor=optional_output)
+    assert output.buffer_address() == optional_output.buffer_address()
+    got = ttnn.to_torch(output)
+    assert got.numel() == 0
+    assert tuple(got.shape) == out_shape
+
+
+def test_repeat_optional_output_mismatched_shard_spec_raises(device, expect_error):
+    """Explicit memory_config shard_spec must equal the prealloc's."""
+    shape = (1, 1, 64, 64)
+    repeat_shape = (1, 1, 1, 2)
+    out_shape = (1, 1, 64, 128)
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(
+        torch_input, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16, memory_config=L1_INTERLEAVED
+    )
+    prealloc_mc = _height_shard_config(out_shape, device, num_cores=2, layout=ttnn.TILE_LAYOUT)
+    other_mc = _height_shard_config(out_shape, device, num_cores=4, layout=ttnn.TILE_LAYOUT)
+    optional_output = ttnn.empty(out_shape, ttnn.bfloat16, ttnn.TILE_LAYOUT, device, prealloc_mc)
+
+    with expect_error(RuntimeError, "shard_spec must match"):
+        ttnn.repeat(input_tensor, list(repeat_shape), memory_config=other_mc, optional_output_tensor=optional_output)

@@ -1,14 +1,14 @@
 # Qwen3.5 / Qwen3.6 on Blackhole
 
 This directory implements Tenstorrent Blackhole inference for the hybrid
-**Gated DeltaNet + Gated Full Attention** Qwen3.5/3.6 family. Despite the
-`qwen3_5_9b` directory name, the same code path serves three checkpoints:
+**Gated DeltaNet + Gated Full Attention** Qwen3.5/3.6 family. The same code path serves three checkpoints:
 
 | Model            | `HF_MODEL`             | Mesh / `MESH_DEVICE` | Parallelism            |
 | ---------------- | ---------------------- | -------------------- | ---------------------- |
 | Qwen3.5-9B       | `Qwen/Qwen3.5-9B`      | single P150 — `P150` | single device          |
 | Qwen3.5-27B      | `Qwen/Qwen3.5-27B`     | P150x4 — `P150x4`    | 4-way tensor parallel  |
 | Qwen3.6-27B      | `Qwen/Qwen3.6-27B`     | P150x4 — `P150x4`    | 4-way tensor parallel  |
+| Qwen3.6-27B      | `Qwen/Qwen3.6-27B`     | P150x8 — `P150x8`    | 8-way tensor parallel  |
 
 - The **9B** runs on a **single Blackhole P150** device. It uses the validated
   single-device forward path (no collectives).
@@ -16,6 +16,13 @@ This directory implements Tenstorrent Blackhole inference for the hybrid
   (a `(1, 4)` Blackhole mesh) using **4-way tensor parallelism (TP)**. The TP
   path needs `FABRIC_1D` for the cross-device collectives (all-reduce /
   reduce-scatter) and a trace region for the captured chunk-outer prefill trace.
+- **Qwen3.6-27B additionally runs at TP=8** on a `(1, 8)` mesh (`P150x8`).
+  Because it has only **4 KV heads**, TP=8 cannot give each device its own head:
+  each head is instead **replicated across the device pair holding its GQA query
+  group** (devices 0-1 share KV head 0, 2-3 head 1, and so on), so
+  `n_local_kv_heads` is 1 at both TP=4 and TP=8 and the whole runtime KV path is
+  unchanged. See `tp_common.replicate_kv_weight` and
+  `ModelArgs.SUPPORTS_KV_REPLICATION`.
 
 Everything model-specific (hybrid layer dispatch, DeltaNet head/conv dims,
 partial rotary factor, vocab, layer count) is read from the parsed HF config, so
@@ -59,7 +66,15 @@ export MESH_DEVICE=P150x4
 
 `HF_MODEL` is the single source of truth for the checkpoint — it may be a Hugging
 Face hub id (resolved via `snapshot_download`) or a local checkpoint directory.
-`MESH_DEVICE` selects the mesh shape (`P150` → `(1,1)`, `P150x4` → `(1,4)`).
+`MESH_DEVICE` selects the mesh shape (`P150` → `(1,1)`, `P150x4` → `(1,4)`,
+`P150x8` → `(1,8)`).
+
+Optional flags:
+
+```bash
+# Run SDPA in BF8 (faster; slightly lower precision).
+export QWEN_SDPA_BF8=1
+```
 
 
 ## End-to-end demo test (`demo/text_demo.py`)
@@ -81,14 +96,14 @@ Run the preferred traced cases (the env vars above must already be exported):
 
 ```bash
 # All traced ISLs
-pytest models/demos/blackhole/qwen3_5_9b/demo/text_demo.py -v -s -k "traced"
+pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s -k "traced"
 
 # A single ISL, e.g. the short 128-token traced case
-pytest models/demos/blackhole/qwen3_5_9b/demo/text_demo.py -v -s -k "traced_128"
+pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s -k "traced_128"
 
 # Medium / long traced ISLs
-pytest models/demos/blackhole/qwen3_5_9b/demo/text_demo.py -v -s -k "traced_4k"
-pytest models/demos/blackhole/qwen3_5_9b/demo/text_demo.py -v -s -k "traced_64k"
+pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s -k "traced_4k"
+pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s -k "traced_64k"
 ```
 
 The **same command works for both 9B and 27B** — only the exported `HF_MODEL` /
@@ -135,9 +150,9 @@ per-test thresholds.
 Run the 9B unit suite (with `HF_MODEL=Qwen/Qwen3.5-9B`, `MESH_DEVICE=P150`):
 
 ```bash
-pytest models/demos/blackhole/qwen3_5_9b/tests/unit/ -v -s
-pytest models/demos/blackhole/qwen3_5_9b/tests/test_prefill.py -v -s
-pytest models/demos/blackhole/qwen3_5_9b/tests/test_weight_mapping.py -v -s
+pytest models/demos/blackhole/qwen36/tests/unit/ -v -s
+pytest models/demos/blackhole/qwen36/tests/test_prefill.py -v -s
+pytest models/demos/blackhole/qwen36/tests/test_weight_mapping.py -v -s
 ```
 
 > `test_prefill.py` auto-skips cases longer than `--max-prefill` (default 8192).
@@ -162,11 +177,11 @@ Run the 27B TP suite (with `HF_MODEL=Qwen/Qwen3.6-27B` or `Qwen/Qwen3.5-27B`,
 `MESH_DEVICE=P150x4`):
 
 ```bash
-pytest models/demos/blackhole/qwen3_5_9b/tests/test_mlp_tp.py -v -s
-pytest models/demos/blackhole/qwen3_5_9b/tests/test_attention_tp.py -v -s
-pytest models/demos/blackhole/qwen3_5_9b/tests/test_gdn_tp.py -v -s
-pytest models/demos/blackhole/qwen3_5_9b/tests/test_model_tp.py -svq
-pytest models/demos/blackhole/qwen3_5_9b/tests/test_generate_tp.py -v -s
+pytest models/demos/blackhole/qwen36/tests/test_mlp_tp.py -v -s
+pytest models/demos/blackhole/qwen36/tests/test_attention_tp.py -v -s
+pytest models/demos/blackhole/qwen36/tests/test_gdn_tp.py -v -s
+pytest models/demos/blackhole/qwen36/tests/test_model_tp.py -svq
+pytest models/demos/blackhole/qwen36/tests/test_generate_tp.py -v -s
 ```
 
 > `test_substate.py` and `test_weight_mapping.py` are pure-CPU and need no device.

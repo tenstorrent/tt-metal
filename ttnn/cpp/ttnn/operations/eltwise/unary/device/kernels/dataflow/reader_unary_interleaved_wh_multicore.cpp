@@ -5,7 +5,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
@@ -14,11 +14,13 @@ void kernel_main() {
     uint32_t single_block_size_row_arg = get_arg_val<uint32_t>(2);
     uint32_t single_block_size_col_arg = get_arg_val<uint32_t>(3);
 
-    constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t num_tiles_per_2d = get_compile_time_arg_val(0);
     constexpr uint32_t third_dim = get_compile_time_arg_val(1);
     constexpr uint32_t total_tiles_per_row = get_compile_time_arg_val(2);
-    constexpr auto src_args = TensorAccessorArgs<3>();
+    // The block factories emit one reader instance per buffer set, so the input buffer index is a
+    // compile-time arg rather than a fixed c_0 -- see BlockBufferSet in data_movement/common.
+    constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(3);
+    constexpr auto src_args = TensorAccessorArgs<4>();
 
     // single-tile ublocks
     constexpr uint32_t onetile = 1;
@@ -27,7 +29,7 @@ void kernel_main() {
     const auto s = TensorAccessor(src_args, src_addr);
 
     Noc noc;
-    CircularBuffer cb(cb_id_in0);
+    DataflowBuffer dfb(cb_id_in0);
 
 #ifdef BACKWARDS
     for (uint32_t dim = 0; dim > -third_dim; dim--) {
@@ -40,11 +42,11 @@ void kernel_main() {
             for (uint32_t r = 0; r < single_block_size_row_arg; r++) {
                 uint32_t tile = start_id + dim * num_tiles_per_2d + c * total_tiles_per_row + r;
 #endif
-                cb.reserve_back(onetile);
-                noc.async_read(s, cb, tile_bytes, {.page_id = tile}, {.offset_bytes = 0});
+                dfb.reserve_back(onetile);
+                noc.async_read(s, dfb, tile_bytes, {.page_id = tile}, {.offset_bytes = 0});
 
                 noc.async_read_barrier();
-                cb.push_back(onetile);
+                dfb.push_back(onetile);
             }
         }
     }

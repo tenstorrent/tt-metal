@@ -14,6 +14,7 @@
 #include "api/compute/tilize.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
+#include "api/dataflow/dataflow_buffer.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
 // #include "api/debug/dprint.h"
@@ -61,10 +62,10 @@ void tilize_in(
 }  // tilize_in()
 
 template <uint32_t in_cb_id, uint32_t in_block_w, uint32_t out_cb_id>
-inline void tilize_single_block(experimental::CB in_cb) {
-    in_cb.wait_front(in_block_w);
+inline void tilize_single_block(DataflowBuffer in_dfb) {
+    in_dfb.wait_front(in_block_w);
     fast_tilize_block(in_cb_id, in_block_w, out_cb_id);
-    in_cb.pop_front(in_block_w);
+    in_dfb.pop_front(in_block_w);
 }
 
 template <uint32_t in_cb_id, uint32_t window_reuse_offset>
@@ -74,10 +75,10 @@ inline uint32_t update_in_cb(uint32_t in_cb_addr) {
 }
 
 template <uint32_t in_cb_id, uint32_t in_block_w, uint32_t out_cb_id, uint32_t tilized_cb_row_offset>
-inline void tilize_single_block_with_out_cb_update(experimental::CB in_cb, uint32_t& out_cb_addr) {
+inline void tilize_single_block_with_out_cb_update(DataflowBuffer in_dfb, uint32_t& out_cb_addr) {
     PACK((get_local_cb_interface(out_cb_id).fifo_wr_ptr = out_cb_addr));
     PACK((out_cb_addr += tilized_cb_row_offset));
-    tilize_single_block<in_cb_id, in_block_w, out_cb_id>(in_cb);
+    tilize_single_block<in_cb_id, in_block_w, out_cb_id>(in_dfb);
 }
 
 template <
@@ -93,16 +94,16 @@ template <
     uint32_t tilized_cb_second_reader_offset,
     uint32_t image_width_in_tiles>
 inline void tilize_in_reuse_split_reader(
-    experimental::CB in1_cb,
-    experimental::CB in2_cb,
-    experimental::CB out_cb,
+    DataflowBuffer in1_dfb,
+    DataflowBuffer in2_dfb,
+    DataflowBuffer out_dfb,
     uint32_t act_cb_start_address,
     uint32_t act_cb_second_reader_start_address) {
     // with activation reuse, the activation buffers are sized to fit one output image width only,
     // so we need to interleave waits and pops on the two buffers to allow parallelization;
     // we reserve back tilized CB to store whole act block h - and then we update write pointers so that
     // we fill in first row of the first half (NCRISC), first row of the second half (BRISC) and so on
-    out_cb.reserve_back(out_cb_tiles);
+    out_dfb.reserve_back(out_cb_tiles);
     fast_tilize_init_with_dt(in1_cb_id, in_block_w, out_cb_id);
 
     uint32_t in1_cb_addr = act_cb_start_address;
@@ -128,9 +129,9 @@ inline void tilize_in_reuse_split_reader(
         in2_cb_addr = update_in_cb<in2_cb_id, window_reuse_offset>(in2_cb_addr);
         for (uint32_t image_col = 0; image_col < image_width_in_tiles; ++image_col) {
             tilize_single_block_with_out_cb_update<in1_cb_id, in_block_w, out_cb_id, tilized_cb_row_offset>(
-                in1_cb, out_cb_addr);
+                in1_dfb, out_cb_addr);
             tilize_single_block_with_out_cb_update<in2_cb_id, in_block_w, out_cb_id, tilized_cb_row_offset>(
-                in2_cb, out_cb_addr_second_reader);
+                in2_dfb, out_cb_addr_second_reader);
         }
     }
 
@@ -140,7 +141,7 @@ inline void tilize_in_reuse_split_reader(
     for (uint32_t image_col = 0; image_col < max_leftover; ++image_col) {
         if (image_col < leftover_in1) {
             tilize_single_block_with_out_cb_update<in1_cb_id, in_block_w, out_cb_id, tilized_cb_row_offset>(
-                in1_cb, out_cb_addr);
+                in1_dfb, out_cb_addr);
 
             if (image_col == image_width_in_tiles - 1) {
                 in1_cb_addr = update_in_cb<in1_cb_id, window_reuse_offset>(in1_cb_addr);
@@ -149,7 +150,7 @@ inline void tilize_in_reuse_split_reader(
 
         if (image_col < leftover_in2) {
             tilize_single_block_with_out_cb_update<in2_cb_id, in_block_w, out_cb_id, tilized_cb_row_offset>(
-                in2_cb, out_cb_addr_second_reader);
+                in2_dfb, out_cb_addr_second_reader);
 
             if (image_col == image_width_in_tiles - 1) {
                 in2_cb_addr = update_in_cb<in2_cb_id, window_reuse_offset>(in2_cb_addr);
@@ -162,25 +163,25 @@ inline void tilize_in_reuse_split_reader(
     // starts from whichever mid-region offset the last tilize_single_block left
     // and trips the LLK bounds assert (see GH #42510).
     PACK((get_local_cb_interface(out_cb_id).fifo_wr_ptr = out_cb_addr_init));
-    out_cb.push_back(out_cb_tiles);
+    out_dfb.push_back(out_cb_tiles);
     fast_tilize_uninit(in2_cb_id, out_cb_id, in_block_w);
 }
 
 template <uint32_t out_subblock_w, uint32_t out_block_w>
 inline void reblock_and_untilize(
-    experimental::CB interm_cb,
-    experimental::CB out_cb,
+    DataflowBuffer interm_dfb,
+    DataflowBuffer out_dfb,
     uint32_t num_out_subblocks_in_col,
     uint32_t out_subblock_num_tiles,
     uint32_t out_subblock_h) {
-    const uint32_t interm_cb_id = interm_cb.get_cb_id();
-    const uint32_t out_cb_id = out_cb.get_cb_id();
+    const uint32_t interm_cb_id = interm_dfb.get_id();
+    const uint32_t out_cb_id = out_dfb.get_id();
     uint32_t num_tiles_in_row_of_subblocks = mulsi3(out_subblock_num_tiles, num_out_subblocks_in_col);
-    interm_cb.wait_front(num_tiles_in_row_of_subblocks);
+    interm_dfb.wait_front(num_tiles_in_row_of_subblocks);
     uint32_t within_block_index = 0;
     for (uint32_t h = 0; h < out_subblock_h; h++) {
         uint32_t block_offset = 0;
-        out_cb.reserve_back(out_block_w);
+        out_dfb.reserve_back(out_block_w);
         for (uint32_t n = 0; n < num_out_subblocks_in_col; n++) {
             tile_regs_acquire();
             for (uint32_t w = 0; w < out_subblock_w; w++) {
@@ -193,10 +194,10 @@ inline void reblock_and_untilize(
             tile_regs_release();
             block_offset += out_subblock_num_tiles;
         }
-        out_cb.push_back(out_block_w);
+        out_dfb.push_back(out_block_w);
         within_block_index += out_subblock_w;
     }
-    interm_cb.pop_front(num_tiles_in_row_of_subblocks);
+    interm_dfb.pop_front(num_tiles_in_row_of_subblocks);
 }
 
 void kernel_main() {
@@ -227,25 +228,23 @@ void kernel_main() {
     constexpr uint32_t matmul_partials_cb = get_compile_time_arg_val(22);
     constexpr uint32_t tilized_in0_cb_id = get_compile_time_arg_val(23);
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(24);
-    constexpr bool partials_cb_uses_output = get_compile_time_arg_val(25);
-    constexpr uint32_t in0_nblocks_w_tilize = get_compile_time_arg_val(26);
-    constexpr bool check_skip_compute = get_compile_time_arg_val(27);
-    constexpr bool pack_relu = get_compile_time_arg_val(28);
-    constexpr bool packer_untilize = get_compile_time_arg_val(29);
-    constexpr bool packer_l1_acc = get_compile_time_arg_val(30);
-    constexpr bool fuse_bias = get_compile_time_arg_val(31);
-    constexpr bool split_reader = get_compile_time_arg_val(32);
-    constexpr bool activation_reuse = get_compile_time_arg_val(33);
+    constexpr uint32_t in0_nblocks_w_tilize = get_compile_time_arg_val(25);
+    constexpr bool check_skip_compute = get_compile_time_arg_val(26);
+    constexpr bool pack_relu = get_compile_time_arg_val(27);
+    constexpr bool packer_untilize = get_compile_time_arg_val(28);
+    constexpr bool packer_l1_acc = get_compile_time_arg_val(29);
+    constexpr bool fuse_bias = get_compile_time_arg_val(30);
+    constexpr bool split_reader = get_compile_time_arg_val(31);
+    constexpr bool activation_reuse = get_compile_time_arg_val(32);
 
-    constexpr uint32_t image_width_in_tiles = get_compile_time_arg_val(34);
-    constexpr uint32_t window_reuse_offset = get_compile_time_arg_val(35);
-    constexpr uint32_t tilized_cb_row_offset = get_compile_time_arg_val(36);
-    constexpr uint32_t tilized_cb_second_reader_offset = get_compile_time_arg_val(37);
-    constexpr bool split_reader_cb_shared = get_compile_time_arg_val(38) == 1;
+    constexpr uint32_t image_width_in_tiles = get_compile_time_arg_val(33);
+    constexpr uint32_t window_reuse_offset = get_compile_time_arg_val(34);
+    constexpr uint32_t tilized_cb_row_offset = get_compile_time_arg_val(35);
+    constexpr uint32_t tilized_cb_second_reader_offset = get_compile_time_arg_val(36);
+    constexpr bool split_reader_cb_shared = get_compile_time_arg_val(37) == 1;
 
     constexpr uint32_t out_block_num_tiles = in0_num_subblocks * in1_num_subblocks * out_subblock_num_tiles;
     constexpr uint32_t out_block_w = in1_block_w;
-    constexpr bool spill = in0_num_blocks_w > 1;
 
     constexpr uint32_t untilize_mode_out_cb_id = untilize_out ? matmul_partials_cb : out_cb_id;
 
@@ -279,40 +278,35 @@ void kernel_main() {
         skip_compute = (bool)get_arg_val<uint32_t>(0);
     }
 
-    experimental::CB cb_in0(in0_cb_id);
-    experimental::CB cb_in0_second_reader(in0_cb_second_reader_id);
-    experimental::CB cb_tilized_in0(tilized_in0_cb_id);
-    experimental::CB cb_mm_in0(mm_in0_cb_id);
-    experimental::CB cb_in1(in1_cb_id);
-    experimental::CB cb_matmul_partials(matmul_partials_cb);
-    experimental::CB cb_mm_out(mm_out_cb_id);
-    experimental::CB cb_out(out_cb_id);
-    experimental::CB cb_bias(bias_cb_id);
-    experimental::CB cb_untilize_mode_out(untilize_mode_out_cb_id);
+    DataflowBuffer dfb_in0(in0_cb_id);
+    DataflowBuffer dfb_in0_second_reader(in0_cb_second_reader_id);
+    DataflowBuffer dfb_tilized_in0(tilized_in0_cb_id);
+    DataflowBuffer dfb_mm_in0(mm_in0_cb_id);
+    DataflowBuffer dfb_in1(in1_cb_id);
+    DataflowBuffer dfb_matmul_partials(matmul_partials_cb);
+    DataflowBuffer dfb_mm_out(mm_out_cb_id);
+    DataflowBuffer dfb_out(out_cb_id);
+    DataflowBuffer dfb_bias(bias_cb_id);
+    DataflowBuffer dfb_untilize_mode_out(untilize_mode_out_cb_id);
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(mm_in0_cb_id, in1_cb_id, out_cb_id);
     matmul_block_init(mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
 #ifdef SFPU_OP_INIT_ACTIVATION
     SFPU_OP_INIT_ACTIVATION
 #endif
-    UNPACK(uint32_t partials_cb_read_ptr = get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr;)
-    PACK(uint32_t partials_cb_write_ptr = get_local_cb_interface(matmul_partials_cb).fifo_wr_ptr;)
     // in1 num blocks w is the outer loop. Output blocks are computed in col major order.
     for (uint32_t in1_block_w_i = 0; in1_block_w_i < in1_num_blocks_w; ++in1_block_w_i) {
         for (uint32_t in0_block_h_i = 0; in0_block_h_i < in0_num_blocks_h; ++in0_block_h_i) {
-            bool enable_reload = false;
-
             if constexpr (pack_relu) {
                 // for each output block we start we relu disabled so that intermediate results are not relu'd
                 PACK((llk_pack_relu_config(ReluConfig::none())));
             }
-            if constexpr (partials_cb_uses_output) {
-                UNPACK(partials_cb_read_ptr = get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr;)
-                PACK(partials_cb_write_ptr = get_local_cb_interface(matmul_partials_cb).fifo_wr_ptr;)
-            }
-            uint32_t curr_matmul_out_cb = matmul_partials_cb;
             for (uint32_t in0_block_w_i = 0; in0_block_w_i < in0_num_blocks_w; ++in0_block_w_i) {
-                bool last_inner_dim_block = (in0_block_w_i == in0_num_blocks_w - 1);
+                const bool last_inner_dim_block = (in0_block_w_i == in0_num_blocks_w - 1);
+                const bool reload_partials =
+                    in0_block_w_i > 0 && (!packer_l1_acc || (!fuse_bias && last_inner_dim_block));
+                const uint32_t curr_matmul_out_cb =
+                    last_inner_dim_block && !fuse_bias ? mm_out_cb_id : matmul_partials_cb;
                 if constexpr (!height_sharded) {
                     if (in0_block_w_i % in0_nblocks_w_tilize == 0) {
                         if constexpr (pack_relu && !fuse_bias) {
@@ -322,7 +316,13 @@ void kernel_main() {
                             }
                         }
                         if constexpr (packer_l1_acc) {
-                            pack_reconfig_data_format(curr_matmul_out_cb, tilized_in0_cb_id);
+                            // curr_matmul_out_cb is the upcoming pack target, not necessarily PACK's current format.
+                            // After K0, PACK is configured for partials until this tilize starts.
+                            if (in0_block_w_i == 0) {
+                                pack_reconfig_data_format(tilized_in0_cb_id);
+                            } else {
+                                pack_reconfig_data_format(matmul_partials_cb, tilized_in0_cb_id);
+                            }
                             pack_reconfig_l1_acc(0);
                         }
                         tilize_in<
@@ -347,7 +347,13 @@ void kernel_main() {
                         }
                     }
                     if constexpr (packer_l1_acc) {
-                        pack_reconfig_data_format(curr_matmul_out_cb, tilized_in0_cb_id);
+                        // curr_matmul_out_cb is the upcoming pack target, not necessarily PACK's current format.
+                        // After K0, PACK is configured for partials until this tilize starts.
+                        if (in0_block_w_i == 0) {
+                            pack_reconfig_data_format(tilized_in0_cb_id);
+                        } else {
+                            pack_reconfig_data_format(matmul_partials_cb, tilized_in0_cb_id);
+                        }
                         pack_reconfig_l1_acc(0);
                     }
 
@@ -374,9 +380,9 @@ void kernel_main() {
                                 tilized_cb_row_offset,
                                 tilized_cb_second_reader_offset,
                                 image_width_in_tiles>(
-                                cb_in0,
-                                cb_in0_second_reader,
-                                cb_tilized_in0,
+                                dfb_in0,
+                                dfb_in0_second_reader,
+                                dfb_tilized_in0,
                                 act_cb_start_address,
                                 act_cb_second_reader_start_address);
                         }
@@ -386,17 +392,17 @@ void kernel_main() {
                     matmul_block_init(mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
                 }
 
-                cb_mm_in0.wait_front(in0_block_num_tiles);
+                dfb_mm_in0.wait_front(in0_block_num_tiles);
 
                 uint32_t in0_index_subblock_offset = 0;
                 if constexpr (check_skip_compute) {
                     if (skip_compute) {
-                        cb_mm_in0.pop_front(in0_block_num_tiles);
+                        dfb_mm_in0.pop_front(in0_block_num_tiles);
                         continue;
                     }
                 }
 
-                cb_in1.wait_front(in1_block_num_tiles);
+                dfb_in1.wait_front(in1_block_num_tiles);
 
                 if (last_inner_dim_block) {
                     if constexpr (!fuse_bias) {
@@ -404,7 +410,6 @@ void kernel_main() {
                             // if last block we pack the final result with relu enabled
                             PACK((llk_pack_relu_config(ReluConfig::zero())));
                         }
-                        curr_matmul_out_cb = mm_out_cb_id;
                     }
                 }
 
@@ -414,18 +419,19 @@ void kernel_main() {
                 for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
                     uint32_t in1_index_subblock_offset = 0;
                     for (uint32_t in1_subblock_i = 0; in1_subblock_i < in1_num_subblocks; ++in1_subblock_i) {
-                        if (enable_reload) {
+                        if (reload_partials) {
                             // Reconfigure input
-                            copy_tile_to_dst_init_short_with_dt(in1_cb_id, matmul_partials_cb);
-                            cb_matmul_partials.wait_front(out_subblock_num_tiles);
+                            reconfig_data_format_srca(in1_cb_id, matmul_partials_cb);
+                            copy_init(matmul_partials_cb);
+                            dfb_matmul_partials.wait_front(out_subblock_num_tiles);
                             tile_regs_acquire();
 
                             uint32_t start_dst_index = 0;
                             uint32_t start_tile_index = 0;
-                            copy_block_matmul_partials(
+                            copy_block(
                                 matmul_partials_cb, start_tile_index, start_dst_index, out_subblock_num_tiles);
 
-                            cb_matmul_partials.pop_front(out_subblock_num_tiles);
+                            dfb_matmul_partials.pop_front(out_subblock_num_tiles);
                             // Reconfigure srcA back
                             reconfig_data_format_srca(matmul_partials_cb, in1_cb_id);
                             matmul_block_init(
@@ -470,93 +476,39 @@ void kernel_main() {
                         }
 #endif
                         tile_regs_commit();
-                        experimental::CB curr_out_cb =
-                            curr_matmul_out_cb == matmul_partials_cb ? cb_matmul_partials : cb_mm_out;
-                        curr_out_cb.reserve_back(out_subblock_num_tiles);
+                        DataflowBuffer curr_out_dfb =
+                            curr_matmul_out_cb == matmul_partials_cb ? dfb_matmul_partials : dfb_mm_out;
+                        curr_out_dfb.reserve_back(out_subblock_num_tiles);
                         tile_regs_wait();
 
                         if constexpr (packer_l1_acc) {
-                            // no accumulation for first iteration, last iteration
-                            // accumulation happens with copying tiles to dst
-                            if (in0_block_w_i == 0) {
-                                pack_reconfig_l1_acc(0);
-                            } else if (last_inner_dim_block) {
-                                pack_reconfig_l1_acc(fuse_bias ? 1 : 0);
-                            } else {
-                                pack_reconfig_l1_acc(1);
-                            }
+                            pack_reconfig_l1_acc(in0_block_w_i == 0 || reload_partials ? 0 : 1);
                         }
 
                         uint32_t start_dst_index = 0;
-                        pack_tile_block(start_dst_index, curr_matmul_out_cb, out_subblock_num_tiles);
+                        pack_block(start_dst_index, curr_matmul_out_cb, out_subblock_num_tiles);
 
                         tile_regs_release();
-                        curr_out_cb.push_back(out_subblock_num_tiles);
+                        curr_out_dfb.push_back(out_subblock_num_tiles);
 
                         in1_index_subblock_offset += out_subblock_w;
                     }  // for in1_num_subblocks
                     in0_index_subblock_offset += in0_subblock_num_tiles;
                 }
-                if (curr_matmul_out_cb == matmul_partials_cb) {
-                    if constexpr (!partials_cb_uses_output) {
-                        UNPACK(get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr = partials_cb_read_ptr;)
-                        PACK(get_local_cb_interface(matmul_partials_cb).fifo_wr_ptr = partials_cb_write_ptr;)
-                    }
-                }
                 if constexpr (packer_l1_acc) {
-                    if constexpr (fuse_bias) {
-                        if (in0_block_w_i < in0_num_blocks_w - 1) {
-                            // Wait for l1 accumulation to populate interm buffer,
-                            // then pop to update fifo rd pointer
-                            cb_matmul_partials.wait_front(out_block_num_tiles);
-                            cb_matmul_partials.pop_front(out_block_num_tiles);
-                            if constexpr (spill) {
-                                UNPACK(get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr = partials_cb_read_ptr);
-                                PACK(get_local_cb_interface(matmul_partials_cb).fifo_wr_ptr = partials_cb_write_ptr);
-                            }
-                        }
-                        // never reload when with bias, bias uses interm buffer
-                        enable_reload = false;
-                    } else {
-                        // Last iteration does spill and reload to output buffer
-                        if (in0_block_w_i < in0_num_blocks_w - 2) {
-                            cb_matmul_partials.wait_front(out_block_num_tiles);
-                            cb_matmul_partials.pop_front(out_block_num_tiles);
-                            if constexpr (spill) {
-                                UNPACK(get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr = partials_cb_read_ptr);
-                                PACK(get_local_cb_interface(matmul_partials_cb).fifo_wr_ptr = partials_cb_write_ptr);
-                            }
-                        }
-                        if (in0_block_w_i == in0_num_blocks_w - 2) {
-                            enable_reload = true;
-                        }
-                    }
-                } else {
-                    if constexpr (spill) {
-                        enable_reload = true;
-
-                        if constexpr (fuse_bias) {
-                            if (!last_inner_dim_block) {
-                                UNPACK(get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr = partials_cb_read_ptr);
-                                PACK(get_local_cb_interface(matmul_partials_cb).fifo_wr_ptr = partials_cb_write_ptr);
-                            }
-                        } else {
-                            if (!last_inner_dim_block) {
-                                UNPACK(get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr = partials_cb_read_ptr);
-                            }
-                            if (in0_block_w_i < in0_num_blocks_w - 2) {
-                                PACK(get_local_cb_interface(matmul_partials_cb).fifo_wr_ptr = partials_cb_write_ptr);
-                            }
-                        }
+                    const bool keep_partials =
+                        last_inner_dim_block || (!fuse_bias && in0_block_w_i == in0_num_blocks_w - 2);
+                    if (curr_matmul_out_cb == matmul_partials_cb && !keep_partials) {
+                        // The logical partials FIFO is exactly one output block. Releasing the completed block makes
+                        // the next K pass wrap naturally to the same physical addresses for packer accumulation.
+                        dfb_matmul_partials.wait_front(out_block_num_tiles);
+                        dfb_matmul_partials.pop_front(out_block_num_tiles);
                     }
                 }
 
-                cb_mm_in0.pop_front(in0_block_num_tiles);
-                cb_in1.pop_front(in1_block_num_tiles);
+                dfb_mm_in0.pop_front(in0_block_num_tiles);
+                dfb_in1.pop_front(in1_block_num_tiles);
             }  // for in0_num_blocks_w
-            if constexpr (matmul_partials_cb == mm_out_cb_id && partials_cb_uses_output) {
-                UNPACK(get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr = partials_cb_read_ptr);
-            }
             if constexpr (check_skip_compute) {
                 if (skip_compute) {
                     continue;
@@ -572,10 +524,10 @@ void kernel_main() {
                     pack_reconfig_l1_acc(0);
                 }
                 reconfig_data_format(in1_cb_id, matmul_partials_cb, mm_in0_cb_id, bias_cb_id);
-                add_bcast_rows_init_short(matmul_partials_cb, bias_cb_id);
+                add_bcast_rows_init(matmul_partials_cb, bias_cb_id);
 
-                cb_bias.wait_front(bias_ntiles_w);
-                cb_matmul_partials.wait_front(out_block_num_tiles);
+                dfb_bias.wait_front(bias_ntiles_w);
+                dfb_matmul_partials.wait_front(out_block_num_tiles);
                 for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
                     uint32_t in1_index_subblock_offset = 0;
                     for (uint32_t in1_subblock_i = 0; in1_subblock_i < in1_num_subblocks; ++in1_subblock_i) {
@@ -597,23 +549,19 @@ void kernel_main() {
 #endif
                         tile_regs_commit();
                         // do not pop front bias as it may be used again for subsequent blocks
-                        cb_matmul_partials.pop_front(out_subblock_num_tiles);
+                        dfb_matmul_partials.pop_front(out_subblock_num_tiles);
 
-                        cb_untilize_mode_out.reserve_back(out_subblock_num_tiles);
+                        dfb_untilize_mode_out.reserve_back(out_subblock_num_tiles);
                         tile_regs_wait();
                         for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
                             pack_tile(i, untilize_mode_out_cb_id);
                         }
                         tile_regs_release();
-                        cb_untilize_mode_out.push_back(out_subblock_num_tiles);
+                        dfb_untilize_mode_out.push_back(out_subblock_num_tiles);
 
                         in1_index_subblock_offset += out_subblock_w;
                     }  // for in1_num_subblocks
                 }  // in0_num_subblocks
-                if constexpr (untilize_out) {
-                    UNPACK(get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr = partials_cb_read_ptr);
-                    PACK(get_local_cb_interface(matmul_partials_cb).fifo_wr_ptr = partials_cb_write_ptr);
-                }
             }
             if constexpr (untilize_out) {
                 if constexpr (packer_l1_acc) {
@@ -629,10 +577,10 @@ void kernel_main() {
 
                 if constexpr (packer_untilize) {
                     pack_untilize_dest_init<out_subblock_w, out_block_w>(out_cb_id);
-                    copy_tile_to_dst_init_short(matmul_partials_cb);
+                    copy_init(matmul_partials_cb);
                     for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
                         reblock_and_untilize<out_subblock_w, out_block_w>(
-                            cb_matmul_partials, cb_out, in1_num_subblocks, out_subblock_num_tiles, out_subblock_h);
+                            dfb_matmul_partials, dfb_out, in1_num_subblocks, out_subblock_num_tiles, out_subblock_h);
                     }
                     pack_untilize_uninit(matmul_partials_cb);
                 } else {

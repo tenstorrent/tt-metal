@@ -20,7 +20,7 @@ namespace {
 
 ttnn::Tensor expand_wrapper(
     const ttnn::Tensor& input_tensor,
-    const ttnn::SmallVector<int32_t>& output_shape,
+    const ttsl::SmallVector<int32_t>& output_shape,
     const std::optional<ttnn::MemoryConfig>& memory_config) {
     return ttnn::expand(input_tensor, output_shape, memory_config);
 }

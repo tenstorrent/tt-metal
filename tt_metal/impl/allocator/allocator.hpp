@@ -4,6 +4,10 @@
 
 #pragma once
 
+#include <atomic>
+#include <unordered_map>
+#include <unordered_set>
+
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/device.hpp>
 
@@ -38,6 +42,30 @@ public:
     void set_hybrid_device_allocators(const std::vector<AllocatorImpl*>& device_allocators);
     void clear_hybrid_device_allocators();
 
+    // Per-bank ranges reserved on devices this rank does not drive, appended to the locally
+    // gathered ranges in allocate_buffer(). set_hybrid_device_allocators() reaches only local
+    // devices, so on a submesh co-owned by several ranks each co-owner would otherwise subtract a
+    // smaller occupied set and place the same replicated buffer at a different address over the
+    // same physical L1. MeshBuffer::create collects these by all-gather over the co-owning ranks.
+    // Empty on a single-rank mesh.
+    void set_hybrid_remote_occupied_ranges(std::vector<std::pair<DeviceAddr, DeviceAddr>> ranges);
+    void clear_hybrid_remote_occupied_ranges();
+
+    // Claim/release the HYBRID allocation span. The two setters above pass state into
+    // allocate_buffer, so a hybrid allocation is a set -> allocate -> teardown protocol rather
+    // than one atomic call, and per-method locking cannot make it safe: a second thread's
+    // teardown lands between the first's set and its allocate, the first then places without the
+    // per-core reservations, and its buffer overlaps one on the same core. Concurrent hybrid
+    // allocations on a mesh are therefore unsupported, and this reports the violation instead of
+    // leaving it silent.
+    //
+    // try_begin returns false when a span is already open; the caller is expected to fail. Fails
+    // rather than blocking because on a co-owned mesh the span contains a collective, and a
+    // blocking guard would park every other thread behind a rank that never arrives. LOCKSTEP
+    // mode sets none of this state and is unaffected.
+    [[nodiscard]] bool try_begin_hybrid_allocation(const std::vector<AllocatorImpl*>& device_allocators);
+    void end_hybrid_allocation();
+
     void deallocate_buffer(Buffer* buffer);
     void deallocate_buffers();
 
@@ -55,6 +83,11 @@ public:
     const std::vector<std::uint32_t>& get_bank_ids_from_dram_channel(std::uint32_t dram_channel) const;
     const std::vector<std::uint32_t>& get_bank_ids_from_logical_core(
         BufferType buffer_type, const CoreCoord& logical_core) const;
+
+    // Whether logical_core has a bank of buffer_type. Same lookup as
+    // get_bank_ids_from_logical_core(), but reports absence instead of throwing, for callers
+    // validating a core before they need its bank ids.
+    bool has_bank(BufferType buffer_type, const CoreCoord& logical_core) const;
 
     DeviceAddr get_base_allocator_addr(const HalMemType& mem_type) const;
 
@@ -77,8 +110,19 @@ public:
     void shrink_allocator_size(const BufferType& buffer_type, DeviceAddr shrink_size, bool bottom_up = true);
     void reset_allocator_size(const BufferType& buffer_type);
 
-    void mark_allocations_unsafe();
-    void mark_allocations_safe();
+    void register_active_trace(std::uint32_t trace_id);
+    void unregister_active_trace(std::uint32_t trace_id);
+
+    // Unsafe allocation tracking is per trace. Allocation context remains per buffer because a
+    // buffer has the same allocation site regardless of how many older traces can corrupt it.
+    std::unordered_map<size_t, std::string> get_unsafe_tracked_ids(std::uint32_t trace_id);
+    void remove_unsafe_tracked_id(size_t buffer_unique_id);
+    static std::vector<size_t> drain_pending_traceback_ids();
+    static std::vector<size_t> drain_retired_traceback_ids();
+    static void push_corruptible_allocation_scope(const std::vector<AllocatorImpl*>& allocators);
+    static void pop_corruptible_allocation_scope();
+
+    // See <tt-metalium/experimental/allocation_context.hpp> for the thread-local context stack API.
 
     // High water mark tracking for DRAM allocations during trace capture
     // Delegates to BankManager to account for banking properly
@@ -122,12 +166,15 @@ protected:
 
 private:
     void verify_safe_allocation() const;
+    void record_allocation_if_unsafe(Buffer* buffer);
+    bool in_corruptible_allocation_scope() const;
 
     mutable std::mutex mutex_;
 
     // Set to true if allocating a buffer is unsafe. This happens when a live trace on device can corrupt
     // memory allocated by the user (memory used by trace is not tracked in the allocator once the trace is captured).
     bool allocations_unsafe_ = false;
+
     std::unique_ptr<BankManager> dram_manager_;
     std::unique_ptr<BankManager> l1_manager_;
     std::unique_ptr<BankManager> l1_small_manager_;
@@ -142,6 +189,13 @@ private:
     // HYBRID mode: device allocators to query per-bank ranges during lockstep allocation.
     std::vector<AllocatorImpl*> hybrid_device_allocators_;
 
+    // HYBRID mode: per-bank ranges occupied on co-owning ranks' devices (see the setter).
+    std::vector<std::pair<DeviceAddr, DeviceAddr>> hybrid_remote_occupied_ranges_;
+
+    // Set while a HYBRID allocation span is open (see try_begin_hybrid_allocation). Not a mutex:
+    // a same-thread re-entry must report a bug, not deadlock or hit try_lock's UB.
+    std::atomic<bool> hybrid_allocation_in_progress_{false};
+
     // config_ is stored in a unique_ptr because AllocatorConfig is currently an incomplete type in API directory.
     //
     // TODO(river): revert this to inplace storage if we can shove Allocator into impl.
@@ -151,6 +205,15 @@ private:
     // stability
     // TODO(river): Revisit during API refactor.
     std::unique_ptr<Allocator> view_;
+
+    // Keep all tracker-only state after the allocator's original fields so the
+    // compiled-in feature does not perturb their cache layout when tracking is disabled.
+    bool tracking_enabled_ = false;
+    bool traceback_capture_enabled_ = false;
+    bool skip_program_cache_ = false;
+    std::uint32_t active_trace_count_ = 0;
+    std::unordered_map<std::uint32_t, std::unordered_set<size_t>> unsafe_tracked_ids_by_trace_;
+    std::unordered_map<size_t, std::string> unsafe_allocation_contexts_;
 };
 
 }  // namespace tt::tt_metal

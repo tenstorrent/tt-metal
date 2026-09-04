@@ -227,6 +227,8 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
     std::vector<uint32_t> storage_core_noc_y;
     std::vector<CoreCoord> storage_core_coords =
         corerange_to_cores(all_storage_cores, all_storage_cores.num_cores(), true);
+    storage_core_noc_x.reserve(storage_core_coords.size());
+    storage_core_noc_y.reserve(storage_core_coords.size());
     for (auto core : storage_core_coords) {
         storage_core_noc_x.push_back((std::uint32_t)mesh_device->worker_core_from_logical_core(core).x);
         storage_core_noc_y.push_back((std::uint32_t)mesh_device->worker_core_from_logical_core(core).y);
@@ -950,6 +952,7 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
                 std::swap(mcast_start, mcast_end);
             }
             std::vector<uint32_t> mcast_sender_args;
+            mcast_sender_args.reserve(6 + in0_mcast_noc_x.size() + in0_mcast_noc_y.size());
             mcast_sender_args.push_back(mcast_start.x);
             mcast_sender_args.push_back(mcast_start.y);
             mcast_sender_args.push_back(mcast_end.x);
@@ -963,6 +966,7 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
             (not use_two_stage_reduce and width_index < num_cores_all_to_all) or
             (use_two_stage_reduce and width_index_two_stage < 1)) {
             std::vector<uint32_t> mcast_receiver_args;
+            mcast_receiver_args.reserve(4 + in0_mcast_noc_x.size() + in0_mcast_noc_y.size());
             mcast_receiver_args.push_back(all_to_all_worker_tile_offset_size_bytes);
             bool is_second_stage_reader;
             if (use_two_stage_reduce and width_index < 1) {
@@ -980,6 +984,7 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
                 program, reader_mcast_receiver_kernels_id_all_to_all, core, mcast_receiver_args);
         } else {
             std::vector<uint32_t> mcast_receiver_args;
+            mcast_receiver_args.reserve(6);
             mcast_receiver_args.push_back(all_to_all_worker_tile_offset_size_bytes);
             mcast_receiver_args.push_back(0);
             mcast_receiver_args.push_back(0);
@@ -1127,6 +1132,7 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
                 writer_mcast_sender_args.end(), all_gather_rts.begin(), all_gather_rts.end());
             writer_mcast_sender_args.at(0) = writer_mcast_sender_args.size();
             std::vector<uint32_t> writer_mcast_post_sender_args;
+            writer_mcast_post_sender_args.reserve(4 + write_back_writer_args.size());
             if (use_two_stage_reduce) {
                 if (width_index < 1) {
                     writer_mcast_post_sender_args.push_back(cinv_bits);
@@ -1172,6 +1178,7 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
                 writer_mcast_receiver_args.end(), all_gather_rts.begin(), all_gather_rts.end());
             writer_mcast_receiver_args.at(0) = writer_mcast_receiver_args.size();
             std::vector<uint32_t> writer_mcast_post_receiver_args;
+            writer_mcast_post_receiver_args.reserve(4 + write_back_writer_args.size());
             writer_mcast_post_receiver_args.push_back(cinv_bits);
             writer_mcast_post_receiver_args.push_back(e.u);
             writer_mcast_post_receiver_args.push_back(gamma_dram_addr);

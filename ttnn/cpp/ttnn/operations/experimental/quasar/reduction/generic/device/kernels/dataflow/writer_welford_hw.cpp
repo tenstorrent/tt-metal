@@ -125,7 +125,7 @@ void kernel_main() {
         // L1 contents there are harmless.
         cb_combined_obj.reserve_back(1);
         if constexpr (combined_is_bf16) {
-            auto* combined_ptr = reinterpret_cast<uint16_t*>(cb_combined_obj.get_write_ptr());
+            auto* combined_ptr = reinterpret_cast<volatile uint16_t*>(cb_combined_obj.get_write_ptr());
             for (uint32_t i = 0; i < FACE_W; ++i) {
                 combined_ptr[i] = 0;
             }
@@ -133,7 +133,7 @@ void kernel_main() {
             // hardware so the output is bit-identical to a packer-produced bf16.
             combined_ptr[0] = fp32_to_bf16(final_var);
         } else {
-            auto* combined_ptr = reinterpret_cast<float*>(cb_combined_obj.get_write_ptr());
+            auto* combined_ptr = reinterpret_cast<volatile float*>(cb_combined_obj.get_write_ptr());
             for (uint32_t i = 0; i < FACE_W; ++i) {
                 combined_ptr[i] = 0.0f;
             }

@@ -10,6 +10,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "llrt/rtoptions.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 #ifndef OVERRIDE_KERNEL_PREFIX
 #define OVERRIDE_KERNEL_PREFIX ""
@@ -43,9 +44,10 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelMultipleThreads) {
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 
-    constexpr uint32_t l1_address = 1000 * 1024;
+    const uint32_t l1_address = MetalContext::instance().hal().get_dev_addr(
+        HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
     std::vector<uint32_t> init_values(16, 0);
-    tt_metal::detail::WriteToDeviceL1(mesh_device->get_devices()[0], node, l1_address, init_values);
+    slow_dispatch::WriteToL1(*mesh_device, node, l1_address, init_values);
 
     const experimental::KernelSpecName COMPUTE_KERNEL{"risc_math"};
 
@@ -59,7 +61,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelMultipleThreads) {
             {
                 .runtime_arg_names = {"l1_address"},
             },
-        .hw_config = experimental::ComputeHardwareConfig{},
+        .hw_config = experimental::ComputeGen2Config{},
     };
 
     experimental::WorkUnitSpec main_wu{
@@ -78,7 +80,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelMultipleThreads) {
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
         .kernel = COMPUTE_KERNEL,
-        .runtime_arg_values = {{node, {{"l1_address", l1_address}}}},
+        .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(node, {{"l1_address", l1_address}}),
     }};
     experimental::SetProgramRunArgs(program, params);
 
@@ -86,8 +88,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelMultipleThreads) {
     distributed::EnqueueMeshWorkload(cq, workload, true);
 
     std::vector<uint32_t> actual_values(16, 0);
-    tt_metal::detail::ReadFromDeviceL1(
-        mesh_device->get_devices()[0], node, l1_address, 16 * sizeof(uint32_t), actual_values);
+    slow_dispatch::ReadFromL1(*mesh_device, node, l1_address, 16 * sizeof(uint32_t), actual_values);
 
     const std::vector<uint32_t> expected_values = {4, 6, 5, 9, 8, 10, 9, 13, 12, 14, 13, 17, 16, 18, 17, 21};
 
@@ -119,9 +120,10 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelSingleThread) {
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 
-    constexpr uint32_t l1_address = 1000 * 1024;
+    const uint32_t l1_address = MetalContext::instance().hal().get_dev_addr(
+        HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
     std::vector<uint32_t> init_values(4, 0);
-    tt_metal::detail::WriteToDeviceL1(mesh_device->get_devices()[0], node, l1_address, init_values);
+    slow_dispatch::WriteToL1(*mesh_device, node, l1_address, init_values);
 
     const experimental::KernelSpecName COMPUTE_KERNEL{"risc_math"};
 
@@ -135,7 +137,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelSingleThread) {
             {
                 .runtime_arg_names = {"l1_address"},
             },
-        .hw_config = experimental::ComputeHardwareConfig{},
+        .hw_config = experimental::ComputeGen2Config{},
     };
 
     experimental::WorkUnitSpec main_wu{
@@ -154,7 +156,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelSingleThread) {
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
         .kernel = COMPUTE_KERNEL,
-        .runtime_arg_values = {{node, {{"l1_address", l1_address}}}},
+        .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(node, {{"l1_address", l1_address}}),
     }};
     experimental::SetProgramRunArgs(program, params);
 
@@ -162,8 +164,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelSingleThread) {
     distributed::EnqueueMeshWorkload(cq, workload, true);
 
     std::vector<uint32_t> actual_values(4, 0);
-    tt_metal::detail::ReadFromDeviceL1(
-        mesh_device->get_devices()[0], node, l1_address, 4 * sizeof(uint32_t), actual_values);
+    slow_dispatch::ReadFromL1(*mesh_device, node, l1_address, 4 * sizeof(uint32_t), actual_values);
 
     const std::vector<uint32_t> expected_values = {4, 6, 5, 9};
 
@@ -187,7 +188,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarCreateMultipleComputeKernelsSing
 
             OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/compute/risc_math.cpp",
         .num_threads = 1,
-        .hw_config = experimental::ComputeHardwareConfig{},
+        .hw_config = experimental::ComputeGen2Config{},
     };
 
     experimental::KernelSpec compute_kernel_spec_2{
@@ -196,7 +197,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarCreateMultipleComputeKernelsSing
 
             OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/compute/risc_math.cpp",
         .num_threads = 2,
-        .hw_config = experimental::ComputeHardwareConfig{},
+        .hw_config = experimental::ComputeGen2Config{},
     };
 
     experimental::WorkUnitSpec main_wu{
@@ -211,5 +212,5 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarCreateMultipleComputeKernelsSing
         .work_units = {main_wu},
     };
 
-    ASSERT_THROW(experimental::MakeProgramFromSpec(*devices_[0], spec), std::runtime_error);
+    ASSERT_THROW(experimental::MakeProgramFromSpec(this->device(), spec), std::runtime_error);
 }

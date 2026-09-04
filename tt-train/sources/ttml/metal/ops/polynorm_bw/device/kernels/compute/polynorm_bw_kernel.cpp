@@ -128,13 +128,14 @@ constexpr uint32_t packed_partials_tiles_per_row = 4U;
 
 // Broadcast a COL-scalar tile from a CB into a DEST register (init + bcast).
 inline void bcast_col_to_reg(const uint32_t cb_src, const uint32_t reg_dst) {
-    unary_bcast_init<BroadcastType::COL>(cb_src, cb_src);
+    compute_kernel_hw_startup(cb_src, cb_src);
+    unary_bcast_init<BroadcastType::COL>(cb_src);
     unary_bcast<BroadcastType::COL>(cb_src, 0, reg_dst);
 }
 
 // Copy a tile at index tile_idx from a CB into a DEST register (init + copy).
 inline void copy_tile_to_reg(const uint32_t cb_src, const uint32_t tile_idx, const uint32_t reg_dst) {
-    copy_tile_init(cb_src);
+    copy_init(cb_src);
     copy_tile(cb_src, tile_idx, reg_dst);
 }
 
@@ -157,7 +158,7 @@ inline bool use_one_block_precision_path() {
 // register for use across the current Pass-2 tile.
 inline void load_alpha_tile(const uint32_t cb_alpha, const uint32_t reg_dst) {
     reconfig_data_format(cb_alpha, cb_alpha);
-    copy_tile_to_dst_init_short(cb_alpha);
+    copy_init(cb_alpha);
     copy_tile(cb_alpha, 0U, reg_dst);
 }
 
@@ -182,7 +183,7 @@ void reduce_sum_to_inv_rms(const uint32_t cb_sum, const uint32_t cb_inv_rms) {
         mul_binary_tile_init();
         mul_binary_tile(reg_acc, reg_scaler, reg_acc);
     } else {
-        reconfig_data_format(cb_sum, cb_scaler);
+        reconfig_data_format(cb_scaler, cb_sum);
         reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_sum, cb_scaler, cb_inv_rms);
         reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_sum, cb_scaler, 0, 0, reg_acc);
         reduce_uninit();
@@ -214,7 +215,7 @@ void reduce_sum_to_scalar(const uint32_t cb_sum, const uint32_t cb_scalar) {
         row_reduce_sum_to_reg(cb_sum, reg_acc);
     } else {
         cb_wait_front(cb_one, onetile);
-        reconfig_data_format(cb_sum, cb_one);
+        reconfig_data_format(cb_one, cb_sum);
         reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_sum, cb_one, cb_scalar);
         reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_sum, cb_one, 0, 0, reg_acc);
         reduce_uninit();
@@ -449,7 +450,7 @@ void emit_output_for_row() {
     constexpr uint32_t reg1 = 2U;
     constexpr uint32_t reg2 = 3U;
 
-    binary_op_init_common(cb_x, cb_x, cb_output);
+    compute_kernel_hw_startup(cb_x, cb_x, cb_output);
 
     cb_wait_front(cb_weighted_inv_rms_x, onetile);
     cb_wait_front(cb_weighted_inv_rms_x2, onetile);
@@ -547,8 +548,8 @@ void kernel_main() {
     cb_wait_front(cb_w1, onetile);
     cb_wait_front(cb_w2, onetile);
 
-    init_sfpu(cb_x, cb_output);
-    binary_op_init_common(cb_x, cb_x, cb_output);
+    compute_kernel_hw_startup(cb_x, cb_x, cb_output);
+    copy_init(cb_x);
 
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {
         (void)row;

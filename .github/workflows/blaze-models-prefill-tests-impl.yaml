@@ -1,0 +1,336 @@
+name: "[internal] Blaze Models Prefill tests impl"
+
+on:
+  workflow_call:
+    inputs:
+      docker-image:
+        required: true
+        type: string
+      build-artifact-name:
+        required: true
+        type: string
+      wheel-artifact-name:
+        required: true
+        type: string
+      enabled-skus:
+        required: true
+        type: string
+      sp-config:
+        required: false
+        type: string
+        default: "sc1"
+        description: "Supercluster configuration (sc1)"
+      test-type:
+        required: false
+        type: string
+        default: "all"
+      exclude-test-group:
+        required: false
+        type: string
+        default: ""
+      resource-prefix:
+        required: true
+        type: string
+        description: "Unique prefix when multiple impl jobs share a run (e.g. module, sdpa-perf)"
+      hang-detection-timeout:
+        required: false
+        type: number
+        default: 10
+        description: "Seconds without dispatch progress before tt-triage fires on the hung rank(s). 0 or less disables hang detection (the runtime treats any non-positive duration as no timeout)."
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  load-test-matrix:
+    name: Load Test Matrix for ${{ inputs.sp-config }}
+    runs-on: ubuntu-slim
+    outputs:
+      matrix: ${{ steps.filter-tests.outputs.matrix }}
+    env:
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/blaze_models_prefill_tests.yaml
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+
+      - name: Install dependencies
+        run: pip3 install PyYAML
+
+      - name: Validate SKU exists
+        run: |
+          if ! grep -q "bh_${{ inputs.sp-config }}:" .github/sku_config.yaml; then
+            echo "::error::SKU 'bh_${{ inputs.sp-config }}' not found in .github/sku_config.yaml"
+            exit 1
+          fi
+          echo "✓ SKU 'bh_${{ inputs.sp-config }}' exists in sku_config.yaml"
+
+      - name: Verify test timeouts against budget
+        run: |
+          set -e
+          echo "Verifying that timeouts defined in tests.yaml are within the allowed limits..."
+          python3 .github/scripts/utils/verify_time_budget.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            ./.github/time_budget.yaml \
+            "demo"
+
+      - name: Build test matrix
+        id: build-matrix
+        run: |
+          python3 .github/scripts/utils/prepare_test_matrix.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            "${{ inputs.enabled-skus }}" \
+            ./.github/sku_config.yaml
+
+      - name: Apply test-type filter
+        id: apply-test-type-filter
+        env:
+          MATRIX: ${{ steps.build-matrix.outputs.matrix }}
+        run: |
+          MATRIX="$MATRIX"
+          TEST_TYPE="${{ inputs.test-type }}"
+          EXCLUDE_GROUP="${{ inputs.exclude-test-group }}"
+          if [ -z "$TEST_TYPE" ] || \
+            echo "$TEST_TYPE" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -Fxq "all"; then
+            if [ -n "$EXCLUDE_GROUP" ]; then
+              MATRIX=$(echo "$MATRIX" | jq -c --arg g "$EXCLUDE_GROUP" '[.[] | select(.test_group != $g)]')
+            fi
+          else
+            MATRIX=$(echo "$MATRIX" | jq -c --arg sel "$TEST_TYPE" '
+              ($sel | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))) as $tokens
+              | [ .[] | . as $e | select(
+                    ($tokens | index($e.test_type))
+                    or ($tokens | index($e.test_group))
+                    or (($e.test_tags // []) | any(. as $f | $tokens | index($f)))
+                ) ]
+            ')
+            if [ "$MATRIX" = "[]" ]; then
+              echo "::error::No tests found for test-type '$TEST_TYPE'. Ensure each selected test-type or test-group is defined in the test matrix (TESTS_YAML_PATH=${{ env.TESTS_YAML_PATH }})."
+              exit 1
+            fi
+          fi
+          echo "filtered_matrix<<EOF" >> $GITHUB_OUTPUT
+          echo "$MATRIX" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Filter tests by sp_config
+        id: filter-tests
+        env:
+          MATRIX: ${{ steps.apply-test-type-filter.outputs.filtered_matrix }}
+        run: |
+          FILTERED=$(echo "$MATRIX" | jq -c --arg sp "${{ inputs.sp-config }}" '[.[] | select(.sp_config == $sp)]')
+          if [ "$FILTERED" = "[]" ]; then
+            echo "::error::No tests found for sp_config '${{ inputs.sp-config }}' in ${TESTS_YAML_PATH}"
+            exit 1
+          fi
+          echo "matrix<<EOF" >> $GITHUB_OUTPUT
+          echo "$FILTERED" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          echo "Filtered tests for ${{ inputs.sp-config }}:"
+          echo "$FILTERED" | jq .
+      - name: Write test matrix to file
+        env:
+          MATRIX: ${{ steps.filter-tests.outputs.matrix }}
+        run: |
+          echo "$MATRIX" > test_matrix_${{ inputs.resource-prefix }}.json
+      # Named per resource-prefix so the two impl invocations (module, sdpa-perf)
+      # don't collide on one artifact name; the parent merges them for expected-jobs.
+      - name: Upload test matrix
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: test_matrix_${{ inputs.resource-prefix }}
+          path: test_matrix_${{ inputs.resource-prefix }}.json
+          retention-days: 1
+
+  multihost-tests:
+    name: ${{ matrix.test-group.name }}
+    needs: load-test-matrix
+    container:
+      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+
+    env:
+      PATH: "/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+      VIRTUAL_ENV: /opt/venv
+      HOME: /home/user
+      # /ci is the NFS volume shared with the runner; worker /home/user is per-node, invisible to it.
+      # Rank 0 writes; the run/attempt/job subpath keeps reused-PVC runs from colliding.
+      PREFILL_SUMMARIES: /ci/prefill_summaries/${{ github.run_id }}-${{ github.run_attempt }}/${{ inputs.resource-prefix }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
+      # On /ci for the same reason as PREFILL_SUMMARIES: triage runs on a worker node.
+      TRIAGE_OUTPUT_DIR: /ci/triage_output/${{ github.run_id }}-${{ github.run_attempt }}/${{ inputs.resource-prefix }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
+    runs-on: ${{ matrix.test-group.runs_on }}
+    outputs:
+      test-result: ${{ steps.run-test.outcome }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+
+      - name: Setup multihost job
+        uses: ./.github/actions/setup-multihost-job
+        timeout-minutes: 90
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          create-pipeline-dir: "false"
+          auto-triage: ${{ inputs.hang-detection-timeout > 0 }}
+          hang-detection-timeout: ${{ inputs.hang-detection-timeout }}
+          triage-job-info: "leg: ${{ matrix.test-group.name }} | sku: ${{ matrix.test-group.sku }}"
+
+      - name: Configure TorusXY fabric profile
+        if: ${{ matrix.test-group.fabric_profile == 'torus_xy' }}
+        shell: bash
+        run: |
+          echo "TT_MESH_GRAPH_DESC_PATH=/home/user/tt-metal/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto" >> "$GITHUB_ENV"
+          echo "PREFILL_TORUS_XY_CERTIFIED=1" >> "$GITHUB_ENV"
+
+      - name: ${{ matrix.test-group.name }}
+        id: run-test
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        uses: ./.github/actions/run-with-log
+        with:
+          working-directory: /home/user/tt-metal
+          log-file: generated/test_logs/${{ matrix.test-group.name }}.log
+          run: |
+            CMD=$(cat << 'EOF'
+            ${{ matrix.test-group.cmd }}
+            EOF
+            )
+
+            echo "Running: ${{ matrix.test-group.name }}"
+            echo "$CMD"
+            eval "$CMD"
+
+      # The container-hook runner streams a plain `run:` step's stdout but not a
+      # composite action's, so the run-with-log test step above produces no console
+      # output there — its tee'd .log is the only copy of the run's stdout. Echo it
+      # from a plain step (which does stream) and upload it, or a failed self-
+      # allocating leg leaves nothing to diagnose.
+      - name: 🧾 Surface test log
+        if: always() && !cancelled()
+        continue-on-error: true
+        working-directory: /home/user/tt-metal
+        run: |
+          shopt -s nullglob
+          logs=(generated/test_logs/*.log)
+          if [ ${#logs[@]} -eq 0 ]; then
+            echo "No test log under generated/test_logs"
+            exit 0
+          fi
+          for f in "${logs[@]}"; do
+            echo "==================== $f ===================="
+            cat "$f"
+          done
+
+      - name: ⬆️ Upload test log
+        if: always() && !cancelled()
+        continue-on-error: true
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: test-log-${{ matrix.test-group.name }} (attempt ${{ github.run_attempt }})
+          path: /home/user/tt-metal/generated/test_logs/**
+          if-no-files-found: warn
+          retention-days: 30
+
+      # Only uploaded on a hang; the triage report itself is already in the test step's log.
+      - name: ⬆️ Upload triage output
+        if: always() && !cancelled()
+        continue-on-error: true
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          # Named after the leg, not the matrix index: the job is displayed as
+          # "<caller job> / <this name>", so the artifact maps to it by eye. The index-based name it
+          # replaced could only be resolved by cross-referencing the test_matrix_* artifact.
+          name: triage_output_${{ matrix.test-group.name }} (attempt ${{ github.run_attempt }})
+          path: ${{ env.TRIAGE_OUTPUT_DIR }}/**
+          if-no-files-found: ignore
+          retention-days: 30
+
+      # archive:false makes the artifact URL a direct link to the PNG rather than a zip. Must precede the
+      # publish step below, which needs the URL.
+      - name: ⬆️ Upload prefill plots
+        id: upload-prefill-plots
+        if: always() && !cancelled()
+        continue-on-error: true
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: prefill-plots-${{ inputs.resource-prefix }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
+          path: ${{ env.PREFILL_SUMMARIES }}/plots/*.png
+          if-no-files-found: ignore
+          retention-days: 30
+          archive: false
+
+      - name: 📊 Publish prefill summaries
+        if: always() && !cancelled()
+        continue-on-error: true
+        env:
+          PLOTS_URL: ${{ steps.upload-prefill-plots.outputs.artifact-url }}
+        run: |
+          shopt -s nullglob
+          files=("$PREFILL_SUMMARIES"/perf/*.md "$PREFILL_SUMMARIES"/pcc/*.md)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No prefill summary files under $PREFILL_SUMMARIES"
+          fi
+          for f in "${files[@]}"; do
+            # tee so the table shows in this step's log too, not only on the job-summary page.
+            cat "$f" | tee -a "$GITHUB_STEP_SUMMARY"
+            printf '\n' >> "$GITHUB_STEP_SUMMARY"
+          done
+          # The job-summary sanitizer strips inlined images, so the gantt can only be offered as a link.
+          # Gate on the PNG existing: a failed matplotlib install leaves the artifact empty but still URL'd.
+          plots=("$PREFILL_SUMMARIES"/plots/*.png)
+          if [ -n "$PLOTS_URL" ] && [ ${#plots[@]} -gt 0 ]; then
+            printf '[Pipeline gantt (PNG)](%s)\n\n' "$PLOTS_URL" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "Published ${#files[@]} prefill summary file(s) to the job summary"
+
+      # Keep the raw .md files for cross-run perf-trend analysis. Uploaded before cleanup; unique name per
+      # matrix job so v7 (no auto-merge) doesn't collide when the whole suite runs.
+      - name: ⬆️ Upload prefill summaries
+        if: always() && !cancelled()
+        continue-on-error: true
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: prefill-summaries-${{ inputs.resource-prefix }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
+          path: ${{ env.PREFILL_SUMMARIES }}/**/*.md
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: 🧹 Clean shared dirs
+        if: always()
+        env:
+          TEST_NAME: ${{ matrix.test-group.name }}
+        run: |
+          # Annotate the job when a hang was triaged, so the failed job points at its artifact
+          # instead of leaving you to guess which one belongs to it.
+          if [ -n "$TRIAGE_OUTPUT_DIR" ] && [ -n "$(ls -A "$TRIAGE_OUTPUT_DIR" 2>/dev/null)" ]; then
+            echo "::notice title=tt-triage::Hang triaged on $(ls "$TRIAGE_OUTPUT_DIR" | tr '\n' ' ')— see artifact \"triage_output_$TEST_NAME (attempt ${{ github.run_attempt }})\""
+          fi
+          if [ -n "$PREFILL_SUMMARIES" ]; then rm -rf "$PREFILL_SUMMARIES"; fi
+          if [ -n "$TRIAGE_OUTPUT_DIR" ]; then rm -rf "$TRIAGE_OUTPUT_DIR"; fi
+
+      - name: 🤖 AI job summary
+        if: always() && !cancelled()
+        continue-on-error: true
+        uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/job@main
+        with:
+          config: |
+            {
+              "model": "${{ vars.AI_SUMMARY_MODEL }}",
+              "workspace": "/home/user/tt-metal",
+              "input_dirs": ["generated/test_logs"],
+              "output_dir": "generated/ai_summaries"
+            }
+          api-key: ${{ secrets.TT_CHAT_API_KEY }}
+          api-url: ${{ secrets.TT_CHAT_URL }}
+          job-name: ${{ matrix.test-group.name }}
+
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+          owner: ${{ matrix.test-group.owner_id }}

@@ -23,7 +23,7 @@ std::pair<bool, std::string> InterleavedToShardedDeviceOperation::validate_input
         return {false, "Operands to shard need to be allocated in buffers on device!"};
     }
 
-    // Reject dtype/layout combinations that would hard-fail during TensorSpec construction in compute_output_specs().
+    // Reject dtype/layout combinations that would hard-fail during tt::tt_metal::TensorSpec construction in compute_output_specs().
     // These low-precision packed formats require tiled layout.
     const bool output_dtype_requires_tile =
         output_dtype == DataType::BFLOAT8_B || output_dtype == DataType::BFLOAT4_B;
@@ -31,7 +31,7 @@ std::pair<bool, std::string> InterleavedToShardedDeviceOperation::validate_input
         return {false, "Output dtype BFLOAT8_B/BFLOAT4_B requires TILE layout, but input tensor layout is ROW_MAJOR"};
     }
 
-    // TensorSpec construction normalizes ND shard specs to equivalent 2D layouts when possible.
+    // tt::tt_metal::TensorSpec construction normalizes ND shard specs to equivalent 2D layouts when possible.
     // Use the normalized memory config for validation so that convertible ND specs are accepted.
     auto resolved_output_mem_config = output_mem_config;
     if (output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::ND_SHARDED) {
@@ -119,7 +119,7 @@ InterleavedToShardedDeviceOperation::spec_return_value_t InterleavedToShardedDev
     }
 
     const auto& input_tensor = tensor_args.input_tensor;
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         input_tensor.logical_shape(),
         tt::tt_metal::TensorLayout(
             operation_attributes.output_dtype,
@@ -141,13 +141,21 @@ InterleavedToShardedDeviceOperation::tensor_return_value_t InterleavedToShardedD
 ttsl::hash::hash_t InterleavedToShardedDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
+    // keep_l1_aligned is deliberately absent: the factory hardcodes it to true and never reads the
+    // attribute, so keying on it would split the cache between byte-identical programs.
     return tt::tt_metal::operation::hash_operation<InterleavedToShardedDeviceOperation>(
         operation_attributes.output_mem_config,
         operation_attributes.output_dtype,
-        operation_attributes.keep_l1_aligned,
         input_tensor.dtype(),
         input_tensor.memory_config(),
         input_tensor.layout(),
+        // Both shapes are needed. The row-major branch of the factory takes the reader's row stride
+        // from logical_shape()[-1] and the last core's shard height from logical_volume(), and
+        // neither is patched on a cache hit. Padded shape alone does not pin those: an interleaved
+        // input's alignment is unconstrained (validate_alignment_rm only checks the width alignment
+        // of a sharded tensor), so a logical [1, 1, 32, 60] with Alignment{64} and a logical
+        // [1, 1, 32, 64] with the default alignment both pad to [1, 1, 32, 64].
+        input_tensor.logical_shape(),
         input_tensor.padded_shape());
 }
 

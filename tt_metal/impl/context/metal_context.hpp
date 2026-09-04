@@ -5,6 +5,7 @@
 #pragma once
 
 #include <tt_stl/indestructible.hpp>
+#include <optional>
 #include <vector>
 #include <llrt/hal.hpp>  // Hal — full definition needed to call hal().get_*() via MetalContext
 #include <llrt/rtoptions.hpp>
@@ -94,10 +95,51 @@ public:
     get_env();
 
     dispatch_core_manager& get_dispatch_core_manager();
+
+    // Snapshot of the dispatch-core partition used to build the currently live
+    // dispatch managers. Written only by initialize(); default-constructed
+    // (WORKER, unset axis) until then. Teardown does not clear it.
+    const DispatchCoreConfig& get_dispatch_core_config() const { return dispatch_core_config_; }
+
+    // TEMPORARY:
+    // Propose a complete dispatch-core config from the environment attached to
+    // this context, plus optional caller preferences.
+    //
+    // This is not a getter for get_dispatch_core_config(). That member is the
+    // snapshot stored by initialize(), describing how already-built dispatch
+    // state was partitioned. This method never reads that snapshot. It
+    // recomputes from live architecture, live fabric tensix config, optional
+    // type/axis arguments, and the TT_METAL_GTEST_ETH_DISPATCH override
+    // (explicit argument > env-var override > platform default).
+    //
+    // Call this when choosing the config to pass into a forthcoming
+    // initialize() / device open: no usable snapshot exists yet, or the caller
+    // is proposing a new partition. Call get_dispatch_core_config() when asking
+    // how live dispatch managers were built.
+    //
+    // The two agree only after initialize() has run and the last initialize
+    // used exactly what this method would produce from the same inputs now.
+    // They differ when initialize has not run, when initialize was given an
+    // explicit non-default that the no-argument call would not pick, or when
+    // fabric tensix config changed after the snapshot was stored.
+    //
+    // initialize() itself is not this method: it keeps the incoming type and
+    // only fills an unset axis. Calling resolve after initialize does not
+    // refresh the snapshot; it re-runs default policy against the live env.
+    //
+    // Temporary. Dispatch config is still a parameter to initialize() because
+    // MetalContext has no construct-with-settings step. The intended end state
+    // is to resolve (or accept an already-complete config) when the
+    // environment is set up, after fabric config is known, and to store that
+    // result for the context lifetime. This helper should then go away;
+    // remaining callers query the snapshot.
+    DispatchCoreConfig resolve_dispatch_core_config(
+        std::optional<DispatchCoreType> type = std::nullopt, std::optional<DispatchCoreAxis> axis = std::nullopt) const;
     internal::ServiceCoreManager& get_service_core_manager();
     DispatchQueryManager& get_dispatch_query_manager();
+
     const DispatchMemMap& dispatch_mem_map() const;  // DispatchMemMap for the core type we're dispatching on.
-    const DispatchMemMap& dispatch_mem_map(const CoreType& core_type) const;  // DispatchMemMap for specific core type.
+
     inspector::Data* get_inspector_data() const {
         return inspector_data_.get();
     }
@@ -117,7 +159,7 @@ public:
         size_t l1_small_size,
         size_t trace_region_size,
         const tt_metal::DispatchCoreConfig& dispatch_core_config,
-        tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
+        ttsl::Span<const std::uint32_t> l1_bank_remap = {},
         size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE,
         bool init_profiler = true,
         bool initialize_fabric_and_dispatch_fw = true);
@@ -185,7 +227,7 @@ public:
     void on_dispatch_timeout_detected();
 
 private:
-    friend class tt::stl::Indestructible<MetalContext>;
+    friend class ttsl::Indestructible<MetalContext>;
 
     // Construct MetalContext to use the given MetalEnv and assign it context id. The MetalEnv must not be
     // destroyed while its associated MetalContext instance is alive.
@@ -250,7 +292,7 @@ private:
     std::unique_ptr<RiscFirmwareInitializer> risc_firmware_initializer_;
     std::unordered_set<InitializerKey> risc_fw_init_done_;
 
-    std::array<std::unique_ptr<DispatchMemMap>, static_cast<size_t>(CoreType::COUNT)> dispatch_mem_map_;
+    std::unique_ptr<DispatchMemMap> dispatch_mem_map_;
 
     // We are using a thread_local to allow each thread to have its own command queue id stack.
     // This not only allows consumers to set active command queue for a thread

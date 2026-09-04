@@ -64,33 +64,54 @@ FORCE_INLINE void send_chunk_from_address_with_trid(
     }
 }
 
-template <EDM_IO_BLOCKING_MODE blocking_mode = EDM_IO_BLOCKING_MODE::BLOCKING>
+template <EDM_IO_BLOCKING_MODE blocking_mode = EDM_IO_BLOCKING_MODE::BLOCKING, bool posted = false>
 FORCE_INLINE void send_chunk_from_address(
     const uint32_t& local_l1_address,
     const uint32_t& num_pages,
     const uint32_t& page_size,
-    uint64_t remote_l1_write_addr) {
-    const uint8_t noc = get_fabric_worker_noc();
-    noc_async_write(local_l1_address, remote_l1_write_addr, page_size * num_pages, noc);
+    uint64_t remote_l1_write_addr,
+    uint8_t noc = get_fabric_worker_noc()) {
+    noc_async_write<NOC_MAX_BURST_SIZE + 1, true, posted>(
+        local_l1_address, remote_l1_write_addr, page_size * num_pages, noc);
     if constexpr (blocking_mode == EDM_IO_BLOCKING_MODE::FLUSH_BLOCKING) {
-        noc_async_writes_flushed(noc);
+        if constexpr (posted) {
+            noc_async_posted_writes_flushed(noc);
+        } else {
+            noc_async_writes_flushed(noc);
+        }
     } else if constexpr (blocking_mode == EDM_IO_BLOCKING_MODE::BLOCKING) {
-        noc_async_write_barrier(noc);
+        if constexpr (posted) {
+            noc_async_posted_writes_flushed(noc);
+        } else {
+            noc_async_write_barrier(noc);
+        }
     }
 }
 
-template <EDM_IO_BLOCKING_MODE blocking_mode = EDM_IO_BLOCKING_MODE::BLOCKING>
+template <EDM_IO_BLOCKING_MODE blocking_mode = EDM_IO_BLOCKING_MODE::BLOCKING, bool posted = false>
 FORCE_INLINE void send_chunk(
-    const uint32_t& cb_id, const uint32_t& num_pages, const uint32_t& page_size, uint64_t remote_l1_write_addr) {
-    const uint8_t noc = get_fabric_worker_noc();
+    const uint32_t& cb_id,
+    const uint32_t& num_pages,
+    const uint32_t& page_size,
+    uint64_t remote_l1_write_addr,
+    uint8_t noc = get_fabric_worker_noc()) {
     cb_wait_front(cb_id, num_pages);
     uint32_t l1_read_addr = get_read_ptr(cb_id);
-    noc_async_write(l1_read_addr, remote_l1_write_addr, page_size * num_pages, noc);
+    noc_async_write<NOC_MAX_BURST_SIZE + 1, true, posted>(
+        l1_read_addr, remote_l1_write_addr, page_size * num_pages, noc);
     if constexpr (blocking_mode == EDM_IO_BLOCKING_MODE::FLUSH_BLOCKING) {
-        noc_async_writes_flushed(noc);
+        if constexpr (posted) {
+            noc_async_posted_writes_flushed(noc);
+        } else {
+            noc_async_writes_flushed(noc);
+        }
         cb_pop_front(cb_id, num_pages);
     } else if constexpr (blocking_mode == EDM_IO_BLOCKING_MODE::BLOCKING) {
-        noc_async_write_barrier(noc);
+        if constexpr (posted) {
+            noc_async_posted_writes_flushed(noc);
+        } else {
+            noc_async_write_barrier(noc);
+        }
         cb_pop_front(cb_id, num_pages);
     }
 }

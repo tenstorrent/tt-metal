@@ -22,13 +22,6 @@ target_link_libraries(
 
 install(TARGETS tt-nn-validation-basic RUNTIME COMPONENT ttnn-validation)
 
-# Mock cluster descriptors used by configure_mock_mode() in tt-nn-validation-basic.
-install(
-    DIRECTORY
-        ${PROJECT_SOURCE_DIR}/tt_metal/third_party/umd/tests/cluster_descriptor_examples/
-    DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/tt_metal/third_party/umd/tests/cluster_descriptor_examples
-    COMPONENT ttnn-validation
-    FILES_MATCHING
-    PATTERN
-    "*.yaml"
-)
+# Mock cluster descriptor YAMLs used by configure_mock_mode() in tt-nn-validation-basic
+# ship in tt-metalium-validation.deb (see tt_metal/test/CMakeLists.txt). tt-nn-validation
+# picks them up via its Depends: metalium-validation in cmake/packaging.cmake.

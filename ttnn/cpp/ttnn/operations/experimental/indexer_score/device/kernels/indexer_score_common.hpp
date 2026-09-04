@@ -70,10 +70,17 @@ constexpr uint32_t k_chunk_tiles = k_tiles_per_unit * head_dim_tiles;           
 
 // Thin wrapper binding the shared work-split formula to this kernel's CT dims: unmasked prefix
 // k-tiles of absolute q-tile-row q_row_abs in a unit. chunk_start_tiles is the per-device runtime
-// chunk-start offset (in tiles); the compute kernel reads it from a runtime arg.
+// chunk-start offset (in tiles); straddle_* carry the mid-slab boundary-chip diagonal jump (0 otherwise).
+// All three are compute-kernel runtime args.
 inline uint32_t row_valid_prefix(
-    uint32_t q_row_abs, uint32_t k_tile_start, uint32_t k_tiles_in_unit, uint32_t chunk_start_tiles) {
-    return iscore::valid_prefix_tiles(q_row_abs, k_tile_start, k_tiles_in_unit, chunk_start_tiles);
+    uint32_t q_row_abs,
+    uint32_t k_tile_start,
+    uint32_t k_tiles_in_unit,
+    uint32_t chunk_start_tiles,
+    uint32_t straddle_q_tile,
+    uint32_t straddle_jump_tiles) {
+    return iscore::valid_prefix_tiles(
+        q_row_abs, k_tile_start, k_tiles_in_unit, chunk_start_tiles, straddle_q_tile, straddle_jump_tiles);
 }
 
 /** (group, band) cell cursor. group = absolute q-row-group index; band = absolute k-band index; the
@@ -99,5 +106,54 @@ struct WorkUnitSpan {
         const uint32_t start = k_tile_start();
         const uint32_t left = valid_k_len_tiles > start ? valid_k_len_tiles - start : 0;
         return left < k_tiles_per_unit ? left : k_tiles_per_unit;
+    }
+};
+
+/** One fused Ring Indexer work unit in shard-major physical order. Consecutive physical tiles stay within
+ *  one SP shard, so the local shard can run without a Fabric dependency and every remote unit has exactly
+ *  one readiness source. The block-cyclic inverse maps packed compute columns back to logical K positions. */
+template <bool BlockCyclic, uint32_t ChunkLocal, uint32_t Sp>
+struct ShardMajorWorkUnitSpan {
+    uint32_t group = 0;
+    uint32_t physical_tile_start = 0;
+    uint32_t tiles_per_shard = 0;
+    uint32_t valid_k_len_tiles = k_len_tiles;
+
+    void set(uint32_t g, uint32_t physical_start, uint32_t shard_tiles) {
+        group = g;
+        physical_tile_start = physical_start;
+        tiles_per_shard = shard_tiles;
+    }
+    void set_valid_k_len_tiles(uint32_t tiles) { valid_k_len_tiles = tiles; }
+
+    uint32_t q_tile_start() const { return group * q_tiles_per_unit; }
+    uint32_t shard() const { return physical_tile_start / tiles_per_shard; }
+    uint32_t shard_offset() const { return physical_tile_start - shard() * tiles_per_shard; }
+
+    uint32_t logical_tile(uint32_t col) const {
+        if constexpr (!BlockCyclic) {
+            return physical_tile_start + col;
+        } else {
+            const uint32_t local = shard_offset() + col;
+            const uint32_t slab = local / ChunkLocal;
+            const uint32_t slab_offset = local - slab * ChunkLocal;
+            return (slab * Sp + shard()) * ChunkLocal + slab_offset;
+        }
+    }
+
+    uint32_t capacity_tiles() const {
+        const uint32_t shard_left = tiles_per_shard - shard_offset();
+        return shard_left < k_tiles_per_unit ? shard_left : k_tiles_per_unit;
+    }
+
+    // Logical positions increase monotonically within one physical shard, though they jump between local
+    // block-cyclic runs. Therefore the runtime KV prefix is still a packed prefix of this work unit.
+    uint32_t k_tiles() const {
+        const uint32_t capacity = capacity_tiles();
+        uint32_t valid = 0;
+        while (valid < capacity && logical_tile(valid) < valid_k_len_tiles) {
+            ++valid;
+        }
+        return valid;
     }
 };

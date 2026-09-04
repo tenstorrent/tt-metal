@@ -16,11 +16,9 @@
 #include <tt-metalium/dispatch_core_common.hpp>
 #include "gmock/gmock.h"
 #include "hostdevcommon/common_values.hpp"
-#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_config.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/program_cache.hpp>
 #include <tt-metalium/system_mesh.hpp>
 #include <tt-metalium/maybe_remote.hpp>
 #include "impl/context/metal_context.hpp"
@@ -36,7 +34,7 @@ using ::testing::ElementsAre;
 using ::testing::SizeIs;
 
 std::vector<MeshShape> get_mesh_shapes() {
-    static tt::stl::Indestructible<std::vector<MeshShape>> kMeshShapes(std::vector<MeshShape>{
+    static ttsl::Indestructible<std::vector<MeshShape>> kMeshShapes(std::vector<MeshShape>{
         MeshShape{1, 1}, MeshShape{1, 2}, MeshShape{1, 3}, MeshShape{1, 4}, MeshShape{1, 5}, MeshShape{1, 6},
         MeshShape{1, 7}, MeshShape{1, 8}, MeshShape{2, 1}, MeshShape{2, 2}, MeshShape{2, 3}, MeshShape{2, 4},
         MeshShape{3, 1}, MeshShape{3, 2}, MeshShape{4, 1}, MeshShape{4, 2}, MeshShape{8, 1}, MeshShape{7, 1},
@@ -120,13 +118,16 @@ public:
 
 TEST_F(MeshDevice1x8ReshapeTest, InvalidRequestedShape) {
     auto& system_mesh = tt::tt_metal::MetalContext::instance().get_system_mesh();
+    const auto& system_shape = system_mesh.shape();
+    ASSERT_EQ(system_shape.dims(), 2);
 
     // Shape too big.
-    EXPECT_ANY_THROW(system_mesh.get_mapped_devices(MeshShape(9)));
-    EXPECT_ANY_THROW(system_mesh.get_mapped_devices(MeshShape(2, 5)));
+    EXPECT_ANY_THROW(system_mesh.get_mapped_devices(MeshShape(system_shape.mesh_size() + 1)));
+    EXPECT_ANY_THROW(system_mesh.get_mapped_devices(MeshShape(system_shape[0] + 1, system_shape[1])));
 
     // Invalid offset.
-    EXPECT_ANY_THROW(system_mesh.get_mapped_devices(MeshShape(2, 3), /*offset=*/MeshCoordinate(1, 1)));
+    EXPECT_ANY_THROW(system_mesh.get_mapped_devices(
+        MeshShape(2, 2), /*offset=*/MeshCoordinate(system_shape[0] - 1, system_shape[1] - 1)));
 
     // Offset dimensionality mismatch.
     EXPECT_ANY_THROW(system_mesh.get_mapped_devices(MeshShape(2, 3), /*offset=*/MeshCoordinate(1)));
@@ -167,22 +168,6 @@ TEST_F(MeshDevice1x8ReshapeTest, From1x8To2x4ThenBackTo1x8) {
 
     mesh_device_->reshape(MeshShape(1, 8));
     EXPECT_EQ(mesh_device_->get_device_ids(), original_order);
-}
-
-TEST_F(MeshDevice1x8ReshapeTest, ReshapeClearsProgramCache) {
-    // Reshape remaps device order, so stale cached programs must be dropped.
-
-    // Inserts a dummy entry so num_program_cache_entries() > 0 without dispatching a workload.
-    mesh_device_->get_program_cache().insert(
-        tt::tt_metal::program_cache::detail::ProgramCacheKey{1, "reconfig_regression_dummy"},
-        tt::tt_metal::program_cache::detail::CachedProgramFactory(
-            tt::tt_metal::program_cache::detail::CachedProgram<int>(tt::tt_metal::CreateProgram(), 0), 0));
-
-    EXPECT_GT(mesh_device_->num_program_cache_entries(), 0u);
-
-    mesh_device_->reshape(MeshShape(2, 4));
-
-    EXPECT_EQ(mesh_device_->num_program_cache_entries(), 0u);
 }
 
 TEST_F(MeshDevice1x8ReshapeTest, InvalidTotalDeviceCount) {

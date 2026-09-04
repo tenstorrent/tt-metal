@@ -227,6 +227,25 @@ def test_bf16_dtype_preserved_on_disk(tmp_path):
     ctx.reset_graph()
 
 
+def test_rng_state_roundtrips_in_header(tmp_path):
+    """The opaque header round-trips its payload byte-for-byte through pickle. train.py's saver stores the
+    C++ generator string under "rng"; this test also bundles a numpy state tuple to prove the header
+    preserves embedded ndarrays exactly, not just strings. Host-only: no model tensors."""
+    ctx = ttml.autograd.AutoContext.get_instance()
+    ctx.set_seed(7)
+    np.random.seed(7)
+    rng = {"cpp": ctx.get_generator_state(), "numpy": np.random.get_state()}
+
+    path = str(tmp_path / "rng.pkl")
+    checkpointing.save_checkpoint(path, header={"step": 0, "rng": rng})
+
+    restored = checkpointing.load_checkpoint(path)["rng"]
+    assert restored["cpp"] == rng["cpp"]
+    assert restored["numpy"][0] == rng["numpy"][0]  # algorithm tag ("MT19937")
+    np.testing.assert_array_equal(restored["numpy"][1], rng["numpy"][1])  # 624-word state
+    assert restored["numpy"][2:] == rng["numpy"][2:]  # position + cached-gaussian fields
+
+
 def test_bad_file_raises(tmp_path, expect_error):
     """A non-checkpoint, empty, or wrong-format file raises a clear ValueError (host-only — no device)."""
     not_pickle = tmp_path / "garbage.pkl"

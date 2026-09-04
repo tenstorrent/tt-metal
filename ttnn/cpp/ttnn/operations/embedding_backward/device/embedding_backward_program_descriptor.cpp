@@ -4,6 +4,7 @@
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 
@@ -58,7 +59,11 @@ ProgramDescriptor EmbeddingBackwardDeviceOperation::create_descriptor(
     uint32_t seq_len_tiles = tensor_args.index_tensor.padded_shape()[-1] / TILE_WIDTH;
     uint32_t input_height_tiles = batch_size * seq_len_tiles;
 
-    uint32_t num_embeddings_tiles = operation_attributes.num_embeddings / TILE_HEIGHT;
+    // Round up: the output is tile-padded, so a weight table whose row count is not a
+    // multiple of TILE_HEIGHT still owns a full trailing tile row. Truncating here left
+    // that tile row out of the reader's output zero-init loop, so it kept whatever was
+    // in the freshly allocated DRAM and the accumulation added on top of garbage.
+    uint32_t num_embeddings_tiles = tt::div_up(operation_attributes.num_embeddings, TILE_HEIGHT);
 
     // We split work based on the number of tiles in the embedding dimension
     auto grid_size = device->compute_with_storage_grid_size();

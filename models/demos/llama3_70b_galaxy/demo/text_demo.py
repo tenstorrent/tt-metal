@@ -1,33 +1,29 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-from pathlib import Path
-from loguru import logger
-from datetime import datetime
 import hashlib
-import requests
 import json
 import math
-import torch
-import pytest
 import os
-import ttnn
+from datetime import datetime
+from pathlib import Path
 
+import pytest
+import requests
+import torch
+from loguru import logger
+
+import ttnn
+from models.common.utility_functions import comp_pcc
+from models.common.weight_cache import build_cached_state_dict, mark_weight_cache_complete, weight_cache_is_complete
 from models.demos.llama3_70b_galaxy.tt.generator import Generator, SamplingParams
 from models.demos.llama3_70b_galaxy.tt.model_config import LlamaOptimizations
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
-from models.tt_transformers.tt.common import (
-    preprocess_inputs_prefill,
-    PagedAttentionConfig,
-)
-from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
-from models.common.utility_functions import (
-    comp_pcc,
-)
 from models.demos.utils.device_sku import get_current_device_sku_name
 from models.demos.utils.llm_demo_utils import verify_perf
 from models.demos.utils.model_targets import resolve_perf_targets
 from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM
+from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
+from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
 
 
 def load_and_cache_context(context_url, cache_dir, max_length=None):
@@ -210,11 +206,39 @@ def create_tt_model(
         optimizations=optimizations,
         max_seq_len=max_seq_len,
         dummy_weights=dummy_weights,
+        cache_hf=False,  # Demo never builds a torch reference; keep the lighter weight loader.
     )
     # When running running prefill-only profile, run just 1 layer
     tt_model_args.n_layers = num_layers if not prefill_profile else 1
 
-    state_dict = tt_model_args.load_state_dict()
+    # Warm ttnn cache => build from .tensorbin, skip the HF from_pretrained load. Pure placeholder:
+    # this galaxy demo embeds tokens on-device (HostEmbedding is tests-only), so the state_dict
+    # feeds only the TtTransformer -- no host-weight hybrid needed. (#45400)
+    cache_dir = tt_model_args.weight_cache_path(dtype)
+    cache_identity = dict(
+        model_name=tt_model_args.model_name,
+        n_layers=tt_model_args.n_layers,
+        mesh_shape=tuple(mesh_device.shape),
+        # The galaxy loader picks prefetcher-vs-DRAM cache FILENAMES off use_prefetcher
+        # (llama_attention.py wqkv_sharded_2d_prefetcher / _dram), and the optimizations level
+        # sets per-tensor dtypes that are baked into filenames. Key the marker on both so a cache
+        # seeded under one configuration is not certified for another. (#45400 review, finding B2)
+        build_variant={
+            "use_prefetcher": bool(getattr(tt_model_args, "use_prefetcher", False)),
+            "optimizations": repr(getattr(tt_model_args, "optimizations", None)),
+        },
+    )
+    loaded_real_weights = False
+    if (
+        not prefill_profile
+        and not getattr(tt_model_args, "dummy_weights", False)
+        and weight_cache_is_complete(cache_dir, **cache_identity)
+    ):
+        logger.info("Warm ttnn weight cache detected -- skipping HF state_dict load.")
+        state_dict = build_cached_state_dict(cache_dir, build_variant=cache_identity["build_variant"])
+    else:
+        state_dict = tt_model_args.load_state_dict()
+        loaded_real_weights = bool(state_dict) and not getattr(tt_model_args, "dummy_weights", False)
     page_table = None
     paged_attention_config = None
     tt_kv_cache = None
@@ -245,6 +269,9 @@ def create_tt_model(
 
     if use_paged_kv_cache:
         tt_kv_cache = [l.attention.layer_past for l in model.layers]
+
+    if loaded_real_weights and not prefill_profile:
+        mark_weight_cache_complete(cache_dir, state_dict, **cache_identity)
 
     return tt_model_args, model, page_table, [tt_kv_cache]
 
@@ -448,6 +475,28 @@ def create_tt_model(
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             False,  # stop_at_eos
+            False,  # apc_test
+            False,  # pcc_check
+            False,  # token_accuracy
+            False,  # prefill-only profile
+            80,  # num layers
+            False,  # print_outputs
+            False,  # is_cur_pos_sharded    #NOTE: currently cur pos/ page table sharding is not supported on repeat batch runs
+            False,  # is_page_table_sharded
+            False,  # use_prefix_caching
+            0.0,  # prefix_cached_ratio
+        ),
+        (  # ci-eval-1 - 6 repeat batches (batch-1) with paired-batch output comparison
+            "models/demos/llama3_70b_galaxy/demo/sample_prompts/eval_repeat_prompts_batch1.json",  # input_prompts
+            True,  # instruct mode
+            6,  # repeat_batches
+            2048,  # max_seq_len (longest prompt is ~750 tokens; leaves room for max_generated_tokens)
+            1,  # batch_size
+            200,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            False,  # stop_at_eos    #NOTE: must stay False; the decode perf aggregation assumes every repeat batch generates the same number of tokens
             False,  # apc_test
             False,  # pcc_check
             False,  # token_accuracy
@@ -745,6 +794,37 @@ def create_tt_model(
             True,  # use_prefix_caching
             0.5,  # prefix_cached_ratio
         ),
+        (  # seqlen-sweep - Sweeps all powers-of-two seqlens up to model's max (128k), one prefill+decode per batch
+            [
+                "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_1k.json",
+                "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_2k.json",
+                "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_4k.json",
+                "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_8k.json",
+                "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_16k.json",
+                "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_32k.json",
+                "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_64k.json",
+                "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_128k.json",
+            ],  # input_prompts (list of files, one per sweep step)
+            True,  # instruct mode
+            8,  # repeat_batches (one per seqlen step; adjusted dynamically by sweep logic)
+            128 * 1024,  # max_seq_len (model maximum; filters out files that exceed this)
+            1,  # batch_size
+            32,  # max_generated_tokens (minimal decode to verify prefill succeeds at each length)
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            False,  # apc_test
+            False,  # pcc_check
+            False,  # token_accuracy
+            False,  # prefill-only profile
+            80,  # num layers
+            False,  # print_outputs
+            False,  # is_cur_pos_sharded
+            False,  # is_page_table_sharded
+            False,  # use_prefix_caching
+            0.0,  # prefix_cached_ratio
+        ),
     ],
     ids=[
         "batch-32",  # throughput
@@ -755,6 +835,7 @@ def create_tt_model(
         "evals-32",  # 32 users, 32 repeated batches, smaller prompts (<4K)
         "evals-long-prompts",  # Single user, 12 repeated batches, very long prompts (4K ~ 64K)
         "repeat2",  # latency with 2 repeat batches
+        "ci-eval-1",  # CI 6 repeat batches (batch-1) with paired-batch output comparison
         "long-4k-b1",  # 4k context for 1 user
         "long-8k-b1",  # 4k context for 1 user
         "long-16k-b1",  # 16K context for 1 user
@@ -768,6 +849,7 @@ def create_tt_model(
         "pcc-80L",  # pcc check for 80L + teacher forced
         "batch-1-prefix-caching-perf",  # 1 user, prefix caching (performance)
         "batch-1-prefix-caching-pcc",  # 1 user, prefix caching with PCC (correctness)
+        "seqlen-sweep",  # Sweep prefill across all powers-of-two seqlens up to model's max (128k)
     ],
 )
 @pytest.mark.parametrize(
@@ -866,7 +948,11 @@ def test_demo_text(
     max_generated_tokens = request.config.getoption("--max_generated_tokens") or max_generated_tokens
     paged_attention = request.config.getoption("--paged_attention") or paged_attention
     page_params = request.config.getoption("--page_params") or page_params
-    sampling_params = request.config.getoption("--sampling_params") or sampling_params
+    cli_sampling_params = request.config.getoption("--sampling_params")
+    if cli_sampling_params:
+        # Merge onto the parametrized defaults so a partial override (e.g. only
+        # temperature) keeps the remaining keys the demo indexes unconditionally.
+        sampling_params = {**sampling_params, **cli_sampling_params}
     if request.config.getoption("--stop_at_eos") in [
         0,
         1,
@@ -880,10 +966,13 @@ def test_demo_text(
     if token_accuracy and batch_size != 1:
         raise ValueError("Token accuracy mode only supports batch_size=1")
 
+    test_id = request.node.callspec.id
+    is_seqlen_sweep = "seqlen-sweep" in test_id
+
     enable_trace = True  # Use tracing for better perf
     if token_accuracy:
         enable_trace = False  # Teacher forcing uses fresh host tokens each iteration.
-    prefill_enable_trace = True
+    prefill_enable_trace = not is_seqlen_sweep  # disable only for sweep to avoid 80MB trace budget
     print_to_file = False  # Enable this flag to print the output of all users to a file
     instruct = num_layers == 80 and instruct  # if using instruct weights it must be full model
     input_lengths = (
@@ -925,11 +1014,22 @@ def test_demo_text(
 
     logger.info(f"Reading inputs...")
     profiler.start("loading_inputs")
-    input_prompts, all_prompts = load_inputs(
-        input_prompts,
-        input_lengths,
-        instruct,
-    )
+    sweep_prompt_files = None
+    if is_seqlen_sweep:
+        # In seqlen-sweep mode, input_prompts is a list of file paths (one per sweep step).
+        # Load the first file now for initial setup; per-step loading happens later.
+        sweep_prompt_files = input_prompts
+        input_prompts, all_prompts = load_inputs(
+            sweep_prompt_files[0],
+            input_lengths,
+            instruct,
+        )
+    else:
+        input_prompts, all_prompts = load_inputs(
+            input_prompts,
+            input_lengths,
+            instruct,
+        )
     profiler.end("loading_inputs")
 
     # Load expected outputs for comparison
@@ -972,10 +1072,30 @@ def test_demo_text(
     # To simulate a deployment environment, the demo supports repeating batched prompts.
     # This loop will rotate the prompts between the users for each batch, to simulate users sending different requests
     repeat_batch_prompts = []
-    for i in range(repeat_batches):
-        repeat_batch_prompts.append(
-            [all_prompts[(j + i) % len(all_prompts)] for j in range(len(all_prompts))][:batch_size]
+    if is_seqlen_sweep:
+        # Seqlen sweep: load each prompt file individually, filtering out lengths that exceed the model's max.
+        # Extract target seqlen from filename (e.g. "input_data_long_16k.json" -> stem "input_data_long_16k" -> "16k" -> 16384).
+        filtered_files = []
+        for f in sweep_prompt_files:
+            label = Path(f).stem.split("_")[-1]  # e.g. "16k"
+            if label.endswith("k") and label[:-1].isdigit():
+                min_seqlen = int(label[:-1]) * 1024
+                if min_seqlen <= max_seq_len:
+                    filtered_files.append(f)
+        if not filtered_files:
+            pytest.skip(f"No sweep prompt files fit within model's max context length ({max_seq_len})")
+        repeat_batches = len(filtered_files)
+        logger.info(
+            f"Seqlen sweep: running {repeat_batches} steps with files: {[Path(f).name for f in filtered_files]}"
         )
+        for f in filtered_files:
+            batch_prompts, _ = load_inputs(f, input_lengths, instruct)
+            repeat_batch_prompts.append(batch_prompts[:batch_size])
+    else:
+        for i in range(repeat_batches):
+            repeat_batch_prompts.append(
+                [all_prompts[(j + i) % len(all_prompts)] for j in range(len(all_prompts))][:batch_size]
+            )
 
     model_args, model, page_table, tt_kv_cache = create_tt_model(
         mesh_device,
@@ -991,7 +1111,7 @@ def test_demo_text(
         prefill_profile=prefill_profile,
     )
 
-    model_args.tokenizer = Tokenizer(model_args.tokenizer_path)
+    model_args.tokenizer = model_args.create_tokenizer()
     tokenizer = model_args.tokenizer
     generator = Generator(model, model_args, mesh_device, tokenizer=tokenizer)
 
@@ -1002,6 +1122,7 @@ def test_demo_text(
         repeat_batch_prompts = [[token_acc.prepare_ref_tokens(tokenizer)]]
 
     num_tokens_generated_decode = []
+    repeat_batch_outputs = []  # Final decoded output per repeat batch, used by the ci-eval-1 comparison
 
     logger.info("Starting inference...")
     for batch_idx, input_prompts in enumerate(repeat_batch_prompts):
@@ -1462,8 +1583,18 @@ def test_demo_text(
                             f"\n==REPEAT BATCH {batch_idx}\n==USER {i} - PROMPT\n{short_prompt} \n==USER {i} - OUTPUT\n{text_after_prompt.strip()}\n"
                         )
                 profiler.end(f"log_saving_file", iteration=batch_idx)
-                # TODO This check is only for the config `repeat2`.
 
+            # Store the final output of each repeat batch so paired batches can be compared once
+            # all batches have run. Paired prompts mean batches (0,1), (2,3), ... must match exactly.
+            if not users_decoding and "ci-eval-1" in test_id:
+                text = tokenizer.decode(all_outputs[0])
+                prompt_including_assistant_tags = tokenizer.decode(
+                    model_args.encode_prompt(input_prompts[0], instruct=instruct)
+                )
+                repeat_batch_outputs.append(text.replace(prompt_including_assistant_tags, "", 1).strip())
+                logger.info(f"Stored output for batch {batch_idx}: {repeat_batch_outputs[-1][:100]}...")
+
+            # TODO This check is only for the config `repeat2`.
             # Since right now that config is the only using a repeat_batches=2 this if statement works
             if not users_decoding and batch_size == 1 and repeat_batches == 2:
                 # Compare to text in outputs_batch_1.json for the first user of the first batch
@@ -1621,31 +1752,75 @@ def test_demo_text(
         f"Average speed: {round(avg_decode_iteration_time * 1000, 2)}ms @ {round(decode_tok_s_user, 2)} tok/s/user ({round(decode_tok_s, 2)} tok/s throughput)"
     )
 
+    # The ci-eval-1 prompt file pairs its prompts ([A, A, B, B, ...]), so consecutive repeat batches
+    # run identical inputs. ci-eval-1 runs temperature=0 argmax, so any divergence between paired
+    # batches indicates a real defect (e.g. trace/fabric-CCL buffer corruption), which can first
+    # diverge late in generation. This exact-match gate was purpose-built for that (PR #30739,
+    # issue #27242), so require byte-identical full outputs rather than a token prefix.
+    if "ci-eval-1" in test_id:
+        # Fail loudly rather than skipping the comparison if any batch failed to record its output
+        assert (
+            len(repeat_batch_outputs) == repeat_batches
+        ), f"Expected one stored output per repeat batch, got {len(repeat_batch_outputs)} of {repeat_batches}"
+        logger.info("=== Repeat Batch Output Comparison ===")
+        all_matches = True
+        for first_idx in range(0, repeat_batches - 1, 2):
+            second_idx = first_idx + 1
+            first_tokens = repeat_batch_outputs[first_idx].split()
+            second_tokens = repeat_batch_outputs[second_idx].split()
+            compared = min(len(first_tokens), len(second_tokens))
+            matched = sum(1 for a, b in zip(first_tokens, second_tokens) if a == b)
+            overlap = matched / compared if compared else 1.0
+            if repeat_batch_outputs[first_idx] == repeat_batch_outputs[second_idx]:
+                logger.info(
+                    f"Batches {first_idx} and {second_idx} comparison PASSED: "
+                    f"outputs are byte-identical (token overlap {overlap:.1%})"
+                )
+            else:
+                logger.warning(
+                    f"Batches {first_idx} and {second_idx} comparison FAILED: "
+                    f"outputs differ (token overlap {overlap:.1%})"
+                )
+                logger.info(f"  Batch {first_idx} output: {repeat_batch_outputs[first_idx][:100]}...")
+                logger.info(f"  Batch {second_idx} output: {repeat_batch_outputs[second_idx][:100]}...")
+                all_matches = False
+
+        assert all_matches, "Repeat batch outputs should be identical"
+
     test_id = request.node.callspec.id
-    if "repeat2" in test_id:  #  test_id will be changed to eval-1 and eval-32 in the future
+    if "ci-eval-1" in test_id:
         sku = get_current_device_sku_name()
+        # Key the target on the prompt the metrics were actually measured from. Every value in
+        # `measurements` comes from batch 0 (get_duration() defaults to iteration 0, and
+        # num_tokens_generated_decode[0]/prefill_lens[0] are batch 0), whereas `input_prompts` is
+        # left pointing at the *last* repeat batch by the loop above.
+        target_seq_len = len(repeat_batch_prompts[0][0])
         resolved_targets = resolve_perf_targets(
             model_name=model_args.base_model_name,
             sku=sku,
             batch_size=batch_size,
-            seq_len=len(input_prompts[0]),
+            seq_len=target_seq_len,
         )
         if resolved_targets:
             verify_perf(
                 measurements,
+                # Use the prefill_time_to_first_token alias: both alias to the same measured TTFT,
+                # but per-metric tolerance keys are resolved from the requested name only, so
+                # requesting prefill_time_to_token would silently ignore a
+                # prefill_time_to_first_token_tolerance in the centralized targets.
                 expected_measurements={
-                    "prefill_time_to_token": True,
+                    "prefill_time_to_first_token": True,
                     "decode_t/s/u": True,
                 },
                 model_name=model_args.base_model_name,
                 sku=sku,
                 batch_size=batch_size,
-                seq_len=len(input_prompts[0]),
+                seq_len=target_seq_len,
             )
         else:
             logger.warning(
                 f"No centralized performance targets found for model={model_args.base_model_name}, "
-                f"sku={sku}, batch_size={batch_size}, seq_len={len(input_prompts[0])}"
+                f"sku={sku}, batch_size={batch_size}, seq_len={target_seq_len}"
             )
     else:
         logger.info(f"Test '{test_id}' currently doesn't have performance targets set! Skipping performance checks...")

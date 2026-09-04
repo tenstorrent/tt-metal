@@ -11,16 +11,19 @@
 #include "tt-metalium/circular_buffer_constants.h"
 #include "tt-metalium/circular_buffer_config.hpp"
 #include "tt-metalium/core_coord.hpp"
-#include "tt-metalium/hal_types.hpp"     // HalProgrammableCoreType
-#include "tt-metalium/kernel_types.hpp"  // KernelHandle
-#include "tt-metalium/program.hpp"       // KernelGroup
-#include "program_device_map.hpp"        // ProgramTransferInfo
+#include "tt-metalium/hal_types.hpp"           // HalProgrammableCoreType
+#include "tt-metalium/kernel_types.hpp"        // KernelHandle
+#include "tt-metalium/program.hpp"             // KernelGroup
+#include "hostdev/cross_node_dfb_constants.h"  // CROSS_NODE_DFB_OFFSET_NONE
+#include "program_device_map.hpp"              // ProgramTransferInfo
 #include "impl/buffers/semaphore.hpp"
 #include "tt-metalium/sub_device_types.hpp"
-#include "tt-metalium/experimental/tensor/spec/tensor_spec.hpp"  // Metal 2.0 TensorParameter registry
+#include "tt-metalium/tensor/spec/tensor_spec.hpp"                               // Metal 2.0 TensorParameter registry
+#include "tt-metalium/experimental/metal2_host_api/tensor_spec_relaxations.hpp"  // Metal 2.0 TensorParameter relaxations
 #include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
+#include <impl/context/context_types.hpp>
 
-#include <umd/device/types/core_coordinates.hpp>        // CoreType
+#include <umd/device/types/core_coordinates.hpp>          // CoreType
 #include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
 
 #include <atomic>
@@ -50,26 +53,29 @@ class EnqueueProgramCommand;
 class Kernel;
 
 namespace distributed {
+class MeshDevice;
 class MeshWorkload;
 class MeshWorkloadImpl;
 }  // namespace distributed
 
 namespace experimental {
 class GlobalCircularBuffer;
-}
+class CrossNodeDFB;
+}  // namespace experimental
 
 namespace program_dispatch {
 
 void assemble_device_commands(
     ProgramCommandSequence& program_command_sequence,
     detail::ProgramImpl& program,
-    IDevice* device,
+    distributed::MeshDevice* mesh_device,
     SubDeviceId sub_device_id,
     bool use_prefetcher_cache);
 }
 
 struct KernelGroup {
     uint32_t programmable_core_type_index{};
+    ContextId context_id_{DEFAULT_CONTEXT_ID};
     CoreRangeSet core_ranges;
     // kernel_ids are ordered by processor index
     std::vector<KernelHandle> kernel_ids;
@@ -105,6 +111,13 @@ struct ProgramConfig {
     uint32_t dfb_offset;
     uint32_t dfb_size;
     uint32_t local_cb_size;
+    // CrossNodeDFB dense index byte offset from kernel_config_base, or
+    // CROSS_NODE_DFB_OFFSET_NONE when no CrossNodeDFB participants are present.
+    // Dense region: word[0]=num_slots, then num_slots × fixed 3-word entries
+    // [absolute_config_buffer_addr, entry_size, relay_dfb_id]. Full per-core pages
+    // (fifo/NOC/credits) live in a dedicated program-owned L1 config Buffer rather than
+    // inflating every worker-config ringbuffer slot.
+    uint32_t cross_node_dfb_offset = CROSS_NODE_DFB_OFFSET_NONE;
     uint32_t kernel_text_offset;  // offset of first kernel bin
     uint32_t kernel_text_size;    // max size of all kernel bins across all kernel groups
 };
@@ -135,6 +148,8 @@ struct ProgramOffsetsState {
     uint32_t local_cb_size = 0;
     uint32_t dfb_offset = 0;
     uint32_t dfb_size = 0;
+    // CrossNodeDFB offset from config base, or CROSS_NODE_DFB_OFFSET_NONE if none.
+    uint32_t cross_node_dfb_offset = CROSS_NODE_DFB_OFFSET_NONE;
     // Kernel binary offsets and sizes.
     uint32_t kernel_text_offset = 0;
     uint32_t kernel_text_size = 0;
@@ -179,7 +194,7 @@ public:
 // The internal implementation of the Program class. Program is a view of this class that's usable by API clients.
 class ProgramImpl : public std::enable_shared_from_this<ProgramImpl> {
 public:
-    ProgramImpl();
+    explicit ProgramImpl(ContextId context_id = DEFAULT_CONTEXT_ID);
 
     ProgramImpl(const ProgramImpl& other) = delete;
     ProgramImpl& operator=(const ProgramImpl& other) = delete;
@@ -193,6 +208,8 @@ public:
     using LocalCBMaskType = typename dev_msgs::kernel_config_msg_t::
         FieldTraits<false, dev_msgs::kernel_config_msg_t::Field::local_cb_mask>::element_type;
     static constexpr size_t cb_mask_width_ = sizeof(LocalCBMaskType) * 8;
+
+    ContextId get_context_id() const { return context_id_; }
 
     void set_runtime_id(ProgramId id);
     ProgramId get_runtime_id() const;
@@ -212,7 +229,8 @@ public:
     std::vector<CoreRange> circular_buffers_unique_coreranges() const;
     std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>> dataflow_buffers_on_core(
         const CoreCoord& core) const;
-    std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>> dataflow_buffers_on_corerange(const CoreRange& cr) const;
+    std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>
+    dataflow_buffers_on_corerange(const CoreRange& cr) const;
     std::vector<CoreRange> dataflow_buffers_unique_coreranges() const;
     std::vector<std::reference_wrapper<const Semaphore>> semaphores_on_core(
         const CoreCoord& core, CoreType core_type) const;
@@ -220,11 +238,15 @@ public:
         const IDevice& device, const CoreCoord& logical_core, uint32_t programmable_core_type_index) const;
     std::vector<std::vector<CoreCoord>> logical_cores() const;
     void compile(IDevice* device, bool force_slow_dispatch = false);
+    void compile_and_allocate(IDevice* device, bool force_slow_dispatch);
     void invalidate_circular_buffer_allocation();
     void invalidate_dataflow_buffer_allocation();
     // Always used in conjunction with validate_circular_buffer_region and compile
     void allocate_circular_buffers(const IDevice* device);
     void allocate_dataflow_buffers(const IDevice* device);
+    // Metal 2.0 only: allocate Program-scope L1 for each kernel's scratchpads,
+    // and patch the base address into the CRTA buffer
+    void allocate_scratchpads(const IDevice* device);
     bool is_finalized() const;
     bool is_compiled() const { return !compiled_.empty(); }
     void set_finalized();
@@ -244,7 +266,7 @@ public:
     const ProgramConfig& get_program_config(uint32_t programmable_core_type_index) const;
     const std::vector<SubDeviceId>& determine_sub_device_ids(const IDevice* device);
 
-    void generate_trace_dispatch_commands(IDevice* device, bool use_prefetcher_cache);
+    void generate_trace_dispatch_commands(distributed::MeshDevice* mesh_device, bool use_prefetcher_cache);
     std::unordered_map<uint64_t, ProgramCommandSequence>& get_trace_cached_program_command_sequences() noexcept;
 
     // debug/test
@@ -271,7 +293,7 @@ public:
         const KernelsGetter& kernels_getter,
         const KernelGroupsGetter& kernel_groups_getter,
         const SemaphoresGetter& semaphores_getter,
-        tt::stl::Span<ProgramImpl*> programs);
+        ttsl::Span<ProgramImpl*> programs);
 
     std::vector<uint32_t>& get_program_config_sizes() noexcept { return program_config_sizes_; }
 
@@ -284,8 +306,43 @@ public:
     uint32_t add_dataflow_buffer(
         const CoreRangeSet& core_range_set, const experimental::dfb::DataflowBufferConfig& config);
 
+    uint32_t assign_dfb_device_slot(const experimental::dfb::detail::DataflowBufferImpl& dfb) const;
+
     // Declare an alias relationship: secondary shares primary's L1 address.
     void set_dfb_alias(uint32_t primary_id, uint32_t secondary_id);
+
+    // Per-core CrossNodeDFB participant record. Host storage is sparse: a core only lists
+    // slots it participates in. Device config is still dense by program-wide remote_dfb_id
+    struct CrossNodeDFBParticipant {
+        uint8_t remote_dfb_id;
+        // Absolute L1 address of this slot's page in its dedicated sharded config Buffer.
+        uint32_t config_page_addr;
+        uint32_t entry_size;
+        uint8_t relay_dfb_id;
+    };
+
+    // Read-only accessor for dispatch to iterate CrossNodeDFB participant records.
+    const std::unordered_map<CoreCoord, std::vector<CrossNodeDFBParticipant>>& get_per_core_cross_node_dfbs() const {
+        return per_core_cross_node_dfbs_;
+    }
+
+    // Program-wide slot count (dense [0, num) remote_dfb_id space).
+    uint8_t num_cross_node_dfb_slots() const { return next_cross_node_dfb_slot_; }
+
+    // Wire a CrossNodeDFB onto its all_cores and store it under the new slot id.
+    uint8_t add_cross_node_dfb(experimental::CrossNodeDFB gdfb);
+
+    const experimental::CrossNodeDFB& get_cross_node_dfb(uint8_t remote_dfb_id) const;
+    experimental::CrossNodeDFB& get_cross_node_dfb(uint8_t remote_dfb_id);
+
+    // Mark a normal local DFB as the typed relay for a CrossNodeDFB this core participates in.
+    // The local DFB borrows the CrossNode data buffer; its device_slot is emitted
+    // only on receiver cores and consumed by CrossNodeDFB::bind_relay().
+    void register_cross_node_relay_dfb(
+        const CoreRangeSet& receiver_cores, uint8_t remote_dfb_id, uint32_t relay_dfb_host_id);
+
+    // Retarget the data ring of an existing CrossNodeDFB slot to `buffer`.
+    void update_dynamic_cross_node_dfb_address(uint8_t remote_dfb_id, Buffer& buffer);
 
     // Allocates TCs and remapper configs, cannot be done on creation because we need to determine if a set of DFBs on a
     // core require remapper being enabled
@@ -293,7 +350,8 @@ public:
 
     std::shared_ptr<CircularBufferImpl> get_circular_buffer(CBHandle cb_id) const;
 
-    std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl> get_dataflow_buffer(uint32_t dfb_id) const;
+    std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl> get_dataflow_buffer(
+        uint32_t dfb_id) const;
 
     // A single DFB size override request, resolved to a DFB id. Overrides are applied as a batch
     // so an alias group can be validated for agreement before any mutation.
@@ -339,21 +397,23 @@ public:
 
     std::unordered_map<uint64_t, ProgramCommandSequence>& get_cached_program_command_sequences() noexcept;
 
-    void generate_dispatch_commands(IDevice* device, bool use_prefetcher_cache);
+    void generate_dispatch_commands(distributed::MeshDevice* mesh_device, bool use_prefetcher_cache);
 
     // Dispatches detail::collect_kernel_meta, device is nullable
     std::vector<detail::KernelMeta> collect_kernel_meta(IDevice* device) const;
 
+    // Metal 2.0: Mark this Program as created from ProgramSpec
+    // This enables legality checks against illegal mixing of Metal 2.0 idioms with legacy Programs.
+    void mark_created_from_spec() { created_from_spec_ = true; }
+    bool created_from_spec() const { return created_from_spec_; }
+
     // Metal 2.0: Add name -> handle mappings (temporary indirection)
+    bool has_metal2_registry() const { return metal2_registry_.has_value(); }
     void register_kernel_spec_name(const std::string& name, KernelHandle handle);
     void register_dfb_spec_name(const std::string& name, uint32_t dfb_id);
     void register_semaphore_spec_name(const std::string& name, uint32_t sem_id);
     void register_tensor_parameter(
-        const std::string& name,
-        const TensorSpec& spec,
-        bool dynamic_tensor_shape,
-        bool match_padded_shape_only,
-        bool enqueue_invariant);
+        const std::string& name, const TensorSpec& spec, const experimental::TensorSpecRelaxations& relaxations);
 
     // Metal 2.0: Get handle from name (TT_FATAL if not found)
     KernelHandle get_kernel_handle(const std::string& name) const;
@@ -361,15 +421,9 @@ public:
     uint32_t get_semaphore_handle(const std::string& name) const;
     // Returns nullptr if name is not registered (caller validates).
     const TensorSpec* get_tensor_parameter_layout(const std::string& name) const;
-    // Returns false if the parameter was not registered with dynamic_tensor_shape=true,
-    // or if the name is unknown. (The caller validates known-ness separately.)
-    bool get_tensor_parameter_dynamic_tensor_shape(const std::string& name) const;
-    // Returns false if the parameter was not registered with match_padded_shape_only=true,
-    // or if the name is unknown. (The caller validates known-ness separately.)
-    bool get_tensor_parameter_match_padded_shape_only(const std::string& name) const;
-    // Returns false if the parameter was not registered enqueue-invariant, or if the name is
-    // unknown. (The caller validates known-ness separately.)
-    bool get_tensor_parameter_enqueue_invariant(const std::string& name) const;
+    // Returns the relaxations the parameter was registered with (default-constructed / strict if the
+    // name is unknown; the caller validates known-ness separately).
+    experimental::TensorSpecRelaxations get_tensor_parameter_relaxations(const std::string& name) const;
     std::vector<std::string> get_registered_tensor_parameter_names() const;
 
     // Metal 2.0: register that DFB `dfb_id` borrows its backing L1 memory from the MeshTensor
@@ -403,13 +457,6 @@ public:
         // broadcast count.
         std::unordered_map<CoreCoord, size_t> num_runtime_varargs_per_node;
         size_t num_common_runtime_varargs = 0;
-
-        // Names (each a subset of runtime_arg_names / common_runtime_arg_names) declared
-        // enqueue-loop invariant via KernelAdvancedOptions. These named args may be omitted
-        // from a partial UpdateProgramRunArgs call, in which case the value installed by the
-        // most recent SetProgramRunArgs is retained. (Varargs cannot be marked invariant.)
-        std::unordered_set<std::string> enqueue_invariant_runtime_arg_names;
-        std::unordered_set<std::string> enqueue_invariant_common_runtime_arg_names;
     };
 
     // Metal 2.0: Runtime argument schema registration and lookup
@@ -418,6 +465,13 @@ public:
 
     // Metal 2.0: Get all registered kernel names (for completeness validation)
     std::vector<std::string> get_registered_kernel_names() const;
+
+    // Metal 2.0: Pre-size RTA/CRTA host buffers from the registered schema + CRTA layout so
+    // finalize_offsets can compute dispatch sizes before SetProgramRunArgs fills values.
+    void reserve_runtime_arg_buffers();
+
+    bool program_run_args_initialized() const { return program_run_args_initialized_; }
+    void mark_program_run_args_initialized() { program_run_args_initialized_ = true; }
 
 private:
     HWCommandQueue* last_used_command_queue_for_testing = nullptr;
@@ -430,6 +484,7 @@ private:
     ProgramTransferInfo program_transfer_info;
 
     bool finalized_{false};
+    bool program_run_args_initialized_{false};
     // Used only when devices do not have virtualization enabled and used to check that programs are only rerun on
     // the same device
     std::optional<uint64_t> cached_device_hash_;
@@ -462,9 +517,10 @@ private:
         // Reset when circular buffer allocation is invalidated
         void reset_available_addresses() { this->l1_regions.clear(); }
     };
+    ContextId context_id_{DEFAULT_CONTEXT_ID};
     uint32_t programmable_core_count_;
     uint32_t max_cbs_;  // Architecture-specific max CBs
-    uint64_t id;  // Need to make non-const due to move constructor
+    uint64_t id;        // Need to make non-const due to move constructor
     uint64_t runtime_id{0};
     static std::atomic<uint64_t> program_counter;
     // Programmable core type index -> KernelHandle -> Kernel
@@ -486,6 +542,15 @@ private:
     std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>> dataflow_buffers_;
     std::unordered_map<uint32_t, std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>
         dataflow_buffer_by_id_;
+
+    // CrossNodeDFB participants: per-core list of (remote_dfb_id, config_page_addr, entry_size).
+    // 0-based ascending index space; separate from DFB index space.
+    std::unordered_map<CoreCoord, std::vector<CrossNodeDFBParticipant>> per_core_cross_node_dfbs_;
+    // Host objects owned by this program, keyed by remote_dfb_id.
+    std::unordered_map<uint8_t, experimental::CrossNodeDFB> cross_node_dfbs_;
+    // Optional typed relay: remote_dfb_id → local DFB host id (from CreateCrossNodeRelayDataflowBuffer).
+    std::unordered_map<uint8_t, uint32_t> cross_node_relay_host_ids_;
+    uint8_t next_cross_node_dfb_slot_ = 0;
     tt::tt_metal::experimental::dfb::detail::TileCounterAllocator tile_counter_allocator_;
     tt::tt_metal::experimental::dfb::detail::RemapperIndexAllocator remapper_index_allocator_;
     tt::tt_metal::experimental::dfb::detail::TxnIdAllocator txn_id_allocator_;
@@ -505,11 +570,7 @@ private:
         // the per-parameter lookup for completeness checks.
         struct RegisteredTensorParameter {
             TensorSpec spec;
-            bool dynamic_tensor_shape = false;
-            bool match_padded_shape_only = false;
-            // Declared enqueue-loop invariant: the TensorArgument may be omitted from a partial
-            // UpdateProgramRunArgs call (the previously-bound MeshTensor is retained).
-            bool enqueue_invariant = false;
+            experimental::TensorSpecRelaxations relaxations;
         };
         std::unordered_map<std::string, RegisteredTensorParameter> tensor_parameter_layouts;
 
@@ -518,12 +579,32 @@ private:
     };
     std::optional<Metal2NameRegistry> metal2_registry_;  // Only populated for Metal 2.0 programs
 
+    // True only for Programs minted by BuildProgramFromSpec (the sole legitimate source of
+    // Metal 2.0 kernels). Metal 2.0 named bindings require the ProgramSpec path; add_kernel
+    // rejects an is_metal2_kernel() kernel added to any other Program (e.g. the
+    // ProgramDescriptor ctor path or a legacy CreateKernel program).
+    bool created_from_spec_ = false;
+
     // Semaphores
     std::vector<Semaphore> semaphores_;
 
     std::unordered_set<uint64_t> compiled_;
     bool local_circular_buffer_allocation_needed_{false};
     bool local_dataflow_buffer_allocation_needed_{false};
+
+    // Guards compile_and_allocate, which runs on every enqueue of a program, not just the first.
+    // Once a program has been compiled and laid out for a device, every step inside it is a no-op
+    // until something invalidates the CB or DFB layout, so it can be skipped wholesale. The
+    // invalidate_*_allocation hooks and the CB/DFB creation paths set this back to true. Recorded
+    // per device, since the layout steps also register the program against the device.
+    bool compile_and_allocate_needed_{true};
+    const IDevice* compile_and_allocate_device_{nullptr};
+
+    // Scratchpads (Metal 2.0 only)
+    // Guards allocate_scratchpads to ensure that it runs once per allocation cycle.
+    // Scratchpad allocation occurs once on Program creation, and is re-run if the DFB layout
+    // is recomputed (due to a DFB size override at runtime).
+    bool scratchpads_allocated_{false};
 
     static constexpr uint8_t core_to_kernel_group_invalid_index = 0xff;
     std::vector<std::vector<std::shared_ptr<KernelGroup>>> kernel_groups_;
@@ -570,7 +651,7 @@ private:
     friend void program_dispatch::assemble_device_commands(
         ProgramCommandSequence& program_command_sequence,
         ProgramImpl& program,
-        IDevice* device,
+        distributed::MeshDevice* mesh_device,
         SubDeviceId sub_device_id,
         bool use_prefetcher_cache);
 
@@ -582,4 +663,9 @@ private:
 };
 
 }  // namespace detail
+
+// Launch `program` on every device in `mesh_device` via EnqueueMeshWorkload.
+// Takes ownership of `program`. When `wait_until_cores_done` is true, enqueue is blocking.
+void LaunchProgram(distributed::MeshDevice& mesh_device, Program&& program, bool wait_until_cores_done);
+
 }  // namespace tt::tt_metal

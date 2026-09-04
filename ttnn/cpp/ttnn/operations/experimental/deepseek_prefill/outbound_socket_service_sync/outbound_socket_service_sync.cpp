@@ -9,7 +9,13 @@
 namespace ttnn::experimental {
 
 Tensor outbound_socket_service_sync(
-    const tt::tt_metal::D2DStreamServiceSender& service, const Tensor& input, const std::optional<Tensor>& metadata) {
+    const ttnn::D2DStreamServiceSender& service, const Tensor& input, const std::optional<Tensor>& metadata) {
+    return ttnn::prim::outbound_socket_service_sync(service, input, metadata);
+}
+Tensor outbound_socket_service_sync(
+    const tt::tt_metal::D2HStreamService& service,
+    const std::optional<Tensor>& input,
+    const std::optional<Tensor>& metadata) {
     return ttnn::prim::outbound_socket_service_sync(service, input, metadata);
 }
 

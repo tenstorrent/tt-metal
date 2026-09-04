@@ -2,6 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+# Single parametrized prefill test. Wormhole runs the original (main) prefetcher path; Blackhole
+# Galaxy runs the no-prefetcher bring-up path. The architecture is detected once at import so the
+# fabric config and in-body setup select the right path automatically.
 import torch
 import pytest
 from loguru import logger
@@ -16,6 +19,12 @@ from models.common.utility_functions import (
 from models.demos.llama3_70b_galaxy.tt.prefetcher_common import TtLlamaPrefetcherSetup
 from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
 from models.demos.llama3_70b_galaxy.reference.qwen import FeedForward
+
+
+from models.demos.llama3_70b_galaxy.tests.unit_tests.qwen_test_utils import (
+    IS_BLACKHOLE as _IS_BLACKHOLE,
+    PREFILL_FABRIC_CONFIG as _PREFILL_FABRIC_CONFIG,
+)
 
 
 @torch.no_grad()
@@ -36,7 +45,7 @@ from models.demos.llama3_70b_galaxy.reference.qwen import FeedForward
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}],
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": _PREFILL_FABRIC_CONFIG}],
     indirect=True,
 )
 def test_qwen_mlp_inference_prefill(seq_len, batch_size, mesh_device, reset_seeds, ensure_gc):
@@ -74,9 +83,16 @@ def test_qwen_mlp_inference_prefill(seq_len, batch_size, mesh_device, reset_seed
 
     logger.info(f"Qwen Model Loaded")
 
-    prefetcher_setup = TtLlamaPrefetcherSetup(mesh_device, n_tensors=0, n_layers=1, mode="prefill")
-    mesh_device.set_sub_device_stall_group([prefetcher_setup.worker_sub_device_id])
-    tt_ccl = TT_CCL(mesh_device, model_args, prefetcher_setup.worker_sub_device_id, mode="prefill", is_qwen=True)
+    # Blackhole runs prefill on the full compute grid (no narrow prefetcher worker sub-device);
+    # Wormhole keeps main's prefill prefetcher setup so the worker sub-device matches production.
+    if _IS_BLACKHOLE:
+        prefetcher_setup = None
+        worker_sub_device_id = None
+    else:
+        prefetcher_setup = TtLlamaPrefetcherSetup(mesh_device, n_tensors=0, n_layers=1, mode="prefill")
+        mesh_device.set_sub_device_stall_group([prefetcher_setup.worker_sub_device_id])
+        worker_sub_device_id = prefetcher_setup.worker_sub_device_id
+    tt_ccl = TT_CCL(mesh_device, model_args, worker_sub_device_id, mode="prefill", is_qwen=True)
 
     model_args.WEIGHTS_DTYPE = dtype
     tt_model = TtLlamaMLP(

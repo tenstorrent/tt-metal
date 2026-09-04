@@ -10,7 +10,7 @@ from helpers.param_config import (
     input_output_formats,
     parametrize,
 )
-from helpers.perf import PerfConfig
+from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
     DEST_INDEX,
@@ -78,7 +78,7 @@ def get_valid_num_faces_datacopy(tilize):
     dest_index=0,
     num_blocks=[1, 2],
     num_tiles_in_block=[4, 8],
-    loop_factor=[1, 16, 64],
+    loop_factor=[8, 128, 512],
 )
 def test_perf_pack_dest_bank(
     perf_report,

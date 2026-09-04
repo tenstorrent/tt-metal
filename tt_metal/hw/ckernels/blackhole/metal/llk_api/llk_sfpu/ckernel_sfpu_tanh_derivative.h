@@ -9,8 +9,7 @@
 #include "sfpu/ckernel_sfpu_polyval.h"
 #include "ckernel_sfpu_exp.h"
 #include "sfpu/ckernel_sfpu_load_config.h"
-
-using namespace sfpi;
+#include "cmath_common.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -20,40 +19,34 @@ namespace sfpu {
 // Kept for backward compatibility. Use calculate_tanh_derivative_sech2 instead.
 template <bool APPROXIMATION_MODE, int WITH_PRECOMPUTED_TANH = 0, int ITERATIONS = 8>
 inline void calculate_tanh_derivative() {
-    vUInt l0 = l_reg[LRegs::LReg0];
-    vUInt l1 = l_reg[LRegs::LReg1];
-    vUInt l2 = l_reg[LRegs::LReg2];
+    sfpi::vLut8si si0 = l_reg[sfpi::LRegs::LReg0];
+    sfpi::vLut8si si1 = l_reg[sfpi::LRegs::LReg1];
+    sfpi::vLut8si si2 = l_reg[sfpi::LRegs::LReg2];
 
     // tanh'(x) = 1 - (tanh(x))^2
     for (int d = 0; d < ITERATIONS; d++) {
-        vFloat val = dst_reg[0];
+        sfpi::vFloat val = sfpi::dst_reg[0];
 
         if constexpr (!WITH_PRECOMPUTED_TANH) {
-            val = lut(val, l0, l1, l2);
+            val = sfpi::lut(val, si0, si1, si2);
         }
 
-        val = val * (-val) + vConst1;
-        dst_reg[0] = val;
+        val = val * (-val) + 1.0f;
+        sfpi::dst_reg[0] = val;
 
-        dst_reg++;
+        sfpi::dst_reg++;
     }
 
-    l_reg[LRegs::LReg0] = l0;
-    l_reg[LRegs::LReg1] = l1;
-    l_reg[LRegs::LReg2] = l2;
+    sfpi::l_reg[LRegs::LReg0] = si0;
+    sfpi::l_reg[LRegs::LReg1] = si1;
+    sfpi::l_reg[LRegs::LReg2] = si2;
 }
 
 template <bool APPROXIMATION_MODE>
 inline void tanh_derivative_init() {
-    uint imm0;
-    uint imm1;
-    uint imm2;
-    imm0 = 0x1DFF;  // 0.90625*x
-    imm1 = 0x481A;  // 0.09375*x + 0.8125
-    imm2 = 0xFF00;  // 1
-    _sfpu_load_imm16_(0, imm0);
-    _sfpu_load_imm16_(1, imm1);
-    _sfpu_load_imm16_(2, imm2);
+    sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vLut8si(0.90625f, 0.0f);
+    sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::vLut8si(0.09375f, 0.8125f);
+    sfpi::l_reg[sfpi::LRegs::LReg2] = sfpi::vLut8si(0.0f, 1.0f);
 }
 
 // =============================================================================
@@ -103,14 +96,14 @@ sfpi_inline sfpi::vFloat inline_exp_sech2_tail(sfpi::vFloat a) {
     r = k * LN2_LO + r;
 
     // Degree-4 Taylor for exp(r)
-    sfpi::vFloat poly = PolynomialEvaluator::eval(r, sfpi::vConst1, sfpi::vConst1, C2, C3, C4);
+    sfpi::vFloat poly = PolynomialEvaluator::eval(r, 1.0f, 1.0f, C2, C3, C4);
 
     // 2^k scaling via direct exponent bit manipulation (FREE)
-    sfpi::vInt p_exp = sfpi::exexp(poly, sfpi::ExponentMode::NoDebias);
+    sfpi::vInt p_exp = sfpi::exexp(poly, sfpi::ExponentMode::Biased);
     sfpi::vInt new_exp = p_exp + k_int;
 
     // FTZ: if exponent underflows, result is 0 (natural zero saturation)
-    sfpi::vFloat result = sfpi::vConst0;
+    sfpi::vFloat result = 0.0f;
     v_if(new_exp > 0) { result = sfpi::setexp(poly, new_exp); }
     v_endif;
 
@@ -169,11 +162,11 @@ constexpr float SECH2_POLY_C10 = 6.33840343077387569082e-02f;
 constexpr float CORE_REGION_LIMIT = 3.0f;   // Polynomial ↔ exp boundary
 constexpr float TAIL_REGION_LIMIT = 45.0f;  // Exp ↔ zero saturation boundary
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_tanh_derivative_sech2() {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat val = sfpi::dst_reg[0];
-        sfpi::vFloat result = sfpi::vConst0;
+        sfpi::vFloat result = 0.0f;
 
         // sech²(x) is an even function: sech²(-x) = sech²(x)
         sfpi::vFloat a = sfpi::abs(val);
@@ -217,6 +210,7 @@ inline void calculate_tanh_derivative_sech2() {
 
 template <bool APPROXIMATION_MODE>
 inline void tanh_derivative_sech2_init() {
+    math::reset_counters(p_setrwc::SET_ABD_F);
     // No special initialization needed — no reciprocal, no LUT.
     // Polynomial uses only Horner evaluation, inline exp uses only arithmetic.
 }

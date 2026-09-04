@@ -16,6 +16,7 @@ from loguru import logger
 import ttnn
 from models.common.sampling import SamplingParams
 from models.common.utility_functions import is_blackhole, is_wormhole_b0
+from models.common.weight_cache import build_cached_state_dict, mark_weight_cache_complete, weight_cache_is_complete
 from models.demos.multimodal.gemma3.tt.gemma_e2e_model import TtGemmaModel
 from models.demos.multimodal.gemma3.tt.gemma_multimodal_generator import GemmaMultimodalGenerator as Generator
 from models.demos.utils.device_sku import get_current_device_sku_name
@@ -70,7 +71,7 @@ def create_tt_model(
     dummy_weights: bool = False,
     enable_program_trace: bool = False,
 ):
-    from models.demos.multimodal.gemma3.tt.model_config import ModelArgs
+    from models.demos.multimodal.gemma3.tt.model_config import ModelArgs, is_gemma3_host_weight
     from models.tt_transformers.tt.model import Transformer
 
     tt_model_args = ModelArgs(
@@ -112,10 +113,41 @@ def create_tt_model(
             for decoder_id in range(tt_model_args.n_layers):
                 tt_model_args.optimizations.set_decoder_conf(decoder_id, gemma_text_perf)
             tt_model_args.model_config["DECODERS_OPTIMIZATIONS"] = tt_model_args.optimizations
+            if tt_model_args.num_devices == 1:
+                # Turn off fp32_dest_acc_en to not trigger L1 OOM
+                tt_model_args._force_sdpa_prefill_hifi4_fp16()
 
-    # Avoid loading state_dict for every DP model
-    if not state_dict:
-        state_dict = tt_model_args.load_state_dict()
+    # Warm ttnn cache => skip the HF from_pretrained host load and build from .tensorbin. Text and
+    # vision share one cache dir and gemma3's load_state_dict returns the full multimodal dict, so
+    # both paths use the shared hybrid helper with the SAME host-weight set (the text Transformer
+    # consumes none of the 5 vision host keys, but they must be captured to the sidecar for the
+    # vision path). None=decide, placeholder=skip/DP-reuse, populated=reuse.
+    #
+    # components="text": this build constructs ONLY the text Transformer, so it only writes the
+    # text tensorbins. The marker records that, and vision_demo (components="text+vision") will not
+    # accept it -- otherwise the vision tower would be built from placeholders and as_tensor would
+    # dump them to disk as real cache entries. (#45400 review)
+    cache_dir = tt_model_args.weight_cache_path(dtype)
+    cache_identity = dict(
+        model_name=tt_model_args.model_name,
+        n_layers=tt_model_args.n_layers,
+        mesh_shape=tuple(tt_model_args.mesh_device.shape),
+        components=["text"],
+        # gemma3 inherits the tt_transformers ModelArgs, so its cache filenames move with the
+        # same knobs (precision config, prefetcher, batch, rope mode). Key the marker on them the
+        # same way create_tt_model does. (#45400 review, finding B2)
+        build_variant=tt_model_args._weight_cache_build_variant(),
+    )
+    loaded_real_weights = False
+    if state_dict is None:
+        if not tt_model_args.dummy_weights and weight_cache_is_complete(cache_dir, **cache_identity):
+            logger.info("Warm ttnn weight cache detected -- building state_dict from cache (no HF load).")
+            state_dict = build_cached_state_dict(
+                cache_dir, args=tt_model_args, build_variant=cache_identity["build_variant"]
+            )
+        else:
+            state_dict = tt_model_args.load_state_dict()
+            loaded_real_weights = bool(state_dict) and not tt_model_args.dummy_weights
 
     model = Transformer(
         args=tt_model_args,
@@ -127,6 +159,9 @@ def create_tt_model(
     )
 
     tt_kv_cache = [l.attention.layer_past for l in model.layers] if paged_attention_config else None
+
+    if loaded_real_weights and num_layers is None:
+        mark_weight_cache_complete(cache_dir, state_dict, is_host_weight=is_gemma3_host_weight, **cache_identity)
 
     return tt_model_args, model, tt_kv_cache, state_dict
 
@@ -695,6 +730,33 @@ def _gemma3_text_demo_device_params():
             False,  # stress_test
             False,  # enable_trace
         ),
+        # Seqlen sweep: 1k-128k context lengths, one step per seqlen
+        (
+            [
+                "models/tt_transformers/demo/sample_prompts/input_data_long_1k.json",
+                "models/tt_transformers/demo/sample_prompts/input_data_long_2k.json",
+                "models/tt_transformers/demo/sample_prompts/input_data_long_4k.json",
+                "models/tt_transformers/demo/sample_prompts/input_data_long_8k.json",
+                "models/tt_transformers/demo/sample_prompts/input_data_long_16k.json",
+                "models/tt_transformers/demo/sample_prompts/input_data_long_32k.json",
+                "models/tt_transformers/demo/sample_prompts/input_data_long_64k.json",
+                "models/tt_transformers/demo/sample_prompts/input_data_long_128k.json",
+            ],  # input_prompts: list of 8 files, one per sweep step
+            True,  # instruct mode
+            8,  # repeat_batches (one per seqlen step)
+            64 * 1024,  # max_seq_len (capped for single-N150 memory; steps above this are filtered out)
+            1,  # batch_size
+            32,  # max_generated_tokens (minimal decode to verify prefill works)
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks_per_dp": 1024},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params
+            True,  # stop_at_eos
+            True,  # ci_only
+            1,  # data_parallel
+            False,  # token_accuracy
+            False,  # stress_test
+            True,  # enable_trace
+        ),
     ],
     ids=[
         "batch-1",  # latency
@@ -717,6 +779,7 @@ def _gemma3_text_demo_device_params():
         "ci-b1-DP-32",  # CI DP 32 batch 1
         "ci-stress-1",  # CI Stress test batch-1
         "ci-token-matching",  # CI performs token accuracy matching with reference procomputed tokens
+        "seqlen-sweep",  # sweep 1k-128k context lengths
     ],
 )
 @pytest.mark.parametrize(
@@ -802,7 +865,11 @@ def test_demo_text(
     page_params = request.config.getoption("--page_params") or page_params
     if isinstance(page_params, str):  # Required for proper load of a dictionary from the override command
         page_params = json.loads(page_params)
-    sampling_params = request.config.getoption("--sampling_params") or sampling_params
+    cli_sampling_params = request.config.getoption("--sampling_params")
+    if cli_sampling_params:
+        # Merge onto the parametrized defaults so a partial override (e.g. only
+        # temperature) keeps the remaining keys the demo indexes unconditionally.
+        sampling_params = {**sampling_params, **cli_sampling_params}
     json_config_file = request.config.getoption("--decoder_config_file")
     token_accuracy = request.config.getoption("--token_accuracy") or token_accuracy
     stress_test = request.config.getoption("--stress_test") or stress_test
@@ -891,12 +958,30 @@ def test_demo_text(
 
     logger.info(f"Reading inputs...")
     profiler.start("loading_inputs")
-    if len(input_prompts) == 1:  # Manual input
+    is_seqlen_sweep = "seqlen-sweep" in test_id
+    # The paged KV-cache pool is sized by page_max_num_blocks_per_dp, independent of max_seq_len, so a
+    # capped sweep (e.g. --max_seq_len on a single-N150 SKU) would still allocate the full pool and OOM.
+    # Shrink the pool to the swept context so the cache fits smaller-DRAM SKUs. min() only ever reduces it.
+    if is_seqlen_sweep:
+        blocks_needed = -(-(max_seq_len + max_generated_tokens) // page_params["page_block_size"])  # ceil div
+        page_params = {
+            **page_params,
+            "page_max_num_blocks_per_dp": min(page_params["page_max_num_blocks_per_dp"], blocks_needed),
+        }
+        logger.info(
+            f"Seqlen sweep: page_max_num_blocks_per_dp capped to {page_params['page_max_num_blocks_per_dp']} "
+            f"(max_seq_len={max_seq_len}, block_size={page_params['page_block_size']})"
+        )
+    if is_seqlen_sweep:  # seqlen-sweep: list of file paths, loaded per step in repeat_batch_prompts
+        seqlen_sweep_files = input_prompts
+        logger.info(
+            f"Seqlen sweep: running {len(seqlen_sweep_files)} steps: {[f.split('_')[-1] for f in seqlen_sweep_files]}"
+        )
+    elif len(input_prompts) == 1:  # Manual input
         input_prompts = input_prompts * global_batch_size
     else:  # Inputs from file
-        input_prompts = load_inputs(input_prompts, global_batch_size, input_prompts)
+        input_prompts = load_inputs(input_prompts, global_batch_size, instruct)
     profiler.end("loading_inputs")
-
     # To simulate a deployment environment, the demo supports repeating batched prompts.
     # This loop will rotate the prompts between the users for each batch, to simulate users sending different requests
     # If batch_size=1, the same prompt is repeated for each batch
@@ -963,9 +1048,22 @@ def test_demo_text(
         input_prompts[0] = token_acc.prepare_ref_tokens(tokenizer)
 
     repeat_batch_prompts = []
-    for i in range(repeat_batches):
-        repeat_batch_prompts.append([input_prompts[(j + i) % len(input_prompts)] for j in range(len(input_prompts))])
+    if is_seqlen_sweep:
+        # Extract target seqlen from filename (e.g. "input_data_long_16k.json" -> "16k" -> 16384)
+        def _seqlen_from_file(f):
+            label = Path(f).stem.split("_")[-1]  # e.g. "16k"
+            return int(label[:-1]) * 1024 if label.endswith("k") and label[:-1].isdigit() else 0
 
+        filtered_files = [f for f in seqlen_sweep_files if 0 < _seqlen_from_file(f) <= max_seq_len]
+        if not filtered_files:
+            pytest.skip(f"No sweep prompt files fit within max_seq_len={max_seq_len}")
+        for f in filtered_files:
+            repeat_batch_prompts.append(load_inputs(f, global_batch_size, instruct))
+    else:
+        for i in range(repeat_batches):
+            repeat_batch_prompts.append(
+                [input_prompts[(j + i) % len(input_prompts)] for j in range(len(input_prompts))]
+            )
     num_tokens_generated_decode = []
 
     logger.info("Starting inference...")
@@ -1182,7 +1280,7 @@ def test_demo_text(
                 expected_accuracy_metrics={"top1": min_top1_acc, "top5": min_top5_acc},
             )
 
-    profiler.end(f"inference_decode", iteration=batch_idx)
+        profiler.end(f"inference_decode", iteration=batch_idx)
 
     # Finish profiling at the end of inference for all repeated batches
     profiler.end("run")
@@ -1346,6 +1444,7 @@ def test_demo_text(
                 step_warm_up_num_iterations=None,
                 target=None,
             )
+
         if token_accuracy:
             benchmark_data.add_measurement(
                 profiler,

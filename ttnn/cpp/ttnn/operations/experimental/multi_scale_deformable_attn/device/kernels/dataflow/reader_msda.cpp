@@ -90,8 +90,18 @@ constexpr auto grid_args = TensorAccessorArgs<value_args.next_compile_time_args_
 constexpr auto attn_args = TensorAccessorArgs<grid_args.next_compile_time_args_offset()>();
 
 constexpr uint32_t TILE_MAX_ROWS = 32;
-constexpr uint32_t HALF_STICK_NBYTES = 32;  // 16 bf16 per row half (TL or TR portion of one row)
+constexpr uint32_t HALF_STICK_NBYTES = 32;  // one face-row half: 16 bf16 (TL or TR portion of one row)
 constexpr uint32_t HALF_WORDS = HALF_STICK_NBYTES / sizeof(uint32_t);
+constexpr uint32_t TILE_NBYTES = 2048;  // bf16 32x32 tile
+
+// A value stick carries D bf16 values (= D/2 uint32 words). One tile row
+// holds 32 values (lo + hi face halves), so a stick spans N_D_TILES tiles
+// laid side by side; the trailing tile is half-filled when D % 32 == 16.
+// Derived from D (not value_stick_nbytes, which is alignment-padded).
+constexpr uint32_t STICK_WORDS = D / 2;
+constexpr uint32_t WORDS_PER_TILE_ROW = 2 * HALF_WORDS;
+constexpr uint32_t N_D_TILES = (STICK_WORDS + WORDS_PER_TILE_ROW - 1) / WORDS_PER_TILE_ROW;
+static_assert(D % 16 == 0 && D > 0, "D must be a positive multiple of 16");
 
 void kernel_main() {
     const uint32_t value_addr = get_arg_val<uint32_t>(0);
@@ -206,8 +216,8 @@ void kernel_main() {
                 const bool* xv_arr = (c & 1) ? x1v_arr : x0v_arr;
                 const float* w_corner_arr = (c == 0) ? w_nw_arr : (c == 1) ? w_ne_arr : (c == 2) ? w_sw_arr : w_se_arr;
 
-                // ---- INPUT TILE ----
-                input_tile_cb.reserve_back(1);
+                // ---- INPUT TILES (N_D_TILES per (p, corner)) ----
+                input_tile_cb.reserve_back(N_D_TILES);
                 const uint32_t tile_l1 = input_tile_cb.get_write_ptr();
 
                 // Issue NoC reads for all valid rows.
@@ -223,21 +233,31 @@ void kernel_main() {
                 }
                 noc.async_read_barrier();
 
-                // Scatter sticks into face rows. Invalid corners have stale staging
-                // data but their scalar entry is zero — the multiply contributes 0.
+                // Scatter sticks into face rows. Stick words [k*32row .. ] land in
+                // d-tile k at the same row offsets. Invalid corners have stale
+                // staging data but their scalar entry is zero — the multiply
+                // contributes 0.
                 for (uint32_t r = 0; r < v_rows; ++r) {
                     if (!(yv_arr[r] && xv_arr[r])) {
                         continue;
                     }
                     const auto off = msda_tile_layout::tile_row_offsets(r);
                     CoreLocalMem<volatile uint32_t> s(value_scratch_l1 + r * value_stick_nbytes);
-                    CoreLocalMem<volatile uint32_t> dl(tile_l1 + off.lo);
-                    CoreLocalMem<volatile uint32_t> dh(tile_l1 + off.hi);
-                    for (uint32_t i = 0; i < HALF_WORDS; ++i) {
-                        dl[i] = s[i];
-                    }
-                    for (uint32_t i = 0; i < HALF_WORDS; ++i) {
-                        dh[i] = s[HALF_WORDS + i];
+                    for (uint32_t k = 0; k < N_D_TILES; ++k) {
+                        const uint32_t base = k * WORDS_PER_TILE_ROW;
+                        const uint32_t words_k =
+                            (STICK_WORDS - base < WORDS_PER_TILE_ROW) ? (STICK_WORDS - base) : WORDS_PER_TILE_ROW;
+                        const uint32_t lo_words = words_k < HALF_WORDS ? words_k : HALF_WORDS;
+                        const uint32_t hi_words = words_k - lo_words;
+                        const uint32_t ktile_l1 = tile_l1 + k * TILE_NBYTES;
+                        CoreLocalMem<volatile uint32_t> dl(ktile_l1 + off.lo);
+                        CoreLocalMem<volatile uint32_t> dh(ktile_l1 + off.hi);
+                        for (uint32_t i = 0; i < lo_words; ++i) {
+                            dl[i] = s[base + i];
+                        }
+                        for (uint32_t i = 0; i < hi_words; ++i) {
+                            dh[i] = s[base + HALF_WORDS + i];
+                        }
                     }
                 }
 
@@ -245,8 +265,10 @@ void kernel_main() {
                 // their scalar entry is zero (see scalar tile below), so any stale
                 // bytes in input row r contribute 0 to L1 accumulation. Saves a
                 // 16-row × 64-byte memset for tail tiles and skips work on full
-                // tiles entirely.
-                input_tile_cb.push_back(1);
+                // tiles entirely. The same contract covers the unused hi halves of
+                // a trailing half-filled d-tile (D % 32 == 16): the writer never
+                // reads those lanes back.
+                input_tile_cb.push_back(N_D_TILES);
 
                 // ---- SCALAR TILE ----
                 // LLK COL bcast reads only col 0 of TL face (rows 0..15) and BL

@@ -201,15 +201,18 @@ public:
     bool add_required_constraint(const std::set<TargetNode>& target_nodes, GlobalNode global_node);
 
     /**
-     * @brief Add explicit required constraint (many-to-many)
+     * @brief Add explicit required constraint (many-to-many pinning group)
      *
-     * Constrains multiple target nodes to map to any of the provided global nodes.
-     * This creates a many-to-many relationship: any target node from the set can map
-     * to any global node from the set. Intersects with existing constraints for each target.
+     * Each target in @p target_nodes may map only to globals in @p global_nodes. The solver still
+     * enforces a bijection, so distinct targets in the group land on distinct globals from that set.
+     * Globals in the set that are not used by the group remain available to other targets.
      *
-     * @param target_nodes The set of target nodes to constrain
-     * @param global_nodes The set of global nodes they can map to
-     * @return true if constraint was successfully added, false if constraint causes empty valid mappings
+     * Returns false when |target_nodes| > |global_nodes| (impossible to assign injectively).
+     * A single-target group is 1:many: that target may use any listed global; others stay eligible too.
+     *
+     * @param target_nodes The target nodes in the pinning group
+     * @param global_nodes The globals (ASICs) they may map to
+     * @return true if constraint was successfully added, false if unsatisfiable or overconstrained
      */
     bool add_required_constraint(const std::set<TargetNode>& target_nodes, const std::set<GlobalNode>& global_nodes);
 
@@ -414,6 +417,17 @@ public:
     bool minimize_same_rank_groups_used() const { return minimize_same_rank_groups_used_; }
 
     /**
+     * @brief HARD cap: the mapping may occupy at most @p k distinct same-rank global groups (host partitions).
+     *
+     * The solver chooses WHICH k groups (never pinned to a specific, possibly-unroutable cover). Register the
+     * global groups via set_same_rank_groups_constraint first so the cap has a partition to bind. A capacity
+     * feasibility check (can k groups hold all targets?) runs at solve time; a provably infeasible cap is skipped
+     * with a warning and the soft set_minimize_same_rank_groups_used fallback (if enabled) applies. 0 = no cap.
+     */
+    void set_max_same_rank_groups_used(std::size_t k) { max_same_rank_groups_used_ = k; }
+    std::size_t max_same_rank_groups_used() const { return max_same_rank_groups_used_; }
+
+    /**
      * @brief Get forbidden (target, global) pairs that are invalid even when no required constraints exist
      *
      * Used when add_forbidden_constraint is called for a target with no valid_mappings_ entry.
@@ -476,8 +490,11 @@ private:
     // Opt-in objective: minimize number of distinct same-rank global groups (host partitions) used.
     bool minimize_same_rank_groups_used_ = false;
 
-    // Track which global nodes are exclusively reserved by many-to-many constraints
-    // Maps global node -> set of target nodes that are allowed to map to it via many-to-many constraints
+    // Opt-in HARD cap: at most this many distinct same-rank global groups may be occupied (0 = no cap).
+    std::size_t max_same_rank_groups_used_ = 0;
+
+    // Deprecated: many-to-many pinning no longer reserves globals exclusively for a target set.
+    // Kept for compatibility with older constraint merges that extended an existing reservation.
     std::map<GlobalNode, std::set<TargetNode>> reserved_global_nodes_;
 
     // Quiet mode flag - mutable so it can be set even on const objects
@@ -791,6 +808,9 @@ struct ConstraintIndexData {
     // Opt-in objective: minimize the number of distinct same-rank global groups (host partitions) used.
     bool minimize_same_rank_groups_used = false;
 
+    // Opt-in HARD cap: at most this many distinct same-rank global groups may be occupied (0 = no cap).
+    std::size_t max_same_rank_groups_used = 0;
+
     /**
      * @brief Construct ConstraintIndexData from MappingConstraints and GraphIndexData
      *
@@ -910,6 +930,7 @@ struct TopologySatConstraintView {
     const std::vector<std::set<size_t>>& same_rank_groups;
     const std::vector<size_t>& target_to_group;
     bool minimize_same_rank_groups_used = false;
+    std::size_t max_same_rank_groups_used = 0;
 
     template <typename TargetNode, typename GlobalNode>
     explicit TopologySatConstraintView(const ConstraintIndexData<TargetNode, GlobalNode>& c) :
@@ -920,7 +941,8 @@ struct TopologySatConstraintView {
         global_to_same_rank_group(c.global_to_same_rank_group),
         same_rank_groups(c.same_rank_groups),
         target_to_group(c.target_to_group),
-        minimize_same_rank_groups_used(c.minimize_same_rank_groups_used) {}
+        minimize_same_rank_groups_used(c.minimize_same_rank_groups_used),
+        max_same_rank_groups_used(c.max_same_rank_groups_used) {}
 
     bool is_valid_mapping(size_t target_idx, size_t global_idx) const {
         if (target_idx < forbidden_global_indices.size() && !forbidden_global_indices[target_idx].empty()) {

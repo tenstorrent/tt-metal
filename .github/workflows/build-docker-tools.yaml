@@ -14,8 +14,6 @@ permissions:
   packages: write
 
 env:
-  # zstd level 22 (max) produces ~5-15% smaller images vs level 3 but compresses ~10-20x slower.
-  # Tool images are built infrequently; monitor push duration if this becomes a bottleneck.
   BAKE_OUTPUT: type=image,push=true,compression=zstd,compression-level=22,force-compression=true,oci-mediatypes=true
 
 on:
@@ -39,7 +37,7 @@ on:
 jobs:
   metadata:
     name: "Tool metadata"
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       tool_tags: ${{ steps.metadata.outputs.tool_tags }}
     steps:
@@ -55,7 +53,7 @@ jobs:
   prepare-matrix:
     name: "Prepare tool build matrix"
     if: fromJson(inputs.tool-data).any_missing == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
@@ -91,6 +89,9 @@ jobs:
         timeout-minutes: 20
         with:
           fetch-depth: 1
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3

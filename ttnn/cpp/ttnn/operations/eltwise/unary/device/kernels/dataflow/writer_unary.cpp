@@ -4,7 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
@@ -15,13 +15,13 @@ void kernel_main() {
     constexpr auto cb_id_dst = tt::CBIndex::c_2;
 
     Noc noc;
-    CircularBuffer cb_dst(cb_id_dst);
+    DataflowBuffer dfb_dst(cb_id_dst);
 
 #if DST_SHARDED
     // Output is sharded in place; the wait is only a readiness handshake. Pop to
     // leave the CB balanced.
-    cb_dst.wait_front(num_pages);
-    cb_dst.pop_front(num_pages);
+    dfb_dst.wait_front(num_pages);
+    dfb_dst.pop_front(num_pages);
 #else
     constexpr uint32_t onepage = 1;
     constexpr auto dst_args = TensorAccessorArgs<0, 0>();
@@ -42,27 +42,27 @@ void kernel_main() {
 
         for (uint32_t j = 0; j < chunks_per_row; ++j) {
             uint32_t bytes = (j == chunks_per_row - 1) ? last_chunk_size : chunk_size;
-            cb_dst.wait_front(onepage);
+            dfb_dst.wait_front(onepage);
             for (uint32_t r = 0; r < actual_rows; ++r) {
                 noc.async_write(
-                    cb_dst,
+                    dfb_dst,
                     dst,
                     bytes,
                     {.offset_bytes = r * bytes},
                     {.page_id = base_page + r, .offset_bytes = j * chunk_size});
             }
             noc.async_writes_flushed();
-            cb_dst.pop_front(onepage);
+            dfb_dst.pop_front(onepage);
         }
     }
     noc.async_write_barrier();
 #else
     const uint32_t page_bytes = get_local_cb_interface(cb_id_dst).fifo_page_size;
     for (uint32_t i = start_id; i < end_id; ++i) {
-        cb_dst.wait_front(onepage);
-        noc.async_write(cb_dst, dst, page_bytes, {}, {.page_id = i});
+        dfb_dst.wait_front(onepage);
+        noc.async_write(dfb_dst, dst, page_bytes, {}, {.page_id = i});
         noc.async_writes_flushed();
-        cb_dst.pop_front(onepage);
+        dfb_dst.pop_front(onepage);
     }
     noc.async_write_barrier();
 #endif

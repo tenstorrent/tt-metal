@@ -8,8 +8,14 @@
 
 #pragma once
 
-#include "ttnn/tensor/types.hpp"
+#include <cmath>
+#include <optional>
+#include <set>
+
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/math.hpp>
+#include "ttnn/tensor/types.hpp"
 
 namespace ttnn {
 
@@ -104,10 +110,19 @@ inline NcoresWH compute_ncores_wh(size_t grid_area, uint32_t nblocks, uint32_t w
     return NcoresWH{ncores, nblocks_per_core, total_blocks_width, total_blocks_height, single_block_size};
 }
 
-inline NcoresWHsb compute_ncores_wh_sb(
-    size_t grid_area, uint32_t nblocks, uint32_t width_tiles, uint32_t height_tiles, uint32_t single_block_size_limit) {
-    // check single_block_size_limit is valid
-    TT_FATAL(single_block_size_limit >= 1, "single_block_size_limit must be at least 1");
+// Non-throwing: returns nullopt when no sub-block assignment satisfies the L1-derived
+// single_block_size_limit (or the limit is invalid). The throwing wrapper below is the
+// factory entry point; hash-time callers must use this so a tight-L1 miss does not
+// TT_FATAL / backtrace on every dispatch.
+inline std::optional<NcoresWHsb> try_compute_ncores_wh_sb(
+    size_t grid_area,
+    uint32_t nblocks,
+    uint32_t width_tiles,
+    uint32_t height_tiles,
+    uint32_t single_block_size_limit) noexcept {
+    if (single_block_size_limit < 1) {
+        return std::nullopt;
+    }
     // Compute grid area and initial blocks-per-core using integer math.
     uint32_t nblocks_per_core = (grid_area == 0) ? 1 : (nblocks + grid_area - 1) / grid_area;
     // Calculate ncores using single_block_size_limit.
@@ -129,7 +144,7 @@ inline NcoresWHsb compute_ncores_wh_sb(
     // Conditions: (1) single_sub_block_size < single_block_size_limit
     //             (2) Maximize total_blocks_sb (computed by single_block_size)
     //             (3) Minimize n (prefer smaller n for tie-breaker)
-    //             (4) blocks_row_cliff < single_sub_block_size_limit
+    //             (4) cliff_nblocks_row < single_block_size_limit
     uint32_t single_block_size = 0;
     uint32_t opt_n = 0;
     uint32_t single_sub_block_size = 0;
@@ -155,9 +170,8 @@ inline NcoresWHsb compute_ncores_wh_sb(
         }
     }
 
-    // If no solution found, use single_block_size_limit
     if (opt_n == 0) {
-        TT_FATAL(false, "No solution found for single_block_size");
+        return std::nullopt;
     }
 
     total_blocks_width = tt::div_up(width_tiles, single_block_size);
@@ -166,6 +180,14 @@ inline NcoresWHsb compute_ncores_wh_sb(
     ncores = (nblocks_per_core == 0) ? nblocks : total_blocks;
     return NcoresWHsb{
         ncores, nblocks_per_core, total_blocks_width, total_blocks_height, single_block_size, single_sub_block_size};
+}
+
+inline NcoresWHsb compute_ncores_wh_sb(
+    size_t grid_area, uint32_t nblocks, uint32_t width_tiles, uint32_t height_tiles, uint32_t single_block_size_limit) {
+    TT_FATAL(single_block_size_limit >= 1, "single_block_size_limit must be at least 1");
+    auto result = try_compute_ncores_wh_sb(grid_area, nblocks, width_tiles, height_tiles, single_block_size_limit);
+    TT_FATAL(result.has_value(), "No solution found for single_block_size");
+    return *result;
 }
 
 inline BlockSplitWH split_blocks_for_tilize_wh(
@@ -245,7 +267,7 @@ inline BlockSplitWH split_blocks_for_tilize_wh(
 }
 
 inline BlockSplitWH split_blocks_for_tilize_wh(
-    CoreCoord grid_size,
+    tt::tt_metal::CoreCoord grid_size,
     uint32_t nblocks,
     uint32_t width_tiles,
     uint32_t height_tiles,
@@ -278,7 +300,7 @@ inline BlockSplitWH split_blocks_for_tilize_wh(
     uint32_t i_x = 0;
     uint32_t i_y = 0;
     auto addCore = [&](std::set<CoreRange>& targetSet) {
-        CoreRange range{CoreCoord{i_x, i_y}, CoreCoord{i_x, i_y}};
+        CoreRange range{tt::tt_metal::CoreCoord{i_x, i_y}, tt::tt_metal::CoreCoord{i_x, i_y}};
         targetSet.insert(range);
         all_cores.insert(range);
         // Update core coordinates in a cyclic row-wise manner.
@@ -339,7 +361,7 @@ inline BlockSplit split_blocks_for_tilize(const CoreRangeSet& grid, uint32_t nbl
     const uint32_t ncores_no_cliff = nblocks_per_core_cliff == 0 ? ncores : ncores - 1;
 
     std::set<CoreRange> core_range, cliff_core_range;
-    std::optional<CoreCoord> cliff_core;
+    std::optional<tt::tt_metal::CoreCoord> cliff_core;
 
     // Top non-cliff range
     for (uint32_t core_id = 0; core_id < ncores_no_cliff; core_id++) {
@@ -363,7 +385,7 @@ inline BlockSplit split_blocks_for_tilize(const CoreRangeSet& grid, uint32_t nbl
     return BlockSplit{ncores, all_cores, core_range, cliff_core_range, nblocks_per_core, nblocks_per_core_cliff};
 }
 
-inline BlockSplit split_blocks_for_tilize(CoreCoord grid_size, uint32_t nblocks) {
+inline BlockSplit split_blocks_for_tilize(tt::tt_metal::CoreCoord grid_size, uint32_t nblocks) {
     size_t grid_area = grid_size.x * grid_size.y;
     auto [ncores, nblocks_per_core] = compute_ncores(grid_area, nblocks);
     const uint32_t nblocks_per_core_cliff = nblocks_per_core == 0 ? 0 : nblocks % nblocks_per_core;
@@ -372,27 +394,27 @@ inline BlockSplit split_blocks_for_tilize(CoreCoord grid_size, uint32_t nblocks)
     const uint32_t ncores_x_cliff = ncores - ((ncores_y - 1) * ncores_x);
 
     std::set<CoreRange> core_range, cliff_core_range;
-    std::optional<CoreCoord> cliff_core;
+    std::optional<tt::tt_metal::CoreCoord> cliff_core;
 
     // Top non-cliff range (full rows)
     const uint32_t top_range_end_y = ncores_y - (ncores_x_cliff < ncores_x || nblocks_per_core_cliff > 0);
 
     if (top_range_end_y > 0) {
-        auto range = CoreRange{CoreCoord{0, 0}, CoreCoord{ncores_x - 1, top_range_end_y - 1}};
+        auto range = CoreRange{tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{ncores_x - 1, top_range_end_y - 1}};
         core_range.insert(range);
     }
 
     if (ncores_x_cliff < ncores_x && nblocks_per_core_cliff == 0) {
         // Last partial row (non-cliff)
-        auto range = CoreRange{CoreCoord{0, ncores_y - 1}, CoreCoord{ncores_x_cliff - 1, ncores_y - 1}};
+        auto range = CoreRange{tt::tt_metal::CoreCoord{0, ncores_y - 1}, tt::tt_metal::CoreCoord{ncores_x_cliff - 1, ncores_y - 1}};
         core_range.insert(range);
     } else if (nblocks_per_core_cliff > 0) {
         // Last partial row (excluding last core) and single cliff core
         if (ncores_x_cliff > 1) {  // Add range only if there are cores before the cliff core
-            auto range = CoreRange{CoreCoord{0, ncores_y - 1}, CoreCoord{ncores_x_cliff - 2, ncores_y - 1}};
+            auto range = CoreRange{tt::tt_metal::CoreCoord{0, ncores_y - 1}, tt::tt_metal::CoreCoord{ncores_x_cliff - 2, ncores_y - 1}};
             core_range.insert(range);
         }
-        cliff_core = CoreCoord{ncores_x_cliff - 1, ncores_y - 1};
+        cliff_core = tt::tt_metal::CoreCoord{ncores_x_cliff - 1, ncores_y - 1};
     }
 
     std::set<CoreRange> all_cores = core_range;
@@ -451,6 +473,8 @@ struct BlockRep {
 
         std::vector<BlockRep> first;
         std::vector<BlockRep> second;
+        first.reserve(2);
+        second.reserve(2);
 
         int rep_idx = idx / single_rep();
         if (rep_idx > 0) {
@@ -478,7 +502,7 @@ struct BlockRep {
             second.emplace_back(n_data, n_mixed, n_pads, remaining_times);
         }
 
-        return {first, second};
+        return {std::move(first), std::move(second)};
     }
 };
 
@@ -584,7 +608,7 @@ inline std::vector<std::vector<BlockRep>> distribute_work(
             }
         }
 
-        core_assignments.push_back(core_blocks);
+        core_assignments.push_back(std::move(core_blocks));
     }
 
     return core_assignments;
