@@ -312,6 +312,36 @@ struct OperationFpuMatmul : Operation<Exu::Fpu, Hoistable::Yes>
         RtDim>;
 };
 
+// ----------------------------------------
+// OPERATION - FPU ELTWISE UNARY DATACOPY
+// ----------------------------------------
+
+struct OperationFpuEltwiseUnaryDatacopy : Operation<Exu::Fpu, Hoistable::Yes>
+{
+    template <typename T>
+    using Field = StateField<OperationFpuEltwiseUnaryDatacopy, T>;
+
+    struct DataCopyType : Field<std::uint32_t>
+    {
+    };
+
+    struct BroadcastType : Field<std::uint32_t>
+    {
+    };
+
+    // Note: Blackhole specific
+    struct NumFaces : Field<std::uint32_t>
+    {
+    };
+
+    using Struct = StateStruct<
+        OperationFpuEltwiseUnaryDatacopy,
+        /* Fields */
+        DataCopyType,
+        BroadcastType,
+        NumFaces>;
+};
+
 // ------------------
 // OPERATION - PACK
 // ------------------
@@ -331,14 +361,16 @@ struct OperationPack : Operation<Exu::Pack, Hoistable::Yes>
 
 using UnpackOperations = OperationList<OperationUnpackUnary, OperationUnpackMatmul, OperationUnpackTilize>;
 
-using FpuOperations = OperationList<OperationFpuMatmul
-                                    // sstanisic todo: add FPU ELTWISE BINARY ADD operation state
-                                    // sstanisic todo: add FPU ELTWISE BINARY SUB operation state
-                                    // sstanisic todo: add FPU ELTWISE BINARY MUL operation state
-                                    // sstanisic todo: add FPU ELTWISE BINARY ADD DEST REUSE operation state
-                                    // sstanisic todo: add FPU ELTWISE BINARY SUB DEST REUSE operation state
-                                    // sstanisic todo: add FPU ELTWISE BINARY MUL DEST REUSE operation state
-                                    >;
+using FpuOperations = OperationList<
+    OperationFpuMatmul,
+    OperationFpuEltwiseUnaryDatacopy
+    // sstanisic todo: add FPU ELTWISE BINARY ADD operation state
+    // sstanisic todo: add FPU ELTWISE BINARY SUB operation state
+    // sstanisic todo: add FPU ELTWISE BINARY MUL operation state
+    // sstanisic todo: add FPU ELTWISE BINARY ADD DEST REUSE operation state
+    // sstanisic todo: add FPU ELTWISE BINARY SUB DEST REUSE operation state
+    // sstanisic todo: add FPU ELTWISE BINARY MUL DEST REUSE operation state
+    >;
 
 using SfpuOperations = OperationList<>;
 
