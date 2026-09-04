@@ -999,4 +999,76 @@ std::unique_ptr<op_slicing::OpSliceAttr> get_conv2d_slice_attr(
         compute_config,
         device));
 }
+
+std::optional<Conv2dSliceConfig> determine_conv2d_dram_slice_config(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& weight_tensor,
+    MeshDevice* device,
+    uint32_t in_channels,
+    uint32_t out_channels,
+    uint32_t batch_size,
+    uint32_t input_height,
+    uint32_t input_width,
+    std::array<uint32_t, 2> kernel_size,
+    std::array<uint32_t, 2> stride,
+    std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
+    std::array<uint32_t, 2> dilation,
+    uint32_t groups,
+    const std::optional<const DataType>& dtype,
+    const std::optional<const ttnn::Tensor>& bias_tensor,
+    const std::optional<const Conv2dConfig>& conv_config_,
+    const std::optional<const DeviceComputeKernelConfig>& compute_config_,
+    const std::optional<const Conv2dSliceConfig>& dram_slice_config_) {
+    // Same setup as conv2d_DRAM up to its run_sliced_op call, minus anything that touches device memory.
+    TT_FATAL(
+        determine_conv2d_execution_path(input_tensor, dram_slice_config_) == Conv2dExecutionPath::DRAM,
+        "determine_conv2d_dram_slice_config previews the DRAM slicing path; this input would take the L1 path.");
+    Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
+    TT_FATAL(
+        !conv_config.enable_kernel_stride_folding.value_or(false),
+        "determine_conv2d_dram_slice_config does not model kernel-stride folding.");
+    const DataType output_dtype = dtype.value_or(input_tensor.dtype());
+    std::array<uint32_t, 4> padding_n4 = sliding_window::get_pair_n4_padding(padding);
+    TT_FATAL(
+        !use_matmul_for_1x1_conv(kernel_size, stride, padding_n4, dilation, groups, conv_config),
+        "determine_conv2d_dram_slice_config: 1x1 matmul convs never use the slicing path.");
+    DataType weight_dtype = conv_config.weights_dtype.value_or(weight_tensor.dtype());
+    DeviceComputeKernelConfig compute_config =
+        compute_config_.value_or(get_conv_default_compute_kernel_config(device, input_tensor.dtype(), weight_dtype));
+    if (!conv_config.weights_dtype.has_value()) {
+        conv_config.weights_dtype = weight_tensor.dtype();
+    }
+    auto [output_height, output_width] =
+        calculate_output_image_size({input_height, input_width}, kernel_size, stride, padding_n4, dilation);
+
+    // Conv2dSliceAttr keeps references to the weight/bias tensors but its L1 estimate never reads them.
+    Tensor& weight_ref = const_cast<Tensor&>(weight_tensor);
+    std::optional<std::reference_wrapper<Tensor>> bias_ref =
+        bias_tensor.has_value() ? std::make_optional(std::ref(const_cast<Tensor&>(bias_tensor.value()))) : std::nullopt;
+    auto slice_attr = Conv2dSliceAttr(
+        batch_size,
+        {input_height, input_width},
+        in_channels,
+        out_channels,
+        kernel_size,
+        stride,
+        padding_n4,
+        dilation,
+        groups,
+        input_tensor.layout(),
+        input_tensor.dtype(),
+        output_dtype,
+        weight_ref,
+        bias_ref,
+        conv_config,
+        compute_config,
+        device);
+    return op_slicing::try_determine_slice_config(
+        &slice_attr,
+        ttnn::Shape({batch_size, input_height, input_width, in_channels}),
+        ttnn::Shape({batch_size, output_height, output_width, out_channels}),
+        dram_slice_config_,
+        conv_config.output_layout,
+        device);
+}
 }  // namespace ttnn::operations::conv::conv2d
