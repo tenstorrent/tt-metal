@@ -154,6 +154,29 @@ gates**, so P7's whole evidence base briefly existed only against paths no longe
 
 ---
 
+
+## 0.3 HUMAN GATES — the seven questions this recipe cannot answer for you
+
+Everything else here is designed to be executed without a person editing it. These seven points are
+not automatable *in principle*, because the answer is not in the repo, the checkpoint, or the device.
+At each one: **stop, ask the named question, and record the answer as confirmed rather than assumed.**
+Each carries a default so a missing answer does not stall the run — but a default that ran is a risk
+entry, not a decision.
+
+| # | Gate | Phase | The question | Default if unanswered | What guessing wrong costs |
+|---|---|---|---|---|---|
+| **H1** | **Model identity** | P0 | The package name may not map to a real checkpoint. Which one is meant? | the nearest real checkpoint, recorded as an assumption | Everything downstream rests on it. Cheap to confirm, expensive to discover late. Two independent runs both stopped here and neither could resolve it. |
+| **H2** | **Resource exclusivity** | before P8 | Is the mesh exclusively ours, and for how long? | assume shared; treat non-determinism as suspect | `G-RACE` needs three bit-identical runs. Contention looks exactly like the semaphore bug it tests for, so a shared machine can burn a session on a phantom. |
+| **H3** | **Credentials** | P0 / P6 / P10 | Is there a token or checkout for the gated weights, and for any private dependency? | proceed weightless; mark real-weight gates BLOCKED | Not a recipe problem, and no amount of recipe quality fixes it. |
+| **H4** | **Scope boundary** | P10 | Which gates in an external component's ladder are *ours*? | run only those a failure of which would implicate our code | An agent transcribing a dependency's full gate list will try to prove that dependency's infrastructure. Ask whose bug a red gate would be. |
+| **H5** | **Unexplained error ratio** | any numeric gate | A gate clears its threshold but sits far off the noise floor with no identified cause. Ship or investigate? | investigate; never record a clean PASS | This is the judgement the method most needs a person for. §2.3/§2.3.1 let you *attribute* a known fused kernel; a new, unattributed gap is a decision. |
+| **H6** | **Residual risk at sign-off** | P9 | Which uncovered surface is acceptable to ship? | list it, ship nothing on it | Uncovered is not the same as broken, and the distinction is a product call. |
+| **H7** | **Upstream fixes** | P9 / after | Who owns the bugs found *outside* this package? | log them; file nothing | A bring-up routinely finds real defects in its templates and in the engine it plugs into. Landing those is human work with a human owner. |
+
+**Rule:** a `HUMAN GATE` that ran on its default appears in `07_RISKS.md` with the question verbatim,
+so the register shows what was assumed rather than decided. H1 in particular should be *closed* by a
+one-word answer, not carried to the end of the run.
+
 ## 1. Logging protocol — the deliverable that makes this iteration evaluable
 
 Create the log root **before Phase 0 does anything else**:
@@ -545,7 +568,9 @@ recipe's own rule. Past the ceiling, split the id across lanes.
 
 ---
 
-## Phase P0 — Model card: pin down *exactly* what is being built
+## Phase P0 — Model card
+
+> **HUMAN GATE H1 (model identity).** Ask before deriving anything from the name. See §0.3.: pin down *exactly* what is being built
 
 **Goal:** a single table where every architectural fact has a value and a source. This is what
 prevents an entire bring-up from being built on a mis-remembered head count.
@@ -1483,7 +1508,9 @@ loudly instead of silently running a different core.
 
 ---
 
-## Phase P8 — Multi-device: TP, SP, and the CCL gates
+## Phase P8 — Multi-device
+
+> **HUMAN GATE H2 (resource exclusivity).** `G-RACE` is meaningless on a contended mesh. See §0.3.: TP, SP, and the CCL gates
 
 Only now does the mesh come in. Everything here is about proving the collectives are correct **and**
 race-free — and about the fact that the mesh has failure modes the single-card phases cannot show
@@ -1633,6 +1660,8 @@ Expect it, attribute it, and set any future KV threshold against the **chunked**
 
 ## Phase P10 — Disaggregated-prefill integration
 
+> **HUMAN GATE H4 (scope boundary).** Ask whose bug a red gate would be before running an external component's ladder. See §0.3.
+
 **This phase runs before P9.** See the note at the top of Phase P9.
 
 **Read these two documents in full before writing anything in this phase:**
@@ -1757,6 +1786,8 @@ limitations you inherited (loopback-only verification; cross-talk invisible with
 ---
 
 ## Phase P9 — Cleanliness gate
+
+> **HUMAN GATES H6 (residual risk) and H7 (upstream fixes).** See §0.3.
 
 **Run this last, after P10.** P9's gate is a whole-package sweep: no TODOs without a filed issue,
 every env var in the README's table, every `tt/` module owning a test, `README.md` complete, and
