@@ -19,8 +19,9 @@ class ExpertWeights:
     """Container for expert weight tensors - immutable after creation.
 
     Gate and up projections are stored FUSED along the output dimension so the two projections run
-    as one sparse_matmul (the per-expert cost of that op is a fixed overhead, not bandwidth, so one
-    call with N = 2 * intermediate is ~half the price of two calls). Per device the fused output is
+    as one sparse_matmul in decode (the per-expert cost of that op is a fixed overhead, not bandwidth,
+    so one call with N = 2 * intermediate is ~half the price of two calls) and as one dense matmul per
+    expert in EP=1 prefill (see gate_up_proj_per_expert). Per device the fused output is
     laid out as [gate (intermediate_padded_per_device) | up (intermediate_padded_per_device)], each
     half zero-padded from intermediate_size_per_device up to a tile multiple so that the halves can
     be split at a tile boundary and fed to SwiGLU / the down projection without any re-layout.
@@ -36,6 +37,13 @@ class ExpertWeights:
     # directly onto [1, E, tokens, N] activations (prefill and multi-user decode) without a per-call
     # ttnn.transpose. Stored bfloat8_b (the activations it is added to are bfloat8_b).
     gate_up_proj_bias_t: ttnn.Tensor = None
+    # Per-expert views of gate_up_proj ([1, 1, hidden, 2 * intermediate_padded_per_device] each), created on device
+    # on first use by the dense prefill path (experts/prefill.py, EP=1): one dense matmul per expert over the whole
+    # token split beats the per-(32-token tile, expert) sparse_matmul by ~3x on Blackhole.
+    gate_up_proj_per_expert: list = None
+    # down_proj with K zero-padded from intermediate_size_per_device to intermediate_padded_per_device (dense matmul
+    # requires matching logical K; the sparse_matmul path compares padded shapes). Also created on first use.
+    down_proj_padded: ttnn.Tensor = None
 
 
 def _fuse_gate_up_per_device(gate, up, tp, local, padded):

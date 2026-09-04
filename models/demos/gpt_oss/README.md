@@ -41,10 +41,18 @@ slots); any `max_batch_size` ≤ 32 works — the per-user Q/K/V / KV-cache / SD
 the two agree at construction; prefill of the users runs sequentially through the generator (one
 user per forward).
 
-Prefill runs each 32-token tile through the experts routed to at least one of its tokens
-(`experts/prefill.py`, routing-aware `sparse_matmul` mask) rather than through every expert, which
-is worth ~1.3× on gpt-oss-120b prefill/TTFT; grouping tokens per expert (one GEMM per expert with
-variable M, as the Galaxy throughput path does) is the remaining lever.
+Prefill on single-row meshes (EP=1) runs the MoE as dense matmuls (`experts/prefill.py`): one
+`[split, H] × [H, 2·Ip]` matmul per expert for gate/up (per-expert weight views are sliced once on
+device) and one batched `[E, split, Ip] × [E, Ip, H]` matmul for down, with the routing weights
+applied to the down input and the down bias folded into a `[split, E] × [E, H]` matmul after the
+expert reduction (which also removes two broadcast elementwise passes over the `[E, split, H]` down
+output that cost more than the matmuls). The `sparse_matmul` path (kept for EP>1) multicasts in a 1D
+pattern that leaves the whole M on ≤24 cores and re-streams every expert's weights once per 32-token
+tile; on P150 the dense form is ~4× faster for a 1024-token split (gate/up 24.5 → 7.6 ms, down
+23.8 → 3.7 ms). Measured gpt-oss-120b prefill per user at batch 1: 128 tokens 405 → 230 ms,
+1024 tokens 2.98 → 0.67 s, 8192 tokens 22.9 → 5.2 s (~4.4×); gpt-oss-20b 8192 tokens 4.0 → 1.03 s.
+Grouping tokens per expert (one GEMM per expert with only its ~32 routed tokens per 1024-token
+split) would cut the remaining MoE FLOPs ~30× and is the next lever.
 
 ```bash
 export HF_MODEL=/path/to/gpt-oss-120b
