@@ -152,7 +152,7 @@ inline void _llk_unpack_A_mop_config_(
         {
             constexpr std::uint32_t replay_buf_len = 3;
             lltt::record(4, replay_buf_len);
-            TTI_UNPACR_NOP(SrcB, p_unpacr_nop::UNP_ZEROSRC);
+            TTI_UNPACR_NOP(SrcB, p_unpacr_nop::UNP_ZEROSRC_STALL_RESET_WR_RDY);
             TTI_UNPACR_NOP(SrcB, p_unpacr_nop::UNP_SET_DVALID);
             if (num_faces > 2)
             {
