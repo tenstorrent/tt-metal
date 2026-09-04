@@ -165,18 +165,11 @@ void bind_slice_descriptor(nb::module_& mod) {
             nb::arg("operation_attributes"),
             nb::arg("tensor_args"));
 
-    nb::class_<ttnn::prim::SliceTileProgramFactory>(mod, "SliceTileProgramFactory")
-        .def_static(
-            "create_descriptor",
-            [](const ttnn::prim::SliceParams& operation_attributes,
-               const ttnn::prim::SliceInputs& tensor_args,
-               Tensor& tensor_return_value) {
-                return ttnn::prim::SliceTileProgramFactory::create_descriptor(
-                    operation_attributes, tensor_args, tensor_return_value);
-            },
-            nb::arg("operation_attributes"),
-            nb::arg("tensor_args"),
-            nb::arg("tensor_return_value"));
+    // The class binding stays: ttnn/__init__.py imports this symbol at module scope, so removing it
+    // would break `import ttnn`. Its create_descriptor entry point is gone -- the factory is on the
+    // Metal 2.0 spec concept, which returns a ProgramSpec + ProgramRunArgs pair rather than a
+    // ProgramDescriptor, and there is no equivalent to expose in its place.
+    nb::class_<ttnn::prim::SliceTileProgramFactory>(mod, "SliceTileProgramFactory");
 }
 
 }  // namespace ttnn::operations::data_movement::detail

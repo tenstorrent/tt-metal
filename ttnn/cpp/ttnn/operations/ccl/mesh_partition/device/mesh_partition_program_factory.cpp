@@ -13,9 +13,17 @@
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 
 namespace ttnn::operations::ccl {
 namespace detail {
+
+// True for a slice program factory that has migrated to the Metal 2.0 spec concept. Keyed on the
+// entry point rather than on a list of factory names, so each further slice factory that migrates
+// needs no change here.
+template <typename T>
+concept IsSliceSpecFactory = requires { &T::create_program_artifacts; };
+
 uint32_t get_cluster_axis_index(
     const ttnn::MeshDeviceView& mesh_view,
     const ttnn::MeshCoordinate& mesh_coordinate,
@@ -128,8 +136,21 @@ MeshPartitionDeviceOperation::MeshPartition::create_at(
     Program program = std::visit(
         [&](auto&& factory) -> Program {
             using Factory = std::decay_t<decltype(factory)>;
-            auto descriptor = Factory::create_descriptor(slice_attrs, slice_tensor_args, tensor_return_value);
-            return Program{descriptor};
+            // Slice's factories are migrating to Metal 2.0 one at a time, so this visit spans both
+            // shapes. A Metal 2.0 factory has no create_descriptor to call -- declaring one would
+            // re-classify it as a descriptor factory and its spec entry point would never run -- so
+            // it is built from its spec instead. The remaining factories take the descriptor path
+            // unchanged, and this branch retires when the last of them converts.
+            if constexpr (detail::IsSliceSpecFactory<Factory>) {
+                auto artifacts = Factory::create_program_artifacts(slice_attrs, slice_tensor_args, tensor_return_value);
+                Program spec_program =
+                    tt::tt_metal::experimental::MakeProgramFromSpec(*tensor_args.input_tensor.device(), artifacts.spec);
+                tt::tt_metal::experimental::SetProgramRunArgs(spec_program, artifacts.run_params);
+                return spec_program;
+            } else {
+                auto descriptor = Factory::create_descriptor(slice_attrs, slice_tensor_args, tensor_return_value);
+                return Program{descriptor};
+            }
         },
         program_factory);
 
@@ -149,11 +170,27 @@ void MeshPartitionDeviceOperation::MeshPartition::override_runtime_arguments(
         auto [slice_attrs, slice_tensor_args] =
             compute_slice_parameters(operation_attributes, tensor_args, mesh_coordinate);
 
-        // Re-apply this coord's per-dispatch state to the cached Program, through the same patch the
-        // slice op uses -- addresses only. CB total_size/page_size are not re-applied on a hit, so any
-        // sizing that varies across calls must be in compute_program_hash().
-        ttnn::prim::patch_slice_program_addresses(
-            program, shared_variables.slice_program_factory, slice_attrs, slice_tensor_args, tensor_return_value);
+        // Re-apply this coord's per-dispatch state to the cached Program, through the same path the
+        // slice op uses for whichever factory built it. Buffer sizing is not re-applied on a hit, so
+        // any sizing that varies across calls must be in compute_program_hash().
+        std::visit(
+            [&](auto&& factory) {
+                using Factory = std::decay_t<decltype(factory)>;
+                if constexpr (detail::IsSliceSpecFactory<Factory>) {
+                    tt::tt_metal::experimental::UpdateProgramRunArgs(
+                        program,
+                        Factory::override_runtime_arguments(
+                            slice_attrs, slice_tensor_args, tensor_return_value, mesh_coordinate));
+                } else {
+                    ttnn::prim::patch_slice_program_addresses(
+                        program,
+                        shared_variables.slice_program_factory,
+                        slice_attrs,
+                        slice_tensor_args,
+                        tensor_return_value);
+                }
+            },
+            shared_variables.slice_program_factory);
     }
 }
 
