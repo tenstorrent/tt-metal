@@ -856,14 +856,6 @@ void WatcherDeviceReader::Core::DumpAssertStatus() const {
             assert_status.tripped());
     }
     error_msg += assert_msg;
-    if (reader_.env.get_hal().get_arch() == tt::ARCH::QUASAR &&
-        assert_status.tripped() != dev_msgs::DebugAssertHwFault && assert_status.hw_fault_info() != 0) {
-        const uint64_t hw_thread_info = assert_status.hw_fault_info();
-        error_msg += fmt::format(
-            " Cached/raw hw_thread_idx mismatch: cached=0x{:x}, raw={}.",
-            static_cast<uint32_t>(hw_thread_info >> 32),
-            static_cast<uint32_t>(hw_thread_info));
-    }
     error_msg += fmt::format(" Current kernel: {}.", GetKernelName(assert_status.which()));
     log_warning(tt::LogMetal, "Watcher stopped the device due to tripped assert, see watcher log for more details");
     log_warning(tt::LogMetal, "{}", error_msg);
