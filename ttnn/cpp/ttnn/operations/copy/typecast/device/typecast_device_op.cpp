@@ -56,6 +56,14 @@ bool can_use_sharded_optimized_factory(const TypecastParams& args, const Typecas
 
 TypecastDeviceOperation::program_factory_t TypecastDeviceOperation::select_program_factory(
     const TypecastParams& args, const TypecastInputs& tensor_args) {
+    // Row-major pages can be smaller than a hardware tile, while eltwise_typecast.cpp always uses
+    // full-tile copy/pack LLKs. The chunked factory stages every row chunk in tile-sized DFB pages,
+    // including for sharded inputs and restricted grids.
+    if (tensor_args.input.layout() == Layout::ROW_MAJOR) {
+        log_debug(tt::LogOp, "Using TypecastRowMajorChunkedProgramFactory");
+        return TypecastRowMajorChunkedProgramFactory{};
+    }
+
     if (tensor_args.input.is_sharded()) {
         if (can_use_sharded_optimized_factory(args, tensor_args)) {
             log_debug(tt::LogOp, "Using TypecastShardedProgramFactory");
@@ -63,10 +71,6 @@ TypecastDeviceOperation::program_factory_t TypecastDeviceOperation::select_progr
         }
         log_debug(tt::LogOp, "Using TypecastProgramFactory");
         return TypecastProgramFactory{};
-    }
-    if (tensor_args.input.layout() == Layout::ROW_MAJOR) {
-        log_debug(tt::LogOp, "Using TypecastRowMajorChunkedProgramFactory");
-        return TypecastRowMajorChunkedProgramFactory{};
     }
 
     if (args.sub_core_grids.has_value()) {
