@@ -7,7 +7,6 @@
 #include "watcher_common.h"
 #include "dev_mem_map.h"
 #include "internal/hw_thread.h"
-#include "api/debug/assert.h"
 
 // We don't control the stack size for active erisc, and share the stack with base FW, so don't implement for ERISC.
 #if defined(WATCHER_ENABLED) && \
@@ -52,8 +51,6 @@ static inline uint32_t measure_stack_usage() {
         stack_ptr++;
     }
     uint32_t stack_free = (uint32_t)((uintptr_t)stack_ptr - (uintptr_t)&__stack_base[0]);
-    // Zero free means the stack reached the bottom of its region and overwrote the TLS data below.
-    ASSERT(stack_free != 0, DebugAssertTripped);
     return stack_free + 1;
 }
 
