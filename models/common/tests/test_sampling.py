@@ -1072,6 +1072,43 @@ def test_num_single_device_vocab_splits(padded_vocab_size, expected_splits):
     assert TTSampling.num_single_device_vocab_splits(padded_vocab_size) == expected_splits
 
 
+# The parameter is "shape", not "mesh_shape": pytest_collection_modifyitems in this
+# directory's conftest deselects any item carrying a mesh_shape param whose value does
+# not equal its ttnn_mesh_device param. These cases build a stand-in object instead of
+# taking that fixture, so the name would silently drop every one of them.
+@pytest.mark.parametrize(
+    "shape, padded_vocab_size, num_sampling_shards, expected",
+    [
+        # 1x1: the same-device split path, so width alone never disqualifies a vocab
+        # it can cut tile-aligned. GPT-OSS at TP=1 is the 262144 case (4 x 65536).
+        ([1, 1], 262144, 1, True),
+        ([1, 1], 256000, 1, True),  # Gemma-2, 4 x 64000
+        ([1, 1], 131104, 1, False),  # no tile-aligned cut -> host sampling
+        # Larger meshes shard the vocab instead: each device top-ks its own shard,
+        # which has to fit on its own. The same 262144 that a 1x1 mesh splits is
+        # fine across 8 devices and not fine across 2.
+        ([1, 8], 262144, 8, True),
+        ([1, 2], 262144, 2, False),
+        ([4, 8], 262144, 8, True),
+    ],
+)
+def test_supports_vocab_on_device(shape, padded_vocab_size, num_sampling_shards, expected):
+    mesh_device = SimpleNamespace(shape=shape)
+    assert TTSampling.supports_vocab_on_device(mesh_device, padded_vocab_size, num_sampling_shards) is expected
+
+
+def test_supports_vocab_on_device_tracks_multi_step_reduction():
+    """A single-device mesh that is not [1, 1] must not claim the split path.
+
+    ``multi_step_reduction`` (and with it ``_num_vocab_splits``) keys off
+    ``list(mesh_device.shape) == [1, 1]``. If this predicate were written as
+    ``get_num_devices() == 1`` instead, a 1D single-device mesh would report
+    support, then take the non-split branch and hand ttnn.topk a 131072-wide row.
+    """
+    assert TTSampling.supports_vocab_on_device(SimpleNamespace(shape=[1, 1]), 262144, 1) is True
+    assert TTSampling.supports_vocab_on_device(SimpleNamespace(shape=[1]), 262144, 1) is False
+
+
 @pytest.mark.parametrize(
     "width, expected",
     [
@@ -1159,17 +1196,21 @@ def _single_device_sampling_args(mesh_device, vocab_size, max_top_k=32, max_batc
         # into four same-device chunks. Qwen3 has exactly this vocab size (#53064).
         pytest.param(151936, id="v151936_four_way_split"),
         # Four 64000-wide tile-aligned chunks, none a power of two. Gemma-2-2B has exactly
-        # this vocab size and is the largest vocab any tiered model runs on one device.
+        # this vocab size.
         pytest.param(256000, id="v256000_four_way_split_gemma"),
+        # Exactly four TOPK_MAX_WIDTH chunks, so every chunk is both the widest ttnn.topk
+        # accepts and a power of two. GPT-OSS at TP=1 pads to this width, and it is the
+        # widest vocab any tiered model runs on one device.
+        pytest.param(262144, id="v262144_four_way_split_gpt_oss"),
     ],
 )
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
 def test_ttsampling_topk_matches_argmax_on_single_device(vocab_size, mesh_device):
     """top-k=1 through TTSampling must select the row maximum on a 1x1 mesh.
 
-    On a single device TTSampling splits the logits in half and runs ttnn.topk on each half
-    (``multi_step_reduction``), so this covers the split path end to end for both top-k program
-    factories. Regression test for the half-width local indices buffer, which made the multi-core
+    On a single device TTSampling cuts the logits into as many same-device chunks as the width
+    needs (``multi_step_reduction``) and runs ttnn.topk on each chunk, so this covers the split
+    path end to end for both top-k program factories. Regression test for the half-width local indices buffer, which made the multi-core
     factory page its index tiles past the end of that buffer and return indices that did not
     belong to the values it returned.
     """

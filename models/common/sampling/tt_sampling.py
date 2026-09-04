@@ -92,6 +92,30 @@ class TTSampling(LightweightModule):
             return None
         return num_splits
 
+    @classmethod
+    def supports_vocab_on_device(cls, mesh_device, padded_vocab_size, num_sampling_shards):
+        """Whether TTSampling can sample this vocabulary on device.
+
+        The two cases are not the same bound, which is why callers must not
+        hardcode one:
+
+        - 1x1 mesh: ``forward`` takes the same-device split top-k
+          (``multi_step_reduction``), which cuts the padded vocab into
+          power-of-two chunks each at most TOPK_MAX_WIDTH wide. Any vocab it can
+          cut tile-aligned is supported, however wide (#53167). The mesh
+          predicate here must stay identical to ``multi_step_reduction``: a
+          single-device mesh whose shape is not [1, 1] does NOT take the split
+          path and would hand ttnn.topk a half-width row.
+        - Larger mesh: each device runs top-k on its own vocab shard and there is
+          no same-device split for shards, so the shard itself has to fit.
+
+        Callers that get False must fall back to host sampling rather than
+        constructing TTSampling.
+        """
+        if list(mesh_device.shape) == [1, 1]:
+            return cls.num_single_device_vocab_splits(padded_vocab_size) is not None
+        return padded_vocab_size // num_sampling_shards <= TOPK_MAX_WIDTH
+
     @staticmethod
     def _untilize_chunk_count(width):
         """Fewest tile-aligned even chunks of at most TOPK_MAX_WIDTH each, or 1
