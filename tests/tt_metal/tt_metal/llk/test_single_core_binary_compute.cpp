@@ -39,6 +39,7 @@
 #include <umd/device/types/arch.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/distributed.hpp>
+#include "single_core_compute_runners.hpp"
 
 namespace tt::tt_metal {
 
@@ -88,7 +89,7 @@ struct SingleCoreBinaryConfig {
 };
 
 void set_math_fid_masks(
-    uint16_t& srca_fid_mask, uint16_t& srcb_fid_mask, MathFidelity math_fidelity = MathFidelity::HiFi4) {
+    std::uint16_t& srca_fid_mask, std::uint16_t& srcb_fid_mask, MathFidelity math_fidelity = MathFidelity::HiFi4) {
     switch (math_fidelity) {
         case MathFidelity::HiFi4:
         case MathFidelity::HiFi3: {
@@ -112,10 +113,10 @@ void set_math_fid_masks(
 }
 
 struct BinaryStimulus {
-    std::vector<uint32_t> packed_input0;
-    std::vector<uint32_t> packed_input1;
-    std::vector<uint32_t> packed_input2;
-    std::vector<uint32_t> packed_golden;
+    std::vector<std::uint32_t> packed_input0;
+    std::vector<std::uint32_t> packed_input1;
+    std::vector<std::uint32_t> packed_input2;
+    std::vector<std::uint32_t> packed_golden;
     bool is_fp32 = false;
 };
 
@@ -171,22 +172,22 @@ static BinaryStimulus generate_binary_stimulus(const SingleCoreBinaryConfig& tes
     s.is_fp32 = test_config.l1_input_data_format == tt::DataFormat::Float32;
     if (s.is_fp32) {
         const size_t num_elements = byte_size / sizeof(float);
-        s.packed_input0 = generate_packed_uniform_random_vector<uint32_t, float>(-1.0f, 1.0f, num_elements, 0);
-        s.packed_input1 = generate_packed_uniform_random_vector<uint32_t, float>(-1.0f, 1.0f, num_elements, 1);
-        s.packed_input2 = generate_packed_uniform_random_vector<uint32_t, float>(-1.0f, 1.0f, num_elements, 2);
+        s.packed_input0 = generate_packed_uniform_random_vector<std::uint32_t, float>(-1.0f, 1.0f, num_elements, 0);
+        s.packed_input1 = generate_packed_uniform_random_vector<std::uint32_t, float>(-1.0f, 1.0f, num_elements, 1);
+        s.packed_input2 = generate_packed_uniform_random_vector<std::uint32_t, float>(-1.0f, 1.0f, num_elements, 2);
 
         TT_FATAL(
             test_config.l1_output_data_format == tt::DataFormat::Float32, "Float32 stimulus requires Float32 output");
         std::vector<float> input0(s.packed_input0.size());
         std::vector<float> input1(s.packed_input1.size());
         std::vector<float> input2(s.packed_input2.size());
-        std::transform(s.packed_input0.begin(), s.packed_input0.end(), input0.begin(), [](uint32_t value) {
+        std::transform(s.packed_input0.begin(), s.packed_input0.end(), input0.begin(), [](std::uint32_t value) {
             return std::bit_cast<float>(value);
         });
-        std::transform(s.packed_input1.begin(), s.packed_input1.end(), input1.begin(), [](uint32_t value) {
+        std::transform(s.packed_input1.begin(), s.packed_input1.end(), input1.begin(), [](std::uint32_t value) {
             return std::bit_cast<float>(value);
         });
-        std::transform(s.packed_input2.begin(), s.packed_input2.end(), input2.begin(), [](uint32_t value) {
+        std::transform(s.packed_input2.begin(), s.packed_input2.end(), input2.begin(), [](std::uint32_t value) {
             return std::bit_cast<float>(value);
         });
 
@@ -210,22 +211,22 @@ static BinaryStimulus generate_binary_stimulus(const SingleCoreBinaryConfig& tes
                 golden[i] = input2[i] * broadcast_input0[i];
             }
         }
-        s.packed_golden = pack_vector<uint32_t, float>(golden);
+        s.packed_golden = pack_vector<std::uint32_t, float>(golden);
         return s;
     }
 
     s.packed_input0 =
-        generate_packed_uniform_random_vector<uint32_t, bfloat16>(-1.0f, 1.0f, byte_size / sizeof(bfloat16), 0);
+        generate_packed_uniform_random_vector<std::uint32_t, bfloat16>(-1.0f, 1.0f, byte_size / sizeof(bfloat16), 0);
     s.packed_input1 =
-        generate_packed_uniform_random_vector<uint32_t, bfloat16>(-1.0f, 1.0f, byte_size / sizeof(bfloat16), 1);
+        generate_packed_uniform_random_vector<std::uint32_t, bfloat16>(-1.0f, 1.0f, byte_size / sizeof(bfloat16), 1);
     s.packed_input2 =
-        generate_packed_uniform_random_vector<uint32_t, bfloat16>(-1.0f, 1.0f, byte_size / sizeof(bfloat16), 2);
+        generate_packed_uniform_random_vector<std::uint32_t, bfloat16>(-1.0f, 1.0f, byte_size / sizeof(bfloat16), 2);
 
-    auto input0 = unpack_vector<bfloat16, uint32_t>(s.packed_input0);
-    auto input1 = unpack_vector<bfloat16, uint32_t>(s.packed_input1);
-    auto input2 = unpack_vector<bfloat16, uint32_t>(s.packed_input2);
-    uint16_t srca_fid_mask = 0xFFFF;
-    uint16_t srcb_fid_mask = 0xFFFF;
+    auto input0 = unpack_vector<bfloat16, std::uint32_t>(s.packed_input0);
+    auto input1 = unpack_vector<bfloat16, std::uint32_t>(s.packed_input1);
+    auto input2 = unpack_vector<bfloat16, std::uint32_t>(s.packed_input2);
+    std::uint16_t srca_fid_mask = 0xFFFF;
+    std::uint16_t srcb_fid_mask = 0xFFFF;
     if (!is_quasar) {
         set_math_fid_masks(srca_fid_mask, srcb_fid_mask, test_config.math_fidelity);
     }
@@ -239,14 +240,14 @@ static BinaryStimulus generate_binary_stimulus(const SingleCoreBinaryConfig& tes
         for (size_t i = 0; i < golden.size(); ++i) {
             constexpr size_t tile_size = 32 * 32;
             const bfloat16 srca = std::bit_cast<bfloat16>(
-                static_cast<uint16_t>(std::bit_cast<uint16_t>(input2[i % tile_size]) & srca_fid_mask));
-            const bfloat16 srcb = std::bit_cast<bfloat16>(static_cast<uint16_t>(
-                std::bit_cast<uint16_t>(
+                static_cast<std::uint16_t>(std::bit_cast<std::uint16_t>(input2[i % tile_size]) & srca_fid_mask));
+            const bfloat16 srcb = std::bit_cast<bfloat16>(static_cast<std::uint16_t>(
+                std::bit_cast<std::uint16_t>(
                     bfloat16(static_cast<float>(input0[i]) - static_cast<float>(broadcast_input1[i]))) &
                 srcb_fid_mask));
             golden[i] = static_cast<float>(srca) * static_cast<float>(srcb);
         }
-        s.packed_golden = pack_vector<uint32_t, bfloat16>(golden);
+        s.packed_golden = pack_vector<std::uint32_t, bfloat16>(golden);
         return s;
     }
 
@@ -271,10 +272,10 @@ static BinaryStimulus generate_binary_stimulus(const SingleCoreBinaryConfig& tes
             }
             if (test_config.binary_op == "mul") {
                 return (
-                    static_cast<float>(
-                        std::bit_cast<bfloat16>(static_cast<uint16_t>(std::bit_cast<uint16_t>(lhs) & srca_fid_mask))) *
-                    static_cast<float>(
-                        std::bit_cast<bfloat16>(static_cast<uint16_t>(std::bit_cast<uint16_t>(rhs) & srcb_fid_mask))));
+                    static_cast<float>(std::bit_cast<bfloat16>(
+                        static_cast<std::uint16_t>(std::bit_cast<std::uint16_t>(lhs) & srca_fid_mask))) *
+                    static_cast<float>(std::bit_cast<bfloat16>(
+                        static_cast<std::uint16_t>(std::bit_cast<std::uint16_t>(rhs) & srcb_fid_mask))));
             }
             if (test_config.binary_op.find("with_dest_reuse") != std::string::npos) {
                 return static_cast<float>(lhs);
@@ -300,13 +301,13 @@ static BinaryStimulus generate_binary_stimulus(const SingleCoreBinaryConfig& tes
                 const bfloat16 srcb =
                     test_config.dest_reuse_type == BinaryDestReuseType::SrcA ? input_value : dest_value;
                 return static_cast<float>(std::bit_cast<bfloat16>(
-                           static_cast<uint16_t>(std::bit_cast<uint16_t>(srca) & srca_fid_mask))) *
+                           static_cast<std::uint16_t>(std::bit_cast<std::uint16_t>(srca) & srca_fid_mask))) *
                        static_cast<float>(std::bit_cast<bfloat16>(
-                           static_cast<uint16_t>(std::bit_cast<uint16_t>(srcb) & srcb_fid_mask)));
+                           static_cast<std::uint16_t>(std::bit_cast<std::uint16_t>(srcb) & srcb_fid_mask)));
             }
             return rhs;
         });
-    s.packed_golden = pack_vector<uint32_t, bfloat16>(golden);
+    s.packed_golden = pack_vector<std::uint32_t, bfloat16>(golden);
     return s;
 }
 
@@ -346,20 +347,20 @@ static bool read_and_validate_binary_result(
     const std::shared_ptr<distributed::MeshBuffer>& output_dram_buffer,
     const distributed::MeshCoordinate& zero_coord,
     const BinaryStimulus& stimulus,
-    std::vector<uint32_t>* packed_result = nullptr) {
-    std::vector<uint32_t> dest_buffer_data;
+    std::vector<std::uint32_t>* packed_result = nullptr) {
+    std::vector<std::uint32_t> dest_buffer_data;
     distributed::ReadShard(cq, dest_buffer_data, output_dram_buffer, zero_coord, false);
     if (packed_result != nullptr) {
         *packed_result = dest_buffer_data;
     }
 
     if (stimulus.is_fp32) {
-        return is_close_vectors<uint32_t>(
-            dest_buffer_data, stimulus.packed_golden, [](uint32_t actual, uint32_t expected) {
+        return is_close_vectors<std::uint32_t>(
+            dest_buffer_data, stimulus.packed_golden, [](std::uint32_t actual, std::uint32_t expected) {
                 return is_close(std::bit_cast<float>(actual), std::bit_cast<float>(expected), 0.0155f);
             });
     }
-    return is_close_packed_vectors<bfloat16, uint32_t>(
+    return is_close_packed_vectors<bfloat16, std::uint32_t>(
         dest_buffer_data, stimulus.packed_golden, [&](const bfloat16& a, const bfloat16& b) {
             return is_close(a, b, 0.0155f);
         });
@@ -404,7 +405,7 @@ static std::map<std::string, std::string> build_binary_defines(const SingleCoreB
 bool single_core_binary(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const SingleCoreBinaryConfig& test_config,
-    uint32_t num_runs = 1) {
+    std::uint32_t num_runs = 1) {
     TT_FATAL(
         num_runs > 0 && test_config.block_size > 0 && test_config.num_tiles % test_config.block_size == 0,
         "num_runs and block_size must be positive, and num_tiles must be divisible by block_size");
@@ -414,7 +415,7 @@ bool single_core_binary(
     auto& cq = mesh_device->mesh_command_queue();
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     const experimental::NodeCoord node{
-        static_cast<uint32_t>(test_config.core.x), static_cast<uint32_t>(test_config.core.y)};
+        static_cast<std::uint32_t>(test_config.core.x), static_cast<std::uint32_t>(test_config.core.y)};
 
     // Math-fidelity masks model WH/BH LLK behavior; Quasar HW does not apply them.
     auto stimulus = generate_binary_stimulus(test_config, is_quasar);
@@ -438,25 +439,25 @@ bool single_core_binary(
     const experimental::KernelSpecName WRITER{"writer"};
     const experimental::KernelSpecName COMPUTE{"compute"};
 
-    auto make_input_dfb = [&](const experimental::DFBSpecName& name, uint32_t num_entries) {
+    auto make_input_dfb = [&](const experimental::DFBSpecName& name, std::uint32_t num_entries) {
         return experimental::DataflowBufferSpec{
             .unique_id = name,
-            .entry_size = static_cast<uint32_t>(test_config.tile_byte_size),
+            .entry_size = static_cast<std::uint32_t>(test_config.tile_byte_size),
             .num_entries = num_entries,
             .data_format_metadata = test_config.l1_input_data_format,
             .tile_format_metadata = test_config.tile,
         };
     };
 
-    const uint32_t num_tiles_u = static_cast<uint32_t>(test_config.num_tiles);
-    const uint32_t retained_operand_tiles = test_config.precede_dest_reuse_with_col_broadcast ? 1 : num_tiles_u;
+    const std::uint32_t num_tiles_u = static_cast<std::uint32_t>(test_config.num_tiles);
+    const std::uint32_t retained_operand_tiles = test_config.precede_dest_reuse_with_col_broadcast ? 1 : num_tiles_u;
     experimental::DataflowBufferSpec inp0_dfb_spec = make_input_dfb(INP0_DFB, num_tiles_u);
     experimental::DataflowBufferSpec inp1_dfb_spec = make_input_dfb(INP1_DFB, retained_operand_tiles);
     experimental::DataflowBufferSpec inp2_dfb_spec = make_input_dfb(INP2_DFB, retained_operand_tiles);
     experimental::DataflowBufferSpec out_dfb_spec{
         .unique_id = OUT_DFB,
-        .entry_size = static_cast<uint32_t>(test_config.tile_byte_size),
-        .num_entries = static_cast<uint32_t>(test_config.num_tiles),
+        .entry_size = static_cast<std::uint32_t>(test_config.tile_byte_size),
+        .num_entries = static_cast<std::uint32_t>(test_config.num_tiles),
         .data_format_metadata = test_config.l1_output_data_format,
         .tile_format_metadata = test_config.tile,
     };
@@ -617,18 +618,18 @@ bool single_core_binary(
             .kernel = COMPUTE,
             .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
                 node,
-                {{"per_core_block_cnt", static_cast<uint32_t>(test_config.num_tiles / test_config.block_size)},
-                 {"per_core_block_size", static_cast<uint32_t>(test_config.block_size)},
+                {{"per_core_block_cnt", static_cast<std::uint32_t>(test_config.num_tiles / test_config.block_size)},
+                 {"per_core_block_size", static_cast<std::uint32_t>(test_config.block_size)},
                  {"acc_to_dst", 0u}}),
         },
     };
     experimental::SetProgramRunArgs(program, params);
 
-    std::vector<uint32_t> first_result;
-    for (uint32_t run = 0; run < num_runs; ++run) {
+    std::vector<std::uint32_t> first_result;
+    for (std::uint32_t run = 0; run < num_runs; ++run) {
         distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
 
-        std::vector<uint32_t> packed_result;
+        std::vector<std::uint32_t> packed_result;
         if (!read_and_validate_binary_result(cq, output_dram_buffer, zero_coord, stimulus, &packed_result)) {
             return false;
         }
@@ -644,7 +645,7 @@ bool single_core_binary(
 }  // namespace unit_tests::compute::binary
 
 TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreSingleTileAdd) {
-    for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
+    for (std::uint8_t i = std::uint8_t(MathFidelity::LoFi); i <= std::uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
         }
@@ -664,7 +665,7 @@ TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreSingle
 }
 
 TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreSingleTileSub) {
-    for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
+    for (std::uint8_t i = std::uint8_t(MathFidelity::LoFi); i <= std::uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
         }
@@ -684,7 +685,7 @@ TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreSingle
 }
 
 TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreSingleTileMul) {
-    for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
+    for (std::uint8_t i = std::uint8_t(MathFidelity::LoFi); i <= std::uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
         }
@@ -704,7 +705,7 @@ TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreSingle
 }
 
 TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreSingleTileAddFullInit) {
-    for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
+    for (std::uint8_t i = std::uint8_t(MathFidelity::LoFi); i <= std::uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
         }
@@ -724,7 +725,7 @@ TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreSingle
 }
 
 TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreSingleTileSubFullInit) {
-    for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
+    for (std::uint8_t i = std::uint8_t(MathFidelity::LoFi); i <= std::uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
         }
@@ -744,7 +745,7 @@ TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreSingle
 }
 
 TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreSingleTileMulFullInit) {
-    for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
+    for (std::uint8_t i = std::uint8_t(MathFidelity::LoFi); i <= std::uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
         }
@@ -764,7 +765,7 @@ TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreSingle
 }
 
 TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiTileAddWithDestReuse) {
-    for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
+    for (std::uint8_t i = std::uint8_t(MathFidelity::LoFi); i <= std::uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
         }
@@ -788,7 +789,7 @@ TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiT
 }
 
 TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiTileSubWithDestReuse) {
-    for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
+    for (std::uint8_t i = std::uint8_t(MathFidelity::LoFi); i <= std::uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
         }
@@ -812,7 +813,7 @@ TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiT
 }
 
 TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiTileMulWithDestReuse) {
-    for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
+    for (std::uint8_t i = std::uint8_t(MathFidelity::LoFi); i <= std::uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
         }
@@ -939,7 +940,7 @@ TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeColBroadcastThen
 }
 
 TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiTileAdd) {
-    for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
+    for (std::uint8_t i = std::uint8_t(MathFidelity::LoFi); i <= std::uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
         }
@@ -963,7 +964,7 @@ TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiT
 }
 
 TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiTileSub) {
-    for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
+    for (std::uint8_t i = std::uint8_t(MathFidelity::LoFi); i <= std::uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
         }
@@ -987,7 +988,7 @@ TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiT
 }
 
 TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiTileMul) {
-    for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
+    for (std::uint8_t i = std::uint8_t(MathFidelity::LoFi); i <= std::uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
         }
@@ -1011,7 +1012,7 @@ TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiT
 }
 
 TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiTileAddDestAcc) {
-    for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
+    for (std::uint8_t i = std::uint8_t(MathFidelity::LoFi); i <= std::uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
         }
@@ -1037,7 +1038,7 @@ TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiT
 }
 
 TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiTileSubDestAcc) {
-    for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
+    for (std::uint8_t i = std::uint8_t(MathFidelity::LoFi); i <= std::uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
         }
@@ -1063,7 +1064,7 @@ TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiT
 }
 
 TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiTileMulDestAcc) {
-    for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
+    for (std::uint8_t i = std::uint8_t(MathFidelity::LoFi); i <= std::uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
         }
@@ -1086,6 +1087,84 @@ TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiT
             }
         }
     }
+}
+
+// ============================================================================
+// Id-free (2.0) eltwise binary ADD family, validated against a C++ host golden (elementwise A + B in
+// bfloat16), not a legacy kernel. Covers plain add, blocked add (blocks of 4), and dest-reuse add (seed
+// DST with A then fold B in). All Float16_b, tolerance is_close(rtol=0.0155). Runs on Blackhole (BH-only API).
+// ============================================================================
+namespace {
+// Host golden: elementwise A + B for two packed Float16_b tile vectors.
+std::vector<std::uint32_t> host_binary_add_golden(
+    const std::vector<std::uint32_t>& src0, const std::vector<std::uint32_t>& src1) {
+    auto a = tt::test_utils::unpack_vector<bfloat16, std::uint32_t>(src0);
+    auto b = tt::test_utils::unpack_vector<bfloat16, std::uint32_t>(src1);
+    TT_FATAL(a.size() == b.size(), "host_binary_add_golden: operand size mismatch");
+    std::vector<bfloat16> out(a.size());
+    for (size_t i = 0; i < a.size(); ++i) {
+        out[i] = bfloat16(static_cast<float>(a[i]) + static_cast<float>(b[i]));
+    }
+    return tt::test_utils::pack_vector<std::uint32_t, bfloat16>(out);
+}
+
+void expect_binary_add_matches_golden(
+    const std::vector<std::uint32_t>& result,
+    const std::vector<std::uint32_t>& src0,
+    const std::vector<std::uint32_t>& src1) {
+    auto golden = host_binary_add_golden(src0, src1);
+    EXPECT_EQ(golden.size(), result.size());
+    bool close = tt::test_utils::is_close_packed_vectors<bfloat16, std::uint32_t>(
+        result, golden, [](const bfloat16& a, const bfloat16& b) { return tt::test_utils::is_close(a, b, 0.0155f); });
+    EXPECT_TRUE(close);
+}
+}  // namespace
+
+TEST_F(LLKBlackholeSingleCardFixture, TensixBinaryAddIdFreeGolden) {
+    constexpr std::uint32_t num_tiles = 64;
+    auto src0 = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
+    auto src1 = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/20, /*seed=*/7, /*offset=*/-10.0f);
+    auto result = unit_tests::llk::single_core::run_binary(
+        *this->devices_.at(0),
+        src0,
+        src1,
+        num_tiles,
+        "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_binary_add_idfree.cpp");
+    expect_binary_add_matches_golden(result, src0, src1);
+}
+
+TEST_F(LLKBlackholeSingleCardFixture, TensixBinaryAddBlockIdFreeGolden) {
+    constexpr std::uint32_t num_tiles = 64;  // multiple of the 4-tile block
+    auto src0 = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
+    auto src1 = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/20, /*seed=*/7, /*offset=*/-10.0f);
+    auto result = unit_tests::llk::single_core::run_binary(
+        *this->devices_.at(0),
+        src0,
+        src1,
+        num_tiles,
+        "tests/tt_metal/tt_metal/test_kernels/compute/binary_add_block_2_0.cpp",
+        /*compute_defines=*/{},
+        /*cb_depth_tiles=*/num_tiles);
+    expect_binary_add_matches_golden(result, src0, src1);
+}
+
+TEST_F(LLKBlackholeSingleCardFixture, TensixBinaryReuseDestIdFreeGolden) {
+    constexpr std::uint32_t num_tiles = 64;
+    auto src0 = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
+    auto src1 = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/20, /*seed=*/7, /*offset=*/-10.0f);
+    auto result = unit_tests::llk::single_core::run_binary(
+        *this->devices_.at(0),
+        src0,
+        src1,
+        num_tiles,
+        "tests/tt_metal/tt_metal/test_kernels/compute/binary_reuse_dest_2_0.cpp");
+    expect_binary_add_matches_golden(result, src0, src1);
 }
 
 }  // namespace tt::tt_metal

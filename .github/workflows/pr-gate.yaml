@@ -304,15 +304,40 @@ jobs:
       ttnn-import-artifact-id: ${{ needs.asan-build.outputs.ttnn-import-artifact-id }}
       build-type: 'ASan'
 
-  runtime-examples:
-    needs: [ asan-build, find-changed-files ]
+  build-runtime-examples-image:
+    needs: [ asan-build, build-docker-images, find-changed-files ]
     if: ${{
         github.ref_name == 'main' ||
         needs.find-changed-files.outputs.cmake-changed == 'true' ||
         needs.find-changed-files.outputs.tt-metalium-changed == 'true'
       }}
+    uses: ./.github/workflows/build-prebuilt-tests-image.yaml
+    permissions:
+      contents: read
+      packages: write
+      actions: read
+    secrets: inherit
+    with:
+      artifact-name: ${{ needs.asan-build.outputs.packages-artifact-name }}
+      # Canonical ref: the producer is GitHub-hosted and cannot reach Harbor.
+      base-image: ${{ needs.build-docker-images.outputs.basic-dev-tag }}
+      dockerfile: dockerfile/Dockerfile.prebuilt-tests-packages
+      build-args: |
+        PRODUCT=tt-metalium
+        PROFILE=examples
+
+  runtime-examples:
+    needs: [ asan-build, find-changed-files, build-docker-images, build-runtime-examples-image ]
+    # Not !failure(): a failed image build must still let examples use the artifact.
+    if: ${{ !cancelled() && needs.asan-build.result == 'success' && (
+        github.ref_name == 'main' ||
+        needs.find-changed-files.outputs.cmake-changed == 'true' ||
+        needs.find-changed-files.outputs.tt-metalium-changed == 'true')
+      }}
     uses: ./.github/workflows/sdk-examples.yaml
     with:
+      # Empty on forks or a failed build; examples then use the artifact.
+      prebuilt-image: ${{ needs.build-runtime-examples-image.outputs.image }}
       docker-image: ${{ needs.asan-build.outputs.basic-dev-docker-image }}
       package-artifact-name: ${{ needs.asan-build.outputs.packages-artifact-name }}
       product: tt-metalium
@@ -321,16 +346,42 @@ jobs:
       per-test-timeout: 15
     secrets: inherit
 
-  ttnn-examples:
-    needs: [ asan-build, find-changed-files ]
+  build-ttnn-examples-image:
+    needs: [ asan-build, build-docker-images, find-changed-files ]
     if: ${{
         github.ref_name == 'main' ||
         needs.find-changed-files.outputs.cmake-changed == 'true' ||
         needs.find-changed-files.outputs.tt-metalium-changed == 'true' ||
         needs.find-changed-files.outputs.tt-nn-changed == 'true'
       }}
+    uses: ./.github/workflows/build-prebuilt-tests-image.yaml
+    permissions:
+      contents: read
+      packages: write
+      actions: read
+    secrets: inherit
+    with:
+      artifact-name: ${{ needs.asan-build.outputs.packages-artifact-name }}
+      # Canonical ref: the producer is GitHub-hosted and cannot reach Harbor.
+      base-image: ${{ needs.build-docker-images.outputs.basic-dev-tag }}
+      dockerfile: dockerfile/Dockerfile.prebuilt-tests-packages
+      build-args: |
+        PRODUCT=tt-nn
+        PROFILE=examples
+
+  ttnn-examples:
+    needs: [ asan-build, find-changed-files, build-docker-images, build-ttnn-examples-image ]
+    # Not !failure(): a failed image build must still let examples use the artifact.
+    if: ${{ !cancelled() && needs.asan-build.result == 'success' && (
+        github.ref_name == 'main' ||
+        needs.find-changed-files.outputs.cmake-changed == 'true' ||
+        needs.find-changed-files.outputs.tt-metalium-changed == 'true' ||
+        needs.find-changed-files.outputs.tt-nn-changed == 'true')
+      }}
     uses: ./.github/workflows/sdk-examples.yaml
     with:
+      # Empty on forks or a failed build; examples then use the artifact.
+      prebuilt-image: ${{ needs.build-ttnn-examples-image.outputs.image }}
       docker-image: ${{ needs.asan-build.outputs.basic-dev-docker-image }}
       package-artifact-name: ${{ needs.asan-build.outputs.packages-artifact-name }}
       product: tt-nn

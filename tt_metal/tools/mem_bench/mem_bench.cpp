@@ -184,8 +184,8 @@ TestResult mem_bench_copy_with_active_kernel(benchmark::State& state) {
     }
 
     auto src_data = generate_random_src_data(ctx.total_size);
-    auto* hugepage = get_hugepage(device->id(), 0);
-    auto hugepage_size = get_hugepage_size(device->id());
+    auto* hugepage = get_hugepage(device_id, 0);
+    auto hugepage_size = get_hugepage_size(device_id);
 
     for ([[maybe_unused]] auto _ : state) {
         auto pgm = CreateProgram();
@@ -249,11 +249,11 @@ TestResult mem_bench_copy_active_kernel_different_page(benchmark::State& state) 
     };
 
     auto src_data = generate_random_src_data(ctx.total_size);
-    auto device_hugepage_size = get_hugepage_size(device->id());
+    auto device_hugepage_size = get_hugepage_size(device_id);
 
     // 2nd open device is not required
-    auto* host_hugepage = get_hugepage(device->id() + 1, 0);
-    auto host_hugepage_size = get_hugepage_size(device->id() + 1);
+    auto* host_hugepage = get_hugepage(device_id + 1, 0);
+    auto host_hugepage_size = get_hugepage_size(device_id + 1);
 
     for ([[maybe_unused]] auto _ : state) {
         auto pgm = CreateProgram();
@@ -398,8 +398,8 @@ TestResult mem_bench_copy_with_read_and_write_kernel(benchmark::State& state) {
     };
 
     auto src_data = generate_random_src_data(ctx.total_size);
-    auto* hugepage = get_hugepage(device->id(), 0);
-    auto hugepage_size = get_hugepage_size(device->id());
+    auto* hugepage = get_hugepage(device_id, 0);
+    auto hugepage_size = get_hugepage_size(device_id);
 
     // Don't need to separate device results
     // Readers will have 0 bytes written
