@@ -109,8 +109,8 @@ DROP_EXACT = {
 }
 # Flags dropped by prefix.
 DROP_PREFIX = (
-    "-ftt-",       # SFPI-GCC extensions (-ftt-nttp, -ftt-constinit, ...)
-    "-fdump-",     # GCC dump flags (TT_METAL_JIT_ANALYTICS / build-map modes)
+    "-ftt-",  # SFPI-GCC extensions (-ftt-nttp, -ftt-constinit, ...)
+    "-fdump-",  # GCC dump flags (TT_METAL_JIT_ANALYTICS / build-map modes)
 )
 # Flags that consume the NEXT argv element and are dropped with it.
 DROP_WITH_ARG = {"-MF", "-o"}
@@ -130,10 +130,14 @@ MCPU_MAP = {
 # static_asserts this -- see the "analysis tools sometimes are misconfigured"
 # comment in sfpi.h).
 INT32_OVERRIDES = [
-    "-U__INT32_TYPE__", "-D__INT32_TYPE__=long int",
-    "-U__UINT32_TYPE__", "-D__UINT32_TYPE__=long unsigned int",
-    "-U__INT_LEAST32_TYPE__", "-D__INT_LEAST32_TYPE__=long int",
-    "-U__UINT_LEAST32_TYPE__", "-D__UINT_LEAST32_TYPE__=long unsigned int",
+    "-U__INT32_TYPE__",
+    "-D__INT32_TYPE__=long int",
+    "-U__UINT32_TYPE__",
+    "-D__UINT32_TYPE__=long unsigned int",
+    "-U__INT_LEAST32_TYPE__",
+    "-D__INT_LEAST32_TYPE__=long int",
+    "-U__UINT_LEAST32_TYPE__",
+    "-D__UINT_LEAST32_TYPE__=long unsigned int",
 ]
 
 # Diagnostics that are pure GCC/clang divergence noise for device code.
@@ -264,7 +268,7 @@ def transform(argv, clang):
             i += 1
             continue
         if a.startswith("-mcpu="):
-            target_info = MCPU_MAP.get(a[len("-mcpu="):])
+            target_info = MCPU_MAP.get(a[len("-mcpu=") :])
             i += 1
             continue
         out.append(a)
@@ -295,7 +299,10 @@ def dedupe_key(entry, mode):
             # acceptable for a lint pass, revisit if per-config coverage is
             # ever needed (drop --dedupe to keep everything).
             return (m.group("kname"), m.group("target"))
-    return (d, f, )
+    return (
+        d,
+        f,
+    )
 
 
 def find_clang_tidy(explicit):
@@ -319,9 +326,7 @@ def run_tidy_entry(tidy_bin, cfg, header_filter, entry):
     if header_filter:
         cmd.append(f"--header-filter={header_filter}")
     cmd += ["--"] + flags
-    proc = subprocess.run(
-        cmd, cwd=entry["directory"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
-    )
+    proc = subprocess.run(cmd, cwd=entry["directory"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     return entry, proc.returncode, proc.stdout, proc.stderr
 
 
@@ -342,14 +347,29 @@ def self_test():
     gxx = "/opt/tenstorrent/sfpi/compiler/bin/riscv-tt-elf-g++"
     out_dir = "/home/u/.cache/tt-metal-cache/k/1/kernels/reduce_h/42/trisc1"
     compile_argv = [
-        gxx, "-O3", "-std=c++17", "-ftt-nttp", "-flto=auto", "-MMD", "-mcpu=tt-wh-tensix",
-        "-I.", "-I..", "-DARCH_WORMHOLE", '-DFULL_KERNEL_NAME="reduce_h/42"',
-        "-DKERNEL_COMPILE_TIME_ARGS=1,2,3", "-c", "-o", f"{out_dir}/._7_0_trisck.o",
-        "-MF", f"{out_dir}/._7_0_trisck.d", "/repo/tt_metal/hw/firmware/src/tt-1xx/trisck.cc",
+        gxx,
+        "-O3",
+        "-std=c++17",
+        "-ftt-nttp",
+        "-flto=auto",
+        "-MMD",
+        "-mcpu=tt-wh-tensix",
+        "-I.",
+        "-I..",
+        "-DARCH_WORMHOLE",
+        '-DFULL_KERNEL_NAME="reduce_h/42"',
+        "-DKERNEL_COMPILE_TIME_ARGS=1,2,3",
+        "-c",
+        "-o",
+        f"{out_dir}/._7_0_trisck.o",
+        "-MF",
+        f"{out_dir}/._7_0_trisck.d",
+        "/repo/tt_metal/hw/firmware/src/tt-1xx/trisck.cc",
     ]
     compile_line = (
         "2026-01-01 00:00:01.000 | info     |    BuildKernels |     g++ compile cmd: "
-        + " ".join(compile_argv) + " (build.cpp:686)\n"
+        + " ".join(compile_argv)
+        + " (build.cpp:686)\n"
     )
     link_line = (
         "2026-01-01 00:00:02.000 | info     |    BuildKernels |     g++ link cmd: "
@@ -361,7 +381,7 @@ def self_test():
         f.write("2026-01-01 00:00:00.000 | info     | Metal | unrelated (foo.cpp:1)\n")
         f.write(compile_line)
         f.write(compile_line)  # duplicate (forced recompile) -> must dedupe
-        f.write(link_line)     # link -> must be discarded
+        f.write(link_line)  # link -> must be discarded
         log_path = f.name
 
     entries = entries_from_log(log_path)
@@ -398,20 +418,30 @@ def main():
         help="Run log captured with TT_METAL_LOG_KERNELS_COMPILE_COMMANDS=1 and TT_LOGGER_LEVEL=info",
     )
     src_group.add_argument("--self-test", action="store_true", help="Run built-in fixture assertions and exit")
-    ap.add_argument("--output-dir", help="Where to write the translated compile_commands.json (and findings); required except with --self-test")
+    ap.add_argument(
+        "--output-dir",
+        help="Where to write the translated compile_commands.json (and findings); required except with --self-test",
+    )
     ap.add_argument("--clang", default="clang++", help="clang driver name to put in the translated commands")
-    ap.add_argument("--dedupe", choices=["kernel-role", "none"], default="kernel-role",
-                    help="kernel-role (default): one entry per (kernel, RISC target); none: keep every captured config")
+    ap.add_argument(
+        "--dedupe",
+        choices=["kernel-role", "none"],
+        default="kernel-role",
+        help="kernel-role (default): one entry per (kernel, RISC target); none: keep every captured config",
+    )
     ap.add_argument("--limit", type=int, default=0, help="Cap the number of entries (0 = no cap)")
     ap.add_argument("--run", action="store_true", help="Also run clang-tidy over the translated entries")
     ap.add_argument("--clang-tidy", default="", help="clang-tidy binary (default: autodetect newest)")
     ap.add_argument("--config-file", default="", help=".clang-tidy config for --run")
-    ap.add_argument("--header-filter",
-                    default=r".*/(kernels|kernels_ng|kernels_dfb|test_kernels)/.*",
-                    help="--header-filter passed to clang-tidy (findings in #included kernel sources)")
+    ap.add_argument(
+        "--header-filter",
+        default=r".*/(kernels|kernels_ng|kernels_dfb|test_kernels)/.*",
+        help="--header-filter passed to clang-tidy (findings in #included kernel sources)",
+    )
     ap.add_argument("--jobs", type=int, default=os.cpu_count() or 4)
-    ap.add_argument("--fail-on-findings", action="store_true",
-                    help="Exit nonzero if any finding is emitted (default: report only)")
+    ap.add_argument(
+        "--fail-on-findings", action="store_true", help="Exit nonzero if any finding is emitted (default: report only)"
+    )
     args = ap.parse_args()
 
     if args.self_test:
@@ -453,10 +483,13 @@ def main():
     if skipped_unknown_cpu:
         print(f"[kernel-clang-tidy] skipped {skipped_unknown_cpu} entries with unrecognized -mcpu", file=sys.stderr)
     if not entries:
-        print("[kernel-clang-tidy] nothing captured. Did the run compile anything? "
-              "(TT_METAL_FORCE_JIT_COMPILE=1 and CCACHE_DISABLE=1 must be set; for --input-log "
-              "the run also needs TT_METAL_LOG_KERNELS_COMPILE_COMMANDS=1 and TT_LOGGER_LEVEL=info; "
-              "for --input the command must be wrapped in `bear --`)", file=sys.stderr)
+        print(
+            "[kernel-clang-tidy] nothing captured. Did the run compile anything? "
+            "(TT_METAL_FORCE_JIT_COMPILE=1 and CCACHE_DISABLE=1 must be set; for --input-log "
+            "the run also needs TT_METAL_LOG_KERNELS_COMPILE_COMMANDS=1 and TT_LOGGER_LEVEL=info; "
+            "for --input the command must be wrapped in `bear --`)",
+            file=sys.stderr,
+        )
         return 0
 
     if not args.run:
@@ -493,8 +526,10 @@ def main():
                     findings.write("\n[stderr tail]\n" + "\n".join(err.splitlines()[-15:]) + "\n")
                 findings.write("\n")
 
-    print(f"[kernel-clang-tidy] {total_findings} findings across {len(entries)} entries "
-          f"({failed_entries} entries had parse/config errors) -> {findings_path}")
+    print(
+        f"[kernel-clang-tidy] {total_findings} findings across {len(entries)} entries "
+        f"({failed_entries} entries had parse/config errors) -> {findings_path}"
+    )
     for check, count in sorted(check_counts.items(), key=lambda kv: -kv[1])[:25]:
         print(f"  {count:6d}  {check}")
 
