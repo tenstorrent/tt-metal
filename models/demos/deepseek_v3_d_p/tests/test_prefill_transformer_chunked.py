@@ -246,10 +246,8 @@ KIMI_UNTRACED_BASELINE_CHUNK_TIMES_S = {
 TRACED_PERF_MARGIN = 0.03
 UNTRACED_PERF_MARGIN = 0.05
 
-# Mistral needs wider bands than Kimi. Traced: 5%, because the per-unit-KV cost varies up to 4.3%
-# per chunk between runs (3% failed 7/20 chunks on the next green run). Untraced: 8% plus one
-# isolated chunk, because 2 of 8 runs had a single chunk spike 32-66% while the rest sat in band.
-MISTRAL4_TRACED_PERF_MARGIN = 0.05
+# Traced uses Kimi's 3%. Untraced needs 8% plus one isolated chunk: 5% flakes on ordinary variation,
+# and 2 of 8 runs had a single chunk spike 32-66% while the rest sat in band.
 MISTRAL4_UNTRACED_PERF_MARGIN = 0.08
 MISTRAL4_UNTRACED_MAX_OUT_OF_BAND = 1
 
@@ -266,19 +264,34 @@ MISTRAL4_UNTRACED_MAX_OUT_OF_BAND = 1
 # carries fixed overhead that does not scale with the window and understates throughput by 17-30%
 # (see test_mistral4_prefill_transformer_chunked_no_pcc's docstring).
 MISTRAL4_TRACED_BASELINE_CHUNK_TIMES_S: dict[tuple[int, int, int], list[float]] = {
-    # Deliberately empty: not gateable on a pool-scheduled leg. Over seven CI runs the
-    # depth-independent cost held to +/-1% while the per-unit-KV cost -- the MLA/SDPA term this row
-    # exists to catch -- came out in two clusters, ~7.8 and ~11-13 ms, a 1.5x split.
+    # Median-of-medians over three runs on bh_sc1_high_power. Ramps with depth (chunk c attends to
+    # KV[0:c*CHUNK]), which is what makes this the row that can see an MLA/SDPA regression -- the
+    # untraced twin below is host-dispatch bound and cannot.
     #
-    # It is the BOARD, not the run: two back-to-back runs on one galaxy reproduce b to 0.13%
-    # (7.76 / 7.75), and that box sits in the fast cluster. AICLK (1343 MHz everywhere), fabric
-    # mapping (byte-identical), topology, device count and code are all ruled out. So bh_sc1 holds at
-    # least two performance classes of galaxy and this leg gets a random one -- no absolute per-chunk
-    # baseline can survive that, and the same applies to any other perf row on the pool.
-    #
-    # Arm this once the leg is pinned to one class (or the pool is made homogeneous); the untraced
-    # twin below shows the machinery works.
-    # (36, 20, 10): [...],
+    # Must be cut on high_power. The same rows on plain bh_sc1 split into two clusters 1.5x apart
+    # depending which box the pool gave them; on high_power three runs agree to 0.26%.
+    (36, 20, 10): [
+        0.125,
+        0.136,
+        0.140,
+        0.149,
+        0.159,
+        0.167,
+        0.177,
+        0.184,
+        0.188,
+        0.197,
+        0.213,
+        0.209,
+        0.216,
+        0.228,
+        0.233,
+        0.241,
+        0.253,
+        0.261,
+        0.268,
+        0.277,
+    ],
 }
 MISTRAL4_UNTRACED_BASELINE_CHUNK_TIMES_S: dict[tuple[int, int, int], list[float]] = {
     # Median-of-medians over three healthy CI runs. Flat ~0.69 s/chunk: untraced is host-dispatch
@@ -1249,7 +1262,7 @@ def mistral4_chunked_perf_gate(use_trace, num_layers, n_chunks, num_iters, perf_
     should be armed with no allowance.
     """
     table, default_margin, max_oob = (
-        (MISTRAL4_TRACED_BASELINE_CHUNK_TIMES_S, MISTRAL4_TRACED_PERF_MARGIN, 0)
+        (MISTRAL4_TRACED_BASELINE_CHUNK_TIMES_S, TRACED_PERF_MARGIN, 0)
         if use_trace
         else (
             MISTRAL4_UNTRACED_BASELINE_CHUNK_TIMES_S,
