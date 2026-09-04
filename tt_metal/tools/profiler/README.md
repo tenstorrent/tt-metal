@@ -1,5 +1,9 @@
 # tt_metal profiler
 
+For HW performance counters (FPU/SFPU/MATH, unpack/pack, instruction-stall and
+semaphore-wait, L1/NoC ports) — capture, buffer sizing, scope control, and the
+utilization-trust gate — see [PERF_COUNTERS.md](PERF_COUNTERS.md).
+
 ## Tests
 
 ### Automation tests for the profiler module
