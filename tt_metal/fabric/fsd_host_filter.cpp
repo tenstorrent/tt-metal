@@ -169,4 +169,36 @@ void agree_or_throw_fsd_host_filter(
     throw std::runtime_error(message);
 }
 
+void throw_on_fsd_chips_absent_from_live(
+    const ::tt::tt_metal::PhysicalSystemDescriptor& fsd, const ::tt::tt_metal::PhysicalSystemDescriptor& live) {
+    const auto fsd_index = ::tt::tt_metal::build_physical_node_id_index(fsd);
+    const auto live_index = ::tt::tt_metal::build_physical_node_id_index(live);
+
+    std::set<std::string> live_hosts;
+    for (const auto& hostname : live.get_all_hostnames()) {
+        live_hosts.insert(::tt::tt_metal::canonical_host_for_node_id(hostname));
+    }
+
+    std::vector<std::string> absent;
+    for (const auto& [node_id, asic_id] : fsd_index.node_id_to_asic_id) {
+        if (!live_hosts.contains(std::string(::tt::tt_metal::host_id_view(node_id)))) {
+            continue;  // discovery never looked at this host -- see the header
+        }
+        if (!live_index.node_id_to_asic_id.contains(node_id)) {
+            absent.push_back(fmt::format("{}", node_id));
+        }
+    }
+    if (absent.empty()) {
+        return;
+    }
+    // Sorted because the index is unordered: without this, two ranks would report the same chips in
+    // different orders and the operator would see several distinct-looking failures.
+    std::sort(absent.begin(), absent.end());
+    throw std::runtime_error(fmt::format(
+        "Factory System Descriptor: {} chip(s) it expects are absent from the live cluster: {}. A missing "
+        "chip is not a downed-link case -- check the allocation and the boards.",
+        absent.size(),
+        fmt::join(absent, ", ")));
+}
+
 }  // namespace tt::tt_metal::experimental::tt_fabric

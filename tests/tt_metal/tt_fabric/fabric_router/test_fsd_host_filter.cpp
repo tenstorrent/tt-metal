@@ -288,5 +288,103 @@ TEST(FsdHostFilter, ALocalFailureThrowsThroughTheAgreement) {
     }
 }
 
+// A factory descriptor with an extra ASIC on one host, to stand for a board that was not installed.
+FSD make_fsd_with_extra_asic(const std::vector<std::string>& hostnames) {
+    FSD fsd = make_fsd(hostnames);
+    // A second tray on host 0, cabled so the builder enumerates it (ASICs with no cables never appear).
+    auto* location = fsd.mutable_board_types()->add_board_locations();
+    location->set_host_id(0);
+    location->set_tray_id(1);
+    location->set_board_type("N300");
+
+    auto* connection = fsd.mutable_eth_connections()->add_connection();
+    auto* a = connection->mutable_endpoint_a();
+    a->set_host_id(0);
+    a->set_tray_id(1);
+    a->set_asic_location(0);
+    a->set_chan_id(4);
+    auto* b = connection->mutable_endpoint_b();
+    b->set_host_id(0);
+    b->set_tray_id(1);
+    b->set_asic_location(1);
+    b->set_chan_id(4);
+    return fsd;
+}
+
+TEST(FsdChipsAbsentFromLive, MatchingDescriptorsPass) {
+    const auto fsd = descriptor_for({"hosta", "hostb"});
+    const auto live = descriptor_for({"hosta", "hostb"});
+
+    EXPECT_NO_THROW(throw_on_fsd_chips_absent_from_live(fsd, live));
+}
+
+// A whole chip the factory descriptor expects and live does not have is a wrong allocation, not a pile of
+// downed cables, so it is fatal before the mapper rather than a link-health record.
+TEST(FsdChipsAbsentFromLive, AnUninstalledBoardIsFatal) {
+    const auto fsd = ::tt::tt_metal::PhysicalSystemDescriptor(
+        build_physical_descriptor(make_fsd_with_extra_asic({"hosta", "hostb"})));
+    const auto live = descriptor_for({"hosta", "hostb"});
+
+    try {
+        throw_on_fsd_chips_absent_from_live(fsd, live);
+        FAIL() << "expected a throw";
+    } catch (const std::runtime_error& e) {
+        const std::string what = e.what();
+        // Both ASICs on the absent tray, each by address, and named as an allocation problem.
+        EXPECT_NE(what.find("2 chip(s)"), std::string::npos) << what;
+        EXPECT_NE(what.find("tray 1"), std::string::npos) << what;
+        EXPECT_NE(what.find("not a downed-link case"), std::string::npos) << what;
+    }
+}
+
+// Hosts discovery never looked at are out of scope. This is what keeps a local-only live descriptor from
+// reporting every remote chip as absent and fataling on a healthy system.
+TEST(FsdChipsAbsentFromLive, ChipsOnUnenumeratedHostsAreOutOfScope) {
+    const auto fsd = descriptor_for({"hosta", "hostb"});
+    const auto live = descriptor_for({"hosta"});
+
+    EXPECT_NO_THROW(throw_on_fsd_chips_absent_from_live(fsd, live));
+}
+
+// Live having chips the factory descriptor does not is not a fault -- the descriptor is golden about what
+// must exist, not about what may.
+TEST(FsdChipsAbsentFromLive, ExtraLiveChipsArePassed) {
+    const auto fsd = descriptor_for({"hosta"});
+    const auto live =
+        ::tt::tt_metal::PhysicalSystemDescriptor(build_physical_descriptor(make_fsd_with_extra_asic({"hosta"})));
+
+    EXPECT_NO_THROW(throw_on_fsd_chips_absent_from_live(fsd, live));
+}
+
+// Ranks fed the same descriptors must produce the same bytes, or the operator sees what looks like several
+// different failures. The address index is unordered, so this is not free.
+TEST(FsdChipsAbsentFromLive, TheMessageIsDeterministic) {
+    const auto fsd = ::tt::tt_metal::PhysicalSystemDescriptor(
+        build_physical_descriptor(make_fsd_with_extra_asic({"hosta", "hostb"})));
+
+    std::string first;
+    for (int attempt = 0; attempt < 5; ++attempt) {
+        const auto live = descriptor_for({"hosta", "hostb"});
+        try {
+            throw_on_fsd_chips_absent_from_live(fsd, live);
+            FAIL() << "expected a throw";
+        } catch (const std::runtime_error& e) {
+            if (first.empty()) {
+                first = e.what();
+            } else {
+                EXPECT_EQ(first, std::string(e.what()));
+            }
+        }
+    }
+}
+
+// Host spelling does not decide whether a chip is present.
+TEST(FsdChipsAbsentFromLive, HostSpellingDoesNotMakeChipsLookAbsent) {
+    const auto fsd = descriptor_for({"hosta", "hostb"});
+    const auto live = descriptor_for({"HostA.dc.example.com", "hostb"});
+
+    EXPECT_NO_THROW(throw_on_fsd_chips_absent_from_live(fsd, live));
+}
+
 }  // namespace
 }  // namespace tt::tt_metal::experimental::tt_fabric
