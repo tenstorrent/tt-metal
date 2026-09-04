@@ -734,6 +734,44 @@ def test_linear(
                 assert check_result[n][c][i]["relative_rmse"] < 0.02
 
 
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [
+        [(2, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}],
+    ],
+    ids=["2x4"],
+    indirect=["mesh_device", "device_params"],
+)
+def test_linear_cache_identity(mesh_device):
+    # Keep both activation variants in one process so they can expose program-cache aliasing.
+    submesh = _create_cluster_submesh(mesh_device, cluster_axis=1)
+    common = dict(
+        M=32,
+        K=2048,
+        N=2048,
+        M_block_size=1,
+        K_block_size=8,
+        N_block_size=8,
+        subblock_h=1,
+        subblock_w=2,
+        topology=ttnn.Topology.Ring,
+        core_grid=ttnn.CoreCoord(4, 4),
+        num_workers_per_link=4,
+        num_links=1,
+        use_non_fused=False,
+        force_transpose=True,
+        sp_axis=0,
+        tp_axis=1,
+        cluster_axis=1,
+        chunks=1,
+    )
+    plain = run_test_linear(submesh, activation=None, **common)
+    gelu = run_test_linear(submesh, activation="gelu", **common)
+    for result in (plain, gelu):
+        assert result[0][0][0]["pcc"] > 0.999_500
+        assert result[0][0][0]["relative_rmse"] < 0.02
+
+
 def run_test_linear_fsdp(
     device,
     M,
