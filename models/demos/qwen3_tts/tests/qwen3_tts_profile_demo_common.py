@@ -258,8 +258,10 @@ def build_demo_icl_state(device, model, main_weights) -> Dict[str, Any]:
         se = model.speaker_encoder
         se.capture_se_block_traces()
         se.capture_fc_trace()
-        se_mel = se.compute_mel_spectrogram(audio_data)
-        se.capture_forward_trace(int(se_mel.shape[-1]))
+        se.capture_audio_forward_trace(audio_data)
+        if not se._audio_traces:
+            # Waveform the device mel cannot take; fall back to the mel-in trace.
+            se.capture_forward_trace(int(se.compute_mel_spectrogram(audio_data).shape[-1]))
         se.activate_traced_extract()
 
     ref_codes, audio_data = encode_reference_audio(str(DEFAULT_REF_AUDIO), main_weights)

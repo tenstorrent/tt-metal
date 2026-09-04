@@ -210,15 +210,18 @@ def run_full_ttnn_tts(
                 cap_start = time.time()
                 se.capture_se_block_traces()
                 se.capture_fc_trace()
-                se_mel = se.compute_mel_spectrogram(audio_data)
-                se.capture_forward_trace(int(se_mel.shape[-1]))
+                se.capture_audio_forward_trace(audio_data)
+                if not se._audio_traces:
+                    # Waveform the device mel cannot take; fall back to the mel-in trace.
+                    se.capture_forward_trace(int(se.compute_mel_spectrogram(audio_data).shape[-1]))
                 se.activate_traced_extract()
                 timings["se_trace_capture"] = time.time() - cap_start
                 print(
                     f"  ECAPA traces captured in {timings['se_trace_capture']*1000:.1f} ms "
                     f"(SE blocks {len(getattr(se, '_se_traces', {}))}, "
                     f"fc {getattr(se, '_fc_trace', None) is not None}, "
-                    f"forward lengths {sorted(se._fwd_traces)})"
+                    f"forward lengths {sorted(se._fwd_traces)}, "
+                    f"audio samples {sorted(se._audio_traces)})"
                 )
 
             spk_start = time.time()
