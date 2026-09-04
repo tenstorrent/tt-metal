@@ -98,8 +98,10 @@ void bind_tensor_prefetcher(nb::module_& mod) {
                     Supply exactly one of global_cb / prefetcher_pipes.
                 prefetcher_pipes (TensorPrefetcherPipes): DRAM-sender PrefetcherPipes (created via
                     ttnn.experimental.create_prefetcher_pipes_for_tensor_prefetcher) to deliver into
-                    instead of a GCB. Receiver-contiguous batched tensors only, each with a
-                    per-receiver block size equal to the pipes' entry_size.
+                    instead of a GCB. Receiver-contiguous batched tensors only. A tensor's
+                    per-receiver block size need not equal the pipes' entry_size; it only has to
+                    leave the ring room for two whole blocks, since consumers keep one block of
+                    lookahead.
                 device_subset (Optional[MeshCoordinateRangeSet]): subset of the mesh that
                     processes this request. Defaults to the full mesh.
                 capture_into_trace (bool): whether this request may be captured into a trace.
@@ -206,8 +208,9 @@ void bind_tensor_prefetcher(nb::module_& mod) {
             Args:
                 mesh_device: The mesh device to create the buffer on.
                 bank_to_receivers: List of (bank_id, receivers) pairs.
-                entry_size: Push granularity in bytes. Must equal each streamed tensor's
-                    per-receiver bytes-per-block; this transport does not resize mid-flight.
+                entry_size: Push granularity in bytes the pipes start life at. With num_entries
+                    it fixes the ring size, which never changes. A later queued tensor may use a
+                    different per-receiver block size as long as the ring holds two of them.
                 num_entries: Ring depth, in entries, per receiver.
                 buffer_type: Buffer type (L1 or L1_SMALL).
                 support_multi_receiver_shards: If True, a bank's shard may feed multiple receivers,
