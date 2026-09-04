@@ -22,6 +22,7 @@ set(HW_JIT_API_HEADERS
     inc/api/numeric/float32.h
     inc/api/numeric/int32.h
     inc/api/kernel_thread_globals.h
+    inc/api/llk_operand_from_tokens.h
     inc/api/tensor/tensor_accessor.h
     inc/api/tensor/tensor_accessor_args.h
     inc/api/tensor/tensor_binding_token.h
@@ -184,6 +185,7 @@ set(HW_JIT_API_HEADERS
     inc/internal/prefetcher_pipe_init.h
     inc/internal/cross_node_dfb_interface.h
     inc/internal/firmware_common.h
+    inc/internal/llk_metadata.h
     inc/internal/mod_div_lib.h
     inc/internal/risc_attribs.h
     inc/internal/template_string.h
