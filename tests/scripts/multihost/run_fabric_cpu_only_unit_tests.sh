@@ -103,8 +103,7 @@ SC36_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING="tt_metal/third_party/tt-cluster-
 # SC28 and SC24 (6-quad) ring subsets of the SC36 revC subtorus aisleD capture (the hosts whose
 # quads close each ring; see the mappings' headers). Exact fits for the 112-stage 4x2 ring /
 # SC28-K3 7-BigMesh and for the SC24-GLM 6-BigMesh respectively.
-# TODO(rsong): pending tt-cluster-descriptors PR 19 (rsong/sc28-revc-subtorus-aisled-mapping);
-# these entries fail in CI until it merges and the submodule pin is bumped.
+# Mappings landed in tt-cluster-descriptors #19 (in the pinned submodule).
 # The other SC28/SC24 ring host lists (120-C, 110-A/C/D) have no complete mock capture in
 # tt-cluster-descriptors yet (aisle-C sets have 20 of 36 hosts and none include c07/Quad6;
 # 110-D has a 16-host set only; 110-A has none), so only the 120-D (revC) mappings exist for now.
@@ -112,7 +111,7 @@ SC28_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING="tt_metal/third_party/tt-cluster-
 SC24_REVC_SUBTORUS_AISLED_RING_CLUSTER_DESC_MAPPING="tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC36_32x4_revC_subtorus_aisleD/SC24_32x4_revC_subtorus_aisleD_ring_mapping.yaml"
 # 24-host SC24 revC subtorus (system-110, aisle C columns c01-c07, units u02-u20); used by the SC24
 # 96-stage / six-BigMesh ring-stress entries.
-# TODO(rsong): pending tt-cluster-descriptors SC24 aisle-C set; path will be finalized when it lands.
+# Set landed in tt-cluster-descriptors #17 (in the pinned submodule).
 SC24_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING="tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC24_32x4_revC_subtorus_aisleC/SC24_32x4_revC_subtorus_aisleC_mapping.yaml"
 # (The non-subtorus flat SC20 revAB Aisle C mock was removed: real revAB systems are subtorus, and the
 # flat mock only exposes 12 physical meshes, so the SC20 rings can't map onto it. Use the revAB subtorus
@@ -742,8 +741,8 @@ fi # bh-blitz-decode
 #     the SC20 one (80 slots) -- 16/64 only (96+ need >= 24 hosts).
 #   - SC28 revC subtorus aisleD (28-host SC28-ring subset of the aisleD capture, 112 slots):
 #     16/64 (96/112 disabled, see #51629 note below).
-#   - SC24 revC subtorus aisleC (24 hosts, 96 slots; pending tt-cluster-descriptors PR 17 +
-#     submodule bump): 16 only (64 embedded + 96 disabled, see #51629 note below).
+#   - SC24 revC subtorus aisleC (24 hosts, 96 slots; tt-cluster-descriptors #17): 16 only
+#     (64 embedded + 96 disabled, see #51629 note below).
 # Own shard; see tests/pipeline_reorg/fabric_cpu_only_unit_tests.yaml for the CI budget.
 ######################################
 if run_group "bh-ring-stress"; then
@@ -773,8 +772,8 @@ for entry in \
     "SC24_revC_subtorus_110_aisleC:${SC24_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}:16" ; do
   rest="${entry#*:}"; cluster_map="${rest%%:*}"; stages="${rest#*:}"
   if [[ ! -f "${cluster_map}" ]]; then
-    # Pending tt-cluster-descriptors merge + submodule bump (see the mapping vars' TODOs).
-    echo "WARNING: [bh-ring-stress] skipping ${entry%%:*} -- mock mapping is in tt-cluster-descriptors PR 19 (https://github.com/tenstorrent/tt-cluster-descriptors/pull/19), pending merge + submodule bump: ${cluster_map}" >&2
+    # Guard against a tt-cluster-descriptors pin that predates the mapping (all current entries are in the pin).
+    echo "WARNING: [bh-ring-stress] skipping ${entry%%:*} -- mock mapping not in the pinned tt-cluster-descriptors submodule: ${cluster_map}" >&2
     continue
   fi
   for stage in ${stages}; do
@@ -822,8 +821,8 @@ for entry in \
     "SC28_revC_subtorus_120_aisleD:${SC28_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}:7" ; do
   rest="${entry#*:}"; cluster_map="${rest%%:*}"; bigmeshes="${rest#*:}"
   if [[ ! -f "${cluster_map}" ]]; then
-    # Pending tt-cluster-descriptors merge + submodule bump (see the mapping vars' TODOs).
-    echo "WARNING: [bh-ring-stress] skipping ${entry%%:*} -- mock mapping is in tt-cluster-descriptors PR 19 (https://github.com/tenstorrent/tt-cluster-descriptors/pull/19), pending merge + submodule bump: ${cluster_map}" >&2
+    # Guard against a tt-cluster-descriptors pin that predates the mapping (all current entries are in the pin).
+    echo "WARNING: [bh-ring-stress] skipping ${entry%%:*} -- mock mapping not in the pinned tt-cluster-descriptors submodule: ${cluster_map}" >&2
     continue
   fi
   for bigmesh in ${bigmeshes}; do
