@@ -2732,3 +2732,96 @@ def test_to_memory_config_tile_interleaved_l1_dram(device, src_buffer, dst_buffe
     assert output_tensor.memory_config().buffer_type == dst_buffer
     output_torch = ttnn.to_torch(output_tensor)
     assert_equal(torch_input, output_torch)
+
+
+def test_to_memory_config_interleaved_to_sharded_with_resident_l1(device):
+    """Regression #54621: interleaved_to_sharded fast-path selection must budget CB size
+    against LIVE free L1, not against the whole of L1 (``l1_size_per_core - base_addr``).
+
+    Statically allocated CBs grow upward from the allocator's base L1 address while L1
+    tensors are allocated downward from the top of L1, so the space actually available to
+    a program's CBs is ``lowest_occupied_compute_l1_address() - base``. Before this fix,
+    ``can_use_interleaved_to_sharded`` in ``to_memory_config_op.cpp`` compared against the
+    whole-of-L1 budget, so the fast path was still selected when a resident L1 buffer left
+    insufficient space, and the program's static CB region clashed with the resident buffer
+    at dispatch:
+
+        Statically allocated circular buffers in program N clash with L1 buffers on core range ...
+
+    The fix routes the eligibility check through ``get_max_l1_space()``, which subtracts
+    ``lowest_occupied_compute_l1_address()``. This test reserves L1 so that the required CB
+    for the DRAM-sharded destination would fit under the old total-L1 budget but not under
+    free L1, and asserts that ``to_memory_config`` still succeeds (by falling back to
+    ``ttnn.prim.copy``) rather than clashing.
+
+    Asserts only on the result, never on which implementation served it: a future refactor
+    that goes back to whole-of-L1 budgeting would compile fine and pass the other tests in
+    this file, but would crash here at dispatch.
+    """
+    torch.manual_seed(0)
+    TILE_BYTES = 2048  # bfloat16 tile
+
+    info = ttnn._ttnn.reports.get_device_info(device)
+
+    # DRAM-sharded destinations go through the ``dst_is_dram`` branch of
+    # ``can_use_interleaved_to_sharded``, where the CB is sized to the full shard
+    # (num_units_per_shard * output_page_size). Size the shard so its CB is 70% of the
+    # whole-of-L1 budget the buggy check used; the resident reservation below then pushes
+    # free L1 below that CB size, so a whole-of-L1 check accepts the fast path while a
+    # free-L1 check must reject it.
+    cb_target_bytes = int(info.cb_limit * 0.70)
+    shard_tiles = cb_target_bytes // TILE_BYTES
+    if shard_tiles < 4:
+        pytest.skip(f"device cb_limit {info.cb_limit} B is too small for this regression test")
+
+    # Width-shard across every DRAM bank: shard height spans the whole tensor height and
+    # shard width is one tile column per bank, so num_units_per_shard = shard_tiles.
+    num_dram_banks = device.dram_grid_size().x
+    shape = [1, 1, 32 * shard_tiles, 32 * num_dram_banks]
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    # Built before the L1 reservation so any device-side tilize in from_torch runs with the
+    # usual amount of L1 available; only the to_memory_config under test should see the pressure.
+    input_tensor = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    shard_grid = make_full_dram_core_range_set(device)
+    shard_shape = (32 * shard_tiles, 32)
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    output_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.DRAM,
+        shard_spec,
+    )
+
+    # Reserve L1 so the fast-path CB is oversized against free L1 but still under the
+    # whole-of-L1 budget. Interleaved L1 spreads pages round-robin across every bank, so
+    # tiles_per_bank tiles per bank pushes the lowest occupied L1 address down uniformly.
+    headroom_target = cb_target_bytes // 2  # target free L1 ~ half the fast-path CB
+    tiles_per_bank = (info.cb_limit - headroom_target) // TILE_BYTES
+    if tiles_per_bank <= 0:
+        pytest.skip("device L1 too small to leave a meaningful headroom window")
+
+    resident = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, 1, 32 * tiles_per_bank, 32 * info.l1_num_banks]),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        device,
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+    )
+    try:
+        # Guard against a vacuous pass: if the reservation did not land where intended
+        # there is no L1 pressure to regress against.
+        actual_free_l1 = resident.buffer_address() - info.address_at_first_l1_cb_buffer
+        assert actual_free_l1 < cb_target_bytes, (
+            f"resident L1 buffer left {actual_free_l1} B free above the CB base; the "
+            f"regression scenario needs free L1 < fast-path CB size {cb_target_bytes} B"
+        )
+
+        output_tensor = ttnn.to_memory_config(input_tensor, memory_config=output_mem_config)
+        assert_equal(torch_input, ttnn.to_torch(output_tensor))
+    finally:
+        ttnn.deallocate(resident)
