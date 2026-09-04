@@ -85,8 +85,10 @@
 # fill, div-scalar dtype matrices, clamp/clip) -- they are accuracy and dtype coverage, they cost
 # minutes, and they belong in the nightly eltwise groups where they already run.
 #
-# 737 tests, 44s of pytest and 52s wall-clock on an N300 including device bring-up, against the
-# 5-minute budget. One pytest invocation on purpose: device bring-up is ~7s, so splitting this
+# 753 tests selected -- 737 pass, 9 skip, 7 xfail -- in 230s of pytest and 237s of wall-clock on
+# an N300 including device bring-up, measured against main at e1426777c. That is the reason for the
+# 10-minute timeout: the work itself is ~4 minutes, and a 5-minute timeout would leave a shared
+# runner no headroom. One pytest invocation on purpose: device bring-up is ~7s, so splitting this
 # into per-file entries would cost more than the tests do. Hardware only. Blackhole eltwise
 # coverage in the merge gate comes from the tt-nn-validation-basic gtest suite
 # (tests/ttnn/unit_tests/gtests/test_eltwise.cpp), which runs on bh_p150b_civ2_viommu as well as
@@ -128,6 +130,6 @@
     -m "not disable_fast_runtime_mode"
   skus:
     wh_n300_civ2:
-      timeout: 5
+      timeout: 10
   team: ttnn
   owner_id: U09BX3N0N95 # Mateusz Nowak
