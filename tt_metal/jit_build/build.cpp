@@ -117,6 +117,10 @@ std::string_view pch_umbrella_for(std::string_view kernel_src) {
     if (kernel_src == "ncrisck.cc") {
         return "tt_metal/hw/firmware/src/tt-1xx/ncrisc_pch.h";
     }
+    // active_erisck.cc deliberately has no entry. A PCH is buildable for it, but it
+    // measured as nothing (48 of 4133 targets), and the umbrella would have to omit
+    // noc_nonblocking_api.h as well: once the dataflow headers are gone it becomes the
+    // first to reach risc_common.h, which uses MY_NOC_ENCODING before it is defined.
     return {};
 }
 
