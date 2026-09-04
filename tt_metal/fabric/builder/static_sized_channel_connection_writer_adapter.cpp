@@ -21,7 +21,7 @@ StaticSizedChannelConnectionWriterAdapter::StaticSizedChannelConnectionWriterAda
 void StaticSizedChannelConnectionWriterAdapter::add_downstream_connection(
     const SenderWorkerAdapterSpec& adapter_spec,
     uint32_t inbound_vc_idx,
-    uint32_t /*sender_channel_idx*/,
+    uint32_t sender_channel_idx,
     eth_chan_directions downstream_direction,
     tt::tt_metal::CoreCoord downstream_noc_xy,
     bool is_2D_routing) {
@@ -39,6 +39,7 @@ void StaticSizedChannelConnectionWriterAdapter::add_downstream_connection(
         // For Z router     (my_direction=4): EAST(0)→0, WEST(1)→1,  NORTH(2)→2, SOUTH(3)→3
         size_t compact_index = get_receiver_channel_compact_index(my_direction, downstream_direction);
         this->downstream_edms_connected_by_vc_mask.at(inbound_vc_idx) |= (1 << compact_index);
+        this->downstream_sender_channel_ids.at(inbound_vc_idx).at(compact_index) = sender_channel_idx;
 
         // Store addresses indexed by [vc_idx][compact_index]
         // NOTE: For single-target turns, this works fine (one connection per compact_index)
@@ -66,6 +67,29 @@ void StaticSizedChannelConnectionWriterAdapter::add_downstream_connection(
 
     this->downstream_sender_channels_num_buffers.at(inbound_vc_idx) = adapter_spec.num_buffers_per_channel;
     this->downstream_edms_connected_by_vc_set.insert(inbound_vc_idx);
+}
+
+uint32_t StaticSizedChannelConnectionWriterAdapter::get_packed_downstream_sender_channel_ids(uint32_t vc_idx) const {
+    static_assert(
+        builder_config::num_downstream_edms_2d_vc1_wide <= 4,
+        "Packed downstream sender-channel IDs reserve four 2D direction slots");
+    constexpr uint32_t sender_channel_id_width_bits = 4;
+    uint32_t packed_sender_channel_ids = 0;
+    const uint32_t mask = this->downstream_edms_connected_by_vc_mask.at(vc_idx);
+    for (size_t compact_idx = 0; compact_idx < builder_config::num_downstream_edms_2d_vc1_wide; compact_idx++) {
+        if ((mask & (1 << compact_idx)) == 0) {
+            continue;
+        }
+        const auto sender_channel_id = this->downstream_sender_channel_ids.at(vc_idx).at(compact_idx);
+        TT_FATAL(sender_channel_id.has_value(), "Missing downstream sender channel for compact slot {}", compact_idx);
+        TT_FATAL(
+            *sender_channel_id < sizeof(uint16_t) * 8,
+            "Downstream sender channel {} exceeds the channel trimming bitfield",
+            *sender_channel_id);
+        packed_sender_channel_ids |= static_cast<uint32_t>(*sender_channel_id)
+                                     << (compact_idx * sender_channel_id_width_bits);
+    }
+    return packed_sender_channel_ids;
 }
 
 void StaticSizedChannelConnectionWriterAdapter::add_local_tensix_connection(
@@ -101,8 +125,7 @@ void StaticSizedChannelConnectionWriterAdapter::pack_inbound_channel_rt_args(
     // Because of this constraint, the standard packing path (which stores one buffer address per VC)
     // is sufficient for all connections, including multi-target scenarios.
     if (is_2D_routing) {
-        // For 2D: Use fixed slot count based on VC (kernel expects fixed-size arrays)
-        // VC0: 3 slots (mesh directions)
+        // For 2D: use up to four compact direction slots (kernel expects fixed-size arrays).
         // Get the connection mask to determine which compact indices are valid
         uint32_t mask = this->downstream_edms_connected_by_vc_mask.at(vc_idx);
 

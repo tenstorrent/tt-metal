@@ -477,6 +477,14 @@ bool did_something;
 //   SENDER SIDE HELPERS
 /////////////////////////////////////////////
 
+FORCE_INLINE void record_sender_channel_usage(size_t sender_channel_index, size_t packet_size_bytes) {
+    if constexpr (ENABLE_CHANNEL_TRIMMING_RESOURCE_USAGE_CAPTURE) {
+        channel_trimming_usage_recorder.set_sender_channel_used(sender_channel_index);
+        channel_trimming_usage_recorder.update_sender_channel_packet_size(
+            sender_channel_index, static_cast<uint16_t>(packet_size_bytes));
+    }
+}
+
 template <
     uint8_t sender_channel_index,
     uint8_t to_receiver_pkts_sent_id,
@@ -497,11 +505,7 @@ FORCE_INLINE void send_next_data(
     volatile auto* pkt_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(src_addr);
     size_t const payload_size_bytes = pkt_header->get_payload_size_including_header();
 
-    if constexpr (ENABLE_CHANNEL_TRIMMING_RESOURCE_USAGE_CAPTURE) {
-        channel_trimming_usage_recorder.set_sender_channel_used(sender_channel_index);
-        channel_trimming_usage_recorder.update_sender_channel_packet_size(
-            sender_channel_index, static_cast<uint16_t>(payload_size_bytes));
-    }
+    record_sender_channel_usage(sender_channel_index, payload_size_bytes);
 
     auto const dest_addr = outbound_to_receiver_channel_pointers.remote_receiver_channel_address_ptr;
 
@@ -870,7 +874,7 @@ FORCE_INLINE __attribute__((optimize("no-jump-tables"))) bool admit_2d_dispatch(
 // One unmodified full-packet copy per LIVE direction whose action bit is set. Remote receiver
 // credit is left to the sender step's bubble flow control, and local delivery to the caller.
 template <typename DownstreamSenderT, size_t DOWNSTREAM_EDM_SIZE>
-FORCE_INLINE __attribute__((optimize("no-jump-tables"))) void forward_2d_dispatch(
+FORCE_INLINE __attribute__((optimize("no-jump-tables"))) uint8_t forward_2d_dispatch(
     uint8_t action,
     tt_l1_ptr PACKET_HEADER_TYPE* packet_start,
     ROUTING_FIELDS_TYPE cached_routing_fields,
@@ -880,6 +884,7 @@ FORCE_INLINE __attribute__((optimize("no-jump-tables"))) void forward_2d_dispatc
     constexpr auto dirs = Routing2DCodec::fwd_dirs<static_cast<eth_chan_directions>(my_direction)>();
     constexpr bool stateful_api = use_2d_single_live_stateful_noc<DOWNSTREAM_EDM_SIZE>();
     const uint16_t payload_size_bytes = packet_start->payload_size_bytes;
+    uint8_t forwarded_slot_mask = 0;
     if constexpr ((LIVE >> 0) & 1) {
         if (action & Routing2DCodec::action_bit(dirs[0])) {
             constexpr auto edm_index = get_downstream_edm_interface_index<dirs[0]>();
@@ -889,6 +894,7 @@ FORCE_INLINE __attribute__((optimize("no-jump-tables"))) void forward_2d_dispatc
                 cached_routing_fields,
                 downstream_edm_interfaces[edm_index],
                 transaction_id);
+            forwarded_slot_mask |= 1u << 0;
         }
     }
     if constexpr ((LIVE >> 1) & 1) {
@@ -900,6 +906,7 @@ FORCE_INLINE __attribute__((optimize("no-jump-tables"))) void forward_2d_dispatc
                 cached_routing_fields,
                 downstream_edm_interfaces[edm_index],
                 transaction_id);
+            forwarded_slot_mask |= 1u << 1;
         }
     }
     if constexpr ((LIVE >> 2) & 1) {
@@ -911,6 +918,7 @@ FORCE_INLINE __attribute__((optimize("no-jump-tables"))) void forward_2d_dispatc
                 cached_routing_fields,
                 downstream_edm_interfaces[edm_index],
                 transaction_id);
+            forwarded_slot_mask |= 1u << 2;
         }
     }
     if constexpr ((LIVE >> 3) & 1) {
@@ -922,7 +930,27 @@ FORCE_INLINE __attribute__((optimize("no-jump-tables"))) void forward_2d_dispatc
                 cached_routing_fields,
                 downstream_edm_interfaces[edm_index],
                 transaction_id);
+            forwarded_slot_mask |= 1u << 3;
         }
+    }
+    return forwarded_slot_mask;
+}
+
+// The host-provided slot map translates this receiver's compact downstream indices into each
+// destination router's absolute sender channels. The row remains the receiving VC, including
+// the VC0-to-VC1 crossover case.
+template <uint8_t rx_channel_id>
+FORCE_INLINE void record_2d_forwarded_slots(uint8_t forwarded_slot_mask) {
+    if constexpr (ENABLE_CHANNEL_TRIMMING_RESOURCE_USAGE_CAPTURE) {
+#if defined(FABRIC_2D_VC0_CROSSOVER_TO_VC1)
+        constexpr uint32_t packed_downstream_sender_channel_ids = PACKED_DOWNSTREAM_VC1_SENDER_CHANNEL_IDS;
+#else
+        constexpr uint32_t packed_downstream_sender_channel_ids =
+            rx_channel_id == 0 ? PACKED_DOWNSTREAM_VC0_SENDER_CHANNEL_IDS : PACKED_DOWNSTREAM_VC1_SENDER_CHANNEL_IDS;
+#endif
+        const uint16_t sender_mask =
+            tt::tt_fabric::forwarded_slots_to_sender_mask(forwarded_slot_mask, packed_downstream_sender_channel_ids);
+        channel_trimming_usage_recorder.merge_sender_channel_forwarded_to(rx_channel_id, sender_mask);
     }
 }
 
@@ -1497,10 +1525,12 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
                                 cached_routing_fields,
                                 downstream_edm_interfaces[intermesh_egress_index],
                                 trid);
+                            record_2d_forwarded_slots<receiver_channel>(1u << intermesh_egress_index);
                         } else {
                             // Same action byte as admission. Local delivery stays outside the scan.
-                            forward_2d_dispatch(
+                            const uint8_t forwarded_slot_mask = forward_2d_dispatch(
                                 action, packet_header, cached_routing_fields, downstream_edm_interfaces, trid);
+                            record_2d_forwarded_slots<receiver_channel>(forwarded_slot_mask);
                             if (local_deliver) {
                                 forward_to_local_destination<receiver_channel>(
                                     local_relay_interface, packet_header, packet_header->payload_size_bytes, trid);
@@ -1890,7 +1920,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
             uint32_t tx_progress = 0;
             uint32_t rx_progress = 0;
 
-            if constexpr (is_sender_channel_serviced[0]) {
+            if constexpr (any_sender_channel_serviced) {
                 open_perf_recording_window(inner_loop_perf_telemetry_collector);
             }
 
@@ -2237,7 +2267,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                 run_routing_without_noc_sync_coordinated_as_non_master(termination_signal_ptr);
             }
 
-            if constexpr (is_sender_channel_serviced[0]) {
+            if constexpr (any_sender_channel_serviced) {
                 close_perf_recording_window(inner_loop_perf_telemetry_collector);
                 if constexpr (perf_telemetry_mode != PerfTelemetryRecorderType::NONE) {
                     if (captured_an_event(inner_loop_perf_telemetry_collector) ||
@@ -2635,11 +2665,11 @@ void kernel_main() {
         receiver_txq_id == sender_txq_id || receiver_txq_id == 1,
         "For multi-txq mode, the only currently supported configuration is sender_txq_id=0 and receiver_txq_id=1");
     if constexpr (receiver_txq_id != sender_txq_id) {
-        constexpr bool is_erisc_that_sets_up_second_txq = is_receiver_channel_serviced[0];
+        constexpr bool is_erisc_that_sets_up_second_txq = any_receiver_channel_serviced;
         if constexpr (is_erisc_that_sets_up_second_txq) {
             initialize_state_for_txq1_active_mode();
         }
-        if constexpr (is_sender_channel_serviced[0]) {
+        if constexpr (any_sender_channel_serviced) {
             initialize_state_for_txq1_active_mode_sender_side();
         }
     }
@@ -2719,12 +2749,12 @@ void kernel_main() {
     ///////////////////////
     // Common runtime args:
     ///////////////////////
-    // Read sender channel connection semaphore addresses (9 channels: 8 base + 1 for Z routers)
+    // Read the fixed maximum sender-channel connection semaphore array.
     std::array<size_t, MAX_NUM_SENDER_CHANNELS> local_sender_channel_connection_semaphore_addrs;
     for (size_t i = 0; i < MAX_NUM_SENDER_CHANNELS; i++) {
         local_sender_channel_connection_semaphore_addrs[i] = get_arg_val<uint32_t>(arg_idx++);
     }
-    // Read sender channel connection buffer index IDs (9 channels: 8 base + 1 for Z routers)
+    // Read the fixed maximum sender-channel connection buffer-index array.
     std::array<size_t, MAX_NUM_SENDER_CHANNELS> local_sender_channel_connection_buffer_index_ids;
     for (size_t i = 0; i < MAX_NUM_SENDER_CHANNELS; i++) {
         local_sender_channel_connection_buffer_index_ids[i] = get_arg_val<uint32_t>(arg_idx++);
@@ -2733,7 +2763,7 @@ void kernel_main() {
     // downstream EDM VC0 connection info
     const auto has_downstream_edm_vc0_buffer_connection = get_arg_val<uint32_t>(arg_idx++);
 
-    // For 2D: read 3 buffer base addresses, NOC coords, and registration addresses (one per compact index)
+    // For 2D: read densely packed connection data for up to four compact direction slots.
     // For 1D: reads as 1D and only uses first element
 #if defined(FABRIC_2D)
     std::array<uint32_t, NUM_DOWNSTREAM_SENDERS_VC0> downstream_edm_vc0_buffer_base_addresses;
@@ -3136,10 +3166,10 @@ void kernel_main() {
     // initialize the local sender channel buffers
     local_sender_channels.init<channel_allocs>(channel_buffer_size, sizeof(PACKET_HEADER_TYPE));
 
-    // initialize the local sender channel worker interfaces
-    // Sender channel 0 is always for local worker in the new design
-    constexpr auto sender_channel = 0;
-    if constexpr (is_sender_channel_serviced[sender_channel]) {
+    // The initializer populates every sender interface. Channel trimming can leave a router with
+    // only a nonzero static sender (for example, transit traffic on channel 1), so channel 0 cannot
+    // be used as a proxy for whether initialization is needed.
+    if constexpr (any_sender_channel_serviced) {
         init_local_sender_channel_worker_interfaces(
             local_sender_connection_live_semaphore_addresses,
             local_sender_connection_info_addresses,
