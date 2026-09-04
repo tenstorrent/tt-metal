@@ -73,7 +73,9 @@ Knob map (all tunable parameters, none inlined):
                  kernels' final pops
 
 Deviations from op_design.md section 1.4 (advisory: CB sizing / knob selection;
-the scheme, topology, work split and helper mapping are unchanged):
+the scheme, topology, work split and helper mapping are unchanged).  D1..D28 are
+the SEED's, preserved verbatim; D29..D32 at the end are this op's own, and each
+is priced in l1_ledger.md's "Deviations" table with its measurement:
 
   D1  WT_CHUNK is constrained to a DIVISOR of Wt, so every width chunk is the
       same size.  Three mechanisms in the chosen helper set require a uniform
@@ -612,6 +614,52 @@ the scheme, topology, work split and helper mapping are unchanged):
       block/depth knob set and the L1 predicate are unchanged -- a sharded build
       differs only in (a) who fills cb_input_tiles, (b) which CB pass B reads the
       stat from, and (c) whether the finalize runs locally or on a group root.
+  D29 cb_normalized is allocated whenever HAS_GAMMA | HAS_BIAS -- NOT "only when
+      !HAS_RESIDUAL" as op_design.md's CB table says.  That row wants pass B to
+      pack back into cb_x_sum; cb_x_sum is pass B's HELD Upfront/None srcA, and
+      an in-place chain requires an incrementally-POPPING input
+      (chain.inl:82-85, inplace_chain.cpp:5-21), so the alias would DEADLOCK
+      rather than return a wrong answer.  The design's own Key-Risks row states
+      that cb_x_sum is never aliased, so the two statements contradict each other
+      and this follows the risk row.
+      Its DEPTH (_norm_cb_depth) is 2 only when BOTH post-normalize stages are
+      present AND BLOCK_ROWS > 1: the in-place scale rotates the ring by
+      rows*WT_CHUNK, a whole revolution for a FULL block but not for the partial
+      final one, and the bias stage's bulk cb_wait_front + linear tile indexing
+      would then read past the ring end.  That is D6's hazard on a different CB
+      and it takes D6's fix.  At BLOCK_ROWS == 1 no block is ever partial, so
+      depth 1 is exactly correct -- which is every ROW_RESIDENT / STREAM / BAND /
+      width-shard build, i.e. the L1-tightest regimes get the cheaper ring.
+  D30 a ROW_MAJOR per-channel operand's STAGING ring may be CB_RM_STAGE_DEPTH
+      pages instead of WT_CHUNK, consumed as tilize<1>(WT_CHUNK) rather than
+      tilize<WT_CHUNK>(1).  Same tiles BIT-FOR-BIT -- tile column j of a wide
+      block and block j of a one-wide walk are the same 32 elements laid out the
+      same way -- at 1/WT_CHUNK of the L1, for WT_CHUNK LLK block calls instead
+      of one (paid once per core in the resident regimes).
+      MEASURED NEED, not a tidy-up: (128, 8192) fp32 ROW_MAJOR BLOCK_SHARDED
+      with gamma_bias_residual (a 13x748 shard on an 11x10 grid, WT_CHUNK = 25)
+      built 1 406 976 B of CBs against a 1 344 512 B ceiling -- a hard launch
+      failure on 2 golden cells.  A per-channel operand is ONE stick, and the
+      wide ring reserves 25 whole fp32 tiles (100 kB) to carry 3 200 B of it,
+      twice over.  Taken only when the budget asks, so every build that already
+      fit is byte-identical.
+  D31 CB_RM_STAGE_DEPTH is SEARCHED (2, 1) on the BAND scheme, ordered BEFORE
+      D30 because a band's activation reads come from the core's OWN L1 -- the
+      cheapest overlap in the op to sacrifice.  Same cause as D30:
+      op_design.md gives the band no L1 fallback at all ("take the finest block
+      and let metal's own CB-region check be the arbiter"), which held at the
+      seed's two operands and does not hold with three activations plus
+      cb_x_sum plus a second per-channel operand.
+  D32 the D25 combine pipeline (PIPE_A) is gated OFF when HAS_RESIDUAL.  The
+      hoisted pass A for block blk+1 would write cb_x_sum, whose ring is ONE
+      block deep and whose front block blk's pass B still owns -- so the hoist
+      would either overwrite live data or self-deadlock on the reserve.  Making
+      it legal needs cb_x_sum at depth 2 AND a runtime tile base on the PACK,
+      and output(...) carries no tile base, so it is not expressible without a
+      new chain seam.  Recorded as a follow-up with the measurement to take (
+      cb_x_sum at depth 2 with a pack-side base, against the serial order),
+      never as a finished trade.  Every build without a residual is unchanged.
+
 """
 
 from __future__ import annotations

@@ -11,8 +11,9 @@ consulted. What that produced, concretely:
 
 | Phase boundary | Could it be storage-free? | Decision |
 |----------------|--------------------------|----------|
-| `normalize_block` → `scale_block` → `bias_block` | yes, for all but the first | `normalize_block` packs into `cb_normalized`; `scale_block` **transforms it in place**; `bias_block` **packs into the destination** `cb_output_tiles`. This is patterns 1+2 of Rule 3 and it is what makes bias cost **zero** block-sized buffers |
+| `normalize_block` → `scale_block` → `bias_block` | yes, for all but the first | `normalize_block` packs into `cb_normalized`; `scale_block` **transforms it in place**; `bias_block` **packs into the destination** `cb_output_tiles`. Patterns 1+2 of Rule 3: three stages, ONE block-shaped buffer between them. **What in-place actually costs, stated honestly:** the in-place chain ROTATES `cb_normalized`'s ring (pop `PASS_B_BLK`, then reserve `PASS_B_BLK`), so a block advances the front by `rows*WC`. That is a whole revolution for a FULL block but not for the partial final one, and `bias_block`'s bulk wait + linear indexing would then straddle the wrap — D6's hazard on a different CB. So `cb_normalized` is **two blocks deep when `BR > 1` and both stages are present** (`_norm_cb_depth`), which is the same L1 a dedicated `cb_scaled` would have cost. In-place is therefore not an L1 win over the fallback at `BR > 1`; it wins at `BR == 1` (every ROW_RESIDENT / STREAM / BAND / width-shard build), where no block can be partial and depth 1 is exactly correct. Lamp L-BIAS-INPLACE is the measurement that would decide the `BR > 1` case on ns rather than bytes |
 | `residual_add_block` → `square_block` → `normalize_block` | no | `cb_x_sum` is genuinely required: `t = x + r` is read by *both* passes, and fusing the add into pass B's broadcast multiply is inexpressible (`DestReuseBinary` carries no broadcast parameter, `chain.hpp:526`). Pattern 4 (fold into DEST) covers the pass-A half only — recorded as Lamp L-RES-FUSE, not as a buffer |
+| `normalize_block` packing back into `cb_x_sum` when `HAS_R` | **no — and `op_design.md`'s CB table is wrong here** | The design's `cb_normalized` row says it is "allocated only when `!HAS_RESIDUAL`" because "with a residual, `cb_x_sum` plays this role too". It cannot: `cb_x_sum` is pass B's *srcA* at `WaitPolicy::Upfront` / `PopPolicy::None` (it is the HELD operand, indexed at a tile base), and an in-place chain requires an **incrementally popping** input and an **incrementally reserving** output — `chain.inl:82-85` and `inplace_chain.cpp:5-21`. Aliasing it would DEADLOCK on the packer's reserve rather than return a wrong answer. The design's own Key-Risks row says the same thing ("`cb_x_sum` … is never aliased"), so the two statements contradict each other and this ledger follows the risk row. `cb_normalized` is therefore allocated whenever `HAS_G \| HAS_B`, residual or not |
 | `square_block` → `reduce_accumulate_block` | partly | Pattern 4: the D12 DEST fold accumulates the chunk's width tiles inside DEST, collapsing `cb_x_squared` from `BR*WC` pages to `BR*1`. Gated on `WC ≤ 8` and `PARTIAL_W == 0` |
 | root fold → finalize | yes | Fused into one DEST window (D22); `ROOT_FOLD_OUT` and every combine-path use of `cb_row_stat` were **deleted**, saving 256 kB/core at `BR = 32` |
 | combine partial hand-off | yes | D27's compact transpose took `cb_partials_gathered` from `GS * BR` pages to `GS`, removing the `GROUP_SIZE × BLOCK_ROWS` term from the block solve entirely |
@@ -33,7 +34,9 @@ Only after all six was a budget predicate introduced.
 | `XSW` | `X_SQUARED_WT` | `XSW ∈ {1, WC}` | `1` iff `PARTIAL_W == 0 and WC ≤ DEST_ACC_SQUARE_MAX_WT (8)`; host `assert XSW in (1, WC)` |
 | `DX`, `DO` | `CB_X_DEPTH`, `CB_OUT_DEPTH` | `∈ CB_DEPTH_CANDIDATES = (2,)` on TILE; forced to `1` on ROW_MAJOR | the regime search walks the candidates coarsest-first; RM's producer/consumer is a sequential tilize/untilize so depth buys no overlap |
 | `DR` | `CB_R_DEPTH` | `DR = DX` | tied by construction so one knob moves both streams (Lamp L-RES-DEPTH is the measurement that could untie it) |
-| `DS` | `CB_RM_STAGE_DEPTH` | `= 2` | primary knob |
+| `DS` | `CB_RM_STAGE_DEPTH` | `= 2`, **searched down to 1 on the BAND scheme** | primary knob; the band branch of `_solve_blocking` walks `(2, 1)` because a band has THREE activation staging rings and its block is already pinned at one tile-row, so the ring depth is the only extent left to give back. Local-L1 reads are the cheapest overlap in the op to sacrifice |
+| `ND` | `_norm_cb_depth(HAS_G, HAS_B, BR)` — blocks of `cb_normalized` | `0` when no post-stage; `1` with exactly one, or with both at `BR == 1`; `2` with both at `BR > 1` | the in-place `scale_block` rotates the ring by `rows*WC` per block; `2` is the D6-class contiguity floor for a PARTIAL final block, and at `BR == 1` no block is ever partial |
+| `PS` | per-channel staging pages (`pc_stage_pages`) | `WC` normally; `DS` under the D30 narrow fallback | D30: a per-channel operand is ONE stick, but a `tilize<WC>` ring must reserve 32 rows' worth of pages to carry it. The narrow form stages one tile COLUMN per page and consumes it as `tilize<1>(WC)` — bit-identical tiles at `1/WC` of the L1. Taken only when the budget asks (the band search's second axis) |
 | `SD` | `CB_ROW_STAT_DEPTH` | `= 2` | **correctness floor**, not a perf depth (D6) |
 | `FD` | `CB_COMBINE_FLAT_DEPTH` | `= 2` | primary knob; one round in flight |
 | `SP` | `scaler_pages` | `∈ {1, 2}` | `2` iff `kernel_partial_w != 0` |
@@ -43,7 +46,7 @@ Only after all six was a budget predicate introduced.
 | `bt` | `tile_size(input.dtype)` | `∈ {1088 (bf8b), 2048 (bf16), 4096 (fp32)}` | dtype ∈ SUPPORTED |
 | `gt`, `bit` | `tile_size(weight.dtype)`, `tile_size(bias.dtype)` | same set; **independent of `bt` and of each other** | operand dtype ∈ SUPPORTED |
 | `st`, `ft` | `tile_size(bf16)` = 2048, `tile_size(fp32)` = 4096 | constants | — |
-| `budget` | bytes the CBs may take | `L1_SAFETY_FRACTION (0.85) * max(0, usable_L1 − l1_reserved − L1_CB_ARENA_BASE_RESERVE)` where the last two terms apply only when a shard is resident | `_solve_blocking`; `l1_reserved = shard_bytes(in) + shard_bytes(out) + shard_bytes(residual)` |
+| `budget` | bytes the CBs may take | `L1_SAFETY_FRACTION (0.85) * max(0, usable_L1 − l1_reserved − L1_CB_ARENA_BASE_RESERVE)` where the last two terms apply only when a shard is resident | `_solve_blocking`; `l1_reserved` sums the **distinct** resident tensors among {input, output, residual} — `inplace` makes the output *be* the input, so charging both would price one buffer twice |
 
 `HAS_G`, `HAS_B`, `HAS_R` are `0/1` compile-time presence flags; `RM`, `PC_RM`, `NAT_IN`,
 `NAT_OUT`, `NAT_R`, `CMB`, `CMP` (compact = `CMB and BR>1`), `TREE` are `0/1` build flags.
@@ -59,9 +62,9 @@ Only after all six was a budget predicate introduced.
 | `cb_x_squared` | `BR * XSW` | `BR * XSW` | `{row: spans → BR, width: spans → XSW (=1 under the DEST fold, else WC), channel: —, pass: pass A only, slot: —}` | input dtype | compute | compute | pass A | **Could share with `cb_normalized`** (pass A vs. pass B, disjoint) — **not taken**: the D25 combine pipeline issues block `b+1`'s pass A before block `b`'s combine, which makes the two concurrent. Recorded per Rule 3's pipelining clause |
 | `cb_scaler` | `SP` (1 or 2) | `SP` | `{row: —, width: —, channel: —, pass: —, slot: —}` — constant | **bfloat16**, always | reader | compute | whole kernel | **Cannot share.** Live for the whole kernel; `1.0` exactly, never `1/W` |
 | `cb_row_stat` | `!CMB * SD * BR` | `BR` (one block's stats) | `{row: spans → BR, width: —, channel: —, pass: spans → written in A, read in B, slot: —}` | **float32 always** — deliberately overrides the "page format follows DEST width" default, because this is the cross-chunk accumulator `reduce`'s `Accumulate::at` reloads; a 16-bit page would make the STREAM reload lossy at exactly the widths this op cares about | compute | compute | pass A → pass B | **Cannot share.** Capacity is `SD =` 2× the live set and that gap is a **correctness** requirement, not double buffering: `transform_in_place` rotates the ring and a partial final block's finalized tiles would otherwise straddle the wrap (D6). Not allocated at all on a combine path |
-| `cb_gamma_sticks` | `HAS_G * PC_RM * WC` | `WC` | `{row: —, width: spans → WC, channel: spans → WC*32 weights, pass: streams, slot: —}` | weight dtype | reader | compute | `HAS_G && PC_RM` | **Cannot share with `cb_bias_sticks`** — differing page format (the two operands' dtypes are independent) and concurrent (both staged per chunk before their tilizes) |
+| `cb_gamma_sticks` | `HAS_G * PC_RM * PS` | `PS` | `{row: —, width: spans → WC (as `PS = WC`) or **streams** → one tile column per page under D30, channel: spans → WC*32 weights, pass: streams, slot: —}` | weight dtype | reader | compute | `HAS_G && PC_RM` | **Cannot share with `cb_bias_sticks`** — differing page format (the two operands' dtypes are independent) and concurrent (both staged per chunk before their tilizes). Capacity `PS` is the D30 knob: `WC` for one wide `tilize<WC>(1)`, or `DS` pages for `tilize<1>(WC)` |
 | `cb_gamma_tiles` | `HAS_G * XH` | `XH` | `{row: **streams** → the same vector feeds every row (reuse-shared), width: spans → XH, channel: spans → XH*32, pass: spans → held across both, slot: —}` | weight dtype | reader (TILE build) / compute (RM build) | compute | `HAS_G` | **Cannot share with `cb_bias_tiles`** — differing page format, and both are live simultaneously in pass B |
-| `cb_normalized` | `(!HAS_R) * (HAS_G \| HAS_B) * BR * WC` | `BR * WC` | `{row: spans → BR, width: spans → WC, channel: —, pass: pass B only, slot: —}` | input dtype | compute | compute | pass B | **Cannot share with `cb_x_squared`** — the D25 pipeline makes them concurrent (above). **Not allocated when `HAS_R`**: `cb_x_sum` already holds a block-shaped input-dtype buffer that pass B can pack into and transform in place |
+| `cb_normalized` | `ND * BR * WC` (`ND = 0` when neither post-stage is present) | `BR * WC` | `{row: spans → BR, width: spans → WC, channel: —, pass: pass B only, slot: —}` | input dtype | compute | compute | pass B | **Cannot share with `cb_x_squared`** — the D25 pipeline makes them concurrent (above). **Cannot share with `cb_x_sum`** either, and the design's contrary claim is refuted in the inventory table above: `cb_x_sum` is pass B's held `Upfront`/`None` srcA and an in-place chain needs an incrementally-popping input, so aliasing it deadlocks. Capacity `ND` is the in-place rotation floor, not double buffering |
 | `cb_output_tiles` | `NAT_OUT ? out_shard_pages : DO * BR * WC` | as capacity when zero-copy; `BR*WC` otherwise | `{row: spans → BR, width: spans → WC, channel: —, pass: pass B only, slot: —}` | output dtype (= input dtype) | compute | writer | pass B | **Cannot share.** Zero-copy over the output shard when `NAT_OUT`; under `inplace` that shard **is** the input's, which is the aliasing the caller asked for and not a ledger sharing. Capacity exceeds live set by `DO` — compute↔writer double buffer |
 | `cb_output_sticks` | `RM * DS * WC` | `WC` | `{row: streams → 32 sticks per pop, width: spans → WC, channel: —, pass: pass B only, slot: —}` | output dtype | compute | writer | RM only | **Cannot share with `cb_input_sticks`** — concurrent across the pipelined block boundary |
 | `cb_sum_handoff` | `CMB * SD * BR` | `BR` | `{row: spans → BR, width: —, channel: —, pass: pass A, slot: streams → this core's own partial}` | float32 | compute | writer | combine only | **Replaces `cb_row_stat` on the combine path** — that is the sharing, and it is why `cb_row_stat` is not allocated there. Capacity `SD` is the D25 pipeline depth |
@@ -75,8 +78,8 @@ Only after all six was a budget predicate introduced.
 | `cb_node_out` | `CMB * TREE * FD` | `1` | `{row: streams, width: —, channel: —, pass: —, slot: —}` | float32 | compute | writer | tree combine only | **Cannot share.** Carries a level-0 node's *raw* (unfinalized) run sum while the level-0 ring is still being refilled |
 | **`cb_residual_sticks`** | `HAS_R * RM * DS * WC` | `WC` | `{row: streams → 32 sticks per push, width: spans → WC, channel: —, pass: streams, slot: —}` | input dtype | reader | compute | `HAS_R` && RM | **Cannot share with `cb_input_sticks`** — both are operands of one `residual_add_block` and are therefore live at the same instant. Same page format, so the *only* obstacle is concurrency, and it is stated rather than assumed |
 | **`cb_residual_tiles`** | `HAS_R * (NAT_R ? shard_h_t*shard_w_t : DR * BR * WC)` | as capacity when zero-copy; `BR*WC` otherwise | `{row: spans → BR, width: spans → WC, channel: —, pass: streams → consumed in pass A, and again in pass B only when !X_RESIDENT, slot: —}` | input dtype | reader | compute | `HAS_R` | **Cannot share with `cb_input_tiles`** — simultaneous operands. Zero-copy over the residual's own shard when `NAT_R` (the residual carries the input's shard spec, so it is already in this core's L1 and must never cross the NoC). Capacity exceeds live set by `DR` — double buffering |
-| **`cb_x_sum`** | `HAS_R * BR * XH` | `BR * XH` | `{row: spans → BR, width: spans → XH, channel: —, pass: **spans** → written in A, read in B (this is why its width extent is XH and not WC), slot: —}` | input dtype | compute | compute | `HAS_R`, pass A → pass B | **Takes over `cb_input_tiles`'s held role** — that is the sharing: when `HAS_R`, `cb_input_tiles` drops from `BR*XH` held to `DX*BR*WC` streaming. **Cannot** additionally share with `cb_normalized`, and does not need to: `cb_normalized` is not allocated when `HAS_R`, because pass B packs into `cb_x_sum`'s successor slot and transforms in place |
-| **`cb_bias_sticks`** | `HAS_B * PC_RM * WC` | `WC` | `{row: —, width: spans → WC, channel: spans → WC*32 biases, pass: streams, slot: —}` | bias dtype | reader | compute | `HAS_B && PC_RM` | **Cannot share with `cb_gamma_sticks`** — differing page format (independent dtypes) and concurrent staging |
+| **`cb_x_sum`** | `HAS_R * BR * XH` | `BR * XH` | `{row: spans → BR, width: spans → XH, channel: —, pass: **spans** → written in A, read in B (this is why its width extent is XH and not WC), slot: —}` | input dtype | compute | compute | `HAS_R`, pass A → pass B | **Takes over `cb_input_tiles`'s held role** — that is the sharing: when `HAS_R`, `cb_input_tiles` drops from `BR*XH` held to `DX*BR*WC` streaming. **Cannot** additionally share with `cb_normalized` — see the inventory table: it is pass B's HELD srcA (`Upfront`/`None`, indexed at a tile base), which is exactly the operand shape an in-place chain forbids as its output. Depth 1 is nonetheless correct: a FULL block's push/pop is a whole ring revolution, and only a core's LAST block can be partial, so the D6 straddle cannot arise |
+| **`cb_bias_sticks`** | `HAS_B * PC_RM * PS` | `PS` | `{row: —, width: spans → WC or **streams** under D30, channel: spans → WC*32 biases, pass: streams, slot: —}` | bias dtype | reader | compute | `HAS_B && PC_RM` | **Cannot share with `cb_gamma_sticks`** — differing page format (independent dtypes) and concurrent staging. Same `PS` knob as gamma's |
 | **`cb_bias_tiles`** | `HAS_B * XH` | `XH` | `{row: **streams** → reuse-shared across every row, width: spans → XH, channel: spans → XH*32, pass: spans → held, slot: —}` | bias dtype | reader (TILE) / compute (RM) | compute | `HAS_B` | **Cannot share with `cb_gamma_tiles`** — differing page format and both live in pass B |
 
 ### Audit notes
@@ -114,11 +117,11 @@ arena_bytes =
   + HAS_R * (NAT_R ? 0 : DR * BR * WC * bt)          # cb_residual_tiles
   + HAS_R * BR * XH * bt                             # cb_x_sum
   + BR * XSW * bt                                    # cb_x_squared
-  + (!HAS_R) * (HAS_G | HAS_B) * BR * WC * bt        # cb_normalized
+  + ND * BR * WC * bt                                # cb_normalized
 
   # --- per-channel operands (reuse-shared: no BR term anywhere) ---
-  + HAS_G * XH * gt      + HAS_G * PC_RM * WC * gt   # cb_gamma_tiles  + cb_gamma_sticks
-  + HAS_B * XH * bit     + HAS_B * PC_RM * WC * bit  # cb_bias_tiles   + cb_bias_sticks
+  + HAS_G * XH * gt      + HAS_G * PC_RM * PS * gt   # cb_gamma_tiles  + cb_gamma_sticks
+  + HAS_B * XH * bit     + HAS_B * PC_RM * PS * bit  # cb_bias_tiles   + cb_bias_sticks
 
   # --- statistics ---
   + SP * st                                          # cb_scaler
@@ -130,7 +133,10 @@ arena_bytes =
   # --- combine, flat in BR ---
   + CMB * ( (TREE ? (f0 + f0%2) + (f1 + f1%2) + FD : GS) + FD + CMP * 2*FD ) * ft
 
-l1_reserved = shard_bytes(input) + shard_bytes(output) + HAS_R * shard_bytes(residual)
+l1_reserved = sum of shard_bytes over the DISTINCT resident tensors among
+              {input, output, residual}          # `inplace` makes output IS input,
+                                                 # and double-charging one buffer
+                                                 # would shrink the block for nothing
 budget      = 0.85 * max(0, usable_L1 - (l1_reserved ? l1_reserved + 70656 : 0))
 constraint  : arena_bytes <= budget
 ```
@@ -146,7 +152,9 @@ constraint  : arena_bytes <= budget
 | `SD` | the fp32 accumulators only — a correctness knob whose cost the budget nonetheless prices |
 | `G` / `f0` / `f1` | the combine ring only, and it is `O(G)` tiles rather than `O(G·BR)` |
 | `HAS_R` | adds `cb_residual_*` and `cb_x_sum`; **removes** `cb_normalized`; **demotes** `cb_input_tiles` from held (`XH`) to streaming (`DX*WC`) |
-| `HAS_B` | adds `cb_bias_tiles` (+ `cb_bias_sticks` on RM). **Adds no block-sized buffer** — the in-place `scale_block` is what buys that |
+| `HAS_B` | adds `cb_bias_tiles` (+ `cb_bias_sticks` on RM). Adds **no** block-sized buffer at `BR == 1` — the in-place `scale_block` is what buys that — and **one** at `BR > 1`, where the in-place ring needs `ND = 2` for the partial-block contiguity floor |
+| `ND` | `cb_normalized` only |
+| `PS` | the per-channel *stick* CBs only |
 
 ### Worked deltas at the two extremes
 
@@ -156,7 +164,7 @@ Both at `BR=1`, `bt=gt=bit=2048` (bf16), TILE, `DX=DO=DR=2`, no combine, `XSW=1`
 |---|---|---|
 | `no_gamma` (the seed's baseline) | `(2·WPC + 1)·bt + …` | `(2·WC + 1)·bt + …` |
 | `gamma` | `+ (WC + 1)·bt` (`cb_normalized` + `cb_gamma_tiles` at gt=bt) | same |
-| `gamma_bias` | `+ 1·bt` over `gamma` — **only `cb_bias_tiles`** | same |
+| `gamma_bias` | `+ 1·bt` over `gamma` at `BR == 1` — **only `cb_bias_tiles`**; `+ (WC + 1)·bt` at `BR > 1`, where `ND` goes 1 → 2 | same (`BR == 1` by construction in STREAM) |
 | `gamma_bias_residual` | `+ (2·WC + WPC)·bt − WC·bt` over `gamma_bias`: adds `cb_residual_tiles` (`2·WC`) and `cb_x_sum` (`WPC`), removes `cb_normalized` (`WC`), and `cb_input_tiles` drops from `2·WPC` to `2·WC` (equal at RESIDENT) | `+ (2·WC + WC − WC)·bt = +2·WC·bt` |
 
 The `gamma_bias` row is the point of the in-place `scale_block`: adding a bias costs **one row
@@ -234,3 +242,64 @@ profiles *even though it adds cross-core traffic*, because rank 1 there leaves 1
 idle — and it is chosen over rank 1 on the operand traffic even where both fill the grid. Neither
 decision was made by counting busy cores alone.
 </content>
+
+---
+
+## Deviations from `op_design.md`, recorded here because this is where they are priced
+
+Four, all in the advisory half of the design (CB sizing / knob selection); the scheme, topology,
+work split and helper mapping are unchanged.
+
+| # | Deviation | Why | Effect on an operand-free build |
+|---|-----------|-----|--------------------------------|
+| **D29** | `cb_normalized` is allocated whenever `HAS_G \| HAS_B`, at `ND` blocks deep, rather than "only when `!HAS_RESIDUAL`" | The design's CB table wants pass B to pack back into `cb_x_sum`; that CB is pass B's HELD `Upfront`/`None` srcA and an in-place chain requires an incrementally-popping input (`chain.inl:82-85`, `inplace_chain.cpp:5-21`), so the alias would DEADLOCK. The design's own Key-Risks row says `cb_x_sum` is never aliased, so the two statements contradict and this follows the risk row. The `ND = 2` depth is the same D6-class contiguity floor: the in-place `scale_block` rotates the ring by `rows*WC`, which is a whole revolution only for a full block | **none** — `ND = 0` with no operand, `1` with gamma only, which is byte-identical to the seed |
+| **D30** | A ROW_MAJOR per-channel operand's staging ring can be `DS` pages instead of `WC` (`tilize<1>(WC)` instead of `tilize<WC>(1)`) | The design gives the BAND scheme no L1 fallback ("metal is the arbiter"). At the seed's two operands that held; a third activation ring plus `cb_x_sum` plus a second per-channel operand does not. **Measured**: `(128, 8192)` fp32 ROW_MAJOR BLOCK_SHARDED with `gamma_bias_residual` (a 13×748 shard on an 11×10 grid, `WC = 25`) built 1 406 976 B of CBs against a 1 344 512 B ceiling — a 62 464 B overshoot, i.e. a hard launch failure on 2 golden cells. A per-channel operand is ONE stick; the wide ring reserves 25 whole fp32 tiles (100 kB) to carry 3 200 B of it, twice over. The narrow form costs `WC` LLK block calls instead of one, paid once per core in the resident regimes | **none** — the band search takes it only after the wide form and both ring depths have failed the budget; every band build that already fit takes candidate 1 |
+| **D31** | `DS` is searched `(2, 1)` on the BAND scheme | Same cause. It is ordered BEFORE D30 because a band's activation reads come from the core's own L1, so the overlap it gives up is the cheapest in the op | **none** — same reason |
+| **D32** | The D25 combine pipeline (`PIPE_A`) is gated off when `HAS_R` | The hoisted pass A for block `b+1` would write `cb_x_sum`, whose ring is ONE block deep and whose front block `b`'s pass B still owns — so the hoist would either overwrite live data or self-deadlock on the reserve. Making it legal needs `cb_x_sum` at depth 2 **and** a runtime tile base on the *pack*, and `output(...)` carries no tile base, so it is not expressible without a new chain seam. Recorded as a follow-up with the measurement to take, not as a finished trade | **none** — `PIPE_A` is unchanged without a residual |
+
+### The band worked example, in full
+
+At the failing cell above (`WC = 25`, `BR = 1`, `bt = gt = bit = 4096`, `G = 11`, flat combine,
+`XSW = WC` because `WC > DEST_ACC_SQUARE_MAX_WT`), in fp32 tiles:
+
+| Term | wide staging, `DS = 2` | wide, `DS = 1` | **narrow (`PS = DS = 1`)** |
+|------|------------------------|----------------|---------------------------|
+| 3 activation stick rings (`3·DS·WC`) | 150 | 75 | 75 |
+| `cb_input_tiles` + `cb_residual_tiles` + `cb_x_sum` + `cb_x_squared` + `cb_output_tiles` (`5·WC`) | 125 | 125 | 125 |
+| `cb_normalized` (`ND·WC`, `ND = 1` at `BR = 1`) | 25 | 25 | 25 |
+| per-channel tiles (`2·XH`) | 50 | 50 | 50 |
+| per-channel sticks (`2·PS`) | 50 | 50 | **2** |
+| combine (`SD·BR·2 + GS + FD`) | 18 | 18 | 18 |
+| **total tiles** | 418 | 343 | **295** |
+| **bytes** | 1 712 128 | 1 404 928 | **1 208 320** |
+| vs. the 1 344 512 B hard ceiling | **+368 kB** | **+60 kB** | **−136 kB** |
+
+`ND = 1` here is D29's `BR == 1` case doing real work: at the design's flat `2` this column would
+be 320 tiles / 1 310 720 B, still inside the ceiling but only by 34 kB.
+
+---
+
+## Measured cost of each operand
+
+Blackhole p150b, 110-core grid, bf16 / HiFi2 / `fp32_dest_acc_en=False`, interleaved DRAM, TILE,
+one fresh-cache profiled run per variant (`--profile`, DEVICE KERNEL DURATION ns).
+
+| Shape | `no_gamma` seed → ttnn | `gamma` seed → ttnn | `gamma_bias` | `residual` | all three |
+|-------|------------------------|---------------------|--------------|-----------|-----------|
+| `(1,1,32,1024)` decode | 3955 → 3899 (**1.01×**) | 4859 → 4884 (**1.00×**) | 5829 | 4605 | 6427 |
+| `(1,1,8192,1024)` prefill | 84741 → 81493 (**1.04×**) | 89287 → 89544 (**1.00×**) | 96349 | 125387 | 140905 |
+| `(1,1,32,7168)` wide decode | 7455 → 7499 (**0.99×**) | 9180 → 9248 (**0.99×**) | 10744 | 9337 | 12670 |
+
+**Seed parity holds** on every operand-free and gamma-only cell: 0.99×–1.04×, inside the ~2% noise
+band. That is the measurement behind "the operand-free program is the seed's" — the programs are
+byte-identical by construction (every new CB, CT arg and blocking term is multiplied by its `HAS_*`
+flag), and this says so on device rather than by argument.
+
+**The residual is at the DRAM roofline on the prefill profile**: it takes the activation crossings
+from 2 (x in, out) to 3 (x, r, out), i.e. 1.50× the bytes, and measures 1.42× the time
+(88 598 → 125 387 ns). There is no lever there — the bytes are the wall. On the decode profiles it
+is FLAT to slightly faster (4884 → 4605, 9248 → 9337), because those shapes are latency-bound on
+the width-split combine rather than byte-bound.
+
+**The bias costs 1.09×–1.23×**, largest at decode where a whole extra chain over the block is not
+hidden behind DRAM. Lamp L-OPERAND-TRIM (`BIAS_TRIM ∈ {0, GAMMA_TRIM}`) is the untaken measurement.

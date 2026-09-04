@@ -3,17 +3,35 @@
 //
 // Compute kernel for rms_norm_ttnn (UNPACK / MATH / PACK).
 //
-//   out = x * rsqrt( (1/W) * sum_w x^2 + eps ) * gamma
+//   t   = x + r                                     (A1, optional)
+//   out = t * rsqrt( (1/W) * sum_w t^2 + eps ) * w + b   (w, b optional)
 //
-// One loop nest covers ALL THREE regimes (op_design.md section 7).  Per row-block:
+// One loop nest covers ALL THREE regimes and every operand combination.  Per
+// row-block (bracketed stages are compile-time-elided when absent, so an
+// operand-free build is the seed's kernel):
 //
-//   pass A   [RM] tilize            cb_input_sticks -> cb_input_tiles
-//            square                 cb_input_tiles  -> cb_x_squared
-//            accumulate_reduce_block cb_x_squared   -> cb_row_stat   (sum x^2)
-//   finalize transform_in_place     cb_row_stat     -> cb_row_stat   (1/rms)
-//   pass B   mul<Col>               cb_input_tiles, cb_row_stat -> NORM_OUT
-//            mul<Row>               cb_normalized, cb_gamma_tiles -> cb_output_tiles
-//            [RM] untilize          cb_output_tiles -> cb_output_sticks
+//   pass A   [RM]      tilize             cb_input_sticks    -> cb_input_tiles
+//            [RM,R]    tilize             cb_residual_sticks -> cb_residual_tiles
+//            [R]       residual_add_block cb_input_tiles + cb_residual_tiles
+//                                                            -> cb_x_sum
+//                      square             CB_T               -> cb_x_squared
+//                      accumulate_reduce  cb_x_squared       -> CB_REDUCE_ACC
+//   finalize           transform_in_place cb_row_stat        -> cb_row_stat
+//   pass B             mul<Col>           CB_T, CB_STAT_B    -> NORM_OUT
+//            [G]       mul<Row>           cb_normalized, cb_gamma_tiles
+//                                            -> cb_normalized (in place, if [B])
+//                                            -> cb_output_tiles (otherwise)
+//            [B]       add<Row>           cb_normalized, cb_bias_tiles
+//                                                            -> cb_output_tiles
+//            [RM]      untilize           cb_output_tiles    -> cb_output_sticks
+//
+// CB_T is the tensor the statistics and pass B operate on: cb_x_sum when a
+// residual is present (which is why cb_x_sum, not cb_input_tiles, is the HELD
+// buffer there), cb_input_tiles otherwise.  Pass-B routing, stated once: with
+// S = [scale if G] + [bias if B], `normalize` writes cb_output_tiles when S is
+// empty, else cb_normalized; every stage in S but the LAST writes cb_normalized
+// in place, and the last writes cb_output_tiles.  At S = [scale] or S = [] that
+// collapses to exactly the seed's routing.
 //
 // Under the cross-core width COMBINE the finalize step is replaced by three stages
 // (Perf 3 / D27 -- the compact partial transpose; full justification at the
@@ -25,9 +43,9 @@
 //   recv_unpack  matmul-un-permute cb_mcast_in (1 tile) -> cb_row_final (rows tiles)
 // Pass B is untouched by all of it: it still reads a column-shaped stat.
 //
-// The regimes differ ONLY in whether cb_input_tiles / cb_gamma_tiles are held
-// across both passes, and how wide they are (X_RESIDENT / X_HOLD_WT, from the
-// descriptor -- deviation D14):
+// The regimes differ ONLY in whether CB_T / cb_gamma_tiles / cb_bias_tiles are
+// held across both passes, and how wide they are (X_RESIDENT / X_HOLD_WT, from
+// the descriptor -- deviation D14):
 //   RESIDENT      X_RESIDENT, NUM_W_CHUNKS == 1.  The whole row is one chunk and
 //                 is held, so x is read from DRAM once.
 //   ROW_RESIDENT  X_RESIDENT, NUM_W_CHUNKS >  1.  One whole tile-row of x and the
@@ -52,9 +70,20 @@
 // ROW_RESIDENT regime needs to pass a runtime TILE OFFSET to the chain element.
 // Each is exactly what the corresponding convenience call expands to.
 //
-// Explicit cb_pop_front calls on cb_input_tiles / cb_row_stat / cb_gamma_tiles /
-// cb_scaler are the sanctioned pattern for operands whose lifetime spans more
-// calls than any single PopPolicy can express (op_design.md section 6.1).
+// Explicit cb_pop_front calls on CB_T / cb_row_stat / cb_gamma_tiles /
+// cb_bias_tiles / cb_scaler are the sanctioned pattern for operands whose
+// lifetime spans more calls than any single PopPolicy can express
+// (op_design.md section 6.1).
+//
+// The ONE in-place site in this kernel is `scale_block` when a bias follows it
+// (D29).  Its lifecycle pair is not a free choice: an in-place chain needs an
+// incrementally POPPING input and an incrementally RESERVING output, so both
+// sides are PerBlockSize -- the device-verified case 1 of
+// kernel_lib/tests/eltwise/chain/lifecycle/inplace_chain.cpp.  An upfront-reserve
+// output on an aliased CB DEADLOCKS rather than returning a wrong answer, and a
+// Row/Col operand may never be the aliased CB (chain.inl:82-85) -- which is why
+// cb_x_sum, the HELD Upfront/None srcA, is never aliased even though the
+// design's CB table suggests it.
 
 #include <cstdint>
 
