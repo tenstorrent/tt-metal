@@ -51,11 +51,28 @@ The pass `rtl-rvtt-schedule.cc` conditionally inserts `sfpnop` after Tensix insn
    search misses those (the largest raw-sequence surface):
    ```bash
    # from the repo root
-   grep -rInE "\bTTI_SFP[A-Z0-9_]+|\bTTI_[A-Z0-9_]+\(|sfpnop|TTI_NOP" \
+   grep -rInE "\bTTI_SFP[A-Z0-9_]+|\bTTI_[A-Z0-9_]+\(|\bTT_OP_[A-Z0-9_]+\(|sfpnop|TTI_NOP" \
         tt_metal/tt-llk/tt_llk_* ttnn/cpp models --include=*.h --include=*.cpp 2>/dev/null | grep -v /tests/
    ```
    Classify each block by provenance (sfpi-generated vs raw). Skip sfpi-generated blocks.
-3. **For each raw sequence**, walk producer→consumer in program order. For every result a later instruction reads, check the producer's latency (and `xtt_delay` class) against the spacing present: enough NOPs / independent instructions to cover the latency?
+   The `TT_OP_*` alternative matters: those are opcode VALUES destined for a MOP
+   slot or a replay buffer, so they are part of the at-risk raw surface **and**
+   their spacing cannot be read off the source order — see step 3.
+3. **For each raw sequence**, walk producer→consumer in **executed** program order.
+   For an inline `TTI_*` run that is the source order. For a word that is slotted
+   into a MOP or captured into a replay buffer it is **not**: per `race-audit-all`
+   → *"A word's SLOT, not its line"*, an `END_OP` is followed by the **next** outer
+   iteration's `START_OP`, a `*_LAST` override replaces a loop op only on the last
+   inner iteration, and template 0 selects per iteration from a runtime mask. So
+   padding that looks sufficient in the text can be absent in the executed stream
+   (and vice versa), and it can differ between the first, middle and last
+   iterations of the same MOP. Resolve the neighbours at the `run()`/`replay()`
+   site before judging spacing; the tool's `mop-replay` check recalls the slotted
+   and unattributed words but resolves no counts. Also note that a **whole-pipe
+   wait is not discharged by the last issued instruction being cheap** — the
+   FPU-pipeline condition (`p_stall::MATH`) is satisfied only when *no*
+   instruction is in *any* stage, so a trailing 1-cycle `SETRWC` after a long
+   MOP burst leaves the pipe full. For every result a later instruction reads, check the producer's latency (and `xtt_delay` class) against the spacing present: enough NOPs / independent instructions to cover the latency?
 4. **Apply the arch matrix.** WH: every static + dynamic hazard needs manual spacing. BH/QSR: static delays + the `xtt_dynamic_bug` errata instructions still need manual NOPs; other dynamic hazards are HW-scoreboarded. Do NOT exempt Blackhole wholesale.
 5. **Watch the explicit footguns** the compiler flags: variable-LReg read/write (`rvtt.md` notes "for the user to get this right"), `SFPLOADMACRO` ("Complex" latency), and `SFPCONFIG`. Also the non-SFPU result-latencies the compiler never touches (these are pure LLK-C++, manual on every arch): `MVMUL`/FPU → `SFPLOAD`-from-`Dst` settle (a settle gap is required between an FPU write to `Dst` and an `SFPLOAD` reading that `Dst` region on WH and BH; the exact count — illustratively ~3 unrelated instructions — is a *re-derive-this-run* number per the freshness contract, not a baked authority), config-write (`SETC16`/`WRCFG`) → consumer settle. Related erratum **TEN-2932** (WH/BH, fixed in Quasar): while `LaneConfig.ENABLE_DEST_INDEX` is set, any instruction other than `SFPLOAD`/`SFPLOADI`/`SFPSWAP`/`SFPTRANSP` that writes `LReg[4..7]` is UnsupportedFunctionality. **NOTE: this is an ISA-legality restriction, NOT a latency/settle gap — a NOP does NOT fix it; the fix is avoiding the instruction+mode-bit combo (don't emit the disallowed `LReg[4..7]` write while `ENABLE_DEST_INDEX` is set).** Do not tag a TEN-2932 site LATENCY-HAZARD or recommend inserting NOPs (the Verdict's "errata insn → NOP" remedy applies only to the `xtt_dynamic_bug` latency errata, not to this legality erratum).
 
@@ -63,6 +80,7 @@ The pass `rtl-rvtt-schedule.cc` conditionally inserts `sfpnop` after Tensix insn
 - **sfpi-compiled, or raw sequence with sufficient spacing for the arch** → SAFE.
 - **Raw sequence consuming a multi-cycle result without enough spacing, on an arch that needs it** (WH dynamic; any-arch static; BH/QSR errata insn) → LATENCY-HAZARD (real, silent corruption) — fix = insert the required `SFPNOP`/`TTI_NOP` (or reorder independent work in).
 - **Arch-divergent** (e.g. needs a NOP on WH but HW-scoreboarded on BH) → report per-arch; never collapse to one verdict.
+- **Spacing that depends on a MOP/replay program you could not resolve** (unknown iteration counts, a runtime template-0 mask, a record whose replay site you did not find) → UNCERTAIN + say which slot/site was unresolved. Do **not** report SAFE off the textual spacing: for a slotted word the text is not the executed order.
 - **Can't resolve the pinned compiler** → UNCERTAIN + bounded-coverage note.
 
 ## Thoroughness (optional, full sweep)
