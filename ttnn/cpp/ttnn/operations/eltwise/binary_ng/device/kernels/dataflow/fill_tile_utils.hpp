@@ -372,8 +372,8 @@ FORCE_INLINE void fill_tile_with_first_row(uint32_t l1_write_ptr) {
     // Replicate the row with local NoC copies rather than ~992 volatile loads and ~992 stores.
     // A face is 1024 B of 16 contiguous 64 B rows, so repeatedly doubling the valid region fills
     // one in four transfers. Faces 0 and 1 are the top half of the tile and hold the source row;
-    // faces 2 and 3 are the bottom half and have none of their own, so each is copied from the
-    // finished face above it.
+    // faces 2 and 3 are the bottom half and have none of their own. The four faces are contiguous,
+    // so once the loop leaves faces 0 and 1 both valid the bottom half is one 2 KB copy of the top.
     constexpr uint32_t kFaceBytes = 1024;
     constexpr uint32_t kRowBytes = 64;
     const uint32_t f0 = l1_write_ptr;
@@ -383,8 +383,7 @@ FORCE_INLINE void fill_tile_with_first_row(uint32_t l1_write_ptr) {
         noc_async_read(get_noc_addr(f1), f1 + n, n);
         noc_async_read_barrier();
     }
-    noc_async_read(get_noc_addr(f0), f0 + 2 * kFaceBytes, kFaceBytes);
-    noc_async_read(get_noc_addr(f1), f1 + 2 * kFaceBytes, kFaceBytes);
+    noc_async_read(get_noc_addr(f0), f0 + 2 * kFaceBytes, 2 * kFaceBytes);
     noc_async_read_barrier();
 }
 
