@@ -1413,7 +1413,7 @@
     run() { mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" python3 -m pytest "$@" || rc=1; }
     run --timeout 1000 models/tt_dit/tests/models/wan2_2/test_rope.py
     run --timeout 1000 models/tt_dit/tests/models/wan2_2/test_attention_wan.py
-    run --maxfail 10 --timeout 10000 models/tt_dit/tests/models/wan2_2/test_vae_wan2_1.py -k "not f32 and not 720p and not f81"
+    run --maxfail 10 --timeout 10000 models/tt_dit/tests/models/wan2_2/test_vae_wan2_1.py -k "not f32 and not f81 and (not 720p or 720p_t33_fullT)"
     run --maxfail 10 --timeout 10000 models/tt_dit/tests/models/wan2_2/test_transformer_wan.py -k "not 720p"
     run --timeout 1000 models/tt_dit/tests/encoders/umt5/test_umt5.py -k "bh_glx"
     run --timeout 1000 models/tt_dit/tests/unit/test_embeddings.py::test_wan_time_text_image_embedding -k "bh_glx"
