@@ -112,19 +112,23 @@ constexpr TensorShape tensor_shape_from_num_faces(const std::uint32_t face_r_dim
     return TensorShape {static_cast<std::uint8_t>(face_r_dim), MAX_FACE_C_DIM, num_faces_r_dim, num_faces_c_dim};
 }
 
+constexpr bool is_valid_face_r_dim(const std::uint8_t face_r_dim)
+{
+    return face_r_dim == 1 || face_r_dim == 2 || face_r_dim == 4 || face_r_dim == 8 || face_r_dim == MAX_FACE_R_DIM;
+}
+
 /**
  * @brief Returns whether Input 0 (SrcB) and Input 1 (SrcA) form a supported matmul TensorShape pair.
  *
  * @param src_b_shape: Input 0/SrcB tile shape.
  * @param src_a_shape: Input 1/SrcA tile shape.
  */
-constexpr bool validate_matmul_tensor_shapes_(const TensorShape& src_b_shape, const TensorShape& src_a_shape)
+constexpr bool validate_matmul_tensor_shapes_(const TensorShape src_b_shape, const TensorShape src_a_shape)
 {
     const bool supported_src_a_width =
         src_a_shape.face_c_dim == MAX_FACE_C_DIM && (src_a_shape.num_faces_c_dim == 1 || src_a_shape.num_faces_c_dim == MAX_NUM_FACES_C_DIM);
     const bool wide_src_b = src_b_shape.face_c_dim == MAX_FACE_C_DIM && src_b_shape.num_faces_c_dim == MAX_NUM_FACES_C_DIM &&
-                            ((src_b_shape.num_faces_r_dim == 1 && (src_b_shape.face_r_dim == 1 || src_b_shape.face_r_dim == 2 || src_b_shape.face_r_dim == 4 ||
-                                                                   src_b_shape.face_r_dim == 8 || src_b_shape.face_r_dim == MAX_FACE_R_DIM)) ||
+                            ((src_b_shape.num_faces_r_dim == 1 && is_valid_face_r_dim(src_b_shape.face_r_dim)) ||
                              (src_b_shape.face_r_dim == MAX_FACE_R_DIM && src_b_shape.num_faces_r_dim == MAX_NUM_FACES_R_DIM));
     const bool full_k_src_a      = src_a_shape.face_r_dim == MAX_FACE_R_DIM && src_a_shape.num_faces_r_dim == MAX_NUM_FACES_R_DIM;
     const bool half_k_src_a      = src_a_shape.face_r_dim == MAX_FACE_R_DIM && src_a_shape.num_faces_r_dim == 1;
@@ -156,8 +160,7 @@ __attribute__((noinline)) inline bool validate_tensor_shape_tile_dependent_ops_(
     const std::uint8_t num_faces  = tensor_shape.total_num_faces();
     const std::uint8_t face_r_dim = tensor_shape.face_r_dim;
     const std::uint8_t face_c_dim = tensor_shape.face_c_dim;
-    return (num_faces == 1 || num_faces == 2 || num_faces == 4) &&
-           (face_r_dim == 1 || face_r_dim == 2 || face_r_dim == 4 || face_r_dim == 8 || face_r_dim == 16) && (face_c_dim == 16);
+    return (num_faces == 1 || num_faces == 2 || num_faces == 4) && is_valid_face_r_dim(face_r_dim) && (face_c_dim == 16);
 }
 
 /**

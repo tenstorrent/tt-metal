@@ -58,7 +58,7 @@ inline void _llk_unpack_matmul_mop_config_(
  *
  * @param tensor_shape: Shape of the operand tile.
  */
-inline std::uint32_t _llk_unpack_matmul_src_tile_scale_(const TensorShape& tensor_shape)
+inline std::uint32_t _llk_unpack_matmul_src_tile_scale_(const TensorShape tensor_shape)
 {
     return tensor_shape.total_num_faces() == NUM_FACES ? 1 : tensor_shape.total_num_faces();
 }
@@ -78,7 +78,7 @@ inline std::uint32_t _llk_unpack_matmul_src_tile_scale_(const TensorShape& tenso
  */
 template <std::uint32_t UNP_SEL>
 inline std::uint32_t _llk_unpack_matmul_load_tile_replay_(
-    const std::uint32_t replay_start, const std::uint32_t buf_desc_id, const TensorShape& tensor_shape, const bool advance_to_next_tile)
+    const std::uint32_t replay_start, const std::uint32_t buf_desc_id, const TensorShape tensor_shape, const bool advance_to_next_tile)
 {
     static_assert(UNP_SEL == p_unpacr::UNP_A || UNP_SEL == p_unpacr::UNP_B, "Matmul operands must unpack to SrcA or SrcB");
 
@@ -140,8 +140,8 @@ inline void _llk_unpack_matmul_variable_tile_mop_config_(
     const std::uint8_t ct_dim,
     const std::uint8_t rt_dim,
     const std::uint32_t kt_dim,
-    const TensorShape& src_b_shape,
-    const TensorShape& src_a_shape)
+    const TensorShape src_b_shape,
+    const TensorShape src_a_shape)
 {
     const bool reuse_a                    = ct_dim >= rt_dim;
     const std::uint32_t reuse_replay_len  = reuse_a ? _llk_unpack_matmul_load_tile_replay_<p_unpacr::UNP_B>(0, buf_desc_id_0, src_b_shape, false)
@@ -195,8 +195,8 @@ inline void _llk_unpack_matmul_init_(
     const std::uint8_t ct_dim,
     const std::uint8_t rt_dim,
     const std::uint32_t kt_dim,
-    const TensorShape& src_b_shape = DEFAULT_TENSOR_SHAPE,
-    const TensorShape& src_a_shape = DEFAULT_TENSOR_SHAPE)
+    const TensorShape src_b_shape = DEFAULT_TENSOR_SHAPE,
+    const TensorShape src_a_shape = DEFAULT_TENSOR_SHAPE)
 {
     static_assert((TRANSPOSE_EN == false), "TODO: Transpose srcA not available yet");
     LLK_ASSERT(validate_matmul_tensor_shapes_(src_b_shape, src_a_shape), "unsupported SrcB/SrcA TensorShape pair for matmul");
@@ -236,8 +236,8 @@ inline void _llk_unpack_matmul_(
     const std::uint32_t kt_dim,
     const std::uint32_t start_l1_tile_idx_0,
     const std::uint32_t start_l1_tile_idx_1,
-    const TensorShape& src_b_shape = DEFAULT_TENSOR_SHAPE,
-    const TensorShape& src_a_shape = DEFAULT_TENSOR_SHAPE)
+    const TensorShape src_b_shape = DEFAULT_TENSOR_SHAPE,
+    const TensorShape src_a_shape = DEFAULT_TENSOR_SHAPE)
 {
     // Reset Dest counters for Unpacker to 0
     TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, 0);

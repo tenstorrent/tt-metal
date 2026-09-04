@@ -24,7 +24,7 @@ struct _llk_pack_matmul_tile_layout_t
  *
  * @param tensor_shape: Shape of the output tile.
  */
-inline _llk_pack_matmul_tile_layout_t _llk_pack_matmul_tile_layout_(const TensorShape& tensor_shape)
+inline _llk_pack_matmul_tile_layout_t _llk_pack_matmul_tile_layout_(const TensorShape tensor_shape)
 {
     const std::uint32_t num_faces       = tensor_shape.total_num_faces();
     const bool full_tile                = num_faces == NUM_FACES;
@@ -49,7 +49,7 @@ inline void _llk_pack_matmul_mop_config_(
     const std::uint32_t subblock_r_dim,
     const std::uint32_t subblock_c_dim,
     const std::uint32_t num_subblocks_c_dim,
-    const TensorShape& tensor_shape = DEFAULT_TENSOR_SHAPE)
+    const TensorShape tensor_shape = DEFAULT_TENSOR_SHAPE)
 {
     const auto tile_layout                  = _llk_pack_matmul_tile_layout_(tensor_shape);
     const std::uint32_t MOP_OUTER_LOOP      = subblock_r_dim;
@@ -81,7 +81,7 @@ inline void _llk_pack_matmul_init_(
     const std::uint32_t subblock_r_dim,
     const std::uint32_t subblock_c_dim,
     const std::uint32_t num_subblocks_c_dim,
-    const TensorShape& tensor_shape = DEFAULT_TENSOR_SHAPE)
+    const TensorShape tensor_shape = DEFAULT_TENSOR_SHAPE)
 {
     _llk_pack_matmul_mop_config_(buf_desc_id, subblock_r_dim, subblock_c_dim, num_subblocks_c_dim, tensor_shape);
 }
@@ -95,7 +95,7 @@ inline void _llk_pack_matmul_init_(
  * @note Call @ref _llk_pack_matmul_init_ with matching template args before this function.
  */
 inline void _llk_pack_matmul_(
-    const std::uint32_t start_math_dest_tile_idx, const std::uint32_t start_l1_tile_idx, const TensorShape& tensor_shape = DEFAULT_TENSOR_SHAPE)
+    const std::uint32_t start_math_dest_tile_idx, const std::uint32_t start_l1_tile_idx, const TensorShape tensor_shape = DEFAULT_TENSOR_SHAPE)
 {
     //(TODO) RT: for the best performance, setting counters should be placed in a REPLAY buffer
     // in the mop_config, but for back compatibility with APIs, the counter functions must
