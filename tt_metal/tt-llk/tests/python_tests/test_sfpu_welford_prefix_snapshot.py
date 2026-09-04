@@ -64,6 +64,32 @@ def _run(impl, n):
         disable_format_inference=True,
         compile_time_formats=True,
     )
+    # laneMO stratified-sampling hook (corpus/tools/lanemo_sample_sweep.py),
+    # env-gated and inert otherwise. sem vs hand = TRACE_IMPL 2 (vfloat_direct)
+    # vs 0 (handwritten_direct). The 9-tile register-snapshot Res is the output
+    # compared. Streams then skips (this helper's caller does register analysis
+    # the sampling deliberately bypasses). See test_sfpu_blaze.py for the contract.
+    import os as _os
+
+    _lanemo_sample = _os.environ.get("LANEMO_SAMPLE")
+    if _lanemo_sample:
+        import sys as _sys
+        from pathlib import Path as _Path
+
+        _sys.path.insert(
+            0, str(_Path(__file__).resolve().parents[1] / "corpus" / "tools")
+        )
+        import lanemo_sample_gen as _G
+
+        _G.stream_on_device(
+            config,
+            TestConfig.TENSIX_LOCATION,
+            _lanemo_sample,
+            _os.environ.get("LANEMO_OP", "op"),
+            int(_os.environ.get("LANEMK_WAIT_TIMEOUT", "60")),
+        )
+        pytest.skip("laneMO sample stream complete")
+
     tiles = untilize_block(
         torch.tensor(config.run().result, dtype=torch.bfloat16),
         formats.output_format,

@@ -128,6 +128,31 @@ def test_sfpu_reduce_sdpa(
         unpack_to_dest=False,  # Must be False since math kernel does A2D copy
         dest_acc=dest_acc,
     )
+
+    # laneMO stratified-sampling hook (corpus/tools/lanemo_sample_sweep.py),
+    # env-gated and inert otherwise. sem vs hand = reduce_impl 1 (generated SFPI
+    # math) vs 0 (handwritten replay). See test_sfpu_blaze.py for the contract.
+    import os as _os
+
+    _lanemo_sample = _os.environ.get("LANEMO_SAMPLE")
+    if _lanemo_sample:
+        import sys as _sys
+        from pathlib import Path as _Path
+
+        _sys.path.insert(
+            0, str(_Path(__file__).resolve().parents[1] / "corpus" / "tools")
+        )
+        import lanemo_sample_gen as _G
+
+        _G.stream_on_device(
+            configuration,
+            TestConfig.TENSIX_LOCATION,
+            _lanemo_sample,
+            _os.environ.get("LANEMO_OP", "op"),
+            int(_os.environ.get("LANEMK_WAIT_TIMEOUT", "60")),
+        )
+        return
+
     res_from_L1 = configuration.run().result
 
     res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
