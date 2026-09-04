@@ -15,7 +15,6 @@
 //
 // Differences from the GlobalCircularBuffer validator:
 //   * reads through the device PrefetcherPipe class (Attached by the host) rather than remote_cb_*;
-//   * batched delivery only, so FIFO position == physical block and there is no rotation arg;
 //   * no update_remote_cb_config_in_l1 / atomic barrier at exit -- the durable read cursor is
 //     checkpointed by PrefetcherPipe::commit() when the object goes out of scope, and acks are
 //     posted.
@@ -44,8 +43,12 @@ void kernel_main() {
     constexpr uint32_t num_layers = get_compile_time_arg_val(1);
     constexpr uint32_t num_blocks = get_compile_time_arg_val(2);
     constexpr uint32_t print_stride = get_compile_time_arg_val(3);
-    // TensorAccessor compile-time args start at index 4.
-    constexpr auto tensor_args = TensorAccessorArgs<4>();
+    // Streaming mode: the prefetcher delivers each receiver's blocks ring-rotated, so the entry at
+    // FIFO position `blk` is physical block (lead_block + blk) mod num_blocks. Batched delivery is
+    // the identity.
+    constexpr uint32_t streaming = get_compile_time_arg_val(4);
+    // TensorAccessor compile-time args start at index 5.
+    constexpr auto tensor_args = TensorAccessorArgs<5>();
 
     // ---- Runtime args ----
     // The host derives n_col_start (= ring_pos * n_per_recv_tiles) and total_n_tiles from the
@@ -61,6 +64,7 @@ void kernel_main() {
     const uint32_t total_n_tiles = get_arg_val<uint32_t>(rt_idx++);  // N / TILE_WIDTH (full tensor)
     const uint32_t n_per_recv_tiles = get_arg_val<uint32_t>(rt_idx++);
     const uint32_t n_col_start = get_arg_val<uint32_t>(rt_idx++);  // ring_pos * n_per_recv_tiles
+    const uint32_t lead_block = get_arg_val<uint32_t>(rt_idx++);   // streaming: physical block at FIFO position 0
 
     const auto accessor = TensorAccessor(tensor_args, bank_base_addr);
     const uint32_t tile_bytes = accessor.get_aligned_page_size();
@@ -87,12 +91,14 @@ void kernel_main() {
             pipe.wait_front(1);
             const uint32_t page_addr = pipe.get_read_ptr().get_address();
 
-            // Batched delivery, so the FIFO position is the physical block.
+            // Streaming delivers each receiver's blocks ring-rotated, so FIFO position blk is
+            // physical block (lead_block + blk) mod num_blocks; batched delivery is the identity.
+            const uint32_t phys_blk = streaming ? ((lead_block + blk) % num_blocks) : blk;
             prefetcher_validator::read_expected_block_tiles(
                 accessor,
                 scratch_addr,
                 tile_bytes,
-                /*phys_blk=*/blk,
+                phys_blk,
                 k_block_w_tiles,
                 total_n_tiles,
                 n_col_start,

@@ -150,9 +150,8 @@ void start_tensor_prefetcher(tt::tt_metal::distributed::MeshDevice* mesh_device)
 // and re-sent on every execute_trace of that trace; when false the request is always sent
 // immediately.
 // Exactly one of `global_cb` / `prefetcher_pipes` must be supplied; whichever it is selects the
-// delivery transport. See the metal-level QueueTensorPrefetcherRequest overloads for the extra
-// preconditions PrefetcherPipe delivery imposes (receiver-contiguous, batched, and a block size the
-// fixed ring holds two of).
+// delivery transport. See the metal-level QueueTensorPrefetcherRequest overloads for the one extra
+// precondition PrefetcherPipe delivery imposes: every tensor must be receiver-contiguous.
 void queue_tensor_prefetcher_request(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     const std::vector<TensorPrefetcherQueueTensor>& tensors,

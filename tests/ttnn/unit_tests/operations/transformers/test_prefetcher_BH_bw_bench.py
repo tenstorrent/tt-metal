@@ -55,7 +55,6 @@ from tests.ttnn.unit_tests.operations.prefetcher_common import (
     require_tensor_prefetcher,
 )
 
-
 pytestmark = run_for_blackhole("Tensor prefetcher requires Blackhole")
 
 
@@ -369,6 +368,92 @@ def test_bw_tensor_prefetcher_recv_contig(device, op_name, shape):
     bw_per_recv = bw_total / num_receivers
     logger.info(
         f"[dram_core_bw_rc][{op_name}] dual_senders={dual_senders} trace_elapsed={elapsed * 1e3:.2f}ms "
+        f"bytes_per_recv={bytes_per_recv / 1e6:.1f}MB total_bytes={bytes_total / 1e9:.2f}GB "
+        f"aggregate_bw={bw_total:.2f} GB/s per_recv_bw={bw_per_recv:.3f} GB/s"
+    )
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "trace_region_size": 23887872}],
+    indirect=True,
+)
+@pytest.mark.parametrize("op_name,shape", LLAMA_SHAPES)
+def test_bw_tensor_prefetcher_pipe_recv_contig(device, op_name, shape):
+    """Tensor prefetcher in receiver-contiguous layout -> **PrefetcherPipes** -> discard receiver.
+
+    The transport comparison against test_bw_tensor_prefetcher_recv_contig: same weight, same
+    bank -> receiver topology, same ring depth (one layer's worth of blocks per receiver), same
+    trace methodology. Only the delivery object differs, so the gap between the two logs is what
+    the pipe's credit layout costs -- its per-receiver counter pairs are strided by 2 * L1_ALIGNMENT
+    where a GCB packs them at uint32, which is one extra address computation per receiver per round.
+    """
+    _apply_shape(shape)
+    if device.dram_grid_size().x != 8:
+        pytest.skip("DRAM-core bench expects 8 unharvested DRAM banks")
+
+    trace_repeats = _bench_trace_repeats()
+    num_prefetch_layers = trace_repeats + 1  # 1 warmup + trace_repeats inside the trace
+
+    num_dram_banks = device.dram_grid_size().x
+    num_receivers = num_dram_banks * _NUM_RECV_PER_BANK
+    page_size = _per_receiver_page_size_bytes()
+    pages_per_layer = num_receivers  # = ring_size
+
+    tt_weight = _build_weight_recv_contig(device, num_dram_banks)
+
+    bank_to_receivers = [
+        (
+            b,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(b, 0), ttnn.CoreCoord(b, _NUM_RECV_PER_BANK - 1))}),
+        )
+        for b in range(num_dram_banks)
+    ]
+    dual_senders = os.environ.get("BENCH_DUAL_SENDERS", "0") == "1"
+    # Depth in whole blocks matches _gcb_size_bytes(page_size, pages_per_layer), so both transports
+    # give the sender the same in-flight headroom before reserve_back backpressures.
+    pipes = ttnn.experimental.create_prefetcher_pipes_for_tensor_prefetcher(
+        device,
+        bank_to_receivers,
+        entry_size=page_size,
+        num_entries=pages_per_layer,
+        support_multi_receiver_shards=not dual_senders,
+    )
+
+    ttnn.experimental.start_tensor_prefetcher(device)
+    ttnn.experimental.queue_tensor_prefetcher_request(
+        device, [(tt_weight, num_receivers)] * num_prefetch_layers, prefetcher_pipes=pipes
+    )
+
+    # Warmup: drain 1 layer's worth of entries — primes the cached MeshWorkload.
+    ttnn.experimental.test_tensor_prefetcher_pipe_consumer(
+        device, num_iters=pages_per_layer, page_size_bytes=page_size, prefetcher_pipes=pipes
+    )
+    ttnn.synchronize_device(device)
+
+    bench_trace = ttnn.begin_trace_capture(device, cq_id=0)
+    for _ in range(trace_repeats):
+        ttnn.experimental.test_tensor_prefetcher_pipe_consumer(
+            device, num_iters=pages_per_layer, page_size_bytes=page_size, prefetcher_pipes=pipes
+        )
+    ttnn.end_trace_capture(device, bench_trace, cq_id=0)
+
+    t0 = time.perf_counter()
+    ttnn.execute_trace(device, bench_trace, cq_id=0, blocking=False)
+    ttnn.synchronize_device(device)
+    elapsed = time.perf_counter() - t0
+    ttnn.release_trace(device, bench_trace)
+    ttnn.experimental.stop_tensor_prefetcher(device)
+
+    if os.environ.get("TT_METAL_WATCHER", "0") == "1":
+        time.sleep(3)
+
+    bytes_per_recv = trace_repeats * pages_per_layer * page_size
+    bytes_total = bytes_per_recv * num_receivers
+    bw_total = _gbps(bytes_total, elapsed)
+    bw_per_recv = bw_total / num_receivers
+    logger.info(
+        f"[dram_core_bw_pipe][{op_name}] dual_senders={dual_senders} trace_elapsed={elapsed * 1e3:.2f}ms "
         f"bytes_per_recv={bytes_per_recv / 1e6:.1f}MB total_bytes={bytes_total / 1e9:.2f}GB "
         f"aggregate_bw={bw_total:.2f} GB/s per_recv_bw={bw_per_recv:.3f} GB/s"
     )

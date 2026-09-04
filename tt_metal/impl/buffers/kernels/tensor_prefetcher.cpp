@@ -227,8 +227,10 @@ FORCE_INLINE void prefetcher_sender_barrier(const RemoteSenderCBInterface& iface
 // the loop keep reading fifo_size from config_ptr[3].
 //
 // The write cursor is not stored anywhere: it is derived from a receiver's durable entries_sent
-// counter. Batched receiver-contiguous delivery credits every receiver the same amount each round,
-// so all receivers share one cursor and receiver 0's is representative.
+// counter. Receiver-contiguous delivery finalizes a round by crediting every receiver the same B
+// blocks, so all receivers share one cursor and receiver 0's is representative. That holds under
+// the streaming rotation too -- it varies which DRAM block feeds a receiver, not how much each one
+// is credited.
 FORCE_INLINE void load_pipe_sender_state(
     const experimental::PipeSenderCtx& ctx, uint32_t entry_size, RemoteSenderCBInterface& iface) {
     iface.config_ptr = ctx.config_ptr;

@@ -98,10 +98,10 @@ void bind_tensor_prefetcher(nb::module_& mod) {
                     Supply exactly one of global_cb / prefetcher_pipes.
                 prefetcher_pipes (TensorPrefetcherPipes): DRAM-sender PrefetcherPipes (created via
                     ttnn.experimental.create_prefetcher_pipes_for_tensor_prefetcher) to deliver into
-                    instead of a GCB. Receiver-contiguous batched tensors only. A tensor's
-                    per-receiver block size need not equal the pipes' entry_size; it only has to
-                    leave the ring room for two whole blocks, since consumers keep one block of
-                    lookahead.
+                    instead of a GCB. Receiver-contiguous tensors only; rotation works as it does
+                    for a GCB. A tensor's per-receiver block size need not equal the pipes'
+                    entry_size nor divide the ring, so size the ring for the consumer: one block is
+                    enough for the transport, two for a consumer that keeps a block of lookahead.
                 device_subset (Optional[MeshCoordinateRangeSet]): subset of the mesh that
                     processes this request. Defaults to the full mesh.
                 capture_into_trace (bool): whether this request may be captured into a trace.
