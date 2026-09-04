@@ -131,9 +131,10 @@ build_key (detected via `KernelPrewarmColdStartNeeded()` — capture armed, no i
 batch launched) it runs one capture-only warmup, batch-compiles the manifest
 off-device **in-process** (`KernelPrewarmOfflineCompile()`), resets the poisoned
 in-memory state (program cache + tracers), then runs warm. No wrapper, no manual
-capture pass, nothing to forget. Controls are bound to `ttnn._ttnn.device`
-(`kernel_prewarm_cold_start_needed` / `_set_capture_only` / `_offline_compile`),
-declared in `<tt-metalium/kernel_prewarm_control.hpp>`.
+capture pass, nothing to forget. The controls are the C++ entry points declared
+in `<tt-metalium/kernel_prewarm_control.hpp>` (`KernelPrewarmColdStartNeeded` /
+`KernelPrewarmSetCaptureOnly` / `KernelPrewarmOfflineCompile`); a pipeline calls
+them directly. ttnn bindings are not part of this change.
 
 Measured (LTX distilled `bh_2x4sp1tp0`): **531s → 235s device-held, output
 byte-identical**. One reservation held continuously (the off-device compile runs
@@ -171,22 +172,11 @@ full miss.
 The kernel body is compiled from its on-disk path (`#include`d by the generated
 wrapper), never from the manifest's generated-file snapshot, and the on-disk
 `.dephash` gate is re-verified by the op-by-op path on every run: any change to
-a source or header content forces a recompile. Verified on device by
-`tests/tt_metal/tt_metal/api/test_offline_kernel_compile.cpp`:
-
-- `OfflinePrewarmReflectsEditedKernelBody` — edit a kernel body, run the offline
-  prewarm, assert the loaded binary (`brisc.elf`) reflects the edit, never the
-  captured snapshot.
-- `EditedKernelBodyForcesRecompileNotStaleCacheHit` — the dephash backstop
-  through the op-by-op path.
-
-Run them (device required, slow dispatch):
-
-```bash
-TT_METAL_SLOW_DISPATCH_MODE=1 \
-  build_Release/test/tt_metal/unit_tests_api \
-  --gtest_filter='*OfflinePrewarm*:*EditedKernelBodyForcesRecompile*'
-```
+a source or header content forces a recompile. Because every recipe is
+content-addressed (source + defines + compile-time args + flags + build_key all
+fold into the kernel hash), a replay mismatch is a cache miss → correct
+recompile, never a wrong binary. Dedicated regression tests for the prewarm
+stale-cache paths are a follow-up and are not part of this change.
 
 Note: `<name>.elf.xip.elf` next to a kernel ELF is a tt-triage debug
 disassembly dump written at load time (`tt_memory.cpp`), not a loaded binary;

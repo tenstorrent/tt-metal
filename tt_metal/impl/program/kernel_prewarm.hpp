@@ -11,10 +11,11 @@
 
 namespace tt::tt_metal::kernel_prewarm {
 
-// Self-bootstrapping parallel kernel prewarm. ON by default so any checkout iterates fast on any box
-// (galaxy or LB) with zero setup: the manifest lives at <cache_root>/kernel_prewarm.manifest (moves
-// with TT_METAL_CACHE), a cold run records it, later runs reuse it. Set TT_METAL_KERNEL_PREWARM=0 to
-// disable entirely (byte-for-byte the pre-prewarm behavior).
+// Opt-in parallel kernel prewarm. OFF by default: capture-arming and the device-init auto-launch stay
+// off until TT_METAL_KERNEL_PREWARM is set truthy (1/true/on), so a stock checkout is byte-for-byte the
+// pre-prewarm behavior. Once enabled, the manifest lives at <cache_root>/kernel_prewarm.manifest (moves
+// with TT_METAL_CACHE): a cold run records it, later runs reuse it. The self-bootstrapping default-on
+// variant is deliberately not adopted here until it is proven safe.
 //
 //   Capture. ProgramImpl::compile appends each newly-seen kernel's portable compile recipe
 //     (jit_server::CompileRequest: build_key, kernel_name, gpp, per-target flags/defines/srcs,
