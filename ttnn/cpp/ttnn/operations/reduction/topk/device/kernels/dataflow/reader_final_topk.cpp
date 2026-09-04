@@ -7,24 +7,20 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
 
 void kernel_main() {
     // Compile time args
-    constexpr uint32_t receiver_sem_id = get_compile_time_arg_val(0);          // Ready-to-receive signal
-    constexpr uint32_t sender_sem_id = get_compile_time_arg_val(1);            // Data-sent confirmation
-    constexpr uint32_t noc_start_x = get_compile_time_arg_val(2);              // Starting X coordinate of core range
-    constexpr uint32_t noc_start_y = get_compile_time_arg_val(3);              // Starting Y coordinate of core range
-    constexpr uint32_t noc_end_x = get_compile_time_arg_val(4);                // Ending X coordinate of core range
-    constexpr uint32_t noc_end_y = get_compile_time_arg_val(5);                // Ending Y coordinate of core range
-    constexpr uint32_t Ht = get_compile_time_arg_val(6);                       // Height tiles to process
-    constexpr uint32_t Wt_final = get_compile_time_arg_val(7);                 // Total width tiles from all cores
-    constexpr uint32_t num_dests = get_compile_time_arg_val(8);                // Number of sending cores
-    constexpr uint32_t final_values_dfb_index = get_compile_time_arg_val(9);   // Aggregated TopK values
-    constexpr uint32_t final_indices_dfb_index = get_compile_time_arg_val(10);  // Aggregated TopK indices
+    constexpr uint32_t arrival_counter_sem_id = get_compile_time_arg_val(0);
+    constexpr uint32_t Ht = get_compile_time_arg_val(1);
+    constexpr uint32_t Wt_final = get_compile_time_arg_val(2);
+    constexpr uint32_t final_values_dfb_index = get_compile_time_arg_val(3);
+    constexpr uint32_t final_indices_dfb_index = get_compile_time_arg_val(4);
+    constexpr dataflow_kernel_lib::McastArgs<5, 0> readiness_mcast_args;
 
     Noc noc;
-    Semaphore<> receiver_sem(receiver_sem_id);
-    Semaphore<> sender_sem(sender_sem_id);
+    auto readiness_pipe = readiness_mcast_args.sender(noc);
+    Semaphore<> arrival_counter_sem(arrival_counter_sem_id);
     DataflowBuffer final_values_dfb(final_values_dfb_index);
     DataflowBuffer final_indices_dfb(final_indices_dfb_index);
 
@@ -34,22 +30,15 @@ void kernel_main() {
         final_values_dfb.reserve_back(Wt_final);   // Space for all TopK values
         final_indices_dfb.reserve_back(Wt_final);  // Space for all TopK indices
 
-        // Initialize semaphores for this height row
-        // Reset synchronization state for this height row
-        sender_sem.set(INVALID);  // Mark data as not yet sent
-        receiver_sem.set(VALID);  // Signal readiness to receive
-
-        // Coordinate multicast reception
-        // Enable all local cores to send their data simultaneously by broadcasting
-        // the receiver semaphore state. This allows for efficient parallel transmission.
-        receiver_sem.set_multicast(
-            noc, noc_start_x, noc_start_y, noc_end_x, noc_end_y, num_dests);
-        noc.async_write_barrier();
+        // The arrival counter remains operation-owned and is reset only after the prior round's
+        // exact wait completed. Readiness is a helper-owned monotone Counter, so it is never reset.
+        arrival_counter_sem.set(INVALID);
+        readiness_pipe.send_signal();
 
         // Wait for all data to arrive
         // Block until all expected data (Wt_final tiles) has been received from
-        // the local cores. The sender semaphore is incremented by each sending core.
-        sender_sem.wait(Wt_final);
+        // the local cores. The arrival counter is incremented by each sending core.
+        arrival_counter_sem.wait(Wt_final);
 
         // Commit received data
         // Mark the received data as available to the final compute kernel
