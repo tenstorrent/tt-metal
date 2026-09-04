@@ -56,8 +56,8 @@ struct TensorPrefetcherPipes {
     std::vector<tt::tt_metal::experimental::TensorPrefetcherBankPipes> banks;
     // Per-receiver push granularity the pipes were created with, shared by every pipe. It is the
     // size the receivers start at, not a constraint: an Attach and a queued tensor may use any
-    // entry size the ring is a whole multiple of, and the DRAM sender snaps its cursor onto that
-    // grid. With `num_entries` it fixes `ring_size()`, which never changes.
+    // entry size the ring can hold, and the DRAM sender snaps its cursor onto that grid. With
+    // `num_entries` it fixes `ring_size()`, which never changes.
     uint32_t entry_size = 0;
     // Entries of `entry_size` a receiver's ring holds.
     uint32_t num_entries = 0;
@@ -73,11 +73,15 @@ struct TensorPrefetcherPipes {
     const std::vector<std::pair<tt::tt_metal::CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping() const {
         return mapping_;
     }
-    // Attach every pipe to `program` on its own receiver cores, at the creation-time `entry_size`
-    // bytes per entry -- the size that program's kernels consume, and one `ring_size()` is a whole
-    // multiple of. Returns the program-local pipe id per pipe, bank-major; a receiver core's kernel
+    // Attach every pipe to `program` on its own receiver cores, at `entry_size` bytes per entry --
+    // the size that program's kernels consume, which need not be the size the pipes were created
+    // at: a differing size makes the device-side constructor run the resize handshake against the
+    // sender. Returns the program-local pipe id per pipe, bank-major; a receiver core's kernel
     // takes the id of the one pipe it belongs to (as a runtime argument, since one kernel serves
     // receivers of different pipes).
+    std::vector<uint8_t> attach(tt::tt_metal::Program& program, uint32_t entry_size) const;
+    // Attach at the creation-time entry size, for a consumer that reads entries as the pipes were
+    // built to deliver them.
     std::vector<uint8_t> attach(tt::tt_metal::Program& program) const;
     // Each pipe's receiver-side config page address, bank-major. Identity rather than geometry:
     // two live pipes over the same receivers never share one.
@@ -147,7 +151,8 @@ void start_tensor_prefetcher(tt::tt_metal::distributed::MeshDevice* mesh_device)
 // immediately.
 // Exactly one of `global_cb` / `prefetcher_pipes` must be supplied; whichever it is selects the
 // delivery transport. See the metal-level QueueTensorPrefetcherRequest overloads for the extra
-// preconditions PrefetcherPipe delivery imposes (receiver-contiguous, batched, fixed entry size).
+// preconditions PrefetcherPipe delivery imposes (receiver-contiguous, batched, and a block size the
+// fixed ring holds two of).
 void queue_tensor_prefetcher_request(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     const std::vector<TensorPrefetcherQueueTensor>& tensors,
