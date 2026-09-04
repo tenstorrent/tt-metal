@@ -20,7 +20,11 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSe
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import TorchExpert
 from models.demos.deepseek_v3_d_p.tests.conftest import assert_clamp_coverage
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_x_device_params, torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
+    fabric2d_device_params,
+    torus_x_device_params,
+    torus_xy_device_params,
+)
 from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import (
     ACTIVATION_CLAMPED_SILU_GLU,
     ACTIVATION_SILU,
@@ -41,7 +45,8 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
         # width and the activation are new here — 33792 is 1.8x DSv3's 18432, and it is far past
         # ttnn.situ_glu's 3072 L1 cutoff, so every intermediate is a full-size DRAM tensor.
         (PREFILL_CHUNK_TOKENS_PER_CHIP, KimiK3Config.INTERMEDIATE_SIZE, ACTIVATION_SITU),
-        # DeepSeek-V4's dense FFN at the DeepSeek default width: the activation is what is new.
+        # TtFfn's clamped branch at the DeepSeek default width. No shipped config selects it --
+        # V4, the only clamped model, is MoE on every layer -- so this is its only coverage.
         (PREFILL_CHUNK_TOKENS_PER_CHIP, HIDDEN_DIM, ACTIVATION_CLAMPED_SILU_GLU),
     ],
     ids=["isl_5k", "isl_5k-k3-33792-situ", "isl_5k-v4-18432-clamped"],
@@ -56,8 +61,15 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 4), topology="ring"),
             id="torus-x-1x4",
         ),
-        # BH Galaxy. A Blackhole box accepts no mesh smaller than all 32 devices, so this is the
-        # only param where the SiTU case can run at all -- SiTU needs ttnn.softcap, Blackhole-only.
+        # The only param an 8-device box can run; torus-x needs a 4-device ring.
+        pytest.param(
+            (2, 4),
+            fabric2d_device_params(),
+            2,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+            id="fabric2d-mesh-2x4",
+        ),
+        # BH Galaxy, the production shape.
         pytest.param(
             (8, 4),
             torus_xy_device_params(fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE),

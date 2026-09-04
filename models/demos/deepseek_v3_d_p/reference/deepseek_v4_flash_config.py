@@ -31,6 +31,8 @@ class DeepSeekV4FlashConfig:
 
     # Model architecture
     NUM_LAYERS = 43
+    # V4 has no dense-FFN prefix: every layer is MoE, the first NUM_HASH_LAYERS hash-routed.
+    NUM_DENSE_LAYERS = 0
     NUM_HASH_LAYERS = 3
     VOCAB_SIZE = 129280
     SLIDING_WINDOW = 128
@@ -58,5 +60,8 @@ class DeepSeekV4FlashConfig:
     RMS_NORM_EPS = 1e-6
     ROUTE_SCALE = 1.5
     ROPE_THETA = 10000
+    # Both expert kinds clamp at SWIGLU_LIMIT below.
+    ROUTED_EXPERT_ACTIVATION = "clamped_silu_glu"
+    SHARED_EXPERT_ACTIVATION = "clamped_silu_glu"
     SWIGLU_LIMIT = 10.0
     MAX_POSITION_EMBEDDINGS = 1048576

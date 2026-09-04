@@ -25,11 +25,13 @@ from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping
 
 # Model configs are torch-only and so name their activation as a string; this is the one place
-# that maps those names onto the kernel enum. Keys match the HF ``hidden_act`` spelling.
+# that maps those names onto the kernel enum. Keys are the TT activation name, not the HF
+# ``hidden_act``: DeepSeek-V4's ``hidden_act`` is "silu", with the clamp on ``swiglu_limit``.
 ROUTED_EXPERT_ACTIVATION_BY_NAME = {
     "silu": ttnn.RoutedExpertActivation.Silu,
     "swiglu_oai": ttnn.RoutedExpertActivation.SwiGluOai,
     "situ": ttnn.RoutedExpertActivation.SituGlu,
+    "clamped_silu_glu": ttnn.RoutedExpertActivation.ClampedSiluGlu,
 }
 
 # Activations whose fused kernel path carries the bias branch (gate/up bias before the

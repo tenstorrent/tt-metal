@@ -33,10 +33,13 @@ from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import (
     CLAMPED_SILU_GLU_LIMIT,
     TorchExpert,
 )
-from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
+from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import (
+    ROUTED_EXPERT_ACTIVATION_BY_NAME,
+    TtRoutedExpert,
+)
+from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import SUPPORTED_ACTIVATIONS
 from tests.ttnn.utils_for_testing import comp_pcc
 from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill import ci_pruning
-
 
 SINGLE_CHIP_MESH_PARAMS = [
     pytest.param(
@@ -565,3 +568,21 @@ def test_dsv4_activation_enum_exposed():
     assert activation.SwiGluOai.value == 1
     assert activation.SituGlu.value == 2
     assert activation.ClampedSiluGlu.value == 3
+
+
+@pytest.mark.parametrize("config", [DeepSeekV4ProConfig, DeepSeekV4FlashConfig], ids=["dsv4_pro", "dsv4_flash"])
+def test_dsv4_config_selects_clamped_activation(config):
+    """Host-only: both V4 configs reach the clamped activation at both expert kinds.
+
+    The routed name resolves through a hard dict index and the shared name against a separate
+    tuple, so a name present in only one of the two silently splits the model across two
+    activations instead of raising.
+    """
+    assert config.ROUTED_EXPERT_ACTIVATION == ACTIVATION_CLAMPED_SILU_GLU
+    assert config.SHARED_EXPERT_ACTIVATION == ACTIVATION_CLAMPED_SILU_GLU
+    assert (
+        ROUTED_EXPERT_ACTIVATION_BY_NAME[config.ROUTED_EXPERT_ACTIVATION] == ttnn.RoutedExpertActivation.ClampedSiluGlu
+    )
+    assert config.SHARED_EXPERT_ACTIVATION in SUPPORTED_ACTIVATIONS
+    # Every layer is MoE, so the block never builds a dense FFN for V4.
+    assert config.NUM_DENSE_LAYERS == 0
