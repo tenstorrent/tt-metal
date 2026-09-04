@@ -325,6 +325,9 @@ ALWI void topk_stamp_tile_rank_range(uint32_t idst, uint32_t dst_tile_index, uin
  */
 ALWI void topk_strip_rank_tags(std::uint32_t idst) { MATH((ckernel::sfpu::_topk_strip_rank_tags_(idst))); }
 
+// Before packing a uint16 index tile that lives in 32-bit DEST as a plain integer.
+ALWI void topk_finalize_uint16_indices(std::uint32_t idst) { MATH((ckernel::sfpu::_topk_finalize_hi16_index_tile_(idst))); }
+
 // clang-format off
 /**
  * Sets the tie-break polarity used by the stable TopK comparator. Required once per compute

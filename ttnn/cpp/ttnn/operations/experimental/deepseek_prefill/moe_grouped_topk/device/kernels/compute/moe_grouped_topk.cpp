@@ -78,7 +78,7 @@ void kernel_main() {
             // Single expert group: grouping is a no-op, so select the top-k directly over the full
             // expert axis. blocks::topk is a general cross-tile top-k; feed it all width_tiles of
             // biased scores together with the identity expert-index template (0..experts-1).
-            blocks::topk<stable_sort>(
+            blocks::topk<stable_sort, /*indices_pretransposed=*/true>(
                 cb_biased_scores,
                 cb_expert_index_template,
                 cb_final_indices_transposed,
