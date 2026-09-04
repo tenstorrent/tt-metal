@@ -104,6 +104,8 @@ public:
                                                   : MEM_DM_GLOBAL_BASE;
             const DeviceAddr dm_local_base =
                 params.core_type == HalProgrammableCoreType::DISPATCH ? MEM_DISPATCH_DM_LOCAL_BASE : MEM_DM_LOCAL_BASE;
+            const DeviceAddr dm_local_size =
+                params.core_type == HalProgrammableCoreType::DISPATCH ? MEM_DISPATCH_DM_LOCAL_SIZE : MEM_DM_LOCAL_SIZE;
             if (params.is_fw) {
                 const DeviceAddr dm_firmware_base = params.core_type == HalProgrammableCoreType::DISPATCH
                                                         ? MEM_DISPATCH_DM_FIRMWARE_BASE
@@ -113,10 +115,10 @@ public:
                 flags += fmt::format("-Wl,--defsym=__fw_data={} ", dm_global_base);
                 flags += fmt::format("-Wl,--defsym=__data_size={} ", MEM_DM_GLOBAL_SIZE);
                 flags += fmt::format("-Wl,--defsym=__fw_tls={} ", dm_local_base);
-                flags += fmt::format("-Wl,--defsym=__tls_size={} ", MEM_DM_LOCAL_SIZE);
+                flags += fmt::format("-Wl,--defsym=__tls_size={} ", dm_local_size);
                 flags += fmt::format("-Wl,--defsym=__min_stack={} ", MEM_DM_STACK_MIN_SIZE);
                 flags += fmt::format("-Wl,--defsym=__local_base={} ", dm_local_base);
-                flags += fmt::format("-Wl,--defsym=__local_stride={} ", MEM_DM_LOCAL_SIZE);
+                flags += fmt::format("-Wl,--defsym=__local_stride={} ", dm_local_size);
             } else {
                 DeviceAddr kn_text = MEM_KERNEL_BASE;
                 if (params.core_type == HalProgrammableCoreType::DISPATCH) {
@@ -144,10 +146,10 @@ public:
                     dm_global_base + MEM_DM_GLOBAL_SIZE + (params.processor_id * MEM_DM_GLOBAL_SIZE));
                 flags += fmt::format("-Wl,--defsym=__data_size={} ", MEM_DM_GLOBAL_SIZE);
                 flags += fmt::format("-Wl,--defsym=__fw_tls={} ", dm_local_base);
-                flags += fmt::format("-Wl,--defsym=__tls_size={} ", MEM_DM_LOCAL_SIZE);
+                flags += fmt::format("-Wl,--defsym=__tls_size={} ", dm_local_size);
                 flags += fmt::format("-Wl,--defsym=__min_stack={} ", MEM_DM_STACK_MIN_SIZE);
                 flags += fmt::format("-Wl,--defsym=__local_base={} ", dm_local_base);
-                flags += fmt::format("-Wl,--defsym=__local_stride={} ", MEM_DM_LOCAL_SIZE);
+                flags += fmt::format("-Wl,--defsym=__local_stride={} ", dm_local_size);
             }
         } else if (params.processor_class == HalProcessorClassType::COMPUTE) {
             if (params.is_fw) {

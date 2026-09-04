@@ -18,6 +18,12 @@ extern thread_local uint32_t hw_thread_idx;
 namespace internal_ {
 
 #if defined(ARCH_QUASAR) && (defined(COMPILE_FOR_TRISC) || defined(COMPILE_FOR_DM))
+// Defined in api/debug/assert.h, after ASSERT is available there. Deliberately not included
+// directly from this file: assert.h includes this header (for internal_::get_hw_thread_idx), so an
+// #include of assert.h here would re-enter this file before ASSERT is defined on whichever side
+// loses the include-order race. Forward-declaring instead breaks the cycle.
+void check_hw_thread_idx(uint32_t cached, uint32_t raw);
+
 inline __attribute__((always_inline)) uint32_t read_hw_thread_idx() {
 #if defined(COMPILE_FOR_TRISC)
     uint32_t neo_id = ckernel::csr_read<ckernel::CSR::NEO_ID>();
@@ -49,8 +55,9 @@ inline __attribute__((always_inline)) void init_hw_thread_idx() { hw_thread_idx 
 //   Index 16-19: NEO2 Cluster (TRISC0-TRISC3)
 //   Index 20-23: NEO3 Cluster (TRISC0-TRISC3)
 //
-// On Quasar this serves the cached index, so it is valid only once init_hw_thread_idx() has run on this
-// thread.
+// On Quasar this reads the hardware index directly so debug/mailbox indexing is not vulnerable to
+// cached local-memory corruption. When watcher ASSERT is already available in the include context, it
+// also checks that the cached TLS copy still matches the raw hardware value.
 //
 // Blackhole/Wormhole (tt-1xx) Tensix:
 //   Index 0: BRISC  (DM0)
@@ -64,6 +71,7 @@ inline __attribute__((always_inline)) void init_hw_thread_idx() { hw_thread_idx 
 // ETH Blackhole/Quasar: Index 0 to 1
 inline __attribute__((always_inline)) uint32_t get_hw_thread_idx() {
 #if defined(ARCH_QUASAR) && (defined(COMPILE_FOR_TRISC) || defined(COMPILE_FOR_DM))
+    check_hw_thread_idx(hw_thread_idx, read_hw_thread_idx());
     return hw_thread_idx;
 #else
     return PROCESSOR_INDEX;

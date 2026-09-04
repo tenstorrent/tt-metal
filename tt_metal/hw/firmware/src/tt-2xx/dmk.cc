@@ -41,8 +41,9 @@ uint32_t _start() {
     while (c_tensix_core::read_wall_clock() < end_time);
 #endif
 #else
-    // TODO: initialize globals and bss
-    uint32_t hartid = internal_::get_hw_thread_idx();
+    // Raw read: hw_thread_idx has not been filled yet, and do_thread_crt1() below zeroes the .tbss
+    // it lives in, so caching it any earlier would just be discarded.
+    uint32_t hartid = internal_::read_hw_thread_idx();
 
     // Obtain launch message from mailbox and derive thread 0 (lowest hartid with same kernel).
     uint32_t launch_idx = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
@@ -80,6 +81,8 @@ uint32_t _start() {
     }
 
     do_thread_crt1(tdata_lma);
+    // .tbss has been zeroed: cache this thread's hw index.
+    internal_::init_hw_thread_idx();
 
     // Wait until first thread in the group has set its slot to GO.
     while ((*GET_MAILBOX_ADDRESS_DEV(shared_globals_ready))[thread_0_hartid] != SHARED_GLOBALS_READY_GO) {

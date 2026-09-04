@@ -47,6 +47,14 @@ FORCE_INLINE void lightweight_assert_trap() { asm("ebreak"); }
 
 #endif
 
+#if defined(ARCH_QUASAR) && (defined(COMPILE_FOR_TRISC) || defined(COMPILE_FOR_DM))
+// internal_::get_hw_thread_idx() forward-declares this rather than including this header directly,
+// to avoid re-entering hw_thread.h before ASSERT is defined above (see hw_thread.h).
+namespace internal_ {
+inline __attribute__((always_inline)) void check_hw_thread_idx(uint32_t cached, uint32_t raw) { ASSERT(cached == raw); }
+}  // namespace internal_
+#endif
+
 // Included after ASSERT so risc_common.h's ISR handlers can use the macro even when this header
 // is the include entry point (circular include with risc_common.h).
 #include "risc_common.h"
@@ -72,7 +80,15 @@ inline void assert_and_hang(uint32_t line_num, debug_assert_type_t assert_type) 
 #endif
     {
         v->line_num = line_num;
+#if defined(ARCH_QUASAR) && (defined(COMPILE_FOR_DM) || defined(COMPILE_FOR_TRISC))
+        uint32_t raw_hw_thread_idx = internal_::read_hw_thread_idx();
+        v->which = raw_hw_thread_idx;
+        if (assert_type != DebugAssertHwFault && hw_thread_idx != raw_hw_thread_idx) {
+            v->hw_fault_info = (static_cast<uint64_t>(hw_thread_idx) << 32) | raw_hw_thread_idx;
+        }
+#else
         v->which = internal_::get_hw_thread_idx();
+#endif
         if (assert_type == DebugAssertHwFault) {  // only valid on Quasar
 #ifndef COMPILE_FOR_TRISC
             uint64_t mcause;
