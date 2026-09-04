@@ -212,6 +212,37 @@ def _run_blaze(
         compile_time_formats=True,
     )
 
+    # laneMO stratified-sampling hook (corpus/tools/lanemo_sample_sweep.py),
+    # env-gated and inert otherwise. LANEMO_SAMPLE="n_tiles,seed,ckpt,outfile"
+    # + LANEMO_OP=<op> streams stratified operand-A sample tiles through THIS
+    # certified blaze kernel (this BLAZE_IMPL / ELF) in one open session and
+    # emits the per-leg sample line. sem vs hand = the same node at impl 2
+    # (semantic_lift) vs impl 0 (blaze_original); the orchestrator compares
+    # their output SHAs. Golden assert is bypassed (raw injection replaces the
+    # generated stimulus). Only operand A is sampled (harness has no
+    # lanejn_raw_b); an op's operand B keeps its fixed generated stimulus.
+    import os as _os
+
+    _lanemo_sample = _os.environ.get("LANEMO_SAMPLE")
+    if _lanemo_sample:
+        import sys as _sys
+        from pathlib import Path as _Path
+
+        _sys.path.insert(
+            0, str(_Path(__file__).resolve().parents[1] / "corpus" / "tools")
+        )
+        import lanemo_sample_gen as _G
+
+        _wait_to = int(_os.environ.get("LANEMK_WAIT_TIMEOUT", "60"))
+        _G.stream_on_device(
+            configuration,
+            TestConfig.TENSIX_LOCATION,
+            _lanemo_sample,
+            _os.environ.get("LANEMO_OP", "op"),
+            _wait_to,
+        )
+        return
+
     res_from_L1 = configuration.run().result
     res_from_L1 = res_from_L1[: 1024 * tile_cnt]
 

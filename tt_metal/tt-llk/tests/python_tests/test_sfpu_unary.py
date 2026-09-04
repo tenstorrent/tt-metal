@@ -153,67 +153,12 @@ def _lanemo_run_sample_stream(configuration, spec):
 
     spec = "n_tiles,seed,ckpt,outfile" (op name taken from LANEMO_OP env).
     """
-    import hashlib
-    import struct
-    import time
-
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "corpus" / "tools"))
     import lanemo_sample_gen as G
 
-    n_s, seed_s, ckpt_s, outfile = spec.split(",", 3)
-    n_tiles = int(n_s, 0)
-    seed = int(seed_s, 0)
-    ckpt = max(1, int(ckpt_s, 0))
     op = os.environ.get("LANEMO_OP", "op")
-    st = configuration.variant_stimuli
-    loc = TestConfig.TENSIX_LOCATION
-    per_run = int(st.tile_count_A) * 1024
-
-    configuration.prepare()
-    configuration.write_runtimes_to_L1()
     _wait_to = int(os.environ.get("LANEMK_WAIT_TIMEOUT", "60"))
-
-    osha = hashlib.sha256()
-    isha = hashlib.sha256()
-    ckpt_shas = []
-    ck = hashlib.sha256()
-    tiles = 0
-    obytes = 0
-    t0 = time.time()
-    for tile in G.iter_tiles(op, per_run, n_tiles, seed):
-        raw = struct.pack(f"<{per_run}I", *tile)
-        st.lanejn_raw_a = raw
-        st.write(loc)
-        st.clear_result_buffer(loc)
-        configuration.run_elf_files()
-        configuration.wait_for_tensix_operations_finished(timeout=_wait_to)
-        res = st.collect_raw_result_bytes(loc)
-        want = per_run * 4
-        if len(res) < want:
-            raise RuntimeError(f"sample {tiles}: got {len(res)} result bytes < {want}")
-        out = res[:want]
-        osha.update(out)
-        isha.update(raw)
-        ck.update(out)
-        obytes += want
-        tiles += 1
-        if tiles % ckpt == 0:
-            ckpt_shas.append(ck.hexdigest())
-            ck = hashlib.sha256()
-    if tiles % ckpt != 0:
-        ckpt_shas.append(ck.hexdigest())
-    dt = time.time() - t0
-
-    line = (
-        "LANEMO_SAMPLE_RESULT,"
-        f"op={op},n_samples={tiles},per_run_elems={per_run},seed=0x{seed:016x},"
-        f"ckpt={ckpt},wall_s={dt:.3f},per_run_ms={(1000.0 * dt / tiles) if tiles else 0:.3f},"
-        f"input_sha256={isha.hexdigest()},output_sha256={osha.hexdigest()}"
-    )
-    print(line, flush=True)
-    with open(outfile, "w") as fh:
-        fh.write(line + "\n")
-        fh.write("checkpoint_shas\t" + ",".join(ckpt_shas) + "\n")
+    G.stream_on_device(configuration, TestConfig.TENSIX_LOCATION, spec, op, _wait_to)
 
 
 SUPPORTED_FAST_MODE_OPS = [

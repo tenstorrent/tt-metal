@@ -40,9 +40,26 @@ _IN_RE = re.compile(r"input_sha256=([0-9a-f]{64})")
 _N_RE = re.compile(r"n_samples=(\d+)")
 
 
-def run_leg(args, node, out_file, log_file):
-    """One pytest invocation streaming the whole sample set for one leg.
-    Returns (out_sha, in_sha, n_samples, ckpt_shas, wall)."""
+def _text_sha(venv, rt):
+    """Object-identity attestation: sha256 of the built math kernel's .text.
+    Each leg builds into its own RUNNER_TEMP, so the single math.elf there is
+    that leg's certified kernel. Empty string if not found (build+run only)."""
+    elfs = sorted(Path(rt).glob("tt-llk-build/sources/*/*/elf/math.elf"))
+    if not elfs:
+        return ""
+    here = Path(__file__).resolve().parent
+    r = subprocess.run(
+        [venv, str(here / "elf_text_sha.py"), str(elfs[-1])],
+        capture_output=True,
+        text=True,
+    )
+    return r.stdout.strip()
+
+
+def run_leg(args, node, rt, out_file, log_file):
+    """One pytest invocation streaming the whole sample set for one leg into its
+    own RUNNER_TEMP `rt`. Returns (out_sha, in_sha, n_samples, ckpt_shas, wall,
+    text_sha)."""
     if Path(out_file).exists():
         txt = Path(out_file).read_text()
         m = _OUT_RE.search(txt)
@@ -53,20 +70,22 @@ def run_leg(args, node, out_file, log_file):
                 int(_N_RE.search(txt).group(1)) if _N_RE.search(txt) else 0,
                 _ckpts(txt),
                 0.0,
+                _text_sha(args.venv, rt),
             )
     env = dict(os.environ)
     env.update(
         CHIP_ARCH="blackhole",
         SHORT_ARCH="bh",
         LLK_HOME=args.llk_home,
-        RUNNER_TEMP=args.runner_temp,
+        RUNNER_TEMP=rt,
         PYTHONUNBUFFERED="1",
         TT_VISIBLE_DEVICES=str(args.chip),
         LANEMO_OP=args.op,
         LANEMO_SAMPLE=f"{args.n_samples},{args.seed},{args.ckpt},{out_file}",
     )
+    mode = "--compile-consumer " if args.consume else ""
     inner = (
-        f"{shlex.quote(args.venv)} -m pytest -o addopts= -q -s --compile-consumer "
+        f"{shlex.quote(args.venv)} -m pytest -o addopts= -q -s {mode}"
         f"{shlex.quote(node)} > {shlex.quote(str(log_file))} 2>&1"
     )
     cmd = ["flock", "-x", f"/tmp/tt-dev-{args.chip}.lock", "-c", inner]
@@ -89,6 +108,7 @@ def run_leg(args, node, out_file, log_file):
         (int(nm.group(1)) if nm else 0),
         _ckpts(txt),
         dt,
+        _text_sha(args.venv, rt),
     )
 
 
@@ -107,7 +127,9 @@ def main():
     ap.add_argument("--farm", required=True)
     ap.add_argument("--venv", required=True)
     ap.add_argument("--llk-home", required=True)
-    ap.add_argument("--runner-temp", required=True)
+    ap.add_argument(
+        "--runner-temp", required=True, help="parent dir for per-leg RUNNER_TEMPs"
+    )
     ap.add_argument("--n-samples", type=lambda s: int(s, 0), default=1_000_000)
     ap.add_argument("--seed", default="0x1")
     ap.add_argument("--ckpt", type=lambda s: int(s, 0), default=4096)
@@ -115,18 +137,29 @@ def main():
     ap.add_argument("--timeout", type=int, default=3600)
     ap.add_argument("--out", required=True)
     ap.add_argument(
+        "--consume",
+        action="store_true",
+        help="use prebuilt ELFs (--compile-consumer, galaxy); default builds+runs",
+    )
+    ap.add_argument(
         "--strategy", default="stratified:specials+expgrid+structure+random"
     )
     args = ap.parse_args()
 
     out = Path(args.out).resolve()
     (out / "legs").mkdir(parents=True, exist_ok=True)
+    sem_rt = f"{args.runner_temp}/sem"
+    hand_rt = f"{args.runner_temp}/hand"
 
-    sem_sha, sem_in, sem_n, sem_ck, sem_dt = run_leg(
-        args, args.sem_node, out / "legs" / "sem.txt", out / "legs" / "sem.log"
+    sem_sha, sem_in, sem_n, sem_ck, sem_dt, sem_text = run_leg(
+        args, args.sem_node, sem_rt, out / "legs" / "sem.txt", out / "legs" / "sem.log"
     )
-    hand_sha, hand_in, hand_n, hand_ck, hand_dt = run_leg(
-        args, args.hand_node, out / "legs" / "hand.txt", out / "legs" / "hand.log"
+    hand_sha, hand_in, hand_n, hand_ck, hand_dt, hand_text = run_leg(
+        args,
+        args.hand_node,
+        hand_rt,
+        out / "legs" / "hand.txt",
+        out / "legs" / "hand.log",
     )
 
     # The input stream MUST be identical across legs (same seed) — a differential
@@ -137,6 +170,12 @@ def main():
         witness = "-"
     elif sem_n != hand_n:
         verdict = "SAMPLE-REFUSED(sample-count-mismatch)"
+        n_diffs = "n/a"
+        witness = "-"
+    elif sem_text and hand_text and sem_text == hand_text:
+        # Object-identity gate: a CONSISTENT verdict is only meaningful if the two
+        # legs are genuinely DIFFERENT kernels. Same .text => trivial equality.
+        verdict = "SAMPLE-REFUSED(identical-elf-text)"
         n_diffs = "n/a"
         witness = "-"
     elif sem_sha == hand_sha:
@@ -153,18 +192,25 @@ def main():
         n_diffs = f">=1 (checkpoint-window {first})"
 
     n_used = sem_n
+    obj_id = (
+        "sem!=hand"
+        if (sem_text and hand_text and sem_text != hand_text)
+        else ("unknown" if not (sem_text and hand_text) else "sem==hand")
+    )
     ledger = out / f"{args.op}-SAMPLE-LEDGER-ROW.tsv"
     with open(ledger, "w") as fh:
         fh.write(
-            "op\tn_samples\tper_leg_elems\tstrategy\tn_diffs\tverdict\tsem_sha\thand_sha\twitness\twall_s\n"
+            "op\tn_samples\tper_leg_elems\tstrategy\tn_diffs\tverdict\tsem_out_sha\thand_out_sha\t"
+            "sem_text_sha\thand_text_sha\tobject_identity\twitness\twall_s\n"
         )
         fh.write(
             f"{args.op}\t{n_used}\t{args.n_samples}\t{args.strategy}\t{n_diffs}\t"
-            f"{verdict}\t{sem_sha[:16]}\t{hand_sha[:16]}\t{witness}\t{sem_dt+hand_dt:.1f}\n"
+            f"{verdict}\t{sem_sha[:16]}\t{hand_sha[:16]}\t{sem_text[:16]}\t{hand_text[:16]}\t"
+            f"{obj_id}\t{witness}\t{sem_dt+hand_dt:.1f}\n"
         )
     summary = (
         f"OP={args.op} VERDICT={verdict} n_samples={n_used} "
-        f"n_diffs={n_diffs} witness={witness} "
+        f"n_diffs={n_diffs} object_identity={obj_id} witness={witness} "
         f"sem={sem_sha[:12]} hand={hand_sha[:12]} wall_s={sem_dt+hand_dt:.1f}"
     )
     print(summary, flush=True)

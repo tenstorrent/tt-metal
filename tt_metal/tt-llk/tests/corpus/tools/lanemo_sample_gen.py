@@ -79,80 +79,109 @@ def _seed_for(op: str, base_seed: int) -> int:
     return s or 1
 
 
-def _exp_tile(words: list[int], exp: int, prng_state: int) -> tuple[list[int], int]:
-    """Fill `words` in place-style (returns new list) at biased exponent `exp`,
-    cycling mantissa corners {0, max, mid, random} and both signs."""
-    corners = [0x000000, 0x7FFFFF, 0x400000]
+def _fields(elem_bits: int) -> tuple[int, int, int, int]:
+    """(sign_shift, exp_shift, mant_mask, word_mask) for an IEEE-ish float of
+    `elem_bits`. fp32 = 32 (1+8+23); bf16 = 16 (1+8+7). Both keep the 8-bit
+    biased exponent, so the exponent grid 0..255 maps directly across widths."""
+    if elem_bits == 32:
+        return 31, 23, 0x7FFFFF, MASK32
+    if elem_bits == 16:
+        return 15, 7, 0x7F, 0xFFFF  # bf16 = high 16 bits of fp32
+    raise ValueError(f"unsupported elem_bits {elem_bits}")
+
+
+def _special_words(elem_bits: int) -> list[int]:
+    if elem_bits == 32:
+        return list(_SPECIAL_WORDS)
+    return [w >> 16 for w in _SPECIAL_WORDS]  # bf16 = fp32 truncated to high 16
+
+
+def _canon(word32: int, elem_bits: int) -> int:
+    """A canonical fp32 constant re-expressed at `elem_bits` (bf16 = >>16)."""
+    return word32 if elem_bits == 32 else (word32 >> 16)
+
+
+def _exp_tile(per_run: int, exp: int, prng_state: int, elem_bits: int):
+    """A tile at biased exponent `exp`, cycling mantissa corners + both signs."""
+    sign_sh, exp_sh, mant_mask, _ = _fields(elem_bits)
+    corners = [0, mant_mask, mant_mask // 2 + 1]
     out = []
-    for i in range(len(words)):
-        sign = (i & 1) << 31
+    for i in range(per_run):
+        sign = (i & 1) << sign_sh
         if i % 4 == 3:
             prng_state, r = splitmix64(prng_state)
-            mant = r & 0x7FFFFF
+            mant = r & mant_mask
         else:
             mant = corners[i % 3]
-        out.append(sign | (exp << 23) | mant)
+        out.append(sign | (exp << exp_sh) | mant)
     return out, prng_state
 
 
-def _structure_tiles(n: int, prng_state: int) -> tuple[list[list[int]], int]:
-    """Cross-lane-structure tiles of width n."""
-    prng_state, r = splitmix64(prng_state)
-    hot = 0x3F800000  # 1.0
+def _structure_tiles(n: int, prng_state: int, elem_bits: int):
+    """Cross-lane-structure tiles of width n (format-correct constants)."""
+    _, _, _, wmask = _fields(elem_bits)
+    one = _canon(0x3F800000, elem_bits)  # 1.0
+    negone = _canon(0xBF800000, elem_bits)  # -1.0
+    two = _canon(0x40000000, elem_bits)  # 2.0
+    pi = _canon(0x40490FDB, elem_bits)  # pi
     tiles = [
-        list(range(n)),  # ascending int-pattern ramp
-        list(range(n - 1, -1, -1)),  # descending ramp
-        [0x40490FDB] * n,  # all-equal (pi)
-        ([0x3F800000, 0x40000000] * (n // 2 + 1))[:n],  # two-value alternating
-        [hot] + [0] * (n - 1),  # single-hot lane 0
-        [0] * (n - 1) + [hot],  # single-hot last lane
-        ([0x3F800000] * (n // 2) + [0xBF800000] * (n - n // 2)),  # tie-heavy +/-1
+        [i & wmask for i in range(n)],  # ascending int-pattern ramp
+        [(n - 1 - i) & wmask for i in range(n)],  # descending ramp
+        [pi] * n,  # all-equal
+        ([one, two] * (n // 2 + 1))[:n],  # two-value alternating
+        [one] + [0] * (n - 1),  # single-hot lane 0
+        [0] * (n - 1) + [one],  # single-hot last lane
+        ([one] * (n // 2) + [negone] * (n - n // 2)),  # tie-heavy +/-1
     ]
     return tiles, prng_state
 
 
-def iter_tiles(op: str, per_run: int, n_tiles: int, base_seed: int):
-    """Yield exactly `n_tiles` operand-A tiles (each a list of `per_run` uint32),
-    deterministically for (op, base_seed). Strata come first (specials, exp-grid,
-    structure), then uniform-random fill for the remainder of the budget."""
+def iter_tiles(
+    op: str, per_run: int, n_tiles: int, base_seed: int, elem_bits: int = 32
+):
+    """Yield exactly `n_tiles` operand-A tiles (each a list of `per_run` values of
+    `elem_bits` each), deterministically for (op, base_seed, elem_bits). Strata
+    come first (specials, exp-grid, structure), then uniform-random fill for the
+    remainder of the budget. elem_bits = 32 for fp32 operands, 16 for bf16."""
     if per_run <= 0 or n_tiles <= 0:
         return
+    _, _, _, wmask = _fields(elem_bits)
+    specials = _special_words(elem_bits)
     state = _seed_for(op, base_seed)
     emitted = 0
 
     # 1. SPECIALS — one whole-tile per special word, then a mixed-specials tile.
-    for w in _SPECIAL_WORDS:
+    for w in specials:
         if emitted >= n_tiles:
             return
         yield [w] * per_run
         emitted += 1
     if emitted < n_tiles:
-        mix = [_SPECIAL_WORDS[i % len(_SPECIAL_WORDS)] for i in range(per_run)]
-        yield mix
+        yield [specials[i % len(specials)] for i in range(per_run)]
         emitted += 1
 
     # 2. EXP-GRID — biased exponent sweep 0..255.
     for exp in range(256):
         if emitted >= n_tiles:
             return
-        tile, state = _exp_tile([0] * per_run, exp, state)
+        tile, state = _exp_tile(per_run, exp, state, elem_bits)
         yield tile
         emitted += 1
 
     # 3. STRUCTURE — cross-lane fold-order shapes.
-    structs, state = _structure_tiles(per_run, state)
+    structs, state = _structure_tiles(per_run, state, elem_bits)
     for tile in structs:
         if emitted >= n_tiles:
             return
         yield tile
         emitted += 1
 
-    # 4. RANDOM — uniform uint32 fill for the rest of the budget.
+    # 4. RANDOM — uniform fill for the rest of the budget.
     while emitted < n_tiles:
         tile = []
         for _ in range(per_run):
             state, r = splitmix64(state)
-            tile.append(r & MASK32)
+            tile.append(r & wmask)
         yield tile
         emitted += 1
 
@@ -199,3 +228,78 @@ def stream_sha_and_count(op: str, per_run: int, n_tiles: int, base_seed: int, ou
         obytes += len(out)
         tiles += 1
     return osha.hexdigest(), tiles, obytes, isha.hexdigest()
+
+
+def stream_on_device(configuration, location, spec, op, wait_to):
+    """Shared persistent-session device leg for the LANEMO_SAMPLE hooks (unary +
+    blaze). ONE open device session: per dispatch inject the next stratified
+    operand-A sample tile (raw bits, subnormals/NaN exact), run the certified
+    kernel, read Res, fold output SHA-256 + checkpoint SHAs. Only operand A is
+    sampled (harness has no lanejn_raw_b); an op's operand B keeps its fixed
+    generated stimulus.
+
+    spec = "n_tiles,seed,ckpt,outfile". Emits one LANEMO_SAMPLE_RESULT line.
+    Object identity is preserved by construction (same `configuration`/ELF).
+    """
+    import hashlib
+    import time
+
+    n_s, seed_s, ckpt_s, outfile = spec.split(",", 3)
+    n_tiles = int(n_s, 0)
+    seed = int(seed_s, 0)
+    ckpt = max(1, int(ckpt_s, 0))
+    st = configuration.variant_stimuli
+    per_run = int(st.tile_count_A) * 1024
+    # Element byte-width from the operand's tile size (1024 elements per tile):
+    # 4 => fp32, 2 => bf16. The raw-injection payload must match this exactly.
+    elem_bytes = int(st.tile_size_A_bytes) // 1024
+    elem_bits = elem_bytes * 8
+    pack_code = {4: "I", 2: "H"}.get(elem_bytes)
+    if pack_code is None:
+        raise RuntimeError(f"unsupported operand-A elem_bytes {elem_bytes}")
+
+    configuration.prepare()
+    configuration.write_runtimes_to_L1()
+
+    osha = hashlib.sha256()
+    isha = hashlib.sha256()
+    ckpt_shas = []
+    ck = hashlib.sha256()
+    tiles = 0
+    obytes = 0
+    t0 = time.time()
+    for tile in iter_tiles(op, per_run, n_tiles, seed, elem_bits):
+        raw = struct.pack(f"<{per_run}{pack_code}", *tile)
+        st.lanejn_raw_a = raw
+        st.write(location)
+        st.clear_result_buffer(location)
+        configuration.run_elf_files()
+        configuration.wait_for_tensix_operations_finished(timeout=wait_to)
+        res = st.collect_raw_result_bytes(location)
+        want = int(st.buf_res_tile_size) * int(st.tile_count_res)
+        if len(res) < want:
+            raise RuntimeError(f"sample {tiles}: got {len(res)} result bytes < {want}")
+        out = res[:want]
+        osha.update(out)
+        isha.update(raw)
+        ck.update(out)
+        obytes += want
+        tiles += 1
+        if tiles % ckpt == 0:
+            ckpt_shas.append(ck.hexdigest())
+            ck = hashlib.sha256()
+    if tiles % ckpt != 0:
+        ckpt_shas.append(ck.hexdigest())
+    dt = time.time() - t0
+
+    line = (
+        "LANEMO_SAMPLE_RESULT,"
+        f"op={op},n_samples={tiles},per_run_elems={per_run},seed=0x{seed:016x},"
+        f"ckpt={ckpt},wall_s={dt:.3f},"
+        f"per_run_ms={(1000.0 * dt / tiles) if tiles else 0:.3f},"
+        f"input_sha256={isha.hexdigest()},output_sha256={osha.hexdigest()}"
+    )
+    print(line, flush=True)
+    with open(outfile, "w") as fh:
+        fh.write(line + "\n")
+        fh.write("checkpoint_shas\t" + ",".join(ckpt_shas) + "\n")
