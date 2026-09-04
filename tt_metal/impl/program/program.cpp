@@ -3080,10 +3080,18 @@ bool detail::ProgramCompileGroup::contains(tt::tt_metal::IDevice* device) {
     return program_device_map_.contains(device);
 }
 
-void LaunchProgram(distributed::MeshDevice& mesh_device, Program&& program, bool wait_until_cores_done) {
+[[nodiscard]] distributed::MeshWorkload LaunchProgramAsync(distributed::MeshDevice& mesh_device, Program&& program) {
     distributed::MeshWorkload workload;
     workload.add_program(distributed::MeshCoordinateRange(mesh_device.shape()), std::move(program));
-    distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), workload, wait_until_cores_done);
+    distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), workload, /*blocking=*/false);
+    return workload;
+}
+
+distributed::MeshWorkload LaunchProgram(distributed::MeshDevice& mesh_device, Program&& program) {
+    distributed::MeshWorkload workload;
+    workload.add_program(distributed::MeshCoordinateRange(mesh_device.shape()), std::move(program));
+    distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), workload, /*blocking=*/true);
+    return workload;
 }
 
 }  // namespace tt::tt_metal

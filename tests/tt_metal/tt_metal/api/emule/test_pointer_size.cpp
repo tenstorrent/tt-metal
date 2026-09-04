@@ -44,8 +44,7 @@ TEST_F(UnitMeshFixture, Local_L1_Alignment_SanityCheck) {
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     EXPECT_DEATH(
-        LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true),
-        ".*Local L1 Alignment: Offset 0x5 must be 4-byte aligned.*");
+        LaunchProgram(this->device(), std::move(program)), ".*Local L1 Alignment: Offset 0x5 must be 4-byte aligned.*");
 }
 
 }  // namespace tt::tt_metal

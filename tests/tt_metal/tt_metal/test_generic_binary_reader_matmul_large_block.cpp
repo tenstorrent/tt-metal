@@ -297,7 +297,7 @@ TEST_F(UnitMeshFixture, GenericBinaryReaderMatmulLargeBlock) {
 
         tt_metal::SetRuntimeArgs(program, unary_writer_kernel, core, writer_rt_args);
 
-        LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
+        LaunchProgram(this->device(), std::move(program));
 
         std::vector<uint32_t> result_vec;
         slow_dispatch::ReadFromBuffer(*dst_dram_buffer, result_vec);

@@ -111,7 +111,7 @@ TEST_F(UnitMeshFixture, MatmulSingleTileBfp8b) {
 
     SetRuntimeArgs(program, unary_writer_kernel, core, {(uint32_t)dst_dram_buffer->address(), 0, num_tiles});
 
-    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program));
 
     std::vector<uint32_t> result_vec;
     slow_dispatch::ReadFromBuffer(*dst_dram_buffer, result_vec);

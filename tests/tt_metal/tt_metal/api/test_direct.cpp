@@ -310,7 +310,7 @@ bool reader_writer(const std::shared_ptr<distributed::MeshDevice>& mesh_device, 
     };
     experimental::SetProgramRunArgs(program, params);
 
-    LaunchProgram(*mesh_device, std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(*mesh_device, std::move(program));
 
     std::vector<uint32_t> dest_buffer_data;
     slow_dispatch::ReadFromBuffer(*output_dram_buffer, dest_buffer_data);
