@@ -91,12 +91,13 @@ SLOT_EAGER = 2
 SLOT_CONTROL = 3  # eager with the temperature suppressed; the sensitivity control
 NUM_USERS = 4
 
-# Traced and eager run the SAME ops on the SAME device and differ only in how they are dispatched, so
-# this is an agreement bar, not an accuracy bar: it should read ~0.999, and anything materially below
-# it means the replay is not reproducing the eager forward. Deliberately well above the
-# traced-vs-golden bar (TRACE_KV_CACHE_PCC_THRESHOLD = 0.96), which has to absorb real bf8_b
-# accumulation drift that this comparison does not.
-TRACED_VS_EAGER_KV_PCC = 0.99
+# An AGREEMENT bar, not an accuracy bar. Traced and eager run the same ops on the same device and
+# differ only in dispatch, and the first measured run came back at exactly 1.000000 on every layer --
+# a replay reproduces the eager forward bit-for-bit. So this sits far above the traced-vs-golden bar
+# (TRACE_KV_CACHE_PCC_THRESHOLD = 0.96), which has to absorb real bf8_b accumulation drift this
+# comparison does not. 0.999 rather than 1.0 leaves room for a bf8 quantisation tie to land the other
+# way; anything materially below it means the replay is not reproducing eager.
+TRACED_VS_EAGER_KV_PCC = 0.999
 
 
 def _packed_metadata_msg(mesh_device, slot_id: int, actual_start: int, actual_end: int) -> ttnn.Tensor:
@@ -164,7 +165,14 @@ def _build(mesh_device, hf_config, weight_cache_path, num_layers, num_links, use
         capacity_factor=8,  # PREFILL_CAPACITY_FACTOR default; 1 undersizes the MoE dispatch buffers
         num_links=num_links,
         gate_mode_name=adapter.default_gate_mode,
-        kv_only_last_layer=False,
+        # True, matching PREFILL_KV_ONLY_LAST_LAYER's default in prefill_runner. Load-bearing for a
+        # TRACED build, not a preference: with it False the forward runs past the last layer into
+        # norm + lm_head, and _lm_head_and_extract -> lm_head.logit_to_host() is a device->host
+        # readback. A readback records an event, and events are illegal inside a capture --
+        # fd_mesh_command_queue.cpp:933 TT_FATAL "Event Synchronization is not supported during trace
+        # capture". With it True the forward returns as soon as the last layer's KV is written, which
+        # is also all a prefill runtime wants: the populated KV cache IS the output on the last rank.
+        kv_only_last_layer=True,
         weight_cache_path=weight_cache_path,
         use_trace=use_trace,
     )
@@ -221,7 +229,28 @@ def _run_eager_reference(runtime, kv_caches, mesh_device, token_ids, slot):
     ttnn.synchronize_device(mesh_device)
 
 
-@pytest.mark.parametrize("num_layers", [4], ids=["L4"])
+# 8 layers, and every number below is measured on device -- an earlier revision of this comment
+# extrapolated instead and was badly wrong, so the measurements are here in full.
+#
+# The query temperature reaches K/V only through the previous layer's attention output, so its effect
+# compounds with depth. Suppressing it entirely (the control pass) moves KV PCC by:
+#
+#     layer   1        2        3        4        5        6        7
+#     PCC     0.99976  0.99926  0.99742  0.99714  0.99417  0.98969  0.99500
+#     1-PCC   2.4e-4   7.4e-4   2.6e-3   2.9e-3   5.8e-3   1.0e-2   5.0e-3
+#     growth    -       3.11x    3.46x    1.11x    2.04x    1.77x    0.48x
+#
+# It does NOT compound indefinitely. Growth is ~3.3x for the first three layers, then flattens, and
+# layer 7 is BELOW layer 6 -- the perturbation saturates around 1-PCC ~ 1e-2 rather than running away.
+# So going deeper than 8 buys nothing; the worst layer is 6 either way. (The earlier revision
+# extrapolated 3.28x/layer to predict ~0.70 at L8. Actual worst: 0.98969.)
+#
+# 4 layers is NOT enough: the deepest control PCC there is 0.99742, i.e. only 0.0026 of movement for a
+# COMPLETELY wrong temperature, which sits above the agreement bar. That is exactly the "~0.002
+# against a 0.98 threshold" blindness write_chunk_metadata's docstring warns about, reproduced. 8
+# layers reaches 0.98969, which is 10x clear of the bar in 1-PCC terms -- adequate, not generous, and
+# the sensitivity assertion below fails the run if it ever stops holding.
+@pytest.mark.parametrize("num_layers", [8], ids=["L8"])
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links",
     [
