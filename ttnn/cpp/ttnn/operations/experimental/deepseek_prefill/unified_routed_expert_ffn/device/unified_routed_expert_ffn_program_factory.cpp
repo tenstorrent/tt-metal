@@ -1271,10 +1271,16 @@ void UnifiedRoutedExpertFfnProgramFactory::override_runtime_arguments(
         auto& writer_args = tt::tt_metal::GetRuntimeArgs(program, writer_id, core);
         writer_args[0] = out_addr;
         writer_args[3] = start_addr;
-        // Per-expert `up` addresses occupy the final N slots.
-        size_t u = writer_args.size() - N;
+        // Per-expert `up` then `down` base addresses follow the 8 fixed args (the kernel's
+        // UP_RT / DOWN_RT). Indexed from the FRONT: the tail holds the DOWN_SPLIT sem pair
+        // and the IN1_WRITER_MCAST block, so counting back from the end overwrites those
+        // and leaves both address blocks stale on a program-cache hit.
+        size_t wa = 8;
         for (uint32_t e = 0; e < N; ++e) {
-            writer_args[u++] = t.up_projs[e].buffer()->address();
+            writer_args[wa++] = t.up_projs[e].buffer()->address();
+        }
+        for (uint32_t e = 0; e < N; ++e) {
+            writer_args[wa++] = t.down_projs[e].buffer()->address();
         }
     }
 }
