@@ -283,12 +283,12 @@ void kernel_main() {
 #ifdef PACK_RELU
         // for each batch we start we relu disabled so that intermediate results are not relu'd
         if constexpr (batch > 1) {
-            PACK((llk_pack_relu_config(ReluConfig::none())));
+            pack_relu_config(ReluConfig::none());
         }
 #endif
 
         if constexpr (batch > 1) {
-            PACK((pack_reconfig_data_format(mm_partials_cb_id)));
+            pack_reconfig_data_format(mm_partials_cb_id);
         }
 
         // Wait to receive in1
@@ -311,7 +311,7 @@ void kernel_main() {
 #if not defined FUSE_BIAS and defined PACK_RELU
             if (last_out) {
                 // if last block we pack the final result with relu enabled
-                PACK((llk_pack_relu_config(ReluConfig::zero())));
+                pack_relu_config(ReluConfig::zero());
             }
 #endif
 
@@ -403,12 +403,12 @@ void kernel_main() {
 #endif
 
 #if defined FP32_DEST_ACC_EN or defined PACKER_L1_ACC
-                        PACK((pack_reconfig_data_format(mm_out_cb_id)));
+                        pack_reconfig_data_format(mm_out_cb_id);
 #endif
 
 #ifdef PACKER_L1_ACC
 
-                        PACK((llk_pack_reconfig_l1_acc(0)));
+                        pack_reconfig_l1_acc(0);
 #endif
 
                         uint32_t start_dst_index = 0;
@@ -432,9 +432,9 @@ void kernel_main() {
 
 #ifdef PACKER_L1_ACC
                         if (block == 0) {  // no accumulation for first iteration
-                            PACK((llk_pack_reconfig_l1_acc(0)));
+                            pack_reconfig_l1_acc(0);
                         } else if (block == 1) {
-                            PACK((llk_pack_reconfig_l1_acc(1)));
+                            pack_reconfig_l1_acc(1);
                         }
 #endif
 
