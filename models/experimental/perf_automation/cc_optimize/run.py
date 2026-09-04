@@ -122,7 +122,9 @@ LOOP:
 
 FINISHING IS THE GATE'S CALL, NOT YOURS. termination_check() returns stages_short_of_achievable: every stack still measuring SLOWER than its own achievable band, each with the ms it must reach and how far over it is. While that list is non-empty can_stop is false and the round is NOT over -- go back to the top of the LOOP and take the next target, preferring ops in the stacks it names. Reaching the band is the minimum; beating it is fine and is not on the list. Do NOT wrap up because the last lever failed, because progress feels slow, or because the ops you were working are exhausted -- those are reasons to pick a different op, in a different stack, not to stop.
 
-ONLY when can_stop=true, or when every reachable rung on every stack named in stages_short_of_achievable has been measured and recorded and nothing is left to try: LEAVE CLEAN (commit wins, revert in-progress edits); end with git_head. Report start->final {metric}, committed wins, and per blocking op which rungs were done + measured ms -- and if any stack still owes its band, say WHICH and by how many ms, so the next round starts there."""
+ENDING A ROUND GOES THROUGH finish_round(). Call it when you believe you are done. It answers finished=true only when every stack is inside its band, or when no material op has an attempt left to try -- otherwise it returns finished=false with the stacks still owing and the ops with no attempt yet, and the round is NOT over: go back to the top of the LOOP and take the next target. Do not end a round without calling it, and do not end one it refused.
+
+ONLY when finish_round() returns finished=true: LEAVE CLEAN (commit wins, revert in-progress edits); end with git_head. Report start->final {metric}, committed wins, and per blocking op which rungs were done + measured ms -- and if any stack still owes its band, say WHICH and by how many ms, so the next round starts there."""
 
 
 _HITL_PROMPT = (
@@ -4833,6 +4835,39 @@ def _publish_optimize_section(mod, demo_dir, key, block) -> None:
         print(f"  [optimize/cc] could not publish the {key} section to the model directory: {_exc}")
 
 
+def _last_round_finish(repo_root: Path, mcp_env: dict, devices: str) -> dict:
+    """The verdict finish_round recorded, or {} when the round never called it.
+
+    Read through the SAME out-of-process probe _gate_status uses: the state file is written by the
+    MCP server in the run's own environment, and only a reader with that environment resolves the
+    per-run path. Best-effort -- a reader that fails must not stop the loop.
+    """
+    code = (
+        "import sys, json; sys.path.insert(0, sys.argv[1]); import perf_mcp as P\n"
+        "print('FINISH=' + json.dumps(P.read_round_finish() or {}))"
+    )
+    env = cc_env(repo_root, devices)
+    env.update(mcp_env)
+    try:
+        rc, out = _run_device_step(
+            [_python_bin(repo_root), "-c", code, str(repo_root / CC_DIR)],
+            repo_root / PERF_DIR,
+            env,
+            devices,
+            60,
+            "round_finish",
+            stall_s=60,
+        )
+        if rc is None:
+            return {}
+        for line in (out or "").splitlines():
+            if line.startswith("FINISH="):
+                return json.loads(line[len("FINISH=") :]) or {}
+    except Exception:  # noqa: BLE001
+        return {}
+    return {}
+
+
 def _read_baseline_profile_for_report(repo_root):
     """THIS RUN's baseline profile, or None. Never another run's.
 
@@ -5212,6 +5247,18 @@ def optimize_pipeline(
         # WHAT THE ROUND IS BEING SENT IN TO DO. Printed before it starts, so a reader can see the
         # target the agent was given and compare it with what the round actually did -- the check
         # that was missing when eight rounds ended early and each looked like a clean finish.
+        # DID THE LAST ROUND ASK TO FINISH, and was it allowed to? A round that just exits looks
+        # identical to one that ran out of work, which is how thirteen rounds ended early unnoticed.
+        _fin = _last_round_finish(repo_root, mcp_env, devices) if rounds else {}
+        if rounds and not _fin:
+            print(
+                "  [optimize/cc] round %d ended WITHOUT calling finish_round — the gate never got to "
+                "say whether it was allowed to" % rounds
+            )
+        elif _fin and _fin.get("finished") is False:
+            print(
+                "  [optimize/cc] round %d ended after finish_round REFUSED it: %s" % (rounds, _fin.get("why", "")[:120])
+            )
         if st.get("short"):
             print(
                 "  [optimize/cc] round %d starts with stacks still short of their band: %s" % (rounds + 1, st["short"])

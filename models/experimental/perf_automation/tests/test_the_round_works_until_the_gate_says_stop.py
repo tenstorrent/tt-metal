@@ -33,11 +33,13 @@ def test_the_prompt_still_formats():
 
 
 def test_wrapping_up_is_conditional_on_the_gate():
-    """The closing instruction was unconditional, so it read as a cue to stop."""
+    """The closing instruction was unconditional, so it read as a cue to stop. It now sits behind
+    finish_round(), which is a gate the tool can refuse rather than a sentence it cannot check."""
     p = _prompt()
     i = p.index("LEAVE CLEAN")
     before = p[max(0, i - 400) : i]
-    assert "can_stop=true" in before, "LEAVE CLEAN must sit behind the gate, not stand alone"
+    assert "finished=true" in before, "LEAVE CLEAN must sit behind the verdict, not stand alone"
+    assert "finish_round()" in before
 
 
 def test_the_usual_reasons_to_stop_early_are_refused():
@@ -53,7 +55,13 @@ def test_beating_the_band_is_not_a_fault():
 
 
 def test_a_genuine_dead_end_can_still_finish_cleanly():
-    """Not an infinite loop: everything reachable measured and recorded is a real ending."""
+    """Not an infinite loop: everything reachable measured and recorded is a real ending, and
+    finish_round is told to answer finished=true for it."""
     p = _prompt()
-    assert "nothing is left to try" in p
+    assert "no material op has an attempt left to try" in p
     assert "say WHICH and by how many ms" in p, "the next round has to know where to start"
+
+
+def test_the_agent_may_not_end_a_round_the_gate_refused():
+    p = _prompt()
+    assert "Do not end a round without calling it, and do not end one it refused." in p

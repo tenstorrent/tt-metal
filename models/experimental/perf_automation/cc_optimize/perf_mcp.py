@@ -6888,6 +6888,103 @@ def _stage_gap_share(profile) -> dict:
     return out
 
 
+def _round_finish_path():
+    """Where finish_round's last verdict is written, keyed like every other per-run state file."""
+    model = _MODEL_ROOT.name if _MODEL_ROOT else "model"
+    task = os.environ.get("PERF_MCP_TASK", "main")
+    return state_dir() / ("perf_mcp_round_finish_%s_%s.json" % (model, task))
+
+
+def _record_round_finish(verdict: dict) -> None:
+    """Persist the verdict so the LOOP can tell a round that asked from one that just exited.
+
+    Best-effort and silent on failure: a record that cannot be written must not cost the round the
+    answer it came for.
+    """
+    try:
+        _p = _round_finish_path()
+        _p.parent.mkdir(parents=True, exist_ok=True)
+        _p.write_text(json.dumps({"at": time.time(), **(verdict or {})}, default=str))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def read_round_finish() -> dict:
+    """The last finish_round verdict, or {} when the round never asked. Read by the loop."""
+    try:
+        return json.loads(_round_finish_path().read_text()) or {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+@mcp.tool()
+def finish_round() -> dict:
+    """THE ONLY WAY TO END A ROUND. Returns finished=true, or refuses and hands back the work left.
+
+    The run-level condition is enforced in code -- the loop reads can_stop and will not exit while it
+    is false. The ROUND-level condition was only a sentence in the prompt, and nothing checked it: the
+    loop calls the agent, the agent's process exits, and `rounds += 1` accepts that unconditionally.
+    So an agent could end a round for any reason and the tool had no opinion. Measured on voxtral
+    2026-09-04: thirteen rounds in a row ended with the agent writing a progress summary while the
+    prompt-stage stack sat 125 ms above its band, and every one was accepted.
+
+    An instruction the tool never checks is a suggestion. This makes the round's ending pass through
+    the same gate the run's does: ask, and be told no while stacks still owe their band.
+
+    NOT A TRAP. It returns finished=true when there is genuinely nothing left to work -- every stack
+    inside its band, or no untried material op remaining, which is the same escape the prompt already
+    described. A round that has actually run out of moves ends cleanly and the loop starts a fresh
+    one; only a round ending EARLY is refused.
+
+    The agent can still exit without calling this -- no tool can stop a process from returning. What
+    it cannot do any more is end early having ASKED and been told to continue, and the refusal is
+    recorded so the loop can say a round ended without it.
+    """
+    _short = _stages_short_of_achievable()
+    _verdict: dict = {"finished": True, "stages_short_of_achievable": _short}
+    if not _short:
+        _verdict["why"] = "every priced stack is inside its achievable band"
+        _record_round_finish(_verdict)
+        return _verdict
+    # STILL SHORT -- but only refuse while there is something left to try. Everything reachable
+    # already measured and recorded is a real ending, and refusing it would spin a round forever.
+    try:
+        # THE GATE'S OWN ANSWER, not a second one. termination_check already builds the blocking list
+        # and already names what has no attempt yet; asking it here means finish_round and the target
+        # the agent was handed can never disagree about what is left.
+        _tc = termination_check
+        for _a in ("fn", "func", "_fn", "__wrapped__"):
+            if hasattr(_tc, _a):
+                _tc = getattr(_tc, _a)
+                break
+        _rep = _tc() or {}
+        _left = _untried_material_ops(_rep.get("blocking_ops") or [], _load_attempts_all())
+    except Exception:  # noqa: BLE001 -- a check that cannot run must not trap the round
+        _left = []
+    if not _left:
+        _verdict["why"] = (
+            "stacks still owe their band, but every material op has a recorded attempt -- "
+            "nothing reachable is left this round"
+        )
+        _record_round_finish(_verdict)
+        return _verdict
+    _verdict["finished"] = False
+    _verdict["untried_material_ops"] = _left[:8]
+    _verdict["why"] = (
+        "NOT FINISHED. %s still above its own achievable band (%s), and %d material op(s) have no "
+        "recorded attempt yet. Go back to the top of the LOOP: call termination_check, take the next "
+        "target -- prefer ops in the stacks named here -- and work its rung. Banking wins and writing "
+        "a summary is not an ending while this list is non-empty."
+        % (
+            ", ".join(str(r.get("stage")) for r in _short),
+            "; ".join("%s %.1fms over" % (r.get("stage"), r.get("over_by_ms") or 0.0) for r in _short),
+            len(_left),
+        )
+    )
+    _record_round_finish(_verdict)
+    return _verdict
+
+
 @mcp.tool()
 def termination_check() -> dict:
     """THE BINDING STOP GATE and SOLE authority on 'optimize more or not' — you may declare DONE ONLY
