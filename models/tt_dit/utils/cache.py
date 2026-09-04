@@ -58,14 +58,16 @@ def source_id(path: str | Path) -> str:
 
     A HuggingFace hub blob is stored under its own git-lfs sha256, so for the common case the
     resolved filename *is* an exact content hash and costs one `readlink` — no read of the 46GB
-    file. Anything else falls back to size+mtime, which catches a re-download or a swapped file
-    but not an in-place rewrite that preserves both.
+    file. Anything else falls back to size, mtime, ctime and inode. A re-download or a swapped
+    file changes at least one; ctime closes the aliasing gap a plain size+mtime key leaves, since
+    the kernel bumps it on any write and userspace cannot reset it, so even a metadata-preserving
+    copy that restores size and mtime is still caught (its ctime and inode differ).
     """
     p = Path(path).resolve()
     st = p.stat()
     if p.parent.name == "blobs" and len(p.name) == 64 and all(c in "0123456789abcdef" for c in p.name):
         return f"sha256:{p.name}"
-    return f"stat:{st.st_size}:{st.st_mtime_ns}"
+    return f"stat:{st.st_size}:{st.st_mtime_ns}:{st.st_ctime_ns}:{st.st_ino}"
 
 
 def module_signature(module: Module) -> str:
