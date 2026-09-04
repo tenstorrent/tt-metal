@@ -434,6 +434,7 @@ ttnn::device_operation::ProgramArtifacts BatchNormOperation::BatchNormFactory::c
     KernelSpec::CompileTimeArgs compute_compile_time_args{
         {"weight_has_value", static_cast<uint32_t>(weight_has_value)},
         {"bias_has_value", static_cast<uint32_t>(bias_has_value)},
+        {"needs_output_typecast", static_cast<uint32_t>(needs_output_typecast)},
     };
     KernelSpec::CompilerOptions::Defines compute_defines;
     if (use_sfpu_kernel) {
