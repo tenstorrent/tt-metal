@@ -2023,16 +2023,21 @@ class ttMLA:
             # mesh IS the sp*tp linearization, so ONE full-mesh (snake-ring) gather rebuilds the slab in
             # the same order the TP-inner -> SP-outer route produces. Where the snake cannot close its
             # ring, _gather_kvpe_prefix_tp_sharded_high_bw does it in two axis gathers instead.
+            can_full_mesh = self._can_full_mesh_gather_kvpe(kvpe_cache.storage)
+            if overlap_resources is not None and not can_full_mesh:
+                raise ValueError(
+                    "sparse MLA overlap with TP-sharded KV requires the single full-mesh gather; "
+                    "the two-axis fallback does not support overlap resources"
+                )
             gather = (
-                self._gather_kvpe_prefix_full_mesh
-                if self._can_full_mesh_gather_kvpe(kvpe_cache.storage)
-                else self._gather_kvpe_prefix_tp_sharded_high_bw
+                self._gather_kvpe_prefix_full_mesh if can_full_mesh else self._gather_kvpe_prefix_tp_sharded_high_bw
             )
             return gather(
                 kvpe_cache,
                 cache_batch_idx,
                 populated_global,
                 block_cyclic_chunk_local=block_cyclic_chunk_local,
+                **({"overlap_resources": overlap_resources} if can_full_mesh else {}),
             )
 
         storage = kvpe_cache.storage
@@ -2147,6 +2152,7 @@ class ttMLA:
         populated_global: int,
         *,
         block_cyclic_chunk_local: int,
+        overlap_resources=None,
     ) -> MlaKvCache:
         """_gather_kvpe_prefix for an SP*TP-DEDUPED cache: ONE full-mesh snake gather.
 
@@ -2166,8 +2172,7 @@ class ttMLA:
         )
         assert gathered_dim_size > 0
         assert self._sparse_kv_gather_buffer is not None
-        gathered = ttnn.experimental.high_bw_all_gather(
-            storage,
+        gather_kwargs = dict(
             dim=2,
             output_tensor=self._sparse_kv_gather_buffer,
             num_links=self.ccl_num_links,
@@ -2175,6 +2180,14 @@ class ttMLA:
             input_batch_index=slot_lo,
             gathered_dim_size=gathered_dim_size,
         )
+        if overlap_resources is not None:
+            gather_kwargs.update(
+                subdevice_id=overlap_resources.gather_subdevice_id,
+                sub_core_grids=overlap_resources.gather_core_grid,
+                ready_semaphore=overlap_resources.ready_semaphore,
+                data_valid_semaphore=overlap_resources.data_valid_semaphore,
+            )
+        gathered = ttnn.experimental.high_bw_all_gather(storage, **gather_kwargs)
         return MlaKvCache(
             format=kvpe_cache.format,
             storage=gathered,
