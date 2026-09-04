@@ -178,22 +178,13 @@ inline void _topk_uint16_move_dest_tile_to_pack_half_(std::uint32_t dst_tile_ind
     set_dst_write_addr(0);
 }
 
-// Fused-key stable topk: pack each datum into one 32-bit word [bf16 value | u16 index'] where
-// index' = index XOR (0xFFFF iff (value_sign == 0) XNOR largest). Sign-magnitude SFPSWAP order on
-// the packed word is then a strict total order whose value-tie order is the requested torch-stable
-// order in BOTH global directions, and stays correct under the network's internal direction
-// alternation (mirror runs) — so the plain UNSTABLE swap network sorts it. Requires 32-bit DEST
-// (values exact-widened to [bf16|0x0000] by the fp32-dest datacopy) and raw INT32 load/store for
-// every touch of a packed word (a float-mode store would denormal-flush 0x0000xxxx keys).
-//
-// _topk_fuse_tile_ consumes the u16 index tiles at DEST offset 128 (garbage high bits per #50215,
-// masked here) and packs into the value tiles at offset 0; the index region is dead afterwards.
-// _topk_defuse_tile_ restores the pre-fuse layout: [bf16|0x0000] value words in place, u16 indices
-// back at offset 128 (index_store_mode selects raw INT32 or the mode-9 low->high store the packer
-// needs to read u16 from 32-bit DEST). Both are one-shot O(tile) sweeps called explicitly by the
-// kernel (fuse once per fresh slab with the GLOBAL direction — never per network call; defuse once
-// on the final output), and both record over replay slots 0..9, so the fuse poisons
-// topk_replay_init to force the network to re-record its load/store/phase windows.
+// Fused-key stable topk. Each datum becomes one 32-bit word: the bf16 value in the high half, its
+// u16 index in the low half. SFPSWAP compares words by sign and magnitude, so equal values are
+// ordered by the index bits and the plain unstable network sorts stably. So that the LOWER index
+// wins a tie in the requested direction, the index is complemented (XOR 0xFFFF) for positive values
+// when sorting descending and for negative values when sorting ascending.
+// Needs 32-bit DEST and raw INT32 loads/stores. Fuse each newly loaded pair of tiles once, after
+// they are transposed into DEST and before their local sort; defuse each output tile once.
 template <bool largest>
 inline void _topk_fuse_tile_()
 {
@@ -327,15 +318,9 @@ inline void _topk_defuse_tile_(const int num_tiles)
 // write to LREG0..3 or a programmable-constant read. The standalone sweeps
 // below run while LREG4..7 are dead, so their load captures are harmless.
 
-// Stamp ONE value tile (dst_tile_index 0 or 1 within the slab) with sign-conditioned rank tags
-// rank_base + [0, 32): the tile's 32 sequence positions offset by a caller-chosen base. rank_base
-// must be a multiple of 32 and rank_base + 31 must fit 16 bits, so the base ORs into the iota.
-// The k>32 insertion cascade stamps each accumulator tile with its round-start CHAIN position
-// range (32 * level) and the fresh chunk with the top range (32 * output_tiles) exactly once per
-// round; the loser tile's tags then RIDE the cascade unchanged, keeping every tag in the round
-// globally consistent with the true (value, index) order. Same per-vector body and -0.0 fold as
-// the 2-tile local-position stamp below, which is expressed as two calls of this sweep.
-// Clobbers LREG0..2 and the lane enables (left fully enabled).
+// Stamp one value tile (dst tile 0 or 1) with sign-conditioned rank tags rank_base + [0, 32).
+// rank_base must be a multiple of 32 and rank_base + 31 must fit in 16 bits.
+// Clobbers LREG0..2 and leaves all lanes enabled.
 template <bool largest>
 inline void _topk_stamp_tile_rank_range_(std::uint32_t dst_tile_index, std::uint32_t rank_base)
 {

@@ -414,46 +414,11 @@ def test_topk_sfpu(
 # Adversarial stimuli coverage (test_topk_sfpu_adversarial)
 # =============================================================================
 #
-# The classes below drive the stable/fused topk engines with bit-pattern-level
-# stimuli (tie pileups, signed zeros, bf16 denormals, infinities, NaN
-# payloads) that the uniform stimuli of test_topk_sfpu can never produce.
-# Validation is done entirely in-test against per-row goldens; TopKGolden is
-# deliberately not used for these classes.
-#
-# Harness bit-transport constraints (measured on the host paths, no device):
-#   * Write path (pack_bfp16: torch bf16 -> f32 -> ml_dtypes bf16) quietizes
-#     sNaN payloads to the sign-preserved canonical qNaN (0x7F81 -> 0x7FC0,
-#     0xFFC0 -> 0xFFC0); +-0, denormals, +-inf and normals reach L1
-#     bit-exactly. Modeled by _model_write_path_bits.
-#   * Readback path (unpack_bfp16: bytes -> f32 -> python float -> torch bf16)
-#     collapses EVERY NaN to 0x7FC0, destroying payload AND sign; +-0,
-#     denormals, +-inf and normals read back bit-exactly. Modeled by
-#     _model_readback_bits.
-# Consequence: NaN payloads cannot be observed end-to-end through this
-# harness. NaN expectations are therefore expressed through the golden
-# hypotheses below instead of raw payload-bit assertions.
-#
-# Golden hypotheses:
-#   * canon golden (_canon_stable_golden) - PRIMARY. A silicon probe of the
-#     ttnn-level engines showed BOTH engines canonicalize identically before
-#     sorting: +-0 and all bf16 denormals -> +0.0 (0x0000); NaN -> same-sign
-#     infinity bits (0x7F80 / 0xFF80), genuinely tying with real same-sign
-#     inf; normals and +-inf stay bit-exact; ties break index-ascending.
-#     Whether this transfers exactly to the LLK harness level is not yet
-#     characterized, hence the fallback below.
-#   * bit-exact golden (_bitexact_stable_golden) - FALLBACK hypothesis for the
-#     comparator ("stable") engine at LLK level: value bits are preserved and
-#     compared in sign-magnitude total order (-NaN < -inf < negatives < -0 <
-#     +0 < positives < +inf < +NaN, i.e. -0 strictly below +0), ties breaking
-#     index-ascending.
-# For sort_mode == "fused" only the canon golden is asserted. For sort_mode ==
-# "stable" on the special classes (signed_zero, nan_payloads) the canon golden
-# is primary, but on a mismatch the bit-exact golden is also evaluated and the
-# failure message reports which golden (if either) matched. The normal-value
-# classes (neg_ties, mixed_sign_ties, tie_straddle_k, infinities) contain only
-# normals and real +-inf, where both engine canonicalization and harness
-# transport are identity, so the canon golden degenerates to a plain
-# torch-stable golden and is asserted strictly for both modes.
+# Bit-pattern stimuli (tie pileups, signed zeros, bf16 denormals, infinities, NaN
+# payloads) that the uniform stimuli above cannot produce, checked per row against
+# an in-test golden. Both engines canonicalize before sorting: +-0 and denormals
+# -> +0.0, NaN -> same-sign infinity bits, normals and +-inf kept, ties broken
+# index-ascending (measured on Blackhole silicon).
 
 _BF16_SIGN_MASK = 0x8000
 _BF16_EXP_MASK = 0x7F80
@@ -478,26 +443,6 @@ ADVERSARIAL_STIMULI_CLASSES = [
     "nan_payloads",
     "tie_straddle_k",
 ]
-
-# Classes made only of normal bf16 values and real +-inf: canonicalization and
-# harness transport are identity on them, one strict golden fits both engines.
-_CANON_INVARIANT_CLASSES = (
-    "neg_ties",
-    "mixed_sign_ties",
-    "tie_straddle_k",
-    "infinities",
-)
-
-# Special classes where the two golden hypotheses can diverge
-# (signed_zero, nan_payloads).
-_SPECIAL_CLASSES = tuple(
-    name for name in ADVERSARIAL_STIMULI_CLASSES if name not in _CANON_INVARIANT_CLASSES
-)
-
-# Primary golden hypothesis for the comparator ("stable") engine on the
-# special classes. Flip this single line to "bitexact" if LLK-level
-# characterization shows the comparator sorts bit-exactly.
-_STABLE_SPECIAL_PRIMARY_GOLDEN = "canon"
 
 _ADVERSARIAL_CLASS_SEED = {
     name: 0xAD00 + 257 * i for i, name in enumerate(ADVERSARIAL_STIMULI_CLASSES)
@@ -540,15 +485,6 @@ def _model_write_path_bits(bits_u16):
     return b.to(torch.uint16)
 
 
-def _model_readback_bits(bits_u16):
-    """Harness L1 readback path (unpack_bfp16 -> python floats -> torch bf16):
-    EVERY NaN collapses to 0x7FC0 (payload and sign destroyed); everything
-    else reads back bit-exactly."""
-    b = bits_u16.to(torch.int32)
-    b = torch.where(_is_nan_bits(b), torch.full_like(b, _BF16_QNAN), b)
-    return b.to(torch.uint16)
-
-
 def _canon_stable_golden(row_bits_u16, K, descending):
     """(expected_value_bits, expected_indices) under the canonicalizing-engine
     hypothesis: stable torch argsort (index-ascending ties) over the
@@ -559,20 +495,6 @@ def _canon_stable_golden(row_bits_u16, K, descending):
     values = canon.view(torch.bfloat16).to(torch.float32)
     order = torch.argsort(values, descending=descending, stable=True)[:K]
     return _gather_u16(canon, order), order
-
-
-def _bitexact_stable_golden(row_bits_u16, K, descending):
-    """(expected_value_bits, expected_indices) under the bit-exact comparator
-    hypothesis: values keep their bits and sort in sign-magnitude total order
-    (-NaN < -inf < negatives < -0 < +0 < positives < +inf < +NaN, so -0 is
-    strictly below +0), ties breaking index-ascending. Expected value bits are
-    the as-written bits; callers must still apply _model_readback_bits before
-    comparing against device output."""
-    b = row_bits_u16.to(torch.int32)
-    # Sign-magnitude bits -> totally ordered integer key (ascending).
-    keys = torch.where((b & _BF16_SIGN_MASK) != 0, 0xFFFF - b, b + _BF16_SIGN_MASK)
-    order = torch.argsort(keys, descending=descending, stable=True)[:K]
-    return _gather_u16(row_bits_u16, order), order
 
 
 def _adversarial_value_bits(stimuli_class, num_rows, w_values):
@@ -800,44 +722,20 @@ def test_topk_sfpu_adversarial(
     as_written_bits = _model_write_path_bits(row_bits)
 
     for row in range(num_rows):
-        canon_exp_bits, canon_exp_idx = _canon_stable_golden(
-            as_written_bits[row], K, descending
-        )
-        goldens = {"canon": (canon_exp_bits, canon_exp_idx)}
-
-        if stable_sort and stimuli_class in _SPECIAL_CLASSES:
-            # Comparator engine on a special class: evaluate both hypotheses
-            # so the failure message can say which one the silicon matches.
-            fb_exp_bits, fb_exp_idx = _bitexact_stable_golden(
-                as_written_bits[row], K, descending
-            )
-            goldens["bitexact"] = (_model_readback_bits(fb_exp_bits), fb_exp_idx)
-            primary = _STABLE_SPECIAL_PRIMARY_GOLDEN
-        else:
-            # Fused engine (silicon-confirmed canon family) and all
-            # canon-invariant classes: canon golden only. For the
-            # canon-invariant classes it degenerates to a plain torch-stable
-            # golden (canonicalization is identity on normals and +-inf).
-            primary = "canon"
-
-        matched = {
-            name: torch.equal(res_indices[row], exp_idx)
-            and torch.equal(res_value_bits[row], exp_bits)
-            for name, (exp_bits, exp_idx) in goldens.items()
-        }
-        if matched[primary]:
+        exp_bits, exp_idx = _canon_stable_golden(as_written_bits[row], K, descending)
+        if torch.equal(res_indices[row], exp_idx) and torch.equal(
+            res_value_bits[row], exp_bits
+        ):
             continue
-
-        lines = [
-            f"topk adversarial mismatch: class={stimuli_class} mode={sort_mode} "
-            f"direction={sort_direction.name} row={row} (primary golden: {primary})"
-        ]
-        for name, (exp_bits, exp_idx) in goldens.items():
-            lines.append(
-                f"  golden '{name}': {'MATCHED' if matched[name] else 'mismatched'}"
+        pytest.fail(
+            "\n".join(
+                [
+                    f"topk adversarial mismatch: class={stimuli_class} mode={sort_mode} "
+                    f"direction={sort_direction.name} row={row}",
+                    f"  expected indices:    {exp_idx.tolist()}",
+                    f"  expected value bits: {_hex_row(exp_bits)}",
+                    f"  result indices:      {res_indices[row].tolist()}",
+                    f"  result value bits:   {_hex_row(res_value_bits[row])}",
+                ]
             )
-            lines.append(f"    expected indices:    {exp_idx.tolist()}")
-            lines.append(f"    expected value bits: {_hex_row(exp_bits)}")
-        lines.append(f"  result indices:    {res_indices[row].tolist()}")
-        lines.append(f"  result value bits: {_hex_row(res_value_bits[row])}")
-        pytest.fail("\n".join(lines))
+        )
