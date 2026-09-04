@@ -26,8 +26,8 @@ mkdir -p "$CACHE_DIR"
 export TT_METAL_HOME="$WT"
 export PYTHONPATH="$WT"
 export TT_METAL_CACHE="$CACHE_DIR"
-export LTX_CHECKPOINT="${LTX_CHECKPOINT:-/home/kevinmi/.cache/huggingface/hub/models--Lightricks--LTX-2.3/snapshots/76730e634e70a28f4e8d51f5e29c08e40e2d8e74/ltx-2.3-22b-distilled-1.1.safetensors}"
-export GEMMA_PATH="${GEMMA_PATH:-/home/kevinmi/.cache/huggingface/hub/models--google--gemma-3-12b-it-qat-q4_0-unquantized/snapshots/68f7ee4fbd59087436ada77ed2d62f373fdd4482/}"
+export LTX_CHECKPOINT="${LTX_CHECKPOINT:-/home/models/ltx-2.3/ltx-2.3-22b-distilled-1.1.safetensors}"
+export GEMMA_PATH="${GEMMA_PATH:-/home/models/gemma-3-12b-it-qat-q4_0-unquantized/}"
 export TT_DIT_CACHE_DIR="${TT_DIT_CACHE_DIR:-/home/smarton/.cache/tt-dit}"
 export LTX_TRACED=0   # eager path runs the torch-oracle PCC gate
 
