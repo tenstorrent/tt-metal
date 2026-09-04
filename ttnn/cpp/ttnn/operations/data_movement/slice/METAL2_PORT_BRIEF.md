@@ -21,7 +21,7 @@
 > `METAL2_PREPORT_AUDIT.md` → *Post-audit reconciliation*, which also explains the one substantive
 > finding difference (that branch already dropped the `TensorAccessor` 3rd args).
 
-**Scope:** one DeviceOperation, **five** program factories, **nine** slice-owned kernels + **one**
+**Scope:** one DeviceOperation, **five** program factories, **ten** slice-owned kernels + **one**
 cross-family donor kernel, **seven** CBs, **twelve** tensor bindings. Two kernel files in the op
 directory are **unreferenced** and out of scope — do not touch
 `device/kernels/dataflow/strided_slice_reader_rm_interleaved_nd.cpp` or
