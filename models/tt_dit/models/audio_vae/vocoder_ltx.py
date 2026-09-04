@@ -472,6 +472,7 @@ class Vocoder(Module):
                 mesh_device=self.mesh_device,
                 parallel_config=self.parallel_config,
                 cache=self._tpad_mask_cache,
+                ccl_manager=self.ccl_manager,
             )
 
         cumrate = 1
