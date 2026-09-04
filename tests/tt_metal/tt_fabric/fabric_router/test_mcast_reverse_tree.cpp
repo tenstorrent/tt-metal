@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Reverse-tree multicast: tree construction, the arborescence gate over every root on both axes,
-// packing, the encode pass, and the per-chip L1 embed.
+// Reverse-tree multicast: single-parent tree construction for every root on both axes, packing, the
+// encode pass, and the per-chip L1 embed.
 //
 // Machine-free: MeshGraph and AxisRouteTopology need no cluster, so multi-host mesh shapes are
 // covered here on a single machine.
@@ -177,12 +177,12 @@ void check_prune_over_target_sets(
 
 void check_axis(const MeshGraph& mesh_graph, const AxisRouteTopology& topo, const std::string& label) {
     const MeshId mesh_id{0};
-    const auto gate = run_mcast_arborescence_gate(mesh_graph, mesh_id, topo);
-
-    ASSERT_TRUE(gate.passed) << label << ": root " << gate.failing_root << " failed the gate -- " << gate.failure;
-    ASSERT_EQ(static_cast<int>(gate.trees.size()), topo.axis_len) << label << ": expected one tree per root";
-
-    for (const auto& tree : gate.trees) {
+    for (int root = 0; root < topo.axis_len; root++) {
+        std::string build_failure;
+        const auto built_tree = build_mcast_reverse_tree(mesh_graph, mesh_id, topo, root, &build_failure);
+        ASSERT_TRUE(built_tree.has_value())
+            << label << ": root " << root << " does not form a single-parent tree -- " << build_failure;
+        const auto& tree = *built_tree;
         const std::string where = label + " T(" + std::to_string(tree.root) + ")";
 
         EXPECT_EQ(static_cast<int>(tree.edges.size()), topo.axis_len - 1) << where << ": edge count";
@@ -197,7 +197,7 @@ void check_axis(const MeshGraph& mesh_graph, const AxisRouteTopology& topo, cons
             EXPECT_EQ(edge.parent_output, it->second.second) << where << ": command into row " << edge.child;
         }
 
-        // Indegree 1 everywhere but the root.
+        // Every non-root row appears as a child exactly once.
         std::set<int> children;
         for (const auto& edge : tree.edges) {
             EXPECT_TRUE(children.insert(edge.child).second) << where << ": row " << edge.child << " has two parents";
@@ -248,7 +248,7 @@ void check_fixture(const std::string& fixture) {
     check_axis(mesh_graph, *express, fixture + " Y");
 
     // X is the ordinary four-column ring: E/W only, no chords. A multicast encodes both axes, so
-    // both are gated.
+    // every root on both must form a single-parent tree.
     const auto ordinary_x = derive_ordinary_ring_topology(mesh_graph, MeshId{0}, 1);
     ASSERT_TRUE(ordinary_x.has_value()) << fixture << ": X dimension does not close into a ring";
     check_axis(mesh_graph, *ordinary_x, fixture + " X");
@@ -697,10 +697,16 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
         64);
 }
 
-TEST(McastReverseTreeTest, Gate8x4) { check_fixture("express_links_8x4_mesh_graph_descriptor.textproto"); }
-TEST(McastReverseTreeTest, Gate16x4) { check_fixture("express_links_16x4_mesh_graph_descriptor.textproto"); }
-TEST(McastReverseTreeTest, Gate24x4) { check_fixture("express_links_24x4_mesh_graph_descriptor.textproto"); }
-TEST(McastReverseTreeTest, Gate32x4) { check_fixture("express_links_32x4_mesh_graph_descriptor.textproto"); }
+TEST(McastReverseTreeTest, AllRootsFormTrees8x4) { check_fixture("express_links_8x4_mesh_graph_descriptor.textproto"); }
+TEST(McastReverseTreeTest, AllRootsFormTrees16x4) {
+    check_fixture("express_links_16x4_mesh_graph_descriptor.textproto");
+}
+TEST(McastReverseTreeTest, AllRootsFormTrees24x4) {
+    check_fixture("express_links_24x4_mesh_graph_descriptor.textproto");
+}
+TEST(McastReverseTreeTest, AllRootsFormTrees32x4) {
+    check_fixture("express_links_32x4_mesh_graph_descriptor.textproto");
+}
 
 }  // namespace
 }  // namespace tt::tt_fabric::mcast_reverse_tree_tests

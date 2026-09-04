@@ -77,9 +77,9 @@ std::optional<AxisRouteTopology> derive_ordinary_ring_topology(const MeshGraph& 
 
 // The plain line along `axis`: one domain in coordinate order, no chords, and no closing edge
 // (wraps == false). Always derivable, so it is the fallback that guarantees every 2D mesh has an axis
-// topology on both dimensions. Trivially an arborescence from every root, so the multicast
-// one-feeder-per-row gate always passes on a line. Throws only if an interior edge is missing, which
-// means the axis is not a line either.
+// topology on both dimensions. Routes from any root give every other row exactly one parent, so the
+// multicast reverse-tree representation always works on a line. Throws only if an interior edge is
+// missing, which means the axis is not a line either.
 AxisRouteTopology derive_line_axis_topology(const MeshGraph& mesh_graph, MeshId mesh_id, int axis);
 
 // The topology governing `axis`, in precedence order: express chords where declared for that axis,
