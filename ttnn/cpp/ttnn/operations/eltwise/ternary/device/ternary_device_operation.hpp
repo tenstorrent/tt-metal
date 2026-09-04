@@ -54,13 +54,8 @@ struct TernaryDeviceOperation {
 
         // Cache-hit re-apply of ALL per-core runtime args, IN PLACE on the cached program -- no
         // descriptor rebuild and no kernel recompile, but the work split and every shape-dependent
-        // arg (strides, D/N/C/Ht/Wt, per-core tile counts, start ids, freq/counter, packed scalar,
-        // buffer addresses) ARE re-derived for the current tensors, via the same shared builder
-        // create_descriptor() uses.  compute_program_hash coarsens each input to its padded volume,
-        // so one cached program is shared across shapes whose dims differ but multiply to the same
-        // product; re-applying only addresses left the rest frozen at the first-miss shape and
-        // silently corrupted the result (issue #54235).  Sharded, tensor-backed CBs are re-pointed
-        // here too.  See the .cpp.
+        // arg is re-derived for the current tensors, via the same shared builder
+        // create_descriptor() uses.
         static void override_runtime_arguments(
             tt::tt_metal::Program& program,
             const operation_attributes_t& operation_attributes,
