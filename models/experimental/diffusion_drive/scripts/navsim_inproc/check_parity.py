@@ -28,21 +28,12 @@ import os
 
 import torch
 
+from models.common.utility_functions import comp_pcc
+
 # Sibling import: running this script puts its own dir on sys.path[0], so the
 # agent module (imported as a bare top-level module, like the hydra _target_) is
 # found here too.
 from diffusiondrive_ttnn_inproc_agent import DiffusionDriveTtnnInprocAgent
-
-
-def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
-    a = a.float().flatten()
-    b = b.float().flatten()
-    a = a - a.mean()
-    b = b - b.mean()
-    denom = (a.norm() * b.norm()).item()
-    if denom < 1e-12:
-        return 1.0
-    return (a @ b).item() / denom
 
 
 def main() -> None:
@@ -88,7 +79,7 @@ def main() -> None:
     print(f"[parity] agent trajectory shape     {tuple(agent_out['trajectory'].shape)}")
 
     # 5. PCC on the trajectory (the only output PDM scores).
-    traj_pcc = _pcc(agent_out["trajectory"], ref_out["trajectory"])
+    traj_pcc = comp_pcc(ref_out["trajectory"], agent_out["trajectory"])[1]
     print(f"\n[parity] trajectory PCC = {traj_pcc:.6f}  (threshold {args.threshold})")
 
     agent._close()

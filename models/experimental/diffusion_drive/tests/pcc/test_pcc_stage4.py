@@ -20,19 +20,9 @@ from __future__ import annotations
 import pytest
 import torch
 
+from models.common.utility_functions import comp_pcc
 from models.experimental.diffusion_drive.reference.model import DiffusionDriveConfig, DiffusionDriveModel
 from models.experimental.diffusion_drive.tt.ttnn_diffusion_drive import TtnnDiffusionDriveModel
-
-
-def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
-    a = a.float().flatten()
-    b = b.float().flatten()
-    a = a - a.mean()
-    b = b - b.mean()
-    denom = (a.norm() * b.norm()).item()
-    if denom < 1e-12:
-        return 1.0
-    return (a @ b).item() / denom
 
 
 @pytest.mark.timeout(300)
@@ -68,7 +58,9 @@ def test_stage4_consolidated_perception_pcc(device, model_config) -> None:
     torch.manual_seed(1234)  # same noise stream
     ttnn_out = ttnn_model(features)
 
-    results = {k: _pcc(ttnn_out[k], ref_out[k]) for k in ("trajectory", "scores", "agent_states", "agent_labels")}
+    results = {
+        k: comp_pcc(ref_out[k], ttnn_out[k])[1] for k in ("trajectory", "scores", "agent_states", "agent_labels")
+    }
     for k, v in results.items():
         print(f"{k:14s} PCC = {v:.6f}")
     for k, v in results.items():
