@@ -89,6 +89,29 @@ struct Shape {
 // someone writes Shape<1, 32> meaning a row-form tile and gets a 1x32 block of full tiles.
 template <uint32_t Rows, uint32_t Cols>
 struct Tile {
+    // LEGAL SHAPES, from metal's own table -- TILE_FACE_HW_CHOICES in
+    // `tt_metal/impl/data_format/tile.cpp:19`, twelve entries, everything else throwing "Tile
+    // size is not valid for our hardware" when the host constructs the Tile. Rows may be
+    // 1, 2, 4, 8, 16 or 32 and columns 16 or 32; the face shape follows from the pair.
+    //
+    // Asserted HERE rather than left to the host, because the host's version of this error
+    // arrives from a launcher a long way from the kernel that asked for the shape, and says
+    // nothing about which buffer it was.
+    //
+    // What is NOT in that table is the reason B4 exists: nothing one column wide, and no
+    // 32x1. A [K, 1] operand cannot be held in a 32x1 tile, so it lives in a 32x32 one with
+    // columns 1..31 padded -- which is why the matmul inner dimension is checked in TILES,
+    // with the tile SHAPES checked for compatibility beside it; see MatmulGeometry.
+    static_assert(
+        Rows == 1 || Rows == 2 || Rows == 4 || Rows == 8 || Rows == 16 || Rows == 32,
+        "a tile's HEIGHT must be 1, 2, 4, 8, 16 or 32 -- see TILE_FACE_HW_CHOICES in "
+        "tt_metal/impl/data_format/tile.cpp, which is what the host validates against");
+    static_assert(
+        Cols == 16 || Cols == 32,
+        "a tile's WIDTH must be 16 or 32: a face is 16 wide and a tile is one or two faces "
+        "across, so there is no narrower tile to ask for -- see TILE_FACE_HW_CHOICES in "
+        "tt_metal/impl/data_format/tile.cpp");
+
     using extent = Shape<Rows, Cols>;
     static constexpr uint32_t rows = Rows;
     static constexpr uint32_t cols = Cols;
@@ -142,6 +165,7 @@ using retile = typename retile_impl<TileShape, S>::type;
 // point: it makes a geometry mismatch a build error rather than sparse data.
 template <typename A, typename B>
 inline constexpr bool same_shape_v = std::is_same<A, B>::value;
+
 
 // ---------------------------------------------------------------------------
 // LOGICAL extents: the innermost two dimensions multiplied out by the tile.
