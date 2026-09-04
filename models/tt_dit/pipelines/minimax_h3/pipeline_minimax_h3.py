@@ -197,10 +197,21 @@ class MiniMaxH3ArenaCaps:
     @classmethod
     def for_task(cls, task: str) -> "MiniMaxH3ArenaCaps":
         """Defaults sized to the task's envelope. t2va/fl2va use the field defaults; ref2va needs a
-        larger prompt (vision tokens: ~36.9k for nine image references) and much larger conditioning
-        (nine 2048px images at 4096 rows each). Sizes trace the audit's card-compliant class table."""
+        larger prompt and much larger conditioning.
+
+        Conditioning: an image reference is 4,096 rows, a 5 s clip 18,432 (measured on the quad:
+        2 images + 3 clips = 63,488; 3 + 3 = 67,584). The serving policy admits up to nine images AND
+        three clips of 15 s combined, i.e. 36,864 + 55,296 = 92,160 rows, so that is the cap --
+        anything lower admits a legal request at the API and fails it on device, after the encode
+        (tt-inference-server#5044; 40,960 did exactly that for 2 images + 3 clips).
+
+        Prompt: nine image references contribute 36,864 vision tokens; the documented working points
+        run 39-512 text tokens, so 38,400 leaves ~1,500 text tokens beside a full set of images. It
+        is trimmed from 40,960 so the caps' admissible packed length (38,400 + 92,160 + 1,216 +
+        111,712 + 2,048 = 245,536) stays under the ref2va ladder's top rung (245,760), which
+        `__init__` asserts. Sizes trace the audit's card-compliant class table."""
         if task == "ref2va":
-            return cls(prompt=40960, condition_video_rows=40960, condition_audio_rows=2048)
+            return cls(prompt=38400, condition_video_rows=92160, condition_audio_rows=2048)
         return cls()
 
     def validate(self) -> None:

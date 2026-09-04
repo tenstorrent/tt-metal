@@ -468,6 +468,17 @@ def _get_inter_host_axis(mesh_device: ttnn.MeshDevice, view, mesh_shape: tuple[i
     return 0
 
 
+def _output_buffer(out: torch.Tensor | None, shape: list[int], dtype: torch.dtype) -> torch.Tensor:
+    """The caller's ``out`` when given (shape and dtype must match; a strided view is fine), else a fresh one."""
+    if out is None:
+        return torch.empty(shape, dtype=dtype)
+    if list(out.shape) != list(shape) or out.dtype != dtype:
+        raise ValueError(
+            f"out has shape {tuple(out.shape)} / {out.dtype}, the reassembled tensor is {tuple(shape)} / {dtype}"
+        )
+    return out
+
+
 def _reassemble_2d(
     mesh_coords: list,
     shards: list[torch.Tensor],
@@ -476,13 +487,16 @@ def _reassemble_2d(
     concat_dims: list[int | None],
     permute: tuple[int, ...] | None = None,
     dtype: torch.dtype | None = None,
+    out: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Reassemble per-device shards into a single tensor for a 2D mesh.
 
     For the common case where both axes are concatenated, writes each shard
     directly into a pre-allocated output buffer.  When *permute* and/or *dtype*
     are given the permutation and type conversion are fused into the scatter
-    write, halving total memory traffic.
+    write, halving total memory traffic.  *out*, when given, is that buffer:
+    a caller reading a large tensor in pieces hands in a view of its final
+    tensor and the shards land there directly, with no second copy.
     """
     d0, d1 = concat_dims
 
@@ -500,10 +514,10 @@ def _reassemble_2d(
 
         out_dtype = dtype if dtype is not None else shards[0].dtype
         if permute is not None:
-            out = torch.empty([full_shape[p] for p in permute], dtype=out_dtype)
+            out = _output_buffer(out, [full_shape[p] for p in permute], out_dtype)
             d0_out = list(permute).index(d0)
         else:
-            out = torch.empty(full_shape, dtype=out_dtype)
+            out = _output_buffer(out, full_shape, out_dtype)
             d0_out = d0
 
         for coord, shard in zip(mesh_coords, shards):
@@ -527,7 +541,7 @@ def _reassemble_2d(
             d0_out = perm_list.index(d0)
             d1_out = perm_list.index(d1)
 
-            out = torch.empty(out_shape, dtype=out_dtype)
+            out = _output_buffer(out, out_shape, out_dtype)
             for coord, shard in zip(mesh_coords, shards):
                 r, c = int(coord[0]), int(coord[1])
                 slices = [slice(None)] * ndim
@@ -537,7 +551,7 @@ def _reassemble_2d(
             return out
 
         out_dtype = dtype if dtype is not None else shards[0].dtype
-        out = torch.empty(full_shape, dtype=out_dtype)
+        out = _output_buffer(out, full_shape, out_dtype)
         for coord, shard in zip(mesh_coords, shards):
             r, c = int(coord[0]), int(coord[1])
             slices = [slice(None)] * ndim
@@ -548,10 +562,13 @@ def _reassemble_2d(
 
     if d0 is not None:
         by_pos = sorted(zip(mesh_coords, shards), key=lambda x: int(x[0][0]))
-        return torch.cat([s for _, s in by_pos], dim=d0)
+        return torch.cat([s for _, s in by_pos], dim=d0, out=out)
     if d1 is not None:
         by_pos = sorted(zip(mesh_coords, shards), key=lambda x: int(x[0][1]))
-        return torch.cat([s for _, s in by_pos], dim=d1)
+        return torch.cat([s for _, s in by_pos], dim=d1, out=out)
+    if out is not None:
+        out.copy_(shards[0])
+        return out
     return shards[0]
 
 
@@ -565,6 +582,8 @@ def fast_device_to_host(
     pre_transfer_fn: Callable[[ttnn.Tensor], ttnn.Tensor] | None = None,
     permute: tuple[int, ...] | None = None,
     dtype: torch.dtype | None = None,
+    persistent_gather_buffer: bool = True,
+    out: torch.Tensor | None = None,
 ) -> torch.Tensor | None:
     """Fast D2H transfer using async DMA and zero-copy to_torch.
 
@@ -597,6 +616,17 @@ def fast_device_to_host(
             intermediate tensor in the original layout is ever materialised.
         dtype: Output dtype.  When combined with ``permute``, the dtype
             conversion is fused into the scatter write (single-pass copy).
+        persistent_gather_buffer: Multi-host only. ``True`` (default) lets the
+            inter-host all_gather write into the CCL manager's ping-pong
+            buffers, which are allocated once per gathered shape and never
+            freed -- right for a tensor read back on every step, wasteful for a
+            one-shot read of a large tensor, where two copies of the gathered
+            shape stay resident for the life of the process. ``False`` gathers
+            into a transient buffer that is released with the result.
+        out: Host tensor (or strided view) the reassembled result is written
+            into; its shape and dtype must match the result. Lets a caller
+            that reads a large tensor piece by piece land every piece in its
+            final place without a second copy.
     """
     mesh_shape = tuple(mesh_device.shape)
 
@@ -634,7 +664,7 @@ def fast_device_to_host(
                 dim=inter_dim,
                 mesh_axis=inter_host_axis,
                 use_hyperparams=True,
-                use_persistent_buffer=True,
+                use_persistent_buffer=persistent_gather_buffer,
             )
 
             n_hosts = int(ttnn.distributed_context_get_size())
@@ -711,7 +741,7 @@ def fast_device_to_host(
             coord[intra_host_axis] = intra_remap[int(c[intra_host_axis])]
             local_coords.append(tuple(coord))
 
-        return _reassemble_2d(local_coords, shards, logical_shape, local_mesh_shape, concat_dims, permute, dtype)
+        return _reassemble_2d(local_coords, shards, logical_shape, local_mesh_shape, concat_dims, permute, dtype, out)
 
     # --- Single-host: async DMA on all devices + host-side concat -----------
 
@@ -735,7 +765,7 @@ def fast_device_to_host(
     trim = tuple(slice(0, d) for d in logical_shape)
     shards = [_to_torch_zero_copy(s)[trim] for s in host_shard_tensors]
 
-    return _reassemble_2d(mesh_coords, shards, logical_shape, mesh_shape, concat_dims, permute, dtype)
+    return _reassemble_2d(mesh_coords, shards, logical_shape, mesh_shape, concat_dims, permute, dtype, out)
 
 
 def upsample(

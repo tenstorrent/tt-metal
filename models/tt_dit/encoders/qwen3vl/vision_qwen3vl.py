@@ -410,7 +410,7 @@ def _gather_hidden(x: ttnn.Tensor, p: VisionParallel) -> ttnn.Tensor:
     if not p.tp:
         return x
     x, added = _with_batch_axis(x)
-    x = p.ccl_manager.all_gather_persistent_buffer(x, dim=-1, mesh_axis=p.tp_axis, use_hyperparams=True)
+    x = p.ccl_manager.all_gather_transient(x, dim=-1, mesh_axis=p.tp_axis, use_hyperparams=True)
     return _drop_batch_axis(x, added)
 
 
@@ -424,9 +424,7 @@ def _row_parallel_forward(linear, x: ttnn.Tensor, p: VisionParallel) -> ttnn.Ten
     if not p.tp:
         return linear.forward(x)
     x, added = _with_batch_axis(x)
-    out = p.ccl_manager.all_gather_persistent_buffer(
-        linear.forward(x), dim=-1, mesh_axis=p.tp_axis, use_hyperparams=True
-    )
+    out = p.ccl_manager.all_gather_transient(linear.forward(x), dim=-1, mesh_axis=p.tp_axis, use_hyperparams=True)
     return _drop_batch_axis(out, added)
 
 
@@ -456,7 +454,7 @@ def _row_parallel_seq_forward(linear, x: ttnn.Tensor, p: VisionParallel) -> ttnn
     # shard. Gather it back on the same sequence axis (dim 1 here) to reconstruct the full reduced
     # sequence, then drop the pad rows.
     out = linear.forward(x, reduce_scatter_dim=-2)
-    out = p.ccl_manager.all_gather_persistent_buffer(out, dim=1, mesh_axis=p.tp_axis, use_hyperparams=True)
+    out = p.ccl_manager.all_gather_transient(out, dim=1, mesh_axis=p.tp_axis, use_hyperparams=True)
     if npad:
         out = out[:, :rows, :]
     return _drop_batch_axis(out, added)
@@ -852,10 +850,10 @@ class Qwen3VlVisionAttention(Module):
         if cu_seqlens[0] != 0 or cu_seqlens[-1] != global_seq_len:
             msg = f"cu_seqlens must span [0, {global_seq_len}], got {cu_seqlens[0]}..{cu_seqlens[-1]}"
             raise ValueError(msg)
-        # Consecutive same-shape gathers land in the two halves of the ping-pong buffer pair, so the
-        # v gather does not clobber k.
-        k = ccl.all_gather_persistent_buffer(k, dim=-2, mesh_axis=sp_axis, use_hyperparams=True)
-        v = ccl.all_gather_persistent_buffer(v, dim=-2, mesh_axis=sp_axis, use_hyperparams=True)
+        # Transient gathers: k and v each get their own fresh buffer (nothing to clobber), and no
+        # request-length-keyed pair -- 340 MB each at nine image references -- outlives the request.
+        k = ccl.all_gather_transient(k, dim=-2, mesh_axis=sp_axis, use_hyperparams=True)
+        v = ccl.all_gather_transient(v, dim=-2, mesh_axis=sp_axis, use_hyperparams=True)
         cu_window = ttnn.from_torch(
             torch.tensor(cu_seqlens, dtype=torch.int32),
             device=self.mesh_device,
@@ -1168,20 +1166,17 @@ class Qwen3VlVisionModel(Module):
         a plain concatenation because SP shards rows contiguously (device `d` holds rows
         `[d * S/sp, (d+1) * S/sp)`), so device order equals token order for any number of blocks.
 
-        The `ttnn.clone` is load-bearing. Every CCL gather here writes into a persistent buffer that
-        `CCLManager` caches by `(shape, dim, mesh_axis)`, and all four mergers emit the SAME
-        `(tokens, out_hidden_size)` shape -- so they share one buffer. Deepstack features are retained
-        across the remaining blocks while later mergers gather into that buffer, so without the clone
-        they are silently overwritten (a feature reads PCC 0.009% while the output tokens read
-        99.99%). Cloning moves the result out of the buffer, as `Qwen3VlTextEncoder.forward` does for
-        its embedding gather.
+        The gather is transient on purpose. With the persistent variant all four mergers -- the same
+        `(tokens, out_hidden_size)` shape -- shared one cached ping-pong pair, so deepstack features
+        retained across the remaining blocks were overwritten by later mergers' gathers unless cloned
+        out (a feature read PCC 0.009% while the output tokens read 99.99%), and the pair itself,
+        302 MB per device at nine image references, stayed resident for the life of the process. A
+        fresh output per gather aliases nothing, so no clone, and nothing outlives the request.
         """
         if not (self._p.sp or self._p.tp):
             return x
         if self._p.sp:
             x, added = _with_batch_axis(x)
-            x = self._p.ccl_manager.all_gather_persistent_buffer(
-                x, dim=-2, mesh_axis=self._p.sp_axis, use_hyperparams=True
-            )
+            x = self._p.ccl_manager.all_gather_transient(x, dim=-2, mesh_axis=self._p.sp_axis, use_hyperparams=True)
             x = _drop_batch_axis(x, added)
-        return ttnn.clone(x)
+        return x

@@ -318,6 +318,7 @@ class MiniMaxH3Vae:
         pixel_norm: tuple[Sequence[float], Sequence[float]] | None = None,
         readback_uint8: bool = False,
         waves_per_device: int = 1,
+        readback_splits: int = 2,
     ) -> None:
         if task not in ("t2va", "ref2va"):
             raise ValueError(f"task must be 't2va' (also serves fl2va) or 'ref2va', got {task!r}")
@@ -361,6 +362,9 @@ class MiniMaxH3Vae:
         # bigger matmuls and fewer waves; 1 is the original one-tile-per-device schedule.
         assert waves_per_device >= 1, f"waves_per_device must be >= 1, got {waves_per_device}"
         self.waves_per_device = waves_per_device
+        # Column blocks per unit in the wave readback (see `_read_wave_units`). 1 reads a unit whole.
+        assert readback_splits >= 1, f"readback_splits must be >= 1, got {readback_splits}"
+        self.readback_splits = readback_splits
         # Pipeline warmup turns this off so the compile-pass decode does not dump a profile.
         self.log_profile = True
         self._encoder_state: dict[str, torch.Tensor] | None = None
@@ -499,11 +503,62 @@ class MiniMaxH3Vae:
         quantized *before* the host cross-fade rather than after, which costs at most 1 LSB: the blend
         is a convex combination, so blending quantized values and quantizing a blend differ only by
         the rounding. It needs ``pixel_denorm``, since the cast maps ``[-1, 1]``.
+
+        The fast path is read **piecewise**: one unit at a time, and each unit in ``readback_splits``
+        tile-aligned column blocks. On a multi-host mesh ``fast_device_to_host`` all-gathers along the
+        inter-host axis, ``repeat``s the result once per host and ``mesh_partition``s it so every host
+        can DMA the whole wave from its own devices. On the quad (4x32, the 32-wide axis is the one
+        that crosses hosts) a whole (2, 1824, 3072) bf16 wave gathers to 717 MB per device and the
+        repeat to 2.87 GB -- exactly the "Not enough space to allocate 2868903936 B" that killed the
+        second request of a ref2va deployment once anything else held ~1.5 GB (tt-inference-server
+        #5044) -- and the gather's ping-pong buffers, two more copies of the gathered shape, stayed
+        resident for the life of the process. Reading unit by unit, in column blocks, with transient
+        gather buffers, caps the transient at 1/(units * splits) of that and leaves nothing behind;
+        the total data moved is unchanged, and each piece is scattered straight into its slot of the
+        final tensor (``fast_device_to_host(out=...)``), so the host copies once, as a whole read does.
+        Order is the one a whole read produces: ``ShardTensorToMesh(dim=0)`` gave device ``d`` units
+        ``[d*n, (d+1)*n)``, so unit ``u`` of device ``d`` is row ``d*n + u``.
         """
         if self.ccl_manager is None:
             return ttnn.to_torch(wave, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0))
         pre_fn = float_to_uint8 if self.readback_uint8 else None
-        return fast_device_to_host(wave, self.mesh_device, [0, 0], ccl_manager=self.ccl_manager, pre_transfer_fn=pre_fn)
+        units, rows, cols = (int(v) for v in wave.shape)
+        splits = self.readback_splits
+        if cols % (splits * ttnn.TILE_SIZE):
+            splits = 1  # column blocks must stay tile-aligned; a whole unit always is
+        if units == 1 and splits == 1:
+            return fast_device_to_host(
+                wave,
+                self.mesh_device,
+                [0, 0],
+                ccl_manager=self.ccl_manager,
+                pre_transfer_fn=pre_fn,
+                persistent_gather_buffer=False,
+            )
+        col_step = cols // splits
+        full: torch.Tensor | None = None
+        for unit in range(units):
+            for block in range(splits):
+                piece = ttnn.slice(wave, [unit, 0, block * col_step], [unit + 1, rows, (block + 1) * col_step])
+                columns = slice(block * col_step, (block + 1) * col_step)
+                # Unit `unit` of device `d` is row `d * units + unit` of a whole read, so the piece's
+                # slot is a strided view of the final tensor; the shards scatter straight into it.
+                got = fast_device_to_host(
+                    piece,
+                    self.mesh_device,
+                    [0, 0],
+                    ccl_manager=self.ccl_manager,
+                    pre_transfer_fn=pre_fn,
+                    persistent_gather_buffer=False,
+                    out=None if full is None else full[unit::units, :, columns],
+                )
+                ttnn.deallocate(piece)
+                if full is None:
+                    # The first piece fixes the host dtype (uint8 after the cast, else the device's)
+                    # and the device count; it is copied once, every later piece lands in place.
+                    full = torch.empty((units * got.shape[0], rows, cols), dtype=got.dtype)
+                    full[unit::units, :, columns] = got
+        return full
 
     def _report_profile(self, total: float) -> None:
         """Log where a decode's wall time went, and stash it on `last_decode_profile`."""

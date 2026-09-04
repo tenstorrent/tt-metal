@@ -825,6 +825,10 @@ class CCLManager:
     ) -> ttnn.Tensor:
         """
         Helper function to all-gather a tensor with a persistent output buffer.
+
+        The output lands in a ping-pong pair cached per (shape, dim, mesh_axis, dtype) for the life
+        of the process. Right for a loop that gathers the same shape on every step; see
+        `all_gather_transient` for tensors whose shape follows the request.
         """
         return self.all_gather(
             tensor,
@@ -832,6 +836,26 @@ class CCLManager:
             mesh_axis=mesh_axis,
             use_hyperparams=use_hyperparams,
             use_persistent_buffer=True,
+        )
+
+    def all_gather_transient(
+        self, tensor: ttnn.Tensor, /, *, dim: int, mesh_axis: int | None, use_hyperparams: bool = False
+    ) -> ttnn.Tensor:
+        """
+        All-gather into a freshly allocated output, for tensors whose shape follows the request.
+
+        A persistent pair is a leak for a conditioner that gathers once per request at a
+        request-dependent length: every distinct prompt length or reference count leaves another pair
+        behind, and even a single request's pairs -- ~2.5 GB per device for nine image references on
+        the quad -- stay resident and take the next request's conditioning-encode headroom
+        (tt-inference-server#5044). The result aliases nothing, so callers need no defensive clone.
+        """
+        return self.all_gather(
+            tensor,
+            dim=dim,
+            mesh_axis=mesh_axis,
+            use_hyperparams=use_hyperparams,
+            use_persistent_buffer=False,
         )
 
     def all_gather(

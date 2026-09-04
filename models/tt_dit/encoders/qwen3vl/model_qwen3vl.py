@@ -327,11 +327,12 @@ class Qwen3VlTextEncoder(Module):
         input_embeds = self.embed_tokens.forward(input_ids)
 
         if self._tp_axis is not None:
-            input_embeds = self._ccl_manager.all_gather_persistent_buffer(
+            # Transient, not persistent: this runs once per request at the request's own length, and a
+            # persistent pair per distinct length would stay resident for the life of the process
+            # (a full-sequence [1, L, 5120] bf16 pair is 776 MB per device at nine image references).
+            input_embeds = self._ccl_manager.all_gather_transient(
                 input_embeds, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True
             )
-            # clone to move out of persistent buffer
-            input_embeds = ttnn.clone(input_embeds)
 
         if vision_embeds is not None:
             input_embeds = _scatter_rows(input_embeds, vision_embeds, vision_runs, add=False)
@@ -381,7 +382,7 @@ class Qwen3VlTextEncoder(Module):
         if self._sp_axis is not None:
             # Gather the sequence back so the return matches the TP-only contract (full, replicated).
             captured = [
-                self._ccl_manager.all_gather_persistent_buffer(x, dim=1, mesh_axis=self._sp_axis, use_hyperparams=True)
+                self._ccl_manager.all_gather_transient(x, dim=1, mesh_axis=self._sp_axis, use_hyperparams=True)
                 for x in captured
             ]
 
@@ -633,12 +634,12 @@ class Qwen3VlAttention(Module):
         x = ttnn.transformer.concatenate_heads(x)
 
         if self._tp_axis is not None:
-            x = self._ccl_manager.all_gather_persistent_buffer(x, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
+            x = self._ccl_manager.all_gather_transient(x, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
 
         x = self.o_proj.forward(x)
 
         if self._tp_axis is not None:
-            x = self._ccl_manager.all_gather_persistent_buffer(x, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
+            x = self._ccl_manager.all_gather_transient(x, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
 
         return x
 
@@ -777,7 +778,7 @@ class Qwen3VlMlp(Module):
         x = self.down_proj(x)
 
         if self._tp_axis is not None:
-            x = self._ccl_manager.all_gather_persistent_buffer(x, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
+            x = self._ccl_manager.all_gather_transient(x, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
 
         return x
 
