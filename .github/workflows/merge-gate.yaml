@@ -635,14 +635,15 @@ jobs:
 
   # ===========================================================================
   # Team: ttsim
-  # test list: ttsim_merge_gate_tests.yaml
+  # test list: runtime_sanity_tests.yaml (sim_quasar SKU only)
   # ===========================================================================
 
-  # Quasar coverage on the ttsim simulator (sim_quasar SKU, no hardware). Served by
-  # runtime-sanity-tests-impl.yaml with test-category: merge_gate, which selects
-  # tests/pipeline_reorg/ttsim_merge_gate_tests.yaml; the wider sanity matrix stays in
-  # runtime_sanity_tests.yaml. The impl's fetch-ttsim job downloads libttsim_qsr.so and
-  # setup-ttsim installs it for every sim_* SKU.
+  # Quasar coverage on the ttsim simulator (no hardware). This runs the very same
+  # runtime_sim_quasar_cpp_unit_tests entry the sanity pipeline runs — selected out of
+  # runtime_sanity_tests.yaml by enabled-skus below — so there is one definition of the
+  # Quasar leg and merge gate cannot drift from sanity. That entry's timeout is pinned
+  # to 15 min for the merge-gate ceiling. The impl's fetch-ttsim job downloads
+  # libttsim_qsr.so and setup-ttsim installs it for every sim_* SKU.
   ttsim-quasar-merge-gate-tests:
     needs: [build, find-changes]
     if: ${{ !cancelled() && needs.build.result == 'success' && (
@@ -656,14 +657,14 @@ jobs:
     secrets: inherit
     uses: ./.github/workflows/runtime-sanity-tests-impl.yaml
     with:
-      test-category: merge_gate
       # Canonical (non-Harbor-prefixed) ref: sim_quasar's runs_on is ubuntu-latest, a
       # GitHub-hosted runner with no Harbor access.
       docker-image: ${{ needs.build.outputs.ci-test-docker-image }}
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
-      enabled-skus: ALL_SKUS_IN_TESTS
-      per-test-timeout: 15
+      # The Quasar leg only — NOT ALL_SKUS_IN_TESTS, which would drag every hardware
+      # sanity leg in runtime_sanity_tests.yaml into the merge gate.
+      enabled-skus: sim_quasar
 
   # ===========================================================================
   # Team: shield

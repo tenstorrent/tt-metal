@@ -104,6 +104,11 @@
 # in the simulator itself, not this CI wiring — see #54794.
 # QuasarMultiSemaphorePipeline and QuasarMultipleClustersMultiSemaphorePipeline are
 # excluded: both are disabled on tt-metal main.
+#
+# This entry is also the merge gate's Quasar leg: merge-gate.yaml calls
+# runtime-sanity-tests-impl.yaml with enabled-skus: sim_quasar, so both pipelines run
+# this one definition and cannot drift apart. Its timeout is therefore held to the
+# 15-min merge-gate ceiling rather than the 30 min the sanity budget would allow.
 - name: runtime_sim_quasar_cpp_unit_tests
   cmd: >-
     f=HostOnlyTest.Bfp8Conversion;
@@ -121,7 +126,7 @@
     ./build/test/tt_metal/unit_tests_legacy --gtest_filter=$f
   skus:
     sim_quasar:
-      timeout: 30
+      timeout: 15
   owner_id: U08PR765YJ1 # Matt Craighead
   team: ttsim
 
