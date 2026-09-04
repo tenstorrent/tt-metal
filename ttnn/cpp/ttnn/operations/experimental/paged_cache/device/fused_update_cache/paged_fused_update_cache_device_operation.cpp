@@ -389,25 +389,16 @@ ttsl::hash::hash_t PagedFusedUpdateCacheDeviceOperation::compute_program_hash(
         program_factory.index());
 }
 
-// The four factory cache-hit hooks. Each patches the cached program in place: rebuilding the
+// The two mesh factories' cache-hit hooks. Each patches the cached program in place: rebuilding the
 // descriptor would pay the whole cache-miss host cost (work split, CoreRangeSets, compile-time args,
 // per-core arg vectors) on every cache hit. Defined here so the arg-layout constants and the shared
 // patch_runtime_args() above stay in one translation unit.
-void PagedTiledFusedUpdateCacheProgramFactory::override_runtime_arguments(
-    tt::tt_metal::Program& program,
-    const PagedFusedUpdateCacheParams& operation_attributes,
-    const PagedFusedUpdateCacheInputs& tensor_args,
-    PagedFusedUpdateCacheResult& /*tensor_return_value*/,
-    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
-    using namespace CMAKE_UNIQUE_NAMESPACE_FUSED_UPDATE_CACHE;
-    if (coord_excluded_from_dispatch(operation_attributes, mesh_dispatch_coordinate)) {
-        return;
-    }
-    patch_runtime_args(
-        program, tensor_args, compute_tiled_fused_offsets(operation_attributes, tensor_args), kFirstOptionalCbPosTiled);
-}
-
-void PagedRowMajorFusedUpdateCacheProgramFactory::override_runtime_arguments(
+//
+// The two single-device factories are on Metal 2.0 and re-apply their per-dispatch state by returning
+// a ProgramRunArgs instead of mutating a Program, so theirs live beside their spec builds -- which is
+// where the spec resource names they name are declared. They used to be here, and the mesh hooks used
+// to delegate to them; with the signatures no longer shared, each mesh hook calls the patch directly.
+void PagedTiledFusedUpdateCacheMeshWorkloadFactory::override_runtime_arguments(
     tt::tt_metal::Program& program,
     const PagedFusedUpdateCacheParams& operation_attributes,
     const PagedFusedUpdateCacheInputs& tensor_args,
@@ -420,30 +411,25 @@ void PagedRowMajorFusedUpdateCacheProgramFactory::override_runtime_arguments(
     patch_runtime_args(
         program,
         tensor_args,
-        compute_row_major_fused_offsets(operation_attributes, tensor_args),
-        kFirstOptionalCbPosRowMajor);
-}
-
-// The mesh factories delegate their program build to the single-device ones, so the cached program
-// has the same layout — reuse the same patch.
-void PagedTiledFusedUpdateCacheMeshWorkloadFactory::override_runtime_arguments(
-    tt::tt_metal::Program& program,
-    const PagedFusedUpdateCacheParams& operation_attributes,
-    const PagedFusedUpdateCacheInputs& tensor_args,
-    PagedFusedUpdateCacheResult& tensor_return_value,
-    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
-    PagedTiledFusedUpdateCacheProgramFactory::override_runtime_arguments(
-        program, operation_attributes, tensor_args, tensor_return_value, mesh_dispatch_coordinate);
+        PagedTiledFusedUpdateCacheProgramFactory::compute_tiled_fused_offsets(operation_attributes, tensor_args),
+        kFirstOptionalCbPosTiled);
 }
 
 void PagedRowMajorFusedUpdateCacheMeshWorkloadFactory::override_runtime_arguments(
     tt::tt_metal::Program& program,
     const PagedFusedUpdateCacheParams& operation_attributes,
     const PagedFusedUpdateCacheInputs& tensor_args,
-    PagedFusedUpdateCacheResult& tensor_return_value,
+    PagedFusedUpdateCacheResult& /*tensor_return_value*/,
     const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
-    PagedRowMajorFusedUpdateCacheProgramFactory::override_runtime_arguments(
-        program, operation_attributes, tensor_args, tensor_return_value, mesh_dispatch_coordinate);
+    using namespace CMAKE_UNIQUE_NAMESPACE_FUSED_UPDATE_CACHE;
+    if (coord_excluded_from_dispatch(operation_attributes, mesh_dispatch_coordinate)) {
+        return;
+    }
+    patch_runtime_args(
+        program,
+        tensor_args,
+        PagedRowMajorFusedUpdateCacheProgramFactory::compute_row_major_fused_offsets(operation_attributes, tensor_args),
+        kFirstOptionalCbPosRowMajor);
 }
 
 }  // namespace ttnn::experimental::prim
