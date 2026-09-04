@@ -268,8 +268,11 @@ def test_pow_zero_base_special_cases(device, dtype):
             assert (~torch.isfinite(out)).all()
 
     def assert_zero_power_negative_binary(out):
-        # FP32 writes +inf; the bf16 kernel writes NaN, which reads back as +inf after conversion (tt-llk/issues/675).
-        assert torch.isinf(out).all() and (out > 0).all()
+        if dtype == "float32":
+            # Torch gives +inf for pow(0, y < 0).
+            assert torch.isinf(out).all() and (out > 0).all()
+        else:
+            assert (~torch.isfinite(out)).all()
 
     for exponent in positive_exponents:
         exp_t = torch.full(shape, exponent, dtype=torch_dtype)
@@ -317,6 +320,12 @@ def test_pow_zero_base_special_cases(device, dtype):
     )
     binary_neg = ttnn.to_torch(ttnn.pow(tt_zeros, tt_neg_exp))
     binary_neg_zero = ttnn.to_torch(ttnn.pow(tt_neg_zero, tt_neg_exp))
+    # Deliberately disagrees with the scalar-exponent assertion above: unary pow(0, -1.5)
+    # still returns NaN while the binary form now returns +inf, so the same math answers
+    # differently depending on how the exponent is passed. Torch gives +inf for both, so
+    # unary is the wrong one. Fixing it needs the exponent threaded into
+    # power_tile_init(), which takes no arguments today, so this is deferred rather than
+    # intended. See tenstorrent/tt-metal#53922.
     assert_zero_power_negative_binary(binary_neg)
     assert_zero_power_negative_binary(binary_neg_zero)
 

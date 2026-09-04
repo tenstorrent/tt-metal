@@ -37,6 +37,11 @@ namespace sfpu {
  * - base < 0, pow = non-integer: Returns NaN (complex result)
  * - Overflow/underflow: Clamped to appropriate limits
  *
+ * Parity limit: the odd/even test below converts pow through vSMag16, which saturates at
+ * +/-32767, so any larger |pow| reads as non-integer and a negative base returns NaN
+ * where the true result is finite: (-1)**40000 gives NaN rather than 1. The inline claim
+ * that "large powers will approach 0/Inf" does not hold when |base| == 1.
+ *
  * @note This function assumes that the programmable constants are set to the following values:
  * - vConstFloatPrgm0 = 1.4426950408889634f;
  * - vConstFloatPrgm1 = -127.0f;
@@ -166,8 +171,10 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat
 /**
  * @brief base**pow on an fp32 DST.
  *
- * Same two-step log2/exp2 shape as _sfpu_binary_power_21f_, but with a wider log and a
- * stricter zero-base block.
+ * Same two-step log2/exp2 shape as _sfpu_binary_power_21f_, but with a wider log. The
+ * zero-base block below is fp32-only: _sfpu_binary_power_21f_ still carries the original
+ * one verbatim, so on a bf16 DST pow(0, NaN) returns +0 and pow(0, pow < 0) writes NaN.
+ * See #53922, deferred there on tt-llk#675.
  *
  * Special Cases:
  * - base = +/-0, pow > 0: Returns +/-0 for finite pow, preserving the base sign only for odd integer pow; +inf returns
@@ -179,6 +186,12 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat
  * - base < 0, pow = integer: Returns proper signed result (negative if odd power)
  * - base < 0, pow = non-integer: Returns NaN (complex result)
  * - Overflow/underflow: Clamped to appropriate limits
+ *
+ * Parity limit: the same vSMag16 saturation described on _sfpu_binary_power_21f_ above.
+ * In this body it also costs the zero-base sign: a -0 base loses it for odd pow in
+ * 32767 < |pow| < 2**24, because the saturated pow reads as non-integer and the
+ * negative-base branch overwrites y with a positive NaN before the fills below copy its
+ * sign. A +0 base is unaffected, and the magnitude stays correct throughout.
  */
 sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat pow) {
     // The algorithm works in two steps:
@@ -355,6 +368,7 @@ inline void calculate_sfpu_binary_pow(const uint dst_index_in0, const uint dst_i
     const uint out_offset = dst_index_out * dst_tile_size_sfpi;
 
     // Unrolled for fp32 only. The bf16 body runs slower (measured +17% at unroll 4).
+    // On BH, this unroll is perf-neutral.
     if constexpr (is_fp32_dest_acc_en) {
 #pragma GCC unroll 4
         for (int d = 0; d < ITERATIONS; d++) {
