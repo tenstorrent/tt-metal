@@ -27,6 +27,14 @@ std::uint32_t reserved_words_count = 0;
 
 } // namespace llk_profiler
 
+#if defined(ARCH_QUASAR)
+namespace llk_barrier
+{
+// barrier.h cannot include profiler.h, so the L1 address is supplied from here.
+volatile std::uint32_t* barrier_slots = reinterpret_cast<volatile std::uint32_t*>(llk_profiler::BARRIER_START);
+} // namespace llk_barrier
+#endif
+
 #endif
 
 // Mailbox addresses

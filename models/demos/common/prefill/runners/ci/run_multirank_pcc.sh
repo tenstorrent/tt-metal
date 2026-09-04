@@ -1,19 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
-#
-# Multi-galaxy disaggregated prefill cache-accuracy leg: a background N-rank runner opens the mesh, loads
-# the model, warmup-compiles and publishes the merged KV chunk table to shared NFS; a device-less producer
-# then feeds it, reads EVERY device cache the model published back over UMD (a sparse model's indexer key
-# cache as well as its KVPE cache) and PCCs each against the golden trace. The producer exits non-zero on a
-# PCC miss, but under mpirun-ulfm a lost producer daemon can still return 0 with zero caches validated, so
-# the exit code alone is not trusted: the leg is green only when a durable ok=true verdict exists for every
-# producer rank (the PCC gate near the end). Perf/timing are reported but never gate.
-#
-# Usage: run_multirank_pcc.sh <model-key>       # model-key selects a block in the case below
-#
-# Everything outside that case block is model-independent launcher plumbing (host-order derivation, table
-# poll, runner reaping, durable-verdict dump), so a new model is a case entry, not another copy.
 set -euo pipefail
 
 MODEL="${1:?usage: run_multirank_pcc.sh <model-key>}"
@@ -24,9 +11,6 @@ export PYTHONPATH="${TT_METAL_HOME}"
 MANIFEST_DIR="${TT_METAL_HOME}/models/demos/deepseek_v3_d_p/tt/runners/manifests"
 MGD_DIR="${TT_METAL_HOME}/models/demos/common/prefill/runners/topology_configuration/ci"
 
-# Shared defaults; a case block below overrides what its model needs. Each branch also names its own
-# scratch dir by swapping the summaries component out of PREFILL_SUMMARIES: that keeps the run-scoped leaf
-# and the shared-NFS root the blaze impl chose, while leaving the summaries dir itself alone.
 CHUNK_SIZE=5120
 MAX_SEQ_LEN=256000
 GOLDEN_LEN=56320
@@ -41,18 +25,14 @@ case "${MODEL}" in
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/prefill_runner_kv}"
     MGD="${MGD_DIR}/kimi27_mgd.textproto"
     MANIFEST="${MANIFEST_DIR}/kimi27.json"
-    RUNNER_ENV="export PREFILL_HF_MODEL=/mnt/models/moonshotai/Kimi-K2_7-Code-dequantized; export PREFILL_USE_TRACE=1;"
+    RUNNER_ENV="export PREFILL_HF_MODEL=/mnt/models/moonshotai/Kimi-K2_7-Code-dequantized; export PREFILL_USE_TRACE=1; export PREFILL_LAYER_ACK_D2H=1;"
     PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}';"
     ;;
   glm52)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/glm52_prefill_runner_kv}"
-    # LINE/LINE variant: GLM-5.2's MoE all_to_all deadlocks in warmup under the torus fabric modes on
-    # multi-galaxy pipeline prefill, so the descriptor declares no wrap and the fabric mode stays 2d.
     MGD="${MGD_DIR}/glm52_mgd.textproto"
     MANIFEST="${MANIFEST_DIR}/glm52.json"
-    # Sparse DSA: TWO device caches (MLA KVPE over all 78 layers + the lightning-indexer KEY cache over the
-    # 21 `full` layers), both PCC'd. The trace must be the indexer-K dump -- the adapter's default golden
-    # carries no dsa/indexer_k_layer_*, which would silently downgrade this leg to a KVPE-only check.
+    RUNNER_ENV="export PREFILL_LAYER_ACK_D2H=1;"
     PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}'; \
         export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k;"
     ;;
@@ -66,38 +46,22 @@ mkdir -p "${PIPELINE_DIR}"
 TTRUN_DIR="${TTRUN_DIR:-/etc/ttop}"
 TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
 
-# The runner goes through tt-run automapper, which discovers rank->mesh placement from the MGD and takes
-# the plain comma-separated host list. The producer (raw mpirun) needs a slotted host list in the SAME rank
-# order tt-run's discovery chose (parsed from the generated rankfile below) so its master co-locates with
-# runner rank 0 -- the H2D stream service is host-local /dev/shm IPC.
 RESOLVED_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
-# tt-run Phase 1 (generate_rank_bindings) writes generated/ttrun/ under the launch cwd; keep it on shared
-# NFS so the runner pod can read rank-0 outputs.
 TTRUN_CWD="${PIPELINE_DIR}/ttrun-cwd"
 mkdir -p "${TTRUN_CWD}"
 
 MR_DIR=$(mktemp -d "${PIPELINE_DIR}/${MODEL}_prefill_ci_mr.XXXXXX")
 export TABLE_PATH="${MR_DIR}/kv_chunk_table.pb"
-# Each producer rank drops its PCC verdict here before the shutdown sentinel; mpirun drops buffered stdout
-# when the runner tears down, so this file is the only durable record of the measured per-cache PCC.
 PCC_DIR="${MR_DIR}/pcc_verdict"
-# Per-rank stdout/stderr files (mpirun --output-filename). These survive the teardown race that truncates
-# forwarded stdout, so their tails are the authoritative debug log.
 RANKLOGS="${MR_DIR}/ranklogs"
 TIMING_DIR="${MR_DIR}/timing"
 mkdir -p "${TIMING_DIR}"
 
-# The runner idles owning the multi-galaxy allocation until the producer's shutdown sentinel; on any early
-# exit (table-publish timeout, producer failure) it must be reaped or it strands the hardware until the
-# step timeout. Killing ttrun.py tears down the remote ranks with it.
 cleanup() {
   if [ -n "${RUNNER_PID:-}" ] && kill -0 "${RUNNER_PID}" 2>/dev/null; then
     kill "${RUNNER_PID}" 2>/dev/null || true
     wait "${RUNNER_PID}" 2>/dev/null || true
   fi
-  # Dump diagnostics before rm: on every exit path (success, producer failure, table timeout, step-timeout
-  # kill) the live mpirun stdout may be truncated at teardown, so the durable verdict JSON and per-rank
-  # ranklog tails are the authoritative record.
   echo "==================== per-cache PCC verdicts (PROD_RC=${PROD_RC:-<unset>}) ===================="
   for f in "${PCC_DIR}"/rank*.json; do
     [ -e "$f" ] || { echo "no PCC verdict files under ${PCC_DIR}"; break; }
@@ -114,8 +78,6 @@ cleanup() {
       --chunk-size "${CHUNK_SIZE}" --perf-window-chunks "${PERF_WINDOW_CHUNKS:-4}" \
       --summary-name "${MODEL}" \
       || echo "summary generation failed (non-fatal)"
-    # Under PREFILL_SUMMARIES rather than generated/test_logs: the blaze impl uploads that root with
-    # archive:false, which yields a direct PNG link on the job-summary page instead of a log zip to unpack.
     GANTT_DIR="${PREFILL_SUMMARIES}/plots"
     mkdir -p "${GANTT_DIR}"
     python3 -c "import matplotlib" 2>/dev/null \
@@ -131,12 +93,6 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# tt-run automapper: --mesh-graph-descriptor + --hosts generate the rank binding by discovery, so no static
-# binding is committed. tt-run forwards only the device vars it owns (TT_MESH_*) plus its
-# ENV_PASSTHROUGH_PREFIXES; PREFILL_* fall outside that set, so -- exactly as the producer launch below does
-# -- export them inside a per-rank bash -lc rather than relying on tt-run to carry them. Launch from
-# TTRUN_CWD so Phase 1 caches on shared NFS; RUNNER_PID stays ttrun.py's pid so cleanup()'s kill still tears
-# the remote ranks down.
 cd "${TTRUN_CWD}"
 python3 "${TTRUN_PY}" \
   --skip-executable-check \
@@ -169,13 +125,8 @@ for _ in $(seq 1 360); do
 done
 [ -f "${TABLE_PATH}" ] || { echo "KV table not published within timeout"; exit 1; }
 
-# Producer rank i must land on the host running runner rank i (host-local /dev/shm H2D descriptor), and
-# tt-run discovery -- not hostfile order -- decides that mapping, so derive the host order from the rankfile
-# --force-rediscovery just wrote. Using raw hostfile order races discovery and intermittently strands the
-# master on the wrong host -- H2DStreamService.connect then times out and TT_THROWs.
 RANKFILE=$(ls -t "${TTRUN_CWD}"/generated/ttrun/*/rankfile 2>/dev/null | head -1)
 [ -f "${RANKFILE}" ] || { echo "tt-run rankfile not found under ${TTRUN_CWD}/generated/ttrun/*/rankfile"; exit 1; }
-# rankfile lines are "rank N=hostname slots=X"; emit "N hostname", sort by rank, join as host:1.
 HOSTS=$(awk '/^rank[[:space:]]+[0-9]+=/ {n=$2; sub(/=.*/,"",n); h=$2; sub(/^[0-9]+=/,"",h); print n" "h}' "${RANKFILE}" | sort -n | awk '{printf "%s%s:1", (NR>1?",":""), $2}')
 [ -n "${HOSTS}" ] || { echo "failed to parse producer host order from ${RANKFILE}"; exit 1; }
 echo "producer host order from tt-run discovery: ${HOSTS}"
@@ -205,16 +156,10 @@ set +e
 PROD_RC=$?
 set -e
 
-# The cleanup() EXIT trap dumps the durable PCC verdicts and ranklog tails on every exit path, so no inline
-# diagnostics are needed here. On success the producer already sent the shutdown sentinel; wait for the
-# runner to finish teardown so a hung shutdown surfaces here instead of being orphaned.
 if [ "${PROD_RC}" -eq 0 ]; then
   wait "${RUNNER_PID}" || echo "runner exited non-zero after producer success (rc=$?)"
 fi
 
-# PCC gate. Read the durable per-rank verdicts before cleanup() rm's MR_DIR: require an ok=true verdict from
-# every producer rank (one per host in HOSTS). This catches the case the exit code misses -- a ULFM daemon
-# loss that returns 0 with no verdict written, or a rank that failed to validate. Perf/timing never gate.
 EXPECTED_RANKS=$(printf '%s' "${HOSTS}" | tr ',' '\n' | grep -c .)
 PCC_GATE_RC=0
 python3 - "${PCC_DIR}" "${EXPECTED_RANKS}" <<'PY' || PCC_GATE_RC=$?
@@ -244,7 +189,6 @@ if bad:
 print(f"PCC GATE PASS: {len(files)}/{expected} ranks ok, all caches >= threshold")
 PY
 
-# Green only when the producer exited clean AND every rank's PCC verdict is ok.
 if [ "${PROD_RC}" -ne 0 ]; then
   exit "${PROD_RC}"
 fi
