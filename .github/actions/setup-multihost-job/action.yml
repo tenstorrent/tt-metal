@@ -55,6 +55,28 @@ inputs:
     description: Prepend the wheel's build/lib onto LD_LIBRARY_PATH (manylinux). Leave false for inplace.
     required: false
     default: "false"
+  auto-triage:
+    description: >
+      Enable hang detection and tt-triage on workers. Off by default so
+      ttop-recovery is never armed unless a caller opts in after this action
+      (or via this input, which runs after recovery).
+    required: false
+    default: "false"
+  hang-detection-timeout:
+    description: Seconds without dispatch progress before tt-triage fires on the hung rank(s)
+    required: false
+    default: "5.0"
+  triage-output-dir:
+    description: >
+      NFS directory for per-host triage dumps (must be writable on workers).
+      Empty uses TRIAGE_OUTPUT_DIR from the job env, or
+      /ci/triage_output/<run>-<attempt>/<job>.
+    required: false
+    default: ""
+  triage-job-info:
+    description: Identity string written into each host's triage report dir when triage fires
+    required: false
+    default: ""
 
 runs:
   using: "composite"
@@ -190,3 +212,50 @@ runs:
         mpirun --pernode --tag-output bash -lc '
           test -r /mnt/models
         '
+
+    - name: Set up env vars for auto-triage
+      if: ${{ inputs.auto-triage == 'true' }}
+      shell: bash
+      env:
+        TRIAGE_JOB_INFO_INPUT: ${{ inputs.triage-job-info }}
+        TRIAGE_OUTPUT_DIR_INPUT: ${{ inputs.triage-output-dir }}
+        HANG_DETECTION_TIMEOUT: ${{ inputs.hang-detection-timeout }}
+      run: |
+        echo "Enabling detection of timeout on fast dispatch and automatically call tt-triage"
+        if [ -z "${TRIAGE_OUTPUT_DIR:-}" ]; then
+          if [ -n "$TRIAGE_OUTPUT_DIR_INPUT" ]; then
+            TRIAGE_OUTPUT_DIR="$TRIAGE_OUTPUT_DIR_INPUT"
+          else
+            TRIAGE_OUTPUT_DIR="/ci/triage_output/${{ github.run_id }}-${{ github.run_attempt }}/${{ github.job }}"
+          fi
+        fi
+        mkdir -p "$TRIAGE_OUTPUT_DIR"
+        echo "TRIAGE_OUTPUT_DIR=$TRIAGE_OUTPUT_DIR" >> "$GITHUB_ENV"
+
+        if [ -n "$TRIAGE_JOB_INFO_INPUT" ]; then
+          TRIAGE_JOB_INFO="$TRIAGE_JOB_INFO_INPUT"
+        else
+          TRIAGE_JOB_INFO="job: ${{ github.job }}"
+        fi
+        echo "TT_TRIAGE_JOB_INFO=$TRIAGE_JOB_INFO | runner: ${RUNNER_NAME:-unknown} | run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}" >> "$GITHUB_ENV"
+
+        TRIAGE_CMD='D="${TRIAGE_OUTPUT_DIR:-/tmp/tt_triage}/$(hostname)"; mkdir -p "$D" || D=/tmp; if [ -e "$D/.tt_triage_already_ran" ]; then echo "[auto-triage] triage already ran on $(hostname); skipping (cards are not reset between tests, so a second triage is unreliable)" >&2; else touch "$D/.tt_triage_already_ran"; printf "%s\n" "${TT_TRIAGE_JOB_INFO:-unknown leg}" > "$D/job_info.txt"; /opt/venv/bin/python3 "${TT_METAL_HOME:-/home/user/tt-metal}/tools/tt-triage.py" --disable-progress --path="$D/debug_bus_signal_groups.json" --triage-summary-path="$D/triage_summary.txt" --llm-output-path="$D/triage_llm_output.txt" 2>&1 | tee "$D/triage_output.txt" 1>&2; fi'
+
+        {
+          echo "TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE=$TRIAGE_CMD"
+          echo "TT_METAL_OPERATION_TIMEOUT_SECONDS=$HANG_DETECTION_TIMEOUT"
+          echo "TT_TRIAGE_ENABLE_AGGREGATED_CALLSTACKS=1"
+          echo "TT_RUN_DISABLED_TRIAGE_SCRIPTS_IN_CI=1"
+        } >> "$GITHUB_ENV"
+
+        export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE="$TRIAGE_CMD"
+        export TRIAGE_OUTPUT_DIR
+        mpirun --bind-to none --pernode --tag-output bash -lc '
+          ok=1
+          [ -n "$TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE" ] || { echo "triage hook not forwarded to this rank"; ok=0; }
+          [ -w "${TRIAGE_OUTPUT_DIR:-/nonexistent}" ] || { echo "TRIAGE_OUTPUT_DIR not writable here: ${TRIAGE_OUTPUT_DIR:-<unset>}"; ok=0; }
+          /opt/venv/bin/python3 -c "import ttexalens" 2>/dev/null || { echo "ttexalens missing from /opt/venv"; ok=0; }
+          [ "$ok" = 1 ] && echo "triage armed"
+        ' || echo "::warning::Could not verify triage arming on all hosts; a hang here may not produce triage output"
+
+        echo "Triage fires after ${HANG_DETECTION_TIMEOUT}s without dispatch progress"

@@ -120,6 +120,7 @@ struct InspectorSettings {
     bool capture_tensor_specs = true;
     bool log_runtime_entries = false;
     bool log_mesh_buffers = false;
+    bool log_mesh_sockets = false;
 };
 
 template <typename T>
@@ -239,6 +240,10 @@ class RunTimeOptions {
     bool profiler_disable_push_to_tracy = false;
     std::optional<uint32_t> profiler_program_support_count = std::nullopt;
     bool experimental_noc_debug_dump_enabled = false;
+    // Tuning for the NOC-debug-dump background thread (see ProfilerStateManager::start_debug_dump_thread).
+    std::chrono::milliseconds noc_debug_poll_interval{500};
+    std::chrono::milliseconds noc_debug_full_read_interval{4000};
+    std::chrono::milliseconds noc_debug_watermark_margin{3000};
 
     bool checkpoint_enabled = false;
 
@@ -547,6 +552,8 @@ public:
     void set_inspector_log_runtime_entries(bool enabled) { inspector_settings.log_runtime_entries = enabled; }
     bool get_inspector_log_mesh_buffers() const { return inspector_settings.log_mesh_buffers; }
     void set_inspector_log_mesh_buffers(bool enabled) { inspector_settings.log_mesh_buffers = enabled; }
+    bool get_inspector_log_mesh_sockets() const { return inspector_settings.log_mesh_sockets; }
+    void set_inspector_log_mesh_sockets(bool enabled) { inspector_settings.log_mesh_sockets = enabled; }
     // Info from DPrint environment variables, setters included so that user can
     // override with a SW call.
     bool get_feature_enabled(RunTimeDebugFeatures feature) const { return feature_targets[feature].enabled; }
@@ -684,6 +691,21 @@ public:
     bool get_profiler_disable_push_to_tracy() const { return profiler_disable_push_to_tracy; }
     void set_experimental_noc_debug_dump_enabled(bool enabled);
     bool get_experimental_noc_debug_dump_enabled() const { return experimental_noc_debug_dump_enabled; }
+    // How often the NOC-debug-dump background thread polls for stalled cores (light, unblocking poll).
+    std::chrono::milliseconds get_noc_debug_poll_interval() const { return noc_debug_poll_interval; }
+    void set_noc_debug_poll_interval(std::chrono::milliseconds interval) { noc_debug_poll_interval = interval; }
+    // How often the thread self-triggers a full read + process + report + discharge. Rounded up to a whole number
+    // of poll intervals. Zero disables the self-triggered full read entirely (events are then only processed on a
+    // user read or at device close).
+    std::chrono::milliseconds get_noc_debug_full_read_interval() const { return noc_debug_full_read_interval; }
+    void set_noc_debug_full_read_interval(std::chrono::milliseconds interval) {
+        noc_debug_full_read_interval = interval;
+    }
+    // Bounded-lateness margin held back when processing events mid-run. MUST exceed the poll interval above, which
+    // is what bounds how long a stalled core can stay unrecorded; otherwise a cross-core violation can be judged
+    // before the peer core's earlier event has arrived. Validated in start_debug_dump_thread().
+    std::chrono::milliseconds get_noc_debug_watermark_margin() const { return noc_debug_watermark_margin; }
+    void set_noc_debug_watermark_margin(std::chrono::milliseconds margin) { noc_debug_watermark_margin = margin; }
 
     void set_checkpoint_enabled(bool v) { checkpoint_enabled = v; }
     bool get_checkpoint_enabled() const { return checkpoint_enabled; }

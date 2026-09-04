@@ -23,6 +23,7 @@
 #include <algorithm>
 #include <array>
 #include <set>
+#include <string_view>
 #include <vector>
 
 namespace ttnn::operations::experimental::matmul_decode {
@@ -220,6 +221,28 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
             inputB_shard_shape[1] % tt::constants::TILE_WIDTH == 0,
             "Input tensor B must have a width that is divisible by the tile width");
         inB_N_tiles_per_core = inputB_shard_shape[1] / tt::constants::TILE_WIDTH;
+    }
+
+    const uint32_t k_block_tiles = K_tiles / operation_attributes.global_cb_k_blocks;
+    const bool use_custom_mm = in0_rm_hs && device->arch() == tt::ARCH::BLACKHOLE && !operation_attributes.all_gather &&
+                               operation_attributes.global_cb_k_blocks == 1 && k_block_tiles >= 2 &&
+                               k_block_tiles <= 256 && k_block_tiles % 2 == 0 && inB_N_tiles_per_core <= 16;
+    if (!use_custom_mm) {
+        std::string_view reason;
+        if (!in0_rm_hs) {
+            reason = "input A is not ROW_MAJOR HEIGHT_SHARDED";
+        } else if (device->arch() != tt::ARCH::BLACKHOLE) {
+            reason = "custom_mm is Blackhole-only";
+        } else if (operation_attributes.all_gather) {
+            reason = "fused all-gather is not supported by custom_mm";
+        } else if (operation_attributes.global_cb_k_blocks != 1) {
+            reason = "streamed global_cb K blocks are not supported by custom_mm";
+        } else if (k_block_tiles < 2 || k_block_tiles > 256 || k_block_tiles % 2 != 0) {
+            reason = "the K block must contain an even number of tiles in [2, 256]";
+        } else {
+            reason = "the per-core output width exceeds 16 tiles";
+        }
+        log_warning(tt::LogOp, "matmul_decode is falling back to the general block matmul LLKs: {}", reason);
     }
     ProgramDescriptor desc;
 
@@ -471,6 +494,9 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
         if (in0_rm_hs) {
             reader_kernel_desc.defines.emplace_back("IN0_REPLICATED", "1");
         }
+        if (use_custom_mm) {
+            reader_kernel_desc.defines.emplace_back("USE_CUSTOM_MM", "1");
+        }
 
         reader_kernel_desc.runtime_args.reserve(cores.size());
         for (const auto& core : cores) {
@@ -559,9 +585,12 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
         {"cb_sync", sync_cb_index},
     };
     compute_kernel_desc.config = ComputeConfigDescriptor{
-        .math_fidelity = MathFidelity::HiFi4,
+        .math_fidelity = use_custom_mm ? MathFidelity::LoFi : MathFidelity::HiFi4,
         .math_approx_mode = false,
     };
+    if (use_custom_mm) {
+        compute_kernel_desc.defines.emplace_back("USE_CUSTOM_MM", "1");
+    }
     if (use_global_cb) {
         compute_kernel_desc.defines.emplace_back("ENABLE_GLOBAL_CB", "1");
     }
@@ -584,6 +613,10 @@ ProgramDescriptor create_descriptor_ring_gather_full(
     const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate,
     const GlobalSemaphore* out_ready_semaphore,
     const GlobalSemaphore* barrier_semaphore) {
+    log_warning(
+        tt::LogOp,
+        "matmul_decode is falling back to the general block matmul LLKs: ring-gather and fused all-gather are not "
+        "supported by custom_mm");
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto& input_tensor_b = tensor_args.input_tensor_b;
     auto& output_tensor = tensor_return_value;

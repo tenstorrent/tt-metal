@@ -148,6 +148,9 @@ enum class EnvVarID {
     TT_METAL_OPERATION_TIMEOUT_SECONDS,            // Operation timeout duration
     TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE,  // Terminal command to execute on dispatch timeout.
     TT_METAL_NOC_DEBUG_DUMP,                       // Enable experimental NOC debug dump to detect missing barriers
+    TT_METAL_NOC_DEBUG_POLL_INTERVAL_MS,           // NOC debug dump: background poll period (ms)
+    TT_METAL_NOC_DEBUG_FULL_READ_INTERVAL_MS,      // NOC debug dump: period between self-triggered full reads (ms)
+    TT_METAL_NOC_DEBUG_WATERMARK_MARGIN_MS,        // NOC debug dump: mid-run watermark margin (ms)
     TT_METAL_DISPATCH_PROGRESS_UPDATE_MS,          // Dispatch kernel progress update period in milliseconds
     TT_METAL_DISPATCH_TELEMETRY_DISABLE,           // Dispatch telemetry
 
@@ -188,6 +191,7 @@ enum class EnvVarID {
     TT_METAL_INSPECTOR_CAPTURE_TENSOR_SPECS,           // Capture tensor specs on op dispatch (default: off)
     TT_METAL_INSPECTOR_LOG_RUNTIME_ENTRIES,            // Log runtime entries to YAML (expensive, off by default)
     TT_METAL_INSPECTOR_LOG_MESH_BUFFERS,               // Log mesh buffer lifecycle to YAML (expensive, off by default)
+    TT_METAL_INSPECTOR_LOG_MESH_SOCKETS,               // Log mesh socket lifecycle to YAML (off by default)
 
     // ========================================
     // DEBUG PRINTING (DPRINT)
@@ -250,9 +254,9 @@ enum class EnvVarID {
     // ========================================
     // ALLOCATOR CONFIGURATION
     // ========================================
-    TT_METAL_ALLOCATOR_MODE_HYBRID,  // Enable hybrid lockstep + per-core L1 allocator mode
-    TT_METAL_TRACE_ALLOC_TRACKING,  // Enable per-trace unsafe allocation accounting
-    TT_METAL_TRACE_ALLOC_TRACEBACKS,  // Capture diagnostics for unsafe trace allocations
+    TT_METAL_ALLOCATOR_MODE_HYBRID,           // Enable hybrid lockstep + per-core L1 allocator mode
+    TT_METAL_TRACE_ALLOC_TRACKING,            // Enable per-trace unsafe allocation accounting
+    TT_METAL_TRACE_ALLOC_TRACEBACKS,          // Capture diagnostics for unsafe trace allocations
     TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE,  // Exclude program-cache buffers from trace accounting
 
     // ========================================
@@ -1013,10 +1017,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false (no mid-run dumps)
         // Usage: export TT_METAL_PROFILER_MID_RUN_DUMP=1
         case EnvVarID::TT_METAL_PROFILER_MID_RUN_DUMP: {
-            // Only enable mid-run dumps if device profiler is also enabled
-            if (this->profiler_enabled && is_env_enabled(value)) {
-                this->profiler_mid_run_dump = true;
-            }
+            this->profiler_mid_run_dump = is_env_enabled(value);
             break;
         }
 
@@ -1049,6 +1050,46 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         case EnvVarID::TT_METAL_PROFILER_ACCUMULATE: {
             if (this->profiler_enabled && is_env_enabled(value)) {
                 this->profiler_accumulate = true;
+            }
+            break;
+        }
+
+        // TT_METAL_NOC_DEBUG_POLL_INTERVAL_MS
+        // How often the NOC debug dump background thread polls the device for stalled cores. Lower values unblock
+        // stalled cores sooner at the cost of more NoC/PCIe traffic.
+        // Default: 500
+        // Usage: export TT_METAL_NOC_DEBUG_POLL_INTERVAL_MS=250
+        case EnvVarID::TT_METAL_NOC_DEBUG_POLL_INTERVAL_MS: {
+            if (value) {
+                this->noc_debug_poll_interval = std::chrono::milliseconds(std::stoi(value));
+            }
+            break;
+        }
+
+        // TT_METAL_NOC_DEBUG_FULL_READ_INTERVAL_MS
+        // How often the NOC debug dump thread self-triggers a full read, then processes, reports and discharges. This
+        // bounds host memory and surfaces issues during a long run. Rounded up to a whole number of poll intervals.
+        // Set to 0 to disable the self-triggered full read (events are then only processed on a user read or at
+        // device close).
+        // Default: 4000
+        // Usage: export TT_METAL_NOC_DEBUG_FULL_READ_INTERVAL_MS=10000
+        case EnvVarID::TT_METAL_NOC_DEBUG_FULL_READ_INTERVAL_MS: {
+            if (value) {
+                this->noc_debug_full_read_interval = std::chrono::milliseconds(std::stoi(value));
+            }
+            break;
+        }
+
+        // TT_METAL_NOC_DEBUG_WATERMARK_MARGIN_MS
+        // Bounded-lateness margin used when processing NOC debug events mid-run: events newer than
+        // (latest seen - margin) are held back so a momentarily-stalled core cannot have a cross-core violation
+        // judged before its earlier event arrives. MUST exceed TT_METAL_NOC_DEBUG_POLL_INTERVAL_MS, which bounds the
+        // worst-case record-to-host latency; this is validated at debug-dump thread start.
+        // Default: 3000
+        // Usage: export TT_METAL_NOC_DEBUG_WATERMARK_MARGIN_MS=5000
+        case EnvVarID::TT_METAL_NOC_DEBUG_WATERMARK_MARGIN_MS: {
+            if (value) {
+                this->noc_debug_watermark_margin = std::chrono::milliseconds(std::stoi(value));
             }
             break;
         }
@@ -1465,6 +1506,17 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             }
             break;
 
+        // TT_METAL_INSPECTOR_LOG_MESH_SOCKETS
+        // Enables logging of every MeshSocket creation and destruction to YAML.
+        // Default: false (disabled)
+        // Usage: export TT_METAL_INSPECTOR_LOG_MESH_SOCKETS=1
+        case EnvVarID::TT_METAL_INSPECTOR_LOG_MESH_SOCKETS:
+            this->inspector_settings.log_mesh_sockets = false;
+            if (strcmp(value, "1") == 0) {
+                this->inspector_settings.log_mesh_sockets = true;
+            }
+            break;
+
         // ========================================
         // DEBUG PRINTING (DPRINT)
         // ========================================
@@ -1741,8 +1793,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             trace_allocation_tracking_enabled_ = std::strcmp(value, "1") == 0;
             break;
         case EnvVarID::TT_METAL_TRACE_ALLOC_TRACEBACKS:
-            trace_allocation_diagnostics_enabled_ =
-                trace_allocation_tracking_enabled_ && std::strcmp(value, "1") == 0;
+            trace_allocation_diagnostics_enabled_ = trace_allocation_tracking_enabled_ && std::strcmp(value, "1") == 0;
             break;
         case EnvVarID::TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE:
             trace_allocation_skip_program_cache_enabled_ =

@@ -24,6 +24,17 @@ void InterleavedToShardedPartialDeviceOperation::validate_on_program_cache_miss(
         slice_index,
         num_slices);
     TT_FATAL(input_tensor.layout() == Layout::TILE, "Currently, only tile layout is supported for partial I->S");
+    // The factory sizes its units and tile counts from the architectural 32x32 constants, and the tile
+    // is absent from compute_program_hash, so a non-standard tile would both compile a mis-sized
+    // program and alias onto a cached 32x32 one.
+    {
+        const auto tile = input_tensor.tensor_spec().tile();
+        TT_FATAL(
+            tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH,
+            "interleaved_to_sharded_partial does not currently support tiles other than 32x32, got {}x{}",
+            tile.get_height(),
+            tile.get_width());
+    }
     TT_FATAL(
         (input_tensor.physical_volume() / input_tensor.padded_shape()[-1]) % num_slices == 0,
         "Total height of a tensor must be divisible by num_slices!");
@@ -78,9 +89,15 @@ ttsl::hash::hash_t InterleavedToShardedPartialDeviceOperation::compute_program_h
     const operation_attributes_t& operation_attributes, const Tensor& input_tensor) {
     // slice_index is deliberately excluded from the key: it only feeds the runtime read-offset
     // starting_idx_h (same program structure for every slice of a given num_slices), and it is
-    // re-applied on every cache hit via get_dynamic_runtime_args. Keying on it would rebuild the
+    // re-applied on every cache hit by InterleavedToShardedPartialProgramFactory::
+    // override_runtime_arguments. Keying on it would rebuild the
     // program for each slice of a partial-slicing loop. num_slices -- which drives the work split --
     // stays keyed.
+    // padded_shape and the input's memory config both reach the compiled program and neither is
+    // refreshed on a hit: the factory bakes shape-derived reader/writer args at first miss while
+    // override_runtime_arguments patches only the address and starting offset, and the input buffer
+    // type selects the TensorAccessorArgs compile-time words, the scratch CB's existence and the input
+    // CB page size. The non-partial sibling already keys both.
     return tt::tt_metal::operation::hash_operation<InterleavedToShardedPartialDeviceOperation>(
         operation_attributes.grid_size,
         operation_attributes.shard_spec,
@@ -88,7 +105,9 @@ ttsl::hash::hash_t InterleavedToShardedPartialDeviceOperation::compute_program_h
         operation_attributes.output_mem_config,
         operation_attributes.output_dtype,
         input_tensor.dtype(),
-        input_tensor.layout());
+        input_tensor.layout(),
+        input_tensor.padded_shape(),
+        input_tensor.memory_config());
 }
 
 Tensor interleaved_to_sharded_partial(

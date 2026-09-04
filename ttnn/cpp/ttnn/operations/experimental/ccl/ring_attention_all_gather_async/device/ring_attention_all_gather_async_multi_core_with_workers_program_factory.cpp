@@ -101,6 +101,36 @@ RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory::create_workload_d
     return wd;
 }
 
+void RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory::override_runtime_arguments(
+    tt::tt_metal::Program& program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& /*tensor_args*/,
+    tensor_return_value_t& /*tensor_return_value*/,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    namespace dyn = ring_attention_all_gather_async_dynamic;
+
+    // Kernel identity fixes the semaphore, so the sender cores need not be re-derived here.
+    const auto patch_semaphore_arg = [&program](uint32_t kernel_idx, uint32_t arg_idx, uint32_t address) {
+        auto& args_by_core = tt::tt_metal::GetRuntimeArgs(program, kernel_idx);
+        for (auto& args_by_y : args_by_core) {
+            for (auto& args : args_by_y) {
+                if (arg_idx < args.size()) {
+                    args[arg_idx] = address;
+                }
+            }
+        }
+    };
+
+    const auto& semaphore = operation_attributes.semaphore;
+    const auto forward_sem_addr = static_cast<uint32_t>(semaphore.at(dyn::kForwardSemaphoreIdx).address());
+    const auto backward_sem_addr = static_cast<uint32_t>(semaphore.at(dyn::kBackwardSemaphoreIdx).address());
+
+    patch_semaphore_arg(dyn::kReaderForwardKernelIdx, dyn::kReaderSemaphoreArg, forward_sem_addr);
+    patch_semaphore_arg(dyn::kWriterForwardKernelIdx, dyn::kWriterSemaphoreArg, forward_sem_addr);
+    patch_semaphore_arg(dyn::kReaderBackwardKernelIdx, dyn::kReaderSemaphoreArg, backward_sem_addr);
+    patch_semaphore_arg(dyn::kWriterBackwardKernelIdx, dyn::kWriterSemaphoreArg, backward_sem_addr);
+}
+
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn {
@@ -370,7 +400,9 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     std::optional<Tensor> kv_actual_isl,
     uint32_t chunk_local_tiles,
     uint32_t kv_cache_num_layers,
-    uint32_t kv_cache_layer_idx) {
+    uint32_t kv_cache_layer_idx,
+    bool split_forwarding_enabled,
+    RingAttentionRankMapping rank_mapping) {
     using tt::tt_metal::CBDescriptor;
     using tt::tt_metal::CBFormatDescriptor;
     using tt::tt_metal::KernelDescriptor;
@@ -379,6 +411,91 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     using tt::tt_metal::WriterConfigDescriptor;
 
     auto* mesh_device = input_tensor[0].device();
+    // Preserve a single axis-mode kernel shape regardless of the parent mesh geometry.
+    // The mapping is compile-time disabled in this mode, so nonzero dimensions would
+    // only create redundant JIT variants.
+    if (!rank_mapping.full_mesh) {
+        rank_mapping = {};
+    }
+    TT_FATAL(
+        !rank_mapping.full_mesh || topology == ttnn::ccl::Topology::Ring,
+        "full-mesh ring-attention all-gather requires Ring topology");
+    TT_FATAL(
+        !rank_mapping.full_mesh || (rank_mapping.mesh_rows > 0 && rank_mapping.mesh_cols > 0 &&
+                                    rank_mapping.mesh_rows * rank_mapping.mesh_cols == ring_size),
+        "invalid full-mesh rank mapping: rows={}, cols={}, ring_size={}",
+        rank_mapping.mesh_rows,
+        rank_mapping.mesh_cols,
+        ring_size);
+    if (rank_mapping.full_mesh) {
+        const auto live_mesh_shape = mesh_device->shape();
+        TT_FATAL(
+            live_mesh_shape.dims() == 2 && live_mesh_shape[0] == rank_mapping.mesh_rows &&
+                live_mesh_shape[1] == rank_mapping.mesh_cols,
+            "full-mesh ring-attention mapping {}x{} does not match live mesh shape {}",
+            rank_mapping.mesh_rows,
+            rank_mapping.mesh_cols,
+            live_mesh_shape);
+        TT_FATAL(
+            rank_mapping.mesh_rows > 1 && rank_mapping.mesh_cols > 1,
+            "full-mesh ring-attention requires both mesh dimensions greater than one, got {}x{}",
+            rank_mapping.mesh_rows,
+            rank_mapping.mesh_cols);
+        TT_FATAL(
+            tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig()),
+            "full-mesh ring-attention requires Fabric2D");
+        TT_FATAL(
+            target_device_coord.dims() == 2,
+            "full-mesh ring-attention target coordinate must be 2D, got {}",
+            target_device_coord);
+        TT_FATAL(
+            target_device_coord[0] < rank_mapping.mesh_rows && target_device_coord[1] < rank_mapping.mesh_cols,
+            "full-mesh ring-attention target coordinate {} is outside {}x{} mesh",
+            target_device_coord,
+            rank_mapping.mesh_rows,
+            rank_mapping.mesh_cols);
+        const uint32_t rank_from_coordinate = ttnn::ccl::snake_ring::index_from_coordinate(
+            target_device_coord[0],
+            target_device_coord[1],
+            rank_mapping.mesh_rows,
+            rank_mapping.mesh_cols,
+            rank_mapping.orientation);
+        TT_FATAL(
+            rank_from_coordinate == ring_index,
+            "full-mesh ring-attention transport rank {} does not match target coordinate {} (expected {})",
+            ring_index,
+            target_device_coord,
+            rank_from_coordinate);
+        const uint32_t lane_count = rank_mapping.orientation == ttnn::ccl::snake_ring::Orientation::Row
+                                        ? rank_mapping.mesh_rows
+                                        : rank_mapping.mesh_cols;
+        TT_FATAL(
+            lane_count % 2 == 0,
+            "full-mesh ring-attention snake closure requires an even lane count, got {}",
+            lane_count);
+
+        const auto coordinate_for_rank = [&](uint32_t transport_rank) {
+            return MeshCoordinate(
+                ttnn::ccl::snake_ring::coordinate_row(
+                    transport_rank, rank_mapping.mesh_rows, rank_mapping.mesh_cols, rank_mapping.orientation),
+                ttnn::ccl::snake_ring::coordinate_col(
+                    transport_rank, rank_mapping.mesh_rows, rank_mapping.mesh_cols, rank_mapping.orientation));
+        };
+        const auto expected_forward = coordinate_for_rank((ring_index + 1) % ring_size);
+        const auto expected_backward = coordinate_for_rank((ring_index + ring_size - 1) % ring_size);
+        TT_FATAL(
+            forward_device_coord.has_value() && *forward_device_coord == expected_forward,
+            "full-mesh ring-attention forward neighbor for transport rank {} must be {}, got {}",
+            ring_index,
+            expected_forward,
+            forward_device_coord);
+        TT_FATAL(
+            backward_device_coord.has_value() && *backward_device_coord == expected_backward,
+            "full-mesh ring-attention backward neighbor for transport rank {} must be {}, got {}",
+            ring_index,
+            expected_backward,
+            backward_device_coord);
+    }
     [[maybe_unused]] const bool is_first_chip = ring_index == 0;
     [[maybe_unused]] const bool is_last_chip = ring_index == ring_size - 1;
     log_trace(
@@ -413,7 +530,9 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         std::swap(num_targets_forward, num_targets_backward);
     }
     // Get worker cores
-    const uint32_t num_senders_per_link = 2;
+    // 2 sender (forward/backward, each with a reader/writer)
+    uint32_t num_senders_per_link =
+        ttnn::experimental::prim::ring_attention_all_gather_async_dynamic::kNumSendersPerLink;
     const auto [sender_worker_core_range, sender_worker_cores] = ttnn::ccl::choose_worker_cores(
         num_links,
         num_senders_per_link,
@@ -519,6 +638,10 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
 
     // Tensor Info
     const uint32_t num_inputs = input_tensor.size();
+    // Even-ring split-forwarding: the caller owns the protocol decision (a fused consumer must implement
+    // the split second-half wait); the legacy topology gate stays so standalone callers keep prior behavior.
+    const bool effective_split_forwarding =
+        split_forwarding_enabled && topology == ttnn::ccl::Topology::Ring && ring_size % 2 == 0 && ring_size > 2;
     constexpr const char* exchange_writer_kernel_source =
         "ttnn/cpp/ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/kernels/"
         "ring_attention_all_gather_writer.cpp";
@@ -535,7 +658,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     sender_reader_forward_kernel.core_ranges = sender_forward_core_ranges;
     sender_reader_forward_kernel.config = WriterConfigDescriptor{};
     sender_reader_forward_kernel.compile_time_args = {
-        ring_index,                       // my_chip_id
+        ring_index,                       // my_transport_rank
         sender_forward_cb_index,          // cb_forward_id
         num_pages_per_packet,             // packet_size_in_pages
         op_config.get_page_size(),        // tensor0_page_size
@@ -549,7 +672,16 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         static_cast<uint32_t>(has_metadata),
         meta_cb_index,
         num_links,
+        static_cast<uint32_t>(effective_split_forwarding),
+        static_cast<uint32_t>(rank_mapping.full_mesh),
+        static_cast<uint32_t>(rank_mapping.orientation),
+        rank_mapping.mesh_rows,
+        rank_mapping.mesh_cols,
     };
+    TT_FATAL(
+        sender_reader_forward_kernel.compile_time_args.size() ==
+            ttnn::ring_attention_all_gather::kReaderFixedCompileTimeArgCount,
+        "ring-attention reader fixed compile-time argument count changed unexpectedly");
     for (uint32_t i = 0; i < num_inputs; i++) {
         sender_reader_forward_kernel.compile_time_args.push_back(op_config.get_page_size());
     }
@@ -574,7 +706,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     sender_writer_forward_kernel.core_ranges = sender_forward_core_ranges;
     sender_writer_forward_kernel.config = ReaderConfigDescriptor{};
     sender_writer_forward_kernel.compile_time_args = {
-        ring_index,                               // my_chip_id
+        ring_index,                               // my_transport_rank
         reserved_packet_header_forward_CB_index,  // reserved_packet_header_cb_id
         num_packet_headers_storable,              // num_packet_headers_storable
         sender_forward_cb_index,                  // cb_forward_id
@@ -593,7 +725,16 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         static_cast<uint32_t>(has_metadata),
         meta_cb_index,
         num_links,
+        static_cast<uint32_t>(effective_split_forwarding),
+        static_cast<uint32_t>(rank_mapping.full_mesh),
+        static_cast<uint32_t>(rank_mapping.orientation),
+        rank_mapping.mesh_rows,
+        rank_mapping.mesh_cols,
     };
+    TT_FATAL(
+        sender_writer_forward_kernel.compile_time_args.size() ==
+            ttnn::ring_attention_all_gather::kWriterFixedCompileTimeArgCount,
+        "ring-attention writer fixed compile-time argument count changed unexpectedly");
     for (uint32_t i = 0; i < num_inputs; i++) {
         sender_writer_forward_kernel.compile_time_args.push_back(op_config.get_page_size());
     }
@@ -616,7 +757,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     sender_reader_backward_kernel.core_ranges = sender_backward_core_ranges;
     sender_reader_backward_kernel.config = WriterConfigDescriptor{};
     sender_reader_backward_kernel.compile_time_args = {
-        ring_index,                       // my_chip_id
+        ring_index,                       // my_transport_rank
         sender_backward_cb_index,         // cb_backward_id
         num_pages_per_packet,             // packet_size_in_pages
         op_config.get_page_size(),        // tensor0_page_size
@@ -630,7 +771,16 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         static_cast<uint32_t>(has_metadata),
         meta_cb_index,
         num_links,
+        static_cast<uint32_t>(effective_split_forwarding),
+        static_cast<uint32_t>(rank_mapping.full_mesh),
+        static_cast<uint32_t>(rank_mapping.orientation),
+        rank_mapping.mesh_rows,
+        rank_mapping.mesh_cols,
     };
+    TT_FATAL(
+        sender_reader_backward_kernel.compile_time_args.size() ==
+            ttnn::ring_attention_all_gather::kReaderFixedCompileTimeArgCount,
+        "ring-attention reader fixed compile-time argument count changed unexpectedly");
     for (uint32_t i = 0; i < num_inputs; i++) {
         sender_reader_backward_kernel.compile_time_args.push_back(op_config.get_page_size());
     }
@@ -655,7 +805,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     sender_writer_backward_kernel.core_ranges = sender_backward_core_ranges;
     sender_writer_backward_kernel.config = ReaderConfigDescriptor{};
     sender_writer_backward_kernel.compile_time_args = {
-        ring_index,                                // my_chip_id
+        ring_index,                                // my_transport_rank
         reserved_packet_header_backward_CB_index,  // reserved_packet_header_cb_id
         num_packet_headers_storable,               // num_packet_headers_storable
         sender_backward_cb_index,                  // cb_backward_id
@@ -674,7 +824,16 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         static_cast<uint32_t>(has_metadata),
         meta_cb_index,
         num_links,
+        static_cast<uint32_t>(effective_split_forwarding),
+        static_cast<uint32_t>(rank_mapping.full_mesh),
+        static_cast<uint32_t>(rank_mapping.orientation),
+        rank_mapping.mesh_rows,
+        rank_mapping.mesh_cols,
     };
+    TT_FATAL(
+        sender_writer_backward_kernel.compile_time_args.size() ==
+            ttnn::ring_attention_all_gather::kWriterFixedCompileTimeArgCount,
+        "ring-attention writer fixed compile-time argument count changed unexpectedly");
     for (uint32_t i = 0; i < num_inputs; i++) {
         sender_writer_backward_kernel.compile_time_args.push_back(op_config.get_page_size());
     }
@@ -796,8 +955,9 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         KernelDescriptor::RTArgList reader_forward_rt_args;
         reader_forward_rt_args.push_back(static_cast<uint32_t>(dim));  // dim to gather on
         reader_forward_rt_args.push_back(ring_size);                   // ring_size
-        reader_forward_rt_args.push_back(
-            static_cast<uint32_t>(semaphore.at(1).address()));  // smuggled-rta-ok: persistent GlobalSemaphore address
+        reader_forward_rt_args.push_back(static_cast<uint32_t>(
+            semaphore.at(ttnn::experimental::prim::ring_attention_all_gather_async_dynamic::kForwardSemaphoreIdx)
+                .address()));  // smuggled-rta-ok: re-applied via override_runtime_arguments()
         reader_forward_rt_args.append(tensor_descriptor_args);
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
             reader_forward_rt_args.push_back(input_tensor[input_idx].buffer());
@@ -823,8 +983,9 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         KernelDescriptor::RTArgList reader_backward_rt_args;
         reader_backward_rt_args.push_back(static_cast<uint32_t>(dim));  // dim to gather on
         reader_backward_rt_args.push_back(ring_size);                   // ring_size
-        reader_backward_rt_args.push_back(
-            static_cast<uint32_t>(semaphore.at(0).address()));  // smuggled-rta-ok: persistent GlobalSemaphore address
+        reader_backward_rt_args.push_back(static_cast<uint32_t>(
+            semaphore.at(ttnn::experimental::prim::ring_attention_all_gather_async_dynamic::kBackwardSemaphoreIdx)
+                .address()));  // smuggled-rta-ok: re-applied via override_runtime_arguments()
         reader_backward_rt_args.append(tensor_descriptor_args);
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
             reader_backward_rt_args.push_back(input_tensor[input_idx].buffer());
@@ -860,8 +1021,9 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         writer_forward_rt_args.push_back(static_cast<uint32_t>(sender_forward_worker_core.x));  // out_ready_sem_noc0_x
         writer_forward_rt_args.push_back(static_cast<uint32_t>(sender_forward_worker_core.y));  // out_ready_sem_noc0_y
         writer_forward_rt_args.push_back(ring_size);                                            // ring_size
-        writer_forward_rt_args.push_back(
-            static_cast<uint32_t>(semaphore.at(1).address()));  // smuggled-rta-ok: persistent GlobalSemaphore address
+        writer_forward_rt_args.push_back(static_cast<uint32_t>(
+            semaphore.at(ttnn::experimental::prim::ring_attention_all_gather_async_dynamic::kForwardSemaphoreIdx)
+                .address()));  // smuggled-rta-ok: re-applied via override_runtime_arguments()
         writer_forward_rt_args.append(tensor_descriptor_args);
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
             writer_forward_rt_args.push_back(output_tensor[input_idx].buffer());
@@ -900,8 +1062,9 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         writer_backward_rt_args.push_back(
             static_cast<uint32_t>(sender_backward_worker_core.y));  // out_ready_sem_noc0_y
         writer_backward_rt_args.push_back(ring_size);               // ring_size
-        writer_backward_rt_args.push_back(
-            static_cast<uint32_t>(semaphore.at(0).address()));  // smuggled-rta-ok: persistent GlobalSemaphore address
+        writer_backward_rt_args.push_back(static_cast<uint32_t>(
+            semaphore.at(ttnn::experimental::prim::ring_attention_all_gather_async_dynamic::kBackwardSemaphoreIdx)
+                .address()));  // smuggled-rta-ok: re-applied via override_runtime_arguments()
         writer_backward_rt_args.append(tensor_descriptor_args);
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
             writer_backward_rt_args.push_back(output_tensor[input_idx].buffer());

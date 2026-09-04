@@ -14,6 +14,7 @@
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
 #include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/distributed/pinned_memory_cache.hpp"
 #include "tt_metal/distributed/mesh_device_view_impl.hpp"
 
@@ -36,14 +37,14 @@ MeshTensor mesh_tensor_from_buffer_with_topology(
 
 MeshTensor allocate_mesh_tensor_on_device_with_topology(
     distributed::MeshDevice& mesh_device, TensorSpec spec, TensorTopology topology) {
-    // Catch-all guard: FP8_E4M3 is only supported on Blackhole. Op-level validators may also
-    // check this, but we enforce it here at the device-binding boundary so any path that
-    // produces an FP8 tensor on unsupported hardware fails loudly rather than silently
-    // generating programs that misbehave later.
+    // Catch-all guard enforced at the device-binding boundary so any path that produces an FP8 tensor on
+    // unsupported hardware fails loudly rather than silently generating programs that misbehave later.
+    // Gate on the data-format capability (the same predicate used in data_format.cpp / program_spec.cpp)
+    // rather than an arch list, so this stays correct as arches are added or drop FP8 support.
     if (spec.data_type() == DataType::FP8_E4M3) {
         TT_FATAL(
-            mesh_device.arch() == tt::ARCH::BLACKHOLE,
-            "FP8_E4M3 is only supported on Blackhole hardware (got arch {})",
+            tt::is_data_format_supported(tt::DataFormat::Fp8_e4m3, mesh_device.arch()),
+            "FP8_E4M3 is not supported on arch {}",
             mesh_device.arch());
     }
     auto mesh_buffer = tensor_impl::allocate_device_buffer(&mesh_device, spec);
@@ -234,7 +235,11 @@ void h2d_as_replicate_tensor_on_1x1_mesh(
         HostBuffer pinned_buffer(*host_buffer);
         auto pinned_memory = local_coords.empty() ? nullptr
                                                   : experimental::PinnedMemoryCache::instance().try_pin(
-                                                        *mesh_device, local_range, pinned_buffer, /*map_to_noc=*/true);
+                                                        *mesh_device,
+                                                        local_range,
+                                                        pinned_buffer,
+                                                        /*map_to_noc=*/true,
+                                                        experimental::PinnedMemoryDeviceAccess::ReadOnly);
 
         if (pinned_memory) {
             std::vector<distributed::ShardDataTransfer> transfers;
@@ -331,7 +336,11 @@ std::vector<distributed::MeshCoordinate> enqueue_write_tensor(
                 auto coord_range = distributed::MeshCoordinateRangeSet(distributed::MeshCoordinateRange(coord, coord));
                 HostBuffer pinned_buf(*buf);
                 auto pinned_memory = experimental::PinnedMemoryCache::instance().try_pin(
-                    *mesh_device, coord_range, pinned_buf, /*map_to_noc=*/true);
+                    *mesh_device,
+                    coord_range,
+                    pinned_buf,
+                    /*map_to_noc=*/true,
+                    experimental::PinnedMemoryDeviceAccess::ReadOnly);
 
                 auto xfer = distributed::ShardDataTransfer{distributed::MeshCoordinate(coord)}
                                 .host_data(buf->view_bytes().data())

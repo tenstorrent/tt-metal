@@ -322,9 +322,11 @@ void Kernel::process_dataflow_buffer_binding_handles(
 }
 
 void Kernel::process_semaphore_binding_handles(
-    const std::function<void(const std::string& accessor_name, uint16_t semaphore_id)> callback) const {
-    for (const auto& [accessor_name, semaphore_id] : this->semaphore_binding_handles_) {
-        callback(accessor_name, semaphore_id);
+    std::function<void(
+        const std::string& accessor_name, uint16_t semaphore_id, SemScope scope, uint32_t total_binder_harts)> callback)
+    const {
+    for (const auto& [accessor_name, handle] : this->semaphore_binding_handles_) {
+        callback(accessor_name, handle.id, handle.scope, handle.total_binder_harts);
     }
 }
 
@@ -575,7 +577,9 @@ uint64_t Kernel::compute_hash() const {
     }
     for (const auto& it : sorted_iters(this->semaphore_binding_handles_)) {
         hasher.update(it->first);
-        hasher.update(static_cast<uint64_t>(it->second));
+        hasher.update(static_cast<uint64_t>(it->second.id));
+        hasher.update(static_cast<uint64_t>(it->second.scope));
+        hasher.update(static_cast<uint64_t>(it->second.total_binder_harts));
     }
     // Tensor binding handles:
     //  - stored as a std::vector (user-specified order), so no sort step needed
@@ -1582,14 +1586,13 @@ std::string QuasarComputeKernel::config_hash() const {
     }
 
     return fmt::format(
-        "{}_{}_{}_{}_{}_{}_{}_{}",
+        "{}_{}_{}_{}_{}_{}_{}",
         fmt::join(compute_processors_, "_"),
         enchantum::to_string(config_.math_fidelity),
         config_.fp32_dest_acc_en,
         config_.math_approx_mode,
         config_.dst_full_sync_en,
         config_.bfp8_pack_precise,
-        config_.enable_2x_src_format,
         unpack_mode_descriptor);
 }
 
@@ -1604,7 +1607,6 @@ void QuasarComputeKernel::set_build_options(JitBuildOptions& build_options) cons
     build_options.dst_full_sync_en = this->config_.dst_full_sync_en;
     build_options.unpack_to_dest_mode = this->config_.unpack_to_dest_mode;
     build_options.bfp8_pack_precise = this->config_.bfp8_pack_precise;
-    build_options.enable_2x_src_format = this->config_.enable_2x_src_format;
 }
 
 }  // namespace experimental::quasar

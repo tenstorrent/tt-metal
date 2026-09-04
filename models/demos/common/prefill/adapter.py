@@ -254,6 +254,15 @@ class PrefillModelAdapter(ABC):
     def reference_moe_cls(self) -> Optional[type]:
         return None
 
+    @property
+    def reference_rotary_cls(self) -> Optional[type]:
+        """Rope module a standalone reference attention needs its ``(cos, sin)`` from.
+
+        Only needed for references from transformers >= 5, which compute rope at the MODEL level and
+        pass ``position_embeddings`` down, so an attention used on its own has to be handed them.
+        The vendored DeepSeek/Kimi references build rope internally and leave this None."""
+        return None
+
 
 # ---------------------------------------------------------------------------
 # Model registry

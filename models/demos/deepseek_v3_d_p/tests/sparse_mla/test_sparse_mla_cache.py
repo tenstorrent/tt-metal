@@ -31,6 +31,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
     ReuseIndexer,
     TtIndexer,
     indexer_layer_is_reused,
+    normalized_hadamard_matrix,
     resolve_has_indexer,
 )
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
@@ -42,6 +43,57 @@ from tests.ttnn.utils_for_testing import comp_pcc
 CACHE_DIR = Path("/tmp/DS_PREFILL_sparse_mla")
 SEQ_LEN = 256
 SP_AXIS, TP_AXIS = 0, 1
+
+
+# --------------------------------------------------------------------------------------------------
+# Host-only: the decode-compatible Hadamard is orthonormal, so applying it to both indexer operands
+# preserves their score while spreading values before cache quantization.
+# --------------------------------------------------------------------------------------------------
+def test_normalized_hadamard_preserves_indexer_scores():
+    h = normalized_hadamard_matrix(128).float()
+    identity = torch.eye(128)
+    torch.testing.assert_close(h.T @ h, identity, rtol=2e-3, atol=2e-3)
+
+    torch.manual_seed(0)
+    q = torch.randn(3, 128)
+    k = torch.randn(5, 128)
+    torch.testing.assert_close((q @ h) @ (k @ h).T, q @ k.T, rtol=2e-3, atol=2e-3)
+
+
+def test_normalized_hadamard_rejects_non_power_of_two(expect_error):
+    with expect_error(AssertionError, "power of two"):
+        normalized_hadamard_matrix(96)
+
+
+@pytest.mark.parametrize("slots", [1, 2])
+def test_sp1_kvpe_slice_materializes_only_multi_slot_cache(monkeypatch, slots):
+    """A single-slot full-range slice must remain an alias; only slot selection needs new DRAM storage."""
+    import models.demos.deepseek_v3_d_p.tt.mla.mla as mla_module
+
+    storage = SimpleNamespace(shape=(slots, 1, 64, 128))
+    cache = SimpleNamespace(storage=storage, format="format", geometry="geometry")
+    slice_calls = []
+
+    def fake_slice(tensor, starts, ends, **kwargs):
+        slice_calls.append((tensor, starts, ends, kwargs))
+        return tensor if not kwargs else SimpleNamespace(shape=(1, 1, 64, 128))
+
+    monkeypatch.setattr(ttnn, "slice", fake_slice)
+    monkeypatch.setattr(mla_module, "MlaKvCache", lambda **kwargs: SimpleNamespace(**kwargs))
+    self = SimpleNamespace(sp_factor=1)
+
+    gathered = ttMLA._gather_kvpe_prefix(
+        self, cache, cache_batch_idx=slots - 1, populated_global=64, block_cyclic_chunk_local=64
+    )
+
+    if slots == 1:
+        assert not slice_calls
+        assert gathered.storage is storage
+    else:
+        _, starts, _, kwargs = slice_calls[0]
+        assert starts[0] == slots - 1
+        assert kwargs["memory_config"] == ttnn.DRAM_MEMORY_CONFIG
+        assert gathered.storage is not storage
 
 
 # --------------------------------------------------------------------------------------------------

@@ -87,6 +87,12 @@ void validate_in0_row_major_height_sharded(
         "matmul_decode replicated-A path uses M = A's shard height, but shard height {} != M {}",
         a_shard.shape[0],
         operation_attributes.M);
+    if (operation_attributes.M > 1) {
+        log_warning(
+            tt::LogOp,
+            "matmul_decode with ROW_MAJOR input A and M={} is not yet optimized for this case",
+            operation_attributes.M);
+    }
     TT_FATAL(
         a_shard.shape[0] >= 1 && a_shard.shape[0] <= 8,
         "matmul_decode replicated-A path treats each row as a tile of height 1, so shard height (M) must be in [1, 8] "

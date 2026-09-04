@@ -28,7 +28,7 @@ void kernel_main() {
     const uint32_t mcast_dest_noc_end_y = get_arg(args::mcast_dest_noc_end_y);
 
     Noc noc;
-    Semaphore<> reduce_sender_sem(sem::reduce_sender);
+    Semaphore reduce_sender_sem(sem::reduce_sender);
     // [E[x], E[x^2]] local to sender
     DataflowBuffer dfb_stats_reduced_obj(dfb::stats_reduced);
     // [E[x], E[X^2]] global to all cores

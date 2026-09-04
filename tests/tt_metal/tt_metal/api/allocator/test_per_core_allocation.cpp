@@ -7,6 +7,7 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <numeric>
 #include <optional>
 #include <string>
@@ -16,8 +17,13 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
+#include "tests/tt_metal/tt_metal/api/allocator/hybrid_allocator_fixture.hpp"
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
+#include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
+#include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
+#include <tt-metalium/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/tensor/spec/memory_config/memory_config.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
 #include <tt-metalium/experimental/sockets/h2d_socket.hpp>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
@@ -33,40 +39,11 @@ namespace tt::tt_metal {
 
 namespace per_core = experimental::per_core_allocation;
 
-class PerCoreAllocationTest : public MeshDeviceSingleCardBufferFixture {
-protected:
-    void SetUp() override {
-        // Enable HYBRID allocator mode before device creation.
-        setenv("TT_METAL_ALLOCATOR_MODE_HYBRID", "1", /*overwrite=*/1);
+// The fixture is shared with test_range_lockstep_allocation.cpp; the name is kept so the
+// existing test ids do not move.
+using PerCoreAllocationTest = HybridAllocatorTest;
 
-        if (!this->validate_dispatch_mode()) {
-            GTEST_SKIP();
-        }
-        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-        std::vector<ChipId> ids;
-        for (ChipId id : tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids()) {
-            ids.push_back(id);
-        }
-        const auto& dispatch_core_config =
-            tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
-        id_to_device_ = distributed::MeshDevice::create_unit_meshes(
-            ids, l1_small_size_, trace_region_size_, 1, dispatch_core_config, {}, DEFAULT_WORKER_L1_SIZE);
-        devices_.clear();
-        for (const auto& [device_id, device] : id_to_device_) {
-            devices_.push_back(device);
-        }
-        init_max_cbs();
-    }
-
-    void TearDown() override {
-        MeshDeviceSingleCardBufferFixture::TearDown();
-        unsetenv("TT_METAL_ALLOCATOR_MODE_HYBRID");
-    }
-};
-
-// Use 1024-byte page size to be safely above all alignment requirements
-// (FreeListOpt internally uses DRAM alignment which may be larger than L1 alignment)
-static constexpr DeviceAddr PAGE_SIZE = 1024;
+static constexpr DeviceAddr PAGE_SIZE = HYBRID_TEST_PAGE_SIZE;
 
 TEST_F(PerCoreAllocationTest, BasicPerCoreAllocation) {
     auto* device = this->devices_[0]->get_devices()[0];

@@ -4,7 +4,6 @@
 
 #include "layernorm_bw.hpp"
 
-#include "autograd/auto_context.hpp"
 #include "core/compute_kernel_config.hpp"
 #include "device/layernorm_bw_device_operation.hpp"
 

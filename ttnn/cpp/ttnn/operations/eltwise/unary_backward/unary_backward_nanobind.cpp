@@ -1145,7 +1145,10 @@ void py_module(nb::module_& mod) {
     bind_unary_backward_optional<"tanh_bw">(
         mod,
         &ttnn::tanh_bw,
-        R"doc(Performs backward operations for hyperbolic tangent (tanh) function on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc");
+        R"doc(Performs backward operations for hyperbolic tangent (tanh) function on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc",
+        R"doc(BFLOAT16)doc",
+        R"doc(TILE)doc",
+        R"doc(All operands must use the standard 32x32 tile.)doc");
 
     bind_unary_backward_optional<"sqrt_bw">(
         mod,

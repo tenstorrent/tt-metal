@@ -99,7 +99,6 @@ ALWI void process_tile(
     PREPROCESS(BCAST_OP, dfb_pre_bcast_id, dfb_post_bcast_id, dfb_out_id, num_tiles_per_cycle);
     dfb_post_bcast.wait_front(num_tiles_per_cycle);
 
-    compute_kernel_hw_startup(dfb_raw_row_id, dfb_llk_post_id);
     for (uint32_t j = tile_start; j < freq; ++j) {
         // --- ROW broadcast pass (per iteration): the raw partial row tile -> full tile in llk_post.
         // Identical to the single-operand ROW kernel's broadcast pass (unary_bcast<ROW> + the two
@@ -127,14 +126,11 @@ ALWI void process_tile(
         dfb_raw_row.pop_front(num_tiles_per_cycle);
 
         pack_reconfig_data_format(dfb_llk_post_id, dfb_out_id);
-#ifdef ARCH_QUASAR
-        // Retarget the packer destination ring back to dfb_out for the binary-op pack below (see above).
-        pack_init(dfb_out_id);
-#endif
 #if defined(ARCH_BLACKHOLE)
         PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(dfb_out_id)));
 #elif defined(ARCH_QUASAR)
-        PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(dfb_out_id)));
+        // Retarget the packer destination ring back to dfb_out for the binary-op pack below (see above).
+        pack_init(dfb_out_id);
 #endif
 
         // ROW operand's activation chain (reads the expanded llk_post tile). No-op (post aliases llk_post)
@@ -239,7 +235,7 @@ void kernel_main() {
     compute_kernel_hw_startup(dfb_post_lhs_id, dfb_out_id);
     copy_init(dfb_post_lhs_id);
 #ifdef PACK_RELU
-    PACK((llk_pack_relu_config(ReluConfig::zero())));
+    pack_relu_config(ReluConfig::zero());
 #endif
 
 #if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS)) and not(HAS_ACTIVATIONS(POST))

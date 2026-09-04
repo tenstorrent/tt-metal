@@ -64,6 +64,10 @@ public:
     // validating a core before they need its bank ids.
     bool has_bank(BufferType buffer_type, const CoreCoord& logical_core) const;
 
+    // One lookup where has_bank() followed by get_bank_ids_from_logical_core() is two. Null when
+    // the core has no bank of this type.
+    const std::vector<uint32_t>* find_bank_ids(BufferType buffer_type, const CoreCoord& logical_core) const;
+
     DeviceAddr get_base_allocator_addr(const HalMemType& mem_type) const;
 
     const AllocatorConfig& get_config() const;

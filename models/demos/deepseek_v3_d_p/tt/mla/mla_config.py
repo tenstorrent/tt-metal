@@ -11,6 +11,11 @@ Production local seq_len values:
   - 100k total / 8 SP devices = 12800 per device
   - 128k total / 32 SP devices = 4096 per device
   - 100k total / 32 SP devices = 3200 per device
+
+A slot may hold a LIST of candidates when variants share a seq_len; ttMLA takes the first whose
+gating tags match, so order is priority order, most specific first. The tags and their semantics
+live with the checks in ``ttMLA._cfg_matches`` -- one of them is the per-device K, so an entry whose
+tiling cannot divide a given model's K is skipped rather than applied to it.
 """
 
 import ttnn

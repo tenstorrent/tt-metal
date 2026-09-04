@@ -413,7 +413,13 @@ def _safe_arg_str(v, _depth=0):
         if len(v) > _MAX_SEQUENCE_ELEMENTS:
             head.append(f"... +{len(v) - _MAX_SEQUENCE_ELEMENTS} more")
         return f"{open_}{', '.join(head)}{close}"
-    return str(v)
+
+    # Recording arguments is diagnostic, so a value whose repr misbehaves (e.g. a binding whose
+    # std::string-returning __repr__ has no registered caster) must not take down the operation.
+    try:
+        return str(v)
+    except Exception as e:
+        return f"<unprintable {type(v).__name__}: {type(e).__name__}: {e}>"
 
 
 def record_python_operation(name, function_args, function_kwargs):
