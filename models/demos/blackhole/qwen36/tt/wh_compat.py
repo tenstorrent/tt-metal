@@ -33,6 +33,32 @@ NOTE on blast radius: these rebind module-globals in the shared module, so withi
 imports it the change is visible to any other model using it. Both are guarded by
 ``is_blackhole()`` evaluated per call (not at import, which would need an open device), so
 Blackhole behaviour is bit-for-bit unchanged and only Wormhole takes the new paths.
+
+    Blackhole: no exposure. Both overrides delegate to the upstream implementation whenever
+    ``is_blackhole()``, so any model in the process -- qwen36 or not -- runs upstream code.
+
+    Wormhole: real exposure, and it is process-wide, not qwen36-scoped. Importing any qwen36
+    GDN module (``tt/gdn/tp.py``, ``tt/gdn/decode.py``, or this module) runs ``apply()`` as an
+    import side effect, which rebinds ``_seq_memory_config`` and
+    ``chunk_gated_delta_rule_seq`` on the SHARED module. From that point any *other* Wormhole
+    model that imports ``models/experimental/gated_attention_gated_deltanet`` in the same
+    process silently gets DRAM chunk-seq activations and the bf16 output relayout, even though
+    it never imported anything under qwen36. It is not opt-in and there is no per-caller
+    scoping.
+
+    Why that is acceptable today: qwen36 is the only Wormhole consumer of the shared GDN
+    module, so no other model can observe the rebind. Both overrides are also strictly
+    L1-relief changes on a path that OOMs without them -- the alternative for a co-resident
+    Wormhole model is not "upstream numerics", it is a failed allocation.
+
+    What to do if that stops holding: if a second Wormhole model starts using the shared GDN
+    module, do NOT leave this as an import side effect. Drop the module-level ``apply()`` call
+    at the bottom of this file, keep the explicit calls at the qwen36 GDN entry points, and
+    push the dtype/memory-config choice down into the shared module as a parameter so each
+    caller picks its own. The pytest process is the case to watch: a single session that
+    collects both qwen36 and another Wormhole GDN model would share one interpreter, and
+    collection-time imports alone are enough to flip the globals -- test order, not the model
+    under test, would decide which kernels run.
 """
 import inspect
 
