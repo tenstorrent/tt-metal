@@ -40,6 +40,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/tile.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -1495,7 +1496,9 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
                 .entry_size = tilized_info.page_size,
                 .num_entries = 1,
                 .data_format_metadata = tilized_info.data_format,
-                .unpack_face_geometry_metadata = FaceGeometry{.face_r_dim = 1, .num_faces = 4},
+                // Four single-row faces: a 2x2 grid of 1x16 faces.
+                .tile_format_metadata =
+                    tt::tt_metal::Tile({2, tt::constants::TILE_WIDTH}, {1, tt::constants::FACE_WIDTH}),
             });
         } else if (split_program_tilize_only) {
             // OPTION B / Program A: the tilize writes STRAIGHT INTO the borrowed OUT (sized to M*K below,

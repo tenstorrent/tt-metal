@@ -2785,9 +2785,7 @@ void ProgramImpl::set_dfb_data_fmt_and_tile(const std::vector<CoreRange>& crs, J
             if (data_format == DataFormat::Invalid) {
                 continue;
             }
-            const auto& tile_opt = dfb->config.tile;
-            const auto& unpack_geom = dfb->config.unpack_face_geometry;
-            build_options.set_cb_data_fmt_tile_and_face_geometry(cb_index, data_format, tile_opt, unpack_geom);
+            build_options.set_cb_data_fmt_and_tile(cb_index, data_format, dfb->config.tile);
         }
     }
 }

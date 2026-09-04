@@ -32,6 +32,7 @@
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/tile.hpp>
 #include "llk_device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include "hostdevcommon/kernel_structs.h"
@@ -59,6 +60,16 @@ namespace tt::tt_metal {
 using std::vector;
 using namespace tt;
 using namespace tt::test_utils;
+
+namespace {
+// Describe a tile that holds `num_faces` faces of `face_r_dim` rows each, laid out as a
+// 1xN or 2xN face grid (the LLK caps the grid at 2x2).
+Tile tile_from_face_layout(uint32_t face_r_dim, uint32_t num_faces) {
+    const uint32_t tile_r_dim = face_r_dim * (num_faces > 2 ? 2 : 1);
+    const uint32_t tile_c_dim = num_faces == 1 ? constants::FACE_WIDTH : constants::TILE_WIDTH;
+    return Tile({tile_r_dim, tile_c_dim}, {face_r_dim, constants::FACE_WIDTH});
+}
+}  // namespace
 
 namespace unit_tests::compute::tilize {
 
@@ -245,18 +256,18 @@ void run_single_core_tilize_program(distributed::MeshDevice& mesh_device, const 
         .data_format_metadata = output_buf_format,
     };
     if (test_config.untilize_type.has_value() && test_config.untilize_type == UntilizeType::DST) {
-        // DST untilize reads face geometry from the output CB metadata (no explicit kernel args).
-        output_dfb_spec.unpack_face_geometry_metadata =
-            tt::tt_metal::FaceGeometry{test_config.face_r_dim, test_config.num_faces_per_tile};
+        // DST untilize reads the face layout from the output CB metadata (no explicit kernel args).
+        output_dfb_spec.tile_format_metadata =
+            tile_from_face_layout(test_config.face_r_dim, test_config.num_faces_per_tile);
     } else if (
         test_config.tilize_type.has_value() && test_config.tilize_type == TilizeType::UNPACK_A &&
         (test_config.num_faces_per_tile != 4 || test_config.face_r_dim != 16)) {
         // Tiny/shortened-face tilize (e.g. 16x32, or face_r_dim < 16): the unpack/pack LLKs read the
-        // tile's face geometry from the CB metadata, so tag both the input and output buffers with it.
+        // tile's face layout from the CB metadata, so tag both the input and output buffers with it.
         // Gate on either fewer faces or a shorter face row dim so shortened four-face tiles are caught too.
-        const auto fg = tt::tt_metal::FaceGeometry{test_config.face_r_dim, test_config.num_faces_per_tile};
-        input_dfb_spec.unpack_face_geometry_metadata = fg;
-        output_dfb_spec.unpack_face_geometry_metadata = fg;
+        const auto tile = tile_from_face_layout(test_config.face_r_dim, test_config.num_faces_per_tile);
+        input_dfb_spec.tile_format_metadata = tile;
+        output_dfb_spec.tile_format_metadata = tile;
     }
 
     // Reader kernel: untilize types stream native tiles from DRAM (`reader_unary_2_0`);
@@ -998,9 +1009,9 @@ static void run_quasar_tilize_untilize_test(
         .data_format_metadata = output_data_format,
     };
     if (tiny_tile) {
-        const auto fg = tt::tt_metal::FaceGeometry{face_r_dim, num_faces};
-        input_dfb_spec.unpack_face_geometry_metadata = fg;
-        output_dfb_spec.unpack_face_geometry_metadata = fg;
+        const auto tile = tile_from_face_layout(face_r_dim, num_faces);
+        input_dfb_spec.tile_format_metadata = tile;
+        output_dfb_spec.tile_format_metadata = tile;
     }
 
     experimental::KernelSpec reader_spec{
