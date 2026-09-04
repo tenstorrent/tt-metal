@@ -164,35 +164,36 @@ callers pass `enable-kernel-clang-tidy: true` plus `clang-tidy-target-group:
 compile commands land in the leg's run-with-log file), with all three
 kernel-compile cache layers defeated for that leg only (see the gotcha above:
 `TT_METAL_FORCE_JIT_COMPILE=1`, `TT_METAL_CCACHE_KERNEL_SUPPORT` unset,
-`CCACHE_DISABLE=1`, and the Redis `CCACHE_REMOTE_STORAGE` cleared), and
-after the tests a
-non-blocking (`continue-on-error`) step runs the filter + clang-tidy and
-uploads `kernel-clang-tidy-<group>` as an artifact (raw + translated
-compile_commands.json, findings.txt, summary.txt). It is a prototype riding on
-partial, run-dependent coverage — explicitly not a merge gate.
+`CCACHE_DISABLE=1`, and the Redis `CCACHE_REMOTE_STORAGE` cleared). After the
+tests, a non-blocking (`continue-on-error`) step translates the captured
+commands (this script, no `--run`) and analyzes them with CodeChecker —
+`CodeChecker analyze compile_commands.json --analyzers clang-tidy` with our
+config forwarded via `--analyzer-config
+clang-tidy:take-config-from-directory=true clang-tidy:cc-verbatim-args-file=…`
+(the file contains `--config-file=<kernel .clang-tidy>`), then `CodeChecker
+parse --export html` — the same tooling `clang-static-analyzer.yaml` uses.
+Two artifacts per group: `kernel-clang-tidy-<group>` (compile_commands.json,
+summary, plists) and `kernel-clang-tidy-html-<group>` (browsable report).
+Gotcha found while wiring this: CodeChecker's compilation-db parser consults
+`ClangSA.analyzer_binary()` unconditionally, so a `clang` binary must be
+resolvable (we pass both via `CC_ANALYZER_BIN=clang-tidy:…;clangsa:…`) even
+though only clang-tidy runs.
 
-The dedicated caller is `.github/workflows/kernel-clang-tidy.yaml`
-(structured after `code-coverage.yaml`): build → run one ttnn test group via
-`ttnn-sanity-tests-impl.yaml` with the experiment enabled → a report job that
-downloads every `kernel-clang-tidy-*` artifact, renders an HTML report
-(per-group pages with findings deduplicated across TUs, grouped by check, and
-linked to the source at the tested commit; plus an index), uploads it as the
-`kernel-tidy-report-html` artifact, and publishes it to
-`tenstorrent/tt-metal-clangsa-results` gh-pages under `kernel-clang-tidy/`
-(on main, or when dispatched with `publish-html: true`). Launch with:
+The capture works on simulator legs (`sim_*` SKUs, e.g. `sim_wh_n150`): the
+ttsim run JIT-compiles the same kernels on the host, and only the compile
+commands matter — no device needed. That is the default for the dedicated
+caller, `.github/workflows/kernel-clang-tidy.yaml` (structured after
+`code-coverage.yaml`): build → run one ttnn test group via
+`ttnn-sanity-tests-impl.yaml` with the experiment enabled → a publish job
+that downloads the `kernel-clang-tidy-html-*` artifact and pushes it to
+`tenstorrent/tt-metal-kernel-clang-tidy-results` gh-pages (on main, or when
+dispatched with `publish-html: true`). Launch with:
 
 ```sh
 gh workflow run kernel-clang-tidy.yaml --ref <branch> \
-  -f target-group='trace allocation tracker' -f enabled-skus=wh_n300_civ2 \
+  -f target-group='trace allocation tracker' -f enabled-skus=sim_wh_n150 \
   -f publish-html=true
 ```
-
-Publishing-target note: `code-coverage.yaml` force-orphan-pushes
-`tt-metal-code-coverage` nightly (wiping anything co-published there), and
-`clang-static-analyzer.yaml` currently does the same to
-`tt-metal-clangsa-results` — so the published `kernel-clang-tidy/` subdir
-survives only until the next CSA nightly. A dedicated results repo is the
-promotion path; the run's own HTML artifact is always retained regardless.
 
 ## Coverage and known gaps
 

@@ -326,47 +326,44 @@ jobs:
           fi
           echo "perf_ready=$perf_ready" >> "$GITHUB_OUTPUT"
 
-      # EXPERIMENT (kernel clang-tidy, PROTOTYPE — NOT a merge gate): the steps guarded by
-      # inputs.enable-kernel-clang-tidy capture the real runtime JIT kernel compiles of ONE
-      # matrix leg and run clang-tidy on them after the tests finish. Capture uses the build
-      # system's own compile-command logging (TT_METAL_LOG_KERNELS_COMPILE_COMMANDS=1,
-      # jit_build/build.cpp) rather than `bear`: bear 3.0.x's gRPC-over-localhost intercept
-      # channel fails inside these CI containers ("gRPC call failed: failed to connect to all
-      # addresses"), killing the wrapped command before pytest even starts. Log-based capture
-      # has no wrapper process at all, so it structurally CANNOT fail an otherwise-passing
-      # test leg — the pytest exit code is untouched. Coverage is exactly the kernels that
-      # leg's pytest run JIT-compiled — real compile-time args, real generated headers from
-      # the tt-metal-cache dir — no more, no less. The tidy steps are continue-on-error and
-      # findings are uploaded as an artifact rather than failing the job. See
-      # tech_reports/code-indexing/kernel-clang-tidy.md. All steps are skipped (zero
-      # overhead) when the experiment is disabled.
-      - name: Install clang-tidy (kernel clang-tidy)
+      # Kernel clang-tidy experiment (opt-in, non-blocking): lint the JIT kernel
+      # compiles of the one leg named '<clang-tidy-target-group> [<sku>]'.
+      # See tech_reports/code-indexing/kernel-clang-tidy.md.
+      - name: Install clang-tidy + CodeChecker (kernel clang-tidy)
         id: kernel-tidy-tools
-        if: ${{ inputs.enable-kernel-clang-tidy && !startsWith(matrix.test-group.sku, 'sim_') && matrix.test-group.name == format('{0} [{1}]', inputs.clang-tidy-target-group, matrix.test-group.sku) }}
+        if: ${{ inputs.enable-kernel-clang-tidy && matrix.test-group.name == format('{0} [{1}]', inputs.clang-tidy-target-group, matrix.test-group.sku) }}
         continue-on-error: true
         run: |
-          # Best-effort: if clang-tidy can't be found or installed, leave a clear signal and
-          # let the tests run un-instrumented rather than failing the leg.
-          tidy_ready=false
-          # Any reasonably recent clang-tidy works; the CI/dev images ship one for host lint.
-          tidy_bin=""
-          for v in 21 20 19 18 17 ""; do
-            cand="clang-tidy${v:+-$v}"
-            if command -v "$cand" >/dev/null 2>&1; then tidy_bin="$cand"; break; fi
-          done
-          if [ -z "$tidy_bin" ]; then
+          find_bin() {
+            for v in 21 20 19 18 17 ""; do
+              cand="$1${v:+-$v}"
+              if command -v "$cand" >/dev/null 2>&1; then command -v "$cand"; return; fi
+            done
+          }
+          tidy_bin=$(find_bin clang-tidy)
+          clang_bin=$(find_bin clang)
+          if [ -z "$tidy_bin" ] || [ -z "$clang_bin" ]; then
             apt-get update || true
-            apt-get install -y clang-tidy || true
-            command -v clang-tidy >/dev/null 2>&1 && tidy_bin="clang-tidy"
+            apt-get install -y clang-tidy clang || true
+            tidy_bin=$(find_bin clang-tidy)
+            clang_bin=$(find_bin clang)
           fi
-          if [ -n "$tidy_bin" ]; then
-            tidy_ready=true
-            echo "kernel clang-tidy tools ready: $($tidy_bin --version | sed -n 2p)"
+          if command -v uv >/dev/null 2>&1; then
+            uv pip install codechecker==6.27.1 || true
           else
-            echo "::warning::clang-tidy unavailable; kernel clang-tidy will be skipped."
+            pip3 install codechecker==6.27.1 || pip install codechecker==6.27.1 || true
+          fi
+          tidy_ready=false
+          # CodeChecker's compilation-db parser needs a clangsa binary configured
+          # even when only clang-tidy runs (ClangSA.analyzer_binary() is consulted
+          # unconditionally and None crashes entry parsing).
+          if [ -n "$tidy_bin" ] && [ -n "$clang_bin" ] && command -v CodeChecker >/dev/null 2>&1; then
+            tidy_ready=true
+            echo "CC_ANALYZER_BIN=clang-tidy:${tidy_bin};clangsa:${clang_bin}" >> "$GITHUB_ENV"
+          else
+            echo "::warning::clang-tidy/clang/CodeChecker unavailable; kernel clang-tidy will be skipped."
           fi
           echo "tidy_ready=$tidy_ready" >> "$GITHUB_OUTPUT"
-          echo "KERNEL_TIDY_BIN=$tidy_bin" >> "$GITHUB_ENV"
 
       - name: ${{ matrix.test-group.name }} tests
         if: ${{ !startsWith(matrix.test-group.sku, 'sim_') }}
@@ -420,32 +417,13 @@ jobs:
               RUNNER=(bash -c "$TEST_GROUP_CMD")
             fi
 
-            # EXPERIMENT (kernel clang-tidy): when this leg is the selected target, have the
-            # JIT build itself log every kernel compile command (captured into this step's
-            # run-with-log file, which the post-step parses). Pure env-var capture — no
-            # wrapper process — so it cannot change the tests' exit code. Every kernel
-            # compile cache must be defeated for the capture to see anything — a cache hit at
-            # ANY layer means the compile (and its logged command) never happens:
-            #   1. TT_METAL_FORCE_JIT_COMPILE=1 — a tt-metal-cache hit skips the compile
-            #      entirely (JitBuildState::need_compile).
-            #   2. unset TT_METAL_CCACHE_KERNEL_SUPPORT — this job enables kernel ccache
-            #      (setup-job enable-kernel-ccache), which makes JitBuildEnv prepend `ccache`
-            #      to the SFPI command AND configures CCACHE_REMOTE_ONLY=true +
-            #      CCACHE_REMOTE_STORAGE=redis://... — i.e. the CI Redis-backed kernel cache.
-            #      A Redis hit serves the object without running the real compile. Unsetting
-            #      this takes ccache (and therefore Redis) out of the picture entirely for
-            #      this leg, so the logged argv is the bare SFPI compiler.
-            #   3. CCACHE_DISABLE=1 + clear CCACHE_REMOTE_STORAGE — belt and suspenders in
-            #      case anything else routes a kernel compile through ccache: disabled ccache
-            #      is a pure pass-through (no local or remote/Redis lookup, no store).
-            # TT_LOGGER_LEVEL=info is required because the compile-cmd lines are logged at
-            # info level (the container default here is warn). These exports are scoped to
-            # this step's process tree for this one leg; other legs and the job-level
-            # CCACHE_* env (used by the CCache Report step) are untouched. This leg runs
-            # slower and logs more by design — that's inherent to the capture.
+            # Kernel clang-tidy capture: the JIT build logs each kernel compile
+            # command into this leg's run log; every kernel-compile cache layer is
+            # defeated so each compile (and its logged command) actually happens.
+            # Details: tech_reports/code-indexing/kernel-clang-tidy.md.
             KERNEL_TIDY_THIS="${{ inputs.enable-kernel-clang-tidy && matrix.test-group.name == format('{0} [{1}]', inputs.clang-tidy-target-group, matrix.test-group.sku) }}"
             if [ "$KERNEL_TIDY_THIS" = "true" ]; then
-              echo "kernel clang-tidy capture ENABLED for '$TEST_GROUP_NAME' (compile-cmd logging on; JIT + ccache/Redis kernel caches defeated for this leg)"
+              echo "kernel clang-tidy capture ENABLED for '$TEST_GROUP_NAME'"
               export TT_METAL_LOG_KERNELS_COMPILE_COMMANDS=1
               export TT_LOGGER_LEVEL=info
               export TT_METAL_FORCE_JIT_COMPILE=1
@@ -490,6 +468,19 @@ jobs:
             export cmd=$(printf '%s' '${{ matrix.test-group.cmd }}' | sed -E 's/[[:space:]]+--timeout[[:space:]]+[0-9]+//g')
             # PYTEST_ADDOPTS for the serial fallback re-run (drops -n 4); applied only on retry.
             export SERIAL_ADDOPTS="-p no:timeout ${{ startsWith(matrix.test-group.sku, 'sim_wh') && needs.load-test-matrix.outputs.skip-args-wormhole_b0 || startsWith(matrix.test-group.sku, 'sim_bh') && needs.load-test-matrix.outputs.skip-args-blackhole || '' }}"
+            # Kernel clang-tidy capture — same as the HW test step above; the simulator
+            # JIT-compiles the same kernels, no hardware needed for the compile commands.
+            KERNEL_TIDY_THIS="${{ inputs.enable-kernel-clang-tidy && matrix.test-group.name == format('{0} [{1}]', inputs.clang-tidy-target-group, matrix.test-group.sku) }}"
+            if [ "$KERNEL_TIDY_THIS" = "true" ]; then
+              echo "kernel clang-tidy capture ENABLED for '${{ matrix.test-group.name }}'"
+              export TT_METAL_LOG_KERNELS_COMPILE_COMMANDS=1
+              export TT_LOGGER_LEVEL=info
+              export TT_METAL_FORCE_JIT_COMPILE=1
+              unset TT_METAL_CCACHE_KERNEL_SUPPORT
+              export CCACHE_DISABLE=1
+              export CCACHE_REMOTE_STORAGE=
+              unset CCACHE_REMOTE_ONLY
+            fi
             # Wrap the whole sim run in the host-load sidecar so its usage report covers both
             # the parallel run and any serial re-run. Written to /work/mem_report.json (even
             # on failure — emitted before the sidecar exits) so the Upload mem report step
@@ -508,35 +499,40 @@ jobs:
                 exit 1
               '
 
-      # EXPERIMENT (kernel clang-tidy): translate the captured SFPI-GCC compile commands into
-      # clang-compatible ones and run clang-tidy over them. Non-blocking by design
-      # (continue-on-error): this is an exploratory prototype riding on real but partial
-      # coverage (whatever kernels this pytest run happened to JIT-compile), not a merge gate.
-      # The generated headers referenced by the commands live in the durable tt-metal-cache
-      # dir, which persists in this container across steps — nothing is cleaned in between.
-      - name: Run clang-tidy on captured JIT kernel compiles (kernel clang-tidy)
-        if: ${{ !cancelled() && inputs.enable-kernel-clang-tidy && !startsWith(matrix.test-group.sku, 'sim_') && matrix.test-group.name == format('{0} [{1}]', inputs.clang-tidy-target-group, matrix.test-group.sku) && steps.kernel-tidy-tools.outputs.tidy_ready == 'true' }}
+      # Translate the captured SFPI-GCC compile commands for clang and run
+      # clang-tidy through CodeChecker, exporting an HTML report. Non-blocking.
+      - name: Run clang-tidy via CodeChecker on captured JIT kernel compiles (kernel clang-tidy)
+        if: ${{ !cancelled() && inputs.enable-kernel-clang-tidy && matrix.test-group.name == format('{0} [{1}]', inputs.clang-tidy-target-group, matrix.test-group.sku) && steps.kernel-tidy-tools.outputs.tidy_ready == 'true' }}
         continue-on-error: true
         timeout-minutes: 45
         env:
-          # Via env so the group name (spaces, brackets) is never shell-interpolated.
           KERNEL_TIDY_GROUP: ${{ matrix.test-group.name }}
         run: |
-          # The test step's run-with-log file holds the combined output, including the
-          # "g++ compile cmd:" lines the JIT build logged for every kernel compile.
           RUN_LOG="generated/test_logs/${KERNEL_TIDY_GROUP}.log"
           if [ ! -s "$RUN_LOG" ]; then
             echo "::warning::run log '$RUN_LOG' missing/empty; skipping clang-tidy."
             exit 0
           fi
-          # tee opens summary.txt before the filter script mkdirs its output dir; create it first.
           mkdir -p /work/kernel_tidy
           python3 scripts/build_kernel_clang_tidy_commands.py \
             --input-log "$RUN_LOG" \
-            --output-dir /work/kernel_tidy \
-            --clang-tidy "$KERNEL_TIDY_BIN" \
-            --config-file "$PWD/tt_metal/jit_build/kernel_clang_tidy/.clang-tidy" \
-            --run --jobs 8 | tee /work/kernel_tidy/summary.txt || true
+            --output-dir /work/kernel_tidy | tee /work/kernel_tidy/summary.txt
+          if [ ! -s /work/kernel_tidy/compile_commands.json ]; then
+            echo "::warning::no kernel compile commands captured; skipping clang-tidy."
+            exit 0
+          fi
+          # take-config-from-directory stops CodeChecker from passing its own
+          # checker list; the forwarded --config-file then applies our config.
+          echo "--config-file=$PWD/tt_metal/jit_build/kernel_clang_tidy/.clang-tidy" > /work/kernel_tidy/tidyargs
+          CodeChecker analyze /work/kernel_tidy/compile_commands.json \
+            --analyzers clang-tidy \
+            --analyzer-config \
+              'clang-tidy:take-config-from-directory=true' \
+              'clang-tidy:cc-verbatim-args-file=/work/kernel_tidy/tidyargs' \
+            --jobs 8 \
+            --output /work/kernel_tidy/reports || echo "::warning::CodeChecker analyze reported failures (continuing)"
+          CodeChecker parse /work/kernel_tidy/reports --export html --output /work/kernel_tidy_html \
+            | tee -a /work/kernel_tidy/summary.txt || true
           {
             echo '<details><summary>Kernel clang-tidy (prototype, non-blocking)</summary>'
             echo ''
@@ -547,20 +543,25 @@ jobs:
             echo '</details>'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload kernel clang-tidy findings (kernel clang-tidy)
-        if: ${{ !cancelled() && inputs.enable-kernel-clang-tidy && !startsWith(matrix.test-group.sku, 'sim_') && matrix.test-group.name == format('{0} [{1}]', inputs.clang-tidy-target-group, matrix.test-group.sku) }}
+      - name: Upload kernel clang-tidy capture (kernel clang-tidy)
+        if: ${{ !cancelled() && inputs.enable-kernel-clang-tidy && matrix.test-group.name == format('{0} [{1}]', inputs.clang-tidy-target-group, matrix.test-group.sku) }}
         continue-on-error: true
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: kernel-clang-tidy-${{ matrix.test-group.name }}
-          # /docker-job/ is the host-side mount of the container's /work/ directory.
-          # Single glob line ON PURPOSE: with a multiline `path:` here, the runner's
-          # host->container workspace path translation was applied only to the FIRST line
-          # (observed in run 33827663605: the with: block showed host /opt/runner/_work/...
-          # paths, the one uploaded file resolved via the container's /__w/... mount, and the
-          # untranslated lines matched nothing — "least common ancestor is /", 1 of 3 files
-          # uploaded). One glob covers compile_commands.json, findings.txt, and summary.txt.
+          # Single glob on purpose: the runner's host->container path translation
+          # only handles the first line of a multiline path (run 33827663605).
           path: ${{ github.workspace }}/docker-job/kernel_tidy/*
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload kernel clang-tidy HTML report (kernel clang-tidy)
+        if: ${{ !cancelled() && inputs.enable-kernel-clang-tidy && matrix.test-group.name == format('{0} [{1}]', inputs.clang-tidy-target-group, matrix.test-group.sku) }}
+        continue-on-error: true
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: kernel-clang-tidy-html-${{ matrix.test-group.name }}
+          path: ${{ github.workspace }}/docker-job/kernel_tidy_html/*
           if-no-files-found: warn
           retention-days: 14
 
