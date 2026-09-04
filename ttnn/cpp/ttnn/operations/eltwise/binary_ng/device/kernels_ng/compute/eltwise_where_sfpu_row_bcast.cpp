@@ -44,11 +44,10 @@ void kernel_main() {
     DataflowBuffer exp_dfb_left(cb_left);
     DataflowBuffer exp_dfb_right(cb_right);
 
-    compute_kernel_hw_startup(cb_in0, cb_out);
-    copy_init(cb_in0);
+    compute_kernel_hw_startup(cb_left, cb_out);
+    copy_init(cb_left);
     BINARY_SFPU_INIT
 
-    compute_kernel_hw_startup(cb_bcast, cb_llk_post);
     for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
         exp_dfb_in0.wait_front(num_tiles_per_cycle);
         exp_dfb_in1.wait_front(num_tiles_per_cycle);
@@ -70,7 +69,6 @@ void kernel_main() {
         exp_dfb_bcast.pop_front(num_tiles_per_cycle);
         // unary_bcast_uninit<BroadcastType::ROW>(cb_bcast);
         pack_reconfig_data_format(cb_llk_post, cb_out);
-        PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(cb_out)));
 
         exp_dfb_out.reserve_back(num_tiles_per_cycle);
         exp_dfb_llk_post.wait_front(num_tiles_per_cycle);
