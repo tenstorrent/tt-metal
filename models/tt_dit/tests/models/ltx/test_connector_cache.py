@@ -65,6 +65,7 @@ def test_connector_cache_is_content_keyed(*, mesh_device):
             subfolder=subfolder,
             parallel_config=pair.parallel_config,
             mesh_shape=tuple(mesh_device.shape),
+            mesh_device=mesh_device,
             dtype=dtype,
             content=key,
         )
