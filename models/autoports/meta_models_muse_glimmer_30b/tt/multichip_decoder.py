@@ -117,6 +117,8 @@ from models.autoports.meta_models_muse_glimmer_30b.tt.functional_decoder import 
 from models.autoports.meta_models_muse_glimmer_30b.tt.fused_decoder import _FusedNorm, norm_compute_kernel_config
 from models.autoports.meta_models_muse_glimmer_30b.tt.optimized_decoder import (
     DEFAULT_PRECISION,
+    PREFILL_MCAST2D,
+    PREFILL_MINIMAL_BLOCKS,
     PREFILL_NORM_SHARD_MAX_ROWS,
     OptimizedDecoder,
     PrecisionPolicy,
@@ -147,11 +149,17 @@ __all__ = [
     "MULTICHIP_DECODE_SDPA",
     "MULTICHIP_PREFILL_MCAST2D",
     "MULTICHIP_PREFILL_MINIMAL_BLOCKS",
+    "P150X2_DECODE_MATMUL",
+    "P150X2_PREFILL_MCAST2D",
+    "P150X2_PREFILL_MINIMAL_BLOCKS",
     "PREFILL_FRACTURED_NORM_MIN_ROWS",
     "MeshPlan",
     "MultichipDecoder",
     "ROW_PARALLEL_ROLES",
     "mesh_plan",
+    "multichip_decode_matmul",
+    "multichip_prefill_mcast2d",
+    "multichip_prefill_minimal_blocks",
     "minimal_matmul_subblocks",
     "open_multichip_mesh",
     "reference_layer_indices",
@@ -317,6 +325,35 @@ MULTICHIP_DECODE_MATMUL: dict[tuple[str, ttnn.DataType], tuple[int, int]] = {
     ("mlp_gate", ttnn.bfloat16): (MULTICHIP_BOUNDARY_CORES, 1),
     ("mlp_up", ttnn.bfloat16): (MULTICHIP_BOUNDARY_CORES, 1),
     ("mlp_down", ttnn.bfloat16): (MULTICHIP_BOUNDARY_CORES, 5),
+}
+
+#: Legal initial decode geometry for the two-device P150x2 profile.
+#:
+#: Tensor parallelism halves the MLP width to 9984 (312 tiles).  The P150x4
+#: table's 16-core MLP shard is therefore illegal: 16 does not divide 312.
+#: Twenty-six cores divide both the 208 hidden tiles and 312 local-intermediate
+#: tiles, keep every activation shard exact, and reuse the proven single-chip
+#: working grid.  These values are deliberately conservative bring-up choices;
+#: the target-specific latency sweep is the authority for later tuning.
+P150X2_DECODE_MATMUL: dict[tuple[str, ttnn.DataType], tuple[int, int]] = {
+    ("wqkv", ttnn.bfloat4_b): (MULTICHIP_BOUNDARY_CORES, 13),
+    ("attn_gate", ttnn.bfloat4_b): (MULTICHIP_BOUNDARY_CORES, 13),
+    ("o_proj", ttnn.bfloat4_b): (MULTICHIP_BOUNDARY_CORES, 4),
+    ("mlp_gate", ttnn.bfloat4_b): (26, 8),
+    ("mlp_up", ttnn.bfloat4_b): (26, 8),
+    ("mlp_down", ttnn.bfloat4_b): (26, 12),
+    ("wqkv", ttnn.bfloat8_b): (MULTICHIP_BOUNDARY_CORES, 13),
+    ("attn_gate", ttnn.bfloat8_b): (MULTICHIP_BOUNDARY_CORES, 13),
+    ("o_proj", ttnn.bfloat8_b): (MULTICHIP_BOUNDARY_CORES, 4),
+    ("mlp_gate", ttnn.bfloat8_b): (26, 4),
+    ("mlp_up", ttnn.bfloat8_b): (26, 4),
+    ("mlp_down", ttnn.bfloat8_b): (26, 6),
+    ("wqkv", ttnn.bfloat16): (MULTICHIP_BOUNDARY_CORES, 1),
+    ("attn_gate", ttnn.bfloat16): (MULTICHIP_BOUNDARY_CORES, 1),
+    ("o_proj", ttnn.bfloat16): (MULTICHIP_BOUNDARY_CORES, 2),
+    ("mlp_gate", ttnn.bfloat16): (26, 1),
+    ("mlp_up", ttnn.bfloat16): (26, 1),
+    ("mlp_down", ttnn.bfloat16): (26, 3),
 }
 
 #: Decode SDPA ``(grid_x, grid_y, q_chunk, k_chunk, max_cores_per_head_batch)``;
@@ -496,6 +533,42 @@ MULTICHIP_PREFILL_MINIMAL_BLOCKS: dict[
     ("mlp_up", ttnn.bfloat4_b): ((8192, (4, 8, 32)), (2048, (8, 8, 16)), (TILE_SIZE, (4, 16, 16))),
     ("mlp_down", ttnn.bfloat4_b): ((8192, (8, 10, 16)), (2048, None), (TILE_SIZE, (4, 10, 24))),
 }
+
+# P150x2 keeps the single-chip prefill blocks wherever the K dimension is
+# unchanged or still divisible.  o_proj is the exception: its local attention
+# width is 2048 (64 tiles), so use the already-proven multichip entries whose
+# K_block_size is 8 instead of the single-chip table's occasional 13.
+P150X2_PREFILL_MCAST2D = dict(PREFILL_MCAST2D)
+P150X2_PREFILL_MINIMAL_BLOCKS = {
+    **PREFILL_MINIMAL_BLOCKS,
+    **{key: value for key, value in MULTICHIP_PREFILL_MINIMAL_BLOCKS.items() if key[0] == "o_proj"},
+    ("o_proj", ttnn.bfloat4_b): MULTICHIP_PREFILL_MINIMAL_BLOCKS[("o_proj", ttnn.bfloat8_b)],
+}
+
+
+def multichip_decode_matmul(tp: int) -> dict[tuple[str, ttnn.DataType], tuple[int, int]]:
+    """Return the legal decode geometry for a qualified tensor-parallel width."""
+    if tp == 2:
+        return P150X2_DECODE_MATMUL
+    if tp == 4:
+        return MULTICHIP_DECODE_MATMUL
+    raise ValueError(f"Muse-Glimmer multichip decode supports tp=2 or tp=4, got tp={tp}")
+
+
+def multichip_prefill_mcast2d(tp: int) -> dict:
+    if tp == 2:
+        return P150X2_PREFILL_MCAST2D
+    if tp == 4:
+        return MULTICHIP_PREFILL_MCAST2D
+    raise ValueError(f"Muse-Glimmer multichip prefill supports tp=2 or tp=4, got tp={tp}")
+
+
+def multichip_prefill_minimal_blocks(tp: int) -> dict:
+    if tp == 2:
+        return P150X2_PREFILL_MINIMAL_BLOCKS
+    if tp == 4:
+        return MULTICHIP_PREFILL_MINIMAL_BLOCKS
+    raise ValueError(f"Muse-Glimmer multichip prefill supports tp=2 or tp=4, got tp={tp}")
 
 
 def minimal_matmul_subblocks(m_block: int, n_block: int, *, prefer_wide: bool) -> tuple[int, int]:
@@ -943,7 +1016,7 @@ class MultichipDecoder(OptimizedDecoder):
         prefill_fractured_norm_min_rows: int = PREFILL_FRACTURED_NORM_MIN_ROWS,
         **kwargs,
     ) -> None:
-        kwargs.setdefault("decode_matmul", MULTICHIP_DECODE_MATMUL)
+        kwargs.setdefault("decode_matmul", multichip_decode_matmul(plan.tp))
         kwargs.setdefault("boundary_cores", MULTICHIP_BOUNDARY_CORES)
         self.plan = plan
         #: Payload dtype for the two reducing collectives, per mode.  ``None``
@@ -1005,8 +1078,8 @@ class MultichipDecoder(OptimizedDecoder):
             exp_approx_mode=False,
             max_cores_per_head_batch=self.max_cores_per_head_batch,
         )
-        self.prefill_mcast2d = MULTICHIP_PREFILL_MCAST2D
-        self.prefill_minimal_blocks = MULTICHIP_PREFILL_MINIMAL_BLOCKS
+        self.prefill_mcast2d = multichip_prefill_mcast2d(plan.tp)
+        self.prefill_minimal_blocks = multichip_prefill_minimal_blocks(plan.tp)
         if self.mesh_device.get_num_devices() != plan.tp:
             raise ValueError(f"plan targets {plan.tp} devices but the mesh has {self.mesh_device.get_num_devices()}")
         self._prewarm_decode_ccl_buffers()
@@ -1296,7 +1369,7 @@ class MultichipDecoder(OptimizedDecoder):
             activation_dtype=precision.activation_dtype,
             kv_cache_dtype=precision.kv_cache_dtype,
             precision=precision,
-            decode_matmul=decode_matmul if decode_matmul is not None else MULTICHIP_DECODE_MATMUL,
+            decode_matmul=decode_matmul if decode_matmul is not None else multichip_decode_matmul(tp),
             boundary_cores=boundary_cores,
             decode_sdpa=decode_sdpa,
             ccl_dtype=ccl_dtype,

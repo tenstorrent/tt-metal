@@ -1,7 +1,6 @@
-# Muse-Glimmer-30B on QB2 (2 P300 boards = 4 Blackhole ASICs), transcribed from the
-# validated bring-up in this checkout: quickstart/README.md's serve line and the
-# muse-glimmer_pyenv venv that served it. Single validated configuration, so a flat
-# serve: block is the whole launch config.
+# Muse-Glimmer-30B on one, two, or four Blackhole P150 ASICs. The P150x4
+# defaults preserve the validated QB2/P300x2 bring-up; P150 and P150x2 are
+# topology-specific launch profiles built from the same image and source tree.
 schema: "5.1"
 repo: tt-hous/muse-glimmer-30b
 name: muse-glimmer-30b
@@ -15,7 +14,7 @@ kind: vllm-plugin
 arch: blackhole
 
 source:
-  tt_metal: /home/ttuser/dev/muse-glimmer/wt-toolcalling
+  tt_metal: /home/ttuser/dev/muse-glimmer/wt-p150
   code:
     # The import closure crosses THREE packages — computed, not eyeballed: tt/ imports
     # models.common.* AND models.tt_transformers.tt.model_config. Dir-level entries are
@@ -53,29 +52,65 @@ runtime:
 
 serve:
   port: 8000
-  hardware: p300x2        # QB2: 2 boards x 2 ASICs = the (1,4) mesh
-  mesh_device: P300x2
-  max_num_seqs: 32
   block_size: 64          # the TT backend rejects vLLM's default
-  max_model_len: 131072   # full advertised context — validated
   # The model's chat template emits ATEM tool-call markup (<atem:function_calls>).
   # Upstream vLLM ships a muse_glimmer parser from 0.28.0; this stack pins 0.24.0, so
   # tt/muse_glimmer_tool_parser.py is the 0.28.0 file backported (one self-registration
   # shim appended — 0.24's --tool-parser-plugin flow expects the file to register
   # itself). Parse + channel-scoping behavior verified in the validated venv; the
-  # end-to-end tool-call serve is NOT yet hardware-validated.
+  # The paired reasoning parser moves the model's `to=self` channel out of
+  # user-visible content and is tested in composition with the ATEM parser.
   capabilities:
     tool_parser: muse_glimmer
+    reasoning_parser: muse_glimmer
   args:
     - [--tool-parser-plugin, /opt/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/muse_glimmer_tool_parser.py]
+    - [--reasoning-parser-plugin, /opt/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/reasoning_parser.py]
   additional_config:
     tt:
       sample_on_device_mode: all
       trace_region_size: 400000000
-      fabric_config: FABRIC_1D_RING
-      fabric_packet_payload_bytes: 8192   # needs the plugin pin above — no env override exists
-      l1_small_size: 6144
       trace_mode: decode_only
+
+# One image serves every supported tensor-parallel width. Keep fabric settings
+# out of the common block: profile dictionaries deep-merge, so P150 could not
+# erase an inherited multi-chip fabric key.
+serve_profiles:
+  - name: p150
+    description: One Blackhole P150 ASIC; interactive batch-1 serving.
+    hardware: p150
+    mesh_device: P150
+    max_num_seqs: 1
+    max_model_len: 131072
+    env:
+      TT_METAL_VISIBLE_DEVICES: "0"
+  - name: p150x2
+    description: Two Blackhole P150 ASICs in a 1x2 tensor-parallel mesh.
+    hardware: p150x2
+    mesh_device: P150x2
+    max_num_seqs: 1
+    max_model_len: 131072
+    env:
+      TT_METAL_VISIBLE_DEVICES: "0,1"
+    additional_config:
+      tt:
+        fabric_config: FABRIC_1D_RING
+        fabric_packet_payload_bytes: 8192
+        l1_small_size: 6144
+  - name: p150x4
+    description: Four-chip profile validated on QB2/P300x2; capacity default.
+    hardware: p150x4
+    mesh_device: P150x4
+    max_num_seqs: 32
+    max_model_len: 131072
+    env:
+      TT_METAL_VISIBLE_DEVICES: "0,1,2,3"
+    additional_config:
+      tt:
+        fabric_config: FABRIC_1D_RING
+        fabric_packet_payload_bytes: 8192
+        l1_small_size: 6144
+default_profile: p150x4
 
 verify:
   # the silent-fallback trap: tt/precision_config.py falls back to in-code defaults
@@ -90,6 +125,7 @@ verify:
   # the backported ATEM tool parser ships and registers under the name the
   # capabilities block launches with
   - "import vllm; import importlib.util; s = importlib.util.spec_from_file_location('mgtp', '/opt/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/muse_glimmer_tool_parser.py'); m = importlib.util.module_from_spec(s); s.loader.exec_module(m); from vllm.tool_parsers import ToolParserManager; assert 'muse_glimmer' in ToolParserManager.tool_parsers, 'ATEM tool parser did not register'"
+  - "import vllm; import importlib.util; s = importlib.util.spec_from_file_location('mgrp', '/opt/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/reasoning_parser.py'); m = importlib.util.module_from_spec(s); s.loader.exec_module(m); from vllm.reasoning import ReasoningParserManager; assert 'muse_glimmer' in ReasoningParserManager.reasoning_parsers, 'reasoning parser did not register'"
 
 card:
   quickstart: |
@@ -97,10 +133,23 @@ card:
     OpenAI-compatible endpoint for **agentic coding**: long-context (131k)
     tool-calling work driven by a coding agent.
 
-    On this model the first start takes about 4 minutes (weight loading + kernel
-    compilation). Verify it is running correctly with tool calling:
+    Select the hardware profile at serve time; the same package and image own
+    all three configurations:
     ```bash
-    curl -s localhost:8000/v1/chat/completions -H 'Content-Type: application/json' -d '{
+    tt-model serve tt-hous/muse-glimmer-30b --profile p150
+    tt-model serve tt-hous/muse-glimmer-30b --profile p150x2
+    tt-model serve tt-hous/muse-glimmer-30b --profile p150x4
+    ```
+
+    `p150x4` remains the default for compatibility with the original four-chip
+    release. P150 and P150x2 are batch-1 profiles optimized for interactive
+    agentic coding. Tool and reasoning parsing are enabled automatically.
+
+    First start includes weight loading and kernel compilation and can take
+    several minutes. Use the endpoint printed by `tt-model` (normally port
+    20000) and verify it with tool calling:
+    ```bash
+    curl -s http://127.0.0.1:20000/v1/chat/completions -H 'Content-Type: application/json' -d '{
       "model": "meta-models/Muse-Glimmer-30B",
       "messages": [{"role": "user", "content": "What is the weather in Paris right now, in Celsius?"}],
       "tools": [{
@@ -130,9 +179,10 @@ card:
 
     ## Performance
 
-    Release latency sweep on P300x2: one request at a time (batch 1), 512
-    output tokens, input length swept to the full context. Decode rate is per
-    user. Retried points show the median of three independent runs.
+    Existing release latency sweep for the four-chip `p150x4` profile, measured
+    on QB2/P300x2: one request at a time (batch 1), 512 output tokens, input
+    length swept to the full context. Decode rate is per user. Retried points
+    show the median of three independent runs.
 
     | input tokens | output tokens | TTFT | TPOT | end-to-end | tokens/s/user |
     |---:|---:|---:|---:|---:|---:|

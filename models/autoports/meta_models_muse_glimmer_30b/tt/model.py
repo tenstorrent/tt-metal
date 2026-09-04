@@ -4,13 +4,13 @@
 """Full TTNN autoregressive model for ``meta-models/Muse-Glimmer-30B``.
 
 This is the whole text path: token embeddings, the 52-layer decoder stack, the
-terminal RMSNorm, the LM head and the tanh logit softcap -- everything
-:class:`~models.autoports.meta_models_muse_glimmer_30b.tt.multichip_decoder.MultichipDecoder`
-is *not*.  The layer stack is the optimized multichip decoder unchanged: same
-four Blackhole dies, same ``ttnn.MeshShape(1, 4)`` / ``FABRIC_1D_RING`` / Ring
-topology, same precision policy, same paged KV cache, same collective split, and
-the same width-sharded-L1 inter-layer decode residual.  Nothing here falls back
-to one chip, to a replicated weight, or to the host.
+terminal RMSNorm, the LM head and the tanh logit softcap -- everything the
+per-layer decoder does not own.  The same wrapper serves all qualified meshes:
+``OptimizedDecoder`` on P150 (1x1), and ``MultichipDecoder`` on P150x2/P150x4
+(1x2/1x4).  All retain the selected precision policy, paged KV cache, and
+width-sharded-L1 inter-layer decode residual.  Multi-chip profiles add the
+measured collective split; P150 has no fabric or collectives.  No profile falls
+back to host execution or replicated projection weights.
 
 Parallelisation
 ---------------
@@ -18,7 +18,8 @@ Parallelisation
 The decoder's contract is a **replicated** residual stream with column-parallel
 and row-parallel projections inside each layer, so this wrapper has to produce a
 replicated hidden state and consume one.  Both terminal weights are therefore
-column-parallel in the only direction that leaves the residual replicated:
+column-parallel in the only direction that leaves the residual replicated (the
+single P150 shard is the degenerate, communication-free case):
 
 ============  ==============================  ==========================================
 tensor        fracture                        what it costs
@@ -32,12 +33,13 @@ lm_head       vocab dim, ``ShardTensorToMesh(-1)``    nothing: the sampler consu
 norm.weight   replicated                      nothing (one tile row)
 ============  ==============================  ==========================================
 
-The embedding all-gather uses the *async* primitive with semaphores this module
-owns, not ``ttnn.all_gather``: the composite wrapper creates one global semaphore
-per program and never releases it, so a wrapper gather would spend 256 B of the
-6144 B ``L1_SMALL`` region on **every distinct prompt length** the model ever
-sees.  See ``MultichipDecoder._ccl_semaphores`` for the measurement that bounds
-that region.
+On P150x2/P150x4 the embedding all-gather uses the *async* primitive with
+semaphores this module owns, not ``ttnn.all_gather``: the composite wrapper
+creates one global semaphore per program and never releases it, so a wrapper
+gather would spend 256 B of the 6144 B ``L1_SMALL`` region on **every distinct
+prompt length** the model ever sees.  See
+``MultichipDecoder._ccl_semaphores`` for the measurement that bounds that
+region.  P150 converts the local embedding directly to the requested layout.
 
 The vocab is padded up so each device's shard is tile-aligned; the padded ids are
 never valid tokens, and the sampler masks them out by being told **both** widths --
@@ -77,17 +79,47 @@ from models.common.lightweightmodule import LightweightModule
 
 from .functional_decoder import LAYER_KIND_SLIDING, TILE_SIZE, _rope_cos_sin, _text_config, resolve_layer_kind
 from .fused_decoder import norm_compute_kernel_config
-from .multichip_decoder import (
-    CCL_TOPOLOGY,
-    DEFAULT_MESH_SHAPE,
-    MULTICHIP_BOUNDARY_CORES,
-    MeshPlan,
-    MultichipDecoder,
-    mesh_plan,
+from .multichip_decoder import CCL_TOPOLOGY, MeshPlan, MultichipDecoder, mesh_plan
+from .optimized_decoder import (
+    BOUNDARY_CORES,
+    DEFAULT_PRECISION,
+    OptimizedDecoder,
+    PrecisionPolicy,
+    dram_sharded_weight_memcfg,
+    width_sharded_l1,
 )
-from .optimized_decoder import DEFAULT_PRECISION, PrecisionPolicy, dram_sharded_weight_memcfg, width_sharded_l1
 
 HF_MODEL_ID = "meta-models/Muse-Glimmer-30B"
+SUPPORTED_TP = (1, 2, 4)
+
+# Precision artifacts carry the CCL payload policy used by tensor-parallel
+# builds.  It is still useful provenance for P150, but OptimizedDecoder has no
+# collectives and correctly rejects these kwargs.  Filter only this closed set
+# on the 1x1 path; every other decoder override remains checked by its builder.
+_MULTICHIP_ONLY_DECODER_KWARGS = {
+    "ccl_dtype",
+    "prefill_ccl_dtype",
+    "decode_ccl_dtype",
+    "ccl_mode",
+    "prefill_ccl_mode",
+    "decode_ccl_mode",
+    "ccl_rs_workers",
+    "prefill_ccl_rs_workers",
+    "decode_ccl_rs_workers",
+    "ccl_impl",
+    "prefill_ccl_impl",
+    "decode_ccl_impl",
+    "ccl_ag_workers",
+    "prefill_ccl_ag_workers",
+    "decode_ccl_ag_workers",
+    "ccl_persistent_buffers",
+    "ccl_chunks_per_sync",
+    "ccl_buffers_per_channel",
+    "ccl_num_links",
+    "ccl_ag_barrier",
+    "prefill_fractured_norm",
+    "prefill_fractured_norm_min_rows",
+}
 
 #: Canonical HF key prefixes.  ``model.language_model`` is the text tower of the
 #: multimodal ``MuseGlimmerForConditionalGeneration``; the vision tower and the
@@ -636,7 +668,7 @@ class MuseGlimmerModel(LightweightModule):
         config: ModelConfig,
         mesh_device: ttnn.MeshDevice,
         plan: MeshPlan,
-        layers: list[MultichipDecoder],
+        layers: list[OptimizedDecoder],
         embed_weight: ttnn.Tensor,
         embed_norm: _TerminalNorm,
         final_norm: _TerminalNorm,
@@ -656,7 +688,7 @@ class MuseGlimmerModel(LightweightModule):
         self.rope_cache = rope_cache
         self.precision = precision
         self.device_grid = mesh_device.compute_with_storage_grid_size()
-        self.boundary_cores = MULTICHIP_BOUNDARY_CORES
+        self.boundary_cores = layers[0].boundary_cores if layers else BOUNDARY_CORES
         #: Per-layer sliding-window K/V tails, for continuation prefill.  ``None``
         #: until a caller asks for them; see :meth:`prefill_forward`.
         self._sliding_tails: list[tuple[ttnn.Tensor, ttnn.Tensor] | None] | None = None
@@ -699,18 +731,17 @@ class MuseGlimmerModel(LightweightModule):
         ``$full-model`` skill asks for (one layer of each kind, real terminal
         path) and must not be used for accuracy or performance evidence.
         """
-        if mesh_device.get_num_devices() < 2:
+        tp = int(mesh_device.get_num_devices())
+        if tp not in SUPPORTED_TP:
             raise ValueError(
-                "MuseGlimmerModel is the multichip full model; open a "
-                f"{DEFAULT_MESH_SHAPE[0]}x{DEFAULT_MESH_SHAPE[1]} mesh with open_multichip_mesh(). "
-                f"Got a {mesh_device.get_num_devices()}-device mesh."
+                f"MuseGlimmerModel supports P150/P150x2/P150x4 tensor parallelism "
+                f"({SUPPORTED_TP} devices); got a {tp}-device mesh."
             )
         if hf_config is None:
             from transformers import AutoConfig
 
             hf_config = AutoConfig.from_pretrained(model_id, local_files_only=True)
         text_config = _text_config(hf_config)
-        tp = mesh_device.get_num_devices()
         plan = mesh_plan(text_config, tp, dram_banks=mesh_device.dram_grid_size().x)
 
         max_seq_len = int(max_seq_len or text_config.max_position_embeddings)
@@ -814,11 +845,20 @@ class MuseGlimmerModel(LightweightModule):
             )
 
             # ------------------------------------------------------- layers
-            layers: list[MultichipDecoder] = []
+            layers: list[OptimizedDecoder] = []
+            decoder_class = OptimizedDecoder if tp == 1 else MultichipDecoder
+            layer_decoder_kwargs = dict(decoder_kwargs)
+            if tp == 1:
+                for key in _MULTICHIP_ONLY_DECODER_KWARGS:
+                    layer_decoder_kwargs.pop(key, None)
+                # The full model has a stable 16-core boundary contract across
+                # layers; retain it on P150 instead of round-tripping every layer
+                # through DRAM interleaved form.
+                layer_decoder_kwargs.setdefault("sharded_decode_io", True)
             for position, layer_idx in enumerate(indices):
                 state_dict = checkpoint.layer_state_dict(layer_idx)
                 layers.append(
-                    MultichipDecoder.from_state_dict(
+                    decoder_class.from_state_dict(
                         state_dict,
                         hf_config=hf_config,
                         layer_idx=layer_idx,
@@ -835,7 +875,7 @@ class MuseGlimmerModel(LightweightModule):
                         # the same object every layer gets today.
                         precision=precision.for_layer(layer_idx),
                         rope_cache=rope_cache,
-                        **decoder_kwargs,
+                        **layer_decoder_kwargs,
                     )
                 )
                 del state_dict
@@ -1222,6 +1262,15 @@ class MuseGlimmerModel(LightweightModule):
         gather has one program per prompt length -- a test session would exhaust
         the 6144 B region.  These three are created once per mesh.
         """
+        if self.config.tp == 1:
+            # A one-device "gather" is identity, but the decode embedding asks
+            # the collective to write directly into the boundary L1 layout.  Keep
+            # that output-layout contract on P150 with an ordinary conversion.
+            if memory_config is None or tensor.memory_config() == memory_config:
+                return tensor
+            converted = ttnn.to_memory_config(tensor, memory_config)
+            ttnn.deallocate(tensor)
+            return converted
         sems = self._ccl_semaphores()
         gathered = ttnn.experimental.all_gather_async(
             tensor,

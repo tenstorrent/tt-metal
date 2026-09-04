@@ -2463,12 +2463,20 @@ def open_generator_mesh(
     mesh_shape: tuple[int, int] = DEFAULT_MESH_SHAPE,
     trace_region_size: int = DEFAULT_TRACE_REGION_SIZE,
 ) -> ttnn.MeshDevice:
-    """Open the mesh this generator needs: ring fabric plus a trace region."""
+    """Open a qualified generator mesh with fabric only when CCL is needed."""
+    if mesh_shape[0] * mesh_shape[1] == 1:
+        return ttnn.open_mesh_device(
+            mesh_shape=ttnn.MeshShape(*mesh_shape),
+            trace_region_size=trace_region_size,
+        )
     return open_multichip_mesh(mesh_shape, trace_region_size=trace_region_size)
 
 
 def close_generator_mesh(mesh_device: ttnn.MeshDevice) -> None:
-    close_multichip_mesh(mesh_device)
+    if mesh_device.get_num_devices() == 1:
+        ttnn.close_mesh_device(mesh_device)
+    else:
+        close_multichip_mesh(mesh_device)
 
 
 __all__ = [

@@ -25,10 +25,11 @@ part of the answer.  It is also non-conformant for a reasoning model --
 
 This parser splits the channels: the ``self`` channel becomes
 ``reasoning_content`` and everything else (normally the ``user`` channel)
-becomes ``content``.  It is purely an API-layer reformat of text the server
-already produced; it does not touch sampling, the generator, or anything on
-device, and ``reasoning_content + content`` reconstructs the unparsed string
-character for character apart from the channel headers themselves.
+becomes ``content``.  When vLLM composes it with Muse Glimmer's ATEM tool
+parser, it preserves a tool message's framing long enough for that parser to
+identify and validate the call.  It is purely an API-layer reformat of text the
+server already produced; it does not touch sampling, the generator, or
+anything on device.
 
 **The parser never removes information.**  It splits only a turn that actually
 reached a visible channel.  A turn cut short before that -- ``max_tokens``
@@ -72,8 +73,16 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 #: every other recipient (``user``, or a tool namespace) is visible content.
 REASONING_RECIPIENT = "self"
 
-#: The visible channel's recipient in a no-tools deployment.
+#: The visible answer channel's recipient.
 CONTENT_RECIPIENT = "user"
+
+# When the ATEM tool parser is active it forces ``skip_special_tokens=False``:
+# the channel delimiters therefore survive detokenization and, unlike the
+# legacy stripped representation below, make an arbitrary tool recipient
+# unambiguous.  Keep this parser self-contained rather than importing the tool
+# parser: each file is also a valid standalone vLLM parser plugin.
+_FULL_HEADER_RE = re.compile(r"(?:<\|start\|>\s*assistant)?[^\S\n]*to=(?P<recipient>[A-Za-z0-9_.\-]+)<\|message\|>")
+_FULL_END_RE = re.compile(r"<\|eom\|>|<\|eot\|>")
 
 #: A channel header as it survives detokenization.  Either it opens the very
 #: first channel -- the prompt already supplied ``<|start|>assistant``, so the
@@ -81,13 +90,11 @@ CONTENT_RECIPIENT = "user"
 #: subsequent one, where ``<|start|>`` is dropped and the literal word
 #: ``assistant`` is left glued to the end of the previous channel.
 #:
-#: The recipient is matched against a closed set rather than a character class,
+#: In the stripped form the recipient is matched against a closed set rather than a character class,
 #: because ``<|message|>`` is a special token and disappears too: the body runs
 #: straight into the recipient name (``to=userphotosynthesis is ...``), so there
-#: is no delimiter to stop a greedy match at.  A tool recipient
-#: (``to=<namespace>.<function>``) is therefore *not* recognized here -- this
-#: release serves no tools, and guessing where a tool name ends would risk
-#: eating the reply.  Add the tool namespaces to the alternation if that changes.
+#: is no delimiter to stop a greedy match at. Tool-enabled requests retain the
+#: special tokens, so arbitrary tool recipients are parsed by ``_FULL_HEADER_RE``.
 _RECIPIENTS = (REASONING_RECIPIENT, CONTENT_RECIPIENT)
 _HEADER_RE = re.compile(r"(?:\A[ ]?|assistant[ ]?)to=(" + "|".join(_RECIPIENTS) + r")")
 
@@ -127,6 +134,16 @@ def split_channels(text: str) -> list[tuple[str, str]]:
     Returns ``[]`` when the text carries no channel header at all, which is what
     a continuation-style or grammar-constrained generation looks like.
     """
+    full_matches = list(_FULL_HEADER_RE.finditer(text))
+    if full_matches:
+        segments: list[tuple[str, str]] = []
+        for i, match in enumerate(full_matches):
+            next_header = full_matches[i + 1].start() if i + 1 < len(full_matches) else len(text)
+            terminator = _FULL_END_RE.search(text, match.end(), next_header)
+            end = terminator.start() if terminator is not None else next_header
+            segments.append((match.group("recipient"), text[match.end() : end]))
+        return segments
+
     matches = list(_HEADER_RE.finditer(text))
     if not matches:
         return []
@@ -136,6 +153,29 @@ def split_channels(text: str) -> list[tuple[str, str]]:
         end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
         segments.append((match.group(1), text[start:end]))
     return segments
+
+
+def _after_full_reasoning_channel(text: str) -> str:
+    """Raw text after a completed full-token ``self`` message.
+
+    The raw suffix is intentional: vLLM hands this value to the tool parser on
+    the reasoning-to-tool transition, and that parser needs ``to=<tool>`` plus
+    ``<|message|>`` to distinguish executable ATEM from quoted markup.
+    """
+    for header in _FULL_HEADER_RE.finditer(text):
+        if header.group("recipient") != REASONING_RECIPIENT:
+            continue
+        terminator = _FULL_END_RE.search(text, header.end())
+        return text[terminator.end() :] if terminator is not None else ""
+    return ""
+
+
+def _has_tool_channel(text: str) -> bool:
+    """Whether full-token framing contains a non-self, non-user recipient."""
+    return any(
+        match.group("recipient") not in (REASONING_RECIPIENT, CONTENT_RECIPIENT)
+        for match in _FULL_HEADER_RE.finditer(text)
+    )
 
 
 def reached_visible_channel(text: str) -> bool:
@@ -175,6 +215,13 @@ class MuseGlimmerReasoningParser(ReasoningParser):
         # streaming request, so this is per-request state.
         self._emitted_reasoning = 0
         self._emitted_content = 0
+        self._preserve_tool_frames = False
+
+    def adjust_request(self, request):
+        """Remember whether downstream ATEM parsing needs raw channel frames."""
+        tools = getattr(request, "tools", None)
+        self._preserve_tool_frames = bool(tools) and getattr(request, "tool_choice", None) != "none"
+        return request
 
     # -- channel-state helpers -------------------------------------------------
 
@@ -237,6 +284,16 @@ class MuseGlimmerReasoningParser(ReasoningParser):
             # unchanged rather than inventing a split or dropping the output.
             return None, model_output
         reasoning = self.channel_text(model_output, True)
+        # DelegatingParser invokes reasoning extraction before tool extraction.
+        # Preserve the original framed text only when a tool channel is really
+        # present; the ATEM parser then removes self/user framing and returns the
+        # structured call. A tools-enabled request that answers directly keeps
+        # the normal clean user content path.
+        if self._preserve_tool_frames and (
+            _has_tool_channel(model_output)
+            or (_FULL_HEADER_RE.search(model_output) is None and "<atem:invoke" in model_output)
+        ):
+            return (reasoning or None), model_output
         content = self.channel_text(model_output, False)
         return (reasoning or None), content
 
@@ -270,7 +327,10 @@ class MuseGlimmerReasoningParser(ReasoningParser):
             return None
 
         reasoning_all = self.channel_text(current_text, True)
-        content_all = self.channel_text(current_text, False)
+        if self._preserve_tool_frames and _FULL_HEADER_RE.search(current_text):
+            content_all = _after_full_reasoning_channel(current_text)
+        else:
+            content_all = self.channel_text(current_text, False)
 
         hold = pending_header_len(current_text)
         if hold:

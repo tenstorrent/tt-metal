@@ -46,6 +46,8 @@ REASONED_REPLY = "photosynthesis is the process by which plants convert light en
 DIRECT = " to=userSure! Here's a simple breakdown of supervised learning."
 DIRECT_REPLY = "Sure! Here's a simple breakdown of supervised learning."
 
+FULL_REASONED = " to=self<|message|>Think first.<|eom|>" "<|start|>assistant to=user<|message|>Done.<|eot|>"
+
 
 class _FakeTokenizer:
     """Just enough tokenizer for the parser: a vocab and a decode()."""
@@ -79,6 +81,13 @@ def test_reasoned_turn_routes_analysis_away_from_content():
     # The constraint the unparsed string breaks and the parsed content keeps.
     assert content == content.lower()
     assert reasoning != reasoning.lower()
+
+
+def test_full_special_token_framing_is_removed_from_plain_chat():
+    reasoning, content = _parser().extract_reasoning(FULL_REASONED, request=None)
+    assert reasoning == "Think first."
+    assert content == "Done."
+    assert "<|" not in reasoning + content
 
 
 def test_direct_turn_has_no_reasoning():
@@ -138,6 +147,94 @@ def test_split_is_lossless_apart_from_the_headers():
     reasoning, content = _parser().extract_reasoning(REASONED, request=None)
     headers_stripped = REASONED.replace(" to=self", "", 1).replace("assistant to=user", "", 1)
     assert (reasoning or "") + (content or "") == headers_stripped
+
+
+def test_composed_reasoning_and_tool_parsers_keep_calls_and_final_content():
+    """Exercise vLLM's real DelegatingParser order, not either plugin alone."""
+    from vllm.entrypoints.openai.chat_completion.protocol import ChatCompletionRequest
+    from vllm.parser import ParserManager
+
+    # Importing the plugin performs its vLLM registry hook.
+    from models.autoports.meta_models_muse_glimmer_30b.tt import muse_glimmer_tool_parser  # noqa: F401
+
+    req = ChatCompletionRequest(
+        model="meta-models/Muse-Glimmer-30B",
+        messages=[{"role": "user", "content": "inspect the file"}],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "read_file",
+                    "description": "Read a file",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"path": {"type": "string"}},
+                        "required": ["path"],
+                    },
+                },
+            }
+        ],
+        tool_choice="auto",
+    )
+    parser_cls = ParserManager.get_parser(
+        tool_parser_name="muse_glimmer",
+        reasoning_parser_name="muse_glimmer",
+        enable_auto_tools=True,
+        model_name=req.model,
+    )
+    assert parser_cls is not None
+    parser = parser_cls(_FakeTokenizer(), tools=req.tools)
+    parser.adjust_request(req)
+    raw = (
+        " to=self<|message|>I should inspect it.<|eom|>"
+        "<|start|>assistant to=read_file<|message|>"
+        '<atem:function_calls><atem:invoke name="read_file">'
+        '<atem:parameter name="path">src/app.py</atem:parameter>'
+        "</atem:invoke></atem:function_calls><|eom|>"
+        "<|start|>assistant to=user<|message|>Inspection requested.<|eot|>"
+    )
+    reasoning, content, calls = parser.parse(raw, req, enable_auto_tools=True)
+    assert reasoning == "I should inspect it."
+    assert content == "Inspection requested."
+    assert calls is not None and len(calls) == 1
+    assert calls[0].name == "read_file"
+    assert calls[0].arguments == '{"path": "src/app.py"}'
+
+
+def test_composed_parser_keeps_clean_content_when_tools_are_unused():
+    from vllm.entrypoints.openai.chat_completion.protocol import ChatCompletionRequest
+    from vllm.parser import ParserManager
+
+    from models.autoports.meta_models_muse_glimmer_30b.tt import muse_glimmer_tool_parser  # noqa: F401
+
+    req = ChatCompletionRequest(
+        model="meta-models/Muse-Glimmer-30B",
+        messages=[{"role": "user", "content": "answer directly"}],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "read_file",
+                    "description": "Read a file",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+        ],
+        tool_choice="auto",
+    )
+    parser_cls = ParserManager.get_parser(
+        tool_parser_name="muse_glimmer",
+        reasoning_parser_name="muse_glimmer",
+        enable_auto_tools=True,
+        model_name=req.model,
+    )
+    assert parser_cls is not None
+    parser = parser_cls(_FakeTokenizer(), tools=req.tools)
+    parser.adjust_request(req)
+    reasoning, content, calls = parser.parse(FULL_REASONED, req, enable_auto_tools=True)
+    assert reasoning == "Think first."
+    assert content == "Done."
+    assert calls is None
 
 
 def test_reasoning_end_is_true_when_no_analysis_channel_was_opened():

@@ -97,11 +97,12 @@ MODEL_DIR = Path(__file__).resolve().parent.parent
 #: device-op limit rather than a choice this port makes.
 MAX_NUM_SEQS = 32
 
-#: Bytes of device DRAM one paged block costs, per device, for the whole 52-layer
-#: stack at the selected KV-cache dtype: ``52 layers x 2 (K,V) x 1 local KV head x
-#: 64 tokens x 128 head_dim x 1.0625 B`` (BFLOAT8_B is 1024 mantissa + 64 exponent
-#: bytes per 32x32 tile).  Used only to explain the pool size in the log line; the
-#: authoritative figure is measured in ``doc/vllm_integration/``.
+#: Bytes of device DRAM one paged block costs, per local KV head, for the whole
+#: 52-layer stack at the selected KV-cache dtype: ``52 layers x 2 (K,V) x 1 local
+#: KV head x 64 tokens x 128 head_dim x 1.0625 B`` (BFLOAT8_B is 1024 mantissa +
+#: 64 exponent bytes per 32x32 tile).  P150 stores two local KV heads and multiplies
+#: this value by two; P150x2/P150x4 store one.  Used only to explain the pool size
+#: in the log line; the authoritative figure is measured on hardware.
 BYTES_PER_BLOCK_PER_DEVICE = 905_216
 
 #: Total KV tokens the serving pool is sized for, across all users.
@@ -371,8 +372,8 @@ class MuseGlimmerForConditionalGeneration:
         if tt_data_parallel != 1:
             raise ValueError(
                 f"tt_data_parallel={tt_data_parallel} is not supported for this port: the model is "
-                "tensor-parallel over all four dies of the P300_X2 mesh, so there is no submesh left "
-                "to replicate onto."
+                "tensor-parallel over the selected P150/P150x2/P150x4 mesh, so data-parallel "
+                "replication is not implemented."
             )
         if optimizations is not None:
             raise ValueError(
@@ -380,10 +381,9 @@ class MuseGlimmerForConditionalGeneration:
                 "input read from doc/datatype_sweep/selected_precision_config.json, not a preset."
             )
         num_devices = int(mesh_device.get_num_devices())
-        if num_devices != 4:
+        if num_devices not in (1, 2, 4):
             raise ValueError(
-                f"this port is built for the 4-die P300_X2 mesh (1x4); vLLM opened {num_devices} device(s). "
-                "Launch with MESH_DEVICE=P300x2."
+                f"this port supports P150/P150x2/P150x4 (1, 2, or 4 devices); " f"vLLM opened {num_devices} device(s)."
             )
         max_num_seqs = int(max_batch_size)
         if max_num_seqs < 1 or max_num_seqs > MAX_NUM_SEQS:
@@ -478,9 +478,11 @@ class MuseGlimmerForConditionalGeneration:
                 f"the KV pool budget of {budget} tokens cannot hold one request at max_model_len={context}; "
                 "raise MUSE_GLIMMER_VLLM_KV_TOKEN_BUDGET or lower --max_model_len."
             )
+        local_kv_heads = 2 if int(num_devices) == 1 else 1
+        bytes_per_block = BYTES_PER_BLOCK_PER_DEVICE * local_kv_heads
         logger.info(
             f"MuseGlimmer vLLM: KV pool sized for {tokens} tokens across all users "
-            f"(~{tokens // 64 * BYTES_PER_BLOCK_PER_DEVICE / 1e9:.2f} GB/device), "
+            f"(~{tokens // 64 * bytes_per_block / 1e9:.2f} GB/device), "
             f"max_model_len={context}, max_num_seqs={seqs}"
         )
         return tokens
@@ -556,7 +558,7 @@ class MuseGlimmerForConditionalGeneration:
         shape = (num_blocks, kv_heads, block_size, head_dim)
         logger.info(
             f"MuseGlimmer vLLM: allocating the serving KV cache -- {num_layers} layers x 2 x {shape} "
-            f"{cache_dtype} ({num_blocks * BYTES_PER_BLOCK_PER_DEVICE / 1e9:.2f} GB/device, "
+            f"{cache_dtype} ({num_blocks * BYTES_PER_BLOCK_PER_DEVICE * model.plan.local_kv_heads / 1e9:.2f} GB/device, "
             f"{num_blocks * block_size} tokens across all users, declared dtype {dtype})"
         )
         kv_cache = [

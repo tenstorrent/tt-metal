@@ -629,6 +629,29 @@ DECODE_FUSED_ACTIVATION = False
 #: other legal count and it measured 1.5781 (+2.6 %).
 DECODE_SWIGLU_MUL_CORES: int | None = 80
 
+
+def resolve_decode_swiglu_mul_cores(
+    intermediate_size: int,
+    preferred: int | None = DECODE_SWIGLU_MUL_CORES,
+) -> int | None:
+    """Use the wide SwiGLU grid only when the local MLP width shards exactly.
+
+    The 80-core optimization was measured on P150x4's padded 5,120-wide local
+    MLP (160 tiles).  P150 and P150x2 have 624 and 312 local tiles respectively,
+    neither divisible by 80.  For those profiles the correctness-preserving
+    baseline is to multiply on the gate/up matmul grid and avoid all three
+    reshards.  Their latency sweeps can nominate a different exact divisor.
+    """
+    if intermediate_size % TILE_SIZE:
+        raise ValueError(f"intermediate_size={intermediate_size} must be tile aligned")
+    if preferred is None:
+        return None
+    if preferred < 1:
+        raise ValueError(f"decode SwiGLU multiply core count must be positive, got {preferred}")
+    width_tiles = intermediate_size // TILE_SIZE
+    return preferred if width_tiles % preferred == 0 else None
+
+
 #: Row count up to which the four hidden-size prefill RMSNorms run width-sharded
 #: in L1 instead of DRAM interleaved, and the core count they use.
 #:
@@ -941,7 +964,7 @@ class _OptimizedMLP(LightweightModule):
         )
         up = dec._decode_projection(x_sharded, self.up, role="mlp_up", rows=rows)
         out_memcfg = gate.memory_config()
-        wide = DECODE_SWIGLU_MUL_CORES
+        wide = dec.decode_swiglu_mul_cores
         if wide is not None:
             # See :data:`DECODE_SWIGLU_MUL_CORES`: three reshards to spread the SFPU
             # SiLU over more cores.  ``mlp_down``'s ``in0_block_w`` is derived from
@@ -999,12 +1022,17 @@ class OptimizedDecoder(FusedDecoder):
         boundary_cores: int = BOUNDARY_CORES,
         decode_sdpa: tuple[int, int, int, int] | None = None,
         decode_fused_activation: bool = DECODE_FUSED_ACTIVATION,
+        decode_swiglu_mul_cores: int | None = DECODE_SWIGLU_MUL_CORES,
         sharded_decode_io: bool = False,
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
         self.precision = precision
         self.decode_fused_activation = decode_fused_activation
+        self.decode_swiglu_mul_cores = resolve_decode_swiglu_mul_cores(
+            self.config.intermediate_size,
+            decode_swiglu_mul_cores,
+        )
         #: Return the decode residual width-sharded in L1 instead of DRAM
         #: interleaved -- the inter-layer contract described in ``decode_forward``.
         self.sharded_decode_io = sharded_decode_io
@@ -1178,7 +1206,9 @@ class OptimizedDecoder(FusedDecoder):
         boundary_cores: int = BOUNDARY_CORES,
         decode_sdpa: tuple[int, int, int, int] | None = None,
         decode_fused_activation: bool = DECODE_FUSED_ACTIVATION,
+        decode_swiglu_mul_cores: int | None = DECODE_SWIGLU_MUL_CORES,
         sharded_decode_io: bool = False,
+        rope_cache: dict[str, ttnn.Tensor] | None = None,
         **kwargs,
     ) -> "OptimizedDecoder":
         """Same contract as ``FusedDecoder.from_state_dict``, plus ``precision``.
@@ -1297,23 +1327,40 @@ class OptimizedDecoder(FusedDecoder):
 
         cos_cache = sin_cache = cos_cache_tile = sin_cache_tile = None
         if config.uses_rope:
-            cos, sin = _rope_cos_sin(max_seq_len, config.head_dim, config.rope_theta)
-            cos_cache = _to_device(
-                cos.to(torch.bfloat16), mesh_device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT
-            )
-            sin_cache = _to_device(
-                sin.to(torch.bfloat16), mesh_device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT
-            )
-            cos_cache_tile = _to_device(
-                cos.to(torch.bfloat16).reshape(1, 1, max_seq_len, config.head_dim),
-                mesh_device=mesh_device,
-                dtype=ttnn.bfloat16,
-            )
-            sin_cache_tile = _to_device(
-                sin.to(torch.bfloat16).reshape(1, 1, max_seq_len, config.head_dim),
-                mesh_device=mesh_device,
-                dtype=ttnn.bfloat16,
-            )
+            if rope_cache is not None:
+                # Full-model P150 serving uses this single-chip decoder for every
+                # layer.  The 39 sliding layers share one theta, so keeping a copy
+                # of the four full-context tables in every layer would waste about
+                # 5.2 GB of device DRAM.  The model-level builder validates the
+                # common theta before handing this cache in.
+                cos_cache = rope_cache["cos"]
+                sin_cache = rope_cache["sin"]
+                cos_cache_tile = rope_cache["cos_tile"]
+                sin_cache_tile = rope_cache["sin_tile"]
+            else:
+                cos, sin = _rope_cos_sin(max_seq_len, config.head_dim, config.rope_theta)
+                cos_cache = _to_device(
+                    cos.to(torch.bfloat16),
+                    mesh_device=mesh_device,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                )
+                sin_cache = _to_device(
+                    sin.to(torch.bfloat16),
+                    mesh_device=mesh_device,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                )
+                cos_cache_tile = _to_device(
+                    cos.to(torch.bfloat16).reshape(1, 1, max_seq_len, config.head_dim),
+                    mesh_device=mesh_device,
+                    dtype=ttnn.bfloat16,
+                )
+                sin_cache_tile = _to_device(
+                    sin.to(torch.bfloat16).reshape(1, 1, max_seq_len, config.head_dim),
+                    mesh_device=mesh_device,
+                    dtype=ttnn.bfloat16,
+                )
 
         return cls(
             config=config,
@@ -1339,6 +1386,7 @@ class OptimizedDecoder(FusedDecoder):
             boundary_cores=boundary_cores,
             decode_sdpa=decode_sdpa,
             decode_fused_activation=decode_fused_activation,
+            decode_swiglu_mul_cores=decode_swiglu_mul_cores,
             sharded_decode_io=sharded_decode_io,
         )
 

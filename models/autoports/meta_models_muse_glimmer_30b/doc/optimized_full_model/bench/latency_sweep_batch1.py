@@ -95,6 +95,12 @@ def measure(gen, prompt_ids: list[int], osl: int) -> dict:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--mesh-shape",
+        default="1x4",
+        choices=("1x1", "1x2", "1x4"),
+        help="qualified P150/P150x2/P150x4 tensor-parallel mesh",
+    )
     parser.add_argument("--osl", type=int, default=DEFAULT_OSL)
     parser.add_argument("--isl", type=int, nargs="*", default=list(DEFAULT_ISLS))
     parser.add_argument("--out", default=None)
@@ -104,7 +110,8 @@ def main() -> None:
         if isl + args.osl > HF_ADVERTISED_CONTEXT:
             raise SystemExit(f"ISL {isl} + OSL {args.osl} exceeds the advertised context {HF_ADVERTISED_CONTEXT}")
 
-    mesh = open_generator_mesh()
+    mesh_shape = tuple(int(part) for part in args.mesh_shape.split("x"))
+    mesh = open_generator_mesh(mesh_shape=mesh_shape)
     rows: list[dict] = []
     try:
         logger.info("building generator (max_seq_len = full advertised context) ...")
@@ -134,6 +141,8 @@ def main() -> None:
             )
 
         payload = {
+            "mesh_shape": list(mesh_shape),
+            "tensor_parallel_size": mesh_shape[0] * mesh_shape[1],
             "batch_size": 1,
             "osl": args.osl,
             "hf_advertised_context": HF_ADVERTISED_CONTEXT,
