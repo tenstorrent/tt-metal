@@ -357,6 +357,36 @@ void DispatchSKernel::CreateKernel() {
         {"DEVICE_PRINT_CYCLES_FOR_FULL",
          std::to_string(static_config_.device_print_cycles_for_full.value_or(0)) + "ULL"},
     };
+    const bool dispatch_uses_engines =
+        GetCoreType() == CoreType::DISPATCH &&
+        descriptor_.hal().get_supports_sending_fds_go_cmds(
+            descriptor_.hal().get_programmable_core_type_index(HalProgrammableCoreType::DISPATCH));
+    const bool fds_worker_done = dispatch_uses_engines && !descriptor_.rtoptions().get_disable_fds();
+    const bool fds_worker_go =
+        fds_worker_done && get_dispatch_query_manager_ref().cq_dispatch_layout().num_cqs_per_core == 1;
+    if (fds_worker_done) {
+        defines["FDS_WORKER_DONE"] = "1";
+    }
+    if (fds_worker_go) {
+        defines["FDS_WORKER_GO"] = "1";
+    }
+    if (cq_id_ == 0) {
+        if (fds_worker_go) {
+            log_info(tt::LogMetal, "Worker go transport on device {}: FDS", device_->id());
+        } else if (fds_worker_done) {
+            log_info(
+                tt::LogMetal,
+                "Worker go transport on device {}: NOC because multiple CQs share the engine",
+                device_->id());
+        } else if (dispatch_uses_engines) {
+            log_info(tt::LogMetal, "Worker go transport on device {}: NOC because FDS is disabled", device_->id());
+        } else {
+            log_info(
+                tt::LogMetal,
+                "Worker go transport on device {}: NOC because dispatch does not use engines",
+                device_->id());
+        }
+    }
     configure_kernel_variant(dispatch_kernel_file_names[DISPATCH_S], {}, defines);
 
     if (GetCoreType() == CoreType::WORKER && device_->arch() != tt::ARCH::QUASAR) {

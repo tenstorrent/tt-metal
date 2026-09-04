@@ -1150,6 +1150,9 @@ static void process_delay_cmd() {
 
 FORCE_INLINE
 void process_go_signal_mcast_cmd() {
+#if defined(ARCH_QUASAR) && defined(FDS_WORKER_DONE)
+    ASSERT(0);
+#endif
     volatile CQDispatchCmd tt_l1_ptr* cmd = reinterpret_cast<volatile CQDispatchCmd tt_l1_ptr*>(cmd_ptr);
     uint32_t stream = load_aligned<uint32_t>(&cmd->mcast.wait_stream);
     // The go signal embedded in the command does not meet NOC alignment requirements, but cmd_ptr does

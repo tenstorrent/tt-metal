@@ -24,6 +24,7 @@
 
 #include <tt_stl/assert.hpp>
 #include "core_coord.hpp"
+#include "dispatch/dispatch_core_manager.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "mesh_device.hpp"
@@ -71,14 +72,24 @@ SubDeviceManagerId SubDeviceManagerTracker::create_sub_device_manager(
 
 void SubDeviceManagerTracker::reset_sub_device_state(const std::unique_ptr<SubDeviceManager>& sub_device_manager) {
     auto num_sub_devices = sub_device_manager->num_sub_devices();
+    MetalContext& metal_context = MetalContext::instance(extract_context_id(device_));
+    const bool fds_worker_completion =
+        metal_context.get_dispatch_core_manager().get_dispatch_core_type() == CoreType::DISPATCH &&
+        !metal_context.rtoptions().get_disable_fds();
     std::vector<uint32_t> workers_per_sub_device;
     workers_per_sub_device.reserve(num_sub_devices);
     for (uint8_t i = 0; i < num_sub_devices; ++i) {
         const auto sub_device_id = SubDeviceId{i};
         const auto& sub_device = sub_device_manager->sub_device(sub_device_id);
+        const uint32_t active_ethernet_core_count = sub_device.cores(HalProgrammableCoreType::ACTIVE_ETH).num_cores();
+        if (fds_worker_completion) {
+            TT_FATAL(
+                active_ethernet_core_count == 0,
+                "FDS worker completion does not support ACTIVE_ETH cores in sub-device {}",
+                i);
+        }
         workers_per_sub_device.push_back(
-            sub_device.cores(HalProgrammableCoreType::TENSIX).num_cores() +
-            sub_device.cores(HalProgrammableCoreType::ACTIVE_ETH).num_cores());
+            sub_device.cores(HalProgrammableCoreType::TENSIX).num_cores() + active_ethernet_core_count);
     }
     // Dynamic resolution of device types is unclean and poor design. This will be cleaned up
     // when MeshCommandQueue + HWCommandQueue are unified under the same API

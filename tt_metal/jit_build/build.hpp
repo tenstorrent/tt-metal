@@ -41,6 +41,7 @@ struct JitBuiltStateConfig {
     int processor_id = 0;
     bool is_fw = false;
     uint32_t dispatch_message_addr = 0;
+    bool fds_worker_done = false;
     // Set `is_cooperative` when Metal FW/Kernel code is loaded on risc with some base FW running.
     // In this case Metal FW will need to facilitate context switching to base FW (e.g. code running on WH active
     // eriscs)
