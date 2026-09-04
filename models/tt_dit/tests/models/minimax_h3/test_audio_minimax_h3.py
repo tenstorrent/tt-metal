@@ -34,6 +34,7 @@ from ....models.audio_vae.minimax_h3.convert_minimax_h3_audio import (
     remap_amp_activations,
 )
 from ....models.audio_vae.minimax_h3.decoder_minimax_h3_audio import MiniMaxH3AudioDecoder
+from ....models.audio_vae.vocoder_ltx import TILE_HEIGHT
 from ....parallel.config import ParallelFactor
 from ....parallel.manager import CCLManager
 from ....utils.check import assert_quality
@@ -494,6 +495,11 @@ T_PARALLEL_FRAMES = [207, 192]
 TAIL_ROWS = 32  # latent rows of the trailing suffix checked on its own
 
 
+def _shards_pad(num_latent_frames: int, factor: int) -> bool:
+    """True when `Vocoder._upload_BCT` pads T for this factor (per-shard rows are floored to a tile)."""
+    return max(-(-num_latent_frames // factor), TILE_HEIGHT) * factor > num_latent_frames
+
+
 def _build(mesh_device, config, converted, parallel_config, ccl_manager):
     """The decoder at this file's shared defaults, plus a shard layout.
 
@@ -595,10 +601,9 @@ def test_audio_decode_t_parallel(mesh_device, num_latent_frames):
     torch.manual_seed(2)
     latents = torch.randn(2, config["latent_channels"], num_latent_frames) * 0.1
     factors = FACTORS_BY_MESH[(mesh_device.shape[0], mesh_device.shape[1])]
-    if num_latent_frames != 207:
-        # The extra length exists to hit the padded-tail path; a factor whose shards pad nothing there
-        # (e.g. 4 at 192 = 48 rows/shard) decodes bit-identically and would only add a cold compile.
-        factors = [(f, a) for f, a in factors if f == 1 or max(-(-num_latent_frames // f), 32) * f > num_latent_frames]
+    # Only sharded factors that pad exercise the tail path; one that pads nothing (e.g. 4 at 192 latents,
+    # 48 rows/shard) decodes bit-identically to unsharded and would only add a cold compile.
+    factors = [(f, a) for f, a in factors if f == 1 or _shards_pad(num_latent_frames, f)]
 
     baseline_out = None
     baseline_s = None
