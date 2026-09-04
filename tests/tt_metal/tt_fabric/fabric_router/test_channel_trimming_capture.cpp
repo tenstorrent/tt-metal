@@ -274,7 +274,6 @@ UnicastTrafficResult run_unicast_traffic_bw_nodes(
     uint32_t is_2d_fabric = topology == Topology::Mesh;
 
     auto worker_mem_map = BaseFabricFixture::generate_worker_mem_map(sender_device, topology);
-    auto mesh_shape = control_plane.get_physical_mesh_shape(src_fabric_node_id.mesh_id);
     uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
 
     std::vector<uint32_t> compile_time_args = {
@@ -310,8 +309,6 @@ UnicastTrafficResult run_unicast_traffic_bw_nodes(
         time_seed,
         receiver_virtual_core.x,
         receiver_virtual_core.y,
-        mesh_shape[1],
-        src_fabric_node_id.chip_id,
         num_hops,
         1 /* fwd_range */,
         dst_fabric_node_id.chip_id,
