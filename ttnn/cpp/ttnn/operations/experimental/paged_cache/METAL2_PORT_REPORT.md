@@ -2,68 +2,67 @@
 
 ## Outcome
 
-**`PORTED` (partial) + `CAPITULATED` (partial)** — the op's eight factories split cleanly in two, and
-this pass delivers both halves of that split as a deliberate result rather than a stopping point:
+**`PORTED`** — **all four factories this recipe's procedure covers are ported.** The op's eight
+factories split three ways, and the split is now clean:
 
-- **`PORTED`** — `PagedUpdateCacheProgramFactory` and `PagedFillCacheProgramFactory` are on
-  `CustomProgramSpecFactoryConcept`, with five `_metal2` kernel forks. These are the factories
-  `select_program_factory` picks whenever `mesh_coords` is `nullopt`, which is the default on every
-  public entry point — so this is the common path, not a corner.
-- **`CAPITULATED`** — the four `*MeshWorkloadFactory` factories were **blocked on framework work**:
-  they need a per-mesh-coordinate `ProgramSpec` / `ProgramRunArgs`, which no Metal 2.0 TTNN factory
-  concept provided at the time of this port. **That fix is now in review — [PR #54988](https://github.com/tenstorrent/tt-metal/pull/54988)
-  adds `MeshWorkloadSpecFactoryConcept`, which closes both variants of the gap**, so these four are
-  portable once it merges and need no further design work. The two ported factories are unaffected by
-  it. Full analysis, including a correction to this entry's original "multi-program" framing, in
-  [Handoff points](#handoff-points) #1.
-- **Deferred, not capitulated** — the two *fused* single-device factories
-  (`PagedTiledFusedUpdateCacheProgramFactory`, `PagedRowMajorFusedUpdateCacheProgramFactory`) are
-  left for a later pass, since the brief instructs *"Get an answer before you write the fused specs."*
-  The audit's open design **Question #1 is now answered on both channels**, with the same strategy:
-  bind both alternatives unconditionally and select at runtime from the existing `is_input1` arg.
-  DFBs take a ternary over the binding tokens (one type, id in a runtime field); cache tensors take a
-  branch with two typed accessors (distinct types, offsets in the type). Neither costs L1 and neither
-  changes the arg schema, so **these two need no framework work — they can be ported against `main`
-  today.** Evidence and mechanics in [Open items](#open-items-for-downstream) #1.
+- **`PORTED` (pass 1)** — `PagedUpdateCacheProgramFactory` and `PagedFillCacheProgramFactory` on
+  `CustomProgramSpecFactoryConcept`, with five `_metal2` kernel forks.
+- **`PORTED` (pass 2, this pass)** — `PagedTiledFusedUpdateCacheProgramFactory` and
+  `PagedRowMajorFusedUpdateCacheProgramFactory`, same concept, with six more `_metal2` forks. These
+  implement the answer pass 1 worked out to the audit's open **Question #1**, on both binding
+  channels; see [Open items](#open-items-for-downstream) #1 for the design and
+  [Friction](#friction) #4 for the one place the inherited design was incomplete.
+- **Out of this procedure's scope** — the four `*MeshWorkloadFactory` factories. Pass 1 recorded them
+  as blocked on a missing framework capability; **that capability has since merged** (`9fb0ed54794`,
+  PR #54988: `MeshWorkloadSpecFactoryConcept`). They are therefore no longer *blocked* — but their
+  target concept is that new one, and the port recipe bounds itself to
+  `ProgramSpecFactoryConcept` / `CustomProgramSpecFactoryConcept` and names this exact case as one to
+  stop on rather than improvise. Full detail, including the design work already done against the
+  merged concept, in [Handoff points](#handoff-points) #1.
 
-### What the remaining six factories are waiting on
+Together the four ported factories are every factory `select_program_factory` picks whenever
+`mesh_coords` is `nullopt` — the default on all three public entry points, so this is the whole
+common path across all three `DeviceOperation`s.
 
-Two **independent** prerequisites, one per group. Neither blocks the other, and neither blocks the two
-factories already ported.
+### What the remaining four factories are waiting on
+
+One prerequisite, shared by all four, and it is **not** a capability gap any more:
 
 | Remaining factories | Waiting on | Nature |
 |---|---|---|
-| `PagedUpdateCacheMeshWorkloadFactory`, `PagedFillCacheMeshWorkloadFactory` | **Diego's mesh-workload branch — [PR #54988](https://github.com/tenstorrent/tt-metal/pull/54988)** | framework: adds `MeshWorkloadSpecFactoryConcept`. Nothing else needed; no design work outstanding. |
-| `PagedTiledFusedUpdateCacheProgramFactory`, `PagedRowMajorFusedUpdateCacheProgramFactory` | **the Question #1 fix in [Open items](#open-items-for-downstream) #1** (bind both DFBs + both cache tensors, select at runtime from `is_input1`) | op-side only: no framework dependency, no arg-schema change. Can be done today, on `main`. |
-| `PagedTiledFusedUpdateCacheMeshWorkloadFactory`, `PagedRowMajorFusedUpdateCacheMeshWorkloadFactory` | **both of the above** | they are the mesh siblings of the fused pair, so they need the Question #1 fix *and* Diego's branch. |
+| `PagedUpdateCacheMeshWorkloadFactory`, `PagedFillCacheMeshWorkloadFactory`, `PagedTiledFusedUpdateCacheMeshWorkloadFactory`, `PagedRowMajorFusedUpdateCacheMeshWorkloadFactory` | **a port procedure for `MeshWorkloadSpecFactoryConcept`** | process, not framework. The concept and its adapter are on this branch (`9fb0ed54794`); what does not exist is a recipe section telling a porter how to target it, and the current recipe explicitly declines to have one improvised. |
 
-So the fused single-device pair is the piece that can move first — it needs no branch and no merge,
-only the approach recorded below. The mesh work gates on #54988 landing.
-
-**⚠ Not built, not tested — see [Friction](#friction) #1.** The required toolchain (`clang-20`) is
-not installed on the machine this port ran on, so `./build_metal.sh` cannot configure. Every check in
-[Verification performed](#verification-performed) below is static. The invoker asked to run the build
-and tests themselves; the commands, including the mandatory legality-check forcing, are in
-[Handing the build and test run back](#handing-the-build-and-test-run-back).
+**Built and tested — see [Verification performed](#verification-performed).** Unlike pass 1 (which
+ran on a machine without `clang-20` and could only check statically), this pass built the tree and
+ran the confirmed test set on hardware, with the Metal 2.0 legality checks forced on and proven live.
+That also gives pass 1's two factories their first real execution.
 
 ## Provenance
 
-- **Recipe docs (this port):** `50e992a8ec2 2026-08-21 docs(metal_2.0): a run in flight freezes the kernel sources`
+- **Recipe docs (pass 2):** `4bd4bf42bfe 2026-09-03 docs(metal_2.0): state the offset-base wall as a category, not as slice's current state`
+- **Recipe docs (pass 1):** `50e992a8ec2 2026-08-21 docs(metal_2.0): a run in flight freezes the kernel sources`
 - **Audit docs (inherited):** `50e992a8ec2 2026-08-21 docs(metal_2.0): a run in flight freezes the kernel sources`
 
 The working checkout carries no `metal_2.0` doc tree, so
 `git log -1 --format='%h %cs %s' -- docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/`
-prints nothing there. The hash above is pinned from the sibling doc-branch checkout
+prints nothing there. The hashes above are pinned from the sibling doc-branch checkout
 `/localdev/edwinlee/Port_Recipe`, whose `ai/port/metal2_port.md` was verified byte-identical
-(`diff -q`) to the recipe this port was handed — the same pin, and the same verification, the audit
-recorded.
+(`diff -q`) to the recipe each pass was handed. Pass 2 ran against a **newer** doc revision than
+pass 1; the recipe text itself is unchanged in every respect this port depends on, including the
+coverage-boundary rule that keeps the four mesh factories out of scope.
 
 ## TTNN ProgramFactory
 
 ### Concept realized
 
-`CustomProgramSpecFactoryConcept`, as the audit chose, on the two factories this pass ported. Each
-implements `create_program_artifacts` plus a `ProgramRunArgs`-returning `override_runtime_arguments`.
+`CustomProgramSpecFactoryConcept`, as the audit chose, on all four ported factories. Each implements
+`create_program_artifacts` plus a `ProgramRunArgs`-returning `override_runtime_arguments`.
+
+Each `program_factory_t` variant is now **mixed-concept** — one or two alternatives on
+`CustomProgramSpecFactoryConcept`, the rest on `ProgramDescriptorFactoryConcept`. `AllFactoriesValid`
+permits this (each alternative satisfies exactly one concept) and the framework dispatches
+per-factory at runtime, so `PagedFusedUpdateCacheDeviceOperation`'s four-alternative variant builds
+and runs with two of its alternatives on each API.
 
 **Cache-hit tensor-binding completeness** (the silent failure `ttnn_factory.md` warns about — on this
 concept the framework refreshes *nothing* for you): each override returns a `TensorArgument` for
@@ -75,6 +74,15 @@ concept the framework refreshes *nothing* for you): each override returns a `Ten
   did with `UpdateDynamicCircularBufferAddress`.
 - `PagedFillCacheProgramFactory::override_runtime_arguments` → `input`, `cache`, `page_table`, and
   (when present) `batch_idx`, `valid_seq_len`.
+- `PagedTiledFusedUpdateCacheProgramFactory::override_runtime_arguments` and the row-major sibling →
+  `cache1`, `cache2`, `input1`, `input2`, and (when present) `index`, `page_table`. Four of the six
+  are load-bearing beyond their own accessors: `input1` / `input2` refresh the borrowed-memory
+  `src1` / `src2` DFBs' backing L1 addresses, and `index` / `page_table` refresh theirs **when those
+  tensors are L1-sharded** — the four `UpdateDynamicCircularBufferAddress` calls the ported-from
+  `patch_runtime_args` made (`paged_fused_update_cache_device_operation.cpp:73-81`). Note the
+  ported-from code skipped the CB re-point for a *non*-sharded index / page table (its `.buffer` was
+  `nullptr`); on this side the same conditionality lives in the DFB spec's `borrowed_from`, so the
+  `TensorArgument` can be supplied unconditionally and the framework re-points only what borrows.
 
 **Non-tensor refreshes mirror the ported-from set exactly, no more and no less:**
 
@@ -85,7 +93,9 @@ concept the framework refreshes *nothing* for you): each override returns a `Ten
 | `fill_cache` reader `[3]`, writer `[5]` (`noop`) | `noop` named RTA on both kernels |
 | `fill_cache` writer `[4]` (`batch_idx_fallback`, scalar path only) | `batch_idx_fallback` named RTA, declared and refreshed only on the `!use_batch_idx_tensor` path |
 | `fill_cache` reader `[0]`, writer `[0]`/`[1]`/`[4]`(tensor path)/`[6]` | `tensor_args` (3–5 entries) |
-| *(neither: `start_tile_id` / `start_row_num` / `num_rows` / `my_batch_idx` / `wait_to_start` / `send_*`)* | **not** refreshed — identical, deliberately |
+| both fused: reader `[3]`, writer `[2]`/`[3]` on `cores1[i]` **and** `cores2[i]` — only when `offsets` is non-empty | `cache_start_id` / `cache_tile_offset_B` named RTAs on the same two node lists, under the same `offsets.empty()` guard |
+| both fused: reader `[2]`/`[4]`/`[6]`, writer `[1]`, and the four CB re-points | `tensor_args` (4–6 entries) |
+| *(neither: `start_tile_id` / `start_row_num` / `num_rows` / `my_batch_idx` / `wait_to_start` / `send_*` / `has_work` / `is_input1`)* | **not** refreshed — identical, deliberately |
 
 `UpdateProgramRunArgs` is a partial update, so everything omitted keeps its cache-miss value —
 which is exactly the ported-from behaviour.
@@ -98,14 +108,26 @@ which is exactly the ported-from behaviour.
 - **Custom `compute_program_hash`: left intact, untouched**, on all three DeviceOperations —
   `paged_update_cache_device_operation.cpp:313`, `paged_fill_cache_device_operation.cpp:207`,
   `paged_fused_update_cache_device_operation.cpp:371`.
-- **No device-operation-class file was edited at all.** The `TT_FATAL` census below confirms the three
-  device-op `.cpp` files are byte-identical in guard count (45 / 25 / 40, unchanged).
+- **No op-level device-operation-class code was edited** — no `validate_on_program_cache_miss`, no
+  `compute_output_specs`, no `create_output_tensors`, no `select_program_factory`, no attribute
+  parsing, no public entry point. The `TT_FATAL` census below confirms every guard is accounted for.
 - One structural change *inside the port's own writeable surface*, forced by the split: in each ported
-  factory `.cpp` the ported-from `create_descriptor` body and the ported-from `Program&`-mutating
-  patch moved verbatim into anonymous-namespace helpers
-  (`build_paged_update_cache_descriptor` / `patch_paged_update_cache_runtime_args`, and the
-  `fill_cache` equivalents), because the blocked `*MeshWorkloadFactory` sibling still needs them.
-  `fill_cache` already had this shape for the descriptor; `update_cache` acquired it.
+  factory `.cpp` the ported-from `create_descriptor` body moved verbatim into a helper-namespace free
+  function, because the out-of-scope `*MeshWorkloadFactory` sibling still needs it —
+  `build_paged_update_cache_descriptor`, `build_paged_fill_cache_descriptor`,
+  `build_paged_tiled_fused_update_cache_descriptor`,
+  `build_paged_row_major_fused_update_cache_descriptor`. Same for the ported-from `Program&`-mutating
+  patch where it lived in the factory file (`patch_paged_update_cache_runtime_args`).
+- **Pass 2 additionally moved two *factory method definitions* between files** (factory code, not
+  op-level code, so inside the lane — but worth naming since the file changed):
+  `PagedTiledFusedUpdateCacheProgramFactory::override_runtime_arguments` and its row-major sibling
+  were defined in `paged_fused_update_cache_device_operation.cpp` and now live beside their own spec
+  builds in the two factory `.cpp` files. The reason is mechanical: the Metal 2.0 override names spec
+  resources (`TF_CACHE1_TENSOR`, `TF_READER_KERNEL`, …), and those names are declared in the
+  factory's own helper namespace. What stays in the device-operation file is the ported-from
+  index-addressed `patch_runtime_args` template and its arg-layout constants, which the two mesh
+  factories still need; those two mesh hooks previously *delegated* to the single-device hooks and now
+  call `patch_runtime_args` directly, because the signatures are no longer shared.
 
 ### Open items
 
@@ -115,14 +137,35 @@ See [Open items for downstream](#open-items-for-downstream).
 
 ## Handoff points
 
-### 1. **Per-coordinate programs and run args for the four `*MeshWorkloadFactory` factories — FIX IN REVIEW: [PR #54988](https://github.com/tenstorrent/tt-metal/pull/54988).** *(owner: Metal 2.0 / TTNN framework; the action is now "merge, then port", not "design")*
+### 1. **The four `*MeshWorkloadFactory` factories: framework vehicle MERGED (`9fb0ed54794`, PR #54988), now waiting on a *port procedure* for `MeshWorkloadSpecFactoryConcept`.** *(owner: Metal 2.0 doc maintainers, for the procedure; then any porter)*
 
-**Status.** Blocked when this port ran; the vehicle now exists and is in review on **Diego's
-mesh-workload branch, [PR #54988](https://github.com/tenstorrent/tt-metal/pull/54988)**. Read against
-PR head `e38184cccba` (3 commits over merge-base `bc294789ec3`). **These four factories are waiting on
-that branch and nothing else** — once it merges the port is mechanical, with no design question left
-open. Everything below is stated against
-the tree this port ran on, so the `mesh_device_operation_adapter.hpp` line numbers are pre-#54988.
+**Status, and it changed between the two passes.** Pass 1 recorded these four as a capitulation on
+missing framework work: they need a per-mesh-coordinate `ProgramSpec` / `ProgramRunArgs`, and no
+Metal 2.0 TTNN factory concept provided one. **That work has merged** — `9fb0ed54794` *"Let a spec
+factory build a different program per mesh coordinate (#54988)"*, on this branch. So the capability
+gap is closed, and the analysis pass 1 wrote is now directly actionable.
+
+**What is left is not a capability gap but a missing procedure.** With #54988 merged the target
+concept for these four is `MeshWorkloadSpecFactoryConcept`, and the port recipe scopes itself to
+`ProgramSpecFactoryConcept` and `CustomProgramSpecFactoryConcept` — "the two single-program Metal 2.0
+concepts, one spec stamped across the mesh" — then names precisely this situation:
+
+> A brief naming any other target concept is outside this procedure — stop and report. The case to
+> expect is a mesh-workload concept for a genuine multi-program op: the audit can clear one the day
+> TTNN support lands, but no port procedure exists for it until someone writes it. Stopping is the
+> correct outcome; improvising a multi-program port out of this recipe is not.
+
+`ttnn_factory.md` says the same from the audit side: if the target is a mesh-workload concept, "note
+that the port procedure does not cover it yet, so the porter will stop at its coverage boundary."
+Pass 2 therefore stopped here deliberately rather than extrapolating a single-program procedure onto
+a multi-program concept — which is the reading the invoker should sanity-check, since the invoker's
+own framing was that the merge "allows the Mesh factories to be ported." It does, at the framework
+level; the recipe is what withholds permission, not the API.
+
+**The ask, then, is narrow:** a `MeshWorkloadSpecFactoryConcept` section in the port recipe (or an
+explicit instruction to a porter that the general rules extend to it). Everything op-specific is
+already worked out below and needs no rediscovery. Line numbers for
+`mesh_device_operation_adapter.hpp` below are pass-1's, i.e. pre-#54988.
 
 **Correcting this entry's original framing.** The first version of this report filed all four
 factories under `ttnn_factory.md`'s *"multi-program / per-coord variation"* RED case. That is right
@@ -156,8 +199,10 @@ which the port may normalise away (*"Preserve both behaviours as they are"*):
   (`override_runtime_arguments` receives the coordinate); only the miss dispatch was wrong, and it
   would perform a real cache fill on a coordinate the caller excluded.
 
-**How #54988 closes both.** It deletes the *"A future `MeshWorkloadSpecFactoryConcept` will…"*
-placeholder in `metal_v2_artifacts.hpp` and ships it:
+**How #54988 closes both — verified against the merged code, not the PR description.** It replaced
+the *"A future `MeshWorkloadSpecFactoryConcept` will…"* placeholder in `metal_v2_artifacts.hpp` with
+the real thing (`ttnn/api/ttnn/metal_v2_artifacts.hpp:38-52`,
+`ttnn/api/ttnn/operation_concepts.hpp:118-132`):
 
 ```cpp
 static MeshWorkloadArtifacts create_mesh_workload_artifacts(
@@ -185,10 +230,15 @@ static MeshWorkloadArtifacts create_mesh_workload_artifacts(
    with a `static_assert` that rejects a near-miss signature rather than leaving run args silently
    stale.
 
-**The two ported factories are unaffected by #54988.** `CustomProgramSpecMeshWorkloadFactoryAdapter`
-still passes `std::optional<MeshCoordinate>(coordinate_range.start_coord())`, and
-`detail::HasSpecRuntimeArgsOverride` still keys only on the return type — the range-instead-of-
-coordinate change is confined to the new concept. No edit is needed to this port when #54988 lands.
+**The four ported factories are unaffected by #54988, confirmed post-merge.**
+`CustomProgramSpecMeshWorkloadFactoryAdapter` still passes
+`std::optional<MeshCoordinate>(coordinate_range.start_coord())`, and
+`detail::HasSpecRuntimeArgsOverride` (`operation_concepts.hpp:111-115`) still keys only on the return
+type — the range-instead-of-coordinate signature is confined to the new concept's *own* optional
+override. `MeshWorkloadSpecFactoryConcept` is also declared mutually exclusive with the other four,
+so the "exactly one concept per alternative" rule that `AllFactoriesValid` enforces still holds and
+pass 1's two factories classify exactly as before. No edit was needed to either pass when it landed,
+and pass 2's build confirms it.
 
 **Two things to get right in the follow-up port:**
 
@@ -222,35 +272,46 @@ preserve) instead of running them through the factory-concept gate. For `fill_ca
 worded** would not have caught it, because its programs do *not* differ; only a run-arg value does.
 See [Friction](#friction) #2.
 
-**Cost paid in this port because of it:** five kernel forks (next entry), which #54988 also lets us
-retire.
+**Cost paid across both passes because of it:** eleven kernel forks (next entry) — every kernel source
+in the op — which porting these four also lets us retire.
 
-### 2. **Five intra-op `_metal2` kernel forks created.** *(coordination signal; owner: this op's next porter)*
+### 2. **Eleven intra-op `_metal2` kernel forks created — every kernel source in the op.** *(coordination signal; owner: this op's next porter)*
 
 Because each `*MeshWorkloadFactory` binds the *same* kernel sources as the single-device sibling that
-did convert, converting those sources in place would have broken the four blocked factories. Per
+did convert, converting those sources in place would have broken the four out-of-scope factories. Per
 *Caution: Porting a shared kernel* — **rung 2 (create the fork), intra-op shape** — each fork was
 created beside its original, the original was left untouched apart from the mandated pointer comment,
 and the originals keep serving the mesh factories.
 
-| fork created (all under `device/kernels/`) | forked from | remaining consumers of the original |
-|---|---|---|
-| `dataflow/reader_update_cache_interleaved_start_id_metal2.cpp` | `reader_update_cache_interleaved_start_id.cpp` | `PagedUpdateCacheMeshWorkloadFactory` |
-| `dataflow/writer_update_cache_interleaved_start_id_metal2.cpp` | `writer_update_cache_interleaved_start_id.cpp` | `PagedUpdateCacheMeshWorkloadFactory` |
-| `compute/update_cache_metal2.cpp` | `compute/update_cache.cpp` | `PagedUpdateCacheMeshWorkloadFactory` |
-| `dataflow/reader_fill_cache_interleaved_metal2.cpp` | `reader_fill_cache_interleaved.cpp` | `PagedFillCacheMeshWorkloadFactory` |
-| `dataflow/writer_fill_cache_interleaved_metal2.cpp` | `writer_fill_cache_interleaved.cpp` | `PagedFillCacheMeshWorkloadFactory` |
+| fork created (all under `device/kernels/`) | forked from | pass | remaining consumers of the original |
+|---|---|---|---|
+| `dataflow/reader_update_cache_interleaved_start_id_metal2.cpp` | `reader_update_cache_interleaved_start_id.cpp` | 1 | `PagedUpdateCacheMeshWorkloadFactory` |
+| `dataflow/writer_update_cache_interleaved_start_id_metal2.cpp` | `writer_update_cache_interleaved_start_id.cpp` | 1 | `PagedUpdateCacheMeshWorkloadFactory` |
+| `compute/update_cache_metal2.cpp` | `compute/update_cache.cpp` | 1 | `PagedUpdateCacheMeshWorkloadFactory` |
+| `dataflow/reader_fill_cache_interleaved_metal2.cpp` | `reader_fill_cache_interleaved.cpp` | 1 | `PagedFillCacheMeshWorkloadFactory` |
+| `dataflow/writer_fill_cache_interleaved_metal2.cpp` | `writer_fill_cache_interleaved.cpp` | 1 | `PagedFillCacheMeshWorkloadFactory` |
+| `dataflow/reader_paged_fused_update_cache_interleaved_start_id_metal2.cpp` | `reader_paged_fused_update_cache_interleaved_start_id.cpp` | **2** | `PagedTiledFusedUpdateCacheMeshWorkloadFactory` |
+| `dataflow/writer_paged_fused_update_cache_interleaved_start_id_metal2.cpp` | `writer_paged_fused_update_cache_interleaved_start_id.cpp` | **2** | `PagedTiledFusedUpdateCacheMeshWorkloadFactory` |
+| `compute/paged_fused_update_cache_metal2.cpp` | `compute/paged_fused_update_cache.cpp` | **2** | `PagedTiledFusedUpdateCacheMeshWorkloadFactory` |
+| `dataflow/reader_paged_row_major_fused_update_cache_interleaved_start_id_metal2.cpp` | `reader_paged_row_major_fused_update_cache_interleaved_start_id.cpp` | **2** | `PagedRowMajorFusedUpdateCacheMeshWorkloadFactory` |
+| `dataflow/writer_paged_row_major_fused_update_cache_interleaved_start_id_metal2.cpp` | `writer_paged_row_major_fused_update_cache_interleaved_start_id.cpp` | **2** | `PagedRowMajorFusedUpdateCacheMeshWorkloadFactory` |
+| `compute/paged_row_major_fused_update_cache_metal2.cpp` | `compute/paged_row_major_fused_update_cache.cpp` | **2** | `PagedRowMajorFusedUpdateCacheMeshWorkloadFactory` |
 
 No `_metal2` fork existed beside any of them beforehand (checked locationally, by `ls` of each
 original's directory — not by a tree-wide grep). No build-system change was needed: the op's kernels
-are installed by a `file(GLOB_RECURSE …)` that already covers these directories.
+are installed by a `file(GLOB_RECURSE …)` that already covers both directories, and no `sources.cmake`
+entry changed because the port added no new host `.cpp`.
 
-**Sunset — now has a concrete trigger.** [PR #54988](https://github.com/tenstorrent/tt-metal/pull/54988)
-unblocks the four mesh factories (handoff #1). Once it merges and they convert, all five originals are
-deleted and the forks take their names. Until then, **a fix to either copy should be evaluated for the
-other** — these five pairs are a drift-discipline liability inside a single op directory, which is an
-unusually tight coupling for the fork convention and the main reason to land #54988 and follow it with
-the mesh port promptly.
+**Sunset trigger.** Porting the four mesh factories (handoff #1) retires **all eleven** originals: the
+legacy copies are deleted and the forks take their names. Until then, **a fix to either copy of a pair
+should be evaluated for the other.** This is now the whole kernel surface of the op duplicated inside
+one directory — eleven pairs, ~2,900 lines — which is a real drift-discipline liability and the
+strongest practical argument for writing the `MeshWorkloadSpecFactoryConcept` procedure and finishing
+the op promptly. It is also worth noting as a **doc-evolution signal in its own right**: the
+shared-kernel Caution's fork convention was designed for cross-op sharing, where the two consumers
+have different owners and drift is the price of decoupling. Applied to the intra-op mesh/single-device
+split it duplicates a whole op for a reason that is purely temporal, and the mitigation the Caution
+offers (record the pair, evaluate fixes on both) scales poorly at eleven.
 
 ### 3. **`ttnn.experimental.paged_fill_cache`'s `noop` attribute is dead API surface.** *(owner: ops team; carried forward from the audit, confirmed during the port)*
 
@@ -307,12 +368,59 @@ Set explicitly at `paged_update_cache_program_factory.cpp:938`.
 
 ---
 
+**Pass 2 — 4. `dataflow_buffer_spec.hpp`'s alias-group node-set rule caught a legality question before
+it became a validator failure.** The tiled and row-major fused factories each carry an aliased
+intermediate pair, and the header states the constraint at the field: *"Aliased DFBs must have the
+same total size … All members must target the same node set (derived from their bound kernels'
+WorkUnitSpecs)"* (`advanced_options.hpp:169-172`). That third clause is the one worth having read: it
+made me check that the two members' *binding sets* — compute+writer for `untilized_cache`,
+writer+compute for `untilized_cache2` — resolve to the same nodes, which they do only because the
+factory declares a **single** `WorkUnitSpec` over `all_cores_bb`. Had I split the kernels into
+per-core-set work units (the option the audit's Question #1 floated), the alias group would have
+become illegal, and the failure would have arrived as a `TT_FATAL` from `program_spec.cpp` at first
+dispatch with no obvious connection to the work-unit decision. Applies at
+`paged_tiled_fused_update_cache_program_factory.cpp` (the `TF_UNTILIZED_CACHE_DFB` /
+`TF_UNTILIZED_CACHE2_DFB` pair and the `WorkUnitSpec` below it).
+
+**Pass 2 — 5. "Go to the headers first" is what resolved audit Question #1's tensor half, and a
+precedent would have got it wrong.** The natural move, having found that a runtime ternary over
+`dfb::src1` / `dfb::src2` works, is to reach for the same shape on the tensor channel. It cannot
+compile, and the reason is only visible in the declarations: `DFBBindingToken` keeps its identity in
+a runtime `uint16_t` member (`dataflow_buffer.h:90-101`), so every DFB token shares one type, whereas
+host codegen emits `TensorBindingToken<cta_offset, addr_crta_offset>` — a **distinct type per
+binding** (`genfiles.cpp:258-263`) — so two bindings on one kernel can never have a common type. Two
+channels that look symmetric in the recipe's prose are asymmetric in the headers, and the asymmetry
+decides the kernel shape (ternary vs. twice-instantiated generic lambda). The recipe's advice that
+"the reflex to hunt for a precedent is the weaker one" was right here in a strong form: any precedent
+would have shown one channel or the other, and copying it across would have produced either a
+compile error or an unnecessary type-erased wrapper.
+
+**Pass 2 — 6. Re-deriving the endpoint census instead of transcribing the brief's caught the one place
+the two variants differ.** The recipe insists that endpoint dispositions are "mechanical enough to
+*verify*, not transcribe". Re-derived from the six fused kernels, the census agrees with the audit on
+the headline (all 1P+1C, no self-loop, no `allow_instance_multi_binding`) — but it does **not** agree
+kernel-for-kernel: on the row-major path the input buffers' **consumer is the writer**, not compute,
+because a row-major input needs no untilize step and the "untilized input" the writer reads *is* the
+input buffer. A transcription that carried the tiled roles across (compute as consumer) would have
+produced a row-major spec with compute bound to two DFBs it never touches and the writer bound to
+none it does — the endpoint invariant would still have been satisfied on paper, one PRODUCER and one
+CONSUMER each, so the validator would have passed it and the kernel would have hung waiting on a
+buffer nobody drains. Checked mechanically at the end, too: a script re-extracted every
+`DFBBinding` from both factories and confirmed 9 and 8 DFBs at exactly 1P+1C
+([Verification performed](#verification-performed)).
+
 ## Friction
 
 ### Gaps
 
-**1. The port could not be built or tested: the toolchain is absent from the machine.**
-`./build_metal.sh` fails at CMake configure with
+**1. (Pass 1 only — RESOLVED in pass 2.) The port could not be built or tested: the toolchain was
+absent from the machine.** Kept because the two secondary `workspace_setup.md` observations below are
+still worth acting on, and because the resolution is itself a data point: the same box **did** have
+`clang-20` when pass 2 ran, so this was a transient environment gap rather than a fixture of the
+bench. Everything pass 1 lists below as unverified is now verified — see
+[Verification performed](#verification-performed).
+
+At the time of pass 1, `./build_metal.sh` failed at CMake configure with
 `The CMAKE_C_COMPILER: clang-20 is not a full path and was not found in the PATH`; only clang-14 is
 installed (`/usr/bin/clang-14`, `/usr/lib/llvm-14`). A sibling checkout's `CMakeCache.txt` shows
 `/usr/bin/llvm-ar-20`, so the box *did* carry clang-20 at some earlier point — it is gone now.
@@ -330,8 +438,8 @@ Two secondary things this surfaced, both worth a line in `workspace_setup.md`:
   sites before the build was attempted, then reverted when the build proved impossible. Cheap here,
   but a one-line "confirm you can build before you force" would save the round trip.
 
-**Everything in [Verification performed](#verification-performed) is therefore static.** The port's
-highest-risk unverified surfaces, in the order I would check them:
+**Pass 1's verification was therefore entirely static.** The surfaces it flagged as highest-risk and
+unverified — listed below as pass 1 left them — were all exercised in pass 2 and all pass:
 1. Does the whole thing compile (host and the five JIT kernel forks)?
 2. Does `ValidateProgramSpec` accept the `update_cache` alias group and the three `fill_cache`
    self-loops?
@@ -368,6 +476,83 @@ Two refinements, both learned after the fact:
   [PR #54988](https://github.com/tenstorrent/tt-metal/pull/54988) in review, per-coord variation stops
   meaning RED and starts meaning *"target `MeshWorkloadSpecFactoryConcept` instead"*. The gate should
   route to that concept rather than halt the audit, and the readiness sheet needs the third value.
+
+**Pass 2 — Gap: replacing an address RTA with a `TensorBinding` can lose *selection* information, and
+the Dropped Plumbing table has no row for that.** The recipe treats a buffer-address RTA as pure
+plumbing: the address goes away, a `TensorBinding` replaces it, nothing else changes. That holds when
+the slot carries one tensor's address. It does **not** hold when the host wrote *different tensors'*
+addresses into one slot on different nodes, which is what both fused factories do — reader RTA[2] and
+writer RTA[1] carry `cache_tensor1` on `cores1` and `cache_tensor2` on `cores2`. There, the address
+value was doing double duty: it was the address *and* it was the answer to "which cache tensor am I".
+A `TensorBinding` is per-`KernelSpec`, so the port must bind both and the kernel must be told which to
+use — and if no existing arg says so, the port has to **add** one.
+
+Concretely: the row-major writer already had an `is_input1` runtime arg (it used it to pick an input
+buffer) and needed nothing. The **tiled** writer had none, so
+`writer_paged_fused_update_cache_interleaved_start_id_metal2.cpp` gains a named RTA `is_input1`, and
+`paged_tiled_fused_update_cache_program_factory.cpp` declares and emits it. It is not a *demotion*
+(nothing moved CTA→RTA) nor a smuggled address — but it also isn't in the recipe's vocabulary of
+things a port does.
+
+Worth noting how small the actual delta is, because it makes the shape easy to accept: the tiled
+writer's runtime-arg **count is unchanged at 8.** The slot that carried the cache address is the slot
+that now carries the selector — the address moved to the typed channel and the one bit of information
+the address was implicitly encoding stayed behind in its place. Read that way it is less "the port
+added an arg" than "the port split one overloaded slot into a binding plus the bit that chose it",
+which is the same shape as the *Overloaded RTA slots* case the brief already describes for
+`fill_cache` (`Buffer*` **or** meaningful scalar → conditional `TensorParameter` **plus** a named
+scalar). The difference is that `fill_cache`'s two channels are selected by *configuration*, so the
+brief could enumerate them, while here they are selected **per node** — and that is the case neither
+the brief nor the recipe has a name for. Two doc
+suggestions: (a) add a Dropped Plumbing row for "one address slot, several tensors, selected by node
+→ several `TensorBinding`s **plus** a selector arg if the kernel has none"; (b) note it in the
+`hw_config`-adjacent list of silent hazards, because the failure mode of getting it wrong is not a
+compile error — bind both and forget the selector and the kernel writes the *wrong cache tensor* on
+half the cores, which is exactly the shape of bug the fused tests would catch but a single-input smoke
+test would not. Pass 1's own resolution of Question #1 (Open items #1) had this gap: it prescribed
+"branch on `is_input1`" for both fused factories without noticing that one of the four kernels
+involved has no such arg.
+
+**Pass 2 — Gap: what to do with a per-node *short* runtime-arg list is decided by the validator, not
+by the recipe.** Both fused factories give working cores 8/8/2 runtime args and every core in
+`unused_cores` a **single** `{!has_work}`, which the kernels early-return on. The brief flagged this
+and said to "decide up front how the short-arg nodes are expressed (supply the full named set with
+don't-care values, or narrow the `KernelSpec`'s core range) rather than discovering it at validation
+time" — but neither the brief nor the recipe says which is correct, and the two options are not
+equivalent: narrowing the node set also narrows every DFB's derived placement, changing which cores
+get buffers relative to legacy. The answer is in the validator:
+`ValidateSetProgramRunArgs` requires every declared named RTA on **every** node the kernel runs on
+(`tt_metal/impl/metal2_host_api/program_run_args.cpp:296-324`), so the full-named-set option is the
+only one that preserves the legacy program. Worth one sentence in the recipe's `KernelRunArgs`
+bullet, since "a `runtime_arg_schema` is one schema for the whole `KernelSpec`" is stated but its
+consequence — *and therefore every node must supply all of it* — is not.
+
+**Pass 2 — Gap: a `borrowed_from` that is conditional on tensor configuration.** The recipe's
+borrowed-memory bullet reads as a static property of a DFB ("Borrowed memory → set `borrowed_from`
+= …"), and the conditional-binding pattern is written about *bindings* and `#ifdef`s. Both fused
+factories need a third thing: the **same** DFB borrows the index / page-table tensor's L1 memory when
+that tensor is sharded and is an ordinary L1 allocation when it is DRAM-interleaved — legacy said this
+with a `CBDescriptor::buffer` that is `nullptr` on one path (`:117`, `:136`). Expressing it turned out
+to be trivial (build the `DataflowBufferSpec`, then set `borrowed_from` inside an `if`), and nothing
+kernel-side changes because the read through it was already `if constexpr`-gated. But it took a
+detour through the conditional-binding pattern first, on the assumption that a per-config difference
+in a DFB must be a per-config difference in its *binding*. It isn't: this one is a per-config
+difference in the spec, with the binding unconditional. A line in the borrowed-memory bullet saying
+`borrowed_from` may vary by configuration like any other spec field would have saved that.
+
+**Pass 2 — Confusion: rule 2 and the brief's "don't remove dead args" collide on a dead *CB-index*
+CTA, and rule 2 has to win.** The brief lists the row-major fused compute kernel's `in1_cb` / `in2_cb`
+among dead compile-time args and says "The port does not remove them — dropping one is a functional
+change to the arg schema." But those two args are **CB indices**, and kernel-side whitelist rule 2 is
+categorical that a CB index becomes a DFB binding and "never a named argument." The kernel never
+touches either buffer (a row-major input needs no untilize step), so there is no endpoint to declare
+and binding them would invent one. Both instructions cannot be followed. Resolution taken: **drop
+them** — rule 2 is about a channel that no longer exists, while the brief's rule is about preserving
+a *scalar* schema, and the scalar schema is preserved intact because the dead **runtime** arg
+`is_input1` is still declared and still read (`[[maybe_unused]]`). Recorded as a deliberate departure
+in the plan's Dropped Plumbing table and in [Open items](#open-items-for-downstream) #2. The doc fix
+is small: the brief's dead-arg instruction should say *dead scalar* args, since a dead CB index has no
+legal Metal 2.0 spelling to carry forward.
 
 ### Confusion
 
@@ -407,13 +592,17 @@ data — but the host-side binding needed an explicit comment
 
 ## Open items for downstream
 
-### 1. The two **fused** single-device factories — audit Question #1 **RESOLVED**, both halves; no framework dependency
+### 1. The two **fused** single-device factories — audit Question #1, **RESOLVED in pass 1 and IMPLEMENTED in pass 2**
 
-`PagedTiledFusedUpdateCacheProgramFactory` and `PagedRowMajorFusedUpdateCacheProgramFactory` are not
-ported. **They do not depend on Diego's branch** — [PR #54988](https://github.com/tenstorrent/tt-metal/pull/54988)
-blocks only their *mesh* siblings. These two need nothing from the framework: they are blocked purely
-by the audit's own **Question #1**, and both halves of that question are now answered below, so this
-pair can be ported today against `main`.
+`PagedTiledFusedUpdateCacheProgramFactory` and `PagedRowMajorFusedUpdateCacheProgramFactory` are
+**ported**. This entry is kept as the design record, since it is the reasoning a reviewer needs in
+order to accept the two kernels' unusual shape, and since the DFB half's Quasar-debt note is a live
+carry-forward. Read it as "what pass 2 implemented", not "what remains".
+
+**Two corrections to what follows, found while implementing it.** (1) The prescription "branch on
+`is_input1`" assumed all four affected kernels have that arg; the **tiled writer does not**, and the
+port had to add it — see [Friction](#friction). (2) The claim that the approach "does not change the
+arg schema" is therefore true of three kernels, not four.
 
 Question #1 has two halves, on two different binding channels. Both resolve to the same strategy —
 **bind both alternatives unconditionally and select at runtime from the existing `is_input1` arg** —
@@ -576,7 +765,8 @@ a second instantiation and costs nothing at runtime. For a binary choice resolve
 invocation, **route B wins**. Route A earns its keep when the binding count is genuinely variadic,
 which is what `TensorBindingSequence` was built for.
 
-### 2. Dead compile-time args, carried through unchanged
+### 2. Dead compile-time args — carried through, with one deliberate exception
+
 
 The audit catalogued these as team-only anomalies; the port carried each across as a named arg rather
 than dropping it, because removing one changes the arg schema. Now that they are *named*, they are
@@ -587,10 +777,21 @@ also easy to find and drop in a follow-up:
 - `log2_page_table_stick_size` — read and unused in
   `reader_update_cache_interleaved_start_id_metal2.cpp:31` and
   `writer_fill_cache_interleaved_metal2.cpp:46`.
-- `max_blocks_per_seq` — read and unused in both `update_cache` `_metal2` dataflow kernels. It *is*
-  load-bearing in `validate_on_program_cache_miss` as a bound, but no kernel range-checks
-  `virtual_block_id` against it before indexing `page_table_ptr[virtual_block_id]` — a missing
-  on-device bound check worth the ops team's attention independently.
+- `max_blocks_per_seq` — read and unused in both `update_cache` `_metal2` dataflow kernels, and in
+  **all four** fused `_metal2` dataflow kernels. It *is* load-bearing in
+  `validate_on_program_cache_miss` as a bound, but no kernel range-checks `virtual_block_id` against
+  it before indexing `page_table_ptr[virtual_block_id]` — a missing on-device bound check worth the
+  ops team's attention independently.
+- `log_base_2_of_page_size` and `log2_page_table_stick_size` — likewise read and unused in both fused
+  readers (host value `0` in both cases).
+
+**The one exception: the row-major fused compute kernel's `in1_cb` / `in2_cb` were dropped, not
+carried.** They are dead *CB indices*, not dead scalars, and kernel-side whitelist rule 2 forbids a CB
+index becoming a named argument; the kernel touches neither buffer, so there is no DFB endpoint to
+declare either. The scalar arg schema is unaffected — the dead runtime arg `is_input1` alongside them
+is still declared and still read (`[[maybe_unused]]`) — so the host's per-node emission is unchanged.
+Reasoning and the doc-fix suggestion are in [Friction](#friction); recorded in the plan's Dropped
+Plumbing table for the row-major variant.
 
 ### 3. Naming and structure the port deliberately left alone
 
@@ -603,7 +804,40 @@ also easy to find and drop in a follow-up:
   `pop_front`, unlike both sibling writers) — untouched, and unreached by this pass since the RM
   fused factory is deferred. Flagged again here because it will land in whoever ports it.
 
-### 4. Test-coverage note
+### 4. Test-coverage note — **the row-major fused factory has no test that reaches it**
+
+**`PagedRowMajorFusedUpdateCacheProgramFactory` is ported but unreachable from the repo's test
+suite.** `select_program_factory` picks it only when *both* fused inputs are `Layout::ROW_MAJOR`
+(`paged_fused_update_cache_device_operation.cpp:150-155`), and the only pytest file for the op,
+`tests/ttnn/unit_tests/operations/transformers/test_paged_fused_update_cache.py`, reaches that path
+through a `row_major` parameter on its helper
+(`run_test_paged_fused_update_cache_decode`, `:25`) that **defaults to `False` and is not overridden
+by any of the file's three tests**. `grep -rn 'row_major' ` over the file returns exactly two hits:
+the default at `:25` and the branch that consumes it at `:96`. So the row-major branch of the helper
+is dead code as checked in, and the factory it selects has never been executed by CI.
+
+That is a pre-existing gap, not one the port created — the legacy row-major factory was equally
+untested — but it lands squarely on this port, because it means **half of pass 2's diff has no
+regression net.** What pass 2 did about it:
+
+- Drove the path directly, outside the repo suite, with a scratchpad script that imports the existing
+  helper and calls it with `row_major=True` (plus the shapes the op's own validation requires on that
+  path: `head_dim = 128` and eight padded heads, per
+  `paged_fused_update_cache_device_operation.cpp:342-346`). Results in
+  [Verification performed](#verification-performed). This is a smoke test, not coverage.
+- **Recommended follow-up, and it is a one-line change:** add `row_major` to the
+  `@pytest.mark.parametrize` set of `test_paged_fused_update_cache_decode`, constrained to the
+  `num_heads`/`head_dim` combination the op accepts. The helper already handles the padding
+  (`:96-103`) and the comparison, so nothing else is needed. The port did not make this change
+  itself: adding test coverage for a previously-untested factory is a behaviour-revealing change of
+  its own, and bundling it into a Metal 2.0 port is exactly what [§Scope discipline] forbids — if it
+  fails, nobody can tell whether the port or the pre-existing factory is at fault.
+- **Sweep coverage does not fill the gap either.**
+  `tests/sweep_framework/sweeps/model_traced/paged_fused_update_cache_model_traced.py` replays traced
+  model parameters, and every production caller found (`models/common/modules/attention/attention_1d.py:1125`,
+  `models/demos/llama3_70b_galaxy/tt/llama_attention.py:898`) passes tiled inputs.
+
+### 5. Test-coverage note — excluded mesh coordinates on the cache miss
 
 Nothing in the confirmed test set exercises the **cache-miss dispatch on a mesh coordinate excluded
 by `mesh_coords`** on the `fill_cache` path — which is precisely the behaviour handoff point #1's
@@ -631,13 +865,38 @@ strict-subset `mesh_coords` (see handoff #1).
 
 ## Verification performed
 
-**All static — the build could not run ([Friction](#friction) #1).** Denominators printed per the
-recipe's note, so a check that scanned nothing is distinguishable from a check that found nothing.
+Denominators printed per the recipe's note, so a check that scanned nothing is distinguishable from a
+check that found nothing.
+
+### Pass 2 — static checks
+
+`BASE = git merge-base origin/main HEAD = c6640d4f75f`. All sweeps below were re-run over the whole
+port (both passes), not just pass 2's files.
 
 | check | result |
 |---|---|
-| Diff scope — `git diff --name-only $BASE \| grep '^tt_metal/'` | **no output** (11 files changed, all under the op directory) |
-| Forced-legality scaffolding — `git diff $BASE \| grep -E 'METAL2_CHECKS_FORCED\|DO NOT COMMIT'` | **no output** (applied to all 9 grep-named sites, then reverted with `git checkout --`) |
+| **Kernel ↔ host named-argument reconciliation**, all six pass-2 kernels: every `get_arg(args::…)` the kernel reads against every name the host declares in that `KernelSpec`'s `compile_time_args` + `runtime_arg_schema` | **6/6 exact match, both directions** — tiled reader 19/19, tiled writer 19/19, tiled compute 4/4, RM reader 19/19, RM writer 19/19, RM compute 4/4. No name read-but-not-emitted (a JIT `static_assert`) and none emitted-but-unread (dead schema) |
+| **Kernel ↔ host binding-token reconciliation**, all six: every `dfb::` / `tensor::` / `sem::` name the kernel uses against every `accessor_name` the host binds on that kernel | **6/6 exact match, both directions** — dfb 5/6/7/5/7/4, tensor 4/2/0/4/2/0, sem 1/1/0/1/1/0 |
+| **DFB endpoint census, re-extracted from the two factories' `DFBBinding`s** (not transcribed from the brief) | **17/17 DFBs at exactly 1P+1C** — tiled 9, row-major 8. No self-loop, no `allow_instance_multi_binding`, no DFB bound-but-undeclared or declared-but-unbound. Roles match the plan, *including* the row-major difference the brief did not spell out (the input DFBs' consumer is the writer, not compute) |
+| **Alias-group legality**, tiled `c_24`/`c_25` and row-major `c_5`/`c_6` | all three header rules satisfied: mutual `alias_with`, equal `entry_size * num_entries`, and one `WorkUnitSpec` so both members derive the same node set (`advanced_options.hpp:167-172`) |
+| `cb`-name sweep — `grep -rnE '[Cc][Bb]_\|_[Cc][Bb]\|[Cc][Bb]\|CB[A-Z]'` over the six new `_metal2` kernels | **0 hits / 6 files** (after rewording two comments that used the "CB-index" phrasing to explain what the constants became) |
+| Same sweep plus `CircularBuffer` / `CBDescriptor` / `TensorAccessorArgs` / `buffer()->address` / `emplace_runtime_args` / `allow_instance_multi_binding` over both pass-2 factories' **Metal 2.0 regions** (tiled lines 594-1359, RM 592-1346) | **0 hits / 765 + 754 lines** (after rewording one comment per file that named `CBDescriptor::buffer`). Scoped to the Metal 2.0 regions deliberately: each file also retains its ported-from descriptor body, which is legacy CB code by design and must stay |
+| Legacy-API constructs in the six new kernels — `CircularBuffer` / `get_compile_time_arg_val` / `get_arg_val` / `get_common_arg_val` / `get_vararg` / `TensorAccessorArgs` | **0 hits / 6 files** — every argument named, every resource from a binding token |
+| `.id` extraction on a `dfb::` handle, temp `DataflowBuffer` wrappers at LLK call sites | **none.** The tiled compute kernel passes `dfb::src1` / `dfb::src2` straight into `compute_kernel_lib::untilize<>` as NTTPs and a runtime ternary over the two tokens into `compute_kernel_hw_startup` — the `constexpr operator uint32_t()` covers both positions |
+| Varargs — `get_vararg` / `get_common_vararg` / `get_compile_time_vararg` / `compile_time_varargs` / `num_runtime_varargs` | **none** anywhere in the op |
+| `opt_level` audit — `grep -n opt_level` over both pass-2 factories, paired against the compute `KernelSpec`s enumerated from the construction code | **2 lines / 2 compute specs.** Each factory builds exactly one compute `KernelSpec` and each carries an explicit `KernelBuildOptLevel::O3` (tiled `:1056`, RM `:1059`). The four DM specs correctly take Metal 2.0's `O2` default, which is also the legacy DM default |
+| `hw_config` value diff vs. the ported-from configs | DM: `ReaderConfigDescriptor{}` / `WriterConfigDescriptor{}` on all four dataflow kernels → the reader and writer default triples, reproduced by `ttnn::create_reader_datamovement_config` / `create_writer_datamovement_config`. Compute: legacy `ComputeConfigDescriptor{.fp32_dest_acc_en = …}` sets exactly one field, so only `enable_32_bit_dest` carries across and the other four `ComputeGen1Config` defaults are left alone (they coincide with the legacy descriptor's). `bfp_pack_precision_mode` untouched (legacy default). `unpack_modes` derived from the resolved data formats of the DFBs each compute kernel **consumes** — four candidates on the tiled path, two on the row-major one, since its compute kernel consumes neither input DFB |
+| `TT_FATAL` / `TT_ASSERT` / `TT_THROW` census vs. `BASE`, per file | **no file's count dropped.** Two rose: `paged_fill_cache_program_factory.cpp` 3 → 6 (pass 1) and `paged_row_major_fused_update_cache_program_factory.cpp` 2 → **4** (pass 2 — the two shard-spec guards now appear in the retained descriptor body *and* the Metal 2.0 body, which performs the same `.value()` dereferences). The tiled variant is unchanged at 0, correctly: its ported-from body has no such guards, and the port does not add any |
+| Ephemeral-doc citation — `.md` references in every changed + untracked `.cpp` / `.hpp` / `.h` | **0 hits / 33 files** (file list printed before trusting the result, per the recipe's denominator note) |
+| Diff scope — `git diff --name-only $BASE \| grep '^tt_metal/'` | see the note below on the forced-legality scaffolding; **no other `tt_metal/` file is touched**, and every other changed path is inside the op directory |
+| Forced-legality scaffolding in the diff | forced at all **9** sites `grep -n 'bool skip_validation' tt_metal/impl/metal2_host_api/*.cpp` named, with one marker per file (not in `UpdateProgramRunArgs`, which fires on every cache hit), **proven live in the test log**, then reverted with `git checkout --`. Confirmed twice on the final tree: `git diff --stat $BASE -- tt_metal/` is **empty** (the two files are byte-identical to `BASE`), and the marker/`DO NOT COMMIT` grep over all 31 changed-or-untracked `.cpp`/`.hpp`/`.h` files returns **0 hits**. The strings do survive in `METAL2_PORT_REPORT.md`, which documents the procedure — the recipe's one-line `git diff \| grep` form flags that, so it is worth scoping the check to code files, as done here |
+| Positional `compile_time_args` remaining in either ported factory | **none** — every entry is `{{name, value}}` (the only positional vectors left are `reader_compile_time_args` / `writer_compile_time_args` / `compute_kernel_args` inside the retained descriptor bodies, which are legacy by design) |
+| Changed or added files outside the op directory | **none** |
+
+### Pass 1 — static checks (unchanged, re-run)
+
+| check | result |
+|---|---|
 | `cb`-name sweep over the 5 `_metal2` kernels | **0 hits / 5 files** |
 | `cb`-name + `CBDescriptor` + `CircularBuffer` + `TensorAccessorArgs` + `buffer()->address` + `emplace_runtime_args` sweep over both Metal 2.0 factory regions (`paged_update_cache_program_factory.cpp:556-1128`, `paged_fill_cache_program_factory.cpp:435-878`) | **0 hits / 2 regions** after rewording two comments that named the legacy API |
 | Ephemeral-doc citation — `.md` references in changed + untracked `.cpp/.hpp` | **0 hits / 14 files** |
@@ -651,19 +910,86 @@ recipe's note, so a check that scanned nothing is distinguishable from a check t
 | Alias-group legality (`update_cache` `c_24`/`c_25`) | mutual `alias_with`, equal `entry_size * num_entries`, same derived node set, neither borrows — all four rules at `program_spec.cpp:1619-1699` satisfied |
 | Borrowed-DFB legality (`update_cache` `input`) | named `TensorParameter` exists, its `TensorSpec` is L1-resident (the op requires a sharded input), and `entry_size * num_entries` ≤ the tensor's packed size — the three checks at `program_spec.cpp:1570-1615` |
 
-### Handing the build and test run back
+### Build and test — pass 2 (dynamic)
 
-**Confirmed test set.** Located with a broad sweep
+Machine had `clang-20` this time, so everything pass 1 could only reason about statically was actually
+run. Watcher was on for every run (`TT_METAL_WATCHER=10`, exported once so no run paid a Watcher flip
+mid-sequence), and the Metal 2.0 legality checks were forced at all 9 grep-named sites.
+
+**Legality checks proven live before any green was trusted.** `grep -o 'METAL2_CHECKS_FORCED.*' | sort | uniq -c`:
+
+```
+26 METAL2_CHECKS_FORCED (program_run_args.cpp:565)
+26 METAL2_CHECKS_FORCED (program_spec.cpp:2950)
+```
+
+Both translation units fresh, both firing — `program_spec.cpp` is `BuildProgramFromSpec`, the
+spec-side choke point that `MakeProgramFromSpec` / `MakeMeshWorkloadFromSpec(s)` all funnel through,
+and `program_run_args.cpp` is `SetProgramRunArgs`, the cache-miss apply. Exactly 2 per program
+construction across 26 tests, so no spec in this port was validated with the checks bypassed.
+
+**Build.** `./build_metal.sh --build-tests`, twice.
+
+| build | result |
+|---|---|
+| Cold, pre-pass-2 tree (pass 1's code + the forced checks) | **SUCCESS.** Also the first time pass 1's factories were ever compiled |
+| Incremental, with pass 2 | **SUCCESS**, `ttnn_op_experimental_paged_cache` recompiled, **zero diagnostics for the target**. Worth noting the bar: this build runs `-Werror` with `-Wextra -Wall -Wunused -Wunused-parameter -Wshadow -Wconversion -Wmissing-field-initializers` among others, so a stale unused local left behind by the descriptor→spec rewrite, or a designated initializer with fields out of declaration order, would have failed rather than warned |
+
+**Tests — no-regression, measured against a real baseline.** The cold build compiled `paged_cache`
+*before* pass 2's host edits landed, which handed the port something pass 1 never had: a binary with
+the legacy fused factories in it. So the fused result below is a genuine before/after on the same
+machine, same Watcher setting, same device.
+
+| run | binary | result |
+|---|---|---|
+| `test_paged_fused_update_cache.py` | **pre-pass-2** (legacy fused factories) | **82 passed** in 98s |
+| `test_paged_fused_update_cache.py` | **pass 2** (ported tiled fused factory) | **82 passed** in 93s — identical count, no skips, no xfails |
+| row-major fused smoke (see below) | pass 2 | **26 passed** in 38s |
+| `test_paged_cache_flexible_geometry.py` | pass 2 | **24 passed** in 22s |
+| `test_paged_update_cache.py` (nightly) | pass 2 | **136 passed, 47 skipped** in 661s |
+| `test_paged_cache_mask.py` | pass 2 | **1 skipped** — needs a multi-device mesh; this bench has one device (`ls /dev/tenstorrent` → a single entry), exactly as pass 1 predicted |
+
+**Totals: 268 passed, 48 skipped, 0 failed, 0 errors.** Every one of the 47 nightly skips is a
+pre-existing in-test `pytest.mark.skip` with an explicit reason (*"Test case covered by others"*,
+*"just need to sanity-check a select test case for bfp4"*) rather than an environmental or
+port-induced skip. No `0xdeadc0de`, no Watcher assertion, no NoC-idle complaint, and no hang in any
+run — grepped for across all five logs.
+
+**The two pass-1 factories ran for the first time here**, and pass, which retires the *"⚠ Not built,
+not tested"* caveat that headed pass 1's report. Their coverage is the `flexgeo` and nightly files
+above (160 passing cases including the index-tensor path, the batched fill path, and the
+program-cache/cache-hit tests), so pass 1's borrowed-memory `input` DFB, its `c_24`/`c_25` alias
+group, and `fill_cache`'s three writer self-loops are all now confirmed against a live validator
+rather than by reading `program_spec.cpp`.
+
+The tiled fused factory is therefore a measured no-regression, and the three cache-hit tests in that
+file (`…_decode_program_caching`, `…_decode_attr_idxs_program_caching`) are what exercise the
+translated `override_runtime_arguments` — they dispatch the same program at several positions, which
+is precisely the second-dispatch-only failure mode a first-call pass would hide.
+
+**The row-major fused factory had to be driven outside the repo suite**, because no test in it selects
+that path ([Open items](#open-items-for-downstream) #4). Driven with a porter-side script that imports
+the repo's own helper (so the correctness comparison is the repo's) and calls it with
+`row_major=True`, across `paged_update` × `cache_idx` ∈ {0, 127, 1057} × `num_heads` ∈ {1, 8} ×
+`cache_dtype` ∈ {bfloat16, bfloat8_b}, plus a repeated-dispatch case for the cache-hit path: **26
+passed.** The script is **not** part of the diff — it lived in the porter's scratchpad and was
+removed from the tree before the commit. Its content is reproduced in
+[Open items](#open-items-for-downstream) #4's recommendation, which is to parametrize `row_major` in
+the repo test instead.
+
+### Confirmed test set
+
+Located with a broad sweep
 (`find tests -iname '*paged*' -o -iname '*update_cache*' -o -iname '*fill_cache*'`) and filtered.
 There is **no C++ gtest coverage** for this op — pytest only.
 
 | file | fixture | covers |
 |---|---|---|
-| `tests/ttnn/unit_tests/operations/transformers/test_paged_cache_flexible_geometry.py` | `device` | both **ported** factories (block-size / num-kv-heads overrides, negatives) |
-| `tests/ttnn/nightly/unit_tests/operations/transformers/test_paged_update_cache.py` | `device` (18 tests) | both **ported** factories incl. the index-tensor path, the batched fill path, and the program-cache/cache-hit tests — the highest-value file for this port |
-| `tests/ttnn/unit_tests/operations/transformers/test_paged_fused_update_cache.py` | `device` | the **deferred** fused factories — no-regression only |
-| `tests/ttnn/unit_tests/operations/transformers/test_paged_cache_mask.py` | `mesh_device` | the **blocked** mesh path — no-regression only; meaningful coverage needs a multi-device mesh |
-| `tests/sweep_framework/sweeps/model_traced/paged_{update,fill}_cache_model_traced.py` | sweep harness | optional breadth |
+| `tests/ttnn/unit_tests/operations/transformers/test_paged_cache_flexible_geometry.py` | `device` | the two **pass-1** factories (block-size / num-kv-heads overrides, negatives) |
+| `tests/ttnn/nightly/unit_tests/operations/transformers/test_paged_update_cache.py` | `device` | the two **pass-1** factories incl. the index-tensor path, the batched fill path, and the program-cache/cache-hit tests |
+| `tests/ttnn/unit_tests/operations/transformers/test_paged_fused_update_cache.py` | `device` | the **tiled** pass-2 factory. Does **not** reach the row-major one — see [Open items](#open-items-for-downstream) #4 |
+| `tests/ttnn/unit_tests/operations/transformers/test_paged_cache_mask.py` | `mesh_device` | the **out-of-scope** mesh path — no-regression only; meaningful coverage needs a multi-device mesh |
+| `tests/sweep_framework/sweeps/model_traced/paged_{update,fill}_cache_model_traced.py` | sweep harness | optional breadth; every traced caller found passes tiled inputs |
 
 **Excluded as a false positive:** `tests/tt_eager/python_api_testing/unit_testing/misc/test_update_cache.py`
 drives `ttnn.update_cache` / `ttnn.fill_cache` — the separate `kv_cache` op, not this one.
