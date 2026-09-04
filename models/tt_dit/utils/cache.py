@@ -109,7 +109,7 @@ def _walk_parameters(module: Module, prefix: str = ""):
 def _kernel_capture_only() -> bool:
     """True during a kernel-prewarm capture pass, which records compile recipes with dispatch off.
 
-    Matches the C++ flag's semantics (kernel_prewarm.cpp): any non-empty value enables it.
+    Gated on TT_METAL_KERNEL_CAPTURE_ONLY: any non-empty value enables it.
     """
     return os.environ.get("TT_METAL_KERNEL_CAPTURE_ONLY", "") != ""
 
