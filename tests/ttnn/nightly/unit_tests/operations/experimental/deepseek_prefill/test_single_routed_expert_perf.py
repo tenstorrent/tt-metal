@@ -40,46 +40,48 @@ _CEILING_ONLY = 1.0
 # median still has a long right tail (glm-256 spans 192-208us over 15 runs); >=512 holds inside 1.5%.
 _LOW_ISL_MARGIN = 0.08
 
-# Device duration in ns per (model, active), x_rm layout: median of 3 sweeps on a BH p150b
-# (2026-08-20). Recalibrate on the perf runner (DDR-speed dependent): each case logs an
+# Device duration in ns per (model, active), x_rm layout: midpoint of min/max over 3 sweeps
+# on a BH p150b (2026-09-04), each sweep itself a median of 3 dispatches. Cross-sweep
+# spread was <=0.5% on every case except active=0 (1.7%, ~50 ns, ceiling-only band).
+# Recalibrate on the perf runner (DDR-speed dependent): each case logs an
 # "RT-CAL" line in this dict's format, so one run regenerates the table.
 _EXPECTED_NS: dict[tuple[str, int], int] = {
-    ("kimi_k26", 0): 3_850,
-    ("kimi_k26", 128): 203_359,
-    ("kimi_k26", 256): 213_359,
-    ("kimi_k26", 512): 266_812,
-    ("kimi_k26", 1024): 377_775,
-    ("kimi_k26", 2048): 650_297,
-    ("kimi_k26", 4096): 1_278_114,
-    ("kimi_k26", 5120): 1_640_953,
-    ("glm_51", 0): 3_783,
-    ("glm_51", 128): 179_029,
-    ("glm_51", 256): 190_571,
-    ("glm_51", 512): 235_365,
-    ("glm_51", 1024): 330_284,
-    ("glm_51", 2048): 568_372,
-    ("glm_51", 4096): 1_112_126,
-    ("glm_51", 5120): 1_423_673,
+    ("kimi_k26", 0): 3_080,
+    ("kimi_k26", 128): 123_946,
+    ("kimi_k26", 256): 127_376,
+    ("kimi_k26", 512): 162_862,
+    ("kimi_k26", 1024): 294_228,
+    ("kimi_k26", 2048): 579_661,
+    ("kimi_k26", 4096): 1_150_627,
+    ("kimi_k26", 5120): 1_437_053,
+    ("glm_51", 0): 3_133,
+    ("glm_51", 128): 109_978,
+    ("glm_51", 256): 113_223,
+    ("glm_51", 512): 145_161,
+    ("glm_51", 1024): 257_773,
+    ("glm_51", 2048): 508_241,
+    ("glm_51", 4096): 1_009_661,
+    ("glm_51", 5120): 1_260_985,
 }
 
 
 # Kimi K3 keeps its own baseline table: SiTU-GLU is calibrated separately from the SiLU models, and
 # its knee sits at a different token count (see _K3_KNEE_TOKENS). Same measurement as _EXPECTED_NS:
-# median of 3 dispatches, x_rm layout, on a BH p150b (2026-08-20), centred over 3 sweeps rather than
-# taken from one. Flat to ~256 tokens (the op sits on its DRAM weight-read
+# midpoint of min/max over 3 sweeps, each a median of 3 dispatches, x_rm layout, on a BH p150b
+# (2026-09-04). Flat to ~256 tokens (the op sits on its DRAM weight-read
 # floor), linear in tokens past that.
 _K3_SITU_EXPECTED_NS: dict[int, int] = {
-    0: 3_782,
-    128: 161_884,
-    256: 164_167,
-    512: 220_452,
-    1024: 365_674,
-    2048: 675_674,
-    4096: 1_328_317,
-    5120: 1_675_301,
+    0: 3_092,
+    128: 117_154,
+    256: 118_893,
+    512: 179_315,
+    1024: 343_033,
+    2048: 671_470,
+    4096: 1_325_686,
+    5120: 1_658_646,
 }
 
-# K3's DRAM weight read is 18.58 MB against a ~162 us floor, so its knee sits a token count later
+# K3's DRAM weight read is 18.58 MB against a ~117 us floor, so its knee sits a token count later
 # than kimi_k26's or glm_51's: 512 is the first case where compute starts to cover the read, and it
 # inherits the long right tail _LOW_ISL_MARGIN exists for (2% cross-sweep spread at 512 against
 # 0.1% at 128 and 256). Everything past the knee holds inside the usual 3%.
