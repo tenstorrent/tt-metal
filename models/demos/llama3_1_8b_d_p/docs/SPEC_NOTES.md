@@ -366,6 +366,15 @@ embedding dim.
 `PrefillModelAdapter` a `ModelDims` Protocol so a missing attribute is a type error rather than a
 runtime one.
 
+The **runtime** signature has the same shape of problem. §2 documents `request_id` as "the runner
+ALWAYS passes it, so accept it even if unused", but the runner also passes `d2h_service`,
+`record_dev` and `metadata_msg`, none of which are documented. A single-stage model needs none of
+them and must still accept all of them, and a missing keyword is a `TypeError` **inside the serving
+loop**, after the model has been built and compiled — several minutes into a run. Both existing GQA
+donors are missing `metadata_msg` today, so this is not a Llama-specific oversight. Spelling the full
+kwarg set out in §2, or giving `prefill_chunk` a documented `**_engine_kwargs` tail, would make it a
+non-issue.
+
 **(b) `PREFILL_NUM_LAYERS` defaults to 61.** In `prefill_runner.py`:
 
 ```python

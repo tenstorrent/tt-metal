@@ -260,9 +260,13 @@ class TtPrefillRuntime:
         actual_end: int,
         skip_lm_head: bool = True,
         chunk_size: Optional[int] = None,
-        request_id: int = -1,  # accepted for the runner contract; single-stage prefill ignores it
-        d2h_service=None,  # accepted for the runner contract; this runtime uses host-callback LayerAcks
-        record_dev=None,  # accepted for the runner contract; the D1H record path is unused here
+        # The engine passes these on every call. A single-stage, single-rank runtime uses none of
+        # them, but the contract is to ACCEPT them — the runner does not inspect the signature, so a
+        # missing keyword is a TypeError in the serving loop rather than at build time.
+        request_id: int = -1,  # engine chunk counter; only the pipelined layer-completion sink reads it
+        d2h_service=None,  # this runtime emits LayerAcks through set_layer_ack_channel, not D2H
+        record_dev=None,  # the D1H record path is unused here
+        metadata_msg=None,  # raw socket metadata, forwarded verbatim to the next PIPELINE rank; there is none
     ) -> Optional[ttnn.Tensor]:
         """Prefill ONE chunk into user ``slot_id``'s slice of the KV cache. Call in order.
 
@@ -320,12 +324,18 @@ class TtPrefillRuntime:
         """Register the per-layer LayerAck channel (engine-created and owned).
 
         ``forward_layers`` bumps it once per layer through ``on_layer_complete``, which is how the
-        scheduler learns a layer's KV is final and may be migrated.
+        scheduler learns a layer's KV is final and may be migrated. The channel is a COUNTER, not a
+        per-layer message: the contract is ``inject(1)`` per completed layer and the reader drains the
+        delta, so the layer index is implied by the count, not passed.
+
+        Without this, the shared producer's ``PREFILL_PRODUCER_CHECK_PCC=1`` read would race the
+        runner's prefill — the H2D push returning does not mean the layers are done.
         """
+        assert self.compiled, "call compile() before set_layer_ack_channel()"
         self._layer_ack_channel = layer_ack_channel
 
         def on_layer_complete(layer_idx: int) -> None:
-            layer_ack_channel.ack(self.config.first_layer_idx + layer_idx)
+            layer_ack_channel.inject(1)
 
         self._on_layer_complete = on_layer_complete if layer_ack_channel is not None else None
 

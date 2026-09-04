@@ -50,15 +50,18 @@ export PREFILL_H2D_SERVICE_ID="${PREFILL_H2D_SERVICE_ID:-llama31_8b_prefill}"
 export PREFILL_TOPOLOGY=linear
 
 # 2. Runner: publishes the H2D service descriptor, the KV chunk table and the device map.
+# PREFILL_ENABLE_LAYER_ACK=1 is REQUIRED with PREFILL_PRODUCER_CHECK_PCC=1: without it the producer's
+# device-less UMD read races the runner's prefill (an H2D push returning does not mean the layers are
+# done), and the producer refuses to run rather than report a meaningless PCC.
 echo "=== starting runner (log: $OUT/p3_runner.log) ==="
-PREFILL_MOCK_MIGRATION=1 "$PY" -m models.demos.common.prefill.runners.prefill_runner \
+PREFILL_MOCK_MIGRATION=1 PREFILL_ENABLE_LAYER_ACK=1 "$PY" -m models.demos.common.prefill.runners.prefill_runner \
     > "$OUT/p3_runner.log" 2>&1 &
 RUNNER_PID=$!
 trap 'kill -9 $RUNNER_PID 2>/dev/null' EXIT
 
 # Wait for the runner to advertise its service before the producer tries to connect.
 for _ in $(seq 1 "${READY_TIMEOUT_S:-1800}"); do
-    grep -qE "WORKER_READY|serving|H2D service" "$OUT/p3_runner.log" 2>/dev/null && break
+    grep -qE "descriptor service_id=|request .* loop start|WORKER_READY" "$OUT/p3_runner.log" 2>/dev/null && break
     kill -0 $RUNNER_PID 2>/dev/null || { echo "runner died early:"; tail -30 "$OUT/p3_runner.log"; exit 1; }
     sleep 1
 done

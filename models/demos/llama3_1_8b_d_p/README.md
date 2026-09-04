@@ -166,6 +166,22 @@ silently broken model, never a crash.
 
 ---
 
+## Definition of done (recipe §8)
+
+- [x] Every module has a `*_vs_ref` test at or above its PCC threshold — 34 host + 43 device tests
+- [x] Full model runs at the target mesh with real weights; per-layer KV PCC recorded above
+- [x] Adapter implements all four abstract methods, registered in `ADAPTER_PATHS`, manifest exists
+- [x] Runtime satisfies `ADDING_A_PREFILL_MODEL.md` §2 and asserts on out-of-contract chunk ranges
+      (`slot_id`, `[actual_start, actual_end)`, tile alignment, cache capacity)
+- [x] `README.md` records architecture, reuse-vs-fresh, PCC status, run commands, known gaps
+- [x] `bringup_log.jsonl` committed; `bringup_digest.py --lint` clean
+
+Explicitly **not** required for bring-up, and not done: perf numbers, CI-tier registration, and
+top-1 / logits agreement with HF. KV-cache PCC is a proxy for correctness, not a substitute for that
+last one — it is follow-on work, not a blocker.
+
+---
+
 ## Layout
 
 ```
