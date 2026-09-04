@@ -284,7 +284,8 @@ SliceCbSizing compute_cb_size(
 // size TensorAccessorArgs bakes into the compile-time args. That is interchangeable with the
 // per-shard page size they used to be handed only where the two agree: exactly, on a sharded buffer,
 // whose accessor strides by the value verbatim and whose `noc_async_*_sharded` splits pages by it;
-// and up to rounding on an interleaved one, where InterleavedAddrGen re-aligns internally. On a
+// and up to rounding on an interleaved one, whose accessor rounds the page size up to the allocator
+// alignment internally before using it as a stride, so a raw row and a pre-rounded one coincide. On a
 // block/width-sharded buffer that reduces to the shard row being a multiple of the buffer alignment,
 // which `has_subaligned_shard_row` guarantees for anything arriving via ttnn::slice -- but
 // MeshPartition builds these programs straight off select_program_factory and never sees that guard.
