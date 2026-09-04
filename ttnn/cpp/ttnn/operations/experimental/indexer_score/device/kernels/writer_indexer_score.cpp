@@ -18,9 +18,13 @@
 
 constexpr bool fused_ring_enabled = get_compile_time_arg_val(num_common_ct_args) != 0;
 constexpr uint32_t page_bytes = get_compile_time_arg_val(num_common_ct_args + 1);  // row-major page = T*2 bytes
+constexpr bool shard_block_cyclic = get_compile_time_arg_val(num_common_ct_args + 2) != 0;
+constexpr uint32_t shard_chunk_local = get_compile_time_arg_val(num_common_ct_args + 3);
+constexpr uint32_t shard_sp = get_compile_time_arg_val(num_common_ct_args + 4);
 // Trace-safe metadata flag, appended after out's accessor args by both factories (0 on the classic path).
 // The writer needs nothing else: kv_len is pinned to the compile-time full width on that path.
-constexpr auto writer_out_args_probe = TensorAccessorArgs<num_common_ct_args + 2>();
+// out's accessor moved to +5 when main inserted the shard block above; probe from there.
+constexpr auto writer_out_args_probe = TensorAccessorArgs<num_common_ct_args + 5>();
 constexpr uint32_t metadata_args_base = writer_out_args_probe.next_compile_time_args_offset();
 constexpr bool chunk_start_from_metadata = get_compile_time_arg_val(metadata_args_base) != 0;
 constexpr uint32_t cb_meta_writer = get_compile_time_arg_val(metadata_args_base + 1);
@@ -45,6 +49,54 @@ inline void write_strip(
                 write_bytes,
                 {},
                 {.page_id = page_row_start + rr, .offset_bytes = k_tile_start * frag_bytes});
+            src += row_pitch;
+        }
+        noc.async_write_barrier();
+    }
+    cb.pop_front(k_tiles_per_unit);
+}
+
+/** Scatter one shard-major packed strip back to logical K columns. Consecutive physical tiles map to short
+ *  logical runs; coalesce each run so a KC-sized work unit needs only a few writes per output row rather than
+ *  one write per score tile. */
+template <typename OutAcc>
+inline void write_shard_major_strip(
+    Noc noc,
+    const OutAcc& out_acc,
+    uint32_t page_row_start,
+    const ShardMajorWorkUnitSpan<shard_block_cyclic, shard_chunk_local, shard_sp>& shard_span,
+    uint32_t valid_w) {
+    CircularBuffer cb(cb_out_strip);
+    cb.wait_front(k_tiles_per_unit);
+    if (valid_w != 0) {
+        uint32_t fragment_col[k_tiles_per_unit];
+        uint32_t fragment_logical[k_tiles_per_unit];
+        uint32_t fragment_width[k_tiles_per_unit];
+        uint32_t num_fragments = 0;
+        for (uint32_t col = 0; col < valid_w;) {
+            const uint32_t logical_start = shard_span.logical_tile(col);
+            uint32_t width = 1;
+            while (col + width < valid_w && shard_span.logical_tile(col + width) == logical_start + width) {
+                ++width;
+            }
+            fragment_col[num_fragments] = col;
+            fragment_logical[num_fragments] = logical_start;
+            fragment_width[num_fragments] = width;
+            ++num_fragments;
+            col += width;
+        }
+
+        uint32_t src = cb.get_read_ptr();
+        const uint32_t row_pitch = k_tiles_per_unit * frag_bytes;
+        for (uint32_t rr = 0; rr < tt::constants::TILE_HEIGHT; ++rr) {
+            for (uint32_t fragment = 0; fragment < num_fragments; ++fragment) {
+                noc.async_write(
+                    CoreLocalMem<uint32_t>(src + fragment_col[fragment] * frag_bytes),
+                    out_acc,
+                    fragment_width[fragment] * frag_bytes,
+                    {},
+                    {.page_id = page_row_start + rr, .offset_bytes = fragment_logical[fragment] * frag_bytes});
+            }
             src += row_pitch;
         }
         noc.async_write_barrier();
@@ -152,13 +204,15 @@ void kernel_main() {
     const uint32_t straddle_q_keys = get_arg_val<uint32_t>(9) * tt::constants::TILE_WIDTH;
     const uint32_t straddle_jump_keys = get_arg_val<uint32_t>(10) * tt::constants::TILE_WIDTH;
 
-    constexpr auto out_args = TensorAccessorArgs<num_common_ct_args + 2>();
+    constexpr auto out_args = TensorAccessorArgs<num_common_ct_args + 5>();
     const auto out_acc = TensorAccessor(out_args, out_addr, page_bytes);
 
     Noc noc;
 
     WorkUnitSpan span;
     span.set_valid_k_len_tiles(kv_len_tiles);
+    ShardMajorWorkUnitSpan<shard_block_cyclic, shard_chunk_local, shard_sp> shard_span;
+    shard_span.set_valid_k_len_tiles(kv_len_tiles);
 
     // Output [B, num_out_groups, Sq, T]: plane g occupies rows [g*Sq, (g+1)*Sq). Compute pushes
     // num_out_groups * QC strips per cell in g-major order; drain them the same way.
@@ -168,13 +222,18 @@ void kernel_main() {
         const uint32_t group = row_group0 + phase * group_stride;
         for (uint32_t band_i = 0; band_i < num_bands; ++band_i) {
             uint32_t band = band_i;
+            uint32_t k_tile0 = 0;
+            uint32_t valid_w = 0;
             if constexpr (fused_ring_enabled) {
-                // Reordered band-visit order, IDENTICAL to reader/compute (perm starts at rt slot 11).
-                band = get_arg_val<uint32_t>(11 + band_i);
+                const uint32_t physical_start = get_arg_val<uint32_t>(11 + band_i);
+                shard_span.set(group, physical_start, k_len_tiles / shard_sp);
+                k_tile0 = physical_start;
+                valid_w = shard_span.k_tiles();
+            } else {
+                span.set(group, band0 + band);
+                k_tile0 = span.k_tile_start();
+                valid_w = span.k_tiles();
             }
-            span.set(group, band0 + band);
-            const uint32_t k_tile0 = span.k_tile_start();
-            const uint32_t valid_w = span.k_tiles();  // == KC for interior bands, < KC for a partial last band
             // The reader/compute do no K/output work for cells wholly past the runtime prefix.
             // Their q-mcast bookkeeping is completed independently before this point.
             if (valid_w == 0) {
@@ -187,7 +246,7 @@ void kernel_main() {
                 const uint32_t plane_row0 = g * sq_rows;
                 for (uint32_t q_row = 0; q_row < q_tiles_per_unit; ++q_row) {
                     const uint32_t q_seq_row0 =
-                        (span.q_tile_start() + q_row) * tt::constants::TILE_HEIGHT;  // within Sq
+                        (group * q_tiles_per_unit + q_row) * tt::constants::TILE_HEIGHT;  // within Sq
                     const uint32_t page_row_start = plane_row0 + q_seq_row0;
                     if constexpr (block_pool) {
                         write_pooled_strip(
@@ -201,7 +260,11 @@ void kernel_main() {
                             straddle_q_keys,
                             straddle_jump_keys);
                     } else {
-                        write_strip(noc, out_acc, page_row_start, k_tile0, valid_w);
+                        if constexpr (fused_ring_enabled && shard_block_cyclic) {
+                            write_shard_major_strip(noc, out_acc, page_row_start, shard_span, valid_w);
+                        } else {
+                            write_strip(noc, out_acc, page_row_start, k_tile0, valid_w);
+                        }
                     }
                 }
             }

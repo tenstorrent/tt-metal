@@ -341,10 +341,11 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     reader_ct.insert(reader_ct.end(), block_cyclic_ct.begin(), block_cyclic_ct.end());
     // Keep the shared reader's full-mesh rank-mapping CT tail canonical for the classic path.
     reader_ct.insert(reader_ct.end(), {0u, 0u, 0u, 0u});
+    reader_ct.push_back(0u);  // partial all-gather readiness off (non-fused path)
     // Chunk-start metadata is fused-ring only (validate rejects it here), but the SAME reader binary
     // serves both factories, so the block must exist on this path too -- an absent compile arg is a hard
     // build error in the kernel, not a default. Fixed width: flag, rt base, two CBs, Sq, rotation-exact
-    // flag, then a placeholder accessor.
+    // flag, then a placeholder accessor. Pushed AFTER partial readiness, matching meta_ct_base.
     reader_ct.push_back(0u);
     reader_ct.insert(reader_ct.end(), 5, 0u);
     tt::tt_metal::TensorAccessorArgs(*q.buffer()).append_to(reader_ct);
@@ -360,6 +361,9 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     // row-major page = one output row: T scores, or nblocks block-scores when pooling.
     const uint32_t out_row_elems = block_pool ? nblocks : T;
     writer_ct.push_back(out_row_elems * out_elem_bytes);
+    writer_ct.push_back(0u);  // shard-major mapping off
+    writer_ct.push_back(1u);  // unused block-cyclic run width
+    writer_ct.push_back(1u);  // unused SP size
     tt::tt_metal::TensorAccessorArgs(*out.buffer()).append_to(writer_ct);
     writer_ct.push_back(0u);
     writer_ct.push_back(0u);
@@ -374,6 +378,9 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     compute_ct.push_back(fuse_single ? 1u : 0u);
     compute_ct.push_back(fused_stream_k ? 1u : 0u);  // fused: incremental k wait (stream) vs whole-chunk
     compute_ct.push_back(0u);                        // fused_ring off
+    compute_ct.push_back(0u);                        // shard-major block-cyclic mapping off
+    compute_ct.push_back(1u);                        // unused block-cyclic run width
+    compute_ct.push_back(1u);                        // unused SP size
     compute_ct.push_back(0u);                        // trace-safe metadata off
     compute_ct.push_back(0u);                        // metadata CB unused
 

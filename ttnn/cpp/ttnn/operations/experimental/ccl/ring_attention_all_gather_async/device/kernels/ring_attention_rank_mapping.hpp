@@ -10,8 +10,9 @@
 
 namespace ttnn::ring_attention_all_gather {
 
-// 19 on main; +1 for the trace-safe has_slot_metadata flag the reader reads at index 19.
-constexpr uint32_t kReaderFixedCompileTimeArgCount = 20;
+// 22 from main's CompileTimeArg enum, +1 for the trace-safe has_slot_metadata flag this branch appends
+// as the last reader arg. Must stay equal to the reader kernel's kNumFixedCompileTimeArgs sentinel.
+constexpr uint32_t kReaderFixedCompileTimeArgCount = 23;
 constexpr uint32_t kWriterFixedCompileTimeArgCount = 24;
 
 template <bool FullMesh>
