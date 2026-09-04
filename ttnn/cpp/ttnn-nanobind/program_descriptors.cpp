@@ -855,7 +855,7 @@ void py_module_types(nb::module_& mod) {
         .def_prop_rw(
             "blaze_named_compile_time_args",
             [](const tt::tt_metal::KernelDescriptor& self) { return self.blaze_named_args.named_compile_time_args; },
-            [](tt::tt_metal::KernelDescriptor& self, tt::tt_metal::KernelDescriptor::NamedCompileTimeArgs args) {
+            [](tt::tt_metal::KernelDescriptor& self, tt::tt_metal::experimental::blaze::NamedCompileTimeArgs args) {
                 self.blaze_named_args.named_compile_time_args = std::move(args);
             },
             "[EXPERIMENTAL, BLAZE-ONLY, TEMPORARY - WILL BE DELETED, see issue #50953] Named compile-time "
