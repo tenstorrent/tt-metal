@@ -413,7 +413,9 @@ def _create_sampling_state(model: Any, enabled: bool) -> tuple[Any, Any]:
     is_resolved = getattr(getattr(sampling, "config", None), "is_resolved", None)
     if not callable(is_resolved) or not is_resolved():
         raise ValueError("model.sampling must have a resolved Sampling1DConfig")
-    controller = SamplingState1D(sampling)
+    # vLLM already assigns child i ``seed + i``. Equal seeds here are
+    # independent requests and must reproduce identically.
+    controller = SamplingState1D(sampling, salt_duplicate_seeds=False)
     return controller, controller.create_state()
 
 

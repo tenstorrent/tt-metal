@@ -764,6 +764,56 @@ def test_model_owned_executor_has_exact_composition_and_owner_counts(binding, mo
         assert executor.traced_decode_execution is executor.traced_executor
 
 
+def test_llama3_create_sampling_state_disables_duplicate_seed_salting(monkeypatch):
+    captured = {}
+
+    class FakeSampling1D:
+        def __init__(self):
+            self.config = SimpleNamespace(is_resolved=lambda: True)
+
+    class FakeSamplingState1D:
+        def __init__(self, sampling, *, salt_duplicate_seeds=True, **_kwargs):
+            captured["salt_duplicate_seeds"] = salt_duplicate_seeds
+            self.sampling = sampling
+
+        def create_state(self):
+            return object()
+
+    monkeypatch.setattr(llama3_family_executor, "Sampling1D", FakeSampling1D)
+    monkeypatch.setattr(llama3_family_executor, "SamplingState1D", FakeSamplingState1D)
+
+    controller, state = llama3_family_executor._create_sampling_state(SimpleNamespace(sampling=FakeSampling1D()), True)
+
+    assert captured["salt_duplicate_seeds"] is False
+    assert controller is not None
+    assert state is not None
+
+
+def test_qwen3_create_sampling_state_disables_duplicate_seed_salting(monkeypatch):
+    captured = {}
+
+    class FakeSampling1D:
+        def __init__(self):
+            self.config = SimpleNamespace(is_resolved=lambda: True)
+
+    class FakeSamplingState1D:
+        def __init__(self, sampling, *, salt_duplicate_seeds=True, **_kwargs):
+            captured["salt_duplicate_seeds"] = salt_duplicate_seeds
+            self.sampling = sampling
+
+        def create_state(self):
+            return object()
+
+    monkeypatch.setattr(qwen3_32b_executor, "Sampling1D", FakeSampling1D)
+    monkeypatch.setattr(qwen3_32b_executor, "SamplingState1D", FakeSamplingState1D)
+
+    controller, state = qwen3_32b_executor._create_sampling_state(SimpleNamespace(sampling=FakeSampling1D()), True)
+
+    assert captured["salt_duplicate_seeds"] is False
+    assert controller is not None
+    assert state is not None
+
+
 def _device_sampling_executor(binding, monkeypatch, *, runtime_disable: bool):
     class FakeSampling1D:
         config = SimpleNamespace(
@@ -783,7 +833,7 @@ def _device_sampling_executor(binding, monkeypatch, *, runtime_disable: bool):
     if binding.executor_module in (llama33_70b_executor, qwen3_32b_executor):
 
         class FakeSamplingState1D:
-            def __init__(self, sampling):
+            def __init__(self, sampling, **_kwargs):
                 self.sampling = sampling
                 self.seed_manager = SimpleNamespace()
 

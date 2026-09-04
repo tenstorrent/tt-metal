@@ -20,6 +20,7 @@ from models.common.modules.sampling import penalties_1d as penalties_module
 from models.common.modules.sampling.params import PreparedSamplingParams, place_prepared_sampling_params
 from models.common.modules.sampling.penalties_1d import Penalties1D
 from models.common.modules.sampling.sampling_state_1d import SamplingState1D
+from models.common.modules.sampling.seed_manager_1d import SeedManager1D
 
 
 class FakeMesh:
@@ -310,6 +311,31 @@ def test_constructor_rejects_non_1d_topology_before_constructing_state(expect_er
 def test_constructor_rejects_penalty_contract_drift(updates, message, expect_error):
     with expect_error(ValueError, message):
         _make_controller(penalty_config_updates=updates)
+
+
+def test_constructor_threads_unsalted_seed_policy_to_native_manager():
+    events = []
+    config = SimpleNamespace(
+        vocab_size=128,
+        mesh_device=FakeMesh((1, 4)),
+        max_batch_size=4,
+        max_top_k=32,
+        sub_core_grids=object(),
+        seeds=FakeBuffer(torch.arange(4, dtype=torch.int32)),
+    )
+    controller = SamplingState1D(
+        FakeSampling(config, events),
+        penalties_factory=lambda penalties_config: FakePenalties(penalties_config, events),
+        salt_duplicate_seeds=False,
+    )
+
+    assert controller.salt_duplicate_seeds is False
+    assert isinstance(controller.seed_manager, SeedManager1D)
+    assert controller.seed_manager.salt_duplicate_seeds is False
+
+    state = controller.seed_manager.create_state()
+    controller.seed_manager.admit(state, [1234, 1234, 1234, 1234], [0, 1, 2, 3])
+    assert state.snapshot().salts == (0, 0, 0, 0)
 
 
 def test_create_state_materializes_noop_params_and_clears_history(expect_error):

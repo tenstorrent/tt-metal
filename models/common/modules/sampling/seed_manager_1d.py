@@ -176,6 +176,7 @@ class SeedManager1D:
         sampling_config: "Sampling1DConfig",
         *,
         entropy_factory: Callable[[int], int] = secrets.randbits,
+        salt_duplicate_seeds: bool = True,
     ) -> None:
         seed_buffer = getattr(sampling_config, "seeds", None)
         if (
@@ -196,7 +197,16 @@ class SeedManager1D:
                 "Sampling1DConfig seed-buffer source size does not match max_batch_size "
                 f"({source.numel()} != {capacity})"
             )
+        if not isinstance(salt_duplicate_seeds, bool):
+            raise TypeError("salt_duplicate_seeds must be bool")
 
+        # When False, concurrent slots sharing a request seed keep salt 0, so two
+        # independent requests carrying the same seed stay bit-identical (the
+        # OpenAI/vLLM reproducibility contract). vLLM v1 already assigns child i
+        # ``seed + i``, so n>1 completions never arrive here sharing a seed.
+        # Demo callers that intentionally replicate one seed across slots keep
+        # the default and remain salted.
+        self.salt_duplicate_seeds = salt_duplicate_seeds
         self._seed_buffer = seed_buffer
         self._default_source = source.detach().clone()
         self._default_values = tuple(int(value) for value in self._default_source.reshape(-1).tolist())
@@ -236,9 +246,11 @@ class SeedManager1D:
         """Register a simultaneous prefill admission in request order.
 
         Admission always starts a new request stream, even if a target slot
-        previously held the same integer seed.  Equal-seed salts are allocated
-        after all target slots have been cleared, so the simultaneous admission
-        set and surviving live requests determine collision-free salts.
+        previously held the same integer seed.  When salting is enabled,
+        equal-seed salts are allocated after all target slots have been
+        cleared, so the simultaneous admission set and surviving live requests
+        determine collision-free salts.  When ``salt_duplicate_seeds`` is
+        False, every explicit seed keeps salt 0.
         """
 
         self._validate_state(state)
@@ -436,7 +448,7 @@ class SeedManager1D:
         slot = self._validate_slot(slot, label="resume slot")
         if state.active[slot]:
             raise RuntimeError(f"cannot resume into active seed slot {slot}")
-        if checkpoint.request_seed is not None:
+        if self.salt_duplicate_seeds and checkpoint.request_seed is not None:
             collision = any(
                 other != slot
                 and state.active[other]
@@ -550,6 +562,8 @@ class SeedManager1D:
         return int(positions)
 
     def _next_free_salt(self, state: SeedState, slot: int, seed: int) -> int:
+        if not self.salt_duplicate_seeds:
+            return 0
         taken = {
             state.salts[other]
             for other in range(self._capacity)

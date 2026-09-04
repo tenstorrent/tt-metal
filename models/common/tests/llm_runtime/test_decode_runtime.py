@@ -374,7 +374,7 @@ def test_runtime_vector_seed_remains_slot_indexed(seed):
     assert prepared.prepared_sampling.seeds == (111, 222)
 
 
-def test_runtime_simultaneous_equal_request_seeds_receive_distinct_salts():
+def test_runtime_simultaneous_equal_request_seeds_share_vllm_stream():
     runtime = make_runtime(seed_buffer=FakeLazySeedBuffer())
     prepared = prepare(
         runtime,
@@ -386,9 +386,46 @@ def test_runtime_simultaneous_equal_request_seeds_receive_distinct_salts():
     runtime._refresh_sampling_seeds(prepared)
 
     snapshot = runtime._seed_state.snapshot()
+    assert runtime._seed_manager.salt_duplicate_seeds is False
     assert snapshot.request_seeds == (77, 77)
-    assert snapshot.salts == (0, 1)
-    assert snapshot.current_device_seeds[0] != snapshot.current_device_seeds[1]
+    assert snapshot.salts == (0, 0)
+    assert snapshot.current_device_seeds[0] == snapshot.current_device_seeds[1]
+
+
+def test_runtime_vllm_uniform_seed_is_deterministic_across_concurrent_slots():
+    seed_buffer = FakeLazySeedBuffer()
+    seed_buffer.source = torch.arange(32, dtype=torch.int64)
+    model = FakeModel(seed_buffer)
+    model.config.max_batch_size = 32
+    model.sampling.config.max_batch_size = 32
+    runtime = DecodeRuntime(
+        DecodeRuntimeConfig.resolve(
+            model=model,
+            output_reader=OutputReader(FakeMesh()),
+            lane_capacity=32,
+            page_table_layout=page_table_layout(),
+            device_sampling_enabled=True,
+        )
+    )
+    prepared = runtime.prepare(
+        torch.zeros(32, dtype=torch.long),
+        torch.zeros(32, dtype=torch.long),
+        torch.zeros((32, 8), dtype=torch.int32),
+        sampling_params=SamplingParams(
+            temperature=torch.ones(32),
+            top_k=torch.full((32,), 32, dtype=torch.int32),
+            top_p=torch.full((32,), 0.95),
+            seed=[1234] * 32,
+        ),
+        reset_batch=True,
+    )
+
+    runtime._refresh_sampling_seeds(prepared)
+
+    snapshot = runtime._seed_state.snapshot()
+    assert runtime._seed_manager.salt_duplicate_seeds is False
+    assert snapshot.salts == (0,) * 32
+    assert len(set(snapshot.current_device_seeds)) == 1
 
 
 def test_runtime_slot_remap_moves_complete_seed_stream_before_refresh():

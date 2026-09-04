@@ -42,11 +42,15 @@ class _TrackingSeedBuffer(LazyBuffer):
         self.updates.append(new_source.detach().clone())
 
 
-def _make_manager(capacity=4):
+def _make_manager(capacity=4, *, salt_duplicate_seeds=True):
     defaults = torch.arange(capacity, dtype=torch.int32)
     buffer = _TrackingSeedBuffer(defaults)
     config = SimpleNamespace(max_batch_size=capacity, seeds=buffer)
-    manager = SeedManager1D(config, entropy_factory=_EntropySequence())
+    manager = SeedManager1D(
+        config,
+        entropy_factory=_EntropySequence(),
+        salt_duplicate_seeds=salt_duplicate_seeds,
+    )
     return manager, manager.create_state(), buffer, defaults
 
 
@@ -121,6 +125,19 @@ def test_equal_request_seeds_produce_distinct_salted_streams():
     assert len(set(values)) == 4
 
 
+def test_equal_request_seeds_share_one_stream_when_salting_is_disabled():
+    manager, state, _, _ = _make_manager(capacity=32, salt_duplicate_seeds=False)
+    seeds = [1234] * 32
+    slots = list(range(32))
+    manager.admit(state, seeds, slots)
+
+    values = manager.refresh(state, slots, positions=[7] * 32)
+
+    assert state.snapshot().salts == (0,) * 32
+    assert len(set(values)) == 1
+    assert values[0] == _hash_request_seed_to_device_seed(1234, 8, 0)
+
+
 def test_unseeded_rng_state_is_diverse_and_same_position_trace_refresh_does_not_advance_twice():
     manager, state, _, _ = _make_manager()
     manager.admit(state, [None, None], [0, 1])
@@ -182,6 +199,27 @@ def test_slot_remap_moves_counter_salt_rng_and_current_buffer_value_then_vacates
     assert moved.active[3] is False
     assert buffer.updates[-1][1].item() == source.current_device_seeds[3]
     assert buffer.updates[-1][3].item() == defaults[3].item()
+
+
+def test_resume_rejects_reused_salt_when_salting_is_enabled(expect_error):
+    manager, state, _, _ = _make_manager()
+    manager.admit(state, [42, 42], [0, 1])
+    checkpoint = manager.suspend(state, 1)
+    manager.admit(state, [42], [1])
+
+    with expect_error(RuntimeError, "salt was reused"):
+        manager.resume(state, 2, checkpoint)
+
+
+def test_resume_allows_equal_seed_neighbors_when_salting_is_disabled():
+    manager, state, _, _ = _make_manager(salt_duplicate_seeds=False)
+    manager.admit(state, [42, 42], [0, 1])
+    checkpoint = manager.suspend(state, 1)
+
+    manager.resume(state, 1, checkpoint)
+
+    assert state.snapshot().request_seeds[:2] == (42, 42)
+    assert state.snapshot().salts == (0, 0, 0, 0)
 
 
 def test_suspend_resume_preserves_unseeded_rng_stream_across_slot_movement():

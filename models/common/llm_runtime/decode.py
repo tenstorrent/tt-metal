@@ -357,10 +357,12 @@ class DecodeRuntime:
         has_mutable_seed_buffer = all(
             callable(getattr(seed_buffer, name, None)) for name in ("update", "get_device_buffer")
         ) and isinstance(getattr(seed_buffer, "source", None), torch.Tensor)
+        # Converted executors without SamplingState1D still hit this fallback.
+        # They are vLLM-facing, so keep concurrent same-seed slots unsalted.
         self._seed_manager = (
             self._sampling_state_controller.seed_manager
             if self._sampling_state_controller is not None
-            else SeedManager1D(sampling_config)
+            else SeedManager1D(sampling_config, salt_duplicate_seeds=False)
             if config.device_sampling_enabled and has_mutable_seed_buffer
             else None
         )

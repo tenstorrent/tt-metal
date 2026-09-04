@@ -67,6 +67,10 @@ class SamplingState1D:
     borrowed and is never released here.  The topology-matched ``Penalties1D``
     instance is owned by this controller.  Mutable request state is returned by
     :meth:`create_state` rather than retained on the controller.
+
+    ``salt_duplicate_seeds`` is forwarded to the native ``SeedManager1D``.
+    vLLM-facing executors disable it so independent requests that share a seed
+    stay bit-identical.
     """
 
     def __init__(
@@ -75,6 +79,7 @@ class SamplingState1D:
         *,
         penalties_factory: Callable[[Penalties1DConfig], Penalties1D] | None = None,
         seed_manager_factory: Callable[[Any], SeedManager1D] | None = None,
+        salt_duplicate_seeds: bool = True,
     ) -> None:
         sampling_config = getattr(sampling, "config", None)
         if sampling_config is None:
@@ -87,10 +92,15 @@ class SamplingState1D:
             max_batch_size=int(sampling_config.max_batch_size),
             sub_core_grids=sampling_config.sub_core_grids,
         )
+        if not isinstance(salt_duplicate_seeds, bool):
+            raise TypeError("salt_duplicate_seeds must be bool")
         make_penalties = penalties_factory or Penalties1D.from_config
-        make_seed_manager = seed_manager_factory or SeedManager1D
+        make_seed_manager = seed_manager_factory or (
+            lambda config: SeedManager1D(config, salt_duplicate_seeds=salt_duplicate_seeds)
+        )
 
         self.sampling = sampling
+        self.salt_duplicate_seeds = salt_duplicate_seeds
         self.penalties = make_penalties(penalties_config)
         try:
             self.seed_manager = make_seed_manager(sampling_config)
