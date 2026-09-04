@@ -91,6 +91,36 @@ def _lanemk_run_fp32_stream(configuration, spec):
     # for a cold first dispatch / slower debug-bus on some galaxy hosts; override generously.
     _wait_to = int(os.environ.get("LANEMK_WAIT_TIMEOUT", "60"))
 
+    # laneMR three-way correctness leg (env-gated, additive, inert when unset).
+    # LANEMR_GOLDEN="<op-key>,<leg>" turns on a host-side TRUE-MATH golden + bf16
+    # ULP-contract fold that rides along on this exact device pass with NO retention:
+    # per chunk we also compare the device bytes against torch.<op> and fold running
+    # max-ULP / out-of-tolerance / first-witness. Object identity is unchanged (same
+    # certified ELF). Writes a "<outfile>.corr" sidecar; never affects the SHA verdict.
+    _gold = os.environ.get("LANEMR_GOLDEN")
+    _acc = None
+    _corr_note = ""
+    if _gold:
+        import sys as _sys
+
+        _tools = os.path.join(
+            os.path.dirname(os.path.dirname(__file__)), "corpus", "tools"
+        )
+        if _tools not in _sys.path:
+            _sys.path.insert(0, _tools)
+        import threeway_golden as _tgm
+
+        _op_key, _leg = (_gold.split(",", 1) + ["?"])[:2]
+        _spec = _tgm.get_spec(_op_key)
+        if _spec is not None and _spec.checkable:
+            _acc = _tgm.CorrectnessAccumulator(_spec)
+        else:
+            _corr_note = (
+                _spec.note
+                if _spec is not None
+                else f"no golden registered for {_op_key}"
+            )
+
     sha = hashlib.sha256()
     sum64 = 0
     xor32 = 0
@@ -114,6 +144,8 @@ def _lanemk_run_fp32_stream(configuration, spec):
         if len(res) < want:
             raise RuntimeError(f"chunk@{base}: got {len(res)} result bytes < {want}")
         sha.update(res[:want])
+        if _acc is not None:
+            _acc.update(base, n, res[:want])
         for b in range(base, base + n):
             sum64 = (sum64 + b) & ((1 << 64) - 1)
             xor32 ^= b
@@ -121,6 +153,19 @@ def _lanemk_run_fp32_stream(configuration, spec):
         runs += 1
         done += n
     dt = time.time() - t0
+
+    if _gold:
+        _leg_id = _gold.split(",", 1)[1] if "," in _gold else "?"
+        if _acc is not None:
+            _corr = _acc.result_line(_leg_id)
+        else:
+            _corr = (
+                f"LANEMR_CORRECTNESS,leg={_leg_id},op={_gold.split(',',1)[0]},"
+                f"patterns={patterns},status=UNCHECKED,reason={_corr_note!r}"
+            )
+        print(_corr, flush=True)
+        with open(outfile + ".corr", "w") as _fh:
+            _fh.write(_corr + "\n")
 
     line = (
         "LANEMK_STREAM_RESULT,"
