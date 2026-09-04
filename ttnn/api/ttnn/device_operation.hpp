@@ -75,7 +75,7 @@ auto compute_program_hash(
 // Helper to create a mesh workload from a WorkloadFactory that may or may not
 // provide create_mesh_workload. If missing, synthesize it from create_at.
 template <typename WorkloadFactory, typename device_operation_t>
-static auto create_mesh_workload_from_workload_factory(
+auto create_mesh_workload_from_workload_factory(
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const typename device_operation_t::tensor_args_t& tensor_args,

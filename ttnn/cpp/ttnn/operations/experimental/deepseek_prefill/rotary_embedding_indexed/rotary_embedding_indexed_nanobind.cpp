@@ -43,7 +43,8 @@ void bind_rotary_embedding_indexed(nb::module_& mod) {
 
             Args:
                 input (ttnn.Tensor): 4D per-chip input chunk on device, TILE layout
-                    [1, n_heads, chunk_local, head_dim].
+                    [1, n_heads, chunk_local, head_dim]. All four tensor operands must use the
+                    standard 32x32 tile.
                 cos (ttnn.Tensor): 4D cos cache on device, TILE layout, SP-sharded over
                     `cluster_axis` in block-cyclic order keyed by `chunk_local`.
                 sin (ttnn.Tensor): 4D sin cache, same layout/shape as `cos`.

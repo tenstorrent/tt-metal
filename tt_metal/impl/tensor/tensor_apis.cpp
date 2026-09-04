@@ -138,7 +138,11 @@ void distributed::MeshCommandQueue::enqueue_read_tensor(
 
             auto coord_range = distributed::MeshCoordinateRangeSet(distributed::MeshCoordinateRange(coord, coord));
             if (auto pinned = experimental::PinnedMemoryCache::instance().try_pin(
-                    *device, coord_range, *host_buffer, /*map_to_noc=*/true)) {
+                    *device,
+                    coord_range,
+                    *host_buffer,
+                    /*map_to_noc=*/true,
+                    experimental::PinnedMemoryDeviceAccess::ReadWrite)) {
                 experimental::HostBufferSetPinnedMemory(*host_buffer, std::move(pinned));
             }
             return *host_buffer;
@@ -197,7 +201,11 @@ void distributed::MeshCommandQueue::enqueue_write_tensor(const HostTensor& host_
                 auto coord_range = distributed::MeshCoordinateRangeSet(distributed::MeshCoordinateRange(coord, coord));
                 HostBuffer pinned_buf(*buf);
                 auto pinned_memory = experimental::PinnedMemoryCache::instance().try_pin(
-                    *mesh_device, coord_range, pinned_buf, /*map_to_noc=*/true);
+                    *mesh_device,
+                    coord_range,
+                    pinned_buf,
+                    /*map_to_noc=*/true,
+                    experimental::PinnedMemoryDeviceAccess::ReadOnly);
 
                 auto xfer = distributed::ShardDataTransfer{distributed::MeshCoordinate(coord)}
                                 .host_data(buf->view_bytes().data())
