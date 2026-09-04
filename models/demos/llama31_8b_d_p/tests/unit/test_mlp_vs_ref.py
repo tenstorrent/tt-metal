@@ -46,7 +46,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.demos.llama31_8b_d_p.tests.test_factory import TestFactory
+from models.demos.llama31_8b_d_p.tests.test_factory import TestFactory, err_ratio, quantize_like_device
 from models.demos.llama31_8b_d_p.tt.mlp import MLP, default_compute_kernel_config
 
 # 03_OUTLINE.md §5 / Appendix E. Kept as hard floors; the error ratio below is the real diagnostic.
@@ -64,20 +64,10 @@ MAX_ERR_RATIO = 3.0
 WEIGHT_SCALE = 0.02
 
 
-def quantize_like_device(t: torch.Tensor, dtype) -> torch.Tensor:
-    """Round ``t`` to exactly the values the device will hold, via ttnn, and return fp32.
-
-    Host-only (no ``device=`` argument), so this is a pure quantiser and never a compute path.
-    Reproduces ``bfloat8_b``'s shared-exponent tile blocking exactly — which no hand-rolled torch
-    emulation does. Requires a 4D, tile-shaped tensor for TILE_LAYOUT.
-    """
-    assert t.dim() == 4, f"quantize_like_device expects a 4D tensor, got {tuple(t.shape)}"
-    return ttnn.to_torch(ttnn.from_torch(t, dtype=dtype, layout=ttnn.TILE_LAYOUT)).float()
-
-
-def err_ratio(measured: float, floor: float) -> float:
-    """``(1 - measured) / (1 - floor)`` — the measured error in units of the noise floor's."""
-    return float("inf") if floor >= 1.0 else (1.0 - float(measured)) / (1.0 - float(floor))
+# `quantize_like_device` and `err_ratio` were DEFINED here in P5 (`DEC-037`) and promoted to
+# `tests/test_factory.py` in P6 (`DEC-046`), which could not delete these copies at the time. P9
+# finished the promotion (`DEC-124`): this file now imports them like the other nine test files do,
+# so the primitive every gate's error ratio is built on has exactly one definition.
 
 
 def _random_mlp_state(hf_config, *, seed: int) -> dict:

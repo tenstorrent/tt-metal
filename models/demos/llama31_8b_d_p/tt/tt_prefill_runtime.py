@@ -597,7 +597,7 @@ class TtPrefillRuntime:
         ``tt/runners/kv_chunk_table.py`` (``P10.4``, closes ``R-030``). Issues no comms: the engine
         publishes whatever comes back.
 
-        **The layer arguments are checked, not discarded.** The template ``del``\ s them
+        **The layer arguments are checked, not discarded.** The template ``del``-etes them
         (``models/demos/gpt_oss_d_p/tt/tt_prefill_runtime.py:388``), which is correct for the
         single-rank path both packages actually run and silently wrong the first time someone runs a
         pipelined rank: this rank's table covers *its own* ``num_layers`` layers numbered from 0,

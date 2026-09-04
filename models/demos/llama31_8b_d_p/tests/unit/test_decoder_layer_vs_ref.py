@@ -449,19 +449,38 @@ def test_real_weights_show_the_residual_dominating(mesh_device, state_dict, rese
 
 
 @torch.no_grad()
-def test_promoted_helpers_match_the_p5_copies():
-    """`test_factory`'s promoted `quantize_like_device` / `err_ratio` must equal the P5 copies.
+def test_noise_floor_helpers_have_exactly_one_definition():
+    """Every gate's `quantize_like_device` / `err_ratio` must be the **same object**.
 
-    ``DEC-046`` moved both into ``tests/test_factory.py`` (their home now that six gates use them)
-    but could not delete the ``tests/unit/test_mlp_vs_ref.py`` copies, because P6 owns neither that
-    file nor the two P5 tests that import from it. This asserts the duplicate cannot drift while it
-    exists. Host-only.
+    History: ``DEC-037`` defined both in ``tests/unit/test_mlp_vs_ref.py``; ``DEC-046`` promoted them
+    to ``tests/test_factory.py`` but could not delete the originals, and left this test asserting the
+    two *copies* still agreed. ``DEC-124`` (P9) finished the promotion, so the drift this used to
+    guard against is structurally impossible — and the successor assertion is stronger: identity, not
+    equality.
+
+    Why it is still worth a test. `quantize_like_device` is the primitive **every** gate's error
+    ratio is built on (``G-MLP``, ``G-ATTN``, ``G-KV``, ``G-LAYER``, ``G-WEIGHTS``, ``G-MODEL``, and
+    P9's ``G-CLEAN`` additions). A second definition reappearing anywhere would silently re-open the
+    possibility of two gates measuring against two different floors. Host-only.
     """
-    from models.demos.llama31_8b_d_p.tests.unit.test_mlp_vs_ref import err_ratio as p5_err_ratio
-    from models.demos.llama31_8b_d_p.tests.unit.test_mlp_vs_ref import quantize_like_device as p5_quantize
+    import models.demos.llama31_8b_d_p.tests.test_factory as factory
+    import models.demos.llama31_8b_d_p.tests.unit.test_attention_vs_ref as t_attn
+    import models.demos.llama31_8b_d_p.tests.unit.test_kv_cache_vs_ref as t_kv
+    import models.demos.llama31_8b_d_p.tests.unit.test_lm_head_vs_ref as t_lm
+    import models.demos.llama31_8b_d_p.tests.unit.test_mlp_vs_ref as t_mlp
 
+    for mod in (t_mlp, t_attn, t_kv, t_lm):
+        for name in ("quantize_like_device", "err_ratio"):
+            assert getattr(mod, name) is getattr(factory, name), (
+                f"{mod.__name__}.{name} is not tests/test_factory.{name}. The noise-floor helpers "
+                f"must have exactly one definition (DEC-124); import them, do not re-define them."
+            )
+
+    # And the primitive still does what the gates assume: bf8_b block quantisation, fp32 out.
     t = torch.randn(1, 1, 64, 128, generator=torch.Generator().manual_seed(0))
     for dtype in (ttnn.bfloat16, ttnn.bfloat8_b):
-        torch.testing.assert_close(quantize_like_device(t, dtype), p5_quantize(t, dtype), rtol=0.0, atol=0.0)
-    for measured, floor in ((0.999, 0.9999), (0.9, 0.99), (1.0, 1.0)):
-        assert err_ratio(measured, floor) == p5_err_ratio(measured, floor)
+        q = quantize_like_device(t, dtype)
+        assert q.dtype == torch.float32 and q.shape == t.shape
+        assert not torch.equal(q, t), f"{dtype} quantisation was a no-op; the floor would be vacuous"
+    assert err_ratio(0.999, 0.9999) == pytest.approx(10.0)
+    assert err_ratio(1.0, 1.0) == float("inf")

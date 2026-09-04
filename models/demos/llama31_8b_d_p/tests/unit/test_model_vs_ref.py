@@ -348,10 +348,16 @@ def test_full_stack_per_layer_pcc_curve(mesh_device, state_dict, seq_len, reset_
     ref_top1 = _top1(ref_logits, last)
     dev_top1 = int(torch.argmax(dev_last_logits))
 
+    # ONE canonical file, rewritten in place — NOT a timestamped one per run (`DEC-121`). The curve
+    # is deterministic (seeded token ids, fixed weights): P9 found nine timestamped copies in
+    # `bringup_log/raw/`, all nine byte-identical, one per incidental run of the suite. A tracked
+    # file that git diffs when the numbers move is better evidence than a pile that grows whether
+    # or not anything changed. The run's own timestamp stays in the header.
     ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    path = _RAW_DIR / f"G-MODEL-CURVE_{ts}.log"
+    path = _RAW_DIR / "G-MODEL-CURVE.log"
     lines = [
         "G-MODEL — per-layer hidden-state PCC curve",
+        f"generated  : {ts} by tests/unit/test_model_vs_ref.py::test_full_stack_per_layer_pcc_curve",
         f"model      : Llama-3.1-8B-Instruct, {num_layers} layers, real weights",
         f"mesh       : {tuple(mesh_device.shape)}, TP={objs['mesh_config'].tp}, SP={objs['mesh_config'].sp}",
         f"seq_len    : {seq_len}; token ids uniform over vocab, seed 3",

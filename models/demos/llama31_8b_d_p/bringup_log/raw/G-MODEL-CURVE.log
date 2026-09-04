@@ -1,4 +1,5 @@
 G-MODEL — per-layer hidden-state PCC curve
+generated  : 20260904T014636Z by tests/unit/test_model_vs_ref.py::test_full_stack_per_layer_pcc_curve
 model      : Llama-3.1-8B-Instruct, 32 layers, real weights
 mesh       : (1, 1), TP=1, SP=1
 seq_len    : 128; token ids uniform over vocab, seed 3

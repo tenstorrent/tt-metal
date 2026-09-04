@@ -985,7 +985,7 @@ Q/K (and only Q/K) are `reverse_permute`d at load for the Meta RoPE convention.
 | `unit/test_mesh_config.py` | `G-MESH` | none + 1 card | exact asserts | — |
 | `unit/test_ccl_semaphores.py` | `G-SEMAPHORE` | target mesh | list lengths **6 / 4 / 2 / 2** | — |
 | `unit/test_rms_norm_vs_ref.py` | `G-RMS` | (1,1) | **PCC ≥ 0.9999** | `tt_transformers` 0.9999867 / 0.9999886 |
-| `unit/test_rope_vs_ref.py` | `G-ROPE` | (1,1) | PCC ≥ 0.999 **and** scaled ≠ unscaled `inv_freq` | `precompute_freqs` vs HF: `max|Δ| = 0.0` |
+| `unit/test_rope_vs_ref.py` | `G-ROPE` | (1,1) | PCC ≥ 0.999 **and** scaled ≠ unscaled `inv_freq` | `precompute_freqs` vs HF: `max\|Δ\| = 0.0` |
 | `unit/test_mlp_vs_ref.py` | `G-MLP` | (1,1) | **≥ 0.999 @bf8_b**, ≥ 0.9995 @bf16 | 0.9995823 @bf8_b, seq 512 |
 | `unit/test_attention_vs_ref.py` | `G-ATTN` | (1,1) | **≥ 0.999** | 0.9996099 / 0.9996010 |
 | `unit/test_kv_cache_vs_ref.py` | `G-KV` | (1,1) | ≥ 0.99 @bf8_b (record bf16); written-region-only asserts | — |

@@ -289,15 +289,16 @@ def parametrize_galaxy_submeshes(submesh_shapes, *, trace_region_size=None):
 
 
 # --- Promoted numerical helpers (P6 / `DEC-046`) ---------------------------------------
-# `DEC-037` parked `quantize_like_device` and `err_ratio` in `tests/unit/test_mlp_vs_ref.py:67`
-# / `:78` because `test_factory.py` was being edited by a concurrent session. They are now used by
-# six gates (`G-MLP`, `G-ATTN`, `G-KV`, `G-LAYER`, `G-WEIGHTS`, `G-MODEL`), so this is their home.
+# `DEC-037` parked `quantize_like_device` and `err_ratio` in `tests/unit/test_mlp_vs_ref.py` (at
+# lines 67 and 78 as of P5) because `test_factory.py` was being edited by a concurrent session. They
+# are now used by eight gates (`G-MLP`, `G-ATTN`, `G-KV`, `G-LAYER`, `G-WEIGHTS`, `G-MODEL`, and
+# P9's `G-CLEAN` additions), so this is their home.
 #
-# The P5 copies in `test_mlp_vs_ref.py` are deliberately left in place — P6 owns neither that file
-# nor the two tests that import from it — and `tests/unit/test_decoder_layer_vs_ref.py`
-# (`test_promoted_helpers_match_the_p5_copies`) asserts the two definitions still agree, so the
-# duplication cannot silently drift while it exists. Whoever next edits `test_mlp_vs_ref.py` should
-# replace its two definitions with an import from here.
+# P9 finished the move (`DEC-124`): the P5 copies in `test_mlp_vs_ref.py` are **deleted**, and every
+# test file — including that one — imports from here, so the primitive every gate's error ratio is
+# built on has exactly ONE definition. `tests/unit/test_decoder_layer_vs_ref.py`
+# (`test_noise_floor_helpers_have_exactly_one_definition`) asserts that by object identity, which is
+# the successor to the equality check that guarded the duplication while it existed.
 
 
 def quantize_like_device(t, dtype):

@@ -56,7 +56,7 @@ at that line. `HF:<line>` =
 | activation | **`silu`**, used as SwiGLU: `down(silu(gate(x)) * up(x))` | `C:13` (`hidden_act`); SwiGLU form from the HF module `transformers.models.llama.modeling_llama.LlamaMLP` (`python_env/.../transformers/models/llama/modeling_llama.py`) |
 | Q heads | **32** | `C:20` (`num_attention_heads`) |
 | KV heads | **8** → GQA, group = 32/8 = **4** | `C:22` (`num_key_value_heads`); group derived |
-| head_dim | **128** | **Derived**: `hidden_size / num_attention_heads = 4096/32 = 128`. Key is *absent* from `C` (grep: no `head_dim`). HF applies the same derivation: `HF:84` `head_dim: int | None = None`, `HF:87-88` `if self.head_dim is None: self.head_dim = self.hidden_size // self.num_attention_heads`. Confirmed at runtime: `LlamaConfig.from_pretrained(...).head_dim == 128`. |
+| head_dim | **128** | **Derived**: `hidden_size / num_attention_heads = 4096/32 = 128`. Key is *absent* from `C` (grep: no `head_dim`). HF applies the same derivation: `HF:84` `head_dim: int \| None = None`, `HF:87-88` `if self.head_dim is None: self.head_dim = self.hidden_size // self.num_attention_heads`. Confirmed at runtime: `LlamaConfig.from_pretrained(...).head_dim == 128`. |
 | q_proj out | 32·128 = **4096** | derived |
 | k_proj / v_proj out | 8·128 = **1024** | derived |
 | o_proj in | 4096 | derived |
@@ -136,7 +136,7 @@ RMSNorm + no biases.**
 | `ttnn.get_num_devices()` | **32** | run 2026-09-03, this machine |
 | arch | **blackhole** | UMD log: `Creating TopologyDiscovery for architecture: blackhole` |
 | local chip ids | 0…31, all local (no remote) | UMD log: `Opening local chip ids/PCIe ids: {0..31}`, `remote chip ids {}` |
-| physical single-galaxy device topology | **`dims: [8, 4]`** (= 32), both axes `RING` in the torus variant | `tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto:6`; non-torus variant `single_bh_galaxy_mesh_graph_descriptor.textproto:6` has the same `[8, 4]` without `dim_types` |
+| physical single-galaxy device topology | **`dims: [8, 4]`** (= 32), both axes `RING` in the torus variant | `tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto:6`; non-torus variant `tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto:6` has the same `[8, 4]` without `dim_types` |
 | fabric channels per link | **2** | same file, `:8` `channels { count: 2 policy: STRICT }` — consistent with `num_links = 2` on Blackhole |
 
 ### 4.2 Mesh-shape convention: `mesh_shape = (SP, TP)`
@@ -156,8 +156,8 @@ So **rows = SP, cols = TP**, and `SP · TP = 32`.
 |---|---|---|---|
 | 1 | TP must divide `num_key_value_heads` or KV heads get replicated | `8 / TP ∈ ℤ` | `{1, 2, 4, 8}` |
 | 2 | TP must divide `num_attention_heads` | `32 / TP ∈ ℤ` | `{1, 2, 4, 8, 16, 32}` |
-| 3 | `hidden / TP` must be tile-aligned | `4096/TP ≡ 0 (mod 32)` ⇔ `TP | 128` | `{1,2,4,8,16,32,64,128}` |
-| 4 | `intermediate / TP` must be tile-aligned | `14336/TP ≡ 0 (mod 32)` ⇔ `TP | 448` (since `14336/32 = 448 = 2⁶·7`) | `{1,2,4,7,8,14,16,28,32,56,64,112,224,448}` |
+| 3 | `hidden / TP` must be tile-aligned | `4096/TP ≡ 0 (mod 32)` ⇔ `TP \| 128` | `{1,2,4,8,16,32,64,128}` |
+| 4 | `intermediate / TP` must be tile-aligned | `14336/TP ≡ 0 (mod 32)` ⇔ `TP \| 448` (since `14336/32 = 448 = 2⁶·7`) | `{1,2,4,7,8,14,16,28,32,56,64,112,224,448}` |
 | 5 | `o_proj` row-parallel over `num_heads·head_dim` | `4096/TP ≡ 0 (mod 32)` — same as #3 | as #3 |
 
 **Intersection: TP ∈ {1, 2, 4, 8}.** Constraint #1 is the binding one; TP > 8 would require

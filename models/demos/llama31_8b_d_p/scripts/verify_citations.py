@@ -647,19 +647,22 @@ CITES = [
     (f"{LL}/tests/unit/test_rope_vs_ref.py", 60, "def _meta_to_hf_layout"),
     (f"{LL}/tests/unit/test_rope_vs_ref.py", 65, "def _hf_to_meta_layout"),
     (f"{LL}/tests/unit/test_rope_vs_ref.py", 140, "def test_wrong_convention_fails"),
-    (f"{LL}/tests/unit/test_mlp_vs_ref.py", 67, "def quantize_like_device"),
-    (f"{LL}/tests/unit/test_mlp_vs_ref.py", 78, "def err_ratio"),
-    (f"{LL}/tests/unit/test_mlp_vs_ref.py", 145, "def test_mlp_vs_ref"),
-    (f"{LL}/tests/unit/test_mlp_vs_ref.py", 186, "def test_fp32_dest_acc_is_load_bearing"),
-    (f"{LL}/tests/unit/test_mlp_vs_ref.py", 238, "def test_silu_is_on_the_gate_branch"),
-    (f"{LL}/tests/unit/test_attention_vs_ref.py", 184, "def test_attention_vs_ref"),
-    (f"{LL}/tests/unit/test_attention_vs_ref.py", 236, "def test_unswizzled_qk_weights_fail"),
-    (f"{LL}/tests/unit/test_attention_vs_ref.py", 404, "def test_sdpa_kernel_error_is_the_dominant_term"),
-    (f"{LL}/tests/unit/test_attention_vs_ref.py", 469, "def test_qkv_and_rope_stage_is_at_the_floor"),
-    (f"{LL}/tests/unit/test_kv_cache_vs_ref.py", 96, "def test_kv_cache_write_read_vs_ref"),
-    (f"{LL}/tests/unit/test_kv_cache_vs_ref.py", 188, "def test_kv_cache_readback_is_positionally_exact"),
-    (f"{LL}/tests/unit/test_kv_cache_vs_ref.py", 254, "def test_writes_touch_only_their_own_region"),
-    (f"{LL}/tests/unit/test_kv_cache_vs_ref.py", 341, "def test_dram_shard_geometry_at_head_dim_128"),
+    # P9 (`DEC-124`): the P5 copies of these two helpers (formerly at lines 67 and 78 of
+    # test_mlp_vs_ref.py) are DELETED — the file now imports them from tests/test_factory.py like
+    # every other test. The two CITES that named them are replaced by the single canonical pair in
+    # test_factory.py (already below) plus this import, so a re-duplication fails the check too.
+    (f"{LL}/tests/unit/test_mlp_vs_ref.py", 49, "from models.demos.llama31_8b_d_p.tests.test_factory import"),
+    (f"{LL}/tests/unit/test_mlp_vs_ref.py", 135, "def test_mlp_vs_ref"),
+    (f"{LL}/tests/unit/test_mlp_vs_ref.py", 176, "def test_fp32_dest_acc_is_load_bearing"),
+    (f"{LL}/tests/unit/test_mlp_vs_ref.py", 228, "def test_silu_is_on_the_gate_branch"),
+    (f"{LL}/tests/unit/test_attention_vs_ref.py", 183, "def test_attention_vs_ref"),
+    (f"{LL}/tests/unit/test_attention_vs_ref.py", 235, "def test_unswizzled_qk_weights_fail"),
+    (f"{LL}/tests/unit/test_attention_vs_ref.py", 403, "def test_sdpa_kernel_error_is_the_dominant_term"),
+    (f"{LL}/tests/unit/test_attention_vs_ref.py", 468, "def test_qkv_and_rope_stage_is_at_the_floor"),
+    (f"{LL}/tests/unit/test_kv_cache_vs_ref.py", 95, "def test_kv_cache_write_read_vs_ref"),
+    (f"{LL}/tests/unit/test_kv_cache_vs_ref.py", 187, "def test_kv_cache_readback_is_positionally_exact"),
+    (f"{LL}/tests/unit/test_kv_cache_vs_ref.py", 253, "def test_writes_touch_only_their_own_region"),
+    (f"{LL}/tests/unit/test_kv_cache_vs_ref.py", 340, "def test_dram_shard_geometry_at_head_dim_128"),
     # ---------------------------------------------------------------------------------
     # P6 — layer / model assembly, weight loading. Added by P6 per Appendix F.7 ("extend the
     # verifier every phase"). These are the refs P7/P10 will cite, and they are FULLY QUALIFIED
@@ -713,8 +716,8 @@ CITES = [
     (f"{M3}/tt/model_config.py", 214, "TT_CACHE_PATH"),
     (f"{GO}/tt/runners/adapters/gpt_oss.py", 75, "def weight_cache_path"),
     # tests/test_factory.py — the promoted helpers (DEC-046)
-    (f"{LL}/tests/test_factory.py", 303, "def quantize_like_device"),
-    (f"{LL}/tests/test_factory.py", 321, "def err_ratio"),
+    (f"{LL}/tests/test_factory.py", 304, "def quantize_like_device"),
+    (f"{LL}/tests/test_factory.py", 322, "def err_ratio"),
     # tests/unit/test_decoder_layer_vs_ref.py — G-LAYER
     (f"{LL}/tests/unit/test_decoder_layer_vs_ref.py", 118, "def _torch_rms_norm"),
     (f"{LL}/tests/unit/test_decoder_layer_vs_ref.py", 140, "def _torch_layer"),
@@ -731,7 +734,7 @@ CITES = [
         396,
         "def test_real_weights_show_the_residual_dominating",
     ),
-    (f"{LL}/tests/unit/test_decoder_layer_vs_ref.py", 452, "def test_promoted_helpers_match_the_p5_copies"),
+    (f"{LL}/tests/unit/test_decoder_layer_vs_ref.py", 452, "def test_noise_floor_helpers_have_exactly_one_definition"),
     # tests/unit/test_weight_loading.py — G-WEIGHTS
     (f"{LL}/tests/unit/test_weight_loading.py", 91, "def test_no_missing_and_no_unused_keys"),
     (f"{LL}/tests/unit/test_weight_loading.py", 149, "def test_cache_only_rebuild_is_bit_identical"),
@@ -745,14 +748,14 @@ CITES = [
     (f"{LL}/tests/unit/test_model_vs_ref.py", 149, "def _torch_stack"),
     (f"{LL}/tests/unit/test_model_vs_ref.py", 262, "def test_model_vs_hf_reduced_depth"),
     (f"{LL}/tests/unit/test_model_vs_ref.py", 309, "def test_full_stack_per_layer_pcc_curve"),
-    (f"{LL}/tests/unit/test_model_vs_ref.py", 398, "def test_rotated_layer_weights_fail"),
+    (f"{LL}/tests/unit/test_model_vs_ref.py", 404, "def test_rotated_layer_weights_fail"),
     (
         f"{LL}/tests/unit/test_model_vs_ref.py",
-        438,
+        444,
         "def test_get_last_token_slice_matches_the_full_sequence",
     ),
-    (f"{LL}/tests/unit/test_model_vs_ref.py", 471, "def test_hf_reference_is_causal"),
-    (f"{LL}/tests/unit/test_model_vs_ref.py", 501, "def test_in_test_torch_reference_agrees_with_hf"),
+    (f"{LL}/tests/unit/test_model_vs_ref.py", 477, "def test_hf_reference_is_causal"),
+    (f"{LL}/tests/unit/test_model_vs_ref.py", 507, "def test_in_test_torch_reference_agrees_with_hf"),
     # transformers 5.12.1 — the reference's own shape (DEC-051)
     (
         "python_env/lib/python3.12/site-packages/transformers/models/llama/modeling_llama.py",
@@ -860,6 +863,16 @@ CITES = [
 # Explicit CITES above assert *what* is on the line; this pass is the safety net that catches a
 # reference to a file that moved or a line past EOF, for the many refs that carry no needle.
 DOCS = [
+    # P9 addition (`DEC-120`): the recipe itself, and the three P0-P2 logs, were the only prose in
+    # the package pass 2 could not see. The recipe is the document a re-runner follows literally,
+    # so a stale `path:line` in it is the most expensive kind there is — and one had already
+    # survived to P9 because of this hole. `README.md` joins for the same reason: it is the first
+    # file a reviewer reads and it cites the engine contract by `path:line`.
+    "models/demos/llama31_8b_d_p/BRINGUP_RECIPE.md",
+    "models/demos/llama31_8b_d_p/README.md",
+    "models/demos/llama31_8b_d_p/bringup_log/00_MODEL_CARD.md",
+    "models/demos/llama31_8b_d_p/bringup_log/01_REFERENCE.md",
+    "models/demos/llama31_8b_d_p/bringup_log/02_SURVEY.md",
     "models/demos/llama31_8b_d_p/bringup_log/03_OUTLINE.md",
     "models/demos/llama31_8b_d_p/bringup_log/04_CCL_PLAN.md",
     # P5 added the decision log and the gate ledger: both now carry load-bearing `path:line` refs.
@@ -907,6 +920,14 @@ DOC_PREFIXES = {
 }
 _REF = re.compile(r"`([A-Za-z0-9_./-]+\.(?:py|cpp|hpp|md|json|textproto|yaml)):(\d+)(?:-(\d+))?`")
 
+# P9 addition (`DEC-120`): `02_SURVEY.md` and the recipe write citations with the *same* one- and
+# two-letter aliases this script defines above (`GO/tt/ccl.py:55`, `TT/tt/common.py:489`) — 86 of
+# them. Every one of those resolved before this map existed, but only by falling through to the
+# ambiguous-basename path, i.e. by luck: the day a second `ccl.py` is cited anywhere the ref flips
+# to a failure that has nothing to do with the ref being wrong. Expanding the alias makes them
+# LITERAL, which is what a `path:line` is supposed to be.
+_ALIASES = {"TT/": TT, "GO/": GO, "M3/": M3, "DS/": DS, "CP/": CP, "CM/": CM, "LL/": LL}
+
 
 # P5: the logs also use abbreviated forms — a bare basename (`common.py:564`, continuing an earlier
 # full citation) or a partial path (`gpt_oss_d_p/tt/config.py:55`). Resolving them instead of
@@ -946,6 +967,11 @@ def _basename_index():
 def _resolve(path, index):
     """Return (resolved_path, note). `note` is non-empty when the resolution was not literal."""
     path = DOC_PREFIXES.get(path, path)
+    for alias, real in _ALIASES.items():
+        if path.startswith(alias):
+            expanded = real + "/" + path[len(alias) :]
+            if os.path.isfile(os.path.join(ROOT, expanded)):
+                return expanded, f"alias {alias} -> {expanded}"
     if os.path.isfile(os.path.join(ROOT, path)):
         return path, ""
     stripped = path.lstrip("./")

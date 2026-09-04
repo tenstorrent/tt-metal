@@ -46,6 +46,8 @@ Template: `BRINGUP_RECIPE.md` §1.4. Full gate index and thresholds: `BRINGUP_RE
 | G-KV-TABLE | P10.4 | the KV chunk address table itself: protobuf round trip, head->config->chip, position->address, K/V separation — read back over UMD and compared **bit-exactly** (closes `R-030`) | `torch.equal` (`rtol=atol=0`) on every block; negative control must fail | **2/2 tests pass** in 23.5 s on the full `(4,8)`: 2 users x 2 layers x 8 heads x K/V x 512 tokens all bit-exact through `table.lookup` -> `read_dram_umd` -> `_decode_bfp8_chunk`; 16 configs survive export/re-import with zero-padded names `00..15`; `k` and `v` resolve to different bases; negative control (head 0 read through config 1) **fails as required**; the 3 multi-rank refusals (`DEC-109`) all raise naming `R-040` | **PASS** | 2026-09-04 | `raw/G-KV-TABLE_20260904T000847Z.log` |
 | G-LOOPBACK | P10 | the engine's **Gate 2**: real DRAM -> transport -> DRAM copy | — | — | **OUT-OF-SCOPE (by decision, `DEC-070`)** — not `BLOCKED`; it verifies the *engine's* model-agnostic byte copy, and its residual gap for us is enumerated as `R-040` | 2026-09-03 | `08_PREFILL_INTEGRATION.md` §4 |
 | G-P10-REGRESSION | P10 | the whole package suite still passes after P10's additions | 0 failed | **161 passed, 0 failed** in 1022.28 s (P8 was 130; P10 adds 31 tests and modifies 1) | **PASS** | 2026-09-04 | `raw/G-P10-REGRESSION_20260904T004311Z.log` |
+| G-CLEAN | P9 | the nine cleanliness items of `BRINGUP_RECIPE.md` Phase P9, over the whole package | all nine pass, each with its command and output recorded | **9/9**. `pre-commit` **exit 0** over 140 files; SPDX **0 missing** (3 documented JSON/`.gitignore` exceptions); `TODO`/`FIXME` **2 hits, both describing *another* package's TODO**; **0** `except: pass`, 3 broad handlers all off the correctness path (`DEC-123`); **0** unused imports, **0** commented-out code, **0** `print(` in `tt/`, **0** `SyntaxWarning`; **15/15** env vars in the README (the grep found 2 no hand-written list had); README **8/8** sections, citations **661/661** + **973/973**; adapter import **0.039 s, heavy_modules=NONE** (template 2.44 s, 63x); test inventory **20/20 modules, 0 gaps** (2 closed by `DEC-122`) | **PASS** | 2026-09-04 | `raw/G-CLEAN_20260904T015705Z.log` (verdict), `raw/G-CLEAN_20260904T012517Z.log` (the run with the findings) |
+| G-CLEAN-REGRESSION | P9 | the whole package suite after P9's changes | 0 failed | **169 passed, 0 failed** in 1030.49 s (P10 was 161; P9 adds 8 tests and replaces 1). `G-MLP` and `G-LAYER` were re-run in isolation first and reproduce the P5/P6 numbers to every printed digit | **PASS** | 2026-09-04 | `raw/G-CLEAN-REGRESSION_20260904T013905Z.log`, `raw/G-CLEAN-MLP_20260904T013118Z.log` |
 
 ## Checklist (recipe phase map, `BRINGUP_RECIPE.md:37-49`)
 
@@ -61,7 +63,7 @@ Template: `BRINGUP_RECIPE.md` §1.4. Full gate index and thresholds: `BRINGUP_RE
 | **P7** Chunked + golden | `G-CHUNK` `G-GOLDEN` `G-RUNTIME` `G-CHUNK-ATTN` | 🟡 `G-GOLDEN` ✅ `G-RUNTIME` ✅ `G-CHUNK` ✅ **PASS-WITH-DEVIATION** (`DEC-058`) · `G-CHUNK-ATTN` was ⛔ **BLOCKED** (`R-028`, `R-027`) and is **unblocked and run in P8** — see the P8 row |
 | **P8** Multi-device | `G-TP-PARITY` `G-RACE` `G-SEMAPHORE` `G-MESH-KV` `G-CHUNK-ATTN` `G-KV-TP8` `G-SP-RING` `G-FABRIC-MATRIX` | ✅ **8 of 8** — `G-TP-PARITY` ✅ `G-RACE` ✅ `G-SEMAPHORE` ✅ `G-MESH-KV` ✅ (one-shot + chunked + 2048/512 + cache-only) `G-KV-TP8` ✅ (new, closes `R-027`) `G-SP-RING` ✅ (new) `G-FABRIC-MATRIX` ✅ (new) · `G-CHUNK-ATTN` 🟡 **PASS-WITH-DEVIATION** (`DEC-085`), promoted from `BLOCKED` |
 | **P10** Prefill integration | `G-ADAPTER` `G-REQUEST` `G-MOCK-MIG` `G-KV-TABLE` `G-P10-REGRESSION` | ✅ **all 4 gates PASS** — `G-ADAPTER` ✅ `G-REQUEST` ✅ `G-MOCK-MIG` ✅ (min PCC 0.984451) `G-KV-TABLE` ✅ (new, closes `R-030`) · `G-LOOPBACK` ⚪ **OUT-OF-SCOPE** (`DEC-070`, not blocked) |
-| **P9** Cleanliness | `G-CLEAN` | ⬜ — runs **after** P10 (`BRINGUP_RECIPE.md` F.12) |
+| **P9** Cleanliness | `G-CLEAN` `G-CLEAN-REGRESSION` | ✅ **PASS** — 9/9 items, run **after** P10 (`BRINGUP_RECIPE.md` F.12). Found and fixed: a wrong technical claim in the recipe and 6 more unchecked citations (`DEC-120`), a stale checklist row, 9 byte-identical copies of one raw log (`DEC-121`), 2 `tt/` modules with no test (`DEC-122`), a duplicated noise-floor primitive (`DEC-124`), and a risk register 12 rows out of date (`DEC-125`) |
 
 > **Correction (P3).** The `BLOCKED, R-003` annotations on the P6–P8 rows above are **stale**.
 > Appendix F.1 records that real weights are staged at
@@ -69,7 +71,12 @@ Template: `BRINGUP_RECIPE.md` §1.4. Full gate index and thresholds: `BRINGUP_RE
 > `G-CHUNK`/`G-MESH-KV`-vs-golden, `G-MODEL` top-1, `G-REQUEST` and `G-MOCK-MIG` are **runnable**.
 > Keep the `requires_hf_reference` skip marker so the suite still runs on a weightless machine.
 > See `07_RISKS.md` → "Corrections to earlier risk entries".
-| **P10** Disagg prefill | `G-ADAPTER` `G-REQUEST` `G-MOCK-MIG` `G-LOOPBACK` | ⬜ |
+>
+> **Correction (P9).** A second, stale `| **P10** Disagg prefill | … | ⬜ |` row used to sit
+> directly below this block — a leftover from the P3 draft of the checklist, orphaned outside
+> the table by the blockquote above and left behind when P10 added its real row. It said P10
+> was not started, four rows under the row saying all four of its gates PASS. Removed;
+> `DEC-120`.
 
 ---
 
@@ -854,7 +861,9 @@ Handover to P6: tt/mlp.py (MLP), tt/attention/ (Attention, AttentionConfig, Prog
   weights and **real** embedding rows: `||x|| = 7.6`, `||attn delta|| = 5.3`, `||mlp delta|| = 15.3`
   -> attenuation **1.73x** (attn) / **1.23x** (mlp).
   `test_promoted_helpers_match_the_p5_copies`: the `test_factory.py` copies of
-  `quantize_like_device` / `err_ratio` are bit-identical to the P5 ones (`DEC-046`).
+  `quantize_like_device` / `err_ratio` are bit-identical to the P5 ones (`DEC-046`). *(P9: the P5
+  copies are now deleted and the test is `test_noise_floor_helpers_have_exactly_one_definition`,
+  asserting object identity instead of equality — `DEC-124`. The measurement above is unchanged.)*
 - **Raw logs:** the verdict is `raw/G-LAYER_20260903T191826Z.log` (11/11 PASS). `raw/G-LAYER_20260903T184510Z.log` is kept deliberately: it is the run where the masking probe **FAILED** while asserting Appendix E's direction, which is the evidence for `DEC-040`.
 - **Verdict:** **PASS** (11/11 tests)
 - **Deviations:** none against the threshold, and no threshold was changed. One **finding** about
@@ -951,7 +960,7 @@ Handover to P6: tt/mlp.py (MLP), tt/attention/ (Attention, AttentionConfig, Prog
   | **32** | 128 | **0.9997646** | 0.9997630 | **0.99x** | — | 220 / **220** ✓ |
 
   **32-layer per-layer curve — shape, and whether a step appeared.** Full table in
-  `raw/G-MODEL-CURVE_20260903T195712Z.log`. Shape: layer 0 error **8.49e-05**, then a **drop** to
+  `raw/G-MODEL-CURVE.log`. Shape: layer 0 error **8.49e-05**, then a **drop** to
   **1.87e-05** at layer 1 (a 0.22x "step" downward — the layer-0 residual is only the
   embedding-sized activation, so its sublayer deltas are relatively large), then **smooth monotone
   growth** to **1.48e-04** at layer 31. Consecutive error ratios from layer 3 onward stay in
@@ -1834,6 +1843,131 @@ Verified after the rename, before commit:
 
 ---
 
+## P9 — Cleanliness (run last: `BRINGUP_RECIPE.md` F.12)
+
+### G-CLEAN — the nine cleanliness items (P9, run last per `BRINGUP_RECIPE.md` F.12)
+- **Command:** one script, nine sections, `tee`'d whole. Each item's own command is printed above its
+  output in the raw log, so the log is re-runnable by reading it.
+- **Mesh / device:** **none** for items 1-9 (all host / static analysis). The two new module tests
+  `DEC-122` added, and the regression below, are the only parts that open a device.
+- **Threshold:** all nine items pass, each with its command and output recorded.
+- **Measured — item by item:**
+
+  | # | Item | Command | Result |
+  |---|---|---|---|
+  | 1 | `pre-commit` clean | `pre-commit run --files $(git diff --name-only 1783edc25de~5 -- <pkg>)` + P9's new/modified files, **140 files** | **exit 0.** 12 hooks ran (`trailing-whitespace`, `end-of-file-fixer`, `black`, `autoflake`, `isort`, `check-large-files`, `prefer-expect-error`, …), 16 skipped as not applicable. **0 files modified.** |
+  | 2 | SPDX header pair on every file | header scan of all 72 non-log files | **0 missing**, excluding three documented exceptions: `configs/Llama-3.1-8B-Instruct/config.json`, `tt/runners/manifests/llama31_8b_d_p.json`, `bringup_log/raw/.gitignore`. JSON has **no comment syntax**, and no `.json` or `.gitignore` in `minimax_m3`, `gpt_oss_d_p` or anywhere else under `models/` carries SPDX either — this is repo convention, not an omission. |
+  | 3 | no unresolved `TODO`/`FIXME`/`XXX`/`HACK` | `grep -rn` over `*.py` + `*.json` | **2 hits, 0 of them ours.** `tt/embedding.py:15` and `tests/unit/test_ccl_semaphores.py:156` both describe a TODO **in another package's code** (gpt-oss's deferred vocab sharding; an upstream CCL semaphore TODO) as part of explaining why this package does something different. No `TODO` marks work owed by this package. |
+  | 4 | no `except: pass` / bare `except Exception` on a correctness path | `grep -rn` + three lines of context each | **0 `except: pass` anywhere.** Three `except Exception`, all off the correctness path and each recorded in `DEC-123`: the delta probe (`tt/layer.py:90` — the case the recipe explicitly allows, and it **logs** at WARNING), the `dense_sp` capability probe (`tt/tt_prefill_runtime.py:110`, `# noqa: BLE001` with reasoning), and one test that records *which* failure an A/B produces (`tests/unit/test_sp_attention_chunked.py:480`). Everything else catches a named type. |
+  | 5 | no unused imports / dead branches / commented-out code / leftover `print` | `autoflake --remove-all-unused-imports` diff; AST parse of every keyword-leading comment; `print(` census | **unused imports: 0** (autoflake diff is empty). **Commented-out code: 0** — 7 comment lines start with a Python keyword and **none of them parses as Python**; all 7 are prose. **`print(` in `tt/`: 0** — library and pytest code uses `loguru` (25 files import it). The 66 `print(` calls are all in the six standalone CLI entry points (`scripts/*.py`, `tests/galaxy_prefill_kv_pcc.py`, `tests/fabric_topology_matrix.py`), which are invoked as `python3 <file>` and whose output *is* the gate transcript. **Also fixed:** one invalid escape sequence (`` `\ ` `` in a non-raw docstring, `tt/tt_prefill_runtime.py:600`) that CPython 3.12 warns on and a future release will make an error — now **0 files raise a `SyntaxWarning`**. |
+  | 6 | every env read is in the README table | AST + regex scan, **including reads through a module-level string constant** (`_TRACE_ENV`) | **15 distinct variables, 15 in the table, 0 missing.** The scan found two the P8/P10 hand-written lists did not: **`PREFILL_HF_MODEL`** and **`PREFILL_TTNN_CACHE`**, both read by `tt/runners/adapters/llama.py`. This is why the item says *grep*, not *transcribe*. |
+  | 7 | `README.md` complete | section scan + `verify_citations.py` | **All 8 required sections present** (architecture table, deployment path, status table with measured PCC, run commands, env-var table, layout, what-is-not-implemented, **and the "why not `models/common`" line** Appendix F.3 demands). 332 lines, 13 tables, 8 code blocks; every measured number transcribed from this ledger. Citations: **661/661 verified, 973/973 resolved** — up from 745 doc refs, because `DEC-120` added the recipe, the README and the P0-P2 logs to `DOCS`. |
+  | 8 | adapter import is cheap | `python -c "import …tt.runners.adapters.llama"` x3, subprocess-measured | **0.0389 / 0.0392 / 0.0389 s, `heavy_modules=NONE`, 211 `sys.modules`.** The gpt-oss template measured in the same run: **2.44 s with `['torch','ttnn']` loaded** — **63x**. Unchanged from P10's `G-ADAPTER` measurement, which is the point: P9 re-verified it after P9's own edits. |
+  | 9 | every `tt/` module owns a test | module → test map, crediting the `tt.attention` package re-export | **20 modules (excluding `__init__.py`), 0 without a test.** Two of them had none when the sweep started — `tt/embedding.py` and `tt/lm_head.py`, covered only transitively through `tt/model.py`. `DEC-122` closed both with dedicated tests rather than flagging them. The full map is the table below. |
+
+- **Verdict:** **PASS** (9/9)
+- **Deviations:** none. No threshold was changed, no test was weakened, no gate was removed.
+- **What the sweep actually found and fixed** (nothing here was known before P9):
+  1. **A wrong technical claim in the recipe**, surviving because the recipe was not citation-checked
+     (`DEC-120`): F.6's *"`write_kv_chunk` takes one KV head per call"* — the assert it cites is
+     about the **batch** dim, and the bare basename resolved to a file with fewer lines than the
+     citation. Six more bare-basename or alias-form citations were made literal in the same pass.
+  2. **A stale checklist row** in this file claiming P10 was not started, four rows below the row
+     saying all four of its gates PASS (`DEC-120`).
+  3. **Nine byte-identical copies of one raw log** — `git ls-tree` at `1783edc25de` shows **9 files,
+     1 blob hash** (`297b2237…`). Collapsed to one canonical `raw/G-MODEL-CURVE.log`, and the test
+     now rewrites that file instead of adding to the pile (`DEC-121`).
+  4. **Two `tt/` modules with no test of their own** (`DEC-122`).
+  5. **A duplicated noise-floor primitive.** `quantize_like_device` / `err_ratio` still had two
+     definitions, three phases after `DEC-046` recorded the promotion as done. Cosmetically
+     different, numerically identical — `G-MLP` re-ran bit-identical — but it is the primitive every
+     gate's error ratio is built on, so it is now one definition asserted by object identity
+     (`DEC-124`).
+  6. **Two env vars absent from every hand-written list** (item 6 above).
+  7. **One invalid escape sequence** in a docstring (item 5 above).
+  8. **Two empty stray directories** — `docs/` (planned in P3, never populated) and `build/` (a
+     profiler artifact tree). Removed.
+  9. **A risk register 12 rows out of date** (`DEC-125`). `07_RISKS.md`'s summary table — the first
+     thing anyone reads there — was missing a row for **twelve** risks that have full sections,
+     including **`R-040`**, the single genuinely open engineering gap; and **eight** rows still read
+     `open` / `blocked` / `deferred` under sections that close them. As it stood the table advertised
+     four open high-severity risks (only one is open) and hid the one that should drive the next
+     engineer's plan. Rebuilt from the body; no section text changed.
+  10. **Eleven markdown table rows that do not render.** `00_MODEL_CARD.md`, `01_REFERENCE.md`,
+     `02_SURVEY.md` and `03_OUTLINE.md` carried unescaped `|` **inside** table cells — `max|Δ|`,
+     `head_dim: int | None`, `TP | 128` — which GitHub parses as extra columns, so the row (and in
+     `01_REFERENCE.md` §5 the whole three-row table) renders broken. Escaped to `\|`, and **only on
+     lines that start with `|`**, because outside a table `\|` renders literally. Every table in
+     every package document now has a consistent column count, checked mechanically.
+  11. **`R-019` closed.** "This package never ran `pre-commit`" was `partially resolved` since P5.1
+     with the *process* gap open. Item 1 of this gate closes it: the hooks are now a gated step over
+     all 140 files with their output in the raw log, not something a phase might remember to run.
+- **Notes:**
+  - `raw/G-CLEAN_20260904T012517Z.log` is kept deliberately alongside the verdict log: it is the
+    **first** run, the one where items 1, 2 and 9 had findings (`pre-commit` failed on the log it was
+    writing; the SPDX check had not yet distinguished the JSON exception; four modules showed no
+    test). Same convention as `G-LAYER`'s retained failing run.
+  - Item 1's `pre-commit` list is *wider* than the recipe's: it adds every file P9 itself created or
+    modified, because a sweep that only lints the pre-existing diff cannot lint its own output. The
+    one thing it cannot cover is the ledger entry written *after* it — so `pre-commit` was re-run
+    over the whole package once more at the end, including this file and the regression transcript,
+    and passes with only `trailing-whitespace` normalising the pytest output (which is what happened
+    to every earlier regression log in `raw/` too — the summary line is untouched).
+
+#### Test inventory (`G-CLEAN` item 9)
+
+`*` = reached through the `tt/attention/__init__.py` re-export, which is how every caller reaches it.
+
+| `tt/` module | Test(s) |
+|---|---|
+| `tt/attention/config.py` | `test_sp_attention_chunked.py`, + `test_attention_vs_ref.py`\* `test_attention_chunked_vs_ref.py`\* `test_decoder_layer_vs_ref.py`\* `test_model_vs_ref.py`\* `test_tp_parity.py`\* |
+| `tt/attention/dense_sp.py` | `test_sp_attention_chunked.py` (`G-SP-RING`, `G-CHUNK-ATTN`), + the five above\* |
+| `tt/attention/kv_cache.py` | `test_kv_cache_vs_ref.py` (`G-KV`), `test_kv_cache_tp8.py` (`G-KV-TP8`), `test_kv_chunk_table.py`, `test_attention_chunked_vs_ref.py`, `test_prefill_runtime_chunked.py`, `test_prefill_adapter.py`, `test_sp_attention_chunked.py`, `galaxy_prefill_kv_pcc.py` |
+| `tt/attention/operations.py` | `test_attention_vs_ref.py`, `test_attention_chunked_vs_ref.py` |
+| `tt/attention/prefill.py` | `test_attention_vs_ref.py`\* (`G-ATTN`), `test_attention_chunked_vs_ref.py`\*, `test_decoder_layer_vs_ref.py`\*, `test_model_vs_ref.py`\*, `test_tp_parity.py`\* |
+| `tt/attention/weights.py` | the same five\* — `Attention.__init__` calls `load_attention_weights`, and `G-WEIGHTS` checks its 39 device tensors bit-exactly |
+| `tt/ccl.py` | `test_ccl_semaphores.py` (`G-SEMAPHORE`), `test_factory.py`, `fabric_topology_matrix.py` |
+| `tt/config.py` | `test_mesh_config.py` (`G-MESH`), `test_tp_parity.py`, `test_factory.py`, `fabric_topology_matrix.py` |
+| `tt/embedding.py` | **`test_embedding_vs_ref.py`** (new, `DEC-122`) |
+| `tt/layer.py` | `test_decoder_layer_vs_ref.py` (`G-LAYER`), `test_tp_parity.py` |
+| `tt/lm_head.py` | **`test_lm_head_vs_ref.py`** (new, `DEC-122`) |
+| `tt/mlp.py` | `test_mlp_vs_ref.py` (`G-MLP`), `test_tp_parity.py` |
+| `tt/model.py` | `test_model_vs_ref.py` (`G-MODEL`) + 12 others |
+| `tt/model_config.py` | `test_mesh_config.py`, `test_weight_loading.py` (`G-WEIGHTS`) + 11 others |
+| `tt/model_dims.py` | `test_prefill_adapter.py` (`G-ADAPTER`; 14/14 constants vs `config.json`) |
+| `tt/rms_norm.py` | `test_rms_norm_vs_ref.py` (`G-RMS`), `test_tp_parity.py` |
+| `tt/rope.py` | `test_rope_vs_ref.py` (`G-ROPE`) + 7 others |
+| `tt/runners/adapters/llama.py` | `test_prefill_adapter.py` (`G-ADAPTER`, 29 tests) |
+| `tt/runners/kv_chunk_table.py` | `test_kv_chunk_table.py` (`G-KV-TABLE`), `test_prefill_runtime_chunked.py` |
+| `tt/tt_prefill_runtime.py` | `test_prefill_runtime_chunked.py` (`G-RUNTIME`) + 6 others |
+
+**Gaps: none.** The two that existed at the start of P9 are closed by `DEC-122`. The four modules
+reached only through the `tt.attention` re-export are **not** counted as gaps: that re-export *is*
+their public interface — nothing in or out of this package imports `tt.attention.prefill` directly —
+so a test that imports `tt.attention` and calls `Attention(...)` exercises them exactly the way the
+model does.
+
+---
+
+### G-CLEAN-REGRESSION — the whole package suite after P9's changes
+- **Command:** `PREFILL_TRACE_DIR=/home/mstojkovic/llama31_8b_golden/p7_s2048 pytest models/demos/llama31_8b_d_p/tests -q`
+- **Mesh / device:** as each test requires; the galaxy tests open the `(4,8)`.
+- **Threshold:** 0 failed.
+- **Measured:** **169 passed, 0 failed** in 1030.49 s. P10's suite was **161 passed**; P9 adds **8** tests (`tests/unit/test_embedding_vs_ref.py` 5, `tests/unit/test_lm_head_vs_ref.py` 3) and replaces one (`DEC-124`). **No test was removed and no threshold was changed.**
+- **Verdict:** **PASS**
+- **What P9 changed that a regression has to cover:** two **new** test files (`DEC-122`, 8 tests),
+  one test **replaced** by a stronger successor (`DEC-124`), and four test files' **imports**
+  redirected at the shared noise-floor helpers (`DEC-124`). `tt/` production code changed in exactly
+  one place — a docstring's invalid escape sequence in `tt/tt_prefill_runtime.py` — so no numerical
+  result can move, and none did: `G-MLP` and `G-LAYER` were re-run in isolation first
+  (`raw/G-CLEAN-MLP_20260904T013118Z.log`, 22 passed) and reproduce the P5/P6 ledger numbers to
+  every printed digit.
+- **Deviations:** none.
+- **Notes:** this run also exercises `DEC-121` end to end — `test_full_stack_per_layer_pcc_curve`
+  rewrote `raw/G-MODEL-CURVE.log` in place instead of adding a tenth timestamped copy.
+
+---
+
 STATUS after P10: gates PASS=30 FAIL=0 DEVIATION=2 BLOCKED=0 NOT-RUN=0 OUT-OF-SCOPE=1 | suite 161 passed, 0 failed | next: **P9 (cleanliness)** — P10 ran first, `BRINGUP_RECIPE.md` F.12
 P10 added `G-ADAPTER`, `G-REQUEST`, `G-MOCK-MIG`, `G-KV-TABLE` (new, `DEC-111`) and
 `G-P10-REGRESSION`; `G-LOOPBACK` stays **OUT-OF-SCOPE** by `DEC-070` (not blocked).
@@ -1899,3 +2033,33 @@ logs are small and stored plain; they hold the PCC numbers.)
 They are stored **gzipped rather than filtered** — `zcat`/`zless` to read. Compression is lossless, so
 the bytes are exactly what the run emitted; trimming the progress bars would have been the easy fix and
 would have made these five logs the only edited evidence in the ledger. 828-850 KB -> ~20 KB each.
+
+STATUS after P9: gates PASS=32 FAIL=0 DEVIATION=2 BLOCKED=0 NOT-RUN=0 OUT-OF-SCOPE=1 | suite 169 passed, 0 failed | next: **none — P9 is the last phase (`BRINGUP_RECIPE.md` F.12 order: … P8, P10, P9)**
+P9 added `G-CLEAN` (9/9) and `G-CLEAN-REGRESSION`, and closed **`R-019`** (the package is now
+hook-clean *and* the hooks are run as a gate). It opened no risk.
+New decisions: `DEC-120` (the recipe, the README and the P0-P2 logs join `verify_citations.py`'s
+`DOCS`, plus literal alias resolution — this found a **wrong technical claim** in the recipe and six
+more unchecked citations), `DEC-121` (one canonical `G-MODEL-CURVE.log` instead of nine identical
+copies), `DEC-122` (dedicated tests for `tt/embedding.py` and `tt/lm_head.py` instead of a flagged
+gap), `DEC-123` (what P9 deliberately did **not** clean, and why), `DEC-124` (the noise-floor
+helpers' promotion finished — one definition, asserted by object identity), `DEC-125` (the risk
+register rebuilt from its own body: 12 missing rows, 8 stale statuses).
+
+**The package is complete for this iteration.** Appendix C's six "definition of done" items:
+1. ✅ the P3 tree, no dead files — P9 removed two empty stray directories and eight duplicate logs.
+2. ✅ `G-CARD` … `G-CLEAN` all `PASS` or `PASS-WITH-DEVIATION` with a `DEC`, each with a raw log.
+3. ✅ `G-ADAPTER` / `G-REQUEST` / `G-MOCK-MIG` `PASS`; `G-LOOPBACK` **out-of-scope by `DEC-070`**
+   with the reasoning and the exact residual gap (`R-040`) stated in `08_PREFILL_INTEGRATION.md` §4.
+4. ✅ `bringup_log/` reads as a narrative — 125 decisions, 32 gates, 34 risks, all citation-checked
+   (`661/661`, `973/973`).
+5. ✅ `README.md` — architecture, deployment path, measured-PCC status table, run commands, env-var
+   table built from a **grep of the source**, layout, "what is not implemented", and the
+   "why not `models/common`" line Appendix F.3 demands.
+6. ✅ `07_RISKS.md` — every risk has a row and a section that agree (`DEC-125`).
+
+**The one open engineering gap is `R-040`**: the multi-rank merged KV-chunk table and the D2D
+pipeline activation layout are unexercised, because Gate 1 is single-rank by the engine's design and
+Gate 2 needs a binary this environment does not have. `DEC-109` turned it from latent into loud —
+`build_kv_chunk_table` raises rather than publishing a wrong table — and `DEC-109`'s three refusals
+are the checklist for whoever implements the merge. **`R-001` also remains open and is not
+engineering:** somebody has to confirm that `llama31_8b_d_p` was meant to be Llama-3.1-8B-Instruct.

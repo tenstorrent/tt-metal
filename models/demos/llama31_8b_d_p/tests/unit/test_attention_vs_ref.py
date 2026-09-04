@@ -45,8 +45,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.demos.llama31_8b_d_p.tests.test_factory import TestFactory
-from models.demos.llama31_8b_d_p.tests.unit.test_mlp_vs_ref import err_ratio, quantize_like_device
+from models.demos.llama31_8b_d_p.tests.test_factory import TestFactory, err_ratio, quantize_like_device
 from models.demos.llama31_8b_d_p.tests.unit.test_rope_vs_ref import _hf_cos_sin_from_meta, _hf_to_meta_layout
 from models.demos.llama31_8b_d_p.tt.attention import Attention, ProgramConfig, attention_config_from_hf
 from models.demos.llama31_8b_d_p.tt.attention.operations import (

@@ -636,7 +636,7 @@ from `config.json`; benign for Llama-3.x, silently wrong for any model that chan
 
 `models/tt_transformers/tt/attention.py:641-723` implements **both** (dispatch at `:159-173` is the
 better anchor), selected by
-`ModelArgs.use_hf_rope`, whose default is `False` (`model_config.py:623`) — i.e. llama runs the Meta
+`ModelArgs.use_hf_rope`, whose default is `False` (`models/tt_transformers/tt/model_config.py:623`) — i.e. llama runs the Meta
 path today, and the comment there notes HF is intended to become the only one (issue #37605).
 
 **Take the Meta path (`rotary_embedding_llama`)**: it is what both prefill templates use
@@ -1227,7 +1227,8 @@ Keep the `requires_hf_reference` skip marker anyway so the suite still runs on a
 - **Decide dict-vs-object for `hf_config` explicitly and hold it.** Templates pass an object
   (`minimax_m3/tt/dense_mlp.py:47` does `hf_config.hidden_size`); `llama_config_dims()` returns a dict;
   `get_rope_theta` wants a dict. A silent mix is how `None` dims get in.
-- `ModelArgs.reference_*` accessors **raise without `HF_MODEL`** (`model_config.py:702`), so the
+- `ModelArgs.reference_*` accessors **raise without `HF_MODEL`**
+  (`models/tt_transformers/tt/model_config.py:702`), so the
   recipe's "preferred option 1" is unreachable on a weightless box. With F.1 they now work, but the
   in-test torch math remains the better oracle for P5/P6: no checkpoint, faster, and gate-validated.
 - `get_rot_transformation_mat(dhead=32)` **ignores its argument** (`common.py:564` hard-codes 32).
@@ -1306,9 +1307,16 @@ path.**
 - `head_dim` 64 -> 128 was real but minor: the shard spec
   `shard_shape=[1, 1, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK(=32), head_dim]` (`kv_cache.py:87`)
   parameterises it and 128 is tile-aligned; P7 measured it clean.
-- Also note `write_kv_chunk` takes **one KV head per call** (`kv_cache.py:181`); handing it a
-  `[1,8,S,128]` tensor silently writes only head 0. Slice per head — which is exactly what a chip does
-  at TP=8.
+- Also note `write_kv_chunk` writes **one user per call** and asserts it
+  (`models/demos/gpt_oss_d_p/tt/attention/kv_cache.py:148`, mirrored at
+  `models/demos/llama31_8b_d_p/tt/attention/kv_cache.py:181`): the op ignores the leading batch dim,
+  so a `batch > 1` tensor would silently write only `slot_idx`. Multi-user prefill must loop
+  `slot_idx + b` at the call site. The **head** count is not this assert's business — it is the op's
+  own `TT_FATAL` cited above, which is why the `nkv = tp` mapping has to be proved by a TP=8 run
+  rather than assumed. *(P9 correction: this bullet previously read "takes one KV head per call",
+  citing the bare basename `kv_cache.py` at line 181. Both halves were wrong — the basename resolves
+  to gpt-oss's copy, which has only 177 lines, and the assert is about the batch dim, not heads.
+  `DEC-120`.)*
 
 **So the first thing P8 must run is a `(1,8)`/TP=8 parametrisation** — no SP, cheap, and it proves the
 model -> cache mesh-mapper step (KV head `c` -> mesh column `c`) *before* any sequence-parallel bug can

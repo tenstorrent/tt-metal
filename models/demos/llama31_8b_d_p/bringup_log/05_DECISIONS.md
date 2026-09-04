@@ -1471,7 +1471,8 @@ Template: `BRINGUP_RECIPE.md` §1.3.
   positional read-back assert needs values that survive the cache dtype bit-exactly.
 - **Two decisions:**
   1. **Helper placement.** `quantize_like_device` and `err_ratio` are defined in
-     `tests/unit/test_mlp_vs_ref.py:67` / `:78` and imported by the attention and KV tests, rather
+     `tests/unit/test_mlp_vs_ref.py` (at `:67` / `:78` as of P5) and imported by the attention and
+     KV tests, rather
      than added to the shared `tests/test_factory.py`. Reason: `test_factory.py` is shared with the
      session that owns `tt/rms_norm.py`, which was being edited concurrently; a cross-test import is
      already the established pattern here (`test_rope_vs_ref.py:50` imports from
@@ -1667,7 +1668,7 @@ Template: `BRINGUP_RECIPE.md` §1.3.
   Layer 1's MLP delta carries `max|x| = 310` against a `mean|x|` of 0.014 — a ~22000x outlier, and
   `L2` 506.8 against its neighbours' 14-19. This is Llama-3's well-known **massive activation**, not
   a bug (the surrounding PCCs are the gated ones and layer 1 is in fact the curve's *best* layer at
-  0.9999813, `raw/G-MODEL-CURVE_20260903T195712Z.log`). It is exactly why the residual stream and
+  0.9999813, `raw/G-MODEL-CURVE.log`). It is exactly why the residual stream and
   the embedding output are **bf16 and not bf8_b** (a per-tile shared exponent set by 310 crushes
   every other channel in that tile), and it is invisible in `L2` / `mean|x|` / `signed_mean` alone —
   which is the argument for the fourth statistic. `signed_mean` stays at ~1e-4 everywhere, i.e. no
@@ -1796,7 +1797,7 @@ Template: `BRINGUP_RECIPE.md` §1.3.
   activation cannot produce the artefact the recipe asks for. The compatibility cost is a **loud**
   `TypeError` for a one-argument callback copied from gpt-oss — not a silent behaviour change — and
   P10 owns no such callback yet, so the cost is a documentation line rather than a migration.
-- **Evidence:** the curve itself, `raw/G-MODEL-CURVE_*.log`, produced from one forward pass.
+- **Evidence:** the curve itself, `raw/G-MODEL-CURVE.log`, produced from one forward pass.
 - **Confidence:** high.
 - **Falsifier:** a P10 adapter that must accept gpt-oss's one-argument callback verbatim. If so,
   accept both arities by inspection at construction — not by dropping the tensor.
@@ -1807,7 +1808,8 @@ Template: `BRINGUP_RECIPE.md` §1.3.
 ### DEC-046 — `quantize_like_device` and `err_ratio` promoted to `tests/test_factory.py`; the P5 copies stay, with a drift guard
 - **Phase / module:** P6 / `tests/test_factory.py`
 - **Date (UTC):** 2026-09-03
-- **Trigger:** `DEC-037` parked both helpers in `tests/unit/test_mlp_vs_ref.py:67` / `:78` because
+- **Trigger:** `DEC-037` parked both helpers in `tests/unit/test_mlp_vs_ref.py` (`:67` / `:78` as
+  of P5) because
   `test_factory.py` was being edited concurrently, and asked P6 to promote them "once no session is
   mid-edit". They are now used by six gates (`G-MLP`, `G-ATTN`, `G-KV`, `G-LAYER`, `G-WEIGHTS`,
   `G-MODEL`).
@@ -1827,6 +1829,10 @@ Template: `BRINGUP_RECIPE.md` §1.3.
   PASSED.
 - **Confidence:** high.
 - **Falsifier:** the guard test failing, which is the point.
+- **P9 UPDATE (`DEC-124`):** done. The P5 copies are deleted, `test_mlp_vs_ref.py` imports from
+  `tests/test_factory.py`, and the drift guard is replaced by
+  `test_noise_floor_helpers_have_exactly_one_definition`, which asserts **object identity** across
+  all four importing test modules. This entry's `path:line` refs above are therefore historical.
 - **Revisit if:** whoever next edits `test_mlp_vs_ref.py` replaces its two definitions with an
   import from `tests/test_factory.py` — at which point the guard test should be deleted in the same
   edit.
@@ -1855,12 +1861,12 @@ Template: `BRINGUP_RECIPE.md` §1.3.
   1 *drops* to 1.87e-05 (a 0.22x "step") purely because the embedding-sized residual at layer 0 is
   small. From layer 3 the measured curve is smooth: the ratio stays in **0.99x-1.38x** across all 29
   remaining layers, with the maximum 1.38x at layer 30
-  (`raw/G-MODEL-CURVE_20260903T195712Z.log`). 4.0 therefore sits ~2.9x above the worst observed
+  (`raw/G-MODEL-CURVE.log`). 4.0 therefore sits ~2.9x above the worst observed
   value while still catching a single layer that contributes as much error as the three before it
   combined. A step is
   what a swapped weight, an off-by-one layer index or a stale single-tensor cache entry looks like —
   `DEC-039`'s and `DEC-042`'s failure modes seen from the activation side.
-- **Evidence:** `raw/G-MODEL-CURVE_*.log` (the full curve and the max step),
+- **Evidence:** `raw/G-MODEL-CURVE.log` (the full curve and the max step),
   `raw/G-MODEL_*.log` (the err ratios at 2 and 4 layers), `raw/G-LAYER_20260903T184846Z.log`,
   `raw/G-ATTN_20260903T180817Z.log`.
 - **Confidence:** medium-high. The step threshold is the softer of the two: it is calibrated on one
@@ -1998,7 +2004,7 @@ Template: `BRINGUP_RECIPE.md` §1.3.
   output, and whether the last entry is pre- or post-final-norm, both matter for the curve. A hook
   on `LlamaDecoderLayer` returns exactly its output tensor (`modeling_llama.py:332`), which is
   unambiguously what `tt/layer.py` returns.
-- **Evidence:** `raw/G-MODEL_*.log`, `raw/G-MODEL-CURVE_*.log`.
+- **Evidence:** `raw/G-MODEL_*.log`, `raw/G-MODEL-CURVE.log`.
 - **Confidence:** high.
 - **Falsifier:** a transformers upgrade that changes `LlamaDecoderLayer.forward`'s return type from
   a tensor to a tuple — the hook would then capture a tuple and the shape assertion fires loudly.
@@ -3017,3 +3023,267 @@ Template: `BRINGUP_RECIPE.md` §1.3.
 - **Evidence:** `raw/G-KV-TABLE_20260904T000847Z.log`, 2 passed.
 - **Confidence:** high.
 - **Blast radius:** new test file; new row in `06_GATES.md`. No production code.
+
+---
+
+### DEC-120 — `BRINGUP_RECIPE.md` and the P0–P2 logs join `verify_citations.py`'s `DOCS`, and the aliases resolve literally
+- **Phase / module:** P9 / `scripts/verify_citations.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** P9 item 3 of the "P9 owes" list in `06_GATES.md`: the recipe was **not** in `DOCS`, so
+  its own `path:line` refs were never machine-checked, and P10 had already found one stale reference
+  in it by hand (Appendix F.13). The same check found `00_MODEL_CARD.md`, `01_REFERENCE.md` and
+  `02_SURVEY.md` were absent too — every P0–P2 document, i.e. the three that carry the most
+  citations into `models/tt_transformers` and the HF package.
+- **Question:** add the recipe only, as the ledger asked, or every unscanned prose file?
+- **Choice:** add **all five** — `BRINGUP_RECIPE.md`, `README.md` (new in this phase), and
+  `00`/`01`/`02` — and additionally teach `_resolve` the script's own path aliases (`TT/`, `GO/`,
+  `M3/`, `DS/`, `CP/`, `CM/`, `LL/`), which `02_SURVEY.md` and the recipe use in **86** citations.
+- **Why the alias map and not just the two failures it fixed:** all 86 of those refs *did* resolve
+  before, but only by falling through to the ambiguous-basename path — i.e. by luck. The day a
+  second file with the same basename is cited anywhere in the logs, an unrelated ref flips to a
+  failure. Expanding the alias makes them literal, which is what a `path:line` is supposed to be.
+- **What it caught (7 real defects, none of which any earlier gate could see):**
+  1. `BRINGUP_RECIPE.md` F.6 — *"`write_kv_chunk` takes **one KV head per call**"*, citing the bare
+     basename `kv_cache.py` at line 181. **Both halves wrong.** That basename resolves to gpt-oss's
+     copy, which has 177 lines, and the
+     assert at our own `tt/attention/kv_cache.py:181` is about the **batch** dim, not heads. Rewritten
+     to say what the code says, with full paths and a marked correction.
+  2. `BRINGUP_RECIPE.md:639` — bare `model_config.py` at 623 → `models/tt_transformers/tt/model_config.py:623`.
+  3. `BRINGUP_RECIPE.md` F.2 — bare `model_config.py` at 702 → the same file, full path.
+  4. `01_REFERENCE.md:309` — bare `model_config.py` at 4368-4376 → the same file, full path.
+  5. `02_SURVEY.md:139` — bare `model.py` at 890 → `models/common/models/llama3_8b/model.py:890`. This is the
+     citation behind the README's "why not the existing llama3_8b" line, so it is load-bearing.
+  6. `02_SURVEY.md:164` used the *script variable* alias form `TT/tt/model_config.py` in prose.
+  7. `00_MODEL_CARD.md:139` cited `single_bh_galaxy_mesh_graph_descriptor.textproto` by basename.
+  Separately, the sweep removed a **stale duplicate `| **P10** Disagg prefill | … | ⬜ |` row** in
+  `06_GATES.md`'s checklist — a P3 leftover orphaned outside the table by the P3 correction
+  blockquote, claiming P10 was not started four rows under the row saying all four of its gates PASS.
+- **Cost:** `DOCS` grows from 6 prose files (745 refs) to 11 (**956** refs). `CITES` is unchanged at
+  662 except for four line numbers in `tests/unit/test_model_vs_ref.py` that `DEC-121`'s six-line
+  edit shifted.
+- **Evidence:** `raw/G-CLEAN_20260904T015705Z.log` item 7 — **661/661** verified, **973/973**
+  resolved (from 662/745 before this change). The first sweep, `raw/G-CLEAN_20260904T012517Z.log`,
+  is the run in which the seven defects above were surfaced.
+- **Confidence:** high.
+- **Falsifier:** a `path:line` in any package document that still resolves only by basename luck.
+  `_resolve` reports the resolution note, so this is inspectable, not assumed.
+- **Revisit if:** a new prose file is added to the package — it must be added to `DOCS` in the same
+  edit, exactly as Appendix F.9 says a new gate must get its test file in the same edit.
+- **Blast radius:** `scripts/verify_citations.py`, and one corrected sentence each in
+  `BRINGUP_RECIPE.md`, `00_MODEL_CARD.md`, `01_REFERENCE.md`, `02_SURVEY.md`, `06_GATES.md`.
+
+---
+
+### DEC-121 — `G-MODEL-CURVE` writes **one canonical file**, not one per run
+- **Phase / module:** P9 / `tests/unit/test_model_vs_ref.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** `bringup_log/raw/` held **nine** `G-MODEL-CURVE_<timestamp>.log` files — one per
+  incidental run of the suite between P6 and P10, none of them deliberate evidence.
+- **Question:** should the test stop writing the curve, or should one copy be kept?
+- **The measurement that settles it:** all nine are **byte-identical** (`md5 216dfc9c3c2ec92eb6c5a9b88c58fa00`).
+  The curve is deterministic — seeded token ids, fixed weights, no device nondeterminism at `(1,1)`
+  — so timestamping produced nine copies of one artifact and would have produced a tenth on the next
+  `pytest` invocation. That is not evidence accumulating; it is noise accumulating.
+- **Options considered:**
+  1. Stop writing it. Rejected: the per-layer curve is the one thing an aggregate PCC cannot give,
+     it is cited by `DEC-047`, `DEC-052`, `R-025` and `G-MODEL`, and the recipe's rule is that a gate
+     with no raw log did not happen.
+  2. Keep the nine, change nothing. Rejected: it grows without bound and none of the nine is
+     distinguishable from the others.
+  3. **One canonical, git-tracked file, rewritten in place.** Chosen.
+- **Choice:** `raw/G-MODEL-CURVE.log`, with the run's timestamp moved *into* the file as a
+  `generated :` header line. The nine copies collapse to one (`git mv` + `git rm`), and the four doc
+  citations that named the timestamped file now name the stable one.
+- **Why in-place rewrite is the right behaviour, not a hazard:** the file is tracked, so a re-run
+  that changes the numbers shows up as a `git diff` — which is *stronger* evidence than a new file
+  nobody compares against the old one. A re-run that changes nothing leaves the tree clean.
+- **Evidence:** `raw/G-MODEL-CURVE.log`, and the appendix of `raw/G-CLEAN_20260904T015705Z.log`:
+  `git ls-tree 1783edc25de` lists **9 files with 1 blob hash** (`297b2237…`) — byte-identity proved
+  from the index, not from a transient `md5sum`.
+- **Confidence:** high.
+- **Revisit if:** the curve stops being deterministic (a device path, or unseeded inputs) — then a
+  timestamped file per run is the right shape again, and the accumulation becomes meaningful.
+- **Blast radius:** one test's output path; four citations in `05_DECISIONS.md`, `06_GATES.md`,
+  `07_RISKS.md`. No assertion, threshold or measured number changes.
+
+---
+
+### DEC-122 — The two `tt/` modules with no test of their own get one, rather than a flagged gap
+- **Phase / module:** P9 / `tests/unit/test_embedding_vs_ref.py`, `tests/unit/test_lm_head_vs_ref.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** P9 item 9 — the test inventory. Of 20 non-`__init__` modules under `tt/`, **18** are
+  named by at least one test. The two that were not: `tt/embedding.py` and `tt/lm_head.py`.
+- **Question:** the recipe says "list the mapping and **flag** gaps". Is flagging enough?
+- **What the existing coverage actually is:** both are exercised **transitively** by
+  `tests/unit/test_model_vs_ref.py` through `tt/model.py` — `G-MODEL`, which scores the 32-layer
+  stack at PCC 0.9997646 and checks top-1 agreement 5/5. That is real, and it is end-to-end. Its
+  weakness is specific and worth stating: an embedding bug arrives there as *"the model is slightly
+  off"* rather than as *"the gather is wrong"*, and the LM head's only dedicated assertion is a
+  single `argmax` over 128256 logits — the head can be measurably wrong at every token except the
+  winner and still pass.
+- **Choice:** write both tests. 8 new tests, `(1,1)` mesh, ~20 s total.
+- **Two design points that make them worth having rather than box-ticking:**
+  * **The embedding gate is `torch.equal`, not PCC.** `ttnn.embedding` is a *gather*: it copies rows,
+    it does not compute, so there is no arithmetic error to tolerate and the honest threshold is
+    exactness against `bfloat16(table)[tokens]`. A PCC threshold would hide an off-by-one row index
+    behind 0.9999-something. Measured: **0 / 2097152 elements differ**.
+  * **`vocab_size` is reduced to 8192** via `dataclasses.replace`, and deliberately **not** to
+    `hidden_size`: the real table is 2.0 GiB in fp32 on the host for a test that indexes it, and a
+    square weight would let a `[out, in]` / `[in, out]` transpose error pass.
+- **Measured:** embedding **bit-exact** at s32 and s512, shuffled-token control fails as required;
+  LM head **PCC 0.9999459 / 0.9999460** (s32 / s512) against a bf8_b storage floor of 0.9999741,
+  **err_ratio 2.09x** against the 3.0x single-op ceiling (Appendix E.2); 7 refusals matched on
+  message.
+- **Evidence:** `raw/G-CLEAN-REGRESSION_20260904T013905Z.log`; the per-test numbers are in
+  `06_GATES.md`'s `G-CLEAN-REGRESSION` block.
+- **Confidence:** high.
+- **Falsifier:** neither test would have caught a *layout* bug that `tt/model.py` compensates for,
+  because both call the module directly. That is what `G-MODEL` remains for; these do not replace it.
+- **Blast radius:** two new test files; the suite goes 161 → 169. No production code changed.
+
+---
+
+### DEC-123 — What P9 deliberately did **not** clean: three `except Exception` handlers and one vestigial probe
+- **Phase / module:** P9 / `tt/layer.py`, `tt/tt_prefill_runtime.py`, `tests/unit/test_sp_attention_chunked.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** P9 items 4 and 5. A cleanliness sweep whose only output is "I deleted things" is not
+  a review; the cases it consciously leaves have to be recorded or the next sweep re-litigates them.
+- **The three broad handlers, and why each stays:**
+  1. `tt/layer.py:90` — the `LLAMA31_8B_DELTA_PROBE` residual probe. This is **the case the recipe's
+     item 4 explicitly allows**: a debug probe that must never be able to fail a run. It satisfies
+     the condition attached to that allowance — it **logs**, at WARNING, naming the layer and the
+     tag. It is off by default and touches no value the model uses.
+  2. `tt/tt_prefill_runtime.py:110` — `_dense_sp_is_implemented`, which calls
+     `dense_sp_attention()` with no arguments and reads the exception type. `NotImplementedError`
+     meant the P5 stub; anything else (in practice `TypeError`) means a real signature. Broad by
+     construction: the whole point is that it must not care *which* non-`NotImplementedError` it
+     gets. Carries a `# noqa: BLE001` with that reasoning.
+  3. `tests/unit/test_sp_attention_chunked.py:480` — records **which** failure the
+     `fp32_dest_acc_en=True` A/B produces (`DEC-084`'s `TT_FATAL`). Narrowing it would make the test
+     assert the failure it already found rather than report the one it gets.
+  Everything else in the package catches a **named** exception type; there is no `except: pass`
+  anywhere, and no broad handler on a correctness path.
+- **The vestigial probe, left alone on purpose:** `_dense_sp_is_implemented` can now only return
+  `True` — P8 landed the real `dense_sp_attention`, so the `NotImplementedError` branch is
+  unreachable, and the `assert` at `tt_prefill_runtime.py:193` that consumes it can no longer fire.
+  It reads as dead code and P9 considered deleting it. It stays because
+  `tests/unit/test_prefill_runtime_chunked.py:384` **asserts it returns `True`** — i.e. the probe is
+  the mechanism by which "P8's port actually landed" is under test, and deleting the probe means
+  deleting that assertion. P9's hard rule forbids removing a test to make something look clean.
+- **What P9 *did* remove:** two empty directories (`docs/`, never populated; `build/`, a stray
+  profiler artifact tree) and eight duplicate raw logs (`DEC-121`). No source line was deleted.
+- **Evidence:** `raw/G-CLEAN_20260904T015705Z.log` items 4 and 5 — the handler list with three lines
+  of context each, `except: pass` **(none)**, autoflake reporting **0** unused-import removals, and
+  **0** of 7 keyword-leading comment lines parsing as Python.
+- **Confidence:** high.
+- **Revisit if:** `dense_sp_attention` ever gains an arity that makes the zero-argument probe
+  ambiguous — then the probe should become an explicit capability flag and the test should assert
+  *that*.
+- **Blast radius:** none — this decision records what was left unchanged.
+
+---
+
+### DEC-124 — The noise-floor helpers' promotion is **finished**: one definition, asserted by identity
+- **Phase / module:** P9 / `tests/test_factory.py`, `tests/unit/test_mlp_vs_ref.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** P9 item 5 (duplicated / dead code). `quantize_like_device` and `err_ratio` still had
+  **two definitions**: the P5 originals in `tests/unit/test_mlp_vs_ref.py` and the P6 promotion in
+  `tests/test_factory.py`. `DEC-046` recorded the promotion as done and explicitly left the copies,
+  because P6 was not permitted to edit a P5-owned test file mid-review; `DEC-037` before it had
+  parked them there only because `test_factory.py` was being edited by a concurrent session. Both
+  constraints expired two phases ago and nobody removed the copies.
+- **Question:** is this worth touching at the end of a bring-up, given that it changes no number?
+- **Scope, measured before deciding:** the two implementations differ **only** cosmetically — type
+  annotations, docstring wording, and whether `import ttnn` is module-level or function-local. The
+  arithmetic is character-for-character the same, `test_promoted_helpers_match_the_p5_copies` had
+  been asserting exactly that since P6, and it passed on every run. **No measured number in this
+  package is affected, and no gate needed re-running for correctness.**
+- **Choice:** delete the P5 copies; `test_mlp_vs_ref.py` and the three other importers
+  (`test_attention_vs_ref.py`, `test_kv_cache_vs_ref.py`, P9's new `test_lm_head_vs_ref.py`) now all
+  import from `tests/test_factory.py`. The shared copy is the one kept — it is the one whose
+  docstring carries the `DEC-032` / Appendix E.1 / E.2 / E.5 reasoning.
+- **Why bother, since nothing moves:** `quantize_like_device` is the primitive **every** gate's error
+  ratio is built on — `G-MLP`, `G-ATTN`, `G-KV`, `G-LAYER`, `G-WEIGHTS`, `G-MODEL`, and now the two
+  P9 additions. Two copies of it is precisely the thing that *becomes* a correctness bug the first
+  time someone edits one and not the other, at which point two gates are quietly measuring against
+  two different floors. This package is going to be read as a reference for future bring-ups, and a
+  duplicated core helper with a "please tidy this later" comment teaches the wrong pattern.
+- **The guard test is replaced, not deleted.** `test_promoted_helpers_match_the_p5_copies` asserted
+  the two copies were *equal*. Its successor,
+  `test_noise_floor_helpers_have_exactly_one_definition`, asserts they are the **same object**
+  across all four importing modules, plus that the primitive is not a no-op in either dtype. That is
+  a strictly stronger statement than the one it replaces, so this is not a test being weakened to
+  make a sweep look clean — the property it guarded is now structural, and the test now guards
+  against the duplication *coming back*.
+- **Evidence:** `G-MLP` re-run after the change — PCC **0.9999148 / 0.9999143 / 0.9999144** @bf8_b
+  and **0.9999852 / 0.9999852 / 0.9999852** @bf16 at seq 32/512/4096, floors 0.9999223 / 0.9999929,
+  err_ratio **1.10x / 2.09x**: **identical to the P5 `G-MESH`-era numbers to every printed digit**.
+  Raw: `raw/G-CLEAN-MLP_20260904T013118Z.log`.
+- **Confidence:** high.
+- **Falsifier:** the identity assertion failing, i.e. a second definition reappearing.
+- **Blast radius:** four test files' imports, one test replaced, two `CITES` entries in
+  `verify_citations.py`. No production code, no threshold, no measured number.
+
+---
+
+### DEC-125 — `07_RISKS.md`'s summary table is rebuilt from its own body
+- **Phase / module:** P9 / `bringup_log/07_RISKS.md`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** reading the package the way a new engineer would — top of each document first. The
+  risk register's summary table is the **first** thing anyone sees in `07_RISKS.md`, and it did not
+  agree with the document it summarises.
+- **What was wrong, mechanically counted:**
+  * **Twelve** risks had a full section and **no row at all**: `R-018`-`R-025` (P5/P6),
+    `R-031`-`R-033` (P8) and — worst — **`R-040`**, the single genuinely open engineering gap in the
+    package (the untested multi-rank KV-chunk-table merge). Every phase after P4 added sections and
+    stopped adding rows.
+  * **Eight** rows carried a status their own closure section contradicts: `R-003` (`blocked`, but
+    void since Appendix F.1 staged the weights), `R-012` / `R-013` / `R-017` / `R-027` / `R-028` /
+    `R-029` (all closed by P8, with "Status updates and closures from P8" sitting 700 lines below
+    saying so) and `R-030` (closed by P10).
+- **Why this is a real defect and not tidiness:** the summary is what a reviewer reads to decide
+  whether the package is safe to build on. As it stood it said **four open high-severity risks**
+  (`R-001`, `R-003`, `R-027`, `R-028`) when only `R-001` — *"confirm the intended model is
+  Llama-3.1-8B-Instruct"* — is genuinely open, and it **omitted the one risk that should drive the
+  next engineer's plan**. Both errors point the same way: they make the package look riskier where
+  it is proven and safer where it is not.
+- **Choice:** rebuild the table — 34 rows, one per section, statuses taken verbatim from the closure
+  sections — and put a dated audit note above it saying what was corrected. **No section text was
+  changed**: the body was already right, only the register was stale.
+- **Why not just append the missing rows:** because the stale statuses were the more dangerous half,
+  and fixing one without the other leaves the same class of defect in place.
+- **Evidence:** the count is reproducible — parse the table rows and the `^##+ R-NNN` headings and
+  diff the two sets.
+- **Confidence:** high.
+- **Falsifier:** a risk with a section and no row, or a row whose status disagrees with its section.
+- **Revisit if:** a phase closes a risk — the register row must move in the **same** edit as the
+  closure section, which is the same rule Appendix F.9 states for gates and their test files, and
+  `DEC-120` states for prose files and `DOCS`.
+- **Also in this pass, same class of defect:** eleven table rows in `00_MODEL_CARD.md`,
+  `01_REFERENCE.md`, `02_SURVEY.md` and `03_OUTLINE.md` contained an unescaped `|` inside a
+  cell (`max|Δ|`, `head_dim: int | None`, `TP | 128`) and therefore **do not render** — one of
+  them takes `01_REFERENCE.md` §5's whole cross-reference table with it. Escaped, and only on
+  lines beginning with `|`, since outside a table the escape would show. A column-count check
+  over every package document now passes.
+- **Blast radius:** `bringup_log/07_RISKS.md`'s summary table, and eleven table rows in the
+  P0-P3 logs. No prose claim changed.
+
+### DEC-130 — R-001 CLOSED: the model is confirmed Llama-3.1-8B-Instruct
+- **Phase / module:** orchestrator, post-P9
+- **Date (UTC):** 2026-09-04
+- **Trigger:** P9's final assessment listed `R-001` as the second-most-important open item —
+  "the whole package rests on `llama31_8b_d_p` meaning Llama-3.1-**8B**... cheap to confirm and
+  embarrassing to discover late." Correct, and the session had no way to resolve it.
+- **Resolution:** **the user confirmed it directly.** Asked whether the target was still
+  Llama-3.1-8B-Instruct, the answer was yes. The user also renamed the package to `31_8b` themselves
+  mid-run (reverted at the time only because the rename landed while a phase session was live, then
+  redone properly at the P7/P8 boundary), which is independent corroboration of intent.
+- **Supporting evidence, already on file:** `models/tt_transformers/model_params/` enumerates the
+  Llama-3.2 family as 1B / 3B / 11B-Vision / 90B — there is **no** `Llama-3.2-8B`; the only 8B Llama
+  in this tree is 3.1. The staged checkpoint's live `config.json` byte-matches the bundled
+  `Llama-3.1-8B-Instruct` dims.
+- **Status change:** `R-001` moves from OPEN (assumption awaiting confirmation) to **CLOSED
+  (confirmed)**. `00_MODEL_CARD.md`'s identity row is no longer an assumption.
+- **Blast radius:** none — the resolution confirms what was already built. Had it gone the other way
+  the retarget was priced at three `config.json` keys (`rope_scaling.factor`,
+  `tie_word_embeddings`, explicit `head_dim`), all read at runtime.

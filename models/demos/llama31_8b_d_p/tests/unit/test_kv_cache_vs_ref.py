@@ -48,8 +48,7 @@ import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.common.prefill.runners.migration import get_num_dram_banks
 from models.demos.deepseek_v3_d_p.tt.mla.utils import block_cyclic_reorder, blockcyclic_positions
-from models.demos.llama31_8b_d_p.tests.test_factory import TestFactory
-from models.demos.llama31_8b_d_p.tests.unit.test_mlp_vs_ref import err_ratio, quantize_like_device
+from models.demos.llama31_8b_d_p.tests.test_factory import TestFactory, err_ratio, quantize_like_device
 from models.demos.llama31_8b_d_p.tt.attention.kv_cache import (
     LLAMA_HEAD_DIM,
     NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,

@@ -1,0 +1,205 @@
+
+===================================================================
+G-CLEAN  2026-09-04T01:25:17Z  package=models/demos/llama31_8b_d_p  HEAD=1783edc25de
+===================================================================
+
+===================================================================
+[1/9] pre-commit run --files $(git diff --name-only 1783edc25de~5 -- models/demos/llama31_8b_d_p) + the P9 additions
+===================================================================
+files: 140
+trim trailing whitespace..................................................................Passed
+fix end of files..........................................................................Failed
+- hook id: end-of-file-fixer
+- exit code: 1
+
+Fixing models/demos/llama31_8b_d_p/bringup_log/raw/G-CLEAN_20260904T012517Z.log
+
+check yaml............................................................(no files to check)Skipped
+check for merge conflicts.................................................................Passed
+black.....................................................................................Passed
+autoflake.................................................................................Passed
+isort.....................................................................................Passed
+gersemi...............................................................(no files to check)Skipped
+yamllint..............................................................(no files to check)Skipped
+clang-format..........................................................(no files to check)Skipped
+tests: use the expect_error fixture instead of pytest.raises..............................Passed
+check for large files (>500 KB)...........................................................Passed
+validate-metalium-includes................................................................Passed
+Verify that there is no global torch import in ttnn.......................................Passed
+Forbid get_read_ptr on cb_reserve_back'd CBs (issue...................(no files to check)Skipped
+Prevent edits to frozen pybind11 sources under ttnn...................(no files to check)Skipped
+Convert .ipynb to .py for ttnn basic examples.............................................Passed
+Detect legacy device operation classes in newly added files...........(no files to check)Skipped
+Detect smuggled buffer-address runtime args in descriptor factories...(no files to check)Skipped
+Detect ProgramDescriptor rebuilds inside override_runtime_arguments...(no files to check)Skipped
+Validate golden bandwidth CSV column headers..........................(no files to check)Skipped
+tt-triage type checks.................................................(no files to check)Skipped
+llk: fix std::uint*_t and add cstdint include.........................(no files to check)Skipped
+autoflake (llk).......................................................(no files to check)Skipped
+isort (llk)...........................................................(no files to check)Skipped
+black (llk)...........................................................(no files to check)Skipped
+pylint (llk)..........................................................(no files to check)Skipped
+codespell (llk).......................................................(no files to check)Skipped
+pre-commit exit: 1
+
+===================================================================
+[2/9] SPDX header pair on every file
+===================================================================
+source files checked: 70
+  MISSING ['SPDX-FileCopyrightText', 'SPDX-License-Identifier']: models/demos/llama31_8b_d_p/bringup_log/raw/.gitignore
+  MISSING ['SPDX-FileCopyrightText', 'SPDX-License-Identifier']: models/demos/llama31_8b_d_p/configs/Llama-3.1-8B-Instruct/config.json
+  MISSING ['SPDX-FileCopyrightText', 'SPDX-License-Identifier']: models/demos/llama31_8b_d_p/tt/runners/manifests/llama31_8b_d_p.json
+missing: 3
+
+===================================================================
+[3/9] TODO / FIXME / XXX / HACK in package source
+===================================================================
+models/demos/llama31_8b_d_p/tt/embedding.py:15:gain. ``models/demos/gpt_oss_d_p/tt/model.py:82`` carries the same deferral as a TODO. The
+models/demos/llama31_8b_d_p/tests/unit/test_ccl_semaphores.py:156:    It deliberately does *not* touch the barrier or ring-attention semaphores — an upstream TODO
+--- prose (recipe + bringup_log) hits, for the record ---
+models/demos/llama31_8b_d_p/BRINGUP_RECIPE.md:3
+models/demos/llama31_8b_d_p/README.md:0
+models/demos/llama31_8b_d_p/bringup_log/00_MODEL_CARD.md:0
+models/demos/llama31_8b_d_p/bringup_log/01_REFERENCE.md:0
+models/demos/llama31_8b_d_p/bringup_log/02_SURVEY.md:0
+models/demos/llama31_8b_d_p/bringup_log/03_OUTLINE.md:1
+models/demos/llama31_8b_d_p/bringup_log/04_CCL_PLAN.md:1
+models/demos/llama31_8b_d_p/bringup_log/05_DECISIONS.md:5
+models/demos/llama31_8b_d_p/bringup_log/06_GATES.md:1
+models/demos/llama31_8b_d_p/bringup_log/07_RISKS.md:1
+models/demos/llama31_8b_d_p/bringup_log/08_PREFILL_INTEGRATION.md:0
+
+===================================================================
+[4/9] except: pass / bare except Exception
+===================================================================
+models/demos/llama31_8b_d_p/scripts/verify_citations.py:679:    (f"{GO}/tt/layer.py", 35, "except Exception"),
+models/demos/llama31_8b_d_p/tt/tt_prefill_runtime.py:110:    except Exception:  # noqa: BLE001 - a TypeError here means a real signature, i.e. implemented
+models/demos/llama31_8b_d_p/tt/layer.py:90:    except Exception as e:  # never let the probe break a run
+models/demos/llama31_8b_d_p/tests/unit/test_sp_attention_chunked.py:480:    except Exception as exc:  # noqa: BLE001 - the point is to record WHICH failure, if any
+--- context of each ---
+### models/demos/llama31_8b_d_p/tt/layer.py:90
+        )
+    except Exception as e:  # never let the probe break a run
+        from loguru import logger
+
+        logger.warning(f"[delta-probe] failed at L{layer_idx} {tag}: {e}")
+### models/demos/llama31_8b_d_p/tt/tt_prefill_runtime.py:110
+        return False
+    except Exception:  # noqa: BLE001 - a TypeError here means a real signature, i.e. implemented
+        return True
+    return True
+
+### models/demos/llama31_8b_d_p/tests/unit/test_sp_attention_chunked.py:480
+        forced_true = _run(program_config.get_compute_kernel_config(mesh))  # fp32_dest_acc_en=True
+    except Exception as exc:  # noqa: BLE001 - the point is to record WHICH failure, if any
+        forced_error = f"{type(exc).__name__}: {str(exc)[:300]}"
+
+    # The floor: exactly the values the device holds (bf8_b K/V, bf16 Q), all arithmetic in fp32.
+
+===================================================================
+[5/9] unused imports / dead code / commented-out code / print()
+===================================================================
+--- autoflake (would-remove unused imports; empty diff = none) ---
+(autoflake diff lines above: 0)
+--- commented-out code (comment lines that parse as statements) ---
+models/demos/llama31_8b_d_p/tt/attention/dense_sp.py:196:        # with kv_actual_isl (ring_joint_sdpa_device_operation.cpp:627), which every chunk passes.
+models/demos/llama31_8b_d_p/tt/runners/adapters/llama.py:297:        # with PREFILL_FABRIC_MODE — Ring collectives need FABRIC_1D_RING plus the torus mesh-graph
+models/demos/llama31_8b_d_p/tests/unit/test_attention_chunked_vs_ref.py:604:    # for it to be re-derived at a realistic chunk size. This is the same statistic on the KV
+models/demos/llama31_8b_d_p/tests/unit/test_ccl_semaphores.py:146:    # from a 12-wide device grid would give 11 >= 12 and fail at SP > 1 only.
+models/demos/llama31_8b_d_p/tests/unit/test_reference_model.py:62:# with a device tensor -- see bringup_log/01_REFERENCE.md section 3.
+--- print() calls, by file ---
+models/demos/llama31_8b_d_p/scripts/verify_golden_kv.py:3
+models/demos/llama31_8b_d_p/scripts/verify_citations.py:11
+models/demos/llama31_8b_d_p/scripts/generate_golden_kv_cache.py:14
+models/demos/llama31_8b_d_p/tests/unit/test_prefill_adapter.py:1
+models/demos/llama31_8b_d_p/tests/galaxy_prefill_kv_pcc.py:23
+models/demos/llama31_8b_d_p/tests/fabric_topology_matrix.py:14
+--- loguru usage, by file ---
+23
+
+===================================================================
+[6/9] every os.environ / os.getenv read appears in README.md's env-var table
+===================================================================
+<unknown>:600: SyntaxWarning: invalid escape sequence '\ '
+15 distinct variables read by package source:
+  OK    HF_MODEL                          ['conftest.py', 'scripts/generate_golden_kv_cache.py', 'tests/test_factory.py', 'tt/model_config.py', 'tt/runners/adapters/llama.py']
+  OK    LLAMA31_8B_DELTA_PROBE            ['tt/layer.py']
+  OK    LLAMA31_8B_TTNN_CACHE             ['tt/model_config.py', 'tt/runners/adapters/llama.py']
+  OK    LLAMA_KV_PCC_MIN                  ['tests/galaxy_prefill_kv_pcc.py']
+  OK    LLAMA_WEIGHTS_FROM_CACHE          ['tests/galaxy_prefill_kv_pcc.py', 'tt/runners/adapters/llama.py']
+  OK    PREFILL_CHUNKED                   ['tests/galaxy_prefill_kv_pcc.py']
+  OK    PREFILL_CHUNK_SIZE                ['tests/galaxy_prefill_kv_pcc.py']
+  OK    PREFILL_HF_MODEL                  ['tt/runners/adapters/llama.py']
+  OK    PREFILL_KV_HASH_ONLY              ['tests/galaxy_prefill_kv_pcc.py']
+  OK    PREFILL_NUM_LAYERS                ['tests/galaxy_prefill_kv_pcc.py']
+  OK    PREFILL_RUNS                      ['tests/galaxy_prefill_kv_pcc.py']
+  OK    PREFILL_TOPOLOGY                  ['tests/galaxy_prefill_kv_pcc.py', 'tt/runners/adapters/llama.py']
+  OK    PREFILL_TRACE_DIR                 ['tests/galaxy_prefill_kv_pcc.py', 'tests/unit/test_attention_chunked_vs_ref.py (via _TRACE_ENV)', 'tests/unit/test_kv_cache_tp8.py (via _TRACE_ENV)', 'tests/unit/test_sp_attention_chunked.py (via _TRACE_ENV)', 'tt/tt_prefill_runtime.py']
+  OK    PREFILL_TTNN_CACHE                ['tt/runners/adapters/llama.py']
+  OK    TT_CACHE_PATH                     ['tt/model_config.py', 'tt/runners/adapters/llama.py']
+missing from README: 0 []
+
+===================================================================
+[7/9] README.md complete
+===================================================================
+  OK   architecture table                 ('## Architecture')
+  OK   deployment path                    ('## Deployment path')
+  OK   status table with measured PCC     ('## Status')
+  OK   run commands                       ('## Run')
+  OK   env-var table                      ('## Environment variables')
+  OK   layout section                     ('## Layout')
+  OK   what is not implemented            ('## What is **not** implemented')
+  OK   why not models/common              ('## Why a new package, and not `models/common/`')
+  tables: 13   fenced blocks: 8   lines: 332
+  measured PCC present: True
+--- verify_citations.py (README is now in DOCS) ---
+citations checked : 662
+  verified        : 662
+  mismatched      : 0
+  missing files   : 0
+doc refs scanned  : 956
+  resolved        : 956
+  unresolved      : 0
+
+===================================================================
+[8/9] import hygiene: the adapter must import cheap
+===================================================================
+import_time=0.0396s  heavy_modules=NONE  sys.modules=211  class=LlamaPrefillAdapter
+import_time=0.0392s  heavy_modules=NONE  sys.modules=211  class=LlamaPrefillAdapter
+import_time=0.0391s  heavy_modules=NONE  sys.modules=211  class=LlamaPrefillAdapter
+--- comparison: the gpt-oss template ---
+Config{cache_path=/home/mstojkovic/.cache/ttnn,model_cache_path=/home/mstojkovic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+gpt_oss adapter import_time=2.4407s  heavy_modules=['torch', 'ttnn']
+
+===================================================================
+[9/9] test inventory: every tt/ module -> its test(s)
+===================================================================
+  tt/__init__.py                           (package init)
+  tt/attention/__init__.py                 (package init)
+  tt/attention/config.py                   test_sp_attention_chunked.py
+  tt/attention/dense_sp.py                 test_sp_attention_chunked.py
+  tt/attention/kv_cache.py                 galaxy_prefill_kv_pcc.py test_attention_chunked_vs_ref.py test_kv_cache_tp8.py test_kv_cache_vs_ref.py test_kv_chunk_table.py test_prefill_adapter.py test_prefill_runtime_chunked.py test_sp_attention_chunked.py
+  tt/attention/operations.py               test_attention_chunked_vs_ref.py test_attention_vs_ref.py
+  tt/attention/prefill.py                  *** NO DIRECT TEST REFERENCE ***
+  tt/attention/weights.py                  *** NO DIRECT TEST REFERENCE ***
+  tt/ccl.py                                fabric_topology_matrix.py test_ccl_semaphores.py test_factory.py
+  tt/config.py                             fabric_topology_matrix.py test_factory.py test_mesh_config.py test_tp_parity.py
+  tt/embedding.py                          *** NO DIRECT TEST REFERENCE ***
+  tt/layer.py                              test_decoder_layer_vs_ref.py test_tp_parity.py
+  tt/lm_head.py                            *** NO DIRECT TEST REFERENCE ***
+  tt/mlp.py                                test_mlp_vs_ref.py test_tp_parity.py
+  tt/model.py                              galaxy_prefill_kv_pcc.py test_attention_chunked_vs_ref.py test_ccl_semaphores.py test_factory.py test_kv_cache_tp8.py test_mesh_config.py test_model_vs_ref.py test_prefill_adapter.py test_prefill_runtime_chunked.py test_rope_vs_ref.py test_sp_attention_chunked.py test_tp_parity.py test_weight_loading.py
+  tt/model_config.py                       galaxy_prefill_kv_pcc.py test_attention_chunked_vs_ref.py test_ccl_semaphores.py test_factory.py test_kv_cache_tp8.py test_mesh_config.py test_model_vs_ref.py test_prefill_adapter.py test_prefill_runtime_chunked.py test_rope_vs_ref.py test_sp_attention_chunked.py test_tp_parity.py test_weight_loading.py
+  tt/model_dims.py                         test_prefill_adapter.py
+  tt/rms_norm.py                           test_rms_norm_vs_ref.py test_tp_parity.py
+  tt/rope.py                               test_attention_chunked_vs_ref.py test_attention_vs_ref.py test_decoder_layer_vs_ref.py test_kv_cache_tp8.py test_model_vs_ref.py test_rope_vs_ref.py test_sp_attention_chunked.py test_tp_parity.py
+  tt/runners/__init__.py                   (package init)
+  tt/runners/adapters/__init__.py          (package init)
+  tt/runners/adapters/llama.py             test_prefill_adapter.py
+  tt/runners/kv_chunk_table.py             test_kv_chunk_table.py test_prefill_runtime_chunked.py
+  tt/tt_prefill_runtime.py                 galaxy_prefill_kv_pcc.py test_attention_chunked_vs_ref.py test_kv_cache_tp8.py test_kv_chunk_table.py test_prefill_adapter.py test_prefill_runtime_chunked.py test_sp_attention_chunked.py
+modules: 20   without a direct test reference: 4 ['tt/attention/prefill.py', 'tt/attention/weights.py', 'tt/embedding.py', 'tt/lm_head.py']
+
+===================================================================
+G-CLEAN checks complete  2026-09-04T01:25:23Z
+===================================================================

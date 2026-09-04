@@ -5,11 +5,22 @@
 
 One row per risk. `Owner` is a slot for a human name. `Status` ∈ open / mitigated / closed / blocked.
 
+> **P9 audit (`DEC-125`).** This table had drifted badly from its own body: **twelve** risks
+> (`R-018`-`R-025`, `R-031`-`R-033`, `R-040`) had a full section below and **no row at all**,
+> and **eight** rows still read `open` / `blocked` / `deferred` under sections that close them
+> — `R-003` (void since Appendix F.1), `R-012`/`R-013`/`R-017`/`R-027`/`R-028`/`R-029` (closed by
+> P8) and `R-030` (closed by P10). A reader who trusted the summary would have
+> read it as having **four** open high-severity risks (`R-001`, `R-003`, `R-027`, `R-028`) when
+> only `R-001` — "confirm the model identity" — was genuinely still open at that point (it has since
+> been CLOSED: confirmed by the user, `DEC-130`), and would have missed
+> `R-040` entirely, which is the one that matters. All **34** rows are now consistent
+> with the sections they summarise; **no section text was changed**, only the register.
+
 | Id | Severity | Phase found | Summary | Status | Owner |
 |---|---|---|---|---|---|
-| `R-001` | **high** | P0 | Model identity is an assumption: `llama31_8b` ⇒ Llama-3.1-8B-Instruct | open — **needs user confirmation** | _(unassigned)_ |
+| `R-001` | **high** | P0 | Model identity is an assumption: `llama31_8b` ⇒ Llama-3.1-8B-Instruct | **CLOSED** — confirmed by the user 2026-09-04 (`DEC-130`) | orchestrator |
 | `R-002` | medium | P0/P1 | Installed `transformers` is 5.12.1; `config.rope_theta` is `None` (moved into `rope_parameters`) | mitigated (use `get_rope_theta`) | _(unassigned)_ |
-| `R-003` | **high** | P0 | No checkpoint anywhere on this machine → all real-weight gates are `BLOCKED` | blocked | _(unassigned)_ |
+| `R-003` | **high** | P0 | No checkpoint anywhere on this machine → all real-weight gates are `BLOCKED` | **void** — Appendix F.1: real weights ARE staged. See the corrections section. | _(unassigned)_ |
 | `R-004` | medium | P0 | TP=8 ⇒ **1 KV head per chip**; no op in the SDPA/KV-write path checked for a `num_kv_heads > 1` assumption | partially mitigated | _(unassigned)_ |
 | `R-005` | medium | P1 | `tt_transformers.ModelArgs` **raises** without `HF_MODEL`, so the recipe's preferred `reference_*` oracles are unreachable here | mitigated (`DEC-004`) | _(unassigned)_ |
 | `R-006` | medium | P2 | `compute_llama3_parameters` **hard-codes** `low_freq_factor=1` / `high_freq_factor=4` — it does *not* read them from `config.json` | mitigated for this model; latent for others | _(unassigned)_ |
@@ -18,17 +29,29 @@ One row per risk. `Owner` is a slot for a human name. `Status` ∈ open / mitiga
 | `R-009` | low | P2 | `MeshConfig` is duplicated in two packages with **divergent** feature sets; neither is importable-as-is | open | _(unassigned)_ |
 | `R-010` | medium | P2 | `get_rot_transformation_mat(dhead)` **ignores its argument** and hard-codes `dhead = 32` | mitigated (informational) | _(unassigned)_ |
 | `R-011` | low | P0/P1 | `test_factory.TestFactory.setup_test` cannot run until P5 creates `tt/config.py` + `tt/ccl.py` | open by design | _(unassigned)_ |
-| `R-012` | medium | P4 | `G-TP-PARITY` runs on `(1,N)` meshes, which use `num_links=1` + `Topology.Linear`; the 2-link `Ring` path is exercised **only** by `G-MESH-KV`/`G-RACE` on `(4,8)` | open | _(unassigned)_ |
-| `R-013` | medium | P4 | The barrier-semaphore ping-pong is only **2** deep (a one-op gap), and `reset_global_semaphores` deliberately skips the barrier and ring-attention semaphores that chunked prefill now reuses across chunks | **deferred to P8 by `DEC-052`** — unchanged in P7 and *not tested* there (at `(1,1)` no collective runs at all); if `G-RACE` fails, first move is deepening the ping-pong 2→4 | _(unassigned)_ |
+| `R-012` | medium | P4 | `G-TP-PARITY` runs on `(1,N)` meshes, which use `num_links=1` + `Topology.Linear`; the 2-link `Ring` path is exercised **only** by `G-MESH-KV`/`G-RACE` on `(4,8)` | **CLOSED (P8)** — `G-TP-PARITY` now runs `(2,8)`/`(4,8)` submeshes at `num_links=2` | _(unassigned)_ |
+| `R-013` | medium | P4 | The barrier-semaphore ping-pong is only **2** deep (a one-op gap), and `reset_global_semaphores` deliberately skips the barrier and ring-attention semaphores that chunked prefill now reuses across chunks | **CLOSED (P8)** by `G-RACE`: 3 runs, 1 hash, one `CCLManager`, one process (`DEC-086`) | _(unassigned)_ |
 | `R-014` | medium | P3 | **`R-002` is factually wrong** as measured: `cfg.rope_theta` does not exist (raises `AttributeError`), `cfg.rope_scaling` is a full dict, and `getattr(cfg, "rope_theta", D)` returns `D` — so the hazard is a *silent default*, not a silent `None` | mitigated (`DEC-010`) | _(unassigned)_ |
 | `R-015` | low | P3 | **`DEC-006`'s stated premise is false**: `gpt_oss_d_p` and `minimax_m3` both cross-import `models.demos.deepseek_v3_d_p.tt.*` extensively, so "no demo package imports another demo's `tt/`" is not the tree's convention | open (informational) | _(unassigned)_ |
-| `R-017` | medium | P3 | The tilized **weight cache is mesh-shape dependent** but no gate checks a cache-only rebuild at TP>1: `G-WEIGHTS` runs on 1 card, and `TestFactory.setup_test` takes a raw `tensor_cache_path` with no mesh in it | open | _(unassigned)_ |
+| `R-017` | medium | P3 | The tilized **weight cache is mesh-shape dependent** but no gate checks a cache-only rebuild at TP>1: `G-WEIGHTS` runs on 1 card, and `TestFactory.setup_test` takes a raw `tensor_cache_path` with no mesh in it | **CLOSED (P8)** — cache-only rebuild bit-identical at `(4,8)`, and a byte-identical KV hash | _(unassigned)_ |
 | `R-016` | medium | P3 | **`R-008`'s proposed fix would break P8**: deriving the SDPA program grid from `compute_with_storage_grid_size()` (measured 12×10) violates the ring-joint assert `ccl_core_grid_offset.x >= sdpa_grid.x` at offset 11 | mitigated (`DEC-012`) | _(unassigned)_ |
 | `R-026` | medium | P7 | `tokenizer.apply_chat_template(..., tokenize=True)` returns a **`BatchEncoding`** on transformers 5.12.1 (`return_dict` now defaults to `True`), so `list(...)` yields the dict KEYS — a plausible 2-element "token list" of strings | mitigated (`return_dict=False` + an int assert); latent in `models/demos/minimax_m3/scripts/generate_golden_kv_cache.py:180` | _(unassigned)_ |
-| `R-027` | **high** | P7 | The packed KV cache is **one KV head per chip**, so `TP` must equal `num_key_value_heads` (8). No model-level KV write is possible at `(1,1)` — it dies in a C++ `TT_FATAL`. `G-KV`'s `(1,1)` coverage used `nkv = tp = 1`, a head count the model never produces there | mitigated by a loud runtime assert; **the coverage hole is open and is P8's** | _(unassigned)_ |
-| `R-028` | **high** | P7 | Chunked cache-read attention (`cached_len > 0`) is unimplemented on a single device, so `G-CHUNK`'s attention-core third is `BLOCKED`; it needs `tt/attention/dense_sp.py` (P8) or a paged chunked SDPA | open — blocks `G-CHUNK-ATTN` | _(unassigned)_ |
-| `R-029` | medium | P7 | `TtPrefillRuntime.gather_layer` / `dump_slot_kv` / `kv_cache_pcc_check` are **never executed on device** in P7 (they need TP=8); only their format contract is asserted | open — P8's `G-MESH-KV` is the first real exercise | _(unassigned)_ |
-| `R-030` | medium | P7 | `TtPrefillRuntime.build_kv_chunk_table` **raises**; the KV chunk-address table is P10's `tt/runners/kv_chunk_table.py`, so `PREFILL_ENABLE_MIGRATION=1` cannot work yet | open by design — P10 | _(unassigned)_ |
+| `R-027` | **high** | P7 | The packed KV cache is **one KV head per chip**, so `TP` must equal `num_key_value_heads` (8). No model-level KV write is possible at `(1,1)` — it dies in a C++ `TT_FATAL`. `G-KV`'s `(1,1)` coverage used `nkv = tp = 1`, a head count the model never produces there | **CLOSED (P8)** by `G-KV-TP8`: head→column bit-exact, 32 layers vs golden | _(unassigned)_ |
+| `R-028` | **high** | P7 | Chunked cache-read attention (`cached_len > 0`) is unimplemented on a single device, so `G-CHUNK`'s attention-core third is `BLOCKED`; it needs `tt/attention/dense_sp.py` (P8) or a paged chunked SDPA | **CLOSED (P8)** — `dense_sp_attention` implemented; `G-CHUNK-ATTN` ran | _(unassigned)_ |
+| `R-029` | medium | P7 | `TtPrefillRuntime.gather_layer` / `dump_slot_kv` / `kv_cache_pcc_check` are **never executed on device** in P7 (they need TP=8); only their format contract is asserted | **CLOSED (P8)** — the read-back helpers ran on device in `G-MESH-KV` | _(unassigned)_ |
+| `R-030` | medium | P7 | `TtPrefillRuntime.build_kv_chunk_table` **raises**; the KV chunk-address table is P10's `tt/runners/kv_chunk_table.py`, so `PREFILL_ENABLE_MIGRATION=1` cannot work yet | **CLOSED (P10)** — `tt/runners/kv_chunk_table.py` + `G-KV-TABLE` | _(unassigned)_ |
+| `R-018` | medium | P5.2 | Appendix E's threshold method is **input-distribution-sensitive** | mitigated for `G-RMS`; **superseded by `R-022`**, which is the sharper statement | _(unassigned)_ |
+| `R-019` | low | P5.1 | The package was untracked in git, so P0-P4 never ran the repo's `pre-commit` hooks | **CLOSED (P9)** — `G-CLEAN` item 1 runs the hooks over all 140 package files, exit 0 | _(unassigned)_ |
+| `R-020` | medium | P5.3 | `build_prefill_rope` cannot serve a chunked prefill past chunk 1 | **CLOSED (P7)** by measurement — the indexed path, `G-CHUNK` | _(unassigned)_ |
+| `R-021` | medium | P5.4/5.5 | `ttnn` compute-kernel defaults differ **per op**, so "copy the template" is unsafe | mitigated per-op (`DEC-031`); **open for every op a future phase adds** | _(unassigned)_ |
+| `R-022` | medium | P5.5 | A storage-dtype noise floor does **not** model a fused kernel's interior | measured and fenced for `G-ATTN`; **open wherever a fused kernel appears** | _(unassigned)_ |
+| `R-023` | low | P6.1 | Appendix E's masking caveat is a cross-test comparison, and the recipe builds a rule on it | corrected in `DEC-040`; **the recipe text is still wrong** and a re-runner will read it | _(unassigned)_ |
+| `R-024` | medium | P6.2 | `tt_transformers`' HF→Meta key conversion is prescribed for a package that consumes HF keys | closed for this package (`DEC-039`); **the recipe and `03_OUTLINE.md` §3.3 still prescribe the harmful version** | _(unassigned)_ |
+| `R-025` | medium | P6.3 | The per-layer PCC step threshold is calibrated at one sequence length | **CLOSED (P8) for the KV product** at the real chunk size; **the hidden-state curve stays open** | _(unassigned)_ |
+| `R-031` | medium | P8 | Fabric bring-up fails on any **top-level partial mesh**; every sub-shape must be a submesh of the open galaxy | mitigated (`DEC-080`, `TestFactory.setup_submesh`); the underlying limitation is open | _(unassigned)_ |
+| `R-032` | medium | P8 | Two overlapping submeshes **hang the machine** unless `quiesce_devices()` separates them | mitigated in `tests/unit/test_tp_parity.py`; **the trap is open for every future test** | _(unassigned)_ |
+| `R-033` | medium | P8 | The ring path can **never** use the fp32 accumulator, and that cost grows with depth | open by construction — not fixable in this package (`DEC-084`) | _(unassigned)_ |
+| `R-040` | **high** | P10 | The **multi-rank KV-chunk-table merge** is untested; `kv_migration_base_address` is implemented but never executed | open, accepted (`DEC-070`) — and **loud, not latent**: `build_kv_chunk_table` raises naming `R-040` (`DEC-109`) | _(unassigned)_ |
 
 ---
 
@@ -41,8 +64,12 @@ Llama in the tree is `Llama-3.1-8B-Instruct`.
 **Decision taken.** `DEC-001`: proceed on `meta-llama/Llama-3.1-8B-Instruct` dims. The recipe
 explicitly instructs not to stall (`BRINGUP_RECIPE.md:233-234`).
 
-**What the user must confirm.** Whether the intended target is Llama-3.1-8B-Instruct. If it is a
-Llama-3.2 *text* model instead, the delta is exactly three config keys
+**RESOLVED 2026-09-04 (`DEC-130`).** The user confirmed the target is Llama-3.1-8B-Instruct, and
+independently renamed the package to `31_8b` themselves. This risk is **closed**; the identity row in
+`00_MODEL_CARD.md` is a confirmed fact, no longer an assumption.
+
+**Had it gone the other way** — if the intended target had been a Llama-3.2 *text* model — the delta
+would have been exactly three config keys
 (`00_MODEL_CARD.md` §1): `rope_scaling.factor` (8.0 → 32.0), `tie_word_embeddings` (false → true),
 and an explicit `head_dim`. No structural code changes.
 
@@ -510,7 +537,12 @@ is compared with the oracle's.
 
 ## R-019 — This package is untracked in git, so P0-P4 never ran the repo's `pre-commit` hooks
 
-**Status:** partially resolved in P5.1 (all 32 files are now hook-clean); the **process** gap remains.
+**Status: CLOSED (P9).** The package is committed as of `1783edc25de`, and `G-CLEAN` item 1 runs
+`pre-commit` over **all 140** package files as a gated step with its output in the raw log — so the
+hooks are no longer something a phase might remember to run. It exits **0** with **0 files
+modified**, which also confirms that every phase from P5 on did keep its files hook-clean.
+*(Original P5.1 status, kept for the history below: "partially resolved in P5.1 (all 32 files are
+now hook-clean); the **process** gap remains.")*
 
 `git ls-files -o --exclude-standard` lists every file in `models/demos/llama31_8b_d_p/` — the
 directory has never been committed, and the recipe forbids committing (`BRINGUP_RECIPE.md:91`). The
@@ -763,7 +795,7 @@ reintroduce a `convert_to_meta_format` flag.
 
 `DEC-047` sets `MAX_LAYER_ERROR_STEP = 4.0` from the measured 32-layer curve at **seq 128**, where
 the consecutive per-layer error ratio stays in 0.99x-1.38x from layer 3 onward
-(`raw/G-MODEL-CURVE_20260903T195712Z.log`). Two limits:
+(`raw/G-MODEL-CURVE.log`). Two limits:
 
 * it is one sequence length, one input, one dtype. A longer sequence changes the SDPA chunk sizes
   (`ProgramConfig.prefill_threshold = 2048`) and therefore the per-layer error, so the curve's shape

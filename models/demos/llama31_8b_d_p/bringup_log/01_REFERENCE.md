@@ -158,8 +158,8 @@ what is proved is that the whole `seed → weights → forward` chain is reprodu
 
 | Case | dims | sha256 of the output hidden state | `torch.equal` |
 |---|---|---|---|
-| HF `LlamaDecoderLayer` | full (4096 / 32Q / 8KV / 128 / 14336, S=128) | `82cea4baa3e1e5210f88107b7044ee7be25f733331148cc4c1fd5ab84d28fb4b` (run 0 **and** run 1) | **True**, `max|Δ| = 0.0` |
-| HF `LlamaDecoderLayer` | tiny (256 / 8Q / 2KV / 32 / 512, S=64) | `e19a867af264f74f01c6225b9489dc854af534cadde1deb0a9643a1ae904071c` (run 0 **and** run 1) | **True**, `max|Δ| = 0.0` |
+| HF `LlamaDecoderLayer` | full (4096 / 32Q / 8KV / 128 / 14336, S=128) | `82cea4baa3e1e5210f88107b7044ee7be25f733331148cc4c1fd5ab84d28fb4b` (run 0 **and** run 1) | **True**, `max\|Δ\| = 0.0` |
+| HF `LlamaDecoderLayer` | tiny (256 / 8Q / 2KV / 32 / 512, S=64) | `e19a867af264f74f01c6225b9489dc854af534cadde1deb0a9643a1ae904071c` (run 0 **and** run 1) | **True**, `max\|Δ\| = 0.0` |
 | hand-written reference | full | `82cea4baa3e1e5210f88107b7044ee7be25f733331148cc4c1fd5ab84d28fb4b` | **True** |
 | hand-written reference | tiny | `e19a867af264f74f01c6225b9489dc854af534cadde1deb0a9643a1ae904071c` | **True** |
 
@@ -167,7 +167,7 @@ what is proved is that the whole `seed → weights → forward` chain is reprodu
 
 ## 5. Cross-reference: the two oracles agree **exactly**
 
-| dims | PCC | `max|Δ|` | rel-L2 | threshold |
+| dims | PCC | `max\|Δ\|` | rel-L2 | threshold |
 |---|---|---|---|---|
 | full | **1.0** | **0.000e+00** | **0.000e+00** | ≥ 0.9999 |
 | tiny | **1.0** | **0.000e+00** | **0.000e+00** | ≥ 0.9999 |
@@ -196,8 +196,8 @@ with HF's llama3 RoPE **exactly** on the frequency tables:
 
 | check | measured |
 |---|---|
-| `precompute_freqs` cos vs HF cos (first half), S=256, head_dim=128 | `max|Δ| = 0.000e+00` |
-| `precompute_freqs` sin vs HF sin (first half) | `max|Δ| = 0.000e+00` |
+| `precompute_freqs` cos vs HF cos (first half), S=256, head_dim=128 | `max\|Δ\| = 0.000e+00` |
+| `precompute_freqs` sin vs HF sin (first half) | `max\|Δ\| = 0.000e+00` |
 
 That removes the largest single risk in P5.3 before a line of `tt/rope.py` exists. The test also
 pins the **convention difference** Appendix B names as the classic RoPE bug:
@@ -253,7 +253,7 @@ Raw log: `bringup_log/raw/G-REF_20260903T161226Z.log`. Host only; no device open
 
 | Recipe condition (`:337-341`) | Result |
 |---|---|
-| (a) fixed-seed hidden state twice, **bit-identical** | ✅ 4/4 cases; sha256 pairs identical; `max|Δ| = 0.0` |
+| (a) fixed-seed hidden state twice, **bit-identical** | ✅ 4/4 cases; sha256 pairs identical; `max\|Δ\| = 0.0` |
 | (b) hand-written vs HF agree **PCC ≥ 0.9999** on one layer | ✅ PCC = **1.0** both dim sets (bit-exact) |
 | (c) `01_REFERENCE.md` documents invocation + dtype policy | ✅ §2 and §3 |
 
@@ -306,4 +306,5 @@ Tests, and what each is for:
    the mask gives non-causal attention with no error.
 7. The moment a checkpoint is staged, `ModelArgs.reference_*` becomes usable and is worth switching
    to for `G-LAYER` / `G-MODEL` — it handles the Meta↔HF weight conversion for you
-   (`reference_mlp` monkey-patches `load_state_dict` at `model_config.py:4368-4376`). `R-005`.
+   (`reference_mlp` monkey-patches `load_state_dict` at
+   `models/tt_transformers/tt/model_config.py:4368-4376`). `R-005`.
