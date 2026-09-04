@@ -112,6 +112,48 @@ def make_verify_buffers(mesh_device, page_table_torch: torch.Tensor, block_size:
     return DFlashVerifyBuffers(pos_uint32, pos_int32, page_table, candidate_ids, block_size)
 
 
+def refresh_verify_positions(mesh_device, buffers: DFlashVerifyBuffers, start_pos: int) -> None:
+    """Refresh buffers.pos_uint32/pos_int32 in place for a new start_pos -- the one part
+    of verify's inputs that's genuinely dynamic every call (position values shift every
+    iteration; there's no way around rebuilding this small host tensor each time, see
+    verify.py's module docstring). Shared by dflash_verify (below) and generate.py's
+    fused-iteration path, which builds its own candidate-ids tensor on device instead of
+    going through buffers.candidate_ids."""
+    mapper = _mesh_mapper(mesh_device)
+    block_size = buffers.block_size
+    positions = list(range(start_pos, start_pos + block_size))
+    pu = torch.zeros((1, 32), dtype=torch.int64)
+    pu[0, :block_size] = torch.tensor(positions, dtype=torch.int64)
+    ttnn.copy_host_to_device_tensor(
+        ttnn.from_torch(pu, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32, mesh_mapper=mapper), buffers.pos_uint32
+    )
+    ttnn.copy_host_to_device_tensor(
+        ttnn.from_torch(
+            torch.tensor(positions, dtype=torch.int32),
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.int32,
+            mesh_mapper=mapper,
+        ),
+        buffers.pos_int32,
+    )
+
+
+def run_verify_forward(model, mesh_device, tt_kv_cache, buffers: DFlashVerifyBuffers, x_tt: ttnn.Tensor):
+    """Raw ttnn_verify_forward call against an ALREADY-ON-DEVICE candidate-ids tensor
+    (``x_tt``, e.g. built via ttnn.concat rather than uploaded from a host list) --
+    ``refresh_verify_positions`` must already have been called for this start_pos.
+    Returns (logits, hidden) exactly as ttnn_verify_forward does; the caller owns both
+    (deallocate hidden, argmax logits) -- this is the shared primitive dflash_verify and
+    generate.py's fused-iteration path both build on."""
+    return model.ttnn_verify_forward(
+        x=x_tt,
+        current_pos=buffers.pos_uint32,
+        current_pos_cache=buffers.pos_int32,
+        page_table=buffers.page_table,
+        kv_cache=tt_kv_cache,
+    )
+
+
 def dflash_verify(
     model, mesh_device, tt_kv_cache, buffers: DFlashVerifyBuffers, candidate_ids: list[int], start_pos: int
 ):
@@ -131,21 +173,7 @@ def dflash_verify(
     assert len(candidate_ids) == block_size, f"expected {block_size} candidate ids, got {len(candidate_ids)}"
     mapper = _mesh_mapper(mesh_device)
 
-    positions = list(range(start_pos, start_pos + block_size))
-    pu = torch.zeros((1, 32), dtype=torch.int64)
-    pu[0, :block_size] = torch.tensor(positions, dtype=torch.int64)
-    ttnn.copy_host_to_device_tensor(
-        ttnn.from_torch(pu, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32, mesh_mapper=mapper), buffers.pos_uint32
-    )
-    ttnn.copy_host_to_device_tensor(
-        ttnn.from_torch(
-            torch.tensor(positions, dtype=torch.int32),
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            dtype=ttnn.int32,
-            mesh_mapper=mapper,
-        ),
-        buffers.pos_int32,
-    )
+    refresh_verify_positions(mesh_device, buffers, start_pos)
     ttnn.copy_host_to_device_tensor(
         ttnn.from_torch(
             torch.tensor(candidate_ids, dtype=torch.int64).reshape(1, block_size),
@@ -156,13 +184,7 @@ def dflash_verify(
         buffers.candidate_ids,
     )
 
-    logits, hidden = model.ttnn_verify_forward(
-        x=buffers.candidate_ids,
-        current_pos=buffers.pos_uint32,
-        current_pos_cache=buffers.pos_int32,
-        page_table=buffers.page_table,
-        kv_cache=tt_kv_cache,
-    )
+    logits, hidden = run_verify_forward(model, mesh_device, tt_kv_cache, buffers, buffers.candidate_ids)
     ttnn.deallocate(hidden)
 
     vocab = logits.shape[-1]
