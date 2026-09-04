@@ -89,7 +89,6 @@ void kernel_main() {
         REL();
         rotated_in_interm_cb_obj.push_back(Wt);
         rotated_in_interm_cb_obj.wait_front(Wt);
-
         mul_init(rotated_in_interm_cb, sin_cb);
         ACQ();
         // sin_interim = rotated * sin
