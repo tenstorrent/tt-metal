@@ -47,6 +47,7 @@ void kernel_main() {
     static_assert(num_entries_e1 > 0, "E1 phase must push at least one entry before resize");
 
     const uint32_t staging_base = get_arg_val<uint32_t>(0);
+    const CoreLocalMem<uint8_t> staging(staging_base);
     volatile tt_l1_ptr uint32_t* resized_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(1));
     volatile tt_l1_ptr uint32_t* go_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(2));
 
@@ -55,7 +56,7 @@ void kernel_main() {
 
     for (uint32_t i = 0; i < num_entries_e1; ++i) {
         gdfb.reserve_back(1);
-        gdfb.write_broadcast(staging_base + i * entry_size_e1, 1, noc);
+        gdfb.write_broadcast(noc, staging, 1, {.offset_bytes = i * entry_size_e1});
         gdfb.flush_writes(noc);
         gdfb.push_back(1, noc);
     }
@@ -65,10 +66,10 @@ void kernel_main() {
     noc_semaphore_set(resized_sem, 1);
     noc_semaphore_wait(go_sem, 1);
 
-    const uint32_t staging_e2 = staging_base + num_entries_e1 * entry_size_e1;
+    const uint32_t staging_e2_offset = num_entries_e1 * entry_size_e1;
     for (uint32_t i = 0; i < num_entries_e2; ++i) {
         gdfb.reserve_back(1);
-        gdfb.write_broadcast(staging_e2 + i * entry_size_e2, 1, noc);
+        gdfb.write_broadcast(noc, staging, 1, {.offset_bytes = staging_e2_offset + i * entry_size_e2});
         gdfb.flush_writes(noc);
         gdfb.push_back(1, noc);
     }
