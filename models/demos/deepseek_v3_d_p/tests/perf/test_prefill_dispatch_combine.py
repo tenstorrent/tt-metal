@@ -29,6 +29,7 @@ import ttnn
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.glm_5_2_config import GLM52Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
+from models.demos.deepseek_v3_d_p.reference.mistral_small_4_config import MistralSmall4Config
 from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import ALL_MESH_CONFIGS
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     compute_constants,
@@ -50,7 +51,18 @@ DISPATCH_BUFFER_CAPACITY_FACTOR = 8
 
 
 # One entry per model whose chunked-prefill capture we replay; add a model by extending this list.
-_CHUNK_MODELS = [("dsv3", DeepSeekV3Config), ("kimi26", KimiK26Config), ("glm52", GLM52Config)]
+#
+# mistral4 (128 experts / top-4 at emb 4096 -> 32 per col, 4 per chip) is wired up but has no capture
+# yet: expert_routing_dispatch_combine_perf_mistral4.safetensors must be produced from a real
+# Mistral4 chunked-prefill run before this case can execute, and its hot (layer, col) picks ranked
+# with analyze_routing_send.py before test_dispatch_combine_perf can select it. Until then the case
+# is unreachable -- nothing sets TT_DS_CAPTURED_LAYER/COL for it, so it skips.
+_CHUNK_MODELS = [
+    ("dsv3", DeepSeekV3Config),
+    ("kimi26", KimiK26Config),
+    ("glm52", GLM52Config),
+    ("mistral4", MistralSmall4Config),
+]
 _TORUS_Y_MESH_CONFIGS = [param for param in ALL_MESH_CONFIGS if param.id == "fabric2d-torus-y-8x1-2link"]
 assert len(_TORUS_Y_MESH_CONFIGS) == 1, "LoudBox TorusY proxy config missing from ALL_MESH_CONFIGS"
 
