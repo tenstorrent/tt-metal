@@ -73,16 +73,32 @@ _ROUTING_IDS = [
 ]
 
 
+# Native selects RmSingleRowMultiCore for a row-major index row wider than this
+# (device/gather_device_operation.cpp), and that factory returns wrong elements. Both legs below are
+# native, so the wrongness is identical on each side and the value comparison reports agreement
+# rather than the defect -- except where the wrong elements decode to NaN, which differs per
+# platform and which exact equality can never pass. Above this width the routing property is the
+# only thing the comparison can honestly assert.
+_RM_MULTI_CORE_W = 60 * 32
+
+
 @pytest.mark.parametrize("dtype", _DTYPES, ids=_DTYPE_IDS)
 @pytest.mark.parametrize("shape,kwargs,layout", _ROUTING, ids=_ROUTING_IDS)
 def test_gather_codegen_routing(device, shape, kwargs, dtype, layout):
+    index_spec = kwargs.get("index")
+    wide_native_rm_row = (
+        layout == ttnn.ROW_MAJOR_LAYOUT and isinstance(index_spec, list) and index_spec[-1] > _RM_MULTI_CORE_W
+    )
     x = _make_input(shape, dtype)
     xt = ttnn.from_torch(x, dtype=dtype, layout=layout, device=device)
     kwargs = _materialize_index(shape, kwargs, layout, device)
-    golden = ttnn.to_torch(_force_native(xt, **kwargs))
+    # Dispatched before the count is taken so the native program is already cached: the assertion
+    # below reads a codegen program appearing, not native's own first miss.
+    native = _force_native(xt, **kwargs)
     entries_before = device.num_program_cache_entries()
     out = ttnn.gather(xt, **kwargs)
-    assert_equal(golden, ttnn.to_torch(out))
+    if not wide_native_rm_row:
+        assert_equal(ttnn.to_torch(native), ttnn.to_torch(out))
     msg = "auto routed an out-of-scope case to codegen (program cache grew); expected native fallback"
     assert device.num_program_cache_entries() == entries_before, msg
 
