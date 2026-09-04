@@ -546,15 +546,17 @@ void DPrintServer::Impl::print_buffer_data(
                 risc_data.warned_missing_parser = true;
                 log_warning(
                     tt::LogMetal,
-                    "DEVICE_PRINT: dropping messages from device {} core ({},{}) risc {}: no ELF parser "
-                    "resolved (is_kernel={}, info_id={}). The core is printing but never announced its "
-                    "kernel id; its firmware may be missing DEVICE_PRINT_KERNEL_FINISHED().",
+                    "DEVICE_PRINT: dropping messages from device {} core ({},{}) risc {}: no {} ELF "
+                    "parser resolved (info_id={}). {}",
                     device_id,
                     logical_core.coord.x,
                     logical_core.coord.y,
                     header->risc_id,
-                    header->is_kernel,
-                    header->info_id);
+                    header->is_kernel ? "kernel" : "firmware",
+                    header->info_id,
+                    header->is_kernel ? "The core is printing but never announced its kernel id; its firmware may be "
+                                        "missing DEVICE_PRINT_KERNEL_FINISHED()."
+                                      : "The firmware ELF could not be found for this risc.");
             }
 
             // Move to the next message
@@ -1345,6 +1347,7 @@ void DPrintServer::Impl::reset_for_new_run() {
         risc_data.kernel_elf_path.clear();
         risc_data.kernel_elf_parser.reset();
         risc_data.last_loaded_kernel_id = -1;
+        risc_data.warned_missing_parser = false;
     }
 }  // reset_for_new_run
 

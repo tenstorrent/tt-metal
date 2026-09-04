@@ -351,7 +351,7 @@ protected:
         }
     }
 
-    static std::string DevicePrintConfigFingerprint() {
+    std::string DevicePrintConfigFingerprint() const {
         const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
         const auto targets = rtoptions.get_feature_targets(tt::llrt::RunTimeDebugFeatureDprint);
         std::string fingerprint = fmt::format(
@@ -361,6 +361,11 @@ protected:
             targets.one_file_per_risc,
             targets.prepend_device_core_risc,
             rtoptions.get_checkpoint_enabled());
+        fingerprint += fmt::format(
+            " l1_small={} trace_region={} dispatch_full_us={}",
+            l1_small_size_,
+            trace_region_size_,
+            rtoptions.get_device_print_dispatch_full_us());
         fingerprint += " chip_ids=[";
         for (int chip_id : targets.chip_ids) {
             fingerprint += fmt::format("{},", chip_id);
