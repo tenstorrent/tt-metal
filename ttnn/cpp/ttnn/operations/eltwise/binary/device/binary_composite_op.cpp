@@ -159,7 +159,7 @@ Tensor div(
     ttsl::Span<const ttnn::unary::EltwiseUnaryWithParam> rhs_activations,
     const std::optional<CoreRangeSet>& sub_core_grids,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
-    const bool is_int32 = input.dtype() == DataType::INT32;
+    const bool is_int32 = (input.dtype() == DataType::INT32) && !std::holds_alternative<float>(value);
 
     if (is_int32) {
         TT_FATAL(

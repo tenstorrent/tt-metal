@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "binary.hpp"
+#include <type_traits>
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 
@@ -610,7 +611,18 @@ inline auto invoke_binary_ng_impl(
         if constexpr (requires { rhs.dtype(); }) {
             return rhs.dtype();
         } else {
-            return a_dtype;
+            return std::visit(
+                [](auto v) -> DataType {
+                    using T = std::decay_t<decltype(v)>;
+                    if constexpr (std::is_same_v<T, float>) {
+                        return DataType::FLOAT32;
+                    } else if constexpr (std::is_same_v<T, uint32_t>) {
+                        return DataType::UINT32;
+                    } else {
+                        return DataType::INT32;
+                    }
+                },
+                rhs);
         }
     }();
     const auto output_preallocated = output.has_value();
@@ -635,20 +647,22 @@ inline auto invoke_binary_ng_impl(
     };
     std::optional<Tensor> lhs_promoted;
     std::optional<Tensor> rhs_promoted;
-    if constexpr (requires { rhs.dtype(); }) {
-        const bool is_float_arith = (binary_op_type == operations::binary::BinaryOpType::DIV) ||
-                                    (binary_op_type == operations::binary::BinaryOpType::MUL);
-        if (is_float_arith) {
-            if (is_32bit_int(a_dtype) && tt::tt_metal::is_floating_point(b_dtype)) {
-                const auto target = float_promote_target(b_dtype);
-                log_debug(
-                    tt::LogOp,
-                    "Binary: typecasting lhs from integer dtype {} to {} to match floating rhs dtype {}",
-                    a_dtype,
-                    target,
-                    b_dtype);
-                lhs_promoted = ttnn::typecast(lhs, target);
-            } else if (is_32bit_int(b_dtype) && tt::tt_metal::is_floating_point(a_dtype)) {
+    const bool is_float_arith = (binary_op_type == operations::binary::BinaryOpType::DIV) ||
+                                (binary_op_type == operations::binary::BinaryOpType::MUL) ||
+                                (binary_op_type == operations::binary::BinaryOpType::REMAINDER) ||
+                                (binary_op_type == operations::binary::BinaryOpType::FMOD);
+    if (is_float_arith) {
+        if (is_32bit_int(a_dtype) && tt::tt_metal::is_floating_point(b_dtype)) {
+            const auto target = float_promote_target(b_dtype);
+            log_debug(
+                tt::LogOp,
+                "Binary: typecasting lhs from integer dtype {} to {} to match floating rhs dtype {}",
+                a_dtype,
+                target,
+                b_dtype);
+            lhs_promoted = ttnn::typecast(lhs, target);
+        } else if constexpr (requires { rhs.dtype(); }) {
+            if (is_32bit_int(b_dtype) && tt::tt_metal::is_floating_point(a_dtype)) {
                 const auto target = float_promote_target(a_dtype);
                 log_debug(
                     tt::LogOp,

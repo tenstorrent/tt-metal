@@ -1743,3 +1743,181 @@ def test_mixed_float_int_promotion(device, ttnn_op, float_dtype, int_dtype, int_
     rtol = 0.05 if expected_dtype == ttnn.bfloat16 else 0.01
     rel_err = (tt_out.float() - z_torch.float()).abs() / z_torch.float().abs().clamp_min(1e-3)
     assert rel_err.max() < rtol, f"max relative error {rel_err.max():.4g} exceeds {rtol}"
+
+
+@pytest.mark.parametrize("rounding_mode", ["floor", "trunc"])
+def test_binary_int32_min_div_tensor_thresholds(rounding_mode, device):
+    """Test INT32_MIN tensor-tensor division with divisors around hardware approximation thresholds."""
+    divisors = [
+        2,
+        -2,
+        3,
+        -3,
+        2097151,
+        2097152,
+        2097153,
+        -2097151,
+        -2097152,
+        -2097153,
+        4194303,
+        4194304,
+        4194305,
+        -4194303,
+        -4194304,
+        -4194305,
+        1073741824,
+        -1073741824,
+        2147483647,
+        -2147483647,
+    ]
+    torch_a = torch.full((len(divisors),), -2147483648, dtype=torch.int32)
+    torch_b = torch.tensor(divisors, dtype=torch.int32)
+
+    a_tt = ttnn.from_torch(
+        torch_a,
+        dtype=ttnn.int32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    b_tt = ttnn.from_torch(
+        torch_b,
+        dtype=ttnn.int32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    out_tt = ttnn.divide(a_tt, b_tt, rounding_mode=rounding_mode)
+    out_torch = torch.divide(torch_a, torch_b, rounding_mode=rounding_mode)
+
+    assert out_tt.dtype == ttnn.int32
+    assert torch.equal(ttnn.to_torch(out_tt), out_torch)
+
+
+@pytest.mark.parametrize("rounding_mode", ["floor", "trunc"])
+@pytest.mark.parametrize(
+    "scalar",
+    [
+        2,
+        -2,
+        3,
+        -3,
+        2097151,
+        2097152,
+        2097153,
+        -2097151,
+        -2097152,
+        -2097153,
+        4194303,
+        4194304,
+        4194305,
+        -4194303,
+        -4194304,
+        -4194305,
+        1073741824,
+        -1073741824,
+        2147483647,
+        -2147483647,
+    ],
+)
+def test_binary_int32_min_div_scalar_thresholds(rounding_mode, scalar, device):
+    """Test INT32_MIN tensor-scalar division with divisors around hardware approximation thresholds."""
+    torch_a = torch.tensor([-2147483648, -2147483647, -100, 0, 100, 2147483647], dtype=torch.int32)
+    a_tt = ttnn.from_torch(
+        torch_a,
+        dtype=ttnn.int32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    out_tt = ttnn.divide(a_tt, scalar, rounding_mode=rounding_mode)
+    out_torch = torch.divide(torch_a, scalar, rounding_mode=rounding_mode)
+
+    assert out_tt.dtype == ttnn.int32
+    assert torch.equal(ttnn.to_torch(out_tt), out_torch)
+
+
+@pytest.mark.parametrize("ttnn_op", [ttnn.remainder, ttnn.fmod])
+def test_binary_int32_min_remainder_fmod_thresholds(ttnn_op, device):
+    """Test INT32_MIN remainder and fmod with divisors around hardware approximation thresholds."""
+    divisors = [
+        2,
+        -2,
+        3,
+        -3,
+        2097151,
+        2097152,
+        2097153,
+        -2097151,
+        -2097152,
+        -2097153,
+        4194303,
+        4194304,
+        4194305,
+        -4194303,
+        -4194304,
+        -4194305,
+        1073741824,
+        -1073741824,
+        2147483647,
+        -2147483647,
+    ]
+    torch_a = torch.full((len(divisors),), -2147483648, dtype=torch.int32)
+    torch_b = torch.tensor(divisors, dtype=torch.int32)
+
+    a_tt = ttnn.from_torch(
+        torch_a,
+        dtype=ttnn.int32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    b_tt = ttnn.from_torch(
+        torch_b,
+        dtype=ttnn.int32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    out_tt = ttnn_op(a_tt, b_tt)
+    torch_op = torch.remainder if ttnn_op == ttnn.remainder else torch.fmod
+    out_torch = torch_op(torch_a, torch_b)
+
+    assert out_tt.dtype == ttnn.int32
+    assert torch.equal(ttnn.to_torch(out_tt), out_torch)
+
+
+@pytest.mark.parametrize("float_scalar", [2.5, -2.5, 3.0, 2097152.0])
+def test_binary_int32_scalar_float_promotion(float_scalar, device):
+    """Test INT32 tensor combined with floating-point scalars promoting to FLOAT32."""
+    torch_a = torch.tensor([-2147483648, -100, 0, 100, 2147483647], dtype=torch.int32)
+    a_tt = ttnn.from_torch(
+        torch_a,
+        dtype=ttnn.int32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    div_tt = ttnn.divide(a_tt, float_scalar)
+    assert div_tt.dtype == ttnn.float32
+    assert_with_pcc(torch.divide(torch_a, float_scalar), ttnn.to_torch(div_tt), 0.999)
+
+    div_floor_tt = ttnn.divide(a_tt, float_scalar, rounding_mode="floor")
+    assert div_floor_tt.dtype == ttnn.float32
+    assert_with_pcc(torch.divide(torch_a, float_scalar, rounding_mode="floor"), ttnn.to_torch(div_floor_tt), 0.999)
+
+    div_trunc_tt = ttnn.divide(a_tt, float_scalar, rounding_mode="trunc")
+    assert div_trunc_tt.dtype == ttnn.float32
+    assert_with_pcc(torch.divide(torch_a, float_scalar, rounding_mode="trunc"), ttnn.to_torch(div_trunc_tt), 0.999)
+
+    rem_tt = ttnn.remainder(a_tt, float_scalar)
+    assert rem_tt.dtype == ttnn.float32
+    assert_with_pcc(torch.remainder(torch_a, float_scalar), ttnn.to_torch(rem_tt), 0.999)
+
+    fmod_tt = ttnn.fmod(a_tt, float_scalar)
+    assert fmod_tt.dtype == ttnn.float32
+    assert_with_pcc(torch.fmod(torch_a, float_scalar), ttnn.to_torch(fmod_tt), 0.999)
