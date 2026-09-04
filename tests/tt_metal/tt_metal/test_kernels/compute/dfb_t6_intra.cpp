@@ -5,6 +5,7 @@
 #include <cstdint>
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/compute/common.h"
+#include "api/compute/pack.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/compute_kernel_hw_startup.h"
@@ -34,6 +35,25 @@ void kernel_main() {
             for (std::uint32_t w = 0; w < words_per_entry; w++) {
                 entry[w] += 1;
             }
+            // Publish these scalar stores before the credit that releases the entry to unpack.
+            asm volatile("fence w, w" ::: "memory");
+
+            // TEN-4746: this producer fills the entry with scalar stores, so without this there is
+            // no PACR between reserve_back's WAIT_FREE and push_back's PUSH_TILES, and the WAIT_FREE
+            // is free to resolve before the slot really is. Issue a real pack purely for its PACR.
+            //
+            // It has to name this same dfb -- llk_pack disarms the guard for the dfb it is handed,
+            // and the constraint likewise wants a TDMA on the same buffer -- so it is aimed at the
+            // scratch slot at the end of this Neo's ring instead of the entry being pushed.
+            //
+            // out_of_order_output resolves the target to wr_entry_idx + output_tile_index with no
+            // wrap. On iteration i this Neo's cursor sits at base + i*stride and its scratch slot is
+            // base + (ring_entries_per_neo - 1)*stride, so the difference below is what lands on it.
+            //
+            // DEST holds whatever the previous iteration's copy_tile left; that is deliberate. The
+            // packed bytes are never read, so no MATH->PACK dest handshake is taken out for them.
+            pack_tile<true /* out_of_order_output */>(
+                0, dfb::out, neo_stride_entries * ((ring_entries_per_neo - 1) - i));
         }
 #endif
         // TEN-4746: the pack thread wrote L1 directly (no PACR) since reserve_back, so push_back would
@@ -51,6 +71,8 @@ void kernel_main() {
             for (std::uint32_t w = 0; w < words_per_entry; w++) {
                 entry[w] += 1;
             }
+            // Publish these before the entry is handed back to pack.
+            asm volatile("fence w, w" ::: "memory");
         }
 #endif
         dfb.pop_front(1);
