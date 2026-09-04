@@ -16,7 +16,7 @@ import ttnn
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.dflash_drafter_config import DFlashDrafterConfig
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.tt_dflash_drafter import TtDFlashDrafter
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.utils import load_drafter_state_dict
-from models.demos.deepseek_v3_d_p.tt.mla.rope import ChunkMetadata
+from models.demos.deepseek_v3_d_p.tt.mla.rope import ChunkMetadata, _llama4_scale_geometry
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor
@@ -168,6 +168,9 @@ class TtPrefillRuntime:
         self._trace_captured = False
         self._kv_cache = None
         self._trace_request_id = 0
+        #   _llama4_scale_by_offset — Mistral only: one pre-built query-scale buffer per chunk offset,
+        #                       device-to-device copied into _trace_metadata's buffer each chunk
+        self._llama4_scale_by_offset: dict[int, ttnn.Tensor] = {}
 
         self._build_model(state_dict)
 
@@ -559,6 +562,52 @@ class TtPrefillRuntime:
             metadata=self._trace_metadata,
         )
 
+    def _prepare_llama4_scale_offsets(self, chunk: int) -> None:
+        """Pre-build one query-scale device buffer per chunk offset (#55126). Mistral only.
+
+        The traced path cannot build the scale per chunk: refresh_llama4_scale makes a ~50 MB host
+        tensor, and since the offset advances every chunk the memo never hits -- measured 3x worse at
+        102,400 (4.130 -> 13.291 s). Offsets are deterministic (k * chunk_size), so build them all
+        once here and device-to-device copy the right one in per chunk.
+
+        One shared set for all layers -- the traced path already shares one
+        ChunkMetadata.llama4_scale and the contents are layer-invariant -- but linear in max_seq_len,
+        and the cost per offset scales with heads_local, i.e. INVERSELY with TP:
+
+            8x4 single-rank (TP=4)   3.28 MB/device/offset   62.5 MiB/device at 102,400
+            (8,1) PP=4 stage (TP=1)  13.1 MB/device/offset     250 MiB/device at 102,400
+
+        Measured after the fix: 5.111 s at 102,400, against 5.745 s pre-temperature.
+        """
+        self._llama4_scale_by_offset = {}
+        if self._trace_metadata.llama4_scale is None:
+            return
+        # Floor would silently omit the last offset and the request would then die mid-run on the
+        # off-grid raise in prefill_chunk. Fail at compile() instead, where it is actionable.
+        assert self.config.max_seq_len % chunk == 0, (
+            f"max_seq_len ({self.config.max_seq_len}) must be a multiple of chunk_size ({chunk}): the "
+            f"traced llama4 query scale is pre-built per k * chunk_size offset, so a partial trailing "
+            f"chunk has no buffer"
+        )
+        n_offsets = self.config.max_seq_len // chunk
+        t0 = time.perf_counter()
+        for k in range(n_offsets):
+            offset = k * chunk
+            # Populated at allocation: one host build per offset, not two.
+            self._llama4_scale_by_offset[offset] = self.model.rope_setup.make_llama4_scale_buffer(chunk, offset)
+        ttnn.synchronize_device(self.mesh_device)
+        # From the allocator's own geometry helper, not tensor.shape -- whether a sharded mesh
+        # tensor reports global or per-device shape is exactly what made an earlier figure 4x too high.
+        heads_local, width, _ = _llama4_scale_geometry(self.hf_config, self.mesh_device, self.config.sp_axis)
+        chunk_local = chunk // self.config.mesh_shape[self.config.sp_axis]
+        per_dev_bytes = heads_local * chunk_local * width * 2
+        logger.info(
+            f"[trace] pre-built {n_offsets} llama4 query-scale buffers "
+            f"(offsets 0..{(n_offsets - 1) * chunk} step {chunk}, "
+            f"{n_offsets * per_dev_bytes / 1e6:.1f} MB/device) in "
+            f"{(time.perf_counter() - t0) * 1000.0:.0f} ms"
+        )
+
     def _prepare_trace(self, kv_caches: MlaKvCaches) -> None:
         """Set up the persistent input + per-element metadata buffers and the controller, then warm-compile
         the metadata-variant programs (a full forward). Does NOT begin/end the capture — the driver calls
@@ -576,6 +625,7 @@ class TtPrefillRuntime:
             self._meta1_dev(chunk),
             self.model.rope_setup.make_llama4_scale_buffer(chunk),
         )
+        self._prepare_llama4_scale_offsets(chunk)
         # Same three words packed, for the D2H ack record. Allocated whether or not the ack is wired:
         # set_d2h_ack_service() runs after compile(), and the capture needs an address that predates it.
         self._trace_metadata_msg = self._meta3_dev((0, 0, chunk))
@@ -699,26 +749,35 @@ class TtPrefillRuntime:
                 "on-device (the traced serving loop always carries it; the eager warm-up passes host ints)"
             )
             ttnn.copy(input_tensor, self._trace_input)
-            # The three scalars come off the device from metadata_msg -- on this path the host is
-            # not told the chunk offset at all (slot_id/actual_start/actual_end arrive None), which
-            # is the point of consuming them on-device.
-            #
-            # That is also why Mistral's query-scale buffer cannot ride along here: it is computed on
-            # host from actual_start, and there is no actual_start to compute it from. An unrefreshed
-            # buffer is ones-initialised, so the replay would silently apply a temperature of 1.0 --
-            # a wrong softmax scale that still produces plausible output. Fail instead; wiring the
-            # scale into the packed record (or deriving it on-device) is follow-up work
-            # (https://github.com/tenstorrent/tt-metal/issues/55126).
-            #
-            # An explicit raise rather than an assert, unlike most guards in this tree: `python -O`
-            # strips asserts, and stripping THIS one does not crash -- it re-enables the silent
-            # wrong-temperature path, which the chunked PCC gate cannot see (~0.002 against 0.98).
+            # The three scalars are consumed on-device from metadata_msg, which is the point of this
+            # path: the host ints below are never read for the softmax bound.
             if self._trace_metadata.llama4_scale is not None:
-                raise RuntimeError(
-                    "the traced runtime path consumes chunk metadata on-device and cannot refresh the "
-                    "llama4 query-scale buffer, which is derived on host from actual_start; run Mistral "
-                    "through the host-scalar path until the scale is carried in the metadata record"
-                )
+                # Mistral's query temperature. The caller still passes actual_start, so it can SELECT
+                # a pre-built buffer even though it cannot build one inside a capture. The copy and
+                # the replay are both on cq 0, so it is ordered ahead of every layer's read.
+                #
+                # Raises rather than asserts, unlike most guards in this tree: `python -O` strips
+                # asserts, and stripping these does not crash -- it re-enables the silent
+                # wrong-temperature path, which the chunked PCC gate cannot see (~0.002 against 0.98).
+                if actual_start is None:
+                    raise RuntimeError(
+                        "use_trace: the llama4 query scale needs this chunk's actual_start on host to "
+                        "pick its pre-built buffer. The traced path reads the SCALARS on-device, but "
+                        "the caller still passes the offset (prefill_runner does); a None here means a "
+                        "caller that does not, and replaying with a stale buffer would silently apply "
+                        "the previous chunk's temperature"
+                    )
+                src = self._llama4_scale_by_offset.get(actual_start)
+                if src is None:
+                    raise RuntimeError(
+                        f"no pre-built llama4 query-scale buffer for actual_start={actual_start}. "
+                        f"Offsets are pre-built at compile() for k * {self.config.chunk_size} up to "
+                        f"max_seq_len={self.config.max_seq_len}; this offset is off that grid or past "
+                        f"the end. Raising rather than falling back to a host refresh on purpose: the "
+                        f"fallback is what regresses long context 3x (see "
+                        f"_prepare_llama4_scale_offsets)."
+                    )
+                ttnn.copy(src, self._trace_metadata.llama4_scale)
             self._metadata_from_msg(metadata_msg)
             self._controller.replay()
             ttnn.deallocate(input_tensor)
@@ -814,6 +873,9 @@ class TtPrefillRuntime:
         # service-core L1 release -- only works while the mesh is open, so it has to run from here
         # rather than from wherever the last reference happens to drop.
         self._trace_d2h_service = None
+        # Sized by max_seq_len, so this is the largest thing the traced path holds (250 MiB/device at
+        # 102,400 on an (8,1) stage). Nothing survives the capture it was built for.
+        self._llama4_scale_by_offset.clear()
 
     def warmup_ack_count(self) -> int:
         """How many D2H ack records capture_trace()'s warm pass will emit — one per layer of this rank's
