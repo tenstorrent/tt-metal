@@ -45,10 +45,11 @@ The device-operation class (`slice_device_operation.cpp`) and the op's top-level
 **byte-identical** to pre-port.
 
 **One capability lost outside the op, with no test left red:** the brief-mandated removal of the
-pybound `SliceTileProgramFactory.create_descriptor` takes slice out of the descriptor-fusion path,
-which the port cannot repair (fusion merges `ProgramDescriptor`s; a ported factory has none). Six
-fusion tests are converted from failures to skips by the same guard layernorm's port uses, under
-issue #54365 — `0 failed, 50 passed, 75 skipped`. See *Handoff points* #1.
+pybound `SliceTileProgramFactory.create_descriptor` takes slice out of the `OpDescriptor` path
+(`models/experimental/`), which the port cannot repair — that path needs a `ProgramDescriptor` object
+and a ported factory has none. Six tests are converted from failures to skips by the same guard
+layernorm's port uses, under issue #54365 — `0 failed, 50 passed, 75 skipped`. See
+*Handoff points* #1.
 
 **Bench caveat:** this machine's multi-chip ethernet topology defeats UMD's cluster discovery, so all
 runs used `TT_VISIBLE_DEVICES` to restrict to a single Wormhole card. That matches the
@@ -121,12 +122,21 @@ mirrors `layernorm_nanobind.cpp:339`, which is exactly the same shape: a factory
 2.0, still bound, with no methods. It costs nothing and it means a caller gets a clear
 missing-*method* error rather than a missing-*symbol* one.
 
-**What genuinely cannot be preserved.** A fusion branch does not merely call `create_descriptor` — it
-consumes the `ProgramDescriptor` structurally: `fusion.py:805` iterates `op.descriptor.kernels` to
-group them by RISC type, `op_descriptor.py:227` hashes the descriptor, and codegen emits a *fused*
-`ProgramDescriptor`. A ported factory produces a `ProgramSpec`, which that pipeline cannot consume.
-No binding shape recovers this; the capability is gone until fusion learns to consume a spec. The
-affected consumer is `models/experimental/ops/descriptors/data_movement/slice.py:54`.
+**What genuinely cannot be preserved.** The consumer does not merely *call* `create_descriptor`; it
+needs the returned `ProgramDescriptor` as an object. `OpDescriptor.launch()` hands it straight to
+`ttnn.generic_op` (`op_descriptor.py:334-338`); a *fused* tree goes further and consumes it
+structurally — `fusion.py:805` iterates `op.descriptor.kernels` to group them by RISC type,
+`op_descriptor.py:227` hashes it, and codegen emits a merged `ProgramDescriptor`. A ported factory
+produces a `ProgramSpec`, which neither path can consume. No binding shape recovers this.
+
+**Scope — wider than "fusion", but narrower than it first looks.** The entry point is
+`models/experimental/ops/descriptors/data_movement/slice.py:54`, and *both* its uses break: standalone
+`OpDescriptor.launch()`, and membership in a `Sequential` / `Parallel` tree (a "branch", in this
+infrastructure's terms, is one `OpDescriptor` inside such a tree — `fusion.py:441-458`). Against
+that: `Sequential` / `Parallel` are **already disabled by default** — `fusion.py:85-89` raises unless
+`TT_METAL_ENABLE_PARALLEL_SEQUENTIAL=1`, for the same *"until ProgramSpec is exposed to Python"*
+reason that #54365 tracks — and everything affected sits under `models/experimental/`. `ttnn.slice()`
+itself is untouched; it runs the spec path, which is what the 445 passing tests exercise.
 
 **Resolution — the layernorm precedent, applied.** The fusion suite already handles exactly this: an
 autouse fixture in `tests/ttnn/unit_tests/operations/fused/parallel_sequential/conftest.py` stands a
