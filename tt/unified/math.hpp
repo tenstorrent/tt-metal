@@ -254,6 +254,37 @@ inline void pack_geometry_assume(uint32_t dfb_id) {
 #endif
 }
 
+// ONE SHARED COPY OF THE PER-TILE PACK SEQUENCE, instead of one per store site.
+//
+// `ckernel::pack_tile` looks small and is not: it inlines the packer's address computation
+// and `program_packer_destination`, whose SETDMAREG / REG2FLOP / PACR sequence is most of
+// what the PACK projection contains. Attributed by line table, `kernel_main` on PACK was
+// 94.9% llk and ckernel code and only 3.4% tt/unified -- and the single hottest line,
+// cpack_common.h:873, was 1932 bytes spread over 235 INLINE SITES averaging eight bytes
+// each. Not one fat inline: the same sequence stamped out at every store. ttnn's own SDPA
+// compute kernel reaches the same llk through out-of-line helpers (`sdpa_pack_tile_ooo`,
+// `blocked_matmul_and_pack`) and has 10x to 17x fewer sites for those lines.
+//
+// Sharing it is worth 5188 bytes on flash_attention -- trisc2 18724 -> 13644 -- and costs
+// nothing: mean +0.01% over 43 cells, worst cell NEGATIVE, every llama_prefill config
+// within 0.2%. The call is per tile, so it trades one jal/ret for a sequence that is dozens
+// of instructions.
+//
+// THE PER-BLOCK PATH IS DELIBERATELY LEFT INLINE. Giving `ckernel::pack_block` the same
+// treatment saves a further 3848 bytes and costs +3.2% on Gemma 3 1B/d256 prefill and +0.6
+// to +1.0% on every other prefill config -- measured both ways round, and it is the block
+// path that carries all of it, not this one. A matmul packs a whole subblock per call so
+// the overhead amortises, but attention's many small packs do not. If that 3848 bytes is
+// ever needed, it is a size-for-speed trade to make on purpose rather than a free win.
+__attribute__((noinline)) inline void pack_one(uint32_t dst, uint32_t dfb_id) {
+#if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
+    ckernel::pack_tile(dst, dfb_id);
+#else
+    (void)dst;
+    (void)dfb_id;
+#endif
+}
+
 inline void pack_to(uint32_t dfb_id) {
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
     if (detail::g_pack_configured == dfb_id) {
@@ -1691,7 +1722,7 @@ struct Strategy<SFPUFusion> {
                 ckernel::tile_regs_commit();
                 ckernel::tile_regs_wait();
                 for (uint32_t k = 0; k < count; ++k) {
-                    ckernel::pack_tile(k * kLeaves + expr::leaf_result_ofs_v<Node>, dfb_id);
+                    pack_one(k * kLeaves + expr::leaf_result_ofs_v<Node>, dfb_id);
                 }
                 ckernel::tile_regs_release();
             }
@@ -1702,7 +1733,7 @@ struct Strategy<SFPUFusion> {
                 expr::emit(node, i, kEveryTile || i == 0);
                 ckernel::tile_regs_commit();
                 ckernel::tile_regs_wait();
-                ckernel::pack_tile(expr::result_slot_v<Node>, dfb_id);
+                pack_one(expr::result_slot_v<Node>, dfb_id);
                 ckernel::tile_regs_release();
             }
         }
@@ -1736,7 +1767,7 @@ struct Strategy<FpuEltwiseFusion> {
             ckernel::tile_regs_commit();
             ckernel::tile_regs_wait();
             for (uint32_t k = 0; k < count; ++k) {
-                ckernel::pack_tile(k, dfb_id);
+                pack_one(k, dfb_id);
             }
             ckernel::tile_regs_release();
         }
@@ -2305,7 +2336,7 @@ struct Strategy<BcastFusion> {
             }
             ckernel::tile_regs_commit();
             ckernel::tile_regs_wait();
-            ckernel::pack_tile(0, dfb_id);
+            pack_one(0, dfb_id);
             ckernel::tile_regs_release();
         }
         buffer(dfb_id).push_back(num_tiles);
@@ -2357,7 +2388,7 @@ struct Strategy<ReduceFusion> {
             }
             ckernel::tile_regs_commit();
             ckernel::tile_regs_wait();
-            ckernel::pack_tile(0, dfb_id);
+            pack_one(0, dfb_id);
             ckernel::tile_regs_release();
         }
         buffer(dfb_id).push_back(kOut);
