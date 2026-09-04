@@ -5,6 +5,8 @@
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
 #include <internal/service/service_core_manager.hpp>
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
+#include "distributed/mesh_device_impl.hpp"
+#include "impl/context/metal_env_impl.hpp"
 #include "tt_metal/distributed/named_shm.hpp"
 #include "tt_metal/distributed/hd_socket_connector_state.hpp"
 #include "tt_metal/distributed/hd_socket_descriptor.hpp"
@@ -167,7 +169,7 @@ D2HSocket::PinnedBufferInfo D2HSocket::init_host_buffer_hugepage(const std::shar
 }
 
 void D2HSocket::init_config_buffer(const std::shared_ptr<MeshDevice>& mesh_device) {
-    const SocketSenderSize sender_size;
+    const SocketSenderSize sender_size(mesh_device->impl().metal_env().get_hal().get_alignment(HalMemType::L1));
     uint32_t config_buffer_size = sender_size.md_size_bytes + sender_size.ack_size_bytes + sender_size.enc_size_bytes;
 
     auto shard_params = ShardSpecBuffer(
@@ -202,7 +204,7 @@ void D2HSocket::write_socket_metadata(
     const std::shared_ptr<MeshDevice>& mesh_device,
     const PinnedBufferInfo& data_info,
     const PinnedBufferInfo& bytes_sent_info) const {
-    const SocketSenderSize sender_size;
+    const SocketSenderSize sender_size(mesh_device->impl().metal_env().get_hal().get_alignment(HalMemType::L1));
     const uint32_t total_config_bytes =
         sender_size.md_size_bytes + sender_size.ack_size_bytes + sender_size.enc_size_bytes;
 
@@ -366,7 +368,7 @@ void D2HSocket::init_common(const std::shared_ptr<MeshDevice>& mesh_device) {
     write_socket_metadata(mesh_device, data_info, bytes_sent_info);
     init_sender_tlb(mesh_device);
 
-    const SocketSenderSize sender_size;
+    const SocketSenderSize sender_size(mesh_device->impl().metal_env().get_hal().get_alignment(HalMemType::L1));
     bytes_acked_device_offset_ = sender_size.md_size_bytes;
 
     enable_mock_flow_control(*mesh_device);
@@ -455,7 +457,8 @@ D2HSocket::D2HSocket(
     // through the same window (subtracting its base). An address outside the window
     // passes the alignment check above but then underflows or trips
     // TlbWindow::validate() on the first acknowledgement, so reject it up front.
-    const uint64_t config_end = static_cast<uint64_t>(config_buffer_address) + required_config_buffer_size();
+    const uint64_t config_end =
+        static_cast<uint64_t>(config_buffer_address) + required_config_buffer_size(l1_alignment);
     TT_FATAL(
         config_buffer_address >= ll_api::kL2cpuLimBase && config_end <= ll_api::kL2cpuLimTlbEnd,
         "L2CPU D2H config buffer [0x{:x}, 0x{:x}) must lie inside the LIM window [0x{:x}, 0x{:x}) covered by the "
@@ -470,8 +473,8 @@ D2HSocket::D2HSocket(
     init_common(mesh_device_ptr);
 }
 
-uint32_t D2HSocket::required_config_buffer_size() {
-    const SocketSenderSize sender_size;
+uint32_t D2HSocket::required_config_buffer_size(uint32_t l1_alignment) {
+    const SocketSenderSize sender_size(l1_alignment);
     return sender_size.md_size_bytes + sender_size.ack_size_bytes + sender_size.enc_size_bytes;
 }
 

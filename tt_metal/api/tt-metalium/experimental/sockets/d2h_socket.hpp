@@ -99,7 +99,7 @@ public:
      * Used by callers that own their sender core's L1 layout (e.g. the real-time
      * profiler, which carves its config out of dispatch L1 on the reserved
      * profiler tensix). The region must be at least
-     * D2HSocket::required_config_buffer_size() bytes, L1-aligned, and live for
+     * D2HSocket::required_config_buffer_size(l1_alignment) bytes, L1-aligned, and live for
      * the lifetime of the socket.
      */
     struct ExternalConfigBuffer {
@@ -114,7 +114,7 @@ public:
      * socket's configuration buffer should use this to size that region (or
      * static_assert their own constant against it).
      */
-    static uint32_t required_config_buffer_size();
+    static uint32_t required_config_buffer_size(uint32_t l1_alignment);
 
     /**
      * @brief Constructs a D2HSocket using a caller-provided config buffer address.
@@ -143,7 +143,7 @@ public:
      *                     coord of an L2CPU tile on the target device.
      * @param fifo_size Size of the circular FIFO buffer in bytes. Must be PCIe-aligned.
      * @param config_buffer_address LIM address on the sender L2CPU for the socket metadata.
-     *                              Must be L1-aligned, at least required_config_buffer_size()
+     *                              Must be L1-aligned, at least required_config_buffer_size(l1_alignment)
      *                              bytes, and within the L2CPU's static TLB window.
      */
     D2HSocket(
