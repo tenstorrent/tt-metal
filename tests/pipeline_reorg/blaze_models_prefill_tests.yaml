@@ -870,8 +870,8 @@
   test_tags: [mistral4, transformer]
   test_group: module
   skus:
-    bh_sc1:
-      # ~1.4x the worst observed test step (24.9 min over three runs). The run-to-run swing is the
+    bh_sc1_high_power:
+      # ~1.4x the worst observed test step (24.9 min over three runs, on bh_sc1). The run-to-run swing is the
       # weight cache -- tt_transformer_creation ranges 1-17 min on page-cache warmth while tt_forward
       # is stable -- and it does not show up in the per-chunk medians, which have their own bands.
       timeout: 35
