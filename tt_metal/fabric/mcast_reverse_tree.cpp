@@ -13,6 +13,7 @@
 #include <fmt/format.h>
 
 #include "hostdevcommon/fabric_common.h"
+#include "routing_2d_table_builder.hpp"
 
 namespace tt::tt_fabric {
 
@@ -316,6 +317,12 @@ std::vector<RoutingDirection> mcast_root_output_directions(
 
 namespace {
 
+void set_mcast_tree_edge(std::uint8_t* region, std::uint32_t index, std::uint16_t packed_edge) {
+    const std::uint32_t byte_index = index * Routing2DCodec::MCAST_TREE_EDGE_BYTES;
+    region[byte_index] = static_cast<std::uint8_t>(packed_edge & 0xFF);
+    region[byte_index + 1] = static_cast<std::uint8_t>((packed_edge >> 8) & 0xFF);
+}
+
 // One axis of the embed: build T(root), pack it, and lay the words down at `offset`.
 bool embed_one_axis(
     const MeshGraph& mesh_graph,
@@ -362,7 +369,7 @@ bool embed_one_axis(
 
     std::uint8_t* region = route_table_2d + offset;
     for (std::uint32_t i = 0; i < expected; i++) {
-        Routing2DCodec::set_mcast_tree_edge(region, i, (*packed)[i]);
+        set_mcast_tree_edge(region, i, (*packed)[i]);
     }
     return true;
 }
@@ -381,15 +388,15 @@ bool embed_mcast_reverse_trees(
     const auto y_size = static_cast<std::uint32_t>(y_topo.axis_len);
     const auto x_size = static_cast<std::uint32_t>(x_topo.axis_len);
 
-    if (!Routing2DCodec::route_table_regions_fit(y_size, x_size)) {
+    if (!is_valid_2d_route_table_shape(y_size, x_size)) {
         if (failure != nullptr) {
             *failure = fmt::format(
-                "[{},{}] needs {} B of action vectors and {} B of reverse trees, exceeding fixed capacities "
-                "{} B and {} B",
+                "[{},{}] cannot fit the fixed 2D route table: axes must be in [1,{}], the mesh must have at most {} "
+                "chips, and its action vectors and multicast trees must fit {} B and {} B",
                 y_size,
                 x_size,
-                Routing2DCodec::vectors_region_bytes(y_size, x_size),
-                Routing2DCodec::mcast_tree_region_bytes(y_size, x_size),
+                Routing2DCodec::MAX_AXIS_SIZE,
+                MAX_MESH_SIZE,
                 Routing2DCodec::ACTION_VECTOR_CAPACITY_BYTES,
                 Routing2DCodec::MCAST_TREE_CAPACITY_BYTES);
         }
