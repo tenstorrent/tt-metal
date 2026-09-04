@@ -12,7 +12,6 @@ shape of the run_id it mints.
 import pandas as pd
 import pyarrow.parquet as pq
 from helpers.perf.core import (
-    attempt_of,
     group_by_arch,
     merge_main,
     merge_run,
@@ -47,8 +46,14 @@ def _shard(root, *, run_id, arch, shard, timestamp, commit_sha="deadbeef", rows=
     return path
 
 
-def _night(root, run="42", *, commit_sha="deadbeef"):
-    """Five shards on each of two arches, with staggered write times."""
+def _sharded_nightly(root, run="42", *, commit_sha="deadbeef"):
+    """One nightly's artefacts: five split groups on each of two architectures.
+
+    Five because that is what tests/pipeline_reorg/llk_perf_tests.yaml defines
+    -- llk_perf_wormhole group 1/5 .. 5/5, and the same for blackhole -- which
+    llk-perf-impl.yaml turns into one job each. Write times are staggered
+    because every shard stamps its own, minutes apart.
+    """
     for arch in ("wormhole", "blackhole"):
         for shard in range(5):
             _shard(
@@ -62,7 +67,7 @@ def _night(root, run="42", *, commit_sha="deadbeef"):
 
 
 def test_merge_produces_one_file_per_arch(tmp_path):
-    _night(tmp_path / "runs")
+    _sharded_nightly(tmp_path / "runs")
 
     merged = merge_run(
         list((tmp_path / "runs").glob("**/*.parquet")), str(tmp_path / "out")
@@ -81,7 +86,7 @@ def test_merge_produces_one_file_per_arch(tmp_path):
 def test_merge_unifies_run_id_and_takes_the_earliest_timestamp(tmp_path):
     # Both vary per shard, and the loader fails a file whose run columns are
     # not constant. RUN_TS is "when the run executed", so earliest wins.
-    _night(tmp_path / "runs")
+    _sharded_nightly(tmp_path / "runs")
 
     merge_run(list((tmp_path / "runs").glob("**/*.parquet")), str(tmp_path / "out"))
 
@@ -94,7 +99,7 @@ def test_merge_unifies_run_id_and_takes_the_earliest_timestamp(tmp_path):
 
 
 def test_merge_keeps_every_row(tmp_path):
-    _night(tmp_path / "runs")
+    _sharded_nightly(tmp_path / "runs")
     shards = list((tmp_path / "runs").glob("**/*.parquet"))
     before = sum(pq.read_metadata(p).num_rows for p in shards)
 
@@ -168,32 +173,93 @@ def test_run_id_carries_the_workflow_run_so_a_dispatch_cannot_replace_a_night():
     assert scheduled != dispatched
 
 
-def test_run_id_keeps_a_re_run_attempt():
-    assert (
-        merged_run_id(
-            pipeline="nightly",
-            timestamp="2026-09-01T03:00:00+00:00",
-            workflow_run_id="42",
-            arch="wormhole",
-            attempt="2",
-        )
-        == "nightly-20260901-42-wormhole-2"
+def test_re_running_a_shard_keeps_the_merged_run_id(tmp_path):
+    # A re-run bumps GITHUB_RUN_ATTEMPT, so its shard's run_id gains a suffix
+    # while the shards that already passed keep theirs. The merged id must not
+    # depend on which is read first, and re-uploading must replay over the
+    # partial night rather than add a second one beside it.
+    runs = tmp_path / "runs"
+    _shard(
+        runs,
+        run_id="42-wormhole-0",
+        arch="wormhole",
+        shard=0,
+        timestamp="2026-09-01T03:00:00+00:00",
+    )
+    _shard(
+        runs,
+        run_id="42-wormhole-1-2",
+        arch="wormhole",
+        shard=1,
+        timestamp="2026-09-01T05:00:00+00:00",
     )
 
+    merged = merge_run(list(runs.glob("**/*.parquet")), str(tmp_path / "out"))
 
-def test_attempt_and_workflow_id_come_from_the_shard_run_id():
+    assert [m["run_id"] for m in merged] == ["nightly-20260901-42-wormhole"]
+
+
+def test_merge_refuses_shards_from_two_workflow_runs(tmp_path):
+    # Same commit, two runs -- a scheduled night and a manual dispatch -- would
+    # otherwise merge under whichever shard came first.
+    runs = tmp_path / "runs"
+    _shard(
+        runs,
+        run_id="42-wormhole-0",
+        arch="wormhole",
+        shard=0,
+        timestamp="2026-09-01T03:00:00+00:00",
+    )
+    _shard(
+        runs,
+        run_id="43-wormhole-1",
+        arch="wormhole",
+        shard=1,
+        timestamp="2026-09-01T04:00:00+00:00",
+    )
+
+    try:
+        merge_run(list(runs.glob("**/*.parquet")), str(tmp_path / "out"))
+    except ValueError as e:
+        assert "workflow runs" in str(e)
+    else:
+        raise AssertionError("expected a ValueError")
+
+
+def test_group_by_arch_refuses_an_arch_outside_the_known_set(tmp_path):
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    path = _shard(
+        tmp_path,
+        run_id="42-wormhole-0",
+        arch="wormhole",
+        shard=0,
+        timestamp="2026-09-01T03:00:00+00:00",
+    )
+    table = pq.read_table(path)
+    table = table.set_column(
+        table.schema.get_field_index("arch"),
+        "arch",
+        pa.array(["wormhol"] * table.num_rows, type=pa.string()),
+    )
+    pq.write_table(table, path)
+
+    try:
+        group_by_arch([str(path)])
+    except ValueError as e:
+        assert "unknown arch" in str(e)
+    else:
+        raise AssertionError("expected a ValueError")
+
+
+def test_workflow_id_comes_from_the_shard_run_id():
     assert workflow_run_id_of("33465181016-wormhole-4") == "33465181016"
     assert workflow_run_id_of("33465181016") == "33465181016"
-    # Four run_id shapes across the two eras of the archive. A shard index is a
-    # trailing number too, so only the component count separates them.
-    assert attempt_of("33465181016", "33465181016") == ""  # legacy, attempt 1
-    assert attempt_of("33465181016-2", "33465181016") == "2"  # legacy, re-run
-    assert attempt_of("33465181016-wormhole-4", "33465181016") == ""  # current
-    assert attempt_of("33465181016-wormhole-4-2", "33465181016") == "2"  # its re-run
 
 
 def test_cli_merges_and_reports(tmp_path, capsys):
-    _night(tmp_path / "runs")
+    _sharded_nightly(tmp_path / "runs")
 
     code = merge_main(
         ["--in-dir", str(tmp_path / "runs"), "--out-dir", str(tmp_path / "out")]

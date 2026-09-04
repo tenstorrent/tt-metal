@@ -20,6 +20,11 @@ on:
         default: false
         type: boolean
       only-group:
+        # For testing a change to this workflow. The perf suite is split into
+        # five groups per architecture, so a full manual run occupies ten perf
+        # machines for two hours; naming one group runs that group alone, on
+        # one machine. Empty -- the default, and what a scheduled run gets --
+        # runs every group.
         description: "Run only this split group (1-5). Empty runs every group."
         required: false
         default: ""
@@ -202,6 +207,10 @@ jobs:
   upload-perf-data:
     name: "Upload perf data to the warehouse"
     needs: [build-images, llk-perf-exec]
+    # always(): a night that lost shards still produced the ones that finished,
+    # and partial coverage is real data. Publishing it is safe because the
+    # merged run_id carries no attempt, so re-running the failed shards and
+    # re-uploading replays over the partial night instead of adding a second.
     if: ${{ always() && inputs.upload-to-warehouse }}
     runs-on: ubuntu-latest
     # The merge lives in helpers.perf.core, whose imports reach the device
@@ -224,6 +233,12 @@ jobs:
         working-directory: ${{ env.LLK_PATH }}/tests/python_tests
         env:
           PYTHONPATH: .
+          # Required, and not by the merge: importing anything under helpers
+          # runs helpers/device.py, whose module scope calls
+          # get_chip_architecture(), which probes a device when CHIP_ARCH is
+          # unset. This runner has none. The value is arbitrary -- the merge
+          # reads each file's own arch column and stamps no new rows -- but it
+          # must be one ChipArchitecture accepts.
           CHIP_ARCH: wormhole
         run: |
           python3 -m helpers.perf.core \

@@ -1069,18 +1069,24 @@ def create_test_or_perf_config(
 
 RUN_ID_TEMPLATE = "{pipeline}-{date}-{workflow_run_id}-{arch}"
 
+# The architectures a run Parquet may claim. Anything else is a corrupt or
+# hand-edited file, which must not reach the warehouse.
+MERGE_ARCHES = ("wormhole", "blackhole", "quasar")
 
-def merged_run_id(*, pipeline, timestamp, workflow_run_id, arch, attempt=""):
+
+def merged_run_id(*, pipeline, timestamp, workflow_run_id, arch):
     """The run_id one merged file carries. Derived only from the rows.
 
-    Deriving it from the file contents rather than the CI environment is what
-    lets the backfill produce exactly what the nightly produces.
+    No re-run attempt: one workflow run is one run whatever it took to finish,
+    so re-running failed shards and re-uploading replays over the partial night
+    instead of adding a second one beside it.
     """
-    date = _date_of(timestamp)
-    run_id = RUN_ID_TEMPLATE.format(
-        pipeline=pipeline, date=date, workflow_run_id=workflow_run_id, arch=arch
+    return RUN_ID_TEMPLATE.format(
+        pipeline=pipeline,
+        date=_date_of(timestamp),
+        workflow_run_id=workflow_run_id,
+        arch=arch,
     )
-    return f"{run_id}-{attempt}" if attempt else run_id
 
 
 def _date_of(timestamp):
@@ -1106,27 +1112,6 @@ def workflow_run_id_of(run_id):
     return run_id.split("-", 1)[0]
 
 
-def attempt_of(run_id, workflow_run_id):
-    """The re-run attempt in a per-shard run_id, or "" for attempt 1.
-
-    A run_id is one of four shapes, across the two eras of the archive::
-
-        <wf>                        legacy, attempt 1
-        <wf>-<attempt>              legacy, re-run
-        <wf>-<arch>-<shard>         current, attempt 1
-        <wf>-<arch>-<shard>-<att>   current, re-run
-
-    So the attempt is the trailing component only when stripping the workflow
-    id leaves one or three parts. Two parts is ``<arch>-<shard>``, whose shard
-    index is a trailing number that is not an attempt -- which is what a
-    "trailing digits" rule gets wrong.
-    """
-    if not run_id.startswith(f"{workflow_run_id}-"):
-        return ""
-    parts = run_id[len(workflow_run_id) + 1 :].split("-")
-    return parts[-1] if len(parts) in (1, 3) and parts[-1].isdigit() else ""
-
-
 def group_by_arch(paths):
     """Map arch -> its shard paths, reading arch from the rows, not the name.
 
@@ -1137,10 +1122,15 @@ def group_by_arch(paths):
 
     groups = {}
     for path in sorted(paths):
-        arch = set(pq.read_table(path, columns=["arch"]).column("arch").to_pylist())
-        if len(arch) != 1:
-            raise ValueError(f"{path}: arch is not constant: {sorted(arch)}")
-        groups.setdefault(arch.pop(), []).append(path)
+        values = set(pq.read_table(path, columns=["arch"]).column("arch").to_pylist())
+        if len(values) != 1:
+            raise ValueError(f"{path}: arch is not constant: {sorted(values)}")
+        arch = values.pop()
+        if arch not in MERGE_ARCHES:
+            raise ValueError(
+                f"{path}: unknown arch {arch!r}; expected one of {MERGE_ARCHES}"
+            )
+        groups.setdefault(arch, []).append(path)
     return groups
 
 
@@ -1170,16 +1160,24 @@ def merge_run(paths, out_dir, *, prefix="llk_perf_"):
                 )
             constant[column] = values.pop() if values else None
 
-        timestamps = [t for t in table.column("timestamp").to_pylist() if t]
-        earliest = min(timestamps)
-        shard_ids = table.column("run_id").to_pylist()
-        workflow_run_id = workflow_run_id_of(shard_ids[0])
+        # Every shard must come from the same workflow run. Two runs of one
+        # commit -- a scheduled night and a manual dispatch -- would otherwise
+        # merge under whichever shard happened to come first.
+        workflow_run_ids = {
+            workflow_run_id_of(r) for r in table.column("run_id").to_pylist()
+        }
+        if len(workflow_run_ids) > 1:
+            raise ValueError(
+                f"{arch}: shards come from {len(workflow_run_ids)} workflow runs: "
+                f"{sorted(workflow_run_ids)[:5]}"
+            )
+
+        earliest = min(t for t in table.column("timestamp").to_pylist() if t)
         run_id = merged_run_id(
             pipeline=constant["pipeline"],
             timestamp=earliest,
-            workflow_run_id=workflow_run_id,
+            workflow_run_id=workflow_run_ids.pop(),
             arch=arch,
-            attempt=attempt_of(shard_ids[0], workflow_run_id),
         )
 
         for column, value in (("run_id", run_id), ("timestamp", earliest)):
