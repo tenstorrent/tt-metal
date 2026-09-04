@@ -646,19 +646,49 @@ class StimuliConfig:
                 twos_complement=self.twos_complement,
             )
 
-        StimuliConfig.write_matrix(
-            self.buffer_B,
-            self.tile_count_B,
-            pack_function_B,
-            self.buf_b_addr,
-            self.tile_size_B_bytes,
-            self.num_faces,
-            self.face_r_dim,
-            location,
-            self.write_full_tiles,
-            use_srcs=self._operand_use_srcs("B"),
-            twos_complement=self.twos_complement,
-        )
+        # laneMQ two-operand raw-injection point (mirror of the laneJN raw-A path
+        # above, for operand B). When the test set `lanejn_raw_b` (exact per-tile
+        # packed payload bytes for operand B, concatenated tile 0..N-1), write
+        # THOSE bytes to L1 instead of the packed generated tensor. This makes the
+        # SECOND operand of a binary op sweepable at the bit level for ops whose
+        # ABI keeps operand B in buffer_B. (SFPU binary pow/xlogy/etc. instead pack
+        # both operands into buffer_A as interleaved even/odd tiles — those ops are
+        # driven through the raw-A path with an interleaved payload, not this one.)
+        # Reusable and inert unless the attribute is set.
+        _lanejn_raw_b = getattr(self, "lanejn_raw_b", None)
+        if _lanejn_raw_b is not None:
+            if len(_lanejn_raw_b) % self.tile_count_B != 0:
+                raise ValueError(
+                    f"lanejn_raw_b length {len(_lanejn_raw_b)} not divisible by "
+                    f"tile_count_B {self.tile_count_B}"
+                )
+            _payload_b = len(_lanejn_raw_b) // self.tile_count_B
+            if _payload_b > self.tile_size_B_bytes:
+                raise ValueError(
+                    f"lanejn_raw_b per-tile payload {_payload_b} exceeds "
+                    f"tile_size_B_bytes {self.tile_size_B_bytes}"
+                )
+            for _ind in range(self.tile_count_B):
+                write_to_device(
+                    location,
+                    self.buf_b_addr + _ind * self.tile_size_B_bytes,
+                    _lanejn_raw_b[_ind * _payload_b : (_ind + 1) * _payload_b],
+                )
+            self.lanejn_src_b_raw = bytes(_lanejn_raw_b)
+        else:
+            StimuliConfig.write_matrix(
+                self.buffer_B,
+                self.tile_count_B,
+                pack_function_B,
+                self.buf_b_addr,
+                self.tile_size_B_bytes,
+                self.num_faces,
+                self.face_r_dim,
+                location,
+                self.write_full_tiles,
+                use_srcs=self._operand_use_srcs("B"),
+                twos_complement=self.twos_complement,
+            )
 
         for op in self._active_optional_operands():
             self._write_optional_operand(op, location, dense=False)
@@ -677,13 +707,16 @@ class StimuliConfig:
                 f"Unsupported data formats: srcA({self.stimuli_A_format.name}), srcB({self.stimuli_B_format.name})"
             )
 
-        if getattr(self, "lanejn_raw_a", None) is not None:
-            # laneJN raw injection is only implemented for the
+        if (
+            getattr(self, "lanejn_raw_a", None) is not None
+            or getattr(self, "lanejn_raw_b", None) is not None
+        ):
+            # laneJN/laneMQ raw injection is only implemented for the
             # backward-compatible tile layout; fail loudly rather than sweep
             # the wrong bytes.
             raise RuntimeError(
-                "lanejn_raw_a injection is unsupported on the dense "
-                "tile-dimensions write path"
+                "lanejn_raw_a / lanejn_raw_b injection is unsupported on the "
+                "dense tile-dimensions write path"
             )
         self.lanejn_src_a_raw = StimuliConfig.write_matrix_w_tile_dimensions(
             self.buffer_A,

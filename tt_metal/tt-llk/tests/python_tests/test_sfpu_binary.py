@@ -408,6 +408,86 @@ def _logsigmoid_stimuli_spec():
 # =============================================================================
 
 
+def _lanemk_run_binary_stream(configuration, spec):
+    """laneMQ persistent-session TWO-operand 2^32 streamer (object-identity preserving).
+
+    Runs the CERTIFIED corpus binary kernel (this exact `configuration` / ELF) over a
+    [start, start+count) band of the joint bf16 x bf16 space in ONE open device session,
+    folding each dispatch's raw result-region bytes into a streaming SHA-256. Each
+    dispatch injects an interleaved buffer_A payload (even tile = base, odd tile =
+    exponent) through the validated laneJN raw-A L1 path -- the SFPU binary ABI keeps
+    both operands in buffer_A, so no separate raw-B write is needed here. Emits one
+    LANEMK_STREAM_BINARY_RESULT line (per-leg output SHA + joint sum64/xor32 coverage
+    checksums + measured wall/per-dispatch). Env-gated; never runs in a normal test.
+
+    spec = "start,count,outfile" (start, count are joint indices, both multiples of the
+    per-dispatch joint span pairs*1024).
+    """
+    import hashlib
+    import struct  # noqa: F401  (kept for parity with the laneMK unary streamer)
+    import sys
+    import time
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "corpus" / "tools"))
+    import binary_stream_lib as B
+
+    start_s, count_s, outfile = spec.split(",", 2)
+    start = int(start_s, 0)
+    count = int(count_s, 0)
+    st = configuration.variant_stimuli
+    loc = TestConfig.TENSIX_LOCATION
+
+    tca = int(st.tile_count_A)
+    if tca % 2:
+        raise RuntimeError(
+            f"binary stream needs an even tile_count_A (pairs), got {tca}"
+        )
+    pairs = tca // 2
+    joint_per = pairs * B.ELEMS_PER_TILE
+
+    configuration.prepare()
+    configuration.write_runtimes_to_L1()
+
+    import os
+
+    _wait_to = int(os.environ.get("LANEMK_WAIT_TIMEOUT", "60"))
+
+    sha = hashlib.sha256()
+    sum64 = 0
+    xor32 = 0
+    joints = 0
+    runs = 0
+    t0 = time.time()
+    for ds, span in B.enum_dispatches(start, count, joint_per):
+        # Inject both operands as one interleaved buffer_A payload (even=base, odd=exp).
+        st.lanejn_raw_a = B.interleaved_payload(ds, pairs)
+        st.write(loc)
+        st.clear_result_buffer(loc)
+        configuration.run_elf_files()
+        configuration.wait_for_tensix_operations_finished(timeout=_wait_to)
+        res = st.collect_raw_result_bytes(loc)
+        # Whole (cleared) result region: whole dispatches only, so no padding to exclude.
+        sha.update(res)
+        for j in range(ds, ds + span):
+            sum64 = (sum64 + j) & ((1 << 64) - 1)
+            xor32 ^= j
+        joints += span
+        runs += 1
+    dt = time.time() - t0
+
+    line = (
+        "LANEMK_STREAM_BINARY_RESULT,"
+        f"start={start},count={joints},runs={runs},joint_per_dispatch={joint_per},"
+        f"pairs={pairs},wall_s={dt:.3f},per_run_ms={(1000.0 * dt / runs) if runs else 0:.3f},"
+        f"sum64=0x{sum64:016x},xor32=0x{xor32:08x},"
+        f"output_sha256={sha.hexdigest()}"
+    )
+    print(line, flush=True)
+    with open(outfile, "w") as fh:
+        fh.write(line + "\n")
+
+
 def sfpu_binary(
     formats,
     dest_acc,
@@ -571,6 +651,17 @@ def sfpu_binary(
         unpack_to_dest=formats.input_format.is_32_bit(),
         compile_time_formats=True,
     )
+    # laneMQ two-operand 2^32 streamer hook (env-gated, inert otherwise): stream the
+    # certified kernel over a band of the joint bf16 x bf16 space in one open device
+    # session and emit a per-leg output SHA + coverage line. Object identity is preserved
+    # (same `configuration`, same ELF). LANEMK_STREAM_BINARY="start,count,outfile".
+    import os as _lanemk_os
+
+    _lanemk_stream_binary = _lanemk_os.environ.get("LANEMK_STREAM_BINARY")
+    if _lanemk_stream_binary:
+        _lanemk_run_binary_stream(configuration, _lanemk_stream_binary)
+        return
+
     res_from_L1 = configuration.run().result
 
     torch_format = format_dict[formats.output_format]
