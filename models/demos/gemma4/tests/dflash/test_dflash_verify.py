@@ -33,7 +33,7 @@ from models.demos.gemma4.tt.dflash.config import Gemma4DFlashDrafterConfig
 from models.demos.gemma4.tt.dflash.context import compute_context
 from models.demos.gemma4.tt.dflash.drafter import dflash_drafter_forward
 from models.demos.gemma4.tt.dflash.lm_head import compute_dflash_logits, load_gemma4_lm_head_weight
-from models.demos.gemma4.tt.dflash.verify import dflash_verify, greedy_accept_from_posterior
+from models.demos.gemma4.tt.dflash.verify import dflash_verify, greedy_accept_from_posterior, make_verify_buffers
 from models.demos.gemma4.tt.dflash.weights import load_gemma4_dflash_weights
 from models.tt_transformers.tt.common import PagedAttentionConfig
 
@@ -170,7 +170,8 @@ def test_dflash_verify_t3k(mesh_device, device_params, model_path):
 
     # ---- real verify: candidates = [real anchor token] + our own drafted tokens ----
     candidate_ids = [real_first_token] + draft_tokens
-    posterior, _ = dflash_verify(model, mesh_device, tt_kv_cache, page_table, candidate_ids, start_pos=ctx_len)
+    verify_buffers = make_verify_buffers(mesh_device, page_table, block_size)
+    posterior, _ = dflash_verify(model, mesh_device, tt_kv_cache, verify_buffers, candidate_ids, start_pos=ctx_len)
     acceptance_length, bonus, committed = greedy_accept_from_posterior(candidate_ids, posterior)
 
     print(f"posterior (ttnn):  {posterior.tolist()}")
