@@ -29,7 +29,7 @@ from ttexalens.tt_exalens_lib import (
 from .device_io import read_from_device, write_words_to_device
 from .llk_params import BriscCmd
 from .logger import logger
-from .simulator_backend import is_versim
+from .target_config import TestTargetConfig
 
 
 class _UninitializedMailboxes:
@@ -206,23 +206,19 @@ def get_register_store(location="0,0", device_id=0, neo_id=0):
     return register_store
 
 
-# Cache of the tt_umd TTDevice behind tt-exalens, keyed by device id. Versim runs
-# tt-exalens in-process, so this is the real nanobind object rather than a proxy.
-_VERSIM_TT_DEVICES = {}
-
-
 def _versim_tt_device(device_id: int = 0):
-    if device_id not in _VERSIM_TT_DEVICES:
-        umd_device = check_context().umd_api.get_device(device_id)
-        _VERSIM_TT_DEVICES[device_id] = umd_device.get_local_tt_device()
-    return _VERSIM_TT_DEVICES[device_id]
+    """The tt_umd TTDevice behind tt-exalens. Versim runs in-process, so this is
+    the real nanobind object rather than a Pyro5 proxy, and both hops are a dict
+    lookup and an attribute read -- not worth caching, and caching it across a
+    context re-init would hand back a handle to a dead simulator."""
+    return check_context().umd_api.get_device(device_id).get_local_tt_device()
 
 
 def _versim_set_tensix_soft_reset(value, location="0,0", device_id=0):
     """Drive RISC reset on Versim, which cannot be reset through the register bus.
 
     On silicon the reset is a read-modify-write of RISCV_DEBUG_REG_SOFT_RESET_0 over
-    the NOC. Under Versim that access aliases into L1 (see helpers.simulator_backend),
+    the NOC. Under Versim that access aliases into L1 (see helpers.target_config),
     so the register never changes and the read-back is unrelated data. UMD models
     simulator reset as its own backdoor command instead, which Versim maps onto its
     internal reset handling.
@@ -260,7 +256,7 @@ def get_soft_reset_mask(cores: list[RiscCore]):
 def set_tensix_soft_reset(
     value, cores: list[RiscCore] = ALL_CORES, location="0,0", device_id=0
 ):
-    if is_versim():
+    if not TestTargetConfig().has_host_register_access:
         # cores cannot be honoured here; see _versim_set_tensix_soft_reset.
         _versim_set_tensix_soft_reset(value, location, device_id)
         return
@@ -281,7 +277,7 @@ def set_tensix_soft_reset(
 def commit_tensix_soft_reset(
     value, cores: list[RiscCore] = ALL_CORES, location="0,0", device_id=0
 ):
-    if is_versim():
+    if not TestTargetConfig().has_host_register_access:
         # The read-back poll below confirms the register latched the write. Versim has
         # no such register to poll, and its backdoor reset is synchronous, so applying
         # it is the whole operation.
@@ -374,7 +370,7 @@ def wait_brisc_boot_ready(location: str = "0,0", timeout: float = 1.0):
 
 
 def assert_if_all_in_reset(location: str = "0,0", place: str = ""):
-    if is_versim():
+    if not TestTargetConfig().has_host_register_access:
         # Reading the soft reset register under Versim returns aliased L1, so this
         # check could only produce a spurious failure.
         return
@@ -433,7 +429,7 @@ def load_elf(
     through .loader_init in L1 and ElfLoader.remap_address redirects it there. Every
     write lands in L1, which Versim serves correctly.
     """
-    if not is_versim():
+    if TestTargetConfig().has_host_register_access:
         return _ttexalens_load_elf(
             elf_file=elf_file,
             location=location,
@@ -522,7 +518,7 @@ def _print_callstack(risc_name: str, callstack: list[CallstackEntry]) -> str:
 
 
 def handle_if_assert_hit(elfs: list[str], core_loc="0,0", device_id=0):
-    if is_versim():
+    if not TestTargetConfig().has_risc_debug:
         # is_ebreak_hit() and callstack() both go through the RISC debug hardware,
         # which lives behind the register bus Versim does not expose to the host.
         # Probing it would report noise, so leave the caller's timeout to speak for
