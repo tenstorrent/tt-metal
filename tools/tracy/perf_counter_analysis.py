@@ -1785,10 +1785,8 @@ def compute_device_only_metrics(
             safe_complement("value_MATH_NOT_STALLED_DEST_WR_PORT", "value_MATH_INSTRN_AVAILABLE"),
             axis=1,
         )
-    # AVAILABLE_MATH is a TDMA_PACK counter and MATH_INSTRN_AVAILABLE a TDMA_UNPACK one. A capture
-    # that took unpack without pack produces no AVAILABLE_MATH column at all, and safe_complement's
-    # .get(key, 0) would then report a flat 100%. Existence is the right test: a captured all-zero
-    # column is a real fully-stalled reading and must stay.
+    # AVAILABLE_MATH is PACK-group, so an unpack-only capture has no column and would read as 100%.
+    # Existence only, unlike the sum guard above: an all-zero column is a real fully-stalled reading.
     if "value_AVAILABLE_MATH" in eff_pivot.columns:
         eff_pivot["Math Scoreboard Stall Rate"] = eff_pivot.apply(
             safe_complement("value_AVAILABLE_MATH", "value_MATH_INSTRN_AVAILABLE"),
