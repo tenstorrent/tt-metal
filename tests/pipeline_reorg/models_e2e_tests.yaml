@@ -956,6 +956,39 @@
 # weights' device addresses and dynamic_load evicts them. The 4x8 galaxy rows need neither: 32
 # chips hold the whole pipeline resident. They also run Ring topology, the path the
 # ColParallelLinear addcmul bug does not affect. Add a bh_quietbox_2 leg once that fix lands.
+# Two purposes. First, bh_quietbox_2 e2e is viable for the first time: it needed the
+# dynamic_load=True + release_traces() fix from #55364, without which the encoder OOMs partway
+# through weight conversion (dynamic_load off) or a trace replays freed weights (dynamic_load on).
+# Second, this is the run that stages the rest of the FLUX.2-dev snapshot. bh_quietbox_2 and
+# bh_sc1 share one NFS export -- QB2 mounts host /mnt/models/huggingface at
+# /mnt/MLPerf/huggingface, sc1 reads /mnt/models/huggingface directly -- and the share currently
+# holds only what QB2's *unit* runs pulled: transformer, text_encoder, tokenizer, vae. No
+# pipeline has ever run, so scheduler/ is absent, which is exactly what run 33690418331 died on
+# for bh_sc1 e2e. Dispatch this with mlperf-write-access=true and the pipeline fetches the
+# missing subfolders into the shared mount, unblocking the bh_sc1 e2e leg above.
+- name: TT-DiT Flux.2-dev e2e tests
+  cmd: |
+    unset TT_METAL_WATCHER  # blocked by #50886
+    unset HF_HUB_OFFLINE  # scheduler/ is not staged yet; this run is what fetches it
+    export NO_PROMPT=1
+    export TT_DIT_CACHE_DIR=/mnt/MLPerf/huggingface/tt_dit_cache/black-forest-labs/FLUX.2-dev
+    # bh_qb is the (2,2) row and the only one a 4-chip box matches, since the perf rows carry
+    # require_exact_physical_num_devices. 1024x1024 only -- the resolutions run to 8192.
+    pytest --timeout 4800 -rs models/tt_dit/tests/models/flux2/test_performance_flux2.py \
+      -k "bh_qb and 1024x1024"
+  model: flux.2-dev
+  model_family: Flux
+  skus:
+    bh_quietbox_2:
+      # Cold-run allowance: first pipeline run on this SKU, so it downloads the missing
+      # subfolders and converts encoder + transformer + VAE weights for the pipeline's own
+      # parallel configs. Recalibrate once measured.
+      timeout: 90
+      tier: 1
+      release_ready: false
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
 - name: TT-DiT Flux.2-dev multihost e2e tests
   # BLOCKED as of run 33690418331: the FLUX.2-dev snapshot pre-staged on this SKU's
   # /mnt/models/huggingface is incomplete -- it has transformer, text_encoder, tokenizer and vae
