@@ -333,6 +333,85 @@ class TestDryRunCli(unittest.TestCase):
         self.assertEqual(record["pass_pct"], 12.5)
         self.assertEqual(record["hosts"], HOSTS.split(","))
 
+    def test_invalid_pass_pct_override_rejected(self):
+        artifact = self._iteration_dir(["Detected Hosts: bh-glx-110-c01u02\nAll Detected Links are healthy\n"])
+        stderr = io.StringIO()
+        with redirect_stderr(stderr), self.assertRaises(SystemExit) as caught:
+            main(
+                [
+                    "--test-type",
+                    "physical",
+                    "--hosts",
+                    HOSTS,
+                    "--analyzer-code",
+                    "0",
+                    "--artifact-dir",
+                    artifact,
+                    "--pass-pct",
+                    "120",
+                    "--ts",
+                    TS,
+                    "--dry-run",
+                ]
+            )
+        self.assertEqual(caught.exception.code, 2)
+        self.assertIn("pass_pct", stderr.getvalue())
+
+    def test_nan_pass_pct_override_rejected(self):
+        artifact = self._iteration_dir(["Detected Hosts: bh-glx-110-c01u02\nAll Detected Links are healthy\n"])
+        stderr = io.StringIO()
+        with redirect_stderr(stderr), self.assertRaises(SystemExit) as caught:
+            main(
+                [
+                    "--test-type",
+                    "physical",
+                    "--hosts",
+                    HOSTS,
+                    "--analyzer-code",
+                    "0",
+                    "--artifact-dir",
+                    artifact,
+                    "--pass-pct",
+                    "nan",
+                    "--ts",
+                    TS,
+                    "--dry-run",
+                ]
+            )
+        self.assertEqual(caught.exception.code, 2)
+        self.assertIn("pass_pct", stderr.getvalue())
+
+    def test_wrapper_log_infers_hosts_code_and_pass_pct(self):
+        root = fixtures.temp_dir(self)
+        wrapper = fixtures.write(
+            root,
+            "physical_validation-20260819T031200Z.log",
+            "=== Physical Validation ===\n"
+            "HOSTS=bh-glx-110-c01u02,bh-glx-110-c01u08\n"
+            "Success Rate: 66.0%\n"
+            "Analysis exit code: 1\n",
+        )
+        rc, out, err = _run(
+            [
+                "--test-type",
+                "physical",
+                "--artifact-dir",
+                str(wrapper),
+                "--ts",
+                TS,
+                "--dry-run",
+            ]
+        )
+        self.assertEqual(rc, 0, err)
+        record = json.loads(out.strip())
+        self.assertEqual(record["pass_pct"], 66.0)
+        self.assertEqual(record["analyzer_code"], 1)
+        self.assertEqual(record["status"], "failed")
+        self.assertEqual(
+            record["hosts"],
+            ["bh-glx-110-c01u02", "bh-glx-110-c01u08"],
+        )
+
     def test_missing_logs_omit_pass_pct(self):
         rc, out, err = _run(_base_argv())
         self.assertEqual(rc, 0, err)

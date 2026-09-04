@@ -488,6 +488,20 @@ def apply_physical_inference(
     return request
 
 
+def resolve_pass_pct_override(raw: Any) -> float | None:
+    """Validate an explicit ``--pass-pct`` value, or return None when omitted.
+
+    Raises ValueError when the option was supplied but is not a finite number
+    in [0, 100]. Callers must not treat that case as “infer from artifact.”
+    """
+    if raw is None:
+        return None
+    rate = as_pass_pct(raw)
+    if rate is None:
+        raise ValueError("pass_pct: must be a finite number in [0, 100]")
+    return rate
+
+
 def record_request_from_cli(args: argparse.Namespace) -> RecordRequest:
     request = RecordRequest(
         test_type=args.test_type,
@@ -502,7 +516,7 @@ def record_request_from_cli(args: argparse.Namespace) -> RecordRequest:
     )
     return apply_physical_inference(
         request,
-        pass_pct_override=as_pass_pct(getattr(args, "pass_pct", None)),
+        pass_pct_override=resolve_pass_pct_override(getattr(args, "pass_pct", None)),
         infer_hosts=not parse_hosts(request.hosts),
         infer_code=args.analyzer_code is None,
     )
@@ -941,6 +955,11 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--test-type and --artifact-dir are required (or pass --from-artifact-dir / --from-diag-report)")
     if args.pass_pct is not None and args.test_type != "physical":
         parser.error("--pass-pct is only valid with --test-type physical")
+    if args.pass_pct is not None:
+        try:
+            resolve_pass_pct_override(args.pass_pct)
+        except ValueError as exc:
+            parser.error(str(exc))
     if not args.hosts and args.test_type != "physical":
         parser.error("--hosts is required (physical can infer hosts from --artifact-dir)")
     try:

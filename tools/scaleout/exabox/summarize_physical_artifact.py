@@ -12,6 +12,7 @@ Does not print the analyzer report.
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -34,6 +35,9 @@ _WRAPPER_LOG_NAME = re.compile(
     r"^(physical_validation|fabric_tests|dispatch_tests|recover)[-_]",
     re.IGNORECASE,
 )
+_ANALYSIS_RC = re.compile(r"Analysis exit code:\s*(-?\d+)\s*$", re.MULTILINE)
+_HOSTS_LINE = re.compile(r"^HOSTS=(.*)$", re.MULTILINE)
+_OUTPUT_DIR_LINE = re.compile(r"^OUTPUT_DIR=(.*)$", re.MULTILINE)
 
 
 @dataclass(frozen=True)
@@ -61,9 +65,18 @@ def parse_success_rate(text: str) -> float | None:
         value = float(match.group(1))
     except ValueError:
         return None
-    if value < 0 or value > 100:
+    if value < 0 or value > 100 or not math.isfinite(value):
         return None
     return round(value, 2)
+
+
+def _last_match(pattern: re.Pattern[str], text: str) -> str | None:
+    match = None
+    for match in pattern.finditer(text):
+        pass
+    if match is None:
+        return None
+    return match.group(1).strip()
 
 
 def _is_wrapper_log(name: str) -> bool:
@@ -113,11 +126,41 @@ def _wrapper_candidates(artifact: Path) -> list[Path]:
     return _unique_paths(candidates)
 
 
+def _resolve_maybe(path: Path) -> Path:
+    try:
+        return path.resolve()
+    except OSError:
+        return path
+
+
+def _output_dir_matches_artifact(output_dir: str, artifact: Path) -> bool:
+    """True when wrapper OUTPUT_DIR refers to the requested artifact directory."""
+    if not output_dir:
+        return False
+    artifact_resolved = _resolve_maybe(artifact)
+    output_path = Path(output_dir)
+    if output_path.is_absolute():
+        return _resolve_maybe(output_path) == artifact_resolved
+
+    # Relative OUTPUT_DIR: accept exact relative equality against common
+    # suffixes of the artifact path (fixtures store relative run dirs).
+    artifact_parts = artifact_resolved.parts
+    output_parts = output_path.parts
+    if not output_parts:
+        return False
+    if len(artifact_parts) >= len(output_parts) and artifact_parts[-len(output_parts) :] == output_parts:
+        return True
+    return artifact.name == output_path.name and (
+        len(output_parts) == 1 or artifact_parts[-(len(output_parts)) :] == output_parts
+    )
+
+
 def _grade_logs(log_files: list[Path]) -> PhysicalSummary:
-    analyses = [analyze_log_file(str(path)) for path in log_files]
-    analyses = [item for item in analyses if item.content]
-    if not analyses:
+    if not log_files:
         return PhysicalSummary()
+    # Keep empty/unreadable analyses so the denominator matches
+    # analyze_validation_results.calculate_metrics (full analysis-list length).
+    analyses = [analyze_log_file(str(path)) for path in log_files]
     metrics = calculate_metrics(analyses)
     _message, analyzer_code = validate_results(analyses, metrics)
     info = get_cluster_info(analyses)
@@ -126,20 +169,64 @@ def _grade_logs(log_files: list[Path]) -> PhysicalSummary:
     pass_pct = None
     if isinstance(rate, (int, float)) and not isinstance(rate, bool):
         pass_pct = round(float(rate), 2)
-        if pass_pct < 0 or pass_pct > 100:
+        if pass_pct < 0 or pass_pct > 100 or not math.isfinite(pass_pct):
             pass_pct = None
     return PhysicalSummary(pass_pct=pass_pct, analyzer_code=analyzer_code, hosts=hosts)
 
 
 def _summary_from_wrapper_text(text: str) -> PhysicalSummary:
-    return PhysicalSummary(pass_pct=parse_success_rate(text))
+    hosts = _last_match(_HOSTS_LINE, text) or ""
+    code_raw = _last_match(_ANALYSIS_RC, text)
+    analyzer_code = int(code_raw) if code_raw is not None else None
+    return PhysicalSummary(
+        pass_pct=parse_success_rate(text),
+        analyzer_code=analyzer_code,
+        hosts=hosts,
+    )
+
+
+def _read_wrapper(path: Path) -> str | None:
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+
+
+def _select_wrapper(artifact: Path, candidates: list[Path]) -> Path | None:
+    """Pick one wrapper for ``artifact``, or None if ambiguous / missing.
+
+    Prefer a unique ``OUTPUT_DIR`` match. If none correlate, accept a lone
+    candidate (older logs omit ``OUTPUT_DIR``) but refuse multiple siblings.
+    """
+    if artifact.is_file() and _is_wrapper_log(artifact.name):
+        return artifact
+
+    correlated: list[Path] = []
+    readable: list[Path] = []
+    for wrapper in candidates:
+        text = _read_wrapper(wrapper)
+        if text is None:
+            continue
+        readable.append(wrapper)
+        output_dir = _last_match(_OUTPUT_DIR_LINE, text)
+        if output_dir is not None and _output_dir_matches_artifact(output_dir, artifact):
+            correlated.append(wrapper)
+
+    if len(correlated) == 1:
+        return correlated[0]
+    if len(correlated) > 1:
+        return None
+    if len(readable) == 1:
+        return readable[0]
+    return None
 
 
 def summarize_physical_artifact(artifact: str | Path) -> PhysicalSummary:
     """Grade physical logs under ``artifact`` without printing the analyzer report.
 
     Prefers in-process re-grade of iteration logs. If those are missing, parses
-    ``Success Rate: N%`` from a sibling ``physical_validation-*.log``.
+    ``Success Rate: N%`` (plus hosts / analyzer code) from a sibling
+    ``physical_validation-*.log`` whose ``OUTPUT_DIR`` matches the artifact.
     """
     path = Path(artifact)
     if path.is_dir():
@@ -149,15 +236,13 @@ def summarize_physical_artifact(artifact: str | Path) -> PhysicalSummary:
     elif path.is_file() and path.suffix == ".log" and not _is_wrapper_log(path.name):
         return _grade_logs([path])
 
-    for wrapper in _wrapper_candidates(path):
-        try:
-            text = wrapper.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-        summary = _summary_from_wrapper_text(text)
-        if summary.pass_pct is not None:
-            return summary
-    return PhysicalSummary()
+    wrapper = _select_wrapper(path, _wrapper_candidates(path))
+    if wrapper is None:
+        return PhysicalSummary()
+    text = _read_wrapper(wrapper)
+    if text is None:
+        return PhysicalSummary()
+    return _summary_from_wrapper_text(text)
 
 
 def as_pass_pct(value: Any) -> float | None:
@@ -168,6 +253,6 @@ def as_pass_pct(value: Any) -> float | None:
         number = float(value)
     else:
         return None
-    if number < 0 or number > 100:
+    if not math.isfinite(number) or number < 0 or number > 100:
         return None
     return round(number, 2)
