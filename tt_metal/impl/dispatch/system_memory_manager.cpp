@@ -262,11 +262,12 @@ void SystemMemoryManager::init_dispatch_core_interfaces(uint8_t num_hw_cqs, uint
             completion_queue_writer_core.chip,
             CoreCoord(completion_queue_writer_core.x, completion_queue_writer_core.y),
             core_type);
-        this->completion_q_windows.emplace_back(ctx.get_cluster().get_static_tlb_window(tt_cxy_pair(
-            completion_queue_writer_core.chip, completion_queue_writer_virtual.x, completion_queue_writer_virtual.y)));
+
         // Static TLBs are mapped at address 0, so a device address is already the window's byte offset.
         this->completion_byte_addrs[cq_id] =
             mem_map.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD, cq_id);
+        this->completion_q_windows.emplace_back(ctx.get_cluster().get_static_tlb_window(tt_cxy_pair(
+            completion_queue_writer_core.chip, completion_queue_writer_virtual.x, completion_queue_writer_virtual.y)));
 
         const uint32_t alignment =
             is_dram_backed() ? ctx.hal().get_alignment(HalMemType::DRAM) : ctx.hal().get_alignment(HalMemType::HOST);
@@ -289,7 +290,7 @@ void SystemMemoryManager::init_dispatch_core_interfaces(uint8_t num_hw_cqs, uint
         this->prefetch_q_dev_fences[cq_id] =
             prefetch_q_base + mem_map.prefetch_q_entries() * mem_map.prefetch_q_entry_size_bytes();
         // Both windows are written at raw device addresses, so every address this CQ will use must fit
-        // the static TLB aperture. TlbWindow::validate() would otherwise throw mid-dispatch.
+        // the static TLB aperture.
         TT_FATAL(
             this->prefetch_q_dev_fences[cq_id] <= this->prefetch_q_windows[cq_id]->get_size() &&
                 this->completion_byte_addrs[cq_id] < this->completion_q_windows[cq_id]->get_size(),
@@ -660,7 +661,7 @@ void SystemMemoryManager::send_completion_queue_read_ptr(const uint8_t cq_id) co
     uint32_t read_ptr_and_toggle = cq_interface.completion_fifo_rd_ptr | (cq_interface.completion_fifo_rd_toggle << 31);
     this->completion_q_windows[cq_id]->write32(this->completion_byte_addrs[cq_id], read_ptr_and_toggle);
     auto& ctx = tt::tt_metal::MetalContext::instance(this->context_id);
-    const uint32_t host_completion_q_rd_ptr =
+    const uint32_t completion_q_rd_ptr =
         ctx.dispatch_mem_map().get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_RD);
 
     if (is_dram_backed()) {
@@ -670,8 +671,7 @@ void SystemMemoryManager::send_completion_queue_read_ptr(const uint8_t cq_id) co
             sizeof(uint32_t),
             this->device_id,
             device->allocator_impl()->get_dram_channel_from_bank_id(this->get_dram_region_bank_id()),
-            this->get_dram_region_base_addr() + get_relative_cq_offset(cq_id, this->cq_size) +
-                host_completion_q_rd_ptr);
+            this->get_dram_region_base_addr() + get_relative_cq_offset(cq_id, this->cq_size) + completion_q_rd_ptr);
         return;
     }
 
@@ -681,7 +681,7 @@ void SystemMemoryManager::send_completion_queue_read_ptr(const uint8_t cq_id) co
     ctx.get_cluster().write_sysmem(
         &read_ptr_and_toggle,
         sizeof(uint32_t),
-        host_completion_q_rd_ptr + get_relative_cq_offset(cq_id, this->cq_size),
+        completion_q_rd_ptr + get_relative_cq_offset(cq_id, this->cq_size),
         mmio_device_id,
         channel);
 }
