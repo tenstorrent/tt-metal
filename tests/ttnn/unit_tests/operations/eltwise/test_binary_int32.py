@@ -10,6 +10,21 @@ from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc, assert_w
 
 pytestmark = pytest.mark.use_module_device
 
+INT32_MIN_THRESHOLD_DIVISORS = (
+    2**21 - 1,
+    2**21,
+    2**21 + 1,
+    -(2**21 - 1),
+    -(2**21),
+    -(2**21 + 1),
+    2**22 - 1,
+    2**22,
+    2**22 + 1,
+    -(2**22 - 1),
+    -(2**22),
+    -(2**22 + 1),
+)
+
 
 def create_full_range_tensor(input_shape, dtype, value_ranges):
     num_elements = torch.prod(torch.tensor(input_shape)).item()
@@ -907,11 +922,7 @@ def test_div_edge_cases(rounding_mode, device):
 @pytest.mark.parametrize("rounding_mode", ["trunc", "floor"])
 def test_div_int32_min_rounding_modes(rounding_mode, device):
     divisors = [
-        2**21 - 1,
-        2**21,
-        2**22 - 1,
-        2**22,
-        2**22 + 1,
+        *INT32_MIN_THRESHOLD_DIVISORS,
         239823930,
         2**30,
         -(2**30),
@@ -940,7 +951,7 @@ def test_div_int32_min_rounding_modes(rounding_mode, device):
     actual = ttnn.to_torch(ttnn.div(input_tensor_a, input_tensor_b, rounding_mode=rounding_mode))
     assert_equal(expected, actual)
 
-    for divisor in [2**22, 239823930, -(2**30)]:
+    for divisor in divisors:
         expected = torch.div(torch_input_tensor_a, divisor, rounding_mode=rounding_mode)
         actual = ttnn.to_torch(ttnn.div(input_tensor_a, divisor, rounding_mode=rounding_mode))
         assert_equal(expected, actual)
@@ -1330,11 +1341,7 @@ def test_binary_remainder_fmod_int32_edge_cases(ttnn_op, device):
 )
 def test_binary_remainder_fmod_int32_min(ttnn_op, device):
     divisors = [
-        2**21 - 1,
-        2**21,
-        2**22 - 1,
-        2**22,
-        2**22 + 1,
+        *INT32_MIN_THRESHOLD_DIVISORS,
         239823930,
         2**30,
         -(2**30),
@@ -1378,7 +1385,9 @@ def test_binary_remainder_fmod_int32_min(ttnn_op, device):
     ],
 )
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
-@pytest.mark.parametrize("divisor", [-1, 2**22, 239823930, -(2**30), -(2**31)])
+@pytest.mark.parametrize(
+    "divisor", [-1, *INT32_MIN_THRESHOLD_DIVISORS, 239823930, 2**30, -(2**30), 2**31 - 1, -(2**31)]
+)
 def test_binary_remainder_fmod_int32_scalar_layout_and_extreme_values(ttnn_op, layout, divisor, device):
     torch_input_tensor = torch.tensor(
         [-(2**31), -2140947629, -(2**30), -1, 0, 1, 2**30, 2**31 - 1], dtype=torch.int32
