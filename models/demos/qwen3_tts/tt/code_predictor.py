@@ -69,6 +69,10 @@ class CodePredictor(LightweightModule):
         # Sharded transformation matrix for the decode-mode RoPE kernel — see
         # rope.apply_rope_qk. Built at init so it predates any trace capture.
         self._decode_trans_mat = get_decode_transformation_mat(device)
+        # Decode K goes from the rotary kernel into paged_update_cache in the rotary
+        # kernel's own [1, 1, kv_heads, head_dim] layout, dropping the transpose that
+        # only fed ttnn.update_cache. QWEN3_TTS_CP_K_CACHE_LAYOUT=0 restores it.
+        self._k_cache_layout_opt = os.environ.get("QWEN3_TTS_CP_K_CACHE_LAYOUT", "1") != "0"
 
         DRAM = ttnn.DRAM_MEMORY_CONFIG
         L1 = ttnn.L1_MEMORY_CONFIG
@@ -483,13 +487,12 @@ class CodePredictor(LightweightModule):
             _qkv_cores = self._n300_fused_qkv // _qkv_shard_w
             _qkv_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(_qkv_cores - 1, 0))})
             _q_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(self.num_heads - 1, 0))})
-            _concat_grid = ttnn.num_cores_to_corerangeset(self.num_heads, _cg, True)
 
-            def _hs(grid, w):
+            def _hs(grid, w, m=_M):
                 return ttnn.MemoryConfig(
                     ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
                     ttnn.BufferType.L1,
-                    ttnn.ShardSpec(grid, (_M, w), ttnn.ShardOrientation.ROW_MAJOR),
+                    ttnn.ShardSpec(grid, (m, w), ttnn.ShardOrientation.ROW_MAJOR),
                 )
 
             def _ws(grid, w):
@@ -499,10 +502,32 @@ class CodePredictor(LightweightModule):
                     ttnn.ShardSpec(grid, (_M, w), ttnn.ShardOrientation.ROW_MAJOR),
                 )
 
+            # nlp_concat_heads takes only the LAYOUT and buffer type from the
+            # memory_config it is handed -- the output SHARD SPEC is derived from the
+            # input's (nlp_concat_heads_device_operation.cpp::compute_output_specs):
+            #
+            #   heads_per_shard = in_shard_h / padded_seq;  out_shard = (padded_seq,
+            #   in_shard_w * heads_per_shard)  on the input's grid
+            #
+            # So packing `num_heads / o_proj_in0_cores` heads per core on the way IN
+            # makes the concat land exactly in the DRAM-sharded o_proj's in0 spec, and
+            # the Reshard between them disappears. SDPA writes that same spec directly
+            # (its output_mem_config is used verbatim), so the I2S in front of the
+            # concat goes with it. Falls back to one head per core if the o_proj grid
+            # does not divide the head count.
+            _heads_per_shard = 1
+            _concat_grid = ttnn.num_cores_to_corerangeset(self.num_heads, _cg, True)
+            _wo_shard = self._cp_wo_in0_memcfg.shard_spec if self._ds_oproj else None
+            if _wo_shard is not None:
+                _wo_cores = _wo_shard.grid.num_cores()
+                _hps = self.num_heads // _wo_cores if _wo_cores and self.num_heads % _wo_cores == 0 else 0
+                if _hps >= 1 and tuple(_wo_shard.shape) == (_M, HD * _hps):
+                    _heads_per_shard = _hps
+                    _concat_grid = _wo_shard.grid
             self._n300_qkv_split_in_memcfg = _ws(_qkv_grid, _qkv_shard_w)
             self._n300_qkv_split_q_memcfg = _hs(_q_grid, HD)
-            self._n300_concat_in_memcfg = _hs(_concat_grid, HD)
-            self._n300_concat_out_memcfg = _ws(_concat_grid, HD)
+            self._n300_concat_in_memcfg = _hs(_concat_grid, HD, m=_M * _heads_per_shard)
+            self._n300_concat_out_memcfg = _ws(_concat_grid, HD * _heads_per_shard)
 
             _row_perm_n300 = []
             for _kv in range(self.num_kv_heads):
@@ -830,6 +855,19 @@ class CodePredictor(LightweightModule):
             ttnn.deallocate(k)
             k = k_b
         # RoPE kernel is bf16-only; cast Q/K if still in fp32.
+        # Decode K goes straight from the rotary kernel into the cache: its output
+        # layout ([1, 1, kv_heads, head_dim] HEIGHT_SHARDED on one core) is exactly what
+        # paged_update_cache takes, so K skips the transpose back to [1, kv, 1, hd] that
+        # only existed to feed ttnn.update_cache. Same gate as apply_rope_qk's own decode
+        # branch (the Talker does this via `k_keep_decode_layout`).
+        _k_in_cache_layout = (
+            self._k_cache_layout_opt
+            and mode != "prefill"
+            and kv_cache is not None
+            and self._decode_trans_mat is not None
+            and int(q.shape[-2]) == 1
+            and int(q.shape[1]) <= ttnn.TILE_SIZE
+        )
         q_r, k_r = apply_rope_qk(
             q,
             k,
@@ -840,6 +878,7 @@ class CodePredictor(LightweightModule):
             decode_trans_mat=self._decode_trans_mat,
             compute_kernel_config=self.kcfg,
             memory_config=ttnn.L1_MEMORY_CONFIG,
+            k_keep_decode_layout=_k_in_cache_layout,
         )
         ttnn.deallocate(q)
         ttnn.deallocate(k)
@@ -859,6 +898,11 @@ class CodePredictor(LightweightModule):
             if mode == "prefill":
                 ttnn.fill_cache(k_cache, k, 0)
                 ttnn.fill_cache(v_cache, v, 0)
+            elif _k_in_cache_layout:
+                # K is already [1, 1, kv_heads, head_dim] HEIGHT_SHARDED. start_pos is a
+                # Python int baked into the trace, exactly like update_cache's update_idx.
+                ttnn.experimental.paged_update_cache(k_cache, k, update_idxs=[start_pos])
+                ttnn.update_cache(v_cache, v, update_idx=start_pos)
             else:
                 ttnn.update_cache(k_cache, k, update_idx=start_pos)
                 ttnn.update_cache(v_cache, v, update_idx=start_pos)
@@ -969,7 +1013,11 @@ class CodePredictor(LightweightModule):
                 scale=self.scale,
                 compute_kernel_config=self.sdpa_kcfg,
                 program_config=self.sdpa_program_config,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
+                # SDPA writes its output_mem_config verbatim, and nlp_concat_heads'
+                # input spec IS a height-sharded [1, nh, m, hd] -- so ask for it here
+                # and the I2S in front of the concat never runs (Talker does the same,
+                # attention.py `_sdpa_out_memcfg`).
+                memory_config=self._n300_concat_in_memcfg if fast else ttnn.L1_MEMORY_CONFIG,
             )
             ttnn.deallocate(q)
             if not k_cache_alias:
@@ -979,8 +1027,11 @@ class CodePredictor(LightweightModule):
                 ttnn.deallocate(_explicit_mask)
 
             if fast:
-                attn_s = ttnn.to_memory_config(attn_out, self._n300_concat_in_memcfg)
-                ttnn.deallocate(attn_out)
+                if attn_out.memory_config() != self._n300_concat_in_memcfg:
+                    attn_s = ttnn.to_memory_config(attn_out, self._n300_concat_in_memcfg)
+                    ttnn.deallocate(attn_out)
+                else:
+                    attn_s = attn_out
                 attn_concat_s = ttnn.experimental.nlp_concat_heads(attn_s, memory_config=self._n300_concat_out_memcfg)
                 ttnn.deallocate(attn_s)
             else:
@@ -1331,6 +1382,13 @@ class CodePredictor(LightweightModule):
             return h_norm, updated_kvs
 
         # Apply lm_head over full hidden (caller indexes last position).
+        #
+        # NOT worth moving to L1: ttnn.topk's front end calls fill_implicit_tile_padding
+        # unconditionally (topk.cpp), and its early-out needs the last two LOGICAL dims
+        # tile-aligned -- the CP runs at logical M=1 padded to a tile, so the fill always
+        # runs. Placing the logits in L1 instead of DRAM was measured over the whole
+        # traced frame: FillPad 19.4 -> 18.9 us and TopK 218.1 -> 216.8 us, i.e. nothing.
+        # Both are latency-bound, not DRAM-bandwidth-bound.
         lm_idx = generation_step - 1
         logits = ttnn.matmul(h_norm, self.lm_heads[lm_idx], dtype=self.act_dtype, compute_kernel_config=self.mm_kcfg)
         ttnn.deallocate(h_norm)
