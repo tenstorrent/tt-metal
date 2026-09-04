@@ -18,13 +18,12 @@ from models.common.sampling import (
     format_sampling_params,
     scatter_sampling_params_to_slots,
 )
+from models.common.sampling._utils import topk_would_route_to_large_indices
 from models.common.sampling.generator import (
     MAX_UINT32,
     _hash_request_seed_to_device_seed,
     _mark_trace_buffers_corruptible,
 )
-from models.common.sampling._utils import topk_would_route_to_large_indices
-from models.common.sampling.generator import _hash_request_seed_to_device_seed, _mark_trace_buffers_corruptible
 from models.common.sampling.tt_log_probs import MAX_TOP_LOGPROBS, LogProbsResult
 from models.common.utility_functions import comp_pcc, is_blackhole
 
