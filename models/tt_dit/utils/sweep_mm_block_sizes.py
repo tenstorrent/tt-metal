@@ -185,6 +185,32 @@ SHAPES = [
     (11520, 3456, 5120, 12, 8, False, "mmrs"),  # Aang SR (super-resolution)
     (1664, 3456, 5120, 12, 8, False, "mmrs"),  # Aang a2v @1080p
     (7200, 3456, 5120, 12, 8, False, "mmrs"),  # Aang SR @1080p
+    # Aang AGMM shapes at 4x32 (TP4 ring on axis 0, 2 links): per-device M = padded_seq/32 for
+    # a2v / SR / a2v-1080p / SR-1080p. Same K/N family as the Wan2.2 720p rows above; 12x9 grid
+    # matches the model (ColParallelLinear force_transpose=True reserves the mux row).
+    (2656, 5120, 3840, 12, 9, True, "qkv"),  # Aang a2v — attn1.to_qkv (chunks=3)
+    (2656, 5120, 1280, 12, 9, True, "to_out"),  # Aang a2v — attn to_out (fused addcmul)
+    (2656, 5120, 3456, 12, 9, True, "ff1_gelu"),  # Aang a2v — ffn.ff1 (fused GELU)
+    (11520, 5120, 3840, 12, 9, True, "qkv"),  # Aang SR
+    (11520, 5120, 1280, 12, 9, True, "to_out"),  # Aang SR
+    (11520, 5120, 3456, 12, 9, True, "ff1_gelu"),  # Aang SR
+    (1664, 5120, 3840, 12, 9, True, "qkv"),  # Aang a2v @1080p
+    (1664, 5120, 1280, 12, 9, True, "to_out"),  # Aang a2v @1080p
+    (1664, 5120, 3456, 12, 9, True, "ff1_gelu"),  # Aang a2v @1080p
+    (7200, 5120, 3840, 12, 9, True, "qkv"),  # Aang SR @1080p
+    (7200, 5120, 1280, 12, 9, True, "to_out"),  # Aang SR @1080p
+    (7200, 5120, 3456, 12, 9, True, "ff1_gelu"),  # Aang SR @1080p
+    # Aang cross-attn to_q / to_out: same (M, K, N) as the fused to_out rows but plain epilogue
+    # (no addcmul), which changes L1 pressure — swept as its own use case.
+    (2656, 5120, 1280, 12, 9, True, "plain"),  # Aang a2v — attn2.to_q / attn2.to_out
+    (11520, 5120, 1280, 12, 9, True, "plain"),  # Aang SR
+    (1664, 5120, 1280, 12, 9, True, "plain"),  # Aang a2v @1080p
+    (7200, 5120, 1280, 12, 9, True, "plain"),  # Aang SR @1080p
+    # Aang proj_out (plain minimal_matmul after the TP gather; fp32 out in the model), 11x10 grid.
+    (2656, 5120, 64, 11, 10, False, "plain"),  # Aang a2v
+    (11520, 5120, 64, 11, 10, False, "plain"),  # Aang SR
+    (1664, 5120, 64, 11, 10, False, "plain"),  # Aang a2v @1080p
+    (7200, 5120, 64, 11, 10, False, "plain"),  # Aang SR @1080p
     # 12x8 won that grid sweep (1.313 ms vs 1.373 at 12x7 and 1.487 at 12x9); the longer durations
     # (M = 9216 / 13632) reuse its blocking rather than being swept -- warmup compiles one program per
     # combo and compile time grows with M, so M=9216 alone is ~75 min against ~9 min here, for a block

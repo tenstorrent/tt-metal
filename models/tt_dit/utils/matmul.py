@@ -219,6 +219,12 @@ grid_11_10_configs = {
     (2048, 6144, 4608): (4, 4, 15, (4, 1)),  # 462.3 μs  proj_mlp spatial
     (2048, 6144, 9216): (8, 8, 10, (2, 2)),  # 972.7 μs  ff1 / qkv spatial
     (64, 6144, 4608): (2, 8, 8, (2, 2)),  # 196.3 μs  proj_mlp prompt
+    # Aang proj_out at 4x32 (plain minimal_matmul after the TP gather; per-device M at SP=32),
+    # swept 2026-09-03 on bh_4x8_sp1_tp0. Best legal blockings (N_block <= N_tiles = 2).
+    (1664, 5120, 64): (12, 8, 2, (2, 2)),  # a2v-1080p, 79.8 us (-7.4% vs 8x8x8)
+    (2656, 5120, 64): (4, 8, 2, (2, 2)),  # a2v, 118.6 us (-6.9%)
+    (7200, 5120, 64): (3, 32, 2, (3, 1)),  # SR-1080p, 269.7 us (-8.1%)
+    (11520, 5120, 64): (3, 20, 2, (3, 1)),  # SR, 414.5 us (-9.1%)
 }
 
 grid_12_9_configs = {
@@ -354,6 +360,23 @@ grid_12_9_configs = {
     (3424, 5376, 5376): (4, 7, 14, (2, 2)),  # qkv
     (3424, 7168, 1344): (9, 8, 5, (3, 1)),  # to_out
     (3424, 5376, 7168): (6, 7, 12, (2, 2)),  # ff1
+    # Aang (Wan2.2 family) at 4x32 — per-device M at SP=32 for a2v / SR / a2v-1080p / SR-1080p.
+    # Swept 2026-09-03 on bh_4x8_sp1_tp0 (sweep_mm_block_sizes.py); deltas are vs what previously
+    # ran (the warned 8x8x8 fallback for M < N, the v3 rules otherwise). Each (M, 5120, 1280)
+    # entry serves both the fused-addcmul to_out and the plain cross-attn to_q / to_out (they
+    # share the table key) — compromise blockings within ~1% of both use cases' optima.
+    (1664, 5120, 3840): (5, 8, 10, (1, 2)),  # a2v-1080p qkv, 423.2 us (-8.9% vs 8x8x8)
+    (2656, 5120, 3840): (7, 5, 14, (1, 2)),  # a2v qkv, 579.7 us (-8.5% vs 8x8x8)
+    (7200, 5120, 3840): (8, 5, 14, (2, 2)),  # SR-1080p qkv, 1456.9 us (-13.2% vs v3)
+    (11520, 5120, 3840): (6, 8, 14, (2, 2)),  # SR qkv, 2159.2 us (pins the v3 pick)
+    (1664, 5120, 1280): (6, 8, 5, (3, 1)),  # to_out 272.1 us / plain 250.8 us
+    (2656, 5120, 1280): (8, 8, 5, (4, 1)),  # to_out 406.4 us / plain 377.7 us
+    (7200, 5120, 1280): (10, 8, 5, (2, 1)),  # to_out 1063.1 us / plain 966.3 us (= v3 pick)
+    (11520, 5120, 1280): (8, 8, 8, (2, 2)),  # to_out 1647.9 us / plain 1509.4 us (= old default)
+    (1664, 5120, 3456): (5, 8, 16, (1, 4)),  # a2v-1080p ff1, 380.6 us (-13.9% vs 8x8x8)
+    (2656, 5120, 3456): (7, 8, 12, (1, 4)),  # a2v ff1, 503.5 us (-17.1% vs 8x8x8)
+    (7200, 5120, 3456): (10, 4, 12, (2, 2)),  # SR-1080p ff1, 1362.5 us (-11.6% vs v3)
+    (11520, 5120, 3456): (6, 8, 12, (2, 2)),  # SR ff1, 1971.2 us (pins the v3 pick)
 }
 
 
