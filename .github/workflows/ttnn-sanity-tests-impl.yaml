@@ -519,6 +519,8 @@ jobs:
             echo "::warning::no kernel compile commands captured (bear output missing/empty); skipping clang-tidy."
             exit 0
           fi
+          # tee opens summary.txt before the filter script mkdirs its output dir; create it first.
+          mkdir -p /work/kernel_tidy
           python3 scripts/build_kernel_clang_tidy_commands.py \
             --input /work/kernel_tidy_raw_compile_commands.json \
             --output-dir /work/kernel_tidy \
