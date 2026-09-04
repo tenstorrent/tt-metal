@@ -33,8 +33,8 @@ from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import fabric_to_device
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     ExpertMapping,
     compute_constants,
+    dispatch_buffer_used_tokens,
     extract_mesh_config,
-    get_ep_mesh_composer,
     get_ep_mesh_mapper,
     get_expert_token_counts_mesh_mapper,
     get_gate_outputs,
@@ -51,6 +51,135 @@ from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
 from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert_dispatch_table, log_validation_results
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 
+_PERF_ITERATIONS = 10
+
+# The operating point the per-model cases run: the production sequence length, timed over
+# _PERF_ITERATIONS trace replays with the last replay's output checked. The capacity factor is
+# ceil(N/2) of the most conservative integer N such that dgs*seq*N >= worst-case dispatch buffer.
+_SEQ_LEN_PER_CHIP = 640
+_DISPATCH_BUFFER_CAPACITY_FACTOR = 8
+
+
+def _upload_dispatch_buffer(
+    host_buffer,
+    capacity_tokens,
+    used_tokens,
+    pad_value,
+    *,
+    mesh_mapper,
+    layout,
+    dtype,
+    mesh_device,
+):
+    """Put a full-capacity dispatch buffer on device out of the `used_tokens` a router fills.
+
+    The flat dispatch buffer is sized for the worst-case router -- one expert receiving the whole
+    dispatch group -- and a real router fills a few percent of it: under 4% for DeepSeek V3 at seq
+    640 with capacity factor 8, where the worst case is 35 GiB. Everything past `used_tokens` is the
+    constant dispatch initialised the buffer to, so `ttnn.pad` writes it back on device in
+    milliseconds rather than the host converting and shipping it (29.5s measured, per upload).
+
+    The op gets a bit-identical input either way -- the tail dispatch leaves is exactly `pad_value`
+    -- and it still sees a full-capacity buffer, so nothing about what is measured changes.
+
+    `used_tokens` is one number for the whole mesh, not one per chip, which keeps this a single
+    mesh-wide upload and a single mesh-wide op: a prefix that covers the busiest chip covers them all.
+    A `host_buffer` already cut to that prefix is uploaded as it is; one at full capacity is sliced.
+    """
+    assert used_tokens <= capacity_tokens, f"{used_tokens=} is past the end of a {capacity_tokens}-token buffer"
+
+    prefix = ttnn.from_torch(
+        host_buffer[:, :, :used_tokens, :].contiguous(),
+        mesh_mapper=mesh_mapper,
+        layout=layout,
+        device=mesh_device,
+        dtype=dtype,
+    )
+    if used_tokens == capacity_tokens:
+        return prefix
+
+    full = ttnn.pad(prefix, [(0, 0), (0, 0), (0, capacity_tokens - used_tokens), (0, 0)], pad_value)
+    ttnn.deallocate(prefix)
+    return full
+
+
+# Which index of `ttnn.get_device_tensors` holds which (dispatch group, chip), per mesh shape. Read
+# off the mesh once per process rather than assumed -- see `_ep_shard_order`.
+_EP_SHARD_ORDER = {}
+
+
+def _ep_shard_order(mesh_device):
+    """The (dispatch group, chip) each shard of `ttnn.get_device_tensors` belongs to, in shard order.
+
+    `get_device_tensors` hands back shards in the tensor's own coordinate order, and that order is
+    not part of its contract, so this reads it off the mesh instead of assuming row-major: hand the
+    EP mapper a tensor whose every element is its own (group, chip), pull the shards back, and see
+    where each one landed. A few hundred bytes and one round trip, cached per mesh shape because the
+    mapper depends on nothing else.
+
+    The permutation assert is the real check: if this ever stopped being a bijection onto the mesh,
+    the alternative is an output tensor assembled from the right data in the wrong places.
+    """
+    dispatch_group_size, num_dispatch_groups = mesh_device.shape[0], mesh_device.shape[1]
+    key = (dispatch_group_size, num_dispatch_groups)
+    if key in _EP_SHARD_ORDER:
+        return _EP_SHARD_ORDER[key]
+
+    # Laid out like the combine output's leading two dims -- (group, chip) -- so the EP mapper sends
+    # each element to the device that will hold that (group, chip) of the output. The trailing 32 is
+    # only to keep a row-major page a sensible size.
+    marker = torch.arange(num_dispatch_groups * dispatch_group_size, dtype=torch.int32)
+    marker = marker.reshape(num_dispatch_groups, dispatch_group_size, 1, 1).repeat(1, 1, 1, ttnn.TILE_SIZE)
+    tt_marker = ttnn.from_torch(
+        marker,
+        mesh_mapper=get_ep_mesh_mapper(mesh_device),
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        dtype=ttnn.int32,
+    )
+    order = []
+    for shard in ttnn.get_device_tensors(tt_marker):
+        value = int(ttnn.to_torch(shard).flatten()[0].item())
+        order.append((value // dispatch_group_size, value % dispatch_group_size))
+    ttnn.deallocate(tt_marker)
+
+    expected = sorted((g, c) for g in range(num_dispatch_groups) for c in range(dispatch_group_size))
+    assert sorted(order) == expected, f"EP shard order is not a permutation of the mesh: {order}"
+
+    logger.debug(f"[ep shard order] {key} -> {order}")
+    _EP_SHARD_ORDER[key] = order
+    return order
+
+
+def _download_ep_output(tt_output, mesh_device):
+    """Bring an EP-sharded combine output to host, without the mesh composer.
+
+    `to_torch(mesh_composer=...)` on this tensor is almost all host work: measured at 8x4, the whole
+    call is 14.85s, of which the device-to-host transfer is 0.31s (2.24 GiB at 7.2 GB/s) and the
+    other 14.51s is stitching 32 shards into one rank-5 tensor. Converting those shards one at a
+    time costs 2.91s, so copying them into a preallocated destination -- one pass over 2.24 GiB at
+    memory speed -- gets the same tensor for about a quarter of the time.
+
+    Same result, not an approximation: every shard is copied in full, into the place the composer
+    would have put it. The shape assert downstream and the PCC check itself are what would catch a
+    misplacement.
+    """
+    shards = ttnn.get_device_tensors(tt_output)
+    order = _ep_shard_order(mesh_device)
+    assert len(shards) == len(order), f"{len(shards)} shards from a {len(order)}-device mesh"
+
+    dispatch_group_size, num_dispatch_groups = mesh_device.shape[0], mesh_device.shape[1]
+    out = None
+    for shard, (group, chip) in zip(shards, order):
+        local = ttnn.to_torch(shard)
+        assert (
+            local.shape[0] == 1 and local.shape[1] == 1
+        ), f"expected a (1, 1, ...) per-device shard, got {local.shape}"
+        if out is None:
+            out = torch.empty((num_dispatch_groups, dispatch_group_size, *local.shape[2:]), dtype=local.dtype)
+        out[group, chip] = local[0, 0]
+    return out
+
 
 def run_combine(
     mesh_device,
@@ -61,7 +190,6 @@ def run_combine(
     dispatch_buffer_capacity_factor,
     topology,
     use_predictable_data,
-    run_pcc_check,
     dispatched_buffer_layout,
     use_fp8_output,
     num_links=2,
@@ -157,7 +285,20 @@ def run_combine(
         expert_dispatch_table=expert_dispatch_table,
     )
 
-    # Initialize torch dispatch module with num_dispatch_groups support
+    # How much of the worst-case buffer this router will fill. Known from the expert regions the gate
+    # outputs above already lay out, so it is known before dispatch runs rather than after. Both the
+    # buffer and its metadata share the dispatch buffer's token layout, so one prefix bounds both.
+    used_tokens = dispatch_buffer_used_tokens(expert_token_counts, expert_region_offsets)
+    logger.debug(f"{used_tokens=} of {max_dispatch_buffer_token_size=} dispatch buffer tokens")
+
+    # Initialize torch dispatch module with num_dispatch_groups support.
+    #
+    # Sized to the prefix the router fills, not to the worst-case capacity the device buffer has: the
+    # rest of that capacity is a constant, and `_upload_dispatch_buffer` puts it back on device. At
+    # 8x4 with DeepSeek V3 that is the difference between generating a 35 GiB host tensor per case
+    # and a 1.3 GiB one -- 3.7% of it held tokens. Every index dispatch writes comes from
+    # expert_offsets, which is bounded by exactly this prefix, so a wrong prefix would raise here
+    # rather than quietly hand the op a truncated buffer.
     torch_dispatch_module = TorchDispatchModule(
         dispatch_group_size=dispatch_group_size,
         experts_per_chip=experts_per_chip,
@@ -165,7 +306,7 @@ def run_combine(
         num_experts_per_tok=num_experts_per_tok,
         metadata_len=metadata_len,
         max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
-        max_dispatch_buffer_token_size=max_dispatch_buffer_token_size,
+        max_dispatch_buffer_token_size=used_tokens,
         seq_len_per_chip=seq_len_per_chip,
         emb_dim=emb_dim,
         num_dispatch_groups=num_dispatch_groups,
@@ -178,20 +319,28 @@ def run_combine(
     # Use different sharding: shard both dimensions
     mesh_mapper = get_ep_mesh_mapper(mesh_device)
 
-    tt_dispatched_buffer = ttnn.from_torch(
+    tt_dispatched_buffer = _upload_dispatch_buffer(
         dispatched_buffer,
+        max_dispatch_buffer_token_size,
+        used_tokens,
+        # Dispatch zero-fills the buffer it writes into.
+        0.0,
         mesh_mapper=mesh_mapper,
         layout=dispatched_buffer_layout,
-        device=mesh_device,
         dtype=ttnn.bfloat16,
+        mesh_device=mesh_device,
     )
 
-    tt_dispatched_metadata = ttnn.from_torch(
+    tt_dispatched_metadata = _upload_dispatch_buffer(
         dispatched_metadata,
+        max_dispatch_buffer_token_size,
+        used_tokens,
+        # Metadata starts at -1, not 0: an unwritten slot has no origin chip, token or top-k slot.
+        -1,
         mesh_mapper=mesh_mapper,
         layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=mesh_device,
         dtype=ttnn.int32,
+        mesh_device=mesh_device,
     )
 
     tt_expert_token_counts = ttnn.from_torch(
@@ -241,7 +390,7 @@ def run_combine(
             fp8_output=use_fp8_output,
         )
 
-        tt_output = tt_combine(
+        combine_inputs = (
             tt_dispatched_buffer,
             tt_dispatched_metadata,
             tt_expert_token_counts,
@@ -269,7 +418,7 @@ def run_combine(
             topology=topology,
         )
 
-        tt_output = tt_combine(
+        combine_inputs = (
             tt_dispatched_buffer,
             tt_dispatched_metadata,
             tt_expert_token_counts,
@@ -277,15 +426,37 @@ def run_combine(
             tt_expert_offsets,
         )
 
-    if not run_pcc_check:
+    # combine cannot be launched for the FIRST time inside a trace capture.
+    #
+    # A capture records commands instead of running them, and rejects host-to-device writes:
+    # fd_mesh_command_queue.cpp, "Writes are not supported during trace capture". combine writes on a
+    # program cache MISS and only then -- create_workload_descriptor allocates two cross-device
+    # GlobalSemaphores and zeroes them on device. So a cold op inside a capture is a guaranteed
+    # TT_FATAL, whatever the shapes.
+    #
+    # This launch exists to take that miss outside the capture. The launch inside the capture is then
+    # a cache hit, which builds nothing and writes nothing. It is not a warmup: the numbers still
+    # come only from the replays. Its output is thrown away -- nothing reads it, and at 8x4 it is
+    # 2.3 GB the capture below needs back.
+    cache_miss_output = tt_combine(*combine_inputs)
+    ttnn.synchronize_device(mesh_device)
+    ttnn.deallocate(cache_miss_output)
+
+    # Capture does NOT execute -- the op runs again on the replays below, and `tt_output` ends up
+    # holding the LAST replay's result, which is what the check further down reads. Checking the last
+    # launch rather than the first is deliberate: it proves a launch leaves the op's counters fit for
+    # the next one, which a check placed between capture and replays would silently stop testing.
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    tt_output = tt_combine(*combine_inputs)
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    for _ in range(_PERF_ITERATIONS):
         ttnn.synchronize_device(mesh_device)
-        logger.debug("Skipping PCC validation (run_pcc_check=False)")
-        return
+        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+    ttnn.synchronize_device(mesh_device)
+    ttnn.release_trace(mesh_device, trace_id)
 
     # Step 6: Convert ttnn output to torch for comparison
-    mesh_composer = get_ep_mesh_composer(mesh_device)
-
-    tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=mesh_composer)
+    tt_output_torch = _download_ep_output(tt_output, mesh_device)
     if use_fp8_output:
         # ttnn.to_torch returns a torch.float8_e4m3fn tensor for FP8_E4M3 device tensors
         # (see ttnn/ttnn/operations/core.py). Widen to bfloat16 for validation, since
@@ -367,11 +538,8 @@ ONLY_PROXY_QB_MESH = _Test_Mesh(
 )
 
 
-# Per-model combine shapes as (id_prefix, config, extended_model). Each model contributes a pcc
-# param (seq 128, // 16 experts, top-4) and a perf param (seq 640, // 4 experts, top-2). DeepSeek
-# V3 is the baseline and runs by default; every other model is gated behind
-# @pytest.mark.extended_model. dispatch_buffer_capacity_factor is ceil(N/2) of the most
-# conservative integer N such that dgs*seq*N >= worst-case dispatch buffer.
+# Per-model combine shapes as (id_prefix, config, extended_model). DeepSeek V3 is the baseline and
+# runs by default; every other model is gated behind @pytest.mark.extended_model.
 COMBINE_MODELS = [
     ("dsv3", DeepSeekV3Config, SINGLE_GLX_AND_PROXY_MESHES),
     ("glm_51", GLM51Config, ONLY_PROXY_QB_MESH),
@@ -386,7 +554,7 @@ COMBINE_MODELS = [
 # Scales down model hyper-params for a given hardware to obtain good/meaningful proxy test
 # How exactly to scale it down is op-specific (more precisely - even op-implementation specific)
 # Thus it makes sense for this to be combine-specific function
-def _model_scaledown(model, ref_mesh, target_mesh, pcc_only):
+def _model_scaledown(model, ref_mesh, target_mesh):
     # number of experts has to be reduced to preserve the experts per chip
     ref_num_chips = ref_mesh[0] * ref_mesh[1]
     target_num_chips = target_mesh[0] * target_mesh[1]
@@ -400,11 +568,6 @@ def _model_scaledown(model, ref_mesh, target_mesh, pcc_only):
     # 4x8 reference collapsed to a single-group proxy). Routing every token to zero experts is not a test.
     if ref_mesh[1] != target_mesh[1]:
         model.NUM_EXPERTS_PER_TOKEN = max(1, (model.NUM_EXPERTS_PER_TOKEN // ref_mesh[1]) * target_mesh[1])
-
-    # further reduce these two hyperparams in case of pcc check test to get faster, although not perf-representative test
-    if pcc_only:
-        model.NUM_ROUTED_EXPERTS = max(target_num_chips, model.NUM_ROUTED_EXPERTS // 16)
-        model.NUM_EXPERTS_PER_TOKEN = max(2, model.NUM_EXPERTS_PER_TOKEN // 4)
 
     return model
 
@@ -428,63 +591,36 @@ def _cross_product_conflated_cmb_test_dimensions():
     params = []
     for model_name, model_config_class, test_meshes in COMBINE_MODELS:
         for target_mesh, fabric_cfg in test_meshes.target_meshes.items():
-            device_params = fabric_to_device_params(fabric_cfg)
-            topo_marker = _topo_marker(target_mesh, fabric_cfg)
-            marks = pytest.mark.requires_mesh_topology(mesh_shape=target_mesh, topology=topo_marker)
-            test_scenarios = [
-                ("pcc", 128, 4, True),
-                ("perf_no_pcc", 640, 8, False),
-            ]
-            for test_scenario_id, seq_len_per_chip, dispatch_buffer_capacity_factor, run_pcc in test_scenarios:
-                model_config = _model_scaledown(model_config_class(), test_meshes.full_model_mesh, target_mesh, run_pcc)
-
-                num_experts = model_config.NUM_ROUTED_EXPERTS
-                topk = model_config.NUM_EXPERTS_PER_TOKEN
-                shape = target_mesh
-
-                params.append(
-                    pytest.param(
-                        shape,
-                        device_params,
-                        seq_len_per_chip,
-                        model_config.EMB_SIZE,
-                        num_experts,
-                        topk,
-                        dispatch_buffer_capacity_factor,
-                        run_pcc,
-                        marks=marks,
-                        id=f"{model_name}-{_mesh_id(target_mesh, fabric_cfg)}-{test_scenario_id}",
-                    )
+            model_config = _model_scaledown(model_config_class(), test_meshes.full_model_mesh, target_mesh)
+            params.append(
+                pytest.param(
+                    target_mesh,
+                    fabric_to_device_params(fabric_cfg),
+                    _SEQ_LEN_PER_CHIP,
+                    model_config.EMB_SIZE,
+                    model_config.NUM_ROUTED_EXPERTS,
+                    model_config.NUM_EXPERTS_PER_TOKEN,
+                    _DISPATCH_BUFFER_CAPACITY_FACTOR,
+                    marks=pytest.mark.requires_mesh_topology(
+                        mesh_shape=target_mesh, topology=_topo_marker(target_mesh, fabric_cfg)
+                    ),
+                    id=f"{model_name}-{_mesh_id(target_mesh, fabric_cfg)}-perf_no_pcc",
                 )
+            )
 
     return params
 
 
 def _unsupported_param_combos(**params):
-    mesh_device = params["mesh_device"]
-    run_pcc_check = params["run_pcc_check"]
     use_predictable_data = params["use_predictable_data"]
     use_fp8_output = params["use_fp8_output"]
     dispatched_buffer_layout = params["dispatched_buffer_layout"]
-    is_ci_env = params["is_ci_env"]
-    is_ci_v2_env = params["is_ci_v2_env"]
     is_bh = params["is_bh"]
-
-    # This function is called before test cases are fully formed, so 'mesh_device' here, unlike in the test_ttnn_combine
-    # function is not fully formed device object. Rather it is the first parametrization axis argument that parametrization
-    # logic itterates over (which is also named 'mesh_device') and which is a simple shape tuple.
-    num_devices = mesh_device[0] * mesh_device[1]
-    if num_devices >= 8 and not run_pcc_check and use_predictable_data:
-        return True
 
     # Predictable inputs are torch.arange(...), which produces values up to ~1.8M and
     # overflows fp8_e4m3fn's ±448 range — overflow encodes as NaN, breaking PCC.
     # Only exercise the fp8 path with random (N(0,1)) data that fits in range.
     if use_fp8_output and use_predictable_data:
-        return True
-
-    # fp8 perf test doesn't run PCC
-    if use_fp8_output and not run_pcc_check:
         return True
 
     # The fp8 output path is only wired up in combine_program_factory.cpp inside the
@@ -497,10 +633,6 @@ def _unsupported_param_combos(**params):
     # Blackhole. TtCombineModule already raises ValueError if fp8_output is requested on
     # non-BH; skip cleanly here so this surfaces as "skipped" instead of an error.
     if use_fp8_output and not is_bh:
-        return True
-
-    # ROW_MAJOR perf coverage is redundant in CI; TILE (all paths) and ROW_MAJOR PCC still run.
-    if (is_ci_env or is_ci_v2_env) and not run_pcc_check and dispatched_buffer_layout == ttnn.ROW_MAJOR_LAYOUT:
         return True
 
     # Otherwise don't uncollect the test case. Keep it.
@@ -527,7 +659,7 @@ def _unsupported_param_combos(**params):
 #
 @pytest.mark.uncollect_if(pred=_unsupported_param_combos)
 @pytest.mark.parametrize(
-    "mesh_device, device_params, seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check",
+    "mesh_device, device_params, seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor",
     _cross_product_conflated_cmb_test_dimensions(),
     indirect=["mesh_device", "device_params"],
 )
@@ -547,7 +679,6 @@ def test_ttnn_combine(
     num_experts_per_tok,
     dispatch_buffer_capacity_factor,
     use_predictable_data,
-    run_pcc_check,
     dispatched_buffer_layout,
     use_fp8_output,
     is_ci_env,
@@ -563,7 +694,6 @@ def test_ttnn_combine(
         dispatch_buffer_capacity_factor,
         topology,
         use_predictable_data,
-        run_pcc_check,
         dispatched_buffer_layout,
         use_fp8_output,
     )
@@ -592,11 +722,11 @@ def _all_externally_owned_test_cases():
         _tc((8, 4), ttnn.FabricConfig.FABRIC_1D, 128, 2, MiniMaxM3Config()),
         _tc((8, 4), ttnn.FabricConfig.FABRIC_1D, 640, 2, MiniMaxM3Config()),
         # Proxy tests executable on CIs which run op unit tests
-        _tc((4, 1), ttnn.FabricConfig.FABRIC_1D, 1024, 4, _model_scaledown(GptOss20BConfig(), (4, 8), (4, 1), False)),
-        _tc((4, 1), ttnn.FabricConfig.FABRIC_1D, 128, 2, _model_scaledown(GptOss120BConfig(), (4, 8), (4, 1), False)),
-        _tc((4, 1), ttnn.FabricConfig.FABRIC_1D, 1280, 2, _model_scaledown(GptOss120BConfig(), (4, 8), (4, 1), False)),
-        _tc((8, 1), ttnn.FabricConfig.FABRIC_1D, 128, 2, _model_scaledown(MiniMaxM3Config(), (8, 4), (8, 1), False)),
-        _tc((8, 1), ttnn.FabricConfig.FABRIC_1D, 640, 2, _model_scaledown(MiniMaxM3Config(), (8, 4), (8, 1), False)),
+        _tc((4, 1), ttnn.FabricConfig.FABRIC_1D, 1024, 4, _model_scaledown(GptOss20BConfig(), (4, 8), (4, 1))),
+        _tc((4, 1), ttnn.FabricConfig.FABRIC_1D, 128, 2, _model_scaledown(GptOss120BConfig(), (4, 8), (4, 1))),
+        _tc((4, 1), ttnn.FabricConfig.FABRIC_1D, 1280, 2, _model_scaledown(GptOss120BConfig(), (4, 8), (4, 1))),
+        _tc((8, 1), ttnn.FabricConfig.FABRIC_1D, 128, 2, _model_scaledown(MiniMaxM3Config(), (8, 4), (8, 1))),
+        _tc((8, 1), ttnn.FabricConfig.FABRIC_1D, 640, 2, _model_scaledown(MiniMaxM3Config(), (8, 4), (8, 1))),
     ]
 
 
@@ -635,7 +765,6 @@ def test_externally_owned_cases(
         2,  # buffer capacity factor
         topology,
         use_predictable_data=False,
-        run_pcc_check=True,
         dispatched_buffer_layout=ttnn.TILE_LAYOUT,
         use_fp8_output=False,
         num_links=num_links,
@@ -643,43 +772,30 @@ def test_externally_owned_cases(
 
 
 def _cmb_fabric2d_dimensions():
-    """The (mesh, device_params, ...) tuples the fabric2d case runs on.
-
-    Same two scenarios the direct op carries: a small pcc run that checks the op computes the
-    right thing, and the seq-640 perf run this op's development has been measured against.
-    """
+    """The (mesh, device_params, ...) tuple the fabric2d case runs on: the production mesh at the
+    operating point this op's development has been measured against."""
     mesh = SINGLE_GLX_AND_PROXY_MESHES.full_model_mesh
     fabric_cfg = SINGLE_GLX_AND_PROXY_MESHES.target_meshes[mesh]
-    marks = pytest.mark.requires_mesh_topology(mesh_shape=mesh, topology=_topo_marker(mesh, fabric_cfg))
+    model_config = _model_scaledown(DeepSeekV3Config(), SINGLE_GLX_AND_PROXY_MESHES.full_model_mesh, mesh)
 
-    params = []
-    for scenario_id, seq_len_per_chip, dispatch_buffer_capacity_factor, run_pcc in (
-        ("pcc", 128, 4, True),
-        ("perf_no_pcc", 640, 8, False),
-    ):
-        model_config = _model_scaledown(
-            DeepSeekV3Config(), SINGLE_GLX_AND_PROXY_MESHES.full_model_mesh, mesh, pcc_only=run_pcc
+    return [
+        pytest.param(
+            mesh,
+            fabric_to_device_params(fabric_cfg),
+            per_axis_topology(fabric_cfg)[0],  # sp axis; the op rings along cluster_axis=sp_axis
+            _SEQ_LEN_PER_CHIP,
+            model_config.EMB_SIZE,
+            model_config.NUM_ROUTED_EXPERTS,
+            model_config.NUM_EXPERTS_PER_TOKEN,
+            _DISPATCH_BUFFER_CAPACITY_FACTOR,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=mesh, topology=_topo_marker(mesh, fabric_cfg)),
+            id=f"dsv3-fabric2d-{_mesh_id(mesh, fabric_cfg)}-row_major-2link-perf_no_pcc",
         )
-        params.append(
-            pytest.param(
-                mesh,
-                fabric_to_device_params(fabric_cfg),
-                per_axis_topology(fabric_cfg)[0],  # sp axis; the op rings along cluster_axis=sp_axis
-                seq_len_per_chip,
-                model_config.EMB_SIZE,
-                model_config.NUM_ROUTED_EXPERTS,
-                model_config.NUM_EXPERTS_PER_TOKEN,
-                dispatch_buffer_capacity_factor,
-                run_pcc,
-                marks=marks,
-                id=f"dsv3-fabric2d-{_mesh_id(mesh, fabric_cfg)}-row_major-2link-{scenario_id}",
-            )
-        )
-    return params
+    ]
 
 
 @pytest.mark.parametrize(
-    "mesh_device, device_params, topology, seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check",
+    "mesh_device, device_params, topology, seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor",
     _cmb_fabric2d_dimensions(),
     indirect=["mesh_device", "device_params"],
 )
@@ -691,7 +807,6 @@ def test_ttnn_combine_fabric2d(
     num_experts_per_tok,
     dispatch_buffer_capacity_factor,
     topology,
-    run_pcc_check,
 ):
     run_combine(
         mesh_device,
@@ -703,7 +818,6 @@ def test_ttnn_combine_fabric2d(
         num_links=2,
         topology=topology,
         use_predictable_data=False,
-        run_pcc_check=run_pcc_check,
         dispatched_buffer_layout=ttnn.ROW_MAJOR_LAYOUT,
         use_fp8_output=False,
         cmb_version=2,
