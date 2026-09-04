@@ -47,6 +47,11 @@ JitDeviceConfig create_jit_device_config(ChipId device_id, uint8_t num_hw_cqs, C
     auto pcie_cores = soc_d.get_cores(CoreType::PCIE, CoordSystem::TRANSLATED);
     CoreCoord pcie_core = pcie_cores.empty() ? soc_d.grid_size : pcie_cores[0];
 
+    const tt::CoreType resolved_dispatch_core_type = resolve_dispatch_core_type(env, device_id, dispatch_core_config);
+    const bool is_fds_supported =
+        resolved_dispatch_core_type == tt::CoreType::DISPATCH &&
+        hal.get_supports_sending_fds_go_cmds(hal.get_programmable_core_type_index(HalProgrammableCoreType::DISPATCH));
+
     return {
         .hal = &hal,
         .arch = cluster.arch(),
@@ -55,8 +60,9 @@ JitDeviceConfig create_jit_device_config(ChipId device_id, uint8_t num_hw_cqs, C
         .pcie_core = pcie_core,
         .harvesting_mask = cluster.get_harvesting_mask(device_id),
         .dispatch_core_type = dispatch_core_config.get_dispatch_core_type(),
-        .resolved_dispatch_core_type =
-            resolve_dispatch_core_type(env, device_id, dispatch_core_config),
+        .resolved_dispatch_core_type = resolved_dispatch_core_type,
+        .fds_worker_done =
+            is_fds_supported && !ctx.rtoptions().get_disable_fds() && ctx.rtoptions().get_fast_dispatch(),
         .dispatch_core_axis = dispatch_core_config.get_dispatch_core_axis(),
         .coordinate_virtualization_enabled = hal.is_coordinate_virtualization_enabled(),
         .dispatch_message_addr = ctx.dispatch_mem_map().get_dispatch_message_addr_start(),
