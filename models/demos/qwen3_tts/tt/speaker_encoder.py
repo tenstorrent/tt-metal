@@ -95,6 +95,8 @@ class SpeakerEncoder(LightweightModule):
         self._conv1d_prepared_cache = {}  # keyed by (cache_key, input_length, ...)
         self._linear_param_tt_cache = {}  # 1x1 conv → ttnn.linear [1,1,in,out]
         self._linear_prog_cache = {}
+        self._asp_split_param_cache = {}  # ASP tdnn weight splits for trace-safe replay
+        self._seq_tile_pad_cache = {}  # edge-replicate suffix for non-tile seq lengths
         _grid = device.compute_with_storage_grid_size()
         self._compute_grid_x = int(_grid.x)
         self._compute_grid_y = int(_grid.y)
@@ -112,9 +114,8 @@ class SpeakerEncoder(LightweightModule):
         # because it trades 8 transfers for ~310 small ops. See PERF_NOTES 3.4.
         self._se_device_conv = os.environ.get("QWEN3_TTS_SE_DEVICE_CONV", "0") != "0"
         # How a tap's reflected row order is materialised. "slice" decomposes it into
-        # ascending runs and concatenates them (~3.3 us/slice); "gather" is one
-        # ttnn.gather (~500 us at these shapes — correct but 10x the cost).
-        self._se_conv_shift = os.environ.get("QWEN3_TTS_SE_CONV_SHIFT", "slice")
+        # ascending runs and concatenates them (~3 us/slice); "gather" is one
+        # ttnn.gather (~480 us at mel T=384 — never use on the hot path).
         # Mel spectrogram on device instead of host torch.stft. Ported from the
         # ign/xtts_modules branch (models/experimental/xtts/tt/xtts_mel.py). ON by
         # default: it costs ~2.4 s of one-off JIT and ~10 ms warm against the host's
@@ -623,8 +624,36 @@ class SpeakerEncoder(LightweightModule):
             self._stacked_w_cache[key] = hit
         return hit
 
+    def _conv_shift_mode(self) -> str:
+        return os.environ.get("QWEN3_TTS_SE_CONV_SHIFT", "slice")
+
+    def _pad_nlc_seq_to_tile(self, x_nlc: ttnn.Tensor, mc) -> ttnn.Tensor:
+        """Edge-replicate pad so seq len is a multiple of 32 (one concat vs many tilize pads)."""
+        batch, seq_len, ch = int(x_nlc.shape[0]), int(x_nlc.shape[1]), int(x_nlc.shape[2])
+        tile = 32
+        need = ((seq_len + tile - 1) // tile) * tile
+        pad = need - seq_len
+        if pad == 0:
+            return x_nlc
+        key = (seq_len, ch, pad)
+        pad_tt = self._seq_tile_pad_cache.get(key)
+        if pad_tt is None:
+            # Placeholder suffix; each forward overwrites via copy from the last real frame.
+            pad_tt = ttnn.from_torch(
+                torch.zeros(batch, pad, ch, dtype=torch.bfloat16),
+                device=self.device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=mc,
+            )
+            self._seq_tile_pad_cache[key] = pad_tt
+        last = ttnn.slice(x_nlc, [0, seq_len - 1, 0], [batch, seq_len, ch], memory_config=mc)
+        last_rep = ttnn.repeat(last, (1, pad, 1))
+        ttnn.copy(last_rep, pad_tt)
+        return ttnn.concat([x_nlc, pad_tt], dim=1, memory_config=mc)
+
     def _shift_tap(self, x_nlc, rows: torch.Tensor, key, memory_config) -> ttnn.Tensor:
-        if self._se_conv_shift == "gather":
+        if self._conv_shift_mode() == "gather":
             return ttnn.gather(x_nlc, dim=1, index=self._tap_index_tt(rows, int(x_nlc.shape[2]), key))
         return self._tap_by_slice(x_nlc, rows, key, memory_config)
 
@@ -801,6 +830,82 @@ class SpeakerEncoder(LightweightModule):
     def _pointwise_linear_relu(self, x: ttnn.Tensor, weight: torch.Tensor, bias: torch.Tensor) -> ttnn.Tensor:
         """Device ``conv1d`` k=1 + ReLU as fused ``ttnn.linear`` (NLC in/out)."""
         return self._pointwise_linear(x, weight, bias, ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU))
+
+    def _ensure_asp_tdnn_split_params(
+        self, tdnn_weight: torch.Tensor, tdnn_bias: torch.Tensor, channels: int
+    ) -> Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
+        """Lazy-cache ASP tdnn splits as device weights (must run before trace capture)."""
+        key = (tdnn_weight.data_ptr(), tdnn_bias.data_ptr(), channels)
+        hit = self._asp_split_param_cache.get(key)
+        if hit is not None:
+            return hit
+        w = tdnn_weight.float()
+        if w.dim() == 3:
+            w = w.squeeze(-1)
+        out_ch = int(w.shape[0])
+        zero = torch.zeros(out_ch)
+        w_x = w[:, :channels].unsqueeze(-1)
+        w_m = w[:, channels : 2 * channels].unsqueeze(-1)
+        w_s = w[:, 2 * channels : 3 * channels].unsqueeze(-1)
+        wx, z_tt = self._ensure_pointwise_linear_params(w_x, zero)
+        wm, _ = self._ensure_pointwise_linear_params(w_m, zero)
+        ws, _ = self._ensure_pointwise_linear_params(w_s, zero)
+        _, b_tt = self._ensure_pointwise_linear_params(w_x, tdnn_bias)
+        hit = (wx, wm, ws, b_tt, z_tt)
+        self._asp_split_param_cache[key] = hit
+        return hit
+
+    def _asp_device_tdnn_relu(
+        self,
+        x_nlc: ttnn.Tensor,
+        mean: ttnn.Tensor,
+        std: ttnn.Tensor,
+        tdnn_weight: torch.Tensor,
+        tdnn_bias: torch.Tensor,
+    ) -> ttnn.Tensor:
+        """ASP tdnn k=1 conv without materializing the 3×-wide concat.
+
+        ``conv([x; mean; std])`` is linear in its input, so
+        ``W @ [x; m; s] = W_x x + W_m m + W_s s`` with ``m,s`` broadcast along seq.
+        Avoids ``repeat`` + the wide ``concat`` + their untilize/tilize chains.
+        """
+        mc = ttnn.L1_MEMORY_CONFIG
+        batch, seq_len, channels = int(x_nlc.shape[0]), int(x_nlc.shape[1]), int(x_nlc.shape[2])
+        wx, wm, ws, b_tt, z_tt = self._ensure_asp_tdnn_split_params(tdnn_weight, tdnn_bias, channels)
+
+        ax = self._tuned_linear(
+            ttnn.reshape(x_nlc, (batch, 1, seq_len, channels)),
+            wx,
+            z_tt,
+            None,
+            mc,
+        )
+        mean_1 = ttnn.slice(mean, [0, 0, 0], [batch, 1, channels], memory_config=mc)
+        std_1 = ttnn.slice(std, [0, 0, 0], [batch, 1, channels], memory_config=mc)
+        am = self._tuned_linear(
+            ttnn.reshape(mean_1, (batch, 1, 1, channels)),
+            wm,
+            z_tt,
+            None,
+            mc,
+        )
+        a_s = self._tuned_linear(
+            ttnn.reshape(std_1, (batch, 1, 1, channels)),
+            ws,
+            z_tt,
+            None,
+            mc,
+        )
+
+        out_ch = int(wx.shape[-1])
+        ax_nlc = ttnn.reshape(ax, (batch, seq_len, out_ch))
+        am_nlc = ttnn.reshape(am, (batch, 1, out_ch))
+        a_s_nlc = ttnn.reshape(a_s, (batch, 1, out_ch))
+        b_nlc = ttnn.reshape(b_tt, (1, 1, out_ch))
+        s = ttnn.add(ax_nlc, am_nlc, memory_config=mc)
+        s = ttnn.add(s, a_s_nlc, memory_config=mc)
+        s = ttnn.add(s, b_nlc, memory_config=mc)
+        return ttnn.relu(s)
 
     def _time_delay_net_block(
         self, x: ttnn.Tensor, conv_weight: torch.Tensor, conv_bias: torch.Tensor, dilation: int = 1
@@ -1053,10 +1158,6 @@ class SpeakerEncoder(LightweightModule):
         centered = ttnn.subtract(x_nlc, mean, memory_config=mc)
         std = ttnn.sqrt(ttnn.clamp(ttnn.mean(ttnn.multiply(centered, centered), dim=1, keepdim=True), min=eps))
 
-        mean_expanded = ttnn.repeat(mean, (1, seq_len, 1))
-        std_expanded = ttnn.repeat(std, (1, seq_len, 1))
-        attention_input = ttnn.concat([x_nlc, mean_expanded, std_expanded], dim=2, memory_config=mc)
-
         # Pass torch weights directly (avoids device round-trip).
         # HF AttentiveStatisticsPooling does conv → ReLU → tanh → conv (the
         # self.tdnn is TimeDelayNetBlock = conv + ReLU). We had been doing
@@ -1064,13 +1165,15 @@ class SpeakerEncoder(LightweightModule):
         # against QwenLM/Qwen3-TTS reference: PCC 0.96 → 0.9999 after fix.
         _asp_pointwise = self._is_pointwise_conv(tdnn_weight, 1) and self._is_pointwise_conv(conv_weight, 1)
         if self._se_device_asp and _asp_pointwise:
-            # k=1 convs are plain matmuls, so the whole ASP attention branch stays on
-            # device: no D2H/H2D pair at all. tdnn is conv+ReLU (fused into the
-            # matmul); the second conv has no activation.
-            a_tt = self._pointwise_linear_relu(attention_input, tdnn_weight, tdnn_bias)
+            # k=1 convs are plain matmuls. Split the tdnn's 3× concat input into
+            # three linears so mean/std need not be repeat-expanded along seq.
+            a_tt = self._asp_device_tdnn_relu(x_nlc, mean, std, tdnn_weight, tdnn_bias)
             a_tt = ttnn.tanh(a_tt)
             a_tt = self._pointwise_linear(a_tt, conv_weight, conv_bias)
         elif self._se_host_fuse:
+            mean_expanded = ttnn.repeat(mean, (1, seq_len, 1))
+            std_expanded = ttnn.repeat(std, (1, seq_len, 1))
+            attention_input = ttnn.concat([x_nlc, mean_expanded, std_expanded], dim=2, memory_config=mc)
             # Host-conv fallback (k>1, or the device path disabled): both convs are
             # host-side, so keeping ReLU+tanh between them on the host drops one
             # D2H/H2D pair and two device Unary ops.
@@ -1080,6 +1183,9 @@ class SpeakerEncoder(LightweightModule):
             a_t = self._conv1d_same_padding_torch_nlc(torch.tanh(F.relu(a_t)), conv_weight, conv_bias)
             a_tt = self._torch_nlc_to_ttnn(a_t)
         else:
+            mean_expanded = ttnn.repeat(mean, (1, seq_len, 1))
+            std_expanded = ttnn.repeat(std, (1, seq_len, 1))
+            attention_input = ttnn.concat([x_nlc, mean_expanded, std_expanded], dim=2, memory_config=mc)
             a_tt = self._conv1d_same_padding(attention_input, tdnn_weight, tdnn_bias)
             a_tt = ttnn.relu(a_tt)
             a_tt = ttnn.tanh(a_tt)
@@ -1229,6 +1335,17 @@ class SpeakerEncoder(LightweightModule):
 
         _mark("forward start")
         _dump("input mel→ttnn", hidden_tt)
+
+        if self._se_device_conv:
+            mc = ttnn.L1_MEMORY_CONFIG
+            hidden_tt = (
+                hidden_tt
+                if len(tuple(hidden_tt.shape)) == 3
+                else ttnn.reshape(
+                    hidden_tt, (hidden_tt.shape[0], hidden_tt.shape[2], hidden_tt.shape[3]), memory_config=mc
+                )
+            )
+            hidden_tt = self._pad_nlc_seq_to_tile(hidden_tt, mc)
 
         # blocks[0]: Initial TDNN
         conv_weight = self.pytorch_weights.get("blocks.0.conv.weight")

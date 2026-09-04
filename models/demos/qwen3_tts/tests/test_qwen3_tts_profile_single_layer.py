@@ -23,8 +23,14 @@ On-device modules (Mimi encode/decode stays on CPU and is not in these tests):
                           -k talker_layer_decode          eager fallback (cache sliced to 1)
                           -k talker_layer_decode_traced   DEPLOYED path (full-cache SDPA)
   CodePredictor layer     -k cp_layer_prefill | cp_layer_decode
-  Speaker TDNN 128→512    -k speaker_tdnn
-  Speaker SERes2Net       -k speaker_block
+  Speaker TDNN 128→512    -k speaker_tdnn   (partial — see note below)
+  Speaker SERes2Net       -k speaker_block  (partial — see note below)
+
+For a **full** speaker-encoder op list use ``test_qwen3_tts_perf_report.py -k
+test_speaker_encoder`` (or ``qwen3_tts_perf_report.sh -w speaker_encoder``).
+The two Speaker lines above profile untraced slices with synthetic weights:
+``speaker_tdnn`` runs k>1 conv on the host (default host-fuse) so Tracy sees only
+ReLU; ``speaker_block`` profiles one SERes2Net block, not entry TDNN / MFA / ASP / FC.
 
 Run **one** ``-k`` per Tracy capture. Do not use ``-k talker_layer_prefill`` —
 that substring matches all three buckets.
@@ -510,7 +516,13 @@ def _synthetic_speaker_block_sd():
 
 
 def test_speaker_tdnn(device):
-    """SpeakerEncoder entry TDNN (128→512) at demo-like mel length T=384."""
+    """SpeakerEncoder entry TDNN (128→512) at demo-like mel length T=384.
+
+    Partial / misleading for perf work: k>1 conv runs on the host under default
+    host-fuse, so the Tracy window is essentially ReLU only. Use
+    ``test_speaker_encoder`` in ``test_qwen3_tts_perf_report.py`` for the full
+    traced ECAPA forward.
+    """
     from models.demos.qwen3_tts.tt.speaker_encoder import SpeakerEncoder, SpeakerEncoderConfig
 
     enc = SpeakerEncoder(device, _synthetic_speaker_tdnn_sd(), config=SpeakerEncoderConfig())
@@ -527,7 +539,12 @@ def test_speaker_tdnn(device):
 
 
 def test_speaker_block(device):
-    """One SpeakerEncoder SERes2Net block (512-ch) at demo-like mel length T=384."""
+    """One SpeakerEncoder SERes2Net block (512-ch) at demo-like mel length T=384.
+
+    Partial: one block only, synthetic weights, untraced — huge host op-to-op gaps
+    and no entry TDNN / MFA / ASP / FC. Use ``test_speaker_encoder`` for the full
+    encoder on the deployed ``capture_forward_trace`` path.
+    """
     from models.demos.qwen3_tts.tt.speaker_encoder import SpeakerEncoder, SpeakerEncoderConfig
 
     enc = SpeakerEncoder(device, _synthetic_speaker_block_sd(), config=SpeakerEncoderConfig())
