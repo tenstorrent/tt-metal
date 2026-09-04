@@ -298,9 +298,23 @@
     {
       "branch": "silencer/dedupe-conv3d-blocking-fallback-warning",
       "title": "Dedupe repeated conv3d blocking-fallback warnings in tt_dit",
+      "status": "reported-inconclusive-ready-for-review",
+      "note": "Opened 2026-09 run. get_conv3d_config() in models/tt_dit/utils/conv3d.py logged an unguarded WARNING every call for fallback/none-match blocking keys; static per-run shapes meant identical lines repeated 4-60x per key in a single job (sampled from t3000-perf-tests run 32251268376 job 96071192614, wh_llmbox_perf QwenImage). Mirrored existing dedup pattern already used in matmul.py (_warned_matmul_signatures) via new _warned_conv3d_signatures set. Dispatched models-t2-e2e-tests (model=qwenimage) against branch for validation. | Reconciled this run: validation run 33856540225 (models-t2-e2e-tests, qwenimage) job 100972998732 completed/failure - unrelated perf-tolerance AssertionError (total_time 73.38 vs expected 68, tolerance exceeded), not the conv3d dedup. Grepped conv3d-blocking in last-5000-line tail sample: 0 occurrences (inconclusive - fallback path likely executes earlier in log, outside tail window). Outcome commented (/codeowners ping) and marked ready for review (2026-09).",
+      "number": 55442
+    },
+    {
+      "branch": "silencer/fix-qwenimage-deprecated-load-state-dict",
+      "title": "Fix deprecated load_state_dict call in QwenImage VAE decoder",
+      "pattern": "vae_qwenimage.py load_torch_state_dict() called self.wan_decoder.load_state_dict(), a @deprecated shim in layers/module.py that just forwards to load_torch_state_dict(); every QwenImage VAE load emitted DeprecationWarning 'Use load_torch_state_dict instead'",
+      "source_run_id": "32200321400",
+      "source_job_id": "95919238871",
+      "source_workflow": "t3000-demo-tests.yaml",
+      "category": "1-fix-deprecated-api-call",
+      "validation_workflow_dispatched": "models-t2-e2e-tests",
+      "dispatch_model": "qwenimage",
       "status": "pr-opened-dispatch-requested",
-      "note": "Opened 2026-09 run. get_conv3d_config() in models/tt_dit/utils/conv3d.py logged an unguarded WARNING every call for fallback/none-match blocking keys; static per-run shapes meant identical lines repeated 4-60x per key in a single job (sampled from t3000-perf-tests run 32251268376 job 96071192614, wh_llmbox_perf QwenImage). Mirrored existing dedup pattern already used in matmul.py (_warned_matmul_signatures) via new _warned_conv3d_signatures set. Dispatched models-t2-e2e-tests (model=qwenimage) against branch for validation."
+      "note": "Opened this run. One-line fix: call load_torch_state_dict() directly instead of the deprecated load_state_dict() wrapper (same signature, same default strict=True, identical behavior, no warning). Python-only change, no build required. Dispatched models-t2-e2e-tests (model=qwenimage) for validation."
     }
   ],
-  "backlog_cursor": "Phase A: PR #55405 reconciled (comment posted + marked ready for review); memory updated to ready-for-review-inconclusive-validation. Phase B: opened new PR silencer/dedupe-conv3d-blocking-fallback-warning (conv3d.py fallback-warning dedup), dispatched models-t2-e2e-tests qwenimage for validation. bge_m3-N150-func LOAD REPORT noise re-confirmed non-viable (transformers-library origin, not tt-metal source) - do not re-investigate. Next run: check conv3d PR validation result; continue workflow rotation with single-card-demo-tests, blackhole-sanity-tests, or t3000-demo-tests for a fresh target."
+  "backlog_cursor": "Phase A: PR #55442 (conv3d dedup) reconciled - comment posted (perf-tolerance failure unrelated, conv3d grep inconclusive) and marked ready for review. Phase B: opened new PR silencer/fix-qwenimage-deprecated-load-state-dict (vae_qwenimage.py deprecated load_state_dict -> load_torch_state_dict), dispatched models-t2-e2e-tests qwenimage for validation. bge_m3-N150-func LOAD REPORT noise remains non-viable (transformers-library origin) - do not re-investigate. Next run: check qwenimage-deprecated-load-state-dict PR validation result; continue workflow rotation with single-card-demo-tests or blackhole-sanity-tests for a fresh target."
 }
