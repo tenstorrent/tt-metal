@@ -6,7 +6,7 @@ Written during the inventory and planning steps; committed alongside the port fo
 
 ---
 
-## Scope — two passes
+## Scope — three passes
 
 The audit brief scopes the op as **three `DeviceOperation`s, eight factories, four program bodies**.
 Those eight split into three groups, each with a different disposition. Pass 1 ported the two
@@ -19,12 +19,42 @@ which is every factory this recipe's procedure covers.
 | `PagedFillCacheProgramFactory` | `mesh_coords == nullopt` | **PORTED** (pass 1) |
 | `PagedTiledFusedUpdateCacheProgramFactory` | `mesh_coords == nullopt` | **PORTED** (pass 2) |
 | `PagedRowMajorFusedUpdateCacheProgramFactory` | `mesh_coords == nullopt` | **PORTED** (pass 2) |
-| `PagedUpdateCacheMeshWorkloadFactory` | `mesh_coords.has_value()` | **OUT OF PROCEDURE** — target concept `MeshWorkloadSpecFactoryConcept` |
-| `PagedFillCacheMeshWorkloadFactory` | `mesh_coords.has_value()` | **OUT OF PROCEDURE** — same |
-| `PagedTiledFusedUpdateCacheMeshWorkloadFactory` | `mesh_coords.has_value()` | **OUT OF PROCEDURE** — same |
-| `PagedRowMajorFusedUpdateCacheMeshWorkloadFactory` | `mesh_coords.has_value()` | **OUT OF PROCEDURE** — same |
+| `PagedUpdateCacheMeshWorkloadFactory` | `mesh_coords.has_value()` | **PORTED** (pass 3) — `MeshWorkloadSpecFactoryConcept` |
+| `PagedFillCacheMeshWorkloadFactory` | `mesh_coords.has_value()` | **PORTED** (pass 3) — same |
+| `PagedTiledFusedUpdateCacheMeshWorkloadFactory` | `mesh_coords.has_value()` | **PORTED** (pass 3) — same |
+| `PagedRowMajorFusedUpdateCacheMeshWorkloadFactory` | `mesh_coords.has_value()` | **PORTED** (pass 3) — same |
 
-**Why the four mesh factories are not in pass 2, even though their framework blocker cleared.**
+**All eight factories are now on Metal 2.0.** Pass 3 was **invoker-authorised rather than
+recipe-covered**, and that distinction is the first thing a reviewer should know about it — the
+reasoning is recorded in [Pass 3](#pass-3--the-four-mesh-factories-invoker-authorised) below and in
+`METAL2_PORT_REPORT.md` → *Handoff points* #1.
+
+### Pass 3 — the four mesh factories, invoker-authorised
+
+Pass 2 stopped at the recipe's coverage boundary (reasoning preserved below, since it is still the
+correct default). The invoker then reviewed that reasoning and directed the port to proceed on
+`MeshWorkloadSpecFactoryConcept`. Two things make that a sound call rather than an override of the
+recipe:
+
+- **The rule pass 2 applied does not literally fire on this op.** The port recipe's stop condition is
+  *"A brief naming any other target concept"* — and this brief names `CustomProgramSpecFactoryConcept`
+  for **all eight** factories, mesh ones included. The audit never ran the multi-program gate at all
+  (`METAL2_PORT_REPORT.md` → *Friction* #2). So what pass 1 and 2 actually hit was a porter
+  disagreeing with the audit's concept choice, for which the recipe has a different and more specific
+  instruction — *"stop and surface the disagreement to the invoker — do not unilaterally override.
+  The audit is the source of truth for the chosen concept; an in-port revision is a signal the audit
+  was incomplete and the invoker needs to know."* The disagreement was surfaced, and the invoker
+  answered. That is the loop the recipe prescribes, completed.
+- **The capability limit is gone.** The `§When the discipline doesn't fit` off-ramp pass 1 used is
+  scoped to "when Metal 2.0 genuinely *cannot express* something, or the change reaches outside the
+  op's directory." Metal 2.0 can now express this, and nothing here reaches outside the op directory.
+
+What remains true, and is why this is flagged rather than treated as routine: **no port procedure has
+been written for this concept**, so the structural decisions below were made by reading the merged
+adapter rather than by following a documented pattern. They are the ones a procedure would settle,
+and they are the ones to review hardest.
+
+**Why the four mesh factories were not in pass 2, even though their framework blocker had cleared.**
 Pass 1 recorded them as blocked on a framework capability that did not exist: a per-mesh-coordinate
 `ProgramSpec` / `ProgramRunArgs`. That capability **has since merged** — `9fb0ed54794`
 *"Let a spec factory build a different program per mesh coordinate (#54988)"* ships
@@ -695,6 +725,91 @@ COMPUTE binds neither, because it never touches them.
 **`unpack_modes`** consumed set is therefore smaller: `RMF_CACHE_DFB` and
 `RMF_UNTILIZED_CACHE2_DFB` only.
 
+### Variant: the four `*MeshWorkloadFactory` factories (pass 3)
+
+Target concept **`MeshWorkloadSpecFactoryConcept`** (`9fb0ed54794`). Two methods per factory:
+
+```cpp
+static MeshWorkloadArtifacts create_mesh_workload_artifacts(
+    const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords);
+static ProgramRunArgs override_runtime_arguments(
+    const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&,
+    const ttnn::MeshCoordinateRange& range);          // called once per RANGE, not per device
+```
+
+**No new spec construction.** Each mesh factory calls its single-device sibling's
+`create_program_artifacts` and stamps the result across the mesh. That is sound because the
+`ProgramSpec` genuinely does not vary by coordinate for any of these four ops — same kernels, same
+DFBs, same bindings, same core ranges, none of them a function of the coordinate. What varies is
+either *which* coordinates get a program (three factories) or one run-arg value (`fill_cache`). So
+pass 3 adds no `DataflowBufferSpec`, no `KernelSpec`, no binding, and no kernel change; the DFB
+endpoint census, `hw_config` values, `unpack_modes` and `opt_level` are all inherited unchanged from
+passes 1-2 and re-verified there.
+
+#### The four structural decisions, and why each went the way it did
+
+**1. Range granularity: one program per coordinate.** Not a judgement call in the end — it is what the
+ported-from path built. The descriptor adapter branches on whether `create_descriptor` takes a
+`mesh_dispatch_coordinate` (`mesh_device_operation_adapter.hpp:607-615`); all four of these do, so it
+iterated `tensor_coords.coords()` and added one program per **coordinate**, wrapping each in a
+single-coordinate `MeshCoordinateRange`. Emitting single-coordinate ranges therefore reproduces the
+ported-from program set exactly. It also dissolves the range-decomposition problem the pass-2 report
+flagged for `fill_cache`: a coarser range would have to be split wherever `mesh_coords` membership
+changes inside it, because one `Program` backs a whole range — with one coordinate per range, every
+range is uniform in `noop` by construction.
+
+**2. The two mesh-filtering idioms, preserved as they are.** They are genuinely different and the
+brief forbids normalising either:
+
+| factory | ported-from idiom | Metal 2.0 expression |
+|---|---|---|
+| `update_cache`, both fused | empty `ProgramDescriptor` → adapter skips the coordinate | **omit the range.** The adapter requires every returned range to sit inside `tensor_coords` but does **not** require the ranges to cover it (`mesh_device_operation_adapter.hpp:1084-1100`), so an omitted coordinate gets no program — exactly the descriptor path's `desc.kernels.empty() → return` |
+| `fill_cache` | full descriptor with a `noop` RTA the kernels early-exit on, so the cache slot is still populated | **emit every coordinate**, patching only the `noop` run-arg value per range |
+
+`fill_cache` is the one worth restating: it is **not** a multi-program op. Its spec is identical
+everywhere and only a run-arg value differs, which is why the pass-1 report's original
+"multi-program" framing was wrong for it. What it needed from this concept is per-coordinate run args
+on the **cache miss** — its cache-*hit* path was always correct, because `override_runtime_arguments`
+already received the coordinate.
+
+**3. Does the cache-hit override need the range?** Split by idiom, for a reason worth stating:
+
+- **`update_cache` and both fused: no.** Every range that exists is one the op runs on, so the
+  coordinate test the ported-from patch performed on every hit is now *structural*. These pass
+  `std::nullopt` to the single-device override, whose optional-coordinate parameter exists only to
+  run that same test.
+- **`fill_cache`: yes.** `noop` is a function of the coordinate, so the override passes
+  `range.start_coord()`. That is exact rather than representative **because** of decision 1 — each
+  range covers one coordinate. Were ranges ever widened, this line would silently start applying one
+  coordinate's `noop` to several devices, so it is the line that depends most on decision 1 holding.
+
+**4. `noop` is patched, not rebuilt.** `noop` reaches only `runtime_arg_values`, never the spec, so
+`fill_cache` builds one base artifact and overwrites that one named value per coordinate via
+`AddRuntimeArgsForNode` (which assigns, so it overwrites). It reuses pass 1's
+`paged_fill_cache_noop(attrs, coord)` helper — already the single source of truth for that choice —
+so the miss and hit paths cannot disagree about which coordinates are noops.
+
+#### Dropped Plumbing (pass 3)
+
+| legacy location | legacy form | Metal 2.0 replacement |
+|---|---|---|
+| all four `create_descriptor(attrs, args, ret, coord)` | one `ProgramDescriptor` per coordinate, empty when excluded | `create_mesh_workload_artifacts(..., tensor_coords)` returning one `{range, spec, run_params}` per included coordinate |
+| all four `void override_runtime_arguments(Program&, …, coord)` | in-place `Program` mutation via `GetRuntimeArgs` / `UpdateDynamicCircularBufferAddress` | `ProgramRunArgs override_runtime_arguments(…, const MeshCoordinateRange&)` applied by the adapter with `UpdateProgramRunArgs` |
+| `build_paged_update_cache_descriptor`, `build_paged_fill_cache_descriptor`, `build_paged_tiled_fused_update_cache_descriptor`, `build_paged_row_major_fused_update_cache_descriptor` | the retained ported-from descriptor bodies (~1,700 lines) | **deleted** — pass 3 removes their last consumer. Forced, not optional: the `update_cache` and `fill_cache` ones live in an anonymous namespace, so leaving them unused is `-Wunused-function` under this build's `-Werror` |
+| `patch_paged_update_cache_runtime_args`, `patch_paged_fill_cache_runtime_args`, the fused `patch_runtime_args` template and its 11 arg-layout / CB-position constants, `coord_excluded_from_dispatch` | the ported-from index-addressed cache-hit patches | **deleted** with their last consumer. This is where the *"every mismatch is silent"* index-addressed arg layout the brief warned about finally leaves the op entirely |
+| `#include <tt-metalium/circular_buffer.hpp>` in the fused device-op, `program_descriptors.hpp` / `tensor_accessor_args.hpp` across the four factory files | legacy-API includes | dropped — the op no longer references a CB or a descriptor anywhere in host code |
+
+#### Flags (pass 3)
+
+- **The 11 legacy kernel sources are now unreferenced.** Nothing binds them: every factory binds a
+  `_metal2` fork. That completes the *sunset trigger* condition the pass-2 report recorded, and the
+  remaining work — delete the 11 originals, rename the forks onto their names, drop the pointer
+  comments — is deliberately **not** in this pass. It is purely mechanical, touches 22 files, and
+  bundling it with a novel-concept port would make both harder to review and to bisect. Carried in
+  `METAL2_PORT_REPORT.md` → *Open items* #6.
+- **One behaviour delta, confirmed empirically.** See *Deferred / Flagged*.
+
 ## Preserved Multiplicity
 
 **none — no work-split multiplicity in legacy.** Neither ported factory pushes the same
@@ -942,6 +1057,35 @@ analysis in `METAL2_PORT_REPORT.md` → *Open items for downstream* #1.
 in pass 2 against `main`. Their `*MeshWorkloadFactory` siblings now have their framework vehicle
 (#54988, merged) but await a port procedure for `MeshWorkloadSpecFactoryConcept`, per the finding
 above.
+
+### New in pass 3 — one behaviour delta: an empty `mesh_coords` now raises instead of dispatching nothing
+
+The only place pass 3 is **not** behaviour-preserving, stated plainly because the porting invariant
+says a port changes nothing observable.
+
+`MeshWorkloadSpecFactoryAdapter::create_mesh_workload` asserts
+`TT_FATAL(!artifacts.programs.empty(), "create_mesh_workload_artifacts returned no programs")`
+(`ttnn/api/ttnn/mesh_device_operation_adapter.hpp:1078`). There is no way to express "no programs
+anywhere" on this concept. So for `paged_update_cache` and both fused ops, a `mesh_coords` that is
+**empty or fully disjoint from `tensor_coords`** excludes every coordinate, yields zero programs, and
+now throws — where the ported-from descriptor path silently dispatched nothing.
+
+- **Reachable.** `select_program_factory` picks the mesh factory whenever `mesh_coords.has_value()`,
+  and an empty `std::set` has a value. Neither `paged_update_cache` nor the fused op validates that
+  `mesh_coords` is non-empty or a subset of `tensor_coords`.
+- **`fill_cache` is immune, for two independent reasons.** It emits a program on every coordinate
+  (the `noop` idiom), and `paged_fill_cache_device_operation.cpp:182-199` already validates
+  `mesh_coords ⊆ tensor_coords`.
+- **Confirmed by running it**, not by reading the adapter: a porter-side test asserted the raise
+  (`METAL2_PORT_REPORT.md` → *Verification performed*). Recording it as measured rather than inferred
+  matters here, because the alternative — that the fatal is somehow unreachable — would have been an
+  easy and wrong thing to assume.
+- **Not fixed.** Making it not throw means either an op-level validation change (off-limits) or
+  inventing a program for a coordinate the caller excluded (wrong). It wants a one-line ruling from
+  the op owners: accept the fatal as an improvement on a nonsensical input, or add the same
+  subset/non-empty validation `paged_fill_cache` already has. Nonsensical input and no known caller
+  does it — DeepSeek-V3 MLA passes a non-empty strict subset — but it is a real delta and it is the
+  single thing in this port a reviewer should weigh against shipping it.
 
 ### Other flags
 
