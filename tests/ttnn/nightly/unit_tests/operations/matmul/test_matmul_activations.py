@@ -15,19 +15,10 @@ import torch
 import torch.nn.functional as F
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
-# Every tolerance in this file is a literal, predicted from the number formats on
-# the device path rather than observed. numeric_tolerances.py in this directory
-# records the error budget the literals come from and how each one is arrived at;
-# nothing imports it, so re-derive the tables from it by hand if a test's shapes,
-# seeds or activations change.
-#
-# The shape of the answer, from that budget: the relative error of a matmul does
-# not grow with K. Each product carries a fractional slip from the mantissa bits
-# the multiplier discards, those slips multiply values of random sign, so the
-# error grows as sqrt(K) and so does the result. They cancel. At LoFi the
-# multiplier keeps only 4 of the 7 mantissa bits of the right hand operand, a 2.6
-# percent relative error that dominates every other term, which is why the limits
-# below barely move with K or with the data type.
+# Tolerances in this file are hard coded, derived based on the number formats used.
+# numeric_tolerances.py records the error budget the hard coded values came from
+# and how each one was derived.
+
 
 # rtol carries only what scales with an element's own value: the rounding into the
 # output format, doubled for the safety factor, plus two units in the last place
