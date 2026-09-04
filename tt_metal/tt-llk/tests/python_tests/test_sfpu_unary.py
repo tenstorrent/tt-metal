@@ -60,6 +60,80 @@ from helpers.test_variant_parameters import (
 )
 from helpers.utils import passed_test
 
+
+def _lanemk_run_fp32_stream(configuration, spec):
+    """laneMK persistent-session fp32/int32 2^32 streamer (object-identity preserving).
+
+    Runs the CERTIFIED corpus kernel (this exact `configuration` / ELF) over a
+    [start, start+count) band of the raw-uint32 space in ONE open device session,
+    folding each chunk's raw result bytes into a streaming SHA-256. The chunk size
+    is the config's own capacity (tile_count_A * 1024 patterns). Emits one
+    LANEMK_STREAM_RESULT line (per-leg output SHA + input sum64/xor32 coverage
+    checksums + measured wall/per-run). Env-gated; never runs in a normal test.
+
+    spec = "start,count,outfile".
+    """
+    import hashlib
+    import struct
+    import time
+
+    start_s, count_s, outfile = spec.split(",", 2)
+    start = int(start_s, 0)
+    count = int(count_s, 0)
+    st = configuration.variant_stimuli
+    loc = TestConfig.TENSIX_LOCATION
+    per_run = int(st.tile_count_A) * 1024  # elements the config processes per dispatch
+
+    configuration.prepare()
+    configuration.write_runtimes_to_L1()
+
+    # Per-dispatch Math-done wait timeout (seconds). The harness default (2 s) is too tight
+    # for a cold first dispatch / slower debug-bus on some galaxy hosts; override generously.
+    _wait_to = int(os.environ.get("LANEMK_WAIT_TIMEOUT", "60"))
+
+    sha = hashlib.sha256()
+    sum64 = 0
+    xor32 = 0
+    patterns = 0
+    runs = 0
+    t0 = time.time()
+    done = 0
+    while done < count:
+        n = min(per_run, count - done)
+        base = start + done
+        # Raw little-endian uint32 patterns; pad the tail of the final partial
+        # dispatch with 0 so a full tile is always written (deterministic).
+        pats = list(range(base, base + n)) + [0] * (per_run - n)
+        st.lanejn_raw_a = struct.pack(f"<{per_run}I", *pats)
+        st.write(loc)
+        st.clear_result_buffer(loc)
+        configuration.run_elf_files()
+        configuration.wait_for_tensix_operations_finished(timeout=_wait_to)
+        res = st.collect_raw_result_bytes(loc)
+        want = n * 4
+        if len(res) < want:
+            raise RuntimeError(f"chunk@{base}: got {len(res)} result bytes < {want}")
+        sha.update(res[:want])
+        for b in range(base, base + n):
+            sum64 = (sum64 + b) & ((1 << 64) - 1)
+            xor32 ^= b
+        patterns += n
+        runs += 1
+        done += n
+    dt = time.time() - t0
+
+    line = (
+        "LANEMK_STREAM_RESULT,"
+        f"start={start},count={patterns},runs={runs},per_run_patterns={per_run},"
+        f"wall_s={dt:.3f},per_run_ms={(1000.0 * dt / runs) if runs else 0:.3f},"
+        f"sum64=0x{sum64:016x},xor32=0x{xor32:08x},"
+        f"output_sha256={sha.hexdigest()}"
+    )
+    print(line, flush=True)
+    with open(outfile, "w") as fh:
+        fh.write(line + "\n")
+
+
 SUPPORTED_FAST_MODE_OPS = [
     MathOperation.Rsqrt,
     MathOperation.Sqrt,
@@ -928,6 +1002,14 @@ def eltwise_unary_sfpu(
     torch.manual_seed(0)
     torch.set_printoptions(precision=10)
 
+    # laneMK: env override of the tile dimensions for the streaming sweep. The tile
+    # COUNT is a runtime arg (TILE_COUNT/NUM_BLOCKS/NUM_TILES_IN_BLOCK), so the math
+    # .text is invariant to it — larger tiles amortize the fixed per-dispatch overhead
+    # without changing the certified object (asserted separately by the .text gate).
+    _lanemk_dim = os.environ.get("LANEMK_TILE_DIM")
+    if _lanemk_dim:
+        input_dimensions = [int(v) for v in _lanemk_dim.split(",")]
+
     # The op's own signed domain, not generate_stimuli's positive-only format default,
     # which would leave the x<0 branch, the piecewise knees and the saturation tails
     # unreached. A KeyError means a new op arrived with no _OP_DOMAIN_REGISTRY entry:
@@ -1029,6 +1111,17 @@ def eltwise_unary_sfpu(
     _lanejn_raw_a = os.environ.get("LANEJN_RAW_A")
     if _lanejn_raw_a:
         configuration.variant_stimuli.lanejn_raw_a = Path(_lanejn_raw_a).read_bytes()
+
+    # laneMK persistent-session fp32 streaming hook (corpus/tools/fp32_stream_sweep.py),
+    # env-gated and inert otherwise. LANEMK_STREAM="start,count,outfile[,anchorfile]" runs
+    # the certified kernel over a [start,start+count) raw-uint32 band in ONE open device
+    # session (prepare once; per chunk of tile_count_A*1024 patterns: inject raw A, clear
+    # Res, run_elf_files, wait, read Res, fold into a streaming SHA-256), then emits the
+    # per-leg producer line. Object identity is preserved: same `configuration`, same ELF.
+    _lanemk_stream = os.environ.get("LANEMK_STREAM")
+    if _lanemk_stream:
+        _lanemk_run_fp32_stream(configuration, _lanemk_stream)
+        return
 
     res_from_L1 = configuration.run().result
 
