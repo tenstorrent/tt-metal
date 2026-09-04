@@ -23,23 +23,13 @@ from __future__ import annotations
 import pytest
 import torch
 
+from models.common.utility_functions import comp_pcc
 from models.experimental.diffusion_drive.reference.model import DiffusionDriveConfig, TransfuserBackbone
 from models.experimental.diffusion_drive.tt.ttnn_backbone import TtnnTransfuserBackbone
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
-    a = a.float().flatten()
-    b = b.float().flatten()
-    a = a - a.mean()
-    b = b - b.mean()
-    denom = (a.norm() * b.norm()).item()
-    if denom < 1e-12:
-        return 1.0
-    return (a @ b).item() / denom
 
 
 def _make_backbone(latent: bool = True) -> TransfuserBackbone:
@@ -77,7 +67,7 @@ def test_backbone_bev_upscale_pcc(device) -> None:
         ref_up, ref_feat, _ = bb_ref(camera, lidar_dummy)
         ttnn_up, ttnn_feat, _ = ttnn_bb(camera, lidar_dummy)
 
-    pcc_up = _pcc(ttnn_up, ref_up)
+    pcc_up = comp_pcc(ref_up, ttnn_up)[1]
     assert pcc_up >= 0.99, f"bev_upscale PCC {pcc_up:.6f} < 0.99"
 
 
@@ -96,5 +86,5 @@ def test_backbone_bev_feature_pcc(device) -> None:
         _, ref_feat, _ = bb_ref(camera, lidar_dummy)
         _, ttnn_feat, _ = ttnn_bb(camera, lidar_dummy)
 
-    pcc_feat = _pcc(ttnn_feat, ref_feat)
+    pcc_feat = comp_pcc(ref_feat, ttnn_feat)[1]
     assert pcc_feat >= 0.99, f"bev_feature PCC {pcc_feat:.6f} < 0.99"

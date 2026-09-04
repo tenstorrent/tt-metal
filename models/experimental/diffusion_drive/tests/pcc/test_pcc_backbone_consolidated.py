@@ -26,6 +26,7 @@ from __future__ import annotations
 import pytest
 import torch
 
+from models.common.utility_functions import comp_pcc
 from models.experimental.diffusion_drive.reference.model import (
     DiffusionDriveConfig,
     DiffusionDriveModel,
@@ -39,17 +40,6 @@ from models.experimental.diffusion_drive.tt.ttnn_gpt_fusion import TtnnFuseFeatu
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
-    a = a.float().flatten()
-    b = b.float().flatten()
-    a = a - a.mean()
-    b = b - b.mean()
-    denom = (a.norm() * b.norm()).item()
-    if denom < 1e-12:
-        return 1.0
-    return (a @ b).item() / denom
 
 
 def _make_backbone() -> TransfuserBackbone:
@@ -104,10 +94,10 @@ def test_consolidated_matches_staged_and_reference(device) -> None:
         cons_up, cons_feat, _ = ttnn_bb(camera, lidar_dummy)
 
     pccs = {
-        "bev_upscale  cons-vs-ref": _pcc(cons_up, ref_up),
-        "bev_feature  cons-vs-ref": _pcc(cons_feat, ref_feat),
-        "bev_upscale  cons-vs-staged": _pcc(cons_up, staged_up),
-        "bev_feature  cons-vs-staged": _pcc(cons_feat, staged_feat),
+        "bev_upscale  cons-vs-ref": comp_pcc(ref_up, cons_up)[1],
+        "bev_feature  cons-vs-ref": comp_pcc(ref_feat, cons_feat)[1],
+        "bev_upscale  cons-vs-staged": comp_pcc(staged_up, cons_up)[1],
+        "bev_feature  cons-vs-staged": comp_pcc(staged_feat, cons_feat)[1],
     }
     for k, v in pccs.items():
         print(f"{k:30s} PCC = {v:.6f}")

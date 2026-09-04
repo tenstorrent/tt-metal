@@ -16,18 +16,8 @@ import pytest
 import torch
 import torch.nn as nn
 
+from models.common.utility_functions import comp_pcc
 from models.experimental.diffusion_drive.tt.common import fold_bn
-
-
-def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
-    a = a.float().flatten()
-    b = b.float().flatten()
-    a = a - a.mean()
-    b = b - b.mean()
-    denom = (a.norm() * b.norm()).item()
-    if denom < 1e-12:
-        return 1.0
-    return (a @ b).item() / denom
 
 
 def _run_case(conv: nn.Conv2d, bn: nn.BatchNorm2d, x: torch.Tensor) -> None:
@@ -98,7 +88,7 @@ def _run_case(conv: nn.Conv2d, bn: nn.BatchNorm2d, x: torch.Tensor) -> None:
     with torch.no_grad():
         out_bf16 = conv_fold_bf16(x)
 
-    pcc_val = _pcc(out_bf16, ref)
+    pcc_val = comp_pcc(ref, out_bf16)[1]
     assert pcc_val >= 0.99, f"bfloat16 fold PCC {pcc_val:.6f} < 0.99"
 
 
@@ -173,5 +163,5 @@ def test_fold_bn_precision_vs_fp16() -> None:
     conv_fold.eval()
     with torch.no_grad():
         out = conv_fold(x)
-    pcc_val = _pcc(out, ref)
+    pcc_val = comp_pcc(ref, out)[1]
     assert pcc_val >= 0.99, f"PCC {pcc_val:.6f} < 0.99"
