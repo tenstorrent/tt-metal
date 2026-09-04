@@ -35,6 +35,7 @@ import math
 import os
 import time
 from collections.abc import Sequence
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -189,6 +190,60 @@ def blend_clip_frames(a, b, extent: int):
     return head if extent == b.shape[0] else np.concatenate([head, b[extent:]], axis=0)
 
 
+def assemble_clip_parts(parts: list[tuple], frame_overlap: int):
+    """Temporal assembly into one preallocated buffer: seam math on overlap frames, memcpy for the rest.
+
+    ``parts`` is ``[(segment, previous_overlap_or_None), ...]`` in output order, where a non-None
+    ``previous_overlap`` means the segment's first ``frame_overlap`` frames cross-fade from that
+    overlap's trailing frames -- exactly :func:`blend_clip_frames`, whose head this reuses verbatim
+    so the seam math (weights, uint8 re-rounding) cannot drift.
+
+    The append-and-concat form this replaces copied every segment once inside the blend's tail
+    concat and the whole video again in ``concat_clip_frames`` -- 1.32 s + 0.26 s of numpy at
+    768P/15s, nearly all memcpy. Here each segment writes its own disjoint slab of the output, so
+    the copies happen once, and in parallel: every write touches only its own slab, its own
+    segment, and the previous segment's trailing frames, all read-only, so the pool needs no
+    ordering. uint8/torch copies release the GIL, which is what makes the threads worth having.
+    """
+    total = sum(clip_num_frames(segment) for segment, _ in parts)
+    first = parts[0][0]
+    if isinstance(first, np.ndarray):
+        out = np.empty((total, *first.shape[1:]), dtype=first.dtype)
+    else:
+        shape = list(first.shape)
+        shape[2] = total
+        out = torch.empty(shape, dtype=first.dtype)
+
+    def write(start: int, segment, previous) -> None:
+        frames = clip_num_frames(segment)
+        slab = clip_frames(out, start, start + frames)
+        extent = 0 if previous is None else min(clip_num_frames(previous), frames, frame_overlap)
+        if extent:
+            head = blend_clip_frames(previous, clip_frames(segment, 0, extent), extent)
+            if isinstance(out, np.ndarray):
+                slab[:extent] = head
+                np.copyto(slab[extent:], segment[extent:])
+            else:
+                slab[:, :, :extent] = head
+                slab[:, :, extent:].copy_(segment[:, :, extent:])
+        elif isinstance(out, np.ndarray):
+            np.copyto(slab, segment)
+        else:
+            slab.copy_(segment)
+
+    jobs, start = [], 0
+    for segment, previous in parts:
+        jobs.append((start, segment, previous))
+        start += clip_num_frames(segment)
+    if len(jobs) == 1:
+        write(*jobs[0])
+    else:
+        with ThreadPoolExecutor(max_workers=min(8, len(jobs))) as pool:
+            for done in [pool.submit(write, *job) for job in jobs]:
+                done.result()
+    return out
+
+
 def stitch_tiles(
     tiles: list[list[torch.Tensor]], height_overlaps: list[int], width_overlaps: list[int]
 ) -> torch.Tensor:
@@ -318,9 +373,12 @@ class MiniMaxH3Vae:
         pixel_norm: tuple[Sequence[float], Sequence[float]] | None = None,
         readback_uint8: bool = False,
         waves_per_device: int = 1,
+        stitch_exchange: str = "gather",
     ) -> None:
         if task not in ("t2va", "ref2va"):
             raise ValueError(f"task must be 't2va' (also serves fl2va) or 'ref2va', got {task!r}")
+        if stitch_exchange not in ("gather", "neighbor"):
+            raise ValueError(f"stitch_exchange must be 'gather' or 'neighbor', got {stitch_exchange!r}")
         self.config = config
         self.task = task
         self.mesh_device = mesh_device
@@ -336,9 +394,17 @@ class MiniMaxH3Vae:
         # Defaults to a plain strict load, which is what every existing test does.
         self._weight_loader = weight_loader
         self._stitcher = None
+        self._blender = None
         # Blend the tile grid on device and read back the assembled canvas, instead of reading
         # overlapping tiles and blending them on host.
         self.device_stitch = device_stitch
+        # How a device-stitched wave shares tiles. "gather" all-gathers every wave slot to every
+        # device and blends the whole canvas redundantly -- simple, but the traffic scales with
+        # mesh size (wave_size tiles per device). "neighbor" exchanges only the two overlap strips
+        # each tile actually reads and blends in place, so traffic scales with the ~80 px overlap
+        # instead; the trims and canvas placement move to a host that only slices and concatenates
+        # (float reads fp32 tiles, yuv420 converts per tile and crops the planar atlas on host).
+        self.stitch_exchange = stitch_exchange
         # `(mean, std)` of the ImageNet normalization the decoder's pixels are still in. Set it and
         # the de-normalization is folded into `proj_out`, so `decode` emits `[-1, 1]` pixels and the
         # caller keeps no copy of the constants. Left unset the decoder emits reference-space values,
@@ -878,129 +944,398 @@ class MiniMaxH3Vae:
         if pending is not None:
             yield from read_wave(*pending)
 
-    def _decode_clip_device_stitched(self, z_BCTHW: torch.Tensor, output_type: str = "float"):
-        """One clip, decoded and stitched entirely on device, read back as the assembled canvas.
+    def _decode_clips_device_stitched(self, chunk_latents: list[torch.Tensor], output_type: str = "float") -> list:
+        if self.stitch_exchange == "neighbor":
+            return self._decode_clips_neighbor_stitched(chunk_latents, output_type)
+        return self._decode_clips_gather_stitched(chunk_latents, output_type)
 
-        The win is transfer volume, not compute. The host path reads back **overlapping** tiles --
-        28 of 256x256 against a 768x1344 canvas, 2.51 GB over the whole video -- and then blends them
-        on host. Blending first and reading back the canvas moves far less, and the two-axis
-        all-gather that co-locates the neighbours costs little against the readback it removes, so
-        the collective is nearly free.
+    def _decode_clips_gather_stitched(self, chunk_latents: list[torch.Tensor], output_type: str = "float") -> list:
+        """Temporal chunks decoded and stitched entirely on device, packed into full waves.
+
+        The win over the host path is transfer volume, not compute. That path reads back
+        **overlapping** tiles -- 28 of 256x256 against a 768x1344 canvas, 2.51 GB over the whole
+        video -- and then blends them on host. Blending first and reading back the canvas moves far
+        less, and the two-axis all-gather that co-locates the neighbours costs little against the
+        readback it removes, so the collective is nearly free.
+
+        Chunks pack `wave_size // tiles_per_chunk` to a wave because the gather's cost does not care
+        what the slots hold: it moves `wave_size` tiles to every device whether they are real tiles
+        or the pad repeats. One chunk per wave on a mesh wider than the grid -- a 4x7 grid on a 4x32
+        quad -- would decode 100 pad tiles per wave and run the same wave count as a 4x8; packing
+        turns those slots into the next chunks' tiles at zero extra gather cost. Only one chunk's
+        canvas is live at a time, and the temporal cross-fade in `_decode` stays ordered on host.
 
         The tile -> gathered-position map comes from `gathered_tile_order`'s inverse and is **not**
         row-major: the two-axis gather transposes dim 0, so position
         `c * rows + r` holds shard `r * cols + c`. Assuming row-major here puts tiles in the wrong
         place, which the seam gate catches loudly -- but only because something finally reads them.
+        That map is pure mesh arithmetic -- a shard's gathered position never depends on the tile
+        grid -- which is what makes packing safe without the grid matching the mesh shape.
         """
         from .decoder_minimax_h3 import unpatchify  # noqa: F401  (host fallback parity)
+        from .stitch_device_minimax_h3 import DeviceTileStitcher, unpatchify_device
 
         (y_starts, y_lengths, y_overlaps), (x_starts, x_lengths, x_overlaps) = self._decode_tile_grid(
-            z_BCTHW.shape[-2], z_BCTHW.shape[-1]
+            chunk_latents[0].shape[-2], chunk_latents[0].shape[-1]
         )
         grid_rows, grid_cols = len(y_lengths), len(x_lengths)
-
-        mark = time.perf_counter()
-        units = self._latent_tiles(z_BCTHW)
-        self._profile["tiling"] += time.perf_counter() - mark
-        assert len(units) == grid_rows * grid_cols, f"{len(units)} tiles for a {grid_rows}x{grid_cols} grid"
+        tiles_per_chunk = grid_rows * grid_cols
 
         mesh_rows, mesh_cols = tuple(self.mesh_device.shape)
         wave_size = self.mesh_device.get_num_devices()
         assert (
-            len(units) <= wave_size
-        ), f"a device-stitched clip must fit one wave; {len(units)} tiles against {wave_size} devices"
-        # The co-location below all-gathers the *whole* of each cluster axis, so every device ends up
-        # holding `wave_size` tiles regardless of how many the grid has. That is affordable when the
-        # grid fills the mesh and ruinous when it does not: a 4x7 grid on a 4x32 quad would put 128
-        # tiles on every chip to use 28 of them. Refuse rather than allocate it. Lifting this needs
-        # the neighbour-exchange form, where a tile only ever pulls its two overlap strips.
-        assert grid_rows == mesh_rows and grid_cols <= mesh_cols, (
-            f"the gather-based device stitch needs a {mesh_rows}x<={mesh_cols} tile grid to match the "
-            f"mesh, got {grid_rows}x{grid_cols} on {mesh_rows}x{mesh_cols}"
-        )
-        _, _, num_frames, height, width = units[0].shape
+            tiles_per_chunk <= wave_size
+        ), f"a device-stitched chunk must fit one wave; {tiles_per_chunk} tiles against {wave_size} devices"
+        chunks_per_wave = wave_size // tiles_per_chunk
+
         decoder = self.decoder
-        assert decoder.latent_shape == (
-            num_frames,
-            height,
-            width,
-        ), f"unit shape {(num_frames, height, width)} != decoder {decoder.latent_shape}"
         profile = self._profile
-
-        mark = time.perf_counter()
-        wave = [unit.permute(0, 2, 3, 4, 1).reshape(1, num_frames * height * width, -1) for unit in units]
-        # Pad to the mesh with repeats of the last tile, as the host path does. The padding lands on
-        # devices whose gathered positions map outside the grid and is never indexed.
-        batch = torch.cat(wave + [wave[-1]] * (wave_size - len(wave)), dim=0)
-        profile["host_prep"] += time.perf_counter() - mark
-
-        mark = time.perf_counter()
-        tokens = ttnn.from_torch(
-            batch,
-            dtype=ttnn.bfloat16,
-            device=self.mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
-        )
-        profile["upload"] += time.perf_counter() - mark
-
-        mark = time.perf_counter()
-        from .stitch_device_minimax_h3 import DeviceTileStitcher, unpatchify_device
-
-        decoded = decoder(tokens)
-        # Row-major from here to the DMA. `unpatchify_device`'s rank-8 intermediate has trailing dims
-        # of 16, which a tiled reshape pads to 32x32 -- a 4x blowup for a view -- and the stitch's
-        # slices and concats land off tile boundaries on this grid's overlaps. One conversion here
-        # keeps every step after it on a fast path, `mesh_partition` included.
-        decoded = ttnn.to_layout(decoded, ttnn.ROW_MAJOR_LAYOUT)
-        pixels = unpatchify_device(
-            decoded,
-            num_frames=num_frames,
-            height=height,
-            width=width,
-            out_channels=self.config.out_channels,
-            patch_size=self.config.spatial_compression_ratio,
-            patch_size_t=self.config.temporal_compression_ratio,
-        )
-        # Co-locate every tile on every device. Two gathers, one per mesh axis.
-        gathered = ttnn.all_gather(pixels, 0, cluster_axis=0, topology=ttnn.Topology.Ring)
-        gathered = ttnn.all_gather(gathered, 0, cluster_axis=1, topology=ttnn.Topology.Ring)
-
         # Position of shard k in the gathered tensor: the inverse of the transpose.
         order = [r * mesh_cols + c for c in range(mesh_cols) for r in range(mesh_rows)]
         position = {shard: index for index, shard in enumerate(order)}
         if self._stitcher is None:
             self._stitcher = DeviceTileStitcher(self.mesh_device)
-        # `ttnn.Shape` does not support slicing, so materialize it as a list once.
-        gathered_shape = list(gathered.shape)
 
-        def tile_at(row: int, col: int) -> ttnn.Tensor:
-            index = position[row * grid_cols + col]
-            return ttnn.slice(gathered, [index, 0, 0, 0, 0], [index + 1, *gathered_shape[1:]])
+        canvases = []
+        for group_start in range(0, len(chunk_latents), chunks_per_wave):
+            group = chunk_latents[group_start : group_start + chunks_per_wave]
 
-        rows = [[tile_at(i, j) for j in range(grid_cols)] for i in range(grid_rows)]
-        canvas = self._stitcher.stitch(rows, y_overlaps, x_overlaps)
-        elapsed = time.perf_counter() - mark
-        profile["device"] += elapsed
-        profile["device_each"].append(elapsed)
-        profile["waves"] += 1
-        profile["units"] += len(units)
+            mark = time.perf_counter()
+            units = [tile for latents in group for tile in self._latent_tiles(latents)]
+            profile["tiling"] += time.perf_counter() - mark
+            assert (
+                len(units) == len(group) * tiles_per_chunk
+            ), f"{len(units)} tiles for {len(group)} chunks of a {grid_rows}x{grid_cols} grid"
 
-        mark = time.perf_counter()
-        canvas_shape = tuple(canvas.shape)
-        canvas_dtype = str(canvas.dtype)
-        if output_type == "yuv420":
-            out = self._read_canvas_yuv(canvas)
-            read_bytes = out.size
-        else:
-            out = local_device_to_torch(canvas).float()
-            read_bytes = out.numel() * out.element_size()
-        elapsed = time.perf_counter() - mark
-        profile["readback"] += elapsed
-        profile["readback_each"].append(elapsed)
-        profile["shape"] = canvas_shape
-        profile["dtype"] = canvas_dtype
-        profile["readback_mb"] += read_bytes / 1e6
+            _, _, num_frames, height, width = units[0].shape
+            assert decoder.latent_shape == (
+                num_frames,
+                height,
+                width,
+            ), f"unit shape {(num_frames, height, width)} != decoder {decoder.latent_shape}"
+
+            mark = time.perf_counter()
+            wave = [unit.permute(0, 2, 3, 4, 1).reshape(1, num_frames * height * width, -1) for unit in units]
+            # Pad to the mesh with repeats of the last tile, as the host path does. The padding lands on
+            # devices whose gathered positions map outside every chunk's grid and is never indexed.
+            batch = torch.cat(wave + [wave[-1]] * (wave_size - len(wave)), dim=0)
+            profile["host_prep"] += time.perf_counter() - mark
+
+            mark = time.perf_counter()
+            tokens = ttnn.from_torch(
+                batch,
+                dtype=ttnn.bfloat16,
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
+            )
+            profile["upload"] += time.perf_counter() - mark
+
+            mark = time.perf_counter()
+            decoded = decoder(tokens)
+            # fp32 before anything downstream touches the tiles: the mixed bf16-tile x fp32-ramp
+            # ROW_MAJOR blend in `DeviceTileStitcher` mis-executes on current ttnn (garbage-scale
+            # output; the seam gate only covers fp32 tiles, which is exactly the path this keeps us
+            # on). The cast lands here, while `decoded` is still TILE, so it costs no extra layout
+            # conversion -- the price is fp32 through unpatchify and the gathers (2x bytes).
+            decoded = ttnn.typecast(decoded, ttnn.float32)
+            # Row-major from here to the DMA. `unpatchify_device`'s rank-8 intermediate has trailing dims
+            # of 16, which a tiled reshape pads to 32x32 -- a 4x blowup for a view -- and the stitch's
+            # slices and concats land off tile boundaries on this grid's overlaps. One conversion here
+            # keeps every step after it on a fast path, `mesh_partition` included.
+            decoded = ttnn.to_layout(decoded, ttnn.ROW_MAJOR_LAYOUT)
+            pixels = unpatchify_device(
+                decoded,
+                num_frames=num_frames,
+                height=height,
+                width=width,
+                out_channels=self.config.out_channels,
+                patch_size=self.config.spatial_compression_ratio,
+                patch_size_t=self.config.temporal_compression_ratio,
+            )
+            # Co-locate every tile on every device. Two gathers, one per mesh axis.
+            gathered = ttnn.all_gather(pixels, 0, cluster_axis=0, topology=ttnn.Topology.Ring)
+            gathered = ttnn.all_gather(gathered, 0, cluster_axis=1, topology=ttnn.Topology.Ring)
+            elapsed = time.perf_counter() - mark
+            profile["device"] += elapsed
+            profile["waves"] += 1
+            profile["units"] += len(units)
+
+            # `ttnn.Shape` does not support slicing, so materialize it as a list once.
+            gathered_shape = list(gathered.shape)
+
+            def tile_at(offset: int, row: int, col: int) -> ttnn.Tensor:
+                index = position[offset + row * grid_cols + col]
+                return ttnn.slice(gathered, [index, 0, 0, 0, 0], [index + 1, *gathered_shape[1:]])
+
+            # Stitch-then-read one chunk at a time: the gathered pile plus a single fp32 canvas
+            # bounds device memory, where stitching the whole group first would hold every canvas.
+            for chunk_index in range(len(group)):
+                mark = time.perf_counter()
+                offset = chunk_index * tiles_per_chunk
+                rows = [[tile_at(offset, i, j) for j in range(grid_cols)] for i in range(grid_rows)]
+                canvas = self._stitcher.stitch(rows, y_overlaps, x_overlaps)
+                elapsed = time.perf_counter() - mark
+                profile["device"] += elapsed
+                profile["device_each"].append(elapsed)
+
+                mark = time.perf_counter()
+                canvas_shape = tuple(canvas.shape)
+                canvas_dtype = str(canvas.dtype)
+                if output_type == "yuv420":
+                    out = self._read_canvas_yuv(canvas)
+                    read_bytes = out.size
+                else:
+                    out = local_device_to_torch(canvas).float()
+                    read_bytes = out.numel() * out.element_size()
+                ttnn.deallocate(canvas)
+                elapsed = time.perf_counter() - mark
+                profile["readback"] += elapsed
+                profile["readback_each"].append(elapsed)
+                profile["shape"] = canvas_shape
+                profile["dtype"] = canvas_dtype
+                profile["readback_mb"] += read_bytes / 1e6
+                canvases.append(out)
+            ttnn.deallocate(gathered)
+        return canvases
+
+    def _decode_clips_neighbor_stitched(self, chunk_latents: list[torch.Tensor], output_type: str = "float") -> list:
+        """The gather-free device stitch: halo strips instead of an all-gather, blend in place.
+
+        Same wave packing as the gather form, but tiles are placed **grid-aligned** -- tile
+        ``(chunk k, r, c)`` on device ``(r, k * grid_cols + c)`` -- so each tile's up and left
+        neighbours are its mesh-axis neighbours and `NeighborTileBlender` can hand it exactly the
+        two overlap strips the reference blend reads. No device ever holds more than its own tile
+        plus ~96 rows and ~80 columns of halo, against the gather form's ``wave_size`` tiles, and
+        every cross-fade happens on device; the host only applies the reference trims and
+        concatenates, so its per-chunk cost is slicing, not blending.
+
+        Packing density is ``mesh_cols // grid_cols`` chunks per wave (columns must stay aligned),
+        against the gather form's ``wave_size // tiles_per_chunk`` -- identical at the shapes that
+        matter (4 on a 4x32 quad, 1 on a 4x8, for the 4x7 grid).
+
+        ``yuv420`` reads back per tile rather than per canvas: the grid-aligned wave *is* the
+        ``(mesh_rows*tile) x (mesh_cols*tile)`` atlas `fast_device_to_host_yuv` reassembles from
+        per-device shards, so the blended tiles convert to planar uint8 on device and the host
+        crops the trims out of the atlas planes -- uint8 slicing, no blend, no fp32 canvas. That
+        cuts this path's readback from fp32 tiles to 1.5 bytes/pixel, at ~1.78x the canvas area
+        (the overlap regions ride along untrimmed).
+        """
+        from .stitch_device_minimax_h3 import NeighborTileBlender, unpatchify_device
+
+        assert self.ccl_manager is not None, "the neighbour exchange needs a CCLManager"
+
+        (y_starts, y_lengths, y_overlaps), (x_starts, x_lengths, x_overlaps) = self._decode_tile_grid(
+            chunk_latents[0].shape[-2], chunk_latents[0].shape[-1]
+        )
+        grid_rows, grid_cols = len(y_lengths), len(x_lengths)
+        tiles_per_chunk = grid_rows * grid_cols
+
+        mesh_rows, mesh_cols = tuple(self.mesh_device.shape)
+        wave_size = self.mesh_device.get_num_devices()
+        assert grid_rows <= mesh_rows and grid_cols <= mesh_cols, (
+            f"the neighbour stitch needs the {grid_rows}x{grid_cols} grid to fit the "
+            f"{mesh_rows}x{mesh_cols} mesh with rows and columns aligned"
+        )
+        chunks_per_wave = mesh_cols // grid_cols
+
+        if self._blender is None:
+            self._blender = NeighborTileBlender(self.mesh_device, self.ccl_manager)
+        decoder = self.decoder
+        profile = self._profile
+
+        canvases = []
+        for group_start in range(0, len(chunk_latents), chunks_per_wave):
+            group = chunk_latents[group_start : group_start + chunks_per_wave]
+
+            mark = time.perf_counter()
+            units_by_chunk = [self._latent_tiles(latents) for latents in group]
+            profile["tiling"] += time.perf_counter() - mark
+
+            _, _, num_frames, height, width = units_by_chunk[0][0].shape
+            assert decoder.latent_shape == (
+                num_frames,
+                height,
+                width,
+            ), f"unit shape {(num_frames, height, width)} != decoder {decoder.latent_shape}"
+
+            mark = time.perf_counter()
+            # Grid-aligned slots; the leftovers (idle columns, idle rows) carry a filler tile whose
+            # blended output is never read and whose halo contributions meet zero weights.
+            slots: list[torch.Tensor | None] = [None] * wave_size
+            for k, units in enumerate(units_by_chunk):
+                assert len(units) == tiles_per_chunk
+                for index, unit in enumerate(units):
+                    r, c = divmod(index, grid_cols)
+                    slots[r * mesh_cols + k * grid_cols + c] = unit
+            filler = units_by_chunk[0][0]
+            wave = [
+                (unit if unit is not None else filler)
+                .permute(0, 2, 3, 4, 1)
+                .reshape(1, num_frames * height * width, -1)
+                for unit in slots
+            ]
+            batch = torch.cat(wave, dim=0)
+            profile["host_prep"] += time.perf_counter() - mark
+
+            mark = time.perf_counter()
+            tokens = ttnn.from_torch(
+                batch,
+                dtype=ttnn.bfloat16,
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
+            )
+            profile["upload"] += time.perf_counter() - mark
+
+            mark = time.perf_counter()
+            decoded = decoder(tokens)
+            decoded = ttnn.to_layout(decoded, ttnn.ROW_MAJOR_LAYOUT)
+            pixels = unpatchify_device(
+                decoded,
+                num_frames=num_frames,
+                height=height,
+                width=width,
+                out_channels=self.config.out_channels,
+                patch_size=self.config.spatial_compression_ratio,
+                patch_size_t=self.config.temporal_compression_ratio,
+            )
+            blended = self._blender.blend_wave(
+                pixels,
+                grid_rows=grid_rows,
+                grid_cols=grid_cols,
+                y_overlaps=y_overlaps,
+                x_overlaps=x_overlaps,
+                chunks_per_wave=chunks_per_wave,
+            )
+            elapsed = time.perf_counter() - mark
+            profile["device"] += elapsed
+            profile["device_each"].append(elapsed)
+            profile["waves"] += 1
+            profile["units"] += sum(len(units) for units in units_by_chunk)
+
+            if output_type == "yuv420":
+                _, _, _, tile_ph, tile_pw = (int(d) for d in blended.shape)
+                mark = time.perf_counter()
+                # Same clamp-cast as `_read_canvas_yuv`, on the blended tiles instead of a canvas;
+                # the wave's per-device shards are exactly the atlas layout the YUV d2h reassembles.
+                tiles = ttnn.clamp(blended, min=-1.0, max=1.0)
+                tiles = ttnn.typecast(tiles, ttnn.bfloat16)
+                tiles = ttnn.to_layout(tiles, ttnn.ROW_MAJOR_LAYOUT)
+                planar = fast_device_to_host_yuv(tiles, self.mesh_device, ccl_manager=self.ccl_manager)
+                elapsed = time.perf_counter() - mark
+                profile["readback"] += elapsed
+                profile["readback_each"].append(elapsed)
+                profile["shape"] = tuple(planar.shape)
+                profile["dtype"] = str(planar.dtype)
+                profile["readback_mb"] += planar.size / 1e6
+                ttnn.deallocate(blended)
+
+                mark = time.perf_counter()
+                canvases.extend(
+                    self._assemble_yuv_atlas(
+                        planar,
+                        chunks=len(group),
+                        grid_rows=grid_rows,
+                        grid_cols=grid_cols,
+                        mesh_rows=mesh_rows,
+                        mesh_cols=mesh_cols,
+                        y_starts=y_starts,
+                        x_starts=x_starts,
+                        y_overlaps=y_overlaps,
+                        x_overlaps=x_overlaps,
+                        tile_ph=tile_ph,
+                        tile_pw=tile_pw,
+                    )
+                )
+                profile["stitch"] += time.perf_counter() - mark
+                continue
+
+            mark = time.perf_counter()
+            wave_torch = fast_device_to_host(blended, self.mesh_device, [0, 0], ccl_manager=self.ccl_manager)
+            elapsed = time.perf_counter() - mark
+            profile["readback"] += elapsed
+            profile["readback_each"].append(elapsed)
+            profile["shape"] = tuple(wave_torch.shape)
+            profile["dtype"] = str(wave_torch.dtype)
+            profile["readback_mb"] += wave_torch.numel() * wave_torch.element_size() / 1e6
+            ttnn.deallocate(blended)
+
+            mark = time.perf_counter()
+            # Every cross-fade already happened on device; this is the reference's trims and
+            # concats only, so the host cost is memory movement, not blend math.
+            for k in range(len(group)):
+                rows = []
+                for i in range(grid_rows):
+                    row = []
+                    for j in range(grid_cols):
+                        slot = i * mesh_cols + k * grid_cols + j
+                        tile = wave_torch[slot : slot + 1].float()
+                        if i < grid_rows - 1:
+                            tile = tile[..., : tile.shape[-2] - y_overlaps[i], :]
+                        if j < grid_cols - 1:
+                            tile = tile[..., : tile.shape[-1] - x_overlaps[j]]
+                        row.append(tile)
+                    rows.append(torch.cat(row, dim=-1))
+                canvases.append(torch.cat(rows, dim=-2))
+            profile["stitch"] += time.perf_counter() - mark
+        return canvases
+
+    @staticmethod
+    def _assemble_yuv_atlas(
+        planar: np.ndarray,
+        *,
+        chunks: int,
+        grid_rows: int,
+        grid_cols: int,
+        mesh_rows: int,
+        mesh_cols: int,
+        y_starts: list[int],
+        x_starts: list[int],
+        y_overlaps: list[int],
+        x_overlaps: list[int],
+        tile_ph: int,
+        tile_pw: int,
+    ) -> list[np.ndarray]:
+        """Crop each chunk's planar canvas out of the tile atlas the YUV d2h returns.
+
+        ``planar`` is ``(T, atlas_h*atlas_w * 3/2)`` uint8 with the wave's tiles at their mesh
+        positions: tile ``(chunk k, i, j)`` at atlas ``(i*tile_ph, (k*grid_cols + j)*tile_pw)``.
+        Every cross-fade happened on device, so this applies only the reference trims (drop the
+        last ``overlap`` rows/columns of every non-edge tile) and places the survivors at their
+        ``y_starts``/``x_starts`` -- pure uint8 slicing, in luma and half-res chroma alike. All
+        starts and overlaps are even, so the 4:2:0 chroma crops stay integral.
+        """
+        frames = planar.shape[0]
+        atlas_h, atlas_w = mesh_rows * tile_ph, mesh_cols * tile_pw
+        luma_len, chroma_len = atlas_h * atlas_w, (atlas_h // 2) * (atlas_w // 2)
+        y_atlas = planar[:, :luma_len].reshape(frames, atlas_h, atlas_w)
+        cb_atlas = planar[:, luma_len : luma_len + chroma_len].reshape(frames, atlas_h // 2, atlas_w // 2)
+        cr_atlas = planar[:, luma_len + chroma_len :].reshape(frames, atlas_h // 2, atlas_w // 2)
+
+        canvas_h, canvas_w = y_starts[-1] + tile_ph, x_starts[-1] + tile_pw
+        out = []
+        for k in range(chunks):
+            y_c = np.empty((frames, canvas_h, canvas_w), dtype=np.uint8)
+            cb_c = np.empty((frames, canvas_h // 2, canvas_w // 2), dtype=np.uint8)
+            cr_c = np.empty((frames, canvas_h // 2, canvas_w // 2), dtype=np.uint8)
+            for i in range(grid_rows):
+                own_h = tile_ph - (y_overlaps[i] if i < grid_rows - 1 else 0)
+                row_dst, row_src = y_starts[i], i * tile_ph
+                for j in range(grid_cols):
+                    own_w = tile_pw - (x_overlaps[j] if j < grid_cols - 1 else 0)
+                    col_dst, col_src = x_starts[j], (k * grid_cols + j) * tile_pw
+                    y_c[:, row_dst : row_dst + own_h, col_dst : col_dst + own_w] = y_atlas[
+                        :, row_src : row_src + own_h, col_src : col_src + own_w
+                    ]
+                    cb_c[:, row_dst // 2 : (row_dst + own_h) // 2, col_dst // 2 : (col_dst + own_w) // 2] = cb_atlas[
+                        :, row_src // 2 : (row_src + own_h) // 2, col_src // 2 : (col_src + own_w) // 2
+                    ]
+                    cr_c[:, row_dst // 2 : (row_dst + own_h) // 2, col_dst // 2 : (col_dst + own_w) // 2] = cr_atlas[
+                        :, row_src // 2 : (row_src + own_h) // 2, col_src // 2 : (col_src + own_w) // 2
+                    ]
+            flat = np.concatenate([y_c.reshape(frames, -1), cb_c.reshape(frames, -1), cr_c.reshape(frames, -1)], axis=1)
+            out.append(flat.reshape(frames, canvas_h * 3 // 2, canvas_w))
         return out
 
     def _read_canvas_yuv(self, canvas: ttnn.Tensor) -> np.ndarray:
@@ -1041,7 +1376,7 @@ class MiniMaxH3Vae:
         """
         self._ensure_loaded(self.decoder, self._decoder_subfolder())
         if self.device_stitch:
-            return self._decode_clip_device_stitched(z_BCTHW)
+            return self._decode_clips_device_stitched([z_BCTHW])[0]
 
         mark = time.perf_counter()
         units = self._latent_tiles(z_BCTHW)
@@ -1149,10 +1484,11 @@ class MiniMaxH3Vae:
         ]
         if self.device_stitch and chunk_latents:
             # Each chunk's tile grid is decoded, unpatchified, all-gathered and blended on device,
-            # and only the assembled canvas is read back. One chunk at a time, and serial on
-            # purpose: deferring a chunk's readback until the next is enqueued does not help,
-            # because the stage is device-bound and holding two canvases live only adds allocation.
-            clips = [self._decode_clip_device_stitched(latents, output_type) for latents in chunk_latents]
+            # and only the assembled canvas is read back. Chunks pack `wave_size // tiles_per_chunk`
+            # to a wave, so a mesh wider than one grid (a 4x32 quad against a 4x7 grid) fills its
+            # waves with real tiles instead of pad repeats. Waves stay serial: the stage is
+            # device-bound, and holding two gathered piles live only adds allocation.
+            clips = self._decode_clips_device_stitched(chunk_latents, output_type)
         elif chunk_latents:
             latent_height, latent_width = chunk_latents[0].shape[-2], chunk_latents[0].shape[-1]
             mark = time.perf_counter()
@@ -1179,7 +1515,10 @@ class MiniMaxH3Vae:
             clips = []
 
         assemble_mark = time.perf_counter()
-        decoded, overlap = [], None
+        # Lay out the segments first (views only), then write them into one preallocated buffer:
+        # `assemble_clip_parts` keeps the blend math in `blend_clip_frames` and turns the rest of
+        # what used to bill to blend+concat into parallel disjoint memcpy.
+        parts, overlap = [], None
         for i in range(num_chunks):
             clip = clips[i]
             for j in range(int(config.token_drop > 0) + 1):
@@ -1187,18 +1526,15 @@ class MiniMaxH3Vae:
                 chunk = clip_frames(clip, frame_start, frame_start + chunk_num_frames)
                 chunk = clip_frames(chunk, config.frame_pre_padding, clip_num_frames(chunk))
                 if j == 0:
-                    if overlap is not None:
-                        chunk = blend_clip_frames(overlap, chunk, config.frame_overlap)
-                    decoded.append(chunk)
+                    parts.append((chunk, overlap))
                 else:
                     overlap = chunk
         if overlap is not None:
-            decoded.append(overlap)
+            parts.append((overlap, None))
 
+        result = assemble_clip_parts(parts, config.frame_overlap) if parts else concat_clip_frames([])
         self._profile["blend"] = time.perf_counter() - assemble_mark
-        concat_mark = time.perf_counter()
-        result = concat_clip_frames(decoded)
-        self._profile["concat"] = time.perf_counter() - concat_mark
+        self._profile["concat"] = 0.0
         if pad_tokens > 0:
             intra_tail = config.clip_length % temporal_ratio
             tokens_before_pad = z_BCTHW.shape[2] - pad_tokens

@@ -72,7 +72,12 @@ def test_t2va_performance(mesh_device, reset_seeds, aspect_ratio, duration_s):
             "from the total either way, but the run will take far longer than the reported compute."
         )
 
-    pipeline = MiniMaxH3Pipeline.create_pipeline(mesh_device=mesh_device, weights_dir=weights, dit_fsdp=False)
+    pipeline = MiniMaxH3Pipeline.create_pipeline(
+        mesh_device=mesh_device,
+        weights_dir=weights,
+        dit_fsdp=False,
+        vae_output_type="float",  # this gate reads the (1, 3, F, H, W) float contract; yuv420 is the deployment default
+    )
 
     benchmark_profiler = BenchmarkProfiler()
     output = run_warm_generation(

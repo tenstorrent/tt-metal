@@ -319,13 +319,22 @@ def draw_request_latents(
 
 @dataclass
 class MiniMaxH3Output:
-    """One generation. `video` is `(1, 3, F, H, W)` in [0, 1]; `audio` is `(1, 2, samples)`."""
+    """One generation. `audio` is `(1, 2, samples)`; `video` depends on `video_format`:
+
+    - `"rgb_float"`: `(1, 3, F, H, W)` float in [0, 1] -- the reference contract.
+    - `"yuv420"`: planar `(F, H * 3 // 2, W)` uint8 as a **numpy array** (straight off the
+      device-stitch readback, never a torch tensor), ready for `utils.video.export_video_audio_yuv`
+      (or an ffmpeg rawvideo pipe at `-pix_fmt yuv420p`) with no host conversion. Consumers must
+      branch on `video_format` rather than assume the float layout -- `num_frames` is correct for
+      both.
+    """
 
     video: torch.Tensor
     audio: torch.Tensor
     sampling_rate: int
     num_frames: int
     fps: int = MINIMAX_H3_FPS
+    video_format: str = "rgb_float"
 
     @property
     def video_seconds(self) -> float:
@@ -358,6 +367,7 @@ class MiniMaxH3Pipeline:
         trace_denoise: bool | None = None,
         bucket_ladder: tuple[int, ...] | None = None,
         arena_caps: MiniMaxH3ArenaCaps | None = None,
+        vae_output_type: str = "yuv420",
         adaln_slot_roles: tuple[str, ...] | None = None,
     ) -> None:
         self.mesh_device = mesh_device
@@ -504,10 +514,15 @@ class MiniMaxH3Pipeline:
         self._host_vae_decoder_loaded = False
         self._image_processor = None
         # `"yuv420"` builds the VAE for the device-stitched path: the canvas is blended, clamped and
-        # colour-converted on device, and `_decode_video` returns planar `(T, H*3//2, W)` uint8 for
-        # `export_video_audio_yuv` instead of a `(1, 3, T, H, W)` float tensor. Off by default because
-        # it changes this method's return type, and every quality gate reads the float one.
-        self.vae_output_type = "float"  # "float" | "uint8" | "yuv420"
+        # colour-converted on device, and the output carries planar `(T, H*3//2, W)` uint8 for
+        # `export_video_audio_yuv` instead of a `(1, 3, T, H, W)` float tensor. The DEFAULT since
+        # 2026-09-04: measured 6.93 s vs float's 10.76 s for the 768p/15s decode stage on a 4x8
+        # (float pays ~3.4 s of host stitch/unpatchify plus a 6.8 GB readback that never scales).
+        # It changes `MiniMaxH3Output.video`'s layout -- consumers branch on `output.video_format`
+        # -- so the pixel-comparing quality gates pin `vae_output_type="float"` explicitly.
+        if vae_output_type not in ("float", "uint8", "yuv420"):
+            raise ValueError(f"vae_output_type must be 'float', 'uint8' or 'yuv420', got {vae_output_type!r}")
+        self.vae_output_type = vae_output_type
         # Decode tiles per device per wave (batch dim). >1 cuts wave count at the cost of activation
         # memory. 1 is the original one-tile-per-device schedule.
         self.vae_waves_per_device = 2
@@ -594,6 +609,7 @@ class MiniMaxH3Pipeline:
         trace_denoise: bool | None = None,
         bucket_ladder: tuple[int, ...] | None = None,
         arena_caps: MiniMaxH3ArenaCaps | None = None,
+        vae_output_type: str = "yuv420",
         adaln_slot_roles: tuple[str, ...] | None = None,
     ) -> "MiniMaxH3Pipeline":
         """`task="t2va"` serves both t2va and fl2va; `task="ref2va"` loads `transformer_ref/`.
@@ -627,6 +643,7 @@ class MiniMaxH3Pipeline:
             trace_denoise=trace_denoise,
             bucket_ladder=bucket_ladder,
             arena_caps=arena_caps,
+            vae_output_type=vae_output_type,
             adaln_slot_roles=adaln_slot_roles,
         )
 
@@ -1983,11 +2000,15 @@ class MiniMaxH3Pipeline:
         with event_section(on_event, "audio"):
             audio = self._decode_audio(audio_decoder, audio_rows, num_audio_latents, layout.num_condition_audio_rows)
 
+        # Planar yuv420 is (F, H*3//2, W); the float/uint8 contract is (1, 3, F, H, W). The frame
+        # count lives on a different axis in each, and shape[2] on the planar layout is the WIDTH.
+        yuv = self.vae_output_type == "yuv420"
         return MiniMaxH3Output(
             video=video,
             audio=audio,
             sampling_rate=self.audio_sampling_rate,
-            num_frames=video.shape[2],
+            num_frames=video.shape[0] if yuv else video.shape[2],
+            video_format="yuv420" if yuv else "rgb_float",
         )
 
     def warmup(

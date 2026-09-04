@@ -151,7 +151,10 @@ def _record_quality(frames: np.ndarray, paths: dict, case: str) -> None:
 def _pipeline(mesh_device) -> MiniMaxH3Pipeline:
     """Pipeline bound to the `transformer_ref` partition (62 GB, fixed at construction)."""
     return MiniMaxH3Pipeline.create_pipeline(
-        mesh_device=mesh_device, weights_dir=weights_dir("transformer_ref"), task="ref2va"
+        vae_output_type="float",  # this gate reads the (1, 3, F, H, W) float contract; yuv420 is the deployment default
+        mesh_device=mesh_device,
+        weights_dir=weights_dir("transformer_ref"),
+        task="ref2va",
     )
 
 

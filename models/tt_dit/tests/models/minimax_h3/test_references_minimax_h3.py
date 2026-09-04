@@ -644,7 +644,12 @@ def test_encode_references_matches_reference(mesh_device, case, reset_seeds):
     weights = _weights_dir()
     ours, theirs = _reference_case(case)
 
-    pipeline = MiniMaxH3Pipeline.create_pipeline(mesh_device=mesh_device, weights_dir=weights, task="ref2va")
+    pipeline = MiniMaxH3Pipeline.create_pipeline(
+        mesh_device=mesh_device,
+        weights_dir=weights,
+        task="ref2va",
+        vae_output_type="float",  # this gate reads the (1, 3, F, H, W) float contract; yuv420 is the deployment default
+    )
     needs_video = any(reference.kind == "video" for reference in ours)
     vae = pipeline.vae
     audio_encoder = pipeline._prepare_audio_encoder() if any(r.has_audio for r in ours) else None
