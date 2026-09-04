@@ -177,7 +177,7 @@ The dedicated caller is `.github/workflows/kernel-clang-tidy.yaml`
 downloads every `kernel-clang-tidy-*` artifact, renders an HTML report
 (per-group pages with findings deduplicated across TUs, grouped by check, and
 linked to the source at the tested commit; plus an index), uploads it as the
-`kernel-clang-tidy-report-html` artifact, and publishes it to
+`kernel-tidy-report-html` artifact, and publishes it to
 `tenstorrent/tt-metal-clangsa-results` gh-pages under `kernel-clang-tidy/`
 (on main, or when dispatched with `publish-html: true`). Launch with:
 

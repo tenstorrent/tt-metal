@@ -106,6 +106,29 @@ jobs:
           path: artifacts
           merge-multiple: false
 
+      - name: Normalize single-artifact download layout
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # download-artifact v8 extracts a pattern match of exactly ONE
+          # artifact directly into `path` with no per-artifact subdirectory
+          # (src/download-artifact.ts: `artifacts.length === 1 ? resolvedPath
+          # : path.join(resolvedPath, artifact.name)`) — observed in run
+          # 33925024829, where the report came out empty because the renderer
+          # expects one subdirectory per artifact. Recreate the subdirectory,
+          # recovering the artifact name (it carries the test-group name) from
+          # the run's artifact list.
+          if [ -e artifacts/findings.txt ] || [ -e artifacts/summary.txt ]; then
+            jq_expr='[.artifacts[].name
+              | select(startswith("kernel-clang-tidy-") and (endswith("-report-html") | not))][0] // empty'
+            name=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?per_page=100" \
+              --jq "$jq_expr" 2>/dev/null || true)
+            name=${name:-kernel-clang-tidy-capture}
+            echo "single-artifact layout detected; moving loose files into 'artifacts/${name}'"
+            mkdir -p "artifacts/${name}"
+            find artifacts -maxdepth 1 -type f -exec mv -t "artifacts/${name}/" {} +
+          fi
+
       - name: Generate HTML report + step summary
         env:
           ARTIFACTS_DIR: artifacts
@@ -129,8 +152,13 @@ jobs:
               r"^(?P<path>/[^:\s][^:]*):(?P<line>\d+):(?P<col>\d+): "
               r"(?P<sev>warning|error): (?P<msg>.*?)(?: \[(?P<check>[^\[\]\s]+)\])?$"
           )
-          # findings.txt entry separator written by build_kernel_clang_tidy_commands.py
+          # findings.txt entry separator written by build_kernel_clang_tidy_commands.py.
+          # NOTE: it is only written for TUs that produced output, so the
+          # authoritative linted-TU totals come from summary.txt instead.
           ENTRY_RE = re.compile(r"^==== (?P<tu>.+) \(dir: .*, rc: (?P<rc>-?\d+)\) ====$")
+          SUMMARY_RE = re.compile(
+              r"(\d+) findings across (\d+) entries \((\d+) entries had parse/config errors\)"
+          )
 
           CSS = """
             body { font-family: sans-serif; max-width: 1100px; margin: 2rem auto; padding: 0 1rem; }
@@ -154,12 +182,19 @@ jobs:
 
           def blob_link(path, line):
               # Map container-absolute kernel paths back to repo-relative ones.
-              # Generated TUs (tt-metal-cache) have no stable blob to link to.
+              # Generated TUs (tt-metal-cache) have no stable blob to link to,
+              # and neither do toolchain headers (/opt/tenstorrent/sfpi/...).
+              # site-packages/ttnn/ covers wheel-installed copies of repo files
+              # (the ttnn wheel ships tt_metal/hw, fabric includes, etc.).
               if "tt-metal-cache" in path:
                   return None
-              for marker in ("/work/", "/tt-metal/"):
+              for marker in ("/work/", "/tt-metal/", "site-packages/ttnn/"):
                   if marker in path:
                       rel = path.split(marker, 1)[1]
+                      # tt_metal/tt-llk is a submodule: a blob URL into the
+                      # superproject 404s, so leave those unlinked.
+                      if rel.startswith("tt_metal/tt-llk/"):
+                          return None
                       return f"{repo_url}/blob/{sha}/{rel}#L{line}"
               return None
 
@@ -193,6 +228,15 @@ jobs:
                           raw_diags += 1
                           key = (m["path"], int(m["line"]), int(m["col"]), m["sev"], m["msg"], m["check"] or "")
                           uniq.setdefault(key, set()).add(cur_tu or "?")
+
+              # findings.txt only lists TUs with output; summary.txt has the
+              # real linted/failed totals — prefer those when parseable.
+              summary_file = adir / "summary.txt"
+              if summary_file.exists():
+                  m = SUMMARY_RE.search(summary_file.read_text(errors="replace"))
+                  if m:
+                      entries = int(m.group(2))
+                      failed_entries = int(m.group(3))
 
               gdir = site / slug
               gdir.mkdir(parents=True, exist_ok=True)
@@ -281,7 +325,7 @@ jobs:
                   for g in groups:
                       out.write(f"| {g['name']} | {g['unique']} | {g['raw']} "
                                 f"| {g['entries']} | {g['failed_entries']} |\n")
-                  out.write("\nHTML report: `kernel-clang-tidy-report-html` artifact.\n")
+                  out.write("\nHTML report: `kernel-tidy-report-html` artifact.\n")
               else:
                   out.write("_No kernel-clang-tidy artifacts were produced by this run._\n")
           EOF
@@ -289,9 +333,10 @@ jobs:
       - name: Upload HTML report
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          # Deliberately NOT matching the kernel-clang-tidy-* download pattern,
-          # so a re-run of this job never ingests its own output as a group.
-          name: kernel-clang-tidy-report-html
+          # Deliberately NOT matching the kernel-clang-tidy-* download pattern
+          # (note: 'kernel-tidy-', not 'kernel-clang-tidy-'), so a re-run of
+          # this job never ingests its own output as a group.
+          name: kernel-tidy-report-html
           path: site
           if-no-files-found: error
           retention-days: 30
