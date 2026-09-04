@@ -767,9 +767,12 @@ def test_linear_cache_identity(mesh_device):
     )
     plain = run_test_linear(submesh, activation=None, **common)
     gelu = run_test_linear(submesh, activation="gelu", **common)
-    for result in (plain, gelu):
-        assert result[0][0][0]["pcc"] > 0.999_500
-        assert result[0][0][0]["relative_rmse"] < 0.02
+    for activation_results in (plain, gelu):
+        for iteration_results in activation_results:
+            for chunk_results in iteration_results:
+                for device_result in chunk_results:
+                    assert device_result["pcc"] > 0.999_500
+                    assert device_result["relative_rmse"] < 0.02
 
 
 def run_test_linear_fsdp(
