@@ -6,6 +6,7 @@
 
 #include <cstdint>
 
+#include "ckernel_ops.h"
 #include "ckernel_trisc_common.h"
 #include "cpack_common.h"
 #include "llk_assert.h"
@@ -223,7 +224,7 @@ inline void _llk_pack_reduce_mask_config_(const TensorShape& tensor_shape)
     }
 
     // Stall until all config instructions are done
-    TTI_STALLWAIT(p_stall::PACK0, 0, 0, p_stall::TRISC_CFG);
+    TTI_STALLWAIT(p_stall::STALL_PACK, 0, 0, p_stall::CFGEXU);
 }
 
 /**
@@ -246,7 +247,7 @@ inline void _llk_pack_reduce_mask_clear_()
     cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE3_RMW, ckernel::pack::EDGE_MASK_FACE_ALL_ROWS_MASK_0);
 
     // Stall until all config instructions are done
-    TTI_STALLWAIT(p_stall::PACK0, 0, 0, p_stall::TRISC_CFG);
+    TTI_STALLWAIT(p_stall::STALL_PACK, 0, 0, p_stall::CFGEXU);
 }
 
 /**
