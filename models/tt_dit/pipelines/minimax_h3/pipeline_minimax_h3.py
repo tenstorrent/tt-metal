@@ -562,8 +562,9 @@ class MiniMaxH3Pipeline:
         self.rope_freq_dim = self.transformer_config["rope_freq_dim"]
         self.rope_theta = self.transformer_config["rope_theta"]
 
-        # Tokenizer, host debug twins, vision tower and audio stay lazy -- they are not part of
-        # the residency scheme.
+        # Tokenizer, host debug twins, vision tower, and the audio encoder stay lazy -- they
+        # are not part of the residency scheme (the encoder is ref2va-only). The audio
+        # decoder is primed with the other always-on stages below.
         self._tokenizer = None
         # The released Qwen3-VL conditioner on the host, for `encode_prompt_host` -- a debug twin of
         # the device encode, lazily loaded because it is a large read only wanted when comparing.
@@ -645,10 +646,13 @@ class MiniMaxH3Pipeline:
 
         # Prime in reverse order of use. Under coresident=False the text-encoder load would
         # immediately evict the DiT, so skip that upload; it loads on first denoise. VAE
-        # sub-models load on first use, so warmup decides what uploads.
+        # sub-models load on first use, so warmup decides what uploads. The audio decoder
+        # is not in the exclusion set -- it is small enough to stay -- and every request
+        # needs it, so it loads here rather than on first decode.
         if self.coresident:
             self._prepare_transformer()
         self._prepare_text_encoder()
+        self._prepare_audio_decoder()
 
     # ------------------------------------------------------------------ construction
 
@@ -2076,9 +2080,10 @@ class MiniMaxH3Pipeline:
                 self._vae, video_rows, num_latent_frames, latent_height, latent_width, layout.num_condition_video_rows
             )
 
-        audio_decoder = self._prepare_audio_decoder()
         with event_section(on_event, "audio"):
-            audio = self._decode_audio(audio_decoder, audio_rows, num_audio_latents, layout.num_condition_audio_rows)
+            audio = self._decode_audio(
+                self._audio_decoder, audio_rows, num_audio_latents, layout.num_condition_audio_rows
+            )
 
         return MiniMaxH3Output(
             video=video,
