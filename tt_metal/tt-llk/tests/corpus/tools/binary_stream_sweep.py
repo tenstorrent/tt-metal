@@ -29,13 +29,28 @@ _SHA_RE = re.compile(r"output_sha256=([0-9a-f]{64})")
 _RUNS_RE = re.compile(r"runs=(\d+)")
 
 
-def run_band_leg(args, node, start, count, out_sha_file, log_file):
-    """One pytest invocation: stream joint [start,start+count) for one leg. Returns (sha, wall, runs)."""
+def parse_corr(corr_file):
+    """Parse a per-band .corr sidecar (LANEMR_CORRECTNESS,k=v,...) into a dict, or None."""
+    p = Path(corr_file)
+    if not p.exists():
+        return None
+    lines = p.read_text().strip().splitlines()
+    if not lines or "LANEMR_CORRECTNESS" not in lines[0]:
+        return None
+    return dict(kv.split("=", 1) for kv in lines[0].split(",") if "=" in kv)
+
+
+def run_band_leg(args, node, start, count, out_sha_file, log_file, leg=None):
+    """One pytest invocation: stream joint [start,start+count) for one leg.
+
+    Returns (sha, wall, runs, corr) — corr is the parsed 3-way sidecar dict (or None).
+    """
+    corr_file = str(out_sha_file) + ".corr"
     if Path(out_sha_file).exists():
         txt = Path(out_sha_file).read_text()
         m = _SHA_RE.search(txt)
         if m:
-            return m.group(1), 0.0, 0  # resumed
+            return m.group(1), 0.0, 0, parse_corr(corr_file)  # resumed
     env = dict(os.environ)
     env.update(
         CHIP_ARCH="blackhole",
@@ -48,6 +63,9 @@ def run_band_leg(args, node, start, count, out_sha_file, log_file):
         TT_VISIBLE_DEVICES=str(args.chip),
         LANEMK_STREAM_BINARY=f"{start},{count},{out_sha_file}",
     )
+    if args.golden and leg:
+        # host-side torch.pow TRUE-MATH golden + bf16 ULP-contract leg rides along.
+        env["LANEMR_GOLDEN"] = f"{args.golden},{leg}"
     inner = (
         # --compile-consumer: use the prebuilt ELFs in RUNNER_TEMP; never invoke the
         # toolchain (galaxy hosts have none). The ELFs must be compiled beforehand
@@ -74,7 +92,7 @@ def run_band_leg(args, node, start, count, out_sha_file, log_file):
         raise RuntimeError(
             f"band [{start},{start+count}) leg {node} produced no SHA; see {log_file}"
         )
-    return m.group(1), dt, int(r.group(1)) if r else 0
+    return m.group(1), dt, int(r.group(1)) if r else 0, parse_corr(corr_file)
 
 
 def _identity_gate(args, out):
@@ -143,6 +161,11 @@ def main():
         default="sfpu_binary_test.cpp",
         help="the test .cpp under tt-llk-build/sources whose ELF variants the idmap indexes",
     )
+    ap.add_argument(
+        "--golden",
+        default="",
+        help="op key ('binarypow') for the host-side torch.pow 3-way leg; emits CORRECTNESS-LEDGER.tsv",
+    )
     args = ap.parse_args()
 
     out = Path(args.out).resolve()  # absolute: run_band_leg runs pytest with cwd=farm
@@ -155,6 +178,8 @@ def main():
     n_bands = (args.total + band - 1) // band
     ledger = out / f"{args.op}-STREAM-LEDGER.tsv"
 
+    corr_legs = {"sem": _new_leg(), "hand": _new_leg()}
+
     rows = []
     covered = 0
     t_all = time.time()
@@ -165,12 +190,27 @@ def main():
         c = min(band, args.start_bit + args.total - s)
         sem_f = out / "bands" / f"b{k:04d}-sem.txt"
         hand_f = out / "bands" / f"b{k:04d}-hand.txt"
-        sem_sha, sem_dt, _ = run_band_leg(
-            args, args.sem_node, s, c, sem_f, out / "bands" / f"b{k:04d}-sem.log"
+        sem_sha, sem_dt, _, sem_corr = run_band_leg(
+            args,
+            args.sem_node,
+            s,
+            c,
+            sem_f,
+            out / "bands" / f"b{k:04d}-sem.log",
+            leg="sem",
         )
-        hand_sha, hand_dt, _ = run_band_leg(
-            args, args.hand_node, s, c, hand_f, out / "bands" / f"b{k:04d}-hand.log"
+        hand_sha, hand_dt, _, hand_corr = run_band_leg(
+            args,
+            args.hand_node,
+            s,
+            c,
+            hand_f,
+            out / "bands" / f"b{k:04d}-hand.log",
+            leg="hand",
         )
+        if args.golden:
+            _fold_leg(corr_legs["sem"], sem_corr)
+            _fold_leg(corr_legs["hand"], hand_corr)
         eq = sem_sha == hand_sha
         all_equal &= eq
         if not eq:
@@ -212,6 +252,108 @@ def main():
     )
     print(summary, flush=True)
     (out / f"{args.op}-VERDICT.txt").write_text(summary + "\n")
+
+    if args.golden:
+        write_correctness_ledger(out, args.op, verdict, corr_legs, covered)
+
+
+def _new_leg():
+    return {
+        "joints": 0,
+        "max_ulp": -1.0,
+        "max_ulp_at": "-",
+        "n_out": 0,
+        "first_witness": None,
+        "checked": False,
+    }
+
+
+def _fold_leg(acc, corr):
+    if not corr:
+        return
+    acc["checked"] = True
+    acc["joints"] += int(corr.get("joints", 0))
+    mu = float(corr.get("max_bf16_ulp", 0))
+    if mu > acc["max_ulp"]:
+        acc["max_ulp"] = mu
+        acc["max_ulp_at"] = corr.get("max_ulp_joint", "-")
+    acc["n_out"] += int(corr.get("n_out_of_tol", 0))
+    fw = corr.get("first_witness", "0x00000000")
+    try:
+        fwi = int(fw, 0)
+    except ValueError:
+        fwi = 0
+    if int(corr.get("n_out_of_tol", 0)) > 0 and fwi != 0:
+        cand = (
+            fwi,
+            corr.get("first_witness_class", "-"),
+            corr.get("witness_dev", "?"),
+            corr.get("witness_golden", "?"),
+        )
+        if acc["first_witness"] is None or cand[0] < acc["first_witness"][0]:
+            acc["first_witness"] = cand
+
+
+def write_correctness_ledger(out, op, equiv_verdict, corr_legs, covered):
+    sem, hand = corr_legs["sem"], corr_legs["hand"]
+    equiv = equiv_verdict == "BIT-EXACT-ALL-INPUTS"
+
+    def leg_in(a):
+        return a["checked"] and a["n_out"] == 0
+
+    if not (sem["checked"] or hand["checked"]):
+        verdict = "UNCHECKED(no golden)"
+    else:
+        sem_in, hand_in = leg_in(sem), leg_in(hand)
+        if sem_in and hand_in:
+            verdict = "LICENSED-BOTH-CORRECT" if not equiv else "CORRECT-AND-EQUAL"
+        elif sem_in and not hand_in:
+            verdict = "SEM-MORE-ACCURATE(hand out-of-contract)"
+        elif hand_in and not sem_in:
+            verdict = "SEM-BUG(sem out-of-contract)"
+        else:
+            verdict = "BOTH-OUT-OF-CONTRACT(approx/see-note)"
+
+    p = out / f"{op}-CORRECTNESS-LEDGER.tsv"
+    with open(p, "w") as fh:
+        fh.write(
+            "# laneMR three-way (binary): device (certified pin-59 ELF) vs sem/hand AND vs "
+            "torch.pow TRUE-MATH golden (bf16 ULP contract). covered=%d full_2^32=%s\n"
+            % (covered, covered == TWO32)
+        )
+        fh.write(
+            "op\tequiv\tsem_max_bf16_ulp\thand_max_bf16_ulp\tsem_in_contract\t"
+            "hand_in_contract\tsem_n_out\thand_n_out\tverdict\tfirst_witness\twitness_class\n"
+        )
+        w = sem if sem["first_witness"] else hand
+        witness = (
+            "-" if w["first_witness"] is None else f"0x{w['first_witness'][0]:08x}"
+        )
+        wclass = "-" if w["first_witness"] is None else w["first_witness"][1]
+        fh.write(
+            "\t".join(
+                str(x)
+                for x in (
+                    op,
+                    "EQUAL" if equiv else "DIVERGENT",
+                    ("%.0f" % sem["max_ulp"]) if sem["checked"] else "n/a",
+                    ("%.0f" % hand["max_ulp"]) if hand["checked"] else "n/a",
+                    leg_in(sem) if sem["checked"] else "n/a",
+                    leg_in(hand) if hand["checked"] else "n/a",
+                    sem["n_out"] if sem["checked"] else "n/a",
+                    hand["n_out"] if hand["checked"] else "n/a",
+                    verdict,
+                    witness,
+                    wclass,
+                )
+            )
+            + "\n"
+        )
+    print(
+        f"OP={op} 3WAY_VERDICT={verdict} sem_max_ulp={sem['max_ulp']:.0f} "
+        f"hand_max_ulp={hand['max_ulp']:.0f} sem_out={sem['n_out']} hand_out={hand['n_out']}",
+        flush=True,
+    )
 
 
 if __name__ == "__main__":

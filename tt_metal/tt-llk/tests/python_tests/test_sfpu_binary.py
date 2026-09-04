@@ -453,6 +453,16 @@ def _lanemk_run_binary_stream(configuration, spec):
 
     _wait_to = int(os.environ.get("LANEMK_WAIT_TIMEOUT", "60"))
 
+    # laneMR three-way correctness leg (env-gated, additive, inert when unset).
+    # LANEMR_GOLDEN="binarypow,<leg>" folds a host-side torch.pow golden over the EVEN
+    # result tiles (device pow output) with NO retention; writes a "<outfile>.corr".
+    _gold = os.environ.get("LANEMR_GOLDEN")
+    _bacc = None
+    if _gold and _gold.split(",", 1)[0] == "binarypow":
+        import threeway_golden as _tgm
+
+        _bacc = _tgm.BinaryPowAccumulator()
+
     sha = hashlib.sha256()
     sum64 = 0
     xor32 = 0
@@ -469,12 +479,21 @@ def _lanemk_run_binary_stream(configuration, spec):
         res = st.collect_raw_result_bytes(loc)
         # Whole (cleared) result region: whole dispatches only, so no padding to exclude.
         sha.update(res)
+        if _bacc is not None:
+            _bacc.update(ds, pairs, res)
         for j in range(ds, ds + span):
             sum64 = (sum64 + j) & ((1 << 64) - 1)
             xor32 ^= j
         joints += span
         runs += 1
     dt = time.time() - t0
+
+    if _bacc is not None:
+        _leg_id = _gold.split(",", 1)[1] if "," in _gold else "?"
+        _corr = _bacc.result_line(_leg_id)
+        print(_corr, flush=True)
+        with open(outfile + ".corr", "w") as _fh:
+            _fh.write(_corr + "\n")
 
     line = (
         "LANEMK_STREAM_BINARY_RESULT,"

@@ -472,3 +472,112 @@ class CorrectnessAccumulator:
             f"witness_dev={self.first_witness_dev!r},witness_golden={self.first_witness_golden!r},"
             f"atol={self.spec.atol},rtol={self.spec.rtol}{extra}"
         )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# binarypow (laneMQ two-operand streamer) — the highest-interest divergent op.
+# Joint J in [0,2^32): base16 = J>>16, exp16 = J&0xFFFF (raw bf16 patterns). The
+# device writes pow(base, exp) to the EVEN tile of each tile pair (sfpu_binary_test.cpp
+# `call(tile, tile+1, tile)`); odd tiles stay the 0xA5 clear sentinel. Output Float16_b
+# (2 bytes), dest_acc=No, contract atol=rtol=0.05 (passed_test Float16_b default).
+# Golden mirrors BinarySFPUGolden._pow: (base_fp32 ** exp_fp32) -> bf16.
+# ─────────────────────────────────────────────────────────────────────────────
+BINARY_POW_ATOL = 0.05
+BINARY_POW_RTOL = 0.05
+_ELEMS_PER_TILE = 1024
+
+
+def _bf16_bits_to_f32(u16: np.ndarray) -> np.ndarray:
+    """Raw bf16 bit patterns (uint16) -> fp32 values (shift into the fp32 high half)."""
+    return (u16.astype(np.uint32) << np.uint32(16)).view(np.float32)
+
+
+def binary_pow_golden_bf16(base16: np.ndarray, exp16: np.ndarray) -> np.ndarray:
+    """pow(base, exp) per BinarySFPUGolden._pow: (a_fp32 ** b_fp32) rounded to bf16, as fp32."""
+    a = _bf16_bits_to_f32(base16).astype(np.float64)
+    b = _bf16_bits_to_f32(exp16).astype(np.float64)
+    with np.errstate(all="ignore"):
+        hp = np.power(
+            a, b
+        )  # fp64 pow (a,b are exact bf16 values); matches (fp32**fp32) target
+    return _round_bf16_as_f32(hp).astype(np.float32)
+
+
+@dataclass
+class BinaryPowAccumulator:
+    """Streaming correctness for binarypow: device even-tile outputs vs torch.pow (bf16)."""
+
+    atol: float = BINARY_POW_ATOL
+    rtol: float = BINARY_POW_RTOL
+    joints: int = 0
+    max_ulp: float = 0.0
+    max_ulp_joint: int = -1
+    n_out_of_tol: int = 0
+    first_witness_joint: int = -1
+    first_witness_class: str = ""
+    first_witness_dev: float = 0.0
+    first_witness_golden: float = 0.0
+
+    def update(
+        self, dispatch_start: int, pairs: int, result_region_bytes: bytes
+    ) -> None:
+        with np.errstate(all="ignore"):
+            self._update(dispatch_start, pairs, result_region_bytes)
+
+    def _update(self, dispatch_start: int, pairs: int, res: bytes) -> None:
+        tile_bytes = _ELEMS_PER_TILE * 2  # bf16 tile = 1024 * 2 bytes
+        for p in range(pairs):
+            joint0 = dispatch_start + p * _ELEMS_PER_TILE
+            base16 = (joint0 >> 16) & 0xFFFF
+            lo = joint0 & 0xFFFF
+            exp16 = (np.arange(_ELEMS_PER_TILE, dtype=np.uint32) + lo).astype(np.uint16)
+            base_arr = np.full(_ELEMS_PER_TILE, base16, dtype=np.uint16)
+            golden = binary_pow_golden_bf16(base_arr, exp16)  # fp32 (bf16-valued)
+
+            even_off = (2 * p) * tile_bytes  # output lives in the EVEN tile of the pair
+            dev16 = np.frombuffer(res[even_off : even_off + tile_bytes], dtype="<u2")
+            if dev16.size < _ELEMS_PER_TILE:
+                raise ValueError(
+                    f"binarypow dispatch@{dispatch_start} pair {p}: short result region"
+                )
+            dev = _bf16_bits_to_f32(dev16.astype(np.uint32)).astype(np.float32)
+
+            ulp = bf16_bitdistance(golden, dev)
+            g = golden.astype(np.float64)
+            d = dev.astype(np.float64)
+            both_nan = np.isnan(g) & np.isnan(d)
+            both_inf = np.isinf(g) & np.isinf(d) & (np.sign(g) == np.sign(d))
+            close = np.abs(d - g) <= (self.atol + self.rtol * np.abs(g))
+            within = close | both_nan | both_inf
+            out = ~within & np.isfinite(ulp)
+
+            i = int(np.nanargmax(np.where(np.isfinite(ulp), ulp, -1.0)))
+            if ulp[i] > self.max_ulp:
+                self.max_ulp = float(ulp[i])
+                self.max_ulp_joint = joint0 + i
+            n_out = int(np.count_nonzero(out))
+            if n_out:
+                self.n_out_of_tol += n_out
+                if self.first_witness_joint < 0:
+                    j = int(np.argmax(out))
+                    self.first_witness_joint = joint0 + j
+                    b_f = float(_bf16_bits_to_f32(base_arr[j : j + 1])[0])
+                    self.first_witness_class = (
+                        "base<=0 (pow via exp(b*log a) -> nan/inf, expected)"
+                        if b_f <= 0.0
+                        else ("nonfinite-base" if not math.isfinite(b_f) else "base>0")
+                    )
+                    self.first_witness_dev = float(dev[j])
+                    self.first_witness_golden = float(golden[j])
+            self.joints += _ELEMS_PER_TILE
+
+    def result_line(self, leg: str) -> str:
+        w = max(self.first_witness_joint, 0)
+        return (
+            f"LANEMR_CORRECTNESS,leg={leg},op=binarypow,joints={self.joints},"
+            f"max_bf16_ulp={self.max_ulp:.0f},max_ulp_joint=0x{max(self.max_ulp_joint,0):08x},"
+            f"n_out_of_tol={self.n_out_of_tol},within_contract={self.n_out_of_tol == 0},"
+            f"first_witness=0x{w:08x},first_witness_class={self.first_witness_class or '-'},"
+            f"witness_dev={self.first_witness_dev!r},witness_golden={self.first_witness_golden!r},"
+            f"atol={self.atol},rtol={self.rtol}"
+        )

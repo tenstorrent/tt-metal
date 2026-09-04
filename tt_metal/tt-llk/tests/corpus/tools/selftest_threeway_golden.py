@@ -234,6 +234,75 @@ def case_domain():
     )
 
 
+def case_binarypow():
+    print("case 6: binarypow golden faithful to BinarySFPUGolden._pow + region accum")
+    import torch
+
+    # faithfulness: my fp64 pow->bf16 vs the harness _pow ((fp32**fp32)->bf16), over a
+    # spread of bf16 base/exp patterns. Differ only at sub-tolerance fp32-vs-fp64 ties.
+    from helpers.golden_generators import BinarySFPUGolden
+
+    rng = np.random.default_rng(11)
+    base16 = rng.integers(0, 1 << 16, size=4096, dtype=np.uint16)
+    exp16 = rng.integers(0, 1 << 16, size=4096, dtype=np.uint16)
+    mine = tg.binary_pow_golden_bf16(base16, exp16)
+    a = torch.from_numpy(tg._bf16_bits_to_f32(base16.astype(np.uint32))).to(
+        torch.bfloat16
+    )
+    b = torch.from_numpy(tg._bf16_bits_to_f32(exp16.astype(np.uint32))).to(
+        torch.bfloat16
+    )
+    ref = BinarySFPUGolden()._pow(a, b).to(torch.float32).numpy()
+    diff = np.where(mine.view(np.uint32) != ref.view(np.uint32))[0]
+    if diff.size == 0:
+        check("binarypow-faithful", True, "4096/4096 bit-identical to _pow")
+    else:
+        g = ref[diff].astype(np.float64)
+        m = mine[diff].astype(np.float64)
+        fin = np.isfinite(g) & np.isfinite(m)
+        ok = np.all(np.abs(m[fin] - g[fin]) <= (0.05 + 0.05 * np.abs(g[fin])))
+        check(
+            "binarypow-faithful",
+            bool(ok),
+            f"{diff.size}/4096 differ, all sub-tolerance fp32-vs-fp64 pow ties",
+        )
+
+    # region accumulator: build 2 pairs, even tiles = golden, odd = 0xA5 sentinel.
+    pairs = 2
+    ELEMS = tg._ELEMS_PER_TILE
+    region = bytearray()
+    dispatch_start = 0x3F800000  # base16=0x3F80 (=1.0), exps sweep
+    golden_tiles = []
+    for p in range(pairs):
+        joint0 = dispatch_start + p * ELEMS
+        base = np.full(ELEMS, (joint0 >> 16) & 0xFFFF, dtype=np.uint16)
+        exps = (np.arange(ELEMS, dtype=np.uint32) + (joint0 & 0xFFFF)).astype(np.uint16)
+        g = tg.binary_pow_golden_bf16(base, exps)
+        gbits = tg._to_bf16_bits(g).astype(np.uint16)
+        golden_tiles.append(gbits)
+        region += gbits.tobytes()  # even tile = output
+        region += b"\xa5\xa5" * ELEMS  # odd tile = sentinel
+    acc = tg.BinaryPowAccumulator()
+    acc.update(dispatch_start, pairs, bytes(region))
+    check(
+        "binarypow-known-correct",
+        acc.max_ulp == 0.0 and acc.n_out_of_tol == 0,
+        f"max_ulp={acc.max_ulp} n_out={acc.n_out_of_tol}",
+    )
+
+    # seeded bug: corrupt one even-tile output far out of tolerance.
+    region2 = bytearray(region)
+    bad = np.uint16(tg._to_bf16_bits(np.array([1e30]))[0])  # huge value
+    region2[10 * 2 : 10 * 2 + 2] = np.array([bad], dtype=np.uint16).tobytes()
+    acc2 = tg.BinaryPowAccumulator()
+    acc2.update(dispatch_start, pairs, bytes(region2))
+    check(
+        "binarypow-seeded-bug",
+        acc2.n_out_of_tol >= 1 and acc2.first_witness_joint == dispatch_start + 10,
+        f"n_out={acc2.n_out_of_tol} witness=0x{max(acc2.first_witness_joint,0):08x}",
+    )
+
+
 def main():
     print("laneMR three-way golden selftest")
     case_faithful()
@@ -241,6 +310,7 @@ def main():
     case_known_correct()
     case_seeded_bug()
     case_domain()
+    case_binarypow()
     print()
     if FAILED:
         print(f"FAILED: {FAILED}")
