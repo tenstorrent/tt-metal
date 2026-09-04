@@ -1023,6 +1023,47 @@ sfpi_inline void _two_pass_horizontal_sum_mean_()
 }
 
 /**
+ * Broadcast lane zero of LREG0, preserving LREG4-7 and programmable constants.
+ */
+sfpi_inline void _two_pass_broadcast_first_lane_()
+{
+    // Retain column zero of each eight-lane sub-vector without multiplying
+    // unselected values by zero. LTILEID's low four bits contain 2 * column.
+    TTI_SFPMOV(0, ckernel::p_sfpu::LTILEID, ckernel::p_sfpu::LREG1, 0);
+    TTI_SFPSHFT(28, 0, ckernel::p_sfpu::LREG1, 1 /* immediate shift */);
+    TTI_SFPSETCC(0, ckernel::p_sfpu::LREG1, 0, sfpi::SFPSETCC_MOD1_LREG_NE0);
+    TTI_SFPLOADI(ckernel::p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_FLOATB, 0);
+    TTI_SFPENCC(0, 0, 0, 0);
+
+    // The first transpose isolates sub-row zero in LREG0. Replicate that
+    // sub-row before transposing back; the second transpose restores LREG4-7.
+    TTI_SFPLOADI(ckernel::p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_FLOATB, 0);
+    TTI_SFPLOADI(ckernel::p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_FLOATB, 0);
+    TTI_SFPLOADI(ckernel::p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_FLOATB, 0);
+    TTI_SFPTRANSP(0, 0, 0, 0);
+    TTI_SFPMOV(0, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG1, 0);
+    TTI_SFPMOV(0, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG2, 0);
+    TTI_SFPMOV(0, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG3, 0);
+    TTI_SFPTRANSP(0, 0, 0, 0);
+
+    // Spread the anchor to disjoint columns: no addition combines two
+    // nonzero anchors, so the broadcast itself cannot overflow.
+#pragma GCC unroll 3
+    for (std::uint32_t stage = 0; stage < 3; ++stage)
+    {
+        TTI_SFPMOV(0, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG1, 0);
+#pragma GCC unroll 4
+        for (std::uint32_t rotation = 0; rotation < (1U << stage); ++rotation)
+        {
+            TTI_SFPSHFT2(0, ckernel::p_sfpu::LREG1, ckernel::p_sfpu::LREG1, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+            TTI_SFPNOP;
+        }
+        TTI_SFPADD(ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LCONST_1, ckernel::p_sfpu::LREG1, ckernel::p_sfpu::LREG0, 0);
+        WELFORD_SFPU_ONLINE_HAZARD_NOP();
+    }
+}
+
+/**
  * Finalise lane-local statistics, combine 32 equal lane populations, and store one group.
  *
  * Uses total variance: average lane variance plus variance of lane means.
@@ -1042,38 +1083,41 @@ sfpi_inline void _two_pass_store_combined_mean_var_to_dst_raw_group_(std::uint32
         TTI_SFPADD(ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LCONST_1, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG5, 0);
     }
 
-    // Convert each lane's M2 to variance and retain its mean in scratch DST.
+    // Convert each lane's M2 to variance, then centre its mean on lane zero.
     TT_SFPLOADI(ckernel::p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_UPPER, reciprocal_bits >> 16);
     TT_SFPLOADI(ckernel::p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_LOWER, reciprocal_bits & 0xffff);
     TTI_SFPMUL(ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LCONST_0, ckernel::p_sfpu::LREG5, 0);
     constexpr std::uint32_t scratch_tile_offset = 128;
-    TTI_SFPSTORE(ckernel::p_sfpu::LREG4, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, scratch_tile_offset);
+    constexpr std::uint32_t scratch_anchor_offset = scratch_tile_offset + 4;
 
     TTI_SFPMOV(0, ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LREG0, 0);
+    _two_pass_broadcast_first_lane_();
+    TTI_SFPSTORE(ckernel::p_sfpu::LREG0, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, scratch_anchor_offset);
+    TTI_SFPMAD(ckernel::p_sfpu::LREG11 /* -1 */, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LREG0, 0);
+    WELFORD_SFPU_ONLINE_HAZARD_NOP();
+    TTI_SFPSTORE(ckernel::p_sfpu::LREG0, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, scratch_tile_offset);
+    // Keep the lane-variance sum unscaled so the final reciprocal applies once to both variance terms.
     TTI_SFPMOV(0, ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG4, 0);
     _two_pass_horizontal_sum_pair_<true /*broadcast_result*/>();
 
-    constexpr std::uint32_t lane_reciprocal_bits = 0x3d000000; // 1/32
-    TT_SFPLOADI(ckernel::p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_UPPER, lane_reciprocal_bits >> 16);
-    TT_SFPLOADI(ckernel::p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_LOWER, lane_reciprocal_bits & 0xffff);
+    constexpr std::uint32_t lane_reciprocal_bf16 = 0x3d00; // 1/32
+    TTI_SFPLOADI(ckernel::p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_FLOATB, lane_reciprocal_bf16);
     TTI_SFPMUL(ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LCONST_0, ckernel::p_sfpu::LREG0, 0);
-    // Keep the lane-variance sum unscaled so the final reciprocal applies once to both variance terms.
-    WELFORD_SFPU_ONLINE_HAZARD_NOP();
 
-    const std::uint32_t group_offset         = group_id << 2;
-    TT_SFPSTORE(ckernel::p_sfpu::LREG0, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, WELFORD_SFPU_MEAN_TILE_OFFSET + group_offset);
-
-    // Add variance(mean) to the average lane variance.
+    // Compute variance of centred means before restoring the absolute mean.
     TTI_SFPLOAD(ckernel::p_sfpu::LREG1, sfpi::SFPLOAD_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, scratch_tile_offset);
+    TTI_SFPLOAD(ckernel::p_sfpu::LREG7, sfpi::SFPLOAD_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, scratch_anchor_offset);
     TTI_SFPMAD(ckernel::p_sfpu::LREG11 /* -1 */, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG1, ckernel::p_sfpu::LREG1, 0);
+    TTI_SFPADD(ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LCONST_1, ckernel::p_sfpu::LREG7, ckernel::p_sfpu::LREG7, 0);
     WELFORD_SFPU_ONLINE_HAZARD_NOP();
+    const std::uint32_t group_offset = group_id << 2;
+    TT_SFPSTORE(ckernel::p_sfpu::LREG7, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, WELFORD_SFPU_MEAN_TILE_OFFSET + group_offset);
     TTI_SFPMAD(ckernel::p_sfpu::LREG1, ckernel::p_sfpu::LREG1, ckernel::p_sfpu::LCONST_0, ckernel::p_sfpu::LREG0, 0);
     WELFORD_SFPU_ONLINE_HAZARD_NOP();
     _two_pass_horizontal_sum_mean_();
 
     TTI_SFPADD(ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LCONST_1, ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LREG5, 0);
-    TT_SFPLOADI(ckernel::p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_UPPER, lane_reciprocal_bits >> 16);
-    TT_SFPLOADI(ckernel::p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_LOWER, lane_reciprocal_bits & 0xffff);
+    TTI_SFPLOADI(ckernel::p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_FLOATB, lane_reciprocal_bf16);
     TTI_SFPMUL(ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LCONST_0, ckernel::p_sfpu::LREG5, 0);
     WELFORD_SFPU_ONLINE_HAZARD_NOP();
     TT_SFPSTORE(ckernel::p_sfpu::LREG5, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, WELFORD_SFPU_M2_TILE_OFFSET + group_offset);

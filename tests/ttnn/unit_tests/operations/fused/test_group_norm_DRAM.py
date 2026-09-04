@@ -45,16 +45,28 @@ def test_group_norm_statistics_mode_validation(expect_error):
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
 @pytest.mark.parametrize("has_affine", [False, True], ids=["plain", "affine"])
 @pytest.mark.parametrize("num_groups", [1, 2])
-def test_group_norm_fp32_large_offset_DRAM(device, has_affine, num_groups):
+@pytest.mark.parametrize(
+    "constant",
+    [None, 1e38, -1e38, 1e-37, -1e-37],
+    ids=["offset", "large_positive", "large_negative", "small_positive", "small_negative"],
+)
+def test_group_norm_fp32_large_offset_DRAM(device, has_affine, num_groups, constant):
     """The FP32 finalizer must not truncate x and mean to TF32 before subtraction."""
     torch.manual_seed(7)
     N, C, HW = 1, 64, 32
     x = 1_000_000.0 + 128.0 * (torch.rand((N, 1, HW, C), dtype=torch.float32) - 0.5)
+    if constant is not None:
+        x.fill_(constant)
     weight = torch.linspace(0.75, 1.25, C, dtype=torch.float32) if has_affine else None
     bias = torch.linspace(-0.25, 0.25, C, dtype=torch.float32) if has_affine else None
-    reference = torch.nn.functional.group_norm(
-        x.view(N, HW, C).permute(0, 2, 1).reshape(N, C, 1, HW), num_groups, weight=weight, bias=bias
-    ).permute(0, 2, 3, 1)
+    if constant is None:
+        reference = torch.nn.functional.group_norm(
+            x.view(N, HW, C).permute(0, 2, 1).reshape(N, C, 1, HW), num_groups, weight=weight, bias=bias
+        ).permute(0, 2, 3, 1)
+    else:
+        # Constant populations normalise to zero. Avoid an overflowing CPU
+        # statistics reference; affine output must equal beta exactly.
+        reference = torch.zeros_like(x) if bias is None else bias.view(1, 1, 1, C).expand_as(x)
 
     compute_kernel_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -98,6 +110,9 @@ def test_group_norm_fp32_large_offset_DRAM(device, has_affine, num_groups):
 
     error = actual - reference
     assert torch.isfinite(actual).all()
+    if constant is not None:
+        # Exact equality also detects small means flushed by premature scaling.
+        assert torch.equal(actual, reference)
     assert error.abs().max() < 0.015
     assert error.abs().mean() < 0.004
 

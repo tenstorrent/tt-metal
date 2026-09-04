@@ -222,19 +222,33 @@ def test_group_norm_stable_stats_translation_stability(device, base, amplitude):
 
 
 @pytest.mark.parametrize("has_affine", [False, True], ids=["plain", "affine"])
-def test_group_norm_sharded_fp32_large_offset(device, has_affine):
+@pytest.mark.parametrize("num_groups", [1, 16])
+@pytest.mark.parametrize(
+    "constant",
+    [None, 1e38, -1e38, 1e-37, -1e-37],
+    ids=["offset", "large_positive", "large_negative", "small_positive", "small_negative"],
+)
+def test_group_norm_sharded_fp32_large_offset(device, has_affine, num_groups, constant):
     """Sharded FP32 normalization must retain low-order input variation."""
     torch.manual_seed(7)
-    N, C, H, W, num_groups = 1, 256, 1, 256, 16
+    N, C, H, W = 1, 256, 1, 256
     grid = ttnn.CoreGrid(y=1, x=1)
     x = 1_000_000.0 + 128.0 * (torch.rand((N, C, H, W), dtype=torch.float32) - 0.5)
+    if constant is not None:
+        x.fill_(constant)
     weight = torch.linspace(0.75, 1.25, C, dtype=torch.float32) if has_affine else None
     bias = torch.linspace(-0.25, 0.25, C, dtype=torch.float32) if has_affine else None
-    reference = (
-        torch.nn.functional.group_norm(x, num_groups, weight=weight, bias=bias)
-        .permute(0, 2, 3, 1)
-        .reshape(N, 1, H * W, C)
-    )
+    if constant is None:
+        reference = (
+            torch.nn.functional.group_norm(x, num_groups, weight=weight, bias=bias)
+            .permute(0, 2, 3, 1)
+            .reshape(N, 1, H * W, C)
+        )
+    else:
+        # The analytical result avoids overflow in the CPU reference too.
+        reference = torch.zeros((N, 1, H * W, C), dtype=torch.float32)
+        if bias is not None:
+            reference += bias.view(1, 1, 1, C)
 
     compute_kernel_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -294,6 +308,9 @@ def test_group_norm_sharded_fp32_large_offset(device, has_affine):
 
     error = actual - reference
     assert torch.isfinite(actual).all()
+    if constant is not None:
+        # Exact equality also detects small means flushed by premature scaling.
+        assert torch.equal(actual, reference)
     assert error.abs().max() < 0.02
     assert error.abs().mean() < 0.004
 
