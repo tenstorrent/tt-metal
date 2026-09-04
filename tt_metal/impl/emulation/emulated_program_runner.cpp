@@ -887,15 +887,8 @@ static void emit_metal2_namespaces(
             named_compile_args.begin(), named_compile_args.end());
         std::sort(cta_entries.begin(), cta_entries.end());
         for (const auto& [name, value] : cta_entries) {
-            // Namespaced compile-time args carry a dotted name (e.g. "cp.dst"),
-            // which is not a valid flat C++ identifier, so emitting
-            // `constexpr CtaVal<uint32_t> cp.dst{...}` here would fail to compile;
-            // skip them to keep the flat `args::` form namespaced-safe. This change
-            // does NOT emit the matching `blaze_ct_args::<ns>` structs — that is a separate
-            // emission step (it needs a Kernel::process_named_ct_arg_namespaces API);
-            // a kernel that references `blaze_ct_args::<ns>` requires that step to be
-            // present, so skipping here only prevents invalid flat C++, it does not
-            // itself make namespaced args available.
+            // Dotted keys cannot name flat args:: constants.
+            // Blaze constants are emitted separately from named_ct_arg_namespaces.
             if (name.find('.') != std::string::npos) {
                 continue;
             }

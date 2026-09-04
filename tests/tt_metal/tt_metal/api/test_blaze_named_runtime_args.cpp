@@ -127,6 +127,7 @@ TEST_F(NamedArgsTest, TensixTestNamedArrayRuntimeArgs) {
                                         << ", got " << results[0];
 }
 
+// Both header channels must remain usable together on the data-movement path.
 TEST_F(NamedArgsTest, TensixTestNamedCompileTimeArgs) {
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->get_devices()[0];
@@ -140,11 +141,13 @@ TEST_F(NamedArgsTest, TensixTestNamedCompileTimeArgs) {
 
     const uint32_t param_a = 42;
     const uint32_t param_b = 0xBEEF;
+    const uint32_t legacy_param = 0xCAFE;
 
     KernelDescriptor kernel = {
         .kernel_source = "tests/tt_metal/tt_metal/test_kernels/misc/blaze_named_runtime_args_kernel.cpp",
         .core_ranges = cores,
-        .defines = {{"WRITE_ADDRESS", std::to_string(write_addr)}},
+        .named_compile_time_args = {{"legacy_param", legacy_param}},
+        .defines = {{"WRITE_ADDRESS", std::to_string(write_addr)}, {"TEST_LEGACY_NAMED_CT_ARGS", "1"}},
         .blaze_named_args =
             {
                 .named_compile_time_args = {{"my_kernel.param_a", param_a}, {"my_kernel.param_b", param_b}},
@@ -160,10 +163,11 @@ TEST_F(NamedArgsTest, TensixTestNamedCompileTimeArgs) {
     distributed::EnqueueMeshWorkload(cq, workload, false);
 
     std::vector<uint32_t> results;
-    detail::ReadFromDeviceL1(device, core, write_addr, 4 * sizeof(uint32_t), results);
+    detail::ReadFromDeviceL1(device, core, write_addr, 5 * sizeof(uint32_t), results);
 
     EXPECT_EQ(results[2], param_a) << "blaze_ct_args::my_kernel::param_a should be 42";
     EXPECT_EQ(results[3], param_b) << "blaze_ct_args::my_kernel::param_b should be 0xBEEF";
+    EXPECT_EQ(results[4], legacy_param);
 }
 
 TEST_F(NamedArgsTest, TensixTestNamedPerCoreArrayRuntimeArgs) {
@@ -223,14 +227,8 @@ TEST_F(NamedArgsTest, TensixTestNamedPerCoreArrayRuntimeArgs) {
         << "Core (1,0): sum should be " << expected_sum_core1 << ", got " << results_core1[0];
 }
 
-// Covers the COMPUTE JIT compile path for the experimental named blaze_ct_args:: header.
-// All tests above use DataMovementConfigDescriptor (the BRISC/NCRISC path via
-// jit_build_genfiles_kernel_include); this one uses ComputeConfigDescriptor (the
-// TRISC path via jit_build_genfiles_triscs_src + build_trisc_prolog). Before the
-// genfiles relocation, named_args_generated.h was emitted per-source by build.cpp's
-// compile_one and delivered via `-include` — a non-atomic write on a shared path
-// (racy under multiprocess, and never carried to the remote/JIT-server path). This
-// exercises the relocated, presence-gated prolog #include on the compute path.
+// Verifies that TRISC kernels can use the force-included legacy CT map together with
+// the Blaze header included by build_trisc_prolog. Both values must reach device L1.
 TEST_F(NamedArgsTest, TensixTestMixedNamedCompileTimeArgsComputeKernel) {
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->get_devices()[0];

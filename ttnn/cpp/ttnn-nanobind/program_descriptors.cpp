@@ -728,7 +728,8 @@ void py_module_types(nb::module_& mod) {
                tt::tt_metal::KernelDescriptor::CommonRuntimeArgs common_runtime_args,
                std::optional<tt::tt_metal::KernelBuildOptLevel> opt_level,
                tt::tt_metal::KernelDescriptor::ConfigDescriptor config,
-               tt::tt_metal::KernelDescriptor::IncludePaths compiler_include_paths) {
+               tt::tt_metal::KernelDescriptor::IncludePaths compiler_include_paths,
+               tt::tt_metal::experimental::blaze::NamedCompileTimeArgs blaze_named_compile_time_args) {
                 // Accept RuntimeArgsWrapper, RuntimeArgsView, or the raw RuntimeArgs type, mirroring
                 // the .runtime_args property setter rather than relying on the generic sequence
                 // caster falling back to the wrapper's __iter__.
@@ -752,10 +753,8 @@ void py_module_types(nb::module_& mod) {
                     ////////////////////////////////////////////////////////////
                     // Blaze-only experimental named args
                     // Removal is tracked by issue #50953
-                    // Deliberately constructed EMPTY here: the Blaze named-arg surface is kept
-                    // OUT of the Python __init__ signature. It is settable ONLY post-construction
-                    // via the blaze_named_* def_prop_rw setters below (experimental / temporary).
-                    tt::tt_metal::experimental::blaze::NamedKernelArgs{},
+                    tt::tt_metal::experimental::blaze::NamedKernelArgs{
+                        .named_compile_time_args = std::move(blaze_named_compile_time_args)},
                     ////////////////////////////////////////////////////////////
                     opt_level,
                     std::move(config),
@@ -773,6 +772,9 @@ void py_module_types(nb::module_& mod) {
             nb::arg("opt_level") = nb::none(),
             nb::arg("config"),
             nb::arg("compiler_include_paths") = nb::cast(tt::tt_metal::KernelDescriptor::IncludePaths()),
+            nb::kw_only(),
+            nb::arg("blaze_named_compile_time_args") =
+                nb::cast(tt::tt_metal::experimental::blaze::NamedCompileTimeArgs()),
             R"pbdoc(
                 Initialize a KernelDescriptor with complete configuration.
 
@@ -788,6 +790,7 @@ void py_module_types(nb::module_& mod) {
                     opt_level: Optimization level for kernel compilation
                     config: Configuration descriptor for the kernel
                     compiler_include_paths: Additional include paths passed to the kernel compiler as -I flags
+                    blaze_named_compile_time_args: Experimental Blaze arguments exposed through blaze_ct_args only
             )pbdoc")
         .def_rw(
             "kernel_source",
@@ -849,9 +852,8 @@ void py_module_types(nb::module_& mod) {
         // Blaze-only experimental named args
         // Removal is tracked by issue #50953
         //
-        // These def_prop_rw setters are the ENTIRE Python surface for the temporary,
-        // Blaze-only named args. They are intentionally kept off __init__ and
-        // loudly marked so they acquire no new users before deletion (issue #50953).
+        // Temporary Blaze named-arg properties. Compile-time args can also be supplied
+        // to __init__; runtime args are set only through these properties.
         .def_prop_rw(
             "blaze_named_compile_time_args",
             [](const tt::tt_metal::KernelDescriptor& self) { return self.blaze_named_args.named_compile_time_args; },
