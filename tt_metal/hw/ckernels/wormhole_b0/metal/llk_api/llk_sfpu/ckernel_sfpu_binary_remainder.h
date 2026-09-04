@@ -53,6 +53,7 @@ sfpi_inline sfpi::vFloat unsigned_remainder_recip(const sfpi::vInt& b_signed) {
 // Computes the unsigned remainder: |a| - floor(|a| / |b|) * |b|, given the scaled reciprocal 1/|b|.
 // Use 32-bit integer division from ckernel_sfpu_div_int32_floor.h
 // Returns: unsigned remainder r
+template <bool numerator_can_be_int_min = true>
 sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(
     const sfpi::vInt& a_signed, const sfpi::vInt& b_signed, const sfpi::vFloat& inv_b_f) {
     // Absolute value of a; handle edge case where sign-magnitude conversion yields negative
@@ -72,11 +73,11 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(
     sfpi::vFloat MANTISSA_ALIGNMENT_OFFSET = 8388608.0f;
 
     // Split q and b into 11-bit chunks to compute q * b
-    sfpi::vMag MASK_11{0x7ff};
-    sfpi::vFloat q1 = sfpi::convert<sfpi::vFloat>(q & MASK_11, sfpi::RoundMode::Nearest);
+    // Shift out unwanted bits instead of keeping an 11-bit mask in a register.
+    sfpi::vFloat q1 = sfpi::convert<sfpi::vFloat>(sfpi::vMag((q << 21) >> 21), sfpi::RoundMode::Nearest);
     sfpi::vFloat q2 = sfpi::convert<sfpi::vFloat>(q >> 11, sfpi::RoundMode::Nearest);
-    sfpi::vFloat b1 = sfpi::convert<sfpi::vFloat>((b >> 11) & MASK_11, sfpi::RoundMode::Nearest);
-    sfpi::vFloat b0 = sfpi::convert<sfpi::vFloat>(b & MASK_11, sfpi::RoundMode::Nearest);
+    sfpi::vFloat b1 = sfpi::convert<sfpi::vFloat>(sfpi::vMag((b << 10) >> 21), sfpi::RoundMode::Nearest);
+    sfpi::vFloat b0 = sfpi::convert<sfpi::vFloat>(sfpi::vMag((b << 21) >> 21), sfpi::RoundMode::Nearest);
 
     // hi = q2 * b0 + q1 * b1 (high part)
     // lo = q1 * b0 (low part)
@@ -90,8 +91,7 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(
     sfpi::vUInt qb = sfpi::exman(lo) << 11;
     qb += sfpi::exman(hi) << 22;
 
-    // Compute remainder - recompute abs(a_signed)
-    a = sfpi::abs(a_signed);
+    // Compute remainder from the retained numerator magnitude.
     sfpi::vInt r{a - qb};
 
     // abs(INT_MIN) remains INT_MIN, whose sign-magnitude conversion produces
@@ -105,10 +105,9 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(
     auto correction = sfpi::convert<sfpi::vUInt16>(correction_f, sfpi::RoundMode::Nearest);
     correction_f = sfpi::convert<sfpi::vFloat>(correction, sfpi::RoundMode::Nearest);
 
-    // Recompute b chunks for correction multiplication to reduce register pressure
-    b = sfpi::abs(b_signed);
-    b0 = sfpi::convert<sfpi::vFloat>(b & MASK_11, sfpi::RoundMode::Nearest);
-    b1 = sfpi::convert<sfpi::vFloat>((b >> 11) & MASK_11, sfpi::RoundMode::Nearest);
+    // Recompute chunks from the retained divisor magnitude.
+    b0 = sfpi::convert<sfpi::vFloat>(sfpi::vMag((b << 21) >> 21), sfpi::RoundMode::Nearest);
+    b1 = sfpi::convert<sfpi::vFloat>(sfpi::vMag((b << 10) >> 21), sfpi::RoundMode::Nearest);
     sfpi::vFloat b2 = sfpi::convert<sfpi::vFloat>(b >> 22, sfpi::RoundMode::Nearest);
 
     // tmp = correction * (b2<<22 + b1<<11 + b0)
@@ -121,15 +120,19 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(
     top += MANTISSA_ALIGNMENT_OFFSET;
 
     sfpi::vInt tmp{sfpi::exman(low) + (sfpi::exman(mid) << 11) + (sfpi::exman(top) << 22)};
-    // r=INT_MIN represents the valid positive magnitude 2**31. Subtracting
-    // one wraps only that value, distinguishing it from negative remainders.
-    v_if(r < 0 && (r - 1) < 0) { tmp = -tmp; }
-    v_endif;
+    // When q is zero, qb is also zero, so r=INT_MIN is the positive magnitude
+    // 2**31. A negative residual with nonzero q instead needs a negative correction.
+    if constexpr (numerator_can_be_int_min) {
+        v_if(r < 0 && q != 0) { tmp = -tmp; }
+        v_endif;
+    } else {
+        // A range-reduced unsigned numerator cannot produce the positive 2**31 residue.
+        v_if(r < 0) { tmp = -tmp; }
+        v_endif;
+    }
     r -= tmp;
 
-    // Final adjustment - recompute b to reduce register pressure. The
-    // corrected remainder cannot be INT_MIN.
-    b = sfpi::abs(b_signed);
+    // Final adjustment. The corrected remainder cannot be INT_MIN.
     v_if(r < 0) { r += b; }
     v_elseif(r >= b) { r -= b; }
     v_endif;
@@ -139,8 +142,10 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(
 
 // Computes the unsigned remainder: |a| - floor(|a| / |b|) * |b|
 // Returns: unsigned remainder r
+template <bool numerator_can_be_int_min = true>
 sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(const sfpi::vInt& a_signed, const sfpi::vInt& b_signed) {
-    return compute_unsigned_remainder_int32(a_signed, b_signed, unsigned_remainder_recip(b_signed));
+    return compute_unsigned_remainder_int32<numerator_can_be_int_min>(
+        a_signed, b_signed, unsigned_remainder_recip(b_signed));
 }
 
 // Signed (int32) remainder = a - floor(a / b) * b
@@ -155,6 +160,10 @@ sfpi_inline void calculate_remainder_int32_body(
 
     // Compute unsigned remainder
     sfpi::vInt r = compute_unsigned_remainder_int32(a_signed, b_signed);
+
+    // Reload signs so only their magnitudes remain live through the helper.
+    a_signed = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>();
+    b_signed = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>();
 
     // Remainder sign handling
     sfpi::vInt sign = a_signed ^ b_signed;
@@ -196,10 +205,12 @@ sfpi_inline void calculate_remainder_uint32_body(
     // pass). t = (uint32)a >> 1 is always < 2^31, so the helper sees valid [0, 2^31) operands; rt
     // is only used on the b < 2^31 lanes, but every lane pays the call.
     sfpi::vInt t = sfpi::vInt(sfpi::vUInt(a) >> 1);
-    sfpi::vInt rt = compute_unsigned_remainder_int32(t, b);
+    sfpi::vInt rt = compute_unsigned_remainder_int32<false>(t, b);
 
     // Reload a from DEST instead of keeping it live across the helper
     a = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>();
+    // The helper retains |b|, so release the raw b until the range reduction.
+    b = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>();
 
     // b < 2^31 uses x = 2*rt + (a & 1); b >= 2^31 keeps x = a
     v_if(b >= 0) { a = rt + rt + (a & 1); }

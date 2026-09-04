@@ -139,7 +139,7 @@ inline void calculate_remainder_uint32_scalar(uint scalar) {
         for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vInt a = sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>();
             sfpi::vInt t = sfpi::vInt(sfpi::vUInt(a) >> 1);
-            sfpi::vInt rt = compute_unsigned_remainder_int32(t, b, inv_b_f);
+            sfpi::vInt rt = compute_unsigned_remainder_int32<false>(t, b, inv_b_f);
 
             // Reload a from DEST instead of keeping it live across the helper
             a = sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>();

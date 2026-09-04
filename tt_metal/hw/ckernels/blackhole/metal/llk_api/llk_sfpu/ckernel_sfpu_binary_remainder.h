@@ -72,9 +72,9 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(
     sfpi::vInt tmp_lo = sfpi::fractional_mul(correction, b);
     sfpi::vInt tmp = tmp_lo + ((tmp_hi + b_hi) << 23);
 
-    // r=INT_MIN represents the valid positive magnitude 2**31. Subtracting
-    // one wraps only that value, distinguishing it from negative remainders.
-    v_if(r < 0 && (r - 1) < 0) { tmp = -tmp; }
+    // When q is zero, qb is also zero, so r=INT_MIN is the positive magnitude
+    // 2**31. A negative residual with nonzero q instead needs a negative correction.
+    v_if(r < 0 && q != 0) { tmp = -tmp; }
     v_endif;
     r -= tmp;
 
