@@ -252,7 +252,7 @@ void D2HSocket::init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device) 
     TT_FATAL(mesh_device, "init_sender_tlb requires a MeshDevice (owner path only; connectors use PCIeCoreWriter).");
 
     auto& env = mesh_device->impl().metal_env();
-    auto* cluster = &env.get_cluster();
+    auto& cluster = env.get_cluster();
     const uint32_t sender_device_id = mesh_device->get_device(sender_core_.device_coord)->id();
     const CoreCoord sender_virtual_core =
         is_l2cpu_ ? sender_core_.core_coord : mesh_device->worker_core_from_logical_core(sender_core_.core_coord);
@@ -262,16 +262,16 @@ void D2HSocket::init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device) 
     // cluster.write_core() dynamic writer. SWEmuleChip backs that with real memory-backed I/O;
     // MockChip never invokes pcie_writer_ at runtime (only socket construction / JIT), so the
     // installed writer is harmless there.
-    if (!cluster->is_mock_or_emulated()) {
+    if (!cluster.is_mock_or_emulated()) {
         // L2CPU: sender_core_.core_coord is already a TRANSLATED NOC coord. The window is the
         // static TLB configure_static_tlbs() anchors at the LIM base.
-        sender_core_tlb_ = cluster->get_driver()
+        sender_core_tlb_ = cluster.get_driver()
                                ->get_chip(sender_device_id)
                                ->get_tlb_manager()
                                ->get_tlb_window(tt_xy_pair(sender_virtual_core.x, sender_virtual_core.y));
     }
 
-    if (is_l2cpu_ && !cluster->is_mock_or_emulated()) {
+    if (is_l2cpu_ && !cluster.is_mock_or_emulated()) {
         // The L2CPU window is anchored at the LIM base, so absolute addresses are
         // converted to window-relative offsets before write_block(). Mock/emule
         // have no TLB manager and fall through to the write_core() path below.
@@ -279,7 +279,7 @@ void D2HSocket::init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device) 
         pcie_writer_ = [this, l2cpu_tlb_base](void* data, uint32_t num_bytes, uint64_t device_addr) {
             sender_core_tlb_->write_block(device_addr - l2cpu_tlb_base, data, num_bytes);
         };
-    } else if (env.get_hal().get_arch() == tt::ARCH::BLACKHOLE && !cluster->is_mock_or_emulated()) {
+    } else if (env.get_hal().get_arch() == tt::ARCH::BLACKHOLE && !cluster.is_mock_or_emulated()) {
         // Entire device address space for Blackhole is statically mapped.
         // Safe to use static TLBs without requiring the driver to do a reconfig.
         pcie_writer_ = [this](void* data, uint32_t num_bytes, uint64_t device_addr) {
@@ -288,9 +288,9 @@ void D2HSocket::init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device) 
     } else {
         // Wormhole B0 may require the driver to do a reconfig of the TLB for each write,
         // since the device address space is not statically mapped.
-        pcie_writer_ = [cluster, sender_device_id, sender_virtual_core](
+        pcie_writer_ = [&cluster, sender_device_id, sender_virtual_core](
                            void* data, uint32_t num_bytes, uint64_t device_addr) {
-            cluster->write_core(data, num_bytes, tt_cxy_pair(sender_device_id, sender_virtual_core), device_addr);
+            cluster.write_core(data, num_bytes, tt_cxy_pair(sender_device_id, sender_virtual_core), device_addr);
         };
     }
 }

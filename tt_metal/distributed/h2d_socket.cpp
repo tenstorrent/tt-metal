@@ -304,7 +304,7 @@ void H2DSocket::init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_device
     TT_FATAL(mesh_device, "init_receiver_tlb requires a MeshDevice (owner path only; connectors use PCIeCoreWriter).");
 
     auto& env = mesh_device->impl().metal_env();
-    auto* cluster = &env.get_cluster();
+    auto& cluster = env.get_cluster();
 
     // Mock/emulated chips have no TLB manager (get_tlb_manager() == nullptr), so they can't take the
     // static-TLB path: the target_in_static_tlb guard below excludes them (which also keeps
@@ -327,8 +327,8 @@ void H2DSocket::init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_device
         // configure_static_tlbs() anchors at the LIM base.
         recv_device_id = mesh_device->get_device(recv_core_.device_coord)->id();
         recv_virtual_core = recv_core_.core_coord;
-        if (!cluster->is_mock_or_emulated()) {
-            receiver_core_tlb_ = cluster->get_driver()
+        if (!cluster.is_mock_or_emulated()) {
+            receiver_core_tlb_ = cluster.get_driver()
                                      ->get_chip(recv_device_id)
                                      ->get_tlb_manager()
                                      ->get_tlb_window(tt_xy_pair(recv_virtual_core.x, recv_virtual_core.y));
@@ -348,7 +348,7 @@ void H2DSocket::init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_device
     // Captured into the lambdas below so write() can keep passing local addresses.
     const uint64_t l1_offset = dram_l1_noc_offset_;
 
-    if (is_l2cpu_ && !cluster->is_mock_or_emulated()) {
+    if (is_l2cpu_ && !cluster.is_mock_or_emulated()) {
         // The L2CPU window is anchored at the LIM base, so absolute addresses are
         // converted to window-relative offsets before write_block(). Mock/emule
         // have no TLB manager and fall through to the write_core() writer below.
@@ -371,15 +371,15 @@ void H2DSocket::init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_device
     // may still need a per-write driver reconfig.
     const tt_xy_pair tlb_core(recv_virtual_core.x, recv_virtual_core.y);
     const bool target_in_static_tlb =
-        !cluster->is_mock_or_emulated() && env.get_hal().get_arch() == tt::ARCH::BLACKHOLE &&
-        cluster->get_driver()
+        !cluster.is_mock_or_emulated() && env.get_hal().get_arch() == tt::ARCH::BLACKHOLE &&
+        cluster.get_driver()
             ->get_chip(recv_device_id)
             ->get_tlb_manager()
             ->is_tlb_mapped(tlb_core, static_cast<uint64_t>(aligned_data_buf_start_) + l1_offset, fifo_size_);
 
     if (target_in_static_tlb) {
         receiver_core_tlb_ =
-            cluster->get_driver()->get_chip(recv_device_id)->get_tlb_manager()->get_tlb_window(tlb_core);
+            cluster.get_driver()->get_chip(recv_device_id)->get_tlb_manager()->get_tlb_window(tlb_core);
         pcie_writer = [this, l1_offset](void* data, uint32_t num_bytes, uint64_t device_addr) {
             receiver_core_tlb_->write_block(device_addr + l1_offset, data, num_bytes);
         };
@@ -387,9 +387,9 @@ void H2DSocket::init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_device
         // Non-Blackhole, or no static window covers the target: use dynamic TLBs
         // through UMD (the driver may reconfigure the TLB per write). Covers
         // Wormhole B0 and the DRAM-recv L1 path described above.
-        pcie_writer = [cluster, recv_device_id, recv_virtual_core, l1_offset](
+        pcie_writer = [&cluster, recv_device_id, recv_virtual_core, l1_offset](
                           void* data, uint32_t num_bytes, uint64_t device_addr) {
-            cluster->write_core(
+            cluster.write_core(
                 data, num_bytes, tt_cxy_pair(recv_device_id, recv_virtual_core), device_addr + l1_offset);
         };
     }
