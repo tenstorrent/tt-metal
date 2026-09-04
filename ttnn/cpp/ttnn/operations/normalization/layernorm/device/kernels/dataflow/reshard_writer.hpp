@@ -7,20 +7,23 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 
+// Move this core's output block to the storage cores that own it. `output_base_addr` is the base
+// address of the output tensor's shard, which is the same on every core it is sharded across, so it
+// doubles as the destination address on each storage core.
 inline void write_resharded_data(
     Noc& noc,
-    CircularBuffer& cb_out,
-    CircularBuffer& cb_out_resharded,
+    DataflowBuffer& dfb_out,
+    uint32_t output_base_addr,
     uint32_t num_segments_to_write_back,
     uint32_t storage_core_start_offset,
     tt_l1_ptr uint32_t* segment_args,
     uint32_t worker_core_stride_w_bytes,
     uint32_t storage_core_stride_w_bytes,
     uint32_t block_ht) {
-    const uint32_t out_single_tile_size_bytes = get_tile_size(cb_out.get_cb_id());
+    const uint32_t out_single_tile_size_bytes = dfb_out.get_tile_size();
     uint32_t args_idx = 0;
     uint32_t worker_core_read_offset = 0;
 
@@ -36,7 +39,7 @@ inline void write_resharded_data(
         uint32_t num_tiles_to_write_in_current_segment = write_size / out_single_tile_size_bytes * block_ht;
 
         uint32_t src_offset = worker_core_read_offset;
-        uint32_t dst_addr = cb_out_resharded.get_write_ptr();
+        uint32_t dst_addr = output_base_addr;
         if (i == 0) {  // For the first segment we need to add the start offset; the following segments will start at 0
                        // offset
             dst_addr += storage_core_start_offset;
@@ -45,9 +48,9 @@ inline void write_resharded_data(
         for (uint32_t h = 0; h < block_ht; ++h) {
             for (uint32_t w = 0; w < num_tiles_to_write_in_current_segment; ++w) {
                 num_tiles_in_write_queue += 1;
-                cb_out.wait_front(num_tiles_in_write_queue);
+                dfb_out.wait_front(num_tiles_in_write_queue);
                 noc.async_write(
-                    cb_out,
+                    dfb_out,
                     remote,
                     out_single_tile_size_bytes,
                     {.offset_bytes = src_offset},

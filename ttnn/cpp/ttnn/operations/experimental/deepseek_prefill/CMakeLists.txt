@@ -1,6 +1,9 @@
 # Owned by @tenstorrent/metalium-developers-ds-prefill. Add/remove ops for
 # this domain here without touching ttnn/CMakeLists.txt.
+add_subdirectory(attn_res_gather_softmax)
+add_subdirectory(attn_res_weighted_reduce_nc)
 add_subdirectory(combine)
+add_subdirectory(combine_fabric2d)
 add_subdirectory(dispatch)
 add_subdirectory(extract)
 add_subdirectory(inbound_socket_service_sync)
@@ -9,8 +12,10 @@ add_subdirectory(masked_bincount)
 add_subdirectory(mhc_split_sinkhorn)
 add_subdirectory(moe_grouped_topk)
 add_subdirectory(moe_hash_gate)
+add_subdirectory(moe_padding_config)
 add_subdirectory(offset_cumsum)
 add_subdirectory(outbound_socket_service_sync)
+add_subdirectory(pack_scaled_fp8_kv_cache)
 add_subdirectory(per_token_cast_back)
 add_subdirectory(per_token_cast_to_fp8)
 add_subdirectory(post_combine_reduce)
@@ -26,7 +31,10 @@ add_library(TTNN::Ops::Experimental::DeepSeekPrefill ALIAS ttnn_op_deepseek_pref
 target_link_libraries(
     ttnn_op_deepseek_prefill
     INTERFACE
+        TTNN::Ops::Experimental::DeepSeekPrefill::AttnResGatherSoftmax
+        TTNN::Ops::Experimental::DeepSeekPrefill::AttnResWeightedReduceNc
         TTNN::Ops::Experimental::DeepSeekPrefill::Combine
+        TTNN::Ops::Experimental::DeepSeekPrefill::CombineFabric2d
         TTNN::Ops::Experimental::DeepSeekPrefill::Dispatch
         TTNN::Ops::Experimental::DeepSeekPrefill::Extract
         TTNN::Ops::Experimental::DeepSeekPrefill::H2dSocketSync
@@ -35,8 +43,10 @@ target_link_libraries(
         TTNN::Ops::Experimental::DeepSeekPrefill::MhcSplitSinkhorn
         TTNN::Ops::Experimental::DeepSeekPrefill::MoeGroupedTopk
         TTNN::Ops::Experimental::DeepSeekPrefill::MoeHashGate
+        TTNN::Ops::Experimental::DeepSeekPrefill::MoePaddingConfig
         TTNN::Ops::Experimental::DeepSeekPrefill::OffsetCumsum
         TTNN::Ops::Experimental::DeepSeekPrefill::D2dSocketSync
+        TTNN::Ops::Experimental::DeepSeekPrefill::PackScaledFp8KvCache
         TTNN::Ops::Experimental::DeepSeekPrefill::PerTokenCastBack
         TTNN::Ops::Experimental::DeepSeekPrefill::PerTokenCastToFp8
         TTNN::Ops::Experimental::DeepSeekPrefill::PostCombineReduce
@@ -59,7 +69,10 @@ target_link_libraries(
 target_sources(
     ttnn_op_deepseek_prefill
     INTERFACE
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::AttnResGatherSoftmax>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::AttnResWeightedReduceNc>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::Combine>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::CombineFabric2d>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::Dispatch>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::Extract>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::H2dSocketSync>
@@ -68,8 +81,10 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::MhcSplitSinkhorn>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::MoeGroupedTopk>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::MoeHashGate>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::MoePaddingConfig>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::OffsetCumsum>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::D2dSocketSync>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::PackScaledFp8KvCache>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::PerTokenCastBack>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::PerTokenCastToFp8>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::PostCombineReduce>

@@ -87,7 +87,8 @@ ttnn::device_operation::ProgramArtifacts NdReshardCopyPagesFactory::create_progr
                 {"page_size", aligned_page_size},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"start_page", "end_page"}},
-        .hw_config = ttnn::create_reader_datamovement_config(input.device()->arch()),
+        .hw_config =
+            ttnn::create_reader_datamovement_config(input.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     KernelSpec writer{
@@ -108,7 +109,8 @@ ttnn::device_operation::ProgramArtifacts NdReshardCopyPagesFactory::create_progr
                 {"page_size", aligned_page_size},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"start_page", "end_page"}},
-        .hw_config = ttnn::create_writer_datamovement_config(input.device()->arch()),
+        .hw_config =
+            ttnn::create_writer_datamovement_config(input.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // Work split: per-core page ranges.

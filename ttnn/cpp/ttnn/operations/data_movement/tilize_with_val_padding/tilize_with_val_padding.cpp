@@ -9,6 +9,8 @@
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
+#include <tt-metalium/hal.hpp>
+
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement {
@@ -65,11 +67,18 @@ namespace ttnn {
 ttnn::Tensor tilize_with_val_padding(
     const ttnn::Tensor& input_tensor,
     const ttnn::Shape& output_padded_shape,
-    const tt::tt_metal::PadValue pad_value,
+    const ttnn::PadValue pad_value,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<DataType> output_dtype,
     bool use_multicore,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+    // FP8_E4M3 is ROW_MAJOR-only, so it can never be the TILE output dtype. When the caller doesn't
+    // request a specific output dtype, default an FP8 input to FLOAT32 (the format it unpacks to in
+    // DEST) so every downstream value_or() below resolves to a legal TILE dtype.
+    if (!output_dtype.has_value() && input_tensor.dtype() == DataType::FP8_E4M3) {
+        output_dtype = DataType::FLOAT32;
+    }
+
     if (input_tensor.layout() == Layout::TILE) {
         return input_tensor;
     }
@@ -77,7 +86,7 @@ ttnn::Tensor tilize_with_val_padding(
     // Handle empty tensors - no tiling needed for tensors with no data
     if (input_tensor.physical_volume() == 0) {
         // Create output tensor with same properties
-        TensorSpec spec(
+        tt::tt_metal::TensorSpec spec(
             output_padded_shape,
             TensorLayout(
                 output_dtype.value_or(input_tensor.dtype()),
@@ -95,10 +104,37 @@ ttnn::Tensor tilize_with_val_padding(
     uint32_t num_tiles_per_row = output_padded_shape[-1] / tt::constants::TILE_WIDTH;
     uint32_t num_tiles_per_col = output_padded_shape[-2] / tt::constants::TILE_HEIGHT;
 
+    // Fold in the block factory's c_1 staging CB so routing sees the true CB budget.
+    const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
+    const uint32_t staging_bytes_per_tile = input_single_tile_size / tt::constants::TILE_HEIGHT;
+    const uint32_t fixed_staging_bytes = 2 * dram_alignment;
+
+    // Reserve the output buffer's per-core L1 up front: it is allocated after this check
+    // but before the CBs are placed, so leaving it out overestimates the CB budget and can
+    // pick a factory whose static CBs then clash with it (issue #21358).
+    const uint32_t pending_l1_output_bytes = operations::data_movement::get_pending_l1_output_reservation(
+        input_tensor,
+        output_padded_shape,
+        memory_config.value_or(input_tensor.memory_config()),
+        output_dtype.value_or(input_tensor.dtype()),
+        Layout::TILE);
+
     bool enough_space_width = operations::data_movement::is_enough_space(
-        input_tensor, input_single_tile_size, output_single_tile_size, num_tiles_per_col);
+        input_tensor,
+        input_single_tile_size,
+        output_single_tile_size,
+        num_tiles_per_col,
+        staging_bytes_per_tile,
+        fixed_staging_bytes,
+        pending_l1_output_bytes);
     bool enough_space_height = operations::data_movement::is_enough_space(
-        input_tensor, input_single_tile_size, output_single_tile_size, num_tiles_per_row);
+        input_tensor,
+        input_single_tile_size,
+        output_single_tile_size,
+        num_tiles_per_row,
+        staging_bytes_per_tile,
+        fixed_staging_bytes,
+        pending_l1_output_bytes);
 
     auto base_tilize = [=](const ttnn::Tensor& input_tensor) {
         return ttnn::prim::tilize_with_val_padding(
@@ -119,7 +155,7 @@ ttnn::Tensor tilize_with_val_padding(
 ttnn::Tensor tilize_with_val_padding(
     const ttnn::Tensor& input_tensor,
     const ttsl::SmallVector<uint32_t>& output_padded_shape,
-    const tt::tt_metal::PadValue pad_value,
+    const ttnn::PadValue pad_value,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<DataType> output_dtype,
     bool use_multicore,
@@ -127,7 +163,7 @@ ttnn::Tensor tilize_with_val_padding(
     // Handle empty tensors - no tiling needed for tensors with no data
     if (input_tensor.physical_volume() == 0) {
         // Create output tensor with same properties
-        TensorSpec spec(
+        tt::tt_metal::TensorSpec spec(
             ttnn::Shape{output_padded_shape},
             TensorLayout(
                 output_dtype.value_or(input_tensor.dtype()),
@@ -166,7 +202,7 @@ ttnn::Tensor tilize_with_zero_padding(
     // Handle empty tensors - no tiling needed for tensors with no data
     if (input_tensor.physical_volume() == 0) {
         // Create output tensor with same properties
-        TensorSpec spec(
+        tt::tt_metal::TensorSpec spec(
             padded_shape,
             TensorLayout(
                 output_dtype.value_or(input_tensor.dtype()),
@@ -175,7 +211,7 @@ ttnn::Tensor tilize_with_zero_padding(
         return create_device_tensor(spec, input_tensor.device());
     }
 
-    tt::tt_metal::PadValue pad_value;
+    ttnn::PadValue pad_value;
     if (input_tensor.dtype() == DataType::BFLOAT16 or input_tensor.dtype() == DataType::FLOAT32) {
         pad_value = 0.0f;
     } else {

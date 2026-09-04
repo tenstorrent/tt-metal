@@ -4,9 +4,8 @@
 
 #pragma once
 
-#include "llk_math_eltwise_binary_sfpu.h"
-#include "llk_math_eltwise_unary_sfpu.h"
-#include "llk_assert.h"
+#include <cstdint>
+#include "llk_math_eltwise_binary_sfpu_macros.h"
 #include "sfpu/ckernel_sfpu_mul_int32.h"
 
 namespace ckernel {
@@ -47,20 +46,14 @@ template <
 inline void llk_math_eltwise_binary_sfpu_mul_int(
     std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst, VectorMode vector_mode = VectorMode::RC) {
     static_assert(DATA_FORMAT == DataFormat::Int32, "Quasar SFPU mul_int currently supports Int32 only");
-    LLK_ASSERT(
-        vector_mode == VectorMode::R || vector_mode == VectorMode::C || vector_mode == VectorMode::RC ||
-            vector_mode == VectorMode::None,
-        "Quasar SFPU mul_int only supports vector modes R, C, RC, None");
-    constexpr std::uint32_t tile_stride = NUM_FACES * FACE_R_DIM;
-    const std::uint32_t in0_offset = idst0 * tile_stride;
-    const std::uint32_t in1_offset = idst1 * tile_stride;
-    const std::uint32_t out_offset = odst * tile_stride;
-
-    _llk_math_eltwise_binary_sfpu_params_(
-        ckernel::sfpu::_mul_int32_<APPROXIMATE, ITERATIONS, SIGN_MAGNITUDE_FORMAT>,
-        in0_offset,
-        in1_offset,
-        out_offset,
+    SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        _mul_int32_,
+        (APPROXIMATE, ITERATIONS, SIGN_MAGNITUDE_FORMAT),
+        idst0,
+        idst1,
+        odst,
         vector_mode);
 }
 

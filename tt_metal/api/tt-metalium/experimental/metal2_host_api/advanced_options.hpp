@@ -19,7 +19,7 @@ namespace tt::tt_metal::experimental {
 // Advanced options for Metal 2.0 specs
 // ============================================================================
 //
-// Each Metal 2.0 Spec (KernelSpec, DataflowBufferSpec, TensorParameter, ...) may
+// Each Metal 2.0 Spec (KernelSpec, DataflowBufferSpec, ...) may
 // carry a *AdvancedOptions field at the end of its struct.
 // Features in "advanced options" are one (or more) of:
 //
@@ -44,21 +44,6 @@ using DFBSpecName = ttsl::StrongType<std::string, struct DFBSpecNameTag>;
 
 struct KernelAdvancedOptions {
     ////////////////////////////////////////////////////////////////////////////////
-    // Enqueue-loop invariant kernel arguments
-    ////////////////////////////////////////////////////////////////////////////////
-
-    // Designate certain runtime arguments and common runtime arguments as enqueue-loop
-    // invariant. This permits the same argument value to be reused across multiple Program
-    // enqueues via UpdateProgramRunArgs, which can improve performance in enqueue loops.
-    // By default, every runtime argument and common runtime argument is expected to be
-    // re-specified (via SetProgramRunArgs) on every enqueue.
-    //
-    // CAUTION: This feature is unsafe if used incorrectly! The onus is on the programmer
-    // to ensure that the designated arguments remain valid across enqueues.
-    Group<std::string> enqueue_invariant_runtime_args;
-    Group<std::string> enqueue_invariant_common_runtime_args;
-
-    ////////////////////////////////////////////////////////////////////////////////
     // Varargs
     ////////////////////////////////////////////////////////////////////////////////
 
@@ -74,22 +59,27 @@ struct KernelAdvancedOptions {
     // It will later be deprecated and replaced by std::array typed arguments.
 
     //--------------------------------
-    // Compile time varargs
-    //--------------------------------
-    // TODO: This is currently unimplemented.
-    //       However, certain variadic kernels require this workaround.
-    //       (#45388 tracks the implementation of this feature.)
-
-    //--------------------------------
     // Runtime varargs
     //--------------------------------
     // Number of runtime varargs for the kernel.
     // Set the vararg values (per node) via ProgramRunArgs.
+    //
+    // To retrieve these values in kernel code, use:
+    //   get_vararg(uint32_t idx); // index in [0, num_runtime_varargs - 1]
+    //
+    // CAUTION: This feature exists to address niche uses cases only.
+    //          Prefer regular, named runtime arguments unless varargs are strictly necessary.
     uint32_t num_runtime_varargs = 0;
 
     // Number of common runtime varargs for the kernel.
     // Set the vararg values via ProgramRunArgs.
     // (The same argument values are broadcast to every node the kernel runs on.)
+    //
+    // To retrieve these values in kernel code, use:
+    //    get_common_vararg(uint32_t idx); // index in [0, num_common_runtime_varargs - 1]
+    //
+    // CAUTION: This feature exists to address niche uses cases only.
+    //          Prefer named common runtime arguments unless varargs are strictly necessary.
     uint32_t num_common_runtime_varargs = 0;
 
     // Per-node runtime vararg-count override.
@@ -100,6 +90,65 @@ struct KernelAdvancedOptions {
     //       existing uses are refactored to avoid it.
     [[deprecated("Per-node-vararg-count feature is deprecated and will be removed.")]]
     Table<Nodes, /* num_varargs */ uint32_t> num_runtime_varargs_per_node;
+
+    //--------------------------------
+    // Compile time varargs
+    //--------------------------------
+    // Compile-time vararg VALUES for the kernel.
+    // (Unlike the runtime varargs fields above, these values are baked into the Program
+    // at kernel compile time.)
+    //
+    // To retrieve these values in kernel code, use:
+    //   - get_compile_time_vararg(idx)   // for a computed index
+    //   - get_compile_time_vararg<idx>() // for a compile-time constant index
+    //   - get_num_compile_time_varargs() // for the count
+    //
+    // CAUTION: This is a temporary API that will removed in favor of compile-time array arguments.
+    //          It exists to solve a niche, isolated use case.
+    //          Always prefer regular, named compile-time arguments.
+    [[deprecated("Compile-time varargs is a temporary feature that will be removed in the future.")]]
+    std::vector<uint32_t> compile_time_varargs;
+
+    ////////////////////////////////////////////////////////////////////////////////
+    // Tensor binding sequences
+    ////////////////////////////////////////////////////////////////////////////////
+
+    // A tensor binding sequence gives a kernel an additional way to retrieve its tensor
+    // bindings: positionally, by index, rather than by name.
+    //
+    // In kernel code, a tensor binding is normally retrieved by name (e.g. `tensor::in0`).
+    // Declaring a TensorBindingSequence with a list of tensor binding names also emits the
+    // following into the generated header's `tensor` namespace, in the order specified:
+    //
+    //    constexpr auto my_binding_sequence = std::make_tuple(in0, in1, /* ... */ inN);
+    //
+    // To make use of this, the kernel then calls:
+    //   /* create a tuple of TensorAccessor from the binding token tuple */
+    //   auto accessor_tuple =  make_tensor_accessors(tensor::my_binding_sequence);
+    //   /* create an array of non-owning, type-erased TensorAccessor handles */
+    //   auto accessor_array = make_abstract_tensor_accessor_wrappers(accessor_tuple);
+    //
+    // Usage: A niche mechanism for a kernel that wishes to express a compile-time-variadic number of
+    //        tensor bindings, and therefore needs to access them positionally. Prefer the default
+    //        named TensorBindingToken access whenever possible.
+    //
+    // Notes:
+    //   - The named tokens are still emitted, so a sequence adds positional access rather than
+    //      replacing named access.
+    //   - A separate count argument is not required, as the sequence is available kernel-side via
+    //      `std::tuple_size_v<decltype(tensor::my_binding_sequence)>`
+    //
+    // Constraints:
+    //   - Every `members` entry is a TensorBinding::accessor_name on this kernel
+    //   - No duplicate members within a sequence (one binding may appear in several sequences)
+    //   - `sequence_name` is a valid C++ identifier, unique in this kernel's `tensor::` namespace
+    //   - An empty members list is legal; this produces an empty std::tuple<>.
+
+    struct TensorBindingSequence {
+        std::string sequence_name;         // device: tensor::<sequence_name>
+        std::vector<std::string> members;  // TensorBinding::accessor_name; order is the device tuple order
+    };
+    Group<TensorBindingSequence> tensor_binding_sequences;
 };
 
 struct DFBAdvancedOptions {
@@ -121,6 +170,39 @@ struct DFBAdvancedOptions {
     //   - All members must target the same node set
     //     (derived from their bound kernels' WorkUnitSpecs).
     Group<DFBSpecName> alias_with;
+
+    ////////////////////////////////////////////////////////////////////////////////
+    // DFB multi-bindings
+    ////////////////////////////////////////////////////////////////////////////////
+
+    // A DFB is a software FIFO. By default, a DFB instance (i.e., a DFB on a
+    // particular node) must have exactly one producer kernel instance and exactly
+    // one consumer kernel instance.
+    //
+    // This invariant holds at the INSTANCE level; a *DFBSpec* (spanning multiple
+    // nodes) can have more than one KernelSpec producer or more consumer bindings,
+    // as long as every node's DFB instance has one producer and one consumer.
+    // (This enables, for example, a grid-spanning compute kernel to be fed data by
+    // different types of producer kernels on different nodes.)
+    //
+    // "Multi-binding" refers to a DFB instance that has more than one producer
+    // and/or more than one consumer kernel instance. Gen1 hardware (Wormhole and
+    // Blackhole) is technically capable of supporting multi-binding: a DFB lowers
+    // to a plain circular buffer there, so the FIFO pointers are shared L1 state
+    // that any number of producer/consumer RISCs can drive.
+    // However, this configuration is unsafe and its use is discouraged.
+    //
+    // CAUTION:
+    // Multi-binding a DFB instance is UNSAFE in most circumstances.
+    // The kernel logic must explicitly ensure access safety and synchronization.
+    // Multi-binding forfeits the protections of the FIFO synchronization mechanics.
+    // There is a high likelihood of race conditions and non-deterministic behavior.
+    //
+    // NOTE:
+    // This feature is included for backwards compatibility with legacy APIs.
+    // It is NOT supported on Gen2 architectures: setting this flag on a Gen2
+    // target is a hard error, whether or not any instance is actually multi-bound.
+    bool allow_instance_multi_binding = false;
 };
 
 struct AdvancedKernelRunArgs {
@@ -151,64 +233,6 @@ struct SemaphoreAdvancedOptions {
     //       When cross-node DFB becomes available, non-zero initial values will be removed.
     [[deprecated("Non-zero semaphore initialization is deprecated and will be removed.")]]
     uint32_t initial_value = 0;
-};
-
-struct TensorParameterAdvancedOptions {
-    ////////////////////////////////////////////////////////////////////////////////
-    // Enqueue-loop invariance
-    ////////////////////////////////////////////////////////////////////////////////
-
-    // Designate this TensorParameter as enqueue-loop invariant.
-    // Permits the same MeshTensor argument to be reused across multiple Program
-    // enqueues via UpdateProgramRunArgs. By default, a TensorParameter is expected to
-    // be re-specified on every enqueue.
-    //
-    // CAUTION:
-    // The user is responsible for managing the MeshTensor argument's lifetime and
-    // ensuring that it remains valid across enqueues. Undefined behavior will result
-    // if the MeshTensor goes out of scope (and its device memory is deallocated),
-    // and you try to re-enqueue the Program with the now-stale MeshTensor argument.
-    bool enqueue_invariant = false;
-
-    ////////////////////////////////////////////////////////////////////////////////
-    // TensorSpec match relaxation options
-    ////////////////////////////////////////////////////////////////////////////////
-
-    // By default, the MeshTensor argument provided at execution time must
-    // EXACTLY match the TensorParameter's declared TensorSpec.
-    // The options here relax this match requirement in particular ways.
-    //
-    // CAUTION:
-    // These options are UNSAFE if set to true; most kernels will not function
-    // correctly if the tensor argument's spec deviates from the declared spec.
-    // Use with caution. You must ensure that your kernel logic outside of the
-    // TensorAccessor itself is compatible with the chosen relaxation option(s)!
-
-    // Permit tensor arguments whose logical_shape differs from the declared shape.
-    // The argument's padded_shape must still match exactly.
-    //
-    // Effects:
-    //  - Validation checks are relaxed
-    //  - TensorAccessor configuration is completely unchanged
-    bool match_padded_shape_only = false;
-
-    // Permit tensor arguments with dynamic logical shape.
-    // The argument's logical_shape AND padded_shape may differ from the declared shape.
-    //
-    // Effects:
-    //  - Validation checks are relaxed.
-    //  - For a sharded tensor:
-    //    The TensorAccessor configuration DYNAMICALLY reflects the tensor argument's actual shape.
-    //    Shape, expressed in pages-per-dim, becomes implicit common runtime arguments.
-    //  - For an interleaved TILED tensor:
-    //    TensorAccessor configuration is unchanged
-    //    (The page size is fixed by dtype/tile dims, so it cannot vary with shape).
-    //  - For an interleaved ROW-MAJOR tensor:
-    //    The TensorAccessor configuration DYNAMICALLY reflects the tensor argument's page size.
-    //    NOTE: page_size = last_dim_width * element_size is part of the varying shape!
-    //    The aligned_page_size becomes an implicit common runtime argument.
-    //    (Your kernel can access this value via TensorAccessor::get_aligned_page_size().)
-    bool dynamic_tensor_shape = false;
 };
 
 }  // namespace tt::tt_metal::experimental

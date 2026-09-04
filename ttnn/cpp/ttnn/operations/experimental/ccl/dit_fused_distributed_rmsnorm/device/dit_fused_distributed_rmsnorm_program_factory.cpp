@@ -215,13 +215,21 @@ bool decide_block_major_post(
     uint32_t bias_cb_tiles,
     bool fuse_rope,
     bool is_layernorm,
+    bool per_head_norm,
+    uint32_t input_tile_bytes,
     uint64_t l1_cap_bytes) {
     const uint32_t padded = ((num_tile_cols + block_size - 1u) / block_size) * block_size;
     // Whole-row CBs that the block-major layout collapses to O(block_size):
     uint64_t whole_row = static_cast<uint64_t>(padded) * intermediate_tile_bytes;  // intermediate_cb
-    // rotated_input_cb is whole-row for RoPE; LayerNorm always uses it as the
-    // (x-mean) xmm buffer, so it's whole-row there too (RMS no-rope leaves it tiny).
-    whole_row += (fuse_rope || is_layernorm) ? static_cast<uint64_t>(padded) * intermediate_tile_bytes : 0ull;
+    // rotated_input_cb sizing. With per_head_norm, create_cb keeps both rotated_input_cb and
+    // input_cb resident whole-row even for RMS no-rope, so count both. Otherwise use the original
+    // gate (unchanged for callers that don't set per_head_norm).
+    if (per_head_norm) {
+        whole_row += static_cast<uint64_t>(padded) * intermediate_tile_bytes;  // rotated_input_cb (whole-row)
+        whole_row += 2ull * num_tile_cols * input_tile_bytes;                  // resident input_cb (2 rows)
+    } else {
+        whole_row += (fuse_rope || is_layernorm) ? static_cast<uint64_t>(padded) * intermediate_tile_bytes : 0ull;
+    }
     whole_row += 2ull * padded * output_tile_bytes;  // output_cb (2 rows)
     // weight_cb / bias_cb tile counts (passed in): every affine mode holds ONE row (num_tile_cols)
     // — broadcast resident, per-token / per-batch streamed per row. block-major does NOT shrink
@@ -342,12 +350,13 @@ DitFusedDistributedRmsnormSizing compute_sizing(
     return s;
 }
 
-TensorSpec make_stats_tensor_spec(const DitFusedDistributedRmsnormSizing& sizing) {
+tt::tt_metal::TensorSpec make_stats_tensor_spec(const DitFusedDistributedRmsnormSizing& sizing) {
     // Row-major fp32 DRAM-interleaved scratch: one accessor page per packed stats page.
     // Kept in one place so the pre-alloc helper, compute_output_specs, and validate agree.
     ttnn::Shape stats_shape({1u, 1u, sizing.total_pages, TILE_HEIGHT * sizing.window_size});
     MemoryConfig stats_mem{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
-    return TensorSpec(stats_shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), stats_mem));
+    return tt::tt_metal::TensorSpec(
+        stats_shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), stats_mem));
 }
 
 DitFusedDistributedRmsnormMeshWorkloadFactory::cached_program_t
@@ -385,7 +394,7 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     // Per-token weight/bias: shape [N, H] (or [B,1,N,H]) instead of broadcast
     // [1, H]. Detected by checking the second-to-last logical dim — broadcast
     // weight has 1 there. When set, the reader reads per-row tiles using
-    // noc_async_read_tile (full 4 KB/tile) and compute uses mul_tiles instead
+    // a full-page noc.async_read (4 KB/tile) and compute uses mul_tiles instead
     // of mul_tiles_bcast_rows.
     const bool per_token_weight = has_weight && (weight->logical_shape()[-2] > 1);
     const bool per_token_bias = has_bias && (bias->logical_shape()[-2] > 1);
@@ -541,7 +550,7 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     // Grid-wide set: the packet CB + sync semaphores are created here so their
     // L1 address is identical on every worker and forwarder core — a worker
     // learns its forwarder's packet base / sem addr from its OWN
-    // get_write_ptr(packet_cb) / get_semaphore(id), no cross-core address args.
+    // CircularBuffer(packet_cb).get_write_ptr() / Semaphore(id), no cross-core address args.
     const CoreRangeSet all_core_set({core_grid});
 
     // Partition helpers: worker w -> forwarder (w / wpf), slot (w % wpf);
@@ -674,6 +683,8 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
         bias_cb_tiles_est,
         fuse_rope,
         is_layernorm,
+        args.per_head_norm,
+        input_tile_size,
         l1_cap_bytes);
     // When the resident POST overflows, the whole-row path MUST stream (block-major
     // re-reads input pass 1), so force streaming even if the input alone would fit
@@ -729,7 +740,7 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     // The resident LayerNorm POST now clamps its sub-phases to the per-block tail count,
     // so non-divisible num_tile_cols is supported there (e.g. SD3.5: dim 2432 -> 38/19
     // tile-cols at TP2/TP4). The block-major LayerNorm POST, however, streams input and
-    // its PRE waits cb_wait_front(input_cb, block_size) per block — the shared reader
+    // its PRE waits input_cb.wait_front(block_size) per block — the shared reader
     // pushes only the tail count on the last block, so a non-divisible width would hang
     // that path. block-major LN needs num_tile_cols wide enough to stream (>=56) and is
     // only reached by divisible shapes today; keep a fail-fast guard for it until it gets
@@ -813,9 +824,9 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     constexpr uint32_t welford_zero_cb_id = tt::CBIndex::c_21;
 
     // Double-buffer input_cb: reader can fill chunk N+1 while compute is in
-    // chunk N's post phase. The cumulative cb_wait_front in compute pairs
+    // chunk N's post phase. The cumulative wait_front in compute pairs
     // naturally with this — compute uses absolute indices within the
-    // current chunk, and cb_pop_front at end of chunk frees that chunk's slots
+    // current chunk, and pop_front at end of chunk frees that chunk's slots
     // back to the reader.
     //
     // Streaming low-L1: input_cb holds only a handful of block_size-tile blocks
@@ -930,7 +941,7 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
         // Size the cos/sin CBs to match the actual cos/sin tensor dtype rather
         // than assuming fp32. LTX feeds bf16 cos/sin (its standalone RoPE op is
         // all-bf16); accepting bf16 here halves the rope-table DRAM reads and L1
-        // footprint. The reader derives tile bytes from get_tile_size(rope_cos_cb)
+        // footprint. The reader derives tile bytes from rope_cos_cb.get_tile_size()
         // and the compute reconfigs the unpacker via reconfig_data_format(), so
         // both follow this format automatically.
         const tt::DataFormat rope_format = datatype_to_dataformat_converter(rope_cos->dtype());
@@ -1001,7 +1012,7 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     create_cb(
         rotated_input_cb_id, program, worker_core_set, intermediate_tile_size, rotated_cb_tiles, intermediate_format);
     // output_cb sized to 2 full padded rows so the writer can deep-drain a
-    // whole row under ONE noc_async_writes_flushed() (instead of flushing every
+    // whole row under ONE noc.async_writes_flushed() (instead of flushing every
     // block_size=2 tiles) while compute produces the next row. The shallow
     // 4-tile CB capped write concurrency at block_size, leaving the output
     // drain at ~22% of POST as back-pressure (P_ADD's 5.9× core-to-core spread
@@ -1032,8 +1043,8 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     // Sync semaphores for the worker<->forwarder handshake. arrival (workers inc,
     // forwarder waits) + go (forwarder incs, workers wait) are on-chip; created on
     // the WHOLE grid so their L1 address is identical across workers + forwarders
-    // (kernels resolve via get_semaphore(id)). out_ready is the caller's
-    // GlobalSemaphore, fabric-inc'd by peer forwarders (resolved later).
+    // (kernels resolve via Semaphore(id)). out_ready is the caller's GlobalSemaphore,
+    // fabric-inc'd by peer forwarders (resolved later).
     const uint32_t arrival_sem_id = use_mux ? tt::tt_metal::CreateSemaphore(program, all_core_set, 0u) : 0u;
     const uint32_t go_sem_id = use_mux ? tt::tt_metal::CreateSemaphore(program, all_core_set, 0u) : 0u;
 
@@ -1240,8 +1251,8 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
         TensorAccessorArgs(stats_dram_buffer).append_to(fwd_ct);
         forwarder_kernel_ids[f] = CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/"
-            "dit_rmsnorm_fused_forwarder.cpp",
+            "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_norm_common/kernels/dataflow/"
+            "dit_fused_norm_forwarder.cpp",
             CoreRangeSet({CoreRange(forwarder_cores[f], forwarder_cores[f])}),
             WriterDataMovementConfig(fwd_ct));
     }
@@ -1278,7 +1289,7 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
         // tiles straight into stats_gathered_cb (sized for num_heads) and consume
         // them locally in POST. With the old (ring_size==1)-only form, per_head
         // ring>1 routed PRE to stats_local_cb (sized 1 tile, no consumer) and
-        // wedged on the 2nd head's cb_reserve_back.
+        // wedged on the 2nd head's reserve_back.
         /*is_tp_1=*/static_cast<uint32_t>(is_tp_1 ? 1u : 0u),
         // Packed AG CBs (all-gather path). For is_tp_1 the compute kernel
         // sidesteps the packed path entirely (pushes col-0 stats straight into

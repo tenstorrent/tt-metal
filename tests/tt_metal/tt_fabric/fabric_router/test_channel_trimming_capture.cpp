@@ -67,7 +67,7 @@ using CaptureResults =
 // ============================================================================
 struct EthCoreCaptureResult {
     ChipId physical_chip_id;
-    CoreCoord logical_eth_core;
+    tt::tt_metal::CoreCoord logical_eth_core;
     chan_id_t channel_id;
     CaptureResults capture;
 };
@@ -76,18 +76,18 @@ struct EthCoreCaptureResult {
 // Helper: Enumerate the ETH cores/channels that participate in the configured
 // fabric topology for a physical chip.
 // ============================================================================
-std::vector<std::pair<CoreCoord, chan_id_t>> get_active_fabric_capture_cores(ChipId physical_chip_id) {
+std::vector<std::pair<tt::tt_metal::CoreCoord, chan_id_t>> get_active_fabric_capture_cores(ChipId physical_chip_id) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& soc_desc = cluster.get_soc_desc(physical_chip_id);
     const auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(physical_chip_id);
     const auto active_channels = control_plane.get_active_fabric_eth_channels(fabric_node_id);
 
-    std::vector<std::pair<CoreCoord, chan_id_t>> capture_cores;
+    std::vector<std::pair<tt::tt_metal::CoreCoord, chan_id_t>> capture_cores;
     capture_cores.reserve(active_channels.size());
     for (const auto& [channel_id, _] : active_channels) {
         auto logical_eth_core = soc_desc.get_eth_core_for_channel(channel_id, CoordSystem::LOGICAL);
-        capture_cores.emplace_back(CoreCoord(logical_eth_core.x, logical_eth_core.y), channel_id);
+        capture_cores.emplace_back(tt::tt_metal::CoreCoord(logical_eth_core.x, logical_eth_core.y), channel_id);
     }
     return capture_cores;
 }
@@ -117,8 +117,7 @@ std::vector<EthCoreCaptureResult> read_capture_from_all_eth_cores(
 
     for (const auto& [logical_core, channel_id] : capture_cores) {
         std::vector<uint32_t> raw_data;
-        tt_metal::detail::ReadFromDeviceL1(
-            device->get_devices()[0], logical_core, capture_addr, capture_size, raw_data, CoreType::ETH);
+        tt_metal::slow_dispatch::ReadFromL1(*device, logical_core, capture_addr, capture_size, raw_data, CoreType::ETH);
 
         CaptureResults capture{};
         std::memcpy(static_cast<void*>(&capture), raw_data.data(), std::min(capture_size, raw_data.size() * sizeof(uint32_t)));
@@ -155,8 +154,7 @@ void clear_capture_on_device(BaseFabricFixture* fixture, ChipId physical_chip_id
     const auto capture_cores = get_active_fabric_capture_cores(physical_chip_id);
     const auto& device = fixture->get_device(physical_chip_id);
     for (const auto& [logical_core, _] : capture_cores) {
-        tt_metal::detail::WriteToDeviceL1(
-            device->get_devices()[0], logical_core, capture_addr, raw, CoreType::ETH);
+        tt_metal::slow_dispatch::WriteToL1(*device, logical_core, capture_addr, raw, CoreType::ETH);
     }
 }
 
@@ -231,8 +229,8 @@ UnicastTrafficResult run_unicast_traffic_bw_nodes(
     FabricNodeId dst_fabric_node_id,
     uint32_t num_hops,
     uint32_t num_packets = 10) {
-    CoreCoord sender_logical_core = {0, 0};
-    CoreCoord receiver_logical_core = {1, 0};
+    tt::tt_metal::CoreCoord sender_logical_core = {0, 0};
+    tt::tt_metal::CoreCoord receiver_logical_core = {1, 0};
 
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
@@ -270,7 +268,7 @@ UnicastTrafficResult run_unicast_traffic_bw_nodes(
 
     auto sender_device = fixture->get_device(src_physical);
     auto receiver_device = fixture->get_device(dst_physical);
-    CoreCoord receiver_virtual_core = receiver_device->worker_core_from_logical_core(receiver_logical_core);
+    tt::tt_metal::CoreCoord receiver_virtual_core = receiver_device->worker_core_from_logical_core(receiver_logical_core);
 
     const auto topology = control_plane.get_fabric_context().get_fabric_topology();
     uint32_t is_2d_fabric = topology == Topology::Mesh;
@@ -346,25 +344,24 @@ UnicastTrafficResult run_unicast_traffic_bw_nodes(
     tt_metal::SetRuntimeArgs(receiver_program, receiver_kernel, receiver_logical_core, receiver_runtime_args);
 
     // Launch and wait
-    fixture->RunProgramNonblocking(receiver_device, receiver_program);
-    fixture->RunProgramNonblocking(sender_device, sender_program);
-    fixture->WaitForSingleProgramDone(sender_device, sender_program);
-    fixture->WaitForSingleProgramDone(receiver_device, receiver_program);
+    fixture->RunProgramNonblocking(receiver_device, std::move(receiver_program));
+    tt_metal::LaunchProgram(*sender_device, std::move(sender_program), /*wait_until_cores_done=*/true);
+    fixture->WaitForSingleProgramDone(receiver_device);
 
     // Validate sender/receiver status
     std::vector<uint32_t> sender_status;
     std::vector<uint32_t> receiver_status;
 
-    tt_metal::detail::ReadFromDeviceL1(
-        sender_device->get_devices()[0],
+    tt_metal::slow_dispatch::ReadFromL1(
+        *sender_device,
         sender_logical_core,
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
         sender_status,
         CoreType::WORKER);
 
-    tt_metal::detail::ReadFromDeviceL1(
-        receiver_device->get_devices()[0],
+    tt_metal::slow_dispatch::ReadFromL1(
+        *receiver_device,
         receiver_logical_core,
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
@@ -1571,6 +1568,105 @@ TEST_F(Fabric1DChannelTrimmingCaptureAndOverrideFixture, UnicastTrafficWithCaptu
 // These tests don't require a device — they exercise YAML parsing and the
 // bitfield merge logic using synthetic data.
 // ============================================================================
+
+TEST(ChannelTrimmingFastPath, DerivesPacketSizeOnlyFromUsedVC0Senders) {
+    ChannelTrimmingOverrides entry{};
+    entry.sender_channel_used_bitfield_by_vc = 0x1;
+    entry.sender_channel_max_packet_size_seen_bytes_by_vc[0] = 13920;
+    entry.sender_channel_max_packet_size_seen_bytes_by_vc[1] = 15000;
+
+    auto info = try_derive_vc0_trim_fast_path_info(entry, 4, ChannelTrimmingGlobalOverrides{});
+
+    ASSERT_TRUE(info.has_value());
+    EXPECT_TRUE(info->worker_only_nonforwarding);
+    ASSERT_TRUE(info->local_sender_max_packet_size_bytes.has_value());
+    EXPECT_EQ(*info->local_sender_max_packet_size_bytes, 13920);
+    EXPECT_FALSE(info->peer_sender_max_packet_size_bytes.has_value());
+}
+
+TEST(ChannelTrimmingFastPath, BoundsPacketSizeScanToCaptureStorage) {
+    ChannelTrimmingOverrides entry{};
+    entry.sender_channel_used_bitfield_by_vc = std::numeric_limits<uint16_t>::max();
+    entry.sender_channel_max_packet_size_seen_bytes_by_vc.back() = 13920;
+
+    auto info = try_derive_vc0_trim_fast_path_info(
+        entry, std::numeric_limits<std::size_t>::max(), ChannelTrimmingGlobalOverrides{});
+
+    ASSERT_TRUE(info.has_value());
+    ASSERT_TRUE(info->local_sender_max_packet_size_bytes.has_value());
+    EXPECT_EQ(*info->local_sender_max_packet_size_bytes, 13920);
+}
+
+TEST(ChannelTrimmingFastPath, LeavesPacketSizeUnknownWhenVC0HasNoSenderTraffic) {
+    ChannelTrimmingOverrides entry{};
+    entry.receiver_channel_data_forwarded_bitfield_by_vc = 0x1;
+
+    auto info = try_derive_vc0_trim_fast_path_info(entry, 4, ChannelTrimmingGlobalOverrides{});
+
+    ASSERT_TRUE(info.has_value());
+    EXPECT_TRUE(info->terminal_only_nonforwarding);
+    EXPECT_FALSE(info->local_sender_max_packet_size_bytes.has_value());
+}
+
+TEST(ChannelTrimmingFastPath, PacketSizeDoesNotBypassVC0GlobalOverride) {
+    ChannelTrimmingOverrides entry{};
+    entry.sender_channel_used_bitfield_by_vc = 0x1;
+    entry.sender_channel_max_packet_size_seen_bytes_by_vc[0] = 13920;
+    ChannelTrimmingGlobalOverrides global_overrides{};
+    global_overrides.per_vc[0].force_enable_all_sender_channels = true;
+
+    EXPECT_FALSE(try_derive_vc0_trim_fast_path_info(entry, 4, global_overrides).has_value());
+}
+
+TEST(ChannelTrimmingFastPath, CreditAmortizationPreservesReferenceByteBudget) {
+    constexpr uint32_t reference_packet_size_bytes = 4448;
+
+    EXPECT_EQ(limit_credit_amortization_frequency_by_packet_size(4, reference_packet_size_bytes, std::nullopt), 1);
+    EXPECT_EQ(limit_credit_amortization_frequency_by_packet_size(4, reference_packet_size_bytes, 4448), 4);
+    EXPECT_EQ(limit_credit_amortization_frequency_by_packet_size(4, reference_packet_size_bytes, 5000), 3);
+    EXPECT_EQ(limit_credit_amortization_frequency_by_packet_size(4, reference_packet_size_bytes, 13920), 1);
+    EXPECT_EQ(limit_credit_amortization_frequency_by_packet_size(2, reference_packet_size_bytes, 7616), 1);
+    EXPECT_EQ(limit_credit_amortization_frequency_by_packet_size(0, reference_packet_size_bytes, std::nullopt), 0);
+    EXPECT_EQ(limit_credit_amortization_frequency_by_packet_size(4, 0, std::nullopt), 4);
+    EXPECT_EQ(limit_credit_amortization_frequency_by_packet_size(4, reference_packet_size_bytes, 0), 1);
+}
+
+TEST(ChannelTrimmingFastPath, PropagatesPeerPacketSizeIndependentlyOfTerminalSpeedyRx) {
+    Vc0TrimFastPathInfo local_info{};
+    Vc0TrimFastPathInfo peer_info{};
+    peer_info.local_sender_max_packet_size_bytes = 13920;
+
+    apply_vc0_trim_fast_path_peer_info(local_info, peer_info, false);
+
+    EXPECT_EQ(local_info.peer_sender_max_packet_size_bytes, 13920);
+    EXPECT_FALSE(local_info.enable_terminal_speedy_rx);
+}
+
+TEST(ChannelTrimmingFastPath, EnablesTerminalSpeedyRxOnlyForMatching2DPeer) {
+    Vc0TrimFastPathInfo local_info{};
+    local_info.terminal_only_nonforwarding = true;
+    Vc0TrimFastPathInfo peer_info{};
+    peer_info.worker_only_nonforwarding = true;
+
+    apply_vc0_trim_fast_path_peer_info(local_info, peer_info, false);
+    EXPECT_FALSE(local_info.enable_terminal_speedy_rx);
+
+    apply_vc0_trim_fast_path_peer_info(local_info, peer_info, true);
+    EXPECT_TRUE(local_info.enable_terminal_speedy_rx);
+}
+
+TEST(ChannelTrimmingFastPath, UsesSharedSpeedyEligibilityPredicate) {
+    Vc0TrimFastPathInfo info{};
+    EXPECT_TRUE(vc0_speedy_path_enabled(1, false, info));
+    EXPECT_FALSE(vc0_speedy_path_enabled(1, true, info));
+
+    info.worker_only_nonforwarding = true;
+    EXPECT_TRUE(vc0_speedy_path_enabled(4, true, info));
+
+    info.worker_only_nonforwarding = false;
+    info.enable_terminal_speedy_rx = true;
+    EXPECT_TRUE(vc0_speedy_path_enabled(4, true, info));
+}
 
 // Test: Parse a global override YAML with force_enable_all for VC1
 TEST(ChannelTrimmingGlobalOverride, ParseForceEnableAllVC1) {

@@ -40,6 +40,6 @@ struct tensor_args_t {
 };
 
 using tensor_return_value_t = Tensor;
-using spec_return_value_t = TensorSpec;
+using spec_return_value_t = tt::tt_metal::TensorSpec;
 
 }  // namespace ttnn::operations::experimental::topk_large_indices

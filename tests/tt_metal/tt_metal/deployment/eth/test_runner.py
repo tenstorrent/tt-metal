@@ -44,7 +44,6 @@ testcheck = re.compile(f"({timeregex}).*Test \| core_check: {locinfo} .*")
 
 print_logs = True
 missing_links: dict[str, dict] = {}
-exit_status = 0
 
 
 class TestCase(str, Enum):
@@ -797,6 +796,7 @@ async def main():
     logf = open(logpath, "w") if logpath else None
 
     tests = [TestCase.LINK_UP, TestCase.BANDWIDTH_BIDIR]
+    exit_status = 0
 
     if opts.l:
         print("Available tests:")
@@ -841,12 +841,13 @@ async def main():
 
         proc = await asyncio.create_subprocess_exec(program, *args, stdout=asyncio.subprocess.PIPE, env=env)
 
-        p, evs = await asyncio.gather(proc.wait(), parse_logs(proc.stdout, logf))
+        exit_status, evs = await asyncio.gather(proc.wait(), parse_logs(proc.stdout, logf))
 
     # pprint.pp(evs)
     runs = list(parse_evs(evs))
     # pprint.pp(runs)
     # print(runs_to_json(runs, sort_keys=True, indent=4))
+
     if not opts.n:
         print_results(runs)
     if logf:

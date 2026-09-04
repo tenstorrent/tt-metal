@@ -64,6 +64,7 @@ enum watcher_features_t {
     SanitizeNOCWriteWithStateBadCoord,
     SanitizeNOCInlineWriteFromState,
     SanitizeNOCInlineWriteWithState,
+    SanitizeNOCInvalidTxnId,
 };
 
 tt::tt_metal::HalMemType get_buffer_mem_type_for_test(watcher_features_t feature) {
@@ -122,10 +123,20 @@ void RunTestOnCore(
     if (multi_dm_race && !is_quasar) {
         GTEST_SKIP() << "Multi-DM race test only runs on Quasar";
     }
+    // The Quasar NOC shifts the data so transfers don't need to be aligned; a misaligned transfer is
+    // legal there and there is nothing to flag. These tests stay valid on WH/BH where alignment is
+    // enforced.
+    if ((feature == SanitizeNOCAlignmentL1Write || feature == SanitizeNOCAlignmentL1Read) && is_quasar) {
+        GTEST_SKIP() << "Quasar NOC has no L1 alignment restriction; misaligned transfers are legal";
+    }
     // Both exercise Quasar's uncached L1 alias, which only exists on Quasar DM cores.
     if ((feature == SanitizeNOCMailboxWriteUncachedAlias || feature == SanitizeL1OverflowStraddle) &&
         (!is_quasar || is_eth_core)) {
         GTEST_SKIP() << "Uncached-alias tests only apply to Quasar DM cores";
+    }
+    // Invalid txn-id sanitization is exercised via the Metal 2.0 Noc API on TENSIX only.
+    if (feature == SanitizeNOCInvalidTxnId && is_eth_core) {
+        GTEST_SKIP() << "Invalid txn-id sanitize test is TENSIX-only";
     }
 
     // TENSIX cores use the Metal 2.0 variant; ETH cores stay on the legacy kernel/API.
@@ -238,6 +249,11 @@ void RunTestOnCore(
         }
         // (gen1 path: no CTA bindings needed; the kernel runs on exactly one DM processor.)
 
+        // Under SD the kernel signals completion via RUN_MSG_DONE, not the FD notify path (which wedges the NOC).
+        if (fixture->IsSlowDispatch()) {
+            defines["WATCHER_KERNEL_SLOW_DISPATCH"] = "1";
+        }
+
         // Select the DM config variant matching the current architecture (Gen2 on Quasar, Gen1 otherwise).
         auto gen1_processor =
             use_ncrisc ? tt::tt_metal::DataMovementProcessor::RISCV_1 : tt::tt_metal::DataMovementProcessor::RISCV_0;
@@ -278,7 +294,8 @@ void RunTestOnCore(
                       "mcast_dst_end_y",
                       "use_write_with_state",
                       "use_inline_dw_write_from_state",
-                      "use_inline_dw_write_with_state"}},
+                      "use_inline_dw_write_with_state",
+                      "invalid_txn_id"}},
             .hw_config = dm_cfg,
         };
         experimental::WorkUnitSpec wu{
@@ -317,14 +334,19 @@ void RunTestOnCore(
     bool use_write_with_state = false;
     bool use_inline_dw_write_from_state = false;
     bool use_inline_dw_write_with_state = false;
+    // WH/BH expose trids [0,15]. Quasar reserves [8,31] for DFB implicit sync,
+    // leaving user kernels [0,7].
+    const uint32_t k_max_user_txn_id = is_quasar ? 7 : 15;
+    const uint32_t k_invalid_txn_id = k_max_user_txn_id + 1;
+    uint32_t invalid_txn_id = 0;
     switch (feature) {
         case SanitizeNOCAddress:
             output_buf_noc_xy.x = 26;
             output_buf_noc_xy.y = 18;
             break;
         case SanitizeNOCAlignmentL1Write:
-            output_buffer_addr++;  // This is illegal because reading DRAM->L1 needs DRAM alignment
-                                   // requirements (32 byte aligned).
+            output_buffer_addr++;  // Misaligned L1 write: on WH/BH the NoC requires
+                                   // NOC_L1_WRITE_ALIGNMENT_BYTES alignment.
             buffer_size--;
             break;
         case SanitizeNOCAlignmentL1Read:
@@ -412,6 +434,7 @@ void RunTestOnCore(
             output_buf_noc_xy.y = 18;
             use_inline_dw_write_with_state = true;
             break;
+        case SanitizeNOCInvalidTxnId: invalid_txn_id = k_invalid_txn_id; break;
         default:
             log_warning(LogTest, "Unrecognized feature to test ({}), skipping...", feature);
             GTEST_SKIP();
@@ -437,7 +460,8 @@ void RunTestOnCore(
         mcast_dst_end_y,
         use_write_with_state,
         use_inline_dw_write_from_state,
-        use_inline_dw_write_with_state};
+        use_inline_dw_write_with_state,
+        invalid_txn_id};
 
     if (is_eth_core) {
         // ETH cores still go through the legacy API.
@@ -467,7 +491,8 @@ void RunTestOnCore(
                  {"mcast_dst_end_y", mcast_dst_end_y},
                  {"use_write_with_state", use_write_with_state},
                  {"use_inline_dw_write_from_state", use_inline_dw_write_from_state},
-                 {"use_inline_dw_write_with_state", use_inline_dw_write_with_state}}),
+                 {"use_inline_dw_write_with_state", use_inline_dw_write_with_state},
+                 {"invalid_txn_id", invalid_txn_id}}),
         }};
         experimental::SetProgramRunArgs(program, params);
     }
@@ -715,6 +740,20 @@ void RunTestOnCore(
                 mcast_end_coord.str(),
                 output_buffer_addr);
         } break;
+        case SanitizeNOCInvalidTxnId: {
+            expected = fmt::format(
+                "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} used invalid NoC transaction id {} "
+                "(exceeds max {}).",
+                device->id(),
+                core_name,
+                core.x,
+                core.y,
+                virtual_core.x,
+                virtual_core.y,
+                risc_name,
+                k_invalid_txn_id,
+                k_max_user_txn_id);
+        } break;
         default:
             log_warning(LogTest, "Unrecognized feature to test ({}), skipping...", feature);
             GTEST_SKIP();
@@ -786,14 +825,13 @@ void RunTestIEth(
 
 // Run tests for host-side sanitization (uses functions that are from watcher_server.hpp).
 void CheckHostSanitization(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-    auto* device = mesh_device->get_devices()[0];
     // Try reading from a core that doesn't exist
     constexpr CoreCoord core = {99, 99};
     uint64_t addr = 0;
     uint32_t sz_bytes = 4;
     try {
-        [[maybe_unused]] auto data =
-            tt::tt_metal::MetalContext::instance().get_cluster().read_core(device->id(), core, addr, sz_bytes);
+        [[maybe_unused]] auto data = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+            mesh_device->get_device_ids()[0], core, addr, sz_bytes);
     } catch (std::runtime_error& e) {
         const std::string expected = fmt::format("Host watcher: bad {} NOC coord {}\n", "read", core.str());
         const std::string error = std::string(e.what());
@@ -841,6 +879,23 @@ TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeNOCAlignmentL1ReadNCrisc) {
         this->devices_[0]);
 }
 
+// Quasar relaxes NoC transfer alignment to 1B (misaligned transfers are legal, so the watcher can't
+// flag them) while allocation alignment stays at the physical floor. Guards against regressing either.
+TEST_F(MeshWatcherFixture, TensixTestWatcherQuasarAlignmentContract) {
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    if (hal.get_arch() != tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Relaxed NoC alignment is Quasar-only";
+    }
+    // NoC transfer alignment relaxed to 1B.
+    EXPECT_EQ(hal.get_read_alignment(HalMemType::L1), 1u);
+    EXPECT_EQ(hal.get_write_alignment(HalMemType::L1), 1u);
+    EXPECT_EQ(hal.get_read_alignment(HalMemType::DRAM), 1u);
+    EXPECT_EQ(hal.get_write_alignment(HalMemType::DRAM), 1u);
+    // Allocation alignment stays at the physical floor.
+    EXPECT_EQ(hal.get_alignment(HalMemType::L1), 16u);
+    EXPECT_EQ(hal.get_alignment(HalMemType::DRAM), 64u);
+}
+
 TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeNOCZeroL1Write) {
     this->RunTestOnDevice(
         [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
@@ -873,6 +928,15 @@ TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeNOCInlineWriteDram) {
         [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
             CoreCoord core{0, 0};
             RunTestOnCore(fixture, mesh_device, core, false, SanitizeNOCInlineWriteDram);
+        },
+        this->devices_[0]);
+}
+
+TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeNOCInvalidTxnId) {
+    this->RunTestOnDevice(
+        [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+            CoreCoord core{0, 0};
+            RunTestOnCore(fixture, mesh_device, core, false, SanitizeNOCInvalidTxnId);
         },
         this->devices_[0]);
 }

@@ -60,8 +60,7 @@ void kernel_main() {
     cb_input.reserve_back(Wt);
     cb_input.push_back(Wt);
 
-    const uint32_t cache_tile_bytes = get_tile_size(cache_cb_id);
-    const DataFormat cache_data_format = get_dataformat(cache_cb_id);
+    const uint32_t cache_tile_bytes = cb_cache.get_tile_size();
 
     constexpr uint32_t TILE_HEIGHT = 32;
 

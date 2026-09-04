@@ -33,7 +33,7 @@ void AddIntegersHangOperation::validate_on_program_cache_miss(
 AddIntegersHangOperation::spec_return_value_t AddIntegersHangOperation::compute_output_specs(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
     const auto& a = tensor_args.input_tensor_a;
-    return ttnn::TensorSpec(
+    return tt::tt_metal::TensorSpec(
         a.logical_shape(),
         tt::tt_metal::TensorLayout(a.dtype(), tt::tt_metal::PageConfig(a.layout()), ttnn::MemoryConfig{}));
 }
@@ -41,7 +41,7 @@ AddIntegersHangOperation::spec_return_value_t AddIntegersHangOperation::compute_
 AddIntegersHangOperation::tensor_return_value_t AddIntegersHangOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto output_spec = compute_output_specs(operation_attributes, tensor_args);
-    return create_device_tensor(output_spec, tensor_args.input_tensor_a.device());
+    return ttnn::create_device_tensor(output_spec, tensor_args.input_tensor_a.device());
 }
 
 ttnn::Tensor add_integers_hang(const ttnn::Tensor& input_tensor_a, const ttnn::Tensor& input_tensor_b) {

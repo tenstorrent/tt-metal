@@ -7,35 +7,34 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
     // Compile-time constants
-    constexpr uint32_t N = get_named_compile_time_arg_val("N");
-    constexpr uint32_t output_cb_page_size = get_named_compile_time_arg_val("output_page_size");
-    constexpr uint32_t num_rows = get_named_compile_time_arg_val("num_rows");
+    constexpr uint32_t N = get_arg(args::N);
+    constexpr uint32_t output_cb_page_size = get_arg(args::output_page_size);
+    constexpr uint32_t num_rows = get_arg(args::num_rows);
 
-    constexpr uint32_t X = get_named_compile_time_arg_val("X");
-    constexpr uint32_t X_stride = get_named_compile_time_arg_val("X_stride");
-    constexpr uint32_t x_dim = get_named_compile_time_arg_val("x_dim");
+    constexpr uint32_t X = get_arg(args::X);
+    constexpr uint32_t X_stride = get_arg(args::X_stride);
+    constexpr uint32_t x_dim = get_arg(args::x_dim);
 
-    constexpr uint32_t W_stride = get_named_compile_time_arg_val("W_stride");
-    constexpr uint32_t input_cb_page_size = get_named_compile_time_arg_val("input_page_size");
-    constexpr uint32_t element_size = get_named_compile_time_arg_val("element_size");
+    constexpr uint32_t W_stride = get_arg(args::W_stride);
+    constexpr uint32_t input_cb_page_size = get_arg(args::input_page_size);
+    constexpr uint32_t element_size = get_arg(args::element_size);
 
-    constexpr uint32_t num_blocks_total = get_named_compile_time_arg_val("num_blocks_total");
-    constexpr uint32_t x_blocks = get_named_compile_time_arg_val("x_blocks");
-    constexpr uint32_t w_blocks = get_named_compile_time_arg_val("w_blocks");
-    constexpr uint32_t x_block_size = get_named_compile_time_arg_val("x_block_size");
-    constexpr uint32_t w_block_size = get_named_compile_time_arg_val("w_block_size");
-    constexpr uint32_t W = get_named_compile_time_arg_val("W");
-    constexpr auto dst_args = TensorAccessorArgs<0>();
+    constexpr uint32_t num_blocks_total = get_arg(args::num_blocks_total);
+    constexpr uint32_t x_blocks = get_arg(args::x_blocks);
+    constexpr uint32_t w_blocks = get_arg(args::w_blocks);
+    constexpr uint32_t x_block_size = get_arg(args::x_block_size);
+    constexpr uint32_t w_block_size = get_arg(args::w_block_size);
+    constexpr uint32_t W = get_arg(args::W);
 
-    constexpr uint32_t cb_id_in = tt::CBIndex::c_2;
     Noc noc;
-    CircularBuffer cb_in(cb_id_in);
+    DataflowBuffer dfb_in(dfb::cb_out);
 
     // Precompute bytes-per-block along X
     constexpr uint32_t x_block_size_bytes = x_block_size * element_size;
@@ -46,21 +45,20 @@ void kernel_main() {
     // Calculate how many "non_x_rows" we have (these are the combinations of all dimensions except X)
     constexpr uint32_t non_x_rows = num_rows / X;
 
-    // Destination base address
-    const uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    const uint32_t start_block = get_arg_val<uint32_t>(1);
-    const uint32_t end_block = get_arg_val<uint32_t>(2);
+    const uint32_t start_block = get_arg(args::start_block);
+    const uint32_t end_block = get_arg(args::end_block);
 
     // Interleaved address configuration for the destination
-    const auto s0 = TensorAccessor(dst_args, dst_addr);
+    const auto s0 = TensorAccessor(tensor::output);
 
-    // Input shape, permutation, and destination strides
-    // start at runtime arg 3 since address/start_block/end_block make up the first 3 args
+    // Input shape, permutation, and destination strides.
+    // Rank-length arrays (count = N, a CTA) delivered as runtime varargs:
+    // input_shape in varargs [0, N), perm in [N, 2N), dest_strides in [2N, 3N).
     uint32_t input_shape[N], perm[N], dest_strides[N];
-    for (uint32_t i = 3; i < N + 3; i++) {
-        input_shape[i - 3] = get_arg_val<uint32_t>(i);
-        perm[i - 3] = get_arg_val<uint32_t>(i + N);
-        dest_strides[i - 3] = get_arg_val<uint32_t>(i + 2 * N);
+    for (uint32_t i = 0; i < N; i++) {
+        input_shape[i] = get_vararg(i);
+        perm[i] = get_vararg(i + N);
+        dest_strides[i] = get_vararg(i + 2 * N);
     }
 
     // The source data was transposed between W and X by the previous kernel.
@@ -139,8 +137,8 @@ void kernel_main() {
         }
 
         // Wait for the transposed block data to be ready in the input CB
-        cb_in.wait_front(w_block_size);
-        uint32_t transposed_buffer_read_addr = cb_in.get_read_ptr();
+        dfb_in.wait_front(w_block_size);
+        uint32_t transposed_buffer_read_addr = dfb_in.get_read_ptr();
 
         // Iterate over the W dimension elements
         for (uint32_t w = w_start; w < w_end; ++w) {
@@ -163,6 +161,6 @@ void kernel_main() {
         noc.async_write_barrier();
 
         // Pop the block from the input circular buffer, as we're done writing it
-        cb_in.pop_front(w_block_size);
+        dfb_in.pop_front(w_block_size);
     }
 }

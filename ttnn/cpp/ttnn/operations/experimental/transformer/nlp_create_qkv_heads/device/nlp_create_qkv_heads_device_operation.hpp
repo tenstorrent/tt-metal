@@ -11,10 +11,10 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"  // exposes ttnn::MemoryConfig alias used in member/signature declarations
-#include "ttnn/distributed/types.hpp"  // exposes ttnn::MeshCoordinate used in get_dynamic_runtime_args()
+#include "ttnn/distributed/types.hpp"  // exposes ttnn::MeshCoordinate used in override_runtime_arguments()
 
+#include <tt-metalium/program.hpp>
 #include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/experimental/program_descriptor_patching.hpp>
 
 namespace ttnn::operations::experimental::transformer {
 
@@ -24,6 +24,7 @@ struct NlpCreateHeadsDeviceOperation {
         uint32_t num_kv_heads;
         uint32_t head_dim;
         bool transpose_k_heads;
+        bool kv_tied;
         MemoryConfig output_mem_config;
     };
 
@@ -33,7 +34,8 @@ struct NlpCreateHeadsDeviceOperation {
         std::vector<std::optional<Tensor>> optional_output_tensors;
     };
 
-    using spec_return_value_t = std::tuple<ttnn::TensorSpec, ttnn::TensorSpec, ttnn::TensorSpec>;
+    using spec_return_value_t =
+        std::tuple<tt::tt_metal::TensorSpec, tt::tt_metal::TensorSpec, tt::tt_metal::TensorSpec>;
     using tensor_return_value_t = std::tuple<Tensor, Tensor, Tensor>;
 
     struct Interleaved {
@@ -41,6 +43,13 @@ struct NlpCreateHeadsDeviceOperation {
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
+
+        static void override_runtime_arguments(
+            tt::tt_metal::Program& program,
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value,
+            const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
     };
 
     struct Sharded {
@@ -48,6 +57,13 @@ struct NlpCreateHeadsDeviceOperation {
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
+
+        static void override_runtime_arguments(
+            tt::tt_metal::Program& program,
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value,
+            const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
     };
 
     using program_factory_t = std::variant<Interleaved, Sharded>;
@@ -68,18 +84,6 @@ struct NlpCreateHeadsDeviceOperation {
 
     // Create the output tensors based on the operation attributes and tensor args
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-
-    // Re-apply the Sharded factory's computed input-buffer addresses on every cache hit.
-    // The Sharded reader/writer bake raw base addresses AND per-core `base + head_offset` start
-    // addresses as uint32 runtime args; a plain Buffer* binding can only express the bare base, so
-    // these address-derived slots are refreshed here instead (the output CBs are patched via their
-    // `.buffer` bindings).  Defined in nlp_create_qkv_heads_program_factory.cpp so it can reuse the
-    // shared per-core arg builder that create_descriptor() uses. Interleaved returns no dynamic args.
-    static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
-        const operation_attributes_t&,
-        const tensor_args_t&,
-        tensor_return_value_t&,
-        const std::optional<ttnn::MeshCoordinate>& = std::nullopt);
 };
 
 }  // namespace ttnn::operations::experimental::transformer
@@ -92,6 +96,7 @@ std::tuple<Tensor, Tensor, Tensor> nlp_create_qkv_heads(
     std::optional<uint32_t> num_kv_heads,
     uint32_t head_dim,
     bool transpose_k_heads,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<std::vector<std::optional<Tensor>>>& optional_output_tensors);
+    bool kv_tied = false,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<std::vector<std::optional<Tensor>>>& optional_output_tensors = std::nullopt);
 }  // namespace ttnn::prim

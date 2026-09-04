@@ -1,0 +1,128 @@
+name: "[internal] Model unit tests multihost (exabox) impl"
+
+# Multihost (exabox) model-unit tests. Modeled on the multihost job in
+# models-e2e-tests-multihost-impl.yaml: each leg runs on an
+# exabox-multihost-ci-* runner with container.image for worker provisioning (runner hook),
+# fans the build/wheel out with `mpirun --pernode`, resets + validates the cluster, then
+# runs the test. Legs are selected by SKU: an entry lands here when prepare_test_matrix.py
+# marks it "multihost": true (SKU runs_on contains an exabox-multihost* label).
+#
+# Split out of models-unit-tests-impl.yaml so the exabox lifecycle lives in one file.
+# The matrix is computed by load-test-matrix in models-unit-tests-impl.yaml
+# (matrix_multihost output) and passed in.
+
+on:
+  workflow_call:
+    inputs:
+      docker-image:
+        required: true
+        type: string
+      build-artifact-name:
+        required: true
+        type: string
+      wheel-artifact-name:
+        required: true
+        type: string
+      matrix:
+        required: true
+        type: string
+        description: "JSON array of exabox multihost legs (models-unit-tests-impl.yaml matrix_multihost output)."
+
+# Callers must grant id-token: write on the job that `uses` this workflow (job-level permissions
+# replace inherited defaults) and pass `secrets: inherit`.
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  models-unit-tests-multihost:
+    if: ${{ inputs.matrix != '[]' }}
+    name: ${{ matrix.test-group.name }}
+    container:
+      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+    env:
+      PATH: "/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+      VIRTUAL_ENV: /opt/venv
+      HOME: /home/user
+      PIP_CACHE_DIR: /home/user/.cache/pip
+      LD_LIBRARY_PATH: /home/user/tt-metal/build/lib
+      TT_METAL_HOME: /home/user/tt-metal
+      TT_METAL_RUNTIME_ROOT: /home/user/tt-metal
+      TT_METAL_CACHE: /home/user/.cache
+      PYTHONPATH: /home/user/tt-metal
+      # Shared NFS scratch for automapper launches (empty ttrun-cwd + ranklogs).
+      PIPELINE_DIR: /ci/models-unit-${{ github.run_id }}-${{ strategy.job-index }}
+      TTRUN_CWD: /ci/models-unit-${{ github.run_id }}-${{ strategy.job-index }}/ttrun-cwd
+      TTRUN_PY: /home/user/tt-metal/ttnn/ttnn/distributed/ttrun.py
+      # Forwarded to the mpirun ranks (PRTE_MCA_prte_fwd_environment) so gated HF models can be
+      # downloaded. Requires the token's HF account to have accepted the model's license.
+      HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJson(inputs.matrix) }}
+    runs-on: ${{ matrix.test-group.runs_on }}
+    outputs:
+      test-result: ${{ steps.run-test.outcome }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+
+      - name: Setup multihost job
+        uses: ./.github/actions/setup-multihost-job
+        timeout-minutes: 90
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          extra-pip-packages: pytest==9.0.3 pytest-timeout==2.4.0
+
+      - name: ${{ matrix.test-group.name }}
+        id: run-test
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        # Automapper cmds cd to $PIPELINE_DIR/ttrun-cwd (empty NFS dir) themselves.
+        # Keep runtime compilation and tt-run working directory on a single source root.
+        working-directory: /home/user/tt-metal
+        run: |
+          # Store command safely using heredoc
+          CMD=$(cat << 'EOF'
+          ${{ matrix.test-group.cmd }}
+          EOF
+          )
+
+          echo "Running: ${{ matrix.test-group.name }}"
+          echo "$CMD"
+          eval "$CMD"
+
+      - name: Prepare artifacts for upload
+        if: always()
+        run: |
+          # upload-artifact rejects ':' in paths (NTFS-safe). Automapper cwd can contain
+          # ISO-timestamped dumps under ttrun-cwd.
+          if [ -d "$PIPELINE_DIR" ]; then
+            find "$PIPELINE_DIR" -depth -name '*:*' -print0 2>/dev/null | while IFS= read -r -d '' path; do
+              dir=$(dirname "$path")
+              base=$(basename "$path")
+              mv -f "$path" "$dir/$(printf '%s' "$base" | tr ':' '_')"
+            done
+          fi
+
+      - name: Upload launch + per-rank logs and automapper outputs
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: models-unit-multihost-${{ strategy.job-index }}-${{ github.run_id }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: ${{ env.PIPELINE_DIR }}/
+
+      - name: Clean up shared staging dir
+        if: always()
+        run: |
+          rm -rf "$PIPELINE_DIR"
+
+      - uses: ./.github/actions/slack-report
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+          owner: ${{ matrix.test-group.owner_id }}

@@ -9,12 +9,69 @@ from typing import Any, Optional, Union
 
 import torch
 from loguru import logger
+from safetensors import safe_open
 
 import ttnn
 from models.demos.deepseek_v3.utils.hf_model_utils import dequantize_state_dict as _fp8_dequantize_state_dict
 
 # Wormhole B0 worker-L1 override for ring MLA tests. On Blackhole we use the platform default.
 WH_WORKER_L1_SIZE = 1344544
+
+
+def read_sharded_rows(tensor_dir: Path, key: str, start: int, end: int) -> torch.Tensor:
+    """Read rows [start:end] of `key` from a chunked_group_a_v1 shard directory, concatenating the
+    rows_<s>_<e>.safetensors shards that overlap the range (partial read, natural order)."""
+    parts = []
+    for shard in sorted(tensor_dir.glob("rows_*.safetensors")):
+        s, e = (int(x) for x in shard.stem.split("_")[1:3])
+        if e <= start or s >= end:
+            continue
+        with safe_open(shard, framework="pt") as f:
+            parts.append(f.get_slice(key)[max(start, s) - s : min(end, e) - s].to(torch.float32))
+    assert parts, f"no shards overlap rows [{start}:{end}] in {tensor_dir}"
+    return torch.cat(parts, dim=0)
+
+
+def interleave_pe(pe: torch.Tensor) -> torch.Tensor:
+    """HF half-split k_pe basis -> device Meta-interleaved basis. pe: [N, d]."""
+    d = pe.shape[-1]
+    return torch.stack([pe[:, : d // 2], pe[:, d // 2 :]], dim=-1).reshape(-1, d)
+
+
+def gather_cache_tp0(tt_cache, mesh_device) -> torch.Tensor:
+    """Gather a caller-owned KV/indexer cache (SP-sharded on dim 2, TP-replicated) to host float32, keeping
+    TP replica 0. Returns [num_slots, seq_len_cache, head_dim] (still block-cyclic rotated)."""
+    cache_full = ttnn.to_torch(
+        tt_cache,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
+    ).to(torch.float32)[
+        :, :1
+    ]  # [num_slots, 1, seq_len_cache, head_dim]
+    return cache_full[:, 0]
+
+
+def unrotate_cache_layer(cache_slot: torch.Tensor, positions: torch.Tensor, total_len: int) -> torch.Tensor:
+    """Un-rotate one slot's block-cyclic cache rows [seq_len_cache, head_dim] to natural order and slice the
+    valid region. `positions` = blockcyclic_positions(sp, chunk, seq_len_cache)."""
+    nat = torch.empty_like(cache_slot)
+    nat[positions] = cache_slot
+    return nat[:total_len]
+
+
+def cache_half_pccs(golden: torch.Tensor, dev: torch.Tensor, split: int, pe_interleave: bool) -> tuple[float, float]:
+    """PCC the two halves of a [N, head_dim] cache block vs golden, returning (pcc_first, pcc_second). The
+    first `split` columns compare directly; the rest compare directly unless `pe_interleave`, where the
+    golden's HF half-split RoPE is re-based to the device Meta interleave. This is the single home for the
+    cache-compare convention: KVPE = [nope | pe] (split=kv_lora, pe_interleave=True); indexer-K =
+    [rope | nope] (split=index_head_dim//2, pe_interleave=False -- GLM indexer RoPE is natively interleaved)."""
+    from tests.ttnn.utils_for_testing import comp_pcc
+
+    _, pcc_first = comp_pcc(golden[:, :split], dev[:, :split])
+    ref_second = golden[:, split:]
+    if pe_interleave:
+        ref_second = interleave_pe(ref_second)
+    _, pcc_second = comp_pcc(ref_second, dev[:, split:])
+    return pcc_first, pcc_second
 
 
 def print_buffers(device, name, buffer_type):
@@ -35,11 +92,21 @@ def print_l1_small_buffers(device, name):
     print_buffers(device, name, ttnn.BufferType.L1_SMALL)
 
 
-def adjust_shapes_for_testing(config, mesh_device):
-    """Scale TP dimension for smaller meshes. sp_dim (per-device seq len) is always correct."""
+def adjust_shapes_for_testing(config, mesh_device, tile_align_width: bool = True):
+    """Scale TP dimension for smaller meshes. sp_dim (per-device seq len) is always correct.
+
+    `tile_align_width` rounds the model dim up so the per-device width (config.dim / n_tp_devices) is
+    a multiple of 32. An L1-sharded gate input needs that -- a shard width must be whole tiles -- so
+    it is the default, and it is a no-op for every model whose per-device width already is (only
+    GPT-OSS is not: 2880 -> 720/device, 22.5 tiles). Pass False when the input is DRAM-interleaved,
+    where TILE_LAYOUT padding covers the ragged width and the test can hold the deployed dim exactly.
+    """
     _, n_tp_devices = mesh_device.shape
     if n_tp_devices != 4:
         config.dim = config.dim // (4 // n_tp_devices)
+    if tile_align_width:
+        tile_multiple = 32 * n_tp_devices
+        config.dim = ((config.dim + tile_multiple - 1) // tile_multiple) * tile_multiple
 
 
 def get_input_mem_config(config, mesh_shape):
@@ -297,3 +364,81 @@ def dequantize_state_dict(
     if is_pack_quantized_int4(quant_cfg):
         return _dequantize_pack_quantized_state_dict(state_dict, quant_cfg, dtype=dtype)
     return _fp8_dequantize_state_dict(state_dict, hf_config, dtype)
+
+
+def passthrough_state_dict(state_dict: Mapping[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+    """Materialize an already-dequantized (sub-)state_dict, preserving each tensor's source dtype.
+
+    Both dequantizers need quantization metadata before they can touch a single tensor (fp8 reads
+    `weight_block_size`, INT4 reads its config group), so a checkpoint that carries none needs this
+    separate route rather than a no-op trip through `dequantize_state_dict`.
+
+    Source dtypes are preserved for the same reason `_dequantize_pack_quantized_state_dict` preserves
+    them on its non-quantized tensors: the fp32 `e_score_correction_bias` feeding the router top-k must
+    not be downcast to bf16. A dequantized checkpoint already stores the dtypes the model expects
+    (Kimi K2.6: bf16 weights, fp32 router bias), so there is nothing to convert.
+    """
+    out: dict[str, torch.Tensor] = {}
+    for name in sorted(state_dict.keys()):
+        # A dequantized checkpoint carries no quantized payload. If one turns up, the weights are
+        # quantized but config.json lost its metadata -- say so instead of emitting garbage tensors.
+        if name.endswith(("_scale_inv", "_packed")):
+            raise ValueError(
+                f"Found quantized tensor '{name}' in a checkpoint whose config has no `quantization_config`. "
+                "The dequantization metadata is missing from config.json."
+            )
+        tensor = state_dict[name]
+        if tensor is None:
+            raise ValueError(f"Expected tensor {name} to exist in state_dict but it was None")
+        if tensor.dtype == torch.float8_e4m3fn:
+            raise ValueError(
+                f"Found float8 tensor '{name}' in a checkpoint whose config has no `quantization_config`. "
+                "The dequantization metadata is missing from config.json."
+            )
+        out[name] = tensor.contiguous().clone()  # passthrough: preserve source dtype
+    return out
+
+
+_LOGGED_CONVERSION_MODES: set[str] = set()
+
+
+def _log_conversion_mode(message: str) -> None:
+    """Log the quantized/dequantized conclusion once per process; repeats drop to debug.
+
+    `convert_state_dict` runs per module and per layer (60+ times for a full checkpoint), so logging at
+    info every time would bury the rest of the weight-load output.
+    """
+    if message in _LOGGED_CONVERSION_MODES:
+        logger.debug(message)
+        return
+    _LOGGED_CONVERSION_MODES.add(message)
+    logger.info(message)
+
+
+def convert_state_dict(
+    state_dict: Mapping[str, torch.Tensor],
+    hf_config: Any,
+    dtype: torch.dtype = torch.bfloat16,
+) -> dict[str, torch.Tensor]:
+    """Convert an HF (sub-)state_dict, dequantizing only when the checkpoint is actually quantized.
+
+    Every model here ships as both a quantized and a dequantized checkpoint behind one loading path,
+    and only `hf_config.quantization_config` tells them apart: present means quantized weights, so hand
+    off to `dequantize_state_dict` (Kimi INT4 pack-quant or DeepSeek fp8 block-wise); absent means the
+    checkpoint is already dequantized, so pass the weights through untouched.
+    """
+    quant_cfg = _get_quantization_config_dict(hf_config)
+
+    if quant_cfg is None:
+        _log_conversion_mode(
+            "No `quantization_config` found in hf_config -> checkpoint is already dequantized; "
+            "passing weights through without dequantization."
+        )
+        return passthrough_state_dict(state_dict)
+
+    quant_method = quant_cfg.get("quant_method") if isinstance(quant_cfg, dict) else None
+    _log_conversion_mode(
+        f"Found `quantization_config` in hf_config (quant_method={quant_method!r}) -> checkpoint is "
+        "quantized; dequantizing weights."
+    )
+    return dequantize_state_dict(state_dict, hf_config, dtype)

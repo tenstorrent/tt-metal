@@ -3,12 +3,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
 #include "cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 #include "tt_metal/tools/profiler/kernel_profiler.hpp"
 #include <cstdint>
 #include <utility>
+#include "api/tensor/noc_traits.h"
 
 using address_t = uint32_t;
 
@@ -48,7 +52,7 @@ void kernel_main() {
     address_t intermediate_tensor_address = get_arg_val<address_t>(arg_idx++);
     address_t output_tensor_address = get_arg_val<address_t>(arg_idx++);
     size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t fwd_bwd_sem_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+    Semaphore<> fwd_bwd_sem(get_arg_val<uint32_t>(arg_idx++));
     const bool is_forward = get_arg_val<uint32_t>(arg_idx++);
     const bool is_first_device_in_direction = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_targets_in_direction = get_arg_val<uint32_t>(arg_idx++);
@@ -141,6 +145,11 @@ void kernel_main() {
         matmul_receiver = ReduceScatterOpReceiver(arg_idx);
     }
 
+    Noc noc_obj;
+    CircularBuffer cb_input(cb_input_id);
+    CircularBuffer cb_intermediate(cb_intermediate_id);
+    CircularBuffer cb_reader_output(cb_reader_output_id);
+
     /**
      * Intermediate buffer is double-sized (shape [2, *input_shape]) to accommodate forward and backward.
      * BWD indexes into second half of intermediate buffer.
@@ -182,7 +191,7 @@ void kernel_main() {
 
             if (is_first_device_in_direction) {
                 // We have no incoming slices, so forward directly to writer
-                uint32_t cb_in0 = cb_reader_output_id;
+                CircularBuffer& cb_in0 = cb_reader_output;
                 for (uint32_t c = 0; c < slice_C; ++c) {
                     uint32_t input_pages_read_in_row = start_pages_read_in_row;
                     uint32_t input_row_offset = start_row_offset;
@@ -194,8 +203,8 @@ void kernel_main() {
                         uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
                         uint32_t num_pages_to_read = std::min(tiles_remaining_to_read, tile_granularity);
 
-                        cb_reserve_back(cb_in0, tile_granularity);
-                        uint32_t l1_write_addr = get_write_ptr(cb_in0);
+                        cb_in0.reserve_back(tile_granularity);
+                        uint32_t l1_write_addr = cb_in0.get_write_ptr();
                         for (uint32_t j = 0; j < num_pages_to_read; ++j) {
                             uint32_t tile_id = input_tile_id_start + input_row_offset + input_pages_read_in_row;
                             uint64_t noc_read_addr = input_tensor_addrgen.get_noc_addr(tile_id);
@@ -210,14 +219,14 @@ void kernel_main() {
                         }
                         tiles_read += num_pages_to_read;
 
-                        noc_async_read_barrier();
-                        cb_push_back(cb_in0, tile_granularity);
+                        noc_obj.async_read_barrier();
+                        cb_in0.push_back(tile_granularity);
                     }
                     input_tile_id_start += input_channel_num_pages;
                 }
             } else {
                 // I have incoming slices, so write my output to compute kernel and read intermediate input
-                uint32_t cb_in0 = cb_input_id;
+                CircularBuffer& cb_in0 = cb_input;
                 for (uint32_t c = 0; c < slice_C; ++c) {
                     uint32_t input_pages_read_in_row = start_pages_read_in_row;
                     uint32_t input_row_offset = start_row_offset;
@@ -232,8 +241,8 @@ void kernel_main() {
                         uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
                         uint32_t num_pages_to_read = std::min(tiles_remaining_to_read, tile_granularity);
 
-                        cb_reserve_back(cb_in0, tile_granularity);
-                        uint32_t l1_write_addr = get_write_ptr(cb_in0);
+                        cb_in0.reserve_back(tile_granularity);
+                        uint32_t l1_write_addr = cb_in0.get_write_ptr();
                         for (uint32_t j = 0; j < num_pages_to_read; ++j) {
                             uint32_t tile_id = input_tile_id_start + input_row_offset + input_pages_read_in_row;
                             uint64_t noc_read_addr = input_tensor_addrgen.get_noc_addr(tile_id);
@@ -255,8 +264,8 @@ void kernel_main() {
                         chunk_count++;
 
                         // read the next intermediate slice out of intermediate buffer, and put it in intermediate CB
-                        cb_reserve_back(cb_intermediate_id, tile_granularity);
-                        l1_write_addr = get_write_ptr(cb_intermediate_id);
+                        cb_intermediate.reserve_back(tile_granularity);
+                        l1_write_addr = cb_intermediate.get_write_ptr();
                         for (uint32_t j = 0; j < num_pages_to_read; ++j) {
                             uint32_t tile_id =
                                 intermediate_tile_id_start + intermediate_row_offset + intermediate_pages_read_in_row;
@@ -271,9 +280,9 @@ void kernel_main() {
                             }
                         }
 
-                        noc_async_read_barrier();
-                        cb_push_back(cb_in0, tile_granularity);
-                        cb_push_back(cb_intermediate_id, tile_granularity);
+                        noc_obj.async_read_barrier();
+                        cb_in0.push_back(tile_granularity);
+                        cb_intermediate.push_back(tile_granularity);
                     }
                     input_tile_id_start += input_channel_num_pages;
                     intermediate_tile_id_start += input_channel_num_pages;
@@ -335,7 +344,7 @@ void kernel_main() {
                 channel_num_pages = input_channel_num_pages;
             }
 
-            uint32_t cb_in0 = cb_input_id;
+            CircularBuffer& cb_in0 = cb_input;
             for (uint32_t c = 0; c < slice_C; ++c) {
                 uint32_t pages_read_in_row;
                 uint32_t row_offset;
@@ -356,19 +365,22 @@ void kernel_main() {
                 while (tiles_read < tiles_to_read) {
                     // Wait for FWD writer to signal that it has done its final reduction
                     if (accumulate_output) {
-                        noc_semaphore_wait_min(
-                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fwd_bwd_sem_addr), ++fwd_sync_cnt);
+                        fwd_bwd_sem.wait_min(++fwd_sync_cnt);
                     }
 
                     uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
                     uint32_t num_pages_to_read = std::min(tiles_remaining_to_read, tile_granularity);
 
-                    cb_reserve_back(cb_in0, tile_granularity);
-                    uint32_t l1_write_addr = get_write_ptr(cb_in0);
+                    cb_in0.reserve_back(tile_granularity);
+                    uint32_t l1_write_addr = cb_in0.get_write_ptr();
                     for (uint32_t j = 0; j < num_pages_to_read; ++j) {
                         uint32_t tile_id = tile_id_start + row_offset + pages_read_in_row;
-                        uint64_t noc_read_addr = accumulate_output ? output_tensor_addrgen.get_noc_addr(tile_id)
-                                                                   : input_tensor_addrgen.get_noc_addr(tile_id);
+                        uint64_t noc_read_addr;
+                        if (accumulate_output) {
+                            noc_read_addr = output_tensor_addrgen.get_noc_addr(tile_id);
+                        } else {
+                            noc_read_addr = input_tensor_addrgen.get_noc_addr(tile_id);
+                        }
                         noc_async_read(noc_read_addr, l1_write_addr, page_size);
                         l1_write_addr += page_size;
 
@@ -387,8 +399,8 @@ void kernel_main() {
                     chunk_count++;
 
                     // read the next intermediate slice out of the intermediate buffer, and put it in intermediate CB
-                    cb_reserve_back(cb_intermediate_id, tile_granularity);
-                    l1_write_addr = get_write_ptr(cb_intermediate_id);
+                    cb_intermediate.reserve_back(tile_granularity);
+                    l1_write_addr = cb_intermediate.get_write_ptr();
                     for (uint32_t j = 0; j < num_pages_to_read; ++j) {
                         uint32_t intermediate_tile_id =
                             intermediate_tile_id_start + intermediate_row_offset + intermediate_pages_read_in_row;
@@ -403,9 +415,9 @@ void kernel_main() {
                         }
                     }
 
-                    noc_async_read_barrier();
-                    cb_push_back(cb_in0, tile_granularity);
-                    cb_push_back(cb_intermediate_id, tile_granularity);
+                    noc_obj.async_read_barrier();
+                    cb_in0.push_back(tile_granularity);
+                    cb_intermediate.push_back(tile_granularity);
                 }
                 tile_id_start += channel_num_pages;
                 intermediate_tile_id_start += input_channel_num_pages;

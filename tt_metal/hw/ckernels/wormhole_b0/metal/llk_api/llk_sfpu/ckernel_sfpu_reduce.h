@@ -13,6 +13,7 @@
 #include "ckernel_instr_params.h"
 #include "llk_assert.h"
 #include "llk_defs.h"
+#include "llk_math_eltwise_unary_sfpu.h"
 #include "lltt.h"
 #include "sfpi.h"
 
@@ -1248,8 +1249,8 @@ inline void init_reduce_max_min([[maybe_unused]] std::uint32_t num_cols) {
     TTI_SFPLOADMACRO(0, INSTRUCTION_MODE, ADDR_MOD_3, 0);
 
     // Dummy loads to increment dest counters
-    TTI_SFPLOAD(8, INSTRUCTION_MODE, ADDR_MOD_6, 0);
-    TTI_SFPLOAD(8, INSTRUCTION_MODE, ADDR_MOD_5, 0);
+    TTI_SFPLOAD(8, INSTRUCTION_MODE, ADDR_MOD_2, 0);
+    TTI_SFPLOAD(8, INSTRUCTION_MODE, ADDR_MOD_1, 0);
 }
 
 /**
@@ -1674,6 +1675,7 @@ inline void calculate_reduce_sum_avg(std::uint32_t block_ct_dim, std::uint32_t b
  */
 template <PoolType pool_type, DataFormat format, bool is_fp32_dest_accum_en>
 inline void init_reduce(std::uint32_t block_ct_dim = 1) {
+    math::reset_counters(p_setrwc::SET_ABD_F);
     static_assert(
         is_supported_reduce_format(format),
         "Unsupported data format. Supported formats: Int32, UInt32, UInt16, Float32, Float16_b");

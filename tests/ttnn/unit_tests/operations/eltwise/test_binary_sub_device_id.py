@@ -110,7 +110,7 @@ def test_binary_tensor_scalar_with_sub_device_id(device, op_fn, op_name):
 # Mutual exclusion: sub_core_grids + sub_device_id = TT_FATAL
 # ---------------------------------------------------------------------------
 @skip_for_slow_dispatch()
-def test_binary_sub_device_id_and_sub_core_grids_mutual_exclusion(device):
+def test_binary_sub_device_id_and_sub_core_grids_mutual_exclusion(device, expect_error):
     """TT_FATAL when both sub_core_grids and sub_device_id are provided."""
     torch.manual_seed(0)
     shape = [1, 1, 32, 32]
@@ -125,7 +125,7 @@ def test_binary_sub_device_id_and_sub_core_grids_mutual_exclusion(device):
 
         some_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
 
-        with pytest.raises(RuntimeError, match="Cannot specify both"):
+        with expect_error(RuntimeError, "Cannot specify both"):
             ttnn.add(
                 tt_a,
                 tt_b,

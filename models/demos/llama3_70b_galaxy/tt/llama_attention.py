@@ -124,6 +124,9 @@ class TtLlamaAttention(LightweightModule):
         # Also mirrored into model_config for any config-dict consumers.
         self.use_prefetcher = configuration.use_prefetcher
         self.model_config["USE_PREFETCHER"] = configuration.use_prefetcher
+        # BH-prefetcher bring-up: keep the ring matmuls (gated by use_prefetcher) but route the
+        # post-matmul collectives through the stable/no-prefetcher branches (gated by use_unfused_ccl).
+        self.use_unfused_ccl = self.use_prefetcher and getattr(configuration, "use_unfused_ccl", False)
         self.sdpa_decode_compute_kernel_config = self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"]
         self.ccl_topology = configuration.ccl_topology()
         self.is_multichip = configuration.is_multichip
@@ -176,6 +179,9 @@ class TtLlamaAttention(LightweightModule):
         self._create_head_input_memcfg_nlp = None
         sub_core_grids = getattr(configuration, "sub_core_grids", None)
         start_core = getattr(configuration, "start_core", None)
+        # Worker sub-core grid used to pin auto-gridding tail ops (e.g. the create-head slice) so they
+        # stay inside the prefetcher worker sub-device instead of grabbing the full 12-wide compute grid.
+        self._worker_sub_core_grids = sub_core_grids
         if sub_core_grids is not None and start_core is not None and self._qkv_n_local % self.head_dim == 0:
             n_qkv_heads_local = self._qkv_n_local // self.head_dim
             self._create_head_input_memcfg_nlp = ttnn.MemoryConfig(
@@ -382,9 +388,89 @@ class TtLlamaAttention(LightweightModule):
         self.tt_ccl = tt_ccl
 
     def _apply_decode_qk_norm(self, q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD):
+        # unfused-CCL (BH prefetcher) path: the create-head output is an ND round-robin height-sharded
+        # tensor (user-parallel), which neither the fused sharded reshard (expects the head-parallel
+        # single-core layout) nor the flat path (DRAM round-trip violates single-sub-device with the
+        # resident prefetcher) can consume. Normalize in place on the worker cores instead.
+        if self.use_prefetcher and self.use_unfused_ccl:
+            return self._apply_decode_qk_norm_unfused(q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD)
         if self.use_prefetcher:
             return self._apply_decode_qk_norm_sharded(q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD)
         return self._apply_decode_qk_norm_flat(q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD)
+
+    def _apply_decode_qk_norm_unfused(self, q_heads, k_heads):
+        """Worker-confined RMSNorm over head_dim for the user-parallel create-head layout.
+
+        The create-head output is TILE + HEIGHT_SHARDED [32, head_dim] with one shard per head on worker
+        cores (round-robin ND spec). ttnn.rms_norm rejects HEIGHT_SHARDED input, and the fused sharded
+        QK-norm's reshard-to-1-core intermediate can't collapse the ND spec. Instead reshard straight to a
+        WIDTH_SHARDED worker layout (head_dim split across 4 worker cores), run the sharded rms_norm there
+        (cross-core reduction over head_dim), then reshard back to the native layout. All ops stay on
+        worker cores, so it coexists with the resident prefetcher."""
+
+        def _norm_one(heads, norm_mod, core_start):
+            rm = heads.memory_config()
+            # The create-head output physically pads each head's users to a full tile (32 rows) and puts
+            # one head per shard, so the physical height is (num_head_shards * 32), not the logical row
+            # count.
+            src_spec = heads.memory_config().shard_spec
+            phys_rows = int(src_spec.shape[0]) * src_spec.grid.num_cores()
+            num_head_shards = phys_rows // 32  # one 32-row (tile-padded) group per head
+            # Split head_dim across 2 width cores (2 tiles each). Both q_heads and k_heads carry
+            # num_head_shards == n_local_heads (8) tile-padded row groups, so each block-shard grid is
+            # ncores_w x 8. With only cols 4,7-10 free of prefetcher/CCL L1, a 4-wide split can't fit two
+            # 8-row grids side by side (8 columns needed); a 2-wide split lets Q use cols 7-8 and K cols
+            # 9-10, both within rows 0-7 of the worker grid.
+            ncores_w = 2
+            width_per_core = self.head_dim // ncores_w
+            # BLOCK-shard the [phys_rows, head_dim] norm input as num_head_shards row-groups x ncores_w
+            # width cores: each core holds exactly one head's [32, 32] tile. The sharded rms_norm reduces
+            # head_dim across the ncores_w cores in each row (row-wise mcast), each row an independent
+            # head. This keeps block_h at 1 tile instead of stacking all heads' rows onto a 4-core WIDTH
+            # shard (block_h = num_head_shards, e.g. 8 for the Q heads). That tall CB overflowed the L1
+            # left free above the full-worker-grid resident decode buffer during trace capture
+            # ("static circular buffers clash with L1 buffers ... region ends at 430656"); block_h=1 fits.
+            core_grid = ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(core_start[0], core_start[1]),
+                        ttnn.CoreCoord(core_start[0] + ncores_w - 1, core_start[1] + num_head_shards - 1),
+                    )
+                }
+            )
+            block_mc = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(core_grid, [32, width_per_core], ttnn.ShardOrientation.ROW_MAJOR),
+            )
+            prog_cfg = ttnn.LayerNormShardedMultiCoreProgramConfig(
+                compute_with_storage_grid_size=[ncores_w, num_head_shards],
+                subblock_w=1,
+                block_h=1,
+                block_w=width_per_core // 32,
+                inplace=False,
+            )
+            heads = ttnn.to_memory_config(heads, block_mc)
+            heads = norm_mod(
+                heads,
+                mode="decode",
+                in_sharded=True,
+                out_sharded=True,
+                norm_config={"sharded_program_config": prog_cfg, "sharded_output_config": block_mc},
+            )
+            heads = ttnn.to_memory_config(heads, rm)
+            return heads
+
+        # Place the QK-norm block-shard grids on free worker columns (7-10), not the default cols 1-2.
+        # Columns 1-3 are the dram_prefetcher's global-CB receiver cores; running the norm there collides
+        # with the resident global CB during trace capture. Cols 7-10 are inside the worker sub-device
+        # (cols 1-10) but carry no global CB / CCL persistent buffers. Q has n_local_heads shards (rows
+        # 0..N-1); K has n_local_kv_heads (1 shard) so it lands on a single row placed clear of Q. The
+        # reshard-in/reshard-out inside _norm_one moves the heads there and back, so the grid choice is
+        # independent of the create-head layout.
+        q_heads = _norm_one(q_heads, self.q_norm, (7, 0))
+        k_heads = _norm_one(k_heads, self.k_norm, (9, 0))
+        return q_heads, k_heads
 
     def _apply_decode_qk_norm_flat(self, q_heads, k_heads):
         """DRAM interleaved TILE RMSNorm; use reshape (not view) for TILE [1,H,B,D] -> [1,1,H*B,D]."""
@@ -525,6 +611,11 @@ class TtLlamaAttention(LightweightModule):
         x: (seq_len, 1, batch, dim)
         current_pos: (batch_size), current token position in the sequence for each user
         """
+        # fused_ccl gates the fused galaxy collectives (llama_rs_create_heads / all_gather_concat).
+        # On the BH prefetcher path (use_unfused_ccl) we keep the ring matmuls but run the stable,
+        # worker-pinned no-prefetcher collective/head/rotary path instead, gluing layouts as needed.
+        fused_ccl = self.use_prefetcher and not self.use_unfused_ccl
+
         ###
         # QKV matmuls
         # Use HiFi2 for DRAM-sharded matmuls as they are otherwise flop-bound. Loses 1 bit of activation precision.
@@ -533,11 +624,18 @@ class TtLlamaAttention(LightweightModule):
             xqkv_fused_sharded = ttnn.matmul(  # [1, 1, 32, 1280]
                 x,
                 self.wqkv,
-                program_config=self.model_config["XQKV_DECODE_RING_PROGCFG"],
+                # Unfused-CCL path emits TILE bf8 (non-untilized) so the sliced create-head input can feed
+                # the bf8-sized column all-reduce directly; the fused path untilizes to ROW_MAJOR bf16 for
+                # llama_rs_create_heads.
+                program_config=(
+                    self.model_config["XQKV_DECODE_RING_PROGCFG_TILE"]
+                    if self.use_unfused_ccl
+                    else self.model_config["XQKV_DECODE_RING_PROGCFG"]
+                ),
                 memory_config=self.model_config["SHARDED_QKV_OUT_RING_MEMCFG"],
                 compute_kernel_config=self.compute_kernel_config_hifi2,
                 global_cb=self.prefetcher_setup.global_circular_buffer,
-                dtype=ttnn.bfloat16,
+                dtype=ttnn.bfloat8_b if self.use_unfused_ccl else ttnn.bfloat16,
                 sub_device_id=self.prefetcher_setup.worker_sub_device_id,
             )
         else:
@@ -565,39 +663,52 @@ class TtLlamaAttention(LightweightModule):
         ###
         # Reshape and rotary embeddings
         ###
-        if not self.use_prefetcher:
-            xqkv_fused_interleaved = ttnn.to_memory_config(xqkv_fused_sharded, memory_config=ttnn.L1_MEMORY_CONFIG)
-            fqkv_shape = xqkv_fused_interleaved.shape
-            if fqkv_shape[3] > self._qkv_n_local:
-                xqkv_fused_interleaved = ttnn.slice(
-                    xqkv_fused_interleaved,
-                    [0, 0, 0, 0],
-                    [fqkv_shape[0], fqkv_shape[1], fqkv_shape[2], self._qkv_n_local],
-                    memory_config=ttnn.L1_MEMORY_CONFIG,
-                )
-                fqkv_shape = xqkv_fused_interleaved.shape
-            xqkv_fused_interleaved = ttnn.reshape(
-                xqkv_fused_interleaved,
-                (1, 1, self.batch_size_per_device_group, fqkv_shape[3]),
-                (1, 1, 32, fqkv_shape[3]),
-            )
-            if xqkv_fused_interleaved.layout != ttnn.TILE_LAYOUT:
-                xqkv_fused_interleaved = ttnn.to_layout(
-                    xqkv_fused_interleaved,
-                    ttnn.TILE_LAYOUT,
-                    memory_config=ttnn.L1_MEMORY_CONFIG,
-                )
-            # nlp_create_qkv_heads_decode only honors batch_offset/slice_size in its WIDTH_SHARDED
-            # program factory; width-shard the fused tensor so batch_offset selects users
-            # [col*8:col*8+8] per column.
-            create_head_input_memcfg = self._create_head_input_memcfg_nlp
-            if create_head_input_memcfg is not None:
-                xqkv_fused_create_head_in = ttnn.to_memory_config(
-                    xqkv_fused_interleaved, memory_config=create_head_input_memcfg
-                )
-                ttnn.deallocate(xqkv_fused_interleaved)
+        if not fused_ccl:
+            if self.use_unfused_ccl:
+                # Prefetcher resident: the ring QKV matmul already emitted a width-sharded L1 tensor on
+                # the worker cores (SHARDED_QKV_OUT_RING_MEMCFG: padded N = 12288//8 over RING_SIZE
+                # cores, [32, head_dim/2] per shard). Feed it straight into the common column all-reduce
+                # + nlp_create_qkv_heads_decode below, exactly like the proven BH LB/QB tt_transformers
+                # decode path: the create-head op consumes the first (n_q + 2*n_kv)*head_dim = 1280
+                # valid columns and ignores the N padding (its width-sharded factory only requires the
+                # shard width to divide head_dim, which 64 does). This avoids any unpad ttnn.slice /
+                # sharded->interleaved bounce; those auto-pack a 32-core block from origin (0,0) that
+                # spills into the uncovered senders-column tail (cores (0,8)/(0,9)) -> "kernel group
+                # cores do not match sub device cores" fatal under the resident prefetcher manager.
+                xqkv_fused_create_head_in = xqkv_fused_sharded
             else:
-                xqkv_fused_create_head_in = xqkv_fused_interleaved
+                xqkv_fused_interleaved = ttnn.to_memory_config(xqkv_fused_sharded, memory_config=ttnn.L1_MEMORY_CONFIG)
+                fqkv_shape = xqkv_fused_interleaved.shape
+                if fqkv_shape[3] > self._qkv_n_local:
+                    xqkv_fused_interleaved = ttnn.slice(
+                        xqkv_fused_interleaved,
+                        [0, 0, 0, 0],
+                        [fqkv_shape[0], fqkv_shape[1], fqkv_shape[2], self._qkv_n_local],
+                        memory_config=ttnn.L1_MEMORY_CONFIG,
+                    )
+                    fqkv_shape = xqkv_fused_interleaved.shape
+                xqkv_fused_interleaved = ttnn.reshape(
+                    xqkv_fused_interleaved,
+                    (1, 1, self.batch_size_per_device_group, fqkv_shape[3]),
+                    (1, 1, 32, fqkv_shape[3]),
+                )
+                if xqkv_fused_interleaved.layout != ttnn.TILE_LAYOUT:
+                    xqkv_fused_interleaved = ttnn.to_layout(
+                        xqkv_fused_interleaved,
+                        ttnn.TILE_LAYOUT,
+                        memory_config=ttnn.L1_MEMORY_CONFIG,
+                    )
+                # nlp_create_qkv_heads_decode only honors batch_offset/slice_size in its WIDTH_SHARDED
+                # program factory; width-shard the fused tensor so batch_offset selects users
+                # [col*8:col*8+8] per column.
+                create_head_input_memcfg = self._create_head_input_memcfg_nlp
+                if create_head_input_memcfg is not None:
+                    xqkv_fused_create_head_in = ttnn.to_memory_config(
+                        xqkv_fused_interleaved, memory_config=create_head_input_memcfg
+                    )
+                    ttnn.deallocate(xqkv_fused_interleaved)
+                else:
+                    xqkv_fused_create_head_in = xqkv_fused_interleaved
             # Sum the K-fractured QKV partials across mesh columns on device (sum + replicate),
             # the device equivalent of the former host column-sum. This keeps the whole decode path
             # on device and trace-capturable. The width-sharded [32, head_dim]x(qkv_n_local/head_dim)
@@ -612,6 +723,29 @@ class TtLlamaAttention(LightweightModule):
                 dtype=ttnn.bfloat16,
                 use_optimal_ccl_for_llama=True,
             )
+            if self.use_unfused_ccl:
+                # The ring QKV output + column all-reduce leave the fused tensor width-sharded on the
+                # ring cores == the prefetcher's global-CB receiver cores (cols 1-3, rows 0-7). Running
+                # nlp_create_qkv_heads_decode there while the resident dram_prefetcher is still streaming
+                # weights into the global CB on those same cores deadlocks the create-head kernels. Move
+                # the create-head input onto non-receiver worker columns (5-6) first, so create-heads
+                # (and its output) never touch the live global-CB receiver cores. One head (head_dim)
+                # per core, width-sharded, so nlp_create_qkv_heads_decode's batch_offset factory works.
+                _ch_w = int(xqkv_fused_create_head_in.shape[-1])
+                _ch_ncores = _ch_w // self.head_dim
+                _off_receiver_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9))])
+                _ch_in_memcfg = ttnn.MemoryConfig(
+                    ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                    ttnn.BufferType.L1,
+                    ttnn.ShardSpec(
+                        ttnn.num_cores_to_corerangeset_in_subcoregrids(
+                            ttnn.CoreCoord(5, 0), _ch_ncores, _off_receiver_grid, row_wise=False
+                        ),
+                        [32, self.head_dim],
+                        ttnn.ShardOrientation.ROW_MAJOR,
+                    ),
+                )
+                xqkv_fused_create_head_in = ttnn.to_memory_config(xqkv_fused_create_head_in, _ch_in_memcfg)
             (
                 q_heads_pre_rot_1BQD,
                 k_heads_pre_rot_1BKD,
@@ -647,7 +781,7 @@ class TtLlamaAttention(LightweightModule):
         ttnn.deallocate(xqkv_fused_sharded)
 
         # Q, K Rotary Embeddings
-        if self.use_prefetcher:
+        if fused_ccl:
             q_heads_1BQD, k_heads_1BKD = ttnn.experimental.rotary_embedding_llama_fused_qk(
                 q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, rot_mats[0], rot_mats[1], self.transformation_mats["decode"]
             )  # [1, 8, 8, 128], [1, 8, 8, 128]
@@ -675,29 +809,39 @@ class TtLlamaAttention(LightweightModule):
                     k_heads_pre_rot_1BKD.shape[2],
                     self.head_dim,
                 ]
+                # Prefetcher resident (unfused-CCL): pin the auto-gridding slice kernels to the worker
+                # sub-core grid. Otherwise ttnn.slice packs a 32-core block column-major from origin
+                # (0,0), spilling into the uncovered senders-column tail (cores (0,8)/(0,9)) and hitting
+                # the "kernel group cores do not match sub device cores" fatal under the split
+                # senders/worker sub-device manager. None on the WH / no-prefetcher path (no split mgr).
+                rot_slice_sub_core_grids = self._worker_sub_core_grids if self.use_unfused_ccl else None
                 q_rot_cos = ttnn.slice(
                     rot_mats[0],
                     [0, 0, 0, 0],
                     q_rot_end,
                     memory_config=self.model_config["CREATE_HEAD_OUTPUT_MEMCFG"],
+                    sub_core_grids=rot_slice_sub_core_grids,
                 )
                 q_rot_sin = ttnn.slice(
                     rot_mats[1],
                     [0, 0, 0, 0],
                     q_rot_end,
                     memory_config=self.model_config["CREATE_HEAD_OUTPUT_MEMCFG"],
+                    sub_core_grids=rot_slice_sub_core_grids,
                 )
                 k_rot_cos = ttnn.slice(
                     rot_mats[0],
                     [0, 0, 0, 0],
                     k_rot_end,
                     memory_config=self.model_config["CREATE_HEAD_OUTPUT_MEMCFG"],
+                    sub_core_grids=rot_slice_sub_core_grids,
                 )
                 k_rot_sin = ttnn.slice(
                     rot_mats[1],
                     [0, 0, 0, 0],
                     k_rot_end,
                     memory_config=self.model_config["CREATE_HEAD_OUTPUT_MEMCFG"],
+                    sub_core_grids=rot_slice_sub_core_grids,
                 )
                 q_rot_cos = ttnn.to_layout(q_rot_cos, ttnn.TILE_LAYOUT)
                 q_rot_sin = ttnn.to_layout(q_rot_sin, ttnn.TILE_LAYOUT)
@@ -733,7 +877,7 @@ class TtLlamaAttention(LightweightModule):
         # k_heads, [seqlen, n_kv_heads, bsz, head_dim]
         # v_heads [seqlen, n_kv_heads, bsz, head_dim]
         # keys, [max_batch_size, n_kv_heads // configuration.num_devices, max_seq_len, head_dim]
-        if not self.use_prefetcher:
+        if not fused_ccl:
             v_update_mem_cfg = ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
                 ttnn.BufferType.L1,
@@ -787,7 +931,7 @@ class TtLlamaAttention(LightweightModule):
             )
         ttnn.deallocate(q_heads_1BQD)
 
-        if not self.use_prefetcher:
+        if not fused_ccl:
             # Device SDPA output is batch-first [1, B_local, H_local, D] (8 users/col). Order matters:
             # nlp_concat_heads_decode pads batch to 32, so gather users across cols FIRST (8 -> 32),
             # then concat heads. Mimic tt_transformers.tt_all_gather: all_gather_async with
@@ -839,6 +983,12 @@ class TtLlamaAttention(LightweightModule):
         use_replicated_full_wo = (
             self.is_qwen and not self.use_prefetcher and attn_output_cat.shape[-1] == self.n_heads * self.head_dim
         )
+        if self.use_unfused_ccl:
+            # The ring WO matmul (below) expects its input in the ring layout, but the unfused concat
+            # produced the no-prefetcher layout; reshard into the ring WO input config first.
+            attn_output_cat = ttnn.to_memory_config(
+                attn_output_cat, self.model_config["SHARDED_ATTN_WO_INPUT_RING_MEMCFG"]
+            )
         if not self.use_prefetcher:
             # BH no-prefetch cannot use the ring WO program here: its static CB
             # allocation exceeds L1 once concat produces the correct decode shape.

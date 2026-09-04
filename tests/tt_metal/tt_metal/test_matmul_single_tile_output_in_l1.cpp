@@ -13,8 +13,9 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "impl/program/program_impl.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 
@@ -22,27 +23,25 @@ using std::vector;
 using namespace tt;
 using namespace tt::tt_metal;
 
-TEST_F(MeshDeviceSingleCardFixture, MatmulSingleTileOutputInL1) {
-    IDevice* dev = devices_[0]->get_devices()[0];
-    Program program = CreateProgram();
-
+TEST_F(UnitMeshFixture, MatmulSingleTileOutputInL1) {
     CoreCoord core = {0, 0};
 
     uint32_t single_tile_size = 2 * 1024;
     uint32_t num_tiles = 1;
     uint32_t dram_buffer_size = single_tile_size * num_tiles;
 
-    InterleavedBufferConfig dram_config{
-        .device = dev, .size = dram_buffer_size, .page_size = dram_buffer_size, .buffer_type = BufferType::DRAM};
-    InterleavedBufferConfig l1_config{
-        .device = dev, .size = dram_buffer_size, .page_size = dram_buffer_size, .buffer_type = BufferType::L1};
+    distributed::DeviceLocalBufferConfig dram_config{.page_size = dram_buffer_size, .buffer_type = BufferType::DRAM};
+    distributed::DeviceLocalBufferConfig l1_config{.page_size = dram_buffer_size, .buffer_type = BufferType::L1};
+    distributed::ReplicatedBufferConfig buffer_config{.size = dram_buffer_size};
 
-    auto src0_dram_buffer = CreateBuffer(dram_config);
-    auto src1_dram_buffer = CreateBuffer(dram_config);
-    auto dst_l1_buffer = CreateBuffer(l1_config);
+    auto src0_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, &this->device());
+    auto src1_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, &this->device());
+    auto dst_l1_buffer = distributed::MeshBuffer::create(buffer_config, l1_config, &this->device());
 
-    auto l1_dst_noc_xy = dev->virtual_core_from_logical_core(
-        dst_l1_buffer->allocator()->get_logical_core_from_bank_id(0), CoreType::WORKER);
+    auto l1_dst_noc_xy = this->device().virtual_core_from_logical_core(
+        this->device().allocator()->get_logical_core_from_bank_id(0), CoreType::WORKER);
+
+    Program program = CreateProgram();
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 1;
@@ -91,12 +90,12 @@ TEST_F(MeshDeviceSingleCardFixture, MatmulSingleTileOutputInL1) {
     auto activations_tile_layout =
         convert_layout_tile_swizzled_to_tile_nfaces(ttsl::make_const_span(tensor.get_values()));
     auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
-    detail::WriteToBuffer(src0_dram_buffer, activations);
+    slow_dispatch::WriteToBuffer(*src0_dram_buffer, activations);
 
     auto identity = create_identity_matrix(32, 32, 32);
     auto weights_tile_layout = convert_layout_tile_swizzled_to_tile_nfaces(ttsl::make_const_span(identity));
     auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
-    detail::WriteToBuffer(src1_dram_buffer, weights);
+    slow_dispatch::WriteToBuffer(*src1_dram_buffer, weights);
 
     SetRuntimeArgs(
         program,
@@ -118,10 +117,10 @@ TEST_F(MeshDeviceSingleCardFixture, MatmulSingleTileOutputInL1) {
         core,
         {dst_l1_buffer->address(), (std::uint32_t)l1_dst_noc_xy.x, (std::uint32_t)l1_dst_noc_xy.y, num_tiles});
 
-    detail::LaunchProgram(dev, program);
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> result_vec;
-    detail::ReadFromBuffer(dst_l1_buffer, result_vec);
+    slow_dispatch::ReadFromBuffer(*dst_l1_buffer, result_vec);
 
     // Validation
     auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);

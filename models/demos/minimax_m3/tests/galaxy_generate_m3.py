@@ -16,7 +16,7 @@ Run:
   cd /data/vmelnykov/tt-metal
   export TT_METAL_HOME=/data/vmelnykov/tt-metal PYTHONPATH=/data/vmelnykov/tt-metal
   source python_env/bin/activate
-  export HF_MODEL=/data/vmelnykov/MiniMax-M3-ref
+  export HF_MODEL=/mnt/models/MiniMaxAI/MiniMax-M3-ref   # real bf16 weights + tilized cache
   export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
   export EXPERT_DTYPE=bf4
   python3 models/demos/minimax_m3/tests/galaxy_generate_m3.py

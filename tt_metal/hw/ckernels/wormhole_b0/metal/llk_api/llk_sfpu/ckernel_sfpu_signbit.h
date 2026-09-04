@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include "ckernel.h"
+#include "llk_math_eltwise_unary_sfpu.h"
 #include "sfpi.h"
 using namespace sfpi;
 
@@ -41,8 +42,8 @@ inline void calculate_signbit() {
         sfpi::vFloat in = sfpi::dst_reg[0];
         // Logical-shift the fp32 bit pattern right by 31 to isolate the sign bit as 0/1,
         // then convert that integer to 0.0f / 1.0f.
-        sfpi::vInt sign = sfpi::as<sfpi::vInt>(sfpi::shft(sfpi::as<sfpi::vUInt>(in), -31));
-        sfpi::dst_reg[0] = sfpi::int32_to_float(sign, sfpi::RoundMode::Nearest);
+        sfpi::vSMag sign = sfpi::as<sfpi::vSMag>(sfpi::as<sfpi::vUInt>(in) >> 31);
+        sfpi::dst_reg[0] = sfpi::convert<sfpi::vFloat>(sign, sfpi::RoundMode::Nearest);
         sfpi::dst_reg++;
     }
 #endif
@@ -80,6 +81,8 @@ inline void calculate_signbit_int32() {
 #endif
 }
 inline void signbit_init() {
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+    math::reset_counters(p_setrwc::SET_ABD_F);
 #ifndef DISABLE_SFPLOADMACRO
     // InstructionTemplate[0]
     TTI_SFPSHFT2(-31 & 0xfff, 0, 12, sfpi::SFPSHFT2_MOD1_SHFT_IMM);
@@ -109,6 +112,8 @@ inline void signbit_init() {
 }
 
 inline void signbit_int32_init() {
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+    math::reset_counters(p_setrwc::SET_ABD_F);
 #ifndef DISABLE_SFPLOADMACRO
     // InstructionTemplate[0]
     TTI_SFPSHFT2(-31 & 0xfff, 0, 12, sfpi::SFPSHFT2_MOD1_SHFT_IMM);

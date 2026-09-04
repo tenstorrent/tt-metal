@@ -154,6 +154,11 @@ class GemmaTokenizerEncoderPair:
         # than untraced — and the trace never amortizes. Resident (e.g. 4x8) captures once and
         # replays warm.
         self._encoder_trace = not dynamic_load
+        # A capture taken after this one reuses the memory freed from its capture-time activations,
+        # and replaying the encode then writes over whatever now owns that region. Consumers that
+        # capture traces of their own after construction call ``defer_trace_capture`` and reopen the
+        # gate once they are done, which makes the encode the last capture taken.
+        self._trace_gate_open = True
 
     # Dims the pipeline warmup needs before the encoder is built.
     @property
@@ -167,6 +172,14 @@ class GemmaTokenizerEncoderPair:
     @property
     def audio_dim(self) -> int:
         return self._audio_dim
+
+    def defer_trace_capture(self) -> None:
+        """Hold the encode trace back until ``open_trace_gate`` (see ``_trace_gate_open``)."""
+        self._trace_gate_open = False
+
+    def open_trace_gate(self) -> None:
+        """Allow the next encode to capture/replay its trace (see ``_trace_gate_open``)."""
+        self._trace_gate_open = True
 
     def register_coresident_peers(self, peers: list) -> None:
         """Store the DiT/VAE peers the encoder modules must not be L1-coresident with.
@@ -222,6 +235,7 @@ class GemmaTokenizerEncoderPair:
             subfolder="text_encoder",
             parallel_config=self.parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
+            mesh_device=self.mesh_device,
             get_torch_state_dict=lambda: _gemma_state_dict(gemma_path),
         )
         logger.info(f"Loaded TTNN Gemma encoder ({self._num_layers}L) in {time.time()-t0:.0f}s")
@@ -267,6 +281,7 @@ class GemmaTokenizerEncoderPair:
             subfolder="feature_extractor",
             parallel_config=self.parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
+            mesh_device=self.mesh_device,
             get_torch_state_dict=lambda: _feature_extractor_state_dict(
                 ckpt(), mode=self.mode, gemma_hidden_size=gemma_hidden_size, gemma_num_layers=gemma_num_layers
             ),
@@ -299,6 +314,7 @@ class GemmaTokenizerEncoderPair:
             subfolder=f"{axis}_connector",
             parallel_config=self.parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
+            mesh_device=self.mesh_device,
             dtype="float32",
             get_torch_state_dict=lambda: _connector_state_dict(ckpt(), axis, num_blocks),
         )
@@ -347,7 +363,7 @@ class GemmaTokenizerEncoderPair:
             src_idx, keep_mask = self.video_connector.build_indices(tokens.attention_mask, seq)
 
             video_dev, audio_dev = self._encode_device(
-                tt_ids, tt_gemma_mask, fe_mask, src_idx, keep_mask, traced=self._encoder_trace
+                tt_ids, tt_gemma_mask, fe_mask, src_idx, keep_mask, traced=self._encoder_trace and self._trace_gate_open
             )
             video_embeds = ttnn.to_torch(ttnn.get_device_tensors(video_dev)[0]).float()
             audio_embeds = (

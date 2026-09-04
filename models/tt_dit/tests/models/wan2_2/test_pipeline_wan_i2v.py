@@ -10,13 +10,31 @@ import PIL
 import pytest
 import torch
 from loguru import logger
+from PIL import Image
 
 import ttnn
 from models.tt_dit.parallel.config import DiTParallelConfig, EncoderParallelConfig, VaeHWParallelConfig
 from models.tt_dit.pipelines.wan.pipeline_wan import WanPipelineConfig
 from models.tt_dit.pipelines.wan.pipeline_wan_i2v import ImagePrompt, WanPipelineI2V
+from models.tt_dit.utils.vbench import assert_vbench_quality
 
-from ....utils.test import line_params, ring_params
+from ....utils.test import (
+    line_params_req_exact_devices,
+    ring_params_8k_req_exact_devices,
+    ring_params_req_exact_devices,
+    skip_if_unsupported_num_links,
+)
+from .common import check_first_frame_matches_seed, check_output_sanity
+
+
+def create_fractal_image(width: int, height: int) -> Image.Image:
+    c = np.linspace(-2.0, 1.0, width)[None, :] + 1j * np.linspace(-1.5, 1.5, height)[:, None]
+    z = np.zeros_like(c)
+    img = np.zeros(c.shape, dtype=np.uint8)
+    for i in range(32):
+        z = z * z + c
+        img[(img == 0) & (np.abs(z) > 2)] = 255 - 8 * i
+    return Image.fromarray(np.dstack((img, np.roll(img, width // 10, 1), np.roll(img, height // 10, 0))), "RGB")
 
 
 @pytest.mark.parametrize(
@@ -26,21 +44,20 @@ from ....utils.test import line_params, ring_params
 @pytest.mark.parametrize(
     "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
     [
-        [(2, 2), (2, 2), 0, 1, 2, False, line_params, ttnn.Topology.Linear, True],
-        [(2, 4), (2, 4), 0, 1, 1, True, line_params, ttnn.Topology.Linear, True],
-        # BH on 2x4 with dynamic_load to avoid init-time DRAM OOM
-        [(2, 4), (2, 4), 1, 0, 2, True, line_params, ttnn.Topology.Linear, False],
-        # WH (ring) on 4x8
-        [(4, 8), (4, 8), 1, 0, 4, False, ring_params, ttnn.Topology.Ring, True],
-        # BH (linear) on 4x8
-        [(4, 8), (4, 8), 1, 0, 2, False, line_params, ttnn.Topology.Linear, False],
+        [(2, 2), (2, 2), 0, 1, 2, False, line_params_req_exact_devices, ttnn.Topology.Linear, True],
+        [(2, 4), (2, 4), 0, 1, 1, True, line_params_req_exact_devices, ttnn.Topology.Linear, True],
+        [(2, 4), (2, 4), 1, 0, 2, True, line_params_req_exact_devices, ttnn.Topology.Linear, False],
+        [(4, 8), (4, 8), 1, 0, 4, False, ring_params_req_exact_devices, ttnn.Topology.Ring, True],
+        [(4, 8), (4, 8), 1, 0, 2, False, line_params_req_exact_devices, ttnn.Topology.Linear, False],
+        [(4, 32), (4, 32), 1, 0, 2, False, ring_params_8k_req_exact_devices, ttnn.Topology.Ring, False],
     ],
     ids=[
-        "2x2sp0tp1",
-        "2x4sp0tp1",
-        "bh_2x4sp1tp0",
-        "wh_4x8sp1tp0",
-        "bh_4x8sp1tp0",
+        "2x2sp0tp1nl2_linear_is_fsdp1",
+        "2x4sp0tp1nl1_linear_is_fsdp1",
+        "2x4sp1tp0nl2_linear_is_fsdp0",  # BH on 2x4 with dynamic_load to avoid init-time DRAM OOM
+        "4x8sp1tp0nl4_ring_is_fsdp1",  # WH (ring) on 4x8
+        "4x8sp1tp0nl2_linear_is_fsdp0",  # BH (linear) on 4x8
+        "4x32sp1tp0nl2_ring_is_fsdp0",  # BH (ring) on 4x32 quad galaxy
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -67,12 +84,18 @@ def test_pipeline_inference(
     height,
     is_fsdp,
     no_prompt,
+    request,
 ):
     parent_mesh = mesh_device
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
 
-    pil_image = PIL.Image.open("./prompt_image.png")
-    image_prompt = [ImagePrompt(image=pil_image, frame_pos=0)]
+    skip_if_unsupported_num_links(mesh_device, num_links)
+
+    if no_prompt:
+        test_image = create_fractal_image(width, height)
+    else:
+        test_image = PIL.Image.open("./prompt_image.png")
+    image_prompt = [ImagePrompt(image=test_image, frame_pos=0)]
     negative_prompt = "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走"
 
     num_frames = 81
@@ -134,6 +157,9 @@ def test_pipeline_inference(
 
         # Remove batch dimension
         frames = frames[0]
+        if int(ttnn.distributed_context_get_rank()) == 0:
+            check_output_sanity(frames, num_frames=num_frames, height=height, width=width)
+            check_first_frame_matches_seed(frames, seed_image=test_image, width=width, height=height)
         output_filename = f"wan_i2v_{width}x{height}_{number}.mp4"
         try:
             from models.tt_dit.utils.video import export_to_video
@@ -143,8 +169,34 @@ def test_pipeline_inference(
         except ImportError:
             logger.info("Could not export video - imageio_ffmpeg not available")
 
+    # VBench gate for I2V uses ONLY subject_consistency + background_consistency. They measure
+    # intra-video feature consistency (does the content stay coherent frame-to-frame), which still
+    # catches a pipeline that emits incoherent/garbage output. The other VBench dimensions are dropped
+    # because they're meaningless for this test's synthetic seed: the CI seed is a fractal, so
+    # `dynamic_degree` (RAFT optical-flow "is it moving") reads ~0 (a fractal can't be animated
+    # naturally) and `imaging_quality` (MUSIQ, trained on natural photos) reads ~0.30 regardless of
+    # correctness -- neither reflects a real defect here. Floors are provisional: set below one
+    # observed i2v run (subject≈0.75, background≈0.89); tighten/loosen as more runs accrue.
+    vbench_thresholds_by_height = {
+        720: {
+            "subject_consistency": 0.70,
+            "background_consistency": 0.80,
+        },
+        480: {
+            "subject_consistency": 0.70,
+            "background_consistency": 0.82,
+        },
+    }
+
+    def check_output_with_vbench(prompt, number):
+        if int(ttnn.distributed_context_get_rank()) == 0:
+            output_filename = f"wan_i2v_{width}x{height}_{number}.mp4"
+            thresholds = vbench_thresholds_by_height[height]
+            assert_vbench_quality(output_filename, prompt=prompt, thresholds=thresholds)
+
     if no_prompt:
         run(prompt=prompt, number=0, seed=42)
+        check_output_with_vbench(prompt, 0)
     else:
         for i in itertools.count():
             new_prompt = input("Enter the input prompt, or q to exit: ")
@@ -153,3 +205,4 @@ def test_pipeline_inference(
             if prompt[0] == "q":
                 break
             run(prompt=prompt, number=i, seed=i)
+            check_output_with_vbench(prompt, i)

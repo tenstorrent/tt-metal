@@ -9,8 +9,8 @@
 #include <tracy/Tracy.hpp>
 #include <type_traits>
 
-// Opt-in Tracy macros (zones, messages, plots) for debug-verbosity profiling. A TTZone*D / TTMessage*D /
-// TTPlotD macro's first argument is a category token (DISPATCH, RT_PROFILER, ...); it is compiled in only when
+// Opt-in Tracy macros (zones, messages, plots) for debug-verbosity profiling. A TTZone*D / TTTracyMessage*D /
+// TTTracyPlotD macro's first argument is a category token (DISPATCH, RT_PROFILER, ...); it is compiled in only when
 // that category is selected at build time via --build-perf-debug ('all' selects every category), and compiles
 // to nothing otherwise. Categories are defined once in tt_metal/tools/profiler/tracy_debug_categories.txt; from
 // it the build generates, per category, TT_TRACY_CATEGORY_<TOKEN> (1 if selected, 0 if not) and
@@ -111,27 +111,28 @@ constexpr bool zone_name_valid(const char* name) { return name != nullptr; }
 #define TTZoneValueD(category, value) TT_TRACY_EMIT(category, (void(sizeof(value))), ZoneValue(value))
 #define TTZoneIsActiveD(category) TT_TRACY_EMIT(category, false, ZoneIsActive)
 
-#define TTMessageD(category, txt, size) \
+#define TTTracyMessageD(category, txt, size) \
     TT_TRACY_EMIT(category, (void(sizeof(txt) + sizeof(size))), TracyMessage(txt, size))
-#define TTMessageDL(category, txt) TT_TRACY_EMIT(category, (void(sizeof(txt))), TracyMessageL(txt))
-#define TTMessageDC(category, txt, size, color) \
+#define TTTracyMessageDL(category, txt) TT_TRACY_EMIT(category, (void(sizeof(txt))), TracyMessageL(txt))
+#define TTTracyMessageDC(category, txt, size, color) \
     TT_TRACY_EMIT(category, (void(sizeof(txt) + sizeof(size) + sizeof(color))), TracyMessageC(txt, size, color))
-#define TTMessageDLC(category, txt, color) \
+#define TTTracyMessageDLC(category, txt, color) \
     TT_TRACY_EMIT(category, (void(sizeof(txt) + sizeof(color))), TracyMessageLC(txt, color))
-#define TTMessageDS(category, txt, size, depth) \
+#define TTTracyMessageDS(category, txt, size, depth) \
     TT_TRACY_EMIT(category, (void(sizeof(txt) + sizeof(size) + sizeof(depth))), TracyMessageS(txt, size, depth))
-#define TTMessageDLS(category, txt, depth) \
+#define TTTracyMessageDLS(category, txt, depth) \
     TT_TRACY_EMIT(category, (void(sizeof(txt) + sizeof(depth))), TracyMessageLS(txt, depth))
-#define TTMessageDCS(category, txt, size, color, depth)                     \
+#define TTTracyMessageDCS(category, txt, size, color, depth)                \
     TT_TRACY_EMIT(                                                          \
         category,                                                           \
         (void(sizeof(txt) + sizeof(size) + sizeof(color) + sizeof(depth))), \
         TracyMessageCS(txt, size, color, depth))
-#define TTMessageDLCS(category, txt, color, depth) \
+#define TTTracyMessageDLCS(category, txt, color, depth) \
     TT_TRACY_EMIT(category, (void(sizeof(txt) + sizeof(color) + sizeof(depth))), TracyMessageLCS(txt, color, depth))
 
-#define TTPlotD(category, name, val) TT_TRACY_EMIT(category, (void(sizeof(name) + sizeof(val))), TracyPlot(name, val))
-#define TTPlotConfigD(category, name, type, step, fill, color)                                                 \
+#define TTTracyPlotD(category, name, val) \
+    TT_TRACY_EMIT(category, (void(sizeof(name) + sizeof(val))), TracyPlot(name, val))
+#define TTTracyPlotConfigD(category, name, type, step, fill, color)                                            \
     TT_TRACY_EMIT(                                                                                             \
         category,                                                                                              \
         (void(sizeof(name) + TT_TRACY_SIZEOF_IF_ENABLED(type) + sizeof(step) + sizeof(fill) + sizeof(color))), \

@@ -22,11 +22,14 @@ def get_rot_transformation_mat():
     return rot_emb_matrix
 
 
-def get_cos_sin_matrix(hf_config, interleave: bool = True):
+def get_cos_sin_matrix(hf_config, interleave: bool = True, num_positions: int | None = None):
     """Get cos and sin matrices for rotary positional embeddings.
 
     HuggingFace returns cos/sin in [max_seq_len, dim] with dim = [t1,..,td//2, t1,..,td//2].
-    Returns cos, sin as [1, 1, max_seq_len, dim].
+    Returns cos, sin as [1, 1, num_positions or max_seq_len, dim].
+
+    ``num_positions`` overrides how many positions the table covers (default hf_config.max_seq_len).
+    It is a table LENGTH, not a rope parameter: YaRN's frequencies do not depend on it.
 
     interleave (which physical columns form a rotated pair):
         True  -> Meta-style duplicated pairs [t1,t1,..,td//2,td//2]; pairs (0,1),(2,3),..
@@ -41,7 +44,7 @@ def get_cos_sin_matrix(hf_config, interleave: bool = True):
     """
     args = {
         "dim": hf_config.qk_rope_head_dim,
-        "max_position_embeddings": hf_config.max_seq_len,
+        "max_position_embeddings": num_positions if num_positions is not None else hf_config.max_seq_len,
         "base": hf_config.rope_theta * 1.0,
         "device": "cpu",
         "scaling_factor": hf_config.rope_scaling["factor"],
@@ -134,6 +137,7 @@ class RotarySetup:
         self.sp_axis = sp_axis
         self.is_balanced = is_balanced
         self.sp_factor = mesh_device.shape[sp_axis]
+        self.use_nope = bool(getattr(hf_config, "mla_use_nope", False))  # Kimi-K3 path: no rope
 
     def get_rope_tensors(self, seq_len: int) -> dict[str, ttnn.Tensor]:
         """Get cos, sin, and transformation matrices sharded over SP axis.
@@ -144,6 +148,8 @@ class RotarySetup:
         Always Meta-style interleaved cos/sin + a trans_matrix (rotary_embedding_llama) — the
         MLA's own RoPE layout.
         """
+        if self.use_nope:
+            return {}  # Kimi-K3 path
         cos_matrix_torch, sin_matrix_torch = get_cos_sin_matrix(self.hf_config, interleave=True)
 
         assert (
@@ -186,7 +192,9 @@ class RotarySetup:
 
         return {"cos_matrix": cos_matrix, "sin_matrix": sin_matrix, "trans_matrix": trans_matrix}
 
-    def get_rope_tensors_indexed(self, cache_seq_len_global: int, chunk_size_global: int) -> dict[str, ttnn.Tensor]:
+    def get_rope_tensors_indexed(
+        self, cache_seq_len_global: int, chunk_size_global: int, tail_slack: bool = False
+    ) -> dict[str, ttnn.Tensor]:
         """Get whole-cache cos/sin/trans matrices for the KV-pad-aware *indexed* rotated path.
 
         This builds the rope values for the *entire* cache once. The cos/sin are
@@ -202,12 +210,18 @@ class RotarySetup:
                 cover every position the cache can hold). Per-chip shard = cache_seq_len_global // sp.
             chunk_size_global: global chunk size (one chunk across all SP devices). Per-chip chunk =
                 chunk_size_global // sp_factor, which keys the block-cyclic reorder.
+            tail_slack: extend the table by ONE chunk past the cache. A chunk ropes its whole padded
+                slab, so a last chunk padding past the cache end would read past an exactly-sized
+                table. The KV cache skips that tail instead (valid_global); the rope table, being one
+                shared tensor, has to be readable.
 
         Constraints (mirroring the block-cyclic / cache layout):
             * ``cache_seq_len_global <= max_seq_len``
             * ``chunk_size_global % (TILE_SIZE * sp_factor) == 0``
             * ``cache_seq_len_global % chunk_size_global == 0``
         """
+        if self.use_nope:
+            return {}  # Kimi-K3 path
         assert not self.is_balanced, "indexed rotated rope is incompatible with is_balanced"
         sp = self.sp_factor
         assert (
@@ -221,10 +235,11 @@ class RotarySetup:
             f"chunk_size_global ({chunk_size_global})"
         )
         chunk_local = chunk_size_global // sp
+        table_seq_len = cache_seq_len_global + (chunk_size_global if tail_slack else 0)
 
-        cos_matrix_torch, sin_matrix_torch = get_cos_sin_matrix(self.hf_config)
-        cos_matrix_torch = cos_matrix_torch[..., :cache_seq_len_global, :]
-        sin_matrix_torch = sin_matrix_torch[..., :cache_seq_len_global, :]
+        cos_matrix_torch, sin_matrix_torch = get_cos_sin_matrix(self.hf_config, num_positions=table_seq_len)
+        cos_matrix_torch = cos_matrix_torch[..., :table_seq_len, :]
+        sin_matrix_torch = sin_matrix_torch[..., :table_seq_len, :]
 
         # Block-cyclic reorder keyed by the per-chip chunk so a plain SP shard hands device c the
         # rope values for every global position it carries, in local-cache-row order.
@@ -259,24 +274,3 @@ class RotarySetup:
         )
 
         return {"cos_matrix": cos_matrix, "sin_matrix": sin_matrix, "trans_matrix": trans_matrix}
-
-    def get_indexer_rope_tables(self, interleave: bool) -> dict[str, ttnn.Tensor]:
-        """Full-length REPLICATED cos/sin (+ trans_matrix iff ``interleave``) for the DSA lightning
-        indexer's natural-path RoPE. Distinct from ``get_rope_tensors`` (SP-sharded, interleaved-only,
-        for the MLA q_pe/k_pe): the indexer keeps a replicated full/gathered key cache, chooses its
-        convention per config (GLM interleaved -> ``rotary_embedding_llama``; DeepSeek half-split ->
-        ``rotary_embedding_hf``), and slices the tables per chunk itself. Pure rotations (no mscale),
-        same theta/YaRN as the MLA. Returns ``{"cos", "sin", "trans"}`` with ``trans=None`` for the
-        half-split (DeepSeek) convention."""
-        cos, sin = get_cos_sin_matrix(self.hf_config, interleave=interleave)
-
-        def repl(t):
-            return ttnn.from_torch(
-                t.to(torch.bfloat16),
-                device=self.mesh_device,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat16,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-            )
-
-        return {"cos": repl(cos), "sin": repl(sin), "trans": repl(get_rot_transformation_mat()) if interleave else None}

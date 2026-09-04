@@ -554,6 +554,20 @@ def test_slice_irregular_shapes_sharded(shape, begins, ends, step, shard_factory
     )
 
 
+# RM HEIGHT-sh in + interleaved out: routes SliceRmProgramFactory whose reader uses
+# noc_async_read_sharded — the fast-path enabled by #47299 for sub-NoC-aligned sticks (W·E % 16 ≠ 0).
+@pytest.mark.parametrize(
+    "shape, begins, ends, step, dtype",
+    [
+        pytest.param((1, 1, 32, 97), (0, 0, 0, 0), (1, 1, 32, 49), (1, 1, 1, 1), ttnn.bfloat16, id="bf16_W97"),
+        pytest.param((1, 1, 32, 49), (0, 0, 0, 0), (1, 1, 32, 33), (1, 1, 1, 1), ttnn.float32, id="f32_W49"),
+    ],
+)
+def test_slice_rm_height_sharded_sub_noc_aligned_stick(shape, begins, ends, step, dtype, device):
+    in_mc = _height_sharded(shape, device, num_cores=4, layout=ttnn.ROW_MAJOR_LAYOUT)
+    _run_slice(shape, begins, ends, step, ttnn.ROW_MAJOR_LAYOUT, in_mc, L1_INTERLEAVED, dtype, device)
+
+
 # ────────────────────────────────────────────────────────────────────────────────
 # Group F: Sharded inputs with explicit grids/shapes — irregular logical dims, uneven splits.
 # ────────────────────────────────────────────────────────────────────────────────
@@ -664,14 +678,43 @@ def test_slice_tile_subtile_height_sharded(shape, begins, ends, step, ncores, sh
     )
 
 
+# Issue #50714: F/H are the load-bearing HS→HS regression cases for SliceRmShardedProgramFactory; A covers the coalesce fast-path; G exercises the w_begin_aligned routing guard fallback to SliceRmProgramFactory.
 @pytest.mark.parametrize(
-    "shape, begins, ends, step, shard_shape",
+    "shape, begins, ends, step, in_shard, out_shard",
     [
-        pytest.param((1, 1, 52, 64), (0, 0, 0, 0), (1, 1, 26, 64), (1, 1, 1, 1), (13, 64), id="RM_hs_13x64_nontile"),
+        pytest.param(
+            (1, 1, 52, 64), (0, 0, 0, 0), (1, 1, 26, 64), (1, 1, 1, 1), (4, 13, 64), (2, 13, 64), id="A_coalesced"
+        ),
+        pytest.param(
+            (1, 1, 32, 64), (0, 0, 0, 16), (1, 1, 32, 32), (1, 1, 1, 1), (4, 8, 64), (4, 8, 16), id="F_w_begin_aligned"
+        ),
+        # W_in=52 at bf16: 104 B payload vs 112 B aligned page — exercises src_stride_bytes != stick_size_unpadded.
+        pytest.param(
+            (1, 1, 32, 52),
+            (0, 0, 0, 0),
+            (1, 1, 26, 52),
+            (1, 1, 1, 1),
+            (4, 8, 52),
+            (2, 13, 52),
+            id="H_w_unaligned_stride",
+        ),
+        # HS→HS + misaligned W-begin: pins the w_begin_aligned guard (all other clauses of
+        # height_sharded_in_out_no_step are true, so only w_begin_aligned can route this to
+        # SliceRmProgramFactory). Removing `&& w_begin_aligned` would flip this to the buggy path.
+        pytest.param(
+            (1, 1, 32, 64),
+            (0, 0, 0, 1),
+            (1, 1, 32, 32),
+            (1, 1, 1, 1),
+            (4, 8, 64),
+            (4, 8, 31),
+            id="G_w_begin_misaligned_routes_to_rm_fallback",
+        ),
     ],
 )
-def test_slice_row_major_height_sharded_nontile_aligned(shape, begins, ends, step, shard_shape, device):
-    imc = _explicit_height_shard_config(device, 4, shard_shape[0], shard_shape[1])
+def test_slice_row_major_height_sharded_nontile_aligned(shape, begins, ends, step, in_shard, out_shard, device):
+    imc = _explicit_height_shard_config(device, *in_shard)
+    omc = _explicit_height_shard_config(device, *out_shard)
     _run_slice(
         shape,
         begins,
@@ -679,7 +722,7 @@ def test_slice_row_major_height_sharded_nontile_aligned(shape, begins, ends, ste
         step,
         ttnn.ROW_MAJOR_LAYOUT,
         imc,
-        L1_INTERLEAVED,
+        omc,
         ttnn.bfloat16,
         device,
     )
@@ -940,6 +983,85 @@ def test_slice_rm_bw_sharded_nonzero_width_begin(shard_factory, device):
     )
 
 
+def test_slice_rm_bw_sharded_subaligned_shard_row_in(device):
+    """RM WIDTH-sharded input whose shard row is 12 bf16 elems = 24B, not a multiple of any buffer
+    alignment. W=96 is tile-aligned and width-begin is 0, so only the shard-row check routes this
+    through L1 interleaved; natively the accessor strides pages by the aligned page size while
+    `noc_async_read_sharded` reuses that same value as the per-page payload."""
+    in_shape = (1, 1, 64, 96)
+    _run_slice(
+        in_shape,
+        (0, 0, 0, 0),
+        (1, 1, 32, 96),
+        (1, 1, 1, 1),
+        ttnn.ROW_MAJOR_LAYOUT,
+        _width_sharded(in_shape, device, num_cores=8, layout=ttnn.ROW_MAJOR_LAYOUT),
+        L1_INTERLEAVED,
+        ttnn.bfloat16,
+        device,
+        ulp_when_exact=True,
+    )
+
+
+def test_slice_rm_block_sharded_subaligned_shard_row_in(device):
+    """BLOCK-sharded counterpart of the input-side case. `_block_sharded`'s 2x2 grid can't reach it —
+    any tile-aligned W halved is still a multiple of 8 bf16 elems — so use an explicit 2x8 grid:
+    a (32, 12) shard on (1, 1, 64, 96) gives a 24B row while W stays tile-aligned."""
+    in_shape = (1, 1, 64, 96)
+    _run_slice(
+        in_shape,
+        (0, 0, 0, 0),
+        (1, 1, 32, 96),
+        (1, 1, 1, 1),
+        ttnn.ROW_MAJOR_LAYOUT,
+        _explicit_block_shard_config(device, 2, 8, 32, 12),
+        L1_INTERLEAVED,
+        ttnn.bfloat16,
+        device,
+        ulp_when_exact=True,
+    )
+
+
+def test_slice_rm_bw_sharded_rescaled_subaligned_shard_row(device):
+    """Implicit output spec (no memory_config): the output inherits the input's shard spec and then has
+    it rescaled to the sliced width, after the composite decision. The inherited row is 16 bf16 elems
+    = 32B and aligned, but the rescale yields div_up(96, 8) = 12 elems = 24B, which is not — so the
+    guard has to test the rescaled width rather than the inherited one."""
+    in_shape = (1, 1, 64, 128)
+    _run_slice(
+        in_shape,
+        (0, 0, 0, 0),
+        (1, 1, 64, 96),
+        (1, 1, 1, 1),
+        ttnn.ROW_MAJOR_LAYOUT,
+        _width_sharded(in_shape, device, num_cores=8, layout=ttnn.ROW_MAJOR_LAYOUT),
+        None,
+        ttnn.bfloat16,
+        device,
+        ulp_when_exact=True,
+    )
+
+
+def test_slice_rm_bw_sharded_subaligned_shard_row_out(device):
+    """Mirror of the input-side case on the writer: RM interleaved → WIDTH-sharded output with a
+    24B shard row. Input W is tile-aligned, so needs_rm_composite_output must fire on the shard row
+    alone."""
+    in_shape = (1, 1, 64, 96)
+    out_shape = (1, 1, 32, 96)
+    _run_slice(
+        in_shape,
+        (0, 0, 0, 0),
+        out_shape,
+        (1, 1, 1, 1),
+        ttnn.ROW_MAJOR_LAYOUT,
+        L1_INTERLEAVED,
+        _width_sharded(out_shape, device, num_cores=8, layout=ttnn.ROW_MAJOR_LAYOUT),
+        ttnn.bfloat16,
+        device,
+        ulp_when_exact=True,
+    )
+
+
 # Focused dtype spot-checks on representative paths. The core suites above run bf16 only to keep
 # the file under budget; this hits f32 across TILE+RM paths and bf8b on the TILE-only path.
 @pytest.mark.parametrize(
@@ -969,3 +1091,106 @@ def test_slice_dtype_coverage(shape, layout, in_mc_fn, dtype, device):
         device,
         ulp_when_exact=(dtype != ttnn.bfloat8_b),
     )
+
+
+# Specless sharded output must shrink CoreRangeSet to populated shard count.
+
+
+def _slice_and_assert_shrink(device, shape, begins, ends, out_layout, expected_grid_factory, n_expected):
+    """Run slice with a specless sharded output_mem_config; assert result.grid matches expected
+    and result is bit-exact against torch reference."""
+    compute_grid = device.compute_with_storage_grid_size()
+    if compute_grid.x * compute_grid.y < n_expected:
+        pytest.skip(f"Device grid too small for shrink test (need >= {n_expected} cores)")
+    torch.manual_seed(12345)
+    x = torch.rand(shape, dtype=torch.bfloat16)
+    ttnn_in = ttnn.from_torch(
+        x, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=L1_INTERLEAVED
+    )
+    out_mc = ttnn.MemoryConfig(out_layout, ttnn.BufferType.L1)
+    result = ttnn.slice(ttnn_in, begins, ends, (1, 1, 1, 1), memory_config=out_mc)
+    grid = result.memory_config().shard_spec.grid
+    assert grid.num_cores() == n_expected, f"Expected {n_expected} populated cores, got {grid.num_cores()}"
+    expected = expected_grid_factory(compute_grid)
+    assert grid == expected, f"Expected grid {expected}, got {grid}"
+    slices = tuple(slice(b, e, 1) for b, e in zip(begins, ends))
+    ref = x[slices]
+    got = ttnn.to_torch(result.cpu().to(ttnn.ROW_MAJOR_LAYOUT))
+    assert_with_ulp(ref, got, ulp_threshold=0)
+
+
+def test_slice_specless_sharded_output_grid_shrinks_height(device):
+    """HEIGHT_SHARDED no-spec output: expect ceil(tensor_h / shard_h) populated cores.
+    slice (1,1,128,128) → (1,1,64,128); tensor_h=64, shard_h=32 → 2 populated cores."""
+    _slice_and_assert_shrink(
+        device,
+        shape=(1, 1, 128, 128),
+        begins=(0, 0, 0, 0),
+        ends=(1, 1, 64, 128),
+        out_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        expected_grid_factory=lambda grid: ttnn.num_cores_to_corerangeset(2, grid, True),
+        n_expected=2,
+    )
+
+
+def test_slice_specless_sharded_output_grid_shrinks_width(device):
+    """WIDTH_SHARDED no-spec output: expect ceil(tensor_w / shard_w) populated cores.
+    slice (1,1,128,128) → (1,1,128,64); tensor_w=64, shard_w=32 → 2 populated cores."""
+    _slice_and_assert_shrink(
+        device,
+        shape=(1, 1, 128, 128),
+        begins=(0, 0, 0, 0),
+        ends=(1, 1, 128, 64),
+        out_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        expected_grid_factory=lambda grid: ttnn.num_cores_to_corerangeset(2, grid, True),
+        n_expected=2,
+    )
+
+
+def test_slice_specless_sharded_output_grid_shrinks_block(device):
+    """BLOCK_SHARDED no-spec output: expect rectangular 2x2 populated grid.
+    slice (1,1,128,128) → (1,1,64,64); shard=32x32 → 2x2 rectangle = 4 cores."""
+    compute_grid = device.compute_with_storage_grid_size()
+    if compute_grid.x < 2 or compute_grid.y < 2:
+        pytest.skip("Device grid too small for 2x2 BLOCK shrink test")
+    _slice_and_assert_shrink(
+        device,
+        shape=(1, 1, 128, 128),
+        begins=(0, 0, 0, 0),
+        ends=(1, 1, 64, 64),
+        out_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        expected_grid_factory=lambda _grid: ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}
+        ),
+        n_expected=4,
+    )
+
+
+def test_slice_specless_sharded_output_grid_shrinks_block_col_major(device):
+    """BLOCK+COL_MAJOR shrink: adjust rejects (sub-tile), falls to gen; shard=(32,32), phys 2x3=6 cores COL_MAJOR."""
+    shape = (1, 1, 128, 128)
+    compute_grid = device.compute_with_storage_grid_size()
+    if compute_grid.x < 2 or compute_grid.y < 3:
+        pytest.skip("Device grid too small for COL_MAJOR 2x3 BLOCK shrink test")
+    in_mc = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
+            (64, 64),
+            ttnn.ShardOrientation.COL_MAJOR,
+        ),
+    )
+    out_mc = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1)
+    torch.manual_seed(12345)
+    x = torch.rand(shape, dtype=torch.bfloat16)
+    ttnn_in = ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=in_mc)
+    result = ttnn.slice(ttnn_in, (0, 0, 0, 0), (1, 1, 64, 96), (1, 1, 1, 1), memory_config=out_mc)
+    ss = result.memory_config().shard_spec
+    assert ss.orientation == ttnn.ShardOrientation.COL_MAJOR, f"Expected COL_MAJOR, got {ss.orientation}"
+    assert ss.grid.num_cores() == 6, f"Expected 2x3=6 populated cores, got {ss.grid.num_cores()}"
+    expected = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 2))})
+    assert ss.grid == expected, f"Expected COL_MAJOR rect (0,0)->(1,2), got {ss.grid}"
+    ref = x[0:1, 0:1, 0:64, 0:96]
+    got = ttnn.to_torch(result.cpu().to(ttnn.ROW_MAJOR_LAYOUT))
+    assert_with_ulp(ref, got, ulp_threshold=0)

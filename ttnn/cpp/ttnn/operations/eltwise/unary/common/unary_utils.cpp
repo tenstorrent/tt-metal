@@ -9,11 +9,11 @@
 
 namespace ttnn::operations::unary {
 
-const std::optional<tt::tt_metal::ShardSpec>& get_shard_spec(const TensorSpec& tensor_spec) {
+const std::optional<tt::tt_metal::ShardSpec>& get_shard_spec(const tt::tt_metal::TensorSpec& tensor_spec) {
     return tensor_spec.memory_config().shard_spec();
 }
 
-bool is_uneven(const TensorSpec& t) {
+bool is_uneven(const tt::tt_metal::TensorSpec& t) {
     if (!t.memory_config().is_sharded()) {
         return false;
     }
@@ -28,7 +28,8 @@ bool is_uneven(const TensorSpec& t) {
     return (volume_except_last % shard[0]) != 0 || (shape[-1] % shard[1]) != 0;
 }
 
-bool is_native_L1_sharding(const TensorSpec& input_spec, const tt::tt_metal::MemoryConfig& output_memory_config) {
+bool is_native_L1_sharding(
+    const tt::tt_metal::TensorSpec& input_spec, const tt::tt_metal::MemoryConfig& output_memory_config) {
     if (!output_memory_config.is_sharded()) {
         return false;
     }
@@ -52,7 +53,8 @@ bool is_native_L1_sharding(const TensorSpec& input_spec, const tt::tt_metal::Mem
     return true;
 }
 
-std::optional<UnaryShardSpecs> get_shard_specs(const TensorSpec& input_spec, const TensorSpec& output_spec) {
+std::optional<UnaryShardSpecs> get_shard_specs(
+    const tt::tt_metal::TensorSpec& input_spec, const tt::tt_metal::TensorSpec& output_spec) {
     const bool input_sharded = input_spec.memory_config().is_sharded();
     const bool output_sharded = output_spec.memory_config().is_sharded();
 
@@ -68,7 +70,7 @@ std::optional<UnaryShardSpecs> get_shard_specs(const TensorSpec& input_spec, con
     // for the sharded CB-aliasing path to work (it requires whole-tile pages).
     // Fall back to the interleaved path otherwise.
     if (input_spec.layout() == tt::tt_metal::Layout::ROW_MAJOR) {
-        auto is_shard_tile_aligned = [](const TensorSpec& spec) {
+        auto is_shard_tile_aligned = [](const tt::tt_metal::TensorSpec& spec) {
             const auto& shard = *get_shard_spec(spec);
             const auto tile_hw = spec.tile().get_tile_hw();
             const uint64_t shard_elements = static_cast<uint64_t>(shard.shape[0]) * shard.shape[1];

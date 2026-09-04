@@ -4,30 +4,28 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    uint32_t num_sticks_per_core = get_arg_val<uint32_t>(1);
-    uint32_t num_sticks_per_barrier = get_arg_val<uint32_t>(2);
-    uint32_t start_page_id = get_arg_val<uint32_t>(3);
+    auto num_sticks_per_core = get_arg(args::num_sticks_per_core);
+    auto num_sticks_per_barrier = get_arg(args::num_sticks_per_barrier);
+    auto start_page_id = get_arg(args::start_page_id);
 
-    constexpr uint32_t cb_out0 = get_compile_time_arg_val(0);
-    constexpr uint32_t stick_size_bytes = get_compile_time_arg_val(1);
-    constexpr uint32_t stick_size_padded_aligned = get_compile_time_arg_val(2);
-    constexpr uint32_t num_output_pages_in_row = get_compile_time_arg_val(3);
-    constexpr uint32_t accessor_page_size = get_compile_time_arg_val(4);
-    constexpr auto dst_args = TensorAccessorArgs<5>();
+    constexpr auto stick_size_bytes = get_arg(args::stick_size_bytes);
+    constexpr auto stick_size_padded_aligned = get_arg(args::stick_size_padded_aligned);
+    constexpr auto num_output_pages_in_row = get_arg(args::num_output_pages_in_row);
 
-    const auto s = TensorAccessor(dst_args, dst_addr, accessor_page_size);
+    const auto s = TensorAccessor(tensor::dst);
     Noc noc;
-    CircularBuffer cb_out0_exp(cb_out0);
+    DataflowBuffer dfb_out0_exp(dfb::out0);
 
     uint32_t i_page = start_page_id;
     for (uint32_t iter = 0; iter < num_sticks_per_core;) {
-        cb_out0_exp.wait_front(num_sticks_per_barrier);
+        dfb_out0_exp.wait_front(num_sticks_per_barrier);
 
         uint32_t l1_read_offset = 0;
 
@@ -37,7 +35,7 @@ void kernel_main() {
                 // `noc_async_write_sharded` derives pages-per-row from the (rank-squeezed) dspec
                 // shape, which is wrong when an outer dim is sharded and the width is a single page.
                 noc.async_write(
-                    CoreLocalMem<uint32_t>(cb_out0_exp.get_read_ptr() + l1_read_offset),
+                    CoreLocalMem<uint32_t>(dfb_out0_exp.get_read_ptr() + l1_read_offset),
                     s,
                     stick_size_bytes,
                     {},
@@ -46,7 +44,7 @@ void kernel_main() {
                 const uint32_t stick_id = i_page / num_output_pages_in_row;
                 tt::data_movement::common::noc_async_write_sharded(
                     noc,
-                    cb_out0_exp.get_read_ptr() + l1_read_offset,
+                    dfb_out0_exp.get_read_ptr() + l1_read_offset,
                     s,
                     stick_id,
                     /*offset=*/0,
@@ -56,6 +54,6 @@ void kernel_main() {
             i_page += num_output_pages_in_row;
         }
         noc.async_write_barrier();
-        cb_out0_exp.pop_front(num_sticks_per_barrier);
+        dfb_out0_exp.pop_front(num_sticks_per_barrier);
     }
 }

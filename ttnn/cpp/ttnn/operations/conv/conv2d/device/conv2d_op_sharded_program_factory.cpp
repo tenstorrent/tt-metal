@@ -7,6 +7,7 @@
 #include <string>
 #include <utility>
 #include <tt_stl/assert.hpp>
+#include <tt-metalium/circular_buffer_constants.h>
 #include "tt-metalium/circular_buffer_config.hpp"
 #include "tt-metalium/core_coord.hpp"
 #include "tt-metalium/kernel_types.hpp"
@@ -126,6 +127,7 @@ ActivationReuseConfig calculate_activation_reuse_params(
     config.num_cores_with_non_meaningful_work = tt::div_up(total_remaining_tiles_to_push, single_core_height_ntiles);
 
     std::vector<CoreCoord> all_input_cores;
+    all_input_cores.reserve(input_cores.num_cores());
     for (const CoreRange& range : input_cores.ranges()) {
         for (const CoreCoord& core : range) {
             all_input_cores.push_back(core);
@@ -768,11 +770,6 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         }
     }
 
-    // 1D depthwise compute uses dest-reuse for accumulation — no MATMUL_PARTIALS CB is allocated.
-    const bool partials_cb_uses_output =
-        !is_conv_1d_depthwise_conv && get_cb_info_by_name(cb_info, Conv2dCb::MATMUL_PARTIALS).is_globally_allocated;
-    log_debug(tt::LogOp, "partials_cb_uses_output: {}", partials_cb_uses_output);
-
     std::string reader_kernel;
     std::string compute_kernel = "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/conv_bmm_tilize.cpp";
     std::string writer_mcast_sender_kernel =
@@ -870,7 +867,8 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         reader_defines["CONFIG_TENSOR_IN_DRAM"] = "1";
         writer_defines["CONFIG_TENSOR_IN_DRAM"] = "1";               // Needed for split reader
         writer_mcast_sender_defines["CONFIG_TENSOR_IN_DRAM"] = "1";  // Needed for split reader
-        reader_compile_time_args.push_back(conv_reader_indices_buffer->address());
+        reader_compile_time_args.push_back(
+            conv_reader_indices_buffer->address());  // smuggled-rta-ok: compile-time workload-owned buffer
         reader_compile_time_args.push_back(conv_reader_indices_buffer->page_size());
         tt::tt_metal::TensorAccessorArgs(conv_reader_indices_buffer).append_to(reader_compile_time_args);
     } else {
@@ -1037,6 +1035,11 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
 
     const bool check_skip_compute = input_cores != output_cores;
 
+    // Unpack-to-Dest overrides for the fp32 depthwise path; empty (default) for every other conv.
+    // Pairs with the SFPU path in compute_depthwise_conv1d.cpp -- that fixes the arithmetic, this
+    // makes sure the tiles reaching DST aren't already TF32-truncated by the unpacker.
+    std::vector<tt::tt_metal::UnpackToDestMode> depthwise_unpack_to_dest;
+
     std::vector<uint32_t> compute_kernel_args;
     if (is_conv_1d_depthwise_conv) {
         // compute_depthwise_conv1d.cpp uses a specialized dest-reuse accumulation path. The last
@@ -1048,6 +1051,29 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         const bool use_partials_scratch = !coalesce_1d_depthwise_kw_reads && num_blocks_act_h_per_core > 1;
         const uint32_t dest_reuse_scratch_cb_id =
             get_cb_info_by_name(cb_info, use_partials_scratch ? Conv2dCb::MATMUL_PARTIALS : Conv2dCb::OUT).index;
+
+        // Single source of truth for the fp32-exact depthwise contract: this drives both the
+        // unpack-to-dest overrides below and the kernel's SFPU dispatch (compile arg 12), so the
+        // two can never disagree. All three formats must be fp32 -- ACT_TILIZED and the scratch
+        // take the output format, and the JIT honors the mode only for Float32-format CBs
+        // (get_unpack_dst_formats). Mixed-dtype calls keep the stock FPU path.
+        const bool use_fp32_sfpu_depthwise =
+            fp32_dest_acc_en && a.dtype() == tt::tt_metal::DataType::FLOAT32 &&
+            b.dtype() == tt::tt_metal::DataType::FLOAT32 &&
+            get_cb_info_by_name(cb_info, Conv2dCb::OUT).data_format == tt::DataFormat::Float32;
+        if (use_fp32_sfpu_depthwise) {
+            depthwise_unpack_to_dest.assign(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+            // ACT is included as well as ACT_TILIZED: the tilize step unpacks ACT through SrcA, which
+            // rounds fp32 to TF32 *before* ACT_TILIZED is ever written, so overriding only the
+            // tilized buffer would leave the activation already truncated.
+            for (const uint32_t cb :
+                 {get_cb_info_by_name(cb_info, Conv2dCb::ACT).index,
+                  get_cb_info_by_name(cb_info, Conv2dCb::ACT_TILIZED).index,
+                  get_cb_info_by_name(cb_info, Conv2dCb::WEIGHTS).index,
+                  dest_reuse_scratch_cb_id}) {
+                depthwise_unpack_to_dest[cb] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+            }
+        }
 
         compute_kernel_args = {
             act_block_w_ntiles,                                         // 0: in0_block_w
@@ -1062,6 +1088,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
             filter_w,                                                   // 9: kernel_width
             coalesce_1d_depthwise_kw_reads,                             // 10: coalesced activation block
             dest_reuse_scratch_cb_id,                                   // 11: dest-reuse read-back scratch
+            (uint32_t)use_fp32_sfpu_depthwise,                          // 12: SFPU fp32-exact dispatch
         };
     } else {
         compute_kernel_args = {
@@ -1096,7 +1123,6 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
             get_cb_info_by_name(cb_info, Conv2dCb::MATMUL_PARTIALS).index,
             get_cb_info_by_name(cb_info, Conv2dCb::ACT_TILIZED).index,
             get_cb_info_by_name(cb_info, Conv2dCb::OUT).index,
-            partials_cb_uses_output,
             conv_act_c_blocks,
             check_skip_compute,
             pack_relu,
@@ -1181,6 +1207,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     compute_kernel_desc.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
+        .unpack_to_dest_mode = depthwise_unpack_to_dest,
     };
 
     // Helper lambda to setup mcast arguments

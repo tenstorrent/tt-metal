@@ -12,6 +12,7 @@
 
 #ifdef LLK_TRISC_UNPACK
 
+#include "llk_bfd_alloc.h"
 #include "llk_math_common.h"
 #include "llk_unpack_common.h"
 #include "llk_unpack_unary_operand.h"
@@ -24,14 +25,12 @@
 //   Dest:     tile 0 = gate, tile 1 = up, tile 2 = output
 //   buffer_Res: 1 output tile (the value of dest tile 2 packed out)
 // We unpack 2 tiles to Dest via the unary operand path (unpacker advances
-// through tiles 0,1 automatically with num_tiles=2).
+// through tiles 0,1 automatically from the init argument).
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    const std::uint32_t buf_desc_id     = 0;
-    const std::uint32_t num_input_tiles = 2; // gate + up
 
     if (unpack_to_dest)
     {
@@ -43,33 +42,24 @@ void run_kernel(RUNTIME_PARAMETERS params)
         set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
     }
 
-    buffer_descriptor_u bd_val = {0};
-
-    bd_val.f.l1_addr_16B = L1_ADDRESS(params.buffer_A[0]);
-    bd_val.f.format      = static_cast<std::uint8_t>(formats.unpack_A_src);
-    bd_val.f.x_dim       = params.TEST_FACE_C_DIM;
-    bd_val.f.y_dim       = params.TEST_FACE_R_DIM;
-    bd_val.f.z_dim       = params.num_faces;
-
-    tdma_descriptor_t td_val;
-    td_val.buf_desc        = bd_val;
-    td_val.buf_desc_id     = buf_desc_id;
-    td_val.reg_data_format = static_cast<std::uint8_t>(formats.unpack_A_dst);
-    _configure_buf_desc_table_(td_val.buf_desc_id, td_val.buf_desc);
+    ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
+        ckernel::tensor_shape_from_num_faces(params.TEST_FACE_R_DIM, params.num_faces), L1_ADDRESS(params.buffer_A[0]), formats.unpack_A_src);
 
     if (is_fp32_dest_acc_en && !unpack_to_dest)
     {
         // Same workaround as unary tests: MOVA2D for 32-bit dest requires both
         // SrcA/B format configs because the datacopy uses ELWADD internally.
-        _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(td_val, td_val);
+        _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
+            static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_A_dst));
     }
     else
     {
-        _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(td_val);
+        _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(static_cast<DataFormat>(formats.unpack_A_dst));
     }
 
-    _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, num_input_tiles);
-    _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(0, ckernel::DEFAULT_TENSOR_SHAPE);
+    _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(
+        ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), ckernel::DEFAULT_TENSOR_SHAPE, 2 /*gate + up*/);
+    _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(0 /*l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
 
     if (unpack_to_dest)
     {
@@ -117,17 +107,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
     DataFormat src_format = static_cast<DataFormat>(formats.math);
     _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, is_int_fpu_en>(src_format, src_format);
 
-    constexpr std::uint32_t NUM_INPUT_TILES = 2; // gate + up
-
     if (!unpack_to_dest)
     {
         // FPU path: datacopy BOTH input tiles from SrcA to Dest before the
         // SFPU section reads them. Tile 0 = gate at Dest[0], tile 1 = up at
         // Dest[1].
-        const std::uint32_t num_rows = params.num_faces * params.TEST_FACE_R_DIM;
-        _llk_math_eltwise_unary_datacopy_init_<DATA_COPY_TYPE, is_fp32_dest_acc_en>(num_rows, 1);
+        _llk_math_eltwise_unary_datacopy_init_<DATA_COPY_TYPE, is_fp32_dest_acc_en>(params.num_faces * params.TEST_FACE_R_DIM, 1 /*num_matrices*/);
 
-        for (std::uint32_t i = 0; i < NUM_INPUT_TILES; ++i)
+        for (std::uint32_t i = 0; i < 2 /*gate + up*/; ++i)
         {
             _llk_math_eltwise_unary_datacopy_(params.DST_INDEX + i);
         }
@@ -179,6 +166,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef LLK_TRISC_PACK
 
 #include "cfg_defines.h"
+#include "llk_bfd_alloc.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 #include "params.h"
@@ -188,9 +176,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    std::uint32_t const buf_desc_id          = 8;
-    constexpr std::uint32_t num_output_tiles = 1;
-
     // Declare the same dvalid client chain that UNPACK/MATH used, seen from
     // PACK's side. The chain must match on all three threads.
     if (unpack_to_dest)
@@ -202,28 +187,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
         set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
     }
 
-    buffer_descriptor_u bd_val = {0};
-    bd_val.f.l1_addr_16B       = params.buffer_Res[0] / 16;
-    bd_val.f.format            = static_cast<std::uint8_t>(formats.pack_dst);
-    bd_val.f.x_dim             = params.TEST_FACE_C_DIM;
-    bd_val.f.y_dim             = params.TEST_FACE_R_DIM;
-    bd_val.f.z_dim             = params.num_faces;
+    ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(
+        ckernel::tensor_shape_from_num_faces(params.TEST_FACE_R_DIM, params.num_faces), L1_ADDRESS(params.buffer_Res[0]), formats.pack_dst);
 
-    tdma_descriptor_t tdma_desc;
-    tdma_desc.buf_desc        = bd_val;
-    tdma_desc.buf_desc_id     = buf_desc_id;
-    tdma_desc.reg_data_format = static_cast<std::uint8_t>(formats.pack_src);
-    _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
-
-    _llk_pack_hw_configure_<p_pacr::PACK0>(tdma_desc);
-    _llk_pack_init_(buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, num_output_tiles);
+    _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
+    _llk_pack_init_(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), ckernel::DEFAULT_TENSOR_SHAPE, 1 /*num_tiles*/);
 
     // Output lives at Dest tile index 2 — this is the layout *this driver*
     // uses (see "Layout used by this test" at the top of the file): gate=0,
     // up=1, out=2 relative to DST_INDEX. The kernel itself is layout-agnostic
     // and accepts arbitrary (gate, up, out) Dest offsets via
     // `_calculate_swiglu_`'s parameters; +2 is not a property of swiglu.
-    _llk_pack_(params.DST_INDEX + 2, 0, ckernel::DEFAULT_TENSOR_SHAPE);
+    _llk_pack_(params.DST_INDEX + 2 /*start_math_dest_tile_idx*/, 0 /*start_l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
     _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
 }
 #endif

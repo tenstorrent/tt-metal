@@ -2,6 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// NOTE (please keep): PhysicalSystemDiscovery runs outside of tt-metal as well — it is used by
+// applications that manage their own devices. Do NOT instantiate MetalContext here (e.g.
+// `MetalContext::instance()`): that spins up a MetalContext behind the caller's back and breaks
+// telemetry / explicit device ownership. If runtime options or context are needed, pass them in
+// explicitly as function arguments. For a small piece of config, read the environment variable
+// directly with std::getenv (see get_local_discovery_hostname() below for the mock cluster descriptor).
+
 #include <tt_stl/fmt.hpp>
 #include "tt_metal/fabric/physical_system_discovery.hpp"
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
@@ -11,10 +18,12 @@
 
 #include <unistd.h>
 #include <climits>
+#include <cstdlib>
 #include <fstream>
 #include <algorithm>
 #include <set>
 #include <unordered_map>
+#include <unordered_set>
 #include <filesystem>
 #include <vector>
 
@@ -26,7 +35,6 @@
 #include "tt_metal/fabric/serialization/physical_system_descriptor_serialization.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/fabric/port_lookup.hpp"
-#include "impl/context/metal_context.hpp"
 
 namespace tt::tt_metal {
 
@@ -50,12 +58,14 @@ PortType to_metal_port_type(tt::scaleout_tools::PortType pt) {
 
 // OS hostname for live clusters; mock cluster descriptor filename (basename) per rank in mock mode.
 std::string get_local_discovery_hostname() {
-    const auto& rtoptions = MetalContext::instance().rtoptions();
-    if (rtoptions.get_mock_enabled()) {
-        const auto& path = rtoptions.get_mock_cluster_desc_path();
-        if (!path.empty()) {
-            return std::filesystem::path(path).filename().string();
-        }
+    // Read the mock cluster descriptor path straight from the environment rather than through
+    // MetalContext (see file-header note: MetalContext must not be instantiated here). This matches how
+    // rtoptions defines "mock enabled" (mock_cluster_desc_path non-empty, set from
+    // TT_METAL_MOCK_CLUSTER_DESC_PATH). In mock mode use the descriptor filename as this rank's hostname
+    // so mock-cluster test runs get stable, matching hostnames; otherwise use the OS hostname.
+    if (const char* mock_cluster_desc_path = std::getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH");
+        mock_cluster_desc_path != nullptr && mock_cluster_desc_path[0] != '\0') {
+        return std::filesystem::path(mock_cluster_desc_path).filename().string();
     }
     return get_host_name();
 }
@@ -94,13 +104,20 @@ TrayID get_tray_id_for_chip(
     }
     if (!mobo_to_bus_ids.contains(mobo_name)) {
         auto bus_id = tt::tt_fabric::get_bus_id(cluster_desc, chip_id);
-        log_warning(
-            tt::LogAlways,
-            "Unknown motherboard '{}' for chip_id={} (bus_id=0x{:x}) — falling back to bus_id as tray_id. "
-            "Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.",
-            mobo_name,
-            chip_id,
-            bus_id);
+        // All chips on a host share the same motherboard, so this fires once per chip in
+        // get_asic_position()'s per-chip loop (run_local_discovery iterates chip_unique_ids).
+        // Warn only once per distinct unknown motherboard name per process to avoid identical
+        // repeated log spam, while still surfacing the actionable message at least once.
+        static std::unordered_set<std::string> warned_mobo_names;
+        if (warned_mobo_names.insert(mobo_name).second) {
+            log_warning(
+                tt::LogAlways,
+                "Unknown motherboard '{}' for chip_id={} (bus_id=0x{:x}) — falling back to bus_id as tray_id. "
+                "Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.",
+                mobo_name,
+                chip_id,
+                bus_id);
+        }
         return TrayID{static_cast<uint32_t>(bus_id)};
     }
 
@@ -129,10 +146,6 @@ std::pair<TrayID, ASICLocation> get_asic_position(
     std::unordered_map<uint32_t, ASICLocation>& pcie_id_to_asic_location) {
     if (cluster_desc.get_board_type(chip_id) == BoardType::UBB_WORMHOLE ||
         cluster_desc.get_board_type(chip_id) == BoardType::UBB_BLACKHOLE) {
-        constexpr std::string_view ubb_mobo_name = "S7T-MB";
-
-        TT_FATAL(
-            using_mock_cluster_desc || get_mobo_name() == ubb_mobo_name, "UBB systems must use S7T-MB motherboard.");
         auto ubb_id = tt::tt_fabric::get_ubb_id(cluster_desc, chip_id);
         auto pcie_id = cluster_desc.get_chips_with_mmio().at(chip_id);
         pcie_devices_per_tray[ubb_id.tray_id].insert(pcie_id);
@@ -239,7 +252,7 @@ uint32_t get_chip_id_for_asic(const umd::ClusterDescriptor& cluster_desc, AsicID
 
 void validate_eth_fw_versions(
     PhysicalSystemDescriptor& psd,
-    const tt::umd::semver_t& peer_ethernet_firmware_version,
+    const tt::umd::SemVer& peer_ethernet_firmware_version,
     const std::string& my_host_name,
     const std::string& peer_host_name) {
     TT_FATAL(
@@ -737,7 +750,7 @@ PhysicalSystemDescriptor run_local_discovery(
 
     psd.get_system_graph().host_connectivity_graph[hostname_key] = {};
     // Get Ethernet Firmware Version from the driver - Initialize to 0 if not available
-    psd.get_ethernet_firmware_version() = cluster_desc.get_cluster_eth_fw_version().value_or(tt::umd::semver_t(0, 0, 0));
+    psd.get_ethernet_firmware_version() = cluster_desc.get_cluster_eth_fw_version().value_or(tt::umd::SemVer(0, 0, 0));
     // Get Firmware Bundle Version from the driver
     psd.get_firmware_bundle_version() = cluster_desc.get_cluster_firmware_bundle_version();
 

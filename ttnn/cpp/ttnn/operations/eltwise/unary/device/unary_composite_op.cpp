@@ -24,6 +24,7 @@
 #include "ttnn/operation.hpp"
 #include "ttnn/types.hpp"
 #include <tt-metalium/hal.hpp>
+#include <cstdint>
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 namespace ttnn::detail {
 
@@ -58,17 +59,17 @@ Tensor _std(
 }
 
 std::vector<Tensor> split_tensor_for_glu(
-    const Tensor& input_a, int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
+    const Tensor& input_a, std::int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> t_split;
     ttnn::Shape inshape(input_a.padded_shape());
     TT_FATAL(((inshape[dim] / 2) % tt::constants::TILE_WIDTH == 0), "Split tensor dimension should be in full tile");
-    ttsl::SmallVector<uint32_t> s_a = {0, 0, 0, 0};
-    ttsl::SmallVector<uint32_t> e_a = {input_a.padded_shape()[0], inshape[1], inshape[2], inshape[3] / 2};
+    ttsl::SmallVector<std::uint32_t> s_a = {0, 0, 0, 0};
+    ttsl::SmallVector<std::uint32_t> e_a = {input_a.padded_shape()[0], inshape[1], inshape[2], inshape[3] / 2};
 
-    ttsl::SmallVector<uint32_t> s_b = {0, 0, 0, inshape[3] / 2};
-    ttsl::SmallVector<uint32_t> e_b = {inshape[0], inshape[1], inshape[2], inshape[3]};
+    ttsl::SmallVector<std::uint32_t> s_b = {0, 0, 0, inshape[3] / 2};
+    ttsl::SmallVector<std::uint32_t> e_b = {inshape[0], inshape[1], inshape[2], inshape[3]};
 
-    auto step = ttsl::SmallVector<uint32_t>({1, 1, 1, 1});
+    auto step = ttsl::SmallVector<std::uint32_t>({1, 1, 1, 1});
     Tensor t_a = ttnn::slice(input_a, s_a, e_a, step, output_mem_config);
     Tensor t_b = ttnn::slice(input_a, s_b, e_b, step, output_mem_config);
 
@@ -164,10 +165,10 @@ Tensor clip(
     std::optional<float> max,
     const std::optional<MemoryConfig>& output_mem_config) {
     // Convert float optionals to variant optionals
-    std::optional<std::variant<float, int32_t>> min_variant =
-        min ? std::make_optional<std::variant<float, int32_t>>(std::in_place_type<float>, *min) : std::nullopt;
-    std::optional<std::variant<float, int32_t>> max_variant =
-        max ? std::make_optional<std::variant<float, int32_t>>(std::in_place_type<float>, *max) : std::nullopt;
+    std::optional<std::variant<float, std::int32_t>> min_variant =
+        min ? std::make_optional<std::variant<float, std::int32_t>>(std::in_place_type<float>, *min) : std::nullopt;
+    std::optional<std::variant<float, std::int32_t>> max_variant =
+        max ? std::make_optional<std::variant<float, std::int32_t>>(std::in_place_type<float>, *max) : std::nullopt;
 
     return clamp(input_a, min_variant, max_variant, output_mem_config);
 }
@@ -183,8 +184,8 @@ Tensor clip(
 // clamp
 Tensor clamp(
     const Tensor& input_a,
-    std::optional<std::variant<float, int32_t>> min,
-    std::optional<std::variant<float, int32_t>> max,
+    std::optional<std::variant<float, std::int32_t>> min,
+    std::optional<std::variant<float, std::int32_t>> max,
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<Tensor>& output_tensor) {
     TT_FATAL(
@@ -193,8 +194,8 @@ Tensor clamp(
     Tensor a = input_a;
 
     // Check if we have any int32_t scalars (both will be int32_t or null)
-    bool has_int32_scalar = (min.has_value() && std::holds_alternative<int32_t>(min.value())) ||
-                            (max.has_value() && std::holds_alternative<int32_t>(max.value()));
+    bool has_int32_scalar = (min.has_value() && std::holds_alternative<std::int32_t>(min.value())) ||
+                            (max.has_value() && std::holds_alternative<std::int32_t>(max.value()));
 
     // Convert input tensor to float32 only if input is INT32 and scalars are float (not int32)
     if (input_a.dtype() == DataType::INT32 && !has_int32_scalar) {
@@ -203,9 +204,9 @@ Tensor clamp(
 
     if (has_int32_scalar) {
         // All scalars are int32_t (or null)
-        int32_t min_val = min.has_value() ? std::get<int32_t>(min.value()) : -16775716;
-        int32_t max_val =
-            max.has_value() ? std::get<int32_t>(max.value())
+        std::int32_t min_val = min.has_value() ? std::get<std::int32_t>(min.value()) : -16775716;
+        std::int32_t max_val =
+            max.has_value() ? std::get<std::int32_t>(max.value())
                             : 16775716;  // max_val and min_val will be updated once unary infra supports int32 scalar.
         return ttnn::clamp_tss(a, min_val, max_val, output_mem_config, output_tensor);
     }  // All scalars are float (or null)
@@ -250,7 +251,7 @@ Tensor clamp(
 }
 
 // Gated Linear Unit activation: matmul(split[0],sigmoid(split[1]))
-Tensor glu(const Tensor& input_a, int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor glu(const Tensor& input_a, std::int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
     TT_ASSERT(dim == -1 || dim == 3, "last dim GLU only supported at this time ");
     if (dim == -1) {
         dim = 3;
@@ -263,7 +264,7 @@ Tensor glu(const Tensor& input_a, int32_t dim, const std::optional<MemoryConfig>
 }
 
 // ReLU Gated Linear Unit activation: matmul(split[0],relu(split[1]))
-Tensor reglu(const Tensor& input_a, int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor reglu(const Tensor& input_a, std::int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
     TT_ASSERT(dim == -1 || dim == 3, "last dim REGLU only supported at this time ");
     if (dim == -1) {
         dim = 3;
@@ -275,7 +276,7 @@ Tensor reglu(const Tensor& input_a, int32_t dim, const std::optional<MemoryConfi
 }
 
 // Gaussian Error Gated Linear Unit activation: matmul(split[0],gelu(split[1]))
-Tensor geglu(const Tensor& input_a, int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor geglu(const Tensor& input_a, std::int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
     TT_ASSERT(dim == -1 || dim == 3, "last dim GEGLU only supported at this time ");
     if (dim == -1) {
         dim = 3;
@@ -290,7 +291,7 @@ Tensor geglu(const Tensor& input_a, int32_t dim, const std::optional<MemoryConfi
 }
 
 // Swish Gated Linear Unit activation: matmul(split[0],swish(split[1]))
-Tensor swiglu(const Tensor& input_a, int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor swiglu(const Tensor& input_a, std::int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
     TT_ASSERT(dim == -1 || dim == 3, "last dim SWIGLU only supported at this time ");
     if (dim == -1) {
         dim = 3;
@@ -304,7 +305,7 @@ Tensor swiglu(const Tensor& input_a, int32_t dim, const std::optional<MemoryConf
 }
 
 // tril : select lower triangular region of input matrix
-Tensor tril(const Tensor& input_a, int32_t diag, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor tril(const Tensor& input_a, std::int32_t diag, const std::optional<MemoryConfig>& output_mem_config) {
     Tensor index_l = ttnn::index_tril<::bfloat16>(
         input_a.logical_shape(),
         input_a.padded_shape(),
@@ -317,7 +318,7 @@ Tensor tril(const Tensor& input_a, int32_t diag, const std::optional<MemoryConfi
 }
 
 // triu : select upper triangular region of input matrix
-Tensor triu(const Tensor& input_a, int32_t diag, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor triu(const Tensor& input_a, std::int32_t diag, const std::optional<MemoryConfig>& output_mem_config) {
     Tensor index_u = ttnn::index_triu<::bfloat16>(
         input_a.logical_shape(),
         input_a.padded_shape(),
@@ -330,10 +331,10 @@ Tensor triu(const Tensor& input_a, int32_t diag, const std::optional<MemoryConfi
 }
 
 // polygamma ψ^(n)(x): implemented via a fused SFPU kernel using a finite-sum + tail approximation.
-// The kernel evaluates (-1)^(n+1) * n! * Σ_{k=0}^{10} 1/(x + k)^(n+1) and applies an Euler–Maclaurin
-// tail correction term to approximate the infinite remainder Σ_{k=11}^{∞} 1/(x + k)^(n+1), rather than
-// performing a hard truncation at k = 10. This is a single kernel dispatch instead of 11+ composite ops.
-Tensor polygamma(const Tensor& input_a, int32_t k, const std::optional<MemoryConfig>& output_mem_config) {
+// The kernel evaluates (-1)^(n+1) * n! * Σ_{k=0}^{5} 1/(x + k)^(n+1) and applies an Euler–Maclaurin
+// tail correction term to approximate the infinite remainder Σ_{k=6}^{∞} 1/(x + k)^(n+1), rather than
+// performing a hard truncation at k = 5. This is a single kernel dispatch instead of 11+ composite ops.
+Tensor polygamma(const Tensor& input_a, std::int32_t k, const std::optional<MemoryConfig>& output_mem_config) {
     // Range includes k=11 to support polygamma_bw which computes polygamma(input, n+1)
     TT_FATAL(k >= 1 && k <= 11, "polygamma order must be in range [1, 11], got {}", k);
     float n = static_cast<float>(k);

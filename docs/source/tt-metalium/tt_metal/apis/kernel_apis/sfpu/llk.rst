@@ -258,6 +258,8 @@ available:
   * SM32 - (vSMag), 32-bit sign-magnitude integer
   * SM16 - (vSMag16), 16-bit sign-magnitude integer
   * M32 - (vMag), 32-bit magnitude only integer
+  * LO16 - low 16 bits
+  * HI16 - high 16 bits
 
 On Wormhole, the default mode for ``vInt`` is ``SM32``. In all cases
 when transfering a ``vInt`` to or from ``SM32``, or tranferring
@@ -266,6 +268,13 @@ Wormhole this is part of the load or store, on other architectures it
 is a separate operation. It is unspecified how 2's complement's most
 negative value converts to sign-magnitude.  Not all data
 representations are permitted for all types.
+
+The ``LO16`` layout transfers 16 bits to and from the low part of a
+``vUInt`` or related type. The ``HI16`` layout reads 16 bits into the
+high 16 bits of a ``vUInt`` type, but writes 32 bits, with the two
+16-bit halves swapped. For precise details consult the ISA document
+for how ``SFPLOAD`` and ``SFPSTORE`` handle the appropriate
+``MOD0_FMT_LO16`` and ``MOD0_FMT_HI16`` modifier values.
 
 Quasar's SrcS reg accessors may also use a `done` modifier, to set the
 ''done'' bit in the load or store:
@@ -328,6 +337,43 @@ the ``RoundMode`` operand is optional, and the following are provided:
   * ``Zero`` - round to zero (not Wormhole)
   * ``Nearest`` - Alias for ``NearestAway``, or ``NearestEven``
 
+Not all conversions are supported (columns are the source type, rows
+are the result type):
+
++-----------+--------+------+-------+-------+------+
+| Result    | vFloat | vInt | vUInt | vSMag | vMag |
++===========+========+======+=======+=======+======+
+| vFloat    |   -    | YES  |       | YES   | YES  |
++-----------+--------+------+-------+-------+------+
+| vInt      |  QSR   |  -   |       | YES   | YES  |
++-----------+--------+------+-------+-------+------+
+| vUInt     |        |      |       |       |      |
++-----------+--------+------+-------+-------+------+
+| vSMag     |  QSR   | YES  |       |   -   | YES  |
++-----------+--------+------+-------+-------+------+
+| vMag      |        |      |       |       |  -   |
++-----------+--------+------+-------+-------+------+
+| vFloat16a |  YES   | YES  |       | YES   | YES  |
++-----------+--------+------+-------+-------+------+
+| vFloat16b |  YES   | YES  |       | YES   | YES  |
++-----------+--------+------+-------+-------+------+
+| vUInt16   |  YES   |      |       |       |      |
++-----------+--------+------+-------+-------+------+
+| vUInt8    |  YES   |      |       |       |      |
++-----------+--------+------+-------+-------+------+
+| vSMag16   |  YES   |      |       |       |      |
++-----------+--------+------+-------+-------+------+
+| vSMag8    |  YES   |      |       |       |      |
++-----------+--------+------+-------+-------+------+
+
+The restricted types (``vFloat16a``, ``vSMag16``, etc, can be
+converted to the same types as their unrestricted variants
+(``vFloat``, ``vSMag``, etc).
+
+Note: The older ``int32_to_float`` function actually converted from
+sign-magnitude to float representations. Thus code using it should now
+use a ``vSMag`` source type, (or it was malfunctioning).
+
 Operators
 ^^^^^^^^^
 
@@ -345,12 +391,16 @@ The modifying variants, ``OP=``, are available.
 
 Conditional operators are provided -- ``==``, ``!=``, ``<``, ``>=``,
 ``>`` & ``<=``. These produce a ``vBool`` result, which may be used
-directly or indirectly in a ``v_if`` conditional. Both operands must
+directly in a ``v_if`` conditional. Both operands must
 be related vector types, or the second operand may be an appropriate
 scalar operator, or, for integral comparisons, may be a ``vMag`` type.
 
 ``vBool``s may be combined with ``&&``, ``||`` and ``!``
 operations. Note that these are not short-circuiting.
+
+You may create predicate functions that return a ``vBool``, but they
+must be invoked inside a ``v_if`` (or ``v_elseif``) condition.  Do not
+store the return value and then interrogate it later.
 
 Note: There is currently a compiler defect regarding signed and
 unsigned integer comparisons, where ordering comparisons are only
@@ -450,6 +500,30 @@ may be ``All`` or ``IgnoreSign`` (treats bit 31 as zero).
 
 .. code-block:: c++
 
+   impl_::FloatInt round (vFloat v);
+
+Round v to nearest integer, ties round to nearest even. This returns a
+tuple that may be implicitly converted to either ``vFloat`` or
+``vInt``, if you want exactly one result object.  Or it may be used in
+a structured binding, if you want both:
+
+.. code-block:: c++
+
+   auto [f1, i1] = round (v);
+   vFloat f2 = round (v);
+   vInt i2 = round (v);
+
+.. code-block:: c++
+
+   vFloat ldexp (vFloat in, int scale, LdexpMode = LdexpMode::Correct);
+   vFloat ldexp (vFloat in, vInt scale, LdexpMode = LdexpMode::Correct);
+
+Scale ``in`` by 2^``scale``. You may select an ``LdexpMode::Fast``,
+which for the vector case can be slightly faster at the expense of not
+dealing with exponent overflow or underflow.
+
+.. code-block:: c++
+
     vUInt shft(vUInt v, int amt, ShiftMode = ShiftMode::Logical);
     vUInt shft(vUInt v, vInt amt, ShiftMode = ShiftMode::Logical);
     vInt shft(vInt v, int amt, ShiftMode = ShiftMode::Arithmetic);
@@ -486,6 +560,14 @@ available on Wormhole.
 
 .. code-block:: c++
 
+   vFloat polynomial (vFloat x, T0 Coeff0, T1 Coeff1, T2 Coeff2, ...);
+
+Compute the polynomial expansion ``Coeff0 + Coeff1 * x + Coeff2 * x^2
++ ...``.  Coefficients may any be mixture of vector ``vFloat`` and
+scalar ``float`` types.
+
+.. code-block:: c++
+
     void swap(vType &a, vType &b);
 
 Swaps the values of ``a`` and ``b``.  Note that this uses the
@@ -495,11 +577,11 @@ Swaps the values of ``a`` and ``b``.  Note that this uses the
 .. code-block:: c++
 
     {vFloat,vSMag} min({vFloat,vSMag} a, {vFloat,vSmag} b);
-    vFloat min(vFloat a, float b);
+    {vFloat,vUInt} min({vFloat,vUInt} a, {float,unsigned} b);
     {vFloat,vSMag} max({vFloat,vSMag} a, {vFloat,vSmag} b);
-    vFloat max(vFloat a, float b);
+    {vFloat,vUInt} max({vFloat,vUInt} a, {float,unsigned} b);
     {vFloat,vSMag} clamp({vFloat,vSMag} a, {vFloat,vSmag} lower, {vFloat,vSmag} upper);
-    vFloat clamp(vFloat a, float lower, float upper);
+    {vFloat,vUInt} clamp({vFloat,vUInt} a, {float,unsigned} lower, {float,unsigned} upper);
     vFloat symmetric_clamp(vFloat a, float bound);
 
 Return the minimum, maximum or clamped value.  ``symmetric_clamp``
@@ -550,28 +632,84 @@ Blackhole.
 
 .. code-block:: c++
 
-    vFloat lut(const vFloat v, const vUInt l0, const vUInt l1, const vUInt l2, const int offset)
-    vFloat lut_sign(const vFloat v, const vUInt l0, const vUInt l1, const vUInt l2, const int offset)
+    // Wormhole, Blackhole
+    vFloat lut(vFloat v, vLut8si si0, vLut8si si1, vLut8si si2,
+               LutSign  = LutSign::Retain);
+    vFloat lut(vFloat v, vLut16si si0, vLut16si si1, vLut16si si2,
+               LutSign  = LutSign::Retain);
+    vFloat lut(vFloat v, vLut32si si0, vLut32si si1, vLut132si si2,
+               LutSign  = LutSign::Retain);
+    template <LutMode Mode = LutMode::Fp16x6_HWM3>
+    vFloat lut (vFloat v, vLut16ss s01, vLut16ii i01,
+                vLut16ss s23, vLut16ii i23,
+                vLut16ss s45, vLut16ii i45,
+                LutSign signedness = LutSign::Retain);
 
-``l0``, ``l1``, ``l2`` each contain 2 8-bit floating point values ``A`` and ``B`` with ``A`` in bits 15:8 and ``B`` in bits 7:0. The 8-bit format is:
+    // Quasar
+    LutCookie<LutMode::Fp8x3> lut_init (sLut8si si0, sLut8si si1, sLut8si si2);
+    LutCookie<LutMode::Fp16x3> lut_init (sLut16si si0, sLut16si si1, sLut16si si2);
+    LutCookie<LutMode::Fp32x3> lut_init (sLut32si si0, sLut32si si1, sLut32si si2);
+    template <LutMode Mode = LutMode::Fp16x6_HWM3>
+    LutCookie<Mode> lut_init (sLut16ss s01, sLut16ii i01,
+                              sLut16ss s23, sLut16ii i23,
+                              sLut16ss s45, sLut16ii i45);
+    template <LutMode Mode = LutMode::Fp16x6_HWM3>
+    LutCookie<Mode> lut_init (sLut16si si0, sLut16si si1,
+                              sLut16si si2, sLut16si si3,
+                              sLut16si si4, sLut16si si5);
+    template <LutMode Mode>
+    vFloat lut (vFloat v, LutSign = LutSign::Retain);
+    template <LutMode Mode>
+    vFloat lut (vFloat v, LutCookie<Mode>, LutSign = LutSign::Retain);
 
-  * 0xFF represents the value 0, otherwise
-  * bit[7] is the sign bit, bit[6:4] is the unsigned exponent_extender and bit[3:0] is the mantissa
+Compute a multiply-add driven by a 3 or 6-entry lookup table.  Each table entry
+consists of a slope (``s``) and an intercept (``i``). The absolute value of the
+incoming `v` determines which lookup table entry to use.
 
-Floating point representations of ``A`` and ``B`` (19-bit on GS and 32-bit on WH) are constructed by:
+The three-entry tables use the first entry for values <1.0, otherwise
+the second entry for <2.0 and the third entry otherwise. The six entry
+tables use <0.5, <1.0, <1.5, <2.0 as cutoffs for the first 4 entries
+and then either <3.0 or <4.0 for the 5th entry, otherwise the 6th
+entry is used. ``LutMode::Fp16x6_HWM3`` uses 3.0 and
+``LutMode::Fp16x6_HWM4`` uses 4.0.
 
-  * Using the sign bit
-  * Generating an 8-bit exponent as (127 – exponent_extender)
-  * Generating a mantissa by padding the right of the specified 4 bit mantissa with 0s
+The table entries themselves are created from pairs floating point or
+integer values representing either the slope and intercept, a pair of
+slopes or a pair of intercepts. Both scalar (``s``) and vector (``v``)
+variants are available. Floating point values are converted after
+rounding to nearest representable value, with ties rounding away from
+zero. Integer values are reinterpretted directly as the encoded
+coefficients. (This arrangement is determined by the underlying
+instruction, ``sfplut`` or ``sfplut32fp``.)
 
-``A`` and ``B`` are selected from one of ``l0``, ``l1`` or ``l2`` based on the value in ``v`` as follows:
+The optional ``LutSign`` operand determines whether the result sign is
+copied from the source value (``LutSign::Retain``), or is that
+determined by the computation (``LutSign::Update``).
 
-  * ``l0`` when ``v`` < 0
-  * ``l1`` when ``v`` == 0
-  * ``l2`` when ``v`` > 0
+The Quasar API uses an initialization and evaluation scheme, which
+matches how the hardware holds the constant table. It makes more use
+of the ``LutMode`` enumeration, whose values are:
 
-.. XXXX is this backwards?
-.. Returns the result of the computation ''A * ABS(v) + B''.  The ''lut_sgn'' variation discards the calculated sign bit and instead uses the sign of ''v''.
+  * ``Fp8x3``       // 3 entry 8-bit constants
+  * ``Fp16x3``      // 3 entry 16-bit constants
+  * ``Fp32x3``      // 3 entry 32-bit constants
+  * ``Fp16x6_HWM3`` // 6 entry 16-bit constants cutoff 3.0
+  * ``Fp16x6_HWM4`` // 6 entry 16-bit constants cutoff 4.0
+
+The Quasar 16-bit 6-entry initialization may be done in two forms,
+either passing ``ss`` and ``ii`` pairs as with the Blackhole and
+Wormhole scheme, or passing a sequence of ``si`` values, which more
+closely matches the table format and the 3-entry routines.  The
+intialization routines return an empty-class cookie, whose only use is
+to convey type information implicitly to the ``lut`` evaluation
+routine.  It may be ignored, with the loss of consistency checking, if
+one uses the cookieless evaluator.
+
+Note that the 8- and 16-bit formats use a bespoke representation, and
+the 8 bit format in particular has a range of (-2.0, +2.0).
+
+On Quasar, use of these routines conflicts with use of the ``vConst``
+constants.
 
 .. code-block:: c++
 

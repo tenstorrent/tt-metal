@@ -670,8 +670,8 @@ TEST_F(TopologyMapperTest, PinningHonorsFixedAsicPositionOnDualGalaxyMesh_1pin) 
     const auto my_host = physical_system_descriptor_->my_host_name();
     auto pinned_asic = AsicPosition{1, 1};
 
-    std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> pins = {
-        {FabricNodeId(MeshId{0}, 0), std::vector<AsicPosition>{pinned_asic}},
+    std::vector<AsicPinningGroup> pins = {
+        {{FabricNodeId(MeshId{0}, 0)}, {pinned_asic}},
     };
 
     TopologyMapper topology_mapper_with_pins(
@@ -713,9 +713,9 @@ TEST_F(TopologyMapperTest, PinningHonorsFixedAsicPositionOnDualGalaxyMesh_2pins)
     auto pinned_asic = AsicPosition{1, 1};
     auto pinned_asic2 = AsicPosition{1, 5};
 
-    std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> pins = {
-        {FabricNodeId(MeshId{0}, 0), std::vector<AsicPosition>{pinned_asic}},
-        {FabricNodeId(MeshId{0}, 1), std::vector<AsicPosition>{pinned_asic2}},
+    std::vector<AsicPinningGroup> pins = {
+        {{FabricNodeId(MeshId{0}, 0)}, {pinned_asic}},
+        {{FabricNodeId(MeshId{0}, 1)}, {pinned_asic2}},
     };
 
     TopologyMapper topology_mapper_with_pins(
@@ -759,9 +759,8 @@ TEST_F(TopologyMapperTest, PinningThrowsOnBadAsicPositionGalaxyMesh) {
     }
 
     // Use an ASIC position that does not exist in this environment
-    std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> pins_missing = {
-        {FabricNodeId(MeshId{0}, 0),
-         std::vector<AsicPosition>{AsicPosition{tt::tt_metal::TrayID{1}, tt::tt_metal::ASICLocation{3}}}},
+    std::vector<AsicPinningGroup> pins_missing = {
+        {{FabricNodeId(MeshId{0}, 0)}, {AsicPosition{tt::tt_metal::TrayID{1}, tt::tt_metal::ASICLocation{3}}}},
     };
 
     // Expect a throw due to missing ASIC position in the local mesh physical topology
@@ -1007,6 +1006,24 @@ TEST_F(TopologyMapperTest, T3kMeshGraphTestFromPhysicalSystemDescriptor) {
             EXPECT_NE(asic_id.get(), 0u) << "ASIC ID should be valid for fabric node " << fabric_node_id;
         }
     });
+
+    // --- Auto-discovery honesty on the same wrap-less 2x4: requesting FABRIC_2D_TORUS_XY, the
+    // genuine torus candidates fail against the cabling and TORUS_Y on the extent-2 axis is
+    // VACUOUS (its logical graph is a plain mesh). Vacuous candidates are skipped so a plain mesh
+    // is never mislabeled as a torus. Observable: an honest MESH keeps its boundary ports in every
+    // direction, while a graph labeled as a torus would have that axis's edge ports reserved.
+    MeshGraph torus_mesh_graph = TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
+        get_cluster(),
+        *physical_system_descriptor_,
+        FabricConfig::FABRIC_2D_TORUS_XY,
+        FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+    ASSERT_EQ(torus_mesh_graph.get_mesh_shape(mesh_id).mesh_size(), 8u);
+    const auto& edge_ports = torus_mesh_graph.get_mesh_edge_ports_to_chip_id().at(*mesh_id);
+    EXPECT_EQ(edge_ports.count({RoutingDirection::N, 0}), 1u)
+        << "no torus axis is wired on this box; a vacuous torus candidate must not win the fallback";
+    EXPECT_EQ(edge_ports.count({RoutingDirection::S, 0}), 1u);
+    EXPECT_EQ(edge_ports.count({RoutingDirection::E, 0}), 1u);
+    EXPECT_EQ(edge_ports.count({RoutingDirection::W, 0}), 1u);
 }
 
 TEST_F(TopologyMapperTest, ClosetBoxSuperpodRelaxedPolicyTest) {

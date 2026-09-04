@@ -12,7 +12,7 @@
 #include "device/device_impl.hpp"
 #include "impl/context/context_descriptor.hpp"
 
-#include <tt_metal_profiler.hpp>
+#include <tt-metalium/tt_metal_profiler.hpp>
 #include "profiler/profiler_state.hpp"
 #include "profiler/profiler_state_manager.hpp"
 

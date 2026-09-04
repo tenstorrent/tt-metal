@@ -10,11 +10,7 @@ on:
         type: choice
         options:
           - all
-          - grok
-          - dits
-          - deepseek
           - tttv2 modules
-          - mistral-small-3.1-24b-vision
           - qwen3_vl
       platform:
         required: false
@@ -52,6 +48,7 @@ jobs:
     uses: ./.github/workflows/check-harbor.yaml
   build-artifact:
     needs: check-harbor
+    if: ${{ !cancelled() }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read
@@ -59,11 +56,12 @@ jobs:
     secrets: inherit
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
-      build-wheel: true
+      build-inplace-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
   t3000-unit-tests:
     needs: [check-harbor, build-artifact]
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' }}
     secrets: inherit
     uses: ./.github/workflows/t3000-unit-tests-impl.yaml
     with:

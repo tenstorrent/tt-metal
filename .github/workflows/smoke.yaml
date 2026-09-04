@@ -10,9 +10,26 @@ on:
         required: false
         type: string
         default: ""
+      cpu-docker-image:
+        required: false
+        type: string
+        default: ""
+        description: >-
+          Canonical (non-Harbor-prefixed, publicly pullable) image ref used for the
+          github_hosted_cpu SKU. GitHub-hosted runners have no Harbor access, so the
+          Harbor-prefixed docker-image ref cannot be pulled there. Same idea as
+          docs-latest-public.yaml, which pulls the raw GHCR tag on ubuntu-latest.
       package-artifact-name:
         required: true
         type: string
+      prebuilt-image:
+        required: false
+        type: string
+        default: ""
+        description: >-
+          Image with the packages already installed. When set it replaces
+          docker-image and the download and install steps are skipped. Empty
+          means the artifact path, which is what forks always get.
       enabled-skus:
         required: false
         type: string
@@ -21,7 +38,11 @@ on:
       per-test-timeout:
         required: false
         type: string
-        default: "4.0" # TODO: Drop back to 3.5 when https://github.com/tenstorrent/github-ci-infra/issues/876 is resolved.
+        default: ""
+        description: >-
+          Max allowed timeout (minutes) for any individual test SKU entry in the
+          tests yaml. Verified during load-test-matrix via verify_time_budget.py.
+          Empty skips the per-test ceiling check.
       product:
         required: true
         type: string # tt-metalium or tt-nn
@@ -45,7 +66,7 @@ on:
 
 jobs:
   load-test-matrix:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       matrix: ${{ steps.build-matrix.outputs.matrix }}
     env:
@@ -72,11 +93,16 @@ jobs:
 
       - name: Verify test timeouts against budget
         run: |
-          set -e
+          set -euo pipefail
+          extra=()
+          if [ -n "${{ inputs.per-test-timeout }}" ]; then
+            extra+=(--max-per-test-timeout "${{ inputs.per-test-timeout }}")
+          fi
           python3 .github/scripts/utils/verify_time_budget.py \
             "${{ env.TESTS_YAML_PATH }}" \
             ./.github/time_budget.yaml \
-            "${{ inputs.test-category }}"
+            "${{ inputs.test-category }}" \
+            "${extra[@]}"
 
       - name: Build test matrix based on enabled SKUs
         id: build-matrix
@@ -84,7 +110,8 @@ jobs:
           python3 .github/scripts/utils/prepare_test_matrix.py \
             "${{ env.TESTS_YAML_PATH }}" \
             "${{ inputs.enabled-skus }}" \
-            ./.github/sku_config.yaml
+            ./.github/sku_config.yaml \
+            --event "${{ github.event_name }}"
 
   smoke:
     needs: load-test-matrix
@@ -98,7 +125,12 @@ jobs:
     timeout-minutes: 30
     runs-on: ${{ matrix.test-group.runs_on }}
     container:
-      image: ${{ (inputs.docker-image && (contains(join(matrix.test-group.runs_on, ','), 'dedicated-merge-gate') && inputs.docker-image || format('{0}{1}', inputs.harbor-prefix, inputs.docker-image))) || 'docker-image-unresolved!' }}
+      # github_hosted_cpu runs on GitHub-hosted runners with no Harbor access, so it
+      # needs the canonical (publicly pullable) cpu-docker-image ref instead of the
+      # Harbor-prefixed one (same reason dedicated-merge-gate uses the raw ref).
+      # A prebuilt image already carries the packages, and is a canonical ghcr
+      # ref so it needs no Harbor prefix on any SKU.
+      image: ${{ inputs.prebuilt-image || (matrix.test-group.sku == 'github_hosted_cpu' && (inputs.cpu-docker-image || inputs.docker-image)) || (inputs.docker-image && (contains(join(matrix.test-group.runs_on, ','), 'dedicated-merge-gate') && inputs.docker-image || format('{0}{1}', inputs.harbor-prefix, inputs.docker-image))) || 'docker-image-unresolved!' }}
       env:
         ASAN_OPTIONS: "color=always"
         TSAN_OPTIONS: "color=always"
@@ -106,9 +138,11 @@ jobs:
         LLVM_PROFILE_FILE: "/work/coverage/%p-%m.profraw"
       volumes:
         - /work
-        - ${{ (!contains(join(matrix.test-group.runs_on, ','), 'viommu') && '/dev/hugepages-1G:/dev/hugepages-1G') || '/no_hugepages' }}
+        # No hugepages on viommu runners or on GitHub-hosted CPU-only runners.
+        - ${{ (!contains(join(matrix.test-group.runs_on, ','), 'viommu') && matrix.test-group.sku != 'github_hosted_cpu' && '/dev/hugepages-1G:/dev/hugepages-1G') || '/no_hugepages' }}
       # Memory reduction in WH LB coming up: https://github.com/tenstorrent/metal-internal-workflows/issues/786
-      options: --device /dev/tenstorrent ${{ contains(matrix.test-group.sku, 'llmbox') && '--memory 256g' || '' }}
+      # github_hosted_cpu has no /dev/tenstorrent to pass through.
+      options: ${{ matrix.test-group.sku != 'github_hosted_cpu' && '--device /dev/tenstorrent' || '' }} ${{ contains(matrix.test-group.sku, 'llmbox') && '--memory 256g' || '' }}
     defaults:
       run:
         shell: bash
@@ -124,6 +158,7 @@ jobs:
           sparse-checkout-cone-mode: false
 
       - uses: ./.github/actions/download-artifact-with-retry
+        if: ${{ inputs.prebuilt-image == '' }}
         timeout-minutes: 15
         with:
           name: ${{ inputs.package-artifact-name || 'packages artifact unresolved!' }}
@@ -155,10 +190,16 @@ jobs:
           echo "Memory limit validated: ${memory_bytes} bytes"
 
       - name: Install packages
+        if: ${{ inputs.prebuilt-image == '' }}
         timeout-minutes: 10
         run: |
           # Ideally only ${{ inputs.product }}-validation, but APT doesn't resolve dependencies from files on disk without being told about them.
-          apt install -y ./pkgs/tt-metalium_*.deb ./pkgs/tt-metalium-jit_*.deb ./pkgs/tt-metalium-validation_*.deb ./pkgs/${{ inputs.product }}_*.deb ./pkgs/${{ inputs.product }}-validation_*.deb
+          # tt-metalium-jit is optional: TT_USE_SYSTEM_SFPI builds don't produce it, since this
+          # container already has /opt/tenstorrent/sfpi for the JIT-build runtime fallback
+          # (see tt_metal/jit_build/build.cpp).
+          shopt -s nullglob
+          pkgs=(./pkgs/tt-metalium_*.deb ./pkgs/tt-metalium-jit_*.deb ./pkgs/tt-metalium-validation_*.deb ./pkgs/${{ inputs.product }}_*.deb ./pkgs/${{ inputs.product }}-validation_*.deb)
+          apt install -y "${pkgs[@]}"
 
       - name: Prepare coverage directory
         run: |
@@ -318,21 +359,22 @@ jobs:
       - name: Publish ccache summary
         if: ${{ !cancelled() && inputs.enable-kernel-ccache == true }}
         run: |
-          echo '## CCache Summary (kernel)' >> $GITHUB_STEP_SUMMARY
+          echo '<details><summary>CCache Summary (kernel)</summary>' >> $GITHUB_STEP_SUMMARY
+          echo '' >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
           ccache -s >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
+          echo '' >> $GITHUB_STEP_SUMMARY
+          echo '</details>' >> $GITHUB_STEP_SUMMARY
 
           # Surface remote storage stats and errors from the ccache log.
           # Uses a filter script to avoid overflowing the 1024k step summary limit.
           if [ -f /tmp/ccache.log ]; then
-            echo '## CCache Remote Storage (kernel)' >> $GITHUB_STEP_SUMMARY
+            echo '<details><summary>CCache Remote Storage (kernel)</summary>' >> $GITHUB_STEP_SUMMARY
+            echo '' >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
             "$GITHUB_WORKSPACE/.github/scripts/ccache_log_filter.sh" /tmp/ccache.log >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
+            echo '' >> $GITHUB_STEP_SUMMARY
+            echo '</details>' >> $GITHUB_STEP_SUMMARY
           fi
-
-      - name: Check for slow tests
-        uses: tenstorrent/tt-metal/.github/actions/detect-slow-tests@main
-        with:
-          threshold: ${{ inputs.per-test-timeout }}

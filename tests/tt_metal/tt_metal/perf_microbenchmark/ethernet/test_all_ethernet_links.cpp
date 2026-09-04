@@ -23,12 +23,12 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/tt_metal_profiler.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/impl/profiler/profiler_paths.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
+#include "impl/program/program_impl.hpp"
 
 #include <thread>
 #include "impl/context/metal_context.hpp"
@@ -70,8 +70,8 @@ struct SenderReceiverPair {
     tt_cxy_pair receiver;
 
     // In test modes where receiver writes results to tensix we
-    std::optional<CoreCoord> sender_tensix = std::nullopt;
-    std::optional<CoreCoord> receiver_tensix = std::nullopt;
+    std::optional<tt::tt_metal::CoreCoord> sender_tensix = std::nullopt;
+    std::optional<tt::tt_metal::CoreCoord> receiver_tensix = std::nullopt;
 
     std::shared_ptr<tt_metal::distributed::MeshBuffer> sender_buffer = nullptr;
     std::shared_ptr<tt_metal::distributed::MeshBuffer> receiver_buffer = nullptr;
@@ -92,10 +92,10 @@ struct SenderReceiverPair {
         }
         // this and other are diff
         // this sender before the other sender means less then
-        auto sender_coord = CoreCoord(sender.x, sender.y);
-        auto receiver_coord = CoreCoord(receiver.x, receiver.y);
-        auto other_sender_coord = CoreCoord(other.sender.x, other.sender.y);
-        auto other_receiver_coord = CoreCoord(other.receiver.x, other.receiver.y);
+        auto sender_coord = tt::tt_metal::CoreCoord(sender.x, sender.y);
+        auto receiver_coord = tt::tt_metal::CoreCoord(receiver.x, receiver.y);
+        auto other_sender_coord = tt::tt_metal::CoreCoord(other.sender.x, other.sender.y);
+        auto other_receiver_coord = tt::tt_metal::CoreCoord(other.receiver.x, other.receiver.y);
 
         // Order based on sender
         bool result = (sender.chip < other.sender.chip) ||
@@ -110,7 +110,7 @@ struct SenderReceiverPair {
 tt_metal::distributed::MeshDevice* find_device_with_id(
     const std::vector<std::shared_ptr<tt_metal::distributed::MeshDevice>>& devices, ChipId chip_id) {
     for (const auto& device : devices) {
-        if (device->get_devices()[0]->id() == chip_id) {
+        if (device->get_device_ids()[0] == chip_id) {
             return device.get();
         }
     }
@@ -172,22 +172,22 @@ public:
 
 private:
     // NOLINTBEGIN(readability-make-member-function-const)
-    std::pair<std::optional<CoreCoord>, std::shared_ptr<tt_metal::distributed::MeshBuffer>>
+    std::pair<std::optional<tt::tt_metal::CoreCoord>, std::shared_ptr<tt_metal::distributed::MeshBuffer>>
     assign_tensix_and_allocate_buffer(const TestParams& params, const tt_cxy_pair& logical_eth_core) {
         if (params.benchmark_type != BenchmarkType::EthEthTensixUniDir and
             params.benchmark_type != BenchmarkType::EthEthTensixBiDir) {
             return {std::nullopt, nullptr};
         }
-        static std::unordered_map<ChipId, std::unordered_set<CoreCoord>> assigned_tensix_per_chip;
+        static std::unordered_map<ChipId, std::unordered_set<tt::tt_metal::CoreCoord>> assigned_tensix_per_chip;
         auto& assigned_phys_tensix = assigned_tensix_per_chip[logical_eth_core.chip];
         const auto& soc_d = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(logical_eth_core.chip);
 
         auto physical_eth_core =
-            soc_d.get_physical_ethernet_core_from_logical(CoreCoord{logical_eth_core.x, logical_eth_core.y});
+            soc_d.get_physical_ethernet_core_from_logical(tt::tt_metal::CoreCoord{logical_eth_core.x, logical_eth_core.y});
 
         const std::vector<tt::umd::CoreCoord>& tensix_cores = soc_d.get_cores(CoreType::TENSIX, CoordSystem::NOC0);
 
-        std::optional<CoreCoord> closest_phys_tensix = std::nullopt;
+        std::optional<tt::tt_metal::CoreCoord> closest_phys_tensix = std::nullopt;
         for (auto phys_tensix : tensix_cores) {
             if (assigned_phys_tensix.contains(phys_tensix)) {
                 continue;
@@ -238,8 +238,9 @@ private:
         bool slow_dispath_mode = (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr);
 
         std::queue<ChipId> chip_q;
-        chip_q.push(this->devices[0]->get_devices()[0]->id());  // Start with the first device's chip ID
-        sender_chips.insert(this->devices[0]->get_devices()[0]->id());
+        const auto device_id = this->devices[0]->get_device_ids()[0];
+        chip_q.push(device_id);  // Start with the first device's chip ID
+        sender_chips.insert(device_id);
         std::unordered_set<ChipId> visited_chips;
 
         // Need sender and receiver chips to be disjoint because we profile wrt. sender and don't want devices to be out
@@ -275,10 +276,11 @@ private:
 
             // Handle other unconnected device clusters
             for (auto& device : this->devices) {
-                if (!visited_chips.contains(device->get_devices()[0]->id())) {
+                const auto device_id = device->get_device_ids()[0];
+                if (!visited_chips.contains(device_id)) {
                     // This device is not connected others visited above, mark it as a sender for its connected cluster
-                    chip_q.push(device->get_devices()[0]->id());
-                    sender_chips.insert(device->get_devices()[0]->id());
+                    chip_q.push(device_id);
+                    sender_chips.insert(device_id);
                     break;
                 }
             }
@@ -330,8 +332,9 @@ std::vector<tt_metal::Program> build(const ConnectedDevicesHelper& device_helper
     // Create a mapping from chip ID to vector index
     std::map<ChipId, size_t> chip_to_index;
     for (size_t i = 0; i < device_helper.devices.size(); i++) {
-        chip_to_index[device_helper.devices[i]->get_devices()[0]->id()] = i;
-        log_info(tt::LogTest, "Device {} index {}", device_helper.devices[i]->get_devices()[0]->id(), i);
+        const auto device_id = device_helper.devices[i]->get_device_ids()[0];
+        chip_to_index[device_id] = i;
+        log_info(tt::LogTest, "Device {} index {}", device_id, i);
     }
 
     uint32_t measurement_type = (uint32_t)(params.test_latency ? MeasurementType::Latency : MeasurementType::Bandwidth);
@@ -393,26 +396,26 @@ std::vector<tt_metal::Program> build(const ConnectedDevicesHelper& device_helper
             sender_program,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/"
             "ethernet_write_worker_latency_ubench_sender.cpp",
-            CoreCoord(link.sender.x, link.sender.y),
+            tt::tt_metal::CoreCoord(link.sender.x, link.sender.y),
             tt_metal::EthernetConfig{.noc = tt_metal::NOC::RISCV_0_default, .compile_args = eth_ct_args});
         tt_metal::SetRuntimeArgs(
-            sender_program, sender_kernel, CoreCoord(link.sender.x, link.sender.y), eth_sender_rt_args);
+            sender_program, sender_kernel, tt::tt_metal::CoreCoord(link.sender.x, link.sender.y), eth_sender_rt_args);
 
         auto receiver_kernel = tt_metal::CreateKernel(
             receiver_program,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/"
             "ethernet_write_worker_latency_ubench_receiver.cpp",
-            CoreCoord(link.receiver.x, link.receiver.y),
+            tt::tt_metal::CoreCoord(link.receiver.x, link.receiver.y),
             tt_metal::EthernetConfig{.noc = tt_metal::NOC::RISCV_0_default, .compile_args = eth_ct_args});
         tt_metal::SetRuntimeArgs(
-            receiver_program, receiver_kernel, CoreCoord(link.receiver.x, link.receiver.y), eth_receiver_rt_args);
+            receiver_program, receiver_kernel, tt::tt_metal::CoreCoord(link.receiver.x, link.receiver.y), eth_receiver_rt_args);
     }
 
     // Compile all programs
     for (size_t i = 0; i < device_helper.devices.size(); i++) {
         const auto& device = device_helper.devices[i];
         try {
-            tt_metal::detail::CompileProgram(device.get(), programs[i]);
+            programs[i].impl().compile(device.get());
         } catch (std::exception& e) {
             log_error(tt::LogTest, "Failed to compile program on device {}: {}", i, e.what());
             throw e;
@@ -438,14 +441,14 @@ void validation(
     auto* sender_device = find_device_with_id(device_helper.devices, link.sender.chip);
     auto* receiver_device = find_device_with_id(device_helper.devices, link.receiver.chip);
     TT_FATAL(
-        sender_device->get_devices()[0]->id() == link.sender.chip and
-            receiver_device->get_devices()[0]->id() == link.receiver.chip,
+        sender_device->get_device_ids()[0] == link.sender.chip and
+            receiver_device->get_device_ids()[0] == link.receiver.chip,
         "Mismatch between chips");
 
     auto sender_virtual =
-        sender_device->virtual_core_from_logical_core(CoreCoord(link.sender.x, link.sender.y), CoreType::ETH);
+        sender_device->virtual_core_from_logical_core(tt::tt_metal::CoreCoord(link.sender.x, link.sender.y), CoreType::ETH);
     auto receiver_virtual =
-        receiver_device->virtual_core_from_logical_core(CoreCoord(link.receiver.x, link.receiver.y), CoreType::ETH);
+        receiver_device->virtual_core_from_logical_core(tt::tt_metal::CoreCoord(link.receiver.x, link.receiver.y), CoreType::ETH);
 
     if (read_buffer) {
         auto buffer_to_validate = validate_receiver ? link.receiver_buffer : link.sender_buffer;
@@ -506,9 +509,9 @@ void dump_eth_link_stats(
         auto* sender_device = find_device_with_id(device_helper.devices, link.sender.chip);
         auto* receiver_device = find_device_with_id(device_helper.devices, link.receiver.chip);
         auto sender_virtual =
-            sender_device->virtual_core_from_logical_core(CoreCoord(link.sender.x, link.sender.y), CoreType::ETH);
+            sender_device->virtual_core_from_logical_core(tt::tt_metal::CoreCoord(link.sender.x, link.sender.y), CoreType::ETH);
         auto receiver_virtual =
-            receiver_device->virtual_core_from_logical_core(CoreCoord(link.receiver.x, link.receiver.y), CoreType::ETH);
+            receiver_device->virtual_core_from_logical_core(tt::tt_metal::CoreCoord(link.receiver.x, link.receiver.y), CoreType::ETH);
 
         tt::tt_metal::MetalContext::instance().get_cluster().read_core(
             link_stats.data(),

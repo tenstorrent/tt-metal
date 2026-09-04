@@ -17,11 +17,119 @@
 #include "impl/allocator/allocator.hpp"
 #include "mesh_device_impl.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/debug/inspector/inspector.hpp"
+#include <tt-metalium/distributed_context.hpp>
+
+#include <algorithm>
+#include <cstring>
+#include <map>
+#include <mutex>
+#include <optional>
 
 namespace per_core_allocation = tt::tt_metal::experimental::per_core_allocation;
 
 namespace tt::tt_metal::distributed {
 namespace {
+
+// HYBRID lockstep placement on a submesh co-owned by several ranks.
+//
+// A lockstep address is chosen by subtracting the per-bank (per-core) reservations from the free
+// list, but MeshDeviceView::get_devices() returns only local devices. On a co-owned submesh each
+// co-owner therefore subtracts a different set and places one replicated buffer at a different
+// address over the same physical L1, silently.
+//
+// The reservations are all-gathered over the co-owning ranks so every rank subtracts the same set
+// and picks the same address. Co-owners also then fail together rather than one OOMing alone.
+
+// Holds the mesh allocator's HYBRID allocation span open for one MeshBuffer, and fails loudly if
+// another is already open (see AllocatorImpl::try_begin_hybrid_allocation).
+class HybridAllocationScope {
+public:
+    HybridAllocationScope(AllocatorImpl* allocator, const std::vector<AllocatorImpl*>& device_allocators) :
+        allocator_(allocator) {
+        TT_FATAL(
+            allocator_->try_begin_hybrid_allocation(device_allocators),
+            "A per-core (HYBRID) allocation is already in progress on this mesh. Per-core allocation passes "
+            "state into the allocator around each allocation, so allocations on one mesh must be serialized -- "
+            "issue them from a single thread.");
+    }
+    ~HybridAllocationScope() { allocator_->end_hybrid_allocation(); }
+
+    HybridAllocationScope(const HybridAllocationScope&) = delete;
+    HybridAllocationScope& operator=(const HybridAllocationScope&) = delete;
+    HybridAllocationScope(HybridAllocationScope&&) = delete;
+    HybridAllocationScope& operator=(HybridAllocationScope&&) = delete;
+
+private:
+    AllocatorImpl* allocator_;
+};
+
+// This rank's per-bank (per-core) reservations across the devices it drives, flattened to
+// [start, end, start, end, ...].
+std::vector<DeviceAddr> local_per_core_ranges(
+    const std::vector<AllocatorImpl*>& device_allocators, uint32_t num_banks) {
+    using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
+    std::vector<DeviceAddr> flat;
+    for (auto* dev_alloc : device_allocators) {
+        for (uint32_t bank_id = 0; bank_id < num_banks; bank_id++) {
+            for (const auto& [start, end] : dev_alloc->get_l1_allocated_ranges(AllocatorID{bank_id + 1})) {
+                flat.push_back(start);
+                flat.push_back(end);
+            }
+        }
+    }
+    return flat;
+}
+
+// All-gather `local` over `ctx` and return every OTHER rank's entries as ranges.
+//
+// all_gather requires equal-sized contributions but rank counts differ, so gather the counts and
+// pad to the maximum. Every member issues the same two collectives regardless of its own count.
+std::vector<std::pair<DeviceAddr, DeviceAddr>> allgather_remote_ranges(
+    const std::vector<DeviceAddr>& local, const std::vector<int>& ranks, const multihost::DistributedContext& ctx) {
+    const auto world = static_cast<size_t>(*ctx.size());
+    const auto my_index = static_cast<size_t>(*ctx.rank());
+
+    uint64_t my_count = local.size();
+    std::vector<uint64_t> counts(world, 0);
+    ctx.all_gather(
+        ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&my_count), sizeof(my_count)),
+        ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(counts.data()), counts.size() * sizeof(uint64_t)));
+
+    const uint64_t max_count = *std::max_element(counts.begin(), counts.end());
+    if (max_count == 0) {
+        return {};
+    }
+
+    std::vector<DeviceAddr> padded(max_count, 0);
+    std::copy(local.begin(), local.end(), padded.begin());
+    std::vector<DeviceAddr> gathered(world * max_count, 0);
+    ctx.all_gather(
+        ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(padded.data()), padded.size() * sizeof(DeviceAddr)),
+        ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(gathered.data()), gathered.size() * sizeof(DeviceAddr)));
+
+    std::vector<std::pair<DeviceAddr, DeviceAddr>> remote;
+    for (size_t r = 0; r < world; r++) {
+        if (r == my_index) {
+            continue;  // the caller already has its own, gathered from live allocators
+        }
+        for (uint64_t i = 0; i + 1 < counts[r]; i += 2) {
+            const DeviceAddr start = gathered[r * max_count + i];
+            const DeviceAddr end = gathered[r * max_count + i + 1];
+            if (end > start) {
+                remote.emplace_back(start, end);
+            }
+        }
+    }
+    log_debug(
+        tt::LogMetal,
+        "[hybrid-coowner] rank {} contributed {} range(s), received {} from the other {} co-owner(s) of this mesh",
+        *multihost::DistributedContext::get_current_world()->rank(),
+        local.size() / 2,
+        remote.size(),
+        ranks.size() - 1);
+    return remote;
+}
 
 void validate_mesh_buffer_config(const MeshBufferConfig& config, const MeshDevice& mesh_device) {
     if (std::holds_alternative<ReplicatedBufferConfig>(config)) {
@@ -101,6 +209,7 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
         auto mesh_buffer =
             std::shared_ptr<MeshBuffer>(new MeshBuffer(mesh_buffer_config, device_local_config, 0, 0, mesh_device));
         mesh_buffer->initialize_device_buffers();
+        Inspector::mesh_buffer_allocated(mesh_buffer.get());
         return mesh_buffer;
     }
 
@@ -133,12 +242,29 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
         // can query their per-bank ranges and avoid regions occupied on any device.
         auto* mesh_allocator = mesh_device->allocator_impl().get();
         bool is_hybrid = mesh_allocator->get_config().allocator_mode == AllocatorMode::HYBRID;
+        // Open for the whole span the allocator's hybrid state is live: set, gather, place.
+        std::optional<HybridAllocationScope> hybrid_scope;
         if (is_hybrid) {
             std::vector<AllocatorImpl*> device_allocators;
+            device_allocators.reserve(mesh_device->get_view().num_devices());
             for (auto* device : mesh_device->get_view().get_devices()) {
                 device_allocators.push_back(device->allocator_impl().get());
             }
-            mesh_allocator->set_hybrid_device_allocators(device_allocators);
+            hybrid_scope.emplace(mesh_allocator, device_allocators);
+
+            // The loop above sees only local devices, so trade per-bank reservations with the
+            // co-owners and let each subtract the same occupied set. No collective on a mesh this
+            // rank drives alone. Done here rather than in AllocatorImpl because allocate_buffer()
+            // holds the allocator mutex, under which a collective must not run.
+            if (device_local_config.buffer_type == BufferType::L1) {
+                const auto& coowners = mesh_device->impl().coowner_ranks();
+                if (!coowners.empty()) {
+                    const auto& ctx = mesh_device->impl().coowner_context();
+                    const uint32_t num_banks = mesh_allocator->get_num_banks(BufferType::L1);
+                    mesh_allocator->set_hybrid_remote_occupied_ranges(
+                        allgather_remote_ranges(local_per_core_ranges(device_allocators, num_banks), coowners, *ctx));
+                }
+            }
         }
 
         // Rely on the MeshDevice allocator to provide the address for the entire mesh buffer.
@@ -152,9 +278,7 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
             device_local_config.bottom_up,
             device_local_config.sub_device_id);
 
-        if (is_hybrid) {
-            mesh_allocator->clear_hybrid_device_allocators();
-        }
+        hybrid_scope.reset();  // ends the span exactly where the placement does
 
         mesh_buffer = std::shared_ptr<MeshBuffer>(new MeshBuffer(
             mesh_buffer_config, device_local_config, device_local_size, mesh_device, std::move(backing_buffer)));
@@ -165,6 +289,7 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
         mesh_buffer->initialize_device_buffers();
     }
 
+    Inspector::mesh_buffer_allocated(mesh_buffer.get());
     return mesh_buffer;
 }
 
@@ -231,7 +356,7 @@ bool MeshBuffer::is_allocated() const {
 MeshBuffer::~MeshBuffer() { deallocate(); }
 
 MeshBuffer::MeshBuffer(MeshBuffer&& other) noexcept :
-    config_(other.config_),
+    config_((Inspector::mesh_buffer_deallocated(&other), other.config_)),
     device_local_config_(std::move(other.device_local_config_)),
     mesh_device_(std::move(other.mesh_device_)),
     address_(other.address_),
@@ -241,11 +366,13 @@ MeshBuffer::MeshBuffer(MeshBuffer&& other) noexcept :
     other.state_ = DeallocatedState{};
     other.address_ = 0;
     other.device_local_size_ = 0;
+    Inspector::mesh_buffer_allocated(this);
 }
 
 MeshBuffer& MeshBuffer::operator=(MeshBuffer&& other) noexcept {
     if (this != &other) {
         deallocate();
+        Inspector::mesh_buffer_deallocated(&other);
         config_ = other.config_;
         device_local_config_ = std::move(other.device_local_config_);
         mesh_device_ = std::move(other.mesh_device_);
@@ -257,11 +384,18 @@ MeshBuffer& MeshBuffer::operator=(MeshBuffer&& other) noexcept {
         other.state_ = DeallocatedState{};
         other.address_ = 0;
         other.device_local_size_ = 0;
+        Inspector::mesh_buffer_allocated(this);
     }
     return *this;
 }
 
 void MeshBuffer::deallocate() {
+    // Guard against double reporting to Inspector if deallocate() was called explicitly and then again in the
+    // destructor.
+    if (!std::holds_alternative<DeallocatedState>(state_)) {
+        Inspector::mesh_buffer_deallocated(this);
+    }
+
     auto mesh_device = mesh_device_.lock();
     if (mesh_device) {
         // Check HYBRID mode via rtoptions rather than mesh_device->allocator_impl() because:

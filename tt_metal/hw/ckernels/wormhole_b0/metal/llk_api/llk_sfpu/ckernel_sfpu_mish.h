@@ -10,6 +10,7 @@
 #include "sfpi.h"
 #include "ckernel_sfpu_exp.h"
 #include "ckernel_sfpu_recip.h"
+#include "cmath_common.h"
 
 namespace ckernel::sfpu {
 
@@ -76,10 +77,11 @@ inline void calculate_mish() {
     }
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
+template <bool APPROXIMATION_MODE>
 inline void mish_init() {
+    math::reset_counters(p_setrwc::SET_ABD_F);
     // exp does not need an init
-    recip_init<APPROXIMATION_MODE, is_fp32_dest_acc_en, false>();
+    recip_init<APPROXIMATION_MODE, false, false>();
 }
 
 }  // namespace ckernel::sfpu

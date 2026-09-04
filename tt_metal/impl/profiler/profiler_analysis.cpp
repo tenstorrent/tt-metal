@@ -13,6 +13,7 @@
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/profiler.hpp>
 #include <tt_metal.hpp>
+#include "tt_metal_profiler.hpp"
 #include <fstream>
 
 #include "context/metal_env_accessor.hpp"
@@ -56,7 +57,32 @@ NLOHMANN_JSON_SERIALIZE_ENUM(
      {RiscType::TRISC_1, "TRISC_1"},
      {RiscType::TRISC_2, "TRISC_2"},
      {RiscType::TENSIX_RISC_AGG, "TENSIX_RISC_AGG"},
-     {RiscType::ERISC, "ERISC"}});
+     {RiscType::ERISC, "ERISC"},
+     {RiscType::NONE, "NONE"},
+     {RiscType::QUASAR_DM0, "QUASAR_DM0"},
+     {RiscType::QUASAR_DM1, "QUASAR_DM1"},
+     {RiscType::QUASAR_DM2, "QUASAR_DM2"},
+     {RiscType::QUASAR_DM3, "QUASAR_DM3"},
+     {RiscType::QUASAR_DM4, "QUASAR_DM4"},
+     {RiscType::QUASAR_DM5, "QUASAR_DM5"},
+     {RiscType::QUASAR_DM6, "QUASAR_DM6"},
+     {RiscType::QUASAR_DM7, "QUASAR_DM7"},
+     {RiscType::QUASAR_NEO0_TRISC0, "QUASAR_NEO0_TRISC0"},
+     {RiscType::QUASAR_NEO0_TRISC1, "QUASAR_NEO0_TRISC1"},
+     {RiscType::QUASAR_NEO0_TRISC2, "QUASAR_NEO0_TRISC2"},
+     {RiscType::QUASAR_NEO0_TRISC3, "QUASAR_NEO0_TRISC3"},
+     {RiscType::QUASAR_NEO1_TRISC0, "QUASAR_NEO1_TRISC0"},
+     {RiscType::QUASAR_NEO1_TRISC1, "QUASAR_NEO1_TRISC1"},
+     {RiscType::QUASAR_NEO1_TRISC2, "QUASAR_NEO1_TRISC2"},
+     {RiscType::QUASAR_NEO1_TRISC3, "QUASAR_NEO1_TRISC3"},
+     {RiscType::QUASAR_NEO2_TRISC0, "QUASAR_NEO2_TRISC0"},
+     {RiscType::QUASAR_NEO2_TRISC1, "QUASAR_NEO2_TRISC1"},
+     {RiscType::QUASAR_NEO2_TRISC2, "QUASAR_NEO2_TRISC2"},
+     {RiscType::QUASAR_NEO2_TRISC3, "QUASAR_NEO2_TRISC3"},
+     {RiscType::QUASAR_NEO3_TRISC0, "QUASAR_NEO3_TRISC0"},
+     {RiscType::QUASAR_NEO3_TRISC1, "QUASAR_NEO3_TRISC1"},
+     {RiscType::QUASAR_NEO3_TRISC2, "QUASAR_NEO3_TRISC2"},
+     {RiscType::QUASAR_NEO3_TRISC3, "QUASAR_NEO3_TRISC3"}});
 }  // namespace tracy
 
 namespace tt::tt_metal {
@@ -71,7 +97,7 @@ uint32_t get_available_worker_core_count_for_program(
     const DispatchCoreConfig& dispatch_core_config) {
     const auto decoded = detail::DecodePerDeviceProgramID(encoded_runtime_host_id);
     const std::optional<tt::ProgramSubDeviceInfo> sub_device_info =
-        tt::GetProgramSubDevice(chip_id, decoded.base_program_id);
+        tt::GetProgramSubDevice(MetalContext::instance().get_context_id(), chip_id, decoded.base_program_id);
     if (sub_device_info.has_value() && sub_device_info->num_available_worker_cores > 0) {
         return sub_device_info->num_available_worker_cores;
     }
@@ -256,6 +282,26 @@ bool matches_start_end_config(const tracy::TTDeviceMarker& marker, const Analysi
                marker.marker_name_keyword_flags, start_end_config.marker_name_keywords);
 }
 
+// Fixed per-processor-type clock (MHz) for Quasar. NEO TRISCs run at 1.4 GHz; DMs read the NEO TRISC
+// wall clock for now, so DM and TRISC timestamps share one timeline and can be compared directly.
+// TODO: update the DM clock frequency once the DMs read their own clock counter and the DM and TRISC
+// clock domains are synchronized.
+// Returns nullopt for non-Quasar RISCs (WH/BH), which fall back to the runtime device aiclk.
+std::optional<int> quasar_processor_clock_mhz(tracy::RiscType risc) {
+    using tracy::RiscType;
+    static_assert(
+        static_cast<int>(RiscType::QUASAR_DM7) - static_cast<int>(RiscType::QUASAR_DM0) == 7 &&
+            static_cast<int>(RiscType::QUASAR_NEO3_TRISC3) - static_cast<int>(RiscType::QUASAR_NEO0_TRISC0) == 15,
+        "quasar_processor_clock_mhz relies on contiguous QUASAR_DM*/QUASAR_NEO*_TRISC* enum blocks");
+    if (risc >= RiscType::QUASAR_DM0 && risc <= RiscType::QUASAR_DM7) {
+        return 1400;  // Quasar DM: 1.4 GHz (reads the NEO TRISC wall clock for now)
+    }
+    if (risc >= RiscType::QUASAR_NEO0_TRISC0 && risc <= RiscType::QUASAR_NEO3_TRISC3) {
+        return 1400;  // Neo TRISC: 1.4 GHz
+    }
+    return std::nullopt;
+}
+
 AnalysisResults parse_duration(
     const AnalysisConfig& analysis_config,
     const std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& markers) {
@@ -267,6 +313,7 @@ AnalysisResults parse_duration(
     std::unordered_map<experimental::ProgramExecutionUID, experimental::ProgramSingleAnalysisResult>&
         results_per_program_execution_uid = analysis_results.results_per_program_execution_uid;
     ChipId device_id = -1;
+    tracy::RiscType zone_start_risc = tracy::RiscType::NONE;
 
     for (uint32_t i = 0; i < markers.size(); ++i) {
         const auto& marker_ref = markers[i];
@@ -280,6 +327,9 @@ AnalysisResults parse_duration(
         if (matches_start_end_config(marker, analysis_config.start_config)) {
             if (program_results == PROGRAM_INVALID_SINGLE_ANALYSIS_RESULT) {
                 program_results.start_timestamp = marker.timestamp;
+                if (zone_start_risc == tracy::RiscType::NONE) {
+                    zone_start_risc = marker.risc;
+                }
             }
         }
         if (matches_start_end_config(marker, analysis_config.end_config)) {
@@ -297,8 +347,10 @@ AnalysisResults parse_duration(
     for (auto& [_, result] : results_per_program_execution_uid) {
         if (result != PROGRAM_INVALID_SINGLE_ANALYSIS_RESULT) {
             TT_ASSERT(result.start_timestamp <= result.end_timestamp);
+            // Quasar DM/TRISC use hardcoded clock frequencies for now
             const int chip_frequency_mhz =
-                tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(device_id);
+                quasar_processor_clock_mhz(zone_start_risc)
+                    .value_or(tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(device_id));
             result.duration = static_cast<uint64_t>(
                 std::round((result.end_timestamp - result.start_timestamp) * 1000.0 / chip_frequency_mhz));
         }
@@ -800,6 +852,7 @@ std::vector<AnalysisConfig> loadAnalysisConfigsFromJSON(const std::filesystem::p
     const nlohmann::json configs_json = nlohmann::json::parse(json_ifs);
 
     std::vector<AnalysisConfig> configs;
+    configs.reserve(configs_json.size());
     for (const auto& config_json : configs_json) {
         configs.push_back(config_json.get<AnalysisConfig>());
     }

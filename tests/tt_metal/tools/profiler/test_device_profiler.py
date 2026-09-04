@@ -9,6 +9,7 @@ import inspect
 import pytest
 import subprocess
 import ast
+import yaml
 from loguru import logger
 from conftest import is_6u
 
@@ -235,6 +236,26 @@ def test_multi_op_buffer_overflow():
         ), "Wrong Marker Repeat count"
 
 
+EXPECTED_KERNEL_RISCS = {
+    "wormhole_b0": ["BRISC", "NCRISC", "TRISC_0", "TRISC_1", "TRISC_2"],
+    "blackhole": ["BRISC", "NCRISC", "TRISC_0", "TRISC_1", "TRISC_2"],
+    "quasar": [f"QUASAR_DM{i}" for i in range(2, 8)] + [f"QUASAR_NEO{n}_TRISC{t}" for n in range(4) for t in range(4)],
+}
+
+
+def _assert_kernel_cycle_counts(devicesData, ref_min, ref_max):
+    arch = devicesData["data"]["deviceInfo"]["arch"]
+    assert arch in EXPECTED_KERNEL_RISCS, f"Unhandled arch '{arch}' for custom cycle count test"
+    stats = devicesData["data"]["devices"]["0"]["cores"]["DEVICE"]["analysis"]
+
+    for risc in EXPECTED_KERNEL_RISCS[arch]:
+        statName = f"{risc} KERNEL_START->KERNEL_END"
+        assert statName in stats, f"Missing device analysis for {statName}"
+        avg = stats[statName]["stats"]["Average"]
+        assert avg < ref_max, f"{statName}: cycle count too high ({avg} >= {ref_max})"
+        assert avg > ref_min, f"{statName}: cycle count too low ({avg} <= {ref_min})"
+
+
 def test_custom_cycle_count_slow_dispatch():
     REF_CYCLE_COUNT_PER_LOOP = 52
     LOOP_COUNT = 2000
@@ -247,14 +268,7 @@ def test_custom_cycle_count_slow_dispatch():
 
     devicesData = run_device_profiler_test(setupAutoExtract=True, slowDispatch=True)
 
-    stats = devicesData["data"]["devices"]["0"]["cores"]["DEVICE"]["analysis"]
-
-    for risc in ["BRISC", "NCRISC", "TRISC_0", "TRISC_1", "TRISC_2"]:
-        statName = f"{risc} KERNEL_START->KERNEL_END"
-
-        assert statName in stats.keys(), "Wrong device analysis format"
-        assert stats[statName]["stats"]["Average"] < REF_CYCLE_COUNT_MAX, "Wrong cycle count, too high"
-        assert stats[statName]["stats"]["Average"] > REF_CYCLE_COUNT_MIN, "Wrong cycle count, too low"
+    _assert_kernel_cycle_counts(devicesData, REF_CYCLE_COUNT_MIN, REF_CYCLE_COUNT_MAX)
 
 
 def test_custom_cycle_count():
@@ -269,14 +283,7 @@ def test_custom_cycle_count():
 
     devicesData = run_device_profiler_test(setupAutoExtract=True)
 
-    stats = devicesData["data"]["devices"]["0"]["cores"]["DEVICE"]["analysis"]
-
-    for risc in ["BRISC", "NCRISC", "TRISC_0", "TRISC_1", "TRISC_2"]:
-        statName = f"{risc} KERNEL_START->KERNEL_END"
-
-        assert statName in stats.keys(), "Wrong device analysis format"
-        assert stats[statName]["stats"]["Average"] < REF_CYCLE_COUNT_MAX, "Wrong cycle count, too high"
-        assert stats[statName]["stats"]["Average"] > REF_CYCLE_COUNT_MIN, "Wrong cycle count, too low"
+    _assert_kernel_cycle_counts(devicesData, REF_CYCLE_COUNT_MIN, REF_CYCLE_COUNT_MAX)
 
 
 @pytest.mark.skip_post_commit
@@ -284,6 +291,11 @@ def test_full_buffer():
     OP_COUNT = 23
     RISC_COUNT = 5
     ZONE_COUNT = 125
+
+    # Quasar runs only 1 OP to saturate the L1 buffer
+    QUASAR_OP_COUNT = 1
+    QUASAR_RISC_COUNT = 6 + 4 * 4  # DM2-7 + Neo0-3 * TRISC0-3
+    QUASAR_ZONE_COUNT = 125
     REF_COUNT_DICT = {
         "wormhole_b0": [
             72 * OP_COUNT * RISC_COUNT * ZONE_COUNT,
@@ -295,13 +307,23 @@ def test_full_buffer():
             120 * OP_COUNT * RISC_COUNT * ZONE_COUNT,
             110 * OP_COUNT * RISC_COUNT * ZONE_COUNT,
         ],
+        # Note: using emu-quasar-2x3_DISPATCH for both dispatch modes
+        "quasar": [
+            2 * QUASAR_OP_COUNT * QUASAR_RISC_COUNT * QUASAR_ZONE_COUNT,
+        ],
+    }
+    TEST_BIN_DICT = {
+        "wormhole_b0": "build/test/tt_metal/tools/profiler/test_full_buffer",
+        "blackhole": "build/test/tt_metal/tools/profiler/test_full_buffer",
+        "quasar": "build/programming_examples/profiler/test_full_buffer",
     }
 
     ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
     assert ENV_VAR_ARCH_NAME in REF_COUNT_DICT.keys()
 
     devicesData = run_device_profiler_test(
-        testName="build/test/tt_metal/tools/profiler/test_full_buffer", setupAutoExtract=True
+        testName=TEST_BIN_DICT[ENV_VAR_ARCH_NAME],
+        setupAutoExtract=True,
     )
 
     stats = devicesData["data"]["devices"]["0"]["cores"]["DEVICE"]["analysis"]
@@ -1098,21 +1120,34 @@ def test_timestamped_events():
         for E in BH_ERISC_COUNTS:
             BH_COMBO_COUNTS.append((T, E))
 
+    # Quasar's profiler is L1-only, the buffer fills and remaining markers are dropped, only the
+    # iterations that fit are captured. Each iteration writes 10 words (zone start + TS_DATA +
+    # TS_EVENT + zone end), so (PROFILER_L1_VECTOR_SIZE - CUSTOM_MARKERS) / 10 = 500 / 10 = 50
+    # iterations per risc, each contributing two event markers.
+    QUASAR_RISC_COUNT = 6 + 4 * 4  # DM2-7 + Neo0-3 * TRISC0-3
+    QUASAR_ITER_COUNT = 50
+    QUASAR_EVENTS_PER_ITER = 2  # DeviceTimestampedData + DeviceRecordEvent
+
     REF_COUNT_DICT = {
         "wormhole_b0": [(T * RISC_COUNT + E) * OP_COUNT * ZONE_COUNT for T, E in WH_COMBO_COUNTS],
         "blackhole": [(T * RISC_COUNT + E) * OP_COUNT * ZONE_COUNT for T, E in BH_COMBO_COUNTS],
+        # Note: using emu-quasar-2x3_DISPATCH for both dispatch modes
+        "quasar": [2 * QUASAR_RISC_COUNT * QUASAR_ITER_COUNT * QUASAR_EVENTS_PER_ITER],
     }
     REF_ERISC_COUNT = {
         "wormhole_b0": [C * OP_COUNT * ZONE_COUNT for C in WH_ERISC_COUNTS],
         "blackhole": [C * OP_COUNT * ZONE_COUNT for C in BH_ERISC_COUNTS],
     }
+    TEST_BIN_DICT = {
+        "wormhole_b0": "build/test/tt_metal/tools/profiler/test_timestamped_events",
+        "blackhole": "build/test/tt_metal/tools/profiler/test_timestamped_events",
+        "quasar": "build/programming_examples/profiler/test_timestamped_events",
+    }
 
     ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
     assert ENV_VAR_ARCH_NAME in REF_COUNT_DICT.keys()
 
-    devicesData = run_device_profiler_test(
-        testName="build/test/tt_metal/tools/profiler/test_timestamped_events", setupAutoExtract=True
-    )
+    devicesData = run_device_profiler_test(testName=TEST_BIN_DICT[ENV_VAR_ARCH_NAME], setupAutoExtract=True)
 
     if ENV_VAR_ARCH_NAME in REF_ERISC_COUNT.keys():
         eventCount = len(
@@ -1165,7 +1200,52 @@ def test_noc_event_profiler():
 
     with open(expected_trace_file, "r") as nocTraceJson:
         noc_trace_data = json.load(nocTraceJson)
-        assert len(noc_trace_data) == 8
+        # Zone-marker entries carry no "type" key, so default it rather than indexing.
+        event_types = [event.get("type", "") for event in noc_trace_data]
+
+        # The example kernel's read and write are what NPE consumes; they must always be traced.
+        assert "READ" in event_types, f"missing READ event: {event_types}"
+        assert "WRITE_" in event_types, f"missing WRITE_ event: {event_types}"
+
+        # Barrier/flush/semaphore/inline-write events serve only the NOC debug tool and are compiled out of plain
+        # NOC tracing (see KernelProfilerNocEventMetadata::isDebugOnlyEventType), so the kernel's two barriers
+        # contribute nothing here. That is why this count is 4 (2 zone markers + READ + WRITE_) and not 8.
+        # Debug-mode coverage lives in the C++ unit_tests_noc_debugging suite instead: enabling
+        # TT_METAL_NOC_DEBUG_DUMP routes events into NOCDebugState and no noc trace JSON is written at all.
+        assert not any(
+            "BARRIER" in event_type for event_type in event_types
+        ), f"plain NOC tracing must not record barrier events, got: {event_types}"
+        assert len(noc_trace_data) == 4, f"unexpected noc trace events: {event_types}"
+
+    # Validate SoC descriptor is produced and contains valid grid/core data
+    expected_soc_descriptor_file = f"{PROFILER_ARTIFACTS_DIR}/noc_events_rpt/soc_descriptor.yaml"
+    assert os.path.isfile(
+        expected_soc_descriptor_file
+    ), f"SoC descriptor file not found at {expected_soc_descriptor_file}"
+
+    with open(expected_soc_descriptor_file, "r") as soc_desc_file:
+        soc_desc_data = yaml.safe_load(soc_desc_file)
+
+        # Verify required fields exist
+        assert "grid" in soc_desc_data, "SoC descriptor missing 'grid' field"
+        assert "x_size" in soc_desc_data["grid"], "SoC descriptor grid missing 'x_size'"
+        assert "y_size" in soc_desc_data["grid"], "SoC descriptor grid missing 'y_size'"
+        assert soc_desc_data["grid"]["x_size"] > 0, "SoC descriptor grid x_size must be positive"
+        assert soc_desc_data["grid"]["y_size"] > 0, "SoC descriptor grid y_size must be positive"
+
+        assert "arch_name" in soc_desc_data, "SoC descriptor missing 'arch_name' field"
+        arch_name = soc_desc_data["arch_name"].upper()
+        expected_arch = ENV_VAR_ARCH_NAME.upper()
+        assert (
+            expected_arch in arch_name or arch_name in expected_arch
+        ), f"SoC descriptor arch_name '{soc_desc_data['arch_name']}' does not match expected arch '{ENV_VAR_ARCH_NAME}'"
+
+        assert "functional_workers" in soc_desc_data, "SoC descriptor missing 'functional_workers' field"
+        assert len(soc_desc_data["functional_workers"]) > 0, "SoC descriptor must have at least one functional worker"
+
+        # Verify DRAM channels exist (all architectures have DRAM)
+        assert "dram" in soc_desc_data, "SoC descriptor missing 'dram' field"
+        assert len(soc_desc_data["dram"]) > 0, "SoC descriptor must have at least one DRAM channel"
 
 
 @skip_for_blackhole()
@@ -1204,11 +1284,6 @@ def test_fabric_event_profiler_1d():
         except subprocess.CalledProcessError as e:
             ret_code = e.returncode
             assert ret_code == 0, f"test command '{test_bin}' returned unsuccessfully"
-
-        expected_cluster_coords_file = f"{PROFILER_LOGS_DIR}/cluster_coordinates.json"
-        assert os.path.isfile(
-            expected_cluster_coords_file
-        ), f"expected cluster coordinates file '{expected_cluster_coords_file}' does not exist"
 
         noc_trace_files = []
         for f in os.listdir(f"{PROFILER_LOGS_DIR}"):
@@ -1274,11 +1349,6 @@ def test_fabric_event_profiler_fabric_mux():
         except subprocess.CalledProcessError as e:
             ret_code = e.returncode
             assert ret_code == 0, f"test command '{test_bin}' returned unsuccessfully"
-
-        expected_cluster_coords_file = f"{PROFILER_LOGS_DIR}/cluster_coordinates.json"
-        assert os.path.isfile(
-            expected_cluster_coords_file
-        ), f"expected cluster coordinates file '{expected_cluster_coords_file}' does not exist"
 
         noc_trace_files = []
         for f in os.listdir(f"{PROFILER_LOGS_DIR}"):
@@ -1394,11 +1464,6 @@ def test_fabric_event_profiler_2d():
         except subprocess.CalledProcessError as e:
             ret_code = e.returncode
             assert ret_code == 0, f"test command '{test_bin}' returned unsuccessfully"
-
-        expected_cluster_coords_file = f"{PROFILER_LOGS_DIR}/cluster_coordinates.json"
-        assert os.path.isfile(
-            expected_cluster_coords_file
-        ), f"expected cluster coordinates file '{expected_cluster_coords_file}' does not exist"
 
         noc_trace_files = []
         for f in os.listdir(f"{PROFILER_LOGS_DIR}"):

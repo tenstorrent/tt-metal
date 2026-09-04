@@ -12,6 +12,28 @@ You can run `tt-triage` by executing `tools/tt-triage.py`.
 1. The script must define a global variable `script_config` of type `ScriptConfig`.
 2. The script must define a `run` method with two arguments: `(args, context)`. `args` contains the parsed arguments for all scripts. `context` is a ttexalens `Context` object.
 
+## Scripts outside tools/triage
+
+`--additional-scripts-directory=<dir>` adds `<dir>` to the search, alongside `tools/triage`. Repeat the option to add several directories. This lets a consuming repository keep its own triage scripts in its own tree while still using the built-in ones:
+
+```bash
+./tools/tt-triage.py --additional-scripts-directory=/path/to/my/custom/triage/scripts
+```
+
+Scripts in those directories are discovered, executed and given their arguments exactly like the built-in ones, and they may depend on built-in scripts by name. Each directory is also put on `sys.path`, so a script can import its siblings.
+
+The option is read before discovery on every entry point, so it works the same way when a single script is run directly (see [Enabling standalone script execution](#enabling-standalone-script-execution)):
+
+```bash
+python /path/to/my/custom/triage/scripts/my_check.py --additional-scripts-directory=/path/to/my/other/triage/scripts
+```
+
+A script run directly does not need the flag for its own directory - that is always searched. A script and the scripts it depends on can sit side by side and be run with no options at all; the flag is only needed to reach scripts in *other* directories.
+
+One limitation with `tt-run-triage`: its host-side argument check only knows the built-in scripts, so if a script in an additional directory defines its own options, passing them through `tt-run-triage` is rejected before the ranks start. Run `triage.py` under `tt-run` directly in that case.
+
+**File names must be unique across all searched directories.** Scripts and their helper modules are imported by bare module name, so if two directories both contain `device_info.py`, only one of them can ever be imported under that name. `tt-triage` warns about the repeated names at startup and skips the shadowed script rather than running the wrong file under its path. That warning is the signal to watch for: `--run=<name>` resolves to the first match, which is the built-in one, so it runs the built-in script without complaining. Pointing at the shadowed file by path does report which file the name really resolved to. This applies to helper modules too - a `utils.py` next to your scripts would be shadowed by `tools/triage/utils.py`. `__init__.py` is exempt, since it is never loaded as a script.
+
 There are two types of scripts:
 - Data provider
 - State checker
@@ -34,7 +56,7 @@ If a check is critical (such as a missing ELF file), the script should raise a `
 
 ### Data visualization
 
-`tt-triage` will try to visualize data returned by scripts, so it is important to describe the data accordingly. For example, see `dump_callstacks` — `tt-triage` would generate a table with all callstacks.
+`tt-triage` will try to visualize data returned by scripts, so it is important to describe the data accordingly. For example, see `dump_callstacks` - `tt-triage` would generate a table with all callstacks.
 
 #### dump_callstacks output modes
 
@@ -139,6 +161,8 @@ If you set `data_provider` to `True`, your script is treated as a data provider 
 If you set `disabled` to `True`, your script will not be executed (and all scripts that depend on it will fail).
 
 `depends` is a list of scripts that your script depends on. Scripts that perform checks per device depend on the `check_per_device` script. Scripts that depend on checking operations, kernels, or firmware depend on the `dispatcher_data` script.
+
+A bare dependency name is looked for next to your script first, then in `tools/triage`, then in the directories given by `--additional-scripts-directory`, in the order they were given; the first match wins. An absolute path is used as given. This is what lets a script outside `tools/triage` depend on a built-in provider such as `run_checks` by name.
 
 ## Additional pip requirements
 

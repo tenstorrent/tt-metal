@@ -252,3 +252,54 @@ def test_msa_native_causal_vs_noncausal_differs(device):
     out_causal = run_op_msa_native(q, k, v, indices, device, chunk_start_idx=0)
     out_block_only = run_op_msa_native(q, k, v, indices, device)  # chunk_start_idx=None -> legacy path
     assert pcc(out_causal, out_block_only) < 0.999, "causal mask had no effect vs block-only"
+
+
+# ---- block-cyclic remap: block-ids are NATURAL positions but the K/V cache is stored block-cyclic across SP
+# ---- shards. sp is DERIVED from the mesh (block_cyclic_sp_axis = the striped axis). On ONE device the mesh is
+# ---- 1x1 so sp=1 and the block-granular remap reduces to identity (shard=0, BC_SLAB_STRIDE_GAP=0 => phys=block)
+# ---- — enough to smoke the whole BC path (API, chunk_local cross-check, BC_ENABLE reader+writer branch, T
+# ---- hashing). The sp>1 PERMUTATION arithmetic needs a real SP mesh; that multi-device coverage is deferred to
+# ---- a nightly multidevice file (a mesh_device fixture can't share this single-device file), mirroring
+# ---- test_sparse_sdpa's block-cyclic coverage. ----
+@run_for_blackhole()
+def test_msa_native_block_cyclic_sp1_identity(device):
+    """sp=1 (from the 1x1 device-mesh): block-cyclic == natural, so the op must reproduce the natural golden
+    while exercising the BC_ENABLE path, across cache sizes T. T is hashed for this path (BC_SHARD_STRIDE_GAP is
+    a compile-time define), so each distinct T is a DISTINCT program — asserted below."""
+    H, n_kv, S, d, topk = 32, 1, 128, _D, 16  # S == chunk_local (mult of block_size); TOPK*4 must be 64B-aligned
+    Ts = (2048, 4096)  # nblk = T/128 >= topk; distinct T -> distinct program (T hashed for the BC path)
+    device.clear_program_cache()
+    for T in Ts:
+        nblk = T // BLK_KV
+        q, k, v, indices = make_msa_inputs(H, n_kv, S, T, topk=min(topk, nblk), d=d, causal=False, seed=T)
+        gold = sparse_attention_ref_msa(q, k, v, indices, d**-0.5)
+        out = run_op_msa_native(q, k, v, indices, device, block_cyclic_sp_axis=0, block_cyclic_chunk_local=S)
+        p = pcc(out, gold)
+        assert p >= DEVICE_PCC, f"PCC {p:.5f} (sp=1 identity block-cyclic, T={T})"
+    n = device.num_program_cache_entries()
+    assert n == len(Ts), f"block-cyclic should hash cache size T: got {n} entries (expected {len(Ts)})"
+
+
+@run_for_blackhole()
+def test_msa_native_block_cyclic_sp1_bit_exact(device):
+    """The remap is pure addressing, not arithmetic: at sp=1 invP is the identity, so the block-cyclic path reads
+    the exact same tiles in the same order as the plain path and must produce a BIT-IDENTICAL result (stronger
+    than PCC — proves the BC_ENABLE branch and the extra phys_block computation perturb nothing)."""
+    H, n_kv, S, d, topk, T = 32, 1, 128, _D, 16, 2048
+    q, k, v, indices = make_msa_inputs(H, n_kv, S, T, topk, d, causal=False, seed=7)
+    plain = run_op_msa_native(q, k, v, indices, device)
+    bc = run_op_msa_native(q, k, v, indices, device, block_cyclic_sp_axis=0, block_cyclic_chunk_local=S)
+    assert torch.equal(
+        plain, bc
+    ), f"block-cyclic sp=1 must be bit-identical to non-BC; max|delta|={(plain - bc).abs().max().item()}"
+
+
+@run_for_blackhole()
+def test_msa_native_block_cyclic_chunk_local_rejected(device, expect_error):
+    """The chunk_local cross-check rejects a value that is neither q_isl nor tp*q_isl. On a single device
+    sp=1/tp=1, so the only legal chunk_local is q_isl (= S); any other value must raise before dispatch."""
+    H, n_kv, S, d, topk = 32, 1, 128, _D, 2
+    T = 256
+    q, k, v, indices = make_msa_inputs(H, n_kv, S, T, topk, d, causal=False, seed=1)
+    with expect_error(RuntimeError, "block_cyclic_chunk_local"):
+        run_op_msa_native(q, k, v, indices, device, block_cyclic_sp_axis=0, block_cyclic_chunk_local=S - 32)

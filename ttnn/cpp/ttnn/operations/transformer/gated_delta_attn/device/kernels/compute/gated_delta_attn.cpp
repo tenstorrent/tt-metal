@@ -63,6 +63,14 @@ constexpr uint32_t cb_s_upd = tt::CBIndex::c_25;
 constexpr uint32_t cb_S_tmp = tt::CBIndex::c_26;
 constexpr uint32_t cb_final_state = tt::CBIndex::c_27;
 
+// Reconfigure sources + packer and re-init the matmul MOP for a new in0 @ in1 -> out matmul.
+// Matmul maps in0 -> SrcB and in1 -> SrcA, so the source reconfig uses SrcOrder::Reverse.
+static inline void matmul_reconfig_and_init(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb) {
+    reconfig_data_format<SrcOrder::Reverse>(in0_cb, in1_cb);
+    matmul_init(in0_cb, in1_cb);
+    pack_reconfig_data_format(out_cb);
+}
+
 // ---------------------------------------------------------------------------
 // One row of blocked forward substitution.
 //
@@ -85,7 +93,7 @@ __attribute__((noinline)) static void fwd_sub_row(
 
     // Step 1: fwd_rhs = rhs_cb[row_i * Xt .. (row_i+1)*Xt - 1]
     CircularBuffer(cb_nm_P_a).reserve_back(Xt);
-    copy_tile_to_dst_init_short(rhs_cb);
+    copy_init(rhs_cb);
     for (uint32_t xt = 0; xt < Xt; xt++) {
         tile_regs_acquire();
         copy_tile(rhs_cb, row_i * Xt + xt, 0);
@@ -100,7 +108,7 @@ __attribute__((noinline)) static void fwd_sub_row(
     for (uint32_t j = 0; j < row_i; j++) {
         // corr = L_unit[row_i*Ct + j] @ out_cb[j*Xt .. (j+1)*Xt-1]
         CircularBuffer(cb_nm_P_b).reserve_back(Xt);
-        mm_init(cb_L_unit, out_cb, cb_nm_P_b);
+        matmul_reconfig_and_init(cb_L_unit, out_cb, cb_nm_P_b);
         uint32_t L_tile = row_i * Ct + j;
         for (uint32_t xt = 0; xt < Xt; xt++) {
             tile_regs_acquire();
@@ -116,7 +124,7 @@ __attribute__((noinline)) static void fwd_sub_row(
         CircularBuffer(cb_nm_P_a).wait_front(Xt);
         CircularBuffer(cb_nm_P_b).wait_front(Xt);
         CircularBuffer(cb_nm_R_a).reserve_back(Xt);
-        sub_tiles_init(cb_nm_P_a, cb_nm_P_b);
+        sub_init(cb_nm_P_a, cb_nm_P_b);
         for (uint32_t xt = 0; xt < Xt; xt++) {
             tile_regs_acquire();
             sub_tiles(cb_nm_P_a, cb_nm_P_b, xt, xt, 0);
@@ -132,7 +140,7 @@ __attribute__((noinline)) static void fwd_sub_row(
         // fwd_rhs (nm_P_a) = nm_R_a
         CircularBuffer(cb_nm_R_a).wait_front(Xt);
         CircularBuffer(cb_nm_P_a).reserve_back(Xt);
-        copy_tile_to_dst_init_short(cb_nm_R_a);
+        copy_init(cb_nm_R_a);
         for (uint32_t xt = 0; xt < Xt; xt++) {
             tile_regs_acquire();
             copy_tile(cb_nm_R_a, xt, 0);
@@ -149,7 +157,7 @@ __attribute__((noinline)) static void fwd_sub_row(
     CircularBuffer(cb_nm_P_a).wait_front(Xt);
     CircularBuffer(cb_L_inv_row_i).wait_front(1);
     CircularBuffer(out_cb).reserve_back(Xt);
-    mm_init(cb_L_inv_row_i, cb_nm_P_a, out_cb);
+    matmul_reconfig_and_init(cb_L_inv_row_i, cb_nm_P_a, out_cb);
     for (uint32_t xt = 0; xt < Xt; xt++) {
         tile_regs_acquire();
         matmul_tiles(cb_L_inv_row_i, cb_nm_P_a, 0, xt, 0);
@@ -213,10 +221,11 @@ void kernel_main() {
     constexpr uint32_t attn_tiles = Ct * Ct;
     constexpr uint32_t kdt_tiles = Kt * Ct;
 
-    // Pre-configure hardware UNPACK format registers for float32.
-    // TT Metal requires mm_init before any copy_tile_to_dst_init_short call.
-    // Without this, the first copy_tile in fwd_sub_row(row_i=0) reads tiles as zeros.
-    mm_init(cb_v_beta_sc, cb_S, cb_v_cor);
+    // Pre-configure hardware (UNPACK/MATH/PACK) format registers for float32. This one-time
+    // HW startup must run before any copy_init call; without it, the first
+    // copy_tile in fwd_sub_row(row_i=0) reads tiles as zeros. Matmul maps in0 -> SrcB and
+    // in1 -> SrcA, hence SrcOrder::Reverse (per-matmul init is done at each matmul below).
+    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_v_beta_sc, cb_S, cb_v_cor);
 
     // Initial state pre-loaded by reader into cb_S.
     CircularBuffer(cb_S).wait_front(state_tiles);
@@ -272,7 +281,7 @@ void kernel_main() {
         // ==================================================================
         CircularBuffer(cb_k_cum).wait_front(in_kv_tiles);
         CircularBuffer(cb_v_prime).reserve_back(out_tiles);
-        mm_init(cb_k_cum, cb_S, cb_v_prime);
+        matmul_reconfig_and_init(cb_k_cum, cb_S, cb_v_prime);
         for (uint32_t ct = 0; ct < Ct; ct++) {
             for (uint32_t vt = 0; vt < Vt; vt++) {
                 tile_regs_acquire();
@@ -294,7 +303,7 @@ void kernel_main() {
         CircularBuffer(cb_v_cor).wait_front(out_tiles);
         CircularBuffer(cb_v_prime).wait_front(out_tiles);
         CircularBuffer(cb_v_new).reserve_back(out_tiles);
-        sub_tiles_init(cb_v_cor, cb_v_prime);
+        sub_init(cb_v_cor, cb_v_prime);
         for (uint32_t t = 0; t < out_tiles; t++) {
             tile_regs_acquire();
             sub_tiles(cb_v_cor, cb_v_prime, t, t, 0);
@@ -311,7 +320,7 @@ void kernel_main() {
         // 3. o_inter = q_decay @ S
         // ==================================================================
         CircularBuffer(cb_o_inter).reserve_back(out_tiles);
-        mm_init(cb_q_decay, cb_S, cb_o_inter);
+        matmul_reconfig_and_init(cb_q_decay, cb_S, cb_o_inter);
         for (uint32_t ct = 0; ct < Ct; ct++) {
             for (uint32_t vt = 0; vt < Vt; vt++) {
                 tile_regs_acquire();
@@ -332,7 +341,7 @@ void kernel_main() {
         // ==================================================================
         CircularBuffer(cb_v_new).wait_front(out_tiles);
         CircularBuffer(cb_intra_v).reserve_back(out_tiles);
-        mm_init(cb_intra_att, cb_v_new, cb_intra_v);
+        matmul_reconfig_and_init(cb_intra_att, cb_v_new, cb_intra_v);
         for (uint32_t ct = 0; ct < Ct; ct++) {
             for (uint32_t vt = 0; vt < Vt; vt++) {
                 tile_regs_acquire();
@@ -354,7 +363,7 @@ void kernel_main() {
         CircularBuffer(cb_o_inter).wait_front(out_tiles);
         CircularBuffer(cb_intra_v).wait_front(out_tiles);
         CircularBuffer(cb_out).reserve_back(out_tiles);
-        add_tiles_init(cb_o_inter, cb_intra_v);
+        add_init(cb_o_inter, cb_intra_v);
         for (uint32_t t = 0; t < out_tiles; t++) {
             tile_regs_acquire();
             add_tiles(cb_o_inter, cb_intra_v, t, t, 0);
@@ -371,7 +380,7 @@ void kernel_main() {
         // 6. s_upd = k_decay_t @ v_new
         // ==================================================================
         CircularBuffer(cb_s_upd).reserve_back(state_tiles);
-        mm_init(cb_k_dt, cb_v_new, cb_s_upd);
+        matmul_reconfig_and_init(cb_k_dt, cb_v_new, cb_s_upd);
         for (uint32_t kt = 0; kt < Kt; kt++) {
             for (uint32_t vt = 0; vt < Vt; vt++) {
                 tile_regs_acquire();
@@ -393,7 +402,7 @@ void kernel_main() {
         // ==================================================================
         CircularBuffer(cb_s_upd).wait_front(state_tiles);
         CircularBuffer(cb_S_tmp).reserve_back(state_tiles);
-        mul_tiles_bcast_scalar_init_short(cb_S, cb_dl_exp);
+        mul_bcast_scalar_init(cb_S, cb_dl_exp);
         for (uint32_t t = 0; t < state_tiles; t++) {
             tile_regs_acquire();
             mul_tiles_bcast_scalar(cb_S, cb_dl_exp, t, 0, 0);
@@ -413,7 +422,7 @@ void kernel_main() {
         const bool is_last_chunk = (c == num_chunks - 1);
         uint32_t dst_cb = is_last_chunk ? cb_final_state : cb_S;
         CircularBuffer(dst_cb).reserve_back(state_tiles);
-        add_tiles_init(cb_S_tmp, cb_s_upd);
+        add_init(cb_S_tmp, cb_s_upd);
         for (uint32_t t = 0; t < state_tiles; t++) {
             tile_regs_acquire();
             add_tiles(cb_S_tmp, cb_s_upd, t, t, 0);

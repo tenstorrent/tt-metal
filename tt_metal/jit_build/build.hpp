@@ -11,6 +11,7 @@
 #include <future>
 #include <map>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <tt-metalium/hal_types.hpp>
@@ -130,6 +131,14 @@ protected:
     std::string extra_link_objs_;
     std::string weakened_firmware_name_;
 
+    // True for the TENSIX compute pack state (TRISC2) — the only state where the per-kernel
+    // RVV opt-in (JitBuildSettings::get_trisc2_rvv_enabled) may apply.
+    bool is_compute_pack_{};
+    // HAL-provided compile flags enabling RVV codegen on this state; empty when the arch or
+    // processor does not support it. Appended to a kernel's recipe cflags only when that
+    // kernel opted in, so default builds are unchanged.
+    std::string rvv_cflags_;
+
     // Default compiler optimization setting
     // Used when JitBuildSettings is not provided
     std::string default_compile_opt_level_;
@@ -148,7 +157,6 @@ protected:
     static constexpr size_t kMaxBuildBitset = 64;
 
     bool build_state_matches(const std::string& out_dir) const;
-    void write_build_state_hash(const std::string& out_dir) const;
 
     bool need_compile(const std::string& out_dir, const std::string& obj) const;
     std::bitset<kMaxBuildBitset> compile(
@@ -175,6 +183,25 @@ public:
     // kernel-specific settings.  Replaces the PoC pattern of exposing
     // individual getters for every internal field.
     tt::jit_build::TargetRecipe export_target_recipe(const JitBuildSettings* settings) const;
+
+    // Write the effective-recipe hash to a ".build_state" file in out_dir. Callers producing a
+    // reusable cache (preprocess-and-ship) stamp this with the real recipe so a later local build
+    // detects recipe changes not reflected in the kernel-hash path.
+    void write_build_state_hash(const std::string& out_dir) const;
+
+    // True if a warmed preprocess-and-ship ELF for `kernel_name` is present and still valid: the
+    // ".build_state" recipe stamp matches and the source-complete FULL_DEPHASH_SUFFIX sidecar is up
+    // to date, so compile+link (local build) or the remote round-trip can be skipped and the cached
+    // ELF loaded directly. Validates only this build state's single ELF; callers loop over a kernel's
+    // per-processor build states. Ordinary local builds never write the sidecar, so this returns
+    // false for them.
+    bool warmed_elf_reusable(std::string_view kernel_name) const;
+
+    // Write the preprocess-and-ship reuse cache (FULL_DEPHASH_SUFFIX sidecar + ".build_state") for
+    // this build state's ELF, from the .d files the -E step left in the target dir plus the link
+    // inputs. Call only after the remote compile succeeds and the ELF is on disk, so the cache never
+    // points at a missing or stale ELF. Validates on the next run via warmed_elf_reusable.
+    void write_reuse_cache(std::string_view kernel_name) const;
     const std::string& get_weakened_firmware_name() const { return weakened_firmware_name_; }
     bool get_firmware_is_kernel_object() const { return firmware_is_kernel_object_; }
 };

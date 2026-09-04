@@ -140,6 +140,7 @@ KernelHandle create_kernel(
                     .compile_args = compile_args,
                 });
         case HalProgrammableCoreType::DRAM:
+        case HalProgrammableCoreType::DISPATCH:
         case HalProgrammableCoreType::COUNT: TT_THROW("bad core type"); break;
     }
     TT_THROW("Unreachable");
@@ -231,7 +232,6 @@ void test_dummy_EnqueueProgram_with_runtime_args(
     distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program;
-    auto* device = mesh_device->get_devices()[0];
     auto eth_noc_xy = mesh_device->ethernet_core_from_logical_core(eth_core_coord);
 
     constexpr uint32_t num_runtime_args0 = 9;
@@ -269,7 +269,7 @@ void test_dummy_EnqueueProgram_with_runtime_args(
     Finish(cq);
 
     vector<uint32_t> dummy_kernel0_args_readback = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-        device->id(),
+        mesh_device->get_device_ids()[0],
         eth_noc_xy,
         MetalContext::instance().hal().get_dev_addr(
             tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED),
@@ -731,6 +731,7 @@ std::pair<uint32_t, uint32_t> get_args_addr(const IDevice* device, HalProcessorI
             common_args_addr = unique_args_addr + 1 * 256 * sizeof(uint32_t);
             break;
         case HalProgrammableCoreType::DRAM:
+        case HalProgrammableCoreType::DISPATCH:
         case HalProgrammableCoreType::COUNT: TT_THROW("bad core type");
     }
     return {unique_args_addr, common_args_addr};
@@ -905,17 +906,15 @@ void test_basic_dispatch_functions(const std::shared_ptr<distributed::MeshDevice
     constexpr uint32_t k_LoopPerDev = 100;
 
     DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
-    auto* device = mesh_device->get_devices()[0];
     log_info(tt::LogTest, "Running On Device {} CQ{}", mesh_device->id(), cq_id);
-
-    log_info(tt::LogTest, "Running On Device {} CQ{}", device->id(), cq_id);
+    const auto device_id = mesh_device->get_device_ids()[0];
 
     // Alternate write patterns
     std::vector<uint32_t> src_data_1(k_DataSize / sizeof(uint32_t));
     std::vector<uint32_t> src_data_2(k_DataSize / sizeof(uint32_t));
     for (int i = 0; i < k_DataSize / sizeof(uint32_t); ++i) {
-        src_data_1[i] = (device->id() + rand()) * 0xdeadbeef;
-        src_data_2[i] = (device->id() + rand()) * 0xabcd1234;
+        src_data_1[i] = (device_id + rand()) * 0xdeadbeef;
+        src_data_2[i] = (device_id + rand()) * 0xabcd1234;
     }
     distributed::DeviceLocalBufferConfig l1_buffer_config{.page_size = k_PageSize, .buffer_type = BufferType::L1};
     distributed::DeviceLocalBufferConfig dram_buffer_config{.page_size = k_PageSize, .buffer_type = BufferType::DRAM};
@@ -1787,8 +1786,7 @@ TEST_F(UnitMeshCQFixture, TestLogicalCoordinatesEth) {
     GTEST_SKIP() << "Mesh device does not support logical / relative coordinates on Eth";
     for (const auto& device : devices_) {
         if (!does_device_have_active_eth_cores(device->get_devices()[0])) {
-            GTEST_SKIP() << "Skipping test because device " << device->id()
-                         << " does not have any active ethernet cores";
+            GTEST_SKIP() << "Skipping test because device does not have any active ethernet cores";
         }
         const auto erisc_count =
             tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
@@ -2378,8 +2376,7 @@ TEST_F(UnitMeshRandomProgramFixture, TensixTestSimplePrograms) {
 TEST_F(UnitMeshRandomProgramFixture, TensixActiveEthTestSimplePrograms) {
     for (const auto& device : device_->get_devices()) {
         if (!does_device_have_active_eth_cores(device)) {
-            GTEST_SKIP() << "Skipping test because device " << device->id()
-                         << " does not have any active ethernet cores";
+            GTEST_SKIP() << "Skipping test because device does not have any active ethernet cores";
         }
     }
 
@@ -2410,8 +2407,7 @@ TEST_F(UnitMeshRandomProgramFixture, TensixActiveEthTestSimplePrograms) {
 TEST_F(UnitMeshRandomProgramFixture, ActiveEthTestPrograms) {
     for (const auto& device : device_->get_devices()) {
         if (!does_device_have_active_eth_cores(device)) {
-            GTEST_SKIP() << "Skipping test because device " << device->id()
-                         << " does not have any active ethernet cores";
+            GTEST_SKIP() << "Skipping test because device does not have any active ethernet cores";
         }
     }
 
@@ -2438,8 +2434,7 @@ TEST_F(UnitMeshRandomProgramFixture, ActiveEthTestPrograms) {
 TEST_F(UnitMeshRandomProgramFixture, TensixActiveEthTestPrograms) {
     for (const auto& device : device_->get_devices()) {
         if (!does_device_have_active_eth_cores(device)) {
-            GTEST_SKIP() << "Skipping test because device " << device->id()
-                         << " does not have any active ethernet cores";
+            GTEST_SKIP() << "Skipping test because device does not have any active ethernet cores";
         }
     }
 

@@ -87,8 +87,10 @@ GatedDeltaAttnSeqDeviceOperation::spec_return_value_t GatedDeltaAttnSeqDeviceOpe
     const uint32_t Dv = attrs.val_dim;
     const auto& mc = attrs.output_mem_config;
 
-    TensorSpec out_spec(ttnn::Shape({BH, NC, C, Dv}), TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), mc));
-    TensorSpec state_spec(ttnn::Shape({BH, Dk, Dv}), TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), mc));
+    tt::tt_metal::TensorSpec out_spec(
+        ttnn::Shape({BH, NC, C, Dv}), TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), mc));
+    tt::tt_metal::TensorSpec state_spec(
+        ttnn::Shape({BH, Dk, Dv}), TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), mc));
     return {out_spec, state_spec};
 }
 

@@ -12,14 +12,22 @@ on:
       enabled-skus:
         required: true
         type: string
+      tests-yaml-path:
+        required: false
+        type: string
+        default: ./tests/pipeline_reorg/runtime_perf_tests.yaml
+      budget-subheading:
+        required: false
+        type: string
+        default: "perf"
 
 jobs:
   load-test-matrix:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       matrix: ${{ steps.build-matrix.outputs.matrix }}
     env:
-      TESTS_YAML_PATH: ./tests/pipeline_reorg/runtime_perf_tests.yaml
+      TESTS_YAML_PATH: ${{ inputs.tests-yaml-path }}
     steps:
       - name: Checkout the repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -38,7 +46,7 @@ jobs:
           python3 .github/scripts/utils/verify_time_budget.py \
             ${{ env.TESTS_YAML_PATH }} \
             ./.github/time_budget.yaml \
-            "perf"
+            "${{ inputs.budget-subheading }}"
       - name: Build unified test matrix based on enabled SKUs
         id: build-matrix
         run: |
@@ -104,6 +112,14 @@ jobs:
             docker-job/pgm_bench.json
             docker-job/buffer_bench.json
           prefix: "perf_benchmarks_json_"
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        # Diagnostic only: a GitHub artifact API reset (ECONNRESET) must not fail the test.
+        continue-on-error: true
+        if: ${{ !cancelled() && matrix.test-group.profiler_logs_path }}
+        with:
+          path: ${{ matrix.test-group.profiler_logs_path }}
+          prefix: "profiler-logs-${{ join(matrix.test-group.name) }}-"
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:

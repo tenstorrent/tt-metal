@@ -26,14 +26,18 @@ add_subdirectory(ccl/moe_gpt)
 
 # metalium-developers-mmfusedreduce
 add_subdirectory(matmul)
+add_subdirectory(matmul_decode)
 add_subdirectory(quasar)
 add_subdirectory(reduction)
 
 # metalium-developers-sdpa
+add_subdirectory(high_bw_all_gather)
 add_subdirectory(indexer_score)
+add_subdirectory(kda)
 add_subdirectory(topk_large_indices)
 
 # metallium-maintainers-llama-models
+add_subdirectory(indexed_page_cache)
 add_subdirectory(paged_cache)
 
 # metalium-developers-external-experience
@@ -41,6 +45,7 @@ add_subdirectory(isin)
 
 # cglagovichTT, jonathansuTT (named individuals, not a team)
 add_subdirectory(minimal_matmul)
+add_subdirectory(rgb_to_yuv)
 
 # Jointly owned by convolutions + ops-data-movement — already covered by this
 # file's CODEOWNERS union above, so no separate decision was needed to fold
@@ -82,13 +87,18 @@ target_link_libraries(
         TTNN::Ops::Experimental::CCL
         TTNN::Ops::Experimental::MoEGPT
         TTNN::Ops::Experimental::Matmul
+        TTNN::Ops::Experimental::MatmulDecode
         TTNN::Ops::Experimental::Quasar
         TTNN::Ops::Experimental::Reduction
+        TTNN::Ops::Experimental::HighBwAllGather
         TTNN::Ops::Experimental::IndexerScore
+        TTNN::Ops::Experimental::KDA
         TTNN::Ops::Experimental::TopkLargeIndices
+        TTNN::Ops::Experimental::IndexedPageCache
         TTNN::Ops::Experimental::PagedCache
         TTNN::Ops::Experimental::IsIn
         TTNN::Ops::Experimental::MinimalMatmul
+        TTNN::Ops::Experimental::RgbToYuv
         TTNN::Ops::Experimental::PaddedSlice
         TTNN::Ops::Experimental::SliceWrite
         TTNN::Ops::Experimental::BcastTo
@@ -129,13 +139,17 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::CCL>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::MoEGPT>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::Matmul>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::MatmulDecode>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::Quasar>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::Reduction>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::HighBwAllGather>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::IndexerScore>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::TopkLargeIndices>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::IndexedPageCache>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::PagedCache>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::IsIn>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::MinimalMatmul>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::RgbToYuv>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::PaddedSlice>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::SliceWrite>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::BcastTo>

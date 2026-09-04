@@ -12,7 +12,11 @@ from typing import Optional, Union
 import yaml
 from loguru import logger
 
-from infra.data_collection.github.workflows import is_job_hanging_from_job_log
+from infra.data_collection.github.workflows import (
+    is_job_hanging_from_job_log,
+    get_civ2_node_name_and_serial_from_annotations,
+    get_civ2_node_name_and_serial_from_job_log,
+)
 from infra.data_collection.models import InfraErrorV1, TestErrorV1, CodeQualityErrorV1
 from infra.data_collection.pydantic_models import CompleteBenchmarkRun
 
@@ -99,6 +103,11 @@ def return_first_string_starts_with(starting_string, strings):
 
 def get_job_failure_signature_(github_job, failure_description, workflow_outputs_dir) -> Optional[Union[InfraErrorV1]]:
     error_snippet_to_signature_mapping = {
+        # Actions runner timing out downloading a custom action/repo tarball from codeload.github.com
+        # (same root cause as the ACTION_DOWNLOAD_FAILURE cases below, just the timeout variant instead
+        # of an explicit error) — must be checked before the generic "has timed out" job-timeout snippet,
+        # which would otherwise swallow this and misroute it through hang detection
+        "download has timed out": str(InfraErrorV1.ACTION_DOWNLOAD_FAILURE),
         "has timed out": str(InfraErrorV1.JOB_UNIT_TIMEOUT_FAILURE),
         "exceeded the maximum execution time": str(InfraErrorV1.JOB_CUMULATIVE_TIMEOUT_FAILURE),
         "lost communication with the server": str(InfraErrorV1.RUNNER_COMM_FAILURE),
@@ -115,6 +124,35 @@ def get_job_failure_signature_(github_job, failure_description, workflow_outputs
         "could not read Username": str(InfraErrorV1.CHECKOUT_FAILURE),
         "terminal prompts disabled": str(InfraErrorV1.CHECKOUT_FAILURE),
         "Fetched in submodule path": str(InfraErrorV1.CHECKOUT_FAILURE),
+        # Docker daemon rejects a container operation with a null id (distinct from registry/pull failures above)
+        "Value cannot be null. (Parameter 'ContainerId')": str(InfraErrorV1.DOCKER_CONTAINER_ID_NULL_FAILURE),
+        # GitHub Actions runner failing to download a custom action's tarball from codeload.github.com
+        # (e.g. actions/checkout itself), distinct from a `git clone` failure of the repo under test
+        "Failed to download archive": str(InfraErrorV1.ACTION_DOWNLOAD_FAILURE),
+        "Failed to download action": str(InfraErrorV1.ACTION_DOWNLOAD_FAILURE),
+        # phoenix-actions/test-reporting surfacing a real test failure as a .github-path annotation
+        "Failed tests were found and 'fail-on-error'": str(InfraErrorV1.TEST_REPORTER_FAILURE),
+        "No test report files were found": str(InfraErrorV1.TEST_REPORTER_NO_REPORTS_FAILURE),
+        "/usr/bin/git' failed with exit code 128": str(InfraErrorV1.GIT_PROCESS_FAILURE),
+        "Failed to FinalizeArtifact": str(InfraErrorV1.ARTIFACT_FINALIZE_FAILURE),
+        # Artifact/workflow-run record expired or was cleaned up server-side, distinct from the
+        # transient ECONNRESET case below — must be checked first since both share the same prefix
+        "Failed to GetSignedArtifactURL: Received non-retryable error: Failed request: (404) Not Found": str(
+            InfraErrorV1.ARTIFACT_DOWNLOAD_NOT_FOUND_FAILURE
+        ),
+        # Match the connection-specific portion, not the bare operation name: a 403/500/malformed
+        # GetSignedArtifactURL is a different failure mode and must not land in the connection bucket
+        "Failed to GetSignedArtifactURL: Unable to make request": str(
+            InfraErrorV1.ARTIFACT_DOWNLOAD_CONNECTION_FAILURE
+        ),
+        # Match the 403-specific portion: a ListArtifacts ECONNRESET is a connection error, not a
+        # forbidden error, and should not be swallowed by the operation name alone
+        "Failed to ListArtifacts: Received non-retryable error: Failed request: (403) Forbidden": str(
+            InfraErrorV1.ARTIFACT_DOWNLOAD_FORBIDDEN_FAILURE
+        ),
+        "Upload progress stalled.": str(InfraErrorV1.ARTIFACT_UPLOAD_STALLED_FAILURE),
+        "Request was cancelled.": str(InfraErrorV1.REQUEST_CANCELLED_FAILURE),
+        "We received a malformed request from your client": str(InfraErrorV1.GITHUB_API_MALFORMED_REQUEST_FAILURE),
     }
 
     # Check the mapping dictionary for specific failure signature types
@@ -165,6 +203,12 @@ def get_job_failure_signature_(github_job, failure_description, workflow_outputs
 
         if is_clang_tidy_failure:
             return str(CodeQualityErrorV1.CLANG_TIDY_VIOLATION)
+
+    # Most generic step-failure message GitHub emits ("Process completed with exit code N").
+    # Checked only after the step-specific classifiers above so a checkout/clang-tidy step that
+    # fails with this generic annotation still gets its specific signature, not this fallback.
+    if "Process completed with exit code" in failure_description:
+        return str(InfraErrorV1.GENERIC_EXIT_CODE_FAILURE)
 
     # generic catch-all
     return str(InfraErrorV1.GENERIC_FAILURE)
@@ -243,16 +287,36 @@ def get_job_row_from_github_job(github_job, github_job_id_to_annotations, workfl
     else:
         ubuntu_version = None
 
-    # Clean up ephemeral runner names
-    if host_name and (host_name.startswith("tt-beta") or host_name.startswith("tt-ubuntu")):
-        parts = host_name.split("-")
-        # Issue: https://github.com/tenstorrent/tt-metal/issues/21694
-        # Issue: https://github.com/tenstorrent/tt-metal/issues/26445
-        # Remove non-constant ephemeral runner suffix from tt-beta/tt-ubuntu runner names only if the second last part is "runner"
-        # We don't want to remove the suffix for non-ephemeral runners (e.g. tt-beta-ubuntu-2204-xlarge)
-        # E.g. tt-beta-ubuntu-2204-n150-large-stable-nk6pd-runner-5g5f9 -> tt-beta-ubuntu-2204-n150-large-stable-nk6pd
-        if len(parts) >= 2 and parts[-2] == "runner":
-            host_name = "-".join(parts[:-1])
+    # Resolve the host_name for CIv2 (tt-ubuntu) runners. The ephemeral runner identity is
+    # not useful for data analysis since it changes every pod, so prefer the physical
+    # <node name>_<serial> emitted by the job-start hook annotations, falling back to the
+    # job log when annotations are unavailable (e.g. not downloaded).
+    if host_name and host_name.startswith("tt-ubuntu"):
+        node_name, serial = get_civ2_node_name_and_serial_from_annotations(
+            github_job_id_to_annotations.get(github_job_id)
+        )
+        if not (node_name and serial):
+            log_node_name, log_serial = get_civ2_node_name_and_serial_from_job_log(
+                workflow_outputs_dir, github_job["run_id"], github_job_id
+            )
+            node_name = node_name or log_node_name
+            serial = serial or log_serial
+
+        if node_name and serial:
+            host_name = f"{node_name}_{serial}"
+        elif node_name:
+            # CPU-only runners have no card serial; the node name alone identifies the host
+            host_name = node_name
+        else:
+            # No node/serial info: strip the non-constant ephemeral suffix so host aggregation
+            # stays stable, but only when the second-last part is "runner" so we don't touch
+            # non-ephemeral runners (e.g. tt-ubuntu-2204-xlarge).
+            # E.g. tt-ubuntu-2204-n150-large-stable-nk6pd-runner-5g5f9 -> tt-ubuntu-2204-n150-large-stable-nk6pd
+            # Issues: https://github.com/tenstorrent/tt-metal/issues/21694
+            #         https://github.com/tenstorrent/tt-metal/issues/26445
+            parts = host_name.split("-")
+            if len(parts) >= 2 and parts[-2] == "runner":
+                host_name = "-".join(parts[:-1])
 
     # Cleanup GitHub-hosted runner names because we're sending the whole thing, which is unnecessary
     # and clogs up the data with 1000s of hosts

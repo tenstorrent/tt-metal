@@ -1123,7 +1123,18 @@ namespace reuse_mcast_optimized_helpers {
         (out_block_h / out_subblock_h - last_block_num_nonzero_subblocks_h) * (out_block_w * out_subblock_h);
 
     if (in0_block_sharded) {
-        if (in0_noc == tt::tt_metal::NOC::NOC_1) {
+        // A multicast rectangle must be specified with start <= end. Two arch paths:
+        //  * WH/BH (2 NOCs, torus): a NOC_1 multicast runs high->low, so swap start/end (unchanged).
+        //  * Quasar (single NOC, non-torus): the rectangle must be ascending regardless of NOC. in0_noc =
+        //    preferred_noc_for_dram_write(arch) returns NOC_1 on Quasar too, so the WH/BH swap would
+        //    degenerate it to [max..min] and the sender would block forever on mcast acks (hang). Force
+        //    ascending via min/max. (#48552)
+        if (device->arch() == tt::ARCH::QUASAR) {
+            uint32_t lo = std::min(in0_mcast_receiver_grid_diff_coord_start, in0_mcast_receiver_grid_diff_coord_end);
+            uint32_t hi = std::max(in0_mcast_receiver_grid_diff_coord_start, in0_mcast_receiver_grid_diff_coord_end);
+            in0_mcast_receiver_grid_diff_coord_start = lo;
+            in0_mcast_receiver_grid_diff_coord_end = hi;
+        } else if (in0_noc == tt::tt_metal::NOC::NOC_1) {
             std::swap(in0_mcast_receiver_grid_diff_coord_start, in0_mcast_receiver_grid_diff_coord_end);
         }
     }
@@ -1140,10 +1151,18 @@ namespace reuse_mcast_optimized_helpers {
 
     for (const auto& core : cores) {
         CoreCoord left_core = {(std::size_t)start_core_x, (std::size_t)core.y};
-        CoreCoord left_core_plus_one = {(std::size_t)start_core_x + 1, (std::size_t)core.y};
+        // [Quasar single-row/col guard] The mcast "+1" corner (the first receiver past the sender) does not
+        // exist when there is only one column (in0 row-mcast) or one row (in1 column-mcast) -- e.g. on the
+        // 2-core emulator (2x1 grid) start_core_y+1 = (0,1) has no core, so translating it throws
+        // "No core coordinate found at (0,1)". Clamp the +1 corner to the sender's own coord when that
+        // dimension has a single core; the degenerate mcast then covers 0 receivers so the clamped
+        // rectangle is unused. Multi-row/col grids (num_cores_with_work_* > 1) are unchanged.
+        CoreCoord left_core_plus_one = {
+            (std::size_t)start_core_x + (num_cores_with_work_c > 1 ? 1u : 0u), (std::size_t)core.y};
         CoreCoord right_core = {(std::size_t)start_core_x + num_cores_with_work_c - 1, (std::size_t)core.y};
         CoreCoord top_core = {(std::size_t)core.x, (std::size_t)start_core_y};
-        CoreCoord top_core_plus_one = {(std::size_t)core.x, (std::size_t)start_core_y + 1};
+        CoreCoord top_core_plus_one = {
+            (std::size_t)core.x, (std::size_t)start_core_y + (num_cores_with_work_r > 1 ? 1u : 0u)};
         CoreCoord bottom_core = {(std::size_t)core.x, (std::size_t)start_core_y + num_cores_with_work_r - 1};
 
         auto left_core_physical = device->worker_core_from_logical_core(left_core);
@@ -2566,7 +2585,18 @@ create_program_mcast_in0_in1(
         (out_block_h / out_subblock_h - last_block_num_nonzero_subblocks_h) * (out_block_w * out_subblock_h);
 
     if (in0_block_sharded) {
-        if (in0_noc == tt::tt_metal::NOC::NOC_1) {
+        // A multicast rectangle must be specified with start <= end. Two arch paths:
+        //  * WH/BH (2 NOCs, torus): a NOC_1 multicast runs high->low, so swap start/end (unchanged).
+        //  * Quasar (single NOC, non-torus): the rectangle must be ascending regardless of NOC. in0_noc =
+        //    preferred_noc_for_dram_write(arch) returns NOC_1 on Quasar too, so the WH/BH swap would
+        //    degenerate it to [max..min] and the sender would block forever on mcast acks (hang). Force
+        //    ascending via min/max. (#48552)
+        if (device->arch() == tt::ARCH::QUASAR) {
+            uint32_t lo = std::min(in0_mcast_receiver_grid_diff_coord_start, in0_mcast_receiver_grid_diff_coord_end);
+            uint32_t hi = std::max(in0_mcast_receiver_grid_diff_coord_start, in0_mcast_receiver_grid_diff_coord_end);
+            in0_mcast_receiver_grid_diff_coord_start = lo;
+            in0_mcast_receiver_grid_diff_coord_end = hi;
+        } else if (in0_noc == tt::tt_metal::NOC::NOC_1) {
             std::swap(in0_mcast_receiver_grid_diff_coord_start, in0_mcast_receiver_grid_diff_coord_end);
         }
     }
@@ -2594,10 +2624,18 @@ create_program_mcast_in0_in1(
 
     for (const auto& core : cores) {
         CoreCoord left_core = {(std::size_t)start_core_x, (std::size_t)core.y};
-        CoreCoord left_core_plus_one = {(std::size_t)start_core_x + 1, (std::size_t)core.y};
+        // [Quasar single-row/col guard] The mcast "+1" corner (the first receiver past the sender) does not
+        // exist when there is only one column (in0 row-mcast) or one row (in1 column-mcast) -- e.g. on the
+        // 2-core emulator (2x1 grid) start_core_y+1 = (0,1) has no core, so translating it throws
+        // "No core coordinate found at (0,1)". Clamp the +1 corner to the sender's own coord when that
+        // dimension has a single core; the degenerate mcast then covers 0 receivers so the clamped
+        // rectangle is unused. Multi-row/col grids (num_cores_with_work_* > 1) are unchanged.
+        CoreCoord left_core_plus_one = {
+            (std::size_t)start_core_x + (num_cores_with_work_c > 1 ? 1u : 0u), (std::size_t)core.y};
         CoreCoord right_core = {(std::size_t)start_core_x + num_cores_with_work_c - 1, (std::size_t)core.y};
         CoreCoord top_core = {(std::size_t)core.x, (std::size_t)start_core_y};
-        CoreCoord top_core_plus_one = {(std::size_t)core.x, (std::size_t)start_core_y + 1};
+        CoreCoord top_core_plus_one = {
+            (std::size_t)core.x, (std::size_t)start_core_y + (num_cores_with_work_r > 1 ? 1u : 0u)};
         CoreCoord bottom_core = {(std::size_t)core.x, (std::size_t)start_core_y + num_cores_with_work_r - 1};
 
         auto left_core_physical = device->worker_core_from_logical_core(left_core);
@@ -3073,11 +3111,16 @@ namespace m2 = tt::tt_metal::experimental;
 
 namespace CMAKE_UNIQUE_NAMESPACE {
 // Create a generation-agnostic data movement hardware config: Gen1 (WH/BH) takes the given
-// processor & NOC; Gen2 (Quasar) uses the default config.
+// processor & NOC; Gen2 (Quasar) uses the default config, optionally opting the kernel's DFBs
+// out of implicit-sync credit accounting (disable_dfb_implicit_sync_for_all) — a Gen2-only concept
+// ignored on Gen1.
 m2::DataMovementHardwareConfig make_datamovement_hardware_config(
-    tt::ARCH arch, tt::tt_metal::DataMovementProcessor processor, tt::tt_metal::NOC noc) {
+    tt::ARCH arch,
+    tt::tt_metal::DataMovementProcessor processor,
+    tt::tt_metal::NOC noc,
+    bool disable_dfb_implicit_sync_for_all = false) {
     if (arch == tt::ARCH::QUASAR) {
-        return m2::DataMovementGen2Config{};
+        return m2::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = disable_dfb_implicit_sync_for_all};
     }
     return m2::DataMovementGen1Config{.processor = processor, .noc = noc};
 }
@@ -3165,7 +3208,6 @@ m2::KernelSpec make_compute_kernel(
     bool has_bias,
     uint32_t bias_ntiles,
     bool row_broadcast_bias,
-    const std::optional<UnaryWithParam>& fused_activation,
     const std::map<std::string, std::string>& mm_kernel_defines,
     const m2::ComputeHardwareConfig& compute_hw_config) {
     std::vector<m2::DFBBinding> dfb_bindings = {
@@ -3222,14 +3264,6 @@ m2::KernelSpec make_compute_kernel(
     if (has_bias) {
         cta.insert({"row_broadcast_bias", row_broadcast_bias ? 1u : 0u});
     }
-    if (fused_activation.has_value() && fused_activation.value().op_type != UnaryOpType::RELU) {
-        using ttnn::operations::experimental::quasar::matmul::utilities::get_activation_params;
-        const auto params = get_activation_params(fused_activation.value());
-        cta.insert({"activation_type", static_cast<uint32_t>(params.type)});
-        cta.insert({"activation_param0", params.param0});
-        cta.insert({"activation_param1", params.param1});
-        cta.insert({"activation_param2", params.param2});
-    }
 
     return m2::KernelSpec{
         .unique_id = RO_COMPUTE_KERNEL,
@@ -3245,7 +3279,7 @@ m2::KernelSpec make_compute_kernel(
 // mcast_in0_in1 (ProgramArtifacts). Mirrors create_program_mcast_in0_in1_descriptor.
 // ---------------------------------------------------------------------------------------------------
 ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
-    const tt::tt_metal::Tensor& a,
+    const ttnn::Tensor& a,
     tt_metal::IDevice* device,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
@@ -3572,11 +3606,11 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
         mm_kernel_in1_receiver_writer_other_noc_setup_defines["FUSE_BIAS"] = "1";
     }
     if (fused_activation.has_value()) {
-        if (fused_activation.value().op_type == UnaryOpType::RELU) {
-            mm_kernel_defines["PACK_RELU"] = "1";
-        } else {
-            mm_kernel_defines["SFPU_ACTIVATION"] = "1";
-        }
+        TT_FATAL(
+            fused_activation.value().op_type == UnaryOpType::RELU,
+            "Quasar 2D matmul fused activation only supports RELU (packer); packer-thread SFPU "
+            "activations (SFPU_ACTIVATION) are not supported.");
+        mm_kernel_defines["PACK_RELU"] = "1";
     }
     if (packer_l1_acc_en) {
         mm_kernel_defines["PACKER_L1_ACC"] = "1";
@@ -3903,7 +3937,10 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
             // in0_noc below, so the mcast must issue on in0_noc or it inverts and only the sender's
             // own column receives in0 (degenerate 2-corner delivery -> partial-grid hang).
             .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
-                device->arch(), tt::tt_metal::DataMovementProcessor::RISCV_1, in0_noc),
+                device->arch(),
+                tt::tt_metal::DataMovementProcessor::RISCV_1,
+                in0_noc,
+                /*disable_dfb_implicit_sync_for_all=*/true),
         };
         // Block-sharded in0 sender reads num_x + num_y per-core mcast-coord varargs (in0_mcast_noc_x/y);
         // declare the count so the framework allocates the vararg slots (else get_vararg is OOB).
@@ -3932,7 +3969,10 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
             .runtime_arg_schema = {.runtime_arg_names = in0_sender_rta_names},
             // Pin RISCV_1 + in0_noc (legacy parity) to match the in0-mcast rectangle geometry.
             .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
-                device->arch(), tt::tt_metal::DataMovementProcessor::RISCV_1, in0_noc),
+                device->arch(),
+                tt::tt_metal::DataMovementProcessor::RISCV_1,
+                in0_noc,
+                /*disable_dfb_implicit_sync_for_all=*/true),
         };
         // Same varargs (in0_mcast_noc_x/y) as the work in0 sender (block-sharded only path).
         no_work_ks.advanced_options.num_runtime_varargs = num_x_bs + num_y_bs;
@@ -3970,7 +4010,10 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
             // Pin RISCV_1 + in0_noc (legacy parity). The m2 path computes a single in0-mcast geometry
             // on in0_noc for both the main and _other receivers, so both must use in0_noc.
             .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
-                device->arch(), tt::tt_metal::DataMovementProcessor::RISCV_1, in0_noc),
+                device->arch(),
+                tt::tt_metal::DataMovementProcessor::RISCV_1,
+                in0_noc,
+                /*disable_dfb_implicit_sync_for_all=*/true),
         };
     };
     if (has_in0_receiver) {
@@ -4093,7 +4136,10 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
             // Pin RISCV_0 + in1_noc (legacy parity): the in1 column-mcast dest rectangle is swapped
             // for in1_noc below, so the mcast must issue on in1_noc or it inverts and degenerates.
             .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
-                device->arch(), tt::tt_metal::DataMovementProcessor::RISCV_0, in1_noc),
+                device->arch(),
+                tt::tt_metal::DataMovementProcessor::RISCV_0,
+                in1_noc,
+                /*disable_dfb_implicit_sync_for_all=*/true),
         });
     }
 
@@ -4171,7 +4217,10 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
             // on in1_noc for both the main and _other receivers, so both must use in1_noc to match
             // the sender's multicast rectangle and semaphore signaling.
             .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
-                device->arch(), tt::tt_metal::DataMovementProcessor::RISCV_0, in1_noc),
+                device->arch(),
+                tt::tt_metal::DataMovementProcessor::RISCV_0,
+                in1_noc,
+                /*disable_dfb_implicit_sync_for_all=*/true),
         };
     };
     const bool has_in1_receiver = in1_receiver.num_cores() > 0;
@@ -4207,7 +4256,6 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
         bias_tensor.has_value(),
         in1_per_core_w,
         row_broadcast_bias,
-        fused_activation,
         mm_kernel_defines,
         compute_hw_config));
 
@@ -4303,7 +4351,18 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
         (out_block_h / out_subblock_h - last_block_num_nonzero_subblocks_h) * (out_block_w * out_subblock_h);
 
     if (in0_block_sharded) {
-        if (in0_noc == tt::tt_metal::NOC::NOC_1) {
+        // A multicast rectangle must be specified with start <= end. Two arch paths:
+        //  * WH/BH (2 NOCs, torus): a NOC_1 multicast runs high->low, so swap start/end (unchanged).
+        //  * Quasar (single NOC, non-torus): the rectangle must be ascending regardless of NOC. in0_noc =
+        //    preferred_noc_for_dram_write(arch) returns NOC_1 on Quasar too, so the WH/BH swap would
+        //    degenerate it to [max..min] and the sender would block forever on mcast acks (hang). Force
+        //    ascending via min/max. (#48552)
+        if (device->arch() == tt::ARCH::QUASAR) {
+            uint32_t lo = std::min(in0_mcast_receiver_grid_diff_coord_start, in0_mcast_receiver_grid_diff_coord_end);
+            uint32_t hi = std::max(in0_mcast_receiver_grid_diff_coord_start, in0_mcast_receiver_grid_diff_coord_end);
+            in0_mcast_receiver_grid_diff_coord_start = lo;
+            in0_mcast_receiver_grid_diff_coord_end = hi;
+        } else if (in0_noc == tt::tt_metal::NOC::NOC_1) {
             std::swap(in0_mcast_receiver_grid_diff_coord_start, in0_mcast_receiver_grid_diff_coord_end);
         }
     }
@@ -4351,10 +4410,18 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
 
     for (const auto& core : cores) {
         CoreCoord left_core = {(std::size_t)start_core_x, (std::size_t)core.y};
-        CoreCoord left_core_plus_one = {(std::size_t)start_core_x + 1, (std::size_t)core.y};
+        // [Quasar single-row/col guard] The mcast "+1" corner (the first receiver past the sender) does not
+        // exist when there is only one column (in0 row-mcast) or one row (in1 column-mcast) -- e.g. on the
+        // 2-core emulator (2x1 grid) start_core_y+1 = (0,1) has no core, so translating it throws
+        // "No core coordinate found at (0,1)". Clamp the +1 corner to the sender's own coord when that
+        // dimension has a single core; the degenerate mcast then covers 0 receivers so the clamped
+        // rectangle is unused. Multi-row/col grids (num_cores_with_work_* > 1) are unchanged.
+        CoreCoord left_core_plus_one = {
+            (std::size_t)start_core_x + (num_cores_with_work_c > 1 ? 1u : 0u), (std::size_t)core.y};
         CoreCoord right_core = {(std::size_t)start_core_x + num_cores_with_work_c - 1, (std::size_t)core.y};
         CoreCoord top_core = {(std::size_t)core.x, (std::size_t)start_core_y};
-        CoreCoord top_core_plus_one = {(std::size_t)core.x, (std::size_t)start_core_y + 1};
+        CoreCoord top_core_plus_one = {
+            (std::size_t)core.x, (std::size_t)start_core_y + (num_cores_with_work_r > 1 ? 1u : 0u)};
         CoreCoord bottom_core = {(std::size_t)core.x, (std::size_t)start_core_y + num_cores_with_work_r - 1};
 
         auto left_core_physical = device->worker_core_from_logical_core(left_core);

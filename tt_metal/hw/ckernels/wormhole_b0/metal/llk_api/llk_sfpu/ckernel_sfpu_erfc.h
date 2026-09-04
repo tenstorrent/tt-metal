@@ -8,6 +8,7 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "cmath_common.h"
 #include "sfpu/ckernel_sfpu_converter.h"
 
 #include "ckernel_sfpu_piecewise_rational.h"
@@ -78,6 +79,7 @@ inline void calculate_erfc() {
 
 template <bool APPROXIMATION_MODE>
 void erfc_init() {
+    math::reset_counters(p_setrwc::SET_ABD_F);
     sfpu_reciprocal_init<true>();
 }
 

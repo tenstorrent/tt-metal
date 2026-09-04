@@ -55,8 +55,6 @@ void kernel_main() {
 
     constexpr auto s0_args = TensorAccessorArgs<20>();
 
-    const uint32_t cache_tile_bytes = get_tile_size(cache_cb_id);
-
     constexpr uint32_t TILE_HEIGHT = 32;
 
     const auto s0 = TensorAccessor(s0_args, cache_addr);
@@ -67,6 +65,8 @@ void kernel_main() {
     CircularBuffer cb_untilized_input(untilized_input_cb_id);
     CircularBuffer cb_index(cb_index_id);
     CircularBuffer cb_page_table(page_table_cb_id);
+
+    const uint32_t cache_tile_bytes = cb_cache.get_tile_size();
 
     uint32_t cache_id = cache_start_id;
     uint32_t update_idx = 0;
@@ -174,5 +174,11 @@ void kernel_main() {
     if (send_signal) {
         // send signal to receiver core that we are done using the input CB
         Semaphore<>(receiver_sem_id).up(noc, send_core_x, send_core_y, 1);
+        // Drain the non-posted atomic before kernel_main returns. .up() lowers to a non-posted
+        // noc_semaphore_inc tracked by a separate atomic counter that noc.async_write_barrier() (line
+        // 164) does NOT drain, so without this the kernel exits with the readiness atomic still in
+        // flight -- an inter-kernel NOC race (Watcher NOC-idle assert). Mirrors the legacy sibling
+        // writer_update_cache_interleaved_start_id.cpp.
+        noc.async_atomic_barrier();
     }
 }

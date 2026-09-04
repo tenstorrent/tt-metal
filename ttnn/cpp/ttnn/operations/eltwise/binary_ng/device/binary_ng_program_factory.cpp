@@ -11,11 +11,15 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/experimental/program_descriptor_patching.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt-metalium/circular_buffer.hpp>
 
 #include <algorithm>
 #include <variant>
 #include <vector>
 using namespace tt::tt_metal;
+using ttnn::Tensor;
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
@@ -85,7 +89,9 @@ TensorMemoryLayout get_memory_layout(const Tensor& a, const std::optional<Tensor
 }
 
 std::optional<AllShardSpecs> get_shard_specs(
-    const TensorSpec& a, const std::optional<TensorSpec>& b, const TensorSpec& c) {
+    const tt::tt_metal::TensorSpec& a,
+    const std::optional<tt::tt_metal::TensorSpec>& b,
+    const tt::tt_metal::TensorSpec& c) {
     bool a_sharded = a.memory_config().is_sharded();
     bool b_sharded = b.has_value() && b->memory_config().is_sharded();
     bool c_sharded = c.memory_config().is_sharded();
@@ -364,7 +370,9 @@ bool is_llk_bcast(
 namespace ttnn::operations::binary_ng {
 
 std::optional<AllShardVolumes> get_shard_volumes(
-    const TensorSpec& a, const std::optional<TensorSpec>& b, const TensorSpec& c) {
+    const tt::tt_metal::TensorSpec& a,
+    const std::optional<tt::tt_metal::TensorSpec>& b,
+    const tt::tt_metal::TensorSpec& c) {
     const auto shard_specs = CMAKE_UNIQUE_NAMESPACE::get_shard_specs(a, b, c);
 
     if (not shard_specs.has_value()) {
@@ -396,17 +404,17 @@ struct BinaryNgPerCoreArgs {
 };
 
 // SINGLE SOURCE OF TRUTH for binary_ng per-core runtime args.  Run by BOTH create_descriptor()
-// (cache miss) and BinaryNgDeviceOperation::get_dynamic_runtime_args() (cache hit).
+// (cache miss) and BinaryNgDeviceOperation::override_runtime_arguments() (cache hit).
 //
 // binary_ng's compute_program_hash intentionally EXCLUDES the tensor volume, so one cached program
 // is shared across differently-shaped calls.  On a cache hit the descriptor is NOT rebuilt, so every
 // shape/work-split-dependent per-core arg (c_start_id, per-core tile counts, strides, D/N/C/Ht/Wt,
 // compute_tiles, freq/counter, packed scalar, ...) would otherwise stay frozen at the first-miss
-// shape and corrupt results.  get_dynamic_runtime_args() re-runs THIS builder for the current tensors
-// and re-applies each arg every dispatch.  Because the work-core set itself changes with volume (a
-// core can flip between work and noop across hits), the builder emits args for ALL num_cores_total
-// cores -- noop cores get zero-filled lists sized to match the work-core layout -- and
-// get_dynamic_runtime_args re-applies every slot (buffer slots via their current address), so nothing
+// shape and corrupt results.  override_runtime_arguments() re-runs THIS builder for the current
+// tensors and re-applies each arg every dispatch.  Because the work-core set itself changes with
+// volume (a core can flip between work and noop across hits), the builder emits args for ALL
+// num_cores_total cores -- noop cores get zero-filled lists sized to match the work-core layout -- and
+// override_runtime_arguments re-applies every slot (buffer slots via their current address), so nothing
 // is left frozen regardless of how the partition shifts.
 BinaryNgPerCoreArgs build_per_core_runtime_args(
     const BinaryNgDeviceOperation::operation_attributes_t& operation_attributes,
@@ -438,7 +446,7 @@ BinaryNgPerCoreArgs build_per_core_runtime_args(
     const auto [cD, cN, cC, cHt, cWt] = CMAKE_UNIQUE_NAMESPACE::get_shape_dims(c);
 
     const auto shard_specs = CMAKE_UNIQUE_NAMESPACE::get_shard_specs(
-        a.tensor_spec(), b.has_value() ? b->tensor_spec() : std::optional<TensorSpec>{}, c.tensor_spec());
+        a.tensor_spec(), b.has_value() ? b->tensor_spec() : std::optional<tt::tt_metal::TensorSpec>{}, c.tensor_spec());
     const bool rt_has_sharding = shard_specs.has_value();
     auto grid = rt_has_sharding ? shard_specs->a_shard_spec.grid : CoreRangeSet{};
 
@@ -842,7 +850,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     }
 
     const auto shard_volumes = get_shard_volumes(
-        a.tensor_spec(), b.has_value() ? b->tensor_spec() : std::optional<TensorSpec>{}, c.tensor_spec());
+        a.tensor_spec(), b.has_value() ? b->tensor_spec() : std::optional<tt::tt_metal::TensorSpec>{}, c.tensor_spec());
     const auto has_sharding = shard_volumes.has_value();
     const auto a_sharded = has_sharding and shard_volumes->a_shard_volume.has_value();
     const auto b_sharded = has_sharding and shard_volumes->b_shard_volume.has_value();
@@ -860,13 +868,17 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                          : (is_sfpu_op && !is_block_float(a_dtype)) ? a_dtype
                                                                     : DataType::BFLOAT16;
     const auto c_dtype = c.dtype();
-    const auto a_data_format = datatype_to_dataformat_converter(a_dtype);
+    // Int8 quant input (dequant/requant operand A) is read through the UInt8 unpacker.
+    const auto a_data_format =
+        (is_quant_op && a_dtype == DataType::INT8) ? tt::DataFormat::UInt8 : datatype_to_dataformat_converter(a_dtype);
     const auto b_data_format = datatype_to_dataformat_converter(b_dtype);
     const auto c_data_format = datatype_to_dataformat_converter(c_dtype);
+    // Int8 output is packed through the UInt8 packer path.
+    const auto c_pack_data_format = (c_dtype == DataType::INT8) ? tt::DataFormat::UInt8 : c_data_format;
 
     uint32_t a_single_tile_size = tt::tile_size(a_data_format);
     uint32_t b_single_tile_size = tt::tile_size(b_data_format);
-    uint32_t c_single_tile_size = tt::tile_size(c_data_format);
+    uint32_t c_single_tile_size = tt::tile_size(c_pack_data_format);
 
     // we parallelize the computation across the output tiles
     const auto& all_device_cores = operation_attributes.worker_grid;
@@ -886,13 +898,36 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
 
     // Quant/requant rounding depends on the output dtype. For uint8, we need fp32->uint8 rounding instead
     // of the default fp32->int8. The packer narrows the int32 SFPU result to uint8.
-    if (c_dtype == DataType::UINT8) {
-        if (operation_attributes.binary_op_type == BinaryOpType::QUANT) {
-            compute_kernel_defines["BINARY_SFPU_INIT"] =
-                "quant_uint8_tile_init(get_arg_val<uint32_t>(QUANT_ZERO_POINT_RT_ARGS_IDX));";
-        } else if (operation_attributes.binary_op_type == BinaryOpType::REQUANT) {
-            compute_kernel_defines["BINARY_SFPU_INIT"] =
-                "requant_uint8_tile_init(get_arg_val<uint32_t>(QUANT_ZERO_POINT_RT_ARGS_IDX));";
+    // For int8 output, the SFPU crafts an offset-128 byte and stores through the UInt8 packer path.
+    const char* quant_zp_arg = "(get_arg_val<uint32_t>(QUANT_ZERO_POINT_RT_ARGS_IDX));";
+    const bool int8_in = is_quant_op && a_dtype == DataType::INT8;
+    const auto set_sfpu_op = [&](const std::string& init_fn, const std::string& op_fn) {
+        compute_kernel_defines["BINARY_SFPU_INIT"] = init_fn + quant_zp_arg;
+        compute_kernel_defines["BINARY_SFPU_OP"] = op_fn;
+    };
+    if (operation_attributes.binary_op_type == BinaryOpType::QUANT) {
+        if (c_dtype == DataType::UINT8) {
+            compute_kernel_defines["BINARY_SFPU_INIT"] = std::string("quant_uint8_tile_init") + quant_zp_arg;
+        } else if (c_dtype == DataType::INT8) {
+            set_sfpu_op("quant_int8_tile_init", "quant_int8_tile");
+        }
+    } else if (operation_attributes.binary_op_type == BinaryOpType::DEQUANT) {
+        if (int8_in) {
+            set_sfpu_op("dequant_int8_tile_init", "dequant_int8_tile");
+        }
+    } else if (operation_attributes.binary_op_type == BinaryOpType::REQUANT) {
+        if (c_dtype == DataType::INT8) {
+            set_sfpu_op(
+                int8_in ? "requant_int8_in_int8_out_tile_init" : "requant_int8_tile_init",
+                int8_in ? "requant_int8_in_int8_out_tile" : "requant_int8_tile");
+        } else if (c_dtype == DataType::UINT8) {
+            // uint8 output uses the standard packer narrowing (int32 SFPU result -> uint8), so it reuses
+            // the int32-output op body; only the init differs, to select FP32_TO_UINT8 rounding.
+            set_sfpu_op(
+                int8_in ? "requant_int8_in_uint8_out_tile_init" : "requant_uint8_tile_init",
+                int8_in ? "requant_int8_in_tile" : "requant_tile");
+        } else if (int8_in) {
+            set_sfpu_op("requant_int8_in_tile_init", "requant_int8_in_tile");
         }
     }
 
@@ -1108,7 +1143,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
             .core_ranges = all_device_cores,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_2),
-                .data_format = c_data_format,
+                .data_format = c_pack_data_format,
                 .page_size = c_single_tile_size,
             }}},
             .buffer = c_sharded ? c_buffer : nullptr,
@@ -1328,7 +1363,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
 
     // === Per-core runtime arguments ===
     // Built via the shared single-source-of-truth builder so create_descriptor() (cache miss, here)
-    // and BinaryNgDeviceOperation::get_dynamic_runtime_args() (cache hit) stay byte-identical.
+    // and BinaryNgDeviceOperation::override_runtime_arguments() (cache hit) stay byte-identical.
     {
         auto per_core = build_per_core_runtime_args(operation_attributes, a, b, c);
         for (size_t i = 0; i < per_core.cores.size(); ++i) {
@@ -1345,27 +1380,27 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     return desc;
 }
 
-std::vector<tt::tt_metal::DynamicRuntimeArg> BinaryNgDeviceOperation::get_dynamic_runtime_args(
+void BinaryNgDeviceOperation::ProgramFactory::override_runtime_arguments(
+    tt::tt_metal::Program& program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& c,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    // binary_ng's compute_program_hash EXCLUDES the tensor volume, so one cached program is reused
-    // across differently-shaped calls.  On a cache hit the descriptor is never rebuilt, so every
-    // shape-/work-split-dependent per-core arg baked at the first miss would stay frozen and corrupt a
-    // later, differently-shaped call.  Re-run the SAME builder create_descriptor() uses and re-apply
-    // every per-core arg for the CURRENT tensors.
+    // Re-apply ALL per-dispatch state to the cached program on a program-cache hit (the descriptor-era
+    // override_runtime_arguments()).  compute_program_hash EXCLUDES the tensor volume, so one cached
+    // program is reused across differently-shaped and differently-allocated (incl. in-place, out=x)
+    // calls; every shape-/work-split-dependent per-core arg AND every tensor-backed CB base address
+    // would otherwise stay frozen at the first miss.  We re-derive them for the CURRENT tensors from
+    // the SAME shared builder create_descriptor() uses, so the two stay byte-identical by construction.
     //
-    // Kernel push order in create_descriptor(): reader(0), writer(1), compute(2).
+    // This is correct where address inference (resolve_bindings' std::find) was not: nothing is guessed
+    // from Buffer* identity, so an in-place alias (input_a == output) or a mixed in-place/out-of-place
+    // reuse of one cache entry writes each slot from the tensor it actually belongs to.
     //
-    // The work-core partition itself shifts with the volume (a core can flip between work and noop), so
-    // we re-apply ALL cores' args, not just the work cores: noop cores get zero-filled lists (harmless,
-    // they do no work), and any core that becomes a work core on this hit gets its full args here.  For
-    // that reason we ALSO re-apply the buffer-address slots (via the current Buffer address) rather than
-    // relying solely on the Buffer* bindings: bindings are resolved once at cache-miss time and only
-    // cover the cores that were work cores THEN, so a core promoted to a work core on a later hit would
-    // otherwise be left with a stale/zero base address.  Indices match create_descriptor() by
-    // construction because both walk the identical builder output.
+    // Kernel push order in create_descriptor(): reader(0), writer(1), compute(2).  The work-core
+    // partition shifts with the volume (a core can flip between work and noop), so the builder emits
+    // args for ALL cores; we re-apply every one, buffer-address slots included (via the current Buffer
+    // address), so a core promoted to a work core on this hit is never left with a stale base address.
     const auto& a = tensor_args.input_tensor_a;
     const auto& b = tensor_args.input_tensor_b;
 
@@ -1375,34 +1410,45 @@ std::vector<tt::tt_metal::DynamicRuntimeArg> BinaryNgDeviceOperation::get_dynami
     constexpr uint32_t kWriterKernelIdx = 1;
     constexpr uint32_t kComputeKernelIdx = 2;
 
-    std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
-    // Reserve the exact number of args we're about to emit (reader + writer + compute per core).
-    size_t total_args = 0;
-    for (size_t i = 0; i < per_core.cores.size(); ++i) {
-        total_args += per_core.reader[i].size() + per_core.writer[i].size() + per_core.compute[i].size();
-    }
-    dynamic_args.reserve(total_args);
-
-    auto emit = [&](uint32_t kernel_idx,
-                    const CoreCoord& core,
-                    const std::vector<std::variant<uint32_t, tt::tt_metal::Buffer*>>& args) {
-        for (uint32_t arg_idx = 0; arg_idx < args.size(); ++arg_idx) {
+    auto apply = [&](uint32_t kernel_idx,
+                     const CoreCoord& core,
+                     const std::vector<std::variant<uint32_t, tt::tt_metal::Buffer*>>& args) {
+        auto& data = tt::tt_metal::GetRuntimeArgs(program, kernel_idx, core);
+        for (uint32_t arg_idx = 0; arg_idx < static_cast<uint32_t>(args.size()); ++arg_idx) {
             const auto& slot = args[arg_idx];
-            uint32_t value = std::holds_alternative<tt::tt_metal::Buffer*>(slot)
-                                 ? static_cast<uint32_t>(std::get<tt::tt_metal::Buffer*>(slot)->address())
-                                 : std::get<uint32_t>(slot);
-            dynamic_args.push_back({kernel_idx, core, arg_idx, value});
+            data[arg_idx] = std::holds_alternative<tt::tt_metal::Buffer*>(slot)
+                                ? static_cast<uint32_t>(std::get<tt::tt_metal::Buffer*>(slot)->address())
+                                : std::get<uint32_t>(slot);
         }
     };
 
     for (size_t i = 0; i < per_core.cores.size(); ++i) {
         const auto& core = per_core.cores[i];
-        emit(kReaderKernelIdx, core, per_core.reader[i]);
-        emit(kWriterKernelIdx, core, per_core.writer[i]);
-        emit(kComputeKernelIdx, core, per_core.compute[i]);
+        apply(kReaderKernelIdx, core, per_core.reader[i]);
+        apply(kWriterKernelIdx, core, per_core.writer[i]);
+        apply(kComputeKernelIdx, core, per_core.compute[i]);
     }
 
-    return dynamic_args;
+    // Re-point tensor-backed (globally-allocated) circular buffers at the CURRENT buffers, by CBIndex.
+    // binary_ng convention: c_0 = input_a, c_1 = input_b, c_2 = output.  Addressing by CBIndex (not by
+    // enumeration order) is what makes the in-place alias correct: the output CB always tracks the
+    // output buffer even when it shares a Buffer* with an input.
+    tt::tt_metal::Buffer* a_buffer = a.buffer();
+    tt::tt_metal::Buffer* b_buffer = b.has_value() ? b->buffer() : nullptr;
+    tt::tt_metal::Buffer* c_buffer = c.buffer();
+    for (const auto& cb : program.circular_buffers()) {
+        if (!cb->globally_allocated()) {
+            continue;
+        }
+        const auto& indices = cb->buffer_indices();
+        if (indices.contains(static_cast<uint8_t>(tt::CBIndex::c_0)) && a_buffer != nullptr) {
+            tt::tt_metal::UpdateDynamicCircularBufferAddress(program, cb->id(), *a_buffer);
+        } else if (indices.contains(static_cast<uint8_t>(tt::CBIndex::c_1)) && b_buffer != nullptr) {
+            tt::tt_metal::UpdateDynamicCircularBufferAddress(program, cb->id(), *b_buffer);
+        } else if (indices.contains(static_cast<uint8_t>(tt::CBIndex::c_2)) && c_buffer != nullptr) {
+            tt::tt_metal::UpdateDynamicCircularBufferAddress(program, cb->id(), *c_buffer);
+        }
+    }
 }
 
 }  // namespace ttnn::operations::binary_ng

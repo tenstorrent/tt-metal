@@ -206,9 +206,13 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     uint32_t mm_block_wt,
     std::optional<uint32_t> mm_N_full_block_wt,
     std::optional<uint32_t> chunk_width_in_mm_blocks,
+    std::optional<uint32_t> mm_window_blocks,
+    std::optional<uint32_t> mm_logical_Ht,
+    const std::optional<const Tensor>& mm_credit_counters,
     std::optional<float> fused_ternary_scalar,
     const std::optional<const Tensor>& addcmul_input_tensor1,
-    const std::optional<const Tensor>& addcmul_input_tensor2) {
+    const std::optional<const Tensor>& addcmul_input_tensor2,
+    const std::optional<const Tensor>& mm_progress_counters) {
     auto* mesh_device = input_tensor.device();
     [[maybe_unused]] bool is_first_chip = ring_index == 0;
     [[maybe_unused]] bool is_last_chip = ring_index == ring_size - 1;
@@ -257,8 +261,11 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     };
 
     std::vector<CoreRange> sender_worker_core_ranges;
+    sender_worker_core_ranges.reserve(num_links * num_directions_per_link * num_workers_per_direction);
     std::vector<CoreRange> mux_core_ranges;
+    mux_core_ranges.reserve(num_links * num_directions_per_link);
     std::vector<CoreRange> termination_master_core_ranges;
+    termination_master_core_ranges.reserve(num_links * num_directions_per_link);
     uint32_t core_id = 0;
     for (uint32_t link = 0; link < num_links; link++) {
         for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
@@ -301,7 +308,11 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
         normalized_dim == 3,
         "strided_reduce_scatter_async ring implementation only supports scattering on dim 3 (width), but got {}",
         normalized_dim);
-    const uint32_t input_tensor_Ht = input_tensor_shape[-2] / tt::constants::TILE_HEIGHT;
+    // When the fused matmul hands its output over through a rolling L1 window, the input tensor is
+    // only mm_window_blocks M blocks tall, so its height describes the window, not the data being
+    // reduce-scattered. Take the true height from mm_logical_Ht in that case; the tensor is still the
+    // right thing to build the TensorAccessor from, since the reader remaps rows into the window.
+    const uint32_t input_tensor_Ht = mm_logical_Ht.value_or(input_tensor_shape[-2] / tt::constants::TILE_HEIGHT);
     const uint32_t input_tensor_Wt = input_tensor_shape[-1] / tt::constants::TILE_WIDTH;
 
     const uint32_t slice_B = input_tensor_B;
@@ -327,7 +338,11 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     const uint32_t slice_Ht_per_core = padded_slice_Ht / mm_cores_y_val;
     const uint32_t mm_M_unit_blocks_per_core = tt::div_up(slice_Ht_per_core, mm_block_ht_val);
 
-    const uint32_t input_tensor_num_pages = input_tensor.buffer()->num_pages();
+    // Page counts describe the logical reduce-scatter data, so they must not come from the buffer
+    // when it only holds a window of it.
+    const uint32_t input_tensor_num_pages = mm_logical_Ht.has_value()
+                                                ? input_tensor_B * input_tensor_C * input_tensor_Ht * input_tensor_Wt
+                                                : input_tensor.buffer()->num_pages();
     const uint32_t output_tensor_num_pages = input_tensor_num_pages / ring_size;
     const uint32_t input_batch_num_pages = input_tensor_num_pages / input_tensor_B;
     const uint32_t output_batch_num_pages = output_tensor_num_pages / slice_B;
@@ -394,7 +409,7 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
         CreateCircularBuffer(program, sender_worker_core_range_set, cb_addcmul_b_config);
     }
 
-    bool input_is_sharded = input_tensor.is_sharded();
+    [[maybe_unused]] bool input_is_sharded = input_tensor.is_sharded();  // input always via TensorAccessorArgs
     bool intermediate_is_sharded = intermediate_tensor.is_sharded();
     bool output_is_sharded = output_tensor.is_sharded();
 
@@ -402,9 +417,7 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     std::map<std::string, std::string> writer_compute_defines;
     std::map<std::string, std::string> reduce_compute_defines;
 
-    if (input_is_sharded) {
-        reader_compute_defines["INPUT_IS_SHARDED"] = "1";
-    }
+    // The input (MM output) is always fed through TensorAccessorArgs (below)
     if (intermediate_is_sharded) {
         reader_compute_defines["INTERMEDIATE_IS_SHARDED"] = "1";
         writer_compute_defines["INTERMEDIATE_IS_SHARDED"] = "1";
@@ -430,9 +443,145 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
         fused_op_signaler->init_reduce_scatter(program, mesh_device, sender_worker_core_range_set);
     }
     bool fuse_mm_op = mm_fused_op_signaler.has_value();
+    // Per-core MM signaling: L1 array of per-MM-core progress counters, one row per RS worker core
+    std::shared_ptr<tt::tt_metal::Buffer> mm_progress_counters_buffer;
+    uint32_t captured_mm_progress_counters_addr = 0;
     if (fuse_mm_op) {
         mm_fused_op_signaler->init_strided_reduce_scatter(program, mesh_device, sender_worker_core_range_set);
         reader_compute_defines["FUSE_MM_OP_SIGNALER"] = "1";
+
+        // The counter array: one shard (row) per RS worker core, sized to the full device compute grid
+        const auto mm_grid = mesh_device->compute_with_storage_grid_size();
+        const uint32_t num_mm_core_slots = mm_grid.x * mm_grid.y;
+        const uint32_t counters_row_bytes = num_mm_core_slots * sizeof(uint32_t);
+
+        if (mm_progress_counters.has_value()) {
+            // Caller-owned array, shared across programs
+            const auto& counters = mm_progress_counters.value();
+            const auto& counters_shard_spec = counters.memory_config().shard_spec();
+            TT_FATAL(
+                counters.memory_config().buffer_type() == tt::tt_metal::BufferType::L1 &&
+                    counters_shard_spec.has_value(),
+                "mm_progress_counters must be an L1 sharded tensor so that its row lands at the same "
+                "local address on every RS worker core");
+            TT_FATAL(
+                counters_shard_spec->grid.contains(sender_worker_core_range_set),
+                "mm_progress_counters is sharded over {} which does not cover the RS worker cores {}",
+                counters_shard_spec->grid.str(),
+                sender_worker_core_range_set.str());
+            const uint32_t provided_row_bytes = counters_shard_spec->shape[1] * counters.element_size();
+            TT_FATAL(
+                provided_row_bytes >= counters_row_bytes,
+                "mm_progress_counters provides {} B per core but the MM grid needs {} slots ({} B)",
+                provided_row_bytes,
+                num_mm_core_slots,
+                counters_row_bytes);
+            mm_fused_op_signaler->mm_progress_counters_addr = static_cast<uint32_t>(counters.buffer()->address());
+        } else {
+            // BUILD-VERIFY: this is the ONE tt-metal buffer-API call to confirm against your tree
+            const uint32_t num_rs_cores = sender_worker_core_range_set.num_cores();
+            const auto counter_shard_spec = tt::tt_metal::ShardSpecBuffer(
+                sender_worker_core_range_set,
+                {1, num_mm_core_slots},
+                tt::tt_metal::ShardOrientation::ROW_MAJOR,
+                {1, num_mm_core_slots},
+                {num_rs_cores, num_mm_core_slots});
+            mm_progress_counters_buffer = tt::tt_metal::CreateBuffer(tt::tt_metal::ShardedBufferConfig{
+                .device = mesh_device,
+                .size = num_rs_cores * counters_row_bytes,
+                .page_size = counters_row_bytes,
+                .buffer_type = tt::tt_metal::BufferType::L1,
+                .buffer_layout = tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
+                .shard_parameters = counter_shard_spec});
+            mm_fused_op_signaler->mm_progress_counters_addr =
+                static_cast<uint32_t>(mm_progress_counters_buffer->address());
+        }
+        captured_mm_progress_counters_addr = mm_fused_op_signaler->mm_progress_counters_addr;
+    }
+
+    // RS -> MM credits, the return path for the rolling window. One L1 row per MM core holding a
+    // monotonic "M blocks consumed" counter per RS reader; the matmul waits on the MINIMUM across
+    // readers before recycling a window slot. A single shared counter would not do: readers stripe
+    // disjoint tiles and run at different rates, so a fast reader could satisfy a summed total while
+    // a slow one still has the block to read. Each reader owns its slot and increments it once per M
+    // block, so readers never contend for the same word.
+    // HEIGHT_SHARDED over the MM grid => the row is at the same local L1 address on every MM core.
+    // Signalling walks an explicit list of MM core NOC coords, mirroring how the matmul signals the
+    // RS (OpSignaler::signal_op_per_core) rather than multicasting to a rectangle.
+    std::shared_ptr<tt::tt_metal::Buffer> rs_credit_counters_buffer;
+    const uint32_t num_rs_readers = num_directions_per_link * num_links * num_workers_per_direction;
+    uint32_t rs_credit_counters_addr = 0;
+    std::vector<CoreCoord> mm_cores_noc;
+    uint32_t num_mm_cores = 0;
+    uint32_t captured_rs_credit_counters_addr = 0;
+    if (mm_window_blocks.has_value()) {
+        TT_FATAL(fuse_mm_op, "mm_window_blocks requires the fused matmul path (FUSE_MM_OP_SIGNALER).");
+        TT_FATAL(
+            input_tensor_B == 1 && slice_C == 1,
+            "mm_window_blocks currently assumes B=C=1; the window carries no batch/channel dimension "
+            "(got B={}, C={}).",
+            input_tensor_B,
+            slice_C);
+
+        const uint32_t mm_cores_x_val = tt::div_up(input_tensor_Wt, mm_N_full_block_wt_val);
+        num_mm_cores = mm_cores_x_val * mm_cores_y_val;
+        const CoreRangeSet mm_core_range_set(
+            CoreRange(CoreCoord(0, 0), CoreCoord(mm_cores_x_val - 1, mm_cores_y_val - 1)));
+        const uint32_t credit_row_bytes = num_rs_readers * sizeof(uint32_t);
+        if (mm_credit_counters.has_value()) {
+            // Caller-owned array, shared across programs. Same reasoning as mm_progress_counters:
+            // a per-program copy is retained for as long as the program stays cached, and L1 is
+            // handed out top-down, so each small permanent block pins the space above it.
+            const auto& credits = mm_credit_counters.value();
+            const auto& credits_shard_spec = credits.memory_config().shard_spec();
+            TT_FATAL(
+                credits.memory_config().buffer_type() == tt::tt_metal::BufferType::L1 && credits_shard_spec.has_value(),
+                "mm_credit_counters must be an L1 sharded tensor so that its row lands at the same "
+                "local address on every matmul core");
+            TT_FATAL(
+                credits_shard_spec->grid.contains(mm_core_range_set),
+                "mm_credit_counters is sharded over {} which does not cover the matmul cores {}",
+                credits_shard_spec->grid.str(),
+                mm_core_range_set.str());
+            const uint32_t provided_row_bytes = credits_shard_spec->shape[1] * credits.element_size();
+            TT_FATAL(
+                provided_row_bytes >= credit_row_bytes,
+                "mm_credit_counters provides {} B per core but the {} RS readers need {} B",
+                provided_row_bytes,
+                num_rs_readers,
+                credit_row_bytes);
+            rs_credit_counters_addr = static_cast<uint32_t>(credits.buffer()->address());
+        } else {
+            const auto credit_shard_spec = tt::tt_metal::ShardSpecBuffer(
+                mm_core_range_set,
+                {1, num_rs_readers},
+                tt::tt_metal::ShardOrientation::ROW_MAJOR,
+                {1, num_rs_readers},
+                {num_mm_cores, num_rs_readers});
+            rs_credit_counters_buffer = tt::tt_metal::CreateBuffer(tt::tt_metal::ShardedBufferConfig{
+                .device = mesh_device,
+                .size = num_mm_cores * credit_row_bytes,
+                .page_size = credit_row_bytes,
+                .buffer_type = tt::tt_metal::BufferType::L1,
+                .buffer_layout = tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
+                .shard_parameters = credit_shard_spec});
+            rs_credit_counters_addr = static_cast<uint32_t>(rs_credit_counters_buffer->address());
+        }
+
+        // NOC coords of every MM core, in the same row-major order the matmul uses to index its own
+        // slot, so a reader can walk them and bump its counter on each.
+        mm_cores_noc.reserve(num_mm_cores);
+        for (uint32_t y = 0; y < mm_cores_y_val; y++) {
+            for (uint32_t x = 0; x < mm_cores_x_val; x++) {
+                mm_cores_noc.push_back(mesh_device->worker_core_from_logical_core(CoreCoord(x, y)));
+            }
+        }
+
+        // Hand the return path to the matmul factory, which builds its program after this one.
+        mm_fused_op_signaler->rs_credit_counters_addr = rs_credit_counters_addr;
+        mm_fused_op_signaler->num_rs_readers = num_rs_readers;
+        mm_fused_op_signaler->mm_window_blocks = mm_window_blocks.value();
+        captured_rs_credit_counters_addr = rs_credit_counters_addr;
     }
 
     // Kernel Runtime Args
@@ -487,13 +636,11 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
         slice_Ht_per_core,                  // [21] slice_Ht_per_core
         static_cast<uint32_t>(fuse_mm_op),  // [22] fuse_mm_op (consumed via FUSE_MM_OP_SIGNALER define)
         slice_Ht,                           // [23] slice_Ht (total height in tiles across all MM cores)
+        mm_window_blocks.value_or(0),       // [24] mm_window_blocks (0 = whole MM output resident)
     };
 
-    if (input_is_sharded) {
-        shard_builder::extend_sharding_compile_time_args(input_tensor, sender_reader_compile_args);
-    } else {
-        tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(sender_reader_compile_args);
-    }
+    // Input (MM output): always TensorAccessorArgs (handles interleaved AND L1-sharded) so the reader's
+    tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(sender_reader_compile_args);
     if (intermediate_is_sharded) {
         shard_builder::extend_sharding_compile_time_args(intermediate_tensor, sender_reader_compile_args);
     } else {
@@ -661,9 +808,7 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
                     worker_id,                                // worker_id
                     num_workers,                              // num_workers
                 };
-                if (input_is_sharded) {
-                    shard_builder::extend_sharding_run_time_args(input_tensor, reader_rt_args);
-                }
+                // Input uses TensorAccessorArgs (see above) — no shard-map RT args, just the address.
                 if (intermediate_is_sharded) {
                     shard_builder::extend_sharding_run_time_args(intermediate_tensor, reader_rt_args);
                 }
@@ -672,6 +817,16 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
                 }
                 if (fuse_mm_op) {
                     mm_fused_op_signaler->push_strided_reduce_scatter_fused_op_rt_args(reader_rt_args);
+                }
+                if (mm_window_blocks.has_value()) {
+                    // This reader's slot must match the kernel's effective_worker_id
+                    // (worker_id + direction * num_workers), which is how tiles are striped.
+                    reader_rt_args.push_back(rs_credit_counters_addr);
+                    reader_rt_args.push_back(num_mm_cores);
+                    for (const auto& c : mm_cores_noc) {
+                        reader_rt_args.push_back(static_cast<uint32_t>(c.x));
+                        reader_rt_args.push_back(static_cast<uint32_t>(c.y));
+                    }
                 }
                 // Addcmul tensor addresses (a then b) — must be last so override_runtime_arguments
                 // can locate them via reader_addcmul_rt_arg_offset.
@@ -744,7 +899,11 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
         num_workers_per_direction,
         num_mux_cores_per_direction_per_link,
         num_cores_per_link,
-        captured_reader_addcmul_rt_arg_offset};
+        captured_reader_addcmul_rt_arg_offset,
+        mm_progress_counters_buffer,
+        captured_mm_progress_counters_addr,
+        rs_credit_counters_buffer,
+        captured_rs_credit_counters_addr};
 }
 
 void ring_strided_reduce_scatter_async_helper_override_runtime_arguments(
@@ -875,9 +1034,13 @@ RingStridedReduceScatterMeshWorkloadFactory::create_at(
         operation_attributes.mm_block_wt,
         operation_attributes.mm_N_full_block_wt,
         operation_attributes.chunk_width_in_mm_blocks,
+        std::nullopt,   // mm_window_blocks: standalone RS reads a full matmul output, never a window
+        std::nullopt,   // mm_logical_Ht
+        std::nullopt,   // mm_credit_counters
         std::nullopt,   // fused_ternary_scalar
         std::nullopt,   // addcmul_input_tensor1
-        std::nullopt);  // addcmul_input_tensor2
+        std::nullopt,   // addcmul_input_tensor2
+        std::nullopt);  // mm_progress_counters (fused MM->RS only)
 
     return {std::move(program), std::move(shared_vars)};
 }

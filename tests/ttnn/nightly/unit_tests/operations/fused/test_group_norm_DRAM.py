@@ -10,18 +10,60 @@ from loguru import logger
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.common.utility_functions import is_blackhole, run_for_blackhole
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_numeric_metrics
+from models.common.utility_functions import is_blackhole, run_for_blackhole, skip_for_blackhole
 
 import tests.ttnn.unit_tests.operations.fused.test_group_norm_DRAM as base
+
+
+# Legacy ROW_MAJOR shapes, PR #49501.
+GROUP_NORM_ROW_MAJOR_SHAPES = [
+    # Model shapes that should benefit
+    # (N,    C,    H,    W,     g, nob, cy, cx)
+    (1, 512, 128, 128, 32, 1, 8, 8),
+    (1, 512, 64, 64, 32, 1, 8, 8),
+    (1, 256, 256, 256, 32, 8, 8, 8),
+    (1, 128, 1, 512, 32, 1, 8, 8),
+    # Model shapes that should avoid regression due to fallback
+    (1, 1152, 128, 128, 32, 2, 8, 4),
+    (1, 1920, 16, 16, 32, 1, 4, 4),
+    (1, 1536, 8, 8, 32, 1, 2, 8),
+    (1, 480, 1, 64, 8, 1, 1, 1),
+    # Model shapes that should stay unaffected
+    (1, 256, 256, 256, 32, 4, 8, 8),
+    (1, 512, 256, 256, 32, 4, 8, 8),
+    (1, 256, 1024, 1024, 32, 48, 8, 8),
+    (1, 128, 1, 262144, 32, 64, 8, 4),
+    # Synthetic grid-utilization
+    (1, 512, 1, 1024, 32, 2, 1, 8),
+    (1, 512, 1, 2048, 32, 2, 2, 8),
+    (1, 512, 1, 3072, 32, 2, 3, 8),
+    (1, 512, 1, 4096, 32, 2, 4, 8),
+    (1, 512, 1, 5120, 32, 2, 5, 8),
+    (1, 512, 1, 6144, 32, 2, 6, 8),
+    (1, 512, 1, 7168, 32, 2, 7, 8),
+    (1, 512, 1, 8192, 32, 2, 8, 8),
+    # Synthetic batch-imbalance
+    (9, 768, 1, 512, 32, 2, 8, 8),
+    (10, 768, 1, 512, 32, 2, 8, 8),
+    (16, 768, 1, 512, 32, 2, 8, 8),
+    (17, 768, 1, 512, 32, 2, 8, 8),
+    # Synthetic that should take fused path
+    (1, 768, 1, 512, 32, 2, 8, 8),
+    (2, 768, 1, 512, 32, 2, 8, 8),
+    (8, 768, 1, 512, 32, 2, 8, 8),
+]
 
 
 @pytest.mark.parametrize("device_params", base.DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
 @pytest.mark.parametrize(
     "N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x",
     [
-        # Only SDXL/sd35 tests with 512x512 or larger sizes moved to nightly
+        # SDXL/sd35 tests with 512x512 or larger sizes and cases taking more than 4 minutes in sim.
         #  SDXL VAE
+        (1, 256, 256, 256, 32, 4, 8, 8),
+        (1, 512, 256, 256, 32, 4, 8, 8),
+        (1, 128, 1, 262144, 32, 64, 8, 4),  # SD 1.4 VAE Issue #21131
         (1, 128, 1024, 1024, 32, 32, 8, 8),
         (1, 128, 512, 512, 32, 8, 8, 8),
         (1, 256, 1024, 1024, 32, 48, 8, 8),
@@ -49,7 +91,7 @@ def test_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y
 
 
 @pytest.mark.parametrize("device_params", base.DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
-def test_group_norm_DRAM_rejects_non_uniform_mcast_groups(device):
+def test_group_norm_DRAM_rejects_non_uniform_mcast_groups(device, expect_error):
     """Regression test for GH#40912: N=2 with grid (8,5) creates num_virtual_rows=5
     which is not divisible by num_batches=2, producing non-uniform mcast groups
     that deadlock due to exact-equality semaphore waits in the sender kernel."""
@@ -76,7 +118,7 @@ def test_group_norm_DRAM_rejects_non_uniform_mcast_groups(device):
         [torch_weight, torch_bias], C, num_groups, device, core_grid=bad_grid, return_mask=True
     )
 
-    with pytest.raises(RuntimeError, match="core_grid"):
+    with expect_error(RuntimeError, "core_grid"):
         ttnn.group_norm(
             input_tensor_tilized,
             num_groups=num_groups,
@@ -121,7 +163,6 @@ def test_group_norm_DRAM_rejects_non_uniform_mcast_groups(device):
         (1, 1152, 128, 128, 32, 2, 8, 4),
         (1, 512, 64, 64, 32, 1, 8, 8),  # SD 1.4 VAE
         (1, 512, 128, 128, 32, 1, 8, 8),  # SD 1.4 VAE
-        (1, 512, 256, 256, 32, 4, 8, 8),  # SD 1.4 VAE
         (1, 256, 256, 256, 32, 8, 8, 8),  # SD 1.4 VAE
         # sd35. 4 indicates the number of device.
         (1, 256 // 4, 256, 256, 32 // 4, 1, 8, 8),
@@ -184,6 +225,19 @@ def test_sdxl_base_group_norm_split_unit_shapes(device, N, C, H, W, num_groups, 
 
 @pytest.mark.parametrize("device_params", base.DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
 @pytest.mark.parametrize(
+    "N, C, H, W, num_groups, num_splits",
+    [
+        (1, 256, 512, 512, 32, 8),
+        (1, 512, 512, 512, 32, 16),
+    ],
+)
+@pytest.mark.parametrize("specify_grid", [True, False])
+def test_sdxl_base_group_norm_split_large(device, N, C, H, W, num_groups, num_splits, specify_grid):
+    base.test_sdxl_base_group_norm_split(device, N, C, H, W, num_groups, num_splits, specify_grid)
+
+
+@pytest.mark.parametrize("device_params", base.DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
+@pytest.mark.parametrize(
     "N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, eps", base.GROUP_NORM_DRAM_OFT_PARAMS
 )
 @pytest.mark.parametrize("specify_grid", [False])
@@ -192,3 +246,206 @@ def test_group_norm_DRAM_oft_unit_shapes(
     device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, eps, specify_grid
 ):
     base.test_group_norm_DRAM_oft(device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, eps, specify_grid)
+
+
+@skip_for_blackhole("interleaved ROW_MAJOR group_norm is Wormhole-only, see #52279")
+@pytest.mark.parametrize("device_params", base.DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True, ids=["l1small0"])
+@pytest.mark.parametrize("N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x", GROUP_NORM_ROW_MAJOR_SHAPES)
+@pytest.mark.parametrize("welford_mode", ["legacy"])
+@pytest.mark.parametrize(
+    "input_layout, output_layout",
+    [
+        (ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
+        (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
+        (ttnn.ROW_MAJOR_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
+    ],
+    ids=["RM_IN_TILE_OUT", "TILE_IN_RM_OUT", "RM_IN_RM_OUT"],
+)
+def test_group_norm_DRAM_row_major(
+    device,
+    N,
+    C,
+    H,
+    W,
+    num_groups,
+    num_out_blocks,
+    cores_y,
+    cores_x,
+    welford_mode,
+    input_layout,
+    output_layout,
+):
+    base.run_group_norm_DRAM(
+        device,
+        N,
+        C,
+        H,
+        W,
+        num_groups,
+        num_out_blocks,
+        cores_y,
+        cores_x,
+        welford_mode,
+        use_input_mask=True,
+        input_layout=input_layout,
+        output_layout=output_layout,
+    )
+
+
+# Welford + interleaved ROW_MAJOR must fail (legacy-only feature).
+@skip_for_blackhole("interleaved ROW_MAJOR group_norm is Wormhole-only, see #52279")
+@pytest.mark.parametrize("device_params", base.DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True, ids=["l1small0"])
+@pytest.mark.parametrize(
+    "input_layout, output_layout",
+    [
+        (ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
+        (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
+        (ttnn.ROW_MAJOR_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
+    ],
+    ids=["RM_IN_TILE_OUT", "TILE_IN_RM_OUT", "RM_IN_RM_OUT"],
+)
+def test_group_norm_DRAM_row_major_rejects_welford(device, input_layout, output_layout, expect_error):
+    N, C, H, W = 1, 480, 1, 64
+    num_groups = 8
+    grid_size = ttnn.CoreGrid(y=1, x=1)
+
+    tt_input = ttnn.from_torch(
+        torch.rand((N, 1, H * W, C), dtype=torch.bfloat16),
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    if input_layout == ttnn.TILE_LAYOUT:
+        tt_input = ttnn.tilize_with_zero_padding(tt_input, use_multicore=True)
+
+    with expect_error(RuntimeError, "not supported on the Welford path"):
+        ttnn.group_norm(
+            tt_input,
+            num_groups=num_groups,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            output_layout=output_layout,
+            core_grid=grid_size,
+            inplace=False,
+            num_out_blocks=1,
+            use_welford=True,
+        )
+
+
+# Optional weight/bias and input-mask coverage, one representative shape.
+@skip_for_blackhole("interleaved ROW_MAJOR group_norm is Wormhole-only, see #52279")
+@pytest.mark.parametrize("device_params", base.DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True, ids=["l1small0"])
+@pytest.mark.parametrize("use_input_mask", [True, False], ids=["mask", "no_mask"])
+@pytest.mark.parametrize(
+    "has_weight, has_bias",
+    [(True, True), (False, False), (True, False), (False, True)],
+    ids=["weight_and_bias", "no_affine", "weight_only", "bias_only"],
+)
+@pytest.mark.parametrize(
+    "input_layout, output_layout",
+    [
+        (ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
+        (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
+        (ttnn.ROW_MAJOR_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
+    ],
+    ids=["RM_IN_TILE_OUT", "TILE_IN_RM_OUT", "RM_IN_RM_OUT"],
+)
+def test_group_norm_DRAM_row_major_affine_and_mask(
+    device,
+    use_input_mask,
+    has_weight,
+    has_bias,
+    input_layout,
+    output_layout,
+):
+    torch.manual_seed(0)
+
+    N, C, H, W = 1, 480, 1, 64
+    num_groups = 8
+    num_out_blocks = 1
+    grid_size = ttnn.CoreGrid(y=1, x=1)
+    num_virtual_cols = ttnn.operations.normalization.dram_group_norm_virtual_columns(grid_size, C, num_groups)
+
+    torch_input = torch.rand((N, C, H, W), dtype=torch.bfloat16)
+    torch_weight = torch.rand((C,), dtype=torch.bfloat16) if has_weight else None
+    torch_bias = torch.rand((C,), dtype=torch.bfloat16) if has_bias else None
+    torch_output = (
+        torch.nn.functional.group_norm(torch_input, num_groups, weight=torch_weight, bias=torch_bias, eps=1e-12)
+        .permute(0, 2, 3, 1)
+        .view(N, 1, H * W, C)
+    )
+
+    gamma_t = beta_t = input_mask = None
+    if has_weight:
+        gamma_t = ttnn.dram_group_norm_params_from_torch(
+            torch_weight, C, num_groups, device, core_grid=grid_size, return_mask=False
+        )
+    if has_bias:
+        beta_t = ttnn.dram_group_norm_params_from_torch(
+            torch_bias, C, num_groups, device, core_grid=grid_size, return_mask=False
+        )
+    if use_input_mask:
+        input_mask = ttnn.to_device(
+            ttnn.create_group_norm_input_mask(C, num_groups, num_virtual_cols, ttnn.bfloat16), device
+        )
+
+    tt_input = ttnn.from_torch(
+        torch_input.permute(0, 2, 3, 1).view(N, 1, H * W, C),
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    if input_layout == ttnn.TILE_LAYOUT:
+        tt_input = ttnn.tilize_with_zero_padding(tt_input, use_multicore=True)
+
+    tt_output = ttnn.group_norm(
+        tt_input,
+        num_groups=num_groups,
+        input_mask=input_mask,
+        weight=gamma_t,
+        bias=beta_t,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        output_layout=output_layout,
+        core_grid=grid_size,
+        inplace=False,
+        num_out_blocks=num_out_blocks,
+        use_welford=False,
+    )
+    assert_numeric_metrics(
+        torch_output,
+        ttnn.to_torch(ttnn.from_device(tt_output)),
+        pcc_threshold=0.999,
+        rtol=0.060,
+        atol=0.069,
+        frobenius_threshold=0.025,
+    )
+
+
+# Regression: ROW_MAJOR out + large block_ht on no_mcast used to undersize c_10 and hang.
+@skip_for_blackhole("interleaved ROW_MAJOR group_norm is Wormhole-only, see #52279")
+@pytest.mark.parametrize("device_params", base.DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True, ids=["l1small0"])
+@pytest.mark.timeout(300)
+def test_group_norm_DRAM_row_major_no_mcast_large_block_ht(device):
+    """c_10 (cb_ex_external) must be sized for num_out_blocks_padded on the no_mcast path.
+
+    N=8 >= num_virtual_rows=8 selects no_mcast; 768/32 = 24 ch/group straddles tiles,
+    so the ROW_MAJOR-output override raises num_out_blocks from 16 to block_ht =
+    8704/32 = 272. The sender reader then reserves ceil(272 * 16B / 2048B) = 3 pages
+    per iteration; the CB must be at least that large.
+    """
+    base.run_group_norm_DRAM(
+        device,
+        8,
+        768,
+        1,
+        8704,
+        32,
+        16,
+        8,
+        8,
+        "legacy",
+        use_input_mask=True,
+        input_layout=ttnn.TILE_LAYOUT,
+        output_layout=ttnn.ROW_MAJOR_LAYOUT,
+    )

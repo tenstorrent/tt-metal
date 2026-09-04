@@ -2,11 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shared arch-detection helpers for the Qwen3-32B galaxy unit tests.
+"""Shared arch-detection helpers for the Qwen3-32B galaxy tests.
 
-Both the attention and MLP unit tests select their execution path (Wormhole prefetcher vs
-Blackhole no-prefetcher) from the detected architecture. Keeping the detection here avoids the
-two test files drifting apart.
+The attention, MLP, decoder, prefill and e2e-accuracy tests all select their execution path
+(Wormhole prefetcher vs Blackhole no-prefetcher) and fabric config from the detected architecture.
+Keeping the detection here avoids the test files drifting apart.
 """
 
 import os
@@ -16,14 +16,8 @@ import ttnn
 def is_blackhole_galaxy():
     """Return True when running on a Blackhole Galaxy, False otherwise.
 
-    Detection order: explicit QWEN_TEST_FORCE_ARCH override -> cluster type -> ARCH_NAME / arch name.
+    Detection order: cluster type -> ARCH_NAME / arch name.
     """
-    # Optional explicit override (set to "blackhole"/"bh" or "wormhole"/"wh").
-    forced = os.environ.get("QWEN_TEST_FORCE_ARCH", "").lower()
-    if forced in ("blackhole", "bh"):
-        return True
-    if forced in ("wormhole", "wormhole_b0", "wh"):
-        return False
     try:
         cluster_type = ttnn.cluster.get_cluster_type()
         if cluster_type == ttnn.cluster.ClusterType.BLACKHOLE_GALAXY:
@@ -48,3 +42,6 @@ IS_BLACKHOLE = is_blackhole_galaxy()
 # requires a 2D-torus fabric (FABRIC_1D / FABRIC_1D_RING throw `IndexError: map::at` on the cross-column
 # route). Wormhole keeps main's fabric_config=True.
 DECODE_FABRIC_CONFIG = ttnn.FabricConfig.FABRIC_2D_TORUS_XY if IS_BLACKHOLE else True
+
+# Prefill collectives need the same 2D-torus fabric on Blackhole; Wormhole keeps main's FABRIC_1D_RING.
+PREFILL_FABRIC_CONFIG = ttnn.FabricConfig.FABRIC_2D_TORUS_XY if IS_BLACKHOLE else ttnn.FabricConfig.FABRIC_1D_RING

@@ -47,11 +47,11 @@ void swiglu_block(uint32_t in_cb, uint32_t bias_cb, uint32_t out_cb, uint32_t M_
 
             tile_regs_acquire();
 #ifdef FUSE_BIAS
-            add_bcast_rows_init_short(in_cb, bias_cb);
+            add_bcast_rows_init(in_cb, bias_cb);
             add_tiles_bcast<BroadcastType::ROW>(in_cb, bias_cb, gate_tile_id, gate_n, GATE_DST);
             add_tiles_bcast<BroadcastType::ROW>(in_cb, bias_cb, up_tile_id, up_n, UP_DST);
 #else
-            copy_tile_to_dst_init_short(in_cb);
+            copy_init(in_cb);
             copy_tile(in_cb, gate_tile_id, GATE_DST);
             copy_tile(in_cb, up_tile_id, UP_DST);
 #endif
@@ -71,7 +71,7 @@ void swiglu_block(uint32_t in_cb, uint32_t bias_cb, uint32_t out_cb, uint32_t M_
 #endif  // FUSE_SWIGLU
 
 void copy_block(CircularBuffer& in_cb, CircularBuffer& out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
-    copy_tile_to_dst_init_short(in_cb.get_cb_id());
+    copy_init(in_cb.get_cb_id());
     reconfig_data_format_srca(in_cb.get_cb_id());
     pack_reconfig_data_format(out_cb.get_cb_id());
     uint32_t fused_act_dst_id = 0;
@@ -109,7 +109,7 @@ void add_bias_block(
     CircularBuffer& out_cb,
     uint32_t M_block_tiles,
     uint32_t N_block_tiles) {
-    add_bcast_rows_init_short(in_cb.get_cb_id(), bias_cb.get_cb_id());
+    add_bcast_rows_init(in_cb.get_cb_id(), bias_cb.get_cb_id());
     reconfig_data_format(in_cb.get_cb_id(), bias_cb.get_cb_id());
     pack_reconfig_data_format(out_cb.get_cb_id());
     uint32_t fused_act_dst_id = 0;
@@ -155,7 +155,7 @@ void add_bias_and_addcmul_block(
     // Read from intermediate_cb and write back to intermediate_cb
     // ============================================
 
-    add_bcast_rows_init_short(intermediate_cb.get_cb_id(), bias_cb.get_cb_id());
+    add_bcast_rows_init(intermediate_cb.get_cb_id(), bias_cb.get_cb_id());
     reconfig_data_format(intermediate_cb.get_cb_id(), bias_cb.get_cb_id());
     pack_reconfig_data_format(intermediate_cb.get_cb_id());
 
@@ -206,9 +206,14 @@ void add_bias_and_addcmul_block(
         ternary_b_cb.wait_front(N_block_tiles);
 
 #ifndef TERNARY_B_IS_FLOAT32
-        mul_bcast_rows_init_short(intermediate_cb.get_cb_id(), ternary_b_cb.get_cb_id());
+        mul_bcast_rows_init(intermediate_cb.get_cb_id(), ternary_b_cb.get_cb_id());
 #else
-        unary_bcast_init<BroadcastType::ROW>(ternary_b_cb.get_cb_id(), intermediate_cb.get_cb_id());
+        // Full re-arm (hw_configure + pack_dest/math_pack_sync), matching the pre-cleanup
+        // 2-arg unary_bcast_init(ternary_b_cb, intermediate_cb); this runs after matmul_blocks
+        // regardless of FUSE_BIAS, so a plain reconfig would drop the MATH<->PACK DST re-arm.
+        // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
+        compute_kernel_hw_startup(ternary_b_cb.get_cb_id(), intermediate_cb.get_cb_id());
+        unary_bcast_init<BroadcastType::ROW>(ternary_b_cb.get_cb_id());
 #endif  // TERNARY_B_IS_FLOAT32
 
         binop_with_scalar_tile_init();
@@ -232,10 +237,12 @@ void add_bias_and_addcmul_block(
                     intermediate_cb.get_cb_id(), ternary_b_cb.get_cb_id(), tile_id, n, DST_ID);
 #else
                 constexpr uint32_t TERNARY_B_DST_ID = 1;
-                unary_bcast_init<BroadcastType::ROW>(ternary_b_cb.get_cb_id(), intermediate_cb.get_cb_id());
+                // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
+                compute_kernel_hw_startup(ternary_b_cb.get_cb_id(), intermediate_cb.get_cb_id());
+                unary_bcast_init<BroadcastType::ROW>(ternary_b_cb.get_cb_id());
                 unary_bcast<BroadcastType::ROW>(ternary_b_cb.get_cb_id(), n, TERNARY_B_DST_ID);
 
-                copy_tile_to_dst_init_short(intermediate_cb.get_cb_id());
+                copy_init(intermediate_cb.get_cb_id());
                 copy_tile(intermediate_cb.get_cb_id(), tile_id, DST_ID);
 
                 mul_binary_tile_init();
@@ -256,7 +263,7 @@ void add_bias_and_addcmul_block(
     } else {
         // === NO BROADCAST: row-by-row, wait/pop per M row ===
 #ifndef TERNARY_B_IS_FLOAT32
-        mul_tiles_init(intermediate_cb.get_cb_id(), ternary_b_cb.get_cb_id());
+        mul_init(intermediate_cb.get_cb_id(), ternary_b_cb.get_cb_id());
 #endif
         binop_with_scalar_tile_init();
         reconfig_data_format(intermediate_cb.get_cb_id(), ternary_b_cb.get_cb_id());
@@ -272,10 +279,10 @@ void add_bias_and_addcmul_block(
                 mul_tiles(intermediate_cb.get_cb_id(), ternary_b_cb.get_cb_id(), tile_id, n, DST_ID);
 #else
                 constexpr uint32_t TERNARY_B_DST_ID = 1;
-                copy_tile_to_dst_init_short(ternary_b_cb.get_cb_id());
+                copy_init(ternary_b_cb.get_cb_id());
                 copy_tile(ternary_b_cb.get_cb_id(), n, TERNARY_B_DST_ID);
 
-                copy_tile_to_dst_init_short(intermediate_cb.get_cb_id());
+                copy_init(intermediate_cb.get_cb_id());
                 copy_tile(intermediate_cb.get_cb_id(), tile_id, DST_ID);
 
                 mul_binary_tile_init();
@@ -302,7 +309,7 @@ void add_bias_and_addcmul_block(
 
     intermediate_cb.wait_front(out_block_num_tiles);
 
-    add_tiles_init(intermediate_cb.get_cb_id(), ternary_a_cb.get_cb_id());
+    add_init(intermediate_cb.get_cb_id(), ternary_a_cb.get_cb_id());
     reconfig_data_format(intermediate_cb.get_cb_id(), ternary_a_cb.get_cb_id());
     pack_reconfig_data_format(out_cb.get_cb_id());
 

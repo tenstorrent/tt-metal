@@ -26,6 +26,7 @@
 #include <umd/device/cluster.hpp>
 #include <umd/device/driver_atomics.hpp>
 #include <umd/device/cluster_descriptor.hpp>
+#include <umd/device/chip_helpers/sysmem_buffer.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/chip_helpers/tlb_manager.hpp>
 #include <umd/device/pcie/tlb_window.hpp>
@@ -33,6 +34,7 @@
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <umd/device/types/cluster_types.hpp>
+#include <umd/device/types/host_memory.hpp>
 
 namespace tt {
 namespace llrt {
@@ -46,8 +48,6 @@ namespace tt_metal {
 class Hal;
 }
 }  // namespace tt
-
-static constexpr std::uint32_t SW_VERSION = 0x00020000;
 
 using tt_target_dram = std::tuple<int, int, int>;
 
@@ -72,8 +72,6 @@ public:
     Cluster(llrt::RunTimeOptions& rtoptions);
     ~Cluster();
 
-    // For TG Galaxy systems, mmio chips are gateway chips that are only used for dispatch, so user_devices are meant
-    // for user facing host apis
     std::unordered_map<ChipId, EthCoord> get_user_chip_ethernet_coordinates() const;
     size_t number_of_user_devices() const;
     std::set<ChipId> user_exposed_chip_ids() const;
@@ -116,15 +114,16 @@ public:
     ARCH arch() const { return this->arch_; }
 
     const metal_SocDescriptor& get_soc_desc(ChipId chip) const;
-    CoreCoord get_virtual_coordinate_from_logical_coordinates(
-        ChipId chip_id, CoreCoord logical_coord, const CoreType& core_type) const;
-    CoreCoord get_virtual_coordinate_from_physical_coordinates(ChipId chip_id, CoreCoord physical_coord) const;
+    tt::tt_metal::CoreCoord get_virtual_coordinate_from_logical_coordinates(
+        ChipId chip_id, tt::tt_metal::CoreCoord logical_coord, const CoreType& core_type) const;
+    tt::tt_metal::CoreCoord get_virtual_coordinate_from_physical_coordinates(
+        ChipId chip_id, tt::tt_metal::CoreCoord physical_coord) const;
     tt_cxy_pair get_virtual_coordinate_from_logical_coordinates(
         tt_cxy_pair logical_coordinate, const CoreType& core_type) const;
-    CoreCoord get_physical_coordinate_from_logical_coordinates(
-        ChipId chip_id, CoreCoord logical_coord, const CoreType& core_type, bool no_warn = false) const;
-    const std::unordered_set<CoreCoord>& get_virtual_worker_cores(ChipId chip_id) const;
-    const std::unordered_set<CoreCoord>& get_virtual_eth_cores(ChipId chip_id) const;
+    tt::tt_metal::CoreCoord get_physical_coordinate_from_logical_coordinates(
+        ChipId chip_id, tt::tt_metal::CoreCoord logical_coord, const CoreType& core_type, bool no_warn = false) const;
+    const std::unordered_set<tt::tt_metal::CoreCoord>& get_virtual_worker_cores(ChipId chip_id) const;
+    const std::unordered_set<tt::tt_metal::CoreCoord>& get_virtual_eth_cores(ChipId chip_id) const;
 
     uint32_t get_harvesting_mask(ChipId chip) const {
         return this->driver_->get_soc_descriptor(chip).harvesting_masks.tensix_harvesting_mask;
@@ -135,8 +134,7 @@ public:
     std::optional<int> get_physical_slot(ChipId chip) const;
 
     //! device driver and misc apis
-    void verify_sw_fw_versions(int device_id, std::uint32_t sw_version, std::vector<std::uint32_t>& fw_versions) const;
-    std::optional<tt::umd::semver_t> get_ethernet_firmware_version() const;
+    std::optional<tt::umd::SemVer> get_ethernet_firmware_version() const;
 
     void deassert_risc_reset_at_core(
         const tt_cxy_pair& core, const tt::umd::RiscType& soft_resets, bool staggered_start = true) const;
@@ -155,26 +153,28 @@ public:
     // Write to core without effects of write combining
     template <typename DType>
     void write_core_immediate(
-        ChipId device_id, const CoreCoord& core, const std::span<DType>& hex_vec, uint64_t addr) const {
+        ChipId device_id, const tt::tt_metal::CoreCoord& core, const std::span<DType>& hex_vec, uint64_t addr) const {
         write_core_immediate(hex_vec.data(), hex_vec.size() * sizeof(DType), tt_cxy_pair(device_id, core), addr);
     }
 
     // Write to core without effects of write combining
     template <typename DType>
     void write_core_immediate(
-        ChipId device_id, const CoreCoord& core, const std::vector<DType>& hex_vec, uint64_t addr) const {
+        ChipId device_id, const tt::tt_metal::CoreCoord& core, const std::vector<DType>& hex_vec, uint64_t addr) const {
         write_core_immediate(hex_vec.data(), hex_vec.size() * sizeof(DType), tt_cxy_pair(device_id, core), addr);
     }
 
     // Write span to core
     template <typename DType>
-    void write_core(ChipId device_id, const CoreCoord& core, const std::span<DType>& hex_vec, uint64_t addr) const {
+    void write_core(
+        ChipId device_id, const tt::tt_metal::CoreCoord& core, const std::span<DType>& hex_vec, uint64_t addr) const {
         write_core(hex_vec.data(), hex_vec.size() * sizeof(DType), tt_cxy_pair(device_id, core), addr);
     }
 
     // Write vector to core
     template <typename DType>
-    void write_core(ChipId device_id, const CoreCoord& core, const std::vector<DType>& hex_vec, uint64_t addr) const {
+    void write_core(
+        ChipId device_id, const tt::tt_metal::CoreCoord& core, const std::vector<DType>& hex_vec, uint64_t addr) const {
         write_core(hex_vec.data(), hex_vec.size() * sizeof(DType), tt_cxy_pair(device_id, core), addr);
     }
 
@@ -183,7 +183,8 @@ public:
     void read_core(std::vector<uint32_t>& data, uint32_t size_in_bytes, tt_cxy_pair core, uint64_t addr) const;
 
     template <typename DType = uint32_t>
-    [[nodiscard]] std::vector<DType> read_core(ChipId chip, const CoreCoord& core, uint64_t addr, uint32_t size) const {
+    [[nodiscard]] std::vector<DType> read_core(
+        ChipId chip, const tt::tt_metal::CoreCoord& core, uint64_t addr, uint32_t size) const {
         std::vector<DType> read_hex_vec;
         read_core(read_hex_vec, size, tt_cxy_pair(chip, core), addr);
         return read_hex_vec;
@@ -196,8 +197,8 @@ public:
         const void* mem_ptr,
         uint32_t sz_in_bytes,
         ChipId chip_id,
-        CoreCoord core_start,
-        CoreCoord core_end,
+        tt::tt_metal::CoreCoord core_start,
+        tt::tt_metal::CoreCoord core_end,
         uint64_t addr) const;
 
     std::optional<std::tuple<uint32_t, uint32_t>> get_tlb_data(const tt_cxy_pair& target) const {
@@ -254,7 +255,11 @@ public:
     std::unique_ptr<tt::umd::SysmemBuffer> allocate_sysmem_buffer(
         ChipId device_id, size_t sysmem_buffer_size, bool map_to_noc = false) const;
     std::unique_ptr<tt::umd::SysmemBuffer> map_sysmem_buffer(
-        ChipId device_id, void* buffer, size_t sysmem_buffer_size, bool map_to_noc = false) const;
+        ChipId device_id,
+        void* buffer,
+        size_t sysmem_buffer_size,
+        bool map_to_noc = false,
+        tt::umd::DeviceBufferAccess device_access = tt::umd::DeviceBufferAccess::READ_WRITE) const;
 
     int get_device_aiclk(const ChipId& chip_id) const;
 
@@ -276,33 +281,33 @@ public:
 
     // Returns whether `logical_core` has an eth link to a core on a connected chip
     // Cores that connect to another cluster will show up as connected
-    bool is_ethernet_link_up(ChipId chip_id, const CoreCoord& logical_core) const;
+    bool is_ethernet_link_up(ChipId chip_id, const tt::tt_metal::CoreCoord& logical_core) const;
 
     // Returns connected ethernet core on the other chip
     // If the core is connected to a device not accessible through this Cluster, it will assert
-    std::tuple<ChipId, CoreCoord> get_connected_ethernet_core(std::tuple<ChipId, CoreCoord> eth_core) const;
+    std::tuple<ChipId, tt::tt_metal::CoreCoord> get_connected_ethernet_core(
+        std::tuple<ChipId, tt::tt_metal::CoreCoord> eth_core) const;
 
     // Returns connected ethernet core on the other chip that is not managed by this Cluster
-    std::tuple<uint64_t, CoreCoord> get_connected_ethernet_core_to_remote_mmio_device(
-        std::tuple<ChipId, CoreCoord> eth_core) const;
+    std::tuple<uint64_t, tt::tt_metal::CoreCoord> get_connected_ethernet_core_to_remote_mmio_device(
+        std::tuple<ChipId, tt::tt_metal::CoreCoord> eth_core) const;
 
     // Returns a ethernet sockets between local chip and remote chip
     // get_ethernet_sockets(a, b)[0] is connected to get_ethernet_sockets(b, a)[0]
-    std::vector<CoreCoord> get_ethernet_sockets(ChipId local_chip, ChipId remote_chip) const;
+    std::vector<tt::tt_metal::CoreCoord> get_ethernet_sockets(ChipId local_chip, ChipId remote_chip) const;
     // Converts logical ethernet core coord to physical ethernet core coord
-    CoreCoord ethernet_core_from_logical_core(ChipId chip_id, const CoreCoord& logical_core) const;
+    tt::tt_metal::CoreCoord ethernet_core_from_logical_core(
+        ChipId chip_id, const tt::tt_metal::CoreCoord& logical_core) const;
 
     // Returns virtual eth coord from channel
-    CoreCoord get_virtual_eth_core_from_channel(ChipId chip_id, int channel) const;
+    tt::tt_metal::CoreCoord get_virtual_eth_core_from_channel(ChipId chip_id, int channel) const;
 
     // Internal routing for SD and FD enables launching user ethernet kernels and FD tunneling for all devices in the
     // cluster. When using multiple devices in a cluster, this should be the flow:
-    //       CreateDevice(0)
-    //       CreateDevice(1)
+    //       auto unit_meshes = MeshDevice::create_unit_meshes({0, 1});
     //       set_internal_routing_info_for_ethernet_cores(true);
     //       set_internal_routing_info_for_ethernet_cores(false);
-    //       CloseDevice(0)
-    //       CloseDevice(1)
+    //       unit_meshes.clear();  // or let RAII close them / MeshDevice::close
     void set_internal_routing_info_for_ethernet_cores(
         const tt::tt_fabric::ControlPlane& control_plane,
         bool enable_internal_routing,
@@ -332,7 +337,7 @@ public:
     const std::unordered_set<ChipId>& get_devices_controlled_by_mmio_device(ChipId mmio_device_id) const;
 
     // Returns map of connected chip ids to active ethernet cores
-    std::unordered_map<ChipId, std::vector<CoreCoord>> get_ethernet_cores_grouped_by_connected_chips(
+    std::unordered_map<ChipId, std::vector<tt::tt_metal::CoreCoord>> get_ethernet_cores_grouped_by_connected_chips(
         ChipId chip_id) const;
 
     // Returns vector of unique tunnels originating from mmio device.
@@ -361,8 +366,8 @@ public:
 
     // Returns whether IOMMU is enabled on the system (cached at init time)
     bool is_iommu_enabled() const;
-    // Returns whether NOC mapping is enabled on the system (cached at init time)
-    bool is_noc_mapping_enabled() const;
+    // Returns whether device-read-only page pinning is available.
+    bool is_read_only_page_pinning_supported() const;
 
     tt::tt_metal::ClusterType get_cluster_type() const;
 
@@ -383,28 +388,31 @@ public:
         const tt::tt_fabric::ControlPlane& control_plane, ChipId chip_id) const;
 
     // Get fabric ethernet cores connecting src to dst
-    std::vector<CoreCoord> get_fabric_ethernet_routers_between_src_and_dest(ChipId src_id, ChipId dst_id) const;
+    std::vector<tt::tt_metal::CoreCoord> get_fabric_ethernet_routers_between_src_and_dest(
+        ChipId src_id, ChipId dst_id) const;
 
-    bool is_worker_core(const CoreCoord& core, ChipId chip_id) const;
-    bool is_ethernet_core(const CoreCoord& core, ChipId chip_id) const;
-    bool is_dram_core(const CoreCoord& core, ChipId chip_id) const;
-    CoreCoord get_logical_ethernet_core_from_virtual(ChipId chip, CoreCoord core) const;
+    bool is_worker_core(const tt::tt_metal::CoreCoord& core, ChipId chip_id) const;
+    bool is_ethernet_core(const tt::tt_metal::CoreCoord& core, ChipId chip_id) const;
+    bool is_dram_core(const tt::tt_metal::CoreCoord& core, ChipId chip_id) const;
+    bool is_dispatch_core(const tt::tt_metal::CoreCoord& core, ChipId chip_id) const;
+    tt::tt_metal::CoreCoord get_logical_ethernet_core_from_virtual(ChipId chip, tt::tt_metal::CoreCoord core) const;
 
     // These two functions should be removed in favor of direct translation.
     std::unordered_map<int, int> get_worker_logical_to_virtual_x(ChipId chip_id) const;
     std::unordered_map<int, int> get_worker_logical_to_virtual_y(ChipId chip_id) const;
 
-    const std::unordered_map<CoreCoord, int32_t>& get_virtual_routing_to_profiler_flat_id(ChipId chip_id) const;
+    const std::unordered_map<tt::tt_metal::CoreCoord, int32_t>& get_virtual_routing_to_profiler_flat_id(
+        ChipId chip_id) const;
 
     std::uint32_t get_ubb_asic_id(ChipId physical_chip_id) const;
 
     // TODO: move to separate system descriptor class
     // return enum for connection type, Internal, QSFP, Other, Unknown
-    bool is_external_cable(ChipId physical_chip_id, CoreCoord eth_core) const;
+    bool is_external_cable(ChipId physical_chip_id, tt::tt_metal::CoreCoord eth_core) const;
 
     uint32_t get_alignment_requirements(ChipId chip_id, uint32_t size_in_bytes) const;
 
-    const std::unordered_set<CoreCoord>& get_eth_cores_with_frequent_retraining(ChipId chip_id) const {
+    const std::unordered_set<tt::tt_metal::CoreCoord>& get_eth_cores_with_frequent_retraining(ChipId chip_id) const {
         return this->frequent_retrain_cores_.at(chip_id);
     }
 
@@ -412,7 +420,7 @@ public:
     // Call after link retraining to allow continued operation without restarting the process.
     void rediscover_ethernet_links();
 
-    const std::unordered_map<CoreCoord, EthRouterMode>& get_eth_routing_info(ChipId chip_id) const {
+    const std::unordered_map<tt::tt_metal::CoreCoord, EthRouterMode>& get_eth_routing_info(ChipId chip_id) const {
         return this->device_eth_routing_info_.at(chip_id);
     }
 
@@ -425,6 +433,9 @@ private:
     void open_driver(const bool& skip_driver_allocs = false);
     void start_driver(umd::DeviceParams& device_params) const;
     void validate_harvesting_masks() const;
+
+    // Apply the TT_METAL_TDP_LIMIT_WATTS override to every local ASIC. No-op when it is unset.
+    void apply_tdp_limit_override();
 
     void get_metal_desc_from_tt_desc();
     void generate_virtual_to_umd_coord_mapping();
@@ -452,21 +463,24 @@ private:
 
     // Cached system IOMMU status to avoid slow queries at MeshDevice construction
     bool iommu_enabled_ = false;
-    // Cached system NOC mapping status to avoid slow queries at MeshDevice construction
-    bool noc_mapping_enabled_ = false;
+    // Cached device-read-only pinning support. Reading the KMD version parses sysfs, and this is queried once per
+    // tensor shard on the transfer path, so it must not be recomputed per call.
+    bool read_only_page_pinning_supported_ = false;
 
     // There is an entry for every device that can be targeted (MMIO and remote)
     std::unordered_map<ChipId, metal_SocDescriptor> sdesc_per_chip_;
 
     // Data Structures Tracking Virtual Coordinates
     std::unordered_map<tt_cxy_pair, tt_cxy_pair> virtual_to_umd_coord_mapping_;
-    std::unordered_map<ChipId, std::unordered_set<CoreCoord>> virtual_worker_cores_;
-    std::unordered_map<ChipId, std::unordered_set<CoreCoord>> virtual_eth_cores_;
-    std::unordered_map<ChipId, std::unordered_set<CoreCoord>> virtual_dram_cores_;
-    std::unordered_map<ChipId, std::unordered_set<CoreCoord>> virtual_dram_hw_cores_;
-    std::unordered_map<ChipId, std::unordered_set<CoreCoord>> virtual_pcie_cores_;
-    std::unordered_map<BoardType, std::unordered_map<CoreCoord, int32_t>> virtual_routing_to_profiler_flat_id_;
-    std::unordered_map<ChipId, std::unordered_set<CoreCoord>> frequent_retrain_cores_;
+    std::unordered_map<ChipId, std::unordered_set<tt::tt_metal::CoreCoord>> virtual_worker_cores_;
+    std::unordered_map<ChipId, std::unordered_set<tt::tt_metal::CoreCoord>> virtual_dispatch_cores_;
+    std::unordered_map<ChipId, std::unordered_set<tt::tt_metal::CoreCoord>> virtual_eth_cores_;
+    std::unordered_map<ChipId, std::unordered_set<tt::tt_metal::CoreCoord>> virtual_dram_cores_;
+    std::unordered_map<ChipId, std::unordered_set<tt::tt_metal::CoreCoord>> virtual_dram_hw_cores_;
+    std::unordered_map<ChipId, std::unordered_set<tt::tt_metal::CoreCoord>> virtual_pcie_cores_;
+    std::unordered_map<BoardType, std::unordered_map<tt::tt_metal::CoreCoord, int32_t>>
+        virtual_routing_to_profiler_flat_id_;
+    std::unordered_map<ChipId, std::unordered_set<tt::tt_metal::CoreCoord>> frequent_retrain_cores_;
     // Flag to tell whether we are on a TG type of system.
     // If any device has to board type of GALAXY, we are on a TG cluster.
     tt::tt_metal::ClusterType cluster_type_ = tt::tt_metal::ClusterType::INVALID;
@@ -492,9 +506,9 @@ private:
     std::unordered_map<ChipId, uint16_t> device_to_host_mem_channel_;
 
     // Mapping of each devices' ethernet routing mode
-    std::unordered_map<ChipId, std::unordered_map<CoreCoord, EthRouterMode>> device_eth_routing_info_;
+    std::unordered_map<ChipId, std::unordered_map<tt::tt_metal::CoreCoord, EthRouterMode>> device_eth_routing_info_;
 
-    std::unordered_map<ChipId, std::unordered_map<ChipId, std::vector<CoreCoord>>> ethernet_sockets_;
+    std::unordered_map<ChipId, std::unordered_map<ChipId, std::vector<tt::tt_metal::CoreCoord>>> ethernet_sockets_;
 
     uint32_t routing_info_addr_ = 0;
     uint32_t retrain_count_addr_ = 0;

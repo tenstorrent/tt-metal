@@ -15,24 +15,28 @@ from helpers.llk_params import (
     DestAccumulation,
     DestSync,
     ImpliedMathFormat,
+    PerfRunType,
     UnpackerEngine,
     format_dict,
 )
 from helpers.param_config import (
     calculate_edgecase_dest_indices,
+    generate_perf_input_dimensions,
     generate_unary_input_dimensions,
     input_output_formats,
     parametrize,
     runtime,
+    select_perf_tile_sizes,
 )
+from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DATA_COPY_TYPE,
     DEST_INDEX,
     DEST_SYNC,
     IMPLIED_MATH_FORMAT,
+    LOOP_FACTOR,
     NUM_FACES,
     NUM_FACES_C_DIM,
     NUM_FACES_R_DIM,
@@ -45,8 +49,18 @@ from helpers.tile_shape import construct_tile_shape
 from helpers.utils import passed_test
 
 
+def datacopy_implied_math_formats(format, *, is_perf=False):
+    if is_perf:
+        return [ImpliedMathFormat.Yes]
+    if format.input_format.is_mx_format():
+        return [ImpliedMathFormat.Yes]
+    return [ImpliedMathFormat.Yes, ImpliedMathFormat.No]
+
+
 def generate_eltwise_unary_datacopy_combinations(
     formats_list: List[FormatConfig],
+    *,
+    is_perf=False,
 ):
     """
     Generate eltwise_unary_datacopy combinations.
@@ -61,8 +75,15 @@ def generate_eltwise_unary_datacopy_combinations(
         in_fmt = fmt.input_format
 
         dest_acc_modes = (DestAccumulation.No, DestAccumulation.Yes)
-        dest_sync_modes = (DestSync.Half, DestSync.Full)
+        dest_sync_modes = (
+            (DestSync.Half,) if is_perf else (DestSync.Half, DestSync.Full)
+        )
         data_copy_types = (DataCopyType.A2D, DataCopyType.B2D)
+        tile_sizes = (
+            select_perf_tile_sizes(SUPPORTED_TILE_SIZES)
+            if is_perf
+            else SUPPORTED_TILE_SIZES
+        )
 
         for dest_acc in dest_acc_modes:
             if (
@@ -74,34 +95,50 @@ def generate_eltwise_unary_datacopy_combinations(
 
             for dest_sync in dest_sync_modes:
                 for data_copy_type in data_copy_types:
-                    for tile_dims in SUPPORTED_TILE_SIZES:
+                    for tile_dims in tile_sizes:
                         if is_mx_unsupported_tile_dims(
                             in_fmt, fmt.output_format, tile_dims
                         ):
                             continue
                         tile_shape = construct_tile_shape(tile_dims)
-                        for dimensions in generate_unary_input_dimensions(
-                            dest_acc, dest_sync=dest_sync, tile_shape=tile_shape
-                        ):
-                            for (
-                                _,
-                                edgecase_dest_index,
-                            ) in calculate_edgecase_dest_indices(
-                                True if dest_acc == DestAccumulation.Yes else False,
-                                dimensions[0]
-                                // tile_dims[0]
-                                * dimensions[1]
-                                // tile_dims[1],
-                                [dest_sync],
-                            ):
+                        dimensions_list = (
+                            generate_perf_input_dimensions(
+                                dest_acc, dest_sync, tile_shape
+                            )
+                            if is_perf
+                            else generate_unary_input_dimensions(
+                                dest_acc, dest_sync=dest_sync, tile_shape=tile_shape
+                            )
+                        )
+                        for dimensions in dimensions_list:
+                            dest_indices = (
+                                [0]
+                                if is_perf
+                                else [
+                                    edgecase_dest_index
+                                    for _, edgecase_dest_index in calculate_edgecase_dest_indices(
+                                        (
+                                            True
+                                            if dest_acc == DestAccumulation.Yes
+                                            else False
+                                        ),
+                                        dimensions[0]
+                                        // tile_dims[0]
+                                        * dimensions[1]
+                                        // tile_dims[1],
+                                        [dest_sync],
+                                    )
+                                ]
+                            )
+                            for dest_index in dest_indices:
                                 combinations.append(
                                     (
                                         fmt,
                                         dest_acc,
                                         data_copy_type,
-                                        runtime(dimensions),
+                                        dimensions,
                                         dest_sync,
-                                        runtime(edgecase_dest_index),
+                                        runtime(dest_index),
                                         runtime(tile_dims),
                                     )
                                 )
@@ -122,23 +159,30 @@ DATACOPY_FORMATS = input_output_formats(
 ALL_DATACOPY_COMBINATIONS = generate_eltwise_unary_datacopy_combinations(
     DATACOPY_FORMATS
 )
+PERF_DATACOPY_COMBINATIONS = generate_eltwise_unary_datacopy_combinations(
+    DATACOPY_FORMATS,
+    is_perf=True,
+)
 
 
 @pytest.mark.quasar
 @parametrize(
     formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices=ALL_DATACOPY_COMBINATIONS,
     # don't generate the No variant for them. combo[0] is the InputOutputFormat (input/output pair).
-    implied_math_format=lambda formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices: (
-        [ImpliedMathFormat.Yes]
-        if formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices[
-            0
-        ].input_format.is_mx_format()
-        else [ImpliedMathFormat.Yes, ImpliedMathFormat.No]
+    implied_math_format=lambda formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices: datacopy_implied_math_formats(
+        formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices[0]
     ),
+    run_types=[[PerfRunType.L1_TO_L1]],
+    loop_factor=[1],
 )
 def test_eltwise_unary_datacopy_quasar(
     formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices,
     implied_math_format,
+    run_types,
+    loop_factor,
+    *,
+    is_perf=False,
+    perf_report=None,
 ):
     (
         formats,
@@ -181,10 +225,13 @@ def test_eltwise_unary_datacopy_quasar(
         tile_shape=tile_shape,
     )
 
-    configuration = TestConfig(
-        "sources/quasar/eltwise_unary_datacopy_quasar_test.cpp",
-        formats,
-        templates=[
+    if is_perf and perf_report is None:
+        raise ValueError("perf_report must be provided when is_perf=True")
+
+    test_config_kwargs = {
+        "test_name": "sources/quasar/eltwise_unary_datacopy_quasar_test.cpp",
+        "formats": formats,
+        "templates": [
             IMPLIED_MATH_FORMAT(implied_math_format),
             DATA_COPY_TYPE(data_copy_type),
             UNPACKER_ENGINE_SEL(
@@ -194,15 +241,16 @@ def test_eltwise_unary_datacopy_quasar(
             ),
             DEST_SYNC(dest_sync_mode),
         ],
-        runtimes=[
+        "runtimes": [
             TILE_COUNT(tile_cnt_A),
             NUM_FACES(num_faces),
             TEST_FACE_DIMS(tile_shape.face_r_dim),
             NUM_FACES_R_DIM(tile_shape.num_faces_r_dim),
             NUM_FACES_C_DIM(tile_shape.num_faces_c_dim),
             DEST_INDEX(dest_index),
+            LOOP_FACTOR(loop_factor),
         ],
-        variant_stimuli=StimuliConfig(
+        "variant_stimuli": StimuliConfig(
             src_A,
             formats.input_format,
             src_B,
@@ -216,14 +264,22 @@ def test_eltwise_unary_datacopy_quasar(
             tile_dimensions=tile_dimensions,
             use_dense_tile_dimensions=True,
         ),
-        unpack_to_dest=False,
-        dest_acc=dest_acc,
-        # MX formats require disable_format_inference to match C++ IMPLIED_MATH_FORMAT setting
-        disable_format_inference=(
+        "unpack_to_dest": False,
+        "dest_acc": dest_acc,
+        "disable_format_inference": (
             implied_math_format == ImpliedMathFormat.Yes
             and formats.input_format.is_mx_format()
         ),
+    }
+
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs=test_config_kwargs,
     )
+    if is_perf:
+        configuration.run(perf_report)
+        return
 
     res_from_L1 = configuration.run().result
 

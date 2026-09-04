@@ -34,7 +34,7 @@ int main() {
         ttnn::DataType::BFLOAT16,
         tt::tt_metal::PageConfig(ttnn::Layout::TILE),
         ttnn::MemoryConfig(tt::tt_metal::BufferType::DRAM));
-    ttnn::TensorSpec spec(ttnn::Shape({M, N}), tile_layout);
+    tt::tt_metal::TensorSpec spec(ttnn::Shape({M, N}), tile_layout);
 
     ttnn::Tensor a = ttnn::Tensor::from_vector<bfloat16>(a_data, spec, mesh_device.get());
     ttnn::Tensor b = ttnn::Tensor::from_vector<bfloat16>(b_data, spec, mesh_device.get());

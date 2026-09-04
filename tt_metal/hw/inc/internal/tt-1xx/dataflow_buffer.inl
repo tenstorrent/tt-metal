@@ -29,14 +29,21 @@
 inline DataflowBuffer::DataflowBuffer(uint16_t logical_dfb_id) : logical_dfb_id_(logical_dfb_id) {}
 #else
 inline DataflowBuffer::DataflowBuffer(uint16_t logical_dfb_id)
-    : logical_dfb_id_(logical_dfb_id), local_dfb_interface_(get_local_cb_interface(logical_dfb_id)) {}
+    : logical_dfb_id_(logical_dfb_id), local_dfb_interface_(get_local_cb_interface(logical_dfb_id)) {
+    // Declare this DFB's L1 extent to the NOC-debug tracker so a write into it without holding the
+    // lock can be flagged.
+    RECORD_SCOPED_LOCK_EVENT(
+        NocDebuggingEventMetadata::NocDebugEventType::DFB_REGION_START,
+        address_units_to_bytes(local_dfb_interface_.fifo_limit) - get_ring_span_bytes(),
+        get_ring_span_bytes());
+}
 #endif
 
 inline uint32_t DataflowBuffer::get_entry_size() const {
 #if DFB_IS_COMPUTE_MATH
     return 0;
 #else
-    return local_dfb_interface_.fifo_page_size;
+    return address_units_to_bytes(local_dfb_interface_.fifo_page_size);
 #endif
 }
 
@@ -44,7 +51,7 @@ inline uint32_t DataflowBuffer::get_stride_size() const {
 #if DFB_IS_COMPUTE_MATH
     return 0;
 #else
-    return local_dfb_interface_.fifo_page_size;
+    return address_units_to_bytes(local_dfb_interface_.fifo_page_size);
 #endif
 }
 
@@ -52,10 +59,27 @@ inline uint32_t DataflowBuffer::get_total_num_entries() const {
 #if DFB_IS_COMPUTE_MATH
     return 0;
 #else
-    return local_dfb_interface_.fifo_num_pages;
+    // Only writers populate fifo_num_pages
+    const uint32_t page_size = local_dfb_interface_.fifo_page_size;
+    return local_dfb_interface_.fifo_num_pages ? local_dfb_interface_.fifo_num_pages : (local_dfb_interface_.fifo_size / page_size);
 #endif
 }
 
+inline uint32_t DataflowBuffer::get_total_size_bytes() const {
+#if DFB_IS_COMPUTE_MATH
+    return 0;
+#else
+    return address_units_to_bytes(local_dfb_interface_.fifo_size);
+#endif
+}
+
+inline uint32_t DataflowBuffer::get_local_num_entries() const { return get_total_num_entries(); }
+
+inline uint32_t DataflowBuffer::get_local_size_bytes() const { return get_total_size_bytes(); }
+
+inline uint32_t DataflowBuffer::get_ring_span_bytes() const { return get_total_size_bytes(); }
+
+inline uint32_t DataflowBuffer::get_ring_span_num_entries() const { return get_total_num_entries(); }
 
 inline void DataflowBuffer::reserve_back_impl(uint16_t num_entries) {
 #ifdef COMPILE_FOR_TRISC
@@ -107,6 +131,22 @@ inline uint32_t DataflowBuffer::get_read_ptr_impl() const {
 #endif
 }
 
+inline void DataflowBuffer::evil_set_write_ptr(uint32_t addr) {
+#if DFB_IS_COMPUTE_MATH
+    (void)addr;
+#else
+    local_dfb_interface_.fifo_wr_ptr = addr;
+#endif
+}
+
+inline void DataflowBuffer::evil_set_read_ptr(uint32_t addr) {
+#if DFB_IS_COMPUTE_MATH
+    (void)addr;
+#else
+    local_dfb_interface_.fifo_rd_ptr = addr;
+#endif
+}
+
 #ifdef COMPILE_FOR_TRISC
 
 inline uint32_t DataflowBuffer::get_tile_address(uint32_t tile_index) {
@@ -153,6 +193,11 @@ T DataflowBuffer::read_tile_value(uint32_t tile_index, uint32_t element_offset) 
     return value;
 }
 
+template <bool>
+inline DataflowBuffer::ScopedLockRegion DataflowBuffer::lock_acquire_impl(uint16_t) { return {}; }
+template <bool>
+inline void DataflowBuffer::lock_release_impl(ScopedLockRegion, uint16_t) {}
+
 #else
 
 inline bool DataflowBuffer::pages_reservable_at_back(int32_t num_pages) const {
@@ -164,6 +209,37 @@ inline bool DataflowBuffer::pages_available_at_front(int32_t num_pages) const {
 }
 
 inline void DataflowBuffer::write_barrier_impl(const Noc& noc) const { noc.async_write_barrier(); }
+
+// WH/BH: lock num_entries entries from the write (is_write) or read pointer.
+template <bool is_write>
+inline DataflowBuffer::ScopedLockRegion DataflowBuffer::lock_acquire_impl(uint16_t num_entries) {
+    const uint32_t limit = local_dfb_interface_.fifo_limit;
+    const uint32_t base = limit - local_dfb_interface_.fifo_size;
+    const uint32_t stride = local_dfb_interface_.fifo_page_size;
+    const uint32_t pointer = is_write ? local_dfb_interface_.fifo_wr_ptr : local_dfb_interface_.fifo_rd_ptr;
+    uint32_t addr = pointer;
+    for (uint16_t k = 0; k < num_entries; ++k) {
+        RECORD_SCOPED_LOCK_EVENT(NocDebuggingEventMetadata::NocDebugEventType::DFB_LOCK, addr, stride);
+        addr += stride;
+        if (addr >= limit) {
+            addr = base;
+        }
+    }
+    return {pointer, base, limit};
+}
+
+template <bool is_write>
+inline void DataflowBuffer::lock_release_impl(ScopedLockRegion region, uint16_t num_entries) {
+    const uint32_t stride = local_dfb_interface_.fifo_page_size;
+    uint32_t addr = region.start;
+    for (uint16_t k = 0; k < num_entries; ++k) {
+        RECORD_SCOPED_LOCK_EVENT(NocDebuggingEventMetadata::NocDebugEventType::DFB_UNLOCK, addr, stride);
+        addr += stride;
+        if (addr >= region.limit) {
+            addr = region.base;
+        }
+    }
+}
 
 #endif
 

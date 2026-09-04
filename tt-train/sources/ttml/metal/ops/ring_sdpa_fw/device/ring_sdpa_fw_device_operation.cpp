@@ -6,6 +6,8 @@
 
 #include <tt-metalium/host_api.hpp>
 
+#include "metal/ops/common/ring_sdpa_utils.hpp"
+
 namespace ttml::metal::ops::ring_sdpa_fw {
 
 using namespace tt::tt_metal;
@@ -13,21 +15,24 @@ using namespace ttnn;
 
 void RingSDPAFwDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
-    TT_FATAL(tensor_args.query.device() != nullptr, "Query tensor must be on device");
-    TT_FATAL(tensor_args.key.device() != nullptr, "Key tensor must be on device");
-    TT_FATAL(tensor_args.value.device() != nullptr, "Value tensor must be on device");
-
-    TT_FATAL(attrs.ring_size > 0, "Ring size must be > 0");
-    TT_FATAL(attrs.step < attrs.ring_size, "Step must be < ring_size");
+    validate_ring_attributes(attrs, tensor_args.query);
+    validate_ring_qkv(tensor_args.query, tensor_args.key, tensor_args.value);
+    if (tensor_args.preallocated_output.has_value()) {
+        validate_output_like_tensor(
+            tensor_args.preallocated_output.value(), "Preallocated output", tensor_args.query, tensor_args.value);
+    }
+    if (tensor_args.preallocated_intermediates.has_value()) {
+        validate_intermediates_tensor(tensor_args.preallocated_intermediates.value(), tensor_args.query);
+    }
 }
 
 RingSDPAFwDeviceOperation::spec_return_value_t RingSDPAFwDeviceOperation::compute_output_specs(
     const operation_attributes_t& /*attrs*/, const tensor_args_t& tensor_args) {
     // Handle output spec
-    ttnn::TensorSpec output_spec =
+    tt::tt_metal::TensorSpec output_spec =
         tensor_args.preallocated_output.has_value()
             ? tensor_args.preallocated_output->tensor_spec()
-            : ttnn::TensorSpec(
+            : tt::tt_metal::TensorSpec(
                   tensor_args.query.logical_shape(),
                   tt::tt_metal::TensorLayout(
                       tensor_args.query.dtype(), tt::tt_metal::Layout::TILE, tensor_args.query.memory_config()));
@@ -35,10 +40,10 @@ RingSDPAFwDeviceOperation::spec_return_value_t RingSDPAFwDeviceOperation::comput
     // Handle intermediates spec - shape is (B, H, S, 32) = 1 FP32 tile wide (logsumexp)
     auto query_shape = tensor_args.query.logical_shape();
     auto [batch, heads, seq_len, dim] = query_shape.to_array_4D();
-    ttnn::TensorSpec intermediates_spec =
+    tt::tt_metal::TensorSpec intermediates_spec =
         tensor_args.preallocated_intermediates.has_value()
             ? tensor_args.preallocated_intermediates->tensor_spec()
-            : ttnn::TensorSpec(
+            : tt::tt_metal::TensorSpec(
                   ttnn::Shape{batch, heads, seq_len, 32U},
                   tt::tt_metal::TensorLayout(
                       ttnn::DataType::FLOAT32, tt::tt_metal::Layout::TILE, tensor_args.query.memory_config()));
@@ -53,12 +58,12 @@ RingSDPAFwDeviceOperation::tensor_return_value_t RingSDPAFwDeviceOperation::crea
     // Handle output
     ttnn::Tensor output = tensor_args.preallocated_output.has_value()
                               ? tensor_args.preallocated_output.value()
-                              : create_device_tensor(output_spec, tensor_args.query.device());
+                              : ttnn::create_device_tensor(output_spec, tensor_args.query.device());
 
     // Handle intermediates
     ttnn::Tensor intermediates = tensor_args.preallocated_intermediates.has_value()
                                      ? tensor_args.preallocated_intermediates.value()
-                                     : create_device_tensor(intermediates_spec, tensor_args.query.device());
+                                     : ttnn::create_device_tensor(intermediates_spec, tensor_args.query.device());
 
     return {output, intermediates};
 }

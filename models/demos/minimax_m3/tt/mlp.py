@@ -11,9 +11,12 @@ expert backends were removed in the prefill cleanup; this mirrors deepseek_v3_d_
 
 import ttnn
 from models.demos.minimax_m3.utils.general_utils import get_cache_file_name
+from models.demos.minimax_m3.utils.profiler_utils import FINE, zone
 from models.demos.minimax_m3.utils.substate import substate
 
+from .attention.operations import assert_sharded_residual_unpadded
 from .dense_mlp import DenseMLP
+from .residual import use_sharded_residual
 from .topk import TopKRouter
 
 
@@ -66,6 +69,12 @@ class MLP:
         self.mesh_device = mesh_device
         self.mesh_config = mesh_config
         self.ccl = ccl_manager
+        # Residual-stream layout (tt/residual.py). Sharded => this block CONSUMES full emb (the layer's
+        # single pre-MLP all-gather, shared with the router and the shared expert) and RETURNS emb/tp:
+        # the routed side stops at its reduce-scatter, the shared expert reduce-scatters instead of
+        # all-reducing, and the two are added in emb/tp. That removes two of the three all-gathers this
+        # block pays under the replicated layout.
+        self.sharded_residual = use_sharded_residual() and mesh_config is not None and mesh_config.tp > 1
         # Split state dict. MiniMax's SparseMoeBlock has `gate.weight` (no bias) plus a sibling
         # `e_score_correction_bias` buffer; experts live under `experts.*`.
         router_state_dict = dict(substate(state_dict, "gate"))
@@ -78,6 +87,9 @@ class MLP:
             hf_config,
             router_state_dict,
             tensor_cache_path=get_cache_file_name(tensor_cache_path, "router"),
+            # Tokens per device per forward — lets the router size the fused gate's wide bias at init.
+            num_tokens=ep_seq_len_per_chip,
+            mesh_config=mesh_config,
         )
 
         # Cache-only loading: an empty state_dict means "load every tilized weight from the on-disk
@@ -137,6 +149,23 @@ class MLP:
                 for e in range(E)
             ]
         )
+        # The MoE's closing TP reduce-scatter. Routed through MeshConfig so it uses
+        # reduce_scatter_minimal_async with the same ping-pong + barrier semaphores as every other M3
+        # collective, instead of the plain `ttnn.reduce_scatter` prim (which carries no barrier
+        # semaphore), so every M3 collective goes through one managed path.
+        # Contract: reduce over the TP axis, scatter on the last dim.
+        # dim is resolved from the tensor's rank rather than passed as -1: MeshConfig.reduce_scatter
+        # forwards straight to reduce_scatter_minimal_async, which (unlike the ttnn.reduce_scatter
+        # wrapper it replaces) does not normalize a negative dim.
+        moe_reduce_scatter = None
+        if mesh_config is not None and ccl_manager is not None and mesh_config.tp > 1:
+            # Same guard attention's apply_reduce_scatter runs: a non-tile-aligned hidden/tp would land
+            # output-dim padding inside one TP column's residual slice after the scatter.
+            assert_sharded_residual_unpadded(mesh_config, hf_config.hidden_size)
+            moe_reduce_scatter = lambda t: mesh_config.reduce_scatter(  # noqa: E731
+                t, ccl_manager, dim=len(t.shape) - 1, axis=mesh_config.tp_axis
+            )
+
         # Routed experts: DeepSeek EP dispatch/combine + the fused unified_routed_expert_moe kernel with
         # M3's clamped swigluoai activation (baked alpha=1.702 / limit=7.0). See TtMiniMaxMoE.
         self.experts = TtMiniMaxMoE(
@@ -157,36 +186,60 @@ class MLP:
             num_links=ccl_manager.num_links,
             routed_expert_weights_dtype=expert_weight_dtype,
             weight_cache_path=_ep_cache_dir(tensor_cache_path),
+            # Must match the model's routed_scaling_factor (2.0), not the 1.0 default: the internal gate
+            # applies it to the top-k weights, so a stale 1.0 silently halves every routed contribution
+            # as soon as gate_fallback_mode selects the internal gate over the caller-supplied topk.
+            route_scale=getattr(hf_config, "routed_scaling_factor", 1.0),
+            reduce_scatter_fn=moe_reduce_scatter,
         )
         self.ep_num_links = ccl_manager.num_links
 
-    def __call__(self, hidden_states):
+    def __call__(self, hidden_states, actual_isl=None):
         """Forward (prefill): shared expert + expert-parallel routed experts.
 
-        hidden_states: per-device [1,1,S,H] (the prompts/seq-shards live in the mesh rows). The EP
-        dispatch reads rows via cluster_axis=0; the router runs per-row (each row routes its own
-        tokens). The MoE returns reduce-scattered emb/tp; we all-gather it back to full emb so it
-        matches the layer residual's [1,1,S,H]. The shared expert runs on the same input and is added.
+        actual_isl: real (non-pad) tokens in this chunk across the whole SP axis, or None for a full
+        chunk. Drives the padding config below; a wrong value silently drops real tokens, so a caller
+        that does not track it must pass None (correct, it just does the padded work).
+
+        hidden_states: per-device [1,1,S,H] at FULL emb (the prompts/seq-shards live in the mesh rows).
+        Under a sharded residual that full width comes from the layer's single pre-MLP all-gather, and
+        all three consumers here — the router, the shared expert and the EP dispatch — read that one
+        tensor. The EP dispatch reads rows via cluster_axis=0; the router runs per-row (each row routes
+        its own tokens).
+
+        Returns emb/tp under a sharded residual (routed reduce-scatter + shared reduce-scatter, added),
+        or full emb under the replicated one (the routed output is all-gathered back and the shared
+        expert all-reduced), matching the layer residual either way.
         """
-        shared_out = self.shared_expert(hidden_states) if self.shared_expert is not None else None
+        with zone("shared_expert"):
+            shared_out = self.shared_expert(hidden_states) if self.shared_expert is not None else None
 
         Hfull = hidden_states.shape[-1]
-        idx, wts = self.router(hidden_states, True)  # per-row top-k on [1,1,S,H]
+        # ONE padding config per chunk, shared by the gate and the EP dispatch. Built (and memoized) by
+        # the router; None for a full chunk. Both consumers must see the SAME tensor — the gate
+        # sentinel-marks the padded rows and dispatch shortens its token loop to match. See tt/topk.py.
+        padding_config = self.router.build_padding_config(actual_isl)
+        with zone("router_topk"):
+            idx, wts = self.router(hidden_states, padding_config=padding_config)  # per-row top-k
         x3d = ttnn.squeeze(hidden_states, dim=0)  # [1,1,S,H] -> [1,S,H] per device
-        out = self.experts(x3d, topk_indices=idx, topk_weights=wts)  # -> [1,S,H/tp] reduce-scattered
+        out = self.experts(
+            x3d, topk_indices=idx, topk_weights=wts, padding_config=padding_config
+        )  # -> [1,S,H/tp] reduce-scattered
         out = ttnn.unsqueeze(out, dim=0)  # -> [1,1,S,H/tp]
-        if self.mesh_device.shape[1] > 1 and out.shape[-1] < Hfull:
+        if not self.sharded_residual and self.mesh_device.shape[1] > 1 and out.shape[-1] < Hfull:
             # TP all-gather (reduce-scattered emb -> full emb). Use the MANAGED all_gather_async
             # (mesh_config.allgather, semaphore/barrier-managed — the path DeepSeek's MoE uses) instead of
             # the raw ttnn.all_gather: the raw op left a stale tile-face on a non-device-0 TP column's
             # slice under the full-model footprint -> ~1e38 garbage -> token-0 (token-0 hunt 2026-06-29).
-            if self.mesh_config is not None and self.ccl is not None:
-                out = self.mesh_config.allgather(out, self.ccl, axis=1, dim=3)
-            else:
-                out = ttnn.all_gather(
-                    out, dim=-1, cluster_axis=1, num_links=self.ep_num_links, topology=ttnn.Topology.Linear
-                )
+            with zone("tp_allgather"):
+                if self.mesh_config is not None and self.ccl is not None:
+                    out = self.mesh_config.allgather(out, self.ccl, axis=1, dim=3)
+                else:
+                    out = ttnn.all_gather(
+                        out, dim=-1, cluster_axis=1, num_links=self.ep_num_links, topology=ttnn.Topology.Linear
+                    )
         if shared_out is not None:
-            out = ttnn.add(out, shared_out)
+            with zone("add_shared", FINE):
+                out = ttnn.add(out, shared_out)
             shared_out.deallocate(True)
         return out

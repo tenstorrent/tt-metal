@@ -115,8 +115,10 @@ void Device::initialize_smc_dispatch_telemetry_control() {
     }
 
     smc_dispatch_telemetry_control_ = dispatch_telemetry_types::SMCDispatchTelemetryControl{};
+    // TODO: When dispatch telemetry is supported on Quasar, we'll need to pass in the command queue id(s) here.
     smc_dispatch_telemetry_control_.dispatch_telemetry_addr =
-        context_->dispatch_mem_map().get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_TELEMETRY);
+        context_->dispatch_mem_map().get_device_command_queue_addr(
+            CommandQueueDeviceAddrType::DISPATCH_TELEMETRY, /*cq_id=*/0);
     smc_dispatch_telemetry_control_.num_hw_cqs = this->num_hw_cqs_;
     write_smc_dispatch_telemetry_control(*tt_device, smc_dispatch_telemetry_control_);
 }
@@ -545,7 +547,7 @@ void Device::configure_fabric() {
                 hal.get_dev_addr(this->get_programmable_core_type(physical_core), HalL1MemAddrType::LAUNCH));
         }
     }
-    log_info(tt::LogMetal, "Fabric initialized on Device {}", this->id_);
+    log_debug(tt::LogMetal, "Fabric initialized on Device {}", this->id_);
 }
 
 bool Device::initialize(
@@ -677,7 +679,10 @@ bool Device::close() {
 
     this->invalidate_smc_dispatch_telemetry_control();
 
-    tt::tt_metal::MetalContext::instance().get_service_core_manager().impl().on_device_close(this->id_);
+    tt::tt_metal::MetalContext::instance(this->get_context_id())
+        .get_service_core_manager()
+        .impl()
+        .on_device_close(this->id_);
 
     this->disable_and_clear_program_cache();
     this->set_program_cache_misses_allowed(true);
@@ -737,7 +742,10 @@ CoreCoord Device::compute_with_storage_grid_size() const {
     auto grid = tt::get_compute_grid_size(MetalEnvAccessor(*env_).impl(), id_, num_hw_cqs_, dispatch_core_config);
     // Cap to FD-mode grid when service cores are claimed — prevents SD workloads
     // from targeting dispatch-column cores running persistent service kernels.
-    if (auto safe = MetalContext::instance().get_service_core_manager().impl().get_safe_compute_grid(id_)) {
+    if (auto safe = MetalContext::instance(this->get_context_id())
+                        .get_service_core_manager()
+                        .impl()
+                        .get_safe_compute_grid(id_)) {
         grid.x = std::min(grid.x, safe->x);
         grid.y = std::min(grid.y, safe->y);
     }
@@ -911,12 +919,6 @@ void Device::disable_and_clear_program_cache() {
 }
 std::size_t Device::num_program_cache_entries() { return program_cache_.num_entries(); }
 
-// NOLINTNEXTLINE(readability-make-member-function-const)
-void Device::mark_allocations_unsafe() { this->allocator_impl()->mark_allocations_unsafe(); }
-
-// NOLINTNEXTLINE(readability-make-member-function-const)
-void Device::mark_allocations_safe() { this->allocator_impl()->mark_allocations_safe(); }
-
 CoreCoord Device::virtual_program_dispatch_core(uint8_t cq_id) const {
     if (cq_id >= this->command_queues_.size() || !this->command_queues_[cq_id]) {
         return CoreCoord{0, 0};  // Return default for mock devices
@@ -1005,6 +1007,7 @@ std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignmen
         noc_translation_enabled && (hal.get_virtualized_core_types().contains(dev_msgs::AddressableCoreType::DRAM));
     const metal_SocDescriptor& soc_d = MetalEnvAccessor(*env_).impl().get_cluster().get_soc_desc(this->id());
     std::vector<CoreCoord> dram_phy_coords;
+    dram_phy_coords.reserve(num_dram_banks);
     for (int i = 0; i < num_dram_banks; ++i) {
         auto dram_core = this->dram_core_from_dram_channel(i, noc);
         if (dram_is_virtualized) {

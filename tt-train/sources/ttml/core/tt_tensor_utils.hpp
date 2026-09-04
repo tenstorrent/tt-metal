@@ -13,25 +13,25 @@
 
 namespace ttml::core {
 
-void print_tensor_stats(const tt::tt_metal::Tensor& tensor, const std::string& name);
+void print_tensor_stats(const ttnn::Tensor& tensor, const std::string& name);
 
-tt::tt_metal::Tensor zeros_like(const tt::tt_metal::Tensor& tensor);
-tt::tt_metal::Tensor ones_like(const tt::tt_metal::Tensor& tensor);
+ttnn::Tensor zeros_like(const ttnn::Tensor& tensor);
+ttnn::Tensor ones_like(const ttnn::Tensor& tensor);
 
-tt::tt_metal::Tensor empty(
+ttnn::Tensor empty(
     const ttnn::Shape& shape, ttnn::distributed::MeshDevice* device, const ttnn::MemoryConfig& memory_config);
-tt::tt_metal::Tensor full(
+ttnn::Tensor full(
     const ttnn::Shape& shape,
     float value,
     ttnn::distributed::MeshDevice* device,
     ttnn::DataType dtype = ttnn::DataType::BFLOAT16);
-tt::tt_metal::Tensor zeros(
+ttnn::Tensor zeros(
     const ttnn::Shape& shape, ttnn::distributed::MeshDevice* device, ttnn::DataType dtype = ttnn::DataType::BFLOAT16);
-tt::tt_metal::Tensor ones(
+ttnn::Tensor ones(
     const ttnn::Shape& shape, ttnn::distributed::MeshDevice* device, ttnn::DataType dtype = ttnn::DataType::BFLOAT16);
 
 template <class VectorType = float, ttnn::DataType TensorType = ttnn::DataType::BFLOAT16>
-[[nodiscard]] tt::tt_metal::Tensor from_vector(
+[[nodiscard]] ttnn::Tensor from_vector(
     const std::vector<VectorType>& buffer,
     const ttnn::Shape& shape,
     ttnn::distributed::MeshDevice* device,
@@ -39,26 +39,26 @@ template <class VectorType = float, ttnn::DataType TensorType = ttnn::DataType::
     const ttnn::distributed::TensorToMesh* mesh_mapper = nullptr);
 
 template <class T = float>
-[[nodiscard]] std::vector<T> to_vector(const tt::tt_metal::Tensor& tensor) {
+[[nodiscard]] std::vector<T> to_vector(const ttnn::Tensor& tensor) {
     return tensor.to_vector<T>();
 }
 
-[[nodiscard]] bool is_tensor_initialized(const tt::tt_metal::Tensor& tensor);
+[[nodiscard]] bool is_tensor_initialized(const ttnn::Tensor& tensor);
 
 template <class T = float, ttnn::DataType TensorType = ttnn::DataType::BFLOAT16>
-[[nodiscard]] tt::tt_metal::Tensor from_xtensor(
+[[nodiscard]] ttnn::Tensor from_xtensor(
     const xt::xarray<T>& buffer,
     ttnn::distributed::MeshDevice* device,
     ttnn::Layout layout = ttnn::Layout::TILE,
     const ttnn::distributed::TensorToMesh* mesh_mapper = nullptr) {
-    auto shape = tt::tt_metal::experimental::xtensor::get_shape_from_xarray(buffer);
+    auto shape = ttnn::experimental::xtensor::get_shape_from_xarray(buffer);
     auto buffer_view = xtensor_to_span(buffer);
     return from_vector<T, TensorType>(
         std::vector<T>(buffer_view.begin(), buffer_view.end()), shape, device, layout, mesh_mapper);
 }
 
 template <class T = float>
-[[nodiscard]] xt::xarray<T> to_xtensor(const tt::tt_metal::Tensor& tensor) {
+[[nodiscard]] xt::xarray<T> to_xtensor(const ttnn::Tensor& tensor) {
     auto vec = tensor.to_vector<T>();
     const auto& shape = tensor.logical_shape();
     std::vector<size_t> shape_vec(shape.cbegin(), shape.cend());
@@ -70,8 +70,7 @@ std::vector<std::span<std::byte>> get_bytes_from_cpu_tensor(ttnn::Tensor& cpu_te
 
 // Converts a tensor distributed across mesh device into a single xtensor
 template <class T = float>
-[[nodiscard]] xt::xarray<T> to_xtensor(
-    const tt::tt_metal::Tensor& tensor, const ttnn::distributed::MeshToTensor& composer) {
+[[nodiscard]] xt::xarray<T> to_xtensor(const ttnn::Tensor& tensor, const ttnn::distributed::MeshToTensor& composer) {
     auto [vec, shape] = composer.compose<T>(tensor);
     std::vector<size_t> shape_vec(shape.cbegin(), shape.cend());
     return xt::adapt(vec, shape_vec);
@@ -82,7 +81,7 @@ struct IdentityComposer {};
 
 // Converts a tensor distributed across mesh device into a collection of individual xtensors
 template <class T = float>
-auto to_xtensor(const tt::tt_metal::Tensor& tensor, IdentityComposer) {
+auto to_xtensor(const ttnn::Tensor& tensor, IdentityComposer) {
     auto cpu_tensor = tensor.cpu();
     cpu_tensor = cpu_tensor.to_layout(ttnn::Layout::ROW_MAJOR);
     auto cpu_tensors = ttnn::distributed::get_device_tensors(cpu_tensor);

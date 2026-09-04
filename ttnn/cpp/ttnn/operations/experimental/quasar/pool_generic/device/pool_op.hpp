@@ -41,7 +41,7 @@ struct Pool2D {
         const Tensor& input_tensor_;
     };
 
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = std::vector<Tensor>;
 
     // Metal 2.0 single-program factory (MetalV2FactoryConcept). The op-owned

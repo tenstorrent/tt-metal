@@ -44,8 +44,14 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
     bool out_sharded = output.memory_config().is_sharded();
     // Special handling for tensors of W=16 and H%32==0
     // In this case skip untilizing on compute and in writer kernel just copy face0 and face2,
-    // and skip face1 and face3.
-    bool unpad_tensor_w_16 = output.padded_shape()[-1] == 16 && output.padded_shape()[-2] % TILE_HEIGHT == 0;
+    // and skip face1 and face3. Only writer_unary_unpad_width_16_sharded.cpp knows how to extract
+    // faces 0 and 2 from the tiled output emitted by eltwise_copy.cpp; that writer is only reached
+    // inside the `if (out_sharded)` branch. The interleaved-output writer
+    // (writer_unary_stick_layout_interleaved_blocks.cpp) expects the normal untilized row-major rows
+    // produced by untilize.cpp and cannot consume the tiled data, so the fast path must be gated on
+    // out_sharded.
+    bool unpad_tensor_w_16 =
+        out_sharded && output.padded_shape()[-1] == 16 && output.padded_shape()[-2] % TILE_HEIGHT == 0;
     tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
     tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
@@ -147,7 +153,8 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
         .dfb_bindings = {DFBBinding{
             .dfb_spec_name = IN_DFB, .accessor_name = "in", .endpoint_type = DFBEndpointType::PRODUCER}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles_per_core"}},
-        .hw_config = ttnn::create_reader_datamovement_config(a.device()->arch()),
+        .hw_config =
+            ttnn::create_reader_datamovement_config(a.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // ------------------------------------------------------------------------
@@ -158,7 +165,8 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
     // ------------------------------------------------------------------------
     KernelSpec writer{
         .unique_id = WRITER,
-        .hw_config = ttnn::create_writer_datamovement_config(a.device()->arch()),
+        .hw_config =
+            ttnn::create_writer_datamovement_config(a.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
     if (out_sharded) {
         // Both out-sharded writers consume OUT (untilized tiles) and produce the resident OUT_SHARDED
@@ -230,8 +238,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
     ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(a.device()->arch(), compute_config);
     if (fp32_dest_acc_en) {
         std::visit(
-            [&](auto& c) { c.unpack_to_dest_mode.emplace(IN_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32); },
-            compute_hw);
+            [&](auto& c) { c.unpack_modes.emplace(IN_DFB, tt::tt_metal::UnpackMode::UnpackToDest); }, compute_hw);
     }
 
     KernelSpec compute{
