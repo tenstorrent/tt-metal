@@ -1,0 +1,116 @@
+name: "Publish tt-train metrics"
+description: >-
+  Publish the metrics a tt-train leg produced with run_models.py: the loss
+  curves as a PNG artifact, their Mermaid chart in the job summary, and the
+  metrics JSON to the SFTP bucket. Every step is conditional on the files
+  actually being there, so callers only need their own gate (typically
+  `if: !cancelled()` plus whatever marks the leg as a tt-train leg).
+
+inputs:
+  metrics-dir:
+    description: >-
+      Directory containing the metrics set by --output-dir from run_models.py.
+    required: true
+  repo-root:
+    description: >-
+      Directory of tt-metal where the SFTP upload runs from. The metrics JSON is staged into
+      <repo-root>/generated/tt-train-metrics, the path tt_train_model_metrics.txt
+      puts, and the batchfile itself is read from <repo-root>/.github.
+    required: false
+    default: "/work"
+  plot-artifact-name:
+    description: "Artifact name for the loss plot. Must be unique across matrix legs."
+    required: true
+  upload-to-sftp:
+    description: "Whether to upload the metrics JSON. Requires the sftp-* inputs."
+    required: false
+    default: "true"
+  sftp-ssh-private-key:
+    description: "SSH private key for the SFTP bucket."
+    required: false
+    default: ""
+  sftp-username:
+    description: "Username on the SFTP server."
+    required: false
+    default: ""
+  sftp-hostname:
+    description: "Hostname of the SFTP server."
+    required: false
+    default: ""
+
+runs:
+  using: "composite"
+  steps:
+    # `always() &&` on every condition below: callers run this after a failed
+    # test, and a bare `if:` in a composite step is skipped once the job status
+    # is failure.
+    - name: Stage metrics for upload
+      id: stage
+      if: always()
+      shell: bash
+      env:
+        METRICS_DIR: ${{ inputs.metrics-dir }}
+        REPO_ROOT: ${{ inputs.repo-root }}
+      run: |
+        has_json=false
+        has_plots=false
+
+        if compgen -G "$METRICS_DIR/*.json" > /dev/null; then
+          has_json=true
+          staged="$REPO_ROOT/generated/tt-train-metrics"
+          mkdir -p "$staged"
+          # No-op when the leg already wrote into the repo tree; a real copy when
+          # it wrote to NFS.
+          if [ "$(cd "$METRICS_DIR" && pwd -P)" != "$(cd "$staged" && pwd -P)" ]; then
+            cp -f "$METRICS_DIR"/*.json "$staged"/
+          fi
+        fi
+
+        if compgen -G "$METRICS_DIR/plots/*losses.png" > /dev/null; then
+          has_plots=true
+        fi
+
+        {
+          echo "has-json=$has_json"
+          echo "has-plots=$has_plots"
+        } >> "$GITHUB_OUTPUT"
+
+    # archive: false gives a direct link to the PNG, and run_models.py prefixes
+    # each filename with the model + card so matrix legs cannot collide.
+    - name: Upload loss plot
+      id: upload-loss-plot
+      if: ${{ always() && steps.stage.outputs.has-plots == 'true' }}
+      uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+      with:
+        name: ${{ inputs.plot-artifact-name }}
+        path: ${{ inputs.metrics-dir }}/plots/*losses.png
+        if-no-files-found: warn
+        retention-days: 30
+        archive: false
+
+    - name: Add loss plot to summary
+      if: ${{ always() && steps.upload-loss-plot.outputs.artifact-url != '' }}
+      shell: bash
+      env:
+        METRICS_DIR: ${{ inputs.metrics-dir }}
+        PLOT_ARTIFACT_URL: ${{ steps.upload-loss-plot.outputs.artifact-url }}
+      run: |
+        {
+          if compgen -G "$METRICS_DIR/plots/*losses.md" > /dev/null; then
+            cat "$METRICS_DIR"/plots/*losses.md
+          fi
+          echo "[Download full loss plot image]($PLOT_ARTIFACT_URL)"
+        } >> "$GITHUB_STEP_SUMMARY"
+
+    # Referenced by name rather than ./.github/actions/... : a nested local
+    # `uses` resolves against $GITHUB_WORKSPACE, which is not the repo root for
+    # callers that check out into a subdirectory.
+    - name: Upload metrics data to AWS SFTP bucket
+      if: ${{ always() && inputs.upload-to-sftp == 'true' && steps.stage.outputs.has-json == 'true' }}
+      uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
+      with:
+        ssh-private-key: ${{ inputs.sftp-ssh-private-key }}
+        sftp-batchfile: ${{ inputs.repo-root }}/.github/actions/upload-data-via-sftp/tt_train_model_metrics.txt
+        username: ${{ inputs.sftp-username }}
+        hostname: ${{ inputs.sftp-hostname }}
+        path: ${{ inputs.repo-root }}

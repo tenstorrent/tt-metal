@@ -208,25 +208,17 @@ jobs:
               --out /work/power_report.json \
               -- bash -c '${{ matrix.test-group.cmd }}'
 
-      - name: Upload loss plot
-        id: upload-loss-plot
+      - name: 📈 Publish tt-train metrics
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        uses: ./docker-job/.github/actions/publish-tt-train-metrics
         with:
-          # Set archive: false to get a direct link to the PNG. run_models.py prefixes
-          # each PNG filename with the model + card, so avoiding collision between each
-          # matrix job.
-          name: loss-plot-${{ matrix.test-group.name }}-${{ matrix.test-group.sku }}
-          path: /work/generated/tt-train-metrics/plots/*losses.png
-          if-no-files-found: warn
-          retention-days: 30
-          archive: false
-
-      - name: Add loss plot to summary
-        if: ${{ !cancelled() && steps.upload-loss-plot.outputs.artifact-url != '' }}
-        run: |
-          cat /work/generated/tt-train-metrics/plots/*losses.md >> $GITHUB_STEP_SUMMARY
-          echo "[Download full loss plot image](${{ steps.upload-loss-plot.outputs.artifact-url }})" >> $GITHUB_STEP_SUMMARY
+          metrics-dir: /work/generated/tt-train-metrics
+          repo-root: /work
+          plot-artifact-name: loss-plot-${{ matrix.test-group.name }}-${{ matrix.test-group.sku }}
+          upload-to-sftp: ${{ inputs.test-category == 'perf' }}
+          sftp-ssh-private-key: ${{ secrets.TT_TRAIN_AWS_KEY }}
+          sftp-username: ${{ secrets.TT_TRAIN_AWS_USERNAME }}
+          sftp-hostname: ${{ secrets.TT_TRAIN_AWS_HOSTNAME }}
 
       - name: Upload power report
         if: ${{ !cancelled() }}
@@ -236,16 +228,6 @@ jobs:
           path: ${{ github.workspace }}/docker-job/power_report.json
           if-no-files-found: warn
           retention-days: 30
-
-      - name: Upload metrics data to AWS SFTP bucket
-        if: ${{ !cancelled() && inputs.test-category == 'perf' && hashFiles('docker-job/generated/tt-train-metrics/**') != '' }}
-        uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
-        with:
-          ssh-private-key: ${{ secrets.TT_TRAIN_AWS_KEY }}
-          sftp-batchfile: /work/.github/actions/upload-data-via-sftp/tt_train_model_metrics.txt
-          username: ${{ secrets.TT_TRAIN_AWS_USERNAME }}
-          hostname: ${{ secrets.TT_TRAIN_AWS_HOSTNAME }}
-          path: /work
 
       - name: 📊 CCache Report
         if: ${{ !cancelled() }}
