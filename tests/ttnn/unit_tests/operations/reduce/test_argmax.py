@@ -277,3 +277,92 @@ def test_argmax_reduce_all_multicore_no_deadlock(device):
     ref = int(torch.argmax(t.reshape(-1)))
     got = int(ttnn.to_torch(ttnn.from_device(result["out"])).item())
     assert got == ref, f"argmax reduce_all mismatch: got {got}, expected {ref}"
+
+
+def _run_argmax_in_worker(fn, timeout_s=60.0):
+    """Run `fn` on a worker thread so a device hang surfaces as an assertion, not a hung session."""
+    result = {}
+
+    def _run():
+        try:
+            result["out"] = fn()
+        except Exception as exc:  # surface device/compile errors to the main thread
+            result["error"] = exc
+
+    worker = threading.Thread(target=_run, daemon=True)
+    worker.start()
+    worker.join(timeout=timeout_s)
+    return worker, result
+
+
+@pytest.mark.timeout(120, method="thread")
+@pytest.mark.parametrize(
+    "tensor_shape, core_ranges",
+    [
+        # More sub-grid cores than blocks of work
+        ([8, 32], [((0, 0), (1, 1))]),  # 4 cores, 2 blocks
+        ([1, 64], [((0, 0), (7, 0))]),  # 8 cores, 4 blocks
+        # Fewer cores than blocks
+        ([1, 80], [((0, 0), (3, 0))]),  # 4 cores, 5 blocks -> 2 blocks each = 128 units for 80
+        ([1, 144], [((0, 0), (7, 0))]),  # 8 cores, 9 blocks -> 2 blocks each = 256 units for 144
+        # Two ranges exercise the second core group (cores1 / red_dim_units1).
+        ([4, 80], [((0, 0), (1, 0)), ((0, 1), (1, 1))]),
+        # Widths that already split cleanly
+        ([1, 128], [((0, 0), (7, 0))]),
+        ([8, 1024], [((0, 0), (7, 0))]),
+    ],
+)
+def test_argmax_sub_core_grids_work_split(device, tensor_shape, core_ranges):
+    """
+    Guard the sub_core_grids work-split: rounded-up per-core shares can overshoot the
+    reduction dim by more than one core's share, and trimming only the last core then underflowed
+    uint32 into a large read size and a hang.  Slices are now clamped per core instead.
+    """
+    torch.manual_seed(0)
+    grids = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(*start), ttnn.CoreCoord(*end)) for start, end in core_ranges}
+    )
+
+    torch_tensor = torch.randn(*tensor_shape, dtype=torch.bfloat16)
+    ttnn_tensor = ttnn.from_torch(torch_tensor, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    def _run():
+        out = ttnn.argmax(ttnn_tensor, dim=-1, keepdim=False, sub_core_grids=grids)
+        ttnn.synchronize_device(device)
+        return out
+
+    worker, result = _run_argmax_in_worker(_run)
+
+    assert not worker.is_alive(), f"ttnn.argmax timed out for shape={tensor_shape}, " f"sub_core_grids={core_ranges}"
+    if "error" in result:
+        raise result["error"]
+
+    ttnn_result = ttnn.to_torch(ttnn.from_device(result["out"])).to(torch.int32)
+    assert_equal(torch.argmax(torch_tensor, dim=-1, keepdim=False), ttnn_result)
+
+
+@pytest.mark.timeout(120, method="thread")
+def test_argmax_reduce_all_sub_core_grids_idle_cores(device):
+    """
+    dim=None uses the kernel's separate reduce_all block (its own partial-write and semaphore
+    sequence); drive it with a sub_core_grids wide enough to leave cores with no work.
+    """
+    torch.manual_seed(0)
+    # 4 cores for a 32-wide reduction dim = 2 blocks of work, so two cores are left idle.
+    grids = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
+    t = torch.randn(8, 32, dtype=torch.bfloat16)
+    ttnn_in = ttnn.from_torch(t, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    def _run():
+        out = ttnn.argmax(ttnn_in, sub_core_grids=grids)  # dim=None -> reduce_all
+        ttnn.synchronize_device(device)
+        return out
+
+    worker, result = _run_argmax_in_worker(_run)
+
+    assert not worker.is_alive(), "ttnn.argmax(dim=None) timed out with sub_core_grids leaving idle cores"
+    if "error" in result:
+        raise result["error"]
+
+    got = int(ttnn.to_torch(ttnn.from_device(result["out"])).item())
+    assert got == int(torch.argmax(t.reshape(-1))), f"reduce_all mismatch: got {got}"

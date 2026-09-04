@@ -5,11 +5,12 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>  // tt::ChipId
-#include <umd/device/types/core_coordinates.hpp>  // CoreType
+#include <umd/device/types/core_coordinates.hpp>          // CoreType
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 
 namespace tt::tt_metal {
@@ -51,11 +52,14 @@ CoreType resolve_dispatch_core_type(tt::ARCH arch, DispatchCoreType dispatch_cor
 
 // Resolve the dispatch core axis from a DispatchCoreConfig without depending on MetalContext.
 // Uses the config's explicit axis if set; otherwise falls back to arch-based resolution.
-// TODO: https://github.com/tenstorrent/tt-metal/issues/39974
 DispatchCoreAxis resolve_dispatch_core_axis(
     const DispatchCoreConfig& config, tt::ARCH arch, tt_fabric::FabricTensixConfig fabric_tensix_config);
 
-// Helper functions to get the dispatch core config/type
-DispatchCoreConfig get_dispatch_core_config();
+// Resolve a complete dispatch core config from explicit platform properties and optional caller preferences.
+DispatchCoreConfig resolve_dispatch_core_config(
+    tt::ARCH arch,
+    tt_fabric::FabricTensixConfig fabric_tensix_config,
+    std::optional<DispatchCoreType> type = std::nullopt,
+    std::optional<DispatchCoreAxis> axis = std::nullopt);
 
 }  // namespace tt::tt_metal

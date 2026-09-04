@@ -134,7 +134,7 @@ public:
     std::optional<int> get_physical_slot(ChipId chip) const;
 
     //! device driver and misc apis
-    std::optional<tt::umd::semver_t> get_ethernet_firmware_version() const;
+    std::optional<tt::umd::SemVer> get_ethernet_firmware_version() const;
 
     void deassert_risc_reset_at_core(
         const tt_cxy_pair& core, const tt::umd::RiscType& soft_resets, bool staggered_start = true) const;

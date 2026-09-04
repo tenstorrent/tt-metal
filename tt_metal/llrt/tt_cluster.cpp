@@ -1073,7 +1073,7 @@ std::unique_ptr<tt::umd::SysmemBuffer> Cluster::map_sysmem_buffer(
     return sysmem_manager->map_sysmem_buffer(buffer, sysmem_buffer_size, map_to_noc, device_access);
 }
 
-std::optional<tt::umd::semver_t> Cluster::get_ethernet_firmware_version() const {
+std::optional<tt::umd::SemVer> Cluster::get_ethernet_firmware_version() const {
     return this->driver_->get_ethernet_firmware_version();
 }
 
@@ -1611,7 +1611,7 @@ bool Cluster::supports_ethernet_link_retraining() const {
         return true;
     }
     if (this->arch_ == tt::ARCH::BLACKHOLE) {
-        return this->get_ethernet_firmware_version() >= tt::umd::semver_t(1, 9, 0);
+        return this->get_ethernet_firmware_version() >= tt::umd::SemVer(1, 9, 0);
     }
     return false;
 }

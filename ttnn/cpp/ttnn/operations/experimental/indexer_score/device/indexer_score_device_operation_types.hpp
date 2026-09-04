@@ -12,6 +12,7 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/transformer/sdpa/device/block_cyclic_layout.hpp"  // ttnn::prim::BlockCyclicLayout (shared)
 #include "ttnn/operations/ccl/ccl_host_types.hpp"                           // ttnn::ccl::Topology
+#include "ttnn/operations/ccl/shared_with_host/snake_ring.hpp"
 #include <tt-metalium/base_types.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/global_semaphore.hpp>
@@ -42,14 +43,20 @@ using ttnn::prim::BlockCyclicLayout;
 // is batch-1 scratch; only cache_batch_idx is gathered. The fused program factory co-schedules the all-gather
 // (the only Linear+fuse-capable AG) into the SAME program as the indexer compute, wiring a producer->consumer
 // semaphore handshake so the reader starts scoring once the gather lands. Scalar AG config only (tensors live in
-// tensor_args). All fields and semaphore addresses are hashed because the descriptor embeds them in AG worker
-// allocation/routing/runtime arguments and the cache-hit override only rebuilds consumer kernels. ring_size /
-// ring_index are DERIVED from the mesh + coordinate (cluster_axis), not stored.
+// tensor_args). Routing fields are hashed because they shape AG worker allocation and topology. Semaphore
+// addresses and other dispatch-time values are deliberately hash-excluded; the cache-hit override re-patches
+// the four AG worker kernels and the consumer kernels. ring_size / ring_index are DERIVED from the mesh +
+// coordinate (cluster_axis), not stored.
 struct FusedRingConfig {
     uint32_t num_links{1};  // fabric links for the gather
     ttnn::ccl::Topology topology{ttnn::ccl::Topology::Linear};
     std::vector<tt::tt_metal::GlobalSemaphore> ag_semaphore;  // the all-gather's own out-ready semaphores
     std::optional<tt::tt_metal::SubDeviceId> ag_sub_device_id{std::nullopt};
+    bool full_mesh{false};
+    ttnn::ccl::snake_ring::Orientation snake_orientation{ttnn::ccl::snake_ring::Orientation::Row};
+    uint32_t mesh_rows{0};
+    uint32_t mesh_cols{0};
+    std::optional<uint64_t> route_plan_hash;
     // NOTE: the all-gather concat dim is structurally fixed to seq (dim 2) -- the reader's block-cyclic
     // permutation assumes it -- so it is a named constant at the AG call site, not a configurable field. The AG
     // workers' grid offset is likewise computed by the factory (reserved-column math), not carried here.
@@ -111,6 +118,14 @@ struct operation_attributes_t {
     // K), which selects the classic program factory and stays byte-identical.
     std::optional<FusedRingConfig> fused_ring{std::nullopt};
     bool has_fused_ring() const { return fused_ring.has_value(); }
+    // KV dedup: KEYS striped this many times finer than the queries are sharded. Deliberately NOT folded into
+    // block_cyclic -- device_causal_geometry indexes by SP-ring rank, so that would shift the causal diagonal.
+    uint32_t key_stripe_split{1};  // 1 = pre-dedup. HASHED: it bakes the reader's invP divisors.
+    // The (stripes, per-stripe chunk) pair the invP remap decodes with; the product is the global chunk either way.
+    uint32_t key_stripes() const { return block_cyclic.has_value() ? block_cyclic->sp * key_stripe_split : 1; }
+    uint32_t key_stripe_chunk() const {
+        return block_cyclic.has_value() ? block_cyclic->chunk_local / key_stripe_split : 0;
+    }
 };
 
 struct tensor_args_t {

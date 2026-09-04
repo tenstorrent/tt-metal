@@ -582,13 +582,13 @@ std::set<experimental::ProgramAnalysisData> translateProgramsPerfResults(
 bool doAllDispatchCoresComeAfterNonDispatchCores(
     const IDevice* device, const std::vector<CoreCoord>& virtual_cores, ContextId context_id) {
     TT_ASSERT(context_id == extract_context_id(device));
-    const auto& dispatch_core_config = get_dispatch_core_config();
-    auto& env = MetalEnvAccessor(tt::tt_metal::MetalContext::instance(context_id).get_env()).impl();
+    auto& metal_ctx = tt::tt_metal::MetalContext::instance(context_id);
+    const auto& dispatch_core_config = metal_ctx.get_dispatch_core_config();
+    auto& env = MetalEnvAccessor(metal_ctx.get_env()).impl();
     const std::vector<CoreCoord> logical_dispatch_cores =
         get_logical_dispatch_cores(env, device->id(), device->num_hw_cqs(), dispatch_core_config);
 
-    const CoreType dispatch_core_type =
-        resolve_dispatch_core_type(env, device->id(), dispatch_core_config);
+    const CoreType dispatch_core_type = resolve_dispatch_core_type(env, device->id(), dispatch_core_config);
     std::vector<CoreCoord> virtual_dispatch_cores;
     virtual_dispatch_cores.reserve(logical_dispatch_cores.size());
     for (const CoreCoord& core : logical_dispatch_cores) {

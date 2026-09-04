@@ -59,6 +59,7 @@ void copy_and_pack_block(uint32_t in_cb, uint32_t out_cb, uint32_t M_block_tiles
 //
 // N_block_tiles must be even (enforced host-side).
 void swiglu_block(uint32_t in_cb, uint32_t bias_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
+    CircularBuffer cb_out(out_cb);
 #ifdef FUSE_BIAS
     reconfig_data_format(in_cb, bias_cb);
 #else
@@ -98,7 +99,7 @@ void swiglu_block(uint32_t in_cb, uint32_t bias_cb, uint32_t out_cb, uint32_t M_
             pack_tile(GATE_DST, out_cb);
             tile_regs_release();
         }
-        cb_push_back(out_cb, out_N_block_tiles);
+        cb_out.push_back(out_N_block_tiles);
     }
 }
 #endif  // FUSE_SWIGLU
