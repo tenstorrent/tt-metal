@@ -3,47 +3,41 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-
 #include "api/compute/bcast.h"
-#include "api/dataflow/dataflow_buffer.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "experimental/kernel_args.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
+
+namespace ckl = compute_kernel_lib;
 
 void kernel_main() {
-    std::uint32_t w = 0;
-    constexpr std::uint32_t onetile = 1;
-
-    DataflowBuffer dfb_a(dfb::in0);
-    DataflowBuffer dfb_b(dfb::in1);
-    DataflowBuffer dfb_out(dfb::out);
-
     auto B = get_arg(args::B);
     auto Ht = get_arg(args::Ht);
     auto Wt = get_arg(args::Wt);
 
-    compute_kernel_hw_startup(dfb::in0, dfb::in1, dfb::out);
-    bcast_init<BCAST_LLKOP, BCAST_DIM>(dfb::in0, dfb::in1);
-
-    for (std::uint32_t b = 0; b < B; b++) {
-        for (std::uint32_t h = 0; h < Ht; h++) {
-            dfb_b.wait_front(onetile);
-            for (std::uint32_t w = 0; w < Wt; w++) {
-                dfb_a.wait_front(onetile);
-
-                tile_regs_acquire();
-                BCAST_OP<BroadcastType::COL>(dfb::in0, dfb::in1, 0, 0, 0);
-                tile_regs_commit();
-
-                dfb_a.pop_front(onetile);
-
-                dfb_out.reserve_back(onetile);
-
-                tile_regs_wait();
-                pack_tile(0, dfb::out);
-                tile_regs_release();
-
-                dfb_out.push_back(onetile);
-            }
-            dfb_b.pop_front(onetile);
-        }
+    // The factory launches this kernel across the full device grid and assigns zero work to idle
+    // cores. Preserve the legacy kernel's no-op behavior instead of forming an empty grid shape.
+    if (B == 0 || Ht == 0 || Wt == 0) {
+        return;
     }
+
+    compute_kernel_hw_startup(dfb::in0, dfb::in1, dfb::out);
+
+    ckl::eltwise_chain(
+        ckl::IterationShape::grid(B * Ht, Wt),
+        ckl::BinaryFpu<
+            CHAIN_BCAST_OP,
+            // dfb_lhs_id: one tile per (row,col)
+            ckl::input(dfb::in0, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
+            // dfb_rhs_id: one broadcast tile per row
+            ckl::input(
+                dfb::in1,
+                CHAIN_BCAST_DIM,
+                ckl::WaitPolicy::PerTile,
+                ckl::PopPolicy::PerTile,
+                ckl::InputTileMapping::Col,
+                ckl::DataFormatReconfig::Disabled)>{},
+        // Output remains one tile per (row,col); only the column-shaped input is streamed per row.
+        ckl::PackTile<ckl::output(
+            dfb::out, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>{});
 }
