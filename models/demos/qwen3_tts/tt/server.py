@@ -780,8 +780,10 @@ class _DeviceSampler:
         # and the real temperature is carried by the noise scale instead.
         self.temp_tensor = _rm(torch.full((1,), 1.0, dtype=torch.float32), ttnn.bfloat16)
 
+        # [1, 32, 1, 64]: one tile per slot along dim 1 so row slices are tile-aligned
+        # (the old [1, 1, 32, 64] layout lowered to Untilize→Slice→Tilize per call).
         self.noise_tt = ttnn.from_torch(
-            torch.zeros(1, 1, _NOISE_SLOTS, _SAMPLING_TOPK, dtype=torch.bfloat16),
+            torch.zeros(1, _NOISE_SLOTS, 1, _SAMPLING_TOPK, dtype=torch.bfloat16),
             device=device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
@@ -789,7 +791,7 @@ class _DeviceSampler:
             mesh_mapper=self._mesh_mapper,
         )
         # Host-side scratch reused every frame (no per-frame allocation).
-        self._noise_cpu = torch.empty(1, 1, _NOISE_SLOTS, _SAMPLING_TOPK, dtype=torch.float32)
+        self._noise_cpu = torch.empty(1, _NOISE_SLOTS, 1, _SAMPLING_TOPK, dtype=torch.float32)
         self._noise_cpu[..., self.top_k :] = _SAMPLING_NEG
         self._zero_noise = os.environ.get("QWEN3_TTS_CP_NOISE", "1") == "0"
 
@@ -833,12 +835,12 @@ class _DeviceSampler:
             # Debug gate: with no noise, Gumbel-max degenerates to argmax over the
             # top-k, so the whole device chain must reproduce the host greedy path
             # token-for-token. Used to prove the chain independently of the RNG.
-            self._noise_cpu[0, 0, :, : self.top_k] = 0.0
+            self._noise_cpu[0, :, 0, : self.top_k] = 0.0
         else:
             u = torch.rand(_NOISE_SLOTS, self.top_k)
             u.clamp_(1e-12, 1.0 - 1e-12)
             # Gumbel(0,1) = -log(-log(u)); fold the temperature in (argmax is scale-free).
-            self._noise_cpu[0, 0, :, : self.top_k] = -torch.log(-torch.log(u)) * self.temperature
+            self._noise_cpu[0, :, 0, : self.top_k] = -torch.log(-torch.log(u)) * self.temperature
         host = ttnn.from_torch(
             self._noise_cpu.bfloat16(),
             dtype=ttnn.bfloat16,
@@ -874,7 +876,7 @@ class _DeviceSampler:
         )
         if padded is not logits_tt:
             ttnn.deallocate(padded)
-        noise_row = ttnn.slice(self.noise_tt, [0, 0, slot, 0], [1, 1, slot + 1, _SAMPLING_TOPK])
+        noise_row = ttnn.slice(self.noise_tt, [0, slot, 0, 0], [1, slot + 1, 1, _SAMPLING_TOPK])
         perturbed = ttnn.add(values, noise_row)
         ttnn.deallocate(values)
         ttnn.deallocate(noise_row)

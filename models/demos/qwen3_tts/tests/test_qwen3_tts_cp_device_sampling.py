@@ -128,10 +128,12 @@ def test_noise_tile_is_fresh_per_frame_and_per_slot(device):
     second = _all_chips(device, sampler.noise_tt)[0].float()
 
     assert not torch.equal(first, second), "noise tile did not change between frames"
-    assert not torch.equal(first[0, 0], first[0, 1]), "slots 0 and 1 share one Gumbel row"
+    # Host layout is [1, slots, 1, top_k]; device to_torch may report the padded logical shape.
+    cpu = sampler._noise_cpu[0, :, 0]
+    assert not torch.equal(cpu[0], cpu[1]), "slots 0 and 1 share one Gumbel row"
     # Columns at/after top_k carry the mask that applies the top-k truncation.
-    assert torch.all(first[0, :, TOP_K:] < _SAMPLING_NEG / 2), "top-k truncation mask missing"
-    assert torch.all(first[0, :, :TOP_K] > _SAMPLING_NEG / 2), "live columns were masked"
+    assert torch.all(cpu[:, TOP_K:] < _SAMPLING_NEG / 2), "top-k truncation mask missing"
+    assert torch.all(cpu[:, :TOP_K] > _SAMPLING_NEG / 2), "live columns were masked"
 
 
 def test_noise_tile_follows_torch_seed(device):
@@ -193,7 +195,7 @@ def test_chain_is_argmax_gather_of_perturbed_topk(device):
         logits_tt = _logits_to_device(device, logits)
         torch.manual_seed(100 + i)
         sampler.refresh_noise()
-        noise = _all_chips(device, sampler.noise_tt)[0, 0, 0].float()
+        noise = sampler._noise_cpu[0, 0, 0].float()
 
         sampler.append_sampling(logits_tt, 0, tok)
         got = int(_all_chips(device, ttnn.reshape(tok, [1, 1, 1, 1])).flatten()[0])

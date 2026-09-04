@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Per-op perf report for the two windows the demo optimisation targets: Talker
-prefill, and one autoregressive decode frame.
+"""Per-op perf report for the windows the demo optimisation targets: Talker
+prefill, one autoregressive decode frame, and the ECAPA speaker encoder.
 
 Every window here **replays the Metal trace the demo replays**, exactly once,
 between a ``start`` / ``stop`` signpost pair. That is the difference from the
@@ -21,6 +21,7 @@ Windows (one Tracy capture each — ``-k`` selects one)::
     test_decode_talker      Talker decode trace (28 layers + codec_head)
     test_decode_cp          fused CodePredictor frame trace           ── decode
     test_decode_frame       CP frame + Talker decode = one AR frame   ── throughput
+    test_speaker_encoder    ECAPA forward trace (jim_reference mel)   ── TTFA
 
 Splitting them is deliberate. The whole AR frame is ~4,200 device ops and the
 profiler's DRAM buffer defaults to **1,000 programs**; past that it silently
@@ -67,6 +68,7 @@ from models.demos.qwen3_tts.tests.qwen3_tts_profile_demo_common import (
     build_fused_cp_profile_buffers,
     build_or_load_demo_icl_state,
     build_talker_decode_profile_buffers,
+    capture_speaker_encoder_forward_trace,
     capture_talker_decode_trace,
     capture_talker_prefill_trace,
     demo_target_text,
@@ -95,7 +97,13 @@ except ModuleNotFoundError:
 # Device ops per window, for the profiler-budget check below. Measured on N300 TP=2
 # (per chip, as ops_list.md counts them) and rounded up; N150 differs mainly by losing
 # the collectives. Only the order of magnitude matters — this gates the budget check.
-_WINDOW_OPS = {"prefill": 800, "decode_talker": 1600, "decode_cp": 4400, "decode_frame": 6000}
+_WINDOW_OPS = {
+    "prefill": 800,
+    "decode_talker": 1600,
+    "decode_cp": 4400,
+    "decode_frame": 6000,
+    "speaker_encoder": 500,
+}
 _DEFAULT_PROFILER_PROGRAM_SUPPORT_COUNT = 1000
 
 
@@ -442,3 +450,35 @@ def test_decode_frame(profile_device, demo_model):
         fps = 1e3 / median_ms
         rate = f" = {fps:.2f} frames/s = {fps / 12.5:.2f}x realtime at 12.5 fps"
     print(f"\n[perf_report] AR frame (CP + Talker decode): {_ms(median_ms)}{rate}")
+
+
+# ── Speaker encoder ───────────────────────────────────────────────────────────
+
+
+@pytest.mark.timeout(2400)
+def test_speaker_encoder(profile_device, demo_model):
+    """One replay of the ECAPA forward trace (``QWEN3_TTS_SE_TRACE=1`` path).
+
+    Mel length follows ``jim_reference.wav`` (~384). This is the whole encoder on
+    device — entry TDNN, 3× SERes2Net, MFA, ASP, FC — not the partial
+    ``speaker_tdnn`` / ``speaker_block`` single-layer slices (those profile
+    untraced subgraphs with synthetic weights and miss most conv work).
+    """
+    device = profile_device
+    model, main_weights = demo_model
+    _check_profiler_budget("speaker_encoder")
+    flush_profiler(device)
+
+    st = capture_speaker_encoder_forward_trace(device, model, main_weights)
+    tid = st["trace_id"]
+
+    median_ms = _replay(device, [tid], _reps())
+    ttnn.synchronize_device(device)
+    flush_profiler(device)
+
+    signpost("start")
+    ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
+    ttnn.synchronize_device(device)
+    signpost("stop")
+
+    print(f"\n[perf_report] speaker_encoder mel_T={st['mel_len']}: {_ms(median_ms)}")

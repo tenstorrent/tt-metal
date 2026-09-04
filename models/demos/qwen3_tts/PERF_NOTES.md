@@ -348,10 +348,10 @@ stake against a 26 us matmul; not attempted.
 
 #### Not on the list, found while auditing
 
-The Gumbel noise row is sliced out of a `[1, 1, 32, 64]` tile with
-`ttnn.slice(noise, [0,0,slot,0], ...)`, which is a non-tile-aligned row slice and lowers to
-**Untilize -> Slice -> Tilize, 10.8 us x 14 = 0.15 ms/frame**. Storing the noise as
-`[1, 32, 1, 64]` and slicing dim 1 makes every slice tile-aligned. Not done.
+The Gumbel noise row was sliced out of a `[1, 1, 32, 64]` tile with
+`ttnn.slice(noise, [0,0,slot,0], ...)`, which is a non-tile-aligned row slice and lowered to
+**Untilize -> Slice -> Tilize, 10.8 us x 14 = 0.15 ms/frame**. Fixed: noise is now
+`[1, 32, 1, 64]` with dim-1 slices (tile-aligned).
 
 ---
 
