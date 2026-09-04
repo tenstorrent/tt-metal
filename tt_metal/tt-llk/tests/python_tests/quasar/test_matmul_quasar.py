@@ -234,12 +234,6 @@ TINY_MATMUL_FORMATS = [
     if not format.input_format.is_mx_format()
     and not format.output_format.is_mx_format()
 ]
-TINY_MATMUL_PERF_FORMATS = [
-    format
-    for format in TINY_MATMUL_FORMATS
-    if format.input_format == DataFormat.Float16_b
-    and format.output_format == DataFormat.Float16_b
-]
 
 
 _ARCH = get_chip_architecture()

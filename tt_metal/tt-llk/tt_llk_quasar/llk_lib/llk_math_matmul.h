@@ -51,7 +51,7 @@ struct _llk_math_matmul_execution_geometry_t
  * @param src_a_shape: Input 1/SrcA tile shape.
  */
 inline _llk_math_matmul_execution_geometry_t _llk_math_matmul_execution_geometry_(
-    const std::uint8_t ct_dim, const std::uint8_t rt_dim, const TensorShape& src_b_shape, const TensorShape& src_a_shape)
+    const std::uint8_t ct_dim, const std::uint8_t rt_dim, const TensorShape src_b_shape, const TensorShape src_a_shape)
 {
     LLK_ASSERT(validate_matmul_tensor_shapes_(src_b_shape, src_a_shape), "unsupported SrcB/SrcA TensorShape pair for matmul");
 
@@ -567,8 +567,8 @@ template <ckernel::MathFidelity MATH_FIDELITY_TYPE, bool ENABLE_DIRECT_INDEXING 
 inline void _llk_math_matmul_init_(
     const std::uint8_t ct_dim,
     const std::uint8_t rt_dim,
-    const TensorShape& src_b_shape = DEFAULT_TENSOR_SHAPE,
-    const TensorShape& src_a_shape = DEFAULT_TENSOR_SHAPE)
+    const TensorShape src_b_shape = DEFAULT_TENSOR_SHAPE,
+    const TensorShape src_a_shape = DEFAULT_TENSOR_SHAPE)
 {
     if constexpr (ENABLE_DIRECT_INDEXING || ENABLE_2X_FORMAT)
     {
