@@ -122,6 +122,186 @@ class DeviceTileStitcher:
         return ttnn.concat(result_rows, dim=-2)
 
 
+class NeighborTileBlender:
+    """The gather-free stitch: each tile cross-fades from its two neighbour halos in place.
+
+    `DeviceTileStitcher` needs every tile on every device, so the wave all-gathers `wave_size`
+    tiles to each chip -- ~1.4 GB/device/wave on a 4x32 quad, of which a tile actually reads two
+    overlap strips. This class exchanges exactly those strips: a `neighbor_pad_async` per mesh
+    axis hands each device the trailing rows of the tile above and the trailing columns of the
+    tile to its left, both from the **raw** neighbours -- which is precisely what the reference
+    blend consumes (`stitch`'s "original tiles, not previously blended ones" asymmetry).
+
+    The blend itself is two matmuls against per-device constant weights, built from each
+    device's grid position:
+
+        V^T = [up_halo; T]^T @ Mv          # vertical cross-fade into the top band
+        out = [left_halo | V] @ Nh         # horizontal cross-fade into the left band
+
+    ``Mv`` folds the ramp, the halo alignment (a boundary's true overlap inside the uniform
+    ``hpad``-row halo) and the identity passthrough into one ``(hpad+H, H)`` matrix; ``Nh`` is the
+    ``(wpad+W, W)`` analog. Row-0 tiles, column-0 tiles (including each packed chunk's first
+    column, whose axis-neighbour belongs to a different chunk) and pad slots get pure identity
+    weights, so the garbage their halos carry is multiplied by zero rather than special-cased --
+    every device runs the same program, and the per-position variation lives in the constants.
+
+    Requires the wave to be **grid-aligned**: tile ``(chunk k, r, c)`` on device
+    ``(r, k * grid_cols + c)``, so grid neighbours are mesh-axis neighbours. Output per device is
+    the blended, untrimmed tile in fp32 ROW_MAJOR (the blend runs fp32 for the same reason the
+    gather stitch does); the reference's trims and the canvas placement move to the host, which
+    only slices and concatenates -- every cross-fade already happened here.
+    """
+
+    def __init__(self, mesh_device: ttnn.MeshDevice, ccl_manager) -> None:
+        assert ccl_manager is not None, "the neighbour exchange needs a CCLManager"
+        self.mesh_device = mesh_device
+        self.ccl_manager = ccl_manager
+        self._weights: dict[tuple, tuple] = {}
+        self._compute = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True
+        )
+
+    @staticmethod
+    def _band_matrix(pad: int, extent: int, overlap: int) -> torch.Tensor:
+        """``(pad+extent, extent)`` mixing matrix: identity, with the first ``overlap`` outputs
+        cross-faded from the halo's last ``overlap`` positions -- `_ramp_pair`'s weights as matrix
+        entries. ``overlap == 0`` is the pure identity (edge tiles, pad slots)."""
+        m = torch.zeros(pad + extent, extent, dtype=torch.float32)
+        for k in range(extent):
+            if k < overlap:
+                m[pad - overlap + k, k] = 1.0 - k / overlap
+                m[pad + k, k] = k / overlap
+            else:
+                m[pad + k, k] = 1.0
+        return m
+
+    def _geometry_weights(
+        self,
+        *,
+        grid_rows: int,
+        grid_cols: int,
+        y_overlaps: list[int],
+        x_overlaps: list[int],
+        chunks_per_wave: int,
+        tile_h: int,
+        tile_w: int,
+        hpad: int,
+        wpad: int,
+    ) -> tuple:
+        mesh_rows, mesh_cols = tuple(self.mesh_device.shape)
+        key = (
+            mesh_rows,
+            mesh_cols,
+            grid_rows,
+            grid_cols,
+            tuple(y_overlaps),
+            tuple(x_overlaps),
+            chunks_per_wave,
+            tile_h,
+            tile_w,
+        )
+        if key not in self._weights:
+            mv_shards, nh_shards = [], []
+            for shard in range(mesh_rows * mesh_cols):
+                r, mc = shard // mesh_cols, shard % mesh_cols
+                k, c = mc // grid_cols, mc % grid_cols
+                valid = r < grid_rows and k < chunks_per_wave
+                hov = y_overlaps[r - 1] if valid and r > 0 else 0
+                wov = x_overlaps[c - 1] if valid and c > 0 else 0
+                mv_shards.append(self._band_matrix(hpad, tile_h, hov))
+                nh_shards.append(self._band_matrix(wpad, tile_w, wov))
+
+            def upload(shards):
+                stacked = torch.stack(shards, dim=0)
+                tensor = ttnn.from_torch(
+                    stacked,
+                    dtype=ttnn.float32,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.mesh_device,
+                    mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
+                )
+                return ttnn.reshape(tensor, tuple(stacked.shape[1:]))
+
+            self._weights[key] = (upload(mv_shards), upload(nh_shards))
+        return self._weights[key]
+
+    def _exchange(self, x: ttnn.Tensor, *, pad: int, axis: int) -> ttnn.Tensor:
+        """Prepend the previous device-along-``axis``'s trailing ``pad`` rows of ``x`` (dim 1)."""
+        num_links = max(1, min(int(x.shape[0]), self.ccl_manager.num_links))
+        return self.ccl_manager.neighbor_pad_persistent_buffer(
+            x,
+            dims=[1],
+            pad_left=[pad],
+            pad_right=[0],
+            padding_mode="zeros",
+            axes=[axis],
+            neighbor_sems=[self.ccl_manager.get_np_ping_pong_semaphore(axis)],
+            num_links=[num_links],
+        )
+
+    def blend_wave(
+        self,
+        pixels: ttnn.Tensor,
+        *,
+        grid_rows: int,
+        grid_cols: int,
+        y_overlaps: list[int],
+        x_overlaps: list[int],
+        chunks_per_wave: int,
+    ) -> ttnn.Tensor:
+        """``(1, C, F, H, W)`` ROW_MAJOR raw tiles in, blended fp32 tiles out, same shape."""
+        _, channels, frames, tile_h, tile_w = (int(d) for d in pixels.shape)
+        hpad = max(y_overlaps) if y_overlaps else 0
+        wpad = max(x_overlaps) if x_overlaps else 0
+        mv, nh = (
+            self._geometry_weights(
+                grid_rows=grid_rows,
+                grid_cols=grid_cols,
+                y_overlaps=y_overlaps,
+                x_overlaps=x_overlaps,
+                chunks_per_wave=chunks_per_wave,
+                tile_h=tile_h,
+                tile_w=tile_w,
+                hpad=hpad,
+                wpad=wpad,
+            )
+            if hpad or wpad
+            else (None, None)
+        )
+
+        def tiled_f32(t: ttnn.Tensor) -> ttnn.Tensor:
+            return ttnn.typecast(ttnn.to_layout(t, ttnn.TILE_LAYOUT), ttnn.float32)
+
+        x = ttnn.reshape(pixels, (channels * frames, tile_h, tile_w))
+
+        if hpad:
+            # Vertical, in W-major space so the weight sits on the matmul's right:
+            # V^T = permute([up_halo; T]) @ Mv.
+            stacked = self._exchange(x, pad=hpad, axis=0)
+            v_t = ttnn.matmul(tiled_f32(ttnn.permute(stacked, (0, 2, 1))), mv, compute_kernel_config=self._compute)
+            v = ttnn.permute(ttnn.to_layout(v_t, ttnn.ROW_MAJOR_LAYOUT), (0, 2, 1))
+        else:
+            v = ttnn.typecast(ttnn.to_layout(x, ttnn.TILE_LAYOUT), ttnn.float32)
+            v = ttnn.to_layout(v, ttnn.ROW_MAJOR_LAYOUT)
+
+        if not wpad:
+            return ttnn.reshape(v, (1, channels, frames, tile_h, tile_w))
+
+        # Horizontal: the left halo comes from the *raw* tile (the reference blends against the
+        # original left neighbour, not its blended form), exchanged in W-major space where W is a
+        # middle dim, then stacked against V in H-major space for the activation-left matmul.
+        halo_t = self._exchange(ttnn.permute(x, (0, 2, 1)), pad=wpad, axis=1)
+        halo_t = ttnn.slice(halo_t, [0, 0, 0], [channels * frames, wpad, tile_h])
+        halo = ttnn.permute(halo_t, (0, 2, 1))
+        halo = ttnn.to_layout(
+            ttnn.typecast(ttnn.to_layout(halo, ttnn.TILE_LAYOUT), ttnn.float32), ttnn.ROW_MAJOR_LAYOUT
+        )
+        stacked = ttnn.concat([halo, v], dim=2)
+        out = ttnn.matmul(ttnn.to_layout(stacked, ttnn.TILE_LAYOUT), nh, compute_kernel_config=self._compute)
+        out = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT)
+        return ttnn.reshape(out, (1, channels, frames, tile_h, tile_w))
+
+
 def unpatchify_device(
     tokens: ttnn.Tensor,
     *,

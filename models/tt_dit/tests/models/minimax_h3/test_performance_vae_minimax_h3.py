@@ -246,6 +246,14 @@ DECODE_STAGE_MODES = {
     "uint8": {"pixel_denorm": (MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD), "readback_uint8": True},
     # Stitch, clamp and colour-convert on device; read one planar canvas at 1.5 bytes/pixel.
     "yuv420": {"pixel_denorm": (MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD), "device_stitch": True},
+    # Same, but the tile cross-fade exchanges halo strips with grid neighbours instead of
+    # all-gathering the wave -- the opt-in path whose perf pass is pending (numerics gated
+    # bit-identical to gather on this mesh).
+    "yuv420_neighbor": {
+        "pixel_denorm": (MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD),
+        "device_stitch": True,
+        "stitch_exchange": "neighbor",
+    },
 }
 
 
@@ -288,7 +296,7 @@ def test_decode_stage(mesh_device, seconds, mode):
     vae = MiniMaxH3Vae(
         config, task="t2va", mesh_device=mesh_device, ccl_manager=ccl_manager, **DECODE_STAGE_MODES[mode]
     )
-    output_type = "yuv420" if mode == "yuv420" else "float"
+    output_type = "yuv420" if mode.startswith("yuv420") else "float"
 
     vae.load_state(_decode_stage_state(weights_dir))
 
