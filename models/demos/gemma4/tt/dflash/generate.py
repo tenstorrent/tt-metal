@@ -41,7 +41,12 @@ from models.demos.gemma4.tt.dflash.rope_cache import (
     gather_rope_on_device_buffered,
     make_rope_gather_index_buffer,
 )
-from models.demos.gemma4.tt.dflash.verify import dflash_verify, greedy_accept_from_posterior, make_verify_buffers
+from models.demos.gemma4.tt.dflash.verify import (
+    greedy_accept_from_posterior,
+    make_verify_buffers,
+    refresh_verify_positions,
+    run_verify_forward,
+)
 
 
 def _to_tt(mesh_device, x, dtype=ttnn.bfloat16):
@@ -125,13 +130,43 @@ def dflash_generate(
     # copy_host_to_device_tensor inside the loop below instead of a fresh
     # ttnn.from_torch(..., device=...) allocation each call.
     verify_buffers = make_verify_buffers(mesh_device, page_table_torch, block_size)
-    pre_draft_buf = ttnn.from_torch(
-        torch.zeros((1, block_size), dtype=torch.int64),
+    # anchor_buf holds ONLY the current iteration's anchor token id -- refreshed from
+    # host each iteration (the anchor is the previous iteration's bonus token, only
+    # known after that iteration's host-side accept decision; this one small host round
+    # trip per iteration is inherent, not avoidable -- see verify.py's
+    # greedy_accept_from_posterior docstring). mask_tail_buf is genuinely CONSTANT
+    # (always mask_token_id, block_size-1 wide) and never refreshed after this. Both the
+    # noise-block embedding input and verify's candidate-ids input are built by
+    # concatenating anchor_buf with something already on device (mask_tail_buf, or the
+    # drafter's own argmax output) -- never by rebuilding a token-id list on host and
+    # re-uploading it, unlike the previous pre_draft_buf/candidate_ids-list approach.
+    mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+    anchor_buf = ttnn.from_torch(
+        torch.zeros((1, 1), dtype=torch.int64),
         device=mesh_device,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         dtype=ttnn.uint32,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        mesh_mapper=mesh_mapper,
     )
+    mask_tail_buf = ttnn.from_torch(
+        torch.full((1, block_size - 1), mask_token_id, dtype=torch.int64),
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint32,
+        mesh_mapper=mesh_mapper,
+    )
+
+    def _write_anchor(token_id: int) -> None:
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(
+                torch.tensor([[token_id]], dtype=torch.int64),
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                dtype=ttnn.uint32,
+                mesh_mapper=mesh_mapper,
+            ),
+            anchor_buf,
+        )
+
     # The steady state (every iteration after the first) never needs more than
     # 2*block_size positions -- context_len maxes out at block_size once past the
     # initial prefill-seeded block. The first iteration's (potentially much larger)
@@ -175,6 +210,7 @@ def dflash_generate(
     )
     ttnn.deallocate(real_first_id_tt)
     real_first_token = int(real_first_torch.reshape(-1)[0].item())
+    _write_anchor(real_first_token)
 
     context_tt = _slice_seq(context_padded, ctx_len)
     ttnn.deallocate(context_padded)
@@ -189,67 +225,92 @@ def dflash_generate(
     stopped = real_first_token in stop_tokens
 
     while len(output_ids) < max_new_tokens and not stopped:
-        verify_size = block_size  # always request a full block; excess is truncated below
+        # ---- everything below builds each iteration's full op sequence using ONLY
+        # persistent buffers and on-device concatenation -- anchor_buf is the ONLY
+        # per-iteration host->device write (the anchor token id, genuinely only known
+        # after the previous iteration's host-side accept decision); the drafter's own
+        # draft-token predictions never round-trip to host to get fed back into verify's
+        # input, only read back once at the very end for the accept decision itself. ----
+        noise_tt = model.raw_embed(ttnn.concat([anchor_buf, mask_tail_buf], dim=-1))
+        if len(noise_tt.shape) != 4:
+            noise_tt = ttnn.unsqueeze_to_4D(noise_tt)
+        if noise_tt.layout != ttnn.TILE_LAYOUT:
+            noise_tt = ttnn.to_layout(noise_tt, ttnn.TILE_LAYOUT)
 
-        if verify_size > 1:
-            pre_draft_ids = torch.tensor([[output_ids[-1]] + [mask_token_id] * (verify_size - 1)], dtype=torch.long)
-            ttnn.copy_host_to_device_tensor(
-                ttnn.from_torch(pre_draft_ids, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32, mesh_mapper=replicate),
-                pre_draft_buf,
+        positions = list(range(start - context_len, start + block_size))
+        if len(positions) <= rope_idx_buf.shape[-1]:
+            cos_tt, sin_tt = gather_rope_on_device_buffered(
+                mesh_device, rope_idx_buf, positions, cos_2d, sin_2d, head_dim
             )
-            noise_tt = model.raw_embed(pre_draft_buf)
-            if len(noise_tt.shape) != 4:
-                noise_tt = ttnn.unsqueeze_to_4D(noise_tt)
-            if noise_tt.layout != ttnn.TILE_LAYOUT:
-                noise_tt = ttnn.to_layout(noise_tt, ttnn.TILE_LAYOUT)
-
-            positions = list(range(start - context_len, start + verify_size))
-            if len(positions) <= rope_idx_buf.shape[-1]:
-                cos_tt, sin_tt = gather_rope_on_device_buffered(
-                    mesh_device, rope_idx_buf, positions, cos_2d, sin_2d, head_dim
-                )
-            else:
-                # Only the very first iteration's context (the real prompt) can be large
-                # enough to exceed the steady-state buffer -- a one-off, non-repeating
-                # gather, so a fresh allocation here doesn't stand in the way of tracing
-                # the (much more frequently replayed) later iterations.
-                cos_tt, sin_tt = gather_rope_on_device(mesh_device, positions, cos_2d, sin_2d, head_dim)
-
-            drafter_out = dflash_drafter_forward(
-                context_tt,
-                noise_tt,
-                weights,
-                cos_tt,
-                sin_tt,
-                mesh_device,
-                mesh_config,
-                ccl_manager,
-                num_local_heads,
-                num_local_kv_heads,
-                head_dim,
-                config.rms_norm_eps,
-                layer_configs,
-            )
-            final_out = weights.norm(drafter_out)
-            draft_ids_tt = compute_dflash_argmax(
-                final_out, lm_head_weight, mesh_device, mesh_config, ccl_manager, config.final_logit_softcapping
-            )
-            draft_ids_torch = (
-                ttnn.to_torch(ttnn.get_device_tensors(draft_ids_tt)[0]) if is_mesh else ttnn.to_torch(draft_ids_tt)
-            )
-            ttnn.deallocate(draft_ids_tt)
-            draft_tokens = draft_ids_torch.reshape(-1).tolist()[1:]
         else:
-            draft_tokens = []
+            # Only the very first iteration's context (the real prompt) can be large
+            # enough to exceed the steady-state buffer -- a one-off, non-repeating
+            # gather, so a fresh allocation here doesn't stand in the way of tracing
+            # the (much more frequently replayed) later iterations.
+            cos_tt, sin_tt = gather_rope_on_device(mesh_device, positions, cos_2d, sin_2d, head_dim)
 
-        candidate_ids = [output_ids[-1]] + draft_tokens
+        drafter_out = dflash_drafter_forward(
+            context_tt,
+            noise_tt,
+            weights,
+            cos_tt,
+            sin_tt,
+            mesh_device,
+            mesh_config,
+            ccl_manager,
+            num_local_heads,
+            num_local_kv_heads,
+            head_dim,
+            config.rms_norm_eps,
+            layer_configs,
+        )
+        final_out = weights.norm(drafter_out)
+        draft_ids_tt = compute_dflash_argmax(
+            final_out, lm_head_weight, mesh_device, mesh_config, ccl_manager, config.final_logit_softcapping
+        )  # [1,1,block_size] uint32, stays on device
+
+        # verify's candidate ids, built ON DEVICE: [anchor, draft_1, ..., draft_{block_size-1}]
+        # -- draft_ids_tt's own row 0 (its prediction for the anchor slot) is dropped,
+        # matching the original [0, 1:] slice, just done as a device op instead of a
+        # host list slice.
+        draft_ids_2d = ttnn.reshape(draft_ids_tt, [1, block_size])
+        draft_tail_tt = ttnn.slice(draft_ids_2d, [0, 1], [1, block_size])
+        candidate_ids_tt = ttnn.concat([anchor_buf, draft_tail_tt], dim=-1)
+
+        refresh_verify_positions(mesh_device, verify_buffers, start)
 
         def _verify():
-            return dflash_verify(model, mesh_device, tt_kv_cache, verify_buffers, candidate_ids, start_pos=start)
+            logits, hidden = run_verify_forward(model, mesh_device, tt_kv_cache, verify_buffers, candidate_ids_tt)
+            ttnn.deallocate(hidden)
+            vocab = logits.shape[-1]
+            if logits.shape[2] != block_size:
+                sliced = ttnn.slice(logits, [0, 0, 0, 0], [1, 1, block_size, vocab])
+                ttnn.deallocate(logits)
+                logits = sliced
+            posterior_tt = argmax_last_dim(logits, block_size)
+            ttnn.deallocate(logits)
+            return posterior_tt
 
-        (posterior, _), next_context_padded = _tap_context(model, weights, fc_slices, _verify)
+        posterior_tt, next_context_padded = _tap_context(model, weights, fc_slices, _verify)
+
+        # ---- the one place per iteration a host readback is unavoidable: the accept
+        # decision (how many tokens to keep) has to be visible to this host loop. Both
+        # small results are read back together here, not interleaved earlier. ----
+        draft_ids_torch = (
+            ttnn.to_torch(ttnn.get_device_tensors(draft_ids_tt)[0]) if is_mesh else ttnn.to_torch(draft_ids_tt)
+        )
+        ttnn.deallocate(draft_ids_tt)
+        draft_tokens = draft_ids_torch.reshape(-1).tolist()[1:]
+
+        posterior_torch = (
+            ttnn.to_torch(ttnn.get_device_tensors(posterior_tt)[0]) if is_mesh else ttnn.to_torch(posterior_tt)
+        )
+        ttnn.deallocate(posterior_tt)
+        posterior = posterior_torch.reshape(1, -1)[:, :block_size].long()
+
+        candidate_ids = [output_ids[-1]] + draft_tokens
         accept, bonus, committed = greedy_accept_from_posterior(candidate_ids, posterior)
-        produced = min(accept + 1, verify_size)
+        produced = min(accept + 1, block_size)
 
         new_tokens = committed[1:]  # committed[0] == output_ids[-1], already recorded
         remaining_budget = max_new_tokens - len(output_ids)
@@ -268,5 +329,7 @@ def dflash_generate(
 
         if stopped or len(output_ids) >= max_new_tokens:
             break
+
+        _write_anchor(bonus)  # next iteration's anchor -- skipped on the final iteration
 
     return output_ids, acceptance_lengths
