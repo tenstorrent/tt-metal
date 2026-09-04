@@ -573,9 +573,7 @@ def _localize_divergence(baseline, parallel, *, factor: int, logger) -> None:
 
 
 # ~14 min: three decoder builds plus a decode per factor, against `pytest.ini`'s 300 s default.
-# Hang guard, not a budget: a cold JIT compile of a new clip length runs 40-60 min per parametrization
-# (each factor recompiles), ~15 min warm. This marker overrides `--timeout` on the command line.
-@pytest.mark.timeout(5400)
+@pytest.mark.timeout(3600)
 @pytest.mark.parametrize("num_latent_frames", T_PARALLEL_FRAMES)
 @pytest.mark.parametrize(("mesh_device", "device_params"), MESH, indirect=["mesh_device", "device_params"])
 def test_audio_decode_t_parallel(mesh_device, num_latent_frames):
