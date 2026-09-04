@@ -7087,6 +7087,16 @@ def termination_check() -> dict:
             "bound_by": o.get("bound_by"),
             "grid": o.get("grid"),
             "weight_dtype": o.get("weight_dtype"),
+            # WHAT FEEDS THIS OP AND WHAT IT FEEDS. tracy_tool._neighbours reads execution order out
+            # of the capture and roofline carries prev_op/next_op onto every open_op row -- and this
+            # entry, the only thing the agent is handed, dropped both. So the agent optimised each op
+            # as if it stood alone, and could not see the one thing this model's remaining cost is
+            # made of: 13,580 data-movement ops, each existing because a producer emits a layout its
+            # consumer cannot use. A reshard is a property of an EDGE; an agent shown only nodes
+            # cannot reason about it. Adjacency was computed, carried, and then thrown away one step
+            # before the reader who needed it.
+            "prev_op": o.get("prev_op"),
+            "next_op": o.get("next_op"),
         }
         # THE STAGE AXIS, CARRIED. router has had "regime" among its DIMENSIONS all along,
         # declare_stages() fills its vocabulary from the model's own PIPELINE_STAGES, and
@@ -7195,6 +7205,12 @@ def termination_check() -> dict:
             # only the recurring stage -- so it worked that stage regardless of where the ranking
             # pointed. Discovered from the capture's own marks; "" when the capture carried none.
             "stage": stage_of_op(blocking[0]["op"], prof),
+            # THE OP'S PLACE IN THE CHAIN, not just its name. An op handed over alone can only be
+            # tuned alone; the levers that remain on this model are about the JOIN between two ops --
+            # a layout one emits and the next has to repack. Empty when the capture could not place
+            # it, exactly as every other discovered field behaves.
+            "prev_op": blocking[0].get("prev_op") or "",
+            "next_op": blocking[0].get("next_op") or "",
         }
         if blocking
         else None
@@ -7213,6 +7229,19 @@ def termination_check() -> dict:
     # WHERE THE TIME ACTUALLY IS, handed over as data rather than left implicit in the ranking. The
     # agent sees an op and a metric; the metric names only the recurring stage, so without this it
     # cannot tell that the stage it is being scored on is the one with least left to win.
+    # WHERE THE OP SITS IN THE CHAIN, said once in the directive so it is read rather than looked up.
+    # The knob rungs tune an op in isolation and that is right for them; the structural rung cannot be
+    # reasoned about without the join, because a reshard is caused by the PAIR, not by either end.
+    _chain_note = ""
+    if next_target and (next_target.get("prev_op") or next_target.get("next_op")):
+        _chain_note = (
+            "In the capture this op runs between %s and %s -- a cost sitting on either join "
+            "belongs to the pair, not to the op alone. "
+            % (
+                next_target.get("prev_op") or "nothing recorded",
+                next_target.get("next_op") or "nothing recorded",
+            )
+        )
     _shares = _stage_gap_share(prof)
     _stage_time_note = (
         (
@@ -7247,7 +7276,10 @@ def termination_check() -> dict:
             else "NOT DONE — work next_target (the largest-gap blocking op) at its rung, IN THE STAGE "
             "next_target.stage names: the ranking already accounts for where the time is, and the "
             "metric in your instructions describes only the recurring stage, so following the metric "
-            "instead of the target spends effort where little is left. " + _stage_time_note + "REUSE-FIRST: "
+            "instead of the target spends effort where little is left. "
+            + _stage_time_note
+            + _chain_note
+            + "REUSE-FIRST: "
             "BEFORE editing, call recall_knobs(next_target.op_class, next_target.grid, "
             "next_target.bound_by) and APPLY/ADAPT any matching "
             "catalogued knob (heed its negative knowledge); improvise from scratch ONLY if nothing "
