@@ -67,7 +67,6 @@ _CMD_MISTRAL4_CHUNKED_8X4 = (
     "-k 'deep-50k+5k and mistral4 and func and torus-xy-8x4 and scalar and no_determinism' "
     "--wrapper-invocation"
 )
-
 # Migration starting threshold, NOT a gate. Measured 2026-09-04 on bh-glx-120-b03u02, 8x4 TorusXY
 # certified, DDR 14000, single run: 3_301_775 ns, of which RingJointSDPA is 2_538_210 (76.9%) --
 # against DeepSeek's 50% at the same mesh, which is why this row is the lever for long context.
