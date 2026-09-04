@@ -31,7 +31,7 @@
 # them fails when a codegen kernel itself breaks -- and they cost 1-5 minutes per op, which is
 # why they stay in nightly. The untilize, repeat and repeat_interleave legs are 49 tests and
 # roughly 35s of wall-clock pytest on an N300, device bring-up and kernel compiles included,
-# against the job's 5-minute budget. concat adds 20 tests, measured at 12.4s on a p150 with a cold
+# against the job's 5-minute budget. concat adds 25 tests, measured at 39.5s on an N150 with a cold
 # kernel cache; not re-measured on an N300.
 #
 # Hardware only, to keep the gate cheap. Codegen kernels are not blocked from ttsim -- untilize's
