@@ -236,6 +236,125 @@ bit-exact and carry none of this risk.
 
 ---
 
+### 2.5 CodePredictor decode — the remaining layout round-trips, audited
+
+A per-op audit of the traced CP frame (`ops_list/perf_report_ag_sharded/decode_cp`, 3469
+device ops / 27.67 ms over one frame = 15 CP calls x 5 layers) listed eight
+producer/consumer pairs that move or reshape data the next op could have read in place.
+Three were removed; the other five are blocked, and the reason each is blocked is worth
+more than another attempt at it.
+
+Measured on the traced `decode_cp` window (`tests/qwen3_tts_perf_report.sh -w decode_cp`),
+before -> after: **3469 -> 3249 device ops, 27.668 -> 27.252 ms** device kernel time.
+Wall clock 26.88 -> 26.69 ms, but read the device column: wall swung 26.57-26.91 ms across
+four captures of two builds, so it cannot resolve a 0.4 ms move.
+
+| # | pair (count, device ms) | verdict |
+|---|---|---|
+| 1 | Transposes wrapping RoPE (280, 0.891) | **partly removed**: -70 |
+| 2 | S2I Matmul -> AllGather (150, 0.344) | already gone in `94eeed8` |
+| 3 | S2I NlpCreateHeads -> LayerNorm (150, 0.312) | blocked |
+| 4 | Reshard before o_proj / before MLP down (150, 0.301) | **o_proj half removed**: -75 |
+| 5 | I2S Matmul -> NlpCreateHeads (75, 0.186) | blocked |
+| 6 | I2S SDPA -> NLPConcatHeads (75, 0.175) | **removed**: -75 |
+| 7 | FillPad before TopK (15, 0.291) | blocked |
+| 8 | S2I LayerNorm -> Matmul, QKV in0 (75, 0.095) | open, low value |
+
+**(6) and (4a) fall together, and the lever is `nlp_concat_heads`' output spec.** The op
+takes only the *layout* and buffer type from the `memory_config` you hand it; the output
+**shard spec is derived from the input's**
+(`nlp_concat_heads_device_operation.cpp::compute_output_specs`):
+
+```
+heads_per_shard = in_shard_h / padded_seq
+out_shard       = (padded_seq, in_shard_w * heads_per_shard)   on the input's grid
+```
+
+So the concat's output grid is chosen by how many heads you pack per core on the way *in*.
+The DRAM-sharded o_proj's in0 is `find_grid_k_n(K=32 tiles, N=36 tiles)` = **4 cores x 256**;
+the concat was fed one head per core (8 cores x 128) and therefore emitted 8 x 128, which
+needed a Reshard. Feeding it **2 heads per core on 4 cores** makes the concat emit the
+o_proj in0 spec exactly — the Reshard disappears. And since SDPA writes its
+`output_mem_config` verbatim, asking SDPA for that same 2-heads-per-core height-sharded
+spec removes the I2S in front of the concat as well. Two ops per layer, one config change,
+`-150 ops / -0.36 ms`. The Talker already did the SDPA half (`_sdpa_out_memcfg`); the
+heads-per-shard half is new and applies there too (not ported — the Talker's o_proj grid
+comes from a different builder and it is not measured here).
+
+**(1) K skips its transpose back.** `apply_rope_qk(k_keep_decode_layout=True)` returns K as
+the decode kernel's own `[1, 1, kv_heads, head_dim]` HEIGHT_SHARDED-on-one-core output, which
+is byte-identical to what `paged_update_cache` wants — so the transpose back to
+`[1, kv, 1, hd]`, which existed only to feed `ttnn.update_cache`, goes. The Talker has done
+this since 2.4; the CP had not. **This is close to free, not a win:** Transpose
+0.890 -> 0.669 ms (-0.221), but `paged_update_cache` costs 7.9 us against `update_cache`'s
+5.3, so the cache ops go 0.751 -> 0.935 ms (+0.184). Net ~-0.04 ms and -70 ops. Kept for the
+op count and because it is bit-exact (output and both K/V caches, verified against
+`QWEN3_TTS_CP_K_CACHE_LAYOUT=0`); do not expect time from it.
+
+Q's two transposes and K's inbound one — the other 210 — need the **decode-native head ops**
+(`nlp_create_qkv_heads_decode` -> `sdpa_decode` -> `nlp_concat_heads_decode`), i.e. a second
+attention path for `mode == "decode"` alongside the seq=2 prefill one. Not attempted here.
+
+#### The five that are blocked, and why
+
+**(3) QK-norm cannot take the height-sharded Q/K.** `layernorm_device_operation.cpp:166`
+`TT_FATAL`s on a HEIGHT_SHARDED input outright, so the S2I is not optional. Two sharded
+layouts it *does* accept were tested at the model's shape (`[1, 8, 32, 128]`, bf16):
+
+| layout | result |
+|---|---|
+| BLOCK_SHARDED, 1 col x 8 rows, shard (32, 128) | runs, **max diff vs interleaved = 0** |
+| WIDTH_SHARDED, 4 cores over head_dim | runs, diff 0.0625 — reduces over the wrong axis |
+
+Block-sharded is exact (each core is its own core-row, so the reduction is over head_dim,
+i.e. per head) — but it buys nothing. **This op has a ~9-11 us floor that no core count
+moves:** in the same capture, RMSNorm measures 24.3 us on 1 core, 9.4 us on 8, 8.9 us on 4,
+10.9 us on 32 and 11.0 us on 16. It is fixed overhead, not compute, so swapping the S2I for
+a Reshard into block-sharded leaves the 0.312 ms roughly where it is. 315 LayerNorms x
+~10.7 us = 3.36 ms = 12 % of the frame is essentially 315 kernel launches; the win here is
+fewer norm *calls*, not a better layout for them.
+
+**(5) The QKV matmul cannot write the split's input spec.**
+`nlp_create_qkv_heads` pins the shard width exactly:
+`shard_w == (num_q_heads / num_kv_heads + 2) * head_dim` = 512
+(`nlp_create_qkv_heads_device_operation.cpp:133`), which for the CP's per-chip
+`8q/4kv/hd=128` means **exactly 4 cores, no other grid is legal**. A matmul that wrote a
+4-core width shard would be a 32x1024x2048 GEMM on 4 cores against the current 64 — far more
+than the 2.5 us I2S is worth. A wider grid is not available to trade into.
+
+**(4b) The MLP-down reshard is blocked by DRAM-shard grid arithmetic.** gate/up lands on
+`find_grid_k_n(K=32, N=48)` = 16 cores, down wants `find_grid_k_n(K=48, N=36)` = 12. Forcing
+gate/up to 12 fails `dram_sharded_program_config`'s `K % (TILE*cores) == 0` (32 % 12);
+forcing down to 16 fails the output width shard (36 % 16), and padding down's N to 1536 to
+fix that adds 33 % to a weight-bandwidth-bound matmul (~+6 us) to save a 1.7 us reshard.
+0.126 ms, left alone.
+
+**(7) The TopK fill cannot be skipped through the public API.** `ttnn.topk` calls
+`fill_implicit_tile_padding` unconditionally (`topk.cpp:650`), and its early-out fires only
+when the last two **logical** dims are tile-aligned. The CP runs at logical M=1 padded to a
+tile, so it never fires. Nothing at the call site changes that: `ttnn.reshape`/`view` are
+volume-preserving and cannot promote logical 1 row to 32, and an explicit `ttnn.pad` to 32
+rows does the same write the fill does. **Placement is not the problem either** — moving the
+logits from DRAM into L1 (`perf_report_cp_logits_l1`) moved FillPad 19.4 -> 18.9 us and TopK
+218.1 -> 216.8 us, i.e. nothing; both are latency-bound. Reverted, comment kept at the
+`lm_head` call site. The real target in this neighbourhood is TopK itself (15 calls,
+217 us each, **12 % of the frame**) — see 6.x, not this fill.
+
+**(8) Open.** The width-sharded input RMSNorm (32 cores) unshards for the QKV matmul.
+Removing it needs a `MatmulMultiCoreReuseMultiCast1DProgramConfig(mcast_in0=True)` on the
+LN's own 32-core grid — legal (K=32 tiles / 32 cores = 1 tile each), but it halves the
+matmul's core count from 64 and that matmul is already at 56.4 % of DRAM peak. 0.128 ms at
+stake against a 26 us matmul; not attempted.
+
+#### Not on the list, found while auditing
+
+The Gumbel noise row is sliced out of a `[1, 1, 32, 64]` tile with
+`ttnn.slice(noise, [0,0,slot,0], ...)`, which is a non-tile-aligned row slice and lowers to
+**Untilize -> Slice -> Tilize, 10.8 us x 14 = 0.15 ms/frame**. Storing the noise as
+`[1, 32, 1, 64]` and slicing dim 1 makes every slice tile-aligned. Not done.
+
+---
+
 ---
 
 ## 3. Measured results
