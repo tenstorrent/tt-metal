@@ -1,0 +1,20 @@
+# Two 1x2 meshes with no connection between them.
+#
+# The control for test_two_1x2_meshes_linked.textproto: same meshes, no mesh-level edge, so the two
+# placements only have to be disjoint and are free to sit anywhere.
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 2 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+}
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
