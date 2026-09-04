@@ -48,12 +48,15 @@ _PCC_THRESHOLD = 0.9995
 _CPU_REFERENCE_CACHE_VERSION = 4
 _PERF_SKU = "bh_loudbox"
 _PERF_MARGIN = 0.03
-# Throwaway Fabric2D prototype baselines from one session on bh-lb-42 (2026-09-04).
-# A proper implementation must recalibrate with five independent sessions.
+# Fabric2D calibration at da25439f8c3 on bh-lb-42 (2026-09-04): median of
+# five independent process/device sessions, each containing five 10-replay samples.
+# Session medians: SP1xTP8=[11.067, 11.057, 11.051, 11.059, 11.048],
+# SP2xTP4=[9.922, 9.921, 9.925, 9.920, 9.915],
+# SP4xTP2=[10.259, 10.261, 10.257, 10.255, 10.251].
 _PERF_REFERENCE_MS = {
-    "SP1xTP8": 11.062,
-    "SP2xTP4": 9.890,
-    "SP4xTP2": 10.055,
+    "SP1xTP8": 11.057,
+    "SP2xTP4": 9.921,
+    "SP4xTP2": 10.257,
 }
 # Blackhole Galaxy SP8xTP4 calibration at c4f8ddd0e377 (2026-09-02): median
 # of five warm synchronized 10-replay samples on the high-power CI lane.
