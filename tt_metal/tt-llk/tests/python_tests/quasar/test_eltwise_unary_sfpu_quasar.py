@@ -569,7 +569,7 @@ def prepare_comp_inputs_uint(
 #   int<->int : store sfpmem mode (widen/equal) or RNE narrow to 8-bit
 #
 # The functor `calculate_typecast<IN_FMT, OUT_FMT>` needs the format pair at
-# COMPILE time, but the unified dispatcher only carries `SfpuType` at compile time
+# COMPILE time, but the unified dispatcher only carries `SfpuUnaryOp` at compile time
 # and formats at runtime. We bridge that with the `TYPECAST_FORMATS` template param,
 # which bakes the pair as `constexpr DataFormat TYPECAST_IN_FORMAT / TYPECAST_OUT_FORMAT`
 # per build variant.

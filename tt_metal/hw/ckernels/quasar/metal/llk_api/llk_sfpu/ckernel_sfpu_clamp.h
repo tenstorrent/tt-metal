@@ -9,8 +9,8 @@
 #include "ckernel.h"
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
-#include "llk_math_eltwise_unary_sfpu_init.h"
 #include "sfpi.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -36,18 +36,29 @@ inline void calculate_clamp(std::uint32_t min_val, std::uint32_t max_val) {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat val = sfpi::dst_reg[0];
 
-        v_if (val < min_bound) {
-            val = min_bound;
-        }
-        v_elseif (val >= max_bound) {
-            val = max_bound;
-        }
+        v_if(val < min_bound) { val = min_bound; }
+        v_elseif(val >= max_bound) { val = max_bound; }
         v_endif;
 
         sfpi::dst_reg[0] = val;
         sfpi::dst_reg++;
     }
 }
+
+// ---------------------------------------------------------------------------------------------------
+// Clamp<APPROX, FORMAT, DST_SYNC, DST_ACCUM, ITERATIONS>
+//   calculate(dst_index, vector_mode, min_val, max_val) -> calculate_clamp (clamp_tile)
+//   init()                                              -> bare init       (clamp_tile_init)
+// Same template parameter list as the Wormhole/Blackhole struct; Quasar has no int32 clamp kernel.
+// ---------------------------------------------------------------------------------------------------
+template <bool APPROXIMATION_MODE, DataFormat FORMAT, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8>
+struct Clamp : SfpuUnaryOp<Clamp<APPROXIMATION_MODE, FORMAT, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static_assert(FORMAT != DataFormat::Int32, "Quasar clamp supports float dest only");
+
+    static void kernel(std::uint32_t min_val, std::uint32_t max_val) {
+        calculate_clamp<APPROXIMATION_MODE, ITERATIONS>(min_val, max_val);
+    }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

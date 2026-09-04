@@ -16,6 +16,7 @@
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
 #include "sfpi.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel::sfpu {
 
@@ -172,7 +173,7 @@ sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x) {
  * @tparam APPROXIMATION_MODE: Select the LUT path (loads the 6-segment table), values = <true/false>
  * @tparam is_fp32_dest_acc_en: For the non-approximate path, select the fp32 rational-erf variant,
  *         which needs the Newton-Raphson constant its reciprocal refines with.
- * @note The surrounding @ref llk_math_eltwise_unary_sfpu_init resets the counters, so unlike the
+ * @note The surrounding @ref _llk_math_eltwise_sfpu_init_ resets the counters, so unlike the
  *       Blackhole kernel this init only programs constants.
  */
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
@@ -320,4 +321,14 @@ inline void calculate_gelu() {
     }
 }
 
+// ---------------------------------------------------------------------------------------------------
+// Gelu<APPROX, DST_SYNC, DST_ACCUM, ITERATIONS>::calculate(dst_index, vector_mode) / init()
+//   backs gelu_tile / gelu_tile_pack and gelu_tile_init / gelu_tile_init_pack (init_kernel -> gelu_init).
+// ---------------------------------------------------------------------------------------------------
+template <bool APPROXIMATION_MODE, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = SFPU_ITERATIONS>
+struct Gelu : SfpuUnaryOp<Gelu<APPROXIMATION_MODE, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static void kernel() { calculate_gelu<APPROXIMATION_MODE, DST_ACCUM, ITERATIONS>(); }
+
+    static void init_kernel() { gelu_init<APPROXIMATION_MODE, DST_ACCUM>(); }
+};
 }  // namespace ckernel::sfpu

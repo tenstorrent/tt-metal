@@ -264,7 +264,7 @@ static constexpr bool ASCENDING  = true;
 // the consumer uses, and the one this family needs: it does its own Dest addressing (see
 // set_dst_write_addr_offset_test.cpp), so the standard per-face walk must not be applied.
 // Spelled through _llk_math_eltwise_unary_sfpu_params_ rather than the Metal
-// SFPU_UNARY_CALL macro, which is what the other tt-llk sort driver (topk_xl_test.cpp)
+// SfpuUnaryFn adapter, which is what the other tt-llk sort driver (topk_xl_test.cpp)
 // does; the expansion is the same call.
 inline void top32_phases_steps(std::uint32_t dst_tile, bool direction)
 {
@@ -429,7 +429,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if TOP32_VIA_WRAPPERS
         llk_math_deepseek_top32_rm_init<false /* APPROXIMATE */>();
 #else
-        _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
+        _llk_math_eltwise_sfpu_init_();
         ckernel::sfpu::_top32_rm_init_();
 #endif
 
@@ -479,7 +479,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if TOP32_VIA_WRAPPERS
     llk_math_deepseek_top32_rm_init<false /* APPROXIMATE */>();
 #else
-    _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
+    _llk_math_eltwise_sfpu_init_();
     ckernel::sfpu::_top32_rm_init_();
 #endif
 

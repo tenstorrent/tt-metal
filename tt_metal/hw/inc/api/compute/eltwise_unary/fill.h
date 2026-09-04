@@ -6,8 +6,7 @@
 
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
-#include "sfpu/ckernel_sfpu_fill.h"
-#include "llk_math_eltwise_unary_sfpu_macros.h"
+#include "ckernel_sfpu_fill.h"
 #endif
 
 namespace ckernel {
@@ -26,9 +25,9 @@ namespace ckernel {
  * | param0          | Value to fill tile with.                                                   | float    |                                                       | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void fill_tile(uint32_t idst, float param0) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_fill_, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC, param0));
+    MATH((sfpu::Fill<APPROX, DST_SYNC_MODE, is_fp32_dest_acc_en>::calculate(idst, VectorMode::RC, param0)));
 }
 
 // clang-format off
@@ -47,21 +46,15 @@ ALWI void fill_tile(uint32_t idst, float param0) {
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  * | param0          | Value to fill tile with (unsigned integer)                                 | uint32_t |                                                       | True     |
  */
-template <DataFormat DATA_FORMAT>
+template <DataFormat DATA_FORMAT, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void fill_tile_int(uint32_t idst, uint32_t param0) {
     static_assert(
         DATA_FORMAT == DataFormat::Int32 || DATA_FORMAT == DataFormat::UInt32 || DATA_FORMAT == DataFormat::UInt16,
         "Unsupported data format for fill_tile_int. Supported: Int32, UInt32, UInt16");
     constexpr InstrModLoadStore INSTRUCTION_MODE =
         (DATA_FORMAT == DataFormat::UInt16) ? InstrModLoadStore::LO16 : InstrModLoadStore::INT32;
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        _calculate_fill_int_,
-        (APPROX, INSTRUCTION_MODE, 8 /*ITERATIONS*/),
-        idst,
-        VectorMode::RC,
-        param0));
+    MATH((sfpu::FillInt<APPROX, INSTRUCTION_MODE, DST_SYNC_MODE, is_fp32_dest_acc_en>::calculate(
+        idst, VectorMode::RC, param0)));
 }
 
 // clang-format off
@@ -78,19 +71,16 @@ ALWI void fill_tile_int(uint32_t idst, uint32_t param0) {
  * | param0          | The bit-cast representation of a floating-point value to be used as output | uint32_t | Must represent a valid bit-cast float value           | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void fill_tile_bitcast(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        _calculate_fill_bitcast_,
-        (APPROX, 8 /*ITERATIONS*/),
-        idst,
-        VectorMode::RC,
-        param0));
+    MATH((sfpu::FillBitcast<APPROX, DST_SYNC_MODE, is_fp32_dest_acc_en>::calculate(idst, VectorMode::RC, param0)));
 }
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void fill_tile_init() { MATH(SFPU_UNARY_INIT(fill)); }
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void fill_tile_init() {
+    MATH((sfpu::Fill<APPROX, DST_SYNC_MODE, is_fp32_dest_acc_en>::init()));
+}
 
 }  // namespace ckernel

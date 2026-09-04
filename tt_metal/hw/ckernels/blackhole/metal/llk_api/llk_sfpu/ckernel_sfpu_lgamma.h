@@ -12,6 +12,7 @@
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_log.h"
 #include "ckernel_sfpu_recip.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel::sfpu {
 
@@ -170,4 +171,39 @@ void lgamma_stirling_init() {
     sfpi::vConstFloatPrgm0 = 2.0f;
 }
 
+// ---------------------------------------------------------------------------------------------------
+// LgammaStirling<APPROX, DST_SYNC, DST_ACCUM, ITERATIONS>          (unary)
+//   calculate(dst_index, vector_mode) -> calculate_lgamma_stirling,        init() -> lgamma_stirling_init
+// LgammaStirlingFp32<APPROX, DST_SYNC, DST_ACCUM, ITERATIONS>      (binary)
+//   calculate(in0, in1, out, vector_mode) -> calculate_lgamma_stirling_fp32, init() -> lgamma_stirling_init
+// LgammaAdjusted<APPROX, DST_SYNC, DST_ACCUM, ITERATIONS>          (ternary)
+//   calculate(in0, in1, in2, out, vector_mode) -> calculate_lgamma_adjusted, init() -> shared SFPU init only
+// Back lgamma_stirling_tile[_init], lgamma_stirling_float_tile[_init], lgamma_adjusted_tile[_init].
+// ---------------------------------------------------------------------------------------------------
+template <bool APPROXIMATION_MODE, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8>
+struct LgammaStirling
+    : SfpuUnaryOp<LgammaStirling<APPROXIMATION_MODE, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static void kernel() { calculate_lgamma_stirling<APPROXIMATION_MODE, DST_ACCUM, ITERATIONS>(); }
+
+    static void init_kernel() { lgamma_stirling_init<APPROXIMATION_MODE>(); }
+};
+
+template <bool APPROXIMATION_MODE, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8>
+struct LgammaStirlingFp32
+    : SfpuBinaryOp<LgammaStirlingFp32<APPROXIMATION_MODE, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static void kernel(uint32_t dst_index_in0, uint32_t dst_index_in1, uint32_t dst_index_out) {
+        calculate_lgamma_stirling_fp32<APPROXIMATION_MODE, ITERATIONS>(dst_index_in0, dst_index_in1, dst_index_out);
+    }
+
+    static void init_kernel() { lgamma_stirling_init<APPROXIMATION_MODE>(); }
+};
+
+template <bool APPROXIMATION_MODE, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8>
+struct LgammaAdjusted
+    : SfpuTernaryOp<LgammaAdjusted<APPROXIMATION_MODE, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static void kernel(uint32_t dst_index_in0, uint32_t dst_index_in1, uint32_t dst_index_in2, uint32_t dst_index_out) {
+        calculate_lgamma_adjusted<APPROXIMATION_MODE, DST_ACCUM, ITERATIONS>(
+            dst_index_in0, dst_index_in1, dst_index_in2, dst_index_out);
+    }
+};
 }  // namespace ckernel::sfpu

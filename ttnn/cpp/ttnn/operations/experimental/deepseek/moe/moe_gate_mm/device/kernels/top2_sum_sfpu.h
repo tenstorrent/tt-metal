@@ -8,7 +8,7 @@
 #include "api/compute/common_globals.h"
 
 #ifdef TRISC_MATH
-#include "llk_math_eltwise_unary_sfpu_macros.h"
+#include "llk_math_eltwise_sfpu_op.h"
 #endif
 
 /**
@@ -153,14 +153,11 @@ inline void _top2_calculate_top2_() {
 
 }  // namespace sfpu
 
-inline void _llk_math_sum_top2_tile_init_() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::unused>(ckernel::sfpu::_top2_configure_addrmod_);
-}
+using Top2Op = SfpuUnaryFn<sfpu::_top2_calculate_top2_, DST_SYNC_MODE, DST_ACCUM_MODE, sfpu::_top2_configure_addrmod_>;
 
-inline void _llk_math_sum_top2_tile_(uint32_t dst_index) {
-    SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(
-        DST_SYNC_MODE, DST_ACCUM_MODE, _top2_calculate_top2_, dst_index, VectorMode::RC_custom);
-}
+inline void _llk_math_sum_top2_tile_init_() { Top2Op::init(); }
+
+inline void _llk_math_sum_top2_tile_(uint32_t dst_index) { Top2Op::calculate(dst_index, VectorMode::RC_custom); }
 
 #endif
 

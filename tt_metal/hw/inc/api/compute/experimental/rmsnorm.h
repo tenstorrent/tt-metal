@@ -11,6 +11,7 @@
 #include "api/compute/experimental/mul_reduce_scalar.h"
 // Blackhole-only: the rmsnorm LLKs live only in the Blackhole llk_api / llk_lib trees.
 #if defined(TRISC_MATH) && defined(ARCH_BLACKHOLE)
+#include "ckernel_sfpu_fill.h"  // sfpu::Fill used by mul_reduce_scalar_chunked_tile
 #include "experimental/llk_math_rmsnorm_bcast_scalar_dest_reuse_api.h"
 #endif
 #if defined(TRISC_UNPACK) && defined(ARCH_BLACKHOLE)
@@ -140,23 +141,11 @@ ALWI void mul_reduce_scalar_chunked_tile(uint32_t icb0, uint32_t icb1, uint32_t 
         UNPACK((llk_unpack_mul_reduce_scalar_switch_to_reduce()));
         MATH((llk_math_mul_reduce_scalar_reduce_init<is_fp32_dest_acc_en, MATH_FIDELITY>()));
         MATH((llk_math_mul_reduce_scalar_move_dest_to_src<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(0)));
-        MATH(SFPU_UNARY_CALL(
-            DST_SYNC_MODE,
-            is_fp32_dest_acc_en,
-            _calculate_fill_,
-            (APPROX, 2 /*ITERATIONS*/),
-            0 /*dst_index*/,
-            VectorMode::RC_custom,
-            scaler));
+        MATH((sfpu::Fill<APPROX, DST_SYNC_MODE, is_fp32_dest_acc_en, 2 /*ITERATIONS*/>::calculate(
+            0 /*dst_index*/, VectorMode::RC_custom, scaler)));
         MATH((llk_math_mul_reduce_scalar_move_dest_to_src<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(0)));
-        MATH(SFPU_UNARY_CALL(
-            DST_SYNC_MODE,
-            is_fp32_dest_acc_en,
-            _calculate_fill_,
-            (APPROX, 2 /*ITERATIONS*/),
-            0 /*dst_index*/,
-            VectorMode::RC_custom,
-            0.0f));
+        MATH((sfpu::Fill<APPROX, DST_SYNC_MODE, is_fp32_dest_acc_en, 2 /*ITERATIONS*/>::calculate(
+            0 /*dst_index*/, VectorMode::RC_custom, 0.0f)));
 
         if (batch == 0) {
             PACK((llk_pack_reduce_mask_config<ReduceDim::REDUCE_SCALAR, ckernel::PackMode::Default>(ocb)));

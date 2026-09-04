@@ -155,8 +155,11 @@ inline void sdpa_exp_tile_first_column(uint32_t idst) {
 template <bool approx, bool SCALE_EN, uint32_t scaler_fp32 = 0>
 inline void sdpa_exp_tile_init() {
 #if defined(TRISC_MATH) && defined(ARCH_BLACKHOLE)
-    ::ckernel::llk_math_eltwise_unary_sfpu_init<::SfpuType::exponential>(
-        sdpa_calculate_exponential_face_init<SCALE_EN, scaler_fp32>);
+    ::ckernel::SfpuUnaryFn<
+        sdpa_calculate_exponential_face</*ITERATIONS*/ 8, /*CLAMP_NEGATIVE*/ false, DST_ACCUM_MODE>,
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        sdpa_calculate_exponential_face_init<SCALE_EN, scaler_fp32>>::init();
 #endif
 }
 

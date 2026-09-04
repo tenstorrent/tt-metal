@@ -8,6 +8,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "llk_math_eltwise_unary_sfpu.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel::sfpu {
 
@@ -156,4 +157,15 @@ inline void rand(std::uint32_t from, std::uint32_t scale) {
         rand_rows<false>();
     }
 }
+
+// ---------------------------------------------------------------------------------------------------
+// Rand<APPROX, DST_SYNC, DST_ACCUM>::calculate(dst_index, vector_mode, from, scale) backs rand_tile;
+//   init(seed) backs rand_tile_init (init_kernel -> rand_init(seed)).
+// ---------------------------------------------------------------------------------------------------
+template <bool APPROXIMATION_MODE, DstSync DST_SYNC, bool DST_ACCUM>
+struct Rand : SfpuUnaryOp<Rand<APPROXIMATION_MODE, DST_SYNC, DST_ACCUM>, DST_SYNC, DST_ACCUM> {
+    static void kernel(std::uint32_t from, std::uint32_t scale) { rand<APPROXIMATION_MODE>(from, scale); }
+
+    static void init_kernel(std::uint32_t seed) { rand_init<APPROXIMATION_MODE>(seed); }
+};
 }  // namespace ckernel::sfpu

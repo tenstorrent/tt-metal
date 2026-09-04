@@ -10,6 +10,7 @@
 #include "sfpi.h"
 #include "ckernel_sfpu_recip.h"
 #include "sfpu/ckernel_sfpu_rounding_ops.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel::sfpu {
 
@@ -140,4 +141,32 @@ inline void fmod_binary_init() {
     sfpu_reciprocal_init<false>();
 }
 
+// ---------------------------------------------------------------------------------------------------
+// BinaryFmod<APPROXIMATION_MODE, FORMAT, DST_SYNC, DST_ACCUM, ITERATIONS>
+//   FORMAT = Int32 -> calculate_fmod_int32 / fmod_int32_init
+//   other (float)  -> calculate_sfpu_binary_fmod<.., DST_ACCUM> / fmod_binary_init
+//   Backs fmod_int32_tile(_init) / fmod_binary_tile(_init) (api/compute/binary_fmod.h).
+// ---------------------------------------------------------------------------------------------------
+template <bool APPROXIMATION_MODE, DataFormat FORMAT, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8>
+struct BinaryFmod
+    : SfpuBinaryOp<BinaryFmod<APPROXIMATION_MODE, FORMAT, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static constexpr bool is_int32 = FORMAT == DataFormat::Int32;
+
+    static void kernel(uint32_t dst_index_in0, uint32_t dst_index_in1, uint32_t dst_index_out) {
+        if constexpr (is_int32) {
+            calculate_fmod_int32<APPROXIMATION_MODE, ITERATIONS>(dst_index_in0, dst_index_in1, dst_index_out);
+        } else {
+            calculate_sfpu_binary_fmod<APPROXIMATION_MODE, ITERATIONS, DST_ACCUM>(
+                dst_index_in0, dst_index_in1, dst_index_out);
+        }
+    }
+
+    static void init_kernel() {
+        if constexpr (is_int32) {
+            fmod_int32_init<APPROXIMATION_MODE>();
+        } else {
+            fmod_binary_init<APPROXIMATION_MODE>();
+        }
+    }
+};
 }  // namespace ckernel::sfpu

@@ -108,7 +108,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         _llk_packer_wait_for_math_done_();
 
-        _llk_math_eltwise_unary_sfpu_init_<SfpuType::reduce>();
+        _llk_math_eltwise_sfpu_init_();
         ckernel::sfpu::_init_reduce_max_col_subblock_4x2_<DataFormat::Float16_b>();
         _llk_math_eltwise_sfpu_start_(0);
         ckernel::sfpu::_reduce_max_col_subblock_4x2_prologue_();

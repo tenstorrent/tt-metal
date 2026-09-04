@@ -111,7 +111,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
 
-        _llk_math_eltwise_unary_sfpu_init_<SfpuType::reduce>();
+        _llk_math_eltwise_sfpu_init_();
         init_reduce<POOL_TYPE, static_cast<DataFormat>(formats.math), is_fp32_dest_acc_en>();
 
         PROFILER_SYNC();

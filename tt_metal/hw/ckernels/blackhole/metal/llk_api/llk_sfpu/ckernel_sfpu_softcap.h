@@ -9,6 +9,7 @@
 #include "cmath_common.h"
 #include "ckernel_sfpu_tanh.h"
 #include "sfpu/ckernel_sfpu_converter.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel::sfpu {
 
@@ -46,4 +47,17 @@ inline void calculate_softcap(std::uint32_t param0, std::uint32_t param1) {
     }
 }
 
+// ---------------------------------------------------------------------------------------------------
+// Softcap<APPROX, DST_SYNC, DST_ACCUM, ITERATIONS>::calculate(dst_index, vector_mode, beta, beta_recip)
+//   backs softcap_tile / softcap_tile_init. Blackhole only. init_kernel loads the tanh polynomial
+//   constants (softcap_init -> tanh_init); without them the saturation clamp does not hold.
+// ---------------------------------------------------------------------------------------------------
+template <bool APPROXIMATION_MODE, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8>
+struct Softcap : SfpuUnaryOp<Softcap<APPROXIMATION_MODE, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static void init_kernel() { softcap_init(); }
+
+    static void kernel(std::uint32_t param0, std::uint32_t param1) {
+        calculate_softcap<APPROXIMATION_MODE, DST_ACCUM, ITERATIONS>(param0, param1);
+    }
+};
 }  // namespace ckernel::sfpu

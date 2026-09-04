@@ -120,8 +120,7 @@ inline void sdpa_op_init()
     }
     else
     {
-        _llk_math_eltwise_unary_sfpu_init_once_();
-        sfpu::softplus_init();
+        _llk_math_eltwise_sfpu_init_();
     }
 }
 
@@ -129,31 +128,21 @@ inline void sdpa_op(const std::uint32_t dst_index)
 {
     if constexpr (SDPA_OP == OP_RECIP_LEGACY)
     {
-        _llk_math_eltwise_unary_sfpu_params_(
-            sfpu::calculate_recip_first_column<true /* legacy_compat */, is_fp32_dest_acc_en>,
-            dst_index,
-            VectorMode::C);
+        _llk_math_eltwise_unary_sfpu_params_(sfpu::calculate_recip_first_column<true /* legacy_compat */, is_fp32_dest_acc_en>, dst_index, VectorMode::C);
     }
     else if constexpr (SDPA_OP == OP_RECIP_ITER)
     {
-        _llk_math_eltwise_unary_sfpu_params_(
-            sfpu::calculate_recip_first_column<false /* legacy_compat */, is_fp32_dest_acc_en>,
-            dst_index,
-            VectorMode::C);
+        _llk_math_eltwise_unary_sfpu_params_(sfpu::calculate_recip_first_column<false /* legacy_compat */, is_fp32_dest_acc_en>, dst_index, VectorMode::C);
     }
     else if constexpr (SDPA_OP == OP_EXP_ACCURATE)
     {
         _llk_math_eltwise_unary_sfpu_params_(
-            sfpu::calculate_exponential_first_column<true /* SDPA_EXP_APPROX_MODE */, EXP_SCALE_BF16, is_fp32_dest_acc_en>,
-            dst_index,
-            VectorMode::C);
+            sfpu::calculate_exponential_first_column<true /* SDPA_EXP_APPROX_MODE */, EXP_SCALE_BF16, is_fp32_dest_acc_en>, dst_index, VectorMode::C);
     }
     else if constexpr (SDPA_OP == OP_EXP_POLY)
     {
         _llk_math_eltwise_unary_sfpu_params_(
-            sfpu::calculate_exponential_first_column<false /* SDPA_EXP_APPROX_MODE */, EXP_SCALE_BF16, is_fp32_dest_acc_en>,
-            dst_index,
-            VectorMode::C);
+            sfpu::calculate_exponential_first_column<false /* SDPA_EXP_APPROX_MODE */, EXP_SCALE_BF16, is_fp32_dest_acc_en>, dst_index, VectorMode::C);
     }
     else if constexpr (SDPA_OP == OP_SOFTPLUS)
     {
@@ -168,10 +157,7 @@ inline void sdpa_op(const std::uint32_t dst_index)
     else
     {
         _llk_math_eltwise_unary_sfpu_params_(
-            sfpu::calculate_fused_max_sub_exp_add_tile<is_fp32_dest_acc_en>,
-            dst_index,
-            VectorMode::C,
-            static_cast<int>(EXP_SCALE_BF16));
+            sfpu::calculate_fused_max_sub_exp_add_tile<is_fp32_dest_acc_en>, dst_index, VectorMode::C, static_cast<int>(EXP_SCALE_BF16));
     }
 }
 

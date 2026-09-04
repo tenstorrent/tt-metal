@@ -759,7 +759,7 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
                 sub_tiles_bcast_scalar(cur_max_dfb_rt, dfb_attention_sink, sink_row_offset + s, 0, 1);
                 // The custom first-column exp needs generic unary SFPU addrmod state, but not the
                 // Blackhole approximate exp_init macro/replay setup used by exp_tile<true>.
-                MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::exponential, DST_ACCUM_MODE>()));
+                MATH((_llk_math_eltwise_sfpu_init_()));
                 constexpr uint16_t scale_bf16 = scale_fp32 >> 16;
                 constexpr uint16_t negated_scale_bf16 = scale_bf16 ^ 0x8000;
                 MATH((exp_tile_first_column<EXP_APPROX_MODE, negated_scale_bf16>(1)));

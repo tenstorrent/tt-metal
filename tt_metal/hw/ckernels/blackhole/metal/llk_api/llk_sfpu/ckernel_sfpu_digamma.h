@@ -12,6 +12,7 @@
 
 #include "ckernel_sfpu_piecewise_rational.h"
 #include "cmath_common.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel::sfpu {
 
@@ -109,4 +110,16 @@ void digamma_init() {
     sfpu_reciprocal_init();
 }
 
+// ---------------------------------------------------------------------------------------------------
+// Digamma<APPROX, DST_SYNC, DST_ACCUM, ITERATIONS>
+//   calculate(dst_index, vector_mode) -> calculate_digamma
+//   init()                            -> digamma_init
+// Backs digamma_tile / digamma_tile_init.
+// ---------------------------------------------------------------------------------------------------
+template <bool APPROXIMATION_MODE, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8>
+struct Digamma : SfpuUnaryOp<Digamma<APPROXIMATION_MODE, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static void kernel() { calculate_digamma<APPROXIMATION_MODE, ITERATIONS>(); }
+
+    static void init_kernel() { digamma_init<APPROXIMATION_MODE>(); }
+};
 }  // namespace ckernel::sfpu

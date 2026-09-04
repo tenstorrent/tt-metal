@@ -7,7 +7,6 @@
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_quant.h"
-#include "llk_math_eltwise_binary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
@@ -26,11 +25,19 @@ namespace ckernel {
  * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void quant_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((SFPU_BINARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_quant_int32, (APPROX), idst0, idst1, odst, VectorMode::RC)));
+    MATH((sfpu::Quant<
+          sfpu::QuantVariant::Quant,
+          APPROX,
+          DataFormat::Int32,
+          false /*INT8_INPUT*/,
+          DST_SYNC_MODE,
+          is_fp32_dest_acc_en>::calculate(idst0, idst1, odst, VectorMode::RC)));
 }
 
+// The int8 / uint8 quantization variants have no Quasar kernel.
+#ifndef ARCH_QUASAR
 // clang-format off
 /**
  * Quantize variant writing an int8 output tensor.
@@ -45,10 +52,17 @@ ALWI void quant_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
  * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void quant_int8_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((SFPU_BINARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_quant_int32_int8_pack, (APPROX), idst0, idst1, odst, VectorMode::RC)));
+    MATH((sfpu::Quant<
+          sfpu::QuantVariant::Quant,
+          APPROX,
+          DataFormat::Int8,
+          false /*INT8_INPUT*/,
+          DST_SYNC_MODE,
+          is_fp32_dest_acc_en>::calculate(idst0, idst1, odst, VectorMode::RC)));
 }
+#endif
 
 // clang-format off
 /**
@@ -64,11 +78,18 @@ ALWI void quant_int8_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
  * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void requant_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((SFPU_BINARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_requant_int32, (APPROX), idst0, idst1, odst, VectorMode::RC)));
+    MATH((sfpu::Quant<
+          sfpu::QuantVariant::Requant,
+          APPROX,
+          DataFormat::Int32,
+          false /*INT8_INPUT*/,
+          DST_SYNC_MODE,
+          is_fp32_dest_acc_en>::calculate(idst0, idst1, odst, VectorMode::RC)));
 }
 
+#ifndef ARCH_QUASAR
 // clang-format off
 /**
  * Re-quantize variant writing an int8 output tensor.
@@ -83,16 +104,15 @@ ALWI void requant_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
  * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void requant_int8_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((SFPU_BINARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_requant_int32_int8_pack,
-        (APPROX),
-        idst0,
-        idst1,
-        odst,
-        VectorMode::RC)));
+    MATH((sfpu::Quant<
+          sfpu::QuantVariant::Requant,
+          APPROX,
+          DataFormat::Int8,
+          false /*INT8_INPUT*/,
+          DST_SYNC_MODE,
+          is_fp32_dest_acc_en>::calculate(idst0, idst1, odst, VectorMode::RC)));
 }
 
 // clang-format off
@@ -109,16 +129,15 @@ ALWI void requant_int8_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
  * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void requant_int8_in_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((SFPU_BINARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_requant_int32,
-        (APPROX, 8, false, true),
-        idst0,
-        idst1,
-        odst,
-        VectorMode::RC)));
+    MATH((sfpu::Quant<
+          sfpu::QuantVariant::Requant,
+          APPROX,
+          DataFormat::Int32,
+          true /*INT8_INPUT*/,
+          DST_SYNC_MODE,
+          is_fp32_dest_acc_en>::calculate(idst0, idst1, odst, VectorMode::RC)));
 }
 
 // clang-format off
@@ -136,17 +155,17 @@ ALWI void requant_int8_in_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
  * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void requant_int8_in_int8_out_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((SFPU_BINARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_requant_int32_int8_pack,
-        (APPROX, 8, true),
-        idst0,
-        idst1,
-        odst,
-        VectorMode::RC)));
+    MATH((sfpu::Quant<
+          sfpu::QuantVariant::Requant,
+          APPROX,
+          DataFormat::Int8,
+          true /*INT8_INPUT*/,
+          DST_SYNC_MODE,
+          is_fp32_dest_acc_en>::calculate(idst0, idst1, odst, VectorMode::RC)));
 }
+#endif
 
 // clang-format off
 /**
@@ -162,11 +181,18 @@ ALWI void requant_int8_in_int8_out_tile(uint32_t idst0, uint32_t idst1, uint32_t
  * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void dequant_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((SFPU_BINARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_dequant_int32, (APPROX), idst0, idst1, odst, VectorMode::RC)));
+    MATH((sfpu::Quant<
+          sfpu::QuantVariant::Dequant,
+          APPROX,
+          DataFormat::Float32,
+          false /*INT8_INPUT*/,
+          DST_SYNC_MODE,
+          is_fp32_dest_acc_en>::calculate(idst0, idst1, odst, VectorMode::RC)));
 }
 
+#ifndef ARCH_QUASAR
 // clang-format off
 /**
  * De-quantize variant reading an int8 input tensor.
@@ -181,17 +207,17 @@ ALWI void dequant_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
  * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void dequant_int8_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((SFPU_BINARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_dequant_int32,
-        (APPROX, 8, false, true),
-        idst0,
-        idst1,
-        odst,
-        VectorMode::RC)));
+    MATH((sfpu::Quant<
+          sfpu::QuantVariant::Dequant,
+          APPROX,
+          DataFormat::Float32,
+          true /*INT8_INPUT*/,
+          DST_SYNC_MODE,
+          is_fp32_dest_acc_en>::calculate(idst0, idst1, odst, VectorMode::RC)));
 }
+#endif
 
 // clang-format off
 /**
@@ -205,10 +231,18 @@ ALWI void dequant_int8_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
  * | zero_point | The zero point of the quantization Op | uint32_t  | Any number  | Yes      |
  * */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void quant_tile_init(const uint32_t zero_point) {
-    MATH((SFPU_BINARY_INIT_FN_ARGS(quant_int32, sfpu::quant_init, (APPROX), zero_point)));
+    MATH((sfpu::Quant<
+          sfpu::QuantVariant::Quant,
+          APPROX,
+          DataFormat::Int32,
+          false /*INT8_INPUT*/,
+          DST_SYNC_MODE,
+          is_fp32_dest_acc_en>::init(zero_point)));
 }
 
+#ifndef ARCH_QUASAR
 // clang-format off
 /**
  * Initialize the sfpu with the zero point argument of the quantization Op, rounding into the
@@ -221,8 +255,15 @@ ALWI void quant_tile_init(const uint32_t zero_point) {
  * | zero_point | The zero point of the quantization Op | uint32_t  | Any number  | Yes      |
  * */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void quant_uint8_tile_init(const uint32_t zero_point) {
-    MATH((SFPU_BINARY_INIT_FN_ARGS(quant_int32, sfpu::quant_init, (APPROX, false, DataFormat::UInt8), zero_point)));
+    MATH((sfpu::Quant<
+          sfpu::QuantVariant::Quant,
+          APPROX,
+          DataFormat::UInt8,
+          false /*INT8_INPUT*/,
+          DST_SYNC_MODE,
+          is_fp32_dest_acc_en>::init(zero_point)));
 }
 
 // clang-format off
@@ -236,9 +277,17 @@ ALWI void quant_uint8_tile_init(const uint32_t zero_point) {
  * | zero_point | The zero point of the quantization Op | uint32_t  | Any number  | Yes      |
  * */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void quant_int8_tile_init(const uint32_t zero_point) {
-    MATH((SFPU_BINARY_INIT_FN_ARGS(quant_int32, sfpu::quant_init, (APPROX, false, DataFormat::Int8), zero_point)));
+    MATH((sfpu::Quant<
+          sfpu::QuantVariant::Quant,
+          APPROX,
+          DataFormat::Int8,
+          false /*INT8_INPUT*/,
+          DST_SYNC_MODE,
+          is_fp32_dest_acc_en>::init(zero_point)));
 }
+#endif
 
 // clang-format off
 /**
@@ -252,10 +301,18 @@ ALWI void quant_int8_tile_init(const uint32_t zero_point) {
  * | zero_point | The zero point of the re-quantization Op | uint32_t  | Any number  | Yes      |
  * */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void requant_tile_init(const uint32_t zero_point) {
-    MATH((SFPU_BINARY_INIT_FN_ARGS(requant_int32, sfpu::requant_init, (APPROX), zero_point)));
+    MATH((sfpu::Quant<
+          sfpu::QuantVariant::Requant,
+          APPROX,
+          DataFormat::Int32,
+          false /*INT8_INPUT*/,
+          DST_SYNC_MODE,
+          is_fp32_dest_acc_en>::init(zero_point)));
 }
 
+#ifndef ARCH_QUASAR
 // clang-format off
 /**
  * Initialize the sfpu with the zero point argument of the re-quantization Op, rounding into the
@@ -268,8 +325,15 @@ ALWI void requant_tile_init(const uint32_t zero_point) {
  * | zero_point | The zero point of the re-quantization Op | uint32_t  | Any number  | Yes      |
  * */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void requant_uint8_tile_init(const uint32_t zero_point) {
-    MATH((SFPU_BINARY_INIT_FN_ARGS(requant_int32, sfpu::requant_init, (APPROX, false, DataFormat::UInt8), zero_point)));
+    MATH((sfpu::Quant<
+          sfpu::QuantVariant::Requant,
+          APPROX,
+          DataFormat::UInt8,
+          false /*INT8_INPUT*/,
+          DST_SYNC_MODE,
+          is_fp32_dest_acc_en>::init(zero_point)));
 }
 
 // clang-format off
@@ -283,8 +347,15 @@ ALWI void requant_uint8_tile_init(const uint32_t zero_point) {
  * | zero_point | The zero point of the re-quantization Op | uint32_t  | Any number  | Yes      |
  * */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void requant_int8_tile_init(const uint32_t zero_point) {
-    MATH((SFPU_BINARY_INIT_FN_ARGS(requant_int32, sfpu::requant_init, (APPROX, false, DataFormat::Int8), zero_point)));
+    MATH((sfpu::Quant<
+          sfpu::QuantVariant::Requant,
+          APPROX,
+          DataFormat::Int8,
+          false /*INT8_INPUT*/,
+          DST_SYNC_MODE,
+          is_fp32_dest_acc_en>::init(zero_point)));
 }
 
 // clang-format off
@@ -299,9 +370,15 @@ ALWI void requant_int8_tile_init(const uint32_t zero_point) {
  * | zero_point | The zero point of the re-quantization Op | uint32_t  | Any number  | Yes      |
  * */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void requant_int8_in_tile_init(const uint32_t zero_point) {
-    MATH((SFPU_BINARY_INIT_FN_ARGS(
-        requant_int32, sfpu::requant_init, (APPROX, false, DataFormat::Int32, true), zero_point)));
+    MATH((sfpu::Quant<
+          sfpu::QuantVariant::Requant,
+          APPROX,
+          DataFormat::Int32,
+          true /*INT8_INPUT*/,
+          DST_SYNC_MODE,
+          is_fp32_dest_acc_en>::init(zero_point)));
 }
 
 // clang-format off
@@ -317,9 +394,15 @@ ALWI void requant_int8_in_tile_init(const uint32_t zero_point) {
  * | zero_point | The zero point of the re-quantization Op | uint32_t  | Any number  | Yes      |
  * */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void requant_int8_in_uint8_out_tile_init(const uint32_t zero_point) {
-    MATH((SFPU_BINARY_INIT_FN_ARGS(
-        requant_int32, sfpu::requant_init, (APPROX, false, DataFormat::UInt8, true), zero_point)));
+    MATH((sfpu::Quant<
+          sfpu::QuantVariant::Requant,
+          APPROX,
+          DataFormat::UInt8,
+          true /*INT8_INPUT*/,
+          DST_SYNC_MODE,
+          is_fp32_dest_acc_en>::init(zero_point)));
 }
 
 // clang-format off
@@ -335,10 +418,17 @@ ALWI void requant_int8_in_uint8_out_tile_init(const uint32_t zero_point) {
  * | zero_point | The zero point of the re-quantization Op | uint32_t  | Any number  | Yes      |
  * */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void requant_int8_in_int8_out_tile_init(const uint32_t zero_point) {
-    MATH((SFPU_BINARY_INIT_FN_ARGS(
-        requant_int32, sfpu::requant_init, (APPROX, false, DataFormat::Int8, true), zero_point)));
+    MATH((sfpu::Quant<
+          sfpu::QuantVariant::Requant,
+          APPROX,
+          DataFormat::Int8,
+          true /*INT8_INPUT*/,
+          DST_SYNC_MODE,
+          is_fp32_dest_acc_en>::init(zero_point)));
 }
+#endif
 
 // clang-format off
 /**
@@ -352,10 +442,18 @@ ALWI void requant_int8_in_int8_out_tile_init(const uint32_t zero_point) {
  * | zero_point | The zero point of the de-quantization Op | uint32_t  | Any number  | Yes      |
  * */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void dequant_tile_init(const uint32_t zero_point) {
-    MATH((SFPU_BINARY_INIT_FN_ARGS(dequant_int32, sfpu::dequant_init, (APPROX), zero_point)));
+    MATH((sfpu::Quant<
+          sfpu::QuantVariant::Dequant,
+          APPROX,
+          DataFormat::Float32,
+          false /*INT8_INPUT*/,
+          DST_SYNC_MODE,
+          is_fp32_dest_acc_en>::init(zero_point)));
 }
 
+#ifndef ARCH_QUASAR
 // clang-format off
 /**
  * Initialize the sfpu for dequantize reading an int8 input tensor. Must be called before using the dequant
@@ -368,8 +466,16 @@ ALWI void dequant_tile_init(const uint32_t zero_point) {
  * | zero_point | The zero point of the de-quantization Op | uint32_t  | Any number  | Yes      |
  * */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void dequant_int8_tile_init(const uint32_t zero_point) {
-    MATH((SFPU_BINARY_INIT_FN_ARGS(dequant_int32, sfpu::dequant_init, (APPROX, false, true), zero_point)));
+    MATH((sfpu::Quant<
+          sfpu::QuantVariant::Dequant,
+          APPROX,
+          DataFormat::Float32,
+          true /*INT8_INPUT*/,
+          DST_SYNC_MODE,
+          is_fp32_dest_acc_en>::init(zero_point)));
 }
+#endif
 
 }  // namespace ckernel

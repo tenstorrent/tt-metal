@@ -123,7 +123,7 @@ class MathOperation(Enum):
     Trunc = OpSpec("trunc", MathOpType.SFPU_UNARY)
     Frac = OpSpec("frac", MathOpType.SFPU_UNARY)
     # Trigonometric / inverse / hyperbolic unary SFPU ops (shared harness).
-    # cpp_enum_value must match the SfpuType enumerator name exactly.
+    # cpp_enum_value must match the SfpuUnaryOp enumerator name exactly.
     Tan = OpSpec("tan", MathOpType.SFPU_UNARY)
     Atan = OpSpec("atan", MathOpType.SFPU_UNARY)
     Asin = OpSpec("asin", MathOpType.SFPU_UNARY)
@@ -133,7 +133,7 @@ class MathOperation(Enum):
     # round-half-to-even to integer (decimals = 0).
     Round = OpSpec("round", MathOpType.SFPU_UNARY)
     # Comparison-to-zero unary SFPU ops. cpp_enum_value must exactly match the
-    # SfpuType enumerator name so SFPU_UNARY_OPERATION = SfpuType::{value} resolves.
+    # SfpuUnaryOp enumerator name so SFPU_UNARY_OPERATION = SfpuUnaryOp::{value} resolves.
     EqualZero = OpSpec("equal_zero", MathOpType.SFPU_UNARY)
     NotEqualZero = OpSpec("not_equal_zero", MathOpType.SFPU_UNARY)
     LessThanZero = OpSpec("less_than_zero", MathOpType.SFPU_UNARY)
@@ -143,14 +143,14 @@ class MathOperation(Enum):
     # Swiglu is technically a binary SFPU op (gate+up → out), but because
     # Quasar lacks the llk_math_eltwise_binary_sfpu_* dispatcher, its test
     # harness runs through the unary SFPU path. We therefore register it as
-    # SFPU_UNARY for the test-dispatch constant (SfpuType::swiglu). The
+    # SFPU_UNARY for the test-dispatch constant (SfpuUnaryOp::swiglu). The
     # actual binary semantics are implemented by the C++ test source which
     # unpacks two input tiles into Dest and calls _calculate_swiglu_ with
     # three offsets directly.
     SfpuSwiGLU = OpSpec("swiglu", MathOpType.SFPU_UNARY)
     Tanh = OpSpec("tanh", MathOpType.SFPU_UNARY)
     # Typecast is dispatched by the (input, output) DataFormat pair rather than a
-    # single op, but it maps to SfpuType::typecast and runs through the shared
+    # single op, but it maps to SfpuUnaryOp::typecast and runs through the shared
     # unary-SFPU dispatch (see call_unary_sfpu_operation in sfpu_operations.h).
     Typecast = OpSpec("typecast", MathOpType.SFPU_UNARY)
     Threshold = OpSpec("threshold", MathOpType.SFPU_UNARY)
@@ -203,8 +203,8 @@ class MathOperation(Enum):
     SqrtCustom = OpSpec("sqrt_custom", MathOpType.SFPU_UNARY)
     Add1 = OpSpec("add1", MathOpType.SFPU_UNARY)
     CastFp32ToFp16a = OpSpec("cast_fp32_to_fp16a", MathOpType.SFPU_UNARY)
-    # isinf/isnan family: cpp_enum_value must match the SfpuType enumerator name
-    # so SFPU_UNARY_OPERATION = SfpuType::{value} resolves.
+    # isinf/isnan family: cpp_enum_value must match the SfpuUnaryOp enumerator name
+    # so SFPU_UNARY_OPERATION = SfpuUnaryOp::{value} resolves.
     Isinf = OpSpec("isinf", MathOpType.SFPU_UNARY)
     Isposinf = OpSpec("isposinf", MathOpType.SFPU_UNARY)
     Isneginf = OpSpec("isneginf", MathOpType.SFPU_UNARY)
@@ -214,7 +214,7 @@ class MathOperation(Enum):
     SubInt32 = OpSpec("sub_int32", MathOpType.SFPU_UNARY)
     AbsInt32 = OpSpec("abs_int32", MathOpType.SFPU_UNARY)
     # Integer unary ops (int32/uint32/uint16). cpp_enum_value must match the
-    # SfpuType enumerator name so SFPU_UNARY_OPERATION = SfpuType::{value} resolves.
+    # SfpuUnaryOp enumerator name so SFPU_UNARY_OPERATION = SfpuUnaryOp::{value} resolves.
     # Exercised through the dedicated integer harness (test_eltwise_unary_sfpu_int).
     LeftShift = OpSpec("left_shift", MathOpType.SFPU_UNARY)
     RightShift = OpSpec("right_shift", MathOpType.SFPU_UNARY)
@@ -224,7 +224,7 @@ class MathOperation(Enum):
     UnaryMinUint32 = OpSpec("unary_min_uint32", MathOpType.SFPU_UNARY)
     BitwiseNot = OpSpec("bitwise_not", MathOpType.SFPU_UNARY)
     # logical_not(x) = (x == 0) ? 1 : 0, exercised on the float (DEFAULT-layout)
-    # path. cpp_enum_value must match the SfpuType enumerator name.
+    # path. cpp_enum_value must match the SfpuUnaryOp enumerator name.
     # NOTE: main added `LogicalNot` with the same cpp value; keep both so
     # references to either name resolve (equal values alias in Python enums).
     LogicalNot = OpSpec("logical_not_unary", MathOpType.SFPU_UNARY)
@@ -277,7 +277,7 @@ class MathOperation(Enum):
     SfpuIsclose = OpSpec("ISCLOSE", MathOpType.SFPU_BINARY)
     SfpuLogsigmoid = OpSpec("LOGSIGMOID", MathOpType.SFPU_BINARY)
     # Integer / format-typed binary SFPU ops. cpp_enum_value matches the BinaryOp
-    # enumerator (and, lowercased, the SfpuType) so both the dispatch and the coverage
+    # enumerator (and, lowercased, the SfpuUnaryOp) so both the dispatch and the coverage
     # guard resolve.
     SfpuEqInt = OpSpec("EQ_INT", MathOpType.SFPU_BINARY)
     SfpuNeInt = OpSpec("NE_INT", MathOpType.SFPU_BINARY)

@@ -11,6 +11,7 @@
 #include "ckernel_sfpu_exp.h"
 #include "ckernel_sfpu_recip.h"
 #include "cmath_common.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel::sfpu {
 
@@ -84,4 +85,14 @@ inline void mish_init() {
     recip_init<APPROXIMATION_MODE, false, false>();
 }
 
+// ---------------------------------------------------------------------------------------------------
+// Mish<APPROX, DST_SYNC, DST_ACCUM, ITERATIONS>::calculate(dst_index, vector_mode) / init()
+//   backs mish_tile / mish_tile_init (init_kernel -> mish_init).
+// ---------------------------------------------------------------------------------------------------
+template <bool APPROXIMATION_MODE, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8>
+struct Mish : SfpuUnaryOp<Mish<APPROXIMATION_MODE, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static void kernel() { calculate_mish<APPROXIMATION_MODE, DST_ACCUM, ITERATIONS>(); }
+
+    static void init_kernel() { mish_init<APPROXIMATION_MODE>(); }
+};
 }  // namespace ckernel::sfpu

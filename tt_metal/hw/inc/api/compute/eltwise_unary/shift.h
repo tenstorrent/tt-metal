@@ -7,7 +7,6 @@
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_unary_shift.h"
-#include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
@@ -29,10 +28,10 @@ namespace ckernel {
  * | param0          | The number of bits to shift the input by                                   | uint32_t |                                                       | True     |
  */
 // clang-format on
-template <DataFormat data_format>
+template <DataFormat data_format, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void left_shift_tile(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_left_shift, (APPROX, data_format), idst, VectorMode::RC, param0));
+    MATH((sfpu::UnaryShift<APPROX, true /*IS_LEFT_SHIFT*/, data_format, DST_SYNC_MODE, is_fp32_dest_acc_en>::calculate(
+        idst, VectorMode::RC, param0)));
 }
 
 // clang-format off
@@ -53,20 +52,29 @@ ALWI void left_shift_tile(uint32_t idst, uint32_t param0) {
  * | param0          | The number of bits to shift the input by                                   | uint32_t |                                                       | True     |
  */
 // clang-format on
-template <DataFormat data_format>
+template <DataFormat data_format, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void right_shift_tile(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_right_shift, (APPROX, data_format), idst, VectorMode::RC, param0));
+    MATH((sfpu::UnaryShift<APPROX, false /*IS_LEFT_SHIFT*/, data_format, DST_SYNC_MODE, is_fp32_dest_acc_en>::calculate(
+        idst, VectorMode::RC, param0)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void left_shift_tile_init() { MATH(SFPU_UNARY_INIT(left_shift)); }
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void left_shift_tile_init() {
+    // The init is the shared SFPU init; the data-format parameter of the op struct is irrelevant here.
+    MATH((sfpu::UnaryShift<APPROX, true /*IS_LEFT_SHIFT*/, DataFormat::Int32, DST_SYNC_MODE, is_fp32_dest_acc_en>::
+              init()));
+}
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void right_shift_tile_init() { MATH(SFPU_UNARY_INIT(right_shift)); }
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void right_shift_tile_init() {
+    MATH((sfpu::UnaryShift<APPROX, false /*IS_LEFT_SHIFT*/, DataFormat::Int32, DST_SYNC_MODE, is_fp32_dest_acc_en>::
+              init()));
+}
 
 }  // namespace ckernel

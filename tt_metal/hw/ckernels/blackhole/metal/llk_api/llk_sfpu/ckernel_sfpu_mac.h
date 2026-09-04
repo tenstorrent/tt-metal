@@ -8,6 +8,7 @@
 #include "llk_defs.h"
 #include "lltt.h"
 #include "sfpi.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel::sfpu {
 
@@ -32,10 +33,9 @@ inline constexpr int mac_replay_len = is_fp32_dest_acc_en ? 5 : 6;
 
 template <bool APPROXIMATE, bool is_fp32_dest_acc_en, DataFormat data_format>
 inline void mac_init() {
-    // eltwise_ternary_sfpu_configure_addrmod only sets ADDR_MOD_6 (dest.incr=2)
-    // for SfpuType::where.  mac's replay sequence uses ADDR_MOD_6 on SFPSTORE
-    // (physical slot 6, direct on Blackhole since there is no addr_mod_base
-    // offset), so we must configure it explicitly here.
+    // The shared SFPU init only programs ADDR_MOD_7; mac's replay sequence uses
+    // ADDR_MOD_6 on SFPSTORE (physical slot 6, direct on Blackhole since there is
+    // no addr_mod_base offset), so we must configure it explicitly here.
     addr_mod_t{
         .srca = {.incr = 0},
         .srcb = {.incr = 0},
@@ -91,9 +91,9 @@ inline void mac_init() {
 // mac_tile call is only valid immediately after mac_tile_init.
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, DataFormat data_format, int ITERATIONS>
 inline void calculate_mac(
-    [[maybe_unused]] const uint dst_index_in0,  // input a  (fixed at 0)
-    [[maybe_unused]] const uint dst_index_in1,  // input b  (fixed at 1)
-    [[maybe_unused]] const uint dst_index_in2,  // input c  (fixed at 2)
+    [[maybe_unused]] const uint dst_index_in0,    // input a  (fixed at 0)
+    [[maybe_unused]] const uint dst_index_in1,    // input b  (fixed at 1)
+    [[maybe_unused]] const uint dst_index_in2,    // input c  (fixed at 2)
     [[maybe_unused]] const uint dst_index_out) {  // output  (fixed at 0)
     static_assert(
         data_format == DataFormat::Float32 || data_format == DataFormat::Float16_b,
@@ -105,4 +105,18 @@ inline void calculate_mac(
     }
 }
 
+// ---------------------------------------------------------------------------------------------------
+// Mac<APPROX, FORMAT, DST_SYNC, DST_ACCUM, ITERATIONS>
+//   calculate(in0, in1, in2, out, vector_mode) -> calculate_mac   (mac_tile)
+//   init()                                     -> mac_init        (mac_tile_init)
+// ---------------------------------------------------------------------------------------------------
+template <bool APPROXIMATION_MODE, DataFormat FORMAT, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8>
+struct Mac : SfpuTernaryOp<Mac<APPROXIMATION_MODE, FORMAT, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static void kernel(uint32_t dst_index_in0, uint32_t dst_index_in1, uint32_t dst_index_in2, uint32_t dst_index_out) {
+        calculate_mac<APPROXIMATION_MODE, DST_ACCUM, FORMAT, ITERATIONS>(
+            dst_index_in0, dst_index_in1, dst_index_in2, dst_index_out);
+    }
+
+    static void init_kernel() { mac_init<APPROXIMATION_MODE, DST_ACCUM, FORMAT>(); }
+};
 }  // namespace ckernel::sfpu

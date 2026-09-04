@@ -15,6 +15,7 @@
 #include "ckernel_sfpu_log.h"
 #include "ckernel_sfpu_polyval.h"
 #include "sfpi.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel::sfpu {
 
@@ -1189,46 +1190,89 @@ void init_atanh() {
 // Single entry points for the trigonometry / inverse-hyperbolic family, matching
 // the unary-SFPU harness contract (one init + one calculate, templated on the op).
 // The if-constexpr switch selects the per-op body above; only the five ops in the
-// harness is_trig_op set (sine/cosine/acosh/asinh/atanh) are valid.
-template <SfpuType OPERATION, bool is_fp32_dest_acc_en>
+// harness is_trig_op set (Sine/Cosine/Acosh/Asinh/Atanh) are valid.
+enum class TrigOp { Sine, Cosine, Tan, Asin, Acos, Atan, Sinh, Cosh, Asinh, Acosh, Atanh };
+
+template <TrigOp OPERATION, bool is_fp32_dest_acc_en>
 inline void init_trigonometry() {
     static_assert(
-        OPERATION == SfpuType::sine || OPERATION == SfpuType::cosine || OPERATION == SfpuType::acosh ||
-            OPERATION == SfpuType::asinh || OPERATION == SfpuType::atanh,
-        "init_trigonometry: OPERATION must be a trigonometry SfpuType (sine/cosine/acosh/asinh/atanh)");
+        OPERATION == TrigOp::Sine || OPERATION == TrigOp::Cosine || OPERATION == TrigOp::Acosh ||
+            OPERATION == TrigOp::Asinh || OPERATION == TrigOp::Atanh,
+        "init_trigonometry: OPERATION must be a supported TrigOp (Sine/Cosine/Acosh/Asinh/Atanh)");
 
-    if constexpr (OPERATION == SfpuType::sine) {
+    if constexpr (OPERATION == TrigOp::Sine) {
         sine_init<false /* APPROXIMATION_MODE */>();
-    } else if constexpr (OPERATION == SfpuType::cosine) {
+    } else if constexpr (OPERATION == TrigOp::Cosine) {
         cosine_init<false /* APPROXIMATION_MODE */>();
-    } else if constexpr (OPERATION == SfpuType::acosh || OPERATION == SfpuType::asinh) {
+    } else if constexpr (OPERATION == TrigOp::Acosh || OPERATION == TrigOp::Asinh) {
         init_inverse_hyperbolic<false /* APPROXIMATION_MODE */, is_fp32_dest_acc_en>();
-    } else if constexpr (OPERATION == SfpuType::atanh) {
+    } else if constexpr (OPERATION == TrigOp::Atanh) {
         init_atanh<false /* APPROXIMATION_MODE */, is_fp32_dest_acc_en>();
     }
 }
 
-template <SfpuType OPERATION, bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = SFPU_ITERATIONS>
+template <TrigOp OPERATION, bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = SFPU_ITERATIONS>
 inline void calculate_trigonometry() {
     static_assert(
-        OPERATION == SfpuType::sine || OPERATION == SfpuType::cosine || OPERATION == SfpuType::acosh ||
-            OPERATION == SfpuType::asinh || OPERATION == SfpuType::atanh,
-        "calculate_trigonometry: OPERATION must be a trigonometry SfpuType (sine/cosine/acosh/asinh/atanh)");
+        OPERATION == TrigOp::Sine || OPERATION == TrigOp::Cosine || OPERATION == TrigOp::Acosh ||
+            OPERATION == TrigOp::Asinh || OPERATION == TrigOp::Atanh,
+        "calculate_trigonometry: OPERATION must be a supported TrigOp (Sine/Cosine/Acosh/Asinh/Atanh)");
     static_assert(
-        !APPROXIMATION_MODE || OPERATION == SfpuType::sine || OPERATION == SfpuType::cosine,
-        "calculate_trigonometry: APPROXIMATION_MODE only affects sine/cosine; pass false for acosh/asinh/atanh");
+        !APPROXIMATION_MODE || OPERATION == TrigOp::Sine || OPERATION == TrigOp::Cosine,
+        "calculate_trigonometry: APPROXIMATION_MODE only affects Sine/Cosine; pass false for Acosh/Asinh/Atanh");
 
-    if constexpr (OPERATION == SfpuType::sine) {
+    if constexpr (OPERATION == TrigOp::Sine) {
         calculate_sine<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>();
-    } else if constexpr (OPERATION == SfpuType::cosine) {
+    } else if constexpr (OPERATION == TrigOp::Cosine) {
         calculate_cosine<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>();
-    } else if constexpr (OPERATION == SfpuType::acosh) {
+    } else if constexpr (OPERATION == TrigOp::Acosh) {
         calculate_acosh<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>();
-    } else if constexpr (OPERATION == SfpuType::asinh) {
+    } else if constexpr (OPERATION == TrigOp::Asinh) {
         calculate_asinh<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>();
-    } else if constexpr (OPERATION == SfpuType::atanh) {
+    } else if constexpr (OPERATION == TrigOp::Atanh) {
         calculate_atanh<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>();
     }
 }
 
+// ---------------------------------------------------------------------------------------------------
+// Trigonometry<TRIG_OP, APPROX, DST_SYNC, DST_ACCUM, ITERATIONS>::calculate(dst_index, vector_mode) / init()
+//   backs sin/cos/asinh/acosh/atanh _tile and _tile_init. TRIG_OP selects the per-function kernel and
+//   its init routine. Quasar implements only Sine, Cosine, Asinh, Acosh, Atanh.
+// ---------------------------------------------------------------------------------------------------
+template <TrigOp TRIG_OP, bool APPROXIMATION_MODE, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = SFPU_ITERATIONS>
+struct Trigonometry
+    : SfpuUnaryOp<Trigonometry<TRIG_OP, APPROXIMATION_MODE, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static_assert(
+        TRIG_OP == TrigOp::Sine || TRIG_OP == TrigOp::Cosine || TRIG_OP == TrigOp::Asinh || TRIG_OP == TrigOp::Acosh ||
+            TRIG_OP == TrigOp::Atanh,
+        "Trigonometry: unsupported TrigOp; Quasar supports Sine, Cosine, Asinh, Acosh, Atanh");
+
+    static void kernel() {
+        if constexpr (TRIG_OP == TrigOp::Sine) {
+            calculate_sine<APPROXIMATION_MODE, DST_ACCUM, ITERATIONS>();
+        } else if constexpr (TRIG_OP == TrigOp::Cosine) {
+            calculate_cosine<APPROXIMATION_MODE, DST_ACCUM, ITERATIONS>();
+        } else if constexpr (TRIG_OP == TrigOp::Asinh) {
+            calculate_asinh<APPROXIMATION_MODE, DST_ACCUM, ITERATIONS>();
+        } else if constexpr (TRIG_OP == TrigOp::Acosh) {
+            calculate_acosh<APPROXIMATION_MODE, DST_ACCUM, ITERATIONS>();
+        } else if constexpr (TRIG_OP == TrigOp::Atanh) {
+            calculate_atanh<APPROXIMATION_MODE, DST_ACCUM, ITERATIONS>();
+        }
+    }
+
+    static void init_kernel() {
+        if constexpr (TRIG_OP == TrigOp::Sine) {
+            sine_init<APPROXIMATION_MODE>();
+        } else if constexpr (TRIG_OP == TrigOp::Cosine) {
+            cosine_init<APPROXIMATION_MODE>();
+        } else if constexpr (TRIG_OP == TrigOp::Asinh) {
+            init_inverse_hyperbolic<APPROXIMATION_MODE, DST_ACCUM>();
+        } else if constexpr (TRIG_OP == TrigOp::Acosh) {
+            init_inverse_hyperbolic<APPROXIMATION_MODE, DST_ACCUM>();
+        } else if constexpr (TRIG_OP == TrigOp::Atanh) {
+            init_atanh<APPROXIMATION_MODE, DST_ACCUM>();
+        }
+    }
+};
 }  // namespace ckernel::sfpu

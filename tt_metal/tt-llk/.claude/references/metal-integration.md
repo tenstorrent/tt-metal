@@ -86,12 +86,12 @@ Grep for "{function_name}" in tests/tt_metal/tt_metal/test_kernels/compute/ (*.c
 | 2 | `tt_metal/hw/ckernels/{arch}/metal/llk_api/llk_sfpu/ckernel_sfpu_new_op.h` | Existing wrapper in `llk_sfpu/` |
 | 3 | `tt_metal/hw/inc/api/compute/eltwise_unary/new_op.h` | Existing op in `eltwise_unary/` |
 
-The Compute API in Layer 3 calls the SFPU functor directly via the `SFPU_UNARY_CALL` / `SFPU_UNARY_INIT*` macros (declared in `llk_math_eltwise_unary_sfpu_macros.h`), so no per-op `llk_math_eltwise_unary_sfpu_<op>.h` wrapper is required in Layer 2 for the standard pattern.
+The Layer 2 header also defines the op's dispatch struct (e.g. `struct NewOp : SfpuUnaryOp<NewOp<...>, DST_SYNC, DST_ACCUM>` with `kernel(...)` and an optional `init_kernel(...)` that runs after the shared `_llk_math_eltwise_sfpu_init_()` and owns any op-specific state such as `ADDR_MOD_6`; bases in `llk_math_eltwise_sfpu_op.h`). The Compute API in Layer 3 calls `sfpu::NewOp<..., DST_SYNC_MODE, is_fp32_dest_acc_en>::calculate(...)` / `::init(...)`, so no per-op `llk_math_eltwise_unary_sfpu_<op>.h` wrapper is required in Layer 2 for the standard pattern. See `tt_metal/hw/inc/api/compute/eltwise_unary/README.md`.
 
 **Update these files:**
 
 ```
-# Include the SFPU macro/op header where the compute API needs it
+# Include the SFPU op header where the compute API needs it
 Read tt_metal/hw/inc/api/compute/eltwise_unary/new_op.h
 
 # Include the new compute API header in the unary aggregator

@@ -11,6 +11,7 @@
 #include "ckernel_sfpu_sqrt_custom.h"
 
 #include "sfpi.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -63,5 +64,17 @@ void erfinv_init() {
     log_init<false, false, false>();
 }
 
+// ---------------------------------------------------------------------------------------------------
+// Erfinv<APPROX, DST_SYNC, DST_ACCUM>
+//   calculate(dst_index, vector_mode) -> calculate_erfinv
+//   init()                            -> erfinv_init
+// Backs erfinv_tile / erfinv_tile_init.
+// ---------------------------------------------------------------------------------------------------
+template <bool APPROXIMATION_MODE, DstSync DST_SYNC, bool DST_ACCUM>
+struct Erfinv : SfpuUnaryOp<Erfinv<APPROXIMATION_MODE, DST_SYNC, DST_ACCUM>, DST_SYNC, DST_ACCUM> {
+    static void kernel() { calculate_erfinv<APPROXIMATION_MODE>(); }
+
+    static void init_kernel() { erfinv_init<APPROXIMATION_MODE>(); }
+};
 }  // namespace sfpu
 }  // namespace ckernel

@@ -102,7 +102,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_dest_init_wrapper_<DST_SYNC, is_fp32_dest_acc_en, PackMode::Default>();
 
     // Programs vConstFloatPrgm0 = 2.0f for the reciprocal inside _sfpu_sigmoid_.
-    _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
+    _llk_math_eltwise_sfpu_init_();
     ckernel::sfpu::sigmoid_init<false /* APPROXIMATION_MODE */>();
 
     for (std::uint32_t tile = 0; tile < params.TILE_CNT; ++tile)

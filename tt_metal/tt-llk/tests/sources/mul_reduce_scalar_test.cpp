@@ -114,7 +114,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // compute_kernel_hw_startup programs the SFPU config register once per
     // kernel; this standalone harness bypasses it, so run the idempotent
     // once-init before the reduce-phase _calculate_fill_ SFPU stores.
-    _llk_math_eltwise_unary_sfpu_init_once_();
+    _llk_math_eltwise_sfpu_init_();
 
     // mul_reduce_scalar_init: element-wise multiply, no accumulate-to-dest.
     _llk_math_eltwise_binary_init_<EltwiseBinaryType::ELWMUL, BroadcastType::NONE, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE>(

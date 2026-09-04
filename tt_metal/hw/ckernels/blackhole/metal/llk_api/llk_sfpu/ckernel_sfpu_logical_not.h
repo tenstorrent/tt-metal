@@ -10,10 +10,9 @@
 #include "ckernel_defs.h"
 #include "cmath_common.h"
 #include "sfpi.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel::sfpu {
-
-inline void logical_not_unary_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
 template <bool APPROXIMATION_MODE, InstrModLoadStore INSTRUCTION_MODE, int ITERATIONS>
 inline void calculate_logical_not() {
@@ -40,4 +39,23 @@ inline void calculate_logical_not() {
         sfpi::dst_reg++;
     }
 }
+
+// ---------------------------------------------------------------------------------------------------
+// LogicalNot<APPROX, INSTRUCTION_MODE, DST_SYNC, DST_ACCUM, ITERATIONS>::calculate(dst_index, vector_mode)
+//   backs logical_not_tile<DATA_FORMAT> (INSTRUCTION_MODE is derived from DATA_FORMAT by the API header)
+//   and logical_not_tile_init (shared SFPU init only).
+// ---------------------------------------------------------------------------------------------------
+template <
+    bool APPROXIMATION_MODE,
+    InstrModLoadStore INSTRUCTION_MODE,
+    DstSync DST_SYNC,
+    bool DST_ACCUM,
+    int ITERATIONS = 8>
+struct LogicalNot : SfpuUnaryOp<
+                        LogicalNot<APPROXIMATION_MODE, INSTRUCTION_MODE, DST_SYNC, DST_ACCUM, ITERATIONS>,
+                        DST_SYNC,
+                        DST_ACCUM> {
+    static void kernel() { calculate_logical_not<APPROXIMATION_MODE, INSTRUCTION_MODE, ITERATIONS>(); }
+};
+
 }  // namespace ckernel::sfpu

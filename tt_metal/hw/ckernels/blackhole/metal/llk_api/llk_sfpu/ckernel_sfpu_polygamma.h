@@ -13,6 +13,7 @@
 #include "sfpu/ckernel_sfpu_polyval.h"
 #include "ckernel_sfpu_recip.h"
 #include "cmath_common.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel::sfpu {
 
@@ -140,4 +141,18 @@ void polygamma_init() {
     sfpu_reciprocal_init<APPROXIMATION_MODE>();
 }
 
+// ---------------------------------------------------------------------------------------------------
+// Polygamma<APPROX, DST_SYNC, DST_ACCUM, ITERATIONS>
+//   calculate(dst_index, vector_mode, n_packed, scale_packed) -> calculate_polygamma
+//   init()                                                    -> polygamma_init
+// Backs polygamma_tile / polygamma_tile_init.
+// ---------------------------------------------------------------------------------------------------
+template <bool APPROXIMATION_MODE, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8>
+struct Polygamma : SfpuUnaryOp<Polygamma<APPROXIMATION_MODE, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static void kernel(std::uint32_t n_packed, std::uint32_t scale_packed) {
+        calculate_polygamma<APPROXIMATION_MODE, DST_ACCUM, ITERATIONS>(n_packed, scale_packed);
+    }
+
+    static void init_kernel() { polygamma_init<APPROXIMATION_MODE>(); }
+};
 }  // namespace ckernel::sfpu

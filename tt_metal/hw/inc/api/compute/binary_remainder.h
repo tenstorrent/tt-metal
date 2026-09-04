@@ -7,7 +7,6 @@
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_binary_remainder.h"
-#include "llk_math_eltwise_binary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
@@ -30,23 +29,18 @@ namespace ckernel {
  * | idst1          | The index of the tile in DST register buffer to use as second operand | uint32_t | Must be less than the size of the DST register buffer | True     |
  * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void remainder_int32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((SFPU_BINARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_remainder_int32,
-        (APPROX, 8 /* ITERATIONS */),
-        idst0,
-        idst1,
-        odst,
-        VectorMode::RC)));
+    MATH((sfpu::BinaryRemainder<APPROX, DataFormat::Int32, DST_SYNC_MODE, is_fp32_dest_acc_en>::calculate(
+        idst0, idst1, odst, VectorMode::RC)));
 }
 
 /**
  * Please refer to documentation for remainder_int32_tile.
  */
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void remainder_int32_tile_init() {
-    MATH((SFPU_BINARY_INIT_FN(remainder_int32, sfpu::remainder_int32_init, (APPROX))));
+    MATH((sfpu::BinaryRemainder<APPROX, DataFormat::Int32, DST_SYNC_MODE, is_fp32_dest_acc_en>::init()));
 }
 
 // clang-format off
@@ -67,23 +61,18 @@ ALWI void remainder_int32_tile_init() {
  * | idst1          | The index of the tile in DST register buffer to use as second operand | uint32_t | Must be less than the size of the DST register buffer | True     |
  * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void remainder_uint32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((SFPU_BINARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_remainder_uint32,
-        (APPROX, 8 /* ITERATIONS */),
-        idst0,
-        idst1,
-        odst,
-        VectorMode::RC)));
+    MATH((sfpu::BinaryRemainder<APPROX, DataFormat::UInt32, DST_SYNC_MODE, is_fp32_dest_acc_en>::calculate(
+        idst0, idst1, odst, VectorMode::RC)));
 }
 
 /**
  * Please refer to documentation for remainder_uint32_tile.
  */
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void remainder_uint32_tile_init() {
-    MATH((SFPU_BINARY_INIT_FN(remainder_uint32, sfpu::remainder_uint32_init, (APPROX))));
+    MATH((sfpu::BinaryRemainder<APPROX, DataFormat::UInt32, DST_SYNC_MODE, is_fp32_dest_acc_en>::init()));
 }
 
 // BF16, FP32
@@ -109,22 +98,16 @@ ALWI void remainder_uint32_tile_init() {
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void remainder_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((SFPU_BINARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_sfpu_binary_remainder,
-        (APPROX, 8 /* ITERATIONS */, is_fp32_dest_acc_en),
-        idst0,
-        idst1,
-        odst,
-        VectorMode::RC)));
+    MATH((sfpu::BinaryRemainder<APPROX, DataFormat::Float16_b, DST_SYNC_MODE, is_fp32_dest_acc_en>::calculate(
+        idst0, idst1, odst, VectorMode::RC)));
 }
 
 /**
  * Please refer to documentation for remainder_binary_tile.
  */
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void remainder_binary_tile_init() {
-    MATH((SFPU_BINARY_INIT_FN(unused, sfpu::remainder_binary_init, (APPROX))));
+    MATH((sfpu::BinaryRemainder<APPROX, DataFormat::Float16_b, DST_SYNC_MODE, is_fp32_dest_acc_en>::init()));
 }
 
 }  // namespace ckernel

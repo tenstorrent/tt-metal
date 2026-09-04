@@ -12,8 +12,8 @@
 #include "ckernel_ops.h"
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
-#include "llk_math_eltwise_unary_sfpu_init.h"
 #include "sfpi.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -121,10 +121,31 @@ inline void calculate_rsqrt() {
 template <bool APPROXIMATION_MODE, [[maybe_unused]] bool legacy_compat = false>
 void rsqrt_init() {
     static_assert(!legacy_compat, "Non-default legacy_compat (true) not supported in Quasar rsqrt");
-    llk_math_eltwise_unary_sfpu_init<SfpuType::rsqrt>();
+    _llk_math_eltwise_sfpu_init_();
     // Program the SQRT_23-bits seed / refinement constants the full-precision rsqrt reads.
     _init_rsqrt_<APPROXIMATION_MODE>();
 }
 
+// ---------------------------------------------------------------------------------------------------
+// Rsqrt<APPROX, FAST_APPROX, LEGACY_COMPAT, DST_SYNC, DST_ACCUM, ITERATIONS>
+//   calculate(dst_index, vector_mode) -> calculate_rsqrt
+//   init()                            -> rsqrt_init
+// Backs rsqrt_tile / rsqrt_tile_init.
+// ---------------------------------------------------------------------------------------------------
+template <
+    bool APPROXIMATION_MODE,
+    bool FAST_APPROX,
+    bool LEGACY_COMPAT,
+    DstSync DST_SYNC,
+    bool DST_ACCUM,
+    int ITERATIONS = 8>
+struct Rsqrt : SfpuUnaryOp<
+                   Rsqrt<APPROXIMATION_MODE, FAST_APPROX, LEGACY_COMPAT, DST_SYNC, DST_ACCUM, ITERATIONS>,
+                   DST_SYNC,
+                   DST_ACCUM> {
+    static void kernel() { calculate_rsqrt<APPROXIMATION_MODE, ITERATIONS, DST_ACCUM, FAST_APPROX, LEGACY_COMPAT>(); }
+
+    static void init_kernel() { rsqrt_init<APPROXIMATION_MODE, LEGACY_COMPAT>(); }
+};
 }  // namespace sfpu
 }  // namespace ckernel

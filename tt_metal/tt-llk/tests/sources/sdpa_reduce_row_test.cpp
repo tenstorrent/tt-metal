@@ -154,7 +154,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // _init_sdpa_reduce_row_8x32_ sets the ZERO / TILE_OFFSET addr_mods, and the replay-buffer
     // recorder lays down the pool-specific fold sequence. sdpa.h records the replay buffer for
     // exactly the pool it is about to compute, so we do the same here.
-    _llk_math_eltwise_unary_sfpu_init_<SfpuType::reduce>();
+    _llk_math_eltwise_sfpu_init_();
     ckernel::sfpu::_init_sdpa_reduce_row_8x32_<DataFormat::Float16_b>();
     _llk_math_eltwise_sfpu_start_(SDPA_DST_INDEX);
 

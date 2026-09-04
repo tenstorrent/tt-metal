@@ -19,6 +19,7 @@
 #include "ckernel_sfpu_piecewise_rational.h"
 #include "ckernel_sfpu_tanh.h"  // _sfpu_tanh_fp32_accurate_ for gelu_tanh
 #include "sfpi.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel::sfpu {
 
@@ -515,4 +516,37 @@ inline void gelu_derivative_polynomial_init() {
     }
 }
 
+// ---------------------------------------------------------------------------------------------------
+// Gelu<APPROX, DST_SYNC, DST_ACCUM, ITERATIONS>::calculate(dst_index, vector_mode) / init()
+//   backs gelu_tile / gelu_tile_pack and gelu_tile_init / gelu_tile_init_pack (init_kernel -> gelu_init).
+// ---------------------------------------------------------------------------------------------------
+template <bool APPROXIMATION_MODE, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8>
+struct Gelu : SfpuUnaryOp<Gelu<APPROXIMATION_MODE, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static void kernel() { calculate_gelu<APPROXIMATION_MODE, DST_ACCUM, ITERATIONS>(); }
+
+    static void init_kernel() { gelu_init<APPROXIMATION_MODE, DST_ACCUM>(); }
+};
+
+// ---------------------------------------------------------------------------------------------------
+// GeluTanh<DST_SYNC, DST_ACCUM, ITERATIONS>::calculate(dst_index, vector_mode) / init()
+//   backs gelu_tanh_tile / gelu_tanh_tile_pack and their inits (init_kernel -> gelu_tanh_init).
+// ---------------------------------------------------------------------------------------------------
+template <DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8>
+struct GeluTanh : SfpuUnaryOp<GeluTanh<DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static void kernel() { calculate_gelu_tanh<DST_ACCUM, ITERATIONS>(); }
+
+    static void init_kernel() { gelu_tanh_init(); }
+};
+
+// ---------------------------------------------------------------------------------------------------
+// GeluDerivative<APPROX, DST_SYNC, DST_ACCUM, ITERATIONS>::calculate(dst_index, vector_mode) / init()
+//   backs gelu_derivative_tile / gelu_derivative_tile_init (init_kernel -> gelu_derivative_polynomial_init).
+// ---------------------------------------------------------------------------------------------------
+template <bool APPROXIMATION_MODE, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8>
+struct GeluDerivative
+    : SfpuUnaryOp<GeluDerivative<APPROXIMATION_MODE, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static void kernel() { calculate_gelu_derivative_polynomial<APPROXIMATION_MODE, DST_ACCUM, ITERATIONS>(); }
+
+    static void init_kernel() { gelu_derivative_polynomial_init<APPROXIMATION_MODE>(); }
+};
 }  // namespace ckernel::sfpu

@@ -221,7 +221,7 @@ using namespace ckernel;
 template <std::uint32_t K, bool fused>
 inline void topk_xl_init()
 {
-    _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
+    _llk_math_eltwise_sfpu_init_();
     ckernel::sfpu::_topk_xl_init_<K, fused>();
 }
 
@@ -265,7 +265,7 @@ inline void topk_xl_rebuild(std::uint32_t dst_index, bool ascending)
 
 inline void topk_xl_add_lsb_indices_init()
 {
-    _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
+    _llk_math_eltwise_sfpu_init_();
     ckernel::sfpu::_topk_xl_add_lsb_indices_init_();
 }
 
@@ -280,7 +280,7 @@ inline void topk_xl_add_lsb_indices(std::uint32_t dst_index)
 template <std::uint32_t chunk_base_upper16, std::uint32_t chunk_base_lower16>
 inline void topk_xl_separate_indices_row_major_init_static()
 {
-    _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
+    _llk_math_eltwise_sfpu_init_();
     ckernel::sfpu::_topk_xl_separate_indices_row_major_init_static_<chunk_base_upper16, chunk_base_lower16>();
 }
 
@@ -288,7 +288,7 @@ inline void topk_xl_separate_indices_row_major_init_static()
 // is only known at runtime.
 inline void topk_xl_separate_indices_row_major_init(std::uint32_t chunk_base)
 {
-    _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
+    _llk_math_eltwise_sfpu_init_();
     ckernel::sfpu::_topk_xl_separate_indices_row_major_init_(chunk_base);
 }
 
@@ -296,7 +296,7 @@ inline void topk_xl_separate_indices_row_major_init(std::uint32_t chunk_base)
 template <std::uint32_t chunk_base_upper16>
 inline void topk_xl_separate_indices_row_major_init_upper(std::uint32_t chunk_base_low16)
 {
-    _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
+    _llk_math_eltwise_sfpu_init_();
     ckernel::sfpu::_topk_xl_separate_indices_row_major_init_upper_<chunk_base_upper16>(chunk_base_low16);
 }
 
@@ -322,7 +322,7 @@ inline void topk_xl_separate_indices_row_major_advance_chunk_base()
 // Generic separate_indices (keeps the tile coordinate and prepends group_id).
 inline void topk_xl_separate_indices_init(std::uint32_t group_id_bit_shift)
 {
-    _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
+    _llk_math_eltwise_sfpu_init_();
     ckernel::sfpu::_topk_xl_separate_indices_init_(group_id_bit_shift);
 }
 

@@ -9,7 +9,7 @@
 
 namespace ckernel {
 
-inline void llk_math_ema_sfpu_init() { _llk_math_eltwise_ternary_sfpu_init_<SfpuType::unused>(); }
+inline void llk_math_ema_sfpu_init() { _llk_math_eltwise_sfpu_init_(); }
 
 inline void llk_math_ema_sfpu_load_alpha_beta(uint32_t alpha, uint32_t beta) { sfpu::_load_alpha_beta_(alpha, beta); }
 

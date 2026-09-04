@@ -17,6 +17,7 @@
 #include "ckernel_sfpu_expm1.h"
 #include "ckernel_sfpu_trigonometry.h"
 #include "cmath_common.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel::sfpu {
 
@@ -226,5 +227,14 @@ inline void tanh_init() {
         }
     }
 }
+
+// Tanh<APPROX, DST_SYNC, DST_ACCUM, ITERATIONS>: tanh_tile / tanh_tile_init and the
+// tanh_tile_pack / tanh_tile_init_pack pack-thread variants (compute_kernel_api.h).
+template <bool APPROXIMATION_MODE, DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS = 8>
+struct Tanh : SfpuUnaryOp<Tanh<APPROXIMATION_MODE, DST_SYNC, DST_ACCUM, ITERATIONS>, DST_SYNC, DST_ACCUM> {
+    static void kernel() { calculate_tanh<APPROXIMATION_MODE, DST_ACCUM, ITERATIONS>(); }
+
+    static void init_kernel() { tanh_init<APPROXIMATION_MODE, DST_ACCUM>(); }
+};
 
 }  // namespace ckernel::sfpu

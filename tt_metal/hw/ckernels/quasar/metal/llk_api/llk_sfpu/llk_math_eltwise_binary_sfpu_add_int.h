@@ -5,15 +5,16 @@
 #pragma once
 
 #include <cstdint>
-#include "llk_math_eltwise_binary_sfpu_macros.h"
-#include "sfpu/ckernel_sfpu_add.h"
+#include "ckernel_sfpu_add_int.h"
 
 namespace ckernel {
 
 /**
  * @brief Initialize SFPU for elementwise integer add
  */
-inline void llk_math_eltwise_binary_sfpu_add_int_init() { _llk_math_eltwise_sfpu_init_(); }
+inline void llk_math_eltwise_binary_sfpu_add_int_init() {
+    sfpu::AddInt<false, DataFormat::Int32, DST_SYNC_MODE, DST_ACCUM_MODE>::init();
+}
 
 /**
  * @brief Performs elementwise integer add: y = add(x0, x1)
@@ -32,15 +33,8 @@ template <bool APPROXIMATE, int ITERATIONS, DataFormat DATA_FORMAT, bool SIGN_MA
 inline void llk_math_eltwise_binary_sfpu_add_int(
     std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst, VectorMode vector_mode = VectorMode::RC) {
     static_assert(DATA_FORMAT == DataFormat::Int32, "Quasar SFPU add_int currently supports Int32 only");
-    SFPU_BINARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        _add_int_,
-        (APPROXIMATE, ITERATIONS, DATA_FORMAT, 0, SIGN_MAGNITUDE_FORMAT),
-        idst0,
-        idst1,
-        odst,
-        vector_mode);
+    sfpu::AddInt<APPROXIMATE, DATA_FORMAT, DST_SYNC_MODE, DST_ACCUM_MODE, SIGN_MAGNITUDE_FORMAT, ITERATIONS>::calculate(
+        idst0, idst1, odst, vector_mode);
 }
 
 }  // namespace ckernel

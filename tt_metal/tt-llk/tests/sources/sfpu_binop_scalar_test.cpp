@@ -61,7 +61,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 using namespace ckernel;
 
 #include "llk_sfpu/ckernel_sfpu_binop_with_unary.h"
-#include "llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h"
+#include "llk_sfpu/llk_math_eltwise_sfpu_op.h"
 
 void run_kernel(RUNTIME_PARAMETERS)
 {
@@ -83,15 +83,11 @@ void run_kernel(RUNTIME_PARAMETERS)
     // Scalar binop: out(tile 0) = binop(dst, scalar). VectorMode::RC drives 4
     // faces (8 rows each), so ITERATIONS is 8 per call, matching the production
     // add_unary_tile / sub_unary_tile / ... APIs.
-    llk_math_eltwise_unary_sfpu_init<SfpuType::unused, is_fp32_dest_acc_en>();
-    SFPU_UNARY_CALL(
+    _llk_math_eltwise_sfpu_init_();
+    SfpuUnaryFn<
+        sfpu::calculate_binop_with_scalar<APPROX_MODE, SFPU_BINOP_MODE, 8 /* ITERATIONS */, is_fp32_dest_acc_en>,
         DstSync::SyncHalf,
-        is_fp32_dest_acc_en,
-        calculate_binop_with_scalar,
-        (APPROX_MODE, SFPU_BINOP_MODE, 8 /* ITERATIONS */, is_fp32_dest_acc_en),
-        0 /* dst_index */,
-        VectorMode::RC,
-        SFPU_UNARY_SCALAR);
+        is_fp32_dest_acc_en>::calculate(0 /* dst_index */, VectorMode::RC, SFPU_UNARY_SCALAR);
 
     _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 }

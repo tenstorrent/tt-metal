@@ -8,7 +8,7 @@
 #include "api/compute/common_globals.h"
 
 #ifdef TRISC_MATH
-#include "llk_math_eltwise_unary_sfpu_macros.h"
+#include "llk_math_eltwise_sfpu_op.h"
 #endif
 
 /**
@@ -611,13 +611,12 @@ inline void _calculate_top8_tile_(uint32_t tile_index) {
 
 }  // namespace sfpu
 
-inline void _llk_math_top8_tile_init_() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::unused>(ckernel::sfpu::_top8_configure_addrmod_);
-}
+using Top8Op = SfpuUnaryFn<sfpu::_calculate_top8_tile_, DST_SYNC_MODE, DST_ACCUM_MODE, sfpu::_top8_configure_addrmod_>;
+
+inline void _llk_math_top8_tile_init_() { Top8Op::init(); }
 
 inline void _llk_math_top8_tile_(uint32_t tile_index, uint32_t dst_index) {
-    SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(
-        DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_top8_tile_, dst_index, VectorMode::RC_custom, tile_index);
+    Top8Op::calculate(dst_index, VectorMode::RC_custom, tile_index);
 }
 
 #endif

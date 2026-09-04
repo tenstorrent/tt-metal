@@ -117,7 +117,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
 
         // Initialize SFPU for reduce operation
-        _llk_math_eltwise_unary_sfpu_init_<SfpuType::reduce>();
+        _llk_math_eltwise_sfpu_init_();
 
         // Initialize SDPA reduce using unified function
         init_reduce<PoolType::MAX, DataFormat::Float16_b, is_fp32_dest_acc_en>(BLOCK_CT_DIM);

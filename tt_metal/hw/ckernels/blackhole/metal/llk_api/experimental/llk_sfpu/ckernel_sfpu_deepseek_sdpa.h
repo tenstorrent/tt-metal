@@ -11,6 +11,7 @@
 #include "sfpi.h"
 #include "ckernel_sfpu_exp.h"
 #include "ckernel_sfpu_recip.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel::sfpu {
 
@@ -82,4 +83,16 @@ inline void calculate_fused_max_sub_exp_add_tile(int scale_bf16) {
     }
 }
 
+// ---------------------------------------------------------------------------------------------------
+// FusedMaxSubExpAdd<SDPA_EXP_APPROX_MODE, FINAL_NORM, DST_SYNC, DST_ACCUM>
+//   calculate(dst_index, vector_mode, scale_bf16) -> calculate_fused_max_sub_exp_add_tile
+// No op-specific init. Backs fused_max_sub_exp_add_tile (api/compute/experimental/sdpa.h).
+// ---------------------------------------------------------------------------------------------------
+template <bool SDPA_EXP_APPROX_MODE, bool FINAL_NORM, DstSync DST_SYNC, bool DST_ACCUM>
+struct FusedMaxSubExpAdd
+    : SfpuUnaryOp<FusedMaxSubExpAdd<SDPA_EXP_APPROX_MODE, FINAL_NORM, DST_SYNC, DST_ACCUM>, DST_SYNC, DST_ACCUM> {
+    static void kernel(int scale_bf16) {
+        calculate_fused_max_sub_exp_add_tile<SDPA_EXP_APPROX_MODE, FINAL_NORM>(scale_bf16);
+    }
+};
 }  // namespace ckernel::sfpu

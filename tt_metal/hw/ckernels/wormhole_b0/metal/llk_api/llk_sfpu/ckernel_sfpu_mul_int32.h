@@ -8,6 +8,8 @@
 #include "ckernel_addrmod.h"
 #include "ckernel_defs.h"
 #include "sfpi.h"
+#include "sfpu/ckernel_sfpu_mul_int.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 namespace ckernel::sfpu {
 
@@ -113,5 +115,46 @@ inline void mul_int32_init() {
     sfpi::vConstIntPrgm1 = -11;
     sfpi::vConstFloatPrgm2 = 8388608.0f;  // 2**23
 }
+
+// ---------------------------------------------------------------------------------------------------
+// MulInt<APPROX, FORMAT, DST_SYNC, DST_ACCUM, SIGN_MAGNITUDE_FORMAT, ITERATIONS>
+//   UInt16          : calculate -> _mul_int_ (tt-llk),  init -> _init_mul_int_
+//   Int32 / UInt32  : calculate -> mul_int32,           init -> mul_int32_init
+// Backs mul_int_tile / mul_int_tile_init.
+// SIGN_MAGNITUDE_FORMAT is a Quasar-only dest-encoding flag; WH/BH INT32 loads convert implicitly, so it is ignored.
+// ---------------------------------------------------------------------------------------------------
+template <
+    bool APPROXIMATION_MODE,
+    DataFormat FORMAT,
+    DstSync DST_SYNC,
+    bool DST_ACCUM,
+    [[maybe_unused]] bool SIGN_MAGNITUDE_FORMAT = false,
+    int ITERATIONS = 8>
+struct MulInt : SfpuBinaryOp<
+                    MulInt<APPROXIMATION_MODE, FORMAT, DST_SYNC, DST_ACCUM, SIGN_MAGNITUDE_FORMAT, ITERATIONS>,
+                    DST_SYNC,
+                    DST_ACCUM> {
+    static_assert(
+        FORMAT == DataFormat::Int32 || FORMAT == DataFormat::UInt32 || FORMAT == DataFormat::UInt16,
+        "Unsupported data format for mul_int. Supported data formats are: Int32, UInt32, UInt16");
+    static constexpr bool is_uint16 = FORMAT == DataFormat::UInt16;
+
+    static void kernel(uint32_t dst_index_in0, uint32_t dst_index_in1, uint32_t dst_index_out) {
+        if constexpr (is_uint16) {
+            _mul_int_<APPROXIMATION_MODE, ITERATIONS>(dst_index_in0, dst_index_in1, dst_index_out);
+        } else {
+            mul_int32<APPROXIMATION_MODE, ITERATIONS>(dst_index_in0, dst_index_in1, dst_index_out);
+        }
+    }
+
+    static void init_kernel() {
+        addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+        if constexpr (is_uint16) {
+            _init_mul_int_<APPROXIMATION_MODE>();
+        } else {
+            mul_int32_init<APPROXIMATION_MODE>();
+        }
+    }
+};
 
 }  // namespace ckernel::sfpu

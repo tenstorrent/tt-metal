@@ -95,7 +95,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_lib_math_wrappers.h"
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
-#include "llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h"
+#include "llk_sfpu/llk_math_eltwise_sfpu_op.h"
 #include "sfpu/experimental/ckernel_sfpu_generic_moe_gate_topk.h"
 
 using namespace ckernel;
@@ -113,7 +113,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* is_int_fpu_en */, PackMode::Default>(
         TILE_NUM_FACES, formats.math);
 
-    _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
+    _llk_math_eltwise_sfpu_init_();
     ckernel::sfpu::_init_generic_moe_gate_topk_();
 
     _llk_math_wait_for_dest_available_<DST_SYNC>();
@@ -126,16 +126,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         MOE_GATE_BIAS_DST_TILE, formats.math, formats.math);
 
     // RC_custom: the kernel walks DEST itself off the tile-0 base.
-    SFPU_UNARY_CALL(
+    SfpuUnaryFn<
+        sfpu::_generic_moe_gate_topk_<MOE_GATE_NORMALIZE, MOE_GATE_NUM_SELECTED_EXPERTS, MOE_GATE_NUM_TOTAL_EXPERTS, MOE_GATE_ZERO_TAIL, MOE_GATE_FULL_SORT>,
         DST_SYNC,
-        is_fp32_dest_acc_en,
-        _generic_moe_gate_topk_,
-        (MOE_GATE_NORMALIZE, MOE_GATE_NUM_SELECTED_EXPERTS, MOE_GATE_NUM_TOTAL_EXPERTS, MOE_GATE_ZERO_TAIL, MOE_GATE_FULL_SORT),
-        MOE_GATE_SCORES_DST_TILE,
-        VectorMode::RC_custom,
-        MOE_GATE_EPS_BITS,
-        MOE_GATE_SCALE_BITS,
-        MOE_GATE_EXTRA_SCALE_BITS);
+        is_fp32_dest_acc_en>::calculate(MOE_GATE_SCORES_DST_TILE, VectorMode::RC_custom, MOE_GATE_EPS_BITS, MOE_GATE_SCALE_BITS, MOE_GATE_EXTRA_SCALE_BITS);
 
     _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
 }

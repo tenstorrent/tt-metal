@@ -5,7 +5,7 @@
 #pragma once
 
 #include <cstdint>
-#include "llk_math_eltwise_unary_sfpu_init.h"
+#include "llk_math_eltwise_sfpu_op.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
 #include "sfpu/experimental/ckernel_sfpu_topk_xl.h"
 
@@ -13,7 +13,8 @@ namespace ckernel {
 
 template <std::uint32_t K, bool fused>
 inline void llk_math_eltwise_unary_sfpu_topk_xl_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::unused>(ckernel::sfpu::_topk_xl_init_<K, fused>);
+    _llk_math_eltwise_sfpu_init_();
+    ckernel::sfpu::_topk_xl_init_<K, fused>();
 }
 
 template <std::uint32_t K>
@@ -46,7 +47,8 @@ inline void llk_math_eltwise_unary_sfpu_topk_xl_rebuild(
 }
 
 inline void llk_math_eltwise_unary_sfpu_topk_xl_add_lsb_indices_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::unused>(ckernel::sfpu::_topk_xl_add_lsb_indices_init_);
+    _llk_math_eltwise_sfpu_init_();
+    ckernel::sfpu::_topk_xl_add_lsb_indices_init_();
 }
 
 template <std::uint32_t K, std::uint32_t core_id, bool row_major = false>
@@ -87,8 +89,8 @@ inline void llk_math_eltwise_unary_sfpu_topk_xl_remove_msb_values(std::uint32_t 
 }
 
 inline void llk_math_eltwise_unary_sfpu_topk_xl_separate_indices_init(std::uint32_t group_id_bit_shift) {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::unused>(
-        ckernel::sfpu::_topk_xl_separate_indices_init_, group_id_bit_shift);
+    _llk_math_eltwise_sfpu_init_();
+    ckernel::sfpu::_topk_xl_separate_indices_init_(group_id_bit_shift);
 }
 
 // TOPK_LARGE_INDICES ADDITION: row-major UINT32 index split API.
@@ -96,20 +98,20 @@ inline void llk_math_eltwise_unary_sfpu_topk_xl_separate_indices_init(std::uint3
 // `ckernel_sfpu_topk_xl.h`; the base TopK XL wrappers above and below are
 // otherwise unchanged.
 inline void llk_math_eltwise_unary_sfpu_topk_xl_separate_indices_row_major_init(std::uint32_t chunk_base) {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::unused>(
-        ckernel::sfpu::_topk_xl_separate_indices_row_major_init_, chunk_base);
+    _llk_math_eltwise_sfpu_init_();
+    ckernel::sfpu::_topk_xl_separate_indices_row_major_init_(chunk_base);
 }
 
 template <std::uint32_t chunk_base_upper16>
 inline void llk_math_eltwise_unary_sfpu_topk_xl_separate_indices_row_major_init_upper(std::uint32_t chunk_base_low16) {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::unused>(
-        ckernel::sfpu::_topk_xl_separate_indices_row_major_init_upper_<chunk_base_upper16>, chunk_base_low16);
+    _llk_math_eltwise_sfpu_init_();
+    ckernel::sfpu::_topk_xl_separate_indices_row_major_init_upper_<chunk_base_upper16>(chunk_base_low16);
 }
 
 template <std::uint32_t chunk_base_upper16, std::uint32_t chunk_base_lower16>
 inline void llk_math_eltwise_unary_sfpu_topk_xl_separate_indices_row_major_init_static() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::unused>(
-        ckernel::sfpu::_topk_xl_separate_indices_row_major_init_static_<chunk_base_upper16, chunk_base_lower16>);
+    _llk_math_eltwise_sfpu_init_();
+    ckernel::sfpu::_topk_xl_separate_indices_row_major_init_static_<chunk_base_upper16, chunk_base_lower16>();
 }
 
 inline void llk_math_eltwise_unary_sfpu_topk_xl_separate_indices_row_major_reinit() {
@@ -133,7 +135,8 @@ inline void llk_math_eltwise_unary_sfpu_topk_xl_separate_indices_row_major(std::
 
 // Fused end-to-end: chunk-field-mask init + once-per-row global split.
 inline void llk_math_eltwise_unary_sfpu_topk_xl_separate_indices_row_major_global_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::unused>(ckernel::sfpu::_topk_xl_separate_indices_row_major_global_init_);
+    _llk_math_eltwise_sfpu_init_();
+    ckernel::sfpu::_topk_xl_separate_indices_row_major_global_init_();
 }
 
 template <std::uint32_t K>

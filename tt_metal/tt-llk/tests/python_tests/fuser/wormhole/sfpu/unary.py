@@ -67,7 +67,7 @@ class UnarySfpu(Sfpu):
         stage = operation.stage_id
         dest_acc = config.dest_acc.cpp_enum_value
         approx_mode = self.approx_mode.cpp_enum_value
-        op = f"SfpuType::{self.operation.cpp_enum_value}"
+        op = f"::SfpuUnaryOp::{self.operation.cpp_enum_value}"
 
         return (
             f"// Operation {stage}: Unary {self.operation.cpp_enum_value} SFPU\n"
@@ -84,7 +84,7 @@ class UnarySfpu(Sfpu):
         dest_sync = operation.dest_sync.cpp_enum_value
         dest_acc = config.dest_acc.cpp_enum_value
         approx_mode = self.approx_mode.cpp_enum_value
-        op = f"SfpuType::{self.operation.cpp_enum_value}"
+        op = f"::SfpuUnaryOp::{self.operation.cpp_enum_value}"
 
         return (
             f"test_utils::call_unary_sfpu_operation<"

@@ -7,7 +7,6 @@
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_reshuffle_rows.h"
-#include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
@@ -28,14 +27,18 @@ namespace ckernel {
  * | idx_addr        | Address at which array of output row indices is stored                     | uint32_t |                                                       | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void reshuffle_rows_tile(uint32_t idst, uint32_t idx_addr) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_reshuffle_rows, (APPROX), idst, VectorMode::RC_custom, idx_addr));
+    MATH((sfpu::ReshuffleRows<APPROX, DST_SYNC_MODE, is_fp32_dest_acc_en>::calculate(
+        idst, VectorMode::RC_custom, idx_addr)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void reshuffle_rows_tile_init() { MATH(SFPU_UNARY_INIT(reshuffle_rows)); }
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void reshuffle_rows_tile_init() {
+    MATH((sfpu::ReshuffleRows<APPROX, DST_SYNC_MODE, is_fp32_dest_acc_en>::init()));
+}
 
 }  // namespace ckernel

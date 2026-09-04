@@ -7,13 +7,32 @@
 #include <cstdint>
 
 #include "ckernel_sfpu_is_fp16_zero.h"
-#include "llk_sfpu_types.h"
 #include "sfpi.h"
 
 namespace ckernel
 {
 namespace sfpu
 {
+
+enum class ZeroCompMode
+{
+    EqZ,
+    NeZ,
+    LtZ,
+    GeZ,
+    GtZ,
+    LeZ
+};
+
+enum class UnaryCompMode
+{
+    Ne,
+    Eq,
+    Gt,
+    Lt,
+    Ge,
+    Le
+};
 
 sfpi_inline void _calculate_comp_init_flag_(bool check, sfpi::vFloat& flag1, sfpi::vFloat& flag2, float init)
 {
@@ -100,70 +119,82 @@ sfpi_inline void _calculate_comp_(const int iterations, std::uint32_t exponent_s
     }
 }
 
-template <SfpuType COMP_MODE>
+template <ZeroCompMode COMP_MODE>
 sfpi_inline void apply_zero_comp(sfpi::vFloat& v, std::uint32_t exponent_size_8);
 
 template <>
-sfpi_inline void apply_zero_comp<SfpuType::equal_zero>(sfpi::vFloat& v, std::uint32_t)
+sfpi_inline void apply_zero_comp<ZeroCompMode::EqZ>(sfpi::vFloat& v, std::uint32_t)
 {
     sfpi::vFloat r = 0.0f;
     v_if (_sfpu_is_fp16_zero_(v))
+    {
         r = 1.0f;
+    }
     v_endif;
     v = r;
 }
 
 template <>
-sfpi_inline void apply_zero_comp<SfpuType::not_equal_zero>(sfpi::vFloat& v, std::uint32_t)
+sfpi_inline void apply_zero_comp<ZeroCompMode::NeZ>(sfpi::vFloat& v, std::uint32_t)
 {
     sfpi::vFloat r = 1.0f;
     v_if (_sfpu_is_fp16_zero_(v))
+    {
         r = 0.0f;
+    }
     v_endif;
     v = r;
 }
 
 template <>
-sfpi_inline void apply_zero_comp<SfpuType::less_than_zero>(sfpi::vFloat& v, std::uint32_t /*unused*/)
+sfpi_inline void apply_zero_comp<ZeroCompMode::LtZ>(sfpi::vFloat& v, std::uint32_t /*unused*/)
 {
     sfpi::vFloat r = 1.0f;
     v_if (v >= 0.0f)
+    {
         r = 0.0f;
+    }
     v_endif;
     v = r;
 }
 
 template <>
-sfpi_inline void apply_zero_comp<SfpuType::greater_than_equal_zero>(sfpi::vFloat& v, std::uint32_t /*unused*/)
+sfpi_inline void apply_zero_comp<ZeroCompMode::GeZ>(sfpi::vFloat& v, std::uint32_t /*unused*/)
 {
     sfpi::vFloat r = 0.0f;
     v_if (v >= 0.0f)
+    {
         r = 1.0f;
+    }
     v_endif;
     v = r;
 }
 
 template <>
-sfpi_inline void apply_zero_comp<SfpuType::greater_than_zero>(sfpi::vFloat& v, std::uint32_t /*unused*/)
+sfpi_inline void apply_zero_comp<ZeroCompMode::GtZ>(sfpi::vFloat& v, std::uint32_t /*unused*/)
 {
     sfpi::vFloat r = 0.0f;
     v_if (v > 0.0f)
+    {
         r = 1.0f;
+    }
     v_endif;
     v = r;
 }
 
 template <>
-sfpi_inline void apply_zero_comp<SfpuType::less_than_equal_zero>(sfpi::vFloat& v, std::uint32_t /*unused*/)
+sfpi_inline void apply_zero_comp<ZeroCompMode::LeZ>(sfpi::vFloat& v, std::uint32_t /*unused*/)
 {
     sfpi::vFloat r = 1.0f;
     v_if (v > 0.0f)
+    {
         r = 0.0f;
+    }
     v_endif;
     v = r;
 }
 
-template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
+template <bool APPROXIMATION_MODE, ZeroCompMode COMP_MODE, int ITERATIONS = 8>
 sfpi_inline void _calculate_zero_comp_(std::uint32_t exponent_size_8)
 {
     for (int d = 0; d < ITERATIONS; d++)
@@ -175,70 +206,82 @@ sfpi_inline void _calculate_zero_comp_(std::uint32_t exponent_size_8)
     }
 }
 
-template <SfpuType COMP_MODE>
+template <ZeroCompMode COMP_MODE>
 sfpi_inline void apply_zero_comp_int(sfpi::vInt& v);
 
 template <>
-sfpi_inline void apply_zero_comp_int<SfpuType::equal_zero>(sfpi::vInt& v)
+sfpi_inline void apply_zero_comp_int<ZeroCompMode::EqZ>(sfpi::vInt& v)
 {
     sfpi::vInt r = 0;
     v_if (v == 0)
+    {
         r = 1;
+    }
     v_endif;
     v = r;
 }
 
 template <>
-sfpi_inline void apply_zero_comp_int<SfpuType::not_equal_zero>(sfpi::vInt& v)
+sfpi_inline void apply_zero_comp_int<ZeroCompMode::NeZ>(sfpi::vInt& v)
 {
     sfpi::vInt r = 1;
     v_if (v == 0)
+    {
         r = 0;
+    }
     v_endif;
     v = r;
 }
 
 template <>
-sfpi_inline void apply_zero_comp_int<SfpuType::less_than_zero>(sfpi::vInt& v)
+sfpi_inline void apply_zero_comp_int<ZeroCompMode::LtZ>(sfpi::vInt& v)
 {
     sfpi::vInt r = 0;
     v_if (v < 0)
+    {
         r = 1;
+    }
     v_endif;
     v = r;
 }
 
 template <>
-sfpi_inline void apply_zero_comp_int<SfpuType::greater_than_zero>(sfpi::vInt& v)
+sfpi_inline void apply_zero_comp_int<ZeroCompMode::GtZ>(sfpi::vInt& v)
 {
     sfpi::vInt r = 0;
     v_if (v > 0)
+    {
         r = 1;
+    }
     v_endif;
     v = r;
 }
 
 template <>
-sfpi_inline void apply_zero_comp_int<SfpuType::less_than_equal_zero>(sfpi::vInt& v)
+sfpi_inline void apply_zero_comp_int<ZeroCompMode::LeZ>(sfpi::vInt& v)
 {
     sfpi::vInt r = 0;
     v_if (v <= 0)
+    {
         r = 1;
+    }
     v_endif;
     v = r;
 }
 
 template <>
-sfpi_inline void apply_zero_comp_int<SfpuType::greater_than_equal_zero>(sfpi::vInt& v)
+sfpi_inline void apply_zero_comp_int<ZeroCompMode::GeZ>(sfpi::vInt& v)
 {
     sfpi::vInt r = 0;
     v_if (v >= 0)
+    {
         r = 1;
+    }
     v_endif;
     v = r;
 }
 
-template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
+template <bool APPROXIMATION_MODE, ZeroCompMode COMP_MODE, int ITERATIONS = 8>
 sfpi_inline void _calculate_zero_comp_int_()
 {
     for (int d = 0; d < ITERATIONS; d++)
@@ -250,11 +293,11 @@ sfpi_inline void _calculate_zero_comp_int_()
     }
 }
 
-template <SfpuType COMP_MODE>
+template <UnaryCompMode COMP_MODE>
 sfpi_inline void apply_unary_comp_int(sfpi::vInt& val, const sfpi::vInt& v, const int scalar);
 
 template <>
-sfpi_inline void apply_unary_comp_int<SfpuType::unary_ne>(sfpi::vInt& val, const sfpi::vInt& v, const int scalar)
+sfpi_inline void apply_unary_comp_int<UnaryCompMode::Ne>(sfpi::vInt& val, const sfpi::vInt& v, const int scalar)
 {
     val = 0;
     v_if (v != scalar)
@@ -265,7 +308,7 @@ sfpi_inline void apply_unary_comp_int<SfpuType::unary_ne>(sfpi::vInt& val, const
 }
 
 template <>
-sfpi_inline void apply_unary_comp_int<SfpuType::unary_eq>(sfpi::vInt& val, const sfpi::vInt& v, const int scalar)
+sfpi_inline void apply_unary_comp_int<UnaryCompMode::Eq>(sfpi::vInt& val, const sfpi::vInt& v, const int scalar)
 {
     val = 0;
     v_if (v == scalar)
@@ -276,7 +319,7 @@ sfpi_inline void apply_unary_comp_int<SfpuType::unary_eq>(sfpi::vInt& val, const
 }
 
 template <>
-sfpi_inline void apply_unary_comp_int<SfpuType::unary_gt>(sfpi::vInt& val, const sfpi::vInt& v, const int scalar)
+sfpi_inline void apply_unary_comp_int<UnaryCompMode::Gt>(sfpi::vInt& val, const sfpi::vInt& v, const int scalar)
 {
     // Unfortunately the compiler doesn't generate correct compares
     // (#14598)
@@ -300,7 +343,7 @@ sfpi_inline void apply_unary_comp_int<SfpuType::unary_gt>(sfpi::vInt& val, const
 }
 
 template <>
-sfpi_inline void apply_unary_comp_int<SfpuType::unary_lt>(sfpi::vInt& val, const sfpi::vInt& v, const int scalar)
+sfpi_inline void apply_unary_comp_int<UnaryCompMode::Lt>(sfpi::vInt& val, const sfpi::vInt& v, const int scalar)
 {
     sfpi::vInt s = scalar;
 
@@ -322,7 +365,7 @@ sfpi_inline void apply_unary_comp_int<SfpuType::unary_lt>(sfpi::vInt& val, const
 }
 
 template <>
-sfpi_inline void apply_unary_comp_int<SfpuType::unary_ge>(sfpi::vInt& val, const sfpi::vInt& v, const int scalar)
+sfpi_inline void apply_unary_comp_int<UnaryCompMode::Ge>(sfpi::vInt& val, const sfpi::vInt& v, const int scalar)
 {
     sfpi::vInt s = scalar;
 
@@ -344,7 +387,7 @@ sfpi_inline void apply_unary_comp_int<SfpuType::unary_ge>(sfpi::vInt& val, const
 }
 
 template <>
-sfpi_inline void apply_unary_comp_int<SfpuType::unary_le>(sfpi::vInt& val, const sfpi::vInt& v, const int scalar)
+sfpi_inline void apply_unary_comp_int<UnaryCompMode::Le>(sfpi::vInt& val, const sfpi::vInt& v, const int scalar)
 {
     sfpi::vInt s = scalar;
 
@@ -365,7 +408,7 @@ sfpi_inline void apply_unary_comp_int<SfpuType::unary_le>(sfpi::vInt& val, const
     v_endif;
 }
 
-template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
+template <bool APPROXIMATION_MODE, UnaryCompMode COMP_MODE, int ITERATIONS = 8>
 sfpi_inline void _calculate_comp_unary_int_(int scalar)
 {
 #pragma GCC unroll 8
@@ -381,11 +424,11 @@ sfpi_inline void _calculate_comp_unary_int_(int scalar)
     }
 }
 
-template <SfpuType COMP_MODE>
+template <UnaryCompMode COMP_MODE>
 sfpi_inline void apply_unary_comp_float(sfpi::vFloat& val, const sfpi::vFloat& v, const sfpi::vFloat& s);
 
 template <>
-sfpi_inline void apply_unary_comp_float<SfpuType::unary_eq>(sfpi::vFloat& val, const sfpi::vFloat& v, const sfpi::vFloat& s)
+sfpi_inline void apply_unary_comp_float<UnaryCompMode::Eq>(sfpi::vFloat& val, const sfpi::vFloat& v, const sfpi::vFloat& s)
 {
     val = 0.0f;
     v_if (v == s)
@@ -396,7 +439,7 @@ sfpi_inline void apply_unary_comp_float<SfpuType::unary_eq>(sfpi::vFloat& val, c
 }
 
 template <>
-sfpi_inline void apply_unary_comp_float<SfpuType::unary_ne>(sfpi::vFloat& val, const sfpi::vFloat& v, const sfpi::vFloat& s)
+sfpi_inline void apply_unary_comp_float<UnaryCompMode::Ne>(sfpi::vFloat& val, const sfpi::vFloat& v, const sfpi::vFloat& s)
 {
     val = 1.0f;
     v_if (v == s)
@@ -407,7 +450,7 @@ sfpi_inline void apply_unary_comp_float<SfpuType::unary_ne>(sfpi::vFloat& val, c
 }
 
 template <>
-sfpi_inline void apply_unary_comp_float<SfpuType::unary_gt>(sfpi::vFloat& val, const sfpi::vFloat& v, const sfpi::vFloat& s)
+sfpi_inline void apply_unary_comp_float<UnaryCompMode::Gt>(sfpi::vFloat& val, const sfpi::vFloat& v, const sfpi::vFloat& s)
 {
     val = 0.0f;
     v_if (v > s)
@@ -418,7 +461,7 @@ sfpi_inline void apply_unary_comp_float<SfpuType::unary_gt>(sfpi::vFloat& val, c
 }
 
 template <>
-sfpi_inline void apply_unary_comp_float<SfpuType::unary_lt>(sfpi::vFloat& val, const sfpi::vFloat& v, const sfpi::vFloat& s)
+sfpi_inline void apply_unary_comp_float<UnaryCompMode::Lt>(sfpi::vFloat& val, const sfpi::vFloat& v, const sfpi::vFloat& s)
 {
     val = 0.0f;
     v_if (v < s)
@@ -429,7 +472,7 @@ sfpi_inline void apply_unary_comp_float<SfpuType::unary_lt>(sfpi::vFloat& val, c
 }
 
 template <>
-sfpi_inline void apply_unary_comp_float<SfpuType::unary_ge>(sfpi::vFloat& val, const sfpi::vFloat& v, const sfpi::vFloat& s)
+sfpi_inline void apply_unary_comp_float<UnaryCompMode::Ge>(sfpi::vFloat& val, const sfpi::vFloat& v, const sfpi::vFloat& s)
 {
     val = 0.0f;
     v_if (v >= s)
@@ -440,7 +483,7 @@ sfpi_inline void apply_unary_comp_float<SfpuType::unary_ge>(sfpi::vFloat& val, c
 }
 
 template <>
-sfpi_inline void apply_unary_comp_float<SfpuType::unary_le>(sfpi::vFloat& val, const sfpi::vFloat& v, const sfpi::vFloat& s)
+sfpi_inline void apply_unary_comp_float<UnaryCompMode::Le>(sfpi::vFloat& val, const sfpi::vFloat& v, const sfpi::vFloat& s)
 {
     val = 0.0f;
     v_if (v <= s)
@@ -450,7 +493,7 @@ sfpi_inline void apply_unary_comp_float<SfpuType::unary_le>(sfpi::vFloat& val, c
     v_endif;
 }
 
-template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
+template <bool APPROXIMATION_MODE, UnaryCompMode COMP_MODE, int ITERATIONS = 8>
 sfpi_inline void _calculate_comp_unary_(std::uint32_t value)
 {
     sfpi::vFloat s = value;

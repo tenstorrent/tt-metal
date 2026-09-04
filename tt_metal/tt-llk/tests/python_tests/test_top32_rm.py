@@ -444,7 +444,7 @@ def test_top32_rm_32bit_partial_chunk(formats, row_elements, request):
 
 # `experimental/llk_sfpu/llk_math_deepseek_top32_rm.h` publishes 7 entry points for this family
 # and, before these two tests, **nothing in the tree called any of them** -- the in-tree
-# consumers drive the `ckernel::sfpu::` primitives directly through SFPU_UNARY_CALL. The
+# consumers drive the `ckernel::sfpu::` primitives directly through SfpuUnaryFn. The
 # wrappers are thin (each is the same `_llk_math_eltwise_unary_sfpu_params_` call the driver
 # makes itself), so the point is not new arithmetic: it is that the wrapper layer compiles, is
 # code-generated, and computes what the primitives compute. A signature drift or a wrong

@@ -63,7 +63,7 @@ class UnarySfpu(Sfpu):
         block: BlockData,
     ) -> str:
         stage = operation.stage_id
-        op = f"SfpuType::{self.operation.cpp_enum_value}"
+        op = f"::SfpuUnaryOp::{self.operation.cpp_enum_value}"
         en_32bit_dest = config.dest_acc.cpp_enum_value
         approx_mode = self.approx_mode.cpp_enum_value
         return (
@@ -79,7 +79,7 @@ class UnarySfpu(Sfpu):
         compute_unit: SfpuNode,
         block: BlockData,
     ) -> str:
-        op = f"SfpuType::{self.operation.cpp_enum_value}"
+        op = f"::SfpuUnaryOp::{self.operation.cpp_enum_value}"
         dest_sync = operation.dest_sync.cpp_enum_value
         en_32bit_dest = config.dest_acc.cpp_enum_value
         sfpu_format = config.sentinel._math_format.cpp_enum_value

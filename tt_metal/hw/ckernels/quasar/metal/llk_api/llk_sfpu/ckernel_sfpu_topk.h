@@ -8,6 +8,7 @@
 #include "ckernel_ops.h"
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
+#include "llk_math_eltwise_sfpu_op.h"
 
 // Quasar TopK keeps the SFPSWAP bodies inline. TEN-4690 forbids record-and-execute
 // replay (`execute_while_loading=true`), and replaying recorded SFPSWAP sequences
@@ -707,6 +708,47 @@ inline void calculate_bitonic_topk_rebuild(
 // UInt16-in-32b-DEST prepare helper: no-op on Quasar (workaround only required for WH/BH).
 // Defined so compute_kernel_api.h resolves the symbol on all architectures.
 inline void topk_uint16_prepare_value_tile_for_pack(std::uint32_t /*tile_index*/) {}
+
+// TopkLocalSort / TopkMerge / TopkRebuild <APPROX, ..., DST_SYNC, DST_ACCUM>: topk_local_sort, topk_merge,
+// topk_rebuild and topk_tile_init (compute_kernel_api.h). All three stages share topk_init. Same interface
+// as WH/BH; STABLE_SORT must be false on Quasar (asserted by the kernels).
+template <bool APPROXIMATION_MODE, bool STABLE_SORT, DstSync DST_SYNC, bool DST_ACCUM>
+struct TopkLocalSort
+    : SfpuUnaryOp<TopkLocalSort<APPROXIMATION_MODE, STABLE_SORT, DST_SYNC, DST_ACCUM>, DST_SYNC, DST_ACCUM> {
+    static void kernel(
+        const int initial_sort_dir,
+        const int i_end_phase,
+        const int i_start_phase,
+        const int i_end_step,
+        const int i_start_step) {
+        calculate_bitonic_topk_phases_steps<APPROXIMATION_MODE, DST_ACCUM, STABLE_SORT>(
+            initial_sort_dir, i_end_phase, i_start_phase, i_end_step, i_start_step);
+    }
+
+    static void init_kernel() { topk_init<APPROXIMATION_MODE>(); }
+};
+
+template <bool APPROXIMATION_MODE, bool IDIR, bool STABLE_SORT, DstSync DST_SYNC, bool DST_ACCUM>
+struct TopkMerge
+    : SfpuUnaryOp<TopkMerge<APPROXIMATION_MODE, IDIR, STABLE_SORT, DST_SYNC, DST_ACCUM>, DST_SYNC, DST_ACCUM> {
+    static void kernel(const int m_iter, const int k) {
+        calculate_bitonic_topk_merge<APPROXIMATION_MODE, DST_ACCUM, IDIR, STABLE_SORT>(m_iter, k);
+    }
+
+    static void init_kernel() { topk_init<APPROXIMATION_MODE>(); }
+};
+
+template <bool APPROXIMATION_MODE, bool STABLE_SORT, DstSync DST_SYNC, bool DST_ACCUM>
+struct TopkRebuild
+    : SfpuUnaryOp<TopkRebuild<APPROXIMATION_MODE, STABLE_SORT, DST_SYNC, DST_ACCUM>, DST_SYNC, DST_ACCUM> {
+    static void kernel(
+        const bool initial_sort_dir, const int m_iter, const int k, const int logk, const int skip_second) {
+        calculate_bitonic_topk_rebuild<APPROXIMATION_MODE, DST_ACCUM, STABLE_SORT>(
+            initial_sort_dir, m_iter, k, logk, skip_second);
+    }
+
+    static void init_kernel() { topk_init<APPROXIMATION_MODE>(); }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel
