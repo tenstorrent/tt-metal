@@ -245,7 +245,10 @@ std::shared_ptr<MeshBuffer> create_socket_config_buffer(
         .page_size = config_buffer_size,
         .buffer_type = BufferType::L1,
         .sharding_args = BufferShardingArgs(shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
-        .bottom_up = std::nullopt,
+        // Tiny and address-agnostic: keep it out of the top region, where a top-down
+        // lockstep placement below other banks' per-core ranges strands 64 B markers
+        // that fragment every bank's top into sub-CB slivers (see PR #54788).
+        .bottom_up = true,
         .sub_device_id = is_sender ? socket_mem_config.sender_sub_device : socket_mem_config.receiver_sub_device,
     };
 

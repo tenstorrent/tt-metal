@@ -392,7 +392,8 @@ AnyBuffer::AnyBuffer(std::shared_ptr<Buffer> buffer) : buffer_(buffer.get()), ho
 AnyBuffer::AnyBuffer(std::shared_ptr<MeshBuffer> buffer) :
     buffer_(buffer->get_reference_buffer()), holder_(std::move(buffer)) {}
 
-AnyBuffer AnyBuffer::create(const tt::tt_metal::ShardedBufferConfig& config, std::optional<uint64_t> address) {
+AnyBuffer AnyBuffer::create(
+    const tt::tt_metal::ShardedBufferConfig& config, std::optional<uint64_t> address, std::optional<bool> bottom_up) {
     // TODO #20966: Remove single device support and branches + dynamic_cast
     auto* mesh_device = dynamic_cast<MeshDevice*>(config.device);
     if (!mesh_device) {
@@ -408,6 +409,7 @@ AnyBuffer AnyBuffer::create(const tt::tt_metal::ShardedBufferConfig& config, std
         .page_size = config.page_size,
         .buffer_type = config.buffer_type,
         .sharding_args = BufferShardingArgs(config.shard_parameters, config.buffer_layout),
+        .bottom_up = bottom_up,
     };
     return MeshBuffer::create(mesh_config, local_config, mesh_device, address);
 }

@@ -97,7 +97,8 @@ void GlobalSemaphoreImpl::setup_buffer(
         .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
         .shard_parameters = std::move(shard_parameters),
     };
-    buffer_ = distributed::AnyBuffer::create(sem_shard_config, address);
+    // Bottom-up: tiny and address-agnostic, so it must not fragment the top region (see PR).
+    buffer_ = distributed::AnyBuffer::create(sem_shard_config, address, /*bottom_up=*/true);
 
     if (initial_value.has_value()) {
         this->reset_semaphore_value(initial_value.value());
