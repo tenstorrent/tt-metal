@@ -19,17 +19,17 @@ using namespace ckernel;
  *
  * The Z counter walks tiles across a single row of tiles, but it does not advance between rows. To untilize more than
  * one row of tiles, program this register to account for the offset of every row already completed. The offset is
- * in units of datums, so it is the number of datums in a row of tiles.
+ * in units of 16 datums (one face row), so it is the number of face rows in a row of tiles.
  *
  * @param tensor_shape: Tile shape info: num faces, face row/col dim, etc.
- * @param l1_base_idx: Offset of the current row of tiles, scaled to datums here.
+ * @param l1_base_idx: Offset of the current row of tiles.
  * @note Call this once per row of tiles, before the @ref _llk_pack_untilize_ call that writes that row.
  */
 inline void _llk_pack_untilize_set_dst_offset_(const TensorShape& tensor_shape, const std::uint32_t l1_base_idx)
 {
-    const std::uint32_t dst_addr_offset_datums = l1_base_idx * tensor_shape.num_faces_c_dim;
+    const std::uint32_t dst_addr_offset_face_rows = l1_base_idx * tensor_shape.num_faces_c_dim;
 
-    cfg_rmw(THCON_PACKER0_REG0_UNTILIZE_DST_ADDR_OFFSET_RMW, dst_addr_offset_datums);
+    cfg_rmw(THCON_PACKER0_REG0_UNTILIZE_DST_ADDR_OFFSET_RMW, dst_addr_offset_face_rows);
 }
 
 /**
