@@ -1,0 +1,554 @@
+{
+  "schema": 3,
+  "status": "complete",
+  "created_at": "2026-09-04T16:22:01.523480+00:00",
+  "profile": "p150x2",
+  "base_url": "http://127.0.0.1:20000",
+  "model": "meta-models/Muse-Glimmer-30B",
+  "server_models": [
+    "meta-models/Muse-Glimmer-30B"
+  ],
+  "weight_revision": "f84ecc3a0ea984a4c04542a84269e3d065350a6e",
+  "source_revision": "71f89fda45a6a97506131df1e0740f62145a97c9",
+  "image_digest": "sha256:fdec17cd3aacad3c7524f5ee02b0c5fb9744653841e9b6770c9605fd586b3d94",
+  "source_delivery": "read-only bind mount over the runtime image",
+  "context_limit": 131072,
+  "planned_isls": [
+    512,
+    1024,
+    4096,
+    8192,
+    16384,
+    32768,
+    65536,
+    130560
+  ],
+  "completed_isls": [
+    512,
+    1024,
+    4096,
+    8192,
+    16384,
+    32768,
+    65536,
+    130560
+  ],
+  "max_tokens": 512,
+  "batch_size": 1,
+  "repeats": 3,
+  "warmup_per_shape": true,
+  "measurement": {
+    "ttft": "client start to first semantic SSE delta (reasoning, content, or tool call)",
+    "e2el": "client start through SSE completion",
+    "tpot": "derived as (E2EL - TTFT) / (completion_tokens - 1)"
+  },
+  "prompt_corpus": {
+    "kind": "ordered tracked Python source, complete-line prefix plus bounded comment pad",
+    "files": [
+      "models/common/sampling/tt_sampling.py",
+      "models/autoports/meta_models_muse_glimmer_30b/tt/generator.py",
+      "models/autoports/meta_models_muse_glimmer_30b/tt/model.py",
+      "models/autoports/meta_models_muse_glimmer_30b/tt/optimized_decoder.py",
+      "models/autoports/meta_models_muse_glimmer_30b/tt/multichip_decoder.py",
+      "models/autoports/meta_models_muse_glimmer_30b/tt/functional_decoder.py",
+      "models/autoports/meta_models_muse_glimmer_30b/tt/generator_vllm.py",
+      "models/autoports/meta_models_muse_glimmer_30b/tt/precision_config.py",
+      "models/autoports/meta_models_muse_glimmer_30b/tt/muse_glimmer_tool_parser.py",
+      "models/autoports/meta_models_muse_glimmer_30b/tt/reasoning_parser.py",
+      "models/autoports/meta_models_muse_glimmer_30b/tests/test_full_model.py",
+      "models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py",
+      "models/autoports/meta_models_muse_glimmer_30b/tests/test_optimized_decoder.py",
+      "models/autoports/meta_models_muse_glimmer_30b/tests/test_multichip_decoder.py"
+    ],
+    "sha256": "08e2882b02b1eda36b0a60c9a0c2c9007059d780e8cfedb13d0babb81d13cf61",
+    "message_layout": "system plus user"
+  },
+  "tool_contract": {
+    "name": "record_latency_probe",
+    "arguments": {
+      "payload": "ready"
+    }
+  },
+  "rows": [
+    {
+      "isl": 512,
+      "repeats": 3,
+      "tool_call_pass": true,
+      "completion_tokens": 135.0,
+      "ttft_ms": 283.82354497443885,
+      "tpot_ms_derived": 35.47851997036695,
+      "e2el_ms": 5037.888822029345,
+      "tokens_per_second_per_user_derived": 28.186068664511346,
+      "samples": [
+        {
+          "isl": 512,
+          "completion_tokens": 135,
+          "ttft_ms": 283.82354497443885,
+          "tpot_ms_derived": 35.4780990824993,
+          "e2el_ms": 5037.888822029345,
+          "tokens_per_second_per_user_derived": 28.18640304472462,
+          "finish_reason": "tool_calls",
+          "tool_name": "record_latency_probe",
+          "tool_arguments": {
+            "payload": "ready"
+          },
+          "content": "",
+          "reasoning_chars": 405,
+          "tool_call_pass": true
+        },
+        {
+          "isl": 512,
+          "completion_tokens": 135,
+          "ttft_ms": 284.0316349756904,
+          "tpot_ms_derived": 35.47851997036695,
+          "e2el_ms": 5038.153311004862,
+          "tokens_per_second_per_user_derived": 28.186068664511346,
+          "finish_reason": "tool_calls",
+          "tool_name": "record_latency_probe",
+          "tool_arguments": {
+            "payload": "ready"
+          },
+          "content": "",
+          "reasoning_chars": 405,
+          "tool_call_pass": true
+        },
+        {
+          "isl": 512,
+          "completion_tokens": 135,
+          "ttft_ms": 283.5146539728157,
+          "tpot_ms_derived": 35.47923542548722,
+          "e2el_ms": 5037.732200988103,
+          "tokens_per_second_per_user_derived": 28.185500279457262,
+          "finish_reason": "tool_calls",
+          "tool_name": "record_latency_probe",
+          "tool_arguments": {
+            "payload": "ready"
+          },
+          "content": "",
+          "reasoning_chars": 405,
+          "tool_call_pass": true
+        }
+      ]
+    },
+    {
+      "isl": 1024,
+      "repeats": 3,
+      "tool_call_pass": true,
+      "completion_tokens": 180.0,
+      "ttft_ms": 364.1797329764813,
+      "tpot_ms_derived": 36.12900607830288,
+      "e2el_ms": 6831.271820992697,
+      "tokens_per_second_per_user_derived": 27.67859148498817,
+      "samples": [
+        {
+          "isl": 1024,
+          "completion_tokens": 180,
+          "ttft_ms": 365.8968040253967,
+          "tpot_ms_derived": 36.129618955219385,
+          "e2el_ms": 6833.098597009666,
+          "tokens_per_second_per_user_derived": 27.67812196523421,
+          "finish_reason": "tool_calls",
+          "tool_name": "record_latency_probe",
+          "tool_arguments": {
+            "payload": "ready"
+          },
+          "content": "",
+          "reasoning_chars": 635,
+          "tool_call_pass": true
+        },
+        {
+          "isl": 1024,
+          "completion_tokens": 180,
+          "ttft_ms": 362.6615710090846,
+          "tpot_ms_derived": 36.128676279224244,
+          "e2el_ms": 6829.694624990225,
+          "tokens_per_second_per_user_derived": 27.678844147828602,
+          "finish_reason": "tool_calls",
+          "tool_name": "record_latency_probe",
+          "tool_arguments": {
+            "payload": "ready"
+          },
+          "content": "",
+          "reasoning_chars": 635,
+          "tool_call_pass": true
+        },
+        {
+          "isl": 1024,
+          "completion_tokens": 180,
+          "ttft_ms": 364.1797329764813,
+          "tpot_ms_derived": 36.12900607830288,
+          "e2el_ms": 6831.271820992697,
+          "tokens_per_second_per_user_derived": 27.67859148498817,
+          "finish_reason": "tool_calls",
+          "tool_name": "record_latency_probe",
+          "tool_arguments": {
+            "payload": "ready"
+          },
+          "content": "",
+          "reasoning_chars": 635,
+          "tool_call_pass": true
+        }
+      ]
+    },
+    {
+      "isl": 4096,
+      "repeats": 3,
+      "tool_call_pass": true,
+      "completion_tokens": 278.0,
+      "ttft_ms": 7799.212813028134,
+      "tpot_ms_derived": 12.010752638870857,
+      "e2el_ms": 11126.191293995362,
+      "tokens_per_second_per_user_derived": 83.25872907944685,
+      "samples": [
+        {
+          "isl": 4096,
+          "completion_tokens": 278,
+          "ttft_ms": 7799.0841590217315,
+          "tpot_ms_derived": 12.01083785929929,
+          "e2el_ms": 11126.086246047635,
+          "tokens_per_second_per_user_derived": 83.2581383342677,
+          "finish_reason": "tool_calls",
+          "tool_name": "record_latency_probe",
+          "tool_arguments": {
+            "payload": "ready"
+          },
+          "content": "",
+          "reasoning_chars": 192,
+          "tool_call_pass": true
+        },
+        {
+          "isl": 4096,
+          "completion_tokens": 278,
+          "ttft_ms": 7802.885455021169,
+          "tpot_ms_derived": 12.010267873703155,
+          "e2el_ms": 11129.729656036943,
+          "tokens_per_second_per_user_derived": 83.2620896149644,
+          "finish_reason": "tool_calls",
+          "tool_name": "record_latency_probe",
+          "tool_arguments": {
+            "payload": "ready"
+          },
+          "content": "",
+          "reasoning_chars": 192,
+          "tool_call_pass": true
+        },
+        {
+          "isl": 4096,
+          "completion_tokens": 278,
+          "ttft_ms": 7799.212813028134,
+          "tpot_ms_derived": 12.010752638870857,
+          "e2el_ms": 11126.191293995362,
+          "tokens_per_second_per_user_derived": 83.25872907944685,
+          "finish_reason": "tool_calls",
+          "tool_name": "record_latency_probe",
+          "tool_arguments": {
+            "payload": "ready"
+          },
+          "content": "",
+          "reasoning_chars": 192,
+          "tool_call_pass": true
+        }
+      ]
+    },
+    {
+      "isl": 8192,
+      "repeats": 3,
+      "tool_call_pass": true,
+      "completion_tokens": 147.0,
+      "ttft_ms": 1697.8458529920317,
+      "tpot_ms_derived": 37.0591628765496,
+      "e2el_ms": 7108.483632968273,
+      "tokens_per_second_per_user_derived": 26.983879893109588,
+      "samples": [
+        {
+          "isl": 8192,
+          "completion_tokens": 147,
+          "ttft_ms": 1696.538599964697,
+          "tpot_ms_derived": 37.05938451378032,
+          "e2el_ms": 7107.208738976624,
+          "tokens_per_second_per_user_derived": 26.983718513408004,
+          "finish_reason": "tool_calls",
+          "tool_name": "record_latency_probe",
+          "tool_arguments": {
+            "payload": "ready"
+          },
+          "content": "",
+          "reasoning_chars": 460,
+          "tool_call_pass": true
+        },
+        {
+          "isl": 8192,
+          "completion_tokens": 147,
+          "ttft_ms": 1697.8458529920317,
+          "tpot_ms_derived": 37.0591628765496,
+          "e2el_ms": 7108.483632968273,
+          "tokens_per_second_per_user_derived": 26.983879893109588,
+          "finish_reason": "tool_calls",
+          "tool_name": "record_latency_probe",
+          "tool_arguments": {
+            "payload": "ready"
+          },
+          "content": "",
+          "reasoning_chars": 460,
+          "tool_call_pass": true
+        },
+        {
+          "isl": 8192,
+          "completion_tokens": 147,
+          "ttft_ms": 1698.446767986752,
+          "tpot_ms_derived": 37.05836403421254,
+          "e2el_ms": 7108.967916981783,
+          "tokens_per_second_per_user_derived": 26.984461566538478,
+          "finish_reason": "tool_calls",
+          "tool_name": "record_latency_probe",
+          "tool_arguments": {
+            "payload": "ready"
+          },
+          "content": "",
+          "reasoning_chars": 460,
+          "tool_call_pass": true
+        }
+      ]
+    },
+    {
+      "isl": 16384,
+      "repeats": 3,
+      "tool_call_pass": true,
+      "completion_tokens": 128.0,
+      "ttft_ms": 3541.290844033938,
+      "tpot_ms_derived": 37.91486636981163,
+      "e2el_ms": 8356.478873000015,
+      "tokens_per_second_per_user_derived": 26.374878662270973,
+      "samples": [
+        {
+          "isl": 16384,
+          "completion_tokens": 128,
+          "ttft_ms": 3541.290844033938,
+          "tpot_ms_derived": 37.91486636981163,
+          "e2el_ms": 8356.478873000015,
+          "tokens_per_second_per_user_derived": 26.374878662270973,
+          "finish_reason": "tool_calls",
+          "tool_name": "record_latency_probe",
+          "tool_arguments": {
+            "payload": "ready"
+          },
+          "content": "",
+          "reasoning_chars": 389,
+          "tool_call_pass": true
+        },
+        {
+          "isl": 16384,
+          "completion_tokens": 128,
+          "ttft_ms": 3528.4044339787215,
+          "tpot_ms_derived": 37.915041598704036,
+          "e2el_ms": 8343.614717014134,
+          "tokens_per_second_per_user_derived": 26.374756767619655,
+          "finish_reason": "tool_calls",
+          "tool_name": "record_latency_probe",
+          "tool_arguments": {
+            "payload": "ready"
+          },
+          "content": "",
+          "reasoning_chars": 389,
+          "tool_call_pass": true
+        },
+        {
+          "isl": 16384,
+          "completion_tokens": 128,
+          "ttft_ms": 3551.2389529612847,
+          "tpot_ms_derived": 37.91342062213803,
+          "e2el_ms": 8366.243371972814,
+          "tokens_per_second_per_user_derived": 26.37588441218332,
+          "finish_reason": "tool_calls",
+          "tool_name": "record_latency_probe",
+          "tool_arguments": {
+            "payload": "ready"
+          },
+          "content": "",
+          "reasoning_chars": 389,
+          "tool_call_pass": true
+        }
+      ]
+    },
+    {
+      "isl": 32768,
+      "repeats": 3,
+      "tool_call_pass": true,
+      "completion_tokens": 168.0,
+      "ttft_ms": 7493.674464989454,
+      "tpot_ms_derived": 39.998917946380054,
+      "e2el_ms": 14173.50997502217,
+      "tokens_per_second_per_user_derived": 25.000676301807335,
+      "samples": [
+        {
+          "isl": 32768,
+          "completion_tokens": 168,
+          "ttft_ms": 7498.88694396941,
+          "tpot_ms_derived": 39.998917946380054,
+          "e2el_ms": 14178.70624101488,
+          "tokens_per_second_per_user_derived": 25.000676301807335,
+          "finish_reason": "tool_calls",
+          "tool_name": "record_latency_probe",
+          "tool_arguments": {
+            "payload": "ready"
+          },
+          "content": "",
+          "reasoning_chars": 571,
+          "tool_call_pass": true
+        },
+        {
+          "isl": 32768,
+          "completion_tokens": 168,
+          "ttft_ms": 7493.674464989454,
+          "tpot_ms_derived": 39.99868365287681,
+          "e2el_ms": 14173.45463501988,
+          "tokens_per_second_per_user_derived": 25.000822744027413,
+          "finish_reason": "tool_calls",
+          "tool_name": "record_latency_probe",
+          "tool_arguments": {
+            "payload": "ready"
+          },
+          "content": "",
+          "reasoning_chars": 571,
+          "tool_call_pass": true
+        },
+        {
+          "isl": 32768,
+          "completion_tokens": 168,
+          "ttft_ms": 7493.578318040818,
+          "tpot_ms_derived": 39.99959076036738,
+          "e2el_ms": 14173.50997502217,
+          "tokens_per_second_per_user_derived": 25.000255777387242,
+          "finish_reason": "tool_calls",
+          "tool_name": "record_latency_probe",
+          "tool_arguments": {
+            "payload": "ready"
+          },
+          "content": "",
+          "reasoning_chars": 571,
+          "tool_call_pass": true
+        }
+      ]
+    },
+    {
+      "isl": 65536,
+      "repeats": 3,
+      "tool_call_pass": true,
+      "completion_tokens": 110.0,
+      "ttft_ms": 16985.249165038113,
+      "tpot_ms_derived": 43.405241798609495,
+      "e2el_ms": 21715.989460004494,
+      "tokens_per_second_per_user_derived": 23.038692069491834,
+      "samples": [
+        {
+          "isl": 65536,
+          "completion_tokens": 110,
+          "ttft_ms": 16985.249165038113,
+          "tpot_ms_derived": 43.40128710978331,
+          "e2el_ms": 21715.989460004494,
+          "tokens_per_second_per_user_derived": 23.04079133576167,
+          "finish_reason": "tool_calls",
+          "tool_name": "record_latency_probe",
+          "tool_arguments": {
+            "payload": "ready"
+          },
+          "content": "",
+          "reasoning_chars": 290,
+          "tool_call_pass": true
+        },
+        {
+          "isl": 65536,
+          "completion_tokens": 110,
+          "ttft_ms": 17032.21203800058,
+          "tpot_ms_derived": 43.40837552284805,
+          "e2el_ms": 21763.724969991017,
+          "tokens_per_second_per_user_derived": 23.037028867243578,
+          "finish_reason": "tool_calls",
+          "tool_name": "record_latency_probe",
+          "tool_arguments": {
+            "payload": "ready"
+          },
+          "content": "",
+          "reasoning_chars": 290,
+          "tool_call_pass": true
+        },
+        {
+          "isl": 65536,
+          "completion_tokens": 110,
+          "ttft_ms": 16981.087528984062,
+          "tpot_ms_derived": 43.405241798609495,
+          "e2el_ms": 21712.258885032497,
+          "tokens_per_second_per_user_derived": 23.038692069491834,
+          "finish_reason": "tool_calls",
+          "tool_name": "record_latency_probe",
+          "tool_arguments": {
+            "payload": "ready"
+          },
+          "content": "",
+          "reasoning_chars": 290,
+          "tool_call_pass": true
+        }
+      ]
+    },
+    {
+      "isl": 130560,
+      "repeats": 3,
+      "tool_call_pass": true,
+      "completion_tokens": 135.0,
+      "ttft_ms": 42030.490692006424,
+      "tpot_ms_derived": 51.17868286567921,
+      "e2el_ms": 48888.43419600744,
+      "tokens_per_second_per_user_derived": 19.53938522850511,
+      "samples": [
+        {
+          "isl": 130560,
+          "completion_tokens": 135,
+          "ttft_ms": 41994.44600002607,
+          "tpot_ms_derived": 51.18127891779947,
+          "e2el_ms": 48852.7373750112,
+          "tokens_per_second_per_user_derived": 19.538394138334574,
+          "finish_reason": "tool_calls",
+          "tool_name": "record_latency_probe",
+          "tool_arguments": {
+            "payload": "ready"
+          },
+          "content": "",
+          "reasoning_chars": 425,
+          "tool_call_pass": true
+        },
+        {
+          "isl": 130560,
+          "completion_tokens": 135,
+          "ttft_ms": 42030.490692006424,
+          "tpot_ms_derived": 51.17868286567921,
+          "e2el_ms": 48888.43419600744,
+          "tokens_per_second_per_user_derived": 19.53938522850511,
+          "finish_reason": "tool_calls",
+          "tool_name": "record_latency_probe",
+          "tool_arguments": {
+            "payload": "ready"
+          },
+          "content": "",
+          "reasoning_chars": 425,
+          "tool_call_pass": true
+        },
+        {
+          "isl": 130560,
+          "completion_tokens": 135,
+          "ttft_ms": 42111.819949001074,
+          "tpot_ms_derived": 51.17713604487284,
+          "e2el_ms": 48969.556179014035,
+          "tokens_per_second_per_user_derived": 19.539975803319393,
+          "finish_reason": "tool_calls",
+          "tool_name": "record_latency_probe",
+          "tool_arguments": {
+            "payload": "ready"
+          },
+          "content": "",
+          "reasoning_chars": 425,
+          "tool_call_pass": true
+        }
+      ]
+    }
+  ]
+}

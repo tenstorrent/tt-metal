@@ -34,6 +34,7 @@ python models/autoports/meta_models_muse_glimmer_30b/doc/optimized_full_model/be
   --out models/autoports/meta_models_muse_glimmer_30b/doc/serving_perf/benchmarks/p150_fixed_osl_latency.json
 
 TT_METAL_VISIBLE_DEVICES=0,1 \
+TT_MESH_GRAPH_DESC_PATH="$PWD/models/autoports/meta_models_muse_glimmer_30b/tt/p150x2_qb2_mesh_graph_descriptor.textproto" \
 python models/autoports/meta_models_muse_glimmer_30b/doc/optimized_full_model/bench/latency_sweep_batch1.py \
   --mesh-shape 1x2 \
   --out models/autoports/meta_models_muse_glimmer_30b/doc/serving_perf/benchmarks/p150x2_fixed_osl_latency.json

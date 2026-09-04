@@ -210,3 +210,26 @@ card:
     by the KV cache. This historical four-chip release passed its original
     bounded latency gate: 2% per metric, plus a 5 ms absolute TTFT allowance for
     short-input measurement variance.
+
+    New lower-device fixed-OSL qualification, measured at batch 1 with exactly
+    512 generated tokens per row:
+
+    | input | P150 TTFT | P150 TPOT | P150 E2E | P150x2 TTFT | P150x2 TPOT | P150x2 E2E |
+    |---:|---:|---:|---:|---:|---:|---:|
+    | 128 | 177.3 ms | 97.74 ms | 50.12 s | 81.0 ms | 36.55 ms | 18.76 s |
+    | 1,024 | 318.8 ms | 100.00 ms | 51.42 s | 214.2 ms | 37.95 ms | 19.61 s |
+    | 4,096 | 1.13 s | 103.53 ms | 54.03 s | 729.0 ms | 39.61 ms | 20.97 s |
+    | 8,192 | 2.29 s | 106.17 ms | 56.54 s | 1.49 s | 40.84 ms | 22.36 s |
+    | 16,384 | 5.01 s | 111.44 ms | 61.96 s | 3.31 s | 43.29 ms | 25.43 s |
+    | 32,768 | 10.99 s | 121.55 ms | 73.10 s | 7.21 s | 48.24 ms | 31.85 s |
+    | 65,536 | 25.33 s | 141.48 ms | 97.62 s | 16.45 s | 58.06 ms | 46.12 s |
+    | 130,560 | 63.56 s | 180.15 ms | 155.62 s | 39.33 s | 77.74 ms | 79.06 s |
+
+    The live OpenAI API qualification used real source-code context and required
+    an exact structured function call at every length: P150 passed 24/24 measured
+    calls and P150x2 passed 24/24, including three calls each at the full
+    130,560 + 512 token context. The source-owned artifacts are the
+    [P150 tool-call sweep](https://github.com/tenstorrent/tt-metal/blob/hous/muse-glimmer-30b-p150-p150x2/models/autoports/meta_models_muse_glimmer_30b/doc/serving_perf/benchmarks/p150_tool_call_latency.json),
+    [P150x2 tool-call sweep](https://github.com/tenstorrent/tt-metal/blob/hous/muse-glimmer-30b-p150-p150x2/models/autoports/meta_models_muse_glimmer_30b/doc/serving_perf/benchmarks/p150x2_tool_call_latency.json),
+    [P150 fixed-OSL control](https://github.com/tenstorrent/tt-metal/blob/hous/muse-glimmer-30b-p150-p150x2/models/autoports/meta_models_muse_glimmer_30b/doc/serving_perf/benchmarks/p150_fixed_osl_latency.json),
+    and [P150x2 fixed-OSL control](https://github.com/tenstorrent/tt-metal/blob/hous/muse-glimmer-30b-p150-p150x2/models/autoports/meta_models_muse_glimmer_30b/doc/serving_perf/benchmarks/p150x2_fixed_osl_latency.json).
