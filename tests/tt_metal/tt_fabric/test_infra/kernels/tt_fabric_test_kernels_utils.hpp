@@ -240,20 +240,16 @@ struct ChipUnicastFields1D {
 
 struct ChipUnicastFields2D {
     static ChipUnicastFields2D build_from_args(size_t& arg_idx) {
-        uint16_t src_device_id = get_local_arg_val<uint32_t>(arg_idx++);
         uint16_t dst_device_id = get_local_arg_val<uint32_t>(arg_idx++);
         uint16_t dst_mesh_id = get_local_arg_val<uint32_t>(arg_idx++);
-        uint16_t ew_dim = get_local_arg_val<uint32_t>(arg_idx++);
-        return ChipUnicastFields2D(src_device_id, dst_device_id, dst_mesh_id, ew_dim);
+        return ChipUnicastFields2D(dst_device_id, dst_mesh_id);
     }
 
-    ChipUnicastFields2D(uint16_t src_device_id, uint16_t dst_device_id, uint16_t dst_mesh_id, uint16_t ew_dim) :
-        src_device_id(src_device_id), dst_device_id(dst_device_id), dst_mesh_id(dst_mesh_id), ew_dim(ew_dim) {}
+    ChipUnicastFields2D(uint16_t dst_device_id, uint16_t dst_mesh_id) :
+        dst_device_id(dst_device_id), dst_mesh_id(dst_mesh_id) {}
 
-    uint16_t src_device_id;
     uint16_t dst_device_id;
     uint16_t dst_mesh_id;
-    uint16_t ew_dim;
 };
 
 struct ChipMulticastFields1D {
@@ -404,17 +400,6 @@ struct NocUnicastScatterWriteFields {
     std::array<uint16_t, MAX_CHUNKS - 1> chunk_sizes;
     uint32_t dst_noc_encoding;
 };
-
-template <typename T>
-void setup_2d_unicast_route(uint32_t packet_header_address, const ChipUnicastFields2D& unicast_fields) {
-    // Template constraint: T must be MeshPacketHeader or HybridMeshPacketHeader
-    fabric_set_unicast_route(
-        (T*)packet_header_address,
-        unicast_fields.src_device_id,
-        unicast_fields.dst_device_id,
-        unicast_fields.dst_mesh_id,
-        unicast_fields.ew_dim);
-}
 
 template <typename T>
 void setup_2d_mcast_route(uint32_t packet_header_address, const ChipMulticastFields2D& mcast_fields) {
