@@ -76,6 +76,22 @@ void agree_or_throw_fsd_host_filter(
     std::uint64_t descriptor_fingerprint,
     bool local_ok);
 
+// Give a factory-built descriptor the runtime facts only discovery knows, so it can be mapped on.
+//
+// A factory descriptor knows the shape of the machine but not this process's place in it: which host is
+// running this rank, and which MPI rank each host is. Both are needed by anything that asks "is this chip
+// mine", and the builder cannot supply either.
+//
+// Host names are matched canonically, but the descriptor's own spelling is left alone -- the local host is
+// recorded under the name the descriptor uses for it, so every lookup inside the descriptor stays
+// self-consistent and only the join with live has to canonicalize.
+//
+// Ranks are copied from live, not kept from the file. The builder numbers hosts by file order and the
+// filter renumbers densely, so a factory descriptor's ranks are unrelated to the MPI ranks the job is
+// actually running on.
+void align_factory_descriptor_with_live(
+    ::tt::tt_metal::PhysicalSystemDescriptor& fsd, const ::tt::tt_metal::PhysicalSystemDescriptor& live);
+
 // Throw if the factory descriptor declares a whole ASIC that the live cluster does not have.
 //
 // A missing *cable* is the downed-link feature. A missing *chip* is a wrong allocation, and the two must
