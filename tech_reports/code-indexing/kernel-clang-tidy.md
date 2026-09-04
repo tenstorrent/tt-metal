@@ -36,7 +36,9 @@ cd <tt-metal root>
 # 1. Cache hits spawn no compiler process, so force real compiles.
 export TT_METAL_FORCE_JIT_COMPILE=1
 # 2. If kernel ccache is enabled (TT_METAL_CCACHE_KERNEL_SUPPORT), a ccache hit
-#    also skips the compiler exec; make ccache a pass-through.
+#    also skips the compiler exec. Take ccache out of the path entirely, and
+#    disable it as a fallback in case something else invokes it.
+unset TT_METAL_CCACHE_KERNEL_SUPPORT
 export CCACHE_DISABLE=1
 
 # 3. Run any test/workload under bear. Use absolute paths.
@@ -59,6 +61,32 @@ reference the generated headers there (`chlkc_*.cpp`, `chlkc_descriptors.h`,
 those sources. Object files do not need to survive (they don't; the JIT build
 uses temp names) — only sources/headers matter, and those are durable.
 
+### Gotcha: every kernel-compile cache silently defeats the capture
+
+`bear` only records what actually `exec`s. A cache hit at **any** layer serves
+the result without spawning the real compiler, and the capture silently comes
+up empty (the filter script warns on zero entries, but the failure mode to
+understand is "cache hit", not "bear broke"). There are three layers:
+
+1. **The tt-metal JIT cache** (`~/.cache/tt-metal-cache`): a hit means
+   `JitBuildState::need_compile` returns false and no process is spawned at
+   all. Defeat: `TT_METAL_FORCE_JIT_COMPILE=1`.
+2. **Kernel ccache** (`TT_METAL_CCACHE_KERNEL_SUPPORT`): when set,
+   `JitBuildEnv::init` prepends `ccache` to the SFPI command; a ccache hit
+   skips the compiler exec. Defeat: `unset TT_METAL_CCACHE_KERNEL_SUPPORT`
+   (removes ccache from the process tree), plus `CCACHE_DISABLE=1` as a
+   fallback (a disabled ccache is a pure pass-through, so the compile is still
+   observable even if ccache does get invoked).
+3. **The CI Redis-backed kernel ccache**: in CI, `.github/actions/setup-job`
+   (`enable-kernel-ccache: true`) configures kernel ccache with
+   `CCACHE_REMOTE_ONLY=true` and `CCACHE_REMOTE_STORAGE=redis://...` — i.e.
+   *all* kernel-compile cache lookups go to a shared Redis instance, and a
+   remote hit serves the object without ever running `riscv-tt-elf-g++`. This
+   is the same ccache from layer 2, so the same defeats apply; the CI wiring
+   additionally clears `CCACHE_REMOTE_STORAGE`/`CCACHE_REMOTE_ONLY` for the
+   capture leg to make the intent explicit and to avoid touching the shared
+   Redis cache from an instrumented run.
+
 ## What the translation does
 
 See the docstring of `scripts/build_kernel_clang_tidy_commands.py` for the
@@ -80,8 +108,11 @@ every configuration.
 
 `.github/workflows/ttnn-sanity-tests-impl.yaml` has an opt-in experiment:
 callers pass `enable-kernel-clang-tidy: true` plus `clang-tidy-target-group:
-"<exact matrix group name>"`. That leg's pytest run is wrapped in `bear` (with
-`TT_METAL_FORCE_JIT_COMPILE=1` and `CCACHE_DISABLE=1`), and after the tests a
+"<exact matrix group name>"`. That leg's pytest run is wrapped in `bear`, with
+all three kernel-compile cache layers defeated for that leg only (see the
+gotcha above: `TT_METAL_FORCE_JIT_COMPILE=1`, `TT_METAL_CCACHE_KERNEL_SUPPORT`
+unset, `CCACHE_DISABLE=1`, and the Redis `CCACHE_REMOTE_STORAGE` cleared), and
+after the tests a
 non-blocking (`continue-on-error`) step runs the filter + clang-tidy and
 uploads `kernel-clang-tidy-<group>` as an artifact (raw + translated
 compile_commands.json, findings.txt, summary.txt). It is a prototype riding on

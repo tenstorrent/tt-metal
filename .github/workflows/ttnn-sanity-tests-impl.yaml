@@ -419,20 +419,33 @@ jobs:
             fi
 
             # EXPERIMENT (kernel clang-tidy): when this leg is the selected target, wrap the
-            # run in `bear` to capture every runtime JIT compiler invocation. Two env vars are
-            # required for the capture to see anything:
-            #   TT_METAL_FORCE_JIT_COMPILE=1 — a JIT cache hit spawns no compiler process
-            #     (JitBuildState::need_compile), so bear would record nothing for cached kernels.
-            #   CCACHE_DISABLE=1 — this job enables kernel ccache (setup-job
-            #     enable-kernel-ccache), and a ccache hit also skips the real compiler exec;
-            #     disabling makes ccache a pass-through so the compile still happens and is
-            #     observable. Both make this leg slower; that's inherent to the capture.
+            # run in `bear` to capture every runtime JIT compiler invocation. Every kernel
+            # compile cache must be defeated for the capture to see anything — a cache hit at
+            # ANY layer means the real compiler never execs and bear records nothing:
+            #   1. TT_METAL_FORCE_JIT_COMPILE=1 — a tt-metal-cache hit spawns no compiler
+            #      process at all (JitBuildState::need_compile).
+            #   2. unset TT_METAL_CCACHE_KERNEL_SUPPORT — this job enables kernel ccache
+            #      (setup-job enable-kernel-ccache), which makes JitBuildEnv prepend `ccache`
+            #      to the SFPI command AND configures CCACHE_REMOTE_ONLY=true +
+            #      CCACHE_REMOTE_STORAGE=redis://... — i.e. the CI Redis-backed kernel cache.
+            #      A Redis hit serves the object without ever exec'ing the compiler. Unsetting
+            #      this takes ccache (and therefore Redis) out of the process tree entirely
+            #      for this leg, so the captured argv is the bare SFPI compiler.
+            #   3. CCACHE_DISABLE=1 + clear CCACHE_REMOTE_STORAGE — belt and suspenders in
+            #      case anything else routes a kernel compile through ccache: disabled ccache
+            #      is a pure pass-through (no local or remote/Redis lookup, no store).
+            # These exports are scoped to this step's process tree for this one leg; other
+            # legs and the job-level CCACHE_* env (used by the CCache Report step) are
+            # untouched. This leg runs slower by design — that's inherent to the capture.
             KERNEL_TIDY_THIS="${{ inputs.enable-kernel-clang-tidy && matrix.test-group.name == format('{0} [{1}]', inputs.clang-tidy-target-group, matrix.test-group.sku) }}"
             KERNEL_TIDY_READY="${{ steps.kernel-tidy-tools.outputs.tidy_ready }}"
             if [ "$KERNEL_TIDY_THIS" = "true" ] && [ "$KERNEL_TIDY_READY" = "true" ]; then
-              echo "kernel clang-tidy capture ENABLED for '$TEST_GROUP_NAME'"
+              echo "kernel clang-tidy capture ENABLED for '$TEST_GROUP_NAME' (JIT + ccache/Redis kernel caches defeated for this leg)"
               export TT_METAL_FORCE_JIT_COMPILE=1
+              unset TT_METAL_CCACHE_KERNEL_SUPPORT
               export CCACHE_DISABLE=1
+              export CCACHE_REMOTE_STORAGE=
+              unset CCACHE_REMOTE_ONLY
               RUNNER=(bear --output /work/kernel_tidy_raw_compile_commands.json -- "${RUNNER[@]}")
             elif [ "$KERNEL_TIDY_THIS" = "true" ]; then
               echo "::warning::kernel clang-tidy tools not ready; running '$TEST_GROUP_NAME' without capture."
