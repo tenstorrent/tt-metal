@@ -967,10 +967,15 @@ def test_special_activation_combinations(
         (ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 1.0), 0.5869, 0.0046, 0.5131, 0.85621),
         # fast_and_approximate mode
         (ttnn.UnaryWithParam(ttnn.UnaryOpType.TANH, 1.0), 0.5892, 0.0046, 0.3976, 0.92096),
-        # The first parameter of sigmoid is the vector mode, not the
-        # fast_and_approximate flag, which is the second one, so this case runs
-        # the accurate sigmoid and carries the same limits as it.
-        (ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID, 1.0), 0.0724, 0.0358, 0.0449, 0.98184),
+        # There is no fast sigmoid case here. sigmoid numbers its parameters
+        # differently from gelu and tanh: the first is the vector mode and the
+        # second is the fast_and_approximate flag, so reaching the table takes
+        # (4.0, 1.0). It is left out because it cannot be checked meaningfully at
+        # this input scale. The inputs are scaled by 0.1, which keeps 97 percent
+        # of them inside |x| < 1 where sigmoid is nearly linear, so its output
+        # spans only about 0.11 in standard deviation while the table's error
+        # bound is an absolute 0.13. The limit would have to admit an error
+        # larger than the signal, which no longer tests anything.
         # Custom min/max
         (ttnn.UnaryWithParam(ttnn.UnaryOpType.HARDTANH, -2.0, 2.0), 0.2897, 0.0046, 0.0959, 0.99541),
         # Custom scale/alpha
@@ -992,7 +997,6 @@ def test_special_activation_combinations(
         "softplus_str",
         "gelu_fast",
         "tanh_fast",
-        "sigmoid_fast",
         "hardtanh_custom",
         "selu_custom",
         "softplus_custom",
