@@ -58,7 +58,12 @@ inline void _llk_math_welfords_sfpu_init_()
     _program_welfords_replay_buffer_();
 }
 
-/** Configure SFPU constants, address modifiers, and counters for two-pass statistics. */
+/**
+ * @brief Configure SFPU constants, address modifiers, and counters for two-pass statistics.
+ *
+ * @note Call @ref _two_pass_clear_stats_ before accumulating a new population; initialisation does not clear the
+ * running register state.
+ */
 inline void _llk_math_two_pass_sfpu_init_()
 {
     sfpu::_init_sfpu_config_reg();
