@@ -84,6 +84,14 @@ _FABRIC_2D_TORUS_XY_DEVICE_PARAMS = pytest.param(
     id="fabric_2d_torus_xy",
 )
 
+# A full-mesh ring resolves on either fabric: the torus closes a boustrophedon over its
+# wrap link, the plain line closes a comb over nearest neighbours only. Both must produce
+# the same gathered tensor, so the whole-mesh tests run over both.
+_FULL_MESH_DEVICE_PARAMS = [
+    _FABRIC_2D_TORUS_XY_DEVICE_PARAMS,
+    _FABRIC_2D_LINE_DEVICE_PARAMS,
+]
+
 _SELECTED_BATCH_PREFIX_DEVICE_PARAMS = [
     _FABRIC_2D_LINE_DEVICE_PARAMS,
     pytest.param(_device_params(ttnn.FabricConfig.FABRIC_1D_RING), id="fabric_1d_ring"),
@@ -778,7 +786,7 @@ def test_high_bw_all_gather_galaxy_ci_perf(mesh_device):
 @pytest.mark.skipif(
     os.getenv("MESH_DEVICE") != "TG", reason="Blackhole Galaxy full-mesh perf gate requires MESH_DEVICE=TG"
 )
-@pytest.mark.parametrize("device_params", [_FABRIC_2D_TORUS_XY_DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("device_params", _FULL_MESH_DEVICE_PARAMS, indirect=True)
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
 def test_high_bw_all_gather_galaxy_full_mesh_ci_perf(mesh_device):
     """Galaxy full-mesh gate: the same CI perf matrix over one 32-rank snake ring.
@@ -802,7 +810,7 @@ def test_high_bw_all_gather_galaxy_full_mesh_ci_perf(mesh_device):
     os.getenv("MESH_DEVICE") != "TG",
     reason="Blackhole Galaxy full-mesh matched-local perf gate requires MESH_DEVICE=TG",
 )
-@pytest.mark.parametrize("device_params", [_FABRIC_2D_TORUS_XY_DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("device_params", _FULL_MESH_DEVICE_PARAMS, indirect=True)
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
 def test_high_bw_all_gather_galaxy_full_mesh_matched_local_perf(mesh_device):
     """32-rank snake at the axis gate's exact rows-per-device, isolating hop count.
@@ -826,7 +834,7 @@ def test_high_bw_all_gather_galaxy_full_mesh_matched_local_perf(mesh_device):
     not os.getenv("TT_METAL_SIMULATOR") and os.getenv("TT_METAL_HIGH_BW_ALL_GATHER_RUN_32_RANK_ACCURACY") != "1",
     reason="run on the Blackhole simulator or set TT_METAL_HIGH_BW_ALL_GATHER_RUN_32_RANK_ACCURACY=1",
 )
-@pytest.mark.parametrize("device_params", [_FABRIC_2D_TORUS_XY_DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("device_params", _FULL_MESH_DEVICE_PARAMS, indirect=True)
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
 def test_high_bw_all_gather_galaxy_8x4_whole_mesh_ring_accuracy(mesh_device):
     """Gather exactly across a 32-rank snake ring while Galaxy remains an 8x4 mesh."""

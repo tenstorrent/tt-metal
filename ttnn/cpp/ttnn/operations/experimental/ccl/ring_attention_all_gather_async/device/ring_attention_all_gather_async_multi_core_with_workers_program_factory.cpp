@@ -466,9 +466,8 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             ring_index,
             target_device_coord,
             rank_from_coordinate);
-        const uint32_t lane_count = rank_mapping.orientation == ttnn::ccl::snake_ring::Orientation::Row
-                                        ? rank_mapping.mesh_rows
-                                        : rank_mapping.mesh_cols;
+        const uint32_t lane_count =
+            ttnn::ccl::snake_ring::lane_count(rank_mapping.mesh_rows, rank_mapping.mesh_cols, rank_mapping.orientation);
         TT_FATAL(
             lane_count % 2 == 0,
             "full-mesh ring-attention snake closure requires an even lane count, got {}",

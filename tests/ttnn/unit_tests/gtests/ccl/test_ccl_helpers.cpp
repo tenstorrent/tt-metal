@@ -6,6 +6,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 #include "gtest/gtest.h"
@@ -22,7 +23,12 @@
 
 namespace {
 
-void check_snake_ring_bijection(uint32_t rows, uint32_t cols, ttnn::ccl::snake_ring::Orientation orientation) {
+// `require_direct_closure` demands every ring edge, the closing one included, be a
+// nearest neighbour on the plain grid -- no wrap. Boustrophedon orientations close
+// across a whole axis and so need the cyclic distance (a torus link); comb
+// orientations must not, since closing without a wrap is their entire purpose.
+void check_snake_ring_bijection(
+    uint32_t rows, uint32_t cols, ttnn::ccl::snake_ring::Orientation orientation, bool require_direct_closure = false) {
     const uint32_t ring_size = rows * cols;
     std::vector<bool> seen_tensor_ranks(ring_size, false);
     for (uint32_t transport_rank = 0; transport_rank < ring_size; ++transport_rank) {
@@ -38,16 +44,22 @@ void check_snake_ring_bijection(uint32_t rows, uint32_t cols, ttnn::ccl::snake_r
         EXPECT_FALSE(seen_tensor_ranks[tensor_rank]);
         seen_tensor_ranks[tensor_rank] = true;
 
-        const uint32_t lane_count = orientation == ttnn::ccl::snake_ring::Orientation::Row ? rows : cols;
+        const uint32_t lane_count = ttnn::ccl::snake_ring::lane_count(rows, cols, orientation);
         if (transport_rank + 1 < ring_size || lane_count % 2 == 0) {
             const uint32_t next_rank = (transport_rank + 1) % ring_size;
             const uint32_t next_row = ttnn::ccl::snake_ring::coordinate_row(next_rank, rows, cols, orientation);
             const uint32_t next_col = ttnn::ccl::snake_ring::coordinate_col(next_rank, rows, cols, orientation);
             const uint32_t raw_row_delta = row > next_row ? row - next_row : next_row - row;
             const uint32_t raw_col_delta = col > next_col ? col - next_col : next_col - col;
-            const uint32_t cyclic_row_delta = std::min(raw_row_delta, rows - raw_row_delta);
-            const uint32_t cyclic_col_delta = std::min(raw_col_delta, cols - raw_col_delta);
-            EXPECT_EQ(cyclic_row_delta + cyclic_col_delta, 1u);
+            if (require_direct_closure) {
+                EXPECT_EQ(raw_row_delta + raw_col_delta, 1u)
+                    << "orientation " << static_cast<uint32_t>(orientation) << " on " << rows << "x" << cols
+                    << " needs a wrap between ranks " << transport_rank << " and " << next_rank;
+            } else {
+                const uint32_t cyclic_row_delta = std::min(raw_row_delta, rows - raw_row_delta);
+                const uint32_t cyclic_col_delta = std::min(raw_col_delta, cols - raw_col_delta);
+                EXPECT_EQ(cyclic_row_delta + cyclic_col_delta, 1u);
+            }
         }
     }
     EXPECT_TRUE(std::all_of(seen_tensor_ranks.begin(), seen_tensor_ranks.end(), [](bool seen) { return seen; }));
@@ -61,6 +73,53 @@ TEST(CclHelpers, SnakeRingMappingsAreBijectionsWithRowMajorTensorRanks) {
         check_snake_ring_bijection(shape[0], shape[1], ttnn::ccl::snake_ring::Orientation::Row);
         check_snake_ring_bijection(shape[0], shape[1], ttnn::ccl::snake_ring::Orientation::Column);
     }
+}
+
+TEST(CclHelpers, CombRingMappingsCloseOnDirectNeighboursWithoutAWrap) {
+    // Every shape here has at least one even extent, which is all a comb needs.
+    // 3x2/2x3 pin the odd-other-extent case; 8x4 is the Galaxy production mesh.
+    constexpr std::array<std::array<uint32_t, 2>, 6> mesh_shapes{{{2, 2}, {2, 4}, {4, 2}, {8, 4}, {3, 2}, {2, 3}}};
+    for (const auto& shape : mesh_shapes) {
+        const uint32_t rows = shape[0];
+        const uint32_t cols = shape[1];
+        if (rows % 2 == 0) {
+            check_snake_ring_bijection(rows, cols, ttnn::ccl::snake_ring::Orientation::CombRow, true);
+        }
+        if (cols % 2 == 0) {
+            check_snake_ring_bijection(rows, cols, ttnn::ccl::snake_ring::Orientation::CombColumn, true);
+        }
+    }
+}
+
+TEST(CclHelpers, CombRingWalksTheSpineThenZigZagsBackToIt) {
+    // 4x3 CombRow, spelled out: down column 0, then columns 1-2 bottom-to-top,
+    // ending at (0,1) which neighbours the spine's origin.
+    constexpr std::array<std::pair<uint32_t, uint32_t>, 12> expected{
+        {{0, 0}, {1, 0}, {2, 0}, {3, 0}, {3, 1}, {3, 2}, {2, 2}, {2, 1}, {1, 1}, {1, 2}, {0, 2}, {0, 1}}};
+    for (uint32_t transport_rank = 0; transport_rank < expected.size(); ++transport_rank) {
+        EXPECT_EQ(
+            ttnn::ccl::snake_ring::coordinate_row(transport_rank, 4, 3, ttnn::ccl::snake_ring::Orientation::CombRow),
+            expected[transport_rank].first)
+            << "rank " << transport_rank;
+        EXPECT_EQ(
+            ttnn::ccl::snake_ring::coordinate_col(transport_rank, 4, 3, ttnn::ccl::snake_ring::Orientation::CombRow),
+            expected[transport_rank].second)
+            << "rank " << transport_rank;
+    }
+}
+
+TEST(CclHelpers, CombLaneCountMatchesTheBoustrophedonItReplaces) {
+    // The comb inherits the parity precondition of the orientation it stands in
+    // for, so op-side `lane_count % 2` validation needs no special case.
+    EXPECT_EQ(ttnn::ccl::snake_ring::lane_count(8, 4, ttnn::ccl::snake_ring::Orientation::CombRow), 8u);
+    EXPECT_EQ(
+        ttnn::ccl::snake_ring::lane_count(8, 4, ttnn::ccl::snake_ring::Orientation::Row),
+        ttnn::ccl::snake_ring::lane_count(8, 4, ttnn::ccl::snake_ring::Orientation::CombRow));
+    EXPECT_EQ(
+        ttnn::ccl::snake_ring::lane_count(8, 4, ttnn::ccl::snake_ring::Orientation::Column),
+        ttnn::ccl::snake_ring::lane_count(8, 4, ttnn::ccl::snake_ring::Orientation::CombColumn));
+    EXPECT_FALSE(ttnn::ccl::snake_ring::is_comb(ttnn::ccl::snake_ring::Orientation::Row));
+    EXPECT_TRUE(ttnn::ccl::snake_ring::is_comb(ttnn::ccl::snake_ring::Orientation::CombColumn));
 }
 
 TEST(CclHelpers, RingAttentionRankMappingKeepsAxisIdentityAndPlacesFullMeshInRowMajorOrder) {

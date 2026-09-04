@@ -100,7 +100,7 @@ void HighBwAllGatherDeviceOperation::validate_on_program_cache_miss(
     const auto mesh_shape = input_tensor.device()->shape();
     if (args.linearized_mesh_ring) {
         const uint32_t snake_lane_count =
-            args.snake_ring_orientation == ttnn::ccl::snake_ring::Orientation::Row ? mesh_shape[0] : mesh_shape[1];
+            ttnn::ccl::snake_ring::lane_count(mesh_shape[0], mesh_shape[1], args.snake_ring_orientation);
         TT_FATAL(
             mesh_shape[0] > 1 && mesh_shape[1] > 1 && snake_lane_count % 2 == 0,
             "high_bw_all_gather full-mesh ring requires a 2D mesh whose selected snake orientation has an even "

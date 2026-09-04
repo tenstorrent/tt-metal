@@ -273,13 +273,26 @@ std::optional<MeshRingPlan> resolve_mesh_ring_plan(
         }
         return std::nullopt;
     }
+    // Boustrophedon first, comb second. The boustrophedon needs a wrap link to
+    // close, so it only resolves on a torus (or an extent-2 closing axis), but
+    // where it does resolve it is the already-validated production route and
+    // keeping it first leaves that path bit-identical. The comb closes on
+    // nearest neighbours alone, which is what makes a plain 2D fabric eligible.
     for (const auto orientation :
-         {ttnn::ccl::snake_ring::Orientation::Row, ttnn::ccl::snake_ring::Orientation::Column}) {
-        const uint32_t lane_count = orientation == ttnn::ccl::snake_ring::Orientation::Row ? shape[0] : shape[1];
-        if (lane_count % 2 != 0) {
+         {ttnn::ccl::snake_ring::Orientation::Row,
+          ttnn::ccl::snake_ring::Orientation::Column,
+          ttnn::ccl::snake_ring::Orientation::CombRow,
+          ttnn::ccl::snake_ring::Orientation::CombColumn}) {
+        if (ttnn::ccl::snake_ring::lane_count(shape[0], shape[1], orientation) % 2 != 0) {
             continue;
         }
-        const uint32_t closing_axis = orientation == ttnn::ccl::snake_ring::Orientation::Row ? 0 : 1;
+        // Only the boustrophedon has a closing axis whose topology decides the
+        // wrap; a comb's closing edge is a neighbour, and full_mesh forces
+        // is_ring inside the edge proof either way.
+        const uint32_t closing_axis = (orientation == ttnn::ccl::snake_ring::Orientation::Row ||
+                                       orientation == ttnn::ccl::snake_ring::Orientation::CombRow)
+                                          ? 0
+                                          : 1;
         const auto route_hash = resolve_direct_neighbor_route_hash(
             tensor, std::nullopt, num_links, axis_topology[closing_axis], orientation, false, operation_name);
         if (route_hash.has_value()) {
@@ -301,9 +314,11 @@ std::optional<MeshRingPlan> resolve_mesh_ring_plan(
     if (log_rejection) {
         // Repeat the deterministic fallback orientation with logging enabled
         // so the caller gets the exact edge/link that made the mesh ineligible.
-        const auto fallback =
-            shape[0] % 2 == 0 ? ttnn::ccl::snake_ring::Orientation::Row : ttnn::ccl::snake_ring::Orientation::Column;
-        const uint32_t closing_axis = fallback == ttnn::ccl::snake_ring::Orientation::Row ? 0 : 1;
+        // Report against the comb, not the boustrophedon: it is the weaker
+        // requirement, so an edge it cannot prove is the real obstacle.
+        const auto fallback = shape[0] % 2 == 0 ? ttnn::ccl::snake_ring::Orientation::CombRow
+                                                : ttnn::ccl::snake_ring::Orientation::CombColumn;
+        const uint32_t closing_axis = fallback == ttnn::ccl::snake_ring::Orientation::CombRow ? 0 : 1;
         (void)resolve_direct_neighbor_route_hash(
             tensor, std::nullopt, num_links, axis_topology[closing_axis], fallback, true, operation_name);
     }
