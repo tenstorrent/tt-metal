@@ -2412,10 +2412,9 @@ void ProgramImpl::generate_dispatch_commands(distributed::MeshDevice* mesh_devic
     uint64_t command_hash = *mesh_device->get_active_sub_device_manager_id();
     MetalContext& metal_ctx = MetalContext::instance(extract_context_id(mesh_device));
 
-    uint64_t device_hash =
-        BuildEnvManager::get_instance(extract_context_id(mesh_device))
-            .get_device_build_env(mesh_device->build_id())
-            .build_key();
+    uint64_t device_hash = BuildEnvManager::get_instance(extract_context_id(mesh_device))
+                               .get_device_build_env(mesh_device->build_id())
+                               .build_key();
     if (not metal_ctx.hal().is_coordinate_virtualization_enabled()) {
         ttsl::hash::hash_combine(device_hash, mesh_device->id());
     }
@@ -2454,10 +2453,9 @@ void ProgramImpl::generate_trace_dispatch_commands(distributed::MeshDevice* mesh
     uint64_t command_hash = *mesh_device->get_active_sub_device_manager_id();
     MetalContext& metal_ctx = MetalContext::instance(extract_context_id(mesh_device));
 
-    uint64_t device_hash =
-        BuildEnvManager::get_instance(extract_context_id(mesh_device))
-            .get_device_build_env(mesh_device->build_id())
-            .build_key();
+    uint64_t device_hash = BuildEnvManager::get_instance(extract_context_id(mesh_device))
+                               .get_device_build_env(mesh_device->build_id())
+                               .build_key();
     if (not metal_ctx.hal().is_coordinate_virtualization_enabled()) {
         device_hash = (device_hash << 32) | (mesh_device->id());
     }
