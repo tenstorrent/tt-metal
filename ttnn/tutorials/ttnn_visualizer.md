@@ -105,13 +105,13 @@ We’ll use a config file for flexibility:
 Each configuration option has a specific purpose:
 
 * **enable_fast_runtime_mode** - Must be disabled to enable logging.
-* **enable_logging** - Synchronizes main thread after every operation and logs the operation.
-* **report_name** (*required*) - Name of the report used by TT-NN Visualizer. If not provided, no data will be dumped to disk. Note that tests under `tests/ttnn/` derive one from the test id automatically, but tests elsewhere (such as under `models/`) do not, so set it explicitly.
+* **enable_logging** - Synchronizes main thread after every operation and logs the operation. Inside a metal trace capture the synchronization is skipped (it is not allowed there), so the logged timings cover dispatch only and device errors surface when the trace is executed.
+* **report_name** (*optional*) - Name of the report used by TT-NN Visualizer. If not provided, the `ttnn_graph_report` pytest fixture derives one from the test id. Note that the report flags below only take effect under pytest; a plain script generates a report with `ttnn.graph.full_graph_capture(path)` followed by `ttnn.graph_report.import_report(path, output_dir)`.
 * **enable_graph_python_stack_traces** (*optional*) - When true, outermost Python `begin_graph_capture` records Python call stacks. `ttnn.graph.full_graph_capture` always records Python stacks regardless of this flag.
 * **enable_graph_report** (*required* for the graph view) - Captures the operation graph, which is what writes the graph data in `db.sqlite`. With it disabled the visualizer has no graph to show; *enable_comparison_mode* on its own still writes comparison records, but nothing else does.
 * **enable_detailed_buffer_report** (if *report_name* and *enable_graph_report* are set) - Enable to visualize the detailed buffer report after every operation.
-* **enable_detailed_tensor_report** (if *report_name* is set) - Enable to visualize the values of input and output tensors of every operation.
-* **enable_comparison_mode** (if *report_name* is set) - Enable to test the output of operations against their golden implementation.
+* **enable_detailed_tensor_report** (if *report_name* and *enable_graph_report* are set) - Records the Python source file and line of the operations that produce, last use and deallocate each tensor (the tensor lifetime view). It does not dump tensor values.
+* **enable_comparison_mode** (if *report_name* is set) - Enable to test the output of operations against their golden implementation. Operations inside a metal trace capture are not compared, since their inputs and outputs cannot be read back there.
 
 > [NOTE]
 > This config file corresponds to the recommended setup in TT-NN Visualizer docs, feel free to adjust it to your needs.
