@@ -146,12 +146,25 @@ void SliceDeviceOperation::validate_on_program_cache_miss(
         const auto& out_tensor = tensor_args.preallocated_output.value();
         // Padded, not logical: ttnn::slice pads the tile-path ends up to a tile boundary before
         // calling here and views the result back down afterwards, so the caller's tensor legitimately
-        // carries the unpadded logical shape. Both shapes coincide on the row-major path.
+        // carries a smaller logical shape than the spec. That licence is tile-only; see below.
         TT_FATAL(
             out_tensor.padded_shape() == spec_required.padded_shape(),
             "The preallocated output tensor needs a padded shape of {}, however it is {}",
             spec_required.padded_shape(),
             out_tensor.padded_shape());
+        // Row-major ends are passed through unpadded, so here the caller's logical shape has to match
+        // exactly too, and padded-versus-padded does not imply it: a sharded output's alignment is its
+        // shard width, so any logical width in the same shard column pads to the same value.
+        // SliceRmShardedProgramFactory sizes each row's copy from output.logical_shape()[-1] -- the one
+        // place any factory reads the logical shape -- so a short one there copies part of every row
+        // and leaves the remainder untouched, with no error.
+        if (tensor_args.input.layout() == Layout::ROW_MAJOR) {
+            TT_FATAL(
+                out_tensor.logical_shape() == spec_required.logical_shape(),
+                "The preallocated output tensor needs a logical shape of {}, however it is {}",
+                spec_required.logical_shape(),
+                out_tensor.logical_shape());
+        }
         // create_output_tensors hands the program the caller's tensor verbatim, so the destination's
         // page geometry has to be what the factories were built against. One comparison covers dtype,
         // page_config, memory_config and alignment — including the fields compute_program_hash omits.
