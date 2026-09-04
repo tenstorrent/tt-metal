@@ -284,7 +284,7 @@ void D2HSocket::init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device) 
     TT_FATAL(mesh_device, "init_sender_tlb requires a MeshDevice (owner path only; connectors use PCIeCoreWriter).");
 
     auto& env = mesh_device->impl().metal_env();
-    auto* cluster = &env.get_cluster();
+    auto& cluster = env.get_cluster();
     const uint32_t sender_device_id = mesh_device->get_device(sender_core_.device_coord)->id();
     CoreCoord sender_virtual_core_coord;
 
@@ -298,10 +298,10 @@ void D2HSocket::init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device) 
         // logical->virtual translation is applied. The window is anchored at the LIM
         // base rather than at 0, because LIM does not start at 0.
         sender_virtual_core_coord = sender_core_.core_coord;
-        if (!cluster->is_mock_or_emulated()) {
-            sender_core_window_ = cluster->get_driver()->create_io_window(
+        if (!cluster.is_mock_or_emulated()) {
+            sender_core_window_ = cluster.get_driver()->create_io_window(
                 sender_device_id,
-                cluster->get_soc_desc(sender_device_id)
+                cluster.get_soc_desc(sender_device_id)
                     .get_coord_at(sender_virtual_core_coord, tt::CoordSystem::TRANSLATED),
                 ll_api::kL2cpuLimBase,
                 {.size = ll_api::kL2cpuLimTlbSize});
@@ -310,7 +310,7 @@ void D2HSocket::init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device) 
         sender_virtual_core_coord = this->sender_virtual_core(*mesh_device, sender_device_id);
     }
 
-    if (is_l2cpu_ && !cluster->is_mock_or_emulated()) {
+    if (is_l2cpu_ && !cluster.is_mock_or_emulated()) {
         // The L2CPU window is anchored at the LIM base, so absolute addresses are
         // converted to window-relative offsets before write_block(). Mock/emule
         // have no window and fall through to the write_core() path below.
@@ -318,16 +318,16 @@ void D2HSocket::init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device) 
         pcie_writer_ = [this, l2cpu_window_base](void* data, uint32_t num_bytes, uint64_t device_addr) {
             sender_core_window_->write_block(device_addr - l2cpu_window_base, data, num_bytes);
         };
-    } else if (env.get_hal().get_arch() == tt::ARCH::BLACKHOLE && !cluster->is_mock_or_emulated()) {
+    } else if (env.get_hal().get_arch() == tt::ARCH::BLACKHOLE && !cluster.is_mock_or_emulated()) {
         // Only this path uses a window of our own, so it is also the only path that reserves one:
         // a window is a finite hardware TLB held for the socket's lifetime, and the write_core
         // fallback below needs none. Anchored at the core type's L1 NOC offset (0 for a Tensix
         // core, DRAM_L1_NOC_OFFSET for a DRISC sender, whose L1 sits above the GDDR in the core's
         // address space), so a write addresses the sender's L1 by its device address, and Blackhole
         // reaches the whole L1 through it — no reconfig per write.
-        sender_core_window_ = cluster->get_driver()->create_io_window(
+        sender_core_window_ = cluster.get_driver()->create_io_window(
             sender_device_id,
-            cluster->get_soc_desc(sender_device_id).get_coord_at(sender_virtual_core_coord, tt::CoordSystem::TRANSLATED),
+            cluster.get_soc_desc(sender_device_id).get_coord_at(sender_virtual_core_coord, tt::CoordSystem::TRANSLATED),
             /*addr=*/env.get_hal().get_l1_noc_offset(sender_core_type_));
         pcie_writer_ = [this](void* data, uint32_t num_bytes, uint64_t device_addr) {
             sender_core_window_->write_block(device_addr, data, num_bytes);
@@ -337,9 +337,9 @@ void D2HSocket::init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device) 
         // since the device address space is not mapped this way. A DRISC sender's L1 is
         // addressed at the DRAM core's L1 NOC offset (0 for Tensix).
         const uint64_t l1_noc_offset = env.get_hal().get_l1_noc_offset(sender_core_type_);
-        pcie_writer_ = [cluster, sender_device_id, sender_virtual_core_coord, l1_noc_offset](
+        pcie_writer_ = [&cluster, sender_device_id, sender_virtual_core_coord, l1_noc_offset](
                            void* data, uint32_t num_bytes, uint64_t device_addr) {
-            cluster->write_core(
+            cluster.write_core(
                 data,
                 num_bytes,
                 tt_cxy_pair(sender_device_id, sender_virtual_core_coord),

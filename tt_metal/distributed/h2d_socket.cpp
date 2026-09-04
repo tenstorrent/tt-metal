@@ -304,7 +304,7 @@ void H2DSocket::init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_device
     TT_FATAL(mesh_device, "init_receiver_tlb requires a MeshDevice (owner path only; connectors use PCIeCoreWriter).");
 
     auto& env = mesh_device->impl().metal_env();
-    auto* cluster = &env.get_cluster();
+    auto& cluster = env.get_cluster();
 
     // Mock/emulated chips have no device to map, so they skip the window creation below (guarded by
     // !is_mock_or_emulated()) and fall through to the cluster.write_core() dynamic writer.
@@ -325,10 +325,10 @@ void H2DSocket::init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_device
         // base rather than at 0, because LIM does not start at 0.
         recv_device_id = mesh_device->get_device(recv_core_.device_coord)->id();
         recv_virtual_core = recv_core_.core_coord;
-        if (!cluster->is_mock_or_emulated()) {
-            receiver_core_window_ = cluster->get_driver()->create_io_window(
+        if (!cluster.is_mock_or_emulated()) {
+            receiver_core_window_ = cluster.get_driver()->create_io_window(
                 recv_device_id,
-                cluster->get_soc_desc(recv_device_id).get_coord_at(recv_virtual_core, tt::CoordSystem::TRANSLATED),
+                cluster.get_soc_desc(recv_device_id).get_coord_at(recv_virtual_core, tt::CoordSystem::TRANSLATED),
                 ll_api::kL2cpuLimBase,
                 {.size = ll_api::kL2cpuLimTlbSize});
         }
@@ -347,7 +347,7 @@ void H2DSocket::init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_device
     // Captured into the lambdas below so write() can keep passing local addresses.
     const uint64_t l1_offset = dram_l1_noc_offset_;
 
-    if (is_l2cpu_ && !cluster->is_mock_or_emulated()) {
+    if (is_l2cpu_ && !cluster.is_mock_or_emulated()) {
         // The L2CPU window is anchored at the LIM base, so absolute addresses are
         // converted to window-relative offsets before write_block(). Mock/emule
         // create no window and fall through to the write_core() writer below.
@@ -367,10 +367,10 @@ void H2DSocket::init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_device
     // Blackhole — on Wormhole B0 the device address space isn't fully mapped this way and a write
     // may still need a per-write driver reconfig.
     const uint64_t addr = static_cast<uint64_t>(aligned_data_buf_start_) + l1_offset;
-    if (!cluster->is_mock_or_emulated() && env.get_hal().get_arch() == tt::ARCH::BLACKHOLE) {
-        std::unique_ptr<tt::umd::IoWindow> window = cluster->get_driver()->create_io_window(
+    if (!cluster.is_mock_or_emulated() && env.get_hal().get_arch() == tt::ARCH::BLACKHOLE) {
+        std::unique_ptr<tt::umd::IoWindow> window = cluster.get_driver()->create_io_window(
             recv_device_id,
-            cluster->get_soc_desc(recv_device_id).get_coord_at(recv_virtual_core, tt::CoordSystem::TRANSLATED),
+            cluster.get_soc_desc(recv_device_id).get_coord_at(recv_virtual_core, tt::CoordSystem::TRANSLATED),
             /*addr=*/0);
         if (window != nullptr && addr + fifo_size_ <= window->get_size()) {
             receiver_core_window_ = std::move(window);
@@ -385,9 +385,9 @@ void H2DSocket::init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_device
         // Non-Blackhole, or no window reaches the target: write through UMD instead
         // (the driver may reconfigure a window per write). Covers Wormhole B0 and the
         // DRAM-recv L1 path described above.
-        pcie_writer = [cluster, recv_device_id, recv_virtual_core, l1_offset](
+        pcie_writer = [&cluster, recv_device_id, recv_virtual_core, l1_offset](
                           void* data, uint32_t num_bytes, uint64_t device_addr) {
-            cluster->write_core(
+            cluster.write_core(
                 data, num_bytes, tt_cxy_pair(recv_device_id, recv_virtual_core), device_addr + l1_offset);
         };
     }
