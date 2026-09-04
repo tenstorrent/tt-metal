@@ -86,13 +86,23 @@ class ttKDA:
         tp_axis: int = 1,
         program_config: KDAProgramConfig | None = None,
         weights: KDAWeights | None = None,
+        *,
+        topology: tuple[ttnn.Topology, ttnn.Topology],
     ) -> None:
         if tp_axis not in (0, 1) or sp_axis not in (0, 1) or sp_axis == tp_axis:
             raise ValueError(f"KDA requires distinct 2D SP/TP axes, got SP={sp_axis}, TP={tp_axis}")
+        if (
+            not isinstance(topology, tuple)
+            or len(topology) != 2
+            or not all(isinstance(axis_topology, ttnn.Topology) for axis_topology in topology)
+        ):
+            raise ValueError("KDA topology must be a 2-tuple of ttnn.Topology values ordered by physical mesh axis")
         program_config = program_config or KDAProgramConfig()
         self.device = mesh_device
         self.tensor_parallel_axis = tp_axis
         self.sequence_parallel_axis = sp_axis
+        self.sp_ccl_topology = topology[self.sequence_parallel_axis]
+        self.tp_ccl_topology = topology[self.tensor_parallel_axis]
         self.sequence_parallel_size = (
             tuple(mesh_device.shape)[self.sequence_parallel_axis] if isinstance(mesh_device, ttnn.MeshDevice) else 1
         )
@@ -101,7 +111,6 @@ class ttKDA:
         )
         if uses_grouped_scan and config.head_k_dim != config.head_v_dim:
             raise ValueError("grouped KDA affine prefix currently requires K == V")
-        self.tp_ccl_topology = program_config.tp_ccl_topology
         self.gated_rms_output_dtype = program_config.gated_rms_output_dtype
         if weights is not None and state_dict is not None:
             raise ValueError("pass either constructed KDAWeights or host state_dict, not both")
@@ -130,8 +139,8 @@ class ttKDA:
         self.qkv_convolution_program_config = ttnn.QkvCausalConv1dSiluProgramConfig(
             channel_chunk_size=qkv_channel_chunk_size
         )
-        if self.tensor_parallel_size > 1 and tt_ccl is None:
-            raise ValueError("tt_ccl is required for tensor-parallel KDA")
+        if (self.tensor_parallel_size > 1 or self.sequence_parallel_size > 1) and tt_ccl is None:
+            raise ValueError("tt_ccl is required for multi-device KDA collectives")
         self.tt_ccl = tt_ccl
         # Ordinary matmuls (input and decay projections) keep packer L1 accumulation.
         self.compute_config = ttnn.init_device_compute_kernel_config(
@@ -153,6 +162,8 @@ class ttKDA:
             mesh_device,
             program_config.recurrence,
             sequence_parallel_axis=(self.sequence_parallel_axis if self.sequence_parallel_size > 1 else None),
+            topology=self.sp_ccl_topology,
+            tt_ccl=self.tt_ccl,
         )
         self.output_projection_compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
@@ -239,6 +250,8 @@ class ttKDA:
                 qkv_row_major,
                 state_row_major,
                 sequence_parallel_axis=self.sequence_parallel_axis,
+                topology=self.sp_ccl_topology,
+                tt_ccl=self.tt_ccl,
             )
         else:
             new_state = ttnn.slice(
@@ -369,7 +382,7 @@ class ttKDA:
             compute_kernel_config=self.output_projection_compute_config,
         )
         if self.tensor_parallel_size > 1:
-            cluster_axis = None if self.sequence_parallel_size == 1 else self.tensor_parallel_axis
+            cluster_axis = self.tensor_parallel_axis
             output = ttnn.experimental.reduce_scatter_minimal_async(
                 output,
                 dim=-1,

@@ -9,9 +9,11 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.utils import random_weights
 from models.demos.deepseek_v3_d_p.tt.kda.kda import ttKDA
 from models.demos.deepseek_v3_d_p.tt.kda.weights import load_kda_weights
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.tt_transformers.tt.ccl import TT_CCL
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate, assert_equal
 
@@ -38,7 +40,7 @@ def _tp_rank(physical_index: int, mesh_columns: int, tensor_parallel_axis: int) 
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    [fabric2d_device_params()],
     indirect=True,
 )
 def test_device_weight_placement(
@@ -133,7 +135,7 @@ def test_device_weight_placement(
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    [fabric2d_device_params()],
     indirect=True,
 )
 def test_tp_layer_with_nonsquare_state_matches_reference(mesh_device: ttnn.MeshDevice) -> None:
@@ -152,7 +154,13 @@ def test_tp_layer_with_nonsquare_state_matches_reference(mesh_device: ttnn.MeshD
     )
     golden_output, golden_state = kda_forward_reference(hidden, state_dict, config)
 
-    layer = ttKDA(mesh_device, config, state_dict, tt_ccl=TT_CCL(mesh_device))
+    layer = ttKDA(
+        mesh_device,
+        config,
+        state_dict,
+        tt_ccl=TT_CCL(mesh_device),
+        topology=per_axis_topology(),
+    )
     initial_state = layer.allocate_state(batch_size=1)
     hidden_tt = ttnn.from_torch(
         hidden,

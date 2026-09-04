@@ -11,6 +11,7 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     collect_mesh_accuracy_and_determinism_results,
     random_weights,
@@ -20,6 +21,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
 )
 from models.demos.deepseek_v3_d_p.tt.kda.config import KDAProgramConfig, KDARecurrenceProgramConfig
 from models.demos.deepseek_v3_d_p.tt.kda.kda import ttKDA
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.tt_transformers.tt.ccl import TT_CCL
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate
 
@@ -28,7 +30,7 @@ pytestmark = [
     pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True),
     pytest.mark.parametrize(
         "device_params",
-        [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+        [fabric2d_device_params()],
         indirect=True,
     ),
 ]
@@ -86,6 +88,7 @@ def test_sp_group_divisor_fallback_matches_reference(
         sp_axis=sp_axis,
         tp_axis=tensor_parallel_axis,
         program_config=program_config,
+        topology=per_axis_topology(),
     )
     initial_state = layer.allocate_state(batch_size=1)
     hidden_tt = _to_sp_input(hidden, mesh_device, sp_axis)
@@ -178,6 +181,7 @@ def test_sp_segmented_prefill_matches_one_shot(
         program_config=KDAProgramConfig(
             recurrence=KDARecurrenceProgramConfig(summary_group_chunks=summary_group_chunks)
         ),
+        topology=per_axis_topology(),
     )
 
     one_shot_input_state = layer.allocate_state(batch_size=1)
@@ -285,6 +289,7 @@ def test_sp_minimal_group_matches_reference_and_is_deterministic(
         sp_axis=sp_axis,
         tp_axis=tensor_parallel_axis,
         program_config=KDAProgramConfig(recurrence=KDARecurrenceProgramConfig(summary_group_chunks=1)),
+        topology=per_axis_topology(),
     )
     hidden_tt = _to_sp_input(hidden, mesh_device, sp_axis)
     tp_size = tuple(mesh_device.shape)[tensor_parallel_axis]

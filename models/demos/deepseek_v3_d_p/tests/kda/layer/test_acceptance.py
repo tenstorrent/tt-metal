@@ -13,7 +13,7 @@ import pytest
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_device_params, torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     check_kimi_k3_accuracy,
     collect_mesh_accuracy_and_determinism_results,
@@ -30,18 +30,34 @@ _PCC_THRESHOLD = 0.9995
 
 
 @pytest.mark.parametrize(
-    "mesh_device,tensor_parallel_axis,device_params",
+    "mesh_device,tensor_parallel_axis,device_params,sequence",
     [
+        pytest.param(
+            (1, 8),
+            1,
+            fabric2d_device_params(),
+            128,
+            id="SP1xTP8-fabric-2d",
+        ),
         pytest.param(
             (2, 4),
             1,
-            fabric_1d_device_params(),
-            id="SP2xTP4-fabric-1d",
+            fabric2d_device_params(),
+            _SEQUENCE,
+            id="SP2xTP4-fabric-2d",
+        ),
+        pytest.param(
+            (2, 4),
+            0,
+            fabric2d_device_params(),
+            128,
+            id="SP4xTP2-fabric-2d",
         ),
         pytest.param(
             (8, 4),
             1,
             torus_xy_device_params(),
+            _SEQUENCE,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="SP8xTP4-torus-xy",
         ),
@@ -52,12 +68,13 @@ def test_synthetic_kimi_k3_accuracy_and_determinism(
     mesh_device: ttnn.MeshDevice,
     tensor_parallel_axis: int,
     device_params: dict,
+    sequence: int,
 ) -> None:
     """Gate K3 dimensions against Torch and compare three device runs bit-for-bit."""
     mesh_shape = tuple(mesh_device.shape)
     sequence_parallel_axis = 1 - tensor_parallel_axis
     layout = f"SP{mesh_shape[sequence_parallel_axis]}xTP{mesh_shape[tensor_parallel_axis]}"
-    case = make_synthetic_kimi_k3_test_case(sequence=_SEQUENCE)
+    case = make_synthetic_kimi_k3_test_case(sequence=sequence)
     reference_start = time.perf_counter()
     golden_output, golden_state = kda_forward_reference(case.hidden, case.state_dict, case.config)
     reference_seconds = time.perf_counter() - reference_start
@@ -78,7 +95,7 @@ def test_synthetic_kimi_k3_accuracy_and_determinism(
     state = KdaState(recurrent=recurrent, convolution=convolution)
     try:
         pcc = check_kimi_k3_accuracy(
-            f"Synthetic Kimi-K3 T=5120 {layout}",
+            f"Synthetic Kimi-K3 T={sequence} {layout}",
             case,
             golden_output,
             golden_state,
@@ -96,7 +113,7 @@ def test_synthetic_kimi_k3_accuracy_and_determinism(
             + json.dumps(
                 {
                     "layout": layout,
-                    "sequence": _SEQUENCE,
+                    "sequence": sequence,
                     "weights": "deterministic synthetic",
                     "reference": "independent pure-Torch FP32 CPU reference",
                     "cpu_reference_seconds": reference_seconds,
@@ -116,9 +133,9 @@ def test_synthetic_kimi_k3_accuracy_and_determinism(
 @pytest.mark.parametrize(
     "mesh_device,tensor_parallel_axis,device_params,sequence",
     [
-        pytest.param((1, 8), 1, fabric_1d_device_params(), 128, id="SP1xTP8"),
-        pytest.param((2, 4), 1, fabric_1d_device_params(), 128, id="SP2xTP4"),
-        pytest.param((2, 4), 0, fabric_1d_device_params(), 128, id="SP4xTP2"),
+        pytest.param((1, 8), 1, fabric2d_device_params(), 128, id="SP1xTP8-fabric-2d"),
+        pytest.param((2, 4), 1, fabric2d_device_params(), 128, id="SP2xTP4-fabric-2d"),
+        pytest.param((2, 4), 0, fabric2d_device_params(), 128, id="SP4xTP2-fabric-2d"),
         pytest.param(
             (8, 4),
             1,
