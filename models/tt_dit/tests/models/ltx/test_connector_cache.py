@@ -22,13 +22,32 @@ import ttnn
 from ....encoders.gemma.encoder_pair import _read_connector_checkpoint
 from ....pipelines.ltx.pipeline_ltx import LTXPipeline
 from ....utils import cache
+from ....utils.ltx import default_ltx_checkpoint
 
 POISONED = os.path.expanduser("~/.cache/tt-dit-ltxrt/ltx-2.3-22b-distilled-1.1")
 
 
 def _ckpt() -> str | None:
-    path = os.environ.get("LTX_CHECKPOINT")
-    return path if path and os.path.exists(path) else None
+    """Local path to the LTX checkpoint, or None if unavailable.
+
+    Recognizes an explicit LTX_CHECKPOINT / flat ~/.cache path, and — like
+    test_pipeline_ltx_distilled._ltx_checkpoint_cached — one already staged in the HF hub cache,
+    which default_ltx_checkpoint returns as a "repo:file" ref (never a path). The old
+    LTX_CHECKPOINT-only guard skipped this under HF_HOME CI even with the weights cached.
+    """
+    ref = default_ltx_checkpoint("ltx-2.3-22b-distilled-1.1.safetensors")
+    if os.path.exists(ref):
+        return ref
+    if ":" in ref:  # "repo_id:filename" -> resolvable from the local hub cache without a network call
+        repo_id, fname = ref.split(":", 1)
+        from huggingface_hub import hf_hub_download
+        from huggingface_hub.utils import EntryNotFoundError, LocalEntryNotFoundError
+
+        try:
+            return hf_hub_download(repo_id=repo_id, filename=fname, local_files_only=True)
+        except (LocalEntryNotFoundError, EntryNotFoundError, FileNotFoundError):
+            return None
+    return None
 
 
 @pytest.mark.parametrize(
