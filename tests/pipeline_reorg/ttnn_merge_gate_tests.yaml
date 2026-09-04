@@ -85,16 +85,15 @@
 # fill, div-scalar dtype matrices, clamp/clip) -- they are accuracy and dtype coverage, they cost
 # minutes, and they belong in the nightly eltwise groups where they already run.
 #
-# 753 tests selected -- 737 pass, 9 skip, 7 xfail -- in 45-47s of pytest and 52-55s of wall-clock
-# on an N300 including device bring-up, measured against main at e1426777c with a warm kernel cache,
-# which is what the shared kernel ccache gives this job. On a total kernel-ccache miss the same
-# selection takes 230s of pytest and 237s of wall-clock, all of the difference being kernel
-# compilation; the 10-minute timeout is sized for that case, not for the expected one. One pytest
-# invocation on purpose: device bring-up is ~7s, so splitting this into per-file entries would cost
-# more than the tests do. Hardware only. Blackhole eltwise
-# coverage in the merge gate comes from the tt-nn-validation-basic gtest suite
-# (tests/ttnn/unit_tests/gtests/test_eltwise.cpp), which runs on bh_p150b_civ2_viommu as well as
-# wh_n150_civ2.
+# 753 tests selected -- 737 pass, 9 skip, 7 xfail. The test step measured 115s in CI on this branch
+# (run 33844607890) against the 10-minute timeout. Locally on an N300 the same selection is 45-47s
+# of pytest / 52-55s of wall-clock with a warm kernel cache and 230s / 237s on a total ccache miss;
+# the whole spread is kernel compilation, and this job runs with enable-kernel-ccache against the
+# shared Redis backend, so it sits at the warm end. One pytest invocation on purpose: device
+# bring-up is ~7s, so splitting this into per-file entries would cost more than the tests do.
+# Hardware only. Blackhole eltwise coverage in the merge gate comes from the tt-nn-validation-basic
+# gtest suite (tests/ttnn/unit_tests/gtests/test_eltwise.cpp), which runs on bh_p150b_civ2_viommu
+# as well as wh_n150_civ2.
 - name: "ttnn eltwise infra"
   cmd: >-
     pytest --timeout 60 -xv
