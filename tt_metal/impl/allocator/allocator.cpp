@@ -30,6 +30,10 @@ namespace tt::tt_metal {
 
 AllocatorImpl::AllocatorImpl(const AllocatorConfig& alloc_config) :
     config_(std::make_unique<AllocatorConfig>(alloc_config)),
+    persistent_l1_(
+        alloc_config.l1_unreserved_base,
+        alloc_config.worker_l1_size - alloc_config.l1_small_size,
+        alloc_config.worker_grid),
     view_(std::make_unique<Allocator>(this)),
     tracking_enabled_(trace_allocation_tracking_enabled()),
     traceback_capture_enabled_(trace_allocation_diagnostics_enabled()),
@@ -211,7 +215,8 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
                 "range lockstep resolved to zero cores to scan; the buffer must carry a shard spec or a "
                 "distribution spec naming the cores it occupies");
 
-            std::vector<std::pair<DeviceAddr, DeviceAddr>> additional_ranges;
+            // PrefetcherPipe / persistent L1 regions sit outside BankManager; lockstep must avoid them too.
+            std::vector<std::pair<DeviceAddr, DeviceAddr>> additional_ranges = persistent_l1_.occupied_ranges();
             if (!hybrid_device_allocators_.empty()) {
                 using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
                 auto gather_from = [&](const AllocatorImpl* dev_alloc, uint32_t bank_id) {
