@@ -6,7 +6,7 @@
 
 **`PORTED`** — all five factories of `SliceDeviceOperation` converted to
 `CustomProgramSpecFactoryConcept`: `SliceRm`, `SliceRmSharded`, `SliceRmStride`, `SliceTile`,
-`SliceTileTensorArgs`. Nine slice-owned kernels converted in place; the cross-family donor reused via
+`SliceTileTensorArgs`. Ten slice-owned kernels converted in place; the cross-family donor reused via
 its existing `_metal2` fork (rung 1). Nothing left on the descriptor API, so
 `patch_slice_program_addresses` and `slice_tile_dynamic_args` are deleted outright.
 
