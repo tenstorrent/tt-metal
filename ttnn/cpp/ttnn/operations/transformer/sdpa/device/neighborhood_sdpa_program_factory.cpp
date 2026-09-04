@@ -10,6 +10,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
@@ -78,9 +79,23 @@ tt::tt_metal::ProgramDescriptor NeighborhoodSDPAOperation::NeighborhoodSDPAProgr
     // while it fits the shared L1 budget; past it the reader generates every chunk as before.
     const bool per_brick_persistent_fits =
         mask_tiles_per_kv_chunk * kv_chunk_count <= kernel_args::MAX_PERSISTENT_MASK_TILES;
-    const bool persistent_mask = relative_mask_table && (!per_brick_mask || per_brick_persistent_fits);
+    // Per-brick blocks persist keyed on the chunk's clamp signature, generated or table-fed alike, so
+    // that needs no uploaded table -- only the L1 budget.
+    const bool persistent_mask = per_brick_mask ? per_brick_persistent_fits : relative_mask_table;
     const uint32_t mask_cb_pages =
         persistent_mask ? mask_tiles_per_kv_chunk * kv_chunk_count : mask_tiles_per_kv_chunk * 2;
+    log_info(
+        tt::LogOp,
+        "neighborhood sdpa mask CB: per_brick={} relative_table={} persistent={} mask_tiles_per_kv_chunk={} "
+        "kv_chunk_count={} gather_brick_count={} tiles_per_kv_chunk={} pages={}",
+        per_brick_mask,
+        relative_mask_table,
+        persistent_mask,
+        mask_tiles_per_kv_chunk,
+        kv_chunk_count,
+        plan.gather_brick_count,
+        tiles_per_kv_chunk,
+        mask_cb_pages);
 
     const tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(tensors.query_tensor.dtype());
     const uint32_t tile_bytes = tt::tile_size(data_format);
@@ -224,10 +239,6 @@ tt::tt_metal::ProgramDescriptor NeighborhoodSDPAOperation::NeighborhoodSDPAProgr
     const char* always_env = std::getenv("DIFFVAE_NA_TABLE_ALWAYS");
     reader_compile_args[kernel_args::reader_arg::table_always] =
         (always_env != nullptr && always_env[0] == '1') ? 1u : 0u;
-    // The relative table is read straight from DRAM per slot, so it needs no L1 staging -- and
-    // staging is what forced the per-slot fill to be a word loop in the first place.
-    reader_compile_args[kernel_args::reader_arg::has_interior_mask] =
-        (tensors.interior_mask.has_value() && (relative_mask || uses_resident_mask)) ? 1u : 0u;
 
     // Accessor args come after the named block, in the order the reader constructs them.
     tt::tt_metal::TensorAccessorArgs(tensors.query_tensor.buffer()).append_to(reader_compile_args);

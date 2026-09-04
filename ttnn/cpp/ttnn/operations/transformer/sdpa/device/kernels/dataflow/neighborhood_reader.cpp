@@ -9,6 +9,9 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/tensor/noc_traits.h"
+#if defined(DEBUG_PRINT_ENABLED)
+#include "api/debug/dprint.h"
+#endif
 #include "neighborhood_mask_gen.hpp"
 #include "tools/profiler/kernel_profiler.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/neighborhood_chunk_layout.hpp"
@@ -146,6 +149,92 @@ FORCE_INLINE bool gather_is_canonical(
         if (gather_bricks[axis] != static_cast<uint32_t>(high - low + 1)) {
             return false;
         }
+    }
+    return true;
+}
+
+// ---- per-brick persistent mask block: its signature ----
+//
+// Two chunks produce the same [brick][slot] mask block exactly when, on every axis, (a) the gather
+// origin sits at the same brick offset from the chunk and (b) each brick's window is shifted by
+// the same amount at both ends of the brick (0 when unclamped; when the window clamps at 0 or at
+// volume - window the shift pins the brick's absolute position, and the shifts of the sites in
+// between follow from those two). Interior chunks are the all-zero-shift, canonical-offset case;
+// the T-edge chunks along one W row all share theirs; a core's work items are consecutive chunks,
+// so it sees long runs of equal signatures and writes each block once per run. Without this the
+// cores that own an edge row generate all 336 tiles of every work item while the interior cores
+// skip -- and the op runs at the pace of its slowest core, so skipping only interior chunks
+// bought nothing at 1080p.
+//
+// A brick beyond the resident tensor on an axis (ghost rows: the T-overhang of the last chunk) is
+// part of the signature too -- its rows are generated OPEN, and its keys all lie inside the
+// resident tensor because the planner clamps the gather into it -- so the whole last T slice, which
+// lands on a few cores as an unbroken run, is written once rather than on every work item. Not
+// persistable (returns false): a brick below the volume (a low-edge halo brick).
+constexpr uint32_t MAX_BRICKS_PER_CHUNK = 8;
+struct BlockSignature {
+    uint32_t word[1 + 2 * MAX_BRICKS_PER_CHUNK];
+};
+
+FORCE_INLINE bool per_brick_block_signature(
+    BlockSignature& out,
+    const BrickPoint& gather_origin_brick,
+    const BrickPoint& chunk_origin,
+    ChunkShapeInBricks query_chunk_bricks,
+    const BrickPoint& query_origin_bricks,
+    uint32_t bricks_per_query_chunk,
+    const kernel_args::NeighborhoodExtents& extents) {
+    const auto brick_sites = extents.brick_sites;
+    const auto volume = extents.volume;
+    const auto context_window = extents.context_window;
+    const auto resident = extents.resident;
+    const auto shard_origin = extents.shard_origin;
+
+    const BrickPoint first_query_brick = chunk_origin + query_origin_bricks;
+    uint32_t offsets = 0;
+    for (Axis axis : ALL_AXES) {
+        const int32_t offset =
+            static_cast<int32_t>(gather_origin_brick[axis]) - static_cast<int32_t>(first_query_brick[axis]);
+        offsets |= (static_cast<uint32_t>(offset) & 0xFFu) << (8u * static_cast<uint32_t>(axis));
+    }
+    out.word[0] = offsets;
+
+    for (uint32_t brick_in_chunk = 0; brick_in_chunk < bricks_per_query_chunk; ++brick_in_chunk) {
+        const BrickPoint query_brick = layout::brick_within_chunk(brick_in_chunk, chunk_origin, query_chunk_bricks);
+        const Site site = first_site_of(query_brick + query_origin_bricks, brick_sites);
+        uint32_t word_th = 0;
+        uint32_t word_w = 0;
+        for (Axis axis : ALL_AXES) {
+            const uint32_t window = context_window[axis] < volume[axis] ? context_window[axis] : volume[axis];
+            if (site[axis] + brick_sites[axis] > resident[axis]) {
+                // Ghost brick on this axis: its rows are fully open whatever the window says.
+                word_w |= 1u << (16u + static_cast<uint32_t>(axis));
+                continue;
+            }
+            const int32_t first = static_cast<int32_t>(site[axis]) + shard_origin[axis];
+            if (first < 0) {
+                return false;
+            }
+            const int32_t last = first + static_cast<int32_t>(brick_sites[axis]) - 1;
+            const int32_t half = static_cast<int32_t>(window / 2);
+            const int32_t shift_first = static_cast<int32_t>(ttnn::transformer::neighborhood::window_origin_on_axis(
+                                            static_cast<uint32_t>(first), 1u, window, volume[axis], 0u)) -
+                                        (first - half);
+            const int32_t shift_last = static_cast<int32_t>(ttnn::transformer::neighborhood::window_origin_on_axis(
+                                           static_cast<uint32_t>(last), 1u, window, volume[axis], 0u)) -
+                                       (last - half);
+            const uint32_t packed =
+                (static_cast<uint32_t>(shift_first) & 0xFFu) | ((static_cast<uint32_t>(shift_last) & 0xFFu) << 8u);
+            if (axis == Axis::Time) {
+                word_th |= packed;
+            } else if (axis == Axis::Height) {
+                word_th |= packed << 16u;
+            } else {
+                word_w |= packed;
+            }
+        }
+        out.word[1 + 2 * brick_in_chunk] = word_th;
+        out.word[2 + 2 * brick_in_chunk] = word_w;
     }
     return true;
 }
@@ -362,9 +451,19 @@ void kernel_main() {
         per_brick_mask != 0 ? bricks_per_query_chunk * tiles_per_kv_chunk : tiles_per_kv_chunk;
     constexpr bool per_brick_persistent_fits =
         mask_tiles_per_kv_chunk * kv_chunk_count <= kernel_args::MAX_PERSISTENT_MASK_TILES;
-    const bool interior_table_supported = relative_mask != 0 && has_interior_mask != 0 &&
-                                          (per_brick_mask == 0 || (per_brick_persistent_fits && mask_memset_only == 0));
+    const bool interior_table_supported = relative_mask != 0 && has_interior_mask != 0 && per_brick_mask == 0;
     bool mask_pages_hold_table = false;
+    // Per-brick: the block resident in cb_mask is whichever chunk wrote it last, identified by its
+    // signature (see per_brick_block_signature); the table is not needed for this, generated blocks
+    // persist just the same. MEMSET_ONLY keeps writing so that probe stays a floor on the write cost.
+    static_assert(bricks_per_query_chunk <= MAX_BRICKS_PER_CHUNK, "block signature holds at most 8 bricks");
+    constexpr bool per_brick_block_persistence = per_brick_persistent_fits && mask_memset_only == 0;
+    BlockSignature resident_signature{};
+    bool resident_signature_valid = false;
+#if defined(DEBUG_PRINT_ENABLED)
+    uint32_t dbg_skipped = 0, dbg_refilled = 0, dbg_generated = 0, dbg_items = 0;
+    uint32_t dbg_not_persistable = 0;
+#endif
 
     uint32_t argument_index = 0;
     const uint32_t query_address = get_arg_val<uint32_t>(argument_index++);
@@ -472,28 +571,50 @@ void kernel_main() {
         // loop body -- the instruction-cache mix the mask loops are split three ways to avoid.
         // That alone was 32.3 s against 15.6 s at 145 frames, on a gate that admits 75% of bricks
         // and a plan where only 20% of mask tiles ever generated.
-        // Per-brick: every brick of the chunk must be unclamped (each has its own window), and only
-        // the gather ORIGIN has to be canonical -- its extent is a chunk's span, not a brick's, so
-        // gather_is_canonical's extent test would reject every chunk.
-        bool chunk_bricks_unclamped = true;
-        if constexpr (per_brick_mask != 0) {
-            for (uint32_t brick_in_chunk = 0; brick_in_chunk < bricks_per_query_chunk && chunk_bricks_unclamped;
-                 ++brick_in_chunk) {
-                const BrickPoint query_brick =
-                    layout::brick_within_chunk(brick_in_chunk, chunk_origin, query_chunk_bricks);
-                const Site query_origin_site = first_site_of(query_brick + query_origin_bricks, extents.brick_sites);
-                chunk_bricks_unclamped = brick_window_is_unclamped(query_origin_site, extents);
-            }
-        }
         const bool use_interior_table =
             interior_table_supported &&
-            (per_brick_mask != 0
-                 ? gather_origin_at_span_low(gather_origin_brick, chunk_origin_site, extents)
-                 : gather_is_canonical(gather_origin_brick, chunk_origin_site, gather_bricks, extents)) &&
-            (table_always != 0 ||
-             (per_brick_mask != 0 ? chunk_bricks_unclamped : brick_window_is_unclamped(chunk_origin_site, extents)));
+            gather_is_canonical(gather_origin_brick, chunk_origin_site, gather_bricks, extents) &&
+            (table_always != 0 || brick_window_is_unclamped(chunk_origin_site, extents));
         // The pages already hold exactly these tiles, so there is nothing to write.
         const bool refill_mask = use_interior_table && !mask_pages_hold_table;
+
+        // Per-brick: skip the whole block when the pages hold a block with this chunk's signature.
+        BlockSignature block_signature{};
+        bool block_persistable = false;
+        bool block_resident = false;
+        if constexpr (per_brick_mask != 0) {
+            block_persistable = per_brick_block_persistence && per_brick_block_signature(
+                                                                   block_signature,
+                                                                   gather_origin_brick,
+                                                                   chunk_origin,
+                                                                   query_chunk_bricks,
+                                                                   query_origin_bricks,
+                                                                   bricks_per_query_chunk,
+                                                                   extents);
+            if (block_persistable && resident_signature_valid) {
+                block_resident = true;
+                for (uint32_t word = 0; word < 1 + 2 * bricks_per_query_chunk; ++word) {
+                    if (block_signature.word[word] != resident_signature.word[word]) {
+                        block_resident = false;
+                        break;
+                    }
+                }
+            }
+        }
+        const bool skip_per_brick_mask_writes = block_persistable && block_resident;
+#if defined(DEBUG_PRINT_ENABLED)
+        if constexpr (per_brick_mask != 0) {
+            ++dbg_items;
+            if (skip_per_brick_mask_writes) {
+                ++dbg_skipped;
+            } else if (block_persistable) {
+                ++dbg_refilled;
+            } else {
+                ++dbg_generated;
+                ++dbg_not_persistable;
+            }
+        }
+#endif
 
         uint32_t resident_mask_pointer = 0;
         if (use_uploaded_mask && relative_mask == 0) {
@@ -597,9 +718,9 @@ void kernel_main() {
             // subblock. Generated rather than copied from the uploaded set: the upload is keyed on
             // the CHUNK's window regime, which is the wrong window for every brick but the first.
             if (per_brick_mask != 0) {
-                // The pages already hold exactly this chunk's block (see interior_table_supported):
-                // nothing to write, only the K/V reads above and the pushes below.
-                if (!use_interior_table || refill_mask) {
+                // The pages already hold a block with this chunk's signature: nothing to write, only
+                // the K/V reads above and the pushes below.
+                if (!skip_per_brick_mask_writes) {
                     for (uint32_t brick_in_chunk = 0; brick_in_chunk < bricks_per_query_chunk; ++brick_in_chunk) {
                         const BrickPoint query_brick =
                             layout::brick_within_chunk(brick_in_chunk, chunk_origin, query_chunk_bricks);
@@ -762,6 +883,24 @@ void kernel_main() {
         // An edge brick wrote generated tiles over the pages, so the next unclamped one must
         // put the table back.
         mask_pages_hold_table = use_interior_table;
+        if constexpr (per_brick_mask != 0) {
+            // A non-persistable chunk generated over the pages; whatever it left is unnamed.
+            resident_signature_valid = block_persistable;
+            if (block_persistable) {
+                resident_signature = block_signature;
+            }
+        }
+#if defined(DEBUG_PRINT_ENABLED)
+        if (work_item + 1 == work_item_start + work_item_count) {
+            DPRINT(
+                "mp items={} skip={} refill={} gen={} not_persistable={}\n",
+                dbg_items,
+                dbg_skipped,
+                dbg_refilled,
+                dbg_generated,
+                dbg_not_persistable);
+        }
+#endif
 
         cb_gather_origin.push_back(1);
         cb_gather_origin.pop_front(1);
