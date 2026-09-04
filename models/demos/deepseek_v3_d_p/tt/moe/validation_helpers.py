@@ -248,9 +248,8 @@ def assert_index_domain(
     padded token must carry the out-of-range sentinel (== ``total_experts``). Unlike recall or
     PCC this needs no golden reference, so it holds for any input.
 
-    Worth asserting separately from selection accuracy: a duplicate or out-of-range id does not
-    merely degrade the routed output, it makes the downstream dispatch address the wrong expert
-    (or nothing at all), which corrupts memory rather than the numerics.
+    Worth asserting separately from selection accuracy: the wrong expert (or nothing at all)
+    may corrupt memory rather than the output numerics.
     """
     idx = tt_indices.reshape(-1, n_activated_experts).long()
 
@@ -278,7 +277,7 @@ def assert_index_domain(
 
 def assert_indices_exact(tt_indices, ref_indices, n_activated_experts, context=""):
     """Element-wise index parity, no tolerance. Unlike ``assert_gate_output``'s set recall this sees
-    ORDER, which is the whole content of the stable-sort contract."""
+    order, which is the whole content of the stable-sort contract."""
     tt = tt_indices.reshape(-1, n_activated_experts).long()
     ref = ref_indices.reshape(-1, n_activated_experts).long()
     assert tt.shape == ref.shape, f"{context}shape {tuple(tt.shape)} != {tuple(ref.shape)}"
