@@ -25,7 +25,7 @@ from tests.ttnn.utils_for_testing import assert_numeric_metrics
 # not grow with K. Each product carries a fractional slip from the mantissa bits
 # the multiplier discards, those slips multiply values of random sign, so the
 # error grows as sqrt(K) and so does the result. They cancel. At LoFi the
-# multiplier keeps only 4 of the 7 mantissa bits of the right hand operand, a 3.6
+# multiplier keeps only 4 of the 7 mantissa bits of the right hand operand, a 2.6
 # percent relative error that dominates every other term, which is why the limits
 # below barely move with K or with the data type.
 
@@ -102,7 +102,7 @@ def find_max_subblock(out_block_h, out_block_w):
 # Limits for each activation, folded over the two shapes, both data types and both
 # packer_l1_acc settings. Each is the most permissive value the budget gives over
 # those cases, so no case is held tighter than predicted; the trailing comment
-# gives the full range, widest spread 1.69x. The last field says whether the
+# gives the full range, widest spread 1.88x. The last field says whether the
 # device evaluates the activation exactly, with comparison and selection only,
 # rather than with a fitted polynomial, which is what picks rtol out of
 # _RTOL_BY_OUTPUT_FORMAT.
@@ -114,30 +114,30 @@ def find_max_subblock(out_block_h, out_block_w):
     "activation, atol, frobenius_threshold, pcc_threshold, evaluated_exactly",
     [
         # activation                atol      frob       pcc    exact      derived atol      frobenius            pcc
-        (None, 9.857, 0.0886, 0.99607, True),  # 5.83..9.86   0.0766..0.0886  0.99608..0.99707
+        (None, 7.9688, 0.0724, 0.99901, True),  # 4.23..7.97   0.0650..0.0845  0.99803..0.99884
         # String-based activations
-        ("relu", 9.857, 0.0879, 0.99433, True),  # 5.83..9.86   0.0765..0.0878  0.99433..0.99572
-        ("relu6", 9.857, 0.1528, 0.97807, True),  # 5.83..9.86   0.1204..0.1528  0.97808..0.98686
-        ("silu", 10.3894, 0.0997, 0.99272, False),  # 6.27..10.39   0.0850..0.0996  0.99273..0.99476
-        ("gelu", 10.1969, 0.0995, 0.99274, False),  # 6.17..10.20   0.0848..0.0994  0.99275..0.99476
-        ("tanh", 3.9426, 0.2803, 0.96072, False),  # 3.59..3.94   0.2264..0.2803  0.96072..0.97437
-        ("sigmoid", 1.6864, 0.1563, 0.97458, False),  # 1.24..1.69   0.1206..0.1562  0.97459..0.98475
-        ("hardsigmoid", 1.6429, 0.1525, 0.9758, False),  # 0.97..1.64   0.1173..0.1524  0.97581..0.98557
-        ("hardtanh", 4.0, 0.3064, 0.95307, True),  # 4.00..4.00   0.2542..0.3064  0.95307..0.96770
-        ("selu", 10.6898, 0.1013, 0.99308, False),  # 6.46..10.69   0.0865..0.1012  0.99309..0.99507
-        ("softplus", 9.857, 0.0982, 0.9929, False),  # 5.83..9.86   0.0829..0.0981  0.99290..0.99495
+        ("relu", 7.9688, 0.0719, 0.99857, True),  # 4.23..7.97   0.0650..0.0845  0.99803..0.99884
+        ("relu6", 7.9688, 0.1254, 0.99446, True),  # 4.23..7.97   0.0650..0.0845  0.99803..0.99884
+        ("silu", 8.4736, 0.0857, 0.99798, False),  # 4.59..8.47   0.0664..0.0857  0.99798..0.99880
+        ("gelu", 8.3088, 0.0856, 0.99798, False),  # 4.56..8.31   0.0663..0.0855  0.99799..0.99880
+        ("tanh", 3.8539, 0.2356, 0.98959, False),  # 3.14..3.85   0.1696..0.2356  0.98959..0.99461
+        ("sigmoid", 1.52, 0.1308, 0.99332, False),  # 0.97..1.52   0.0914..0.1307  0.99333..0.99672
+        ("hardsigmoid", 1.3282, 0.1279, 0.99361, False),  # 0.71..1.33   0.0893..0.1279  0.99362..0.99686
+        ("hardtanh", 4.0, 0.2594, 0.98739, True),  # 4.00..4.00   0.1912..0.2593  0.98739..0.99315
+        ("selu", 8.7059, 0.0867, 0.99808, False),  # 4.78..8.71   0.0676..0.0866  0.99809..0.99888
+        ("softplus", 7.9688, 0.0846, 0.99802, False),  # 4.23..7.97   0.0650..0.0845  0.99803..0.99884
         # UnaryWithParam versions with default parameters, same limits as the
         # string spelling of the same activation
-        (ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU), 9.857, 0.0879, 0.99433, True),
-        (ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU6), 9.857, 0.1528, 0.97807, True),
-        (ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU), 10.3894, 0.0997, 0.99272, False),
-        (ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU), 10.1969, 0.0995, 0.99274, False),
-        (ttnn.UnaryWithParam(ttnn.UnaryOpType.TANH), 3.9426, 0.2803, 0.96072, False),
-        (ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID), 1.6864, 0.1563, 0.97458, False),
-        (ttnn.UnaryWithParam(ttnn.UnaryOpType.HARDSIGMOID), 1.6429, 0.1525, 0.9758, False),
-        (ttnn.UnaryWithParam(ttnn.UnaryOpType.HARDTANH), 4.0, 0.3064, 0.95307, True),
-        (ttnn.UnaryWithParam(ttnn.UnaryOpType.SELU), 10.6898, 0.1013, 0.99308, False),
-        (ttnn.UnaryWithParam(ttnn.UnaryOpType.SOFTPLUS), 9.857, 0.0982, 0.9929, False),
+        (ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU), 7.9688, 0.0719, 0.99857, True),
+        (ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU6), 7.9688, 0.1254, 0.99446, True),
+        (ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU), 8.4736, 0.0857, 0.99798, False),
+        (ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU), 8.3088, 0.0856, 0.99798, False),
+        (ttnn.UnaryWithParam(ttnn.UnaryOpType.TANH), 3.8539, 0.2356, 0.98959, False),
+        (ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID), 1.52, 0.1308, 0.99332, False),
+        (ttnn.UnaryWithParam(ttnn.UnaryOpType.HARDSIGMOID), 1.3282, 0.1279, 0.99361, False),
+        (ttnn.UnaryWithParam(ttnn.UnaryOpType.HARDTANH), 4.0, 0.2594, 0.98739, True),
+        (ttnn.UnaryWithParam(ttnn.UnaryOpType.SELU), 8.7059, 0.0867, 0.99808, False),
+        (ttnn.UnaryWithParam(ttnn.UnaryOpType.SOFTPLUS), 7.9688, 0.0846, 0.99802, False),
     ],
     ids=[
         "no_activation",
@@ -291,15 +291,15 @@ def test_matmul_with_fused_activations(
     "activation, atol, rtol, frobenius_threshold, pcc_threshold",
     [
         # activation with its custom parameters             atol     rtol     frob      pcc
-        (ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU6, 3.0), 3.7732, 0.0046, 0.1338, 0.98297),  # Custom max=3.0
-        (ttnn.UnaryWithParam(ttnn.UnaryOpType.HARDTANH, -2.0, 2.0), 3.7732, 0.0046, 0.1608, 0.98708),  # Custom min/max
-        (ttnn.UnaryWithParam(ttnn.UnaryOpType.SELU, 1.5, 1.1), 5.6739, 0.0358, 0.0854, 0.99512),  # Custom scale/alpha
+        (ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU6, 3.0), 2.7127, 0.0046, 0.0976, 0.9966),  # Custom max=3.0
+        (ttnn.UnaryWithParam(ttnn.UnaryOpType.HARDTANH, -2.0, 2.0), 2.7127, 0.0046, 0.1171, 0.99743),  # Custom min/max
+        (ttnn.UnaryWithParam(ttnn.UnaryOpType.SELU, 1.5, 1.1), 4.0831, 0.0358, 0.0662, 0.9989),  # Custom scale/alpha
         (
             ttnn.UnaryWithParam(ttnn.UnaryOpType.SOFTPLUS, 2.0, 10.0),
-            3.7732,
+            2.7127,
             0.0358,
-            0.0831,
-            0.99489,
+            0.0647,
+            0.99883,
         ),  # Custom beta/threshold
     ],
     ids=["relu6_custom", "hardtanh_custom", "selu_custom", "softplus_custom"],
@@ -400,11 +400,11 @@ def test_matmul_with_custom_activation_params(
     "activation, atol, rtol, frobenius_threshold, pcc_threshold",
     [
         # activation      atol     rtol     frob      pcc
-        ("relu", 5.9798, 0.0046, 0.076, 0.99576),
-        ("gelu", 6.3191, 0.0358, 0.0843, 0.99479),
-        ("sigmoid", 1.2673, 0.0358, 0.1185, 0.9851),
-        ("hardtanh", 4.0, 0.0046, 0.2471, 0.96947),
-        ("softplus", 5.9798, 0.0358, 0.0825, 0.99498),
+        ("relu", 4.3409, 0.0046, 0.0553, 0.99915),
+        ("gelu", 4.6711, 0.0358, 0.066, 0.9988),
+        ("sigmoid", 0.99, 0.0358, 0.0899, 0.99678),
+        ("hardtanh", 4.0, 0.0046, 0.1854, 0.99355),
+        ("softplus", 4.3409, 0.0358, 0.0647, 0.99884),
     ],
     ids=["relu", "gelu", "sigmoid", "hardtanh", "softplus"],
 )
@@ -696,15 +696,18 @@ def run_test_matmul_dram_sharded_with_bias_and_activation(
     bias_t = None
     if has_bias:
         bias = torch.randn(bias_shape).bfloat16().float()
-        bias_padded = bias.unsqueeze(2)
-        bias_padded = torch.nn.functional.pad(bias_padded, (0, 0, 0, 32 - bias_padded.size(2)), "constant", 0)
+        # Shape [1, 1, 1, N]. The op broadcasts a single bias row across every
+        # output row, so the bias must stay one row tall. Padding it out to a
+        # full tile height makes it logically that many rows, all but the first
+        # of them zero, and then only the first output row receives the bias.
+        bias_row = bias.unsqueeze(2)
         bias_shard_grid = ttnn.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1)
         bias_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), bias_shard_grid)})
         bias_shard_spec = ttnn.ShardSpec(bias_shard_grid, bias_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
         bias_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, bias_shard_spec
         )
-        bias_t = torch2tt_tensor(bias_padded, device, tt_memory_config=bias_mem_config, tt_dtype=ttnn.bfloat16)
+        bias_t = torch2tt_tensor(bias_row, device, tt_memory_config=bias_mem_config, tt_dtype=ttnn.bfloat16)
 
     # Shard in0
     in0_t = ttnn.interleaved_to_sharded(
@@ -789,23 +792,23 @@ def run_test_matmul_dram_sharded_with_bias_and_activation(
         #
         #                       atol     rtol     frob      pcc
         # Test bias alone
-        (True, None, 33.6096, 0.0046, 0.0769, 0.99704),
-        (False, None, 33.607, 0.0046, 0.0769, 0.99704),
+        (True, None, 24.4546, 0.0046, 0.056, 0.99941),
+        (False, None, 24.4527, 0.0046, 0.056, 0.99941),
         # Test activation alone
-        (False, "relu", 33.607, 0.0046, 0.0768, 0.99566),
-        (False, "gelu", 33.9469, 0.0046, 0.0769, 0.99565),
-        (False, "sigmoid", 1.9992, 0.0046, 0.2126, 0.95478),
-        (False, "softplus", 33.607, 0.0358, 0.0844, 0.99476),
+        (False, "relu", 24.4527, 0.0046, 0.0561, 0.99913),
+        (False, "gelu", 24.7926, 0.0046, 0.0561, 0.99913),
+        (False, "sigmoid", 1.9912, 0.0046, 0.1693, 0.98925),
+        (False, "softplus", 24.4527, 0.0358, 0.0662, 0.99879),
         # Test bias + activation combinations (main focus)
-        (True, "relu", 33.6096, 0.0046, 0.0769, 0.99566),
-        (True, "gelu", 33.9495, 0.0046, 0.077, 0.99565),
-        (True, "sigmoid", 1.9992, 0.0046, 0.2132, 0.95453),
-        (True, "hardtanh", 4.0, 0.0046, 0.3372, 0.94316),
-        (True, "selu", 35.6466, 0.0358, 0.0853, 0.99481),
-        (True, "softplus", 33.6096, 0.0358, 0.0845, 0.99476),
+        (True, "relu", 24.4546, 0.0046, 0.0561, 0.99913),
+        (True, "gelu", 24.7945, 0.0046, 0.0562, 0.99913),
+        (True, "sigmoid", 1.9912, 0.0046, 0.1696, 0.98921),
+        (True, "hardtanh", 4.0, 0.0046, 0.2834, 0.98494),
+        (True, "selu", 26.0275, 0.0358, 0.0668, 0.9988),
+        (True, "softplus", 24.4546, 0.0358, 0.0662, 0.99879),
         # Test with UnaryWithParam
-        (True, ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU6, 6.0), 12.0, 0.0046, 0.211, 0.95665),
-        (True, ttnn.UnaryWithParam(ttnn.UnaryOpType.HARDTANH, -1.0, 1.0), 4.0, 0.0046, 0.3372, 0.94316),
+        (True, ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU6, 6.0), 12.0, 0.0046, 0.1658, 0.98996),
+        (True, ttnn.UnaryWithParam(ttnn.UnaryOpType.HARDTANH, -1.0, 1.0), 4.0, 0.0046, 0.2834, 0.98494),
     ],
     ids=[
         "bias_only",
@@ -889,9 +892,9 @@ def test_matmul_dram_sharded_with_bias_and_activation(
         # 7 bits, which is why tanh reaches 0.992 here.
         #
         # Special combinations to test edge cases
-        ("tanh", ttnn.MathFidelity.HiFi2, True, 3.5315, 0.0046, 0.1249, 0.99221),  # High precision with tanh
-        ("gelu", ttnn.MathFidelity.LoFi, False, 16.777, 0.0046, 0.0767, 0.9957),  # Fast approximation with GELU
-        ("sigmoid", ttnn.MathFidelity.LoFi, True, 1.9354, 0.0046, 0.1738, 0.96931),  # Sigmoid with L1 accumulation
+        ("tanh", ttnn.MathFidelity.HiFi2, True, 3.3451, 0.0046, 0.1098, 0.99774),  # High precision with tanh
+        ("gelu", ttnn.MathFidelity.LoFi, False, 12.2997, 0.0046, 0.056, 0.99914),  # Fast approximation with GELU
+        ("sigmoid", ttnn.MathFidelity.LoFi, True, 1.8085, 0.0046, 0.1314, 0.99341),  # Sigmoid with L1 accumulation
     ],
     ids=["tanh_hifi", "gelu_lofi", "sigmoid_l1acc"],
 )
@@ -944,8 +947,8 @@ def test_special_activation_combinations(
 # line segments, whose error is absolute and so does not shrink with the output.
 # At this input scale that error is the whole budget, which is why their limits
 # are an order of magnitude looser than accurate gelu's and tanh's. gelu_fast is
-# the one entry in this file whose fold exceeds 2x (its pcc runs 0.856 at K = 2048
-# to 0.931 at K = 4096, a 2.08x spread in the distance from 1); it is left folded
+# the one entry in this file whose fold exceeds 2x (its pcc runs 0.947 at K = 2048
+# to 0.975 at K = 4096, a 2.11x spread in the distance from 1); it is left folded
 # because the spread comes entirely from the segment error bound, the single
 # quantity in the budget that is estimated rather than derived, so splitting it
 # would give false precision.
@@ -953,22 +956,22 @@ def test_special_activation_combinations(
     "activation, atol, rtol, frobenius_threshold, pcc_threshold",
     [
         #                                              atol     rtol     frob      pcc
-        (None, 0.2897, 0.0046, 0.0958, 0.99541),
-        ("relu", 0.2897, 0.0046, 0.0948, 0.99341),
-        ("relu6", 0.2897, 0.0046, 0.0948, 0.99341),
-        ("silu", 0.3186, 0.0358, 0.1042, 0.99416),
-        ("gelu", 0.3269, 0.0358, 0.1051, 0.99367),
-        ("tanh", 0.2892, 0.0358, 0.1050, 0.99449),
-        ("sigmoid", 0.0724, 0.0358, 0.0449, 0.98184),
-        ("hardsigmoid", 0.0483, 0.0358, 0.0410, 0.96747),
-        ("hardtanh", 0.2897, 0.0046, 0.1002, 0.99498),
-        ("selu", 0.4741, 0.0358, 0.1039, 0.99458),
-        ("softplus", 0.2736, 0.0358, 0.0533, 0.98921),
+        (None, 0.2419, 0.0046, 0.08, 0.9988),
+        ("relu", 0.2419, 0.0046, 0.0793, 0.99827),
+        ("relu6", 0.2419, 0.0046, 0.0793, 0.99827),
+        ("silu", 0.2661, 0.0358, 0.0892, 0.99839),
+        ("gelu", 0.273, 0.0358, 0.0899, 0.99826),
+        ("tanh", 0.2416, 0.0358, 0.0899, 0.99848),
+        ("sigmoid", 0.0605, 0.0358, 0.0424, 0.99371),
+        ("hardsigmoid", 0.0404, 0.0358, 0.0395, 0.98832),
+        ("hardtanh", 0.2419, 0.0046, 0.0838, 0.99868),
+        ("selu", 0.4006, 0.0358, 0.089, 0.9985),
+        ("softplus", 0.2283, 0.0358, 0.0487, 0.99648),
         # Test with UnaryWithParam objects with parameters
         # fast_and_approximate mode
-        (ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 1.0), 0.5869, 0.0046, 0.5131, 0.85621),
+        (ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 1.0), 0.533, 0.0046, 0.5103, 0.94668),
         # fast_and_approximate mode
-        (ttnn.UnaryWithParam(ttnn.UnaryOpType.TANH, 1.0), 0.5892, 0.0046, 0.3976, 0.92096),
+        (ttnn.UnaryWithParam(ttnn.UnaryOpType.TANH, 1.0), 0.5416, 0.0046, 0.394, 0.97089),
         # There is no fast sigmoid case here. sigmoid numbers its parameters
         # differently from gelu and tanh: the first is the vector mode and the
         # second is the fast_and_approximate flag, so reaching the table takes
@@ -979,11 +982,11 @@ def test_special_activation_combinations(
         # bound is an absolute 0.13. The limit would have to admit an error
         # larger than the signal, which no longer tests anything.
         # Custom min/max
-        (ttnn.UnaryWithParam(ttnn.UnaryOpType.HARDTANH, -2.0, 2.0), 0.2897, 0.0046, 0.0959, 0.99541),
+        (ttnn.UnaryWithParam(ttnn.UnaryOpType.HARDTANH, -2.0, 2.0), 0.2419, 0.0046, 0.0801, 0.99879),
         # Custom scale/alpha
-        (ttnn.UnaryWithParam(ttnn.UnaryOpType.SELU, 1.5, 1.2), 0.4854, 0.0358, 0.1033, 0.99463),
+        (ttnn.UnaryWithParam(ttnn.UnaryOpType.SELU, 1.5, 1.2), 0.4101, 0.0358, 0.0885, 0.99852),
         # Custom beta/threshold
-        (ttnn.UnaryWithParam(ttnn.UnaryOpType.SOFTPLUS, 2.0, 10.0), 0.2887, 0.0358, 0.0716, 0.99326),
+        (ttnn.UnaryWithParam(ttnn.UnaryOpType.SOFTPLUS, 2.0, 10.0), 0.2411, 0.0358, 0.063, 0.99804),
     ],
     ids=[
         "no_activation",

@@ -39,8 +39,9 @@ grows as ``sqrt(K)``, never as ``K``.
 *A one-sided slip behaves like a random one.* Mantissa bits are dropped rather
 than rounded, so every slip has the same sign. It still does not build up,
 because it multiplies a mean-zero quantity. The figure that matters is therefore
-the root-mean-square of the slip including its mean, ``2**-m / sqrt(3)`` for a
-slip spread over ``[0, 2**-m)``, rather than its standard deviation.
+the root-mean-square of the slip including its mean, rather than its standard
+deviation about that mean. For a slip spread over ``[0, 2**-m)`` on a significand
+in ``[1, 2)`` that is ``2**-m / sqrt(6)``.
 """
 
 import math
@@ -49,6 +50,16 @@ import torch
 import ttnn
 
 _SQRT3 = math.sqrt(3.0)
+_SQRT6 = math.sqrt(6.0)
+
+# Margin on the correlation limit, as a multiplier on the relative error. Squared
+# by the conversion to a correlation, so it allows 1.5x on the distance from 1.
+# The whole-tensor and elementwise limits take the larger ``safety`` factor
+# instead; a correlation needs less because the quantity it is built from is a
+# root-mean-square over tens of thousands of elements, which barely varies from
+# run to run. Some margin is still needed: with the truncation term corrected the
+# budget tracks the measured error closely rather than sitting well above it.
+_PCC_MARGIN = math.sqrt(1.5)
 
 # Stored mantissa bits, excluding the leading one bit that normalised floating
 # point formats imply rather than store. The gap between neighbouring values is
@@ -67,17 +78,26 @@ _BLOCK_FLOAT_BITS = {
     ttnn.bfloat4_b: 2,
 }
 
-# Mantissa bits the matrix unit keeps from each operand, as (SrcA, SrcB).
-# The multiplier is 5 bits by 7 bits and each fidelity level makes another pass
-# over the inputs to consume more of them
+# Mantissa bits the matrix unit keeps from each operand, as (SrcA, SrcB), taken
+# from the union of the per-pass bit masks. The multiplier is 5 bits by 7 bits
+# and each fidelity level makes another pass to consume more of the inputs
 # (tech_reports/matrix_engine/matrix_engine.md). A matmul loads the right hand
 # operand into SrcA and the left hand operand into SrcB, the opposite of other
 # operations, so the right hand operand takes the narrower path.
+#
+# Over an 11 bit significand field with the hidden bit at position 10, the masks
+# cover SrcA 10..6 then 5..1, and SrcB 10..4 then 3..0. Accumulating those:
+#   LoFi   pass 0        SrcA 4 bits,  SrcB 6 bits
+#   HiFi2  passes 0,1    SrcA 9 bits,  SrcB 6 bits
+#   HiFi3  passes 0,1,2  SrcA 9 bits,  SrcB 10 bits
+#   HiFi4  all passes    same coverage as HiFi3, plus the low-by-low cross term
+# Nine and ten bits exceed what any input format here carries, so those operands
+# are consumed whole and contribute nothing.
 _FIDELITY_MANTISSA_BITS_KEPT = {
     ttnn.MathFidelity.LoFi: (4, 6),
-    ttnn.MathFidelity.HiFi2: (7, 6),
-    ttnn.MathFidelity.HiFi3: (4, 7),
-    ttnn.MathFidelity.HiFi4: (7, 7),
+    ttnn.MathFidelity.HiFi2: (9, 6),
+    ttnn.MathFidelity.HiFi3: (9, 10),
+    ttnn.MathFidelity.HiFi4: (9, 10),
 }
 
 # Passes over the inputs, which is also how many times each fidelity level
@@ -120,10 +140,19 @@ def _source_mantissa_bits(dtype):
 
 
 def _truncation_relative_error(bits_kept, bits_available):
-    """Contribution to ``r`` from dropping mantissa bits below ``bits_kept``."""
+    """Contribution to ``r`` from dropping mantissa bits below ``bits_kept``.
+
+    Keeping ``m`` bits leaves a dropped remainder spread over ``[0, 2**-m)``,
+    whose root-mean-square is ``2**-m / sqrt(3)``. That is an error on the
+    significand, which lies in ``[1, 2)``, so the *relative* error is smaller by
+    a further factor: ``E[1/v**2]`` over that interval is 1/2, giving
+    ``2**-m / sqrt(6)``. Simulating the truncation on normally distributed data
+    gives 0.0237, 0.0107 and 0.0041 for 4, 5 and 6 kept bits, against this
+    formula's 0.0255, 0.0128 and 0.0064, so it stays an upper bound.
+    """
     if bits_kept >= bits_available:
         return 0.0
-    return 2.0**-bits_kept / _SQRT3
+    return 2.0**-bits_kept / _SQRT6
 
 
 def _accumulated_rounding_relative_error(step_error, steps):
@@ -322,14 +351,20 @@ def matmul_numeric_tolerances(
             used to work out how accurately the device evaluates it.
         activation_fn: the same activation as a callable on a torch tensor, used
             to carry the predicted error through it. ``None`` means no activation.
-        safety: multiplier on the predicted error. For the whole-tensor checks
-            the prediction is a root-mean-square over tens of thousands of
-            elements, so it barely varies from run to run and the margin covers
-            the model missing a term. Since independent errors combine in
-            quadrature, a factor of 2 covers a missed term up to sqrt(3) times
-            the largest one already counted. The elementwise limit is different:
-            it rests on an extreme value, which does vary noticeably from run to
-            run, so there the margin covers both.
+        safety: multiplier on the predicted error, applied to ``atol``, ``rtol``
+            and ``frobenius_threshold``. Those scale linearly with the error, so
+            a factor of 2 stays a factor of 2. Since independent errors combine
+            in quadrature it covers a missed term up to sqrt(3) times the
+            largest one already counted, and for the elementwise limit it also
+            covers the run-to-run spread of an extreme value.
+
+            It is **not** applied to ``pcc_threshold``, which takes the smaller
+            ``_PCC_MARGIN`` instead. The distance of a correlation from 1 goes
+            as the square of the relative error, so this factor of 2 would
+            become a factor of 4 there. For an activation that saturates, where
+            the reference's variance collapses and the distance from 1 is large
+            enough to see, that produces a limit several times looser than the
+            hardware needs.
 
     Other arguments are as for :func:`matmul_relative_error`.
 
@@ -423,8 +458,9 @@ def matmul_numeric_tolerances(
     # removed, so the divisor is the reference's standard deviation and not its
     # root-mean-square; for a saturating activation such as sigmoid those differ
     # by a lot, because most of the reference's size is in its mean.
+    # _PCC_MARGIN rather than ``safety``: see the note on ``safety`` above.
     if golden_std > 0.0:
-        noise_ratio = safety * rms_error / golden_std
+        noise_ratio = _PCC_MARGIN * rms_error / golden_std
         tolerances["pcc_threshold"] = max(0.0, min(0.999999, 1.0 - noise_ratio * noise_ratio / 2.0))
     else:
         tolerances["pcc_threshold"] = 0.0

@@ -535,8 +535,11 @@ def test_matmul_in1_dram_sharded_tiny_tile(
 
     if has_bias:
         bias = torch.randn(bias_shape).bfloat16().float()
-        bias_padded = bias.unsqueeze(2)
-        bias_padded = torch.nn.functional.pad(bias_padded, (0, 0, 0, tile_h - bias_padded.size(2)), "constant", 0)
+        # Shape [1, 1, 1, N]. The op broadcasts a single bias row across every
+        # output row, so the bias must stay one row tall. Padding it out to a
+        # full tile height makes it logically that many rows, all but the first
+        # of them zero, and then only the first output row receives the bias.
+        bias_row = bias.unsqueeze(2)
         bias_shard_grid = ttnn.CoreCoord(mesh_device.dram_grid_size().x - 1, mesh_device.dram_grid_size().y - 1)
         bias_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), bias_shard_grid)})
         bias_shard_spec = ttnn.ShardSpec(bias_shard_grid, bias_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
@@ -544,7 +547,7 @@ def test_matmul_in1_dram_sharded_tiny_tile(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, bias_shard_spec
         )
         bias_t = ttnn.from_torch(
-            bias_padded,
+            bias_row,
             tile=ttnn.Tile((tile_h, tile_w)),
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
@@ -1423,10 +1426,13 @@ def run_matmul_1d_multiple_output_blocks_per_core(
 
     if has_bias:
         bias = torch.randn(bias_shape).bfloat16().float()
-        bias_padded = bias.unsqueeze(2)
-        bias_padded = torch.nn.functional.pad(bias_padded, (0, 0, 0, 32 - bias_padded.size(2)), "constant", 0)
+        # Shape [1, 1, 1, N]. The op broadcasts a single bias row across every
+        # output row, so the bias must stay one row tall. Padding it out to a
+        # full tile height makes it logically that many rows, all but the first
+        # of them zero, and then only the first output row receives the bias.
+        bias_row = bias.unsqueeze(2)
         bias_t = ttnn.from_torch(
-            bias_padded,
+            bias_row,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=device,
