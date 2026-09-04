@@ -128,15 +128,25 @@ FORCE_INLINE void prefetcher_write_chunk(
     }
 }
 
-// local_pages_stride is the byte stride between a sender's per-receiver counter pairs in its own
-// L1. A DRAM-sender GlobalCircularBuffer packs them at uint32 stride
-// (REMOTE_CB_LOCAL_PAGES_STRIDE); a DRAM-sender PrefetcherPipe keeps the 2 * L1_ALIGNMENT stride
-// its worker-sender counterpart uses. The remote stride is 2 * L1_ALIGNMENT either way, and the
-// credit unit is the same (REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE == L1_ALIGNMENT), so the two
-// transports differ only in this constant.
-template <bool skip_ptr_update, uint32_t local_pages_stride = experimental::REMOTE_CB_LOCAL_PAGES_STRIDE>
+// PrefetcherPipe counter geometry: pairs at 2 * L1_ALIGNMENT, entries_acked one L1_ALIGNMENT above
+// entries_sent.
+inline constexpr uint32_t kPipeLocalPagesStride = 2 * L1_ALIGNMENT;
+
+// `local_pages_stride` is the byte stride between a sender's per-receiver counter pairs in its own
+// L1, with pages_acked half a stride above pages_sent. A DRAM-sender GlobalCircularBuffer packs
+// them at uint32 stride (REMOTE_CB_LOCAL_PAGES_STRIDE); a DRAM-sender PrefetcherPipe keeps the
+// 2 * L1_ALIGNMENT stride its worker-sender counterpart uses (kPipeLocalPagesStride). The remote
+// stride is 2 * L1_ALIGNMENT either way, and the credit unit is the same
+// (REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE == L1_ALIGNMENT), so the two transports differ only in
+// this one value. It is an argument rather than a template parameter so the sender loop is emitted
+// once -- DRISC text is the tight resource -- and carries no per-iteration transport branch.
+template <bool skip_ptr_update>
 FORCE_INLINE void prefetcher_finalize_block(
-    RemoteSenderCBInterface& iface, uint32_t page_bytes_per_recv, uint32_t num_receivers, uint8_t noc) {
+    RemoteSenderCBInterface& iface,
+    uint32_t page_bytes_per_recv,
+    uint32_t num_receivers,
+    uint8_t noc,
+    uint32_t local_pages_stride) {
     uint32_t len_bytes = page_bytes_per_recv;
     uint32_t next_wr_ptr = iface.fifo_wr_ptr + page_bytes_per_recv;
     if (next_wr_ptr >= iface.fifo_limit_page_aligned) {
@@ -167,16 +177,14 @@ FORCE_INLINE void prefetcher_finalize_block(
 // Non-blocking variant of remote_cb_reserve_back's polling loop: scans all
 // receivers' (pages_sent - pages_acked) and returns the min free aligned-page
 // count. Used by the recv-contig batched main loop to size the next round.
-template <
-    uint32_t local_pages_stride = experimental::REMOTE_CB_LOCAL_PAGES_STRIDE,
-    uint32_t local_pages_acked_offset = experimental::REMOTE_CB_LOCAL_PAGES_ACKED_OFFSET>
-FORCE_INLINE uint32_t poll_min_free_aligned_pages(const RemoteSenderCBInterface& iface, uint32_t num_receivers) {
+FORCE_INLINE uint32_t
+poll_min_free_aligned_pages(const RemoteSenderCBInterface& iface, uint32_t num_receivers, uint32_t local_pages_stride) {
     const uint32_t fifo_size = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(iface.config_ptr)[3];
     const uint32_t fifo_aligned_num_pages = fifo_size / REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE;
     volatile tt_l1_ptr uint32_t* pages_sent_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(iface.aligned_pages_sent_ptr);
     volatile tt_l1_ptr uint32_t* pages_acked_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(iface.aligned_pages_sent_ptr + local_pages_acked_offset);
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(iface.aligned_pages_sent_ptr + local_pages_stride / 2);
     uint32_t min_free = fifo_aligned_num_pages;
     invalidate_l1_cache();
     for (uint32_t i = 0; i < num_receivers; ++i) {
@@ -195,15 +203,9 @@ FORCE_INLINE uint32_t poll_min_free_aligned_pages(const RemoteSenderCBInterface&
     return min_free;
 }
 
-// PrefetcherPipe counter geometry: pairs at 2 * L1_ALIGNMENT with entries_acked one L1_ALIGNMENT
-// above entries_sent, both locally and remotely.
-inline constexpr uint32_t kPipeLocalPagesStride = 2 * L1_ALIGNMENT;
-inline constexpr uint32_t kPipeLocalPagesAckedOffset = L1_ALIGNMENT;
-
 // Spin until every receiver has acked everything this sender published. The remote-CB equivalent is
 // remote_cb_sender_barrier, which assumes the packed DRISC counter stride.
-template <uint32_t local_pages_stride>
-FORCE_INLINE void prefetcher_sender_barrier(const RemoteSenderCBInterface& iface) {
+FORCE_INLINE void prefetcher_sender_barrier(const RemoteSenderCBInterface& iface, uint32_t local_pages_stride) {
     const uint32_t num_receivers = remote_cb_num_receivers(iface.num_receivers_and_remote_pages_sent_ptr);
     volatile tt_l1_ptr uint32_t* sent_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(iface.aligned_pages_sent_ptr);
@@ -219,7 +221,7 @@ FORCE_INLINE void prefetcher_sender_barrier(const RemoteSenderCBInterface& iface
     }
 }
 
-// Fill a RemoteSenderCBInterface from a PrefetcherPipe sender config page in DRISC L1, so the
+// Fill a RemoteSenderCBInterface from an already-loaded PrefetcherPipe sender context, so the
 // receiver-contiguous loop can drive either transport through one interface. The two config layouts
 // share their first four words (is_sender, num_receivers, fifo_start, fifo_size), which is what lets
 // the loop keep reading fifo_size from config_ptr[3].
@@ -228,24 +230,15 @@ FORCE_INLINE void prefetcher_sender_barrier(const RemoteSenderCBInterface& iface
 // counter. Batched receiver-contiguous delivery credits every receiver the same amount each round,
 // so all receivers share one cursor and receiver 0's is representative.
 FORCE_INLINE void load_pipe_sender_state(
-    uint32_t config_page_addr, uint32_t entry_size, RemoteSenderCBInterface& iface) {
-    volatile tt_l1_ptr uint32_t* cfg = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(config_page_addr);
-    const uint32_t num_receivers = cfg[REMOTE_DFB_CFG_NUM_RECEIVERS];
-    const uint32_t fifo_start = cfg[REMOTE_DFB_CFG_FIFO_START];
-    const uint32_t fifo_size = cfg[REMOTE_DFB_CFG_FIFO_SIZE];
-
-    iface.config_ptr = config_page_addr;
-    iface.fifo_start_addr = fifo_start;
+    const experimental::PipeSenderCtx& ctx, uint32_t entry_size, RemoteSenderCBInterface& iface) {
+    iface.config_ptr = ctx.config_ptr;
+    iface.fifo_start_addr = ctx.fifo_start_addr;
     iface.fifo_page_size = entry_size;
-    iface.receiver_noc_xy_ptr = config_page_addr + cfg[PREFETCHER_PIPE_CFG_NOC_XY_OFFSET];
-    iface.aligned_pages_sent_ptr = config_page_addr + cfg[PREFETCHER_PIPE_CFG_PAGES_SENT_OFFSET];
-    iface.num_receivers_and_remote_pages_sent_ptr =
-        remote_cb_pack(num_receivers, config_page_addr + cfg[PREFETCHER_PIPE_CFG_PAGES_ACKED_OFFSET]);
-    iface.fifo_limit_page_aligned = fifo_start + (fifo_size - fifo_size % entry_size);
-
-    const uint32_t ring_units = fifo_size / L1_ALIGNMENT;
-    const uint32_t sent_units = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(iface.aligned_pages_sent_ptr);
-    iface.fifo_wr_ptr = fifo_start + (sent_units % ring_units) * L1_ALIGNMENT;
+    iface.receiver_noc_xy_ptr = ctx.receiver_noc_xy_ptr;
+    iface.aligned_pages_sent_ptr = ctx.local_counters_ptr;
+    iface.num_receivers_and_remote_pages_sent_ptr = remote_cb_pack(ctx.num_receivers, ctx.remote_counters_base);
+    iface.fifo_limit_page_aligned = ctx.fifo_start_addr + (ctx.ring_bytes - ctx.ring_bytes % entry_size);
+    iface.fifo_wr_ptr = ctx.fifo_start_addr + experimental::pipe_derived_wr_offset(ctx, 0);
 }
 
 // Loads the per-GCB sender state block's RemoteSenderCBInterface-compatible region
@@ -341,7 +334,7 @@ void kernel_main() {
             // restoring NoC2AXI mode.
             if (has_loaded_sender_state) {
                 if (last_transport_was_pipe) {
-                    prefetcher_sender_barrier<kPipeLocalPagesStride>(iface);
+                    prefetcher_sender_barrier(iface, kPipeLocalPagesStride);
                 } else {
                     experimental::remote_cb_sender_barrier(remote_cb_id);
                 }
@@ -384,6 +377,10 @@ void kernel_main() {
 
         // Which kind of target the state address above points at.
         const bool is_pipe = req->prefetch.transport == tt::tt_metal::TENSOR_PREFETCHER_TRANSPORT_PREFETCHER_PIPE;
+        // The only thing the credit loops need from the transport; hoisted here so they stay
+        // branch-free (see prefetcher_finalize_block).
+        const uint32_t local_pages_stride =
+            is_pipe ? kPipeLocalPagesStride : experimental::REMOTE_CB_LOCAL_PAGES_STRIDE;
 
         if (!is_pipe) {
             load_sender_state(state, iface);
@@ -454,7 +451,7 @@ void kernel_main() {
                 // Rebuild the interface from the PrefetcherPipe config page each tensor. The write
                 // cursor comes from the durable per-receiver counters, which is what makes it
                 // resume correctly across requests and across programs.
-                load_pipe_sender_state(target_state_addr, t_page_bytes_per_recv, iface);
+                load_pipe_sender_state(pipe_ctx, t_page_bytes_per_recv, iface);
             } else {
                 // Set the sender fifo page size to one full per-receiver page. When resize skips
                 // padding to reach the next aligned page (e.g. a larger page after a smaller one in
@@ -586,7 +583,7 @@ void kernel_main() {
                     if (sb + 1 == t_num_sub && ch + 1 == t_M) {
                         noc_async_posted_writes_flushed();
                         prefetcher_finalize_block</*skip_ptr_update=*/true>(
-                            iface, t_page_bytes_per_recv, num_receivers, noc_index);
+                            iface, t_page_bytes_per_recv, num_receivers, noc_index, local_pages_stride);
                     } else {
                         // The ping-pong DMA can reuse this stage slot two chunks later.
                         // Make sure all posted writes sourced from it have departed first.
@@ -644,12 +641,8 @@ void kernel_main() {
                     PROF_DECL_TS(t_poll_end);
                     PROF_TICK(t_poll_start);
                     do {
-                        // Same computation for both transports; only the local counter stride
-                        // differs (see kPipeLocalPagesStride).
                         const uint32_t min_free_aligned =
-                            is_pipe ? poll_min_free_aligned_pages<kPipeLocalPagesStride, kPipeLocalPagesAckedOffset>(
-                                          iface, num_receivers)
-                                    : poll_min_free_aligned_pages(iface, num_receivers);
+                            poll_min_free_aligned_pages(iface, num_receivers, local_pages_stride);
                         min_free_blocks = min_free_aligned / fifo_pages_per_block;
                     } while (min_free_blocks == 0);
                     PROF_TICK(t_poll_end);
@@ -875,13 +868,8 @@ void kernel_main() {
                     PROF_DECL_TS(t_fn0);
                     PROF_DECL_TS(t_fn1);
                     PROF_TICK(t_fn0);
-                    if (is_pipe) {
-                        prefetcher_finalize_block</*skip_ptr_update=*/true, kPipeLocalPagesStride>(
-                            iface, B * t_page_bytes_per_recv, num_receivers, noc_index);
-                    } else {
-                        prefetcher_finalize_block</*skip_ptr_update=*/true>(
-                            iface, B * t_page_bytes_per_recv, num_receivers, noc_index);
-                    }
+                    prefetcher_finalize_block</*skip_ptr_update=*/true>(
+                        iface, B * t_page_bytes_per_recv, num_receivers, noc_index, local_pages_stride);
                     PROF_TICK(t_fn1);
                     PROF_ACC(prof_finalize, t_fn1, t_fn0);
                     pages_sent_global += B;

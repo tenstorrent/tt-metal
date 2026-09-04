@@ -339,7 +339,7 @@ void test_tensor_prefetcher_pipe_validator(
     TT_FATAL(tensor_buffer != nullptr, "source_tensor must be on device");
     TT_FATAL(tensor_buffer->is_dram(), "source_tensor must be a DRAM buffer");
 
-    const auto sr_mapping = prefetcher_pipes.sender_receiver_core_mapping();
+    const auto& sr_mapping = prefetcher_pipes.sender_receiver_core_mapping();
     const CoreRangeSet receiver_cores = prefetcher_pipes.receiver_cores();
     TT_FATAL(receiver_cores.num_cores() > 0, "TensorPrefetcherPipes has no receiver cores");
 
