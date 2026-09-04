@@ -22,7 +22,8 @@
 //   * Credit increments and payload writes ride the same NOC VC, so a drained NIU implies the
 //     payload landed before the credit the receiver observes.
 //
-// Simplifications this sender relies on, both asserted at load time:
+// Simplifications this sender relies on, both asserted at load time and again on every
+// pipe_set_entry_size:
 //   * ring_bytes % entry_bytes == 0, so the page-aligned usable region is the whole ring and no
 //     end-of-ring padding credit is ever needed (the worker-sender path's trailing-gap term).
 //   * A write of n entries must not straddle the ring wrap, matching the contiguous-write rule the
@@ -113,20 +114,52 @@ FORCE_INLINE void pipe_reserve_back(const PipeSenderCtx& ctx, uint32_t num_entri
     }
 }
 
-// Publish num_entries to every receiver: bump this core's local counter and NOC-inc the matching
-// counter on each receiver. Advancing entries_sent is also what moves that receiver's derived
-// write cursor forward, so call this only after the payload writes are flushed.
+// Publish `units` L1_ALIGNMENT-sized credit units to one receiver: bump this core's local counter
+// and NOC-inc the receiver's mirror of it. Advancing entries_sent is also what moves that
+// receiver's derived write cursor forward, so call this only after the payload writes are flushed.
+FORCE_INLINE void pipe_credit_receiver(const PipeSenderCtx& ctx, uint32_t r, uint32_t units, uint8_t noc) {
+    if (units == 0) {
+        return;
+    }
+    volatile tt_l1_ptr uint32_t* xy = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ctx.receiver_noc_xy_ptr);
+    const uint32_t remote_noc_xy =
+        uint32_t(NOC_XY_ENCODING(DYNAMIC_NOC_X(noc, xy[2 * r]), DYNAMIC_NOC_Y(noc, xy[2 * r + 1])));
+    const uint32_t remote_sent_ptr = ctx.remote_counters_base + 2 * r * L1_ALIGNMENT;
+    *pipe_local_sent_ptr(ctx, r) += units;
+    // Posted, matching the worker-sender path: receivers discover credit by polling, and this
+    // core observes their acks the same way.
+    noc_semaphore_inc</*skip_ptr_update=*/true>(get_noc_addr_helper(remote_noc_xy, remote_sent_ptr), units, noc);
+}
+
+// Publish num_entries to every receiver.
 FORCE_INLINE void pipe_push_credits(const PipeSenderCtx& ctx, uint32_t num_entries, uint8_t noc) {
     const uint32_t units = num_entries * pipe_units_per_entry(ctx);
-    volatile tt_l1_ptr uint32_t* xy = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ctx.receiver_noc_xy_ptr);
     for (uint32_t r = 0; r < ctx.num_receivers; ++r) {
-        const uint32_t remote_noc_xy =
-            uint32_t(NOC_XY_ENCODING(DYNAMIC_NOC_X(noc, xy[2 * r]), DYNAMIC_NOC_Y(noc, xy[2 * r + 1])));
-        const uint32_t remote_sent_ptr = ctx.remote_counters_base + 2 * r * L1_ALIGNMENT;
-        *pipe_local_sent_ptr(ctx, r) += units;
-        // Posted, matching the worker-sender path: receivers discover credit by polling, and this
-        // core observes their acks the same way.
-        noc_semaphore_inc</*skip_ptr_update=*/true>(get_noc_addr_helper(remote_noc_xy, remote_sent_ptr), units, noc);
+        pipe_credit_receiver(ctx, r, units, noc);
+    }
+}
+
+// Switch this sender to `entry_bytes` for subsequent pushes: snap every receiver's derived write
+// cursor onto the new entry grid and publish the bytes it skips as pad credits. A receiver runs the
+// matching snap -- PrefetcherPipe's constructor, when the Attach entry size differs from the one
+// last applied -- and waits for exactly these credits, so the two endpoints stay on one grid.
+// Mirrors PrefetcherPipe::resize_sender_interface<true>(): because ring_bytes % entry_bytes == 0
+// the usable region is the whole ring, so its align-then-wrap step reduces to the one remainder
+// below (a cursor that would land on the ring end wraps to zero after crediting the same bytes).
+//
+// A cursor already on the grid takes no credit, so this is idempotent: a caller pushing a run of
+// same-sized tensors can call it before each one.
+FORCE_INLINE void pipe_set_entry_size(PipeSenderCtx& ctx, uint32_t entry_bytes, uint8_t noc) {
+    ASSERT(entry_bytes != 0);
+    ASSERT(entry_bytes % L1_ALIGNMENT == 0);
+    ASSERT(ctx.ring_bytes % entry_bytes == 0);
+    ctx.entry_bytes = entry_bytes;
+    for (uint32_t r = 0; r < ctx.num_receivers; ++r) {
+        const uint32_t offset_into_entry = pipe_derived_wr_offset(ctx, r) % entry_bytes;
+        if (offset_into_entry == 0) {
+            continue;
+        }
+        pipe_credit_receiver(ctx, r, (entry_bytes - offset_into_entry) / L1_ALIGNMENT, noc);
     }
 }
 
