@@ -81,6 +81,9 @@ inline void llk_math_two_pass_sfpu_clear_stats() { ckernel::sfpu::_two_pass_clea
  */
 template <bool dual_m2>
 inline void llk_math_two_pass_sfpu_store_mean_m2_to_dst(std::uint32_t mean_dst_idx) {
+    LLK_ASSERT(
+        (mean_dst_idx + 1 < get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>()),
+        "two-pass statistics require two consecutive DST tiles");
     _llk_math_welfords_sfpu_params_(ckernel::sfpu::_two_pass_store_mean_m2_to_dst_<dual_m2>, mean_dst_idx);
 }
 
@@ -94,6 +97,9 @@ inline void llk_math_two_pass_sfpu_store_mean_m2_to_dst(std::uint32_t mean_dst_i
 template <bool dual_m2>
 inline void llk_math_two_pass_sfpu_store_split_mean_var_to_dst_row(
     std::uint32_t mean_dst_idx, std::uint32_t reciprocal_bits) {
+    LLK_ASSERT(
+        (mean_dst_idx + 1 < get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>()),
+        "two-pass statistics require two consecutive DST tiles");
     _llk_math_welfords_sfpu_params_(
         ckernel::sfpu::_two_pass_store_split_mean_var_to_dst_row_<dual_m2>, mean_dst_idx, reciprocal_bits);
 }
@@ -145,6 +151,9 @@ inline void llk_math_two_pass_sfpu_load_anchor_from_state_dst(std::uint32_t mean
 template <bool dual_m2>
 inline void llk_math_two_pass_sfpu_combine_block_to_dst(
     std::uint32_t mean_dst_idx, std::uint32_t total_reciprocal_bits, std::uint32_t block_n_bits) {
+    LLK_ASSERT(
+        (mean_dst_idx + 1 < get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>()),
+        "two-pass statistics require two consecutive DST tiles");
     _llk_math_welfords_sfpu_params_(
         ckernel::sfpu::_two_pass_combine_block_to_dst_<dual_m2>, mean_dst_idx, total_reciprocal_bits, block_n_bits);
 }
@@ -159,6 +168,9 @@ inline void llk_math_two_pass_sfpu_combine_block_to_dst(
 template <bool dual_m2>
 inline void llk_math_two_pass_sfpu_store_mean_var_to_dst_row(
     std::uint32_t mean_dst_idx, std::uint32_t reciprocal_bits) {
+    LLK_ASSERT(
+        (mean_dst_idx + 1 < get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>()),
+        "two-pass statistics require two consecutive DST tiles");
     _llk_math_welfords_sfpu_params_(
         ckernel::sfpu::_two_pass_store_mean_var_to_dst_row_<dual_m2>, mean_dst_idx, reciprocal_bits);
 }
@@ -174,6 +186,9 @@ inline void llk_math_two_pass_sfpu_store_mean_var_to_dst_row(
 template <bool dual_m2>
 inline void llk_math_two_pass_sfpu_store_mean_var_to_dst_raw(
     std::uint32_t mean_dst_idx, std::uint32_t group_id, std::uint32_t reciprocal_bits) {
+    LLK_ASSERT(
+        (mean_dst_idx + 1 < get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>()),
+        "two-pass statistics require two consecutive DST tiles");
     _llk_math_welfords_sfpu_params_(
         ckernel::sfpu::_two_pass_store_mean_var_to_dst_raw_group_<dual_m2>, mean_dst_idx, group_id, reciprocal_bits);
 }
