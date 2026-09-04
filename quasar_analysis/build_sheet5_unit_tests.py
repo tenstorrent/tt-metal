@@ -188,9 +188,10 @@ CAUSE_A = (
     "passed verbatim, because that is what sheet 1 records."
 )
 CAUSE_B = (
-    "CAUSE B -- Gen2 forbids a self-looped data-movement DFB: program_spec.cpp:1439, '%s' is bound as both "
-    "PRODUCER and CONSUMER by kernel 'reader0'. Hits exactly the convs that need a halo. max_pool2d needs one "
-    "too and PASSES, so this is the conv halo path specifically."
+    "CAUSE B -- Gen2 forbids a self-looped data-movement DFB: program_spec.cpp:1439, the halo scratch buffer is "
+    "bound as both PRODUCER and CONSUMER by kernel 'reader0'. Hits exactly the convs that need a halo. "
+    "max_pool2d needs one too and PASSES, so this is the conv halo path specifically. (The one-line traceback "
+    "stops before the buffer name; SUMMARY.txt has the per-buffer counts from the full log.)"
 )
 PCC_FAIL = (
     "NUMERIC failure, not an error: the op ran and returned, and the result missed its bound at PCC %s. This "
@@ -208,7 +209,7 @@ def classify(tb):
     if "1076" in tb or "unpack_modes" in tb:
         return CAUSE_A
     if "1439" in tb:
-        return CAUSE_B % ("act_sharded" if "act_sharded" in tb else "gather_scratch0")
+        return CAUSE_B
     m = re.search(r"AssertionError: ([0-9.]+)", tb)
     if m:
         return PCC_FAIL % ("%.4f" % float(m.group(1)))

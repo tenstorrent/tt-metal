@@ -57,7 +57,7 @@ RUN
   TT_METAL_SIMULATOR=<dir>/libttsim.so TT_METAL_SLOW_DISPATCH_MODE=1 ARCH_NAME=quasar \
   pytest -s models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op103_add_layer3_4.py
 
-Status on 2026-09-04 (craq-sim, Arch.QUASAR, 8x4): (not run)
+Status on 2026-09-04 (craq-sim, Arch.QUASAR, 8x4): PASS
 """
 
 import pytest

@@ -76,7 +76,7 @@ RUN
   TT_METAL_SIMULATOR=<dir>/libttsim.so TT_METAL_SLOW_DISPATCH_MODE=1 ARCH_NAME=quasar \
   pytest -s models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/test_op020_conv2d_layer1_1_conv3.py
 
-Status on 2026-09-04 (craq-sim, Arch.QUASAR, 8x4): (not run)
+Status on 2026-09-04 (craq-sim, Arch.QUASAR, 8x4): FAIL -- cause A, fp32_dest_acc_en=true rejected (program_spec.cpp:1076, no unpack_modes entry for the FP32 DFB)
 """
 
 import pytest

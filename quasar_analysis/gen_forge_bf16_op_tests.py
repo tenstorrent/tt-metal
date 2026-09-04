@@ -4,8 +4,8 @@
 """
 Generate ONE STANDALONE TEST FILE PER OP CALL-SITE for the bf16-only tt-forge ResNet-50 compile.
 
-91 files, one per COMPUTE row of resnet50_forge_bf16_vs_quasar.xlsx sheet 1 (the 50 ttnn.to_layout
-rows are layout plumbing and are skipped -- see SKIP_OPS), written into
+91 files, one per COMPUTE row of resnet50_forge_bf16_vs_quasar.xlsx sheet 1 (its layout-plumbing
+rows are skipped -- see SKIP_OPS), written into
   models/demos/vision/classification/resnet50/quasar/tests/ResNet50_Forge_Fe_bf16/
 in the style of the sibling ../ops/ suite: a flat directory of self-contained test files, each with
 its own docstring (WHERE IT COMES FROM / WHAT IT VALIDATES / RUN), its own config constants and its
@@ -178,26 +178,21 @@ def block_tags(n):
 
 
 def name_rows(recs):
-    """row index -> (file stem, short tag)."""
+    """row index -> (file stem, short tag), for the rows that get a file."""
     convs = iter(conv_tags())
     adds = iter(block_tags(16))
     relus = iter(block_tags(16))
     names = {}
     for r in recs:
         i, op = r["idx"], r["op"]
+        if op in SKIP_OPS:
+            continue
         if op == "ttnn.conv2d":
             tag = next(convs)
         elif op == "ttnn.add":
             tag = next(adds)
         elif op == "ttnn.relu":
             tag = next(relus)
-        elif op == "ttnn.to_layout":
-            src, dst = layout_of(r["ops"][0]["cfg"]), layout_of(r["out"]["cfg"])
-            tag = "%s2%s_%s" % (
-                "rm" if src == "ROW_MAJOR" else "tile",
-                "rm" if dst == "ROW_MAJOR" else "tile",
-                short(r["ops"][0]["shape"]),
-            )
         elif op == "ttnn.reshape":
             tag = "stem_flatten" if i == 2 else "classifier_squeeze"
         elif op == "ttnn.permute":
@@ -293,86 +288,6 @@ def consts(rec, quasar_op):
 # --------------------------------------------------------------------------------------------------
 # per-op-kind emitters -- each returns (prose, validates, quasar_op, body)
 # --------------------------------------------------------------------------------------------------
-def em_to_layout(rec, names, consumer):
-    src, dst = layout_of(rec["ops"][0]["cfg"]), layout_of(rec["out"]["cfg"])
-    shape = tup(rec["ops"][0]["shape"])
-    ragged = shape[-2] % 32 or shape[-1] % 32
-    if src == "ROW_MAJOR":
-        prose = (
-            "The model input, and the ONLY ROW_MAJOR -> TILE layout change in the whole graph: Forge tilizes\n"
-            "the 1x3x224x224 image the moment it arrives, before the permute that turns it channels-last.\n"
-            "Every other one of the 50 ttnn.to_layout ops in this compile goes the other way."
-        )
-    else:
-        prose = (
-            "This compile has no layout optimisation, so Forge inserts an explicit untilize before every conv:\n"
-            "the conv emits TILE, the next conv wants ROW_MAJOR, and a ttnn.to_layout sits between them. There\n"
-            "are 50 of these -- more rows than there are convs -- which makes to_layout the single most common\n"
-            "op in the graph.\n"
-            "%s" % (("\nThis one feeds sheet 1 row %d, %s." % consumer) if consumer else "")
-        )
-    validates = (
-        "A layout change moves data, it does not compute it, so the golden is THE INPUT TENSOR ITSELF and the\n"
-        "check is EXACT equality, not a PCC tolerance. A PCC assert runs alongside it only so that a partial\n"
-        'corruption reports a number instead of just "not equal".\n\n'
-        "%s"
-        % (
-            (
-                "This shape is NOT tile-aligned (height %d, width %d), so the op has to %s -- that is the\n"
-                "untilize_with_unpadding / tilize_with_val_padding machinery, which is where Quasar layout bugs\n"
-                "have shown up before (../ops/test_tilize_width_quasar.py, ../ops/test_untilize_with_unpadding.py)."
-                % (shape[-2], shape[-1], "unpad" if dst == "ROW_MAJOR" else "pad")
-            )
-            if ragged
-            else (
-                "Both dimensions are tile-aligned here (height %d, width %d), so nothing has to be padded or\n"
-                "stripped. That does not by itself make the shape safe -- see the Status line below."
-                % (shape[-2], shape[-1])
-            )
-        )
-    )
-    body = """
-SHAPE = {shape!r}
-FROM_LAYOUT = ttnn.{src}_LAYOUT
-TO_LAYOUT = ttnn.{dst}_LAYOUT
-
-
-{dp}
-def test_forge_bf16_op{i:03d}_to_layout(mesh_device):
-    device = mesh_device
-    torch.manual_seed(0)
-
-    host = torch.randn(SHAPE, dtype=torch.bfloat16)
-    tt_in = ttnn.from_torch(host, dtype=ttnn.bfloat16, layout=FROM_LAYOUT, device=device, memory_config=DRAM)
-    assert tt_in.layout == FROM_LAYOUT, "input landed in %s, sheet 1 row {i} says {src}" % (tt_in.layout,)
-
-    out = ttnn.experimental.quasar.to_layout(tt_in, TO_LAYOUT, memory_config=DRAM)
-    ttnn.synchronize_device(device)
-
-    assert out.layout == TO_LAYOUT, "landed in %s, sheet 1 row {i} says {dst}" % (out.layout,)
-    assert tuple(out.shape) == SHAPE, "logical shape changed: %s -> %s" % (SHAPE, tuple(out.shape))
-    mem = out.memory_config()
-    assert mem.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED, "not interleaved: %s" % (mem.memory_layout,)
-    assert mem.buffer_type == ttnn.BufferType.DRAM, "not in DRAM: %s" % (mem.buffer_type,)
-
-    got = ttnn.to_torch(ttnn.from_device(out))
-    # PCC first so a partial corruption reports a number, then exact equality -- a layout change moves
-    # bits and must not change one of them.
-    assert_with_pcc(host.float(), got.float(), pcc=0.9999)
-    assert torch.equal(got.to(torch.bfloat16), host), "{src} -> {dst} changed %d of %d elements" % (
-        int((got.to(torch.bfloat16) != host).sum()),
-        host.numel(),
-    )
-""".format(
-        shape=shape,
-        src=src if src == "TILE" else "ROW_MAJOR",
-        dst=dst if dst == "TILE" else "ROW_MAJOR",
-        i=rec["idx"],
-        dp=DEVICE_PARAMS,
-    )
-    return prose, validates, "quasar.to_layout", body
-
-
 def em_permute(rec, names, consumer):
     prose = (
         "The NCHW -> NHWC conversion of the model input, once, before the stem. torchvision hands Forge an\n"
@@ -806,8 +721,7 @@ def em_relu(rec, names, consumer):
         "    add(conv3_out, skip)      <-- sheet 1 row %d\n"
         "    relu(...)                 <-- THIS ROW, one of 16 with no Quasar equivalent\n\n"
         "Forge DOES fuse relu into 33 of the 53 convs via Conv2dConfig.activation, and that path works on\n"
-        "Quasar. It is only these 16 post-add relus that have no home."
-        % (tag, rec["idx"] - 1, rec["idx"] - 1)
+        "Quasar. It is only these 16 post-add relus that have no home." % (tag, rec["idx"] - 1, rec["idx"] - 1)
     )
     validates = (
         "THE GAP: ttnn.experimental.quasar binds data movement, conv2d, the pools, the matmul family and a\n"
@@ -1008,13 +922,13 @@ def test_forge_bf16_op140_linear(mesh_device):
     return prose, validates, "quasar.linear", body
 
 
-# Ops deliberately NOT given a test file. ttnn.to_layout is layout plumbing rather than a compute
-# op -- the same reason it is excluded from the comparison sheets 3 and 4 of the workbook -- so its
-# 50 rows get no file here. em_to_layout is kept below so that re-enabling it is a one-line change.
+# Sheet-1 ops that get no test file: layout plumbing rather than compute -- they move a tensor
+# between TILE and ROW_MAJOR without computing anything, which is the same reason the workbook's
+# comparison sheets 3 and 4 leave them out. Rows whose op is listed here are skipped entirely: no
+# file, no name, no emitter.
 SKIP_OPS = {"ttnn.to_layout"}
 
 EMITTERS = {
-    "ttnn.to_layout": em_to_layout,
     "ttnn.permute": em_permute,
     "ttnn.reshape": em_reshape,
     "ttnn.conv2d": em_conv2d,
@@ -1029,85 +943,62 @@ EMITTERS = {
 # --------------------------------------------------------------------------------------------------
 # the observed status of each row, from the parametrised sweep in quasar_analysis/forge_fe_bf16_runs/
 # --------------------------------------------------------------------------------------------------
-FILE_TO_OP = {
-    "test_conv2d_forge_bf16.py": "ttnn.conv2d",
-    "test_to_layout_forge_bf16.py": "ttnn.to_layout",
-    "test_add_forge_bf16.py": "ttnn.add",
-    "test_relu_forge_bf16.py": "ttnn.relu",
-    "test_reshape_forge_bf16.py": "ttnn.reshape",
-    "test_permute_forge_bf16.py": "ttnn.permute",
-    "test_max_pool2d_forge_bf16.py": "ttnn.max_pool2d",
-    "test_mean_forge_bf16.py": "ttnn.mean",
-    "test_linear_forge_bf16.py": "ttnn.linear",
-}
-
-
 def read_status(recs):
-    """sheet row -> a one-line status string, taken from the logged sweep of the parametrised suite."""
-    import glob
+    """
+    sheet row -> a one-line status, taken from the last logged run.
 
-    rows_of = {}
-    for op in set(r["op"] for r in recs):
-        rows_of[op] = [r["idx"] for r in recs if r["op"] == op]
+    Keyed on the row in the test file name (test_op<row>_...), which is the only thing that ties a
+    log line to a sheet-1 row now that the suite is one file per op. Anything the log does not
+    mention stays "(not run)" rather than silently claiming a result.
+    """
+    import glob
 
     outcome, tb_of = {}, {}
     for path in sorted(glob.glob(os.path.join(REPO, "quasar_analysis/forge_fe_bf16_runs/*.log"))):
         txt = open(path, errors="replace").read()
         for line in txt.split("\n"):
-            m = re.match(r"^(PASSED|FAILED|XFAIL)\s+\S+/(test_\S+\.py)::(\w+)(?:\[([^\]]*)\])?", line)
+            m = re.match(r"^(PASSED|FAILED|XFAIL)\s+\S*/test_op(\d{3})_\S*\.py::", line)
             if m:
-                outcome.setdefault((m.group(2), m.group(3), m.group(4) or ""), m.group(1))
+                outcome[int(m.group(2))] = m.group(1)
+        # --tb=line prints one line per failure in execution order with no per-test header; the
+        # FAILED lines of the short summary are in the same order, so they pair positionally.
         block = re.search(r"=+ FAILURES =+\n(.*?)\n=+ short test summary", txt, re.S)
         tbs = (
             [l.strip() for l in block.group(1).split("\n") if re.match(r"^/\S+\.py:\d+: ", l.strip())] if block else []
         )
         fails = [l.split()[1] for l in txt.split("\n") if l.startswith("FAILED models/")]
-        for nid, tb in zip(fails, tbs):
-            m = re.match(r"^\S+/(test_\S+\.py)::(\w+)(?:\[([^\]]*)\])?$", nid)
-            if m:
-                tb_of[(m.group(1), m.group(2), m.group(3) or "")] = tb
+        if len(tbs) == len(fails):
+            for nid, tb in zip(fails, tbs):
+                m = re.search(r"/test_op(\d{3})_\S*\.py::", nid)
+                if m:
+                    tb_of[int(m.group(1))] = tb
 
     def cause(tb):
         if not tb:
             return ""
         if "1076" in tb or "unpack_modes" in tb:
-            return "cause A, fp32_dest_acc_en=true rejected (program_spec.cpp:1076, no unpack_modes entry for the FP32 DFB)"
+            return (
+                "cause A, fp32_dest_acc_en=true rejected (program_spec.cpp:1076, no unpack_modes entry for the "
+                "FP32 DFB)"
+            )
         if "1439" in tb:
-            what = "act_sharded" if "act_sharded" in tb else "gather_scratch0"
-            return "cause B, Gen2 forbids the self-looped halo DFB '%s' (program_spec.cpp:1439)" % what
+            # --tb=line stops before the info: block that names the buffer, so do not guess one;
+            # SUMMARY.txt has the per-buffer counts, taken from the full log.
+            return "cause B, Gen2 forbids the self-looped halo scratch DFB (program_spec.cpp:1439)"
         m = re.search(r"AssertionError: ([0-9.]+)", tb)
         if m:
-            return "cause C, quasar untilize SILENTLY corrupts this shape -- no error, PCC %.4f" % float(m.group(1))
+            return "NUMERIC failure -- the op ran and returned, but missed its bound at PCC %.4f" % float(m.group(1))
         return tb
 
     status = {}
-    for (fname, func, cid), oc in outcome.items():
-        op = FILE_TO_OP.get(fname)
-        if op is None or not cid:
-            continue  # host-only table checks have no per-row status
-        m = re.match(r"^quasar-(\d+)_", cid)
-        n = int(m.group(1)) if m else 0
-        if not m and cid != "quasar-device_params0":
-            continue
-        rows = rows_of.get(op, [])
-        if n >= len(rows):
-            continue
-        row = rows[n]
-        tb = tb_of.get((fname, func, cid), "")
+    for row, oc in outcome.items():
         text = {"PASSED": "PASS", "FAILED": "FAIL", "XFAIL": "XFAIL"}[oc]
         if oc == "FAILED":
-            text += " -- " + cause(tb)
-        elif oc == "XFAIL":
-            text += " -- the op does not exist on Quasar; the workaround test in this file PASSES"
-        prev = status.get(row, "")
-        # a gap file has two tests; report the gap, and note the workaround
-        if prev.startswith("XFAIL"):
-            continue
-        status[row] = text if not prev or text.startswith("XFAIL") else prev
+            text += " -- " + cause(tb_of.get(row, ""))
+        status[row] = text
     return status
 
 
-# --------------------------------------------------------------------------------------------------
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--check", action="store_true", help="report what would be written, write nothing")
@@ -1150,21 +1041,6 @@ def main():
         return
 
     # remove the parametrised files these supersede
-    for old in (
-        "test_conv2d_forge_bf16.py",
-        "test_to_layout_forge_bf16.py",
-        "test_add_forge_bf16.py",
-        "test_relu_forge_bf16.py",
-        "test_reshape_forge_bf16.py",
-        "test_permute_forge_bf16.py",
-        "test_max_pool2d_forge_bf16.py",
-        "test_mean_forge_bf16.py",
-        "test_linear_forge_bf16.py",
-    ):
-        p = os.path.join(OUTDIR, old)
-        if os.path.exists(p):
-            os.remove(p)
-            print("removed superseded %s" % old)
     for stale in os.listdir(OUTDIR):
         if re.match(r"^test_op\d{3}_.*\.py$", stale) and stale not in {f for f, _ in written}:
             os.remove(os.path.join(OUTDIR, stale))
