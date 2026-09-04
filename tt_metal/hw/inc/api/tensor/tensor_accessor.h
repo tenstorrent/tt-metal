@@ -28,20 +28,6 @@ T get_arg_val(int arg_idx);
 
 namespace tensor_accessor {
 
-// DSpec of an accessor built from an absent tensor binding (see NullTensorBindingToken).
-//
-// This is a dummy DSpec only meant to allow instantiation of a TensorAccessor from a NullTensorBindingToken.
-// The details of these fields should not be accessed at runtime.
-using NullDSpec = DistributionSpec<
-    /* RankCT */ 1,
-    /* NumBanksCT */ 1,
-    /* TensorShapeWrapper */ ArrayStaticWrapperU32<1>,
-    /* ShardShapeWrapper */ ArrayStaticWrapperU32<1>,
-    /* BankCoordsWrapper */ ArrayStaticWrapperU16<0>,
-    /* IsInterleaved */ false,
-    /* IsDram */ false,
-    /* IsShardContiguous */ false>;
-
 // This helper gets proper additional offset from interleaved_addr_gen::get_bank_offset +
 //      Adds proper xy coordinates for NOC address
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
@@ -118,12 +104,6 @@ public:
         static_assert(
             ADDR_CRTA_OFFSET % sizeof(uint32_t) == 0, "TensorBindingToken: ADDR_CRTA_OFFSET must be 4-byte aligned");
     }
-
-    // Construct from the "binding not present" token.
-    // Meant to be used with `get_token_if_present` to make the token-not-exist branch compile.
-    // Will not attempt to read any CTAs.
-    // This will never be run in runtime & NullTensorBindingToken is not constructible.
-    explicit TensorAccessor(const tensor_accessor::NullTensorBindingToken&) : TensorAccessor(size_t{0}, uint32_t{0}) {}
 
     constexpr const auto& dspec() const {
         if constexpr (DSpec::is_static) {
@@ -582,8 +562,6 @@ TensorAccessor(tensor_accessor::TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>
         /* IsDram */ TensorAccessorArgs<CTA_OFFSET, ADDR_CRTA_OFFSET / sizeof(uint32_t) + 1>::is_dram,
         /* IsShardContiguous */
         TensorAccessorArgs<CTA_OFFSET, ADDR_CRTA_OFFSET / sizeof(uint32_t) + 1>::is_shard_contiguous>>;
-
-TensorAccessor(const tensor_accessor::NullTensorBindingToken&) -> TensorAccessor<tensor_accessor::NullDSpec>;
 
 template <std::size_t CTA_OFFSET, std::size_t CRTA_OFFSET>
 TensorAccessor(const TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>& args, size_t, uint32_t)

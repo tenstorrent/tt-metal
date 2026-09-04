@@ -650,11 +650,11 @@ constexpr size_t kNumComputeArgs = 4;
 // their current value.  The cache-hit path is then a fixed-width copy per core: no variant
 // dispatch per slot and no per-core heap allocation on the dispatch path.
 //
-// reader_buffer_slots / writer_buffer_slots record which slots hold a buffer base address, so
-// create_descriptor() can declare them as Buffer* bindings rather than as raw addresses.  The hit
-// path ignores them: the builder has already written the current address into the flat row.  The
-// slot layout is identical for every work core, so this is one small list per kernel, not one per
-// core.  On the framework's use of those bindings, see the note in create_descriptor().
+// reader_buffer_slots / writer_buffer_slots record which slots hold a buffer base address. Only
+// create_descriptor() needs them, to re-attach those slots as Buffer* bindings so the framework
+// keeps its O(1) address patching; the hit path ignores them, because the builder has already
+// written the current address into the flat row.  The slot layout is identical for every work
+// core, so this is one small list per kernel rather than one per core.
 struct TernaryPerCoreArgs {
     struct BufferSlot {
         uint32_t slot = 0;
@@ -1459,16 +1459,9 @@ tt::tt_metal::ProgramDescriptor TernaryDeviceOperation::TernaryProgramFactory::c
     // and override_runtime_arguments() (cache hit) stay byte-identical.
     //
     // The builder returns flat uint32 rows with buffer addresses already resolved.  Here -- and only
-    // here, on the miss path -- the buffer-carrying slots are re-wrapped as Buffer* and declared via
-    // emplace_runtime_args().  Noop cores hold no buffers, so they take the plain path.
-    //
-    // Note these bindings are currently INERT: mesh_device_operation_adapter.hpp skips
-    // resolve_bindings() for any factory that defines override_runtime_arguments() ("the op
-    // re-derives all per-dispatch state on every hit ... no resolve_bindings needed"), and this op
-    // does, so nothing consumes them and the hit path re-applies every row itself.  They are kept
-    // because declaring a buffer slot as a Buffer* -- rather than smuggling a raw address into a
-    // descriptor arg -- is the form the framework and scripts/detect_smuggled_rta.py expect, and it
-    // keeps the miss path correct by construction if this op ever drops its override.
+    // here, on the miss path -- the buffer-carrying slots are re-wrapped as Buffer* so
+    // emplace_runtime_args() registers them as bindings and the framework keeps its O(1) address
+    // patching.  Noop cores hold no buffers, so they take the plain path.
     {
         auto per_core = CMAKE_UNIQUE_NAMESPACE::build_per_core_runtime_args(
             operation_attributes, tensor_args, output, broadcast_type);
