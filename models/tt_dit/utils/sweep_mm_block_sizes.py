@@ -206,6 +206,15 @@ SHAPES = [
     (11520, 5120, 1280, 12, 9, True, "plain"),  # Aang SR
     (1664, 5120, 1280, 12, 9, True, "plain"),  # Aang a2v @1080p
     (7200, 5120, 1280, 12, 9, True, "plain"),  # Aang SR @1080p
+    # Aang a2v-1080p qkv/ff1 at the non-transposed layouts. Swept 2026-09-04: nt full-width 12x9
+    # wins -14.4% (qkv, (3,8,16) sb1x4, 362.3 us) and -9.4% (ff1, (3,8,10) sb3x1, 344.7 us) over
+    # the transposed winners; the flag-only nt 11x10 is -2.3% (qkv) and +7.3% (ff1) — adopting the
+    # win needs force_transpose=False plus an explicit 12x9 grid at the call site, and replacing
+    # the transposed grid_12_9_configs entries for these two keys atomically with that flip.
+    (1664, 5120, 3840, 12, 9, True, "qkv_nt"),  # Aang a2v @1080p, nt full-width
+    (1664, 5120, 3840, 11, 10, True, "qkv_nt"),  # Aang a2v @1080p, nt default
+    (1664, 5120, 3456, 12, 9, True, "ff1_gelu_nt"),  # Aang a2v @1080p, nt full-width
+    (1664, 5120, 3456, 11, 10, True, "ff1_gelu_nt"),  # Aang a2v @1080p, nt default
     # Aang proj_out (plain minimal_matmul after the TP gather; fp32 out in the model), 11x10 grid.
     (2656, 5120, 64, 11, 10, False, "plain"),  # Aang a2v
     (11520, 5120, 64, 11, 10, False, "plain"),  # Aang SR
@@ -498,6 +507,19 @@ USE_CASE_CONFIGS = {
     "ff1_gelu": {
         "fused_activation": (ttnn.UnaryOpType.GELU, True),
     },
+    # Non-transposed AGMM variants (force_transpose=False; only valid for M < N, where the op
+    # stays non-transposed). The row's core grid is the nt worker grid: (11, 10) is the default
+    # nt derivation (muxes in the free last column); (12, 9) is the full-width layout the H3
+    # campaign swept, with the muxes parked on the free bottom row.
+    "qkv_nt": {
+        "chunks": 3,
+        "math_approx_mode": True,
+        "force_transpose": False,
+    },
+    "ff1_gelu_nt": {
+        "fused_activation": (ttnn.UnaryOpType.GELU, True),
+        "force_transpose": False,
+    },
     # Like "plain" but with exact (non-approx) GELU fused — matches the
     # activation="gelu" config in test_all_gather_minimal_matmul_async.py.
     "plain_gelu": {
@@ -643,6 +665,12 @@ def get_per_core_dims(shape, cluster_size):
         # K_block must divide the pre-gather shard: the ring delivers K_per_device tiles
         # per device in K_block-sized chunks, same rule as the agmm path.
         return -(-M_tiles // cgy), K_tiles // cluster_size, N_per_core
+
+    if op_kind == "agmm" and not USE_CASE_CONFIGS.get(use_case, {}).get("force_transpose", True):
+        # Non-transposed AGMM (M < N): in0 (M) parallelizes across grid_y and in1 (N) across
+        # grid_x — the mirror of the force_transpose=True default above.
+        assert M < N, f"non-transposed AGMM sweep requires M < N (op auto-transposes), got M={M} N={N}"
+        return -(-M_tiles // cgy), K_tiles // cluster_size, -(-N_tiles // cgx)
 
     M_per_core = -(-M_tiles // cgx)  # ceiling
     N_per_core = -(-N_tiles // cgy)
@@ -1187,7 +1215,7 @@ def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_gri
                 topology=cfg["topology"],
                 cluster_axis=cfg["cluster_axis"],
                 barrier_semaphore=None,
-                force_transpose=True,
+                force_transpose=uc_cfg.get("force_transpose", True),
                 num_workers_per_link=cfg["num_workers_per_link"],
                 num_buffers_per_channel=24 if is_blackhole() else 48,
                 scalar=scalar,
