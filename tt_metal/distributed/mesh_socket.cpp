@@ -10,6 +10,7 @@
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/topology_mapper.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 
 using namespace tt::tt_metal::distributed::multihost;
 
@@ -42,8 +43,11 @@ void barrier_across_send_recv_ranks(
     sub_context->barrier();
 }
 
-[[maybe_unused]] void validate_device_ownership(
-    multihost::Rank global_sender_rank, multihost::Rank global_receiver_rank, const SocketConfig& config) {
+void validate_device_ownership(
+    multihost::Rank global_sender_rank,
+    multihost::Rank global_receiver_rank,
+    const SocketConfig& config,
+    bool uses_rank_scoped_coordinates) {
     const auto& global_distributed_context = DistributedContext::get_current_world();
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& topology_mapper = control_plane.get_topology_mapper();
@@ -66,39 +70,64 @@ void barrier_across_send_recv_ranks(
     const auto expected_receiver_host_rank = std::get<1>(global_logical_bindings.at(global_receiver_rank));
 
     for (const auto& connection : config.socket_connection_config) {
-        if (is_sender) {
-            auto actual_sender_host_rank = topology_mapper.get_host_rank_for_coord(
-                config.sender_mesh_id.value(), connection.sender_core.device_coord);
-            TT_FATAL(
-                actual_sender_host_rank.has_value(),
-                "Sender core coordinate {} does not map to any host rank on mesh id {}",
-                connection.sender_core.device_coord,
-                *config.sender_mesh_id);
-            TT_FATAL(
-                actual_sender_host_rank.value() == expected_sender_host_rank,
-                "Sender core coordinate {} is owned by mesh host rank {}, expected {} for rank {} on mesh id {}",
-                connection.sender_core.device_coord,
-                *actual_sender_host_rank,
-                *expected_sender_host_rank,
-                *global_sender_rank,
-                *config.sender_mesh_id);
-        }
-        if (is_receiver) {
-            auto actual_receiver_host_rank = topology_mapper.get_host_rank_for_coord(
-                config.receiver_mesh_id.value(), connection.receiver_core.device_coord);
-            TT_FATAL(
-                actual_receiver_host_rank.has_value(),
-                "Receiver core coordinate {} does not map to any host rank on mesh id {}",
-                connection.receiver_core.device_coord,
-                *config.receiver_mesh_id);
-            TT_FATAL(
-                actual_receiver_host_rank.value() == expected_receiver_host_rank,
-                "Receiver core coordinate {} is owned by mesh host rank {}, expected {} for rank {} on mesh id {}",
-                connection.receiver_core.device_coord,
-                *actual_receiver_host_rank,
-                *expected_receiver_host_rank,
-                *global_receiver_rank,
-                *config.receiver_mesh_id);
+        // Case 1: Each rank is using its own local coordinate system rather than global coordinate system
+        // In this case, verify that the supplied coordinates are within the bounds of each rank's sub-mesh
+        if (uses_rank_scoped_coordinates) {
+            if (is_sender) {
+                const auto sender_submesh_shape =
+                    topology_mapper.get_mesh_shape(config.sender_mesh_id.value(), expected_sender_host_rank);
+                TT_FATAL(
+                    MeshCoordinateRange(sender_submesh_shape).contains(connection.sender_core.device_coord),
+                    "Sender core coordinate {} is out of bounds for submesh shape {}",
+                    connection.sender_core.device_coord,
+                    sender_submesh_shape);
+            }
+            if (is_receiver) {
+                const auto receiver_submesh_shape =
+                    topology_mapper.get_mesh_shape(config.receiver_mesh_id.value(), expected_receiver_host_rank);
+                TT_FATAL(
+                    MeshCoordinateRange(receiver_submesh_shape).contains(connection.receiver_core.device_coord),
+                    "Receiver core coordinate {} is out of bounds for submesh shape {}",
+                    connection.receiver_core.device_coord,
+                    receiver_submesh_shape);
+            }
+        } else {
+            // Case 2: Each rank is using the global coordinate system
+            // In this case, verify that the supplied coordinates map to the expected host ranks
+            if (is_sender) {
+                auto actual_sender_host_rank = topology_mapper.get_host_rank_for_coord(
+                    config.sender_mesh_id.value(), connection.sender_core.device_coord);
+                TT_FATAL(
+                    actual_sender_host_rank.has_value(),
+                    "Sender core coordinate {} does not map to any host rank on mesh id {}",
+                    connection.sender_core.device_coord,
+                    *config.sender_mesh_id);
+                TT_FATAL(
+                    actual_sender_host_rank.value() == expected_sender_host_rank,
+                    "Sender core coordinate {} is owned by mesh host rank {}, expected {} for rank {} on mesh id {}",
+                    connection.sender_core.device_coord,
+                    *actual_sender_host_rank,
+                    *expected_sender_host_rank,
+                    *global_sender_rank,
+                    *config.sender_mesh_id);
+            }
+            if (is_receiver) {
+                auto actual_receiver_host_rank = topology_mapper.get_host_rank_for_coord(
+                    config.receiver_mesh_id.value(), connection.receiver_core.device_coord);
+                TT_FATAL(
+                    actual_receiver_host_rank.has_value(),
+                    "Receiver core coordinate {} does not map to any host rank on mesh id {}",
+                    connection.receiver_core.device_coord,
+                    *config.receiver_mesh_id);
+                TT_FATAL(
+                    actual_receiver_host_rank.value() == expected_receiver_host_rank,
+                    "Receiver core coordinate {} is owned by mesh host rank {}, expected {} for rank {} on mesh id {}",
+                    connection.receiver_core.device_coord,
+                    *actual_receiver_host_rank,
+                    *expected_receiver_host_rank,
+                    *global_receiver_rank,
+                    *config.receiver_mesh_id);
+            }
         }
     }
 }
@@ -132,11 +161,7 @@ void MeshSocket::process_host_ranks() {
 
     config_.sender_mesh_id = std::get<0>(global_logical_bindings.at(sender_rank));
     config_.receiver_mesh_id = std::get<0>(global_logical_bindings.at(receiver_rank));
-    // Skip coordinate validation for rank-addressed sockets (this path): the socket cores are
-    // expressed in submesh-local space, which doesn't match the parent-mesh coord range that
-    // validate_device_ownership / get_coord_range expect. This holds for cross-mesh rank-
-    // addressed sockets too — they use the same submesh-local cores. Role correctness is
-    // enforced by the rank-based check in the constructor.
+    validate_device_ownership(sender_rank, receiver_rank, config_, rank_scoped_socket_);
 }
 
 void MeshSocket::process_mesh_ids() {
