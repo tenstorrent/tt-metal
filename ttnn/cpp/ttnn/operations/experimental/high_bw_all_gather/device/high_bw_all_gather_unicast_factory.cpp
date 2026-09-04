@@ -307,8 +307,10 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
 
     const bool linearized_mesh_ring = operation_attributes.linearized_mesh_ring;
     const uint32_t axis = operation_attributes.cluster_axis;
-    const auto topology =
-        linearized_mesh_ring ? tt::tt_fabric::Topology::Ring : operation_attributes.axis_topology[axis];
+    const auto topology = linearized_mesh_ring
+                              ? (operation_attributes.linearized_mesh_open_path ? tt::tt_fabric::Topology::Linear
+                                                                                : tt::tt_fabric::Topology::Ring)
+                              : operation_attributes.axis_topology[axis];
     const bool is_ring = tt::tt_fabric::is_ring_or_torus(topology);
 
     const uint32_t num_devices = operation_attributes.num_devices;

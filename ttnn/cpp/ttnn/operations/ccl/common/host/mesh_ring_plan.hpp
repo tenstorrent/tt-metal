@@ -71,13 +71,25 @@ std::optional<uint64_t> resolve_direct_neighbor_route_hash(
 // Resolve an axis line/ring or select the first legal full-mesh snake. For a
 // full mesh, row orientation is preferred and column orientation is the
 // fallback; only orientations with an even lane count are candidates.
+//
+// A snake CYCLE closes across a whole axis, so it is a direct hop only on a
+// torus (or an extent-2 axis). When no cycle closes and `allow_open_path` is
+// set, the same boustrophedon is returned as an open Hamiltonian PATH with
+// Topology::Linear: no wrap edge to prove, no parity precondition, so it
+// resolves on any wired mesh of two or more devices, 1xN included.
+//
+// The path costs N-1 hops of latency against a ring's N/2, and it leaves rank 0
+// without a backward neighbor and rank N-1 without a forward one. Only callers
+// whose schedule handles dead endpoints may opt in -- an op that fuses a closed
+// ring must leave this false and keep getting nullopt where no cycle exists.
 std::optional<MeshRingPlan> resolve_mesh_ring_plan(
     const ttnn::Tensor& tensor,
     std::optional<uint32_t> cluster_axis,
     uint32_t num_links,
     const std::array<tt::tt_fabric::Topology, 2>& axis_topology,
     bool log_rejection = true,
-    std::string_view operation_name = "mesh ring");
+    std::string_view operation_name = "mesh ring",
+    bool allow_open_path = false);
 
 MeshRingPosition get_mesh_ring_position(
     const ttnn::Tensor& tensor, const ttnn::MeshCoordinate& coordinate, const MeshRingPlan& plan);

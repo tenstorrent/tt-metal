@@ -84,6 +84,15 @@ _FABRIC_2D_TORUS_XY_DEVICE_PARAMS = pytest.param(
     id="fabric_2d_torus_xy",
 )
 
+# A full-mesh linearization resolves on either fabric, but not as the same thing: the
+# torus closes a snake ring over its wrap link, the plain line can only walk an open
+# Hamiltonian path. Both must produce the same gathered tensor, so accuracy runs over
+# both; perf is gated separately because the path costs N-1 hops against a ring's N/2.
+_FULL_MESH_DEVICE_PARAMS = [
+    _FABRIC_2D_TORUS_XY_DEVICE_PARAMS,
+    _FABRIC_2D_LINE_DEVICE_PARAMS,
+]
+
 _SELECTED_BATCH_PREFIX_DEVICE_PARAMS = [
     _FABRIC_2D_LINE_DEVICE_PARAMS,
     pytest.param(_device_params(ttnn.FabricConfig.FABRIC_1D_RING), id="fabric_1d_ring"),
@@ -826,7 +835,7 @@ def test_high_bw_all_gather_galaxy_full_mesh_matched_local_perf(mesh_device):
     not os.getenv("TT_METAL_SIMULATOR") and os.getenv("TT_METAL_HIGH_BW_ALL_GATHER_RUN_32_RANK_ACCURACY") != "1",
     reason="run on the Blackhole simulator or set TT_METAL_HIGH_BW_ALL_GATHER_RUN_32_RANK_ACCURACY=1",
 )
-@pytest.mark.parametrize("device_params", [_FABRIC_2D_TORUS_XY_DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("device_params", _FULL_MESH_DEVICE_PARAMS, indirect=True)
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
 def test_high_bw_all_gather_galaxy_8x4_whole_mesh_ring_accuracy(mesh_device):
     """Gather exactly across a 32-rank snake ring while Galaxy remains an 8x4 mesh."""
@@ -878,6 +887,39 @@ def test_high_bw_all_gather_quietbox_2x2_whole_mesh_ring_accuracy(mesh_device):
         cluster_axis=None,
         rows_per_device=4,
         num_links=2,
+    )
+
+
+@run_for_blackhole("full-mesh open-path coverage requires Blackhole")
+@pytest.mark.skipif(
+    os.getenv("MESH_DEVICE") != "TG",
+    reason="full-mesh open-path coverage requires MESH_DEVICE=TG",
+)
+@pytest.mark.parametrize("device_params", _FULL_MESH_DEVICE_PARAMS, indirect=True)
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize("submesh_shape", [(8, 1), (1, 4), (1, 2)], ids=["8x1", "1x4", "1x2"])
+def test_high_bw_all_gather_full_mesh_open_path_accuracy(mesh_device, submesh_shape):
+    """cluster_axis=None on a submesh that is one device wide.
+
+    A 1-wide grid has no snake cycle unless its axis wrap is wired, so on a plain 2D
+    fabric these resolve as an open Hamiltonian path -- the tier that exists so no mesh
+    is left without a full-mesh route. The gathered result must match the ring's byte for
+    byte: the transport-to-tensor mapping is the same row-major linearization either way,
+    only the closing edge differs. On a torus the same shapes close their ring instead
+    (1x2 excepted, where a two-device ring is degenerate), which is why both fabrics run.
+    """
+    assert tuple(mesh_device.shape) == (8, 4)
+    submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
+    assert tuple(submesh.shape) == submesh_shape
+    _run_high_bw_all_gather_accuracy(
+        submesh,
+        ttnn.bfloat16,
+        width=576,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        expected_page_size=1152,
+        cluster_axis=None,
+        rows_per_device=4,
+        num_links=1,
     )
 
 

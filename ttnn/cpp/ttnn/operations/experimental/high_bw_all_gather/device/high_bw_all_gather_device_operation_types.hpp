@@ -27,6 +27,10 @@ struct HighBwAllGatherParams {
     // With no public cluster_axis, linearize the complete 2D mesh into a
     // direct-neighbor snake ring. cluster_axis is ignored in this mode.
     bool linearized_mesh_ring = false;
+    // The linearization is an open Hamiltonian path, not a closed ring: the mesh admits
+    // no cycle (1xN) or its wrap edge is not wired (a plain, non-torus 2D fabric). Rank 0
+    // and rank N-1 then run one direction each, exactly like an axis line.
+    bool linearized_mesh_open_path = false;
     ttnn::ccl::snake_ring::Orientation snake_ring_orientation = ttnn::ccl::snake_ring::Orientation::Row;
 
     // Fabric setup info
