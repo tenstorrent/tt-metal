@@ -192,8 +192,7 @@ size_t hash_hw_config(const std::variant<m2::DataMovementHardwareConfig, m2::Com
                                 c.sfpu_precision_mode,
                                 c.enable_32_bit_dest,
                                 c.double_buffer_dest,
-                                c.unpack_modes,
-                                c.enable_2x_src_register);
+                                c.unpack_modes);
                         }},
                     compute);
             }},
