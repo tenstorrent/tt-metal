@@ -72,6 +72,8 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     std::optional<uint32_t> sliding_window_size = std::nullopt,
     std::optional<uint32_t> tokens_per_frame = std::nullopt,
     std::optional<uint32_t> num_frames_padded = std::nullopt,
-    std::vector<uint32_t> sparse_frame_mask = {});
+    std::vector<uint32_t> sparse_frame_mask = {},
+    const std::optional<ttnn::Tensor>& reference_kv = std::nullopt,
+    std::optional<uint32_t> reference_frame_idx = std::nullopt);
 
 }  // namespace ttnn::prim

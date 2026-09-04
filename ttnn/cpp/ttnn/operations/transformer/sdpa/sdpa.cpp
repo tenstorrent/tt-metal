@@ -44,9 +44,7 @@ ttnn::Tensor scaled_dot_product_attention(
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<ttnn::Tensor>& attention_sink,
-    const std::optional<ttnn::Tensor>& cu_window_seqlens,
-    uint32_t windowed_q_token_offset,
-    const std::optional<ttnn::Tensor>& windowed_q_token_offset_tensor) {
+    const std::optional<ttnn::Tensor>& cu_window_seqlens) {
     [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
                                      ? input_tensor_q.device()->arch()
                                      : ttnn::GetDefaultDevice()->arch();
@@ -94,9 +92,7 @@ ttnn::Tensor scaled_dot_product_attention(
         memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
         std::move(program_config),
         kernel_config_val,
-        cu_window_seqlens,
-        windowed_q_token_offset,
-        windowed_q_token_offset_tensor);
+        cu_window_seqlens);
 }
 
 // Legacy: chunk_start_idx as scalar (part of program cache key).
@@ -135,8 +131,6 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
         std::move(program_config),
         kernel_config_val,
         std::nullopt,  // cu_window_seqlens
-        0,             // windowed_q_token_offset (windowed mode only)
-        std::nullopt,  // windowed_q_token_offset_tensor
         paged_cache_geometry);
 }
 
@@ -176,8 +170,6 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
         std::move(program_config),
         kernel_config_val,
         std::nullopt,  // cu_window_seqlens
-        0,             // windowed_q_token_offset (windowed mode only)
-        std::nullopt,  // windowed_q_token_offset_tensor
         paged_cache_geometry);
 }
 
@@ -241,7 +233,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     const std::optional<ttnn::Tensor>& persistent_output_buffer_joint_v,
     std::optional<uint32_t> tokens_per_frame,
     std::optional<uint32_t> num_frames_padded,
-    std::vector<uint32_t> sparse_frame_mask) {
+    std::vector<uint32_t> sparse_frame_mask,
+    const std::optional<ttnn::Tensor>& reference_kv,
+    std::optional<uint32_t> reference_frame_idx) {
     // Normalize empty joints to nullopt (see drop_if_empty).
     const std::optional<ttnn::Tensor> joint_q = drop_if_empty(joint_tensor_q);
     const std::optional<ttnn::Tensor> joint_k = drop_if_empty(joint_tensor_k);
@@ -288,7 +282,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         sliding_window_size,
         tokens_per_frame,
         num_frames_padded,
-        std::move(sparse_frame_mask));
+        std::move(sparse_frame_mask),
+        reference_kv,
+        reference_frame_idx);
     return {
         output_tensors[prim::RING_JOINT_SDPA_OUTPUT_IDX],
         output_tensors[prim::RING_JOINT_SDPA_JOINT_OUTPUT_IDX],
