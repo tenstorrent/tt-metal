@@ -234,7 +234,7 @@ def _assert_synthetic_performance(layout: str, median_wall_ms: float) -> None:
     )
 
 
-@pytest.mark.parametrize("layout", ["SP2xTP4", "SP8xTP4"])
+@pytest.mark.parametrize("layout", ["SP1xTP8", "SP2xTP4", "SP4xTP2", "SP8xTP4"])
 def test_synthetic_performance_uses_two_sided_margin(layout, monkeypatch, expect_error) -> None:
     monkeypatch.setenv("KDA_PERF_SKU", _PERF_SKU)
     reference_ms = _synthetic_perf_reference_ms(layout)
@@ -506,7 +506,9 @@ def test_kimi_k3_layer_1_perf(
 @pytest.mark.parametrize(
     "mesh_device,tensor_parallel_axis,device_params",
     [
+        pytest.param((1, 8), 1, fabric2d_device_params(), id="SP1xTP8-fabric-2d"),
         pytest.param((2, 4), 1, fabric2d_device_params(), id="SP2xTP4-fabric-2d"),
+        pytest.param((2, 4), 0, fabric2d_device_params(), id="SP4xTP2-fabric-2d"),
         pytest.param(
             (8, 4),
             1,

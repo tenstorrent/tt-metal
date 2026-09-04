@@ -8,7 +8,7 @@ import torch
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
-from models.demos.deepseek_v3_d_p.tests.kda.utils import make_small_kda_test_config, random_weights
+from models.demos.deepseek_v3_d_p.tests.kda.utils import LINEAR_TOPOLOGY, make_small_kda_test_config, random_weights
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate, assert_bit_identical
 
@@ -38,7 +38,7 @@ def test_segmented_prefill_matches_reference_and_reuses_program(
     golden_first, golden_state = kda_forward_reference(hidden[:, :32], weights, config)
     golden_second, golden_state = kda_forward_reference(hidden[:, 32:], weights, config, golden_state)
 
-    layer = ttKDA(device, config, weights)
+    layer = ttKDA(device, config, weights, topology=LINEAR_TOPOLOGY)
     state = layer.allocate_state()
     actual_first, state = _forward(layer, hidden[:, :32], state)
     cache_entries_after_first = device.num_program_cache_entries()
@@ -76,7 +76,7 @@ def test_trace_replay_matches_eager_without_mutating_input_state(device: ttnn.De
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    layer = ttKDA(device, config, random_weights(config))
+    layer = ttKDA(device, config, random_weights(config), topology=LINEAR_TOPOLOGY)
 
     with ttnn.manage_config("throw_exception_on_fallback", True):
         eager_output, _ = layer.forward(hidden_tt, layer.allocate_state())

@@ -19,6 +19,8 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
 )
 from models.demos.deepseek_v3_d_p.tt.kda import recurrence
 from models.demos.deepseek_v3_d_p.tt.kda.config import KDARecurrenceProgramConfig
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
+from models.tt_transformers.tt.ccl import TT_CCL
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_accurate,
     assert_bit_identical,
@@ -57,6 +59,8 @@ def _run_recurrence(
             local_scan_strategy=local_scan_strategy,
         ),
         sequence_parallel_axis=None,
+        topology=ttnn.Topology.Linear,
+        tt_ccl=None,
     )
     return executor(q=q, k=k, v=v, gate=gate, beta=beta, initial_state=state)
 
@@ -281,6 +285,8 @@ def _distributed_recurrence_case(
         mesh_device,
         KDARecurrenceProgramConfig(summary_group_chunks=8),
         sequence_parallel_axis=sp_axis,
+        topology=per_axis_topology()[sp_axis],
+        tt_ccl=TT_CCL(mesh_device),
     )
     return executor, inputs, expected_output.to(torch.bfloat16), expected_state, sp_axis
 
