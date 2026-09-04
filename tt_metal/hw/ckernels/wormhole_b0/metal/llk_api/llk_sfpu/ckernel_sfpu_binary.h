@@ -213,7 +213,10 @@ inline void calculate_sfpu_binary_div(
     }
 }
 
-// Tensor/tensor float floor_div: Markstein quotient (when fp32 DEST) then floor in one pass.
+// Tensor/tensor float floor_div: Markstein quotient then floor in one pass.
+// The residual is computed in fp32 LRegs before floor, so it is required even
+// when DEST is bf16: unlike DIV, the integer after floor cannot recover a 1-ulp
+// shortfall that would have been invisible after a bf16 store.
 template <bool APPROXIMATION_MODE, BinaryOp BINOP, int ITERATIONS, bool is_fp32_dest_acc_en>
 inline void calculate_sfpu_binary_floor_div(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
@@ -224,13 +227,11 @@ inline void calculate_sfpu_binary_floor_div(
 
         sfpi::vFloat r = sfpu_reciprocal_iter<2>(in1);
         sfpi::vFloat result = in0 * r;
-        if constexpr (is_fp32_dest_acc_en) {
-            v_if(sfpi::exexp(result, sfpi::ExponentMode::Biased) != 255) {
-                sfpi::vFloat e = in0 - result * in1;
-                result = result + e * r;
-            }
-            v_endif;
+        v_if(sfpi::exexp(result, sfpi::ExponentMode::Biased) != 255) {
+            sfpi::vFloat e = in0 - result * in1;
+            result = result + e * r;
         }
+        v_endif;
 
         v_if(in1 == 0) {
             v_if(in0 == 0) { result = std::numeric_limits<float>::quiet_NaN(); }
@@ -272,13 +273,11 @@ inline void calculate_sfpu_binary_floor_div_scalar(
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
         sfpi::vFloat result = in0 * r;
-        if constexpr (is_fp32_dest_acc_en) {
-            v_if(sfpi::exexp(result, sfpi::ExponentMode::Biased) != 255) {
-                sfpi::vFloat e = in0 - result * in1;
-                result = result + e * r;
-            }
-            v_endif;
+        v_if(sfpi::exexp(result, sfpi::ExponentMode::Biased) != 255) {
+            sfpi::vFloat e = in0 - result * in1;
+            result = result + e * r;
         }
+        v_endif;
 
         sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = _floor_body_(result);
         sfpi::dst_reg++;
