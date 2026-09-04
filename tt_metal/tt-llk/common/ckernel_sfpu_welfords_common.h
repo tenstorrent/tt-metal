@@ -313,7 +313,8 @@ sfpi_inline void _clear_previous_mean_and_m2_()
  * common anchor in LREG4 and accumulates `(x - anchor)` in LREG5, optionally
  * alternating with LREG6. `_two_pass_finish_shifted_mean_` replaces LREG4 with
  * the mean and clears LREG5/LREG6. Pass two accumulates `(x - mean)^2` in
- * LREG5/LREG6. LREG11 must contain -1.0, as established by the two-pass init.
+ * LREG5/LREG6. LREG11 must retain its boot-time -1.0 value; callers must not
+ * leave programmable constant register 11 clobbered before entering these helpers.
  *
  * State spill helpers use two consecutive DST tiles: mean at raw offset 0 and
  * M2 at raw offset 64. The optional retained anchor uses the otherwise-unused
