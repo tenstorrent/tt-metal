@@ -1,9 +1,28 @@
 # Plan: FSD-backed topology map + Control Plane downed-links API
 
-**Status:** Implementation plan
+**Status:** In progress. Landed: §5.5's mapper identity, via [`PLAN_physical_node_id.md`](PLAN_physical_node_id.md) slices 1–4, so the mapper is keyed on `PhysicalNodeId` and §5.2's canonicalization exists as a function to call; §6's `diff_physical_system_descriptors` with its offline tests; `LinkHealth` (§2–§3) with `test_link_health.cpp`; the host filter with its rank-agreement protocol (§5.1–§5.4), minus §5.3 cases 5–7; and §7's ControlPlane wiring and forwarders. Not yet written: the `test_fsd_psd_e2e.cpp` half of §8.
+
+**The feature is now reachable end to end.** Setting `TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH` makes
+ControlPlane init derive a host filter from live, agree on it across ranks, build a PSD from the factory
+descriptor, solve the mesh on *that*, and hang a `LinkHealth` off the result. With no such path set,
+nothing changes: `descriptor_to_map_on()` returns the discovered descriptor and every forwarder is a
+null-safe no-op.
+
+**How the mapper gets real UMD identities.** The solve runs on addresses, so it does not care which
+descriptor it was handed, but `asic_id` and `physical_chip_id` are UMD facts a factory descriptor does not
+have — its ASIC labels are file order. `TopologyMapper` therefore takes an optional live descriptor and
+resolves those two fields from it by `(host_id, tray, loc)` *after* the solve. On the discovered path that
+live descriptor is the same object as the one being solved on, which makes the resolution an identity and
+leaves the existing behaviour byte-for-byte, confirmed by unchanged golden mappings.
+
+Coverage gaps, both from fixtures rather than the code: `test_link_health.cpp` runs on the T3K mock, a
+single mesh on a single host, so the intermesh path (§4) and the cross-host merge (§5.4) are exercised only
+by construction; and `FactoryDescriptorControlPlaneFixture` runs one rank against a matching descriptor, so
+it proves the healthy path and the identity resolution but not a *downed* link. Both need a multi-mesh mock
+fixture, which is §8's `test_fsd_psd_e2e.cpp`.
 **Umbrella:** [tenstorrent/tt-metal#52859](https://github.com/tenstorrent/tt-metal/issues/52859)
 **Contract:** [`README_downed_links_contract.md`](README_downed_links_contract.md)
-**Depends on (already on main):** RTOptions FSD path ([#53451](https://github.com/tenstorrent/tt-metal/pull/53451)), `build_physical_descriptor_from_file` ([#53857](https://github.com/tenstorrent/tt-metal/pull/53857))
+**Depends on (already on main):** RTOptions FSD path ([#53451](https://github.com/tenstorrent/tt-metal/pull/53451)), `build_physical_descriptor_from_file` ([#53857](https://github.com/tenstorrent/tt-metal/pull/53857)), `filter_factory_descriptor`
 **FSD assets:** [tt-cluster-descriptors#18](https://github.com/tenstorrent/tt-cluster-descriptors/pull/18) (`79cb691` — pin until it merges). E2E pairing: [`PLAN_downed_links_testing.md`](PLAN_downed_links_testing.md) §6.
 
 Namespace: `tt::tt_fabric`. Types live in `link_health.hpp`; `ControlPlane` forwards. No FSD ⇒ `link_health_ == nullptr`, forwarders return healthy / empty / `false` / `0`.
@@ -27,7 +46,7 @@ FSD present: convert FSD→PSD at init, map on that, diff against live PSD. Miss
 
 No FSD: today's path (map on live). Every link healthy; `fsd_rerouting_active() == false`.
 
-Same `TopologyMapper` on both paths. Physical identity is `PhysicalNodeId` = `{canonical host[64], tray, loc}` — §5.5 and [`PLAN_physical_node_id.md`](PLAN_physical_node_id.md). UMD `chip_unique_id` is a Cluster ChipId label **after** the solve, never a mapper key.
+Same `TopologyMapper` on both paths. Physical identity is `PhysicalNodeId` = `{canonical host_id[128], tray, loc}` — §5.5 and [`PLAN_physical_node_id.md`](PLAN_physical_node_id.md). **That plan's slices 1–4 have landed**, so the mapper is already keyed this way and this plan can assume it. UMD `chip_unique_id` is a Cluster ChipId label **after** the solve, never a mapper key.
 
 ```mermaid
 flowchart TB
@@ -126,6 +145,14 @@ flowchart TB
 ---
 
 ## 2. `LinkHealth`
+
+**Built.** `link_health.hpp` / `link_health.cpp`, covered by `test_link_health.cpp`. One departure from
+the sketch below: it does **not** forward-declare `TopologyMapper` but includes `topology_mapper.hpp`,
+because the mapper lookups it needs are declared there and the header is already public API. Two
+optional-returning lookups were added to `TopologyMapper` for it —
+`find_fabric_node_id_from_physical_node_id` and `find_physical_node_id_from_fabric_node_id` — since a
+descriptor can hold ASICs the mesh graph solve never placed, and walking every ASIC in a descriptor has
+to tell that apart from the programming error the throwing overloads treat it as.
 
 Inputs: `const TopologyMapper&` (expected PSD + mesh graph + asic→node) and `const PhysicalSystemDescriptor&` live. No default ctor. Non-copyable / non-movable. `link_health.hpp` forward-declares `TopologyMapper`.
 
@@ -524,6 +551,12 @@ lives next to pairing in ControlPlane, not as a second identity key in `LinkHeal
 
 ## 5. Host filtering: which slice of the FSD to ingest
 
+**Built, except three §5.3 error cases.** `fsd_host_filter.{hpp,cpp}` (internal — ControlPlane is the only
+consumer) plus the builder changes in §5.4, covered by `test_fsd_host_filter.cpp`. Cases 1, 2, 4, 8, 10 and
+§5.2's injectivity requirement all throw from `fsd_host_filter_from_live`; case 9's protocol is
+`agree_or_throw_fsd_host_filter`. Cases 5, 6 and 7 are not done — see §5.4. Nothing calls any of it yet;
+that is §7.
+
 An FSD in the wild describes a whole superpod or an aggregated datacenter. A job runs on a subset of it.
 Ingesting the whole FSD breaks both halves of this feature:
 
@@ -560,28 +593,44 @@ whole FSD.
 The live PSD's host keys are **not always OS hostnames**, so a naive string intersection silently matches
 nothing. From `physical_system_discovery.cpp`:
 
-- **Mock mode** (`TT_METAL_MOCK_CLUSTER_DESC_PATH`): prefer
-  `ClusterDescriptor::get_host_id()` (the accelerator-group id, whose value today is the
-  exact FSD / OS name —
-  [`PLAN_umd_cluster_descriptor_hostname.md`](PLAN_umd_cluster_descriptor_hostname.md)).
-  If the field is unset, today's basename fallback stays (ClosetBox). Do not pass a
-  basename to `filter_factory_descriptor`; use the UMD `host_id` or the aisle-token alias
-  (testing plan §6.3) until every FSD-paired YAML is filled.
+- **Mock mode** (`TT_METAL_MOCK_CLUSTER_DESC_PATH`): **already handled** —
+  `get_local_discovery_hostname` prefers `ClusterDescriptor::get_host_id()` (the accelerator-group id,
+  whose value today is the exact FSD / OS name —
+  [`PLAN_umd_cluster_descriptor_hostname.md`](PLAN_umd_cluster_descriptor_hostname.md)), and falls back
+  to the descriptor basename only when the field is unset. So the live PSD host key *is* the FSD
+  hostname for every filled descriptor, and no alias is needed to join them. Do not pass a basename to
+  `filter_factory_descriptor`. **27 cluster descriptors are still unfilled**
+  ([`PLAN_physical_node_id.md`](PLAN_physical_node_id.md) §10) — those keys are still filenames, so
+  either fill the ones a given FSD test needs, or fatal cleanly per case 10 below. The aisle-token
+  alias earlier drafts specified was never built and should stay unbuilt.
 - **Non-unique hostnames across ranks**: the key becomes `hostname + "_" + rank` (`run_local_discovery`;
   `my_host_name()` mirrors it through `all_hostnames_unique_`).
 - **Live and unique**: the raw `gethostname()` result, short or FQDN depending on host config. The FSD
   carries whatever the cabling-descriptor author wrote. `run_blitz_superpod_automapper_tests.py` already
   needs a `hostname_matches` helper for this — the mismatch is real, not hypothetical.
 
-Define one canonicalization and use it on **both** sides, for the filter and for the overlay's
-`(host_id, tray, loc)` join:
+Define one canonicalization and use it on **both** sides, for the filter and for the
+`(host_id, tray, loc)` join. **It already exists and is already shipped** — call
+`tt::tt_metal::canonical_host_for_node_id` ([`PLAN_physical_node_id.md`](PLAN_physical_node_id.md) §3).
+Do not write a second one here; the filter and the mapper key have to be the same string or the filter
+silently retains nothing.
 
 ```
-canonical(h):
-    if !psd.get_all_hostnames_unique():  strip a trailing "_<rank>"
-    take the first label (up to the first '.')      // FQDN -> short name
+canonical(h) = canonical_host_for_node_id(h):
+    fatal if h starts with '.'                      // empty first label, no name to address
+    if every dot-separated label is a legal DNS label:
+        take the first label                        // FQDN -> short name
     lowercase
 ```
+
+> **This is not what earlier drafts of this section said, and the difference matters.**
+> The rank suffix is **kept**, not stripped, and the first-label cut is **conditional**. An earlier
+> version of this plan specified `if !get_all_hostnames_unique(): strip a trailing "_<rank>"` and an
+> unconditional cut at the first dot. Both were wrong and both are now impossible to express: there is
+> no `hosts_unique` parameter on the shipped API. `run_local_discovery` appends `_<rank>` exactly when
+> two ranks report the same host id, so that suffix is the only thing telling them apart — stripping
+> it merges two machines. And synthesized ids such as `dual_glx_2.5d_torus_cluster_desc` contain dots
+> that are not domain separators. See [`PLAN_physical_node_id.md`](PLAN_physical_node_id.md) §3.1.
 
 Require it to be **injective over the live host set**. If two live hosts canonicalize to the same string,
 fatal: the join is ambiguous and would otherwise attach one machine's cables to another. Normalize both
@@ -600,7 +649,7 @@ sides; never rewrite the FSD on disk.
 | 7 | **Board-type mismatch** per `(host_id, tray)` | compare FSD board type against live | Fatal — wrong/stale FSD, would otherwise surface as a confusing partial mapping |
 | 8 | **Duplicate hostnames inside the FSD** | duplicates among retained hosts | Fatal — `filter_factory_descriptor` keeps *all* matching indices, so one name silently pulls in two machines |
 | 9 | Any rank's filter failed, **or** ranks disagree on the filter | `agree_or_throw_fsd_host_filter` — all-reduce `local_ok` + host-list checksum + FSD fingerprint **before** ingest | **Every rank throws the same `std::runtime_error`.** See protocol below. |
-| 10 | **Mock cluster + FSD** | live name from `ClusterDescriptor::get_host_id()` once filled ([`PLAN_umd_cluster_descriptor_hostname.md`](PLAN_umd_cluster_descriptor_hostname.md)); filename is not a hostname | Prefer the UMD `host_id` field (value is the exact FSD name). If the field is still empty, aisle-token alias (testing plan §6.3) so `PhysicalNodeId.host_id[]` and the filter still use FSD hostnames. Fatal if a live key has no field and no token, the token misses or collides, or the map is not injective. ClosetBox / no-field / no-FSD keeps the basename fallback. |
+| 10 | **Mock cluster + FSD** | live name from `ClusterDescriptor::get_host_id()` (already preferred by `get_local_discovery_hostname`); a filename is not a hostname | Filled descriptors need nothing — the live key is already the FSD name. For an **unfilled** descriptor the key is a filename that no FSD host matches, which case 2 catches; make that a clean fatal naming the descriptor and the missing `host_id:` field, so the fix is "fill the asset", not "add an alias". No aisle-token alias. ClosetBox / no-FSD keeps the basename fallback. |
 
 Case 2 **replaces** the earlier "unknown host in the FSD filter: warn, fall back to live, leave
 `link_health_` null". That fallback is per-rank: one rank maps on live while the others map on the FSD, so
@@ -645,20 +694,42 @@ does not need live ranks: it is producing the rank binding.
 
 ### 5.4 What the builder needs
 
-- `filter_factory_descriptor`: match on canonical names, reject duplicates among the retained hosts, keep
-  reporting *all* missing names at once (it already does).
-- Optional `FilterReport` out-param (hosts dropped, connections dropped, component count) so ControlPlane
-  logs one line and the builder stays quiet.
+**Built**, in `physical_descriptor_builder.{hpp,cpp}` and `fsd_host_filter.{hpp,cpp}`, covered by
+`test_fsd_host_filter.cpp`. What shipped:
+
+- `filter_factory_descriptor` matches on canonical names, rejects retained hosts that collide under
+  canonicalization, and still reports *all* missing names at once.
+- `FilterReport` carries hosts before / after and dropped connections. **No component count** — components
+  are `build_physical_descriptors`' concern and counting them here would mean running that partition on
+  every ingest for a log line. §5.3 case 5 is therefore still unimplemented.
+- `validate_host_filter` runs those checks *without* building the filtered copy. This is the piece the
+  sketch above missed, and case 9 does not work without it: the failure has to be known before the
+  agreement, and discovering it during the ingest is exactly the mid-ingest per-rank abort case 9 exists to
+  prevent. `fsd_host_filter_from_live` calls it as a dry run, so it throws for every reason the later
+  ingest would.
+- `fsd_host_filter_from_live` takes the FSD **path**, not a loaded proto as the §7 sketch shows, so
+  ControlPlane never names a proto type. The cost is parsing the descriptor twice per init — once to
+  derive, once to build. If that shows up on a datacenter-scale textproto, the fix is an opaque handle
+  rather than leaking the proto.
+- The agreement reduces `{local_ok, host_checksum, fsd_fingerprint}` as one `uint64` array, twice
+  (`MIN` then `MAX`), and compares each value's min against its max. `all_reduce` was already available on
+  `DistributedContext`; §8's "all-reduce" is literal. The `fsd_fingerprint` half is not in the sketch
+  above and is what catches ranks agreeing on the host list while reading *different files* for it, which
+  is what a half-rolled-out asset update looks like.
+
+Still open from §5.3: case 5 (allocation not connected), case 6 (live-only ASICs on a retained host — needs
+the diff, so it belongs with §7's ingest) and case 7 (board-type mismatch — likewise; note
+`diff_physical_system_descriptors` already reports it as `mismatched_asics`).
 
 The init sequence that applies all of this is in §7.
 
 ### 5.5 Mapper identity is `(host_id, tray, loc)`, not AsicID
 
 > **Decision.** The topology solver's physical node is a **POD**
-> `{canonical_host[64], TrayID, ASICLocation}`, not UMD `AsicID`, not FSD `1..N`, and not
+> `{canonical host_id[128], TrayID, ASICLocation}`, not UMD `AsicID`, not FSD `1..N`, and not
 > `hash32(host)` stuffed into a `uint64`. Encoding, utility, mock→FSD hostname join, and
 > mapper/builder call sites: [`PLAN_physical_node_id.md`](PLAN_physical_node_id.md) — **separate
-> change**, land first. FSD does **not** encode ASIC ids. Fabric Manager and
+> change, now landed** (slices 1–4). FSD does **not** encode ASIC ids. Fabric Manager and
 > `generate_rank_bindings` must produce the **same** `FabricNodeId` placement as ControlPlane
 > given the same FSD, whether or not UMD discovery has succeeded.
 > [Piotr Stankiewicz, #54752](https://github.com/tenstorrent/tt-metal/pull/54752) shows the
@@ -689,14 +760,23 @@ and it has the same blocker. Connectivity comes from the FSD; identity comes fro
 (`topology_mapper.cpp`, the `config.asic_positions` / `hostname_to_asics` fill). Lift that into the
 node type:
 
+**This has landed** — the type is `tt::tt_metal::PhysicalNodeId` in
+`tt-metalium/experimental/fabric/physical_node_id.hpp`, the sketch below is what it became, and every
+physical map on the mapper is keyed on it. Use it; do not define a `PhysicalNodeKey`.
+
 ```cpp
-// Production type is PhysicalNodeId (char host[64] + tray + loc). See PLAN_physical_node_id.md.
-struct PhysicalNodeKey {
-    char host[64];  // canonical (§5.2), NUL-padded C array — not a hash / std::string
+// Shipped. See PLAN_physical_node_id.md §3.
+struct PhysicalNodeId {
+    char host_id[kPhysicalHostNameLen];  // 128, canonical (§5.2), NUL-padded — not a hash / std::string
     tt::tt_metal::TrayID tray;
     tt::tt_metal::ASICLocation loc;
 };
 ```
+
+Two helpers this plan will want, both already there: `node_id_from_asic_descriptor(desc)` turns a
+descriptor into an address, and `build_physical_node_id_index(psd)` gives both-way translation between
+addresses and the PSD's own `AsicID` labels — which is how §7's `load_physical_chip_mapping` and
+`LinkInfo::src_asic` resolve a Cluster ChipId after the solve.
 
 - `PhysicalAdjacencyMap` / solver `GlobalNode` = `PhysicalNodeId`.
 - `TopologyMappingConfig::asic_positions` and `hostname_to_asics` become **derived** (tray/loc and host
@@ -731,6 +811,19 @@ assert one specific mapping will need a re-baseline; that is expected and is the
 
 ## 6. `diff_physical_system_descriptors`
 
+**Built.** `physical_system_descriptor.hpp` declares it, `physical_system_descriptor_diff.cpp`
+implements it, `test_physical_system_descriptor_diff.cpp` covers §8's list. Two notes on what shipped:
+
+- **`mismatched_asics` is a board-type disagreement, not a tray one.** §8 below asked for "tray
+  mismatch → `mismatched_asics`", which cannot happen: tray is part of the address, so a chip that
+  moved trays is one address that lost its chip and another that gained one. It reads as
+  `missing_asics` + `extra_asics`, and there is a test pinning exactly that. Board type is the
+  attribute that *can* differ at a fixed address, and it is §5.3 case 7's fatal.
+- **The link maps are flat across hosts**, resolving §10.1 #12: a cable is not a property of one host,
+  and filing a cross-host cable under one of its two ends would be arbitrary. Repeated destination
+  entries within one `AsicTopology` are merged before comparing, which #12 warned would otherwise
+  produce false misses; there is a test for that shape too.
+
 ```cpp
 // physical_system_descriptor.hpp / physical_system_descriptor_diff.cpp
 namespace tt::tt_metal {
@@ -738,19 +831,16 @@ namespace tt::tt_metal {
 struct PhysicalSystemDelta {
     std::vector<AsicID> missing_asics;
     std::vector<AsicID> extra_asics;
-    AsicTopology missing_links;  // both endpoints, same shape as descriptor graph
+    std::vector<AsicID> mismatched_asics;  // same address, different board type
+    AsicTopology missing_links;  // flat across hosts; each cable as both directed halves
     AsicTopology extra_links;
-    AsicTopology mismatched_links;  // same LinkKey, different port_type / is_local
-    std::vector<AsicID> mismatched_asics;
+    AsicTopology mismatched_links;  // same two endpoints, different port_type / is_local
 
-    bool matches() const {
-        return missing_asics.empty() && extra_asics.empty() &&
-               missing_links.empty() && extra_links.empty() &&
-               mismatched_links.empty() && mismatched_asics.empty();
-    }
+    bool matches() const;
 };
 
 // PRECONDITION: none on AsicID space. Join by physical position.
+// Fatal if either descriptor has two ASICs at one address -- the join would be ambiguous.
 PhysicalSystemDelta diff_physical_system_descriptors(
     const PhysicalSystemDescriptor& golden, const PhysicalSystemDescriptor& candidate);
 
@@ -804,9 +894,9 @@ Init (`init_control_plane` / `init_control_plane_auto_discovery`):
 ```cpp
 run_physical_system_discovery();  // live_psd — its host set IS the allocation
 if (rtoptions_.get().has_factory_system_descriptor_path()) {
-    // Mock: live keys are YAML basenames. Do not pass them to the filter.
-    // Build aisle-token alias (testing plan §6.3) and filter with alias.values() (FSD hostnames).
-    // Silicon: hosts = canonical_host_set(live) (§5.2).
+    // Mock and silicon are the same call now: discovery already keyed the live PSD on the
+    // descriptor's host_id, so hosts = canonical_host_set(live) (§5.2). An unfilled descriptor
+    // still yields a filename here and must fatal via case 2 / case 10, not get aliased.
     auto hosts = fsd_host_filter_from_live(*physical_system_descriptor_, fsd);  // alias or canonical
     // Catch local filter/alias errors → local_ok=false. Do not throw yet.
     agree_or_throw_fsd_host_filter(ctx, checksum_sorted_host_list(hosts), fsd_fingerprint, local_ok);  // §5.3 case 9
@@ -1039,7 +1129,7 @@ Assert `LinkHealth` is constructed only after pairing in both ControlPlane inits
 
 **§7.6 filter agreement (plan):** one rank `local_ok=false` → every rank throws the **same** `what()`. Checksum disagreement → same. All-ok → no throw. Never local-fatal before the all-reduce. See testing plan §7.6.
 
-**E2E FSD + mock PSD + ControlPlane (testing plan §6 / §4 / §5):** `test_fsd_psd_e2e.cpp` and the FSD cases in `test_multi_host.cpp`. Assets from tt-cluster-descriptors #18. Hostname join is the aisle-token alias (§6.3) — do not change discovery. Single-host and multi-host ControlPlane tests both set an FSD. Start with `SC20_32x4_revAB_aisleC`.
+**E2E FSD + mock PSD + ControlPlane (testing plan §6 / §4 / §5):** `test_fsd_psd_e2e.cpp` and the FSD cases in `test_multi_host.cpp`. Assets from tt-cluster-descriptors #18. The hostname join needs no alias: discovery already keys the live PSD on the descriptor's `host_id` — pick a system whose descriptors are filled. `SC20_32x4_revAB_aisleC` is a good start and its host captures carry the field.
 
 **ControlPlane:** no-FSD walk entire contract. Path set → mapper on FSD PSD, **AsicIDs not rewritten**. Every rank `get_downed_links()` identical including remotes. STRICT + FSD + downed intra/intermesh → init completes, records in LinkHealth. No FSD + STRICT + missing connection → still fatals. Extras in live PSD → OK. Host mismatch → fatal. >10% of FSD-expected connections down → error + log. **Placement stability (§5.5):** same FSD, synthesized vs UMD-like AsicIDs → identical `FabricNodeId` placement. `generate_rank_bindings` with FSD does not call discovery.
 

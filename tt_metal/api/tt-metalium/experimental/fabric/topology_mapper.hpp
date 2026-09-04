@@ -102,7 +102,8 @@ public:
         const MeshGraph& mesh_graph,
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
         const LocalMeshBinding& local_mesh_binding,
-        std::chrono::duration<float> timeout = std::chrono::duration<float>(60.0f));
+        std::chrono::duration<float> timeout = std::chrono::duration<float>(60.0f),
+        const tt::tt_metal::PhysicalSystemDescriptor* live_descriptor = nullptr);
 
     // Construct a TopologyMapper with many-to-many ASIC pinning groups (MGD AsicPinningGroup shape).
     // Each group lists fabric nodes and allowed ASIC positions; any node in the group may map to any
@@ -114,7 +115,8 @@ public:
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
         const LocalMeshBinding& local_mesh_binding,
         const std::vector<::tt::tt_metal::experimental::tt_fabric::PinningConstraint>& pinning_groups,
-        std::chrono::duration<float> timeout = std::chrono::duration<float>(60.0f));
+        std::chrono::duration<float> timeout = std::chrono::duration<float>(60.0f),
+        const tt::tt_metal::PhysicalSystemDescriptor* live_descriptor = nullptr);
 
     // Construct a TopologyMapper from a pre-provided logical mesh chip to physical chip mapping.
     // Skips discovery and builds fabric node id to asic id mapping directly from the provided mapping.
@@ -125,7 +127,8 @@ public:
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
         const LocalMeshBinding& local_mesh_binding,
         const std::map<FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping,
-        std::chrono::duration<float> timeout = std::chrono::duration<float>(60.0f));
+        std::chrono::duration<float> timeout = std::chrono::duration<float>(60.0f),
+        const tt::tt_metal::PhysicalSystemDescriptor* live_descriptor = nullptr);
 
     /**
      * @brief Get logical mesh graph connectivity
@@ -161,12 +164,38 @@ public:
     FabricNodeId get_fabric_node_id_from_physical_node_id(const tt::tt_metal::PhysicalNodeId& physical_node_id) const;
 
     /**
+     * @brief Look up a fabric node ID without failing when there is not one
+     *
+     * Returns nullopt for both of the ways a lookup can come up empty: the descriptor has no ASIC at
+     * that address, and it has one that the mesh graph solve never placed. Callers that walk every
+     * ASIC in a descriptor -- rather than only the mapped ones -- need to tell those apart from a
+     * programming error, which is what the throwing overload above treats them as.
+     *
+     * @param physical_node_id
+     * @return std::optional<FabricNodeId>
+     */
+    std::optional<FabricNodeId> find_fabric_node_id_from_physical_node_id(
+        const tt::tt_metal::PhysicalNodeId& physical_node_id) const;
+
+    /**
      * @brief Get the physical node ID (host_id, tray, loc) mapped to a fabric node ID
      *
      * @param fabric_node_id
      * @return tt::tt_metal::PhysicalNodeId
      */
     tt::tt_metal::PhysicalNodeId get_physical_node_id_from_fabric_node_id(const FabricNodeId& fabric_node_id) const;
+
+    /**
+     * @brief Look up a physical node ID without failing when there is not one
+     *
+     * A mesh graph can name nodes the solve did not place, and those have no address. Returns
+     * nullopt for them rather than treating the query as a programming error.
+     *
+     * @param fabric_node_id
+     * @return std::optional<tt::tt_metal::PhysicalNodeId>
+     */
+    std::optional<tt::tt_metal::PhysicalNodeId> find_physical_node_id_from_fabric_node_id(
+        const FabricNodeId& fabric_node_id) const;
 
     /**
      * @brief Get physical chip ID from a physical node ID mapped by the topology mapper
@@ -408,7 +437,8 @@ private:
      * @return std::map<MeshId, std::map<tt::tt_metal::PhysicalNodeId, MeshHostRankId>> Map from mesh ID to
      * ASIC ID to mesh host rank (ordered for deterministic iteration)
      */
-    std::map<MeshId, std::map<tt::tt_metal::PhysicalNodeId, MeshHostRankId>> build_physical_node_id_to_mesh_rank_mapping();
+    std::map<MeshId, std::map<tt::tt_metal::PhysicalNodeId, MeshHostRankId>>
+    build_physical_node_id_to_mesh_rank_mapping();
 
     /**
      * @brief Build the mapping between fabric node IDs and host ranks
@@ -445,6 +475,17 @@ private:
 
     const MeshGraph& mesh_graph_;
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor_;
+
+    // Where the real UMD identities come from, which is not always the descriptor being solved on.
+    //
+    // The solve runs entirely on addresses, so it does not care whether its descriptor was discovered or
+    // built from a factory system descriptor. But `asic_id` and `physical_chip_id` are UMD facts, and a
+    // factory descriptor has neither: its ASIC labels are file order. So those two fields are resolved
+    // from this descriptor by address, after the solve.
+    //
+    // Aliases `physical_system_descriptor_` unless a caller passes a separate live descriptor, which makes
+    // the resolution an identity on the discovered path and leaves it byte-for-byte as it was.
+    const tt::tt_metal::PhysicalSystemDescriptor& live_descriptor_;
     const LocalMeshBinding& local_mesh_binding_;
     const std::vector<::tt::tt_metal::experimental::tt_fabric::PinningConstraint> pinning_groups_;
     bool generate_mapping_locally_ = false;

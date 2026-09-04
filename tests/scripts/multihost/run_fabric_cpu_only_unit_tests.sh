@@ -177,17 +177,33 @@ run_test() {
   if [[ "$DRY_RUN" -eq 1 ]]; then
     return 0
   fi
+  local out status
+  out=$(mktemp)
+  # errexit has to be off across the invocation. `set -e` aborts on a failing command in an
+  # if/else body, so without this the status check below is never reached: the first failing
+  # test kills the script, nothing lands in FAILURES, and --keep-going does nothing.
+  set +e
   # Optional wall-clock cap. One MPI rank that fatals while another sits in a barrier
   # deadlocks prterun forever; this turns that into a failed command instead of a hang.
   # No --foreground: that signals only tt-run itself, and killing the launcher leaves its
   # ranks orphaned and spinning in MPI finalize. The default puts the command in its own
   # process group so the whole rank set is torn down.
   if [[ -n "${TT_FABRIC_TEST_TIMEOUT:-}" ]]; then
-    timeout --kill-after=30s "${TT_FABRIC_TEST_TIMEOUT}" "$@"
+    timeout --kill-after=30s "${TT_FABRIC_TEST_TIMEOUT}" "$@" 2>&1 | tee "$out"
   else
-    "$@"
+    "$@" 2>&1 | tee "$out"
   fi
-  local status=$?
+  status=${PIPESTATUS[0]}
+  set -e
+  # A --gtest_filter that matches nothing exits 0, so a suite that was renamed, dropped from
+  # sources.cmake, or compiled into a different build tree reads as a pass. This gtest is too
+  # old for --gtest_fail_if_no_test_selected, hence matching on the summary line.
+  if [[ $status -eq 0 && "$cmd_str" == *--gtest_filter=* ]] &&
+    grep -q "0 tests from 0 test suites ran" "$out"; then
+    echo "error: gtest filter matched no tests" >&2
+    status=1
+  fi
+  rm -f "$out"
   if [[ $status -ne 0 ]]; then
     FAILURES+=("[${CURRENT_GROUP}] exit ${status}: ${cmd_str% }")
     if [[ "$KEEP_GOING" -eq 0 ]]; then
@@ -298,13 +314,22 @@ run_test env TT_METAL_MOCK_CLUSTER_DESC_PATH=tt_metal/third_party/tt-cluster-des
 run_test env TT_METAL_MOCK_CLUSTER_DESC_PATH=tt_metal/third_party/tt-cluster-descriptors/wormhole/2x2_n300_cluster_desc/2x2_n300_cluster_desc.yaml ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MockClusterTopologyFixture*"
 run_test env TT_METAL_MOCK_CLUSTER_DESC_PATH=tt_metal/third_party/tt-cluster-descriptors/wormhole/6u_cluster_desc/6u_cluster_desc.yaml ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="RoutingTableValidation*"
 
-run_test ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*LogicalToPhysicalConversionFixture*"
+# LogicalToPhysicalConversionFixture used to be run here. Its file,
+# fabric_router/test_control_plane_logical_to_physical.cpp, is in no sources.cmake and does not
+# compile: the APIs it covers (build_mesh_adjacency_map,
+# convert_{1d,2d}_mesh_adjacency_to_row_major_vector) no longer exist. The filter matched nothing and
+# exited 0, so this line reported a pass for zero tests. Reviving it means rewriting it against the
+# current mapper API.
 run_test ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MeshGraphDescriptorTests*"
 run_test ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="TopologySolverTest.*"
 run_test ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="TopologySatEncoderTest.*"
 run_test ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="TopologyMapperUtilsTest.*"
 run_test ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="PhysicalGroupingDescriptorTests*"
 run_test ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="PhysicalDescriptorBuilder.*"
+run_test ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="PhysicalNodeIdTest.*"
+run_test ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="PhysicalSystemDescriptorDiff.*"
+run_test ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FsdHostFilter.*"
+run_test ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FsdChipsAbsentFromLive.*"
 
 fi # unit
 
@@ -328,6 +353,17 @@ run_test env TT_METAL_MOCK_CLUSTER_DESC_PATH=tt_metal/third_party/tt-cluster-des
 ######################################
 run_test env TT_METAL_MOCK_CLUSTER_DESC_PATH=tt_metal/third_party/tt-cluster-descriptors/wormhole/t3k_cluster_desc/t3k_cluster_desc.yaml TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="T3kTopologyMapperCustomMapping/*"
 run_test env TT_METAL_MOCK_CLUSTER_DESC_PATH=tt_metal/third_party/tt-cluster-descriptors/wormhole/t3k_cluster_desc/t3k_cluster_desc.yaml TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="TopologyMapperTest.T3kMeshGraphTest*"
+run_test env TT_METAL_MOCK_CLUSTER_DESC_PATH=tt_metal/third_party/tt-cluster-descriptors/wormhole/t3k_cluster_desc/t3k_cluster_desc.yaml TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="LinkHealthTest.*"
+
+# ControlPlane's link-health surface with no factory descriptor -- the configuration every caller is in
+# today. Walks the whole surface, because a forwarder missing its null check segfaults by default.
+run_test env TT_METAL_MOCK_CLUSTER_DESC_PATH=tt_metal/third_party/tt-cluster-descriptors/wormhole/t3k_cluster_desc/t3k_cluster_desc.yaml TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="ControlPlaneFixture.NoFactoryDescriptor*:ControlPlaneFixture.RefreshWithout*"
+
+# The factory-descriptor path end to end: one host's mock cluster descriptor against the 36-host FSD that
+# describes it, so the host filter narrows the descriptor to this rank's slice and the mesh is solved on it.
+# The descriptor agrees with the mock, so a correct run reports no downed links at all.
+SC36_DIR=tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC36_32x4_revC_subtorus_aisleD
+run_test env TT_METAL_MOCK_CLUSTER_DESC_PATH=$SC36_DIR/SC36_32x4_revC_subtorus_aisleD_cluster_desc/SC36_32x4_revC_subtorus_aisleD_cluster_desc_bh-glx-120-d01u02_rank_0.yaml TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH=$SC36_DIR/SC36_32x4_revC_subtorus_aisleD_factory_system_descriptor.textproto TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FactoryDescriptorControlPlaneFixture.*"
 run_test env TT_METAL_MOCK_CLUSTER_DESC_PATH=tt_metal/third_party/tt-cluster-descriptors/wormhole/n300_cluster_desc/n300_cluster_desc.yaml TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="TopologyMapperTest.N300MeshGraphTest"
 run_test env TT_METAL_MOCK_CLUSTER_DESC_PATH=tt_metal/third_party/tt-cluster-descriptors/blackhole/p100_cluster_desc/p100_cluster_desc.yaml TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="TopologyMapperTest.P100MeshGraphTest"
 run_test tt-run --mock-cluster-rank-binding tt_metal/third_party/tt-cluster-descriptors/wormhole/6u_dual_host/6u_dual_host_cluster_desc_mapping.yaml --rank-binding tests/tt_metal/distributed/config/dual_galaxy_rank_bindings.yaml --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="TopologyMapperTest.DualGalaxyBigMeshTest"

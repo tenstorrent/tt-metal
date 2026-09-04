@@ -271,4 +271,49 @@ private:
     uint32_t local_rank_ = 0;
 };
 
+// How a candidate descriptor departs from a golden one.
+//
+// The link maps are shaped like the descriptor's own AsicTopology so a caller can walk a delta the
+// same way it walks a descriptor, but they are flat across hosts: a cable is not a property of one
+// host, and a cross-host cable would otherwise have to be filed under an arbitrary one of its two
+// ends. Each cable appears as both of its directed representations, because callers key on the
+// source end and need to see the link from either side.
+//
+// AsicIDs here are labels for reporting, never the join -- see diff_physical_system_descriptors.
+// They come from golden where the ASIC exists there, and from candidate otherwise.
+struct PhysicalSystemDelta {
+    // Addresses golden has and candidate does not, and vice versa.
+    std::vector<AsicID> missing_asics;
+    std::vector<AsicID> extra_asics;
+    // An ASIC at the same address in both, described differently (board type).
+    std::vector<AsicID> mismatched_asics;
+
+    AsicTopology missing_links;
+    AsicTopology extra_links;
+    // The same cable between the same two channels, but disagreeing on port type or locality.
+    // Reported here rather than as a missing/extra pair, so a re-typed cable is not read as a
+    // pulled one.
+    AsicTopology mismatched_links;
+
+    bool matches() const {
+        return missing_asics.empty() && extra_asics.empty() && mismatched_asics.empty() && missing_links.empty() &&
+               extra_links.empty() && mismatched_links.empty();
+    }
+};
+
+// Compare two descriptors by physical position, not by ASIC label.
+//
+// An ASIC is identified by its address (host_id, tray, loc) and a cable endpoint by that address
+// plus a channel, so two descriptors whose AsicID spaces are entirely disjoint still match when
+// they describe the same hardware. That is the point: a descriptor built from a factory system
+// descriptor labels its ASICs 1..N in file order, while a discovered one labels them with UMD chip
+// unique ids, and neither label means anything to the other.
+//
+// Cables are joined undirected, so the two directed halves of one cable are one comparison.
+// Only the ASIC graph is compared; the host graph is a lower-resolution view of the same cables.
+//
+// Fatal if either descriptor has two ASICs at one address, since then the join is ambiguous.
+PhysicalSystemDelta diff_physical_system_descriptors(
+    const PhysicalSystemDescriptor& golden, const PhysicalSystemDescriptor& candidate);
+
 }  // namespace tt::tt_metal
