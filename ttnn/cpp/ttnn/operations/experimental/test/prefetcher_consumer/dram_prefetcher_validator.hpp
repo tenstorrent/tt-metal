@@ -90,9 +90,9 @@ void test_dram_prefetcher_validator(
 // device-side experimental::PrefetcherPipe.
 //
 // Unlike the GlobalCircularBuffer path this is not a ttnn device operation: it builds and enqueues
-// its program directly. TensorPrefetcherPipes cannot live in an operation-attribute struct (the
-// attribute reflection used for hashing and profiler output cannot format the pipe handles it
-// holds), and as a test-only op there is nothing to gain from program caching.
+// its program directly. Every run wants a fresh program anyway -- the validator is checked once per
+// call against freshly delivered data -- so there is nothing for program caching to hit, and the
+// direct path keeps the test op's wiring visible next to what it validates.
 void test_tensor_prefetcher_pipe_validator(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     const ttnn::Tensor& source_tensor,
