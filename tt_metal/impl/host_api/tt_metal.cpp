@@ -51,6 +51,8 @@
 #include <tt-metalium/experimental/lightmetal/lightmetal_binary.hpp>
 #include <tt-metalium/experimental/lightmetal/lightmetal_api.hpp>
 #include <tt-metalium/experimental/offline_kernel_compile.hpp>
+#include <tt-metalium/experimental/prefetcher_pipe.hpp>
+#include "impl/dataflow_buffer/prefetcher_pipe.hpp"
 #include <fmt/format.h>
 #include "llrt.hpp"
 #include <tt-logger/tt-logger.hpp>
@@ -1988,6 +1990,16 @@ CBHandle CreateCircularBuffer(
     const GlobalCircularBuffer& global_circular_buffer) {
     CoreRangeSet core_ranges = detail::GetCoreRangeSet(core_spec);
     return program.impl().add_circular_buffer(core_ranges, config, global_circular_buffer);
+}
+
+CBHandle CreateCircularBuffer(
+    Program& program,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    const CircularBufferConfig& config,
+    const PrefetcherPipe& prefetcher_pipe,
+    uint8_t prefetcher_pipe_id) {
+    CoreRangeSet core_ranges = detail::GetCoreRangeSet(core_spec);
+    return program.impl().add_circular_buffer(core_ranges, config, prefetcher_pipe, prefetcher_pipe_id);
 }
 
 void UpdateDynamicCircularBufferAddress(

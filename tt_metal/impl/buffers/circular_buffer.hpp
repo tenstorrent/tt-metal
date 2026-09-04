@@ -10,6 +10,10 @@
 
 namespace tt::tt_metal {
 
+namespace experimental {
+class PrefetcherPipe;
+}  // namespace experimental
+
 class CircularBufferImpl {
 public:
     CircularBufferImpl(const CoreRangeSet& core_range_set, const CircularBufferConfig& config);
@@ -17,6 +21,13 @@ public:
         const CoreRangeSet& core_ranges,
         const CircularBufferConfig& config,
         const experimental::GlobalCircularBuffer& global_circular_buffer);
+    // Relay over a PrefetcherPipe ring: an ordinary local CB whose L1 is the pipe's durable ring
+    // rather than program-local space, so compute reads the delivered pages in place. The pipe owns
+    // the address, so this CB is globally allocated but has no shadow Buffer.
+    CircularBufferImpl(
+        const CoreRangeSet& core_ranges,
+        const CircularBufferConfig& config,
+        const experimental::PrefetcherPipe& prefetcher_pipe);
     CircularBufferImpl(const CBDescriptor& descriptor);
 
     CBHandle id() const { return id_; }
@@ -35,6 +46,9 @@ public:
 
     bool globally_allocated() const { return this->config_.globally_allocated_address().has_value(); }
     bool is_global_circular_buffer() const { return this->shadow_global_circular_buffer_ != nullptr; }
+    // True for a CB laid over a PrefetcherPipe ring: globally allocated, but at an address the pipe
+    // owns rather than one read back from a shadow Buffer.
+    bool is_prefetcher_pipe_relay() const { return this->shadow_prefetcher_pipe_ != nullptr; }
 
     uint32_t size() const { return this->config_.total_size(); }
 
@@ -76,6 +90,7 @@ private:
     uint32_t globally_allocated_address_{};
     DeviceAddr global_circular_buffer_config_address_{};
     const experimental::GlobalCircularBuffer* shadow_global_circular_buffer_ = nullptr;
+    const experimental::PrefetcherPipe* shadow_prefetcher_pipe_ = nullptr;
     // add a callback to invalidate circular buffer allocation
 };
 

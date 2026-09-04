@@ -15,6 +15,7 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/experimental/prefetcher_pipe.hpp>
 
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/compute_throttle_utils.hpp"
@@ -102,6 +103,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     const MeshTensor& in0_tensor,
     const MeshTensor& in1_tensor,
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
+    const std::optional<ttnn::operations::experimental::TensorPrefetcherPipes>& prefetcher_pipes,
     ttsl::optional_reference<const MeshTensor> bias_tensor,
     const MeshTensor& out_tensor,
     const tt::tt_metal::Tile& in0_tile,
@@ -123,7 +125,13 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     using tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids;
 
     const bool use_global_cb = global_cb.has_value();
-    const bool in1_is_locally_sharded = in1_is_sharded && !use_global_cb;
+    const bool use_pipes = prefetcher_pipes.has_value();
+    // Both would define ENABLE_GLOBAL_CB and ENABLE_PREFETCHER_PIPE on the in1 reader, which then
+    // waits on one transport and acks the other.
+    TT_FATAL(
+        !(use_global_cb && use_pipes),
+        "mcast_in0 takes its in1 weights from one transport: global_cb and prefetcher_pipes cannot both be set");
+    const bool in1_is_locally_sharded = in1_is_sharded && !use_global_cb && !use_pipes;
 
     // currently only support transpose of the full tile
     bool in0_transpose_tile = in0_tile.get_transpose_of_faces() && in0_tile.get_transpose_within_face();
@@ -170,7 +178,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
     uint32_t in0_aligned_tile_size =
         in0_is_sharded ? in0_single_tile_size : tt::align(in0_single_tile_size, dram_alignment);
-    uint32_t in1_aligned_tile_size = (in1_is_locally_sharded || use_global_cb)
+    uint32_t in1_aligned_tile_size = (in1_is_locally_sharded || use_global_cb || use_pipes)
                                          ? in1_single_tile_size
                                          : tt::align(in1_single_tile_size, dram_alignment);
     // Bias CB pages must be padded to the DRAM alignment so the reader's L1 write stride
@@ -266,6 +274,17 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
             global_cb->receiver_cores() == all_cores_with_work,
             "mcast_in0 global_cb receivers {} must exactly match output worker cores {}",
             global_cb->receiver_cores(),
+            all_cores_with_work);
+    }
+    if (use_pipes) {
+        // Compared as sets: receiver_cores() is a merge of the per-pipe ranges and need not
+        // decompose the same way num_cores_to_corerangeset_in_subcoregrids does.
+        const CoreRangeSet& pipe_receivers = prefetcher_pipes->receiver_cores();
+        TT_FATAL(
+            pipe_receivers.num_cores() == all_cores_with_work.num_cores() &&
+                pipe_receivers.intersection(all_cores_with_work).num_cores() == all_cores_with_work.num_cores(),
+            "mcast_in0 prefetcher_pipes receivers {} must exactly match output worker cores {}",
+            pipe_receivers,
             all_cores_with_work);
     }
     CoreRange in0_mcast_receiver_cores_bounding_box = all_cores_with_work.bounding_box();
@@ -550,6 +569,11 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     if (use_global_cb) {
         mm_kernel_in1_sender_writer_defines["ENABLE_GLOBAL_CB"] = "1";
     }
+    if (use_pipes) {
+        mm_kernel_in1_sender_writer_defines["ENABLE_PREFETCHER_PIPE"] = "1";
+        // The compute kernel needs it too: it re-aligns cb_in1 to the pipe's durable cursor.
+        mm_kernel_defines["ENABLE_PREFETCHER_PIPE"] = "1";
+    }
 
     if (bias_is_sharded) {
         mm_kernel_in1_sender_writer_defines["BIAS_SHARDED"] = "1";
@@ -791,7 +815,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     // bool fp32_dest_acc_en = false;
     // Gelu currently has better accuracy when run in approx mode
     // bool math_approx_mode = false;
-    tt_metal::CreateKernel(
+    auto mm_kernel_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp",
         all_cores_with_work,
@@ -822,6 +846,9 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     uint32_t src1_cb_index = tt::CBIndex::c_1;
     tt::tt_metal::CBHandle cb_src1 = 0;
     uint32_t in1_remote_cb_size = 0;
+    // PrefetcherPipe delivery only: one kernel serves the receivers of every pipe, so each core
+    // takes the id of the one pipe it belongs to as a runtime argument.
+    std::unordered_map<CoreCoord, uint8_t> pipe_id_by_core;
     if (use_global_cb) {
         const uint32_t remote_cb_index = tt::CBIndex::c_31;
         const uint32_t in1_block_size_bytes = in1_block_tiles * in1_single_tile_size;
@@ -847,6 +874,53 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
             .set_tile_dims(in1_tile);
         cb_src1 =
             tt_metal::experimental::CreateCircularBuffer(program, all_cores_with_work, remote_cb_config, *global_cb);
+    } else if (use_pipes) {
+        // One local CB per pipe, laid over that pipe's ring and registered as its relay: the pages
+        // the prefetcher delivers are what compute reads, with no copy. One page is one in1 K-block,
+        // the same granularity the pipes are Attached and driven at, and the compute kernel indexes
+        // the tiles inside a page explicitly.
+        // Op validation states this rule with the program-config derivation; repeated here because
+        // this is the last point before the CB and the reader are built against it, and callers
+        // that bypass op validation reach this factory directly.
+        const uint32_t in1_block_size_bytes = in1_block_tiles * in1_single_tile_size;
+        TT_FATAL(
+            prefetcher_pipes->ring_size() % in1_block_size_bytes == 0 &&
+                prefetcher_pipes->ring_size() >= 2 * in1_block_size_bytes,
+            "mcast_in0 prefetcher_pipes ring size {} B must be a whole number of in1 K-blocks of {} B "
+            "({} tiles of {} B), and hold at least two of them for the reader's lookahead",
+            prefetcher_pipes->ring_size(),
+            in1_block_size_bytes,
+            in1_block_tiles,
+            in1_single_tile_size);
+        const std::vector<uint8_t> pipe_ids = prefetcher_pipes->attach(program, in1_block_size_bytes);
+        TT_FATAL(
+            pipe_ids.size() == prefetcher_pipes->num_pipes(),
+            "attach() returned {} pipe ids for {} pipes; the loop below pairs them by position",
+            pipe_ids.size(),
+            prefetcher_pipes->num_pipes());
+        uint32_t pipe_index = 0;
+        for (const auto& bank : prefetcher_pipes->banks) {
+            for (const auto& pipe : bank.pipes) {
+                const CoreRangeSet& pipe_receivers = tt::tt_metal::experimental::prefetcher_pipe_receiver_cores(*pipe);
+                tt_metal::CircularBufferConfig pipe_cb_config =
+                    tt_metal::CircularBufferConfig(prefetcher_pipes->ring_size(), {{src1_cb_index, in1_data_format}})
+                        .set_page_size(src1_cb_index, in1_block_size_bytes)
+                        .set_tile_dims(src1_cb_index, in1_tile);
+                const tt::tt_metal::CBHandle pipe_cb = tt_metal::experimental::CreateCircularBuffer(
+                    program, pipe_receivers, pipe_cb_config, *pipe, pipe_ids[pipe_index]);
+                if (pipe_index == 0) {
+                    // shared_variables.cbs[0] is the in1 CB handle. On this path there are several
+                    // of them and the override reads none: it branches on prefetcher_pipes and
+                    // skips the address update entirely, because the pipes own those addresses.
+                    // Store the first so the slot is not a null handle.
+                    cb_src1 = pipe_cb;
+                }
+                for (const CoreCoord& receiver : corerange_to_cores(pipe_receivers)) {
+                    pipe_id_by_core[receiver] = pipe_ids[pipe_index];
+                }
+                ++pipe_index;
+            }
+        }
     } else {
         tt_metal::CircularBufferConfig src1_cb_config =
             tt_metal::CircularBufferConfig(in1_CB_size, {{src1_cb_index, in1_data_format}})
@@ -857,13 +931,17 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
         }
         cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
     }
+    const uint32_t in1_cb_bytes =
+        use_global_cb ? in1_remote_cb_size : (use_pipes ? prefetcher_pipes->ring_size() : in1_CB_size);
+    // PrefetcherPipe delivery pages the in1 CB by K-block; every other path pages it by tile.
+    const uint32_t in1_cb_page_bytes = use_pipes ? in1_block_tiles * in1_single_tile_size : in1_single_tile_size;
     log_debug(
         LogOp,
         "CB {} :: PS = {}, NP = {}, TOTAL = {}",
         src1_cb_index,
-        in1_single_tile_size,
-        use_global_cb ? in1_remote_cb_size / in1_single_tile_size : in1_CB_size / in1_single_tile_size,
-        use_global_cb ? in1_remote_cb_size : in1_CB_size);
+        in1_cb_page_bytes,
+        in1_cb_bytes / in1_cb_page_bytes,
+        in1_cb_bytes);
 
     uint32_t src2_cb_index = tt::CBIndex::c_2;
     tt::tt_metal::CBHandle cb_src2 = 0;
@@ -1172,6 +1250,21 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
 
             if (fuse_op && fused_op_signaler->is_all_gather()) {
                 fused_op_signaler->push_matmul_fused_op_rt_args(mm_in1_sender_writer_args, true);
+            }
+
+            if (use_pipes) {
+                const auto pipe_id_it = pipe_id_by_core.find(core);
+                TT_FATAL(
+                    pipe_id_it != pipe_id_by_core.end(),
+                    "Output worker core {} belongs to no PrefetcherPipe; the receiver-set check above should have "
+                    "caught this",
+                    core.str());
+                // Appended last: the reader parses its runtime args in order and which of the
+                // optional ones above are present varies with the config.
+                mm_in1_sender_writer_args.push_back(pipe_id_it->second);
+                // The compute kernel re-aligns cb_in1 to the same pipe, and this config sets no
+                // other compute runtime argument.
+                tt_metal::SetRuntimeArgs(program, mm_kernel_id, core, {pipe_id_it->second});
             }
 
             tt_metal::SetRuntimeArgs(
@@ -2997,6 +3090,7 @@ static void override_mcast_in0_program_parameters(
     tt_metal::Program& program,
     const MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t& override_variables,
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
+    const std::optional<ttnn::operations::experimental::TensorPrefetcherPipes>& prefetcher_pipes,
     const ttnn::prim::MatmulInputs& tensor_args,
     const std::vector<ttnn::Tensor>& output_tensors) {
     const auto& input_tensors = tensor_args.input_tensors;
@@ -3037,11 +3131,11 @@ static void override_mcast_in0_program_parameters(
     }
 
     if (src1_sharded) {
-        // cbs[0] is cb_src1. For the receiver-contiguous GCB path it is a GlobalCircularBuffer whose
-        // address is owned by the GCB (not tensor-backed), so the tensor overload of
-        // UpdateDynamicCircularBufferAddress would TT_FATAL on a program-cache hit. Skip it there,
-        // mirroring the gather_in0 override.
-        if (!global_cb.has_value()) {
+        // cbs[0] is cb_src1. When in1 arrives over a prefetcher transport its address is owned by
+        // that transport (a GlobalCircularBuffer's ring, or a PrefetcherPipe's) rather than by the
+        // weight tensor, so the tensor overload of UpdateDynamicCircularBufferAddress would
+        // TT_FATAL on a program-cache hit. Skip it there, mirroring the gather_in0 override.
+        if (!global_cb.has_value() && !prefetcher_pipes.has_value()) {
             UpdateDynamicCircularBufferAddress(program, override_variables.cbs.at(0), src_b_tensor);
         }
     }
@@ -3119,13 +3213,14 @@ inline void override_gather_in0_program_parameters(
 void override_program_parameters(
     const MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t& override_variables,
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
+    const std::optional<ttnn::operations::experimental::TensorPrefetcherPipes>& prefetcher_pipes,
     Program& program,
     const ttnn::prim::MatmulInputs& tensor_args,
     const std::vector<ttnn::Tensor>& tensor_return_value) {
     switch (override_variables.type) {
         case ttnn::prim::Matmul1DType::MCAST_IN0:
             override_mcast_in0_program_parameters(
-                program, override_variables, global_cb, tensor_args, tensor_return_value);
+                program, override_variables, global_cb, prefetcher_pipes, tensor_args, tensor_return_value);
             break;
         case ttnn::prim::Matmul1DType::GATHER_IN0: {
             override_gather_in0_program_parameters(
@@ -5180,7 +5275,10 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
     bool stream_in1,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     uint32_t start_cb_index,
-    std::optional<CoreRangeSet> restricted_cores) {
+    std::optional<CoreRangeSet> restricted_cores,
+    // mcast_in0 only. No default: a caller that forgets it would silently fall back to reading in1
+    // from the weight tensor while the prefetcher fills a ring nobody drains.
+    const std::optional<ttnn::operations::experimental::TensorPrefetcherPipes>& prefetcher_pipes) {
     const auto& b = b_tensors[0];
     const auto& output = output_tensors[0].mesh_tensor();
 
@@ -5415,6 +5513,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
             in0_tensor,
             in1_tensor,
             global_cb,
+            prefetcher_pipes,
             bias_mesh_tensor,
             output,
             in0_tile,
@@ -5486,7 +5585,12 @@ void MatmulMultiCoreReuseMcast1DProgramFactory::override_runtime_arguments(
     const ttnn::prim::MatmulInputs& tensor_args,
     std::vector<ttnn::Tensor>& tensor_return_value) {
     reuse_mcast_1d_optimized_helpers::override_program_parameters(
-        shared_variables, operation_attributes.global_cb, program, tensor_args, tensor_return_value);
+        shared_variables,
+        operation_attributes.global_cb,
+        operation_attributes.prefetcher_pipes,
+        program,
+        tensor_args,
+        tensor_return_value);
 }
 
 ProgramDescriptor MatmulMultiCoreReuseMcast1DProgramFactory::create_descriptor(
@@ -5760,7 +5864,10 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
         config.stream_in1,
         sub_device_id,
         start_cb_index,
-        std::move(restricted_cores));
+        std::move(restricted_cores),
+        // The CCL fused-op callers of this helper have no PrefetcherPipe transport; their own
+        // create paths reject one rather than building a matmul that ignores it.
+        /*prefetcher_pipes=*/std::nullopt);
 }
 
 MatmulMeshWorkloadMultiCoreReuseMcast1DProgramFactory::cached_mesh_workload_t
@@ -5825,7 +5932,8 @@ MatmulMeshWorkloadMultiCoreReuseMcast1DProgramFactory::create_mesh_workload(
                 pc.stream_in1,
                 attributes.sub_device_id,
                 tt::CBIndex::c_0,
-                std::nullopt);
+                std::nullopt,
+                attributes.prefetcher_pipes);
             shared_variables[mesh_coord_range] = std::move(shared_vars);
             workload.add_program(mesh_coord_range, std::move(program));
         }

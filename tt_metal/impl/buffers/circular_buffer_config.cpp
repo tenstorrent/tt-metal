@@ -211,6 +211,18 @@ CircularBufferConfig& CircularBufferConfig::set_globally_allocated_address(const
     return set_globally_allocated_address(*tensor.mesh_buffer().get_reference_buffer());
 }
 
+CircularBufferConfig& CircularBufferConfig::set_globally_allocated_address(uint32_t address, uint32_t max_size) {
+    TT_FATAL(address != 0, "A globally allocated circular buffer address must be a real L1 address, not 0");
+    TT_FATAL(max_size > 0, "A globally allocated circular buffer must reserve a non-zero number of bytes");
+    this->globally_allocated_address_ = address;
+    this->dynamic_cb_ = true;
+    this->max_size_ = max_size;
+    this->buffer_size_ = max_size;
+    // Re-run the size check now that max_size_ is known; total_size_ is unchanged.
+    this->set_total_size(this->total_size_);
+    return *this;
+}
+
 CircularBufferConfig& CircularBufferConfig::set_globally_allocated_address_and_total_size(
     const MeshTensor& tensor, uint32_t total_size) {
     return set_globally_allocated_address_and_total_size(*tensor.mesh_buffer().get_reference_buffer(), total_size);

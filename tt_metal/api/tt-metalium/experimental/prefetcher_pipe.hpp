@@ -23,9 +23,11 @@
 #include <cstdint>
 #include <memory>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/global_circular_buffer.hpp>
 
@@ -100,6 +102,25 @@ uint32_t prefetcher_pipe_config_address(const PrefetcherPipe& pipe);
 // impl/dataflow_buffer/prefetcher_pipe.hpp.
 uint8_t AttachPrefetcherPipe(
     Program& program, PrefetcherPipe& prefetcher_pipe, const CoreRangeSet& cores, uint32_t entry_size);
+
+// Create a local circular buffer over `prefetcher_pipe`'s ring and register it as that pipe's
+// relay, so the pages the sender delivers are read in place by compute through the ordinary CB
+// API. `prefetcher_pipe_id` must be the id AttachPrefetcherPipe returned for these cores.
+//
+// The bridge a compute kernel needs that a DataflowBuffer relay cannot give it: a real
+// circular buffer index, which is what a legacy program factory's kernels name.
+//
+// `config` declares exactly one local buffer index and no remote index, its total size is the
+// pipe's ring size, and its page size is the Attached entry size, so one delivered entry is one CB
+// page. `core_spec` must be a subset of the pipe's receiver cores.
+// The CB is globally allocated at the ring address, so it neither consumes program-local L1 nor
+// accepts UpdateDynamicCircularBufferAddress.
+CBHandle CreateCircularBuffer(
+    Program& program,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    const CircularBufferConfig& config,
+    const PrefetcherPipe& prefetcher_pipe,
+    uint8_t prefetcher_pipe_id);
 
 }  // namespace experimental
 }  // namespace tt::tt_metal

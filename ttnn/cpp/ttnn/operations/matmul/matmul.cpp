@@ -83,6 +83,17 @@ Tensor handle_zero_volume_matmul(
     return output_tensor;
 }
 
+// The in1 weight transport is exclusive: `global_cb` streams K-blocks through a DRAM-sender
+// GlobalCircularBuffer, `prefetcher_pipes` through DRAM-sender PrefetcherPipes. Supplying both
+// would leave the reader with two sources for the same operand.
+void validate_in1_transport(
+    const std::optional<const GlobalCircularBuffer>& global_cb,
+    const std::optional<TensorPrefetcherPipes>& prefetcher_pipes) {
+    TT_FATAL(
+        !(global_cb.has_value() && prefetcher_pipes.has_value()),
+        "global_cb and prefetcher_pipes are alternative in1 transports; supply at most one, not both");
+}
+
 }  // namespace detail
 
 std::optional<UnaryWithParam> get_fused_activation(const std::optional<const Activation>& activation) {
@@ -376,7 +387,9 @@ Tensor matmul(
     const std::optional<const tt::tt_metal::Tile>& output_tile,
     std::optional<Tensor> optional_output_tensor,
     const std::optional<const GlobalCircularBuffer>& global_cb,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    const std::optional<TensorPrefetcherPipes>& prefetcher_pipes) {
+    detail::validate_in1_transport(global_cb, prefetcher_pipes);
     std::optional<CoreCoord> user_core_coord;
     if (core_grid.has_value()) {
         user_core_coord = CoreCoord(core_grid->x, core_grid->y);
@@ -401,7 +414,8 @@ Tensor matmul(
         transpose_b,
         output_tile,
         global_cb,
-        sub_device_id};
+        sub_device_id,
+        prefetcher_pipes};
 
     return bound_matmul(
         input_tensor_a,
@@ -426,7 +440,9 @@ Tensor linear(
     const std::optional<const tt::tt_metal::Tile>& output_tile,
     std::optional<ttnn::Tensor> optional_output_tensor,
     const std::optional<const GlobalCircularBuffer>& global_cb,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    const std::optional<TensorPrefetcherPipes>& prefetcher_pipes) {
+    detail::validate_in1_transport(global_cb, prefetcher_pipes);
     std::optional<CoreCoord> user_core_coord;
     if (core_grid.has_value()) {
         user_core_coord = CoreCoord(core_grid->x, core_grid->y);
@@ -447,7 +463,8 @@ Tensor linear(
         transpose_b,
         output_tile,
         global_cb,
-        sub_device_id};
+        sub_device_id,
+        prefetcher_pipes};
     return bound_matmul(input_tensor_a, input_tensor_b, bias, matmul_params, optional_output_tensor);
 }
 

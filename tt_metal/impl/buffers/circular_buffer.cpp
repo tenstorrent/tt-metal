@@ -10,6 +10,7 @@
 
 #include <tt_stl/assert.hpp>
 #include "impl/buffers/circular_buffer.hpp"
+#include "impl/dataflow_buffer/prefetcher_pipe.hpp"
 #include "circular_buffer_config.hpp"
 #include "circular_buffer_constants.h"
 #include "tile.hpp"
@@ -51,6 +52,29 @@ CircularBufferImpl::CircularBufferImpl(
         !this->config_.remote_buffer_indices().empty(),
         "Remote buffer indices should be specified when using a GlobalCircularBuffer");
     this->set_global_circular_buffer(global_circular_buffer);
+}
+
+CircularBufferImpl::CircularBufferImpl(
+    const CoreRangeSet& core_ranges,
+    const CircularBufferConfig& config,
+    const experimental::PrefetcherPipe& prefetcher_pipe) :
+    id_(reinterpret_cast<uintptr_t>(this)),
+    core_ranges_(core_ranges),
+    config_(config),
+    locally_allocated_address_(std::nullopt),
+    shadow_prefetcher_pipe_(&prefetcher_pipe) {
+    this->validate_set_config_attributes();
+    TT_FATAL(
+        !config.globally_allocated_address().has_value(),
+        "Cannot create a PrefetcherPipe relay CircularBuffer from a config already linked to a buffer");
+    TT_FATAL(
+        this->config_.remote_buffer_indices().empty(),
+        "A PrefetcherPipe relay CircularBuffer is a local CB over the pipe ring and must not declare remote buffer "
+        "indices");
+    // The ring is arena-owned and fixed for the pipe's lifetime, so the address is stamped once
+    // here rather than re-read through a shadow Buffer on every program-cache hit.
+    this->config_.set_globally_allocated_address(prefetcher_pipe.buffer_address(), prefetcher_pipe.ring_size());
+    this->globally_allocated_address_ = prefetcher_pipe.buffer_address();
 }
 
 CircularBufferImpl::CircularBufferImpl(const CBDescriptor& descriptor) :
@@ -173,6 +197,11 @@ uint32_t CircularBufferImpl::address() const {
 }
 
 void CircularBufferImpl::assign_global_address() {
+    // A PrefetcherPipe relay is globally allocated without a shadow Buffer: its address is the
+    // pipe's ring base, stamped at construction and never re-derived.
+    if (is_prefetcher_pipe_relay()) {
+        return;
+    }
     globally_allocated_address_ = config_.shadow_global_buffer->address() + config_.address_offset();
 }
 

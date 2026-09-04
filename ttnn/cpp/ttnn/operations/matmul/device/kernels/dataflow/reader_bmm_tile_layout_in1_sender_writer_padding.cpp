@@ -11,6 +11,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
+#include "api/dataflow/prefetcher_pipe.h"
 #include "api/remote_circular_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "api/dataflow/endpoints.h"
@@ -154,6 +155,12 @@ void kernel_main() {
         op_signaler = OpSignaler(rt_args_idx);
     }
 
+#ifdef ENABLE_PREFETCHER_PIPE
+    // Appended after every optional runtime arg above, because this reader parses them in order and
+    // which of them are present varies with the config.
+    const uint32_t prefetcher_pipe_id = get_arg_val<uint32_t>(rt_args_idx++);
+#endif
+
     constexpr auto in1_args = TensorAccessorArgs<33>();
     constexpr auto sparsity_args = TensorAccessorArgs<in1_args.next_compile_time_args_offset()>();
     constexpr auto out_args = TensorAccessorArgs<sparsity_args.next_compile_time_args_offset()>();
@@ -197,7 +204,7 @@ void kernel_main() {
     constexpr uint32_t in1_aligned_tile_size_bytes =
         (in1_single_tile_size_bytes + (DRAM_ALIGNMENT - 1)) & ~(DRAM_ALIGNMENT - 1);
 #if !defined(IN1_SHARDED) && !defined(IN1_DRAM_WIDTH_SHARDED) && !defined(IN1_DRAM_HEIGHT_SHARDED) && \
-    !defined(ENABLE_GLOBAL_CB)
+    !defined(ENABLE_GLOBAL_CB) && !defined(ENABLE_PREFETCHER_PIPE)
     constexpr uint32_t in1_block_size_bytes = in1_block_num_tiles * in1_aligned_tile_size_bytes;
 #else
     constexpr uint32_t in1_block_size_bytes = in1_block_num_tiles * in1_single_tile_size_bytes;
@@ -219,15 +226,25 @@ void kernel_main() {
 #ifdef IN1_SHARDED
     dfb_in1.reserve_back(in1_block_num_tiles * num_blocks_inner_dim);
     dfb_in1.push_back(in1_block_num_tiles * num_blocks_inner_dim);
-#elif !defined(ENABLE_GLOBAL_CB)
+#elif !defined(ENABLE_GLOBAL_CB) && !defined(ENABLE_PREFETCHER_PIPE)
     uint32_t l1_write_addr_in1;
 
     [[maybe_unused]] const auto s1 = TensorAccessor(in1_args, in1_tensor_addr);
-#endif  // IN1_SHARDED / ENABLE_GLOBAL_CB
+#endif  // IN1_SHARDED / ENABLE_GLOBAL_CB / ENABLE_PREFETCHER_PIPE
 
 #ifdef ENABLE_GLOBAL_CB
     constexpr uint32_t remote_cb_id = tt::CBIndex::c_31;
     const uint32_t in1_fifo_tiles = get_local_cb_interface(dfb_id_in1).fifo_num_pages;
+#endif
+
+#ifdef ENABLE_PREFETCHER_PIPE
+    // cb_in1 is a local CB laid over this pipe's ring, so the prefetcher's pages arrive already in
+    // place: this kernel only converts a delivered entry into CB credit and, once compute is done
+    // with it, that entry's credit back into an ack. bind_relay() aligns cb_in1 to the pipe's
+    // durable cursor (firmware reset it at launch) and is what makes pop_front wait for compute.
+    // The pipe object must outlive the block loop: its destructor commits the cursor.
+    experimental::PrefetcherPipe pipe(prefetcher_pipe_id);
+    pipe.bind_relay();
 #endif
 
     //  WRITER
@@ -345,6 +362,13 @@ void kernel_main() {
                         // its remote-CB credit to the prefetcher.
                         dfb_in1.reserve_back(in1_block_num_tiles);
                         experimental::remote_cb_wait_front(remote_cb_id, block == 0 ? 1u : 2u);
+#elif defined(ENABLE_PREFETCHER_PIPE)
+                        // Same one-block lookahead as ENABLE_GLOBAL_CB, over a PrefetcherPipe:
+                        // publish the current block to compute, then hand the previous block's
+                        // entry back to the sender once the unpacker has drained it. One CB page is
+                        // one K-block here, which is also one pipe entry.
+                        dfb_in1.reserve_back(1);
+                        pipe.wait_front(block == 0 ? 1u : 2u);
 #elif defined(IN1_DRAM_WIDTH_SHARDED)
                         // Operand 1 - DRAM width sharded
                         dfb_in1.reserve_back(in1_block_num_tiles);
@@ -507,15 +531,26 @@ void kernel_main() {
                             in1_mcast_num_cores);
 #endif  // SKIP_MCAST
 
-#ifndef IN1_SHARDED
+#if defined(ENABLE_PREFETCHER_PIPE)
+                        dfb_in1.push_back(1);
+#elif !defined(IN1_SHARDED)
                         dfb_in1.push_back(in1_block_num_tiles);
-#endif  // IN1_SHARDED
+#endif  // ENABLE_PREFETCHER_PIPE / IN1_SHARDED
 #ifdef ENABLE_GLOBAL_CB
                         if (block >= 1) {
                             while (!dfb_in1.pages_reservable_at_back(in1_fifo_tiles - in1_block_num_tiles)) {
                                 invalidate_l1_cache();
                             }
                             experimental::remote_cb_pop_front(remote_cb_id, 1);
+                        }
+#endif
+#ifdef ENABLE_PREFETCHER_PIPE
+                        // pop_front waits for the unpacker to have popped the block's tiles out of
+                        // cb_in1 before acking, so no explicit free-space spin is needed here. The
+                        // block was published once, above; publishing it again through the relay
+                        // view would double the credit compute sees.
+                        if (block >= 1) {
+                            pipe.pop_front(1, noc);
                         }
 #endif
                     }
@@ -525,6 +560,11 @@ void kernel_main() {
                             invalidate_l1_cache();
                         }
                         experimental::remote_cb_pop_front(remote_cb_id, 1);
+                    }
+#endif
+#ifdef ENABLE_PREFETCHER_PIPE
+                    if (num_blocks_inner_dim > 0) {
+                        pipe.pop_front(1, noc);
                     }
 #endif
 #ifdef FUSE_BIAS

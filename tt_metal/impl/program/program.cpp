@@ -1331,6 +1331,56 @@ CBHandle detail::ProgramImpl::add_circular_buffer(
     return add_circular_buffer_(circular_buffer);
 }
 
+CBHandle detail::ProgramImpl::add_circular_buffer(
+    const CoreRangeSet& core_range_set,
+    const CircularBufferConfig& config,
+    const experimental::PrefetcherPipe& prefetcher_pipe,
+    uint8_t prefetcher_pipe_id) {
+    TT_FATAL(this->compiled_.empty(), "Cannot add circular buffer to an already compiled program {}", this->id);
+    TT_FATAL(
+        this->dataflow_buffers_.empty(), "Cannot add circular buffer to a program that already has dataflow buffers");
+    TT_FATAL(
+        config.local_buffer_indices().size() == 1,
+        "A PrefetcherPipe relay circular buffer carries exactly one local buffer index (the one compute reads), "
+        "but {} were configured",
+        config.local_buffer_indices().size());
+    TT_FATAL(
+        config.total_size() == prefetcher_pipe.ring_size(),
+        "A PrefetcherPipe relay circular buffer spans the whole pipe ring: total size {} B must equal the pipe's "
+        "ring size {} B",
+        config.total_size(),
+        prefetcher_pipe.ring_size());
+    // The CB's L1 address and extent come from `prefetcher_pipe`, but the device-side relay is
+    // keyed by `prefetcher_pipe_id`. A mismatched pair would leave the CB on one pipe's ring while
+    // kernels follow another pipe's cursor, silently reading the wrong pages.
+    TT_FATAL(
+        &get_prefetcher_pipe_attachment(prefetcher_pipe_id) == &prefetcher_pipe,
+        "PrefetcherPipe slot {} is attached to a different pipe than the one this relay circular "
+        "buffer is laid over",
+        prefetcher_pipe_id);
+    const uint8_t relay_device_slot = static_cast<uint8_t>(*config.local_buffer_indices().begin());
+    TT_FATAL(
+        config.page_sizes().at(relay_device_slot).has_value(),
+        "PrefetcherPipe relay circular buffer index {} has no page size set",
+        relay_device_slot);
+    const uint32_t relay_page_size = config.page_sizes().at(relay_device_slot).value();
+    const CoreRangeSet merged_cores = core_range_set.merge_ranges();
+    TT_FATAL(
+        prefetcher_pipe.receiver_cores().merge(merged_cores).num_cores() ==
+            prefetcher_pipe.receiver_cores().num_cores(),
+        "PrefetcherPipe relay circular buffer cores {} must be a subset of the pipe's receiver cores {}",
+        merged_cores,
+        prefetcher_pipe.receiver_cores());
+
+    std::shared_ptr<CircularBufferImpl> circular_buffer =
+        std::make_shared<CircularBufferImpl>(merged_cores, config, prefetcher_pipe);
+    CBHandle handle = add_circular_buffer_(circular_buffer);
+    // After the CB is in: a failure here leaves the program unusable either way, and the relay
+    // registration is what makes the pipe's pop_front wait on compute.
+    set_prefetcher_pipe_relay_slot(merged_cores, prefetcher_pipe_id, relay_device_slot, relay_page_size);
+    return handle;
+}
+
 uint8_t detail::ProgramImpl::add_cross_node_dfb(experimental::CrossNodeDFB gdfb) {
     TT_FATAL(this->compiled_.empty(), "Cannot add CrossNodeDFB to an already compiled program {}", this->id);
     // Check mutual exclusion: GlobalCircularBuffer and CrossNodeDFB cannot coexist in the same program.
@@ -1501,8 +1551,16 @@ void detail::ProgramImpl::register_prefetcher_pipe_relay_dfb(
     prefetcher_pipe_relay_host_ids_[prefetcher_pipe_id] = relay_dfb_host_id;
 
     relay_dfb->set_borrowed_memory_base_addr(pipe.buffer_address());
-    const uint8_t relay_device_slot = static_cast<uint8_t>(relay_dfb->device_slot);
+    set_prefetcher_pipe_relay_slot(
+        receiver_cores, prefetcher_pipe_id, static_cast<uint8_t>(relay_dfb->device_slot), relay_dfb->config.entry_size);
+}
 
+void detail::ProgramImpl::set_prefetcher_pipe_relay_slot(
+    const CoreRangeSet& receiver_cores,
+    uint8_t prefetcher_pipe_id,
+    uint8_t relay_device_slot,
+    uint32_t relay_entry_size) {
+    TT_FATAL(relay_entry_size > 0, "PrefetcherPipe relay entry size must be > 0");
     for (const CoreCoord& core : corerange_to_cores(receiver_cores)) {
         auto participant_it = per_core_prefetcher_pipes_.find(core);
         TT_FATAL(
@@ -1519,9 +1577,9 @@ void detail::ProgramImpl::register_prefetcher_pipe_relay_dfb(
             prefetcher_pipe_id,
             core.str());
         TT_FATAL(
-            participant->entry_size == relay_dfb->config.entry_size,
+            participant->entry_size == relay_entry_size,
             "PrefetcherPipe relay entry size {} must match Attach dense entry_size {} on core {}",
-            relay_dfb->config.entry_size,
+            relay_entry_size,
             participant->entry_size,
             core.str());
         TT_FATAL(
