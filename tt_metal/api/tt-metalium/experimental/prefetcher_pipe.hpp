@@ -92,10 +92,11 @@ public:
     // programmable DRAM core (CreatePrefetcherPipesForTensorPrefetcher).
     SenderCoreType sender_core_type() const;
 
-    // The single entry size a DRAM-sender pipe is stamped with. A DRAM sender never Attaches, so
-    // it can neither observe nor answer a receiver-side resize; every Attach must use this size.
-    // 0 for a worker-sender pipe, which resizes normally.
-    uint32_t fixed_entry_size() const;
+    // The entry size a DRAM-sender pipe is created at: the ring is this many bytes times the
+    // requested depth, and it is what a consumer attaching at this size skips the resize handshake
+    // for on the first program. Later Attaches and later requests may use any size that divides the
+    // ring. 0 for a worker-sender pipe, which is sized in bytes and resizes normally.
+    uint32_t initial_entry_size() const;
 
     // Internal: adopt an already-built implementation. The DRAM-sender factory uses it; a
     // worker-sender pipe comes from the constructor above.
@@ -177,11 +178,11 @@ struct TensorPrefetcherBankPipes {
 // default, matching the receiver-contiguous layout — a bank with more than one receiver gets two
 // senders, each pushing roughly half of them.
 //
-// `entry_size` is the per-receiver push granularity and must equal the streamed tensor's
-// per-receiver page size: a DRAM sender is never dispatched to and so cannot answer a
-// receiver-side resize. Every pipe is stamped with it, and both AttachPrefetcherPipe and
-// QueueTensorPrefetcherRequest reject any other size (with the offending values in the message).
-// Each receiver's ring holds `num_entries` of them.
+// `entry_size` is the per-receiver push granularity a pipe starts life at, and `num_entries` is how
+// many of them a receiver's ring holds; together they fix the ring size, which never changes. A
+// later Attach and a later queued tensor may use a different entry size as long as it divides the
+// ring: the DRAM sender snaps its write cursor onto the new grid and publishes the skipped bytes as
+// pad credits, which is the same resize handshake a worker sender runs.
 //
 // The rings come from the persistent L1 arena, which refuses a core a live Program has sealed with
 // its own local circular buffers. Create the pipes before running any op on the receiver cores --

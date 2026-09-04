@@ -41,11 +41,26 @@ namespace ttnn::operations::experimental {
 // or the prefetcher may still deliver into them -- an attached Program holds a non-owning pointer
 // to each pipe, and dropping the last copy frees the rings and config pages.
 struct TensorPrefetcherPipes {
+    // Declared rather than aggregate-implicit so this type is not an aggregate. tt_stl's json
+    // serializer has two unconstrained-against-each-other specializations -- one keyed on
+    // attribute_names, one on being an aggregate -- and a type satisfying both is an ambiguous
+    // partial specialization. Staying a non-aggregate leaves only the attribute_names one, which
+    // is also the only one that can work here: the aggregate walk would descend into `banks` and
+    // the forward-declared PrefetcherPipe.
+    TensorPrefetcherPipes() = default;
+    TensorPrefetcherPipes(
+        std::vector<tt::tt_metal::experimental::TensorPrefetcherBankPipes> banks,
+        uint32_t entry_size,
+        uint32_t num_entries) :
+        banks(std::move(banks)), entry_size(entry_size), num_entries(num_entries) {}
+
     std::vector<tt::tt_metal::experimental::TensorPrefetcherBankPipes> banks;
-    // Per-receiver push granularity, shared by every pipe. Every Attach and every queued tensor
-    // must match it: a DRAM sender is never dispatched to and so cannot answer a resize.
+    // Per-receiver push granularity the pipes were created with, shared by every pipe. It is the
+    // size the receivers start at, not a constraint: an Attach and a queued tensor may use any
+    // entry size the ring is a whole multiple of, and the DRAM sender snaps its cursor onto that
+    // grid. With `num_entries` it fixes `ring_size()`, which never changes.
     uint32_t entry_size = 0;
-    // Entries a receiver's ring holds.
+    // Entries of `entry_size` a receiver's ring holds.
     uint32_t num_entries = 0;
 
     // Bytes of ring per receiver.
@@ -57,11 +72,27 @@ struct TensorPrefetcherPipes {
     CoreRangeSet receiver_cores() const;
     // Sender core (DRAM-logical, x == bank id) -> its receivers. One entry per pipe, bank-major.
     std::vector<std::pair<tt::tt_metal::CoreCoord, CoreRangeSet>> sender_receiver_core_mapping() const;
-    // Attach every pipe to `program` on its own receiver cores, at the shared entry size. Returns
-    // the program-local pipe id per pipe, bank-major; a receiver core's kernel takes the id of
-    // the one pipe it belongs to (as a runtime argument, since one kernel serves receivers of
+    // Attach every pipe to `program` on its own receiver cores, at `entry_size` bytes per entry --
+    // the size that program's kernels consume, which `ring_size()` must be a whole multiple of.
+    // Returns the program-local pipe id per pipe, bank-major; a receiver core's kernel takes the id
+    // of the one pipe it belongs to (as a runtime argument, since one kernel serves receivers of
     // different pipes).
+    std::vector<uint8_t> attach(tt::tt_metal::Program& program, uint32_t entry_size) const;
+    // Attach at the creation-time entry size, for a consumer that reads entries as the pipes were
+    // built to deliver them.
     std::vector<uint8_t> attach(tt::tt_metal::Program& program) const;
+    // Each pipe's receiver-side config page address, bank-major. Identity rather than geometry:
+    // two live pipes over the same receivers never share one.
+    std::vector<uint32_t> config_addresses() const;
+
+    // Reflection for op attribute hashing. The core mapping plus the config addresses identify
+    // *these* pipes, not merely pipes of this shape -- a consuming op bakes each ring address into
+    // its program, so a same-geometry replacement must not hit that op's program cache.
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("sender_receiver_core_mapping", "config_addresses", "entry_size", "num_entries");
+    auto attribute_values() const {
+        return std::make_tuple(sender_receiver_core_mapping(), config_addresses(), entry_size, num_entries);
+    }
 };
 
 // One tensor to prefetch: either (tensor, block_count) or (tensor, block_count, rotation).
