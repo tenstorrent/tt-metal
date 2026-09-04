@@ -57,7 +57,7 @@ std::vector<uint32_t> noc_ordered_bbox(
 
 }  // namespace detail
 
-std::vector<uint32_t> skip_mcast_compile_time_args() { return {0u}; }
+std::vector<uint32_t> absent_mcast_compile_time_args() { return {0u}; }
 
 Mcast1D::Mcast1D(
     tt::tt_metal::IDevice* device,
@@ -108,6 +108,10 @@ Mcast1D::Mcast1D(
             span_);
     }
 
+    TT_FATAL(
+        !rotating_sender_ || sender_placement_ == Mcast1DSenderPlacement::Uniform,
+        "Mcast1D: Diagonal sender placement cannot be combined with rotating_sender");
+
     if (!rotating_sender_) {
         TT_FATAL(
             starting_sender_index_ < span_,
@@ -127,7 +131,7 @@ Mcast1D::Mcast1D(
             participating_ranges.emplace_back(sender, sender);
         }
         const uint32_t fanout = receiver_span_ - (sender_in_receiver_grid ? 1u : 0u);
-        has_receivers_ = has_receivers_ || fanout > 0;
+        has_remote_receivers_ = has_remote_receivers_ || fanout > 0;
         if (!have_fanout) {
             first_fanout = fanout;
             minimum_fanout = fanout;
@@ -146,6 +150,7 @@ Mcast1D::Mcast1D(
             add_sender(sender_lines_[line][sender_index_for_line_(line)]);
         }
     }
+    TT_FATAL(have_fanout, "Mcast1D: at least one sender is required");
     if (cfg_.ack_count_override.has_value()) {
         TT_FATAL(
             *cfg_.ack_count_override <= minimum_fanout,
@@ -189,7 +194,7 @@ std::vector<uint32_t> Mcast1D::compile_time_args(std::optional<bool> pre_handsha
     // TODO: Share this CT argument layout and count with kernel McastArgs.
     return {
         1u,
-        has_receivers_ ? 1u : 0u,
+        has_remote_receivers_ ? 1u : 0u,
         data_ready_id_,
         consumer_ready_id_,
         ack_count(),
@@ -229,7 +234,7 @@ bool Mcast1D::is_sender(const tt::tt_metal::CoreCoord& core) const {
 }
 
 uint32_t Mcast1D::num_receivers(const tt::tt_metal::CoreCoord& core) const {
-    if (!has_receivers_ || !is_sender(core)) {
+    if (!has_remote_receivers_ || !is_sender(core)) {
         return 0;
     }
     return receiver_span_ - (receiver_grid_.bounding_box().contains(core) ? 1u : 0u);
@@ -237,7 +242,7 @@ uint32_t Mcast1D::num_receivers(const tt::tt_metal::CoreCoord& core) const {
 
 uint32_t Mcast1D::num_senders() const { return rotating_sender_ ? span_ : 1u; }
 
-bool Mcast1D::has_receivers() const { return has_receivers_; }
+bool Mcast1D::has_remote_receivers() const { return has_remote_receivers_; }
 
 const tt::tt_metal::CoreRangeSet& Mcast1D::receiver_cores() const { return receiver_grid_; }
 
@@ -348,8 +353,7 @@ std::vector<uint32_t> Mcast1D::rotating_rt_(const tt::tt_metal::CoreCoord& core)
     for (uint32_t i = 0; i < receiver_span_; ++i) {
         receiver_coordinates.push_back(virt_(line_coord_(core, i)));
     }
-    std::vector<uint32_t> runtime_args =
-        has_receivers_ ? noc_ordered_bbox_(receiver_coordinates) : std::vector<uint32_t>{0, 0, 0, 0};
+    std::vector<uint32_t> runtime_args = noc_ordered_bbox_(receiver_coordinates);
     for (const auto& sender : sender_lines_[line]) {
         const auto coordinate = virt_(sender);
         runtime_args.push_back(coordinate.first);
@@ -401,6 +405,7 @@ Mcast2D::Mcast2D(
     area_ = (rx1_ - rx0_ + 1) * (ry1_ - ry0_ + 1);
 
     std::vector<tt::tt_metal::CoreRange> participating_ranges = mcast_rect.ranges();
+    uint32_t minimum_fanout = 0;
     if (rotating_sender_) {
         const auto& effective_sender_grid =
             rotating_config->sender_grid.has_value() ? *rotating_config->sender_grid : mcast_rect;
@@ -410,31 +415,34 @@ Mcast2D::Mcast2D(
 
         bool uniform_fanout = true;
         const uint32_t first_fanout = area_ - (sender_in_rect_ ? 1u : 0u);
-        uint32_t minimum_fanout = first_fanout;
+        minimum_fanout = first_fanout;
         for (const auto& rotating_sender : senders_) {
             const bool sender_in_rect = in_rect_(rotating_sender);
             const uint32_t fanout = area_ - (sender_in_rect ? 1u : 0u);
             uniform_fanout = uniform_fanout && fanout == first_fanout;
             minimum_fanout = std::min(minimum_fanout, fanout);
-            has_receivers_ = has_receivers_ || fanout > 0;
+            has_remote_receivers_ = has_remote_receivers_ || fanout > 0;
             if (!sender_in_rect) {
                 participating_ranges.emplace_back(rotating_sender, rotating_sender);
             }
         }
-        ack_count_ = cfg_.ack_count_override.value_or(uniform_fanout ? first_fanout : ACK_EQUALS_FANOUT);
+        const auto& ack_count_override = cfg_.ack_count_override;
+        ack_count_ = ack_count_override.value_or(uniform_fanout ? first_fanout : ACK_EQUALS_FANOUT);
         TT_FATAL(
-            !cfg_.ack_count_override.has_value() || *cfg_.ack_count_override <= minimum_fanout,
-            "Mcast2D: ack_count_override ({}) exceeds the minimum rotating sender fan-out ({})",
-            cfg_.ack_count_override.value_or(0),
+            !ack_count_override.has_value() || *ack_count_override <= minimum_fanout,
+            "Mcast2D: acknowledgment count ({}) exceeds the minimum rotating sender fan-out ({})",
+            ack_count_override.value_or(0),
             minimum_fanout);
     } else {
         sender_in_rect_ = receiver_box.contains(sender_);
         const uint32_t receivers = sender_in_rect_ ? (area_ - 1) : area_;
-        has_receivers_ = receivers > 0;
-        ack_count_ = cfg_.ack_count_override.value_or(receivers);
+        minimum_fanout = receivers;
+        has_remote_receivers_ = receivers > 0;
+        const auto& ack_count_override = cfg_.ack_count_override;
+        ack_count_ = ack_count_override.value_or(receivers);
         TT_FATAL(
             ack_count_ <= receivers,
-            "Mcast2D: ack_count_override ({}) exceeds the receiver fan-out ({})",
+            "Mcast2D: acknowledgment count ({}) exceeds the receiver fan-out ({})",
             ack_count_,
             receivers);
         if (!sender_in_rect_) {
@@ -474,7 +482,7 @@ std::vector<uint32_t> Mcast2D::compile_time_args(std::optional<bool> pre_handsha
     // TODO: Share this CT argument layout and count with McastArgs.
     return {
         1u,
-        has_receivers_ ? 1u : 0u,
+        has_remote_receivers_ ? 1u : 0u,
         data_ready_id_,
         consumer_ready_id_,
         ack_count_,
@@ -499,13 +507,13 @@ std::vector<uint32_t> Mcast2D::runtime_args(const tt::tt_metal::CoreCoord& core)
 
 bool Mcast2D::is_sender(const tt::tt_metal::CoreCoord& core) const {
     if (rotating_sender_) {
-        return has_receivers_ && std::find(senders_.begin(), senders_.end(), core) != senders_.end();
+        return std::find(senders_.begin(), senders_.end(), core) != senders_.end();
     }
     return core == sender_;
 }
 
 uint32_t Mcast2D::num_receivers(const tt::tt_metal::CoreCoord& core) const {
-    if (!has_receivers_) {
+    if (!has_remote_receivers_) {
         return 0;
     }
     if (rotating_sender_) {
@@ -518,7 +526,7 @@ uint32_t Mcast2D::ack_count() const { return ack_count_; }
 
 uint32_t Mcast2D::num_senders() const { return rotating_sender_ ? senders_.size() : 1u; }
 
-bool Mcast2D::has_receivers() const { return has_receivers_; }
+bool Mcast2D::has_remote_receivers() const { return has_remote_receivers_; }
 
 bool Mcast2D::sender_in_rect() const { return sender_in_rect_; }
 

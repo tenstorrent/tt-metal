@@ -239,13 +239,11 @@ void kernel_main() {
     DataflowBuffer dfb_sparsity(dfb_id_sparsity);
     const auto s_sparsity = TensorAccessor(sparsity_args, sparsity_addr);
 
-#ifndef SKIP_MCAST
-    auto weights_bias_pipe = in1_mcast_args.sender(noc);
+    auto weights_bias_pipe = in1_mcast_args.optional_sender(noc);
 
 #ifdef IN1_SHARDED
     uint64_t in1_start_address = dfb_in1.get_write_ptr();
 #endif  // IN1_SHARDED
-#endif  // SKIP_MCAST
 
     uint32_t l1_write_addr_sparsity = 0;
     if constexpr (batchB > 0) {
@@ -458,12 +456,12 @@ void kernel_main() {
                         noc.async_read_barrier();
 #endif  // IN1_DRAM_WIDTH_SHARDED / IN1_DRAM_HEIGHT_SHARDED / IN1_SHARDED
 
-#ifndef SKIP_MCAST
-                        weights_bias_pipe.send(
-                            static_cast<uint32_t>(in1_start_address),
-                            static_cast<uint32_t>(in1_start_address),
-                            in1_block_size_bytes);
-#endif  // SKIP_MCAST
+                        if constexpr (in1_mcast_args.active) {
+                            weights_bias_pipe->send(
+                                static_cast<uint32_t>(in1_start_address),
+                                static_cast<uint32_t>(in1_start_address),
+                                in1_block_size_bytes);
+                        }
 
 #ifndef IN1_SHARDED
                         dfb_in1.push_back(in1_block_num_tiles);
@@ -563,12 +561,12 @@ void kernel_main() {
                         noc.async_read_barrier();
 #endif  // IN1_DRAM_WIDTH_SHARDED
 
-#ifndef SKIP_MCAST
-                        weights_bias_pipe.send(
-                            static_cast<uint32_t>(in3_start_address),
-                            static_cast<uint32_t>(in3_start_address),
-                            in3_block_size_bytes);
-#endif  // SKIP_MCAST
+                        if constexpr (in1_mcast_args.active) {
+                            weights_bias_pipe->send(
+                                static_cast<uint32_t>(in3_start_address),
+                                static_cast<uint32_t>(in3_start_address),
+                                in3_block_size_bytes);
+                        }
 
                         dfb_in3.push_back(in1_block_w);
 #else

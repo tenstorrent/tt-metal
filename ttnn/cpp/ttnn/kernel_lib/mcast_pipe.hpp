@@ -43,6 +43,8 @@
 // changes.
 #define MCAST_PIPE_API_VERSION 16
 
+#include <optional>
+
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/noc_semaphore.h"
@@ -229,8 +231,8 @@ private:
 // =============================================================================
 // Construct McastArgs with the starting offsets of the host helper's compile-time and runtime arguments.
 // Sender kernels call sender(noc), receiver kernels call receiver(noc), and rotating receivers pass the
-// absolute work round to receive(round). Guard sender work with `has_receivers` when a family may have
-// no receivers.
+// absolute work round to receive(round). A present sender must still call send() when `has_receivers`
+// is false because that is the degenerate local-copy case; absence is represented by `active == false`.
 //
 // can_send() and can_receive() report this core's roles. sender_index(round) maps an absolute work
 // round to a rotating phase, and should_send(round) reports whether that phase belongs to this core.
@@ -242,6 +244,20 @@ namespace detail {
 template <uint32_t>
 static constexpr bool dependent_false = false;
 
+// These sentinels only make the optional pipe surface well-formed for an absent
+// tagged block. The inactive specialization always returns empty optionals, so
+// neither sentinel represents a constructed multicast pipe.
+struct InactiveSenderPipe {
+    template <SourceL1Guard = SourceL1Guard::Guard>
+    FORCE_INLINE void send(uint32_t, uint32_t, uint32_t) {}
+    FORCE_INLINE void send_signal(uint32_t = VALID) {}
+};
+
+struct InactiveReceiverPipe {
+    FORCE_INLINE void receive(uint32_t = 0) {}
+    FORCE_INLINE uint32_t receive_signal(uint32_t = 0) { return 0; }
+};
+
 template <bool PRESENT, uint32_t CT_BASE, uint32_t RT_BASE>
 struct McastArgsImpl;
 
@@ -250,8 +266,9 @@ struct McastArgsImpl<true, CT_BASE, RT_BASE> {
     constexpr McastArgsImpl() = default;
     static constexpr bool active = true;
 
-    // Use `has_receivers` to guard sender work. The per-core role metadata reports which pipe faces
-    // this kernel instance may construct and its phase within the repeating sender rotation.
+    // `has_receivers` is the legacy wire name for remote fan-out. Do not use it to suppress sender
+    // work: a present zero-fan-out sender still calls send() to perform a degenerate local copy. The
+    // per-core role metadata reports which pipe faces this kernel instance may construct and its phase.
     static constexpr uint32_t has_receivers = get_compile_time_arg_val(CT_BASE + 1);
     static constexpr uint32_t data_ready = get_compile_time_arg_val(CT_BASE + 2);
     static constexpr uint32_t consumer_ready = get_compile_time_arg_val(CT_BASE + 3);
@@ -292,11 +309,14 @@ struct McastArgsImpl<true, CT_BASE, RT_BASE> {
     static constexpr uint32_t sender_index(uint32_t round) { return round % num_senders; }
     bool should_send(uint32_t round) const;
 
-    // Construct the sender pipe. Guard send() with `has_receivers` when the family may be inactive.
+    // Construct the sender pipe on a sender-role core. Use optional_sender() when a shared kernel
+    // binary may run on non-sender roles or receive an absent tagged helper block.
     SenderPipe sender(const Noc& noc) const;
+    std::optional<SenderPipe> optional_sender(const Noc& noc) const;
 
     // Construct the receiver pipe. Pass the absolute work round to receive() or receive_signal().
     ReceiverPipe receiver(const Noc& noc) const;
+    std::optional<ReceiverPipe> optional_receiver(const Noc& noc) const;
 
     // Receiver view, FIXED: the sender's coords (the target of this receiver's readiness ack).
     uint32_t sender_x() const { return get_arg_val<uint32_t>(RT_BASE + 0); }
@@ -311,6 +331,9 @@ struct McastArgsImpl<false, CT_BASE, RT_BASE> {
     constexpr McastArgsImpl() = default;
     static constexpr bool active = false;
     static constexpr uint32_t has_receivers = 0;
+    static constexpr uint32_t num_senders = 0;
+    using SenderPipe = InactiveSenderPipe;
+    using ReceiverPipe = InactiveReceiverPipe;
     static constexpr uint32_t next_compile_time_args_offset() { return CT_BASE + 1; }
     static constexpr uint32_t next_runtime_args_offset() { return RT_BASE; }
     bool can_send() const { return false; }
@@ -324,6 +347,9 @@ struct McastArgsImpl<false, CT_BASE, RT_BASE> {
     void receiver(const Noc&) const {
         static_assert(dependent_false<CT_BASE>, "No multicast on this core; a receiver pipe cannot be built");
     }
+
+    std::optional<SenderPipe> optional_sender(const Noc&) const { return std::nullopt; }
+    std::optional<ReceiverPipe> optional_receiver(const Noc&) const { return std::nullopt; }
 };
 
 }  // namespace detail

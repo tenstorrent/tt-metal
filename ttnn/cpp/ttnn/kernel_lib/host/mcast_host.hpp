@@ -37,13 +37,14 @@ struct McastConfig {
     uint32_t base_sem_id = 0;
     // Adopt caller-owned ids instead; consumer_ready is required when handshake is enabled.
     std::optional<std::vector<uint32_t>> sem_ids = std::nullopt;
-    // Override the derived receiver acknowledgment count.
+    // Override the derived receiver acknowledgment count. Unlike the legacy Mcast2D
+    // constructor's ack_count argument, zero is an explicit zero override.
     std::optional<uint32_t> ack_count_override = std::nullopt;
 };
 
-// Needed for kernels that have the option to skip multicast altogether.
-// TODO: Find a better name and provide a fuller explanation of the optional multicast compile-time encoding.
-std::vector<uint32_t> skip_mcast_compile_time_args();
+// Compile-time representation of an absent multicast channel. It emits only
+// the false presence tag and therefore has no runtime payload or semaphores.
+std::vector<uint32_t> absent_mcast_compile_time_args();
 
 namespace detail {
 
@@ -59,8 +60,8 @@ void append_args_to(Args& destination, const std::vector<uint32_t>& args) {
 }  // namespace detail
 
 template <typename Args>
-void append_skip_mcast_compile_time_args_to(Args& destination) {
-    detail::append_args_to(destination, skip_mcast_compile_time_args());
+void append_absent_mcast_compile_time_args_to(Args& destination) {
+    detail::append_args_to(destination, absent_mcast_compile_time_args());
 }
 
 // Mcast1D-specific types.
@@ -94,6 +95,7 @@ using Mcast1DSenderConfig = std::variant<Mcast1DFixedSenderConfig, Mcast1DRotati
 // receiver_grid when sender_grid is omitted.
 class Mcast1D {
 public:
+    // Unified API: the sender configuration selects fixed or rotating behavior.
     Mcast1D(
         tt::tt_metal::IDevice* device,
         const tt::tt_metal::CoreRangeSet& receiver_grid,
@@ -122,7 +124,7 @@ public:
 
     bool is_sender(const tt::tt_metal::CoreCoord& core) const;
 
-    // Number of receivers reached by core, or zero when core is not a sender with receivers.
+    // Number of receivers reached by core, or zero when core is not an active sender.
     uint32_t num_receivers(const tt::tt_metal::CoreCoord& core) const;
 
     // Number of receiver acknowledgments the sender waits for.
@@ -131,7 +133,9 @@ public:
     // Number of sender rounds; one in fixed mode.
     uint32_t num_senders() const;
 
-    bool has_receivers() const;
+    // True when at least one sender reaches a remote receiver. A degenerate
+    // local-copy channel returns false here.
+    bool has_remote_receivers() const;
 
     const tt::tt_metal::CoreRangeSet& receiver_cores() const;
     const tt::tt_metal::CoreRangeSet& participating_cores() const;
@@ -175,7 +179,7 @@ private:
     uint32_t span_ = 1;
     uint32_t receiver_span_ = 1;
     std::vector<std::vector<tt::tt_metal::CoreCoord>> sender_lines_;
-    bool has_receivers_ = false;
+    bool has_remote_receivers_ = false;
     uint32_t ack_count_ = 0;
     bool owns_sems_ = true;
     uint32_t data_ready_id_ = 0;
@@ -207,6 +211,7 @@ using Mcast2DSenderConfig = std::variant<Mcast2DFixedSenderConfig, Mcast2DRotati
 // mcast_rect when sender_grid is omitted.
 class Mcast2D {
 public:
+    // Unified API: the sender configuration selects fixed or rotating behavior.
     Mcast2D(
         tt::tt_metal::IDevice* device,
         const tt::tt_metal::CoreRangeSet& mcast_rect,
@@ -243,7 +248,9 @@ public:
     // Number of sender rounds; one in fixed mode.
     uint32_t num_senders() const;
 
-    bool has_receivers() const;
+    // True when at least one sender reaches a remote receiver. A degenerate
+    // local-copy channel returns false here.
+    bool has_remote_receivers() const;
 
     // Whether the fixed sender, or first rotating sender, is inside the receiver grid.
     bool sender_in_rect() const;
@@ -277,7 +284,7 @@ private:
     uint32_t area_ = 1;
     std::vector<tt::tt_metal::CoreCoord> senders_;
     bool sender_in_rect_ = true;
-    bool has_receivers_ = false;
+    bool has_remote_receivers_ = false;
     bool owns_sems_ = true;
     uint32_t ack_count_ = 0;
     uint32_t data_ready_id_ = 0;
