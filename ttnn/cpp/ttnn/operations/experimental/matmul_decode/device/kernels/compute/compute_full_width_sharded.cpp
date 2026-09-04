@@ -6,6 +6,10 @@
 
 #include "api/compute/common.h"
 #include "api/compute/matmul.h"
+#ifdef USE_CUSTOM_MM
+#include "api/compute/experimental/custom_mm.h"
+#include "api/compute/experimental/pack_block.h"
+#endif
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/dataflow/circular_buffer.h"
 
@@ -62,6 +66,39 @@ void kernel_main() {
 
     in0_cb.wait_front(in0_num_tiles);
 
+#ifdef USE_CUSTOM_MM
+    constexpr bool transpose = false;
+    constexpr bool split_acc = true;
+    constexpr bool dense_packing = true;
+    constexpr bool finalize = true;
+
+    static_assert(num_k_blocks == 1, "custom_mm does not support streamed K blocks");
+    static_assert(K_tiles >= 2 && K_tiles <= 256 && K_tiles % 2 == 0);
+    static_assert(N_tiles_per_core >= 1 && N_tiles_per_core <= 16);
+
+    custom_mm_block_init_short<transpose, split_acc, dense_packing>(in0_cb_id, in1_cb_id, out_cb_id, N_tiles_per_core);
+    pack_block_contiguous_init(out_cb_id);
+
+    out_cb.reserve_back(M_tiles * N_tiles_per_core);
+#ifdef ENABLE_GLOBAL_CB
+    in1_cb.wait_front(in1_page_tiles);
+#endif
+    for (uint32_t mt = 0; mt < M_tiles; ++mt) {
+        tile_regs_acquire();
+        custom_mm_block<finalize, false>(in0_cb_id, in1_cb_id, mt * K_tiles, 0, 0, K_tiles, N_tiles_per_core);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_block_contiguous(0, out_cb_id, N_tiles_per_core);
+        tile_regs_release();
+    }
+    custom_mm_block_uninit<dense_packing>();
+#ifdef ENABLE_GLOBAL_CB
+    in1_cb.pop_front(in1_page_tiles);
+    sync_cb.reserve_back(1);
+    sync_cb.push_back(1);
+#endif
+    out_cb.push_back(M_tiles * N_tiles_per_core);
+#else
     matmul_block_init(in0_cb_id, in1_cb_id, false, out_block_w, out_block_h, in0_block_w);
 
     out_cb.reserve_back(M_tiles * N_tiles_per_core);
@@ -105,6 +142,7 @@ void kernel_main() {
         pack_reconfig_l1_acc(0);
     }
     out_cb.push_back(M_tiles * N_tiles_per_core);
+#endif
 
     in0_cb.pop_front(in0_num_tiles);
 }
