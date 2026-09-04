@@ -1,0 +1,1 @@
+{"event":"test_run","status":"pass","detail":"seed-equivalent paths (no operand / gamma, TILE + RM) reproduce after the rms_norm_ttnn derivative port","pcc":0.99999,"ts":"2026-09-04T16:15:45+00:00"}
