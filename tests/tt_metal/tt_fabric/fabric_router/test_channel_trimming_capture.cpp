@@ -1027,9 +1027,9 @@ TEST_F(Fabric2DChannelTrimmingFixture, DirectionalChannelLiveness) {
 
         // --- Destination device: validate receiver channel activity ---
         // NOTE: In 2D, sender_channel_forwarded_to_bitfield_by_vc[0] is 0 at the terminal
-        // destination because hop_cmd_to_sender_channel_mask masks out my_direction,
-        // resulting in fwd_mask=0. Also, sender_channel_used may be non-zero if this
-        // router also forwards in other directions. We only check positive conditions.
+        // destination because its action-map entry requests local delivery with no outgoing
+        // ethernet action bit. sender_channel_used may be non-zero if this router also forwards
+        // in other directions, so only positive conditions are checked.
         auto dst_captures = read_capture_from_all_eth_cores(this, result.dst_physical_device_id);
         bool found_receiver = false;
         for (const auto& cap : dst_captures) {
@@ -1188,9 +1188,9 @@ TEST_F(Fabric2DChannelTrimmingFixture, DirectionalChannelForwardedTo) {
         << "Expected to find sender activity on source device's edm_port " << static_cast<int>(result.edm_port);
 
     // --- Destination device: validate receiver channel activity ---
-    // NOTE: In 2D, forwarded_to[0] is 0 at the terminal destination because
-    // hop_cmd_to_sender_channel_mask masks out my_direction (local write).
-    // sender_channel_used may also be non-zero if this router forwards in other directions.
+    // NOTE: In 2D, forwarded_to[0] is 0 at the terminal destination because its action-map entry
+    // requests local delivery with no outgoing ethernet action bit. sender_channel_used may still
+    // be non-zero if this router forwards in other directions.
     auto dst_captures = read_capture_from_all_eth_cores(this, result.dst_physical_device_id);
     bool found_receiver_forwarding = false;
     for (const auto& cap : dst_captures) {
