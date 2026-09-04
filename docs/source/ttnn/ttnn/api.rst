@@ -13,6 +13,7 @@ Device
    ttnn.close_device
    ttnn.manage_device
    ttnn.synchronize_device
+   ttnn.is_trace_capture_active
    ttnn.SetDefaultDevice
    ttnn.GetDefaultDevice
 
