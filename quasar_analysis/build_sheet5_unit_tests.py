@@ -806,11 +806,10 @@ def verify():
     assert not unused, "%d op files have no row on sheet 5: %s" % (len(unused), unused[:10])
     checks += 2
 
-    kinds = collections.Counter(r[4] for r in data if re.fullmatch(r"\d+", r[3] if len(r) > 3 else ""))
     print("verify: %d assertions, 0 mismatches" % checks)
     print(
-        "  sheet 1 rows covered: %d / %d (+ %d excluded %s rows = 141)"
-        % (len(referenced), COVERED_OPS, EXCLUDED_ROWS, ", ".join(EXCLUDED_OPS))
+        "  sheet 1 rows covered: %d compute rows (+ %d layout rows with no test file = %d)"
+        % (len(referenced), len(missing), SHEET1_ROWS)
     )
     print("  op files with a row:  %d / %d" % (len(seen_files & set(files)), len(files)))
     print("  test rows per result: %s" % dict(res))
