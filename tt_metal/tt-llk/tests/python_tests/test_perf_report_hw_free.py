@@ -203,13 +203,14 @@ def test_l1_to_l1_three_trisc_keeps_unpack_to_pack_duration():
                         ("pack", 155, 160),
                     ]
                 ),
+                # Envelope-shaped, as on hardware: KERNEL wraps each thread's whole kernel.
                 _parallel_events(
                     [
-                        ("unpack", 10, 15),
-                        ("pack", 50, 55),
+                        ("unpack", 10, 300),
+                        ("pack", 10, 300),
                         ("sfpu", 90, 200),
                     ]
-                ).assign(**{MARKER: "KERNEL"}),
+                ).assign(**{MARKER: "KERNEL", "marker_id": 99}),
             ],
             ignore_index=True,
         )
@@ -247,8 +248,10 @@ def _one_run_events(seed: int) -> pd.DataFrame:
     """
     rows = []
     ts = 100
-    for thread in _THREADS:
-        for marker, mid in _MARKERS:
+    # Marker-major, as on hardware: the entry rendezvous means every thread closes INIT before any
+    # opens TILE_LOOP, and _assert_zones_dont_overlap enforces exactly that.
+    for marker, mid in _MARKERS:
+        for thread in _THREADS:
             dur = 10 + mid * 5 + seed  # distinct per marker, varies per run
             for etype, offset in (("ZONE_START", 0), ("ZONE_END", dur)):
                 rows.append(
@@ -787,3 +790,165 @@ def test_catalog_check_skips_a_base_name_with_no_entry():
     # The static gate already fails a perf test missing from the catalog, and
     # combine globs whatever is on disk, so this must not fail a partial run.
     _assert_matches_catalog(_frame(), "perf_absent_from_catalog", "x.csv")
+
+
+# The failing direction of the cross-thread overlap invariant.
+
+
+def _overlap_events(run_index=None, overlap=True):
+    """INIT/TILE_LOOP pairs on three threads; math's INIT closes late when overlap=True."""
+    rows = []
+    for thread in _THREADS:
+        init_end = 400 if (overlap and thread == "math") else 200
+        for marker, mid, start, end in (
+            ("INIT", 0, 100, init_end),
+            ("TILE_LOOP", 1, 250, 900),
+        ):
+            for etype, ts in (("ZONE_START", start), ("ZONE_END", end)):
+                row = {
+                    "thread": thread,
+                    "type": etype,
+                    MARKER: marker,
+                    "timestamp": ts,
+                    "data": 0,
+                    "marker_id": mid,
+                    "file": "perf.cpp",
+                    "line": 1,
+                }
+                if run_index is not None:
+                    row["run_index"] = run_index
+                rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def test_overlapping_zones_are_rejected_by_raw_and_frame():
+    for view in ("raw", "frame"):
+        with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+            AssertionError, match="Zones overlap across threads"
+        ):
+            getattr(ProfilerData(_overlap_events()), view)()
+    # and the same trace without the overlap passes both views
+    ProfilerData(_overlap_events(overlap=False)).raw()
+    ProfilerData(_overlap_events(overlap=False)).frame()
+
+
+def test_overlap_is_grouped_by_run_index():
+    # run 0 healthy, run 1 overlapping: must fire and name run 1, not compare across runs.
+    df = pd.concat(
+        [_overlap_events(run_index=0, overlap=False), _overlap_events(run_index=1)],
+        ignore_index=True,
+    )
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        AssertionError, match="run_index=1"
+    ):
+        ProfilerData(df).raw()
+    # two healthy runs stay silent even though run 1's INIT closes after run 0's TILE_LOOP opened
+    df = pd.concat(
+        [
+            _overlap_events(run_index=0, overlap=False),
+            _overlap_events(run_index=1, overlap=False),
+        ],
+        ignore_index=True,
+    )
+    ProfilerData(df).raw()
+
+
+def test_overlap_checks_untagged_frames_too():
+    # run_index all-NA (declared but not yet tagged): the NA bucket must still be checked.
+    df = _overlap_events()
+    df["run_index"] = pd.NA
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        AssertionError, match="Zones overlap across threads"
+    ):
+        ProfilerData(df).raw()
+
+
+def _zones(*zones, run_index=None):
+    """Arbitrary (thread, marker, marker_id, start, end) zone events."""
+    rows = []
+    for thread, marker, mid, start, end in zones:
+        for etype, ts in (("ZONE_START", start), ("ZONE_END", end)):
+            row = {
+                "thread": thread,
+                "type": etype,
+                MARKER: marker,
+                "timestamp": ts,
+                "data": 0,
+                "marker_id": mid,
+                "file": "perf.cpp",
+                "line": 1,
+            }
+            if run_index is not None:
+                row["run_index"] = run_index
+            rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def test_overlap_check_is_zone_name_agnostic():
+    # Three zones with kernel-chosen names; the second/third pair overlaps on one thread.
+    healthy = [
+        (t, m, i, 100 + 300 * i, 200 + 300 * i)
+        for i in range(3)
+        for t in _THREADS
+        for m in [f"PHASE_{i}"]
+    ]
+    ProfilerData(_zones(*healthy)).raw()
+    broken = [(t, "WARMUP", 0, 100, 200) for t in _THREADS]
+    broken += [
+        ("unpack", "COMPUTE", 1, 400, 500),
+        ("math", "COMPUTE", 1, 400, 800),
+        ("pack", "COMPUTE", 1, 400, 500),
+    ]
+    broken += [(t, "DRAIN", 2, 600, 900) for t in _THREADS]
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        AssertionError,
+        match="the last COMPUTE closed at 800 but the first DRAIN opened at 600",
+    ):
+        ProfilerData(_zones(*broken)).raw()
+
+
+def test_non_rendezvous_zones_are_exempt():
+    # UNINIT has no entry rendezvous, so it may overlap the zone before it.
+    events = [(t, "INIT", 0, 100, 200) for t in _THREADS]
+    events += [(t, "TILE_LOOP", 1, 300, 900 if t == "pack" else 500) for t in _THREADS]
+    events += [(t, "UNINIT", 2, 550, 600) for t in ("unpack", "math")] + [
+        ("pack", "UNINIT", 2, 950, 1000)
+    ]
+    ProfilerData(_zones(*events)).raw()
+
+
+# trisc.cpp wraps every thread's kernel in ZONE_SCOPED("KERNEL"), so on hardware the phases
+# are always nested inside a longer zone on their own thread.
+def _wrapped_events(init_ends, loop_starts):
+    events = [(t, "KERNEL", 9, 90, 1100) for t in _THREADS]
+    events += [(t, "INIT", 0, 100, init_ends[t]) for t in _THREADS]
+    events += [(t, "TILE_LOOP", 1, loop_starts[t], 1000) for t in _THREADS]
+    return events
+
+
+def test_zones_nested_in_a_wrapper_are_not_an_overlap():
+    events = _wrapped_events(
+        {t: 200 for t in _THREADS},
+        {t: 210 for t in _THREADS},
+    )
+    ProfilerData(_zones(*events)).raw()
+    ProfilerData(_zones(*events)).frame()
+
+
+def test_a_wrapper_does_not_mask_an_overlap_inside_it():
+    events = _wrapped_events(
+        {"unpack": 200, "math": 400, "pack": 200},
+        {"unpack": 210, "math": 410, "pack": 210},
+    )
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        AssertionError,
+        match="the last INIT closed at 400 but the first TILE_LOOP opened at 210",
+    ):
+        ProfilerData(_zones(*events)).raw()
+
+
+def test_wrapper_on_threads_without_phases_is_not_an_overlap():
+    # ISOLATE run types: every thread emits KERNEL, only the measured one emits phases.
+    events = [(t, "KERNEL", 9, 90, 1100) for t in _THREADS]
+    events += [("math", "INIT", 0, 100, 200), ("math", "TILE_LOOP", 1, 210, 1000)]
+    ProfilerData(_zones(*events)).raw()
