@@ -3248,6 +3248,123 @@ public:
         report_relay_linear_sections(total_length);
     }
 
+    // Inline-payload counterpart to run_relay_linear_payload_sweep: the dispatch command AND its data ride
+    // in one CQ_PREFETCH_CMD_RELAY_INLINE through cmddat_q, instead of the header arriving inline and the
+    // payload out-of-band from DRAM. The prefetcher reads only the header with loads and forwards the
+    // payload by NoC, so this is the shape where cmddat_q invalidation covers bytes nothing reads cached.
+    // page_size * num_pages is the inline payload size; the sweep is over that product.
+    void run_inline_write_linear_sweep() {
+        const uint32_t payload_bytes = get_page_size() * get_num_pages();
+        ASSERT_EQ(payload_bytes % sizeof(uint32_t), 0u);
+
+        const CoreCoord first_worker = this->worker_start();
+        const CoreRange worker_range = this->worker_range(first_worker, /*multi_core=*/false);
+        const uint32_t l1_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
+
+        auto& metal_ctx = MetalContext::instance(extract_context_id(device_));
+        {
+            DeviceCommandCalculator calc(metal_ctx);
+            calc.add_dispatch_write_linear<true, true>(payload_bytes);
+            if (calc.write_offset_bytes() > max_fetch_bytes_) {
+                GTEST_SKIP() << "inline command of " << calc.write_offset_bytes() << " B exceeds max_fetch_bytes_ "
+                             << max_fetch_bytes_ << "; cmddat_q would overflow";
+            }
+        }
+
+        std::vector<uint32_t> payload(payload_bytes / sizeof(uint32_t));
+        for (uint32_t i = 0; i < payload.size(); i++) {
+            payload[i] = i;
+        }
+
+        Common::DeviceData device_data(
+            device_, worker_range, l1_base, dram_base_, nullptr, false, get_dram_data_size_words(), cfg_);
+
+        const uint32_t dst_addr = device_data.get_result_data_addr(first_worker, 0);
+        Common::DeviceDataUpdater::update_linear_write(payload, device_data, worker_range, /*is_mcast=*/false);
+        device_data.pad(first_worker, /*bank_id=*/0, l1_alignment_);
+
+        const CoreCoord first_worker_virt = device_->virtual_core_from_logical_core(first_worker, CoreType::WORKER);
+        const uint32_t noc_xy = device_->get_noc_unicast_encoding(k_dispatch_downstream_noc, first_worker_virt);
+
+        std::vector<HostMemDeviceCommand> commands_per_iteration;
+        commands_per_iteration.push_back(Common::CommandBuilder::build_linear_write_command<true, true>(
+            metal_ctx, payload, worker_range, /*is_mcast=*/false, noc_xy, dst_addr, payload_bytes));
+
+        log_info(
+            tt::LogTest,
+            "InlineWriteLinearCycleBenchmark inline_payload_bytes={} iterations={}",
+            payload_bytes,
+            get_num_iterations());
+        warmup_before_snapshot();
+        zero_bench_region();
+        execute_generated_commands(commands_per_iteration, device_data, worker_range.size(), get_num_iterations());
+        report_relay_linear_sections(payload_bytes);
+    }
+
+    // Same inline shape as run_inline_write_linear_sweep, but the dispatch command is WRITE_PAGED to DRAM
+    // banks. The prefetcher path is identical -- one RELAY_INLINE of the same size -- so this isolates
+    // whether a different dispatcher cost keeps the prefetcher on the critical path.
+    // page_size is the DRAM page size and num_pages the page count; their product is the inline payload.
+    void run_inline_write_paged_sweep() {
+        const uint32_t page_size_bytes = get_page_size();
+        const uint32_t pages = get_num_pages();
+        const uint32_t payload_bytes = page_size_bytes * pages;
+        ASSERT_EQ(page_size_bytes % sizeof(uint32_t), 0u);
+
+        auto& metal_ctx = MetalContext::instance(extract_context_id(device_));
+        {
+            DeviceCommandCalculator calc(metal_ctx);
+            calc.add_dispatch_write_paged<true>(page_size_bytes, pages);
+            if (calc.write_offset_bytes() > max_fetch_bytes_) {
+                GTEST_SKIP() << "inline command of " << calc.write_offset_bytes() << " B exceeds max_fetch_bytes_ "
+                             << max_fetch_bytes_ << "; cmddat_q would overflow";
+            }
+        }
+
+        const uint32_t page_size_words = page_size_bytes / sizeof(uint32_t);
+        const uint32_t page_size_alignment_bytes = device_->allocator_impl()->get_alignment(BufferType::DRAM);
+        const CoreCoord first_worker = this->worker_start();
+        const CoreRange worker_range = this->worker_range(first_worker, /*multi_core=*/false);
+        const uint32_t l1_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
+
+        Common::DeviceData device_data(
+            device_, worker_range, l1_base, dram_base_, nullptr, false, get_dram_data_size_words(), cfg_);
+
+        // One contiguous inline payload spanning `pages` pages, striped across banks the way the dispatcher
+        // will place them, so validate() checks the same bytes the command carried.
+        std::vector<uint32_t> payload;
+        payload.reserve(pages * page_size_words);
+        for (uint32_t page = 0; page < pages; page++) {
+            const uint32_t bank_id = page % num_banks_;
+            const auto dram_channel = device_->allocator_impl()->get_dram_channel_from_bank_id(bank_id);
+            const CoreCoord bank_core = device_->logical_core_from_dram_channel(dram_channel);
+
+            std::vector<uint32_t> page_payload =
+                payload_generator_->generate_payload_with_page_id(page_size_words, page);
+            Common::DeviceDataUpdater::update_paged_write(
+                page_payload, device_data, bank_core, bank_id, page_size_alignment_bytes, tt::CoreType::DRAM);
+            payload.insert(payload.end(), page_payload.begin(), page_payload.end());
+        }
+
+        const uint32_t base_addr = device_data.get_base_result_addr(tt::CoreType::DRAM);
+
+        std::vector<HostMemDeviceCommand> commands_per_iteration;
+        commands_per_iteration.push_back(Common::CommandBuilder::build_paged_write_command<true>(
+            metal_ctx, payload, base_addr, page_size_bytes, pages, /*start_page_cmd=*/0, /*is_dram=*/true));
+
+        log_info(
+            tt::LogTest,
+            "InlineWritePagedCycleBenchmark page_bytes={} pages={} inline_payload_bytes={} iterations={}",
+            page_size_bytes,
+            pages,
+            payload_bytes,
+            get_num_iterations());
+        warmup_before_snapshot();
+        zero_bench_region();
+        execute_generated_commands(commands_per_iteration, device_data, worker_range.size(), get_num_iterations());
+        report_relay_linear_sections(payload_bytes);
+    }
+
 private:
     // The FD kernels are persistent; this Finish() drains the cold iteration before the measured window so the
     // cold wait is booked before the window rather than inside it.
@@ -3819,6 +3936,8 @@ private:
 
 // Separate suite so the paged-packed sweep gets its own parameter list; the measurement machinery is shared.
 class PrefetcherRelayPagedPackedCycleBenchmarkFixture : public PrefetcherRelayLinearCycleBenchmarkFixture {};
+class PrefetcherInlineWriteLinearCycleBenchmarkFixture : public PrefetcherRelayLinearCycleBenchmarkFixture {};
+class PrefetcherInlineWritePagedCycleBenchmarkFixture : public PrefetcherRelayLinearCycleBenchmarkFixture {};
 
 // Quasar FD fixtures
 class BasePrefetcherQuasarSimulatorTestFixture : public Common::QuasarSimulatorVariant<BasePrefetcherTestFixture> {};
@@ -3826,6 +3945,10 @@ class PrefetcherRelayLinearCycleBenchmarkQuasarSimulatorTestFixture
     : public Common::QuasarSimulatorVariant<PrefetcherRelayLinearCycleBenchmarkFixture> {};
 class PrefetcherRelayPagedPackedCycleBenchmarkQuasarSimulatorTestFixture
     : public Common::QuasarSimulatorVariant<PrefetcherRelayPagedPackedCycleBenchmarkFixture> {};
+class PrefetcherInlineWriteLinearCycleBenchmarkQuasarSimulatorTestFixture
+    : public Common::QuasarSimulatorVariant<PrefetcherInlineWriteLinearCycleBenchmarkFixture> {};
+class PrefetcherInlineWritePagedCycleBenchmarkQuasarSimulatorTestFixture
+    : public Common::QuasarSimulatorVariant<PrefetcherInlineWritePagedCycleBenchmarkFixture> {};
 class PrefetcherPackedReadQuasarSimulatorTestFixture
     : public Common::QuasarSimulatorVariant<PrefetcherPackedReadTestFixture> {};
 class PrefetcherLinearPackedReadQuasarSimulatorTestFixture
@@ -4500,6 +4623,20 @@ TEST_P(PrefetcherRelayPagedPackedCycleBenchmarkFixture, RelayPagedPackedSweep) {
     run_relay_paged_packed_sweep();
 }
 
+TEST_P(PrefetcherInlineWriteLinearCycleBenchmarkFixture, InlineWriteLinearSweep) {
+    log_info(
+        tt::LogTest,
+        "PrefetcherInlineWriteLinearCycleBenchmarkFixture - InlineWriteLinearSweep (Fast Dispatch) - Test Start");
+    run_inline_write_linear_sweep();
+}
+
+TEST_P(PrefetcherInlineWritePagedCycleBenchmarkFixture, InlineWritePagedSweep) {
+    log_info(
+        tt::LogTest,
+        "PrefetcherInlineWritePagedCycleBenchmarkFixture - InlineWritePagedSweep (Fast Dispatch) - Test Start");
+    run_inline_write_paged_sweep();
+}
+
 // This tests random configurations of commands like CQ_PREFETCH_CMD_RELAY_LINEAR, CQ_PREFETCH_CMD_RELAY_PAGED,
 // CQ_PREFETCH_CMD_RELAY_INLINE etc
 TEST_P(RandomTestFixture, RandomTest) {
@@ -4832,6 +4969,22 @@ TEST_P(PrefetcherRelayPagedPackedCycleBenchmarkQuasarSimulatorTestFixture, Relay
         "PrefetcherRelayPagedPackedCycleBenchmarkQuasarSimulatorTestFixture - RelayPagedPackedSweep (Quasar simulator "
         "FD) - Test Start");
     run_relay_paged_packed_sweep();
+}
+
+TEST_P(PrefetcherInlineWriteLinearCycleBenchmarkQuasarSimulatorTestFixture, InlineWriteLinearSweep) {
+    log_info(
+        tt::LogTest,
+        "PrefetcherInlineWriteLinearCycleBenchmarkQuasarSimulatorTestFixture - InlineWriteLinearSweep (Quasar "
+        "simulator FD) - Test Start");
+    run_inline_write_linear_sweep();
+}
+
+TEST_P(PrefetcherInlineWritePagedCycleBenchmarkQuasarSimulatorTestFixture, InlineWritePagedSweep) {
+    log_info(
+        tt::LogTest,
+        "PrefetcherInlineWritePagedCycleBenchmarkQuasarSimulatorTestFixture - InlineWritePagedSweep (Quasar "
+        "simulator FD) - Test Start");
+    run_inline_write_paged_sweep();
 }
 
 TEST_P(PrefetcherHostQuasarSimulatorTestFixture, HostTest) {
@@ -5268,6 +5421,58 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::Values(RELAY_PAGED_PACKED_BENCH_PARAMS),
     relay_paged_packed_bench_name);
 
+// Inline-payload sweep. The prefetcher's per-fetch cmddat_q invalidate covers the whole fetched extent,
+// so its cost scales with these payload sizes (4 lines at 256 B up to 2048 at 128 KB) while the bytes
+// the prefetcher actually reads with loads
+// (the command header) stay fixed. Sweeping payload at a fixed command count separates the two.
+// num_pages is 1 throughout: this measures payload size, not sub-command count. Cells whose command
+// exceeds max_fetch_bytes_ skip themselves rather than overflowing cmddat_q.
+#define INLINE_WRITE_LINEAR_BENCH_PARAMS                                                           \
+    PagedReadParams{256, 1, 100, Common::DRAM_DATA_SIZE_WORDS, false},                             \
+        PagedReadParams{1 * 1024, 1, 100, Common::DRAM_DATA_SIZE_WORDS, false},                    \
+        PagedReadParams{2 * 1024, 1, 100, Common::DRAM_DATA_SIZE_WORDS, false},                    \
+        PagedReadParams{4 * 1024, 1, 100, Common::DRAM_DATA_SIZE_WORDS, false},                    \
+        PagedReadParams{8 * 1024, 1, 100, Common::DRAM_DATA_SIZE_WORDS, false},                    \
+        PagedReadParams{16 * 1024, 1, 100, Common::DRAM_DATA_SIZE_WORDS, false},                   \
+        PagedReadParams{32 * 1024, 1, 100, Common::DRAM_DATA_SIZE_WORDS, false},                   \
+        PagedReadParams{64 * 1024, 1, 100, Common::DRAM_DATA_SIZE_WORDS, false}, PagedReadParams { \
+        128 * 1024, 1, 100, Common::DRAM_DATA_SIZE_WORDS, false                                    \
+    }
+
+static std::string inline_write_linear_bench_name(const testing::TestParamInfo<PagedReadParams>& info) {
+    return std::to_string(info.param.page_size * info.param.num_pages) + "B_" +
+           std::to_string(info.param.num_iterations) + "iter_inline_write_linear";
+}
+
+// Same payload sizes as the linear grid, expressed as pages so the dispatcher does a real paged write.
+// 2048 B is the DRAM page size used throughout these benchmarks.
+#define INLINE_WRITE_PAGED_BENCH_PARAMS                                                            \
+    PagedReadParams{2 * 1024, 1, 100, Common::DRAM_DATA_SIZE_WORDS, false},                        \
+        PagedReadParams{2 * 1024, 2, 100, Common::DRAM_DATA_SIZE_WORDS, false},                    \
+        PagedReadParams{2 * 1024, 4, 100, Common::DRAM_DATA_SIZE_WORDS, false},                    \
+        PagedReadParams{2 * 1024, 8, 100, Common::DRAM_DATA_SIZE_WORDS, false},                    \
+        PagedReadParams{2 * 1024, 16, 100, Common::DRAM_DATA_SIZE_WORDS, false},                   \
+        PagedReadParams{2 * 1024, 32, 100, Common::DRAM_DATA_SIZE_WORDS, false}, PagedReadParams { \
+        2 * 1024, 64, 100, Common::DRAM_DATA_SIZE_WORDS, false                                     \
+    }
+
+static std::string inline_write_paged_bench_name(const testing::TestParamInfo<PagedReadParams>& info) {
+    return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "pages_" +
+           std::to_string(info.param.num_iterations) + "iter_inline_write_paged";
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    PrefetcherCycleBenchmarkTests,
+    PrefetcherInlineWriteLinearCycleBenchmarkFixture,
+    ::testing::Values(INLINE_WRITE_LINEAR_BENCH_PARAMS),
+    inline_write_linear_bench_name);
+
+INSTANTIATE_TEST_SUITE_P(
+    PrefetcherCycleBenchmarkTests,
+    PrefetcherInlineWritePagedCycleBenchmarkFixture,
+    ::testing::Values(INLINE_WRITE_PAGED_BENCH_PARAMS),
+    inline_write_paged_bench_name);
+
 // PrefetcherThroughputTestFixture test - Runs only with exec buff disabled
 INSTANTIATE_TEST_SUITE_P(
     PrefetcherTests,
@@ -5322,6 +5527,18 @@ INSTANTIATE_TEST_SUITE_P(
     PrefetcherRelayPagedPackedCycleBenchmarkQuasarSimulatorTestFixture,
     ::testing::Values(RELAY_PAGED_PACKED_BENCH_PARAMS),
     relay_paged_packed_bench_name);
+
+INSTANTIATE_TEST_SUITE_P(
+    QuasarSimulatorPrefetcherTests,
+    PrefetcherInlineWriteLinearCycleBenchmarkQuasarSimulatorTestFixture,
+    ::testing::Values(INLINE_WRITE_LINEAR_BENCH_PARAMS),
+    inline_write_linear_bench_name);
+
+INSTANTIATE_TEST_SUITE_P(
+    QuasarSimulatorPrefetcherTests,
+    PrefetcherInlineWritePagedCycleBenchmarkQuasarSimulatorTestFixture,
+    ::testing::Values(INLINE_WRITE_PAGED_BENCH_PARAMS),
+    inline_write_paged_bench_name);
 
 INSTANTIATE_TEST_SUITE_P(
     QuasarSimulatorPrefetcherTests,
