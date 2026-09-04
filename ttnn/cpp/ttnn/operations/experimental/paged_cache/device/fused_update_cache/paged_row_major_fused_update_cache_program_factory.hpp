@@ -9,7 +9,6 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/program.hpp>
-#include <tt-metalium/program_descriptors.hpp>
 
 #include "ttnn/metal_v2_artifacts.hpp"
 
@@ -53,24 +52,26 @@ struct PagedRowMajorFusedUpdateCacheProgramFactory {
         const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 
+// Metal 2.0 mesh-workload factory (MeshWorkloadSpecFactoryConcept).  Selected when mesh_coords is
+// provided.  Differs from its single-device sibling in exactly one way: it runs a different set of
+// programs across the mesh, because a coordinate outside operation_attributes.mesh_coords gets no
+// program at all.
 struct PagedRowMajorFusedUpdateCacheMeshWorkloadFactory {
-    // Per-coord program build.  Coordinates outside operation_attributes.mesh_coords
-    // (when provided) get an empty program — the legacy mesh path skipped them
-    // entirely; with the descriptor framework we still must hand back a descriptor
-    // for every dispatched coord, so we return an empty one for excluded coords.
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    // One ProgramSpec + ProgramRunArgs per coordinate range.  Ranges omitted from the result get no
+    // program, which is how the coordinate filter is expressed.
+    static ttnn::device_operation::MeshWorkloadArtifacts create_mesh_workload_artifacts(
         const PagedFusedUpdateCacheParams& operation_attributes,
         const PagedFusedUpdateCacheInputs& tensor_args,
         PagedFusedUpdateCacheResult& tensor_return_value,
-        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate);
+        const ttnn::MeshCoordinateRangeSet& tensor_coords);
 
-    // Same program layout as the single-device factory, so it reuses that patch.
-    static void override_runtime_arguments(
-        tt::tt_metal::Program& program,
+    // Cache-hit refresh, called once per range (not once per device).  Same per-dispatch state as the
+    // single-device factory refreshes; see the .cpp for why the range is not needed.
+    static tt::tt_metal::experimental::ProgramRunArgs override_runtime_arguments(
         const PagedFusedUpdateCacheParams& operation_attributes,
         const PagedFusedUpdateCacheInputs& tensor_args,
         PagedFusedUpdateCacheResult& tensor_return_value,
-        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
+        const ttnn::MeshCoordinateRange& coordinate_range);
 };
 
 }  // namespace ttnn::experimental::prim
