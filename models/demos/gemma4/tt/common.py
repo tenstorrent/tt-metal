@@ -171,6 +171,7 @@ def create_assistant_model(
     assistant_path=None,
     state_dict=None,
     max_local_batch_size=1,
+    bounded_sliding_kv_cache=None,
 ):
     """Create the Gemma4 it-assistant drafter, sharing the target's mesh/CCL.
 
@@ -197,11 +198,25 @@ def create_assistant_model(
             f"Assistant backbone_hidden_size ({assistant_args.backbone_hidden_size}) != target hidden_size "
             f"({target_model.hidden_size}). The assistant must match its target model."
         )
+    # Bounded target KV is supported now: the drafter's attention configs take
+    # the same cache_position_modulo as the target's sliding layers (see the
+    # bounded_sliding_kv_cache plumbing below and assistant/model.py), so its
+    # cross-attention wraps absolute positions into the same ring. This is what
+    # makes >=128k spec decode reachable on 31B, where unbounded KV does not fit.
+    # It requires the ring sizes to agree; the assistant's own sliding_window
+    # matches its target's (1024 on both 12B and 31B), so verify that here
+    # rather than assuming it.
     if getattr(target_model, "bounded_sliding_kv_cache", False):
-        raise NotImplementedError(
-            "Speculative decoding requires the target to use unbounded sliding KV caches "
-            "(bounded_sliding_kv_cache=False); the drafter cross-attention reads absolute cache positions."
+        _tgt_win = getattr(target_model, "sliding_window", None) or getattr(
+            getattr(target_model, "hf_config", None), "sliding_window", None
         )
+        _asst_win = getattr(assistant_args.text_args, "sliding_window", None)
+        if _tgt_win is not None and _asst_win is not None and int(_tgt_win) != int(_asst_win):
+            raise NotImplementedError(
+                f"Bounded spec decode needs matching sliding windows: target {_tgt_win} vs "
+                f"assistant {_asst_win}. The drafter cross-attends the target's bounded ring, "
+                "so a different window would wrap positions to the wrong slots."
+            )
 
     if state_dict is None:
         state_dict = Gemma4AssistantArgs.load_state_dict(assistant_path, dummy_weights=False)
@@ -220,5 +235,13 @@ def create_assistant_model(
         tensor_cache_path=tensor_cache_path,
         mesh_config=mesh_config,
         max_local_batch_size=max_local_batch_size,
+        # Match the TARGET's KV mode: with bounded sliding caches the drafter's
+        # cross-attention must wrap positions into the same ring. Inferred from
+        # the target when not stated explicitly.
+        bounded_sliding_kv_cache=(
+            bounded_sliding_kv_cache
+            if bounded_sliding_kv_cache is not None
+            else bool(getattr(target_model, "bounded_sliding_kv_cache", False))
+        ),
     )
     return assistant_args, model

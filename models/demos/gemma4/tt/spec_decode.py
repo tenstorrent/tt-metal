@@ -58,6 +58,34 @@ def _to_probs(logits_row, temperature, top_p, top_k):
     return probs / s if s > 0 else probs
 
 
+def auto_draft_len(prompt_len, default=3):
+    """Pick the speculative draft length for a prompt (``GEMMA4_SPEC_DRAFT_LEN=auto``).
+
+    The optimum is INTERIOR and context-dependent, so neither the old fixed 3 nor
+    "as large as possible" is right. Measured on 31B / native galaxy column tp=8,
+    traced greedy (tok/s/user):
+
+        ISL    K=3    K=5    K=7
+        128    47.0   40.6    -
+        4096   55.3   62.9   46.0
+
+    Short prompts give the drafter little context, so acceptance is low and the
+    extra verify rows of a long draft cost more than they return; with real
+    context acceptance rises and a longer draft pays. Acceptance itself is
+    non-monotonic in K (2.96/5 -> 2.67/7 at 4k) because the assistant drafts
+    autoregressively from ONE fixed position, so late drafts degrade.
+
+    Kept as a coarse threshold on purpose: the fused spec trace is captured PER
+    draft length, so switching K at runtime costs a re-capture (seconds). A
+    finer adaptive policy wants two pre-captured traces (cf. the qwen36 MTP
+    "auto-K 11/7"); that is follow-up work.
+    """
+    env = os.environ.get("GEMMA4_SPEC_DRAFT_LEN")
+    if env and env.strip().lower() not in ("auto", ""):
+        return int(env)
+    return 5 if prompt_len is not None and prompt_len >= 1024 else default
+
+
 class SpeculativeDecoder:
     def __init__(
         self,
