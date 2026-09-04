@@ -55,15 +55,9 @@ while IFS= read -r FILE; do
             # this gets its own flag rather than the blanket ANY_CODE_CHANGED fanout.
             TTSIM_CI_CHANGED=true
             ;;
-        tests/pipeline_reorg/ttsim_sanity_tests.yaml|tests/pipeline_reorg/ttsim_unit_tests.yaml|tests/pipeline_reorg/ttsim-skip-list.yaml)
+        tests/pipeline_reorg/ttsim_merge_gate_tests.yaml|tests/pipeline_reorg/ttsim_sanity_tests.yaml|tests/pipeline_reorg/ttsim_unit_tests.yaml|tests/pipeline_reorg/ttsim-skip-list.yaml)
             # ttsim test matrices and the skip list. These are maintained independently of
             # the code they run, so a PR that only tunes them must still validate itself.
-            TTSIM_CI_CHANGED=true
-            ;;
-        tests/pipeline_reorg/runtime_sanity_tests.yaml)
-            # Holds the runtime_sim_quasar_cpp_unit_tests entry that the merge gate's
-            # Quasar leg runs (merge-gate.yaml selects it via enabled-skus: sim_quasar),
-            # so a PR tuning that entry must exercise the leg it just changed.
             TTSIM_CI_CHANGED=true
             ;;
         .github/actions/fetch-ttsim/**|.github/actions/setup-ttsim/**|.github/workflows/ttsim-*.yaml)

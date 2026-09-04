@@ -16,6 +16,24 @@ on:
       enabled-skus:
         required: true
         type: string
+      tests-yaml-path:
+        required: false
+        type: string
+        default: ./tests/pipeline_reorg/runtime_sanity_tests.yaml
+        description: "Pipeline reorg test matrix YAML (e.g. ttsim_merge_gate_tests.yaml for merge gate)."
+      test-category:
+        required: false
+        type: string
+        default: sanity
+        description: "Time-budget workflow key passed to verify_time_budget.py (sanity for the runtime sanity matrix)."
+      per-test-timeout:
+        required: false
+        type: string
+        default: ""
+        description: >-
+          Max allowed timeout (minutes) for any individual test SKU entry in the
+          tests yaml. Verified during load-test-matrix via verify_time_budget.py.
+          Empty skips the per-test ceiling check.
       ref:
         required: false
         type: string
@@ -38,7 +56,7 @@ jobs:
       matrix: ${{ steps.build-matrix.outputs.matrix }}
       sim-libs: ${{ steps.build-matrix.outputs.sim-libs }}
     env:
-      TESTS_YAML_PATH: ./tests/pipeline_reorg/runtime_sanity_tests.yaml
+      TESTS_YAML_PATH: ${{ inputs.tests-yaml-path }}
     steps:
       - name: Checkout the repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -52,12 +70,17 @@ jobs:
         run: pip3 install PyYAML
       - name: Verify test timeouts against budget
         run: |
-          set -e
+          set -euo pipefail
           echo "Verifying that timeouts defined in tests.yaml are within the allowed limits..."
+          extra=()
+          if [ -n "${{ inputs.per-test-timeout }}" ]; then
+            extra+=(--max-per-test-timeout "${{ inputs.per-test-timeout }}")
+          fi
           python3 .github/scripts/utils/verify_time_budget.py \
             ${{ env.TESTS_YAML_PATH }} \
             ./.github/time_budget.yaml \
-            "sanity"
+            "${{ inputs.test-category }}" \
+            "${extra[@]}"
       - name: Build unified test matrix based on enabled SKUs
         id: build-matrix
         run: |
