@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Exhaustive BF16 ULP sweep for ttnn.erfinv (Blackhole BF16 kernel).
+"""Exhaustive BF16 ULP sweep for the Blackhole and Wormhole ttnn.erfinv kernels.
 
 Runs every one of the 65,536 BF16 encodings through ttnn.erfinv in a single
 tiled tensor and checks, per tenstorrent/tt-metal#49435:
@@ -11,18 +11,18 @@ tiled tensor and checks, per tenstorrent/tt-metal#49435:
     torch.erfinv reference (pure ULP = |FTZ(golden) - result| /
     bf16_ulp_spacing(bf16-rounded golden), the ttnn-eltwise-op-tester metric,
     with the numerator flush keyed on the rounded golden exactly as the
-    Blackhole post-round-FTZ hardware behaves; threshold = min(previous
+    post-round-FTZ hardware behaves; threshold = min(previous
     threshold, certified ULP rounded up) — the previous kernel measured
     255.2 max pure ULP on this sweep, the replacement is
     certified at 0.8324;
   * special values, matching the silicon-certified contract: x = +/-1 -> signed Inf; |x| > 1, +/-Inf and NaN -> +Inf
   * zeros and DAZ'd subnormal inputs produce exact zeros.
 
-Hardware model per tech_reports/Handling_Special_Value/special_values.md and
-the Blackhole ISA: DAZ on input, post-round FTZ on output, and the format
-conversion pipeline maps NaN payloads onto infinities and +/-0 onto +0 —
-which is why the out-of-domain expectation is +Inf, not NaN (identical to
-the previous kernel, which also never produced NaN here).
+Hardware model per tech_reports/Handling_Special_Value/special_values.md:
+DAZ on input, post-round FTZ on output, and the format conversion pipeline
+maps NaN payloads onto infinities and +/-0 onto +0. Blackhole canonicalizes
+NaN payloads to +Inf; Wormhole preserves the sign of negative NaN inputs.
+The previous kernels also never produced NaN here.
 
 Set TT_EXPORT_ULP_DUMP=<path.npz> to additionally dump the raw per-encoding
 device outputs (used to render the accuracy figure in the PR / tech report).
@@ -37,8 +37,7 @@ import pytest
 import torch
 import ttnn
 from loguru import logger
-
-from models.common.utility_functions import is_blackhole
+from models.common.utility_functions import is_blackhole, is_wormhole_b0
 
 
 def _all_bf16_encodings() -> torch.Tensor:
@@ -70,7 +69,10 @@ def _bf16_ulp_spacing(y: np.ndarray) -> np.ndarray:
     return (up - cur).astype(np.float64)
 
 
-@pytest.mark.skipif(not is_blackhole(), reason="BF16 erfinv kernel replacement is Blackhole-only")
+@pytest.mark.skipif(
+    not (is_blackhole() or is_wormhole_b0()),
+    reason="BF16 erfinv kernel replacement is supported on Blackhole and Wormhole",
+)
 def test_erfinv_bf16_exhaustive_ulp(device):
     x_bf16 = _all_bf16_encodings()
 
@@ -90,11 +92,17 @@ def test_erfinv_bf16_exhaustive_ulp(device):
     inf_lanes = np.isinf(golden)
     finite_lanes = ~(nan_lanes | inf_lanes)
 
-    # Out-of-domain, NaN and +/-Inf inputs: the conversion pipeline yields
-    # +Inf (see the module docstring); the poles x = +/-1 keep their sign.
+    # Out-of-domain, NaN and +/-Inf inputs become infinities. Wormhole
+    # preserves the sign of negative NaN inputs; Blackhole canonicalizes all
+    # of these lanes to +Inf. The poles x = +/-1 keep their sign on both.
+    expected_nonfinite = np.full(nan_lanes.sum(), np.inf)
+    if is_wormhole_b0():
+        nonfinite_inputs = x64[nan_lanes]
+        negative_nan = np.isnan(nonfinite_inputs) & np.signbit(nonfinite_inputs)
+        expected_nonfinite[negative_nan] = -np.inf
     assert np.array_equal(
-        out[nan_lanes], np.full(nan_lanes.sum(), np.inf)
-    ), "out-of-domain / NaN inputs must produce +Inf"
+        out[nan_lanes], expected_nonfinite
+    ), "out-of-domain / NaN inputs must follow the architecture's infinity-sign contract"
     assert np.array_equal(out[inf_lanes], golden[inf_lanes]), "pole inputs must produce signed Inf"
 
     zero_golden = finite_lanes & (golden == 0.0)

@@ -11,13 +11,13 @@
 namespace ckernel {
 namespace sfpu {
 
-// BF16 erfinv kernel migrated from Blackhole:
+// Wormhole BF16 erfinv kernel:
 //
 //     t = ln(1 - x^2);   erfinv(x) ~= x * P3(|t|)   on |x| < 1
 //
-// The coefficient table and anchored single-rounding reduction are identical
-// to the exhaustively validated Blackhole BF16 implementation. Wormhole
-// accuracy is validated separately on silicon.
+// The coefficient table and anchored single-rounding reduction are shared
+// with the Blackhole implementation. Both architecture paths are covered by
+// the exhaustive BF16 accuracy test.
 //
 // This path serves the BF16 destination-register case only; fp32 dest
 // (is_fp32_dest_acc_en) keeps the pre-existing Wormhole implementation.
