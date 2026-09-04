@@ -174,6 +174,7 @@ inline void _llk_math_sub_bcast_cols_compensated_(
     constexpr std::uint32_t tf32_src_fmt_overrides =
         (to_underlying(DataFormat::Tf32) << ALU_FORMAT_SPEC_REG_SrcA_val_SHAMT) | (1 << ALU_FORMAT_SPEC_REG_SrcA_override_SHAMT) |
         (to_underlying(DataFormat::Tf32) << ALU_FORMAT_SPEC_REG_SrcB_val_SHAMT) | (1 << ALU_FORMAT_SPEC_REG_SrcB_override_SHAMT);
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
     cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_val_ADDR32, 0, src_fmt_override_mask>(tf32_src_fmt_overrides);
 
     for (std::uint32_t tile = 0; tile < ct_dim; ++tile)
@@ -203,6 +204,7 @@ inline void _llk_math_sub_bcast_cols_compensated_(
     TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD);
 
     // Restore the state_configure baseline for subsequent math operations.
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
     cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_val_ADDR32, 0, src_fmt_override_mask>(0);
     math::_configure_default_zero_flag_state_();
     math::clear_dst_reg_addr();
