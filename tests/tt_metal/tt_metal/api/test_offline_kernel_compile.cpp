@@ -9,8 +9,10 @@
 #include <chrono>
 #include <cstddef>
 #include <filesystem>
-#include <string>
+#include <fstream>
+#include <sstream>
 #include <stdexcept>
+#include <string>
 #include <variant>
 #include <vector>
 
@@ -22,9 +24,11 @@
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "device_fixture.hpp"
+#include "impl/program/kernel_prewarm.hpp"
 #include "jit_build/build.hpp"
 #include "llrt/rtoptions.hpp"
 #include "tt_metal/jit_build/build_cache_telemetry.hpp"
+#include "tt_metal/jit_build/build_env_manager.hpp"
 
 namespace tt::tt_metal {
 
@@ -210,6 +214,62 @@ bool contains_nonempty_elf(const fs::path& dir) {
     return false;
 }
 
+void write_probe_kernel(const fs::path& path, const std::string& tag) {
+    std::ofstream file(path, std::ios::trunc | std::ios::binary);
+    file << "#include <cstdint>\n"
+            "namespace {\n"
+            "const char kProbe[] = \""
+         << tag
+         << "\";\n"
+            "}\n"
+            "void kernel_main() {\n"
+            "    *reinterpret_cast<volatile uintptr_t*>(0x10000) = reinterpret_cast<uintptr_t>(kProbe);\n"
+            "}\n";
+    TT_FATAL(!file.fail(), "Failed to write probe kernel to {}", path.string());
+}
+
+// Loadable ELFs are the ground truth for the code that the device runs. XIP sidecars are debug
+// disassembly dumps and can lag the compiled kernel.
+std::vector<fs::path> list_kernel_elfs(const fs::path& dir) {
+    std::vector<fs::path> elfs;
+    if (!fs::exists(dir)) {
+        return elfs;
+    }
+    for (const auto& entry : fs::recursive_directory_iterator(dir)) {
+        if (entry.is_regular_file() && entry.path().extension() == ".elf" &&
+            !entry.path().filename().string().ends_with(".xip.elf")) {
+            elfs.push_back(entry.path());
+        }
+    }
+    std::sort(elfs.begin(), elfs.end());
+    return elfs;
+}
+
+std::string read_kernel_elf_bytes(const fs::path& dir) {
+    std::string bytes;
+    for (const auto& elf : list_kernel_elfs(dir)) {
+        std::ifstream file(elf, std::ios::binary);
+        std::stringstream stream;
+        stream << file.rdbuf();
+        bytes += stream.str();
+    }
+    return bytes;
+}
+
+bool blob_contains(const std::string& haystack, const std::string& needle) {
+    return haystack.find(needle) != std::string::npos;
+}
+
+std::string with_trailing_slash(std::string path) {
+    if (!path.empty() && path.back() != '/') {
+        path.push_back('/');
+    }
+    return path;
+}
+
+constexpr const char* kProbeTagV1 = "TTPREWARM_PROBE_AAAAAAAAAAAA";
+constexpr const char* kProbeTagV2 = "TTPREWARM_PROBE_BBBBBBBBBBBB";
+
 TEST_F(OfflineKernelCompileMockFixture, CompileKernelOfflineEmitsExpectedSubtreeForReaderKernel) {
     if (offline_compile_unsupported_under_simulator()) {
         GTEST_SKIP() << "CompileKernelOffline has no precompiled firmware for the simulator build_key "
@@ -336,6 +396,73 @@ TEST_F(MeshDeviceFixture, RuntimeMissingPrecompiledErrorsOnPolicyError) {
         FAIL() << "Unexpected exception type: " << ex.what();
     }
     EXPECT_EQ(jit_srcs.delta(), 0u);
+}
+
+TEST_F(MeshDeviceFixture, OfflinePrewarmReflectsEditedKernelBody) {
+    auto* device = this->devices_.at(0)->get_devices().at(0);
+    const auto& build_env =
+        BuildEnvManager::get_instance(extract_context_id(device)).get_device_build_env(device->build_id()).build_env;
+
+    ScopedTempDir source_dir("ttprewarm_probe");
+    const fs::path kernel_path = source_dir.path_ / (source_dir.path_.filename().string() + ".cpp");
+    const fs::path kernel_subdir = fs::path(build_env.get_out_kernel_root_path()) / kernel_path.stem().string();
+
+    auto compile_probe = [&]() {
+        Program program = CreateProgram();
+        CreateKernel(program, kernel_path.string(), CoreCoord{0, 0}, kReaderDmConfig);
+        detail::CompileProgram(device, program);
+    };
+
+    write_probe_kernel(kernel_path, kProbeTagV1);
+    compile_probe();
+    const std::string elf_v1 = read_kernel_elf_bytes(kernel_subdir);
+    ASSERT_FALSE(elf_v1.empty()) << "no kernel .elf produced under " << kernel_subdir;
+    ASSERT_TRUE(blob_contains(elf_v1, kProbeTagV1));
+    ASSERT_FALSE(blob_contains(elf_v1, kProbeTagV2));
+
+    // The body edit keeps the path and compile arguments stable, so the manifest key and kernel hash
+    // are unchanged. Offline prewarm must compile the current source instead of a captured snapshot.
+    write_probe_kernel(kernel_path, kProbeTagV2);
+    const std::size_t built = kernel_prewarm::prewarm_manifest_offline(
+        build_env.get_out_root_path(), with_trailing_slash(build_env.get_root_path()));
+    ASSERT_GT(built, 0u) << "offline prewarm built nothing";
+
+    const std::string elf_prewarm = read_kernel_elf_bytes(kernel_subdir);
+    EXPECT_TRUE(blob_contains(elf_prewarm, kProbeTagV2)) << "prewarm did not reflect the edited body";
+    EXPECT_FALSE(blob_contains(elf_prewarm, kProbeTagV1)) << "prewarm served the stale kernel body";
+}
+
+TEST_F(MeshDeviceFixture, EditedKernelBodyForcesRecompileNotStaleCacheHit) {
+    auto* device = this->devices_.at(0)->get_devices().at(0);
+    const auto& build_env =
+        BuildEnvManager::get_instance(extract_context_id(device)).get_device_build_env(device->build_id()).build_env;
+
+    ScopedTempDir source_dir("ttdephash_probe");
+    const fs::path kernel_path = source_dir.path_ / (source_dir.path_.filename().string() + ".cpp");
+    const fs::path kernel_subdir = fs::path(build_env.get_out_kernel_root_path()) / kernel_path.stem().string();
+
+    auto compile_probe = [&]() {
+        Program program = CreateProgram();
+        CreateKernel(program, kernel_path.string(), CoreCoord{0, 0}, kReaderDmConfig);
+        detail::CompileProgram(device, program);
+    };
+
+    write_probe_kernel(kernel_path, kProbeTagV1);
+    jit_build_cache_clear();
+    compile_probe();
+    const std::string elf_v1 = read_kernel_elf_bytes(kernel_subdir);
+    ASSERT_TRUE(blob_contains(elf_v1, kProbeTagV1));
+    ASSERT_FALSE(blob_contains(elf_v1, kProbeTagV2));
+
+    // Clearing in-memory dedup models a fresh process. The dependency hash must reject the v1
+    // artifacts on disk after the source body changes.
+    write_probe_kernel(kernel_path, kProbeTagV2);
+    jit_build_cache_clear();
+    compile_probe();
+
+    const std::string elf_v2 = read_kernel_elf_bytes(kernel_subdir);
+    EXPECT_TRUE(blob_contains(elf_v2, kProbeTagV2)) << "recompiled binary does not reflect the edit";
+    EXPECT_FALSE(blob_contains(elf_v2, kProbeTagV1)) << "stale kernel body survived the edit";
 }
 
 }  // namespace tt::tt_metal
