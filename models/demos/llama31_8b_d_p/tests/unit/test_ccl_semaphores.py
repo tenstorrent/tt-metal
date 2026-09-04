@@ -24,7 +24,19 @@ Run:
 import pytest
 from loguru import logger
 
+import ttnn
+from models.demos.gpt_oss_d_p.utils.general_utils import get_default_num_links
+from models.demos.llama31_8b_d_p.tests.galaxy_prefill_kv_pcc import allocate_engine_cache, build_runtime, run_prefill
+from models.demos.llama31_8b_d_p.tests.test_factory import (
+    GALAXY_MESH_SHAPE,
+    galaxy_device_params,
+    prefill_topology,
+    requires_galaxy,
+    requires_ring_fabric,
+)
 from models.demos.llama31_8b_d_p.tt.ccl import CCLManager
+from models.demos.llama31_8b_d_p.tt.config import derive_head_dim
+from models.demos.llama31_8b_d_p.tt.model_config import ModelArgs
 
 # `bringup_log/04_CCL_PLAN.md` §3, from `models/demos/gpt_oss_d_p/tt/ccl.py:65`, `:71`, `:77`, `:84`.
 EXPECTED_RS = 6
@@ -33,6 +45,9 @@ EXPECTED_BARRIER = 2
 EXPECTED_RING_ATTENTION = 2
 EXPECTED_TOTAL = 14
 N_LAYERS = 32  # `bringup_log/00_MODEL_CARD.md` §2 — one manager serves all of them.
+# One chunk that is also the whole cache: the smallest legal SP shape (a multiple of
+# `TILE_SIZE * sp` = 128), so the P8 arm below costs one short forward rather than a long one.
+SP_CHUNK = 128
 
 
 def _inventory(ccl):
@@ -143,3 +158,67 @@ def test_semaphores_would_multiply_if_built_per_layer(mesh_device):
     logger.info(f"[G-SEMAPHORE] control: 3 managers -> {total} semaphores (correct code: {EXPECTED_TOTAL})")
     assert total == 3 * EXPECTED_TOTAL
     assert total != EXPECTED_TOTAL, "the control did not diverge from the correct inventory"
+
+
+# =============================================================================================
+# The P8 half: the target mesh, and the state AFTER a real multi-layer run.
+#
+# `BRINGUP_RECIPE.md:1778-1780` asks for the inventory "at construction, after dozens of getter
+# cycles, and **after a real multi-layer harness run**". The first two are above and run on one
+# card; the third cannot: it needs a model, which needs `tp == num_key_value_heads == 8`. It is
+# also the only one of the three that could catch a `CCLManager` rebuilt inside `prefill_chunk` or
+# inside a layer, because the getter-cycle arms never construct a second manager.
+# =============================================================================================
+@requires_galaxy
+@requires_ring_fabric
+@pytest.mark.parametrize("device_params", [galaxy_device_params()], indirect=True)
+@pytest.mark.parametrize("mesh_device", [GALAXY_MESH_SHAPE], indirect=True)
+def test_inventory_is_unchanged_after_a_real_multi_layer_run(mesh_device):
+    """Build the real model on `(4,8)`, run a chunk through every layer, re-count.
+
+    Weightless: `state_dict={}` plus the weight cache `G-WEIGHTS` populated, so this costs a build
+    and one forward rather than a 15 GB checkpoint read. What is under test is the semaphore
+    inventory, not the numbers — `G-MESH-KV` owns those.
+    """
+    args = ModelArgs(mesh_device, max_seq_len=SP_CHUNK)
+    hf = args.hf_config
+    n_layers = hf["num_hidden_layers"]
+    ccl = CCLManager(mesh_device, num_links=get_default_num_links(mesh_device), topology=prefill_topology())
+    before = _inventory(ccl)
+
+    runtime = build_runtime(
+        mesh_device,
+        hf,
+        {},  # cache-only: the tilized weights come from the G-WEIGHTS cache
+        num_layers=n_layers,
+        chunk_global=SP_CHUNK,
+        total=SP_CHUNK,
+        cache_path=args.weight_cache_path(ttnn.bfloat8_b),
+        ccl_manager=ccl,
+    )
+    assert runtime.ccl_manager is ccl, (
+        "TtPrefillRuntime built a second CCLManager although one was passed in; there must be "
+        "exactly one per mesh (bringup_log/04_CCL_PLAN.md section 2)"
+    )
+    after_build = _inventory(ccl)
+
+    kv_cache = allocate_engine_cache(mesh_device, num_layers=n_layers, total=SP_CHUNK, head_dim=derive_head_dim(hf))
+    run_prefill(runtime, kv_cache, [0] * SP_CHUNK, n_chunks=1, chunk_global=SP_CHUNK, n_tokens=SP_CHUNK)
+    kv_cache.k.deallocate(True)
+    kv_cache.v.deallocate(True)
+    after_run = _inventory(ccl)
+
+    logger.info(
+        f"[G-SEMAPHORE] on {GALAXY_MESH_SHAPE} (TP=8, SP=4), {n_layers} layers, one "
+        f"{SP_CHUNK}-token chunk: construction {before} -> after build {after_build} -> after run "
+        f"{after_run}; ping-pong indices rs={ccl.rs_ping_pong_idx} ag={ccl.ag_ping_pong_idx} "
+        f"barrier={ccl.barrier_idx} (all in [0, {CCLManager.PING_PONG_DEPTH}))"
+    )
+    assert before == after_build == after_run, (
+        f"the semaphore inventory changed across a real run: {before} -> {after_build} -> "
+        f"{after_run}. A count that became n_layers x the constant means a CCLManager is being "
+        f"built per layer or per chunk, which shows up as nondeterministic PCC, not as an error."
+    )
+    assert sum(after_run.values()) == EXPECTED_TOTAL
+    for idx in (ccl.rs_ping_pong_idx, ccl.ag_ping_pong_idx, ccl.barrier_idx):
+        assert 0 <= idx < CCLManager.PING_PONG_DEPTH, f"a ping-pong index escaped its ring: {idx}"

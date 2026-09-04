@@ -78,9 +78,27 @@ Keep this checklist in `bringup_log/06_GATES.md` and tick it as you go. If you m
   org token in the environment). The live `config.json` byte-matches the bundled
   `models/tt_transformers/model_params/Llama-3.1-8B-Instruct/config.json` dims.
 - BH Galaxy mesh descriptors live in `tt_metal/fabric/mesh_graph_descriptors/` — e.g.
-  `bh_galaxy_sp4_torus_xy_graph_descriptor.textproto`,
+  BH Galaxy mesh descriptors: `tt_metal/fabric/mesh_graph_descriptors/`. For **one** galaxy (32
+  devices, one host) the correct pair is `single_bh_galaxy_mesh_graph_descriptor.textproto` and
+  `single_bh_galaxy_torus_xy_graph_descriptor.textproto` — both `[8,4]` with `host_topology [1,1]`.
+  **Do not use** `bh_galaxy_sp4_torus_xy_graph_descriptor.textproto` (four `[32,4]` meshes,
+  `host_topology [4,1]` — 512 devices across 16 hosts) or
+  `32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto` (`[32,4]`, `host_topology [4,1]` — 128
+  devices, 4 hosts): an earlier draft of this section named both as examples for a single-galaxy
+  machine, which is simply wrong. Check `instances`, `dims` and `host_topology` in the file before
+  trusting any descriptor name, including these.
   `32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto`. The Ring topology P8 needs the torus
-  descriptor; a Ring topology on a plain `FABRIC_1D` fabric **hangs** rather than erroring.
+**Corrected by measurement — the previous claim here was false in both halves.** On a single
+Blackhole Galaxy: `FABRIC_1D_RING` **cannot be initialised at all** (the torus descriptor fails to map
+— `topology_mapper.cpp:540`, "32 target node(s) are not mapped to any global node"; a `RELAXED` copy
+fails identically; and `FABRIC_1D_RING` over a LINE descriptor is refused outright at
+`mesh_graph.cpp:447-453`, "FabricConfig can only restrict topology ... not create new connections").
+Meanwhile `Topology.Ring` **collectives** on a plain `FABRIC_1D` fabric are **bit-exact**, not hanging
+— verified at (1,8)/1 link and (2,8)/(4,8)/2 links on both axes.
+**So on one galaxy every measurement is a `FABRIC_1D` run**, and any instruction to "exercise 2-link
+Ring fabric" is unachievable as written. Note separately that the *ring SDPA op* does require a wrap
+route and aborts under `Topology.Ring` (`fabric.cpp:171`, "Could not find any forwarding direction
+from src (M0, D0) to dst (M0, D3)") — pass it `Linear`.
 - **Never write the HF token into any file, log, or agent prompt.** It is read from the environment
   only.
 
@@ -220,6 +238,20 @@ pytest models/demos/llama31_8b_d_p/tests/unit/test_mlp_vs_ref.py -x -q 2>&1 \
 ```
 
 The ledger entry then cites the raw filename. A gate with no raw log did not happen.
+
+**Add a third verifier pass for raw-artefact citations.** Both `path:line` passes key on a line
+number, so the ledger's own evidence form — a bare backticked `raw/<gate>_<stamp>.log` — is scanned by
+neither, and a dangling one survives every document gate. When you add that pass, note two things it
+will teach you: **documenting an absent file creates a citation to it** (name missing files without
+the citation form), and a **generic placeholder written in the citation form is indistinguishable from
+a citation**. Both bit on the first run of this pass.
+
+**Timestamp every derived artefact, not just the `tee`d log.** Gate logs carry a UTC stamp and never
+collide; the per-layer PCC tables and similar files a gate writes often do not — and a later phase's
+regression will overwrite them. Measured: one phase's `G-CHUNK_per_layer_pcc.json` was silently
+replaced by a later phase's run at a different sequence length, while the ledger row still cited the
+original. The corollary to "a gate with no raw log did not happen" is that **a gate whose evidence a
+later phase overwrote did not happen either.**
 
 **Commit the raw logs, and check that you actually did.** This repo's root `.gitignore` carries a
 blanket `*.log`, so `bringup_log/raw/` is silently excluded and the evidence for every gate lives on
@@ -1698,7 +1730,12 @@ Two consequences, and neither is a code comment:
 
 ### Step 3 — the rest of the phase
 
-3. Add the submesh parametrisations to the P5/P6 unit tests: `(1,2)`, `(1,4)`, `(1,8)`, **`(2,8)`**
+Add the submesh parametrisations in a **new** test file that opens the full mesh and carves submeshes
+from it. Do **not** parametrise the repo-root `mesh_device` fixture for this: that fixture performs a
+**top-level open** (`conftest.py:661`), which step 1 above establishes dies in fabric bring-up — so
+the two instructions contradicted each other and step 3 was literally unexecutable as previously
+written. Cover `(1,2)`, `(1,4)`, `(1,8)` and `(2,8)` as submeshes, and remember two submeshes must
+never be live at once without `parent.quiesce_devices()`.
    and the target `(4,8)`. `(2,8)` is not optional: `get_default_num_links` returns **1** for any
    single-row mesh (`models/demos/gpt_oss_d_p/utils/general_utils.py:33`), so `(1,N)` parity runs
    `num_links=1` + `Topology.Linear` and **never touches the deployment fabric**. `(2,8)` is the
@@ -1767,6 +1804,10 @@ Expect it, attribute it, and set any future KV threshold against the **chunked**
   — sharper than PCC-vs-torch because it removes the reference's own error. Run all five shapes:
   `(1,2)`, `(1,4)`, `(1,8)`, `(2,8)`, `(4,8)`. At SP > 1 the multi-device output is a token slice,
   so compare it against the corresponding slice of the `(1,1)` output — the TP claim is unchanged
+  **Only for token-wise modules** (norms, MLP, embedding). Attention and the decoder layer *mix*
+  tokens, so a sequence-sharded input makes each row block attend only to itself and the output is not
+  a slice of the unsharded result at all. Sequence-shard only the token-wise modules; give the
+  attention path its own comparison.
   and the extra rows are what put the 2-link Ring transport under test. Negative control: rotate the
   reference by one TP shard (≤ 0.95). This gate holds two overlapping submeshes at once:
   `quiesce_devices()` between phases is mandatory.

@@ -1,0 +1,13 @@
+[fabric-matrix] CONTROL: one ok case is stated as `hang`; the sweep must report MISMATCH
+[fabric-matrix] 1 cases, 240s timeout each, one subprocess per case; tt-smi -r after any hang
+
+[fabric-matrix] === submesh_1x8_linear_l1_ax1  (expect hang)
+[fabric-matrix] submesh_1x8_linear_l1_ax1: expect=hang got=ok MISMATCH in 20.8s :: all_gather axis=1 n=8 bit-exact on all 8 devices
+
+==============================================================================================================
+case                                 expect  got     match     secs  detail
+--------------------------------------------------------------------------------------------------------------
+submesh_1x8_linear_l1_ax1            hang    ok      NO        20.8  all_gather axis=1 n=8 bit-exact on all 8 devices
+==============================================================================================================
+[fabric-matrix] 0/1 cases matched their stated expectation; MISMATCHED: ['submesh_1x8_linear_l1_ax1']
+[fabric-matrix] CONTROL PASSED: a wrong expectation was reported

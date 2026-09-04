@@ -2650,3 +2650,677 @@ something stubbed; or find that the reference and the repo disagree.
 - **Confidence:** medium; a wrapper is cheap and a later phase may want one.
 - **Revisit if:** P9's cleanliness gate wants every gate in one command.
 - **Blast radius:** the P7 regression's coverage, nothing executable.
+
+---
+
+## P8 — Multi-device: TP, SP and the CCL gates
+
+---
+
+### DEC-070 — `G-FABRIC-MATRIX` runs every case in a subprocess with a timeout, and resets the box after a hang
+- **Phase / module:** P8 / `tests/fabric_topology_matrix.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** recipe P8 step 2 requires the sweep, and two of its cases do not fail — they **hang**,
+  and the hang is not contained: every later collective on the box hangs too, until `tt-smi -r`
+  (`BRINGUP_RECIPE.md:1683-1689`).
+- **Question:** pytest with a per-test timeout, or a bespoke parent/child harness?
+- **Options considered:**
+  1. pytest + `pytest-timeout`. The repo already has it (it fired at 300 s on `G-WEIGHTS`'s P8 arm).
+     But `pytest-timeout`'s default method cannot reliably interrupt a device call blocked in C++,
+     and a hang would poison every *remaining* test in the same session — turning one measurement
+     into a lost run, which is the exact failure the recipe describes.
+  2. A parent process that runs each case as `python fabric_topology_matrix.py --case <id>` with
+     `subprocess.run(timeout=...)`, and calls `tt-smi -r` after any timeout.
+- **Choice:** option 2. `CASE_TIMEOUT_S = 240`.
+- **Why:** a hang has to become a *recorded measurement*, which means the process that hangs must
+  not be the process that records. 240 s is ~6x the slowest healthy case measured (29.5 s), so a
+  `hang` verdict is a hang and not a slow machine.
+- **The recovery path was validated before the first hazardous case ran**, not after: `tt-smi -r`
+  exit 0 in 41.8 s on this box, and 43.1 s when the harness invoked it for real.
+- **Evidence:** `raw/G-FABRIC-MATRIX_20260904T142819Z.log` — `overlap_1x2_then_1x8_no_quiesce`
+  recorded `hang` at 246.3 s, the box was reset in 43.1 s, and the next case
+  (`overlap_1x2_then_1x8_quiesce`) passed bit-exactly 22.4 s later. A poisoned box would have made
+  that impossible.
+- **Confidence:** high.
+- **Falsifier:** if a healthy case ever took more than 240 s the harness would mislabel it a hang.
+  Every healthy case measured 18-30 s.
+- **Revisit if:** a case is added whose legitimate runtime approaches the timeout.
+- **Blast radius:** `G-FABRIC-MATRIX` only.
+
+---
+
+### DEC-071 — Neither mesh-graph descriptor the recipe names is usable on one galaxy
+- **Phase / module:** P8 / `tests/fabric_topology_matrix.py`, `tests/test_factory.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** `BRINGUP_RECIPE.md:80-83` says "BH Galaxy mesh descriptors live in
+  `tt_metal/fabric/mesh_graph_descriptors/` — e.g. `bh_galaxy_sp4_torus_xy_graph_descriptor.textproto`,
+  `32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto`. The Ring topology P8 needs the torus
+  descriptor". The user's hard scope limit for this session is **one** Blackhole Galaxy.
+- **Question:** which descriptor does a single galaxy use?
+- **Finding:** **neither of the two named.** Read from the files themselves:
+  - `bh_galaxy_sp4_torus_xy_graph_descriptor.textproto:1-11` declares **four** meshes of
+    `dims: [32, 4]` with `host_topology { dims: [4, 1] }` — a super-pod of 4 galaxies, 512 devices,
+    16 hosts;
+  - `32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto:3-10` declares one `dims: [32, 4]` mesh
+    with `host_topology { dims: [4, 1] }` — a quad galaxy, 128 devices, 4 hosts.
+  Both are multi-galaxy and out of scope. The single-galaxy descriptors are
+  `single_bh_galaxy_mesh_graph_descriptor.textproto` (`dims: [8, 4]`, no `dim_types`, i.e. LINE/LINE)
+  and `single_bh_galaxy_torus_xy_graph_descriptor.textproto` (`dims: [8, 4]`,
+  `dim_types: [RING, RING]`), both `host_topology { dims: [1, 1] }` — 32 devices, one host. The
+  in-repo galaxy harness names the second one
+  (`models/demos/gpt_oss_d_p/tests/galaxy_prefill_kv_pcc.py:26`).
+- **Choice:** the harness sets `TT_MESH_GRAPH_DESC_PATH` to `single_bh_galaxy_torus_xy...` for its
+  `FABRIC_1D_RING` cases and `single_bh_galaxy_mesh...` for its `FABRIC_1D` cases, always explicitly,
+  never by default.
+- **Why:** the descriptor and the fabric config are one decision (`DEC-027`), and leaving either to
+  a default is how a Ring collective ends up on a route that does not exist.
+- **Evidence:** the descriptor files; `raw/G-FABRIC-MATRIX_20260904T142819Z.log`.
+- **Confidence:** high — read from the files, not inferred.
+- **Blast radius:** every P8 gate's fabric configuration; the recipe's §The machine bullet.
+
+---
+
+### DEC-072 — The SP path needs **two** cores, not one: the ring, and an exact bootstrap
+- **Phase / module:** P8 / `tt/attention/dense_sp.py`, `tt/attention/prefill.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** implementing the P5.5 seam. The recipe's P8 step 7 names only the ring path.
+- **Question:** is `dense_sp_attention` enough to cover every SP > 1 configuration?
+- **Finding:** no. `ttnn.transformer.ring_joint_scaled_dot_product_attention`'s own docstring:
+  "Chunked-prefill mode is entered implicitly when `input_tensor_q`'s per-device seq length is
+  **less than** `input_tensor_k`'s". A request whose single chunk fills the whole cache
+  (`max_seq_len == chunk_global`) makes them equal, so the ring op cannot serve it.
+- **Choice:** implement `sp_bootstrap_attention` as well — all-gather Q/K/V on the SP axis, run the
+  **caller's own** dense SDPA closure on the full sequence, reduce-scatter, divide by `sp` (the
+  reduce-scatter sums `sp` identical copies). Template:
+  `models/demos/gpt_oss_d_p/tt/attention/prefill.py:230-252`.
+- **Why:** it makes a one-shot SP request exact rather than unsupported, and it gives `G-MESH-KV`
+  and `G-CHUNK-ATTN` a genuinely different second core to compare the ring against. Taking the
+  `run_sdpa` closure from the caller rather than building a program config here is what guarantees
+  the bootstrap runs the same kernel every P5-P7 gate scored.
+- **The hazard it introduces, and how it is closed:** Appendix B's last row — "everything passes but
+  the numbers look too good | you measured the SP bootstrap because `max_seq_len == chunk_size`".
+  `select_attention_core` (`DEC-075`) names the choice in one place and every gate **asserts** which
+  core ran.
+- **Evidence:** `raw/G-MESH-KV-oneshot_20260904T150307Z.log` (`attention core for chunk 0:
+  sp_bootstrap`, min K 0.9987994) vs `raw/G-MESH-KV-chunked512_20260904T150451Z.log.gz`
+  (`sp_ring`, min K 0.9967119).
+- **Confidence:** high.
+- **Falsifier:** if the ring op ever accepted equal Q and K lengths the bootstrap would be dead code.
+- **Blast radius:** `tt/attention/prefill.py`, `G-MESH-KV`, `G-CHUNK-ATTN`.
+
+---
+
+### DEC-073 — The ring SDPA's `q_chunk_size` / `k_chunk_size` stay at the template's 128
+- **Phase / module:** P8 / `tt/attention/dense_sp.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** `sp_ring_program_config` needs SDPA chunk sizes, and the dense path's are seq-len
+  dependent (32 below 2048, 256 above).
+- **Question:** derive them from the chunk length, or pin them?
+- **Choice:** pin `q_chunk_size = k_chunk_size = 128`, the template's value
+  (`models/demos/gpt_oss_d_p/tt/attention/prefill.py:196-197`).
+- **Why:** the ring op's Q slab is one chunk rather than the whole sequence, so the dense path's
+  threshold logic does not transfer; and recipe §2.3 measured that sweeping SDPA chunk sizes over
+  {32, 128, 256} moves the fused kernel's PCC by **under 4%**, so this is not a correctness knob in a
+  functional-first iteration.
+- **Measured, and it is the reason this entry exists rather than being an inherited default:** the op
+  accepts `q_chunk_size=128` with a per-device Q of **64** rows — `G-MESH-KV` at
+  `PREFILL_CHUNK_SIZE=256` (chunk_local 64) scored min K 0.9967844 / V 0.9866232, essentially equal
+  to the chunk_local-128 arm's 0.9967119 / 0.9868228. A pinned 128 therefore does not constrain the
+  deployable chunk size, which was the only reason to consider deriving it.
+- **Evidence:** `raw/G-MESH-KV-chunked256_20260904T150549Z.log.gz`,
+  `raw/G-MESH-KV-chunked512_20260904T150451Z.log.gz`.
+- **Confidence:** high for correctness, none claimed for performance.
+- **Revisit if:** perf work starts.
+- **Blast radius:** `G-SP-RING`, `G-CHUNK-ATTN`, `G-MESH-KV`.
+
+---
+
+### DEC-074 — `dense_sp_attention`'s `q` is the **per-device** chunk, correcting the P5.5 seam's docstring
+- **Phase / module:** P8 / `tt/attention/dense_sp.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** the P5.5 stub documented `q` as `[1, n_q_local, chunk_global, head_dim]`.
+- **Finding:** wrong. The op takes `[b x nh x N/num_devices x dh]` (its own docstring), i.e. the
+  **per-device** length `chunk_local`; the global figure travels in `logical_n`. The template's own
+  call passes the post-head-split per-device tensor
+  (`models/demos/gpt_oss_d_p/tt/attention/prefill.py:208-216`).
+- **Choice:** fix the docstring to `chunk_local` and say so here rather than silently.
+- **Why:** the seam's whole purpose (P5.5) was that P8 would not have to rediscover the interface; a
+  wrong shape in it is worse than none, for the same reason an unverified `path:line` is worse than
+  no citation.
+- **Evidence:** the op's docstring; `raw/G-SP-RING_20260904T145354Z.log` (output `(1, 4, 128, 128)`
+  for `chunk_global=512`, `sp=4`, i.e. `chunk_local=128`).
+- **Confidence:** high.
+- **Blast radius:** documentation only.
+
+---
+
+### DEC-075 — The attention core is chosen in **one** function, `select_attention_core`, and every gate asserts it
+- **Phase / module:** P8 / `tt/attention/prefill.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** `DEC-072` makes the SP path a three-way choice (`dense` / `sp_bootstrap` / `sp_ring`),
+  and Appendix B's final row is a mis-selection between two of the three.
+- **Question:** inline the conditions in `attention_forward`, as the template does
+  (`models/demos/gpt_oss_d_p/tt/attention/prefill.py:182-191`), or factor them out?
+- **Choice:** factor them into `select_attention_core(config, mesh_config, kv_cache, *, seq_len,
+  cached_len) -> str`, called by `attention_forward` and **imported by the gates**.
+- **Why:** a gate cannot assert which core ran if the condition lives inside the function under test.
+  With the choice named, `G-MESH-KV` and `G-CHUNK-ATTN` both assert their expected core *before*
+  spending three minutes measuring the wrong one, and the assertion is on the same expression the
+  production path evaluates rather than a copy of it.
+- **Evidence:** `raw/G-CHUNK-ATTN_20260904T150921Z.log.gz` — both arms log and assert their core
+  (`sp_bootstrap` at chunk 1024, `sp_ring` at chunk 512).
+- **Confidence:** high.
+- **Falsifier:** if the two cores ever produced identical numbers the assertion would be the only
+  thing distinguishing them — which is precisely why it exists. They do not: min K 0.9987994 vs
+  0.9967119.
+- **Blast radius:** `tt/attention/prefill.py`, every P8 mesh gate.
+
+---
+
+### DEC-076 — A `FABRIC_1D_RING` run must have the torus descriptor **exported before pytest starts**
+- **Phase / module:** P8 / `tests/test_factory.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** `TT_MESH_GRAPH_DESC_PATH` is read when metal initialises the control plane, which
+  happens inside the `mesh_device` fixture — too late for a `conftest.py` to set it reliably, and
+  setting it at import time would change every P5-P7 test's environment.
+- **Question:** set it from Python, or require it and skip?
+- **Choice:** require it. `requires_ring_fabric` skips with the exact `export` line in its reason.
+- **Why:** the failure mode of getting this wrong is not a wrong number, it is a fabric init that
+  aborts (or, per the recipe's claim, a hang). A skip with instructions is strictly better than a
+  half-configured run.
+- **Note:** on this galaxy the marker is inert, because `PREFILL_FABRIC` defaults to `1d`
+  (`DEC-079`). It is kept for a torus-cabled machine.
+- **Evidence:** `raw/G-FABRIC-MATRIX_20260904T142547Z.log` — the **aborted first sweep**, in which a
+  five-level `dirname` walk (one short) made `TT_MESH_GRAPH_DESC_PATH` point at a nonexistent file
+  and **every** case reported `std::filesystem::exists(mesh_graph_desc_path)` instead of what it was
+  measuring, including two that "matched" their expectation for the wrong reason. That log is kept as
+  evidence of the harness bug, and `_repo_root()` now asserts the descriptor directory exists.
+- **Confidence:** high.
+- **Blast radius:** the P8 gates' run instructions.
+
+---
+
+### DEC-077 — `SubmeshPool` quiesces on **both** sides of every hand-out
+- **Phase / module:** P8 / `tests/test_factory.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** `tt_metal/api/tt-metalium/mesh_device.hpp:296-305` requires a barrier between phases
+  using overlapping submeshes and names `quiesce_devices()` (`:305`); nothing enforces it, and
+  `G-TP-PARITY` compares `(1,1)` against five multi-device shapes **in one process**.
+- **Question:** call `quiesce_devices()` at the seams by hand, or make forgetting impossible?
+- **Choice:** a `SubmeshPool.use(shape)` context manager that calls `parent.quiesce_devices()`
+  **before** creating/handing out the submesh and again **after** the phase ends, and caches
+  submeshes by `(shape, offset)` so a five-shape sweep creates five.
+- **Why:** the cost of forgetting is not a failed test, it is a machine-wide hang that poisons the box
+  until `tt-smi -r` and turns every remaining gate into a false `FAIL`. A rule that has to be
+  remembered at every call site will be forgotten at one. Quiescing on both sides makes "two live
+  submeshes with no barrier between their phases" unreachable through the API.
+- **Evidence:** the landmine measured directly —
+  `raw/G-FABRIC-MATRIX_20260904T142819Z.log`: `overlap_1x2_then_1x8_no_quiesce` **hang** (246.3 s,
+  box reset), `overlap_1x2_then_1x8_quiesce` **ok** (22.4 s, both phases bit-exact). And
+  `raw/G-TP-PARITY_20260904T145701Z.log`: 6 submesh shapes, 24 phase transitions per module, 5 tests,
+  67.6 s, no hang.
+- **Confidence:** high.
+- **Falsifier:** a hang inside `G-TP-PARITY` would falsify it. None occurred across ~100 hand-outs.
+- **Blast radius:** every P8 test that opens a submesh.
+
+---
+
+### DEC-078 — Arm A of `G-KV-TP8` probes **V with RoPE on** and **K with RoPE off**
+- **Phase / module:** P8 / `tests/unit/test_kv_cache_tp8.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** the head→column claim must be **bit-exact** (recipe §2.5), and RoPE is
+  position-dependent: rotating a labelled vector destroys the label.
+- **Question:** how do you make a bit-exact head→column probe through the *full* model→cache path
+  when that path includes RoPE?
+- **Options considered:**
+  1. Predict the post-RoPE values on the host. Requires reproducing the device's bf16 RoPE
+     arithmetic exactly — a second implementation of the thing under test.
+  2. Probe **V** with RoPE on: V is never rotated (`tt/attention/prefill.py` asserts it as an
+     invariant at `G-ATTN`), so its lanes survive the whole path unchanged.
+  3. Probe **K** with `transformation_mats=None`, which skips RoPE entirely.
+- **Choice:** 2 **and** 3, as two parametrisations of one test.
+- **Why:** the same `column_parallel` mapper places `k_proj` and `v_proj`, on the same axis with the
+  same out-dim geometry, so the two probes together pin the mapping for both. K's *post-RoPE*
+  correctness is arm B's (vs the fp32 golden) and `G-CHUNK-ATTN`'s.
+- **The K probe's weight is head-uniform on purpose:** the loader `reverse_permute`s `k_proj`
+  (`models/tt_transformers/tt/load_checkpoints.py:891`), which permutes rows *within* each head, so
+  only a head-uniform label survives the swizzle. The V probe, which is not swizzled, carries the
+  richer two-lane-block label the rotated-column control needs.
+- **Evidence:** `raw/G-KV-TP8_20260904T144803Z.log` — `v_with_rope` and `k_without_rope` each
+  8/8 columns bit-identical (`torch.equal`, `rtol=atol=0`).
+- **Confidence:** high.
+- **The gap, stated:** no bit-exact check exists for K's *post-RoPE* head→column placement. It is
+  covered numerically by arm B (min K 0.9986432 over 32 layers) and by `G-CHUNK-ATTN`.
+- **Blast radius:** `G-KV-TP8` arm A.
+
+---
+
+### DEC-079 — There is **no ring fabric** on this galaxy; P8 runs on `FABRIC_1D`
+- **Phase / module:** P8 / `tests/test_factory.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** every `FABRIC_1D_RING` case in `G-FABRIC-MATRIX` failed.
+- **Question:** is `FABRIC_1D_RING` available on one Blackhole Galaxy?
+- **Finding:** **no**, and it is the cabling, not the configuration:
+  - `FABRIC_1D_RING` + `single_bh_galaxy_torus_xy_graph_descriptor.textproto` (the only single-galaxy
+    RING/RING descriptor) fails at `tt_metal/fabric/topology_mapper.cpp:544` with "Graph specified in
+    MGD could not fit in the discovered physical topology ... Intra-mesh mapping failure for logical
+    mesh 0 -> physical mesh 0: Mapping validation failed: **32 target node(s) are not mapped to any
+    global node**";
+  - it is **not** the channel policy: a copy of that descriptor with `policy: STRICT` changed to
+    `RELAXED` fails identically;
+  - `FABRIC_1D_RING` on a LINE/LINE or LINE/RING descriptor is refused a step earlier, at
+    `tt_metal/fabric/mesh_graph.cpp:447-453` — "FabricConfig {} requests topology {} which requires
+    more connectivity than MGD provides {}. FabricConfig can only restrict topology (e.g.,
+    torus→mesh), not create new connections."
+- **Choice:** `PREFILL_FABRIC` defaults to `1d` (`ttnn.FabricConfig.FABRIC_1D`), with `1d_ring` kept
+  as an override for a torus-cabled machine.
+- **Why:** it is the only fabric this machine can initialise, and it is sufficient — see `DEC-081`.
+- **What the recipe says, and it is wrong here:** `BRINGUP_RECIPE.md:82-84`, "The Ring topology P8
+  needs the torus descriptor; a Ring topology on a plain `FABRIC_1D` fabric **hangs** rather than
+  erroring." On this box the torus descriptor cannot be used at all, and
+  `ttnn.Topology.Ring` **collectives on `FABRIC_1D` do not hang** — they return bit-exact results at
+  `(1,8)`/1 link, `(2,8)`/2 links and `(4,8)`/2 links on both axes.
+- **Evidence:** `raw/G-FABRIC-MATRIX_20260904T142819Z.log` (5 ring-fabric cases `error`,
+  `submesh_1x8_ring_on_fabric1d` `ok` and bit-exact),
+  `raw/G-FABRIC-MATRIX-ADDENDUM_20260904T144233Z.log` (5/5 `ok`).
+- **Confidence:** high on this machine; the recipe's claim may well hold on a torus-cabled galaxy,
+  which is why the override stays.
+- **Falsifier:** re-cabling, or `./build/test/tt_metal/tt_fabric/test_system_health` reporting the
+  wrap links present — in which case the mapping failure would be a control-plane bug rather than a
+  cabling fact.
+- **Blast radius:** every P8 gate's `device_params`; `07_RISKS.md` R-030.
+
+---
+
+### DEC-080 — `G-KV-TP8` splits arm A in two: head→column at chunk 0, write offset without an attention core
+- **Phase / module:** P8 / `tests/unit/test_kv_cache_tp8.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** the first draft parametrised the head→column probe over `kv_actual ∈ {0, 128}`. The
+  `128` case failed — correctly: `Attention.__call__` at `cached_len > 0` is **delta 3**, and on a
+  `(1,8)` mesh there is no SP axis to run the ring core on, so the dense core refuses it.
+- **Question:** weaken the refusal, move the probe to `(4,8)`, or split the arm?
+- **Choice:** split. The full-path probe (projection → head split → RoPE → SDPA → write) runs at
+  chunk 0 only; a second test drives `apply_qkv_projection` → `split_qkv_heads_prefill` →
+  `write_kv_chunk` directly over three offsets `{0, 128, 256}` at TP=8.
+- **Why:** the refusal is right and must not be weakened (recipe P7's instruction is explicit). The
+  two claims are separable: head→column is about the *mapper*, the advancing offset is about the
+  *write*, and only the second needs more than one offset. `G-CHUNK-ATTN` on `(4,8)` is where a
+  cache-backed **core** runs.
+- **Evidence:** `raw/G-KV-TP8_20260904T144803Z.log` — 24/24 (offset, column) blocks bit-identical,
+  pad tail exactly 0. The earlier failure is in `raw/G-KV-TP8-ARMA_20260904T144614Z.log`.
+- **Confidence:** high.
+- **Blast radius:** `G-KV-TP8` arm A.
+
+---
+
+### DEC-081 — The collective topology is `Linear`, because the **ring SDPA** demands a wrap route the fabric lacks
+- **Phase / module:** P8 / `tests/test_factory.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** `G-SP-RING`'s first run, with `PREFILL_TOPOLOGY=ring` on `FABRIC_1D`.
+- **Question:** `Ring` or `Linear` for `CCLManager.topology`, given `DEC-079`?
+- **Finding:** plain collectives do not decide it — `ttnn.Topology.Ring` all-gathers are bit-exact on
+  `FABRIC_1D` at every P8 shape. The **ring SDPA** does:
+  `ttnn.transformer.ring_joint_scaled_dot_product_attention` under `Topology.Ring` asks the fabric for
+  the SP axis's wrap-around route and aborts —
+  `TT_FATAL @ tt_metal/fabric/fabric.cpp:174: forwarding_direction.has_value()`,
+  "Could not find any forwarding direction from src (M0, D0) to dst (M0, D3)" — where D0→D3 is the
+  4-device SP ring closing on itself. The identical call with `Topology.Linear` runs.
+- **Choice:** `PREFILL_TOPOLOGY` defaults to `linear`.
+- **Why:** it is the only topology under which the deployment's own attention core executes on this
+  machine. `Ring` is not merely unnecessary here — it is unserviceable for the one op that needs a
+  real ring, which is a sharper statement than `DEC-079`'s and is what settles the topology for the
+  whole phase.
+- **Measured cost of the choice: none that this phase can see.** `G-SP-RING` scores PCC 0.9996672 at
+  **6.05x** its own floor under `Linear`, against the recipe's quoted 7.98x for the same op; and
+  `G-TP-PARITY` is 0.9999733-1.0000000 across all five shapes. A `Ring`-vs-`Linear` A/B of the
+  collectives alone is possible (both work) and is not done here: it would be a *performance*
+  measurement, and perf is an explicit non-goal.
+- **Evidence:** `raw/G-SP-RING_20260904T145034Z.log` (the `Ring` abort, with the full backtrace),
+  `raw/G-SP-RING_20260904T145354Z.log` (`Linear`, 4/4 tests pass).
+- **Confidence:** high.
+- **Revisit if:** the machine is re-cabled for a torus, or the ring op gains a linear-route fallback.
+- **Blast radius:** `CCLManager.topology` everywhere in P8; `07_RISKS.md` R-030, R-031.
+
+---
+
+### DEC-082 — `G-SP-RING`'s numeric control is a wrong `kv_cache_batch_idx`, because a wrong `kv_actual_isl` is refused
+- **Phase / module:** P8 / `tests/unit/test_dense_sp_vs_ref.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** the gate needs a negative control (§1.4). The obvious one — lie about
+  `kv_actual_isl`, the chunk's position in the global sequence — turned out not to be numeric: the op
+  **refuses** it.
+- **Finding:** `kv_actual_isl=0` for a chunk that really starts at 512 aborts with
+  `TT_FATAL @ ring_joint_sdpa_device_operation.cpp:278: new_actual_isl <= chunk_capacity`,
+  "KV-pad-aware rotation expects current valid Q to fit in one fixed chunk. Got new_actual_isl=1024,
+  chunk capacity=512" — because the op derives current valid tokens as `logical_n - kv_actual_isl`.
+- **Choice:** keep that as a **structural** control (§1.4 counts a configuration that must refuse as
+  one) and add a **numeric** control: a wrong `kv_cache_batch_idx`.
+- **Why:** a gate needs at least one control the op *accepts* and gets wrong, or the assertion has
+  never been exercised against a wrong answer. And `kv_cache_batch_idx` is the right choice on the
+  merits: `dense_sp.py`'s fact 3 is that it must be `slot_idx * num_layers + layer_idx`, and passing
+  the slot alone makes **every layer read layer 0's cache** — layer 0 correct by coincidence, layers
+  1+ on stale K/V. That is the exact shape of bug a single-layer test cannot see, so the control
+  populates two layers with different K/V and reads layer 1 both ways.
+- **Evidence:** `raw/G-SP-RING_20260904T145354Z.log` — correct read PCC **0.9996770**, control read
+  PCC **-0.00337**. The refused-`kv_actual_isl` control's `TT_FATAL` text is in the same log.
+- **Good news worth stating:** an off-by-`actual_start` chunk cannot silently produce a wrong answer
+  through this op. It aborts.
+- **Confidence:** high.
+- **Blast radius:** `G-SP-RING`.
+
+---
+
+### DEC-083 — `G-TP-PARITY` shards the sequence only for the **token-wise** modules
+- **Phase / module:** P8 / `tests/unit/test_tp_parity.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** `BRINGUP_RECIPE.md:1768-1770`: "At SP > 1 the multi-device output is a token slice, so
+  compare it against the corresponding slice of the `(1,1)` output".
+- **Question:** does that hold for every module?
+- **Finding:** only for the token-wise ones. `RMSNorm` and `MLP` act on each token row
+  independently, so a sequence-sharded input does produce exactly the corresponding slice.
+  `Attention` and `DecoderLayer` do **not**: the dense causal SDPA mixes tokens, so a
+  sequence-sharded input makes each row block attend only itself and the output is not a slice of
+  the single-device output at all.
+- **Choice:** shard the sequence for `rms_norm` and `mlp` (and compare slices); **replicate** it for
+  `attention` and `layer` (and compare the full output).
+- **Why:** for the token-wise pair, the slice comparison is the direct proof of the CCL plan's central
+  claim — collectives go on the TP axis only, so every module is SP-safe. For the other two,
+  replication keeps the comparison a device-vs-device exactness claim while still running the TP
+  collective on a 2-row and 4-row mesh at `num_links=2`, which is the transport the recipe's sentence
+  is reaching for. The genuine SP attention core is `G-SP-RING`'s and `G-CHUNK-ATTN`'s.
+- **Evidence:** `raw/G-TP-PARITY_20260904T145701Z.log` — `rms_norm` **1.0000000** at all five shapes
+  (sequence-sharded, sliced), `mlp` 0.9999915 worst (sequence-sharded, sliced), `attention`
+  0.9999917 and `layer` 0.9999733 worst (replicated). Control: the reference rolled by one TP shard
+  scores **0.00307**.
+- **Confidence:** high.
+- **This is a deviation from the recipe's wording** and is reported as such.
+- **Blast radius:** `G-TP-PARITY`.
+
+---
+
+### DEC-084 — `G-MESH-KV` drives the deployment path through `TtPrefillRuntime`, closing `R-029`
+- **Phase / module:** P8 / `tests/galaxy_prefill_kv_pcc.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** `07_RISKS.md` R-029 — `TtPrefillRuntime` had **never been instantiated**: the
+  `tp == num_key_value_heads` equality forbids `(1,1)`, so `G-RUNTIME` could only audit it
+  statically and no line of its happy path had executed.
+- **Question:** drive `G-MESH-KV` through `tt/model.py` directly (simpler, fewer moving parts) or
+  through the runtime?
+- **Choice:** through `TtPrefillRuntime`, including its `compile()`.
+- **Why:** P8 is the first moment the runtime *can* run, and a harness that reimplemented the chunk
+  loop would have left the deployment object untested at exactly that moment — while adding a second
+  chunk loop for the engine's contract to drift from. It also means `make_chunk_input`,
+  `resolve_chunk_sizes`, `_build_indexed_rope`, `_resolve_kv` and the per-chunk argument checks all
+  execute for real rather than against a stub.
+- **Evidence:** `raw/G-MESH-KV-oneshot_20260904T150307Z.log` — `compile()` 18.9 s, one served chunk
+  220.5 ms, 4643 tok/s, min K 0.9987994; `raw/G-MESH-KV-chunked512_20260904T150451Z.log.gz` — two
+  chunks including a second at `actual_start=512`, `compile()` warming both, min K 0.9967119.
+- **Confidence:** high.
+- **What is still uncovered:** the six engine hooks still raise (`R-024`), so nothing on the
+  migration, ack or trace paths has run. That is P10's.
+- **Blast radius:** `G-MESH-KV`, `G-RACE`, `G-CHUNK-ATTN`, `G-SEMAPHORE`'s P8 arm; `R-029`.
+
+---
+
+### DEC-085 — `meta_head_index` is duplicated in the script and pinned by an equality test
+- **Phase / module:** P8 / `tests/galaxy_prefill_kv_pcc.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** `tests/galaxy_prefill_kv_pcc.py` is a **script** (recipe P8 names it as one, and
+  `G-MESH-KV`'s mechanism is an exit code), so it must not import a pytest module — but it needs the
+  HF→Meta head-dim permutation that `tests/unit/test_decoder_layer_vs_ref.py::_meta_head_index`
+  already defines.
+- **Question:** move the helper to `tests/test_factory.py`, or duplicate it?
+- **Choice:** duplicate it in the script, and add
+  `test_meta_head_index_does_not_drift_between_the_script_and_the_tests` asserting the two are equal
+  at `head_dim ∈ {64, 128}`.
+- **Why:** recipe §2.2 warns that two copies of a *floor helper* drift and then two gates disagree
+  about what a floor is; the same argument applies here, and worse — a divergence would permute the
+  golden one way in `G-MESH-KV` and another way in every unit gate, and **both** would look
+  plausible. Moving it into `test_factory.py` would have been cleaner, but `test_factory.py` imports
+  `pytest` at module scope, which is the thing the script must avoid. The equality test is the cheap
+  half of the fix; the honest note is that the duplication is a wart.
+- **Evidence:** `raw/G-CHUNK-ATTN_20260904T150921Z.log.gz` — the drift test passes.
+- **Confidence:** medium. A better answer is a `pytest`-free helpers module; P9 may want it.
+- **Revisit if:** P9's cleanliness gate objects to the duplication.
+- **Blast radius:** `G-MESH-KV`, `G-CHUNK-ATTN`.
+
+---
+
+### DEC-086 — `G-CHUNK-ATTN` runs both arms from **one** runtime with two supported chunk sizes
+- **Phase / module:** P8 / `tests/unit/test_chunked_attention_ring.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** the gate compares the ring core against the SP bootstrap per layer, which means both
+  must run in one process on the same weights.
+- **Question:** two runtimes (two `Model`s, two `CCLManager`s, twice the weight memory) or one?
+- **Choice:** one runtime, built with `chunk_size=512` and `additional_chunk_sizes=(1024,)`, so
+  `rope_indexed` holds both tables and each `prefill_chunk` call passes the size it wants. At
+  `max_seq_len=1024`, chunk 1024 selects `sp_bootstrap` and chunk 512 selects `sp_ring`.
+- **Why:** identical weights on both sides is the whole point of a mutual-PCC gate — two builds would
+  put the weight loader between the two arms. It also keeps one `CCLManager`, which is what
+  `G-SEMAPHORE` requires, and halves device memory.
+- **Evidence:** `raw/G-CHUNK-ATTN_20260904T150921Z.log.gz` — layer 0 mutual K **1.0000000** on both K
+  and V, which is only possible if both arms saw byte-identical weights and byte-identical inputs.
+- **Confidence:** high.
+- **Blast radius:** `G-CHUNK-ATTN`.
+
+---
+
+### DEC-087 — `G-WEIGHTS`'s P8 arm hashes 32 shards of everything except the replicated vocab table
+- **Phase / module:** P8 / `tests/unit/test_weight_loading.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** the recipe asks for "every device tensor SHA-256-identical" at TP=8. The first
+  attempt hashed all 32 shards of all 12 tensors and hit `pytest-timeout` at 300 s.
+- **Question:** raise the timeout, or scope the sweep?
+- **Finding:** `model.embed_tokens.weight` is **replicated, not TP-sharded** (`tt/embedding.py`,
+  `DEC-024`), so each of the 32 devices holds the whole `[128256, 4096]` bf16 table — 1.05 GB each,
+  **33.6 GB of device-to-host transfer per pass, twice**, to re-prove a tensor the mesh does not
+  shard. It is 4x the cost of everything else combined.
+- **Choice:** hash all 32 shards of all 11 other tensors (`lm_head.weight` included — it *is*
+  column-parallel over the vocab), and for the embedding table hash the **first and last** device.
+  Timeout raised to 2400 s for the arm.
+- **Why:** for a replicated tensor the per-device claim is the `(1,1)` arm's claim repeated; the
+  first-and-last pair is what keeps the *replication* itself falsifiable. Two further assertions make
+  the scoping honest rather than convenient: the replicated tensors **must** have one distinct hash,
+  and `q_proj` / `lm_head` **must** have more than one — so an arm that silently stopped sharding
+  would fail rather than pass faster.
+- **Evidence:** `raw/G-WEIGHTS-TP8_20260904T151945Z.log` — 354 device shards over 12 tensors, all
+  identical; 8 tensors with **8 distinct** shard hashes (the 8 TP columns, replicated across the 4 SP
+  rows — exactly the expected geometry), 4 replicated. The timed-out first attempt is
+  `raw/G-WEIGHTS-TP8_20260904T151317Z.log`.
+- **Confidence:** high.
+- **The gap, stated:** the embedding table's shards on devices 1-30 are not hashed at TP=8.
+- **Blast radius:** `G-WEIGHTS` (P8 ext).
+
+---
+
+### DEC-088 — P8 steps 5 and 6 required **no** code change, and here is why that is not an omission
+- **Phase / module:** P8 / `tt/attention/operations.py`, `tt/mlp.py`, `tt/rms_norm.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** recipe P8 step 5 says "Turn on the collectives in the modules (they were written with
+  the branch in place in P5)" and step 6 says "Enable the distributed RMSNorm branch **only if** the
+  residual scheme is B". A phase that touches neither file needs to say so, or a reviewer cannot tell
+  whether the steps were done or skipped.
+- **Step 5 — the collectives were already on.** They are gated on `mesh_config.tp <= 1`
+  (`tt/attention/operations.py::apply_allreduce`, and the same shape in `tt/mlp.py`), not on a flag,
+  so they are a no-op at TP=1 and *live* at TP=8 with nothing to switch. `G-TP-PARITY` is the proof
+  they run and are exact (worst 0.9999733 over five shapes, with the reference-rolled control at
+  0.00307), and `G-SEMAPHORE`'s P8 arm confirms they draw from one `CCLManager`.
+- **Step 6 — not applicable, because the residual scheme is A.** `DEC-025` took scheme A on the
+  cost-equivalence argument, so the residual stream is full-emb replicated and
+  `RMSNorm.is_distributed` stays `False`. Enabling it would be *wrong*, not merely unnecessary: the
+  distributed norm expects an emb/TP-sharded input, and feeding it a replicated one is a mixed
+  residual. `tt/rms_norm.py::_forward_distributed` is therefore still dormant in this package — and
+  still carries the fix for the template's `stats`-passed-twice bug (`DEC-031`, `R-011`) so that
+  whoever enables it does not inherit the `TypeError`.
+- **Choice:** change nothing; record it.
+- **Evidence:** `raw/G-TP-PARITY_20260904T145701Z.log`, `raw/G-SEMAPHORE_20260904T151056Z.log.gz`.
+- **Confidence:** high.
+- **Falsifier:** if `G-TP-PARITY` had shown TP=8 outputs equal to the TP=1 ones *without* a
+  collective having run — i.e. if the reduce-scatter/all-gather pair were somehow a no-op — the
+  shard-rotation control would still have discriminated but the mlp/attention numbers would have been
+  exactly 1.0 rather than 0.99999x. They are not.
+- **Blast radius:** none executable; the log's completeness.
+
+---
+
+### DEC-089 — P8 step 3's submesh parametrisation goes in a **new file**, not into the P5/P6 unit tests
+- **Phase / module:** P8 / `tests/unit/test_tp_parity.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** recipe P8 step 3: "Add the submesh parametrisations to the P5/P6 unit tests: `(1,2)`,
+  `(1,4)`, `(1,8)`, **`(2,8)`** and the target `(4,8)`."
+- **Question:** parametrise `test_rms_norm_vs_ref.py`, `test_mlp_vs_ref.py`,
+  `test_attention_vs_ref.py` and `test_decoder_layer_vs_ref.py` over five more shapes, or put the
+  multi-device coverage in `G-TP-PARITY`'s own file?
+- **Finding — the instruction as written is not executable on this machine, and it contradicts the
+  recipe's own step 1.** The P5/P6 tests parametrise the repo-root `mesh_device` fixture
+  (`conftest.py:554`), which calls `ttnn.open_mesh_device(MeshShape(*grid_dims))` at `conftest.py:661`
+  — a **top-level** open. Step 1 of the same phase says that dies in fabric bring-up on this galaxy,
+  and `G-FABRIC-MATRIX` measured it: `toplevel_1x8_fabric1d` and `toplevel_2x8_fabric1d` both
+  `error`. So `@pytest.mark.parametrize("mesh_device", [(1,8)], indirect=True)` cannot be added to
+  anything here.
+- **Choice:** all five shapes plus the `(1,1)` reference live in `tests/unit/test_tp_parity.py`, as
+  **submeshes** of one open `(4,8)` handed out by `SubmeshPool` (`DEC-077`), for all four modules
+  `rms_norm` / `mlp` / `attention` / `layer`.
+- **Why, beyond the mechanical blocker — three reasons the new file is also the better answer:**
+  1. **A better instrument.** The recipe itself says to compare "**device outputs to each other**
+     (not just each to torch) — sharper than PCC-vs-torch because it removes the reference's own
+     error". A parametrised P5 test would compare each shape to *torch*, which is the weaker claim.
+  2. **The P5/P6 thresholds do not transfer.** Every one was set against a `(1,1)` floor; at TP=8
+     the row-parallel matmul's reduction order changes, so those numbers would be gating a different
+     quantity under the same name.
+  3. **Runtime.** Six shapes x four modules x the existing dtype/seq-len parametrisations would
+     multiply four gates' cost for coverage one file gives in 68 s.
+- **What is *not* covered by this choice, stated:** the P5/P6 gates themselves still run only at
+  `(1,1)`, so their **floors and error ratios** remain single-card measurements. `G-TP-PARITY`
+  establishes that the multi-device outputs equal them to 0.9999733+, which is what makes the
+  single-card floors transferable — but it is an inference, not a re-measurement.
+- **Evidence:** `raw/G-TP-PARITY_20260904T145701Z.log`; `raw/G-FABRIC-MATRIX_20260904T142819Z.log`
+  for the blocker.
+- **Confidence:** high.
+- **This is a deviation from the recipe's step 3** and is reported as such, together with the
+  step-1/step-3 contradiction.
+- **Blast radius:** `G-TP-PARITY`; the P5/P6 test files are untouched.
+
+---
+
+### DEC-090 — The P8 regression was re-run after formatting, because the first run was mutated mid-flight
+- **Phase / module:** P8 / hygiene
+- **Date (UTC):** 2026-09-04
+- **Trigger:** `black --line-length 120` was run over the new P8 files **while the first P8
+  regression run was still executing**, reformatting seven of them.
+- **What happened.** pytest had already imported and collected the modules, so the run in flight was
+  executing the pre-format code. Its result is valid for that code and **not** for the tree as it
+  now stands. This is recipe §0.2's rule — "never rename, move, or restructure while a session is
+  live" — in a milder form than a rename, but the same class of mistake, and it was self-inflicted
+  in the same way §0.2's three incidents were.
+- **Choice:** keep the first run's log as the record of what it actually tested, and **re-run the
+  regression on the final tree**, citing the second run in the ledger.
+- **Why not just argue that `black` is semantics-preserving:** it is, and that argument is exactly
+  the "verify a mutation with a smoke test" reasoning `LANDMINES.md` lists as a method trap. The
+  regression costs one command; the argument costs a reviewer's trust.
+- **Evidence:** both regression logs are in `raw/`, and the ledger's `P8-REGRESSION` row cites the
+  post-format one.
+- **Confidence:** high.
+- **Kit note:** the formatting hooks (`black`, `isort`, `autoflake`) are documented in
+  `LANDMINES.md` as things that "will block your commit" and that reformatting "moves the lines you
+  just cited" — both true. What is not said, and cost this entry, is **when** to run them: before a
+  long device run, not after. `isort` is additionally not installed in this `python_env`, so only
+  `black` ran.
+- **Blast radius:** the P8 regression row's provenance.
+
+---
+
+### DEC-091 — `G-CHUNK-ATTN` **skips** on a too-short golden trace, and the two per-layer JSONs collide
+- **Phase / module:** P8 / `tests/unit/test_chunked_attention_ring.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** `G-CHUNK-ATTN` needs a **1024**-token golden trace (two chunks of 512, so
+  `chunk_local = 128` matches the ring `q_chunk_size`), while `G-CHUNK` (P7) was recorded against the
+  **512**-token trace. Both read `$PREFILL_TRACE_DIR`, which the engine owns and which points at one
+  directory.
+- **Question:** assert the trace length, or skip?
+- **Choice:** **skip**, with the regeneration command in the reason. Asserting made the per-phase
+  regression *fail* whenever `PREFILL_TRACE_DIR` pointed at the 512-token trace — a harness fact
+  presented as a defect, which is precisely the thing a gate must not do.
+- **The second half of the problem, and it is not solved:** `tests/unit/test_attention_chunked_vs_ref.py`
+  writes `raw/G-CHUNK_per_layer_pcc.json` and derives its shape from `metadata["n_tokens"]`, so
+  running the regression at `s1024` **overwrites P7's evidence file with 1024-token content** while
+  P7's ledger row cites a 512-token measurement. Measured, not theorised: the first P8 regression run
+  did exactly that (`git diff` showed 211 changed lines in that JSON, plus a trailing-newline-only
+  change in `G-MODEL_per_layer_pcc.json`).
+- **Handling:** the two files are restored from the P7 commit after the final regression, and the
+  incident is `07_RISKS.md` R-041. Not fixed by renaming P7's output, because that would break the
+  `path`-style citation its ledger row carries — the fix belongs to whoever can update both, i.e. P9.
+- **Why this matters beyond bookkeeping:** a per-phase regression that **writes into a previous
+  phase's evidence** can silently invalidate a `PASS` recorded three phases ago, and nothing in the
+  recipe's §1.2 raw-output rule anticipates it. Appendix C item 2 — "a gate with no raw log did not
+  happen" — has an unstated corollary: a gate whose raw log was overwritten by a later phase did not
+  happen either.
+- **Evidence:** `raw/P8-REGRESSION_20260904T152156Z.log.gz` (the run that overwrote them, 196 passed),
+  and `git diff` on the two JSONs.
+- **Confidence:** high.
+- **Blast radius:** `G-CHUNK`'s and `G-MODEL`'s evidence files; the regression's own reproducibility.
+
+---
+
+### DEC-092 — The two `TT_FATAL` controls use `try`/`except` rather than the `expect_error` fixture
+- **Phase / module:** P8 / `tests/unit/test_dense_sp_vs_ref.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** `G-SP-RING` has to record the **verbatim** `TT_FATAL` text for two refusals
+  (`fp32_dest_acc_en=True` and a wrong `kv_actual_isl`), because the message *is* the measurement —
+  the recipe asks for "the `TT_FATAL` text when `True` is refused" (`BRINGUP_RECIPE.md:1742-1744`).
+  Everywhere else in this package a refusal is asserted with the repo-root `expect_error` fixture
+  (`conftest.py:948`), which `LANDMINES.md` and `DEC-045` require.
+- **Question:** `expect_error(RuntimeError, "<substring>")`, or catch and log?
+- **Choice:** catch, log the full message through `loguru`, then assert on a metachar-free substring
+  of it.
+- **Why, three reasons:**
+  1. **`expect_error` swallows the message.** It asserts and discards; the gate's job here is to put
+     the text in `bringup_log/raw/` so a reader can see *which* assert fired. Both messages are now
+     in the raw log verbatim.
+  2. **`expect_error` matches its `message` as a regex**, not a substring (`R-014`, `DEC-045`), and
+     these two messages are dense with metacharacters — `!kv_pad_rotation_enabled || use_streaming_compute`,
+     `new_actual_isl <= chunk_capacity`, `(1,4,128,128)`. A literal would silently fail to match and
+     the test would report `Regex pattern did not match` on correct code.
+  3. **One of the two refusals was a surprise**, and that is exactly when you want the text rather
+     than a boolean: the `kv_actual_isl` control was written expecting a numeric collapse and instead
+     produced a refusal, which changed the gate's control design (`DEC-082`).
+- **This is not a `try/except: pass`** (recipe §0 rule 5): the handler stores the message, the test
+  logs it, and two assertions then require (a) that something was refused and (b) that it was refused
+  by the specific assert the control names. A refusal from an unrelated cause fails the gate.
+- **Evidence:** `raw/G-SP-RING_20260904T145354Z.log` — both messages appear in full, with their
+  file:line.
+- **Confidence:** high.
+- **Blast radius:** `G-SP-RING`'s two structural controls.
+
+---
+
+### DEC-093 — `sp_ring_program_config`'s grid assertion took a parameter, because it could not fail
+- **Phase / module:** P8 / `tt/attention/dense_sp.py`, `tt/attention/prefill.py`
+- **Date (UTC):** 2026-09-04
+- **Trigger:** reviewing the phase's own new code against recipe §0 rule 5 ("no dead code") and §1.4
+  ("a control that cannot fail is worse than no control, because it is recorded as evidence").
+- **What was wrong.** `sp_ring_program_config` computed *both* sides of its safety assertion from the
+  same expression:
+  `ccl_offset_x = grid.x - 1` and `sdpa_grid_x = grid.x - 1`, then `assert sdpa_grid_x <= ccl_offset_x`.
+  Tautological. It reads like the construction-time check `attention/config.py::validate_grid` is —
+  the one that turns the P8-only ring landmine into a build-time failure — and it is not one.
+- **Choice:** `sp_ring_program_config(mesh_device, *, ccl_core_grid_offset=None, ...)`, and
+  `attention/prefill.py` passes `ccl_manager.ring_attention_ccl_core_grid_offset`. The assertion then
+  compares **this file's** derivation of the SDPA grid against **`tt/ccl.py`'s** derivation of the CCL
+  offset, which is a real check that the two have not drifted. Omitting the argument still falls back
+  to the local derivation, and the docstring says that makes the check tautological.
+- **Why not just delete the assert:** the constraint is real
+  (`ring_joint_sdpa_device_operation.cpp:421`) and it is a P8-only failure mode — the same shape of
+  landmine that motivated `validate_grid`. A check with a genuine second source is worth more than
+  either a tautology or nothing.
+- **Verified behaviour-neutral, not assumed:** `G-SP-RING` and `G-CHUNK-ATTN` were re-run after the
+  change and reproduce every number exactly — PCC 0.9996672 / 6.05x, L1 mutual K 0.9999505, control
+  worst 0.87279, 7/7 tests.
+- **Evidence:** `raw/G-SP-RING-RECHECK_20260904T161926Z.log.gz`.
+- **Scope note:** the final full regression (`raw/P8-REGRESSION_20260904T155300Z.log.gz`, 196 passed)
+  predates this one-line change by 26 minutes. No test asserts on the signature, and the two gates
+  that exercise the function were re-run; that is stated here rather than left for a reader to work
+  out from timestamps.
+- **Confidence:** high.
+- **Blast radius:** `tt/attention/dense_sp.py`, `tt/attention/prefill.py`; `G-SP-RING`,
+  `G-CHUNK-ATTN`.

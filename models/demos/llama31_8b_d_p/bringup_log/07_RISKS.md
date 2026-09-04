@@ -1,17 +1,17 @@
 # 07 — Risks and open questions
 
-The register and the sections must agree. Re-checked at every phase boundary (last: end of P7,
+The register and the sections must agree. Re-checked at every phase boundary (last: end of P8,
 2026-09-04).
 
 | Id | Severity | Phase found | Summary | Status | Owner |
 |---|---|---|---|---|---|
-| R-001 | medium | P0 | `(1,1)` gates test a KV-head count the deployment mesh never produces | open — scoped to P8 | P8 (`G-KV-TP8`) |
+| R-001 | medium | P0 | `(1,1)` gates test a KV-head count the deployment mesh never produces | **closed as of P8** — `G-KV-TP8` proved head `c` -> mesh column `c` **bit-exactly** at TP=8 (8/8 columns, both RoPE states) and scored 32 layers of model-produced K/V against the fp32 golden (min K 0.9986432 / V 0.9942853) | closed (`G-KV-TP8`) |
 | R-002 | low | P0 | Checkpoint identity established against the in-repo config, not against the live gated HF repo | mitigated | P0 (`DEC-001`) |
 | R-003 | medium | P0 | Pre-existing tilized weight caches inside `$HF_MODEL` (`ttnn_cache/`, `P150/`) | **closed** as of P6.2 — `weight_cache_path` refuses to fall back to the checkpoint dir (`DEC-048`), gated by `G-WEIGHTS` | closed (`DEC-048`) |
 | R-004 | low | P0 | `CHUNK_SIZE` / `MAX_SEQ_LEN` not yet chosen | open — deferred by `DEC-004` | P7 (`G-CHUNK`) |
 | R-005 | high | P1 | `rope_theta` is absent from the `transformers` 5.12.1 config object; `getattr` with a default silently substitutes a wrong theta | **mitigated and enforced** as of P5.3 | closed by `tt/rope.py` + `G-ROPE` |
 | R-006 | medium | P1 | The hand-written oracle and HF could share a misreading of the architecture | open — inherent | P0 card / P6 (`G-MODEL`) |
-| R-007 | medium | P2 | `ttnn.experimental.deepseek_prefill.update_padded_kv_cache` and `rotary_embedding_indexed` are consumed from `deepseek_v3_d_p`'s substrate; no Llama-specific test exists upstream | **closed as of P7** — the write path was bit-exact at P5.6 (`G-KV`) and the indexed RoPE is now **bit-identical** to the contiguous builder at `sp = 1`, four chunk offsets, `torch.equal` (`G-CHUNK`). The `sp > 1` block-cyclic path is still untested and is `R-001`'s, not this one's | closed (`G-KV` + `G-CHUNK`); `sp > 1` -> P8 |
+| R-007 | medium | P2 | `ttnn.experimental.deepseek_prefill.update_padded_kv_cache` and `rotary_embedding_indexed` are consumed from `deepseek_v3_d_p`'s substrate; no Llama-specific test exists upstream | **closed as of P7** — the write path was bit-exact at P5.6 (`G-KV`) and the indexed RoPE is now **bit-identical** to the contiguous builder at `sp = 1`, four chunk offsets, `torch.equal` (`G-CHUNK`). The `sp > 1` block-cyclic path is still untested and is `R-001`'s, not this one's | **closed as of P8** — `G-MESH-KV` scores the block-cyclic `sp = 4` cache at three different periods (chunk_local 256/128/64) against the fp32 golden, min K 0.9967119 / V 0.9866232 | closed (`G-MESH-KV`) |
 | R-008 | low | P2 | The kit ships fewer example files than its own README and `WHY_THESE_EXAMPLES.md` advertise | open — affects the kit, not the model | kit maintainer |
 | R-009 | medium | P2 | No in-repo template implements a **dense, bias-free, full-RoPE** attention block; `tt/attention/` is an adaptation with three features deleted | **mitigated** as of P5.5 (`G-ATTN`: every hand-written stage 1.00-2.50x of its floor, block 0.999+) | closed by `G-ATTN`; P6 re-checks at layer level |
 | R-010 | low | P2 | `compute_llama3_parameters` hard-codes low/high frequency factors instead of reading the config | mitigated in-package (P5.3 assert); open upstream | P5.3 (`G-ROPE`) |
@@ -27,13 +27,26 @@ The register and the sections must agree. Re-checked at every phase boundary (la
 | R-020 | medium | P6.3 | `G-MODEL`'s absolute PCC threshold is scoped to the **reduced-depth** runs by the phase text (`:1420-1422`) and to all depths by the Appendix A row (`:1856`); at 32 layers the measured post-norm PCC is 0.9984849 | resolved in-package (`DEC-053`); the kit's wording is still ambiguous | kit maintainer |
 | R-021 | **high** | P6.3 | `G-MODEL`'s floor omitted the bf16 rounding of the RoPE tables the device stores while `G-LAYER`'s floor included it — worth **45%** of the floor error at 32 layers, and the whole difference between a reported 2.79x and **1.53x** | **fixed in-package** (the floor now quantises cos/sin); both numbers recorded (`DEC-053`) | kit maintainer (§2.2 wording); P7/P8 for their own floors |
 | R-022 | medium | P6.3 | §2.3.1's additive kernel attribution **over-subtracts at 32-layer depth**: the substituted chain scores 0.9981153, worse than the device's 0.9984849, giving an attributed residual of **0.63x** (< 1.0) | open as a method limit; worked around (gate on the raw ratio against a complete floor) | kit maintainer; P7/P8 |
-| R-023 | medium | P7 | **Delta 3** — chunk *k*'s queries attending the prefix read back out of the cache — cannot run in P7: it needs the ring path and TP=8. `G-CHUNK-ATTN` is recorded `BLOCKED` | open by construction; the runtime **refuses** the configuration rather than running a mask that is off by `actual_start` | **P8** (`G-CHUNK-ATTN`, `G-SP-RING`) |
+| R-023 | medium | P7 | **Delta 3** — chunk *k*'s queries attending the prefix read back out of the cache — cannot run in P7: it needs the ring path and TP=8. `G-CHUNK-ATTN` is recorded `BLOCKED` | **closed as of P8** — `G-CHUNK-ATTN` measured it: L1 mutual K **0.9999505** (>= 0.999), worst gated per-layer step 2.14x against 4x, both arms inside `G-CHUNK`'s golden thresholds | closed (`G-CHUNK-ATTN`) |
 | R-024 | medium | P7 | Six engine-called runtime hooks (migration, layer-ack, trace) are present and **raise**; a migration or trace run therefore fails rather than silently publishing nothing | open — deliberate stubs, each naming P10 in its message, all covered by `G-RUNTIME` | **P10** (`G-KV-TABLE`, `G-LOOPBACK`, `G-REQUEST`) |
 | R-025 | medium | P7 | The recipe describes `verify_golden_kv.py` as a **device**-vs-golden scorer (`:1548-1549`) and, six lines later, as importing **no ttnn** (`:1588-1590`) | resolved in-package by following the gate (`DEC-060`); the kit's two passages still contradict | kit maintainer |
 | R-026 | medium | P7 | The 128 MB fp32 golden trace is **not in the repo**; `G-CHUNK`'s evidence depends on regenerating it from `$HF_MODEL` | mitigated: one command, ~100 s, and `metadata.json`'s `token_ids` pin the inputs (`DEC-066`) | P8/P10 (they score against the same trace) |
 | R-027 | low | P7 | The recipe's delta-1 negative control quotes **two** numbers (0.706 / 0.655) for a control that in the gate's own decomposition can move only **K** — V is never rotated | resolved in-package: two controls, one per delta (`DEC-065`); K measured 0.72466 against the quoted 0.706 | kit maintainer |
 | R-028 | low | P7 | Recipe P7 step 4 names `models/demos/minimax_m3/tests/unit/test_attention_chunked_vs_ref.py` as the template for the P7 test of the same name — but that file is precisely the **delta-3** cache-read test the same phase forbids P7 to run | worked around: the P7 file implements deltas 1-2 as the `G-CHUNK` gate text specifies, and the named template becomes P8's | kit maintainer |
-| R-029 | **high** | P7 | `TtPrefillRuntime` has **never been instantiated**: `G-RUNTIME` is a static audit and the `tp == num_key_value_heads` equality forbids `(1,1)`, so no line of its happy path has executed | open — stated in the `G-RUNTIME` gate block as what the gate does not prove | **P8** (first instantiation), P10 |
+| R-029 | **high** | P7 | `TtPrefillRuntime` has **never been instantiated**: `G-RUNTIME` is a static audit and the `tp == num_key_value_heads` equality forbids `(1,1)`, so no line of its happy path has executed | **closed as of P8** — `G-MESH-KV` drives the deployment path through it, `compile()` included (`DEC-084`); the six engine hooks still raise, which is `R-024`'s, not this one's | closed (`G-MESH-KV`, `G-CHUNK-ATTN`, `G-RACE`) |
+| R-030 | **high** | P8 | **There is no ring fabric on this Blackhole Galaxy.** `FABRIC_1D_RING` cannot be initialised at all, and `Topology.Ring` is unserviceable for the ring SDPA | open — worked around by running the whole phase on `FABRIC_1D` + `Topology.Linear` (`DEC-079`, `DEC-081`) | machine owner / kit maintainer |
+| R-031 | medium | P8 | The SP path has been measured under `Topology.Linear` **only**; nothing in P8 has run the deployment's collectives under `Ring` end to end | open — `Ring` is untestable here (`R-030`) | whoever runs a torus-cabled galaxy |
+| R-032 | medium | P8 | **Multi-galaxy is out of scope by user instruction**, so multi-rank pipelined prefill, the KV-chunk-table merge and `G-LOOPBACK`'s two-rank half are unrun and the runtime **raises** on all of them | open — scoped out, not deferred | user / P10 |
+| R-033 | low | P8 | Both mesh-graph descriptors the recipe names in §The machine are **multi-galaxy** (a 4-galaxy super-pod and a quad galaxy) and unusable on one galaxy | open — affects the kit, not the model (`DEC-071`) | kit maintainer |
+| R-034 | medium | P8 | The block-cyclic cache read-back in `tests/galaxy_prefill_kv_pcc.py` **re-derives** the position map instead of importing one, so it and `models/demos/deepseek_v3_d_p/tt/mla/utils.py`'s statement of the same formula can drift | open — mitigated by reading at three different periods and by asserting the map covers every position exactly once | P9 / P10 |
+| R-035 | low | P8 | `meta_head_index` is duplicated between the `G-MESH-KV` script and the unit tests, because a script must not import a pytest module | open — pinned by an equality test (`DEC-085`), but the duplication is a wart | P9 |
+| R-036 | medium | P8 | No **bit-exact** check exists for K's *post-RoPE* head->column placement; it is impossible by construction and is covered only numerically | open — stated in `G-KV-TP8`'s gate block (`DEC-078`) | accepted |
+| R-037 | low | P8 | `G-WEIGHTS`'s P8 arm does not hash the replicated embedding table on devices 1-30 (33.6 GB of D2H per pass) | open — scoped, with the replication itself asserted on the first and last device (`DEC-087`) | accepted |
+| R-038 | medium | P8 | `G-RACE`'s pass covers a few hundred collectives on **one** user slot with the barrier ping-pong only 2 deep; it says nothing about a long-running multi-user server | open — the recipe requires this scope statement rather than a fix | perf/serving phase |
+| R-040 | low | P8 | Six P8 raw gate logs exceed the repo's own 500 KB `check-large-files` limit, inflated by ~5,000 tt-metal `Pinned source memory start address ... must be aligned` info lines each — not by progress-bar output as `LANDMINES.md` assumes | worked around: gzipped, losslessly, as `LANDMINES.md` itself prescribes | kit maintainer / tt-metal |
+| R-041 | medium | P8 | A per-phase regression run **overwrites a previous phase's evidence file**: `G-CHUNK`'s per-layer JSON is rewritten with whatever `$PREFILL_TRACE_DIR` currently holds | worked around (`DEC-091`): restored from the P7 commit, and `G-CHUNK-ATTN` now skips rather than fails on a short trace | P9; kit maintainer (§1.2) |
+| R-042 | medium | P8 | Two P5.4-P5.6 ledger citations point at raw logs that **do not exist** and never did; found by the raw-artefact pass this phase added to `verify_citations.py`, which four previous doc gates had no equivalent of | open — deliberately not re-attributed, because guessing which run was meant is what §1.6 warns against | P9 |
+| R-039 | **high** | P8 | The `sp_bootstrap` attention core is reachable **only** when `max_seq_len == chunk_global`, which the deployment config (chunk 8192, cache 131072) never satisfies — it has a gate but no deployment use; and the deployment pair itself has never been run | open | P10 / perf phase |
 
 ---
 
@@ -508,7 +521,7 @@ mesh — neither of which P7 has.
 producer, and it proves nothing about whether a chunk-2 query attends chunks 0-1 correctly. The
 consequence is bounded and named: after `G-CHUNK`, the KV cache written by a multi-chunk prefill is
 verified; the *attention output* of a multi-chunk prefill is not verified at all.
-**Why it is not weakened into `G-CHUNK`.** `BRINGUP_RECIPE.md:1598-1601` forbids both available
+**Why it is not weakened into `G-CHUNK`.** `BRINGUP_RECIPE.md:1633-1637` forbids both available
 shortcuts: "Do **not** weaken `G-CHUNK` to cover it, do not move P7 to a multi-device mesh to make
 it run". The third option — running a cache-backed chunk on the dense path anyway — is the dangerous
 one, because plain `is_causal` SDPA assumes Q row 0 aligns with K row 0 and so produces a mask off
@@ -650,3 +663,235 @@ forward is `G-MODEL`'s. The runtime's own contribution is the wiring between the
 **How to close.** P8's first act on the `(4,8)` mesh should be to build a `TtPrefillRuntime` and run
 `compile()` — which is also the cheapest possible smoke test of the ring path, since `compile` warms
 a second chunk at `actual_start = chunk` and therefore exercises delta 3 immediately. Owner: P8.
+
+---
+
+# P8 additions and closures
+
+## R-001 — CLOSED at P8
+**How it closed.** `G-KV-TP8` on a `(1,8)` submesh: global KV head `c` lands on mesh column `c`,
+asserted `torch.equal` with `rtol=atol=0`, **8/8 columns** on both a V probe with RoPE enabled and a
+K probe with RoPE disabled (`DEC-078`); the advancing write offset `{0, 128, 256}` **24/24** blocks
+bit-identical; and 32 layers of model-produced K/V scored against the fp32 golden at min K
+**0.9986432** / min V **0.9942853**, with layer 0 at **1.10x** / **1.02x** its complete floor. The
+rotated-column control scored **PCC 0.99887** while failing bit-equality, reproducing recipe §2.5's
+0.99890 on this package's own probe — which is the measurement behind the rule, not a quotation of it.
+**Residual:** `R-036` (no bit-exact post-RoPE K placement check).
+
+## R-007 — CLOSED at P8
+**How it closed.** `G-MESH-KV` runs the deployment `(4,8)` mesh at `sp = 4`, where the block-cyclic
+sequence layout is live rather than the identity, and reads the cache back at **three different
+periods** — `chunk_local` 256 (one-shot), 128 and 64 (chunked) — scoring against the fp32 golden every
+time (min K 0.9987994 / 0.9967119 / 0.9967844). A read-back with the wrong period cannot score at more
+than one. **Residual:** `R-034` (the map is re-derived rather than imported).
+
+## R-023 — CLOSED at P8
+**How it closed.** `G-CHUNK-ATTN`. Delta 3 measured on the deployment mesh: one runtime, one
+`CCLManager`, two arms (`sp_bootstrap` at chunk 1024, `sp_ring` at chunk 512), 1024 real tokens, real
+weights. Mutual K **1.0000000** at layer 0, **0.9999505** at layer 1 against a >= 0.999 threshold,
+worst gated per-layer step **2.14x** against 4x, both arms inside `G-CHUNK`'s golden thresholds. The
+control — chunk 1 served against a never-written prefix — leaves layer 0 at **1.0000000** and
+collapses to **0.87279** by layer 5, which is also the demonstration that a layer-0-only check proves
+nothing about delta 3.
+
+## R-029 — CLOSED at P8
+**How it closed.** `G-MESH-KV`, `G-CHUNK-ATTN`, `G-RACE` and `G-SEMAPHORE`'s P8 arm all drive
+`TtPrefillRuntime` for real (`DEC-084`): `TtPrefillRuntimeConfig.__post_init__`,
+`resolve_chunk_sizes`, `_build_indexed_rope`, `make_chunk_input`, `compile()` (including its
+second-chunk warm-up at `actual_start = chunk`), `prefill_chunk`'s argument checks and `_resolve_kv`
+have now executed on the target mesh. **Residual:** `R-024` — the six engine hooks (migration, ack,
+trace) still raise, so nothing on those paths has run. That is P10's, and it is the reason this
+closure is about the *prefill* path only.
+
+## R-030 — There is no ring fabric on this Blackhole Galaxy
+**Fact.** Three independent measurements, all in `G-FABRIC-MATRIX`'s logs:
+1. `ttnn.set_fabric_config(FABRIC_1D_RING)` with the only single-galaxy RING/RING descriptor,
+   `single_bh_galaxy_torus_xy_graph_descriptor.textproto`, aborts at
+   `tt_metal/fabric/topology_mapper.cpp:544`: "Graph specified in MGD could not fit in the discovered
+   physical topology ... Intra-mesh mapping failure for logical mesh 0 -> physical mesh 0: Mapping
+   validation failed: **32 target node(s) are not mapped to any global node** ... Either relax
+   pinnings or modify the MGD."
+2. It is **not** the channel policy: a copy of that descriptor with `policy: STRICT` -> `RELAXED`
+   fails identically, so the torus wrap links are absent rather than merely under-provisioned.
+3. Asking `FABRIC_1D_RING` of a LINE/LINE or LINE/RING descriptor is refused a step earlier, at
+   `tt_metal/fabric/mesh_graph.cpp:447-453`: "FabricConfig can only restrict topology (e.g.,
+   torus->mesh), not create new connections."
+And the consequence that actually bites: `ttnn.transformer.ring_joint_scaled_dot_product_attention`
+under `Topology.Ring` aborts with
+`tt_metal/fabric/fabric.cpp:174: forwarding_direction.has_value()` — "Could not find any forwarding
+direction from src (M0, D0) to dst (M0, D3)", D0 -> D3 being the 4-device SP ring closing on itself.
+**Impact.** The entire phase runs on `FABRIC_1D` + `Topology.Linear`. `ttnn.Topology.Ring`
+*collectives* do work on `FABRIC_1D` (bit-exact at every P8 shape and both axes), so the choice is
+driven by the ring SDPA alone.
+**What the recipe says, and it is wrong here.** `BRINGUP_RECIPE.md:82-84`: "The Ring topology P8
+needs the torus descriptor; a Ring topology on a plain `FABRIC_1D` fabric **hangs** rather than
+erroring." On this machine the torus descriptor is unusable and Ring-on-`FABRIC_1D` neither hangs nor
+errors — it returns bit-exact results.
+**Status.** open, worked around (`DEC-079`, `DEC-081`). `PREFILL_FABRIC=1d_ring` is kept as an
+override.
+**How to close.** Run `./build/test/tt_metal/tt_fabric/test_system_health` (the mapper's own
+suggestion) to establish whether the wrap links are physically absent or merely untrained. If absent,
+this is a cabling fact and the recipe's §The machine bullet needs a single-galaxy qualifier; if
+untrained, it is a machine-health issue with an owner. **Owner:** machine owner, then kit maintainer.
+
+## R-031 — The SP path has been measured under `Linear` only
+**Fact.** Every P8 number in this ledger was measured with `CCLManager.topology = Topology.Linear`,
+forced by `R-030`.
+**Impact.** If the deployment ever runs on a torus-cabled galaxy it will use `Topology.Ring`, and
+nothing here has exercised that: the reduce-scatter/all-gather route, the ring SDPA's halo exchange
+and the barrier ping-pong all change. The numbers would need re-measuring, not merely re-checking.
+**Status.** open; untestable on this machine.
+**How to close.** Re-run the P8 ladder with `PREFILL_TOPOLOGY=ring PREFILL_FABRIC=1d_ring` and the
+torus descriptor on a galaxy where it maps. Everything needed is already env-driven. **Owner:**
+whoever runs a torus-cabled galaxy.
+
+## R-032 — Multi-galaxy is out of scope by user instruction
+**Fact.** The scope for this session is **one** Blackhole Galaxy. Multi-rank pipelined prefill needs
+two, so anything requiring it was not configured, attempted or planned.
+**Impact.** Unrun, and the runtime raises rather than guessing on each:
+`set_layer_completion_sink` (the multi-rank layer-completion sink), the multi-rank half of
+`build_kv_chunk_table`'s merge, and `G-LOOPBACK`'s cross-rank copy. `TtPrefillRuntimeConfig` pins
+`is_first_rank = is_last_rank = True` and `first_layer_idx = 0`, and `compile()` refuses a non-first
+rank outright.
+**Status.** open — **scoped out, not deferred.** No gate was weakened to accommodate it and no gate
+was recorded `BLOCKED` for it, because no P8 gate needs it: every P8 gate is single-rank by
+construction.
+**How to close.** Two galaxies. **Owner:** user / P10.
+
+## R-033 — The recipe's named mesh descriptors are multi-galaxy
+**Fact.** `BRINGUP_RECIPE.md:80-83` names `bh_galaxy_sp4_torus_xy_graph_descriptor.textproto` (4
+meshes of `[32,4]`, `host_topology [4,1]` — a 512-device super-pod) and
+`32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto` (`[32,4]`, `host_topology [4,1]` — a
+128-device quad galaxy) as the descriptors for a machine it describes as "Blackhole Galaxy, 32
+devices". The single-galaxy pair is `single_bh_galaxy_mesh_graph_descriptor.textproto` and
+`single_bh_galaxy_torus_xy_graph_descriptor.textproto`, both `[8,4]` with `host_topology [1,1]`.
+**Impact.** An agent following the bullet literally would try a descriptor that cannot map, and the
+resulting `topology_mapper.cpp:544` message names neither the descriptor nor the galaxy count.
+**Status.** open — affects the kit, not the model (`DEC-071`). **Owner:** kit maintainer.
+
+## R-034 — The cache read-back re-derives the block-cyclic map
+**Fact.** `tests/galaxy_prefill_kv_pcc.py::cache_row_to_global_position` implements
+`(lr // chunk_local) * chunk_global + row * chunk_local + (lr % chunk_local)`. The same formula is
+*stated* in `models/demos/deepseek_v3_d_p/tt/mla/utils.py:88-92` and *implemented* differently, for
+the forward direction, in `block_cyclic_reorder:65-80` — which is what `tt/rope.py::build_indexed_rope`
+uses. There is no shared inverse.
+**Impact.** If the writer kernel's layout ever changed, the RoPE tables and the read-back would have
+to be fixed in two places, and a read-back fixed alone would produce a plausible wrong PCC.
+**Status.** open, mitigated twice: the map is asserted to cover every global position **exactly
+once** before any scoring, and `G-MESH-KV` reads at three different periods.
+**How to close.** Export an inverse from the deepseek util and import it. **Owner:** P9 / P10.
+
+## R-035 — `meta_head_index` is duplicated
+**Fact.** `tests/galaxy_prefill_kv_pcc.py::meta_head_index` duplicates
+`tests/unit/test_decoder_layer_vs_ref.py::_meta_head_index`, because the former is a script and must
+not import a pytest module and the natural shared home (`tests/test_factory.py`) imports `pytest` at
+module scope.
+**Impact.** A divergence would permute the golden one way in `G-MESH-KV` and another in every unit
+gate, and both would look plausible — the same failure mode recipe §2.2 warns about for floor helpers.
+**Status.** open, pinned by `test_meta_head_index_does_not_drift_between_the_script_and_the_tests`
+(`DEC-085`).
+**How to close.** A `pytest`-free helpers module. **Owner:** P9.
+
+## R-036 — No bit-exact check of K's post-RoPE head->column placement
+**Fact.** `G-KV-TP8`'s arm A is bit-exact on V through the full path (V is never rotated) and on K
+with RoPE disabled. Predicting post-RoPE K bit-exactly would require re-implementing the device's
+bf16 RoPE arithmetic on the host — a second implementation of the thing under test.
+**Impact.** A hypothetical bug that placed post-RoPE K on the wrong column *without* affecting V or
+un-rotated K would be caught only numerically (arm B's min K 0.9986432 over 32 layers, and
+`G-CHUNK-ATTN`).
+**Status.** open, accepted and stated in the gate block (`DEC-078`). No plausible mechanism for such
+a bug exists: the same `column_parallel` mapper places both weights and RoPE is applied after the
+head split, per-head.
+
+## R-037 — The replicated embedding table is not hashed on all 32 devices
+**Fact.** `G-WEIGHTS`'s P8 arm hashes 32 shards of 11 tensors and the **first and last** device of
+`model.embed_tokens.weight`, which is replicated (`DEC-024`) at 1.05 GB per device.
+**Impact.** A rebuild that corrupted the embedding on one of devices 1-30 only would not be caught by
+this arm. The `(1,1)` arm covers the tensor's contents; the first-and-last pair covers the
+replication.
+**Status.** open, scoped (`DEC-087`). **How to close.** Hash it in native dtype without the fp32
+upcast, or accept.
+
+## R-038 — `G-RACE`'s scope
+**Fact.** 3 runs x 2 chunks x 32 layers x 2 collectives per layer on **one** user slot, with the
+barrier ping-pong **2 deep** (`DEC-026`) and `reset_global_semaphores` deliberately not resetting the
+barrier or ring-attention sets.
+**Impact.** A pass says the ping-pong cycling is correct at this scale. It does not cover a
+long-running server, hundreds of thousands of collectives, or multiple user slots interleaving.
+**Status.** open by construction; the recipe requires the scope statement rather than a fix. The
+documented first move on failure — deepening the barrier ring 2 -> 4 — was **not** taken
+pre-emptively, so the gate could measure. **Owner:** perf/serving phase.
+
+## R-039 — `sp_bootstrap` has a gate but no deployment use, and the deployment shape has never run
+**Fact.** `select_attention_core` selects `sp_bootstrap` only when `max_seq_len == chunk_global`. The
+deployment config is `chunk_size = 8192`, `max_seq_len = 131072` (`DEC-061`), so
+`max_seq_len > chunk_global` always and the deployment **always** selects `sp_ring`. Separately, that
+deployment pair itself has never been run: every P8 measurement used a 1024-token cache.
+**Impact.** Two distinct gaps. (a) `sp_bootstrap` is exercised only by test configurations, so a
+regression in it would be invisible to a deployment run — the inverse of the usual worry, and the
+reason `G-MESH-KV`'s one-shot arm is worth keeping. (b) Nothing has validated 8192-token chunks or a
+131072-token cache: the DRAM footprint, the `ttnn.move` guard past 32k tokens
+(`tt/layer.py::_MOVE_GUARD_SEQ_LEN`), the `bfloat8_b` activation switch past 32k
+(`tt/attention/prefill.py::_BF8_ACTIVATION_SEQ_LEN`) and the 16-chunk `build_indexed_rope` table are
+all unrun.
+**Status.** open.
+**How to close.** (a) decide whether `sp_bootstrap` is a supported configuration or test-only, and
+say so in the README's "not implemented" section; (b) run `G-MESH-KV` once at the deployment pair
+against a long golden trace. Both are cheap and neither is a P8 gate. **Owner:** P10 / perf phase.
+
+## R-040 — Six P8 raw logs exceed the repo's own 500 KB commit limit, and it is not progress-bar output
+**Fact.** `check-large-files` rejects files over 500 KB (`LANDMINES.md`, "Repo hooks that will block
+your commit"). Six P8 gate logs are over it: `P8-REGRESSION` (2.1 MB), `G-CHUNK-ATTN` (1.0 MB),
+`G-RACE` (876 KB), `G-MESH-KV-chunked256` (863 KB), `G-MESH-KV-chunked512` (851 KB), `G-SEMAPHORE`
+(840 KB).
+**Cause.** Not the tests' own output and not a progress bar, which is what `LANDMINES.md` blames.
+It is one tt-metal `info` line per host<->device transfer:
+`Metal | Pinned source memory start address 0x... must be aligned 64 B (dispatch.cpp:...)`. In
+`G-SEMAPHORE`'s log that pattern accounts for **5,120 of its lines**, and it scales with the device
+count — so every 32-device gate log is inflated by ~800 KB of it regardless of what the gate does.
+**Impact.** Cosmetic for this session (nothing is committed) but a commit blocker for whoever lands
+this, and it makes the logs slow to read.
+**Status.** worked around exactly as `LANDMINES.md` prescribes: the six are **gzipped**, which is
+lossless, so the evidence stays byte-exact, and the ledger cites the `.log.gz` names.
+**How to close.** Either raise the metal log level for gate runs (which would make the raw log a
+*filtered* record and is therefore worse), or fix the `dispatch.cpp` info line upstream — it reads
+like a warning that fires on the normal path. **Owner:** kit maintainer (the `LANDMINES.md` note
+naming progress bars as the cause), then a tt-metal owner.
+
+## R-041 — A per-phase regression run can overwrite a previous phase's evidence file
+**Fact.** `tests/unit/test_attention_chunked_vs_ref.py` (P7, `G-CHUNK`) writes
+`bringup_log/raw/G-CHUNK_per_layer_pcc.json` on every run, with content derived from whatever
+`$PREFILL_TRACE_DIR` points at. `G-CHUNK-ATTN` (P8) needs a **1024**-token trace where `G-CHUNK` was
+recorded against a **512**-token one, so a P8 regression run at `s1024` rewrote P7's file with
+1024-token content — 211 changed lines — while P7's ledger row still cites the 512-token
+measurement. `raw/G-MODEL_per_layer_pcc.json` was also touched (a trailing newline).
+**Impact.** A `PASS` recorded in an earlier phase can have its evidence file silently replaced by a
+later phase's run. The recipe's §1.2 raw-output rule covers `tee`d `.log` files, which are
+timestamped and therefore collision-free; it says nothing about the derived `.json` tables gates
+write, which are not.
+**Status.** worked around: both files restored from the P7 commit after the final P8 regression, and
+`G-CHUNK-ATTN` now **skips** rather than fails on a short trace (`DEC-091`).
+**How to close.** Put the discriminating parameters in the filename — `G-CHUNK_s512_c128_per_layer_pcc.json`
+— and update the citing ledger row in the same change. That is a two-file edit spanning two phases'
+records, so it belongs to P9's cleanliness pass rather than to P8. **Owner:** P9; kit maintainer for
+the §1.2 rule.
+
+## R-042 — Two P5 ledger citations point at raw logs that do not exist
+**Fact.** `06_GATES.md:894` cites `P5-REGRESSION_20260904T100738Z.log` for "93 passed, 0 failed"
+and `:896` cites `G-CITE_20260904T101355Z.log` for "330/330 verified ... 629/629 doc refs
+resolved". Neither file is on disk and neither is in git history. `raw/` holds a P5 regression pair
+at `T092212Z` / `T102256Z` and a `G-CITE` pair at `T092334Z` / `T102606Z`.
+**How it was found.** `verify_citations.py`'s **pass 3**, added in P8 (`G-CITE (P8)`): passes 1 and 2
+both key on `path:line`, so a bare a bare backticked `raw/`-relative log name reference — the ledger's own evidence citation
+format — was scanned by neither, and four previous doc gates passed clean over these two lines.
+**Impact.** Two claims in the P5.4-P5.6 status block have no retrievable evidence. The recipe's rule
+is unambiguous: "A gate with no raw log did not happen" (`BRINGUP_RECIPE.md:199`). The *gates*
+themselves (`G-MLP`, `G-ATTN`, `G-KV`) each cite their own logs and those exist — what is
+unevidenced is the **per-phase regression count** and the **citation count** at that point, not a
+numeric gate.
+**Status.** open, and deliberately **not** re-attributed. Pointing the two claims at the surviving
+`T102256Z` / `T102606Z` logs would assert that those carry the same numbers, which this session
+cannot know; §1.6's whole argument is that a wrong-but-plausible citation is worse than none.
+**How to close.** Whoever owns the P5 record either re-runs the two commands and appends a new status
+entry (append-only, §1.1), or appends a note saying the two logs were lost. Either closes it; editing
+the old line does not. **Owner:** P9.

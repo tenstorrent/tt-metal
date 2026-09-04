@@ -1,0 +1,273 @@
+2026-09-04 14:50:37.500 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mstojkovic/.cache/ttnn,model_cache_path=/home/mstojkovic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-09-04 14:50:38.480 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:224)
+2026-09-04 14:50:38.480 | info     |             UMD | Cluster constructor started. (cluster.cpp:406)
+2026-09-04 14:50:38.497 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-09-04 14:50:38.497 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-09-04 14:50:38.588 | info     |             UMD | Established firmware bundle version: 19.12.0 (topology_discovery.cpp:576)
+2026-09-04 14:50:38.593 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-09-04 14:50:40.018 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31}/[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 30, 31, 16, 17, 18, 19, 20, 21, 22, 23] and remote chip ids {} (cluster.cpp:173)
+2026-09-04 14:50:40.018 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-09-04 14:50:40.018 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-09-04 14:50:40.018 | info     |             UMD | Cluster constructor completed. (cluster.cpp:665)
+2026-09-04 14:50:40.037 | info     |             UMD | Starting devices in cluster (cluster.cpp:1205)
+2026-09-04 14:50:41.043 | warning  |             UMD | AICLK settled at 1337 MHz, within 5% of the requested 1350 MHz but not an exact match. Proceeding. (tt_device.cpp:256)
+2026-09-04 14:50:41.656 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1213)
+============================= test session starts ==============================
+platform linux -- Python 3.12.14, pytest-9.0.3, pluggy-1.6.0 -- /home/mstojkovic/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mstojkovic/tt-metal
+configfile: pytest.ini
+plugins: timeout-2.4.0, anyio-4.15.0, cov-7.0.0, github-actions-annotate-failures-0.3.0, repeat-0.9.4, dash-2.15.0, benchmark-5.2.3, split-0.11.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 3 items
+
+models/demos/llama31_8b_d_p/tests/unit/test_dense_sp_vs_ref.py::test_dense_sp_attention_vs_fp32_reference[blackhole-mesh_device0-device_params0] 2026-09-04 14:50:45.703 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
+2026-09-04 14:50:45.703 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
+2026-09-04 14:50:45.721 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4, 3:16, 4:12} (topology_mapper_utils.cpp:3368)
+2026-09-04 14:50:45.721 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {3:4, 4:20, 5:8} (topology_mapper_utils.cpp:3376)
+2026-09-04 14:50:45.737 | INFO     | models.demos.utils.trace_region_sizes:resolve_trace_region_size_for_candidates:155 - No trace_region_size configured for model candidates ['/home/mstojkovic/models/Llama-3.1-8B-Instruct', 'Llama-3.1-8B-Instruct', 'Llama-3.1-8B'] and SKU='bh_galaxy_perf'; defaulting to dynamic allocation (trace_region_size=0).
+2026-09-04 14:50:45.737 | info     |           Metal | Fabric config changed from FabricConfig::DISABLED to FabricConfig::FABRIC_1D, reinitializing control plane (metal_env.cpp:324)
+2026-09-04 14:50:45.737 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
+2026-09-04 14:50:45.737 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
+2026-09-04 14:50:45.753 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4, 3:16, 4:12} (topology_mapper_utils.cpp:3368)
+2026-09-04 14:50:45.753 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {3:4, 4:20, 5:8} (topology_mapper_utils.cpp:3376)
+2026-09-04 14:50:45.756 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:50:45.756 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:50:45.756 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:50:45.756 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:50:46.350 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:50:46.350 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:50:46.350 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:50:46.350 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:50:46.451 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:308)
+2026-09-04 14:50:46.651 | info     |           Metal | Fabric initialized on 32 devices (fabric_firmware_initializer.cpp:455)
+2026-09-04 14:50:46.651 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D (fabric_firmware_initializer.cpp:325)
+2026-09-04 14:50:47.832 | DEBUG    | conftest:mesh_device:668 - multidevice with 32 devices is created
+2026-09-04 14:50:47.872 | INFO     | llama31_8b_d_p.tests.unit.test_dense_sp_vs_ref:test_dense_sp_attention_vs_fp32_reference:223 - [G-SP-RING] mesh=(4, 8) sp=4 tp=8 num_links=2 topology=Topology.Ring compute_grid=(12,10) ccl_offset=(11, 0) ring_sdpa_grid=(11,10) chunk_global=512 chunk_local=128 kv_actual=512 logical_n=1024 cache_global=2048
+2026-09-04 14:50:48.030 | critical |          Always | TT_FATAL: Could not find any forwarding direction from src (M0, D0) to dst (M0, D3) (assert.hpp:104)
+FAILED2026-09-04 14:50:48.273 | INFO     | conftest:pytest_runtest_teardown:1227 - In custom teardown, open device ids: {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31}
+
+
+=================================== FAILURES ===================================
+_ test_dense_sp_attention_vs_fp32_reference[blackhole-mesh_device0-device_params0] _
+
+mesh_device = MeshDevice(4x8 grid, 32 devices), reset_seeds = None
+
+    @requires_galaxy
+    @requires_ring_fabric
+    @torch.no_grad()
+    @pytest.mark.parametrize("device_params", [galaxy_device_params()], indirect=True)
+    @pytest.mark.parametrize("mesh_device", [GALAXY_MESH_SHAPE], indirect=True)
+    def test_dense_sp_attention_vs_fp32_reference(mesh_device, reset_seeds):
+        """**`G-SP-RING`.** The ring op alone, on the deployment `(4, 8)` mesh.
+
+        * **Input distribution:** **standard-normal** Q/K/V, iid. Stated because it matters here more
+          than anywhere else: recipe §2.3 measured that a *fused* kernel's error **ratio** is
+          distribution-dependent even though the floor is not — the same single-card SDPA sits at 71x
+          on iid standard-normal Q/K and 27-29x on real correlated post-RoPE activations. So this
+          number is the iid one and is not comparable with an in-model measurement of the same op;
+          `G-CHUNK-ATTN` is the in-model arm.
+        * **Reference dtype policy:** Q rounded to **bf16** (what the projection hands the op), K/V
+          rounded to **`bfloat8_b`** (what the cache holds), **all remaining math fp32** — the softmax,
+          the two matmuls and the mask. No internal intermediate is quantised (§2.2's conservative
+          reading), so this is a floor and not a flattered one.
+        * **Computed noise floor:** the same reference re-run with Q/K/V *already* at their device
+          values (which is what the reference above uses) scored against the fp32-input reference —
+          i.e. the floor isolates the storage rounding from the kernel.
+        * **Negative control:** two, in the tests below — `fp32_dest_acc_en=True` must be **refused**
+          by the op (§1.4 counts a configuration that must refuse as a control), and a wrong
+          `kv_actual_isl` must collapse the PCC.
+        """
+        hf = llama_config_dims()
+        head_dim = derive_head_dim(hf)
+        n_q, n_kv = hf["num_attention_heads"], hf["num_key_value_heads"]
+        rows, cols = GALAXY_MESH_SHAPE
+        sp, tp = rows, cols
+        chunk_local = CHUNK_GLOBAL // sp
+        n_q_local, n_kv_local = n_q // tp, n_kv // tp
+        logical_n = KV_ACTUAL + CHUNK_GLOBAL
+        scale = head_dim**-0.5
+        gqa_group = n_q // n_kv
+
+        assert n_kv_local == 1, f"the packed cache holds one KV head per chip; got {n_kv_local} at tp={tp}"
+        assert chunk_local == 128, f"chunk_local {chunk_local} must equal the ring q_chunk_size (128)"
+
+        mesh_config = MeshConfig(GALAXY_MESH_SHAPE, tp=tp)
+        ccl = CCLManager(mesh_device, num_links=get_default_num_links(mesh_device), topology=prefill_topology())
+        program_config = sp_ring_program_config(mesh_device)
+        grid = mesh_device.compute_with_storage_grid_size()
+        logger.info(
+            f"[G-SP-RING] mesh={GALAXY_MESH_SHAPE} sp={sp} tp={tp} num_links={ccl.num_links} "
+            f"topology={prefill_topology()} compute_grid=({grid.x},{grid.y}) "
+            f"ccl_offset={ccl.ring_attention_ccl_core_grid_offset} "
+            f"ring_sdpa_grid=({program_config.compute_with_storage_grid_size.x},"
+            f"{program_config.compute_with_storage_grid_size.y}) "
+            f"chunk_global={CHUNK_GLOBAL} chunk_local={chunk_local} kv_actual={KV_ACTUAL} "
+            f"logical_n={logical_n} cache_global={CACHE_GLOBAL}"
+        )
+
+        kv_cache, (k_fp32, v_fp32), (k_dev, v_dev) = _populate(mesh_device, head_dim, n_kv=n_kv, logical_n=logical_n)
+        torch.manual_seed(1)
+        q_global = torch.randn(1, n_q, CHUNK_GLOBAL, head_dim)
+        q_dev = quantize_like_device(q_global, ACTIVATION_DTYPE)
+        tt_q = _shard_chunk(q_dev, mesh_device, ACTIVATION_DTYPE)
+
+>       out = dense_sp_attention(
+            tt_q,
+            kv_cache.k,
+            kv_cache.v,
+            None,
+            None,
+            kv_actual=KV_ACTUAL,
+            logical_n=logical_n,
+            n_kv=n_kv,
+            cache_global=CACHE_GLOBAL,
+            head_dim=head_dim,
+            mesh_device=mesh_device,
+            ccl_manager=ccl,
+            program_config=program_config,
+            compute_kernel_config=sp_ring_compute_kernel_config(mesh_device),
+            scale=scale,
+            cluster_axis=mesh_config.sp_axis,
+            slot_idx=0,
+            layer_idx=0,
+            num_layers=1,
+            write_chunk=False,
+        )
+
+models/demos/llama31_8b_d_p/tests/unit/test_dense_sp_vs_ref.py:239:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+models/demos/llama31_8b_d_p/tt/attention/dense_sp.py:156: in dense_sp_attention
+    out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = FastOperation(python_fully_qualified_name='ttnn.transformer.ring_joint_scaled_dot_product_attention', function=<ttnn._...uts=None, golden_function=None, postprocess_golden_function_outputs=None, is_cpp_operation=True, is_experimental=False)
+function_args = (device_id: 0, MeshCoordinate([0, 0])
+ttnn.Tensor([[[[-1.5234e+00, -7.5000e-01,  ...,  1.0205e-01,  3.3984e-01],
+     ... 0.0000,  0.0000]]]], shape=Shape([1, 1, 512, 128]), dtype=DataType::BFLOAT8_B, layout=Layout::TILE), None, None, None)
+function_kwargs = {'ccl_core_grid_offset': (11, 0), 'cluster_axis': 0, 'compute_kernel_config': <ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x752b7816cb10>, 'dim': 2, ...}
+cq_id = None, recording = False
+
+    def __call__(self, *function_args, **function_kwargs):
+        if self._requires_slow_runtime():
+            return self._slow_operation_instance()(*function_args, **function_kwargs)
+
+        cq_id = None
+        if "queue_id" in function_kwargs:
+            cq_id = function_kwargs.pop("queue_id")
+        elif "cq_id" in function_kwargs:
+            cq_id = function_kwargs.pop("cq_id")
+
+        recording = ttnn.graph.is_python_io_recording_enabled()
+        if recording:
+            ttnn.graph.track_function_start(self.python_fully_qualified_name)
+            ttnn.graph.record_python_operation(self.python_fully_qualified_name, function_args, function_kwargs)
+            input_tensors = get_all_tensors((function_args, function_kwargs))
+            set_tensor_id(input_tensors)
+
+        try:
+            if cq_id is None:
+>               result = self.function(*function_args, **function_kwargs)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E               RuntimeError: TT_FATAL @ /home/mstojkovic/tt-metal/tt_metal/fabric/fabric.cpp:174: forwarding_direction.has_value()
+E               info:
+E               Could not find any forwarding direction from src (M0, D0) to dst (M0, D3)
+E               backtrace:
+E                --- /home/mstojkovic/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x17fbb38) [0x753474bfbb38]
+E                --- void tt::tt_fabric::append_fabric_connection_rt_args<tt::tt_metal::ProgramDescriptor>(tt::tt_fabric::FabricNodeId const&, tt::tt_fabric::FabricNodeId const&, unsigned int, tt::tt_metal::ProgramDescriptor&, tt::xy_pair const&, std::vector<unsigned int, std::allocator<unsigned int> >&, tt::CoreType)
+E                --- /home/mstojkovic/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn62ring_attention_all_gather_async_multi_core_with_workers_helperERN2tt8tt_metal17ProgramDescriptorERKSt6vectorINS_6TensorESaIS5_EERKNS1_11distributed14MeshCoordinateESt8optionalISB_ESF_RS7_ijjjNS0_9tt_fabric8TopologyERKS4_INS1_15GlobalSemaphoreESaISJ_EERKSE_IN4ttsl10StrongTypeIhNS1_14SubDeviceIdTagEEEERSE_INS_12experimental3ccl24AllGatherFusedOpSignalerEENS0_7xy_pairENS_3ccl22CoreAllocationStrategyESE_IjES13_SE_IS5_ES14_jjjbNS_24RingAttentionRankMappingE+0x54d1) [0x753474ca8fd1]
+E                --- /home/mstojkovic/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x2a0a082) [0x753475e0a082]
+E                --- ttnn::prim::RingJointSDPAProgramFactory::create_workload_descriptor(ttnn::prim::RingJointSDPAParams const&, ttnn::prim::RingJointSDPAInputs const&, std::vector<ttnn::Tensor, std::allocator<ttnn::Tensor> >&, tt::tt_metal::distributed::MeshCoordinateRangeSet const&)
+E                --- /home/mstojkovic/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x2a148fb) [0x753475e148fb]
+E                --- /home/mstojkovic/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x2a2ded9) [0x753475e2ded9]
+E                --- /home/mstojkovic/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim28RingJointSDPADeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x240) [0x753475e219f0]
+E                --- /home/mstojkovic/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim28RingJointSDPADeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x3a5) [0x753475e14355]
+E                --- /home/mstojkovic/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn4prim39ring_joint_scaled_dot_product_attentionERKNS_6TensorES3_RKSt8optionalIS1_ES7_S7_S7_RS1_S7_S7_S7_RKNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEEmmNS_10operations11transformer17SDPAProgramConfigEiRKSt6vectorIN2tt8tt_metal15GlobalSemaphoreESaISN_EEjS4_IjERKNSM_11distributed10MeshDeviceENSL_9tt_fabric8TopologyENSL_7xy_pairES4_IN4ttsl10StrongTypeIhNSM_14SubDeviceIdTagEEEEbbbS4_IfES4_INS_19ComputeKernelConfigEENS_3ccl22CoreAllocationStrategyESS_SS_SS_S7_S7_S7_jjSS_+0x1e5c) [0x753475dff1ec]
+E                --- /home/mstojkovic/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn11transformer39ring_joint_scaled_dot_product_attentionERKNS_6TensorES3_S3_RKSt8optionalIS1_ES7_S7_RS1_S8_RKNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEEmmNS_10operations11transformer17SDPAProgramConfigEiRKSt6vectorIN2tt8tt_metal15GlobalSemaphoreESaISN_EEjjRKNSM_11distributed10MeshDeviceENSL_9tt_fabric8TopologyES4_IN4ttsl10StrongTypeIhNSM_14SubDeviceIdTagEEEENSL_7xy_pairEbbbS4_IfES4_INS_19ComputeKernelConfigEENS_3ccl22CoreAllocationStrategyES4_IjES19_S7_S19_S7_S7_+0x47c) [0x753475dc400c]
+E                --- /home/mstojkovic/tt-metal/ttnn/ttnn/_ttnn.so(+0x39b3a9) [0x75347639b3a9]
+E                --- /home/mstojkovic/tt-metal/ttnn/ttnn/_ttnn.so(+0x3aa109) [0x7534763aa109]
+E                --- /home/mstojkovic/tt-metal/ttnn/ttnn/_ttnn.so(+0x377704) [0x753476377704]
+E                --- /home/mstojkovic/tt-metal/python_env/bin/python3() [0x1abf1a2]
+E                --- /home/mstojkovic/tt-metal/python_env/bin/python3() [0x18c2d1a]
+E                --- /home/mstojkovic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0xcbe4) [0x181e0e4]
+E                --- /home/mstojkovic/tt-metal/python_env/bin/python3() [0x1abf1a2]
+E                --- /home/mstojkovic/tt-metal/python_env/bin/python3() [0x18c2d1a]
+E                --- /home/mstojkovic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x45de) [0x1815ade]
+E                --- /home/mstojkovic/tt-metal/python_env/bin/python3() [0x1abf1a2]
+E                --- /home/mstojkovic/tt-metal/python_env/bin/python3() [0x18c2d1a]
+E                --- /home/mstojkovic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x45de) [0x1815ade]
+E                --- /home/mstojkovic/tt-metal/python_env/bin/python3() [0x1abf1a2]
+E                --- /home/mstojkovic/tt-metal/python_env/bin/python3() [0x18c2d1a]
+E                --- /home/mstojkovic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0xcbe4) [0x181e0e4]
+E                --- /home/mstojkovic/tt-metal/python_env/bin/python3() [0x1abf1a2]
+E                --- /home/mstojkovic/tt-metal/python_env/bin/python3() [0x18c2d1a]
+E                --- /home/mstojkovic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x45de) [0x1815ade]
+E                --- /home/mstojkovic/tt-metal/python_env/bin/python3() [0x1abf1a2]
+E                --- /home/mstojkovic/tt-metal/python_env/bin/python3() [0x18c2d1a]
+E                --- /home/mstojkovic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x45de) [0x1815ade]
+E                --- /home/mstojkovic/tt-metal/python_env/bin/python3() [0x1abf1a2]
+E                --- /home/mstojkovic/tt-metal/python_env/bin/python3() [0x18c2d1a]
+E                --- /home/mstojkovic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x45de) [0x1815ade]
+E                --- /home/mstojkovic/tt-metal/python_env/bin/python3(PyEval_EvalCode+0xde) [0x18a54ba]
+E                --- /home/mstojkovic/tt-metal/python_env/bin/python3() [0x18a5c9d]
+E                --- /home/mstojkovic/tt-metal/python_env/bin/python3() [0x19e9605]
+E                --- /home/mstojkovic/tt-metal/python_env/bin/python3(_PyRun_SimpleFileObject+0x106) [0x19e93c6]
+E                --- /home/mstojkovic/tt-metal/python_env/bin/python3(_PyRun_AnyFileObject+0x4a) [0x19e914a]
+E                --- /home/mstojkovic/tt-metal/python_env/bin/python3() [0x19e90d0]
+E                --- /home/mstojkovic/tt-metal/python_env/bin/python3() [0x19e8fdd]
+E                --- /home/mstojkovic/tt-metal/python_env/bin/python3() [0x1ad9763]
+E                --- /home/mstojkovic/tt-metal/python_env/bin/python3() [0x197f61f]
+E                --- /home/mstojkovic/tt-metal/python_env/bin/python3() [0x197f42c]
+E                --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x7535386c11ca]
+E                --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x7535386c128b]
+E                --- /home/mstojkovic/tt-metal/python_env/bin/python3(_start+0x29) [0x19a78a9]
+
+ttnn/ttnn/decorators.py:728: RuntimeError
+- generated xml file: /home/mstojkovic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+2.29s setup    models/demos/llama31_8b_d_p/tests/unit/test_dense_sp_vs_ref.py::test_dense_sp_attention_vs_fp32_reference[blackhole-mesh_device0-device_params0]
+0.20s call     models/demos/llama31_8b_d_p/tests/unit/test_dense_sp_vs_ref.py::test_dense_sp_attention_vs_fp32_reference[blackhole-mesh_device0-device_params0]
+0.19s teardown models/demos/llama31_8b_d_p/tests/unit/test_dense_sp_vs_ref.py::test_dense_sp_attention_vs_fp32_reference[blackhole-mesh_device0-device_params0]
+=========================== short test summary info ============================
+FAILED models/demos/llama31_8b_d_p/tests/unit/test_dense_sp_vs_ref.py::test_dense_sp_attention_vs_fp32_reference[blackhole-mesh_device0-device_params0]
+!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!
+============================== 1 failed in 2.77s ===============================
+nanobind: leaked 2 instances!
+ - leaked instance 0x7533b20673e8 of type "ttnn._ttnn.tensor.MemoryConfig"
+ - leaked instance 0x7533b1ec2628 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 23 types!
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "FabricConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "Arch"
+ - ... skipped remainder
+nanobind: leaked 255 functions!
+ - leaked function "__repr__"
+ - leaked function "worker_core_from_logical_core"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "matmul_select_program_factory"
+ - leaked function "__eq__"
+ - leaked function "is_allocated"
+ - leaked function ""
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-09-04 14:50:49.722 | info     |    BuildKernels | JIT cache stats: 147/147 hits (100.0%) [147 cached, 548 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-09-04 14:50:49.722 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-09-04 14:50:49.940 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:550)
+2026-09-04 14:50:49.940 | info     |             UMD | Closing devices in cluster (cluster.cpp:1218)
+2026-09-04 14:50:57.715 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1227)
+2026-09-04 14:50:57.716 | info     |             UMD | Cluster destructor started. (cluster.cpp:933)
+2026-09-04 14:50:57.716 | info     |             UMD | Cluster destructor completed. (cluster.cpp:936)

@@ -1,0 +1,227 @@
+2026-09-04 14:57:03.934 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mstojkovic/.cache/ttnn,model_cache_path=/home/mstojkovic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-09-04 14:57:04.922 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:224)
+2026-09-04 14:57:04.922 | info     |             UMD | Cluster constructor started. (cluster.cpp:406)
+2026-09-04 14:57:04.939 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-09-04 14:57:04.939 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-09-04 14:57:05.037 | info     |             UMD | Established firmware bundle version: 19.12.0 (topology_discovery.cpp:576)
+2026-09-04 14:57:05.042 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-09-04 14:57:06.484 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31}/[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 30, 31, 16, 17, 18, 19, 20, 21, 22, 23] and remote chip ids {} (cluster.cpp:173)
+2026-09-04 14:57:06.484 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-09-04 14:57:06.484 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-09-04 14:57:06.484 | info     |             UMD | Cluster constructor completed. (cluster.cpp:665)
+2026-09-04 14:57:06.502 | info     |             UMD | Starting devices in cluster (cluster.cpp:1205)
+2026-09-04 14:57:08.082 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1213)
+============================= test session starts ==============================
+platform linux -- Python 3.12.14, pytest-9.0.3, pluggy-1.6.0 -- /home/mstojkovic/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mstojkovic/tt-metal
+configfile: pytest.ini
+plugins: timeout-2.4.0, anyio-4.15.0, cov-7.0.0, github-actions-annotate-failures-0.3.0, repeat-0.9.4, dash-2.15.0, benchmark-5.2.3, split-0.11.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 5 items
+
+models/demos/llama31_8b_d_p/tests/unit/test_tp_parity.py::test_multi_device_matches_single_device[blackhole-rms_norm-mesh_device0-device_params0] 2026-09-04 14:57:14.798 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
+2026-09-04 14:57:14.798 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
+2026-09-04 14:57:14.815 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4, 3:16, 4:12} (topology_mapper_utils.cpp:3368)
+2026-09-04 14:57:14.815 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {3:4, 4:20, 5:8} (topology_mapper_utils.cpp:3376)
+2026-09-04 14:57:14.818 | INFO     | conftest:mesh_device:650 - No trace region size for (4, 8)
+2026-09-04 14:57:14.818 | info     |           Metal | Fabric config changed from FabricConfig::DISABLED to FabricConfig::FABRIC_1D, reinitializing control plane (metal_env.cpp:324)
+2026-09-04 14:57:14.818 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
+2026-09-04 14:57:14.818 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
+2026-09-04 14:57:14.834 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4, 3:16, 4:12} (topology_mapper_utils.cpp:3368)
+2026-09-04 14:57:14.834 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {3:4, 4:20, 5:8} (topology_mapper_utils.cpp:3376)
+2026-09-04 14:57:14.837 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:57:14.837 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:57:14.837 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:57:14.837 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:57:15.438 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:57:15.438 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:57:15.438 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:57:15.438 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:57:15.539 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:308)
+2026-09-04 14:57:15.722 | info     |           Metal | Fabric initialized on 32 devices (fabric_firmware_initializer.cpp:455)
+2026-09-04 14:57:15.722 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D (fabric_firmware_initializer.cpp:325)
+2026-09-04 14:57:16.912 | DEBUG    | conftest:mesh_device:668 - multidevice with 32 devices is created
+2026-09-04 14:57:18.093 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 14:57:18.125 | INFO     | llama31_8b_d_p.tests.unit.test_tp_parity:test_multi_device_matches_single_device:241 - [G-TP-PARITY] rms_norm: reference on (1, 1) (TP=1), output (1, 1, 128, 4096), token_wise=True
+2026-09-04 14:57:18.202 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 2), tp=2) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 14:57:18.222 | INFO     | llama31_8b_d_p.tests.unit.test_tp_parity:test_multi_device_matches_single_device:269 - [G-TP-PARITY] rms_norm on (1, 2) (TP=2, SP=1, num_links=1): worst device PCC = 1.0000000 at device None (threshold 0.999)
+2026-09-04 14:57:18.297 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 4), tp=4) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 14:57:18.324 | INFO     | llama31_8b_d_p.tests.unit.test_tp_parity:test_multi_device_matches_single_device:269 - [G-TP-PARITY] rms_norm on (1, 4) (TP=4, SP=1, num_links=1): worst device PCC = 1.0000000 at device None (threshold 0.999)
+2026-09-04 14:57:18.399 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 8), tp=8) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 14:57:18.442 | INFO     | llama31_8b_d_p.tests.unit.test_tp_parity:test_multi_device_matches_single_device:269 - [G-TP-PARITY] rms_norm on (1, 8) (TP=8, SP=1, num_links=1): worst device PCC = 1.0000000 at device None (threshold 0.999)
+2026-09-04 14:57:18.517 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(2, 8), tp=8) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 14:57:19.082 | INFO     | llama31_8b_d_p.tests.unit.test_tp_parity:test_multi_device_matches_single_device:269 - [G-TP-PARITY] rms_norm on (2, 8) (TP=8, SP=2, num_links=2): worst device PCC = 1.0000000 at device None (threshold 0.999)
+2026-09-04 14:57:19.770 | INFO     | llama31_8b_d_p.tests.unit.test_tp_parity:test_multi_device_matches_single_device:269 - [G-TP-PARITY] rms_norm on (4, 8) (TP=8, SP=4, num_links=2): worst device PCC = 1.0000000 at device None (threshold 0.999)
+2026-09-04 14:57:19.770 | INFO     | llama31_8b_d_p.tests.unit.test_tp_parity:test_multi_device_matches_single_device:276 - [G-TP-PARITY] rms_norm: worst over 5 shapes = 1.0000000; (1, 2)=1.0000000, (1, 4)=1.0000000, (1, 8)=1.0000000, (2, 8)=1.0000000, (4, 8)=1.0000000
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_tp_parity.py::test_shard_rotation_control_fails[blackhole-mesh_device0-device_params0] 2026-09-04 14:57:20.315 | INFO     | conftest:mesh_device:650 - No trace region size for (4, 8)
+2026-09-04 14:57:20.315 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D to FabricConfig::FABRIC_1D, reinitializing control plane (metal_env.cpp:324)
+2026-09-04 14:57:20.315 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
+2026-09-04 14:57:20.315 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
+2026-09-04 14:57:20.332 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4, 3:16, 4:12} (topology_mapper_utils.cpp:3368)
+2026-09-04 14:57:20.332 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {3:4, 4:20, 5:8} (topology_mapper_utils.cpp:3376)
+2026-09-04 14:57:20.335 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:57:20.335 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:57:20.335 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:57:20.335 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:57:21.145 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:57:21.145 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:57:21.145 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:57:21.145 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:57:21.166 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:308)
+2026-09-04 14:57:21.304 | info     |           Metal | Fabric initialized on 32 devices (fabric_firmware_initializer.cpp:455)
+2026-09-04 14:57:21.304 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D (fabric_firmware_initializer.cpp:325)
+2026-09-04 14:57:21.840 | DEBUG    | conftest:mesh_device:668 - multidevice with 32 devices is created
+2026-09-04 14:57:22.878 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 14:57:25.203 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 8), tp=8) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 14:57:27.656 | INFO     | llama31_8b_d_p.tests.unit.test_tp_parity:test_shard_rotation_control_fails:316 - [G-TP-PARITY] control: MLP on (1, 8) vs its (1,1) run scores PCC 0.9999916; against the reference rolled by one TP shard (512 features) it scores 0.00307 (ceiling 0.95)
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_tp_parity.py::test_multi_device_matches_single_device[blackhole-mlp-mesh_device0-device_params0] 2026-09-04 14:57:28.120 | INFO     | conftest:mesh_device:650 - No trace region size for (4, 8)
+2026-09-04 14:57:28.120 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D to FabricConfig::FABRIC_1D, reinitializing control plane (metal_env.cpp:324)
+2026-09-04 14:57:28.120 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
+2026-09-04 14:57:28.120 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
+2026-09-04 14:57:28.137 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4, 3:16, 4:12} (topology_mapper_utils.cpp:3368)
+2026-09-04 14:57:28.137 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {3:4, 4:20, 5:8} (topology_mapper_utils.cpp:3376)
+2026-09-04 14:57:28.140 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:57:28.140 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:57:28.140 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:57:28.140 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:57:28.962 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:57:28.962 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:57:28.962 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:57:28.962 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:57:28.983 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:308)
+2026-09-04 14:57:29.123 | info     |           Metal | Fabric initialized on 32 devices (fabric_firmware_initializer.cpp:455)
+2026-09-04 14:57:29.123 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D (fabric_firmware_initializer.cpp:325)
+2026-09-04 14:57:29.658 | DEBUG    | conftest:mesh_device:668 - multidevice with 32 devices is created
+2026-09-04 14:57:30.706 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 14:57:32.024 | INFO     | llama31_8b_d_p.tests.unit.test_tp_parity:test_multi_device_matches_single_device:241 - [G-TP-PARITY] mlp: reference on (1, 1) (TP=1), output (1, 1, 128, 4096), token_wise=True
+2026-09-04 14:57:32.037 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 2), tp=2) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 14:57:34.179 | INFO     | llama31_8b_d_p.tests.unit.test_tp_parity:test_multi_device_matches_single_device:269 - [G-TP-PARITY] mlp on (1, 2) (TP=2, SP=1, num_links=1): worst device PCC = 0.9999963 at device (0, 0) (threshold 0.999)
+2026-09-04 14:57:34.196 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 4), tp=4) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 14:57:39.176 | INFO     | llama31_8b_d_p.tests.unit.test_tp_parity:test_multi_device_matches_single_device:269 - [G-TP-PARITY] mlp on (1, 4) (TP=4, SP=1, num_links=1): worst device PCC = 0.9999943 at device (0, 0) (threshold 0.999)
+2026-09-04 14:57:39.246 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 8), tp=8) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 14:57:40.415 | INFO     | llama31_8b_d_p.tests.unit.test_tp_parity:test_multi_device_matches_single_device:269 - [G-TP-PARITY] mlp on (1, 8) (TP=8, SP=1, num_links=1): worst device PCC = 0.9999916 at device (0, 0) (threshold 0.999)
+2026-09-04 14:57:40.492 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(2, 8), tp=8) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 14:57:45.337 | INFO     | llama31_8b_d_p.tests.unit.test_tp_parity:test_multi_device_matches_single_device:269 - [G-TP-PARITY] mlp on (2, 8) (TP=8, SP=2, num_links=2): worst device PCC = 0.9999916 at device (0, 0) (threshold 0.999)
+2026-09-04 14:57:50.455 | INFO     | llama31_8b_d_p.tests.unit.test_tp_parity:test_multi_device_matches_single_device:269 - [G-TP-PARITY] mlp on (4, 8) (TP=8, SP=4, num_links=2): worst device PCC = 0.9999915 at device (1, 0) (threshold 0.999)
+2026-09-04 14:57:50.455 | INFO     | llama31_8b_d_p.tests.unit.test_tp_parity:test_multi_device_matches_single_device:276 - [G-TP-PARITY] mlp: worst over 5 shapes = 0.9999915; (1, 2)=0.9999963, (1, 4)=0.9999943, (1, 8)=0.9999916, (2, 8)=0.9999916, (4, 8)=0.9999915
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_tp_parity.py::test_multi_device_matches_single_device[blackhole-attention-mesh_device0-device_params0] 2026-09-04 14:57:50.994 | INFO     | conftest:mesh_device:650 - No trace region size for (4, 8)
+2026-09-04 14:57:50.995 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D to FabricConfig::FABRIC_1D, reinitializing control plane (metal_env.cpp:324)
+2026-09-04 14:57:50.995 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
+2026-09-04 14:57:50.995 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
+2026-09-04 14:57:51.012 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4, 3:16, 4:12} (topology_mapper_utils.cpp:3368)
+2026-09-04 14:57:51.012 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {3:4, 4:20, 5:8} (topology_mapper_utils.cpp:3376)
+2026-09-04 14:57:51.016 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:57:51.016 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:57:51.016 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:57:51.016 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:57:51.853 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:57:51.853 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:57:51.853 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:57:51.853 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:57:51.875 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:308)
+2026-09-04 14:57:52.016 | info     |           Metal | Fabric initialized on 32 devices (fabric_firmware_initializer.cpp:455)
+2026-09-04 14:57:52.016 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D (fabric_firmware_initializer.cpp:325)
+2026-09-04 14:57:52.553 | DEBUG    | conftest:mesh_device:668 - multidevice with 32 devices is created
+2026-09-04 14:57:53.604 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 14:57:55.257 | DEBUG    | models.demos.llama31_8b_d_p.tt.attention.prefill:attention_forward:228 - [attention L0] core=dense seq_local=128 sp=1 cached_len=0 cache_global=None
+2026-09-04 14:57:56.155 | INFO     | llama31_8b_d_p.tests.unit.test_tp_parity:test_multi_device_matches_single_device:241 - [G-TP-PARITY] attention: reference on (1, 1) (TP=1), output (1, 1, 128, 4096), token_wise=False
+2026-09-04 14:57:56.169 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 2), tp=2) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 14:57:57.850 | DEBUG    | models.demos.llama31_8b_d_p.tt.attention.prefill:attention_forward:228 - [attention L0] core=dense seq_local=128 sp=1 cached_len=0 cache_global=None
+2026-09-04 14:58:00.216 | INFO     | llama31_8b_d_p.tests.unit.test_tp_parity:test_multi_device_matches_single_device:269 - [G-TP-PARITY] attention on (1, 2) (TP=2, SP=1, num_links=1): worst device PCC = 0.9999963 at device (0, 0) (threshold 0.999)
+2026-09-04 14:58:00.233 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 4), tp=4) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 14:58:02.030 | DEBUG    | models.demos.llama31_8b_d_p.tt.attention.prefill:attention_forward:228 - [attention L0] core=dense seq_local=128 sp=1 cached_len=0 cache_global=None
+2026-09-04 14:58:04.415 | INFO     | llama31_8b_d_p.tests.unit.test_tp_parity:test_multi_device_matches_single_device:269 - [G-TP-PARITY] attention on (1, 4) (TP=4, SP=1, num_links=1): worst device PCC = 0.9999943 at device (0, 0) (threshold 0.999)
+2026-09-04 14:58:04.434 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 8), tp=8) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 14:58:04.784 | DEBUG    | models.demos.llama31_8b_d_p.tt.attention.prefill:attention_forward:228 - [attention L0] core=dense seq_local=128 sp=1 cached_len=0 cache_global=None
+2026-09-04 14:58:04.870 | INFO     | llama31_8b_d_p.tests.unit.test_tp_parity:test_multi_device_matches_single_device:269 - [G-TP-PARITY] attention on (1, 8) (TP=8, SP=1, num_links=1): worst device PCC = 0.9999917 at device (0, 0) (threshold 0.999)
+2026-09-04 14:58:04.938 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(2, 8), tp=8) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 14:58:05.309 | DEBUG    | models.demos.llama31_8b_d_p.tt.attention.prefill:attention_forward:228 - [attention L0] core=dense seq_local=128 sp=2 cached_len=0 cache_global=None
+2026-09-04 14:58:06.565 | INFO     | llama31_8b_d_p.tests.unit.test_tp_parity:test_multi_device_matches_single_device:269 - [G-TP-PARITY] attention on (2, 8) (TP=8, SP=2, num_links=2): worst device PCC = 0.9999917 at device (0, 0) (threshold 0.999)
+2026-09-04 14:58:07.058 | DEBUG    | models.demos.llama31_8b_d_p.tt.attention.prefill:attention_forward:228 - [attention L0] core=dense seq_local=128 sp=4 cached_len=0 cache_global=None
+2026-09-04 14:58:07.273 | INFO     | llama31_8b_d_p.tests.unit.test_tp_parity:test_multi_device_matches_single_device:269 - [G-TP-PARITY] attention on (4, 8) (TP=8, SP=4, num_links=2): worst device PCC = 0.9999917 at device (0, 0) (threshold 0.999)
+2026-09-04 14:58:07.273 | INFO     | llama31_8b_d_p.tests.unit.test_tp_parity:test_multi_device_matches_single_device:276 - [G-TP-PARITY] attention: worst over 5 shapes = 0.9999917; (1, 2)=0.9999963, (1, 4)=0.9999943, (1, 8)=0.9999917, (2, 8)=0.9999917, (4, 8)=0.9999917
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_tp_parity.py::test_multi_device_matches_single_device[blackhole-layer-mesh_device0-device_params0] 2026-09-04 14:58:07.833 | INFO     | conftest:mesh_device:650 - No trace region size for (4, 8)
+2026-09-04 14:58:07.833 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D to FabricConfig::FABRIC_1D, reinitializing control plane (metal_env.cpp:324)
+2026-09-04 14:58:07.833 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
+2026-09-04 14:58:07.833 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
+2026-09-04 14:58:07.851 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4, 3:16, 4:12} (topology_mapper_utils.cpp:3368)
+2026-09-04 14:58:07.851 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {3:4, 4:20, 5:8} (topology_mapper_utils.cpp:3376)
+2026-09-04 14:58:07.854 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:58:07.854 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:58:07.854 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:58:07.854 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:58:08.665 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:58:08.665 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:58:08.665 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:58:08.665 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:58:08.687 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:308)
+2026-09-04 14:58:08.824 | info     |           Metal | Fabric initialized on 32 devices (fabric_firmware_initializer.cpp:455)
+2026-09-04 14:58:08.824 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D (fabric_firmware_initializer.cpp:325)
+2026-09-04 14:58:09.372 | DEBUG    | conftest:mesh_device:668 - multidevice with 32 devices is created
+2026-09-04 14:58:10.424 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 14:58:11.950 | DEBUG    | models.demos.llama31_8b_d_p.tt.attention.prefill:attention_forward:228 - [attention L0] core=dense seq_local=128 sp=1 cached_len=0 cache_global=None
+2026-09-04 14:58:11.962 | INFO     | llama31_8b_d_p.tests.unit.test_tp_parity:test_multi_device_matches_single_device:241 - [G-TP-PARITY] layer: reference on (1, 1) (TP=1), output (1, 1, 128, 4096), token_wise=False
+2026-09-04 14:58:11.975 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 2), tp=2) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 14:58:12.938 | DEBUG    | models.demos.llama31_8b_d_p.tt.attention.prefill:attention_forward:228 - [attention L0] core=dense seq_local=128 sp=1 cached_len=0 cache_global=None
+2026-09-04 14:58:12.957 | INFO     | llama31_8b_d_p.tests.unit.test_tp_parity:test_multi_device_matches_single_device:269 - [G-TP-PARITY] layer on (1, 2) (TP=2, SP=1, num_links=1): worst device PCC = 0.9999854 at device (0, 0) (threshold 0.999)
+2026-09-04 14:58:12.972 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 4), tp=4) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 14:58:14.169 | DEBUG    | models.demos.llama31_8b_d_p.tt.attention.prefill:attention_forward:228 - [attention L0] core=dense seq_local=128 sp=1 cached_len=0 cache_global=None
+2026-09-04 14:58:14.194 | INFO     | llama31_8b_d_p.tests.unit.test_tp_parity:test_multi_device_matches_single_device:269 - [G-TP-PARITY] layer on (1, 4) (TP=4, SP=1, num_links=1): worst device PCC = 0.9999798 at device (0, 0) (threshold 0.999)
+2026-09-04 14:58:14.210 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 8), tp=8) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 14:58:15.802 | DEBUG    | models.demos.llama31_8b_d_p.tt.attention.prefill:attention_forward:228 - [attention L0] core=dense seq_local=128 sp=1 cached_len=0 cache_global=None
+2026-09-04 14:58:15.852 | INFO     | llama31_8b_d_p.tests.unit.test_tp_parity:test_multi_device_matches_single_device:269 - [G-TP-PARITY] layer on (1, 8) (TP=8, SP=1, num_links=1): worst device PCC = 0.9999733 at device (0, 0) (threshold 0.999)
+2026-09-04 14:58:15.929 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(2, 8), tp=8) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 14:58:17.416 | DEBUG    | models.demos.llama31_8b_d_p.tt.attention.prefill:attention_forward:228 - [attention L0] core=dense seq_local=128 sp=2 cached_len=0 cache_global=None
+2026-09-04 14:58:17.519 | INFO     | llama31_8b_d_p.tests.unit.test_tp_parity:test_multi_device_matches_single_device:269 - [G-TP-PARITY] layer on (2, 8) (TP=8, SP=2, num_links=2): worst device PCC = 0.9999733 at device (0, 0) (threshold 0.999)
+2026-09-04 14:58:19.105 | DEBUG    | models.demos.llama31_8b_d_p.tt.attention.prefill:attention_forward:228 - [attention L0] core=dense seq_local=128 sp=4 cached_len=0 cache_global=None
+2026-09-04 14:58:19.337 | INFO     | llama31_8b_d_p.tests.unit.test_tp_parity:test_multi_device_matches_single_device:269 - [G-TP-PARITY] layer on (4, 8) (TP=8, SP=4, num_links=2): worst device PCC = 0.9999733 at device (0, 0) (threshold 0.999)
+2026-09-04 14:58:19.338 | INFO     | llama31_8b_d_p.tests.unit.test_tp_parity:test_multi_device_matches_single_device:276 - [G-TP-PARITY] layer: worst over 5 shapes = 0.9999733; (1, 2)=0.9999854, (1, 4)=0.9999798, (1, 8)=0.9999733, (2, 8)=0.9999733, (4, 8)=0.9999733
+PASSED
+
+=============================== warnings summary ===============================
+python_env/lib/python3.12/site-packages/pydantic/_internal/_config.py:291
+  /home/mstojkovic/tt-metal/python_env/lib/python3.12/site-packages/pydantic/_internal/_config.py:291: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.9/migration/
+    warnings.warn(DEPRECATION_MESSAGE, DeprecationWarning)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /home/mstojkovic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+20.84s call     models/demos/llama31_8b_d_p/tests/unit/test_tp_parity.py::test_multi_device_matches_single_device[blackhole-mlp-mesh_device0-device_params0]
+14.77s call     models/demos/llama31_8b_d_p/tests/unit/test_tp_parity.py::test_multi_device_matches_single_device[blackhole-attention-mesh_device0-device_params0]
+10.02s call     models/demos/llama31_8b_d_p/tests/unit/test_tp_parity.py::test_multi_device_matches_single_device[blackhole-layer-mesh_device0-device_params0]
+5.86s call     models/demos/llama31_8b_d_p/tests/unit/test_tp_parity.py::test_shard_rotation_control_fails[blackhole-mesh_device0-device_params0]
+2.92s call     models/demos/llama31_8b_d_p/tests/unit/test_tp_parity.py::test_multi_device_matches_single_device[blackhole-rms_norm-mesh_device0-device_params0]
+2.32s setup    models/demos/llama31_8b_d_p/tests/unit/test_tp_parity.py::test_multi_device_matches_single_device[blackhole-rms_norm-mesh_device0-device_params0]
+1.86s setup    models/demos/llama31_8b_d_p/tests/unit/test_tp_parity.py::test_multi_device_matches_single_device[blackhole-attention-mesh_device0-device_params0]
+1.84s setup    models/demos/llama31_8b_d_p/tests/unit/test_tp_parity.py::test_multi_device_matches_single_device[blackhole-layer-mesh_device0-device_params0]
+1.81s setup    models/demos/llama31_8b_d_p/tests/unit/test_tp_parity.py::test_shard_rotation_control_fails[blackhole-mesh_device0-device_params0]
+1.76s setup    models/demos/llama31_8b_d_p/tests/unit/test_tp_parity.py::test_multi_device_matches_single_device[blackhole-mlp-mesh_device0-device_params0]
+0.21s teardown models/demos/llama31_8b_d_p/tests/unit/test_tp_parity.py::test_multi_device_matches_single_device[blackhole-layer-mesh_device0-device_params0]
+0.20s teardown models/demos/llama31_8b_d_p/tests/unit/test_tp_parity.py::test_multi_device_matches_single_device[blackhole-attention-mesh_device0-device_params0]
+0.19s teardown models/demos/llama31_8b_d_p/tests/unit/test_tp_parity.py::test_multi_device_matches_single_device[blackhole-rms_norm-mesh_device0-device_params0]
+0.19s teardown models/demos/llama31_8b_d_p/tests/unit/test_tp_parity.py::test_multi_device_matches_single_device[blackhole-mlp-mesh_device0-device_params0]
+0.19s teardown models/demos/llama31_8b_d_p/tests/unit/test_tp_parity.py::test_shard_rotation_control_fails[blackhole-mesh_device0-device_params0]
+=========================== short test summary info ============================
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_tp_parity.py::test_multi_device_matches_single_device[blackhole-rms_norm-mesh_device0-device_params0]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_tp_parity.py::test_shard_rotation_control_fails[blackhole-mesh_device0-device_params0]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_tp_parity.py::test_multi_device_matches_single_device[blackhole-mlp-mesh_device0-device_params0]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_tp_parity.py::test_multi_device_matches_single_device[blackhole-attention-mesh_device0-device_params0]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_tp_parity.py::test_multi_device_matches_single_device[blackhole-layer-mesh_device0-device_params0]
+=================== 5 passed, 1 warning in 67.64s (0:01:07) ====================
+2026-09-04 14:58:21.498 | info     |    BuildKernels | JIT cache stats: 320/505 hits (63.4%) [320 cached, 5003 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-09-04 14:58:21.498 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-09-04 14:58:21.720 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:550)
+2026-09-04 14:58:21.720 | info     |             UMD | Closing devices in cluster (cluster.cpp:1218)
+2026-09-04 14:58:29.546 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1227)
+2026-09-04 14:58:29.547 | info     |             UMD | Cluster destructor started. (cluster.cpp:933)
+2026-09-04 14:58:29.547 | info     |             UMD | Cluster destructor completed. (cluster.cpp:936)

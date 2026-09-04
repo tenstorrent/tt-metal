@@ -1,0 +1,57 @@
+[fabric-matrix] 12 cases, 240s timeout each, one subprocess per case; tt-smi -r after any hang
+
+[fabric-matrix] === toplevel_1x8_fabric1d  (expect error)
+[fabric-matrix] toplevel_1x8_fabric1d: expect=error got=error MATCH in 29.2s :: RuntimeError: TT_THROW @ /home/mstojkovic/tt-metal/tt_metal/impl/device/firmware/fabric_firmware_initializer.cpp:271: tt::exception
+
+[fabric-matrix] === toplevel_2x8_fabric1d  (expect error)
+[fabric-matrix] toplevel_2x8_fabric1d: expect=error got=error MATCH in 29.5s :: RuntimeError: TT_THROW @ /home/mstojkovic/tt-metal/tt_metal/impl/device/firmware/fabric_firmware_initializer.cpp:271: tt::exception
+
+[fabric-matrix] === submesh_1x2_linear_l1_ax1  (expect ok)
+[fabric-matrix] submesh_1x2_linear_l1_ax1: expect=ok got=ok MATCH in 22.1s :: all_gather axis=1 n=2 bit-exact on all 2 devices
+
+[fabric-matrix] === submesh_1x4_linear_l1_ax1  (expect ok)
+[fabric-matrix] submesh_1x4_linear_l1_ax1: expect=ok got=ok MATCH in 22.3s :: all_gather axis=1 n=4 bit-exact on all 4 devices
+
+[fabric-matrix] === submesh_1x8_linear_l1_ax1  (expect ok)
+[fabric-matrix] submesh_1x8_linear_l1_ax1: expect=ok got=ok MATCH in 21.0s :: all_gather axis=1 n=8 bit-exact on all 8 devices
+
+[fabric-matrix] === submesh_1x8_ring_l1_ax1  (expect ok)
+[fabric-matrix] submesh_1x8_ring_l1_ax1: expect=ok got=error MISMATCH in 18.2s :: RuntimeError: TT_FATAL @ /home/mstojkovic/tt-metal/tt_metal/fabric/topology_mapper.cpp:544: mapping_result.success
+
+[fabric-matrix] === submesh_2x8_ring_l2_ax1  (expect ok)
+[fabric-matrix] submesh_2x8_ring_l2_ax1: expect=ok got=error MISMATCH in 18.3s :: RuntimeError: TT_FATAL @ /home/mstojkovic/tt-metal/tt_metal/fabric/topology_mapper.cpp:544: mapping_result.success
+
+[fabric-matrix] === full_4x8_ring_l2_ax1  (expect ok)
+[fabric-matrix] full_4x8_ring_l2_ax1: expect=ok got=error MISMATCH in 18.3s :: RuntimeError: TT_FATAL @ /home/mstojkovic/tt-metal/tt_metal/fabric/topology_mapper.cpp:544: mapping_result.success
+
+[fabric-matrix] === full_4x8_ring_l2_ax0  (expect ok)
+[fabric-matrix] full_4x8_ring_l2_ax0: expect=ok got=error MISMATCH in 18.4s :: RuntimeError: TT_FATAL @ /home/mstojkovic/tt-metal/tt_metal/fabric/topology_mapper.cpp:544: mapping_result.success
+
+[fabric-matrix] === submesh_1x8_ring_on_fabric1d  (expect hang)
+[fabric-matrix] submesh_1x8_ring_on_fabric1d: expect=hang got=ok MISMATCH in 21.0s :: all_gather axis=1 n=8 bit-exact on all 8 devices
+
+[fabric-matrix] === overlap_1x2_then_1x8_no_quiesce  (expect hang)
+[fabric-matrix] overlap_1x2_then_1x8_no_quiesce: expect=hang got=hang MATCH in 246.3s :: no result in 240s
+[fabric-matrix] overlap_1x2_then_1x8_no_quiesce hung as expected -> tt-smi -r (a hang poisons every later collective)
+[fabric-matrix] tt-smi -r exit=0 in 43.1s
+
+[fabric-matrix] === overlap_1x2_then_1x8_quiesce  (expect ok)
+[fabric-matrix] overlap_1x2_then_1x8_quiesce: expect=ok got=ok MATCH in 22.4s :: phase1: all_gather axis=1 n=2 bit-exact on all 2 devices | phase2: all_gather axis=1 n=8 bit-exact on all 8 devices
+
+==============================================================================================================
+case                                 expect  got     match     secs  detail
+--------------------------------------------------------------------------------------------------------------
+toplevel_1x8_fabric1d                error   error   yes       29.2  RuntimeError: TT_THROW @ /home/mstojkovic/tt-metal/tt_metal/impl/device/firmware/fabric_firmware_initializer.cpp:271: tt
+toplevel_2x8_fabric1d                error   error   yes       29.5  RuntimeError: TT_THROW @ /home/mstojkovic/tt-metal/tt_metal/impl/device/firmware/fabric_firmware_initializer.cpp:271: tt
+submesh_1x2_linear_l1_ax1            ok      ok      yes       22.1  all_gather axis=1 n=2 bit-exact on all 2 devices
+submesh_1x4_linear_l1_ax1            ok      ok      yes       22.3  all_gather axis=1 n=4 bit-exact on all 4 devices
+submesh_1x8_linear_l1_ax1            ok      ok      yes       21.0  all_gather axis=1 n=8 bit-exact on all 8 devices
+submesh_1x8_ring_l1_ax1              ok      error   NO        18.2  RuntimeError: TT_FATAL @ /home/mstojkovic/tt-metal/tt_metal/fabric/topology_mapper.cpp:544: mapping_result.success
+submesh_2x8_ring_l2_ax1              ok      error   NO        18.3  RuntimeError: TT_FATAL @ /home/mstojkovic/tt-metal/tt_metal/fabric/topology_mapper.cpp:544: mapping_result.success
+full_4x8_ring_l2_ax1                 ok      error   NO        18.3  RuntimeError: TT_FATAL @ /home/mstojkovic/tt-metal/tt_metal/fabric/topology_mapper.cpp:544: mapping_result.success
+full_4x8_ring_l2_ax0                 ok      error   NO        18.4  RuntimeError: TT_FATAL @ /home/mstojkovic/tt-metal/tt_metal/fabric/topology_mapper.cpp:544: mapping_result.success
+submesh_1x8_ring_on_fabric1d         hang    ok      NO        21.0  all_gather axis=1 n=8 bit-exact on all 8 devices
+overlap_1x2_then_1x8_no_quiesce      hang    hang    yes      246.3  no result in 240s
+overlap_1x2_then_1x8_quiesce         ok      ok      yes       22.4  phase1: all_gather axis=1 n=2 bit-exact on all 2 devices | phase2: all_gather axis=1 n=8 bit-exact on all 8 devices
+==============================================================================================================
+[fabric-matrix] 7/12 cases matched their stated expectation; MISMATCHED: ['submesh_1x8_ring_l1_ax1', 'submesh_2x8_ring_l2_ax1', 'full_4x8_ring_l2_ax1', 'full_4x8_ring_l2_ax0', 'submesh_1x8_ring_on_fabric1d']

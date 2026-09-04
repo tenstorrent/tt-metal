@@ -1,0 +1,27 @@
+[fabric-matrix] 5 cases, 240s timeout each, one subprocess per case; tt-smi -r after any hang
+
+[fabric-matrix] === submesh_2x8_ring_on_fabric1d_l2_ax1  (expect ok)
+[fabric-matrix] submesh_2x8_ring_on_fabric1d_l2_ax1: expect=ok got=ok MATCH in 20.7s :: all_gather axis=1 n=8 bit-exact on all 16 devices
+
+[fabric-matrix] === full_4x8_ring_on_fabric1d_l2_ax1  (expect ok)
+[fabric-matrix] full_4x8_ring_on_fabric1d_l2_ax1: expect=ok got=ok MATCH in 20.7s :: all_gather axis=1 n=8 bit-exact on all 32 devices
+
+[fabric-matrix] === full_4x8_ring_on_fabric1d_l2_ax0  (expect ok)
+[fabric-matrix] full_4x8_ring_on_fabric1d_l2_ax0: expect=ok got=ok MATCH in 22.0s :: all_gather axis=0 n=4 bit-exact on all 32 devices
+
+[fabric-matrix] === full_4x8_linear_l2_ax1  (expect ok)
+[fabric-matrix] full_4x8_linear_l2_ax1: expect=ok got=ok MATCH in 20.7s :: all_gather axis=1 n=8 bit-exact on all 32 devices
+
+[fabric-matrix] === full_4x8_linear_l2_ax0  (expect ok)
+[fabric-matrix] full_4x8_linear_l2_ax0: expect=ok got=ok MATCH in 20.7s :: all_gather axis=0 n=4 bit-exact on all 32 devices
+
+==============================================================================================================
+case                                 expect  got     match     secs  detail
+--------------------------------------------------------------------------------------------------------------
+submesh_2x8_ring_on_fabric1d_l2_ax1  ok      ok      yes       20.7  all_gather axis=1 n=8 bit-exact on all 16 devices
+full_4x8_ring_on_fabric1d_l2_ax1     ok      ok      yes       20.7  all_gather axis=1 n=8 bit-exact on all 32 devices
+full_4x8_ring_on_fabric1d_l2_ax0     ok      ok      yes       22.0  all_gather axis=0 n=4 bit-exact on all 32 devices
+full_4x8_linear_l2_ax1               ok      ok      yes       20.7  all_gather axis=1 n=8 bit-exact on all 32 devices
+full_4x8_linear_l2_ax0               ok      ok      yes       20.7  all_gather axis=0 n=4 bit-exact on all 32 devices
+==============================================================================================================
+[fabric-matrix] 5/5 cases matched their stated expectation

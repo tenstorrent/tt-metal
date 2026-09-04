@@ -1,0 +1,14 @@
+citations checked : 539
+  verified        : 539
+  mismatched      : 0
+  missing files   : 0
+doc refs scanned  : 900
+  resolved        : 900
+  unresolved      : 0
+raw artefacts cited: 100
+  present         : 98
+  missing         : 2
+
+ARTEFACT FAILURES:
+  ARTEFACT MISSING  models/demos/llama31_8b_d_p/bringup_log/06_GATES.md: raw/P5-REGRESSION_20260904T100738Z.log
+  ARTEFACT MISSING  models/demos/llama31_8b_d_p/bringup_log/06_GATES.md: raw/G-CITE_20260904T101355Z.log

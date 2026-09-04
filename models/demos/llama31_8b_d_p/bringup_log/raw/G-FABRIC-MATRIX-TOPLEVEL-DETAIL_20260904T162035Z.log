@@ -1,0 +1,15 @@
+[fabric-matrix] 2 cases, 240s timeout each, one subprocess per case; tt-smi -r after any hang
+
+[fabric-matrix] === toplevel_1x8_fabric1d  (expect error)
+[fabric-matrix] toplevel_1x8_fabric1d: expect=error got=error MATCH in 29.3s :: RuntimeError: TT_THROW @ /home/mstojkovic/tt-metal/tt_metal/impl/device/firmware/fabric_firmware_initializer.cpp:271: tt::exception || why: 2026-09-04 16:20:56.622 | error    |           Metal | Fabric Router Sync: Timeout after 10000 ms on Device 1. Expected status 0xa2b2c2d2 (LOCAL_HANDSHAKE_COMPLETE) at edm_status_address=0x00015c10. Per-router status: (fabric_firmware_initializer.cpp:206)
+
+[fabric-matrix] === toplevel_2x8_fabric1d  (expect error)
+[fabric-matrix] toplevel_2x8_fabric1d: expect=error got=error MATCH in 29.6s :: RuntimeError: TT_THROW @ /home/mstojkovic/tt-metal/tt_metal/impl/device/firmware/fabric_firmware_initializer.cpp:271: tt::exception || why: 2026-09-04 16:21:26.060 | error    |           Metal | Fabric Router Sync: Timeout after 10000 ms on Device 4. Expected status 0xa2b2c2d2 (LOCAL_HANDSHAKE_COMPLETE) at edm_status_address=0x00015c10. Per-router status: (fabric_firmware_initializer.cpp:206)
+
+==============================================================================================================
+case                                 expect  got     match     secs  detail
+--------------------------------------------------------------------------------------------------------------
+toplevel_1x8_fabric1d                error   error   yes       29.3  RuntimeError: TT_THROW @ /home/mstojkovic/tt-metal/tt_metal/impl/device/firmware/fabric_firmware_initializer.cpp:271: tt
+toplevel_2x8_fabric1d                error   error   yes       29.6  RuntimeError: TT_THROW @ /home/mstojkovic/tt-metal/tt_metal/impl/device/firmware/fabric_firmware_initializer.cpp:271: tt
+==============================================================================================================
+[fabric-matrix] 2/2 cases matched their stated expectation

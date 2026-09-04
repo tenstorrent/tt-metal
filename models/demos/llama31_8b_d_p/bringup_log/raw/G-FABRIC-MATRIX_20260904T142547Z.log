@@ -1,0 +1,24 @@
+[fabric-matrix] 12 cases, 240s timeout each, one subprocess per case; tt-smi -r after any hang
+
+[fabric-matrix] === toplevel_1x8_fabric1d  (expect error)
+[fabric-matrix] toplevel_1x8_fabric1d: expect=error got=error MATCH in 18.3s :: RuntimeError: TT_FATAL @ /home/mstojkovic/tt-metal/tt_metal/impl/context/metal_env.cpp:416: std::filesystem::exists(mesh_graph_desc_path)
+
+[fabric-matrix] === toplevel_2x8_fabric1d  (expect error)
+[fabric-matrix] toplevel_2x8_fabric1d: expect=error got=error MATCH in 18.4s :: RuntimeError: TT_FATAL @ /home/mstojkovic/tt-metal/tt_metal/impl/context/metal_env.cpp:416: std::filesystem::exists(mesh_graph_desc_path)
+
+[fabric-matrix] === submesh_1x2_linear_l1_ax1  (expect ok)
+[fabric-matrix] submesh_1x2_linear_l1_ax1: expect=ok got=error MISMATCH in 18.2s :: RuntimeError: TT_FATAL @ /home/mstojkovic/tt-metal/tt_metal/impl/context/metal_env.cpp:416: std::filesystem::exists(mesh_graph_desc_path)
+
+[fabric-matrix] === submesh_1x4_linear_l1_ax1  (expect ok)
+[fabric-matrix] submesh_1x4_linear_l1_ax1: expect=ok got=error MISMATCH in 18.4s :: RuntimeError: TT_FATAL @ /home/mstojkovic/tt-metal/tt_metal/impl/context/metal_env.cpp:416: std::filesystem::exists(mesh_graph_desc_path)
+
+[fabric-matrix] === submesh_1x8_linear_l1_ax1  (expect ok)
+[fabric-matrix] submesh_1x8_linear_l1_ax1: expect=ok got=error MISMATCH in 18.3s :: RuntimeError: TT_FATAL @ /home/mstojkovic/tt-metal/tt_metal/impl/context/metal_env.cpp:416: std::filesystem::exists(mesh_graph_desc_path)
+
+[fabric-matrix] === submesh_1x8_ring_l1_ax1  (expect ok)
+[fabric-matrix] submesh_1x8_ring_l1_ax1: expect=ok got=error MISMATCH in 18.3s :: RuntimeError: TT_FATAL @ /home/mstojkovic/tt-metal/tt_metal/impl/context/metal_env.cpp:416: std::filesystem::exists(mesh_graph_desc_path)
+
+[fabric-matrix] === submesh_2x8_ring_l2_ax1  (expect ok)
+[fabric-matrix] submesh_2x8_ring_l2_ax1: expect=ok got=error MISMATCH in 18.4s :: RuntimeError: TT_FATAL @ /home/mstojkovic/tt-metal/tt_metal/impl/context/metal_env.cpp:416: std::filesystem::exists(mesh_graph_desc_path)
+
+[fabric-matrix] === full_4x8_ring_l2_ax1  (expect ok)

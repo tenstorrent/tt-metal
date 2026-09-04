@@ -15,8 +15,9 @@ in sync.
 import ttnn
 
 from .config import AttentionConfig, ProgramConfig
+from .dense_sp import dense_sp_attention, sp_bootstrap_attention, sp_ring_compute_kernel_config, sp_ring_program_config
 from .kv_cache import LlamaKVCache, allocate_kv_cache, write_kv_chunk
-from .prefill import attention_forward
+from .prefill import attention_forward, select_attention_core
 from .weights import AttentionWeights, load_attention_weights
 
 __all__ = [
@@ -27,7 +28,14 @@ __all__ = [
     "ProgramConfig",
     "allocate_kv_cache",
     "attention_forward",
+    # P8's sequence-parallel surface. `select_attention_core` is exported because the gates assert
+    # which of the three cores ran rather than inferring it (`DEC-075`).
+    "dense_sp_attention",
     "load_attention_weights",
+    "select_attention_core",
+    "sp_bootstrap_attention",
+    "sp_ring_compute_kernel_config",
+    "sp_ring_program_config",
     "write_kv_chunk",
 ]
 

@@ -58,13 +58,20 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.gpt_oss_d_p.utils.general_utils import get_default_num_links
 from models.demos.llama31_8b_d_p.tests.test_factory import (
+    GALAXY_MESH_SHAPE,
     bundled_config_path,
+    galaxy_device_params,
     hf_model_path,
     llama_config_dims,
+    prefill_topology,
     quantize_like_device,
+    requires_galaxy,
     requires_hf_reference,
+    requires_ring_fabric,
 )
+from models.demos.llama31_8b_d_p.tt.ccl import CCLManager
 from models.demos.llama31_8b_d_p.tt.config import MeshConfig
 from models.demos.llama31_8b_d_p.tt.model import Model
 from models.demos.llama31_8b_d_p.tt.model_config import ModelArgs, torch_dtype_of
@@ -75,6 +82,11 @@ WEIGHT_DTYPE = ttnn.bfloat8_b  # `DEC-022`
 # is identical for every layer, and part (a) covers all 32 layers by key set. Building 32 layers
 # with real weights twice would cost ~15 minutes of host I/O to re-prove the same code path.
 N_LAYERS = 1
+
+# Replicated across the whole mesh rather than TP-sharded (`tt/embedding.py`, `DEC-024`), and large
+# enough that hashing all 32 identical copies costs 33.6 GB of D2H per pass. See
+# `_all_device_hashes` in the P8 arm.
+_REPLICATED_VOCAB_TABLES = ("model.embed_tokens.weight",)
 
 # The keys a one-layer model consumes, in the order they are checked, with the transform each one
 # goes through. `swizzle` marks the two the Meta RoPE convention rewrites at load
@@ -161,11 +173,13 @@ def _sha256(t):
     return hashlib.sha256(t.detach().contiguous().numpy().tobytes()).hexdigest()
 
 
-def _build_model(mesh_device, hf, state_dict, *, cache_path=None, weight_dtype=WEIGHT_DTYPE):
+def _build_model(mesh_device, hf, state_dict, *, cache_path=None, weight_dtype=WEIGHT_DTYPE, ccl_manager=None):
+    """Build a one-layer `Model`. `ccl_manager` is required at TP > 1 (the P8 arm)."""
     return Model(
         mesh_device,
         hf,
         state_dict,
+        ccl_manager=ccl_manager,
         mesh_config=MeshConfig(tuple(mesh_device.shape), tp=mesh_device.shape[1]),
         weight_dtype=weight_dtype,
         tensor_cache_path=str(cache_path) if cache_path else None,
@@ -427,3 +441,99 @@ def test_state_dict_prefixes_match_the_checkpoint():
         matches = [k for k in keys if k.startswith(prefix)]
         logger.info(f"[G-WEIGHTS] prefix {prefix!r} matches {len(matches)} checkpoint keys")
         assert matches, f"get_state_dict_prefix produced {prefix!r}, which matches no checkpoint key"
+
+
+# =============================================================================================
+# (d) `G-WEIGHTS`, the P8 extension: the cache-only rebuild **at TP=8**, where the cache is
+# actually sharded.
+#
+# `BRINGUP_RECIPE.md:1785-1787`: "`ttnn.as_tensor` caches the already-sharded tensor, so a stale or
+# wrong-shape cache presents as 'one layer runs on garbage' and is first visible here, not at
+# `G-WEIGHTS`". The `(1,1)` arm above cannot see it for two reasons, both structural:
+#
+#   1. at TP=1 there is nothing to shard, so the persisted tensor is the full-width one and any
+#      sharding bug is absent from the file rather than baked into it;
+#   2. `_read_device` reads **device 0 only**, which at `(1,1)` is the whole tensor and at `(4,8)`
+#      is 1/8 of it — so the arm below hashes **every one of the 32 device tensors** and a cache
+#      that reconstituted the shards in the wrong order would still pass a device-0 check.
+#
+# The mesh shape is in the cache path (`DEC-048`), so a `(1,1)` cache cannot be picked up here by
+# accident; `test_cache_written_at_another_dtype_is_not_reused` above is the same argument for the
+# dtype. This arm adds the mesh-shape half.
+# =============================================================================================
+@requires_hf_reference
+@requires_galaxy
+@requires_ring_fabric
+@pytest.mark.timeout(2400)
+@pytest.mark.parametrize("device_params", [galaxy_device_params()], indirect=True)
+@pytest.mark.parametrize("mesh_device", [GALAXY_MESH_SHAPE], indirect=True)
+def test_cache_only_rebuild_is_bit_identical_at_tp8(mesh_device, tmp_path):
+    """Every one of the 32 device shards must be SHA-256-identical after a cache-only rebuild."""
+    hf = llama_config_dims()
+    args = ModelArgs(mesh_device, hf_config=hf)
+    cache_path = args.weight_cache_path(WEIGHT_DTYPE, cache_root=tmp_path)
+    assert cache_path.name.endswith(f"_{GALAXY_MESH_SHAPE[0]}x{GALAXY_MESH_SHAPE[1]}"), (
+        f"the mesh shape must be in the cache path so a (1,1) cache cannot be reused at TP=8; got " f"{cache_path.name}"
+    )
+    logger.info(f"[G-WEIGHTS] TP=8 cache path: {cache_path.name}")
+
+    def _all_device_hashes(model):
+        """`{key: {device_index: sha256}}` over every device shard, except as noted below.
+
+        `model.embed_tokens.weight` is **replicated, not TP-sharded** (`tt/embedding.py`,
+        `DEC-024`), so each of the 32 devices holds the whole `[128256, 4096]` table — 1.05 GB
+        each, 33.6 GB of device-to-host transfer per pass, twice, to re-prove a tensor the mesh
+        does not shard. For that one tensor the first and last device are hashed (which is what
+        makes the *replication* falsifiable) and the per-device claim is the `(1,1)` arm's
+        (`DEC-087`). Every other tensor, `lm_head.weight` included, is hashed on all 32.
+        """
+        out = {}
+        for key, tensor in _model_tensors(model).items():
+            shards = ttnn.get_device_tensors(tensor)
+            picked = (0, len(shards) - 1) if key in _REPLICATED_VOCAB_TABLES else range(len(shards))
+            out[key] = {dev: _sha256(ttnn.to_torch(shards[dev]).float()) for dev in picked}
+        return out
+
+    ccl = CCLManager(mesh_device, num_links=get_default_num_links(mesh_device), topology=prefill_topology())
+    first = _build_model(mesh_device, hf, _load_subset(), cache_path=cache_path, ccl_manager=ccl)
+    first_hashes = _all_device_hashes(first)
+    del first
+
+    cached = _build_model(mesh_device, hf, {}, cache_path=cache_path, ccl_manager=ccl)
+    second_hashes = _all_device_hashes(cached)
+
+    n_shards = 0
+    sharded, replicated = [], []
+    for key in first_hashes:
+        assert set(first_hashes[key]) == set(second_hashes[key]), f"{key}: the device set changed"
+        n_shards += len(first_hashes[key])
+        distinct = len(set(first_hashes[key].values()))
+        (sharded if distinct > 1 else replicated).append(key)
+        for dev, a in first_hashes[key].items():
+            b = second_hashes[key][dev]
+            assert a == b, f"{key} shard {dev} differs after a cache-only rebuild: {a[:16]} vs {b[:16]}"
+        logger.info(
+            f"[G-WEIGHTS] TP=8 cache-only {key:<48} {len(first_hashes[key])} shards hashed, "
+            f"{distinct} distinct -> {'SHARDED' if distinct > 1 else 'replicated'}, "
+            f"dev0 {first_hashes[key][0][:16]}"
+        )
+
+    files = sorted(p.name for p in cache_path.rglob("*.tensorbin"))
+    logger.info(
+        f"[G-WEIGHTS] TP=8 cache-only rebuild: {n_shards} device shards over "
+        f"{len(first_hashes)} tensors, all SHA-256-identical. Genuinely sharded ({len(sharded)}): "
+        f"{sharded}. Replicated ({len(replicated)}): {replicated}. {len(files)} cache files."
+    )
+    # The whole point of the P8 extension: if nothing were actually sharded, this arm would be the
+    # (1,1) arm again with more devices.
+    assert sharded, (
+        "no weight came back with more than one distinct shard hash, so nothing is sharded at "
+        "TP=8 and this arm is not testing what it claims to. Check MeshConfig.column_parallel."
+    )
+    # The replication claim, made falsifiable rather than assumed: the vocab table's first and last
+    # device must agree, and every projection must NOT.
+    for key in _REPLICATED_VOCAB_TABLES:
+        hashes = set(first_hashes[key].values())
+        assert len(hashes) == 1, f"{key} is documented as replicated (DEC-024) but its shards differ"
+    for key in ("model.layers.0.self_attn.q_proj.weight", "lm_head.weight"):
+        assert key in sharded, f"{key} is column-parallel and must differ across the TP columns"

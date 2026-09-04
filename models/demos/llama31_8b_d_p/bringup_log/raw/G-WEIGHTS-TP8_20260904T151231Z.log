@@ -1,0 +1,175 @@
+2026-09-04 15:12:34.681 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mstojkovic/.cache/ttnn,model_cache_path=/home/mstojkovic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-09-04 15:12:35.665 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:224)
+2026-09-04 15:12:35.665 | info     |             UMD | Cluster constructor started. (cluster.cpp:406)
+2026-09-04 15:12:35.682 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-09-04 15:12:35.682 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-09-04 15:12:35.776 | info     |             UMD | Established firmware bundle version: 19.12.0 (topology_discovery.cpp:576)
+2026-09-04 15:12:35.781 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-09-04 15:12:37.209 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31}/[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 30, 31, 16, 17, 18, 19, 20, 21, 22, 23] and remote chip ids {} (cluster.cpp:173)
+2026-09-04 15:12:37.209 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-09-04 15:12:37.209 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-09-04 15:12:37.209 | info     |             UMD | Cluster constructor completed. (cluster.cpp:665)
+2026-09-04 15:12:37.228 | info     |             UMD | Starting devices in cluster (cluster.cpp:1205)
+2026-09-04 15:12:39.040 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1213)
+============================= test session starts ==============================
+platform linux -- Python 3.12.14, pytest-9.0.3, pluggy-1.6.0 -- /home/mstojkovic/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mstojkovic/tt-metal
+configfile: pytest.ini
+plugins: timeout-2.4.0, anyio-4.15.0, cov-7.0.0, github-actions-annotate-failures-0.3.0, repeat-0.9.4, dash-2.15.0, benchmark-5.2.3, split-0.11.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 12 items / 11 deselected / 1 selected
+
+models/demos/llama31_8b_d_p/tests/unit/test_weight_loading.py::test_cache_only_rebuild_is_bit_identical_at_tp8[blackhole-mesh_device0-device_params0] 2026-09-04 15:12:44.562 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
+2026-09-04 15:12:44.563 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
+2026-09-04 15:12:44.580 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4, 3:16, 4:12} (topology_mapper_utils.cpp:3368)
+2026-09-04 15:12:44.580 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {3:4, 4:20, 5:8} (topology_mapper_utils.cpp:3376)
+2026-09-04 15:12:44.596 | INFO     | models.demos.utils.trace_region_sizes:resolve_trace_region_size_for_candidates:155 - No trace_region_size configured for model candidates ['/home/mstojkovic/models/Llama-3.1-8B-Instruct', 'Llama-3.1-8B-Instruct', 'Llama-3.1-8B'] and SKU='bh_galaxy_perf'; defaulting to dynamic allocation (trace_region_size=0).
+2026-09-04 15:12:44.597 | info     |           Metal | Fabric config changed from FabricConfig::DISABLED to FabricConfig::FABRIC_1D, reinitializing control plane (metal_env.cpp:324)
+2026-09-04 15:12:44.597 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
+2026-09-04 15:12:44.597 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
+2026-09-04 15:12:44.612 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4, 3:16, 4:12} (topology_mapper_utils.cpp:3368)
+2026-09-04 15:12:44.612 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {3:4, 4:20, 5:8} (topology_mapper_utils.cpp:3376)
+2026-09-04 15:12:44.615 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 15:12:44.615 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 15:12:44.615 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 15:12:44.615 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 15:12:45.205 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 15:12:45.205 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 15:12:45.205 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 15:12:45.205 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 15:12:45.304 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:308)
+2026-09-04 15:12:45.502 | info     |           Metal | Fabric initialized on 32 devices (fabric_firmware_initializer.cpp:455)
+2026-09-04 15:12:45.502 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D (fabric_firmware_initializer.cpp:325)
+2026-09-04 15:12:46.696 | DEBUG    | conftest:mesh_device:668 - multidevice with 32 devices is created
+2026-09-04 15:12:46.698 | INFO     | llama31_8b_d_p.tests.unit.test_weight_loading:test_cache_only_rebuild_is_bit_identical_at_tp8:468 - [G-WEIGHTS] TP=8 cache path: tensor_cache_bfp8_4x8
+2026-09-04 15:12:46.700 | INFO     | models.demos.llama31_8b_d_p.tt.model_config:_load_safetensors:199 - loaded 12 checkpoint tensors from /home/mstojkovic/models/Llama-3.1-8B-Instruct
+2026-09-04 15:12:47.269 | DEBUG    | core:from_torch_and_dump:702 - Generating cache for /tmp/pytest-of-mstojkovic/pytest-32/test_cache_only_rebuild_is_bit0/tensor_cache_bfp8_4x8/model.embed_tokens/weight_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin of shape Shape([128256, 4096]), dtype BFLOAT16, layout ROW_MAJOR
+2026-09-04 15:12:49.760 | DEBUG    | core:from_torch_and_dump:702 - Generating cache for /tmp/pytest-of-mstojkovic/pytest-32/test_cache_only_rebuild_is_bit0/tensor_cache_bfp8_4x8/model.layers.0/input_layernorm/weight_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin of shape Shape([1, 1, 128, 32]), dtype BFLOAT16, layout ROW_MAJOR
+2026-09-04 15:12:49.761 | DEBUG    | core:from_torch_and_dump:702 - Generating cache for /tmp/pytest-of-mstojkovic/pytest-32/test_cache_only_rebuild_is_bit0/tensor_cache_bfp8_4x8/model.layers.0/post_attention_layernorm/weight_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin of shape Shape([1, 1, 128, 32]), dtype BFLOAT16, layout ROW_MAJOR
+FAILED2026-09-04 15:12:50.023 | INFO     | conftest:pytest_runtest_teardown:1227 - In custom teardown, open device ids: {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31}
+
+
+=================================== FAILURES ===================================
+_ test_cache_only_rebuild_is_bit_identical_at_tp8[blackhole-mesh_device0-device_params0] _
+
+mesh_device = MeshDevice(4x8 grid, 32 devices)
+tmp_path = PosixPath('/tmp/pytest-of-mstojkovic/pytest-32/test_cache_only_rebuild_is_bit0')
+
+    @requires_hf_reference
+    @requires_galaxy
+    @requires_ring_fabric
+    @pytest.mark.parametrize("device_params", [galaxy_device_params()], indirect=True)
+    @pytest.mark.parametrize("mesh_device", [GALAXY_MESH_SHAPE], indirect=True)
+    def test_cache_only_rebuild_is_bit_identical_at_tp8(mesh_device, tmp_path):
+        """Every one of the 32 device shards must be SHA-256-identical after a cache-only rebuild."""
+        hf = llama_config_dims()
+        args = ModelArgs(mesh_device, hf_config=hf)
+        cache_path = args.weight_cache_path(WEIGHT_DTYPE, cache_root=tmp_path)
+        assert cache_path.name.endswith(f"_{GALAXY_MESH_SHAPE[0]}x{GALAXY_MESH_SHAPE[1]}"), (
+            f"the mesh shape must be in the cache path so a (1,1) cache cannot be reused at TP=8; got "
+            f"{cache_path.name}"
+        )
+        logger.info(f"[G-WEIGHTS] TP=8 cache path: {cache_path.name}")
+
+        def _all_device_hashes(model):
+            out = {}
+            for key, tensor in _model_tensors(model).items():
+                shards = ttnn.get_device_tensors(tensor)
+                out[key] = [_sha256(ttnn.to_torch(s).float()) for s in shards]
+            return out
+
+>       first = _build_model(mesh_device, hf, _load_subset(), cache_path=cache_path)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+models/demos/llama31_8b_d_p/tests/unit/test_weight_loading.py:477:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+models/demos/llama31_8b_d_p/tests/unit/test_weight_loading.py:169: in _build_model
+    return Model(
+models/demos/llama31_8b_d_p/tt/model.py:127: in __init__
+    DecoderLayer(
+models/demos/llama31_8b_d_p/tt/layer.py:166: in __init__
+    self.self_attn = Attention(
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <models.demos.llama31_8b_d_p.tt.attention.Attention object at 0x7dd0e4ef6e10>
+mesh_device = MeshDevice(4x8 grid, 32 devices)
+config = AttentionConfig(hidden_size=4096, num_heads=32, num_kv_heads=8, head_dim=128, max_seq_len=32, rms_norm_eps=1e-05, scaling=0.08838834764831845, sequence_parallel=False)
+state_dict = {'k_proj.weight': tensor([[-1.0449e-01, -1.5039e-01,  8.2520e-02,  ...,  3.0273e-02,
+         -1.1475e-02,  4.4434e-02... [-4.7684e-04, -7.8125e-03,  7.1716e-04,  ...,  5.9814e-03,
+          1.7090e-03, -3.6926e-03]], dtype=torch.bfloat16)}
+
+    def __init__(
+        self,
+        mesh_device,
+        config: AttentionConfig,
+        state_dict,
+        *,
+        ccl_manager=None,
+        mesh_config,
+        program_config: ProgramConfig,
+        layer_idx,
+        transformation_mats=None,
+        weight_dtype=ttnn.bfloat8_b,
+        tensor_cache_path=None,
+    ):
+        """
+        Args:
+            mesh_device: the open mesh.
+            config: `AttentionConfig`. This module takes the **config**, not the raw `hf` dict, and
+                that is a deliberate exception to the package's `(mesh_device, hf, state_dict)`
+                convention (`bringup_log/03_OUTLINE.md` §5): the config *is* the model-specific
+                normalisation, and rebuilding it per layer would put config parsing in 32 places.
+            state_dict: this layer's attention keys (`q/k/v/o_proj.weight`), or `{}` for cache-only.
+            ccl_manager: the model's `CCLManager`. Required only when `tp > 1`.
+            mesh_config: the model's `MeshConfig`.
+            program_config: `ProgramConfig`. Its pinned SDPA grid is validated **here**, at
+                construction, so a derived grid fails at build time rather than at SP > 1 in P8
+                (`BRINGUP_RECIPE.md:1196-1204`).
+            layer_idx: this layer's index, used for the per-layer KV-cache write.
+            transformation_mats: `{"prefill": tensor}` — the `[1,1,32,32]` Meta RoPE transformation
+                matrix from `tt/rope.py::build_transformation_mat`. `None` skips RoPE entirely,
+                which only `G-ATTN`'s rotation invariant uses.
+            weight_dtype: on-device weight dtype, `bfloat8_b` (`DEC-022`).
+            tensor_cache_path: where `ttnn.as_tensor` persists / reloads the tilized weights.
+        """
+        self.mesh_device = mesh_device
+        self.config = config
+        self.mesh_config = mesh_config
+        self.ccl_manager = ccl_manager
+        self.program_config = program_config
+        self.layer_idx = layer_idx
+        self.transformation_mats = transformation_mats
+
+        # Fail at construction, not two phases later. See `ProgramConfig.validate_grid`.
+        program_config.validate_grid(mesh_device)
+        if mesh_config.tp > 1 and ccl_manager is None:
+>           raise ValueError(f"Attention at tp={mesh_config.tp} needs a ccl_manager for its TP all-reduce")
+E           ValueError: Attention at tp=8 needs a ccl_manager for its TP all-reduce
+
+models/demos/llama31_8b_d_p/tt/attention/__init__.py:83: ValueError
+=============================== warnings summary ===============================
+python_env/lib/python3.12/site-packages/pydantic/_internal/_config.py:291
+  /home/mstojkovic/tt-metal/python_env/lib/python3.12/site-packages/pydantic/_internal/_config.py:291: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.9/migration/
+    warnings.warn(DEPRECATION_MESSAGE, DeprecationWarning)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+- generated xml file: /home/mstojkovic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+3.06s call     models/demos/llama31_8b_d_p/tests/unit/test_weight_loading.py::test_cache_only_rebuild_is_bit_identical_at_tp8[blackhole-mesh_device0-device_params0]
+2.33s setup    models/demos/llama31_8b_d_p/tests/unit/test_weight_loading.py::test_cache_only_rebuild_is_bit_identical_at_tp8[blackhole-mesh_device0-device_params0]
+0.19s teardown models/demos/llama31_8b_d_p/tests/unit/test_weight_loading.py::test_cache_only_rebuild_is_bit_identical_at_tp8[blackhole-mesh_device0-device_params0]
+=========================== short test summary info ============================
+FAILED models/demos/llama31_8b_d_p/tests/unit/test_weight_loading.py::test_cache_only_rebuild_is_bit_identical_at_tp8[blackhole-mesh_device0-device_params0]
+================= 1 failed, 11 deselected, 1 warning in 7.09s ==================
+2026-09-04 15:12:52.432 | info     |    BuildKernels | JIT cache stats: 140/140 hits (100.0%) [140 cached, 480 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-09-04 15:12:52.432 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-09-04 15:12:52.648 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:550)
+2026-09-04 15:12:52.648 | info     |             UMD | Closing devices in cluster (cluster.cpp:1218)
+2026-09-04 15:13:00.514 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1227)
+2026-09-04 15:13:00.515 | info     |             UMD | Cluster destructor started. (cluster.cpp:933)
+2026-09-04 15:13:00.515 | info     |             UMD | Cluster destructor completed. (cluster.cpp:936)

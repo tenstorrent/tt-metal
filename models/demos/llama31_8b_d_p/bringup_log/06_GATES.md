@@ -23,6 +23,17 @@ entry naming the blocker) · `NOT-RUN` (needs the reason). A gate with no raw lo
 | G-GOLDEN | P7 | the fp32 golden trace's structure and content over all 32 layers | clean per-layer table; generator + verifier exit 0; streamed driver == `LlamaModel`'s own loop bit-exactly; a zeroed and a deleted layer must both exit non-zero | 32 layers / 512 tokens / **fp32**, 128.0 MB; streamed vs `LlamaModel` `max\|delta\|` **0.0** on K, V and the post-norm hidden over **all 32** layers (`torch.equal`); verifier **exit 0**; zeroed-layer control **exit 1** with 7 named problems; deleted-layer control **exit 1** | PASS | 2026-09-04 | `raw/G-GOLDEN-GEN_20260904T123642Z.log`, `raw/G-GOLDEN_20260904T125230Z.log` |
 | G-RUNTIME | P7 | the runtime satisfies the engine's **real** call site, statically; every refusal loud and matched | every unguarded name and parameter present; every refusal matched on its message; the audit itself must reject a doc-faithful runtime | **37/37** tests, no device, 8.2 s. Engine call site: **11** runtime attributes, **2** `config` fields (`is_last_rank`, `use_trace`), **9** called methods, **6** `getattr`-guarded hooks. Audit of `TtPrefillRuntime`: **0** missing attributes, **0** missing config fields, **0** signature problems. Control `_BrokenRuntime`: **3** missing methods, **1** missing config field, **4** signature problems including `metadata_msg`. **25** refusals asserted against **25** `raise` statements | PASS | 2026-09-04 | `raw/G-RUNTIME_20260904T131649Z.log` |
 | G-CHUNK-ATTN | P7 -> **P8** | chunk *k* attending the prefix read back out of the cache (**delta 3**) | >= 0.999 at layer 1; deep layers by step <= 4x; both vs golden | **not measured** — needs the ring path and TP=8, neither of which P7 owns. The configuration is **refused** at two levels rather than approximated | **BLOCKED** (`R-023`, owner **P8**) | 2026-09-04 | n/a — see `raw/G-RUNTIME_20260904T125242Z.log` for the refusal that stands in its place |
+| G-FABRIC-MATRIX | P8 | which (mesh, topology, links, axis) combinations can run a collective on ONE galaxy | every case matches its **stated** expectation, subprocess-isolated with a timeout | **7/12** matched. The 5 that did not are the finding: all four `FABRIC_1D_RING` cases `error` (the only single-galaxy RING/RING descriptor does not map — `topology_mapper.cpp:544`, "32 target node(s) are not mapped to any global node"), and `Ring`-on-`FABRIC_1D` was `ok` and **bit-exact** where the recipe says it hangs. Addendum **5/5**. `overlap...no_quiesce` **hang** (246.3 s, box reset 43.1 s); `...quiesce` **ok**. Harness control: a wrong expectation was reported, not absorbed | PASS-WITH-DEVIATION (`DEC-071`, `DEC-079`, `DEC-081`) | 2026-09-04 | `raw/G-FABRIC-MATRIX_20260904T142819Z.log`, `raw/G-FABRIC-MATRIX-ADDENDUM_20260904T144233Z.log`, `raw/G-FABRIC-MATRIX-CONTROL_20260904T144434Z.log` |
+| G-KV-TP8 | P8 | the **model -> cache** path at TP=8 on a `(1,8)` submesh | head->column **bit-exact** (`rtol=atol=0`); K >= 0.99 / V >= 0.98 vs the fp32 golden; L0 ratio <= 3x; rotated-column control | head->column **8/8 columns bit-identical** on both probes (V with RoPE, K without); write offsets {0,128,256} x 8 columns **24/24 bit-identical**; pad tail **exactly 0**; control (read column `(c+1)%8` as head `c`) **PCC 0.99887, `torch.equal` False, max\|delta\| 7.0** — recipe §2.5 measured 0.99890; arm B over 32 layers **min K 0.9986432** (L22) / **min V 0.9942853** (L26); L0 K **1.10x** its complete floor (1.35x storage), V **1.02x** (1.70x storage); pad tail 0.0 over 64 (layer, cache) pairs | PASS | 2026-09-04 | `raw/G-KV-TP8_20260904T144803Z.log`, `raw/G-KV-TP8_per_layer_pcc.json` |
+| G-SP-RING | P8 | the ring-joint SP attention core **alone**, and the `fp32_dest_acc_en` A/B | PCC >= 0.99 vs an fp32 torch reference; ratio to its own floor **recorded** | **0.9996672** against a **0.9999450** floor -> **6.05x** (the recipe's figure for this op is 7.98x; the single-card SDPA is 52.8-55.0x standalone). `fp32_dest_acc_en=True` **REFUSED**: `ring_joint_sdpa_program_factory.cpp:1308`, "kv_actual_isl requires the ring-joint streaming compute path"; `False` accepted, output `(1,4,128,128)`. Controls: correct `kv_cache_batch_idx` **0.9996770** vs `batch_idx=slot` **-0.00337**; `kv_actual_isl=0` **refused** (`ring_joint_sdpa_device_operation.cpp:278`) | PASS | 2026-09-04 | `raw/G-SP-RING_20260904T145354Z.log` (the `Topology.Ring` abort that settled `DEC-081`: `raw/G-SP-RING_20260904T145034Z.log`) |
+| G-CHUNK-ATTN | P8 | **delta 3** — chunk *k*'s queries attending the prefix read back out of the cache | **>= 0.999 at layer 1**; deep layers by per-layer step <= 4x from L3; both arms vs the fp32 golden at `G-CHUNK`'s thresholds; accumulated min recorded, not gated | L0 (no attention has run) mutual K **1.0000000**; **L1 (one attention layer) K 0.9999505, V 0.9997938**; L8 K 0.9995954; **min over 32 layers K 0.9967975 (L22) — recorded, NOT gated**; worst gated step K **2.14x** (L13) / V **1.58x** (L3) against 4x; vs golden one-shot min K 0.9987994 / V 0.9942686, ring min K 0.9967119 / V 0.9868228 (ring carries **2.74x** the one-shot's K error); control (chunk 1 on an unwritten prefix) L0 **1.0000000** — unmoved — L1 **0.99695**, worst **0.87279** | PASS (supersedes the P7 `BLOCKED` row above; closes `R-023`) | 2026-09-04 | `raw/G-CHUNK-ATTN_20260904T150921Z.log.gz`, `raw/G-CHUNK-ATTN_per_layer_pcc.json` |
+| G-TP-PARITY | P8 | the TP collectives are exact: each module's multi-device output vs its own `(1,1)` output | PCC >= 0.999 on 5 shapes incl. `(2,8)`; control <= 0.95 | `(1,2)`/`(1,4)`/`(1,8)`/`(2,8)`/`(4,8)`, worst device of each: **rms_norm 1.0000000 at all five** (sequence-sharded, sliced); **mlp 0.9999915**; **attention 0.9999917**; **layer 0.9999733**. Control (reference rolled by one 512-feature TP shard) **0.00307**. 6 submesh shapes in one process, `quiesce_devices()` on both sides of every phase, no hang | PASS | 2026-09-04 | `raw/G-TP-PARITY_20260904T145701Z.log` |
+| G-RACE | P8 | no semaphore races | 3 runs **bit-identical**, one process, one `CCLManager` | 3 runs of the full 32-layer chunked harness -> **one** hash `b7abb6481ee1efb569e072924e08256310fcf8ab96c77205c76d16cb9d639d28`; min K 0.9967119 / V 0.9868228 identical on all three; 365.0 / 366.8 / 366.8 ms. The hash also equals the separate single-run process's, so determinism holds across processes too | PASS | 2026-09-04 | `raw/G-RACE_20260904T150647Z.log.gz` |
+| G-SEMAPHORE | P8 | `CCLManager` allocates its CCL state **once** | exact list lengths at construction, after dozens of getter cycles, and after a real multi-layer run | **6 RS + 4 AG + 2 barrier + 2 ring-attention = 14** at construction, after 32x4 getter cycles, after a `(4,8)` build, and after a real **32-layer** forward — unchanged at every point; ping-pong indices rs=0 ag=0 barrier=0, all inside a depth-2 ring; the runtime reused the manager passed to it rather than building a second. Control: 3 managers -> **42** semaphores | PASS | 2026-09-04 | `raw/G-SEMAPHORE_20260904T151056Z.log.gz` |
+| G-MESH-KV | P8 | full-model KV vs the fp32 golden on the target `(4,8)` mesh, one-shot and chunked, at more than one chunk size | per-layer min recorded; K >= 0.99 / V >= 0.98 | **one-shot** (chunk 1024 == cache, `sp_bootstrap`): min K **0.9987994** (L22) / V **0.9942686** (L28), 220.5 ms, 4643 tok/s. **chunked c512** (2 chunks, `sp_ring`): min K **0.9967119** (L22) / V **0.9868228** (L28), 365.0 ms. **chunked c256** (4 chunks, chunk_local 64): min K **0.9967844** (L22) / V **0.9866232** (L28). Two different block-cyclic periods (128 and 64) both score, which is what makes the read-back's layout claim falsifiable | PASS | 2026-09-04 | `raw/G-MESH-KV-oneshot_20260904T150307Z.log`, `raw/G-MESH-KV-chunked512_20260904T150451Z.log.gz`, `raw/G-MESH-KV-chunked256_20260904T150549Z.log.gz` + the three `G-MESH-KV_*_per_layer_pcc.json` |
+| G-WEIGHTS (P8 ext) | P8 | the cache-only rebuild **at TP=8**, where `ttnn.as_tensor` persists an already-sharded tensor | every device tensor SHA-256-identical | **354 device shards over 12 tensors, all SHA-256-identical** after a cache-only rebuild. **8** tensors genuinely sharded with **8 distinct** shard hashes each (the 8 TP columns, replicated across the 4 SP rows — the expected geometry), 4 replicated; `q_proj` and `lm_head` asserted sharded and the vocab table asserted replicated, so a silently-unsharded build fails rather than passes faster | PASS | 2026-09-04 | `raw/G-WEIGHTS-TP8_20260904T151945Z.log` |
+| P8-REGRESSION | P8 | the whole package suite still passes after P8's additions | 0 failed | **196 passed, 0 failed** in 21:23 (P7 stood at 177; P8 adds 19 tests). Run on the final tree with `-p no:randomly`, `PREFILL_TRACE_DIR` at the 1024-token trace so `G-CHUNK-ATTN` runs rather than skipping | PASS | 2026-09-04 | `raw/P8-REGRESSION_20260904T155300Z.log.gz` (an earlier identical-count run, `raw/P8-REGRESSION_20260904T152156Z.log.gz`, was mutated mid-flight by `black` and is superseded — `DEC-090`) |
+| G-CITE (P8) | P8 | every `path:line` and every cited **raw artefact** resolves | 0 mismatched, 0 unresolved, 0 missing artefacts | **539/539** content-checked citations (CITES 488 -> 539), **900/900** doc refs, and — from the **pass 3** this phase added — **98/100** cited raw artefacts present. The 2 missing are dangling P5.4-P5.6 references that pre-date this phase and were invisible to passes 1 and 2 (`R-042`) | PASS-WITH-DEVIATION (`R-042`) | 2026-09-04 | `raw/G-CITE_20260904T162457Z.log` |
 
 ```
 STATUS after P0: gates PASS=1 FAIL=0 DEVIATION=0 BLOCKED=0 | next: P1 (reference)
@@ -881,9 +892,9 @@ What P5.4 can rely on, and what it must not assume:
 ```
 STATUS after P5.4-P5.6: gates PASS=10 FAIL=0 DEVIATION=1 BLOCKED=0 | next: P6 (layer and model assembly)
 Per-phase regression gate: whole package suite **93 passed, 0 failed**
-(`raw/P5-REGRESSION_20260904T100738Z.log`)
+(`raw/P5-REGRESSION_20260904T102256Z.log`)
 Citations after P5.6: **330/330 verified, 0 mismatched; 629/629 doc refs resolved**, exit 0
-(`raw/G-CITE_20260904T101355Z.log`). CITES grew 279 -> 330: every load-bearing P5.4-P5.6 ref was
+(`raw/G-CITE_20260904T102606Z.log`). CITES grew 279 -> 330: every load-bearing P5.4-P5.6 ref was
 promoted into the content-checked list, because the doc-ref pass only range-checks (R-016).
 Open DECs needing review: DEC-004 (chunk size deferred to P7), DEC-012 (checkpoint loader moves to
 ModelArgs in P6.2), DEC-013/DEC-018 (import gpt_oss_d_p/utils; no utils/ package),
@@ -1465,3 +1476,491 @@ What P8 can rely on, and what it must not assume:
 9. **A negative control must be able to fail for the *specific* thing it names.** `G-CHUNK` needed
    two controls where the recipe specified one, because the specified control cannot move V at all
    (`R-027`). Count the things a gate claims and count the controls.
+
+---
+
+## P8 — Multi-device: TP, SP and the CCL gates
+
+`G-FABRIC-MATRIX` ran **first**, before every numerical multi-device gate, as
+`BRINGUP_RECIPE.md:1732-1734` requires — and it is the reason the rest of the phase is configured the
+way it is.
+
+### G-FABRIC-MATRIX — which (mesh, topology, links, axis) combinations can run a collective
+- **Command:** `python models/demos/llama31_8b_d_p/tests/fabric_topology_matrix.py`
+  (+ `--cases <subset>` for the addendum, `--control` for the harness's own control)
+- **Mesh / device:** one Blackhole Galaxy, 32 devices. Every shape below `(4,8)` is a **submesh** of
+  one open `(4,8)`; the two `toplevel_*` cases deliberately open a partial mesh directly.
+- **Inputs:** each case all-gathers a rank-labelled `[1,1,32,32]` bf16 tile along the case's axis
+  through the package's own `MeshConfig.allgather` / `CCLManager` — not a raw
+  `ttnn.experimental.*` call — and checks the result **bit-exactly** (`torch.equal`). Payload
+  integers are <= 31, far inside `bfloat16`'s exact-integer ceiling of 256, so a mismatch cannot be
+  the probe's own numerics.
+- **Reference dtype policy:** none — the expected tensor is a concatenation of exact small integers,
+  so the comparison is bit-equality, not a floor.
+- **Threshold:** every case matches the expectation **written before the sweep ran**, including the
+  cases expected to fail or hang. Expectations came from the recipe's own measured claims
+  (`BRINGUP_RECIPE.md:82-84`, `:1690-1729`, `:1701-1709`).
+- **Noise floor:** not applicable (bit-exact claim; floor is 1.0 by construction).
+- **Measured — 12 cases, 7 matched:**
+
+  | case | expect | got | secs | detail |
+  |---|---|---|---|---|
+  | `toplevel_1x8_fabric1d` | error | **error** | 29.2 | `TT_THROW @ fabric_firmware_initializer.cpp:271` |
+  | `toplevel_2x8_fabric1d` | error | **error** | 29.5 | same |
+  | `submesh_1x2_linear_l1_ax1` | ok | **ok** | 22.1 | bit-exact on 2 devices |
+  | `submesh_1x4_linear_l1_ax1` | ok | **ok** | 22.3 | bit-exact on 4 devices |
+  | `submesh_1x8_linear_l1_ax1` | ok | **ok** | 21.0 | bit-exact on 8 devices |
+  | `submesh_1x8_ring_l1_ax1` | ok | error | 18.2 | `topology_mapper.cpp:544` — the torus descriptor does not map |
+  | `submesh_2x8_ring_l2_ax1` | ok | error | 18.3 | same |
+  | `full_4x8_ring_l2_ax1` | ok | error | 18.3 | same |
+  | `full_4x8_ring_l2_ax0` | ok | error | 18.4 | same |
+  | `submesh_1x8_ring_on_fabric1d` | **hang** | ok | 21.0 | bit-exact on 8 devices — the recipe's "hangs rather than errors" does not hold here |
+  | `overlap_1x2_then_1x8_no_quiesce` | hang | **hang** | 246.3 | no result in 240 s; `tt-smi -r` exit 0 in 43.1 s |
+  | `overlap_1x2_then_1x8_quiesce` | ok | **ok** | 22.4 | both phases bit-exact |
+
+- **Addendum, 5/5 matched** (expectations written from the `(1,8)` result before running):
+  `submesh_2x8_ring_on_fabric1d_l2_ax1`, `full_4x8_ring_on_fabric1d_l2_ax1`,
+  `full_4x8_ring_on_fabric1d_l2_ax0`, `full_4x8_linear_l2_ax1`, `full_4x8_linear_l2_ax0` — all
+  **ok** and bit-exact, 20.7-22.0 s each.
+- **Verdict:** **PASS-WITH-DEVIATION** (`DEC-071`, `DEC-079`, `DEC-081`). Five expectations, all of
+  them taken from the recipe, do not hold on this galaxy. Each has a measured cause and a decision;
+  none was restated after the fact to manufacture a `PASS`.
+- **Negative control:** `--control` states a known-`ok` case's expectation as `hang` and requires the
+  sweep to report a mismatch. It did (`CONTROL PASSED`), so the comparison is running and "every case
+  matched" is not vacuous.
+- **Deviations, and what they mean:**
+  1. **`FABRIC_1D_RING` is unavailable on this galaxy.** The only single-galaxy RING/RING descriptor
+     fails to map — "32 target node(s) are not mapped to any global node" — and it is not the channel
+     policy (a `RELAXED` copy fails identically), so the torus wrap links are not present.
+     `FABRIC_1D_RING` on a LINE/LINE descriptor is refused earlier, at `mesh_graph.cpp:447-454`:
+     "FabricConfig can only restrict topology (e.g., torus->mesh), not create new connections."
+     `DEC-079`.
+  2. **`ttnn.Topology.Ring` collectives on `FABRIC_1D` do not hang** — they are bit-exact at every
+     P8 shape and both axes. The recipe's claim is false here. `DEC-079`.
+  3. The two descriptors the recipe names are **multi-galaxy** and out of scope. `DEC-071`.
+- **Notes:** the recipe cites `fabric_firmware_initializer.cpp:200` for the top-level-partial-mesh
+  failure; the throw on this build is at **`:271`**. The `overlap` hang confirms the worst landmine in
+  the set exactly as documented, including that it poisons the box: the case after it only passed
+  because the harness had reset the machine. An earlier, **aborted** sweep is at
+  `raw/G-FABRIC-MATRIX_20260904T142547Z.log`; a `_repo_root()` walk one level short made
+  `TT_MESH_GRAPH_DESC_PATH` nonexistent and every case reported `std::filesystem::exists(...)`
+  instead of what it was measuring — including two that "matched" for the wrong reason. Kept as
+  evidence; `_repo_root()` now asserts the descriptor directory exists.
+
+### G-KV-TP8 — the model -> cache path at TP=8
+- **Command:** `pytest models/demos/llama31_8b_d_p/tests/unit/test_kv_cache_tp8.py -x -q`
+- **Mesh / device:** `(1, 8)` **submesh** of the full `(4,8)` galaxy. TP=8, **SP=1** — deliberately,
+  because at `sp = 1` the block-cyclic sequence layout is the identity and the only thing under test
+  is the head/feature distribution, so a failure can only be the mapper
+  (`BRINGUP_RECIPE.md:1735-1737`). `Topology.Linear`, `FABRIC_1D`, `num_links=1`.
+- **Inputs / input distribution:**
+  - **arm A (head->column, and the write offset)** — a synthetic **labelled** probe, not a random
+    one: lane block `[0,64)` of each head carries the position `s % 128`, lane block `[64,128)`
+    carries the head id `c+1`. Both are exactly representable in `bfloat8_b`, whose measured
+    exact-integer ceiling on this box is **128**, not the recipe's blanket 257 (`R-013`, `DEC-044`);
+    every payload is `< 128`. A random input cannot make an address claim exact, and §2.5 requires
+    this claim to be exact.
+  - **arm B (vs the golden)** — the golden trace's own 512 `token_ids` (real
+    Llama-3.1-8B-Instruct tokens) and **real checkpoint weights**: §2.2.2's real-embedding-scale arm,
+    the one that predicts model behaviour.
+- **Reference dtype policy:** arm A needs none — the expected tensor is built on the host from
+  integers that both `bfloat16` (activations) and `bfloat8_b` (cache) hold exactly, so the comparison
+  is `torch.equal`. Arm B scores against the **fp32** golden (`DEC-059`, bit-identical to
+  `LlamaModel`'s own loop at `G-GOLDEN`), with K permuted **HF -> Meta before** the quantiser
+  (recipe §2.2.3a).
+- **Threshold:** head->column and the write offset **bit-exact** (`rtol=atol=0`); K >= 0.99 /
+  V >= 0.98 vs the golden and L0 error ratio <= 3x, both **carried from `G-CHUNK`** rather than
+  chosen here — a threshold chosen against this measurement could not fail, and carrying P7's makes
+  the TP split's cost readable directly.
+- **Computed noise floor (arm B, layer 0):** `G-CHUNK`'s **complete** floor — every value the device
+  holds rounded to the dtype it holds it in (bf16 embedding output, bf16 norm gain, `bfloat8_b`
+  projection weight in its transposed Meta-swizzled orientation, bf16 RoPE tables, `bfloat8_b`
+  store), all remaining math fp32, no internal intermediate quantised. The **storage-only** floor is
+  recorded beside it and is the optimistic one (`R-021`, `DEC-064`).
+- **Measured:**
+  - head->column: **8/8 columns bit-identical** for `v_with_rope` and **8/8** for `k_without_rope`;
+    pad tail rows `[128, 512)` on column 0 `max|x| = 0.0`.
+  - write offset `{0, 128, 256}` x 8 columns: **24/24 blocks bit-identical**; pad tail
+    `max|x| = 0.0`.
+  - arm B, 32 layers: **min K 0.9986432** (L22), **min V 0.9942853** (L26); L0 K **0.9999617**
+    (complete floor -> **1.10x**, storage floor -> 1.35x), L0 V **0.9999369** (complete -> **1.02x**,
+    storage -> 1.70x); pad tail `max|x| = 0.0` over all 64 (layer, cache) pairs.
+- **Verdict:** PASS
+- **Negative control:** read mesh column `(c+1) % 8` as KV head `c` — a completely wrong head->column
+  map. **PCC 0.99887** (recipe §2.5 measured 0.99890 for the same control), `torch.equal` **False**,
+  `max|delta| = 7.0`. The gate asserts *both* directions: the control must fail bit-equality **and**
+  must score above 0.9, because a control that PCC also rejected would not be demonstrating the
+  weakness it exists to demonstrate. This is the measurement behind "gate every layout, mapping or
+  address claim on bit-equality, never PCC".
+- **What this closes:** `R-001` — `G-KV` at `(1,1)` proved the cache *primitive* with one synthetic
+  head, at a head count the deployment mesh never emits. This proves the model's own K and V, sharded
+  by the weight loader's `column_parallel` mapper, land on the chips the cache expects.
+- **What it does not cover:** the block-cyclic reorder (identity at `sp = 1`) — `G-MESH-KV`'s; and a
+  bit-exact check of K's *post-RoPE* head->column placement, which is impossible by construction
+  (`DEC-078`) and is covered numerically by arm B.
+- **Deviations:** `DEC-078` (two probes, one per RoPE state), `DEC-080` (the write offset moves to a
+  test without an attention core, because the dense core correctly refuses `cached_len > 0`).
+
+### G-SP-RING — the ring-joint SP attention core, alone
+- **Command:** `pytest models/demos/llama31_8b_d_p/tests/unit/test_dense_sp_vs_ref.py -q`
+- **Mesh / device:** the deployment `(4, 8)`, SP=4 x TP=8, `num_links=2`, `Topology.Linear`,
+  `FABRIC_1D`. Compute grid **(12, 10)**; CCL offset **(11, 0)**; ring SDPA grid **(11, 10)** — the
+  compute grid minus the CCL column, so `ring_joint_sdpa_device_operation.cpp:421`'s
+  `ccl_core_grid_offset.x >= sdpa_grid.x` holds as `11 >= 11` exactly. The dense path's grid stays a
+  pinned 8x8; the two are never unified.
+- **Geometry:** `chunk_global=512`, `chunk_local=128`, `kv_actual=512`, `logical_n=1024`,
+  `cache_global=2048`. The cache is populated **through the real write op** from a host tensor in
+  global-position order, mesh-mapped `dims=(2,1)` exactly as the model maps a chunk, so the reference
+  needs no layout arithmetic at all: "causal attention, Q at global positions `[512, 1024)`, K/V at
+  `[0, 1024)`".
+- **Inputs / input distribution:** **standard-normal, iid** Q/K/V. Stated because it matters more
+  here than anywhere else: recipe §2.3 measured that a *fused* kernel's error **ratio** is
+  distribution-dependent even though the floor is not — the same single-card SDPA sits at 71x on iid
+  standard-normal Q/K and 27-29x on real correlated post-RoPE activations. So **6.05x below is the
+  iid number and is not comparable with an in-model measurement of the same op**; `G-CHUNK-ATTN` is
+  the in-model arm.
+- **Reference dtype policy:** Q rounded to **bf16** (what the projection hands the op), K/V rounded
+  to **`bfloat8_b`** (what the cache holds), **all remaining math fp32** — the mask, both matmuls and
+  the softmax. No internal intermediate is quantised (§2.2's conservative reading).
+- **Threshold:** PCC >= 0.99 (the recipe's). The ratio to its own floor is **recorded, not asserted**:
+  §2.3 measures that a fused kernel does not sit at its floor and §2.3.1 that a ratio budget is not
+  portable, so a threshold on this op's ratio would be a number invented here.
+- **Computed noise floor:** **0.9999450** — the same fp32 reference re-run on the *un-rounded* fp32
+  inputs, scored against the reference on the device's stored values. The gap is the storage rounding
+  alone, with no kernel in it.
+- **Measured:** **PCC 0.9996672 -> 6.05x** the floor. (Recipe's figure for this op: 7.98x. The
+  single-card SDPA measured 52.8-55.0x standalone at `G-ATTN`.)
+- **Verdict:** PASS
+- **Negative controls — three, and only one of them is numeric:**
+  1. **`fp32_dest_acc_en=True` is REFUSED**, structurally (§1.4 counts a configuration that must
+     refuse as a control). Verbatim:
+     `TT_FATAL @ ring_joint_sdpa_program_factory.cpp:1308: !kv_pad_rotation_enabled || use_streaming_compute`
+     — "kv_actual_isl requires the ring-joint streaming compute path; the compute_common.hpp path
+     selected by fp32_dest_acc_en=true is not supported." The same call with `False` is accepted,
+     output `(1,4,128,128)`, so the refusal is about the flag and not the shapes. This is the **one
+     op in this model where `False` is mandatory** rather than the package default of `True`.
+  2. **a wrong `kv_cache_batch_idx`** — the numeric one (`DEC-082`). Two layers populated with
+     different K/V; reading layer 1 with `batch_idx = slot*num_layers + layer` scores **0.9996770**,
+     and with `batch_idx = slot` alone — the template's warned-about bug, which makes every layer read
+     layer 0's cache — scores **-0.00337**.
+  3. **a wrong `kv_actual_isl`** is also **refused**:
+     `ring_joint_sdpa_device_operation.cpp:278: new_actual_isl <= chunk_capacity` — "Got
+     new_actual_isl=1024, chunk capacity=512". Worth stating as a positive: an
+     off-by-`actual_start` chunk **cannot** silently produce a wrong answer through this op.
+- **Notes:** the first run of this gate used `Topology.Ring` and aborted with
+  `fabric.cpp:174: forwarding_direction.has_value()`, "Could not find any forwarding direction from
+  src (M0, D0) to dst (M0, D3)" — the SP ring closing on itself. That abort is what settled the
+  topology for the whole phase (`DEC-081`) and is kept at
+  `raw/G-SP-RING_20260904T145034Z.log`.
+
+### G-CHUNK-ATTN — delta 3, chunk *k* attending the prefix read out of the cache
+- **Command:** `pytest models/demos/llama31_8b_d_p/tests/unit/test_chunked_attention_ring.py -q`
+- **Mesh / device:** the deployment `(4, 8)`, SP=4 x TP=8, `Topology.Linear`, `FABRIC_1D`. **One**
+  `TtPrefillRuntime`, one `CCLManager`, one set of real weights; the two arms differ only in the
+  chunk size each `prefill_chunk` call passes (`DEC-086`).
+- **The two arms, and which core each ran (asserted, not inferred):**
+  | arm | chunk_global | chunks | core |
+  |---|---|---|---|
+  | one-shot | 1024 == `max_seq_len` | 1 | **`sp_bootstrap`** |
+  | chunked | 512 | 2 (`actual_start` 0 and 512) | **`sp_ring`** |
+- **Inputs / input distribution:** the golden trace's own **1024** `token_ids` — real
+  Llama-3.1-8B-Instruct tokens — and real checkpoint weights. There is no synthetic arm: the quantity
+  of interest is an accumulated model-level statistic, and a `randn` input would dilute the attention
+  error through the residual stream (measured 1.47-1.81x vs 3.83x at `G-LAYER`).
+- **Reference dtype policy:** the golden is **fp32** throughout, regenerated at 1024 tokens for this
+  gate and re-proved bit-identical to `LlamaModel`'s own loop — `max|delta| = 0.0` on K, V **and** the
+  post-norm hidden over all 32 layers. K is permuted HF -> Meta **before** any quantiser (§2.2.3a).
+- **Threshold, and it names a depth** (`BRINGUP_RECIPE.md:1745-1749`): **>= 0.999 at layer 1** — one
+  attention layer, i.e. the per-op claim. Deep layers by the per-layer error **step** <= 4x from L3.
+  Both arms vs the golden at `G-CHUNK`'s carried K >= 0.99 / V >= 0.98. The accumulated min over 32
+  layers is **recorded and not gated**.
+- **Computed noise floor:** for the *mutual* comparison the floor is **1.0 by construction** — same
+  weights, same dtypes, same tokens, so at layer 1 the two arms differ only by the attention core and
+  the expected value is exactness. Against the golden, the layer-0 floors are `G-KV-TP8`'s (1.10x on
+  K, 1.02x on V, measured on the identical producer) and are deliberately not recomputed here.
+- **Measured — the depth structure the threshold has to name:**
+  | layer | ring vs one-shot, K | recipe's own table |
+  |---|---|---|
+  | 0 (no attention has run) | **1.0000000** | 1.00000 |
+  | 1 (**one** attention layer) | **0.9999505** | 0.99996 |
+  | 8 | 0.9995954 | 0.99952 |
+  | 22 (the min) | **0.9967975** | 0.99628 |
+  Mutual V at L1: **0.9997938**. Worst gated per-layer step: K **2.14x** at L13, V **1.58x** at L3,
+  against a 4x budget. Vs the golden: one-shot min K 0.9987994 / V 0.9942686; ring min K 0.9967119 /
+  V 0.9868228 — the ring path carries **2.74x** the one-shot path's K error (the recipe measured
+  1.45x on its own shapes).
+- **Verdict:** **PASS** — and it closes `R-023`, the gate P7 recorded `BLOCKED` by construction.
+- **Negative control:** serve chunk 1 against a cache whose chunk-0 prefix was **never written**,
+  breaking the one thing delta 3 is. Signature: **L0 = 1.0000000 (unmoved)**, L1 = **0.99695**,
+  worst over 6 layers = **0.87279**. L0 cannot move because its K and V are produced before any
+  attention runs — **a layer-0-only check would have passed on a completely broken ring read**, which
+  is exactly why this gate's per-op threshold sits at layer 1.
+- **Deviations:** none. The 512-token golden trace could not host this gate (two chunks of >= 512
+  global need >= 1024 tokens), so a 1024-token trace was generated with the same generator and the
+  same `--verify-loop` check; `raw/G-GOLDEN-GEN-S1024_20260904T145507Z.log`.
+
+### G-TP-PARITY — the TP collectives are exact
+- **Command:** `pytest models/demos/llama31_8b_d_p/tests/unit/test_tp_parity.py -q`
+- **Mesh / device:** `(1,1)`, `(1,2)`, `(1,4)`, `(1,8)`, `(2,8)`, `(4,8)` — **all submeshes of one
+  open `(4,8)`**, with `parent.quiesce_devices()` on both sides of every phase (`DEC-077`). `(2,8)` is
+  not optional: `get_default_num_links` returns 1 for any single-row mesh, so every `(1,N)` shape runs
+  `num_links=1` and never touches the deployment link count.
+- **Inputs / input distribution:** **standard-normal** `[1, 1, 128, 4096]`, weights standard-normal
+  scaled 0.02 so the residual blocks stay in a plausible activation range. §2.2.1's warning about
+  synthetic input scale does **not** bite here: this is a device-vs-device comparison, both sides see
+  the identical input, and there is no reference-scale dilution — that caveat applies to floor
+  comparisons, not to an exactness claim about a collective.
+- **Reference dtype policy:** **none, and that is the point.** The reference is the *same module on
+  one chip* at the same dtypes (`bfloat8_b` weights, `bfloat16` activations), so no torch precision
+  enters the comparison. This is a strictly sharper instrument than either arm's PCC against torch.
+- **Threshold:** PCC >= 0.999 on all five multi-device shapes; control <= 0.95.
+- **Computed noise floor:** not applicable, deliberately — a collective is exact up to reduction
+  order, so the *expected* value is 1.0 and there is no dtype floor to sit at. What is recorded
+  instead: column-parallel sharding **cannot** move `bfloat8_b`'s exponent blocks (the shard boundary
+  `4096/8 = 512` is a multiple of the 16-element block), so the only source of disagreement is the
+  reduction order of the row-parallel matmul plus the collective.
+- **Measured — worst device of each shape:**
+  | module | (1,2) | (1,4) | (1,8) | (2,8) | (4,8) |
+  |---|---|---|---|---|---|
+  | `rms_norm` | 1.0000000 | 1.0000000 | 1.0000000 | 1.0000000 | **1.0000000** |
+  | `mlp` | 0.9999963 | 0.9999943 | 0.9999916 | 0.9999916 | **0.9999915** |
+  | `attention` | 0.9999963 | 0.9999943 | 0.9999917 | 0.9999917 | **0.9999917** |
+  | `layer` | 0.9999854 | 0.9999798 | 0.9999733 | 0.9999733 | **0.9999733** |
+  `rms_norm` is **bit-identical** at every shape, which is the expected result: it has no collective
+  and a replicated gain.
+- **Verdict:** PASS
+- **Negative control:** the `(1,1)` reference **rolled by one whole TP shard** (512 features) scores
+  **0.00307** against the `(1,8)` output, while the un-rolled comparison scores 0.9999916. So the gate
+  would notice a module whose output features landed one shard out of place.
+- **Deviations:** `DEC-083` — the sequence is sharded (and slices compared) only for the *token-wise*
+  modules `rms_norm` and `mlp`; `attention` and `layer` replicate it, because the dense causal SDPA
+  mixes tokens and its sequence-sharded output is not a slice of the single-device output at all.
+  The recipe's sentence at `:1768-1770` is true only for the token-wise pair.
+
+### G-RACE — no semaphore races
+- **Command:** `PREFILL_CHUNKED=1 PREFILL_CHUNK_SIZE=512 PREFILL_RACE_ITERS=3
+  PREFILL_KV_PCC_MIN_K=0.99 PREFILL_KV_PCC_MIN_V=0.98 python
+  models/demos/llama31_8b_d_p/tests/galaxy_prefill_kv_pcc.py`
+- **Mesh / device:** the deployment `(4, 8)`, **one process, one `CCLManager`**, three full 32-layer
+  two-chunk prefills with a fresh cache each time.
+- **Inputs:** the golden trace's 1024 `token_ids`, real weights — i.e. the deployment workload, not a
+  probe.
+- **Reference dtype policy:** not applicable — this is a bit-identity claim between three device
+  runs.
+- **Threshold:** the three per-layer PCC tables must be **bit-identical**. Comparand: SHA-256 of the
+  table at full float repr.
+- **Noise floor:** not applicable (identity claim; the expected value is one hash).
+- **Measured:** **one** distinct hash across three runs:
+  `b7abb6481ee1efb569e072924e08256310fcf8ab96c77205c76d16cb9d639d28`
+  (run 0 / run 1 / run 2, min K 0.9967119 and min V 0.9868228 on all three; 365.0 / 366.8 / 366.8 ms).
+  The same hash was produced by the **separate single-run process** earlier
+  (`raw/G-MESH-KV-chunked512_20260904T150451Z.log.gz`), so determinism holds across processes as well —
+  recorded, not gated.
+- **Verdict:** PASS
+- **Negative control:** the identity comparison **is** its own control (§1.4: "a bit-identity
+  comparison across repeated runs counts as its own"). Separately, `G-SEMAPHORE`'s per-layer-manager
+  control shows what the failure would look like structurally.
+- **Scope of this pass, as the recipe insists on stating:** 3 runs x 2 chunks x 32 layers x 2
+  collectives per layer is a few hundred collectives on one user slot, with the barrier ping-pong
+  only **2 deep** (`DEC-026`). Hundreds of collectives is not hundreds of thousands, and this says
+  nothing about multi-user slots. The documented first move if it ever fails — deepening the barrier
+  ring from 2 to 4 — was **not** taken pre-emptively, precisely so the gate could measure.
+
+### G-SEMAPHORE — CCL state allocated once
+- **Command:** `pytest models/demos/llama31_8b_d_p/tests/unit/test_ccl_semaphores.py -q`
+- **Mesh / device:** the one-card arms on `(1,1)`; the P8 arm on the deployment `(4, 8)`.
+- **Inputs:** the P8 arm builds the real 32-layer model **cache-only** (`state_dict={}` plus the
+  `G-WEIGHTS` weight cache) and runs one 128-token chunk through every layer. What is under test is
+  the semaphore inventory, not the numbers.
+- **Reference dtype policy / noise floor:** not applicable — exact list lengths.
+- **Threshold:** 6 RS + 4 AG + 2 barrier + 2 ring-attention = **14**, unchanged at construction, after
+  dozens of getter cycles, and **after a real multi-layer run**.
+- **Measured:** `{rs: 6, ag: 4, barrier: 2, ring_attention: 2}` at construction, after 32x4 getter
+  cycles, after the `(4,8)` build, and after a real 32-layer forward — identical at every point.
+  Ping-pong indices `rs=0 ag=0 barrier=0`, all inside the depth-2 ring. `TtPrefillRuntime` reused the
+  manager passed to it rather than building a second.
+- **Verdict:** PASS
+- **Negative control:** construct one manager per simulated layer — 3 managers -> **42** semaphores,
+  the count the correct code must never produce. This is the only one of the three arms that could
+  catch a `CCLManager` rebuilt inside `prefill_chunk` or inside a layer, because the getter-cycle arms
+  never construct a second manager.
+- **Deviations:** none.
+
+### G-MESH-KV — full-model KV vs the fp32 golden on the target mesh
+- **Command:** `[PREFILL_CHUNKED=1 PREFILL_CHUNK_SIZE=<n>] python
+  models/demos/llama31_8b_d_p/tests/galaxy_prefill_kv_pcc.py`
+- **Mesh / device:** the deployment `(4, 8)`, SP=4 x TP=8, `Topology.Linear`, `FABRIC_1D`,
+  `num_links=2`. Driven through **`TtPrefillRuntime`** including its `compile()` — the first time that
+  object has ever been instantiated (`DEC-084`, closing `R-029`).
+- **Inputs / input distribution:** the golden trace's 1024 `token_ids` and real checkpoint weights.
+- **Reference dtype policy:** the **fp32** golden, bit-identical to `LlamaModel`'s own loop; K
+  permuted HF -> Meta before any quantiser.
+- **Threshold:** per-layer min recorded; K >= 0.99 / V >= 0.98, **carried** from `G-CHUNK`.
+- **Computed noise floor:** the layer-0 complete floor is `G-KV-TP8`'s (1.10x K / 1.02x V) — the same
+  producer, and not recomputed here.
+- **Measured:**
+  | configuration | core | chunk_local | min K | min V | wall |
+  |---|---|---|---|---|---|
+  | one-shot, chunk 1024 | `sp_bootstrap` | 256 | **0.9987994** (L22) | **0.9942686** (L28) | 220.5 ms, 4643 tok/s |
+  | chunked, chunk 512 (2 chunks) | `sp_ring` | 128 | **0.9967119** (L22) | **0.9868228** (L28) | 365.0 ms |
+  | chunked, chunk 256 (4 chunks) | `sp_ring` | 64 | **0.9967844** (L22) | **0.9866232** (L28) | 765.3 ms |
+- **Verdict:** PASS
+- **Negative control:** the read-back's block-cyclic layout claim is what could be silently wrong
+  here, and it is controlled **structurally** rather than by a perturbation: the period is
+  `chunk_local = chunk_global // sp`, so the three configurations read the cache at **three different
+  periods (256, 128, 64)** and all three score. A read-back with the wrong period cannot do that. The
+  head->column half of the same claim is gated bit-exactly by `G-KV-TP8`, and the layout map itself
+  is asserted to cover every global position exactly once before any scoring happens.
+- **HUMAN GATE H5 considered and resolved, not waved through.** The ring path carrying **2.74x** the
+  one-shot path's K error is higher than the recipe's own measurement of the same quantity (1.45x,
+  `BRINGUP_RECIPE.md:1725-1728`), which is the shape of thing §0.3's H5 says to investigate rather
+  than record as clean. It resolves arithmetically and the resolution is §2.3.1's, not a new one:
+  the two runs **agree on the chunked number** (chunked min K 0.9967119 here vs the recipe's
+  0.99695) and differ on the *baseline* (one-shot min K 0.9987994 here vs the recipe's 0.99789 —
+  ours is **better**). A roughly fixed absolute kernel error divided by a smaller baseline error
+  gives a larger ratio: exactly "a fixed-error stage breaks the ratio metric, and the failure runs
+  the *wrong way* — it penalises the **more accurate** configuration". Absolute error attributable
+  to the ring path: `(1 - 0.9967119) - (1 - 0.9987994) = 2.088e-3` here against the recipe's
+  `3.05e-3 - 2.11e-3 = 0.94e-3`; both are the same order and the difference is one trace and one
+  chunk geometry apart. **Nothing is unattributed**, so this is recorded rather than escalated —
+  but it is recorded, because a ratio that moved 1.9x between two runs of the same code is exactly
+  what H5 exists to make someone look at.
+- **Notes:** the two chunked arms are within 1e-4 of each other on both K and V, which says the ring
+  op's error is not sensitive to the chunk length in this range — and it is what retires the concern
+  behind `DEC-073` (a pinned `q_chunk_size=128` does not constrain the deployable chunk size; the
+  `chunk_local=64` arm ran with `q_chunk_size=128` and scored the same).
+
+### G-WEIGHTS (P8 extension) — the cache-only rebuild at TP=8
+- **Command:** `pytest models/demos/llama31_8b_d_p/tests/unit/test_weight_loading.py -q -k tp8`
+- **Mesh / device:** the deployment `(4, 8)`. Weight cache root under `tmp_path`, so the arm cannot
+  pass on a cache another gate wrote.
+- **Inputs:** real checkpoint weights for a one-layer model plus the embedding, final norm and LM
+  head; built once with the checkpoint + a cache path, then again with an **empty** state dict and the
+  same path.
+- **Reference dtype policy / noise floor:** not applicable — SHA-256 identity.
+- **Threshold:** every device tensor SHA-256-identical across the two builds.
+- **Measured:** **354 device shards over 12 tensors, all identical.** 8 tensors genuinely sharded
+  with **8 distinct** shard hashes each — the 8 TP columns, replicated across the 4 SP rows, which is
+  exactly the expected geometry — and 4 replicated (`model.embed_tokens.weight`, the two layer norms,
+  `model.norm.weight`). 12 cache files. The cache path is `tensor_cache_bfp8_4x8`, asserted to carry
+  the mesh shape so a `(1,1)` cache cannot be picked up here.
+- **Verdict:** PASS
+- **Negative control:** two, both structural and both about this arm not being the `(1,1)` arm with
+  more devices: the replicated vocab table **must** have exactly one distinct shard hash, and
+  `q_proj` and `lm_head` **must** have more than one. An arm that silently stopped sharding fails
+  rather than passing faster.
+- **Deviations:** `DEC-087` — the replicated `[128256, 4096]` embedding table is hashed on the first
+  and last device rather than all 32 (33.6 GB of D2H per pass, twice, to re-prove a tensor the mesh
+  does not shard). Its per-device claim is the `(1,1)` arm's; the first-and-last pair keeps the
+  *replication* falsifiable. The gap is stated: devices 1-30's copies of that one table are not
+  hashed at TP=8.
+
+```
+STATUS after P8: gates PASS=24 FAIL=0 DEVIATION=2 BLOCKED=0 | next: P10 (disaggregated-prefill integration)
+Open DECs needing review: DEC-079/DEC-081 (this galaxy has no ring fabric; the whole phase ran on
+FABRIC_1D + Topology.Linear, so every P8 number is a Linear measurement — R-030, R-031),
+DEC-083 (G-TP-PARITY shards the sequence only for the token-wise modules, a stated deviation from
+BRINGUP_RECIPE.md:1768-1770), DEC-085 (meta_head_index duplicated between the script and the tests),
+DEC-087 (G-WEIGHTS's P8 arm does not hash the replicated vocab table on devices 1-30)
+```
+
+`DEVIATION=2` is `G-ATTN` (`DEC-042`, from P5.5) and `G-FABRIC-MATRIX` (`DEC-071`/`DEC-079`/`DEC-081`).
+The counts follow the earlier phases' convention of tallying **Appendix A** gates only, so the two
+cross-cutting rows sit outside them: `P8-REGRESSION` is `PASS` (196/196) and `G-CITE (P8)` is
+`PASS-WITH-DEVIATION` — clean on all 539 content-checked citations and all 900 doc refs, red on the
+two pre-existing P5 raw-log references its new artefact pass exposed (`R-042`).
+`BLOCKED=0`: P7's single `BLOCKED` row, `G-CHUNK-ATTN`, is **closed** by the P8 row above, and no P8
+gate needed a second galaxy — multi-galaxy is scoped out rather than deferred (`R-032`), so nothing
+was recorded `BLOCKED` for it.
+
+**STOPPED HERE, ON A GATE BOUNDARY.** Every gate Appendix A assigns to P8 has run on device with a
+recorded number, a raw log, an input distribution, a reference dtype policy, a computed floor (or a
+stated reason there is none) and a negative control. **P10 (disaggregated-prefill integration) is
+next**, then P9 (cleanliness). Two things P10 should read first:
+
+1. `R-030` / `R-031` — every number in this phase was measured on `FABRIC_1D` + `Topology.Linear`,
+   because this galaxy has no ring fabric. If P10 runs the engine under a different fabric
+   configuration, the P8 numbers do not transfer.
+2. `R-039` — the deployment chunk/cache pair (8192 / 131072) has never been run, and the
+   `sp_bootstrap` core has a gate but no deployment use. Both are cheap to settle and neither is a P8
+   gate.
+
+### P8-REGRESSION — the whole package suite after P8's additions
+- **Command:** `pytest models/demos/llama31_8b_d_p/tests -q -p no:randomly`, with
+  `PREFILL_TRACE_DIR` at the **1024**-token golden trace, `TT_CACHE_PATH` set and `HF_MODEL` staged.
+- **Mesh / device:** every shape the suite uses — `(1,1)` for the P5-P7 gates, and the full `(4,8)`
+  galaxy plus its submeshes for P8's.
+- **Threshold:** 0 failed. Appendix A: "Add a **per-phase regression gate** as well: the whole
+  package suite, 0 failed, after each phase's additions. It is cheap and it is the only thing that
+  catches a new phase breaking an old gate's test file rather than its numbers."
+- **Measured:** **196 passed, 0 failed**, 1283.76 s. P7 stood at 177, so P8 adds 19 tests:
+  `G-KV-TP8` 5, `G-SP-RING` 4, `G-TP-PARITY` 5, `G-CHUNK-ATTN` 3 (including the script/test
+  `meta_head_index` drift check), `G-SEMAPHORE` 1, `G-WEIGHTS` 1. `G-FABRIC-MATRIX` and `G-MESH-KV`
+  are **scripts** and are not in this count — the same gap `DEC-069` records for `G-GOLDEN`, and it
+  now covers three gates rather than one.
+- **Verdict:** PASS
+- **Deviations / notes, all three worth a reader's attention:**
+  1. The suite was run twice. The first run (`raw/P8-REGRESSION_20260904T152156Z.log.gz`, also 196
+     passed) had `black` applied to seven of its own files **while it was executing**, so its result
+     belongs to the pre-format code. `DEC-090`.
+  2. Running the suite with `PREFILL_TRACE_DIR` at the 1024-token trace **overwrites P7's**
+     `raw/G-CHUNK_per_layer_pcc.json` with 1024-token content, while P7's ledger row cites a
+     512-token measurement. Restored from the P7 commit; `DEC-091`, `R-041`.
+  3. `raw/G-SP-RING-RECHECK_20260904T161926Z.log.gz` post-dates this run by 26 minutes and covers the
+     one-line change in `DEC-093`. No full regression was run after it.
+
+### G-CITE (P8) — the citation verifier, extended with a raw-artefact pass
+- **Command:** `python models/demos/llama31_8b_d_p/scripts/verify_citations.py`
+- **Threshold:** 0 mismatched, 0 unresolved (recipe §1.6, Appendix C item 7).
+- **Measured:** **539/539** content-checked citations verified (CITES grew 488 -> 539: every
+  load-bearing P8 ref — the fabric asserts, the ring op's two `TT_FATAL`s, the mesh descriptors, the
+  templates, and nine recipe passages — was promoted into the content-checked list, because pass 2
+  only range-checks, `R-016`). **897/897** doc refs resolved. **Pass 3, new in this phase: 98/100
+  cited raw artefacts present.**
+- **Verdict:** **PASS-WITH-DEVIATION** — the two missing artefacts both pre-date this phase, and
+  neither was written by it.
+- **What pass 3 is and why it exists.** Passes 1 and 2 both key on `path:line`, so a bare
+  `` `G-FOO_<timestamp>.log` `` under `raw/` — which is exactly how this ledger cites its evidence — was scanned
+  by **neither**. The recipe's own definition of a gate is that artefact ("A gate with no raw log did
+  not happen", `BRINGUP_RECIPE.md:199`; Appendix C item 2), so a ledger row citing a file that is not
+  there is a `PASS` with no evidence, and nothing was checking for it. Pass 3 checks it. It accepts
+  `.log.gz` for `.log`, because oversized logs are gzipped losslessly (`R-040`).
+- **What it found, on its first run:** two dangling references in the **P5.4-P5.6** status block
+  above (`06_GATES.md:894`, `:896`):
+  - `P5-REGRESSION_20260904T100738Z.log` — cited for "93 passed, 0 failed";
+  - `G-CITE_20260904T101355Z.log` — cited for "330/330 verified ... 629/629 doc refs resolved".
+  Neither file exists, and neither is in git history. The `raw/` directory holds a P5 regression pair
+  at `T092212Z` / `T102256Z` and a `G-CITE` pair at `T092334Z` / `T102606Z`, i.e. runs ~15 minutes
+  either side of the two cited timestamps — so the most likely history is a P5.4-P5.6 pass that was
+  run, cited, then re-run, with only some of the citations updated.
+- **Deliberately not "fixed".** The two claims are **not** re-attributed to the surviving logs,
+  because this session cannot know that those logs carry the same numbers, and guessing which file
+  an earlier session meant would produce exactly what §1.6 warns about: a citation that is wrong but
+  reads as authoritative. The finding is recorded here and as `07_RISKS.md` **R-042**; the verifier
+  stays red on those two lines until whoever owns that phase's record resolves it.
+- **Negative control:** the pass's own discriminating power is demonstrated by the two failures — it
+  found real dangling references on its first execution, on a ledger that four previous doc gates had
+  passed clean. Separately, it caught **this session's own** first attempt at writing the finding up:
+  quoting the two dangling names in the backticked `raw/`-relative form made them look like fresh
+  citations and the pass flagged them, which is the correct behaviour — the citation form *means*
+  "here is the evidence", so a name that is not evidence must not use it. The two names are written
+  as bare basenames in this block and in `R-042` for that reason, and the P5 status block's own two
+  citations were left exactly as they are, red.
+- **Raw log:** `raw/G-CITE_20260904T162457Z.log` (exit 1, on the two `R-042` artefacts only).
+
+### Note — two P5.4-P5.6 raw-log citations repointed (R-042)
+P8's new artefact-existence pass found two cited logs absent:
+the P5-REGRESSION log stamped 20260904T100738Z and the G-CITE log stamped 20260904T101355Z (named here without the citation form, so documenting their absence does not itself create two dangling citations). Four earlier document
+gates passed over them because both existing passes key on `path:line`, and a bare backticked raw-log filename (written without backticks here, for the same reason)
+matches neither.
+
+Resolved by the orchestrator rather than left dangling. That session re-ran both gates after editing
+files, and cited the **superseded first attempts**, whose logs were not retained; the authoritative
+runs about 15 minutes later are `raw/P5-REGRESSION_20260904T102256Z.log` and `raw/G-CITE_20260904T102606Z.log`, and the rows now cite those. The P8 session deliberately declined to
+guess, which was right — this note records the inference explicitly so a reader can reject it. What is
+lost is only the transcript of two superseded attempts; the recorded numbers come from the surviving,
+authoritative runs.
+
+**Kit consequence:** re-running a gate must replace its ledger citation, not leave the first
+attempt's. Timestamped filenames make the mismatch findable only if something checks that the file
+exists — hence P8's third verifier pass.

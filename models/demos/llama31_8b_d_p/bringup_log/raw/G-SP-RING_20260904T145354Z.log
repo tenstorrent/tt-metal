@@ -1,0 +1,271 @@
+2026-09-04 14:53:57.066 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mstojkovic/.cache/ttnn,model_cache_path=/home/mstojkovic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-09-04 14:53:58.045 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:224)
+2026-09-04 14:53:58.045 | info     |             UMD | Cluster constructor started. (cluster.cpp:406)
+2026-09-04 14:53:58.063 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-09-04 14:53:58.063 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-09-04 14:53:58.156 | info     |             UMD | Established firmware bundle version: 19.12.0 (topology_discovery.cpp:576)
+2026-09-04 14:53:58.161 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-09-04 14:53:59.579 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31}/[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 30, 31, 16, 17, 18, 19, 20, 21, 22, 23] and remote chip ids {} (cluster.cpp:173)
+2026-09-04 14:53:59.579 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-09-04 14:53:59.579 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-09-04 14:53:59.579 | info     |             UMD | Cluster constructor completed. (cluster.cpp:665)
+2026-09-04 14:53:59.598 | info     |             UMD | Starting devices in cluster (cluster.cpp:1205)
+2026-09-04 14:54:01.169 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1213)
+============================= test session starts ==============================
+platform linux -- Python 3.12.14, pytest-9.0.3, pluggy-1.6.0 -- /home/mstojkovic/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mstojkovic/tt-metal
+configfile: pytest.ini
+plugins: timeout-2.4.0, anyio-4.15.0, cov-7.0.0, github-actions-annotate-failures-0.3.0, repeat-0.9.4, dash-2.15.0, benchmark-5.2.3, split-0.11.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 4 items
+
+models/demos/llama31_8b_d_p/tests/unit/test_dense_sp_vs_ref.py::test_dense_sp_attention_vs_fp32_reference[blackhole-mesh_device0-device_params0] 2026-09-04 14:54:05.216 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
+2026-09-04 14:54:05.216 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
+2026-09-04 14:54:05.233 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4, 3:16, 4:12} (topology_mapper_utils.cpp:3368)
+2026-09-04 14:54:05.233 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {3:4, 4:20, 5:8} (topology_mapper_utils.cpp:3376)
+2026-09-04 14:54:05.235 | INFO     | conftest:mesh_device:650 - No trace region size for (4, 8)
+2026-09-04 14:54:05.236 | info     |           Metal | Fabric config changed from FabricConfig::DISABLED to FabricConfig::FABRIC_1D, reinitializing control plane (metal_env.cpp:324)
+2026-09-04 14:54:05.236 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
+2026-09-04 14:54:05.236 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
+2026-09-04 14:54:05.251 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4, 3:16, 4:12} (topology_mapper_utils.cpp:3368)
+2026-09-04 14:54:05.251 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {3:4, 4:20, 5:8} (topology_mapper_utils.cpp:3376)
+2026-09-04 14:54:05.254 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:54:05.254 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:54:05.254 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:54:05.254 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:54:05.852 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:54:05.852 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:54:05.852 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:54:05.852 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:54:05.954 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:308)
+2026-09-04 14:54:06.140 | info     |           Metal | Fabric initialized on 32 devices (fabric_firmware_initializer.cpp:455)
+2026-09-04 14:54:06.141 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D (fabric_firmware_initializer.cpp:325)
+2026-09-04 14:54:07.330 | DEBUG    | conftest:mesh_device:668 - multidevice with 32 devices is created
+2026-09-04 14:54:07.362 | INFO     | llama31_8b_d_p.tests.unit.test_dense_sp_vs_ref:test_dense_sp_attention_vs_fp32_reference:223 - [G-SP-RING] mesh=(4, 8) sp=4 tp=8 num_links=2 topology=Topology.Linear compute_grid=(12,10) ccl_offset=(11, 0) ring_sdpa_grid=(11,10) chunk_global=512 chunk_local=128 kv_actual=512 logical_n=1024 cache_global=2048
+2026-09-04 14:54:07.783 | INFO     | llama31_8b_d_p.tests.unit.test_dense_sp_vs_ref:test_dense_sp_attention_vs_fp32_reference:280 - [G-SP-RING] ring-joint SDPA alone: PCC = 0.9996672 (threshold 0.99); own noise floor = 0.9999450 -> **6.05x**. Recorded, not asserted: recipe section 2.3 measures that a fused kernel does not sit at its floor (the single-card SDPA is 52.8-55.0x standalone at G-ATTN) and section 2.3.1 that a ratio budget is not portable across dtypes. The recipe's figure for this op is 7.98x.
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_dense_sp_vs_ref.py::test_ring_sdpa_refuses_fp32_dest_acc[blackhole-mesh_device0-device_params0] 2026-09-04 14:54:08.180 | INFO     | conftest:mesh_device:650 - No trace region size for (4, 8)
+2026-09-04 14:54:08.181 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D to FabricConfig::FABRIC_1D, reinitializing control plane (metal_env.cpp:324)
+2026-09-04 14:54:08.181 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
+2026-09-04 14:54:08.181 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
+2026-09-04 14:54:08.198 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4, 3:16, 4:12} (topology_mapper_utils.cpp:3368)
+2026-09-04 14:54:08.198 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {3:4, 4:20, 5:8} (topology_mapper_utils.cpp:3376)
+2026-09-04 14:54:08.201 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:54:08.201 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:54:08.201 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:54:08.201 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:54:09.013 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:54:09.013 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:54:09.013 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:54:09.013 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:54:09.037 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:308)
+2026-09-04 14:54:09.178 | info     |           Metal | Fabric initialized on 32 devices (fabric_firmware_initializer.cpp:455)
+2026-09-04 14:54:09.178 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D (fabric_firmware_initializer.cpp:325)
+2026-09-04 14:54:09.758 | DEBUG    | conftest:mesh_device:668 - multidevice with 32 devices is created
+2026-09-04 14:54:09.935 | critical |          Always | TT_FATAL: kv_actual_isl requires the ring-joint streaming compute path; the compute_common.hpp path selected by fp32_dest_acc_en=true is not supported. (assert.hpp:104)
+2026-09-04 14:54:09.936 | INFO     | llama31_8b_d_p.tests.unit.test_dense_sp_vs_ref:test_ring_sdpa_refuses_fp32_dest_acc:351 - [G-SP-RING] fp32_dest_acc_en=True: REFUSED with:
+TT_FATAL @ /home/mstojkovic/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_program_factory.cpp:1308: !kv_pad_rotation_enabled || use_streaming_compute
+info:
+kv_actual_isl requires the ring-joint streaming compute path; the compute_common.hpp path selected by fp32_dest_acc_en=true is not supported.
+backtrace:
+ --- /home/mstojkovic/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0xa0e829) [0x75dc2920e829]
+ --- /home/mstojkovic/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x2a0abd9) [0x75dc2b20abd9]
+ --- ttnn::prim::RingJointSDPAProgramFactory::create_workload_descriptor(ttnn::prim::RingJointSDPAParams const&, ttnn::prim::RingJointSDPAInputs const&, std::vector<ttnn::Tensor, std::allocator<ttnn::Tensor> >&, tt::tt_metal::distributed::MeshCoordinateRangeSet const&)
+ --- /home/mstojkovic/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x2a148fb) [0x75dc2b2148fb]
+ --- /home/mstojkovic/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x2a2ded9) [0x75dc2b22ded9]
+ --- /home/mstojkovic/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim28RingJointSDPADeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x240) [0x75dc2b2219f0]
+ --- /home/mstojkovic/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim28RingJointSDPADeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x3a5) [0x75dc2b214355]
+ --- /home/mstojkovic/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn4prim39ring_joint_scaled_dot_product_attentionERKNS_6TensorES3_RKSt8optionalIS1_ES7_S7_S7_RS1_S7_S7_S7_RKNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEEmmNS_10operations11transformer17SDPAProgramConfigEiRKSt6vectorIN2tt8tt_metal15GlobalSemaphoreESaISN_EEjS4_IjERKNSM_11distributed10MeshDeviceENSL_9tt_fabric8TopologyENSL_7xy_pairES4_IN4ttsl10StrongTypeIhNSM_14SubDeviceIdTagEEEEbbbS4_IfES4_INS_19ComputeKernelConfigEENS_3ccl22CoreAllocationStrategyESS_SS_SS_S7_S7_S7_jjSS_+0x1e5c) [0x75dc2b1ff1ec]
+ --- /home/mstojkovic/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn11transformer39ring_joint_scaled_dot_product_attentionERKNS_6TensorES3_S3_RKSt8optionalIS1_ES7_S7_RS1_S8_RKNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEEmmNS_10operations11transformer17SDPAProgramConfigEiRKSt6vectorIN2tt8tt_metal15GlobalSemaphoreESaISN_EEjjRKNSM_11distributed10MeshDeviceENSL_9tt_fabric8TopologyES4_IN4ttsl10StrongTypeIhNSM_14SubDeviceIdTagEEEENSL_7xy_pairEbbbS4_IfES4_INS_19ComputeKernelConfigEENS_3ccl22CoreAllocationStrategyES4_IjES19_S7_S19_S7_S7_+0x47c) [0x75dc2b1c400c]
+ --- /home/mstojkovic/tt-metal/ttnn/ttnn/_ttnn.so(+0x39b3a9) [0x75dc2b79b3a9]
+ --- /home/mstojkovic/tt-metal/ttnn/ttnn/_ttnn.so(+0x3aa109) [0x75dc2b7aa109]
+ --- /home/mstojkovic/tt-metal/ttnn/ttnn/_ttnn.so(+0x377704) [0x75dc2b777704]
+ --- /home/mstojkovic/tt-metal/python_env/bin/python3() [0x1abf1a2]
+ --- /home/mstojkovic/tt-metal/python_env/bin/python3() [0x18c2d1a]
+ --- /home/mstojkovic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0xcbe4) [0x181e0e4]
+ --- /home/mstojkovic/tt-metal/python_env/bin/python3() [0x1abf1a2]
+ --- /home/mstojkovic/tt-metal/python_env/bin/python3() [0x18c2d1a]
+ --- /home/mstojkovic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x45de) [0x1815ade]
+ --- /home/mstojkovic/tt-metal/python_env/bin/python3() [0x1abf1a2]
+ --- /home/mstojkovic/tt-metal/python_env/bin/python3() [0x18c2d1a]
+ --- /home/mstojkovic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x45de) [0x1815ade]
+ --- /home/mstojkovic/tt-metal/python_env/bin/python3() [0x1abf1a2]
+ --- /home/mstojkovic/tt-metal/python_env/bin/python3() [0x18c2d1a]
+ --- /home/mstojkovic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0xcbe4) [0x181e0e4]
+ --- /home/mstojkovic/tt-metal/python_env/bin/python3() [0x1abf1a2]
+ --- /home/mstojkovic/tt-metal/python_env/bin/python3() [0x18c2d1a]
+ --- /home/mstojkovic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x45de) [0x1815ade]
+ --- /home/mstojkovic/tt-metal/python_env/bin/python3() [0x1abf1a2]
+ --- /home/mstojkovic/tt-metal/python_env/bin/python3() [0x18c2d1a]
+ --- /home/mstojkovic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x45de) [0x1815ade]
+ --- /home/mstojkovic/tt-metal/python_env/bin/python3() [0x1abf1a2]
+ --- /home/mstojkovic/tt-metal/python_env/bin/python3() [0x18c2d1a]
+ --- /home/mstojkovic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x45de) [0x1815ade]
+ --- /home/mstojkovic/tt-metal/python_env/bin/python3(PyEval_EvalCode+0xde) [0x18a54ba]
+ --- /home/mstojkovic/tt-metal/python_env/bin/python3() [0x18a5c9d]
+ --- /home/mstojkovic/tt-metal/python_env/bin/python3() [0x19e9605]
+ --- /home/mstojkovic/tt-metal/python_env/bin/python3(_PyRun_SimpleFileObject+0x106) [0x19e93c6]
+ --- /home/mstojkovic/tt-metal/python_env/bin/python3(_PyRun_AnyFileObject+0x4a) [0x19e914a]
+ --- /home/mstojkovic/tt-metal/python_env/bin/python3() [0x19e90d0]
+ --- /home/mstojkovic/tt-metal/python_env/bin/python3() [0x19e8fdd]
+ --- /home/mstojkovic/tt-metal/python_env/bin/python3() [0x1ad9763]
+ --- /home/mstojkovic/tt-metal/python_env/bin/python3() [0x197f61f]
+ --- /home/mstojkovic/tt-metal/python_env/bin/python3() [0x197f42c]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x75dced7491ca]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x75dced74928b]
+ --- /home/mstojkovic/tt-metal/python_env/bin/python3(_start+0x29) [0x19a78a9]
+
+2026-09-04 14:54:10.037 | INFO     | llama31_8b_d_p.tests.unit.test_dense_sp_vs_ref:test_ring_sdpa_refuses_fp32_dest_acc:369 - [G-SP-RING] fp32_dest_acc_en=False: accepted, output (1, 4, 128, 128)
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_dense_sp_vs_ref.py::test_kv_cache_batch_idx_must_fold_in_the_layer[blackhole-mesh_device0-device_params0] 2026-09-04 14:54:10.418 | INFO     | conftest:mesh_device:650 - No trace region size for (4, 8)
+2026-09-04 14:54:10.419 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D to FabricConfig::FABRIC_1D, reinitializing control plane (metal_env.cpp:324)
+2026-09-04 14:54:10.419 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
+2026-09-04 14:54:10.419 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
+2026-09-04 14:54:10.436 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4, 3:16, 4:12} (topology_mapper_utils.cpp:3368)
+2026-09-04 14:54:10.436 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {3:4, 4:20, 5:8} (topology_mapper_utils.cpp:3376)
+2026-09-04 14:54:10.439 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:54:10.439 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:54:10.439 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:54:10.439 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:54:11.256 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:54:11.256 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:54:11.256 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:54:11.256 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:54:11.278 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:308)
+2026-09-04 14:54:11.419 | info     |           Metal | Fabric initialized on 32 devices (fabric_firmware_initializer.cpp:455)
+2026-09-04 14:54:11.419 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D (fabric_firmware_initializer.cpp:325)
+2026-09-04 14:54:11.952 | DEBUG    | conftest:mesh_device:668 - multidevice with 32 devices is created
+2026-09-04 14:54:13.654 | INFO     | llama31_8b_d_p.tests.unit.test_dense_sp_vs_ref:test_kv_cache_batch_idx_must_fold_in_the_layer:487 - [G-SP-RING] kv_cache_batch_idx: layer 1 read with batch_idx=slot*num_layers+layer scores PCC = 0.9996770; the same read with batch_idx=slot (the template's warned-about bug) scores PCC = -0.00337 against layer 1's reference. Threshold 0.99.
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_dense_sp_vs_ref.py::test_wrong_kv_actual_isl_is_refused[blackhole-mesh_device0-device_params0] 2026-09-04 14:54:14.027 | INFO     | conftest:mesh_device:650 - No trace region size for (4, 8)
+2026-09-04 14:54:14.027 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D to FabricConfig::FABRIC_1D, reinitializing control plane (metal_env.cpp:324)
+2026-09-04 14:54:14.027 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
+2026-09-04 14:54:14.027 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
+2026-09-04 14:54:14.045 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4, 3:16, 4:12} (topology_mapper_utils.cpp:3368)
+2026-09-04 14:54:14.045 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {3:4, 4:20, 5:8} (topology_mapper_utils.cpp:3376)
+2026-09-04 14:54:14.048 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:54:14.048 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:54:14.048 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:54:14.048 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:54:14.863 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:54:14.863 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:54:14.863 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:54:14.863 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:54:14.884 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:308)
+2026-09-04 14:54:15.023 | info     |           Metal | Fabric initialized on 32 devices (fabric_firmware_initializer.cpp:455)
+2026-09-04 14:54:15.023 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D (fabric_firmware_initializer.cpp:325)
+2026-09-04 14:54:15.557 | DEBUG    | conftest:mesh_device:668 - multidevice with 32 devices is created
+2026-09-04 14:54:15.721 | critical |          Always | TT_FATAL: KV-pad-aware rotation expects current valid Q to fit in one fixed chunk. Got new_actual_isl=1024, chunk capacity=512 (assert.hpp:104)
+2026-09-04 14:54:15.722 | INFO     | llama31_8b_d_p.tests.unit.test_dense_sp_vs_ref:test_wrong_kv_actual_isl_is_refused:562 - [G-SP-RING] control kv_actual_isl=0 (true value 512): REFUSED with:
+TT_FATAL @ /home/mstojkovic/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_device_operation.cpp:278: new_actual_isl <= chunk_capacity
+info:
+KV-pad-aware rotation expects current valid Q to fit in one fixed chunk. Got new_actual_isl=1024, chunk capacity=512
+backtrace:
+ --- /home/mstojkovic/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0xa2d9e8) [0x75dc2922d9e8]
+ --- /home/mstojkovic/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x29fa830) [0x75dc2b1fa830]
+ --- ttnn::prim::RingJointSDPADeviceOperation::validate_on_program_cache_miss(ttnn::prim::RingJointSDPAParams const&, ttnn::prim::RingJointSDPAInputs const&)
+ --- /home/mstojkovic/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim28RingJointSDPADeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x1d7) [0x75dc2b221987]
+ --- /home/mstojkovic/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim28RingJointSDPADeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x3a5) [0x75dc2b214355]
+ --- /home/mstojkovic/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn4prim39ring_joint_scaled_dot_product_attentionERKNS_6TensorES3_RKSt8optionalIS1_ES7_S7_S7_RS1_S7_S7_S7_RKNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEEmmNS_10operations11transformer17SDPAProgramConfigEiRKSt6vectorIN2tt8tt_metal15GlobalSemaphoreESaISN_EEjS4_IjERKNSM_11distributed10MeshDeviceENSL_9tt_fabric8TopologyENSL_7xy_pairES4_IN4ttsl10StrongTypeIhNSM_14SubDeviceIdTagEEEEbbbS4_IfES4_INS_19ComputeKernelConfigEENS_3ccl22CoreAllocationStrategyESS_SS_SS_S7_S7_S7_jjSS_+0x1e5c) [0x75dc2b1ff1ec]
+ --- /home/mstojkovic/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn11transformer39ring_joint_scaled_dot_product_attentionERKNS_6TensorES3_S3_RKSt8optionalIS1_ES7_S7_RS1_S8_RKNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEEmmNS_10operations11transformer17SDPAProgramConfigEiRKSt6vectorIN2tt8tt_metal15GlobalSemaphoreESaISN_EEjjRKNSM_11distributed10MeshDeviceENSL_9tt_fabric8TopologyES4_IN4ttsl10StrongTypeIhNSM_14SubDeviceIdTagEEEENSL_7xy_pairEbbbS4_IfES4_INS_19ComputeKernelConfigEENS_3ccl22CoreAllocationStrategyES4_IjES19_S7_S19_S7_S7_+0x47c) [0x75dc2b1c400c]
+ --- /home/mstojkovic/tt-metal/ttnn/ttnn/_ttnn.so(+0x39b3a9) [0x75dc2b79b3a9]
+ --- /home/mstojkovic/tt-metal/ttnn/ttnn/_ttnn.so(+0x3aa109) [0x75dc2b7aa109]
+ --- /home/mstojkovic/tt-metal/ttnn/ttnn/_ttnn.so(+0x377704) [0x75dc2b777704]
+ --- /home/mstojkovic/tt-metal/python_env/bin/python3() [0x1abf1a2]
+ --- /home/mstojkovic/tt-metal/python_env/bin/python3() [0x18c2d1a]
+ --- /home/mstojkovic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0xcbe4) [0x181e0e4]
+ --- /home/mstojkovic/tt-metal/python_env/bin/python3() [0x1abf1a2]
+ --- /home/mstojkovic/tt-metal/python_env/bin/python3() [0x18c2d1a]
+ --- /home/mstojkovic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x45de) [0x1815ade]
+ --- /home/mstojkovic/tt-metal/python_env/bin/python3() [0x1abf1a2]
+ --- /home/mstojkovic/tt-metal/python_env/bin/python3() [0x18c2d1a]
+ --- /home/mstojkovic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x45de) [0x1815ade]
+ --- /home/mstojkovic/tt-metal/python_env/bin/python3() [0x1abf1a2]
+ --- /home/mstojkovic/tt-metal/python_env/bin/python3() [0x18c2d1a]
+ --- /home/mstojkovic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0xcbe4) [0x181e0e4]
+ --- /home/mstojkovic/tt-metal/python_env/bin/python3() [0x1abf1a2]
+ --- /home/mstojkovic/tt-metal/python_env/bin/python3() [0x18c2d1a]
+ --- /home/mstojkovic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x45de) [0x1815ade]
+ --- /home/mstojkovic/tt-metal/python_env/bin/python3() [0x1abf1a2]
+ --- /home/mstojkovic/tt-metal/python_env/bin/python3() [0x18c2d1a]
+ --- /home/mstojkovic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x45de) [0x1815ade]
+ --- /home/mstojkovic/tt-metal/python_env/bin/python3() [0x1abf1a2]
+ --- /home/mstojkovic/tt-metal/python_env/bin/python3() [0x18c2d1a]
+ --- /home/mstojkovic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x45de) [0x1815ade]
+ --- /home/mstojkovic/tt-metal/python_env/bin/python3(PyEval_EvalCode+0xde) [0x18a54ba]
+ --- /home/mstojkovic/tt-metal/python_env/bin/python3() [0x18a5c9d]
+ --- /home/mstojkovic/tt-metal/python_env/bin/python3() [0x19e9605]
+ --- /home/mstojkovic/tt-metal/python_env/bin/python3(_PyRun_SimpleFileObject+0x106) [0x19e93c6]
+ --- /home/mstojkovic/tt-metal/python_env/bin/python3(_PyRun_AnyFileObject+0x4a) [0x19e914a]
+ --- /home/mstojkovic/tt-metal/python_env/bin/python3() [0x19e90d0]
+ --- /home/mstojkovic/tt-metal/python_env/bin/python3() [0x19e8fdd]
+ --- /home/mstojkovic/tt-metal/python_env/bin/python3() [0x1ad9763]
+ --- /home/mstojkovic/tt-metal/python_env/bin/python3() [0x197f61f]
+ --- /home/mstojkovic/tt-metal/python_env/bin/python3() [0x197f42c]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x75dced7491ca]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x75dced74928b]
+ --- /home/mstojkovic/tt-metal/python_env/bin/python3(_start+0x29) [0x19a78a9]
+
+PASSED
+
+==================================== PASSES ====================================
+- generated xml file: /home/mstojkovic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+2.27s setup    models/demos/llama31_8b_d_p/tests/unit/test_dense_sp_vs_ref.py::test_dense_sp_attention_vs_fp32_reference[blackhole-mesh_device0-device_params0]
+1.77s setup    models/demos/llama31_8b_d_p/tests/unit/test_dense_sp_vs_ref.py::test_ring_sdpa_refuses_fp32_dest_acc[blackhole-mesh_device0-device_params0]
+1.72s setup    models/demos/llama31_8b_d_p/tests/unit/test_dense_sp_vs_ref.py::test_kv_cache_batch_idx_must_fold_in_the_layer[blackhole-mesh_device0-device_params0]
+1.71s setup    models/demos/llama31_8b_d_p/tests/unit/test_dense_sp_vs_ref.py::test_wrong_kv_actual_isl_is_refused[blackhole-mesh_device0-device_params0]
+1.71s call     models/demos/llama31_8b_d_p/tests/unit/test_dense_sp_vs_ref.py::test_kv_cache_batch_idx_must_fold_in_the_layer[blackhole-mesh_device0-device_params0]
+0.46s call     models/demos/llama31_8b_d_p/tests/unit/test_dense_sp_vs_ref.py::test_dense_sp_attention_vs_fp32_reference[blackhole-mesh_device0-device_params0]
+0.28s call     models/demos/llama31_8b_d_p/tests/unit/test_dense_sp_vs_ref.py::test_ring_sdpa_refuses_fp32_dest_acc[blackhole-mesh_device0-device_params0]
+0.20s teardown models/demos/llama31_8b_d_p/tests/unit/test_dense_sp_vs_ref.py::test_ring_sdpa_refuses_fp32_dest_acc[blackhole-mesh_device0-device_params0]
+0.19s teardown models/demos/llama31_8b_d_p/tests/unit/test_dense_sp_vs_ref.py::test_dense_sp_attention_vs_fp32_reference[blackhole-mesh_device0-device_params0]
+0.18s teardown models/demos/llama31_8b_d_p/tests/unit/test_dense_sp_vs_ref.py::test_wrong_kv_actual_isl_is_refused[blackhole-mesh_device0-device_params0]
+0.18s teardown models/demos/llama31_8b_d_p/tests/unit/test_dense_sp_vs_ref.py::test_kv_cache_batch_idx_must_fold_in_the_layer[blackhole-mesh_device0-device_params0]
+0.17s call     models/demos/llama31_8b_d_p/tests/unit/test_dense_sp_vs_ref.py::test_wrong_kv_actual_isl_is_refused[blackhole-mesh_device0-device_params0]
+=========================== short test summary info ============================
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_dense_sp_vs_ref.py::test_dense_sp_attention_vs_fp32_reference[blackhole-mesh_device0-device_params0]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_dense_sp_vs_ref.py::test_ring_sdpa_refuses_fp32_dest_acc[blackhole-mesh_device0-device_params0]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_dense_sp_vs_ref.py::test_kv_cache_batch_idx_must_fold_in_the_layer[blackhole-mesh_device0-device_params0]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_dense_sp_vs_ref.py::test_wrong_kv_actual_isl_is_refused[blackhole-mesh_device0-device_params0]
+============================== 4 passed in 10.89s ==============================
+nanobind: leaked 2 instances!
+ - leaked instance 0x75db66fca6e8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x75db6716f428 of type "ttnn._ttnn.tensor.MemoryConfig"
+nanobind: leaked 23 types!
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "FabricConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "Arch"
+ - ... skipped remainder
+nanobind: leaked 255 functions!
+ - leaked function ""
+ - leaked function "buffer_num_pages"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "experimental_per_core_buffer_address"
+ - leaked function "to_json"
+ - leaked function "logical_volume"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-09-04 14:54:17.363 | info     |    BuildKernels | JIT cache stats: 168/178 hits (94.4%) [168 cached, 3316 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-09-04 14:54:17.363 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-09-04 14:54:17.581 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:550)
+2026-09-04 14:54:17.581 | info     |             UMD | Closing devices in cluster (cluster.cpp:1218)
+2026-09-04 14:54:25.329 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1227)
+2026-09-04 14:54:25.330 | info     |             UMD | Cluster destructor started. (cluster.cpp:933)
+2026-09-04 14:54:25.330 | info     |             UMD | Cluster destructor completed. (cluster.cpp:936)

@@ -467,74 +467,74 @@ CITES = [
     # `expect_error`'s `message` is a **regex**, not a substring — `DEC-045`. This is the line.
     ("conftest.py", 962, "pytest.raises(error, match=message)"),
     # --- P5.4-P5.6: every `BRINGUP_RECIPE.md:N` this package cites, content-checked (R-016) ------
-    (RCP, 222, "A gate with no raw log did not happen"),
-    (RCP, 431, "does not describe a **fused** kernel's interior"),
-    (RCP, 577, "separate error budgets per stage"),
-    (RCP, 581, "standalone probe"),
-    (RCP, 616, "0.9925392"),
-    (RCP, 617, "0.9917529"),
-    (RCP, 618, "38.7x worse"),
-    (RCP, 619, "107.6x worse"),
-    (RCP, 621, "already enables"),
-    (RCP, 624, "two to three orders of magnitude"),
-    (RCP, 755, "a test of the model"),
-    (RCP, 757, "say so in the gate block"),
-    (RCP, 1171, "make any module that cannot honour it"),
-    (RCP, 1213, "Give it one, reachable home here"),
-    (RCP, 1321, "input_tensor_a_activations"),
-    (RCP, 1375, "11 >= 8"),
-    (RCP, 1379, "explicit named field defaulting to"),
-    (RCP, 1382, "at construction"),
-    (RCP, 1393, "0.9475"),
-    (RCP, 1420, "Matching it is what lets"),
+    (RCP, 240, "A gate with no raw log did not happen"),
+    (RCP, 463, "does not describe a **fused** kernel's interior"),
+    (RCP, 609, "separate error budgets per stage"),
+    (RCP, 613, "standalone probe"),
+    (RCP, 648, "0.9925392"),
+    (RCP, 649, "0.9917529"),
+    (RCP, 650, "38.7x worse"),
+    (RCP, 651, "107.6x worse"),
+    (RCP, 653, "already enables"),
+    (RCP, 656, "two to three orders of magnitude"),
+    (RCP, 787, "a test of the model"),
+    (RCP, 789, "say so in the gate block"),
+    (RCP, 1203, "make any module that cannot honour it"),
+    (RCP, 1245, "Give it one, reachable home here"),
+    (RCP, 1353, "input_tensor_a_activations"),
+    (RCP, 1407, "11 >= 8"),
+    (RCP, 1411, "explicit named field defaulting to"),
+    (RCP, 1414, "at construction"),
+    (RCP, 1425, "0.9475"),
+    (RCP, 1452, "Matching it is what lets"),
     (RCP, 54, "G-MOCK-MIG"),
-    (RCP, 654, "encode positions as values"),
-    (RCP, 1448, "must be `PASS` before P6"),
-    (RCP, 888, "dense SwiGLU"),
-    (RCP, 1982, "GQA + RoPE + causal SDPA"),
-    (RCP, 651, "positional read-back"),
-    (RCP, 1984, "decoder layer (integration check)"),
-    (RCP, 458, "per-layer step"),
-    (RCP, 2029, "never *raise* one after seeing"),
+    (RCP, 686, "encode positions as values"),
+    (RCP, 1480, "must be `PASS` before P6"),
+    (RCP, 920, "dense SwiGLU"),
+    (RCP, 2023, "GQA + RoPE + causal SDPA"),
+    (RCP, 683, "positional read-back"),
+    (RCP, 2025, "decoder layer (integration check)"),
+    (RCP, 490, "per-layer step"),
+    (RCP, 2070, "never *raise* one after seeing"),
     # --- P6: layer / model assembly + weight loading (G-LAYER, G-WEIGHTS, G-MODEL) -----------
     # Every reference P6's five modules and five test files make, CONTENT-checked. Pass 2 only
     # range-checks a doc ref (`07_RISKS.md` R-016), and this session found the recipe had grown by
     # 31 lines since P5 committed (`git show cbb38d0aa7a --stat`) while the prose refs written
     # against the older numbering still reported `resolved`. Hence the rule P6 works to: a recipe
     # reference is trustworthy only if it is in this list.
-    (RCP, 1032, "**Module signature.**"),
-    (RCP, 1034, "`mesh_config=`, `ccl_manager=`, `tensor_cache_path=`, `weight_dtype=`"),
-    (RCP, 1038, "cache_file_name=get_cache_file_name"),
-    (RCP, 1040, "empty `state_dict` when a cache path exists"),
-    (RCP, 1042, "mesh shape and the dtype in the cache path"),
-    (RCP, 1466, "Do keep a bring-up probe"),
-    (RCP, 1468, "its output belongs in"),
-    (RCP, 1470, "re-allocation guard for long sequences"),
-    (RCP, 1471, "load-bearing for long-context DRAM pressure"),
-    (RCP, 1007, "test_decoder_layer_vs_ref.py"),
-    (RCP, 1474, "in-test fp32 torch layer"),
-    (RCP, 1478, "integration checks and may never substitute"),
-    (RCP, 1482, "a dozen other causes also move"),
-    (RCP, 1491, "attenuated in"),
-    (RCP, 1495, "forbids"),
-    (RCP, 890, "map_hf_to_meta_keys"),
-    (RCP, 1501, "weight_cache_path(dtype)"),
-    (RCP, 1504, "a replicated table is fine for a first pass"),
-    (RCP, 1507, "loads the real checkpoint and asserts (a) every"),
-    (RCP, 1508, "no silently-unused weights and no missing weights"),
-    (RCP, 1509, "cache-only rebuild"),
-    (RCP, 1511, "Q/K Meta swizzle and dtype ladder"),
-    (RCP, 1512, "bypass `map_hf_to_meta_keys`"),
-    (RCP, 1514, "cache-only at TP > 1 is a P8 extension"),
-    (RCP, 1520, "prepare_inputs_prefill"),
-    (RCP, 1523, "reduced layer count"),
-    (RCP, 1524, "hidden-state PCC"),
-    (RCP, 1526, "with_lm_head=True"),
-    (RCP, 1527, "record the per-layer hidden-state PCC curve"),
-    (RCP, 1475, "PCC \u2265 0.999** and **\u2264 8x the computed floor"),
-    (RCP, 1476, "0.9471"),
-    (RCP, 1528, "from layer 3 onward"),
-    (RCP, 1532, "admissible only with self-checks"),
+    (RCP, 1064, "**Module signature.**"),
+    (RCP, 1066, "`mesh_config=`, `ccl_manager=`, `tensor_cache_path=`, `weight_dtype=`"),
+    (RCP, 1070, "cache_file_name=get_cache_file_name"),
+    (RCP, 1072, "empty `state_dict` when a cache path exists"),
+    (RCP, 1074, "mesh shape and the dtype in the cache path"),
+    (RCP, 1498, "Do keep a bring-up probe"),
+    (RCP, 1500, "its output belongs in"),
+    (RCP, 1502, "re-allocation guard for long sequences"),
+    (RCP, 1503, "load-bearing for long-context DRAM pressure"),
+    (RCP, 1039, "test_decoder_layer_vs_ref.py"),
+    (RCP, 1506, "in-test fp32 torch layer"),
+    (RCP, 1510, "integration checks and may never substitute"),
+    (RCP, 1514, "a dozen other causes also move"),
+    (RCP, 1523, "attenuated in"),
+    (RCP, 1527, "forbids"),
+    (RCP, 922, "map_hf_to_meta_keys"),
+    (RCP, 1533, "weight_cache_path(dtype)"),
+    (RCP, 1536, "a replicated table is fine for a first pass"),
+    (RCP, 1539, "loads the real checkpoint and asserts (a) every"),
+    (RCP, 1540, "no silently-unused weights and no missing weights"),
+    (RCP, 1541, "cache-only rebuild"),
+    (RCP, 1543, "Q/K Meta swizzle and dtype ladder"),
+    (RCP, 1544, "bypass `map_hf_to_meta_keys`"),
+    (RCP, 1546, "cache-only at TP > 1 is a P8 extension"),
+    (RCP, 1552, "prepare_inputs_prefill"),
+    (RCP, 1555, "reduced layer count"),
+    (RCP, 1556, "hidden-state PCC"),
+    (RCP, 1558, "with_lm_head=True"),
+    (RCP, 1559, "record the per-layer hidden-state PCC curve"),
+    (RCP, 1507, "PCC \u2265 0.999** and **\u2264 8x the computed floor"),
+    (RCP, 1508, "0.9471"),
+    (RCP, 1560, "from layer 3 onward"),
+    (RCP, 1564, "admissible only with self-checks"),
     (f"{GO}/tt/layer.py", 19, "GPT_OSS_DELTA_PROBE"),
     (f"{GO}/tt/layer.py", 22, "def _delta_stats"),
     (f"{GO}/tt/layer.py", 46, "class DecoderLayer"),
@@ -623,19 +623,19 @@ CITES = [
     (HFL, 408, "position_embeddings = self.rotary_emb"),
     # --- P7: the recipe's own P7 section, content-checked (`R-017`) --------------------------
     (RCP, 16, "Non-goals for this iteration"),
-    (RCP, 1551, "Store the golden at"),
-    (RCP, 1556, "host-only** structural and content check"),
-    (RCP, 1588, "A chunked prefill differs from a one-shot in exactly three places"),
-    (RCP, 1597, "Gate `G-CHUNK`"),
-    (RCP, 1600, "one head at a time"),
-    (RCP, 1604, "chunked vs one-shot: PCC"),
-    (RCP, 1609, "assert the layer-0 ratio against a **complete** floor"),
-    (RCP, 1615, "negative control: rope every chunk at"),
-    (RCP, 1623, "Gate `G-GOLDEN`"),
-    (RCP, 1628, "Gate `G-RUNTIME`"),
-    (RCP, 1633, "Delta 3 cannot run here"),
-    (RCP, 1636, "refuse** the unsupported single-card configuration"),
-    (RCP, 1807, "signature is incomplete"),
+    (RCP, 1583, "Store the golden at"),
+    (RCP, 1588, "host-only** structural and content check"),
+    (RCP, 1620, "A chunked prefill differs from a one-shot in exactly three places"),
+    (RCP, 1629, "Gate `G-CHUNK`"),
+    (RCP, 1632, "one head at a time"),
+    (RCP, 1636, "chunked vs one-shot: PCC"),
+    (RCP, 1641, "assert the layer-0 ratio against a **complete** floor"),
+    (RCP, 1647, "negative control: rope every chunk at"),
+    (RCP, 1655, "Gate `G-GOLDEN`"),
+    (RCP, 1660, "Gate `G-RUNTIME`"),
+    (RCP, 1665, "Delta 3 cannot run here"),
+    (RCP, 1668, "refuse** the unsupported single-card configuration"),
+    (RCP, 1848, "signature is incomplete"),
     (RCP, 52, "G-GOLDEN"),
     (RCP, 52, "G-RUNTIME"),
     (RCP, 53, "G-CHUNK-ATTN"),
@@ -644,6 +644,108 @@ CITES = [
     (f"{CP}/runners/prefill_runner.py", 655, "runtime.build_kv_chunk_table"),
     (f"{CP}/runners/prefill_runner.py", 674, "runtime.build_kv_chunk_table"),
     (f"{CP}/runners/prefill_runner.py", 768, "runtime.set_layer_ack_channel"),
+    # --- P8: the fabric, the submesh rule, and the ring op's own asserts ----------------------
+    # Every one of these is load-bearing for a P8 verdict, so it is CONTENT-checked here rather
+    # than left to the doc pass's range check (`07_RISKS.md` R-016).
+    ("tt_metal/api/tt-metalium/mesh_device.hpp", 305, "void quiesce_devices();"),
+    ("tt_metal/api/tt-metalium/mesh_device.hpp", 307, "create_submesh("),
+    ("tt_metal/fabric/topology_mapper.cpp", 540, "mapping_result.success"),
+    ("tt_metal/fabric/topology_mapper.cpp", 544, "mapping_result.error_message"),
+    ("tt_metal/fabric/mesh_graph.cpp", 447, "requires_more_connectivity"),
+    ("tt_metal/fabric/mesh_graph.cpp", 450, "FabricConfig can only restrict topology"),
+    ("tt_metal/fabric/fabric.cpp", 171, "forwarding_direction.has_value()"),
+    ("tt_metal/fabric/fabric.cpp", 172, "Could not find any forwarding direction"),
+    ("tt_metal/impl/device/firmware/fabric_firmware_initializer.cpp", 200, "Fabric Router Sync: Timeout after"),
+    (
+        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_program_factory.cpp",
+        1304,
+        "use_streaming_compute = !fp32_dest_acc_en",
+    ),
+    (
+        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_program_factory.cpp",
+        1306,
+        "!kv_pad_rotation_enabled || use_streaming_compute",
+    ),
+    (
+        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_program_factory.cpp",
+        1307,
+        "kv_actual_isl requires the ring-joint streaming compute path",
+    ),
+    (
+        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_device_operation.cpp",
+        274,
+        "new_actual_isl <= chunk_capacity",
+    ),
+    (
+        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_device_operation.cpp",
+        275,
+        "KV-pad-aware rotation expects current valid Q to fit in one fixed chunk",
+    ),
+    (
+        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_device_operation.cpp",
+        421,
+        "args.ccl_core_grid_offset.x >= args.program_config.value().compute_with_storage_grid_size.x",
+    ),
+    # The single-galaxy mesh descriptors, and the proof that the two the recipe names are not
+    # single-galaxy (`DEC-071`, `R-033`).
+    (
+        "tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto",
+        6,
+        "dim_types: [ RING, RING ]",
+    ),
+    (
+        "tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto",
+        7,
+        "host_topology   { dims: [ 1, 1 ] }",
+    ),
+    (
+        "tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto",
+        6,
+        "device_topology { dims: [ 8, 4 ] }",
+    ),
+    (
+        "tt_metal/fabric/mesh_graph_descriptors/bh_galaxy_sp4_torus_xy_graph_descriptor.textproto",
+        8,
+        "host_topology   { dims: [ 4, 1 ] }",
+    ),
+    (
+        "tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto",
+        7,
+        "host_topology   { dims: [ 4, 1 ] }",
+    ),
+    # The templates P8 ports from.
+    (f"{GO}/tt/attention/dense_sp.py", 41, "def dense_sp_attention("),
+    (f"{GO}/tt/attention/dense_sp.py", 30, "def _gather_seq_len("),
+    (f"{GO}/tt/attention/dense_sp.py", 138, "Fold the layer into the cache batch index"),
+    (f"{GO}/tt/attention/prefill.py", 191, "use_cache_backed_ring = cached_len > 0 or kv_cache.max_seq_len"),
+    (f"{GO}/tt/attention/prefill.py", 195, "ttnn.CoreCoord(grid.x - 1, grid.y)"),
+    (f"{GO}/tt/attention/prefill.py", 234, "full_seq_len = seq_len * sp"),
+    (f"{GO}/tt/attention/prefill.py", 254, "ttnn.multiply(tt_sdpa_out, 1.0 / sp)"),
+    (f"{GO}/utils/general_utils.py", 33, "if mesh_device.shape[0] == 1:"),
+    (f"{GO}/tests/galaxy_prefill_kv_pcc.py", 26, "single_bh_galaxy_torus_xy_graph_descriptor.textproto"),
+    ("models/demos/minimax_m3/README.md", 48, "single_bh_galaxy_mesh_graph_descriptor.textproto"),
+    ("models/demos/minimax_m3/tests/test_factory.py", 89, "def parametrize_mesh_with_fabric"),
+    ("models/demos/deepseek_v3_d_p/tt/mla/utils.py", 65, "def block_cyclic_reorder("),
+    ("models/demos/deepseek_v3_d_p/tt/mla/utils.py", 89, "local row lr on chip c holds global position"),
+    # The recipe passages P8's gate blocks and decisions quote.
+    (RCP, 90, "The Ring topology P8 needs the torus"),
+    (RCP, 1681, "open **submeshes**, never a top-level partial mesh"),
+    (RCP, 1703, "overlapping submeshes need `quiesce_devices()`"),
+    (RCP, 1715, "A hang is not contained"),
+    (RCP, 1722, "The first diagnosis of that hang was wrong"),
+    (RCP, 1739, "`get_default_num_links` returns **1** for any"),
+    (RCP, 1769, "G-FABRIC-MATRIX`** — the (mesh, topology, links, axis) sweep"),
+    (RCP, 1772, "G-KV-TP8`** — the model \u2192 cache path at TP=8"),
+    (RCP, 1779, "G-SP-RING`** — `dense_sp_attention` **alone**"),
+    (RCP, 1782, "G-CHUNK-ATTN`** — the P7 blocker, now runnable"),
+    (RCP, 1800, "G-TP-PARITY`** — for each module"),
+    (RCP, 1805, "the multi-device output is a token slice"),
+    (RCP, 1814, "G-RACE`** — run the full-model KV PCC harness"),
+    (RCP, 1819, "G-SEMAPHORE`** — assert `CCLManager` allocates its CCL state once"),
+    (RCP, 1822, "G-MESH-KV`** — `tests/galaxy_prefill_kv_pcc.py` on the target mesh"),
+    (RCP, 1826, "G-WEIGHTS` (P8 extension)"),
+    (RCP, 1758, "The ring op requires `fp32_dest_acc_en=False`, structurally"),
+    (RCP, 1665, "Delta 3 cannot run here"),
 ]
 
 # DOCS — every markdown file whose `path:line` references should be range-checked.
@@ -817,6 +919,54 @@ def scan_docs():
     return bad
 
 
+# ---------------------------------------------------------------------------------------------
+# Pass 3 (P8 addition, §1.6 "extend it in every phase"): **every cited raw-log artefact must
+# exist.**
+#
+# Passes 1 and 2 both key on `path:line`, so a bare `` `G-FOO_<timestamp>.log` `` under `raw/` — which is
+# precisely how the ledger cites its evidence — was scanned by **neither**. That is not a
+# hypothetical gap: this pass found two dangling references on its first run, both written by an
+# earlier session (`07_RISKS.md` R-042). And the recipe's definition of a gate is exactly this
+# artefact: "A gate with no raw log did not happen" (`BRINGUP_RECIPE.md:199`), reinforced by
+# Appendix C item 2. A ledger row citing a file that is not there is a `PASS` with no evidence.
+#
+# `.log.gz` is accepted for `.log`, because oversized logs are gzipped rather than trimmed
+# (`LANDMINES.md`, `07_RISKS.md` R-040) and compression is lossless, so the evidence is the same
+# bytes.
+# ---------------------------------------------------------------------------------------------
+_ARTEFACT = re.compile(r"`(raw/[A-Za-z0-9_.\-]+\.(?:log|json))(?:\.gz)?`")
+
+
+def scan_artefacts():
+    ok = bad = 0
+    failures = []
+    seen = set()
+    for doc in DOCS:
+        full = os.path.join(ROOT, doc)
+        if not os.path.isfile(full) or "/bringup_log/" not in doc.replace(os.sep, "/"):
+            continue
+        base = os.path.dirname(full)
+        for m in _ARTEFACT.finditer(open(full, errors="replace").read()):
+            rel = m.group(1)
+            if (doc, rel) in seen:
+                continue
+            seen.add((doc, rel))
+            target = os.path.join(base, rel)
+            if os.path.isfile(target) or os.path.isfile(target + ".gz"):
+                ok += 1
+            else:
+                bad += 1
+                failures.append(f"ARTEFACT MISSING  {doc}: {rel}")
+    print(f"raw artefacts cited: {ok + bad}")
+    print(f"  present         : {ok}")
+    print(f"  missing         : {bad}")
+    if failures:
+        print("\nARTEFACT FAILURES:")
+        for f in failures:
+            print("  " + f)
+    return bad
+
+
 def main():
     ok = bad = missing = 0
     failures = []
@@ -853,7 +1003,8 @@ def main():
         for f in failures:
             print("  " + f)
     doc_bad = scan_docs()
-    return 0 if bad == 0 and missing == 0 and doc_bad == 0 else 1
+    artefact_bad = scan_artefacts()
+    return 0 if bad == 0 and missing == 0 and doc_bad == 0 and artefact_bad == 0 else 1
 
 
 if __name__ == "__main__":

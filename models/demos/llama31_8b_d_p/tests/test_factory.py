@@ -24,6 +24,7 @@ Modelled on `models/demos/minimax_m3/tests/test_factory.py`. Four groups of help
 
 import json
 import os
+from contextlib import contextmanager
 
 import pytest
 
@@ -161,3 +162,164 @@ class TestFactory:
             "weight_dtype": weight_dtype,
             "tensor_cache_path": tensor_cache_path,
         }
+
+
+# --------------------------------------------------------------------------------------------
+# P8: submeshes, and the fabric/topology pair that must be set together
+#
+# `BRINGUP_RECIPE.md:1649-1670`: on this galaxy a **top-level partial mesh** dies in fabric
+# bring-up, because the routers on the opened devices wait for an ethernet handshake with
+# partners outside the mesh. So every P8 shape below `(4, 8)` is a **submesh** of the full mesh
+# (`tt_metal/api/tt-metalium/mesh_device.hpp:307`), measured by `G-FABRIC-MATRIX`.
+# --------------------------------------------------------------------------------------------
+GALAXY_MESH_SHAPE = (4, 8)
+
+# `DEC-027` couples the fabric config and the collective topology behind ONE variable, because a
+# Ring collective on a plain `FABRIC_1D` fabric **hangs** rather than erroring — and a hang on this
+# box poisons every later collective until `tt-smi -r` (`G-FABRIC-MATRIX` case
+# `submesh_1x8_ring_on_fabric1d`).
+# **`Linear`, not `Ring`, on this galaxy** (`DEC-081`), and the reason is the ring SDPA rather than
+# the plain collectives. `G-FABRIC-MATRIX` measured `ttnn.Topology.Ring` all-gathers returning
+# bit-exact results on `FABRIC_1D` at every P8 shape — but
+# `ttnn.transformer.ring_joint_scaled_dot_product_attention` under `Topology.Ring` asks the fabric
+# for the SP axis's **wrap-around** route and aborts when it is missing:
+#
+#   TT_FATAL @ tt_metal/fabric/fabric.cpp:174: forwarding_direction.has_value()   (the condition is at `fabric.cpp:171`)
+#   Could not find any forwarding direction from src (M0, D0) to dst (M0, D3)
+#
+# (D0 -> D3 is the 4-device SP ring closing on itself.) The same call with `Topology.Linear` runs and
+# scores PCC 0.9996672 at 6.05x its own floor (`G-SP-RING`). So `Ring` is not merely unnecessary
+# here, it is unserviceable for the one op that needs a real ring — which is a sharper statement than
+# "the ring fabric will not initialise", and it is what settles the topology for the whole phase.
+_TOPOLOGY_NAME = os.getenv("PREFILL_TOPOLOGY", "linear").lower()
+_TORUS_DESCRIPTOR_BASENAME = "single_bh_galaxy_torus_xy_graph_descriptor.textproto"
+
+
+def prefill_topology():
+    """`ttnn.Topology` for this run — `Ring` (deployment default) or `Linear` (`PREFILL_TOPOLOGY`)."""
+    if _TOPOLOGY_NAME not in ("ring", "linear"):
+        raise ValueError(f"PREFILL_TOPOLOGY must be 'ring' or 'linear', got {_TOPOLOGY_NAME!r}")
+    return ttnn.Topology.Ring if _TOPOLOGY_NAME == "ring" else ttnn.Topology.Linear
+
+
+# The fabric this galaxy actually has. **`FABRIC_1D`, even for Ring collectives** (`DEC-079`).
+#
+# `BRINGUP_RECIPE.md:80-84` says "The Ring topology P8 needs the torus descriptor; a Ring topology
+# on a plain `FABRIC_1D` fabric **hangs** rather than erroring". `G-FABRIC-MATRIX` measured both
+# halves of that on this box and **both are false here**:
+#
+#   * `FABRIC_1D_RING` cannot be initialised at all. The only single-galaxy RING/RING mesh-graph
+#     descriptor is `single_bh_galaxy_torus_xy_graph_descriptor.textproto`, and it fails to map:
+#     `topology_mapper.cpp:540` (the exception metal attributes to `:544`) — "Graph specified in MGD
+#     could not fit in the discovered physical topology ... 32 target node(s) are not mapped to any
+#     global node". It is not the channel
+#     policy: a RELAXED copy fails identically, so the torus wrap links are not there. Asking
+#     `FABRIC_1D_RING` of a LINE/LINE or LINE/RING descriptor instead is refused a step earlier, at
+#     `mesh_graph.cpp:447-453` — "FabricConfig can only restrict topology (e.g., torus->mesh), not
+#     create new connections". The two descriptors the recipe names are both multi-galaxy and out of
+#     scope for a single galaxy (`DEC-071`).
+#   * `ttnn.Topology.Ring` **collectives run correctly on `FABRIC_1D`**: bit-exact all-gathers at
+#     `(1,8)`/1 link, `(2,8)`/2 links and `(4,8)`/2 links on **both** axes (`G-FABRIC-MATRIX`
+#     addendum, 5/5).
+#
+# So the coupling `DEC-027` describes still holds — one variable decides both — but on this machine
+# the pair is (`Topology.Ring`, `FABRIC_1D`). `PREFILL_FABRIC=1d_ring` is kept as an override for a
+# genuinely torus-cabled machine, where the recipe's guidance would apply.
+_FABRIC_NAME = os.getenv("PREFILL_FABRIC", "1d").lower()
+
+
+def prefill_fabric_config():
+    """The `ttnn.FabricConfig` that MUST accompany `prefill_topology()`. Never chosen separately."""
+    if _FABRIC_NAME not in ("1d", "1d_ring"):
+        raise ValueError(f"PREFILL_FABRIC must be '1d' or '1d_ring', got {_FABRIC_NAME!r}")
+    return ttnn.FabricConfig.FABRIC_1D_RING if _FABRIC_NAME == "1d_ring" else ttnn.FabricConfig.FABRIC_1D
+
+
+def galaxy_device_params():
+    """`device_params` for a P8 test: the fabric config matching `PREFILL_TOPOLOGY`.
+
+    Use as `@pytest.mark.parametrize("device_params", [galaxy_device_params()], indirect=True)`
+    (pattern: `models/demos/gpt_oss_d_p/tests/test_kv_cache_table.py:126`).
+    """
+    return {"fabric_config": prefill_fabric_config()}
+
+
+# A `FABRIC_1D_RING` run additionally needs the **torus** mesh-graph descriptor, and that one cannot
+# be set from inside pytest: metal reads `TT_MESH_GRAPH_DESC_PATH` when the control plane
+# initialises. On this galaxy that descriptor does not map (see `_FABRIC_NAME` above), so
+# `PREFILL_FABRIC` defaults to `1d` and this marker skips only the opt-in case — rather than
+# silently running a fabric init that aborts (`DEC-076`).
+def _torus_descriptor_is_set() -> bool:
+    path = os.getenv("TT_MESH_GRAPH_DESC_PATH", "")
+    return bool(path) and os.path.basename(path) == _TORUS_DESCRIPTOR_BASENAME and os.path.isfile(path)
+
+
+requires_ring_fabric = pytest.mark.skipif(
+    _FABRIC_NAME == "1d_ring" and not _torus_descriptor_is_set(),
+    reason=(
+        f"PREFILL_FABRIC=1d_ring needs the single-galaxy torus descriptor exported before pytest "
+        f"starts: TT_MESH_GRAPH_DESC_PATH="
+        f"$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/{_TORUS_DESCRIPTOR_BASENAME}. "
+        f"On this galaxy that descriptor does not map to the physical topology at all "
+        f"(G-FABRIC-MATRIX); the default PREFILL_FABRIC=1d is what runs here."
+    ),
+)
+
+requires_galaxy = pytest.mark.skipif(
+    ttnn.get_num_devices() < GALAXY_MESH_SHAPE[0] * GALAXY_MESH_SHAPE[1],
+    reason=f"P8 needs the full {GALAXY_MESH_SHAPE} Blackhole Galaxy ({GALAXY_MESH_SHAPE[0] * GALAXY_MESH_SHAPE[1]} devices)",
+)
+
+
+class SubmeshPool:
+    """Hands out submeshes of one open parent mesh, with `quiesce_devices()` **enforced**.
+
+    `tt_metal/api/tt-metalium/mesh_device.hpp:296-305` requires a barrier "between phases that use
+    overlapping submeshes on the same physical devices" and names `quiesce_devices()`.
+    **Nothing enforces it**, and forgetting it does not fail — it hangs the machine, and the hang is
+    not contained: every later collective on the box hangs too, including ones that just passed,
+    until `tt-smi -r` (`BRINGUP_RECIPE.md:1671-1689`, `LANDMINES.md`, and `G-FABRIC-MATRIX` case
+    `overlap_1x2_then_1x8_no_quiesce` measures it).
+
+    So this pool quiesces on **both** sides of every hand-out (`DEC-077`): a barrier before the
+    phase starts and one after it ends. That makes "two live submeshes with no barrier between
+    their phases" unreachable through this API, which is stronger than remembering the call — and
+    `G-TP-PARITY`, which compares `(1,1)` against five multi-device shapes in one process, is
+    exactly the pair the header warns about.
+
+    Submeshes are **cached** by `(shape, offset)` and reused, so a five-shape sweep creates five
+    submeshes rather than one per parametrisation.
+    """
+
+    def __init__(self, parent):
+        self.parent = parent
+        self._cache = {}
+
+    @contextmanager
+    def use(self, shape, offset=None):
+        """Yield a submesh of `shape`, with a barrier before and after the phase."""
+        shape = tuple(shape)
+        key = (shape, tuple(offset) if offset is not None else None)
+        self.parent.quiesce_devices()
+        if key not in self._cache:
+            mesh_offset = ttnn.MeshCoordinate(*offset) if offset is not None else None
+            self._cache[key] = self.parent.create_submesh(ttnn.MeshShape(*shape), mesh_offset)
+        sub = self._cache[key]
+        try:
+            yield sub
+        finally:
+            ttnn.synchronize_device(sub)
+            self.parent.quiesce_devices()
+
+
+@pytest.fixture(scope="function")
+def submesh_pool(mesh_device):
+    """A `SubmeshPool` over the full galaxy mesh. Every P8 shape below `(4,8)` comes from here."""
+    assert tuple(mesh_device.shape) == GALAXY_MESH_SHAPE, (
+        f"the submesh pool expects the FULL {GALAXY_MESH_SHAPE} mesh as its parent, got "
+        f"{tuple(mesh_device.shape)}; opening a partial shape top-level is the fabric-init trap "
+        f"(BRINGUP_RECIPE.md:1649-1670)"
+    )
+    pool = SubmeshPool(mesh_device)
+    yield pool
+    mesh_device.quiesce_devices()

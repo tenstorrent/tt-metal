@@ -1,0 +1,355 @@
+2026-09-04 15:13:20.245 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mstojkovic/.cache/ttnn,model_cache_path=/home/mstojkovic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-09-04 15:13:21.249 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:224)
+2026-09-04 15:13:21.249 | info     |             UMD | Cluster constructor started. (cluster.cpp:406)
+2026-09-04 15:13:21.266 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-09-04 15:13:21.266 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-09-04 15:13:21.356 | info     |             UMD | Established firmware bundle version: 19.12.0 (topology_discovery.cpp:576)
+2026-09-04 15:13:21.361 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-09-04 15:13:22.819 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31}/[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 30, 31, 16, 17, 18, 19, 20, 21, 22, 23] and remote chip ids {} (cluster.cpp:173)
+2026-09-04 15:13:22.819 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-09-04 15:13:22.819 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-09-04 15:13:22.819 | info     |             UMD | Cluster constructor completed. (cluster.cpp:665)
+2026-09-04 15:13:22.838 | info     |             UMD | Starting devices in cluster (cluster.cpp:1205)
+2026-09-04 15:13:24.643 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1213)
+============================= test session starts ==============================
+platform linux -- Python 3.12.14, pytest-9.0.3, pluggy-1.6.0 -- /home/mstojkovic/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mstojkovic/tt-metal
+configfile: pytest.ini
+plugins: timeout-2.4.0, anyio-4.15.0, cov-7.0.0, github-actions-annotate-failures-0.3.0, repeat-0.9.4, dash-2.15.0, benchmark-5.2.3, split-0.11.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 12 items / 11 deselected / 1 selected
+
+models/demos/llama31_8b_d_p/tests/unit/test_weight_loading.py::test_cache_only_rebuild_is_bit_identical_at_tp8[blackhole-mesh_device0-device_params0] 2026-09-04 15:13:30.146 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
+2026-09-04 15:13:30.146 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
+2026-09-04 15:13:30.163 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4, 3:16, 4:12} (topology_mapper_utils.cpp:3368)
+2026-09-04 15:13:30.163 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {3:4, 4:20, 5:8} (topology_mapper_utils.cpp:3376)
+2026-09-04 15:13:30.179 | INFO     | models.demos.utils.trace_region_sizes:resolve_trace_region_size_for_candidates:155 - No trace_region_size configured for model candidates ['/home/mstojkovic/models/Llama-3.1-8B-Instruct', 'Llama-3.1-8B-Instruct', 'Llama-3.1-8B'] and SKU='bh_galaxy_perf'; defaulting to dynamic allocation (trace_region_size=0).
+2026-09-04 15:13:30.179 | info     |           Metal | Fabric config changed from FabricConfig::DISABLED to FabricConfig::FABRIC_1D, reinitializing control plane (metal_env.cpp:324)
+2026-09-04 15:13:30.179 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
+2026-09-04 15:13:30.179 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
+2026-09-04 15:13:30.195 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4, 3:16, 4:12} (topology_mapper_utils.cpp:3368)
+2026-09-04 15:13:30.195 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {3:4, 4:20, 5:8} (topology_mapper_utils.cpp:3376)
+2026-09-04 15:13:30.198 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 15:13:30.198 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 15:13:30.198 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 15:13:30.198 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 15:13:30.796 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 15:13:30.796 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 15:13:30.796 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 15:13:30.796 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 15:13:30.899 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:308)
+2026-09-04 15:13:31.098 | info     |           Metal | Fabric initialized on 32 devices (fabric_firmware_initializer.cpp:455)
+2026-09-04 15:13:31.098 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D (fabric_firmware_initializer.cpp:325)
+2026-09-04 15:13:32.305 | DEBUG    | conftest:mesh_device:668 - multidevice with 32 devices is created
+2026-09-04 15:13:32.307 | INFO     | llama31_8b_d_p.tests.unit.test_weight_loading:test_cache_only_rebuild_is_bit_identical_at_tp8:473 - [G-WEIGHTS] TP=8 cache path: tensor_cache_bfp8_4x8
+2026-09-04 15:13:32.343 | INFO     | models.demos.llama31_8b_d_p.tt.model_config:_load_safetensors:199 - loaded 12 checkpoint tensors from /home/mstojkovic/models/Llama-3.1-8B-Instruct
+2026-09-04 15:13:32.923 | DEBUG    | core:from_torch_and_dump:702 - Generating cache for /tmp/pytest-of-mstojkovic/pytest-33/test_cache_only_rebuild_is_bit0/tensor_cache_bfp8_4x8/model.embed_tokens/weight_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin of shape Shape([128256, 4096]), dtype BFLOAT16, layout ROW_MAJOR
+2026-09-04 15:13:35.506 | DEBUG    | core:from_torch_and_dump:702 - Generating cache for /tmp/pytest-of-mstojkovic/pytest-33/test_cache_only_rebuild_is_bit0/tensor_cache_bfp8_4x8/model.layers.0/input_layernorm/weight_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin of shape Shape([1, 1, 128, 32]), dtype BFLOAT16, layout ROW_MAJOR
+2026-09-04 15:13:35.507 | DEBUG    | core:from_torch_and_dump:702 - Generating cache for /tmp/pytest-of-mstojkovic/pytest-33/test_cache_only_rebuild_is_bit0/tensor_cache_bfp8_4x8/model.layers.0/post_attention_layernorm/weight_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin of shape Shape([1, 1, 128, 32]), dtype BFLOAT16, layout ROW_MAJOR
+2026-09-04 15:13:35.588 | DEBUG    | core:from_torch_and_dump:702 - Generating cache for /tmp/pytest-of-mstojkovic/pytest-33/test_cache_only_rebuild_is_bit0/tensor_cache_bfp8_4x8/model.layers.0/self_attn/q_proj_meta_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 4096, 512]), dtype BFLOAT8_B, layout TILE
+2026-09-04 15:13:35.630 | DEBUG    | core:from_torch_and_dump:702 - Generating cache for /tmp/pytest-of-mstojkovic/pytest-33/test_cache_only_rebuild_is_bit0/tensor_cache_bfp8_4x8/model.layers.0/self_attn/k_proj_meta_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 4096, 128]), dtype BFLOAT8_B, layout TILE
+2026-09-04 15:13:35.667 | DEBUG    | core:from_torch_and_dump:702 - Generating cache for /tmp/pytest-of-mstojkovic/pytest-33/test_cache_only_rebuild_is_bit0/tensor_cache_bfp8_4x8/model.layers.0/self_attn/v_proj_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 4096, 128]), dtype BFLOAT8_B, layout TILE
+2026-09-04 15:13:35.751 | DEBUG    | core:from_torch_and_dump:702 - Generating cache for /tmp/pytest-of-mstojkovic/pytest-33/test_cache_only_rebuild_is_bit0/tensor_cache_bfp8_4x8/model.layers.0/self_attn/o_proj_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 512, 4096]), dtype BFLOAT8_B, layout TILE
+2026-09-04 15:13:36.107 | DEBUG    | core:from_torch_and_dump:702 - Generating cache for /tmp/pytest-of-mstojkovic/pytest-33/test_cache_only_rebuild_is_bit0/tensor_cache_bfp8_4x8/model.layers.0/mlp/gate_proj_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 4096, 1792]), dtype BFLOAT8_B, layout TILE
+2026-09-04 15:13:36.468 | DEBUG    | core:from_torch_and_dump:702 - Generating cache for /tmp/pytest-of-mstojkovic/pytest-33/test_cache_only_rebuild_is_bit0/tensor_cache_bfp8_4x8/model.layers.0/mlp/up_proj_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 4096, 1792]), dtype BFLOAT8_B, layout TILE
+2026-09-04 15:13:36.819 | DEBUG    | core:from_torch_and_dump:702 - Generating cache for /tmp/pytest-of-mstojkovic/pytest-33/test_cache_only_rebuild_is_bit0/tensor_cache_bfp8_4x8/model.layers.0/mlp/down_proj_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 1792, 4096]), dtype BFLOAT8_B, layout TILE
+2026-09-04 15:13:36.876 | DEBUG    | core:from_torch_and_dump:702 - Generating cache for /tmp/pytest-of-mstojkovic/pytest-33/test_cache_only_rebuild_is_bit0/tensor_cache_bfp8_4x8/model.norm/weight_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin of shape Shape([1, 1, 128, 32]), dtype BFLOAT16, layout ROW_MAJOR
+2026-09-04 15:13:40.214 | DEBUG    | core:from_torch_and_dump:702 - Generating cache for /tmp/pytest-of-mstojkovic/pytest-33/test_cache_only_rebuild_is_bit0/tensor_cache_bfp8_4x8/lm_head/weight_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 4096, 16032]), dtype BFLOAT8_B, layout TILE
+2026-09-04 15:13:40.676 | INFO     | models.demos.llama31_8b_d_p.tt.model:__init__:166 - Llama model built: 1 layers, mesh (4, 8), tp=8, sp=4, lm_head=True
+2026-09-04 15:16:20.549 | DEBUG    | core:as_tensor:719 - Loaded cache for /tmp/pytest-of-mstojkovic/pytest-33/test_cache_only_rebuild_is_bit0/tensor_cache_bfp8_4x8/model.embed_tokens/weight_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin of shape Shape([128256, 4096])
+2026-09-04 15:16:20.550 | DEBUG    | core:as_tensor:719 - Loaded cache for /tmp/pytest-of-mstojkovic/pytest-33/test_cache_only_rebuild_is_bit0/tensor_cache_bfp8_4x8/model.layers.0/input_layernorm/weight_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin of shape Shape([1, 1, 128, 32])
+2026-09-04 15:16:20.551 | DEBUG    | core:as_tensor:719 - Loaded cache for /tmp/pytest-of-mstojkovic/pytest-33/test_cache_only_rebuild_is_bit0/tensor_cache_bfp8_4x8/model.layers.0/post_attention_layernorm/weight_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin of shape Shape([1, 1, 128, 32])
+2026-09-04 15:16:20.565 | info     |           Metal | Pinned source memory start address 0x782a98efbbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.565 | info     |           Metal | Pinned source memory start address 0x782a9999bbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.565 | info     |           Metal | Pinned source memory start address 0x782a9999bbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.565 | info     |           Metal | Pinned source memory start address 0x782a9911bbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.565 | info     |           Metal | Pinned source memory start address 0x782a9933bbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.565 | info     |           Metal | Pinned source memory start address 0x782a9977bbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.565 | info     |           Metal | Pinned source memory start address 0x782a9955bbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.565 | info     |           Metal | Pinned source memory start address 0x782a99ddbbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.565 | info     |           Metal | Pinned source memory start address 0x782a99bbbbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.565 | info     |           Metal | Pinned source memory start address 0x782a99ddbbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.565 | info     |           Metal | Pinned source memory start address 0x782a99bbbbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.565 | info     |           Metal | Pinned source memory start address 0x782a9977bbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.565 | info     |           Metal | Pinned source memory start address 0x782a9999bbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.565 | info     |           Metal | Pinned source memory start address 0x782a99ddbbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.565 | info     |           Metal | Pinned source memory start address 0x782a98efbbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.565 | info     |           Metal | Pinned source memory start address 0x782a9955bbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.565 | info     |           Metal | Pinned source memory start address 0x782a9933bbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.565 | info     |           Metal | Pinned source memory start address 0x782a9911bbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.565 | info     |           Metal | Pinned source memory start address 0x782a9977bbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.565 | info     |           Metal | Pinned source memory start address 0x782a99bbbbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.565 | info     |           Metal | Pinned source memory start address 0x782a99ddbbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.565 | info     |           Metal | Pinned source memory start address 0x782a9977bbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.565 | info     |           Metal | Pinned source memory start address 0x782a9999bbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.565 | info     |           Metal | Pinned source memory start address 0x782a98efbbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.565 | info     |           Metal | Pinned source memory start address 0x782a9933bbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.565 | info     |           Metal | Pinned source memory start address 0x782a9911bbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.565 | info     |           Metal | Pinned source memory start address 0x782a9955bbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.565 | info     |           Metal | Pinned source memory start address 0x782a99bbbbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.565 | info     |           Metal | Pinned source memory start address 0x782a98efbbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.565 | info     |           Metal | Pinned source memory start address 0x782a9911bbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.565 | info     |           Metal | Pinned source memory start address 0x782a9955bbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.565 | info     |           Metal | Pinned source memory start address 0x782a9933bbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.571 | DEBUG    | core:as_tensor:719 - Loaded cache for /tmp/pytest-of-mstojkovic/pytest-33/test_cache_only_rebuild_is_bit0/tensor_cache_bfp8_4x8/model.layers.0/self_attn/q_proj_meta_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 4096, 512])
+2026-09-04 15:16:20.572 | DEBUG    | core:as_tensor:719 - Loaded cache for /tmp/pytest-of-mstojkovic/pytest-33/test_cache_only_rebuild_is_bit0/tensor_cache_bfp8_4x8/model.layers.0/self_attn/k_proj_meta_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 4096, 128])
+2026-09-04 15:16:20.573 | DEBUG    | core:as_tensor:719 - Loaded cache for /tmp/pytest-of-mstojkovic/pytest-33/test_cache_only_rebuild_is_bit0/tensor_cache_bfp8_4x8/model.layers.0/self_attn/v_proj_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 4096, 128])
+2026-09-04 15:16:20.591 | info     |           Metal | Pinned source memory start address 0x782a98efbbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.591 | info     |           Metal | Pinned source memory start address 0x782a9933bbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.591 | info     |           Metal | Pinned source memory start address 0x782a9955bbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.591 | info     |           Metal | Pinned source memory start address 0x782a99ddbbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.591 | info     |           Metal | Pinned source memory start address 0x782a99bbbbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.591 | info     |           Metal | Pinned source memory start address 0x782a9933bbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.591 | info     |           Metal | Pinned source memory start address 0x782a98efbbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.591 | info     |           Metal | Pinned source memory start address 0x782a9977bbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.591 | info     |           Metal | Pinned source memory start address 0x782a9955bbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.591 | info     |           Metal | Pinned source memory start address 0x782a99ddbbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.591 | info     |           Metal | Pinned source memory start address 0x782a9911bbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.591 | info     |           Metal | Pinned source memory start address 0x782a9999bbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.591 | info     |           Metal | Pinned source memory start address 0x782a9999bbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.591 | info     |           Metal | Pinned source memory start address 0x782a9933bbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.591 | info     |           Metal | Pinned source memory start address 0x782a9911bbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.591 | info     |           Metal | Pinned source memory start address 0x782a98efbbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.591 | info     |           Metal | Pinned source memory start address 0x782a9955bbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.591 | info     |           Metal | Pinned source memory start address 0x782a9911bbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.591 | info     |           Metal | Pinned source memory start address 0x782a9999bbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.591 | info     |           Metal | Pinned source memory start address 0x782a9977bbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.591 | info     |           Metal | Pinned source memory start address 0x782a9977bbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.591 | info     |           Metal | Pinned source memory start address 0x782a99ddbbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.591 | info     |           Metal | Pinned source memory start address 0x782a9933bbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.591 | info     |           Metal | Pinned source memory start address 0x782a98efbbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.591 | info     |           Metal | Pinned source memory start address 0x782a9955bbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.591 | info     |           Metal | Pinned source memory start address 0x782a99bbbbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.591 | info     |           Metal | Pinned source memory start address 0x782a99ddbbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.591 | info     |           Metal | Pinned source memory start address 0x782a9999bbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.591 | info     |           Metal | Pinned source memory start address 0x782a9911bbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.591 | info     |           Metal | Pinned source memory start address 0x782a99bbbbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.591 | info     |           Metal | Pinned source memory start address 0x782a9977bbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.591 | info     |           Metal | Pinned source memory start address 0x782a99bbbbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.595 | DEBUG    | core:as_tensor:719 - Loaded cache for /tmp/pytest-of-mstojkovic/pytest-33/test_cache_only_rebuild_is_bit0/tensor_cache_bfp8_4x8/model.layers.0/self_attn/o_proj_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 512, 4096])
+2026-09-04 15:16:20.639 | info     |           Metal | Pinned source memory start address 0x782a9047fbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.639 | info     |           Metal | Pinned source memory start address 0x782a9135fbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.639 | info     |           Metal | Pinned source memory start address 0x782a91acfbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.639 | info     |           Metal | Pinned source memory start address 0x782a9311fbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.639 | info     |           Metal | Pinned source memory start address 0x782a9388fbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.639 | info     |           Metal | Pinned source memory start address 0x782a91acfbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.639 | info     |           Metal | Pinned source memory start address 0x782a90befbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.639 | info     |           Metal | Pinned source memory start address 0x782a9135fbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.639 | info     |           Metal | Pinned source memory start address 0x782a9311fbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.639 | info     |           Metal | Pinned source memory start address 0x782a9135fbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.639 | info     |           Metal | Pinned source memory start address 0x782a9047fbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.639 | info     |           Metal | Pinned source memory start address 0x782a90befbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.639 | info     |           Metal | Pinned source memory start address 0x782a90befbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.639 | info     |           Metal | Pinned source memory start address 0x782a9047fbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.639 | info     |           Metal | Pinned source memory start address 0x782a9388fbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.639 | info     |           Metal | Pinned source memory start address 0x782a91acfbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.639 | info     |           Metal | Pinned source memory start address 0x782a929afbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.639 | info     |           Metal | Pinned source memory start address 0x782a9223fbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.639 | info     |           Metal | Pinned source memory start address 0x782a9311fbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.639 | info     |           Metal | Pinned source memory start address 0x782a929afbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.639 | info     |           Metal | Pinned source memory start address 0x782a9223fbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.639 | info     |           Metal | Pinned source memory start address 0x782a9388fbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.639 | info     |           Metal | Pinned source memory start address 0x782a929afbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.639 | info     |           Metal | Pinned source memory start address 0x782a9388fbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.639 | info     |           Metal | Pinned source memory start address 0x782a9311fbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.639 | info     |           Metal | Pinned source memory start address 0x782a9223fbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.639 | info     |           Metal | Pinned source memory start address 0x782a929afbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.639 | info     |           Metal | Pinned source memory start address 0x782a9047fbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.639 | info     |           Metal | Pinned source memory start address 0x782a90befbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.639 | info     |           Metal | Pinned source memory start address 0x782a91acfbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.639 | info     |           Metal | Pinned source memory start address 0x782a9135fbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.639 | info     |           Metal | Pinned source memory start address 0x782a9223fbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.653 | DEBUG    | core:as_tensor:719 - Loaded cache for /tmp/pytest-of-mstojkovic/pytest-33/test_cache_only_rebuild_is_bit0/tensor_cache_bfp8_4x8/model.layers.0/mlp/gate_proj_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 4096, 1792])
+2026-09-04 15:16:20.707 | info     |           Metal | Pinned source memory start address 0x782a91acfbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.707 | info     |           Metal | Pinned source memory start address 0x782a9047fbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.707 | info     |           Metal | Pinned source memory start address 0x782a91acfbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.707 | info     |           Metal | Pinned source memory start address 0x782a9388fbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.707 | info     |           Metal | Pinned source memory start address 0x782a929afbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.707 | info     |           Metal | Pinned source memory start address 0x782a9223fbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.707 | info     |           Metal | Pinned source memory start address 0x782a90befbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.707 | info     |           Metal | Pinned source memory start address 0x782a9135fbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.707 | info     |           Metal | Pinned source memory start address 0x782a9388fbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.707 | info     |           Metal | Pinned source memory start address 0x782a9223fbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.707 | info     |           Metal | Pinned source memory start address 0x782a929afbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.707 | info     |           Metal | Pinned source memory start address 0x782a9311fbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.707 | info     |           Metal | Pinned source memory start address 0x782a9388fbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.707 | info     |           Metal | Pinned source memory start address 0x782a9311fbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.707 | info     |           Metal | Pinned source memory start address 0x782a91acfbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.707 | info     |           Metal | Pinned source memory start address 0x782a9135fbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.707 | info     |           Metal | Pinned source memory start address 0x782a929afbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.707 | info     |           Metal | Pinned source memory start address 0x782a9388fbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.707 | info     |           Metal | Pinned source memory start address 0x782a9223fbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.707 | info     |           Metal | Pinned source memory start address 0x782a9047fbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.707 | info     |           Metal | Pinned source memory start address 0x782a90befbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.707 | info     |           Metal | Pinned source memory start address 0x782a9223fbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.707 | info     |           Metal | Pinned source memory start address 0x782a9311fbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.707 | info     |           Metal | Pinned source memory start address 0x782a929afbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.707 | info     |           Metal | Pinned source memory start address 0x782a90befbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.707 | info     |           Metal | Pinned source memory start address 0x782a9135fbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.707 | info     |           Metal | Pinned source memory start address 0x782a9047fbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.707 | info     |           Metal | Pinned source memory start address 0x782a90befbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.707 | info     |           Metal | Pinned source memory start address 0x782a91acfbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.707 | info     |           Metal | Pinned source memory start address 0x782a9135fbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.707 | info     |           Metal | Pinned source memory start address 0x782a9047fbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.707 | info     |           Metal | Pinned source memory start address 0x782a9311fbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.720 | DEBUG    | core:as_tensor:719 - Loaded cache for /tmp/pytest-of-mstojkovic/pytest-33/test_cache_only_rebuild_is_bit0/tensor_cache_bfp8_4x8/model.layers.0/mlp/up_proj_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 4096, 1792])
+2026-09-04 15:16:20.775 | info     |           Metal | Pinned source memory start address 0x782a91acfbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.775 | info     |           Metal | Pinned source memory start address 0x782a929afbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.775 | info     |           Metal | Pinned source memory start address 0x782a9135fbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.775 | info     |           Metal | Pinned source memory start address 0x782a9047fbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.775 | info     |           Metal | Pinned source memory start address 0x782a9135fbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.775 | info     |           Metal | Pinned source memory start address 0x782a9047fbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.775 | info     |           Metal | Pinned source memory start address 0x782a91acfbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.775 | info     |           Metal | Pinned source memory start address 0x782a90befbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.775 | info     |           Metal | Pinned source memory start address 0x782a9311fbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.775 | info     |           Metal | Pinned source memory start address 0x782a9223fbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.775 | info     |           Metal | Pinned source memory start address 0x782a9223fbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.775 | info     |           Metal | Pinned source memory start address 0x782a9388fbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.775 | info     |           Metal | Pinned source memory start address 0x782a90befbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.775 | info     |           Metal | Pinned source memory start address 0x782a9388fbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.775 | info     |           Metal | Pinned source memory start address 0x782a9311fbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.775 | info     |           Metal | Pinned source memory start address 0x782a9388fbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.775 | info     |           Metal | Pinned source memory start address 0x782a929afbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.775 | info     |           Metal | Pinned source memory start address 0x782a9223fbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.775 | info     |           Metal | Pinned source memory start address 0x782a929afbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.775 | info     |           Metal | Pinned source memory start address 0x782a91acfbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.775 | info     |           Metal | Pinned source memory start address 0x782a9135fbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.775 | info     |           Metal | Pinned source memory start address 0x782a9047fbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.775 | info     |           Metal | Pinned source memory start address 0x782a90befbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.775 | info     |           Metal | Pinned source memory start address 0x782a9311fbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.775 | info     |           Metal | Pinned source memory start address 0x782a9311fbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.775 | info     |           Metal | Pinned source memory start address 0x782a9223fbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.775 | info     |           Metal | Pinned source memory start address 0x782a9388fbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.775 | info     |           Metal | Pinned source memory start address 0x782a929afbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.775 | info     |           Metal | Pinned source memory start address 0x782a9135fbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.775 | info     |           Metal | Pinned source memory start address 0x782a90befbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.775 | info     |           Metal | Pinned source memory start address 0x782a91acfbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.775 | info     |           Metal | Pinned source memory start address 0x782a9047fbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:20.788 | DEBUG    | core:as_tensor:719 - Loaded cache for /tmp/pytest-of-mstojkovic/pytest-33/test_cache_only_rebuild_is_bit0/tensor_cache_bfp8_4x8/model.layers.0/mlp/down_proj_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 1792, 4096])
+2026-09-04 15:16:20.789 | DEBUG    | core:as_tensor:719 - Loaded cache for /tmp/pytest-of-mstojkovic/pytest-33/test_cache_only_rebuild_is_bit0/tensor_cache_bfp8_4x8/model.norm/weight_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin of shape Shape([1, 1, 128, 32])
+2026-09-04 15:16:21.144 | info     |           Metal | Pinned source memory start address 0x782a4334dbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:21.144 | info     |           Metal | Pinned source memory start address 0x782a4faebbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:21.144 | info     |           Metal | Pinned source memory start address 0x782a3ae39bb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:21.144 | info     |           Metal | Pinned source memory start address 0x782a36bafbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:21.144 | info     |           Metal | Pinned source memory start address 0x782a4b861bb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:21.144 | info     |           Metal | Pinned source memory start address 0x782a4faebbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:21.144 | info     |           Metal | Pinned source memory start address 0x782a4334dbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:21.144 | info     |           Metal | Pinned source memory start address 0x782a3ae39bb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:21.144 | info     |           Metal | Pinned source memory start address 0x782a3f0c3bb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:21.144 | info     |           Metal | Pinned source memory start address 0x782a36bafbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:21.144 | info     |           Metal | Pinned source memory start address 0x782a475d7bb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:21.144 | info     |           Metal | Pinned source memory start address 0x782a53d75bb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:21.144 | info     |           Metal | Pinned source memory start address 0x782a4b861bb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:21.144 | info     |           Metal | Pinned source memory start address 0x782a36bafbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:21.144 | info     |           Metal | Pinned source memory start address 0x782a4334dbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:21.144 | info     |           Metal | Pinned source memory start address 0x782a4b861bb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:21.144 | info     |           Metal | Pinned source memory start address 0x782a475d7bb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:21.144 | info     |           Metal | Pinned source memory start address 0x782a53d75bb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:21.144 | info     |           Metal | Pinned source memory start address 0x782a3f0c3bb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:21.144 | info     |           Metal | Pinned source memory start address 0x782a3ae39bb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:21.144 | info     |           Metal | Pinned source memory start address 0x782a53d75bb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:21.144 | info     |           Metal | Pinned source memory start address 0x782a4faebbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:21.144 | info     |           Metal | Pinned source memory start address 0x782a475d7bb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:21.144 | info     |           Metal | Pinned source memory start address 0x782a4faebbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:21.144 | info     |           Metal | Pinned source memory start address 0x782a53d75bb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:21.144 | info     |           Metal | Pinned source memory start address 0x782a3ae39bb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:21.144 | info     |           Metal | Pinned source memory start address 0x782a3f0c3bb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:21.144 | info     |           Metal | Pinned source memory start address 0x782a3f0c3bb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:21.144 | info     |           Metal | Pinned source memory start address 0x782a475d7bb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:21.144 | info     |           Metal | Pinned source memory start address 0x782a36bafbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:21.144 | info     |           Metal | Pinned source memory start address 0x782a4334dbb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:21.144 | info     |           Metal | Pinned source memory start address 0x782a4b861bb8 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-04 15:16:21.247 | DEBUG    | core:as_tensor:719 - Loaded cache for /tmp/pytest-of-mstojkovic/pytest-33/test_cache_only_rebuild_is_bit0/tensor_cache_bfp8_4x8/lm_head/weight_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 4096, 16032])
+2026-09-04 15:16:21.247 | INFO     | models.demos.llama31_8b_d_p.tt.model:__init__:166 - Llama model built: 1 layers, mesh (4, 8), tp=8, sp=4, lm_head=True
+FAILED2026-09-04 15:18:30.233 | INFO     | conftest:pytest_runtest_teardown:1227 - In custom teardown, open device ids: {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31}
+
+
+=================================== FAILURES ===================================
+_ test_cache_only_rebuild_is_bit_identical_at_tp8[blackhole-mesh_device0-device_params0] _
+
+mesh_device = MeshDevice(4x8 grid, 32 devices)
+tmp_path = PosixPath('/tmp/pytest-of-mstojkovic/pytest-33/test_cache_only_rebuild_is_bit0')
+
+    @requires_hf_reference
+    @requires_galaxy
+    @requires_ring_fabric
+    @pytest.mark.parametrize("device_params", [galaxy_device_params()], indirect=True)
+    @pytest.mark.parametrize("mesh_device", [GALAXY_MESH_SHAPE], indirect=True)
+    def test_cache_only_rebuild_is_bit_identical_at_tp8(mesh_device, tmp_path):
+        """Every one of the 32 device shards must be SHA-256-identical after a cache-only rebuild."""
+        hf = llama_config_dims()
+        args = ModelArgs(mesh_device, hf_config=hf)
+        cache_path = args.weight_cache_path(WEIGHT_DTYPE, cache_root=tmp_path)
+        assert cache_path.name.endswith(f"_{GALAXY_MESH_SHAPE[0]}x{GALAXY_MESH_SHAPE[1]}"), (
+            f"the mesh shape must be in the cache path so a (1,1) cache cannot be reused at TP=8; got "
+            f"{cache_path.name}"
+        )
+        logger.info(f"[G-WEIGHTS] TP=8 cache path: {cache_path.name}")
+
+        def _all_device_hashes(model):
+            out = {}
+            for key, tensor in _model_tensors(model).items():
+                shards = ttnn.get_device_tensors(tensor)
+                out[key] = [_sha256(ttnn.to_torch(s).float()) for s in shards]
+            return out
+
+        ccl = CCLManager(mesh_device, num_links=get_default_num_links(mesh_device), topology=prefill_topology())
+        first = _build_model(mesh_device, hf, _load_subset(), cache_path=cache_path, ccl_manager=ccl)
+        first_hashes = _all_device_hashes(first)
+        del first
+
+        cached = _build_model(mesh_device, hf, {}, cache_path=cache_path, ccl_manager=ccl)
+>       second_hashes = _all_device_hashes(cached)
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+models/demos/llama31_8b_d_p/tests/unit/test_weight_loading.py:488:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+models/demos/llama31_8b_d_p/tests/unit/test_weight_loading.py:479: in _all_device_hashes
+    out[key] = [_sha256(ttnn.to_torch(s).float()) for s in shards]
+                        ^^^^^^^^^^^^^^^^
+ttnn/ttnn/decorators.py:728: in __call__
+    result = self.function(*function_args, **function_kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ttnn/ttnn/operations/core.py:441: in to_torch
+    tensor = tensor.to_torch(mesh_composer=mesh_composer)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+ext_tensor = <nanobind.nb_ndarray object at 0x782c357a3cb0>
+
+>   def from_dlpack(
+
+        ext_tensor: Any,
+        *,
+        device: _Device | None = None,
+        copy: bool | None = None
+    ) -> 'torch.Tensor':
+E   Failed: Timeout (>300.0s) from pytest-timeout.
+
+python_env/lib/python3.12/site-packages/torch/utils/dlpack.py:58: Failed
+=============================== warnings summary ===============================
+python_env/lib/python3.12/site-packages/pydantic/_internal/_config.py:291
+  /home/mstojkovic/tt-metal/python_env/lib/python3.12/site-packages/pydantic/_internal/_config.py:291: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.9/migration/
+    warnings.warn(DEPRECATION_MESSAGE, DeprecationWarning)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+- generated xml file: /home/mstojkovic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+297.66s call     models/demos/llama31_8b_d_p/tests/unit/test_weight_loading.py::test_cache_only_rebuild_is_bit_identical_at_tp8[blackhole-mesh_device0-device_params0]
+2.35s setup    models/demos/llama31_8b_d_p/tests/unit/test_weight_loading.py::test_cache_only_rebuild_is_bit_identical_at_tp8[blackhole-mesh_device0-device_params0]
+0.19s teardown models/demos/llama31_8b_d_p/tests/unit/test_weight_loading.py::test_cache_only_rebuild_is_bit_identical_at_tp8[blackhole-mesh_device0-device_params0]
+=========================== short test summary info ============================
+FAILED models/demos/llama31_8b_d_p/tests/unit/test_weight_loading.py::test_cache_only_rebuild_is_bit_identical_at_tp8[blackhole-mesh_device0-device_params0]
+=========== 1 failed, 11 deselected, 1 warning in 301.72s (0:05:01) ============
+2026-09-04 15:18:32.645 | info     |    BuildKernels | JIT cache stats: 140/140 hits (100.0%) [140 cached, 480 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-09-04 15:18:32.645 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-09-04 15:18:32.864 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:550)
+2026-09-04 15:18:32.864 | info     |             UMD | Closing devices in cluster (cluster.cpp:1218)
+2026-09-04 15:18:40.825 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1227)
+2026-09-04 15:18:40.826 | info     |             UMD | Cluster destructor started. (cluster.cpp:933)
+2026-09-04 15:18:40.826 | info     |             UMD | Cluster destructor completed. (cluster.cpp:936)

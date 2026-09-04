@@ -27,11 +27,27 @@ reference exists to get right.
   `is_causal` SDPA cannot see (its mask assumes Q row 0 aligns with K row 0, so it is off by
   `cached_len` and **silently wrong**). `models/demos/gpt_oss_d_p/tt/attention/prefill.py:257-270`
   raises for exactly this reason; P8's ring path (`dense_sp.py`) is what makes it legal.
+
+**P8 added the attention-core selection**, and it is a three-way choice rather than a switch, so
+`select_attention_core` names it in one place and both this function and `G-CHUNK-ATTN` /
+`G-MESH-KV` read the name from there (`DEC-075`). Appendix B's last row — "everything passes but
+the numbers look too good | you measured the SP bootstrap because `max_seq_len == chunk_size`" — is
+a mis-selection between two of these three, so which one ran is **logged on every call** and
+asserted by the gates rather than inferred:
+
+| core | when | what runs |
+|---|---|---|
+| `dense` | `sp == 1` or `sequence_parallel=False`, and `cached_len == 0` | plain causal SDPA on one chip's whole sequence — every P5-P7 gate |
+| `sp_bootstrap` | SP > 1, `cached_len == 0` **and** `max_seq_len == chunk_global` | all-gather Q/K/V on the SP axis, dense SDPA, reduce-scatter (`dense_sp.py::sp_bootstrap_attention`) |
+| `sp_ring` | SP > 1 and (`cached_len > 0` **or** `max_seq_len > chunk_global`) | ring-joint SDPA reading the prefix out of the block-cyclic cache — **delta 3** |
 """
+
+from loguru import logger
 
 import ttnn
 
 from .config import AttentionConfig, ProgramConfig
+from .dense_sp import dense_sp_attention, sp_bootstrap_attention, sp_ring_compute_kernel_config, sp_ring_program_config
 from .kv_cache import LlamaKVCache, write_kv_chunk
 from .operations import (
     apply_allreduce,
@@ -66,6 +82,26 @@ def run_sdpa(tt_q, tt_k, tt_v, config: AttentionConfig, program_config: ProgramC
         program_config=program_config.get_prefill_sdpa_config(mesh_device, seq_len),
         compute_kernel_config=program_config.get_compute_kernel_config(mesh_device),
     )
+
+
+def select_attention_core(config: AttentionConfig, mesh_config, kv_cache, *, seq_len, cached_len) -> str:
+    """`"dense"` | `"sp_bootstrap"` | `"sp_ring"` — the ONE place the core is chosen (`DEC-075`).
+
+    A function rather than an `if` chain inside `attention_forward`, because the gates have to
+    assert *which* core ran and Appendix B's final row is a mis-selection between two of the three.
+    `seq_len` is the **per-device** sequence length, so `chunk_global = seq_len * sp`.
+
+    The `max_seq_len > chunk_global` condition is not a heuristic: the ring op enters chunked mode
+    only when Q's per-device length is strictly less than K's
+    (`ttnn.transformer.ring_joint_scaled_dot_product_attention` docstring), and a request whose one
+    chunk fills the whole cache makes them equal. Mirrors
+    `models/demos/gpt_oss_d_p/tt/attention/prefill.py:191`.
+    """
+    if not (config.sequence_parallel and mesh_config.sp > 1):
+        return "dense"
+    if cached_len > 0 or (kv_cache is not None and kv_cache.max_seq_len > seq_len * mesh_config.sp):
+        return "sp_ring"
+    return "sp_bootstrap"
 
 
 def attention_forward(
@@ -116,13 +152,20 @@ def attention_forward(
 
     if seq_len <= 1:
         raise ValueError(f"Prefill requires seq_len > 1, got {seq_len}. Decode is out of scope for this iteration.")
-    if cached_len > 0:
+
+    core = select_attention_core(config, mesh_config, kv_cache, seq_len=seq_len, cached_len=cached_len)
+    if core == "dense" and cached_len > 0:
         # Fail loud rather than run a mask that is off by `cached_len`. See the module docstring.
         raise NotImplementedError(
             f"cached_len={cached_len} needs a chunk-position-aware SDPA: plain is_causal SDPA "
             f"assumes Q row 0 aligns with K row 0, so a cache-backed chunk would be silently "
-            f"wrong. The ring-joint path over the block-cyclic cache (tt/attention/dense_sp.py) is "
-            f"P8's, gated by G-CHUNK-ATTN; KV-cache storage and writes are already gated by G-KV."
+            f"wrong. The ring-joint path over the block-cyclic cache (tt/attention/dense_sp.py) "
+            f"needs sequence_parallel=True on a mesh with sp > 1, and is gated by G-CHUNK-ATTN."
+        )
+    if core != "dense" and kv_cache is None:
+        raise ValueError(
+            f"the {core} attention core reads the prefix out of the KV cache, so it needs one; "
+            f"kv_cache=None is the unit-test path and only the dense core supports it"
         )
 
     q, k, v = apply_qkv_projection(hidden_states, weights, compute_kernel_config)
@@ -176,7 +219,51 @@ def attention_forward(
             sp_axis=mesh_config.sp_axis,
         )
 
-    tt_sdpa_out = run_sdpa(tt_q, tt_k, tt_v, config, program_config, mesh_device, seq_len)
+    # --- the attention core ------------------------------------------------------------------
+    logger.debug(
+        f"[attention L{layer_idx}] core={core} seq_local={seq_len} sp={mesh_config.sp} "
+        f"cached_len={cached_len} cache_global={kv_cache.max_seq_len if kv_cache else None}"
+    )
+    if core == "dense":
+        tt_sdpa_out = run_sdpa(tt_q, tt_k, tt_v, config, program_config, mesh_device, seq_len)
+    elif core == "sp_bootstrap":
+        tt_sdpa_out = sp_bootstrap_attention(
+            tt_q,
+            tt_k,
+            tt_v,
+            mesh_config=mesh_config,
+            ccl_manager=ccl_manager,
+            run_sdpa=lambda q, k, v, full: run_sdpa(q, k, v, config, program_config, mesh_device, full),
+            sp_axis=mesh_config.sp_axis,
+        )
+    else:
+        # Delta 3: this chunk's local Q attends the whole prefix `[0, cached_len + chunk_global)`,
+        # read back out of the block-cyclic cache. `write_chunk=False` — the per-layer seam above
+        # already wrote this chunk's K/V, so letting the op write again would double-write.
+        tt_sdpa_out = dense_sp_attention(
+            tt_q,
+            kv_cache.k,
+            kv_cache.v,
+            tt_k,
+            tt_v,
+            kv_actual=cached_len,
+            logical_n=cached_len + seq_len * mesh_config.sp,
+            n_kv=config.num_kv_heads,
+            cache_global=kv_cache.max_seq_len,
+            head_dim=config.head_dim,
+            mesh_device=mesh_device,
+            ccl_manager=ccl_manager,
+            program_config=sp_ring_program_config(
+                mesh_device, ccl_core_grid_offset=ccl_manager.ring_attention_ccl_core_grid_offset
+            ),
+            compute_kernel_config=sp_ring_compute_kernel_config(mesh_device),
+            scale=config.scaling,
+            cluster_axis=mesh_config.sp_axis,
+            slot_idx=user_id,
+            layer_idx=layer_idx,
+            num_layers=kv_cache.num_layers,
+            write_chunk=False,
+        )
     tt_q.deallocate(True)
     tt_k.deallocate(True)
     tt_v.deallocate(True)

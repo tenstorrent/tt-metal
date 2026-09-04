@@ -1,0 +1,277 @@
+2026-09-04 14:46:17.463 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mstojkovic/.cache/ttnn,model_cache_path=/home/mstojkovic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-09-04 14:46:18.449 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:224)
+2026-09-04 14:46:18.449 | info     |             UMD | Cluster constructor started. (cluster.cpp:406)
+2026-09-04 14:46:18.467 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-09-04 14:46:18.467 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-09-04 14:46:18.558 | info     |             UMD | Established firmware bundle version: 19.12.0 (topology_discovery.cpp:576)
+2026-09-04 14:46:18.563 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-09-04 14:46:19.997 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31}/[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 30, 31, 16, 17, 18, 19, 20, 21, 22, 23] and remote chip ids {} (cluster.cpp:173)
+2026-09-04 14:46:19.997 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-09-04 14:46:19.997 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-09-04 14:46:19.997 | info     |             UMD | Cluster constructor completed. (cluster.cpp:665)
+2026-09-04 14:46:20.015 | info     |             UMD | Starting devices in cluster (cluster.cpp:1205)
+2026-09-04 14:46:21.022 | warning  |             UMD | AICLK settled at 1343 MHz, within 5% of the requested 1350 MHz but not an exact match. Proceeding. (tt_device.cpp:256)
+2026-09-04 14:46:21.025 | warning  |             UMD | AICLK settled at 1343 MHz, within 5% of the requested 1350 MHz but not an exact match. Proceeding. (tt_device.cpp:256)
+2026-09-04 14:46:21.639 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1213)
+============================= test session starts ==============================
+platform linux -- Python 3.12.14, pytest-9.0.3, pluggy-1.6.0 -- /home/mstojkovic/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mstojkovic/tt-metal
+configfile: pytest.ini
+plugins: timeout-2.4.0, anyio-4.15.0, cov-7.0.0, github-actions-annotate-failures-0.3.0, repeat-0.9.4, dash-2.15.0, benchmark-5.2.3, split-0.11.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 6 items / 1 deselected / 5 selected
+
+models/demos/llama31_8b_d_p/tests/unit/test_kv_cache_tp8.py::test_head_to_mesh_column_is_bit_exact[blackhole-v_with_rope-off0-s128-mesh_device0-device_params0] 2026-09-04 14:46:27.077 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
+2026-09-04 14:46:27.077 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
+2026-09-04 14:46:27.096 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4, 3:16, 4:12} (topology_mapper_utils.cpp:3368)
+2026-09-04 14:46:27.096 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {3:4, 4:20, 5:8} (topology_mapper_utils.cpp:3376)
+2026-09-04 14:46:27.112 | INFO     | models.demos.utils.trace_region_sizes:resolve_trace_region_size_for_candidates:155 - No trace_region_size configured for model candidates ['/home/mstojkovic/models/Llama-3.1-8B-Instruct', 'Llama-3.1-8B-Instruct', 'Llama-3.1-8B'] and SKU='bh_galaxy_perf'; defaulting to dynamic allocation (trace_region_size=0).
+2026-09-04 14:46:27.112 | info     |           Metal | Fabric config changed from FabricConfig::DISABLED to FabricConfig::FABRIC_1D, reinitializing control plane (metal_env.cpp:324)
+2026-09-04 14:46:27.112 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
+2026-09-04 14:46:27.112 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
+2026-09-04 14:46:27.129 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4, 3:16, 4:12} (topology_mapper_utils.cpp:3368)
+2026-09-04 14:46:27.129 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {3:4, 4:20, 5:8} (topology_mapper_utils.cpp:3376)
+2026-09-04 14:46:27.132 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:46:27.132 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:46:27.132 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:46:27.132 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:46:27.730 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:46:27.730 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:46:27.730 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:46:27.730 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:46:27.825 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:308)
+2026-09-04 14:46:28.002 | info     |           Metal | Fabric initialized on 32 devices (fabric_firmware_initializer.cpp:455)
+2026-09-04 14:46:28.002 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D (fabric_firmware_initializer.cpp:325)
+2026-09-04 14:46:29.181 | DEBUG    | conftest:mesh_device:668 - multidevice with 32 devices is created
+2026-09-04 14:46:29.263 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 8), tp=8) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 14:46:33.150 | DEBUG    | models.demos.llama31_8b_d_p.tt.attention.prefill:attention_forward:228 - [attention L0] core=dense seq_local=128 sp=1 cached_len=0 cache_global=512
+2026-09-04 14:46:35.881 | INFO     | llama31_8b_d_p.tests.unit.test_kv_cache_tp8:test_head_to_mesh_column_is_bit_exact:264 - [G-KV-TP8] arm A v_with_rope: head->column at kv_actual=0, s=128, TP=8, topology=Topology.Ring: 8/8 columns bit-identical (torch.equal, rtol=atol=0)
+2026-09-04 14:46:35.882 | INFO     | llama31_8b_d_p.tests.unit.test_kv_cache_tp8:test_head_to_mesh_column_is_bit_exact:272 - [G-KV-TP8] arm A v_with_rope: pad tail rows [128, 512) on column 0: max|x| = 0.0
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_kv_cache_tp8.py::test_rotated_column_control_passes_pcc_and_fails_bit_equality[blackhole-mesh_device0-device_params0] 2026-09-04 14:46:36.299 | INFO     | models.demos.utils.trace_region_sizes:resolve_trace_region_size_for_candidates:155 - No trace_region_size configured for model candidates ['/home/mstojkovic/models/Llama-3.1-8B-Instruct', 'Llama-3.1-8B-Instruct', 'Llama-3.1-8B'] and SKU='bh_galaxy_perf'; defaulting to dynamic allocation (trace_region_size=0).
+2026-09-04 14:46:36.299 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D to FabricConfig::FABRIC_1D, reinitializing control plane (metal_env.cpp:324)
+2026-09-04 14:46:36.299 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
+2026-09-04 14:46:36.299 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
+2026-09-04 14:46:36.317 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4, 3:16, 4:12} (topology_mapper_utils.cpp:3368)
+2026-09-04 14:46:36.317 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {3:4, 4:20, 5:8} (topology_mapper_utils.cpp:3376)
+2026-09-04 14:46:36.320 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:46:36.320 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:46:36.320 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:46:36.320 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:46:37.124 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:46:37.124 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:46:37.124 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:46:37.124 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:46:37.146 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:308)
+2026-09-04 14:46:37.289 | info     |           Metal | Fabric initialized on 32 devices (fabric_firmware_initializer.cpp:455)
+2026-09-04 14:46:37.289 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D (fabric_firmware_initializer.cpp:325)
+2026-09-04 14:46:37.818 | DEBUG    | conftest:mesh_device:668 - multidevice with 32 devices is created
+2026-09-04 14:46:37.833 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 8), tp=8) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+2026-09-04 14:46:38.272 | DEBUG    | models.demos.llama31_8b_d_p.tt.attention.prefill:attention_forward:228 - [attention L0] core=dense seq_local=128 sp=1 cached_len=0 cache_global=512
+2026-09-04 14:46:38.290 | INFO     | llama31_8b_d_p.tests.unit.test_kv_cache_tp8:test_rotated_column_control_passes_pcc_and_fails_bit_equality:347 - [G-KV-TP8] control (read column (c+1)%8 as head c): PCC = 0.99887, torch.equal = False, max|delta| = 7.00000. Recipe section 2.5 measured 0.99890 for this control; PCC is not a layout gate.
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_kv_cache_tp8.py::test_head_to_mesh_column_is_bit_exact[blackhole-v_with_rope-off128-s128-mesh_device0-device_params0] 2026-09-04 14:46:38.706 | INFO     | models.demos.utils.trace_region_sizes:resolve_trace_region_size_for_candidates:155 - No trace_region_size configured for model candidates ['/home/mstojkovic/models/Llama-3.1-8B-Instruct', 'Llama-3.1-8B-Instruct', 'Llama-3.1-8B'] and SKU='bh_galaxy_perf'; defaulting to dynamic allocation (trace_region_size=0).
+2026-09-04 14:46:38.706 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D to FabricConfig::FABRIC_1D, reinitializing control plane (metal_env.cpp:324)
+2026-09-04 14:46:38.706 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
+2026-09-04 14:46:38.706 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
+2026-09-04 14:46:38.724 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4, 3:16, 4:12} (topology_mapper_utils.cpp:3368)
+2026-09-04 14:46:38.724 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {3:4, 4:20, 5:8} (topology_mapper_utils.cpp:3376)
+2026-09-04 14:46:38.728 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:46:38.728 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:46:38.728 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:46:38.728 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:46:39.541 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:46:39.541 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:46:39.541 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:46:39.541 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-04 14:46:39.562 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:308)
+2026-09-04 14:46:39.703 | info     |           Metal | Fabric initialized on 32 devices (fabric_firmware_initializer.cpp:455)
+2026-09-04 14:46:39.703 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D (fabric_firmware_initializer.cpp:325)
+2026-09-04 14:46:40.233 | DEBUG    | conftest:mesh_device:668 - multidevice with 32 devices is created
+2026-09-04 14:46:40.248 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:126 - MeshConfig(mesh_shape=(1, 8), tp=8) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B deployment target.
+FAILED2026-09-04 14:46:40.913 | INFO     | conftest:pytest_runtest_teardown:1227 - In custom teardown, open device ids: {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31}
+
+
+=================================== FAILURES ===================================
+_ test_head_to_mesh_column_is_bit_exact[blackhole-v_with_rope-off128-s128-mesh_device0-device_params0] _
+
+submesh_pool = <models.demos.llama31_8b_d_p.tests.test_factory.SubmeshPool object at 0x7d6cdf805b50>
+seq_len = 128, kv_actual = 128, probe = 'v_with_rope', reset_seeds = None
+
+    @requires_galaxy
+    @requires_ring_fabric
+    @torch.no_grad()
+    @pytest.mark.parametrize("device_params", [galaxy_device_params()], indirect=True)
+    @pytest.mark.parametrize("mesh_device", [GALAXY_MESH_SHAPE], indirect=True)
+    @pytest.mark.parametrize("seq_len", [128], ids=lambda s: f"s{s}")
+    @pytest.mark.parametrize("kv_actual", [0, 128], ids=lambda k: f"off{k}")
+    @pytest.mark.parametrize("probe", ["v_with_rope", "k_without_rope"])
+    def test_head_to_mesh_column_is_bit_exact(submesh_pool, seq_len, kv_actual, probe, reset_seeds):
+        """**Arm A.** Global KV head `c` must land on mesh column `c`, `rtol = atol = 0`.
+
+        Driven through the real `Attention.__call__` — projection, GQA head split, optional RoPE,
+        `write_kv_chunk` — at TP=8 on a `(1, 8)` submesh, so what is proved is the **model -> cache**
+        path and not a re-implementation of it.
+
+        * **Input distribution:** a synthetic labelled probe (see the module docstring), *not* a random
+          one. A random input cannot make an address claim exact, and §2.5 requires this claim to be
+          exact. Every payload is `< 128`, `bfloat8_b`'s measured exact-integer ceiling (`R-013`).
+        * **Reference dtype policy:** none needed — the expected tensor is constructed on the host from
+          integers that `bfloat16` (the activation dtype) and `bfloat8_b` (the cache dtype) both hold
+          exactly, so the comparison is bit-equality rather than a floor.
+        * **Noise floor:** not applicable to a bit-exact claim; the floor is 1.0 by construction and
+          the assertion is `torch.equal`.
+        * **Negative control:** `test_rotated_column_control_passes_pcc_and_fails_bit_equality`.
+        """
+        hf = llama_config_dims()
+        head_dim, n_kv = derive_head_dim(hf), hf["num_key_value_heads"]
+        uniform = probe.startswith("k")
+        with_rope = probe.endswith("with_rope")
+        max_seq_len = 512
+
+        with submesh_pool.use(TP_MESH_SHAPE) as sub:
+            assert tuple(sub.shape) == TP_MESH_SHAPE
+            mesh_config = MeshConfig(TP_MESH_SHAPE, tp=TP_MESH_SHAPE[1])
+            assert mesh_config.tp == n_kv, (
+                f"TP({mesh_config.tp}) must equal num_key_value_heads({n_kv}); the packed cache holds "
+                f"exactly one KV head per chip (00_MODEL_CARD.md section 4.1)"
+            )
+            ccl = CCLManager(sub, num_links=get_default_num_links(sub), topology=prefill_topology())
+            weight = _labelled_projection_weight(hf, head_dim, uniform=uniform)
+            # Both projections carry the SAME labelled weight, so whichever the probe reads back is the
+            # one under test and the other cannot mask a failure.
+            attn = _build_probe_attention(
+                sub,
+                hf,
+                {"k": weight, "v": weight},
+                seq_len=seq_len,
+                max_seq_len=max_seq_len,
+                with_rope=with_rope,
+                mesh_config=mesh_config,
+                ccl_manager=ccl,
+            )
+            kv_cache = allocate_kv_cache(
+                sub, num_layers=1, max_seq_len=max_seq_len, num_users=1, head_dim=head_dim, cache_dtype=CACHE_DTYPE
+            )
+
+            x = ttnn.from_torch(
+                _labelled_input(hf, seq_len, start_pos=kv_actual),
+                device=sub,
+                dtype=ACTIVATION_DTYPE,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(sub),
+            )
+>           out = attn(x, build_prefill_rope(sub, hf, seq_len, start_pos=0), kv_cache=kv_cache, cached_len=kv_actual)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+models/demos/llama31_8b_d_p/tests/unit/test_kv_cache_tp8.py:250:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+models/demos/llama31_8b_d_p/tt/attention/__init__.py:111: in __call__
+    return attention_forward(
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+hidden_states = device_id: 0, MeshCoordinate([0, 0])
+ttnn.Tensor([[[[ 0.0000,  1.0000,  ...,  0.0000,  0.0000],
+               [ 1.000...00,  1.0000,  ...,  0.0000,  0.0000]]]], shape=Shape([1, 1, 128, 4096]), dtype=DataType::BFLOAT16, layout=Layout::TILE)
+rope_mats = [device_id: 0, MeshCoordinate([0, 0])
+ttnn.Tensor([[[[ 1.0000,  1.0000,  ...,  1.0000,  1.0000],
+               [ 0.53...-01,  ...,  3.8862e-05,  3.8862e-05]]]], shape=Shape([1, 1, 128, 128]), dtype=DataType::BFLOAT16, layout=Layout::TILE)]
+
+    def attention_forward(
+        hidden_states,
+        rope_mats,
+        *,
+        weights: AttentionWeights,
+        kv_cache,
+        config: AttentionConfig,
+        mesh_config,
+        mesh_device,
+        program_config: ProgramConfig,
+        transformation_mat,
+        ccl_manager,
+        user_id=0,
+        batch_size=1,
+        layer_idx=0,
+        cached_len=0,
+        indexed_rope=False,
+    ):
+        """Prefill attention forward. `[1, 1, B*S, 4096]` in, `[1, 1, B*S, 4096]` out.
+
+        Args:
+            hidden_states: post-norm input, `[1, 1, B*S, hidden]` bf16 TILE.
+            rope_mats: `[cos, sin]`. Per-chunk contiguous tables from
+                `tt/rope.py::build_prefill_rope`, or — when `indexed_rope` — the whole-cache
+                block-cyclic SP-sharded tables from `build_indexed_rope`.
+            weights: `AttentionWeights` (Q/K already Meta-swizzled by the loader).
+            kv_cache: `LlamaKVCache` or `None`. `None` is the unit-test / no-cache path.
+            config: `AttentionConfig`.
+            mesh_config: the model's `MeshConfig` — supplies TP, the axis, and `shard_size`.
+            mesh_device: the open mesh.
+            program_config: `ProgramConfig` (pinned SDPA grid + the compute-kernel config).
+            transformation_mat: the `[1,1,32,32]` Meta RoPE transformation matrix, or `None` to skip
+                RoPE entirely (used by `G-ATTN`'s "only Q and K are rotated" invariant check).
+            ccl_manager: the model's `CCLManager`; only read when `tp > 1`.
+            user_id: KV-cache slot for this user's write.
+            batch_size: users packed on the sequence dim.
+            layer_idx: this layer's index, for the per-layer cache write.
+            cached_len: valid prefix already in the cache before this chunk. Non-zero is refused on
+                this dense path — see the module docstring.
+            indexed_rope: use the on-device indexed RoPE (P7).
+        """
+        total_seq_len = hidden_states.shape[-2]
+        seq_len = total_seq_len // batch_size
+        activation_dtype = ttnn.bfloat8_b if seq_len > _BF8_ACTIVATION_SEQ_LEN else ttnn.bfloat16
+        compute_kernel_config = program_config.get_compute_kernel_config(mesh_device)
+
+        if seq_len <= 1:
+            raise ValueError(f"Prefill requires seq_len > 1, got {seq_len}. Decode is out of scope for this iteration.")
+
+        core = select_attention_core(config, mesh_config, kv_cache, seq_len=seq_len, cached_len=cached_len)
+        if core == "dense" and cached_len > 0:
+            # Fail loud rather than run a mask that is off by `cached_len`. See the module docstring.
+>           raise NotImplementedError(
+                f"cached_len={cached_len} needs a chunk-position-aware SDPA: plain is_causal SDPA "
+                f"assumes Q row 0 aligns with K row 0, so a cache-backed chunk would be silently "
+                f"wrong. The ring-joint path over the block-cyclic cache (tt/attention/dense_sp.py) "
+                f"needs sequence_parallel=True on a mesh with sp > 1, and is gated by G-CHUNK-ATTN."
+            )
+E           NotImplementedError: cached_len=128 needs a chunk-position-aware SDPA: plain is_causal SDPA assumes Q row 0 aligns with K row 0, so a cache-backed chunk would be silently wrong. The ring-joint path over the block-cyclic cache (tt/attention/dense_sp.py) needs sequence_parallel=True on a mesh with sp > 1, and is gated by G-CHUNK-ATTN.
+
+models/demos/llama31_8b_d_p/tt/attention/prefill.py:164: NotImplementedError
+=============================== warnings summary ===============================
+python_env/lib/python3.12/site-packages/pydantic/_internal/_config.py:291
+  /home/mstojkovic/tt-metal/python_env/lib/python3.12/site-packages/pydantic/_internal/_config.py:291: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.9/migration/
+    warnings.warn(DEPRECATION_MESSAGE, DeprecationWarning)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /home/mstojkovic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+6.70s call     models/demos/llama31_8b_d_p/tests/unit/test_kv_cache_tp8.py::test_head_to_mesh_column_is_bit_exact[blackhole-v_with_rope-off0-s128-mesh_device0-device_params0]
+2.30s setup    models/demos/llama31_8b_d_p/tests/unit/test_kv_cache_tp8.py::test_head_to_mesh_column_is_bit_exact[blackhole-v_with_rope-off0-s128-mesh_device0-device_params0]
+1.75s setup    models/demos/llama31_8b_d_p/tests/unit/test_kv_cache_tp8.py::test_head_to_mesh_column_is_bit_exact[blackhole-v_with_rope-off128-s128-mesh_device0-device_params0]
+1.74s setup    models/demos/llama31_8b_d_p/tests/unit/test_kv_cache_tp8.py::test_rotated_column_control_passes_pcc_and_fails_bit_equality[blackhole-mesh_device0-device_params0]
+0.47s call     models/demos/llama31_8b_d_p/tests/unit/test_kv_cache_tp8.py::test_rotated_column_control_passes_pcc_and_fails_bit_equality[blackhole-mesh_device0-device_params0]
+0.41s call     models/demos/llama31_8b_d_p/tests/unit/test_kv_cache_tp8.py::test_head_to_mesh_column_is_bit_exact[blackhole-v_with_rope-off128-s128-mesh_device0-device_params0]
+0.19s teardown models/demos/llama31_8b_d_p/tests/unit/test_kv_cache_tp8.py::test_head_to_mesh_column_is_bit_exact[blackhole-v_with_rope-off128-s128-mesh_device0-device_params0]
+0.19s teardown models/demos/llama31_8b_d_p/tests/unit/test_kv_cache_tp8.py::test_rotated_column_control_passes_pcc_and_fails_bit_equality[blackhole-mesh_device0-device_params0]
+0.19s teardown models/demos/llama31_8b_d_p/tests/unit/test_kv_cache_tp8.py::test_head_to_mesh_column_is_bit_exact[blackhole-v_with_rope-off0-s128-mesh_device0-device_params0]
+=========================== short test summary info ============================
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_kv_cache_tp8.py::test_head_to_mesh_column_is_bit_exact[blackhole-v_with_rope-off0-s128-mesh_device0-device_params0]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_kv_cache_tp8.py::test_rotated_column_control_passes_pcc_and_fails_bit_equality[blackhole-mesh_device0-device_params0]
+FAILED models/demos/llama31_8b_d_p/tests/unit/test_kv_cache_tp8.py::test_head_to_mesh_column_is_bit_exact[blackhole-v_with_rope-off128-s128-mesh_device0-device_params0]
+!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!
+============ 1 failed, 2 passed, 1 deselected, 1 warning in 15.43s =============
+2026-09-04 14:46:42.707 | info     |    BuildKernels | JIT cache stats: 220/251 hits (87.6%) [220 cached, 1897 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-09-04 14:46:42.707 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-09-04 14:46:42.926 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:550)
+2026-09-04 14:46:42.926 | info     |             UMD | Closing devices in cluster (cluster.cpp:1218)
+2026-09-04 14:46:50.708 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1227)
+2026-09-04 14:46:50.708 | info     |             UMD | Cluster destructor started. (cluster.cpp:933)
+2026-09-04 14:46:50.708 | info     |             UMD | Cluster destructor completed. (cluster.cpp:936)
