@@ -239,6 +239,46 @@ class SpeculativeDecoder:
             pt, device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32, mesh_mapper=self._mapper
         )
 
+    def _page_tables_per_layer(self, batch, user_idx=0):
+        """Per-layer page tables replicated to ``batch`` verify rows (bounded KV).
+
+        Under bounded sliding the target runs HYBRID per-layer page tables:
+        sliding layers address a small bounded ring, full layers the full pool.
+        The model stashes the batch-1 set in ``_active_page_tables_per_layer``,
+        but the speculative verify puts its K+1 candidates in the BATCH dim, so
+        each layer's table needs that user's row replicated across the
+        candidates -- the same batch-alias trick ``_page_table`` uses for the
+        flat table. Without this the per-candidate KV write slices a row the
+        table does not have.
+
+        Returns ``None`` when the target is not running per-layer tables, which
+        keeps the unbounded path byte-identical.
+        """
+        installed = getattr(self.target, "_active_page_tables_per_layer", None)
+        if not installed:
+            return None
+        cache = getattr(self, "_pt_layer_cache", None)
+        if cache is None:
+            cache = {}
+            self._pt_layer_cache = cache
+        key = (batch, user_idx, id(installed))
+        hit = cache.get(key)
+        if hit is not None:
+            return hit
+        out = []
+        for pt in installed:
+            if pt is None:
+                out.append(None)
+                continue
+            t = pt if hasattr(pt, "dim") else None
+            if t is None:  # already a device tensor: leave it to the model
+                out.append(pt)
+                continue
+            row = t[user_idx : user_idx + 1] if t.dim() > 1 else t.unsqueeze(0)
+            out.append(row.repeat(batch, 1).to(torch.int32))
+        cache[key] = out
+        return out
+
     def _page_table_users(self, B):
         # Distinct per-user page-table rows [B, blocks] for a true B-user batched
         # forward (each user attends to its OWN physical KV blocks). Requires
@@ -293,7 +333,12 @@ class SpeculativeDecoder:
         # Compile run (warm program cache before capture).
         _lg.info(f"[spec-trace] capture verify batch={batch}: compile run")
         logits, hidden = self.target.ttnn_verify_forward(
-            x=x_dev, current_pos=pu_dev, current_pos_cache=pi_dev, page_table=pt_dev, kv_cache=self.tt_kv_cache
+            x=x_dev,
+            current_pos=pu_dev,
+            current_pos_cache=pi_dev,
+            page_table=pt_dev,
+            kv_cache=self.tt_kv_cache,
+            page_tables_per_layer=self._page_tables_per_layer(batch),
         )
         ttnn.synchronize_device(self.mesh_device)
         logits.deallocate(True)
@@ -592,7 +637,12 @@ class SpeculativeDecoder:
         pos_u, pos_i = self._pos_tensors(positions)
         pt = self._page_table(len(tokens))
         logits, hidden = self.target.ttnn_verify_forward(
-            x=x, current_pos=pos_u, current_pos_cache=pos_i, page_table=pt, kv_cache=self.tt_kv_cache
+            x=x,
+            current_pos=pos_u,
+            current_pos_cache=pos_i,
+            page_table=pt,
+            kv_cache=self.tt_kv_cache,
+            page_tables_per_layer=self._page_tables_per_layer(len(tokens)),
         )
         lh = self._logits_to_host(logits).reshape(len(tokens), -1)
         logits.deallocate(True)
@@ -831,7 +881,12 @@ class SpeculativeDecoder:
         v_pu, v_pi = self._pos_tensors(v_pos)
         v_pt = self._page_table(K + 1)
         vlogits, vhidden = self.target.ttnn_verify_forward(
-            x=verify_x, current_pos=v_pu, current_pos_cache=v_pi, page_table=v_pt, kv_cache=self.tt_kv_cache
+            x=verify_x,
+            current_pos=v_pu,
+            current_pos_cache=v_pi,
+            page_table=v_pt,
+            kv_cache=self.tt_kv_cache,
+            page_tables_per_layer=self._page_tables_per_layer(K + 1),
         )
         vidx = self._argmax_last(vlogits, rows=K + 1)  # [1,1,K+1] uint32 RM (fast multicore argmax)
 
@@ -1169,7 +1224,11 @@ class SpeculativeDecoder:
         pu, pi = self._pos_tensors(positions)  # pu [1,32] (B filled), pi [B]
         pt = self._page_table_users(len(tokens))  # [B, blocks] distinct
         logits, hidden = self.target.ttnn_verify_forward(
-            x=x, current_pos=pu, current_pos_cache=pi, page_table=pt, kv_cache=self.tt_kv_cache
+            x=x,
+            current_pos=pu,
+            current_pos_cache=pi,
+            page_table=pt,
+            kv_cache=self.tt_kv_cache,
         )
         logits.deallocate(True)
         for t in (x, pu, pi, pt):

@@ -206,6 +206,20 @@ def create_assistant_model(
     # It requires the ring sizes to agree; the assistant's own sliding_window
     # matches its target's (1024 on both 12B and 31B), so verify that here
     # rather than assuming it.
+    if (
+        getattr(target_model, "bounded_sliding_kv_cache", False)
+        and os.environ.get("GEMMA4_SPEC_ALLOW_BOUNDED", "0") != "1"
+    ):
+        raise NotImplementedError(
+            "Speculative decoding on a BOUNDED sliding KV cache is not coherent yet. "
+            "The verify writes all K+1 candidates' KV up front and relies on rejected "
+            "positions being harmlessly overwritten later; in a bounded ring, position p "
+            "maps to slot p % window, so rejected speculative writes clobber slots that "
+            "still hold LIVE context (measured at 256k: degenerate output, acceptance "
+            "0.73/5 vs 3.27/5 at 4k). Needs accepted-only / deferred verify KV writes "
+            "(or scratch-slot save+restore) first. Set GEMMA4_SPEC_ALLOW_BOUNDED=1 to "
+            "run it anyway for development."
+        )
     if getattr(target_model, "bounded_sliding_kv_cache", False):
         _tgt_win = getattr(target_model, "sliding_window", None) or getattr(
             getattr(target_model, "hf_config", None), "sliding_window", None
