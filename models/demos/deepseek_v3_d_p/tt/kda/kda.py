@@ -160,6 +160,9 @@ class ttKDA:
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+        # Prototype-only cache: validity is host-fixed for a captured trace, while
+        # the cached tensor keeps every replay device-resident.
+        self._tail_masks: dict[tuple[int, int], ttnn.Tensor] = {}
 
     @property
     def _convolution_width(self) -> int:
@@ -190,6 +193,7 @@ class ttKDA:
         self,
         hidden_states: ttnn.Tensor,
         state: KdaState,
+        length: int,
     ) -> None:
         """Validate shape/type plus the documented SP state-distribution contract."""
         if len(hidden_states.shape) != 3 or hidden_states.shape[-1] != self.config.hidden_size:
@@ -204,6 +208,12 @@ class ttKDA:
             raise ValueError(
                 f"KDA prefill requires local T to be positive and divisible by {KDA_CHUNK_SIZE}, got T={sequence}"
             )
+        if not 0 < length <= sequence:
+            raise ValueError(f"KDA length must satisfy 0 < length <= T={sequence}, got {length}")
+        if length % KDA_CHUNK_SIZE != 0:
+            raise ValueError(f"KDA length must be divisible by {KDA_CHUNK_SIZE}, got {length}")
+        if length < sequence and self.sequence_parallel_size > 1:
+            raise ValueError("tail-padding prototypes currently require SP1")
         expected_recurrent = (batch, self.config.num_heads, self.config.head_k_dim, self.config.head_v_dim)
         expected_convolution = (batch, self.config.conv_kernel_size - 1, self._convolution_width)
         if tuple(state.recurrent.shape) != expected_recurrent:
@@ -219,6 +229,7 @@ class ttKDA:
         self,
         qkv: ttnn.Tensor,
         convolution_state: ttnn.Tensor,
+        length: int,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         """Run depthwise convolution and emit Q/K/V without post-convolution slices."""
         config = self.config
@@ -241,11 +252,21 @@ class ttKDA:
                 sequence_parallel_axis=self.sequence_parallel_axis,
             )
         else:
-            new_state = ttnn.slice(
-                qkv_row_major,
-                (0, sequence - (config.conv_kernel_size - 1), 0),
-                (qkv_row_major.shape[0], sequence, channels),
-            )
+            if length == sequence:
+                new_state = ttnn.slice(
+                    qkv_row_major,
+                    (0, sequence - (config.conv_kernel_size - 1), 0),
+                    (qkv_row_major.shape[0], sequence, channels),
+                )
+            else:
+                history_and_qkv = ttnn.concat(
+                    [state_row_major, qkv_row_major], dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG
+                )
+                new_state = ttnn.slice(
+                    history_and_qkv,
+                    (0, length, 0),
+                    (qkv_row_major.shape[0], length + config.conv_kernel_size - 1, channels),
+                )
         # The replacement state is BF16 row-major DRAM [B, K - 1, Q_local + K_local + V_local],
         # channel-sharded across TP and replicated across SP.
         q, k, v = ttnn.experimental.kda.qkv_causal_conv1d_silu(
@@ -259,6 +280,23 @@ class ttKDA:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         return q, k, v, new_state
+
+    def _tail_mask(self, sequence: int, length: int) -> ttnn.Tensor:
+        key = (sequence, length)
+        if key not in self._tail_masks:
+            host_mask = torch.zeros((1, sequence, 1), dtype=torch.bfloat16)
+            host_mask[:, :length] = 1
+            self._tail_masks[key] = ttnn.from_torch(
+                host_mask,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=(
+                    ttnn.ReplicateTensorToMesh(self.device) if isinstance(self.device, ttnn.MeshDevice) else None
+                ),
+            )
+        return self._tail_masks[key]
 
     def _project_inputs(
         self,
@@ -380,6 +418,7 @@ class ttKDA:
         self,
         hidden_states: ttnn.Tensor,
         state: KdaState,
+        length: int | None = None,
     ) -> tuple[ttnn.Tensor, KdaState]:
         """Run prefill KDA and return replacement logical carries.
 
@@ -388,13 +427,19 @@ class ttKDA:
         is sequence-partitioned along SP and, when TP > 1, reduce-scattered on
         the hidden dimension; TP == 1 returns the full hidden dimension.
         """
-        self._validate_forward(hidden_states, state)
+        sequence = hidden_states.shape[1]
+        length = sequence if length is None else length
+        self._validate_forward(hidden_states, state, length)
         projected = self._project_inputs(hidden_states)
-        q, k, v, new_convolution = self._convolve_qkv(projected.qkv, state.convolution)
+        q, k, v, new_convolution = self._convolve_qkv(projected.qkv, state.convolution, length)
         gate, beta = self._compute_gates(
             beta=projected.beta,
             decay_rank=projected.decay_rank,
         )
+        if length < sequence:
+            mask = self._tail_mask(sequence, length)
+            gate = ttnn.multiply(gate, mask, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            beta = ttnn.multiply(beta, mask, memory_config=KDA_OUTPUT_MEMORY_CONFIG)
         new_recurrent, output = self.recurrence(
             q=q,
             k=k,
@@ -405,4 +450,11 @@ class ttKDA:
         )
         output = self._kda_rms_norm(output, projected.output_gate)
         output = self._project_output(output)
+        if length < sequence:
+            output = ttnn.slice(
+                output,
+                (0, 0, 0),
+                (output.shape[0], length, output.shape[2]),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
         return output, KdaState(recurrent=new_recurrent, convolution=new_convolution)
