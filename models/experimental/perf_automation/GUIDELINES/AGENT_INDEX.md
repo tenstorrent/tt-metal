@@ -264,7 +264,6 @@ Matmul only?                   →  single-layer is usually fine; re-check the b
 
 | File | One-liner |
 |---|---|
-| `00_README.md` | Overview, source campaigns, the 5 universal rules, how to navigate |
 | `01_FOUNDATIONS.md` | Hardware grid, L1/DST budget, CB-clash math, fidelity/precision knobs |
 | `02_NORMALIZATION.md` | LN/RMSNorm/GroupNorm: sharding, fidelity, precision-compounding bug, residual fusion |
 | `03_QKV_PROJECTION.md` | Fused QKV matmul, program configs, head-split strategies, RoPE |
