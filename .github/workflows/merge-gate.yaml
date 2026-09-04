@@ -638,10 +638,10 @@ jobs:
   # test list: ttsim_merge_gate_tests.yaml
   # ===========================================================================
 
-  # Quasar coverage on the ttsim simulator (sim_quasar SKU, no hardware). Served by
-  # runtime-sanity-tests-impl.yaml pointed at the merge-gate list via tests-yaml-path;
-  # the wider sanity matrix stays in runtime_sanity_tests.yaml. The impl's fetch-ttsim
-  # job downloads libttsim_qsr.so and setup-ttsim installs it for every sim_* SKU.
+  # Quasar coverage on the ttsim simulator (sim_quasar SKU, no hardware). The impl owns
+  # its test list (tests/pipeline_reorg/ttsim_merge_gate_tests.yaml), so adding or
+  # retiring a leg here is a change to that yaml alone. Its fetch-ttsim job downloads
+  # libttsim_qsr.so and setup-ttsim installs it for the matrix's sim SKU.
   ttsim-quasar-merge-gate-tests:
     needs: [build, find-changes]
     if: ${{ !cancelled() && needs.build.result == 'success' && (
@@ -653,17 +653,13 @@ jobs:
             needs.find-changes.outputs.ttsim-ci-changed == 'true')
         }}
     secrets: inherit
-    uses: ./.github/workflows/runtime-sanity-tests-impl.yaml
+    uses: ./.github/workflows/ttsim-merge-gate-tests-impl.yaml
     with:
-      tests-yaml-path: ./tests/pipeline_reorg/ttsim_merge_gate_tests.yaml
-      test-category: merge_gate
       # Canonical (non-Harbor-prefixed) ref: sim_quasar's runs_on is ubuntu-latest, a
       # GitHub-hosted runner with no Harbor access.
       docker-image: ${{ needs.build.outputs.ci-test-docker-image }}
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
-      enabled-skus: ALL_SKUS_IN_TESTS
-      per-test-timeout: 15
 
   # ===========================================================================
   # Team: shield

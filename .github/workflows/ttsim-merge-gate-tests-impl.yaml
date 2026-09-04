@@ -1,4 +1,23 @@
-name: "[internal] Runtime sanity tests impl"
+name: "[internal] ttsim merge gate tests impl"
+
+# Quasar coverage on the ttsim simulator for the merge gate.
+#
+# Test matrix: tests/pipeline_reorg/ttsim_merge_gate_tests.yaml (ttsim -> merge_gate in
+# .github/time_budget.yaml). Like ttsim-sanity-tests-impl.yaml and
+# ttsim-unit-tests-impl.yaml, the tests yaml path is fixed here — one impl per test
+# list — so adding or retiring a merge-gate ttsim test is a change to that yaml alone.
+#
+# Runs from the build artifact rather than the deb packages, because the entries invoke
+# gtest binaries under ./build/test/tt_metal (unit_tests_legacy et al) which the
+# tt-metalium debs do not ship. ttsim-sanity-tests-impl.yaml is therefore not a
+# candidate to extend: its container installs the debs instead.
+#
+# The closest existing impl is runtime-sanity-tests-impl.yaml, which runs this same
+# test for the sanity pipeline off the same build artifact and ci-test-docker-image.
+# It is not reused here only because it hardcodes its own test list
+# (runtime_sanity_tests.yaml) and takes no tests-yaml-path input — the one-impl-per-list
+# convention above. Consolidating the two later is a reasonable cleanup; there is no
+# packaging constraint keeping them apart.
 
 on:
   workflow_call:
@@ -13,9 +32,6 @@ on:
         required: false
         type: string
         default: ""
-      enabled-skus:
-        required: true
-        type: string
       ref:
         required: false
         type: string
@@ -38,7 +54,7 @@ jobs:
       matrix: ${{ steps.build-matrix.outputs.matrix }}
       sim-libs: ${{ steps.build-matrix.outputs.sim-libs }}
     env:
-      TESTS_YAML_PATH: ./tests/pipeline_reorg/runtime_sanity_tests.yaml
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/ttsim_merge_gate_tests.yaml
     steps:
       - name: Checkout the repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -54,17 +70,22 @@ jobs:
         run: |
           set -e
           echo "Verifying that timeouts defined in tests.yaml are within the allowed limits..."
+          # 15 = the merge-gate per-test ceiling; this pipeline must stay under the
+          # workflow's 15-min end-to-end requirement.
           python3 .github/scripts/utils/verify_time_budget.py \
             ${{ env.TESTS_YAML_PATH }} \
             ./.github/time_budget.yaml \
-            "sanity"
+            "merge_gate" \
+            --max-per-test-timeout 15
       - name: Build unified test matrix based on enabled SKUs
         id: build-matrix
         run: |
           python3 .github/scripts/utils/prepare_test_matrix.py \
             ${{ env.TESTS_YAML_PATH }} \
-            "${{ inputs.enabled-skus }}" \
-            ./.github/sku_config.yaml
+            "ALL_SKUS_IN_TESTS" \
+            ./.github/sku_config.yaml \
+            --event "${{ github.event_name }}"
+
   # Fetch ttsim simulator binaries once; only needed when the matrix has sim_* SKUs.
   fetch-ttsim:
     needs: load-test-matrix
@@ -99,10 +120,9 @@ jobs:
         with:
           lib: ${{ matrix.lib }}
 
-  runtime-sanity-tests:
+  ttsim-merge-gate-tests:
     needs: [load-test-matrix, fetch-ttsim]
-    # fetch-ttsim is skipped when the matrix has no sim_* SKUs; allow that.
-    if: ${{ needs.load-test-matrix.outputs.matrix != '[]' && !cancelled() && (needs.fetch-ttsim.result == 'success' || needs.fetch-ttsim.result == 'skipped') }}
+    if: ${{ needs.load-test-matrix.outputs.matrix != '[]' && !cancelled() && needs.fetch-ttsim.result == 'success' }}
     strategy:
       fail-fast: false
       matrix:
@@ -125,7 +145,8 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
-      options: ${{ startsWith(matrix.test-group.sku, 'sim_') && '--label runner-mode=sim' || '--device /dev/tenstorrent' }}
+      # This matrix is sim-only, so the container never needs /dev/tenstorrent.
+      options: --label runner-mode=sim
     defaults:
       run:
         shell: bash
@@ -145,29 +166,15 @@ jobs:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: ⬇️  Setup TTSim
-        if: ${{ startsWith(matrix.test-group.sku, 'sim_') }}
         uses: ./docker-job/.github/actions/setup-ttsim
         timeout-minutes: 5
         with:
           sku: ${{ matrix.test-group.sku }}
-      - name: Ensure BH links online
-        if: ${{ contains(matrix.test-group.sku, 'bh_loudbox') }}
-        uses: tenstorrent/tt-metal/.github/actions/ensure-bh-links-online@main
-        timeout-minutes: 10
-      - name: ${{ matrix.test-group.name }}
-        if: ${{ !startsWith(matrix.test-group.sku, 'sim_') }}
-        timeout-minutes: ${{ matrix.test-group.timeout }}
-        uses: ./docker-job/.github/actions/run-with-log
-        with:
-          log-file: generated/test_logs/${{ matrix.test-group.name }}.log
-          run: |
-            mkdir -p generated/test_reports
-            echo "${{ matrix.test-group.cmd }}"
-            ${{ matrix.test-group.cmd }}
-      # The HW and simulator steps are mutually exclusive by SKU, so one log
-      # filename is safe for both.
+      # The tests run on the simulator (no hardware power telemetry); wrap the run in the
+      # host-load sidecar to capture host CPU/memory/disk/network usage. The command is
+      # written to a file first (a quoted heredoc preserves its embedded quoting) and run
+      # under the sidecar, which propagates the exit code so failures still fail the job.
       - name: ${{ matrix.test-group.name }} (simulator)
-        if: ${{ startsWith(matrix.test-group.sku, 'sim_') }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         uses: ./docker-job/.github/actions/run-with-log
         with:
@@ -184,7 +191,7 @@ jobs:
               --output /work/mem_report.json \
               -- bash --noprofile --norc -eo pipefail /tmp/sim_cmd.sh
       - name: Upload mem report
-        if: ${{ !cancelled() && startsWith(matrix.test-group.sku, 'sim_') }}
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: mem-report-${{ matrix.test-group.name }}

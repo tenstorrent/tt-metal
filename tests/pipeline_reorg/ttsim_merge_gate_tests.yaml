@@ -4,13 +4,16 @@
 # For max allowed timeout refer to .github/time_budget.yaml (ttsim -> merge_gate).
 #
 # The sanity counterpart is runtime_sim_quasar_cpp_unit_tests in
-# tests/pipeline_reorg/runtime_sanity_tests.yaml (ttsim -> sanity), which keeps the
-# wider/slower Quasar coverage. This list is the merge-gate subset and is held to the
-# 15-min merge-gate ceiling. Keep the two in sync when adding fixtures to either.
+# tests/pipeline_reorg/runtime_sanity_tests.yaml (ttsim -> sanity). The entry below is
+# currently an exact copy of it — same fixtures, same binary — differing only in
+# timeout: 15 here against the 15-min merge-gate ceiling, 30 there. It is NOT yet a
+# reduced subset, so a run in the 15-30 min range passes sanity and times out in the
+# merge gate; either trim the gtest filter or raise the merge-gate budget.
+# Keep the two in sync when adding fixtures to either.
 #
-# runtime-sanity-tests-impl.yaml serves both lists via its tests-yaml-path input and
-# invokes setup-ttsim for every sim_* SKU. See .github/actions/setup-ttsim/action.yml
-# and .github/sku_config.yaml.
+# This list is run by .github/workflows/ttsim-merge-gate-tests-impl.yaml, which
+# hardcodes the path and invokes setup-ttsim for every sim_* SKU. See
+# .github/actions/setup-ttsim/action.yml and .github/sku_config.yaml.
 #
 # Some of these may fail today due to a known libttsim_qsr.so NOC_API_V2 gap in the
 # simulator itself, not this CI wiring — see #54794.

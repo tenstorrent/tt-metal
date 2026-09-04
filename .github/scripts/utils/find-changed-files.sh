@@ -60,16 +60,21 @@ while IFS= read -r FILE; do
             # the code they run, so a PR that only tunes them must still validate itself.
             TTSIM_CI_CHANGED=true
             ;;
+        # The ttsim actions and the ttsim-*-impl.yaml workflows that drive them, including
+        # ttsim-merge-gate-tests-impl.yaml, which owns the merge-gate matrix.
+        # WORKFLOWS_CHANGED is raised too because this pattern matches before the
+        # .github/workflows/*.yaml catch-all below: without it a ttsim-*.yaml-only PR
+        # would lose the standard full-gate fanout that catch-all exists to guarantee.
         .github/actions/fetch-ttsim/**|.github/actions/setup-ttsim/**|.github/workflows/ttsim-*.yaml)
             TTSIM_CI_CHANGED=true
+            WORKFLOWS_CHANGED=true
             ;;
-        # The workflows that define and drive the ttsim legs themselves: the gate that
-        # schedules them, the impl that runs them, and the budget they are checked
-        # against. A PR that rewires any of these must exercise the legs it just
-        # changed rather than skipping them and discovering a broken filter on main.
-        # WORKFLOWS_CHANGED is raised too so these keep the standard full-gate fanout
-        # they get from the .github/workflows/*.yaml catch-all below.
-        .github/workflows/merge-gate.yaml|.github/workflows/runtime-sanity-tests-impl.yaml)
+        # The gate that schedules the ttsim legs, and the budget they are checked
+        # against. A PR that rewires either must exercise the legs it just changed
+        # rather than skipping them and discovering a broken filter on main.
+        # WORKFLOWS_CHANGED is raised too so this keeps the standard full-gate fanout
+        # it gets from the .github/workflows/*.yaml catch-all below.
+        .github/workflows/merge-gate.yaml)
             TTSIM_CI_CHANGED=true
             WORKFLOWS_CHANGED=true
             ;;
