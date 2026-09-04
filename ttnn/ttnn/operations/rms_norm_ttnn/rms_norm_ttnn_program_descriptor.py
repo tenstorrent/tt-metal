@@ -926,7 +926,7 @@ def _largest_divisor_at_most(n: int, cap: int) -> int:
     return 1
 
 
-def _norm_cb_depth(has_gamma: bool, has_bias: bool) -> int:
+def _norm_cb_depth(has_gamma: bool, has_bias: bool, block_rows: int = 0) -> int:
     """Ring depth of cb_normalized, in whole blocks.  ONE source of truth (D29).
 
     0  no post-normalize stage at all -- normalize packs cb_output_tiles direct.
@@ -944,7 +944,18 @@ def _norm_cb_depth(has_gamma: bool, has_bias: bool) -> int:
     """
     if not (has_gamma or has_bias):
         return 0
-    return 2 if (has_gamma and has_bias) else 1
+    if not (has_gamma and has_bias):
+        return 1
+    # `block_rows == 1` is not a guard, it is the ABSENCE of the hazard: with a
+    # one-row block every block has `rows == 1 == BLOCK_ROWS`, so there is no
+    # partial final block and the rotation is always a whole revolution.  Depth 1
+    # is then exactly correct, and it is worth having as its own case rather than
+    # rounding up: every ROW_RESIDENT / STREAM / BAND / width-shard build solves to
+    # BLOCK_ROWS == 1, i.e. the L1-tightest regimes are precisely the ones that
+    # would otherwise pay a whole extra block of cb_normalized for a hazard they
+    # cannot have.  `block_rows == 0` means "not decided yet" and takes the
+    # conservative 2 (the RESIDENT search prices it before it knows the block).
+    return 1 if block_rows == 1 else 2
 
 
 def _cb_block_mult(
@@ -954,6 +965,7 @@ def _cb_block_mult(
     has_bias: bool = False,
     has_residual: bool = False,
     depth_r: int = 0,
+    block_rows: int = 0,
 ) -> int:
     """Tiles-per-block-tile summed over the BLOCK-SCOPED CBs (op_design.md 1.4).
 
@@ -973,7 +985,7 @@ def _cb_block_mult(
     `depth_x + 1 + has_gamma + depth_out` -- nothing is sized for an absent
     operand and no worst-case bucket is taken over the possible operand sets.
     """
-    mult = depth_x + 1 + _norm_cb_depth(has_gamma, has_bias) + depth_out
+    mult = depth_x + 1 + _norm_cb_depth(has_gamma, has_bias, block_rows) + depth_out
     if has_residual:
         mult += depth_r + 1  # cb_residual_tiles + cb_x_sum
     return mult
@@ -2078,7 +2090,7 @@ def _zero_volume_descriptor(all_cores, compute_kernel_config):
     null_acc = list(ttnn.TensorAccessorArgs().get_compile_time_args())
 
     reader_ct = [1, 1, 1, 1, 1, 0, 0, 0, 2, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0]
-    reader_ct += [0, 0, 0, 0, 0, 0, 0]
+    reader_ct += [0, 0, 0, 0, 0, 0, 0, 0]
     assert len(reader_ct) == READER_CT_SCALARS
     reader_ct += null_acc * 4
 
@@ -2087,7 +2099,7 @@ def _zero_volume_descriptor(all_cores, compute_kernel_config):
     writer_ct += [0] * 6 + null_acc
 
     compute_ct = [1, 1, 1, 1, 0, 0, 0, _f32_bits(1.0), _f32_bits(0.0), REDUCE_BULK, 0, 1, 0, 1, 1, 1, 0, 0, 0]
-    compute_ct += [0, 0, 0]
+    compute_ct += [0, 0, 0, 0]
     assert len(compute_ct) == COMPUTE_CT_SCALARS
 
     reader_rt = ttnn.RuntimeArgs()
@@ -2134,8 +2146,8 @@ def _zero_volume_descriptor(all_cores, compute_kernel_config):
 # The kernels read their accessor args at TensorAccessorArgs<N>(), so N must
 # equal the scalar count exactly.  Named here (and asserted at both emission
 # sites) so appending an arg fails in Python instead of mis-parsing on device.
-READER_CT_SCALARS = 28
-COMPUTE_CT_SCALARS = 22
+READER_CT_SCALARS = 29
+COMPUTE_CT_SCALARS = 23
 
 
 def create_program_descriptor(
@@ -2299,8 +2311,8 @@ def create_program_descriptor(
     rm_stage_rings = 2 + (1 if has_residual else 0)
 
     def _solve_blocking(plan):
-        """(block_rows, wt_chunk, num_w_chunks, cb_x_depth, cb_out_depth, x_resident)
-        or None.
+        """(block_rows, wt_chunk, num_w_chunks, cb_x_depth, cb_out_depth, x_resident,
+        rm_stage_depth, narrow_pc_stage) or None.
 
         None => this plan's per-core block does not fit L1 at all, and the caller
         must fall back to SCHEME_ROWS (which can chunk `width`).
@@ -2328,6 +2340,10 @@ def create_program_descriptor(
         depth_candidates = CB_DEPTH_CANDIDATES if is_tile else (1,)
 
         combine_tree = _combine_tree_arity(plan.group_size, 1) if plan.combine else None
+        # Pages the NARROW per-channel staging ring gets (D30): a knob-derived depth
+        # for reader <-> tilize overlap, not a width.  One name so the solve and the
+        # CB table cannot disagree.
+        rm_stage_depth_for_pc = CB_RM_STAGE_DEPTH
 
         def _f32_terms(compact):
             per_row = (CB_ROW_STAT_DEPTH + CB_ROW_STAT_DEPTH) if plan.combine else CB_ROW_STAT_DEPTH
@@ -2339,15 +2355,23 @@ def create_program_descriptor(
 
         # Per-channel bytes that scale with the HELD width (one tile CB per
         # operand, plus its stick staging ring on the ROW_MAJOR path).
-        def _per_channel_bytes(width_tiles, staged_tiles):
+        #
+        # `narrow` is the D30 staging fallback: a per-channel operand is ONE stick,
+        # but a `tilize<WT_CHUNK>` staging ring reserves 32 rows' worth of pages to
+        # carry it, so at a wide chunk it is the single biggest term in the solve
+        # (25 fp32 tiles = 100 kB per operand on the widest band).  Staged one tile
+        # COLUMN at a time -- `tilize<1>(WT_CHUNK)` -- the ring is `rm_depth` pages
+        # instead of `WT_CHUNK`, for the same tiles bit-for-bit.
+        def _per_channel_bytes(width_tiles, staged_tiles, narrow=False):
             total = 0
+            staged = 0 if not per_channel_is_rm else (rm_stage_depth_for_pc if narrow else staged_tiles)
             if has_gamma:
-                total += width_tiles * gt + (staged_tiles * gt if per_channel_is_rm else 0)
+                total += width_tiles * gt + staged * gt
             if has_bias:
-                total += width_tiles * bit + (staged_tiles * bit if per_channel_is_rm else 0)
+                total += width_tiles * bit + staged * bit
             return total
 
-        def _resident_fit(depth, compact):
+        def _resident_fit(depth, compact, rm_depth=CB_RM_STAGE_DEPTH, block_rows=0, narrow_pc=False):
             mult = _cb_block_mult(
                 depth if dx0 is None else dx0,
                 depth if do0 is None else do0,
@@ -2355,11 +2379,12 @@ def create_program_descriptor(
                 has_bias,
                 has_residual,
                 depth if dr0 is None else dr0,
+                block_rows,
             )
             per_row_bytes, combine_fixed = _f32_terms(compact)
             fixed = (
-                _per_channel_bytes(wt_core, wt_core)
-                + (rm_stage_rings * CB_RM_STAGE_DEPTH * wt_core * bt if not is_tile else 0)
+                _per_channel_bytes(wt_core, wt_core, narrow_pc)
+                + (rm_stage_rings * rm_depth * wt_core * bt if not is_tile else 0)
                 + scaler_bytes
                 + combine_fixed
             )
@@ -2373,12 +2398,56 @@ def create_program_descriptor(
             if brmax >= 1:
                 # RESIDENT: the whole per-core row slice is resident; take the
                 # coarsest row block that fits, i.e. the entire assignment when it does.
-                return min(max_rows, brmax), wt_core, 1, depth, depth, True
+                return min(max_rows, brmax), wt_core, 1, depth, depth, True, CB_RM_STAGE_DEPTH, False
 
         if plan.band:
-            # The BAND scheme has no fallback: its width is shard-derived (so not
-            # chunkable) and SCHEME_ROWS cannot address an RM width shard at all.
-            return 1, wt_core, 1, depth_candidates[0], depth_candidates[0], True
+            # The BAND scheme's WIDTH is shard-derived, so it cannot be chunked, and
+            # SCHEME_ROWS cannot address an RM width shard at all (the page is a row
+            # SEGMENT).  Its block is therefore fixed at ONE tile-row -- but the
+            # STAGING DEPTH is still a live knob, and with three activation rings
+            # (x, the residual and the output) instead of two it is the biggest term
+            # the band has left to give back.
+            #
+            # A1: this search is what the residual made necessary.  At the seed's
+            # two operands the fixed depth fit every band geometry; a third
+            # activation ring plus cb_x_sum plus a second per-channel operand pushed
+            # the widest fp32 band (a 8192-element row block-sharded over 88 cores,
+            # 25 tile columns per band) to 1.93 MB of CBs against a 1.57 MB L1.
+            # Stepping the ring depth to 1 costs the reader<->tilize overlap on a
+            # path whose reads are LOCAL L1 rather than DRAM -- the cheapest overlap
+            # in the op to give up -- and it is taken only when the budget says so,
+            # so every band build that already fit is byte-identical.
+            #
+            # The last resort is unchanged from the seed: take the shallowest depth
+            # and let metal's own CB-region check be the arbiter rather than
+            # pre-refusing on a proportional safety margin.
+            band_depths = tuple(dict.fromkeys((CB_RM_STAGE_DEPTH, 1)))
+            # Ordered COARSEST-FIRST on the thing each step costs: the activation
+            # rings' depth first (it costs reader<->tilize overlap on reads that are
+            # LOCAL L1 here, the cheapest overlap in the op to give up), then the
+            # per-channel staging width (D30 -- it costs WT_CHUNK LLK block calls
+            # instead of one, at boot).  Every band build that already fit takes the
+            # first candidate and is byte-identical.
+            for narrow_pc in (False, True):
+                for rm_depth in band_depths:
+                    fit = _resident_fit(
+                        depth_candidates[0], compact=False, rm_depth=rm_depth, block_rows=1, narrow_pc=narrow_pc
+                    )[0]
+                    if fit >= 1:
+                        return (
+                            1,
+                            wt_core,
+                            1,
+                            depth_candidates[0],
+                            depth_candidates[0],
+                            True,
+                            rm_depth,
+                            narrow_pc,
+                        )
+            # Last resort, unchanged from the seed: take the smallest footprint the
+            # knobs can express and let metal's own CB-region check be the arbiter
+            # rather than pre-refusing on a proportional safety margin.
+            return 1, wt_core, 1, depth_candidates[0], depth_candidates[0], True, band_depths[-1], True
         if plan.scheme != SCHEME_ROWS:
             return None  # a shard-derived width cannot be chunked -> caller falls back
 
@@ -2401,7 +2470,7 @@ def create_program_descriptor(
             # residual is present, the per-channel stick rings, and the ROW_MAJOR
             # staging rings (D2).
             per_chunk_tile = (
-                bt * (1 + _norm_cb_depth(has_gamma, has_bias) + depth_out)
+                bt * (1 + _norm_cb_depth(has_gamma, has_bias, 1) + depth_out)
                 + (bt * 2 * depth_x if has_residual else 0)
                 + _per_channel_bytes(0, 1)
                 + (rm_stage_rings * CB_RM_STAGE_DEPTH * bt if not is_tile else 0)
@@ -2418,13 +2487,13 @@ def create_program_descriptor(
                 continue
             wtc = _row_resident_chunk(depth, depth)
             if wtc:
-                return 1, wtc, wt_core // wtc, depth, depth, True
+                return 1, wtc, wt_core // wtc, depth, depth, True, CB_RM_STAGE_DEPTH, False
 
         # STREAM: not even ONE tile-row of the X-role CB fits -> chunk it and
         # re-read x (and the residual) in pass B.  An L1 fallback, not a
         # parallelization.
         depth = depth_candidates[0]
-        mult = _cb_block_mult(depth, depth, has_gamma, has_bias, has_residual, depth)
+        mult = _cb_block_mult(depth, depth, has_gamma, has_bias, has_residual, depth, 1)
         per_chunk_tile_bytes = (
             bt * mult + _per_channel_bytes(1, 1) + (rm_stage_rings * CB_RM_STAGE_DEPTH * bt if not is_tile else 0)  # D2
         )
@@ -2432,7 +2501,7 @@ def create_program_descriptor(
         fixed_stream = scaler_bytes + stream_per_row + stream_combine_fixed
         wt_chunk_l1_max = max(1, (budget - fixed_stream) // per_chunk_tile_bytes)
         wtc = _largest_divisor_at_most(wt_core, wt_chunk_l1_max)  # D1
-        return 1, wtc, wt_core // wtc, depth, depth, False
+        return 1, wtc, wt_core // wtc, depth, depth, False, CB_RM_STAGE_DEPTH, False
 
     solved = _solve_blocking(plan)
     if solved is None:
@@ -2442,7 +2511,16 @@ def create_program_descriptor(
         plan = _plan(force_rows=True)
         solved = _solve_blocking(plan)
         assert solved is not None, "rms_norm_ttnn: no admissible blocking even on SCHEME_ROWS"
-    block_rows, wt_chunk, num_w_chunks, cb_x_depth, cb_out_depth, x_resident = solved
+    (
+        block_rows,
+        wt_chunk,
+        num_w_chunks,
+        cb_x_depth,
+        cb_out_depth,
+        x_resident,
+        rm_stage_depth,
+        narrow_pc_stage,
+    ) = solved
     all_cores = plan.all_cores
     assignment = plan.assignment
     wt_per_core = plan.wt_per_core
@@ -2529,10 +2607,10 @@ def create_program_descriptor(
     # resident L1, so there is no NoC read and no arena allocation at all.
     cbs = []
     if not is_tile:
-        cbs.append(_cb(CB_INPUT_STICKS, bt, CB_RM_STAGE_DEPTH * wt_chunk, input_tensor.dtype, all_cores))
-        cbs.append(_cb(CB_OUTPUT_STICKS, bt, CB_RM_STAGE_DEPTH * wt_chunk, output_tensor.dtype, all_cores))
+        cbs.append(_cb(CB_INPUT_STICKS, bt, rm_stage_depth * wt_chunk, input_tensor.dtype, all_cores))
+        cbs.append(_cb(CB_OUTPUT_STICKS, bt, rm_stage_depth * wt_chunk, output_tensor.dtype, all_cores))
         if has_residual:
-            cbs.append(_cb(CB_RESIDUAL_STICKS, bt, CB_RM_STAGE_DEPTH * wt_chunk, input_tensor.dtype, all_cores))
+            cbs.append(_cb(CB_RESIDUAL_STICKS, bt, rm_stage_depth * wt_chunk, input_tensor.dtype, all_cores))
     in_shard_pages = 0
     out_shard_pages = 0
     if plan.native_in:
@@ -2565,19 +2643,24 @@ def create_program_descriptor(
     # NOT ALLOCATED on the combine path (D27) -- it is strictly dead there.
     if not combine:
         cbs.append(_cb(CB_ROW_STAT, ft, CB_ROW_STAT_DEPTH * block_rows, ttnn.float32, all_cores))
+    # D30: pages of a per-channel STAGING ring.  `wt_chunk` feeds one
+    # `tilize<WT_CHUNK>(1)` call; the narrow fallback feeds `tilize<1>(WT_CHUNK)`
+    # from a `rm_stage_depth`-page ring, which is the same tiles bit-for-bit at
+    # 1/WT_CHUNK of the L1.  ONE expression, read by both operands.
+    pc_stage_pages = rm_stage_depth if narrow_pc_stage else wt_chunk
     if has_gamma:
         if per_channel_is_rm:
             # The stick staging stays CHUNKED even under ROW_RESIDENT -- the tilize
             # consumes it a chunk at a time into the whole-row cb_gamma_tiles.
-            cbs.append(_cb(CB_GAMMA_STICKS, gt, wt_chunk, weight.dtype, all_cores))
+            cbs.append(_cb(CB_GAMMA_STICKS, gt, pc_stage_pages, weight.dtype, all_cores))
         cbs.append(_cb(CB_GAMMA_TILES, gt, x_hold_wt, weight.dtype, all_cores))
     if has_bias:
         # A2: mirrors gamma exactly, at the bias's OWN dtype -- the two per-channel
         # operands share a layout but not a format, so each CB declares its own.
         if per_channel_is_rm:
-            cbs.append(_cb(CB_BIAS_STICKS, bit, wt_chunk, bias.dtype, all_cores))
+            cbs.append(_cb(CB_BIAS_STICKS, bit, pc_stage_pages, bias.dtype, all_cores))
         cbs.append(_cb(CB_BIAS_TILES, bit, x_hold_wt, bias.dtype, all_cores))
-    norm_depth = _norm_cb_depth(has_gamma, has_bias)
+    norm_depth = _norm_cb_depth(has_gamma, has_bias, block_rows)
     if norm_depth:
         cbs.append(_cb(CB_NORMALIZED, bt, norm_depth * block_rows * wt_chunk, input_tensor.dtype, all_cores))
     if plan.native_out:
@@ -2653,6 +2736,11 @@ def create_program_descriptor(
         1 if native_residual else 0,  # 25 NATIVE_RESIDUAL: cb_residual_tiles aliases its shard
         1 if gamma_blocked else 0,  # 26 GAMMA_BLOCKED: the (Wt, 32) ROW_MAJOR form
         1 if bias_blocked else 0,  # 27 BIAS_BLOCKED
+        # 28 D30: stage a ROW_MAJOR per-channel operand one tile COLUMN per page
+        # (`tilize<1>(WT_CHUNK)`) instead of one wide block (`tilize<WT_CHUNK>(1)`).
+        # Same staged tiles, 1/WT_CHUNK of the ring; taken only when the L1 solve
+        # asks for it, so every build that already fit is byte-identical.
+        1 if narrow_pc_stage else 0,
     ]
     assert (
         len(reader_ct_args) == READER_CT_SCALARS
@@ -2722,6 +2810,7 @@ def create_program_descriptor(
         1 if has_bias else 0,  # 19 HAS_BIAS
         1 if has_residual else 0,  # 20 HAS_RESIDUAL
         pass_b_blk_ct,  # 21 PASS_B_BLK override (0 == the op's own pass_b_blk)
+        1 if narrow_pc_stage else 0,  # 22 NARROW_PC_STAGE (D30) -- tilize<1>(WT_CHUNK)
     ]
     assert len(compute_ct_args) == COMPUTE_CT_SCALARS, "compute CT-arg count drifted"
     assert x_squared_wt in (1, wt_chunk), "rms_norm_ttnn: x_squared_wt must be 1 (DEST fold) or WT_CHUNK"

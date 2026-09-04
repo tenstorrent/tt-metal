@@ -61,6 +61,7 @@ import ttnn
 from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 
 from .rms_norm_ttnn_program_descriptor import (
+    _div_up,
     create_program_descriptor,
     dest_tile_limit,
     per_channel_form,
@@ -328,11 +329,27 @@ def _check_per_channel(name, operand, input_tensor, width):
         )
     if operand.layout == ttnn.TILE_LAYOUT:
         padded = list(operand.padded_shape)
-        in_padded = list(input_tensor.padded_shape)
-        if padded[-1] != in_padded[-1]:
+        # The reader fetches tile columns 0 .. ceil(W/32)-1 of the operand, so the
+        # requirement is that those columns EXIST: the operand's padded width must
+        # cover the input's TILE-padded width.
+        #
+        # Compared against `ceil32(W)` and not against `input_tensor.padded_shape`,
+        # because a ROW_MAJOR input has no tile padding at all -- its padded last
+        # dim IS its logical W -- while the operand it is handed is a legal TILE
+        # tensor padded to 64.  Reading the input's own padded dim there refused
+        # every {ROW_MAJOR input, TILE per-channel operand} cell at a non-aligned
+        # W (48 golden cells at (1,1,32,50) alone).
+        #
+        # A FLOOR, like the logical rule above and for the same reason: an operand
+        # WIDER than the input is legal at this layout too (tile ids are row-major
+        # over the padded grid, so columns 0..Wt-1 are the first Wt tiles whatever
+        # the total width) and refusing it would be an equality rule dressed up as
+        # a coverage rule.
+        tile_padded_width = _div_up(width, TILE_DIM) * TILE_DIM
+        if padded[-1] < tile_padded_width:
             raise ValueError(
-                f"rms_norm_ttnn: a TILE-layout {name}'s padded last dim {padded[-1]} must equal the "
-                f"input's padded last dim {in_padded[-1]}"
+                f"rms_norm_ttnn: a TILE-layout {name}'s padded last dim {padded[-1]} does not cover the "
+                f"input's tile-padded last dim {tile_padded_width} (logical W = {width})"
             )
         if len(padded) >= 2 and padded[-2] != TILE_DIM:
             raise ValueError(
@@ -569,4 +586,15 @@ def rms_norm_ttnn(
         if operand is not None:
             tensors.append(operand)
     tensors.append(output_tensor)
-    return ttnn.generic_op(tensors, program_descriptor)
+    result = ttnn.generic_op(tensors, program_descriptor)
+
+    if resolved_pc.inplace:
+        # A5 / X-03: `inplace` is a contract about the OBJECT, not just about the
+        # bytes.  generic_op hands back `io_tensors.back()`, which is a fresh
+        # Python Tensor over the same buffer -- correct values, but a caller who
+        # sets `inplace` and then reads their own tensor back is relying on
+        # IDENTITY, so returning the copy would quietly break exactly the thing
+        # the flag is for.  The device program already wrote through
+        # cb_output_tiles, which aliases this buffer.
+        return input_tensor
+    return result

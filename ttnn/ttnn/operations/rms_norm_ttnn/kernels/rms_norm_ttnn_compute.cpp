@@ -497,6 +497,12 @@ void kernel_main() {
     // A5: the caller's `program_config.subblock_w`, or 0 for "the op's own
     // choice" -- which is exactly the seed's pass_b_blk(WT_CHUNK, DEST_AUTO_LIMIT).
     constexpr uint32_t PASS_B_BLK_CT = get_compile_time_arg_val(21);
+    // D30: the reader staged each ROW_MAJOR per-channel operand one tile COLUMN per
+    // page instead of one WT_CHUNK-wide block, so the tilize walks WT_CHUNK
+    // one-tile blocks.  Same tiles bit-for-bit; the descriptor takes it only when
+    // the L1 budget asks (a per-channel staging ring is WT_CHUNK whole tiles of L1
+    // to carry ONE stick, which is the biggest single term on a wide band).
+    constexpr uint32_t NARROW_PC_STAGE = get_compile_time_arg_val(22);
 
     const uint32_t num_rows = get_arg_val<uint32_t>(0);  // tile-rows owned by this core
     // Only the core holding the row's LAST width tile applies the partial-W
@@ -523,6 +529,7 @@ void kernel_main() {
     constexpr bool HAS_R = (HAS_RESIDUAL != 0);
     constexpr bool G_RM = (GAMMA_IS_RM != 0);
     constexpr bool PC_RM = G_RM;
+    constexpr bool PC_NARROW = (NARROW_PC_STAGE != 0);
     // ---- A1: WHICH CB CARRIES `t` ------------------------------------------
     // The statistics are taken over `t = x + r`, never over x alone, so with a
     // residual present the tensor pass A squares and pass B normalizes is
@@ -937,15 +944,33 @@ void kernel_main() {
     // ---- gamma: resident for the whole core's assignment (RESIDENT) -------
     // ROW_RESIDENT holds the whole tile-row of gamma too, so it tilizes every
     // chunk the reader staged; NUM_W_CHUNKS == 1 makes this the Phase-0 single call.
+    // ONE definition of "tilize one chunk of a per-channel operand", read by the
+    // resident boot below and by the STREAM re-stage in pass B.  D30's two staging
+    // widths differ ONLY in how the same tiles are walked:
+    //   wide   tilize<WT_CHUNK>(1)          one WT_CHUNK-wide block, one LLK call
+    //   narrow tilize<1>(WT_CHUNK)          WT_CHUNK one-tile blocks, WT_CHUNK calls
+    // Both leave exactly WT_CHUNK tiles in the destination CB, in the same order.
+    auto tilize_per_channel_chunk = [&]() {
+        if constexpr (HAS_G) {
+            if constexpr (PC_NARROW) {
+                ckl::tilize<1, cb_gamma_sticks, cb_gamma_tiles>(WT_CHUNK);
+            } else {
+                ckl::tilize<WT_CHUNK, cb_gamma_sticks, cb_gamma_tiles>(1);
+            }
+        }
+        if constexpr (HAS_B) {
+            if constexpr (PC_NARROW) {
+                ckl::tilize<1, cb_bias_sticks, cb_bias_tiles>(WT_CHUNK);
+            } else {
+                ckl::tilize<WT_CHUNK, cb_bias_sticks, cb_bias_tiles>(1);
+            }
+        }
+    };
+
     if constexpr ((HAS_G || HAS_B) && X_RESIDENT && PC_RM) {
         MaybeDeviceZoneScope("compute_gamma_tilize");
         for (uint32_t c = 0; c < NUM_W_CHUNKS; ++c) {
-            if constexpr (HAS_G) {
-                ckl::tilize<WT_CHUNK, cb_gamma_sticks, cb_gamma_tiles>(1);
-            }
-            if constexpr (HAS_B) {
-                ckl::tilize<WT_CHUNK, cb_bias_sticks, cb_bias_tiles>(1);
-            }
+            tilize_per_channel_chunk();
         }
     }
 
@@ -1415,13 +1440,9 @@ void kernel_main() {
                 MaybeDeviceZoneScope("compute_tilize_r_b");
                 ckl::tilize<WT_CHUNK, cb_residual_sticks, cb_residual_tiles>(rows);
             }
-            if constexpr (HAS_G && !X_RESIDENT && PC_RM) {
+            if constexpr ((HAS_G || HAS_B) && !X_RESIDENT && PC_RM) {
                 MaybeDeviceZoneScope("compute_gamma_tilize_b");
-                ckl::tilize<WT_CHUNK, cb_gamma_sticks, cb_gamma_tiles>(1);
-            }
-            if constexpr (HAS_B && !X_RESIDENT && PC_RM) {
-                MaybeDeviceZoneScope("compute_bias_tilize_b");
-                ckl::tilize<WT_CHUNK, cb_bias_sticks, cb_bias_tiles>(1);
+                tilize_per_channel_chunk();
             }
             // A1 in STREAM: neither activation survived pass A, so `t` has to be
             // rebuilt from the re-read x and r.  This is the whole cost of the

@@ -157,11 +157,53 @@ template <
     uint32_t TRIM,
     bool IS_RM,
     bool BLOCKED,
+    bool NARROW,
     typename Acc>
 FORCE_INLINE void stage_per_channel_chunk(const Acc& acc, uint32_t first_wt) {
     constexpr uint32_t TILE_COL_BYTES = TILE_DIM * ELEM_BYTES;
     constexpr uint32_t CHUNK_BYTES = WT_CHUNK * TILE_COL_BYTES;
-    if constexpr (IS_RM) {
+    if constexpr (IS_RM && NARROW) {
+        // D30 -- THE NARROW STAGING RING.  One tile COLUMN per page, so the ring is
+        // a knob-derived DEPTH instead of a WT_CHUNK-wide block: the compute side
+        // consumes it as `tilize<1, sticks, tiles>(WT_CHUNK)` -- WT_CHUNK one-tile
+        // blocks instead of one WT_CHUNK-wide block -- and the staged tiles are
+        // IDENTICAL, because tile column j of a wide block and block j of a
+        // one-wide walk are the same 32 elements laid out the same way.
+        //
+        // WHY IT EXISTS.  A per-channel operand is ONE stick, but a
+        // `tilize<WT_CHUNK>` staging ring has to reserve 32 rows' worth of pages to
+        // carry it -- WT_CHUNK whole tiles of L1 for 32 * WT_CHUNK real elements.
+        // On the widest band in the suite (a 8192-element fp32 row block-sharded
+        // over 88 cores, 25 tile columns per band) that is 100 kB per operand, and
+        // with two per-channel operands plus a residual it is what pushed the CB
+        // region 62 kB past L1.  It costs WT_CHUNK LLK block calls instead of one,
+        // paid once per core in the resident regimes, which is why the descriptor
+        // takes it only when the budget asks (see the band search).
+        //
+        // THE TWO FORMS COLLAPSE HERE.  Flat and blocked differ by exactly one
+        // expression -- which page the 32 elements live on and at what offset -- so
+        // the narrow path needs no separate branch for them.
+        for (uint32_t w = 0; w < WT_CHUNK; ++w) {
+            const uint32_t wt = first_wt + w;
+            // A RAGGED width shard's last core owns fewer real tile columns than
+            // WT_CHUNK; clamp so the read stays inside the tensor (the product lands
+            // in the output's pad region and is never read back).
+            const uint32_t real_wt = (wt < WT) ? wt : (WT - 1);
+            cb_reserve_back(CB_STICKS, 1);
+            const uint32_t dst = get_write_ptr(CB_STICKS);
+            if constexpr (BLOCKED) {
+                noc_async_read(acc.get_noc_addr(real_wt, 0), dst, TILE_COL_BYTES);
+            } else {
+                // Tile-column offsets are multiples of 32 * elem -- 128 B at fp32,
+                // 64 B at bf16 -- so every source offset is 64-byte DRAM aligned.
+                // That is load-bearing: an unaligned source offset is silently
+                // TRUNCATED down to the alignment.
+                noc_async_read(acc.get_noc_addr(0, real_wt * TILE_COL_BYTES), dst, TILE_COL_BYTES);
+            }
+            noc_async_read_barrier();
+            cb_push_back(CB_STICKS, 1);
+        }
+    } else if constexpr (IS_RM) {
         if constexpr (BLOCKED) {
             cb_reserve_back(CB_STICKS, WT_CHUNK);
             const uint32_t l1_base = get_write_ptr(CB_STICKS);
@@ -305,10 +347,12 @@ void kernel_main() {
     constexpr uint32_t NATIVE_RESIDUAL = get_compile_time_arg_val(25);
     constexpr uint32_t GAMMA_BLOCKED = get_compile_time_arg_val(26);
     constexpr uint32_t BIAS_BLOCKED = get_compile_time_arg_val(27);
+    // D30: stage a ROW_MAJOR per-channel operand one tile COLUMN per page.
+    constexpr uint32_t NARROW_PC_STAGE = get_compile_time_arg_val(28);
     // FOUR accessor arg blocks, chained at compile time and ALWAYS declared --
     // never inside an `if constexpr`, or an absent operand would shift every
     // later block's offset.  The descriptor emits the NULL form for an absent one.
-    constexpr auto x_args = TensorAccessorArgs<28>();
+    constexpr auto x_args = TensorAccessorArgs<29>();
     [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto bias_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto residual_args = TensorAccessorArgs<bias_args.next_compile_time_args_offset()>();
@@ -324,6 +368,7 @@ void kernel_main() {
     constexpr bool HAS_B = (HAS_BIAS != 0);
     constexpr bool HAS_R = (HAS_RESIDUAL != 0);
     constexpr bool PC_RM = (PER_CHANNEL_IS_RM != 0);
+    constexpr bool PC_NARROW = (NARROW_PC_STAGE != 0);
     static_assert(!NATIVE_R || HAS_R, "rms_norm_ttnn: NATIVE_RESIDUAL without a residual");
     static_assert(!NATIVE_R || NATIVE_X, "rms_norm_ttnn: a zero-copy residual implies a zero-copy x");
     // A1: the residual carries the input's IDENTICAL shard spec by contract, so the
@@ -508,7 +553,8 @@ void kernel_main() {
                 W_ELEMS,
                 GAMMA_TRIM,
                 PC_RM,
-                (GAMMA_BLOCKED != 0)>(g_acc, first_wt);
+                (GAMMA_BLOCKED != 0),
+                PC_NARROW>(g_acc, first_wt);
         }
         if constexpr (HAS_B) {
             MaybeDeviceZoneScope("reader_read_bias");
@@ -522,7 +568,8 @@ void kernel_main() {
                 W_ELEMS,
                 BIAS_TRIM,
                 PC_RM,
-                (BIAS_BLOCKED != 0)>(b_acc, first_wt);
+                (BIAS_BLOCKED != 0),
+                PC_NARROW>(b_acc, first_wt);
         }
     };
 
