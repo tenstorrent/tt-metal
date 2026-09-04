@@ -55,22 +55,30 @@ python3 fp32_stream_sweep.py --op sign --sem-node '<sem>' --hand-node '<hand>' \
 # -> <evdir>/sign-VERDICT.txt : BIT-EXACT-ALL-INPUTS (covered==2^32) or DIVERGENT+witness bands
 ```
 
-## Galaxy fan-out (all ops) — ONE Slurm job = ONE galaxy = ONE op
-Stage the tree (with the hook) + the prebuilt shared ELF build to `/data`, then on the
-exabox login node set `OPS_TSV IDMAP BUILD VENV LLK_HOME PYDIR OUT` and run
-`lanemk_submit.sh`. It submits one job per op lacking a verdict, each running
-`lanemk_run_op.sh <op>` — object-identity gate → stream the full 2^32 (resume-safe from
-cached band SHAs) → write `<OUT>/<op>/<op>-VERDICT.txt` → **exit, which frees the galaxy**.
-The loop repeats until every op has a verdict; Slurm is the refill and a dead job only
-costs a resubmit. No work-stealing, no claims dir, no supervisor, no held-idle nodes.
-`ops.tsv` = op⇥sem_node⇥hand_node; `idmap` from `build_identity_gate.sh`.
+## Galaxy fan-out (all ops) — a per-op runner + ONE `sbatch --array`
+Stage the tree (with the hook) + the prebuilt shared ELF build to `/data`, write the ops
+that lack a verdict one-per-line to `remaining.txt`, then submit ONE array:
 
-> Design lesson (why this shape): an earlier work-stealing fleet with a central supervisor
-> leaked idle galaxies (a worker that ran out of ops left its node HELD until the whole
-> sweep ended) and abandoned ops (a crashed worker left its claim behind, so its op was
-> never re-stolen). One-op-per-job run-to-completion has neither failure mode by
-> construction: a job owns exactly one op and one node, and releases the node the instant
-> it finishes. Prefer it; do not reintroduce claims/steal/supervise machinery.
+    export LANEMK_OPS_LIST=.../remaining.txt LANEMK_RUN_OP=.../lanemk_run_op.sh \
+           OPS_TSV=... IDMAP=... BUILD=... VENV=... LLK_HOME=... PYDIR=... OUT=... \
+           LANEMK_WAIT_TIMEOUT=600
+    sbatch --array=1-$(wc -l < remaining.txt) --requeue --export=ALL -J lanemk_op \
+           -p <glx-partitions> --time=720 lanemk_array.sh
+
+`lanemk_array.sh` maps `$SLURM_ARRAY_TASK_ID` → that line of `remaining.txt` → one op and
+runs `lanemk_run_op.sh <op>`: object-identity gate → stream the full 2^32 (resume-safe from
+cached band SHAs) → write `<OUT>/<op>/<op>-VERDICT.txt` → **exit, which frees the galaxy**.
+**Slurm is the scheduler, queue and refill**: it runs as many tasks as there are idle
+galaxies at once, queues the rest, and `--requeue` retries a died task. No supervisor, no
+passes, no waits. Re-submit the still-missing ops if any task dies (`ops.tsv` =
+op⇥sem_node⇥hand_node; `idmap` from `build_identity_gate.sh`).
+
+> Design lesson (why this shape): a work-stealing fleet with a supervisor leaked idle
+> galaxies (a worker out of ops held its node) and abandoned ops (a crashed worker's claim
+> was never re-stolen); a hand-rolled submit LOOP that batched-and-waited per pass
+> serialized and ignored a wide-open cluster. The array has neither problem — one task owns
+> one op and one node and frees it on exit, and the Slurm scheduler does the fan-out and
+> refill. Do not reintroduce claims / work-stealing / a supervisor loop.
 
 ## Measured (BH silicon)
 ~2.5M patterns/s per chip ⇒ **~27.7 min/leg, ~55 min/op** full 2^32 on ONE chip (chunk size
