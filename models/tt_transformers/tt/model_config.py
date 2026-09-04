@@ -3572,26 +3572,38 @@ class ModelArgs:
         """in0_block_w for a DRAM-sharded decode matmul with one reader per bank.
 
         The activation multicast is one semaphore-gated block per sender, chained across senders,
-        and with one reader per bank it is the floor at narrow N (mirror #342); the cost is the block
-        count K / in0_block_w. The factory lets a block span several consecutive storage shards, so
-        the width is no longer bounded by the storage grid. It is bounded by L1: each worker buffers
-        in0_block_w x per_worker_N weight tiles three deep, capped here at ~800 KB for a bfp8 tile
-        (16 tiles wide at most).
+        so the chain costs the block count K / in0_block_w. The factory lets a block span several
+        consecutive activation shards, which takes the block count off the shard grid.
+
+        Widening is not free. A block wider than a shard is gathered over the NoC into the sender
+        before the multicast, so those shards cross the NoC twice. The multicast overlaps the
+        block's weight read, so the chain is exposed only while a hop costs more than the weight
+        a worker reads for that block: once bw x per_worker_N covers it, a wider block buys
+        nothing and still pays the gather. Sweeping in0_block_w over 11 decode shapes on P300
+        (Llama-3.2-1B, Llama-3.1-8B and Qwen3-32B at one, four and eight devices) puts a hop at
+        about HOP_IN_WEIGHT_TILES weight tiles: with that bound the rule picks the measured
+        optimum on 8 of the 11 and one step short on the other 3, and no width slower than
+        stock on any.
         """
+        HOP_IN_WEIGHT_TILES = 80
         k_tiles = k // ttnn.TILE_SIZE
         per_core_k = k_tiles // num_cores
         per_worker_n = math.ceil(n / (ttnn.TILE_SIZE * self.dram_grid_size.x))
-        budget_tiles = 800 * 1024 // (3 * 1088)
+        l1_budget_tiles = 800 * 1024 // (3 * 1088)
         base = self.find_largest_divisor(per_core_k)
-        # Only ever widen. The budget governs the widening, not the existing choice: a wide-N
-        # projection such as the LM head already buffers more than the budget at the stock width,
-        # and returning the largest width that fits would make its block count worse, not better.
+        # Only ever widen, and only while a block's own weight read is shorter than one hop.
+        # Widening halves the hops and doubles the weight a hop has to hide behind, so past the
+        # crossover it buys nothing and still pays the gather. The L1 budget is the looser of the
+        # two bounds and stays as a cap. A wide-N projection such as the LM head is already past
+        # the crossover at the stock width, which is why the stock width is also the floor.
         for bw in range(min(16, k_tiles), base, -1):
             if k_tiles % bw:
                 continue
             if per_core_k % bw and bw % per_core_k:
                 continue
-            if bw * per_worker_n <= budget_tiles:
+            if bw * per_worker_n > HOP_IN_WEIGHT_TILES:
+                continue
+            if bw * per_worker_n <= l1_budget_tiles:
                 return bw
         return base
 
