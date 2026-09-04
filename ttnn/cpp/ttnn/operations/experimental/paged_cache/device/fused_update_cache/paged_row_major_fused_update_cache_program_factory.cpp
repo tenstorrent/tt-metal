@@ -59,13 +59,13 @@ const KernelSpecName RMF_COMPUTE_KERNEL{"compute"};
 
 constexpr auto RMF_READER_SOURCE =
     "ttnn/cpp/ttnn/operations/experimental/paged_cache/device/kernels/dataflow/"
-    "reader_paged_row_major_fused_update_cache_interleaved_start_id_metal2.cpp";
+    "reader_paged_row_major_fused_update_cache_interleaved_start_id.cpp";
 constexpr auto RMF_WRITER_SOURCE =
     "ttnn/cpp/ttnn/operations/experimental/paged_cache/device/kernels/dataflow/"
-    "writer_paged_row_major_fused_update_cache_interleaved_start_id_metal2.cpp";
+    "writer_paged_row_major_fused_update_cache_interleaved_start_id.cpp";
 constexpr auto RMF_COMPUTE_SOURCE =
     "ttnn/cpp/ttnn/operations/experimental/paged_cache/device/kernels/compute/"
-    "paged_row_major_fused_update_cache_metal2.cpp";
+    "paged_row_major_fused_update_cache.cpp";
 }  // namespace CMAKE_UNIQUE_NAMESPACE_ROW_MAJOR
 
 std::vector<PagedRowMajorFusedUpdateCacheProgramFactory::PerIndexOffsets>

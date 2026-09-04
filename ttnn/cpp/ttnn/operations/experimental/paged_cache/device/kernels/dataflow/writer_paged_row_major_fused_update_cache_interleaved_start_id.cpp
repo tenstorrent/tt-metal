@@ -2,190 +2,207 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// NOTE: A Metal 2.0 fork of this kernel lives beside it, as
-// writer_paged_row_major_fused_update_cache_interleaved_start_id_metal2.cpp. Ops ported to Metal 2.0 bind the fork;
-// this file serves the consumers still on the legacy API. Until the last of them migrates and this file is retired,
-// changes here likely belong in the fork too.
-
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
     Noc noc;
 
-    uint32_t rt_args_idx = 0;
-    const bool has_work = get_arg_val<uint32_t>(rt_args_idx++);
+    const bool has_work = get_arg(args::has_work);
     if (!has_work) {
         return;
     }
 
-    const uint32_t cache_addr = get_arg_val<uint32_t>(rt_args_idx++);
-    const uint32_t cache_start_id = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t cache_tile_offset_B = get_arg_val<uint32_t>(rt_args_idx++);
-    const uint32_t my_batch_idx = get_arg_val<uint32_t>(rt_args_idx++);
-    const bool send_signal = get_arg_val<uint32_t>(rt_args_idx++) == 1;
-    const uint32_t send_core_x = get_arg_val<uint32_t>(rt_args_idx++);
-    const uint32_t send_core_y = get_arg_val<uint32_t>(rt_args_idx++);
-    const bool is_input1 = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t cache_start_id = get_arg(args::cache_start_id);
+    uint32_t cache_tile_offset_B = get_arg(args::cache_tile_offset_B);
+    const uint32_t my_batch_idx = get_arg(args::my_batch_idx);
+    const bool send_signal = get_arg(args::send_signal) == 1;
+    const uint32_t send_core_x = get_arg(args::send_core_x);
+    const uint32_t send_core_y = get_arg(args::send_core_y);
+    const bool is_input1 = get_arg(args::is_input1);
 
-    constexpr uint32_t cache_cb_id = get_compile_time_arg_val(0);
-    constexpr uint32_t untilized_cache_cb_id = get_compile_time_arg_val(1);
-    constexpr uint32_t untilized_cache2_cb_id = get_compile_time_arg_val(2);
-    constexpr uint32_t untilized_input1_cb_id = get_compile_time_arg_val(3);
-    constexpr uint32_t untilized_input2_cb_id = get_compile_time_arg_val(4);
-    constexpr bool use_index_tensor = get_compile_time_arg_val(5) == 1;
-    constexpr uint32_t cb_index_id = get_compile_time_arg_val(6);
-    constexpr uint32_t cache_batch_num_tiles = get_compile_time_arg_val(7);
-    constexpr uint32_t Wt = get_compile_time_arg_val(8);
-    constexpr uint32_t Wbytes = get_compile_time_arg_val(9);
+    constexpr uint32_t cache_batch_num_tiles = get_arg(args::cache_batch_num_tiles);
+    constexpr uint32_t Wt = get_arg(args::Wt);
+    constexpr uint32_t Wbytes = get_arg(args::Wbytes);
 
     // paged_cache args
-    constexpr bool is_paged_cache = get_compile_time_arg_val(10) == 1;
-    constexpr uint32_t num_heads = get_compile_time_arg_val(11);
-    constexpr uint32_t block_size = get_compile_time_arg_val(12);
-    constexpr uint32_t block_size_t = get_compile_time_arg_val(13);
-    constexpr uint32_t max_blocks_per_seq = get_compile_time_arg_val(14);
-    constexpr uint32_t page_table_cb_id = get_compile_time_arg_val(15);
+    constexpr uint32_t num_heads = get_arg(args::num_heads);
+    constexpr uint32_t block_size = get_arg(args::block_size);
+    constexpr uint32_t block_size_t = get_arg(args::block_size_t);
+    constexpr uint32_t max_blocks_per_seq = get_arg(args::max_blocks_per_seq);
 
-    constexpr uint32_t St = get_compile_time_arg_val(16);
-    constexpr uint32_t receiver_sem_id = get_compile_time_arg_val(17);  // semaphore for receiver
-    constexpr uint32_t batch_size = get_compile_time_arg_val(18);
-    constexpr uint32_t page_table_stick_size = get_compile_time_arg_val(19);
-    constexpr uint32_t page_table_is_dram = get_compile_time_arg_val(20);
-
-    constexpr auto s0_args = TensorAccessorArgs<21>();
-
-    uint32_t untilized_input_cb_id = untilized_input1_cb_id;
-    if (!is_input1) {
-        untilized_input_cb_id = untilized_input2_cb_id;
-    }
+    constexpr uint32_t St = get_arg(args::St);
     constexpr uint32_t head_offset_t = Wt * St;
+    constexpr uint32_t batch_size = get_arg(args::batch_size);
+    constexpr uint32_t page_table_stick_size = get_arg(args::page_table_stick_size);
+    constexpr uint32_t page_table_is_dram = get_arg(args::page_table_is_dram);
 
     constexpr uint32_t TILE_HEIGHT = 32;
 
-    const auto s0 = TensorAccessor(s0_args, cache_addr);
+    // NOTE: this kernel's `cache` DFB is the *output* buffer (the host binds its output
+    // DataflowBufferSpec here) -- it holds the re-tilized cache block this kernel writes back to the
+    // cache tensor, not the cache tiles the reader pulled in.
+    DataflowBuffer dfb_cache(dfb::cache);
+    DataflowBuffer dfb_untilized_cache(dfb::untilized_cache);
+    DataflowBuffer dfb_untilized_cache2(dfb::untilized_cache2);
+    // A row-major input needs no untilize step, so the "untilized input" this kernel consumes IS the
+    // resident input buffer the reader published -- one of the two fused inputs, chosen at runtime by
+    // `is_input1`. Both are bound to this kernel (a kernel cannot touch a DFB it has not bound) and a
+    // ternary over the two tokens picks one: DFBBindingToken carries its identity in a runtime
+    // member, so both tokens share a single type.
+    //
+    // Quasar-uplift debt: DFB placement is derived from the bindings, so each input DFB is now
+    // configured over the whole kernel grid rather than only its own input's shard cores, and on the
+    // other half it carries the sibling input's borrowed base address. Inert on WH/BH -- the
+    // `is_input1` guard means those nodes never touch it, and a borrowed DFB allocates nothing, so
+    // there is nothing for it to collide with. On Gen2 a DFB's hardware footprint varies with its
+    // endpoint configuration and a borrowed DFB over a tensor holding no shard on the node is
+    // meaningless, so this wants revisiting there.
+    const DFBBindingToken untilized_input_token = is_input1 ? dfb::untilized_input1 : dfb::untilized_input2;
+    DataflowBuffer dfb_untilized_input(untilized_input_token);
+#ifdef USE_INDEX_TENSOR
+    // Bound only in index-tensor mode; the reader fills it and this kernel reads the value back out.
+    DataflowBuffer dfb_index(dfb::index);
+#endif
+#ifdef IS_PAGED_CACHE
+    // Bound only for a paged cache; likewise reader-filled, read here.
+    DataflowBuffer dfb_page_table(dfb::page_table);
+#endif
 
-    CircularBuffer cb_cache(cache_cb_id);
-    CircularBuffer cb_untilized_cache(untilized_cache_cb_id);
-    CircularBuffer cb_untilized_cache2(untilized_cache2_cb_id);
-    CircularBuffer cb_untilized_input(untilized_input_cb_id);
-    CircularBuffer cb_index(cb_index_id);
-    CircularBuffer cb_page_table(page_table_cb_id);
-
-    const uint32_t cache_tile_bytes = cb_cache.get_tile_size();
+    const uint32_t cache_tile_bytes = dfb_cache.get_tile_size();
 
     uint32_t cache_id = cache_start_id;
     uint32_t update_idx = 0;
 
     bool skip_update = false;
 
-    if constexpr (use_index_tensor) {
-        cb_index.wait_front(1);
-        uint32_t index_cb_ptr = cb_index.get_read_ptr();
-        volatile tt_l1_ptr uint32_t* index_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_cb_ptr);
+#ifdef USE_INDEX_TENSOR
+    {
+        dfb_index.wait_front(1);
+        uint32_t index_dfb_ptr = dfb_index.get_read_ptr();
+        volatile tt_l1_ptr uint32_t* index_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_dfb_ptr);
         const uint32_t update_idx = index_ptr[my_batch_idx];
 
         if (update_idx == (uint32_t)-1) {
             // Passing update_idx = -1 tells us to skip update for this user
             skip_update = true;
         } else {
-            if constexpr (is_paged_cache) {
-                uint32_t num_pages_to_read = page_table_is_dram ? 1 : batch_size;
-                cb_page_table.wait_front(num_pages_to_read);
-                uint32_t page_table_cb_rd_ptr = cb_page_table.get_read_ptr();
-                if constexpr (!page_table_is_dram) {
-                    page_table_cb_rd_ptr += my_batch_idx * page_table_stick_size;
-                }
-                // DRAM uses uint32 entries; L1-sharded page table uses uint16 entries
-                volatile tt_l1_ptr uint32_t* page_table_ptr_u32 = nullptr;
-                volatile tt_l1_ptr uint16_t* page_table_ptr_u16 = nullptr;
-                if constexpr (page_table_is_dram) {
-                    page_table_ptr_u32 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_cb_rd_ptr);
-                } else {
-                    page_table_ptr_u16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(page_table_cb_rd_ptr);
-                }
-
-                const uint32_t virtual_block_id = update_idx / block_size;
-                const uint32_t physical_block_id = (page_table_is_dram)
-                                                       ? page_table_ptr_u32[virtual_block_id]
-                                                       : static_cast<uint32_t>(page_table_ptr_u16[virtual_block_id]);
-                const uint32_t block_start_id = physical_block_id * num_heads * block_size_t * Wt;
-                const uint32_t block_row_tile = (update_idx % block_size) / TILE_HEIGHT;
-                const uint32_t block_offset = block_row_tile * Wt;
-                cache_id = block_start_id + block_offset;
-
-            } else {
-                const uint32_t cache_batch_tile_offset = my_batch_idx * cache_batch_num_tiles;
-                const uint32_t cache_start_id = cache_batch_tile_offset + (update_idx / TILE_HEIGHT) * Wt;
-                cache_id = cache_start_id;
+#ifdef IS_PAGED_CACHE
+            uint32_t num_pages_to_read = page_table_is_dram ? 1 : batch_size;
+            dfb_page_table.wait_front(num_pages_to_read);
+            uint32_t page_table_dfb_rd_ptr = dfb_page_table.get_read_ptr();
+            if constexpr (!page_table_is_dram) {
+                page_table_dfb_rd_ptr += my_batch_idx * page_table_stick_size;
             }
+            // DRAM uses uint32 entries; L1-sharded page table uses uint16 entries
+            volatile tt_l1_ptr uint32_t* page_table_ptr_u32 = nullptr;
+            volatile tt_l1_ptr uint16_t* page_table_ptr_u16 = nullptr;
+            if constexpr (page_table_is_dram) {
+                page_table_ptr_u32 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_dfb_rd_ptr);
+            } else {
+                page_table_ptr_u16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(page_table_dfb_rd_ptr);
+            }
+
+            const uint32_t virtual_block_id = update_idx / block_size;
+            const uint32_t physical_block_id = (page_table_is_dram)
+                                                   ? page_table_ptr_u32[virtual_block_id]
+                                                   : static_cast<uint32_t>(page_table_ptr_u16[virtual_block_id]);
+            const uint32_t block_start_id = physical_block_id * num_heads * block_size_t * Wt;
+            const uint32_t block_row_tile = (update_idx % block_size) / TILE_HEIGHT;
+            const uint32_t block_offset = block_row_tile * Wt;
+            cache_id = block_start_id + block_offset;
+
+#else
+            const uint32_t cache_batch_tile_offset = my_batch_idx * cache_batch_num_tiles;
+            const uint32_t cache_start_id = cache_batch_tile_offset + (update_idx / TILE_HEIGHT) * Wt;
+            cache_id = cache_start_id;
+#endif
             cache_tile_offset_B = update_idx % TILE_HEIGHT * Wbytes;
         }
     }
+#endif
 
-    cb_untilized_input.wait_front(1);  // input tensor
+    dfb_untilized_input.wait_front(1);  // input tensor
     const uint8_t noc_id = noc.get_noc_id();
     const uint32_t my_noc_x = my_x[noc_id];
     const uint32_t my_noc_y = my_y[noc_id];
-    uint32_t input_l1_read_addr = cb_untilized_input.get_read_ptr();
+    uint32_t input_l1_read_addr = dfb_untilized_input.get_read_ptr();
     UnicastEndpoint local_src;
 
-    for (uint32_t cur_head = 0; cur_head < num_heads; ++cur_head) {
-        // Wait on compute to untilize a block. Update that block in L1.
-        cb_untilized_cache.wait_front(Wt);
-        cb_untilized_cache2.reserve_back(Wt);
+    // The cache tensor this core writes is picked by the same runtime `is_input1` arg, but the tensor
+    // channel cannot select with a ternary the way the DFB channel above can: host codegen emits a
+    // distinct TensorBindingToken *type* per binding (its CTA and CRTA slot offsets are template
+    // parameters, and two bindings on one kernel necessarily occupy different slots). So the per-head
+    // loop is a generic lambda, instantiated once per accessor type and selected once, below. Inside
+    // the loop the accessor is a concrete type and fully inlined.
+    const auto write_cache_blocks = [&](const auto& s0) {
+        for (uint32_t cur_head = 0; cur_head < num_heads; ++cur_head) {
+            // Wait on compute to untilize a block. Update that block in L1.
+            dfb_untilized_cache.wait_front(Wt);
+            dfb_untilized_cache2.reserve_back(Wt);
 
-        uint32_t cache_l1_write_addr = cb_untilized_cache.get_read_ptr() + cache_tile_offset_B;
-        noc.async_read(
-            local_src,
-            CoreLocalMem<uint32_t>(cache_l1_write_addr),
-            Wbytes,
-            {.noc_x = my_noc_x, .noc_y = my_noc_y, .addr = input_l1_read_addr},
-            {});
-        noc.async_read_barrier();
-        cb_untilized_cache2.push_back(Wt);
-        cb_untilized_cache.pop_front(Wt);  // NEW
+            // dfb_untilized_cache and dfb_untilized_cache2 are aliased: they name the same L1 region
+            // through two logical buffers. The new row is written in place through the first, then
+            // republished through the second for compute to re-tilize.
+            uint32_t cache_l1_write_addr = dfb_untilized_cache.get_read_ptr() + cache_tile_offset_B;
+            noc.async_read(
+                local_src,
+                CoreLocalMem<uint32_t>(cache_l1_write_addr),
+                Wbytes,
+                {.noc_x = my_noc_x, .noc_y = my_noc_y, .addr = input_l1_read_addr},
+                {});
+            noc.async_read_barrier();
+            dfb_untilized_cache2.push_back(Wt);
+            dfb_untilized_cache.pop_front(Wt);  // NEW
 
-        // Wait on compute to tilize an updated block. Write that block to DRAM
-        cb_cache.wait_front(Wt);
-        if (!skip_update) {
-            uint32_t out_l1_read_addr = cb_cache.get_read_ptr();
-            for (uint32_t curr_cache_id = cache_id; curr_cache_id < cache_id + Wt; ++curr_cache_id) {
-                noc.async_write(
-                    CoreLocalMem<uint32_t>(out_l1_read_addr), s0, cache_tile_bytes, {}, {.page_id = curr_cache_id});
-                out_l1_read_addr += cache_tile_bytes;
+            // Wait on compute to tilize an updated block. Write that block to DRAM
+            dfb_cache.wait_front(Wt);
+            if (!skip_update) {
+                uint32_t out_l1_read_addr = dfb_cache.get_read_ptr();
+                for (uint32_t curr_cache_id = cache_id; curr_cache_id < cache_id + Wt; ++curr_cache_id) {
+                    noc.async_write(
+                        CoreLocalMem<uint32_t>(out_l1_read_addr), s0, cache_tile_bytes, {}, {.page_id = curr_cache_id});
+                    out_l1_read_addr += cache_tile_bytes;
+                }
+
+                noc.async_writes_flushed();
+            }
+            dfb_cache.pop_front(Wt);
+
+            if (!skip_update) {
+                // Delay syncing the writes to maximize perf.
+                noc.async_write_barrier();
             }
 
-            noc.async_writes_flushed();
+            // read from next head
+            input_l1_read_addr += Wbytes;
+            cache_id += head_offset_t;
         }
-        cb_cache.pop_front(Wt);
+    };
 
-        if (!skip_update) {
-            // Delay syncing the writes to maximize perf.
-            noc.async_write_barrier();
-        }
-
-        // read from next head
-        input_l1_read_addr += Wbytes;
-        cache_id += head_offset_t;
+    if (is_input1) {
+        write_cache_blocks(TensorAccessor(tensor::cache1));
+    } else {
+        write_cache_blocks(TensorAccessor(tensor::cache2));
     }
 
-    cb_untilized_input.pop_front(1);
+    dfb_untilized_input.pop_front(1);
 
     if (send_signal) {
-        // send signal to receiver core that we are done using the input CB
-        Semaphore<>(receiver_sem_id).up(noc, send_core_x, send_core_y, 1);
+        // send signal to receiver core that we are done using the input DFB
+        Semaphore<>(sem::receiver).up(noc, send_core_x, send_core_y, 1);
         // Drain the non-posted atomic before kernel_main returns. .up() lowers to a non-posted
         // noc_semaphore_inc tracked by a separate atomic counter that noc.async_write_barrier() does
         // NOT drain, so without this the kernel exits with the readiness atomic still in flight -- an
         // inter-kernel NOC race (Watcher NOC-idle assert). Mirrors the tiled fused writer and the
-        // legacy sibling writer_update_cache_interleaved_start_id.cpp.
+        // sibling writer_update_cache_interleaved_start_id.cpp.
         noc.async_atomic_barrier();
     }
 }

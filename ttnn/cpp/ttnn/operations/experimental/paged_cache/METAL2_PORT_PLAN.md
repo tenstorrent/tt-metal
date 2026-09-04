@@ -76,12 +76,19 @@ So pass 2 stops there rather than improvising, and the four are carried in
 `METAL2_PORT_REPORT.md` → *Handoff points* #1 as **ready to port, awaiting a procedure**, with the
 `MeshWorkloadSpecFactoryConcept` design work already done in that entry.
 
-**Kernel forks.** Because each `*MeshWorkloadFactory` binds the same kernel sources as its
-single-device sibling and cannot convert with it, every ported factory takes the **intra-op fork**
-rung of *Caution: Porting a shared kernel*. Pass 1 created five `_metal2` forks; pass 2 creates
-**six** more (the fused readers, writers and compute kernels), for eleven in total — one per kernel
-source in the op. The legacy originals stay untouched apart from the mandated pointer comment and
-keep serving the four mesh factories.
+**Kernel forks — created as scaffolding, since retired.** Because each `*MeshWorkloadFactory` bound
+the same kernel sources as its single-device sibling and could not convert with it, passes 1-2 took
+the **intra-op fork** rung of *Caution: Porting a shared kernel*: five `_metal2` forks in pass 1 and
+six in pass 2, eleven in total — one per kernel source in the op — with the legacy originals untouched
+apart from the mandated pointer comment, still serving the mesh factories.
+
+Pass 3 converted those last consumers, so all eleven originals became unreferenced, and a fourth
+commit retired the scaffolding: originals deleted, forks renamed onto their names, pointer comments
+gone with the files that held them, and the eleven kernel-source path strings in the four factories
+updated. **Net effect on the tree: the op has the same eleven kernel files it started with, at the
+same paths, now containing Metal 2.0 code.** See `METAL2_PORT_REPORT.md` → *Handoff points* #2 for the
+doc-evolution signal this left behind (the fork convention is built for cross-op sharing and scales
+poorly applied to an intra-op split).
 
 ---
 
@@ -448,10 +455,10 @@ in this change.
 | `dataflow/writer_paged_row_major_fused_update_cache_interleaved_start_id.cpp` | same pair | no | **2 — create the fork** (pass 2) |
 | `compute/paged_row_major_fused_update_cache.cpp` | same pair | no | **2 — create the fork** (pass 2) |
 
-Eleven forks in total across the two passes — one per kernel source in the op. Remaining consumers
-of every original: the four `*MeshWorkloadFactory` factories (out of procedure — see
-[Deferred / Flagged](#deferred--flagged)). Recorded in `METAL2_PORT_REPORT.md` →
-*Open items for downstream*.
+Eleven forks in total across passes 1-2 — one per kernel source in the op. Their only remaining
+consumers were the four `*MeshWorkloadFactory` factories, which **pass 3 converted**; a fourth commit
+then deleted the originals and renamed the forks onto their names, so no fork and no legacy copy
+survives. Recorded in `METAL2_PORT_REPORT.md` → *Handoff points* #2.
 
 `ls` of each original's directory confirmed no `_metal2` fork existed beside any of the six pass-2
 kernels beforehand (a locational check, not a tree-wide grep). No build-system change was needed:
@@ -517,16 +524,22 @@ Pass 2 adds:
 
 ## Planned Spec Shape
 
+> **Kernel source names.** The paths below are the **final** ones. During passes 1-2 each was a
+> `_metal2` fork sitting beside the legacy original it was forked from; pass 3 converted the last
+> consumers of those originals and a fourth commit retired the scaffolding, renaming each fork onto
+> its original name. So a reviewer reading the pass-1/2 commits will see `*_metal2.cpp` here and a
+> reviewer reading the final tree will not — same file, same content.
+
 ### Variant: `PagedUpdateCacheProgramFactory`
 
 - **KernelSpecs** (3, 1:1 with legacy — no work-split multiplicity):
-  - `READER` — `.../reader_update_cache_interleaved_start_id_metal2.cpp`,
+  - `READER` — `.../reader_update_cache_interleaved_start_id.cpp`,
     `hw_config = create_reader_datamovement_config(arch)` (legacy `ReaderConfigDescriptor{}` resolves
     to the reader default triple `RISCV_1 / NOC_0 / DM_DEDICATED_NOC`), `compiler_options` left at
     the default `O2`.
-  - `WRITER` — `.../writer_update_cache_interleaved_start_id_metal2.cpp`,
+  - `WRITER` — `.../writer_update_cache_interleaved_start_id.cpp`,
     `hw_config = create_writer_datamovement_config(arch)`, `opt_level` default `O2`.
-  - `COMPUTE` — `.../compute/update_cache_metal2.cpp`,
+  - `COMPUTE` — `.../compute/update_cache.cpp`,
     `hw_config = ComputeGen1Config{.enable_32_bit_dest = fp32_dest_acc_en, .unpack_modes = …}`,
     **`compiler_options.opt_level = O3` set explicitly** (legacy `ComputeConfigDescriptor` defaults to
     O3; Metal 2.0 `CompilerOptions` defaults to O2).
@@ -575,9 +588,9 @@ the spec computes the set from the resolved data formats rather than hardcoding 
 ### Variant: `PagedFillCacheProgramFactory`
 
 - **KernelSpecs** (2, 1:1 with legacy):
-  - `READER` — `.../reader_fill_cache_interleaved_metal2.cpp`,
+  - `READER` — `.../reader_fill_cache_interleaved.cpp`,
     `create_reader_datamovement_config(arch)`, `opt_level` default `O2`.
-  - `WRITER` — `.../writer_fill_cache_interleaved_metal2.cpp`,
+  - `WRITER` — `.../writer_fill_cache_interleaved.cpp`,
     `create_writer_datamovement_config(arch)`, `opt_level` default `O2`.
   - No compute kernel, so no `ComputeHardwareConfig` and no `unpack_modes`.
 - **DataflowBufferSpecs** (4):
@@ -613,12 +626,12 @@ unity-built into one translation unit, so the prefixes keep the names from colli
 `UC_` / `FC_` / `RMF_` sets).
 
 - **KernelSpecs** (3, 1:1 with legacy — no work-split multiplicity):
-  - `TF_READER_KERNEL` — `.../reader_paged_fused_update_cache_interleaved_start_id_metal2.cpp`,
+  - `TF_READER_KERNEL` — `.../reader_paged_fused_update_cache_interleaved_start_id.cpp`,
     `hw_config = create_reader_datamovement_config(arch)` (legacy `ReaderConfigDescriptor{}` resolves
     to `RISCV_1 / NOC_0 / DM_DEDICATED_NOC`), `compiler_options.opt_level` left at the default `O2`.
-  - `TF_WRITER_KERNEL` — `.../writer_paged_fused_update_cache_interleaved_start_id_metal2.cpp`,
+  - `TF_WRITER_KERNEL` — `.../writer_paged_fused_update_cache_interleaved_start_id.cpp`,
     `hw_config = create_writer_datamovement_config(arch)`, `opt_level` default `O2`.
-  - `TF_COMPUTE_KERNEL` — `.../compute/paged_fused_update_cache_metal2.cpp`,
+  - `TF_COMPUTE_KERNEL` — `.../compute/paged_fused_update_cache.cpp`,
     `hw_config = ComputeGen1Config{.enable_32_bit_dest = fp32_dest_acc_en, .unpack_modes = …}`,
     **`compiler_options.opt_level = O3` set explicitly** (legacy `ComputeConfigDescriptor` resolves
     to O3; Metal 2.0 `CompilerOptions` defaults to O2).
@@ -697,8 +710,8 @@ allocation to collide with. Recorded as Quasar-uplift debt, with a comment at th
 
 Prefix `RMF_`. Same shape as the tiled variant with these differences:
 
-- **KernelSpecs** (3): sources are the row-major `_metal2` forks; `RMF_COMPUTE_KERNEL` is
-  `.../compute/paged_row_major_fused_update_cache_metal2.cpp`. Same `hw_config` derivation, same
+- **KernelSpecs** (3): sources are the row-major kernels; `RMF_COMPUTE_KERNEL` is
+  `.../compute/paged_row_major_fused_update_cache.cpp`. Same `hw_config` derivation, same
   explicit `O3` on compute.
 - **DataflowBufferSpecs** (8) — the tiled set minus `TF_UNTILIZED_INPUT_DFB`, with the intermediates
   renumbered (`c_5`/`c_6` aliased pair, `c_7` output). Sizes and formats are computed identically.
@@ -802,12 +815,11 @@ so the miss and hit paths cannot disagree about which coordinates are noops.
 
 #### Flags (pass 3)
 
-- **The 11 legacy kernel sources are now unreferenced.** Nothing binds them: every factory binds a
-  `_metal2` fork. That completes the *sunset trigger* condition the pass-2 report recorded, and the
-  remaining work — delete the 11 originals, rename the forks onto their names, drop the pointer
-  comments — is deliberately **not** in this pass. It is purely mechanical, touches 22 files, and
-  bundling it with a novel-concept port would make both harder to review and to bisect. Carried in
-  `METAL2_PORT_REPORT.md` → *Open items* #6.
+- **The 11 legacy kernel sources became unreferenced**, since every factory now binds a fork. That met
+  the *sunset trigger* the pass-2 report recorded, and a **fourth commit** acted on it: originals
+  deleted, forks renamed onto their names, the 11 kernel-source path strings updated. Kept out of the
+  pass-3 commit on bisection grounds — a wrong kernel path fails at *runtime* rather than at build
+  time, so "the concept port or the rename?" is exactly the question worth not having to ask.
 - **One behaviour delta, confirmed empirically.** See *Deferred / Flagged*.
 
 ## Preserved Multiplicity

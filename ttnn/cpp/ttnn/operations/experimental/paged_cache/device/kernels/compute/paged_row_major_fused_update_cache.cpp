@@ -2,11 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// NOTE: A Metal 2.0 fork of this kernel lives beside it, as
-// paged_row_major_fused_update_cache_metal2.cpp. Ops ported to Metal 2.0 bind the fork; this file serves
-// the consumers still on the legacy API. Until the last of them migrates and
-// this file is retired, changes here likely belong in the fork too.
-
 #include <cstdint>
 
 #include "api/compute/common.h"
@@ -14,36 +9,35 @@
 #include "api/compute/tilize.h"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t rt_args_idx = 0;
-    const bool has_work = get_arg_val<uint32_t>(rt_args_idx++);
+    const bool has_work = get_arg(args::has_work);
     if (!has_work) {
         return;
     }
-    const bool is_input1 = get_arg_val<uint32_t>(rt_args_idx++);
+    // Read but unused, as in the legacy kernel. A row-major input arrives already untilized, so this
+    // kernel never touches either input buffer and has nothing to select between -- unlike the tiled
+    // sibling, where is_input1 chooses which input to untilize. Kept so the host's per-node runtime
+    // argument emission is unchanged. The two dead input buffer-index compile-time args the legacy
+    // kernel read alongside it are gone: a buffer index is expressed as a dataflow-buffer binding in
+    // this API and nothing else, and there is no endpoint here to declare.
+    [[maybe_unused]] const bool is_input1 = get_arg(args::is_input1);
 
-    constexpr uint32_t in1_cb = get_compile_time_arg_val(0);
-    constexpr uint32_t in2_cb = get_compile_time_arg_val(1);
-    [[maybe_unused]] uint32_t in_cb = in1_cb;
-    if (!is_input1) {
-        in_cb = in2_cb;
-    }
+    constexpr uint32_t Wt = get_arg(args::Wt);
+    constexpr uint32_t num_heads = get_arg(args::num_heads);
 
-    constexpr uint32_t cache_cb = get_compile_time_arg_val(2);
-    constexpr uint32_t untilized_cache_cb = get_compile_time_arg_val(3);
-    constexpr uint32_t untilized_cache2_cb = get_compile_time_arg_val(4);
-    constexpr uint32_t out_cb = get_compile_time_arg_val(5);
-    constexpr uint32_t Wt = get_compile_time_arg_val(6);
-    constexpr uint32_t num_heads = get_compile_time_arg_val(7);
-
-    compute_kernel_hw_startup(cache_cb, untilized_cache_cb);
+    // dfb::cache holds the cache tiles the reader pulled in. dfb::untilized_cache and
+    // dfb::untilized_cache2 are aliased -- the writer patches the new row into the region published
+    // through the first and republishes it through the second, which is what this kernel re-tilizes
+    // into dfb::out.
+    compute_kernel_hw_startup(dfb::cache, dfb::untilized_cache);
 
     for (uint32_t cur_head = 0; cur_head < num_heads; ++cur_head) {
         // Untilize a block from the cache with reconfiguration
-        compute_kernel_lib::untilize<Wt, cache_cb, untilized_cache_cb>(1);
+        compute_kernel_lib::untilize<Wt, dfb::cache, dfb::untilized_cache>(1);
 
         // Wait on writer to update block. Tilize with reconfiguration
-        compute_kernel_lib::tilize<Wt, untilized_cache2_cb, out_cb>(1);
+        compute_kernel_lib::tilize<Wt, dfb::untilized_cache2, dfb::out>(1);
     }
 }

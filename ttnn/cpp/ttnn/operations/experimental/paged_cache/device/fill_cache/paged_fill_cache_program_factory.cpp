@@ -47,10 +47,10 @@ const KernelSpecName FC_WRITER_KERNEL{"writer"};
 
 constexpr auto FC_READER_SOURCE =
     "ttnn/cpp/ttnn/operations/experimental/paged_cache/device/kernels/dataflow/"
-    "reader_fill_cache_interleaved_metal2.cpp";
+    "reader_fill_cache_interleaved.cpp";
 constexpr auto FC_WRITER_SOURCE =
     "ttnn/cpp/ttnn/operations/experimental/paged_cache/device/kernels/dataflow/"
-    "writer_fill_cache_interleaved_metal2.cpp";
+    "writer_fill_cache_interleaved.cpp";
 
 // `noop` is the only thing that differs between the single-device and the mesh-workload factory: a
 // mesh coordinate outside operation_attributes.mesh_coords gets a noop program (kernels early-exit).
