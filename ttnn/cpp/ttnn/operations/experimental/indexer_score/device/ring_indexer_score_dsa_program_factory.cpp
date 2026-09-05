@@ -20,6 +20,7 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-logger/tt-logger.hpp>
+#include <tt_stl/small_vector.hpp>
 #include "hostdevcommon/kernel_structs.h"  // tt::CBIndex
 
 #include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
@@ -702,15 +703,24 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
     tensor_return_value_t& out) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     static const bool profile_enabled = std::getenv("TT_METAL_HOST_PROFILE_PHASES") != nullptr;
-    // Preserve the adapter's resolved operand identity, including the gathered/workload buffers.
-    // Group bindings by kernel so each worker address does not repeat a program/kernel lookup.
+    if (cached.shared_variables.empty()) {
+        return;
+    }
+    // The descriptor adapter copies one workload resource list to every coordinate's shared
+    // variables. Operand order and distributed-buffer addresses therefore do not depend on range.
+    // Collect fresh operands once per dispatch, preserving resolved indices and resource ownership.
+    const auto collected = [&] {
+        ZoneNamedN(collect_zone, "HostProfile::ring_indexer_collect_buffers", profile_enabled);
+        return descriptor_adapter_t::collect_tensor_buffers(
+            tensors, out, cached.shared_variables.begin()->second.workload_descriptor);
+    }();
+    ttsl::SmallVector<uint32_t, 16> addresses;
+    addresses.reserve(collected.buffers.size());
+    for (const auto* buffer : collected.buffers) {
+        addresses.push_back(buffer->address());
+    }
     for (auto& [range, program] : cached.workload.get_programs()) {
-        const auto& shared = cached.shared_variables.at(range);
-        const auto& bindings = shared.resolved_bindings;
-        auto collected = [&] {
-            ZoneNamedN(collect_zone, "HostProfile::ring_indexer_collect_buffers", profile_enabled);
-            return descriptor_adapter_t::collect_tensor_buffers(tensors, out, shared.workload_descriptor);
-        }();
+        const auto& bindings = cached.shared_variables.at(range).resolved_bindings;
         ZoneNamedN(binding_zone, "HostProfile::ring_indexer_patch_bindings", profile_enabled);
         if (!bindings.cbs.empty()) {
             // Retain the general implementation for any future CB binding variant.
@@ -718,19 +728,25 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
             continue;
         }
         std::vector<std::vector<tt::tt_metal::RuntimeArgsData>>* kernel_args = nullptr;
+        tt::tt_metal::RuntimeArgsData* common_args = nullptr;
         uint32_t previous_kernel = 0;
+        uint32_t previous_common_kernel = 0;
+        // Preserve binding order, including duplicate destinations: only cache the last lookup.
+        // References remain local to this apply and never survive dispatch storage retargeting.
         for (const auto& binding : bindings.rt_args) {
             if (binding.is_common) {
-                tt::tt_metal::GetCommonRuntimeArgs(program, binding.kernel_idx)[binding.arg_idx] =
-                    collected.buffers[binding.tensor_buffer_idx]->address();
+                if (common_args == nullptr || previous_common_kernel != binding.kernel_idx) {
+                    common_args = &tt::tt_metal::GetCommonRuntimeArgs(program, binding.kernel_idx);
+                    previous_common_kernel = binding.kernel_idx;
+                }
+                (*common_args)[binding.arg_idx] = addresses[binding.tensor_buffer_idx];
                 continue;
             }
             if (kernel_args == nullptr || previous_kernel != binding.kernel_idx) {
                 kernel_args = &tt::tt_metal::GetRuntimeArgs(program, binding.kernel_idx);
                 previous_kernel = binding.kernel_idx;
             }
-            (*kernel_args)[binding.core.x][binding.core.y][binding.arg_idx] =
-                collected.buffers[binding.tensor_buffer_idx]->address();
+            (*kernel_args)[binding.core.x][binding.core.y][binding.arg_idx] = addresses[binding.tensor_buffer_idx];
         }
     }
 
@@ -753,6 +769,28 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
     const uint32_t local_slot_pages =
         (k_local_shape[2] / tt::constants::TILE_HEIGHT) * (k_local_shape[3] / tt::constants::TILE_WIDTH);
     const uint32_t k_local_batch_page_offset = args.cache_batch_idx.value_or(0) * local_slot_pages;
+    const auto [input_batch_base, valid_pages, backward_semaphore, forward_semaphore] = [&] {
+        ZoneNamedN(ag_collect_zone, "HostProfile::ring_indexer_ag_collect", profile_enabled);
+        const auto& shape = k_local.padded_shape();
+        const uint32_t Ht = shape[2] / tt::constants::TILE_HEIGHT;
+        const uint32_t Wt = shape[3] / tt::constants::TILE_WIDTH;
+        const uint32_t input_batch_base =
+            ag_rt::input_batch_base_pages(args.cache_batch_idx.value_or(0), shape[1], Ht, Wt);
+        const auto valid_Ht = gather_valid_height_tiles(args, k_local);
+        const uint32_t valid_pages = std::min(valid_Ht.value_or(Ht), Ht) * Wt;
+
+        // Semaphore identity is hash-excluded. Rebind both ring directions on every cache hit so callers
+        // can alternate double-buffered semaphore pairs without compiling a second otherwise-identical
+        // program. Runtime-arg layouts are declared in ring_attention_all_gather_async_detail.
+        const auto& ag_semaphores = args.fused_ring->ag_semaphore;
+        TT_FATAL(
+            ag_semaphores.size() >= 2,
+            "indexer_score fused override: expected at least 2 AG semaphores, got {}",
+            ag_semaphores.size());
+        const uint32_t backward_semaphore = static_cast<uint32_t>(ag_semaphores[0].address());
+        const uint32_t forward_semaphore = static_cast<uint32_t>(ag_semaphores[1].address());
+        return std::array<uint32_t, 4>{input_batch_base, valid_pages, backward_semaphore, forward_semaphore};
+    }();
     for (auto& [range, program] : cached.workload.get_programs()) {
         const auto geom = [&] {
             ZoneNamedN(geometry_zone, "HostProfile::ring_indexer_rank_geometry", profile_enabled);
@@ -814,29 +852,11 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
             writer_common.at(common::writer::StraddleJump) = geom.straddle_jump_tiles;
         }
 
-        // Includes the AG scalar preparation immediately preceding the four kernel writes.
+        // Coordinate-specific AG writes; invocation-wide scalar preparation is measured separately.
         ZoneNamedN(ag_zone, "HostProfile::ring_indexer_ag_prepare_writes", profile_enabled);
         // The descriptor fast path patches buffer bindings but not scalar fields embedded in the fused AG
         // workers. cache_batch_idx and the exact kv_len are hash-excluded (only the structural schedule class is
         // hashed), so update the selected input slot and slab-rounded gather extent on every cache hit.
-        const auto& shape = k_local.padded_shape();
-        const uint32_t Ht = shape[2] / tt::constants::TILE_HEIGHT;
-        const uint32_t Wt = shape[3] / tt::constants::TILE_WIDTH;
-        const uint32_t input_batch_base =
-            ag_rt::input_batch_base_pages(args.cache_batch_idx.value_or(0), shape[1], Ht, Wt);
-        const auto valid_Ht = gather_valid_height_tiles(args, k_local);
-        const uint32_t valid_pages = std::min(valid_Ht.value_or(Ht), Ht) * Wt;
-
-        // Semaphore identity is hash-excluded. Rebind both ring directions on every cache hit so callers
-        // can alternate double-buffered semaphore pairs without compiling a second otherwise-identical
-        // program. Runtime-arg layouts are declared in ring_attention_all_gather_async_detail.
-        const auto& ag_semaphores = args.fused_ring->ag_semaphore;
-        TT_FATAL(
-            ag_semaphores.size() >= 2,
-            "indexer_score fused override: expected at least 2 AG semaphores, got {}",
-            ag_semaphores.size());
-        const uint32_t backward_semaphore = static_cast<uint32_t>(ag_semaphores[0].address());
-        const uint32_t forward_semaphore = static_cast<uint32_t>(ag_semaphores[1].address());
         constexpr uint32_t ag_reader_input_base =
             ag_rt::kReaderRuntimeArgHeaderCount + ag_rt::kInputBatchBaseFieldOffset;
         constexpr uint32_t ag_reader_valid_pages = ag_rt::kReaderRuntimeArgHeaderCount + ag_rt::kValidPagesFieldOffset;
