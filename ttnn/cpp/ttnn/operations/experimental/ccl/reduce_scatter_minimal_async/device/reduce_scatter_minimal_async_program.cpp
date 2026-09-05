@@ -150,6 +150,9 @@ std::unordered_map<std::string, uint32_t> get_ring_writer_named_compile_args(
         {"page_size", page_size},
         {"num_tiles_to_write_per_packet", num_tiles_to_write_per_packet},
         {"output_batch_num_pages", output_batch_num_pages},
+        // Batch stride of the tiled (input-shaped) intermediate; the writer needs it to give each
+        // batch its own staging region on that layout, as the chunk-paged one already does.
+        {"input_batch_num_pages", input_batch_num_pages},
         {"input_channel_num_pages", input_channel_num_pages},
         {"output_channel_num_pages", output_channel_num_pages},
         {"input_tensor_B", input_tensor_B},
@@ -786,23 +789,38 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                 uint32_t worker_id = (link * num_workers_per_direction) + worker;
                 uint32_t num_workers = num_links * num_workers_per_direction;
 
-                auto [start_tiles_read, start_tiles_to_read, start_pages_read_in_row, start_row_offset] =
-                    ttnn::experimental::ccl::reduce_scatter_get_tile_offsets(
-                        worker_id,
-                        num_workers,
-                        output_batch_num_pages,
-                        output_channel_num_pages,
-                        slice_Wt,
-                        input_tensor_Wt,
-                        normalized_dim);
+                const auto
+                    [unit_start,
+                     unit_end,
+                     start_tiles_read,
+                     start_tiles_to_read,
+                     start_pages_read_in_row,
+                     start_row_offset] =
+                        ttnn::experimental::ccl::reduce_scatter_get_worker_split(
+                            worker_id,
+                            num_workers,
+                            input_tensor_B,
+                            slice_C,
+                            output_batch_num_pages,
+                            output_channel_num_pages,
+                            slice_Wt,
+                            input_tensor_Wt,
+                            normalized_dim);
 
                 // for dim 0 scatters we process each slice in batches
-                // for all other dims we process each slice in channels
-                uint32_t tiles_to_process_per_slice =
-                    (start_tiles_to_read - start_tiles_read) * (normalized_dim == 0 ? slice_B : slice_C);
+                // for all other dims we process each slice in the (batch, channel) units this worker owns,
+                // all of them inside every ring step
+                uint32_t tiles_per_worker_per_repeat = start_tiles_to_read - start_tiles_read;
+                uint32_t num_repeats = (normalized_dim == 0) ? slice_B : (unit_end - unit_start);
                 uint32_t chunks_per_sync_val =
                     chunks_per_sync.value_or(ttnn::experimental::ccl::reduce_scatter_default_chunks_per_sync(
-                        topology, tiles_to_process_per_slice, tile_granularity));
+                        topology, tiles_per_worker_per_repeat, num_repeats, tile_granularity));
+                if (!chunks_per_sync.has_value() && normalized_dim != 0) {
+                    // The dims 1-3 kernels carry the worker's whole share of the slice per step; see the
+                    // constant's comment for why their default interval is capped and dim 0's is not.
+                    chunks_per_sync_val =
+                        std::min(chunks_per_sync_val, ttnn::experimental::ccl::RING_UNIT_STEP_MAX_CHUNKS_PER_SYNC);
+                }
                 log_trace(tt::LogOp, "DEBUG: chunks_per_sync_val: {}", chunks_per_sync_val);
 
                 std::vector<uint32_t> reader_rt_args;
@@ -829,6 +847,8 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                         start_tiles_to_read,                      // start_tiles_to_read
                         start_pages_read_in_row,                  // start_pages_read_in_row
                         start_row_offset,                         // start_row_offset
+                        unit_start,                               // unit_start
+                        unit_end,                                 // unit_end
                         // penult_intermediate_tensor_address; 0 (unread) on the tiled staging layout
                         use_contiguous_interm ? penult_intermediate_tensor->buffer()->address() : 0,
                     };
@@ -880,6 +900,8 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                         start_row_offset,         // start_row_offset
                         start_tiles_read,         // start_tiles_read
                         start_tiles_to_read,      // tiles_to_read
+                        unit_start,               // unit_start
+                        unit_end,                 // unit_end
                         // penult_intermediate_tensor_address; 0 (unread) on the tiled staging layout. Precedes
                         // the mux/fabric-connection args appended after this block.
                         use_contiguous_interm ? penult_intermediate_tensor->buffer()->address() : 0,
@@ -924,10 +946,15 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                 }
                 tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, {core}, writer_rt_args);
 
+                // Shared by both compute kernels. dim_zero_ring_reduction.cpp has no unit loop and
+                // stops reading after dir, leaving the two trailing values unread; the split helper
+                // still reports the full span for dim 0, so nothing depends on them there.
                 std::vector<uint32_t> compute_rt_args = {
                     start_tiles_read,     // start_tiles_read
                     start_tiles_to_read,  // start_tiles_to_read
-                    dir};                 // dir
+                    dir,                  // dir
+                    unit_start,           // unit_start
+                    unit_end};            // unit_end
                 tt::tt_metal::SetRuntimeArgs(program, compute_kernel_id, {core}, compute_rt_args);
             }
         }
@@ -1521,11 +1548,11 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
 
                 // for dim 0 scatters we process each slice in batches
                 // for all other dims we process each slice in channels
-                uint32_t tiles_to_process_per_slice =
-                    (start_tiles_to_read - start_tiles_read) * (normalized_dim == 0 ? slice_B : slice_C);
+                uint32_t tiles_per_worker_per_repeat = start_tiles_to_read - start_tiles_read;
+                uint32_t num_repeats = (normalized_dim == 0) ? slice_B : slice_C;
                 uint32_t chunks_per_sync_val =
                     chunks_per_sync.value_or(ttnn::experimental::ccl::reduce_scatter_default_chunks_per_sync(
-                        topology, tiles_to_process_per_slice, tile_granularity));
+                        topology, tiles_per_worker_per_repeat, num_repeats, tile_granularity));
                 log_trace(tt::LogOp, "DEBUG: chunks_per_sync_val: {}", chunks_per_sync_val);
 
                 // Reader RT args

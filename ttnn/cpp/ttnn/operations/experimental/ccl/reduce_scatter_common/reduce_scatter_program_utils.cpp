@@ -11,6 +11,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/math.hpp>
 
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
 
@@ -98,15 +99,32 @@ uint32_t reduce_scatter_default_workers(
 }
 
 uint32_t reduce_scatter_default_chunks_per_sync(
-    ttnn::ccl::Topology topology, uint32_t num_tiles_to_process_per_slice, uint32_t tile_granularity) {
+    ttnn::ccl::Topology topology,
+    uint32_t tiles_per_worker_per_repeat,
+    uint32_t num_repeats,
+    uint32_t tile_granularity) {
     // For Line, as early as 20 chunks per sync we get statistically significant performance improvements.
     // For Ring there is no statistically significant performance improvement until 80 chunks per sync.
+    // (The ring kernels for dims 1-3 apply a tighter cap on top of this; see
+    // RING_UNIT_STEP_MAX_CHUNKS_PER_SYNC.)
     TT_FATAL(topology == ttnn::ccl::Topology::Ring || topology == ttnn::ccl::Topology::Linear, "Invalid topology");
     constexpr uint32_t RING_DEFAULT_CHUNKS_PER_SYNC = 80;
     constexpr uint32_t LINEAR_DEFAULT_CHUNKS_PER_SYNC = 20;
     uint32_t default_value =
         topology == ttnn::ccl::Topology::Ring ? RING_DEFAULT_CHUNKS_PER_SYNC : LINEAR_DEFAULT_CHUNKS_PER_SYNC;
-    uint32_t total_chunks = std::max(num_tiles_to_process_per_slice / tile_granularity / 2, (uint32_t)1);
+    // Count chunks the way the kernels actually issue them. Each repeat (a channel for dims 1-3, a
+    // batch for dim 0) is chunked on its own, so a repeat holding fewer than tile_granularity tiles
+    // still costs one whole chunk -- and one semaphore wait on the receiving side.
+    //
+    // The previous form divided the PRODUCT tiles*repeats by the granularity, which silently assumes
+    // every chunk is full. When a repeat is a partial chunk that floors toward zero and pins the
+    // result at 1, so the receiver stalls on every chunk and the read/add/send pipeline never fills.
+    // Measured on [8,8,256,256] scattering on dim 2 (2 tiles per worker over 8 channels): the old
+    // form yielded 1 and the op ran at 456us; the corrected count yields 4 and it runs at 252us.
+    // Dims 0 and 1 are unaffected -- their repeats already hold whole chunks.
+    const uint32_t chunks_per_repeat = tt::div_up(tiles_per_worker_per_repeat, tile_granularity);
+    const uint32_t chunks_per_step = num_repeats * chunks_per_repeat;
+    uint32_t total_chunks = std::max(chunks_per_step / 2, (uint32_t)1);
     return std::min(default_value, total_chunks);
 }
 
@@ -143,7 +161,13 @@ RingIntermStagingParams reduce_scatter_ring_interm_staging_params(
     const uint32_t output_channel_num_pages = output_batch_num_pages / slice_C;
 
     const uint32_t chunks_per_channel = (output_channel_num_pages + tile_granularity - 1) / tile_granularity;
-    const uint32_t total_chunks = ring_size * slice_C * chunks_per_channel;
+    // One staging region per batch. Without the batch axis every batch reuses the same chunks, and a
+    // cross-device barrier has to stand between consecutive batches to stop the next one overwriting
+    // partial sums the current one has not consumed yet -- input_tensor_B - 1 full fabric round trips
+    // per worker. Giving each batch its own region removes the hazard, and with it the barrier. The
+    // arrival semaphores need no such protection: they are monotonic across batches (never reset per
+    // batch) and fabric ordering keeps increment N paired with chunk N.
+    const uint32_t total_chunks = input_tensor_B * ring_size * slice_C * chunks_per_channel;
     const uint32_t page_bytes = tile_granularity * single_tile_bytes;
 
     // The contiguous fast path covers the ring topology on dims 1/2/3 (dim 0 uses distinct kernels).
@@ -196,8 +220,10 @@ std::optional<tt::tt_metal::TensorSpec> reduce_scatter_ring_penult_intermediate_
         return std::nullopt;
     }
     // Same chunk-paged layout as the main intermediate, but sized without the ring_size (slice_idx)
-    // axis: total_chunks == ring_size * slice_C * chunks_per_channel, so this region is exactly
-    // slice_C * chunks_per_channel pages, addressed as (c * chunks_per_channel + chunk-in-channel).
+    // axis: total_chunks == input_tensor_B * ring_size * slice_C * chunks_per_channel, so this region
+    // is exactly input_tensor_B * slice_C * chunks_per_channel pages, addressed as
+    // ((b * slice_C + c) * chunks_per_channel + chunk-in-channel). The batch axis carries over from
+    // total_chunks, for the same reason the main intermediate needs it.
     const uint32_t penult_intermediate_chunks = params.total_chunks / ring_size;
     return tt::tt_metal::TensorSpec(
         ttnn::Shape({penult_intermediate_chunks, params.page_bytes}),
@@ -289,6 +315,51 @@ std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> reduce_scatter_get_tile_offse
     }
 
     return {start_tiles_read, start_tiles_to_read, start_pages_read_in_row, start_row_offset};
+}
+
+ReduceScatterWorkerSplit reduce_scatter_get_worker_split(
+    uint32_t worker_id,
+    uint32_t num_workers,
+    uint32_t input_tensor_B,
+    uint32_t slice_C,
+    uint32_t output_batch_num_pages,
+    uint32_t output_channel_num_pages,
+    uint32_t slice_Wt,
+    uint32_t input_tensor_Wt,
+    uint32_t normalized_dim) {
+    // Units are (batch, channel) pairs; the kernels walk all of a worker's units inside each ring step.
+    const uint32_t num_units = input_tensor_B * slice_C;
+    // Whole units per worker, when they divide evenly. Balance is then identical to the page-major
+    // split, and each worker enters the per-channel loop num_units/num_workers times rather than
+    // num_units times, each time with a full channel of pages.
+    const bool unit_major =
+        normalized_dim != 0 && num_workers > 1 && num_units >= num_workers && num_units % num_workers == 0;
+    if (unit_major) {
+        return {
+            /*unit_start=*/worker_id * num_units / num_workers,
+            /*unit_end=*/(worker_id + 1) * num_units / num_workers,
+            /*start_tiles_read=*/0,
+            /*start_tiles_to_read=*/output_channel_num_pages,
+            /*start_pages_read_in_row=*/0,
+            /*start_row_offset=*/0};
+    }
+
+    const auto [start_tiles_read, start_tiles_to_read, start_pages_read_in_row, start_row_offset] =
+        reduce_scatter_get_tile_offsets(
+            worker_id,
+            num_workers,
+            output_batch_num_pages,
+            output_channel_num_pages,
+            slice_Wt,
+            input_tensor_Wt,
+            normalized_dim);
+    return {
+        /*unit_start=*/0,
+        /*unit_end=*/num_units,
+        start_tiles_read,
+        start_tiles_to_read,
+        start_pages_read_in_row,
+        start_row_offset};
 }
 
 void append_fabric_mux_connection_ct_args(
