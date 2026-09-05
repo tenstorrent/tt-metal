@@ -4,6 +4,10 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+from pathlib import Path
+
+import re
+
 from tracy import perf_metrics_common as mc
 from tracy.perf_counter_analysis import COUNTER_TYPE_NAMES, PERF_COUNTER_CSV_HEADERS
 
@@ -156,3 +160,14 @@ def test_shipped_counter_type_table_matches_the_header():
 
     shipped = json.loads((Path(mc.__file__).with_name("perf_counter_type_names.json")).read_text())
     assert {int(k): v for k, v in shipped.items()} == mc.perf_counter_type_names()
+
+
+def test_tech_report_catalogue_matches_metric_labels_exactly():
+    # The tech report is the single human-readable catalogue: every engine metric has exactly one
+    # row, no row is stale, and the label in the row is the engine's label.
+    report = (Path(__file__).resolve().parents[3] / "tech_reports" / "PerfCounters" / "perf-counters.md").read_text()
+    catalogue = {}
+    for label_unit, key in re.findall(r"^\| (.+?) \| `([a-z0-9_]+)` \| `", report, re.M):
+        assert key not in catalogue, f"duplicate catalogue row for {key}"
+        catalogue[key] = re.sub(r" \((%|ratio)\)$", "", label_unit)
+    assert catalogue == mc.METRIC_LABELS
