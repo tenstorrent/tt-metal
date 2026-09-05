@@ -433,7 +433,7 @@ models:
     wh_galaxy_perf: 430
     bh_quietbox_2: 310
     wh_llmbox: 342
-    bh_loudbox: 75
+    bh_loudbox: 115  # 75 (Llama-3.1-8B dp=8) + 40 (Gemma4-12B tp=8)
     wh_n150: 65
 umd:
   unit:
