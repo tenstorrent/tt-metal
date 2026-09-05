@@ -6,6 +6,7 @@ Test for instantiating both reference CPU and TT device MLA modules with the sam
 This test verifies that both modules can be created and weights are loaded correctly.
 """
 
+import math
 import os
 from pathlib import Path
 
@@ -22,7 +23,12 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_p
 from models.demos.deepseek_v3_d_p.tests.reference_runners import run_reference_mla
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import num_full_indexer_layers, resolve_has_indexer
-from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
+from models.demos.deepseek_v3_d_p.tt.mla.rope import (
+    ChunkMetadata,
+    RotarySetup,
+    refresh_llama4_scale,
+    write_chunk_metadata,
+)
 from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     blockcyclic_cache_host,
     blockcyclic_positions,
@@ -466,6 +472,78 @@ def test_ds_mla(
     )
 
 
+# sp x tp -- Mistral Small 4 bringup. Modelled on test_ds_mla above and deliberately narrowed;
+# every axis that test sweeps is pinned here to ONE value unless it changes the number being measured.
+#   mesh_device        (8, 4) only. Production SP-axis shape for this box; a (2, 4) PCC is not a
+#                      production-shape result, and the TTNN weight cache is keyed on device count.
+#   device_params      fabric2d only. FABRIC_1D is not in CI_ALLOWED_FABRICS for BH galaxy (8,4), so
+#                      pinning it skips the row; TorusXY needs a certified cabling descriptor.
+#   use_pretrained     random only. This row measures the MLA math, which the random-weight path
+#                      exercises identically; the pretrained checkpoint is covered by the chunked
+#                      rows below and by the transformer row.
+#   seq_len            5k and 25k, as Kimi. 25k is the row that crosses position 8192, where the
+#                      llama4 query temperature starts to apply (scale 1.139 at 25600, exactly 1.0
+#                      at 5120), so it is the only case here that exercises it.
+#   skip_host_comparison  check_pcc only. skip_check does the device work and computes NO PCC; the
+#                      gate for this step IS the PCC, so that case would be a silent zero-signal run.
+#   is_balanced        sequential only.
+# scale_down_sl stays swept (2 cases per seq_len): it is the one axis that changes the seq_len
+# actually run (max_sl 5120/25600 vs scaled_sl (sl//32)*8 = 1280/6400), which exercises different
+# padding/rotation paths. Only the max_sl references are staged; the scaled ones recompute.
+#
+# NOT WIRED ON PURPOSE: reference_attention_cls. run_reference_mla returns None for a variant with
+# no reference (reference_runners.py:63), so the [reference_output] PCC is skipped and the three
+# gate PCCs below still come from create_mla_reference -- the vendored DeepSeek MLA, which is
+# variant-independent. Whether that vendored reference is the right truth for Mistral is a separate
+# question and is deliberately NOT settled by this test.
+@pytest.mark.parametrize("mesh_device", [(8, 4)], ids=["8x4"], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "worker_l1_size": _WORKER_L1_SIZE,
+        },
+    ],
+    ids=["fabric2d"],
+    indirect=True,
+)
+@pytest.mark.parametrize("use_pretrained", [False], ids=["random"])
+@pytest.mark.parametrize("scale_down_sl", [False, True], ids=["max_sl", "scaled_sl"])
+@pytest.mark.parametrize("seq_len", [PREFILL_CHUNK_TOKENS, 25 * 1024], ids=["seq5k", "seq25k"])
+@pytest.mark.parametrize("skip_host_comparison", [False], ids=["check_pcc"])
+@pytest.mark.parametrize("is_balanced", [False], ids=["sequential"])
+@pytest.mark.parametrize("variant", ["mistral_small_4"], indirect=True, ids=["mistral"])
+@pytest.mark.skipif(not is_blackhole(), reason="Mistral Small 4 bringup targets the Blackhole galaxy")
+@pytest.mark.timeout(0)
+def test_mistral_small4_mla(
+    use_pretrained,
+    request,
+    mesh_device,
+    seq_len,
+    skip_host_comparison,
+    scale_down_sl,
+    is_balanced,
+    is_ci_env,
+    is_ci_v2_env,
+    device_params,
+    variant,
+):
+    run_model(
+        variant,
+        use_pretrained,
+        request,
+        mesh_device,
+        seq_len,
+        skip_host_comparison,
+        scale_down_sl,
+        is_balanced,
+        is_ci_env,
+        is_ci_v2_env,
+        device_params,
+    )
+
+
 # ---------------------------------------------------------------------------------------------------
 # Unified chunked-prefill driver. One loop (preload -> N iters of write+rope+ring_mla -> compare)
 # parametrized by where the prefix/reference come from. See test_mla_chunked_prefill below.
@@ -690,6 +768,8 @@ def _run_chunked_prefill(
         chunk_size_global=chunk_size_global,
         tail_slack=tight_cache,
     )
+    # Persistent, refreshed per chunk; None for every variant without a query temperature.
+    llama4_scale_buf = rope_setup.make_llama4_scale_buffer(chunk_size_global)
     tt_kvpe_cache = init_mla_kv_cache(
         cache_format=MlaKvCacheFormat.BFP8_TILE,
         hf_config=config,
@@ -777,7 +857,7 @@ def _run_chunked_prefill(
             # tensor. slot_id = cache_user_id (layer_num=1, so it is also the flat cache slot).
             kv_pad_metadata = None
             if use_metadata_tensor:
-                kv_pad_metadata = tuple(
+                scalars = tuple(
                     ttnn.from_torch(
                         torch.tensor([val], dtype=torch.int64).reshape(1, 1, 1, 1),
                         device=mesh_device,
@@ -787,6 +867,17 @@ def _run_chunked_prefill(
                         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
                     )
                     for val in (u, kv_actual, valid_end)
+                )
+                # 4th field is Mistral's query-scale buffer (None elsewhere), refreshed here by
+                # write_chunk_metadata so the scalars and the scale advance together.
+                kv_pad_metadata = ChunkMetadata(*scalars, llama4_scale_buf)
+                write_chunk_metadata(
+                    kv_pad_metadata,
+                    (u, kv_actual, valid_end),
+                    hf_config=config,
+                    mesh_device=mesh_device,
+                    chunk_size_global=chunk_size_global,
+                    sp_axis=sp_axis,
                 )
             # Metadata path: pass ONLY the per-element metadata operands (the runtime's _trace_metadata
             # equivalent) -- actual_start/actual_end are read on-device, so leave them None to prove
@@ -836,7 +927,9 @@ def _run_chunked_prefill(
                 if pcc < DETERMINISM_PCC_THRESHOLD:
                     det_failures.append((u, i, rep, pcc))
             if kv_pad_metadata is not None:
-                for meta_tensor in kv_pad_metadata:
+                # .scalars: field 3 is a persistent buffer allocated outside this loop, so a
+                # blanket deallocate would free it before the next chunk reads it.
+                for meta_tensor in kv_pad_metadata.scalars:
                     ttnn.deallocate(meta_tensor)
 
             assert torch.isfinite(out_flat).all(), f"user {u} iter {i}: non-finite output"
@@ -914,6 +1007,334 @@ def _run_chunked_prefill(
     logger.success(f"✓ Chunked prefill passed ({'trace' if use_trace else 'cpu'} ref, {num_users} user(s))")
 
 
+# ---------------------------------------------------------------------------------------------------
+# Direct checks on the llama4 query-scale tensor. These read the tensor back off-device and compare it
+# to rotated_chip_positions ground truth, INSTEAD of inferring correctness from an output PCC.
+#
+# Why not an output-PCC test: the query temperature moves full-output PCC by ~0.002 against this file's
+# 0.98 gate (measured by disabling the device side: rot-allfull 0.9918 -> 0.9910, deep-50k+5k
+# 0.9994 -> 0.9972). So every chunked scenario passes with the term absent, AND passes with it applied
+# to the WRONG ROWS -- which is the bug this was written after finding. The first implementation used
+# arange(start, start + chunk), correct only when `start` is slab-aligned; both scenarios used to
+# "confirm" it happened to be slab-aligned, so neither could see it.
+#
+# Offsets cover aligned (0, 5120, 51200) and rotated (640 chip-aligned, 672 mid-chip straddle, 4480
+# last chip, 6400 multi-slab) starts, each either crossing 8192 or sitting past it, so the scale
+# actually varies across chips rather than being uniform.
+@pytest.mark.parametrize("mesh_device", [(8, 4)], ids=["8x4"], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    ids=["line"],
+    indirect=True,
+)
+@pytest.mark.parametrize("kv_actual", [0, 640, 672, 4480, 5120, 6400, 7680, 8192, 51200])
+@pytest.mark.parametrize("route", ["host", "buffer", "runtime"])
+@pytest.mark.parametrize("variant", ["mistral_small_4"], indirect=True, ids=["mistral"])
+@pytest.mark.skipif(not is_blackhole(), reason="Mistral Small 4 is validated on Blackhole only")
+@pytest.mark.timeout(0)
+def test_llama4_query_scale_matches_rotated_positions(request, mesh_device, kv_actual, route, variant, device_params):
+    """The per-chip scale values must match the positions those chips actually carry.
+
+    All three delivery routes, because nothing else covers them:
+      * "host"    -> ttMLA builds the tensor from a host actual_start (single-shot / scalar path).
+      * "buffer"  -> refresh_llama4_scale writes the persistent buffer the traced path reads.
+      * "runtime" -> TtPrefillRuntime's own writer, so the arguments it passes are covered too.
+
+    The chunked scenarios cannot check any of this: an unrefreshed buffer holds ones, which is just
+    "no scale", and that is inside the PCC gate's noise.
+    """
+    chunk_size_global = 5120
+    sp_axis, tp_axis = 0, 1
+    sp = mesh_device.shape[sp_axis]
+    chunk_local = chunk_size_global // sp
+    seq_len_cache = ((kv_actual + 2 * chunk_size_global) // chunk_size_global) * chunk_size_global
+
+    config, weights = request.getfixturevalue("random_weights")
+    config.max_seq_len = seq_len_cache
+
+    mla_tt = ttMLA(
+        config,
+        weights,
+        mesh_device,
+        layer_idx=0,
+        seq_len=seq_len_cache,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        is_balanced=False,
+        topology=ttnn.Topology.Linear,
+        is_chunked=True,
+        active_seq_len=chunk_size_global,
+        slot_num=1,
+        layer_num=1,
+    )
+    assert mla_tt._llama4_beta is not None, "llama_4_scaling_beta is not reaching ttMLA"
+
+    if route == "host":
+        tt_scale = mla_tt._llama4_scale(kv_actual, chunk_local, None)
+    else:
+        setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False)
+        buf = setup.make_llama4_scale_buffer(chunk_size_global)
+        assert buf is not None, "RotarySetup did not allocate the persistent buffer"
+        if route == "buffer":
+            refresh_llama4_scale(buf, config, mesh_device, kv_actual, chunk_size_global, sp_axis=sp_axis)
+        else:
+            # Nothing in-tree constructs a TtPrefillRuntime (it needs the full model and a trace
+            # region), so a stub carrying the four attributes the method touches stands in for one.
+            meta = tuple(
+                ttnn.from_torch(
+                    torch.tensor([0], dtype=torch.int64).reshape(1, 1, 1, 1),
+                    device=mesh_device,
+                    dtype=ttnn.uint32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                )
+                for _ in range(3)
+            )
+            write_chunk_metadata(
+                ChunkMetadata(*meta, buf),
+                (0, kv_actual, kv_actual + chunk_size_global),
+                hf_config=config,
+                mesh_device=mesh_device,
+                chunk_size_global=chunk_size_global,
+                sp_axis=sp_axis,
+            )
+            start_back = ttnn.to_torch(meta[1], mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+            assert int(start_back.flatten()[0]) == kv_actual, "metadata[1] was not written"
+        tt_scale = buf
+
+    shard_dims = [None, None]
+    shard_dims[sp_axis] = 2
+    shard_dims[tp_axis] = 1  # head dim is replicated; concat and read one slice
+    got = ttnn.to_torch(
+        tt_scale, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=shard_dims, mesh_shape=mesh_device.shape)
+    )
+
+    beta = mla_tt._llama4_beta
+    orig_max = mla_tt._llama4_orig_max
+    positions = rotated_chip_positions(kv_actual, sp, chunk_local)
+    flat = torch.tensor([positions[c][r] for c in range(sp) for r in range(chunk_local)], dtype=torch.float32)
+    want = 1.0 + beta * torch.log(1.0 + torch.floor(flat / orig_max))
+
+    actual = got[0, 0, :, 0].float()
+    n_distinct = int(want.unique().numel())
+    logger.info(
+        f"kv_actual={kv_actual} route={route}: {n_distinct} distinct scale value(s), "
+        f"range [{want.min():.6f}, {want.max():.6f}]"
+    )
+    torch.testing.assert_close(actual, want.to(actual.dtype), rtol=0, atol=4e-3)
+
+    # A uniform chunk cannot distinguish a correct row map from a permuted one, so pin which cases are
+    # supposed to vary. A chunk varies iff it straddles a multiple of orig_max; sitting entirely inside
+    # one window (kv_actual=8192 -> positions 8192..13311) is uniform and correct.
+    straddles = (kv_actual // orig_max) != ((kv_actual + chunk_size_global - 1) // orig_max)
+    assert (n_distinct > 1) == straddles, (
+        f"kv_actual={kv_actual}: expected {'varying' if straddles else 'uniform'} scale, "
+        f"got {n_distinct} distinct value(s)"
+    )
+
+
+# The rows above check the scale tensor's VALUES. None of them checks that it reaches tt_q: the 27
+# direct rows call _llama4_scale itself, and the trace-replay row multiplies a synthetic q of its own.
+# Deleting the multiply in _q_stem leaves every one of them green. This row closes that gap by running
+# _q_stem twice, scale active and scale suppressed, and asserting the ratio between the two outputs is
+# the scale itself -- so the wiring is covered rather than inferred. Output PCC cannot do this job, for
+# the same reason given above: the temperature moves full-output PCC by ~0.002 against a 0.98 gate.
+@pytest.mark.parametrize("mesh_device", [(8, 4)], ids=["8x4"], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    ids=["line"],
+    indirect=True,
+)
+# Past 8192, so the scale is not 1.0 and the assertion can actually fail. At 5120 the scale is exactly
+# 1.0 and this test would pass with the multiply deleted.
+@pytest.mark.parametrize("kv_actual", [25600], ids=["past_8192"])
+@pytest.mark.parametrize("variant", ["mistral_small_4"], indirect=True, ids=["mistral"])
+@pytest.mark.skipif(not is_blackhole(), reason="Mistral Small 4 is validated on Blackhole only")
+@pytest.mark.timeout(0)
+def test_llama4_query_scale_is_applied_in_q_stem(request, mesh_device, kv_actual, variant, device_params):
+    """The query temperature must be applied to tt_q, not merely computed correctly."""
+    chunk_size_global = 5120
+    sp_axis, tp_axis = 0, 1
+    sp = mesh_device.shape[sp_axis]
+    chunk_local = chunk_size_global // sp
+    seq_len_cache = ((kv_actual + 2 * chunk_size_global) // chunk_size_global) * chunk_size_global
+
+    config, weights = request.getfixturevalue("random_weights")
+    config.max_seq_len = seq_len_cache
+
+    mla_tt = ttMLA(
+        config,
+        weights,
+        mesh_device,
+        layer_idx=0,
+        seq_len=seq_len_cache,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        is_balanced=False,
+        topology=ttnn.Topology.Linear,
+        is_chunked=True,
+        active_seq_len=chunk_size_global,
+        slot_num=1,
+        layer_num=1,
+    )
+    assert mla_tt._llama4_beta is not None, "llama_4_scaling_beta is not reaching ttMLA"
+
+    rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False)
+    rope_tensors = rope_setup.get_rope_tensors_indexed(
+        cache_seq_len_global=seq_len_cache, chunk_size_global=chunk_size_global
+    )
+
+    # _q_stem deallocates qr, so build one input per call from the same host tensor.
+    torch.manual_seed(0)
+    qr_host = torch.randn(1, 1, chunk_local, config.q_lora_rank, dtype=torch.float32)
+
+    def _q_stem_output(apply_scale: bool):
+        qr = ttnn.from_torch(
+            qr_host,
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        saved = mla_tt._llama4_beta
+        if not apply_scale:
+            mla_tt._llama4_beta = None  # skips the multiply in _q_stem
+        try:
+            out = mla_tt._q_stem(qr, rope_tensors, kv_actual, chunk_local, metadata=None)
+        finally:
+            mla_tt._llama4_beta = saved
+        shard_dims = [None, None]
+        shard_dims[sp_axis] = 2
+        shard_dims[tp_axis] = 1
+        return ttnn.to_torch(
+            out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=shard_dims, mesh_shape=mesh_device.shape)
+        ).float()
+
+    scaled = _q_stem_output(apply_scale=True)
+    plain = _q_stem_output(apply_scale=False)
+
+    beta, orig_max = mla_tt._llama4_beta, mla_tt._llama4_orig_max
+    positions = rotated_chip_positions(kv_actual, sp, chunk_local)
+    flat = torch.tensor([positions[c][r] for c in range(sp) for r in range(chunk_local)], dtype=torch.float32)
+    want = 1.0 + beta * torch.log(1.0 + torch.floor(flat / orig_max))
+    assert want.min() > 1.0, f"kv_actual={kv_actual} produced scale 1.0; the test cannot fail as written"
+
+    # Compare where the unscaled magnitude is large enough that the ratio is not dominated by bf16
+    # quantisation of near-zero entries.
+    ref = plain[0, 0, :, :]
+    got = scaled[0, 0, :, :]
+    mask = ref.abs() > 0.1
+    assert mask.any(), "no usable magnitudes in the q stem output"
+    ratio = (got[mask] / ref[mask]).float()
+    per_row = want.unsqueeze(-1).expand_as(ref)[mask]
+    logger.info(
+        f"kv_actual={kv_actual}: expected scale range [{want.min():.6f}, {want.max():.6f}], "
+        f"observed ratio range [{ratio.min():.6f}, {ratio.max():.6f}]"
+    )
+    torch.testing.assert_close(ratio, per_row, rtol=2e-2, atol=2e-2)
+
+
+# ---------------------------------------------------------------------------------------------------
+# Does a CAPTURED trace read the scale buffer's live contents, or a capture-time snapshot?
+#
+# That one ttnn semantic is why the traced path uses a persistent buffer refreshed per chunk instead of
+# a host-built tensor. If a replay saw a snapshot, every chunk after the captured one would silently
+# carry the captured chunk's temperature, and the chunked PCC gate could not see it.
+#
+# Deliberately a two-op trace, not a full MLA forward: attention at a 51200-token offset reads 51200
+# tokens of prior KV, so a replay-vs-eager comparison there has to preload the cache identically before
+# each measured run -- which tests cache bookkeeping on top of the thing actually in question.
+#
+# Offsets 0 (scale 1.0) and 51200 (1.194591) are 19% apart and each uniform across the chunk, so a
+# snapshot and a live read are unmistakable and no rotation reasoning is needed to read the result.
+@pytest.mark.parametrize("mesh_device", [(8, 4)], ids=["8x4"], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 16 * 1024 * 1024}],
+    ids=["line"],
+    indirect=True,
+)
+@pytest.mark.parametrize("variant", ["mistral_small_4"], indirect=True, ids=["mistral"])
+@pytest.mark.skipif(not is_blackhole(), reason="Mistral Small 4 is validated on Blackhole only")
+@pytest.mark.timeout(0)
+def test_llama4_scale_buffer_is_live_under_trace_replay(request, mesh_device, variant, device_params):
+    """A replay must pick up a refreshed scale buffer, and must not change without one."""
+    chunk_size_global = 5120
+    sp_axis, tp_axis = 0, 1
+    off_a, off_b = 0, 51200
+    seq_len_cache = ((off_b + 2 * chunk_size_global) // chunk_size_global) * chunk_size_global
+
+    config, _ = request.getfixturevalue("random_weights")
+    config.max_seq_len = seq_len_cache
+    scale_buf = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False).make_llama4_scale_buffer(
+        chunk_size_global
+    )
+    assert scale_buf is not None, "RotarySetup did not allocate the persistent buffer"
+
+    rope_scaling = config.rope_scaling
+    beta, orig_max = rope_scaling["llama_4_scaling_beta"], rope_scaling["original_max_position_embeddings"]
+    expect = {off: 1.0 + beta * math.log(1.0 + off // orig_max) for off in (off_a, off_b)}
+    assert expect[off_a] != expect[off_b], "offsets must differ in scale or this test proves nothing"
+
+    shard_dims = [None, None]
+    shard_dims[sp_axis] = 2
+    shard_dims[tp_axis] = 1
+    width = config.kv_lora_rank + config.qk_rope_head_dim
+    q = ttnn.from_torch(
+        torch.ones(1, config.num_attention_heads, chunk_size_global, width, dtype=torch.bfloat16),
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
+    )
+
+    refresh_llama4_scale(scale_buf, config, mesh_device, off_a, chunk_size_global, sp_axis=sp_axis)
+    out = ttnn.multiply(q, scale_buf)  # warm/compile before recording
+    ttnn.synchronize_device(mesh_device)
+    tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    out = ttnn.multiply(q, scale_buf)
+    ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
+    ttnn.synchronize_device(mesh_device)
+
+    def replayed():
+        ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)
+        got = ttnn.to_torch(
+            out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=shard_dims, mesh_shape=mesh_device.shape)
+        )
+        return got[0, 0, :, 0].float()
+
+    try:
+        at_a = replayed()
+        torch.testing.assert_close(
+            at_a, torch.full_like(at_a, expect[off_a]), rtol=0, atol=4e-3, msg="replay at the captured offset is wrong"
+        )
+
+        refresh_llama4_scale(scale_buf, config, mesh_device, off_b, chunk_size_global, sp_axis=sp_axis)
+        at_b = replayed()
+        logger.info(f"trace replay: offset {off_a} -> {at_a[0]:.6f}, offset {off_b} -> {at_b[0]:.6f}")
+        torch.testing.assert_close(
+            at_b,
+            torch.full_like(at_b, expect[off_b]),
+            rtol=0,
+            atol=4e-3,
+            msg=(
+                f"after refreshing to offset {off_b} a replay still produced {at_b[0]:.6f} (expected "
+                f"{expect[off_b]:.6f}); the captured graph reads a capture-time SNAPSHOT, so the "
+                "persistent-buffer design does not hold and the traced path needs the position math "
+                "evaluated on-device instead"
+            ),
+        )
+
+        torch.testing.assert_close(replayed(), at_b, rtol=0, atol=0, msg="replay is not deterministic")
+    finally:
+        ttnn.release_trace(mesh_device, tid)
+
+
 # Functionality scenarios (id, kwargs) -- PURE FUNCTIONALITY: no mesh, no reference. Mesh and
 # reference are SEPARATE pytest axes below (chunk=5120 is valid for sp in {2,4,8}), so the same
 # scenario runs on any mesh and is validated against either ground truth (or run functional) without
@@ -960,12 +1381,14 @@ _CHUNKED_SCENARIOS = (
 @pytest.mark.parametrize("kwargs", [kw for _, kw in _CHUNKED_SCENARIOS], ids=[sid for sid, _ in _CHUNKED_SCENARIOS])
 @pytest.mark.parametrize(
     "variant",
-    ["kimi_k2_7", "kimi_k3"],
+    ["kimi_k2_7", "kimi_k3", "mistral_small_4"],
     indirect=True,
     # Name the Kimi generation explicitly. pytest -k is substring-based, so the ids must stay
     # disjoint: "k2_7" and "k3" cannot cross-match, whereas a bare "kimi" id would match both
     # generations and silently widen every `-k` selector (CI yaml, tests/perf/test_mla_perf.py).
-    ids=["k2_7", "k3"],
+    # "mistral4" matches the transformer/block rows' id, so one `-k mistral4` selects this model
+    # across all three; `-k mistral` still finds it, and no other variant here shares the prefix.
+    ids=["k2_7", "k3", "mistral4"],
 )
 @pytest.mark.parametrize("use_metadata_tensor", [False, True], ids=["scalar", "metadata"])
 @pytest.mark.parametrize("determinism_check", [False, True], ids=["no_determinism", "with_determinism"])
@@ -1004,6 +1427,24 @@ def test_mla_chunked_prefill(
     # Incidental, not a K3 guarantee; re-enable when K3 has a runtime that actually feeds metadata.
     if variant.name == "kimi_k3" and use_metadata_tensor:
         pytest.skip("kimi_k3 has no runtime, so the metadata (device-scalar) path is unreachable for it")
+    # No K3 checkpoint is reachable, so no GPU trace was ever recorded for it. _run_chunked_prefill
+    # already asserts on supports_pretrained, but only once a trace root is configured -- so on a box
+    # with MLA_CHUNKED_TRACE_PATH set these cases would hard-fail instead of being cleanly out of
+    # scope. Skip up front; the assert stays as the backstop for any future supports_pretrained=False
+    # variant and for the silent K2.6-trace-substitution it was written to catch.
+    if variant.name == "kimi_k3" and reference == "trace":
+        pytest.skip("kimi_k3 has no reachable checkpoint, so no GPU trace exists for it")
+    # Same reason as K3's: the variant-unqualified CI selectors for this test would otherwise run
+    # Mistral on Wormhole T3K, where it has never been brought up.
+    if variant.name == "mistral_small_4" and not is_blackhole():
+        pytest.skip("mistral_small_4 is validated on Blackhole only")
+    # Variant-agnostic, not a name check: mla_trace_defaults is the adapter's own declaration that
+    # no golden was ever recorded ("Empty = ..." in adapter.py), which is exactly the condition the
+    # assert in _run_chunked_prefill reports. Skipping up front reads as out of scope instead of as
+    # a hard failure, and any future variant without a trace is covered without editing this file.
+    # Mistral is the case that needs it today; 'cpu' and 'func' cover all 13 scenarios between them.
+    if reference == "trace" and not variant.mla_trace_defaults:
+        pytest.skip(f"no golden MLA trace recorded for {variant.name}; use reference='cpu' or 'func'")
     # Opt into real weights on the cpu path when the variant's checkpoint env var is set. The "trace"
     # path already forces pretrained; "func" is ref-less so weights don't matter. The pretrained
     # fixture skips the test if the env var is set but the checkpoint is incomplete.
