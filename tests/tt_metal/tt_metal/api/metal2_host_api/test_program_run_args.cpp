@@ -2905,5 +2905,73 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_TrackProgramSkipsDataflowBuffersWhenProgram
     EXPECT_TRUE(processor->scratchpad_sizes.empty());
 }
 
+TEST_F(ProgramRunArgsTestQuasar, CPU_PreparedCommonArgsSelectionsAndLiveStorage) {
+    auto spec = MakeSpecWithNamedArgs(NodeCoord{0, 0}, {}, {"first", "retained", "last"});
+    spec.kernels[1].runtime_arg_schema.common_runtime_arg_names = {"compute_count"};
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    ProgramRunArgs initial;
+    initial.kernel_run_args = {
+        KernelRunArgs{
+            .kernel = KernelSpecName{"dm_kernel"},
+            .common_runtime_arg_values = {{"first", 1}, {"retained", 2}, {"last", 3}}},
+        KernelRunArgs{.kernel = KernelSpecName{"compute_kernel"}, .common_runtime_arg_values = {{"compute_count", 4}}}};
+    SetProgramRunArgs(program, initial);
+    const std::array<std::string_view, 2> selection{"last", "first"};
+    const std::array<std::string_view, 1> compute_selection{"compute_count"};
+    PreparedCommonRuntimeArgs selected(program, KernelSpecName{"dm_kernel"}, selection);
+    PreparedCommonRuntimeArgs compute(program, KernelSpecName{"compute_kernel"}, compute_selection);
+    auto kernel = program.impl().get_kernel_by_spec_name("dm_kernel");
+    auto compute_kernel = program.impl().get_kernel_by_spec_name("compute_kernel");
+    selected.update(std::array<uint32_t, 2>{30, 10});
+    compute.update(std::array<uint32_t, 1>{40});
+    EXPECT_EQ(kernel->common_runtime_args_data()[0], 10u);
+    EXPECT_EQ(kernel->common_runtime_args_data()[1], 2u);
+    EXPECT_EQ(kernel->common_runtime_args_data()[2], 30u);
+    EXPECT_EQ(compute_kernel->common_runtime_args_data()[0], 40u);
+
+    // Dispatch retargeting changes the payload, while a Program move/destruction must not
+    // invalidate the plan. Keep synthetic dispatch storage alive for the remaining updates.
+    std::array<uint32_t, 3> dispatch{100, 200, 300};
+    kernel->common_runtime_args_data() = RuntimeArgsData{dispatch.data(), dispatch.size()};
+    {
+        Program moved = std::move(program);
+    }
+    selected.update(std::array<uint32_t, 2>{31, 11});
+    EXPECT_EQ(dispatch, (std::array<uint32_t, 3>{11, 200, 31}));
+    EXPECT_EQ(kernel->common_runtime_args()[0], 10u);
+    EXPECT_ANY_THROW(selected.update(std::array<uint32_t, 1>{99}));
+    EXPECT_EQ(dispatch, (std::array<uint32_t, 3>{11, 200, 31}));
+    kernel->common_runtime_args_data() = RuntimeArgsData{dispatch.data(), 1};
+    EXPECT_ANY_THROW(selected.update(std::array<uint32_t, 2>{99, 99}));
+    EXPECT_EQ(dispatch, (std::array<uint32_t, 3>{11, 200, 31}));
+}
+
+TEST_F(ProgramRunArgsTestQuasar, CPU_PreparedCommonArgsRejectInvalidPreparation) {
+    const std::array<std::string_view, 1> names{"count"};
+    Program legacy;
+    EXPECT_ANY_THROW((PreparedCommonRuntimeArgs(legacy, KernelSpecName{"dm_kernel"}, names)));
+    auto spec = MakeSpecWithNamedArgs(NodeCoord{0, 0}, {}, {"count"});
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    EXPECT_ANY_THROW((PreparedCommonRuntimeArgs(program, KernelSpecName{"dm_kernel"}, names)));
+    ProgramRunArgs initial;
+    initial.kernel_run_args = {
+        KernelRunArgs{.kernel = KernelSpecName{"dm_kernel"}, .common_runtime_arg_values = {{"count", 1}}},
+        KernelRunArgs{.kernel = KernelSpecName{"compute_kernel"}}};
+    SetProgramRunArgs(program, initial);
+    EXPECT_ANY_THROW((PreparedCommonRuntimeArgs(program, KernelSpecName{"unknown"}, names)));
+    const std::array<std::string_view, 1> unknown{"unknown"};
+    EXPECT_ANY_THROW((PreparedCommonRuntimeArgs(program, KernelSpecName{"dm_kernel"}, unknown)));
+    const std::array<std::string_view, 2> duplicates{"count", "count"};
+    EXPECT_ANY_THROW((PreparedCommonRuntimeArgs(program, KernelSpecName{"dm_kernel"}, duplicates)));
+    PreparedCommonRuntimeArgs empty;
+    EXPECT_ANY_THROW(empty.update(std::array<uint32_t, 1>{1}));
+    PreparedCommonRuntimeArgs all(program, KernelSpecName{"dm_kernel"}, names);
+    all.update(std::array<uint32_t, 1>{0xffffffffu});
+    EXPECT_EQ(program.impl().get_kernel_by_spec_name("dm_kernel")->common_runtime_args_data()[0], 0xffffffffu);
+    // Schema replacement is prohibited, so a prepared slot cannot silently change meaning.
+    const auto* schema = program.impl().get_kernel_rta_schema("dm_kernel");
+    EXPECT_ANY_THROW(program.impl().register_kernel_rta_schema("dm_kernel", *schema));
+}
+
 }  // namespace
 }  // namespace tt::tt_metal::experimental

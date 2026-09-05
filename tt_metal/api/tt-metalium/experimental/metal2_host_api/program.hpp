@@ -5,6 +5,7 @@
 #pragma once
 
 #include <span>
+#include <string_view>
 
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/mesh_device.hpp>
@@ -91,6 +92,34 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
 // NOTE: DFB size overrides follow the same stateful rule — a DFB whose size is not overridden here
 //       retains its current size (as last set), rather than reverting to the ProgramSpec default.
 void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip_validation = false);
+
+// Resolve a fixed selection of one kernel's named common runtime arguments once.
+// Names must be declared and unique; their order defines the positional values passed to update.
+// SetProgramRunArgs must have initialized the Program before preparation. Unselected arguments
+// retain their current values. All named common arguments are uint32_t, as in ProgramRunArgs.
+//
+// The plan owns its original Program state and cannot be applied to another Program. Program
+// moves are safe. Each update resolves live CRTA storage, including dispatch retargeting; no
+// payload pointer is cached. Schema registration is immutable (duplicate registration fails).
+// Concurrent mutation requires the same external synchronization as UpdateProgramRunArgs.
+//
+// This intentionally supports only named common scalars. Tensor bindings, dynamic accessor
+// metadata, varargs and DFB changes continue to use the existing run-argument APIs, preserving
+// their validation and DFB-before-binding ordering. Preparing another selection is required
+// to change which scalars are supplied; omitted scalars are never cleared.
+class PreparedCommonRuntimeArgs {
+public:
+    PreparedCommonRuntimeArgs() = default;
+    PreparedCommonRuntimeArgs(
+        const Program& program, const KernelSpecName& kernel, std::span<const std::string_view> names);
+
+    // Exactly one value per prepared name is required. Count/storage errors throw before writes.
+    void update(std::span<const uint32_t> values) const;
+
+private:
+    struct Impl;
+    std::shared_ptr<const Impl> impl_;
+};
 
 // Fast-path partial update: refresh ONLY the TensorArgs of an existing Program.
 // All other ProgramRunArgs (named/vararg RTAs and CRTAs, DFB params) retain their values

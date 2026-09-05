@@ -21,6 +21,53 @@
 
 namespace tt::tt_metal::experimental {
 
+struct PreparedCommonRuntimeArgs::Impl {
+    std::shared_ptr<const detail::ProgramImpl> program;
+    std::shared_ptr<Kernel> kernel;
+    std::vector<size_t> slots;
+    size_t required_words = 0;
+};
+
+PreparedCommonRuntimeArgs::PreparedCommonRuntimeArgs(
+    const Program& program, const KernelSpecName& kernel_name, std::span<const std::string_view> names) {
+    const auto& program_impl = program.impl();
+    TT_FATAL(program_impl.created_from_spec(), "PreparedCommonRuntimeArgs requires a Metal 2.0 Program");
+    TT_FATAL(
+        program_impl.program_run_args_initialized(),
+        "PreparedCommonRuntimeArgs requires SetProgramRunArgs before preparation");
+    const auto* schema = program_impl.get_kernel_rta_schema(kernel_name.get());
+    TT_FATAL(schema != nullptr, "Kernel '{}' has no RTA schema registered", kernel_name);
+    auto plan = std::make_shared<Impl>();
+    plan->program = program_impl.shared_from_this();
+    plan->kernel = program_impl.get_kernel_by_spec_name(kernel_name.get());
+    plan->slots.reserve(names.size());
+    for (const auto name : names) {
+        const auto it = schema->common_runtime_arg_name_to_slot.find(std::string(name));
+        TT_FATAL(it != schema->common_runtime_arg_name_to_slot.end(), "Undeclared named CRTA '{}'", name);
+        TT_FATAL(
+            std::find(plan->slots.begin(), plan->slots.end(), it->second) == plan->slots.end(),
+            "Duplicate prepared named CRTA '{}'",
+            name);
+        plan->slots.push_back(it->second);
+        plan->required_words = std::max(plan->required_words, it->second + 1);
+    }
+    TT_FATAL(
+        plan->kernel->common_runtime_args_data().size() >= plan->required_words,
+        "PreparedCommonRuntimeArgs: CRTA storage is too small");
+    impl_ = std::move(plan);
+}
+
+void PreparedCommonRuntimeArgs::update(std::span<const uint32_t> values) const {
+    TT_FATAL(impl_ != nullptr, "PreparedCommonRuntimeArgs is not initialized");
+    TT_FATAL(values.size() == impl_->slots.size(), "PreparedCommonRuntimeArgs value count does not match selection");
+    auto& crta = impl_->kernel->common_runtime_args_data();
+    TT_FATAL(crta.size() >= impl_->required_words, "PreparedCommonRuntimeArgs: live CRTA storage is too small");
+    TT_FATAL(values.empty() || crta.data() != nullptr, "PreparedCommonRuntimeArgs: live CRTA storage is null");
+    for (size_t i = 0; i < values.size(); ++i) {
+        crta.data()[impl_->slots[i]] = values[i];
+    }
+}
+
 // ============================================================================
 // Validation Helpers
 // ============================================================================
