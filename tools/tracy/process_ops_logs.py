@@ -1005,8 +1005,6 @@ def _enrich_ops_from_device_logs(
                 )
                 assign_metric("Math Scoreboard Stall Rate", per_op_stats.get("Math Scoreboard Stall Rate", {}))
 
-                # Fidelity metrics
-
                 # Instruction issue rates
                 assign_metric("T0 Instrn Issue Rate", per_op_stats.get("T0 Instrn Issue Rate", {}), suffix="")
                 assign_metric("T1 Instrn Issue Rate", per_op_stats.get("T1 Instrn Issue Rate", {}), suffix="")

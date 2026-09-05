@@ -108,7 +108,8 @@ constexpr std::array<std::pair<PerfCounterType, std::uint16_t>, 0> l1_4_counters
 constexpr size_t NUM_L1_4_COUNTERS = 0;
 
 // WH INSTRN_THREAD: sel gaps at 9-11, replicated stall conditions at 27/30/33/36.
-constexpr std::array<std::pair<PerfCounterType, std::uint16_t>, 59> instrn_counters = {
+constexpr size_t NUM_INSTRN_COUNTERS = 59;
+constexpr std::array<std::pair<PerfCounterType, std::uint16_t>, NUM_INSTRN_COUNTERS> instrn_counters = {
     {{PerfCounterType::CFG_INSTRN_AVAILABLE_0, 0},     {PerfCounterType::CFG_INSTRN_AVAILABLE_1, 1},
      {PerfCounterType::CFG_INSTRN_AVAILABLE_2, 2},     {PerfCounterType::SYNC_INSTRN_AVAILABLE_0, 3},
      {PerfCounterType::SYNC_INSTRN_AVAILABLE_1, 4},    {PerfCounterType::SYNC_INSTRN_AVAILABLE_2, 5},
@@ -139,4 +140,3 @@ constexpr std::array<std::pair<PerfCounterType, std::uint16_t>, 59> instrn_count
      {PerfCounterType::WAITING_FOR_SFPU_IDLE_2, 65},   {PerfCounterType::THREAD_INSTRUCTIONS_0, 256},
      {PerfCounterType::THREAD_INSTRUCTIONS_1, 264},    {PerfCounterType::THREAD_INSTRUCTIONS_2, 272},
      {PerfCounterType::ANY_THREAD_STALL, 283}}};
-constexpr size_t NUM_INSTRN_COUNTERS = 59;

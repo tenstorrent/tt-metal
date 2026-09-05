@@ -242,9 +242,6 @@ The following metrics are automatically computed from raw counters. Each metric 
 - **NOC vs Compute Balance (%)**: NOC cycles as a fraction of NOC + FPU cycles. >50% = NOC-bound, <50% = compute-bound.
 - **TDMA vs NOC L1 Share (%)**: RISC/TDMA traffic as a fraction of all L1 traffic. Shows how much bandwidth goes to firmware vs NOC.
 
-*Fidelity Metrics*
-
-
 *Wormhole-Only Metrics*
 
 These metrics depend on per-pack-engine hardware signals that don't exist on Blackhole (``PACK_COUNT=1``).

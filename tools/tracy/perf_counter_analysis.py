@@ -337,7 +337,6 @@ PERF_COUNTER_CSV_HEADERS = [
     "Data Hazard Stall Rate Median (%)",
     "Data Hazard Stall Rate Max (%)",
     "Data Hazard Stall Rate Avg (%)",
-    # TDMA_UNPACK fidelity metrics
     # L1 Bank 0 utilization
     "L1 Unpacker Port Util Min (%)",
     "L1 Unpacker Port Util Median (%)",
