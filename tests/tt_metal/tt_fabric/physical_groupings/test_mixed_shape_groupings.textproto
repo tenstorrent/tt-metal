@@ -1,0 +1,58 @@
+# PGD for the mixed-shape placement test: the four shapes the descriptor asks for.
+#
+#   2x2_Mesh:   [ ]---[ ]      1x3_Mesh:   [ ]---[ ]---[ ]
+#               [ ]---[ ]
+#                                1x2_Mesh:   [ ]---[ ]      1x1_Mesh:   [ ]
+#
+# Every location is UNSPECIFIED, so nothing here steers a grouping toward a particular region of
+# the PSD. Which shape can go where is decided entirely by the physical topology and, for the
+# shapes that fit in more than one place, by the mesh-level edges the search has to satisfy.
+groupings {
+  name: "2x2_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 1 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 2 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 3 location { asic_location: ASIC_LOCATION_UNSPECIFIED } }
+  ]
+  row_major_mesh {
+    dims: [2, 2]
+  }
+}
+
+groupings {
+  name: "1x3_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 1 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 2 location { asic_location: ASIC_LOCATION_UNSPECIFIED } }
+  ]
+  row_major_mesh {
+    dims: [1, 3]
+  }
+}
+
+groupings {
+  name: "1x2_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 1 location { asic_location: ASIC_LOCATION_UNSPECIFIED } }
+  ]
+  row_major_mesh {
+    dims: [1, 2]
+  }
+}
+
+groupings {
+  name: "1x1_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_UNSPECIFIED } }
+  ]
+  row_major_mesh {
+    dims: [1, 1]
+  }
+}
