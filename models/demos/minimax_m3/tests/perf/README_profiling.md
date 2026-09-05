@@ -236,6 +236,10 @@ rm -f  build/profiler/build_wasm/traces/*.tracy
 pkill -f tools/tracy/serve_wasm.py     # tracy leaves a WASM server on :8080
 ```
 
+The `pkill` line is only needed if the web viewer was started at all. Profiling runs that just want
+the numbers can skip it by capturing with `python -m tracy --no-web-server ...` (or exporting
+`TRACY_NO_WEB_SERVER=1` for the whole session), which never starts the server in the first place.
+
 ## Reference numbers
 
 Sanity references for "does my capture look right", **not** CI targets — they are per-zone kernel

@@ -47,6 +47,15 @@ def main():
         help="HTTP port for the Tracy WASM web UI after capture (default: 8080, or TRACY_WASM_HTTP_PORT if set). WebSocket uses this port + 1.",
     )
     parser.add_option(
+        "--no-web-server",
+        dest="web_server",
+        action="store_false",
+        default=None,
+        help="Do not start the Tracy WASM web UI after capture. The server is a daemon and outlives the run that "
+        "started it, so headless CI and measurement loops that only want the numbers should turn it off. "
+        "Same effect as setting TRACY_NO_WEB_SERVER=1.",
+    )
+    parser.add_option(
         "--no-op-info-cache",
         dest="opInfoCache",
         action="store_false",
@@ -481,8 +490,10 @@ def main():
                     logger.info(f"embed.tracy -> traces/{tracy_dst.name}")
                 except Exception as e:
                     logger.warning(f"Could not update embed.tracy: {e}")
-                launch_server_subprocess(port=options.web_app_port)
-                # Start the WASM server as a daemon with defaults
+                # Start the WASM server as a daemon with defaults, unless it was switched off
+                # (--no-web-server / TRACY_NO_WEB_SERVER=1) -- it outlives this process, so a
+                # headless run must be able to avoid leaving one listening.
+                launch_server_subprocess(port=options.web_app_port, enabled=options.web_server)
                 if options.report:
                     generate_report(
                         outputFolder,
