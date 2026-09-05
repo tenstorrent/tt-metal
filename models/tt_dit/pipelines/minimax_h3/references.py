@@ -9,10 +9,10 @@ The two passes between a request and the packed layout, mirroring the reference'
 ``MiniMaxH3Ref2VAReferenceEncoderStep.encode_references``:
 
 1. :func:`prepare_references` -- validate the request and put every reference on
-   **its own** resolution. An image goes to a 2048 px short edge, a video onto the
-   768 px canvas of its own aspect ratio at 24 fps truncated to the generated frame
-   count, a soundtrack onto the audio VAE's sample rate truncated to the generated
-   duration. None of this touches the target canvas.
+   **its own** resolution. An image is resized by ``reference_resize_mode`` (default
+   ``match`` against the target canvas), a video onto the 768 px canvas of its own
+   aspect ratio at 24 fps truncated to the generated frame count, a soundtrack onto
+   the audio VAE's sample rate truncated to the generated duration.
 2. :func:`encode_references` -- encode each one and, in doing so, **resolve the
    latent geometry the packed layout is built from**. This is why the encode has to
    run before the layout, unlike ``fl2va`` where a keyframe's geometry is the
@@ -138,6 +138,10 @@ def prepare_references(
     references: Sequence[MiniMaxH3Reference],
     num_frames: int | None,
     audio_sampling_rate: int,
+    *,
+    reference_resize_mode: str = "match",
+    target_height: int | None = None,
+    target_width: int | None = None,
 ) -> tuple[list[MiniMaxH3PreparedReference], int]:
     """Prepare every reference at its own resolution, and resolve the frame count.
 
@@ -162,7 +166,12 @@ def prepare_references(
             # rotation in EXIF and would condition sideways, and a palette or RGBA
             # PNG would reach the channel permute with the wrong channel count.
             image = ImageOps.exif_transpose(image).convert("RGB")
-            height, width = resolve_reference_image_size(*image.size)
+            height, width = resolve_reference_image_size(
+                *image.size,
+                mode=reference_resize_mode,
+                target_width=target_width,
+                target_height=target_height,
+            )
             reference.image = prepare_reference_image(image, height, width)
         elif reference.kind == "video":
             frames = resample_reference_frames(reference_media_to_uint8(entry.video), float(entry.fps))
