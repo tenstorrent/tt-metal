@@ -628,3 +628,94 @@ def test_concat_fp32_last_dim_mantissa_not_truncated(device, width, layout):
 
     assert tt_output.dtype == ttnn.float32
     assert_equal(torch_output, ttnn.to_torch(tt_output))
+
+
+# --- Codegen-path coverage ---
+#
+# ttnn.concat routes gate-supported cases to codegen and the rest to native, and offers no way to
+# ask for one: the verification-only entries below live in the private module for that reason (see
+# concat_force.hpp). These pin the codegen path so the suite exercises it regardless of the gate's
+# verdict -- including cases the perf-demotion gate would send to native under ordinary routing.
+#
+# The codegen path supports only a subset of cases (see concat_codegen_supported.cpp): a bounded
+# number of ROW_MAJOR inputs of one dtype among bfloat16/int32/uint32 and equal rank, interleaved
+# input/output (no sharding), and a projected circular-buffer plan that fits per-core L1; inputs
+# beyond two must additionally share one memory config. Every case below is hand-picked to satisfy
+# that gate, so the forced entry resolves instead of raising. concat copies values verbatim, so a
+# lossless round-trip means assert_equal holds.
+codegen_supported_cases = [
+    # (shapes, dim) -- 2-input, non-width dim
+    ([(1, 32, 64), (1, 32, 64)], 0),
+    ([(2, 32, 64), (2, 64, 64)], 1),
+    # 2-input, width dim: aligned sticks take the reader's batched direct-write fast path
+    ([(1, 32, 64), (1, 32, 64)], -1),
+    # 2-input, width dim: an unaligned stick falls through to the scratch-staged copy
+    ([(1, 32, 40), (1, 32, 24)], -1),
+    # Same regime, but past the staged-copy demotion threshold, so ordinary routing sends it to
+    # native. 128 staged B/stick over >= 19 sticks per core clears 2400 B on both an 8x8 and a
+    # 13x10 grid -- the forced entry is the only way the codegen builders see this shape at all.
+    ([(1, 2560, 40), (1, 2560, 24)], -1),
+    # N-way (> 2 inputs), both regimes
+    ([(1, 32, 32), (1, 64, 32), (1, 32, 32)], 1),
+    ([(1, 32, 32), (1, 32, 64), (1, 32, 32)], -1),
+]
+
+codegen_dtypes = [ttnn.bfloat16, ttnn.int32, ttnn.uint32]
+
+_force_native = ttnn._ttnn.operations.data_movement.concat_force_native
+_force_codegen = ttnn._ttnn.operations.data_movement.concat_force_codegen
+
+
+@pytest.mark.parametrize("shapes, dim", codegen_supported_cases)
+@pytest.mark.parametrize("dtype", codegen_dtypes)
+def test_concat_codegen(device, shapes, dim, dtype):
+    torch_inputs = [random_torch_tensor(dtype, list(s)) for s in shapes]
+    torch_result = torch.concat(torch_inputs, dim=dim)
+
+    tt_inputs = [ttnn.from_torch(t, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=dtype) for t in torch_inputs]
+    output = ttnn.to_torch(_force_codegen(tt_inputs, dim))
+
+    assert (
+        output.shape == torch_result.shape
+    ), f"Output shape {output.shape} does not match torch shape {torch_result.shape}"
+    assert_equal(torch_result, output)
+    # Native is the reference the port's bit-exactness guarantee is stated against.
+    assert_equal(ttnn.to_torch(_force_native(tt_inputs, dim)), output)
+
+
+# One case per builder: each assembles its own runtime-argument list with its own buffer
+# bindings, so a stale-address regression in any of them survives a cache hit undetected.
+@pytest.mark.parametrize(
+    "shapes, dim",
+    [
+        ([(1, 32, 64), (1, 32, 64)], 0),
+        ([(1, 32, 32), (1, 32, 64)], -1),
+        ([(1, 32, 32), (1, 64, 32), (1, 32, 32)], 1),
+        ([(1, 32, 32), (1, 32, 64), (1, 32, 32)], -1),
+    ],
+)
+def test_pc_concat_codegen(device, shapes, dim):
+    num_iters = 3
+    tt_inputs = []
+    torch_results = []
+    for _ in range(num_iters):
+        torch_inputs = [random_torch_tensor(ttnn.bfloat16, list(s)) for s in shapes]
+        torch_results.append(torch.concat(torch_inputs, dim=dim))
+        tt_inputs.append(
+            [ttnn.from_torch(t, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.bfloat16) for t in torch_inputs]
+        )
+
+    base_count = None
+    for i in range(num_iters):
+        with device.cache_entries_counter.measure():
+            output = ttnn.to_torch(_force_codegen(tt_inputs[i], dim))
+        assert (
+            output.shape == torch_results[i].shape
+        ), f"Output shape {output.shape} does not match torch shape {torch_results[i].shape}"
+        assert_equal(torch_results[i], output)
+        if i == 0:
+            base_count = device.cache_entries_counter.total
+        else:
+            assert (
+                device.cache_entries_counter.total == base_count
+            ), "a repeat dispatch of the same spec added a program cache entry"
