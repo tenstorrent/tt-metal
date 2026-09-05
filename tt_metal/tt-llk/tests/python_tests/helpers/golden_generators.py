@@ -1890,9 +1890,8 @@ class TypecastGolden:
     block-float (Bfp8_b / Bfp4_b) source/destination dtypes:
       * block-float input round-trips through ``quantize_input_to_unpack_format``, matching
         what the SFPU sees;
-      * float/int -> integer: truncate toward zero for int32/uint32, round-to-nearest for
-        uint16/uint8 (whole-number stimuli make both exact); UInt8 keeps the low byte, others
-        clamp to the dest range;
+      * float/int -> integer: truncate toward zero for every integer destination; UInt8 keeps
+        the low byte, others clamp to the dest range;
       * -> plain float: value-preserving cast;
       * -> block-float: tilized into 16-element BFP blocks, through the packer's
         shared-exponent quantization, untilized back to row-major (as DataCopyGolden).
@@ -1923,8 +1922,9 @@ class TypecastGolden:
             if input_format.is_integer():
                 values = operand.to(torch.int64)
             else:
-                # int32/uint32 truncate; uint16/uint8 round. Whole-number
-                # stimuli make trunc == round, so trunc models both exactly.
+                # Every integer destination truncates toward zero. Stimuli are
+                # whole numbers, so this arm is not what pins the contract down;
+                # test_typecast_rounding_fractional covers the fractional cases.
                 values = torch.trunc(operand.float()).to(torch.int64)
             result = self._to_integer(values, output_format)
         elif output_format in self._BLOCK_FLOAT_FORMATS:

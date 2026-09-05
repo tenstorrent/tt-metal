@@ -40,6 +40,18 @@ _CLAMP_HIGH = _DTYPE_MAX[ttnn.uint16] + 14465
 _CLAMP_LOW_MAGNITUDE = 1000
 
 
+def device_truncates_float_to_uint16():
+    """Whether the device float -> uint16 typecast truncates toward zero, as every other
+    integer destination and the host path do.
+
+    uint16 is the only destination that hands the conversion to SFP_STOCH_RND rather than
+    building the integer by mantissa shift, and round to zero is a Blackhole mode, so uint16
+    still rounds to nearest with ties away from zero everywhere else. Deleting this predicate
+    and the two branches that use it is the last step of #51655.
+    """
+    return "blackhole" in ttnn.get_arch_name()
+
+
 def _output_allows_negative(tt_output_dtype):
     return tt_output_dtype == ttnn.int32
 
