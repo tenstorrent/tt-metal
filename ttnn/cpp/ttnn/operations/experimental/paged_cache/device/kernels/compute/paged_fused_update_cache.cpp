@@ -9,46 +9,45 @@
 #include "api/compute/tilize.h"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t rt_args_idx = 0;
-    const bool has_work = get_arg_val<uint32_t>(rt_args_idx++);
+    const bool has_work = get_arg(args::has_work);
     if (!has_work) {
         return;
     }
-    const bool is_input1 = get_arg_val<uint32_t>(rt_args_idx++);
+    // Selects which of the two fused inputs this core untilizes. Both input DFBs are bound to this
+    // kernel -- a kernel cannot touch a DFB it has not bound -- and only one is touched per
+    // invocation. The ternary yields a DFBBindingToken because all DFB tokens share one type
+    // (identity lives in a runtime member), which is what lets a runtime value pick a handle here.
+    const bool is_input1 = get_arg(args::is_input1);
 
-    constexpr uint32_t in1_cb = get_compile_time_arg_val(0);
-    constexpr uint32_t in2_cb = get_compile_time_arg_val(1);
-    uint32_t in_cb = in1_cb;
-    if (!is_input1) {
-        in_cb = in2_cb;
-    }
+    constexpr uint32_t Wt = get_arg(args::Wt);
+    constexpr uint32_t num_heads = get_arg(args::num_heads);
 
-    constexpr uint32_t cache_cb = get_compile_time_arg_val(2);
-    constexpr uint32_t untilized_cache_cb = get_compile_time_arg_val(3);
-    constexpr uint32_t untilized_cache2_cb = get_compile_time_arg_val(4);
-    constexpr uint32_t untilized_in_cb = get_compile_time_arg_val(5);
-    constexpr uint32_t out_cb = get_compile_time_arg_val(6);
-    constexpr uint32_t Wt = get_compile_time_arg_val(7);
-    constexpr uint32_t num_heads = get_compile_time_arg_val(8);
+    // dfb::cache holds the cache tiles the reader pulled in; dfb::src1 / dfb::src2 the two resident
+    // input shards. dfb::untilized_cache and dfb::untilized_cache2 are aliased -- the writer patches
+    // the new row into the region published through the first and republishes it through the second,
+    // which is what this kernel re-tilizes into dfb::out.
+    compute_kernel_hw_startup(is_input1 ? dfb::src1 : dfb::src2, dfb::untilized_in);
 
-    compute_kernel_hw_startup(in_cb, untilized_in_cb);
-
-    // Untilize input (single block, init only - no uninit needed)
+    // Untilize input (single block, init only - no uninit needed).
+    // Two instantiations because the source buffer is a template parameter: the branch is on the
+    // runtime `is_input1`, and both are compiled into every node's binary. This is the legacy shape
+    // unchanged -- only the buffer-index constants became binding tokens.
     if (!is_input1) {
         compute_kernel_lib::untilize<
             Wt,
-            in2_cb,
-            untilized_in_cb,
+            dfb::src2,
+            dfb::untilized_in,
             compute_kernel_lib::untilize_config::InitUninitMode::InitOnly,
             compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
             compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(1);
     } else {
         compute_kernel_lib::untilize<
             Wt,
-            in1_cb,
-            untilized_in_cb,
+            dfb::src1,
+            dfb::untilized_in,
             compute_kernel_lib::untilize_config::InitUninitMode::InitOnly,
             compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
             compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(1);
@@ -56,9 +55,9 @@ void kernel_main() {
 
     for (uint32_t cur_head = 0; cur_head < num_heads; ++cur_head) {
         // Untilize a block from the cache with reconfiguration from previous iteration
-        compute_kernel_lib::untilize<Wt, cache_cb, untilized_cache_cb>(1);
+        compute_kernel_lib::untilize<Wt, dfb::cache, dfb::untilized_cache>(1);
 
         // Wait on writer to update block. Tilize with reconfiguration
-        compute_kernel_lib::tilize<Wt, untilized_cache2_cb, out_cb>(1);
+        compute_kernel_lib::tilize<Wt, dfb::untilized_cache2, dfb::out>(1);
     }
 }
