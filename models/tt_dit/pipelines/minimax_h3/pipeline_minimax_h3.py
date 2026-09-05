@@ -140,13 +140,13 @@ _AUDIO_T_FACTOR_ENV = "MINIMAX_H3_AUDIO_T_FACTOR"
 _DEFAULT_AUDIO_T_FACTOR = 8
 
 
-def _requested_audio_t_factor(audio_t_factor: int | None) -> tuple[int, bool]:
-    """Explicit kwarg wins; else MINIMAX_H3_AUDIO_T_FACTOR; else 8. Returns (factor, from_env)."""
+def _requested_audio_t_factor(audio_t_factor: int | None, default: int = _DEFAULT_AUDIO_T_FACTOR) -> tuple[int, bool]:
+    """Explicit kwarg wins; else MINIMAX_H3_AUDIO_T_FACTOR; else `default`. Returns (factor, from_env)."""
     if audio_t_factor is not None:
         return audio_t_factor, False
     raw = os.environ.get(_AUDIO_T_FACTOR_ENV)
     if raw is None:
-        return _DEFAULT_AUDIO_T_FACTOR, False
+        return default, False
     try:
         return int(raw), True
     except ValueError:
@@ -292,6 +292,9 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
         "trace_denoise": True,
         # 32*factor=1024 T-align, so 5-15 s audio shares one compile. 4x8's 256-align would not.
         "audio_t_shard": True,
+        # Shard the audio decode over the 32-wide inter-host axis: at 32 every clip <= 15 s pads to
+        # the same 1024, so the decode compiles once. Overridable by kwarg or MINIMAX_H3_AUDIO_T_FACTOR.
+        "audio_t_factor": 32,
     },
 }
 
@@ -489,9 +492,11 @@ class MiniMaxH3Pipeline:
         if audio_split_mode not in ("off", "weight", "full"):
             raise ValueError(f"audio_split_mode must be 'off', 'weight', or 'full', got {audio_split_mode!r}")
         self.audio_split_mode = audio_split_mode
-        # Audio T-shard factor/axis: explicit kwarg > MINIMAX_H3_AUDIO_T_FACTOR env > default 8, then the
-        # 8->4->1 fallback (32 opt-in); logged before decode.
-        audio_t_factor, self._audio_t_factor_from_env = _requested_audio_t_factor(audio_t_factor)
+        # Audio T-shard factor/axis: explicit kwarg > MINIMAX_H3_AUDIO_T_FACTOR env > preset (32 on the
+        # quad, else 8), then the 8->4->1 fallback; logged before decode.
+        audio_t_factor, self._audio_t_factor_from_env = _requested_audio_t_factor(
+            audio_t_factor, default=preset.get("audio_t_factor", _DEFAULT_AUDIO_T_FACTOR)
+        )
         self.audio_t_factor, self._audio_t_axis = _resolve_audio_t_shard(
             audio_t_factor, shape, self.tp_axis, self.sp_axis
         )
@@ -646,9 +651,7 @@ class MiniMaxH3Pipeline:
 
         # Prime in reverse order of use. Under coresident=False the text-encoder load would
         # immediately evict the DiT, so skip that upload; it loads on first denoise. VAE
-        # sub-models load on first use, so warmup decides what uploads. The audio decoder
-        # is not in the exclusion set -- it is small enough to stay -- and every request
-        # needs it, so it loads here rather than on first decode.
+        # sub-models load on first use, so warmup decides what uploads.
         if self.coresident:
             self._prepare_transformer()
         self._prepare_text_encoder()
