@@ -3264,8 +3264,16 @@ void write_program_command_sequence(
     bool one_shot = one_shot_fetch_size <= metal_ctx.dispatch_mem_map().max_prefetch_command_size();
 
     LOG_TRACE_LAZY(tt::LogDispatch, "One-shot mode: {}, Fetch size: {} bytes", one_shot, one_shot_fetch_size);
+    uint8_t* one_shot_host_write_ptr = nullptr;
     if (one_shot) {
-        manager.issue_queue_reserve(one_shot_fetch_size, command_queue_id);
+        void* reserved_region = manager.issue_queue_reserve(one_shot_fetch_size, command_queue_id);
+        // The reservation is contiguous and remains valid until push_back. Resolve
+        // the host destination once instead of repeating cq_write's mode checks
+        // and channel-address translation for every command fragment. Trace,
+        // DRAM-backed and mock queues retain the general cq_write path.
+        if (!manager.get_bypass_mode() && !manager.is_dram_backed() && !metal_ctx.get_cluster().is_mock_or_emulated()) {
+            one_shot_host_write_ptr = static_cast<uint8_t*>(reserved_region);
+        }
     }
     uint32_t one_shot_write_ptr = manager.get_issue_queue_write_ptr(command_queue_id);
 
@@ -3276,8 +3284,13 @@ void write_program_command_sequence(
 
         if (one_shot) {
             // Already reserved. Write only. Defer push back until all commands are written
-            manager.cq_write(data, size_bytes, one_shot_write_ptr);
-            one_shot_write_ptr += size_bytes;
+            if (one_shot_host_write_ptr != nullptr) {
+                memcpy_to_device(one_shot_host_write_ptr, data, size_bytes);
+                one_shot_host_write_ptr += size_bytes;
+            } else {
+                manager.cq_write(data, size_bytes, one_shot_write_ptr);
+                one_shot_write_ptr += size_bytes;
+            }
         } else {
             manager.issue_queue_reserve(size_bytes, command_queue_id);
             manager.cq_write(data, size_bytes, manager.get_issue_queue_write_ptr(command_queue_id));
