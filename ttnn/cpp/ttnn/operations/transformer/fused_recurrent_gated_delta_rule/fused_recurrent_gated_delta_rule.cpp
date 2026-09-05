@@ -146,8 +146,8 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
         output_per_token_state,
         out_mem,
         kernel_cfg);
-    ttnn::Tensor o_pt = res[0];  // [BH*T, 1, V]
-    ttnn::Tensor st = res[1];    // [BH*T,K,V] per-token, else [BH,K,V]
+    const ttnn::Tensor& o_pt = res[0];  // [BH*T, 1, V]
+    const ttnn::Tensor& st = res[1];    // [BH*T,K,V] per-token, else [BH,K,V]
 
     // o [BH*T,1,V] -> [B,HV,T,V] -> [B,T,HV,V].
     ttnn::Tensor o = ttnn::to_layout(o_pt, Layout::ROW_MAJOR);
