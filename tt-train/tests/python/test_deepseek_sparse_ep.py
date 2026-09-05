@@ -31,15 +31,13 @@ a mesh afterwards leaves the fabric routers half-initialized.
 from __future__ import annotations
 
 import os
-import sys
 from typing import Optional
 
 import numpy as np
 import pytest
 import torch
 
-sys.path.insert(0, os.path.dirname(__file__))
-from tests.ttnn.utils_for_testing import assert_with_pcc  # noqa: E402
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 import ttnn
 import ttml
@@ -131,17 +129,23 @@ def _restore_mgd_path(previous: Optional[str]) -> None:
 
 
 @pytest.fixture(scope="module")
-def ep_mesh():
-    """Open the ``[8, 4]`` galaxy mesh with axes ``("dp", "ep")``."""
+def ep_mesh(skip_if_host_too_small):
+    """Open the ``[8, 4]`` galaxy mesh with axes ``("dp", "ep")``.
+
+    Skips on a host too small for the shape. A host that has enough but
+    still can't open the mesh fails instead.
+    """
     shape = MESH_SHAPE
+    skip_if_host_too_small(shape, f"sparse_ep tests ('ep' axis = {EP_AXIS_SIZE})")
     previous_mgd = _ensure_mgd_path(shape)
 
     _close_device_quietly()
     try:
         ttml.open_device_mesh(ttml.Mesh(shape, ("dp", "ep")))
-    except Exception as e:  # noqa: BLE001
+    except Exception:  # noqa: BLE001
+        _close_device_quietly()
         _restore_mgd_path(previous_mgd)
-        pytest.skip(f"sparse_ep tests need a {shape[0]}x{shape[1]} mesh ('ep' axis = {EP_AXIS_SIZE}): {e}")
+        raise
 
     yield ttml.mesh()
 
