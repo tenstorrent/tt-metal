@@ -462,6 +462,12 @@ void kernel_main() {
 #endif
     }
 
+    // Flush the non-posted credit atomics issued above (noc_semaphore_inc to the mm cores) before
+    // this kernel exits. Leaving them in flight is an inter-kernel data race: the next op can start
+    // before the mm cores' credit counters land, wedging the credit protocol under load. The writer
+    // already barriers its atomics at exit; the reader must too.
+    noc_async_atomic_barrier();
+
     // Explicit cleanup: guarantee the semaphore is 0 when this kernel exits
     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
 }
