@@ -5,6 +5,8 @@
 #include "high_bw_all_gather_unicast_factory.hpp"
 #include "high_bw_all_gather_scheduler.hpp"
 
+#include <cstdlib>
+#include <tracy/Tracy.hpp>
 #include <array>
 #include <cstddef>
 #include <optional>
@@ -934,24 +936,56 @@ void HighBwAllGatherUnicastFactory::override_runtime_arguments(
     const uint32_t output_addr = output_tensor.buffer()->address();
     const bool has_runtime_controls =
         operation_attributes.input_batch_index.has_value() || operation_attributes.gathered_dim_size.has_value();
-    const auto page_geometry = has_runtime_controls
-                                   ? derive_page_geometry(tensor_args.input_tensor, output_tensor, operation_attributes)
-                                   : PageGeometry{};
+    ZoneNamedN(__tracy_phase_zone, "HostProfile::all_gather_runtime_update", ([] {
+                   static const bool enabled = std::getenv("TT_METAL_HOST_PROFILE_PHASES") != nullptr;
+                   return enabled;
+               }()));
+    const char* controls = has_runtime_controls ? "controls" : "no_controls";
+    ZoneTextV(__tracy_phase_zone, controls, has_runtime_controls ? 8 : 11);
+    const auto page_geometry = [&] {
+        ZoneNamedN(__tracy_phase_zone, "HostProfile::all_gather_control_geometry", ([] {
+                       static const bool enabled = std::getenv("TT_METAL_HOST_PROFILE_PHASES") != nullptr;
+                       return enabled;
+                   }()));
+        return has_runtime_controls
+                   ? derive_page_geometry(tensor_args.input_tensor, output_tensor, operation_attributes)
+                   : PageGeometry{};
+    }();
 
     // create_at installs the semaphore addresses once. shared_variables owns copies of those same
     // GlobalSemaphore allocations for the cached workload's lifetime; neither buffer is replaced on
     // a cache hit. Keep their runtime slots intact while refreshing every caller-owned tensor address.
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
-        auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
-
-        auto& reader_common = GetCommonRuntimeArgs(program, shared_vars.reader_kernel_id);
-        reader_common.at(0) = input_addr;
-        reader_common.at(1) = output_addr;
-        GetCommonRuntimeArgs(program, shared_vars.writer_kernel_id).at(0) = output_addr;
+        shared_variables_t* shared_ptr = nullptr;
+        tt::tt_metal::RuntimeArgsData* reader_common = nullptr;
+        tt::tt_metal::RuntimeArgsData* writer_common = nullptr;
+        {
+            ZoneNamedN(__tracy_phase_zone, "HostProfile::all_gather_coordinate_lookup", ([] {
+                           static const bool enabled = std::getenv("TT_METAL_HOST_PROFILE_PHASES") != nullptr;
+                           return enabled;
+                       }()));
+            shared_ptr = &cached_workload.shared_variables.at(coordinate_range);
+            reader_common = &GetCommonRuntimeArgs(program, shared_ptr->reader_kernel_id);
+            writer_common = &GetCommonRuntimeArgs(program, shared_ptr->writer_kernel_id);
+        }
+        auto& shared_vars = *shared_ptr;
+        {
+            ZoneNamedN(__tracy_phase_zone, "HostProfile::all_gather_common_writes", ([] {
+                           static const bool enabled = std::getenv("TT_METAL_HOST_PROFILE_PHASES") != nullptr;
+                           return enabled;
+                       }()));
+            reader_common->at(0) = input_addr;
+            reader_common->at(1) = output_addr;
+            writer_common->at(0) = output_addr;
+        }
 
         if (!has_runtime_controls) {
             continue;
         }
+        ZoneNamedN(__tracy_phase_zone, "HostProfile::all_gather_control_scatter", ([] {
+                       static const bool enabled = std::getenv("TT_METAL_HOST_PROFILE_PHASES") != nullptr;
+                       return enabled;
+                   }()));
         auto& reader_args_by_core = GetRuntimeArgs(program, shared_vars.reader_kernel_id);
         auto& writer_args_by_core = GetRuntimeArgs(program, shared_vars.writer_kernel_id);
 

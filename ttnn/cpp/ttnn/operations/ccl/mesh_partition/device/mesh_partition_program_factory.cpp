@@ -177,13 +177,20 @@ void MeshPartitionDeviceOperation::MeshPartition::override_runtime_arguments(
     const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-    const SliceOp::tensor_args_t slice_tensor_args{
-        .input = tensor_args.input_tensor,
-        .start_tensor = std::nullopt,
-        .end_tensor = std::nullopt,
-        .preallocated_output = std::nullopt};
+    static const bool profile_phases = std::getenv("TT_METAL_HOST_PROFILE_PHASES") != nullptr;
+    const auto slice_tensor_args = [&] {
+        ZoneNamedN(mesh_partition_setup, "HostProfile::mesh_partition_setup", profile_phases);
+        return SliceOp::tensor_args_t{
+            .input = tensor_args.input_tensor,
+            .start_tensor = std::nullopt,
+            .end_tensor = std::nullopt,
+            .preallocated_output = std::nullopt};
+    }();
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
-        auto& shared_variables = cached_workload.shared_variables.at(range);
+        auto& shared_variables = [&]() -> auto& {
+            ZoneNamedN(mesh_partition_lookup, "HostProfile::mesh_partition_coordinate_lookup", profile_phases);
+            return cached_workload.shared_variables.at(range);
+        }();
 
         // Re-apply this coord's per-dispatch state to the cached Program, through the same patch the
         // slice op uses -- addresses only. CB total_size/page_size are not re-applied on a hit, so any

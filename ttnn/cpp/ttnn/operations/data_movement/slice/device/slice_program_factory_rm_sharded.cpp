@@ -10,6 +10,7 @@
 
 #include <map>
 #include <optional>
+#include <utility>
 #include <tracy/Tracy.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
@@ -365,9 +366,11 @@ void patch_slice_program_addresses(
                    static const bool enabled = std::getenv("TT_METAL_HOST_PROFILE_ZONES") != nullptr;
                    return enabled;
                }()));
+    static const bool profile_phases = std::getenv("TT_METAL_HOST_PROFILE_PHASES") != nullptr;
     // Height-sharded RM is CB-bound: the reader args are all keyed, so only the two sharded CB
     // addresses move. CBs are matched positionally -- src0, then c_16.
     if (std::holds_alternative<SliceRmShardedProgramFactory>(factory)) {
+        ZoneNamedN(slice_rm_sharded, "HostProfile::slice_rm_sharded_patch", profile_phases);
         tt::tt_metal::ProgramDescriptor cb_addr_only;
         cb_addr_only.cbs.push_back(tt::tt_metal::CBDescriptor{.buffer = tensor_args.input.buffer()});
         cb_addr_only.cbs.push_back(tt::tt_metal::CBDescriptor{.buffer = output.buffer()});
@@ -378,16 +381,25 @@ void patch_slice_program_addresses(
     // A slot holding 0 belongs to a core create_descriptor left zero-filled; leave those alone.
     constexpr uint32_t kReaderKernelIdx = 0, kWriterKernelIdx = 1;
     if (cached_tile_args != nullptr) {
+        ZoneNamedN(slice_cached_tile, "HostProfile::slice_cached_tile_patch", profile_phases);
         TT_FATAL(
             std::holds_alternative<SliceTileProgramFactory>(factory),
             "Cached tile scalar plans require the scalar tiled slice factory");
         // MeshPartition stores exact coordinate scalars. Reapply them even if unchanged (#52651).
         // Its validated writer ranges contain {num_tiles, start_id}, allowing the address update
         // to share this traversal. Derive active/noop state from the plan, never old dispatch args.
-        GetCommonRuntimeArgs(program, kReaderKernelIdx).at(0) = tensor_args.input.buffer()->address();
-        const uint32_t output_address = output.buffer()->address();
-        auto& reader_args = GetRuntimeArgs(program, kReaderKernelIdx);
-        auto& writer_args = GetRuntimeArgs(program, kWriterKernelIdx);
+        const uint32_t output_address = [&] {
+            ZoneNamedN(slice_tile_addresses, "HostProfile::slice_cached_tile_addresses", profile_phases);
+            GetCommonRuntimeArgs(program, kReaderKernelIdx).at(0) = tensor_args.input.buffer()->address();
+            return output.buffer()->address();
+        }();
+        const auto matrices = [&] {
+            ZoneNamedN(slice_tile_matrices, "HostProfile::slice_cached_tile_matrix_lookup", profile_phases);
+            return std::pair{&GetRuntimeArgs(program, kReaderKernelIdx), &GetRuntimeArgs(program, kWriterKernelIdx)};
+        }();
+        auto& reader_args = *matrices.first;
+        auto& writer_args = *matrices.second;
+        ZoneNamedN(slice_tile_copy, "HostProfile::slice_cached_tile_scalar_address_copy", profile_phases);
         for (const auto& range : *cached_tile_args) {
             auto& matrix = range.kernel_idx == kReaderKernelIdx ? reader_args : writer_args;
             auto& data = matrix.at(range.core.x).at(range.core.y);
@@ -401,6 +413,7 @@ void patch_slice_program_addresses(
         }
         return;
     }
+    ZoneNamedN(slice_uncached_plan, "HostProfile::slice_uncached_plan_patch", profile_phases);
     const auto patch_slot0 = [&program](uint32_t kernel_idx, uint32_t addr) {
         for (auto& col : tt::tt_metal::GetRuntimeArgs(program, kernel_idx)) {
             for (auto& a : col) {
@@ -418,6 +431,7 @@ void patch_slice_program_addresses(
             if constexpr (
                 std::is_same_v<Factory, SliceRmProgramFactory> ||
                 std::is_same_v<Factory, SliceRmStrideProgramFactory>) {
+                ZoneNamedN(slice_rm, "HostProfile::slice_rm_reader_patch", profile_phases);
                 patch_slot0(kReaderKernelIdx, tensor_args.input.buffer()->address());
             } else if constexpr (
                 std::is_same_v<Factory, SliceTileProgramFactory> ||

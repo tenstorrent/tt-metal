@@ -878,6 +878,10 @@ void UpdateTensorArgs(
 
     // Validate the TensorArgument list (shared with the full-path validator).
     if (!skip_validation) {
+        ZoneNamedN(__tracy_phase_zone, "HostProfile::metal2_validate_tensor_args", ([] {
+                       static const bool enabled = std::getenv("TT_METAL_HOST_PROFILE_PHASES") != nullptr;
+                       return enabled;
+                   }()));
         ValidateTensorArgs(program, tensor_args);
     }
 
@@ -885,11 +889,16 @@ void UpdateTensorArgs(
     // As in SetProgramRunArgs, this assumes lockstep mesh allocation:
     // a single device-independent value set per binding.
     std::unordered_map<std::string, const MeshTensor*> tensor_by_param;
-    tensor_by_param.reserve(tensor_args.size());
-    for (const auto& [param_name, tensor_arg] : tensor_args) {
-        tensor_by_param.emplace(param_name.get(), &mesh_tensor_of(tensor_arg));
+    {
+        ZoneNamedN(__tracy_phase_zone, "HostProfile::metal2_tensor_lookup", ([] {
+                       static const bool enabled = std::getenv("TT_METAL_HOST_PROFILE_PHASES") != nullptr;
+                       return enabled;
+                   }()));
+        tensor_by_param.reserve(tensor_args.size());
+        for (const auto& [param_name, tensor_arg] : tensor_args) {
+            tensor_by_param.emplace(param_name.get(), &mesh_tensor_of(tensor_arg));
+        }
     }
-
     // For every kernel with tensor bindings, patch the binding slots in its CRTA buffer in
     // place. Each binding occupies (1 + num_runtime_field_crta_words) words starting at
     // handle.addr_crta_offset: the always-present address word, plus any runtime accessor
@@ -897,38 +906,49 @@ void UpdateTensorArgs(
     // CRTAs, vararg CRTAs) is left untouched and retains the values installed by the most
     // recent SetProgramRunArgs call. The kernel's RTA buffer is also left untouched
     // (tensor binding state lives in CRTAs only).
-    for (const auto& kernel_name : program_impl.get_registered_kernel_names()) {
-        std::shared_ptr<Kernel> kernel = program_impl.get_kernel_by_spec_name(kernel_name);
-        const auto& binding_handles = kernel->tensor_binding_handles();
-        if (binding_handles.empty()) {
-            continue;
-        }
+    {
+        ZoneNamedN(__tracy_phase_zone, "HostProfile::metal2_binding_patch", ([] {
+                       static const bool enabled = std::getenv("TT_METAL_HOST_PROFILE_PHASES") != nullptr;
+                       return enabled;
+                   }()));
+        for (const auto& kernel_name : program_impl.get_registered_kernel_names()) {
+            std::shared_ptr<Kernel> kernel = program_impl.get_kernel_by_spec_name(kernel_name);
+            const auto& binding_handles = kernel->tensor_binding_handles();
+            if (binding_handles.empty()) {
+                continue;
+            }
 
-        // Pre-condition: SetProgramRunArgs must have been called previously to size and
-        // populate this kernel's CRTA buffer. Without it, there is no buffer to patch into.
-        TT_FATAL(
-            !kernel->common_runtime_args().empty(),
-            "UpdateTensorArgs called on Program before SetProgramRunArgs: kernel '{}' has tensor "
-            "bindings but its CRTA buffer has not been allocated. Call SetProgramRunArgs at least "
-            "once first.",
-            kernel_name);
-
-        RuntimeArgsData& crta = kernel->common_runtime_args_data();
-        for (const auto& handle : binding_handles) {
-            auto t_it = tensor_by_param.find(handle.tensor_parameter_name);
+            // Pre-condition: SetProgramRunArgs must have been called previously to size and
+            // populate this kernel's CRTA buffer. Without it, there is no buffer to patch into.
             TT_FATAL(
-                t_it != tensor_by_param.end(),
-                "Internal error: tensor binding '{}' has no resolved MeshTensor (validation should have "
-                "caught this).",
-                handle.tensor_parameter_name);
-            // addr_crta_offset is a byte offset; data() is uint32_t*.
-            uint32_t* dst = crta.data() + (handle.addr_crta_offset / sizeof(uint32_t));
-            EmitBindingCrtaValues(handle, *t_it->second, [&dst](uint32_t w) { *dst++ = w; });
+                !kernel->common_runtime_args().empty(),
+                "UpdateTensorArgs called on Program before SetProgramRunArgs: kernel '{}' has tensor "
+                "bindings but its CRTA buffer has not been allocated. Call SetProgramRunArgs at least "
+                "once first.",
+                kernel_name);
+
+            RuntimeArgsData& crta = kernel->common_runtime_args_data();
+            for (const auto& handle : binding_handles) {
+                auto t_it = tensor_by_param.find(handle.tensor_parameter_name);
+                TT_FATAL(
+                    t_it != tensor_by_param.end(),
+                    "Internal error: tensor binding '{}' has no resolved MeshTensor (validation should have "
+                    "caught this).",
+                    handle.tensor_parameter_name);
+                // addr_crta_offset is a byte offset; data() is uint32_t*.
+                uint32_t* dst = crta.data() + (handle.addr_crta_offset / sizeof(uint32_t));
+                EmitBindingCrtaValues(handle, *t_it->second, [&dst](uint32_t w) { *dst++ = w; });
+            }
         }
     }
-
     // Process DFB runtime parameters to update borrowed-memory DFB backing L1 Buffer*s.
-    AttachBorrowedDFBBuffers(program_impl, tensor_by_param);
+    {
+        ZoneNamedN(__tracy_phase_zone, "HostProfile::metal2_borrowed_dfb_patch", ([] {
+                       static const bool enabled = std::getenv("TT_METAL_HOST_PROFILE_PHASES") != nullptr;
+                       return enabled;
+                   }()));
+        AttachBorrowedDFBBuffers(program_impl, tensor_by_param);
+    }
 }
 
 // Union the args of `src` into `dst` for a single kernel (same kernel name). Used by
@@ -1178,158 +1198,189 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
         "SetProgramRunArgs at least once before a partial update.");
 
     if (!skip_validation) {
+        ZoneNamedN(__tracy_phase_zone, "HostProfile::metal2_validate_program_args", ([] {
+                       static const bool enabled = std::getenv("TT_METAL_HOST_PROFILE_PHASES") != nullptr;
+                       return enabled;
+                   }()));
         ValidateUpdateProgramRunArgs(program, params);
     }
 
     // Patch the supplied args in place. Omitted named args and tensor params are left untouched,
     // retaining the value installed by the most recent SetProgramRunArgs. A supplied positional
     // vararg section refreshes that section wholesale.
-    for (const auto& kernel_params : params.kernel_run_args) {
-        const auto& kernel_name = kernel_params.kernel;
-        std::shared_ptr<Kernel> kernel = program_impl.get_kernel_by_spec_name(kernel_name.get());
-        const KernelRTASchema* schema = program_impl.get_kernel_rta_schema(kernel_name.get());
-        TT_FATAL(schema != nullptr, "Kernel '{}' has no RTA schema registered.", kernel_name);
+    {
+        ZoneNamedN(__tracy_phase_zone, "HostProfile::metal2_named_scalar_patch", ([] {
+                       static const bool enabled = std::getenv("TT_METAL_HOST_PROFILE_PHASES") != nullptr;
+                       return enabled;
+                   }()));
+        for (const auto& kernel_params : params.kernel_run_args) {
+            const auto& kernel_name = kernel_params.kernel;
+            std::shared_ptr<Kernel> kernel = program_impl.get_kernel_by_spec_name(kernel_name.get());
+            const KernelRTASchema* schema = program_impl.get_kernel_rta_schema(kernel_name.get());
+            TT_FATAL(schema != nullptr, "Kernel '{}' has no RTA schema registered.", kernel_name);
 
-        const size_t num_named_rtas = schema->runtime_arg_names.size();
+            const size_t num_named_rtas = schema->runtime_arg_names.size();
 
-        // ---- Per-node RTA buffer: patch supplied named RTAs at their declaration-order slot ----
-        if (!kernel_params.runtime_arg_values.empty()) {
-            const auto& rta_index = schema->runtime_arg_name_to_slot;
-            for (const auto& [name, per_node] : kernel_params.runtime_arg_values) {
-                const auto it = rta_index.find(name);
-                TT_FATAL(
-                    it != rta_index.end(),
-                    "Internal error: named RTA '{}' not in schema for kernel '{}'.",
-                    name,
-                    kernel_name);
-                for (const auto& [node, value] : per_node) {
+            // ---- Per-node RTA buffer: patch supplied named RTAs at their declaration-order slot ----
+            if (!kernel_params.runtime_arg_values.empty()) {
+                const auto& rta_index = schema->runtime_arg_name_to_slot;
+                for (const auto& [name, per_node] : kernel_params.runtime_arg_values) {
+                    const auto it = rta_index.find(name);
                     TT_FATAL(
-                        kernel->cores_with_runtime_args().contains(node),
-                        "UpdateProgramRunArgs: kernel '{}' has no runtime-arg buffer for node {}. Call "
-                        "SetProgramRunArgs at least once before a partial update.",
-                        kernel_name,
-                        node.str());
-                    RuntimeArgsData& rta = kernel->runtime_args_data(node);
-                    rta.data()[it->second] = value;
-                }
-            }
-        }
-
-        // ---- Per-node RTA buffer: patch supplied varargs (positional, after the named section) ----
-        for (const auto& [node, vals] : kernel_runtime_varargs(kernel_params)) {
-            if (vals.empty()) {
-                continue;
-            }
-            TT_FATAL(
-                kernel->cores_with_runtime_args().contains(node),
-                "UpdateProgramRunArgs: kernel '{}' has no runtime-arg buffer for node {}. Call SetProgramRunArgs at "
-                "least once before a partial update.",
-                kernel_name,
-                node.str());
-            RuntimeArgsData& rta = kernel->runtime_args_data(node);
-            for (size_t j = 0; j < vals.size(); ++j) {
-                rta.data()[num_named_rtas + j] = vals[j];
-            }
-        }
-
-        // ---- CRTA buffer: patch supplied named CRTAs + supplied common varargs ----
-        const auto& cvarargs = kernel_common_runtime_varargs(kernel_params);
-        const bool touches_crta = !kernel_params.common_runtime_arg_values.empty() || !cvarargs.empty();
-        if (touches_crta) {
-            TT_FATAL(
-                !kernel->common_runtime_args().empty(),
-                "UpdateProgramRunArgs: kernel '{}' CRTA buffer not allocated. Call SetProgramRunArgs at least once "
-                "before a partial update.",
-                kernel_name);
-            RuntimeArgsData& crta = kernel->common_runtime_args_data();
-
-            if (!kernel_params.common_runtime_arg_values.empty()) {
-                const auto& crta_index = schema->common_runtime_arg_name_to_slot;
-                for (const auto& [name, value] : kernel_params.common_runtime_arg_values) {
-                    const auto it = crta_index.find(name);
-                    TT_FATAL(
-                        it != crta_index.end(),
-                        "Internal error: named CRTA '{}' not in schema for kernel '{}'.",
+                        it != rta_index.end(),
+                        "Internal error: named RTA '{}' not in schema for kernel '{}'.",
                         name,
                         kernel_name);
-                    crta.data()[it->second] = value;
+                    for (const auto& [node, value] : per_node) {
+                        TT_FATAL(
+                            kernel->cores_with_runtime_args().contains(node),
+                            "UpdateProgramRunArgs: kernel '{}' has no runtime-arg buffer for node {}. Call "
+                            "SetProgramRunArgs at least once before a partial update.",
+                            kernel_name,
+                            node.str());
+                        RuntimeArgsData& rta = kernel->runtime_args_data(node);
+                        rta.data()[it->second] = value;
+                    }
                 }
             }
-            if (!cvarargs.empty()) {
-                // Common varargs live after the named CRTAs, the tensor-binding address section, and the
-                // scratchpad address section.
-                const auto& binding_handles = kernel->tensor_binding_handles();
-                size_t binding_section_words = 0;
-                for (const auto& h : binding_handles) {
-                    binding_section_words += 1u + h.num_runtime_field_crta_words;
+
+            // ---- Per-node RTA buffer: patch supplied varargs (positional, after the named section) ----
+            for (const auto& [node, vals] : kernel_runtime_varargs(kernel_params)) {
+                if (vals.empty()) {
+                    continue;
                 }
-                const size_t scratchpad_section_words = kernel->scratchpad_binding_handles().size();
-                const size_t crta_vararg_base =
-                    schema->common_runtime_arg_names.size() + binding_section_words + scratchpad_section_words;
-                for (size_t j = 0; j < cvarargs.size(); ++j) {
-                    crta.data()[crta_vararg_base + j] = cvarargs[j];
+                TT_FATAL(
+                    kernel->cores_with_runtime_args().contains(node),
+                    "UpdateProgramRunArgs: kernel '{}' has no runtime-arg buffer for node {}. Call SetProgramRunArgs "
+                    "at "
+                    "least once before a partial update.",
+                    kernel_name,
+                    node.str());
+                RuntimeArgsData& rta = kernel->runtime_args_data(node);
+                for (size_t j = 0; j < vals.size(); ++j) {
+                    rta.data()[num_named_rtas + j] = vals[j];
+                }
+            }
+
+            // ---- CRTA buffer: patch supplied named CRTAs + supplied common varargs ----
+            const auto& cvarargs = kernel_common_runtime_varargs(kernel_params);
+            const bool touches_crta = !kernel_params.common_runtime_arg_values.empty() || !cvarargs.empty();
+            if (touches_crta) {
+                TT_FATAL(
+                    !kernel->common_runtime_args().empty(),
+                    "UpdateProgramRunArgs: kernel '{}' CRTA buffer not allocated. Call SetProgramRunArgs at least once "
+                    "before a partial update.",
+                    kernel_name);
+                RuntimeArgsData& crta = kernel->common_runtime_args_data();
+
+                if (!kernel_params.common_runtime_arg_values.empty()) {
+                    const auto& crta_index = schema->common_runtime_arg_name_to_slot;
+                    for (const auto& [name, value] : kernel_params.common_runtime_arg_values) {
+                        const auto it = crta_index.find(name);
+                        TT_FATAL(
+                            it != crta_index.end(),
+                            "Internal error: named CRTA '{}' not in schema for kernel '{}'.",
+                            name,
+                            kernel_name);
+                        crta.data()[it->second] = value;
+                    }
+                }
+                if (!cvarargs.empty()) {
+                    // Common varargs live after the named CRTAs, the tensor-binding address section, and the
+                    // scratchpad address section.
+                    const auto& binding_handles = kernel->tensor_binding_handles();
+                    size_t binding_section_words = 0;
+                    for (const auto& h : binding_handles) {
+                        binding_section_words += 1u + h.num_runtime_field_crta_words;
+                    }
+                    const size_t scratchpad_section_words = kernel->scratchpad_binding_handles().size();
+                    const size_t crta_vararg_base =
+                        schema->common_runtime_arg_names.size() + binding_section_words + scratchpad_section_words;
+                    for (size_t j = 0; j < cvarargs.size(); ++j) {
+                        crta.data()[crta_vararg_base + j] = cvarargs[j];
+                    }
                 }
             }
         }
     }
-
     // ---- DFB size overrides (stateful: an unspecified DFB retains its current size) ----
     // Apply BEFORE re-attaching borrowed buffers below, so the borrowed per-bank fit check sees the
     // new size. Mirrors the SetProgramRunArgs path.
-    std::vector<detail::ProgramImpl::DfbSizeOverride> size_overrides;
-    size_overrides.reserve(params.dfb_run_overrides.size());
-    for (const auto& dfb_params : params.dfb_run_overrides) {
-        if (!dfb_params.entry_size.has_value() && !dfb_params.num_entries.has_value()) {
-            continue;
+    {
+        ZoneNamedN(__tracy_phase_zone, "HostProfile::metal2_dfb_overrides", ([] {
+                       static const bool enabled = std::getenv("TT_METAL_HOST_PROFILE_PHASES") != nullptr;
+                       return enabled;
+                   }()));
+        std::vector<detail::ProgramImpl::DfbSizeOverride> size_overrides;
+        size_overrides.reserve(params.dfb_run_overrides.size());
+        for (const auto& dfb_params : params.dfb_run_overrides) {
+            if (!dfb_params.entry_size.has_value() && !dfb_params.num_entries.has_value()) {
+                continue;
+            }
+            size_overrides.push_back(
+                {program_impl.get_dfb_handle(*dfb_params.dfb), dfb_params.entry_size, dfb_params.num_entries});
         }
-        size_overrides.push_back(
-            {program_impl.get_dfb_handle(*dfb_params.dfb), dfb_params.entry_size, dfb_params.num_entries});
+        program_impl.apply_dfb_size_overrides(size_overrides);
     }
-    program_impl.apply_dfb_size_overrides(size_overrides);
-
     // ---- Tensor bindings: patch CRTA address slots for SUPPLIED tensors only ----
     // (Tensors omitted from params keep their previously-patched binding slots.)
     if (!params.tensor_args.empty()) {
         std::unordered_map<std::string, const MeshTensor*> tensor_by_param;
-        tensor_by_param.reserve(params.tensor_args.size());
-        for (const auto& [param_name, tensor_arg] : params.tensor_args) {
-            tensor_by_param.emplace(param_name.get(), &mesh_tensor_of(tensor_arg));
-        }
-
-        for (const auto& kernel_name : program_impl.get_registered_kernel_names()) {
-            std::shared_ptr<Kernel> kernel = program_impl.get_kernel_by_spec_name(kernel_name);
-            const auto& binding_handles = kernel->tensor_binding_handles();
-            if (binding_handles.empty()) {
-                continue;
-            }
-            bool any_supplied = false;
-            for (const auto& handle : binding_handles) {
-                if (tensor_by_param.contains(handle.tensor_parameter_name)) {
-                    any_supplied = true;
-                    break;
-                }
-            }
-            if (!any_supplied) {
-                continue;  // none of this kernel's bindings are being updated.
-            }
-            TT_FATAL(
-                !kernel->common_runtime_args().empty(),
-                "UpdateProgramRunArgs: kernel '{}' CRTA buffer not allocated; cannot patch tensor bindings. Call "
-                "SetProgramRunArgs at least once before a partial update.",
-                kernel_name);
-            RuntimeArgsData& crta = kernel->common_runtime_args_data();
-            for (const auto& handle : binding_handles) {
-                auto t_it = tensor_by_param.find(handle.tensor_parameter_name);
-                if (t_it == tensor_by_param.end()) {
-                    continue;  // tensor omitted → binding slot retained.
-                }
-                uint32_t* dst = crta.data() + (handle.addr_crta_offset / sizeof(uint32_t));
-                EmitBindingCrtaValues(handle, *t_it->second, [&dst](uint32_t w) { *dst++ = w; });
+        {
+            ZoneNamedN(__tracy_phase_zone, "HostProfile::metal2_tensor_lookup", ([] {
+                           static const bool enabled = std::getenv("TT_METAL_HOST_PROFILE_PHASES") != nullptr;
+                           return enabled;
+                       }()));
+            tensor_by_param.reserve(params.tensor_args.size());
+            for (const auto& [param_name, tensor_arg] : params.tensor_args) {
+                tensor_by_param.emplace(param_name.get(), &mesh_tensor_of(tensor_arg));
             }
         }
-
+        {
+            ZoneNamedN(__tracy_phase_zone, "HostProfile::metal2_binding_patch", ([] {
+                           static const bool enabled = std::getenv("TT_METAL_HOST_PROFILE_PHASES") != nullptr;
+                           return enabled;
+                       }()));
+            for (const auto& kernel_name : program_impl.get_registered_kernel_names()) {
+                std::shared_ptr<Kernel> kernel = program_impl.get_kernel_by_spec_name(kernel_name);
+                const auto& binding_handles = kernel->tensor_binding_handles();
+                if (binding_handles.empty()) {
+                    continue;
+                }
+                bool any_supplied = false;
+                for (const auto& handle : binding_handles) {
+                    if (tensor_by_param.contains(handle.tensor_parameter_name)) {
+                        any_supplied = true;
+                        break;
+                    }
+                }
+                if (!any_supplied) {
+                    continue;  // none of this kernel's bindings are being updated.
+                }
+                TT_FATAL(
+                    !kernel->common_runtime_args().empty(),
+                    "UpdateProgramRunArgs: kernel '{}' CRTA buffer not allocated; cannot patch tensor bindings. Call "
+                    "SetProgramRunArgs at least once before a partial update.",
+                    kernel_name);
+                RuntimeArgsData& crta = kernel->common_runtime_args_data();
+                for (const auto& handle : binding_handles) {
+                    auto t_it = tensor_by_param.find(handle.tensor_parameter_name);
+                    if (t_it == tensor_by_param.end()) {
+                        continue;  // tensor omitted → binding slot retained.
+                    }
+                    uint32_t* dst = crta.data() + (handle.addr_crta_offset / sizeof(uint32_t));
+                    EmitBindingCrtaValues(handle, *t_it->second, [&dst](uint32_t w) { *dst++ = w; });
+                }
+            }
+        }
         // Re-attach borrowed-memory DFBs for the supplied tensors (skip omitted ones).
-        AttachBorrowedDFBBuffers(program_impl, tensor_by_param, /*require_all=*/false);
+        {
+            ZoneNamedN(__tracy_phase_zone, "HostProfile::metal2_borrowed_dfb_patch", ([] {
+                           static const bool enabled = std::getenv("TT_METAL_HOST_PROFILE_PHASES") != nullptr;
+                           return enabled;
+                       }()));
+            AttachBorrowedDFBBuffers(program_impl, tensor_by_param, /*require_all=*/false);
+        }
     }
 }
 

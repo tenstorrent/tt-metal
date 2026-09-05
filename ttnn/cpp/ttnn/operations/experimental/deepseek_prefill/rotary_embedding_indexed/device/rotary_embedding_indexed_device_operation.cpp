@@ -4,6 +4,8 @@
 
 #include "rotary_embedding_indexed_device_operation.hpp"
 
+#include <cstdlib>
+#include <tracy/Tracy.hpp>
 #include <cstdint>
 #include <unordered_map>
 #include <utility>
@@ -646,26 +648,36 @@ void RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::override_runtim
     // matches the cached program on every hit -- read it straight from tensor_args. The run args are
     // coordinate-independent, so build them once and apply to every stamped program.
     ProgramRunArgs run_args;
-    run_args.tensor_args = {
-        {INPUT_PARAM, TensorArgument{tensor_args.input.mesh_tensor()}},
-        {COS_PARAM, TensorArgument{tensor_args.cos.mesh_tensor()}},
-        {SIN_PARAM, TensorArgument{tensor_args.sin.mesh_tensor()}},
-        {TRANS_MAT_PARAM, TensorArgument{tensor_args.trans_mat.mesh_tensor()}},
-        {OUTPUT_PARAM, TensorArgument{output.mesh_tensor()}}};
-    if (tensor_args.metadata.has_value()) {
-        run_args.tensor_args.emplace(METADATA_PARAM, TensorArgument{tensor_args.metadata->mesh_tensor()});
-    } else {
-        KernelRunArgs reader_run{.kernel = READER};
-        reader_run.common_runtime_arg_values = {{"kv_actual_global", args.kv_actual_global}};
-        run_args.kernel_run_args = {reader_run};
+    {
+        ZoneNamedN(__tracy_phase_zone, "HostProfile::rotary_build_update_tables", ([] {
+                       static const bool enabled = std::getenv("TT_METAL_HOST_PROFILE_PHASES") != nullptr;
+                       return enabled;
+                   }()));
+        run_args.tensor_args = {
+            {INPUT_PARAM, TensorArgument{tensor_args.input.mesh_tensor()}},
+            {COS_PARAM, TensorArgument{tensor_args.cos.mesh_tensor()}},
+            {SIN_PARAM, TensorArgument{tensor_args.sin.mesh_tensor()}},
+            {TRANS_MAT_PARAM, TensorArgument{tensor_args.trans_mat.mesh_tensor()}},
+            {OUTPUT_PARAM, TensorArgument{output.mesh_tensor()}}};
+        if (tensor_args.metadata.has_value()) {
+            run_args.tensor_args.emplace(METADATA_PARAM, TensorArgument{tensor_args.metadata->mesh_tensor()});
+        } else {
+            KernelRunArgs reader_run{.kernel = READER};
+            reader_run.common_runtime_arg_values = {{"kv_actual_global", args.kv_actual_global}};
+            run_args.kernel_run_args = {reader_run};
+        }
     }
-
     // create_at changes only the coordinate's compile-time my_sp_coord: every program declares
     // the same tensor specs, runtime-argument schema and core targets from shared mesh arguments.
     // Validate the shared update once, then reuse that result across coordinates. Tensor addresses
     // are still refreshed on every program; validate_runtime_args retains per-call scalar checks.
     bool validated = false;
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
+        ZoneNamedN(__tracy_phase_zone, "HostProfile::rotary_update_program", ([] {
+                       static const bool enabled = std::getenv("TT_METAL_HOST_PROFILE_PHASES") != nullptr;
+                       return enabled;
+                   }()));
+
         if (tensor_args.metadata.has_value()) {
             // The metadata reader has no changing named args; its position is read on-device.
             UpdateTensorArgs(program, run_args.tensor_args, /*skip_validation=*/validated);

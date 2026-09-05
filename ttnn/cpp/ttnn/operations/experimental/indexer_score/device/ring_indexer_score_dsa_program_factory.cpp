@@ -6,6 +6,8 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdlib>
+#include <tracy/Tracy.hpp>
 #include <initializer_list>
 #include <utility>
 #include <string>
@@ -684,12 +686,17 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
     const tensor_args_t& tensors,
     tensor_return_value_t& out) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
+    static const bool profile_enabled = std::getenv("TT_METAL_HOST_PROFILE_PHASES") != nullptr;
     // Preserve the adapter's resolved operand identity, including the gathered/workload buffers.
     // Group bindings by kernel so each worker address does not repeat a program/kernel lookup.
     for (auto& [range, program] : cached.workload.get_programs()) {
         const auto& shared = cached.shared_variables.at(range);
         const auto& bindings = shared.resolved_bindings;
-        auto collected = descriptor_adapter_t::collect_tensor_buffers(tensors, out, shared.workload_descriptor);
+        auto collected = [&] {
+            ZoneNamedN(collect_zone, "HostProfile::ring_indexer_collect_buffers", profile_enabled);
+            return descriptor_adapter_t::collect_tensor_buffers(tensors, out, shared.workload_descriptor);
+        }();
+        ZoneNamedN(binding_zone, "HostProfile::ring_indexer_patch_bindings", profile_enabled);
         if (!bindings.cbs.empty() ||
             std::any_of(bindings.rt_args.begin(), bindings.rt_args.end(), [](const auto& binding) {
                 return binding.is_common;
@@ -730,13 +737,17 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
         (k_local_shape[2] / tt::constants::TILE_HEIGHT) * (k_local_shape[3] / tt::constants::TILE_WIDTH);
     const uint32_t k_local_batch_page_offset = args.cache_batch_idx.value_or(0) * local_slot_pages;
     for (auto& [range, program] : cached.workload.get_programs()) {
-        // Must match the build path's rank, or a cache hit shifts the causal offset.
-        const uint32_t device_index = transport_to_tensor_rank(args, transport_rank_for(args, range.start_coord(), q));
-        const uint32_t tp_index =
-            (args.tp_axis().has_value() && q.device_storage().get_coords().size() > 1)
-                ? ttnn::ccl::get_linearized_index_from_physical_coord(q, range.start_coord(), args.tp_axis())
-                : 0u;
-        const auto geom = device_causal_geometry(args, device_index, tp_index, q.logical_shape()[2]);
+        const auto geom = [&] {
+            ZoneNamedN(geometry_zone, "HostProfile::ring_indexer_rank_geometry", profile_enabled);
+            // Must match the build path's rank, or a cache hit shifts the causal offset.
+            const uint32_t device_index =
+                transport_to_tensor_rank(args, transport_rank_for(args, range.start_coord(), q));
+            const uint32_t tp_index =
+                (args.tp_axis().has_value() && q.device_storage().get_coords().size() > 1)
+                    ? ttnn::ccl::get_linearized_index_from_physical_coord(q, range.start_coord(), args.tp_axis())
+                    : 0u;
+            return device_causal_geometry(args, device_index, tp_index, q.logical_shape()[2]);
+        }();
 
         // Visit each kernel/core once for all of its changing scalars. The largest field
         // bounds-check implies every field in this fixed table fits; empty AG cores stay skipped.
@@ -767,25 +778,30 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
             }
             TT_FATAL(patched_any, "indexer_score fused override: kernel {} has no runtime arguments", kernel_idx);
         };
-        namespace rta = CMAKE_UNIQUE_NAMESPACE::rt_arg;
-        patch_fields(
-            kReaderKernelIndex,
-            {{rta::reader_k_batch_offset, k_batch_page_offset},
-             {rta::reader_kv_len_tiles, pcache.kv_len_tiles},
-             {rta::reader_k_local_batch_offset, k_local_batch_page_offset}});
-        patch_fields(
-            kComputeKernelIndex,
-            {{rta::compute_kv_len_tiles, pcache.kv_len_tiles},
-             {rta::compute_chunk_start_tiles, geom.chunk_start_tiles},
-             {rta::compute_straddle_q_tile, geom.straddle_q_tile},
-             {rta::compute_straddle_jump_tiles, geom.straddle_jump_tiles}});
-        patch_fields(
-            kWriterKernelIndex,
-            {{rta::writer_kv_len_tiles, pcache.kv_len_tiles},
-             {rta::writer_chunk_start_tiles, geom.chunk_start_tiles},
-             {rta::writer_straddle_q_tile, geom.straddle_q_tile},
-             {rta::writer_straddle_jump_tiles, geom.straddle_jump_tiles}});
+        {
+            ZoneNamedN(consumer_zone, "HostProfile::ring_indexer_consumer_writes", profile_enabled);
+            namespace rta = CMAKE_UNIQUE_NAMESPACE::rt_arg;
+            patch_fields(
+                kReaderKernelIndex,
+                {{rta::reader_k_batch_offset, k_batch_page_offset},
+                 {rta::reader_kv_len_tiles, pcache.kv_len_tiles},
+                 {rta::reader_k_local_batch_offset, k_local_batch_page_offset}});
+            patch_fields(
+                kComputeKernelIndex,
+                {{rta::compute_kv_len_tiles, pcache.kv_len_tiles},
+                 {rta::compute_chunk_start_tiles, geom.chunk_start_tiles},
+                 {rta::compute_straddle_q_tile, geom.straddle_q_tile},
+                 {rta::compute_straddle_jump_tiles, geom.straddle_jump_tiles}});
+            patch_fields(
+                kWriterKernelIndex,
+                {{rta::writer_kv_len_tiles, pcache.kv_len_tiles},
+                 {rta::writer_chunk_start_tiles, geom.chunk_start_tiles},
+                 {rta::writer_straddle_q_tile, geom.straddle_q_tile},
+                 {rta::writer_straddle_jump_tiles, geom.straddle_jump_tiles}});
+        }
 
+        // Includes the AG scalar preparation immediately preceding the four kernel writes.
+        ZoneNamedN(ag_zone, "HostProfile::ring_indexer_ag_prepare_writes", profile_enabled);
         // The descriptor fast path patches buffer bindings but not scalar fields embedded in the fused AG
         // workers. cache_batch_idx and the exact kv_len are hash-excluded (only the structural schedule class is
         // hashed), so update the selected input slot and slab-rounded gather extent on every cache hit.
