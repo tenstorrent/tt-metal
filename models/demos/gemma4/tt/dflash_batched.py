@@ -63,11 +63,18 @@ class DFlashBatchedDecoder:
         #     correctness reference, ~Bx target weight reads.
         self.verify_split = _os.environ.get("GEMMA4_DFLASH_BVSPLIT", "0") == "1"
         self.verify_bbatch = not self.verify_split and _os.environ.get("GEMMA4_DFLASH_FOLD", "0") != "1"
-        if B * self.P_v > 32:
+        if B * self.P_v > 32 and not self.verify_bbatch:
+            # fold/split put B*P_v rows in the PACKED dim (PNHt blows past L1);
+            # bbatch keeps B in the true batch dim, so its constraints are
+            # B <= 32 (decode batch) and per-user packed rows -- B*P_v > 32 is
+            # legal there (e.g. B=32 x V=1). The 32-row cliff belongs to MTP's
+            # batch-dim verify, not this geometry.
             raise ValueError(
-                f"B*(V+1) = {B * self.P_v} > 32: the verify row cliff (measured on MTP) — "
-                f"lower GEMMA4_DFLASH_VERIFY or B"
+                f"B*(V+1) = {B * self.P_v} > 32 in fold/split verify mode — "
+                f"lower GEMMA4_DFLASH_VERIFY or B, or use bbatch (default)"
             )
+        if B > 32:
+            raise ValueError(f"B = {B} > 32: decode batch ceiling")
 
         z = torch.zeros
         mkT = dict(device=self.mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=self._mapper)
