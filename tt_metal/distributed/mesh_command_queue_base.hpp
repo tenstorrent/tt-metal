@@ -67,23 +67,23 @@ protected:
 private:
     // Helper functions for read and write entire Sharded-MeshBuffers
     void write_sharded_buffer(const MeshBuffer& buffer, const void* src);
-    void read_sharded_buffer(MeshBuffer& buffer, void* dst);
+    void read_sharded_buffer(const MeshBuffer& buffer, void* dst);
 
     // Must be called with lock_api_function_() held.
     void enqueue_read_shards_nolock(
-        const std::vector<ShardDataTransfer>& shard_data_transfers,
-        const std::shared_ptr<MeshBuffer>& mesh_buffer,
+        ttsl::Span<const ShardDataTransfer> shard_data_transfers,
+        const MeshBuffer& mesh_buffer,
         bool blocking,
         std::vector<MemoryPin> memory_pins = {});
     // Must be called with lock_api_function_() held.
     void enqueue_write_shards_nolock(
-        MeshBuffer& mesh_buffer,
-        const std::vector<ShardDataTransfer>& shard_data_transfers,
+        const MeshBuffer& mesh_buffer,
+        ttsl::Span<const ShardDataTransfer> shard_data_transfers,
         bool blocking,
         const tt::tt_metal::CoreRangeSet* logical_core_filter = nullptr);
 
     void enqueue_write_with_core_filter(
-        MeshBuffer& mesh_buffer,
+        const MeshBuffer& mesh_buffer,
         const DistributedHostBuffer& host_buffer,
         bool blocking,
         const tt::tt_metal::CoreRangeSet* logical_core_filter);
@@ -111,25 +111,27 @@ public:
         const MeshCoordinateRange& device_range,
         bool blocking,
         std::optional<BufferRegion> region = std::nullopt) override;
-    void enqueue_write_mesh_buffer(
-        const std::shared_ptr<MeshBuffer>& buffer, const void* host_data, bool blocking) override;
+    using MeshCommandQueue::enqueue_write_mesh_buffer;
+    void enqueue_write_mesh_buffer(const MeshBuffer& buffer, const void* host_data, bool blocking) override;
+    using MeshCommandQueue::enqueue_write_shards;
     void enqueue_write_shards(
-        const std::shared_ptr<MeshBuffer>& mesh_buffer,
-        const std::vector<ShardDataTransfer>& shard_data_transfers,
+        const MeshBuffer& mesh_buffer,
+        ttsl::Span<const ShardDataTransfer> shard_data_transfers,
         bool blocking) override;
-    void enqueue_write(
-        const std::shared_ptr<MeshBuffer>& mesh_buffer,
-        const DistributedHostBuffer& host_buffer,
-        bool blocking) override;
+    using MeshCommandQueue::enqueue_write;
+    void enqueue_write(const MeshBuffer& mesh_buffer, const DistributedHostBuffer& host_buffer, bool blocking) override;
 
     // MeshBuffer Read APIs
-    void enqueue_read_mesh_buffer(void* host_data, const std::shared_ptr<MeshBuffer>& buffer, bool blocking) override;
+    using MeshCommandQueue::enqueue_read_mesh_buffer;
+    void enqueue_read_mesh_buffer(void* host_data, const MeshBuffer& buffer, bool blocking) override;
+    using MeshCommandQueue::enqueue_read_shards;
     void enqueue_read_shards(
-        const std::vector<ShardDataTransfer>& shard_data_transfers,
-        const std::shared_ptr<MeshBuffer>& mesh_buffer,
+        ttsl::Span<const ShardDataTransfer> shard_data_transfers,
+        const MeshBuffer& mesh_buffer,
         bool blocking) override;
+    using MeshCommandQueue::enqueue_read;
     void enqueue_read(
-        const std::shared_ptr<MeshBuffer>& mesh_buffer,
+        const MeshBuffer& mesh_buffer,
         DistributedHostBuffer& host_buffer,
         const std::optional<std::unordered_set<MeshCoordinate>>& shards,
         bool blocking) override;

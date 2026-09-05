@@ -12,11 +12,11 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/core_subset_write/buffer_write.hpp>
 #include "device_fixture.hpp"
-#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -40,7 +40,9 @@ TEST_F(UnitMeshFixture, Host_UAF_WriteToBuffer_SanityCheck) {
     DeallocateBuffer(*buffer->get_reference_buffer());
 
     std::vector<uint32_t> data(256, 0xABCDEFu);
-    EXPECT_DEATH(slow_dispatch::WriteToBuffer(*buffer, data), ".*Use-After-Free.*WriteToBuffer.*");
+    EXPECT_DEATH(
+        this->device().mesh_command_queue().enqueue_write_mesh_buffer(*buffer, data, /*blocking=*/true),
+        ".*Use-After-Free.*WriteToBuffer.*");
 }
 
 TEST_F(UnitMeshFixture, Host_UAF_ReadFromBuffer_SanityCheck) {
@@ -53,7 +55,9 @@ TEST_F(UnitMeshFixture, Host_UAF_ReadFromBuffer_SanityCheck) {
     DeallocateBuffer(*buffer->get_reference_buffer());
 
     std::vector<uint32_t> out;
-    EXPECT_DEATH(slow_dispatch::ReadFromBuffer(*buffer, out), ".*Use-After-Free.*ReadFromBuffer.*");
+    EXPECT_DEATH(
+        this->device().mesh_command_queue().enqueue_read_mesh_buffer(out, *buffer, /*blocking=*/true),
+        ".*Use-After-Free.*ReadFromBuffer.*");
 }
 
 TEST_F(UnitMeshFixture, Host_UAF_ReadShard_SanityCheck) {
@@ -103,7 +107,9 @@ TEST_F(UnitMeshFixture, Host_UAF_WriteToBuffer_SharedPtrOverload_SanityCheck) {
     DeallocateBuffer(*buffer->get_reference_buffer());
 
     std::vector<uint32_t> data(256, 0xABCDEFu);
-    EXPECT_DEATH(slow_dispatch::WriteToBuffer(*buffer, data), ".*Use-After-Free.*WriteToBuffer.*");
+    EXPECT_DEATH(
+        this->device().mesh_command_queue().enqueue_write_mesh_buffer(*buffer, data, /*blocking=*/true),
+        ".*Use-After-Free.*WriteToBuffer.*");
 }
 
 // Positive control: a write/read round-trip on a LIVE (still-allocated) buffer
@@ -118,10 +124,11 @@ TEST_F(UnitMeshFixture, Host_UAF_Allocated_NoViolation) {
         &this->device());  // left allocated
 
     std::vector<uint32_t> data(256, 0xABCDEFu);
-    slow_dispatch::WriteToBuffer(*buffer, data);  // must NOT abort
+    auto& cq = this->device().mesh_command_queue();
+    cq.enqueue_write_mesh_buffer(*buffer, data, /*blocking=*/true);  // must NOT abort
 
     std::vector<uint32_t> out;
-    slow_dispatch::ReadFromBuffer(*buffer, out);  // must NOT abort
+    cq.enqueue_read_mesh_buffer(out, *buffer, /*blocking=*/true);  // must NOT abort
     EXPECT_EQ(out, data);
 
     ::unsetenv("TT_METAL_EMULE_ASAN");

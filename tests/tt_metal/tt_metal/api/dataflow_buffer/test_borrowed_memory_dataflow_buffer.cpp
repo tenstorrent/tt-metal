@@ -261,7 +261,8 @@ void run_borrowed_memory_dfb_program(
     // -----------------------------------------------------------------------
     std::vector<uint32_t> input(cfg.num_entries * cfg.entry_size / sizeof(uint32_t));
     std::iota(input.begin(), input.end(), 0u);
-    slow_dispatch::WriteToBuffer(src_tensor.mesh_buffer(), input);
+    auto& cq = mesh_device.mesh_command_queue();
+    cq.enqueue_write_mesh_buffer(src_tensor.mesh_buffer(), input, /*blocking=*/true);
 
     distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), workload, /*blocking=*/true);
 
@@ -276,7 +277,7 @@ void run_borrowed_memory_dfb_program(
 
     if (cfg.verify_data && !cfg.tensix_consumer) {
         std::vector<uint32_t> output;
-        slow_dispatch::ReadFromBuffer(dst_tensor->mesh_buffer(), output);
+        cq.enqueue_read_mesh_buffer(output, dst_tensor->mesh_buffer(), /*blocking=*/true);
         EXPECT_EQ(input, output);
     }
 }
@@ -383,10 +384,11 @@ void run_update_address_test(
     const KernelRunArgs::RuntimeArgValues dm_rtas =
         MakeRuntimeArgsForSingleNode(node, {{"chunk_offset", 0u}, {"entries_per_core", num_entries}});
 
+    auto& cq = mesh_device.mesh_command_queue();
     // --- Run 1: ring at ring_tensor_a ---
     std::vector<uint32_t> input_a(total_words);
     std::iota(input_a.begin(), input_a.end(), 0u);
-    slow_dispatch::WriteToBuffer(src_tensor.mesh_buffer(), input_a);
+    cq.enqueue_write_mesh_buffer(src_tensor.mesh_buffer(), input_a, /*blocking=*/true);
 
     ProgramRunArgs params1;
     params1.kernel_run_args = {
@@ -411,7 +413,7 @@ void run_update_address_test(
         program.impl().dataflow_buffers()[0]->uniform_alloc_addr(), static_cast<uint32_t>(ring_tensor_a.address()));
     {
         std::vector<uint32_t> output;
-        slow_dispatch::ReadFromBuffer(dst_tensor.mesh_buffer(), output);
+        cq.enqueue_read_mesh_buffer(output, dst_tensor.mesh_buffer(), /*blocking=*/true);
         EXPECT_EQ(input_a, output);
     }
 
@@ -421,7 +423,7 @@ void run_update_address_test(
     // UpdateTensorArgs fast-path (address only).
     std::vector<uint32_t> input_b(total_words);
     std::iota(input_b.begin(), input_b.end(), total_words);  // distinct from run 1
-    slow_dispatch::WriteToBuffer(src_tensor.mesh_buffer(), input_b);
+    cq.enqueue_write_mesh_buffer(src_tensor.mesh_buffer(), input_b, /*blocking=*/true);
 
     if (reentry_num_entries_override.has_value()) {
         // Combined re-bind + resize in ONE SetProgramRunArgs: point the borrowed ring at a different
@@ -461,7 +463,7 @@ void run_update_address_test(
     }
     {
         std::vector<uint32_t> output;
-        slow_dispatch::ReadFromBuffer(dst_tensor.mesh_buffer(), output);
+        cq.enqueue_read_mesh_buffer(output, dst_tensor.mesh_buffer(), /*blocking=*/true);
         EXPECT_EQ(input_b, output);
     }
 }

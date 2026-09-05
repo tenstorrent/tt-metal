@@ -17,6 +17,7 @@
 #include <variant>
 #include <vector>
 
+#include <tt_stl/assert.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/core_coord.hpp>
@@ -82,37 +83,81 @@ public:
         const MeshCoordinateRange& device_range,
         bool blocking,
         std::optional<BufferRegion> region = std::nullopt) = 0;
-    virtual void enqueue_write_mesh_buffer(
-        const std::shared_ptr<MeshBuffer>& buffer, const void* host_data, bool blocking) = 0;
+    void enqueue_write_mesh_buffer(const std::shared_ptr<MeshBuffer>& buffer, const void* host_data, bool blocking) {
+        enqueue_write_mesh_buffer(*buffer, host_data, blocking);
+    }
+    template <typename DType>
+    void enqueue_write_mesh_buffer(const MeshBuffer& buffer, const std::vector<DType>& src, bool blocking) {
+        TT_FATAL(
+            src.size() * sizeof(DType) >= buffer.size(),
+            "Source vector is too small for mesh buffer: mesh buffer size={} bytes, source size={} * {} bytes",
+            buffer.size(),
+            src.size(),
+            sizeof(DType));
+
+        enqueue_write_mesh_buffer(buffer, src.data(), blocking);
+    }
+    virtual void enqueue_write_mesh_buffer(const MeshBuffer& buffer, const void* host_data, bool blocking) = 0;
     // If PinnedMemory is attached to a HostBuffer used within the enqueue_write, the contents of the memory must not be
     // modified until the enqueue_write has completed on the device. This may be checked by any of
     // * calling lock() on the PinnedMemory
     // * setting the blocking parameter to true
     // * calling finish() on the MeshCommandQueue
     // * calling enqueue_record_event_to_host() and then waiting for the event to complete on the host.
+    void enqueue_write(
+        const std::shared_ptr<MeshBuffer>& mesh_buffer, const DistributedHostBuffer& host_buffer, bool blocking) {
+        enqueue_write(*mesh_buffer, host_buffer, blocking);
+    }
     virtual void enqueue_write(
-        const std::shared_ptr<MeshBuffer>& mesh_buffer, const DistributedHostBuffer& host_buffer, bool blocking) = 0;
+        const MeshBuffer& mesh_buffer, const DistributedHostBuffer& host_buffer, bool blocking) = 0;
     // If PinnedMemory is set on a ShardDataTransfer, the contents of the memory must not be modified until the
     // enqueue_write has completed on the device. This may be checked by any of
     // * calling lock() on the PinnedMemory
     // * setting the blocking parameter to true
     // * calling finish() on the MeshCommandQueue
     // * calling enqueue_record_event_to_host() and then waiting for the event to complete on the host.
-    virtual void enqueue_write_shards(
+    void enqueue_write_shards(
         const std::shared_ptr<MeshBuffer>& mesh_buffer,
         const std::vector<ShardDataTransfer>& shard_data_transfers,
-        bool blocking) = 0;
+        bool blocking) {
+        enqueue_write_shards(*mesh_buffer, shard_data_transfers, blocking);
+    }
+    virtual void enqueue_write_shards(
+        const MeshBuffer& mesh_buffer, ttsl::Span<const ShardDataTransfer> shard_data_transfers, bool blocking) = 0;
 
     // MeshBuffer Read APIs
-    virtual void enqueue_read_mesh_buffer(
-        void* host_data, const std::shared_ptr<MeshBuffer>& buffer, bool blocking) = 0;
-    virtual void enqueue_read_shards(
+    void enqueue_read_mesh_buffer(void* host_data, const std::shared_ptr<MeshBuffer>& buffer, bool blocking) {
+        enqueue_read_mesh_buffer(host_data, *buffer, blocking);
+    }
+    // Supports reading MeshBuffers sharded across devices, and a Unit-MeshBuffer with a replicated layout.
+    template <typename DType>
+    void enqueue_read_mesh_buffer(std::vector<DType>& dst, const MeshBuffer& buffer, bool blocking) {
+        if (buffer.global_layout() == MeshBufferLayout::SHARDED) {
+            dst.resize(buffer.global_shard_spec().global_size / sizeof(DType));
+        } else {
+            dst.resize(buffer.size() / sizeof(DType));
+        }
+        enqueue_read_mesh_buffer(dst.data(), buffer, blocking);
+    }
+    virtual void enqueue_read_mesh_buffer(void* host_data, const MeshBuffer& buffer, bool blocking) = 0;
+    void enqueue_read_shards(
         const std::vector<ShardDataTransfer>& shard_data_transfers,
         const std::shared_ptr<MeshBuffer>& mesh_buffer,
-        bool blocking) = 0;
+        bool blocking) {
+        enqueue_read_shards(shard_data_transfers, *mesh_buffer, blocking);
+    }
+    virtual void enqueue_read_shards(
+        ttsl::Span<const ShardDataTransfer> shard_data_transfers, const MeshBuffer& mesh_buffer, bool blocking) = 0;
     // TODO: does "enqueue" make sense anymore? Return the object by value instead.
-    virtual void enqueue_read(
+    void enqueue_read(
         const std::shared_ptr<MeshBuffer>& mesh_buffer,
+        DistributedHostBuffer& host_buffer,
+        const std::optional<std::unordered_set<MeshCoordinate>>& shards,
+        bool blocking) {
+        enqueue_read(*mesh_buffer, host_buffer, shards, blocking);
+    }
+    virtual void enqueue_read(
+        const MeshBuffer& mesh_buffer,
         DistributedHostBuffer& host_buffer,
         const std::optional<std::unordered_set<MeshCoordinate>>& shards,
         bool blocking) = 0;

@@ -283,14 +283,15 @@ TEST_F(UnitMeshFixture, GenericBinaryReaderMatmulLargeBlock) {
             convert_layout_tile_swizzled_to_tile_nfaces(ttsl::make_const_span(activations_tilized));
         auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
         auto activations_tile_transposed = transpose_tiles(activations, M, K, in0_block_w);
-        slow_dispatch::WriteToBuffer(*src0_dram_buffer, activations_tile_transposed);
+        auto& cq = this->device().mesh_command_queue();
+        cq.enqueue_write_mesh_buffer(*src0_dram_buffer, activations_tile_transposed, /*blocking=*/true);
 
         auto identity = create_identity_matrix(K * 32, N * 32, std::min(K, N) * 32);  // bflaot16 32x32 identity
         auto identity_tilized = tilize_swizzled(identity, K * 32, N * 32);
         auto weights_tile_layout =
             convert_layout_tile_swizzled_to_tile_nfaces(ttsl::make_const_span(identity_tilized));
         auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
-        slow_dispatch::WriteToBuffer(*src1_dram_buffer, weights);
+        cq.enqueue_write_mesh_buffer(*src1_dram_buffer, weights, /*blocking=*/true);
         slow_dispatch::WriteToL1(this->device(), core, source_addresses_in_l1_addr, source_addresses);
 
         tt_metal::SetRuntimeArgs(program, generic_binary_reader_kernel, core, generic_binary_reader_args);
@@ -300,7 +301,7 @@ TEST_F(UnitMeshFixture, GenericBinaryReaderMatmulLargeBlock) {
         LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
 
         std::vector<uint32_t> result_vec;
-        slow_dispatch::ReadFromBuffer(*dst_dram_buffer, result_vec);
+        cq.enqueue_read_mesh_buffer(result_vec, *dst_dram_buffer, /*blocking=*/true);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
