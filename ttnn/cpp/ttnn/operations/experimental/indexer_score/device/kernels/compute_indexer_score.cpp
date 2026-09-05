@@ -7,6 +7,8 @@
 //   act = relu when apply_relu, else identity (raw dot). num_out_groups==1 sums all heads -> 1 plane;
 //   >1 keeps the groups separate. Heads stream in DEST passes (half-sync bf16); q/w resident when they fit.
 
+#include "indexer_score_fused_common_args.hpp"
+
 #include <cstdint>
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/matmul.h"
@@ -457,13 +459,21 @@ void kernel_main() {
     const uint32_t max_bands = get_arg_val<uint32_t>(5);  // row's widest column; streaming drains q to this
     // Valid KV length in tiles: caps each cell's valid cols (mask suffix grows over the tail). Full when
     // unset (dense path unchanged). Hash-excluded.
-    const uint32_t kv_len_tiles = get_arg_val<uint32_t>(6);
+    const uint32_t kv_len_tiles =
+        (fused_ring_enabled ? get_common_arg_val<uint32_t>(indexer_fused_common::compute::KvLength)
+                            : get_arg_val<uint32_t>(6));
     // Per-device chunk-start offset (tiles); runtime so distinct values reuse one program.
-    const uint32_t chunk_start_tiles = get_arg_val<uint32_t>(7);
+    const uint32_t chunk_start_tiles =
+        (fused_ring_enabled ? get_common_arg_val<uint32_t>(indexer_fused_common::compute::ChunkStart)
+                            : get_arg_val<uint32_t>(7));
     // Mid-slab boundary-chip diagonal straddle (tiles): q-rows >= straddle_q_tile jump by straddle_jump_tiles.
     // Both 0 on every non-boundary device and in the chunk-aligned case, leaving the diagonal linear.
-    const uint32_t straddle_q_tile = get_arg_val<uint32_t>(8);
-    const uint32_t straddle_jump_tiles = get_arg_val<uint32_t>(9);
+    const uint32_t straddle_q_tile =
+        (fused_ring_enabled ? get_common_arg_val<uint32_t>(indexer_fused_common::compute::StraddleQ)
+                            : get_arg_val<uint32_t>(8));
+    const uint32_t straddle_jump_tiles =
+        (fused_ring_enabled ? get_common_arg_val<uint32_t>(indexer_fused_common::compute::StraddleJump)
+                            : get_arg_val<uint32_t>(9));
     if (num_groups == 0 || num_bands == 0) {
         return;
     }

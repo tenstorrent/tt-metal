@@ -10,6 +10,8 @@
 // sender reads DRAM + mcasts; receiver takes the L1->L1 copy; none is a plain DRAM read. q/w (row) and k
 // (column) mcast are independent; either may be off.
 
+#include "indexer_score_fused_common_args.hpp"
+
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/noc_semaphore.h"
@@ -362,8 +364,10 @@ struct FusedRingGate {
         ring_size(recv.seq.ring_size),
         tiles_per_shard(k_len_tiles / recv.seq.ring_size),
         sem_id{recv.signal_op_semaphore_ids[0], recv.signal_op_semaphore_ids[1]},
-        k_local_acc(TensorAccessor(kl_args, get_arg_val<uint32_t>(argidx++), k_tile_bytes)),
-        local_batch_page_offset(get_arg_val<uint32_t>(argidx++)),
+        k_local_acc(TensorAccessor(
+            kl_args, (argidx++, get_common_arg_val<uint32_t>(indexer_fused_common::reader::KLocal)), k_tile_bytes)),
+        local_batch_page_offset(
+            (argidx++, get_common_arg_val<uint32_t>(indexer_fused_common::reader::LocalBatchOffset))),
         perm_base(argidx),
         shard_dir{},
         shard_half_val{},
@@ -476,9 +480,12 @@ inline void read_k_chunk_streaming(
 }
 
 void kernel_main() {
-    const uint32_t q_addr = get_arg_val<uint32_t>(0);
-    const uint32_t k_addr = get_arg_val<uint32_t>(1);
-    const uint32_t w_addr = get_arg_val<uint32_t>(2);
+    const uint32_t q_addr =
+        (fused_ring_enabled ? get_common_arg_val<uint32_t>(indexer_fused_common::reader::Q) : get_arg_val<uint32_t>(0));
+    const uint32_t k_addr =
+        (fused_ring_enabled ? get_common_arg_val<uint32_t>(indexer_fused_common::reader::K) : get_arg_val<uint32_t>(1));
+    const uint32_t w_addr =
+        (fused_ring_enabled ? get_common_arg_val<uint32_t>(indexer_fused_common::reader::W) : get_arg_val<uint32_t>(2));
     // Banded schedule: groups -> grid rows (q/w shared = q_dir mcast), k-bands -> columns (k shared = k_dir mcast).
     const uint32_t row_group0 = get_arg_val<uint32_t>(3);
     const uint32_t group_stride = get_arg_val<uint32_t>(4);
@@ -489,8 +496,12 @@ void kernel_main() {
     const McastDir k_dir = read_mcast_dir(9);             // K column mcast: args [9, 17)
     const McastDir q_dir = read_mcast_dir(17);            // Q/W row mcast: args [17, 25)
     // Persistent-cache args (hash-excluded, re-applied each dispatch), after the mcast tuples.
-    const uint32_t k_batch_page_offset = get_arg_val<uint32_t>(25);  // indexed-cache page offset; 0 when not indexed
-    const uint32_t kv_len_tiles = get_arg_val<uint32_t>(26);         // valid KV length in tiles (full when unset)
+    const uint32_t k_batch_page_offset =
+        (fused_ring_enabled ? get_common_arg_val<uint32_t>(indexer_fused_common::reader::BatchOffset)
+                            : get_arg_val<uint32_t>(25));  // indexed-cache page offset; 0 when not indexed
+    const uint32_t kv_len_tiles =
+        (fused_ring_enabled ? get_common_arg_val<uint32_t>(indexer_fused_common::reader::KvLength)
+                            : get_arg_val<uint32_t>(26));  // valid KV length in tiles (full when unset)
 
     const auto q_acc = TensorAccessor(q_args, q_addr, q_tile_bytes);
     const auto k_acc = TensorAccessor(k_args, k_addr, k_tile_bytes);

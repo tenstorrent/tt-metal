@@ -7,6 +7,8 @@
 // KC strip's 32 rows. block_size>0: extract per-query block maxes from the pooled tiles' col 0, force each
 // query's own block to +inf, scatter (forced-local block / sparse_local_block).
 
+#include "indexer_score_fused_common_args.hpp"
+
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
@@ -170,7 +172,9 @@ inline void write_pooled_strip(
 }
 
 void kernel_main() {
-    const uint32_t out_addr = get_arg_val<uint32_t>(0);
+    const uint32_t out_addr =
+        (fused_ring_enabled ? get_common_arg_val<uint32_t>(indexer_fused_common::writer::Output)
+                            : get_arg_val<uint32_t>(0));
     // Banded schedule (matches reader/compute): group-phase x band rectangle.
     const uint32_t row_group0 = get_arg_val<uint32_t>(1);
     const uint32_t group_stride = get_arg_val<uint32_t>(2);
@@ -178,13 +182,24 @@ void kernel_main() {
     const uint32_t band0 = get_arg_val<uint32_t>(4);
     const uint32_t num_bands = get_arg_val<uint32_t>(5);
     // [6] max_bands (unused). [7] kv_len_tiles caps columns written per cell (full when unset).
-    const uint32_t kv_len_tiles = get_arg_val<uint32_t>(7);
+    const uint32_t kv_len_tiles =
+        (fused_ring_enabled ? get_common_arg_val<uint32_t>(indexer_fused_common::writer::KvLength)
+                            : get_arg_val<uint32_t>(7));
     // [8] per-device chunk-start (tiles); runtime so distinct values reuse one program. Only the block-pool
     // forced-local stamp uses it; always set.
-    const uint32_t chunk_start_keys = get_arg_val<uint32_t>(8) * tt::constants::TILE_WIDTH;
+    const uint32_t chunk_start_keys =
+        (fused_ring_enabled ? get_common_arg_val<uint32_t>(indexer_fused_common::writer::ChunkStart)
+                            : get_arg_val<uint32_t>(8)) *
+        tt::constants::TILE_WIDTH;
     // [9],[10] mid-slab boundary-chip forced-local block jump (keys); both 0 off the boundary chip.
-    const uint32_t straddle_q_keys = get_arg_val<uint32_t>(9) * tt::constants::TILE_WIDTH;
-    const uint32_t straddle_jump_keys = get_arg_val<uint32_t>(10) * tt::constants::TILE_WIDTH;
+    const uint32_t straddle_q_keys =
+        (fused_ring_enabled ? get_common_arg_val<uint32_t>(indexer_fused_common::writer::StraddleQ)
+                            : get_arg_val<uint32_t>(9)) *
+        tt::constants::TILE_WIDTH;
+    const uint32_t straddle_jump_keys =
+        (fused_ring_enabled ? get_common_arg_val<uint32_t>(indexer_fused_common::writer::StraddleJump)
+                            : get_arg_val<uint32_t>(10)) *
+        tt::constants::TILE_WIDTH;
 
     constexpr auto out_args = TensorAccessorArgs<num_common_ct_args + 5>();
     const auto out_acc = TensorAccessor(out_args, out_addr, page_bytes);

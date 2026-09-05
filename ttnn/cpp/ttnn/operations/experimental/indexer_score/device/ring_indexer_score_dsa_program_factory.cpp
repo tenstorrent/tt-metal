@@ -33,6 +33,7 @@
 #include "indexer_score_host_common.hpp"  // shared causal geometry / device index / persistent-cache args
 #include "ring_indexer_score_schedule.hpp"
 #include "kernels/indexer_score_cb.hpp"
+#include "kernels/indexer_score_fused_common_args.hpp"
 #include "kernels/indexer_score_work_split.hpp"
 
 namespace ttnn::operations::experimental::indexer_score::program {
@@ -491,9 +492,9 @@ ProgramDescriptor build_ring_program_descriptor(
                 row % group_rows, group_rows, num_groups, /*band0=*/0u, col_num_bands, max_bands};
 
             KernelDescriptor::RTArgList reader_rt;
-            reader_rt.push_back(q.buffer());
-            reader_rt.push_back(k.buffer());
-            reader_rt.push_back(w.buffer());
+            reader_rt.push_back(0u);  // Reserved: address is a common buffer binding.
+            reader_rt.push_back(0u);  // Reserved: address is a common buffer binding.
+            reader_rt.push_back(0u);  // Reserved: address is a common buffer binding.
             append_scalars(reader_rt, sched);
             const auto push_mcast_dir = [&](uint32_t role,
                                             uint32_t xs,
@@ -527,35 +528,49 @@ ProgramDescriptor build_ring_program_descriptor(
                 q_py,
                 q_sender,
                 cols_used - 1);
-            // Reader tail (sequential push; slots named in rt_arg, matched positionally by the kernel).
-            reader_rt.push_back(k_batch_page_offset);  // rt_arg::reader_k_batch_offset (25)
-            reader_rt.push_back(kv_len_tiles);         // rt_arg::reader_kv_len_tiles (26)
+            // Preserve unique tail offsets; changing scalars and addresses are common args.
+            reader_rt.push_back(0u);                   // rt_arg::reader_k_batch_offset (25)
+            reader_rt.push_back(0u);                   // rt_arg::reader_kv_len_tiles (26)
             reader_rt.append(fused_rt);                // rt_arg::reader_fused_rt_base (27..35): ring/dir/sems/split
-            reader_rt.push_back(k_local.buffer());     // rt_arg::reader_k_local_addr (36): local SP shard address
-            reader_rt.push_back(k_local_batch_page_offset);  // selected slot in the original local cache
+            reader_rt.push_back(0u);                   // Reserved k_local address slot (36); bound through common args.
+            reader_rt.push_back(0u);                   // Reserved local batch offset (common args).
             reader_rt.append(physical_starts);               // rt_arg::reader_band_perm_base (38..): physical K starts
             reader_kernel.emplace_runtime_args(core, reader_rt);
 
             KernelDescriptor::RTArgList compute_rt;
             append_scalars(compute_rt, sched);
-            compute_rt.push_back(kv_len_tiles);
-            compute_rt.push_back(chunk_t);
-            compute_rt.push_back(geom.straddle_q_tile);
-            compute_rt.push_back(geom.straddle_jump_tiles);
+            compute_rt.push_back(0u);
+            compute_rt.push_back(0u);
+            compute_rt.push_back(0u);
+            compute_rt.push_back(0u);
             compute_rt.append(physical_starts);  // rt_arg::compute_band_perm_base (10..): physical K starts
             compute_kernel.emplace_runtime_args(core, compute_rt);
 
             KernelDescriptor::RTArgList writer_rt;
-            writer_rt.push_back(out.buffer());
+            writer_rt.push_back(0u);  // Reserved: address is a common buffer binding.
             append_scalars(writer_rt, sched);
-            writer_rt.push_back(kv_len_tiles);
-            writer_rt.push_back(chunk_t);
-            writer_rt.push_back(geom.straddle_q_tile);
-            writer_rt.push_back(geom.straddle_jump_tiles);
+            writer_rt.push_back(0u);
+            writer_rt.push_back(0u);
+            writer_rt.push_back(0u);
+            writer_rt.push_back(0u);
             writer_rt.append(physical_starts);  // rt_arg::writer_band_perm_base (11..): physical K starts
             writer_kernel.emplace_runtime_args(core, writer_rt);
         }
     }
+
+    // Common buffer bindings retain descriptor ownership/alias resolution and are
+    // re-applied on every dispatch. Scalars are uniform within each coordinate's kernel.
+    reader_kernel.emplace_common_runtime_args(
+        {q.buffer(),
+         k.buffer(),
+         w.buffer(),
+         k_local.buffer(),
+         k_batch_page_offset,
+         kv_len_tiles,
+         k_local_batch_page_offset});
+    writer_kernel.emplace_common_runtime_args(
+        {out.buffer(), kv_len_tiles, chunk_t, geom.straddle_q_tile, geom.straddle_jump_tiles});
+    compute_kernel.emplace_common_runtime_args({kv_len_tiles, chunk_t, geom.straddle_q_tile, geom.straddle_jump_tiles});
 
     // Consumer kernels FIRST (indices 0/1/2), then the AG helper appends its workers (3..).
     desc.kernels.push_back(std::move(reader_kernel));
@@ -697,17 +712,19 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
             return descriptor_adapter_t::collect_tensor_buffers(tensors, out, shared.workload_descriptor);
         }();
         ZoneNamedN(binding_zone, "HostProfile::ring_indexer_patch_bindings", profile_enabled);
-        if (!bindings.cbs.empty() ||
-            std::any_of(bindings.rt_args.begin(), bindings.rt_args.end(), [](const auto& binding) {
-                return binding.is_common;
-            })) {
-            // Retain the general implementation for any future CB/common binding variant.
+        if (!bindings.cbs.empty()) {
+            // Retain the general implementation for any future CB binding variant.
             tt::tt_metal::apply_resolved_bindings(program, bindings, collected.buffers);
             continue;
         }
         std::vector<std::vector<tt::tt_metal::RuntimeArgsData>>* kernel_args = nullptr;
         uint32_t previous_kernel = 0;
         for (const auto& binding : bindings.rt_args) {
+            if (binding.is_common) {
+                tt::tt_metal::GetCommonRuntimeArgs(program, binding.kernel_idx)[binding.arg_idx] =
+                    collected.buffers[binding.tensor_buffer_idx]->address();
+                continue;
+            }
             if (kernel_args == nullptr || previous_kernel != binding.kernel_idx) {
                 kernel_args = &tt::tt_metal::GetRuntimeArgs(program, binding.kernel_idx);
                 previous_kernel = binding.kernel_idx;
@@ -749,7 +766,7 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
             return device_causal_geometry(args, device_index, tp_index, q.logical_shape()[2]);
         }();
 
-        // Visit each kernel/core once for all of its changing scalars. The largest field
+        // Visit each AG kernel/core once for all of its changing scalars. The largest field
         // bounds-check implies every field in this fixed table fits; empty AG cores stay skipped.
         const auto patch_fields = [&](uint32_t kernel_idx,
                                       std::initializer_list<std::pair<uint32_t, uint32_t>> fields,
@@ -780,24 +797,21 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
         };
         {
             ZoneNamedN(consumer_zone, "HostProfile::ring_indexer_consumer_writes", profile_enabled);
-            namespace rta = CMAKE_UNIQUE_NAMESPACE::rt_arg;
-            patch_fields(
-                kReaderKernelIndex,
-                {{rta::reader_k_batch_offset, k_batch_page_offset},
-                 {rta::reader_kv_len_tiles, pcache.kv_len_tiles},
-                 {rta::reader_k_local_batch_offset, k_local_batch_page_offset}});
-            patch_fields(
-                kComputeKernelIndex,
-                {{rta::compute_kv_len_tiles, pcache.kv_len_tiles},
-                 {rta::compute_chunk_start_tiles, geom.chunk_start_tiles},
-                 {rta::compute_straddle_q_tile, geom.straddle_q_tile},
-                 {rta::compute_straddle_jump_tiles, geom.straddle_jump_tiles}});
-            patch_fields(
-                kWriterKernelIndex,
-                {{rta::writer_kv_len_tiles, pcache.kv_len_tiles},
-                 {rta::writer_chunk_start_tiles, geom.chunk_start_tiles},
-                 {rta::writer_straddle_q_tile, geom.straddle_q_tile},
-                 {rta::writer_straddle_jump_tiles, geom.straddle_jump_tiles}});
+            namespace common = indexer_fused_common;
+            auto& reader_common = tt::tt_metal::GetCommonRuntimeArgs(program, kReaderKernelIndex);
+            reader_common.at(common::reader::BatchOffset) = k_batch_page_offset;
+            reader_common.at(common::reader::KvLength) = pcache.kv_len_tiles;
+            reader_common.at(common::reader::LocalBatchOffset) = k_local_batch_page_offset;
+            auto& compute_common = tt::tt_metal::GetCommonRuntimeArgs(program, kComputeKernelIndex);
+            compute_common.at(common::compute::KvLength) = pcache.kv_len_tiles;
+            compute_common.at(common::compute::ChunkStart) = geom.chunk_start_tiles;
+            compute_common.at(common::compute::StraddleQ) = geom.straddle_q_tile;
+            compute_common.at(common::compute::StraddleJump) = geom.straddle_jump_tiles;
+            auto& writer_common = tt::tt_metal::GetCommonRuntimeArgs(program, kWriterKernelIndex);
+            writer_common.at(common::writer::KvLength) = pcache.kv_len_tiles;
+            writer_common.at(common::writer::ChunkStart) = geom.chunk_start_tiles;
+            writer_common.at(common::writer::StraddleQ) = geom.straddle_q_tile;
+            writer_common.at(common::writer::StraddleJump) = geom.straddle_jump_tiles;
         }
 
         // Includes the AG scalar preparation immediately preceding the four kernel writes.
