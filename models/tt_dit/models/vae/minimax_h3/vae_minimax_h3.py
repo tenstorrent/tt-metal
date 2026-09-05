@@ -503,7 +503,14 @@ class MiniMaxH3Vae:
         if self.ccl_manager is None:
             return ttnn.to_torch(wave, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0))
         pre_fn = float_to_uint8 if self.readback_uint8 else None
-        return fast_device_to_host(wave, self.mesh_device, [0, 0], ccl_manager=self.ccl_manager, pre_transfer_fn=pre_fn)
+        return fast_device_to_host(
+            wave,
+            self.mesh_device,
+            [0, 0],
+            ccl_manager=self.ccl_manager,
+            pre_transfer_fn=pre_fn,
+            use_persistent_buffer=False,
+        )
 
     def _report_profile(self, total: float) -> None:
         """Log where a decode's wall time went, and stash it on `last_decode_profile`."""
@@ -596,7 +603,9 @@ class MiniMaxH3Vae:
 
         def read_wave(encoded: ttnn.Tensor, count: int) -> list[torch.Tensor]:
             mark = time.perf_counter()
-            out = fast_device_to_host(encoded, self.mesh_device, [0, 0], ccl_manager=self.ccl_manager).float()
+            out = fast_device_to_host(
+                encoded, self.mesh_device, [0, 0], ccl_manager=self.ccl_manager, use_persistent_buffer=False
+            ).float()
             elapsed = time.perf_counter() - mark
             profile["readback"] += elapsed
             profile["readback_each"].append(elapsed)
@@ -1030,7 +1039,9 @@ class MiniMaxH3Vae:
         canvas = ttnn.mesh_partition(canvas, dim=-2, cluster_axis=0)
         canvas = ttnn.mesh_partition(canvas, dim=-1, cluster_axis=1)
 
-        planar = fast_device_to_host_yuv(canvas, self.mesh_device, ccl_manager=self.ccl_manager)
+        planar = fast_device_to_host_yuv(
+            canvas, self.mesh_device, ccl_manager=self.ccl_manager, use_persistent_buffer=False
+        )
         return planar.reshape(planar.shape[0], height * 3 // 2, width)
 
     def decode_clip(self, z_BCTHW: torch.Tensor) -> torch.Tensor:

@@ -282,7 +282,7 @@ class MiniMaxH3TransformerBlock(Module):
         # ff1 gathers the TP-fractured input inside its matmul (all_gather_minimal_matmul_async) when
         # parallel_config is passed; ff2 is row-parallel and reduce-scatters back to TP-fractured.
         if not self.use_fused_agmm and self.tp_factor > 1:
-            normed = self.ccl_manager.all_gather_persistent_buffer(normed, dim=3, mesh_axis=self.tp_mesh_axis)
+            normed = self.ccl_manager.all_gather(normed, dim=3, mesh_axis=self.tp_mesh_axis, use_hyperparams=False)
         # ff2's reduce-scatter and the gated residual after it fuse into a single
         # minimal_matmul_strided_reduce_scatter_async, computing residual + ff2(...) * gate in one op.
         #

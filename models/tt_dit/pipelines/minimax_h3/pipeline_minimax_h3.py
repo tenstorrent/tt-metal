@@ -182,9 +182,10 @@ MINIMAX_H3_BUCKET_LADDER = (22528, 31744, 44032, 61440, 86016, 118784)
 
 # ref2va shares the machinery but not the envelope: reference rows (up to 9 images and 3 video clips)
 # push the packed length far past t2va's. The ladder runs from the smallest measured case (~46k, one
-# image) to the audit's R-B ceiling (~245.8k, all-image / single-video-ref requests); requests above
-# it raise, as t2va's do above its top rung. Its optimal spacing is follow-on tuning.
-MINIMAX_H3_REF2VA_BUCKET_LADDER = (61440, 86016, 118784, 176128, 245760)
+# image) up to the top rung, which must admit everything the arena caps do -- the full 12-reference
+# envelope packs to 322336 rows (Sigma of the ref2va caps), rounded up to the 1024 SP alignment.
+# Requests above it raise, as t2va's do above its top rung. Its optimal spacing is follow-on tuning.
+MINIMAX_H3_REF2VA_BUCKET_LADDER = (61440, 86016, 118784, 176128, 245760, 322560)
 
 
 def default_bucket_ladder(task: str) -> tuple[int, ...]:
@@ -240,7 +241,15 @@ class MiniMaxH3ArenaCaps:
         larger prompt (vision tokens: ~36.9k for nine image references) and much larger conditioning
         (nine 2048px images at 4096 rows each). Sizes trace the audit's card-compliant class table."""
         if task == "ref2va":
-            return cls(prompt=40960, condition_video_rows=40960, condition_audio_rows=2048)
+            # Sized to what the reference-count caps admit (9 images, 3 videos totaling <= 15 s,
+            # 3 audios totaling <= 15 s, 12 references), not to any single request class:
+            # - condition_video: 9 x 4096 image rows + ~108 latent frames of video at the 1044
+            #   rows/frame canvas ceiling (15 s combined incl. the 3-clip 17n+5 trim bonuses).
+            #   The predecessor value (40960) was derived from the all-image class alone and
+            #   rejected every multi-video / long-video request the counts admit.
+            # - prompt: 9 x ~4.1k image tokens + 15 s of video vision blocks + 2k of user prompt.
+            # - condition_audio: 15 s of standalone audio plus 15 s of video soundtracks.
+            return cls(prompt=57344, condition_video_rows=149632, condition_audio_rows=2432)
         return cls()
 
     def validate(self) -> None:

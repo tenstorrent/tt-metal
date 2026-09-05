@@ -325,7 +325,7 @@ class MiniMaxH3CausalConv3d(Module):
         if not dims:
             return x_BTHWC
 
-        x_BTHWC = self.ccl_manager.neighbor_pad_persistent_buffer(
+        x_BTHWC = self.ccl_manager.neighbor_pad(
             x_BTHWC,
             dims=dims,
             pad_left=pad_left,

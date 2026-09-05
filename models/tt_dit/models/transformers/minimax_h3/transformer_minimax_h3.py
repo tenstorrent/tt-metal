@@ -537,13 +537,17 @@ class MiniMaxH3Transformer3DModel(Module):
             timestep_idx,
         )
         if self.tp_factor > 1:
-            hidden = self.ccl_manager.all_gather_persistent_buffer(hidden, dim=3, mesh_axis=self.tp_mesh_axis)
+            hidden = self.ccl_manager.all_gather(hidden, dim=3, mesh_axis=self.tp_mesh_axis, use_hyperparams=False)
 
         video_all = self.proj_out(hidden)
         audio_all = self.audio_proj_out(hidden)
         if self.sp_factor > 1:
-            video_all = self.ccl_manager.all_gather_persistent_buffer(video_all, dim=2, mesh_axis=self.sp_mesh_axis)
-            audio_all = self.ccl_manager.all_gather_persistent_buffer(audio_all, dim=2, mesh_axis=self.sp_mesh_axis)
+            video_all = self.ccl_manager.all_gather(
+                video_all, dim=2, mesh_axis=self.sp_mesh_axis, use_hyperparams=False
+            )
+            audio_all = self.ccl_manager.all_gather(
+                audio_all, dim=2, mesh_axis=self.sp_mesh_axis, use_hyperparams=False
+            )
 
         # 6. Select each modality's target rows out of the reassembled global sequence -- gathers
         # with per-request index content and capacity-fixed shapes, mirroring the assembly. The
