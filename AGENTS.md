@@ -86,12 +86,18 @@ rather than burning the session on it.
 
 Do not claim you ran anything you did not run.
 
-## Things you cannot verify here
+## Things you cannot verify on the cloud-agent runner
 
-The runner has no Tenstorrent accelerator attached, so anything requiring real
-silicon — device tests, performance measurements, hardware-dependent
-behaviour — cannot be checked in your environment. Compilation and host-side
-unit tests are in scope; on-device results are not.
+This section describes the internal cloud-agent runner from "Your
+environment" above — it is not a claim about every environment a tt-metal
+checkout might run in. If you are a different agent and your machine has a
+real Tenstorrent accelerator attached, this does not apply to you: verify
+against the actual device instead of assuming it is unavailable.
+
+On the cloud-agent runner specifically: there is no Tenstorrent accelerator
+attached, so anything requiring real silicon — device tests, performance
+measurements, hardware-dependent behaviour — cannot be checked. Compilation
+and host-side unit tests are in scope; on-device results are not.
 
 If a change's correctness depends on device behaviour, say so.
 
