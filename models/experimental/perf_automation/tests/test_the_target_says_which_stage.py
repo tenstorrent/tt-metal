@@ -70,8 +70,12 @@ def test_the_share_summarises_every_marked_stage():
 
 
 def test_the_target_carries_the_stage_and_the_directive_shows_where_time_is():
+    """The stage reaches next_target. WHERE it is resolved is free to move -- and did: every
+    candidate needs it now that a finished stage is ordered last, so it is resolved once onto the
+    entry instead of again for whichever entry wins."""
     src = (PERF / "cc_optimize" / "perf_mcp.py").read_text(encoding="utf-8")
-    assert '"stage": stage_of_op(blocking[0]["op"], prof)' in src
+    assert 'entry["stage"] = stage_of_op(op_code, prof)' in src, "the entry must carry it"
+    assert '"stage": blocking[0].get("stage")' in src, "next_target must pass it on"
     assert "IN THE STAGE " in src, "the directive must tell the agent to work that stage"
     assert "_stage_time_note" in src, "the directive must show where the time actually is"
 

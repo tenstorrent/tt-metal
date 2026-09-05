@@ -7264,6 +7264,10 @@ def termination_check() -> dict:
         _rg = str(o.get("regime") or "").strip().lower()
         if _rg and _rg != "na":
             entry["regime"] = _rg
+        # WHERE THIS OP LIVES, resolved once here rather than again for whichever entry wins: the
+        # ordering below needs it for every candidate, and next_target used to recompute it for the
+        # one it picked.
+        entry["stage"] = stage_of_op(op_code, prof)
         done, rung, reason = _op_ladder_status(o, op_code, attempts)
         if done:
             cleared.append({**entry, "verdict": reason})
@@ -7307,7 +7311,27 @@ def termination_check() -> dict:
         stock_block = _stock_gate(_gate_prof, attempts)
         if stock_block:
             blocking.append(stock_block)
-    blocking.sort(key=lambda b: -(b.get("eff_gap_ms") or b.get("gap_ms") or 0.0))
+    # A STAGE THAT HAS REACHED ITS BAND GOES LAST. The gate works out which stacks are still short --
+    # three lines from where the target is chosen -- and used that only to refuse to stop, never to
+    # decide what to work on. So the target stayed "the biggest gap anywhere", and on
+    # voxtral_mini_3b_2507 (2026-09-05) that meant 11 of 18 attempts landed on encode, which had
+    # reached 77% of its peak, and on decode, which was past its band -- while prefill, the only
+    # stack still short, took the remaining 7.
+    #
+    # Ordered, NOT filtered. `blocking` empty is what makes can_stop true, so dropping entries could
+    # end a run while those ops still had reachable rungs. Everything is still offered; a finished
+    # stage simply stops being offered FIRST.
+    #
+    # An op the capture could not place keeps its position: "" is not a finished stage, and demoting
+    # unplaced work would bury whatever the marks failed to cover. When nothing is short the key is
+    # constant and the order is exactly what it was.
+    _short_names = {str(r.get("stage") or "") for r in (_stages_short_of_achievable() or [])}
+    blocking.sort(
+        key=lambda b: (
+            1 if (_short_names and b.get("stage") and b.get("stage") not in _short_names) else 0,
+            -(b.get("eff_gap_ms") or b.get("gap_ms") or 0.0),
+        )
+    )
     can_stop = not blocking
     # AND NOTHING MATERIAL MAY BE UNTRIED. `blocking` empties as each op's checklist fills, so an op
     # that was never SELECTED never appears there and never blocks -- which is how a run ends with
@@ -7355,7 +7379,7 @@ def termination_check() -> dict:
             # WHERE THIS OP LIVES. Without it the agent has an op and a metric, and the metric names
             # only the recurring stage -- so it worked that stage regardless of where the ranking
             # pointed. Discovered from the capture's own marks; "" when the capture carried none.
-            "stage": stage_of_op(blocking[0]["op"], prof),
+            "stage": blocking[0].get("stage") or "",
             # THE OP'S PLACE IN THE CHAIN, not just its name. An op handed over alone can only be
             # tuned alone; the levers that remain on this model are about the JOIN between two ops --
             # a layout one emits and the next has to repack. Empty when the capture could not place
