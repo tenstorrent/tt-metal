@@ -1068,18 +1068,17 @@ std::vector<Tensor> sin_bw(
 std::vector<Tensor> sinh_bw(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor t_inf = ttnn::multiply(
-        ttnn::sign(grad, output_mem_config), std::numeric_limits<float>::infinity(), std::nullopt, output_mem_config);
-    Tensor grad_a = where(
-        ttnn::gt(input, 88.5f, std::nullopt, output_mem_config),
-        t_inf,
-        where(
-            ttnn::lt(input, -88.5f, std::nullopt, output_mem_config),
-            t_inf,
-            ttnn::multiply(grad, ttnn::cosh(input, output_mem_config), std::nullopt, output_mem_config),
-            output_mem_config),
-        output_mem_config);
-    t_inf.deallocate();
+    // An input-domain guard used to sit here, returning +/-inf once |input| passed 88.5. That
+    // bound is log(FLT_MAX), the point where exp saturates -- but cosh is (e^x + e^-x)/2 and does
+    // not overflow until log(2*FLT_MAX) = 89.4159862. Over that window the guard discarded a
+    // value the forward op computes correctly and finitely, and with grad = 0 it produced
+    // sign(0) * inf = NaN where torch returns 0.
+    //
+    // It was also redundant. The magnitude clamp immediately below already returns inf exactly
+    // when the result overflows and the finite value when it does not, which is the decision the
+    // guard was trying to make, made on the right quantity. Removing it takes six element-wise
+    // operations and one intermediate tensor off every call.
+    Tensor grad_a = ttnn::multiply(grad, ttnn::cosh(input, output_mem_config), std::nullopt, output_mem_config);
     grad_a = where(
         ttnn::ge(grad_a, 3.4e+38f, std::nullopt, output_mem_config),
         std::numeric_limits<float>::infinity(),
@@ -1186,21 +1185,11 @@ std::vector<Tensor> softsign_bw(
 std::vector<Tensor> cosh_bw(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor t_inf = ttnn::multiply(
-        ttnn::sign(grad, output_mem_config), std::numeric_limits<float>::infinity(), std::nullopt, output_mem_config);
-    Tensor t_neg_inf = ttnn::multiply(
-        ttnn::sign(grad, output_mem_config), -std::numeric_limits<float>::infinity(), std::nullopt, output_mem_config);
-    Tensor grad_a = where(
-        ttnn::gt(input, 88.50f, std::nullopt, output_mem_config),
-        t_inf,
-        where(
-            ttnn::lt(input, -88.50f, std::nullopt, output_mem_config),
-            t_neg_inf,
-            ttnn::multiply(grad, ttnn::sinh(input, output_mem_config), std::nullopt, output_mem_config),
-            output_mem_config),
-        output_mem_config);
-    t_neg_inf.deallocate();
-    t_inf.deallocate();
+    // The same stale guard as in sinh_bw, and eight element-wise operations here rather than six,
+    // because the negative branch builds a second infinity tensor. sinh overflows at the same
+    // log(2*FLT_MAX) = 89.4159862, so the window above the old bound was being thrown away, and
+    // the magnitude clamp below already decides the genuine overflow correctly.
+    Tensor grad_a = ttnn::multiply(grad, ttnn::sinh(input, output_mem_config), std::nullopt, output_mem_config);
     grad_a = where(
         ttnn::ge(grad_a, 3.4e+38f, std::nullopt, output_mem_config),
         std::numeric_limits<float>::infinity(),
