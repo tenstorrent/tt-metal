@@ -36,12 +36,13 @@ inline void reduce_configure_mop(const ckernel::TensorShape& tensor_shape);
 template <bool is_int_fpu_en>
 inline void reduce_row_perform_transpose()
 {
-    // The MOVD2B/ELWADD below read the Src zero substitution flag (FlushDenormals = !flag).
-    // A datum whose low byte is zero (e.g. bf16 0x4400 = 768.0) would be flushed to 0 mid-reduction,
-    // corrupting the sum. Disable the flag (via the math state tracker) around the transpose+add, then
-    // return it to the operand driven baseline. WH does the same in its fp32 transpose.
-    math::_configure_preserve_zero_flag_state_();
-
+    // The MOVD2B/ELWADD below read the Src zero substitution flag (FlushDenormals = !flag): a datum
+    // whose low byte is zero (e.g. bf16 0x4400 = 512.0) would be flushed to 0 mid-reduction,
+    // corrupting the sum -- this is what made layernorm drift when the flag was unpack-owned (#46511).
+    // PRESERVE must therefore hold across this whole function; its callers own that (see the guard in
+    // _llk_math_reduce_'s REDUCE_ROW MAX branch). Deliberately not re-asserted per transpose: flipping
+    // it here and restoring DEFAULT after cost 4 pipe-draining cfg writes per 32x32 tile (~40 cycles,
+    // 41% of the kernel), because the value alternated and the skip-if-set guard never hit.
     if constexpr (is_int_fpu_en)
     {
         TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
@@ -70,9 +71,6 @@ inline void reduce_row_perform_transpose()
     TTI_ZEROSRC(0, 1, 0, 1);
     TTI_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_1, 0);
     TTI_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_1, 0);
-
-    // Restore the operand-driven baseline for the currently configured formats.
-    math::_configure_default_zero_flag_state_();
 }
 
 /**
@@ -273,6 +271,16 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
 
         if constexpr (type == PoolType::MAX)
         {
+            // Assert the mov phase's PRESERVE requirement here, in the EXECUTE path, not only in the
+            // init: #46511 built the tracker around "the op-need is (re)asserted in the EXECUTE path so
+            // it survives an llk_math_hw_configure that runs after the op init", and the same applies to
+            // a reconfig_data_format*, an fp8 copy_tile_to_dst_init_short, or another op's init landing
+            // between reduce_init and this tile. Skipping that would corrupt the reduction silently.
+            // Costs nothing in the steady state: _llk_math_reduce_init_ already left the flag here, so
+            // this is a load, compare and not-taken branch on the math RISC -- no cfg write, no pipe
+            // drain, and measured at 58.1 cycles/tile either way (Blackhole p300a, perf_reduce).
+            math::_configure_preserve_zero_flag_state_();
+
             reduce_row_pool_all_faces<type, high_fidelity>(tensor_shape.num_faces_c_dim);
             reduce_row_perform_transpose<is_int_fpu_en>();
 
@@ -487,18 +495,58 @@ inline void _llk_math_reduce_init_(const ckernel::TensorShape& tensor_shape)
 
     math::reset_counters(p_setrwc::SET_ABD_F);
 
-    // Establish the operand-driven DEFAULT zero-flag state before the reduce's GMPOOLs, mirroring
-    // _llk_math_matmul_init_ / _llk_math_eltwise_binary_init_. A preceding copy_init that left
-    // PRESERVE (keep denormals) would otherwise leak "keep" into the pool GMPOOL — harmless on HW
-    // when fp32 DEST accumulation is enabled (the flag is ignored), but a real invariant violation.
-    math::_configure_default_zero_flag_state_();
+    // Establish the zero-flag state up front so the execute path's guard never has to write it.
+    //
+    // This change moves WHERE each path's flag value is written, not WHICH value it gets. Every path
+    // keeps exactly the value main gave it, so no reduce result changes:
+    //
+    //   REDUCE_ROW MAX -> PRESERVE, because main asserted PRESERVE around reduce_row_perform_transpose.
+    //     That function moves the pooled row through SrcB (MOVD2B/TRNSPSRCB) and adds it back with
+    //     ELWADD, and ELWADD is a flag reader. Main asserted it on entry and restored DEFAULT on exit,
+    //     once per face row, so the value alternated and defeated the skip-if-set guard in
+    //     _configure_src_zero_flag_: 4 pipe-draining cfg writes per 32x32 tile, ~40 of the kernel's 98
+    //     cycles/tile on Blackhole p300a. Asserting it here instead makes the steady state free. The
+    //     one behavioural difference from main is that the POOL phase now also runs under PRESERVE;
+    //     that is safe because GMPOOL/GAPOOL are not among the flag's readers (see the reader list in
+    //     cmath_common.h).
+    //
+    //   Everything else -> the operand-driven DEFAULT, mirroring _llk_math_matmul_init_ /
+    //     _llk_math_eltwise_binary_init_, because that is what main gave them. A preceding copy_init
+    //     that left PRESERVE would otherwise leak "keep" into the pool GMPOOL.
+    //
+    // NOTE: REDUCE_ROW MAX is NOT the only path with a mov phase -- REDUCE_SCALAR has one too (MOVD2B +
+    // TRNSPSRCB + 4x MOVB2A in _llk_math_reduce_, and MOVB2A is also a flag reader). It is deliberately
+    // left at DEFAULT here because main ran its mov phase at DEFAULT and this change is not the place
+    // to alter that. Whether it *should* be PRESERVE is an open question and is not currently decidable
+    // from a test: on Blackhole the flag has no observable effect on the float formats reduce supports,
+    // measured both ways -- see the MEASURED STATUS note in
+    // tests/python_tests/test_reduce_zero_flag_clobber_state_machine.py. Do not "fix" scalar on the strength of the
+    // reader list alone; it needs the HW definition or a ttnn-level repro first.
+    //
+    // Setting the value here is the fast path, NOT the guarantee: _llk_math_reduce_ re-asserts it per
+    // tile (#46511's execute-path rule) so an intervening reconfig cannot corrupt the reduction. Doing
+    // it here keeps that per-tile assert a not-taken branch. _llk_math_reduce_uninit_ returns the flag
+    // to DEFAULT, so the value is paired with this init rather than leaked to whatever op runs next.
+    if constexpr (dim == ReduceDim::REDUCE_ROW && type == PoolType::MAX)
+    {
+        math::_configure_preserve_zero_flag_state_();
+    }
+    else
+    {
+        math::_configure_default_zero_flag_state_();
+    }
 }
 
 /**
  * @brief Uninitialize after a reduce operation, undoing any init/execute-time workarounds.
  *
+ * Returns the Src zero-substitution flag to the operand-driven baseline, since
+ * @ref _llk_math_reduce_init_ leaves REDUCE_ROW MAX holding PRESERVE for the whole op. Costs one cfg
+ * write per op (not per tile) and is a no-op for every other reduce path, which never left DEFAULT.
+ *
  * @note Reverses @ref _llk_math_reduce_init_
  */
 inline void _llk_math_reduce_uninit_()
 {
+    math::_configure_default_zero_flag_state_();
 }
