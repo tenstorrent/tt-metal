@@ -78,7 +78,9 @@ def _make_input(torch_chunk, dtype, layout, mesh_device, mesh_mapper):
 
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
 @pytest.mark.parametrize("metadata", [False, True], ids=["scalar", "metadata"])
-def test_update_padded_kv_cache_fresh_buffers(mesh_device, metadata):
+@pytest.mark.parametrize("traced", [False, True])
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 1_000_000}], indirect=True)
+def test_update_padded_kv_cache_fresh_buffers(mesh_device, metadata, traced):
     """Fresh input/cache allocations and changing slot/start must hit one program and copy exact bytes."""
     live_buffers = []
     entries = None
@@ -98,22 +100,34 @@ def test_update_padded_kv_cache_fresh_buffers(mesh_device, metadata):
         host = torch.full((1, 1, 32, KVPE_HEAD_DIM), iteration + 1, dtype=torch.bfloat16)
         src = _make_input(host, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, mesh_device, mapper)
         live_buffers.append((cache, src))
-        if metadata:
-            _update_kv(
-                cache,
-                src,
-                slot_idx=slot,
-                kv_actual_global=start,
-                layer_idx=0,
-                num_layers=1,
-                cluster_axis=0,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_device=mesh_device,
-            )
-        else:
-            ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
-                cache, src, slot_idx=slot, kv_actual_global=start, layer_idx=0, num_layers=1, cluster_axis=0
-            )
+        meta = _make_meta_tensors(mesh_device, kv_actual_global=start, slot_idx=slot) if metadata else None
+        live_buffers.append(meta)
+
+        def run():
+            if metadata:
+                ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+                    cache, src, *meta, layer_idx=0, num_layers=1, cluster_axis=0
+                )
+            else:
+                ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+                    cache, src, slot_idx=slot, kv_actual_global=start, layer_idx=0, num_layers=1, cluster_axis=0
+                )
+
+        run()
+        if traced:
+            ttnn.synchronize_device(mesh_device)
+            trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+            run()
+            ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+            try:
+                # Change contents at the captured input address: replay must refresh the cache,
+                # not merely leave a correct eager result or write into the previous cache allocation.
+                host = host + 10
+                upload = ttnn.from_torch(host, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=mapper)
+                ttnn.copy_host_to_device_tensor(upload, src)
+                ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
+            finally:
+                ttnn.release_trace(mesh_device, trace_id)
         result = ttnn.to_torch(cache, mesh_composer=composer).reshape(2, 1, 256, KVPE_HEAD_DIM)
         assert torch.equal(result[slot : slot + 1, :, start : start + 32], host)
         if entries is None:

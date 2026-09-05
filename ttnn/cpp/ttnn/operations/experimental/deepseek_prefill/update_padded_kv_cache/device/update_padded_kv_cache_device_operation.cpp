@@ -589,6 +589,9 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
     writer_kernel.compile_time_args = std::move(writer_compile_args);
     writer_kernel.config = WriterConfigDescriptor{};
 
+    auto* src_buffer = input.buffer();
+    auto* dst_buffer = cache.buffer();
+
     // Common rt-args: per-chip kernel inputs for on-device update_idxt + start_id derivation. Indices
     // 0-7 are structural (constant for this cached program): linear_coord/linear_factor/chunk_local_t are
     // this chip's position on the linearized sp*tp axis, layer_idx is hashed. Indices 8 and 9 carry the
@@ -614,6 +617,7 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
             // Arg 10: valid_global's DRAM addr when clamping, else an inert 0 (always present so the
             // indices never shift).
             has_valid ? tensor_args.valid_global->buffer()->address() : 0u,  // smuggled-rta-ok: as above
+            dst_buffer,  // common arg11: identical cache base for every writer core
         });
     } else {
         writer_kernel.emplace_common_runtime_args({
@@ -628,6 +632,7 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
             args.slot_idx,
             args.kv_actual_global,
             args.valid_global.value_or(0),  // arg 10; read only by the has_valid program
+            dst_buffer,                     // common arg11: identical cache base for every writer core
         });
     }
 
@@ -642,14 +647,12 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
         tp_factor,
         Wt,
         args.kv_actual_global,
+        src_buffer,  // common arg8: identical input base for every reader core
     });
 
-    // Per-core runtime args. The input/cache buffers are passed as Buffer* bindings (not raw
-    // addresses) so cache hits take the fast path that patches addresses and skips create_descriptor.
-    // The metadata buffers' raw addresses are common args patched by override_runtime_arguments (the
-    // fast path does not refresh raw-address common args), so no per-core scalar goes stale.
-    auto* src_buffer = input.buffer();
-    auto* dst_buffer = cache.buffer();
+    // Keep the existing per-core work-slot indices; slot0 is reserved and never patched.
+    // Both buffer bindings are common arguments, so each cache hit writes their addresses once
+    // per kernel instead of repeating identical values over every active core.
     const uint32_t g1_numcores = core_group_1.num_cores();
 
     const auto cores = corerange_to_cores(all_cores, num_cores, /*row_wise=*/true);
@@ -661,13 +664,13 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
         const CoreCoord& core = cores.at(i);
         const uint32_t num_blocks_per_core = (i < g1_numcores) ? num_blocks_per_core_g1 : num_blocks_per_core_g2;
 
-        // Reader: (src_addr, num_pages, core_blocks_written) -- it derives its source rows from the common
+        // Reader: (reserved, num_pages, core_blocks_written) -- it derives its source rows from the common
         // args, since a TP-sharded chip's rows depend on the chunk start, not just its mesh position.
-        reader_kernel.emplace_runtime_args(core, {src_buffer, num_blocks_per_core * Wt, num_blocks_written});
+        reader_kernel.emplace_runtime_args(core, {0u, num_blocks_per_core * Wt, num_blocks_written});
 
-        // Writer: (dst_addr, num_pages, core_blocks_written) — kernel derives update_idxt + head
+        // Writer: (reserved, num_pages, core_blocks_written) — kernel derives update_idxt + head
         // offset from the slot_idx/kv_actual_global it reads (metadata tensors or common-arg scalars).
-        writer_kernel.emplace_runtime_args(core, {dst_buffer, num_blocks_per_core * Wt, num_blocks_written});
+        writer_kernel.emplace_runtime_args(core, {0u, num_blocks_per_core * Wt, num_blocks_written});
 
         num_blocks_written += num_blocks_per_core;
     }
@@ -691,8 +694,8 @@ void UpdatePaddedKvCacheDeviceOperation::MeshWorkloadFactory::override_runtime_a
     const operation_attributes_t& args,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& /*output*/) {
-    // Only argument 0 of each worker changes with the operands; CBs and work splits are static.
-    // Resolve the two addresses once, then fetch each kernel argument matrix once per program.
+    // Addresses are common to every core; CBs and per-core work splits remain static.
+    // Resolve current operand addresses once and fetch live common storage on each program.
     const uint32_t input_address = tensor_args.input.buffer()->address();
     const uint32_t cache_address = tensor_args.cache.buffer()->address();
     // The writer's per-call common runtime args are raw scalars (not Buffer* bindings), so the
@@ -715,31 +718,16 @@ void UpdatePaddedKvCacheDeviceOperation::MeshWorkloadFactory::override_runtime_a
     const uint32_t arg10 = tensor_args.valid_global.has_value() ? tensor_args.valid_global->buffer()->address()
                                                                 : args.valid_global.value_or(0);
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
-        const auto patch_address = [&](uint32_t kernel, uint32_t address) {
-            auto& runtime_args = GetRuntimeArgs(program, kernel);
-            for (auto& column : runtime_args) {
-                for (auto& core_args : column) {
-                    // create_descriptor gives exactly these three args to every worker; other cores are empty.
-                    if (core_args.size() != 0) {
-                        TT_FATAL(core_args.size() == 3, "update_padded_kv_cache worker expects three runtime args");
-                        core_args[0] = address;
-                    }
-                }
-            }
-        };
-        patch_address(kReaderKernelHandle, input_address);
-        patch_address(kWriterKernelHandle, cache_address);
         auto& writer_common = GetCommonRuntimeArgs(program, kWriterKernelHandle);
-        TT_FATAL(
-            kArg10 < writer_common.size(), "update_padded_kv_cache writer is missing its per-call common runtime args");
+        TT_FATAL(11 < writer_common.size(), "update_padded_kv_cache writer is missing its common address argument");
+        writer_common[11] = cache_address;
         writer_common[kArg8] = arg8;
         writer_common[kArg9] = arg9;
         writer_common[kArg10] = arg10;
 
         auto& reader_common = GetCommonRuntimeArgs(program, kReaderKernelHandle);
-        TT_FATAL(
-            kReaderKvActualGlobalCommonArgIdx < reader_common.size(),
-            "update_padded_kv_cache reader is missing the kv_actual_global common arg");
+        TT_FATAL(8 < reader_common.size(), "update_padded_kv_cache reader is missing its common address argument");
+        reader_common[8] = input_address;
         reader_common[kReaderKvActualGlobalCommonArgIdx] = args.kv_actual_global;
     }
 }
