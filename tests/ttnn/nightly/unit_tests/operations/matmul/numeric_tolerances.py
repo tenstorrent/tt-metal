@@ -42,10 +42,10 @@ two agree, so pass the function that matches the op.
 How accurately the hardware evaluates an activation varies. relu, relu6 and
 hardtanh are exact, being comparison and selection only. The rest are fitted
 polynomials, held to two units in the last place. gelu, tanh and sigmoid also
-accept a flag that swaps the fit for a handful of straight line segments, which
-is far coarser; see _PIECEWISE_LINEAR_ABSOLUTE_ERROR for how loose those cases
-end up, and why gelu's figure is the one number in this module that is measured
-rather than derived.
+accept a flag that swaps that polynomial for a handful of straight line segments,
+which is far coarser; see _PIECEWISE_LINEAR_ABSOLUTE_ERROR for how loose those
+cases end up, and why gelu's figure is the one number in this module that is
+measured rather than derived.
 
 Stage one: a single relative error. matmul_relative_error predicts one relative
 error "r" from the configuration only, never from the data. "r" is defined so that
@@ -115,7 +115,7 @@ needed whether or not an activation applies.
   less correlation than is justified. That is safe against a false failure, but it
   lets more real error through.
 
-atol, rtol and frobenius_threshold are multiplied by the safety argument, 2.0 by
+atol, rtol and frobenius_threshold are multiplied by the safety factor, 2.0 by
 default. pcc_threshold uses _PCC_MARGIN instead; see that constant for why.
 
 To get limits for a new entry in a test's pytest.mark.parametrize list, build the
@@ -153,26 +153,8 @@ directory is the repository root, so that the import resolves:
         )
     )
 
-which prints
-
-    {'atol': 6.565339088439941, 'rtol': 0.035760548978043954,
-     'frobenius_threshold': 0.06724930087282528,
-     'pcc_threshold': 0.9987590077261392}
-
-Both per element limits can be checked by hand. For atol, "r" is 0.0284 here and
-the pre-activation reference has a standard deviation of 22.6, so one element's
-error has a standard deviation of 0.64. There are M * N = 65536 elements, and
-sqrt(2 * ln(131072)) is 4.855, so the worst element error is 3.11. Reapplying
-GELU either side of that shift raises it to 3.28, and the safety argument of 2.0
-gives the printed 6.57. GELU contributes no absolute error, because the device
-fits it with a polynomial and that inaccuracy counts as a relative error in rtol
-instead. For rtol, the table gives GELU a relative error of 2 * 2**-7 = 0.0156 in
-the accumulator format, bfloat16 here because fp32_dest_acc_en is False, and the
-output rounding adds 2**-8 / sqrt(3) = 0.0023 (see _format_relative_error). Twice
-their sum is the printed 0.0358.
-
-One parametrize entry usually covers several shapes, data types and settings. Run
-the calculation for each and keep the largest atol, rtol and
+One parametrize entry in the test file usually covers several shapes, data types
+and settings. Run the calculation for each and keep the largest atol, rtol and
 frobenius_threshold and the smallest pcc_threshold. Round the first three up and
 pcc_threshold down.
 
@@ -181,29 +163,28 @@ Notes:
 - The relative error does not grow with K. Each product carries a relative
 rounding error from the narrowed mantissas, and the test inputs are a mix of
 positive and negative numbers, so those errors multiply values that are as often
-negative as positive and partly cancel. The total error grows as sqrt(K), the
-result grows as sqrt(K), and the ratio is flat. The two terms that do grow
-are the ones that round a running total: the accumulator (see
-_K_PER_ACCUMULATION) and the partial sum spilled between K blocks. Both grow as
-sqrt(K), never as K. With fp32_dest_acc_en both are held in 32 bit, so they fall
+negative as positive and partly cancel. Both the total error and the result grow
+with sqrt(K), so their ratio is flat. There are two terms that do grow with sqrt(K),
+not linearly with K. Both come from rounding a partial sum, the running total as it
+is built. One is the accumulator (see _K_PER_ACCUMULATION); the other is the write
+out between K blocks. With fp32_dest_acc_en they are held in 32 bit, so they fall
 below every other term and K stops mattering; they matter only with a 16 bit
 accumulator.
 
 - Truncation is biased, and it still does not grow with K. The matrix engine
 drops the low mantissa bits of each operand instead of rounding to nearest, which
 moves that operand toward zero, so no product comes out larger in magnitude than
-the true one. Write the product of a and b as a*b*(1-d), where d is the fraction
-lost from the two truncated operands together; d is never negative. Only d has a
-fixed sign, though. Each product a*b is positive or negative depending on its
+the true one. Write the product of a and b as a*b*(1-d), where "d" is the fraction
+lost from the two truncated operands together, so "d" is never negative. Only "d"
+has a fixed sign. Each product a*b can be positive or negative depending on its
 operands, so the errors -d*a*b are too, and they partly cancel in the sum just as
 the products themselves do.
 
-The bias does decide how truncation enters r. An error that averages to zero
+The bias does decide how truncation enters "r". An error that averages to zero
 contributes its standard deviation divided by the result's. Truncation does not
 average to zero, so _truncation_relative_error uses a root-mean-square instead,
-which covers the average of d and the spread around it together. That is an upper
-bound rather than an exact treatment of a fixed offset, and that function records
-how much margin it leaves.
+which covers the average of "d" and the spread around it together. That is an
+upper bound, and that function records how much margin it leaves.
 """
 
 import math
@@ -241,8 +222,8 @@ _BLOCK_FLOAT_BITS = {
 
 # Mantissa bits the matrix engine keeps from each operand, as (SrcA, SrcB), its
 # two operand registers, taken from the union of the per-pass bit masks. The
-# multiplier is 5 bits by 7 bits, and each fidelity level makes another pass to
-# consume more of the inputs
+# engine's multiplier array is 5 bits by 7 bits, and each fidelity level makes
+# another pass to consume more of the inputs
 # (tech_reports/matrix_engine/matrix_engine.md). A matmul loads the right hand
 # operand into SrcA and the left hand operand into SrcB, the opposite of other
 # operations, so the right hand operand takes the narrower path.
@@ -296,7 +277,7 @@ def _format_relative_error(dtype):
 
 
 def _source_mantissa_bits(dtype):
-    """Mantissa bits the data actually carries when it reaches the multiplier."""
+    """Mantissa bits the data actually carries when it reaches the matrix engine."""
     bits = _BLOCK_FLOAT_BITS.get(dtype)
     return bits if bits is not None else _MANTISSA_BITS[dtype]
 
@@ -325,7 +306,8 @@ def _truncation_relative_error(bits_kept, bits_available):
     significand, and taking the significand as equally likely anywhere in its
     range that average is exactly a half: the area under 1/s**2 from 1 to 2 is
     1 - 1/2, over a range of width 1. So the answer is u/sqrt(3) times sqrt(1/2),
-    which is u/sqrt(6). That same division turns the average u/2 into mu.
+    which is u/sqrt(6). The same division turns the average u/2 into the average
+    relative loss, which the module docstring calls mu.
 
     Both uniform assumptions are approximations, so the formula is checked against
     measurement. Truncating bfloat16 values from torch.randn, which carry 7
@@ -336,13 +318,19 @@ def _truncation_relative_error(bits_kept, bits_available):
     dropped, because the amount removed then takes only a few discrete values
     instead of the continuous spread assumed above.
 
-    An understatement in how the caller combines the operands nearly cancels that.
-    A product loses from both operands, and matmul_relative_error adds the two
-    contributions as the square root of the sum of squares, which drops the cross
-    term between the two biases; for bfloat16 operands at LoFi that cross term is
-    worth 16 percent. The two effects very nearly cancel there, leaving the caller
-    0.5 percent above the measured pair, so this term carries almost no margin of
-    its own and relies on the safety factor.
+    A second error, in the opposite direction, comes one step later. Both operands
+    of a product are truncated, so the product's total loss is one such loss from
+    each operand, and matmul_relative_error combines them as the square root of
+    the sum of squares. That is right for the noise part of each loss but wrong
+    for the bias part, because biases add directly, so the total comes out too
+    small: for bfloat16 operands at LoFi the true total is 16 percent above what
+    the caller computes.
+
+    The two errors nearly cancel. This function overstates each operand's loss and
+    the combination understates the total, so for that same LoFi case the caller
+    finishes only 0.5 percent above the measured total. Close agreement, but it
+    leaves this term with no margin of its own, so it depends on the safety factor
+    the limits apply.
     """
     if bits_kept >= bits_available:
         return 0.0
@@ -400,7 +388,7 @@ def matmul_relative_error(
         # Converting each operand to its device format.
         _format_relative_error(in0_dtype),
         _format_relative_error(in1_dtype),
-        # The multiplier discarding the low mantissa bits of each operand.
+        # The matrix engine discarding the low mantissa bits of each operand.
         _truncation_relative_error(srcb_bits, _source_mantissa_bits(in0_dtype)),
         _truncation_relative_error(srca_bits, _source_mantissa_bits(in1_dtype)),
     ]
@@ -593,10 +581,9 @@ def matmul_numeric_tolerances(
         max_propagated_error = extreme_error_before_activation
     else:
         golden = activation_fn(pre_activation).float()
-        # A symmetric difference at the scale of the error, rather than at a
-        # vanishing scale, averages the slope over the interval the error can
-        # move the value, so relu's kink gives a partial slope not an undefined
-        # one.
+        # The slope is averaged over the interval the error can actually move
+        # the value, not taken as a true derivative at a point, so relu's kink
+        # gives a partial slope instead of an undefined one.
         step = error_before_activation if error_before_activation > 0.0 else 1e-6
         slope = ((activation_fn(pre_activation + step) - activation_fn(pre_activation - step)) / (2.0 * step)).float()
         slope_rms = slope.pow(2).mean().sqrt().item()
@@ -621,9 +608,13 @@ def matmul_numeric_tolerances(
         + (_PIECEWISE_LINEAR_RMS_FRACTION * activation_absolute) ** 2
     )
 
-    # Every element is credited with the extreme error rather than only the
-    # unluckiest one, so this is an upper bound. The activation's own error is
-    # already a bound, so it is added rather than combined in quadrature.
+    # The shift above is the largest error any one of the n elements is likely to
+    # see, yet it is applied to all of them and the largest resulting change kept.
+    # Only one element would really see an error that big, and it might sit where
+    # the activation is flat while another sits on a steep part, so taking the
+    # worst of both makes this an upper bound rather than an estimate. The
+    # activation's own error is already a bound, so it is added rather than
+    # combined in quadrature.
     max_error = max_propagated_error + activation_absolute
 
     # rtol carries only what scales with an element's own value; atol carries the
@@ -634,12 +625,15 @@ def matmul_numeric_tolerances(
         "frobenius_threshold": safety * rms_error / golden_rms if golden_rms > 0.0 else safety * rms_error,
     }
 
-    # 1 - q**2 / 2 for q the error over the activated reference's standard
-    # deviation, not its root-mean-square: a correlation removes the mean first,
-    # and for a saturating activation most of that size is in the mean. Capped at
-    # 0.999999, since no test should demand more agreement than that. An all-zero
-    # reference has no scale to divide by, so the frobenius limit above is left
-    # absolute and the correlation limit drops to zero.
+    # noise_ratio divides the same rms_error the frobenius limit above uses, but by
+    # the standard deviation of the activated reference where that one divides by
+    # the root-mean-square. A correlation removes the mean of each tensor before
+    # comparing them, so the standard deviation is the matching divisor here, and
+    # for a saturating activation the two are far apart because most of the
+    # reference's size sits in its mean. The correlation that follows is
+    # 1 - noise_ratio**2 / 2, capped at 0.999999 since no test should demand closer
+    # agreement than that. An all-zero reference has no scale to divide by, so the
+    # frobenius limit is left absolute and this one drops to zero.
     if golden_std > 0.0:
         noise_ratio = _PCC_MARGIN * rms_error / golden_std
         tolerances["pcc_threshold"] = max(0.0, min(0.999999, 1.0 - noise_ratio * noise_ratio / 2.0))
