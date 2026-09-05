@@ -14,10 +14,66 @@
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 
 #include <algorithm>
+#include <tt-metalium/experimental/fabric/pipeline_builder.hpp>
 
 namespace ttnn::operations::experimental::high_bw_all_gather {
 
 namespace CMAKE_UNIQUE_NAMESPACE {
+
+// Cache only topology-derived plans. Tensor placement is still checked on every call,
+// and the exact coordinate-to-fabric-node mapping distinguishes submeshes and reshapes.
+std::optional<ttnn::operations::ccl::common::MeshRingPlan> resolve_cached_ring_plan(
+    const Tensor& tensor,
+    std::optional<uint32_t> cluster_axis,
+    uint32_t num_links,
+    const std::array<tt::tt_fabric::Topology, 2>& axis_topology) {
+    using ttnn::operations::ccl::common::MeshRingPlan;
+    if (!cluster_axis && !ttnn::operations::ccl::common::has_row_major_mesh_coordinates(tensor)) {
+        return ttnn::operations::ccl::common::resolve_mesh_ring_plan(
+            tensor, cluster_axis, num_links, axis_topology, true, "high_bw_all_gather");
+    }
+    struct Key {
+        tt::tt_metal::distributed::MeshShape shape;
+        std::vector<tt::tt_fabric::FabricNodeId> nodes;
+        std::optional<uint32_t> axis;
+        uint32_t links;
+        std::array<tt::tt_fabric::Topology, 2> topology;
+        tt::tt_fabric::FabricConfig fabric_config;
+        bool operator==(const Key&) const = default;
+    };
+    struct Cache {
+        uint64_t version = 0;
+        std::vector<std::pair<Key, MeshRingPlan>> entries;
+    };
+    // No shared mutable cache between submitting threads and no device ownership retained.
+    thread_local Cache cache;
+    const auto version = tt::tt_fabric::pipeline_routing_state_version();
+    if (cache.version != version) {
+        cache.entries.clear();
+        cache.version = version;
+    }
+    auto* device = tensor.device();
+    Key key{device->shape(), {}, cluster_axis, num_links, axis_topology, tt::tt_fabric::GetFabricConfig()};
+    key.nodes.reserve(key.shape.mesh_size());
+    for (const auto& coordinate : tt::tt_metal::distributed::MeshCoordinateRange(key.shape)) {
+        key.nodes.push_back(device->get_fabric_node_id(coordinate));
+    }
+    for (const auto& [cached_key, plan] : cache.entries) {
+        if (key == cached_key) {
+            return plan;
+        }
+    }
+    auto plan = ttnn::operations::ccl::common::resolve_mesh_ring_plan(
+        tensor, cluster_axis, num_links, axis_topology, true, "high_bw_all_gather");
+    if (plan) {
+        // Bound memory for applications creating many submeshes or collective configurations.
+        if (cache.entries.size() == 32) {
+            cache.entries.erase(cache.entries.begin());
+        }
+        cache.entries.emplace_back(std::move(key), *plan);
+    }
+    return plan;
+}
 
 tt::tt_metal::TensorTopology derive_output_topology(
     const Tensor& input_tensor, const std::optional<uint32_t>& cluster_axis, uint32_t gather_dim) {
@@ -380,8 +436,8 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
                        static const bool enabled = std::getenv("TT_METAL_HOST_PROFILE_ZONES") != nullptr;
                        return enabled;
                    }()));
-        const auto mesh_ring_plan = ttnn::operations::ccl::common::resolve_mesh_ring_plan(
-            input_tensor, cluster_axis, collective_num_links, axis_topology, true, "high_bw_all_gather");
+        const auto mesh_ring_plan = CMAKE_UNIQUE_NAMESPACE::resolve_cached_ring_plan(
+            input_tensor, cluster_axis, collective_num_links, axis_topology);
         if (mesh_ring_plan.has_value()) {
             snake_orientation = mesh_ring_plan->orientation;
             direct_neighbor_route_hash = mesh_ring_plan->route_plan_hash;

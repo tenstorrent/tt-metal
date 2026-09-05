@@ -20,6 +20,10 @@
 
 namespace tt::tt_fabric {
 
+uint64_t pipeline_routing_state_version() {
+    return tt::tt_metal::MetalContext::instance().get_control_plane().routing_state_version();
+}
+
 // ------------------------------------------------------------------
 // Low-level control-plane wrappers
 // ------------------------------------------------------------------

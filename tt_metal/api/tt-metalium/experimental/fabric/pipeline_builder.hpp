@@ -16,6 +16,9 @@
 
 namespace tt::tt_fabric {
 
+// Cache invalidation token for topology-derived routing decisions.
+uint64_t pipeline_routing_state_version();
+
 // ------------------------------------------------------------------
 // Low-level control-plane wrappers (exposed individually in nanobind)
 // ------------------------------------------------------------------

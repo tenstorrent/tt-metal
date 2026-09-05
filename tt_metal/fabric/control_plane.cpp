@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <atomic>
+
 #include <iostream>
 #include <enchantum/enchantum.hpp>
 #include <algorithm>
@@ -735,6 +737,7 @@ ControlPlane::ControlPlane(
 }
 
 void ControlPlane::initialize_fabric_context() {
+    routing_state_version_ = next_routing_state_version();
     if (tt::tt_fabric::is_tt_fabric_config(fabric_config_)) {
         this->fabric_context_ = std::make_unique<FabricContext>(
             *this, hal_, cluster_.get().arch(), cluster_.get().is_ubb_galaxy(), fabric_config_, fabric_router_config_);
@@ -1098,7 +1101,13 @@ size_t ControlPlane::get_num_live_routing_planes(
 
 // Only builds the routing table representation, does not actually populate the routing tables in memory of the
 // fabric routers on device
+uint64_t ControlPlane::next_routing_state_version() {
+    static std::atomic<uint64_t> version{0};
+    return version.fetch_add(1, std::memory_order_relaxed) + 1;
+}
+
 void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels() {
+    routing_state_version_ = next_routing_state_version();
     this->intra_mesh_routing_tables_.clear();
     this->inter_mesh_routing_tables_.clear();
     this->router_port_directions_to_physical_eth_chan_map_.clear();
@@ -2092,6 +2101,7 @@ void ControlPlane::reserve_routing_planes(
         fabric_node_id.chip_id,
         static_cast<int>(routing_direction),
         live);
+    routing_state_version_ = next_routing_state_version();
     this->router_port_directions_to_num_reserved_planes_map_.at(fabric_node_id).at(routing_direction) = num_reserved;
 }
 
@@ -2234,6 +2244,7 @@ std::map<std::string, std::string> ControlPlane::get_fabric_kernel_defines() con
 }
 
 void ControlPlane::clear_fabric_context() {
+    routing_state_version_ = next_routing_state_version();
     this->fabric_context_.reset(nullptr);
     asic_id_to_fabric_node_cache_.clear();
 }
@@ -2632,6 +2643,7 @@ void ControlPlane::write_udm_fabric_connections_to_tensix_cores(
 }
 
 void ControlPlane::collect_and_merge_router_port_directions_from_all_hosts() {
+    routing_state_version_ = next_routing_state_version();
     const auto& distributed_context = this->distributed_context_.get();
     if (*distributed_context.size() == 1) {
         // No need to collect from other hosts when running a single process

@@ -254,20 +254,26 @@ def _to_torch_with_device_padding(tensor):
     return torch.nn.functional.pad(host_tensor, padding)
 
 
-def _assert_exact_all_gather(device_input, persistent_output, mesh_device, dtype):
+def _assert_exact_all_gather(device_input, persistent_output, mesh_device, dtype, cluster_axis=None):
     """The collective performs no arithmetic, so compare the gathered device values exactly."""
     if dtype == ttnn.fp8_e4m3:
-        expected = torch.cat(list(_fp8_payloads(device_input, mesh_device)), dim=2)
+        inputs = list(_fp8_payloads(device_input, mesh_device))
         actual_outputs = _fp8_payloads(persistent_output, mesh_device)
     else:
         # Compare the device representation so quantized types and padding inserted
         # independently into each local tile shard are both represented exactly.
-        expected = torch.cat(
-            [_to_torch_with_device_padding(tensor) for tensor in ttnn.get_device_tensors(device_input)],
-            dim=2,
-        )
+        inputs = [_to_torch_with_device_padding(tensor) for tensor in ttnn.get_device_tensors(device_input)]
         actual_outputs = [ttnn.to_torch(tensor) for tensor in ttnn.get_device_tensors(persistent_output)]
     for rank, actual in enumerate(actual_outputs):
+        if cluster_axis == 0:
+            group = inputs[rank % mesh_device.shape[1] :: mesh_device.shape[1]]
+        elif cluster_axis == 1:
+            start = (rank // mesh_device.shape[1]) * mesh_device.shape[1]
+            group = inputs[start : start + mesh_device.shape[1]]
+        else:
+            group = inputs
+        expected = torch.cat(group, dim=2)
+        assert actual.shape == expected.shape
         if torch.equal(actual, expected):
             continue
 
@@ -311,10 +317,11 @@ def _run_high_bw_all_gather_accuracy(
     cluster_axis,
     rows_per_device,
     num_links=_NUM_LINKS,
+    seed=0,
 ):
     collective_size = mesh_device.get_num_devices() if cluster_axis is None else mesh_device.shape[cluster_axis]
     global_shape = (1, 1, rows_per_device * collective_size, width)
-    torch.manual_seed(0)
+    torch.manual_seed(seed)
     host_input = torch.rand(global_shape, dtype=torch.bfloat16)
     mesh_mapper = (
         ttnn.ShardTensorToMesh(mesh_device, dim=2)
@@ -351,7 +358,7 @@ def _run_high_bw_all_gather_accuracy(
     )
     ttnn.synchronize_device(mesh_device)
 
-    _assert_exact_all_gather(device_input, persistent_output, mesh_device, dtype)
+    _assert_exact_all_gather(device_input, persistent_output, mesh_device, dtype, cluster_axis)
 
 
 @run_for_blackhole("high_bw_all_gather requires Blackhole fabric")
@@ -1187,3 +1194,43 @@ def test_high_bw_all_gather_token_sweep(mesh_device, axis_0_min_bandwidth_gbps, 
     rank_line, cluster_axis = _rank_line_mesh(mesh_device)
     min_bandwidth_gbps = (axis_0_min_bandwidth_gbps, axis_1_min_bandwidth_gbps)[cluster_axis]
     _run_high_bw_all_gather_token_sweep(rank_line, min_bandwidth_gbps, cluster_axis)
+
+
+@run_for_blackhole("route-plan cache coverage requires Blackhole Galaxy")
+@pytest.mark.parametrize("device_params", [_FABRIC_2D_TORUS_XY_DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize("dtype,width,page_size", [(ttnn.bfloat16, 576, 1152), (ttnn.fp8_e4m3, 656, 704)])
+def test_high_bw_all_gather_galaxy_route_plan_cache(mesh_device, dtype, width, page_size):
+    """Reuse routes with fresh data/buffers; distinguish axes, links and submesh mappings."""
+    first_column = mesh_device.create_submesh(ttnn.MeshShape(8, 1), ttnn.MeshCoordinate(0, 0))
+    second_column = mesh_device.create_submesh(ttnn.MeshShape(8, 1), ttnn.MeshCoordinate(0, 1))
+    cases = [
+        (mesh_device, 0, 1),
+        (mesh_device, 1, 2),
+        (mesh_device, None, 2),
+        (first_column, 0, 2),
+        (second_column, 0, 2),
+    ]
+    # Parent and submeshes have independent allocators over overlapping physical L1.
+    # Release cached semaphore allocations before handing the devices to another mesh.
+    for index, (device, axis, links) in enumerate(cases):
+        try:
+            mesh_device.quiesce_devices()
+            for repeat in range(3):
+                entries_before = device.num_program_cache_entries()
+                _run_high_bw_all_gather_accuracy(
+                    device,
+                    dtype,
+                    width=width,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    expected_page_size=page_size,
+                    cluster_axis=axis,
+                    rows_per_device=4 + 4 * (repeat % 2),
+                    num_links=links,
+                    seed=10 * repeat + index,
+                )
+                if repeat == 2:
+                    assert device.num_program_cache_entries() == entries_before
+        finally:
+            mesh_device.quiesce_devices()
+            device.clear_program_cache()

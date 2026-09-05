@@ -317,6 +317,9 @@ public:
     std::vector<std::pair<FabricNodeId, FabricNodeId>> get_intermesh_exit_peer_fabric_node_id_pairs_between_meshes(
         MeshId src_mesh_id, MeshId dst_mesh_id) const;
 
+    // Changes whenever routing state is rebuilt; unique across ControlPlane lifetimes.
+    uint64_t routing_state_version() const { return routing_state_version_; }
+
     // Getters
     FabricConfig get_fabric_config() const { return fabric_config_; }
     FabricReliabilityMode get_fabric_reliability_mode() const { return fabric_reliability_mode_; }
@@ -326,6 +329,9 @@ public:
     FabricManagerMode get_fabric_manager_mode() const { return fabric_manager_; }
 
 private:
+    static uint64_t next_routing_state_version();
+    uint64_t routing_state_version_ = next_routing_state_version();
+
     // Check if the provided mesh is local to this host
     bool is_local_mesh(MeshId mesh_id) const;
 
