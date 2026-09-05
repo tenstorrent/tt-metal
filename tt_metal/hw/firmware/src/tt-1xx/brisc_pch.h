@@ -19,6 +19,13 @@
 // kernel. Precompiling dataflow_api.h therefore needs it decoupled from the
 // per-kernel descriptors first.
 //
+// Omitting those two does not keep every generated file out of reach: with
+// TT_METAL_DPRINT_CORES set, kernel_profiler.hpp reaches dprint_tile.h, which
+// includes chlkc_descriptors.h unconditionally. The PCH build strips the
+// "-I."/"-I.." roots through which per-kernel files resolve, so in that
+// configuration it fails outright -- logged by ensure_pch -- and every compile
+// falls back to plain parsing rather than sharing one kernel's descriptors.
+//
 // Everything from kernel_includes.hpp onwards is also left out: that is the
 // generated per-kernel body and the conditional includes that follow it.
 //

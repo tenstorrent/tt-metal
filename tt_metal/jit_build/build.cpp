@@ -233,24 +233,21 @@ std::string ensure_pch(
         const std::string gch_tmp = tt::jit_build::utils::FileRenamer::generate_temp_path(gch);
         const std::string dep_tmp = tt::jit_build::utils::FileRenamer::generate_temp_path(dep);
 
-        std::vector<std::string> args = tt::jit_build::utils::tokenize_flags(gpp);
-        args.push_back("-" + opt_level);
-        for (auto& tok : tt::jit_build::utils::tokenize_flags(cflags)) {
-            args.push_back(std::move(tok));
-        }
-        args.insert(args.end(), include_args.begin(), include_args.end());
-        args.insert(args.end(), defines.begin(), defines.end());
-        // Record the PCH's own dependency closure. A kernel compile that consumes the
-        // PCH emits a truncated .d (-MMD stops at the PCH boundary), so compile_one
-        // merges this file back in to keep the dephash cache honest.
-        args.push_back("-MMD");
-        args.push_back("-MF");
-        args.push_back(dep_tmp);
-        args.push_back("-x");
-        args.push_back("c++-header");
-        args.push_back(header.string());
-        args.push_back("-o");
-        args.push_back(gch_tmp);
+        // Built through the same argv builder as the kernel compiles: any drift between
+        // the two flag sets makes GCC reject the PCH. The .d (via the -MMD already in
+        // cflags) records the PCH's dependency closure; a kernel compile that consumes
+        // the PCH emits a truncated .d of its own (-MMD stops at the PCH boundary), so
+        // compile_one merges this file back in to keep the dephash cache honest.
+        const std::vector<std::string> args = tt::jit_build::utils::build_gpp_argv(
+            gpp,
+            opt_level,
+            cflags,
+            fmt::format("{}", fmt::join(include_args, " ")),
+            defines,
+            header.string(),
+            tt::jit_build::utils::GppAction::PrecompileHeader,
+            gch_tmp,
+            dep_tmp);
 
         // The log is per-temp (and so per-process): concurrent rebuilds of one key must
         // not interleave writes. Removed on success, kept for the warning on failure.
@@ -906,9 +903,21 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
     const std::string temp_d_path = fs::path(obj_temp_path).replace_extension("d").string();
 
     std::vector<std::string> defines = recipe.defines;
+    // A PCH parses ahead of the whole translation unit, so every macro that can change
+    // how an umbrella header parses must reach the PCH build. DM targets pass kernel
+    // defines on the command line (process_defines_at_compile_), which lands them in
+    // the PCH key; TRISC routes them through a generated header (chlkc_list.h ->
+    // defines_generated.h) that the umbrella must exclude, so a kernel define like
+    // FORCE_WATCHER_OFF would go unseen by umbrella headers that the source parses
+    // after chlkc_list.h (stack_usage.h, kernel_profiler.hpp's debug subtree). Every
+    // consumer of that define is inert unless WATCHER_ENABLED is set, so the PCH stays
+    // on for the common case and those targets skip it while the watcher is on.
+    const bool pch_defines_visible =
+        this->process_defines_at_compile_ || !env_.get_rtoptions().get_watcher_enabled();
     // pch_umbrella_for returns a view of a string literal, so this outlives the call.
-    const std::string_view pch_umbrella =
-        jit_pch_enabled() ? pch_umbrella_for(this->srcs_[src_index]) : std::string_view{};
+    const std::string_view pch_umbrella = (jit_pch_enabled() && pch_defines_visible)
+                                              ? pch_umbrella_for(this->srcs_[src_index])
+                                              : std::string_view{};
     std::string pch_dep_path;
     if (!pch_umbrella.empty()) {
         // The PCH is built from the same recipe minus any force-included headers:
