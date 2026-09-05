@@ -3,8 +3,24 @@
 **Model:** `zai-org/GLM-4.7-Flash` (`Glm4MoeLiteForCausalLM`, 30.6B total / ~3.6B active,
 47 layers, 64 experts top-4, MLA attention, vocab 154880, advertised context 202752)
 **Hardware:** one Blackhole p150, 1x1 mesh, ~32 GB device DRAM
-**Branch:** `ttmodelmanager/glm47-flash-probe` (nothing pushed)
+**Branch:** `ttmodelmanager/glm47-flash-probe` (pushed to `tenstorrent/tt-metal`)
 **Report date:** 2026-09-05
+
+> **Prerequisite: this branch does not load on its own.** vLLM resolves the
+> checkpoint architecture `Glm4MoeLiteForCausalLM` through a registration that
+> lives in a *different* repository, and it is not yet merged upstream. Without
+> it you get a missing-architecture error at server start, not a working model.
+> Until it merges, check out the plugin branch alongside this one:
+>
+> - registration: `ttmodelmanager/glm47-flash-registration` on
+>   `github.com/stisiTT/vllm-tt-plugin` (a fork of `tenstorrent/vllm-tt-plugin`;
+>   commit `9f2ec5d`, a single 9-line additive entry in
+>   `src/vllm_tt_plugin/platform.py`)
+> - open PR upstream:
+>   `https://github.com/stisiTT/vllm-tt-plugin/pull/new/ttmodelmanager/glm47-flash-registration`
+>
+> The registration points at `models.autoports.zai_org_glm_4_7_flash`, so the two
+> branches are only useful as a pair.
 
 ---
 
@@ -134,8 +150,11 @@ Per-stage reports and work logs under `models/autoports/zai_org_glm_4_7_flash/do
 `optimized_full_model/`, `datatype_sweep/`, `vllm_integration/` (VS-001..VS-011),
 `optimized_vllm/`, `tti_release/` (RUN_NOTES, AUTOFIX_prefill_dram, evals, benchmarks).
 
-50 commits on `ttmodelmanager/glm47-flash-probe`. Plugin registration is one commit on
-`ttmodelmanager/glm47-flash-registration` in `vllm-tt-plugin`. Neither pushed.
+61 commits on `ttmodelmanager/glm47-flash-probe`, pushed to `tenstorrent/tt-metal`
+(no PR opened). Plugin registration is one commit (`9f2ec5d`) on
+`ttmodelmanager/glm47-flash-registration`, pushed to the fork
+`stisiTT/vllm-tt-plugin` rather than upstream, because this account has read-only
+access to `tenstorrent/vllm-tt-plugin`. See the prerequisite note at the top.
 
 Runner-side gates, both exit 0: `check_degenerate_output --scope all` (no degenerate
 output across all completions) and `check_context_contract --stage vllm`
