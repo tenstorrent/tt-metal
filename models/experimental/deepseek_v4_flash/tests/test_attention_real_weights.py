@@ -226,8 +226,8 @@ _WEIGHT_DTYPE = ttnn.bfloat4_b
 # The floor here is the bf4 weight path, not the decode/prefill difference: measured per
 # row it sits around 0.96-0.97 against the fp32 reference at any batch size. A batched run
 # scores every user separately, so it draws B times as many samples from that spread and
-# routinely turns up one in the low tail -- 0.96 was set when only four rows were compared
-# and is not a bound the block clears reliably over thirty-two. Batching itself is exact,
+# routinely turns up one in the low tail -- 0.95 is the bound the block clears over
+# thirty-two rows. Batching itself is exact,
 # which is what ``test_attention_batching.py`` pins down (a user's output is bit-identical
 # whatever the other users decode); this threshold is only about bf4 error.
 DECODE_PCC_THRESHOLD = 0.95
