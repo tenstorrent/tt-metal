@@ -55,12 +55,19 @@ ttsl::hash::hash_t HighBwAllGatherDeviceOperation::compute_program_hash(
     const HighBwAllGatherParams& args, const HighBwAllGatherInputs& tensor_args) {
     // input_batch_index / gathered_dim_size alter only runtime page ranges and iterator strides;
     // exclude their values so changing cache slot or prefix does not recompile the program.
+    // Routing is fixed for the lifetime of a cached program. Clear the program cache before
+    // reconfiguring fabric routing. Include placement so a mesh reshape cannot reuse old routes.
+    auto* device = tensor_args.input_tensor.device();
+    std::vector<tt::tt_fabric::FabricNodeId> fabric_nodes;
+    fabric_nodes.reserve(device->shape().mesh_size());
+    for (const auto& coord : tt::tt_metal::distributed::MeshCoordinateRange(device->shape())) {
+        fabric_nodes.push_back(device->get_fabric_node_id(coord));
+    }
     return tt::tt_metal::operation::hash_operation<HighBwAllGatherDeviceOperation>(
         args.dim,
         args.output_mem_config,
         args.cluster_axis,
         args.linearized_mesh_ring,
-        args.snake_ring_orientation,
         args.fabric_config,
         args.axis_topology,
         args.axis_num_devices,
@@ -70,8 +77,8 @@ ttsl::hash::hash_t HighBwAllGatherDeviceOperation::compute_program_hash(
         args.mesh_rows,
         args.mesh_cols,
         args.packet_size,
-        args.neighbor_unicast_eligible,
-        args.neighbor_route_plan_hash,
+        device->shape(),
+        fabric_nodes,
         args.subdevice_id,
         args.sub_core_grid,
         args.input_batch_index.has_value(),
@@ -225,14 +232,10 @@ void HighBwAllGatherDeviceOperation::validate_on_program_cache_miss(
     // participate when it has been linearized into one Hamiltonian ring.
     const auto mesh_shape = input_tensor.device()->shape();
     if (args.linearized_mesh_ring) {
-        const uint32_t snake_lane_count =
-            args.snake_ring_orientation == ttnn::ccl::snake_ring::Orientation::Row ? mesh_shape[0] : mesh_shape[1];
         TT_FATAL(
-            mesh_shape[0] > 1 && mesh_shape[1] > 1 && snake_lane_count % 2 == 0,
-            "high_bw_all_gather full-mesh ring requires a 2D mesh whose selected snake orientation has an even "
-            "lane count; mesh={}, orientation={}",
-            mesh_shape,
-            static_cast<uint32_t>(args.snake_ring_orientation));
+            mesh_shape[0] > 1 && mesh_shape[1] > 1 && (mesh_shape[0] % 2 == 0 || mesh_shape[1] % 2 == 0),
+            "high_bw_all_gather full-mesh ring requires a 2D mesh with at least one even dimension; mesh={}",
+            mesh_shape);
         TT_FATAL(
             ttnn::operations::ccl::common::has_row_major_mesh_coordinates(input_tensor),
             "high_bw_all_gather full-mesh ring currently requires row-major tensor mesh coordinates");
@@ -260,16 +263,6 @@ void HighBwAllGatherDeviceOperation::validate_on_program_cache_miss(
         input_tensor.layout() == ttnn::ROW_MAJOR_LAYOUT || input_tensor.layout() == ttnn::TILE_LAYOUT,
         "high_bw_all_gather requires row-major or tile-layout input");
     TT_FATAL(input_tensor.buffer()->is_dram(), "high_bw_all_gather requires DRAM input");
-    TT_FATAL(
-        args.neighbor_unicast_eligible,
-        "high_bw_all_gather requires a direct-neighbor line/ring; devices={}, links={}, topology={}, "
-        "linearized_mesh_ring={}, route_hash={}",
-        args.axis_num_devices,
-        args.axis_num_links,
-        args.axis_topology,
-        args.linearized_mesh_ring,
-        args.neighbor_route_plan_hash);
-
     {
         const auto& output_tensor = tensor_args.output_tensor;
 
@@ -377,6 +370,11 @@ void HighBwAllGatherDeviceOperation::validate_on_program_cache_hit(
     // The slot/prefix values are deliberately hash-excluded. Recheck only their cheap dynamic
     // bounds here; all tensor/layout/fabric structure belongs to the program key and was proven on
     // the miss path. This keeps a serving-loop cache hit to scalar validation plus direct RT-arg writes.
+    if (args.linearized_mesh_ring) {
+        TT_FATAL(
+            ttnn::operations::ccl::common::has_row_major_mesh_coordinates(tensor_args.input_tensor),
+            "high_bw_all_gather full-mesh ring currently requires row-major tensor mesh coordinates");
+    }
     const auto& input_shape = tensor_args.input_tensor.padded_shape();
     const auto& output_tensor = tensor_args.output_tensor;
     TT_FATAL(output_tensor.buffer() != nullptr, "Output tensor must be allocated in buffers on device!");
@@ -525,42 +523,16 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
     const uint32_t num_devices = linearized_mesh_ring ? static_cast<uint32_t>(mesh_shape.mesh_size())
                                                       : axis_num_devices[0] * axis_num_devices[1];
     const size_t packet_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
-    const bool one_active_axis = (axis_num_devices[0] > 1) != (axis_num_devices[1] > 1);
-    const bool fabric_is_2d = ::tt::tt_fabric::is_2d_fabric_config(fabric_config);
-    ttnn::ccl::snake_ring::Orientation snake_orientation = linearized_mesh_ring && mesh_shape[0] % 2 != 0
-                                                               ? ttnn::ccl::snake_ring::Orientation::Column
-                                                               : ttnn::ccl::snake_ring::Orientation::Row;
-    std::optional<uint64_t> direct_neighbor_route_hash;
-    if (fabric_is_2d && (linearized_mesh_ring || one_active_axis)) {
-        const auto mesh_ring_plan = ttnn::operations::ccl::common::resolve_mesh_ring_plan(
-            input_tensor, cluster_axis, collective_num_links, axis_topology, true, "high_bw_all_gather");
-        if (mesh_ring_plan.has_value()) {
-            snake_orientation = mesh_ring_plan->orientation;
-            direct_neighbor_route_hash = mesh_ring_plan->route_plan_hash;
-        }
-    }
-    const uint32_t active_axis = cluster_axis.value_or(0);
-    const auto active_topology = axis_topology[active_axis];
-    const bool topology_supports_neighbor_unicast =
-        active_topology == tt::tt_fabric::Topology::Linear || active_topology == tt::tt_fabric::Topology::Ring;
-    // A direct physical line or ring is supported. The full edge proof keeps routed multi-hop logical rings out of
-    // this native one-hop implementation.
-    const bool neighbor_unicast_eligible =
-        collective_num_links > 0 &&
-        ((!linearized_mesh_ring && one_active_axis && !fabric_is_2d && topology_supports_neighbor_unicast) ||
-         (fabric_is_2d && direct_neighbor_route_hash.has_value()));
-
     log_debug(
         tt::LogOp,
         "fabric_config: {}, axis_topology: {}, axis_num_devices: {}, axis_num_links: {}, num_links override: {}, "
-        "linearized_mesh_ring: {}, snake_orientation: {}, packet_size: {} B",
+        "linearized_mesh_ring: {}, packet_size: {} B",
         fabric_config,
         axis_topology,
         axis_num_devices,
         axis_num_links,
         num_links,
         linearized_mesh_ring,
-        static_cast<uint32_t>(snake_orientation),
         packet_size);
 
     // Resolve negative gather dim
@@ -573,7 +545,6 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
             .output_mem_config = output_tensor.memory_config(),
             .cluster_axis = cluster_axis.value_or(0),
             .linearized_mesh_ring = linearized_mesh_ring,
-            .snake_ring_orientation = snake_orientation,
             .fabric_config = fabric_config,
             .axis_topology = axis_topology,
             .axis_num_devices = axis_num_devices,
@@ -583,8 +554,6 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
             .mesh_rows = linearized_mesh_ring ? mesh_shape[0] : 0,
             .mesh_cols = linearized_mesh_ring ? mesh_shape[1] : 0,
             .packet_size = packet_size,
-            .neighbor_unicast_eligible = neighbor_unicast_eligible,
-            .neighbor_route_plan_hash = direct_neighbor_route_hash,
             .subdevice_id = subdevice_id,
             .sub_core_grid = sub_core_grid,
             .input_batch_index = input_batch_index,
