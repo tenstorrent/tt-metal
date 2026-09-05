@@ -114,6 +114,18 @@ struct ChunkGdnScanParams {
     uint32_t val_dim;
     bool has_initial_state;
     bool output_final_state;
+    // Per-head NoC multicast of the shared V-independent scan inputs (kd, q_decay, intra, k_dec_t,
+    // dl, t_inv): the head's v-block-0 core reads them from DRAM once and multicasts into the
+    // sibling V-block cores' CBs, instead of every sibling re-reading identical DRAM pages
+    // (NV-fold read amplification). Bit-exact: identical bytes land in identical CB slots.
+    // Kill switch QWEN_GDN_SCAN_MCAST=0 (read where params are built, NOT in the factory, so the
+    // flag participates in the program-cache key and in-process A/B toggling is safe).
+    // The factory still falls back to the plain reader when NV==1 (nothing to share).
+    bool use_mcast = true;
+    // QWEN_GDN_SCAN_SERIAL=1 pins NV=1 (perf A/B only). Hashed here for the same reason as
+    // use_mcast: it changes the placement AND the kernel topology (mcast on/off), so a
+    // factory-local env read would silently serve a stale cached program on in-process toggles.
+    bool force_serial = false;
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
 };
