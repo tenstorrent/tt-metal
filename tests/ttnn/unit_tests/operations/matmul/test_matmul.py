@@ -4705,3 +4705,32 @@ def test_matmul_fp32_crossblock_reload_untilize_precision(device, packer_l1_acc)
         check_frobenius=True,
         check_ulp=False,
     )
+
+
+@pytest.mark.parametrize("transpose_mcast", [False, True])
+def test_matmul_2d_cache_hit_fresh_buffers(device, transpose_mcast):
+    """Cached sender/receiver core lists must patch fresh operands and outputs in both orientations."""
+    config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(2, 2),
+        in0_block_w=2,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        per_core_M=1,
+        per_core_N=1,
+        transpose_mcast=transpose_mcast,
+    )
+    live_buffers = []
+    entries = None
+    for seed in (11, 29, 43):
+        generator = torch.Generator().manual_seed(seed)
+        a = torch.randn((1, 1, 64, 64), generator=generator, dtype=torch.bfloat16)
+        b = torch.randn((1, 1, 64, 64), generator=generator, dtype=torch.bfloat16)
+        a_dev = ttnn.from_torch(a, device=device, layout=ttnn.TILE_LAYOUT)
+        b_dev = ttnn.from_torch(b, device=device, layout=ttnn.TILE_LAYOUT)
+        out = ttnn.matmul(a_dev, b_dev, program_config=config)
+        live_buffers.append((a_dev, b_dev, out))
+        assert_with_pcc(torch.matmul(a, b), ttnn.to_torch(out), 0.99)
+        if entries is None:
+            entries = device.num_program_cache_entries()
+        else:
+            assert device.num_program_cache_entries() == entries, "fresh buffers recompiled"

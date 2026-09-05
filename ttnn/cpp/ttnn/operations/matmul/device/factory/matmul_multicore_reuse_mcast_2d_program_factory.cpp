@@ -3059,17 +3059,16 @@ void override_runtime_arguments_impl(
     const ttnn::prim::MatmulInputs& tensor_args,
     std::vector<ttnn::Tensor>& output_tensors) {
     auto mm_kernel_in0_sender_id = shared_variables.mm_kernel_in0_sender_id;
-    auto in0_sender_interleaved_cores = shared_variables.in0_sender_interleaved_cores;
+    const auto& in0_sender_interleaved_cores = shared_variables.in0_sender_interleaved_cores;
     auto mm_kernel_in1_sender_writer_id = shared_variables.mm_kernel_in1_sender_writer_id;
-    auto in1_sender_cores = shared_variables.in1_sender_cores;
+    const auto& in1_sender_cores = shared_variables.in1_sender_cores;
     auto mm_kernel_in1_receiver_writer_id = shared_variables.mm_kernel_in1_receiver_writer_id;
-    auto in1_receiver_cores = shared_variables.in1_receiver_cores;
+    const auto& in1_receiver_cores = shared_variables.in1_receiver_cores;
     auto mm_kernel_in1_receiver_writer_other_noc_setup_id =
         shared_variables.mm_kernel_in1_receiver_writer_other_noc_setup_id;
-    auto in1_receiver_other_cores = shared_variables.in1_receiver_other_cores;
+    const auto& in1_receiver_other_cores = shared_variables.in1_receiver_other_cores;
     auto cb_src2 = shared_variables.cb_src2;
     auto cb_output = shared_variables.cb_output;
-    auto cores = shared_variables.cores;
 
     const auto& input_tensors = tensor_args.input_tensors;
     const auto& optional_input_tensors = tensor_args.optional_input_tensors;
