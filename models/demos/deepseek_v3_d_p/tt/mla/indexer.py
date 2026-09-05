@@ -380,7 +380,6 @@ class TtIndexer:
         # buffer across them.  This keeps the high-bandwidth gathers allocation-free and their output
         # address fixed on the hot forward path.
         self._k_all_gather_output = None
-        self._weights_all_gather_output = None
         self._topk_indices_all_gather_output = None
         if self.tp_factor > 1:
             assert (
@@ -397,12 +396,6 @@ class TtIndexer:
             self._k_all_gather_output = self.tt_ccl.get_mla_high_bw_all_gather_buffer(
                 name="indexer_k_all_reduce",
                 shape=[1, 1, self.active_seq_len_local, self.index_args.index_head_dim],
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-            )
-            self._weights_all_gather_output = self.tt_ccl.get_mla_high_bw_all_gather_buffer(
-                name="indexer_weights_all_reduce",
-                shape=[1, self.tp_factor, self.active_seq_len_local, self.index_args.index_n_heads],
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
             )
@@ -478,28 +471,20 @@ class TtIndexer:
             cluster_axis=self.tp_axis,
         )
 
-    def _tp_all_reduce_via_gather(self, t):
-        """All-reduce over TP via gather (dim 1) + local reduce, instead of _tp_rs_ag's reduce-scatter
-        (dim 3) + all-gather. For a narrow dim-3 width (e.g. wts' H_idx=32) that doesn't divide evenly
-        into tile-sized TP shards, _tp_rs_ag's reduce-scatter hits ttnn's composite fallback
-        (use_composite_reduce_scatter) and balloons into ~30 tilize/pad/slice ops. Gathering on dim 1 —
-        the batch/placeholder axis, always size 1 here — has no tile-alignment constraint, so it always
-        takes the fused fast path; fast_reduce_nc then sums the gathered TP axis locally (pure on-device
-        compute, no fabric traffic). Mirrors ttMLA._kv_stem's kv_a_proj_with_mqa all-reduce (mla.py:
-        917-929), measured cheaper even on an 18x-wider tensor than wts."""
+    def _tp_reduce_scatter_sequence(self, t):
+        """Sum TP partials while retaining only this rank's downstream query rows."""
         if self.tp_factor == 1:
             return t
-        assert self._weights_all_gather_output is not None
-        assert tuple(t.shape) == (1, 1, self.active_seq_len_local, self.index_args.index_n_heads)
-        t = ttnn.experimental.high_bw_all_gather(
+        return ttnn.experimental.reduce_scatter_minimal_async(
             t,
-            dim=1,
-            output_tensor=self._weights_all_gather_output,
+            persistent_output_buffers=None,
+            dim=2,
+            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis=self.tp_axis),
+            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
             num_links=self.ccl_num_links,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=self.tp_ccl_topology,
             cluster_axis=self.tp_axis,
-        )
-        return ttnn.experimental.fast_reduce_nc(
-            t, dims=[1], output=None, compute_kernel_config=self.hifi4_fp32_compute_kernel_config
         )
 
     def _tp_all_gather(self, t, dim):
@@ -539,7 +524,14 @@ class TtIndexer:
         )
         self._idx_wq_b = w["wq_b"]
         self._idx_wk = w["wk"]
-        self._idx_wproj = w["weights_proj"]
+        # This positive constant used to be applied to every weights_proj activation in forward(). Fold it
+        # into the persistent projection weight once at construction instead, preserving existing tensorbin
+        # compatibility while removing a hot-path elementwise op.
+        wproj = w["weights_proj"]
+        self._idx_wproj = ttnn.multiply(
+            wproj, self.index_args.index_n_heads**-0.5 * self.index_args.index_head_dim**-0.5
+        )
+        ttnn.deallocate(wproj)
         self._idx_knorm_w = w["k_norm"]
         self._idx_knorm_b = w["k_norm_bias"]
 
@@ -791,8 +783,8 @@ class TtIndexer:
         ttnn.deallocate(q_dev)
         q_dev = q_h
 
-        # weights_proj: device stem -> FULL all-reduce over tp (all H_idx heads, matching the replicated
-        # wq_b heads) -> scale -> [1, 1, S/sp, H_idx].
+        # weights_proj: device stem -> reduce TP partials and scatter query rows. The static scale is
+        # already folded into the persistent projection weight in _upload_weights().
         wproj_cfg = self._resolve_mm_cfg("indexer.weights_proj", seq_len)
         wts = ttnn.linear(
             hidden_states,
@@ -801,39 +793,29 @@ class TtIndexer:
             memory_config=wproj_cfg["out_mem_config"] if wproj_cfg is not None else ttnn.DRAM_MEMORY_CONFIG,
             **({"program_config": wproj_cfg["program_config"]} if wproj_cfg is not None else {}),
         )
-        # H_idx=32 doesn't divide evenly into tile-sized TP=4 shards (8 < tile width), so _tp_rs_ag's
-        # dim-3 reduce-scatter would hit ttnn's composite fallback (~30 extra tilize/pad/slice ops, see
-        # use_composite_reduce_scatter). Gather-then-local-reduce on dim 1 has no such tile constraint.
-        wts = self._tp_all_reduce_via_gather(wts)  # full all-reduce over tp -> all H_idx head-weights, replicated
-        # Indexer softmax scale = index_head_dim**-0.5 (NO mscale), matching the reference IndexerCPU
-        # (model.py: softmax_scale = head_dim**-0.5). Distinct from MLA's qk_head_dim*mscale**2 scale —
-        # though as a uniform positive multiplier it cannot change the top-k selection regardless.
-        wts = ttnn.multiply(wts, a.index_n_heads**-0.5 * a.index_head_dim**-0.5)  # [1,1,S/sp,H_idx] repl on tp
-
-        # indexer_score wants per-head weights [1, H_idx, S/sp, 1]; wts is [1, 1, S/sp, H_idx].
-        weights = ttnn.permute(wts, (0, 3, 2, 1))
-
-        # TP×SP query parallelism (rope-then-split). q_dev/weights were roped on the FULL S/sp slab
-        # (block-cyclic-correct, cluster_axis=sp_axis), so every row already carries its true position; now
+        # Downstream scoring TP-shards query rows, so sum the TP partials and scatter that same sequence
+        # dimension in one collective. This avoids materializing a replicated full-S result only to slice it.
+        tpsp = self.tp_factor > 1
+        wts = self._tp_reduce_scatter_sequence(wts)
+        # TP×SP query parallelism (rope-then-split). q_dev was roped on the FULL S/sp slab
+        # (block-cyclic-correct, cluster_axis=sp_axis), so every query row already carries its true position; now
         # split those rows over TP so each chip scores only S/(sp·tp) of them — indexer_score + topk shrink
         # ~TP×. RoPE is per-row so the split is safe (no 2-D rope op needed). The score is told the TP axis via
         # seq_shard_axes below, so its EXACT block-cyclic geometry adds each device's tp_rank*Sq' sub-offset
         # (rotation-safe). topk runs on the sub-rows; indices are all-gathered back over TP to the [1,1,S/sp,k]
         # contract so mla.py / sparse_sdpa are unchanged (both DeepSeek and GLM ride this one path).
-        tpsp = self.tp_factor > 1
         if tpsp:
-            q_full, weights_full = (
-                q_dev,
-                weights,
-            )  # release the full-S slabs once TP-split (mesh_partition allocates new)
+            q_full = q_dev  # release the full-S slab once TP-split (mesh_partition allocates new)
             q_dev = ttnn.mesh_partition(q_dev, dim=2, cluster_axis=self.tp_axis)  # [1,H_idx,S/(sp·tp),D_idx]
-            weights = ttnn.mesh_partition(weights, dim=2, cluster_axis=self.tp_axis)  # [1,H_idx,S/(sp·tp),1]
             ttnn.deallocate(q_full)
-            ttnn.deallocate(weights_full)
             sq_local = seq_len // self.tp_factor
             qc = 64 if sq_local % 64 == 0 else 32  # q_chunk must divide the per-chip query tile count
         else:
             qc = 64
+
+        # indexer_score consumes one column tile per head: [1, H_idx, S_local, 1].
+        weights = ttnn.permute(wts, (0, 3, 2, 1))
+        ttnn.deallocate(wts)
         # Causality is fused inside indexer_score (future columns -> -inf from chunk_start_idx), so no triu
         # mask here. All H_idx heads are resident on-chip (wq_b replicated), so head_group_size=0 reads the
         # key cache ONCE — but that needs L1 headroom, so k_chunk is bounded by resident head count
