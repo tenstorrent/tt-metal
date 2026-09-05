@@ -3,6 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 ///
 #include <algorithm>
+#include <array>
+
+#include "kernels/ring_common_args.hpp"
+#include "kernels/line_common_args.hpp"
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
@@ -843,14 +847,15 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                 std::vector<uint32_t> writer_rt_args;
                 if (normalized_dim == 0) {
                     writer_rt_args = {
-                        intermediate_tensor.buffer()->address(),                     // intermediate_tensor_address
-                        output_tensor.buffer()->address(),                           // output_tensor_address
-                        virtual_core.x,                                              // this core.x
-                        virtual_core.y,                                              // this core.y
-                        opposite_core_coord.x,                                       // opposite direction core.x
-                        opposite_core_coord.y,                                       // opposite direction core.y
-                        semaphore.at(dir).address(),                                 // out_ready_semaphore for this dir
-                        semaphore.at(num_directions_per_link).address(),             // batch_ready_semaphore
+                        intermediate_tensor.buffer()->address(),  // intermediate_tensor_address
+                        output_tensor.buffer()->address(),        // output_tensor_address
+                        virtual_core.x,                           // this core.x
+                        virtual_core.y,                           // this core.y
+                        opposite_core_coord.x,                    // opposite direction core.x
+                        opposite_core_coord.y,                    // opposite direction core.y
+                        semaphore.at(dir).address(),              // out_ready_semaphore for this dir
+                        static_cast<uint32_t>(
+                            semaphore.at(num_directions_per_link).address()),        // batch_ready_semaphore
                         barrier_semaphore.has_value() && !using_persistent_buffers,  // use_barrier_sem
                         barrier_semaphore.has_value()                                // barrier_sem
                             ? barrier_semaphore.value().address()
@@ -862,14 +867,15 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                     };
                 } else {
                     writer_rt_args = {
-                        intermediate_tensor.buffer()->address(),                     // intermediate_tensor_address
-                        output_tensor.buffer()->address(),                           // output_tensor_address
-                        virtual_core.x,                                              // this core.x
-                        virtual_core.y,                                              // this core.y
-                        opposite_core_coord.x,                                       // opposite direction core.x
-                        opposite_core_coord.y,                                       // opposite direction core.y
-                        semaphore.at(dir).address(),                                 // out_ready_semaphore for this dir
-                        semaphore.at(num_directions_per_link).address(),             // batch_ready_semaphore
+                        intermediate_tensor.buffer()->address(),  // intermediate_tensor_address
+                        output_tensor.buffer()->address(),        // output_tensor_address
+                        virtual_core.x,                           // this core.x
+                        virtual_core.y,                           // this core.y
+                        opposite_core_coord.x,                    // opposite direction core.x
+                        opposite_core_coord.y,                    // opposite direction core.y
+                        semaphore.at(dir).address(),              // out_ready_semaphore for this dir
+                        static_cast<uint32_t>(
+                            semaphore.at(num_directions_per_link).address()),        // batch_ready_semaphore
                         barrier_semaphore.has_value() && !using_persistent_buffers,  // use_barrier_sem
                         barrier_semaphore.has_value()                                // barrier_sem
                             ? barrier_semaphore.value().address()
@@ -933,6 +939,19 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
         }
     }
 
+    const std::vector<uint32_t> common_addresses = {
+        input_tensor.buffer()->address(),
+        intermediate_tensor.buffer()->address(),
+        output_tensor.buffer()->address(),
+        static_cast<uint32_t>(semaphore.at(0).address()),
+        static_cast<uint32_t>(semaphore.at(1).address()),
+        static_cast<uint32_t>(semaphore.at(num_directions_per_link).address()),
+        barrier_semaphore.has_value() ? static_cast<uint32_t>(barrier_semaphore->address()) : 0,
+        penult_intermediate_tensor.has_value() ? penult_intermediate_tensor->buffer()->address() : 0,
+    };
+    tt::tt_metal::SetCommonRuntimeArgs(program, reader_kernel_id, common_addresses);
+    tt::tt_metal::SetCommonRuntimeArgs(program, writer_kernel_id, common_addresses);
+
     return {
         reader_kernel_id,
         writer_kernel_id,
@@ -948,80 +967,36 @@ void ring_reduce_scatter_minimal_async_helper_override_runtime_arguments(
     tt::tt_metal::Program& program,
     const tt::tt_metal::KernelHandle reader_kernel_id,
     const tt::tt_metal::KernelHandle writer_kernel_id,
-    const std::vector<tt::tt_metal::CoreCoord>& all_cores,
-    uint32_t num_links,
+    [[maybe_unused]] const std::vector<tt::tt_metal::CoreCoord>& all_cores,
+    [[maybe_unused]] uint32_t num_links,
     uint32_t num_directions_per_link,
-    uint32_t num_workers_per_direction,
-    uint32_t num_mux_cores_per_direction_per_link,
-    uint32_t num_cores_per_link,
-    uint32_t normalized_dim,
+    [[maybe_unused]] uint32_t num_workers_per_direction,
+    [[maybe_unused]] uint32_t num_mux_cores_per_direction_per_link,
+    [[maybe_unused]] uint32_t num_cores_per_link,
+    [[maybe_unused]] uint32_t normalized_dim,
     const std::optional<tt::tt_metal::GlobalSemaphore>& barrier_semaphore,
     const std::vector<tt::tt_metal::GlobalSemaphore>& semaphore,
     const Tensor& input,
     const Tensor& intermed,
     const Tensor& output,
     const std::optional<Tensor>& penult_intermediate) {
-    // Resolve invocation-dependent addresses once, then patch the cached per-core argument views.
-    auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id);
-    auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id);
-    const auto input_address = input.buffer()->address();
-    const auto intermediate_address = intermed.buffer()->address();
-    const auto output_address = output.buffer()->address();
-    const auto barrier_address = barrier_semaphore.has_value() ? barrier_semaphore->address() : 0;
-    const auto batch_semaphore_address = semaphore.at(num_directions_per_link).address();
-    const auto penult_address = penult_intermediate.has_value() ? penult_intermediate->buffer()->address() : 0;
-    // update senders
-    for (uint32_t link = 0; link < num_links; link++) {
-        for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
-            const auto direction_semaphore_address = semaphore.at(dir).address();
-            const auto opposite_semaphore_address = normalized_dim == 0 ? 0 : semaphore.at(!dir).address();
-            for (uint32_t worker = 0; worker < num_workers_per_direction; worker++) {
-                uint32_t mux_core_offset = (link * num_cores_per_link) +
-                                           (dir * (num_mux_cores_per_direction_per_link + num_workers_per_direction));
-                CoreCoord core = all_cores[mux_core_offset + num_mux_cores_per_direction_per_link + worker];
-
-                // sender reader
-                auto& worker_reader_sender_runtime_args = reader_runtime_args[core.x][core.y];
-                if (normalized_dim == 0) {
-                    worker_reader_sender_runtime_args[0] = input_address;
-                    worker_reader_sender_runtime_args[1] = intermediate_address;
-                    worker_reader_sender_runtime_args[2] = direction_semaphore_address;
-                } else {
-                    worker_reader_sender_runtime_args[0] = input_address;
-                    worker_reader_sender_runtime_args[1] = intermediate_address;
-                    worker_reader_sender_runtime_args[2] = output_address;
-                    worker_reader_sender_runtime_args[3] = direction_semaphore_address;
-                    worker_reader_sender_runtime_args[4] = opposite_semaphore_address;
-                    if (penult_intermediate.has_value()) {
-                        // Contiguous staging layout only, and it must be patched: the penult intermediate is
-                        // an op output now, so it is reallocated on every invocation and its address is
-                        // not stable across program-cache hits. Index 11 — see the reader RT arg list in
-                        // build_ring_reduce_scatter_minimal_async_program_artifacts; the fused-op args
-                        // are appended after it, so the position is fixed.
-                        worker_reader_sender_runtime_args[11] = penult_address;
-                    }
-                }
-                // sender writer
-                auto& worker_writer_sender_runtime_args = writer_runtime_args[core.x][core.y];
-                // Both layouts now carry the opposite-direction core coords at indices 4/5, so the
-                // dim-0 and non-dim-0 writer arg lists agree up to index 15.
-                worker_writer_sender_runtime_args[0] = intermediate_address;
-                worker_writer_sender_runtime_args[1] = output_address;
-                worker_writer_sender_runtime_args[6] = direction_semaphore_address;
-                worker_writer_sender_runtime_args[7] = batch_semaphore_address;
-                if (barrier_semaphore.has_value()) {
-                    worker_writer_sender_runtime_args[9] = barrier_address;
-                }
-                if (penult_intermediate.has_value()) {
-                    // Index 16 — see the writer RT arg list in
-                    // build_ring_reduce_scatter_minimal_async_program_artifacts; the mux/fabric
-                    // connection args are appended after it, so the position is fixed. Only the
-                    // non-dim-0 layout has this arg, and penult_intermediate is only set there
-                    // (reduce_scatter_use_contiguous_interm returns false for scatter dim 0).
-                    worker_writer_sender_runtime_args[16] = penult_address;
-                }
-            }
-        }
+    // Caller buffers and semaphores may all change on a hit. They are uniform across
+    // workers, so refresh the common tables once per kernel, never per worker.
+    const std::array<uint32_t, ring_common_arg::Count> addresses = {
+        input.buffer()->address(),
+        intermed.buffer()->address(),
+        output.buffer()->address(),
+        static_cast<uint32_t>(semaphore.at(0).address()),
+        static_cast<uint32_t>(semaphore.at(1).address()),
+        static_cast<uint32_t>(semaphore.at(num_directions_per_link).address()),
+        barrier_semaphore.has_value() ? static_cast<uint32_t>(barrier_semaphore->address()) : 0,
+        penult_intermediate.has_value() ? penult_intermediate->buffer()->address() : 0,
+    };
+    auto& reader = GetCommonRuntimeArgs(program, reader_kernel_id);
+    auto& writer = GetCommonRuntimeArgs(program, writer_kernel_id);
+    for (size_t index = 0; index < addresses.size(); ++index) {
+        reader.at(index) = addresses[index];
+        writer.at(index) = addresses[index];
     }
 }
 
@@ -1537,10 +1512,10 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
 
                 // Reader RT args
                 std::vector<uint32_t> reader_rt_args = {
-                    input_tensor.buffer()->address(),         // input_tensor_address
-                    intermediate_tensor.buffer()->address(),  // intermediate_tensor_address
-                    output_tensor.buffer()->address(),        // output_tensor_address
-                    semaphore.at(0).address(),                // remote transfer sync semaphore
+                    input_tensor.buffer()->address(),                  // input_tensor_address
+                    intermediate_tensor.buffer()->address(),           // intermediate_tensor_address
+                    output_tensor.buffer()->address(),                 // output_tensor_address
+                    static_cast<uint32_t>(semaphore.at(0).address()),  // remote transfer sync semaphore
                     fwd_bwd_semaphore_address,
                     is_forward,                    // is_forward
                     is_first_device_in_direction,  // is_first_device_in_direction
@@ -1571,11 +1546,11 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
                     mesh_device->worker_core_from_logical_core(termination_master_logical_core);
 
                 std::vector<uint32_t> writer_rt_args = {
-                    intermediate_tensor.buffer()->address(),  // intermediate_tensor_address
-                    output_tensor.buffer()->address(),        // output_tensor_address
-                    virtual_core.x,                           // out_ready_sem_noc0_x
-                    virtual_core.y,                           // out_ready_sem_noc0_y
-                    semaphore.at(0).address(),                // remote transfer sync semaphore
+                    intermediate_tensor.buffer()->address(),           // intermediate_tensor_address
+                    output_tensor.buffer()->address(),                 // output_tensor_address
+                    virtual_core.x,                                    // out_ready_sem_noc0_x
+                    virtual_core.y,                                    // out_ready_sem_noc0_y
+                    static_cast<uint32_t>(semaphore.at(0).address()),  // remote transfer sync semaphore
                     fwd_bwd_semaphore_address,
                     opposite_core_coord.x,
                     opposite_core_coord.y,
@@ -1623,6 +1598,16 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
         }
     }
 
+    const std::vector<uint32_t> common_addresses = {
+        input_tensor.buffer()->address(),
+        intermediate_tensor.buffer()->address(),
+        output_tensor.buffer()->address(),
+        static_cast<uint32_t>(semaphore.at(0).address()),
+        barrier_semaphore.has_value() ? static_cast<uint32_t>(barrier_semaphore->address()) : 0,
+    };
+    tt::tt_metal::SetCommonRuntimeArgs(program, reader_kernel_id, common_addresses);
+    tt::tt_metal::SetCommonRuntimeArgs(program, writer_kernel_id, common_addresses);
+
     return {
         reader_kernel_id,
         writer_kernel_id,
@@ -1638,51 +1623,32 @@ void line_reduce_scatter_minimal_async_helper_override_runtime_arguments(
     tt::tt_metal::Program& program,
     const tt::tt_metal::KernelHandle reader_kernel_id,
     const tt::tt_metal::KernelHandle writer_kernel_id,
-    const std::vector<tt::tt_metal::CoreCoord>& all_cores,
-    uint32_t num_links,
-    uint32_t num_directions_per_link,
-    uint32_t num_workers_per_direction,
-    uint32_t num_mux_cores_per_direction_per_link,
-    uint32_t num_cores_per_link,
+    [[maybe_unused]] const std::vector<tt::tt_metal::CoreCoord>& all_cores,
+    [[maybe_unused]] uint32_t num_links,
+    [[maybe_unused]] uint32_t num_directions_per_link,
+    [[maybe_unused]] uint32_t num_workers_per_direction,
+    [[maybe_unused]] uint32_t num_mux_cores_per_direction_per_link,
+    [[maybe_unused]] uint32_t num_cores_per_link,
     [[maybe_unused]] uint32_t normalized_dim,
     const std::optional<tt::tt_metal::GlobalSemaphore>& barrier_semaphore,
     const std::vector<tt::tt_metal::GlobalSemaphore>& semaphore,
     const Tensor& input,
     const Tensor& intermed,
     const Tensor& output) {
-    // Resolve invocation-dependent addresses once, then patch the cached per-core argument views.
-    auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id);
-    auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id);
-    const auto input_address = input.buffer()->address();
-    const auto intermediate_address = intermed.buffer()->address();
-    const auto output_address = output.buffer()->address();
-    const auto barrier_address = barrier_semaphore.has_value() ? barrier_semaphore->address() : 0;
-    const auto semaphore_address = semaphore.at(0).address();
-    // update senders
-    for (uint32_t link = 0; link < num_links; link++) {
-        for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
-            for (uint32_t worker = 0; worker < num_workers_per_direction; worker++) {
-                uint32_t mux_core_offset = (link * num_cores_per_link) +
-                                           (dir * (num_mux_cores_per_direction_per_link + num_workers_per_direction));
-                CoreCoord core = all_cores[mux_core_offset + num_mux_cores_per_direction_per_link + worker];
-
-                // sender reader
-                auto& worker_reader_sender_runtime_args = reader_runtime_args[core.x][core.y];
-                worker_reader_sender_runtime_args[0] = input_address;
-                worker_reader_sender_runtime_args[1] = intermediate_address;
-                worker_reader_sender_runtime_args[2] = output_address;
-                worker_reader_sender_runtime_args[3] = semaphore_address;
-                // sender writer
-                auto& worker_writer_sender_runtime_args = writer_runtime_args[core.x][core.y];
-                worker_writer_sender_runtime_args[0] = intermediate_address;
-                worker_writer_sender_runtime_args[1] = output_address;
-                worker_writer_sender_runtime_args[4] = semaphore_address;
-
-                if (barrier_semaphore.has_value()) {
-                    worker_writer_sender_runtime_args[9] = barrier_address;
-                }
-            }
-        }
+    // The line schedule and local synchronization IDs are cache-keyed. Only these
+    // caller-owned addresses vary, and every worker uses the same values.
+    const std::array<uint32_t, line_common_arg::Count> addresses = {
+        input.buffer()->address(),
+        intermed.buffer()->address(),
+        output.buffer()->address(),
+        static_cast<uint32_t>(semaphore.at(0).address()),
+        barrier_semaphore.has_value() ? static_cast<uint32_t>(barrier_semaphore->address()) : 0,
+    };
+    auto& reader = GetCommonRuntimeArgs(program, reader_kernel_id);
+    auto& writer = GetCommonRuntimeArgs(program, writer_kernel_id);
+    for (size_t index = 0; index < addresses.size(); ++index) {
+        reader.at(index) = addresses[index];
+        writer.at(index) = addresses[index];
     }
 }
 
