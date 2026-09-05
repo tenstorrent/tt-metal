@@ -149,6 +149,24 @@ TEST(AxisRouteTopologyTest, Rings8x4) {
         });
 }
 
+TEST(AxisRouteTopologyTest, PlainFabric2DDerivesLineFromExpressMgd) {
+    MeshGraph mesh_graph(
+        tt::tt_metal::ClusterType::BLACKHOLE_GALAXY,
+        fixture_path("express_links_8x4_mesh_graph_descriptor.textproto"),
+        FabricConfig::FABRIC_2D);
+
+    EXPECT_FALSE(derive_express_ring_topology(mesh_graph, MeshId{0}).has_value());
+
+    const auto topo = derive_axis_topology(mesh_graph, MeshId{0}, 0);
+    EXPECT_EQ(topo.axis_dim, 0);
+    EXPECT_EQ(topo.axis_len, 8);
+    EXPECT_FALSE(topo.wraps);
+    EXPECT_TRUE(topo.leaf_runs.empty());
+    EXPECT_EQ(topo.forward_cycle, std::vector<std::vector<int>>({{0, 1, 2, 3, 4, 5, 6, 7}}));
+    EXPECT_EQ(topo.next_row(0, 7), 1);
+    EXPECT_EQ(topo.next_row(7, 0), 6);
+}
+
 // 16x4: LINE axis, span-4 chords 2<->5, 6<->9, 10<->13 and span-8 chords 0<->7, 8<->15. Single
 // spanning family -- note rows 1 and 14 are members despite owning no chord.
 TEST(AxisRouteTopologyTest, Rings16x4) {

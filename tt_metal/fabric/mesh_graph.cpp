@@ -501,33 +501,42 @@ void MeshGraph::initialize_from_mgd(
                 this->get_valid_connections(src_mesh_coord, mesh_coord_range, effective_fabric_type);
         }
 
-        // Layer declared express links on top of the fully-populated base grid. Each pattern expands to
-        // intra-mesh endpoint pairs, added as bidirectional edges with RoutingDirection::Z (so their
-        // physical channels occupy a bucket separate from the N/S/E/W grid and escape its plane
-        // trimming). Tiling wrap comes from the pattern, defaulting to the dimension's torus-ness in
-        // effective_fabric_type (TORUS_Y wraps dim 0, TORUS_X dim 1).
-        for (const auto& express : mesh_desc->express_links()) {
-            const uint32_t dim = express.dim_idx();
-            TT_FATAL(dim < 2, "MeshGraph: ExpressLink dim_idx {} out of range for 2D mesh (mesh M{})", dim, *mesh_id);
-            const bool along_rows = (dim == 0);
-            const uint32_t dim_len = mesh_shape[dim];
-            const uint32_t step = express.pattern().step();
-            TT_FATAL(step >= 2, "MeshGraph: ExpressLink step must be >= 2 (mesh M{})", *mesh_id);
-            TT_FATAL(
-                dim_len % step == 0,
-                "MeshGraph: ExpressLink step {} must divide dim {} length {} for uniform tiling (mesh M{})",
-                step,
-                dim,
-                dim_len,
-                *mesh_id);
-            const bool ring_wrap = express.wrap() != proto::TorusTopology::INVALID_TYPE
-                                       ? express.wrap() == proto::TorusTopology::RING
-                                   : along_rows ? has_flag(effective_fabric_type, FabricType::TORUS_Y)
-                                                : has_flag(effective_fabric_type, FabricType::TORUS_X);
-            for (const auto& [a, b] :
-                 expand_express_link_edges(mesh_shape, along_rows, express.pattern().start(), step, ring_wrap)) {
-                this->add_to_connectivity(mesh_id, a, mesh_id, b, RoutingDirection::Z);
-                this->add_to_connectivity(mesh_id, b, mesh_id, a, RoutingDirection::Z);
+        // A FabricConfig override selects the routing family as well as the base-grid shape. Patterned
+        // express links belong to the 2D torus configurations; explicit plain FABRIC_2D (and non-2D
+        // configurations) deliberately downgrades an express-capable MGD to its N/S/E/W mesh.
+        const bool enable_patterned_express_links =
+            !fabric_config.has_value() || *fabric_config == FabricConfig::FABRIC_2D_TORUS_X ||
+            *fabric_config == FabricConfig::FABRIC_2D_TORUS_Y || *fabric_config == FabricConfig::FABRIC_2D_TORUS_XY;
+        if (enable_patterned_express_links) {
+            // Layer declared express links on top of the fully-populated base grid. Each pattern expands to
+            // intra-mesh endpoint pairs, added as bidirectional edges with RoutingDirection::Z (so their
+            // physical channels occupy a bucket separate from the N/S/E/W grid and escape its plane
+            // trimming). Tiling wrap comes from the pattern, defaulting to the dimension's torus-ness in
+            // effective_fabric_type (TORUS_Y wraps dim 0, TORUS_X dim 1).
+            for (const auto& express : mesh_desc->express_links()) {
+                const uint32_t dim = express.dim_idx();
+                TT_FATAL(
+                    dim < 2, "MeshGraph: ExpressLink dim_idx {} out of range for 2D mesh (mesh M{})", dim, *mesh_id);
+                const bool along_rows = (dim == 0);
+                const uint32_t dim_len = mesh_shape[dim];
+                const uint32_t step = express.pattern().step();
+                TT_FATAL(step >= 2, "MeshGraph: ExpressLink step must be >= 2 (mesh M{})", *mesh_id);
+                TT_FATAL(
+                    dim_len % step == 0,
+                    "MeshGraph: ExpressLink step {} must divide dim {} length {} for uniform tiling (mesh M{})",
+                    step,
+                    dim,
+                    dim_len,
+                    *mesh_id);
+                const bool ring_wrap = express.wrap() != proto::TorusTopology::INVALID_TYPE
+                                           ? express.wrap() == proto::TorusTopology::RING
+                                       : along_rows ? has_flag(effective_fabric_type, FabricType::TORUS_Y)
+                                                    : has_flag(effective_fabric_type, FabricType::TORUS_X);
+                for (const auto& [a, b] :
+                     expand_express_link_edges(mesh_shape, along_rows, express.pattern().start(), step, ring_wrap)) {
+                    this->add_to_connectivity(mesh_id, a, mesh_id, b, RoutingDirection::Z);
+                    this->add_to_connectivity(mesh_id, b, mesh_id, a, RoutingDirection::Z);
+                }
             }
         }
 

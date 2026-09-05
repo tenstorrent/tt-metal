@@ -2543,7 +2543,7 @@ TEST(MeshGraphDescriptorTests, VectorReallocPreservesConnectionsByTypeLookup) {
         << "Dual MGD should retain FABRIC connections after emplace";
 }
 
-// express_links expands into the expected intra-mesh Z edges on the 8x4 [LINE, RING] descriptor.
+// express_links expands into the expected intra-mesh Z edges on the 8x4 [RING, RING] descriptor.
 TEST(MeshGraphDescriptorTests, ExpressLinks8x4) {
     const std::filesystem::path desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
@@ -2590,6 +2590,29 @@ TEST(MeshGraphDescriptorTests, ExpressLinks8x4) {
         }
     }
     EXPECT_EQ(z_directed, 8) << "expected exactly 4 bidirectional express edges (8 directed Z entries)";
+}
+
+TEST(MeshGraphDescriptorTests, PlainFabric2DDowngradesExpressMgdToMesh) {
+    const std::filesystem::path desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/express_links_8x4_mesh_graph_descriptor.textproto";
+
+    const tt::tt_fabric::MeshGraph mesh_graph(
+        tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, desc_path.string(), tt::tt_fabric::FabricConfig::FABRIC_2D);
+    const auto& m0 = mesh_graph.get_intra_mesh_connectivity().at(0);
+    ASSERT_EQ(m0.size(), 32u);
+
+    int z_directed = 0;
+    for (const auto& edges_by_destination : m0) {
+        for (const auto& [_, edge] : edges_by_destination) {
+            z_directed += edge.port_direction == tt::tt_fabric::RoutingDirection::Z ? 1 : 0;
+        }
+    }
+    EXPECT_EQ(z_directed, 0);
+    EXPECT_EQ(m0[8].count(20), 0u);  // the descriptor's row 2 <-> row 5 express chord is absent
+    EXPECT_EQ(m0[0].count(28), 0u);  // plain FABRIC_2D also removes the ordinary row 0 <-> row 7 wrap
+    EXPECT_EQ(m0[0].at(4).port_direction, tt::tt_fabric::RoutingDirection::S);
+    EXPECT_EQ(m0[0].at(1).port_direction, tt::tt_fabric::RoutingDirection::E);
 }
 
 // express_links (two ROW patterns) expand into 48 Z edges on the 32x4 [RING, RING] descriptor.
