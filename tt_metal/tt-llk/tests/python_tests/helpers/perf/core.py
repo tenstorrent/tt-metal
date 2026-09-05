@@ -423,23 +423,17 @@ def _assert_matches_catalog(frame: pd.DataFrame, base_name: str, label: str):
 
 
 def _run_id() -> str:
-    """The ROW_KEY component that identifies one CI run, re-runs included.
+    """The ROW_KEY component that identifies one published Parquet file.
 
-    "Re-run all/failed jobs" keeps ``GITHUB_RUN_ID`` and bumps
-    ``GITHUB_RUN_ATTEMPT``. Without the attempt, a re-run republishes a second,
-    different measurement under the same (test_name, commit_sha, arch, run_id) —
-    a colliding ROW_KEY. Attempt 1 stays bare so every row already archived keeps
-    the identity it was published with; every shard of one attempt still shares
-    one run_id, which is what the data team means by "one run".
-
-    Off CI there is no run id. The run tag is unique per invocation, so two local
-    runs of the same commit no longer collide the way the old constant "local" did.
+    One file is one run: the warehouse loader deletes every row already
+    carrying the incoming file's RUN_ID, then inserts the file, so two files
+    sharing a run_id do not merge. A workflow publishes one file per shard, and
+    the run tag already identifies the shard. The attempt is appended from
+    attempt 2 on, because the workflow builds the tag without it.
     """
-    run = os.environ.get("GITHUB_RUN_ID", "").strip()
-    if not run:
-        return TestConfig.perf_run_tag()
     attempt = os.environ.get("GITHUB_RUN_ATTEMPT", "1").strip() or "1"
-    return run if attempt == "1" else f"{run}-{attempt}"
+    tag = TestConfig.perf_run_tag()
+    return tag if attempt == "1" else f"{tag}-{attempt}"
 
 
 def _ci_provenance() -> dict:
@@ -451,7 +445,8 @@ def _ci_provenance() -> dict:
         "arch": os.environ.get("CHIP_ARCH", "unknown"),
         "run_id": _run_id(),
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "pipeline": "PR" if event == "pull_request" else "nightly",
+        # Lowercase, as the warehouse's RUNS.PIPELINE stores them.
+        "pipeline": "pr" if event == "pull_request" else "nightly",
         "pr_number": os.environ.get("PR_NUMBER") or None,
     }
 
@@ -1057,3 +1052,173 @@ def create_test_or_perf_config(
         functional_kwargs["boot_mode"] = boot_mode
 
     return TestConfig(**functional_kwargs)
+
+
+#  Merging a run's shards into one file per architecture.
+#  The warehouse loader is one file per run: it replays by RUN_ID, and RUNS
+#  carries a single ARCH and RUN_TS. CI produces ten shards on ten machines.
+
+RUN_ID_TEMPLATE = "{pipeline}-{date}-{workflow_run_id}-{arch}"
+
+# The architectures a run Parquet may claim. Anything else is a corrupt or
+# hand-edited file, which must not reach the warehouse.
+MERGE_ARCHES = ("wormhole", "blackhole", "quasar")
+
+
+def merged_run_id(*, pipeline, timestamp, workflow_run_id, arch):
+    """The run_id one merged file carries. Derived only from the rows.
+
+    No re-run attempt: one workflow run is one run whatever it took to finish,
+    so re-running failed shards and re-uploading replays over the partial night
+    instead of adding a second one beside it.
+    """
+    return RUN_ID_TEMPLATE.format(
+        pipeline=pipeline,
+        date=_date_of(timestamp),
+        workflow_run_id=workflow_run_id,
+        arch=arch,
+    )
+
+
+def _date_of(timestamp):
+    """``2026-09-01T03:53:29+00:00`` -> ``20260901``.
+
+    Falls back to the leading 10 characters if the value is not ISO-8601, so a
+    producer that changes format degrades to a readable id instead of raising.
+    """
+    try:
+        return datetime.fromisoformat(timestamp).strftime("%Y%m%d")
+    except (TypeError, ValueError):
+        return str(timestamp)[:10].replace("-", "")
+
+
+def workflow_run_id_of(run_id):
+    """The workflow run id inside a per-shard run_id.
+
+    ``core._run_id`` writes the run tag, whose first component is
+    ``github.run_id`` (``33465181016-wormhole-4`` -> ``33465181016``). Nights
+    archived before that change carry the bare workflow id, which is its own
+    first component, so one rule covers both.
+    """
+    return run_id.split("-", 1)[0]
+
+
+def group_by_arch(paths):
+    """Map arch -> its shard paths, reading arch from the rows, not the name.
+
+    The name is a filesystem convention and has been three different things
+    across the archive; the column is the same in every file ever written.
+    """
+    import pyarrow.parquet as pq
+
+    groups = {}
+    for path in sorted(paths):
+        values = set(pq.read_table(path, columns=["arch"]).column("arch").to_pylist())
+        if len(values) != 1:
+            raise ValueError(f"{path}: arch is not constant: {sorted(values)}")
+        arch = values.pop()
+        if arch not in MERGE_ARCHES:
+            raise ValueError(
+                f"{path}: unknown arch {arch!r}; expected one of {MERGE_ARCHES}"
+            )
+        groups.setdefault(arch, []).append(path)
+    return groups
+
+
+def merge_run(paths, out_dir, *, prefix="llk_perf_"):
+    """Merge shards into one Parquet per arch under ``out_dir``.
+
+    Returns a list of ``{"file", "run_id", "arch", "shards", "rows"}``, one per
+    architecture. Raises ValueError if a group's rows disagree on a run column
+    that merging does not unify.
+    """
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    os.makedirs(out_dir, exist_ok=True)
+    merged = []
+    for arch, group in sorted(group_by_arch(paths).items()):
+        tables = [pq.read_table(p) for p in group]
+        table = pa.concat_tables(tables, promote_options="permissive")
+
+        constant = {}
+        for column in ("commit_sha", "pipeline", "pr_number"):
+            values = {v for v in table.column(column).to_pylist() if v is not None}
+            if len(values) > 1:
+                raise ValueError(
+                    f"{arch}: {column} is not constant across shards: "
+                    f"{sorted(values)[:5]}"
+                )
+            constant[column] = values.pop() if values else None
+
+        # Every shard must come from the same workflow run. Two runs of one
+        # commit -- a scheduled night and a manual dispatch -- would otherwise
+        # merge under whichever shard happened to come first.
+        workflow_run_ids = {
+            workflow_run_id_of(r) for r in table.column("run_id").to_pylist()
+        }
+        if len(workflow_run_ids) > 1:
+            raise ValueError(
+                f"{arch}: shards come from {len(workflow_run_ids)} workflow runs: "
+                f"{sorted(workflow_run_ids)[:5]}"
+            )
+
+        earliest = min(t for t in table.column("timestamp").to_pylist() if t)
+        run_id = merged_run_id(
+            pipeline=constant["pipeline"],
+            timestamp=earliest,
+            workflow_run_id=workflow_run_ids.pop(),
+            arch=arch,
+        )
+
+        for column, value in (("run_id", run_id), ("timestamp", earliest)):
+            table = table.set_column(
+                table.schema.get_field_index(column),
+                column,
+                pa.array([value] * table.num_rows, type=pa.string()),
+            )
+
+        name = f"{prefix}{run_id}.parquet"
+        pq.write_table(table, os.path.join(out_dir, name), compression="zstd")
+        merged.append(
+            {
+                "file": name,
+                "run_id": run_id,
+                "arch": arch,
+                "shards": len(group),
+                "rows": table.num_rows,
+            }
+        )
+    return merged
+
+
+def merge_main(argv=None):
+    """CLI: merge every Parquet under --in-dir into one file per arch in --out-dir."""
+    import argparse
+    import sys
+
+    ap = argparse.ArgumentParser(description=merge_main.__doc__)
+    ap.add_argument(
+        "--in-dir", required=True, help="dir of downloaded per-shard artefacts"
+    )
+    ap.add_argument("--out-dir", required=True, help="dir to write the merged files to")
+    ap.add_argument("--prefix", default="llk_perf_", help="uploaded object name prefix")
+    a = ap.parse_args(argv)
+
+    paths = sorted(glob.glob(os.path.join(a.in_dir, "**", "*.parquet"), recursive=True))
+    if not paths:
+        print(f"merge: no Parquet under {a.in_dir!r}", file=sys.stderr)
+        return 1
+    try:
+        merged = merge_run(paths, a.out_dir, prefix=a.prefix)
+    except ValueError as e:
+        print(f"merge: {e}", file=sys.stderr)
+        return 1
+    for row in merged:
+        print(f"merge: {row['file']} <- {row['shards']} shard(s), {row['rows']} row(s)")
+    print(f"merge: {len(paths)} shard file(s) -> {len(merged)} run file(s)")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(merge_main())

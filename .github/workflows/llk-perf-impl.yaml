@@ -14,6 +14,21 @@ on:
         required: false
         default: true
         type: boolean
+      upload-to-warehouse:
+        description: "Upload the run's Parquet to the perf warehouse over SFTP"
+        required: false
+        default: false
+        type: boolean
+      only-group:
+        # For testing a change to this workflow. The perf suite is split into
+        # five groups per architecture, so a full manual run occupies ten perf
+        # machines for two hours; naming one group runs that group alone, on
+        # one machine. Empty -- the default, and what a scheduled run gets --
+        # runs every group.
+        description: "Run only this split group (1-5). Empty runs every group."
+        required: false
+        default: ""
+        type: string
 
 permissions:
   checks: write
@@ -34,7 +49,8 @@ jobs:
     runs-on: ubuntu-slim
     needs: [build-images]
     outputs:
-      matrix: ${{ steps.build-matrix.outputs.matrix }}
+      # An unset trim step yields "", which is falsy, so the full matrix wins.
+      matrix: ${{ steps.trim.outputs.matrix || steps.build-matrix.outputs.matrix }}
     env:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/llk_perf_tests.yaml
     steps:
@@ -80,6 +96,21 @@ jobs:
             ${{ env.TESTS_YAML_PATH }} \
             "$ENABLED_SKUS" \
             ./.github/sku_config.yaml
+      - name: Keep only one split group
+        id: trim
+        if: ${{ inputs.only-group != '' }}
+        env:
+          MATRIX: ${{ steps.build-matrix.outputs.matrix }}
+          ONLY_GROUP: ${{ inputs.only-group }}
+        run: |
+          FILTER='import json, os, sys
+          rows = json.loads(os.environ["MATRIX"])
+          group = os.environ["ONLY_GROUP"]
+          keep = [r for r in rows if str(r.get("split_group")) == group]
+          if not keep:
+              sys.exit("no matrix row with split_group=" + group)
+          print("matrix=" + json.dumps(keep))'
+          python3 -c "$FILTER" >> "$GITHUB_OUTPUT"
 
   compile-quasar-perf:
     if: ${{ inputs.architecture == 'all' || inputs.architecture == 'quasar' }}
@@ -126,13 +157,6 @@ jobs:
             CHIP_ARCH=unknown
           fi
           echo "CHIP_ARCH=$CHIP_ARCH" >> "$GITHUB_ENV"
-          # One name for everything this shard produces: the report directory
-          # perf_data/runs/<tag> and the Parquet inside it. Must be unique per
-          # job, because pytest-split divides by test item rather than by
-          # module, so one module's variants land in several shards and their
-          # reports would collide the moment the artefacts are brought together.
-          # It carries the workflow run id, so it is also unique across nights --
-          # which matters once these files are archived into one directory.
           echo "PERF_RUN_TAG=${{ github.run_id }}-$CHIP_ARCH-${{ strategy.job-index }}" >> "$GITHUB_ENV"
       - name: Run tests
         shell: bash
@@ -163,9 +187,6 @@ jobs:
         if: always()
         with:
           name: perf-junit-report-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}
-          # Match the merged report, the compile report, the BH per-slice
-          # `-<tname>-run` reports, and the WH `-run` report so that per-test
-          # reports are still uploaded even when a timeout prevents the merge.
           path: |
             ${{ env.LLK_PATH }}/tests/python_tests/pytest-report-*-${{ matrix.test-group.split_group }}.xml
             ${{ env.LLK_PATH }}/tests/python_tests/pytest-report-*-${{ matrix.test-group.split_group }}-*-run.xml
@@ -176,14 +197,62 @@ jobs:
         uses: mikepenz/action-junit-report@v5
         if: always()
         with:
-          # Read the per-phase / per-slice result reports directly (compile +
-          # run for WH, per-slice run for BH) rather than only the merged
-          # report, so results are still published if a shard times out before
-          # the merge step. The three patterns are disjoint and exclude the
-          # merged report, so no test is counted twice.
           report_paths: |
             ${{ env.LLK_PATH }}/tests/python_tests/pytest-report-*-${{ matrix.test-group.split_group }}-compile.xml
             ${{ env.LLK_PATH }}/tests/python_tests/pytest-report-*-${{ matrix.test-group.split_group }}-run.xml
             ${{ env.LLK_PATH }}/tests/python_tests/pytest-report-*-${{ matrix.test-group.split_group }}-*-run.xml
           include_passed: true
           annotate_only: true
+
+  upload-perf-data:
+    name: "Upload perf data to the warehouse"
+    needs: [build-images, llk-perf-exec]
+    # always(): a night that lost shards still produced the ones that finished,
+    # and partial coverage is real data. Publishing it is safe because the
+    # merged run_id carries no attempt, so re-running the failed shards and
+    # re-uploading replays over the partial night instead of adding a second.
+    if: ${{ always() && inputs.upload-to-warehouse }}
+    runs-on: ubuntu-latest
+    # The merge lives in helpers.perf.core, whose imports reach the device
+    # libraries, so it needs the LLK python env. The test image has it.
+    container:
+      image: ${{ needs.build-images.outputs.llk-ci-tag }}
+      options: "--rm"
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          fetch-depth: 1
+      - name: Download this run's perf data
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: perf-data-*
+          path: perf-data
+      - name: Merge the run's shards into one file per architecture
+        working-directory: ${{ env.LLK_PATH }}/tests/python_tests
+        env:
+          PYTHONPATH: .
+          # Required, and not by the merge: importing anything under helpers
+          # runs helpers/device.py, whose module scope calls
+          # get_chip_architecture(), which probes a device when CHIP_ARCH is
+          # unset. This runner has none. The value is arbitrary -- the merge
+          # reads each file's own arch column and stamps no new rows -- but it
+          # must be one ChipArchitecture accepts.
+          CHIP_ARCH: wormhole
+        run: |
+          python3 -m helpers.perf.core \
+            --in-dir "$GITHUB_WORKSPACE/perf-data" \
+            --out-dir "$GITHUB_WORKSPACE/generated/llk_perf"
+          ls -l "$GITHUB_WORKSPACE/generated/llk_perf"
+      # The LLK test image has the python env but no ssh client, and the
+      # upload action shells out to sftp.
+      - name: Install the SFTP client
+        run: apt-get update -qq && apt-get install -y -qq openssh-client
+      - name: Upload perf data
+        uses: ./.github/actions/upload-data-via-sftp
+        with:
+          ssh-private-key: ${{ secrets.SFTP_LLK_PERF_WRITER_KEY }}
+          sftp-batchfile: .github/actions/upload-data-via-sftp/llk_perf_batchfile.txt
+          username: "llk-perf-run-writer"
+          hostname: "s-dbd4b8a190fa40a4b.server.transfer.us-east-2.amazonaws.com"

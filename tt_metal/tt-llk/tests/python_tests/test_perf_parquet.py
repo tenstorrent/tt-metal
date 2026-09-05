@@ -41,7 +41,7 @@ _RUN_PROV = dict(
     arch="wormhole",
     run_id="42",
     timestamp="2026-01-01T00:00:00",
-    pipeline="PR",
+    pipeline="pr",
     pr_number="7",
 )
 
