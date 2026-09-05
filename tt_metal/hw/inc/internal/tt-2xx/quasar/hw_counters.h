@@ -13,31 +13,25 @@
 // the PerfCounterType enum; each NEO's math TRISC reaches its own units through the local-regs window.
 
 // The tt-1xx register names in quasar/tensix.h carry Blackhole offsets that are wrong here; alias
-// from the generated tensix_neo_reg.h offsets instead.
-#define RISCV_DEBUG_REG_PERF_CNT_INSTRN_THREAD0 \
-    (LOCAL_REGS_BASE + NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_PERF_CNT_INSTRN_THREAD0_REG_OFFSET)
-#define RISCV_DEBUG_REG_PERF_CNT_TDMA_UNPACK0 \
-    (LOCAL_REGS_BASE + NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_PERF_CNT_TDMA_UNPACK0_REG_OFFSET)
-#define RISCV_DEBUG_REG_PERF_CNT_FPU0 (LOCAL_REGS_BASE + NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_PERF_CNT_FPU0_REG_OFFSET)
-#define RISCV_DEBUG_REG_PERF_CNT_TDMA_PACK0 \
-    (LOCAL_REGS_BASE + NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_PERF_CNT_TDMA_PACK0_REG_OFFSET)
+// from the generated tensix_neo_reg.h instead. Addresses are NEO0's absolute ones: DM0 reads all
+// four NEOs, and NEO n sits QUASAR_NEO_REG_STRIDE further up.
+#define QUASAR_NEO_REG_STRIDE                                             \
+    (NEO_REGS_1__LOCAL_REGS_DEBUG_REGS_PERF_CNT_INSTRN_THREAD0_REG_ADDR - \
+     NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_PERF_CNT_INSTRN_THREAD0_REG_ADDR)
+#define RISCV_DEBUG_REG_PERF_CNT_INSTRN_THREAD0 NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_PERF_CNT_INSTRN_THREAD0_REG_ADDR
+#define RISCV_DEBUG_REG_PERF_CNT_TDMA_UNPACK0 NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_PERF_CNT_TDMA_UNPACK0_REG_ADDR
+#define RISCV_DEBUG_REG_PERF_CNT_FPU0 NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_PERF_CNT_FPU0_REG_ADDR
+#define RISCV_DEBUG_REG_PERF_CNT_TDMA_PACK0 NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_PERF_CNT_TDMA_PACK0_REG_ADDR
 #define RISCV_DEBUG_REG_PERF_CNT_OUT_L_INSTRN_THREAD \
-    (LOCAL_REGS_BASE + NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_PERF_CNT_OUT_L_INSTRN_THREAD_REG_OFFSET)
-#define RISCV_DEBUG_REG_PERF_CNT_OUT_L_TDMA_UNPACK \
-    (LOCAL_REGS_BASE + NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_PERF_CNT_OUT_L_TDMA_UNPACK_REG_OFFSET)
-#define RISCV_DEBUG_REG_PERF_CNT_OUT_L_TDMA_PACK \
-    (LOCAL_REGS_BASE + NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_PERF_CNT_OUT_L_TDMA_PACK_REG_OFFSET)
-#define RISCV_DEBUG_REG_PERF_CNT_OUT_L_FPU \
-    (LOCAL_REGS_BASE + NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_PERF_CNT_OUT_L_FPU_REG_OFFSET)
+    NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_PERF_CNT_OUT_L_INSTRN_THREAD_REG_ADDR
+#define RISCV_DEBUG_REG_PERF_CNT_OUT_L_TDMA_UNPACK NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_PERF_CNT_OUT_L_TDMA_UNPACK_REG_ADDR
+#define RISCV_DEBUG_REG_PERF_CNT_OUT_L_TDMA_PACK NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_PERF_CNT_OUT_L_TDMA_PACK_REG_ADDR
+#define RISCV_DEBUG_REG_PERF_CNT_OUT_L_FPU NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_PERF_CNT_OUT_L_FPU_REG_ADDR
 
 // l1_client: one clear-on-read CSR behind a subport*8+event mux (subports 0-3 TRISC, 4 THCON,
 // 5-24 unpack, 25-36 pack; events 0 unused, 1 SBank pop, 2-6 stall/work/pending carries, 7 order FIFO active).
-#define RISCV_DEBUG_REG_QUASAR_L1_CLIENT_PERF_CTRL                                  \
-    (LOCAL_REGS_BASE + (NEO_REGS_0__LOCAL_REGS_L1_CLIENT_GROUP_PERF_CTRL_REG_ADDR - \
-                        NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_PERF_CNT_INSTRN_THREAD0_REG_ADDR))
-#define RISCV_DEBUG_REG_QUASAR_L1_CLIENT_PERF_CNT                                  \
-    (LOCAL_REGS_BASE + (NEO_REGS_0__LOCAL_REGS_L1_CLIENT_GROUP_PERF_CNT_REG_ADDR - \
-                        NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_PERF_CNT_INSTRN_THREAD0_REG_ADDR))
+#define RISCV_DEBUG_REG_QUASAR_L1_CLIENT_PERF_CTRL NEO_REGS_0__LOCAL_REGS_L1_CLIENT_GROUP_PERF_CTRL_REG_ADDR
+#define RISCV_DEBUG_REG_QUASAR_L1_CLIENT_PERF_CNT NEO_REGS_0__LOCAL_REGS_L1_CLIENT_GROUP_PERF_CNT_REG_ADDR
 #define QUASAR_L1_CLIENT_PERF_CTRL_ENABLE 0x1u
 #define QUASAR_L1_CLIENT_PERF_SUBPORT_SHIFT 4
 #define QUASAR_L1_CLIENT_PERF_EVENT_SHIFT 12
@@ -45,14 +39,14 @@
 #define QUASAR_L1_CLIENT_NUM_EVENTS 8
 
 // FPU unit: bank 0 grant is tied, bank 1 grant is fpu-or-sfpu valid; same wiring as Blackhole.
-constexpr std::array<std::pair<PerfCounterType, uint16_t>, 3> fpu_counters = {
+constexpr std::array<std::pair<PerfCounterType, uint16_t>, 3> fpu_counters PERF_COUNTER_TABLE = {
     {{PerfCounterType::FPU_COUNTER, 0}, {PerfCounterType::SFPU_COUNTER, 1}, {PerfCounterType::MATH_COUNTER, 257}}};
 constexpr std::size_t NUM_FPU_COUNTERS = 3;
 
 // TDMA_UNPACK unit: 11 banks. Sels 2/256/257 are dead on A0 (fidelity logic hardwired off) and
 // sel 258 duplicates sel 3, so they are not captured. Quasar runs 3 unpackers per thread: sel 9 is
 // unpacker2/thread0 and sel 10 is unpacker0/thread1 (the Blackhole names do not carry over).
-constexpr std::array<std::pair<PerfCounterType, uint16_t>, 18> unpack_counters = {
+constexpr std::array<std::pair<PerfCounterType, uint16_t>, 18> unpack_counters PERF_COUNTER_TABLE = {
     {{PerfCounterType::MATH_SRC_DATA_READY, 0},
      {PerfCounterType::MATH_NOT_D2S_STALLED, 1},
      {PerfCounterType::MATH_INSTRN_STARTED, 3},
@@ -74,7 +68,7 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 18> unpack_counters =
 constexpr std::size_t NUM_UNPACK_COUNTERS = 18;
 
 // TDMA_PACK shares the 21-slice readout with unpack: pack is slices 11-18, 12-14 and 17 tied on A0.
-constexpr std::array<std::pair<PerfCounterType, uint16_t>, 5> pack_counters = {
+constexpr std::array<std::pair<PerfCounterType, uint16_t>, 5> pack_counters PERF_COUNTER_TABLE = {
     {{PerfCounterType::PACKER_DEST_READ_AVAILABLE, 11},
      {PerfCounterType::PACKER_BUSY, 18},
      {PerfCounterType::DEST_READ_GRANTED_0, 267},
@@ -85,7 +79,7 @@ constexpr std::size_t NUM_PACK_COUNTERS = 5;
 // INSTRN readout: sel = class*4+thread (cfg,sync,thcon,xsearch,instissue,math,unpack,pack), 32-35
 // per-thread any-stall, 36-50 thread-ORed backend-stage stall conditions (sampled downstream of the
 // ibuffer, so they can exceed the any-stall counts); grants (sel >= 256) = the thread's ibuffer dequeues.
-constexpr std::array<std::pair<PerfCounterType, uint16_t>, 55> instrn_counters = {
+constexpr std::array<std::pair<PerfCounterType, uint16_t>, 55> instrn_counters PERF_COUNTER_TABLE = {
     {{PerfCounterType::CFG_INSTRN_AVAILABLE_0, 0},
      {PerfCounterType::CFG_INSTRN_AVAILABLE_1, 1},
      {PerfCounterType::CFG_INSTRN_AVAILABLE_2, 2},

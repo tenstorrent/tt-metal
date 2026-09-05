@@ -134,14 +134,6 @@ static uint32_t quasar_perf_counter_mode(uint32_t mode) {
         "TT_METAL_PROFILE_PERF_COUNTERS={} selects perf counter groups that do not exist on Quasar; valid bits are "
         "FPU(1)|PACK(2)|UNPACK(4)|INSTRN(32), 'all' = 39",
         mode);
-    if (mode == quasar_groups) {
-        // 81 records fill 243 of the 250 profiler slots, and Quasar TRISCs cannot flush to DRAM mid-readout.
-        log_warning(
-            tt::LogBuildKernels,
-            "TT_METAL_PROFILE_PERF_COUNTERS=39 captures all Quasar counter groups in one pass, close to the profiler "
-            "buffer budget; if the runtime dropped-markers warning fires, split the capture into masks 32 (INSTRN) and "
-            "7 (FPU|PACK|UNPACK).");
-    }
     return mode;
 }
 
@@ -159,13 +151,6 @@ static std::string quasar_l1_client_defines(const tt::llrt::RunTimeOptions& rtop
         "events",
         sel);
     std::string defines = "-DPROFILE_PERF_COUNTERS_L1_SEL=" + std::to_string(sel) + " ";
-    if (rtoptions.get_profiler_perf_counter_l1_sel_per_neo()) {
-        TT_FATAL(
-            sel + 3 < num_selections,
-            "TT_METAL_PROFILE_PERF_COUNTERS_L1_SEL={} leaves no room for the per-NEO stride (needs sel+3 < 296)",
-            sel);
-        defines += "-DPROFILE_PERF_COUNTERS_L1_SEL_PER_NEO ";
-    }
     return defines;
 }
 
