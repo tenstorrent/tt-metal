@@ -139,7 +139,7 @@ bundle is missing/incomplete). It:
 6. Re-emits `blitz_decode_pipeline_rank_binding_single_pod_ci.yaml`
    from the corrected slice yaml.
 7. Copies the rankfile to a hyphen-free path
-   (`/var/tmp/single_pod_rankfile`) — OpenMPI 5.0.7's
+   (`/var/tmp/single_pod_rankfile`) — OpenMPI 5.0.10's
    `--map-by rankfile:file=PATH` parser rejects paths containing `-`.
 8. Resets chips on every host (calls `reset_chips.sh`). The discovery
    probes in steps 4 and 5 open devices and leave stale FW/lock state
