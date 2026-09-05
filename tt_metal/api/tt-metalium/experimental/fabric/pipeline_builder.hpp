@@ -47,6 +47,8 @@ struct ResolvedEdge {
     uint32_t exit_col = 0;
     uint32_t entry_row = 0;  ///< chip in dst's submesh that receives from src
     uint32_t entry_col = 0;
+    std::optional<uint32_t> exit_core_slot;
+    std::optional<uint32_t> entry_core_slot;
 };
 
 /// Result returned to Python after topology-based graph layout resolution.
@@ -60,13 +62,15 @@ struct GraphLayoutResult {
     /// One entry per input edge (same order), filled with discovered physical coords.
     std::vector<ResolvedEdge> resolved_edges;
 
-    /// Unclaimed chip in stage-0's submesh used as the H2D entry.
+    /// Chip and abstract pipeline-core slot used for H2D in stage 0.
     uint32_t h2d_entry_row = 0;
     uint32_t h2d_entry_col = 0;
+    std::optional<uint32_t> h2d_core_slot;
 
-    /// Unclaimed chip in stage-0's submesh used as the D2H exit.
+    /// Chip and abstract pipeline-core slot used for D2H in stage 0.
     uint32_t d2h_exit_row = 0;
     uint32_t d2h_exit_col = 0;
+    std::optional<uint32_t> d2h_core_slot;
 };
 
 /// Auto-discover the physical layout of a pipeline graph.
@@ -88,12 +92,19 @@ struct GraphLayoutResult {
 ///                      different mesh just because ethernet connectivity allows it.
 ///                      Nodes absent from the map are unconstrained.  An empty map
 ///                      disables the shape filter entirely (legacy behavior).
+/// @param node_pipeline_core_counts Optional per-node pipeline endpoint capacity on
+///                      each chip. When non-empty, every node must be present and the
+///                      resolver jointly selects submeshes, links, endpoint chips, and
+///                      smallest-free abstract core slots. An empty map preserves the
+///                      legacy link-selection and host-placement behavior.
 /// @returns             GraphLayoutResult with physical coords for every edge and
-///                      unclaimed H2D/D2H chip coords in stage-0's submesh.
+///                      H2D/D2H chip coords in stage-0's submesh. Core slots are set only
+///                      when node_pipeline_core_counts is supplied.
 GraphLayoutResult resolve_graph_layout(
     const std::vector<std::string>& nodes,
     const std::vector<EdgeInputTuple>& edges,
     const std::vector<std::vector<ChipTuple>>& submesh_chips,
-    const std::map<std::string, uint32_t>& node_chip_counts = {});
+    const std::map<std::string, uint32_t>& node_chip_counts = {},
+    const std::map<std::string, uint32_t>& node_pipeline_core_counts = {});
 
 }  // namespace tt::tt_fabric
