@@ -5,7 +5,9 @@
 Used only when num_devices > 1. DRAM-sharded matmul cfgs, prefill progcfgs,
 mesh shard/replicate, FP8 dequant, HF weight reorder for per-device sharding.
 """
+
 import math
+import os
 
 import torch
 
@@ -18,6 +20,12 @@ DRAM_CORES = 8
 DRAM_GRID = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(DRAM_CORES - 1, 0))})
 
 
+# Output-subblock ceilings on out_subblock_h * out_subblock_w, set by the DST register budget: an fp32
+# destination tile takes two half-DST slots, so enabling fp32_dest_acc_en halves how many fit.
+DST_TILES = 8
+DST_TILES_FP32_ACC = 4
+
+
 # Compute kernel configs
 COMPUTE_HIFI2 = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -25,6 +33,187 @@ COMPUTE_HIFI2 = ttnn.WormholeComputeKernelConfig(
     fp32_dest_acc_en=True,
     packer_l1_acc=True,
 )
+
+# Same fidelity, fp32 destination accumulation OFF. Used ONLY by the GDN prefill in-projection (see
+# create_prefill_kpass1_matmul_program_config). Turning fp32 dest acc off does two things for that
+# matmul: it halves the intermediate CB and raises the output-subblock ceiling
+# from 4 to 8. Both are what make a ONE-K-PASS blocking (out_block_w ==
+# on, every one-pass variant is rejected with "circular buffers grow to 1524288/1615808/1798848 B
+# beyond max L1 size of 1499136 B".
+#
+# MEASURED (N150, M=2048 K=4096, DEVICE KERNEL DURATION; tests/perf/test_gdn_inproj_sweep.py):
+#     N=6912 cols=8 sub_w=3 blk_w=9  fp32_acc ON   3 K-passes  1493us   <- previous config
+#     N=6176 cols=8 sub_w=5 blk_w=25 fp32_acc OFF  1 K-pass    1255us   -16.0%
+# Accuracy cost is small but real: PCC vs fp32 torch 0.99997 -> 0.99992.
+# Deliberately a SEPARATE constant, not a change to COMPUTE_HIFI2, which is
+# MLP down-proj and both attention projections, which were tuned with fp32 dest accumulation on and
+# are not covered by the sweep above.
+COMPUTE_HIFI2_NO_FP32_ACC = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.HiFi2,
+    math_approx_mode=True,
+    fp32_dest_acc_en=False,
+    packer_l1_acc=True,
+)
+
+
+# LoFi + no fp32 dest acc, for the two attention prefill matmuls on Wormhole. Paired with
+# create_prefill_kpass1_matmul_program_config, exactly like COMPUTE_HIFI2_NO_FP32_ACC -- the
+# one-K-pass blocking requires fp32_dest_acc_en=False.
+#
+# LoFi is free here because both shapes take a BFLOAT8_B weight, whose 8-bit mantissa already
+# dominates the product's error, so HiFi2's ~2x math passes were paying for precision the operands
+# cannot represent. MEASURED (N300, M=2048, one K pass, tests/perf/test_all_matmuls_sweep.py):
+#     qkv 2048x4096x5120  1007.8 -> 887.3us  -12.0%   pcc 0.99992 -> 0.99985
+#     wo  2048x2048x4096   402.6 -> 328.9us  -18.3%   pcc 0.99987 -> 0.99981
+#
+# Kept SEPARATE from COMPUTE_HIFI2_NO_FP32_ACC rather than changing it: that constant is also the
+# GDN in-proj's, tuned at HiFi2 and not covered by this sweep.
+COMPUTE_LOFI_NO_FP32_ACC = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.LoFi,
+    math_approx_mode=True,
+    fp32_dest_acc_en=False,
+    packer_l1_acc=True,
+)
+
+
+def sdpa_bf8_enabled(args):
+    """QWEN_SDPA_BF8: bf8 Q/K/V + bf8 paged KV cache for chunked-prefill SDPA (faster, slightly
+    lower precision). Single source of truth for both attention/tp.py's TPAttention._sdpa_bf8 and
+    model.py's allocate_kv_caches — they must agree, since the cache dtype the KV is filled into has
+    to match what forward_prefill_paged casts K/V to before the fill.
+
+    Default ON for Wormhole N300 only. MEASURED (device kernel duration, N300, single full-attention
+    decoder layer, S=2048, Qwen3.5-9B, on top of the kpass1 matmul + fused-qk-norm changes above):
+        SDPA                    770us -> 494us   -36%
+        wo_proj matmul         515us -> 404us   -21.6%  (cascades: attn output narrows to bf8 too)
+        PagedFillCache x2      19+19us -> 11+10us
+        NLPConcatHeads           64us ->   41us
+        new Q/K/V typecast x3        -> +70us   (the cost of casting into this path)
+    Net effect on that layer's total device time: -600us or so, stacking with the other WH-only
+    fixes to a combined 12,457us -> 10,909us (-12.4%) for this profile.
+
+    Off by default everywhere else (unvalidated on N150/T3K/P150x4/Blackhole from this host — the
+    model_config.py comment this replaces called it out explicitly: "validate PCC at long ctx").
+
+    The env var still overrides in EITHER direction if set: QWEN_SDPA_BF8=0 forces it off on N300,
+    QWEN_SDPA_BF8=1 forces it on anywhere else (at the user's own risk/validation).
+
+    ATTEMPTED AND REVERTED for the 27B at T3K TP=8 (2026-08-19). Prefill validated fine and the wins
+    were large (below), but a bf8 cache BREAKS EVERY DECODE PATH:
+        TT_FATAL: Input and cache tensors must have same dtype!
+    5 of 20 test_model_tp cases failed -- contract, decode_batched[B8], decode_batched[B32],
+    long_prefill, prefill_paged_slots[B8] -- i.e. every case that decodes after a prefill.
+    ROOT CAUSE: the comment at attention/tp.py's paged_update_cache call claims the op "takes
+    bf16/fp32 and casts to bf8 cache". It does NOT -- paged_update_cache enforces input.dtype ==
+    cache.dtype, unlike paged_fill_cache (which accepts a bf8 cache with any input dtype, and is why
+    PREFILL worked). Enabling this needs the decode path to cast K/V to bf8 before the update, which
+    costs 2 typecasts per layer per token in the decode hot path and reduces decode precision -- so it
+    needs its own measurement and gate, not just this flag.
+    NOTE the 64k demo PASSED with this on, because it exercises prefill + traced decode through a path
+    that did not hit the failing update; module tests passed too. Only test_model_tp caught it.
+
+    WHAT IT WAS WORTH, once the decode blocker is fixed (all MEASURED at T3K TP=8, 27B).
+    The N300 clause is left exactly as it was so the 9B's measured behaviour is byte-identical.
+    MEASURED (T3K TP=8, 27B, layer3_fullattn, seq 2048):
+        SDPA                    455 -> 413us
+        PagedFillCache x2      11+11 -> 6+6us
+        new K/V/Q typecasts          -> +27us
+        block                  3,476 -> 3,409us
+    That understates it badly, because at seq 2048 the cache is nearly empty. The real wins are
+    (a) MEMORY -- 256k KV goes ~4.3GB -> ~2.15GB per device, and (b) DECODE, which reads the whole
+    cache every token: MEASURED at 64k, 16.41 -> 17.48 tok/s (+6.5%) with TTFT 22.72 -> 20.94s.
+    (c) and it UNBLOCKS the bf8 attention_norm gather -- paged_fill_cache asserts
+        (input==FP32 || input==BF16 || cache==BFP8 || cache==BFP4), so a bf8 cache satisfies it
+        whatever the K/V input dtype is. That gather is worth a further -443us plus -149us on the
+        qkv matmul that inherits the bf8 in0 (see layer.py). It is the single largest win of the day
+        and it is downstream of this flag.
+    Long-context gate: test_demo_text[traced_64k] passes with content checks (needs
+    --timeout=1800; pytest.ini's 300s default is too short for it).
+    """
+    env = os.environ.get("QWEN_SDPA_BF8")
+    if env is not None:
+        return env == "1"
+    return not is_blackhole() and getattr(args, "device_name", None) == "N300"
+
+
+def wh_9b_n300(args):
+    """True only for Qwen3.5-9B on a Wormhole N300 -- the exact configuration the DECODE
+    optimizations below were measured and PCC-validated on.
+
+    Single source of truth for the scope of decode changes that were all measured on this one
+    config and are unvalidated anywhere else:
+      * ``TPAttention._make_heads_decode``'s ``skip_v_reshard`` (v goes straight from the head split
+        into the paged-cache write)
+      * ``model_config.kv_cache_write_{k,v}_shard_cfg`` + ``kv_cache_write_fused_enabled``
+        (paged_fused_update_cache on disjoint K/V grids)
+      * the fused sigmoid-multiply attention gate in ``TPAttention.forward_decode``
+      * ``mlp_w1/w3_decode_1d_progcfg``'s num_cores=56 + fp32_dest_acc_en=False, paired with
+        ``Qwen36MLP.compute_kernel_config_gateup_decode``
+      * ``rope_permuted_enabled`` below (permuted-head_dim full-width RoPE)
+      * ``emb_decode_memcfg`` (width-sharded L1 token embedding on a tile of indices)
+
+    Three conditions, each load-bearing:
+      * ``not is_blackhole()`` -- Blackhole has 1.84x the L1 and a taller grid, takes a different
+        pad-first KV path (_WH_KV_PAD_NOTE) and a fused AGMM prefill path; every core count and
+        blocking here was tuned against WH's 8x8 grid.
+      * ``dim <= 4096`` -- the 9B. The 27B (dim 5120) has different per-device widths (its
+        hidden_dim/tp is 2176, not 6144), so the swept core counts do not transfer, and it runs at
+        TP=8 on T3K where the CCL/grid arithmetic differs. Gate on dim rather than model_name because
+        HF_MODEL is often a hashed snapshot directory -- same reason ``_decode_tile_opt`` and
+        ``_ab_gap_scoped`` do it this way.
+      * ``device_name == "N300"`` -- 2-device Wormhole. The KV-write grid split needs 2*B/cols rows of
+        worker grid, and the batch-derived shard grids were only checked against this mesh; N150
+        (TP=1) never reaches the TP path at all and T3K (TP=8) re-shapes every one of these grids.
+
+    Outside this scope every one of these falls back to the previously shipped behavior.
+    """
+    return not is_blackhole() and getattr(args, "dim", 0) <= 4096 and getattr(args, "device_name", None) == "N300"
+
+
+def wh_9b_n300_vision(args):
+    """``wh_9b_n300`` for VISION args (VisionModelArgs), where ``args.dim`` is the wrong field.
+
+    VisionModelArgs sets ``dim`` to ``hf_config.vision_config.hidden_size`` -- 1152 on BOTH the 9B
+    and the 27B -- so wh_9b_n300's ``dim <= 4096`` test passes for either model and cannot
+    discriminate them. The text hidden size can: 4096 on the 9B, 5120 on the 27B. Read it from
+    hf_config so this works whichever args object the caller holds.
+
+    Same two other conditions as wh_9b_n300, and the same meaning: outside this scope the vision
+    tower keeps its previously shipped behavior.
+    """
+    if is_blackhole() or getattr(args, "device_name", None) != "N300":
+        return False
+    hf = getattr(args, "hf_config", None)
+    text_cfg = getattr(hf, "text_config", None) if hf is not None else None
+    text_dim = getattr(text_cfg, "hidden_size", None)
+    if text_dim is None:
+        # No text_config to check -- refuse rather than guess, so an unseen shape
+        # falls back to shipped behavior instead of silently enabling a 9B-only path.
+        return False
+    return text_dim <= 4096
+
+
+def rope_permuted_enabled(args):
+    """Permuted-head_dim full-width RoPE (attention/rope_tp.py's rope_channel_perm has the
+    derivation). Reorders head_dim so ``rotary_embedding_hf``'s native full-width rotate-half
+    pairing coincides with HF's partial one, collapsing the partial-rope slice/transpose/concat
+    chain into one call. The permutation is folded into q_proj/k_proj/q_norm/k_norm at load time
+    (attention/tp.py's load_attention_weights_tp), so it changes the WEIGHTS, not just an op
+    sequence -- the ".rp.<hash>" cache tag there (content hash of the source weight +
+    rope_tp.ROPE_PERM_VERSION) keeps the two variants from ever aliasing on disk, and self-
+    invalidates if either the checkpoint weights or the permutation construction code changes.
+
+    ON for Wormhole 9B N300 (wh_9b_n300). No env var: this is the shipping path on that config,
+    plus the geometric precondition that rope_head_dim < head_dim (Qwen3.5's partial rotary --
+    with no unrotated tail to skip, the "partial" chain is already one op and there is nothing
+    to collapse). Off everywhere else (unvalidated on N150/T3K/P150x4/Blackhole and on the 27B).
+
+    MEASURED on a whole decode layer (tests/perf/test_attn_rope_permuted_sweep.py, N300, device
+    profiler): 46 -> 38 programs and 704.5 -> 687.4 us at B=1; 49 -> 37 programs and 907.2 ->
+    778.1 us (-14.2%) at B=32. Takes the decode RoPE section from 15 device ops to 7 per
+    full-attention layer per token; prefill drops slice/slice/concat per Q and K.
+    """
+    return wh_9b_n300(args) and getattr(args, "rope_head_dim", 0) < getattr(args, "head_dim", 0)
 
 
 # Grid helpers
@@ -38,25 +227,19 @@ def prefill_grid_default():
 PREFILL_MAX_COLS_PORTABLE = 11
 
 # Why TP=8 wants different values (measured at S=2048, 27B, 1x8 Ring):
-#   * widest_cols -- `_best_prefill_cols` ranks candidate widths by (out_subblock_w, cols), i.e.
-#     subblock first. At TP=8 the halved N makes wide grids yield a small per_core_N and hence a
-#     narrow subblock, so that ranking retreats to fewer columns and leaves cores idle. Measured
-#     device time is monotonically decreasing in column count instead: attn_wo went 1944us @ 60
-#     cores -> 700us @ 110, and mlp_gate 2943us @ 60 -> 1935us @ 110. So take the width.
-#   * in0_block_w_divisor -- `min(cap, k_tiles // grid_x)` is a function of the per-device K, which
-#     halves. attn_wo/gdn_out go k_tiles 48 -> 24 and `24 // 11 = 2`, but in0_block_w only has to
-#     DIVIDE k_tiles, so a larger block is legal and much faster (attn_wo @ 11 cols, from the sweep:
-#     bw2 786us, bw4 719us, bw6 700us, bw8 705us).
+#   * widest_cols -- `_best_prefill_cols` ranks widths by (out_subblock_w, cols), subblock first.
+#     At TP=8 the halved N makes wide grids yield a narrow subblock, so that ranking retreats to
+#     fewer columns and leaves cores idle. Device time is monotonically decreasing in column count
+#     instead: attn_wo 1944us @ 60 cores -> 700us @ 110. Take the width.
+#   * in0_block_w_divisor -- `min(cap, k_tiles // grid_x)` tracks the per-device K, which halves.
+#     in0_block_w only has to DIVIDE k_tiles, so a larger block is legal and much faster (attn_wo
+#     @ 11 cols: bw2 786us, bw4 719us, bw6 700us, bw8 705us).
 #
-# in0_block_w_cap is L1-BOUND, NOT just a legality bound. in0_block_w sizes the in0 circular
-# buffer, and `_wo_proj` / the MLP prefill arm write their OUTPUT to L1 (attention/tp.py:246,
-# mlp.py:284) -- so the CBs and a resident L1 output tensor compete for the same 1536 KB. Measured
-# on the real model: cap=8 overflows and test_model_tp_long_prefill dies with
-#   "Statically allocated circular buffers in program N clash with L1 buffers on core range
-#    [0-0 - 10-8]. L1 buffer allocated at 1314560 and static circular buffer region ends at 1372032"
-# from attention/tp.py:241. A standalone per-op sweep CANNOT see this: in isolation the only L1
-# tenant is the op under test, so it reports a win that the full model has no room for. Any future
-# raise of this cap must be validated by test_model_tp_long_prefill, not by the sweep alone.
+# in0_block_w_cap is L1-BOUND, not just a legality bound: it sizes the in0 circular buffer, and
+# `_wo_proj` / the MLP prefill arm write their OUTPUT to L1, so the CBs and a resident L1 output
+# compete for the same 1536 KB. cap=8 overflows and test_model_tp_long_prefill dies on a CB/L1
+# clash. A standalone per-op sweep CANNOT see this -- in isolation the only L1 tenant is the op
+# under test -- so any raise of this cap must be validated by that test, not by the sweep.
 _PREFILL_TUNING = {
     4: dict(widest_cols=False, in0_block_w_divisor=False, in0_block_w_cap=4),
     8: dict(widest_cols=True, in0_block_w_divisor=True, in0_block_w_cap=4),
@@ -168,8 +351,30 @@ def create_matmul_1d_decode_progcfg(m, k, n, num_cores, fused_activation=None, f
 
 def matmul_1d_decode(x, weight, decode_1d_progcfg, compute_cfg, out_memory_config=ttnn.L1_MEMORY_CONFIG):
     """Small-grid 1D (mcast_in0) decode matmul on an interleaved weight; interleaves the K-sharded
-    activation first since mcast_in0 needs the full K per core. See test_mlp_matmul_sweep."""
-    x_il = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
+    activation first since mcast_in0 needs the full K per core. See test_mlp_matmul_sweep.
+
+    WORMHOLE ONLY: compares memory_config BY VALUE (matches sharded_decode_matmul's already_sharded
+    check) instead of by object identity. ttnn.to_memory_config can return a tensor that aliases the
+    same underlying buffer as `x` even when it is a distinct Python object, so the original `is not`
+    check can pass and then deallocate() the caller's live input out from under it -- reproduced as
+    a hard segfault on a real WH device when `x` was already ttnn.L1_MEMORY_CONFIG. No current
+    caller passes an already-interleaved x here (they all pass sharded activations, making this a
+    real copy either way), so this is a no-op in practice on both architectures; kept WH-only rather
+    than touching the BH code path, which is left exactly as measured/shipped there."""
+    if is_blackhole():
+        x_il = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
+        out = ttnn.linear(
+            x_il,
+            weight,
+            compute_kernel_config=compute_cfg,
+            program_config=decode_1d_progcfg,
+            memory_config=out_memory_config,
+        )
+        if x_il is not x:
+            ttnn.deallocate(x_il)
+        return out
+    already_il = x.memory_config() == ttnn.L1_MEMORY_CONFIG
+    x_il = x if already_il else ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
     out = ttnn.linear(
         x_il,
         weight,
@@ -177,7 +382,7 @@ def matmul_1d_decode(x, weight, decode_1d_progcfg, compute_cfg, out_memory_confi
         program_config=decode_1d_progcfg,
         memory_config=out_memory_config,
     )
-    if x_il is not x:
+    if not already_il:
         ttnn.deallocate(x_il)
     return out
 
@@ -197,9 +402,50 @@ def create_activation_shard_config(k):
     )
 
 
+def decode_ids_for_embed(token_ids):
+    """Host flatten of decode ids to ``[1, B]``.
+
+    ``ttnn.embedding`` fused-tilize keys off last dim (must be a multiple of 32). Decode tensors
+    arrive as ``[B, 1]``; leaving them that way keeps last dim 1 and the 1-core RM factory.
+    Flatten on the host (logical numel), never via on-device reshape of a padded RM ``[B,1]``.
+    """
+    return token_ids.reshape(1, token_ids.numel())
+
+
+def decode_embed(emb, tok, args):
+    """Token embedding with the decode width-shard when the indices are a full tile.
+
+    ``EmbeddingsDeviceOperation`` with interleaved output parallelizes over token tiles, so
+    decode B=32 is 1 core / ~21us of serial DRAM gathers. Width-sharded L1 output splits
+    across dim instead; measured 3.0us on N300 (test_embedding_decode_sweep.py) with PCC=1.0,
+    and the pre-norm all-gather accepts that layout with no extra reshard.
+
+    Only used when ``args.emb_decode_memcfg`` is set (wh_9b_n300) AND the token tensor already
+    has a full tile on the last dim (``shape[-1] % 32 == 0`` and ``<= 32``). That is the fused-
+    tilize precondition. Decode call sites flatten host tokens ``[B,1]`` -> ``[1,B]`` before
+    ``from_torch`` so this fires at serving batch 32. Do not reshape ``[B,1]`` on device: RM
+    page padding makes that view the first padded row (1 real id + zeros), not B ids.
+    B=1 (last dim 1) stays DRAM interleaved.
+    """
+    mc = getattr(args, "emb_decode_memcfg", None)
+    if mc is None:
+        return emb(tok)
+    last = int(tok.shape[-1])
+    if last == 0 or last > TILE_SIZE or last % TILE_SIZE != 0:
+        return emb(tok)
+    return emb(tok, memory_config=mc)
+
+
 # 2D prefill matmul config
-def _get_out_subblock_w(per_core_n, out_subblock_h):
-    for w in range(min(per_core_n, 4 // out_subblock_h), 0, -1):
+def _get_out_subblock_w(per_core_n, out_subblock_h, max_hw=DST_TILES_FP32_ACC):
+    """Widest out_subblock_w that divides per_core_n within the DST budget.
+
+    max_hw is the out_subblock_h*out_subblock_w ceiling, which depends on the compute kernel config:
+    DST_TILES_FP32_ACC (4) when fp32_dest_acc_en is on, DST_TILES (8) when it is off. The default is
+    the conservative 4 because tp_common.COMPUTE_HIFI2 (the model's shared config) enables fp32 dest
+    accumulation; only callers that pass a non-fp32-acc compute config may raise it.
+    """
+    for w in range(min(per_core_n, max_hw // out_subblock_h), 0, -1):
         if per_core_n % w == 0:
             return w
     return 1
@@ -211,11 +457,169 @@ def _full_grid_crs(grid):
     return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, gy - 1))})
 
 
-def create_prefill_matmul_program_config(m, k, n, grid_size=None, fused_activation=None, tuning=None):
+def _safe_half_out_block_w(per_core_N, out_subblock_w):
+    """Largest divisor of per_core_N, itself a multiple of out_subblock_w, that is <= per_core_N // 2.
+
+    Halves (at least) the output/intermediate CB footprint vs. the default out_block_w=per_core_N.
+    Falls back to out_subblock_w (always a valid divisor of per_core_N by construction) if no smaller
+    multiple divides evenly."""
+    half = max(1, per_core_N // 2)
+    best = out_subblock_w
+    for w in range(out_subblock_w, half + 1, out_subblock_w):
+        if per_core_N % w == 0:
+            best = w
+    return best
+
+
+def prefill_kpass_width(n, grid_size=None, max_waste=0.20):
+    """Smallest width >= n whose TILE count minimises the prefill matmul's K-pass count.
+
+    A 2D prefill matmul walks its per-core output in ceil(per_core_N / out_block_w) N-blocks and
+    re-traverses K once per block -- re-reading a DRAM-resident in0 each time. MEASURED on N300
+    (M=2048, K=4096, HiFi2 BF16 x BFP8, 8x8 grid) the cost tracks that pass count almost exactly and
+    is NOT explained by the output subblock:
+
+        N=6176 (193 tiles, prime) per_core_N=25 out_block_w=5   5 passes  2631us
+        N=6528 (204 tiles)        per_core_N=26 out_block_w=2  13 passes  4194us  +59%
+        N=6912 (216 tiles)        per_core_N=27 out_block_w=9   3 passes  1906us  -28%
+        N=7168 (224 tiles)        per_core_N=28 out_block_w=4   7 passes  2938us  +12%
+
+    The trap is that out_block_w must be a MULTIPLE of out_subblock_w, so _get_out_subblock_w's greedy
+    "widest subblock" can force a narrow block and MORE passes -- N=7168 gets the ideal 1x4 subblock
+    and is still slower than N=6912's 1x3. A prime tile count (193) is worst of all: its only divisors
+    are 1/5/25, and 25 (one pass) overflows L1.
+
+    So: pad the width until the tile count factors well. Candidates are multiples of grid_size[0] (so
+    per_core_N divides exactly and every column of the grid is used), within max_waste extra tiles.
+    Scored by (passes, waste) -- fewest K passes, then least padding. Returns n unchanged when nothing
+    beats it, so callers can use it unconditionally.
+
+    NOT CURRENTLY CALLED BY THE MODEL. Its one user was the GDN in-proj width, which now reaches ONE K
+    pass unpadded via create_prefill_kpass1_matmul_program_config -- padding to improve the tile count's
+    factorization only helps when out_block_w must divide per_core_N into several blocks. Kept because it
+    is the right tool for any shape stuck on the multi-pass path (and see the gdn_qkvzab_pad_tiles note
+    in model_config.py for how to restore the pad); tests/perf/test_gdn_inproj_sweep.py still sweeps it."""
+    if grid_size is None:
+        grid_size = prefill_grid_default()
+    cols = grid_size[0]
+    n_tiles = math.ceil(n / TILE_SIZE)
+
+    def passes_for(tiles):
+        per_core_N = math.ceil(tiles / cols)
+        sub_w = _get_out_subblock_w(per_core_N, 1)
+        blk_w = _safe_half_out_block_w(per_core_N, sub_w)
+        return math.ceil(per_core_N / blk_w)
+
+    best = (passes_for(n_tiles), 0, n_tiles)
+    for tiles in range(_roundup(n_tiles, cols), int(n_tiles * (1 + max_waste)) + 1, cols):
+        cand = (passes_for(tiles), tiles - n_tiles, tiles)
+        if cand < best:
+            best = cand
+    return best[2] * TILE_SIZE
+
+
+def _largest_divisor_le(n, cap):
+    """Largest divisor of n that is <= cap (1 if none, since 1 always divides)."""
+    for d in range(min(n, cap), 0, -1):
+        if n % d == 0:
+            return d
+    return 1
+
+
+# Longest prefill M the full-grid MLP config below is used at. 2048 is the production chunk-outer
+# chunk size (demo/text_demo.py PREFILL_CHUNK, model.capture_prefill_trace_chunked), so the MLP never
+# sees more than this in production -- longer prompts arrive as multiple 2048 chunks. Above it, both
+# per_core_M and therefore every CB scale linearly and the one-K-pass + in0_block_w=8 blocking
+# overflows L1: MEASURED at m=4096 (per_core_M 8 -> 16) the down-proj asks for 2,398,912 B against
+# Wormhole's 1,499,136 B limit. Rather than de-tune the shape production actually runs, fall back to
+# the shared factory above this length -- the same "gate it at the only size it was measured safe at"
+# call gdn/tp.py makes for its L1 placement. The seq4096 case in
+# tests/perf/test_profile_single_layer_prefill.py is a scaling probe, not a served shape.
+PREFILL_FULL_GRID_MAX_M = 2048
+
+
+def create_prefill_mlp_matmul_program_config_full_grid(
+    m, k, n, grid_size=None, fused_activation=None, out_subblock_h=1
+):
+    """One-K-pass prefill MLP progcfg on the FULL grid width. 27B on Wormhole; see tt/mlp.py.
+
+    Deliberately a separate factory rather than flags on create_prefill_mlp_matmul_program_config:
+    the 9B's tuned prefill configs come out of that one and must stay byte-identical, and nothing
+    but the 27B MLP's prefill arm calls this.
+
+    Two measured departures from create_prefill_mlp_matmul_program_config (both at the 27B's TP=8
+    shapes with a bf8 in0 -- tests/perf/test_mlp_prefill_matmul_sweep.py, numbers in tt/mlp.py):
+
+      * The grid width is the full device width instead of _best_prefill_cols'. That heuristic
+        maximises the output subblock, and at hidden_dim/tp = 68 tiles (17408/8/32, whose only
+        divisors <= 8 are 1/2/4) it settles on 6 columns = 48 of 64 cores. More cores wins by a wide
+        margin at this shape -- the subblock-first premise does not survive here. The 9B's
+        hidden_dim/tp is a friendlier tile count and already lands on the full width, which is why
+        this never showed up there.
+      * in0_block_w is the largest divisor of K (in tiles) up to DST_TILES, not min(4, ...). Once
+        ff_norm hands the MLP a bf8 activation the in0 CB is half its former size, so the deeper K
+        block fits -- and it is worth -10% on gate/up. Kept a divisor of K because a partial final
+        K block is not a legal blocking.
+
+    out_subblock_h is NOT derived, it is passed in. At these two shapes the measured winners
+    contradict every simple rule: gate (per_core_N=9) wants 1x3 while down (per_core_N=20) wants
+    2x4, so neither "widest w" nor "largest h*w" predicts both. Callers pass what the sweep measured.
+
+    out_subblock_h is a PREFERENCE, not a demand: it has to divide per_core_M, and per_core_M scales
+    with the prefill length. The tuned values were measured at the production chunk (m=2048 ->
+    per_core_M=8), but the same code runs short prompts and chunk tails: m=128 gives per_core_M=1,
+    which no height above 1 divides. So clamp to the largest divisor of per_core_M at or below the
+    request instead of asserting -- falling back to 1 is exactly the height the shared factory would
+    have picked anyway, so a short prefill loses only this one (unmeasured at that length) tweak.
+    """
+    if grid_size is None:
+        grid_size = prefill_grid_default()
+    per_core_M = max(1, math.ceil(m / TILE_SIZE / grid_size[1]))
+    per_core_N = max(1, math.ceil(n / TILE_SIZE / grid_size[0]))
+    out_subblock_h = _largest_divisor_le(per_core_M, out_subblock_h)
+    k_tiles = math.ceil(k / TILE_SIZE)
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=grid_size,
+        in0_block_w=_largest_divisor_le(k_tiles, DST_TILES),
+        out_subblock_h=out_subblock_h,
+        # DST_TILES (8) not DST_TILES_FP32_ACC (4): this path is only reached with _CKC_MLP_KPASS1,
+        # whose fp32_dest_acc_en=False is what raises the ceiling. See _get_out_subblock_w.
+        out_subblock_w=_get_out_subblock_w(per_core_N, out_subblock_h, max_hw=DST_TILES),
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+        out_block_w=per_core_N,  # one K pass
+        transpose_mcast=False,
+        fused_activation=fused_activation,
+        fuse_batch=False,
+    )
+
+
+def create_prefill_matmul_program_config(
+    m,
+    k,
+    n,
+    grid_size=None,
+    fused_activation=None,
+    tuning=None,
+    out_block_w=None,
+    halve_out_block=False,
+    max_subblock_hw=None,
+):
     """2D prefill matmul progcfg (DRAM-interleaved).
 
     fused_activation in packer; sharded kernel rejects ttnn.linear(activation=...) with progcfg.
-    tuning: a `_PREFILL_TUNING` entry (see `prefill_tuning`); None = the frozen TP=4 behavior."""
+    tuning: a `_PREFILL_TUNING` entry (see `prefill_tuning`); None = the frozen TP=4 behavior.
+    out_block_w: when set (< per_core_N), the output/intermediate CB only needs to hold one
+    out_block_w-wide slice of the per-core output at a time instead of the full per_core_N width —
+    same lever already used by build_mmrs_decode_state/matmul_reduce_scatter_prefill below.
+    halve_out_block: auto-derive a safe halved out_block_w (see _safe_half_out_block_w) instead of
+    passing one explicitly. Needed on grids that are already at their physical max (WH tops out at
+    8x8=64 cores vs BH's 8x10=80, with a smaller per-core L1 budget besides), where per_core_M/N can't
+    be shrunk further by adding more cores.
+    max_subblock_hw: out_subblock_h*out_subblock_w ceiling. Defaults to the conservative
+    DST_TILES_FP32_ACC (4), which is correct for the fp32-dest-acc COMPUTE_HIFI2 most callers pass.
+    Callers using a compute config with fp32_dest_acc_en=False may pass DST_TILES (8) to get the
+    wider output subblock their DST budget actually allows — see _get_out_subblock_w."""
     if grid_size is None:
         grid_size = prefill_grid_default()
     tuning = tuning or _PREFILL_TUNING[4]
@@ -223,7 +627,9 @@ def create_prefill_matmul_program_config(m, k, n, grid_size=None, fused_activati
     per_core_N = max(1, math.ceil(n / TILE_SIZE / grid_size[0]))
 
     out_subblock_h = 1
-    out_subblock_w = _get_out_subblock_w(per_core_N, out_subblock_h)
+    out_subblock_w = _get_out_subblock_w(
+        per_core_N, out_subblock_h, max_hw=max_subblock_hw if max_subblock_hw is not None else DST_TILES_FP32_ACC
+    )
 
     k_tiles = math.ceil(k / TILE_SIZE)
     cap = tuning["in0_block_w_cap"]
@@ -234,7 +640,10 @@ def create_prefill_matmul_program_config(m, k, n, grid_size=None, fused_activati
     else:
         in0_block_w = min(cap, max(1, k_tiles // grid_size[0]))
 
-    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+    if halve_out_block and out_block_w is None:
+        out_block_w = _safe_half_out_block_w(per_core_N, out_subblock_w)
+
+    kwargs = dict(
         compute_with_storage_grid_size=grid_size,
         in0_block_w=in0_block_w,
         out_subblock_h=out_subblock_h,
@@ -245,6 +654,62 @@ def create_prefill_matmul_program_config(m, k, n, grid_size=None, fused_activati
         fused_activation=fused_activation,
         fuse_batch=False,
     )
+    if out_block_w is not None:
+        kwargs["out_block_w"] = out_block_w
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(**kwargs)
+
+
+def create_prefill_kpass1_matmul_program_config(m, k, n, grid_size=None, fused_activation=None):
+    """2D prefill progcfg that walks K exactly ONCE: out_block_w == per_core_N.
+
+    A 2D prefill matmul re-traverses K once per N-block (ceil(per_core_N / out_block_w) blocks),
+    re-reading a DRAM-resident in0 every time, and prefill_kpass_width's measurements show that pass
+    count is the dominant cost term for the GDN in-proj shape. One pass is the floor.
+
+    REQUIRES a compute kernel config with fp32_dest_acc_en=False (COMPUTE_HIFI2_NO_FP32_ACC). Two
+    reasons, both load-bearing:
+      * the full per_core_N-wide output/intermediate CB only fits L1 at half the element size, and
+      * out_subblock_w is picked against the DST_TILES (8) ceiling, not DST_TILES_FP32_ACC (4) --
+        e.g. per_core_N=25 gives sub_w=5 at the 8 ceiling but collapses to 1 at the 4 ceiling, and
+        out_block_w must be a multiple of out_subblock_w, so a sub_w of 1 cannot reach 25 anyway.
+    Passing an fp32-dest-acc config here will fail at program creation with a CB overflow, not
+    silently degrade -- which is the intended behaviour.
+
+    Unlike create_prefill_matmul_program_config there is no halve_out_block escape hatch: halving the
+    block IS the multi-pass behaviour this exists to avoid. Callers whose (m, k, n) does not fit must
+    use the general factory instead.
+    """
+    if grid_size is None:
+        grid_size = prefill_grid_default()
+    per_core_M = max(1, math.ceil(m / TILE_SIZE / grid_size[1]))
+    per_core_N = max(1, math.ceil(n / TILE_SIZE / grid_size[0]))
+    k_tiles = math.ceil(k / TILE_SIZE)
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=grid_size,
+        in0_block_w=min(4, max(1, k_tiles // grid_size[0])),
+        out_subblock_h=1,
+        out_subblock_w=_get_out_subblock_w(per_core_N, 1, max_hw=DST_TILES),
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+        out_block_w=per_core_N,  # one K pass
+        transpose_mcast=False,
+        fused_activation=fused_activation,
+        fuse_batch=False,
+    )
+
+
+def prefill_out_memory_config(seq_len, out_width, elem_bytes=2, budget=8 << 20):
+    """L1 for prefill matmul outputs that fit; DRAM for the big ones.
+
+    Several prefill projections (MLP down-proj, attention wo, ...) were tuned to emit into L1 — a
+    real win measured on Blackhole, whose L1 is larger. Those outputs are [seq_len, out_width] and
+    grow with the prefill chunk (16MB+ at seq_len=2048, out_width=4096, bf16). On Wormhole that
+    leaves so little L1 free that the very matmul producing them can no longer place its own
+    statically-allocated circular buffers, and the op dies with "clash with L1 buffers" — CBs are
+    L1-only, so the output is what has to move. Blackhole keeps the tuned L1 path unchanged."""
+    if is_blackhole():
+        return ttnn.L1_MEMORY_CONFIG
+    return ttnn.DRAM_MEMORY_CONFIG if seq_len * out_width * elem_bytes > budget else ttnn.L1_MEMORY_CONFIG
 
 
 def _widest_prefill_cols(n, max_cols, subblock_slack=1):
@@ -281,7 +746,9 @@ def _best_prefill_cols(n, max_cols):
     return best_cols
 
 
-def create_prefill_mlp_matmul_program_config(m, k, n, fused_activation=None, max_cols=None, tuning=None):
+def create_prefill_mlp_matmul_program_config(
+    m, k, n, fused_activation=None, max_cols=None, tuning=None, halve_out_block=False, max_subblock_hw=None
+):
     """FPU-tuned 2D prefill progcfg for MLP matmuls: picks the grid width that maximizes the output
     subblock (drives prefill FPU) instead of the default full width.
 
@@ -292,7 +759,13 @@ def create_prefill_mlp_matmul_program_config(m, k, n, fused_activation=None, max
 
     tuning: a `_PREFILL_TUNING` entry. With `widest_cols` (TP=8) the subblock-first width heuristic
     is replaced by "take the width, clamped to PREFILL_MAX_COLS_PORTABLE" -- measured device time at
-    TP=8 falls monotonically with column count, so trading cores for a wider subblock loses."""
+    TP=8 falls monotonically with column count, so trading cores for a wider subblock loses.
+    halve_out_block: see create_prefill_matmul_program_config — pass on grids already at their
+    physical core-count max (WH) where the full per_core_N-wide output/intermediate CB overflows L1.
+    max_subblock_hw: see create_prefill_matmul_program_config. NOTE this is deliberately NOT fed into
+    _best_prefill_cols below: the grid-width choice stays on the conservative cap so raising the
+    subblock ceiling cannot silently move the grid too (an unswept axis). It only widens the subblock
+    at the column count production already uses."""
     grid = prefill_grid_default()
     tuning = tuning or _PREFILL_TUNING[4]
     limit = max_cols or grid[0]
@@ -304,7 +777,14 @@ def create_prefill_mlp_matmul_program_config(m, k, n, fused_activation=None, max
     else:
         cols = _best_prefill_cols(n, limit)
     return create_prefill_matmul_program_config(
-        m, k, n, grid_size=(cols, grid[1]), fused_activation=fused_activation, tuning=tuning
+        m,
+        k,
+        n,
+        grid_size=(cols, grid[1]),
+        fused_activation=fused_activation,
+        tuning=tuning,
+        halve_out_block=halve_out_block,
+        max_subblock_hw=max_subblock_hw,
     )
 
 
@@ -387,9 +867,68 @@ def all_gather_matmul_prefill(
     return out
 
 
+def prefill_ccl_tuning():
+    """(chunks_per_sync, num_workers_per_link) for the PREFILL collectives.
+
+    tt_all_reduce() takes these as arguments defaulting to 10 / 2, and qwen36 never passed them;
+    DistributedNorm hardcodes the same 10 / 2 for every non-decode call. So unlike their decode
+    counterparts (which get per-op configs from model_config) the prefill all-gathers and
+    reduce-scatters have never been tuned at all. All four run on 5 cores at 6.8-8.1 GB/s against a
+    ~12.5 GB/s Wormhole link -- 55-65% efficiency, i.e. real headroom.
+
+    Used by BOTH prefill collectives: the reduce-scatters (tt_all_reduce call sites in gdn/tp.py and
+    mlp.py) and the all-gathers (via tt/prefill_norm_tuned.py).
+
+    MEASURED on N300 at seq 2048, device times straight out of tt-perf-report:
+
+      ALL-GATHER -- the reliable win. Per-op, 2 runs each:
+        wpl=2 (upstream)  1,245 / 1,242 us
+        wpl=4             1,012 / 1,012 us      <- used
+        wpl=8             1,015 / 1,016 us
+        => ~-460us per layer across the two gathers, and repeatable to ~10us.
+
+      REDUCE-SCATTER -- smaller and noisy. Layer RS total, 3 runs each:
+        wpl=2 (upstream)  2,234 / 2,478 / 2,076   mean 2,263, spread 402
+        wpl=4             1,995 / 2,063 / 2,037   mean 2,032, spread  68
+        => ~-230us on the mean, and it tightens the spread ~6x, which matters more for tail latency
+           than the mean does. Individual RS ops still range 963-1,277us run to run, so do not read
+           much into any single profile.
+
+      wpl=8 is indistinguishable from 4 once both collectives are tuned (CCL mean 4,313 vs 4,278 us
+      over 2-3 runs each), so 4 stays -- it is the smaller departure from the upstream default.
+      chunks_per_sync made no measurable difference anywhere and stays at 10.
+
+    QWEN35_PREFILL_CCL="cps,wpl" overrides, for re-sweeping.
+
+    WORMHOLE-ONLY: every measurement above is Wormhole (N300 for the 9B pre-norm gather, T3K for the
+    27B post-norm one) -- there is no Blackhole number here at all. Blackhole keeps upstream's
+    untuned literals (10, 2), same as before this function existed, unless QWEN35_PREFILL_CCL forces
+    an override for re-sweeping there too.
+    """
+    _v = os.environ.get("QWEN35_PREFILL_CCL")
+    if _v:
+        _c, _w = (int(t) for t in _v.split(","))
+        return _c, _w
+    if is_blackhole():
+        return 10, 2
+    return 10, 4
+
+
 def mlp_gateup_agmm_enabled(num_devices):
-    """Fuse the ff_norm all-gather into the MLP gate/up matmul (prefill). TP-only (needs the gather)."""
-    return num_devices > 1
+    """Fuse the ff_norm all-gather into the MLP gate/up matmul (prefill). TP-only (needs the gather).
+
+    BH-only: all_gather_swiglu_prefill's grid assumes BH's taller (9-10 row) compute grid; WH tops
+    out at 8 rows, so this fusion is unvalidated there. Falls back to the unfused AG + matmul path on WH.
+
+    MEASURED on N300 (2026-08): the row count is NOT the only blocker, so do not just clamp the grid.
+    With grid height forced to 8, all_gather_minimal_matmul_async's program factory builds its in0/in1
+    sender+receiver core ranges from grid_size.y-1/-2/-3; at y=8 those overlap so two data-movement
+    kernels land on one core needing both NOCs, and program creation dies with
+    "TT_FATAL ... local_noc0_in_use and local_noc1_in_use" (tt_metal.cpp:152). Reproduced at num_links
+    1 AND 2, so it is not a link-count artifact — enabling WH needs a C++ change to that op's core/NOC
+    assignment for 8-row grids. Worth doing: the two all-gathers this would hide are 1,239us + 1,242us
+    of a 21,669us single-layer GDN prefill at seq 2048 (5 cores each, fully exposed)."""
+    return num_devices > 1 and is_blackhole()
 
 
 def all_gather_swiglu_prefill(
@@ -526,7 +1065,24 @@ def matmul_reduce_scatter_prefill(x, weight, tt_ccl, compute_cfg, topology, nd, 
     Unlike decode (M=1, where the 2D matmul collapses to ~8 cores and this loses), at prefill M>>1 the
     2D matmul fills the grid, so overlapping the RS with the matmul is a WIN (biggest for the fp32
     GDN-out with its large RS). grid=(8,8): matmul rows 0-7, RS workers rows 8-9. x: K-sharded
-    [.,M,K_local]; weight [K_local,N]. Returns [1,1,M,N/nd] (cloned; shared buffer survives)."""
+    [.,M,K_local]; weight [K_local,N]. Returns [1,1,M,N/nd] (cloned; shared buffer survives).
+
+    BH-ONLY. Porting this to Wormhole was tried and reverted (N300, 2026-08). It looks like the one CCL
+    fusion that should port, because this op takes an explicit reduce_scatter_core_grid_offset, so WH's
+    8-row grid is expressible as matmul (8,6) on rows 0-5 + RS workers at (0,6) on rows 6-7 — the exact
+    disjoint split build_mmrs_decode_state already uses for the DECODE out-proj. It HANGS anyway: the
+    op never returns and the hang wedges the ethernet cores, after which the next device open fails
+    with "Timed out waiting for ETH heartbeat ... Stuck at 0xaabb0001". Recovery is
+    `tt-topology -l mesh` — note this host's layout is MESH; the tool's default is linear and flashing
+    that breaks device discovery entirely.
+
+    Reproduced twice, so it is not the link count: first at num_links=2, then at num_links=1 after
+    finding that an N300 (1,2) submesh reports get_num_links() == 1 on every axis while the value below
+    is hardcoded to 2 (a P150x4 number). Same symptom both times. Likely the same class of defect as
+    the all-gather fusion (see mlp_gateup_agmm_enabled) — the fused-CCL program factories assume a
+    taller grid than WH has, and a decode config that works at M=1 does not carry to a prefill M that
+    fills the matmul grid. Needs C++ investigation, not a config change. Cost of leaving it off: the
+    two reduce-scatters are ~1,060us + ~995us of an 18,644us single-layer GDN prefill at seq 2048."""
     M, K_local = x.shape[-2], x.shape[-1]
     N = weight.shape[-1]
     interm, out_buf = _mmrs_prefill_shared_bufs(tt_ccl, M, N, nd, dtype)
@@ -579,13 +1135,25 @@ def sharded_decode_matmul(
     prefill_progcfg_fn,
     prefill_k,
     decode_out_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    prefill_compute_cfg=None,
+    prefill_out_dtype=None,
 ):
     """DRAM-WIDTH_SHARDED weight matmul; branches on M (decode vs prefill).
 
     Decode (M<=32): L1-sharded act + DRAM-sharded kernel. Prefill: 2D matmul.
     Gate on x.shape[-2] (seq/M), not x.shape[1] (Z=1 in both modes). Decode result placement is
     `decode_out_memory_config` (default DRAM-interleaved; pass L1 to keep the small decode
-    activation resident). Prefill result is always DRAM-interleaved."""
+    activation resident). Prefill result is always DRAM-interleaved.
+
+    prefill_compute_cfg: compute kernel config for the PREFILL branch only (defaults to compute_cfg).
+    Exists because a prefill progcfg and its compute config are coupled — create_prefill_kpass1_
+    matmul_program_config's blocking is only legal with fp32_dest_acc_en off — while decode keeps the
+    shared COMPUTE_HIFI2. Pass both together or neither.
+
+    prefill_out_dtype: output dtype for the PREFILL branch only. ttnn.linear defaults the output
+    dtype to in0's (matmul.cpp: ``dtype.value_or(input_tensor_a.dtype())``), so a caller that narrows
+    its ACTIVATION to bf8 silently narrows the matmul RESULT too. Pass this to pin the result where
+    that is not wanted -- the in0 saving is kept either way, since it is a read-side win."""
     seq = x.shape[-2]
     if seq <= TILE_SIZE:
         # Reshard act to L1 if needed; skip dealloc when x already sharded (GDN reuses x).
@@ -603,7 +1171,12 @@ def sharded_decode_matmul(
         return ttnn.to_memory_config(out, decode_out_memory_config)
     pc = prefill_progcfg_fn(seq, prefill_k, weight.shape[-1])
     return ttnn.linear(
-        x, weight, compute_kernel_config=compute_cfg, program_config=pc, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        x,
+        weight,
+        compute_kernel_config=prefill_compute_cfg or compute_cfg,
+        program_config=pc,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        **({"dtype": prefill_out_dtype} if prefill_out_dtype is not None else {}),
     )
 
 
@@ -714,6 +1287,38 @@ def prepare_gdn_qkv(qkv_w, key_dim, value_dim, nk, dk, nv, dv, tp):
         v_s = v_part[s * v_per * dv : (s + 1) * v_per * dv, :]
         shards.append(torch.cat([q_s, k_s, v_s], dim=0))
     return torch.cat(shards, dim=0)
+
+
+def tuned_vocab_all_gather(input_tensor, mesh_device, tt_ccl, dim, topology, num_workers_per_link, chunks_per_sync):
+    """The LM-head vocab-sharded logits all-gather, with num_workers_per_link/chunks_per_sync as
+    real parameters (upstream's models.tt_transformers.tt.ccl.tt_all_gather hardcodes 2/10).
+
+    A local copy of that function's cluster_axis=None branch instead of a change to the shared
+    file: this model must not edit ccl.py (other models depend on it). Kept in sync with upstream
+    by inspection; if upstream's all_gather_async call shape changes, re-diff tt_all_gather here.
+    """
+    if list(mesh_device.shape) == [1, 1]:
+        return input_tensor
+    num_links = tt_ccl.get_num_links(None)
+    input_tensor = ttnn.to_memory_config(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
+    if input_tensor.dtype != ttnn.bfloat16:
+        input_tensor = ttnn.to_memory_config(input_tensor, ttnn.L1_MEMORY_CONFIG, ttnn.bfloat16)
+    gathered = ttnn.experimental.all_gather_async(
+        input_tensor,
+        persistent_output_buffer=None,
+        dim=dim,
+        multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(),
+        num_links=num_links,
+        topology=topology,
+        memory_config=None,
+        barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+        chunks_per_sync=chunks_per_sync,
+        num_workers_per_link=num_workers_per_link,
+        num_buffers_per_channel=2,
+        subdevice_id=None,
+    )
+    input_tensor.deallocate(True)
+    return gathered
 
 
 def prepare_conv_taps(conv_w, key_dim, nk, dk, nv, dv, kernel_size, tp):

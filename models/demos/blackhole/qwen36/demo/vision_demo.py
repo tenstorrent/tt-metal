@@ -40,16 +40,23 @@ from loguru import logger
 from qwen_vl_utils import process_vision_info
 
 import ttnn
-from models.common.utility_functions import run_for_blackhole
+from models.common.utility_functions import run_for_wormhole_b0_or_blackhole
 from models.demos.blackhole.qwen36.tt.model import Qwen36Model
 from models.tt_transformers.tt.generator import Generator
 
 # Multi-device (TP) is selected via MESH_DEVICE (e.g. P150x4). On a single device the mesh is
 # (1,1) and the model runs its validated single-device path; on a multi-device mesh it needs
 # FABRIC_1D for the TP collectives. The vision splice buffers are allocated on whichever mesh.
-_MESH_SHAPE = {"N150": (1, 1), "N300": (1, 2), "P150x4": (1, 4), "N150x4": (1, 4), "T3K": (1, 8)}.get(
-    os.environ.get("MESH_DEVICE"), (1, 1)
-)
+# Wormhole meshes listed explicitly, mirroring text_demo.py. The 27B needs T3K (1,8); the 9B
+# fits an N300 (1,2). Anything unlisted falls back to single device.
+_MESH_SHAPE = {
+    "P150": (1, 1),
+    "P150x4": (1, 4),
+    "N150": (1, 1),
+    "N300": (1, 2),
+    "N150x4": (1, 4),
+    "T3K": (1, 8),
+}.get(os.environ.get("MESH_DEVICE"), (1, 1))
 _MULTI = _MESH_SHAPE != (1, 1)
 
 # Both single-device and TP traced paths capture a prefill chunk trace AND a paged decode trace,
@@ -133,6 +140,59 @@ def _sample(vec, generated):
         probs_sort.div_(probs_sort.sum())
         return int(probs_idx[torch.multinomial(probs_sort, 1)].item())
     return int(torch.multinomial(probs, 1).item())
+
+
+# --------------------------------------------------------------------------- #
+# Output content checks
+# --------------------------------------------------------------------------- #
+# Generating fluent, non-repeating text proves the LLM half works; it does NOT prove the image ever
+# reached it. A broken vision path produces confident prose about the wrong thing — e.g. a bad
+# patch-embed had the model call Qwen's beach photo "a corrupted or improperly rendered image file"
+# while the suite still reported 5/5 PASSED on the length/degeneracy asserts alone.
+#
+# So assert on CONTENT: each prompt needs some minimum number of terms that only a model actually
+# seeing the input could produce, and must avoid the phrases that characterize a garbage-embedding
+# answer. Kept deliberately loose (any-of with a threshold, not exact match) so ordinary wording
+# drift does not fail the run, while "wrong subject entirely" does.
+_EXPECTED_CONTENT = {
+    # Qwen demo.jpeg: a woman sitting on a beach at sunset with her dog.
+    "vision_demo.json": {"any_of": ("beach", "dog", "woman", "sand", "sunset", "shore", "ocean", "sea"), "min_hits": 2},
+    # Same image twice; the question asks for differences, so "identical/same/no differences" is right.
+    "vision_multi_image.json": {"any_of": ("identical", "same", "no differences", "no difference"), "min_hits": 1},
+    # space_woaudio.mp4: footage from/of space.
+    "vision_video.json": {
+        "any_of": ("space", "earth", "planet", "orbit", "astronaut", "star", "spacecraft"),
+        "min_hits": 1,
+    },
+    # Text-only prompt: nothing visual to check, so only the forbidden phrases apply.
+    "vision_text_only.json": {"any_of": (), "min_hits": 0},
+}
+# Hallmarks of a model being handed noise instead of an image.
+_FORBIDDEN_CONTENT = ("corrupted", "improperly rendered", "digital artifact", "not a photograph", "random noise")
+
+
+def _assert_describes_input(text, prompt_file):
+    """Fail when the generated text does not actually describe the prompt's image/video."""
+    spec = _EXPECTED_CONTENT.get(prompt_file)
+    if spec is None:
+        return
+    low = text.lower()
+
+    bad = [p for p in _FORBIDDEN_CONTENT if p in low]
+    # A text-only prompt can legitimately discuss these words; only gate visual prompts on them.
+    if bad and prompt_file != "vision_text_only.json":
+        raise AssertionError(
+            f"{prompt_file}: output reads like the vision embeddings are wrong "
+            f"(matched {bad}). Check the vision tower / patch embed. OUTPUT: {text[:300]!r}"
+        )
+
+    hits = [w for w in spec["any_of"] if w in low]
+    if len(hits) < spec["min_hits"]:
+        raise AssertionError(
+            f"{prompt_file}: output does not describe the input — expected >= {spec['min_hits']} of "
+            f"{list(spec['any_of'])}, matched {hits}. OUTPUT: {text[:300]!r}"
+        )
+    logger.info(f"  output content check OK (matched {hits})")
 
 
 def _load_conversation(prompt_file):
@@ -282,7 +342,7 @@ def _blocks_for(seqlen, max_generated_tokens, max_seq_len):
     return min(max_seq_len // BLOCK_SIZE, blocks)
 
 
-@run_for_blackhole()
+@run_for_wormhole_b0_or_blackhole()
 @pytest.mark.timeout(1800)
 @pytest.mark.parametrize("mesh_device", [_MESH_SHAPE], indirect=True)
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
@@ -359,6 +419,7 @@ def test_demo_vision(mesh_device, prompt_file, use_trace, max_generated_tokens, 
 
     assert len(generated) >= 1, "should generate at least 1 token"
     assert len(set(generated)) > 1, f"degenerate generation: {generated}"
+    _assert_describes_input(text, prompt_file)
 
 
 def _run_traced_vision_generation(model, tokenizer, device, token_ids, vision_inputs, max_generated_tokens, num_blocks):
@@ -487,6 +548,9 @@ def _run_tp_vision_generation(model, tokenizer, token_ids, vision_inputs, max_ge
     vocab = model.args.vocab_size
     mesh = model.mesh_device
     T = token_ids.shape[1]
+    _cap = os.environ.get("QWEN36_VISION_MAX_NEW")
+    if _cap:
+        max_generated_tokens = min(max_generated_tokens, int(_cap))
 
     # Flexible chunked SDPA requires the page-table width to be a multiple of 32.
     num_blocks = ((num_blocks + 31) // 32) * 32
@@ -508,10 +572,53 @@ def _run_tp_vision_generation(model, tokenizer, token_ids, vision_inputs, max_ge
     ttnn.synchronize_device(mesh)
     ttft = time.time() - t0 + t_vis
 
-    # Logits are replicated across the mesh ([1,1,vocab]); gather one replica.
+    # Prefill logits are replicated ([1,1,vocab]); first token stays host (one D2H, not the decode loop).
     lt = ttnn.to_torch(logits_dev, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0))
     nxt = _sample(lt.reshape(-1, vocab)[0], [])
     generated = [nxt]
+
+    # On-device per-shard argmax+max for default greedy (same path as text_demo._run_tp_generation).
+    # Skips the vocab all-gather + full-row D2H. TEMP/rep-pen/no-repeat stay on the host _sample path.
+    _greedy = _TEMP <= 0 and _REP_PEN == 1.0 and _NO_REPEAT == 0
+    model._ondev_argmax = _greedy
+    _check = os.environ.get("QWEN36_CHECK_ONDEV_ARGMAX") == "1"
+    _per_shard = vocab // model.num_devices
+    _MAXVAL_C = 32
+    _MAXVAL_R = (((_per_shard + _MAXVAL_C - 1) // _MAXVAL_C) + 31) // 32 * 32
+    _read_comp = ttnn.ConcatMeshToTensor(mesh, dim=0)
+    _vocab_comp = ttnn.ConcatMeshToTensor(mesh, dim=-1)
+    logger.info(f"[TP] decode token pick: {'on-device greedy' if _greedy else 'host _sample'}")
+
+    def _maxval_dev(sharded_logits):
+        padded = ttnn.pad(
+            sharded_logits, [(0, 0), (0, 0), (0, 0), (0, _MAXVAL_R * _MAXVAL_C - _per_shard)], value=-1e30
+        )
+        grid = ttnn.reshape(padded, (1, 1, _MAXVAL_R, _MAXVAL_C))
+        part = ttnn.max(grid, dim=-1)
+        part_row = ttnn.reshape(part, (1, 1, 1, _MAXVAL_R))
+        val = ttnn.max(part_row, dim=-1)
+        ttnn.deallocate(padded)
+        ttnn.deallocate(grid)
+        ttnn.deallocate(part)
+        ttnn.deallocate(part_row)
+        return val
+
+    def _argmax_dev(sharded_logits):
+        logits_rm = ttnn.to_layout(sharded_logits, ttnn.ROW_MAJOR_LAYOUT)
+        idx = ttnn.argmax(logits_rm, dim=-1, keepdim=False)
+        ttnn.deallocate(logits_rm)
+        return idx, _maxval_dev(sharded_logits)
+
+    def _read_tok(idx_t, val_t):
+        idxs = ttnn.to_torch(idx_t, mesh_composer=_read_comp).reshape(-1)
+        vals = ttnn.to_torch(val_t, mesh_composer=_read_comp).reshape(-1)
+        d = int(torch.argmax(vals).item())
+        return d * _per_shard + int(idxs[d].item())
+
+    def _host_tok(sharded_logits):
+        # Same logits as the device pick: concat shards, fp32 argmax. Matches the old host path.
+        full = ttnn.to_torch(sharded_logits, mesh_composer=_vocab_comp).reshape(-1)[:vocab]
+        return int(full.float().argmax())
 
     # ---- Traced paged decode with GDN snapshot/restore (see text_demo for the rationale). ----
     _gdn = [layer.attention for layer in model.layers if not layer.is_full_attention]
@@ -541,40 +648,65 @@ def _run_tp_vision_generation(model, tokenizer, token_ids, vision_inputs, max_ge
                 ttnn.copy(cc, dn.conv_states[j])
                 ttnn.deallocate(cc)
 
+    def _decode_fwd():
+        out = model.ttnn_decode_forward(dev[0], dev[1], rot_mat_idxs=dev[2], page_table=dev[3])
+        return out[0]
+
+    def _update(token, position):
+        # page_table is constant (identity) and baked into the trace; only tokens/pos/rope change.
+        host = model.prepare_decode_inputs_host(
+            torch.tensor([[token]], dtype=torch.int32),
+            torch.tensor([position], dtype=torch.int32),
+            page_table=None,
+        )
+        copy_host_to_device(host[:3], device_tensors=dev[:3])
+
     dev = model.prepare_inputs_decode(
         torch.tensor([[nxt]], dtype=torch.int32), torch.tensor([T], dtype=torch.int32), page_table=page_table
     )
 
-    gdn_snap = _snapshot_gdn()  # exact post-prefill GDN state
-    # Compile decode programs (eager) then capture a throwaway trace; both advance GDN state.
-    model.ttnn_decode_forward(dev[0], dev[1], rot_mat_idxs=dev[2], page_table=dev[3])
+    gdn_snap = _snapshot_gdn()
+    _warm_logits = _decode_fwd()
+    tt_idx = tt_val = None
+    if _greedy:
+        _wi, _wv = _argmax_dev(_warm_logits)
+        ttnn.deallocate(_wi)
+        ttnn.deallocate(_wv)
     trace_id = ttnn.begin_trace_capture(mesh, cq_id=0)
-    tt_logits, _ = model.ttnn_decode_forward(dev[0], dev[1], rot_mat_idxs=dev[2], page_table=dev[3])
+    tt_logits = _decode_fwd()
+    if _greedy:
+        tt_idx, tt_val = _argmax_dev(tt_logits)
     ttnn.end_trace_capture(mesh, trace_id, cq_id=0)
     _restore_gdn(gdn_snap)
 
-    def _update(token, position):
-        host = model.prepare_decode_inputs_host(
-            torch.tensor([[token]], dtype=torch.int32),
-            torch.tensor([position], dtype=torch.int32),
-            page_table=page_table,
-        )
-        copy_host_to_device(host, device_tensors=dev)
-
     pos = T
     decode_times = []
+    mismatches = 0
     while len(generated) < max_generated_tokens:
         _update(nxt, pos)
         t_step = time.time()
         ttnn.execute_trace(mesh, trace_id, cq_id=0, blocking=False)
         ttnn.synchronize_device(mesh)
         decode_times.append(time.time() - t_step)
-        nxt = _sample(model.process_output_decode(tt_logits, B=1, S=1).reshape(-1)[:vocab], generated)
+        if _greedy:
+            nxt = _read_tok(tt_idx, tt_val)
+            if _check:
+                host_nxt = _host_tok(tt_logits)
+                if nxt != host_nxt:
+                    mismatches += 1
+                    logger.error(f"[ondev-argmax] step={len(generated)} device={nxt} host={host_nxt}")
+                    assert (
+                        nxt == host_nxt
+                    ), f"on-device greedy token {nxt} != host argmax {host_nxt} at step {len(generated)}"
+        else:
+            nxt = _sample(model.process_output_decode(tt_logits, B=1, S=1).reshape(-1)[:vocab], generated)
         generated.append(nxt)
         pos += 1
         if nxt == tokenizer.eos_token_id:
             break
     ttnn.release_trace(mesh, trace_id)
+    if _check and _greedy:
+        logger.info(f"[ondev-argmax] checked {len(generated) - 1} decode tokens, mismatches={mismatches}")
 
     return generated, _perf(ttft, decode_times)
 

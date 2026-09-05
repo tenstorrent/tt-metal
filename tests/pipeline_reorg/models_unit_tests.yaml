@@ -194,6 +194,12 @@
   cmd: |
     unset TT_METAL_WATCHER  # blocked by #50886
     export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=Qwen/Qwen3.6-27B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3.6-27B
+    # One-time seed of the shared HF_HOME cache when this revision isn't on the mount yet.
+    # This job's env sets HF_HUB_OFFLINE=1 (and CI=true forces local_files_only=True
+    # downstream too), so a cold cache fails outright with LocalEntryNotFoundError instead of
+    # downloading. Override HF_HUB_OFFLINE for just this command; needs mlperf-read-only=false
+    # on this run too, since /mnt/MLPerf is otherwise mounted :ro and the download can't persist.
+    HF_HUB_OFFLINE=0 python3 -c "import os; from huggingface_hub import snapshot_download; snapshot_download(os.environ['HF_MODEL'])"
     pytest --timeout 90 models/demos/blackhole/qwen36/tests/test_attention_tp.py
     pytest --timeout 90 models/demos/blackhole/qwen36/tests/test_gdn_tp.py
     pytest --timeout 60 models/demos/blackhole/qwen36/tests/test_mlp_tp.py
@@ -205,12 +211,86 @@
     pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_vision_block.py
     pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_model.py
     pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_wrapped_model.py
+    pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_rope_tp.py
+    pytest --timeout 600 models/demos/blackhole/qwen36/tests/test_generate_tp.py
   model: qwen3.6-27b
   model_family: Qwen
   skus:
     bh_quietbox_2:
-      timeout: 28
+      timeout: 36
       tier: 1
+  owner_id: U08HL8X1ECD # Aniruddha Tupe
+  team: models
+
+- name: Qwen3.5-9B unit tests
+  # Wormhole N300 sibling of the Qwen3.6-27B/P150x4 entry above -- different checkpoint, mesh
+  # (1,2), and code path (TP=2 + Wormhole gates). Tier 3, not tier 1: no wh_n300 budget exists
+  # under models.unit_tier1 yet. Omits tests/unit/* (Blackhole P150 component suite) and
+  # full-depth test_prefill.py/test_decode.py (the primary N300 correctness gate, but too long
+  # for the tier-3 budget) and test_decode_bucketing.py (27B/P150x4 path only).
+  cmd: |
+    unset TT_METAL_WATCHER  # same watcher issue as 27B (#50886)
+    export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=Qwen/Qwen3.5-9B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3.5-9B MESH_DEVICE=N300
+    # One-time seed of the shared HF_HOME cache when this revision isn't on the mount yet.
+    # This job's env sets HF_HUB_OFFLINE=1 (and CI=true forces local_files_only=True
+    # downstream too), so a cold cache fails outright with LocalEntryNotFoundError instead of
+    # downloading. Override HF_HUB_OFFLINE for just this command; needs mlperf-read-only=false
+    # on this run too, since /mnt/MLPerf is otherwise mounted :ro and the download can't persist.
+    HF_HUB_OFFLINE=0 python3 -c "import os; from huggingface_hub import snapshot_download; snapshot_download(os.environ['HF_MODEL'])"
+    pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_model_tp.py -k "not prefill_paged_slots_long and not B32 and not isl2048"
+    pytest --timeout 480 models/demos/blackhole/qwen36/tests/test_vision_block.py
+    pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_wrapped_model.py
+  model: qwen3.5-9b
+  model_family: Qwen
+  skus:
+    # Measured 26 min on the first green run (actions/runs/33774111206); 30 leaves ~15% slack.
+    wh_n300:
+      timeout: 30
+      tier: 3
+  owner_id: U08HL8X1ECD # Aniruddha Tupe
+  team: models
+
+# Full-depth HF parity for the 27B. Split out from the entry above because it
+# additionally loads the HuggingFace reference (Qwen3_5ForCausalLM, bf16) on the
+# host, so it is far heavier than the per-module PCC tests and is gated at tier 2.
+# These are the checklist's "prefill full depth logit pcc" / "decoder full depth
+# logit pcc" checks; thresholds live in tests/pcc_thresholds.json.
+- name: Qwen3.6 full-depth PCC tests
+  cmd: |
+    unset TT_METAL_WATCHER  # blocked by #50886
+    export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=Qwen/Qwen3.6-27B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3.6-27B
+    export MESH_DEVICE=P150x4
+    pytest --timeout 1800 models/demos/blackhole/qwen36/tests/unit/test_prefill.py
+    pytest --timeout 1800 models/demos/blackhole/qwen36/tests/unit/test_decode.py
+  model: qwen3.6-27b
+  model_family: Qwen
+  skus:
+    bh_quietbox_2:
+      timeout: 40
+      tier: 2
+  owner_id: U08HL8X1ECD # Aniruddha Tupe
+  team: models
+
+# Single-device Blackhole (P150) coverage for the 9B -- the sibling of the wh_n300
+# entry above, which covers the same checkpoint on Wormhole (1,2). Nothing exercised
+# the P150 single-device path in CI; every other Qwen3.5/3.6 entry ran on a (1,4) mesh.
+# These are the tests/unit/ component PCC suite plus the pure-CPU mapping test.
+- name: Qwen3.5-9B P150 unit tests
+  cmd: |
+    unset TT_METAL_WATCHER  # blocked by #50886
+    export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=Qwen/Qwen3.5-9B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3.5-9B
+    export MESH_DEVICE=P150
+    pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_weight_mapping.py
+    pytest --timeout 900 models/demos/blackhole/qwen36/tests/unit/ \
+      --ignore=models/demos/blackhole/qwen36/tests/unit/test_prefill.py \
+      --ignore=models/demos/blackhole/qwen36/tests/unit/test_decode.py
+    pytest --timeout 600 models/demos/blackhole/qwen36/tests/test_prefill.py
+  model: qwen3.5-9b
+  model_family: Qwen
+  skus:
+    bh_p150:
+      timeout: 25
+      tier: 3
   owner_id: U08HL8X1ECD # Aniruddha Tupe
   team: models
 

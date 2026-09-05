@@ -20,6 +20,7 @@ I/O contract (TP mode):
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 
+from .vision_ccl import vision_ccl_kwargs
 from .vision_layernorm import LayerNorm
 
 
@@ -35,11 +36,19 @@ class DistributedLayerNorm(LightweightModule):
         weight_dtype=ttnn.bfloat8_b,
         eps: float = 1e-05,
         ccl_topology=ttnn.Topology.Linear,
+        replicated_input: bool = False,
+        ccl_kwargs=None,
+        sharded_fp32_acc: bool = False,
     ):
         super().__init__()
         self.tt_ccl = tt_ccl
         self.ccl_topology = ccl_topology
+        self.ccl_kwargs = ccl_kwargs if ccl_kwargs is not None else vision_ccl_kwargs()
         self.is_multichip = device.__class__.__name__ == "MeshDevice" and device.get_num_devices() > 1
+        # When the tower runs with replicated activations there is no fracture to gather: the input
+        # already carries the full hidden dim on every device, so this degrades to a plain LayerNorm
+        # (the same shortcut the single-device path takes). See vision_ccl.
+        self.replicated_input = replicated_input
 
         # Use the existing replicated-weight LayerNorm under the hood.
         self.norm = LayerNorm(
@@ -50,13 +59,15 @@ class DistributedLayerNorm(LightweightModule):
             state_dict_prefix=state_dict_prefix,
             weight_cache_path=weight_cache_path,
             weight_dtype=weight_dtype,
+            # Pass-through only; the caller (vision_block) owns the SKU gate.
+            sharded_fp32_acc=sharded_fp32_acc,
         )
 
-    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        # If we're not multi-chip there is nothing to gather; keep the
-        # behaviour identical to the existing replicated LayerNorm.
-        if not self.is_multichip:
-            return self.norm(x)
+    def forward(self, x: ttnn.Tensor, memory_config=None) -> ttnn.Tensor:
+        # Nothing to gather if we're single-chip, or if the tower keeps activations replicated so the
+        # full hidden dim is already present on every device.
+        if not self.is_multichip or self.replicated_input:
+            return self.norm(x, memory_config=memory_config)
 
         # Gather the fractured hidden dim back into a replicated tensor.
         # Mirrors `DistributedNorm.forward` (non-TG, non-distributed-norm path):
@@ -75,15 +86,14 @@ class DistributedLayerNorm(LightweightModule):
             topology=self.ccl_topology,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-            chunks_per_sync=10,
-            num_workers_per_link=2,
             num_buffers_per_channel=2,
+            **self.ccl_kwargs,
         )
 
         # Regular replicated LayerNorm on full hidden dim. The gathered buffer
         # is an intermediate we own; free it once the norm has produced its
         # own output buffer.
-        out = self.norm(gathered)
+        out = self.norm(gathered, memory_config=memory_config)
         if out is not gathered:
             ttnn.deallocate(gathered)
         return out
