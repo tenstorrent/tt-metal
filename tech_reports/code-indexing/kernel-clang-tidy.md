@@ -271,11 +271,21 @@ because the translation units are the firmware wrappers under
 `kernels/` would skip every TU and analyze nothing. Exclusion-only also fails
 open as new in-repo device directories appear.
 
-`.clang-tidy` is now only `CheckOptions` plus `FormatStyle`, forwarded via
-`cc-verbatim-args-file`. That composes correctly because clang-tidy's
-command-line `-checks`, which CodeChecker supplies, takes precedence over a
-config-file `Checks:` key, while `CheckOptions` from the config are still
-honored — verified with `--list-checks`/`--dump-config` rather than assumed.
+**Check options** go through `--checker-config
+clang-tidy:<checker>:<option>=<value>`, not through a config file. Forwarding
+`--config-file` via `cc-verbatim-args-file` was the first attempt and it fails:
+once `take-config-from-directory` is off, CodeChecker builds its own `-config`
+for clang-tidy (`clangtidy/analyzer.py:509`) and appends our verbatim args
+too, so clang-tidy aborts every TU with "--config-file and --config are
+mutually exclusive". CodeChecker does merge a `-config=<JSON>` supplied in the
+verbatim args, but only matches args starting with `-config`, so
+`--config-file` slips past the merge. `--checker-config` avoids the whole
+problem by landing the options inside that single `-config`, and CodeChecker
+then also defaults `HeaderFilterRegex` to `.*`, which is what we want with the
+skiplist doing the scoping. Verified by reading the built command out of a
+failed-analysis zip: one `-config`, no `--config-file`, all five options
+present. `tt_metal/jit_build/kernel_clang_tidy/.clang-tidy` survives only for
+the local `--run` path and mirrors those options.
 
 `clangsa` is deliberately not enabled yet. Nothing path-sensitive runs today,
 and on riscv32 cross-compiled code leaning on SFPI's analysis-fallback
@@ -300,6 +310,14 @@ follow-up once the `--enable-all` volume is understood.
   1138, `tt_metal/fabric/hw` 55) — where much of the device logic actually
   lives. Both have since been replaced. Any comparison against the early runs
   should account for that rather than reading it as a regression.
+* **Colourized log suffix (fixed).** tt-logger appends a `(build.cpp:NNN)`
+  source location, and with colour on it arrives wrapped in SGR escapes:
+  `...idle_erisck.cc \x1b[90m(build.cpp:686)\x1b[0m`. The escapes pushed the
+  suffix off the `$` anchor in `LOG_CMD_RE`, so the strip missed and the whole
+  escape run was spliced into the argv as an extra input file — every captured
+  entry carried it, and `clang++` reported "no such file or directory" once
+  per TU. The parser now strips SGR sequences before matching, with a
+  `--self-test` case covering the colourized form.
 * **Coverage = what the run compiled.** One test lints one test's kernels; a
   suite lints what the suite exercises. Kernels (or TRISC roles, or `#ifdef`
   branches) the run never compiled are not analyzed.

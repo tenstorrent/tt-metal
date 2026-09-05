@@ -162,11 +162,19 @@ KERNEL_DIR_RE = re.compile(r"/kernels/(?P<kname>[^/]+)/(?P<khash>[^/]+)/(?P<targ
 # source token (a link line has only .o/.elf), and is_sfpi_compile requires
 # "-c" present and "-E" absent. Exercised explicitly by --self-test.
 #
-# The logger appends a "(build.cpp:NNN)" source-location suffix. argv elements
-# are joined with single spaces and never quoted; kernel compile argv elements
-# contain no spaces in practice (paths, -D defines, comma-joined CTAs), so a
-# plain split() recovers the elements verbatim -- including defines that carry
-# literal quote characters, which shlex would eat.
+# The logger appends a "(build.cpp:NNN)" source-location suffix, and when
+# stdout is a terminal (or tt-logger's colour is otherwise on) wraps it in SGR
+# escapes: "...idle_erisck.cc \x1b[90m(build.cpp:686)\x1b[0m". Those escapes
+# push the suffix off the "$" anchor, so the strip below silently misses and
+# the whole "\x1b[90m(build.cpp:686)\x1b[0m" run ends up spliced into the argv
+# as an extra input file -- clang++ then reports "no such file or directory"
+# once per translation unit. Strip SGR sequences before matching.
+#
+# argv elements are joined with single spaces and never quoted; kernel compile
+# argv elements contain no spaces in practice (paths, -D defines, comma-joined
+# CTAs), so a plain split() recovers the elements verbatim -- including defines
+# that carry literal quote characters, which shlex would eat.
+ANSI_SGR_RE = re.compile(r"\x1b\[[0-9;]*m")
 LOG_CMD_RE = re.compile(r"g\+\+ compile cmd: (?P<cmd>.+?)(?:\s*\(build\.cpp:\d+\))?\s*$")
 
 
@@ -176,7 +184,7 @@ def entries_from_log(path):
     seen_lines = set()
     with open(path, errors="replace") as f:
         for line in f:
-            m = LOG_CMD_RE.search(line)
+            m = LOG_CMD_RE.search(ANSI_SGR_RE.sub("", line))
             if not m:
                 continue
             cmd = m.group("cmd")
@@ -377,10 +385,19 @@ def self_test():
         f"-flto=auto -T/x/kernel_trisc1.ld -Wl,--emit-relocs ._7_0_trisck.o /x/substitutes.o "
         f"-o {out_dir}/trisc1.elf (build.cpp:777)\n"
     )
+    # Same line as tt-logger emits it with colour on: SGR escapes wrap the
+    # source-location suffix. Must strip to exactly the same argv, hence dedupe
+    # to a single entry rather than adding a malformed second one.
+    colored_line = (
+        "2026-01-01 00:00:03.000 | info     |    BuildKernels |     g++ compile cmd: "
+        + " ".join(compile_argv)
+        + " \x1b[90m(build.cpp:686)\x1b[0m\n"
+    )
     with tempfile.NamedTemporaryFile("w", suffix=".log", delete=False) as f:
         f.write("2026-01-01 00:00:00.000 | info     | Metal | unrelated (foo.cpp:1)\n")
         f.write(compile_line)
         f.write(compile_line)  # duplicate (forced recompile) -> must dedupe
+        f.write(colored_line)  # colourized suffix -> must strip to the same argv
         f.write(link_line)  # link -> must be discarded
         log_path = f.name
 
@@ -389,6 +406,9 @@ def self_test():
     assert len(entries) == 1, f"expected 1 entry (compile only, deduped), got {len(entries)}"
     assert entries[0]["file"].endswith("trisck.cc")
     assert entries[0]["directory"] == out_dir
+    argv_text = " ".join(entries[0]["arguments"])
+    assert "\x1b" not in argv_text, "SGR escape leaked into the captured argv"
+    assert "build.cpp" not in argv_text, "source-location suffix leaked into the captured argv"
 
     # The link argv must also be rejected by the secondary filter (bear-mode path).
     link_argv = link_line.split("g++ link cmd: ", 1)[1].split()
@@ -435,7 +455,7 @@ def main():
     ap.add_argument("--config-file", default="", help=".clang-tidy config for --run")
     ap.add_argument(
         "--header-filter",
-        default=r".*/(kernels|kernels_ng|kernels_dfb|test_kernels)/.*",
+        default=r".*/(kernels|kernels_ng|kernels_dfb|test_kernels)/.*|.*/tt_metal/(tt-llk|hw|fabric)/.*",
         help="--header-filter passed to clang-tidy (findings in #included kernel sources)",
     )
     ap.add_argument("--jobs", type=int, default=os.cpu_count() or 4)

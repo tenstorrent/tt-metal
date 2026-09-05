@@ -35,6 +35,16 @@
         "--disable",
         "checker:portability-simd-intrinsics",
         "--disable",
-        "prefix:clang-diagnostic-c++98-compat"
+        "prefix:clang-diagnostic-c++98-compat",
+        "--checker-config",
+        "clang-tidy:readability-function-cognitive-complexity:IgnoreMacros=true",
+        "--checker-config",
+        "clang-tidy:readability-function-cognitive-complexity:Threshold=312",
+        "--checker-config",
+        "clang-tidy:readability-simplify-boolean-expr:SimplifyDeMorgan=false",
+        "--checker-config",
+        "clang-tidy:readability-else-after-return:WarnOnUnfixable=false",
+        "--checker-config",
+        "clang-tidy:readability-else-after-return:WarnOnConditionVariables=false"
     ]
 }

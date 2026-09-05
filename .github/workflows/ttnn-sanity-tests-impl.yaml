@@ -509,13 +509,9 @@ jobs:
             echo "::warning::no kernel compile commands captured; skipping clang-tidy."
             exit 0
           fi
-          # Checker selection and scoping come from codechecker.json + skiplist;
-          # the forwarded --config-file supplies only CheckOptions.
-          echo "--config-file=$PWD/tt_metal/jit_build/kernel_clang_tidy/.clang-tidy" > /work/kernel_tidy/tidyargs
+          # Checkers, check options and scoping all come from codechecker.json.
           CodeChecker analyze /work/kernel_tidy/compile_commands.json \
             --config tt_metal/jit_build/kernel_clang_tidy/codechecker.json \
-            --analyzer-config \
-              'clang-tidy:cc-verbatim-args-file=/work/kernel_tidy/tidyargs' \
             --jobs 8 \
             --output /work/kernel_tidy/reports || echo "::warning::CodeChecker analyze reported failures (continuing)"
           CodeChecker parse /work/kernel_tidy/reports --export html --output /work/kernel_tidy_html \
