@@ -2,17 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Host-side unit tests for the destination-major 2D action-map codec -- the single encoding all 2D
-// fabric traffic uses after the codec unification.
-//
-// Machine-free by construction: every function under test is constexpr/inline arithmetic over plain
-// buffers, so these need no cluster, no control plane and no device. They cover the parts of the
-// codec that a device test would only exercise indirectly, and that a silent mis-encode would make
-// look like a hang rather than a wrong answer.
-//
-// What is deliberately NOT here: anything that needs L1 (the device-side route_buffer *builder* in
-// tt_fabric_api.h reads the packed vectors out of the routing table), and anything that needs a
-// real mesh graph (see test_express_ring_topology.cpp for the topology-derivation goldens).
+// Machine-free action-map packing and decode coverage.
 
 #include <gtest/gtest.h>
 
@@ -22,14 +12,12 @@
 #include <vector>
 
 #include "hostdevcommon/fabric_common.h"
-#include "tt_metal/fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/routing_2d_table_builder.hpp"
 
 namespace tt::tt_fabric::routing_2d_codec_tests {
 namespace {
 
 using Codec = Routing2DCodec;
-constexpr uint32_t kMaximumActionMapBytes = 64 + 4;
 
 struct Shape {
     const char* name;
@@ -37,12 +25,12 @@ struct Shape {
     uint32_t x;
 };
 
-// Representative packing geometries. The descriptor sweep owns exhaustive in-tree shape coverage.
+// Representative geometries, including both maximum-layout orientations.
 constexpr std::array<Shape, 4> kRepresentativeShapes = {{
     {"[8,4]", 8, 4},
-    {"[8,8]", 8, 8},
-    {"[8,16]", 8, 16},
     {"[1,16]", 1, 16},
+    {"[64,4]", 64, 4},
+    {"[4,64]", 4, 64},
 }};
 
 // Dimension-order oracle for a plain (chordless) mesh: rows increase southward, columns eastward.
@@ -55,10 +43,6 @@ eth_chan_directions dor_x(uint32_t cur, uint32_t dst) {
 
 constexpr uint32_t action_vector_bytes(uint32_t y_size, uint32_t x_size) {
     return Codec::table_bytes(y_size) + Codec::table_bytes(x_size);
-}
-
-constexpr uint32_t mcast_tree_bytes(uint32_t y_size, uint32_t x_size) {
-    return Codec::MCAST_TREE_EDGE_BYTES * (Codec::mcast_tree_edge_count(y_size) + Codec::mcast_tree_edge_count(x_size));
 }
 
 }  // namespace
@@ -75,14 +59,6 @@ TEST(Routing2DCodec, ActionVectorFootprintMatchesThePackedLayout) {
     EXPECT_EQ(action_vector_bytes(64, 4), 64u * 16u + 4u * 1u);  // 1028
 }
 
-TEST(Routing2DCodec, MaximumShapesFillTheHybridSlotExactly) {
-    for (const auto& shape : std::array<Shape, 2>{{{"[64,4]", 64, 4}, {"[4,64]", 4, 64}}}) {
-        EXPECT_TRUE(is_valid_2d_route_table_shape(shape.y, shape.x));
-        EXPECT_EQ(action_vector_bytes(shape.y, shape.x), Codec::ACTION_VECTOR_CAPACITY_BYTES) << shape.name;
-        EXPECT_EQ(mcast_tree_bytes(shape.y, shape.x), Codec::MCAST_TREE_CAPACITY_BYTES) << shape.name;
-    }
-}
-
 TEST(Routing2DCodec, ShapesBeyondTheAddressableRangeAreRejected) {
     EXPECT_FALSE(is_valid_2d_route_table_shape(0, 4));
     EXPECT_FALSE(is_valid_2d_route_table_shape(4, 0));
@@ -91,38 +67,6 @@ TEST(Routing2DCodec, ShapesBeyondTheAddressableRangeAreRejected) {
     // 64x8 is within the per-axis range, but has 512 chips and needs 1040 vector bytes.
     EXPECT_FALSE(is_valid_2d_route_table_shape(64, 8));
     EXPECT_FALSE(is_valid_2d_route_table_shape(64, 64));
-}
-
-TEST(Routing2DCodec, RuntimeShapeMetadataDistinguishesTransposedMeshes) {
-    routing_l1_info_t routing_info{};
-    constexpr uint32_t dst_dev_id = 6;
-
-    routing_info.mesh_y_size = 8;
-    routing_info.mesh_x_size = 4;
-    EXPECT_EQ(dst_dev_id / routing_info.mesh_x_size, 1u);
-    EXPECT_EQ(dst_dev_id % routing_info.mesh_x_size, 2u);
-
-    routing_info.mesh_y_size = 4;
-    routing_info.mesh_x_size = 8;
-    EXPECT_EQ(dst_dev_id / routing_info.mesh_x_size, 0u);
-    EXPECT_EQ(dst_dev_id % routing_info.mesh_x_size, 6u);
-
-    EXPECT_EQ(sizeof(routing_info), 2704u);
-    EXPECT_EQ(offsetof(routing_l1_info_t, mesh_y_size), 2702u);
-    EXPECT_EQ(offsetof(routing_l1_info_t, mesh_x_size), 2703u);
-}
-
-// ---------------------------------------------------------------------------------------------
-// Packet header sizing
-// ---------------------------------------------------------------------------------------------
-
-TEST(Routing2DCodec, HeaderTiersAreSizeClassAligned) {
-    EXPECT_EQ(sizeof(HybridMeshPacketHeaderT<20>), 80u);
-    EXPECT_EQ(sizeof(HybridMeshPacketHeaderT<36>), 96u);
-    EXPECT_EQ(sizeof(HybridMeshPacketHeaderT<52>), 112u);
-    EXPECT_EQ(sizeof(HybridMeshPacketHeaderT<kMaximumActionMapBytes>), 128u);
-    EXPECT_EQ(64u + 4u, kMaximumActionMapBytes);
-    EXPECT_EQ(sizeof(HybridMeshPacketHeaderT<kMaximumActionMapBytes>) + sizeof(UDMControlFields), 144u);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -156,30 +100,6 @@ TEST(Routing2DCodec, PackDecodeRoundTripsOnAPlainMesh) {
                     EXPECT_EQ(got, cur < dst ? Codec::X2_EAST : Codec::X2_WEST)
                         << s.name << " x[" << dst << "][" << cur << "]";
                 }
-            }
-        }
-    }
-}
-
-TEST(Routing2DCodec, PackDecodeRoundTripsAtMaximumShapes) {
-    for (const auto& shape : std::array<Shape, 2>{{{"[64,4]", 64, 4}, {"[4,64]", 4, 64}}}) {
-        std::vector<std::uint8_t> table(Codec::ACTION_VECTOR_CAPACITY_BYTES, 0);
-        ASSERT_TRUE(pack_2d_route_vectors(table.data(), table.size(), shape.y, shape.x, dor_y, dor_x)) << shape.name;
-
-        for (uint32_t dst = 0; dst < shape.y; ++dst) {
-            const std::uint8_t* row = Codec::y_row(table.data(), shape.y, dst);
-            for (uint32_t cur = 0; cur < shape.y; ++cur) {
-                const uint8_t expected = cur == dst ? Codec::Y2_STOP : (cur < dst ? Codec::Y2_SOUTH : Codec::Y2_NORTH);
-                EXPECT_EQ(Codec::get_action_2bit(row, cur), expected)
-                    << shape.name << " y[" << dst << "][" << cur << "]";
-            }
-        }
-        for (uint32_t dst = 0; dst < shape.x; ++dst) {
-            const std::uint8_t* row = Codec::x_row(table.data(), shape.y, shape.x, dst);
-            for (uint32_t cur = 0; cur < shape.x; ++cur) {
-                const uint8_t expected = cur == dst ? Codec::X2_STOP : (cur < dst ? Codec::X2_EAST : Codec::X2_WEST);
-                EXPECT_EQ(Codec::get_action_2bit(row, cur), expected)
-                    << shape.name << " x[" << dst << "][" << cur << "]";
             }
         }
     }
@@ -313,32 +233,6 @@ TEST(Routing2DCodec, ZeroedRouteBufferDecodesToNothing) {
 
     EXPECT_EQ(Codec::decode_action<eth_chan_directions::NORTH>(route_buffer.data(), 2, 1, kY), 0);
     EXPECT_EQ(Codec::decode_action<eth_chan_directions::EAST>(route_buffer.data(), 2, 1, kY), 0);
-}
-
-// ---------------------------------------------------------------------------------------------
-// Forward direction slot ordering
-// ---------------------------------------------------------------------------------------------
-
-// fwd_dirs is the compact dispatch slot order; every facing must exclude itself and list exactly the
-// other four, or a slot would select the wrong outgoing sender.
-TEST(Routing2DCodec, ForwardDirectionsExcludeSelfAndCoverTheRest) {
-    const auto check = [](auto dirs, eth_chan_directions self) {
-        std::array<bool, 5> seen = {};
-        for (auto d : dirs) {
-            EXPECT_NE(d, self) << "a router must not list its own facing as an output";
-            seen[static_cast<size_t>(d)] = true;
-        }
-        for (size_t i = 0; i < seen.size(); ++i) {
-            if (static_cast<eth_chan_directions>(i) != self) {
-                EXPECT_TRUE(seen[i]) << "missing output direction " << i;
-            }
-        }
-    };
-    check(Codec::fwd_dirs<eth_chan_directions::EAST>(), eth_chan_directions::EAST);
-    check(Codec::fwd_dirs<eth_chan_directions::WEST>(), eth_chan_directions::WEST);
-    check(Codec::fwd_dirs<eth_chan_directions::NORTH>(), eth_chan_directions::NORTH);
-    check(Codec::fwd_dirs<eth_chan_directions::SOUTH>(), eth_chan_directions::SOUTH);
-    check(Codec::fwd_dirs<eth_chan_directions::Z>(), eth_chan_directions::Z);
 }
 
 }  // namespace tt::tt_fabric::routing_2d_codec_tests

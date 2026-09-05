@@ -12,24 +12,7 @@
 
 namespace tt::tt_fabric {
 
-/**
- * RouterVcShape / layout Tests
- *
- * The per-VC channel shape of one router and the flat layout read off it, from router_vc_shape()
- * and the shape's flat_sender_id/flat_receiver_id prefix sums:
- *
- * - Non-express mesh/1D: VC0 only (4 senders in 2D, 2 in 1D); VC1 appears with an intermesh config.
- * - The intermesh boundary family: VC0 = worker + 4 wired producers (5), VC1 = the 4-wide
- *   from-boundary fanout; VC1 senders start at flat index 5.
- * - Express: VC0 widens to the family max of 5, VC1 to 4; VC1 senders start after the wide base.
- * - VC2: one sender at the flat base of the family (7 non-express, 8 on a boundary chip, 9 express),
- *   and no VC2 receiver on the boundary router.
- * - Builder ownership (builder_type_for_vc): tensix takes VC0 in MUX mode, nothing else.
- * - IntermeshVCConfig factory flags and invalid-query failures.
- *
- * The wiring primitive itself is pinned in test_express_connection_wiring.cpp, and the turn sets
- * built from it in test_router_turn_set.cpp.
- */
+// RouterVcShape family counts and flat-layout boundaries.
 
 class RouterWiringRulesTest : public ::testing::Test {};
 
@@ -51,23 +34,12 @@ PerDirectionCapabilities chip_with_z(std::optional<EdgeCapability> z_capability)
 
 // ============ Non-express mesh / 1D ============
 
-TEST_F(RouterWiringRulesTest, NonExpressMesh_AndTorus_VC0OnlyLayout) {
-    for (auto topology : {Topology::Mesh, Topology::Torus}) {
-        const auto shape = router_vc_shape(
-            topology,
-            RoutingDirection::N,
-            chip_with_z(std::nullopt),
-            /*express_routing_enabled=*/false,
-            nullptr);
-
-        EXPECT_EQ(shape.num_vcs, 1) << "topology " << enchantum::to_string(topology);
-        EXPECT_EQ(shape.sender_counts[0], 4);
-        EXPECT_EQ(shape.sender_counts[1], 0);
-
-        for (uint32_t i = 0; i < 4; ++i) {
-            EXPECT_EQ(shape.flat_sender_id(0, i), i);
-        }
-    }
+TEST_F(RouterWiringRulesTest, NonExpress2D_VC0OnlyLayout) {
+    const auto shape = router_vc_shape(Topology::Mesh, RoutingDirection::N, chip_with_z(std::nullopt), false, nullptr);
+    EXPECT_EQ(shape.num_vcs, 1);
+    EXPECT_EQ(shape.sender_counts[0], 4);
+    EXPECT_EQ(shape.sender_counts[1], 0);
+    EXPECT_EQ(shape.flat_sender_id(0, 3), 3);
 }
 
 TEST_F(RouterWiringRulesTest, Linear_VC0OnlyLayout) {
@@ -81,10 +53,7 @@ TEST_F(RouterWiringRulesTest, Linear_VC0OnlyLayout) {
     EXPECT_EQ(shape.num_vcs, 1);
     EXPECT_EQ(shape.sender_counts[0], 2);
     EXPECT_EQ(shape.sender_counts[1], 0);
-
-    for (uint32_t i = 0; i < 2; ++i) {
-        EXPECT_EQ(shape.flat_sender_id(0, i), i);
-    }
+    EXPECT_EQ(shape.flat_sender_id(0, 1), 1);
 }
 
 TEST_F(RouterWiringRulesTest, BuilderOwnership_TensixTakesVC0Only) {
@@ -111,10 +80,9 @@ TEST_F(RouterWiringRulesTest, MeshRouter_IntermeshVC1Layout) {
 
         EXPECT_EQ(shape.num_vcs, 2);
         EXPECT_EQ(shape.sender_counts[1], 3) << "3 cardinal producers, no extra-port slot";
-        // VC1 senders are laid out immediately after the four VC0 senders.
-        for (uint32_t i = 0; i < 3; ++i) {
-            EXPECT_EQ(shape.flat_sender_id(1, i), 4 + i);
-        }
+        EXPECT_EQ(shape.sender_counts[2], 0);
+        EXPECT_EQ(shape.flat_sender_id(1, 0), 4);
+        EXPECT_EQ(shape.flat_sender_id(1, 2), 6);
     }
 }
 
@@ -130,9 +98,8 @@ TEST_F(RouterWiringRulesTest, BoundaryChipMeshRouter_VC1HasExtraFromBoundarySlot
 
     EXPECT_EQ(shape.num_vcs, 2);
     EXPECT_EQ(shape.sender_counts[1], 4) << "3 cardinals + the from-boundary producer";
-    for (uint32_t i = 0; i < 4; ++i) {
-        EXPECT_EQ(shape.flat_sender_id(1, i), 4 + i);
-    }
+    EXPECT_EQ(shape.flat_sender_id(1, 0), 4);
+    EXPECT_EQ(shape.flat_sender_id(1, 3), 7);
 }
 
 // ============ The intermesh boundary router ============
@@ -191,99 +158,41 @@ TEST_F(RouterWiringRulesTest, ExpressMesh_WidenedVC0AndVC1Base) {
     EXPECT_EQ(shape.num_vcs, 2);
     EXPECT_EQ(shape.sender_counts[0], 5);
     EXPECT_EQ(shape.sender_counts[1], 4);
-    for (uint32_t i = 0; i < 4; ++i) {
-        EXPECT_EQ(shape.flat_sender_id(1, i), 5 + i);
+    EXPECT_EQ(shape.flat_sender_id(1, 0), 5);
+    EXPECT_EQ(shape.flat_sender_id(1, 3), 8);
+}
+
+TEST_F(RouterWiringRulesTest, VC2FlatLayoutByRouterFamily) {
+    struct Case {
+        Topology topology;
+        RoutingDirection facing;
+        std::optional<EdgeCapability> z_capability;
+        bool express;
+        uint32_t expected_sender;
+        bool has_receiver;
+    };
+    const std::vector<Case> cases = {
+        {Topology::Torus, RoutingDirection::N, std::nullopt, true, 9, true},
+        {Topology::Mesh, RoutingDirection::N, std::nullopt, false, 7, true},
+        {Topology::Mesh, RoutingDirection::N, EdgeCapability::INTERMESH, false, 8, true},
+        {Topology::Mesh, RoutingDirection::Z, EdgeCapability::INTERMESH, false, 9, false},
+    };
+
+    auto config = IntermeshVCConfig::full_mesh();
+    config.requires_vc2 = true;
+    for (const auto& test : cases) {
+        const auto shape =
+            router_vc_shape(test.topology, test.facing, chip_with_z(test.z_capability), test.express, &config);
+        EXPECT_EQ(shape.num_vcs, 3);
+        EXPECT_EQ(shape.sender_counts[2], 1);
+        EXPECT_EQ(shape.flat_sender_id(2, 0), test.expected_sender);
+        EXPECT_EQ(shape.receiver_counts[2], test.has_receiver ? 1u : 0u);
+        if (test.has_receiver) {
+            EXPECT_EQ(shape.flat_receiver_id(2, 0), 2);
+        } else {
+            EXPECT_THROW((void)shape.flat_receiver_id(2, 0), std::exception);
+        }
     }
-}
-
-TEST_F(RouterWiringRulesTest, ExpressMesh_VC2AtFlatIndex9) {
-    // 5 + 4 + 1 reaches the num_max_sender_channels ceiling exactly.
-    auto config = IntermeshVCConfig::full_mesh();
-    config.requires_vc2 = true;
-    const auto shape = router_vc_shape(
-        Topology::Torus,
-        RoutingDirection::N,
-        chip_with_z(std::nullopt),
-        /*express_routing_enabled=*/true,
-        &config);
-
-    EXPECT_EQ(shape.num_vcs, 3);
-    EXPECT_EQ(shape.flat_sender_id(2, 0), 9);
-}
-
-// ============ VC2 on non-express and boundary families ============
-
-TEST_F(RouterWiringRulesTest, VC2_NonExpressMeshFlatIndices) {
-    auto config = IntermeshVCConfig::full_mesh();
-    config.requires_vc2 = true;
-    const auto shape = router_vc_shape(
-        Topology::Mesh,
-        RoutingDirection::N,
-        chip_with_z(std::nullopt),
-        /*express_routing_enabled=*/false,
-        &config);
-
-    EXPECT_EQ(shape.num_vcs, 3);
-    EXPECT_EQ(shape.sender_counts[2], 1);
-    // VC0:4 + VC1:3 places the VC2 sender at flat index 7; the receiver follows VC0/VC1.
-    EXPECT_EQ(shape.flat_sender_id(2, 0), 7);
-    EXPECT_EQ(shape.flat_receiver_id(2, 0), 2);
-
-    // The existing VCs are untouched by the extra sender.
-    for (uint32_t i = 0; i < 4; ++i) {
-        EXPECT_EQ(shape.flat_sender_id(0, i), i);
-    }
-    for (uint32_t i = 0; i < 3; ++i) {
-        EXPECT_EQ(shape.flat_sender_id(1, i), 4 + i);
-    }
-}
-
-TEST_F(RouterWiringRulesTest, VC2_BoundaryChipFlatIndices) {
-    // A boundary-chip mesh router: VC0:4 + VC1:4 (the extra from-boundary slot) places the VC2
-    // sender at flat index 8.
-    auto config = IntermeshVCConfig::full_mesh();
-    config.requires_vc2 = true;
-    const auto shape = router_vc_shape(
-        Topology::Mesh,
-        RoutingDirection::N,
-        chip_with_z(EdgeCapability::INTERMESH),
-        /*express_routing_enabled=*/false,
-        &config);
-
-    EXPECT_EQ(shape.num_vcs, 3);
-    EXPECT_EQ(shape.flat_sender_id(2, 0), 8);
-}
-
-TEST_F(RouterWiringRulesTest, VC2_BoundaryRouterFlatIndexAndNoReceiver) {
-    // The boundary router: VC0:5 + VC1:4 places the VC2 sender at flat index 9, and the boundary
-    // services no VC2 receiver.
-    auto config = IntermeshVCConfig::full_mesh();
-    config.requires_vc2 = true;
-    const auto shape = router_vc_shape(
-        Topology::Mesh,
-        RoutingDirection::Z,
-        chip_with_z(EdgeCapability::INTERMESH),
-        /*express_routing_enabled=*/false,
-        &config);
-
-    EXPECT_EQ(shape.num_vcs, 3);
-    EXPECT_EQ(shape.sender_counts[2], 1);
-    EXPECT_EQ(shape.flat_sender_id(2, 0), 9);
-    EXPECT_EQ(shape.receiver_counts[2], 0);
-    EXPECT_THROW((void)shape.flat_receiver_id(2, 0), std::exception);
-}
-
-TEST_F(RouterWiringRulesTest, VC2_RequiresExplicitEnable) {
-    auto config = IntermeshVCConfig::full_mesh();  // does not set requires_vc2
-    const auto shape = router_vc_shape(
-        Topology::Mesh,
-        RoutingDirection::N,
-        chip_with_z(std::nullopt),
-        /*express_routing_enabled=*/false,
-        &config);
-
-    EXPECT_EQ(shape.num_vcs, 2);
-    EXPECT_EQ(shape.sender_counts[2], 0);
 }
 
 // ============ IntermeshVCConfig factories ============

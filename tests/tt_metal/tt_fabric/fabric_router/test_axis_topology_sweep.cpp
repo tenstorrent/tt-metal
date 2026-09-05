@@ -2,14 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Sweeps both axes of every in-tree mesh descriptor across express, ordinary-ring, and line
-// topologies. Every hop must use a declared edge; in particular, a line cannot route modularly over
-// a nonexistent closing edge.
-//
-// Machine-free: MeshGraph(ClusterType, path) needs no cluster, no discovery and no topology mapper.
+// Every route in each loadable in-tree descriptor must use declared edges and fit the 2D table ABI.
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <filesystem>
 #include <set>
 #include <string>
@@ -46,12 +43,12 @@ std::vector<std::filesystem::path> all_descriptors() {
     return out;
 }
 
-// A descriptor that will not load is not this test's business -- several need rank bindings, a
-// specific cluster type, or a live topology mapper. They are counted, not asserted on, and the
-// suite fails if too few load (see MinimumCoverage) so it cannot quietly become vacuous.
+// Some descriptors require rank bindings or a live topology mapper; a coverage floor prevents a
+// vacuous pass when those are skipped.
 struct SweepResult {
     int descriptors_loaded = 0;
     int descriptors_skipped = 0;
+    int shapes_checked = 0;
     int axes_checked = 0;
     int lines = 0;
     int rings_or_express = 0;
@@ -92,7 +89,7 @@ void check_route(
     }
 }
 
-SweepResult sweep(bool exhaustive_routes) {
+SweepResult sweep() {
     SweepResult r;
     for (const auto& path : all_descriptors()) {
         std::unique_ptr<MeshGraph> mesh_graph;
@@ -106,6 +103,14 @@ SweepResult sweep(bool exhaustive_routes) {
 
         for (const auto mesh_id : mesh_graph->get_mesh_ids()) {
             const auto shape = mesh_graph->get_mesh_shape(mesh_id);
+            const auto y = static_cast<uint32_t>(shape[0]);
+            const auto x = static_cast<uint32_t>(shape[1]);
+            r.shapes_checked++;
+            EXPECT_TRUE(is_valid_2d_route_table_shape(y, x))
+                << path.filename().string() << " mesh " << *mesh_id << " shape " << y << "x" << x;
+            EXPECT_LE(y + x, 68u) << path.filename().string() << " mesh " << *mesh_id
+                                  << " exceeds the packet action-map buffer";
+
             for (int axis = 0; axis < 2; axis++) {
                 const int axis_len = static_cast<int>(shape[axis]);
                 if (axis_len < 2) {
@@ -115,12 +120,8 @@ SweepResult sweep(bool exhaustive_routes) {
                 try {
                     topo = derive_axis_topology(*mesh_graph, mesh_id, axis);
                 } catch (const std::exception& e) {
-                    // Only the route-checking pass owns derivation failures. MinimumCoverage is a
-                    // counting guard and must not re-report the same fault as a second red test.
-                    if (exhaustive_routes) {
-                        ADD_FAILURE() << path.filename().string() << " mesh " << *mesh_id << " axis " << axis
-                                      << ": derivation threw: " << e.what();
-                    }
+                    ADD_FAILURE() << path.filename().string() << " mesh " << *mesh_id << " axis " << axis
+                                  << ": derivation threw: " << e.what();
                     r.derivations_failed++;
                     continue;
                 }
@@ -136,9 +137,6 @@ SweepResult sweep(bool exhaustive_routes) {
                 EXPECT_EQ(static_cast<int>(topo.domain_of.size()), axis_len) << where << ": domain_of is undersized";
                 EXPECT_EQ(topo.axis_len, axis_len) << where << ": axis_len disagrees with the mesh shape";
 
-                if (!exhaustive_routes) {
-                    continue;
-                }
                 for (int src = 0; src < axis_len; src++) {
                     for (int dst = 0; dst < axis_len; dst++) {
                         if (src != dst) {
@@ -160,55 +158,21 @@ SweepResult sweep(bool exhaustive_routes) {
 // Every hop of every canonical route, on every axis of every mesh of every descriptor that loads,
 // crosses a declared edge and converges without revisiting a row.
 TEST(AxisTopologySweep, EveryRouteCrossesOnlyDeclaredEdges) {
-    const auto r = sweep(/*exhaustive_routes=*/true);
+    const auto r = sweep();
     RecordProperty("descriptors_loaded", r.descriptors_loaded);
     RecordProperty("descriptors_skipped", r.descriptors_skipped);
+    RecordProperty("shapes_checked", r.shapes_checked);
     RecordProperty("axes_checked", r.axes_checked);
+    RecordProperty("derivations_failed", r.derivations_failed);
     RecordProperty("line_axes", r.lines);
     RecordProperty("ring_or_express_axes", r.rings_or_express);
 
-    // Both families must actually appear, or the sweep is not exercising what it claims to.
+    EXPECT_GE(r.descriptors_loaded, 20) << "only " << r.descriptors_loaded << " descriptors loaded ("
+                                        << r.descriptors_skipped << " skipped)";
+    EXPECT_GE(r.axes_checked, 40);
+    EXPECT_GT(r.shapes_checked, 0);
     EXPECT_GT(r.lines, 0) << "no LINE axis was swept -- the line fallback is going untested";
     EXPECT_GT(r.rings_or_express, 0) << "no ring/express axis was swept";
-}
-
-// Guards against the sweep silently degrading to nothing if descriptor loading breaks or the
-// directories move. The floor is deliberately far below the real count.
-TEST(AxisTopologySweep, MinimumCoverage) {
-    const auto r = sweep(/*exhaustive_routes=*/false);
-    EXPECT_GE(r.descriptors_loaded, 20) << "only " << r.descriptors_loaded << " descriptors loaded ("
-                                        << r.descriptors_skipped << " skipped) -- the sweep is nearly vacuous";
-    EXPECT_GE(r.axes_checked, 40) << "only " << r.axes_checked << " axes checked";
-    // Reported, not asserted: EveryRouteCrossesOnlyDeclaredEdges is the test that fails on these.
-    RecordProperty("derivations_failed", r.derivations_failed);
-}
-
-// Every declared mesh shape must fit both the hybrid 2D route table and the packet action map.
-TEST(AxisTopologySweep, EveryDeclaredShapeFitsThe2DRouteTable) {
-    constexpr uint32_t kMaximumActionMapBytes = 64 + 4;
-    int checked = 0;
-
-    for (const auto& path : all_descriptors()) {
-        std::unique_ptr<MeshGraph> mesh_graph;
-        try {
-            mesh_graph = std::make_unique<MeshGraph>(tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, path.string());
-        } catch (...) {
-            continue;
-        }
-        for (const auto mesh_id : mesh_graph->get_mesh_ids()) {
-            const auto shape = mesh_graph->get_mesh_shape(mesh_id);
-            const auto y = static_cast<uint32_t>(shape[0]);
-            const auto x = static_cast<uint32_t>(shape[1]);
-            checked++;
-
-            EXPECT_TRUE(is_valid_2d_route_table_shape(y, x))
-                << path.filename().string() << " mesh " << *mesh_id << " shape " << y << "x" << x
-                << " cannot fit action maps and multicast trees in the 2D route-table slot";
-            EXPECT_LE(y + x, kMaximumActionMapBytes) << path.filename().string() << " mesh " << *mesh_id << " shape "
-                                                     << y << "x" << x << " exceeds the packet action-map buffer";
-        }
-    }
-    EXPECT_GT(checked, 0) << "no mesh shapes were checked";
 }
 
 }  // namespace tt::tt_fabric::axis_topology_sweep_tests

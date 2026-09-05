@@ -2,12 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// First host coverage for the non-express injection heuristic, extracted as
-// NonExpressInjectionPolicy ahead of the unified slot walk. The expected vectors are derived from
-// the pre-extraction function by hand, so an extraction that drifts from byte-identical behaviour
-// fails here: on Torus the worker and the off-axis "turn" producers are injection channels; every
-// other topology guards only the worker; Linear/Mesh and VC1 guard nothing. VC2's worker guard is
-// pinned as the visible difference from the express policy's gate (which excludes VC2 entirely).
+// NonExpressInjectionPolicy coverage for topology, facing, and VC distinctions.
 
 #include <gtest/gtest.h>
 
@@ -54,7 +49,7 @@ TEST(InjectionPoliciesTest, NonExpressZFacingRouterTurnsNothing) {
 TEST(InjectionPoliciesTest, NonExpressNonTorusGuardsOnlyTheWorker) {
     const builder::RouterProducerSlots slots(NORTH, {4, 4, 0});
 
-    // Ring/NeighborExchange: the worker is guarded, turn channels do not exist.
+    // Ring guards only the worker.
     const NonExpressInjectionPolicy ring_policy(Topology::Ring, NORTH);
     EXPECT_EQ(
         compute_sender_channel_injection_flags(slots, /*vc=*/0, ring_policy),

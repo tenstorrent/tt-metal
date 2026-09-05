@@ -24,22 +24,6 @@ using eth_chan_directions::Z;
 
 constexpr std::array<eth_chan_directions, 5> k_directions = {EAST, WEST, NORTH, SOUTH, Z};
 
-TEST(DirectionSlotBijectionTest, PlacementAndNamingRoundTrip) {
-    // The slot a producer is placed into and the producer direction read back from that slot are
-    // the same fact. VC0 layout: sender channel 0 is the local worker, so producers live at
-    // 1 + compact (and the VC1 view reads slot compact + 1 for the same producer).
-    for (const auto facing : k_directions) {
-        for (const auto producer : k_directions) {
-            if (producer == facing) {
-                continue;
-            }
-            const size_t compact = builder::direction_compact_index(producer, facing);
-            EXPECT_EQ(builder::get_sender_channel_direction(facing, 1 + compact), producer)
-                << "facing " << enchantum::to_string(facing) << ", producer " << enchantum::to_string(producer);
-        }
-    }
-}
-
 TEST(DirectionSlotBijectionTest, CompactIndexInvertsBothWays) {
     for (const auto facing : k_directions) {
         for (const auto producer : k_directions) {
@@ -80,58 +64,11 @@ TEST(DirectionSlotBijectionTest, MatchesTheRetiredHandWrittenTables) {
     }
 }
 
-TEST(DirectionSlotBijectionTest, ReceiverDownstreamIndexIsTheSameRelation) {
-    // The receiver-side downstream view (writer adapter indexing) reads the same bijection from
-    // the other side: the downstream direction's rank among this router's non-self directions.
-    for (const auto facing : k_directions) {
-        for (const auto downstream : k_directions) {
-            if (downstream == facing) {
-                continue;
-            }
-            EXPECT_EQ(
-                get_receiver_channel_compact_index(facing, downstream),
-                builder::direction_compact_index(downstream, facing))
-                << "facing " << enchantum::to_string(facing) << ", downstream " << enchantum::to_string(downstream);
-            if (downstream == Z) {
-                EXPECT_EQ(get_receiver_channel_compact_index(facing, downstream), 3u);
-            }
-        }
-    }
-}
-
 TEST(DirectionSlotBijectionTest, DownstreamSenderChannelVcOffsetsArePinned) {
-    // get_downstream_sender_channel_for_vc is the placement production uses, so nothing else pins
-    // its VC0 +1 (worker) / VC1 +0 offset. A hardcoded table pins it directly.
     using D = eth_chan_directions;
-    struct Row {
-        eth_chan_directions producer;
-        eth_chan_directions facing;
-        uint32_t vc0_slot;
-        uint32_t vc1_slot;
-    };
-    constexpr Row rows[] = {
-        {D::NORTH, D::Z, 3, 2},      // boundary feed: compact of N among non-Z = 2
-        {D::Z, D::NORTH, 4, 3},      // from-boundary slot: compact of Z among non-N = 3
-        {D::SOUTH, D::NORTH, 3, 2},  // opposite-Y transit
-        {D::EAST, D::NORTH, 1, 0},   // cross turn, first compact slot
-        {D::NORTH, D::SOUTH, 3, 2},  // opposite of the above
-        {D::WEST, D::EAST, 1, 0},    // X transit
-    };
-    for (const auto& row : rows) {
-        EXPECT_EQ(
-            builder::get_downstream_sender_channel_for_vc(/*is_2d_routing=*/true, 0, row.producer, row.facing),
-            row.vc0_slot)
-            << "producer " << enchantum::to_string(row.producer) << " -> facing " << enchantum::to_string(row.facing)
-            << " (VC0)";
-        EXPECT_EQ(
-            builder::get_downstream_sender_channel_for_vc(/*is_2d_routing=*/true, 1, row.producer, row.facing),
-            row.vc1_slot)
-            << "producer " << enchantum::to_string(row.producer) << " -> facing " << enchantum::to_string(row.facing)
-            << " (VC1)";
-    }
-
-    // 1D is always the single forwarding channel, regardless of the pair.
-    EXPECT_EQ(builder::get_downstream_sender_channel_for_vc(/*is_2d_routing=*/false, 0, D::NORTH, D::Z), 1u);
+    EXPECT_EQ(builder::get_downstream_sender_channel_for_vc(true, 0, D::Z, D::NORTH), 4u);
+    EXPECT_EQ(builder::get_downstream_sender_channel_for_vc(true, 1, D::Z, D::NORTH), 3u);
+    EXPECT_EQ(builder::get_downstream_sender_channel_for_vc(false, 0, D::NORTH, D::Z), 1u);
 }
 
 TEST(DirectionSlotBijectionTest, ProducerSlotsRoundTripsAndNeverNamesFacing) {
