@@ -145,3 +145,123 @@ def test_combine_noc_is_gated_on_a_resident_x(device, shape, memory_layout, shar
     )
     if swapped:
         assert writer_noc == ttnn.NOC.NOC_0.value and reader_noc == ttnn.NOC.NOC_1.value
+
+
+# ---------------------------------------------------------------------------
+# Refinement 2 (Lamp L-FIN) — the finalize site and the two transport knobs
+# ---------------------------------------------------------------------------
+#
+# Same reason as everything above: all three are INVISIBLE to a numerical test.  The op
+# produces bit-identical output whichever way each goes (measured: pcc and rel-RMS agree
+# to every printed digit across the whole sweep), so only an assertion on the built
+# descriptor can catch a later phase flattening one back.
+#
+#   COMBINE_FIN_SPREAD          WHERE the rsqrt runs.  Parked at ROOT after measuring the
+#                               spread at 0.953-1.004x -- see the note at
+#                               `_combine_fin_spread`.  Kept as a LIVE knob, and this test
+#                               asserts it is still live (both settings build) as well as
+#                               that its default is the byte-identical one.
+#   COMBINE_MCAST_FIRE_AND_FORGET   the stat multicast's pre-handshake, elided when the
+#                               combine runs exactly ONE round.
+#   COMBINE_MCAST_FACES         faces the IDENTITY-path multicast carries (3 = faces 0..2,
+#                               one transaction covering both column-carrying faces).
+
+from ttnn.operations.rms_norm_ttnn.rms_norm_ttnn_program_descriptor import (  # noqa: E402
+    COMBINE_FIN_SPREAD,
+    COMBINE_MCAST_FACES,
+    COMBINE_MCAST_FIRE_AND_FORGET,
+    GATHER_FACES,
+    _combine_fin_spread,
+    _combine_gather_faces_ct,
+    _combine_mcast_pre_handshake,
+)
+
+_WRITER_CT_FACES = 15  # the PACKED face-count word in rms_norm_ttnn_writer.cpp
+_COMPUTE_CT_FIN_SPREAD = 23
+
+
+def test_fin_spread_default_is_the_root_and_is_byte_identical():
+    """Lamp L-FIN's knob is parked at ROOT, which allocates nothing and changes no arg."""
+    assert COMBINE_FIN_SPREAD is False
+    assert _combine_fin_spread(True) is False
+    assert _combine_fin_spread(False) is False
+
+
+def test_fin_spread_is_still_a_live_knob():
+    """Parked, not deleted: flipping the module constant must actually move the CT arg."""
+    import ttnn.operations.rms_norm_ttnn.rms_norm_ttnn_program_descriptor as PD
+
+    saved = PD.COMBINE_FIN_SPREAD
+    try:
+        PD.COMBINE_FIN_SPREAD = True
+        assert PD._combine_fin_spread(True) is True
+        assert PD._combine_fin_spread(False) is False, "the spread is meaningless off the combine path"
+    finally:
+        PD.COMBINE_FIN_SPREAD = saved
+
+
+@pytest.mark.parametrize(
+    "combine, single_round, expected",
+    [
+        (True, True, False),  # one round: the landing CB is provably still at its boot state
+        (True, False, True),  # round n+1's send would race round n's drain
+        (False, True, True),  # no combine, no multicast
+    ],
+)
+def test_mcast_pre_handshake_is_gated_on_a_single_round(combine, single_round, expected):
+    assert COMBINE_MCAST_FIRE_AND_FORGET is True
+    assert _combine_mcast_pre_handshake(combine, single_round) is expected
+
+
+@pytest.mark.parametrize(
+    "combine, compact, expected_mcast_faces",
+    [
+        (True, False, COMBINE_MCAST_FACES),  # identity path: the trim applies
+        (True, True, 0),  # compact: the un-permute matmul needs every column finite
+        (False, False, 0),  # no combine: the word must be the seed's literal GATHER_FACES
+    ],
+)
+def test_packed_face_word_keeps_the_gather_byte_and_gates_the_mcast_byte(combine, compact, expected_mcast_faces):
+    word = _combine_gather_faces_ct(combine, compact)
+    assert word & 0xFF == GATHER_FACES, "the gather's own face count may never move"
+    assert (word >> 8) & 0xFF == expected_mcast_faces
+    if not combine:
+        assert word == GATHER_FACES, "a non-combine build must emit the seed's literal word"
+
+
+#: (shape, memory_layout, shard, compact?, single_round?)
+_TRANSPORT_CASES = [
+    ((1, 1, 32, 7168), _ML.WIDTH_SHARDED, ([32, 256], (7, 4)), False, True),
+    ((1, 1, 32, 1024), _ML.WIDTH_SHARDED, ([32, 128], (8, 1)), False, True),
+    ((1, 1, 1024, 512), _ML.WIDTH_SHARDED, ([1024, 128], (4, 1)), True, None),
+    ((1, 1, 8192, 1024), _ML.BLOCK_SHARDED, ([1024, 128], (8, 8)), True, False),
+    ((1, 1, 8192, 1024), _ML.INTERLEAVED, None, None, None),  # no combine
+]
+
+
+@pytest.mark.parametrize(
+    "shape, memory_layout, shard, compact, single_round",
+    _TRANSPORT_CASES,
+    ids=["width_28c", "width_8c", "width_compact_4c", "block_64c", "no_combine"],
+)
+def test_transport_words_reach_the_writer(device, shape, memory_layout, shard, compact, single_round):
+    """End-to-end: the two gates land in the writer's CT list where the kernel reads them."""
+    d = _descriptor(device, shape, memory_layout, shard)
+    writer_ct = list(d.kernels[1].compile_time_args)
+    word = writer_ct[_WRITER_CT_FACES]
+    assert word & 0xFF == GATHER_FACES
+    if compact is None:  # no combine at all
+        assert word == GATHER_FACES
+        return
+    assert (word >> 8) & 0xFF == (0 if compact else COMBINE_MCAST_FACES)
+    if single_round is not None:
+        # McastArgs<18, ...>: [active, data_ready, consumer_ready, num_active, flags, span]
+        flags = writer_ct[18 + 4]
+        assert bool(flags & 0x1) is (
+            not single_round
+        ), "the pre-handshake bit must be OFF exactly on a single-round combine"
+
+
+def test_compute_carries_the_finalize_site(device):
+    d = _descriptor(device, (1, 1, 32, 7168), _ML.WIDTH_SHARDED, ([32, 256], (7, 4)))
+    assert list(d.kernels[2].compile_time_args)[_COMPUTE_CT_FIN_SPREAD] == 0

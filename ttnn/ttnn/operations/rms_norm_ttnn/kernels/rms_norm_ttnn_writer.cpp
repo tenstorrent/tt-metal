@@ -154,7 +154,28 @@ void kernel_main() {
     // vector, i.e. HALF the bytes.  Perf 3 / D27 confines it to the BLOCK_ROWS == 1 branch
     // (the compact branch must ship whole tiles) and MEASURES that it has to stay there --
     // see the gather below.
-    constexpr uint32_t GATHER_FACES = get_compile_time_arg_val(15);
+    // Refinement 2 PACKS a SECOND face count into the same CT word, deliberately, so the
+    // writer's argument LIST stays the seed's shape (its length is a checked property --
+    // see test_program_is_structurally_the_seeds): low byte = the gather's faces, high
+    // byte = the STAT MULTICAST's faces, with 0 meaning "the whole tile" so a build at the
+    // default is the seed's literal value.
+    constexpr uint32_t GATHER_FACES_CT = get_compile_time_arg_val(15);
+    constexpr uint32_t GATHER_FACES = GATHER_FACES_CT & 0xFFu;
+    // Refinement 2 (Lamp L-FIN's transport half): faces per stat tile the IDENTITY-path
+    // MULTICAST carries.  Same measured licence as D26's gather trim, applied to the other
+    // direction: on the identity path the multicast lands in cb_row_final, whose ONLY
+    // reader is pass B's `BinaryFpu<Mul, BroadcastDim::Col>` -- i.e. COLUMN 0, which lives
+    // in faces 0 and 2.  D26's bench seeded the un-shipped lanes with nine catastrophic
+    // patterns (1e30, NaN, +-Inf, subnormals, an Inf + -Inf mix, stale-L1 lookalikes), ran
+    // this exact consumer, and got output BIT-IDENTICAL (torch.equal) every time; the trim
+    // here is strictly LESS exposed than that, because the garbage does not even pass
+    // through the fold's DEST on its way.  Faces 0..2 is ONE contiguous transaction that
+    // covers both column-carrying faces -- and one transaction is the point: this stage
+    // pays per call at a GROUP_SIZE fan-out, which is why it is not split into two
+    // face-exact writes the way the gather's 2-face ship is.
+    // The COMPACT path must ship whole tiles (the un-permute matmul sums 32 products, so
+    // every column must be finite), and 0 here means exactly that.
+    constexpr uint32_t MCAST_FACES = (GATHER_FACES_CT >> 8) & 0xFFu;
     // Perf 3 / D28 -- THE SLOT TREE's arity.  TREE_F0 == 0 means "keep the flat root", and
     // every tree body below is `if constexpr`-ed away there, so a build the descriptor did
     // not select the tree for is the same kernel it was before D28.
@@ -345,6 +366,12 @@ void kernel_main() {
 
     if constexpr (CROSS_CORE) {
         const uint32_t stat_bytes = get_tile_size(cb_stat_handoff);
+        // The multicast's payload: a face-run prefix on the identity path when the
+        // descriptor asked for one, the whole tile otherwise.  ONE name, used by the
+        // root's own local publish AND by `SenderPipe::send`, so the two can never
+        // disagree about how many bytes a receiver's landing page actually holds.
+        const uint32_t mcast_bytes =
+            (!COMPACT && MCAST_FACES != 0 && MCAST_FACES < 4) ? (MCAST_FACES * (stat_bytes / 4)) : stat_bytes;
         // ---- THE COMPACT GATHER (Perf 3, descriptor D27) --------------------
         // The gather is the only per-GROUP_SIZE term in the combine: every member ships
         // into ONE root, so the root's L1 ingress carries (GROUP_SIZE - 1) transfers per
@@ -619,11 +646,11 @@ void kernel_main() {
                         cb_wait_front(cb_stat_handoff, 1);
                         cb_reserve_back(CB_MCAST_LAND, 1);
                         const uint32_t stat_dst = get_write_ptr(CB_MCAST_LAND);
-                        noc_async_write(get_read_ptr(cb_stat_handoff), get_noc_addr(stat_dst), stat_bytes);
+                        noc_async_write(get_read_ptr(cb_stat_handoff), get_noc_addr(stat_dst), mcast_bytes);
                         noc_async_write_barrier();
                         cb_push_back(CB_MCAST_LAND, 1);
                         if constexpr (mc.active) {
-                            sender.send(stat_dst, stat_dst, stat_bytes);
+                            sender.send(stat_dst, stat_dst, mcast_bytes);
                         }
                         cb_pop_front(cb_stat_handoff, 1);
                     }
@@ -694,7 +721,7 @@ void kernel_main() {
                     cb_wait_front(cb_stat_handoff, 1);
                     cb_reserve_back(CB_MCAST_LAND, 1);
                     const uint32_t stat_dst = get_write_ptr(CB_MCAST_LAND);
-                    noc_async_write(get_read_ptr(cb_stat_handoff), get_noc_addr(stat_dst), stat_bytes);
+                    noc_async_write(get_read_ptr(cb_stat_handoff), get_noc_addr(stat_dst), mcast_bytes);
                     noc_async_write_barrier();
                     // Perf 2 (D24): PUBLISH THE ROOT'S OWN COPY BEFORE THE BROADCAST.
                     // The root's un-permute (and behind it its pass B) blocks on this push,
@@ -713,7 +740,7 @@ void kernel_main() {
                     // the root's pass B as the next thing on the critical path).
                     cb_push_back(CB_MCAST_LAND, 1);
                     if constexpr (mc.active) {
-                        sender.send(stat_dst, stat_dst, stat_bytes);
+                        sender.send(stat_dst, stat_dst, mcast_bytes);
                     }
                     cb_pop_front(cb_stat_handoff, 1);
                 }

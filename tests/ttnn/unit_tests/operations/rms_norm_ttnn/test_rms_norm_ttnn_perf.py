@@ -310,8 +310,41 @@ _PARITY_IDS = [
 # allowance is one-directional: this op may never spend MORE L1 there than the seed.
 # Every other CB, and every other writer CT arg, is still asserted IDENTICAL.
 _TREE_RING_CBS = (11, 17)  # cb_partials_gathered, cb_gather_l1
-_TREE_WRITER_CT = (16, 17)  # TREE_F0, TREE_F1 in rms_norm_ttnn_writer.cpp
 _TREE_COMPUTE_CT = (17, 18)  # TREE_F0, TREE_F1 in rms_norm_ttnn_compute.cpp
+
+# --- Refinement 2, the combine's TRANSPORT: two more sanctioned writer divergences ------
+#
+# Both are on the CROSS-CORE COMBINE's stat multicast and both carry their measurement, per
+# the same rule Refinement 1's tree arity satisfies ("a faster program for an operand-free
+# configuration is allowed, but only with a MEASUREMENT, never with an argument").  Neither
+# changes the writer's argument-list SHAPE -- the multicast's face count is PACKED into the
+# high byte of the existing GATHER_FACES word precisely so the length stays the seed's --
+# and both are inert on every non-combine build.
+#
+#   index 15  GATHER_FACES | (MCAST_FACES << 8).  The seed multicasts the whole 4 kB stat
+#             tile; this op multicasts faces 0..2 (3 kB, ONE transaction) on the IDENTITY
+#             path, where the only reader of the landing CB is pass B's column broadcast.
+#             The compact path is untouched (its un-permute matmul needs every column).
+#   index 22  the mcast flags word's PRE_HANDSHAKE bit.  Elided when the combine runs
+#             exactly one round, which is every BLOCK_ROWS == 1 decode shape.
+#
+# MEASURED (blackhole p150b 1350 MHz, in-process profiler, median of 5, min over 3 reps,
+# whole-op DEVICE KERNEL DURATION; the noise floor calibrated on the two BLOCK-shard cells
+# whose program is byte-identical across the sweep is +-0.3%):
+#
+#   case                                     seed-shaped   +handshake   +both   ceiling
+#   (1,1,32,7168) WIDTH [32,256] (7,4) 28c        5713         5576      5520      5481
+#   (1,1,32,2304) WIDTH [32,256] (9,1)  9c        4422         4381      4356      4617
+#   (1,1,32,5120) WIDTH [32,160] (8,4) 32c        4769         4780      4724      5267
+#   (1,1,32,1024) WIDTH [32,128] (8,1)  8c        3683         3678      3658      4110
+#   (1,1,256,512) ROW_MAJOR BAND       64c       23870        23554     23556         -
+#   (1,1,8192,1024) BLOCK (8,8) 64c (gated off)  23527        23509     23596     28619
+#
+# i.e. 1.035x on the op's ONE remaining perf-group miss (ratio-to-ceiling 1.042 -> 1.007),
+# 1.013-1.015x on two more, and no cell below the noise floor.  Output is bit-identical:
+# pcc and rel-RMS agree to every printed digit across all four sweep variants.
+_MCAST_WRITER_CT = (15, 22)  # packed face counts; mcast flags (pre-handshake bit)
+_TREE_WRITER_CT = (16, 17) + _MCAST_WRITER_CT  # TREE_F0, TREE_F1 in rms_norm_ttnn_writer.cpp
 
 
 def _cb_signature(descriptor, drop=()):
@@ -370,7 +403,9 @@ def test_program_is_structurally_the_seeds(device, shape, layout, memory_layout,
     )
 
     # The writer takes no operand at all, so not one of its args may move -- except
-    # TREE_F0 / TREE_F1, which the derived arity owns (see _TREE_WRITER_CT above).
+    # TREE_F0 / TREE_F1 (the derived arity, Refinement 1) and the two combine-TRANSPORT
+    # words Refinement 2 owns (see _TREE_WRITER_CT / _MCAST_WRITER_CT above).  Every
+    # exception is on the cross-core combine and every one carries its measurement.
     def _mask_writer(args):
         return [a for i, a in enumerate(args) if i not in _TREE_WRITER_CT]
 

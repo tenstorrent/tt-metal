@@ -532,6 +532,14 @@ void kernel_main() {
     // the L1 budget asks (a per-channel staging ring is WT_CHUNK whole tiles of L1
     // to carry ONE stick, which is the biggest single term on a wide band).
     constexpr uint32_t NARROW_PC_STAGE = get_compile_time_arg_val(22);
+    // Refinement 2 / LAMP L-FIN: WHERE THE FINALIZE RUNS.
+    //   0  ROOT   -- the last-level fold FUSES `*(1/W) + eps` and the rsqrt into its own
+    //                DEST window (D22) and the multicast carries the FINALIZED stat.
+    //   1  SPREAD -- the root packs the RAW group sum, the multicast carries THAT, and
+    //                every core finalizes its own copy in `spread_finalize` below.
+    // Correct either way; the descriptor's `_combine_fin_spread` owns the choice and
+    // carries the measurement.  Off the combine path this is dead (there is no root).
+    constexpr uint32_t FIN_SPREAD_CT = get_compile_time_arg_val(23);
 
     const uint32_t num_rows = get_arg_val<uint32_t>(0);  // tile-rows owned by this core
     // Only the core holding the row's LAST width tile applies the partial-W
@@ -924,6 +932,19 @@ void kernel_main() {
     // permute pair and by the finalize's lane scope.
     constexpr bool COMPACT = CROSS_CORE && (BLOCK_ROWS > 1);
     constexpr bool COMPACT_FIN_WIDE = (BLOCK_ROWS > 16);
+    // LAMP L-FIN (Refinement 2).  ORTHOGONAL to COMPACT, exactly as the tree is: what it
+    // moves is WHICH CORE applies the rsqrt, never the LAYOUT of the tile it is applied
+    // to -- so the lane scope below is still decided by BLOCK_ROWS alone and BOTH branches
+    // (identity and compact) are covered by the one predicate the verifier's note asks for.
+    //
+    //   ROOT   fold(FINALIZE=true)  -> cb_stat_handoff (finalized) -> mcast -> [un-permute]
+    //   SPREAD fold(FINALIZE=false) -> cb_stat_handoff (RAW)       -> mcast ->
+    //          spread_finalize -> cb_row_stat -> [un-permute]
+    //
+    // cb_row_stat is the landing CB because it is the ONE fp32 per-row CB that is dead on
+    // the combine path (D22 deleted its last use there), so the spread needs no new buffer
+    // index and, at the default, allocates nothing at all.
+    constexpr bool FIN_SPREAD = CROSS_CORE && (FIN_SPREAD_CT != 0);
     // ---- THE SLOT TREE's derived geometry (Perf 3 / D28) -----------------------------
     // TWO LEVELS of contiguous slot runs: level 0 folds runs of TREE_F0 slots on TREE_F1 =
     // ceil(GROUP_SIZE / F0) cores IN PARALLEL and forwards the RAW sums; level 1 folds those
@@ -961,7 +982,13 @@ void kernel_main() {
                                                 : static_cast<uint32_t>(ckl::DEST_AUTO_LIMIT);
     // Pass B's Col operand: the multicast landing CB when the stat was combined
     // across cores, the local accumulator otherwise.
-    constexpr uint32_t CB_STAT_B = CROSS_CORE ? cb_row_final : cb_row_stat;
+    // Under FIN_SPREAD on the IDENTITY path the multicast lands RAW in cb_row_final and the
+    // finalized tile pass B reads is `spread_finalize`'s output; on the COMPACT path the
+    // un-permute still writes cb_row_final, so pass B's operand is unchanged there.
+    constexpr uint32_t CB_STAT_B = CROSS_CORE ? ((FIN_SPREAD && !COMPACT) ? cb_row_stat : cb_row_final) : cb_row_stat;
+    // The un-permute's SOURCE: the multicast landing CB at ROOT, the spread finalize's
+    // output under SPREAD.  One name so the matmul, its reconfig and its pop cannot drift.
+    constexpr uint32_t CB_UNPERM_SRC = FIN_SPREAD ? cb_row_stat : cb_mcast_in;
     // Perf 1 (descriptor D18): on the COMBINE path pass A's reduce packs its partial
     // STRAIGHT into cb_sum_handoff, deleting the fp32 tile copy that used to move
     // cb_row_stat -> cb_sum_handoff on EVERY core of EVERY group.
@@ -1418,12 +1445,19 @@ void kernel_main() {
                 cb_push_back(cb_stat_handoff, 1);
                 cb_pop_front(TREE ? cb_gather_l1 : cb_partials_gathered, TREE ? TREE_SL1 : GATHER_SLOTS);
 #else
+                // FINALIZE = !FIN_SPREAD is the ONE line Lamp L-FIN changes on the root:
+                // under SPREAD the last level forwards the RAW group sum and every core
+                // applies the rsqrt to its own copy after the multicast.  Note this is the
+                // LAST level either way -- an INTERIOR node still must never finalize (it
+                // would rsqrt a partial sum, and the next level would then add rsqrt'd
+                // values), which is why `compute_tree_fold_l0` above stays FINALIZE=false
+                // unconditionally.
                 if constexpr (TREE) {
                     combine_fold<
                         cb_gather_l1,
                         TREE_SL1,
                         cb_stat_handoff,
-                        /*FINALIZE=*/true,
+                        /*FINALIZE=*/!FIN_SPREAD,
                         COMPACT,
                         COMPACT_FIN_WIDE,
                         INV_W_BITS,
@@ -1433,13 +1467,66 @@ void kernel_main() {
                         cb_partials_gathered,
                         GATHER_SLOTS,
                         cb_stat_handoff,
-                        /*FINALIZE=*/true,
+                        /*FINALIZE=*/!FIN_SPREAD,
                         COMPACT,
                         COMPACT_FIN_WIDE,
                         INV_W_BITS,
                         EPS_BITS>();
                 }
 #endif
+            }
+
+            // ---- LAMP L-FIN: the SPREAD finalize (Refinement 2) ---------------------
+            // Under FIN_SPREAD the tile that just arrived (or, on the root, that it
+            // published for itself before broadcasting -- D24) is the RAW group sum, so
+            // `1/rms = rsqrt(sum/W + eps)` is applied HERE, on every core of the group,
+            // in parallel, instead of once on the root ahead of the multicast.
+            //
+            // The SCOPE is the same predicate the root's fused finalize uses and for the
+            // same reason: a compact tile carries one tile-row's sum per COLUMN, so it
+            // needs the <1,8> walk (VectorMode::C to BLOCK_ROWS 16, RC above), while the
+            // identity path's stat really does live in column 0 alone and D17's narrow
+            // <2,4> C walk is both right and 1.39x cheaper.  Getting this wrong is silent:
+            // the narrow scope on a compact tile measured pcc 0.997 with rel-RMS 1036.
+            //
+            // WHY IT IS A COPY + PACK AND NOT AN IN-PLACE TRANSFORM: the raw tile's CB is
+            // the WRITER's (cb_mcast_in on the compact path, cb_row_final on the identity
+            // one -- both are where the multicast lands), so packing back into it would
+            // give that CB two producers.  cb_row_stat is the compute-private landing CB;
+            // it is dead on the combine path otherwise, and it is allocated only when this
+            // knob is on.
+            //
+            // THE STRUCTURAL COST, stated because it is what the measurement found: at
+            // ROOT the rsqrt is FUSED into the fold's DEST window (D22) and costs no pack
+            // at all; spread, it needs its own copy_tile + pack + unpack on every core.
+            // And the finalize is a REPLICATED term -- every core needs the same value --
+            // so relocating it moves it along the identical serial chain rather than
+            // dividing it.  See `_combine_fin_spread` in the descriptor for the numbers.
+            if constexpr (FIN_SPREAD) {
+                constexpr uint32_t CB_RAW = COMPACT ? cb_mcast_in : cb_row_final;
+                MaybeDeviceZoneScope("compute_spread_fin");
+                cb_wait_front(CB_RAW, 1);
+                cb_reserve_back(cb_row_stat, 1);
+                reconfig_data_format_srca(CB_RAW);
+                pack_reconfig_data_format(cb_row_stat);
+                copy_tile_to_dst_init_short(CB_RAW);
+                // MANDATORY here for the same reason it is inside `combine_fold`:
+                // rms_stat_rsqrt_body reads the persistent SFPU PROGRAM registers
+                // sfpu::rsqrt_init programs.
+                rsqrt_tile_init();
+                tile_regs_acquire();
+                copy_tile(CB_RAW, 0, 0);
+                if constexpr (COMPACT) {
+                    compact_finalize_payload<INV_W_BITS, EPS_BITS, COMPACT_FIN_WIDE>(0);
+                } else {
+                    stat_finalize_payload<INV_W_BITS, EPS_BITS>(0);
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_tile(0, cb_row_stat);
+                tile_regs_release();
+                cb_push_back(cb_row_stat, 1);
+                cb_pop_front(CB_RAW, 1);
             }
 
             // ---- every core: UN-PERMUTE the multicast compact stat (D27) ------------
@@ -1460,16 +1547,16 @@ void kernel_main() {
             // (an identity un-permute is nothing to do), exactly as it did before D27.
             if constexpr (COMPACT) {
                 MaybeDeviceZoneScope("compute_recv_unpack");
-                cb_wait_front(cb_mcast_in, 1);
+                cb_wait_front(CB_UNPERM_SRC, 1);
                 cb_reserve_back(cb_row_final, rows);
-                reconfig_data_format<ckernel::SrcOrder::Reverse>(cb_mcast_in, cb_bank);
+                reconfig_data_format<ckernel::SrcOrder::Reverse>(CB_UNPERM_SRC, cb_bank);
                 pack_reconfig_data_format(cb_row_final);
-                matmul_init(cb_mcast_in, cb_bank, /*transpose=*/1);
+                matmul_init(CB_UNPERM_SRC, cb_bank, /*transpose=*/1);
                 for (uint32_t b = 0; b < rows; b += COMBINE_DEST_BATCH) {
                     const uint32_t n = (rows - b < COMBINE_DEST_BATCH) ? (rows - b) : COMBINE_DEST_BATCH;
                     tile_regs_acquire();
                     for (uint32_t d = 0; d < n; ++d) {
-                        matmul_tiles(cb_mcast_in, cb_bank, 0, b + d, d);
+                        matmul_tiles(CB_UNPERM_SRC, cb_bank, 0, b + d, d);
                     }
                     tile_regs_commit();
                     tile_regs_wait();
@@ -1479,7 +1566,7 @@ void kernel_main() {
                     tile_regs_release();
                 }
                 cb_push_back(cb_row_final, rows);
-                cb_pop_front(cb_mcast_in, 1);
+                cb_pop_front(CB_UNPERM_SRC, 1);
             }
         }
 

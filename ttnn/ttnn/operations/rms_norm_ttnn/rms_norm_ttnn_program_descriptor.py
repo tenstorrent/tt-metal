@@ -1031,6 +1031,92 @@ COMBINE_TREE_F0_MAX = 10
 COMBINE_TREE_MIN_DELETED_FOLD_TILES = 18
 
 # ---------------------------------------------------------------------------------------
+# LAMP L-FIN (Refinement 2) -- WHERE THE FINALIZE RUNS, and the transport it implies.
+# ---------------------------------------------------------------------------------------
+# `op_design.md`'s stall-shadow table has exactly one row marked NOT BUILT: "every core
+# waits for the root's finalize ... nothing is independent of it, because pass B's first
+# operand IS the finalized stat."  There are only two places the rsqrt can run, and this
+# pair of knobs is the whole choice:
+#
+#   COMBINE_FIN_SPREAD = False  ROOT.    The root's last-level fold FUSES the finalize
+#                                        into its own DEST window (D22) and the multicast
+#                                        carries the FINALIZED stat.  One rsqrt per round
+#                                        for the whole group, on the root, before the send.
+#   COMBINE_FIN_SPREAD = True   SPREAD.  The root packs the RAW group sum, the multicast
+#                                        carries THAT, and EVERY core finalizes its own
+#                                        copy in parallel -- the literal Lamp L-FIN move.
+#
+# BOTH ARE CORRECT; the default is a MEASUREMENT, and the measurement says ROOT.  See the
+# note at `_combine_fin_spread` for the numbers and for why spreading a REPLICATED (as
+# opposed to divisible) term cannot shorten the chain.
+COMBINE_FIN_SPREAD = False
+
+# The stat multicast's PRE-HANDSHAKE.  `mcast_pipe` defaults to `handshake=True`: every
+# receiver remote-atomic-incs the sender's consumer-ready semaphore and the sender waits
+# for `num_active` of them BEFORE it puts any data on the wire.  That protects a landing
+# buffer that a previous round might still be draining -- which cannot exist when the
+# combine runs exactly ONE round, because then every receiver's landing CB is still at its
+# boot state and its write pointer is still the ring base.
+#
+# The safety argument is an ORDERING one and it is exact, not statistical: a receiver
+# constructs its ReceiverPipe (whose ctor is what writes the data-ready flag cell to
+# INVALID) BEFORE it ships its own partial into the gather, and the root cannot send until
+# every partial has arrived.  So the ctor's INVALID store provably precedes the root's
+# VALID broadcast, which is the one race `PRE_HANDSHAKE=false` would otherwise expose.
+# With more than one round that argument evaporates (round n+1's send races round n's
+# drain), so the gate is `num_blocks == 1` and nothing else.
+COMBINE_MCAST_FIRE_AND_FORGET = True
+
+# Faces per stat tile the IDENTITY-path (BLOCK_ROWS == 1) multicast carries.  0 == the
+# whole tile, which is also what the COMPACT path is forced to (its un-permute matmul sums
+# 32 products, so every column must be finite).  3 is the smallest CONTIGUOUS prefix that
+# covers both column-carrying faces (0 and 2) in ONE transaction -- and one transaction is
+# the point, because this stage pays per call at a GROUP_SIZE fan-out.  The measured
+# licence is D26's, re-used in the other direction; the writer kernel carries the full
+# argument at MCAST_FACES.
+COMBINE_MCAST_FACES = 3
+
+
+def _combine_fin_spread(combine: bool) -> bool:
+    """Where the finalize runs.  ONE definition, read by the CB table, the L1 solve and
+    the compute kernel's CT arg.
+
+    MEASURED and PARKED at ROOT (blackhole p150b 1350 MHz) -- see the changelog entry for
+    Refinement 2 for the table.  The reason it does not pay is structural and worth
+    keeping next to the knob: the finalize is a REPLICATED term, not a divisible one.
+    Spreading work helps when N cores can each do 1/N of it; here every core needs the
+    SAME finalized value, so moving the rsqrt off the root does not delete it anywhere --
+    it just relocates it from before the multicast to after it, on the identical serial
+    chain (fold -> [rsqrt] -> send -> recv -> [rsqrt] -> pass B).  And D22 fused the
+    root's rsqrt INTO the fold's DEST window, so at ROOT it costs no pack at all, while a
+    spread finalize needs its own copy_tile + pack + unpack on every core.  D27 already
+    took the O(BLOCK_ROWS) out of it: the compact tile makes the finalize ONE tile-op per
+    round whatever BLOCK_ROWS is, which is the half of Lamp L-FIN that was actually
+    expensive.  Kept as a live knob (byte-identical at its default) rather than deleted,
+    because it is the only lever that moves `compute_root_fused` at all.
+    """
+    return bool(combine) and COMBINE_FIN_SPREAD
+
+
+def _combine_gather_faces_ct(combine: bool, compact: bool) -> int:
+    """The writer's ONE packed face-count word: gather faces in the low byte, multicast
+    faces in the high byte (0 == whole tile).
+
+    Packed rather than appended because the writer's CT-arg LIST SHAPE is a checked seed
+    property; a build at the defaults emits the seed's literal `GATHER_FACES`.
+    """
+    mcast_faces = 0 if (compact or not combine) else (COMBINE_MCAST_FACES & 0xFF)
+    return (GATHER_FACES & 0xFF) | (mcast_faces << 8)
+
+
+def _combine_mcast_pre_handshake(combine: bool, single_round: bool) -> bool:
+    """Whether the stat multicast keeps its receiver-readiness pre-handshake."""
+    if not combine:
+        return True
+    return not (COMBINE_MCAST_FIRE_AND_FORGET and single_round)
+
+
+# ---------------------------------------------------------------------------------------
 # WHICH NoC CARRIES THE COMBINE (Refinement 1, lever 2) -- ONE pair of constants.
 # ---------------------------------------------------------------------------------------
 # The combine (gather + level-1 forward + stat multicast) lives entirely in the WRITER
@@ -1388,6 +1474,11 @@ def _combine_fixed_pages(plan, compact: bool, tree) -> int:
     pages += CB_COMBINE_FLAT_DEPTH  # cb_stat_handoff
     if compact:
         pages += 2 * CB_COMBINE_FLAT_DEPTH  # cb_compact_handoff + cb_mcast_in
+    if _combine_fin_spread(plan.combine):
+        # Lamp L-FIN: the spread finalize's landing CB (cb_row_stat, re-used -- it is dead
+        # on the combine path otherwise).  BLOCK_ROWS-independent: one raw compact tile in,
+        # one finalized tile out, per round.
+        pages += CB_COMBINE_FLAT_DEPTH
     return pages
 
 
@@ -2378,7 +2469,7 @@ def _zero_volume_descriptor(all_cores, compute_kernel_config):
     writer_ct += [0] * 6 + null_acc
 
     compute_ct = [1, 1, 1, 1, 0, 0, 0, _f32_bits(1.0), _f32_bits(0.0), REDUCE_BULK, 0, 1, 0, 1, 1, 1, 0, 0, 0]
-    compute_ct += [0, 0, 0, 0]
+    compute_ct += [0, 0, 0, 0, 0]
     assert len(compute_ct) == COMPUTE_CT_SCALARS
 
     reader_rt = ttnn.RuntimeArgs()
@@ -2426,7 +2517,7 @@ def _zero_volume_descriptor(all_cores, compute_kernel_config):
 # equal the scalar count exactly.  Named here (and asserted at both emission
 # sites) so appending an arg fails in Python instead of mis-parsing on device.
 READER_CT_SCALARS = 29
-COMPUTE_CT_SCALARS = 23
+COMPUTE_CT_SCALARS = 24
 
 
 def create_program_descriptor(
@@ -2821,6 +2912,15 @@ def create_program_descriptor(
     assert not row_resident or block_rows == 1, "rms_norm_ttnn: ROW_RESIDENT holds ONE tile-row of x"
     compact_combine = combine and block_rows > 1
     assert block_rows <= TILE_DIM or not combine, "rms_norm_ttnn: a compact combine block is at most 32 tile-rows"
+    # ---- Refinement 2 (Lamp L-FIN) -- the two derived combine facts ------------------
+    # `fin_spread`: WHO runs the rsqrt (see `_combine_fin_spread`).
+    # `single_round`: whether EVERY core's combine loop runs exactly one round, which is
+    # the multicast pre-handshake's only safety precondition.  `num_blocks` is a per-core
+    # runtime quantity (`ceil(num_rows / BLOCK_ROWS)` in both dataflow kernels), and the
+    # CT emission is program-wide, so the gate takes the MAX over the assignment.
+    fin_spread = _combine_fin_spread(combine)
+    single_round = combine and max((a.row_count for a in assignment), default=0) <= block_rows
+    mcast_pre_handshake = _combine_mcast_pre_handshake(combine, single_round)
     combine_tree = _combine_tree_arity(plan.group_size, 1) if combine else None
     tree_f0, tree_f1 = combine_tree if combine_tree else (0, 0)
     # Width tiles the HELD CBs span.  Equals wt_chunk in both Phase-0 regimes.
@@ -2923,6 +3023,13 @@ def create_program_descriptor(
     # NOT ALLOCATED on the combine path (D27) -- it is strictly dead there.
     if not combine:
         cbs.append(_cb(CB_ROW_STAT, ft, CB_ROW_STAT_DEPTH * block_rows, ttnn.float32, all_cores))
+    elif fin_spread:
+        # Lamp L-FIN: cb_row_stat comes BACK on the combine path as the spread finalize's
+        # output -- the one place a per-core finalized stat can land without giving a CB two
+        # producers (cb_mcast_in / cb_row_final are the WRITER's).  Flat in BLOCK_ROWS for
+        # the same reason the rest of the combine is since D27: the round's unit is ONE
+        # compact tile.
+        cbs.append(_cb(CB_ROW_STAT, ft, CB_COMBINE_FLAT_DEPTH, ttnn.float32, all_cores))
     # D30: pages of a per-channel STAGING ring.  `wt_chunk` feeds one
     # `tilize<WT_CHUNK>(1)` call; the narrow fallback feeds `tilize<1>(WT_CHUNK)`
     # from a `rm_stage_depth`-page ring, which is the same tiles bit-for-bit at
@@ -3054,7 +3161,10 @@ def create_program_descriptor(
         out_shard_pages,  # 12 pages of the resident out shard (native only)
         1 if plan.band else 0,  # 13 BAND: write the band back stick-by-stick
         plan.out_shard_row_bytes,  # 14 L1 stick stride inside the out shard (0 => accessor)
-        GATHER_FACES,  # 15 faces per partial tile the IDENTITY-path gather ships
+        # 15 PACKED face counts: low byte = the IDENTITY-path gather's faces (D13/D26),
+        # high byte = the IDENTITY-path stat MULTICAST's faces (Refinement 2; 0 == whole
+        # tile, which is also what the compact path is forced to).
+        _combine_gather_faces_ct(combine, compact_combine),
         tree_f0,  # 16/17 the SLOT TREE's arity (D28); 0 == keep the flat root
         tree_f1,
     ]
@@ -3062,7 +3172,11 @@ def create_program_descriptor(
     assert (
         writer_ct_args[WRITER_CT_OUT_SHARD_ROW_BYTES] == plan.out_shard_row_bytes
     ), "WRITER_CT_OUT_SHARD_ROW_BYTES index drifted"
-    writer_ct_args.extend(plan.mcast.compile_time_args() if combine else [0] * 6)
+    # Refinement 2: the mcast helper's own per-kernel `pre_handshake` override is the whole
+    # of the fire-and-forget lever -- one flags bit, no new CT arg, no kernel change (both
+    # SenderPipe and ReceiverPipe read the same bit).  `_combine_mcast_pre_handshake` is the
+    # single place the gate lives.
+    writer_ct_args.extend(plan.mcast.compile_time_args(pre_handshake=mcast_pre_handshake) if combine else [0] * 6)
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
 
     # ---- compute ----------------------------------------------------------
@@ -3091,6 +3205,11 @@ def create_program_descriptor(
         1 if has_residual else 0,  # 20 HAS_RESIDUAL
         pass_b_blk_ct,  # 21 PASS_B_BLK override (0 == the op's own pass_b_blk)
         1 if narrow_pc_stage else 0,  # 22 NARROW_PC_STAGE (D30) -- tilize<1>(WT_CHUNK)
+        # 23 Refinement 2 / Lamp L-FIN: FIN_SPREAD.  0 == the root finalizes inside its
+        # fold's DEST window and the multicast carries the finalized stat; 1 == the root
+        # forwards the RAW group sum and every core finalizes its own copy.  Appended, so
+        # every build at the default is byte-identical to the seed's prefix.
+        1 if fin_spread else 0,
     ]
     assert len(compute_ct_args) == COMPUTE_CT_SCALARS, "compute CT-arg count drifted"
     assert x_squared_wt in (1, wt_chunk), "rms_norm_ttnn: x_squared_wt must be 1 (DEST fold) or WT_CHUNK"
