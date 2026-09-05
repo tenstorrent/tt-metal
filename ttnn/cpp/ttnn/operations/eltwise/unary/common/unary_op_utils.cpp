@@ -1069,9 +1069,12 @@ UnaryWithParam string_to_unary_with_param(const std::string& name) {
         return UnaryWithParam(UnaryOpType::XIELU, {0.8f, 0.8f});  // alpha_p=0.8, alpha_n=0.8
     }
     if (name == "selu") {
+        // selu_tile takes the scale first and alpha second, the same order ttnn::selu exposes
+        // them in. Values below are the exact values of the nearest floats to the published SELU
+        // constants: 1.0507009873554804934193349852946 and 1.6732632423543772848170429916717.
+        float scale = 1.05070102214813232421875f;
         float alpha = 1.67326319217681884765625f;
-        float lambda = 1.05070102214813232421875f;
-        return UnaryWithParam(UnaryOpType::SELU, {alpha, lambda});
+        return UnaryWithParam(UnaryOpType::SELU, {scale, alpha});
     }
     if (name == "alt_complex_rotate90") {
         return UnaryWithParam(UnaryOpType::ALT_COMPLEX_ROTATE90);
