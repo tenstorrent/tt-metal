@@ -821,6 +821,100 @@ def _broadcast_user_spec(
     return spec
 
 
+def _parse_reference_counts(text: str) -> tuple[int, int, int]:
+    """`images:audio:video` -> three non-negative counts; at least one reference required."""
+    parts = text.replace(" ", "").split(":")
+    if len(parts) != 3:
+        raise ValueError(f"expected images:audio:video (e.g. 2:1:2), got {text!r}")
+    images, audio, video = (int(part) for part in parts)
+    if min(images, audio, video) < 0:
+        raise ValueError("counts must be non-negative")
+    if images + audio + video == 0:
+        raise ValueError("need at least one reference")
+    return images, audio, video
+
+
+def _read_reference_spec() -> dict | None:
+    """Host stdin: a text prompt, a counts triple, then that many colon-separated paths per modality.
+
+    `q` at the prompt or counts step, or EOF anywhere, aborts (returns None). Paths are re-prompted
+    until the entered count matches and every path is an existing file, so a typo never reaches pipeline init.
+    """
+    while True:
+        try:
+            prompt = _prompt_line("User prompt (q to quit): ").strip()
+        except EOFError:
+            return None
+        if prompt.lower() == "q":
+            return None
+        if prompt:
+            break
+
+    while True:
+        try:
+            raw = _prompt_line("Enter counts (images:audio:video): ").strip()
+        except EOFError:
+            return None
+        if raw.lower() == "q":
+            return None
+        try:
+            counts = _parse_reference_counts(raw)
+            break
+        except ValueError as error:
+            print(error, file=sys.stderr)
+
+    spec: dict = {"prompt": prompt}
+    for kind, count, label in zip(("image", "audio", "video"), counts, ("Images", "Audio", "Videos")):
+        spec[kind] = []
+        if count == 0:
+            continue
+        while True:
+            try:
+                raw = _prompt_line(f"{label} (colon separated): ")
+            except EOFError:
+                return None
+            paths = [part.strip() for part in raw.split(":") if part.strip()]
+            if len(paths) != count:
+                print(f"expected {count} colon-separated path(s), got {len(paths)}", file=sys.stderr)
+                continue
+            missing = [path for path in paths if not os.path.isfile(path)]
+            if missing:
+                print(f"no such file(s): {missing}", file=sys.stderr)
+                continue
+            spec[kind] = paths
+            break
+    return spec
+
+
+def _broadcast_reference_spec(spec: dict | None) -> dict | None:
+    """Host reference spec (prompt + paths, or None to abort) to every rank via the journal and one allgather."""
+    if not ttnn.using_distributed_env():
+        return spec
+    seq = 0
+    if is_host() and spec is not None:
+        seq = _next_repl_seq()
+        _append_journal(seq, json.dumps(spec))
+    seq = _allgather_host_int(seq)
+    if not seq:
+        return None
+    if not is_host():
+        spec = json.loads(_wait_journal(seq))
+    ttnn.distributed_context_barrier()
+    return spec
+
+
+def read_user_reference_spec() -> dict | None:
+    """Collect a ref2va prompt plus reference paths from the launch TTY and broadcast to every rank.
+
+    Returns `{"prompt": str, "image": [...], "audio": [...], "video": [...]}` in packed order, or None
+    when input is disabled or aborted. Media itself is loaded per rank from the (shared) paths, not carried here.
+    """
+    if not user_input_enabled():
+        return None
+    spec = _read_reference_spec() if is_host() else None
+    return _broadcast_reference_spec(spec)
+
+
 def run_user_generations(
     pipeline,
     *,
@@ -884,6 +978,78 @@ def run_user_generations(
         if is_host():
             duration_tag = int(duration_s) if float(duration_s).is_integer() else duration_s
             stem = f"{label}_{aspect_ratio[0]}x{aspect_ratio[1]}_{width}x{height}_{duration_tag}s_{index}"
+            write_artifacts(
+                to_uint8_frames(output), output.audio.cpu().numpy(), output.sampling_rate, artifacts, stem=stem
+            )
+        index += 1
+
+
+def run_user_ref_generations(
+    pipeline,
+    request_provider,
+    *,
+    aspect_ratio: tuple[int, int],
+    duration_s: float,
+    num_inference_steps: int,
+    seed: int,
+    label: str = "ref2va",
+    artifact_name: str = "h3_ref2va_perf_artifacts",
+) -> None:
+    """ref2va prompt+reference REPL after the warm measured run. No-op unless ENABLE_USER_INPUT is set.
+
+    `request_provider()` returns one `(prompt, references)` per iteration (None to stop), already
+    broadcast to every rank. The working point is fixed at the measured one; prompt and references
+    change. Each entry is a fresh `BenchmarkProfiler` fed by `on_event`, and its artifacts are
+    stemmed by the reference modalities plus a 0-based index. Admission errors log and the loop continues.
+    """
+    if not user_input_enabled():
+        return
+    artifacts = artifact_dir(artifact_name)
+    height, width = resolve_canvas_size(*aspect_ratio)
+    num_frames = align_num_frames(round(duration_s * MINIMAX_H3_FPS))
+    index = 0
+    while True:
+        request = request_provider()
+        if not request:
+            return
+        prompt, references = request
+        profiler = BenchmarkProfiler()
+        try:
+            with profiler("run", iteration=0):
+                output = pipeline(
+                    prompt,
+                    references=references,
+                    num_frames=num_frames,
+                    height=height,
+                    width=width,
+                    num_inference_steps=num_inference_steps,
+                    seed=seed,
+                    on_event=profiler_event_callback(profiler, 0),
+                )
+        except ValueError as error:
+            if is_host():
+                logger.error(f"user ref generation rejected: {error}")
+            if ttnn.using_distributed_env():
+                ttnn.distributed_context_barrier()
+            continue
+        ttnn.synchronize_device(pipeline.mesh_device)
+        if ttnn.using_distributed_env():
+            ttnn.distributed_context_barrier()
+        log_pipeline_perf(
+            profiler,
+            label=label,
+            pipeline=pipeline,
+            num_forwards=num_inference_steps - 1,
+            width=width,
+            height=height,
+            num_frames=output.num_frames,
+            fps=MINIMAX_H3_FPS,
+            aspect_ratio=aspect_ratio,
+            num_inference_steps=num_inference_steps,
+        )
+        if is_host():
+            kinds = "_".join(reference.kind for reference in references)
+            stem = f"{label}_{aspect_ratio[0]}x{aspect_ratio[1]}_{width}x{height}_{index}_{kinds}"
             write_artifacts(
                 to_uint8_frames(output), output.audio.cpu().numpy(), output.sampling_rate, artifacts, stem=stem
             )
