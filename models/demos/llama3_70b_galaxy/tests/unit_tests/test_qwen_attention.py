@@ -2,9 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-# Single parametrized test. Wormhole runs the original (main) prefetcher path; Blackhole Galaxy runs
-# the no-prefetcher bring-up path. The architecture is detected once at import so the pytest
-# parameters (fabric config, paged attention) and the in-body setup select the right path.
+# Single parametrized test. Wormhole runs the original (main) prefetcher path; Blackhole Galaxy
+# honors QWEN_BH_PREFETCHER (CI exports it; vLLM/default stays on the no-prefetcher path).
+# Prefetcher setup follows model_args.use_prefetcher, matching test_qwen_decoder.py.
 import torch
 import pytest
 from loguru import logger
@@ -123,9 +123,8 @@ def test_qwen_attention_inference(
     pcc = 0.99
 
     model_args = TtQwenModelArgs(mesh_device, dummy_weights=False, max_batch_size=batch_size, max_seq_len=max_seq_len)
-    if _IS_BLACKHOLE:
-        # Blackhole bring-up runs the unit test without the runtime prefetcher.
-        model_args.use_prefetcher = False
+    # Prefetcher is on for Wormhole; on Blackhole it is opt-in (CI yamls export QWEN_BH_PREFETCHER=1).
+    use_prefetcher = model_args.use_prefetcher
     model_args.n_layers = 1  # For the unit test, just run a sigle layer
 
     state_dict = model_args.load_state_dict()
@@ -189,7 +188,7 @@ def test_qwen_attention_inference(
             ),
         )
 
-    if _IS_BLACKHOLE:
+    if not use_prefetcher:
         # Keep the default device context when prefetcher is disabled; installing a custom subdevice
         # manager here can conflict with kernel core groups.
         prefetcher_setup = None
@@ -233,13 +232,13 @@ def test_qwen_attention_inference(
     # Initial positions
     current_pos = torch.tensor([generation_start_pos for _ in range(batch_size)])
     current_pos_tensor = _decode_pos_tensor(generation_start_pos, batch_size, mesh_device, model_args.cluster_shape)
-    if not _IS_BLACKHOLE:
+    if use_prefetcher:
         # Explicitly allocate global CB to avoid memory fragmentation
         prefetcher_setup.create_global_cb()
 
-    # Blackhole (no prefetcher) uses the non-ring activation sharding and the non-fused rotary op.
+    # No-prefetcher uses non-ring activation sharding and the non-fused rotary op.
     input_memcfg = model_args.model_config[
-        "SHARDED_ATTN_INPUT_MEMCFG" if _IS_BLACKHOLE else "SHARDED_ATTN_INPUT_RING_MEMCFG"
+        "SHARDED_ATTN_INPUT_RING_MEMCFG" if use_prefetcher else "SHARDED_ATTN_INPUT_MEMCFG"
     ]
 
     for i in range(generation_length):
@@ -255,12 +254,12 @@ def test_qwen_attention_inference(
         )
 
         # Get cos/sin matrices for the current position of each user
-        if _IS_BLACKHOLE:
-            rot_mats = rope_setup.get_rot_mats(current_pos)
-        else:
+        if use_prefetcher:
             rot_mats = rope_setup.get_rm_rot_mats(current_pos)
+        else:
+            rot_mats = rope_setup.get_rot_mats(current_pos)
 
-        if not _IS_BLACKHOLE:
+        if use_prefetcher:
             ttnn.dram_prefetcher(
                 prefetcher_setup.get_input_tensors(),
                 num_layers=1,
@@ -278,7 +277,7 @@ def test_qwen_attention_inference(
             page_table=page_table_tt,
         )
 
-        if _IS_BLACKHOLE:
+        if not use_prefetcher:
             tt_output_torch = _tt_attention_output_to_torch(
                 tt_out, mesh_device, model_args.cluster_shape, batch_size, model_args.dim
             )
