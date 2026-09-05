@@ -340,5 +340,27 @@
       ],
       "evidence": "doc/optimized_vllm/non_aligned_serving.json, doc/optimized_vllm/logs/check_context_contract_after.log"
     }
+  },
+  "tti_release": {
+    "stage": "tti_release",
+    "what_changed_that_touches_persistent_allocation": "get_max_tokens_all_users now reserves the whole-prompt prefill activation pair (2 live [1, 1, phys, hidden_size] bfloat16 tensors at every one of the 47 layer boundaries, 8192 B per prompt token) out of the DRAM it hands to the vLLM KV pool, derived from max_model_len. That is a persistent-allocation change and is recorded here per $optimize's rule: the KV pool shrinks by 1.547 GiB. Nothing else moves. No KV-cache dtype, cache layout, block size, page-table width, activation dtype or chunking change, and the 202752-token context contract is unchanged and is now reachable through the serving path, which it was not before.",
+    "why": "TR-001. With the old fixed 0.75 GiB margin the served context was advertised but not deliverable: a 47104-token and a 65536-token prompt both killed the vLLM EngineCore with TT_FATAL bank_manager.cpp:462 during _moe_prefill, while 32768 served fine. See doc/tti_release/AUTOFIX_prefill_dram.md.",
+    "max_model_len": 202752,
+    "supported_context": 202752,
+    "max_valid_position": 202751,
+    "capability_reduction": "none",
+    "kv_pool_tokens_before": 471168,
+    "kv_pool_tokens_after": 414656,
+    "kv_pool_headroom_note": "414656 pool tokens is 2.05x a single full-context request, so one user at the full 202752 context still fits twice over; vLLM logs 'Maximum concurrency for 202,752 tokens per request: 2.05x' at boot.",
+    "prefill_activation_reserved_gib": 1.547,
+    "prefill_activation_derivation": "PREFILL_LIVE_WHOLE_PROMPT_ACTIVATIONS (2) * ceil(max_model_len / kv_cache.block_size) * block_size * hidden_size (2048, read from the checkpoint's own HF config) * PREFILL_ACTIVATION_DTYPE_BYTES (2) = 1,660,944,384 B.",
+    "served_prompt_lengths_verified": [
+      10000,
+      65536,
+      131071,
+      131072,
+      202751
+    ],
+    "evidence": "doc/tti_release/AUTOFIX_prefill_dram.md, doc/tti_release/autofix_prefill_dram.json, doc/tti_release/non_aligned_prompts.json, doc/tti_release/benchmarks/ (release sweep points at ISL 65536 and 131072, failed=0), doc/tti_release/logs/prefill_oom_before_fix.log (the before side)"
   }
 }

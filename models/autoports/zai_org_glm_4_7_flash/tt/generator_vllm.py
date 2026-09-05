@@ -78,7 +78,7 @@ from loguru import logger
 
 import ttnn
 from models.autoports.zai_org_glm_4_7_flash.tt.generator import GLM47FlashGenerator, build_generator
-from models.autoports.zai_org_glm_4_7_flash.tt.model import DEFAULT_HF_MODEL_ID
+from models.autoports.zai_org_glm_4_7_flash.tt.model import DEFAULT_HF_MODEL_ID, load_hf_config, resolve_checkpoint_dir
 
 _MODEL_DIR = Path(__file__).resolve().parent.parent
 _CONTRACT_PATH = _MODEL_DIR / "doc" / "context_contract.json"
@@ -106,6 +106,27 @@ _CONTRACT_PATH = _MODEL_DIR / "doc" / "context_contract.json"
 #: the next bucket, 2048, failed).
 VLLM_PREFILL_CHUNK_SIZE = 1024
 VLLM_PREFILL_BUCKETS = (128, 256, 512, 1024)
+
+#: How many whole-prompt-length activation tensors are live in DRAM at the same
+#: time during prefill. ``GLM47FlashModel.run_layer_stack_prefill``
+#: (tt/model.py) walks the 47 layers as ``nxt = layer.prefill_forward(x, ...)``
+#: then ``deallocate(x); x = nxt``, and ``FusedDecoder.prefill_forward``
+#: (tt/fused_decoder.py) allocates its ``out_acc`` output for the *whole*
+#: physical prompt up front. So at every layer boundary the layer's input and
+#: the layer's output are both resident, both ``[1, 1, phys, hidden_size]``.
+#: Prefill chunking splits the compute *inside* a layer, never this
+#: layer-to-layer activation, so this pair scales with the prompt length and
+#: not with ``VLLM_PREFILL_CHUNK_SIZE``. Everything else in the prefill path
+#: (the per-chunk norm/attention/MoE temporaries, the terminal
+#: slice/norm/LM-head slab) is chunk- or tile-sized. See
+#: ``get_max_tokens_all_users`` for why this has to be reserved.
+PREFILL_LIVE_WHOLE_PROMPT_ACTIVATIONS = 2
+#: bfloat16: the activation dtype the whole prefill layer stack runs in
+#: (``FusedDecoder.prefill_forward``'s ``out_acc`` is allocated
+#: ``ttnn.bfloat16`` explicitly; ``GLM47FlashModel.embed`` produces the same).
+#: Not a precision knob -- reading the width off the committed activation dtype
+#: so the reservation below cannot drift from it.
+PREFILL_ACTIVATION_DTYPE_BYTES = 2
 
 
 #: A/B knob for the optimized-vLLM stage's before/after measurement, and an
@@ -275,8 +296,15 @@ class GLM47FlashForCausalLM:
         (doc/vllm_integration/work_log.md VS-004). See ``full_model.dram_budget_gib``
         / ``full_model.kv_cache_bytes_per_token_all_47_layers_bf8`` /
         ``full_model.kv_cache_bytes_per_token_per_layer_bf8`` in that file.
+
+        The pool this returns has to leave room for the prefill *transients*
+        too, since they are allocated inside the same DRAM the cache occupies.
+        Two of the three are prompt-length-independent and covered by the fixed
+        ``safety_margin_gib``; the third is the whole-prompt activation pair and
+        is reserved from ``max_model_len``. Both are itemised inline below.
         """
-        contract = _load_context_contract()["full_model"]
+        contract_all = _load_context_contract()
+        contract = contract_all["full_model"]
         budget = contract["dram_budget_gib"]
         headroom_gib = (
             contract["measured_allocatable_dram_gib"]
@@ -309,16 +337,60 @@ class GLM47FlashForCausalLM:
         #
         # 0.75 GiB total covers both with margin, still measured against a real
         # observed failure rather than an arbitrarily large guess.
+        #
+        # Both of those are *prompt-length-independent*: 1. is a property of the
+        # bank geometry and 2. is a property of ``VLLM_PREFILL_CHUNK_SIZE``. What
+        # they do NOT cover, and what this margin alone got wrong (TR-001), is
+        # the third transient: the whole-prompt prefill activation pair below.
         safety_margin_gib = 0.75
+        # 3. Whole-prompt prefill activations, reserved as a function of the
+        #    served context rather than folded into the fixed margin above,
+        #    because it is the one prefill transient that scales with the
+        #    *prompt* length. See PREFILL_LIVE_WHOLE_PROMPT_ACTIVATIONS: two
+        #    [1, 1, phys, hidden_size] bfloat16 tensors are live at each of the
+        #    47 layer boundaries, so a prompt costs
+        #    ``2 * phys * hidden_size * 2`` = 8192 B/token of DRAM that has to
+        #    coexist with (2)'s 384 MiB gate_up transpose buffers.
+        #    ``prefill_physical_len`` bounds ``phys`` by
+        #    ``max_seq_len_physical`` = the block-aligned served context, so
+        #    ``max_model_len`` rounded up to the paged block size is the exact
+        #    worst case, and vLLM prefills one request at a time
+        #    (``prefill_forward`` loops the rows) so one pair is the peak.
+        #    Measured before this term existed, at the 469,104-token budget the
+        #    fixed 0.75 GiB alone produced: prompt 32768 served fine, prompt
+        #    47104 and 65536 both killed EngineCore with the same TT_FATAL
+        #    bank_manager.cpp:462 Out of Memory on the same 402,653,184 B
+        #    transpose buffer -- at 47104 with 411,951,104 B of DRAM still free
+        #    device-wide but only 190,398,976 B of it contiguous, i.e. the
+        #    activation pair had both consumed and fragmented the space (2)
+        #    needs. A 202752-token prompt's pair is 1,660,944,384 B, so the
+        #    unreserved shortfall grew with the prompt and the advertised
+        #    context was unreachable through the serving path.
+        #    (doc/tti_release/AUTOFIX_prefill_dram.md TR-001.)
+        block_size = contract_all["kv_cache"]["block_size"]
+        served_context = int(max_model_len or contract["supported_context"])
+        max_prefill_phys = -(-served_context // block_size) * block_size
+        hidden_size = int(load_hf_config(resolve_checkpoint_dir(None, model_name or DEFAULT_HF_MODEL_ID)).hidden_size)
+        prefill_activation_bytes = (
+            PREFILL_LIVE_WHOLE_PROMPT_ACTIVATIONS * max_prefill_phys * hidden_size * PREFILL_ACTIVATION_DTYPE_BYTES
+        )
+        prefill_activation_gib = prefill_activation_bytes / (1024**3)
         total_tokens = int(
-            (headroom_gib - safety_margin_gib) * (1024**3) / (bytes_per_token_all_layers + bytes_per_token_one_layer)
+            (headroom_gib - safety_margin_gib - prefill_activation_gib)
+            * (1024**3)
+            / (bytes_per_token_all_layers + bytes_per_token_one_layer)
         )
         logger.info(
-            "GLM-4.7-Flash get_max_tokens_all_users: {} GiB headroom ({} GiB safety margin) / "
-            "{} B/token (all-layers + one-layer zero-buffer) -> {} tokens "
-            "(model_name={}, num_devices={}, max_model_len={}, max_num_seqs={})",
+            "GLM-4.7-Flash get_max_tokens_all_users: {} GiB headroom ({} GiB safety margin + {} GiB whole-prompt "
+            "prefill activations = {} live [1,1,{},{}] bf{} tensors) / {} B/token (all-layers + one-layer "
+            "zero-buffer) -> {} tokens (model_name={}, num_devices={}, max_model_len={}, max_num_seqs={})",
             round(headroom_gib, 3),
             safety_margin_gib,
+            round(prefill_activation_gib, 3),
+            PREFILL_LIVE_WHOLE_PROMPT_ACTIVATIONS,
+            max_prefill_phys,
+            hidden_size,
+            8 * PREFILL_ACTIVATION_DTYPE_BYTES,
             bytes_per_token_all_layers + bytes_per_token_one_layer,
             total_tokens,
             model_name,
