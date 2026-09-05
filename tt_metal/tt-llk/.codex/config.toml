@@ -1,0 +1,8 @@
+[mcp_servers.deepwiki]
+url = "https://mcp.deepwiki.com/mcp"
+
+[mcp_servers.atlassian]
+url = "https://mcp.atlassian.com/v1/mcp"
+
+[mcp_servers.glean_default]
+url = "https://tenstorrent-be.glean.com/mcp/default"
