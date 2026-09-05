@@ -7,8 +7,10 @@ import ttnn
 
 from tests.ttnn.utils_for_testing import assert_equal
 
-INTEGER_OUTPUT_DTYPES = frozenset({ttnn.uint8, ttnn.uint16, ttnn.uint32, ttnn.int32})
+INTEGER_OUTPUT_DTYPES = frozenset({ttnn.uint8, ttnn.int8, ttnn.uint16, ttnn.uint32, ttnn.int32})
 _UNSIGNED_INPUT_DTYPES = frozenset({ttnn.uint8, ttnn.uint16, ttnn.uint32})
+# 8-bit outputs wrap rather than clamp, so their bounds reach well outside the output range.
+_NARROW_8BIT_OUTPUT_DTYPES = frozenset({ttnn.uint8, ttnn.int8})
 
 # Signed 32-bit extrema: min = -2^(32-1), max = 2^(32-1) - 1 (exponent is 31, not 32).
 _INT32_MIN = -(2**31)
@@ -23,12 +25,14 @@ _UNSIGNED_INPUT_MAX = {
 # Representable limits per dtype (uint32 output capped to uint16-scale for practical randint).
 _DTYPE_MIN = {
     ttnn.uint8: 0,
+    ttnn.int8: -128,
     ttnn.uint16: 0,
     ttnn.uint32: 0,
     ttnn.int32: _INT32_MIN,
 }
 _DTYPE_MAX = {
     ttnn.uint8: 255,
+    ttnn.int8: 127,
     ttnn.uint16: 65535,
     ttnn.uint32: 65535,
     ttnn.int32: _INT32_MAX,
@@ -41,7 +45,7 @@ _CLAMP_LOW_MAGNITUDE = 1000
 
 
 def _output_allows_negative(tt_output_dtype):
-    return tt_output_dtype == ttnn.int32
+    return tt_output_dtype in (ttnn.int32, ttnn.int8)
 
 
 def typecast_test_input_bounds(tt_input_dtype, tt_output_dtype):
@@ -53,10 +57,10 @@ def typecast_test_input_bounds(tt_input_dtype, tt_output_dtype):
 
     Rules (per review on #46574):
     - Unsigned input → low = 0.
-    - Signed/float input + uint8 output → ±2×(max+1) for wrap/clamp (±512).
+    - Signed/float input + 8-bit output → ±2×(max+1) for wrap/clamp (±512 for uint8, ±256 for int8).
     - Signed/float input + wider unsigned/signed output → low = -min(1000, out_max+1),
       high = out_max + slack (80000 for uint16-scale outputs).
-    - Unsigned input + uint8 output → [0, min(512, input_max)]; wider outputs → [0, min(80000, input_max)].
+    - Unsigned input + 8-bit output → [0, min(2×(max+1), input_max)]; wider outputs → [0, min(80000, input_max)].
     """
     if tt_output_dtype not in INTEGER_OUTPUT_DTYPES:
         return 0, 100
@@ -66,7 +70,7 @@ def typecast_test_input_bounds(tt_input_dtype, tt_output_dtype):
 
     if tt_input_dtype in _UNSIGNED_INPUT_DTYPES:
         low = 0
-    elif tt_output_dtype == ttnn.uint8:
+    elif tt_output_dtype in _NARROW_8BIT_OUTPUT_DTYPES:
         span = out_max + 1
         low = -2 * span
     elif not _output_allows_negative(tt_output_dtype):
@@ -74,7 +78,7 @@ def typecast_test_input_bounds(tt_input_dtype, tt_output_dtype):
     else:
         low = -min(_CLAMP_LOW_MAGNITUDE, abs(out_min) if out_min < 0 else _CLAMP_LOW_MAGNITUDE)
 
-    if tt_output_dtype == ttnn.uint8:
+    if tt_output_dtype in _NARROW_8BIT_OUTPUT_DTYPES:
         high = 2 * (out_max + 1)
     elif tt_output_dtype in (ttnn.uint16, ttnn.uint32, ttnn.int32):
         high = _CLAMP_HIGH
@@ -91,6 +95,8 @@ def typecast_test_input_bounds(tt_input_dtype, tt_output_dtype):
 def make_typecast_test_input(shape, pt_input_dtype, in_low, in_high):
     if pt_input_dtype == torch.uint8:
         return torch.randint(0, 256, shape, dtype=torch.uint8)
+    if pt_input_dtype == torch.int8:
+        return torch.randint(-128, 128, shape, dtype=torch.int8)
     if pt_input_dtype in (torch.int, torch.int32):
         return torch.randint(in_low, in_high + 1, shape, dtype=torch.int32)
     return (torch.rand(shape) * (in_high - in_low) + in_low).to(pt_input_dtype)
