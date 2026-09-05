@@ -103,10 +103,11 @@ def run_distributed_rms_norm_decode_impl(
     # Create semaphore handles for each iteration
     ccl_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, input_shard_grid, 0) for _ in range(num_iters)]
 
-    # Stats buffer configuration - single core sharding so stats.padded_shape[-1] = num_devices * TILE_WIDTH
-    # This is critical for correct RMS scaling across devices
+    # Stats buffer configuration. The op gathers one E(x^2) tile per device on the cluster axis, so
+    # the buffer must be num_devices tiles wide and replicated across the mesh. Passing stats=None
+    # instead lets the op allocate this scratch itself.
     ag_memory_config = ttnn.create_sharded_memory_config(
-        shape=(32, 32),
+        shape=(32, num_devices * 32),
         core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
         strategy=ttnn.ShardStrategy.WIDTH,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
@@ -114,7 +115,7 @@ def run_distributed_rms_norm_decode_impl(
     )
 
     # Create persistent stats tensor
-    ag_shape = [1, 1, 32, num_devices]
+    ag_shape = [1, 1, 32, num_devices * 32]
     stats_tensor = torch.zeros(ag_shape, dtype=torch.bfloat16)
     tt_stats = ttnn.from_torch(
         stats_tensor,
@@ -122,9 +123,7 @@ def run_distributed_rms_norm_decode_impl(
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.bfloat16,
         memory_config=ag_memory_config,
-        mesh_mapper=ttnn.ShardTensor2dMesh(
-            mesh_device, dims=(3, None), mesh_shape=list(ttnn.MeshShape(num_devices, 1))
-        ),
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
 
     # Output memory config
