@@ -510,6 +510,12 @@ void IndexerScoreProgramFactory::override_runtime_arguments(
     // chunk_start (per-coordinate, from the stored device_index).
     const uint32_t Sq = tensors.q.logical_shape()[2];
     const auto [k_batch_page_offset, kv_len_tiles] = persistent_cache_args(args, tensors.k);
+    // Mesh-buffer addresses are common to every coordinate and core in this dispatch.
+    // Resolve them once per invocation; new allocations still refresh every cached program.
+    const uint32_t q_address = tensors.q.buffer()->address();
+    const uint32_t k_address = tensors.k.buffer()->address();
+    const uint32_t w_address = tensors.weights.buffer()->address();
+    const uint32_t out_address = out.buffer()->address();
     for (auto& [range, shared] : cached.shared_variables) {
         auto& program = cached.workload.get_programs().at(range);
         auto& reader_args = tt::tt_metal::GetRuntimeArgs(program, shared.reader_kernel);
@@ -519,9 +525,9 @@ void IndexerScoreProgramFactory::override_runtime_arguments(
         const uint32_t chunk_t = geom.chunk_start_tiles;
         for (const auto& core : shared.worker_cores) {
             auto& reader_rt = reader_args[core.x][core.y];
-            patch_arg(reader_rt, rt_arg::reader_q_addr, tensors.q.buffer()->address(), "reader.q_addr");
-            patch_arg(reader_rt, rt_arg::reader_k_addr, tensors.k.buffer()->address(), "reader.k_addr");
-            patch_arg(reader_rt, rt_arg::reader_w_addr, tensors.weights.buffer()->address(), "reader.w_addr");
+            patch_arg(reader_rt, rt_arg::reader_q_addr, q_address, "reader.q_addr");
+            patch_arg(reader_rt, rt_arg::reader_k_addr, k_address, "reader.k_addr");
+            patch_arg(reader_rt, rt_arg::reader_w_addr, w_address, "reader.w_addr");
             patch_arg(reader_rt, rt_arg::reader_k_batch_offset, k_batch_page_offset, "reader.k_batch_offset");
             patch_arg(reader_rt, rt_arg::reader_kv_len_tiles, kv_len_tiles, "reader.kv_len_tiles");
             patch_arg(compute_args[core.x][core.y], rt_arg::compute_kv_len_tiles, kv_len_tiles, "compute.kv_len_tiles");
@@ -536,7 +542,7 @@ void IndexerScoreProgramFactory::override_runtime_arguments(
                 rt_arg::compute_straddle_jump_tiles,
                 geom.straddle_jump_tiles,
                 "compute.straddle_jump_tiles");
-            patch_arg(writer_args[core.x][core.y], rt_arg::writer_out_addr, out.buffer()->address(), "writer.out_addr");
+            patch_arg(writer_args[core.x][core.y], rt_arg::writer_out_addr, out_address, "writer.out_addr");
             patch_arg(writer_args[core.x][core.y], rt_arg::writer_kv_len_tiles, kv_len_tiles, "writer.kv_len_tiles");
             patch_arg(writer_args[core.x][core.y], rt_arg::writer_chunk_start_tiles, chunk_t, "writer.chunk_start");
             patch_arg(

@@ -398,6 +398,26 @@ def test_indexer_score_indexed_cache(device):
     assert device.num_program_cache_entries() == entries_after_first, "switching cache_batch_idx recompiled"
 
 
+def test_indexer_score_cache_hit_fresh_buffers(device):
+    """Keep old buffers live so a cache hit must patch all four newly allocated addresses."""
+    c = IDX_CACHE
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=32, head_group_size=0)
+    live_buffers = []
+    entries = None
+    for seed, slot in ((11, 0), (29, 1), (43, 0)):
+        q, w, k = _indexed_inputs(2, seed=seed)
+        q_dev, w_dev, k_dev = to_device(q, device), to_device(w, device), to_device(k, device)
+        out = ttnn.experimental.indexer_score_dsa(
+            q_dev, k_dev, w_dev, chunk_start_idx=c["chunk_start"], program_config=cfg, cache_batch_idx=slot
+        )
+        live_buffers.append((q_dev, w_dev, k_dev, out))
+        _check_slot(ttnn.to_torch(out), q, k, w, slot)
+        if entries is None:
+            entries = device.num_program_cache_entries()
+        else:
+            assert device.num_program_cache_entries() == entries, "fresh buffers recompiled"
+
+
 def test_indexer_score_indexed_cache_nd_sharded_k(device):
     """The indexed k cache may be ND-sharded across DRAM banks (each [1,1,T,D] slot is one shard); the
     reader resolves it through a TensorAccessor, so every slot still scores correctly."""
