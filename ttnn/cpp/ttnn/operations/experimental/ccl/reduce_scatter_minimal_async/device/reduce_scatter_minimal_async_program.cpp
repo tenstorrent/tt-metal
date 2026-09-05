@@ -542,6 +542,21 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
             "device page stride (aligned_page_size) would not match chunk_id*page_bytes addressing",
             staging.page_bytes,
             dram_alignment);
+    } else if (input_tensor_B > 1) {
+        // The tiled staging layout gives every batch its own region at b * input_batch_num_pages, and all
+        // batches are in flight within one ring step, so the intermediate has to hold the whole input. The
+        // shared-region layout this replaced only needed one batch's worth, and a caller-provided buffer
+        // sized that way (the fused matmul + reduce-scatter test did this) is otherwise overrun silently
+        // into whatever follows it in DRAM. The public op already rejects such a buffer in validate; this
+        // covers callers that reach the builder directly, such as matmul_reduce_scatter_async.
+        TT_FATAL(
+            intermediate_tensor.buffer()->num_pages() >= input_tensor_num_pages,
+            "reduce_scatter_minimal_async: the tiled intermediate must hold the whole input ({} pages) so that "
+            "each of the {} batches can stage into its own region; got {} pages. Allocate it with the input "
+            "tensor's shape.",
+            input_tensor_num_pages,
+            input_tensor_B,
+            intermediate_tensor.buffer()->num_pages());
     }
 
     // input_tensor from reader -> compute
