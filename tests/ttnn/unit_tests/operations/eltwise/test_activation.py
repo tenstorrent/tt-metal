@@ -69,6 +69,60 @@ def test_log_sigmoid(device, h, w):
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
+@pytest.mark.parametrize("low, high", [(-30.0, 30.0), (-4.0, 4.0)])
+def test_log_sigmoid_range(device, h, w, low, high):
+    # The randn input above stays within about +-4 sigma; both tails need their
+    # own coverage, since that is where the output is a small residual (x > 0)
+    # or is dominated by the linear asymptote (x < 0).
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch.linspace(low, high, h * w, dtype=torch.bfloat16).reshape(h, w)
+    golden_function = ttnn.get_golden_function(ttnn.log_sigmoid)
+    torch_output_tensor = golden_function(torch_input_tensor)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.log_sigmoid(input_tensor)
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    # This pins the bf16 path at 3 ULP so a later change to it cannot silently
+    # degrade. It is not the guard for the defect being fixed: swept over every bfloat16
+    # value in [-30, 30] above 2**-14 on ttsim, that defect measures 2.12 ULP against
+    # 1.43 for the corrected kernel -- a 1.5x gap, too thin to hang a bfloat16
+    # threshold on, and thinner still on the linspace here. That guard is the fp32
+    # test in test_unary_fp32.py, where the same defect is ~1.3e5 ULP.
+    assert_with_ulp(torch_output_tensor, output_tensor, 3)
+
+
+def test_log_sigmoid_bfloat16_special_values(device):
+    torch_input_tensor = torch.zeros((32, 32), dtype=torch.bfloat16)
+    torch_input_tensor.flatten()[:5] = torch.tensor(
+        [float("nan"), float("inf"), -float("inf"), 0.0, -0.0], dtype=torch.bfloat16
+    )
+    golden_function = ttnn.get_golden_function(ttnn.log_sigmoid)
+    torch_output_tensor = golden_function(torch_input_tensor)
+    # The bfloat16 pack converts NaN to +inf. Without the kernel's NaN restore,
+    # this lane is finite zero, so normalizing the golden keeps the regression covered.
+    torch_output_tensor = torch.where(
+        torch.isnan(torch_output_tensor),
+        torch.tensor(float("inf"), dtype=torch_output_tensor.dtype),
+        torch_output_tensor,
+    )
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        preserve_nan_values=True,
+    )
+    output_tensor = ttnn.to_torch(ttnn.log_sigmoid(input_tensor))
+
+    assert_with_ulp(torch_output_tensor, output_tensor, 3, allow_nonfinite=True)
+
+
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
 def test_mish(device, h, w):
     run_activation_unary_test(device, h, w, ttnn.mish, ulp=3)
 

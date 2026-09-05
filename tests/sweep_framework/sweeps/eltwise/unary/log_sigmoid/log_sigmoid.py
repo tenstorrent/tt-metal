@@ -22,7 +22,7 @@ parameters = {
         "input_shape": gen_shapes([1, 1, 32, 32], [6, 12, 256, 256], [1, 1, 32, 32], 16)
         + gen_shapes([1, 32, 32], [12, 256, 256], [1, 32, 32], 16)
         + gen_shapes([32, 32], [256, 256], [32, 32], 32),
-        "input_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "input_dtype": [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.float32],
         "input_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
         "input_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
@@ -54,8 +54,11 @@ def run(
 ) -> list:
     torch.manual_seed(0)
 
+    # The lower bound has to stay well below the point where log_sigmoid becomes
+    # its own linear asymptote, and the upper bound well above the point where the
+    # output is a small residual; -4 in particular sampled only one side.
     torch_input_tensor = gen_func_with_cast_tt(
-        partial(torch_random, low=-4, high=10, dtype=torch.float32), input_dtype
+        partial(torch_random, low=-30, high=30, dtype=torch.float32), input_dtype
     )(input_shape)
     golden_function = ttnn.get_golden_function(ttnn.log_sigmoid)
     torch_output_tensor = golden_function(torch_input_tensor)
