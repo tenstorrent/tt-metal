@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#if defined(PROFILE_STREAMING)
+#include "tools/profiler/kernel_profiler_streaming.hpp"
+#else
 
 #include <climits>
 
@@ -1138,4 +1141,5 @@ __attribute__((noinline)) void trace_only_init() {
 #define StopPerfCounters()
 #define RecordPerfCounters()
 
+#endif
 #endif

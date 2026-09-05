@@ -1,0 +1,122 @@
+# Streaming profiler in the Tracy GUI
+
+Data is streamed off the device as it is produced, so capture runs continuously instead of stopping at
+a kernel or program boundary. Host callbacks receive every record and decide what to do with it (see
+[STREAMING_PROFILER_DETAILED.md](STREAMING_PROFILER_DETAILED.md)). A Tracy callback ships built in: set
+`TT_METAL_STREAMING_PROFILER_TRACY=1` and every record is pushed to the GUI.
+
+The three device-side primitives are below — device code, the host callback that receives it, and how
+it renders. All three GIFs come from one 50-iteration demo kernel; one GPU context per worker core,
+one row per RISC.
+
+## 1. Zone scope — `DeviceZoneScopedN`
+
+Device:
+
+```cpp
+void kernel_main() {
+    DeviceZoneScopedN("MY-KERNEL");    // one zone spanning the whole kernel
+    for (uint32_t it = 0; it < N_ITERS; it++) {
+        DeviceZoneScopedN("compute");  // nested zone: opens here...
+        do_compute();                  // ~20 us of work
+    }                                  // ...closes at the end of the scope
+}
+```
+
+Host callback — a zone arrives as one record, whole, when it closes:
+
+```cpp
+streaming_profiler::ZoneNameMirror names;   // id -> name; grows as kernels JIT-load
+auto h = streaming_profiler::register_consumer("zone-sink", [&](const streaming_profiler::StreamingProfilerRecordBatch& b) {
+    names.refresh();
+    for (const auto& r : b.records) {
+        if (r.meta.type != streaming_profiler::StreamingProfilerRecType::Zone) continue;
+        fmt::print("{}: start={} dur={} cycles (lane {}, op {})\n",
+            names.lookup(r.id),          // "compute"
+            r.data.zone.start, r.data.zone.duration, r.meta.lane, r.prog);
+    }
+});
+```
+
+![zone scopes](docs/zone_gifs/zone_scopes.gif)
+
+A named RAII scope, alive until the end of its `{}`. Zones nest: every RISC row shows
+`*-KERNEL` (the firmware wrapper) with `MY-KERNEL` under it and the per-iteration `compute`
+zones one level deeper. Hovering shows the name and GPU execution time (~20 us here).
+
+## 2. Timestamped data — `DeviceTimestampedData`
+
+Device:
+
+```cpp
+uint64_t bytes_moved = 0;
+for (uint32_t it = 0; it < N_ITERS; it++) {
+    do_compute();
+    bytes_moved += 2048;                                // any runtime value
+    DeviceTimestampedData("BYTES-MOVED", bytes_moved);  // stamped with the device time
+}
+```
+
+Host callback — a `Data` record carries the timestamp; one `Ext` record follows on the same lane
+with the payload word count in `id` and payload words 1–2 packed into `data.ext` (`(hi << 32) | lo`).
+A 64-bit value like this one fits entirely in the `Ext`; `Cont` records appear only for payloads
+past two words (one uint64 each, words 3 and up):
+
+```cpp
+auto h = streaming_profiler::register_consumer("data-sink", [&](const streaming_profiler::StreamingProfilerRecordBatch& b) {
+    names.refresh();
+    for (const auto& r : b.records) {
+        switch (r.meta.type) {
+            case streaming_profiler::StreamingProfilerRecType::Data:  // marker: name id + device timestamp
+                pending = {names.lookup(r.id), r.data.ts};   // "BYTES-MOVED"
+                break;
+            case streaming_profiler::StreamingProfilerRecType::Ext:  // payload words 1-2: the whole uint64 here
+                fmt::print("{} @ {}: value={}\n", pending.name, pending.ts, r.data.ext);
+                break;
+            default: break;  // Cont (words 3+) unused for a single-uint64 payload
+        }
+    }
+});
+```
+
+![timestamped data](docs/zone_gifs/timestamped_data.gif)
+
+A point event carrying a 64-bit runtime value. Renders as a triangle above the row; the tooltip
+shows name, timestamp, and the value — here `Data: 49152` = `bytes_moved` after 24 iterations.
+
+## 3. Flag — `DeviceFlag`
+
+Device:
+
+```cpp
+for (uint32_t it = 0; it < N_ITERS; it++) {
+    DeviceFlag("LOOP-START");   // a named instant, no payload
+    do_compute();
+}
+```
+
+Host callback — an `Event` record is complete by itself: name id + timestamp, no payload:
+
+```cpp
+auto h = streaming_profiler::register_consumer("flag-sink", [&](const streaming_profiler::StreamingProfilerRecordBatch& b) {
+    names.refresh();
+    for (const auto& r : b.records) {
+        if (r.meta.type != streaming_profiler::StreamingProfilerRecType::Event) continue;
+        fmt::print("{} @ {} (lane {})\n",
+            names.lookup(r.id), r.data.ts, r.meta.lane);     // "LOOP-START" @ device time
+    }
+});
+```
+
+![device flag](docs/zone_gifs/device_flag.gif)
+
+The payload-free point event: a name and a device timestamp, nothing else. Use it to put a
+moment (phase boundary, retry, error path) on the timeline. Here one `LOOP-START` per
+iteration, next to that iteration's `BYTES-MOVED` on the same row.
+
+## Where to go next
+
+- [`STREAMING_PROFILER_DETAILED.md`](STREAMING_PROFILER_DETAILED.md) — the full reference: the three profiler
+  modes and every environment variable, the relay/receiver architecture, the wire format, the offline tools.
+- [`STREAMING_PROFILER_FINDINGS.md`](STREAMING_PROFILER_FINDINGS.md) — the dated record of findings and
+  benchmarks behind the design.

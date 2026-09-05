@@ -64,6 +64,7 @@ class AllocatorImpl;
 class ThreadPool;
 struct TraceDescriptor;
 class DriscL1Arena;
+class StreamingProfiler;
 
 namespace distributed {
 
@@ -159,6 +160,10 @@ private:
     // handler). Constructed by init_realtime_profiler_socket() and torn down in close_impl()
     // before the rest of the mesh shutdown so its receiver thread observes a live device.
     std::unique_ptr<RealtimeProfilerManager> realtime_profiler_;
+
+    // Constructed by init_streaming_profiler() when TT_METAL_STREAMING_PROFILER is set; torn down in
+    // close_impl().
+    std::unique_ptr<StreamingProfiler> streaming_profiler_;
 
     // DRISC L1 arena for DRAM-sender GlobalCircularBuffer pages_sent allocations.
     // Constructed eagerly in initialize_impl() when the HAL exposes programmable
@@ -319,6 +324,7 @@ public:
         ttsl::Span<const std::uint32_t> l1_bank_remap = {},
         bool minimal = false);
     void init_realtime_profiler_socket(const std::shared_ptr<MeshDevice>& mesh_device);
+    void init_streaming_profiler(const std::shared_ptr<MeshDevice>& mesh_device);
     void trigger_realtime_profiler_sync_check();
     RealtimeProfilerManager* get_realtime_profiler() const;
 

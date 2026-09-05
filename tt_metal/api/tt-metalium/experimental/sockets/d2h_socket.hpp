@@ -104,6 +104,15 @@ public:
      */
     struct ExternalConfigBuffer {
         uint32_t address;  // L1 address on the sender core
+        // Set when the sender is not a Tensix worker (a Blackhole DRISC): the socket then addresses it by
+        // physical->virtual NoC translation plus the full L1 address. Addressing only: the static-vs-dynamic TLB
+        // path is decided by asking UMD for a window over the config buffer (init_sender_tlb), so a caller on a DRAM
+        // port without one should configure a window first or every read() pays a ~210 ns reconfigure.
+        bool sender_uses_physical_noc_addr = false;
+        // Added to `address` for the host's own write_core() calls only. A Blackhole DRAM core's L1 is not at
+        // NoC address 0 but at hal.get_l1_noc_offset(DRAM), which is the form the host watcher's sanitizer checks;
+        // the kernel and a TLB window over the buffer keep using the bare L1 address.
+        uint64_t host_l1_noc_offset = 0;
     };
 
     /**
@@ -277,6 +286,35 @@ public:
     void read(void* data, uint32_t num_pages, bool notify_sender = true);
 
     /**
+     * @brief View into the FIFO's host memory returned by peek(): one span, or two when the
+     *        requested range wraps the FIFO end (`second` is then the FIFO base).
+     */
+    struct ReadView {
+        const uint32_t* first = nullptr;
+        uint32_t first_bytes = 0;
+        const uint32_t* second = nullptr;
+        uint32_t second_bytes = 0;
+    };
+
+    /**
+     * @brief Zero-copy read: returns spans into the FIFO's host memory instead of copying.
+     *
+     * Blocks until `num_pages` are available, so only request what pages_available() reported. The spans
+     * stay valid until the caller retires them with pop(), since the device only reclaims FIFO space it has
+     * been notified of via `bytes_acked`. Peeking again before pop() returns the same data.
+     *
+     * @throws TT_FATAL if page_size has not been set or num_pages exceeds FIFO capacity.
+     */
+    ReadView peek(uint32_t num_pages);
+
+    /**
+     * @brief Retires a prior peek(): advances the read pointer past `num_pages` and (optionally)
+     *        notifies the device that the space is reclaimable. Call with the same page count as
+     *        the peek(), after the caller has finished with the spans.
+     */
+    void pop(uint32_t num_pages, bool notify_sender = true);
+
+    /**
      * @brief Blocks until all sent data has been acknowledged.
      *
      * Waits until `bytes_acked` equals `bytes_sent`, indicating the host has
@@ -382,6 +420,8 @@ private:
     uint32_t read_ptr_ = 0;
     uint32_t fifo_curr_size_ = 0;
     uint32_t config_buffer_address_ = 0;
+    bool sender_uses_physical_noc_addr_ = false;
+    uint64_t host_l1_noc_offset_ = 0;  // non-worker sender addressing (see ExternalConfigBuffer)
     uint32_t pcie_alignment_ = 0;
     uint32_t bytes_acked_device_offset_ = 0;
     tt::umd::TlbWindow* sender_core_tlb_ = nullptr;

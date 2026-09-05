@@ -445,6 +445,33 @@ def main():
 
             try:
                 captureProcess.communicate(timeout=15)
+                # A crashed capture tool returns from communicate() normally with a nonzero returncode
+                # rather than raising TimeoutExpired; without this check the copy below only warns that
+                # the .tracy it never wrote is missing.
+                capRc = captureProcess.returncode
+                if capRc != 0:
+                    # A signal death shows up as a negative returncode for a direct child, or as
+                    # 128+signo when launched via a shell.
+                    sigNo = None
+                    if capRc is not None and capRc < 0:
+                        sigNo = -capRc
+                    elif capRc is not None and capRc > 128:
+                        sigNo = capRc - 128
+                    if sigNo is not None:
+                        try:
+                            sigName = signal.Signals(sigNo).name
+                        except ValueError:
+                            sigName = f"signal {sigNo}"
+                        detail = f"was killed by {sigName} (signal {sigNo}, exit code {capRc})"
+                    else:
+                        detail = f"exited with code {capRc}"
+                    logger.error(
+                        f"Tracy capture tool (tracy-capture) {detail} before writing a trace. "
+                        f"The profiling stream crashed the capture tool, so NO .tracy was produced. "
+                        f"This is a capture-side failure -- the test itself may have passed. "
+                        f"Re-run under a debugger/ASan build of tracy-capture to root-cause."
+                    )
+                    sys.exit(70)  # EX_SOFTWARE: internal capture-tool failure
                 # Copy the generated .tracy file to the server's traces folder with a unique name
                 import datetime
 

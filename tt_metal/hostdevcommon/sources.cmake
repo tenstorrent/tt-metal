@@ -12,4 +12,5 @@ set(HOSTDEVCOMMON_JIT_API_HEADERS
 set(HOSTDEVCOMMON_HOSTDEV_HEADERS
     ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/hostdev/fabric_telemetry_msgs.h
     ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/hostdev/realtime_profiler_msgs.h
+    ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/hostdev/streaming_profiler_common.h
 )

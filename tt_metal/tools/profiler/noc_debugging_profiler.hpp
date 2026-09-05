@@ -4,6 +4,47 @@
 
 #pragma once
 
+#if defined(PROFILE_STREAMING)
+
+#if defined(DEVICE_DEBUG_DUMP) && defined(PROFILE_KERNEL) && !defined(DISPATCH_KERNEL) && \
+    (defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC))
+
+#include "noc_debugging_metadata.hpp"
+#include "internal/risc_attribs.h"
+#include "kernel_profiler.hpp"
+#include "hostdev/profiler_common.h"
+
+namespace noc_debugging_profiler {
+
+TT_ZONE_DEFINE_ID(kNocDebugZoneId, "NOC-DEBUG");
+
+template <NocDebuggingEventMetadata::NocDebugEventType event_type>
+FORCE_INLINE void recordScopedLockEvent(uint32_t locked_address_base, uint32_t num_bytes) {
+    NocDebuggingEventMetadata ev_md;
+    ev_md.setEventType(event_type);
+    ev_md.setLockedRegion(locked_address_base, num_bytes);
+
+    kernel_profiler::time_stamped_data<noc_debugging_profiler::kNocDebugZoneId>(ev_md.asU64());
+}
+
+}  // namespace noc_debugging_profiler
+
+#define RECORD_SCOPED_LOCK_EVENT(event_type, locked_address_base, num_bytes) \
+    noc_debugging_profiler::recordScopedLockEvent<event_type>((locked_address_base), (num_bytes))
+
+// Unregister every DFB extent this RISC declared.
+#define RECORD_DFB_REGION_CLEAR() \
+    noc_debugging_profiler::recordScopedLockEvent<NocDebuggingEventMetadata::NocDebugEventType::DFB_REGION_CLEAR>(0, 0)
+
+#else
+
+#define RECORD_SCOPED_LOCK_EVENT(event_type, locked_address_base, num_bytes)
+#define RECORD_DFB_REGION_CLEAR()
+
+#endif
+
+#else  // legacy DRAM profiler: origin/main text verbatim
+
 #if defined(DEVICE_DEBUG_DUMP) && defined(PROFILE_KERNEL) && !defined(DISPATCH_KERNEL) && \
     (defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC))
 
@@ -41,3 +82,5 @@ FORCE_INLINE void recordScopedLockEvent(uint32_t locked_address_base, uint32_t n
 #define RECORD_DFB_REGION_CLEAR()
 
 #endif
+
+#endif  // PROFILE_STREAMING

@@ -37,4 +37,11 @@ std::shared_ptr<ThreadPool> create_device_bound_thread_pool(ContextId context_id
 std::shared_ptr<ThreadPool> create_device_bound_thread_pool(
     ContextId context_id, const std::vector<tt::tt_metal::IDevice*>& physical_devices);
 std::shared_ptr<ThreadPool> create_passthrough_thread_pool(ContextId context_id);
+
+// Node granularity: pinning a long-lived data-path thread to one core serializes it against everything else
+// placed there.
+void bind_current_thread_to_numa_node(int numa_node);
+
+// Call before the pages are faulted.
+void bind_memory_to_numa_node(void* base, size_t bytes, int numa_node);
 }  // namespace tt::tt_metal

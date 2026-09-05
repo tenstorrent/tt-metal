@@ -8,6 +8,10 @@
 #include "jit_build_cache.hpp"
 #include "jit_device_config.hpp"
 
+#include <fcntl.h>
+#include <sys/file.h>
+#include <unistd.h>
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -25,6 +29,8 @@
 #include <string>
 #include <string_view>
 #include <vector>
+
+#include "hostdevcommon/profiler_zone_id.h"
 
 #include <enchantum/enchantum.hpp>
 #include <fmt/base.h>
@@ -57,6 +63,76 @@ using namespace std;
 namespace tt::tt_metal {
 
 namespace {
+
+// Hands out the tu_id half of a structural zone id (hostdevcommon/profiler_zone_id.h) as -DTT_PROFILER_TU_ID.
+// Ids must be unique across TUs and stable across runs (a cached ELF keeps the id in its .tt_zone_meta),
+// hence a file. The key is source identity plus build target: one source compiled for BRISC vs NCRISC can
+// number its zones differently. Compile-time args are left out to keep the registry bounded; two
+// define-variants of one source then share a tu_id, which the host reports as a collision rather than
+// mis-naming. Append-only "<source_id>\t<tu_id>" lines, lowest free id; flock() covers parallel builds
+// sharing a cache root, the mutex covers the JIT's own thread pool.
+uint32_t get_or_assign_profiler_tu_id(const std::string& registry_path, const std::string& source_id) {
+    static std::mutex mtx;
+    std::lock_guard<std::mutex> lk(mtx);
+
+    struct RegistryLock {
+        int fd;
+        explicit RegistryLock(const std::string& path) : fd(::open(path.c_str(), O_RDWR | O_CREAT, 0644)) {
+            TT_FATAL(fd >= 0, "Failed to open profiler zone tu-id registry '{}': {}", path, std::strerror(errno));
+            if (::flock(fd, LOCK_EX) != 0) {
+                int err = errno;
+                ::close(fd);
+                TT_THROW("Failed to lock profiler zone tu-id registry '{}': {}", path, std::strerror(err));
+            }
+        }
+        ~RegistryLock() {
+            ::flock(fd, LOCK_UN);
+            ::close(fd);
+        }
+    } registry_lock(registry_path);
+
+    std::vector<bool> taken(TT_ZONE_TU_COUNT, false);
+    {
+        std::ifstream in(registry_path);
+        std::string line;
+        while (std::getline(in, line)) {
+            auto tab = line.rfind('\t');
+            if (tab == std::string::npos) {
+                continue;
+            }
+            uint32_t entry_id = 0;
+            try {
+                entry_id = static_cast<uint32_t>(std::stoul(line.substr(tab + 1)));
+            } catch (const std::exception&) {
+                continue;
+            }
+            if (entry_id >= TT_ZONE_TU_COUNT) {
+                continue;  // assigned when the tu split was wider
+            }
+            if (line.compare(0, tab, source_id) == 0) {
+                return entry_id;
+            }
+            taken[entry_id] = true;
+        }
+    }
+
+    uint32_t id = 0;
+    while (id < TT_ZONE_TU_COUNT && taken[id]) {
+        ++id;
+    }
+    TT_FATAL(
+        id < TT_ZONE_TU_COUNT,
+        "Profiler zone tu-id space ({} ids) is exhausted. Delete '{}' to compact it; ids are re-derived from "
+        "each build's ELFs, so nothing is lost by resetting it.",
+        TT_ZONE_TU_COUNT,
+        registry_path);
+
+    std::ofstream out(registry_path, std::ios::app);
+    out << source_id << '\t' << id << '\n';
+    out.flush();
+    TT_FATAL(out.good(), "Failed to persist profiler zone tu-id registry entry to '{}'", registry_path);
+    return id;
+}
 
 void report_result(const string& target_name, string_view op, const string& cmd, const string& log_file, bool result) {
     if (!result) {
@@ -240,6 +316,26 @@ void JitBuildEnv::init(
 
         this->defines_ += "-DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=" +
                           std::to_string(config.profiler_dram_bank_size_per_risc_bytes) + " ";
+    }
+    if (rtoptions.get_streaming_profiler_enabled()) {
+        // Streaming (perf_debug) profiler. Mutually exclusive with get_profiler_enabled() (rtoptions
+        // TT_FATALs on both), so this branch never stacks on the one above. PROFILE_KERNEL=1 keeps every
+        // DeviceZoneScopedN / DeviceTimestampedData site compiled; PROFILE_STREAMING makes
+        // tools/profiler/kernel_profiler.hpp select the SPSC producer (kernel_profiler_streaming.hpp) instead of
+        // the DRAM one. No DRAM options (dispatch cores, trace-only, sum, accumulate) apply here.
+        TT_FATAL(
+            this->arch_ != tt::ARCH::QUASAR,
+            "TT_METAL_STREAMING_PROFILER is not supported on Quasar: the streaming profiler needs a DRISC "
+            "drainer, which Quasar does not have. Use TT_METAL_DEVICE_PROFILER instead.");
+        this->defines_ += "-DPROFILE_KERNEL=1 -DPROFILE_STREAMING=1 ";
+
+        // Critical-path tool: sync-event markers in cb_wait_front/semaphore paths. A distinct define
+        // (not a PROFILER_OPT bit) so the hook headers can gate without parsing PROFILE_KERNEL's value;
+        // it lands in defines_ and therefore in the JIT cache key like every other profiler option.
+        // Streaming-only: get_profiler_sync_events_enabled() is false unless streaming is on.
+        if (rtoptions.get_profiler_sync_events_enabled()) {
+            this->defines_ += "-DPROFILE_SYNC_EVENTS=1 ";
+        }
     }
     if (rtoptions.get_profiler_noc_events_enabled()) {
         // force profiler on if noc events are being profiled
@@ -667,6 +763,24 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
         cflags += " -save-temps=obj -fdump-tree-all -fdump-rtl-all";
     }
 
+    // Per-TU half of the structural device zone id (STREAMING profiler only; the DRAM profiler's 16-bit
+    // hash ids need no registry). Kept out of `defines_`/`build_key_` on purpose: a tu_id is a property of
+    // the SOURCE, not of the build recipe, so folding it into the cache key would split the cache for no
+    // reason. It is stable for a given source identity, so a cached object never disagrees with a freshly
+    // compiled one.
+    std::vector<std::string> defines = recipe.defines;
+    if (env_.get_rtoptions().get_streaming_profiler_enabled()) {
+        // Firmware has no JitBuildSettings; its source identity is the source path itself plus the target,
+        // which is stable across build configs (out_dir is not -- it carries the build key, and keying on it
+        // would mint a fresh tu_id per config for the same source).
+        const std::string source_id = (settings != nullptr)
+                                          ? settings->get_profiler_zone_src_id() + '\x1f' + this->target_name_
+                                          : "fw\x1f" + this->srcs_[src_index] + '\x1f' + this->target_name_;
+        const uint32_t tu_id =
+            get_or_assign_profiler_tu_id(env_.get_out_root_path() + ".profiler_zone_tu_ids", source_id);
+        defines.push_back(fmt::format("-DTT_PROFILER_TU_ID={}", tu_id));
+    }
+
     const std::string obj_path = out_dir + this->objs_[src_index];
     const std::string obj_temp_path = out_dir + this->temp_objs_[src_index];
     const std::string temp_d_path = fs::path(obj_temp_path).replace_extension("d").string();
@@ -676,7 +790,7 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
         recipe.compiler_opt_level,
         cflags,
         recipe.includes,
-        recipe.defines,
+        defines,
         this->srcs_[src_index],
         tt::jit_build::utils::GppAction::Compile,
         obj_temp_path,
@@ -688,7 +802,7 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
 
     if (env_.get_rtoptions().get_watcher_enabled() && settings) {
         log_kernel_defines_and_args(
-            out_dir, settings->get_full_kernel_name(), fmt::format("{}", fmt::join(recipe.defines, " ")));
+            out_dir, settings->get_full_kernel_name(), fmt::format("{}", fmt::join(defines, " ")));
     }
 
     // log file and dephash file can be renamed after compilation, but the .o file

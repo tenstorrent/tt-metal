@@ -1,4 +1,6 @@
 set(HW_JIT_API_HEADERS
+    inc/experimental/drisc_mode.h
+    inc/experimental/gddr_dma.h
     inc/experimental/blaze_rt_arg.h
     inc/api/alignment.h
     inc/api/compile_time_args.h
@@ -214,6 +216,7 @@ set(HW_JIT_API_HEADERS
     inc/hostdev/fabric_telemetry_msgs.h
     inc/hostdev/profiler_common.h
     inc/hostdev/realtime_profiler_msgs.h
+    inc/hostdev/streaming_profiler_common.h
     inc/hostdev/rta_constants.h
     inc/hostdev/socket.h
     inc/internal/hw_thread.h

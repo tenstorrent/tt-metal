@@ -13,4 +13,13 @@ set(PROFILER_EXAMPLES_SRCS
 
 CREATE_PGM_EXAMPLES_EXE("${PROFILER_EXAMPLES_SRCS}" "profiler")
 
-add_custom_target(profiler_examples DEPENDS ${PROGRAMMING_EXAMPLES_TEST_TARGETS})
+# Built separately: it needs internal Cluster headers, so it cannot go through the public-API-only
+# CREATE_PGM_EXAMPLES_EXE.
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/test_streaming_profiler_zones)
+
+add_custom_target(
+    profiler_examples
+    DEPENDS
+        ${PROGRAMMING_EXAMPLES_TEST_TARGETS}
+        test_streaming_profiler_zones
+)

@@ -51,6 +51,7 @@
 #include "distributed/fd_mesh_command_queue.hpp"
 #include "distributed/realtime_profiler_manager.hpp"
 #include "distributed/trace_allocation_tracker.hpp"
+#include "tools/profiler/streaming_profiler.hpp"
 #include "impl/buffers/tensor_prefetcher_manager.hpp"
 #include "impl/buffers/drisc_l1_arena.hpp"
 #include "distributed/sd_mesh_command_queue.hpp"
@@ -501,6 +502,7 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create(
     ctx.device_manager()->initialize_fabric_and_dispatch_fw();
 
     mesh_device->pimpl_->init_realtime_profiler_socket(mesh_device);
+    mesh_device->pimpl_->init_streaming_profiler(mesh_device);
 
     return mesh_device;
 }
@@ -613,6 +615,7 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDeviceImpl::create_unit_meshes(
 
     for (auto& [device_id, submesh] : result) {
         submesh->pimpl_->init_realtime_profiler_socket(submesh);
+        submesh->pimpl_->init_streaming_profiler(submesh);
     }
 
     return result;
@@ -1026,6 +1029,7 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
         realtime_profiler_->shutdown();
         realtime_profiler_.reset();
     }
+    streaming_profiler_.reset();
 
     // Drain any in-flight Tensor prefetcher kernel and release its state before the
     // rest of the mesh tears down. If the caller forgot to call StopTensorPrefetcher
@@ -1662,6 +1666,34 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
         return;
     }
     realtime_profiler_ = std::make_unique<RealtimeProfilerManager>(mesh_device);
+}
+
+void MeshDeviceImpl::init_streaming_profiler(const std::shared_ptr<MeshDevice>& mesh_device) {
+    if (streaming_profiler_) {
+        return;
+    }
+    // Streaming (perf_debug) profiler: TT_METAL_STREAMING_PROFILER=1 (llrt/rtoptions.cpp) boots the
+    // device-side DRISC relays and spawns the host receiver. Off by default. It is a mode of its own,
+    // exclusive with TT_METAL_DEVICE_PROFILER (rtoptions TT_FATALs on the pair), and the real-time profiler
+    // stands down while it is on (realtime_profiler_manager.cpp: evaluate_realtime_profiler_eligibility) --
+    // both would consume the same per-RISC L1 rings.
+    const auto& rtoptions = MetalContext::instance(get_context_id()).rtoptions();
+    if (!rtoptions.get_streaming_profiler_enabled()) {
+        return;
+    }
+    TT_FATAL(
+        MetalContext::instance(get_context_id()).hal().get_arch() != tt::ARCH::QUASAR,
+        "TT_METAL_STREAMING_PROFILER is not supported on Quasar: the streaming profiler needs a DRISC drainer, "
+        "which Quasar does not have. Use TT_METAL_DEVICE_PROFILER instead.");
+    // TT_METAL_DRISC_PROFILER: producers armed, no built-in consumer -- the caller supplies its own DRISC
+    // drainer (tests/tt_metal/tt_metal/api/test_dram_kernels.cpp), so booting ours would compete with it.
+    if (rtoptions.get_drisc_profiler_enabled()) {
+        log_info(
+            tt::LogMetal,
+            "[streaming profiler] TT_METAL_DRISC_PROFILER set -- producers armed, built-in receiver not started.");
+        return;
+    }
+    streaming_profiler_ = std::make_unique<StreamingProfiler>(mesh_device);
 }
 
 void MeshDeviceImpl::trigger_realtime_profiler_sync_check() {
