@@ -106,6 +106,57 @@ def test_binary_tensor_scalar_with_sub_device_id(device, op_fn, op_name):
         teardown_sub_device(device, sub_device_manager)
 
 
+@pytest.mark.parametrize("op_fn", [ttnn.remainder, ttnn.fmod])
+@skip_for_slow_dispatch()
+def test_binary_int32_float_scalar_promotion_with_sub_device_id(device, op_fn):
+    """INT32-to-FLOAT32 promotion and the scalar op both run on the requested sub-device."""
+    torch_input = torch.tensor([-5, -1, 0, 1, 5], dtype=torch.int32)
+    scalar = 1.5
+
+    sub_device_manager = setup_sub_device(device)
+    try:
+        tt_input = ttnn.from_torch(torch_input, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+
+        result = op_fn(tt_input, scalar, sub_device_id=ttnn.SubDeviceId(1))
+        actual = ttnn.to_torch(result)
+        expected = torch.remainder(torch_input, scalar) if op_fn == ttnn.remainder else torch.fmod(torch_input, scalar)
+
+        assert torch.equal(expected, actual)
+    finally:
+        teardown_sub_device(device, sub_device_manager)
+
+
+@skip_for_slow_dispatch()
+def test_binary_int32_float_scalar_sharded_output_with_sub_device_id(device, expect_error):
+    """The unsupported output typecast must not be reported as an input-promotion failure."""
+    torch_input = torch.arange(-512, 512, dtype=torch.int32).reshape(1, 1, 32, 32)
+    sharded_memory_config = ttnn.create_sharded_memory_config(
+        shape=(32, 32),
+        core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(4, 0))}),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    # Allocate in global L1 before loading the manager with its small local L1 region.
+    tt_output = ttnn.from_torch(
+        torch.zeros_like(torch_input),
+        dtype=ttnn.int32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=sharded_memory_config,
+    )
+
+    sub_device_manager = setup_sub_device(device)
+    try:
+        with expect_error(
+            RuntimeError, "Remainder output typecast on a restricted grid requires a tiled interleaved tensor"
+        ):
+            ttnn.remainder(tt_input, 1.5, output_tensor=tt_output, sub_device_id=ttnn.SubDeviceId(1))
+    finally:
+        teardown_sub_device(device, sub_device_manager)
+
+
 # ---------------------------------------------------------------------------
 # Mutual exclusion: sub_core_grids + sub_device_id = TT_FATAL
 # ---------------------------------------------------------------------------

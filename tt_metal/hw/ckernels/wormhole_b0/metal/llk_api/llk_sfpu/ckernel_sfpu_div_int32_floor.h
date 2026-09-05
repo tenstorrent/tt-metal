@@ -57,17 +57,20 @@ sfpi_inline void calculate_div_int32_body(
     scale = sfpi::as<sfpi::vFloat>((254 << 23) - sfpi::as<sfpi::vInt>(scale));
     inv_b_f = t * inv_b_f + inv_b_f;
 
+    // Fill reciprocal dependency slots with the independent numerator conversion.
+    sfpi::vInt a_s = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>();
+
     // Halley's Method
     sfpi::vFloat e = inv_b_f * neg_b_f + 1.0f;
-
-    sfpi::vInt a_s = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>();
+    sfpi::vMag a = sfpi::abs(a_s);
 
     // Continue Halley's Method
     e = e * e + e;
 
+    sfpi::vFloat a_f = sfpi::convert<sfpi::vFloat>(a, sfpi::RoundMode::Nearest);
+
     // Final step of Halley's Method
     inv_b_f = e * inv_b_f + inv_b_f;
-    sfpi::vFloat a_f = sfpi::convert<sfpi::vFloat>(sfpi::abs(a_s), sfpi::RoundMode::Nearest);
 
     // Apply scale
     inv_b_f = inv_b_f * scale;
@@ -95,8 +98,11 @@ sfpi_inline void calculate_div_int32_body(
     sfpi::vUInt q = q_m << 11;
 
     sfpi::vFloat MANTISSA_ALIGNMENT_OFFSET = 8388608.0f;
-    sfpi::vFloat hi = q2 * b0 + MANTISSA_ALIGNMENT_OFFSET;
-    sfpi::vFloat lo = q1 * b0 + MANTISSA_ALIGNMENT_OFFSET;
+    // Interleave independent products and bias additions to avoid multiply-use NOPs.
+    sfpi::vFloat hi = q2 * b0;
+    sfpi::vFloat lo = q1 * b0;
+    hi += MANTISSA_ALIGNMENT_OFFSET;
+    lo += MANTISSA_ALIGNMENT_OFFSET;
     hi = q1 * b1 + hi;
 
     sfpi::vInt qb = sfpi::vInt(sfpi::exman(lo)) << 11;
@@ -106,7 +112,11 @@ sfpi_inline void calculate_div_int32_body(
     a_s = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>();
     a_s = sfpi::abs(a_s);
     sfpi::vInt r = a_s - qb;
-    sfpi::vFloat r_f = sfpi::convert<sfpi::vFloat>(sfpi::abs(r), sfpi::RoundMode::Nearest);
+    // Shift before conversion so the valid magnitude 2**31 is representable as
+    // a positive sign-magnitude integer. Dropping the low bit can change the
+    // approximate correction by at most one, which the final adjustment handles.
+    sfpi::vFloat r_f = sfpi::convert<sfpi::vFloat>(sfpi::abs(r) >> 1, sfpi::RoundMode::Nearest);
+    r_f = sfpi::addexp(r_f, 1 /* delta */);
 
     // Compute correction value in float32.
     sfpi::vFloat correction_f = r_f * inv_b_f;
@@ -117,29 +127,41 @@ sfpi_inline void calculate_div_int32_body(
     // correction should fit into 11 bits, thus:
     // tmp = correction * (b2<<22 + b1<<11 + b0)
 
-    sfpi::vFloat low = correction_f * b0 + MANTISSA_ALIGNMENT_OFFSET;
-    sfpi::vFloat mid = correction_f * b1 + MANTISSA_ALIGNMENT_OFFSET;
-    sfpi::vFloat top = correction_f * b2 + MANTISSA_ALIGNMENT_OFFSET;
+    // Issue the independent products before consuming them in the bias additions.
+    sfpi::vFloat low = correction_f * b0;
+    sfpi::vFloat mid = correction_f * b1;
+    sfpi::vFloat top = correction_f * b2;
+    low += MANTISSA_ALIGNMENT_OFFSET;
+    mid += MANTISSA_ALIGNMENT_OFFSET;
+    top += MANTISSA_ALIGNMENT_OFFSET;
 
-    sfpi::vInt tmp{sfpi::exman(low) + (sfpi::exman(mid) << 11) + (sfpi::exman(top) << 22)};
+    // Keep this sum order together with q += cor below: current SFPI register
+    // allocation avoids extra moves with this combination. Recheck assembly for
+    // both rounding modes before commuting these integer additions.
+    sfpi::vInt tmp{(sfpi::exman(mid) << 11) + sfpi::exman(low) + (sfpi::exman(top) << 22)};
     sfpi::vUInt cor = correction;
-    v_if(r >= 0) {
+    // When q is zero, qb is also zero, so r=INT_MIN represents the valid
+    // positive magnitude 2**31 rather than a negative remainder.
+    // The conjunction avoids the predicate-complement instruction needed by ||.
+    v_if(r < 0 && q != 0) {
         tmp = -tmp;
         cor = -cor;
     }
     v_endif;
-    q -= cor;
-    r += tmp;
+    q += cor;
+    r -= tmp;
 
     // Since the correction might have been rounded, we may need to correct one
-    // additional bit.  The (r - 1) < 0 check is required to handle r=INT_MIN.
-    v_if(r < 0 && (r - 1) < 0) {
+    // additional bit.  The corrected remainder cannot be INT_MIN.
+    // Reuse the subtraction for both the upper comparison and the adjusted remainder.
+    sfpi::vInt r_minus_b = r - b;
+    v_if(r < 0) {
         q -= 1;
         r += b;
     }
-    v_elseif(r >= b) {
+    v_elseif(r_minus_b >= 0) {
         q += 1;
-        r -= b;
+        r = r_minus_b;
     }
     v_endif;
 
