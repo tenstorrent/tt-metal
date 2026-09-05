@@ -1,6 +1,5 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-import functools
 from typing import List, Optional
 
 import torch
@@ -153,34 +152,81 @@ class IdentityStrategy:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-@functools.lru_cache(maxsize=32)
+def _enumerate_fp32_in_range(
+    low: float, high: float, max_elements: int, offset: int = 0
+) -> torch.Tensor:
+    """Give back the float32 numbers in [low, high], smallest to largest — up to
+    max_elements of them, skipping the first `offset`.
+
+    There are 4 billion float32 numbers, so we can't just list them all. The
+    trick: adding 1 to a float's bit pattern (read as an integer) gives the very
+    next float. So we take low's bits, count up one integer at a time to high's
+    bits, and turn each back into a float. (A small fix makes negatives and
+    crossing zero work.) `offset` starts the count further along, so sweeping a
+    big range in chunks never repeats numbers already covered.
+    """
+    INT_MIN = -(2**31)
+
+    def _bits(x: float) -> int:
+        return int(torch.tensor([x], dtype=torch.float32).view(torch.int32).item())
+
+    def _to_key(bits: int) -> int:
+        # Monotonic total order over float32 (an involution): a larger key means
+        # a larger float value, including across the sign boundary.
+        return bits if bits >= 0 else INT_MIN - bits
+
+    base_lo = _to_key(_bits(low))
+    base_hi = _to_key(_bits(high))
+    if base_lo > base_hi:
+        base_lo, base_hi = base_hi, base_lo
+
+    lo_key = base_lo + offset
+    if lo_key > base_hi:
+        return torch.empty(0, dtype=torch.float32)  # offset past the range end
+    hi_key = min(base_hi, lo_key + max_elements - 1)
+
+    keys = torch.arange(lo_key, hi_key + 1, dtype=torch.int64)
+    bits = torch.where(keys < 0, INT_MIN - keys, keys).to(torch.int32)
+    return bits.view(torch.float32)
+
+
 def _enumerate_representable(
     stimuli_format: DataFormat,
     low: float,
     high: float,
     max_elements: int = 2**16,
+    offset: int = 0,
 ) -> torch.Tensor:
-    """Return all finite representable values in [low, high] for a 16-bit float format.
+    """Return the numbers a float format can represent in [low, high] — sorted,
+    duplicates removed, capped at max_elements, skipping the first `offset`.
 
-    Iterates every 2^16 bit pattern, reinterprets as the target dtype, keeps
-    finite values inside [low, high], then sorts, deduplicates (-0.0 == +0.0),
-    and clips to max_elements.
+    The 16-bit formats are small, so we list all 2^16 possible values and keep
+    the ones in range. float32 has far too many for that, so we walk only the
+    range instead (see _enumerate_fp32_in_range).
 
-    Cached: repeated calls with the same inputs return the same saved tensor.
-    Do not modify the returned tensor in place.
+    `offset` lets a big range be covered in chunks across several calls
+    (offset = 0, max_elements, 2*max_elements, ...).
     """
-    if stimuli_format == DataFormat.Float16_b:
-        dtype = torch.bfloat16
-    elif stimuli_format == DataFormat.Float16:
-        dtype = torch.float16
+    if stimuli_format in (DataFormat.Float16_b, DataFormat.Float16):
+        dtype = (
+            torch.bfloat16 if stimuli_format == DataFormat.Float16_b else torch.float16
+        )
+        all_bits = torch.arange(0, 2**16, dtype=torch.int16)
+        all_vals = all_bits.view(dtype).to(torch.float32)
+        # 16-bit enumerates the whole domain up front, so the offset is applied
+        # when slicing the sorted in-range values below.
+        slice_start = offset
+    elif stimuli_format == DataFormat.Float32:
+        dtype = torch.float32
+        # float32 applies the offset inside the walk (jumps straight to it), so
+        # the slice below starts at 0.
+        all_vals = _enumerate_fp32_in_range(low, high, max_elements, offset)
+        slice_start = 0
     else:
         raise ValueError(
-            f"ULP_SWEEP only supports Float16_b and Float16 formats, "
+            f"ULP_SWEEP supports Float16_b, Float16, and Float32 formats, "
             f"got {stimuli_format.name!r}"
         )
-
-    all_bits = torch.arange(0, 2**16, dtype=torch.int16)
-    all_vals = all_bits.view(dtype).to(torch.float32)
 
     mask = torch.isfinite(all_vals) & (all_vals >= low) & (all_vals <= high)
     vals = all_vals[mask]
@@ -191,17 +237,38 @@ def _enumerate_representable(
         unique_mask = torch.cat([torch.tensor([True]), vals[1:] != vals[:-1]])
         vals = vals[unique_mask]
 
-    if vals.numel() > max_elements:
-        vals = vals[:max_elements]
+    vals = vals[slice_start : slice_start + max_elements]
 
     return vals.to(dtype)
+
+
+def ulp_sweep_value_count(stimuli_format: DataFormat, low: float, high: float) -> int:
+    """How many numbers the format can represent in [low, high].
+
+    For float32 we get this by subtracting the two endpoints' integer bit
+    patterns — no values are actually built — so a batched sweep can size itself
+    without enumerating millions of them. The 16-bit formats are small, so we
+    just count them by listing.
+    """
+    if stimuli_format == DataFormat.Float32:
+        INT_MIN = -(2**31)
+
+        def _key(x: float) -> int:
+            b = int(torch.tensor([x], dtype=torch.float32).view(torch.int32).item())
+            return b if b >= 0 else INT_MIN - b
+
+        lo, hi = _key(low), _key(high)
+        if lo > hi:
+            lo, hi = hi, lo
+        return hi - lo + 1
+    return int(_enumerate_representable(stimuli_format, low, high).numel())
 
 
 class UlpSweepStrategy:
     """Exhaustive 1-ULP sweep — every representable value in [low, high].
 
-    Only Float16_b and Float16 are supported. Padded with zeros to fill the
-    requested tensor length.
+    Float16_b, Float16, and Float32 are supported (float32 only over a range,
+    not its full domain). Padded with zeros to fill the requested tensor length.
     """
 
     short_circuit = True
@@ -227,10 +294,11 @@ class UlpSweepStrategy:
         input_dimensions: Optional[List[int]],
         generator: Optional[torch.Generator],
     ) -> torch.Tensor:
-        # Clone the cached tensor — the slice in the `n >= num_elements` branch
-        # below returns a view, which could leak the cache to a caller that
-        # then mutates it. Cloning here makes the downstream slice safe.
-        vals = _enumerate_representable(stimuli_format, spec.low, spec.high).clone()
+        # Grab exactly num_elements values, starting spec.offset into the range
+        # (this is how a big range gets swept in batches).
+        vals = _enumerate_representable(
+            stimuli_format, spec.low, spec.high, num_elements, spec.offset
+        )
         n = vals.numel()
         if n >= num_elements:
             return vals[:num_elements]
