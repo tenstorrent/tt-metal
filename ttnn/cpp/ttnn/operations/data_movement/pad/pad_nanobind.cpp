@@ -4,8 +4,10 @@
 
 #include "pad_nanobind.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
+#include <iterator>
 #include <optional>
 
 #include <nanobind/nanobind.h>
@@ -16,6 +18,7 @@
 #include "ttnn-nanobind/bind_function.hpp"
 
 #include "pad.hpp"
+#include "pad_force.hpp"
 
 namespace ttnn::operations::data_movement::detail {
 
@@ -73,5 +76,65 @@ void bind_pad(nb::module_& mod) {
             nb::arg("use_multicore") = true,
             nb::arg("memory_config") = nb::none(),
             nb::arg("sub_core_grids") = nb::none()));
+
+    // ttsl::SmallVector<PadSpecDim> has no nanobind caster, which is why ttnn.pad is bound against
+    // the (before, after) pair overload rather than the PadSpecDim one. The force entries exist only
+    // in the PadSpecDim form, so the binding does that conversion itself.
+    const auto as_pad_spec = [](const ttsl::SmallVector<std::array<uint32_t, 2>>& padding) {
+        ttsl::SmallVector<PadSpecDim> spec;
+        spec.reserve(padding.size());
+        std::transform(padding.begin(), padding.end(), std::back_inserter(spec), [](const auto& p) {
+            return PadSpecDim(p[0], p[1]);
+        });
+        return spec;
+    };
+
+    // Bound with a plain def rather than ttnn::bind_function: the latter tags the callable for
+    // auto_register_ttnn_cpp_operations, which would republish these as ttnn.* operations. They are
+    // meant to stay reachable only via this private module. See pad_force.hpp.
+    mod.def(
+        "pad_force_native",
+        [as_pad_spec](
+            const ttnn::Tensor& input_tensor,
+            const ttsl::SmallVector<std::array<uint32_t, 2>>& padding,
+            float value,
+            bool use_multicore,
+            const std::optional<MemoryConfig>& memory_config,
+            const std::optional<CoreRangeSet>& sub_core_grids) {
+            return pad_force_native(
+                input_tensor, as_pad_spec(padding), value, use_multicore, memory_config, sub_core_grids);
+        },
+        nb::arg("input_tensor"),
+        nb::arg("padding"),
+        nb::arg("value"),
+        nb::kw_only(),
+        nb::arg("use_multicore") = true,
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("sub_core_grids") = nb::none(),
+        nb::call_guard<nb::gil_scoped_release>(),
+        R"doc(
+            Verification only: runs the native pad implementation unconditionally. Not part of the
+            public ttnn.pad API.
+        )doc");
+
+    mod.def(
+        "pad_force_codegen",
+        [as_pad_spec](
+            const ttnn::Tensor& input_tensor,
+            const ttsl::SmallVector<std::array<uint32_t, 2>>& padding,
+            float value,
+            const std::optional<MemoryConfig>& memory_config) {
+            return pad_force_codegen(input_tensor, as_pad_spec(padding), value, memory_config);
+        },
+        nb::arg("input_tensor"),
+        nb::arg("padding"),
+        nb::arg("value"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::call_guard<nb::gil_scoped_release>(),
+        R"doc(
+            Verification only: runs the codegen pad implementation unconditionally. Throws for a case
+            outside the codegen support scope instead of falling back to native.
+        )doc");
 }
 }  // namespace ttnn::operations::data_movement::detail
