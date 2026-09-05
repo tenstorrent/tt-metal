@@ -1011,12 +1011,14 @@ def test_high_bw_all_gather_selected_batch_prefix(mesh_device):
 @run_for_blackhole("selected-prefix coverage requires Blackhole Galaxy")
 @pytest.mark.parametrize("device_params", [_FABRIC_2D_TORUS_XY_DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
-def test_high_bw_all_gather_galaxy_selected_batch_prefix(mesh_device):
+@pytest.mark.parametrize("submesh_shape", [(8, 1), (2, 1)], ids=["ring_8x1", "line_2x1"])
+def test_high_bw_all_gather_galaxy_selected_batch_prefix(mesh_device, submesh_shape):
     # Parent/submesh allocators overlap physical L1. Release cached semaphore allocations
     # before each ownership handoff, including when numerical validation fails.
     mesh_device.quiesce_devices()
     mesh_device.clear_program_cache()
-    rank_line = mesh_device.create_submesh(ttnn.MeshShape(8, 1), ttnn.MeshCoordinate(0, 0))
+    # get_axis_topology rejects wrap for a two-device axis even on physical TORUS_XY.
+    rank_line = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape), ttnn.MeshCoordinate(0, 0))
     try:
         _run_high_bw_all_gather_selected_batch_prefix(rank_line, 0)
     finally:
@@ -1233,12 +1235,15 @@ def test_high_bw_all_gather_galaxy_route_plan_cache(mesh_device, dtype, width, p
     """Reuse routes with fresh data/buffers; distinguish axes, links and submesh mappings."""
     first_column = mesh_device.create_submesh(ttnn.MeshShape(8, 1), ttnn.MeshCoordinate(0, 0))
     second_column = mesh_device.create_submesh(ttnn.MeshShape(8, 1), ttnn.MeshCoordinate(0, 1))
+    # A size-two axis is explicitly Linear in get_axis_topology; physical fabric stays TORUS_XY.
+    two_device_line = mesh_device.create_submesh(ttnn.MeshShape(2, 1), ttnn.MeshCoordinate(0, 0))
     cases = [
         (mesh_device, 0, 1),
         (mesh_device, 1, 2),
         (mesh_device, None, 2),
         (first_column, 0, 2),
         (second_column, 0, 2),
+        (two_device_line, 0, 2),
     ]
     # Parent and submeshes have independent allocators over overlapping physical L1.
     # Release cached semaphore allocations before handing the devices to another mesh.

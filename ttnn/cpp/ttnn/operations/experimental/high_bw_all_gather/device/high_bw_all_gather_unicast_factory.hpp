@@ -9,6 +9,7 @@
 #include "ttnn/device_operation.hpp"
 
 #include <tt-metalium/global_semaphore.hpp>
+#include <tt-metalium/host_api.hpp>
 
 namespace ttnn::operations::experimental::high_bw_all_gather {
 
@@ -17,6 +18,9 @@ struct HighBwAllGatherUnicastFactory {
         std::vector<tt::tt_metal::CoreCoord> worker_cores;
         tt::tt_metal::KernelHandle reader_kernel_id{};
         tt::tt_metal::KernelHandle writer_kernel_id{};
+        // Kernel identity is stable; runtime-argument backing storage is resolved afresh per call.
+        tt::tt_metal::KernelRuntimeArgsAccessor reader_runtime_args;
+        tt::tt_metal::KernelRuntimeArgsAccessor writer_runtime_args;
         tt::tt_metal::GlobalSemaphore ready_sem;
         tt::tt_metal::GlobalSemaphore data_valid_sem;
         uint32_t num_links{};
