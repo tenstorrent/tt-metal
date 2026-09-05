@@ -327,9 +327,9 @@ def test_indexer_device_vs_reference(mesh_device, model, layer, device_params, m
     # the partials before top-k. So capture top-k's input by patching the ttnn op the indexer calls.
     orig_topk = ttnn.experimental.topk_large_indices
 
-    def _capture_topk(logits, k):
+    def _capture_topk(logits, k, **kwargs):
         captured["logits"] = logits
-        return orig_topk(logits, k=k)
+        return orig_topk(logits, k=k, **kwargs)
 
     monkeypatch.setattr(ttnn.experimental, "topk_large_indices", _capture_topk)
     # _indexer.forward takes the per-chip (SP-local) sequence; it all-gathers back to the global glob.
@@ -352,7 +352,9 @@ def test_indexer_device_vs_reference(mesh_device, model, layer, device_params, m
     idx_rope = RotarySetup(cfg, mesh_device, sp_axis=0, is_balanced=False).get_rope_tensors_indexed(
         cache_seq_len_global=SEQ_LEN, chunk_size_global=SEQ_LEN
     )
-    idx = mla._indexer.forward(xs, qr, sl, rope_tensors=idx_rope, index_kv_cache=idx_kv_cache)
+    selection_state = mla._indexer.score(xs, qr, sl, rope_tensors=idx_rope, index_kv_cache=idx_kv_cache)
+    local_idx = mla._indexer.select_local(selection_state)
+    idx = mla._indexer.finalize_distribution(local_idx, selection_state)
 
     # The indexer is now query-SP-sharded: top-k input is [1,1,S/sp,end_pos] (TP-replicated) and idx is
     # [1,1,S/sp,k]. Reassemble the full S by concatenating the SP shards (tp=0 column) along the query dim.

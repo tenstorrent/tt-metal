@@ -12,14 +12,14 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include "ttnn/operations/ccl/shared_with_host/snake_ring.hpp"
+#include "ttnn/global_semaphore.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 
 namespace ttnn::operations::experimental::high_bw_all_gather {
 
-// The device-operation framework reflects over this aggregate for the default
-// program-cache key. Keep only stable structural values here; semaphores and
-// raw pointers belong in the program factory's shared variables.
+// This operation supplies an explicit program hash. Runtime semaphore addresses
+// are intentionally excluded; only external-semaphore presence is structural.
 struct HighBwAllGatherParams {
     int32_t dim = 0;
     MemoryConfig output_mem_config;
@@ -52,6 +52,14 @@ struct HighBwAllGatherParams {
     // Worker-core selection.
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id;
     std::optional<CoreRangeSet> sub_core_grid;
+    tt::tt_metal::SubDeviceManagerId subdevice_manager_id;
+    CoreRangeSet resolved_worker_core_grid;
+
+    // Caller-owned semaphores remove allocation/readiness synchronization from the operation's
+    // cache-miss path. They are runtime resources: cache hits may rebind a different pair at the
+    // same structural core profile, so factories must patch their current addresses.
+    std::optional<GlobalSemaphore> ready_semaphore;
+    std::optional<GlobalSemaphore> data_valid_semaphore;
 
     // Optional runtime controls for gathering one slot of a persistent cache into a maximum-capacity
     // output buffer. `gathered_dim_size` is the global (post-gather) valid extent along dim; each rank's

@@ -525,10 +525,13 @@ class TtPrefillBlock(LightweightModule):
             mla.set_trace_controller(controller)
 
     def release_sub_device_managers(self):
-        """Remove this block's MoE overlap sub-device manager before mesh close (no-op otherwise)."""
+        """Remove this block's registered overlap managers before mesh close (no-op otherwise)."""
         ffn = getattr(self, "ffn", None)
         if ffn is not None and hasattr(ffn, "release_sub_device_manager"):
             ffn.release_sub_device_manager()
+        mla = getattr(self, "mla", None)
+        if mla is not None and hasattr(mla, "release_sparse_mla_overlap_manager"):
+            mla.release_sparse_mla_overlap_manager()
 
     def forward(
         self,

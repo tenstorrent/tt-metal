@@ -5,6 +5,7 @@
 #include "topk_large_indices_nanobind.hpp"
 
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/optional.h>
 
 #include "ttnn-nanobind/bind_function.hpp"
 #include "topk_large_indices.hpp"
@@ -47,16 +48,26 @@ void bind_topk_large_indices(nb::module_& mod) {
             * must be in [k, last dimension]; defaults to the full last dimension;
             * applied at runtime (no recompile), so a loop growing valid_length reuses one program.
 
+        Core selection:
+            * ``subdevice_id`` selects a TENSIX subdevice from the active manager;
+            * ``sub_core_grids`` optionally restricts work to a fully contained CoreRangeSet;
+            * the resolved grid is structural and participates in the program-cache key;
+            * kernels and circular buffers are created only on the resolved grid.
+
         Args:
             input_tensor: device tensor with ROW_MAJOR layout and BFLOAT16 dtype.
             k: required number of indices to return.
             valid_length: optional number of leading columns to search (default: full width).
+            subdevice_id: optional active subdevice containing the top-k workers.
+            sub_core_grids: optional core restriction within ``subdevice_id``.
         )doc",
         &ttnn::experimental::topk_large_indices,
         nb::arg("input_tensor"),
         nb::kw_only(),
         nb::arg("k"),
-        nb::arg("valid_length") = std::nullopt);
+        nb::arg("valid_length") = std::nullopt,
+        nb::arg("subdevice_id") = nb::none(),
+        nb::arg("sub_core_grids") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::topk_large_indices::detail
