@@ -12,7 +12,7 @@ from models.common.utility_functions import skip_for_blackhole
 
 @pytest.mark.parametrize("head_dim", [64])
 @pytest.mark.parametrize("max_seq_len", [4096])
-@pytest.mark.parametrize("num_users", [8, 16, 32, 64])
+@pytest.mark.parametrize("num_users", [8, 16, 32, 34, 64])
 @pytest.mark.parametrize("num_heads", [1, 2, 8])
 @pytest.mark.parametrize("in_sharded", [True, False])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
@@ -119,8 +119,9 @@ class TestUpdateCache:
         input_dtype,
         cache_dtype,
         device,
+        expect_error,
     ):
-        if num_users > 32 or (num_users + batch_offset) > 32:
+        if batch_offset != 0 and num_users + batch_offset > 32:
             pytest.skip("Batch offset is only used when num_users < 32 and batch_offset + num_users <= 32")
         if cache_dtype != ttnn.bfloat16:
             pytest.skip(
@@ -156,6 +157,11 @@ class TestUpdateCache:
             xt = xt.to(device, input_mem_config)
         else:
             xt = xt.to(device)
+
+        if num_users > 32 and num_users % 32 != 0:
+            with expect_error(RuntimeError, "at most 32 or a multiple of 32"):
+                ttnn.update_cache(cachett, xt, cache_idx, batch_offset=batch_offset)
+            return
 
         cachett = ttnn.update_cache(cachett, xt, cache_idx, batch_offset=batch_offset)
         cache[0:num_users, 0:num_heads, cache_idx : cache_idx + x.shape[-2], 0 : x.shape[-1]] = x
