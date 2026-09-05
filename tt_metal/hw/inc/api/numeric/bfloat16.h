@@ -62,6 +62,10 @@ struct FloatBits {
     }
 };
 
+inline constexpr uint16_t BFLOAT16_EXPONENT_MASK = 0x7F80;   // Exponent mask for bfloat16
+inline constexpr uint16_t BFLOAT16_MANTISSA_MASK = 0x007F;   // Mantissa mask for bfloat16
+inline constexpr uint16_t BFLOAT16_MAGNITUDE_MASK = 0x7FFF;  // Magnitude mask for bfloat16
+
 // Optimized function to compare two bfloat16 values using integer arithmetic
 bool bfloat16_greater(uint16_t bf16_a, uint16_t bf16_b) {
     /*
@@ -70,6 +74,9 @@ bool bfloat16_greater(uint16_t bf16_a, uint16_t bf16_b) {
        bit 15         bits 14-7          bits 6-0
 
     Comparison Logic:
+    - Torch argmax semantics: NaN is greater than any non-NaN value.
+      Two NaNs are equal (neither is strictly greater, preserving the first NaN index).
+    - Handle zero cases (both +0 and -0 are equal).
     - If signs differ:
         - If bf16_a is positive (sign bit 0), it is greater.
         - If bf16_a is negative (sign bit 1), it is not greater.
@@ -77,6 +84,17 @@ bool bfloat16_greater(uint16_t bf16_a, uint16_t bf16_b) {
         - Positive numbers: higher bits mean greater value.
         - Negative numbers: higher bits mean smaller value (reverse comparison).
     */
+
+    bool is_nan_a = (bf16_a & BFLOAT16_EXPONENT_MASK) == BFLOAT16_EXPONENT_MASK && (bf16_a & BFLOAT16_MANTISSA_MASK) != 0;
+    bool is_nan_b = (bf16_b & BFLOAT16_EXPONENT_MASK) == BFLOAT16_EXPONENT_MASK && (bf16_b & BFLOAT16_MANTISSA_MASK) != 0;
+    if (is_nan_a || is_nan_b) {
+        return is_nan_a && !is_nan_b;
+    }
+
+    // Handle zero cases (both +0 and -0 are equal)
+    if ((bf16_a & BFLOAT16_MAGNITUDE_MASK) == 0 && (bf16_b & BFLOAT16_MAGNITUDE_MASK) == 0) {
+        return false;
+    }
 
     // Check if signs are different
     if ((bf16_a ^ bf16_b) & BFLOAT16_SIGN_MASK) {
@@ -92,4 +110,18 @@ bool bfloat16_greater(uint16_t bf16_a, uint16_t bf16_b) {
         // Both positive: regular comparison
         return bf16_a > bf16_b;
     }
+}
+
+inline bool bfloat16_equal(uint16_t bf16_a, uint16_t bf16_b) {
+    if (bf16_a == bf16_b) {
+        return true;
+    }
+    // ±0 equality
+    if ((bf16_a & BFLOAT16_MAGNITUDE_MASK) == 0 && (bf16_b & BFLOAT16_MAGNITUDE_MASK) == 0) {
+        return true;
+    }
+    // NaN equality (for tie-breaking/first-index consistency)
+    bool is_nan_a = (bf16_a & BFLOAT16_EXPONENT_MASK) == BFLOAT16_EXPONENT_MASK && (bf16_a & BFLOAT16_MANTISSA_MASK) != 0;
+    bool is_nan_b = (bf16_b & BFLOAT16_EXPONENT_MASK) == BFLOAT16_EXPONENT_MASK && (bf16_b & BFLOAT16_MANTISSA_MASK) != 0;
+    return is_nan_a && is_nan_b;
 }
