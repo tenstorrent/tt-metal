@@ -76,6 +76,6 @@ void patch_slice_program_addresses(
     const SliceParams& operation_attributes,
     const SliceInputs& tensor_args,
     Tensor& output,
-    const std::vector<tt::tt_metal::DynamicRuntimeArg>* cached_tile_args = nullptr);
+    const std::vector<SliceTileArgRange>* cached_tile_args = nullptr);
 
 }  // namespace ttnn::prim

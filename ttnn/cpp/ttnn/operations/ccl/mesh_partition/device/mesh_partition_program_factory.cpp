@@ -141,12 +141,28 @@ MeshPartitionDeviceOperation::MeshPartition::create_at(
 
     // The operation key includes tensor specs, partition attributes and participating coordinates.
     // Work splits and slice offsets are invariant for this coordinate on subsequent hits.
-    std::vector<tt::tt_metal::DynamicRuntimeArg> tile_args;
+    std::vector<ttnn::prim::SliceTileArgRange> tile_args;
     if (std::holds_alternative<ttnn::prim::SliceTileProgramFactory>(program_factory)) {
         const auto start_offset =
             ttnn::operations::data_movement::get_tiled_start_offset(tensor_args.input_tensor, slice_attrs.slice_start);
-        tile_args = ttnn::prim::slice_tile_dynamic_args(
+        const auto scalars = ttnn::prim::slice_tile_dynamic_args(
             slice_attrs, slice_tensor_args, tensor_return_value, start_offset, 0, 1);
+        for (const auto& arg : scalars) {
+            TT_FATAL(!arg.is_common && arg.kernel_idx <= 1, "Cached tile scalar must target reader/writer cores");
+            if (tile_args.empty() || tile_args.back().kernel_idx != arg.kernel_idx ||
+                tile_args.back().core != arg.core ||
+                tile_args.back().first_arg + tile_args.back().values.size() != arg.arg_idx) {
+                tile_args.push_back({arg.kernel_idx, arg.core, arg.arg_idx, {}});
+            }
+            tile_args.back().values.push_back(arg.value);
+        }
+        for (const auto& range : tile_args) {
+            if (range.kernel_idx == 1) {
+                TT_FATAL(
+                    range.first_arg == 1 && range.values.size() == 2,
+                    "Cached tile writer plan must contain num_tiles and start_id");
+            }
+        }
     }
     return {
         std::move(program),
@@ -161,14 +177,13 @@ void MeshPartitionDeviceOperation::MeshPartition::override_runtime_arguments(
     const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
+    const SliceOp::tensor_args_t slice_tensor_args{
+        .input = tensor_args.input_tensor,
+        .start_tensor = std::nullopt,
+        .end_tensor = std::nullopt,
+        .preallocated_output = std::nullopt};
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
         auto& shared_variables = cached_workload.shared_variables.at(range);
-
-        const SliceOp::tensor_args_t slice_tensor_args{
-            .input = tensor_args.input_tensor,
-            .start_tensor = std::nullopt,
-            .end_tensor = std::nullopt,
-            .preallocated_output = std::nullopt};
 
         // Re-apply this coord's per-dispatch state to the cached Program, through the same patch the
         // slice op uses -- addresses only. CB total_size/page_size are not re-applied on a hit, so any

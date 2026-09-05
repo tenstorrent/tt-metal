@@ -48,7 +48,7 @@ struct MeshPartitionDeviceOperation {
         struct shared_variables_t {
             prim::SliceDeviceOperation::program_factory_t slice_program_factory;
             prim::SliceParams slice_attributes;
-            std::vector<tt::tt_metal::DynamicRuntimeArg> tile_args;
+            std::vector<ttnn::prim::SliceTileArgRange> tile_args;
         };
         using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 

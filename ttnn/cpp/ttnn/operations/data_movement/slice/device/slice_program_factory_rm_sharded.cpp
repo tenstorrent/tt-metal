@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include <cstdlib>
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_program_factory_rm_sharded.hpp"
@@ -359,7 +360,7 @@ void patch_slice_program_addresses(
     const SliceParams& operation_attributes,
     const SliceInputs& tensor_args,
     Tensor& output,
-    const std::vector<tt::tt_metal::DynamicRuntimeArg>* cached_tile_args) {
+    const std::vector<SliceTileArgRange>* cached_tile_args) {
     ZoneNamedN(__tracy_scoped_zone, "HostProfile::slice_patch_addresses", ([] {
                    static const bool enabled = std::getenv("TT_METAL_HOST_PROFILE_ZONES") != nullptr;
                    return enabled;
@@ -376,6 +377,30 @@ void patch_slice_program_addresses(
 
     // A slot holding 0 belongs to a core create_descriptor left zero-filled; leave those alone.
     constexpr uint32_t kReaderKernelIdx = 0, kWriterKernelIdx = 1;
+    if (cached_tile_args != nullptr) {
+        TT_FATAL(
+            std::holds_alternative<SliceTileProgramFactory>(factory),
+            "Cached tile scalar plans require the scalar tiled slice factory");
+        // MeshPartition stores exact coordinate scalars. Reapply them even if unchanged (#52651).
+        // Its validated writer ranges contain {num_tiles, start_id}, allowing the address update
+        // to share this traversal. Derive active/noop state from the plan, never old dispatch args.
+        GetCommonRuntimeArgs(program, kReaderKernelIdx).at(0) = tensor_args.input.buffer()->address();
+        const uint32_t output_address = output.buffer()->address();
+        auto& reader_args = GetRuntimeArgs(program, kReaderKernelIdx);
+        auto& writer_args = GetRuntimeArgs(program, kWriterKernelIdx);
+        for (const auto& range : *cached_tile_args) {
+            auto& matrix = range.kernel_idx == kReaderKernelIdx ? reader_args : writer_args;
+            auto& data = matrix.at(range.core.x).at(range.core.y);
+            TT_FATAL(
+                range.first_arg + range.values.size() <= data.size(),
+                "Cached tile scalar range exceeds runtime arguments");
+            if (range.kernel_idx == kWriterKernelIdx) {
+                data[0] = range.values[0] != 0 ? output_address : 0;
+            }
+            std::copy(range.values.begin(), range.values.end(), data.data() + range.first_arg);
+        }
+        return;
+    }
     const auto patch_slot0 = [&program](uint32_t kernel_idx, uint32_t addr) {
         for (auto& col : tt::tt_metal::GetRuntimeArgs(program, kernel_idx)) {
             for (auto& a : col) {
@@ -407,27 +432,6 @@ void patch_slice_program_addresses(
                 }
                 tt::tt_metal::apply_dynamic_runtime_args(program, dyn);
 
-                if (cached_tile_args != nullptr) {
-                    // MeshPartition retains the exact per-coordinate scalars. Reapply them even on
-                    // hits: cached Programs can share dispatch state across divergent coordinates.
-                    // Generated tile scalars are consecutive for each (kernel, core). Resolve the
-                    // runtime-argument view once per group, freshly on each invocation so dispatch
-                    // command retargeting is observed; no raw command pointers are retained.
-                    size_t index = 0;
-                    while (index < cached_tile_args->size()) {
-                        const auto& first = (*cached_tile_args)[index];
-                        auto& data = first.is_common ? GetCommonRuntimeArgs(program, first.kernel_idx)
-                                                     : GetRuntimeArgs(program, first.kernel_idx, first.core);
-                        do {
-                            const auto& arg = (*cached_tile_args)[index++];
-                            data.at(arg.arg_idx) = arg.value;
-                        } while (index < cached_tile_args->size() &&
-                                 (*cached_tile_args)[index].kernel_idx == first.kernel_idx &&
-                                 (*cached_tile_args)[index].core == first.core &&
-                                 (*cached_tile_args)[index].is_common == first.is_common);
-                    }
-                    return;
-                }
                 const uint32_t start_offset = std::is_same_v<Factory, SliceTileProgramFactory>
                                                   ? ttnn::operations::data_movement::get_tiled_start_offset(
                                                         tensor_args.input, operation_attributes.slice_start)
