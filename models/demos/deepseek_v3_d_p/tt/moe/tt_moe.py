@@ -213,7 +213,7 @@ class TtMoe(LightweightModule):
         shared_expert_activation: str = ACTIVATION_SILU,
         shared_expert_situ_beta: float | None = None,
         shared_expert_situ_linear_beta: float | None = None,
-        gate_fallback_mode: GateComputeMode = GateComputeMode.HOST_ALL,
+        gate_fallback_mode: GateComputeMode = GateComputeMode.DEVICE_FP32,
         weight_cache_path: Optional[Path] = None,
         layer_idx: int = 0,
         overlap_shared_expert_with_dispatch: bool = True,
@@ -262,7 +262,9 @@ class TtMoe(LightweightModule):
             shared_expert_situ_beta / shared_expert_situ_linear_beta: SiTU softcap betas, required
                 when shared_expert_activation == "situ".
             gate_weights: Dict with "weight" and "e_score_correction_bias" keys for gate
-            gate_fallback_mode: Fallback mode for gate (default: HOST_ALL)
+            gate_fallback_mode: Gate compute mode (default: DEVICE_FP32, the production path).
+                HOST_ALL is the local torch reference; it is the only mode that runs on a
+                sub-256-expert config, which the device grouped gate does not support.
             overlap_shared_expert_with_dispatch: If True, run the shared expert and dispatch
                 on disjoint sub-devices so they overlap on-chip. If False, skip sub-device
                 setup and run them sequentially on the full Tensix grid.

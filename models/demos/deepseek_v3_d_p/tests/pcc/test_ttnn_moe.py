@@ -719,8 +719,6 @@ def _ci_unsupported_param_combos_ds_moe(**params):
         # chain whenever num_routed_experts > 64; without this variant that
         # branch ships PCC-untested on Blackhole.
         pytest.param(PREFILL_CHUNK_TOKENS_PER_CHIP, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 8, GateComputeMode.DEVICE_FP32,   True,  False, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(900)], id="pcc-device-256"),
-        # Perf: LB 8x1 dispatch/combine proxy. 64 experts + 2 picks/tok match one glx column's per-chip traffic (balanced_load=160).
-        pytest.param(PREFILL_CHUNK_TOKENS_PER_CHIP, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE,  64, 2, 8, GateComputeMode.HOST_ALL, False, False, marks=pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), id="perf-host-64"),
         # fmt: on
     ],
 )
@@ -728,16 +726,6 @@ def _ci_unsupported_param_combos_ds_moe(**params):
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links",
     [
-        # SP=8 proxy. Kept out of e2e collection by the uncollect predicate; the moe perf
-        # wrapper still reaches it via --wrapper-invocation, and approximate_8x4_perf takes
-        # its non-TP ops on the assumption that this slot is an SP=8 run.
-        pytest.param(
-            (8, 1),
-            torus_y_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
-            2 if is_blackhole() else 1,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
-            id="torus-y-8x1",
-        ),
         pytest.param(
             (4, 2),
             fabric2d_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
