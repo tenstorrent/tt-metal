@@ -35,6 +35,10 @@ struct RingAttentionAllGatherAsyncParams {
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
     std::optional<uint32_t> cluster_axis;
     ttnn::ccl::CoreAllocationStrategy core_allocation_strategy = ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR;
+    // 0 = full ring all-gather (default). >0 clamps the per-direction relay count (num_targets) to this
+    // radius, so each device only gathers its +-window_radius neighbour shards — a windowed gather for
+    // frame-block sparse attention. See ring_joint_sdpa windowed-CCL path.
+    uint32_t window_radius = 0;
 
     RingAttentionAllGatherAsyncParams(
         std::vector<IDevice*> devices,
@@ -46,7 +50,8 @@ struct RingAttentionAllGatherAsyncParams {
         std::vector<GlobalSemaphore> semaphore,
         std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
         std::optional<uint32_t> cluster_axis,
-        ttnn::ccl::CoreAllocationStrategy core_allocation_strategy = ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR) :
+        ttnn::ccl::CoreAllocationStrategy core_allocation_strategy = ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR,
+        uint32_t window_radius = 0) :
         devices(std::move(devices)),
         dim(dim),
         num_links(num_links),
@@ -56,7 +61,8 @@ struct RingAttentionAllGatherAsyncParams {
         semaphore(std::move(semaphore)),
         sub_device_id(sub_device_id),
         cluster_axis(cluster_axis),
-        core_allocation_strategy(core_allocation_strategy) {}
+        core_allocation_strategy(core_allocation_strategy),
+        window_radius(window_radius) {}
 
     // Restrict program-cache hashing and the canonical key to structure-affecting fields only.
     // Excludes runtime-only `devices` (raw IDevice* pointers), `semaphore` (GlobalSemaphore objects
@@ -64,10 +70,17 @@ struct RingAttentionAllGatherAsyncParams {
     // constant; not part of the historical custom hash). `sub_device_id` is the structural source of
     // the worker-core range set the previous custom hash encoded.
     static constexpr auto attribute_names = std::forward_as_tuple(
-        "dim", "num_links", "ring_size", "output_mem_config", "topology", "sub_device_id", "cluster_axis");
+        "dim",
+        "num_links",
+        "ring_size",
+        "output_mem_config",
+        "topology",
+        "sub_device_id",
+        "cluster_axis",
+        "window_radius");
     auto attribute_values() const {
         return std::forward_as_tuple(
-            dim, num_links, ring_size, output_mem_config, topology, sub_device_id, cluster_axis);
+            dim, num_links, ring_size, output_mem_config, topology, sub_device_id, cluster_axis, window_radius);
     }
 };
 
