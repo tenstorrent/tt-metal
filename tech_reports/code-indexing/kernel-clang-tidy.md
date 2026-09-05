@@ -179,29 +179,44 @@ Gotcha found while wiring this: CodeChecker's compilation-db parser consults
 resolvable (we pass both via `CC_ANALYZER_BIN=clang-tidy:…;clangsa:…`) even
 though only clang-tidy runs.
 
-The capture works on simulator legs (`sim_*` SKUs, e.g. `sim_wh_n150`): the
-ttsim run JIT-compiles the same kernels on the host, and only the compile
-commands matter — no device needed. One capture-specific constraint: the sim
-legs normally run under pytest-xdist (`-n 4`), whose workers use their stdout
-as the execnet RPC channel — raw C++ stdout (the tt-logger default sink, and
-with it the logged compile commands) never reaches the run log from a worker.
-The capture leg therefore runs serially; in-process, the repo-wide `-s`
-(`pytest.ini` addopts) keeps stdout uncaptured, which is why the log-based
-capture works at all. (`TT_LOGGER_FILE` is not a substitute: the sink opens
-with truncate, so each pytest invocation of a multi-command group — and each
-xdist worker — would wipe the previous capture.) That is the default for the dedicated
-caller, `.github/workflows/kernel-clang-tidy.yaml` (structured after
-`code-coverage.yaml`): build → run one ttnn test group via
-`ttnn-sanity-tests-impl.yaml` with the experiment enabled → a publish job
-that downloads the `kernel-clang-tidy-html-*` artifact and pushes it to
+The dedicated caller is `.github/workflows/kernel-clang-tidy.yaml` (structured
+after `code-coverage.yaml`): build → run one ttnn test group on hardware via
+`ttnn-sanity-tests-impl.yaml` with the experiment enabled → a publish job that
+downloads the `kernel-clang-tidy-html-*` artifact and pushes it to
 `tenstorrent/tt-metal-kernel-clang-tidy-results` gh-pages (on main, or when
 dispatched with `publish-html: true`). Launch with:
 
 ```sh
 gh workflow run kernel-clang-tidy.yaml --ref <branch> \
-  -f target-group='trace allocation tracker' -f enabled-skus=sim_wh_n150 \
+  -f target-group='trace allocation tracker' -f enabled-skus=wh_n300_civ2 \
   -f publish-html=true
 ```
+
+### Why not the simulator legs?
+
+Capturing on a `sim_*` leg instead of hardware looks appealing — only the
+compile commands matter, not the device result — but it was tried and
+abandoned; the tidy steps skip `sim_*` SKUs. Three independent blockers:
+
+* **pytest-xdist.** Sim legs run `-n 4`, and xdist workers use their stdout as
+  the execnet RPC channel, so raw C++ stdout (tt-logger's default sink, and
+  with it the logged compile commands) never reaches the run log. Serializing
+  the leg does fix that — the repo-wide `-s` in `pytest.ini` keeps stdout
+  uncaptured in-process, which is why the HW capture works at all — but it
+  forfeits the parallelism sim needs most. `TT_LOGGER_FILE` is not a way
+  around it: the file sink opens with truncate, so each xdist worker and each
+  pytest invocation of a multi-command test group would wipe the previous
+  capture.
+* **Slow dispatch.** ttsim runs slow dispatch, so tests needing trace or fast
+  dispatch skip themselves ("not working for slow dispatch"). Verified in run
+  33931876161: a serialized `trace allocation tracker [sim_wh_n150]` leg
+  passed in ~2 minutes having skipped every device test — **0 captured
+  commands**. It also means the dispatch kernels that dominate a hardware
+  capture are never built under sim.
+* **Cost.** Sim is 10-50x slower per op on cloud runners (sim group timeouts
+  are 40-60 min against 10 for the same group on HW), and the capture leg is
+  already slow by design (`TT_METAL_FORCE_JIT_COMPILE=1`, every kernel cache
+  defeated).
 
 ## Coverage and known gaps
 

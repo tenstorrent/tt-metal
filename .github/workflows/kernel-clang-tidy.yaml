@@ -1,10 +1,9 @@
 name: "Kernel clang-tidy"
 
 # Post-hoc clang-tidy on runtime-JIT-compiled kernel code (prototype).
-# Runs one ttnn test group (simulator by default — only the compile commands
-# matter, not the hardware result); the impl workflow captures the JIT kernel
-# compiles, lints them with clang-tidy via CodeChecker, and uploads an HTML
-# report, which this workflow publishes to GitHub Pages.
+# Runs one ttnn test group on hardware; the impl workflow captures that leg's
+# JIT kernel compiles, lints them with clang-tidy via CodeChecker, and uploads
+# an HTML report, which this workflow publishes to GitHub Pages.
 # See tech_reports/code-indexing/kernel-clang-tidy.md.
 
 on:
@@ -23,7 +22,7 @@ on:
         description: "Comma-separated SKUs for the ttnn impl matrix"
         required: false
         type: string
-        default: "sim_wh_n150"
+        default: "wh_n300_civ2"
       publish-html:
         description: "Publish the HTML report to tenstorrent/tt-metal-kernel-clang-tidy-results"
         required: false
@@ -55,7 +54,7 @@ jobs:
     uses: ./.github/workflows/ttnn-sanity-tests-impl.yaml
     secrets: inherit
     with:
-      enabled-skus: ${{ inputs.enabled-skus || 'sim_wh_n150' }}
+      enabled-skus: ${{ inputs.enabled-skus || 'wh_n300_civ2' }}
       docker-image: ${{ needs.build-artifact.outputs.ci-test-docker-image }}
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
