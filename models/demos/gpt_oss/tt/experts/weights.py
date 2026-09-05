@@ -44,6 +44,9 @@ class ExpertWeights:
     # down_proj with K zero-padded from intermediate_size_per_device to intermediate_padded_per_device (dense matmul
     # requires matching logical K; the sparse_matmul path compares padded shapes). Also created on first use.
     down_proj_padded: ttnn.Tensor = None
+    # Per-expert [1, 1, 1, 2 * intermediate_padded_per_device] bf16 copies of the fused gate/up bias for the dense
+    # prefill path's per-expert ttnn.linear (fused bias add). Also created on first use.
+    gate_up_proj_bias_per_expert: list = None
 
 
 def _fuse_gate_up_per_device(gate, up, tp, local, padded):

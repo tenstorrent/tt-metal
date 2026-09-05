@@ -41,18 +41,21 @@ slots); any `max_batch_size` ≤ 32 works — the per-user Q/K/V / KV-cache / SD
 the two agree at construction; prefill of the users runs sequentially through the generator (one
 user per forward).
 
-Prefill on single-row meshes (EP=1) runs the MoE as dense matmuls (`experts/prefill.py`): one
-`[split, H] × [H, 2·Ip]` matmul per expert for gate/up (per-expert weight views are sliced once on
-device) and one batched `[E, split, Ip] × [E, Ip, H]` matmul for down, with the routing weights
-applied to the down input and the down bias folded into a `[split, E] × [E, H]` matmul after the
-expert reduction (which also removes two broadcast elementwise passes over the `[E, split, H]` down
-output that cost more than the matmuls). The `sparse_matmul` path (kept for EP>1) multicasts in a 1D
-pattern that leaves the whole M on ≤24 cores and re-streams every expert's weights once per 32-token
-tile; on P150 the dense form is ~4× faster for a 1024-token split (gate/up 24.5 → 7.6 ms, down
-23.8 → 3.7 ms). Measured gpt-oss-120b prefill per user at batch 1: 128 tokens 405 → 230 ms,
-1024 tokens 2.98 → 0.67 s, 8192 tokens 22.9 → 5.2 s (~4.4×); gpt-oss-20b 8192 tokens 4.0 → 1.03 s.
-Grouping tokens per expert (one GEMM per expert with only its ~32 routed tokens per 1024-token
-split) would cut the remaining MoE FLOPs ~30× and is the next lever.
+Prefill on single-row meshes (EP=1) runs the MoE as dense matmuls (`experts/prefill.py`). Gate/up:
+for splits of ≤256 tokens the activations are replicated per expert and ONE batched matmul runs with
+one expert's whole output block per core (128 separate launches cost ~30 µs each on device and
+dominated 128-token prefills); longer splits run one `ttnn.linear` (fused bias) per expert over the
+whole split and concatenate. Down: one batched `[E, split, Ip] × [E, Ip, H]` matmul, with the routing
+weights applied to the down input and the down bias folded into a `[split, E] × [E, H]` matmul after
+the expert reduction (removing two broadcast elementwise passes over the `[E, split, H]` output that
+cost more than the matmuls). SwiGLU is a single `ttnn.mul` with per-input activation chains
+(`apply_swiglu_fused`: clamps, +1, α-scaled SiLU, 1/α). The `sparse_matmul` path (kept for EP>1)
+multicasts in a 1D pattern that leaves the whole M on ≤24 cores and re-streams every expert's weights
+once per 32-token tile. Measured gpt-oss-120b prefill per user, batch 1: 128 tokens 405 → 136 ms,
+1024 tokens 2.98 → 0.59 s, 8192 tokens 22.9 → 4.5 s (~5×); batch 32 last-user TTFT at 128 tokens
+16.3 → 3.8 s. Per 1024-token split one 120B layer is now ~1.4 ms attention + ~16 ms experts, of which
+~13 ms are the gate/up and down matmuls themselves; grouping tokens per expert (one GEMM per expert
+over only its ~32 routed tokens) would cut those FLOPs ~30× and is the next lever.
 
 ```bash
 export HF_MODEL=/path/to/gpt-oss-120b

@@ -7,7 +7,7 @@ import ttnn
 from models.demos.gpt_oss.config import Mode
 
 from .config import ExpertConfig, ProgramConfig
-from .operations import apply_expert_parallel_allreduce, apply_swiglu, apply_tensor_parallel_allreduce
+from .operations import apply_expert_parallel_allreduce, apply_swiglu_fused, apply_tensor_parallel_allreduce
 from .weights import ExpertWeights
 
 # Largest number of decode tokens (users) the batched low-latency path handles in
@@ -128,7 +128,9 @@ def decode_forward(
 
     # Apply SwiGLU activation (consumes gate and up internally). The zero-padded columns beyond the
     # real intermediate width stay exactly 0 (gate=0 -> glu=0, up=0 -> (0+1)*0=0).
-    down_input = apply_swiglu(gate, up, config)
+    down_input = apply_swiglu_fused(gate, up, config)  # one fused binary op (7 ops before)
+    gate.deallocate(True)
+    up.deallocate(True)
     # Note: transpose/reshape operations return views - do not deallocate originals
     down_input = ttnn.transpose(down_input, 1, 0)
     down_input = ttnn.reshape(down_input, (1, config.num_experts, seq_len, ip))
@@ -293,7 +295,9 @@ def _decode_forward_batched(
     gate_up.deallocate(True)
 
     # SwiGLU (consumes gate and up): [1, E, T, Ip]; padded columns stay exactly 0.
-    down_input = apply_swiglu(gate, up, config)
+    down_input = apply_swiglu_fused(gate, up, config)  # one fused binary op (7 ops before)
+    gate.deallocate(True)
+    up.deallocate(True)
 
     # 2b. Down projection (input is expert-batched too): [1, E, T, Ip] x [1, E, I, H] -> [1, E, T, H]
     #     (padded K: Ip == padded I of the weight; the extra input columns are zero)

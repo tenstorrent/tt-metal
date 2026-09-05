@@ -12,6 +12,7 @@ from .operations import (
     apply_routing_weights,
     apply_sequence_parallel_allgather,
     apply_swiglu,
+    apply_swiglu_fused,
     apply_tensor_parallel_allreduce,
     reduce_experts,
 )
@@ -106,6 +107,8 @@ def _process_prefill_chunk(
     group_mask = (
         None if dense_moe else _group_expert_mask(routing_weights, seq_len, config.num_experts)
     )  # [1, S/32, 1, E] row-major
+    # Token-major routing weights ([1, 1, S, E], a view) for the dense path's folded down-bias matmul; sliced per split.
+    routing_tokens_all = ttnn.reshape(routing_weights, (1, 1, seq_len, config.num_experts)) if dense_moe else None
     # Note: permute/reshape operations return views - do not deallocate originals
     routing_weights = ttnn.permute(routing_weights, (1, 0))
     routing_weights = ttnn.reshape(routing_weights, (batch_size, config.num_experts, seq_len, 1))
@@ -125,29 +128,48 @@ def _process_prefill_chunk(
     # Process each split and stream-concatenate to avoid holding all split outputs.
     next_states_reduced_acc = None
     group_offset = 0
+    token_offset = 0
     for hidden_split, routing_split in zip(hidden_list, routing_list):
         split_len = hidden_split.shape[2]
         group_size = split_len // TILE_SIZE
 
         if dense_moe:
-            # One dense matmul per expert over the whole split: [1, 1, split, H] x [1, 1, H, 2Ip] -> [1, 1, split, 2Ip],
-            # concatenated along the expert dim into [1, E, split, 2Ip] (the layout the rest of the pipeline uses).
             hidden_4D = ttnn.unsqueeze_to_4D(hidden_split)
-            per_expert = [
-                ttnn.matmul(
-                    hidden_4D,
-                    w_e,
+            bmm_config = _dense_bmm_config(dense_core_grid, split_len, weights)
+            if bmm_config is not None:
+                # Short split: replicate the activations per expert and run ONE batched matmul (one expert per core);
+                # 128 separate launches cost ~30 us each on device, which dominates 128-token prefills.
+                hidden_rep = ttnn.repeat(hidden_4D, ttnn.Shape((1, config.num_experts, 1, 1)))
+                hidden_4D.deallocate(True)  # releases the split (view)
+                gate_up = ttnn.matmul(
+                    hidden_rep,
+                    weights.gate_up_proj,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     dtype=activation_dtype,
-                    core_grid=dense_core_grid,
+                    program_config=bmm_config,
                     compute_kernel_config=_DENSE_COMPUTE_KERNEL_CONFIG,
                 )
-                for w_e in weights.gate_up_proj_per_expert
-            ]
-            hidden_4D.deallocate(True)  # releases the split (view)
-            gate_up = ttnn.concat(per_expert, dim=1)
-            for t in per_expert:
-                t.deallocate(True)
+                hidden_rep.deallocate(True)
+                gate_up = ttnn.add(gate_up, weights.gate_up_proj_bias_t, output_tensor=gate_up)
+            else:
+                # One dense matmul (with fused bias) per expert over the whole split: [1, 1, split, H] x [1, 1, H, 2Ip]
+                # -> [1, 1, split, 2Ip], concatenated along the expert dim into [1, E, split, 2Ip].
+                per_expert = [
+                    ttnn.linear(
+                        hidden_4D,
+                        w_e,
+                        bias=b_e,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        dtype=activation_dtype,
+                        core_grid=dense_core_grid,
+                        compute_kernel_config=_DENSE_COMPUTE_KERNEL_CONFIG,
+                    )
+                    for w_e, b_e in zip(weights.gate_up_proj_per_expert, weights.gate_up_proj_bias_per_expert)
+                ]
+                hidden_4D.deallocate(True)  # releases the split (view)
+                gate_up = ttnn.concat(per_expert, dim=1)
+                for t in per_expert:
+                    t.deallocate(True)
         else:
             # Group tokens into tiles: [1, B, split, H] -> [1, G, 32, H]. This reshape is a view of
             # hidden_split, so deallocating hidden_4D below releases the split itself (intended).
@@ -177,14 +199,19 @@ def _process_prefill_chunk(
             # Note: transpose/reshape operations return views - do not deallocate originals
             gate_up = ttnn.transpose(gate_up, 1, 3)
             gate_up = ttnn.reshape(gate_up, (batch_size, config.num_experts, split_len, 2 * ip))
-        gate_up = ttnn.add(gate_up, weights.gate_up_proj_bias_t, output_tensor=gate_up)
+            gate_up = ttnn.add(gate_up, weights.gate_up_proj_bias_t, output_tensor=gate_up)
         # Split at the tile-aligned half: gate = [..., :Ip], up = [..., Ip:]
         gate = ttnn.slice(gate_up, [0, 0, 0, 0], [batch_size, config.num_experts, split_len, ip])
         up = ttnn.slice(gate_up, [0, 0, 0, ip], [batch_size, config.num_experts, split_len, 2 * ip])
         gate_up.deallocate(True)
 
-        # SwiGLU (consumes gate and up): [B, E, split, Ip]; the zero-padded columns stay exactly 0.
-        down_input = apply_swiglu(gate, up, config)
+        # SwiGLU: [B, E, split, Ip]; the zero-padded columns stay exactly 0.
+        if dense_moe:
+            down_input = apply_swiglu_fused(gate, up, config)  # one fused binary op
+            gate.deallocate(True)
+            up.deallocate(True)
+        else:
+            down_input = apply_swiglu(gate, up, config)  # consumes gate and up
 
         if dense_moe:
             # Routing weights are applied to the down INPUT ([E, split, Ip], a quarter of the down output) -- the down
@@ -204,7 +231,9 @@ def _process_prefill_chunk(
             down_input.deallocate(True)
             next_states_reduced = reduce_experts(down)
             down.deallocate(True)
-            routing_tokens = ttnn.permute(routing_split, (0, 3, 2, 1))  # [1, 1, split, E]
+            routing_tokens = ttnn.slice(
+                routing_tokens_all, [0, 0, token_offset, 0], [1, 1, token_offset + split_len, config.num_experts]
+            )  # [1, 1, split, E]
             bias_contrib = ttnn.matmul(
                 routing_tokens,
                 ttnn.reshape(weights.down_proj_bias, (1, 1, config.num_experts, config.hidden_size)),
@@ -250,8 +279,11 @@ def _process_prefill_chunk(
             next_states_reduced.deallocate(True)
             next_states_reduced_acc = next_states_concat
         routing_split.deallocate(True)
+        token_offset += split_len
     if group_mask is not None:
         group_mask.deallocate(True)
+    if routing_tokens_all is not None:
+        routing_tokens_all.deallocate(True)
 
     return next_states_reduced_acc
 
@@ -269,6 +301,12 @@ def _cache_dense_weights(weights: ExpertWeights, num_experts: int):
     hidden, n = weights.gate_up_proj.shape[2], weights.gate_up_proj.shape[3]
     per_expert = [ttnn.slice(weights.gate_up_proj, [0, e, 0, 0], [1, e + 1, hidden, n]) for e in range(num_experts)]
     object.__setattr__(weights, "gate_up_proj_per_expert", per_expert)  # ExpertWeights is a frozen dataclass
+    bias_t = weights.gate_up_proj_bias_t  # [E, 1, n]
+    biases = [
+        ttnn.typecast(ttnn.reshape(ttnn.slice(bias_t, [e, 0, 0], [e + 1, 1, n]), (1, 1, 1, n)), ttnn.bfloat16)
+        for e in range(num_experts)
+    ]
+    object.__setattr__(weights, "gate_up_proj_bias_per_expert", biases)
     pad_k = weights.intermediate_padded_per_device - weights.intermediate_size_per_device
     down_padded = (
         ttnn.pad(weights.down_proj, padding=[(0, 0), (0, 0), (0, pad_k), (0, 0)], value=0.0)
@@ -276,6 +314,29 @@ def _cache_dense_weights(weights: ExpertWeights, num_experts: int):
         else weights.down_proj
     )
     object.__setattr__(weights, "down_proj_padded", down_padded)
+
+
+_DENSE_BMM_MAX_TOKENS = 256  # per_core_M <= 8 keeps the per-core output block (M x 2Ip tiles) within L1
+
+
+def _dense_bmm_config(core_grid, split_len, weights: ExpertWeights):
+    """One-launch batched matmul config for short splits (one expert's whole [split, 2Ip] output per core), or None
+    when the split is too long for the per-core block to fit in L1 (fall back to the per-expert loop)."""
+    if split_len > _DENSE_BMM_MAX_TOKENS:
+        return None
+    mt = split_len // 32
+    kt = weights.gate_up_proj.shape[2] // 32
+    nt = weights.gate_up_proj.shape[3] // 32
+    in0_block_w = next(d for d in (6, 5, 4, 3, 2, 1) if kt % d == 0)
+    out_subblock_w = next(d for d in (8, 6, 4, 3, 2, 1) if nt % d == 0)
+    return ttnn.MatmulMultiCoreReuseProgramConfig(
+        compute_with_storage_grid_size=(core_grid.x, core_grid.y),
+        in0_block_w=in0_block_w,
+        out_subblock_h=1,
+        out_subblock_w=out_subblock_w,
+        per_core_M=mt,
+        per_core_N=nt,
+    )
 
 
 def _dense_core_grid(mesh_device):
