@@ -6,6 +6,7 @@
 // Uses Sollya-derived minimax polynomials for high accuracy (Max ULP = 1)
 
 #include <cstdint>
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
@@ -27,7 +28,8 @@ void kernel_main() {
     DataflowBuffer dfb_input(dfb::input);
     DataflowBuffer dfb_grad_in(dfb::grad_in);
 
-    unary_op_init_common(dfb::grad_out, dfb::grad_in);
+    compute_kernel_hw_startup(dfb::grad_out, dfb::grad_in);
+    copy_init(dfb::grad_out);
     gelu_derivative_tile_init<false>();
     mul_binary_tile_init();
 

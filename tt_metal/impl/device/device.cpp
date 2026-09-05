@@ -24,6 +24,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <map>
 #include <optional>
@@ -96,7 +97,8 @@ Device::Device(
 }
 
 void Device::initialize_smc_dispatch_telemetry_control() {
-    if (context_->rtoptions().get_dispatch_telemetry_disabled()) {
+    // Versim has no firmware, so there is no SMC telemetry buffer to publish.
+    if (context_->rtoptions().get_dispatch_telemetry_disabled() || context_->rtoptions().get_simulator_enabled()) {
         return;
     }
     auto* tt_device = [&]() -> tt::umd::TTDevice* {
@@ -120,11 +122,18 @@ void Device::initialize_smc_dispatch_telemetry_control() {
         context_->dispatch_mem_map().get_device_command_queue_addr(
             CommandQueueDeviceAddrType::DISPATCH_TELEMETRY, /*cq_id=*/0);
     smc_dispatch_telemetry_control_.num_hw_cqs = this->num_hw_cqs_;
+    const CoreCoord compute_grid = this->compute_with_storage_grid_size();
+    const size_t worker_core_count = compute_grid.x * compute_grid.y;
+    TT_FATAL(
+        worker_core_count <= std::numeric_limits<uint16_t>::max(),
+        "Compute grid has {} worker cores, which exceeds the uint16_t SMC num_worker_cores field",
+        worker_core_count);
+    smc_dispatch_telemetry_control_.num_worker_cores = static_cast<uint16_t>(worker_core_count);
     write_smc_dispatch_telemetry_control(*tt_device, smc_dispatch_telemetry_control_);
 }
 
 void Device::invalidate_smc_dispatch_telemetry_control() {
-    if (context_->rtoptions().get_dispatch_telemetry_disabled()) {
+    if (context_->rtoptions().get_dispatch_telemetry_disabled() || context_->rtoptions().get_simulator_enabled()) {
         return;
     }
 
@@ -147,7 +156,7 @@ void Device::invalidate_smc_dispatch_telemetry_control() {
 
 void Device::update_smc_dispatch_telemetry_for_fast_dispatch(
     uint8_t cq_id, const dispatch_telemetry_types::SMCDispatchCoreCoords& coords) {
-    if (context_->rtoptions().get_dispatch_telemetry_disabled()) {
+    if (context_->rtoptions().get_dispatch_telemetry_disabled() || context_->rtoptions().get_simulator_enabled()) {
         return;
     }
 
@@ -176,7 +185,7 @@ void Device::update_smc_dispatch_telemetry_for_fast_dispatch(
 }
 
 void Device::set_smc_dispatch_telemetry_slow_dispatch_enabled(bool enabled) {
-    if (context_->rtoptions().get_dispatch_telemetry_disabled()) {
+    if (context_->rtoptions().get_dispatch_telemetry_disabled() || context_->rtoptions().get_simulator_enabled()) {
         return;
     }
 
@@ -464,6 +473,7 @@ void Device::init_command_queue_device_with_topology(DispatchTopology* topo) {
             dev_msgs::go_msg_t::ConstView go_msg = kernel->go_msg.view();
             CoreCoord virtual_core = this->virtual_core_from_logical_core(logical_dispatch_core, core_type);
             tt::llrt::write_launch_msg_to_core(
+                MetalEnvAccessor(*env_).impl(),
                 this->id(),
                 virtual_core,
                 msg.view(),
@@ -540,6 +550,7 @@ void Device::configure_fabric() {
 
             auto physical_core = this->virtual_core_from_logical_core(logical_core, core_type);
             tt::llrt::write_launch_msg_to_core(
+                MetalEnvAccessor(*env_).impl(),
                 this->id(),
                 physical_core,
                 msg,
@@ -679,7 +690,10 @@ bool Device::close() {
 
     this->invalidate_smc_dispatch_telemetry_control();
 
-    tt::tt_metal::MetalContext::instance().get_service_core_manager().impl().on_device_close(this->id_);
+    tt::tt_metal::MetalContext::instance(this->get_context_id())
+        .get_service_core_manager()
+        .impl()
+        .on_device_close(this->id_);
 
     this->disable_and_clear_program_cache();
     this->set_program_cache_misses_allowed(true);
@@ -739,7 +753,10 @@ CoreCoord Device::compute_with_storage_grid_size() const {
     auto grid = tt::get_compute_grid_size(MetalEnvAccessor(*env_).impl(), id_, num_hw_cqs_, dispatch_core_config);
     // Cap to FD-mode grid when service cores are claimed — prevents SD workloads
     // from targeting dispatch-column cores running persistent service kernels.
-    if (auto safe = MetalContext::instance().get_service_core_manager().impl().get_safe_compute_grid(id_)) {
+    if (auto safe = MetalContext::instance(this->get_context_id())
+                        .get_service_core_manager()
+                        .impl()
+                        .get_safe_compute_grid(id_)) {
         grid.x = std::min(grid.x, safe->x);
         grid.y = std::min(grid.y, safe->y);
     }

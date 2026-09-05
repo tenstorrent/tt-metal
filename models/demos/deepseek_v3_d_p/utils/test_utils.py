@@ -50,6 +50,28 @@ def gather_cache_tp0(tt_cache, mesh_device) -> torch.Tensor:
     return cache_full[:, 0]
 
 
+def gather_cache_natural(tt_cache, mesh_device, tp_shard_kv: bool = False):
+    """Gather a KV/indexer cache to host float32 in shard-major (block-cyclic) order, returning
+    ``(cache [num_slots, seq_len_cache, head_dim], stripe_count)`` for the caller to un-rotate.
+
+    TP-sharded, every tp-coord holds a distinct slice, so flatten into linear chip order (sp_coord*tp +
+    tp_coord) over sp*tp stripes. Mirrors sparse_mla/test_sparse_mla.py::_cache_natural."""
+    sp, tp = mesh_device.shape[0], mesh_device.shape[1]
+    cache_sr = ttnn.to_torch(
+        tt_cache,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
+    ).to(
+        torch.float32
+    )  # [num_slots, tp, seq_dim, head_dim]
+    if not tp_shard_kv:
+        return cache_sr[:, 0], sp
+    local = cache_sr.shape[2] // sp  # per-chip rows = seq_len_cache / (sp*tp)
+    flat = torch.cat(
+        [cache_sr[:, t, s * local : (s + 1) * local] for s in range(sp) for t in range(tp)], dim=1
+    )  # [num_slots, sp*tp*local == seq_len_cache, head_dim] in linear chip order
+    return flat, sp * tp
+
+
 def unrotate_cache_layer(cache_slot: torch.Tensor, positions: torch.Tensor, total_len: int) -> torch.Tensor:
     """Un-rotate one slot's block-cyclic cache rows [seq_len_cache, head_dim] to natural order and slice the
     valid region. `positions` = blockcyclic_positions(sp, chunk, seq_len_cache)."""

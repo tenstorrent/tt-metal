@@ -261,7 +261,7 @@ void kernel_main() {
 #else
         reconfig_data_format(dfb_in0, dfb_in0);
         pack_reconfig_data_format(dfb_exps);
-        copy_tile_to_dst_init_short(dfb_in0);  // need to copy from CB to DST to be able to run sfpu math
+        copy_init(dfb_in0);  // need to copy from CB to DST to be able to run sfpu math
 #ifndef NUMERIC_STABLE
         exp_tile_init<EXP_APPROX>();
 #endif

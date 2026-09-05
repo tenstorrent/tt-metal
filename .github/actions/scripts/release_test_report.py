@@ -34,7 +34,7 @@ from pathlib import Path
 
 import yaml
 
-from jira_client import _env, _truthy, file_issue
+from jira_client import _commit_link, _env, _truthy, file_issue
 from create_jira import format_test, match_entry, parse_failed
 
 HERE = Path(__file__).resolve().parent
@@ -249,7 +249,7 @@ def render_plain(report, meta):
     out += [
         f"Requirements with passing evidence: {len(with_evidence)} of {len(scoped)}.",
         "",
-        f"Commit:      {meta['sha']}",
+        f"Commit:      {_commit_link(meta['sha'])}",
         f"Sim results: {meta['url']}",
         f"Release run: {meta['run_url']}",
         "",
@@ -494,6 +494,7 @@ def main():
                 f"Release test evidence {version}: {status} " f"({with_evidence}/{len(scoped)} requirements covered)"
             ),
             issue_type=_env("JIRA_ISSUE_TYPE", "Task"),
+            assignee=_env("JIRA_ASSIGNEE_ACCOUNT_ID", "") or None,
             description=render_plain(report, meta) + "\n",
             labels=["release", "test-evidence", f"release-{version}"]
             + sorted({r["key"] for r in report["requirements"] if r["passed"]}),

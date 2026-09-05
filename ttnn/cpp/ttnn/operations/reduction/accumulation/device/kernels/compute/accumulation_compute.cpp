@@ -28,7 +28,8 @@ void kernel_main() {
     DataflowBuffer dfb_out_obj(dfb::out);
     DataflowBuffer dfb_acc_obj(dfb::acc);  // note: only used in compute kernel
 
-    unary_op_init_common(dfb::in, dfb::out);
+    compute_kernel_hw_startup(dfb::in, dfb::out);
+    copy_init(dfb::in);
 
     BINARY_OP_INIT();
 
@@ -71,11 +72,11 @@ void kernel_main() {
             dfb_in_obj.wait_front(ONE_TILE);
 
             reconfig_data_format(dfb::in, dfb::in);
-            copy_tile_to_dst_init_short(dfb::in);
+            copy_init(dfb::in);
             copy_tile(dfb::in, 0, DST_IN);
 
             reconfig_data_format(dfb::acc, dfb::acc);
-            copy_tile_to_dst_init_short(dfb::acc);
+            copy_init(dfb::acc);
             copy_tile(dfb::acc, 0, DST_ACC);
 
             BINARY_OP(DST_IN, DST_ACC, DST_ACC);

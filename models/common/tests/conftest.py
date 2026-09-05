@@ -127,8 +127,12 @@ def ttnn_mesh_device(request):
     if not hasattr(request, "param"):
         pytest.skip(f"{__file__}: mesh_device fixture called without parametrization")
 
-    if ttnn.device.is_blackhole():
-        pytest.skip(f"{__file__}: Blackhole device is not supported for this test yet")
+    mesh_device_name = os.environ.get("MESH_DEVICE", "").strip().upper()
+    blackhole_selected = mesh_device_name in {"P150", "P300", "P150X4"}
+    if ttnn.device.is_blackhole() and not blackhole_selected:
+        pytest.skip(f"{__file__}: select Blackhole explicitly with MESH_DEVICE=P150, P300, or P150x4")
+    if blackhole_selected and not ttnn.device.is_blackhole():
+        pytest.skip(f"{__file__}: MESH_DEVICE={mesh_device_name} requires a Blackhole device")
 
     # request.param is either a Sequence of ints or a dict with fabric_config and etc.
     params = getattr(request, "param", tuple())
@@ -156,7 +160,20 @@ def ttnn_mesh_device(request):
     sys_desc = ttnn._ttnn.multi_device.SystemMeshDescriptor()  # type: ignore[attr-defined]
     sys_shape = tuple(sys_desc.shape())
     req_shape = tuple(mesh_shape)
-    allowed = _allowed_req_shapes_for_system(sys_shape)
+    if blackhole_selected and req_shape == (1, 4) and not _is_physical_p150x4_cluster(ttnn.cluster.get_cluster_type()):
+        pytest.skip(
+            "Exact P150x4 hardware coverage requires a physical P150_X4 or P300_X2 cluster; "
+            "other submeshes are not SKU-equivalent"
+        )
+    if blackhole_selected and mesh_device_name == "P300" and req_shape == (1, 2):
+        cluster_type = ttnn.cluster.get_cluster_type()
+        if cluster_type not in (ttnn.cluster.ClusterType.P150_X2, ttnn.cluster.ClusterType.P300_X2):
+            pytest.skip(
+                "P300 or P300-equivalent development coverage requires a directly connected physical "
+                "two-chip Blackhole cluster; "
+                f"got {cluster_type}"
+            )
+    allowed = _allowed_req_shapes_for_system(sys_shape, blackhole_selected=blackhole_selected)
     if req_shape not in allowed:
         pytest.skip(
             f"{__file__}: Requested mesh {req_shape} unsupported on system {sys_shape}. "
@@ -174,7 +191,11 @@ def ttnn_mesh_device(request):
         # Select the default fabric topology for the logical mesh requested by the test.
         # A submesh still requires opening the full system parent, but its workload topology
         # determines whether that parent must provide Ring or Linear routes.
+        # Select the default fabric topology for the logical mesh requested by the test.
+        # A submesh still requires opening the full system parent, but its workload topology
+        # determines whether that parent must provide Ring or Linear routes.
         if fabric_config is None:
+            fabric_config = _default_fabric_config(req_shape)
             fabric_config = _default_fabric_config(req_shape)
         # set all other input arguments to default values by top-level conftest.py
         ttnn.set_fabric_config(
@@ -202,6 +223,11 @@ def ttnn_mesh_device(request):
                 parent_device = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(parent_shape), **updated_params)
                 yield parent_device
         except Exception as e:
+            # Focused BH qualification nodes are required gates. Exceptions raised by the test body
+            # cross the fixture's ``yield`` and must remain failures rather than becoming skips.
+            # Retain the legacy skip behavior for non-opted-in WH tests.
+            if blackhole_selected:
+                raise
             pytest.skip(f"{__file__}: Mesh device unavailable or unsupported for this configuration: {e}")
         finally:
             if submesh_device is not None:
@@ -211,6 +237,15 @@ def ttnn_mesh_device(request):
             if fabric_config:
                 ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
             del parent_device
+
+
+@pytest.fixture(scope="session")
+def require_blackhole_mesh_device():
+    """Skip a Blackhole-only test unless the requested SKU is explicit."""
+    mesh_device_name = os.environ.get("MESH_DEVICE", "").strip().upper()
+    if mesh_device_name not in {"P150", "P150X4"}:
+        pytest.skip("Blackhole-only test requires MESH_DEVICE=P150 or P150x4")
+    return mesh_device_name
 
 
 def _default_fabric_config(mesh_shape: tuple[int, int]) -> ttnn.FabricConfig | None:
@@ -223,7 +258,15 @@ def _default_fabric_config(mesh_shape: tuple[int, int]) -> ttnn.FabricConfig | N
     return ttnn.FabricConfig.FABRIC_1D
 
 
-def _allowed_req_shapes_for_system(sys_shape: tuple[int, int]) -> set[tuple[int, int]]:
+def _is_physical_p150x4_cluster(cluster_type) -> bool:
+    """Accept the two physical four-die BH systems that expose logical P150x4."""
+
+    return cluster_type in (ttnn.cluster.ClusterType.P150_X4, ttnn.cluster.ClusterType.P300_X2)
+
+
+def _allowed_req_shapes_for_system(
+    sys_shape: tuple[int, int], *, blackhole_selected: bool = False
+) -> set[tuple[int, int]]:
     # todo)) Different cluster has potentially different physical interconnects (in terms of number of links, topology, etc.).
     #        Thus, a tuple of ints may not be enough to fingerprint the parent/system mesh device. We need to use a more sophisticated fingerprinting mechanism so we can base the allowed list of (sub)mesh shapes on the parent/system mesh device.
     # [INFO] The most robust way to identify the underlying system is to use ttnn.cluster.get_cluster_type(), which returns a ClusterType enum that precisely identifies your hardware configuration. cluster.cpp:16-37
@@ -238,6 +281,11 @@ def _allowed_req_shapes_for_system(sys_shape: tuple[int, int]) -> set[tuple[int,
         # Without this entry the lookup below misses, `allowed` comes back empty, and EVERY test on
         # such a host skips.
         (2, 1): ((1, 2), (2, 1), (1, 1)),
+        # Blackhole P150x4 may enumerate as a line or square. Focused tests use
+        # the same logical 1x4 view as the 1D modules.
+        (1, 4): ((1, 4), (1, 2), (1, 1)),
+        (4, 1): ((1, 4), (4, 1), (1, 2), (1, 1)),
+        (2, 2): ((2, 2), (1, 4), (1, 2), (1, 1)),
         (2, 4): ((2, 4), (1, 8), (1, 4), (1, 2), (1, 1)),
         (8, 4): ((8, 4), (4, 8), (1, 8), (1, 4), (1, 2), (1, 1)),
         # [INFO] add more system shapes here
@@ -248,6 +296,12 @@ def _allowed_req_shapes_for_system(sys_shape: tuple[int, int]) -> set[tuple[int,
     if sys_shape in _CANDIDATE_REQ_SHAPES:
         for mesh_shape in _CANDIDATE_REQ_SHAPES[sys_shape]:
             allowed.add(mesh_shape)
+
+    # A physical 2x2 Blackhole quietbox is exposed to the in-scope 1D models
+    # as the canonical P150x4 view. Preserve generic/non-BH square requests;
+    # only the opted-in BH path rejects model-visible (2,2).
+    if blackhole_selected and sys_shape == (2, 2):
+        allowed.discard((2, 2))
 
     return allowed
 
@@ -278,3 +332,40 @@ def _pick_parent_shape_for_submesh(system_shape: tuple[int, int], requested_shap
         f"{__file__}: Requested submesh {requested_shape} does not fit within system mesh {system_shape} "
         f"(or its rotated view {rotated}) with default offset."
     )
+
+
+def _host_is_galaxy_cluster() -> bool | None:
+    """Whether this host is a Galaxy, or None when the cluster type cannot be determined.
+
+    ttnn.cluster.get_cluster_type() returns a ClusterType that fingerprints the hardware
+    directly, which _allowed_req_shapes_for_system documents as the robust alternative to
+    inferring the system from a mesh-shape tuple. Note that a hand-wired 32-chip rig
+    reports CUSTOM rather than GALAXY, so it is not matched here.
+    """
+    try:
+        galaxy_cluster_types = {
+            ttnn.cluster.ClusterType.GALAXY,
+            ttnn.cluster.ClusterType.TG,
+            ttnn.cluster.ClusterType.BLACKHOLE_GALAXY,
+        }
+        return ttnn.cluster.get_cluster_type() in galaxy_cluster_types
+    except Exception:
+        return None
+
+
+@pytest.fixture(scope="module")
+def skip_on_galaxy_system():
+    """Skip a module whose meshes are 1D-only when the host system is a Galaxy.
+
+    The 1D module suites request shapes like (1, 8), which _allowed_req_shapes_for_system
+    permits on a Galaxy (8, 4) as well as on a T3K (2, 4). They are targeted at the T3K,
+    so on a Galaxy they would consume scarce hardware to re-run LLMBox coverage. Gate is
+    opt-in per module rather than applied in _allowed_req_shapes_for_system, because
+    test_auto_compose.py deliberately exercises 1D shapes on a Galaxy.
+
+    Queried at fixture setup rather than collection time: probing the device while
+    collecting has deadlocked nested-pytest runs before. An indeterminate cluster type
+    does not skip; the mesh fixture makes the call instead.
+    """
+    if _host_is_galaxy_cluster():
+        pytest.skip("1D module suites are T3K-targeted; host cluster type is a Galaxy")

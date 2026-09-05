@@ -32,7 +32,7 @@ void kernel_main() {
             add_bcast_cols_init(dfb::in1, dfb::in0);
             add_tiles_bcast_cols(dfb::in1, dfb::in0, 0, 0, dst0);
         } else {
-            copy_tile_to_dst_init_short(dfb::in0);
+            copy_init(dfb::in0);
             copy_tile(dfb::in0, 0, dst0);
         }
         tile_regs_commit();

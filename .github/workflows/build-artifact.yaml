@@ -177,6 +177,9 @@ on:
       manylinux-docker-image:
         description: "Docker tag for the ManyLinux Docker image"
         value: ${{ inputs.manylinux-docker-image || jobs.build-docker-image.outputs.manylinux-tag }}
+      llk-ci-docker-image:
+        description: "Docker tag for the LLK CI image (empty when docker images were passed in pre-built)"
+        value: ${{ jobs.build-docker-image.outputs.llk-ci-tag }}
       packages-artifact-name:
         description: "Name to give download-artifact to get the packages"
         value: >-
@@ -476,12 +479,8 @@ jobs:
         TRACY_NO_ISA_EXTENSIONS: 1
       volumes:
         - ${{ github.workspace }}:/work
-        # HOME is hardcoded for no clear reason: https://github.com/actions/runner/issues/863
-        - /home/ubuntu/.ccache-ci:/github/home/.ccache
-      # Group 1457 is for the shared ccache drive
       # tmpfs is for efficiency
       options: >
-        --group-add 1457
         --tmpfs /tmp
     defaults:
       run:

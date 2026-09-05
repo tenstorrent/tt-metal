@@ -387,7 +387,7 @@ def test_scatter_reduction(
 
 
 @pytest.mark.parametrize(
-    "dim, input_shape, index_shape, source_shape, torch_dtype, input_dtype, index_dtype, source_dtype",
+    "dim, input_shape, index_shape, source_shape, torch_dtype, input_dtype, index_dtype, source_dtype, expected_message",
     [
         (
             10,
@@ -398,6 +398,7 @@ def test_scatter_reduction(
             ttnn.bfloat16,
             ttnn.uint16,
             ttnn.bfloat16,
+            "is out of range for tensor rank",
         ),  # input_rank vs dim
         (
             -10,
@@ -408,6 +409,7 @@ def test_scatter_reduction(
             ttnn.bfloat16,
             ttnn.uint16,
             ttnn.bfloat16,
+            "is out of range for tensor rank",
         ),  # input_rank vs dim
         (
             0,
@@ -418,6 +420,7 @@ def test_scatter_reduction(
             ttnn.bfloat16,
             ttnn.uint16,
             ttnn.bfloat16,
+            "input_rank must be equal to index_rank",
         ),  # index_shape vs source_shape
         (
             0,
@@ -428,6 +431,7 @@ def test_scatter_reduction(
             ttnn.bfloat16,
             ttnn.bfloat16,
             ttnn.bfloat16,
+            "index_dtype is not integer",
         ),  # index_dtype is integer
     ],
 )
@@ -440,7 +444,9 @@ def test_scatter_failing_cases(
     input_dtype,
     index_dtype,
     source_dtype,
+    expected_message,
     device,
+    expect_error,
 ):
     torch.manual_seed(0)
     torch_index_dtype = select_torch_dtype(index_dtype)
@@ -456,7 +462,7 @@ def test_scatter_failing_cases(
     torch_src = torch.randn(source_shape, dtype=torch_source_dtype)
     ttnn_src = ttnn.from_torch(torch_src, dtype=source_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
-    with pytest.raises(RuntimeError):
+    with expect_error(RuntimeError, expected_message):
         ttnn.scatter(ttnn_input, dim, ttnn_index, ttnn_src)
 
 

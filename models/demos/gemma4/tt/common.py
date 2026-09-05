@@ -98,13 +98,19 @@ def create_tt_model(
     # Warm ttnn cache => skip the full HF weight load and build from .tensorbin. Hybrid: the few
     # host-consumed weights (token embedding, per-layer scalars/PLI) are served real from the
     # sidecar, the rest as dataless placeholders. Generalizes PR #50550 to gemma4 (#45400).
+    # Qualify the cache by mesh geometry BEFORE resolving cache_dir: ttnn.as_tensor
+    # reloads tensorbins as-is and ignores mesh_mapper, so a TP=4 cache built on
+    # MeshShape([2,4]) must not be reused on [1,4] (QB2). Setting cluster_shape here
+    # keeps the warm-cache marker (cache_dir) and the tensorbin path on the same
+    # directory instead of letting them diverge.
+    _worker_mesh = tuple(mesh_device.shape) if hasattr(mesh_device, "shape") else (1, 1)
+    model_args.cluster_shape = _worker_mesh
     cache_dir = model_args.weight_cache_path(dtype)
     # Resolved early so it can key the cache identity: gemma4 embeds each module's dtype in its
     # tensorbin FILENAME (attention/experts/shared_mlp/router *_{dtype} suffixes), so an edit to
     # precision_overrides.json changes which files a build needs. Without the precision in the
     # variant, a marker seeded under the old overrides would certify a warm build whose files do
     # not exist -- and as_tensor would persist placeholders for them. (#45400 review, finding B2)
-    _worker_mesh = tuple(mesh_device.shape) if hasattr(mesh_device, "shape") else (1, 1)
     _precision_for_variant = Gemma4Precision.load(model_path, _worker_mesh)
     cache_identity = dict(
         model_name=os.path.basename(str(model_path).rstrip("/")) or "gemma4",
@@ -127,9 +133,8 @@ def create_tt_model(
 
     tensor_cache_path = str(cache_dir)
 
-    # Resolve per-module dtype overrides from precision_overrides.json. The
-    # mesh shape is the worker grid (rows x cols); a 1x1 mesh on a multi-device
-    # system still gets the 1x1 entry.
+    # Per-module dtype overrides from precision_overrides.json, resolved once
+    # above so the cache identity and the model share one value.
     precision = _precision_for_variant
 
     model = Gemma4Model(
@@ -201,7 +206,9 @@ def create_assistant_model(
     if state_dict is None:
         state_dict = Gemma4AssistantArgs.load_state_dict(assistant_path, dummy_weights=False)
 
-    tensor_cache_path = str(assistant_args.weight_cache_path(dtype))
+    mesh_shape = tuple(mesh_device.shape) if hasattr(mesh_device, "shape") else (1, 1)
+    assistant_args.cluster_shape = mesh_shape
+    tensor_cache_path = str(assistant_args.weight_cache_path(dtype, mesh_shape=mesh_shape))
 
     model = Gemma4AssistantModel(
         mesh_device=mesh_device,

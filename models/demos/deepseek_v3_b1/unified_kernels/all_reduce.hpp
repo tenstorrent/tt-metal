@@ -457,7 +457,7 @@ private:
         pack_block_contiguous_init(CTArgs::cb_out);
 
         if constexpr (CTArgs::has_residual) {
-            copy_tile_to_dst_init_short(CTArgs::cb_residual);
+            copy_init(CTArgs::cb_residual);
             cb_wait_front(CTArgs::cb_residual, CTArgs::num_tiles);
             tile_regs_acquire();
             for (uint32_t i = 0; i < CTArgs::num_tiles; i++) {

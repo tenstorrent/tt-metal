@@ -32,7 +32,7 @@ workload:
 
 migration:
   dest_endpoint_id: 1             # == our own endpoint id => loopback
-  dst_slot_offset: 2              # dst = src + 2
+  dst_slot_offset: 2
   timeout_ms: 3600000
   done_file: /tmp/m3_migration_done.sentinel   # driver-side only; no runner counterpart
   table_path: /tmp/m3_kv_chunk_table.pb        # [MATCH RUNNER]
@@ -42,3 +42,4 @@ migration:
 
 env:
   M3_INDEX_CACHE_BF16: "1"        # [MATCH RUNNER]
+  PREFILL_STANDALONE_CHUNKED_PCC: "0.88"

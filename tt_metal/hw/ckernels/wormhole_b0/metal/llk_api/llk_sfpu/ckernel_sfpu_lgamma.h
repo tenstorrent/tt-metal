@@ -84,7 +84,7 @@ inline void calculate_lgamma_stirling_fp32(
 
         // Polynomial bridge for small range inputs (z near 1 or 2 only)
 
-        v_if(abs_range1 < 0.25f) {
+        v_if(abs_range1 <= 0.25f) {
             // Taylor Expansion around z=1 (d = z - 1.0)
             constexpr float p0 = -0.57721566f;  // -gamma
             constexpr float p1 = 0.82246703f;   // zeta(2)/2
@@ -94,7 +94,7 @@ inline void calculate_lgamma_stirling_fp32(
             // res = d * (p0 + d * (p1 + d * (p2 + d * (p3 + d * p4))));
             res = d1 * PolynomialEvaluator::eval(d1, p0, p1, p2, p3, p4);
         }
-        v_elseif(abs_range2 < 0.25f) {
+        v_elseif(abs_range2 <= 0.25f) {
             // Taylor Expansion around z=2 (d = z - 2.0)
             constexpr float q0 = 0.42278434f;   // 1 - gamma
             constexpr float q1 = 0.32246703f;   // (zeta(2)-1)/2

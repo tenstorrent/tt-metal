@@ -44,8 +44,7 @@ protected:
         for (ChipId id : tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids()) {
             ids.push_back(id);
         }
-        const auto& dispatch_core_config =
-            tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
+        const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().resolve_dispatch_core_config();
         id_to_device_ = distributed::MeshDevice::create_unit_meshes(
             ids, l1_small_size_, trace_region_size_, 1, dispatch_core_config);
         this->devices_.clear();
@@ -65,10 +64,9 @@ protected:
         auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
         for (auto& [device_id, device] : id_to_device_) {
             for (const auto& logical_core : device->get_devices()[0]->get_inactive_ethernet_cores()) {
-                CoreCoord virtual_core = cluster.get_virtual_coordinate_from_logical_coordinates(
-                    device->get_devices()[0]->id(), logical_core, CoreType::ETH);
-                cluster.assert_risc_reset_at_core(
-                    tt_cxy_pair(device->get_devices()[0]->id(), virtual_core), tt::umd::RiscType::ALL);
+                CoreCoord virtual_core =
+                    cluster.get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::ETH);
+                cluster.assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::ALL);
             }
         }
 

@@ -17,6 +17,7 @@
 
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
 #include "internal/dataflow/dataflow_api_addrgen.h"
+#include "noc_address_backend.h"
 #endif
 
 // NOLINTBEGIN(misc-unused-parameters)
@@ -35,9 +36,7 @@ uint64_t get_dram_bank_base_offset(uint32_t bank_id, uint8_t noc) {
     uint32_t bank_offset_index = interleaved_addr_gen::get_bank_offset_index<true>(bank_id);
     uint32_t bank_index = interleaved_addr_gen::get_bank_index<true>(bank_id, bank_offset_index);
     uint32_t bank_offset = interleaved_addr_gen::get_bank_offset<true>(bank_index);
-    uint32_t noc_xy = interleaved_addr_gen::get_noc_xy<true>(bank_index, noc);
-    uint64_t noc_addr = get_noc_addr_helper(noc_xy, bank_offset);
-    return noc_addr;
+    return noc_address_backend::bank_address<true>(bank_index, bank_offset, noc);
 }
 #endif
 }  // namespace tensor_accessor
@@ -227,9 +226,7 @@ public:
 
     FORCE_INLINE
     bool is_local_addr(const uint64_t noc_addr, uint8_t noc = noc_index) const {
-        uint32_t x = NOC_UNICAST_ADDR_X(noc_addr);
-        uint32_t y = NOC_UNICAST_ADDR_Y(noc_addr);
-        return is_local_bank(x, y, noc);
+        return noc_address_backend::is_local(noc_addr, noc);
     }
 
     FORCE_INLINE
@@ -306,7 +303,7 @@ private:
         auto bank_x = get_bank_x(packed_xy_coords[page_mapping.bank_id]);
         auto bank_y = get_bank_y(packed_xy_coords[page_mapping.bank_id]);
         auto bank_start = DSpec::is_dram ? tensor_accessor::get_dram_bank_base_offset(bank_x, noc)
-                                         : NOC_XY_ADDR(DYNAMIC_NOC_X(noc, bank_x), DYNAMIC_NOC_Y(noc, bank_y), 0);
+                                         : noc_address_backend::worker_address(bank_x, bank_y, 0, noc);
         return bank_start + bank_base_address + (page_mapping.bank_page_offset * aligned_page_size) + offset;
     }
 
@@ -637,6 +634,31 @@ auto make_tensor_accessor_tuple(const std::tuple<Args...>& args, uint32_t addres
 }
 
 /**
+ * @brief Map a tensor sequence (tuple of TensorBindingToken) to a tuple of TensorAccessor.
+ *
+ * A tuple of TensorBindingTokens is obtained from a TensorBindingSequence: host codegen emits
+ * `tensor::<sequence_name>` as `std::tuple` of the named binding tokens. This helper
+ * maps that sequence into a std::tuple of TensorAccessors, one per token, in the same order.
+ *
+ * Usage (typed tuple — compile-time index):
+ *   auto accessor_tuple = make_tensor_accessors(tensor::inputs);
+ *   noc.async_read(std::get<0>(accessor_tuple), ...);
+ *
+ * Usage (type-erased array — runtime index):
+ *   auto accessor_tuple = make_tensor_accessors(tensor::inputs);
+ *   auto accessor_array = make_abstract_tensor_accessor_wrappers(accessor_tuple);
+ *   noc.async_read(accessor_array[i], ...);
+ *
+ * @param tokens constexpr tuple of TensorBindingTokens from a TensorBindingSequence
+ *               (tensor::<sequence_name>).
+ * @return std::tuple<TensorAccessor<...>, ...>, one per token, in sequence order.
+ */
+template <typename... Tokens>
+auto make_tensor_accessors(const std::tuple<Tokens...>& tokens) {
+    return std::apply([](const auto&... toks) { return std::make_tuple(TensorAccessor(toks)...); }, tokens);
+}
+
+/**
  * @brief AbstractTensorAccessorWrapper provides a unified interface over templated tensor accessors.
  *
  * The wrapper allows to use and iterate over different kinds of tensor accessors in a unified way.
@@ -674,6 +696,9 @@ auto make_abstract_tensor_accessor_wrappers(
 
 // Wraps a tuple of templated tensor accessors into an array of AbstractTensorAccessorWrapper,
 // allowing for easy iteration and runtime dispatch.
+//
+// CAUTION: each wrapper stores a pointer into `accessors`. The tuple must outlive the returned
+// array; do not pass a temporary from make_tensor_accessors(...) straight through.
 template <typename... Accessors>
 auto make_abstract_tensor_accessor_wrappers(const std::tuple<Accessors...>& accessors) {
     return tensor_accessor::detail::make_abstract_tensor_accessor_wrappers(

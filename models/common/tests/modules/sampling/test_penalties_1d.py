@@ -3,6 +3,8 @@
 
 """Tests for Penalties1D module."""
 
+from types import SimpleNamespace
+
 import pytest
 import torch
 
@@ -16,6 +18,9 @@ from models.common.modules.sampling.penalties_1d import (
     _resolve_penalties1d_config,
 )
 from models.common.utility_functions import comp_pcc
+
+# 1D module suites target the T3K; skip when the host system is a Galaxy.
+pytestmark = pytest.mark.usefixtures("skip_on_galaxy_system")
 
 # ---------------------------------------------------------------------------
 # Model name constants (match test_mlp_1d.py naming convention)
@@ -510,7 +515,7 @@ class TestPenalties1DDevice:
             padded_vocab_size = 1024
             sub_core_grids = None
 
-        with pytest.raises(ValueError, match="1D mesh topologies"):
+        with pytest.raises(ValueError, match="1D mesh topologies"):  # allow-pytest.raises: pre-existing
             Penalties1D.from_model_args(FakeMesh(), MockArgs())
 
 
@@ -787,6 +792,141 @@ class TestConfigUnitMore:
 # ==============================================================================
 
 
+@pytest.mark.parametrize(
+    ("batch_height", "expected_operation"),
+    [(1, "to_layout"), (32, "tilize")],
+)
+def test_histogram_tilize_preserves_batch32_path_and_pads_smaller_batches(
+    monkeypatch,
+    batch_height,
+    expected_operation,
+):
+    """Only non-tile batch heights use the padding-aware layout conversion."""
+
+    calls = []
+    counts = SimpleNamespace(padded_shape=(batch_height, 1024))
+    result = object()
+    pen = object.__new__(Penalties1D)
+    pen._op_kwargs = {"sub_core_grids": "sub-grid"}
+    pen._use_low_perf_tilize = True
+
+    monkeypatch.setattr(
+        ttnn,
+        "tilize",
+        lambda tensor, **kwargs: calls.append(("tilize", tensor, kwargs)) or result,
+    )
+    monkeypatch.setattr(
+        ttnn,
+        "to_layout",
+        lambda tensor, layout, **kwargs: calls.append(("to_layout", tensor, layout, kwargs)) or result,
+    )
+
+    assert pen._tilize_counts(counts) is result
+    if expected_operation == "tilize":
+        assert calls == [
+            (
+                "tilize",
+                counts,
+                {"sub_core_grids": "sub-grid", "use_low_perf": True},
+            )
+        ]
+    else:
+        assert calls == [
+            (
+                "to_layout",
+                counts,
+                ttnn.TILE_LAYOUT,
+                {"sub_core_grids": "sub-grid"},
+            )
+        ]
+
+
+def test_non_tile_histogram_slices_padded_views_and_preserves_logical_output(monkeypatch):
+    """Batch-1 vocab slicing uses padded aliases of caller-owned state."""
+
+    events = []
+    counts_new_rm = SimpleNamespace(name="counts-new-rm")
+    counts_new_tiled = SimpleNamespace(name="counts-new-tiled")
+    counts = SimpleNamespace(name="counts", shape=(1, 1024), padded_shape=(32, 1024))
+    counts_padded = SimpleNamespace(name="counts-padded")
+    counts_sliced = SimpleNamespace(name="counts-sliced", shape=(1, 128), padded_shape=(32, 128))
+    counts_sliced_padded = SimpleNamespace(name="counts-sliced-padded")
+    mask = object()
+    new_tokens = SimpleNamespace(deallocate=lambda: events.append("deallocate-tokens"))
+
+    pen = object.__new__(Penalties1D)
+    pen.config = SimpleNamespace(max_batch_size=1)
+    pen._zeros = object()
+    pen._op_kwargs = {}
+    pen._slice_start = object()
+    pen._slice_end = object()
+    pen._num_devices = 8
+    pen._tilize_counts = lambda tensor: events.append(("tilize", tensor)) or counts_new_tiled
+
+    monkeypatch.setattr(
+        ttnn,
+        "scatter_add",
+        lambda *args, **kwargs: events.append(("scatter", args, kwargs)) or counts_new_rm,
+    )
+    monkeypatch.setattr(
+        ttnn,
+        "add",
+        lambda lhs, rhs, *, output_tensor, **kwargs: events.append(("add", lhs, rhs, output_tensor, kwargs))
+        or output_tensor,
+    )
+
+    def reshape(tensor, logical_shape, padded_shape, *, skip_padding_fill):
+        events.append(("reshape", tensor, logical_shape, padded_shape, skip_padding_fill))
+        if tensor is counts:
+            return counts_padded
+        assert tensor is counts_sliced
+        return counts_sliced_padded
+
+    monkeypatch.setattr(ttnn, "reshape", reshape)
+
+    def slice_tensor(tensor, start, end, *, output_tensor, slice_dim, num_devices, **kwargs):
+        events.append(("slice", tensor, start, end, output_tensor, slice_dim, num_devices, kwargs))
+        assert tensor is counts_padded
+        assert end is pen._slice_end
+        assert output_tensor is counts_sliced_padded
+        return output_tensor
+
+    monkeypatch.setattr(ttnn, "slice", slice_tensor)
+    monkeypatch.setattr(
+        ttnn,
+        "gt",
+        lambda tensor, threshold, *, output_tensor, **kwargs: events.append(
+            ("gt", tensor, threshold, output_tensor, kwargs)
+        )
+        or output_tensor,
+    )
+
+    returned_counts, returned_mask = pen._token_bin_counts_and_mask(
+        new_tokens,
+        object(),
+        counts=counts,
+        mask=mask,
+        counts_sliced=counts_sliced,
+    )
+
+    assert returned_counts is counts
+    assert returned_mask is mask
+    assert events[-1] == ("gt", counts_sliced, 0, mask, {})
+    slices = [event for event in events if isinstance(event, tuple) and event[0] == "slice"]
+    assert slices == [
+        (
+            "slice",
+            counts_padded,
+            pen._slice_start,
+            pen._slice_end,
+            counts_sliced_padded,
+            1,
+            8,
+            {},
+        )
+    ]
+
+
 @pytest.mark.parametrize("ttnn_mesh_device", [(1, 1), (1, 2), (1, 8)], ids=["1x1", "1x2", "1x8"], indirect=True)
 class TestPenalties1DDeviceExtra:
     """Coverage for methods not exercised by the reference tests."""
@@ -835,15 +975,19 @@ class TestPenalties1DDeviceExtra:
     # init_prompt_penalties + _token_bin_counts_and_mask counts=None path
     # ------------------------------------------------------------------
 
+    @pytest.mark.parametrize("max_batch_size", [1, 32])
     @pytest.mark.parametrize("vocab_size", [1024])
-    def test_init_prompt_penalties(self, ttnn_mesh_device, vocab_size):
+    def test_init_prompt_penalties(self, ttnn_mesh_device, vocab_size, max_batch_size):
         """init_prompt_penalties scatters prompt tokens into prompt_mask."""
-        B = 32
-        pen = Penalties1D(vocab_size=vocab_size, mesh_device=ttnn_mesh_device)
+        pen = Penalties1D(
+            vocab_size=vocab_size,
+            mesh_device=ttnn_mesh_device,
+            max_batch_size=max_batch_size,
+        )
         pen.load_device_buffers()
         params, accum = _make_proper_params_accum(pen)
 
-        prompt_tokens = torch.randint(0, vocab_size, (B, 10))
+        prompt_tokens = torch.randint(0, vocab_size, (max_batch_size, 10))
         pen.init_prompt_penalties(params, accum, prompt_tokens)
 
     # ------------------------------------------------------------------
@@ -904,17 +1048,21 @@ class TestPenalties1DDeviceExtra:
     # and _token_bin_counts_and_mask counts-not-None path (line 419)
     # ------------------------------------------------------------------
 
+    @pytest.mark.parametrize("max_batch_size", [1, 32])
     @pytest.mark.parametrize("vocab_size", [1024])
-    def test_update_output_tokens_standard(self, ttnn_mesh_device, vocab_size):
+    def test_update_output_tokens_standard(self, ttnn_mesh_device, vocab_size, max_batch_size):
         """update_output_tokens with standard decode-shape [1,1,1,B] (lines 290-294)."""
-        B = 32
-        pen = Penalties1D(vocab_size=vocab_size, mesh_device=ttnn_mesh_device)
+        pen = Penalties1D(
+            vocab_size=vocab_size,
+            mesh_device=ttnn_mesh_device,
+            max_batch_size=max_batch_size,
+        )
         pen.load_device_buffers()
         _, accum = _make_proper_params_accum(pen)
 
-        # Standard sampling output: shape[-1]=B=32, shape[-2]=1 → if-branch
+        # Standard sampling output: shape[-1]=B, shape[-2]=1 → if-branch.
         tokens_tt = ttnn.from_torch(
-            torch.randint(0, vocab_size, (1, 1, 1, B), dtype=torch.int32),
+            torch.randint(0, vocab_size, (1, 1, 1, max_batch_size), dtype=torch.int32),
             device=ttnn_mesh_device,
             dtype=ttnn.int32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -989,7 +1137,7 @@ class TestPenalties1DDeviceExtra:
         """_pad_batch_to_max raises ValueError for non-2D input (lines 396-397)."""
         pen = Penalties1D(vocab_size=1024, mesh_device=ttnn_mesh_device)
         pen.load_device_buffers()
-        with pytest.raises(ValueError, match="Expected 2D"):
+        with pytest.raises(ValueError, match="Expected 2D"):  # allow-pytest.raises: pre-existing
             pen._pad_batch_to_max(torch.zeros(10), pad_value=-1)
 
     # ------------------------------------------------------------------

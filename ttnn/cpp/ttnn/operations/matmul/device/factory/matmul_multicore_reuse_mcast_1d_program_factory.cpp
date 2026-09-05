@@ -821,15 +821,23 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
 
     uint32_t src1_cb_index = tt::CBIndex::c_1;
     tt::tt_metal::CBHandle cb_src1 = 0;
+    uint32_t in1_remote_cb_size = 0;
     if (use_global_cb) {
         const uint32_t remote_cb_index = tt::CBIndex::c_31;
         const uint32_t in1_block_size_bytes = in1_block_tiles * in1_single_tile_size;
+        // Floor the GCB to a whole number of in1 K-block pages, as the gather_in0 path does. The
+        // caller sizes the GCB in bytes and need not know this op's page size; any bytes past the
+        // last whole page are simply unused rather than a hard error. The reader streams through a
+        // two-page window (remote_cb_wait_front of 1 then 2), so that much has to survive the floor —
+        // op validation checks this too, but a GCB built via the raw factory skips that path.
+        in1_remote_cb_size = tt::round_down(global_cb->size(), in1_block_size_bytes);
         TT_FATAL(
-            global_cb->size() % in1_block_size_bytes == 0,
-            "mcast_in0 global_cb size {} must be a multiple of in1 K-block size {}",
+            in1_remote_cb_size >= 2 * in1_block_size_bytes,
+            "mcast_in0 global_cb size {} holds {} whole in1 K-block pages of {} B; the reader needs at least 2",
             global_cb->size(),
+            in1_remote_cb_size / in1_block_size_bytes,
             in1_block_size_bytes);
-        tt_metal::CircularBufferConfig remote_cb_config(global_cb->size());
+        tt_metal::CircularBufferConfig remote_cb_config(in1_remote_cb_size);
         remote_cb_config.remote_index(remote_cb_index)
             .set_page_size(in1_block_size_bytes)
             .set_data_format(in1_data_format);
@@ -854,8 +862,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
         "CB {} :: PS = {}, NP = {}, TOTAL = {}",
         src1_cb_index,
         in1_single_tile_size,
-        use_global_cb ? global_cb->size() / in1_single_tile_size : in1_CB_size / in1_single_tile_size,
-        use_global_cb ? global_cb->size() : in1_CB_size);
+        use_global_cb ? in1_remote_cb_size / in1_single_tile_size : in1_CB_size / in1_single_tile_size,
+        use_global_cb ? in1_remote_cb_size : in1_CB_size);
 
     uint32_t src2_cb_index = tt::CBIndex::c_2;
     tt::tt_metal::CBHandle cb_src2 = 0;
