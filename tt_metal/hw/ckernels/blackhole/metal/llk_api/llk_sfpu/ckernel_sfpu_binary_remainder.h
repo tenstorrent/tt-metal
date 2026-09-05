@@ -59,6 +59,9 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(
     // -0.0 instead of the valid magnitude 2**31.
     // Keep this repair independent of the numerator bound: it also covers a
     // negative INT_MIN residual from an overshooting quotient approximation.
+    // Do not drop the low bit with convert(abs(r) >> 1) + addexp: combined with
+    // reciprocal error, the final adjustment can be insufficient. For example,
+    // -2140947629 % -1 then returns -1 instead of 0 on Blackhole.
     sfpi::vFloat r_f = sfpi::convert<sfpi::vFloat>(sfpi::abs(r), sfpi::RoundMode::Nearest);
     v_if(r_f < 0.0f) { r_f = TWO_POW_31; }
     v_endif;

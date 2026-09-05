@@ -1378,6 +1378,37 @@ def test_binary_remainder_fmod_int32_min(ttnn_op, device):
 
 
 @pytest.mark.parametrize("ttnn_op", [ttnn.remainder, ttnn.fmod])
+def test_binary_remainder_fmod_int32_odd_residuals(ttnn_op, device):
+    # q*b is a multiple of 1024 (Blackhole) or 2048 (Wormhole), so odd
+    # numerators produce odd initial residuals. Dropping their low bit before
+    # float conversion is unsafe: the approximate reciprocal can introduce
+    # additional error that the single final adjustment cannot recover.
+    numerators = torch.cat(
+        [
+            torch.arange(-(2**31), -(2**31) + 256, dtype=torch.int64),
+            torch.arange(2**31 - 256, 2**31, dtype=torch.int64),
+            # Include the known failing -2140947629 / -1 case and its neighbors.
+            torch.arange(-2140947757, -2140947501, dtype=torch.int64),
+            torch.arange(2140947501, 2140947757, dtype=torch.int64),
+            torch.arange(-128, 128, dtype=torch.int64),
+        ]
+    )
+    divisors = torch.tensor(
+        [-4194305, -2049, -2048, -2047, -7, -3, -2, -1, 1, 2, 3, 7, 2047, 2048, 2049, 4194305],
+        dtype=torch.int64,
+    )
+    pairs = torch.cartesian_prod(numerators, divisors)
+    torch_a = pairs[:, 0].reshape(-1, 32).to(torch.int32).contiguous()
+    torch_b = pairs[:, 1].reshape(-1, 32).to(torch.int32).contiguous()
+    input_a = ttnn.from_torch(torch_a, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    input_b = ttnn.from_torch(torch_b, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    # Widen the golden calculation to avoid the INT_MIN % -1 trap.
+    golden_function = ttnn.get_golden_function(ttnn_op)
+    expected = golden_function(torch_a.to(torch.int64), torch_b.to(torch.int64), device=device).to(torch.int32)
+    assert_equal(expected, ttnn.to_torch(ttnn_op(input_a, input_b)))
+
+
+@pytest.mark.parametrize("ttnn_op", [ttnn.remainder, ttnn.fmod])
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 def test_binary_remainder_fmod_int32_sign_adjustment(ttnn_op, layout, device):
     """Cover all operand sign combinations, zero remainders, and INT_MIN divisors."""
