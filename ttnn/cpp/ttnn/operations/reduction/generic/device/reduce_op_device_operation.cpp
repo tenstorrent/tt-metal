@@ -42,8 +42,25 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
         "Only one of row_major_w_dense_path / row_major_h_dense_path may be set");
     TT_FATAL(operation_attributes.num_h_slices >= 1, "num_h_slices must be >= 1");
     TT_FATAL(
-        operation_attributes.num_h_slices == 1 || operation_attributes.row_major_h_dense_path,
-        "num_h_slices > 1 (H-axis split) is only supported on the row-major H dense path");
+        operation_attributes.output_layout == Layout::TILE || !is_block_float(operation_attributes.output_dtype),
+        "Block-float output is TILE-only, got output_layout {} with dtype {}",
+        operation_attributes.output_layout,
+        operation_attributes.output_dtype);
+    // TILE H-axis split stage 1: tiled compute, ROW_MAJOR SUM partials (one row per slice).
+    // dim must be H: compute_output_specs sizes H from num_h_slices. num_h_slices > 1 is what
+    // makes the factory pick the RM writer.
+    const bool tile_h_split = tensor_args.layout() == Layout::TILE && operation_attributes.num_h_slices > 1 &&
+                              operation_attributes.dim == tt::tt_metal::ReduceOpDim::H &&
+                              operation_attributes.output_layout == Layout::ROW_MAJOR &&
+                              operation_attributes.math_op == tt::tt_metal::ReduceOpMath::SUM;
+    TT_FATAL(
+        operation_attributes.num_h_slices == 1 || operation_attributes.row_major_h_dense_path || tile_h_split,
+        "num_h_slices > 1 (H-axis split) requires the row-major H dense path, or a TILE H-reduce "
+        "emitting ROW_MAJOR SUM partials (got layout {}, dim {}, output_layout {}, math_op {})",
+        tensor_args.layout(),
+        operation_attributes.dim,
+        operation_attributes.output_layout,
+        operation_attributes.math_op);
     if (operation_attributes.row_major_w_dense_path || operation_attributes.row_major_h_dense_path) {
         const auto expected_dim =
             operation_attributes.row_major_w_dense_path ? tt::tt_metal::ReduceOpDim::W : tt::tt_metal::ReduceOpDim::H;
@@ -95,9 +112,23 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
     } else {
         TT_FATAL((tensor_args.layout() == Layout::TILE), "Inputs to reduce must be tilized");
         TT_FATAL(
-            operation_attributes.output_layout == Layout::TILE,
+            operation_attributes.output_layout == Layout::TILE || tile_h_split,
             "Tilized reduce paths only emit TILE output, got {}",
             operation_attributes.output_layout);
+        if (tile_h_split) {
+            TT_FATAL(
+                tensor_args.dtype() == DataType::BFLOAT16 || tensor_args.dtype() == DataType::FLOAT32 ||
+                    is_block_float(tensor_args.dtype()),
+                "TILE H-axis split only supports BFLOAT16, FLOAT32 and block-float input, got {}",
+                tensor_args.dtype());
+            TT_FATAL(
+                tensor_args.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED &&
+                    operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
+                "TILE H-axis split requires interleaved input and output memory layouts (input {}, output {})",
+                static_cast<int>(tensor_args.memory_config().memory_layout()),
+                static_cast<int>(operation_attributes.output_mem_config.memory_layout()));
+            TT_FATAL(!operation_attributes.negate, "TILE H-axis split does not support negate (min-reduce)");
+        }
         // INT32 MIN/MAX/SUM is supported via the SFPU reduce path (format deduced from the input CB
         // in compute_kernel_lib::reduce). See common.hpp.
         const bool is_int32_sfpu_reduce = use_sfpu_reduce_path(tensor_args.dtype(), operation_attributes.math_op);

@@ -751,6 +751,55 @@ def test_rm_reduce_h_axis_split(device, reduce_op, fast_and_approximate_mode, ou
     )
 
 
+@pytest.mark.parametrize("reduce_op", ["mean", "sum"])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize("fast_and_approximate_mode", [False, True])
+@pytest.mark.parametrize(
+    "output_layout", [None, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT], ids=["default", "rm", "tile"]
+)
+# Shapes that take the split: Ht above k_min_ht_for_split_tile with NC*Wt below the core count.
+# All also have num_h_slices * slice_Ht > Ht, exercising the reader's past-the-end slices.
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (1, 1, 3136, 144),  # EfficientNetB0 global-pool; Ht=98, Wt=5
+        (1, 1, 3216, 128),  # Ht=101, non-aligned H
+        (1, 1, 1064, 256),  # Ht=34, wide Wt=8, near the threshold, non-aligned H
+        (2, 3, 1024, 40),  # NC=6, Ht=32 — exactly at the threshold
+        (1, 1, 3136, 145),  # non-aligned W → the RM writer's last-tile clamp
+    ],
+)
+def test_tile_reduce_h_axis_split(device, reduce_op, dtype, fast_and_approximate_mode, output_layout, shape):
+    """H reduce on tall TILE input — tiled stage 1, RM stage 2. TILE input defaults to TILE output."""
+    if fast_and_approximate_mode and reduce_op != "mean":
+        pytest.skip("fast_and_approximate_mode only affects mean")
+    torch.manual_seed(0)
+    torch_input = torch.rand(shape, dtype=_torch_dtype(dtype))
+    torch_ref = _golden(torch_input, reduce_op, dim=-2, keepdim=False)
+
+    tt_input = ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    assert tt_input.layout == ttnn.TILE_LAYOUT
+    tt_input = ttnn.fill_implicit_tile_padding(tt_input, -42.0)
+
+    ttnn_op = _OPS[reduce_op][1]
+    op_kwargs = {"dim": -2, "keepdim": False, "output_layout": output_layout}
+    if reduce_op == "mean":
+        op_kwargs["fast_and_approximate_mode"] = fast_and_approximate_mode
+    tt_output = ttnn_op(tt_input, **op_kwargs)
+    # A TILE input defaults to TILE output: stage 1's ROW_MAJOR partials must not leak out as the
+    # op's natural layout the way they do on the RM path.
+    assert tt_output.layout == (output_layout or ttnn.TILE_LAYOUT)
+    output = ttnn.to_torch(tt_output)
+
+    if dtype == ttnn.float32:
+        # Only mean has an accurate fp32 SFPU reduce; the FPU path truncates to TF32, doubling rtol.
+        rtol = 0.002 if (reduce_op == "mean" and not fast_and_approximate_mode) else 0.004
+        metrics = dict(pcc_threshold=0.999, rtol=rtol, atol=1e-3, frobenius_threshold=0.003)
+    else:
+        metrics = dict(pcc_threshold=0.97, rtol=0.01, atol=0.01, frobenius_threshold=0.004)
+    assert_numeric_metrics(torch_ref, output, check_ulp=False, **metrics)
+
+
 # Block-float formats only exist in TILE layout: an RM output would have to widen to BFLOAT16, so
 # sum/mean reject the request instead of silently changing the dtype.
 @pytest.mark.parametrize("reduce_op", ["mean", "sum"])
