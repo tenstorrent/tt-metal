@@ -475,7 +475,23 @@ TEST_GROUP_HARDWARE_CAPABILITY_RULES = {
     "blackhole-p300a-sweeps": ({"board_type": "blackhole", "device_series": "p300a", "card_count": 2},),
     "wormhole-t3k-sweeps": ({"device_series": "n300", "card_count": 4},),
     "wormhole-galaxy-sweeps": ({"device_series": "tt_galaxy_wh"},),
-    "lead-models-single-chip": ({"max_card_count": 1, "excluded_device_series": ("tt_galaxy_wh",)},),
+    # Gates on the TRACING BOX only (board family), not on how many cards it had.
+    #
+    # It used to be ({"max_card_count": 1, "excluded_device_series": ("tt_galaxy_wh",)},), which
+    # made this lane reject every vector routed to it and run ZERO vectors on every run. Lead
+    # models are traced on a galaxy, so even a single-chip op carries device_series
+    # 'tt_galaxy_wh' and card_count 32 -- both halves of that rule rejected it, while
+    # LEAD_MODELS_MESH_TEST_GROUPS["1x1"] kept routing 1x1 here. Routing and capability
+    # contradicted each other, and 36 vectors (28 col + 8 row, 19 modules) were discarded at
+    # load with "machine mismatch" every run. The lane still went green, because zero vectors
+    # means zero failures.
+    #
+    # What actually decides whether a traced config runs on an n150 is the MESH it needs, not
+    # the machine it was traced on: a 1x1 mesh needs one Wormhole chip, and the per-chip core
+    # grid is the same on a galaxy card. Mesh is already enforced twice over -- only "1x1"
+    # routes to this lane, and the batch exports MESH_DEVICE_SHAPE=1x1, which vector_source
+    # checks separately -- so this rule only has to answer "is the traced board a Wormhole?".
+    "lead-models-single-chip": ({"board_type": "wormhole"},),
     "lead-models-galaxy": (
         {"device_series": "tt_galaxy_wh"},
         {"min_card_count": 2},
