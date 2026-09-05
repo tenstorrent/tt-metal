@@ -21,6 +21,7 @@ namespace tt::tt_metal {
 
 class IDevice;
 class HostBuffer;
+class MetalEnvImpl;
 
 namespace distributed {
 class MeshDevice;
@@ -198,12 +199,15 @@ private:
 
     /**
      * @brief Construct PinnedMemory by mapping existing host memory to devices
+     * @param metal_env Env owning the cluster and HAL these devices belong to. IDevice exposes no env of its own,
+     *                  so it is passed in rather than deduced from `devices`.
      * @param devices Vector of devices to map buffers for
      * @param host_buffer Existing host memory to map (must not be null)
      * @param buffer_size Size of buffer to map
      * @param map_to_noc Whether to map the buffer to the NOC
      */
     PinnedMemory(
+        MetalEnvImpl& metal_env,
         const std::vector<IDevice*>& devices,
         void* host_buffer,
         size_t buffer_size,
