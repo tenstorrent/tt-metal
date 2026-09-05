@@ -43,7 +43,10 @@ OWNER = 5  # sender index along the ring (cluster) axis
 
 @pytest.mark.parametrize(
     ("mesh_device", "sp_axis", "tp_axis", "device_params", "topology"),
-    [pytest.param((4, 8), 1, 0, ring_params, ttnn.Topology.Ring, id="bh_4x8_ring")],
+    [
+        pytest.param((4, 8), 1, 0, ring_params, ttnn.Topology.Ring, id="bh_4x8_ring"),
+        pytest.param((4, 32), 1, 0, ring_params, ttnn.Topology.Ring, id="bh_4x32_ring"),
+    ],
     indirect=["mesh_device", "device_params"],
 )
 # (tiles_per_shard, chunk_size_tiles): 1 tile = correctness sanity; 1024 tiles exposes the bandwidth
@@ -280,7 +283,10 @@ def test_broadcast_ring_straddle(mesh_device, sp_axis, tp_axis, device_params, t
 
 @pytest.mark.parametrize(
     ("mesh_device", "sp_axis", "tp_axis", "device_params", "topology"),
-    [pytest.param((4, 8), 1, 0, ring_params, ttnn.Topology.Ring, id="bh_4x8_ring")],
+    [
+        pytest.param((4, 8), 1, 0, ring_params, ttnn.Topology.Ring, id="bh_4x8_ring"),
+        pytest.param((4, 32), 1, 0, ring_params, ttnn.Topology.Ring, id="bh_4x32_ring"),
+    ],
     indirect=["mesh_device", "device_params"],
 )
 # L1-relay path (use_l1_relay=True): same per-line correctness, credit-bounded L1 recv buffer. A few
