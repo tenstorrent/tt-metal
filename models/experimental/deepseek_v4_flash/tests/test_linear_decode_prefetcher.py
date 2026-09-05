@@ -107,14 +107,13 @@ def test_linear_decode_prefetcher_shared_global_cb_uniform_slabs(device, hoist):
 def test_linear_decode_prefetcher_shared_global_cb_mixed_slab_sizes(device):
     """Differently *sized* weights share one GCB by agreeing on a page size.
 
-    These are the three shapes (128 KB, 256 KB, 256 KB slabs at bf16) that used to be refused
-    a shared buffer, because a page was a whole slab and a ring whose page size changes
-    between transfers hangs. Streaming removes the restriction rather than working around it:
-    the common page here is 128 KB, so the two larger weights arrive as two pages each and the
-    matmul accumulates across them, and the ring's geometry never changes.
+    The three shapes (128 KB, 256 KB, 256 KB slabs at bf16) share one GCB by
+    streaming on a common 128 KB page: the two larger weights arrive as two pages
+    each and the matmul accumulates across them, so the ring's geometry never
+    changes. A ring whose page size changes between transfers hangs.
 
-    The queueing is hoisted so all three weights are in flight against a ring that cannot hold
-    them all, which is the case that hung before and is also how the model prefetches.
+    The queue is hoisted so all three weights are in flight against a ring that
+    cannot hold them all, which is how the model prefetches.
     """
     m = 32
     shapes = [(1024, 2048), (2048, 2048), (1024, 4096)]
