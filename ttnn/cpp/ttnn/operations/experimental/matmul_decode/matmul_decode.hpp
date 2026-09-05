@@ -12,6 +12,7 @@
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/experimental/matmul_decode/packed_weight_spec.hpp"
 #include <tt-metalium/global_circular_buffer.hpp>
+#include <tt-metalium/core_coord.hpp>
 
 namespace ttnn::experimental {
 
@@ -48,6 +49,11 @@ Tensor matmul_decode(
     const std::optional<PackedWeightSpec>& packed_weight = std::nullopt,
     bool all_gather = false,
     const std::optional<std::vector<ttnn::MeshCoordinate>>& mesh_coords = std::nullopt,
-    bool ring_gather = false);
+    bool ring_gather = false,
+    const std::optional<tt::tt_metal::CoreRangeSet>& output_core_grid = std::nullopt,
+    bool output_mcast_two_hub = false,
+    bool rms_norm = false,
+    std::optional<float> rms_norm_gamma = std::nullopt,
+    float rms_norm_epsilon = 1.0e-6F);
 
 }  // namespace ttnn::experimental

@@ -7,6 +7,10 @@
 #include "api/compute/common.h"
 #include "api/compute/matmul.h"
 #include "api/compute/eltwise_binary.h"
+#ifdef USE_CUSTOM_MM
+#include "api/compute/experimental/custom_mm.h"
+#include "api/compute/experimental/pack_block.h"
+#endif
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/dataflow/circular_buffer.h"
 
@@ -75,9 +79,50 @@ void kernel_main() {
 
     full_in0_cb.wait_front(full_in0_num_tiles);
 
+    const uint32_t k_offset = k_idx * Kc_tiles;
+#ifdef USE_CUSTOM_MM
+    constexpr bool transpose = false;
+    constexpr bool split_acc = true;
+    constexpr bool dense_packing = true;
+    constexpr bool finalize = true;
+
+    static_assert(M_tiles == 1, "custom_mm partial path requires a single in0 tile row");
+    static_assert(k_block_tiles >= 2 && k_block_tiles <= 256 && k_block_tiles % 2 == 0);
+    static_assert(Nc_tiles >= 1 && Nc_tiles <= 16);
+
+    custom_mm_block_init_short<transpose, split_acc, dense_packing>(full_in0_cb_id, in1_cb_id, partial_cb_id, Nc_tiles);
+    pack_block_contiguous_init(partial_cb_id);
+
+    partial_cb.reserve_back(block_num_tiles);
+    // Each page covers k_block_tiles of this core's reduction, and MVMUL adds into DST without
+    // clearing it, so chaining one call per page leaves the running sum in DST rather than in the
+    // partial CB. Only the last page finalizes, merging the split_acc partials once the reduction
+    // is whole. This is why streaming needs no packer L1 accumulation here.
+    tile_regs_acquire();
+    for (uint32_t kb = 0; kb < num_k_blocks; ++kb) {
+        in1_cb.wait_front(in1_page_tiles);
+        const uint32_t in0_tile = k_offset + kb * k_block_tiles;
+        if (kb == num_k_blocks - 1) {
+            custom_mm_block<true, false>(full_in0_cb_id, in1_cb_id, in0_tile, 0, 0, k_block_tiles, Nc_tiles);
+        } else {
+            custom_mm_block<false, false>(full_in0_cb_id, in1_cb_id, in0_tile, 0, 0, k_block_tiles, Nc_tiles);
+        }
+#ifdef ENABLE_GLOBAL_CB
+        // This page has been read in full; release the local alias and let the reader ack it.
+        in1_cb.pop_front(in1_page_tiles);
+        sync_cb.reserve_back(1);
+        sync_cb.push_back(1);
+#endif
+    }
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_block_contiguous(0, partial_cb_id, Nc_tiles);
+    tile_regs_release();
+    custom_mm_block_uninit<dense_packing>();
+    partial_cb.push_back(block_num_tiles);
+#else
     matmul_block_init(full_in0_cb_id, in1_cb_id, false, out_block_w, out_block_h, in0_block_w);
 
-    const uint32_t k_offset = k_idx * Kc_tiles;
     partial_cb.reserve_back(block_num_tiles);
     for (uint32_t kb = 0; kb < num_k_blocks; ++kb) {
         in1_cb.wait_front(in1_page_tiles);
@@ -118,6 +163,7 @@ void kernel_main() {
         pack_reconfig_l1_acc(0);
     }
     partial_cb.push_back(block_num_tiles);
+#endif
     full_in0_cb.pop_front(full_in0_num_tiles);
 
     if (is_base == 0) {
@@ -126,7 +172,8 @@ void kernel_main() {
 
     reduce_cb.wait_front(reduce_num_tiles);
 
-    // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
+    // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup
+    // full-init behaviour) should become a targeted DST re-arm.
     compute_kernel_hw_startup(reduce_cb_id, reduce_cb_id, out_cb_id);
     add_init(reduce_cb_id, reduce_cb_id, true /* acc_to_dest */);
 

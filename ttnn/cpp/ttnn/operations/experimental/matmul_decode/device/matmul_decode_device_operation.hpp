@@ -31,6 +31,15 @@ inline tt::tt_metal::Tile in0_tile_for_compute(const Tensor& input_tensor_a) {
     return input_tensor_a.tensor_spec().tile();
 }
 
+// custom_mm in0 tiles are [{1,2,4,8}, 32]. 16- and 32-high TILE A stays on matmul_block.
+inline bool is_custom_mm_in0_tile_height(uint32_t tile_height) {
+    return tile_height == 1 || tile_height == 2 || tile_height == 4 || tile_height == 8;
+}
+
+inline bool is_custom_mm_kt_dim(uint32_t kt_dim) { return kt_dim >= 2 && kt_dim <= 256 && (kt_dim % 2u) == 0; }
+
+inline bool is_custom_mm_ct_dim(uint32_t ct_dim) { return ct_dim >= 1 && ct_dim <= 16; }
+
 // Wire contract with reader_*_width_sharded.cpp kernels.
 enum class HubRole : uint32_t {
     Plain = 0,
@@ -78,6 +87,18 @@ struct MatmulDecodeDeviceOperation {
         // full [M, K] replica on every core. M is A's shard height; compute treats A as
         // 1x32 tiles. Mutually exclusive with ring_gather, partial, and batched.
         bool in0_row_major_height_sharded = false;
+        // Full-width only: multicast a replica of [M, N] onto every core of this filled rectangle.
+        // Absent: width-sharded [M, Nc] on the weight grid (legacy).
+        std::optional<CoreRangeSet> output_core_grid = std::nullopt;
+        // When output_core_grid is set, true selects the two-hub gather+mcast (hub0 NOC0, hub1
+        // NOC1). False mcasts each producer's [M, Nc] shard directly (producers must sit on the
+        // dest grid).
+        bool output_mcast_two_hub = false;
+        // Full-width only: normalize each output row using stats reduced over the producer
+        // shards. Gamma is a scalar folded into the multicast inverse-RMS scale.
+        bool rms_norm = false;
+        std::optional<float> rms_norm_gamma = std::nullopt;
+        float rms_norm_epsilon = 1.0e-6F;
     };
 
     struct tensor_args_t {
@@ -152,5 +173,10 @@ ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::tens
     const std::optional<ttnn::operations::experimental::matmul_decode::PackedWeightSpec>& packed_weight = std::nullopt,
     bool all_gather = false,
     const std::optional<std::vector<ttnn::MeshCoordinate>>& mesh_coords = std::nullopt,
-    bool ring_gather = false);
+    bool ring_gather = false,
+    const std::optional<tt::tt_metal::CoreRangeSet>& output_core_grid = std::nullopt,
+    bool output_mcast_two_hub = false,
+    bool rms_norm = false,
+    std::optional<float> rms_norm_gamma = std::nullopt,
+    float rms_norm_epsilon = 1.0e-6F);
 }  // namespace ttnn::prim
