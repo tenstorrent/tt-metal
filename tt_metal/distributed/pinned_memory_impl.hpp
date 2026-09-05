@@ -22,6 +22,7 @@ class SysmemBuffer;
 namespace tt::tt_metal {
 
 class IDevice;
+class MetalEnvImpl;
 using ChipId = int;
 
 namespace experimental {
@@ -36,12 +37,15 @@ class PinnedMemoryImpl {
 public:
     /**
      * @brief Construct PinnedMemory implementation from devices with existing host memory
+     * @param metal_env Env owning the cluster and HAL these devices belong to. IDevice exposes no env of its own,
+     *                  so it is passed in rather than deduced from `devices`.
      * @param devices Vector of devices to map buffers for
      * @param host_buffer Existing host memory to map (must not be null)
      * @param buffer_size Size of buffer to map
      * @param map_to_noc Whether to map the buffer to the NOC
      */
     PinnedMemoryImpl(
+        MetalEnvImpl& metal_env,
         const std::vector<IDevice*>& devices,
         void* host_buffer,
         size_t buffer_size,
@@ -96,6 +100,8 @@ private:
         bool map_to_noc,
         PinnedMemoryDeviceAccess access);
 
+    // Pointer rather than reference so the move assignment operator below stays viable.
+    MetalEnvImpl* metal_env_ = nullptr;
     size_t buffer_size_;
     bool map_to_noc_;
     PinnedMemoryDeviceAccess device_access_ = PinnedMemoryDeviceAccess::ReadWrite;
