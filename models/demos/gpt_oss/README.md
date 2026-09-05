@@ -41,21 +41,40 @@ slots); any `max_batch_size` ≤ 32 works — the per-user Q/K/V / KV-cache / SD
 the two agree at construction; prefill of the users runs sequentially through the generator (one
 user per forward).
 
-Prefill on single-row meshes (EP=1) runs the MoE as dense matmuls (`experts/prefill.py`). Gate/up:
-for splits of ≤256 tokens the activations are replicated per expert and ONE batched matmul runs with
-one expert's whole output block per core (128 separate launches cost ~30 µs each on device and
-dominated 128-token prefills); longer splits run one `ttnn.linear` (fused bias) per expert over the
-whole split and concatenate. Down: one batched `[E, split, Ip] × [E, Ip, H]` matmul, with the routing
-weights applied to the down input and the down bias folded into a `[split, E] × [E, H]` matmul after
-the expert reduction (removing two broadcast elementwise passes over the `[E, split, H]` output that
-cost more than the matmuls). SwiGLU is a single `ttnn.mul` with per-input activation chains
-(`apply_swiglu_fused`: clamps, +1, α-scaled SiLU, 1/α). The `sparse_matmul` path (kept for EP>1)
-multicasts in a 1D pattern that leaves the whole M on ≤24 cores and re-streams every expert's weights
-once per 32-token tile. Measured gpt-oss-120b prefill per user, batch 1: 128 tokens 405 → 136 ms,
-1024 tokens 2.98 → 0.59 s, 8192 tokens 22.9 → 4.5 s (~5×); batch 32 last-user TTFT at 128 tokens
-16.3 → 3.8 s. Per 1024-token split one 120B layer is now ~1.4 ms attention + ~16 ms experts, of which
-~13 ms are the gate/up and down matmuls themselves; grouping tokens per expert (one GEMM per expert
-over only its ~32 routed tokens) would cut those FLOPs ~30× and is the next lever.
+Prefill on single-row meshes (EP=1) runs the MoE without `sparse_matmul` (`experts/prefill.py`; the
+sparse path, which multicasts in a 1D pattern that leaves the whole M on ≤24 cores and re-streams every
+expert's weights once per 32-token tile, is kept for EP>1):
+
+- splits of ≤256 tokens (the traced 128-token prefill): the activations are replicated per expert and
+  ONE batched matmul runs with one expert's whole output block per core (128 separate launches cost
+  ~30 µs each on device and dominated 128-token prefills), then a batched down matmul;
+- longer splits: **expert-sorted** MoE. `topk` over the transposed routing weights gives each expert
+  its routed tokens (cap = the largest per-expert count in the split, rounded to a tile, read back from
+  device once per split); `ttnn.embedding` gathers those rows (and one-hot rows from a cached identity),
+  gate/up and down run as batched matmuls over the `[E, cap, ·]` gathered rows only, each row is scaled
+  by its routing weight and the results are scattered back with `one-hot^T @ rows`. With top-4 routing
+  over 128 experts a 1024-token split has ~32 tokens per expert (cap 64 typical), i.e. ~1/16 of the
+  dense expert FLOPs, and the math is identical (zero-weight filler slots contribute nothing). Splits
+  where an expert exceeds 256 tokens fall back to one `ttnn.linear` per expert over the whole split.
+
+In all paths the down bias is folded into a `[split, E] × [E, H]` matmul added after the expert
+reduction and SwiGLU is a single `ttnn.mul` with per-input activation chains (`apply_swiglu_fused`:
+clamps, +1, α-scaled SiLU, 1/α), which decode uses as well.
+
+Measured prefill per user (= first-user TTFT) on P150x8, greedy (orig = before this series):
+
+| | 120B orig | 120B now | 20B orig | 20B now |
+|---|---|---|---|---|
+| batch 1, ISL 128 | 405 ms | 137 ms | 96 ms | 56 ms |
+| batch 1, ISL 1024 | 2.98 s | 0.37 s | 520 ms | 135–165 ms |
+| batch 1, ISL 8192 | 22.9 s | 2.09 s | 4.01 s | 0.89 s |
+| batch 32, ISL 128, last-user TTFT | 16.3 s | 3.9 s | 2.9 s | 1.4 s |
+| batch 32, ISL 1024, last-user TTFT | 126 s | 8.8 s | 16.3 s | 3.8 s |
+
+Decode is unchanged (120B 35 ms/step at batch 1, 47 / 36 ms at batch 32 for ISL 128 / 1024). The 120B
+sorted path is partly host-bound (one device→host count read per split, then ~45 small ops), so its
+1024-token prefill varies ±10–30% run to run; the remaining levers are trimming those ops and packing
+several users' prompts into one prefill for short-prompt TTFT at large batch.
 
 ```bash
 export HF_MODEL=/path/to/gpt-oss-120b
