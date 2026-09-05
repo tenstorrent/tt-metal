@@ -495,7 +495,10 @@ def test_multi_user_regression(mesh_device, device_params, batch_size, state_dic
     setup = TestFactory.setup_test(mesh_device, use_real_weights=False)
     # Per-user context budget, power of two, at most 64K (mirrors the server's context-capped concurrency).
     max_seq_len = min(MAX_CONTEXT_PER_USER, TOTAL_KV_TOKENS // batch_size)
-    max_seq_len = 1 << (max_seq_len.bit_length() - 1)
+    if os.getenv("GPT_OSS_REGRESSION_POW2_CONTEXT", "1") not in ("0", "false", "False"):
+        max_seq_len = 1 << (max_seq_len.bit_length() - 1)  # power of two (default)
+    else:
+        max_seq_len = max(1024, (max_seq_len // 1024) * 1024)  # multiple of 1024: fits more of the KV budget
     page_params = {
         "page_block_size": BLOCK_SIZE,
         "page_max_num_blocks_per_dp": batch_size * (max_seq_len // BLOCK_SIZE),
