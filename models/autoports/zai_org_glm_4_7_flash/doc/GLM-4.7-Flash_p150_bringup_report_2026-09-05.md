@@ -67,11 +67,17 @@ and a decode MoE doing dense work over all 64 experts when only top-4 are active
 ## Known limitations
 
 1. **Sampling is `smoke-gated`, not full-gated.** The smoke profile passes at spec
-   (3 passed, 1 skipped, 0 failed). The full profile does not (11 failed, 62 passed,
-   1 skipped). Accepted explicitly by the project owner; the `$vllm-integration` skill
-   permits this status with that acceptance. Both logs are kept side by side.
+   (3 passed, 1 skipped, 0 failed). The full profile does not. Accepted explicitly by the
+   project owner; the `$vllm-integration` skill permits this status with that acceptance.
+   Both logs are kept side by side.
+   **The full-profile failure set is not stable.** Measured twice on the same model and
+   chip, separated only by an unrelated decode-path optimisation: **11 failed / 62 passed**
+   before, **8 failed / 65 passed** after. Six seeded-reproducibility tests started
+   passing and three greedy/top-k tests started failing. The committed
+   `sampling_tests_full_RECORD.log` holds the later (8-failure) run. Quote a count only
+   with the run it came from.
 
-2. **All 11 full-profile failures are one upstream serving-state defect,
+2. **The full-profile failures are one upstream serving-state defect,
    [tenstorrent/tt-metal#55408](https://github.com/tenstorrent/tt-metal/issues/55408).**
    Greedy requests lose determinism in a mixed batch after a long-lived server serves a
    long host-sampled request. Every failing test passes alone against a freshly started
@@ -79,10 +85,14 @@ and a decode MoE doing dense work over all 64 experts when only top-4 are active
    **worse** (SmolLM2 fails the same canary at baseline, where this model passes). Nine
    hypotheses were eliminated on hardware, including #48222 (`ttnn.sampling` matched
    `torch.argmax` on 256/256 rows here) and #50512 (multi-device TP only).
-   **Caveat on that filing:** its "greedy determinism" framing is narrower than the
-   evidence. Several failures are pure seeded-reproducibility assertions with no greedy
-   row, and one alternates across seed parametrizations at fixed batch size. A follow-up
-   comment correcting this is owed to the issue.
+   **Correction posted to that filing**
+   ([comment](https://github.com/tenstorrent/tt-metal/issues/55408#issuecomment-5549545445)):
+   its "greedy determinism" framing is narrower than the evidence. The failing set moves
+   between runs without the sampler changing, so that framing fits the later run and not
+   the earlier one, and the opposite (seed-centric) framing fits the earlier and not the
+   later. The stable invariant is "a long-lived server loses per-row determinism in mixed
+   batches"; the reproducer is the isolation-vs-sequence contrast plus the two canary
+   triggers, not any specific test name.
 
 3. **Release accuracy is CI-subset only** (`--limit-samples-mode ci-nightly`, 5% of each
    dataset). Not comparable to a full-set threshold without that qualification. Status is
