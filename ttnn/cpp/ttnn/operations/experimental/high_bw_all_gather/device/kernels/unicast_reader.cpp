@@ -104,8 +104,8 @@ void kernel_main() {
     // RUNTIME ARGS
     ///////////////////////////////////////////////////
     size_t arg_idx = 0;
-    const address_t input_tensor_address = get_arg_val<address_t>(arg_idx++);
-    const address_t output_tensor_address = get_arg_val<address_t>(arg_idx++);
+    const address_t input_tensor_address = get_common_arg_val<address_t>(0);
+    const address_t output_tensor_address = get_common_arg_val<address_t>(1);
     const uint32_t initial_stripe = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t stripe_step = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_iters = get_arg_val<uint32_t>(arg_idx++);
@@ -118,7 +118,8 @@ void kernel_main() {
     const uint32_t input_page_id_end = get_arg_val<uint32_t>(arg_idx++);
     const address_t ready_sem_addr = get_arg_val<uint32_t>(arg_idx++);
     const address_t data_valid_sem_addr = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t output_chunks_per_stripe = get_arg_val<uint32_t>(arg_idx++);
+    ++arg_idx;  // Reserved unique OutputChunksPerStripe slot; preserve following fabric argument offsets.
+    constexpr uint32_t output_chunks_per_stripe = static_output_chunks_per_stripe;
     const uint32_t batch_index_meta_addr = get_arg_val<uint32_t>(arg_idx++);
     // Layer-constant recomposition terms. Runtime rather than compile-time so every layer shares one
     // cached program (per-layer programs would allocate per-layer global semaphores and exhaust
