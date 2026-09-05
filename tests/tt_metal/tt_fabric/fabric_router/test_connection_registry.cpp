@@ -9,18 +9,7 @@
 
 using namespace tt::tt_fabric;
 
-/**
- * ConnectionRegistry Tests
- *
- * The registry is a plain container for RouterConnectionRecord: recording, field round-trip,
- * size, clear, and the four query axes (from-source, to-dest, by-source-node, by-dest-node).
- * Records carry no connection type -- a local turn is identified by its source/destination
- * directions and channels, so there is nothing type-shaped to query.
- *
- * What the records MEAN (which turns get wired, on which VC, in which sender slot) is the
- * connection maps' and the establishment pass's business; see
- * test_router_turn_set.cpp and test_connection_establishment.cpp.
- */
+// ConnectionRegistry container and query coverage.
 
 class ConnectionRegistryTest : public ::testing::Test {
 protected:
@@ -48,11 +37,6 @@ protected:
         };
     }
 };
-
-TEST_F(ConnectionRegistryTest, EmptyRegistry_HasZeroSize) {
-    EXPECT_EQ(registry_.size(), 0);
-    EXPECT_TRUE(registry_.get_all_connections().empty());
-}
 
 TEST_F(ConnectionRegistryTest, RecordConnection_RoundTripsAllFields) {
     registry_.record_connection(RouterConnectionRecord{
@@ -82,15 +66,8 @@ TEST_F(ConnectionRegistryTest, RecordConnection_RoundTripsAllFields) {
     EXPECT_EQ(c.dest_sender_channel, 5);
 }
 
-TEST_F(ConnectionRegistryTest, RecordMultiple_SizeTracks) {
-    for (uint32_t i = 0; i < 3; ++i) {
-        registry_.record_connection(make_record(0, RoutingDirection::N, 0, 1, RoutingDirection::S, 0, i));
-    }
-    EXPECT_EQ(registry_.size(), 3);
-    EXPECT_EQ(registry_.get_all_connections().size(), 3);
-}
-
 TEST_F(ConnectionRegistryTest, Clear_RemovesEverything) {
+    EXPECT_EQ(registry_.size(), 0);
     for (uint32_t i = 0; i < 5; ++i) {
         registry_.record_connection(make_record(0, RoutingDirection::N, 0, 1, RoutingDirection::S, 0, i));
     }
@@ -102,21 +79,12 @@ TEST_F(ConnectionRegistryTest, Clear_RemovesEverything) {
     EXPECT_TRUE(registry_.get_all_connections().empty());
 }
 
-TEST_F(ConnectionRegistryTest, FromSource_SingleMatch) {
-    registry_.record_connection(make_record(0, RoutingDirection::N, 0, 1, RoutingDirection::S, 0, 1));
-    registry_.record_connection(make_record(0, RoutingDirection::E, 0, 1, RoutingDirection::W, 0, 1));
-
-    const auto matches = registry_.get_connections_from_source(FabricNodeId(MeshId{0}, 0), RoutingDirection::N);
-    ASSERT_EQ(matches.size(), 1);
-    EXPECT_EQ(matches[0].source_direction, RoutingDirection::N);
-    EXPECT_EQ(matches[0].dest_direction, RoutingDirection::S);
-}
-
-TEST_F(ConnectionRegistryTest, FromSource_MultipleMatches) {
+TEST_F(ConnectionRegistryTest, FromSource_FiltersByNodeAndDirection) {
     for (uint32_t i = 0; i < 3; ++i) {
         registry_.record_connection(make_record(0, RoutingDirection::N, 0, 1, RoutingDirection::S, 0, i));
     }
     registry_.record_connection(make_record(1, RoutingDirection::N, 0, 0, RoutingDirection::S, 0, 1));
+    registry_.record_connection(make_record(0, RoutingDirection::E, 0, 1, RoutingDirection::W, 0, 1));
 
     const auto matches = registry_.get_connections_from_source(FabricNodeId(MeshId{0}, 0), RoutingDirection::N);
     EXPECT_EQ(matches.size(), 3);
@@ -124,34 +92,20 @@ TEST_F(ConnectionRegistryTest, FromSource_MultipleMatches) {
         EXPECT_EQ(c.source_node, FabricNodeId(MeshId{0}, 0));
         EXPECT_EQ(c.source_direction, RoutingDirection::N);
     }
-}
-
-TEST_F(ConnectionRegistryTest, FromSource_NoMatches) {
-    registry_.record_connection(make_record(0, RoutingDirection::N, 0, 1, RoutingDirection::S, 0, 1));
-
     EXPECT_TRUE(registry_.get_connections_from_source(FabricNodeId(MeshId{0}, 99), RoutingDirection::E).empty());
     EXPECT_TRUE(registry_.get_connections_from_source(FabricNodeId(MeshId{0}, 0), RoutingDirection::W).empty());
 }
 
-TEST_F(ConnectionRegistryTest, ToDest_SingleMatch) {
-    registry_.record_connection(make_record(0, RoutingDirection::N, 0, 1, RoutingDirection::S, 0, 1));
-    registry_.record_connection(make_record(0, RoutingDirection::N, 0, 2, RoutingDirection::W, 0, 1));
-
-    const auto matches = registry_.get_connections_to_dest(FabricNodeId(MeshId{0}, 1), RoutingDirection::S);
-    ASSERT_EQ(matches.size(), 1);
-    EXPECT_EQ(matches[0].dest_node, FabricNodeId(MeshId{0}, 1));
-    EXPECT_EQ(matches[0].dest_direction, RoutingDirection::S);
-}
-
-TEST_F(ConnectionRegistryTest, ToDest_MultipleMatches) {
-    // Four producers feeding one router, one per direction -- the full fan-in of a mesh-facing
-    // receiver.
+TEST_F(ConnectionRegistryTest, ToDest_FiltersByNodeAndDirection) {
     for (auto producer : {RoutingDirection::N, RoutingDirection::E, RoutingDirection::S, RoutingDirection::W}) {
         registry_.record_connection(make_record(0, producer, 0, 1, RoutingDirection::Z, 0, 1));
     }
+    registry_.record_connection(make_record(0, RoutingDirection::N, 0, 2, RoutingDirection::Z, 0, 1));
+    registry_.record_connection(make_record(0, RoutingDirection::N, 0, 1, RoutingDirection::S, 0, 1));
 
     const auto matches = registry_.get_connections_to_dest(FabricNodeId(MeshId{0}, 1), RoutingDirection::Z);
     EXPECT_EQ(matches.size(), 4);
+    EXPECT_TRUE(registry_.get_connections_to_dest(FabricNodeId(MeshId{0}, 99), RoutingDirection::Z).empty());
 }
 
 TEST_F(ConnectionRegistryTest, BySourceNode_CoversAllRoutersOnTheNode) {

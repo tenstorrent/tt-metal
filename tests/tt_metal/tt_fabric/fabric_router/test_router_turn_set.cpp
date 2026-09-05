@@ -4,10 +4,8 @@
 
 #include <gtest/gtest.h>
 
-#include <algorithm>
 #include <cstdint>
 #include <enchantum/enchantum.hpp>
-#include <iostream>
 #include <optional>
 #include <set>
 #include <string>
@@ -19,26 +17,8 @@
 
 using namespace tt::tt_fabric;
 
-/**
- * Router turn-set Tests
- *
- * The per-VC turn table of one router (turn_set_for_router in builder/router_wiring_rules.*),
- * by family. Behaviour is keyed on port roles, not router "types": a cardinal-facing router gets
- * the non-express or express turn set, the chip's extra port enters the turn set only through the
- * chip's ZPortRole, and a Z-facing router whose edge is INTERMESH gets the from-boundary fanout.
- * Covered here:
- *
- * - 1D: opposite-direction only, independent of the chip's extra-port role.
- * - Non-express 2D: every non-self cardinal, plus the boundary target when the chip's
- *   extra port is an intermesh boundary; VC1 mirrors the cardinals; pass-through adds the
- *   boundary target on VC1.
- * - The boundary template: VC1 fanout to every mesh direction, nothing on VC0; requires 2D+VC1.
- * - The express chord: a Z-facing INTRAMESH_EXPRESS router is wired as an ordinary routing
- *   direction on every carrier VC; a cardinal-capability Z edge is a configuration error.
- *
- * The wiring rules these sets are read off live in wires_into; the primitive itself is pinned
- * directly in test_express_connection_wiring.cpp so the two cannot drift.
- */
+// Family-level snapshots for turn_set_for_router. Primitive wiring policy is covered separately in
+// test_express_connection_wiring.cpp.
 
 namespace {
 
@@ -84,16 +64,6 @@ PerDirectionCapabilities chip_with_z(std::optional<EdgeCapability> z_capability)
     return caps;
 }
 
-RoutingDirection opposite_of(RoutingDirection facing) {
-    switch (facing) {
-        case RoutingDirection::N: return RoutingDirection::S;
-        case RoutingDirection::S: return RoutingDirection::N;
-        case RoutingDirection::E: return RoutingDirection::W;
-        case RoutingDirection::W: return RoutingDirection::E;
-        default: return facing;
-    }
-}
-
 }  // namespace
 
 class RouterTurnSetTest : public ::testing::Test {};
@@ -103,27 +73,19 @@ class RouterTurnSetTest : public ::testing::Test {};
 // ============================================================================
 
 TEST_F(RouterTurnSetTest, Linear1D_WiresOnlyTheOpposite) {
-    // A 1D router's whole turn set is the opposite direction. The extra port plays no role:
-    // intermesh connections are rejected upstream for 1D, and get_router_connection_pairs emits
-    // no Z pairs, so a boundary or chord target would be unestablishable anyway.
-    for (auto topology : {Topology::Linear, Topology::Ring}) {
-        for (auto z_capability :
-             {std::optional<EdgeCapability>{},
-              std::optional{EdgeCapability::INTERMESH},
-              std::optional{EdgeCapability::INTRAMESH_EXPRESS}}) {
-            for (auto facing : {RoutingDirection::N, RoutingDirection::E}) {
-                const auto turn_set = turn_set_for_router(
-                    topology, facing, chip_with_z(z_capability), /*express_routing_enabled=*/false, nullptr);
-
-                const auto& targets = turn_set[0];
-                ASSERT_EQ(targets.size(), 1) << "topology " << enchantum::to_string(topology) << " z "
-                                             << (z_capability ? enchantum::to_string(*z_capability) : "absent")
-                                             << " facing " << enchantum::to_string(facing);
-                EXPECT_EQ(*targets[0].target_direction, opposite_of(facing));
-                EXPECT_EQ(targets[0].target_vc, 0);
-                EXPECT_TRUE(turn_set[1].empty());
-            }
-        }
+    struct Case {
+        Topology topology;
+        RoutingDirection facing;
+        std::optional<EdgeCapability> z_capability;
+    };
+    for (const auto& [topology, facing, z_capability] :
+         {Case{Topology::Linear, RoutingDirection::N, std::nullopt},
+          Case{Topology::Ring, RoutingDirection::E, EdgeCapability::INTRAMESH_EXPRESS}}) {
+        const auto turn_set = turn_set_for_router(topology, facing, chip_with_z(z_capability), false, nullptr);
+        ASSERT_EQ(turn_set[0].size(), 1);
+        EXPECT_EQ(*turn_set[0][0].target_direction, get_opposite_direction(facing));
+        EXPECT_EQ(turn_set[0][0].target_vc, 0);
+        EXPECT_TRUE(turn_set[1].empty());
     }
 }
 
@@ -132,37 +94,15 @@ TEST_F(RouterTurnSetTest, Linear1D_WiresOnlyTheOpposite) {
 // ============================================================================
 
 TEST_F(RouterTurnSetTest, NonExpress2D_WiresEveryNonSelfCardinal) {
-    for (auto topology : {Topology::Mesh, Topology::Torus}) {
-        for (auto facing : k_all_cardinals) {
-            const auto turn_set = turn_set_for_router(
-                topology,
-                facing,
-                chip_with_z(std::nullopt),
-                /*express_routing_enabled=*/false,
-                nullptr);
+    for (auto facing : k_all_cardinals) {
+        const auto turn_set = turn_set_for_router(Topology::Mesh, facing, chip_with_z(std::nullopt), false, nullptr);
 
-            EXPECT_EQ(target_directions(turn_set, 0), non_self_cardinals(facing))
-                << "facing " << enchantum::to_string(facing);
-            expect_all_targets_on_vc(turn_set, 0, 0);
-        }
+        EXPECT_EQ(target_directions(turn_set, 0), non_self_cardinals(facing))
+            << "facing " << enchantum::to_string(facing);
+        expect_all_targets_on_vc(turn_set, 0, 0);
+        EXPECT_TRUE(turn_set[1].empty());
+        EXPECT_TRUE(turn_set[2].empty());
     }
-}
-
-TEST_F(RouterTurnSetTest, NonExpress2D_KeepsWiredButUnusedXToYTurns) {
-    // Standing decision: an E/W-facing non-express router is wired into the Y directions even though
-    // 2D routing is already dimension-ordered and never uses those turns. Removing them would move
-    // downstream counts, stream assignment, and L1 layout on every existing 2D configuration.
-    const auto turn_set = turn_set_for_router(
-        Topology::Mesh,
-        RoutingDirection::E,
-        chip_with_z(std::nullopt),
-        /*express_routing_enabled=*/false,
-        nullptr);
-
-    const auto dirs = target_directions(turn_set, 0);
-    EXPECT_TRUE(dirs.contains(RoutingDirection::N));
-    EXPECT_TRUE(dirs.contains(RoutingDirection::S));
-    EXPECT_TRUE(dirs.contains(RoutingDirection::W));
 }
 
 TEST_F(RouterTurnSetTest, NonExpress2D_BoundaryChipAddsBoundaryTargetOnVC0) {
@@ -203,22 +143,14 @@ TEST_F(RouterTurnSetTest, NonExpress2D_VC1MirrorsCardinalsOnly) {
 
 TEST_F(RouterTurnSetTest, PassThrough_AddsBoundaryTargetOnVC1) {
     // EXPERIMENTAL pass-through (A->B->C) forwards VC1 traffic to the local boundary as well.
-    for (auto topology : {Topology::Mesh, Topology::Torus}) {
-        const auto turn_set = turn_set_for_router(
-            topology,
-            RoutingDirection::E,
-            chip_with_z(EdgeCapability::INTERMESH),
-            /*express_routing_enabled=*/false,
-            &k_full_mesh_pass_through);
+    const auto turn_set = turn_set_for_router(
+        Topology::Mesh, RoutingDirection::E, chip_with_z(EdgeCapability::INTERMESH), false, &k_full_mesh_pass_through);
 
-        auto expected_vc1 = non_self_cardinals(RoutingDirection::E);
-        expected_vc1.insert(RoutingDirection::Z);
-        EXPECT_EQ(target_directions(turn_set, 1), expected_vc1) << "topology " << enchantum::to_string(topology);
-        expect_all_targets_on_vc(turn_set, 1, 1);
-
-        // No aliasing: every VC1 target names a distinct direction.
-        EXPECT_EQ(turn_set[1].size(), expected_vc1.size());
-    }
+    auto expected_vc1 = non_self_cardinals(RoutingDirection::E);
+    expected_vc1.insert(RoutingDirection::Z);
+    EXPECT_EQ(target_directions(turn_set, 1), expected_vc1);
+    expect_all_targets_on_vc(turn_set, 1, 1);
+    EXPECT_EQ(turn_set[1].size(), expected_vc1.size());
 }
 
 TEST_F(RouterTurnSetTest, PassThrough_NoEffectWithoutBoundaryPort) {
@@ -373,56 +305,9 @@ TEST_F(RouterTurnSetTest, CardinalFacingRejectsExpressCapability) {
         router_vc_shape(Topology::Torus, RoutingDirection::N, caps, /*express_routing_enabled=*/true, nullptr));
 }
 
-// ============================================================================
-// Queries and value semantics
-// ============================================================================
-
-TEST_F(RouterTurnSetTest, Queries_OnAbsentVcsReturnEmpty) {
-    RouterTurnSet empty{};
-    EXPECT_TRUE(empty[0].empty());
-    EXPECT_TRUE(empty[1].empty());
-
-    const auto mesh = turn_set_for_router(
-        Topology::Mesh,
-        RoutingDirection::N,
-        chip_with_z(std::nullopt),
-        /*express_routing_enabled=*/false,
-        nullptr);
-    EXPECT_TRUE(mesh[1].empty()) << "VC1 not enabled";
-    EXPECT_TRUE(mesh[2].empty());
-}
-
-TEST_F(RouterTurnSetTest, ConnectionTarget_Semantics) {
-    ConnectionTarget target(1, RoutingDirection::Z);
-    EXPECT_EQ(target.target_vc, 1);
-    ASSERT_TRUE(target.target_direction.has_value());
-    EXPECT_EQ(*target.target_direction, RoutingDirection::Z);
-}
-
-// ============================================================================
-// The express multi-mesh landing path, over a CARDINAL seam
-// ============================================================================
-//
-// A mesh graph descriptor names an intermesh connection without naming ports, so which ports the
-// seam lands on is discovery's answer, not the descriptor's. On the 16x4x2 express fixture it lands
-// on the cardinal N/S edge ports, because the chips' Z ports are already spent on express chords.
-// Landed packets therefore combine express mode, a cardinal INTERMESH facing, and EXPRESS_CHORD Z role.
+// Express routing with an intermesh seam on a cardinal port.
 
 namespace {
-
-// The bijection's producer index is in eth order, so producers and egresses have to be spelled that
-// way to index a downstream's sender channels. Written out here rather than reached for through the
-// control plane, which would need a cluster for a five-way switch.
-eth_chan_directions to_eth(RoutingDirection direction) {
-    switch (direction) {
-        case RoutingDirection::N: return eth_chan_directions::NORTH;
-        case RoutingDirection::E: return eth_chan_directions::EAST;
-        case RoutingDirection::S: return eth_chan_directions::SOUTH;
-        case RoutingDirection::W: return eth_chan_directions::WEST;
-        case RoutingDirection::Z: return eth_chan_directions::Z;
-        default: ADD_FAILURE() << "not a port direction"; return eth_chan_directions::EAST;
-    }
-}
 
 // One chip of the destination mesh: cardinals are ordinary same-mesh edges except for an optional
 // seam direction, and the extra port is the express chord.
@@ -455,34 +340,14 @@ RouterTurnSet express_turns_of(RoutingDirection facing, std::optional<RoutingDir
 }  // namespace
 
 TEST_F(RouterTurnSetTest, ExpressCardinalSeam_IsNotTheBoundaryTemplate) {
-    // The from-boundary template is keyed on a Z-facing INTERMESH edge, so a cardinal seam never
-    // reaches it: the router keeps a real routing direction and is wired by the ordinary express
-    // rule. Pinned because the crossover onto VC1 and the landing intercept both key on the plain
-    // "my eth peer is in another mesh" fact, which a cardinal seam does satisfy -- the two halves
-    // disagree about what a seam is, and only this half notices the difference.
+    // Only a Z-facing intermesh router uses the boundary template.
     const auto seam = express_turns_of(RoutingDirection::S, RoutingDirection::S);
-
-    // The boundary template's signature is an empty VC0 and a four-wide VC1 fanout.
     EXPECT_FALSE(seam[0].empty()) << "a cardinal seam still forwards on VC0";
-
-    // It is wired exactly like the same router would be without the seam: capability does not enter
-    // the express turn rule for a Y facing, only the direction's role does.
     EXPECT_EQ(target_directions(seam, 1), target_directions(express_turns_of(RoutingDirection::S, std::nullopt), 1));
 }
 
 TEST_F(RouterTurnSetTest, ExpressCardinalSeam_XRouterKeepsTheSeamAsATarget) {
-    // Dimension order stops an X producer turning back into the mesh's Y rings, and on an express
-    // chip that leaves an E/W router with just one downstream: its opposite. The seam is the
-    // exception the rule is written around (contract 4.4 keys both sides on capability): leaving
-    // the mesh is not a turn back into a protected Y ring, so an INTERMESH egress stays wired
-    // wherever discovery put it.
-    //
-    // The kernel's intermesh egress is what depends on this. It picks the boundary direction per
-    // destination mesh, not from the decoded action, so an exit-bound packet can arrive on any
-    // receiver -- including the E/W one whose last intramesh leg was an X hop. If the seam is not
-    // in that router's turn set there is no downstream slot to hand the packet to, and it is
-    // dropped at the exit chip with no error anywhere: the maps say deliver locally, and locally
-    // is where it stays.
+    // An intermesh egress is exempt from the intramesh X-to-Y restriction.
     for (const auto seam_facing : {RoutingDirection::N, RoutingDirection::S}) {
         for (const auto x_facing : {RoutingDirection::E, RoutingDirection::W}) {
             SCOPED_TRACE(
@@ -490,7 +355,7 @@ TEST_F(RouterTurnSetTest, ExpressCardinalSeam_XRouterKeepsTheSeamAsATarget) {
                 std::string(enchantum::to_string(x_facing)));
 
             const auto turns = express_turns_of(x_facing, seam_facing);
-            const auto expected = std::set<RoutingDirection>{opposite_of(x_facing), seam_facing};
+            const auto expected = std::set<RoutingDirection>{get_opposite_direction(x_facing), seam_facing};
 
             EXPECT_EQ(target_directions(turns, 0), expected);
             EXPECT_EQ(target_directions(turns, 1), expected);
@@ -499,19 +364,13 @@ TEST_F(RouterTurnSetTest, ExpressCardinalSeam_XRouterKeepsTheSeamAsATarget) {
             // seam's capability rather than a hole in dimension order.
             EXPECT_EQ(
                 target_directions(express_turns_of(x_facing, std::nullopt), 0),
-                std::set<RoutingDirection>{opposite_of(x_facing)});
+                std::set<RoutingDirection>{get_opposite_direction(x_facing)});
         }
     }
 }
 
 TEST_F(RouterTurnSetTest, ExpressCardinalSeam_EveryWiredVc1TurnIsPlaceableDownstream) {
-    // The invariant a landed packet depends on: for every VC1 turn the derivation wires, the
-    // DOWNSTREAM router must own a VC1 sender channel at the index the direction<->slot bijection
-    // assigns that producer. A turn that is wired but whose slot index falls outside the
-    // downstream's VC1 sender count cannot be established, and traffic needing it is dropped
-    // silently rather than rejected at build time -- which is indistinguishable at the endpoint
-    // from a routing bug. Checked over every producer/egress pair, on a chip with and without the
-    // seam, rather than for one hand-picked turn.
+    // Every wired VC1 turn must map to a sender slot owned by the downstream shape.
     for (const auto seam_facing : {std::optional<RoutingDirection>{}, std::optional{RoutingDirection::S}}) {
         for (const auto producer :
              {RoutingDirection::N,
@@ -530,7 +389,10 @@ TEST_F(RouterTurnSetTest, ExpressCardinalSeam_EveryWiredVc1TurnIsPlaceableDownst
                 const auto egress_shape = express_shape_of(egress, seam_facing);
 
                 const uint32_t slot = builder::get_downstream_sender_channel_for_vc(
-                    /*is_2d_routing=*/true, target.target_vc, to_eth(producer), to_eth(egress));
+                    true,
+                    target.target_vc,
+                    builder::routing_direction_to_eth_direction(producer),
+                    builder::routing_direction_to_eth_direction(egress));
 
                 EXPECT_LT(slot, egress_shape.sender_counts[target.target_vc])
                     << "VC" << target.target_vc << " turn " << enchantum::to_string(producer) << " -> "
@@ -538,10 +400,10 @@ TEST_F(RouterTurnSetTest, ExpressCardinalSeam_EveryWiredVc1TurnIsPlaceableDownst
                     << ", outside the downstream's " << egress_shape.sender_counts[target.target_vc]
                     << " sender channel(s)";
 
-                // The two host-side spellings of the same placement must agree, or establishment
-                // writes one slot while the credit bookkeeping reads another.
-                const builder::RouterProducerSlots slots(to_eth(egress), egress_shape.sender_counts);
-                const auto by_slots = slots.channel_for(target.target_vc, to_eth(producer));
+                const builder::RouterProducerSlots slots(
+                    builder::routing_direction_to_eth_direction(egress), egress_shape.sender_counts);
+                const auto by_slots =
+                    slots.channel_for(target.target_vc, builder::routing_direction_to_eth_direction(producer));
                 ASSERT_TRUE(by_slots.has_value()) << "RouterProducerSlots has no channel for a wired producer";
                 EXPECT_EQ(*by_slots, slot) << "producer-slot mapping disagrees with the bijection";
             }

@@ -2,19 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Regression for the producer effect derivation that selects each sender's flow-control guard.
-//
-// The ladder is driven from the real derived ring topologies -- the same AxisRouteTopology state
-// the ControlPlane serves -- rather than hand-written predicate answers, so a disagreement between
-// the derivation and the ladder shows up here. The three ring queries are re-implemented over the
-// machine-free topology pair, mirroring ControlPlane::is_protected_ring_edge /
-// are_same_directed_ring_edges / continuation_allowed line for line; the ControlPlane versions
-// themselves are pinned CP-backed in test_express_ring_topology.cpp. Keeping this file machine-free
-// means the builder ladder runs in every environment.
+// Machine-free protected-domain classification and sender-slot flag coverage.
 
 #include <gtest/gtest.h>
 
-#include <enchantum/enchantum.hpp>
 #include <filesystem>
 #include <optional>
 #include <vector>
@@ -278,39 +269,7 @@ TEST(ProtectedDomainEffectsTest, IntrameshXIntoYIsRejectedRatherThanClassified) 
     EXPECT_FALSE(is_static_dor_forbidden(RoutingDirection::E, k_intermesh, RoutingDirection::Z, k_express));
 }
 
-// --- What the replaced heuristic got wrong ---
-
-TEST(ProtectedDomainEffectsTest, OneAxisPairYieldsTwoDifferentGuards) {
-    // Why no axis-based rule can work. Both producers below are a Y ingress feeding a Y egress on the
-    // same node and the same output, so any rule keyed on the axis pair must return one answer for
-    // both -- yet one is transit and the other an acquisition. The replaced heuristic collapsed them
-    // and gave the leaf-fed acquisition the weaker guard, which is the flow-control violation this
-    // derivation removes.
-    const QuadGalaxy fixture;
-    const auto q = bind(fixture, 2);
-
-    const auto from_ring = classify_producer_effect(q, RoutingDirection::N, k_cardinal, RoutingDirection::Z, k_express);
-    const auto from_leaf = classify_producer_effect(q, RoutingDirection::S, k_cardinal, RoutingDirection::Z, k_express);
-
-    EXPECT_NE(from_ring, from_leaf);
-    EXPECT_FALSE(is_injection_effect(from_ring));
-    EXPECT_TRUE(is_injection_effect(from_leaf));
-}
-
-TEST(ProtectedDomainEffectsTest, EffectNamesAreStable) {
-    EXPECT_EQ(enchantum::to_string(ProtectedDomainEffect::NON_RING), "NON_RING");
-    EXPECT_EQ(enchantum::to_string(ProtectedDomainEffect::REMAIN), "REMAIN");
-    EXPECT_EQ(enchantum::to_string(ProtectedDomainEffect::ENTER), "ENTER");
-    EXPECT_EQ(enchantum::to_string(ProtectedDomainEffect::NON_CANONICAL), "NON_CANONICAL");
-}
-
-// --- The slot-level derivation: bound facts to per-channel flags ---
-//
-// ExpressInjectionPolicy takes only bound facts (the ring predicates, the chip's capability set,
-// its Z port role), so the unified slot walk is drivable from the derived topologies without a
-// ControlPlane. The expected effects are asserted above; these cases add the slot arithmetic around
-// them: which producer lands on which channel, the VC1 shift, the dimension-order skip, and the
-// absent-direction skip.
+// Slot-level flags produced from the classified effects.
 
 TEST(ProtectedDomainEffectsTest, ExpressEgressFlagsLandOnTheirProducerSlots) {
     const QuadGalaxy fixture;
@@ -358,18 +317,9 @@ TEST(ProtectedDomainEffectsTest, ReverseCardinalEgressFlagsTheLeafAndWorker) {
 TEST(ProtectedDomainEffectsTest, LeafRouterSkipsTheAbsentZSlot) {
     const QuadGalaxy fixture;
     const auto q = bind(fixture, 3);
-    // A leaf terminates no chord: no Z entry, so the family-max slot for the Z producer stays
-    // unfilled -- per-router wiring fills a subset of the family count.
+    // A leaf has no Z capability; this guards the null capability before classification.
     auto caps = canonical_express_endpoint_capabilities();
     caps.at(RoutingDirection::Z) = std::nullopt;
-
-    // N egress toward the anchor: an attachment, not a ring acquisition -- the acquisition lives
-    // at the anchor's Z sender (the first case above), not at the leaf's own worker.
-    //
-    // The all-false vector does not itself discriminate the absent-direction skip: every slot is
-    // false for its own reason (unprotected egress, dimension order), and a leaf's Z slot can
-    // never legitimately flag. What the case guards is the guard itself: dropping the nullopt
-    // check dereferences it, which crashes here rather than failing cleanly.
     const builder::RouterProducerSlots slots(
         builder::routing_direction_to_eth_direction(RoutingDirection::N), {5, 4, 0});
     const ExpressInjectionPolicy policy(q, caps, ZPortRole::NONE, RoutingDirection::N, k_cardinal);

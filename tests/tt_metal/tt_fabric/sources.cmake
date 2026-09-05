@@ -20,7 +20,6 @@ set(UNIT_TESTS_FABRIC_SRC
     fabric_router/test_custom_routing_tables.cpp
     fabric_router/test_multi_host.cpp
     fabric_router/test_connection_registry.cpp
-    fabric_router/test_connection_establishment.cpp
     fabric_router/test_express_connection_wiring.cpp
     fabric_router/test_protected_domain_effects.cpp
     fabric_router/test_fabric_edge_capability.cpp

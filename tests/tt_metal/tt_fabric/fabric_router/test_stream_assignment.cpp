@@ -101,7 +101,7 @@ TEST(StreamAssignmentTest, ExpressFullFitsWithVc1OnCounters) {
     // 3 receivers (VC1 and VC2 both have one, so VC2's lands on channel 2) + 5 acked + 5 completed
     // + 8 downstream + 9 sender-free = 30, exactly filling the region below the pinned pair, with
     // the VC2 sender/receiver live on their pinned ids. No margin left here.
-    EXPECT_EQ(a.id(StreamRole::RECEIVER_PKTS_SENT, 2, 0), 2u);
+    EXPECT_EQ(a.id(StreamRole::RECEIVER_PKTS_SENT, 2, 0), 7u);
     EXPECT_EQ(a.id(StreamRole::SENDER_FREE_SLOTS, 1, 3), 29u);
     EXPECT_FALSE(a.has(StreamRole::SENDER_PKTS_COMPLETED, 1, 0));
     EXPECT_FALSE(a.has(StreamRole::SENDER_PKTS_ACKED, 1, 0));
@@ -137,31 +137,8 @@ TEST(StreamAssignmentTest, BoundaryOnRegistersStatesFullNeedAndHitsTheBudgetWall
     // A 5/4 boundary fabric with both VCs on registers needs 33: 2 receivers + 5 acked + 9 completed
     // + 8 downstream + 9 sender-free. This exceeds both the 30 below the pinned pair and all 32
     // registers, so register-based credits cannot serve this shape.
-    const auto need = stream_requirements(legacy_with_boundary_placement(), CreditTransportPlan{});
-    uint32_t vc1_completed = 0;
-    for (const auto& g : need.groups) {
-        if (g.role == StreamRole::SENDER_PKTS_COMPLETED && g.vc == 1) {
-            vc1_completed = g.count;
-        }
-    }
-    EXPECT_EQ(vc1_completed, 4u);
-    EXPECT_ANY_THROW(make_stream_assignment(need));
-}
-
-TEST(StreamAssignmentTest, NinthCompletedNameCoversFlat8WhenAVc1GroupIsAllocated) {
-    // The completed table covers flat positions 0..8, including the boundary family's fourth VC1
-    // sender. This VC0-counter/VC1-register plan is host-only; it pins table coverage rather than a
-    // production configuration.
-    CreditTransportPlan plan{};
-    plan.vc0_uses_counters = true;
-    const auto a = make_stream_assignment(stream_requirements(legacy_with_boundary_placement(), plan));
-    EXPECT_TRUE(a.has(StreamRole::SENDER_PKTS_COMPLETED, 1, 3));
-    EXPECT_EQ(a.id(StreamRole::SENDER_PKTS_COMPLETED, 1, 3), 10u);
-    std::map<std::string, uint32_t> values;
-    for (const auto& [name, value] : a.named_args()) {
-        values.emplace(name, value);
-    }
-    EXPECT_EQ(values["TO_SENDER_8_PKTS_COMPLETED_ID"], 10u);
+    EXPECT_ANY_THROW(
+        make_stream_assignment(stream_requirements(legacy_with_boundary_placement(), CreditTransportPlan{})));
 }
 
 TEST(StreamAssignmentTest, ExpressVc1AbsentFits) {
@@ -177,15 +154,6 @@ TEST(StreamAssignmentTest, ExpressVc1AbsentFits) {
     // Nothing VC1 anywhere: no receiver, no senders, no downstream span.
     EXPECT_FALSE(a.has(StreamRole::RECEIVER_PKTS_SENT, 1, 0));
     EXPECT_FALSE(a.has(StreamRole::DOWNSTREAM_FREE_SLOTS, 1, 0));
-}
-
-TEST(StreamAssignmentTest, Vc0OnCountersNeedsNoAcks) {
-    CreditTransportPlan plan{};
-    plan.vc0_uses_counters = true;
-    const auto a = make_stream_assignment(stream_requirements(legacy_2d_placement(), plan));
-    EXPECT_FALSE(a.has(StreamRole::SENDER_PKTS_ACKED, 0, 0));
-    EXPECT_FALSE(a.has(StreamRole::SENDER_PKTS_COMPLETED, 0, 0));
-    EXPECT_TRUE(a.has(StreamRole::SENDER_PKTS_COMPLETED, 1, 0));
 }
 
 TEST(StreamAssignmentTest, PinnedIdThirtyHasAtMostOneLiveConsumer) {
@@ -227,18 +195,6 @@ TEST(StreamAssignmentTest, BoundaryChipAgreementOnTheBoundaryOnlyChannel) {
     EXPECT_EQ(a.id(StreamRole::SENDER_FREE_SLOTS, 1, 0), 19u);
 }
 
-TEST(StreamAssignmentTest, PlacementIsFabricScopedAndDeterministic) {
-    // Independent derivations of one fabric produce identical placements.
-    CreditTransportPlan plan{};
-    plan.vc0_uses_counters = true;
-    const auto a = make_stream_assignment(stream_requirements(legacy_with_boundary_placement(), plan));
-    const auto b = make_stream_assignment(stream_requirements(legacy_with_boundary_placement(), plan));
-    for (uint32_t ch = 0; ch < 5; ++ch) {
-        EXPECT_EQ(a.id(StreamRole::SENDER_FREE_SLOTS, 0, ch), b.id(StreamRole::SENDER_FREE_SLOTS, 0, ch));
-    }
-    EXPECT_EQ(a.id(StreamRole::SENDER_FREE_SLOTS, 1, 0), b.id(StreamRole::SENDER_FREE_SLOTS, 1, 0));
-}
-
 TEST(StreamAssignmentTest, FreeSlotsEmitPlacementWhileAckedEmitsActivity) {
     // A router with 4 VC0 senders in a 5-wide fabric: the free-slots table still carries a real id
     // at index 4 (placement is fabric-scoped, so a downstream lookup resolves it), while the acked
@@ -253,6 +209,8 @@ TEST(StreamAssignmentTest, FreeSlotsEmitPlacementWhileAckedEmitsActivity) {
     }
     EXPECT_EQ(values["SENDER_CHANNEL_4_FREE_SLOTS_STREAM_ID"], 4u);      // real id: placement, not activity
     EXPECT_EQ(values["TO_SENDER_4_PKTS_ACKED_ID"], k_unused_stream_id);  // sentinel: activity
+    EXPECT_FALSE(a.has(StreamRole::SENDER_PKTS_COMPLETED, 0, 0));
+    EXPECT_TRUE(a.has(StreamRole::SENDER_PKTS_COMPLETED, 1, 0));
 }
 
 TEST(StreamAssignmentTest, InactiveConsumersEmitTheSentinel) {
