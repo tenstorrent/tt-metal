@@ -245,7 +245,9 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
         .reader_kernel_id = reader_kernel,
         .compute_kernel_id = compute_kernel,
         .writer_kernel_id = writer_kernel,
-        .cores = cores};
+        .cores = cores,
+        .input_shape = input.logical_shape(),
+        .valid_length = operation_attributes.valid_length};
     set_runtime_args(program, shared, input, indices, llk_target_k, operation_attributes.valid_length);
 
     return cached_program_t{std::move(program), std::move(shared)};
@@ -256,13 +258,34 @@ void TopkLargeIndicesProgramFactory::override_runtime_arguments(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
+    auto& shared = cached_program.shared_variables;
+    const auto& input = tensor_args.input_tensor;
+    // set_runtime_args derives its schedule from logical shape, valid_length, the LLK k bucket,
+    // element size and compute grid. The cache key fixes k, dtype and grid (and compute body mode);
+    // padded shape and subdevice settings are not inputs to that calculation. Logical shape and
+    // valid_length are deliberately not hashed, so changing either must rebuild the schedule.
+    // This memo belongs to this cached program; repeated calls only change its two tensor addresses.
+    if (shared.input_shape == input.logical_shape() && shared.valid_length == operation_attributes.valid_length) {
+        const auto input_addr = input.buffer()->address();
+        const auto output_addr = tensor_return_value.buffer()->address();
+        auto& reader_args = tt::tt_metal::GetRuntimeArgs(cached_program.program, shared.reader_kernel_id);
+        auto& writer_args = tt::tt_metal::GetRuntimeArgs(cached_program.program, shared.writer_kernel_id);
+        for (const auto& core : shared.cores) {
+            reader_args[core.x][core.y][0] = input_addr;
+            writer_args[core.x][core.y][0] = output_addr;
+        }
+        return;
+    }
+
     set_runtime_args(
         cached_program.program,
-        cached_program.shared_variables,
+        shared,
         tensor_args.input_tensor,
         tensor_return_value,
         snap_to_llk_target_k(operation_attributes.k),
         operation_attributes.valid_length);
+    shared.input_shape = input.logical_shape();
+    shared.valid_length = operation_attributes.valid_length;
 }
 
 }  // namespace ttnn::operations::experimental::topk_large_indices::program

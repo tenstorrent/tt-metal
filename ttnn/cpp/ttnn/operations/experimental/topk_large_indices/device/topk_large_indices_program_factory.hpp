@@ -8,6 +8,7 @@
 #include "topk_large_indices_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 
+#include <optional>
 #include <vector>
 
 namespace ttnn::operations::experimental::topk_large_indices::program {
@@ -17,6 +18,8 @@ struct TopkLargeIndicesSharedVariables {
     tt::tt_metal::KernelHandle compute_kernel_id{};
     tt::tt_metal::KernelHandle writer_kernel_id{};
     std::vector<CoreCoord> cores{};
+    ttnn::Shape input_shape;
+    std::optional<uint32_t> valid_length;
 };
 
 struct TopkLargeIndicesProgramFactory {

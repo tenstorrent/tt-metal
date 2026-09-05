@@ -576,3 +576,41 @@ def test_topk_large_indices_valid_length_out_of_range_raises(device, expect_erro
     torch_input = _make_bf16_exact_input(num_rows=1, n=n)
     with expect_error(RuntimeError, "valid_length"):
         ttnn.experimental.topk_large_indices(_to_device(torch_input, device), k=k, valid_length=valid_length)
+
+
+@pytest.mark.parametrize("k", [512, 1024, 2048])
+def test_topk_large_indices_warm_arguments_refresh_buffers_and_shape(device, k):
+    # The cache excludes shape/valid_length. Exercise the address-only path twice at each
+    # shape, then return to an earlier shape and change only the valid prefix.
+    cases = [
+        (2, 4096, 3072),
+        (2, 4096, 3072),
+        (5, 5120, 4096),
+        (5, 5120, 4096),
+        (2, 4096, 3072),
+        (2, 4096, 2048),
+        (2, 4096, 2048),
+    ]
+    held_tensors = []
+    device.enable_program_cache()
+    device.clear_program_cache()
+    entries = None
+    try:
+        for iteration, (rows, width, valid_length) in enumerate(cases):
+            # Unique positive winners avoid unspecified tie ordering. Shift them on every
+            # call so accidentally retaining the previous input produces incorrect indices.
+            host_input = torch.zeros((rows, width), dtype=torch.bfloat16)
+            winners = _make_large_index_input(1, k, k)[0]
+            winner_indices = (torch.arange(k) + iteration * 17) % valid_length
+            host_input[:, winner_indices] = winners
+            tt_input = _to_device(host_input, device)
+            tt_indices = ttnn.experimental.topk_large_indices(tt_input, k=k, valid_length=valid_length)
+            expected = torch.topk(host_input[:, :valid_length].float(), k, dim=-1).indices
+            _assert_indices(tt_indices, expected, [rows, k])
+            # Keep old allocations live, ensuring fresh input/output buffers on each cache hit.
+            held_tensors.extend([tt_input, tt_indices])
+            if entries is None:
+                entries = device.num_program_cache_entries()
+            assert device.num_program_cache_entries() == entries
+    finally:
+        device.disable_and_clear_program_cache()
