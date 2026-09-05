@@ -93,22 +93,26 @@ sfpi_inline void calculate_div_int32_body(
     // Normalize the correction's sign so q and r can be updated unconditionally.
     sfpi::vInt cor = correction;
     v_if(r < 0 && q != 0) {
-        cor = -cor;
         tmp = -tmp;
+        cor = -cor;
     }
     v_endif;
-    q += cor;
+    // Keep this operand order with the sign updates above: it avoids an extra
+    // move in current Blackhole SFPI allocation. Recheck both rounding modes.
+    q = cor + q;
     r -= tmp;
 
     // Since the correction might have been rounded, we may need to correct one
     // additional bit.  The corrected remainder cannot be INT_MIN.
+    // Reuse the subtraction for both the upper comparison and adjusted remainder.
+    sfpi::vInt r_minus_b = r - b;
     v_if(r < 0) {
         q -= 1;
         r += b;
     }
-    v_elseif(r >= b) {
+    v_elseif(r_minus_b >= 0) {
         q += 1;
-        r -= b;
+        r = r_minus_b;
     }
     v_endif;
 
