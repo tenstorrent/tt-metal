@@ -118,7 +118,15 @@ inline void calculate_sfpu_binary(
         } else if constexpr (BINOP == BinaryOp::MUL) {
             result = in0 * in1;
         } else if constexpr (BINOP == BinaryOp::DIV) {
-            result = in0 * sfpu_reciprocal_iter<2>(in1);
+                    } else if constexpr (BINOP == BinaryOp::DIV) {
+            v_if(sfpi::exexp(in1, sfpi::ExponentMode::Biased) >= 253) {
+                sfpi::vFloat in0_scaled = sfpi::addexp(in0, -24);
+                sfpi::vFloat in1_scaled = sfpi::addexp(in1, -24);
+                result = in0_scaled * sfpu_reciprocal_iter<2>(in1_scaled);
+            } v_else {
+                result = in0 * sfpu_reciprocal_iter<2>(in1);
+            } v_endif;
+        } else if constexpr (BINOP == BinaryOp::RSUB) {
         } else if constexpr (BINOP == BinaryOp::RSUB) {
             result = in1 - in0;
         } else if constexpr (BINOP == BinaryOp::POW) {
@@ -178,20 +186,29 @@ inline void calculate_sfpu_binary_div(
         sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
         sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
 
-        sfpi::vFloat r = sfpu_reciprocal_iter<2>(in1);
-        sfpi::vFloat result = in0 * r;
-        if constexpr (is_fp32_dest_acc_en) {
-            // Skip quotient refinement when in0*r is already non-finite (biased exponent == 255).
-            // If in0*r = +/-inf, then the residual e = in0 - (+/-inf)*in1 = -/+inf and
-            // result + e*r = inf + (-inf) = NaN, which would corrupt IEEE overflow behavior.
-            v_if(sfpi::exexp(result, sfpi::ExponentMode::Biased) != 255) {
-                // Residual (Markstein) refinement removes the double-rounding of in0 * round(1/in1).
-                // The residual subtraction is exact under Sterbenz's lemma.
-                sfpi::vFloat e = in0 - result * in1;
-                result = result + e * r;
+             sfpi::vFloat result;
+        v_if(sfpi::exexp(in1, sfpi::ExponentMode::Biased) >= 253) {
+            // Prevent subnormal flush-to-zero by scaling down large denominators
+            sfpi::vFloat in0_scaled = sfpi::addexp(in0, -24);
+            sfpi::vFloat in1_scaled = sfpi::addexp(in1, -24);
+            sfpi::vFloat r = sfpu_reciprocal_iter<2>(in1_scaled);
+            result = in0_scaled * r;
+            if constexpr (is_fp32_dest_acc_en) {
+                v_if(sfpi::exexp(result, sfpi::ExponentMode::Biased) != 255) {
+                    sfpi::vFloat e_scaled = in0_scaled - result * in1_scaled;
+                    result = result + e_scaled * r;
+                } v_endif;
             }
-            v_endif;
-        }
+        } v_else {
+            sfpi::vFloat r = sfpu_reciprocal_iter<2>(in1);
+            result = in0 * r;
+            if constexpr (is_fp32_dest_acc_en) {
+                v_if(sfpi::exexp(result, sfpi::ExponentMode::Biased) != 255) {
+                    sfpi::vFloat e = in0 - result * in1;
+                    result = result + e * r;
+                } v_endif;
+            }
+        } v_endif;
 
         v_if(in1 == 0) {
             v_if(in0 == 0) { result = std::numeric_limits<float>::quiet_NaN(); }
