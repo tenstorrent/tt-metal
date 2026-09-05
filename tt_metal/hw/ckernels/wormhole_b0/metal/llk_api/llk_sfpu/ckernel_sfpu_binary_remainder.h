@@ -67,11 +67,18 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(
     sfpi::vFloat MANTISSA_ALIGNMENT_OFFSET = 8388608.0f;
 
     // Split q and b into 11-bit chunks to compute q * b
-    // Shift out unwanted bits instead of keeping an 11-bit mask in a register.
-    sfpi::vFloat q1 = sfpi::convert<sfpi::vFloat>(sfpi::vMag((q << 21) >> 21), sfpi::RoundMode::Nearest);
+    // Shift out unwanted bits to avoid a mask register in this register-constrained helper.
+    // Division and the small-divisor helper retain masks where they do not cause spills.
+    constexpr uint32_t CHUNK_BITS = 11;
+    constexpr uint32_t LOW_CHUNK_SHIFT = 32 - CHUNK_BITS;
+    constexpr uint32_t MID_CHUNK_SHIFT = 32 - 2 * CHUNK_BITS;
+    sfpi::vFloat q1 =
+        sfpi::convert<sfpi::vFloat>(sfpi::vMag((q << LOW_CHUNK_SHIFT) >> LOW_CHUNK_SHIFT), sfpi::RoundMode::Nearest);
     sfpi::vFloat q2 = sfpi::convert<sfpi::vFloat>(q >> 11, sfpi::RoundMode::Nearest);
-    sfpi::vFloat b1 = sfpi::convert<sfpi::vFloat>(sfpi::vMag((b << 10) >> 21), sfpi::RoundMode::Nearest);
-    sfpi::vFloat b0 = sfpi::convert<sfpi::vFloat>(sfpi::vMag((b << 21) >> 21), sfpi::RoundMode::Nearest);
+    sfpi::vFloat b1 =
+        sfpi::convert<sfpi::vFloat>(sfpi::vMag((b << MID_CHUNK_SHIFT) >> LOW_CHUNK_SHIFT), sfpi::RoundMode::Nearest);
+    sfpi::vFloat b0 =
+        sfpi::convert<sfpi::vFloat>(sfpi::vMag((b << LOW_CHUNK_SHIFT) >> LOW_CHUNK_SHIFT), sfpi::RoundMode::Nearest);
 
     // hi = q2 * b0 + q1 * b1 (high part)
     // lo = q1 * b0 (low part)
@@ -104,8 +111,8 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(
     correction_f = sfpi::convert<sfpi::vFloat>(correction, sfpi::RoundMode::Nearest);
 
     // Recompute chunks from the retained divisor magnitude.
-    b0 = sfpi::convert<sfpi::vFloat>(sfpi::vMag((b << 21) >> 21), sfpi::RoundMode::Nearest);
-    b1 = sfpi::convert<sfpi::vFloat>(sfpi::vMag((b << 10) >> 21), sfpi::RoundMode::Nearest);
+    b0 = sfpi::convert<sfpi::vFloat>(sfpi::vMag((b << LOW_CHUNK_SHIFT) >> LOW_CHUNK_SHIFT), sfpi::RoundMode::Nearest);
+    b1 = sfpi::convert<sfpi::vFloat>(sfpi::vMag((b << MID_CHUNK_SHIFT) >> LOW_CHUNK_SHIFT), sfpi::RoundMode::Nearest);
 
     // tmp = correction * (b2<<22 + b1<<11 + b0)
     // Issue the independent products before consuming them in the bias additions.
