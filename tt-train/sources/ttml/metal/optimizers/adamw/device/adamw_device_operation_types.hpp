@@ -26,6 +26,12 @@ struct operation_attributes_t {
     std::optional<uint32_t> stochastic_rounding_seed{std::nullopt};
 };
 
+struct step_scalar_tensors_t {
+    ttnn::Tensor step_size;
+    ttnn::Tensor inv_sqrt_bc2;
+    ttnn::Tensor decay_factor;
+};
+
 struct tensor_args_t {
     const ttnn::Tensor& param;
     const ttnn::Tensor& grad;
@@ -33,6 +39,8 @@ struct tensor_args_t {
     const ttnn::Tensor& exp_avg;
     const ttnn::Tensor& exp_avg_sq;
     std::optional<ttnn::Tensor> max_exp_avg_sq = std::nullopt;
+
+    std::optional<step_scalar_tensors_t> step_scalars = std::nullopt;
 };
 
 using tensor_return_value_t = ttnn::Tensor;

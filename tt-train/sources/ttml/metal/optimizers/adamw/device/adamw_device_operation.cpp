@@ -5,6 +5,8 @@
 #include "adamw_device_operation.hpp"
 
 #include <enchantum/enchantum.hpp>
+#include <optional>
+#include <tuple>
 
 #include "adamw_program_factory.hpp"
 #include "ttnn/device_operation.hpp"
@@ -14,11 +16,10 @@ namespace ttml::metal::optimizers::adamw::device {
 void AdamWDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& param = tensor_args.param;
-    auto check_tensor = [&param](
-                            const ttnn::Tensor& tensor,
-                            const std::string& name,
-                            const tt::tt_metal::Layout required_layout,
-                            const tt::tt_metal::DataType required_dtype) {
+    auto check_tensor = [](const ttnn::Tensor& tensor,
+                           const std::string& name,
+                           const tt::tt_metal::Layout required_layout,
+                           const tt::tt_metal::DataType required_dtype) {
         TT_FATAL(
             tensor.storage_type() == ttnn::StorageType::DEVICE,
             "AdamW optimizer requires '{}' to be on DEVICE. Got storage type: '{}'",
@@ -52,7 +53,10 @@ void AdamWDeviceOperation::validate_on_program_cache_miss(
             "Tensor '{}' must use INTERLEAVED memory layout, but got '{}'",
             name,
             enchantum::to_string(tensor.memory_config().memory_layout()));
-
+    };
+    // Companion tensors (grad, optimizer state) are indexed in lockstep with the parameter; the
+    // single-element scalar tensors are not, so they only go through check_tensor.
+    auto check_shape_matches_param = [&param](const ttnn::Tensor& tensor, const std::string& name) {
         // Logical shapes must match for element-for-element correspondence with the parameter;
         // padding alone cannot tell apart tensors that round up to the same tile extent.
         TT_FATAL(
@@ -98,13 +102,38 @@ void AdamWDeviceOperation::validate_on_program_cache_miss(
     check_tensor(param, "Parameter", tt::tt_metal::Layout::TILE, param_dtype);
     // Gradient is always bf16
     check_tensor(grad, "Gradient", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
+    check_shape_matches_param(grad, "Gradient");
     // Optimizer states must match param dtype
     check_tensor(exp_avg, "Exponential Average Buffer", tt::tt_metal::Layout::TILE, param_dtype);
+    check_shape_matches_param(exp_avg, "Exponential Average Buffer");
     check_tensor(exp_avg_sq, "Exponential Average Squared Buffer", tt::tt_metal::Layout::TILE, param_dtype);
+    check_shape_matches_param(exp_avg_sq, "Exponential Average Squared Buffer");
 
     if (max_exp_avg_sq.has_value()) {
         check_tensor(
             max_exp_avg_sq.value(), "Max Exponential Average Squared Buffer", tt::tt_metal::Layout::TILE, param_dtype);
+        check_shape_matches_param(max_exp_avg_sq.value(), "Max Exponential Average Squared Buffer");
+    }
+
+    if (tensor_args.step_scalars.has_value()) {
+        const auto& scalars = tensor_args.step_scalars.value();
+        for (const auto& [tensor, name] :
+             {std::pair{&scalars.step_size, "step_size"},
+              std::pair{&scalars.inv_sqrt_bc2, "inv_sqrt_bc2"},
+              std::pair{&scalars.decay_factor, "decay_factor"}}) {
+            check_tensor(*tensor, name, tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::FLOAT32);
+            TT_FATAL(
+                tensor->logical_volume() == 1,
+                "Tensor '{}' must hold exactly one element, got {}",
+                name,
+                tensor->logical_volume());
+            // The launch infrastructure targets param's device; a scalar tensor on another
+            // device would pass its (device-local) buffer address to the reader unnoticed.
+            TT_FATAL(
+                tensor->device() == param.device(),
+                "Tensor '{}' must be on the same device as the parameter tensor",
+                name);
+        }
     }
 }
 
@@ -125,8 +154,20 @@ ttsl::hash::hash_t AdamWDeviceOperation::compute_program_hash(
     auto amsgrad = args.amsgrad;
     auto stochastic_rounding = args.stochastic_rounding;
     auto max_exp_avg_sq_initialized = tensor_args.max_exp_avg_sq.has_value();
+    auto scalars_from_tensor = tensor_args.step_scalars.has_value();
+    std::optional<std::tuple<int, int, int>> scalar_device_ids;
+    if (scalars_from_tensor) {
+        const auto& scalars = *tensor_args.step_scalars;
+        scalar_device_ids = {
+            scalars.step_size.device()->id(), scalars.inv_sqrt_bc2.device()->id(), scalars.decay_factor.device()->id()};
+    }
     auto hash = tt::tt_metal::operation::hash_operation<AdamWDeviceOperation>(
-        amsgrad, stochastic_rounding, max_exp_avg_sq_initialized, param_tensor.dtype(), param_logical_shape);
+        amsgrad,
+        stochastic_rounding,
+        max_exp_avg_sq_initialized,
+        scalar_device_ids,
+        param_tensor.dtype(),
+        param_logical_shape);
 
     return hash;
 }
@@ -171,6 +212,41 @@ ttml::metal::optimizers::adamw::device::AdamWDeviceOperation::tensor_return_valu
         .exp_avg = exp_avg,
         .exp_avg_sq = exp_avg_sq,
         .max_exp_avg_sq = max_exp_avg_sq,
+    };
+
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
+}
+
+ttml::metal::optimizers::adamw::device::AdamWDeviceOperation::tensor_return_value_t adamw(
+    const ttnn::Tensor& param,
+    const ttnn::Tensor& grad,
+    const ttnn::Tensor& exp_avg,
+    const ttnn::Tensor& exp_avg_sq,
+    const std::optional<ttnn::Tensor>& max_exp_avg_sq,
+    const ttnn::Tensor& step_size,
+    const ttnn::Tensor& inv_sqrt_bc2,
+    const ttnn::Tensor& decay_factor,
+    float beta1,
+    float beta2,
+    float epsilon,
+    bool amsgrad) {
+    using OperationType = ttml::metal::optimizers::adamw::device::AdamWDeviceOperation;
+
+    // Stochastic rounding is left at its Disabled default: see the tensor-scalar ttml::metal::adamw overload.
+    auto operation_attributes = OperationType::operation_attributes_t{
+        .beta1 = beta1,
+        .beta2 = beta2,
+        .epsilon = epsilon,
+        .amsgrad = amsgrad,
+    };
+    auto tensor_args = OperationType::tensor_args_t{
+        .param = param,
+        .grad = grad,
+        .exp_avg = exp_avg,
+        .exp_avg_sq = exp_avg_sq,
+        .max_exp_avg_sq = max_exp_avg_sq,
+        .step_scalars =
+            ttml::metal::optimizers::adamw::device::step_scalar_tensors_t{step_size, inv_sqrt_bc2, decay_factor},
     };
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);

@@ -26,4 +26,26 @@ ttnn::Tensor adamw(
     // Required iff stochastic rounding is enabled.
     std::optional<uint32_t> stochastic_rounding_seed = std::nullopt);
 
+// Overload: AdamW with the step-varying scalars as single-element f32 device tensors.
+//   step_size    = lr / (1 - beta1^t)
+//   inv_sqrt_bc2 = 1 / sqrt(1 - beta2^t)
+//   decay_factor = 1 - lr * weight_decay
+//
+// Stochastic rounding is deliberately not offered on this overload. It needs a
+// fresh host-drawn seed every step, delivered as a compute runtime argument --
+// exactly the per-step host work this overload exists to remove. Use the
+// float-scalar `adamw` above when stochastic rounding is required.
+ttnn::Tensor adamw(
+    const ttnn::Tensor& param_in,
+    const ttnn::Tensor& grad,
+    const ttnn::Tensor& exp_avg,
+    const ttnn::Tensor& exp_avg_sq,
+    const std::optional<ttnn::Tensor>& max_exp_avg_sq,
+    const ttnn::Tensor& step_size,
+    const ttnn::Tensor& inv_sqrt_bc2,
+    const ttnn::Tensor& decay_factor,
+    float beta1,
+    float beta2,
+    float epsilon);
+
 }  // namespace ttml::metal

@@ -44,4 +44,31 @@ ttnn::Tensor adamw(
         stochastic_rounding_seed);
 }
 
+ttnn::Tensor adamw(
+    const ttnn::Tensor& param_in,
+    const ttnn::Tensor& grad,
+    const ttnn::Tensor& exp_avg,
+    const ttnn::Tensor& exp_avg_sq,
+    const std::optional<ttnn::Tensor>& max_exp_avg_sq,
+    const ttnn::Tensor& step_size,
+    const ttnn::Tensor& inv_sqrt_bc2,
+    const ttnn::Tensor& decay_factor,
+    float beta1,
+    float beta2,
+    float epsilon) {
+    return ttnn::prim::adamw(
+        param_in,
+        grad,
+        exp_avg,
+        exp_avg_sq,
+        max_exp_avg_sq,
+        step_size,
+        inv_sqrt_bc2,
+        decay_factor,
+        beta1,
+        beta2,
+        epsilon,
+        max_exp_avg_sq.has_value());
+}
+
 }  // namespace ttml::metal
