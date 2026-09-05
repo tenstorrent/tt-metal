@@ -1,0 +1,24 @@
+# CodeChecker skip list for kernel (device) code analysis.
+# https://codechecker.readthedocs.io/en/latest/analyzer/user_guide/#skip
+#
+# Used with --drop-reports-from-skipped-files, so these paths are excluded from
+# BOTH analysis and reporting. Unlike clang-tidy's HeaderFilterRegex this also
+# suppresses clang-diagnostic-* findings, which is the point: the SFPI headers
+# emit parse noise we cannot act on here.
+#
+# Exclusion-only, same shape as tt-umd's .codechecker.skiplist. Note that an
+# allow-list keyed on kernels/ would analyze nothing at all: the translation
+# units are the firmware wrappers
+# (tt_metal/hw/firmware/src/.../{trisck,brisck,ncrisck,idle_erisck}.cc) with the
+# kernel #included into them, so no TU path contains kernels/. Anything not
+# listed here is analyzed, which fails open for in-repo code as new device
+# directories appear.
+
+# Upstream toolchain: pinned SFPI release and the host libc/libstdc++ used for
+# the analysis parse. Not fixable in this repo.
+-/opt/tenstorrent/sfpi/*
+-/usr/*
+
+# Machine-generated JIT glue (chlkc_* headers and friends) emitted per compile
+# into the kernel cache. Findings belong to the generator, not the output.
+-*/tt-metal-cache/*
