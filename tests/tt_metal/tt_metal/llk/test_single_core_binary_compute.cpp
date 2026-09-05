@@ -163,7 +163,24 @@ static std::vector<T> apply_row_broadcast_to_tiled_input(const std::vector<T>& i
     return broadcast_input;
 }
 
-static BinaryStimulus generate_binary_stimulus(const SingleCoreBinaryConfig& test_config, bool is_quasar) {
+// Wormhole Src-register precision model for the Float32 stimulus.
+//
+// Float32 L1 operands with a 32-bit DEST are unpacked into SrcA/SrcB as TF32 (10 explicit mantissa
+// bits): all-fp32 CBs + fp32_dest_acc select unpack_conditional_dst_format = Tf32 in
+// compute_data_formats(), so ALU_FORMAT_SPEC_REG0_SrcA = Tf32. The conversion truncates.
+// MOVD2B moving DEST back into SrcB is likewise a truncation, ShuffleTF32(DstVal >> 13).
+// ELWMUL additionally ignores the least significant bit of the SrcA TF32 mantissa, leaving 9 bits.
+// Applied on Wormhole only: this was measured against Wormhole silicon, and Blackhole selects the
+// SrcA format differently (ImpliedSrcAFmt), so Blackhole keeps the plain Float32 golden until measured.
+static constexpr std::uint32_t kTf32SrcMask = 0xFFFFE000;      // 10 explicit mantissa bits
+static constexpr std::uint32_t kTf32MulSrcAMask = 0xFFFFC000;  // 9 bits: ELWMUL drops the SrcA mantissa LSB
+
+static float truncate_to_src(float value, std::uint32_t mask) {
+    return std::bit_cast<float>(std::bit_cast<std::uint32_t>(value) & mask);
+}
+
+static BinaryStimulus generate_binary_stimulus(const SingleCoreBinaryConfig& test_config, ARCH arch) {
+    const bool is_quasar = arch == ARCH::QUASAR;
     const size_t byte_size = test_config.num_tiles * test_config.tile_byte_size;
     BinaryStimulus s;
     // Use fixed seeds so test results are deterministic and reproducible.
@@ -194,11 +211,24 @@ static BinaryStimulus generate_binary_stimulus(const SingleCoreBinaryConfig& tes
         std::vector<float> golden(input0.size());
         if (test_config.precede_dest_reuse_with_col_broadcast) {
             const auto broadcast_input1 = apply_col_broadcast_to_tiled_input(input1, test_config.num_tiles);
+            const bool model_tf32_src = arch == ARCH::WORMHOLE_B0;
             for (size_t i = 0; i < golden.size(); ++i) {
                 constexpr size_t tile_size = 32 * 32;
-                golden[i] = input2[i % tile_size] * (input0[i] - broadcast_input1[i]);
+                if (model_tf32_src) {
+                    // ELWSUB reads both operands as TF32 and writes the FP32 DEST.
+                    const float sub =
+                        truncate_to_src(input0[i], kTf32SrcMask) - truncate_to_src(broadcast_input1[i], kTf32SrcMask);
+                    // MOVD2B truncates that DEST value into SrcB; in2 is the ELWMUL SrcA operand.
+                    const float srcb = truncate_to_src(sub, kTf32SrcMask);
+                    const float srca = truncate_to_src(input2[i % tile_size], kTf32MulSrcAMask);
+                    golden[i] = srca * srcb;
+                } else {
+                    golden[i] = input2[i % tile_size] * (input0[i] - broadcast_input1[i]);
+                }
             }
         } else {
+            // NOTE: this sibling Float32 path (broadcast DEST_TO_SRCA multiply) has the same TF32 Src
+            // precision gap but has not been measured against hardware, so it keeps the Float32 golden.
             TT_FATAL(
                 (test_config.col_broadcast || test_config.row_broadcast) &&
                     test_config.binary_op == "mul_with_dest_reuse" &&
@@ -410,7 +440,7 @@ bool single_core_binary(
         num_runs > 0 && test_config.block_size > 0 && test_config.num_tiles % test_config.block_size == 0,
         "num_runs and block_size must be positive, and num_tiles must be divisible by block_size");
     TT_FATAL(!(test_config.col_broadcast && test_config.row_broadcast), "Only one broadcast type may be selected");
-    const bool is_quasar = MetalContext::instance().get_cluster().arch() == ARCH::QUASAR;
+    const ARCH arch = MetalContext::instance().get_cluster().arch();
     const size_t byte_size = test_config.num_tiles * test_config.tile_byte_size;
     auto& cq = mesh_device->mesh_command_queue();
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -418,7 +448,7 @@ bool single_core_binary(
         static_cast<std::uint32_t>(test_config.core.x), static_cast<std::uint32_t>(test_config.core.y)};
 
     // Math-fidelity masks model WH/BH LLK behavior; Quasar HW does not apply them.
-    auto stimulus = generate_binary_stimulus(test_config, is_quasar);
+    auto stimulus = generate_binary_stimulus(test_config, arch);
     auto buffers = create_and_populate_binary_buffers(mesh_device, cq, zero_coord, byte_size, stimulus);
     auto& input0_dram_buffer = buffers.input0;
     auto& input1_dram_buffer = buffers.input1;
@@ -631,11 +661,13 @@ bool single_core_binary(
 
         std::vector<std::uint32_t> packed_result;
         if (!read_and_validate_binary_result(cq, output_dram_buffer, zero_coord, stimulus, &packed_result)) {
+            log_error(tt::LogTest, "Run {} output does not match the golden", run);
             return false;
         }
         if (run == 0) {
             first_result = std::move(packed_result);
         } else if (packed_result != first_result) {
+            log_error(tt::LogTest, "Run {} output differs from run 0 -- result is not deterministic", run);
             return false;
         }
     }

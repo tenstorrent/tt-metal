@@ -23,6 +23,25 @@
 using namespace ckernel;
 using namespace ckernel::unpacker;
 
+namespace llk_unpack_a_detail
+{
+
+// Dummy source publication for destination reuse. WaitLikeUnpacr=1 so the instruction waits on
+// Unpackers[i].SrcBank -- the bank it actually clears -- rather than MatrixUnit.Src?Bank, which is a
+// different bank once double-buffering reaches steady state. This lets unpack prepare the next bank
+// while math consumes the current one. Mirrors the wait behaviour of the Blackhole helper of the same
+// name; Blackhole also sets dvalid in the same instruction, which Wormhole cannot -- there SETDVALID is
+// a separate UNPACR_NOP mode.
+template <EltwiseBinaryReuseDestType binary_reuse_dest>
+constexpr std::uint32_t dest_reuse_dummy_unpack()
+{
+    static_assert(binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA || binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCB);
+    constexpr std::uint32_t source = binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA ? SrcA : SrcB;
+    return TT_OP_UNPACR_NOP(source, p_unpacr_nop::UNP_ZEROSRC_STALL_RESET_WR_RDY);
+}
+
+} // namespace llk_unpack_a_detail
+
 /**
  * @brief Program the unpacker MOP for a single-operand (A) unpack.
  *
@@ -63,7 +82,6 @@ inline void _llk_unpack_A_mop_config_(
         TT_OP_UNPACR(SrcA, 0b00100010 /*CH0/CH1 Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // ch0/ch1 z_inc
     static constexpr std::uint32_t unpack_srca_to_dest_transpose_of_faces =
         TT_OP_UNPACR(SrcA, 0b00010010, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // inc srcA ch1_z+=1, ch0_z+=2
-    static constexpr std::uint32_t unpack_srca_zerosrc    = TT_OP_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_ZEROSRC);
     static constexpr std::uint32_t unpack_srca_set_dvalid = TT_OP_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_SET_DVALID);
     static constexpr std::uint32_t unpack_srcb =
         TT_OP_UNPACR(SrcB, 0b1 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
@@ -178,10 +196,14 @@ inline void _llk_unpack_A_mop_config_(
             if constexpr (acc_to_dest)
             {
                 static constexpr std::uint32_t unpack_srca_reuse =
-                    (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA) ? unpack_srca_zerosrc : unpack_srca;
+                    (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA)
+                        ? llk_unpack_a_detail::dest_reuse_dummy_unpack<EltwiseBinaryReuseDestType::DEST_TO_SRCA>()
+                        : unpack_srca;
 
                 static constexpr std::uint32_t unpack_srcb_reuse =
-                    (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCB) ? unpack_srcb_zerosrc : unpack_srcb;
+                    (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCB)
+                        ? llk_unpack_a_detail::dest_reuse_dummy_unpack<EltwiseBinaryReuseDestType::DEST_TO_SRCB>()
+                        : unpack_srcb;
 
                 const std::uint32_t outerloop     = num_faces;
                 constexpr std::uint32_t innerloop = 1;
