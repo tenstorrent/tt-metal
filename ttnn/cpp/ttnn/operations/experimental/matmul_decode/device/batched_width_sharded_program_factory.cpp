@@ -13,6 +13,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <string_view>
 #include <vector>
 
 namespace ttnn::operations::experimental::matmul_decode {
@@ -25,10 +26,6 @@ ProgramDescriptor MatmulDecodeDeviceOperation::BatchedWidthSharded::create_descr
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-    log_warning(
-        tt::LogOp,
-        "matmul_decode is falling back to the general block matmul LLKs: batched width sharding is not supported by "
-        "custom_mm");
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto& input_tensor_b = tensor_args.input_tensor_b;
     auto& output_tensor = tensor_return_value;
@@ -204,16 +201,45 @@ ProgramDescriptor MatmulDecodeDeviceOperation::BatchedWidthSharded::create_descr
         "to be divisible by it, because a GCB page is a whole number of rows of the slab",
         num_k_blocks,
         b_shard_K_tiles);
-    // Streaming can complete an output tile across several pages, and the running sum then lives
-    // in the output CB because the packer accumulates into it. A block-float output cannot be read
-    // back and added to, so it has to be rejected rather than quietly dropping partial sums.
+    // custom_mm reduces a whole batch in one call and needs an even kt_dim, which a batch split
+    // across a page boundary could not offer. Pages that divide the slab on batch boundaries keep
+    // every batch inside a single page, so the reduction stays whole.
+    const bool custom_mm_pages_hold_whole_batches = Bc % num_k_blocks == 0;
+    const bool use_custom_mm = device->arch() == tt::ARCH::BLACKHOLE && M_tiles == 1 &&
+                               is_custom_mm_in0_tile_height(inputA_tile_height) && is_custom_mm_kt_dim(K_tiles) &&
+                               is_custom_mm_ct_dim(Nc_tiles) && custom_mm_pages_hold_whole_batches;
+    if (!use_custom_mm) {
+        std::string_view reason;
+        if (device->arch() != tt::ARCH::BLACKHOLE) {
+            reason = "custom_mm is Blackhole-only";
+        } else if (!is_custom_mm_in0_tile_height(inputA_tile_height)) {
+            reason = "in0 tile height is not in {1, 2, 4, 8}";
+        } else if (M_tiles != 1) {
+            reason = "more than one in0 tile row is not contiguous for custom_mm";
+        } else if (!is_custom_mm_kt_dim(K_tiles)) {
+            reason = "the K dimension must contain an even number of tiles in [2, 256]";
+        } else if (!is_custom_mm_ct_dim(Nc_tiles)) {
+            reason = "the per-core output width exceeds 16 tiles";
+        } else {
+            reason =
+                "custom_mm reduces a batch in a single call, so global_cb_k_blocks must divide the per-core batch "
+                "count for a page to hold whole batches";
+        }
+        log_warning(tt::LogOp, "matmul_decode is falling back to the general block matmul LLKs: {}", reason);
+    }
+    // Streaming can complete an output tile across several pages, and on the fallback path the
+    // running sum then lives in the output CB because the packer accumulates into it. A block-float
+    // output cannot be read back and added to, so it has to be rejected rather than quietly
+    // dropping partial sums. custom_mm is exempt: its pages hold whole batches, so a batch is
+    // reduced entirely in DST and the output CB is written once.
     TT_FATAL(
-        num_k_blocks == 1 || out_data_format == tt::DataFormat::Float32 ||
+        num_k_blocks == 1 || use_custom_mm || out_data_format == tt::DataFormat::Float32 ||
             out_data_format == tt::DataFormat::Float16_b || out_data_format == tt::DataFormat::Float16,
         "batched matmul_decode with global_cb_k_blocks={} accumulates partial sums in the output CB, so the output "
         "dtype must be float32/bfloat16/float16, but it is {}",
         num_k_blocks,
         out_data_format);
+
     const uint32_t in1_slab_bytes = in1_num_tiles * in1_tile_size;
     const uint32_t in1_page_num_tiles = in1_num_tiles / num_k_blocks;
     const uint32_t in1_page_bytes = in1_page_num_tiles * in1_tile_size;
@@ -324,6 +350,8 @@ ProgramDescriptor MatmulDecodeDeviceOperation::BatchedWidthSharded::create_descr
         num_senders,
         in1_page_num_tiles,
         num_k_blocks,
+        Bc,
+        inA_K_tiles_per_core,
     };
     // Every CB index travels as a named "cb_*" arg: op fusion pool-allocates hardware CB slots
     // across the phases it merges and rewrites exactly these args, so positional or hard-coded
@@ -346,6 +374,9 @@ ProgramDescriptor MatmulDecodeDeviceOperation::BatchedWidthSharded::create_descr
     };
     if (use_global_cb) {
         reader_kernel_desc.defines.emplace_back("ENABLE_GLOBAL_CB", "1");
+    }
+    if (use_custom_mm) {
+        reader_kernel_desc.defines.emplace_back("USE_CUSTOM_MM", "1");
     }
     reader_kernel_desc.runtime_args.reserve(b_cores.size());
     for (uint32_t idx = 0; idx < b_cores.size(); idx++) {
@@ -406,11 +437,14 @@ ProgramDescriptor MatmulDecodeDeviceOperation::BatchedWidthSharded::create_descr
         {"cb_sync", sync_cb_index},
     };
     compute_kernel_desc.config = ComputeConfigDescriptor{
-        .math_fidelity = MathFidelity::HiFi4,
+        .math_fidelity = use_custom_mm ? MathFidelity::LoFi : MathFidelity::HiFi4,
         .math_approx_mode = false,
     };
     if (use_global_cb) {
         compute_kernel_desc.defines.emplace_back("ENABLE_GLOBAL_CB", "1");
+    }
+    if (use_custom_mm) {
+        compute_kernel_desc.defines.emplace_back("USE_CUSTOM_MM", "1");
     }
     desc.kernels.push_back(std::move(compute_kernel_desc));
 
