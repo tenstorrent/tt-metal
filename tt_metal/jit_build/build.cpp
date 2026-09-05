@@ -21,9 +21,11 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 #include <enchantum/enchantum.hpp>
@@ -77,6 +79,235 @@ void report_result(const string& target_name, string_view op, const string& cmd,
         }
     } else if (!result) {
         TT_THROW("Failed to open {} failure log file {}", op, log_file);
+    }
+}
+
+// Opt-in precompiled headers for kernel targets (TT_METAL_JIT_PCH=1).
+//
+// Each kernel source re-parses a fixed prelude -- the includes ahead of the
+// generated per-kernel body -- in every target built from it. Those preludes are
+// identical across kernels and account for roughly half of a target's compile
+// time, so precompiling them about halves the compile step.
+//
+// Two GCC constraints shape the implementation:
+//  - A PCH is silently ignored once the first token has been seen, so it must be
+//    force-included ahead of the per-kernel named-ct-arg header.
+//  - GCC validates command-line macros against the state recorded in the PCH:
+//    any macro the precompiled prelude tests or expands (even just via #ifdef,
+//    which the prelude does for KERNEL_COMPILE_TIME_ARGS and FULL_KERNEL_NAME)
+//    must match exactly. One PCH is therefore needed per distinct define set,
+//    and any define whose value is unique per kernel must be kept off the
+//    command line entirely (see FULL_KERNEL_NAME in export_target_recipe).
+bool jit_pch_enabled() {
+    static const bool enabled = [] {
+        // Same convention as RunTimeOptions' is_env_enabled: only a leading '1' turns a
+        // TT_METAL_* boolean on, so "0", "false" and "" all leave it off.
+        const char* v = std::getenv("TT_METAL_JIT_PCH");
+        return v != nullptr && v[0] == '1';
+    }();
+    return enabled;
+}
+
+// Umbrella header for a kernel source's shareable prelude, relative to the tt-metal
+// root. Each one mirrors the includes its source parses before reaching the generated
+// per-kernel body. Matched on the architecture-qualified path suffix rather than the
+// bare filename, so another generation's source of the same name (tt-2xx has its own
+// trisck.cc) never picks up a tt-1xx umbrella; a source with no entry here simply
+// compiles without a PCH.
+std::string_view pch_umbrella_for(std::string_view kernel_src_path) {
+    auto matches = [&](std::string_view suffix) {
+        return kernel_src_path.size() >= suffix.size() &&
+               kernel_src_path.substr(kernel_src_path.size() - suffix.size()) == suffix;
+    };
+    if (matches("/tt-1xx/trisck.cc")) {
+        return "tt_metal/hw/firmware/src/tt-1xx/trisc_pch.h";
+    }
+    if (matches("/tt-1xx/brisck.cc")) {
+        return "tt_metal/hw/firmware/src/tt-1xx/brisc_pch.h";
+    }
+    if (matches("/tt-1xx/ncrisck.cc")) {
+        return "tt_metal/hw/firmware/src/tt-1xx/ncrisc_pch.h";
+    }
+    // active_erisck.cc deliberately has no entry. A PCH is buildable for it, but it
+    // measured as nothing (48 of 4133 targets), and the umbrella would have to omit
+    // noc_nonblocking_api.h as well: once the dataflow headers are gone it becomes the
+    // first to reach risc_common.h, which uses MY_NOC_ENCODING before it is defined.
+    return {};
+}
+
+// Returns the header path to force-include for this compile recipe, building the
+// PCH on first use. Returns empty if a PCH is unavailable, in which case the
+// caller simply compiles without one.
+//
+// `defines` must already have any -include pairs stripped, and must otherwise
+// match the compile exactly, or GCC will reject the result.
+std::string ensure_pch(
+    const std::string& gpp,
+    const std::string& root,
+    const std::string& out_root,
+    const std::string& target_name,
+    std::string_view umbrella_rel,
+    const std::string& opt_level,
+    const std::string& cflags,
+    const std::string& includes,
+    const std::vector<std::string>& defines) {
+    // The relative include roots ("-I.", "-I..") resolve against a kernel's own build
+    // directory and are how a compile reaches per-kernel generated headers. A PCH must
+    // not consume anything per-kernel, so they are dropped from the PCH build: if an
+    // umbrella ever grows a (transitive) dependency on a generated header, its PCH
+    // build fails loudly and every compile falls back to plain parsing, instead of one
+    // kernel's generated state -- or a negative __has_include probe -- being silently
+    // baked into all the other kernels sharing the key.
+    std::vector<std::string> include_args;
+    for (auto& tok : tt::jit_build::utils::tokenize_flags(includes)) {
+        if (tok == "-I." || tok == "-I..") {
+            continue;
+        }
+        include_args.push_back(std::move(tok));
+    }
+
+    // One PCH per distinct recipe. Blaze passes compile-time args through generated
+    // headers, so this stays at one key per target type there; kernels that carry
+    // per-kernel -D defines or include paths (common in ttnn) fan out to one PCH
+    // build per distinct set, which is part of why the feature is opt-in.
+    tt::StableHasher hasher;
+    hasher.update(target_name);
+    hasher.update(std::string(umbrella_rel));
+    hasher.update(opt_level);
+    hasher.update(cflags);
+    for (const auto& inc : include_args) {
+        hasher.update(inc);
+    }
+    for (const auto& define : defines) {
+        hasher.update(define);
+    }
+    const uint64_t key = hasher.digest();
+
+    const fs::path umbrella = fs::path(std::string(umbrella_rel));
+    const fs::path dir = fs::path(out_root) / "pch" / target_name / fmt::format("{:016x}", key);
+    const fs::path header = dir / umbrella.filename();
+    const std::string gch = header.string() + ".gch";
+
+    // Each key is built once per process. The map lock is held only for the entry
+    // lookup; the build runs under the entry's own once_flag, so distinct keys build
+    // in parallel and compiles whose key is already built never wait. A fresh process
+    // deliberately rebuilds rather than trusting a .gch found on disk: the key does
+    // not cover header contents, so an existing file could predate a source edit.
+    // Every shared-path write goes through a unique temp file and an atomic rename --
+    // concurrent processes rebuilding the same key never expose a partial file, and a
+    // compile holding the old .gch open keeps reading it after the rename.
+    struct Entry {
+        std::once_flag once;
+        bool ok = false;
+    };
+    std::shared_ptr<Entry> entry;
+    {
+        static std::mutex map_mutex;
+        static std::unordered_map<uint64_t, std::shared_ptr<Entry>> entries;
+        std::lock_guard lock(map_mutex);
+        auto [it, inserted] = entries.try_emplace(key);
+        if (inserted) {
+            it->second = std::make_shared<Entry>();
+        }
+        entry = it->second;
+    }
+
+    std::call_once(entry->once, [&] {
+        std::error_code ec;
+        fs::create_directories(dir, ec);
+        const std::string header_tmp = tt::jit_build::utils::FileRenamer::generate_temp_path(header);
+        fs::copy_file(fs::path(root) / umbrella, header_tmp, fs::copy_options::overwrite_existing, ec);
+        if (!ec) {
+            fs::rename(header_tmp, header, ec);
+        }
+        if (ec) {
+            log_warning(
+                tt::LogBuildKernels,
+                "PCH: could not stage {}: {}; compiling without it",
+                header.string(),
+                ec.message());
+            return;
+        }
+
+        const std::string dep = header.string() + ".d";
+        const std::string gch_tmp = tt::jit_build::utils::FileRenamer::generate_temp_path(gch);
+        const std::string dep_tmp = tt::jit_build::utils::FileRenamer::generate_temp_path(dep);
+
+        // Built through the same argv builder as the kernel compiles: any drift between
+        // the two flag sets makes GCC reject the PCH. The .d (via the -MMD already in
+        // cflags) records the PCH's dependency closure; a kernel compile that consumes
+        // the PCH emits a truncated .d of its own (-MMD stops at the PCH boundary), so
+        // compile_one merges this file back in to keep the dephash cache honest.
+        const std::vector<std::string> args = tt::jit_build::utils::build_gpp_argv(
+            gpp,
+            opt_level,
+            cflags,
+            fmt::format("{}", fmt::join(include_args, " ")),
+            defines,
+            header.string(),
+            tt::jit_build::utils::GppAction::PrecompileHeader,
+            gch_tmp,
+            dep_tmp);
+
+        // The log is per-temp (and so per-process): concurrent rebuilds of one key must
+        // not interleave writes. Removed on success, kept for the warning on failure.
+        const std::string log = gch_tmp + ".log";
+        bool ok = tt::jit_build::utils::exec_command(args, dir.string(), log);
+        if (ok) {
+            fs::rename(dep_tmp, dep, ec);
+            if (!ec) {
+                fs::rename(gch_tmp, gch, ec);
+            }
+            if (ec) {
+                log_warning(tt::LogBuildKernels, "PCH: could not publish {}: {}", gch, ec.message());
+                ok = false;
+            }
+        }
+        if (ok) {
+            fs::remove(log, ec);
+            log_info(tt::LogBuildKernels, "PCH: built {} for {}", gch, target_name);
+        } else {
+            fs::remove(gch_tmp, ec);
+            fs::remove(dep_tmp, ec);
+            log_warning(
+                tt::LogBuildKernels, "PCH: build failed for {} (log: {}); compiling without it", target_name, log);
+        }
+        entry->ok = ok;
+    });
+    return entry->ok ? header.string() : std::string{};
+}
+
+// A compile that consumed a PCH emits a truncated .d: -MMD lists only what was parsed
+// after the PCH boundary, which would blind the dephash sidecar to edits of any header
+// inside the umbrella. Append the PCH's own dependency closure (recorded at PCH build
+// time, see ensure_pch) under the kernel object's target -- parse_dependency_file
+// accumulates rules for one target across lines. On any failure the kernel .d is
+// removed, which drops the sidecar and forces a recompile next run: slower, never stale.
+void merge_pch_deps_into_kernel_d(
+    const std::string& kernel_d_path, const std::string& kernel_obj, const std::string& pch_d_path) {
+    std::ifstream pch_d(pch_d_path);
+    std::ofstream out(kernel_d_path, std::ios::app);
+    bool ok = pch_d.is_open() && out.is_open();
+    if (ok) {
+        const jit_build::ParsedDependencies deps = jit_build::parse_dependency_file(pch_d);
+        ok = !deps.empty();
+        for (const auto& [target, dep_list] : deps) {
+            for (const auto& dep : dep_list) {
+                out << kernel_obj << ": " << dep << '\n';
+            }
+        }
+        out.flush();
+        ok = ok && out.good();
+    }
+    if (!ok) {
+        out.close();
+        std::error_code ec;
+        fs::remove(kernel_d_path, ec);
+        log_warning(
+            tt::LogBuildKernels,
+            "PCH: could not merge {} into {}; dropping the .d so this object is rebuilt next run",
+            pch_d_path,
+            kernel_d_path);
     }
 }
 
@@ -671,12 +902,64 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
     const std::string obj_temp_path = out_dir + this->temp_objs_[src_index];
     const std::string temp_d_path = fs::path(obj_temp_path).replace_extension("d").string();
 
+    std::vector<std::string> defines = recipe.defines;
+    // A PCH parses ahead of the whole translation unit, so every macro that can change
+    // how an umbrella header parses must reach the PCH build. DM targets pass kernel
+    // defines on the command line (process_defines_at_compile_), which lands them in
+    // the PCH key; TRISC routes them through a generated header (chlkc_list.h ->
+    // defines_generated.h) that the umbrella must exclude, so a kernel define like
+    // FORCE_WATCHER_OFF would go unseen by umbrella headers that the source parses
+    // after chlkc_list.h (stack_usage.h, kernel_profiler.hpp's debug subtree). Every
+    // consumer of that define is inert unless WATCHER_ENABLED is set, so the PCH stays
+    // on for the common case and those targets skip it while the watcher is on.
+    const bool pch_defines_visible =
+        this->process_defines_at_compile_ || !env_.get_rtoptions().get_watcher_enabled();
+    // pch_umbrella_for returns a view of a string literal, so this outlives the call.
+    const std::string_view pch_umbrella = (jit_pch_enabled() && pch_defines_visible)
+                                              ? pch_umbrella_for(this->srcs_[src_index])
+                                              : std::string_view{};
+    std::string pch_dep_path;
+    if (!pch_umbrella.empty()) {
+        // The PCH is built from the same recipe minus any force-included headers:
+        // those are per-kernel, and a PCH that consumed them could not be shared.
+        std::vector<std::string> pch_defines;
+        pch_defines.reserve(defines.size());
+        for (size_t i = 0; i < defines.size(); ++i) {
+            if (defines[i] == "-include") {
+                ++i;  // skip the header argument that follows
+                continue;
+            }
+            pch_defines.push_back(defines[i]);
+        }
+        const std::string pch_header = ensure_pch(
+            env_.gpp_,
+            env_.get_root_path(),
+            env_.get_out_root_path(),
+            target_name_,
+            pch_umbrella,
+            recipe.compiler_opt_level,
+            cflags,
+            recipe.includes,
+            pch_defines);
+        if (!pch_header.empty()) {
+            // Must precede every other -include so no token is seen first.
+            defines.insert(defines.begin(), pch_header);
+            defines.insert(defines.begin(), "-include");
+            // GCC falls back to plain textual inclusion, silently, whenever it rejects
+            // a PCH (flag or macro-state mismatch). Surface that in the compile log.
+            // A warning rather than an error -- the base cflags carry -Werror -- since
+            // a rejected PCH costs speed, not correctness.
+            cflags += " -Winvalid-pch -Wno-error=invalid-pch";
+            pch_dep_path = pch_header + ".d";
+        }
+    }
+
     std::vector<std::string> args = tt::jit_build::utils::build_gpp_argv(
         env_.gpp_,
         recipe.compiler_opt_level,
         cflags,
         recipe.includes,
-        recipe.defines,
+        defines,
         this->srcs_[src_index],
         tt::jit_build::utils::GppAction::Compile,
         obj_temp_path,
@@ -697,6 +980,9 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
     fs::remove(log_file.path());
     bool result = tt::jit_build::utils::exec_command(args, out_dir, log_file.path());
     report_result(this->target_name_, "compile", fmt::format("{}", fmt::join(args, " ")), log_file.path(), result);
+    if (result && !pch_dep_path.empty()) {
+        merge_pch_deps_into_kernel_d(temp_d_path, obj_temp_path, pch_dep_path);
+    }
     jit_build::write_dependency_hashes(out_dir, obj_temp_path, obj_temp_path + ".dephash");
     fs::remove(temp_d_path);  // .d file not needed after hash is written
 }
@@ -1001,10 +1287,19 @@ tt::jit_build::TargetRecipe JitBuildState::export_target_recipe(const JitBuildSe
         });
     }
     if (settings) {
-        // FULL_KERNEL_NAME: consumed by the LLK sanitizer (CTSTR(FULL_KERNEL_NAME)). Emitted
+        // FULL_KERNEL_NAME: consumed only by the LLK sanitizer (CTSTR(FULL_KERNEL_NAME)). Emitted
         // shell-free as one verbatim argv element with literal quotes (the unified/remote-JIT
         // path does no shell expansion).
-        defines.push_back(fmt::format(R"(-DFULL_KERNEL_NAME="{}")", settings->get_full_kernel_name()));
+        //
+        // With the sanitizer off the macro is dead -- sanitizer/output.h substitutes "<unknown>" --
+        // so it is omitted entirely rather than gated on TT_METAL_JIT_PCH. That keeps the exported
+        // recipe deterministic (the remote compile server sees the same recipe whichever way the
+        // client sets that variable), and keeps this per-kernel-unique value off the command line,
+        // where GCC would validate it against a shared PCH and reduce the PCH to one per kernel.
+        // With the sanitizer on, correctness wins and the define stays, costing PCH reuse.
+        if (env_.get_rtoptions().get_sanitizer_settings().enabled) {
+            defines.push_back(fmt::format(R"(-DFULL_KERNEL_NAME="{}")", settings->get_full_kernel_name()));
+        }
         settings->process_compile_time_args([&defines](const std::vector<uint32_t>& values) {
             if (!values.empty()) {
                 defines.push_back(fmt::format("-DKERNEL_COMPILE_TIME_ARGS={}", fmt::join(values, ",")));
