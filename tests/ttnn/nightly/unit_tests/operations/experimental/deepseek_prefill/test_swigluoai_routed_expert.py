@@ -64,7 +64,7 @@ def _torch_swigluoai_expert(x, w, alpha=SWIGLU_ALPHA, limit=SWIGLU_LIMIT):
     return F.linear(activated, w["down_proj"])
 
 
-def run_swigluoai_routed_expert(mesh_device, num_tokens, emb_dim, hidden_dim, activation):
+def run_swigluoai_routed_expert(mesh_device, num_tokens, emb_dim, hidden_dim, activation, repeat=1):
     """1 chip, 1 expert. Compares the fused op (selected RoutedExpertActivation) vs torch reference."""
     torch.manual_seed(42)
     is_swigluoai = activation == ttnn.RoutedExpertActivation.SwiGluOai
@@ -84,14 +84,6 @@ def run_swigluoai_routed_expert(mesh_device, num_tokens, emb_dim, hidden_dim, ac
             torch_output = _torch_swigluoai_expert(torch_input, weights)
         else:
             torch_output = _torch_silu_expert(torch_input, weights)
-
-    tt_input = ttnn.from_torch(
-        torch_input,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
-        dtype=ttnn.bfloat8_b,
-    )
 
     def _make_idx_tensor(values):
         return ttnn.from_torch(
@@ -118,11 +110,34 @@ def run_swigluoai_routed_expert(mesh_device, num_tokens, emb_dim, hidden_dim, ac
         activation=activation,
     )
 
-    tt_output = tt_expert(tt_input, expert_token_counts_tt, expert_region_offsets_tt)
-    tt_output_torch = ttnn.to_torch(
-        tt_output,
-        mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
-    )[:num_tokens]
+    def _run_once():
+        # Re-upload the activation each time: the op's input buffer is not guaranteed to
+        # survive a previous invocation, so a reused handle would compare garbage.
+        inp = ttnn.from_torch(
+            torch_input,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            dtype=ttnn.bfloat8_b,
+        )
+        out = tt_expert(inp, expert_token_counts_tt, expert_region_offsets_tt)
+        return ttnn.to_torch(out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[:num_tokens]
+
+    tt_output_torch = _run_once()
+
+    # Same inputs, same program: every later invocation must be BIT-identical. The op
+    # publishes its down-matmul input through a multicast whose sender also receives its
+    # own copy via the INCL_SRC loopback; if that copy is consumed before it lands, the
+    # affected core's output block changes run to run. A drifting result here means an
+    # ordering guarantee was lost, which PCC alone is too coarse to catch.
+    for i in range(1, repeat):
+        again = _run_once()
+        mismatches = int((again != tt_output_torch).sum())
+        assert mismatches == 0, (
+            f"run {i} differs from run 0 in {mismatches} element(s) "
+            f"(max |delta| {float((again - tt_output_torch).abs().max())}) - "
+            "output is not deterministic"
+        )
 
     passing, pcc = comp_pcc(torch_output, tt_output_torch, 0.97)
     logger.info(f"activation={activation} num_tokens={num_tokens}: PCC={pcc}")
@@ -201,3 +216,32 @@ def test_routed_expert_activation_enum_exposed():
     assert hasattr(activation, "Silu") and hasattr(activation, "SwiGluOai"), "enum is missing Silu/SwiGluOai variants"
     # Distinct variants so SiLU and SwiGLU-OAI cache as separate device programs.
     assert activation.Silu != activation.SwiGluOai
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="unified_routed_expert op is Blackhole-only")
+@pytest.mark.parametrize(
+    "mesh_device, device_params", SINGLE_CHIP_MESH_PARAMS, indirect=["mesh_device", "device_params"]
+)
+def test_swigluoai_routed_expert_deterministic(mesh_device, device_params):
+    """Ordering guard for the activated multicast (issue #50154 finding 17).
+
+    The act sender multicasts cb_activated -> cb_in0_down_full with MCAST_INCL_SRC, so its
+    own copy comes back over the NoC. Receivers are ordered by the valid-sem riding the
+    linked path; the sender has only its own wait, and noc_async_writes_flushed() reports
+    the request as SENT, not landed. Consuming that slot early corrupts one core's block
+    nondeterministically, so this repeats the highest-exposure shape and requires
+    bit-identical output. Uses the M3 dims (emb 6144 / hidden 3072) at 4096 tokens: the
+    multicast payload, and with it the measured landing window, scales with the block
+    size -- instrumented on p100a the loopback was unlanded at the flush point ~4x more
+    often at these dims than at M2.7's. NOT a fail-without-fix reproducer: the residual
+    window is ~1 L1 poll wide and downstream work masks it, so this guards against the
+    window widening (grid, payload or scheduling changes), it does not demonstrate the bug.
+    """
+    run_swigluoai_routed_expert(
+        mesh_device,
+        num_tokens=4096,
+        emb_dim=6144,
+        hidden_dim=3072,
+        activation=ttnn.RoutedExpertActivation.SwiGluOai,
+        repeat=10,
+    )

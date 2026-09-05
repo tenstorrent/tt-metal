@@ -878,14 +878,16 @@ void kernel_main() {
                 // linked=true keeps the multicast path RESERVED so the
                 // valid-semaphore multicast below travels the SAME path and is
                 // delivered AFTER the data at every receiver. With linked=false
-                // the path is released and the (posted) valid-sem multicast can
+                // the path is released and the valid-sem multicast can
                 // overtake the bulk data multicast at a receiver -> the receiver
                 // observes act_valid, pushes cb_in0_down_full, and compute reads
                 // stale L1 -> that core's whole down-matmul output block is wrong
-                // (run-to-run nondeterministic). A write barrier does NOT fix this
-                // on Blackhole (multicast writes are posted; no completion ack to
-                // wait on) — only path-linking orders the sem behind the data.
-                // Mirrors the canonical matmul in0 sender
+                // (run-to-run nondeterministic). Path-linking orders the sem behind
+                // the data for free; the alternative, an ack-wait before sending the
+                // sem, would stall this core on every receiver's ack. (The mcast is
+                // non-posted and ack-counted, so an ack-wait also orders it — step 5
+                // needs exactly that for the sender's own loopback copy.) Mirrors the
+                // canonical matmul in0 sender
                 // (reader_bmm_tile_layout_in0_sender_padding.cpp).
                 if (mcast_bytes > 0) {
                     noc.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
@@ -913,6 +915,15 @@ void kernel_main() {
             // Step 5: receivers wait for both valid sems and push.
             if (!is_act_sender) {
                 act_valid_sem.wait(ACT_VALID);
+            } else {
+                // The sender's own copy arrives via the INCL_SRC loopback, so it needs a wait
+                // too. async_writes_flushed() is not one: it polls NIU_MST_NONPOSTED_WR_REQ_SENT
+                // (request left this NIU), not the ack. The mcast is non-posted, so only the
+                // ack-wait proves the data LANDED before this core's compute reads the slot.
+                // Placed after the valid-sem mcast so receivers are not held up; note the
+                // wait is whole-queue, so it also covers that sem mcast's acks, not just
+                // the loopback copy.
+                noc.async_write_barrier();
             }
             cb_in0_down_full_obj.push_back(d_in0_block_num_tiles);
 
