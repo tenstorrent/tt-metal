@@ -115,7 +115,17 @@ def _weight_tile_bytes(weight):
 
 
 def _make_gcb_and_operands(
-    device, m, k, n, num_a_cores, num_slabs=2, build_gcb=True, seed=0, gcb_k_blocks=1, num_pages=None
+    device,
+    m,
+    k,
+    n,
+    num_a_cores,
+    num_slabs=2,
+    build_gcb=True,
+    seed=0,
+    gcb_k_blocks=1,
+    num_pages=None,
+    row_major_a=False,
 ):
     """Build the activation, the DRAM receiver-contiguous weight, and the GCB.
 
@@ -155,21 +165,39 @@ def _make_gcb_and_operands(
     b_grid = _num_cores_to_rectangle_core_range_set(num_b_cores, device)
     # Rectangle width == the row-major stride, hence ring_cols.
     ring_cols = b_grid.bounding_box().grid_size().x
-    # M < 32 needs a short activation tile, as in test_matmul_decode.py: the shard height
-    # must be tile-aligned, and a 32-high tile would reject an m=1 or m=8 shard outright.
-    a = ttnn.from_torch(
-        pt_a,
-        layout=ttnn.TILE_LAYOUT,
-        tile=ttnn.Tile((get_tile_height(m), 32)),
-        device=device,
-        memory_config=ttnn.create_sharded_memory_config(
-            (m, k // num_a_cores),
-            core_grid=a_grid,
-            strategy=ttnn.ShardStrategy.WIDTH,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
-        ),
-    )
+    if row_major_a:
+        # ROW_MAJOR HEIGHT_SHARDED A replicates full K onto B's own grid, so there is no
+        # cross-core gather; `num_a_cores` does not apply. This is the layout the full-width
+        # custom_mm path requires.
+        a = ttnn.from_torch(
+            pt_a.repeat(num_b_cores, 1),
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.bfloat16,
+            device=device,
+            memory_config=ttnn.create_sharded_memory_config(
+                (m, k),
+                core_grid=b_grid,
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            ),
+        )
+    else:
+        # M < 32 needs a short activation tile, as in test_matmul_decode.py: the shard height
+        # must be tile-aligned, and a 32-high tile would reject an m=1 or m=8 shard outright.
+        a = ttnn.from_torch(
+            pt_a,
+            layout=ttnn.TILE_LAYOUT,
+            tile=ttnn.Tile((get_tile_height(m), 32)),
+            device=device,
+            memory_config=ttnn.create_sharded_memory_config(
+                (m, k // num_a_cores),
+                core_grid=a_grid,
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            ),
+        )
 
     weight = make_recv_contig_weight(
         device,
@@ -267,6 +295,41 @@ def test_matmul_decode_prefetched_streamed_slab_pcc(device, gcb_k_blocks, num_pa
         result = ttnn.to_torch(out).float()
 
     assert_with_pcc(ref, result, 0.99)
+
+
+@pytest.mark.parametrize(
+    "gcb_k_blocks, expect_custom_mm",
+    [
+        pytest.param(2, True, id="k_blocks=2-page-kt=16"),
+        pytest.param(4, True, id="k_blocks=4-page-kt=8"),
+        pytest.param(32, False, id="k_blocks=32-page-kt=1-falls-back"),
+    ],
+)
+def test_matmul_decode_streamed_slab_custom_mm_pcc(device, capfd, gcb_k_blocks, expect_custom_mm):
+    """Streamed full width-sharded on the custom_mm LLKs rather than the block matmul ones.
+
+    custom_mm reduces K inside the LLK, so streaming issues one call per page into the same DST
+    tiles and only finalizes on the last -- the running sum never reaches the output CB and the
+    packer never switches into L1 accumulate mode. A page whose K share is not an even tile count
+    cannot be a custom_mm call at all, which is the k_blocks=32 case: it must fall back and still
+    produce the same answer.
+    """
+    m, k, n = 1, 1024, 2048
+    pt_a, pt_b, a, weight, gcb, _ = _make_gcb_and_operands(
+        device, m, k, n, num_a_cores=32, gcb_k_blocks=gcb_k_blocks, num_pages=2, row_major_a=True
+    )
+    ref = pt_a.to(torch.float32) @ pt_b.to(torch.float32)
+
+    with tensor_prefetcher_session(device):
+        ttnn.experimental.wait_for_cq_on_tensor_prefetcher(device, cq_id=0)
+        ttnn.experimental.queue_tensor_prefetcher_request(device, [(weight, gcb_k_blocks)], global_cb=gcb)
+        out = ttnn.experimental.matmul_decode(a, weight, global_cb=gcb, global_cb_k_blocks=gcb_k_blocks)
+        result = ttnn.to_torch(out).float()
+
+    assert_with_pcc(ref, result, 0.99)
+    captured = capfd.readouterr()
+    fell_back = "falling back to the general block matmul LLKs" in captured.out + captured.err
+    assert fell_back != expect_custom_mm
 
 
 def test_matmul_decode_streamed_repeated_invocations(device):
@@ -573,6 +636,42 @@ def test_matmul_decode_partial_prefetched_streamed_slab_pcc(device, gcb_k_blocks
     assert_with_pcc(ref, result, 0.99)
 
 
+@pytest.mark.parametrize(
+    "gcb_k_blocks, expect_custom_mm",
+    [
+        pytest.param(4, True, id="k_blocks=4-page-kt=4"),
+        pytest.param(8, True, id="k_blocks=8-page-kt=2"),
+        pytest.param(16, False, id="k_blocks=16-page-kt=1-falls-back"),
+    ],
+)
+def test_matmul_decode_partial_streamed_slab_custom_mm_pcc(device, capfd, gcb_k_blocks, expect_custom_mm):
+    """Streamed partial width-sharded on the custom_mm LLKs rather than the block matmul ones.
+
+    Each page is one custom_mm call accumulating into the same DST tiles, so the partial CB is
+    written once at the end and the cross-core K-reduction still sees a whole partial. The
+    k_blocks=16 case cuts Kc into single-tile pages, which is not a legal kt_dim, so it falls back
+    and must agree.
+    """
+    m, k, n, k_blocks, n_blocks = 1, 1024, 1024, 2, 8
+    pt_a, pt_b, a, weight, gcb = _make_partial_gcb_and_operands(
+        device, m, k, n, k_blocks, n_blocks, gcb_k_blocks=gcb_k_blocks, num_pages=2
+    )
+    ref = pt_a.to(torch.float32) @ pt_b.to(torch.float32)
+
+    with tensor_prefetcher_session(device):
+        ttnn.experimental.wait_for_cq_on_tensor_prefetcher(device, cq_id=0)
+        ttnn.experimental.queue_tensor_prefetcher_request(device, [(weight, gcb_k_blocks)], global_cb=gcb)
+        out = ttnn.experimental.matmul_decode(
+            a, weight, partial_width_sharded=True, global_cb=gcb, global_cb_k_blocks=gcb_k_blocks
+        )
+        result = ttnn.to_torch(out).float()
+
+    assert_with_pcc(ref, result, 0.99)
+    captured = capfd.readouterr()
+    fell_back = "falling back to the general block matmul LLKs" in captured.out + captured.err
+    assert fell_back != expect_custom_mm
+
+
 def test_matmul_decode_partial_prefetched_repeated_invocations(device):
     """Back-to-back prefetch+matmul pairs against one partial-mode GCB, alternating two weights.
 
@@ -767,6 +866,40 @@ def test_matmul_decode_batched_prefetched_streamed_slab_pcc(device, gcb_k_blocks
         result = ttnn.to_torch(out).float()
 
     assert_with_pcc(ref, result.reshape(batch, m, n), 0.99)
+
+
+@pytest.mark.parametrize(
+    "gcb_k_blocks, expect_custom_mm",
+    [
+        pytest.param(2, True, id="k_blocks=2-page=one-whole-batch"),
+        pytest.param(8, False, id="k_blocks=8-page=quarter-of-a-batch-falls-back"),
+    ],
+)
+def test_matmul_decode_batched_streamed_slab_custom_mm_pcc(device, capfd, gcb_k_blocks, expect_custom_mm):
+    """Streamed batched width-sharded on the custom_mm LLKs rather than the block matmul ones.
+
+    custom_mm reduces a whole batch in one call and needs an even kt_dim, so it can only be used
+    when a page holds whole batches -- Bc=2 with k_blocks=2 gives exactly one batch per page. At
+    k_blocks=8 a batch spans four pages, which no sequence of custom_mm calls can express, so it
+    falls back to the accumulating block-matmul traversal and must give the same answer.
+    """
+    d0, d1, m, k, n, b_blocks, n_blocks = 1, 4, 1, 512, 1024, 2, 8
+    batch = d0 * d1
+    pt_a, pt_b, a, weight, gcb = _make_batched_gcb_and_operands(
+        device, d0, d1, m, k, n, b_blocks, n_blocks, gcb_k_blocks=gcb_k_blocks, num_pages=2
+    )
+    ref = torch.matmul(pt_a.to(torch.float32), pt_b.to(torch.float32))
+
+    with tensor_prefetcher_session(device):
+        ttnn.experimental.wait_for_cq_on_tensor_prefetcher(device, cq_id=0)
+        ttnn.experimental.queue_tensor_prefetcher_request(device, [(weight, gcb_k_blocks)], global_cb=gcb)
+        out = ttnn.experimental.matmul_decode(a, weight, global_cb=gcb, global_cb_k_blocks=gcb_k_blocks)
+        result = ttnn.to_torch(out).float()
+
+    assert_with_pcc(ref, result.reshape(batch, m, n), 0.99)
+    captured = capfd.readouterr()
+    fell_back = "falling back to the general block matmul LLKs" in captured.out + captured.err
+    assert fell_back != expect_custom_mm
 
 
 def test_matmul_decode_batched_prefetched_repeated_invocations(device):

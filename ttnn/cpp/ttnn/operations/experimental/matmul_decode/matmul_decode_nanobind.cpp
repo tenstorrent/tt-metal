@@ -53,7 +53,7 @@ void bind_matmul_decode_operation(nb::module_& mod) {
 
     ttnn::bind_function<"matmul_decode", "ttnn.experimental.">(
         mod,
-        R"doc(matmul_decode(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, partial_width_sharded: bool = False, dtype: Optional[ttnn.DataType] = None, output_mem_config: Optional[ttnn.MemoryConfig] = None, global_cb: Optional[ttnn.GlobalCircularBuffer] = None, global_cb_k_blocks: int = 1, packed_weight: Optional[ttnn.experimental.MatmulDecodePackedWeightSpec] = None, all_gather: bool = False, mesh_coords: Optional[list[ttnn.MeshCoordinate]] = None, ring_gather: bool = False) -> ttnn.Tensor
+        R"doc(matmul_decode(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, partial_width_sharded: bool = False, dtype: Optional[ttnn.DataType] = None, output_mem_config: Optional[ttnn.MemoryConfig] = None, global_cb: Optional[ttnn.GlobalCircularBuffer] = None, global_cb_k_blocks: int = 1, packed_weight: Optional[ttnn.experimental.MatmulDecodePackedWeightSpec] = None, all_gather: bool = False, mesh_coords: Optional[list[ttnn.MeshCoordinate]] = None, ring_gather: bool = False, output_core_grid: Optional[ttnn.CoreRangeSet] = None, output_mcast_two_hub: bool = False, rms_norm: bool = False, rms_norm_gamma: Optional[float] = None, rms_norm_epsilon: float = 1e-6) -> ttnn.Tensor
 
         Returns the matrix product of two tensors.
 
@@ -133,6 +133,20 @@ void bind_matmul_decode_operation(nb::module_& mod) {
                 union of the source and compute grids instead of the two-hub gather.
                 Full- and partial-width L1-resident paths only (plain or packed_weight).
                 Not supported with `global_cb` or the batched factory. Defaults to False.
+            output_core_grid (ttnn.CoreRangeSet, optional): full-width only. Multicast a
+                replica of ``[M, N]`` onto every core of this filled rectangle. Mutually
+                exclusive with `output_mem_config`, `all_gather`, and `ring_gather`.
+                All-core mcast (the default) requires the weight cores to sit on this grid.
+            output_mcast_two_hub (bool, optional): with `output_core_grid`, gather each
+                producer's N-shard onto bbox-corner hubs then mcast; hub0 uses NOC0 and
+                hub1 uses NOC1, matching the in0 two-hub gather. Defaults to False.
+            rms_norm (bool, optional): fuse distributed RMS normalization of the full
+                logical output row before it is written or multicast. Full-width only.
+                Defaults to False.
+            rms_norm_gamma (float, optional): scalar RMSNorm gamma. Required when
+                ``rms_norm`` is True.
+            rms_norm_epsilon (float, optional): non-negative RMSNorm epsilon. Defaults
+                to 1e-6.
 
                 When `input_tensor_a` is ROW_MAJOR and HEIGHT_SHARDED, it must be replicated on
                 the same core grid as `input_tensor_b` (shard width = K, shard height = M).
@@ -155,7 +169,12 @@ void bind_matmul_decode_operation(nb::module_& mod) {
         nb::arg("packed_weight") = nb::none(),
         nb::arg("all_gather") = false,
         nb::arg("mesh_coords") = nb::none(),
-        nb::arg("ring_gather") = false);
+        nb::arg("ring_gather") = false,
+        nb::arg("output_core_grid") = nb::none(),
+        nb::arg("output_mcast_two_hub") = false,
+        nb::arg("rms_norm") = false,
+        nb::arg("rms_norm_gamma") = nb::none(),
+        nb::arg("rms_norm_epsilon") = 1.0e-6F);
 }
 
 // Descriptor-level bindings for models/experimental/ops/descriptors/matmul_decode.py, mirroring
@@ -180,7 +199,12 @@ void bind_matmul_decode_descriptor(nb::module_& mod) {
         .def_rw("all_gather", &ttnn::prim::MatmulDecodeParams::all_gather)
         .def_rw("ring_size", &ttnn::prim::MatmulDecodeParams::ring_size)
         .def_rw("ring_gather", &ttnn::prim::MatmulDecodeParams::ring_gather)
-        .def_rw("in0_row_major_height_sharded", &ttnn::prim::MatmulDecodeParams::in0_row_major_height_sharded);
+        .def_rw("in0_row_major_height_sharded", &ttnn::prim::MatmulDecodeParams::in0_row_major_height_sharded)
+        .def_rw("output_core_grid", &ttnn::prim::MatmulDecodeParams::output_core_grid)
+        .def_rw("output_mcast_two_hub", &ttnn::prim::MatmulDecodeParams::output_mcast_two_hub)
+        .def_rw("rms_norm", &ttnn::prim::MatmulDecodeParams::rms_norm)
+        .def_rw("rms_norm_gamma", &ttnn::prim::MatmulDecodeParams::rms_norm_gamma)
+        .def_rw("rms_norm_epsilon", &ttnn::prim::MatmulDecodeParams::rms_norm_epsilon);
 
     nb::class_<ttnn::prim::MatmulDecodeInputs>(mod, "MatmulDecodeInputs")
         .def(

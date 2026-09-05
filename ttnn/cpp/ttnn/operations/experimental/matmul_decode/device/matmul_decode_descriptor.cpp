@@ -40,6 +40,11 @@ RealOp::operation_attributes_t to_real_attributes(const MatmulDecodeParams& p) {
         p.ring_gather,
         /*mesh_coords=*/std::nullopt,
         p.in0_row_major_height_sharded,
+        p.output_core_grid,
+        p.output_mcast_two_hub,
+        p.rms_norm,
+        p.rms_norm_gamma,
+        p.rms_norm_epsilon,
     };
 }
 
