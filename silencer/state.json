@@ -1,5 +1,5 @@
 {
-  "last_scan_date": "2026-09-04",
+  "last_scan_date": "2026-09-05",
   "scanned_run_ids": [
     "30227858718",
     "30387358745",
@@ -312,9 +312,9 @@
       "category": "1-fix-deprecated-api-call",
       "validation_workflow_dispatched": "models-t2-e2e-tests",
       "dispatch_model": "qwenimage",
-      "status": "pr-opened-dispatch-requested",
-      "note": "Opened this run. One-line fix: call load_torch_state_dict() directly instead of the deprecated load_state_dict() wrapper (same signature, same default strict=True, identical behavior, no warning). Python-only change, no build required. Dispatched models-t2-e2e-tests (model=qwenimage) for validation."
+      "status": "resolved",
+      "note": "Validation run 33918361002 completed/failure (unrelated perf-tolerance test failure). Target DeprecationWarning confirmed absent from test-execution logs. Commented and marked ready for review (2026-09-05)."
     }
   ],
-  "backlog_cursor": "Phase A: PR #55442 (conv3d dedup) reconciled - comment posted (perf-tolerance failure unrelated, conv3d grep inconclusive) and marked ready for review. Phase B: opened new PR silencer/fix-qwenimage-deprecated-load-state-dict (vae_qwenimage.py deprecated load_state_dict -> load_torch_state_dict), dispatched models-t2-e2e-tests qwenimage for validation. bge_m3-N150-func LOAD REPORT noise remains non-viable (transformers-library origin) - do not re-investigate. Next run: check qwenimage-deprecated-load-state-dict PR validation result; continue workflow rotation with single-card-demo-tests or blackhole-sanity-tests for a fresh target."
+  "backlog_cursor": "Phase A: PR #55533 (qwenimage deprecated load_state_dict) reconciled - validation run 33918361002 completed/failure due to unrelated perf-tolerance test failure; target DeprecationWarning confirmed absent from test logs. Commented and marked ready for review (2026-09-05). Phase B: sampled single-card-demo-tests run 32053638633 (bge_m3-N150-func, success) - only 6 DeprecationWarning lines, consistent with prior finding that this is non-viable (transformers-library origin, do not re-investigate). Sampled blackhole-sanity-tests runs on main - recent runs failing (conclusion=failure), worth a closer look next run to see if failures are genuine or noise. Next run: investigate blackhole-sanity-tests recent failures for a new noise-reduction target; also continue rotation through t3000-perf-tests, runtime-integration-tests, galaxy-integration-tests which have not been sampled recently."
 }
