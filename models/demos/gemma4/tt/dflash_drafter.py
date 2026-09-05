@@ -413,6 +413,106 @@ class DFlashDrafter:
         logits.deallocate(True)
         return ids
 
+    def block_forward_cached_batched(self, x, ctx_k, ctx_v, cos_blk, sin_blk, mask_full_tt, mask_slide_tt, B, cap):
+        """B-user row-folded block draft over STACKED cached ctx K/V.
+
+        One trace-friendly forward for all B users: q rows are user-major
+        [blk_0 | .. | blk_{B-1}] (B*K1 rows), keys/values are
+        [ctx_0 | .. | ctx_{B-1} | blk_0 | .. | blk_{B-1}] (B*cap + B*K1 rows),
+        and the additive masks are BLOCK-DIAGONAL per user (built by the
+        batched decoder; stationary in steady state exactly like B=1).
+        Attention compute scales B^2 on the folded rows -- fine for the B<=4-8
+        this targets (the B*(V+1)<=32 verify row cliff caps B anyway).
+
+        ctx_k/ctx_v: per-layer stacked caches [1, local_kv, B*cap, hd].
+        cos/sin_blk: [1, 1, B*K1, hd] per-row rope for the folded block rows.
+        """
+        BK = x.shape[2]
+        K1 = BK // B
+        scale = 1.0 / math.sqrt(self.head_dim)
+        for li, lyr in enumerate(self.layers):
+            resid = x
+            xn = self._rms(x, lyr["in_norm"])
+            q = ttnn.linear(xn, lyr["q_proj"], compute_kernel_config=self._ckc)
+            q = ttnn.transpose(ttnn.reshape(q, (1, BK, self.local_heads, self.head_dim)), 1, 2)
+            q = self._rms(q, lyr["q_norm"])
+            q = self._apply_rope(q, cos_blk, sin_blk)
+            k_blk = ttnn.linear(xn, lyr["k_proj"], compute_kernel_config=self._ckc)
+            v_blk = ttnn.linear(xn, lyr["v_proj"], compute_kernel_config=self._ckc)
+            xn.deallocate(True)
+
+            def _heads(t, n_rows):
+                return ttnn.transpose(ttnn.reshape(t, (1, n_rows, self.local_kv, self.head_dim)), 1, 2)
+
+            k_blk = self._rms(_heads(k_blk, BK), lyr["k_norm"])
+            k_blk = self._apply_rope(k_blk, cos_blk, sin_blk)
+            k = ttnn.concat([ctx_k[li], k_blk], dim=2)
+            v = ttnn.concat([ctx_v[li], _heads(v_blk, BK)], dim=2)
+            k_blk.deallocate(True)
+            v_blk.deallocate(True)
+            if self.local_kv != self.local_heads:
+                k = ttnn.repeat_interleave(k, self.local_heads // self.local_kv, dim=1)
+                v = ttnn.repeat_interleave(v, self.local_heads // self.local_kv, dim=1)
+            scores = ttnn.matmul(q, ttnn.transpose(k, 2, 3), compute_kernel_config=self._ckc)
+            scores = ttnn.multiply(scores, scale)
+            scores = ttnn.add(scores, mask_slide_tt if lyr["sliding"] else mask_full_tt)
+            probs = ttnn.softmax(scores, dim=-1, compute_kernel_config=self._ckc, numeric_stable=True)
+            scores.deallocate(True)
+            attn = ttnn.matmul(probs, v, compute_kernel_config=self._ckc)
+            probs.deallocate(True)
+            k.deallocate(True)
+            v.deallocate(True)
+            q.deallocate(True)
+            attn = ttnn.reshape(ttnn.transpose(attn, 1, 2), (1, 1, BK, self.local_heads * self.head_dim))
+            o = ttnn.linear(attn, lyr["o_proj"], compute_kernel_config=self._ckc)
+            attn.deallocate(True)
+            if self.tp > 1 and not self.replicated:
+                o = ccl_allreduce(o, self.mesh_config, self.ccl_manager)
+            x = ttnn.add(resid, o)
+            o.deallocate(True)
+            resid.deallocate(True)
+
+            resid = x
+            xn = self._rms(x, lyr["post_norm"])
+            gate = ttnn.linear(xn, lyr["gate"], compute_kernel_config=self._ckc)
+            up = ttnn.linear(xn, lyr["up"], compute_kernel_config=self._ckc)
+            xn.deallocate(True)
+            act = ttnn.multiply(ttnn.silu(gate), up)
+            gate.deallocate(True)
+            up.deallocate(True)
+            mlp = ttnn.linear(act, lyr["down"], compute_kernel_config=self._ckc)
+            act.deallocate(True)
+            if self.tp > 1 and not self.replicated:
+                mlp = ccl_allreduce(mlp, self.mesh_config, self.ccl_manager)
+            x = ttnn.add(resid, mlp)
+            mlp.deallocate(True)
+            resid.deallocate(True)
+
+        # id tail over ALL users' draft rows: per user drop the anchor row.
+        h = self._rms(x, self.final_norm_w)
+        x.deallocate(True)
+        # rows are user-major [b*K1 + i]; drafts are i in [1, K1) per user.
+        parts = [h[:, :, b * K1 + 1 : (b + 1) * K1, :] for b in range(B)]
+        h_drafts = ttnn.concat(parts, dim=2) if B > 1 else parts[0]
+        for t in parts:
+            try:
+                t.deallocate(True)
+            except Exception:
+                pass
+        h.deallocate(True)
+        logits = ttnn.linear(h_drafts, self.lm_head, compute_kernel_config=self._ckc)
+        h_drafts.deallocate(True)
+        sampler = getattr(self, "_sampler", None)
+        if sampler is not None:
+            tt_tokens, _lp = sampler.sample(logits, enable_trace=False)
+            logits.deallocate(True)
+            return tt_tokens  # [.., B*(K1-1)] uint32, user-major
+        if self.tp > 1:
+            logits = ccl_allgather(logits, self.mesh_config, self.ccl_manager)
+        ids = ttnn.argmax(logits[:, :, :, : self.vocab], dim=-1)
+        logits.deallocate(True)
+        return ids
+
     def block_forward(self, x, h_ctx, cos_ctx, sin_ctx, cos_blk, sin_blk, mask_full_tt, mask_slide_tt, ctx_rows):
         """The dFlash block-draft graph (trace-capturable; no host round trips).
 
