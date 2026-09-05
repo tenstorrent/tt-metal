@@ -111,7 +111,7 @@ ALWI void sigmoid_tile_init() {
 #ifdef ARCH_QUASAR
     MATH(SFPU_UNARY_INIT(sigmoid));
 #else
-    MATH(SFPU_UNARY_INIT_FN(sigmoid, sfpu::sigmoid_init, (fast_and_approx)));
+    MATH(SFPU_UNARY_INIT_FN(sigmoid, sfpu::sigmoid_init, (fast_and_approx, DST_ACCUM_MODE)));
 #endif
 }
 
@@ -174,7 +174,7 @@ ALWI void silu_tile_init() {
 #ifdef ARCH_QUASAR
     MATH(SFPU_UNARY_INIT(silu));
 #else
-    MATH(SFPU_UNARY_INIT_FN(silu, sfpu::silu_init, (APPROX)));
+    MATH(SFPU_UNARY_INIT_FN(silu, sfpu::silu_init, (APPROX, DST_ACCUM_MODE)));
 #endif
 }
 
@@ -263,9 +263,9 @@ ALWI void square_tile_init() {
 
 #ifndef ARCH_QUASAR
 
-template <bool fast_and_approx = false>
+template <bool fast_and_approx = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sigmoid_tile_init_pack() {
-    PACK(SFPU_UNARY_INIT_FN(sigmoid, sfpu::sigmoid_init, (fast_and_approx)));
+    PACK(SFPU_UNARY_INIT_FN(sigmoid, sfpu::sigmoid_init, (fast_and_approx, is_fp32_dest_acc_en)));
 }
 
 template <VectorMode vec_mode = VectorMode::RC, bool fast_and_approx = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
@@ -671,7 +671,10 @@ ALWI void silu_tile_pack(uint32_t idst) {
     PACK(SFPU_UNARY_CALL(
         DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_silu, (is_fp32_dest_acc_en, 8 /* ITERATIONS */), idst, VectorMode::RC));
 }
-ALWI void silu_tile_init_pack() { PACK(SFPU_UNARY_INIT_FN(silu, sfpu::silu_init, (APPROX))); }
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void silu_tile_init_pack() {
+    PACK(SFPU_UNARY_INIT_FN(silu, sfpu::silu_init, (APPROX, is_fp32_dest_acc_en)));
+}
 
 #endif  // !ARCH_QUASAR — TopK below is all-arch
 
