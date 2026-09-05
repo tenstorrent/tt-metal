@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "tt_metal",
+  "project_id": "c91c9dde-2b71-4204-8450-736e9c606e0c"
+}
