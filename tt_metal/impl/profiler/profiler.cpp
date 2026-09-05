@@ -2328,37 +2328,44 @@ void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& de
                     start_marker_stack.pop();
                     start_marker_stack.push(curr_zone_start_marker_it);
                 }
-
-                // If this is a performance counter, extract fields from data and store in marker meta_data
-                if (marker.marker_id == PERF_COUNTER_PROFILER_ID) {
-                    const PerfCounter perf_counter(marker.data, marker.data_high);
-                    const uint32_t counter_type_raw = perf_counter.counter_type;
-                    // Skip markers with out-of-range counter_type (stale/dropped data).
-                    if (!enchantum::contains<PerfCounterType>(counter_type_raw)) {
-                        log_warning(
-                            tt::LogMetal,
-                            "PerfCounter marker at device {} core {},{} risc {} run {} has "
-                            "out-of-range counter_type={} (raw data 0x{:x}); skipping enrichment.",
-                            marker.chip_id,
-                            marker.core_x,
-                            marker.core_y,
-                            enchantum::to_string(marker.risc),
-                            marker.runtime_host_id,
-                            counter_type_raw,
-                            marker.data);
-                    } else {
-                        marker.meta_data["counter type"] =
-                            enchantum::to_string(static_cast<PerfCounterType>(counter_type_raw));
-                        marker.meta_data["ref cnt"] = perf_counter.ref_cnt;
-                        marker.meta_data["value"] = perf_counter.counter_value;
-                        if (counter_type_raw == static_cast<uint32_t>(PerfCounterType::QUASAR_L1_CLIENT_EVENT)) {
-                            marker.meta_data["counter sel"] = perf_counter.counter_sel;
-                        }
-
-                        const auto& marker_ret = updateDeviceMarker(marker, device_marker_it);
-                        device_marker_it = marker_ret.first;
-                        next_device_marker_it = marker_ret.second;
+            }
+            // Performance counter records carry their fields in data; they need no enclosing zone (Quasar's DM0
+            // files them into the TRISC buffers after those TRISCs closed their last zone).
+            if (marker.marker_id == PERF_COUNTER_PROFILER_ID) {
+                const PerfCounter perf_counter(marker.data, marker.data_high);
+                uint32_t counter_type_raw = perf_counter.counter_type;
+                // Quasar l1_client records carry BASE + selection in place of the enum value.
+                std::optional<uint32_t> l1_client_sel;
+                if (counter_type_raw >= QUASAR_L1_CLIENT_EVENT_BASE) {
+                    l1_client_sel = counter_type_raw - QUASAR_L1_CLIENT_EVENT_BASE;
+                    counter_type_raw = static_cast<uint32_t>(PerfCounterType::QUASAR_L1_CLIENT_EVENT);
+                }
+                // Skip markers with out-of-range counter_type (stale/dropped data).
+                if (!enchantum::contains<PerfCounterType>(counter_type_raw)) {
+                    log_warning(
+                        tt::LogMetal,
+                        "PerfCounter marker at device {} core {},{} risc {} run {} has "
+                        "out-of-range counter_type={} (raw data 0x{:x}); skipping enrichment.",
+                        marker.chip_id,
+                        marker.core_x,
+                        marker.core_y,
+                        enchantum::to_string(marker.risc),
+                        marker.runtime_host_id,
+                        counter_type_raw,
+                        marker.data);
+                } else {
+                    marker.meta_data["counter type"] =
+                        enchantum::to_string(static_cast<PerfCounterType>(counter_type_raw));
+                    marker.meta_data["ref cnt"] = perf_counter.ref_cnt;
+                    marker.meta_data["value"] = perf_counter.counter_value;
+                    if (l1_client_sel) {
+                        marker.meta_data["counter sel"] = *l1_client_sel;
                     }
+                    marker.meta_data["neo"] = perf_counter.neo;
+
+                    const auto& marker_ret = updateDeviceMarker(marker, device_marker_it);
+                    device_marker_it = marker_ret.first;
+                    next_device_marker_it = marker_ret.second;
                 }
             }
         }

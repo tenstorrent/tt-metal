@@ -134,8 +134,7 @@ enum class EnvVarID {
     TT_METAL_PROFILE_PERF_COUNTERS,                // Enable Performance Counter profiling
 
     // Quasar l1_client counter selection
-    TT_METAL_PROFILE_PERF_COUNTERS_L1_SEL,          // Quasar l1_client event counter selection
-    TT_METAL_PROFILE_PERF_COUNTERS_L1_SEL_PER_NEO,  // Stride the l1_client selection by NEO
+    TT_METAL_PROFILE_PERF_COUNTERS_L1_SEL,  // Quasar l1_client event counter selection
 
     TT_METAL_MEM_PROFILER,                         // Enable memory/buffer profiling
     TT_METAL_TRACE_PROFILER,                       // Enable trace profiling
@@ -996,13 +995,6 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Quasar only: routes the l1_client event counter to subport*8 + event (0..295, -1 = off).
         case EnvVarID::TT_METAL_PROFILE_PERF_COUNTERS_L1_SEL:
             sscanf(value, "%d", &this->profiler_perf_counter_l1_sel);
-            break;
-
-        // Quasar only: each NEO uses L1_SEL + its NEO index, sampling 4 adjacent streams per run.
-        case EnvVarID::TT_METAL_PROFILE_PERF_COUNTERS_L1_SEL_PER_NEO:
-            if (is_env_enabled(value)) {
-                this->profiler_perf_counter_l1_sel_per_neo = true;
-            }
             break;
 
         // TT_METAL_TRACE_PROFILER

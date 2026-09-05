@@ -15,6 +15,7 @@
 #include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_init.h"
 #include "hostdev/dev_msgs.h"
 #include "tools/profiler/kernel_profiler.hpp"
+#include "tools/profiler/perf_counters.hpp"
 #include "api/kernel_thread_globals.h"
 
 #if defined(PROFILE_KERNEL)
@@ -73,7 +74,8 @@ int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
 tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(UNCACHED_MEM_MAILBOX_BASE);
 tt_l1_ptr subordinate_map_t* const subordinate_sync = (subordinate_map_t*)mailboxes->subordinate_sync.map;
 
-inline void invalidate_kernel_binary_l2_cache(uintptr_t kernel_lma, launch_msg_t* launch_msg, uint32_t processor_index) {
+inline void invalidate_kernel_binary_l2_cache(
+    uintptr_t kernel_lma, launch_msg_t* launch_msg, uint32_t processor_index) {
     uint32_t kernel_size = launch_msg->kernel_config.kernel_text_size[processor_index];
     if (kernel_size == 0) {
         return;
@@ -210,9 +212,7 @@ inline void start_subordinate_kernel_run_early(uint32_t enables) {
 // Wake DM1 to run setup_dfb_remapper in parallel with DM0's ISR setup.
 // DM1 has a dedicated DFB-init-only loop and never runs user kernels.
 // Called before DM0's setup_dfb_implicit_sync so both run concurrently.
-inline void start_dm1_dfb_init() {
-    *((volatile uint8_t*)&(subordinate_sync->dm1)) = RUN_SYNC_MSG_GO;
-}
+inline void start_dm1_dfb_init() { *((volatile uint8_t*)&(subordinate_sync->dm1)) = RUN_SYNC_MSG_GO; }
 
 inline void wait_subordinates() {
     WAYPOINT("NTW");
@@ -354,6 +354,8 @@ extern "C" uint32_t _start1() {
                     mailboxes->shared_globals_ready[i] = SHARED_GLOBALS_READY_WAIT;
                 }
 
+                // Arm the perf counters on all NEOs right before the TRISCs go.
+                StartPerfCounters();
                 run_triscs(enables);
 
                 // noc_index = launch_msg_address->kernel_config.brisc_noc_id;
@@ -378,11 +380,11 @@ extern "C" uint32_t _start1() {
                 // prev_noc_mode = noc_mode;
 
                 uint32_t tt_l1_ptr* dfb_l1_base =
-                    (uint32_t tt_l1_ptr*)(kernel_config_base +
-                                          launch_msg_address->kernel_config.local_cb_offset);
+                    (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg_address->kernel_config.local_cb_offset);
                 start_subordinate_kernel_run_early(enables);
 
-                // DM0 needs to setup DFBs to program implicit synchronization regardless of whether it runs a kernel or not.
+                // DM0 needs to setup DFBs to program implicit synchronization regardless of whether it runs a kernel or
+                // not.
                 uint32_t num_local_dfbs = launch_msg_address->kernel_config.local_cb_mask;
                 // Kick DM1 to run remapper config in parallel with DM0's ISR setup.
                 start_dm1_dfb_init();
@@ -392,10 +394,15 @@ extern "C" uint32_t _start1() {
 
                 wait_subordinates();
 
+                // Every NEO's TRISCs are done: freeze the counters and file each NEO's readout into its TRISC buffers.
+                StopPerfCounters();
+                ReadPerfCounters(enables);
+
                 trigger_sync_register_init();
 
                 // Need to ensure that Remapper state is cleared for next kernel launch
-                // Remapper initialization by DM1 tracks which pairs were configured. This will clear valid bits for all configured remappings.
+                // Remapper initialization by DM1 tracks which pairs were configured. This will clear valid bits for all
+                // configured remappings.
                 g_remapper_configurator.clear_clientL_valid_up_to_high_watermark_hw();
                 g_remapper_configurator.reset_pair_high_watermark();
             }
@@ -442,8 +449,8 @@ extern "C" uint32_t _start1() {
         uintptr_t kernel_lma =
             static_cast<uint32_t>(kernel_config_base) + launch_msg->kernel_config.kernel_text_offset[index];
 
-        uint32_t tt_l1_ptr* dfb_l1_base = (uint32_t tt_l1_ptr*)(kernel_config_base +
-                                                                launch_msg->kernel_config.local_cb_offset);
+        uint32_t tt_l1_ptr* dfb_l1_base =
+            (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.local_cb_offset);
         uint32_t num_local_dfbs = launch_msg->kernel_config.local_cb_mask;
 
         if (hartid == 1) {

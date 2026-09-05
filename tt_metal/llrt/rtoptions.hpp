@@ -236,7 +236,6 @@ class RunTimeOptions {
     bool profiler_noc_events_enabled = false;
     uint32_t profiler_perf_counter_mode = 0;
     int32_t profiler_perf_counter_l1_sel = -1;
-    bool profiler_perf_counter_l1_sel_per_neo = false;
     std::string profiler_noc_events_report_path;
     bool profiler_disable_dump_to_files = false;
     bool profiler_disable_push_to_tracy = false;
@@ -692,7 +691,6 @@ public:
     bool get_profiler_noc_events_enabled() const { return profiler_noc_events_enabled; }
     uint32_t get_profiler_perf_counter_mode() const { return profiler_perf_counter_mode; }
     int32_t get_profiler_perf_counter_l1_sel() const { return profiler_perf_counter_l1_sel; }
-    bool get_profiler_perf_counter_l1_sel_per_neo() const { return profiler_perf_counter_l1_sel_per_neo; }
     std::string get_profiler_noc_events_report_path() const { return profiler_noc_events_report_path; }
     bool get_profiler_disable_dump_to_files() const { return profiler_disable_dump_to_files; }
     bool get_profiler_disable_push_to_tracy() const { return profiler_disable_push_to_tracy; }

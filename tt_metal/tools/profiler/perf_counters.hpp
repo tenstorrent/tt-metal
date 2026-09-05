@@ -241,7 +241,7 @@ enum PerfCounterType : uint16_t {
     SRCA_STALL_UNPACK,
     DVALID_STALL_MATH,
     SRCA_STALL_MATH,
-    // The l1_client CSR event counter; the (subport, event) selection travels in counter_sel.
+    // The l1_client CSR event counter; records carry QUASAR_L1_CLIENT_EVENT_BASE + (subport*8 + event).
     QUASAR_L1_CLIENT_EVENT,
     // Quasar runs 3 unpackers per thread.
     UNPACK2_BUSY_THREAD0,
@@ -250,19 +250,22 @@ enum PerfCounterType : uint16_t {
     SRCB_WRITE_NOT_BLOCKED_OVR,
     SRCA_WRITE_NOT_BLOCKED_PORT,
     MATH_NOT_SCOREBOARD_STALLED,
-    // counter_type is a uint32_t:8 bitfield — keep all values below 256.
+    // Values stay below 256: the l1_client selections are encoded above them in counter_type.
 };
-static_assert(MATH_NOT_SCOREBOARD_STALLED <= 255, "PerfCounterType enum exceeds 8-bit counter_type field");
+static_assert(MATH_NOT_SCOREBOARD_STALLED <= 255, "PerfCounterType must leave 256 and up for l1_client selections");
+
+// Quasar's l1_client counter has 296 selections (subport*8 + event) behind one enum value. A record
+// carries QUASAR_L1_CLIENT_EVENT_BASE + selection in counter_type; the host maps it back.
+constexpr uint32_t QUASAR_L1_CLIENT_EVENT_BASE = 256;
 
 union PerfCounter {
     struct {
         uint32_t counter_value;
         uint32_t ref_cnt;
-        uint32_t counter_type : 8;
-        // Selector for counter types with more instances than enum values (Quasar l1_client
-        // subport*8 + event); only meaningful when counter_type declares it.
-        uint32_t counter_sel : 9;
-        uint32_t unused : 15;
+        uint32_t counter_type : 16;
+        // NEO the record came from: Quasar's DM0 reads all four; always 0 on tt-1xx.
+        uint32_t neo : 4;
+        uint32_t unused : 12;
     } __attribute__((packed));
     struct {
         uint64_t raw_data_1;
@@ -270,22 +273,20 @@ union PerfCounter {
     } __attribute__((packed));
 
     PerfCounter() = delete;
-    PerfCounter(uint32_t counter_value, uint32_t ref_cnt, PerfCounterType counter_type) :
-        counter_value(counter_value), ref_cnt(ref_cnt), counter_type(static_cast<uint32_t>(counter_type)) {}
-    PerfCounter(uint32_t counter_value, uint32_t ref_cnt, PerfCounterType counter_type, uint32_t counter_sel) :
-        counter_value(counter_value),
-        ref_cnt(ref_cnt),
-        counter_type(static_cast<uint32_t>(counter_type)),
-        counter_sel(counter_sel) {}
+    PerfCounter(uint32_t counter_value, uint32_t ref_cnt, PerfCounterType counter_type, uint32_t neo = 0) :
+        counter_value(counter_value), ref_cnt(ref_cnt), counter_type(static_cast<uint32_t>(counter_type)), neo(neo) {}
+    // Raw counter_type, for the l1_client encoding above the enum.
+    PerfCounter(uint32_t counter_value, uint32_t ref_cnt, uint32_t counter_type_raw, uint32_t neo) :
+        counter_value(counter_value), ref_cnt(ref_cnt), counter_type(counter_type_raw), neo(neo) {}
 
     PerfCounter(uint64_t raw_data_1, uint64_t raw_data_2) : raw_data_1(raw_data_1), raw_data_2(raw_data_2) {}
 };
 static_assert(sizeof(PerfCounter) == sizeof(uint64_t) * 2, "PerfCounter must be 128-bit");
 
-// Start/stop wraps the compute kernel: TRISC1 on tt-1xx, each NEO's math TRISC on Quasar.
-// Readout: BRISC on tt-1xx (NOC access for DRAM pushes); the math TRISC itself on Quasar.
+// The RISC that orchestrates the kernel owns the counters. tt-1xx: TRISC1 arms and stops, BRISC reads
+// once the TRISCs are done. Quasar: DM0 arms all four NEOs before GO and stops and reads them after DONE.
 #if defined(ARCH_QUASAR)
-#if defined(COMPILE_FOR_TRISC) && ((COMPILE_FOR_TRISC % 4) == 1)
+#if defined(COMPILE_FOR_DM)
 #define PERF_COUNTER_WRAP_RISC 1
 #define PERF_COUNTER_READ_RISC 1
 #endif
@@ -304,6 +305,14 @@ static_assert(sizeof(PerfCounter) == sizeof(uint64_t) * 2, "PerfCounter must be 
 #include "api/debug/assert.h"
 
 namespace kernel_profiler {
+
+// Quasar's DM firmware has a 2 KB RW data region and its linker script folds .rodata into it; the
+// constant counter tables go to the 12 KB text region instead. tt-1xx has room and is unchanged.
+#if defined(ARCH_QUASAR)
+#define PERF_COUNTER_TABLE __attribute__((section(".text.perf_counter_tables")))
+#else
+#define PERF_COUNTER_TABLE
+#endif
 
 // Architecture-specific counter arrays (fpu, unpack, pack, l1_0-l1_4, instrn)
 #if defined(ARCH_QUASAR)
@@ -338,7 +347,7 @@ namespace kernel_profiler {
 
 // Counter groups and their corresponding enable bitmask bits. Shared; used on both
 // TRISC1 (start/stop loop) and BRISC (read loop).
-constexpr std::pair<PerfCounterGroup, uint32_t> counter_group_flags[] = {
+constexpr std::pair<PerfCounterGroup, uint32_t> counter_group_flags[] PERF_COUNTER_TABLE = {
     {PerfCounterGroup::FPU, PROFILE_PERF_COUNTERS_FPU},
     {PerfCounterGroup::PACK, PROFILE_PERF_COUNTERS_PACK},
     {PerfCounterGroup::UNPACK, PROFILE_PERF_COUNTERS_UNPACK},
@@ -359,7 +368,7 @@ constexpr uint32_t NUM_COUNTER_GROUPS = sizeof(counter_group_flags) / sizeof(cou
 // Keep ordered to match the enum (FPU, PACK, UNPACK, L1_0, L1_1, INSTRN, L1_2, L1_3, L1_4).
 #if defined(ARCH_QUASAR)
 // L1 slots are 0: Quasar has no L1 counter unit and the L1 group bits are rejected at compile time.
-constexpr uint32_t cntl_reg_for_group[9] = {
+constexpr uint32_t cntl_reg_for_group[9] PERF_COUNTER_TABLE = {
     RISCV_DEBUG_REG_PERF_CNT_FPU0,            // FPU
     RISCV_DEBUG_REG_PERF_CNT_TDMA_PACK0,      // PACK
     RISCV_DEBUG_REG_PERF_CNT_TDMA_UNPACK0,    // UNPACK
@@ -388,6 +397,133 @@ FORCE_INLINE uint32_t get_cntl_register_for_counter_group(PerfCounterGroup count
     return cntl_reg_for_group[static_cast<uint32_t>(counter_group)];
 }
 
+// Quasar: NEO n's registers sit n strides above NEO0's. tt-1xx has one Tensix and no offset.
+#if defined(ARCH_QUASAR)
+constexpr uint32_t NUM_NEOS = 4;
+static_assert(
+    NEO_REGS_1__LOCAL_REGS_L1_CLIENT_GROUP_PERF_CTRL_REG_ADDR -
+            NEO_REGS_0__LOCAL_REGS_L1_CLIENT_GROUP_PERF_CTRL_REG_ADDR ==
+        QUASAR_NEO_REG_STRIDE,
+    "l1_client CSRs must follow the per-NEO stride of the debug registers");
+FORCE_INLINE uint32_t neo_reg_offset(uint32_t neo) { return neo * QUASAR_NEO_REG_STRIDE; }
+#else
+constexpr uint32_t NUM_NEOS = 1;
+FORCE_INLINE uint32_t neo_reg_offset(uint32_t) { return 0; }
+#endif
+
+#if defined(ARCH_QUASAR)
+// Quasar's profiler is L1-only and one risc buffer holds about 80 records, short of a single NEO's
+// streams and far short of four NEOs. DM0 therefore files each NEO's records into that NEO's own
+// TRISC buffers, which are complete once wait_subordinates() returns, and advances their end
+// indices. The host decodes them under the TRISC's label; the record's neo field says which NEO.
+constexpr uint32_t TRISCS_PER_NEO = 4;
+constexpr uint32_t PERF_RECORD_WORDS = PROFILER_L1_MARKER_UINT32_SIZE * 3;  // marker + two 64-bit words
+
+FORCE_INLINE uint32_t first_trisc_of(uint32_t neo) {
+    return static_cast<uint32_t>(TensixProcessorTypes::E0_MATH0) + neo * TRISCS_PER_NEO;
+}
+
+FORCE_INLINE bool neo_enabled(uint32_t enables, uint32_t neo) { return (enables >> first_trisc_of(neo)) & 1u; }
+
+struct SpillCursor {
+    uint32_t risc;
+    uint32_t last_risc;
+    uint32_t index;
+};
+static SpillCursor spill;
+
+FORCE_INLINE uint32_t spill_end_index(uint32_t risc) {
+    uint32_t index = profiler_control_buffer[DEVICE_BUFFER_END_INDEX_BR_ER + risc];
+    // A TRISC that published nothing has no run sentinel for the host to anchor on; leave it alone.
+    return index < CUSTOM_MARKERS ? PROFILER_L1_VECTOR_SIZE : index;
+}
+
+inline void spill_open(uint32_t neo) {
+    spill.risc = first_trisc_of(neo);
+    spill.last_risc = spill.risc + TRISCS_PER_NEO - 1;
+    spill.index = spill_end_index(spill.risc);
+}
+
+inline void spill_close() { profiler_control_buffer[DEVICE_BUFFER_END_INDEX_BR_ER + spill.risc] = spill.index; }
+
+inline void spill_record(const PerfCounter& counter) {
+    while (spill.index + PERF_RECORD_WORDS > PROFILER_L1_VECTOR_SIZE) {
+        if (spill.risc == spill.last_risc) {
+            mark_dropped_timestamps(spill.risc);  // all four buffers full: let the host's dropped-markers warning fire
+            return;
+        }
+        spill_close();
+        spill.risc++;
+        spill.index = spill_end_index(spill.risc);
+    }
+    volatile tt_l1_ptr uint32_t* data = profiler_data_buffer[spill.risc].data;
+    uint64_t wall_clock = quasar_read_wall_clock_64();
+    data[spill.index] =
+        PROFILER_MARKER_VALID |
+        ((get_const_id(PERF_COUNTER_PROFILER_ID, PacketTypes::TS_DATA_16B) & PROFILER_MARKER_TIMER_ID_MASK)
+         << PROFILER_MARKER_TIMER_ID_SHIFT) |
+        (static_cast<uint32_t>(wall_clock >> 32) & PROFILER_MARKER_TS_HIGH_MASK);
+    data[spill.index + 1] = static_cast<uint32_t>(wall_clock);
+    data[spill.index + 2] = counter.raw_data_1 >> 32;
+    data[spill.index + 3] = static_cast<uint32_t>(counter.raw_data_1);
+    data[spill.index + 4] = counter.raw_data_2 >> 32;
+    data[spill.index + 5] = static_cast<uint32_t>(counter.raw_data_2);
+    spill.index += PERF_RECORD_WORDS;
+}
+#endif  // ARCH_QUASAR
+
+inline void emit_record(const PerfCounter& counter) {
+#if defined(ARCH_QUASAR)
+    spill_record(counter);
+#else
+    kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>(
+        kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE * 2);
+    kernel_profiler::timeStampedData<
+        PERF_COUNTER_PROFILER_ID,
+        kernel_profiler::DoingDispatch::DISPATCH,
+        kernel_profiler::PacketTypes::TS_DATA_16B>(counter.raw_data_1, counter.raw_data_2);
+#endif
+}
+
+#if defined(ARCH_QUASAR) && defined(PROFILE_PERF_COUNTERS_L1_SEL)
+constexpr uint32_t QUASAR_L1_CLIENT_SEL = PROFILE_PERF_COUNTERS_L1_SEL;
+static_assert(
+    QUASAR_L1_CLIENT_SEL < QUASAR_L1_CLIENT_NUM_SUBPORTS * QUASAR_L1_CLIENT_NUM_EVENTS,
+    "PROFILE_PERF_COUNTERS_L1_SEL must be subport*8 + event, below 296");
+static_assert(
+    QUASAR_L1_CLIENT_EVENT_BASE + QUASAR_L1_CLIENT_NUM_SUBPORTS * QUASAR_L1_CLIENT_NUM_EVENTS < (1u << 16),
+    "l1_client encoding must fit the 16-bit counter_type");
+// The CSR has no reference counter; the wall-clock span from arming to freezing is the denominator.
+static uint32_t l1_client_start_cycles;
+static uint32_t l1_client_elapsed_cycles;
+
+inline void start_l1_client_event_counter(uint32_t neo) {
+    constexpr uint32_t subport = QUASAR_L1_CLIENT_SEL / QUASAR_L1_CLIENT_NUM_EVENTS;
+    constexpr uint32_t event = QUASAR_L1_CLIENT_SEL % QUASAR_L1_CLIENT_NUM_EVENTS;
+    volatile tt_reg_ptr uint32_t* ctrl = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(
+        RISCV_DEBUG_REG_QUASAR_L1_CLIENT_PERF_CTRL + neo_reg_offset(neo));
+    volatile tt_reg_ptr uint32_t* cnt = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(
+        RISCV_DEBUG_REG_QUASAR_L1_CLIENT_PERF_CNT + neo_reg_offset(neo));
+    *ctrl = (subport << QUASAR_L1_CLIENT_PERF_SUBPORT_SHIFT) | (event << QUASAR_L1_CLIENT_PERF_EVENT_SHIFT) |
+            QUASAR_L1_CLIENT_PERF_CTRL_ENABLE;
+    // Clear-on-read: drop anything accumulated before this window.
+    (void)*cnt;
+}
+
+inline void stop_l1_client_event_counter(uint32_t neo) {
+    volatile tt_reg_ptr uint32_t* ctrl = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(
+        RISCV_DEBUG_REG_QUASAR_L1_CLIENT_PERF_CTRL + neo_reg_offset(neo));
+    *ctrl = 0;
+}
+
+inline void read_l1_client_event_counter(uint32_t neo) {
+    volatile tt_reg_ptr uint32_t* cnt = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(
+        RISCV_DEBUG_REG_QUASAR_L1_CLIENT_PERF_CNT + neo_reg_offset(neo));
+    PerfCounter counter(*cnt, l1_client_elapsed_cycles, QUASAR_L1_CLIENT_EVENT_BASE + QUASAR_L1_CLIENT_SEL, neo);
+    emit_record(counter);
+}
+#endif  // ARCH_QUASAR && PROFILE_PERF_COUNTERS_L1_SEL
+
 #if !defined(ARCH_QUASAR)
 // Shared: sets the L1 mux select (bank 0..4) for the given group. 0 for non-L1 groups (unused).
 constexpr uint32_t mux_sel_for_group[9] = {
@@ -413,51 +549,67 @@ FORCE_INLINE void set_l1_mux_ctrl(PerfCounterGroup counter_group) {
 #if defined(PERF_COUNTER_WRAP_RISC)
 // --- Wrap-thread only: start/stop counters around the compute kernel -------
 
-__attribute__((noinline)) void start_single_group(PerfCounterGroup counter_group) {
+__attribute__((noinline)) void start_single_group(PerfCounterGroup counter_group, uint32_t neo) {
 #if !defined(ARCH_QUASAR)
     if (counter_group >= PerfCounterGroup::L1_0 && counter_group != PerfCounterGroup::INSTRN) {
         set_l1_mux_ctrl(counter_group);
     }
 #endif
-    volatile tt_reg_ptr uint32_t* cntl_reg =
-        reinterpret_cast<volatile tt_reg_ptr uint32_t*>(get_cntl_register_for_counter_group(counter_group));
+    volatile tt_reg_ptr uint32_t* cntl_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(
+        get_cntl_register_for_counter_group(counter_group) + neo_reg_offset(neo));
     cntl_reg[0] = 0xFFFFFFFF;
     cntl_reg[1] = PERF_CNT_CONTINUOUS_MODE;
     cntl_reg[2] = 0;
     cntl_reg[2] = PERF_CNT_START_VALUE;
 }
 
-__attribute__((noinline)) void stop_single_group(PerfCounterGroup counter_group) {
-    volatile tt_reg_ptr uint32_t* cntl_reg =
-        reinterpret_cast<volatile tt_reg_ptr uint32_t*>(get_cntl_register_for_counter_group(counter_group));
+__attribute__((noinline)) void stop_single_group(PerfCounterGroup counter_group, uint32_t neo) {
+    volatile tt_reg_ptr uint32_t* cntl_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(
+        get_cntl_register_for_counter_group(counter_group) + neo_reg_offset(neo));
     cntl_reg[2] = 0;
     cntl_reg[2] = PERF_CNT_STOP_VALUE;
 }
 
 void start_perf_counter() {
-    for (uint32_t i = 0; i < NUM_COUNTER_GROUPS; i++) {
-        if (PROFILE_PERF_COUNTERS & counter_group_flags[i].second) {
-            start_single_group(counter_group_flags[i].first);
+    for (uint32_t neo = 0; neo < NUM_NEOS; neo++) {
+#if defined(ARCH_QUASAR) && defined(PROFILE_PERF_COUNTERS_L1_SEL)
+        start_l1_client_event_counter(neo);
+#endif
+        for (uint32_t i = 0; i < NUM_COUNTER_GROUPS; i++) {
+            if (PROFILE_PERF_COUNTERS & counter_group_flags[i].second) {
+                start_single_group(counter_group_flags[i].first, neo);
+            }
         }
     }
+#if defined(ARCH_QUASAR) && defined(PROFILE_PERF_COUNTERS_L1_SEL)
+    l1_client_start_cycles = static_cast<uint32_t>(quasar_read_wall_clock_64());
+#endif
 }
 
 void stop_perf_counter() {
-    for (uint32_t i = 0; i < NUM_COUNTER_GROUPS; i++) {
-        if (PROFILE_PERF_COUNTERS & counter_group_flags[i].second) {
-            stop_single_group(counter_group_flags[i].first);
+    for (uint32_t neo = 0; neo < NUM_NEOS; neo++) {
+        for (uint32_t i = 0; i < NUM_COUNTER_GROUPS; i++) {
+            if (PROFILE_PERF_COUNTERS & counter_group_flags[i].second) {
+                stop_single_group(counter_group_flags[i].first, neo);
+            }
         }
+#if defined(ARCH_QUASAR) && defined(PROFILE_PERF_COUNTERS_L1_SEL)
+        stop_l1_client_event_counter(neo);
+#endif
     }
+#if defined(ARCH_QUASAR) && defined(PROFILE_PERF_COUNTERS_L1_SEL)
+    l1_client_elapsed_cycles = static_cast<uint32_t>(quasar_read_wall_clock_64()) - l1_client_start_cycles;
+#endif
 }
 
 #endif  // PERF_COUNTER_WRAP_RISC
 
 #if defined(PERF_COUNTER_READ_RISC)
-// --- Readout thread only: counter readout (BRISC on tt-1xx, math TRISC on Quasar) ---
+// --- Readout thread only: counter readout (BRISC on tt-1xx, DM0 on Quasar) ---
 
 // Lookup tables indexed by PerfCounterGroup (same ordering as cntl_reg_for_group).
 #if defined(ARCH_QUASAR)
-constexpr uint32_t read_reg_for_group[9] = {
+constexpr uint32_t read_reg_for_group[9] PERF_COUNTER_TABLE = {
     RISCV_DEBUG_REG_PERF_CNT_OUT_L_FPU,            // FPU
     RISCV_DEBUG_REG_PERF_CNT_OUT_L_TDMA_PACK,      // PACK
     RISCV_DEBUG_REG_PERF_CNT_OUT_L_TDMA_UNPACK,    // UNPACK
@@ -469,7 +621,7 @@ constexpr uint32_t read_reg_for_group[9] = {
     0,                                             // L1_4
 };
 
-constexpr uint32_t num_counters_for_group[9] = {
+constexpr uint32_t num_counters_for_group[9] PERF_COUNTER_TABLE = {
     NUM_FPU_COUNTERS,     // FPU
     NUM_PACK_COUNTERS,    // PACK
     NUM_UNPACK_COUNTERS,  // UNPACK
@@ -481,7 +633,7 @@ constexpr uint32_t num_counters_for_group[9] = {
     0,                    // L1_4
 };
 
-constexpr const std::pair<PerfCounterType, uint16_t>* counters_for_group[9] = {
+constexpr const std::pair<PerfCounterType, uint16_t>* counters_for_group[9] PERF_COUNTER_TABLE = {
     fpu_counters.data(),     // FPU
     pack_counters.data(),    // PACK
     unpack_counters.data(),  // UNPACK
@@ -542,16 +694,16 @@ FORCE_INLINE const std::pair<PerfCounterType, uint16_t>* get_counters_for_counte
     return counters_for_group[static_cast<uint32_t>(g)];
 }
 
-__attribute__((noinline)) void read_single_group(PerfCounterGroup counter_group) {
+__attribute__((noinline)) void read_single_group(PerfCounterGroup counter_group, uint32_t neo) {
 #if !defined(ARCH_QUASAR)
     if (counter_group >= PerfCounterGroup::L1_0 && counter_group != PerfCounterGroup::INSTRN) {
         set_l1_mux_ctrl(counter_group);
     }
 #endif
-    volatile tt_reg_ptr uint32_t* cntl_reg =
-        reinterpret_cast<volatile tt_reg_ptr uint32_t*>(get_cntl_register_for_counter_group(counter_group));
-    volatile tt_reg_ptr uint32_t* read_reg =
-        reinterpret_cast<volatile tt_reg_ptr uint32_t*>(get_read_register_for_counter_group(counter_group));
+    volatile tt_reg_ptr uint32_t* cntl_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(
+        get_cntl_register_for_counter_group(counter_group) + neo_reg_offset(neo));
+    volatile tt_reg_ptr uint32_t* read_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(
+        get_read_register_for_counter_group(counter_group) + neo_reg_offset(neo));
     const auto* counters = get_counters_for_counter_group(counter_group);
     const uint32_t counters_size = get_num_counters_for_counter_group(counter_group);
     for (unsigned int i = 0; i < counters_size; i++) {
@@ -562,62 +714,60 @@ __attribute__((noinline)) void read_single_group(PerfCounterGroup counter_group)
         while (cntl_reg[1] != expected_mode);
         uint32_t ref_cnt_val = read_reg[0];
         uint32_t counter_val = read_reg[1];
-        PerfCounter counter(counter_val, ref_cnt_val, counters[i].first);
-#if defined(ARCH_QUASAR)
-        // TRISCs cannot flush to DRAM; flag the drop so the host's DROPPED_ZONES warning fires.
-        if (!kernel_profiler::bufferHasRoom<kernel_profiler::DoingDispatch::NOT_DISPATCH>(
-                kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE * 3 - 1)) {
-            kernel_profiler::mark_dropped_timestamps(myRiscID);
-        }
-        kernel_profiler::timeStampedData<
-            PERF_COUNTER_PROFILER_ID,
-            kernel_profiler::DoingDispatch::NOT_DISPATCH,
-            kernel_profiler::PacketTypes::TS_DATA_16B>(counter.raw_data_1, counter.raw_data_2);
-#else
-        kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>(
-            kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE * 2);
-        kernel_profiler::timeStampedData<
-            PERF_COUNTER_PROFILER_ID,
-            kernel_profiler::DoingDispatch::DISPATCH,
-            kernel_profiler::PacketTypes::TS_DATA_16B>(counter.raw_data_1, counter.raw_data_2);
-#endif
+        PerfCounter counter(counter_val, ref_cnt_val, counters[i].first, neo);
+        emit_record(counter);
     }
     // Toggle start bit to clear the counters for this group
     cntl_reg[2] = 0;
     cntl_reg[2] = PERF_CNT_START_VALUE;
 }
 
-void read_perf_counters() {
+// trisc_enables is the launch message's processor enable mask; Quasar skips NEOs that ran nothing.
+void read_perf_counters([[maybe_unused]] uint32_t trisc_enables) {
     if (kernel_profiler::get_profiler_zone_invalid()) {
         return;
     }
+    for (uint32_t neo = 0; neo < NUM_NEOS; neo++) {
+#if defined(ARCH_QUASAR)
+        if (!neo_enabled(trisc_enables, neo)) {
+            continue;
+        }
+        spill_open(neo);
+#endif
 #if (PROFILE_PERF_COUNTERS) & PROFILE_PERF_COUNTERS_FPU
-    read_single_group(PerfCounterGroup::FPU);
+        read_single_group(PerfCounterGroup::FPU, neo);
 #endif
 #if (PROFILE_PERF_COUNTERS) & PROFILE_PERF_COUNTERS_PACK
-    read_single_group(PerfCounterGroup::PACK);
+        read_single_group(PerfCounterGroup::PACK, neo);
 #endif
 #if (PROFILE_PERF_COUNTERS) & PROFILE_PERF_COUNTERS_UNPACK
-    read_single_group(PerfCounterGroup::UNPACK);
+        read_single_group(PerfCounterGroup::UNPACK, neo);
 #endif
 #if (PROFILE_PERF_COUNTERS) & PROFILE_PERF_COUNTERS_L1_0
-    read_single_group(PerfCounterGroup::L1_0);
+        read_single_group(PerfCounterGroup::L1_0, neo);
 #endif
 #if (PROFILE_PERF_COUNTERS) & PROFILE_PERF_COUNTERS_L1_1
-    read_single_group(PerfCounterGroup::L1_1);
+        read_single_group(PerfCounterGroup::L1_1, neo);
 #endif
 #if (PROFILE_PERF_COUNTERS) & PROFILE_PERF_COUNTERS_INSTRN
-    read_single_group(PerfCounterGroup::INSTRN);
+        read_single_group(PerfCounterGroup::INSTRN, neo);
 #endif
 #if (PROFILE_PERF_COUNTERS) & PROFILE_PERF_COUNTERS_L1_2
-    read_single_group(PerfCounterGroup::L1_2);
+        read_single_group(PerfCounterGroup::L1_2, neo);
 #endif
 #if (PROFILE_PERF_COUNTERS) & PROFILE_PERF_COUNTERS_L1_3
-    read_single_group(PerfCounterGroup::L1_3);
+        read_single_group(PerfCounterGroup::L1_3, neo);
 #endif
 #if (PROFILE_PERF_COUNTERS) & PROFILE_PERF_COUNTERS_L1_4
-    read_single_group(PerfCounterGroup::L1_4);
+        read_single_group(PerfCounterGroup::L1_4, neo);
 #endif
+#if defined(ARCH_QUASAR) && defined(PROFILE_PERF_COUNTERS_L1_SEL)
+        read_l1_client_event_counter(neo);
+#endif
+#if defined(ARCH_QUASAR)
+        spill_close();
+#endif
+    }
 }
 
 #endif  // PERF_COUNTER_READ_RISC
@@ -626,71 +776,9 @@ void read_perf_counters() {
 // chosen per architecture at the top of this file.
 #if defined(PERF_COUNTER_WRAP_RISC)
 
-#if defined(ARCH_QUASAR) && defined(PROFILE_PERF_COUNTERS_L1_SEL)
-#if defined(PROFILE_PERF_COUNTERS_L1_SEL_PER_NEO)
-// Stride the selection by NEO so one run samples 4 adjacent l1_client streams instead of 1.
-constexpr uint32_t QUASAR_L1_CLIENT_SEL = PROFILE_PERF_COUNTERS_L1_SEL + (COMPILE_FOR_TRISC / 4);
-#else
-constexpr uint32_t QUASAR_L1_CLIENT_SEL = PROFILE_PERF_COUNTERS_L1_SEL;
-#endif
-static_assert(
-    QUASAR_L1_CLIENT_SEL < QUASAR_L1_CLIENT_NUM_SUBPORTS * QUASAR_L1_CLIENT_NUM_EVENTS,
-    "PROFILE_PERF_COUNTERS_L1_SEL must be subport*8 + event, below 296 (minus 3 in per-NEO mode)");
-
-inline void start_l1_client_event_counter() {
-    constexpr uint32_t subport = QUASAR_L1_CLIENT_SEL / QUASAR_L1_CLIENT_NUM_EVENTS;
-    constexpr uint32_t event = QUASAR_L1_CLIENT_SEL % QUASAR_L1_CLIENT_NUM_EVENTS;
-    volatile tt_reg_ptr uint32_t* ctrl =
-        reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_QUASAR_L1_CLIENT_PERF_CTRL);
-    volatile tt_reg_ptr uint32_t* cnt =
-        reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_QUASAR_L1_CLIENT_PERF_CNT);
-    *ctrl = (subport << QUASAR_L1_CLIENT_PERF_SUBPORT_SHIFT) | (event << QUASAR_L1_CLIENT_PERF_EVENT_SHIFT) |
-            QUASAR_L1_CLIENT_PERF_CTRL_ENABLE;
-    // The counter is clear-on-read: drop anything accumulated before this window.
-    (void)*cnt;
-}
-
-inline void read_l1_client_event_counter(uint32_t start_cycles) {
-    volatile tt_reg_ptr uint32_t* ctrl =
-        reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_QUASAR_L1_CLIENT_PERF_CTRL);
-    volatile tt_reg_ptr uint32_t* cnt =
-        reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_QUASAR_L1_CLIENT_PERF_CNT);
-    uint32_t count = *cnt;
-    *ctrl = 0;
-    // This CSR has no reference counter of its own; the wall-clock delta is the denominator.
-    uint32_t elapsed = static_cast<uint32_t>(quasar_read_wall_clock_64()) - start_cycles;
-    PerfCounter counter(count, elapsed, PerfCounterType::QUASAR_L1_CLIENT_EVENT, QUASAR_L1_CLIENT_SEL);
-    if (!kernel_profiler::bufferHasRoom<kernel_profiler::DoingDispatch::NOT_DISPATCH>(
-            kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE * 3 - 1)) {
-        kernel_profiler::mark_dropped_timestamps(myRiscID);
-    }
-    kernel_profiler::timeStampedData<
-        PERF_COUNTER_PROFILER_ID,
-        kernel_profiler::DoingDispatch::NOT_DISPATCH,
-        kernel_profiler::PacketTypes::TS_DATA_16B>(counter.raw_data_1, counter.raw_data_2);
-}
-#endif  // ARCH_QUASAR && PROFILE_PERF_COUNTERS_L1_SEL
-
 struct PerfCounterWrapper {
-#if defined(ARCH_QUASAR) && defined(PROFILE_PERF_COUNTERS_L1_SEL)
-    uint32_t l1_client_start_cycles;
-#endif
-    PerfCounterWrapper() {
-#if defined(ARCH_QUASAR) && defined(PROFILE_PERF_COUNTERS_L1_SEL)
-        start_l1_client_event_counter();
-        l1_client_start_cycles = static_cast<uint32_t>(quasar_read_wall_clock_64());
-#endif
-        kernel_profiler::start_perf_counter();
-    }
-    ~PerfCounterWrapper() {
-        kernel_profiler::stop_perf_counter();
-#if defined(ARCH_QUASAR)
-#if defined(PROFILE_PERF_COUNTERS_L1_SEL)
-        read_l1_client_event_counter(l1_client_start_cycles);
-#endif
-        kernel_profiler::read_perf_counters();
-#endif
-    }
+    PerfCounterWrapper() { kernel_profiler::start_perf_counter(); }
+    ~PerfCounterWrapper() { kernel_profiler::stop_perf_counter(); }
 };
 #endif  // PERF_COUNTER_WRAP_RISC
 
@@ -706,10 +794,10 @@ struct PerfCounterWrapper {
 #define RecordPerfCounters()
 #endif
 
-#if defined(PERF_COUNTER_READ_RISC) && !defined(ARCH_QUASAR)
-#define ReadPerfCounters() kernel_profiler::read_perf_counters();
+#if defined(PERF_COUNTER_READ_RISC)
+#define ReadPerfCounters(trisc_enables) kernel_profiler::read_perf_counters(trisc_enables);
 #else
-#define ReadPerfCounters()
+#define ReadPerfCounters(trisc_enables)
 #endif
 
 #else
@@ -717,7 +805,7 @@ struct PerfCounterWrapper {
 // null macros when perf counters are disabled
 #define StartPerfCounters()
 #define StopPerfCounters()
-#define ReadPerfCounters()
+#define ReadPerfCounters(trisc_enables)
 #define RecordPerfCounters()
 
 #endif
