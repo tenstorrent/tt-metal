@@ -852,6 +852,28 @@ def test_indexer_score_full_mesh_rejects_invalid_contracts(expect_error):
 @pytest.mark.parametrize("mesh_device", [(8, 1)], ids=["ring8"], indirect=True)
 @pytest.mark.parametrize("device_params", [_RING8_PARTIAL_DEVICE_PARAMS], indirect=True)
 def test_indexer_score_ring8_partial_readiness_reference_cache_hit(mesh_device):
+    _run_ring8_runtime_arguments(mesh_device, traced=False)
+
+
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY, "trace_region_size": 1540000}],
+    indirect=True,
+)
+@pytest.mark.parametrize("traced", [False, True])
+def test_indexer_score_galaxy_runtime_arguments(mesh_device, traced):
+    mesh_device.quiesce_devices()
+    mesh_device.clear_program_cache()
+    child = mesh_device.create_submesh(ttnn.MeshShape(8, 1))
+    try:
+        _run_ring8_runtime_arguments(child, traced)
+    finally:
+        mesh_device.quiesce_devices()
+        child.clear_program_cache()
+
+
+def _run_ring8_runtime_arguments(mesh_device, traced):
     """Reference-check the production Ring two-marker protocol, including its cache-hit runtime patch.
 
     This test keeps query work small while using a large BF16 K capacity to exercise the bank-owned schedule's
@@ -863,7 +885,7 @@ def test_indexer_score_ring8_partial_readiness_reference_cache_hit(mesh_device):
     q_per_rank = 32
     chunk_global = sp * q_per_rank
     k_capacity = 128 * 1024
-    kv_lens = (56320, 112640)
+    kv_lens = (56320, 112640, 56320)
     dim = 128
     grid = mesh_device.compute_with_storage_grid_size()
     worker_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
@@ -874,63 +896,92 @@ def test_indexer_score_ring8_partial_readiness_reference_cache_hit(mesh_device):
     mesh_device.set_sub_device_stall_group(stall_group)
     ccl_semaphores = [ttnn.create_global_semaphore(mesh_device, worker_cores, 0) for _ in range(2)]
     try:
-        q_g, k_nat, w_g = _global_inputs(heads, chunk_global, k_capacity, seed=4242)
-        k_bc = _to_slab(k_nat, sp, chunk_global)
         sp_shard = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(sp, 1), dims=(2, None))
-        q_dev = ttnn.from_torch(
-            q_g, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=sp_shard
-        )
-        w_dev = ttnn.from_torch(
-            w_g, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=sp_shard
-        )
-        k_local = ttnn.from_torch(
-            k_bc,
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=sp_shard,
-        )
-        k_gathered = ttnn.from_torch(
-            torch.zeros_like(k_nat),
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        )
+        input_sets = []
+        reference_sets = []
+        # Distinct payloads make stale bindings numerically observable; retain every
+        # allocation so allocator address reuse cannot hide a missing update.
+        for dispatch in range(len(kv_lens)):
+            q_g, k_nat, w_g = _global_inputs(heads, chunk_global, k_capacity, seed=4242 + dispatch)
+            reference_sets.append((q_g, k_nat, w_g))
+            k_bc = _to_slab(k_nat, sp, chunk_global)
+            q_dev = ttnn.from_torch(
+                q_g, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=sp_shard
+            )
+            w_dev = ttnn.from_torch(
+                w_g, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=sp_shard
+            )
+            k_local = ttnn.from_torch(
+                k_bc,
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=sp_shard,
+            )
+            k_gathered = ttnn.from_torch(
+                torch.zeros_like(k_nat),
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+            input_sets.append((q_dev, w_dev, k_local, k_gathered))
         program_config = ttnn.IndexerScoreProgramConfig(
             q_chunk_size=32,
             k_chunk_size=320,
             head_group_size=0,
         )
 
-        def _score(kv_len):
+        semaphore_sets = [
+            ccl_semaphores,
+            [ttnn.create_global_semaphore(mesh_device, worker_cores, 0) for _ in range(2)],
+        ]
+
+        def _score(kv_len, dispatch):
+            q_dev, w_dev, k_local, k_gathered = input_sets[dispatch]
             chunk_start = kv_len - chunk_global
-            out = ttnn.experimental.ring_indexer_score_dsa(
-                q_dev,
-                k_gathered,
-                w_dev,
-                k_local,
-                ccl_semaphores,
-                cluster_axis=0,
-                topology=ttnn.Topology.Ring,
-                num_links=2,
-                ag_sub_device_id=subdevice_id,
-                chunk_start_idx=chunk_start,
-                kv_len=kv_len,
-                block_cyclic_sp_axis=0,
-                block_cyclic_chunk_local=q_per_rank,
-                program_config=program_config,
-            )
-            ttnn.synchronize_device(mesh_device, sub_device_ids=stall_group)
-            out_t = ttnn.to_torch(out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=2))
-            ttnn.deallocate(out)
+
+            def run():
+                return ttnn.experimental.ring_indexer_score_dsa(
+                    q_dev,
+                    k_gathered,
+                    w_dev,
+                    k_local,
+                    semaphore_sets[dispatch % 2],
+                    cluster_axis=0,
+                    topology=ttnn.Topology.Ring,
+                    num_links=2,
+                    ag_sub_device_id=subdevice_id,
+                    chunk_start_idx=chunk_start,
+                    kv_len=kv_len,
+                    block_cyclic_sp_axis=0,
+                    block_cyclic_chunk_local=q_per_rank,
+                    program_config=program_config,
+                )
+
+            out = run()
+            trace_id = None
+            try:
+                if traced:
+                    ttnn.synchronize_device(mesh_device, sub_device_ids=stall_group)
+                    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+                    out = run()
+                    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+                    ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
+                ttnn.synchronize_device(mesh_device, sub_device_ids=stall_group)
+                out_t = ttnn.to_torch(out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=2))
+            finally:
+                if trace_id is not None:
+                    ttnn.release_trace(mesh_device, trace_id)
+                ttnn.deallocate(out)
             return out_t, chunk_start
 
         entries_before = mesh_device.num_program_cache_entries()
         for dispatch, kv_len in enumerate(kv_lens):
-            out_t, chunk_start = _score(kv_len)
+            q_g, k_nat, w_g = reference_sets[dispatch]
+            out_t, chunk_start = _score(kv_len, dispatch)
             if dispatch == 0:
                 entries_after_compile = mesh_device.num_program_cache_entries()
                 assert entries_after_compile > entries_before

@@ -6,6 +6,8 @@
 
 #include <algorithm>
 #include <array>
+#include <initializer_list>
+#include <utility>
 #include <string>
 #include <vector>
 
@@ -682,9 +684,31 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
     const tensor_args_t& tensors,
     tensor_return_value_t& out) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    // Buffer addresses (q/k/w/out/k_local + the AG's gathered buffer) auto-patch via the descriptor's
-    // BufferBinding fast path.
-    descriptor_adapter_t::apply_descriptor(cached, args, tensors, out);
+    // Preserve the adapter's resolved operand identity, including the gathered/workload buffers.
+    // Group bindings by kernel so each worker address does not repeat a program/kernel lookup.
+    for (auto& [range, program] : cached.workload.get_programs()) {
+        const auto& shared = cached.shared_variables.at(range);
+        const auto& bindings = shared.resolved_bindings;
+        auto collected = descriptor_adapter_t::collect_tensor_buffers(tensors, out, shared.workload_descriptor);
+        if (!bindings.cbs.empty() ||
+            std::any_of(bindings.rt_args.begin(), bindings.rt_args.end(), [](const auto& binding) {
+                return binding.is_common;
+            })) {
+            // Retain the general implementation for any future CB/common binding variant.
+            tt::tt_metal::apply_resolved_bindings(program, bindings, collected.buffers);
+            continue;
+        }
+        std::vector<std::vector<tt::tt_metal::RuntimeArgsData>>* kernel_args = nullptr;
+        uint32_t previous_kernel = 0;
+        for (const auto& binding : bindings.rt_args) {
+            if (kernel_args == nullptr || previous_kernel != binding.kernel_idx) {
+                kernel_args = &tt::tt_metal::GetRuntimeArgs(program, binding.kernel_idx);
+                previous_kernel = binding.kernel_idx;
+            }
+            (*kernel_args)[binding.core.x][binding.core.y][binding.arg_idx] =
+                collected.buffers[binding.tensor_buffer_idx]->address();
+        }
+    }
 
     // The per-dispatch scalars chunk_start_idx / kv_len / cache_batch_idx are HASH-EXCLUDED (see
     // compute_program_hash: one cached program is reused across chunked-prefill chunks and decode steps that
@@ -714,37 +738,53 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
                 : 0u;
         const auto geom = device_causal_geometry(args, device_index, tp_index, q.logical_shape()[2]);
 
-        const auto patch_field = [&](uint32_t kernel_idx, uint32_t slot, uint32_t value) {
+        // Visit each kernel/core once for all of its changing scalars. The largest field
+        // bounds-check implies every field in this fixed table fits; empty AG cores stay skipped.
+        const auto patch_fields = [&](uint32_t kernel_idx,
+                                      std::initializer_list<std::pair<uint32_t, uint32_t>> fields,
+                                      bool skip_empty = false) {
+            const auto max_slot = std::max_element(fields.begin(), fields.end(), [](const auto& a, const auto& b) {
+                                      return a.first < b.first;
+                                  })->first;
             auto& grid_args = GetRuntimeArgs(program, kernel_idx);
+            bool patched_any = false;
             for (auto& col_args : grid_args) {
                 for (auto& core_args : col_args) {
+                    if (skip_empty && core_args.size() == 0) {
+                        continue;
+                    }
                     TT_FATAL(
-                        slot < core_args.size(),
+                        max_slot < core_args.size(),
                         "indexer_score fused override: scalar slot {} out of range (size {}) for kernel {}",
-                        slot,
+                        max_slot,
                         core_args.size(),
                         kernel_idx);
-                    core_args[slot] = value;
+                    for (const auto& [slot, value] : fields) {
+                        core_args[slot] = value;
+                    }
+                    patched_any = true;
                 }
             }
+            TT_FATAL(patched_any, "indexer_score fused override: kernel {} has no runtime arguments", kernel_idx);
         };
-
-        patch_field(kReaderKernelIndex, CMAKE_UNIQUE_NAMESPACE::rt_arg::reader_k_batch_offset, k_batch_page_offset);
-        patch_field(kReaderKernelIndex, CMAKE_UNIQUE_NAMESPACE::rt_arg::reader_kv_len_tiles, pcache.kv_len_tiles);
-        patch_field(
-            kReaderKernelIndex, CMAKE_UNIQUE_NAMESPACE::rt_arg::reader_k_local_batch_offset, k_local_batch_page_offset);
-        patch_field(kComputeKernelIndex, CMAKE_UNIQUE_NAMESPACE::rt_arg::compute_kv_len_tiles, pcache.kv_len_tiles);
-        patch_field(
-            kComputeKernelIndex, CMAKE_UNIQUE_NAMESPACE::rt_arg::compute_chunk_start_tiles, geom.chunk_start_tiles);
-        patch_field(kComputeKernelIndex, CMAKE_UNIQUE_NAMESPACE::rt_arg::compute_straddle_q_tile, geom.straddle_q_tile);
-        patch_field(
-            kComputeKernelIndex, CMAKE_UNIQUE_NAMESPACE::rt_arg::compute_straddle_jump_tiles, geom.straddle_jump_tiles);
-        patch_field(kWriterKernelIndex, CMAKE_UNIQUE_NAMESPACE::rt_arg::writer_kv_len_tiles, pcache.kv_len_tiles);
-        patch_field(
-            kWriterKernelIndex, CMAKE_UNIQUE_NAMESPACE::rt_arg::writer_chunk_start_tiles, geom.chunk_start_tiles);
-        patch_field(kWriterKernelIndex, CMAKE_UNIQUE_NAMESPACE::rt_arg::writer_straddle_q_tile, geom.straddle_q_tile);
-        patch_field(
-            kWriterKernelIndex, CMAKE_UNIQUE_NAMESPACE::rt_arg::writer_straddle_jump_tiles, geom.straddle_jump_tiles);
+        namespace rta = CMAKE_UNIQUE_NAMESPACE::rt_arg;
+        patch_fields(
+            kReaderKernelIndex,
+            {{rta::reader_k_batch_offset, k_batch_page_offset},
+             {rta::reader_kv_len_tiles, pcache.kv_len_tiles},
+             {rta::reader_k_local_batch_offset, k_local_batch_page_offset}});
+        patch_fields(
+            kComputeKernelIndex,
+            {{rta::compute_kv_len_tiles, pcache.kv_len_tiles},
+             {rta::compute_chunk_start_tiles, geom.chunk_start_tiles},
+             {rta::compute_straddle_q_tile, geom.straddle_q_tile},
+             {rta::compute_straddle_jump_tiles, geom.straddle_jump_tiles}});
+        patch_fields(
+            kWriterKernelIndex,
+            {{rta::writer_kv_len_tiles, pcache.kv_len_tiles},
+             {rta::writer_chunk_start_tiles, geom.chunk_start_tiles},
+             {rta::writer_straddle_q_tile, geom.straddle_q_tile},
+             {rta::writer_straddle_jump_tiles, geom.straddle_jump_tiles}});
 
         // The descriptor fast path patches buffer bindings but not scalar fields embedded in the fused AG
         // workers. cache_batch_idx and the exact kv_len are hash-excluded (only the structural schedule class is
@@ -757,28 +797,6 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
         const auto valid_Ht = gather_valid_height_tiles(args, k_local);
         const uint32_t valid_pages = std::min(valid_Ht.value_or(Ht), Ht) * Wt;
 
-        const auto patch_ag_field = [&](uint32_t kernel_idx, uint32_t slot, uint32_t value) {
-            auto& grid_args = GetRuntimeArgs(program, kernel_idx);
-            bool patched_any_core = false;
-            for (auto& col_args : grid_args) {
-                for (auto& core_args : col_args) {
-                    if (core_args.size() == 0) {
-                        continue;
-                    }
-                    TT_FATAL(
-                        core_args.size() > slot,
-                        "indexer_score fused override: AG scalar slot {} out of range (size {}) for kernel {}",
-                        slot,
-                        core_args.size(),
-                        kernel_idx);
-                    core_args[slot] = value;
-                    patched_any_core = true;
-                }
-            }
-            TT_FATAL(
-                patched_any_core, "indexer_score fused override: AG kernel {} has no runtime arguments", kernel_idx);
-        };
-
         // Semaphore identity is hash-excluded. Rebind both ring directions on every cache hit so callers
         // can alternate double-buffered semaphore pairs without compiling a second otherwise-identical
         // program. Runtime-arg layouts are declared in ring_attention_all_gather_async_detail.
@@ -789,23 +807,30 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
             ag_semaphores.size());
         const uint32_t backward_semaphore = static_cast<uint32_t>(ag_semaphores[0].address());
         const uint32_t forward_semaphore = static_cast<uint32_t>(ag_semaphores[1].address());
-        patch_ag_field(kAllGatherReaderForwardKernelIndex, ag_rt::kReaderReadySemaphoreFieldOffset, forward_semaphore);
-        patch_ag_field(kAllGatherWriterForwardKernelIndex, ag_rt::kWriterReadySemaphoreFieldOffset, forward_semaphore);
-        patch_ag_field(
-            kAllGatherReaderBackwardKernelIndex, ag_rt::kReaderReadySemaphoreFieldOffset, backward_semaphore);
-        patch_ag_field(
-            kAllGatherWriterBackwardKernelIndex, ag_rt::kWriterReadySemaphoreFieldOffset, backward_semaphore);
-
         constexpr uint32_t ag_reader_input_base =
             ag_rt::kReaderRuntimeArgHeaderCount + ag_rt::kInputBatchBaseFieldOffset;
         constexpr uint32_t ag_reader_valid_pages = ag_rt::kReaderRuntimeArgHeaderCount + ag_rt::kValidPagesFieldOffset;
         constexpr uint32_t ag_writer_valid_pages = ag_rt::kWriterRuntimeArgHeaderCount + ag_rt::kValidPagesFieldOffset;
-        patch_ag_field(kAllGatherReaderForwardKernelIndex, ag_reader_input_base, input_batch_base);
-        patch_ag_field(kAllGatherReaderBackwardKernelIndex, ag_reader_input_base, input_batch_base);
-        patch_ag_field(kAllGatherReaderForwardKernelIndex, ag_reader_valid_pages, valid_pages);
-        patch_ag_field(kAllGatherReaderBackwardKernelIndex, ag_reader_valid_pages, valid_pages);
-        patch_ag_field(kAllGatherWriterForwardKernelIndex, ag_writer_valid_pages, valid_pages);
-        patch_ag_field(kAllGatherWriterBackwardKernelIndex, ag_writer_valid_pages, valid_pages);
+        patch_fields(
+            kAllGatherReaderForwardKernelIndex,
+            {{ag_rt::kReaderReadySemaphoreFieldOffset, forward_semaphore},
+             {ag_reader_input_base, input_batch_base},
+             {ag_reader_valid_pages, valid_pages}},
+            true);
+        patch_fields(
+            kAllGatherReaderBackwardKernelIndex,
+            {{ag_rt::kReaderReadySemaphoreFieldOffset, backward_semaphore},
+             {ag_reader_input_base, input_batch_base},
+             {ag_reader_valid_pages, valid_pages}},
+            true);
+        patch_fields(
+            kAllGatherWriterForwardKernelIndex,
+            {{ag_rt::kWriterReadySemaphoreFieldOffset, forward_semaphore}, {ag_writer_valid_pages, valid_pages}},
+            true);
+        patch_fields(
+            kAllGatherWriterBackwardKernelIndex,
+            {{ag_rt::kWriterReadySemaphoreFieldOffset, backward_semaphore}, {ag_writer_valid_pages, valid_pages}},
+            true);
     }
 }
 
