@@ -19,6 +19,7 @@ from ....models.audio_vae.minimax_h3.encoder_minimax_h3_audio import MiniMaxH3Au
 from ....models.vae.minimax_h3.vae_minimax_h3 import MiniMaxH3Vae, MiniMaxH3VaeConfig
 from ....parallel.config import ParallelFactor
 from ....parallel.manager import CCLManager
+from ....utils.test import ring_params_8k
 from .common import (
     CLIP_FRAMES,
     DECODE_LATENT_FRAMES,
@@ -346,14 +347,12 @@ def test_decode_stage(mesh_device, seconds, mode):
 
 # 16384, not the decode stage's 65536: the taps=3 video encoder (only ref2va reaches it) clashes
 # with L1 above it -- same override the ref2va e2e suite carries.
+# 8 KB fabric packets like the pipeline: the T-sharded audio encoder's halo exchange corrupts rows wider than one
+# packet (its final trunk conv has 8192-byte rows) and now refuses to run under the default 4352-byte packets.
 ENCODE_STAGE_MESH = [
     pytest.param(
         (4, 8),
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-            "require_exact_physical_num_devices": True,
-            "l1_small_size": 16384,
-        },
+        {**ring_params_8k, "require_exact_physical_num_devices": True, "l1_small_size": 16384},
         id="4x8ring",
     )
 ]
