@@ -396,13 +396,6 @@ namespace {
 // Per-core runtime-arg lists for every core in the worker grid (work AND noop cores), in the same
 // order create_descriptor() populates them.  Each arg list is a vector of variants: Buffer* entries
 // are buffer base addresses (bindings), uint32_t entries are plain values.
-struct BinaryNgPerCoreArgs {
-    std::vector<CoreCoord> cores;
-    std::vector<std::vector<std::variant<uint32_t, Buffer*>>> reader;
-    std::vector<std::vector<std::variant<uint32_t, Buffer*>>> writer;
-    std::vector<std::vector<std::variant<uint32_t, Buffer*>>> compute;
-};
-
 // SINGLE SOURCE OF TRUTH for binary_ng per-core runtime args.  Run by BOTH create_descriptor()
 // (cache miss) and BinaryNgDeviceOperation::override_runtime_arguments() (cache hit).
 //
@@ -416,15 +409,15 @@ struct BinaryNgPerCoreArgs {
 // num_cores_total cores -- noop cores get zero-filled lists sized to match the work-core layout -- and
 // override_runtime_arguments re-applies every slot (buffer slots via their current address), so nothing
 // is left frozen regardless of how the partition shifts.
-BinaryNgPerCoreArgs build_per_core_runtime_args(
+template <typename EmitCoreArgs>
+void for_each_core_runtime_args(
     const BinaryNgDeviceOperation::operation_attributes_t& operation_attributes,
     const Tensor& a,
     const std::optional<Tensor>& b,
-    const Tensor& c) {
+    const Tensor& c,
+    EmitCoreArgs&& emit) {
     using namespace tt;
     using namespace tt::tt_metal;
-
-    BinaryNgPerCoreArgs result;
 
     const auto& all_device_cores = operation_attributes.worker_grid;
     const auto op_type = operation_attributes.binary_op_type;
@@ -588,18 +581,22 @@ BinaryNgPerCoreArgs build_per_core_runtime_args(
         cores = corerange_to_cores(all_device_cores, {}, row_major);
     }
 
-    result.cores.reserve(num_cores_total);
-    result.reader.reserve(num_cores_total);
-    result.writer.reserve(num_cores_total);
-    result.compute.reserve(num_cores_total);
+    // Reuse these invocation-local lists for every core. Consumers copy/apply immediately;
+    // nothing retains their storage, and every shape/scalar/noop value is still re-derived.
+    std::vector<std::variant<uint32_t, Buffer*>> reader_runtime_args;
+    std::vector<std::variant<uint32_t, Buffer*>> writer_runtime_args;
+    std::vector<std::variant<uint32_t, Buffer*>> compute_runtime_args;
+    reader_runtime_args.reserve(row_major_inputs ? 26 : 21);
+    writer_runtime_args.reserve(row_major_inputs ? 14 : (b.has_value() ? 11 : 12));
+    compute_runtime_args.reserve(op_type == BinaryOpType::ISCLOSE ? 5 : 4);
 
     uint32_t current_block = 0;
     for (uint32_t i = 0, start_tile_id = 0; i < num_cores_total; i++) {
         const auto& core = cores[i];
 
-        std::vector<std::variant<uint32_t, Buffer*>> reader_runtime_args;
-        std::vector<std::variant<uint32_t, Buffer*>> writer_runtime_args;
-        std::vector<std::variant<uint32_t, Buffer*>> compute_runtime_args;
+        reader_runtime_args.clear();
+        writer_runtime_args.clear();
+        compute_runtime_args.clear();
 
         uint32_t a_num_tiles = 0;
         uint32_t b_num_tiles = 0;
@@ -618,10 +615,7 @@ BinaryNgPerCoreArgs build_per_core_runtime_args(
             reader_runtime_args.assign(reader_len, std::variant<uint32_t, Buffer*>{uint32_t{0}});
             writer_runtime_args.assign(writer_len, std::variant<uint32_t, Buffer*>{uint32_t{0}});
             compute_runtime_args.assign(compute_len, std::variant<uint32_t, Buffer*>{uint32_t{0}});
-            result.cores.push_back(core);
-            result.reader.push_back(std::move(reader_runtime_args));
-            result.writer.push_back(std::move(writer_runtime_args));
-            result.compute.push_back(std::move(compute_runtime_args));
+            emit(core, reader_runtime_args, writer_runtime_args, compute_runtime_args);
             continue;
         }
 
@@ -813,18 +807,13 @@ BinaryNgPerCoreArgs build_per_core_runtime_args(
             };
         }
 
-        result.cores.push_back(core);
-        result.reader.push_back(std::move(reader_runtime_args));
-        result.writer.push_back(std::move(writer_runtime_args));
-        result.compute.push_back(std::move(compute_runtime_args));
+        emit(core, reader_runtime_args, writer_runtime_args, compute_runtime_args);
 
         start_tile_id += c_num_tiles_core;
         if (row_major_inputs) {
             current_block += c_num_tiles_core;
         }
     }
-
-    return result;
 }
 
 }  // namespace
@@ -1364,14 +1353,16 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     // === Per-core runtime arguments ===
     // Built via the shared single-source-of-truth builder so create_descriptor() (cache miss, here)
     // and BinaryNgDeviceOperation::override_runtime_arguments() (cache hit) stay byte-identical.
-    {
-        auto per_core = build_per_core_runtime_args(operation_attributes, a, b, c);
-        for (size_t i = 0; i < per_core.cores.size(); ++i) {
-            reader_desc.emplace_runtime_args(per_core.cores[i], per_core.reader[i]);
-            writer_desc.emplace_runtime_args(per_core.cores[i], per_core.writer[i]);
-            compute_desc.emplace_runtime_args(per_core.cores[i], per_core.compute[i]);
-        }
-    }
+    for_each_core_runtime_args(
+        operation_attributes,
+        a,
+        b,
+        c,
+        [&](const CoreCoord& core, const auto& reader, const auto& writer, const auto& compute) {
+            reader_desc.emplace_runtime_args(core, reader);
+            writer_desc.emplace_runtime_args(core, writer);
+            compute_desc.emplace_runtime_args(core, compute);
+        });
 
     // Push kernel descriptors: reader (index 0), writer (index 1), compute (index 2)
     desc.kernels.push_back(std::move(reader_desc));
@@ -1404,8 +1395,6 @@ void BinaryNgDeviceOperation::ProgramFactory::override_runtime_arguments(
     const auto& a = tensor_args.input_tensor_a;
     const auto& b = tensor_args.input_tensor_b;
 
-    auto per_core = build_per_core_runtime_args(operation_attributes, a, b, c);
-
     constexpr uint32_t kReaderKernelIdx = 0;
     constexpr uint32_t kWriterKernelIdx = 1;
     constexpr uint32_t kComputeKernelIdx = 2;
@@ -1425,12 +1414,16 @@ void BinaryNgDeviceOperation::ProgramFactory::override_runtime_arguments(
         }
     };
 
-    for (size_t i = 0; i < per_core.cores.size(); ++i) {
-        const auto& core = per_core.cores[i];
-        apply(reader_args.at(core.x).at(core.y), per_core.reader[i]);
-        apply(writer_args.at(core.x).at(core.y), per_core.writer[i]);
-        apply(compute_args.at(core.x).at(core.y), per_core.compute[i]);
-    }
+    for_each_core_runtime_args(
+        operation_attributes,
+        a,
+        b,
+        c,
+        [&](const CoreCoord& core, const auto& reader, const auto& writer, const auto& compute) {
+            apply(reader_args.at(core.x).at(core.y), reader);
+            apply(writer_args.at(core.x).at(core.y), writer);
+            apply(compute_args.at(core.x).at(core.y), compute);
+        });
 
     // Re-point tensor-backed (globally-allocated) circular buffers at the CURRENT buffers, by CBIndex.
     // binary_ng convention: c_0 = input_a, c_1 = input_b, c_2 = output.  Addressing by CBIndex (not by

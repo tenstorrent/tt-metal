@@ -722,3 +722,33 @@ def test_ng_where_scalar_preallocated_output_dtype(device, isolate_program_cache
 
     ref = torch.where(pred.bool(), t_true.float(), torch.full(shape, scalar_false))
     assert_with_pcc(ref, ttnn.to_torch(res).float(), 0.999)
+
+
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 1000000}], indirect=True)
+@pytest.mark.parametrize("traced", [False, True])
+@pytest.mark.parametrize("scalar_rhs", [False, True])
+def test_ng_streamed_runtime_args_work_noop_transitions(device, isolate_program_cache, traced, scalar_rhs):
+    """Changing work extent must overwrite reused scratch lists, including work-to-noop transitions."""
+    live = []
+    entries = None
+    for iteration, side in enumerate((32, 320, 64, 32)):
+        host = torch.full((1, 1, side, side), iteration + 1, dtype=torch.bfloat16)
+        a = ttnn.from_torch(host, layout=ttnn.TILE_LAYOUT, device=device)
+        b = iteration + 2 if scalar_rhs else ttnn.from_torch(host, layout=ttnn.TILE_LAYOUT, device=device)
+        expected = host + (iteration + 2 if scalar_rhs else host)
+        out = ttnn.add(a, b)
+        trace_id = None
+        if traced:
+            ttnn.synchronize_device(device)
+            trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+            out = ttnn.add(a, b)
+            ttnn.end_trace_capture(device, trace_id, cq_id=0)
+            ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
+        live.append((a, b, out))
+        assert torch.equal(ttnn.to_torch(out), expected)
+        if entries is None:
+            entries = device.num_program_cache_entries()
+        else:
+            assert device.num_program_cache_entries() == entries
+        if trace_id is not None:
+            ttnn.release_trace(device, trace_id)
