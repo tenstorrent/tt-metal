@@ -4629,6 +4629,61 @@ def _clear_responses_dir(demo_dir: Path) -> None:
 
 _LAST_PYTEST_STAGES: Dict[str, str] = {}
 _LAST_PYTEST_PCC: Dict[str, float] = {}
+_LAST_HANG_EVIDENCE: str = ""
+
+
+def _capture_hang_evidence(proc) -> str:
+    """Where the process is stuck, sampled BEFORE we SIGKILL the pytest tree.
+
+    A wall-kill used to report only 'WALL-CLOCK BUDGET EXHAUSTED' — true but
+    useless, so the agent re-ran the same stub. A Python stack plus the kernel
+    wait channel names the actual blocking call (a sync, a collective) instead
+    of a blank wall. Best-effort: every probe is optional and never raises, so a
+    box without py-spy still gets a kill and the wchan lines.
+
+    The caller owns the stage lines (it already prints them); this returns only
+    what has to be sampled from the live process."""
+    import shutil as _shutil
+
+    chunks: List[str] = []
+    pid = getattr(proc, "pid", None)
+    if not pid:
+        return ""
+    spy = _shutil.which("py-spy")
+    if spy:
+        try:
+            out = subprocess.run(
+                [spy, "dump", "--pid", str(pid), "--nonblocking"],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            text = (out.stdout or "").strip() or (out.stderr or "").strip()
+            if text:
+                chunks.append("py-spy dump of hung pytest:")
+                chunks.append(text[:6000])
+        except Exception:
+            pass
+    try:
+        pids = [int(pid)] + [int(p) for p in (_collect_agent_descendant_pids(int(pid)) or [])]
+    except Exception:
+        pids = [int(pid)]
+    wchan_lines: List[str] = []
+    for p in pids[:12]:
+        try:
+            wchan = Path(f"/proc/{p}/wchan").read_text().strip()
+        except Exception:
+            wchan = ""
+        try:
+            comm = Path(f"/proc/{p}/comm").read_text().strip()
+        except Exception:
+            comm = ""
+        if wchan or comm:
+            wchan_lines.append(f"  pid={p} comm={comm} wchan={wchan}")
+    if wchan_lines:
+        chunks.append("kernel wchan of pytest tree:")
+        chunks.extend(wchan_lines)
+    return "\n".join(chunks)
 
 
 def _run_focused_pytest(
@@ -4640,6 +4695,7 @@ def _run_focused_pytest(
     allow_device_reset: bool = True,
     _reset_already_attempted: bool = False,
 ) -> int:
+    global _LAST_HANG_EVIDENCE
     if not test_files:
         return 0
     import subprocess
@@ -4686,6 +4742,7 @@ def _run_focused_pytest(
 
     _LAST_PYTEST_STAGES.clear()
     _LAST_PYTEST_PCC.clear()
+    _LAST_HANG_EVIDENCE = ""
     current_test: Optional[str] = None
     lock_wait_state: Dict[str, object] = {"since": None, "blocker_pid": None, "abort": False}
     captured_tail: collections.deque = collections.deque(maxlen=4000)
@@ -4838,10 +4895,20 @@ def _run_focused_pytest(
             f"BRINGUP_MCP_TIMEOUT (it is already scaled by how many chips the run spans).",
             file=sys.stderr,
         )
+        _hang_report: List[str] = []
         if _LAST_PYTEST_STAGES:
-            print("  Last reported stage(s) before kill:", file=sys.stderr)
+            _hang_report.append("  Last reported stage(s) before kill:")
             for tname, stg in _LAST_PYTEST_STAGES.items():
-                print(f"    {tname}: stage={stg}", file=sys.stderr)
+                _hang_report.append(f"    {tname}: stage={stg}")
+        try:
+            _dump = _capture_hang_evidence(proc)
+        except Exception as _hang_exc:
+            _dump = f"(hang evidence capture failed: {_hang_exc})"
+        if _dump:
+            _hang_report.append(_dump)
+        for _line in _hang_report:
+            print(_line, file=sys.stderr)
+        _LAST_HANG_EVIDENCE = "\n".join(_hang_report)
 
         _kill_process_tree(proc, label="pytest")
         pump_thread.join(timeout=5)
@@ -5545,27 +5612,34 @@ def _strategy_directive_for_failure(failure_class: str, *, strict_native: bool =
     if failure_class == "HANG":
         return (
             "Failure class is HANG. The previous stub did not complete within "
-            "the wall-clock budget. The hang is almost always a DEVICE-SIDE "
-            "kernel deadlock (the host enqueued a ttnn op the kernel can't "
-            "actually execute, so `ttnn.synchronize_device` and any subsequent "
-            "`ttnn.to_torch` block forever). Top causes, in order of frequency:\n"
-            "  1. **Tile-misaligned shape** going into a tile op. `ttnn.matmul` / "
+            "the wall-clock budget. Do NOT re-run the same stub — the tool "
+            "refuses an unchanged-stub re-run. Read hang evidence first "
+            "(stage, Python stacks, kernel wchan): that is the hang site.\n"
+            "A hang is almost always a DEVICE-SIDE deadlock (the host enqueued "
+            "work the device never finishes, so `ttnn.synchronize_device` and "
+            "any subsequent `ttnn.to_torch` block forever). Top causes, in "
+            "order of frequency:\n"
+            "  1. **Collective / mesh deadlock.** `all_reduce` / `all_gather` / "
+            "`reduce_scatter` on a `cluster_axis` this mesh does not span "
+            "(axis size 1, or a carved submesh that dropped the other devices) "
+            "never completes. Collectives must run on the mesh the run opened, "
+            "with cluster_axis matching a dimension that has more than one "
+            "device. Do not shrink the mesh to dodge a TP constraint.\n"
+            "  2. **Tile-misaligned shape** going into a tile op. `ttnn.matmul` / "
             "     `ttnn.linear` / `ttnn.softmax` require the last 2 dims to be "
-            "     multiples of 32 in TILE_LAYOUT. Adjust head_dim or pad.\n"
-            "  2. **Permute on TILE_LAYOUT** for axes other than the last two. "
+            "     multiples of 32 in TILE_LAYOUT. Pad the last two dims.\n"
+            "  3. **Permute on TILE_LAYOUT** for axes other than the last two. "
             "     Call `ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT)` BEFORE permute "
             "     that touches non-tile axes, then `ttnn.to_layout(t, TILE)` "
             "     before the next compute op.\n"
-            "  3. **Reshape in TILE_LAYOUT** with non-tile-aligned dims. Switch "
+            "  4. **Reshape in TILE_LAYOUT** with non-tile-aligned dims. Switch "
             "     to ROW_MAJOR_LAYOUT for the reshape, then back to TILE.\n"
-            "  4. **Mismatched mesh distribution** between operands of one op "
-            "     (e.g. input replicated, weight sharded across mesh). Use "
-            "     `ttnn.ReplicateTensorToMesh(device)` for both, OR open a "
-            "     1x1 sub-mesh for this PCC test.\n"
-            "  5. Python-level unbounded loop in `__call__` (rare for native code).\n"
-            "Rewrite the forward path with every intermediate produced by a "
-            "single tile-aligned ttnn op, and explicit layout transitions around "
-            "every permute/reshape."
+            "  5. **Mismatched mesh distribution** between operands of one op "
+            "     (e.g. input replicated, weight sharded). Both operands must "
+            "     use the same mapper as the mesh this run opened.\n"
+            "  6. Python-level unbounded loop in `__call__` (rare for native code).\n"
+            "Fix the hang site in the stub, then re-run. Do not raise a Python "
+            "alarm in the test — it cannot interrupt a Metal futex."
         )
     if failure_class == "DTYPE_MISMATCH":
         return (

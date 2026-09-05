@@ -48,6 +48,7 @@ Config via env:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -127,6 +128,47 @@ def _component_of(test_file: str) -> str:
 
 def _stub_path(component: str) -> Path:
     return _DEMO_DIR / "_stubs" / f"{component}.py"
+
+
+def _stub_sha(component: str) -> str:
+    """Content hash of the live stub, or '' if the file is missing/unreadable.
+
+    Used to refuse a second device run of a HANG whose binary has not changed —
+    re-running the same stub just burns the wall clock on the same deadlock."""
+    p = _stub_path(component)
+    if not p.is_file():
+        return ""
+    try:
+        return hashlib.sha256(p.read_bytes()).hexdigest()
+    except OSError:
+        return ""
+
+
+def _hang_rerun_block_reason(component: str, st: dict | None = None) -> str | None:
+    """Why ``run_component`` must refuse this call, or None if a device run is allowed.
+
+    A HANG is a Metal/CCL/mesh deadlock. The wall-kill text used to be the only
+    feedback, so the agent re-queued the same stub forever. Gate until the stub
+    bytes change; the class is whatever last ``run_component`` classified, not a
+    name the caller passes."""
+    st = st if st is not None else _load_state()
+    if (st.get("last_failure_class") or {}).get(component) != "HANG":
+        return None
+    saved = (st.get("hang_stub_sha") or {}).get(component) or ""
+    if not saved:
+        return None
+    current = _stub_sha(component)
+    if not current or current != saved:
+        return None
+    evidence = ((st.get("last_failure_text") or {}).get(component) or "").strip()
+    if len(evidence) > 1200:
+        evidence = evidence[:1200] + "\n…"
+    return (
+        f"last run of '{component}' was HANG with this exact stub "
+        f"(sha={saved[:12]}). Do NOT call run_component again until you edit "
+        f"_stubs/{component}.py — a hang is a Metal/CCL/mesh deadlock; re-running "
+        f"the same binary just burns the wall clock. Last hang evidence:\n{evidence}"
+    )
 
 
 def _snap(component: str, suffix: str) -> Path:
@@ -472,13 +514,26 @@ def _run_pcc(component: str) -> dict:
         # phrase — without folding it in, this path is OTHER and the component is
         # re-queued forever. Same phrases the existing detector already keys off.
         hang = f"focused pytest WALL-CLOCK BUDGET EXHAUSTED at {_timeout}s " f"— killing process group (likely a hang)"
+        # Single source: `_capture_hang_evidence` already includes stages.
+        # Fall back to stages only when the dump never ran (tests, or capture failed).
+        extras: list[str] = []
+        evidence = str(getattr(_cli, "_LAST_HANG_EVIDENCE", "") or "").strip()
+        if evidence:
+            extras.append(evidence)
+        else:
+            stages = getattr(_cli, "_LAST_PYTEST_STAGES", None) or {}
+            if stages:
+                extras.append(
+                    "Last reported stage(s): " + ", ".join(f"{tname}={stg}" for tname, stg in stages.items())
+                )
+        details = hang if not extras else hang + "\n" + "\n".join(extras)
         return {
             "ran": True,
             "passed": False,
             "failed": True,
             "skipped": False,
             "summary": hang,
-            "details": hang,
+            "details": details[:8000],
             "skip_reason": "",
         }
     report = _cli._scope_report_to_demo(_cli._parse_pytest_report(), _DEMO_DIR)
@@ -597,8 +652,38 @@ def run_component(component: str, mode: str = "single") -> dict:
 
     If ok is false and the test could not even run (import/collection/torch-reference error in the
     summary), the blocker is in the TEST HARNESS (tests/pcc/conftest.py) — fix that, not the stub.
-    PCC>=threshold is enforced inside the test."""
+    PCC>=threshold is enforced inside the test.
+
+    After a HANG, a second call with the SAME stub bytes is refused (`gated: True`). A hang is a
+    Metal/CCL/mesh deadlock; re-running the unchanged binary just burns the wall. Edit the stub,
+    then call again — the tool resets the device first because a wall-kill leaves firmware dirty."""
     stub = _stub_path(component)
+    hang_block = _hang_rerun_block_reason(component)
+    if hang_block:
+        return {
+            "ok": False,
+            "gated": True,
+            "graduated": False,
+            "graduation_block": "",
+            "summary": hang_block[:1000],
+            "failed": False,
+            "skipped": False,
+            "harness_skip": False,
+            "failure_class": "HANG",
+            "reason": hang_block,
+        }
+    st0 = _load_state()
+    if st0.get("hang_device_dirty"):
+        try:
+            _cli._run_tt_smi_reset(context="hang:post-hang-device-reset")
+        except Exception:
+            pass
+        st0["hang_device_dirty"] = False
+        # This IS the fabric reset the shard phase would do on its first run, and
+        # `_run_tt_smi_reset` is capped per process — don't spend a second unit
+        # resetting a card we just reset.
+        st0["shard_reset_done"] = True
+        _save_state(st0)
     if stub.is_file():
         if _is_torch_wrapper(stub):
             bak = _snap(component, ".py.bak")
@@ -650,6 +735,15 @@ def run_component(component: str, mode: str = "single") -> dict:
             cls = _classify_loop(res["summary"], res["details"])
             st.setdefault("last_failure_class", {})[component] = cls
             st.setdefault("last_failure_text", {})[component] = (res["summary"] + "\n" + res["details"])[:4000]
+            if cls == "HANG":
+                sha = _stub_sha(component)
+                if sha:
+                    st.setdefault("hang_stub_sha", {})[component] = sha
+                st["hang_device_dirty"] = True
+            else:
+                (st.get("hang_stub_sha") or {}).pop(component, None)
+        else:
+            (st.get("hang_stub_sha") or {}).pop(component, None)
     if mode == "shard" and _is_fabric_failure(res.get("summary", "") + "\n" + res.get("details", "")):
         st["fabric_unhealthy"] = True
     _save_state(st)
@@ -1185,6 +1279,15 @@ def termination_check() -> dict:
                 f"edit _stubs/{c}.py to native ttnn; re-run; record_result. PCC>={_PCC} graduates it."
                 + _decompose_hint,
             }
+        hang_block = _hang_rerun_block_reason(c, st)
+        if hang_block and nxt is not None:
+            nxt["hang_gated"] = True
+            nxt["reason"] = (
+                f"last run of '{c}' was HANG and the stub is unchanged. "
+                f"EDIT _stubs/{c}.py (collective / mesh / synchronize — not a test timeout) "
+                f"BEFORE calling run_component. Blind re-run of the same binary is gated.\n"
+                + hang_block
+            )
     elif needs_cap:
         c = needs_cap[0]
         if c not in decomposed and _cap_verdict_warrants_decompose(c, st):
