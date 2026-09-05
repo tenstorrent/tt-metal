@@ -12,7 +12,7 @@ hunt for novel hazards.
 
 ```
 ┌─ extractor/  (C++ / Clang libTooling) ─ parse once, emit a semantics-free FACT BASE
-│     llk_extract.cpp     functions · pointer-writes (+provenance) · pointer-reads · calls · macro expansions
+│     llk_extract.cpp     functions · pointer-writes (+provenance) · pointer-reads · calls · macro expansions · opcode values
 │
 ├─ llkaudit/   (Python) ─ classify the fact base into recall candidates
 │     registry.py         ← THE table that maps LLK names/signatures to meaning (edit this)
@@ -153,6 +153,7 @@ Open `registry.py` — it is organized by concept with an `EDIT HERE` banner:
 - new NoC read barrier or read-consume form (noc-read-barrier) → `NOC_METHOD_READ_BARRIER` / `READ_FORWARD_CALLS`
 - new all-draining full barrier → `NOC_FULL_BARRIERS` / `NOC_METHOD_FULL_BARRIER` (drains read+write+atomic — satisfies the flush/barrier, atomic-barrier, AND read-barrier predicates)
 - noc-l1-invalidate has no per-signature table — it keys on the `pointer_read` fact (a volatile L1 poll in a loop) scoped to NoC context (`noc_op_of`) / `get_semaphore` provenance; widen the `pointer_read` capture, not a name list
+- new MOP slot setter / replay entry point → `MOP_SLOT_SETTERS` / `REPLAY_RECORD_CALLS` / `REPLAY_EXPAND_CALLS`. **A word's FAMILY is a contract with the extractor:** `TT_OP_*` expansions are filed under `OPCODE_VALUE_FAMILY` (`opcode_value`), never `macro`, so no instruction-consuming check can read an opcode value as an instruction issued at that line — and `mop-replay` reads only that family. Change one side and the hint goes silently dead (it still passes every hermetic test and returns 0 on a real fact base); a test asserts the two agree.
 
 Then `python3 tests/test_checks.py` to confirm nothing regressed.
 

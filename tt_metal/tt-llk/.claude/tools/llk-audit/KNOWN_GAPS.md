@@ -303,13 +303,16 @@ SECOND word, so a Src flip installed as `END_OP1` draws no `MOP_SLOTTED_SRC_FLIP
 is a `CXXConstructExpr`, which the extractor does not visit (only `VisitFunctionDecl`,
 `VisitBinaryOperator`, `VisitCallExpr`, `VisitImplicitCastExpr`), so the construction emits no
 call fact and the word carries no slot.
-- **Risk:** CAP-REDUCTION — the word surfaces only as `MOP_WORD_SLOT_UNATTRIBUTED` (and only if
-  it is a Src flip or a sync op), or not at all when the op is a named `static constexpr`
-  defined elsewhere in the file.
+- **Risk:** CAP-REDUCTION — the word surfaces only as `MOP_WORD_SLOT_UNATTRIBUTED`, without a
+  slot, and only if it is a Src flip or a sync op; an arithmetic loop op draws nothing here
+  (instruction-latency widens its own `TT_OP_*` enumeration instead).
 - **Live today:** 246 `ckernel_(unpack_)template` constructions across WH+BH+QSR versus 16
   `set_loop_op0/1` calls, so nearly every loop op is constructor-passed. Not a wrong answer —
   the checker never claims a slot it did not resolve — but it means the slot inventory is
   deliberately partial, which is why the skills tell the LLM to resolve at the `run()` site.
+  The unattributed hint does now carry these: `MOP_WORD_SLOT_UNATTRIBUTED` fires 53 (BH) /
+  22 (WH) / 17 (QSR), e.g. the two `TT_OP_MVMUL(p_setrwc::CLR_A|CLR_AB, …)` flips bound to
+  named constants in `experimental/llk_math_custom_mm.h` and fed to a MOP program.
 - **Fix:** add a `VisitCXXConstructExpr` branch emitting a `call`-shaped fact for these types
   (name = the type, args = the ctor args), then map positional args 3/4 to `LOOP_OP0`/`LOOP_OP1`.
 - **Fix hazard:** the positional→slot mapping differs between the two template types and

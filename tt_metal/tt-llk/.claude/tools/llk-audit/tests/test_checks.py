@@ -67,6 +67,17 @@ def macro(file, off, name, text, func=""):
     }
 
 
+def opcode_value(file, off, name, text, func=""):
+    """A `TT_OP_*` word as the EXTRACTOR files it — its own family, never "macro".
+
+    Building these as `macro` facts is what let the unattributed-word hint pass its
+    tests while being dead on every real fact base; the family is the contract.
+    """
+    f = macro(file, off, name, text, func)
+    f["family"] = registry.OPCODE_VALUE_FAMILY
+    return f
+
+
 def call(file, off, name, text=None, func="", arg0="", recv="", recv_type="", argc=-1):
     return {
         "family": "call",
@@ -3955,7 +3966,7 @@ def test_unattributed_opcode_value_flip_is_recalled():
     out = _mr(
         [
             fn("configure_mop", _MR_F, 100, 200),
-            macro(
+            opcode_value(
                 _MR_F,
                 180,
                 "TT_OP_SETRWC",
@@ -3973,7 +3984,7 @@ def test_unattributed_opcode_value_sync_is_recalled():
     out = _mr(
         [
             fn("configure_mop", _MR_F, 100, 200),
-            macro(
+            opcode_value(
                 _MR_F,
                 190,
                 "TT_OP_SEMPOST",
@@ -3992,7 +4003,7 @@ def test_arithmetic_opcode_value_is_not_recalled_here():
     out = _mr(
         [
             fn("sfpu_kernel", _MR_F, 100, 200),
-            macro(
+            opcode_value(
                 _MR_F,
                 195,
                 "TT_OP_SFPMAD",
@@ -4071,6 +4082,62 @@ def test_replay_hex_literal_index_is_resolved():
         ]
     )
     assert out == [], out
+
+
+@case
+def test_opcode_value_filed_as_a_macro_is_not_recalled():
+    """The family IS the contract. A `TT_OP_*` word the extractor filed under
+    "macro" is invisible to this check by design — the instruction-consuming
+    checks own that family, and an opcode value must never reach them."""
+    out = _mr(
+        [
+            fn("configure_mop", _MR_F, 100, 200),
+            macro(
+                _MR_F,
+                180,
+                "TT_OP_SETRWC",
+                "TT_OP_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_AB)",
+                func="configure_mop",
+            ),
+        ]
+    )
+    assert out == [], out
+
+
+@case
+def test_extractor_files_opcode_values_under_the_checkers_family():
+    """Extractor/checker sync, the axis a hint-NAME check cannot see.
+
+    `is_mop_word()` selects `TT_OP_*`; if the C++ MacroPass denylists that prefix
+    outright (as it once did) the unattributed-word hint is structurally DEAD — it
+    passes every hermetic test and returns 0 on every real fact base, which reads
+    as an all-clear. Assert the two sides still agree. Skips (does not fail) if the
+    extractor is not alongside, so a vendored copy of the Python tier tests clean."""
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    src_path = os.path.join(here, "extractor", "llk_extract.cpp")
+    if not os.path.exists(src_path):
+        return
+    src = open(src_path).read()
+    assert (
+        f'"{registry.OPCODE_VALUE_FAMILY}"' in src
+    ), f"extractor never files facts under {registry.OPCODE_VALUE_FAMILY}"
+    # The prefix the checker selects must not be dropped wholesale by the macro pass.
+    assert (
+        f'nm.starts_with("{registry.OPCODE_VALUE_PREFIX}")' not in src
+    ), "extractor denylists the very prefix is_mop_word() matches -> dead hint"
+
+
+@case
+def test_opcode_value_never_earns_an_instruction_role():
+    """Defense in depth for the same thesis: even if an opcode value reached a
+    macro-consuming path, it must not classify as an issued instruction — every
+    consumer of a role reasons about the fact's own LINE, which is exactly what a
+    MOP/replay word does not have."""
+    for name in ("TT_OP_STALLWAIT", "TT_OP_MVMUL", "TT_OP_UNPACR", "TT_OP_MOP"):
+        assert registry.classify_macro(name) is None, name
+    # the issued forms still classify
+    assert registry.classify_macro("TTI_STALLWAIT") == "stall"
+    assert registry.classify_macro("TTI_MVMUL") == "consumer_math"
 
 
 @case

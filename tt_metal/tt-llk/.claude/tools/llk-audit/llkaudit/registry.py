@@ -171,10 +171,19 @@ GPR_WRITE_KINDS = {"regfile_gpr"}
 # Consumers must be genuine instruction macros; require a TTI_/TT_ prefix so that
 # address macros (TENSIX_MOP_CFG_BASE) are never mistaken for a MOP run.
 INSTR_PREFIXES = ("TTI_", "TT_")  # a genuine Tensix instruction macro
+#: An opcode VALUE, not an issued instruction — it shares the `TT_` prefix but is
+#: destined for a MOP slot / replay buffer and executes where the expander issues
+#: it. It must never earn an instruction ROLE (stall / ordered_write / consumer_*),
+#: because every consumer of those roles reasons about the fact's own LINE.
+OPCODE_VALUE_PREFIX = "TT_OP_"
+#: Extractor fact family carrying those words. Kept OUT of the "macro" family so
+#: the instruction-consuming checks cannot see one at all; only mop-replay reads
+#: it. Must match `f.family` in extractor/llk_extract.cpp's MacroPass.
+OPCODE_VALUE_FAMILY = "opcode_value"
 
 
 def _instr(name: str) -> bool:
-    return name.startswith(INSTR_PREFIXES)
+    return name.startswith(INSTR_PREFIXES) and not is_mop_word(name)
 
 
 def is_thread_config_write(macro_name: str) -> bool:
@@ -382,8 +391,13 @@ def is_mop_word(macro_name: str) -> bool:
     """True if `macro_name` is an opcode-VALUE macro (`TT_OP_*`) rather than an
     issued instruction — the form that gets slotted into a MOP or a replay
     buffer. Anchored, not a substring test.
+
+    This is the Python half of a contract with the extractor: it selects the same
+    prefix the C++ MacroPass files under `OPCODE_VALUE_FAMILY`. If one side stops
+    matching what the other emits, the hint goes silently dead — enforced by a
+    test, since a name-level tool/skill sync check cannot see it.
     """
-    return (macro_name or "").startswith("TT_OP_")
+    return (macro_name or "").startswith(OPCODE_VALUE_PREFIX)
 
 
 def mop_word_flips_src(text: str) -> bool:
