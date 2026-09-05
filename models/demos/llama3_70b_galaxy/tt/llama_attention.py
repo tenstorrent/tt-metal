@@ -664,7 +664,9 @@ class TtLlamaAttention(LightweightModule):
         # Reshape and rotary embeddings
         ###
         if not fused_ccl:
-            if self.use_unfused_ccl:
+            # The pass-through below is only valid when the ring QKV matmul actually ran, which
+            # use_prefetcher gates -- use_unfused_ccl alone gates the post-matmul collective path.
+            if self.use_unfused_ccl and self.use_prefetcher:
                 # Prefetcher resident: the ring QKV matmul already emitted a width-sharded L1 tensor on
                 # the worker cores (SHARDED_QKV_OUT_RING_MEMCFG: padded N = 12288//8 over RING_SIZE
                 # cores, [32, head_dim/2] per shard). Feed it straight into the common column all-reduce
@@ -677,6 +679,12 @@ class TtLlamaAttention(LightweightModule):
                 # cores do not match sub device cores" fatal under the resident prefetcher manager.
                 xqkv_fused_create_head_in = xqkv_fused_sharded
             else:
+                # Reached when the ring matmul did not run (use_prefetcher False, e.g. the Blackhole
+                # bring-up unit tests set it after config construction while use_unfused_ccl stays
+                # True): xqkv_fused_sharded is the interleaved DRAM ttnn.linear output, so it must be
+                # glued into the width-sharded L1 create-head layout here. Passing it straight through
+                # gives line_all_reduce an interleaved output memory config, which all_reduce_async
+                # rejects (it requires WIDTH_SHARDED).
                 xqkv_fused_interleaved = ttnn.to_memory_config(xqkv_fused_sharded, memory_config=ttnn.L1_MEMORY_CONFIG)
                 fqkv_shape = xqkv_fused_interleaved.shape
                 if fqkv_shape[3] > self._qkv_n_local:
