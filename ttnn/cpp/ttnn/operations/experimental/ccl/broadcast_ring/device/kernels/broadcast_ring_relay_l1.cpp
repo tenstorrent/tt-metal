@@ -234,6 +234,19 @@ void kernel_main() {
     // count. The op bakes these once at capture, so without a reset the counts accumulate across replayed
     // calls and the wait_min targets are satisfied by stale values -> reads stale data. Mirrors
     // all_gather's reader reset (minimal_default_reader.cpp).
+    //
+    // Drain before zeroing the credit sems: the loop only waits credits up to chunk-num_slots+1, so the last
+    // few credits from the downstream are still in flight at loop exit. `chunk` now equals num_chunks, the
+    // total credits the downstream sends (one per consumed chunk), so waiting on it per active direction lets
+    // every in-flight inc land before the set(0) -- otherwise a late credit lands after the reset and leaves
+    // the sem nonzero, satisfying a wait_min prematurely on the next call (premature slot reuse -> dropped or
+    // stale chunk). Deadlock-free: every device sends all its credits inside the loop, before any drain here.
+    if constexpr (send_data_fwd) {
+        noc_semaphore_wait_min(my_cred_fwd, chunk);
+    }
+    if constexpr (send_data_bwd) {
+        noc_semaphore_wait_min(my_cred_bwd, chunk);
+    }
     noc_semaphore_set(data_ready, 0);
     noc_semaphore_set(my_cred_fwd, 0);
     noc_semaphore_set(my_cred_bwd, 0);
