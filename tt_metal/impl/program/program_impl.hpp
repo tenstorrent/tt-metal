@@ -14,6 +14,7 @@
 #include "tt-metalium/hal_types.hpp"           // HalProgrammableCoreType
 #include "tt-metalium/kernel_types.hpp"        // KernelHandle
 #include "tt-metalium/program.hpp"             // KernelGroup
+#include "tt-metalium/mesh_workload.hpp"
 #include "hostdev/cross_node_dfb_constants.h"  // CROSS_NODE_DFB_OFFSET_NONE
 #include "program_device_map.hpp"              // ProgramTransferInfo
 #include "impl/buffers/semaphore.hpp"
@@ -664,8 +665,16 @@ private:
 
 }  // namespace detail
 
-// Launch `program` on every device in `mesh_device` via EnqueueMeshWorkload.
-// Takes ownership of `program`. When `wait_until_cores_done` is true, enqueue is blocking.
-void LaunchProgram(distributed::MeshDevice& mesh_device, Program&& program, bool wait_until_cores_done);
+// Launch `program` on every device in `mesh_device` via EnqueueMeshWorkload, blocking until completion.
+//
+// @return MeshWorkload that takes ownership of the program.
+distributed::MeshWorkload LaunchProgram(distributed::MeshDevice& mesh_device, Program&& program);
+
+// Launch `program` on every device in `mesh_device` via EnqueueMeshWorkload, without blocking.
+//
+// @return MeshWorkload that takes ownership of the program, and must be kept alive until Finish (or a blocking enqueue)
+// on the same command queue. The reason is that MeshWorkload owns kernel-binary DRAM that fast dispatch may
+// still prefetch after this function returns.
+[[nodiscard]] distributed::MeshWorkload LaunchProgramAsync(distributed::MeshDevice& mesh_device, Program&& program);
 
 }  // namespace tt::tt_metal
