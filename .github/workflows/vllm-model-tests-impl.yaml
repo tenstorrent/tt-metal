@@ -382,7 +382,10 @@ jobs:
                   export GEMMA4_BOUNDED_SLIDING_KV_CACHE=1
                   export G4_FORCE_BATCH_PREFILL=1
                   export GEMMA4_CHUNKED_PREFILL_TRACE=0
-                  echo "Gemma4 P150x8: bounded sliding + batched prefill + eager chunks (gated wedges on 1x8)"
+                  # linear CCL is part of the validated P150X8 spec (the default
+                  # resolves to Ring here).
+                  export GEMMA4_CCL_TOPOLOGY=linear
+                  echo "Gemma4 P150x8: bounded sliding + batched prefill + eager chunks + linear CCL (gated wedges on 1x8)"
                 fi
                 echo "Gemma4 KV pool: GEMMA4_MAX_TOKENS_ALL_USERS=$GEMMA4_MAX_TOKENS_ALL_USERS (from max_model_len=${MAX_MODEL_LEN:-default})"
               fi
