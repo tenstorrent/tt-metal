@@ -376,22 +376,31 @@ def _print_callstack(risc_name: str, callstack: list[CallstackEntry]) -> str:
 
     for idx, entry in enumerate(callstack):
         # Format PC hex like Rust does
-        pc = f"0x{entry.pc:016x}" if entry.pc is not None else "0x????????????????"
+        pc = (
+            f"0x{entry.pc:016x}"
+            if getattr(entry, "pc", None) is not None
+            else "0x????????????????"
+        )
+        function_name = getattr(entry, "function_name", None) or "???"
         # first line: idx, pc, function
-        temp_str += f"{idx:>4}: {pc} - {entry.function_name}\n"
+        temp_str += f"{idx:>4}: {pc} - {function_name}\n"
         # second line: file, line, column. ttexalens >= 0.3.29 moved these onto a nullable
         # CallstackEntry.file_info (DwarfFileLine); older versions exposed them directly on the
         # entry. Support both, and tolerate frames with no DWARF line info at all -- an
         # AttributeError here would mask the LLK assertion we are trying to report.
         file_info = getattr(entry, "file_info", entry)
-        source_file = (
-            getattr(file_info, "file", None) if file_info is not None else None
-        )
+        source_file = None
+        if file_info is not None:
+            source_file = getattr(file_info, "file", None) or getattr(
+                file_info, "filename", None
+            )
         if source_file is None:
             temp_str += f"{' '*25}| at <no line info>\n"
             continue
         file_path = (TESTS_DIR / Path(source_file)).resolve()
-        temp_str += f"{' '*25}| at {file_path}:{file_info.line}:{file_info.column}\n"
+        line = getattr(file_info, "line", None) or "?"
+        column = getattr(file_info, "column", None) or "?"
+        temp_str += f"{' '*25}| at {file_path}:{line}:{column}\n"
 
     return temp_str
 
