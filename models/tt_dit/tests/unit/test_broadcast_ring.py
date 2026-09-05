@@ -215,6 +215,81 @@ def test_broadcast_ring_production_layout(mesh_device, sp_axis, tp_axis, device_
     assert not bad, f"broadcast_ring production-layout mismatch on {len(bad)} shards, first: {bad[0]}"
 
 
+# The production path passes caller-owned ping-pong global semaphores (get_broadcast_ping_pong_semaphore)
+# instead of the op creating its own. This exercises that path over SEVERAL calls: the pool has 2 sets, so
+# calls 0/2/4 reuse set 0 -- and the op must zero its recv/credit sems in-kernel each call, else set 0's
+# accumulated count from call 0 satisfies call 2's wait_min early and it reads stale data. Verifying every
+# call catches a missing reset (and the per-call override_runtime_arguments that rotates the semaphore).
+@pytest.mark.parametrize(
+    ("mesh_device", "sp_axis", "tp_axis", "device_params", "topology"),
+    [
+        pytest.param((4, 8), 1, 0, ring_params, ttnn.Topology.Ring, id="bh_4x8_ring"),
+        pytest.param((4, 32), 1, 0, ring_params_8k, ttnn.Topology.Ring, id="bh_4x32_ring"),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("use_l1_relay", [pytest.param(False, id="dram"), pytest.param(True, id="l1")])
+def test_broadcast_ring_ccl_semaphore(mesh_device, sp_axis, tp_axis, device_params, topology, use_l1_relay):
+    from models.tt_dit.parallel.manager import CCLManager
+
+    tp_factor, sp_factor = tuple(mesh_device.shape)
+    N = 128
+    chunk = 64
+    owner = 5
+
+    grid = mesh_device.compute_with_storage_grid_size()
+    crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+    wsd_id = ttnn.SubDeviceId(0)
+    mgr = mesh_device.create_sub_device_manager([ttnn.SubDevice([crs])], 0)
+    mesh_device.load_sub_device_manager(mgr)
+    mesh_device.set_sub_device_stall_group([wsd_id])
+
+    ccl = CCLManager(mesh_device=mesh_device, num_links=2, topology=topology)
+
+    torch.manual_seed(0)
+    host = torch.randn(1, 1, tp_factor * T, sp_factor * N * T, dtype=torch.float32).to(torch.bfloat16).float()
+    shard_dims = [None, None]
+    shard_dims[tp_axis] = 2
+    shard_dims[sp_axis] = 3
+    rm = ttnn.from_torch(
+        host.to(torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
+    )
+    tt_in = ttnn.to_layout(rm, ttnn.TILE_LAYOUT)
+
+    # Several calls so the ping-pong reuses set 0 (calls 0/2/4) -- a missing in-kernel reset fails call 2.
+    for it in range(5):
+        tt_out = ttnn.experimental.broadcast_ring(
+            tt_in,
+            sender_ring_index=owner,
+            cluster_axis=sp_axis,
+            topology=topology,
+            subdevice_id=wsd_id,
+            num_links=2,
+            chunk_size_tiles=chunk,
+            use_l1_relay=use_l1_relay,
+            multi_device_global_semaphore=ccl.get_broadcast_ping_pong_semaphore(sp_axis),
+        )
+        ttnn.synchronize_device(mesh_device, sub_device_ids=[wsd_id])
+        out = ttnn.to_torch(
+            ttnn.to_layout(tt_out, ttnn.ROW_MAJOR_LAYOUT),
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
+        ).float()
+        bad = []
+        for r in range(tp_factor):
+            golden = host[0, 0, r * T : (r + 1) * T, owner * N * T : (owner + 1) * N * T]
+            for c in range(sp_factor):
+                block = out[0, 0, r * T : (r + 1) * T, c * N * T : (c + 1) * N * T]
+                if not torch.equal(block, golden):
+                    bad.append((it, r, c))
+        assert (
+            not bad
+        ), f"iter {it}: broadcast_ring (ccl semaphore) mismatch on {len(bad)} device-shards, first: {bad[0]}"
+
+
 @pytest.mark.parametrize(
     ("mesh_device", "sp_axis", "tp_axis", "device_params", "topology"),
     [
