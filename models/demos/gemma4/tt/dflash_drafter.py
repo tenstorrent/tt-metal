@@ -28,6 +28,7 @@ v1 scope (bring-up; perf items ledgered in gemma4_galaxy_effort.md):
 
 import json
 import math
+import os as _os
 from pathlib import Path
 
 import torch
@@ -476,7 +477,16 @@ class DFlashFusedDecoder:
         # readback. Same loop-free pattern as the packed verify's staging merge.
         self.mirror = torch.zeros(ctx_cap, H, dtype=torch.bfloat16)
         self.ctx_len = 0
-        self.fc_prev = ttnn.from_torch(z(1, 1, K + 1, H, dtype=torch.bfloat16), **mkT)
+        # Packed-verify + truncation config resolves EARLY: the tap/fc row count
+        # equals the VERIFY row count (taps are captured during the verify
+        # forward), so fc_prev and the ctx-merge width are sized to P_v.
+        # Truncation (V < K) requires the packed path -- the batch-dim verify
+        # always runs K+1 rows.
+        self.use_packed = _os.environ.get("GEMMA4_DFLASH_PACKED", "1") == "1"
+        self.V = min(int(_os.environ.get("GEMMA4_DFLASH_VERIFY", str(K))), K) if self.use_packed else K
+        self.P_v = self.V + 1
+        self.pv_pos = None  # allocated in capture() (needs the generation horizon)
+        self.fc_prev = ttnn.from_torch(z(1, 1, self.P_v, H, dtype=torch.bfloat16), **mkT)
         self.merge_idx = ttnn.from_torch(
             torch.arange(ctx_cap, dtype=torch.int64).reshape(1, ctx_cap),
             device=self.mesh_device,
@@ -507,6 +517,19 @@ class DFlashFusedDecoder:
             mesh_mapper=self._mapper,
         )
         self.anchor_tok = ttnn.from_torch(z(1, 1, dtype=torch.int64), **mkU)
+        # ── PACKED target verify (GEMMA4_DFLASH_PACKED=0 reverts to batch-dim) ──
+        # The batch-dim verify re-reads the whole target KV once PER CANDIDATE
+        # ROW: measured 194 ms/iter at 131k = 16 rows x 2.7 GB bounded KV. The
+        # packed verify (candidates in the query-heads dim) reads KV ONCE and
+        # writes candidates via the per-position fallback loop (proven exact in
+        # the MTP-side bisect) -- no staging port needed.
+        # GEMMA4_DFLASH_VERIFY truncates HOW MANY of the K drafts are verified:
+        # on prose the block accepts ~0.6 of 15, so verifying 15 wastes verify
+        # rows; V<K keeps the drafter unchanged and shrinks the verify.
+        # Known trade-off inherited from MTP: the packed non-causal softmax
+        # drifts off exact greedy at very large S_k (mesh op defaults). The
+        # committed tokens remain the verify posterior (self-consistent /
+        # coherent); validate per ISL.
         pt = page_table_torch[0:1].repeat(K + 1, 1).to(torch.int32)
         self.v_pt = ttnn.from_torch(
             pt, device=self.mesh_device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self._mapper
@@ -551,6 +574,8 @@ class DFlashFusedDecoder:
     def _upload_iter_inputs(self, anchor_id, start):
         d = self.drafter
         K = self.K
+        if self.use_packed and self.pv_pos is not None:
+            self._pv_upload(start)
         arow = d._embed_w_host[[anchor_id]].to(torch.bfloat16).reshape(1, 1, 1, -1)
         h = ttnn.from_torch(arow, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=self._mapper)
         ttnn.copy_host_to_device_tensor(h, self.anchor_row)
@@ -631,8 +656,8 @@ class DFlashFusedDecoder:
         # each ctx row to [ctx_dev | fc_prev] (identity / window-shift / commit
         # rows), refreshed per iteration by step(). At capture merge_idx is
         # identity, so compile + capture are no-ops here (idempotent).
-        src = ttnn.concat([self.ctx_dev, self.fc_prev], dim=2)  # [1,1,cap+K+1,H]
-        src2d = ttnn.reshape(src, (self.cap + K + 1, d.hidden))
+        src = ttnn.concat([self.ctx_dev, self.fc_prev], dim=2)  # [1,1,cap+P_v,H]
+        src2d = ttnn.reshape(src, (self.cap + self.P_v, d.hidden))
         merged = ttnn.embedding(self.merge_idx, src2d, layout=ttnn.TILE_LAYOUT)  # [1,cap,H]
         merged4 = ttnn.reshape(merged, (1, 1, self.cap, d.hidden))
         ttnn.assign(merged4, self.ctx_dev)
@@ -655,14 +680,38 @@ class DFlashFusedDecoder:
         vx = ttnn.concat([self.anchor_tok, flat], dim=-1)  # [1, K+1] uint32
         # sharded verify logits when the sampling module can consume them
         self.target._dflash_sharded_logits = self._sampler is not None
-        logits, hidden = self.target.ttnn_verify_forward(
-            x=vx,
-            current_pos=self.v_pu,
-            current_pos_cache=self.v_pi,
-            page_table=self.v_pt,
-            kv_cache=self.kv_layers,
-            page_tables_per_layer=self.v_ptl,
-        )
+        if self.use_packed:
+            # ONE KV read for all P_v rows (vs P_v reads batch-dim). Fallback
+            # per-position writes (kv_write_idxs) -- no staging. Masks arrive
+            # P-row and are repeated H x in-trace (h*P+p packed row order).
+            vxp = ttnn.slice(vx, [0, 0], [1, self.P_v]) if self.P_v < K + 1 else vx
+            H_l = self.target.layers[0].self_attn.config.num_attention_heads // self.drafter.tp
+            m_full = ttnn.repeat(self.pv_mask_full, ttnn.Shape([1, 1, H_l, 1]))
+            m_slide = ttnn.repeat(self.pv_mask_slide, ttnn.Shape([1, 1, H_l, 1]))
+            logits, hidden = self.target.ttnn_packed_verify_forward(
+                x=vxp,
+                position_idx=self.pv_pos,
+                attn_mask_full=m_full,
+                attn_mask_sliding=m_slide,
+                packed_p=self.P_v,
+                page_table=self.v_pt,
+                kv_cache=self.kv_layers,
+                kv_write_idxs=self.pv_widx,
+                page_tables_per_layer=self.pv_tables,
+            )
+            m_full.deallocate(True)
+            m_slide.deallocate(True)
+            if vxp is not vx:
+                vxp.deallocate(True)
+        else:
+            logits, hidden = self.target.ttnn_verify_forward(
+                x=vx,
+                current_pos=self.v_pu,
+                current_pos_cache=self.v_pi,
+                page_table=self.v_pt,
+                kv_cache=self.kv_layers,
+                page_tables_per_layer=self.v_ptl,
+            )
         if self._sampler is not None:
             vidx, _lp = self._sampler.sample(logits, enable_trace=False)
         else:
@@ -728,9 +777,135 @@ class DFlashFusedDecoder:
         ttnn.copy_host_to_device_tensor(h, self.merge_idx)
         h.deallocate(True)
 
-    def capture(self, anchor_id, start):
+    def _pv_setup(self, start, max_new):
+        """Allocate the packed-verify persistent inputs (see use_packed).
+
+        S_k is capped at capture to cover the whole generation (columns past the
+        live top are NEG -> exact; the captured program never changes shape).
+        Ring metadata per layer type mirrors SpeculativeDecoder._pv_setup; tables
+        are WIDTH-MATCHED to their masks (the packed SDPA attends the table
+        width -- root cause #4 on the MTP side).
+        """
+        t = self.target
+        P_v = self.P_v
+        self.pv_ring = {}
+        rep = {}
+        for i, layer in enumerate(t.layers):
+            lt = t.hf_config.layer_types[i]
+            mod = getattr(layer.self_attn.config, "cache_position_modulo", None)
+            self.pv_ring.setdefault(lt, int(mod) if mod is not None else None)
+            rep.setdefault(lt, i)
+            if lt in self.pv_ring and self.pv_ring[lt] != (int(mod) if mod is not None else None):
+                raise NotImplementedError("packed dflash verify needs uniform pools per layer type")
+        horizon = start + max_new + P_v + 64
+        self.pv_sk = ((horizon + 1023) // 1024) * 1024
+        rows_t = {}
+        installed = getattr(t, "_active_page_tables_per_layer", None)
+        flat = (self.page_table_torch[0] if self.page_table_torch.dim() > 1 else self.page_table_torch).to(torch.int64)
+        for lt in self.pv_ring:
+            rows_t[lt] = flat
+        if installed:
+            for lt, i in rep.items():
+                lpt = installed[i]
+                if lpt is not None and hasattr(lpt, "dim"):
+                    rows_t[lt] = (lpt[0] if lpt.dim() > 1 else lpt).to(torch.int64)
+        bs = 64
+        self.pv_tables = []
+        cache_by_type = {}
+        for i in range(len(t.layers)):
+            lt = t.hf_config.layer_types[i]
+            if lt not in cache_by_type:
+                ring = self.pv_ring.get(lt)
+                width = (ring // bs) if ring else max(1, self.pv_sk // bs)
+                row = rows_t[lt]
+                width = min(width, int(row.shape[0]))
+                cache_by_type[lt] = ttnn.from_torch(
+                    row[:width].to(torch.int32).reshape(1, width),
+                    device=self.mesh_device,
+                    dtype=ttnn.int32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    mesh_mapper=self._mapper,
+                )
+            self.pv_tables.append(cache_by_type[lt])
+        z = torch.zeros
+        mkT = dict(device=self.mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=self._mapper)
+        mkU = dict(device=self.mesh_device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self._mapper)
+        ring = self.pv_ring.get("sliding_attention")
+        self.pv_ssl = ring if ring else self.pv_sk
+        self.pv_pos = ttnn.from_torch(z(1, P_v, dtype=torch.int64), **mkU)
+        self.pv_mask_full = ttnn.from_torch(z(1, 1, P_v, self.pv_sk, dtype=torch.bfloat16), **mkT)
+        self.pv_mask_slide = ttnn.from_torch(z(1, 1, P_v, self.pv_ssl, dtype=torch.bfloat16), **mkT)
+        self.pv_widx = [
+            ttnn.from_torch(
+                z(1, dtype=torch.int32),
+                device=self.mesh_device,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=self._mapper,
+            )
+            for _ in range(P_v)
+        ]
+
+    def _pv_host_masks(self, start):
+        """P-row target-side masks (H-repeated in-trace). Full: causal to
+        start+p over the capped S_k. Sliding: ring-slot formula when bounded
+        (include iff (P_v-1-p) <= (top-j) mod ring < (P_v-1-p)+W and <= top),
+        else the absolute window."""
+        P_v = self.P_v
+        W = self.target.hf_config.sliding_window
+        NEG = -1e9
+        j = torch.arange(self.pv_sk)
+        mf = torch.empty(P_v, self.pv_sk)
+        for pi in range(P_v):
+            mf[pi] = torch.where(j <= start + pi, 0.0, NEG)
+        ring = self.pv_ring.get("sliding_attention")
+        if ring:
+            top = start + P_v - 1
+            jr = torch.arange(ring)
+            d = torch.remainder(top - jr, ring)
+            ms = torch.empty(P_v, ring)
+            for pi in range(P_v):
+                lo = P_v - 1 - pi
+                ok = (d >= lo) & (d < lo + W) & (d <= top)
+                ms[pi] = torch.where(ok, 0.0, NEG)
+        else:
+            ms = torch.empty(P_v, self.pv_sk)
+            for pi in range(P_v):
+                up = start + pi
+                ms[pi] = torch.where((j <= up) & (j > up - W), 0.0, NEG)
+        return (
+            mf.reshape(1, 1, P_v, -1).to(torch.bfloat16),
+            ms.reshape(1, 1, P_v, -1).to(torch.bfloat16),
+        )
+
+    def _pv_upload(self, start):
+        P_v = self.P_v
+        pos = torch.zeros(1, P_v, dtype=torch.int64)
+        pos[0, :] = torch.arange(start, start + P_v)
+        h = ttnn.from_torch(pos, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32, mesh_mapper=self._mapper)
+        ttnn.copy_host_to_device_tensor(h, self.pv_pos)
+        h.deallocate(True)
+        mf, ms = self._pv_host_masks(start)
+        for host, dev in ((mf, self.pv_mask_full), (ms, self.pv_mask_slide)):
+            h = ttnn.from_torch(host, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=self._mapper)
+            ttnn.copy_host_to_device_tensor(h, dev)
+            h.deallocate(True)
+        for pi in range(P_v):
+            h = ttnn.from_torch(
+                torch.tensor([start + pi], dtype=torch.int32),
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                dtype=ttnn.int32,
+                mesh_mapper=self._mapper,
+            )
+            ttnn.copy_host_to_device_tensor(h, self.pv_widx[pi])
+            h.deallocate(True)
+
+    def capture(self, anchor_id, start, max_new=256):
         """Compile-run then capture the fused body at the first-iteration inputs."""
         self.anchor, self.start = anchor_id, start
+        if self.use_packed:
+            self._pv_setup(start, max_new)
+            self._pv_upload(start)
         self.target.dflash_capture_taps(self.drafter.target_layer_ids, buffers=self.tap_bufs)
         self._upload_iter_inputs(anchor_id, start)
         a, b, c = self._body()  # compile pass (idempotent KV writes)
@@ -764,8 +939,9 @@ class DFlashFusedDecoder:
             self._upload_iter_inputs(self.anchor, self.start)
             ttnn.execute_trace(self.mesh_device, self.trace, cq_id=0, blocking=False)
         draft_ids_t, vidx_t, fc_out = self._out
-        drafts = self._read_ids(draft_ids_t)[: self.K]
-        posterior = self._read_ids(vidx_t)[: self.K + 1]
+        # Verify truncation: only the first V drafts were verified (P_v rows).
+        drafts = self._read_ids(draft_ids_t)[: self.V]
+        posterior = self._read_ids(vidx_t)[: self.P_v]
         acc = 0
         for dtok, ptok in zip(drafts, posterior[:-1]):
             if dtok == ptok:
