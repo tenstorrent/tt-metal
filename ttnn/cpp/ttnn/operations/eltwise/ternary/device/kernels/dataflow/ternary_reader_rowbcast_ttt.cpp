@@ -8,6 +8,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/nd_indexing.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
 
 void kernel_main() {
@@ -44,9 +45,12 @@ void kernel_main() {
     const uint32_t c_stride_c = get_arg_val<uint32_t>(23);
     const uint32_t src_num_tiles_c = get_arg_val<uint32_t>(24);
 
-    // Final parameters (args 25-26)
+    // Final parameters (args 25-29)
     const uint32_t dst_shard_width = get_arg_val<uint32_t>(25);
     const uint32_t src_num_tiles = get_arg_val<uint32_t>(26);
+    const uint32_t nd_broadcast_factor = get_arg_val<uint32_t>(27);
+    const uint32_t nd_broadcast_factor_b = get_arg_val<uint32_t>(28);
+    const uint32_t nd_broadcast_factor_c = get_arg_val<uint32_t>(29);
 
     // For compatibility, map to old variable names
     const uint32_t src_addr = src0_addr;       // predicate address
@@ -113,35 +117,39 @@ void kernel_main() {
     uint32_t start_tw = offset_c % Wt;
     uint32_t end_tw = has_sharding ? start_tw + dst_shard_width : Wt;
 
+    uint32_t input_nd = get_input_nd_index(start_nd, nd_broadcast_factor);
+    uint32_t input_nd_b = get_input_nd_index(start_nd, nd_broadcast_factor_b);
+    uint32_t input_nd_c = get_input_nd_index(start_nd, nd_broadcast_factor_c);
+
     // this is the INPUT tile offset
-    uint32_t tile_offset = start_nd * nD_stride + start_d * d_stride + start_n * n_stride + start_c * c_stride;
+    uint32_t tile_offset = input_nd * nD_stride + start_d * d_stride + start_n * n_stride + start_c * c_stride;
 #if !SRC_BCAST_A
     tile_offset += start_th * Wt;
 #endif
     uint32_t next_c_shift = c_stride - HtWt;
     uint32_t next_n_shift = n_stride - c_stride * C;
     uint32_t next_d_shift = d_stride - n_stride * N;
-    uint32_t next_nd_shift = nD_stride - d_stride * D;
+    const uint32_t d_span = d_stride * D;
 
     uint32_t tile_offset_b =
-        start_nd * nD_stride_b + start_d * d_stride_b + start_n * n_stride_b + start_c * c_stride_b;
+        input_nd_b * nD_stride_b + start_d * d_stride_b + start_n * n_stride_b + start_c * c_stride_b;
 #if !SRC_BCAST_B
     tile_offset_b += start_th * Wt;
 #endif
     uint32_t next_c_shift_b = c_stride_b - HtWt;
     uint32_t next_n_shift_b = n_stride_b - c_stride_b * C;
     uint32_t next_d_shift_b = d_stride_b - n_stride_b * N;
-    uint32_t next_nd_shift_b = nD_stride_b - d_stride_b * D;
+    const uint32_t d_span_b = d_stride_b * D;
 
     uint32_t tile_offset_c =
-        start_nd * nD_stride_c + start_d * d_stride_c + start_n * n_stride_c + start_c * c_stride_c;
+        input_nd_c * nD_stride_c + start_d * d_stride_c + start_n * n_stride_c + start_c * c_stride_c;
 #if !SRC_BCAST_C
     tile_offset_c += start_th * Wt;
 #endif
     uint32_t next_c_shift_c = c_stride_c - HtWt;
     uint32_t next_n_shift_c = n_stride_c - c_stride_c * C;
     uint32_t next_d_shift_c = d_stride_c - n_stride_c * N;
-    uint32_t next_nd_shift_c = nD_stride_c - d_stride_c * D;
+    const uint32_t d_span_c = d_stride_c * D;
 
     uint32_t num_tiles_read = 0;
     for (uint32_t nd = start_nd; nd < cND && num_tiles_read < dst_num_tiles; ++nd, start_d = 0) {
@@ -231,9 +239,15 @@ void kernel_main() {
             tile_offset_b += next_d_shift_b;
             tile_offset_c += next_d_shift_c;
         }
-        tile_offset += next_nd_shift;
-        tile_offset_b += next_nd_shift_b;
-        tile_offset_c += next_nd_shift_c;
+        const uint32_t next_input_nd = get_input_nd_index(nd + 1, nd_broadcast_factor);
+        const uint32_t next_input_nd_b = get_input_nd_index(nd + 1, nd_broadcast_factor_b);
+        const uint32_t next_input_nd_c = get_input_nd_index(nd + 1, nd_broadcast_factor_c);
+        tile_offset = advance_nd_offset(tile_offset, input_nd, next_input_nd, nD_stride, d_span);
+        tile_offset_b = advance_nd_offset(tile_offset_b, input_nd_b, next_input_nd_b, nD_stride_b, d_span_b);
+        tile_offset_c = advance_nd_offset(tile_offset_c, input_nd_c, next_input_nd_c, nD_stride_c, d_span_c);
+        input_nd = next_input_nd;
+        input_nd_b = next_input_nd_b;
+        input_nd_c = next_input_nd_c;
     }
 #endif
 }

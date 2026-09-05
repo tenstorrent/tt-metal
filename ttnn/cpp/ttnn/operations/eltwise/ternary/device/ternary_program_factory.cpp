@@ -460,6 +460,20 @@ Strides calculate_strides(const TensorDimensions& dims) {
     return strides;
 }
 
+// 1 when the collapsed nD volumes match; otherwise output_nd / input_nd, which is
+// the dim -6 broadcast extent because dims -7 and outward are required to match.
+uint32_t nd_broadcast_factor(const uint32_t input_nd, const uint32_t output_nd) {
+    if (input_nd == output_nd) {
+        return 1u;
+    }
+    TT_FATAL(
+        input_nd != 0 && output_nd % input_nd == 0,
+        "Collapsed nD volume {} must divide the output volume {}; only dim -6 may broadcast",
+        input_nd,
+        output_nd);
+    return output_nd / input_nd;
+}
+
 // Helper function to set up reader runtime arguments and dimensions for TTS/TST variants
 template <size_t num_reader_args>
 void setup_ts_reader_args_and_dims(
@@ -523,6 +537,11 @@ void setup_ts_reader_args_and_dims(
 
         reader_runtime_args[25] = c_current_shard_width;  // 25: dst_shard_width
         reader_runtime_args[26] = a_num_tiles;            // 26: src_num_tiles (predicate)
+
+        // 27-28: how many output nD slices each operand's nD slice covers, so the reader can map an
+        // output nD index back to its own. Slot 29 (src2) stays 0 -- TTS/TST has no third tensor.
+        reader_runtime_args[27] = nd_broadcast_factor(pred_dims.ND, output_dims.ND);
+        reader_runtime_args[28] = nd_broadcast_factor(tensor_dims.ND, output_dims.ND);
     }
 }
 
@@ -638,7 +657,9 @@ uint32_t pack_compute_scalar_arg(
 
 // Per-kernel runtime-arg counts.  Both the cache-miss and cache-hit paths fill exactly this many
 // slots for every core, which is what lets the hit path copy a fixed-width row per core.
-constexpr size_t kNumReaderArgs = 27;
+// Reader slots 0-26 are the addresses, strides and dims; 27-29 are the per-operand nD broadcast
+// factors (src2's stays 0 on TTS/TST, which has no third tensor).
+constexpr size_t kNumReaderArgs = 30;
 constexpr size_t kNumWriterArgs = 11;
 constexpr size_t kNumComputeArgs = 4;
 
@@ -882,6 +903,11 @@ TernaryPerCoreArgs build_per_core_runtime_args(
             reader_runtime_args[24] = f_num_tiles;              // 24: false_num_tiles
             reader_runtime_args[25] = c_current_shard_width;    // 25: dst_shard_width
             reader_runtime_args[26] = a_num_tiles;              // 26: src_num_tiles (predicate)
+            // 27-29: how many output nD slices each operand's nD slice covers, so the reader can map
+            // an output nD index back to its own.
+            reader_runtime_args[27] = nd_broadcast_factor(pred_dims.ND, output_dims.ND);
+            reader_runtime_args[28] = nd_broadcast_factor(true_dims.ND, output_dims.ND);
+            reader_runtime_args[29] = nd_broadcast_factor(false_dims.ND, output_dims.ND);
 
             // Slots 0,1,2 already hold the three CURRENT buffer base addresses (set above);
             // reader_buffer_slots records them for create_descriptor()'s bindings.
