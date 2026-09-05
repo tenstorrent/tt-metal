@@ -524,18 +524,26 @@ def test_demo_text(
     block_size = page_params["page_block_size"]
     needed_blocks = batch_size * math.ceil(max_seq_len / block_size)
     configured_blocks = page_params.get("page_max_num_blocks")
-    if batch_size <= 1 or configured_blocks is None:
-        page_max_num_blocks = needed_blocks
-    else:
-        page_max_num_blocks = configured_blocks
-    paged_attention_config = (
-        PagedAttentionConfig(block_size=block_size, max_num_blocks=page_max_num_blocks) if paged_attention else None
-    )
 
     # Sliding-cache + prefill chunk from GEMMA4_LONG_CONTEXT_POLICY (model × device).
     # Override: GEMMA4_BOUNDED_SLIDING, GEMMA4_GEN_PREFILL_CHUNK.
     lc = resolve_gemma4_demo_long_context(max_seq_len, mesh_device, model_path, paged_attention=paged_attention)
     bounded_sliding = lc["bounded_sliding"]
+
+    if batch_size <= 1 or configured_blocks is None:
+        page_max_num_blocks = needed_blocks
+    elif bounded_sliding:
+        # ``build_hybrid_page_tables`` gives each user its own full-attention
+        # range [u*ceil(max_seq_len/block), (u+1)*...), so the pool must hold
+        # batch * ceil(max_seq_len/block). The tuned value is a *shared* pool
+        # that the non-hybrid ``create_tt_page_table`` partitions across users;
+        # using it with hybrid tables puts users 1..B-1 past the end of the pool.
+        page_max_num_blocks = max(int(configured_blocks), needed_blocks)
+    else:
+        page_max_num_blocks = configured_blocks
+    paged_attention_config = (
+        PagedAttentionConfig(block_size=block_size, max_num_blocks=page_max_num_blocks) if paged_attention else None
+    )
 
     # ── Model (all optimizations applied inside create_tt_model) ───────────
     logger.info(
@@ -574,6 +582,17 @@ def test_demo_text(
             sliding_window=model_args.sliding_window,
         )
         generator.model[0]._active_page_tables_per_layer = per_layer_pts
+        # Sequential prefill forces ``user_id=0``, so the generator recovers each
+        # user's row by matching the legacy ``page_table`` against the per-layer
+        # stash. ``create_tt_page_table`` builds block IDs independently of
+        # ``build_hybrid_page_tables``, so that match always failed and every
+        # user fell through to row 0. Point the legacy table at a
+        # *full-attention* per-layer table: it is the table full-attn layers
+        # already address, so semantics are unchanged and the match succeeds.
+        # (Using a sliding table here instead breaks full-attn addressing.)
+        full_idxs = [i for i, is_sliding in enumerate(sliding_mask) if not is_sliding]
+        if full_idxs:
+            page_table = per_layer_pts[full_idxs[0]]
         logger.info(f"Bounded sliding: installed {len(per_layer_pts)} per-layer page tables")
 
     # ── Warmup (prefill compile + optional trace) ──────────────────────────

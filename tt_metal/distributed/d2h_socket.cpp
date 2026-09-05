@@ -155,7 +155,11 @@ D2HSocket::PinnedBufferInfo D2HSocket::init_host_buffer_hugepage(const std::shar
     auto pcie_xy = pcie_cores.front();
     uint32_t pcie_xy_enc = hal.noc_xy_pcie64_encoding(pcie_xy.x, pcie_xy.y);
 
-    log_info(
+    // One D2HSocket is created per profiler/host-device channel, so this fires once per socket
+    // rather than once per program run; at info level it drowns out real signal in test logs
+    // with hundreds of otherwise-identical lines (see galaxy/t3000 CI: hundreds of occurrences
+    // per job). The fallback itself is expected on WH x86 hosts, so debug is sufficient here.
+    log_debug(
         tt::LogMetal,
         "D2HSocket: Using hugepage fallback for device {} "
         "(data_dev_addr=0x{:x}, pcie_xy_enc=0x{:x})",

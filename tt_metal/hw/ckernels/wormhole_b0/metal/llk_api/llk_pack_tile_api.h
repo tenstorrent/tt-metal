@@ -3,12 +3,24 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <cstdint>
 #include "llk_pack_common_api.h"
 #include "sanitizer/api.h"
 
 /*************************************************************************
  * LLK PACK
  *************************************************************************/
+
+/**
+ * @brief No-op pack-side ordering primitive; present only for API parity with Quasar.
+ *
+ * WH/BH have no pack-side WAIT/PUSH ordering requirement, so this has no functional role in a kernel. It
+ * exists only so the shared compute-API dummy_pack() resolves on every architecture; on Quasar the same
+ * call is a required TEN-4746 drain primitive (see that arch's llk_pack_tile_api.h).
+ *
+ * @param pack_output  The output dataflow buffer identifier (unused).
+ */
+inline void llk_pack_dummy([[maybe_unused]] const std::uint32_t pack_output) {}
 
 template <
     PackMode pack_mode = PackMode::Default,
@@ -64,7 +76,7 @@ inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32
 
 template <bool is_fp32_dest_acc_en, bool out_of_order_output = false, PackMode pack_mode = PackMode::Default>
 inline void llk_matmul_pack(
-    std::uint32_t start_tile_index, std::uint32_t output, uint32_t ntiles, std::uint32_t output_tile_index = 0) {
+    std::uint32_t start_tile_index, std::uint32_t output, std::uint32_t ntiles, std::uint32_t output_tile_index = 0) {
     std::uint8_t output_id = get_output_id(output);
 
     static_assert(
@@ -84,7 +96,7 @@ inline void llk_matmul_pack(
         get_output_partial_face(output_id),
         get_output_narrow_tile(output_id));
 
-    for (uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
+    for (std::uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
         std::uint32_t pack_tile_addr =
             get_output_tile_address<out_of_order_output, pack_mode>(output_id, output_tile_index);
 

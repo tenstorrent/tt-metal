@@ -15,19 +15,6 @@
 using namespace ckernel::math;
 
 /**
- * @brief Enable or disable FP32 accumulation in the destination register for both FPU and SFPU.
- *
- * @param enable: True to enable FP32 dest accumulation, false to disable.
- */
-inline void _llk_math_set_fp32_dest_acc_(bool enable)
-{
-    // SFPU_Fp32_enabled is read by SFPLOAD/SFPSTORE (MOD0_FMT_SRCB), so the SFPU must drain too, not just the FPU.
-    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
-    cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(enable);
-    cfg_reg_rmw_tensix<ALU_ACC_CTRL_SFPU_Fp32_enabled_RMW>(enable);
-}
-
-/**
  * @brief Configure the math (FPU) thread's ALU control registers for the given source data formats.
  *
  * Sets ZEROACC bank auto-detect, enables INT8 math when either source is Int8/Int32, and programs FP32 dest
