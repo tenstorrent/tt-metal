@@ -31,6 +31,7 @@
 
 void kernel_main() {
     constexpr uint32_t num_entries_per_consumer = get_arg(args::num_entries_per_consumer);
+    constexpr uint32_t block_size = get_arg(args::block_size);
 
     DataflowBuffer dfb(dfb::in);
 
@@ -45,12 +46,27 @@ void kernel_main() {
     compute_kernel_hw_startup(dfb.get_id(), dfb.get_id());
     copy_init(dfb.get_id());
 
-    for (uint32_t tile_id = 0; tile_id < num_entries_per_consumer; ++tile_id) {
-        acquire_dst();
-        dfb.wait_front(1);
-        copy_tile(dfb.get_id(), 0, 0);
-        dfb.pop_front(1);
-        release_dst();
+    if constexpr (block_size > 1) {
+        // BLOCKED (the host sets block_size > 1 only for single-counter consumers): one wait per
+        // block.
+        constexpr uint32_t num_blocks = num_entries_per_consumer / block_size;
+        for (uint32_t b = 0; b < num_blocks; ++b) {
+            dfb.wait_front(block_size);
+            for (uint32_t j = 0; j < block_size; ++j) {
+                acquire_dst();
+                copy_tile(dfb.get_id(), 0, 0);
+                dfb.pop_front(1);
+                release_dst();
+            }
+        }
+    } else {
+        for (uint32_t tile_id = 0; tile_id < num_entries_per_consumer; ++tile_id) {
+            acquire_dst();
+            dfb.wait_front(1);
+            copy_tile(dfb.get_id(), 0, 0);
+            dfb.pop_front(1);
+            release_dst();
+        }
     }
     dfb.finish();
 }

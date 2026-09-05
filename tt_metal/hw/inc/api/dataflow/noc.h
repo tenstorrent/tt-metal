@@ -20,6 +20,7 @@ class DataflowBuffer;
 // dataflow_buffer.h which includes noc.h
 struct DataflowBufferArgs {
     uint32_t offset_bytes{};
+    uint32_t num_tiles{1};  // Tiles one transaction moves.
 };
 
 template <typename T>

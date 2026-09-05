@@ -1121,8 +1121,16 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
                     std::vector<uint8_t> dfb_config_vec(
                         program.impl().get_program_config(index).dfb_size / sizeof(uint8_t));
 
-                    const size_t bytes_written = tt::tt_metal::experimental::dfb::detail::serialize_dfb_config_for_core(
+                    size_t bytes_written = tt::tt_metal::experimental::dfb::detail::serialize_dfb_config_for_core(
                         logical_core, dfbs_on_core, dfb_config_vec);
+
+                    // write_to_device transfers whole 32-bit words. If the serialized DFB config blob is
+                    // not a whole number of words, the final 1-3 bytes are silently dropped, which can
+                    // truncate the last per-RISC record. Pad the blob to a full word before writing it.
+                    bytes_written = tt::align(bytes_written, sizeof(uint32_t));
+                    if (dfb_config_vec.size() < bytes_written) {
+                        dfb_config_vec.resize(bytes_written, 0);
+                    }
 
                     uint64_t addr = kernel_config_base + program.impl().get_program_config(index).dfb_offset;
                     log_info(
