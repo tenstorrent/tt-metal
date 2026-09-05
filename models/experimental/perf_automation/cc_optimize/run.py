@@ -329,6 +329,16 @@ def _mcp_config(repo_root: Path, manifest_path: str, pipe: dict, devices: str, k
     _mrel = pipe.get("model_rel") or _model_rel_from_perf_test(pipe.get("perf_test"))
     if _mrel:
         env["PERF_MCP_MODEL_ROOT"] = str((Path(repo_root) / _mrel).resolve())
+        # AND THIS PROCESS, not only the server it launches. The comment above fixed one consumer --
+        # the server -- by putting the value in the env dict handed to it. Everything the RUN itself
+        # renders was left resolving the model as `Path(".").name`, which is "", which falls through
+        # to the literal "model": so the end-of-run report looked for
+        # perf_mcp_stage_ms_model_main.json, a file that cannot exist, got nothing, and printed a
+        # roofline with no batch, every stage relabelled per-token, memory falsely binding and an
+        # empty fidelity ladder -- beside LIVE reports, written by the server, that were correct all
+        # run. Two reports of one run disagreeing, and the wrong one the final. Same
+        # missing-value-becomes-wrong-answer shape, second consumer.
+        os.environ["PERF_MCP_MODEL_ROOT"] = env["PERF_MCP_MODEL_ROOT"]
     # The chip scope is inherited from os.environ, resolved once after discovery -- see _apply_scope.
     _seq = os.environ.get("TT_PERF_SEQ_LEN")
     if _seq:

@@ -2448,7 +2448,14 @@ def _read_stage_doc(state_dir_path=None, model="", task="") -> dict:
         from pathlib import Path as _P
 
         base = _P(state_dir_path) if state_dir_path else state_dir()
-        m = model or (_MODEL_ROOT.name if _MODEL_ROOT else "model")
+        # NO NAME MEANS NO ANSWER. This used to fall through to the literal "model" and read
+        # perf_mcp_stage_ms_model_main.json -- a path no run ever writes -- so a caller that had not
+        # been told which model it was got {} that was indistinguishable from "this run measured no
+        # stages", and rendered as a confident blank. is_identified is the predicate the ledger
+        # already refuses on for the same reason; one definition, used by both.
+        if not _ledger().is_identified(model):
+            return {}
+        m = model or _MODEL_ROOT.name
         t = task or os.environ.get("PERF_MCP_TASK", "main")
         doc = json.loads((base / ("perf_mcp_stage_ms_%s_%s.json" % (m, t))).read_text())
         if not isinstance(doc, dict):
