@@ -266,7 +266,7 @@ re-derive the breakdown from scratch, and this record is where the finding lives
 
 ---
 
-### [ ] Refinement 2 — Spread the finalize (Lamp L-FIN)
+### [x] Refinement 2 — Spread the finalize (Lamp L-FIN)
 
 **Type**: perf
 
@@ -311,6 +311,49 @@ negative result here is worth more than a retry, because this lamp has been open
 BLOCK shards not regressed — `(1,1,7168,1024)` has only 1.6% of margin), the golden suite is
 green, `verify_supported`'s categories are unchanged, and no regression across the
 config-spanning guard set or `test_program_is_structurally_the_seeds`.
+
+**Outcome**: **the named scheme change was built, measured, and LOSES; the phase's win came
+from the same round's transport.** All numbers blackhole p150b 1350 MHz, in-process
+profiler, median of 5, min over 3 reps, noise floor ±0.3% (calibrated on two cells whose
+program is byte-identical across the sweep).
+
+*What I measured.* `COMBINE_FIN_SPREAD` — the last-level fold forwards the RAW group sum,
+the multicast carries that, and every core finalizes its own copy in parallel, covering the
+identity and compact branches with one predicate — is **correct** (pcc / rel-RMS
+bit-identical to the root finalize everywhere) and measures **0.953–1.004x**: a loss at
+every combine geometry. It is kept as a live knob at its byte-identical default, not
+deleted. The transport half — the pre-handshake elided on a single-round combine, plus a
+3 kB identity-path multicast payload — measures **1.035x on `(1,1,32,7168)` W28**
+(5713 → 5520 ns, ratio-to-ceiling **1.042 → 1.007**), 1.015x at `(1,1,32,2304)`, 1.013x on
+the 64-core ROW_MAJOR BAND, 1.010x at `(1,1,32,5120)`, and 1.004–1.007x on four more, with
+no cell below the noise floor. Both 64-core BLOCK shards are multi-round, so the gate keeps
+them at the seed's program: 0.997 / 0.999, i.e. flat.
+
+*What the bottleneck actually is now.* Not the finalize, and this phase is the measurement
+that says so. The finalize is a **replicated** term, not a divisible one — every core needs
+the same value, so relocating the rsqrt moves it along the identical serial chain rather
+than dividing it — and two earlier decisions had already banked what there was: D22 fused
+the root's rsqrt into the fold's DEST window (no pack at all), and D27 collapsed it from
+`BLOCK_ROWS` tile-ops to **one per round**, which is the O(`BLOCK_ROWS`) cost the lamp was
+written against. Lamp L-FIN is therefore **closed**, and `op_design.md`'s stall-shadow table
+and lamp list now say so with the number. What binds `(1,1,32,7168)` at 28 cores is still
+the **root's serial chain** — `writer_gather_wait` + the 28-tile fold + the broadcast — with
+27 cores idle behind it; that is a fan-in, not a finalize.
+
+*What I would try next, and why not here.* (a) **Fold in the reduce datapath instead of
+pairwise `add_tiles`.** At `BLOCK_ROWS == 1` each sender's 4 kB page carries 32 useful
+floats in column 0; if senders wrote into distinct *rows* of one landing tile (a transpose
+of D27's compact permute, expressible as `transpose_wh` of the tile `member_pack` already
+builds), a group of ≤ 32 would fold in **one `reduce_tile`** instead of `G/2` `add_tiles`,
+and the gather's bytes would drop by more than an order of magnitude. That is a
+gather-representation change, i.e. a different lamp from this heading's, and it is
+⭐⭐⭐-class. (b) **All-reduce the last tree level** — the `f1` level-0 gatherers broadcast
+their run sums and every core folds and finalizes locally, deleting the level-1 hop, the
+root's l1 gather wait and the single-root broadcast. It needs `f1` concurrent senders on one
+receiver rectangle, which `Mcast1D`/`Mcast2D` express only as a *rotating* (per-round)
+sender, so it is a mcast-wire change, not a knob. Neither is filed as a follow-up: the
+trailing perf rounds re-derive the breakdown from scratch and this record is where the
+finding lives.
 
 ---
 

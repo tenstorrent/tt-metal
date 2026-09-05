@@ -61,7 +61,7 @@ Only after all six was a budget predicate introduced.
 | `cb_input_tiles` | `NAT_IN ? shard_h_t*shard_w_t : DX * BR * (HAS_R ? WC : XH)` | same as capacity when zero-copy; `BR*(HAS_R?WC:XH)` otherwise | `{row: spans → BR, width: spans → WC or XH, channel: —, pass: HAS_R ? streams : spans (held across both passes when X_RESIDENT), slot: —}` | input dtype | reader | compute | whole kernel | **Cannot share.** Zero-copy over the input shard when `NAT_IN` (0 arena bytes, and aliasing anything else would corrupt the caller's tensor). Otherwise concurrent with `cb_output_tiles` by the `DX`/`DO` pipelining decision. Capacity exceeds live set by `DX` — double buffering |
 | `cb_x_squared` | `BR * XSW` | `BR * XSW` | `{row: spans → BR, width: spans → XSW (=1 under the DEST fold, else WC), channel: —, pass: pass A only, slot: —}` | input dtype | compute | compute | pass A | **Could share with `cb_normalized`** (pass A vs. pass B, disjoint) — **not taken**: the D25 combine pipeline issues block `b+1`'s pass A before block `b`'s combine, which makes the two concurrent. Recorded per Rule 3's pipelining clause |
 | `cb_scaler` | `SP` (1 or 2) | `SP` | `{row: —, width: —, channel: —, pass: —, slot: —}` — constant | **bfloat16**, always | reader | compute | whole kernel | **Cannot share.** Live for the whole kernel; `1.0` exactly, never `1/W` |
-| `cb_row_stat` | `!CMB * SD * BR` | `BR` (one block's stats) | `{row: spans → BR, width: —, channel: —, pass: spans → written in A, read in B, slot: —}` | **float32 always** — deliberately overrides the "page format follows DEST width" default, because this is the cross-chunk accumulator `reduce`'s `Accumulate::at` reloads; a 16-bit page would make the STREAM reload lossy at exactly the widths this op cares about | compute | compute | pass A → pass B | **Cannot share.** Capacity is `SD =` 2× the live set and that gap is a **correctness** requirement, not double buffering: `transform_in_place` rotates the ring and a partial final block's finalized tiles would otherwise straddle the wrap (D6). Not allocated at all on a combine path |
+| `cb_row_stat` | `!CMB * SD * BR` | `BR` (one block's stats) | `{row: spans → BR, width: —, channel: —, pass: spans → written in A, read in B, slot: —}` | **float32 always** — deliberately overrides the "page format follows DEST width" default, because this is the cross-chunk accumulator `reduce`'s `Accumulate::at` reloads; a 16-bit page would make the STREAM reload lossy at exactly the widths this op cares about | compute | compute | pass A → pass B | **Cannot share.** Capacity is `SD =` 2× the live set and that gap is a **correctness** requirement, not double buffering: `transform_in_place` rotates the ring and a partial final block's finalized tiles would otherwise straddle the wrap (D6). Not allocated at all on a combine path **unless `FIN_SPREAD`** (Refinement 2), where it comes back as the spread finalize's `FD`-page output — flat in `BR`, because D27 made the round's unit ONE compact tile. That re-use IS a sharing (the same index, disjoint lifetimes: pass-A accumulator off the combine path, post-multicast finalize on it) and it is why the spread needs no new buffer index. `FIN_SPREAD` is parked at 0, so the term is 0 in every shipped build |
 | `cb_gamma_sticks` | `HAS_G * PC_RM * PS` | `PS` | `{row: —, width: spans → WC (as `PS = WC`) or **streams** → one tile column per page under D30, channel: spans → WC*32 weights, pass: streams, slot: —}` | weight dtype | reader | compute | `HAS_G && PC_RM` | **Cannot share with `cb_bias_sticks`** — differing page format (the two operands' dtypes are independent) and concurrent (both staged per chunk before their tilizes). Capacity `PS` is the D30 knob: `WC` for one wide `tilize<WC>(1)`, or `DS` pages for `tilize<1>(WC)` |
 | `cb_gamma_tiles` | `HAS_G * XH` | `XH` | `{row: **streams** → the same vector feeds every row (reuse-shared), width: spans → XH, channel: spans → XH*32, pass: spans → held across both, slot: —}` | weight dtype | reader (TILE build) / compute (RM build) | compute | `HAS_G` | **Cannot share with `cb_bias_tiles`** — differing page format, and both are live simultaneously in pass B |
 | `cb_normalized` | `ND * BR * WC` (`ND = 0` when neither post-stage is present) | `BR * WC` | `{row: spans → BR, width: spans → WC, channel: —, pass: pass B only, slot: —}` | input dtype | compute | compute | pass B | **Cannot share with `cb_x_squared`** — the D25 pipeline makes them concurrent (above). **Cannot share with `cb_x_sum`** either, and the design's contrary claim is refuted in the inventory table above: `cb_x_sum` is pass B's held `Upfront`/`None` srcA and an in-place chain needs an incrementally-popping input, so aliasing it deadlocks. Capacity `ND` is the in-place rotation floor, not double buffering |
@@ -132,6 +132,10 @@ arena_bytes =
 
   # --- combine, flat in BR ---
   + CMB * ( (TREE ? (f0 + f0%2) + (f1 + f1%2) + FD : GS) + FD + CMP * 2*FD ) * ft
+  + CMB * FIN_SPREAD * FD * ft                       # cb_row_stat, re-used as the
+                                                     # spread finalize's landing CB
+                                                     # (Refinement 2; FIN_SPREAD = 0 in
+                                                     #  every shipped build, so 0 bytes)
 
 l1_reserved = sum of shard_bytes over the DISTINCT resident tensors among
               {input, output, residual}          # `inplace` makes output IS input,
@@ -225,10 +229,18 @@ ROW_RESIDENT matters more in this op than it did in the seed.
 | `input_tensor` | **1** | each core reads only its `Wt/gw` slice | one compact fp32 tile (4096 B) per member per row-block, up the tree |
 | `residual_input_tensor` | **1** | same slice | — |
 | `weight` / `bias` | **gh** each (not `C`) | a core reads only the slice of the vector its width slice needs, so the whole vector is read once per *row-group* rather than once per core — **strictly less** than the row split | — |
-| output | **1** | | one multicast fp32 tile per row-block, down to `G−1` receivers |
+| output | **1** | | one multicast fp32 tile per row-block, down to `G−1` receivers — **3072 B on the identity path since Refinement 2** |
 
 Cross-core total per row-block: `G · 4096` B up (or `(f0 + f1) · 4096` B with the tree, spread
-across `f1` cores) + `4096` B multicast to `G−1` receivers.
+across `f1` cores) + `4096` B multicast to `G−1` receivers — **`3072` B when `BLOCK_ROWS == 1`**.
+
+Refinement 2 (Lamp L-FIN) is the only change so far that moves a byte count here, and it moves
+exactly one: on the IDENTITY path (`BLOCK_ROWS == 1`) the stat multicast carries faces 0..2 rather
+than the whole tile — 3072 B instead of 4096 B to each of `G−1` receivers — because the landing CB's
+only reader there is pass B's column broadcast (column 0 lives in faces 0 and 2), which is D26's
+already-measured licence applied to the other direction. The COMPACT path is unchanged at 4096 B:
+its un-permute matmul sums 32 products, so every column must be finite. The gather's byte counts
+are untouched in both directions.
 
 Refinement 1 lever 2 changes **which NoC** those bytes ride, never how many there are. On a
 `native_in` plan the reader has no activation stream at all (x is an aliased resident shard), so the

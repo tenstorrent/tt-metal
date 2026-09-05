@@ -633,6 +633,24 @@ void kernel_main() {
             }  // if constexpr (TREE)
         };
 
+        // ---- REFINEMENT 2: THE MULTICAST'S PRE-HANDSHAKE, AND THE ORDERING THAT REPLACES IT ----
+        // The descriptor elides `mcast_pipe`'s receiver-readiness handshake (McastConfig's
+        // `pre_handshake`) whenever the combine runs exactly ONE round -- see
+        // `COMBINE_MCAST_FIRE_AND_FORGET` / `_combine_mcast_pre_handshake` there.  The ONE
+        // invariant that makes that legal is an ORDERING PROPERTY OF THE CODE BELOW, so any change
+        // to it has to preserve this or the elision becomes a rare, cache-warm-only hang:
+        //
+        //   `ReceiverPipe`'s CONSTRUCTOR is what stores INVALID into this core's data-ready flag
+        //   cell (mcast_pipe.inl, ReceiverPipe::ReceiverPipe).  If the root's VALID broadcast could
+        //   land BEFORE that store, the store would clobber it and the receiver would wait forever.
+        //   It cannot, because `auto receiver = mc.receiver(noc)` is constructed BEFORE the round
+        //   loop -- hence before this core ships its own partial -- and the root cannot send until
+        //   `gather_sem.wait_min` has seen every member's post-ship signal.  So the ctor's store
+        //   provably precedes the broadcast on every active core, and an INACTIVE core returns at
+        //   `num_rows == 0` above without ever constructing a pipe.
+        //
+        //   DO NOT move a receiver construction inside the round loop, and DO NOT let a member
+        //   signal the gather before its pipe exists.
         if constexpr (TREE) {
             if (is_root != 0) {
                 auto sender = mc.sender(noc);

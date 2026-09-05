@@ -280,3 +280,90 @@
     why they need pinning.
   - `test_rms_norm_ttnn_perf.py::test_program_is_structurally_the_seeds` extended with the
     documented, measured tree-ring allowance (above).
+
+## Refinement 2 — Spread the finalize (Lamp L-FIN)
+- Date: 2026-09-05
+- What was done:
+  - **The named scheme change was BUILT, MEASURED, and PARKED.** `COMBINE_FIN_SPREAD`
+    makes the last-level fold forward the **RAW** group sum (`combine_fold`'s existing
+    `FINALIZE` template parameter, flipped) so the multicast carries that, and every core
+    applies `rsqrt(sum/W + eps)` to its own copy in parallel — the literal Lamp L-FIN move,
+    covering **both** branches with one predicate (the compact tile is finalized before the
+    un-permute; the identity tile is finalized into `cb_row_stat`, which the combine path
+    leaves dead). It is **correct** — pcc and rel-RMS are bit-identical to the root
+    finalize on every case measured — and it **loses**: **0.953–1.004x** across nine
+    combine geometries. Parked at its byte-identical default (`False`), kept live, and the
+    reason is recorded next to the knob and in `op_design.md`'s stall-shadow table: the
+    finalize is a **replicated** term, not a divisible one. Every core needs the *same*
+    value, so moving the rsqrt does not delete it anywhere — it just relocates it along the
+    identical serial chain (fold → [rsqrt] → send → recv → [rsqrt] → pass B). Two prior
+    decisions had already taken what there was to take: **D22** fused the root's rsqrt into
+    the fold's DEST window (so at ROOT it costs no pack at all, while a spread one needs its
+    own copy + pack + unpack on every core), and **D27** collapsed the finalize from
+    `BLOCK_ROWS` tile-ops to **one per round**, which is the O(`BLOCK_ROWS`) half the lamp
+    was originally written against.
+  - **The round's TRANSPORT is where the phase's win came from** — the half Refinement 1's
+    outcome explicitly deposited here, and the half the verifier note anticipates ("changes
+    what the multicast carries ... and therefore the receive side"). Two gates, both on the
+    stat multicast, both inert on every non-combine build:
+    1. `COMBINE_MCAST_FIRE_AND_FORGET` — elide `mcast_pipe`'s receiver-readiness
+       **pre-handshake** (its own per-kernel `compile_time_args(pre_handshake=...)`
+       override; no new CT arg, no kernel change) whenever the combine runs exactly
+       **one round**. Safe by an exact ordering property, not a statistical one:
+       `ReceiverPipe`'s ctor — which stores INVALID into the data-ready flag — runs before
+       a core ships its partial, and the root cannot send until every partial has landed.
+       The writer kernel carries that invariant as a comment at the receiver construction
+       so a future edit cannot silently break it.
+    2. `COMBINE_MCAST_FACES = 3` — the **identity-path** multicast carries faces 0..2
+       (3 kB, ONE transaction covering both column-carrying faces) instead of the whole
+       4 kB tile. Same measured licence as D26's gather trim applied in the other
+       direction: the landing CB's only reader there is pass B's column broadcast. The
+       COMPACT path is forced to whole tiles (its un-permute matmul sums 32 products).
+       Packed into the **high byte of the existing `GATHER_FACES` CT word** so the writer's
+       argument-list shape stays the seed's.
+- Accuracy achieved: output is **bit-identical** across all four sweep variants — pcc and
+  rel-RMS agree to every printed digit (pcc 0.999985–0.999990, rel-RMS 0.0045–0.0067 against
+  the op's 0.04 bound) on the nine combine geometries plus three non-combine guards. The
+  soft `pcc_threshold = 0.9995` on the `gamma_bias_residual` cell holds with four nines of
+  margin.
+- Golden test progress: `test_op_loose` **433/443** — the identical Phase-0 figure; all 10
+  failures are the same harness-attributed ones (`CoreRange.end_coord`, `torch.max()` on a
+  zero-element readback), none op-attributed. Plus a 2140-cell `test_op` slice over
+  `1x1x32x8192 / 1x1x128x4096 / 1x1x2048x256` (every layout × placement), all green.
+- Perf, measured (blackhole p150b 1350 MHz, in-process profiler, median of 5, min over 3
+  reps; noise floor **±0.3%**, calibrated on the two BLOCK-shard cells whose program is
+  byte-identical across the whole sweep):
+
+  | case | before | after | x | ceiling | ratio |
+  |---|---:|---:|---:|---:|---:|
+  | `(1,1,32,7168)` WIDTH `[32,256]` (7,4) 28c | 5713 | **5520** | **1.035** | 5481 | 1.042 → **1.007** |
+  | `(1,1,32,2304)` WIDTH `[32,256]` (9,1) 9c | 4422 | **4356** | **1.015** | 4617 | 0.943 |
+  | `(1,1,256,512)` ROW_MAJOR BAND 64c | 23870 | **23556** | **1.013** | — | — |
+  | `(1,1,32,5120)` WIDTH `[32,160]` (8,4) 32c | 4769 | **4724** | **1.010** | 5267 | 0.897 |
+  | `(1,1,32,7168)` INTERLEAVED width-split 16c | 9026 | **8961** | 1.007 | 14894 | 0.602 |
+  | `(1,1,32,1024)` WIDTH 8c | 3683 | **3658** | 1.007 | 4110 | 0.890 |
+  | `(1,1,32,5120)` WIDTH gbr/fp32 32c | 6327 | **6295** | 1.005 | 6555 | 0.960 |
+  | `(1,1,32,8192)` WIDTH 64c | 5081 | **5061** | 1.004 | 6000 | 0.844 |
+  | `(1,1,8192,1024)` BLOCK 64c (gates OFF) | 23527 | 23596 | 0.997 | 28619 | 0.824 |
+  | `(1,1,7168,1024)` BLOCK gbr 64c (gates OFF) | 32999 | 33021 | 0.999 | 34569 | 0.955 |
+  | `(1,1,1024,512)` WIDTH compact 4c | 22834 | 22821 | 1.001 | — | — |
+  | `(1,1,8192,1024)` INTERLEAVED (no combine) | 88282 | 87870 | 1.005 | 89992 | 0.976 |
+
+  No cell below the noise floor. The two 64-core BLOCK shards the verifier flagged (one with
+  only 1.6% of margin) are multi-round, so the pre-handshake gate keeps them at the seed's
+  program and they measure flat, as designed.
+- Issues encountered: None. The spread finalize worked first time and its result was a
+  measured null, which is the finding rather than a failure — the lamp had already been
+  closed by D22 and D27 without anyone noticing, and this phase is the measurement that says
+  so. One structural constraint shaped the diff: the writer's CT-arg **list shape** is a
+  checked seed property, so the multicast's face count is packed into an existing word
+  rather than appended, and the two words that legitimately move (`15`, `22`) are added to
+  `test_program_is_structurally_the_seeds`'s measured allowance alongside Refinement 1's
+  tree arity.
+- Tests added:
+  - `test_rms_norm_ttnn_combine_knobs.py`: six new tests — the finalize site's default AND
+    that it is **still a live knob** (flipping the module constant moves the CT arg), the
+    pre-handshake's single-round gate, the packed face word's two bytes, and an end-to-end
+    check that both gates reach the writer's CT list where the kernel reads them.
+  - `test_rms_norm_ttnn_perf.py`: `_MCAST_WRITER_CT`, the measured allowance for the two
+    combine-transport words, with the full sweep table inline.
