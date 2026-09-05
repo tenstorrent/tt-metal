@@ -1263,3 +1263,68 @@ def test_high_bw_all_gather_galaxy_route_plan_cache(mesh_device, dtype, width, p
         finally:
             mesh_device.quiesce_devices()
             device.clear_program_cache()
+
+
+@run_for_blackhole("common argument refresh requires Blackhole Galaxy")
+@pytest.mark.parametrize("device_params", [_FABRIC_2D_TORUS_XY_DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize("links", [1, 2])
+@pytest.mark.parametrize("dtype,width", [(ttnn.bfloat16, 576), (ttnn.fp8_e4m3, 656)])
+def test_high_bw_all_gather_galaxy_common_addresses(mesh_device, links, dtype, width):
+    mesh_device.quiesce_devices()
+    mesh_device.clear_program_cache()
+    device = mesh_device.create_submesh(ttnn.MeshShape(8, 1))
+    try:
+        inputs, outputs = [], []
+        for seed in range(3):
+            torch.manual_seed(seed)
+            inputs.append(
+                _make_tensor(
+                    device,
+                    torch.rand((1, 1, 256, width), dtype=torch.bfloat16),
+                    dtype,
+                    ttnn.ROW_MAJOR_LAYOUT,
+                    ttnn.ShardTensor2dMesh(device, dims=(2, None), mesh_shape=(8, 1)),
+                )
+            )
+            outputs.append(
+                _make_tensor(
+                    device,
+                    torch.zeros((1, 1, 256, width), dtype=torch.bfloat16),
+                    dtype,
+                    ttnn.ROW_MAJOR_LAYOUT,
+                    ttnn.ReplicateTensorToMesh(device),
+                )
+            )
+
+        def run(index):
+            ttnn.experimental.high_bw_all_gather(
+                inputs[index], dim=2, output_tensor=outputs[index], cluster_axis=0, num_links=links
+            )
+
+        def check():
+            ttnn.synchronize_device(device)
+            for source, output in zip(inputs, outputs):
+                _assert_exact_all_gather(source, output, device, dtype, 0)
+
+        # Keep all allocations live and queue distinct addresses without synchronization.
+        for index in range(3):
+            run(index)
+            if index == 0:
+                entries = device.num_program_cache_entries()
+            assert device.num_program_cache_entries() == entries
+        check()
+        trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+        for index in range(3):
+            run(index)
+        ttnn.end_trace_capture(device, trace_id, cq_id=0)
+        try:
+            for _ in range(2):
+                ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
+                check()
+            assert device.num_program_cache_entries() == entries
+        finally:
+            ttnn.release_trace(device, trace_id)
+    finally:
+        mesh_device.quiesce_devices()
+        device.clear_program_cache()

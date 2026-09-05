@@ -32,8 +32,6 @@ struct PageGeometry {
 };
 
 enum class ReaderRtArg : std::size_t {
-    InputAddress,
-    OutputAddress,
     InitialStripe,
     StripeStep,
     NumIters,
@@ -51,7 +49,6 @@ enum class ReaderRtArg : std::size_t {
 };
 
 enum class WriterRtArg : std::size_t {
-    OutputAddress,
     InitialStripe,
     StripeStep,
     NumIters,
@@ -737,6 +734,10 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
     const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
     const uint32_t input_addr = input_tensor.buffer()->address();
     const uint32_t output_addr = output_tensor.buffer()->address();
+    // All workers in a kernel read the same tensor addresses; keep these per-dispatch
+    // values common instead of duplicating their patches across every worker core.
+    tt::tt_metal::SetCommonRuntimeArgs(program, reader_kernel_id, {input_addr, output_addr});
+    tt::tt_metal::SetCommonRuntimeArgs(program, writer_kernel_id, {output_addr});
 
     // Mux runtime args: one fabric connection per active direction per link, to that direction's neighbor. The
     // direction's workers all feed this one connection.
@@ -829,8 +830,6 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
                                               (ring_even_split ? (num_worker_output_chunks - final_count) : 0);
 
                 std::vector<uint32_t> reader_rt_args(rt_arg_index(ReaderRtArg::Count));
-                reader_rt_args[rt_arg_index(ReaderRtArg::InputAddress)] = input_addr;
-                reader_rt_args[rt_arg_index(ReaderRtArg::OutputAddress)] = output_addr;
                 reader_rt_args[rt_arg_index(ReaderRtArg::InitialStripe)] = device_idx;
                 reader_rt_args[rt_arg_index(ReaderRtArg::StripeStep)] = stripe_step;
                 reader_rt_args[rt_arg_index(ReaderRtArg::NumIters)] = num_iters;
@@ -849,7 +848,6 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
                 tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, {core}, reader_rt_args);
 
                 std::vector<uint32_t> writer_rt_args(rt_arg_index(WriterRtArg::Count));
-                writer_rt_args[rt_arg_index(WriterRtArg::OutputAddress)] = output_addr;
                 writer_rt_args[rt_arg_index(WriterRtArg::InitialStripe)] = device_idx;
                 writer_rt_args[rt_arg_index(WriterRtArg::StripeStep)] = stripe_step;
                 writer_rt_args[rt_arg_index(WriterRtArg::NumIters)] = num_iters;
@@ -946,19 +944,16 @@ void HighBwAllGatherUnicastFactory::override_runtime_arguments(
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
 
-        auto& reader_args_by_core = GetRuntimeArgs(program, shared_vars.reader_kernel_id);
-        auto& writer_args_by_core = GetRuntimeArgs(program, shared_vars.writer_kernel_id);
-        for (const auto& core : shared_vars.worker_cores) {
-            auto& reader_args = reader_args_by_core[core.x][core.y];
-            reader_args.at(rt_arg_index(ReaderRtArg::InputAddress)) = input_addr;
-            reader_args.at(rt_arg_index(ReaderRtArg::OutputAddress)) = output_addr;
-            auto& writer_args = writer_args_by_core[core.x][core.y];
-            writer_args.at(rt_arg_index(WriterRtArg::OutputAddress)) = output_addr;
-        }
+        auto& reader_common = GetCommonRuntimeArgs(program, shared_vars.reader_kernel_id);
+        reader_common.at(0) = input_addr;
+        reader_common.at(1) = output_addr;
+        GetCommonRuntimeArgs(program, shared_vars.writer_kernel_id).at(0) = output_addr;
 
         if (!has_runtime_controls) {
             continue;
         }
+        auto& reader_args_by_core = GetRuntimeArgs(program, shared_vars.reader_kernel_id);
+        auto& writer_args_by_core = GetRuntimeArgs(program, shared_vars.writer_kernel_id);
 
         // Patch only scalar runtime arguments: no program rebuild, worker re-selection, allocation, or
         // tensor view/slice is involved on a cache hit. The compiled schedule may be bank-owned; in that

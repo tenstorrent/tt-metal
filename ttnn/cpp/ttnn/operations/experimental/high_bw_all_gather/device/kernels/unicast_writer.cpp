@@ -62,7 +62,7 @@ void kernel_main() {
     // RUNTIME ARGS
     ///////////////////////////////////////////////////
     size_t arg_idx = 0;
-    const address_t output_tensor_address = get_arg_val<address_t>(arg_idx++);
+    const address_t output_tensor_address = get_common_arg_val<address_t>(0);
     const uint32_t initial_stripe = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t stripe_step = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_iters = get_arg_val<uint32_t>(arg_idx++);
