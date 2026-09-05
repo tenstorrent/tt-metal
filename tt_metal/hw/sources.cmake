@@ -33,6 +33,7 @@ set(HW_JIT_API_HEADERS
     inc/api/tensor/pages_address_iterator.h
     inc/api/tensor/page.h
     inc/api/scratchpad.h
+    inc/api/scratchpad_binding_token.h
     inc/api/compute/compute_kernel_api.h
     inc/api/compute/add_int_sfpu.h
     inc/api/compute/atan2.h
@@ -200,6 +201,7 @@ set(HW_JIT_API_HEADERS
     inc/api/dataflow/circular_buffer.h
     inc/api/dataflow/cross_node_dfb.h
     inc/api/dataflow/dataflow_buffer.h
+    inc/api/dataflow/dfb_binding_token.h
     inc/experimental/kernel_args.h
     inc/experimental/blaze_named_args.h
     inc/api/dataflow/noc_semaphore.h
