@@ -168,11 +168,11 @@ kernel-compile cache layers defeated for that leg only (see the gotcha above:
 `CCACHE_DISABLE=1`, and the Redis `CCACHE_REMOTE_STORAGE` cleared). After the
 tests, a non-blocking (`continue-on-error`) step translates the captured
 commands (this script, no `--run`) and analyzes them with CodeChecker —
-`CodeChecker analyze compile_commands.json --analyzers clang-tidy` with our
-config forwarded via `--analyzer-config
-clang-tidy:take-config-from-directory=true clang-tidy:cc-verbatim-args-file=…`
-(the file contains `--config-file=<kernel .clang-tidy>`), then `CodeChecker
+`CodeChecker analyze compile_commands.json --config
+tt_metal/jit_build/kernel_clang_tidy/codechecker.json`, then `CodeChecker
 parse --export html` — the same tooling `clang-static-analyzer.yaml` uses.
+See [Checker selection and scoping](#checker-selection-and-scoping) for how
+that config decides what runs and what is reported.
 Two artifacts per group: `kernel-clang-tidy-<group>` (compile_commands.json,
 summary, plists) and `kernel-clang-tidy-html-<group>` (browsable report).
 Gotcha found while wiring this: CodeChecker's compilation-db parser consults
@@ -229,6 +229,59 @@ abandoned; the tidy steps skip `sim_*` SKUs. Three independent blockers:
   already slow by design (`TT_METAL_FORCE_JIT_COMPILE=1`, every kernel cache
   defeated).
 
+### Checker selection and scoping
+
+Both are driven by CodeChecker, in
+`tt_metal/jit_build/kernel_clang_tidy/codechecker.json`, not by a check list in
+`.clang-tidy`.
+
+**Selection** is `--enable-all` (CodeChecker's ~477 known clang-tidy checkers)
+minus a short `--disable` list. Twelve of the entries are whole families that
+cannot apply to bare-metal RISC-V device code — `abseil`, `altera`, `android`,
+`boost`, `darwin`, `fuchsia`, `linuxkernel`, `llvmlibc`, `mpi`, `objc`,
+`openmp`, `zircon` — 72 checkers between them. The other three are specific to
+this domain:
+
+| Disabled | Reason |
+| --- | --- |
+| `hicpp-no-assembler` | Inline asm is pervasive in `tt_metal/hw/inc` and tt-llk; recorded at 242K hits under the previous flow. |
+| `portability-simd-intrinsics` | SFPI *is* a SIMD intrinsics layer, by design. |
+| `clang-diagnostic-c++98-compat` | Device code is C++17/20. |
+
+Everything else is on. This replaced an inherited 189-entry opt-out list (13
+families plus 176 individual checks) carried over from the `kernel_clang_tidy`
+CMake target in PR #37252, which had been assembled by muting whatever fired
+under that static flow and never re-triaged. It had `clang-analyzer-*` off
+wholesale along with `bugprone-narrowing-conversions`,
+`bugprone-integer-division`, `bugprone-too-small-loop-variable`,
+`bugprone-sizeof-expression`, `misc-const-correctness` and
+`performance-no-int-to-ptr` — close to the bug classes device code most wants.
+Note that `take-config-from-directory` must stay off for any of this to take
+effect: with it set, CodeChecker returns an empty checker list
+(`clangtidy/analyzer.py:471`) and every `--enable`/`--disable` is inert.
+
+**Scoping** is `--skip <skiplist> --drop-reports-from-skipped-files`, which
+replaced `HeaderFilterRegex`. Two reasons the skiplist is the better mechanism
+here: it also drops `clang-diagnostic-*` findings, which a header filter
+structurally cannot (hence the SFPI and glibc parse noise in earlier reports),
+and it keeps scope in one reviewable file. The list is exclusion-only —
+upstream SFPI, host libc, and the generated JIT glue in the kernel cache —
+because the translation units are the firmware wrappers under
+`tt_metal/hw/firmware/src/`, not files under `kernels/`; an allow-list keyed on
+`kernels/` would skip every TU and analyze nothing. Exclusion-only also fails
+open as new in-repo device directories appear.
+
+`.clang-tidy` is now only `CheckOptions` plus `FormatStyle`, forwarded via
+`cc-verbatim-args-file`. That composes correctly because clang-tidy's
+command-line `-checks`, which CodeChecker supplies, takes precedence over a
+config-file `Checks:` key, while `CheckOptions` from the config are still
+honored — verified with `--list-checks`/`--dump-config` rather than assumed.
+
+`clangsa` is deliberately not enabled yet. Nothing path-sensitive runs today,
+and on riscv32 cross-compiled code leaning on SFPI's analysis-fallback
+builtins it may report false positives from the intrinsic stubs; it is a
+follow-up once the `--enable-all` volume is understood.
+
 ## Coverage and known gaps
 
 * **What limits the finding count.** The first all-hardware run should be read
@@ -238,19 +291,15 @@ abandoned; the tidy steps skip `sim_*` SKUs. Three independent blockers:
   only **8** TUs, against ~2450 kernel sources in the tree — hence wiring
   every leg. Second, `--dedupe kernel-role` (the default) lints one config per
   (kernel, RISC target), so the same kernel under many compile-time-arg
-  configurations is analyzed once. Third, `HeaderFilterRegex` decides which
-  files check findings may come from at all — kernel sources qualify because
-  they are `#include`d into the `trisck.cc`/`brisck.cc` wrappers, so clang
-  treats them as headers. Its original value covered only the `kernels/`
-  directories, which silently dropped every check finding in the
-  LLK/ckernel/SFPU header stack — some 2000 in-repo device headers, and where
-  much of the device logic actually lives. It now also covers
-  `tt_metal/{tt-llk,hw,fabric}` (matching both the repo tree and the
-  wheel-installed copies under `site-packages/ttnn/`), leaving out only the
-  SFPI toolchain headers and libc/libstdc++, which genuinely are upstream.
-  Note that compiler diagnostics (`clang-diagnostic-*`) bypass header filters
-  entirely — that is why the pre-widening runs surfaced parse errors from
-  those headers but no check findings from them.
+  configurations is analyzed once. Third and largest, the two gates described
+  in [Checker selection and scoping](#checker-selection-and-scoping) were both
+  set far tighter than anyone had reviewed: 189 muted checks including all of
+  `clang-analyzer-*`, and a `HeaderFilterRegex` covering only the `kernels/`
+  directories, which dropped every check finding from some 2000 in-repo device
+  headers (`tt_metal/hw/ckernels` 447, `tt_metal/hw/inc` 378, `tt_metal/tt-llk`
+  1138, `tt_metal/fabric/hw` 55) — where much of the device logic actually
+  lives. Both have since been replaced. Any comparison against the early runs
+  should account for that rather than reading it as a regression.
 * **Coverage = what the run compiled.** One test lints one test's kernels; a
   suite lints what the suite exercises. Kernels (or TRISC roles, or `#ifdef`
   branches) the run never compiled are not analyzed.
@@ -276,5 +325,9 @@ abandoned; the tidy steps skip `sim_*` SKUs. Three independent blockers:
   (clang vs GCC, generic `rv32im` instead of the TT cpu model, address-space
   attributes `rvtt_l1_ptr`/`rvtt_reg_ptr` ignored). Fine for tidy checks;
   don't expect codegen-dependent diagnostics to be meaningful.
-* The `.clang-tidy` check list is inherited from PR #37252 and not yet
-  re-triaged for this flow.
+* The `--disable` list in `codechecker.json` is a seed, not a triaged result.
+  It could not be measured locally — the captured translation units reference
+  wheel-installed sources that exist only in the CI container, so a local
+  `--enable-all` run fails with `no-sources` on all of them. The first
+  all-legs CI run under `--enable-all` is therefore the measurement; expect to
+  trim it once the per-checker distribution is visible in the report.
