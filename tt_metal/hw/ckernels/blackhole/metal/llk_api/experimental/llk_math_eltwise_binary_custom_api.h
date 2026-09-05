@@ -53,6 +53,28 @@ inline void llk_math_eltwise_binary_sub_bcast_cols_custom(
 }
 
 /**
+ * @brief Initialises the cancellation-resistant LayerNorm column subtraction.
+ * @note Run before @ref llk_math_sub_bcast_cols_compensated on this thread.
+ */
+inline void llk_math_sub_bcast_cols_compensated_init() { _llk_math_sub_bcast_cols_compensated_init_(); }
+
+/**
+ * @brief Runs cancellation-resistant column subtraction over consecutive destination tiles.
+ * @param operandA CB id of the input tiles; its tile shape configures the FPU traversal.
+ * @param dst_index First destination tile index.
+ * @param ct_dim Number of consecutive destination tiles to process.
+ * @note Call @ref llk_math_sub_bcast_cols_compensated_init first. The destination range must fit in the acquired bank.
+ */
+inline void llk_math_sub_bcast_cols_compensated(
+    const std::uint32_t operandA, const std::uint32_t dst_index, const std::uint32_t ct_dim) {
+    LLK_ASSERT(
+        (dst_index + ct_dim <= get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>()),
+        "dst range out of bounds");
+    const auto tensor_shape = get_operand_tensor_shape(get_operand_id(operandA));
+    _llk_math_sub_bcast_cols_compensated_(ct_dim, tensor_shape, dst_index);
+}
+
+/**
  * @brief Init the math (FPU) thread for the indexer_score blocked bcast-col MUL path.
  *
  * @param operandA: CB id of srcA; its num_faces drives the addr-mod setup.

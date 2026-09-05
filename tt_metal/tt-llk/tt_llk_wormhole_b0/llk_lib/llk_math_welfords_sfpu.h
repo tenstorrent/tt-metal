@@ -62,6 +62,19 @@ inline void _llk_math_welfords_sfpu_init_()
 }
 
 /**
+ * @brief Configure SFPU constants, address modifiers, and counters for two-pass statistics.
+ *
+ * @note Call @ref _two_pass_clear_stats_ before accumulating a new population; initialisation does not clear the
+ * running register state.
+ */
+inline void _llk_math_two_pass_sfpu_init_()
+{
+    sfpu::_init_sfpu_config_reg();
+    welfords_sfpu_configure_addrmod();
+    math::reset_counters(p_setrwc::SET_ABD_F);
+}
+
+/**
  * Re-establish MATH address mods and MOP state for the SFPU Welford path after an
  * arbitrary MATH/FPU op (e.g. eltwise binary scalar multiply). Does not touch the
  * SFPU replay buffer or clear running mean/M2 in LREG4/5.

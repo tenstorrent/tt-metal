@@ -13,10 +13,10 @@ USE_PERF_TEST_MODE = True
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
-def test_dram_group_norm_welford_reciprocal_vae(device):
+def test_dram_group_norm_two_pass_vae(device):
     from tests.ttnn.unit_tests.operations.fused.test_group_norm_DRAM import test_group_norm_DRAM
 
-    test_group_norm_DRAM(device, 1, 256, 256, 256, 32, 4, 8, 8, "welford_reciprocal", perf_test_mode=USE_PERF_TEST_MODE)
+    test_group_norm_DRAM(device, 1, 256, 256, 256, 32, 4, 8, 8, "two_pass", perf_test_mode=USE_PERF_TEST_MODE)
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
@@ -117,10 +117,10 @@ def test_conv2d_auto_sliced_vae(device):
 
 @skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
 @pytest.mark.models_device_performance_bare_metal
-def test_dram_group_norm_vae_welford_reciprocal_performance():
+def test_dram_group_norm_vae_two_pass_performance():
     # Create a command that runs the specific test
-    command = f'pytest "models/demos/stable_diffusion_xl_base/tests/test_sdxl_op_unit_test_perf.py::test_dram_group_norm_welford_reciprocal_vae" -v'
-    subdir = f"dram_group_norm_vae_welford_reciprocal_perf"
+    command = f'pytest "models/demos/stable_diffusion_xl_base/tests/test_sdxl_op_unit_test_perf.py::test_dram_group_norm_two_pass_vae" -v'
+    subdir = f"dram_group_norm_vae_two_pass_perf"
     cols = ["DEVICE KERNEL"]
     op_name = "GroupNormDeviceOperation"
 
@@ -135,11 +135,11 @@ def test_dram_group_norm_vae_welford_reciprocal_performance():
     # Extract the device kernel duration result
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
-    expected_duration_ns = 1331396  # Measured: 1.33ms for GroupNorm VAE welford_reciprocal
+    expected_duration_ns = 1331396  # Measured: 1.33ms for two-pass GroupNorm VAE
 
     # Log the performance result
     print(
-        f"DRAM GroupNorm VAE welford_reciprocal Device Kernel Duration: {device_kernel_duration:.2f} ns (expected: {expected_duration_ns} ns)"
+        f"DRAM GroupNorm VAE two-pass Device Kernel Duration: {device_kernel_duration:.2f} ns (expected: {expected_duration_ns} ns)"
     )
 
     # Performance validation with 1.5% margin

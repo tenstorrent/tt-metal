@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <stdint.h>
+#include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
@@ -22,41 +22,53 @@ void kernel_main() {
     constexpr auto Wt = get_arg(args::Wt);
     constexpr auto HtWt = get_arg(args::HtWt);
 
+#ifndef WELFORD_TWO_PASS
     constexpr auto scaler_bits = get_arg(args::scaler_bits);
-    constexpr bool use_welford = get_arg(args::use_welford) != 0;
+    constexpr auto tiles_per_batch = get_arg(args::tiles_per_batch);
+#endif
+    constexpr bool sfpu_two_pass = get_arg(args::use_welford) != 0;
     constexpr auto fp32_mode = get_arg(args::enable_fp32_sfpu) != 0 ? ReduceFp32Mode::Accurate : ReduceFp32Mode::Fast;
-    constexpr uint32_t tiles_per_batch = get_arg(args::tiles_per_batch);
 
-    // Welford must process one column at a time because the SFPU can only maintain
-    // a single running mean/M2 state. DEST_AUTO_LIMIT interleaves multiple columns
-    // per chunk, which would feed the Welford kernel tiles from the wrong columns.
+    // Two-pass statistics must process one column at a time. DEST_AUTO_LIMIT
+    // interleaves multiple columns per chunk, which would feed the statistics
+    // kernel tiles from the wrong columns.
     // Int32 SFPU max keeps one acc DST per column plus one shared work DST (DEST_AUTO_LIMIT - 1).
-    //
-    // The data format has to be a constant expression here (it is a template argument below), so it
-    // is read with the free function rather than off a DataflowBuffer object: DataflowBuffer's
-    // constructor is not constexpr, so no such object is usable in a constant expression.
     constexpr DataFormat reduce_format = get_dataformat(dfb::in0);
     constexpr bool use_sfpu_reduce_path = is_sfpu_reduce_path<REDUCE_OP, REDUCE_DIM, reduce_format, fp32_mode>();
-    constexpr uint32_t row_chunk = use_welford ? 1
-                                               : (use_sfpu_reduce_path ? (compute_kernel_lib::DEST_AUTO_LIMIT - 1)
-                                                                       : compute_kernel_lib::DEST_AUTO_LIMIT);
+    constexpr uint32_t row_chunk = sfpu_two_pass ? 1
+                                                 : (use_sfpu_reduce_path ? (compute_kernel_lib::DEST_AUTO_LIMIT - 1)
+                                                                         : compute_kernel_lib::DEST_AUTO_LIMIT);
 
     constexpr uint32_t onetile = 1;
+#ifdef WELFORD_TWO_PASS_STREAMING_CB_TILES
+    constexpr std::uint32_t max_read_batch = WELFORD_TWO_PASS_STREAMING_CB_TILES;
+#else
+    constexpr std::uint32_t max_read_batch = 1;
+#endif
 
-    // Batch only when row_chunk matches the host's tiles_per_batch; SFPU shortens the chunk.
-    constexpr bool batch_reads = (row_chunk == tiles_per_batch);
-
-    Noc noc;
-    // dfb::in0 is the reduce input pipe: this kernel fills it, the compute kernel drains it.
-    DataflowBuffer dfb_in0(dfb::in0);
-    const uint32_t tile_bytes = dfb_in0.get_tile_size();
-
+#ifndef WELFORD_TWO_PASS
     float scaler_f = __builtin_bit_cast(float, scaler_bits);
     dataflow_kernel_lib::prepare_reduce_scaler<dfb::scaler, REDUCE_OP, REDUCE_DIM>(scaler_f);
+#endif
 
     auto tensor_accessor = TensorAccessor(tensor::src);
 
+    Noc noc;
+    DataflowBuffer dfb_in0(dfb::in0);
+
+    const uint32_t tile_bytes = dfb_in0.get_tile_size();
+
+#ifdef WELFORD_TWO_PASS
+    constexpr bool batch_reads = false;
+#else
+    // Batch only when row_chunk matches the host's tiles_per_batch; SFPU shortens the chunk.
+    constexpr bool batch_reads = (row_chunk == tiles_per_batch);
+#endif
+
     uint32_t w = curr_col_in_batch;
+#ifndef WELFORD_TWO_PASS_L1_REPLAY
+    std::uint32_t stream_write_page = 0;
+#endif
 
     // tiles are read in the N W_skip H W_chunk order
     // W_skip(chunk size) represents the number of tile columns whose reading will be intertwined
@@ -74,53 +86,112 @@ void kernel_main() {
     // reset_w - resets w to the column number in the batch of the starting column
     // reset_curr_id - resets curr_id to the next tile in the starting column
     for (uint32_t i = 0; i < num_cols; i += row_chunk) {
-        uint32_t chunk_end = std::min(i + row_chunk, num_cols);
-        uint32_t curr_id = col_start_tile_id;
-        uint32_t reset_curr_id = curr_id;
-        uint32_t reset_w = w;
-        uint32_t reset_col_start = col_start_tile_id;
-        // Tail is shorter than the CB batch, so the reserve would not be contiguous.
-        const bool batch_chunk = batch_reads && ((chunk_end - i) == row_chunk);
+        uint32_t reset_curr_id = col_start_tile_id;
 
-        for (uint32_t j = 0; j < Ht; ++j) {
-            w = reset_w;
-            col_start_tile_id = reset_col_start;
-            if (batch_chunk) {
-                dfb_in0.reserve_back(row_chunk);
+#ifdef WELFORD_TWO_PASS_L1_REPLAY
+        for (std::uint32_t ht_base = 0; ht_base < Ht; ht_base += max_read_batch) {
+            const std::uint32_t read_batch = std::min(max_read_batch, Ht - ht_base);
+            dfb_in0.reserve_back(read_batch);
+            for (std::uint32_t ht = 0; ht < read_batch; ++ht) {
+                noc.async_read(
+                    tensor_accessor,
+                    dfb_in0,
+                    tile_bytes,
+                    {.page_id = reset_curr_id + (ht_base + ht) * Wt},
+                    {.offset_bytes = ht * tile_bytes});
             }
-            uint32_t slot = 0;
-            for (uint32_t k = i; k < chunk_end; ++k) {
-                if (batch_chunk) {
-                    noc.async_read(
-                        tensor_accessor,
-                        dfb_in0,
-                        tile_bytes,
-                        {.page_id = curr_id},
-                        {.offset_bytes = slot * tile_bytes});
-                    ++slot;
-                } else {
-                    dfb_in0.reserve_back(onetile);
-                    noc.async_read(tensor_accessor, dfb_in0, tile_bytes, {.page_id = curr_id}, {.offset_bytes = 0});
-                    noc.async_read_barrier();
-                    dfb_in0.push_back(onetile);
-                }
-
-                ++w;
-
-                if (w == Wt) {
-                    col_start_tile_id = curr_id + (Ht - j - 1) * Wt + 1;
-                    curr_id = col_start_tile_id + j * Wt;
-                    w = 0;
-                } else {
-                    ++curr_id;
-                    ++col_start_tile_id;
-                }
-            }
-            if (batch_chunk) {
-                noc.async_read_barrier();
-                dfb_in0.push_back(row_chunk);
-            }
-            curr_id = reset_curr_id + (j + 1) * Wt;  // stride in H
+            noc.async_read_barrier();
+            dfb_in0.push_back(read_batch);
         }
+        ++w;
+        if (w == Wt) {
+            col_start_tile_id = reset_curr_id + (Ht - 1) * Wt + 1;
+            w = 0;
+        } else {
+            col_start_tile_id = reset_curr_id + 1;
+        }
+#else
+        static_assert(!sfpu_two_pass || row_chunk == 1);
+        if constexpr (sfpu_two_pass) {
+            constexpr std::uint32_t num_front_retained = 2;
+            constexpr std::uint32_t num_passes = Ht <= num_front_retained + 1 ? 1 : 2;
+            for (std::uint32_t pass = 0; pass < num_passes; ++pass) {
+                const std::uint32_t pass_start = pass == 0 ? 0 : std::min(Ht, num_front_retained);
+                const std::uint32_t pass_end = pass == 0 ? Ht : Ht - 1;
+                for (std::uint32_t ht_base = pass_start; ht_base < pass_end;) {
+                    const std::uint32_t contiguous_pages = max_read_batch - stream_write_page;
+                    const std::uint32_t read_batch =
+                        std::min(std::min(max_read_batch, pass_end - ht_base), contiguous_pages);
+                    dfb_in0.reserve_back(read_batch);
+                    for (std::uint32_t ht = 0; ht < read_batch; ++ht) {
+                        noc.async_read(
+                            tensor_accessor,
+                            dfb_in0,
+                            tile_bytes,
+                            {.page_id = reset_curr_id + (ht_base + ht) * Wt},
+                            {.offset_bytes = ht * tile_bytes});
+                    }
+                    noc.async_read_barrier();
+                    dfb_in0.push_back(read_batch);
+                    ht_base += read_batch;
+                    stream_write_page = (stream_write_page + read_batch) % max_read_batch;
+                }
+            }
+            ++w;
+            if (w == Wt) {
+                col_start_tile_id = reset_curr_id + (Ht - 1) * Wt + 1;
+                w = 0;
+            } else {
+                col_start_tile_id = reset_curr_id + 1;
+            }
+        } else {
+            uint32_t chunk_end = std::min(i + row_chunk, num_cols);
+            uint32_t curr_id = col_start_tile_id;
+            uint32_t reset_w = w;
+            uint32_t reset_col_start = col_start_tile_id;
+            // Tail is shorter than the CB batch, so the reserve would not be contiguous.
+            const bool batch_chunk = batch_reads && ((chunk_end - i) == row_chunk);
+            for (uint32_t j = 0; j < Ht; ++j) {
+                w = reset_w;
+                col_start_tile_id = reset_col_start;
+                if (batch_chunk) {
+                    dfb_in0.reserve_back(row_chunk);
+                }
+                uint32_t slot = 0;
+                for (uint32_t k = i; k < chunk_end; ++k) {
+                    if (batch_chunk) {
+                        noc.async_read(
+                            tensor_accessor,
+                            dfb_in0,
+                            tile_bytes,
+                            {.page_id = curr_id},
+                            {.offset_bytes = slot * tile_bytes});
+                        ++slot;
+                    } else {
+                        dfb_in0.reserve_back(onetile);
+                        noc.async_read(tensor_accessor, dfb_in0, tile_bytes, {.page_id = curr_id}, {.offset_bytes = 0});
+                        noc.async_read_barrier();
+                        dfb_in0.push_back(onetile);
+                    }
+
+                    ++w;
+
+                    if (w == Wt) {
+                        col_start_tile_id = curr_id + (Ht - j - 1) * Wt + 1;
+                        curr_id = col_start_tile_id + j * Wt;
+                        w = 0;
+                    } else {
+                        ++curr_id;
+                        ++col_start_tile_id;
+                    }
+                }
+                if (batch_chunk) {
+                    noc.async_read_barrier();
+                    dfb_in0.push_back(row_chunk);
+                }
+                curr_id = reset_curr_id + (j + 1) * Wt;  // stride in H
+            }
+        }
+#endif
     }
 }

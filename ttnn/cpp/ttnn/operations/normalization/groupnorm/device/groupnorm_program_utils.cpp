@@ -23,9 +23,9 @@ uint32_t GroupNormPadCorrection::scaler_bits(uint32_t reduce_factor_w) const {
 
 GroupNormPadCorrection make_group_norm_pad_correction(
     uint32_t logical_hw, uint32_t padded_hw, bool use_welford, uint32_t tile_height) {
-    // Welford cannot express this: its kernels transpose H*W into the tile columns and track the
-    // sample count in tile units, so the padding rows cannot be excluded. ttnn::group_norm routes
-    // non-tile-aligned Welford requests to the two-pass path instead.
+    // The SFPU two-pass path cannot express this: its kernels transpose H*W into the tile columns
+    // and track the sample count in tile units, so the padding rows cannot be excluded.
+    // ttnn::group_norm routes non-tile-aligned use_welford requests to the tile-reduction path.
     GroupNormPadCorrection pad;
     pad.active = !use_welford && (logical_hw != padded_hw);
     pad.logical_hw = logical_hw;
@@ -148,6 +148,10 @@ bool groupnorm_legacy_rm_prefer_composite_for_perf(
     const bool imbalanced =
         num_virtual_rows != 0 && num_batches >= num_virtual_rows && (num_batches % num_virtual_rows) != 0;
     return num_cores <= kGroupnormLegacyRmMinCoresForOnChip || imbalanced;
+}
+
+bool groupnorm_use_sfpu_local_combine(bool use_welford, tt::ARCH arch, bool fp32_dest_acc_en, uint32_t tile_width) {
+    return use_welford && arch == tt::ARCH::BLACKHOLE && fp32_dest_acc_en && tile_width == 32;
 }
 
 int get_max_subblock(uint32_t n, uint32_t max_subblock_w) {

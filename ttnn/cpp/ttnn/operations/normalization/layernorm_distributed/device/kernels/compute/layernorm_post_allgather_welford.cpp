@@ -34,8 +34,6 @@ struct x_minus_mean_node {
         .DFB_B = dfb::stats_reduced,
         .DFB_OUT = dfb::x_minus_mean,
         .fixed_DFB_B_index = 0,
-        .fixed_dest_reg = 0xFFFF,
-        .debug_mode = 1,
     };
 };
 
@@ -54,8 +52,6 @@ struct normed_output_node {
         .DFB_B = dfb::recip_sqrt_var,
         .DFB_OUT = normed_output_dfb,
         .fixed_DFB_B_index = 0,
-        .fixed_dest_reg = 0xFFFF,
-        .debug_mode = 1,
     };
 };
 
@@ -80,8 +76,6 @@ struct gamma_optional_node {
         .DFB_B = dfb::gamma,
         .DFB_OUT = dfb_times_gamma_out,
         .fixed_DFB_B_index = pop_gamma_beta,
-        .fixed_dest_reg = 0xFFFF,
-        .debug_mode = 1,
     };
 };
 #endif
@@ -100,8 +94,6 @@ struct beta_optional_node {
         .DFB_B = dfb::beta,
         .DFB_OUT = dfb::out,
         .fixed_DFB_B_index = pop_gamma_beta,
-        .fixed_dest_reg = 0xFFFF,
-        .debug_mode = 1,
     };
 };
 #endif
