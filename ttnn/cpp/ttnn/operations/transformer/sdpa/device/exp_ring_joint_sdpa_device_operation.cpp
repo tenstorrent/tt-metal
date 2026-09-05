@@ -141,9 +141,14 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
         v_shape[2],
         N_global);
 
+    // >= rather than ==, mirroring ring_joint_sdpa: a persistent gather buffer allocated at a larger
+    // capacity (e.g. the top trace-bucket rung, shared across rungs) is valid storage. Every reader
+    // and writer stride derives from the buffer shape, the ring walks exactly ring_size shards of
+    // N_local rows, and rows past N_local * ring_size are never written nor read -- real work is
+    // bounded by logical_n, which is <= N_local * ring_size whenever the buffer is oversized.
     TT_FATAL(
-        N_global == N_local * args.ring_size,
-        "Global sequence length must be equal to local sequence length times ring size. Got global sequence length: "
+        N_global >= N_local * args.ring_size,
+        "Gathered K seq length must be >= local sequence length times ring size. Got global sequence length: "
         "{}, local sequence length: {}, ring size: {}",
         N_global,
         N_local,

@@ -66,6 +66,7 @@ class MiniMaxH3TransformerBlock(Module):
         ccl_manager: CCLManager,
         parallel_config: DiTParallelConfig,
         is_fsdp: bool = False,
+        kv_gather_capacity: int | None = None,
     ) -> None:
         super().__init__()
 
@@ -94,6 +95,7 @@ class MiniMaxH3TransformerBlock(Module):
         )
         self.attn = MiniMaxH3Attention(
             hidden_size=hidden_size,
+            kv_gather_capacity=kv_gather_capacity,
             num_heads=num_heads,
             head_dim=head_dim,
             rotary_dim=rotary_dim,

@@ -269,6 +269,7 @@ class Qwen3VlTextEncoder(Module):
         vision_embeds: ttnn.Tensor | None = None,
         vision_runs: Sequence[tuple[int, int]] | None = None,
         deepstack_embeds: Sequence[ttnn.Tensor] | None = None,
+        free_vision_inputs: bool = False,
     ) -> list[ttnn.Tensor]:
         """Args beyond the text path, all optional so text-only callers are unaffected:
 
@@ -277,6 +278,12 @@ class Qwen3VlTextEncoder(Module):
         deepstack_embeds: one feature per entry of the tower's `deepstack_visual_indexes`, *added* to
             the vision rows after decoder layers `0 .. len(deepstack_embeds) - 1`. The reference keys
             these off the list length, not the vision layer indexes they came from.
+        free_vision_inputs: deallocate `vision_embeds` and each `deepstack_embeds` entry as soon as
+            its rows are consumed, instead of leaving them resident for the caller. They are
+            full-presentation-length and replicated on every device (~0.17 GiB per 2048px image
+            reference across the four tensors), so a many-reference request holding them through all
+            50 layers is what set the ref2va visual-reference OOM boundary (#5044). Opt-in because
+            the tensors are caller-owned: only pass it when the caller is done with them.
         """
         if (vision_embeds is None) != (vision_runs is None):
             msg = "vision_embeds and vision_runs must be passed together"
@@ -335,6 +342,8 @@ class Qwen3VlTextEncoder(Module):
 
         if vision_embeds is not None:
             input_embeds = _scatter_rows(input_embeds, vision_embeds, vision_runs, add=False)
+            if free_vision_inputs:
+                ttnn.deallocate(vision_embeds)
 
         # Sequence parallelism: everything above ran on the full (replicated) sequence -- including the
         # vision scatter -- so no per-shard offset logic is needed. Now SP-shard the stream (and the
@@ -345,12 +354,17 @@ class Qwen3VlTextEncoder(Module):
         if self._sp_axis is not None:
             if deepstack_embeds:
                 zero_base = ttnn.zeros_like(input_embeds)
-                deepstack_sharded = [
-                    ttnn.mesh_partition(
-                        _scatter_rows(zero_base, ds, vision_runs, add=False), dim=1, cluster_axis=self._sp_axis
+                deepstack_sharded = []
+                for ds in deepstack_embeds:
+                    deepstack_sharded.append(
+                        ttnn.mesh_partition(
+                            _scatter_rows(zero_base, ds, vision_runs, add=False), dim=1, cluster_axis=self._sp_axis
+                        )
                     )
-                    for ds in deepstack_embeds
-                ]
+                    # Consumed: the sharded copy (1/sp the size) is what the layer adds use.
+                    if free_vision_inputs:
+                        ttnn.deallocate(ds)
+                ttnn.deallocate(zero_base)
             input_embeds = ttnn.mesh_partition(input_embeds, dim=1, cluster_axis=self._sp_axis)
             pos_embeds = tuple(ttnn.mesh_partition(x, dim=2, cluster_axis=self._sp_axis) for x in pos_embeds)
 
@@ -371,6 +385,8 @@ class Qwen3VlTextEncoder(Module):
                     hidden_states = ttnn.add(hidden_states, deepstack_sharded[layer_idx])
                 else:
                     hidden_states = _scatter_rows(hidden_states, deepstack_embeds[layer_idx], vision_runs, add=True)
+                    if free_vision_inputs:
+                        ttnn.deallocate(deepstack_embeds[layer_idx])
             if self._activation_layers is not None and layer_idx in self._activation_layers:
                 captured.append(hidden_states)
 

@@ -240,6 +240,9 @@ class MiniMaxH3Transformer3DModel(Module):
         ccl_manager: CCLManager,
         parallel_config: DiTParallelConfig,
         is_fsdp: bool = False,
+        # One shared K/V gather pair sized for this many global rows, serving every packed length
+        # up to it (the trace-bucket ladder's top rung). None = one pair per distinct length.
+        kv_gather_capacity: int | None = None,
     ) -> None:
         super().__init__()
 
@@ -331,6 +334,7 @@ class MiniMaxH3Transformer3DModel(Module):
                     ccl_manager=ccl_manager,
                     parallel_config=parallel_config,
                     is_fsdp=is_fsdp,
+                    kv_gather_capacity=kv_gather_capacity,
                 )
                 for _ in range(num_layers)
             ]

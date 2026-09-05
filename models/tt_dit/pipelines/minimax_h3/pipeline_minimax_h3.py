@@ -147,9 +147,12 @@ MINIMAX_H3_BUCKET_LADDER = (22528, 31744, 44032, 61440, 86016, 118784)
 
 # ref2va shares the machinery but not the envelope: reference rows (up to 9 images and 3 video clips)
 # push the packed length far past t2va's. The ladder runs from the smallest measured case (~46k, one
-# image) to the audit's R-B ceiling (~245.8k, all-image / single-video-ref requests); requests above
-# it raise, as t2va's do above its top rung. Its optimal spacing is follow-on tuning.
-MINIMAX_H3_REF2VA_BUCKET_LADDER = (61440, 86016, 118784, 176128, 245760)
+# image) to the count-cap ceiling: 9 images + 15 s of video references at the 1044 rows/frame canvas
+# ceiling + 15 s of soundtrack/audio rows + the arena'd prompt and targets = ~322.3k packed rows
+# (the sum of MiniMaxH3ArenaCaps.for_task("ref2va") plus the target arenas -- __init__ asserts the
+# two stay consistent). Requests above it raise, as t2va's do above its top rung. Its optimal
+# spacing is follow-on tuning.
+MINIMAX_H3_REF2VA_BUCKET_LADDER = (61440, 86016, 118784, 176128, 245760, 322560)
 
 
 def default_bucket_ladder(task: str) -> tuple[int, ...]:
@@ -200,7 +203,15 @@ class MiniMaxH3ArenaCaps:
         larger prompt (vision tokens: ~36.9k for nine image references) and much larger conditioning
         (nine 2048px images at 4096 rows each). Sizes trace the audit's card-compliant class table."""
         if task == "ref2va":
-            return cls(prompt=40960, condition_video_rows=40960, condition_audio_rows=2048)
+            # Sized to what the reference-count caps admit (9 images, 3 videos totaling <= 15 s,
+            # 3 audios totaling <= 15 s, 12 references), not to any single request class:
+            # - condition_video: 9 x 4096 image rows + ~108 latent frames of video at the 1044
+            #   rows/frame canvas ceiling (15 s combined incl. the 3-clip 17n+5 trim bonuses).
+            #   The predecessor value (40960) was derived from the all-image class alone and
+            #   rejected every multi-video / long-video request the counts admit.
+            # - prompt: 9 x ~4.1k image tokens + 15 s of video vision blocks + 2k of user prompt.
+            # - condition_audio: 15 s of standalone audio plus 15 s of video soundtracks.
+            return cls(prompt=57344, condition_video_rows=149632, condition_audio_rows=2432)
         return cls()
 
     def validate(self) -> None:
@@ -974,105 +985,115 @@ class MiniMaxH3Pipeline:
             type_ids = torch.nn.functional.pad(type_ids, (0, seq_len - true_seq_len))
 
         encoder = self._prepare_text_encoder()
+        tower = self._prepare_vision_tower() if has_vision else None
 
-        # The vision tower, and the two ways its output enters the decoder. Run before the rope tables
-        # so a tower failure surfaces before any decoder work.
-        vision_kwargs = {}
-        if has_vision:
-            tower = self._prepare_vision_tower()
-            vis_cos, vis_sin = tower.prepare_rope(grid_thw)
-            # One attention block per image and one per FRAME of a video, so `fl2va`'s single
-            # image reduces to full attention. Block form rather than a dense mask: an `s x s`
-            # mask is 17 GiB for a nine-image request.
-            #
-            # Under the SP tower, pad_patches_for_sp aligns the patch count to sp * 32 (a no-op
-            # when already aligned): the pad rides its own phantom attention window and the
-            # tower trims its merged garbage after the SP gather via `logical_patches`, so the
-            # decoder handoff below always carries exactly the real tokens. Inputs shard on the
-            # SP axis; replicated meshes shard nothing and pad nothing (sp_factor 1).
-            p_patches, p_pos, (p_cos, p_sin), p_cu, logical = pad_patches_for_sp(
-                pixel_values.float(),
-                tower.prepare_pos_embeds(grid_thw),
-                (vis_cos, vis_sin),
-                vision_cu_seqlens(grid_thw),
-                sp_factor=self.sp_factor,
+        # Transient scope: the tower and decoder run at presentation-length-keyed shapes, so their
+        # persistent all-gather buffers would otherwise accumulate one pair per distinct length,
+        # forever (~0.2 GiB per visual reference). Neither stage is ever traced, so freeing the
+        # pairs this stage allocated is safe; the readback stays inside because an un-sliced tap
+        # IS the final gather's persistent buffer. free_vision_inputs on the forward is the same
+        # idea for the tower's handoff tensors (merged tokens + deepstack, replicated).
+        with self.ccl_manager.transient_ping_pong_buffers():
+            # The vision tower, and the two ways its output enters the decoder. Run before the rope tables
+            # so a tower failure surfaces before any decoder work.
+            vision_kwargs = {}
+            if has_vision:
+                vis_cos, vis_sin = tower.prepare_rope(grid_thw)
+                # One attention block per image and one per FRAME of a video, so `fl2va`'s single
+                # image reduces to full attention. Block form rather than a dense mask: an `s x s`
+                # mask is 17 GiB for a nine-image request.
+                #
+                # Under the SP tower, pad_patches_for_sp aligns the patch count to sp * 32 (a no-op
+                # when already aligned): the pad rides its own phantom attention window and the
+                # tower trims its merged garbage after the SP gather via `logical_patches`, so the
+                # decoder handoff below always carries exactly the real tokens. Inputs shard on the
+                # SP axis; replicated meshes shard nothing and pad nothing (sp_factor 1).
+                p_patches, p_pos, (p_cos, p_sin), p_cu, logical = pad_patches_for_sp(
+                    pixel_values.float(),
+                    tower.prepare_pos_embeds(grid_thw),
+                    (vis_cos, vis_sin),
+                    vision_cu_seqlens(grid_thw),
+                    sp_factor=self.sp_factor,
+                )
+                sp_kw = {"mesh_axis": self.sp_axis, "shard_dim": 0} if self.sp_factor > 1 else {}
+                merged, deepstack = tower.forward(
+                    bf16_tensor(p_patches, device=self.mesh_device, **sp_kw),
+                    pos_embeds=bf16_tensor(p_pos, device=self.mesh_device, **sp_kw),
+                    rope=(
+                        bf16_tensor(p_cos, device=self.mesh_device, **sp_kw),
+                        bf16_tensor(p_sin, device=self.mesh_device, **sp_kw),
+                    ),
+                    cu_seqlens=p_cu,
+                    logical_patches=logical,
+                )
+                # Both pad ids, in sequence order. `_scatter_rows` consumes the tower's rows in run
+                # order and the patches were concatenated in presentation order, so the two match.
+                pad_ids = [self.tokenizer.convert_tokens_to_ids(token) for token in ("<|image_pad|>", "<|video_pad|>")]
+                runs = vision_token_runs(input_ids, pad_ids)
+                # One run per image and one per merged frame pair of a video, i.e. one per grid
+                # entry once `t` is expanded. A mismatch scatters one reference's tokens into
+                # another's rows.
+                expected_runs = int(sum(int(grid[0]) for grid in grid_thw))
+                assert (
+                    len(runs) == expected_runs
+                ), f"expected {expected_runs} vision run(s) in the presentation, found {len(runs)}"
+                covered = sum(length for _, length in runs)
+                merged_rows = merged.shape[-2]
+                assert covered == merged_rows, f"vision runs cover {covered} rows but the tower emitted {merged_rows}"
+                # merged tokens REPLACE the `<|image_pad|>` row embeddings; deepstack features are ADDED to
+                # those same rows after the first three decoder layers. Not interchangeable.
+                vision_kwargs = {"vision_embeds": merged, "vision_runs": runs, "deepstack_embeds": deepstack}
+
+            # With a vision run the three mRoPE axes diverge, so `mrope_interleaved` stops being a no-op
+            # and the chunked section split is wrong. t2va keeps the default (shared `arange`) path, where
+            # the two layouts are bit-identical -- measured.
+            rope_scaling = self._text_config["rope_scaling"]
+            position_ids = None
+            if has_vision:
+                if not rope_scaling.get("mrope_interleaved"):
+                    raise ValueError(
+                        "this checkpoint does not declare mrope_interleaved; the vision rope path assumes it"
+                    )
+
+                # Qwen3-VL walks the sequence per modality run and pulls from the matching grid
+                # iterator, so the two go in separately, each in the order its own runs appear.
+                def grids_of(kind: str):
+                    selected = [grid for grid, entry in zip(grid_thw, vision_kinds) if entry == kind]
+                    return torch.stack(selected) if selected else None
+
+                position_ids = mrope_position_ids(
+                    type_ids,
+                    image_grid_thw=grids_of("image"),
+                    video_grid_thw=grids_of("video"),
+                    spatial_merge_size=self._vision_config["spatial_merge_size"],
+                )
+            cos, sin = create_rope_tensors(
+                1,
+                seq_len,
+                None,
+                self._text_config["head_dim"],
+                rope_scaling.get("rope_theta", self._text_config["rope_theta"]),
+                rope_scaling["mrope_section"],
+                position_ids=position_ids,
+                interleaved=has_vision,
             )
-            sp_kw = {"mesh_axis": self.sp_axis, "shard_dim": 0} if self.sp_factor > 1 else {}
-            merged, deepstack = tower.forward(
-                bf16_tensor(p_patches, device=self.mesh_device, **sp_kw),
-                pos_embeds=bf16_tensor(p_pos, device=self.mesh_device, **sp_kw),
-                rope=(
-                    bf16_tensor(p_cos, device=self.mesh_device, **sp_kw),
-                    bf16_tensor(p_sin, device=self.mesh_device, **sp_kw),
-                ),
-                cu_seqlens=p_cu,
-                logical_patches=logical,
+            tt_ids = ttnn.from_torch(
+                input_ids,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.mesh_device,
             )
-            # Both pad ids, in sequence order. `_scatter_rows` consumes the tower's rows in run
-            # order and the patches were concatenated in presentation order, so the two match.
-            pad_ids = [self.tokenizer.convert_tokens_to_ids(token) for token in ("<|image_pad|>", "<|video_pad|>")]
-            runs = vision_token_runs(input_ids, pad_ids)
-            # One run per image and one per merged frame pair of a video, i.e. one per grid
-            # entry once `t` is expanded. A mismatch scatters one reference's tokens into
-            # another's rows.
-            expected_runs = int(sum(int(grid[0]) for grid in grid_thw))
-            assert (
-                len(runs) == expected_runs
-            ), f"expected {expected_runs} vision run(s) in the presentation, found {len(runs)}"
-            covered = sum(length for _, length in runs)
-            merged_rows = merged.shape[-2]
-            assert covered == merged_rows, f"vision runs cover {covered} rows but the tower emitted {merged_rows}"
-            # merged tokens REPLACE the `<|image_pad|>` row embeddings; deepstack features are ADDED to
-            # those same rows after the first three decoder layers. Not interchangeable.
-            vision_kwargs = {"vision_embeds": merged, "vision_runs": runs, "deepstack_embeds": deepstack}
-
-        # With a vision run the three mRoPE axes diverge, so `mrope_interleaved` stops being a no-op
-        # and the chunked section split is wrong. t2va keeps the default (shared `arange`) path, where
-        # the two layouts are bit-identical -- measured.
-        rope_scaling = self._text_config["rope_scaling"]
-        position_ids = None
-        if has_vision:
-            if not rope_scaling.get("mrope_interleaved"):
-                raise ValueError("this checkpoint does not declare mrope_interleaved; the vision rope path assumes it")
-
-            # Qwen3-VL walks the sequence per modality run and pulls from the matching grid
-            # iterator, so the two go in separately, each in the order its own runs appear.
-            def grids_of(kind: str):
-                selected = [grid for grid, entry in zip(grid_thw, vision_kinds) if entry == kind]
-                return torch.stack(selected) if selected else None
-
-            position_ids = mrope_position_ids(
-                type_ids,
-                image_grid_thw=grids_of("image"),
-                video_grid_thw=grids_of("video"),
-                spatial_merge_size=self._vision_config["spatial_merge_size"],
+            # Causal, and a single un-padded presentation, so no mask is needed.
+            taps = encoder.forward(
+                tt_ids,
+                attention_mask=None,
+                pos_embeds=(bf16_tensor(cos, device=self.mesh_device), bf16_tensor(sin, device=self.mesh_device)),
+                free_vision_inputs=True,
+                **vision_kwargs,
             )
-        cos, sin = create_rope_tensors(
-            1,
-            seq_len,
-            None,
-            self._text_config["head_dim"],
-            rope_scaling.get("rope_theta", self._text_config["rope_theta"]),
-            rope_scaling["mrope_section"],
-            position_ids=position_ids,
-            interleaved=has_vision,
-        )
-        tt_ids = ttnn.from_torch(
-            input_ids,
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.mesh_device,
-        )
-        # Causal, and a single un-padded presentation, so no mask is needed.
-        taps = encoder.forward(
-            tt_ids,
-            attention_mask=None,
-            pos_embeds=(bf16_tensor(cos, device=self.mesh_device), bf16_tensor(sin, device=self.mesh_device)),
-            **vision_kwargs,
-        )
-        # The SP alignment rows are causal-tail padding, not presentation; drop them so the return
-        # matches `tags` and the packed layout row for row.
-        embeds = local_device_to_torch(taps[0]).float()[:, :true_seq_len]
+            # The SP alignment rows are causal-tail padding, not presentation; drop them so the return
+            # matches `tags` and the packed layout row for row.
+            embeds = local_device_to_torch(taps[0]).float()[:, :true_seq_len]
 
         return embeds, tags
 
@@ -1215,6 +1236,11 @@ class MiniMaxH3Pipeline:
             ccl_manager=self.ccl_manager,
             parallel_config=self.dit_parallel_config,
             is_fsdp=self.dit_fsdp,
+            # On the traced path every ladder rung would otherwise bind its own permanent K/V gather
+            # pair (the ping-pong cache never evicts): one pair at the top rung serves them all,
+            # returning ~3.2 GiB/device on the ref2va ladder. Untraced deployments serve one padded
+            # length at a time and keep the exact-size behavior.
+            kv_gather_capacity=self.bucket_ladder[-1] if self.trace_denoise else None,
         )
 
     def _prepare_transformer(self) -> MiniMaxH3Transformer3DModel:
