@@ -51,12 +51,12 @@ def _hb() -> heartbeat.Writer:
     return _writer
 
 
-def _hang_closes_case(nodeid: str, variant: str, skip_family: bool = True) -> None:
+def _hang_closes_case(nodeid: str, variant: str) -> None:
     """Close a case out on a hang, and ask to be moved off the core it cost us."""
     global _parked
     # Do not retry a case that just hung a core. The pytest failure keeps the result.
     _hb().mark_done(nodeid)
-    _hb().request_recovery(nodeid, variant, skip_family=skip_family)
+    _hb().request_recovery(nodeid, variant)
     # Nobody is watching an unsupervised run, so there is no recovery coming and
     # nothing to wait for.
     _parked = _hb().enabled
@@ -471,8 +471,6 @@ def pytest_runtest_call(item):
             outcome.force_exception(
                 AssertionError(f"{len(failures)} perturbation(s) failed: {head}")
             )
-            # A mismatch can leave device state dirty, so move this worker too.
-            _hang_closes_case(item.nodeid, failures[0], skip_family=False)
     finally:
         unwatch()
 

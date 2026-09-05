@@ -114,7 +114,7 @@ inline void _llk_unpack_hadamard_h128_(
     constexpr std::uint32_t kInputXEnd = 8 * FACE_C_DIM - 1;          // 8 rows = 128 datums
 
     // ── Phase 1 (context 0): h16 -> srcB, input -> srcA bank 0 ──────────
-    wait_for_next_context(2);
+    wait_for_next_context(1);
 
     // SEC0 (srcA) <- input, SEC1 (srcB) <- h16.
     _llk_unpack_configure_addresses_(address_b, address_a, cfg);
