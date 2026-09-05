@@ -181,7 +181,15 @@ though only clang-tidy runs.
 
 The capture works on simulator legs (`sim_*` SKUs, e.g. `sim_wh_n150`): the
 ttsim run JIT-compiles the same kernels on the host, and only the compile
-commands matter — no device needed. That is the default for the dedicated
+commands matter — no device needed. One capture-specific constraint: the sim
+legs normally run under pytest-xdist (`-n 4`), whose workers use their stdout
+as the execnet RPC channel — raw C++ stdout (the tt-logger default sink, and
+with it the logged compile commands) never reaches the run log from a worker.
+The capture leg therefore runs serially; in-process, the repo-wide `-s`
+(`pytest.ini` addopts) keeps stdout uncaptured, which is why the log-based
+capture works at all. (`TT_LOGGER_FILE` is not a substitute: the sink opens
+with truncate, so each pytest invocation of a multi-command group — and each
+xdist worker — would wipe the previous capture.) That is the default for the dedicated
 caller, `.github/workflows/kernel-clang-tidy.yaml` (structured after
 `code-coverage.yaml`): build → run one ttnn test group via
 `ttnn-sanity-tests-impl.yaml` with the experiment enabled → a publish job

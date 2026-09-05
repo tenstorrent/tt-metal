@@ -470,9 +470,13 @@ jobs:
             export SERIAL_ADDOPTS="-p no:timeout ${{ startsWith(matrix.test-group.sku, 'sim_wh') && needs.load-test-matrix.outputs.skip-args-wormhole_b0 || startsWith(matrix.test-group.sku, 'sim_bh') && needs.load-test-matrix.outputs.skip-args-blackhole || '' }}"
             # Kernel clang-tidy capture — same as the HW test step above; the simulator
             # JIT-compiles the same kernels, no hardware needed for the compile commands.
+            # The capture leg must run WITHOUT xdist: workers' raw C++ stdout goes into
+            # the execnet channel and never reaches the run log (pytest.ini's -s only
+            # helps in-process). SERIAL_ADDOPTS is the same option set minus -n 4.
             KERNEL_TIDY_THIS="${{ inputs.enable-kernel-clang-tidy && matrix.test-group.name == format('{0} [{1}]', inputs.clang-tidy-target-group, matrix.test-group.sku) }}"
             if [ "$KERNEL_TIDY_THIS" = "true" ]; then
-              echo "kernel clang-tidy capture ENABLED for '${{ matrix.test-group.name }}'"
+              echo "kernel clang-tidy capture ENABLED for '${{ matrix.test-group.name }}' (serial run)"
+              export PYTEST_ADDOPTS="$SERIAL_ADDOPTS"
               export TT_METAL_LOG_KERNELS_COMPILE_COMMANDS=1
               export TT_LOGGER_LEVEL=info
               export TT_METAL_FORCE_JIT_COMPILE=1
