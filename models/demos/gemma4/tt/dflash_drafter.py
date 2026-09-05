@@ -294,7 +294,7 @@ class DFlashDrafter:
         self._sa_cache = {}
         # flash-decode drafter attention (replaces the explicit repeat_interleave/
         # matmul/softmax chain; keys zero-padded to a 64-multiple, masked out)
-        self._use_sdpa = _os.environ.get("GEMMA4_DFLASH_SDPA", "0") == "1"
+        self._use_sdpa = _os.environ.get("GEMMA4_DFLASH_SDPA", "1") == "1"
         self._sdpa_zpad = None
         # lm_head stays VOCAB-SHARDED even when the drafter runs replicated:
         # a replicated 262k x H head is 2.7 GB/device, and the on-device
