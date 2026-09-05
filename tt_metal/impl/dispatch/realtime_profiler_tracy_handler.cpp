@@ -37,7 +37,7 @@ tracy::TTDeviceMarker make_marker(
     marker.risc = tracy::RiscType::BRISC;
     marker.timestamp = timestamp;
     marker.runtime_host_id = record.runtime_id;
-    marker.marker_name = fmt::format("Program_{}", record.runtime_id);
+    marker.marker_name = fmt::format("Program_{}_chip_{}", record.runtime_id, record.chip_id);
     marker.marker_type = type;
     marker.file = file_str;
     marker.line = 0;
