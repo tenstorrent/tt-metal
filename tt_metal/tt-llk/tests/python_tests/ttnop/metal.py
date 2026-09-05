@@ -19,21 +19,14 @@ lookup and the word reader/writer differ. See the README for the operator view
 import ctypes
 import os
 import re
-import shutil
-import struct
 from contextlib import nullcontext
 from pathlib import Path
 
 import scanner
-from cave import Cave, DetourError, Injector
+from cave import DetourError, Injector
 
 HERE = Path(__file__).resolve().parent
 SHIM = HERE / "libttnop_metal.so"
-
-# TEMP: dump host images as ELFs after each arm so NOP insertion is inspectable.
-# Set TTNOP_TEMP_DUMP_ELFS=0 to disable. Remove this block when done.
-_TEMP_DUMP_ELFS = os.environ.get("TTNOP_TEMP_DUMP_ELFS", "1") not in ("", "0")
-_TEMP_DUMP_DIR = HERE / "temp_elf_dumps"
 
 # tt-metal names TRISCs by index; ttnop names them by role. Same order as the LLK
 # harness's TestConfig.KERNEL_COMPONENTS and metal's -DCOMPILE_FOR_TRISC=N.
@@ -93,55 +86,6 @@ def discover_kernel_dir() -> Path:
         )
     # .../<hash>/trisc1/trisc1.elf.xip.elf -> .../<hash>/
     return candidates[0].parent.parent
-
-
-def _temp_elf32_text_range(elf_path: Path) -> tuple:
-    """TEMP: (file_offset, byte_size, sh_addr) of the .text section in an ELF32."""
-    data = elf_path.read_bytes()
-    if data[:4] != b"\x7fELF":
-        raise DetourError(f"TEMP dump: {elf_path} is not ELF")
-    (
-        _e_type,
-        _e_machine,
-        _e_version,
-        _e_entry,
-        _e_phoff,
-        e_shoff,
-        _e_flags,
-        _e_ehsize,
-        _e_phentsize,
-        _e_phnum,
-        e_shentsize,
-        e_shnum,
-        e_shstrndx,
-    ) = struct.unpack_from("<HHIIIIIHHHHHH", data, 16)
-    shstr = e_shoff + e_shstrndx * e_shentsize
-    str_off = struct.unpack_from("<I", data, shstr + 16)[0]
-    for i in range(e_shnum):
-        sh = e_shoff + i * e_shentsize
-        name_off, _sh_type, _sh_flags, sh_addr, sh_offset, sh_size = struct.unpack_from(
-            "<IIIIII", data, sh
-        )
-        end = data.index(b"\0", str_off + name_off)
-        if data[str_off + name_off : end] == b".text":
-            return sh_offset, sh_size, sh_addr
-    raise DetourError(f"TEMP dump: no .text in {elf_path}")
-
-
-def _temp_write_image_into_elf(src_elf: Path, dst_elf: Path, image: "_Image") -> None:
-    """TEMP: copy src ELF and overwrite .text with the live packed host image words."""
-    shutil.copy2(src_elf, dst_elf)
-    file_off, file_size, _sh_addr = _temp_elf32_text_range(src_elf)
-    blob = b"".join(
-        struct.pack("<I", image.view[i] & 0xFFFFFFFF) for i in range(image.text_words)
-    )
-    if len(blob) > file_size:
-        raise DetourError(
-            f"TEMP dump: image text {len(blob)}B exceeds ELF .text {file_size}B"
-        )
-    with open(dst_elf, "r+b") as fh:
-        fh.seek(file_off)
-        fh.write(blob)
 
 
 class _Image:
@@ -328,65 +272,7 @@ class MetalBackend:
                 )
             self._scans[thread] = scanner.scan(str(xip), site_mode)
             self._images[thread] = self._bind_image(thread)
-        # TEMP: clean baseline ELFs (no detour) for before/after compare.
-        if _TEMP_DUMP_ELFS:
-            self._temp_dump_all("00_baseline", note="clean image before any arm")
         return self._scans
-
-    def _temp_dump_all(self, label: str, note: str = "") -> None:
-        """TEMP: write every thread's live host image into a copy of its XIP ELF."""
-        out = _TEMP_DUMP_DIR / self.kernel
-        out.mkdir(parents=True, exist_ok=True)
-        # Fresh manifest at baseline so a re-run does not append onto an old sweep.
-        if label.startswith("00_"):
-            (out / "TEMP_MANIFEST.txt").write_text(
-                f"TEMP dumps for kernel={self.kernel}\n", encoding="utf-8"
-            )
-        with open(out / "TEMP_MANIFEST.txt", "a", encoding="utf-8") as log:
-            log.write(f"\n=== {label} === {note}\n")
-            for thread, image in self._images.items():
-                trisc = THREAD_TRISC[thread]
-                src = self._xip_elf_for(thread)
-                dst = out / f"{label}__{thread}_trisc{trisc}.elf"
-                _temp_write_image_into_elf(src, dst, image)
-                log.write(f"  {thread}: {dst.name}  text_words={image.text_words}\n")
-        print(f"TEMP: dumped ELFs -> {out}/ ({label})", flush=True)
-
-    def _temp_dump_after_arm(
-        self, thread: str, site, delay: int, filler_word: int
-    ) -> None:
-        """TEMP: snapshot all thread ELFs after a detour is armed."""
-        label = (
-            f"{thread}_{site.op}_0x{site.addr:05x}_n{delay}_" f"fill{filler_word:08x}"
-        )
-        # Sanitize for filesystems.
-        label = re.sub(r"[^\w.\-]+", "_", label)
-        out = _TEMP_DUMP_DIR / self.kernel
-        out.mkdir(parents=True, exist_ok=True)
-        with open(out / "TEMP_MANIFEST.txt", "a", encoding="utf-8") as log:
-            log.write(
-                f"\n=== {label} === armed {thread} {site.op}@0x{site.addr:05x} "
-                f"delay={delay} filler=0x{filler_word:08x}\n"
-            )
-            for thr, image in self._images.items():
-                trisc = THREAD_TRISC[thr]
-                src = self._xip_elf_for(thr)
-                dst = out / f"{label}__{thr}_trisc{trisc}.elf"
-                _temp_write_image_into_elf(src, dst, image)
-                log.write(f"  {thr}: {dst.name}\n")
-                if thr == thread:
-                    site_word = image.read(site.addr, 1)[0]
-                    cave_start = self._scans[thr].cave_start
-                    n = min(max(delay, 1), 32)
-                    fillers = image.read(cave_start, n)
-                    log.write(
-                        f"    SITE 0x{site.addr:05x} = 0x{site_word:08x} "
-                        f"(expect JAL into cave)\n"
-                        f"    CAVE 0x{cave_start:05x} first {n} words = "
-                        + " ".join(f"0x{w:08x}" for w in fillers)
-                        + f"  (expect filler 0x{filler_word:08x})\n"
-                    )
-        print(f"TEMP: dumped ELFs -> {out}/ ({label})", flush=True)
 
     def injector_for(self, thread: str) -> Injector:
         # Each thread is a separate host buffer, so each needs its own injector:
@@ -398,15 +284,6 @@ class MetalBackend:
                 write_words=image.write,
                 max_delay=self.max_delay,
             )
-            # TEMP: wrap arm to snapshot ELFs after NOP/detour writes land.
-            if _TEMP_DUMP_ELFS:
-                _orig_arm = injector.arm
-
-                def _temp_arm(thread, scan, site, delay, filler_word, _arm=_orig_arm):
-                    _arm(thread, scan, site, delay, filler_word)
-                    self._temp_dump_after_arm(thread, site, delay, filler_word)
-
-                injector.arm = _temp_arm  # TEMP
             self._injectors[thread] = injector
         return self._injectors[thread]
 
@@ -440,100 +317,3 @@ class MetalBackend:
         # Nothing to invalidate: the images are host-side and the injectors have
         # already been restored, so the next case re-discovers from a clean image.
         pass
-
-
-def _offline_check() -> None:
-    """Prove the image offset maths and the detour it writes, with no device.
-
-    Everything the metal backend adds over the LLK one is address arithmetic: a
-    scanned vaddr has to land on the right word of a packed image whose text base
-    is not the vaddr base. Get that wrong and the sweep corrupts an unrelated
-    instruction or silently patches nothing, so it is worth being able to check it
-    from a laptop. Run with `python3 metal.py`.
-    """
-
-    def decode_jal(word: int, at: int) -> int:
-        """Inverse of cave.encode_jal, so a bad encoding cannot pass by symmetry."""
-        imm = (
-            (((word >> 31) & 0x1) << 20)
-            | (((word >> 21) & 0x3FF) << 1)
-            | (((word >> 20) & 0x1) << 11)
-            | (((word >> 12) & 0xFF) << 12)
-        )
-        if imm & (1 << 20):
-            imm -= 1 << 21
-        return at + imm
-
-    # A kernel whose .text is 512 words at vaddr 0x6000, with the last 128 the cave.
-    text_start, text_words, max_delay = 0x6000, 512, 100
-    cave_start = text_start + (text_words - 128) * 4
-    site_addr, site_word = text_start + 40 * 4, 0xDEADBEEF
-
-    view = (ctypes.c_uint32 * text_words)()
-    view[(site_addr - text_start) // 4] = site_word
-    image = _Image(view, text_words, text_start)
-
-    assert image.index(text_start) == 0, "text base must map to image word 0"
-    assert image.index(site_addr) == 40
-    for bad in (text_start - 4, text_start + text_words * 4):
-        try:
-            image.index(bad)
-        except DetourError:
-            pass
-        else:
-            raise AssertionError(f"0x{bad:x} should be out of bounds")
-
-    cave = Cave(cave_start, cave_start + 128 * 4, max_delay)
-    site = scanner.Site(index=0, addr=site_addr, word=site_word, op="TEST", sfpu=False)
-
-    class _Scan:
-        cave_start, cave_limit, elf = cave.start, cave.limit, "<offline>"
-        fillers = {
-            "pacr": 0x74000000,
-            "pacr_cfg_set": 0xC8F3E3E2,
-            "pacr_cfg_clr": 0xC8F3E002,
-        }
-
-    injector = Injector(image.read, image.write, max_delay=max_delay)
-    for delay in (0, 1, 37, max_delay):
-        injector.arm("unpack", _Scan, site, delay, 0x08000000)
-
-        landed = decode_jal(view[image.index(site_addr)], site_addr)
-        assert landed == cave.entry(
-            delay
-        ), f"delay {delay}: site jumps to 0x{landed:x}, want 0x{cave.entry(delay):x}"
-        # Exactly `delay` fillers are executed: the entry point sits that many words
-        # short of the displaced instruction, and every word from there on is a filler.
-        executed = (cave.displaced_instruction - landed) // 4
-        assert executed == delay, f"delay {delay}: {executed} fillers would run"
-        for word in range(delay):
-            assert view[image.index(landed + word * 4)] == 0x08000000
-        assert view[image.index(cave.displaced_instruction)] == site_word
-        back = decode_jal(view[image.index(cave.ret)], cave.ret)
-        assert back == site_addr + 4, f"returns to 0x{back:x}, want 0x{site_addr + 4:x}"
-
-    injector.restore()
-    assert view[image.index(site_addr)] == site_word, "restore did not undo the detour"
-
-    delay = 3
-    injector.arm("pack", _Scan, site, delay, _Scan.fillers["pacr"])
-    landed = decode_jal(view[image.index(site_addr)], site_addr)
-    assert landed == cave.set_addr, "pacr detour did not land on its cfg-set"
-    assert view[image.index(cave.set_addr)] == _Scan.fillers["pacr_cfg_set"]
-    run = decode_jal(view[image.index(cave.set_addr + 4)], cave.set_addr + 4)
-    assert run == cave.entry(delay) - 4
-    assert all(
-        view[image.index(run + word * 4)] == _Scan.fillers["pacr"]
-        for word in range(delay)
-    )
-    assert (
-        view[image.index(cave.displaced_instruction - 4)]
-        == _Scan.fillers["pacr_cfg_clr"]
-    )
-    injector.restore()
-
-    print(f"offline check passed (cave 0x{cave.start:x}..0x{cave.end:x})")
-
-
-if __name__ == "__main__":
-    _offline_check()
