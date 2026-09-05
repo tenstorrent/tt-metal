@@ -19,7 +19,12 @@ Tensor matmul_decode(
     const std::optional<PackedWeightSpec>& packed_weight,
     bool all_gather,
     const std::optional<std::vector<ttnn::MeshCoordinate>>& mesh_coords,
-    bool ring_gather) {
+    bool ring_gather,
+    const std::optional<tt::tt_metal::CoreRangeSet>& output_core_grid,
+    bool output_mcast_two_hub,
+    bool rms_norm,
+    std::optional<float> rms_norm_gamma,
+    float rms_norm_epsilon) {
     return ttnn::prim::matmul_decode(
         input_tensor_a,
         input_tensor_b,
@@ -31,7 +36,12 @@ Tensor matmul_decode(
         packed_weight,
         all_gather,
         mesh_coords,
-        ring_gather);
+        ring_gather,
+        output_core_grid,
+        output_mcast_two_hub,
+        rms_norm,
+        rms_norm_gamma,
+        rms_norm_epsilon);
 }
 
 }  // namespace ttnn::experimental
