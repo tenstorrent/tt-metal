@@ -1640,3 +1640,22 @@ targets:
               fps_tolerance: 0.10
             owner_id: U0978501V8B # CODEOWNERS @tvardhineniTT
             team: models
+
+  # DiffusionDrive is tier 3, so it is exempt from perf targets. Its accuracy gate is
+  # the committed assert in tests/pcc/test_pcc_checkpoint_accuracy.py -- trajectory PCC
+  # >= 0.99 against the PyTorch reference at production resolution (camera 256x1024,
+  # LiDAR 256x256) with the real 88.1-PDMS checkpoint. That test emits no benchmark
+  # payload, so there is no metric here for validate_perf_targets.py to compare; the
+  # combo is kept on the books as TODO, matching the vit entry above.
+  diffusiondrive:
+    aliases: ["DiffusionDrive", "diffusiondrive", "hustvl/DiffusionDrive"]
+    skus:
+      wh_n300:
+        entries:
+          - batch_size: 1
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U03HY7MK4BT # Mark O'Connor
+            team: models
