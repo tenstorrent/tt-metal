@@ -434,9 +434,6 @@ def test_eltwise_unary_sfpu(
             )
         )
 
-    if mathop == MathOperation.ReluMin:
-        pytest.skip(reason="https://github.com/tenstorrent/tt-llk/issues/1120")
-
     if mathop == MathOperation.Tanh and approx_mode == ApproximationMode.Yes:
         pytest.skip(reason="Metal tanh does not support approximation mode")
 
@@ -721,9 +718,6 @@ def test_eltwise_unary_sfpu_edges(
     _skip_coverage_unsupported(mathop)
 
     _skip_bh_unless_fp32(formats, dest_acc)
-
-    if mathop == MathOperation.ReluMin:
-        pytest.skip(reason="https://github.com/tenstorrent/tt-llk/issues/1120")
 
     # Two independent gates, and both have to pass: _SPECIALS_READY_OPS says the *golden*
     # defines a result for non-finite inputs, specials_safe() says the *pipeline* delivers
