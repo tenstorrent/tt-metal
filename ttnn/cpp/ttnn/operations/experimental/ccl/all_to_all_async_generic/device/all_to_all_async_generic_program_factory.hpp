@@ -9,6 +9,7 @@
 #include "ttnn/distributed/types.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/global_semaphore.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <cstddef>
 #include <vector>
 
@@ -16,8 +17,8 @@ namespace ttnn::experimental::prim {
 
 struct AllToAllAsyncGenericProgram {
     struct shared_variables_t {
-        tt::tt_metal::KernelHandle sender_reader_kernel_id;
-        std::vector<tt::tt_metal::KernelHandle> sender_writer_kernel_ids;
+        tt::tt_metal::KernelRuntimeArgsAccessor sender_reader_runtime_args;
+        std::vector<tt::tt_metal::KernelRuntimeArgsAccessor> sender_writer_runtime_args;
         tt::tt_metal::GlobalSemaphore init_barrier_semaphore;
         tt::tt_metal::GlobalSemaphore final_barrier_semaphore;
     };

@@ -1089,12 +1089,18 @@ AllToAllAsyncGenericProgram::create_at(
         tt::tt_metal::SetCommonRuntimeArgs(program, kernel_id, {tensor_return_value.buffer()->address()});
     }
 
-    return {
-        std::move(program),
-        {.sender_reader_kernel_id = sender_reader_kernel_id,
-         .sender_writer_kernel_ids = std::move(sender_writer_kernel_ids),
-         .init_barrier_semaphore = init_barrier_semaphore,
-         .final_barrier_semaphore = final_barrier_semaphore}};
+    // Resolve kernels once, before moving the Program. Accessors own the implementation and
+    // reacquire live argument storage after dispatch retargeting; they do not cache argument pointers.
+    shared_variables_t shared_variables{
+        .sender_reader_runtime_args = tt::tt_metal::KernelRuntimeArgsAccessor(program, sender_reader_kernel_id),
+        .sender_writer_runtime_args = {},
+        .init_barrier_semaphore = init_barrier_semaphore,
+        .final_barrier_semaphore = final_barrier_semaphore};
+    shared_variables.sender_writer_runtime_args.reserve(sender_writer_kernel_ids.size());
+    for (const auto kernel_id : sender_writer_kernel_ids) {
+        shared_variables.sender_writer_runtime_args.emplace_back(program, kernel_id);
+    }
+    return {std::move(program), std::move(shared_variables)};
 }
 
 void AllToAllAsyncGenericProgram::override_runtime_arguments(
@@ -1113,9 +1119,9 @@ void AllToAllAsyncGenericProgram::override_runtime_arguments(
             coordinate_range.end_coord());
         auto& shared_variables = cached_workload.shared_variables.at(coordinate_range);
 
-        GetCommonRuntimeArgs(program, shared_variables.sender_reader_kernel_id).at(0) = input_address;
-        for (const auto kernel_id : shared_variables.sender_writer_kernel_ids) {
-            GetCommonRuntimeArgs(program, kernel_id).at(0) = output_address;
+        shared_variables.sender_reader_runtime_args.common_runtime_args().at(0) = input_address;
+        for (auto& writer_runtime_args : shared_variables.sender_writer_runtime_args) {
+            writer_runtime_args.common_runtime_args().at(0) = output_address;
         }
         // create_at installed the two semaphore addresses in each unique argument table.
         // shared_variables owns those same allocations for this cached workload's lifetime;
