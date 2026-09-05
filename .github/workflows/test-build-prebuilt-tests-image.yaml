@@ -14,6 +14,7 @@ on:
       - ".github/workflows/build-prebuilt-tests-image.yaml"
       - ".github/workflows/test-build-prebuilt-tests-image.yaml"
       - "dockerfile/Dockerfile.prebuilt-tests-packages"
+      - "dockerfile/Dockerfile.prebuilt-tests-env"
   workflow_dispatch:
 
 permissions:
@@ -204,3 +205,251 @@ jobs:
         run: |
           /usr/bin/tt-metalium-validation-smoke \
             --gtest_filter="MeshDispatchFixture.TensixFailOnDuplicateKernelCreationDataflow"
+
+  # The packages arm above sets publish-artifact: false, so it makes no tarball
+  # and no wheel. The env image needs both, hence a second build rather than
+  # widening the one whose inputs are already proven.
+  build-env:
+    name: "Build tarball and wheel"
+    if: ${{ github.event.pull_request.head.repo.fork != true && !github.event.pull_request.draft }}
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      contents: read
+      packages: write
+    secrets: inherit
+    with:
+      # 22.04: the setup-job consumers this serves pull the 22.04 ci-test base,
+      # and the hardware leg below runs on a 22.04 runner.
+      platform: "Ubuntu 22.04"
+      toolchain: cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
+      build-type: "Release"
+      publish-artifact: true
+      # The env images bake the tarball and the wheel; the debs would be an upload
+      # and a retention cost that nothing in this arm reads.
+      publish-package: false
+      # In-place, not build-wheel: that one runs cibuildwheel for a second full
+      # compile, and the consumers this serves get the in-place wheel anyway.
+      build-inplace-wheel: true
+      use-system-sfpi: true
+
+  bake-env-full:
+    name: "Bake env image / full"
+    needs: build-env
+    uses: ./.github/workflows/build-prebuilt-tests-image.yaml
+    permissions:
+      contents: read
+      packages: write
+      actions: read
+    secrets: inherit
+    with:
+      artifact-name: ${{ needs.build-env.outputs.build-artifact-name }}
+      base-image: ${{ needs.build-env.outputs.ci-test-docker-image }}
+      dockerfile: dockerfile/Dockerfile.prebuilt-tests-env
+      # Own ghcr package: the env payload is sized nothing like the packages one,
+      # so its retention must not be shared with theirs.
+      image-name: prebuilt-tests-env-image
+      checkout-source: true
+      build-args: PROFILE=full
+
+  bake-env-wheel:
+    name: "Bake env image / wheel"
+    needs: build-env
+    uses: ./.github/workflows/build-prebuilt-tests-image.yaml
+    permissions:
+      contents: read
+      packages: write
+      actions: read
+    secrets: inherit
+    with:
+      artifact-name: ${{ needs.build-env.outputs.wheel-artifact-name }}
+      base-image: ${{ needs.build-env.outputs.ci-test-docker-image }}
+      dockerfile: dockerfile/Dockerfile.prebuilt-tests-env
+      image-name: prebuilt-tests-env-image
+      checkout-source: true
+      build-args: PROFILE=wheel
+
+  # source-ref would otherwise only ever be exercised through its github.sha
+  # fallback. Same commit as bake-env-full, spelled explicitly: the content must
+  # come out identical while the tag must differ, since source-ref feeds the
+  # recipe hash. A DIFFERENT ref would also work but would publish an image whose
+  # source and artifact disagree, which is the thing the input exists to prevent.
+  bake-env-source-ref:
+    name: "Bake env image / explicit source-ref"
+    needs: build-env
+    uses: ./.github/workflows/build-prebuilt-tests-image.yaml
+    permissions:
+      contents: read
+      packages: write
+      actions: read
+    secrets: inherit
+    with:
+      artifact-name: ${{ needs.build-env.outputs.build-artifact-name }}
+      base-image: ${{ needs.build-env.outputs.ci-test-docker-image }}
+      dockerfile: dockerfile/Dockerfile.prebuilt-tests-env
+      image-name: prebuilt-tests-env-image
+      checkout-source: true
+      build-args: PROFILE=full
+      source-ref: ${{ github.sha }}
+
+  # Payload shape is what breaks silently: a wrong one still builds and publishes.
+  # Checking both costs no hardware, so only the full image needs a real leg below.
+  verify-env-payloads:
+    name: "Check both env images carry the right payload"
+    # build-env too: the base ref is needed to tell payload layers from base ones.
+    needs: [build-env, bake-env-full, bake-env-wheel, bake-env-source-ref]
+    if: ${{ needs.bake-env-full.outputs.image != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Assert each payload
+        env:
+          FULL: ${{ needs.bake-env-full.outputs.image }}
+          WHEEL: ${{ needs.bake-env-wheel.outputs.image }}
+          BASE: ${{ needs.build-env.outputs.ci-test-docker-image }}
+        run: |
+          set -euo pipefail
+          echo "::group::${FULL}"
+          docker run --rm --entrypoint cat "$FULL" /etc/prebuilt-tests-env-manifest | grep -q '^profile=full$'
+          docker run --rm --entrypoint sh "$FULL" -c 'test -d /work/build && test -d /work/tests'
+          # Proves the .dockerignore worked; otherwise .git rides along unnoticed.
+          test -z "$(docker run --rm --entrypoint sh "$FULL" -c 'ls -d /work/.git 2>/dev/null')"
+          echo "::endgroup::"
+          echo "::group::${WHEEL}"
+          docker run --rm --entrypoint cat "$WHEEL" /etc/prebuilt-tests-env-manifest | grep -q '^profile=wheel$'
+          docker run --rm --entrypoint sh "$WHEEL" -c 'test ! -d /work/build && test -d /work/tests'
+          # Directory shape says nothing about whether the wheel actually works:
+          # an ABI or missing-library problem installs fine and imports never.
+          docker run --rm --entrypoint python3 "$WHEEL" -c 'import ttnn; print("ttnn imported")'
+          echo "::endgroup::"
+
+      # Layer sizes, not the merged filesystem: a COPY followed by an rm leaves the
+      # payload bytes in a lower layer while `find` sees nothing, which is exactly
+      # the regression that would silently undo the saving.
+      - name: Assert the payload rides in two layers and stays small
+        env:
+          FULL: ${{ needs.bake-env-full.outputs.image }}
+          WHEEL: ${{ needs.bake-env-wheel.outputs.image }}
+          BASE: ${{ needs.build-env.outputs.ci-test-docker-image }}
+          # Release with system SFPI measures 296 MiB (full) and 250 MiB (wheel).
+          # Generous headroom: this guards against a COPYed payload, not drift.
+          MAX_MIB: "600"
+        run: |
+          set -euo pipefail
+          layers() {  # digest<TAB>size for the amd64 image, one per line
+            local ref="$1" repo="${1%:*}" child
+            child=$(docker manifest inspect "$ref" \
+              | jq -r '.manifests[]? | select(.platform.architecture=="amd64" and .platform.os=="linux") | .digest')
+            [ -n "$child" ] && ref="${repo}@${child}"
+            docker manifest inspect "$ref" | jq -r '.layers[] | "\(.digest)\t\(.size)"'
+          }
+          layers "$BASE" | cut -f1 | sort > /tmp/base.txt
+          for pair in "full:$FULL" "wheel:$WHEEL"; do
+            name="${pair%%:*}"; ref="${pair#*:}"
+            layers "$ref" > /tmp/img.txt
+            extra=$(join -v1 -t"$(printf '\t')" <(sort -k1,1 /tmp/img.txt) /tmp/base.txt || true)
+            n=$(printf '%s' "$extra" | grep -c . || true)
+            mib=$(printf '%s' "$extra" | awk -F'\t' '{s+=$2} END {printf "%d", s/1048576}')
+            echo "${name}: ${n} layers beyond the base, ${mib} MiB"
+            [ "$n" -eq 2 ] || { echo "::error::${name} adds ${n} layers, expected 2 (source + payload); a new COPY would do this"; exit 1; }
+            [ "$mib" -le "$MAX_MIB" ] || { echo "::error::${name} payload is ${mib} MiB, over ${MAX_MIB}"; exit 1; }
+          done
+
+      - name: Assert source-ref separates the tag without changing the content
+        env:
+          FULL: ${{ needs.bake-env-full.outputs.image }}
+          EXPLICIT: ${{ needs.bake-env-source-ref.outputs.image }}
+        run: |
+          set -euo pipefail
+          # Same commit, one defaulted and one passed explicitly.
+          [ "$FULL" != "$EXPLICIT" ] \
+            || { echo "::error::source-ref does not separate the tag: both are ${FULL}"; exit 1; }
+          # Only the recipe hash may differ; sha12, CONFIG and the base slug must not.
+          [ "${FULL%-*}" = "${EXPLICIT%-*}" ] \
+            || { echo "::error::tags differ outside the recipe hash: ${FULL} vs ${EXPLICIT}"; exit 1; }
+          # The contents must match, or the explicit ref checked out something other
+          # than the commit the default resolves to. Compare paths and sizes rather
+          # than layer digests: these are independent builds, so tar header mtimes
+          # differ and the digests differ with them even when the files do not.
+          # Measured on two same-run bakes of the same commit: 211,190,989 vs
+          # 211,181,760 bytes for the same source layer.
+          tree() {
+            docker run --rm --entrypoint sh "$1" -c \
+              'find /work -type f -printf "%p %s\n" | LC_ALL=C sort | sha256sum | cut -d" " -f1'
+          }
+          a=$(tree "$FULL"); b=$(tree "$EXPLICIT")
+          [ "$a" = "$b" ] \
+            || { echo "::error::explicit source-ref produced different /work contents (${a} vs ${b})"; exit 1; }
+          echo "source-ref separates the tag (${FULL##*-} vs ${EXPLICIT##*-}) with identical /work contents (${a})"
+
+  verify-env:
+    name: "Run a test from the env image"
+    needs: bake-env-full
+    # Runs freshly built native code from the PR on hardware, and only needs to
+    # pull an image. Do not let it inherit packages: write.
+    permissions:
+      contents: read
+      packages: read
+    # Empty ref means the producer was skipped (fork); nothing to verify.
+    if: ${{ needs.bake-env-full.outputs.image != '' }}
+    runs-on: tt-ubuntu-2204-N150-viommu-stable
+    timeout-minutes: 20
+    container:
+      image: ${{ needs.bake-env-full.outputs.image }}
+      # The runner pulls before any step runs, so no login step can help here.
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+      env:
+        TT_METAL_HOME: /work
+        # /work/ttnn as well as /work: /work/ttnn is a namespace dir and the
+        # package is /work/ttnn/ttnn. Same in-place layout as bisect-dispatch.
+        PYTHONPATH: /work:/work/ttnn
+        LD_LIBRARY_PATH: /work/build/lib
+        ARCH_NAME: wormhole_b0
+        LOGURU_LEVEL: INFO
+      # No /work volume on purpose: the image owns /work, and a bind mount would
+      # mask the payload, which is the whole point of this arm.
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work
+    steps:
+      - name: The environment came from the image, not from a checkout
+        run: |
+          set -euo pipefail
+          test -s /etc/prebuilt-tests-env-manifest
+          cat /etc/prebuilt-tests-env-manifest
+          # Source, build output, and the .so the tarball merges into the source
+          # package dir - the three things a consumer stops fetching.
+          test -d /work/tests && test -d /work/build/lib
+          test -f /work/tools/tt-triage.py
+          ls /work/ttnn/ttnn/*.so >/dev/null
+          # .git is deliberately absent; scripts shelling out to git cannot run here.
+          test ! -d /work/.git
+          ls -la /work/build/test/tt_metal/
+
+      - name: The in-place ttnn package imports
+        run: |
+          set -euo pipefail
+          # The C++ leg below would pass even if the Python payload were unusable,
+          # so import it explicitly. This is the full profile's advertised path.
+          python3 -c 'import ttnn; print("ttnn imported from", ttnn.__file__)'
+
+      - name: Run a runtime test against the baked build
+        timeout-minutes: 10
+        env:
+          GTEST_COLOR: yes
+        run: |
+          # Same fixture as the runtime_sanity_api leg: DRAM R/W, L1 R/W, and a
+          # JIT kernel compile, so it exercises the baked tree end to end.
+          ./build/test/tt_metal/unit_tests_api \
+            --gtest_filter='*DRAMLoopbackSingleCore*:*TestSimpleL1*:*CompileProgram*'

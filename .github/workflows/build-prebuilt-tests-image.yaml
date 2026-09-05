@@ -54,6 +54,19 @@ on:
           Check the source tree out to src/ for Dockerfiles that need it. Off by
           default: it is a multi-GB recursive clone that the package-based paths
           have no use for.
+      source-ref:
+        required: false
+        type: string
+        default: ""
+        description: >-
+          Commit to bake the source from, when checkout-source is on. Must be a
+          full 40-character sha, not a branch or tag: a movable ref would let a
+          re-run recompute the same tag while checking out different source, and
+          overwrite the image with it. Defaults to this workflow's own commit,
+          which is only meaningful when the artifact comes from this run too.
+          Baking another run's artifact (artifact-run-id) alongside a source
+          checkout requires this, since the default would pair this commit's
+          source with someone else's binaries.
       runner-label:
         required: false
         type: string
@@ -102,6 +115,15 @@ on:
         type: boolean
         default: false
         description: "Check the source tree out to src/ for Dockerfiles that need it"
+      source-ref:
+        required: false
+        type: string
+        default: ""
+        description: >-
+          Full 40-character commit sha to bake the source from. Required whenever
+          checkout-source is on here, because a dispatched run always takes its
+          artifact from another run, so there is no commit to default to. Unused
+          when checkout-source is off.
       runner-label:
         required: false
         type: string
@@ -134,12 +156,32 @@ jobs:
           BUILD_ARGS: ${{ inputs.build-args }}
           CHECKOUT_SOURCE: ${{ inputs.checkout-source }}
           ARTIFACT_RUN_ID: ${{ inputs.artifact-run-id }}
+          SOURCE_REF: ${{ inputs.source-ref }}
         run: |
           set -euo pipefail
           # required: true still lets '' through, and an empty name would make
           # download-artifact fetch every artifact in the run.
           if [ -z "$ARTIFACT_NAME" ]; then
             echo "::error::artifact-name is empty; the upstream build did not produce one"
+            exit 1
+          fi
+          # source-ref cannot affect the image when no source is checked out, so
+          # neither validate nor hash it there: doing so would mint a distinct tag
+          # for a byte-identical image and churn retention for nothing.
+          if [ "$CHECKOUT_SOURCE" != "true" ]; then
+            SOURCE_REF=""
+          fi
+          # A branch or tag can move, so re-running would recompute the same tag
+          # while checking out different source and overwrite the image with it.
+          if [ -n "$SOURCE_REF" ] && ! printf '%s' "$SOURCE_REF" | grep -qE '^[0-9a-f]{40}$'; then
+            echo "::error::source-ref must be a full 40-character commit sha, got '$SOURCE_REF'"
+            exit 1
+          fi
+          # Taking the artifact from another run says nothing about which commit
+          # built it, so defaulting the source to this workflow's sha would pair
+          # this commit's source with someone else's binaries under a valid tag.
+          if [ "$CHECKOUT_SOURCE" = "true" ] && [ -n "$ARTIFACT_RUN_ID" ] && [ -z "$SOURCE_REF" ]; then
+            echo "::error::source-ref is required when checkout-source is on and the artifact comes from another run, or src/ and artifact/ are from different commits"
             exit 1
           fi
           # Names end in <ref><sep><runid>, but packages joins with '-' and the
@@ -156,9 +198,11 @@ jobs:
           # is the raw input, so it is empty on the same-run path and changes
           # nothing there, but it separates two cross-run calls that share a
           # build config and would otherwise collide on different payloads.
-          RECIPE=$(printf '%s\n%s\n%s\n%s\n%s\n%s' \
+          # SOURCE_REF included, or two calls differing only in the source they
+          # bake would share a tag and the second would overwrite the first.
+          RECIPE=$(printf '%s\n%s\n%s\n%s\n%s\n%s\n%s' \
             "$CONFIG" "$BASE_IMAGE" "$DOCKERFILE" "$BUILD_ARGS" "$CHECKOUT_SOURCE" \
-            "$ARTIFACT_RUN_ID" \
+            "$ARTIFACT_RUN_ID" "$SOURCE_REF" \
             | sha256sum | cut -c1-8)
           # The readable parts are truncated so the tag is bounded by construction.
           # Real configs reach 142 chars untruncated, over Docker's 128 limit, and
@@ -187,11 +231,20 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
         with:
-          # The workflow's commit: a caller baking another run's artifact must
-          # ensure it matches, or src/ and artifact/ disagree.
-          ref: ${{ github.sha }}
+          # Must match the commit the artifact was built from, or src/ and
+          # artifact/ disagree; defaults to this workflow's own commit.
+          ref: ${{ inputs.source-ref || github.sha }}
           path: src
           submodules: recursive
+
+      # context: is the whole workspace, so every .git in it is transferred. The
+      # Dockerfile checkout puts one at the root even when no source is checked
+      # out, and a source checkout adds its own plus every submodule's.
+      - name: Exclude git metadata from the build context
+        run: |
+          set -euo pipefail
+          printf '.git\n**/.git\n' > "$GITHUB_WORKSPACE/.dockerignore"
+          cat "$GITHUB_WORKSPACE/.dockerignore"
 
       - name: Download the build artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
