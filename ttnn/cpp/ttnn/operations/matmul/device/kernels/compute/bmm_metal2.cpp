@@ -2,9 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// NOTE: A Metal 2.0 fork of this kernel lives beside it, as bmm_metal2.cpp. Ops ported to
-// Metal 2.0 bind the fork; this file serves the consumers still on the legacy API. Until the last
-// of them migrates and this file is retired, changes here likely belong in the fork too.
+// Metal 2.0 fork of bmm.cpp, which lives beside it.
+// Factories ported to Metal 2.0 bind this fork; the original serves the consumers still on the
+// legacy ProgramDescriptor API. Until the last of them migrates and the original is retired,
+// changes to either copy likely belong in the other too.
 
 #include <cstdint>
 
@@ -12,6 +13,7 @@
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 using std::uint32_t;
 
@@ -23,21 +25,17 @@ void kernel_main() {
     int dst_tile_index = 0;
     int in0_block_tile_index = 0;
 
-    uint32_t batch = get_compile_time_arg_val(0);
-    uint32_t Mt = get_compile_time_arg_val(1);
-    uint32_t Kt = get_compile_time_arg_val(2);
-    uint32_t Nt = get_compile_time_arg_val(3);
+    uint32_t batch = get_arg(args::batch);
+    uint32_t Mt = get_arg(args::Mt);
+    uint32_t Kt = get_arg(args::Kt);
+    uint32_t Nt = get_arg(args::Nt);
 
-    constexpr uint32_t dfb_in0 = get_named_compile_time_arg_val("cb_in0");
-    constexpr uint32_t dfb_in1 = get_named_compile_time_arg_val("cb_in1");
-    constexpr uint32_t dfb_out = get_named_compile_time_arg_val("cb_out");
+    DataflowBuffer in0_dfb(dfb::in0);
+    DataflowBuffer in1_dfb(dfb::in1);
+    DataflowBuffer out_dfb(dfb::out);
 
-    DataflowBuffer in0_dfb(dfb_in0);
-    DataflowBuffer in1_dfb(dfb_in1);
-    DataflowBuffer out_dfb(dfb_out);
-
-    compute_kernel_hw_startup<SrcOrder::Reverse>(dfb_in0, dfb_in1, dfb_out);
-    matmul_init(dfb_in0, dfb_in1);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::in0, dfb::in1, dfb::out);
+    matmul_init(dfb::in0, dfb::in1);
 
     // the simplest possible version of outer product blocked matmul
     // the reader is expected to read the A's and B's tile rows and tile columns for each output tile
@@ -50,7 +48,7 @@ void kernel_main() {
                     in0_dfb.wait_front(onetile);
                     in1_dfb.wait_front(onetile);
 
-                    matmul_tiles(dfb_in0, dfb_in1, 0, 0, 0);
+                    matmul_tiles(dfb::in0, dfb::in1, 0, 0, 0);
 
                     in0_dfb.pop_front(onetile);
                     in1_dfb.pop_front(onetile);
@@ -61,7 +59,7 @@ void kernel_main() {
                 out_dfb.reserve_back(onetile);
 
                 tile_regs_wait();
-                pack_tile(0, dfb_out);
+                pack_tile(0, dfb::out);
                 tile_regs_release();
 
                 out_dfb.push_back(onetile);
