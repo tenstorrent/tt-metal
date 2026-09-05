@@ -115,6 +115,9 @@ completion duration in milliseconds, plus medians and workload metadata. Output 
 the initial synchronization are outside the timing window; compilation is excluded by warmup.
 Set DS_PERF_HOST_TRACE=1 alongside DS_PERF_HOST=1 to time trace replay instead, with compilation
 and capture excluded. The traced samples are written to host_trace_<scenario>.json.
+Set DS_PERF_HOST_FABRIC_2D=1 alongside DS_PERF_HOST=1 to use plain FABRIC_2D with a
+matching TT_MESH_GRAPH_DESC_PATH instead of the default torus. Compare timings only within
+the same topology; the JSON records the fabric and descriptor path.
 
 NOTE: warm/long leave the cached prefix of both block-cyclic caches zero-filled rather than populating it
 with earlier chunks — only op shapes/timing matter here, not values, and those come from the full `total`
@@ -440,10 +443,11 @@ def _detect_perf_workload(variant_name: str) -> tuple[PerfWorkload, str | None]:
 
 
 PERF_WORKLOAD, PERF_SKIP_REASON = _detect_perf_workload(VARIANT)
+_HOST_FABRIC_2D = os.environ.get("DS_PERF_HOST") == "1" and os.environ.get("DS_PERF_HOST_FABRIC_2D") == "1"
 _TORUS_XY_CERTIFIED = os.environ.get("PREFILL_TORUS_XY_CERTIFIED") == "1" and bool(
     os.environ.get("TT_MESH_GRAPH_DESC_PATH")
 )
-if PERF_WORKLOAD.system_name == "Galaxy" and not _TORUS_XY_CERTIFIED:
+if PERF_WORKLOAD.system_name == "Galaxy" and not (_TORUS_XY_CERTIFIED or _HOST_FABRIC_2D):
     PERF_SKIP_REASON = "Galaxy sparse MLA perf requires a certified TorusXY graph descriptor"
 PERF_FABRIC_BY_SYSTEM = {
     "QuietBox": ttnn.FabricConfig.FABRIC_2D_TORUS_X,
@@ -451,6 +455,8 @@ PERF_FABRIC_BY_SYSTEM = {
     "Galaxy": ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
 }
 PERF_FABRIC = PERF_FABRIC_BY_SYSTEM.get(PERF_WORKLOAD.system_name, ttnn.FabricConfig.FABRIC_2D)
+if _HOST_FABRIC_2D:
+    PERF_FABRIC = ttnn.FabricConfig.FABRIC_2D
 PERF_FABRIC_ID = {
     ttnn.FabricConfig.FABRIC_2D: "fabric2d",
     ttnn.FabricConfig.FABRIC_2D_TORUS_X: "torus-x",
@@ -950,6 +956,8 @@ def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_fo
             "scenario": scenario,
             "case": _profile_case_id(attn_mode, kv_cache_format),
             "mesh": list(mesh_device.shape),
+            "fabric": PERF_FABRIC_ID,
+            "mesh_graph_descriptor": os.environ.get("TT_MESH_GRAPH_DESC_PATH"),
             "chunk": chunk,
             "cache": cache,
             "warmups": warmups,
