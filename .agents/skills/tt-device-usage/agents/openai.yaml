@@ -1,0 +1,4 @@
+interface:
+  display_name: "TT Device Usage"
+  short_description: "Use TT devices safely and recover common hardware hangs."
+  default_prompt: "Use $tt-device-usage while running TT hardware commands, reset/recovery, tt-smi, tt-triage, watcher, profiler, or device-health checks."
