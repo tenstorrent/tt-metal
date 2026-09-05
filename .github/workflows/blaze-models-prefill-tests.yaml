@@ -90,10 +90,6 @@ jobs:
 
   Galaxy-Blaze-models-prefill:
     needs: [validate-test-type, check-harbor, build-artifact]
-    # Skip when only a focused-job stage was requested: sdpa_perf and prefill_runner_kv_pcc
-    # each have their own impl invocation and no sc1 matrix entry, so running the sc1 caller
-    # for them would fail on an empty matrix. "all"/"module" still select this job.
-    if: ${{ needs.validate-test-type.outputs.test-type != 'sdpa_perf' && needs.validate-test-type.outputs.test-type != 'prefill_runner_kv_pcc' }}
     permissions:
       id-token: write
       contents: read
@@ -112,8 +108,6 @@ jobs:
 
   Galaxy-Blaze-models-prefill-SDPA-Perf-tests:
     needs: [validate-test-type, check-harbor, build-artifact]
-    # Runs for the default "all" and when the sdpa_perf group is selected (alone or with others).
-    if: ${{ needs.validate-test-type.outputs.test-type == 'all' || contains(needs.validate-test-type.outputs.test-type, 'sdpa_perf') }}
     permissions:
       id-token: write
       contents: read
@@ -125,8 +119,10 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enabled-skus: bh_sc1,bh_sc1_high_power
       sp-config: sc1
-      # Select the perf entry by its test_group so adding more perf checks needs no workflow edit.
-      test-type: sdpa_perf
+      test-type: ${{ needs.validate-test-type.outputs.test-type }}
+      # Own the perf group and nothing else, so a tag shared with a functional entry
+      # (mla, determinism, kimi_k3) selects the perf entry here and only here.
+      include-test-group: sdpa_perf
       resource-prefix: sdpa-perf
 
   Galaxy-Blaze-models-prefill-sc4:
@@ -134,23 +130,6 @@ jobs:
     # 4-galaxy (SC4) disaggregated-prefill runner+producer KV-PCC leg. Its own impl
     # invocation because the impl filters the matrix by sp_config, and this is the only
     # sc4 entry (the sc1 job's enabled-skus + sp_config filters already exclude it).
-    # Runs for the default "all", for the "module" group, and when its own stage is selected.
-    # Tokens that can select an sc4 entry: its test_type, its test_group, or any of its
-    # test_tags (kimi_k2_7 / glm_5_2 / runner / kv_cache). Firing this caller for a selection
-    # with no sc4 entry fails on an empty matrix, so the list stays exact.
-    #
-    # Each token is comma-wrapped on BOTH sides because contains() is substring-based while the
-    # impl's filter matches whole tokens. Without the wrapping, `kv_cache_table` (sc1-only)
-    # satisfies contains(..., 'kv_cache') and fires this caller, whose filter then finds no sc4
-    # entry and fails the run -- which is exactly what happened on run 33065088619. The validator
-    # emits the selection as ",".join(tokens) with no spaces, so ',<token>,' is an exact match.
-    if: ${{ needs.validate-test-type.outputs.test-type == 'all'
-      || contains(format(',{0},', needs.validate-test-type.outputs.test-type), ',module,')
-      || contains(format(',{0},', needs.validate-test-type.outputs.test-type), ',prefill_runner_kv_pcc,')
-      || contains(format(',{0},', needs.validate-test-type.outputs.test-type), ',kimi_k2_7,')
-      || contains(format(',{0},', needs.validate-test-type.outputs.test-type), ',glm_5_2,')
-      || contains(format(',{0},', needs.validate-test-type.outputs.test-type), ',runner,')
-      || contains(format(',{0},', needs.validate-test-type.outputs.test-type), ',kv_cache,') }}
     permissions:
       id-token: write
       contents: read
