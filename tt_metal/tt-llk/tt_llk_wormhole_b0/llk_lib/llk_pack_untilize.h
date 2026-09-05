@@ -190,7 +190,12 @@ inline void _llk_pack_untilize_init_(const std::uint32_t pack_dst_format, const 
 
     if (block_ct_dim != full_ct_dim)
     {
-        const std::uint32_t output_addr_offset = SCALE_DATUM_SIZE(pack_dst_format, full_ct_dim * ((num_faces > 1) ? num_faces / 2 : 1) * FACE_C_DIM);
+        // Mirrors the Blackhole narrow_row branch (tt_llk_blackhole/llk_lib/llk_pack_untilize.h): when
+        // narrow_row is set, the execute-side packer strides by row_num_datums per row, so the row-stride
+        // register programmed here must match that, or every other row is mispacked (see #55434).
+        const std::uint32_t output_addr_offset = narrow_row
+                                                      ? SCALE_DATUM_SIZE(pack_dst_format, full_ct_dim * row_num_datums)
+                                                      : SCALE_DATUM_SIZE(pack_dst_format, full_ct_dim * ((num_faces > 1) ? num_faces / 2 : 1) * FACE_C_DIM);
         TT_SETDMAREG(0, LOWER_HALFWORD(output_addr_offset / 16), 0, LO_16(p_gpr_pack::OUTPUT_ADDR_OFFSET)); // store 16B aligned row offset address
     }
 
