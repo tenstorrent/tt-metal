@@ -69,7 +69,11 @@ class MopReplay(Check):
         "is which MOP program is live at a given `run()`: a replay whose record ran on "
         "another path, or not at all, issues whatever words the buffer last held "
         "(KNOWN_GAPS L15), and that is the skill's verdict. The unattributed-word "
-        "hint is deliberately scoped to Src flips, inter-thread sync ops and waits — "
+        "hint reads the extractor's `opcode_value` family, so a word the extractor "
+        "never filed there is not recalled: the NESTED TT_OP_* expansions from inside "
+        "a TTI_* macro body are dropped (they spell at their ckernel_ops.h `#define` "
+        "site, not at a use site), as is anything in an unparsed header. The hint is "
+        "further scoped to Src flips, inter-thread sync ops and waits — "
         "an arithmetic/SFPU opcode value is not recalled here (instruction-latency "
         "widens its own enumeration to `TT_OP_*` instead), so this check is NOT an "
         "enumeration of every MOP-resident instruction."
@@ -186,11 +190,13 @@ class MopReplay(Check):
         """A sync/ordering-relevant `TT_OP_*` word with no resolvable slot.
 
         This is the shape a textual reading misreads as an issued instruction:
-        it may be a constructor-passed loop op, a `static constexpr` consumed
-        elsewhere, or a word captured into a replay buffer.
+        it may be a constructor-passed loop op, a named constant consumed
+        elsewhere, or a word captured into a replay buffer. The extractor files
+        these under their own `opcode_value` family (never `macro`), so no
+        instruction-consuming check can read one as issued at its line.
         """
         out: list[Finding] = []
-        for f in fb.family("macro"):
+        for f in fb.family(registry.OPCODE_VALUE_FAMILY):
             name = f.get("name", "") or ""
             if not registry.is_mop_word(name):
                 continue
