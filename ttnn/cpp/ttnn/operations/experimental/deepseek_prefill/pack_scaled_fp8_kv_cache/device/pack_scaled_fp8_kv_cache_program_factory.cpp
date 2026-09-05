@@ -77,12 +77,17 @@ void PackScaledFp8KvCacheProgramFactory::override_runtime_arguments(
     const PackScaledFp8KvCacheParams&,
     const PackScaledFp8KvCacheInputs& args,
     Tensor& output) {
+    const uint32_t latent_address = args.latent.buffer()->address();
+    const uint32_t scales_address = args.scales.buffer()->address();
+    const uint32_t rope_address = args.rope.buffer()->address();
+    const uint32_t output_address = output.buffer()->address();
+    auto& args_by_core = tt::tt_metal::GetRuntimeArgs(cached.program, cached.shared_variables.kernel_id);
     for (const auto& core : cached.shared_variables.cores) {
-        auto& runtime_args = tt::tt_metal::GetRuntimeArgs(cached.program, cached.shared_variables.kernel_id, core);
-        runtime_args[0] = args.latent.buffer()->address();
-        runtime_args[1] = args.scales.buffer()->address();
-        runtime_args[2] = args.rope.buffer()->address();
-        runtime_args[3] = output.buffer()->address();
+        auto& runtime_args = args_by_core[core.x][core.y];
+        runtime_args[0] = latent_address;
+        runtime_args[1] = scales_address;
+        runtime_args[2] = rope_address;
+        runtime_args[3] = output_address;
     }
 }
 
