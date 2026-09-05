@@ -5,6 +5,7 @@
 #include "rotary_embedding_indexed_device_operation.hpp"
 
 #include <cstdlib>
+#include <array>
 #include <tracy/Tracy.hpp>
 #include <cstdint>
 #include <unordered_map>
@@ -617,7 +618,12 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
 
     auto program = MakeProgramFromSpec(*mesh_device, spec);
     SetProgramRunArgs(program, run_args);
-    return {std::move(program), SharedVariables{}};
+    SharedVariables shared_variables;
+    if (!has_metadata) {
+        constexpr std::array<std::string_view, 1> names{"kv_actual_global"};
+        shared_variables.scalar_update = PreparedCommonRuntimeArgs(program, READER, names);
+    }
+    return {std::move(program), std::move(shared_variables)};
 }
 
 RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::cached_mesh_workload_t
@@ -661,10 +667,6 @@ void RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::override_runtim
             {OUTPUT_PARAM, TensorArgument{output.mesh_tensor()}}};
         if (tensor_args.metadata.has_value()) {
             run_args.tensor_args.emplace(METADATA_PARAM, TensorArgument{tensor_args.metadata->mesh_tensor()});
-        } else {
-            KernelRunArgs reader_run{.kernel = READER};
-            reader_run.common_runtime_arg_values = {{"kv_actual_global", args.kv_actual_global}};
-            run_args.kernel_run_args = {reader_run};
         }
     }
     // create_at changes only the coordinate's compile-time my_sp_coord: every program declares
@@ -678,13 +680,20 @@ void RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::override_runtim
                        return enabled;
                    }()));
 
-        if (tensor_args.metadata.has_value()) {
-            // The metadata reader has no changing named args; its position is read on-device.
-            UpdateTensorArgs(program, run_args.tensor_args, /*skip_validation=*/validated);
-        } else {
-            UpdateProgramRunArgs(program, run_args, /*skip_validation=*/validated);
-        }
+        UpdateTensorArgs(program, run_args.tensor_args, /*skip_validation=*/validated);
         validated = true;
+    }
+    if (!tensor_args.metadata.has_value()) {
+        ZoneNamedN(scalar_zone, "HostProfile::rotary_prepared_scalar_patch", ([] {
+                       static const bool enabled = std::getenv("TT_METAL_HOST_PROFILE_PHASES") != nullptr;
+                       return enabled;
+                   }()));
+        const std::array<uint32_t, 1> values{args.kv_actual_global};
+        // Plans already own the matching coordinate's reader. Iterate them directly rather than
+        // resolving names or looking up the coordinate map for each tensor update.
+        for (const auto& [coordinate_range, shared_variables] : cached_workload.shared_variables) {
+            shared_variables.scalar_update.update(values);
+        }
     }
 }
 

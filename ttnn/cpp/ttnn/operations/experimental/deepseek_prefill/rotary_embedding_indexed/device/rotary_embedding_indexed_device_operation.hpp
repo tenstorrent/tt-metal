@@ -9,6 +9,7 @@
 #include <variant>
 
 #include <tt-metalium/program.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 
 #include "ttnn/device_operation.hpp"
@@ -51,9 +52,10 @@ struct RotaryEmbeddingIndexedDeviceOperation {
 
     // Per-device sharding means each mesh coordinate gets its own program (my_sp_coord is a per-device
     // compile-time arg), so the op builds the mesh workload itself rather than stamping one coord-blind
-    // ProgramSpec. No per-coordinate state is needed on cache hits (override re-derives everything from
-    // attributes/tensor_args), but the mesh-workload adapter requires a shared-variables type.
-    struct SharedVariables {};
+    // ProgramSpec. The scalar path retains a plan bound to each coordinate's reader kernel.
+    struct SharedVariables {
+        tt::tt_metal::experimental::PreparedCommonRuntimeArgs scalar_update;
+    };
 
     struct MeshWorkloadFactory {
         using shared_variables_t = SharedVariables;

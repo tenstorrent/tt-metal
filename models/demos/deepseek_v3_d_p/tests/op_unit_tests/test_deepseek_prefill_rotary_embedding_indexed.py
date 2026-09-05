@@ -365,6 +365,9 @@ def test_rotary_embedding_indexed_metadata_matches_scalar(mesh_device, traced):
         if traced:
             ttnn.synchronize_device(mesh_device)
             trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+            out_scalar = ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(
+                tt_input, cos_tt, sin_tt, trans_tt, kv_actual_global=kv_actual, cluster_axis=sp_axis
+            )
             out_meta = ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(
                 tt_input, cos_tt, sin_tt, trans_tt, kv_actual_global=kv_t, cluster_axis=sp_axis
             )
@@ -376,6 +379,19 @@ def test_rotary_embedding_indexed_metadata_matches_scalar(mesh_device, traced):
                 layout=ttnn.ROW_MAJOR_LAYOUT,
             )
             ttnn.copy_host_to_device_tensor(host_kv, kv_t)
+            # Both paths must perform fresh writes to their captured buffers. Poisoning also
+            # catches a prepared scalar plan that accidentally targets prior dispatch storage.
+            poison = ttnn.from_torch(
+                torch.full_like(torch_input, float("nan")),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    mesh_device, mesh_shape=tuple(mesh_device.shape), dims=input_shard_dims
+                ),
+            )
+            ttnn.copy_host_to_device_tensor(poison, out_scalar)
+            ttnn.copy_host_to_device_tensor(poison, out_meta)
+            ttnn.synchronize_device(mesh_device)
             ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
         ttnn.synchronize_device(mesh_device)
 
