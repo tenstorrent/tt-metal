@@ -407,10 +407,11 @@ void write_socket_configs(
     const auto core_to_core_id = config_buffer_core_to_id(config_buffer, config, socket_endpoint);
     auto grouped_connections = group_socket_connections(config, socket_endpoint);
     auto peer_config_buf_addr = peer_descriptor.config_buffer_address;
-    const SocketSenderSize sender_size(mesh_device->impl().metal_env().get_hal().get_alignment(HalMemType::L1));
-    tt_fabric::FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
+    auto& metal_env = mesh_device->impl().metal_env();
+    const SocketSenderSize sender_size(metal_env.get_hal().get_alignment(HalMemType::L1));
+    tt_fabric::FabricConfig fabric_config = metal_env.get_fabric_config();
     const auto receiver_ids_per_sender = get_receiver_ids_per_sender(config);
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& control_plane = metal_env.get_control_plane();
     const auto& mesh_graph = control_plane.get_mesh_graph();
     const auto& global_bindings = control_plane.get_global_logical_bindings();
 
