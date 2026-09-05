@@ -48,6 +48,8 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_small_b(
     sfpi::vInt r{a - qb};
 
     sfpi::vFloat r_f = sfpi::convert<sfpi::vFloat>(sfpi::abs(r), sfpi::RoundMode::Nearest);
+    v_if(r_f < 0.0f) { r_f = 0x1.0p31f; }
+    v_endif;
     sfpi::vFloat correction_f = r_f * inv_b_f;
     auto correction = sfpi::convert<sfpi::vUInt16>(correction_f, sfpi::RoundMode::Nearest);
     correction_f = sfpi::convert<sfpi::vFloat>(correction, sfpi::RoundMode::Nearest);

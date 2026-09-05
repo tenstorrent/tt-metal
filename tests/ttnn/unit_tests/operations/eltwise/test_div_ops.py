@@ -634,3 +634,39 @@ def test_div_int32_rejects_non_float32_output_dtype(device, expect_error):
 
     with expect_error(RuntimeError, "Incorrect output_dtype value for Integer Division"):
         ttnn.div(input_tensor_a, input_tensor_b, dtype=ttnn.int32)
+
+
+@pytest.mark.parametrize(
+    "b_val",
+    [2097152, 2097153, 239823930, -2097152, -2097153]
+)
+@pytest.mark.parametrize("rounding_mode", ["trunc", "floor"])
+def test_div_int32_edge_cases(device, b_val, rounding_mode):
+    import ttnn
+    import torch
+    
+    a_pt = torch.tensor([-2147483648], dtype=torch.int32)
+    b_pt = torch.tensor([b_val], dtype=torch.int32)
+    
+    a_tt = ttnn.from_torch(a_pt, device=device, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT)
+    b_tt = ttnn.from_torch(b_pt, device=device, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT)
+    
+    res_tt = ttnn.div(a_tt, b_tt, rounding_mode=rounding_mode)
+    res_pt = torch.div(a_pt, b_pt, rounding_mode=rounding_mode).to(torch.int32)
+    
+    res_tt_pt = ttnn.to_torch(res_tt)
+    assert torch.equal(res_tt_pt, res_pt)
+
+@pytest.mark.parametrize("scalar", [2.5, -3.14])
+def test_div_int32_scalar_promotion(device, scalar):
+    import ttnn
+    import torch
+    
+    a_pt = torch.tensor([-2147483648], dtype=torch.int32)
+    a_tt = ttnn.from_torch(a_pt, device=device, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT)
+    
+    res_tt = ttnn.div(a_tt, scalar)
+    res_pt = torch.div(a_pt, scalar)
+    
+    res_tt_pt = ttnn.to_torch(res_tt)
+    assert torch.allclose(res_tt_pt, res_pt, rtol=1e-5, atol=1e-5)

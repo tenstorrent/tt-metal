@@ -542,6 +542,20 @@ inline auto preprocess_inputs(BinaryOpType binary_op_type, Tensor a, Tensor b) {
             Shape repeats(repeat_dim);
             second = ttnn::repeat(second, repeats);
         }
+    } else {
+        const bool is_float_arith = (binary_op_type == operations::binary::BinaryOpType::DIV) ||
+                                    (binary_op_type == operations::binary::BinaryOpType::MUL);
+        if (is_float_arith) {
+            if (is_32bit_int(a_dtype) && std::holds_alternative<float>(rhs)) {
+                const auto target = float_promote_target(DataType::FLOAT32);
+                log_debug(
+                    tt::LogOp,
+                    "Binary: typecasting lhs from integer dtype {} to {} to match floating scalar rhs",
+                    a_dtype,
+                    target);
+                lhs_promoted = ttnn::typecast(lhs, target);
+            }
+        }
     };
 
     repeat_smaller(a, b);

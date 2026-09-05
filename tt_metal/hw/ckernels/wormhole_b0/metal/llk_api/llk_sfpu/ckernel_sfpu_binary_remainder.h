@@ -93,6 +93,8 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(
 
     // Use abs(r) for correction computation
     sfpi::vFloat r_f = sfpi::convert<sfpi::vFloat>(sfpi::abs(r), sfpi::RoundMode::Nearest);
+    v_if(r_f < 0.0f) { r_f = 0x1.0p31f; }
+    v_endif;
 
     // Compute correction: r / b in float32
     sfpi::vFloat correction_f = r_f * inv_b_f;
