@@ -135,47 +135,46 @@ MeshPartitionDeviceOperation::MeshPartition::create_at(
         [&](auto&& factory) -> Program {
             using Factory = std::decay_t<decltype(factory)>;
             auto descriptor = Factory::create_descriptor(slice_attrs, slice_tensor_args, tensor_return_value);
+            // Only MeshPartition opts in to this ABI. Standalone Slice retains its unique
+            // address slot and dynamic scalar patching. Keep slot 0 reserved so every work
+            // split field keeps the exact offset emitted by the underlying Slice factory.
+            const auto use_common_address = [&](uint32_t kernel_idx, tt::tt_metal::Buffer* buffer) {
+                TT_FATAL(kernel_idx < descriptor.kernels.size(), "MeshPartition address kernel is missing");
+                auto& kernel = descriptor.kernels[kernel_idx];
+                TT_FATAL(kernel.common_runtime_args.empty(), "MeshPartition address kernel already has common args");
+                TT_FATAL(
+                    kernel.common_buffer_bindings.empty(), "MeshPartition address kernel already has common bindings");
+                for (const auto& binding : kernel.buffer_bindings) {
+                    TT_FATAL(
+                        binding.arg_idx == 0 && binding.buffer == buffer,
+                        "MeshPartition expected only its operand binding at unique slot 0");
+                }
+                kernel.buffer_bindings.clear();
+                for (auto& [core, args] : kernel.runtime_args) {
+                    args.at(0) = 0;
+                }
+                kernel.defines.emplace_back("MESH_PARTITION_COMMON_ADDRESS", "1");
+                kernel.emplace_common_runtime_args({buffer});
+            };
+            if constexpr (std::is_same_v<Factory, ttnn::prim::SliceTileProgramFactory>) {
+                use_common_address(1, tensor_return_value.buffer());
+            } else if constexpr (std::is_same_v<Factory, ttnn::prim::SliceRmProgramFactory>) {
+                use_common_address(0, tensor_args.input_tensor.buffer());
+                use_common_address(1, tensor_return_value.buffer());
+            }
             return Program{descriptor};
         },
         program_factory);
 
-    // Each coordinate owns a distinct ProgramImpl. The workload key includes tensor specs,
-    // partition attributes and coordinates, so the descriptor's scalar work split is invariant.
-    // All interleaved factories bind addresses at slot 0; tiled readers use common slot 0.
-    // Compress consecutive active cores in each matrix row, without retaining payload pointers.
-    const auto collect_address_runs = [](const tt::tt_metal::KernelRuntimeArgsAccessor& accessor) {
-        std::vector<shared_variables_t::AddressRun> runs;
-        const auto& args = accessor.runtime_args();
-        for (uint32_t x = 0; x < args.size(); ++x) {
-            for (uint32_t y = 0; y < args[x].size();) {
-                if (args[x][y].size() == 0 || args[x][y][0] == 0) {
-                    ++y;
-                    continue;
-                }
-                const uint32_t begin = y++;
-                while (y < args[x].size() && args[x][y].size() != 0 && args[x][y][0] != 0) {
-                    ++y;
-                }
-                runs.push_back({x, begin, y});
-            }
-        }
-        return runs;
-    };
-    const bool tiled = std::holds_alternative<ttnn::prim::SliceTileProgramFactory>(program_factory);
-    const bool rm = std::holds_alternative<ttnn::prim::SliceRmProgramFactory>(program_factory) ||
-                    std::holds_alternative<ttnn::prim::SliceRmStrideProgramFactory>(program_factory);
+    // Each coordinate owns its work split and program. Both addresses are common in the
+    // tiled/RM variants; owning accessors fetch live storage after enqueue/trace retargeting.
+    const bool common_addresses = std::holds_alternative<ttnn::prim::SliceTileProgramFactory>(program_factory) ||
+                                  std::holds_alternative<ttnn::prim::SliceRmProgramFactory>(program_factory);
     std::optional<shared_variables_t::AddressPlan> address_plan;
-    if (tiled || rm) {
+    if (common_addresses) {
         address_plan.emplace(shared_variables_t::AddressPlan{
             .reader = tt::tt_metal::KernelRuntimeArgsAccessor(program, 0),
-            .writer = tt::tt_metal::KernelRuntimeArgsAccessor(program, 1),
-            .reader_runs = {},
-            .writer_runs = {},
-            .common_reader_address = tiled});
-        address_plan->writer_runs = collect_address_runs(address_plan->writer);
-        if (rm) {
-            address_plan->reader_runs = collect_address_runs(address_plan->reader);
-        }
+            .writer = tt::tt_metal::KernelRuntimeArgsAccessor(program, 1)});
     }
     return {
         std::move(program),
@@ -198,24 +197,11 @@ void MeshPartitionDeviceOperation::MeshPartition::override_runtime_arguments(
     for (auto& [range, shared_variables] : cached_workload.shared_variables) {
         if (shared_variables.address_plan) {
             const auto& plan = *shared_variables.address_plan;
-            const auto patch_addresses = [&](const auto& accessor, const auto& runs, uint32_t address) {
-                auto& args = accessor.runtime_args();
-                for (const auto& run : runs) {
-                    auto& row = args.at(run.x);
-                    for (uint32_t y = run.y_begin; y < run.y_end; ++y) {
-                        row.at(y).at(0) = address;
-                    }
-                }
-            };
             ZoneNamedN(mesh_partition_addresses, "HostProfile::mesh_partition_address_plan", profile_phases);
-            patch_addresses(plan.writer, plan.writer_runs, output_address);
-            if (plan.common_reader_address) {
-                plan.reader.common_runtime_args().at(0) = input_address;
-            } else {
-                patch_addresses(plan.reader, plan.reader_runs, input_address);
-            }
+            plan.reader.common_runtime_args().at(0) = input_address;
+            plan.writer.common_runtime_args().at(0) = output_address;
         } else {
-            // CB-bound sharded RM keeps its existing address-only helper.
+            // Keep sharded CB and any future strided factory on the existing helper.
             const SliceOp::tensor_args_t slice_tensor_args{
                 .input = tensor_args.input_tensor,
                 .start_tensor = std::nullopt,

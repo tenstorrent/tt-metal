@@ -49,18 +49,9 @@ struct MeshPartitionDeviceOperation {
         struct shared_variables_t {
             prim::SliceDeviceOperation::program_factory_t slice_program_factory;
             prim::SliceParams slice_attributes;
-            struct AddressRun {
-                uint32_t x;
-                uint32_t y_begin;
-                uint32_t y_end;
-            };
             struct AddressPlan {
                 tt::tt_metal::KernelRuntimeArgsAccessor reader;
                 tt::tt_metal::KernelRuntimeArgsAccessor writer;
-                // Only indices are retained: enqueue/trace can retarget the live argument payloads.
-                std::vector<AddressRun> reader_runs;
-                std::vector<AddressRun> writer_runs;
-                bool common_reader_address;
             };
             std::optional<AddressPlan> address_plan;
         };

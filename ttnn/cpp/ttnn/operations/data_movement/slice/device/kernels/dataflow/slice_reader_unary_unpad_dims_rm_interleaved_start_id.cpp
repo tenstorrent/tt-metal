@@ -11,7 +11,11 @@
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
+#ifdef MESH_PARTITION_COMMON_ADDRESS
+    const uint32_t src_addr = get_common_arg_val<uint32_t>(0);
+#else
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
+#endif
     const uint32_t unpadded_stick_size = get_arg_val<uint32_t>(1);
     const uint32_t stick_size_offset = get_arg_val<uint32_t>(2);
     const uint32_t num_dims = get_arg_val<uint32_t>(3);

@@ -83,6 +83,8 @@ def test_mesh_partition_cached_slice_args(mesh_device):
         # Three/six output tiles or rows exercise a partial active-core run and idle slots.
         (ttnn.TILE_LAYOUT, 2, 0, [1, 1, 32, 96]),
         (ttnn.ROW_MAJOR_LAYOUT, 2, 0, [1, 1, 3, 128]),
+        # Partition starts differ by 130 bytes, exercising the RM reader's W-offset fixup.
+        (ttnn.ROW_MAJOR_LAYOUT, 3, 1, [1, 1, 3, 65]),
     ]
     for case_index, (layout, dim, axis, base_shape) in enumerate(cases):
         group_size = mesh_device.get_num_devices() if axis is None else mesh_device.shape[axis]
@@ -101,6 +103,19 @@ def test_mesh_partition_cached_slice_args(mesh_device):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
             )
+            expected_shards = torch.chunk(host_input, group_size, dim=dim)
+
+            def standalone_slice():
+                ends = list(shape)
+                ends[dim] //= group_size
+                result = ttnn.slice(device_input, starts=[0] * len(shape), ends=ends, steps=[1] * len(shape))
+                for local in ttnn.get_device_tensors(result):
+                    assert torch.equal(ttnn.to_torch(local), expected_shards[0])
+                retained_tensors.append(result)
+
+            # These kernels are shared with Slice, whose unique-address ABI must remain valid
+            # both before and after the MeshPartition-only common-address variant is cached.
+            standalone_slice()
             entries_before = mesh_device.num_program_cache_entries()
             output = ttnn.mesh_partition(device_input, dim=dim, cluster_axis=axis)
             ttnn.synchronize_device(mesh_device)
@@ -116,6 +131,7 @@ def test_mesh_partition_cached_slice_args(mesh_device):
                     assert torch.equal(ttnn.to_torch(local_output), expected_shards[partition])
 
             check(output)
+            standalone_slice()
         trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
         traced_output = ttnn.mesh_partition(device_input, dim=dim, cluster_axis=axis)
         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
