@@ -55,7 +55,7 @@ def _top2_gap(row):
     return float(top2.values[0] - top2.values[1])
 
 
-def _reference_greedy(model, prompt_ids, page_table, kv_shape, max_new, use_decode_step):
+def _reference_greedy(model, prompt_ids, page_table, kv_shape, max_new):
     """Plain greedy decode: the trajectory spec decode must reproduce.
 
     Fresh KV caches + the SAME prefill entry point the spec loop uses (prefill_for_spec, minus the
@@ -83,15 +83,11 @@ def _reference_greedy(model, prompt_ids, page_table, kv_shape, max_new, use_deco
     tokens, gaps = [tok], [_top2_gap(row)]
     pos = T
     while len(tokens) < max_new:
-        if use_decode_step:
-            # The paged single-token decode: the production decode kernels, one token at a time.
-            row, hidden = model.decode_step_paged(tok, pos, page_table)
-        else:
-            # Fallback if decode_step_paged fails: same call as SpeculativeDecoder._seed — one eager
-            # recurrent verify over a single candidate at `pos`. Weaker (shares verify machinery with
-            # the path under test) but the same base forward and always exists. Returns (logits [K, vocab] host float, hidden [1,1,K,dim/tp] device).
-            vlogits, hidden = model.verify_forward([tok], pos, page_table, gdn_recurrent=True)
-            row = vlogits[0]
+        # The paged single-token decode: the production decode kernels, one token at a time. This is
+        # the reference the test exists to compare against, so a failure here fails the test — it is
+        # deliberately NOT caught and replaced by a verify-based stand-in (which would share the
+        # machinery under test).
+        row, hidden = model.decode_step_paged(tok, pos, page_table)
         ttnn.deallocate(hidden)  # the MTP seed hidden; the reference has no drafter to feed
         tok = int(row.argmax())
         tokens.append(tok)
@@ -135,17 +131,8 @@ def test_spec_decode_is_lossless(mesh_device, sampling_mode):
             layer.attention.use_fused_recurrent_decode = True
 
     # --- reference: plain greedy ------------------------------------------------------------- #
-    ref_path = "decode"
-    try:
-        ref, gaps = _reference_greedy(model, prompt_ids, pt, kv_shape, MAX_NEW, use_decode_step=True)
-    except Exception as e:  # decode_step_paged is a debug entry point with no other callers
-        logger.warning(
-            f"[lossless] decode_step_paged reference failed ({type(e).__name__}: {e}) — "
-            "falling back to the eager verify_forward single-token reference"
-        )
-        ref_path = "verify"
-        ref, gaps = _reference_greedy(model, prompt_ids, pt, kv_shape, MAX_NEW, use_decode_step=False)
-    logger.info(f"[lossless] reference ({ref_path}) {len(ref)} tokens: {ref}")
+    ref, gaps = _reference_greedy(model, prompt_ids, pt, kv_shape, MAX_NEW)
+    logger.info(f"[lossless] reference (plain decode) {len(ref)} tokens: {ref}")
     logger.info(f"[lossless] reference text: {tokenizer.decode(ref)!r}")
 
     # --- spec run: same prompt, same fresh state ---------------------------------------------- #
