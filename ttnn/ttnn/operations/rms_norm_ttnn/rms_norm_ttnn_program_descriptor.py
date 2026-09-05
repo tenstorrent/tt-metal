@@ -950,6 +950,106 @@ CB_COMBINE_FLAT_DEPTH = 2
 COMBINE_TREE_F0 = 4
 COMBINE_TREE_MIN_DELETED_FOLD_TILES = 18
 
+# ---------------------------------------------------------------------------------------
+# WHICH NoC CARRIES THE COMBINE (Refinement 1, lever 2) -- ONE pair of constants.
+# ---------------------------------------------------------------------------------------
+# The combine (gather + level-1 forward + stat multicast) lives entirely in the WRITER
+# kernel, and a writer is NOC_1 by Metal's own default (`preferred_noc_for_dram_write`),
+# so the reader's NOC_0 keeps streaming x through pass A while the combine runs.  That
+# trade is only worth paying for WHEN THE READER ACTUALLY HAS AN ACTIVATION STREAM.  It
+# does not on any `native_in` plan: x is a resident L1 shard aliased straight into
+# cb_input_tiles, so the reader reads NOTHING but the (tiny, face-trimmed) per-channel
+# vectors and its NoC sits idle while the combine serialises on the other one.  And
+# `master.md`'s `tensix_all_reduce_ring_transport` measures NOC_1 at 6.07-6.14x slower
+# than NOC_0 for forwarding across a rectangular group that spans grid ROWS -- which is
+# the shape of every WIDTH/BLOCK shard group.
+#
+# So the NoC is chosen PER PLAN, on exactly that predicate, and it is a SWAP of both
+# kernels rather than a one-sided move -- see `_combine_noc_swapped`.
+#
+# MEASURED (blackhole p150b 1350 MHz, in-process profiler, median of 5, two reps;
+# whole-op DEVICE KERNEL DURATION, NOC_1 -> NOC_0):
+#
+#   native_in (x resident)                                   NOC_1     NOC_0
+#     (1,1,32,7168)  WIDTH [32,256] (7,4)   28c   gamma       5768      5698   1.012x
+#     (1,1,32,5120)  WIDTH [32,160] (8,4)   32c   gbr/f32     6615      6553   1.009x
+#     (1,1,32,5120)  WIDTH [32,160] (8,4)   32c   gamma       5042      4968   1.015x
+#     (1,1,32,4800)  WIDTH [32,160] (10,3)  30c   gamma       5072      5049   1.005x
+#     (1,1,32,5120)  WIDTH [32,128] (10,4)  40c   gamma       5123      5039   1.017x
+#     (1,1,32,8192)  WIDTH [32,128] (8,8)   64c   gamma       5870      5500   1.067x
+#     (1,1,8192,1024) BLOCK [1024,128] (8,8) 64c  gamma      24360     23611   1.032x
+#     (1,1,32,1024)  WIDTH [32,128] (8,1)    8c   gamma       3727      3694   1.009x
+#     (1,1,32,2304)  WIDTH [32,256] (9,1)    9c   gamma       4387      4427   0.991x
+#   streamed (x from DRAM through the accessor)
+#     (1,1,32,7168)  INTERLEAVED width split 16c  gamma       9044     13550   0.667x  <--
+#
+# The interleaved row is the whole reason this is a predicate and not a constant: there
+# the reader carries every activation byte, and NOC_1 is the wrong engine for a DRAM READ
+# (`preferred_noc_for_dram_read` is NOC_0 on every arch).  A 1.5x regression on the op's
+# hardest interleaved target is not a trade, it is the gate telling you where it lives.
+COMBINE_NOC_RESIDENT = ttnn.NOC.NOC_0  # x is a resident shard: the reader's NoC is free
+COMBINE_NOC_STREAMED = ttnn.NOC.NOC_1  # the reader streams x from DRAM: leave NOC_0 to it
+
+
+def _combine_noc(native_in: bool):
+    """The NoC the combine runs on -- ONE definition, read by the host wire AND the kernels."""
+    return COMBINE_NOC_RESIDENT if native_in else COMBINE_NOC_STREAMED
+
+
+def _mcast_cfg(native_in: bool, base_sem_id: int = 0):
+    """The combine's McastConfig.
+
+    The `noc` here is not cosmetic: NOC_0 and NOC_1 traverse a rectangle from opposite
+    corners, so the host orders the multicast bounding box differently for each.  It must
+    agree with the writer kernel's own NoC or the broadcast covers the wrong box, which is
+    why both come off `_combine_noc` and nothing else.
+    """
+    return ttnn.McastConfig(noc=_combine_noc(native_in), handshake=True, base_sem_id=base_sem_id)
+
+
+def _combine_noc_swapped(plan) -> bool:
+    """True when this build moves the combine off NOC_1, which SWAPS BOTH kernels' NoCs.
+
+    The two data-movement processors must sit on DIFFERENT NoCs: `DM_DEDICATED_NOC` gives
+    each RISC its own engine, and putting the writer on NOC_0 while the reader is still
+    there is not "sharing", it is two kernels driving one engine's command buffers.
+    MEASURED: writer -> NOC_0 with the reader left on NOC_0 HANGS -- (1,1,32,4800) WIDTH
+    30c timed out with two physical cores never finishing.  So the knob is a SWAP, never a
+    one-sided move: writer RISCV_0 + NOC_0, reader RISCV_1 + NOC_1.  That pairing is
+    Metal's own `RISCV_n_default`, just the mirror of the reader/writer defaults.
+    """
+    return bool(plan.combine) and _combine_noc(plan.native_in) != ttnn.NOC.NOC_1
+
+
+def _writer_dm_config(plan):
+    """The writer kernel's data-movement config.
+
+    Off the swap this is exactly `ttnn.WriterConfigDescriptor()` -- Metal's RISCV_0 +
+    NOC_1 writer default -- so every build the swap does not select stays byte-identical
+    to the seed's.
+    """
+    if not _combine_noc_swapped(plan):
+        return ttnn.WriterConfigDescriptor()
+    return ttnn.DataMovementConfigDescriptor(
+        processor=ttnn.DataMovementProcessor.RISCV_0,
+        noc=_combine_noc(plan.native_in),
+    )
+
+
+def _reader_dm_config(plan):
+    """The reader kernel's data-movement config -- the other half of the NoC swap.
+
+    `ttnn.ReaderConfigDescriptor()` (RISCV_1 + NOC_0) unless the writer took NOC_0, in
+    which case the reader must vacate it; see `_combine_noc_swapped`.
+    """
+    if not _combine_noc_swapped(plan):
+        return ttnn.ReaderConfigDescriptor()
+    return ttnn.DataMovementConfigDescriptor(
+        processor=ttnn.DataMovementProcessor.RISCV_1,
+        noc=ttnn.NOC.NOC_1,
+    )
+
+
 # Smallest number of tile-rows a core must own before the ROW_RESIDENT regime
 # (Lamp L5, D14) is taken at a SHALLOWER CB depth than STREAM would have used.
 #
@@ -1720,7 +1820,7 @@ def _plan_interleaved_width_split(device, input_tensor, output_tensor, Rt, Wt, W
     """
     grid = device.compute_with_storage_grid_size()
     wt_per_core = Wt // gw
-    mc_cfg = ttnn.McastConfig(noc=ttnn.NOC.NOC_1, handshake=True, base_sem_id=0)
+    mc_cfg = _mcast_cfg(native_in=False)  # x streams from DRAM here
     assignment = []
     if gw <= grid.x:
         gh = max(1, min(gh, grid.y))
@@ -1902,7 +2002,7 @@ def _plan_band(device, input_tensor, output_tensor, *, Rt, Wt, W, R_rm):
                 device,
                 bbox_crs,
                 ttnn.CoreCoord(root.x, root.y),
-                ttnn.McastConfig(noc=ttnn.NOC.NOC_1, handshake=True, base_sem_id=0),
+                _mcast_cfg(native_in=False),  # BAND stages x, it does not alias it
                 group_size - 1,
             )
             if group_size > 1
@@ -1937,7 +2037,7 @@ def _plan_band(device, input_tensor, output_tensor, *, Rt, Wt, W, R_rm):
                 shard_grid,
                 ttnn.Mcast1DShape.PerRow,
                 0,
-                ttnn.McastConfig(noc=ttnn.NOC.NOC_1, handshake=True, base_sem_id=0),
+                _mcast_cfg(native_in=False),  # BAND stages x, it does not alias it
             )
             if group_size > 1
             else None
@@ -2072,7 +2172,7 @@ def _plan_placement(device, input_tensor, output_tensor, *, is_tile, Rt, Wt, W, 
                 device,
                 bbox_crs,
                 ttnn.CoreCoord(root.x, root.y),
-                ttnn.McastConfig(noc=ttnn.NOC.NOC_1, handshake=True, base_sem_id=0),
+                _mcast_cfg(native_in=True),  # x is the resident shard
                 group_size - 1,
             )
             if group_size > 1
@@ -2112,7 +2212,7 @@ def _plan_placement(device, input_tensor, output_tensor, *, is_tile, Rt, Wt, W, 
                 shard_grid,
                 ttnn.Mcast1DShape.PerRow,
                 0,
-                ttnn.McastConfig(noc=ttnn.NOC.NOC_1, handshake=True, base_sem_id=0),
+                _mcast_cfg(native_in=True),  # x is the resident shard
             )
             if group_size > 1
             else None
@@ -2942,14 +3042,14 @@ def create_program_descriptor(
         core_ranges=all_cores,
         compile_time_args=reader_ct_args,
         runtime_args=reader_rt,
-        config=ttnn.ReaderConfigDescriptor(),  # reads on NoC0
+        config=_reader_dm_config(plan),  # NoC0, or NoC1 when the combine swaps
     )
     writer_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "rms_norm_ttnn_writer.cpp"),
         core_ranges=all_cores,
         compile_time_args=writer_ct_args,
         runtime_args=writer_rt,
-        config=ttnn.WriterConfigDescriptor(),  # writes on NoC1
+        config=_writer_dm_config(plan),  # NoC1, or NoC0 on a resident-x combine
     )
     compute_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "rms_norm_ttnn_compute.cpp"),
