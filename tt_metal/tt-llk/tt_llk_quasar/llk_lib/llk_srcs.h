@@ -82,7 +82,7 @@ inline void _llk_pack_srcs_(
 
     for (std::uint32_t i = 0; i < INSTRN_COUNT; i++)
     {
-        TT_PACR1_TILE_INC(0b1 /*DstS l1 increment*/, 0b0 /*SrcS l1 increment*/, buf_desc_id, 0b1 /*Set dvalid*/);
+        TT_PACR1_TILE_INC(0b1 /*DstS l1 increment*/, 0b0 /*SrcS l1 increment*/, buf_desc_id, 0b1 /*ClrDatValid*/);
     }
 }
 
