@@ -1,0 +1,303 @@
+name: "Verify Issue"
+
+# Empirically checks a bug report before anyone attaches a bounty to it.
+#
+# Reports in this repo are increasingly machine-generated and often ship a table
+# of "expected" values that were never produced by the reference they name. This
+# workflow re-executes the reference, and where needed the op itself, and writes
+# what it measured to the job summary. It posts nothing to the issue.
+#
+# Trigger: `/verify` (or `/check`) as an issue comment from an org member, or a
+# manual dispatch with the issue number.
+
+on:
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: "Issue number to verify"
+        required: true
+        type: string
+
+  # ---------------------------------------------------------------------------
+  # TEMPORARY — DELETE THIS TRIGGER BEFORE MERGING.
+  #
+  # `issue_comment` and `workflow_dispatch` only ever fire from the default
+  # branch, so neither can exercise this workflow while it is still on a branch.
+  # Pushing is the only way to see it run before it lands. Scoped to this
+  # branch and to the verifier's own files so unrelated pushes cost nothing.
+  # ---------------------------------------------------------------------------
+  push:
+    branches:
+      - aswin/issue-verifier-pilot
+    paths:
+      - ".github/issue_verifier/**"
+      - ".github/workflows/verify-issue.yaml"
+
+permissions: {}
+
+concurrency:
+  group: verify-issue-${{ github.event.issue.number || inputs.issue || github.ref }}
+  cancel-in-progress: true
+
+env:
+  VERIFIER: .github/issue_verifier/run_issue_verifier.py
+  # TEMPORARY (see the push trigger): the issue a push-triggered run verifies.
+  # #54055 is the report this workflow was built from — its "golden" column was
+  # never produced by the golden, so a healthy run must return CLAIM_UNSOUND.
+  PILOT_ISSUE: "54055"
+
+jobs:
+  authorize:
+    # Cheap textual gate first so ordinary issue chatter never starts a runner.
+    if: >-
+      github.event_name == 'push' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.issue.pull_request == null &&
+       (startsWith(github.event.comment.body, '/verify') ||
+        startsWith(github.event.comment.body, '/check')))
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write # solely to acknowledge the trigger with a reaction
+    outputs:
+      issue: ${{ steps.resolve.outputs.issue }}
+      authorized: ${{ steps.member.outputs.authorized }}
+    steps:
+      - name: Resolve and validate the issue number
+        id: resolve
+        env:
+          RAW: >-
+            ${{ github.event_name == 'push' && env.PILOT_ISSUE
+             || github.event_name == 'workflow_dispatch' && inputs.issue
+             || github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          # Everything downstream treats this as trusted, so it must be digits
+          # and nothing else — it is the only event-derived value that reaches a
+          # command line.
+          if ! [[ "$RAW" =~ ^[0-9]+$ ]]; then
+            echo "::error::Issue number must be numeric, got: $RAW"
+            exit 1
+          fi
+          echo "issue=$RAW" >> "$GITHUB_OUTPUT"
+
+      - name: Require an org member
+        id: member
+        env:
+          GITHUB_ORG: tenstorrent
+          ORG_READ_GITHUB_TOKEN: ${{ secrets.ORG_READ_GITHUB_TOKEN }}
+          ACTOR: ${{ github.event_name == 'workflow_dispatch' && github.actor || github.event.comment.user.login }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          # TEMPORARY (see the push trigger): pushing to a branch of this repo
+          # already requires write access, so there is no separate actor to vet.
+          if [ "$EVENT" = "push" ]; then
+            echo "authorized=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Verification burns device time and an LLM budget, so the trigger is
+          # restricted. A community reporter cannot self-serve a run on their
+          # own report.
+          status=$(curl -o /dev/null -s -w '%{http_code}' \
+            -H "Authorization: Bearer $ORG_READ_GITHUB_TOKEN" \
+            "https://api.github.com/orgs/${GITHUB_ORG}/members/${ACTOR}")
+          if [ "$status" -eq 204 ]; then
+            echo "authorized=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::${ACTOR} is not a ${GITHUB_ORG} member; skipping."
+            echo "authorized=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Acknowledge the trigger
+        if: github.event_name == 'issue_comment' && steps.member.outputs.authorized == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+        run: |
+          gh api -X POST "repos/${{ github.repository }}/issues/comments/${COMMENT_ID}/reactions" \
+            -f content=eyes --silent || true
+
+  plan:
+    needs: authorize
+    if: needs.authorize.outputs.authorized == 'true'
+    # Self-hosted, not ubuntu-latest: the Anthropic organization IP-allowlists,
+    # and a GitHub-hosted runner's egress address is rejected with
+    # "403 Access Denied: Your IP address is not in the allowed range".
+    # Every job that opens an agent session must stay inside the network.
+    runs-on: ["tt-ubuntu-2204-medium-stable"]
+    permissions:
+      contents: read
+      issues: read
+    outputs:
+      sku: ${{ steps.plan.outputs.sku }}
+      runs_on: ${{ steps.plan.outputs.runs_on }}
+      verifiable: ${{ steps.plan.outputs.verifiable }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Gate B walks history on the files the report blames
+
+      # TEMPORARY — DELETE WITH THE PUSH TRIGGER.
+      # This pool sits behind an egress proxy that 403s at least astral.sh, and
+      # the Anthropic org IP-allowlists so GitHub-hosted pools are not an
+      # option either. Enumerate what is actually reachable once, rather than
+      # discovering it one failed run at a time.
+      - name: Probe egress reachability
+        continue-on-error: true
+        run: |
+          set +e
+          echo "HTTP_PROXY=${HTTP_PROXY:-<unset>}  HTTPS_PROXY=${HTTPS_PROXY:-<unset>}"
+          echo "NO_PROXY=${NO_PROXY:-<unset>}"
+          echo "tooling present: node=$(command -v node || echo no) npm=$(command -v npm || echo no)" \
+               "uv=$(command -v uv || echo no) pip3=$(command -v pip3 || echo no)"
+          printf '%-40s %s\n' HOST STATUS
+          for url in \
+            https://pypi.org/simple/ \
+            https://files.pythonhosted.org/ \
+            https://registry.npmjs.org/ \
+            https://astral.sh/uv/install.sh \
+            https://claude.ai/install.sh \
+            https://api.anthropic.com/v1/models \
+            https://github.com/ ; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$url")
+            printf '%-40s %s\n' "$(echo "$url" | cut -d/ -f3)" "$code"
+          done
+          exit 0
+
+      # uv rather than `python3 -m venv`: this pool's image ships no
+      # python3-venv, so the stdlib path fails on the missing ensurepip. uv
+      # bootstraps its own and needs no root. actions/setup-python is avoided
+      # too — the tool cache on a self-hosted pool is not guaranteed writable.
+      - name: Install verifier dependencies
+        run: |
+          set -euo pipefail
+          command -v uv >/dev/null 2>&1 || curl -LsSf https://astral.sh/uv/install.sh | sh
+          export PATH="$HOME/.local/bin:$PATH"
+          uv venv .verifier-venv
+          uv pip install --python .verifier-venv/bin/python \
+            -r .github/issue_verifier/requirements-issue-verifier.txt
+          # Native binary install: the tt-metal container has no Node, and the
+          # device path below reuses this same command.
+          curl -fsSL https://claude.ai/install.sh | bash
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Extract the claim and choose a runner pool
+        id: plan
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.BUG_CHECKER_API_KEY || secrets.ANTHROPIC_API_KEY }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE: ${{ needs.authorize.outputs.issue }}
+        run: .verifier-venv/bin/python "$VERIFIER" --stage plan --issue "$ISSUE" --outdir out --verbose
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: issue-verifier-plan
+          path: out/
+
+  build:
+    # Only pay for a build when the plan actually asked for silicon.
+    needs: plan
+    if: needs.plan.outputs.verifiable == 'true' && needs.plan.outputs.sku != 'cpu_medium'
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      contents: read
+      packages: write
+    with:
+      build-wheel: true
+    secrets: inherit
+
+  probe:
+    needs: [authorize, plan, build]
+    if: >-
+      always() && needs.plan.outputs.verifiable == 'true' &&
+      (needs.build.result == 'success' || needs.build.result == 'skipped')
+    runs-on: ${{ fromJSON(needs.plan.outputs.runs_on) }}
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: issue-verifier-plan
+          path: out/
+
+      - name: Fetch the built wheel
+        if: needs.plan.outputs.sku != 'cpu_medium'
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build.outputs.wheel-artifact-name }}
+
+      # Host-only path: no device, no container. Enough to settle any report
+      # whose expected values can be checked against the reference directly.
+      - name: Run the experiment (host)
+        if: needs.plan.outputs.sku == 'cpu_medium'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.BUG_CHECKER_API_KEY || secrets.ANTHROPIC_API_KEY }}
+          # Suppress the tool's own summary write so both paths publish through
+          # the single step below. The container cannot reach the real summary
+          # file anyway (docker-run mounts only the workspace), and one code
+          # path for the only output this workflow produces is worth the line.
+          GITHUB_STEP_SUMMARY: ""
+        run: |
+          set -euo pipefail
+          command -v uv >/dev/null 2>&1 || curl -LsSf https://astral.sh/uv/install.sh | sh
+          export PATH="$HOME/.local/bin:$PATH"
+          uv venv .verifier-venv
+          uv pip install --python .verifier-venv/bin/python \
+            -r .github/issue_verifier/requirements-issue-verifier.txt
+          uv pip install --python .verifier-venv/bin/python torch \
+            --index-url https://download.pytorch.org/whl/cpu
+          curl -fsSL https://claude.ai/install.sh | bash
+          # The probe shells out to `python3`; put the venv first so its scripts
+          # can import torch.
+          export PATH="$PWD/.verifier-venv/bin:$PATH"
+          .verifier-venv/bin/python "$VERIFIER" --stage probe --outdir out --verbose
+
+      # Device path: the standard tt-metal container with the freshly built
+      # wheel, so `import ttnn` works and /dev/tenstorrent is visible.
+      # run_args is fixed text here; the only event-derived value in this job is
+      # the already-validated issue number, and it is not interpolated.
+      - name: Run the experiment (device)
+        if: needs.plan.outputs.sku != 'cpu_medium'
+        uses: ./.github/actions/docker-run
+        with:
+          docker_username: ${{ github.actor }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          install_wheel: true
+          forward_civ2_proxy_env_vars: true
+          docker_opts: |
+            -e ANTHROPIC_API_KEY=${{ secrets.BUG_CHECKER_API_KEY || secrets.ANTHROPIC_API_KEY }}
+            -e ARCH_NAME=${{ needs.plan.outputs.sku == 'bh_p150b_civ2_viommu' && 'blackhole' || 'wormhole_b0' }}
+          run_args: |
+            set -euo pipefail
+            pip install -r .github/issue_verifier/requirements-issue-verifier.txt
+            curl -fsSL https://claude.ai/install.sh | bash
+            export PATH="$HOME/.local/bin:$PATH"
+            python .github/issue_verifier/run_issue_verifier.py --stage probe --outdir out --verbose
+
+      # The only thing this workflow publishes. Runs even when the probe failed,
+      # so a partial report still reaches the reader instead of an empty page.
+      - name: Publish the report to the job summary
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ -s out/report.md ]; then
+            cat out/report.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "## Verification produced no report" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "The probe stage did not write \`out/report.md\`. See the step logs and the" \
+                 "\`issue-verifier-result\` artifact." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: issue-verifier-result
+          path: out/
