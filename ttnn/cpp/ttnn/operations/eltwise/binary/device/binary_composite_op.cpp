@@ -573,20 +573,37 @@ Tensor remainder(
         !operation_sub_device_id.has_value() && post_activations.empty() && lhs_activations.empty() &&
         rhs_activations.empty()) {
         // Native floating inputs already support mixed floating-point outputs in
-        // unary_remainder; only promoted INT32 inputs need the separate typecast.
+        // unary_remainder; preserve their existing packing behavior.
         if (input.dtype() != DataType::INT32 || !output_tensor.has_value() ||
             output_tensor->dtype() == operation_input.dtype()) {
             return ttnn::unary_remainder(
                 operation_input, scalar, output_mem_config, output_tensor, operation_sub_core_grids);
         }
 
-        // The intermediate inherits the input layout and the requested output's sharding.
-        // Validate its typecast before allocating or running the unary operation.
+        // Preserve the supported layout/grid combinations for output conversion,
+        // whether fused below or performed on a separate FP32 intermediate.
         validate_scalar_typecast(
             operation_input.layout(),
             output_tensor->is_sharded(),
             operation_sub_core_grids,
             "Remainder output typecast");
+
+        // Fuse BF16 conversion to avoid a separate pass, but retain TYPECAST's
+        // explicit rounding: direct unary packing is not bit-equivalent.
+        // Leave integer outputs and BFLOAT8_B's precise packing path unchanged.
+        if (output_tensor->dtype() == DataType::BFLOAT16) {
+            return unary::detail::unary_impl(
+                operation_input,
+                {unary::EltwiseUnaryWithParam{unary::UnaryOpType::REMAINDER, std::get<float>(scalar)},
+                 unary::EltwiseUnaryWithParam{
+                     unary::UnaryOpType::TYPECAST,
+                     {static_cast<float>(DataType::FLOAT32), static_cast<float>(DataType::BFLOAT16)}}},
+                output_mem_config,
+                output_tensor,
+                operation_sub_core_grids);
+        }
+
+        // The intermediate inherits the input layout and the requested output's sharding.
         const Tensor operation_output = ttnn::unary_remainder(
             operation_input, scalar, output_tensor->memory_config(), std::nullopt, operation_sub_core_grids);
         return ttnn::typecast(

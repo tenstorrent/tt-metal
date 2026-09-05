@@ -71,7 +71,7 @@ sfpi_inline void calculate_div_int32_body(
     // a positive sign-magnitude integer. Dropping the low bit can change the
     // approximate correction by at most one, which the final adjustment handles.
     sfpi::vFloat r_f = sfpi::convert<sfpi::vFloat>(sfpi::abs(r) >> 1, sfpi::RoundMode::Nearest);
-    r_f = sfpi::addexp(r_f, 1);
+    r_f = sfpi::addexp(r_f, 1 /* delta */);
 
     // Compute correction value in float32.
     sfpi::vFloat correction_f = r_f * inv_b_f;

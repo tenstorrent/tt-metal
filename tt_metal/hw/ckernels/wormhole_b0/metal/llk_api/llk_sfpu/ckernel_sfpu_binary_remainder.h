@@ -75,12 +75,13 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(
     // Split q and b into 11-bit chunks to compute q * b
     // Shift out unwanted bits to avoid a mask register in this register-constrained helper.
     // Division and the small-divisor helper retain masks where they do not cause spills.
-    constexpr uint32_t CHUNK_BITS = 11;
-    constexpr uint32_t LOW_CHUNK_SHIFT = 32 - CHUNK_BITS;
-    constexpr uint32_t MID_CHUNK_SHIFT = 32 - 2 * CHUNK_BITS;
+    constexpr unsigned CHUNK_BITS = 11;
+    constexpr unsigned HIGH_CHUNK_SHIFT = 2 * CHUNK_BITS;
+    constexpr unsigned LOW_CHUNK_SHIFT = 32 - CHUNK_BITS;
+    constexpr unsigned MID_CHUNK_SHIFT = 32 - HIGH_CHUNK_SHIFT;
     sfpi::vFloat q1 =
         sfpi::convert<sfpi::vFloat>(sfpi::vMag((q << LOW_CHUNK_SHIFT) >> LOW_CHUNK_SHIFT), sfpi::RoundMode::Nearest);
-    sfpi::vFloat q2 = sfpi::convert<sfpi::vFloat>(q >> 11, sfpi::RoundMode::Nearest);
+    sfpi::vFloat q2 = sfpi::convert<sfpi::vFloat>(q >> CHUNK_BITS, sfpi::RoundMode::Nearest);
     sfpi::vFloat b1 =
         sfpi::convert<sfpi::vFloat>(sfpi::vMag((b << MID_CHUNK_SHIFT) >> LOW_CHUNK_SHIFT), sfpi::RoundMode::Nearest);
     sfpi::vFloat b0 =
@@ -95,8 +96,8 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(
     lo += MANTISSA_ALIGNMENT_OFFSET;
     hi = q1 * b1 + hi;
 
-    sfpi::vUInt qb = sfpi::exman(lo) << 11;
-    qb += sfpi::exman(hi) << 22;
+    sfpi::vUInt qb = sfpi::exman(lo) << CHUNK_BITS;
+    qb += sfpi::exman(hi) << HIGH_CHUNK_SHIFT;
 
     // Compute remainder from the retained numerator magnitude.
     sfpi::vInt r{a - qb};
@@ -115,7 +116,7 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(
     // Compute correction: r / b in float32
     sfpi::vFloat correction_f = r_f * inv_b_f;
     // Fill the multiply's dependency slot with the independent high divisor chunk.
-    sfpi::vFloat b2 = sfpi::convert<sfpi::vFloat>(b >> 22, sfpi::RoundMode::Nearest);
+    sfpi::vFloat b2 = sfpi::convert<sfpi::vFloat>(b >> HIGH_CHUNK_SHIFT, sfpi::RoundMode::Nearest);
     auto correction = sfpi::convert<sfpi::vUInt16>(correction_f, sfpi::RoundMode::Nearest);
     correction_f = sfpi::convert<sfpi::vFloat>(correction, sfpi::RoundMode::Nearest);
 
@@ -132,7 +133,7 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(
     mid += MANTISSA_ALIGNMENT_OFFSET;
     top += MANTISSA_ALIGNMENT_OFFSET;
 
-    sfpi::vInt tmp{sfpi::exman(low) + (sfpi::exman(mid) << 11) + (sfpi::exman(top) << 22)};
+    sfpi::vInt tmp{sfpi::exman(low) + (sfpi::exman(mid) << CHUNK_BITS) + (sfpi::exman(top) << HIGH_CHUNK_SHIFT)};
     // When q is zero, qb is also zero, so r=INT_MIN is the positive magnitude
     // 2**31. A negative residual with nonzero q instead needs a negative correction.
     if constexpr (numerator_can_be_int_min) {

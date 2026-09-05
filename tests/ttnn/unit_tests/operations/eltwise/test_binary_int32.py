@@ -1526,8 +1526,46 @@ def test_binary_remainder_int32_float_scalar_optional_int32_output(layout, use_s
     assert_equal(expected, ttnn.to_torch(output_tensor))
 
 
+@pytest.mark.parametrize(
+    "layout,use_sub_core_grids",
+    [
+        pytest.param(ttnn.TILE_LAYOUT, False, id="tile"),
+        pytest.param(ttnn.TILE_LAYOUT, True, id="tile_subgrid"),
+        pytest.param(ttnn.ROW_MAJOR_LAYOUT, False, id="row_major"),
+    ],
+)
+@pytest.mark.parametrize("scalar", [257.25, -257.25])
+def test_binary_remainder_int32_float_scalar_optional_bfloat16_output(layout, use_sub_core_grids, scalar, device):
+    torch_input = torch.arange(-512, 512, dtype=torch.int32).reshape(32, 32)
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.int32, layout=layout, device=device)
+    output_tensor = ttnn.from_torch(
+        torch.zeros_like(torch_input, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=layout, device=device
+    )
+    sub_core_grids = None
+    if use_sub_core_grids:
+        sub_core_grids = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+
+    # Fused BF16 conversion must match the previous FP32 intermediate + typecast
+    # path, including rounding of fractional remainders beyond BF16 precision.
+    promoted_input = ttnn.typecast(input_tensor, ttnn.float32, sub_core_grids=sub_core_grids)
+    intermediate = ttnn.remainder(promoted_input, scalar, sub_core_grids=sub_core_grids)
+    reference = ttnn.typecast(intermediate, ttnn.bfloat16, sub_core_grids=sub_core_grids)
+    result = ttnn.remainder(input_tensor, scalar, output_tensor=output_tensor, sub_core_grids=sub_core_grids)
+
+    assert result.buffer_address() == output_tensor.buffer_address()
+    assert result.dtype == ttnn.bfloat16
+    actual = ttnn.to_torch(result)
+    assert_equal(ttnn.to_torch(reference), actual)
+    assert_equal(torch.remainder(torch_input, scalar).to(torch.bfloat16), actual)
+
+
 @pytest.mark.parametrize("input_is_sharded", [False, True])
-def test_binary_remainder_int32_float_scalar_optional_output_sharding(input_is_sharded, device):
+@pytest.mark.parametrize(
+    "output_dtype,torch_output_dtype", [(ttnn.int32, torch.int32), (ttnn.bfloat16, torch.bfloat16)]
+)
+def test_binary_remainder_int32_float_scalar_optional_output_sharding(
+    input_is_sharded, output_dtype, torch_output_dtype, device
+):
     torch_input_tensor = torch.arange(-512, 512, dtype=torch.int32).reshape(1, 1, 32, 32)
     sharded_memory_config = ttnn.create_sharded_memory_config(
         shape=(32, 32),
@@ -1545,7 +1583,7 @@ def test_binary_remainder_int32_float_scalar_optional_output_sharding(input_is_s
     )
     output_tensor = ttnn.from_torch(
         torch.zeros_like(torch_input_tensor),
-        dtype=ttnn.int32,
+        dtype=output_dtype,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -1556,7 +1594,7 @@ def test_binary_remainder_int32_float_scalar_optional_output_sharding(input_is_s
         output_tensor = ttnn.to_memory_config(output_tensor, sharded_memory_config)
 
     scalar = 1.5
-    expected = torch.remainder(torch_input_tensor, scalar).to(torch.int32)
+    expected = torch.remainder(torch_input_tensor, scalar).to(torch_output_dtype)
     ttnn.remainder(input_tensor, scalar, output_tensor=output_tensor)
 
     assert input_tensor.is_sharded() != output_tensor.is_sharded()
