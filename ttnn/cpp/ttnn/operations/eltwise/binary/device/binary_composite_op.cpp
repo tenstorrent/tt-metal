@@ -54,6 +54,17 @@ void validate_scalar_typecast(
         context);
 }
 
+std::pair<Tensor, std::optional<CoreRangeSet>> promote_int32_scalar_input(
+    const Tensor& input,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    auto operation_sub_core_grids = resolve_sub_device_workers(input, sub_core_grids, sub_device_id);
+    validate_scalar_typecast(input.layout(), input.is_sharded(), operation_sub_core_grids, "INT32 scalar promotion");
+    auto operation_input =
+        ttnn::typecast(input, DataType::FLOAT32, std::nullopt, std::nullopt, operation_sub_core_grids);
+    return {std::move(operation_input), std::move(operation_sub_core_grids)};
+}
+
 }  // namespace
 
 // nextafter
@@ -549,12 +560,11 @@ Tensor remainder(
     auto operation_sub_core_grids = sub_core_grids;
     auto operation_sub_device_id = sub_device_id;
     if (input.dtype() == DataType::INT32 && std::holds_alternative<float>(scalar)) {
-        operation_sub_core_grids = resolve_sub_device_workers(input, sub_core_grids, sub_device_id);
+        auto [promoted_input, promoted_sub_core_grids] =
+            promote_int32_scalar_input(input, sub_core_grids, sub_device_id);
+        operation_input = std::move(promoted_input);
+        operation_sub_core_grids = std::move(promoted_sub_core_grids);
         operation_sub_device_id = std::nullopt;
-        validate_scalar_typecast(
-            input.layout(), input.is_sharded(), operation_sub_core_grids, "INT32 scalar promotion");
-        operation_input =
-            ttnn::typecast(input, DataType::FLOAT32, std::nullopt, std::nullopt, operation_sub_core_grids);
     }
 
     // The unary SFPU fast path does not support INT32. Float scalars promote INT32 inputs
@@ -626,11 +636,8 @@ Tensor fmod(
     const std::optional<CoreRangeSet>& sub_core_grids,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     if (input.dtype() == DataType::INT32 && std::holds_alternative<float>(scalar)) {
-        const auto operation_sub_core_grids = resolve_sub_device_workers(input, sub_core_grids, sub_device_id);
-        validate_scalar_typecast(
-            input.layout(), input.is_sharded(), operation_sub_core_grids, "INT32 scalar promotion");
-        const Tensor operation_input =
-            ttnn::typecast(input, DataType::FLOAT32, std::nullopt, std::nullopt, operation_sub_core_grids);
+        const auto [operation_input, operation_sub_core_grids] =
+            promote_int32_scalar_input(input, sub_core_grids, sub_device_id);
         const float scalar_f = std::get<float>(scalar);
         return ttnn::unary_fmod(operation_input, scalar_f, output_mem_config, std::nullopt, operation_sub_core_grids);
     }
