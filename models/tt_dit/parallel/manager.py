@@ -116,8 +116,13 @@ class CCLManager:
             1: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(sr_n_sems)],
         }
 
-        # broadcast_ring semaphores: recv + cred_fwd + cred_bwd per set, 2 sets for ping pong
-        bcast_n_sems = 3 * 2
+        # broadcast_ring semaphores: recv + cred_fwd + cred_bwd per set. 4 sets, not 2: the reference-frame
+        # call site issues one broadcast per owner and the frame spans two owners, so the shared rotation
+        # pins each owner to a fixed set every call. With 2 sets a set is reset at a call's exit and reused
+        # by that same owner's next call one op later -- under trace the exit reset can race the reuse. 4
+        # sets keep each owner alternating between two sets, so a set stays idle several ops before reuse.
+        self.bcast_n_sets = 4
+        bcast_n_sems = 3 * self.bcast_n_sets
         self.bcast_ping_pong_semaphores = {
             0: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(bcast_n_sems)],
             1: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(bcast_n_sems)],
@@ -309,7 +314,7 @@ class CCLManager:
         semaphore would be baked and shared across every replayed call. Mirrors get_rs_ping_pong_semaphore."""
         cur_idx = self.bcast_ping_pong_idx[mesh_axis]
         n_sems = 3
-        self.bcast_ping_pong_idx[mesh_axis] = (cur_idx + 1) % 2
+        self.bcast_ping_pong_idx[mesh_axis] = (cur_idx + 1) % self.bcast_n_sets
         return self.bcast_ping_pong_semaphores[mesh_axis][cur_idx * n_sems : (cur_idx + 1) * n_sems]
 
     def get_rs_ping_pong_semaphore(self, mesh_axis):
