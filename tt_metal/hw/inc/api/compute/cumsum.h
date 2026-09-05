@@ -33,13 +33,7 @@ namespace ckernel {
 ALWI void cumsum_tile(uint32_t idst, bool first = true) {
     // There is only non APPROXIMATE implementation; cumsum can only work in RC_custom mode.
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_cumsum,
-        (false /* APPROXIMATE */),
-        idst,
-        VectorMode::RC_custom,
-        first));
+        DST_SYNC_MODE, calculate_cumsum, (false /* APPROXIMATE */), idst, VectorMode::RC_custom, first));
 }
 
 /**

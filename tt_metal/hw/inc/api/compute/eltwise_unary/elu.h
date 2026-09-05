@@ -32,12 +32,11 @@ namespace ckernel {
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void elu_tile(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_elu, (APPROX, is_fp32_dest_acc_en), idst, VectorMode::RC, param0));
+    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, calculate_elu, (APPROX, is_fp32_dest_acc_en), idst, VectorMode::RC, param0));
 }
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void elu_tile_init() { MATH(SFPU_UNARY_INIT(elu)); }
+ALWI void elu_tile_init() { MATH(SFPU_UNARY_INIT(elu, DST_ACCUM_MODE)); }
 #endif
 }  // namespace ckernel

@@ -32,7 +32,7 @@ namespace ckernel::sfpu {
  *   dst_reg[prev_max_base_idx]   = exp((prev_max - cur_max) * scale) * recip(cur_sum)
  *   dst_reg[worker_max_base_idx] = exp((worker_max - cur_max) * scale) * recip(cur_sum)
  */
-template <bool SDPA_EXP_APPROX_MODE, bool final_norm = false>
+template <bool SDPA_EXP_APPROX_MODE, bool final_norm, bool is_fp32_dest_acc_en>
 inline void calculate_fused_max_sub_exp_add_tile(int scale_bf16) {
     static_assert(!(final_norm && SDPA_EXP_APPROX_MODE), "Approx mode must be disabled when final_norm is true");
 
@@ -61,11 +61,9 @@ inline void calculate_fused_max_sub_exp_add_tile(int scale_bf16) {
         sfpi::vFloat diff_worker = worker_max_vec - cur_max;
 
         sfpi::vFloat exp_prev =
-            ckernel::sfpu::_ckernel_sfpu_exp_accurate_<true /*SCALE_EN*/, DST_ACCUM_MODE /*is_fp32_dest_acc_en*/>(
-                diff_prev, scale_bf16);
+            ckernel::sfpu::_ckernel_sfpu_exp_accurate_<true /*SCALE_EN*/, is_fp32_dest_acc_en>(diff_prev, scale_bf16);
         sfpi::vFloat exp_worker =
-            ckernel::sfpu::_ckernel_sfpu_exp_accurate_<true /*SCALE_EN*/, DST_ACCUM_MODE /*is_fp32_dest_acc_en*/>(
-                diff_worker, scale_bf16);
+            ckernel::sfpu::_ckernel_sfpu_exp_accurate_<true /*SCALE_EN*/, is_fp32_dest_acc_en>(diff_worker, scale_bf16);
 
         if constexpr (!final_norm) {
             sfpi::dst_reg[cur_sum_base_idx] = exp_worker * worker_sum_vec + exp_prev * prev_sum_vec;

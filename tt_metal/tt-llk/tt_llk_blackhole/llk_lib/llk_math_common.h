@@ -28,7 +28,7 @@ using namespace ckernel::math;
  *       interpret data it loads from DEST. For SFPU work, ensure that format's exponent family (BF16 vs FP16) matches
  *       the data in DEST (tt-llk #951).
  */
-template <bool is_fp32_dest_acc_en = false>
+template <bool is_fp32_dest_acc_en>
 inline void _llk_math_hw_configure_(const std::uint32_t srca_data_format, const std::uint32_t srcb_data_format)
 {
     // LLK sanitizer hooks

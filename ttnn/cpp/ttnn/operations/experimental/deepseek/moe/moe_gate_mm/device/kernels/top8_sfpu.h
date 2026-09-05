@@ -617,7 +617,7 @@ inline void _llk_math_top8_tile_init_() {
 
 inline void _llk_math_top8_tile_(uint32_t tile_index, uint32_t dst_index) {
     SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(
-        DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_top8_tile_, dst_index, VectorMode::RC_custom, tile_index);
+        DST_SYNC_MODE, _calculate_top8_tile_, dst_index, VectorMode::RC_custom, tile_index);
 }
 
 #endif

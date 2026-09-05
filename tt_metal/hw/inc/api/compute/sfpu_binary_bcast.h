@@ -79,7 +79,6 @@ template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sfpu_sub_bcast_col(uint32_t dst_data_idx, uint32_t dst_col_vec_idx) {
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
         _calculate_sfpu_binary_bcast_full_tile_,
         (ckernel::BinaryOp::SUB, ckernel::BroadcastType::COL),
         dst_data_idx,
@@ -92,7 +91,6 @@ template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sfpu_add_bcast_col(uint32_t dst_data_idx, uint32_t dst_col_vec_idx) {
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
         _calculate_sfpu_binary_bcast_full_tile_,
         (ckernel::BinaryOp::ADD, ckernel::BroadcastType::COL),
         dst_data_idx,
@@ -105,7 +103,6 @@ template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sfpu_mul_bcast_col(uint32_t dst_data_idx, uint32_t dst_col_vec_idx) {
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
         _calculate_sfpu_binary_bcast_full_tile_,
         (ckernel::BinaryOp::MUL, ckernel::BroadcastType::COL),
         dst_data_idx,
@@ -170,7 +167,6 @@ template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sfpu_sub_bcast_row(uint32_t dst_data_idx, uint32_t dst_row_vec_idx) {
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
         _calculate_sfpu_binary_bcast_full_tile_,
         (ckernel::BinaryOp::SUB, ckernel::BroadcastType::ROW),
         dst_data_idx,
@@ -183,7 +179,6 @@ template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sfpu_add_bcast_row(uint32_t dst_data_idx, uint32_t dst_row_vec_idx) {
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
         _calculate_sfpu_binary_bcast_full_tile_,
         (ckernel::BinaryOp::ADD, ckernel::BroadcastType::ROW),
         dst_data_idx,
@@ -196,7 +191,6 @@ template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sfpu_mul_bcast_row(uint32_t dst_data_idx, uint32_t dst_row_vec_idx) {
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
         _calculate_sfpu_binary_bcast_full_tile_,
         (ckernel::BinaryOp::MUL, ckernel::BroadcastType::ROW),
         dst_data_idx,

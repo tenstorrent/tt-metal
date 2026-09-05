@@ -72,7 +72,6 @@ template <
 ALWI void exp_tile(uint32_t idst, VectorMode vector_mode = VectorMode::RC, uint16_t scale = p_sfpu::kCONST_1_FP16B) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
         calculate_exponential,
         (approx, is_fp32_dest_acc_en, scale_en, iterations, (input_clamping == InputClamping::ClampToNegative)),
         idst,
@@ -108,7 +107,6 @@ ALWI void exp_packthread_tile(
     uint32_t idst, VectorMode vector_mode = VectorMode::RC, uint16_t scale = p_sfpu::kCONST_1_FP16B) {
     PACK(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
         calculate_exponential,
         (approx, is_fp32_dest_acc_en, scale_en, iterations, (input_clamping == InputClamping::ClampToNegative)),
         idst,

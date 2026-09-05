@@ -28,7 +28,7 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void remainder_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_remainder, (APPROX), idst, VectorMode::RC));
+    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, calculate_remainder, (APPROX), idst, VectorMode::RC));
 }
 
 /**
@@ -56,7 +56,6 @@ ALWI void remainder_tile_init(uint32_t param0, uint32_t param1) {
 ALWI void remainder_tile_uint32(uint32_t idst, uint32_t param0) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
         calculate_remainder_uint32_scalar,
         (APPROX /*APPROXIMATION_MODE*/, 8 /*ITERATIONS*/),
         idst,

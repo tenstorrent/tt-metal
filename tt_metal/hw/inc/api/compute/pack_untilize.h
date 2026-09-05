@@ -27,7 +27,8 @@ template <
     bool narrow_row,
     std::uint32_t row_num_datums,
     bool dense,
-    bool configure_remap, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+    bool configure_remap,
+    bool is_fp32_dest_acc_en>
 ALWI void pack_untilize_dest_init_impl(uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
 #ifndef ARCH_QUASAR
     state_configure<Operand::PACK>(ocb, call_line);
@@ -50,7 +51,7 @@ ALWI void pack_untilize_dest_init_impl(uint32_t ocb, uint32_t call_line = __buil
 #endif
 }
 
-template <uint32_t block_ct_dim, uint32_t full_ct_dim, bool configure_remap, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <uint32_t block_ct_dim, uint32_t full_ct_dim, bool configure_remap, bool is_fp32_dest_acc_en>
 ALWI void pack_untilize_init_impl(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
 #ifndef ARCH_QUASAR
     state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line);

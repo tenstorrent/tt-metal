@@ -34,7 +34,6 @@ inline void llk_math_eltwise_binary_sfpu_add_int(
     static_assert(DATA_FORMAT == DataFormat::Int32, "Quasar SFPU add_int currently supports Int32 only");
     SFPU_BINARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
         _add_int_,
         (APPROXIMATE, ITERATIONS, DATA_FORMAT, 0, SIGN_MAGNITUDE_FORMAT),
         idst0,

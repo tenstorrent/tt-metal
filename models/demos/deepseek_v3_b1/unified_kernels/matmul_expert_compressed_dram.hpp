@@ -985,7 +985,6 @@ struct MatmulExpertCompressedDRAM {
                         copy_tile(CTArgs::cb_out_silu, 0, 0);
                         MATH(SFPU_UNARY_CALL(
                             DST_SYNC_MODE,
-                            DST_ACCUM_MODE,
                             calculate_silu,
                             (DST_ACCUM_MODE, silu_iterations),
                             0 /*dst_index*/,
@@ -1087,7 +1086,6 @@ struct MatmulExpertCompressedDRAM {
                             for (uint32_t sn = 0; sn < CTArgs::subblock_n; sn++) {
                                 PACK(SFPU_UNARY_CALL(
                                     DST_SYNC_MODE,
-                                    DST_ACCUM_MODE,
                                     calculate_silu,
                                     (false /*is_fp32_dest_acc_en*/, 2 /*ITERATIONS*/),
                                     sn /*dst_index*/,
