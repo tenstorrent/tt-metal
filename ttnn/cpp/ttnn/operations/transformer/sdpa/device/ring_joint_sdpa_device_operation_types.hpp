@@ -40,6 +40,17 @@ struct RingJointSDPAParams {
     uint32_t kv_cache_layer_idx = 0;
     std::optional<uint32_t> sliding_window_size = std::nullopt;
 
+    // Sparse computation (windowed / block-sparse attention). All three set together or
+    // all unset. `tokens_per_frame` is in TOKENS (a multiple of TILE_HEIGHT); `num_frames_padded` is
+    // the (sp-aligned) frame count, must divide ring_size and be <= 32. The `sparse_frame_mask`
+    // is a bitpacked row-major representation of the [num_frames_padded, num_frames_padded] allow-table: bit
+    // `(q * num_frames_padded + k)` is 1 iff Q frame q attends K frame k. At most 32 uint32 words (max
+    // num_frames_padded = 32 -> 1024 bits). Kept host-side and threaded to kernels as runtime args (see
+    // build_ring_joint_program_factory).
+    std::optional<std::uint32_t> tokens_per_frame = std::nullopt;
+    std::optional<std::uint32_t> num_frames_padded = std::nullopt;
+    std::vector<std::uint32_t> sparse_frame_mask;  // empty when sparse-frames disabled
+
     // We need a constructor, because all_gather_struct is not default initializable.
     RingJointSDPAParams(
         std::string joint_strategy,
@@ -61,7 +72,10 @@ struct RingJointSDPAParams {
         uint32_t latent_v_head_dim = 0,
         uint32_t kv_cache_num_layers = 1,
         uint32_t kv_cache_layer_idx = 0,
-        std::optional<uint32_t> sliding_window_size = std::nullopt) :
+        std::optional<uint32_t> sliding_window_size = std::nullopt,
+        std::optional<std::uint32_t> tokens_per_frame = std::nullopt,
+        std::optional<std::uint32_t> num_frames_padded = std::nullopt,
+        std::vector<std::uint32_t> sparse_frame_mask = {}) :
         joint_strategy(std::move(joint_strategy)),
         scale(scale),
         is_causal(is_causal),
@@ -81,7 +95,10 @@ struct RingJointSDPAParams {
         latent_v_head_dim(latent_v_head_dim),
         kv_cache_num_layers(kv_cache_num_layers),
         kv_cache_layer_idx(kv_cache_layer_idx),
-        sliding_window_size(sliding_window_size) {}
+        sliding_window_size(sliding_window_size),
+        tokens_per_frame(tokens_per_frame),
+        num_frames_padded(num_frames_padded),
+        sparse_frame_mask(std::move(sparse_frame_mask)) {}
 
     std::uint32_t get_q_chunk_size() const { return program_config.has_value() ? program_config->q_chunk_size : 32; }
 
@@ -91,6 +108,7 @@ struct RingJointSDPAParams {
 
     bool has_kv_pad_rotation() const { return kv_actual_isl.has_value(); }
 
+    bool has_sparse_frames() const { return tokens_per_frame.has_value() && num_frames_padded.has_value(); }
     bool has_sliding_window() const { return sliding_window_size.value_or(0) > 0; }
 
     static constexpr auto attribute_names = std::forward_as_tuple(
@@ -110,7 +128,10 @@ struct RingJointSDPAParams {
         "latent_v_head_dim",
         "sliding_window_size",
         "all_gather_operation_attributes",
-        "all_gather_tensor_args");
+        "all_gather_tensor_args",
+        "tokens_per_frame",
+        "num_frames_padded",
+        "sparse_frame_mask");
     auto attribute_values() const {
         return std::make_tuple(
             std::cref(joint_strategy),
@@ -129,7 +150,10 @@ struct RingJointSDPAParams {
             std::cref(latent_v_head_dim),
             std::cref(sliding_window_size),
             std::cref(all_gather_operation_attributes),
-            std::cref(all_gather_tensor_args));
+            std::cref(all_gather_tensor_args),
+            std::cref(tokens_per_frame),
+            std::cref(num_frames_padded),
+            std::cref(sparse_frame_mask));
     }
 };
 
