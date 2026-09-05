@@ -121,6 +121,54 @@ std::string get_default_root_path() {
 
 JitBuildEnv::JitBuildEnv() = default;
 
+// Quasar has no L1 counter unit, so the valid groups are FPU(1)|PACK(2)|UNPACK(4)|INSTRN(32). The tracy
+// frontend's "all" is the tt-1xx mask (47), so map it to the Quasar mask (39) instead of rejecting it.
+static uint32_t quasar_perf_counter_mode(uint32_t mode) {
+    constexpr uint32_t quasar_groups = 0x27;
+    constexpr uint32_t tt1xx_all_groups = 0x2F;
+    if (mode == tt1xx_all_groups) {
+        mode = quasar_groups;
+    }
+    TT_FATAL(
+        (mode & ~quasar_groups) == 0,
+        "TT_METAL_PROFILE_PERF_COUNTERS={} selects perf counter groups that do not exist on Quasar; valid bits are "
+        "FPU(1)|PACK(2)|UNPACK(4)|INSTRN(32), 'all' = 39",
+        mode);
+    if (mode == quasar_groups) {
+        // 81 records fill 243 of the 250 profiler slots, and Quasar TRISCs cannot flush to DRAM mid-readout.
+        log_warning(
+            tt::LogBuildKernels,
+            "TT_METAL_PROFILE_PERF_COUNTERS=39 captures all Quasar counter groups in one pass, close to the profiler "
+            "buffer budget; if the runtime dropped-markers warning fires, split the capture into masks 32 (INSTRN) and "
+            "7 (FPU|PACK|UNPACK).");
+    }
+    return mode;
+}
+
+// The l1_client event counter is a single CSR behind a subport*8 + event mux (37 subports, 8 events),
+// selected per run with TT_METAL_PROFILE_PERF_COUNTERS_L1_SEL.
+static std::string quasar_l1_client_defines(const tt::llrt::RunTimeOptions& rtoptions) {
+    const int sel = rtoptions.get_profiler_perf_counter_l1_sel();
+    if (sel < 0) {
+        return "";
+    }
+    constexpr int num_selections = 37 * 8;
+    TT_FATAL(
+        sel < num_selections,
+        "TT_METAL_PROFILE_PERF_COUNTERS_L1_SEL={} out of range; it encodes subport*8 + event with 37 subports and 8 "
+        "events",
+        sel);
+    std::string defines = "-DPROFILE_PERF_COUNTERS_L1_SEL=" + std::to_string(sel) + " ";
+    if (rtoptions.get_profiler_perf_counter_l1_sel_per_neo()) {
+        TT_FATAL(
+            sel + 3 < num_selections,
+            "TT_METAL_PROFILE_PERF_COUNTERS_L1_SEL={} leaves no room for the per-NEO stride (needs sel+3 < 296)",
+            sel);
+        defines += "-DPROFILE_PERF_COUNTERS_L1_SEL_PER_NEO ";
+    }
+    return defines;
+}
+
 void JitBuildEnv::init(
     uint64_t build_key,
     const JitDeviceConfig& config,
@@ -256,45 +304,8 @@ void JitBuildEnv::init(
         TT_ASSERT(rtoptions.get_profiler_enabled());
         uint32_t perf_counter_mode = rtoptions.get_profiler_perf_counter_mode();
         if (this->arch_ == tt::ARCH::QUASAR) {
-            // Quasar has no L1 counter unit; only FPU(1)|PACK(2)|UNPACK(4)|INSTRN(32) exist.
-            constexpr uint32_t quasar_valid_groups = 0x27;
-            constexpr uint32_t tt1xx_all_groups = 0x2F;
-            if (perf_counter_mode == tt1xx_all_groups) {
-                // "all" from the tracy frontend is the tt-1xx mask; drop the L1 bank bit.
-                perf_counter_mode = quasar_valid_groups;
-            }
-            TT_FATAL(
-                (perf_counter_mode & ~quasar_valid_groups) == 0,
-                "TT_METAL_PROFILE_PERF_COUNTERS={} selects perf counter groups that do not exist on Quasar; valid "
-                "bits are FPU(1)|PACK(2)|UNPACK(4)|INSTRN(32), 'all' = 39",
-                perf_counter_mode);
-            if (perf_counter_mode == quasar_valid_groups) {
-                // 81 records = 243 of the 250 profiler slots; kernels that also log many zones can
-                // still overflow, and Quasar TRISCs cannot flush to DRAM mid-readout.
-                log_warning(
-                    tt::LogBuildKernels,
-                    "TT_METAL_PROFILE_PERF_COUNTERS=39 captures all Quasar counter groups in one pass, close to the "
-                    "profiler buffer budget; if the runtime dropped-markers warning fires, split the capture into "
-                    "masks 32 (INSTRN) and 7 (FPU|PACK|UNPACK).");
-            }
-            if (rtoptions.get_profiler_perf_counter_l1_sel() >= 0) {
-                TT_FATAL(
-                    rtoptions.get_profiler_perf_counter_l1_sel() < 37 * 8,
-                    "TT_METAL_PROFILE_PERF_COUNTERS_L1_SEL={} out of range; it encodes subport*8 + event with 37 "
-                    "subports and 8 events",
-                    rtoptions.get_profiler_perf_counter_l1_sel());
-                this->defines_ +=
-                    "-DPROFILE_PERF_COUNTERS_L1_SEL=" + std::to_string(rtoptions.get_profiler_perf_counter_l1_sel()) +
-                    " ";
-                if (rtoptions.get_profiler_perf_counter_l1_sel_per_neo()) {
-                    TT_FATAL(
-                        rtoptions.get_profiler_perf_counter_l1_sel() + 3 < 37 * 8,
-                        "TT_METAL_PROFILE_PERF_COUNTERS_L1_SEL={} leaves no room for the per-NEO stride (needs sel+3 "
-                        "< 296)",
-                        rtoptions.get_profiler_perf_counter_l1_sel());
-                    this->defines_ += "-DPROFILE_PERF_COUNTERS_L1_SEL_PER_NEO ";
-                }
-            }
+            perf_counter_mode = quasar_perf_counter_mode(perf_counter_mode);
+            this->defines_ += quasar_l1_client_defines(rtoptions);
         }
         this->defines_ += "-DPROFILE_PERF_COUNTERS=" + std::to_string(perf_counter_mode) + " ";
     }
