@@ -229,16 +229,19 @@ def test_swigluoai_routed_expert_deterministic(mesh_device, device_params):
     own copy comes back over the NoC. Receivers are ordered by the valid-sem riding the
     linked path; the sender has only its own wait, and noc_async_writes_flushed() reports
     the request as SENT, not landed. Consuming that slot early corrupts one core's block
-    nondeterministically, so this runs the largest supported shape repeatedly and requires
-    bit-identical output. NOT a fail-without-fix reproducer: the window is ~1 L1 poll wide
-    and downstream work masks it, so this guards against it widening (grid, payload or
-    scheduling changes), it does not demonstrate the bug.
+    nondeterministically, so this repeats the highest-exposure shape and requires
+    bit-identical output. Uses the M3 dims (emb 6144 / hidden 3072) at 4096 tokens: the
+    multicast payload, and with it the measured landing window, scales with the block
+    size -- instrumented on p100a the loopback was unlanded at the flush point ~4x more
+    often at these dims than at M2.7's. NOT a fail-without-fix reproducer: the residual
+    window is ~1 L1 poll wide and downstream work masks it, so this guards against the
+    window widening (grid, payload or scheduling changes), it does not demonstrate the bug.
     """
     run_swigluoai_routed_expert(
         mesh_device,
         num_tokens=4096,
-        emb_dim=MiniMaxM27Config.EMB_SIZE,
-        hidden_dim=MiniMaxM27Config.MOE_INTERMEDIATE_SIZE,
+        emb_dim=6144,
+        hidden_dim=3072,
         activation=ttnn.RoutedExpertActivation.SwiGluOai,
         repeat=10,
     )
