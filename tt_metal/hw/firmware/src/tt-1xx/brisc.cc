@@ -541,9 +541,6 @@ int main() {
 
             wait_ncrisc_trisc();
 
-            // BRISC reads perf counters after TRISCs finish (BRISC has NOC access for DRAM push).
-            ReadPerfCounters();
-
             trigger_sync_register_init();
 
             if constexpr (ASSERT_ENABLED) {
@@ -570,6 +567,9 @@ int main() {
                 noc_local_state_init(noc_index);
             }
 #endif
+
+            // BRISC reads perf counters after TRISCs finish (BRISC has NOC access for DRAM push).
+            ReadPerfCounters();
 
             uint32_t go_message_index = mailboxes->go_message_index;
             mailboxes->go_messages[go_message_index].signal = RUN_MSG_DONE;
