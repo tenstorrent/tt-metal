@@ -62,6 +62,7 @@
 #include "llk_math_eltwise_binary_sfpu_mul_int.h"
 #include "llk_math_eltwise_binary_sfpu_binary_comp.h"
 #include "ckernel_sfpu_topk.h"
+#include "ckernel_sfpu_reduce.h"
 #endif
 #define MATH(...) __VA_ARGS__
 #else
@@ -839,54 +840,6 @@ ALWI void topk_uint16_prepare_value_tile_for_pack(uint32_t idst) {
     MATH((ckernel::sfpu::topk_uint16_prepare_value_tile_for_pack(idst)));
 }
 
-#ifndef ARCH_QUASAR  // BH/WH-only ops below
-
-// clang-format off
-/**
- * Performs MaxPool with indices algorithm on the data tile and index tile
- * that are pre-loaded in DST register. The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only
- * available on the compute engine.
- *
- * | Argument        | Description                                                                 | Type       | Valid Range                                           | Required |
- * |-----------------|-----------------------------------------------------------------------------|------------|-------------------------------------------------------|----------|
- * | idst            | The index of the tile in DST register containing the data to be reduced     | uint32_t   | Must be less than the size of the DST register buffer | True     |
- * | idst_idx        | The index of the tile in DST register containing the indices of the data    | uint32_t   | Must be less than the size of the DST register buffer | True     |
- * | chunk           | The index of the intra-kernel "chunk" of data for large kernel accumulation | uint32_t   | 0 to UINT_MAX                                         | False    |
- * | num_rows        | The number of rows to use for the MaxPool operation                         | uint32_t   | <= 32, but note either 9 or 32 rows will be reduced   | False    |
- * | layout          | The data layout of the data in DST                                          | DataLayout | TILE or ROW_MAJOR                                     | False    |
- * | accumulate      | Whether to accumulate results for large kernels                             | bool       | true, false                                           | False    |
- * | ITERATIONS      | The number of iterations to perform (unused)                                | int        | 1 to 8                                                | False    |
- */
-// clang-format on
-template <
-    int num_rows = 9,
-    ckernel::DataLayout layout = ckernel::DataLayout::TILE,
-    bool accumulate = false,
-    int ITERATIONS = 8, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void max_reduce_with_indices(uint32_t idst, uint32_t idst_idx, uint32_t chunk = 0) {
-    static_assert(num_rows <= 32, "num_rows must be <= 32");
-    MATH((SFPU_BINARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_max_pool_with_indices,
-        (true /* APPROXIMATE */, is_fp32_dest_acc_en, num_rows, ITERATIONS, layout, accumulate),
-        idst,
-        idst_idx,
-        0 /* DST out unused, but required for _llk_math_eltwise_binary_sfpu_params_ */,
-        VectorMode::RC,
-        chunk)));
-}
-
-/**
- * Please refer to documentation for any_init.
- */
-template <ckernel::DataLayout layout = ckernel::DataLayout::TILE>
-ALWI void max_reduce_with_indices_init() {
-    MATH((SFPU_BINARY_INIT_FN(
-        max_pool_with_indices, sfpu::init_max_pool_with_indices, (true /* APPROXIMATE */, layout))));
-}
-
 // clang-format off
 /**
  * Performs reduce operation (sum, average, max, min) on a 32x32 tile for column reduction and multiple tiles for row reduction, placing output values into the first row.
@@ -918,7 +871,11 @@ ALWI void sfpu_reduce(uint32_t idst, uint32_t ct_dim = 1, uint32_t rt_dim = 1) {
         "Only column reduction (REDUCE_COL) is supported for all pool types; row reduction (REDUCE_ROW) is only "
         "supported for SUM, MAX and MIN");
     static_assert(
-        format == DataFormat::Float32 || format == DataFormat::Int32 || format == DataFormat::UInt32 ||
+        format == DataFormat::Float32 || format == DataFormat::Int32 ||
+#ifndef ARCH_QUASAR
+            // Quasar's DataFormat has no UInt32.
+            format == DataFormat::UInt32 ||
+#endif
             format == DataFormat::UInt16 || format == DataFormat::Float16_b,
         "Unsupported data format. Supported formats: Float32, Int32, UInt32, UInt16, Float16_b");
     static_assert(
@@ -952,11 +909,64 @@ ALWI void sfpu_reduce_init() {
             pool_type == PoolType::MIN,
         "Unsupported pool type. Supported pool types: SUM, AVG, MAX, MIN");
     static_assert(
-        format == DataFormat::Float32 || format == DataFormat::Int32 || format == DataFormat::UInt32 ||
+        format == DataFormat::Float32 || format == DataFormat::Int32 ||
+#ifndef ARCH_QUASAR
+            // Quasar's DataFormat has no UInt32.
+            format == DataFormat::UInt32 ||
+#endif
             format == DataFormat::UInt16 || format == DataFormat::Float16_b,
         "Unsupported data format. Supported formats: Float32, Int32, UInt32, UInt16, Float16_b");
 
     MATH(SFPU_UNARY_INIT_FN_ARGS(reduce, sfpu::init_reduce, (pool_type, format, is_fp32_dest_acc_en), 1 /* block_ct_dim */));
+}
+
+#ifndef ARCH_QUASAR  // BH/WH-only ops below
+
+// clang-format off
+/**
+ * Performs MaxPool with indices algorithm on the data tile and index tile
+ * that are pre-loaded in DST register. The DST register buffer must be in
+ * acquired state via *acquire_dst* call. This call is blocking and is only
+ * available on the compute engine.
+ *
+ * | Argument        | Description                                                                 | Type       | Valid Range                                           | Required |
+ * |-----------------|-----------------------------------------------------------------------------|------------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register containing the data to be reduced     | uint32_t   | Must be less than the size of the DST register buffer | True     |
+ * | idst_idx        | The index of the tile in DST register containing the indices of the data    | uint32_t   | Must be less than the size of the DST register buffer | True     |
+ * | chunk           | The index of the intra-kernel "chunk" of data for large kernel accumulation | uint32_t   | 0 to UINT_MAX                                         | False    |
+ * | num_rows        | The number of rows to use for the MaxPool operation                         | uint32_t   | <= 32, but note either 9 or 32 rows will be reduced   | False    |
+ * | layout          | The data layout of the data in DST                                          | DataLayout | TILE or ROW_MAJOR                                     | False    |
+ * | accumulate      | Whether to accumulate results for large kernels                             | bool       | true, false                                           | False    |
+ * | ITERATIONS      | The number of iterations to perform (unused)                                | int        | 1 to 8                                                | False    |
+ */
+// clang-format on
+template <
+    int num_rows = 9,
+    ckernel::DataLayout layout = ckernel::DataLayout::TILE,
+    bool accumulate = false,
+    int ITERATIONS = 8,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void max_reduce_with_indices(uint32_t idst, uint32_t idst_idx, uint32_t chunk = 0) {
+    static_assert(num_rows <= 32, "num_rows must be <= 32");
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        is_fp32_dest_acc_en,
+        calculate_max_pool_with_indices,
+        (true /* APPROXIMATE */, is_fp32_dest_acc_en, num_rows, ITERATIONS, layout, accumulate),
+        idst,
+        idst_idx,
+        0 /* DST out unused, but required for _llk_math_eltwise_binary_sfpu_params_ */,
+        VectorMode::RC,
+        chunk)));
+}
+
+/**
+ * Please refer to documentation for any_init.
+ */
+template <ckernel::DataLayout layout = ckernel::DataLayout::TILE>
+ALWI void max_reduce_with_indices_init() {
+    MATH((SFPU_BINARY_INIT_FN(
+        max_pool_with_indices, sfpu::init_max_pool_with_indices, (true /* APPROXIMATE */, layout))));
 }
 
 // clang-format off
