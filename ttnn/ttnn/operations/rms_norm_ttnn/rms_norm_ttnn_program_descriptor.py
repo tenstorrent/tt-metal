@@ -1075,7 +1075,10 @@ def _combine_noc_swapped(plan) -> bool:
     one-sided move: writer RISCV_0 + NOC_0, reader RISCV_1 + NOC_1.  That pairing is
     Metal's own `RISCV_n_default`, just the mirror of the reader/writer defaults.
     """
-    return bool(plan.combine) and _combine_noc(plan.native_in) != ttnn.NOC.NOC_1
+    # Compared by VALUE: the nanobind `NOC` enum exposes NOC_0 / NOC_1 as aliases of
+    # RISCV_0_default / RISCV_1_default that do not compare equal to their own alias, so
+    # `is` / `==` on the members is not a reliable identity test.
+    return bool(plan.combine) and _combine_noc(plan.native_in).value != ttnn.NOC.NOC_1.value
 
 
 def _writer_dm_config(plan):
