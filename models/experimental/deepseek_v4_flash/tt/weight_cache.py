@@ -38,8 +38,8 @@ class WeightCache:
     ``layers.5.attn.q_a_proj``).
 
     ``require_cache`` turns a cache *miss* (for a tile-cached weight) into a hard
-    error instead of a fallback HF-checkpoint read -- used to assert a populated
-    cache is actually being consumed (see :class:`DeepSeekV4Model`). It rides
+    error instead of a fallback HF-checkpoint read, so a populated cache is
+    actually consumed (see :class:`DeepSeekV4Model`). It rides
     along on the :class:`_CachePath` returned by :meth:`file` and is propagated to
     every child via :meth:`sub`.
     """

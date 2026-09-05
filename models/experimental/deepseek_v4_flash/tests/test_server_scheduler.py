@@ -143,9 +143,9 @@ def _run_turns(api, keys, max_tokens=12, content="hello there friend "):
 def test_same_user_key_runs_in_parallel(key: str) -> None:
     """Concurrent requests carrying one ``user`` value must not serialize.
 
-    A regression guard: slots used to be keyed by the OpenAI ``user`` field, so a client
-    that sends one identifier for all its traffic (or none, landing on the default) had
-    every request queue behind the previous one on a single KV session.
+    Slots are independent of the OpenAI ``user`` field: concurrent requests with
+    the same identifier (or none, landing on the default) each get their own KV
+    session.
     """
     engine = FakeEngine(4)
     api = S.GenerationServer(engine, "fake", prefill_chunk=4)

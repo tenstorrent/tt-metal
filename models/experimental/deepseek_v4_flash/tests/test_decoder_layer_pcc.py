@@ -423,8 +423,8 @@ def test_decoder_layer_decode_pcc(
     rather than over the pooled batch, which would hide one user's output going wrong.
     """
     ref_path, need_gen = _reference_path(tmp_path, f"decoder_layer_{layer_idx}_{batch_size}_{seq_len}")
-    # A bundle cached before ``sliding_window`` was added lacks the field the
-    # decode cache needs -- regenerate it so the sliding cap matches the reference.
+    # Bundles that omit ``sliding_window`` cannot size the decode cache --
+    # regenerate so the sliding cap matches the reference.
     if not need_gen and "sliding_window" not in torch.load(ref_path, weights_only=False)["config"]:
         need_gen = True
     if need_gen and not _generate_reference(ref_path, layer_idx, batch_size, seq_len):
