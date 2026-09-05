@@ -29,6 +29,7 @@
 #               test result. Hangs are still detected and still reset the device.
 #
 # Modes:
+#   SAFE_PYTEST_NO_RESET=1 disables automatic resets; dirty devices require manual recovery.
 #   default  - Dispatch timeout only. Lean, no debug overhead.
 #   --dev    - Debug mode with watcher, asserts, and triage (see above).
 #   --profile - Tracy device profiling with per-op CSV report (see above).
@@ -142,6 +143,10 @@ if [[ "$SIM_MODE" == false ]]; then
 
     # --- Check if device needs reset from previous hang ---
     if [[ -f "$DIRTY_FLAG" ]]; then
+        if [[ "${SAFE_PYTEST_NO_RESET:-0}" == "1" ]]; then
+            echo "SAFE_PYTEST_ERROR: Device marked dirty; automatic reset disabled. Manual recovery required."
+            exit 3
+        fi
         echo "SAFE_PYTEST: Device marked dirty from previous hang, resetting..."
         if ! tt-smi -r; then
             echo "SAFE_PYTEST_ERROR: Device reset (tt-smi -r) failed"
@@ -307,6 +312,12 @@ fi
 # Hangs and crashes corrupt device state. Normal test failures (PCC mismatch,
 # assertion errors) and collection errors don't touch the device.
 if [[ "$IS_HANG" == true ]]; then
+    if [[ "${SAFE_PYTEST_NO_RESET:-0}" == "1" ]]; then
+        touch "$DIRTY_FLAG"
+        echo "SAFE_PYTEST_RESULT: HANG; automatic reset disabled. Manual recovery required."
+        cat "$TRIAGE_LOG"
+        exit 2
+    fi
     echo "SAFE_PYTEST: Resetting device..."
     if tt-smi -r; then
         sleep 2

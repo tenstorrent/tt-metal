@@ -108,6 +108,12 @@ BOTH the measured chunk and the cache by SP/8; cache must stay a whole chunk mul
 DS_PERF_SCENARIO / DS_PERF_ATTN_MODE remain as the module-level defaults used for mesh-shape detection,
 but the test itself sweeps the full matrix via parametrization.
 
+For untraced host timing, set DS_PERF_HOST=1. This bypasses trace capture and the device-profile
+report, runs DS_PERF_HOST_WARMUPS (default 3) warmups per start, then records DS_PERF_HOST_ITERS
+(default 20) ordinary forwards. host_<scenario>.json contains every host submission and synchronized
+completion duration in milliseconds, plus medians and workload metadata. Output deallocation and
+the initial synchronization are outside the timing window; compilation is excluded by warmup.
+
 NOTE: warm/long leave the cached prefix of both block-cyclic caches zero-filled rather than populating it
 with earlier chunks — only op shapes/timing matter here, not values, and those come from the full `total`
 prefix width (allocation), not the cache contents; cold instead runs real chunk forwards that fill the
@@ -121,6 +127,8 @@ import csv
 import datetime
 import json
 import os
+import statistics
+import time
 from dataclasses import dataclass
 
 import pandas as pd
@@ -448,9 +456,9 @@ PERF_FABRIC_ID = {
 }[PERF_FABRIC]
 PERF_TOPOLOGY_MARK = pytest.mark.requires_mesh_topology(
     mesh_shape=PERF_WORKLOAD.mesh_shape,
-    topology="ring"
-    if PERF_FABRIC == ttnn.FabricConfig.FABRIC_2D_TORUS_X
-    else f"mesh-{PERF_WORKLOAD.sp}x{PERF_WORKLOAD.tp}",
+    topology=(
+        "ring" if PERF_FABRIC == ttnn.FabricConfig.FABRIC_2D_TORUS_X else f"mesh-{PERF_WORKLOAD.sp}x{PERF_WORKLOAD.tp}"
+    ),
 )
 PERF_MESH_PARAM = (
     pytest.param(
@@ -715,7 +723,9 @@ def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_fo
         pytest.skip(skip_reason)
     # Assert profiler activation only after skip checks pass: an unsupported system should skip with the
     # informative reason above, not hard-fail here.
-    _require_rt_profiler()
+    host_perf = os.environ.get("DS_PERF_HOST", "0") == "1"
+    if not host_perf:
+        _require_rt_profiler()
 
     scenario_cfg = SCENARIOS[scenario]
     is_cold = scenario_cfg["loop"]
@@ -852,6 +862,54 @@ def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_fo
 
     def _one_forward(start):
         return mla.forward(tt_x, rope, kvpe_cache, actual_start=start, index_kv_cache=index_kv_cache)
+
+    if host_perf:
+        # Ordinary dispatch only: compile and warm outside the measured window. Keep
+        # outputs alive until completion and exclude deallocation from both timings.
+        warmups = int(os.environ.get("DS_PERF_HOST_WARMUPS", "3"))
+        iterations = int(os.environ.get("DS_PERF_HOST_ITERS", "20"))
+        assert warmups >= 1 and iterations >= 1
+        samples = []
+        for start in starts:
+            for iteration in range(-warmups, iterations):
+                ttnn.synchronize_device(mesh_device)
+                begin = time.perf_counter_ns()
+                output = _one_forward(start)
+                submitted = time.perf_counter_ns()
+                ttnn.synchronize_device(mesh_device)
+                completed = time.perf_counter_ns()
+                ttnn.deallocate(output)
+                if iteration >= 0:
+                    samples.append(
+                        {
+                            "start": start,
+                            "iteration": iteration,
+                            "host_submission_ms": (submitted - begin) / 1e6,
+                            "host_completion_ms": (completed - begin) / 1e6,
+                        }
+                    )
+        report = {
+            "git": _git_head(),
+            "execution": "untraced",
+            "variant": variant.name,
+            "scenario": scenario,
+            "case": _profile_case_id(attn_mode, kv_cache_format),
+            "mesh": list(mesh_device.shape),
+            "chunk": chunk,
+            "cache": cache,
+            "warmups": warmups,
+            "realtime_profiler_active": ttnn.device.IsProgramRealtimeProfilerActive(),
+            "samples": samples,
+            "medians_ms": {
+                key: statistics.median(sample[key] for sample in samples)
+                for key in ("host_submission_ms", "host_completion_ms")
+            },
+        }
+        path = os.path.join(_output_dir(subdir), f"host_{scenario}.json")
+        with open(path, "w") as f:
+            json.dump(report, f, indent=2)
+        logger.info(f"Untraced host timing: {report['medians_ms']}; samples: {path}")
+        return
 
     forwards = []  # one {runtime_id -> {...}} per measured trace replay (device-collapsed to critical path)
     for start in starts:
