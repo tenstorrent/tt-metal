@@ -124,7 +124,8 @@ inline void calculate_remainder() {
 
         constexpr auto iter = 10;
         for (int l = 0; l < iter; l++) {
-            v_if(v >= s) { v = v - s; }
+            v_if(v <= -s) { v = v + s; }
+            v_else_if(v >= s) { v = v - s; }
             v_endif;
         }
         v_if(sfpi::abs(v) - s == 0.0f) { v = 0.0f; }
