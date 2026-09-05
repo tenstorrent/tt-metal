@@ -27,7 +27,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.tt_dit.utils.test import ring_params
+from models.tt_dit.utils.test import ring_params, ring_params_8k
 
 try:  # tracy signpost is only present under `python -m tracy`; no-op otherwise.
     from tracy import signpost
@@ -41,11 +41,98 @@ T = ttnn.TILE_SIZE
 OWNER = 5  # sender index along the ring (cluster) axis
 
 
+# The tests above fill each shard with a single CONSTANT (r*10+c), so they cannot see an intra-shard
+# tile shuffle or drop -- every tile reads the same value. This test fills each tile DISTINCTLY
+# (per-element random) and compares the full broadcast output against the sender shard tile-for-tile,
+# so a multi-tile / multi-chunk data-movement bug (which 1-tile misses) is caught. Parametrized over
+# DRAM vs L1 relay and chunk sizes that force many chunks.
 @pytest.mark.parametrize(
     ("mesh_device", "sp_axis", "tp_axis", "device_params", "topology"),
     [
         pytest.param((4, 8), 1, 0, ring_params, ttnn.Topology.Ring, id="bh_4x8_ring"),
-        pytest.param((4, 32), 1, 0, ring_params, ttnn.Topology.Ring, id="bh_4x32_ring"),
+        pytest.param((4, 32), 1, 0, ring_params_8k, ttnn.Topology.Ring, id="bh_4x32_ring"),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(
+    ("tiles_per_shard", "chunk_size_tiles", "use_l1_relay"),
+    [
+        pytest.param(128, 0, False, id="128tiles_chunkauto_dram"),
+        pytest.param(128, 8, False, id="128tiles_chunk8_dram"),
+        pytest.param(128, 8, True, id="128tiles_chunk8_l1"),
+        pytest.param(128, 32, True, id="128tiles_chunk32_l1"),
+    ],
+)
+def test_broadcast_ring_wholeshard(
+    mesh_device, sp_axis, tp_axis, device_params, topology, tiles_per_shard, chunk_size_tiles, use_l1_relay
+):
+    tp_factor, sp_factor = tuple(mesh_device.shape)
+    N = tiles_per_shard
+
+    grid = mesh_device.compute_with_storage_grid_size()
+    crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+    wsd_id = ttnn.SubDeviceId(0)
+    mgr = mesh_device.create_sub_device_manager([ttnn.SubDevice([crs])], 0)
+    mesh_device.load_sub_device_manager(mgr)
+    mesh_device.set_sub_device_stall_group([wsd_id])
+
+    # Per-element-distinct data (bf16-roundtripped so the golden compare is bit-exact).
+    torch.manual_seed(0)
+    host = torch.randn(1, 1, tp_factor * T, sp_factor * N * T, dtype=torch.float32).to(torch.bfloat16).float()
+    shard_dims = [None, None]
+    shard_dims[tp_axis] = 2
+    shard_dims[sp_axis] = 3
+    rm = ttnn.from_torch(
+        host.to(torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
+    )
+    tt_in = ttnn.to_layout(rm, ttnn.TILE_LAYOUT)
+
+    tt_out = ttnn.experimental.broadcast_ring(
+        tt_in,
+        sender_ring_index=OWNER,
+        cluster_axis=sp_axis,
+        topology=topology,
+        subdevice_id=wsd_id,
+        num_links=2,
+        chunk_size_tiles=chunk_size_tiles,
+        use_l1_relay=use_l1_relay,
+    )
+    ttnn.synchronize_device(mesh_device, sub_device_ids=[wsd_id])
+    out = ttnn.to_torch(
+        ttnn.to_layout(tt_out, ttnn.ROW_MAJOR_LAYOUT),
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
+    ).float()
+
+    # Every ring device must hold the sender's shard, tile-for-tile, for its own tp row.
+    bad = []
+    for r in range(tp_factor):
+        golden = host[0, 0, r * T : (r + 1) * T, OWNER * N * T : (OWNER + 1) * N * T]
+        for c in range(sp_factor):
+            block = out[0, 0, r * T : (r + 1) * T, c * N * T : (c + 1) * N * T]
+            if not torch.equal(block, golden):
+                first_bad = next(
+                    (
+                        st
+                        for st in range(N)
+                        if not torch.equal(block[:, st * T : (st + 1) * T], golden[:, st * T : (st + 1) * T])
+                    ),
+                    -1,
+                )
+                bad.append((r, c, first_bad))
+    if bad:
+        logger.info(f"[wholeshard] {len(bad)} device-shards wrong; first few (tp,ring,first_bad_tile): {bad[:8]}")
+    assert not bad, f"broadcast_ring whole-shard mismatch on {len(bad)} device-shards, first: {bad[0]}"
+
+
+@pytest.mark.parametrize(
+    ("mesh_device", "sp_axis", "tp_axis", "device_params", "topology"),
+    [
+        pytest.param((4, 8), 1, 0, ring_params, ttnn.Topology.Ring, id="bh_4x8_ring"),
+        pytest.param((4, 32), 1, 0, ring_params_8k, ttnn.Topology.Ring, id="bh_4x32_ring"),
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -285,7 +372,7 @@ def test_broadcast_ring_straddle(mesh_device, sp_axis, tp_axis, device_params, t
     ("mesh_device", "sp_axis", "tp_axis", "device_params", "topology"),
     [
         pytest.param((4, 8), 1, 0, ring_params, ttnn.Topology.Ring, id="bh_4x8_ring"),
-        pytest.param((4, 32), 1, 0, ring_params, ttnn.Topology.Ring, id="bh_4x32_ring"),
+        pytest.param((4, 32), 1, 0, ring_params_8k, ttnn.Topology.Ring, id="bh_4x32_ring"),
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -376,7 +463,7 @@ def test_broadcast_ring_l1(
     ("mesh_device", "sp_axis", "tp_axis", "device_params", "topology"),
     [
         pytest.param((4, 8), 1, 0, ring_params, ttnn.Topology.Ring, id="bh_4x8_ring"),
-        pytest.param((4, 32), 1, 0, ring_params, ttnn.Topology.Ring, id="bh_4x32_ring"),
+        pytest.param((4, 32), 1, 0, ring_params_8k, ttnn.Topology.Ring, id="bh_4x32_ring"),
     ],
     indirect=["mesh_device", "device_params"],
 )
