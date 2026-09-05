@@ -693,7 +693,38 @@ RingIndexerScoreDsaMeshWorkloadFactory::create_mesh_workload(
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const tensor_args_t& tensors,
     tensor_return_value_t& out) {
-    return descriptor_adapter_t::create_mesh_workload(args, tensor_coords, tensors, out);
+    using namespace CMAKE_UNIQUE_NAMESPACE;
+    auto descriptor_cached = descriptor_adapter_t::create_mesh_workload(args, tensor_coords, tensors, out);
+    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
+    constexpr std::array kernel_indices{
+        kAllGatherReaderForwardKernelIndex,
+        kAllGatherReaderBackwardKernelIndex,
+        kAllGatherWriterForwardKernelIndex,
+        kAllGatherWriterBackwardKernelIndex};
+    for (auto& [range, program] : descriptor_cached.workload.get_programs()) {
+        auto& shared = shared_variables[range];
+        shared.descriptor = std::move(descriptor_cached.shared_variables.at(range));
+        for (size_t index = 0; index < kernel_indices.size(); ++index) {
+            auto& plan = shared.ag_plans[index];
+            plan.kernel_idx = kernel_indices[index];
+            plan.accessor = tt::tt_metal::KernelRuntimeArgsAccessor(program, plan.kernel_idx);
+            const auto& grid = plan.accessor.runtime_args();
+            // Kernel/core placement and argument lengths are fixed by this cached descriptor.
+            // Retain coordinates only: dispatch/trace may relocate every argument payload.
+            for (uint32_t x = 0; x < grid.size(); ++x) {
+                for (uint32_t y = 0; y < grid[x].size(); ++y) {
+                    if (grid[x][y].size() != 0) {
+                        plan.active_cores.emplace_back(x, y);
+                    }
+                }
+            }
+            TT_FATAL(
+                !plan.active_cores.empty(),
+                "indexer_score fused AG kernel {} has no runtime arguments",
+                plan.kernel_idx);
+        }
+    }
+    return {std::move(descriptor_cached.workload), std::move(shared_variables)};
 }
 
 void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
@@ -712,7 +743,7 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
     const auto collected = [&] {
         ZoneNamedN(collect_zone, "HostProfile::ring_indexer_collect_buffers", profile_enabled);
         return descriptor_adapter_t::collect_tensor_buffers(
-            tensors, out, cached.shared_variables.begin()->second.workload_descriptor);
+            tensors, out, cached.shared_variables.begin()->second.descriptor.workload_descriptor);
     }();
     ttsl::SmallVector<uint32_t, 16> addresses;
     addresses.reserve(collected.buffers.size());
@@ -720,7 +751,7 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
         addresses.push_back(buffer->address());
     }
     for (auto& [range, program] : cached.workload.get_programs()) {
-        const auto& bindings = cached.shared_variables.at(range).resolved_bindings;
+        const auto& bindings = cached.shared_variables.at(range).descriptor.resolved_bindings;
         ZoneNamedN(binding_zone, "HostProfile::ring_indexer_patch_bindings", profile_enabled);
         if (!bindings.cbs.empty()) {
             // Retain the general implementation for any future CB binding variant.
@@ -758,7 +789,6 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
     // into the cached programs, as the classic Program-model factory does. Rebuilding the descriptor here was
     // correct but expensive: it reconstructed geometry, schedules, descriptors and consumer runtime args for
     // every mesh coordinate even though only these scalar fields vary between cache hits.
-    using tt::tt_metal::GetRuntimeArgs;
 
     const auto& q = tensors.q;
     const auto& k = tensors.k;
@@ -806,32 +836,25 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
 
         // Visit each AG kernel/core once for all of its changing scalars. The largest field
         // bounds-check implies every field in this fixed table fits; empty AG cores stay skipped.
-        const auto patch_fields = [&](uint32_t kernel_idx,
-                                      std::initializer_list<std::pair<uint32_t, uint32_t>> fields,
-                                      bool skip_empty = false) {
+        const auto& ag_plans = cached.shared_variables.at(range).ag_plans;
+        const auto patch_fields = [&](size_t plan_index, std::initializer_list<std::pair<uint32_t, uint32_t>> fields) {
+            const auto& plan = ag_plans.at(plan_index);
             const auto max_slot = std::max_element(fields.begin(), fields.end(), [](const auto& a, const auto& b) {
                                       return a.first < b.first;
                                   })->first;
-            auto& grid_args = GetRuntimeArgs(program, kernel_idx);
-            bool patched_any = false;
-            for (auto& col_args : grid_args) {
-                for (auto& core_args : col_args) {
-                    if (skip_empty && core_args.size() == 0) {
-                        continue;
-                    }
-                    TT_FATAL(
-                        max_slot < core_args.size(),
-                        "indexer_score fused override: scalar slot {} out of range (size {}) for kernel {}",
-                        max_slot,
-                        core_args.size(),
-                        kernel_idx);
-                    for (const auto& [slot, value] : fields) {
-                        core_args[slot] = value;
-                    }
-                    patched_any = true;
+            auto& grid_args = plan.accessor.runtime_args();
+            for (const auto& core : plan.active_cores) {
+                auto& core_args = grid_args.at(core.x).at(core.y);
+                TT_FATAL(
+                    max_slot < core_args.size(),
+                    "indexer_score fused override: scalar slot {} out of range (size {}) for kernel {}",
+                    max_slot,
+                    core_args.size(),
+                    plan.kernel_idx);
+                for (const auto& [slot, value] : fields) {
+                    core_args[slot] = value;
                 }
             }
-            TT_FATAL(patched_any, "indexer_score fused override: kernel {} has no runtime arguments", kernel_idx);
         };
         {
             ZoneNamedN(consumer_zone, "HostProfile::ring_indexer_consumer_writes", profile_enabled);
@@ -862,25 +885,19 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
         constexpr uint32_t ag_reader_valid_pages = ag_rt::kReaderRuntimeArgHeaderCount + ag_rt::kValidPagesFieldOffset;
         constexpr uint32_t ag_writer_valid_pages = ag_rt::kWriterRuntimeArgHeaderCount + ag_rt::kValidPagesFieldOffset;
         patch_fields(
-            kAllGatherReaderForwardKernelIndex,
+            0,
             {{ag_rt::kReaderReadySemaphoreFieldOffset, forward_semaphore},
              {ag_reader_input_base, input_batch_base},
-             {ag_reader_valid_pages, valid_pages}},
-            true);
+             {ag_reader_valid_pages, valid_pages}});
         patch_fields(
-            kAllGatherReaderBackwardKernelIndex,
+            1,
             {{ag_rt::kReaderReadySemaphoreFieldOffset, backward_semaphore},
              {ag_reader_input_base, input_batch_base},
-             {ag_reader_valid_pages, valid_pages}},
-            true);
+             {ag_reader_valid_pages, valid_pages}});
         patch_fields(
-            kAllGatherWriterForwardKernelIndex,
-            {{ag_rt::kWriterReadySemaphoreFieldOffset, forward_semaphore}, {ag_writer_valid_pages, valid_pages}},
-            true);
+            2, {{ag_rt::kWriterReadySemaphoreFieldOffset, forward_semaphore}, {ag_writer_valid_pages, valid_pages}});
         patch_fields(
-            kAllGatherWriterBackwardKernelIndex,
-            {{ag_rt::kWriterReadySemaphoreFieldOffset, backward_semaphore}, {ag_writer_valid_pages, valid_pages}},
-            true);
+            3, {{ag_rt::kWriterReadySemaphoreFieldOffset, backward_semaphore}, {ag_writer_valid_pages, valid_pages}});
     }
 }
 
