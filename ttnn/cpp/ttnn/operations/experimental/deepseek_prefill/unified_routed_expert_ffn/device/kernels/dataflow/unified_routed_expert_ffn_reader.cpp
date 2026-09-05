@@ -920,7 +920,9 @@ void kernel_main() {
                 // too. async_writes_flushed() is not one: it polls NIU_MST_NONPOSTED_WR_REQ_SENT
                 // (request left this NIU), not the ack. The mcast is non-posted, so only the
                 // ack-wait proves the data LANDED before this core's compute reads the slot.
-                // Placed after the valid-sem mcast so receivers are not held up.
+                // Placed after the valid-sem mcast so receivers are not held up; note the
+                // wait is whole-queue, so it also covers that sem mcast's acks, not just
+                // the loopback copy.
                 noc.async_write_barrier();
             }
             cb_in0_down_full_obj.push_back(d_in0_block_num_tiles);
