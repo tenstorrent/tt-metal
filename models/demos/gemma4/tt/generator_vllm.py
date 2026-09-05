@@ -1789,11 +1789,23 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
                 out.append(pt)
                 continue
             batch = int(pt.shape[0])
-            slots = (
-                slots_by_row
-                if slots_by_row is not None and len(slots_by_row) == batch
-                else self._bounded_ring_slots(pt, max_slots or batch, False)
-            )
+            if slots_by_row is not None and len(slots_by_row) == batch:
+                slots = slots_by_row
+            else:
+                # Per-layer fallback: keys derive from THIS layer's table. Under
+                # hybrid-groups-off every layer shares one table so this equals
+                # slots_by_row; with hybrid groups on, a sliding row whose block-0
+                # was nulled by vLLM could key a different slot than the
+                # full-attention reference — if the fallback ever fires alongside
+                # a computed reference, surface it instead of diverging silently.
+                if slots_by_row is not None and not getattr(self, "_g4_ring_fallback_warned", False):
+                    self._g4_ring_fallback_warned = True
+                    logger.warning(
+                        f"gemma4 bounded ring: layer {i} page table has {batch} rows but the shared "
+                        f"slot reference has {len(slots_by_row)} — falling back to per-layer slot "
+                        "derivation. Rings can diverge across layers if row identities differ."
+                    )
+                slots = self._bounded_ring_slots(pt, max_slots or batch, False)
             # Always W columns (demo layout). Keeping vLLM's full-ISL width
             # here thrash-reallocates persistent buffers vs short prefill
             # tables and is unused under cache_position_modulo.
