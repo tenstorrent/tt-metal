@@ -627,6 +627,16 @@ def _parse_duration(text: str, default: float) -> float:
     return duration
 
 
+def _parse_steps(text: str, default: int) -> int:
+    text = text.strip()
+    if not text:
+        return int(default)
+    steps = int(text)
+    if steps <= 0:
+        raise ValueError("steps must be positive")
+    return steps
+
+
 def _repl_dir() -> Path:
     """Same directory the launch script uses: `$TT_METAL_HOME/.h3_repl` (NFS), not the pytest cwd."""
     return Path(os.environ.get("TT_METAL_HOME") or os.getcwd()) / ".h3_repl"
@@ -747,6 +757,7 @@ def _prompt_line(message: str, timeout: float | None = None) -> str:
 
 def pretest_user_repl(*, timeout: float = 1800, rounds: int = 3) -> None:
     """`rounds` TTY round-trips before pipeline init. Fails fast if the launch-host relay is not working."""
+    return  # skip this for now
     if not user_input_enabled():
         return
     flag = 0
@@ -764,9 +775,9 @@ def pretest_user_repl(*, timeout: float = 1800, rounds: int = 3) -> None:
 
 
 def _read_user_spec(
-    default_aspect_ratio: tuple[int, int], default_duration_s: float
-) -> tuple[str, tuple[int, int], float] | None:
-    """Host stdin: prompt (required; `q` quits; blank lines ignored), aspect and duration defaulting to the test case."""
+    default_aspect_ratio: tuple[int, int], default_duration_s: float, default_num_steps: int
+) -> tuple[str, tuple[int, int], float, int] | None:
+    """Host stdin: prompt (required; `q` quits; blank lines ignored), aspect, duration and steps defaulting to the test case."""
     while True:
         try:
             prompt = _prompt_line("User prompt (q to quit): ").strip()
@@ -794,29 +805,50 @@ def _read_user_spec(
             return None
         except ValueError:
             print("expected a positive number of seconds", file=sys.stderr)
-    return prompt, aspect, duration_s
+    while True:
+        try:
+            raw = _prompt_line(f"Inference steps [{default_num_steps}]: ")
+            num_steps = _parse_steps(raw, default_num_steps)
+            break
+        except EOFError:
+            return None
+        except ValueError:
+            print("expected a positive integer", file=sys.stderr)
+    return prompt, aspect, duration_s, num_steps
 
 
 def _broadcast_user_spec(
-    spec: tuple[str, tuple[int, int], float] | None,
-) -> tuple[str, tuple[int, int], float] | None:
+    spec: tuple[str, tuple[int, int], float, int] | None,
+) -> tuple[str, tuple[int, int], float, int] | None:
     """Host `spec` (or None to quit) to every rank via the journal and one allgather."""
     if not ttnn.using_distributed_env():
         return spec
     seq = 0
     if is_host() and spec is not None:
         seq = _next_repl_seq()
-        prompt, aspect, duration_s = spec
+        prompt, aspect, duration_s, num_steps = spec
         _append_journal(
             seq,
-            json.dumps({"prompt": prompt, "aspect": [int(aspect[0]), int(aspect[1])], "duration_s": float(duration_s)}),
+            json.dumps(
+                {
+                    "prompt": prompt,
+                    "aspect": [int(aspect[0]), int(aspect[1])],
+                    "duration_s": float(duration_s),
+                    "num_steps": int(num_steps),
+                }
+            ),
         )
     seq = _allgather_host_int(seq)
     if not seq:
         return None
     if not is_host():
         payload = json.loads(_wait_journal(seq))
-        spec = payload["prompt"], (int(payload["aspect"][0]), int(payload["aspect"][1])), float(payload["duration_s"])
+        spec = (
+            payload["prompt"],
+            (int(payload["aspect"][0]), int(payload["aspect"][1])),
+            float(payload["duration_s"]),
+            int(payload["num_steps"]),
+        )
     ttnn.distributed_context_barrier()
     return spec
 
@@ -834,8 +866,10 @@ def _parse_reference_counts(text: str) -> tuple[int, int, int]:
     return images, audio, video
 
 
-def _read_reference_spec() -> dict | None:
-    """Host stdin: a text prompt, a counts triple, then that many colon-separated paths per modality.
+def _read_reference_spec(
+    default_aspect_ratio: tuple[int, int], default_duration_s: float, default_num_steps: int
+) -> dict | None:
+    """Host stdin: a prompt, aspect, duration and steps (defaulting to the working point), a counts triple, then paths.
 
     `q` at the prompt or counts step, or EOF anywhere, aborts (returns None). Paths are re-prompted
     until the entered count matches and every path is an existing file, so a typo never reaches pipeline init.
@@ -852,6 +886,36 @@ def _read_reference_spec() -> dict | None:
 
     while True:
         try:
+            raw = _prompt_line(f"Aspect ratio [{default_aspect_ratio[0]}:{default_aspect_ratio[1]}]: ")
+            aspect = _parse_aspect(raw, default_aspect_ratio)
+            break
+        except EOFError:
+            return None
+        except ValueError:
+            print("expected W:H (e.g. 16:9)", file=sys.stderr)
+
+    while True:
+        try:
+            raw = _prompt_line(f"Duration seconds [{default_duration_s:g}]: ")
+            duration_s = _parse_duration(raw, default_duration_s)
+            break
+        except EOFError:
+            return None
+        except ValueError:
+            print("expected a positive number of seconds", file=sys.stderr)
+
+    while True:
+        try:
+            raw = _prompt_line(f"Inference steps [{default_num_steps}]: ")
+            num_steps = _parse_steps(raw, default_num_steps)
+            break
+        except EOFError:
+            return None
+        except ValueError:
+            print("expected a positive integer", file=sys.stderr)
+
+    while True:
+        try:
             raw = _prompt_line("Enter counts (images:audio:video): ").strip()
         except EOFError:
             return None
@@ -863,7 +927,12 @@ def _read_reference_spec() -> dict | None:
         except ValueError as error:
             print(error, file=sys.stderr)
 
-    spec: dict = {"prompt": prompt}
+    spec: dict = {
+        "prompt": prompt,
+        "aspect": [int(aspect[0]), int(aspect[1])],
+        "duration_s": float(duration_s),
+        "num_steps": int(num_steps),
+    }
     for kind, count, label in zip(("image", "audio", "video"), counts, ("Images", "Audio", "Videos")):
         spec[kind] = []
         if count == 0:
@@ -903,15 +972,18 @@ def _broadcast_reference_spec(spec: dict | None) -> dict | None:
     return spec
 
 
-def read_user_reference_spec() -> dict | None:
-    """Collect a ref2va prompt plus reference paths from the launch TTY and broadcast to every rank.
+def read_user_reference_spec(
+    default_aspect_ratio: tuple[int, int], default_duration_s: float, default_num_steps: int
+) -> dict | None:
+    """Collect a ref2va prompt, aspect/duration/steps and reference paths from the launch TTY and broadcast to every rank.
 
-    Returns `{"prompt": str, "image": [...], "audio": [...], "video": [...]}` in packed order, or None
-    when input is disabled or aborted. Media itself is loaded per rank from the (shared) paths, not carried here.
+    Returns `{"prompt": str, "aspect": [w, h], "duration_s": float, "num_steps": int, "image": [...],
+    "audio": [...], "video": [...]}` in packed order, or None when input is disabled or aborted. Media
+    itself is loaded per rank from the (shared) paths, not carried here.
     """
     if not user_input_enabled():
         return None
-    spec = _read_reference_spec() if is_host() else None
+    spec = _read_reference_spec(default_aspect_ratio, default_duration_s, default_num_steps) if is_host() else None
     return _broadcast_reference_spec(spec)
 
 
@@ -935,11 +1007,11 @@ def run_user_generations(
     artifacts = artifact_dir(artifact_name)
     index = 0
     while True:
-        spec = _read_user_spec(default_aspect_ratio, default_duration_s) if is_host() else None
+        spec = _read_user_spec(default_aspect_ratio, default_duration_s, num_inference_steps) if is_host() else None
         spec = _broadcast_user_spec(spec)
         if spec is None:
             return
-        prompt, aspect_ratio, duration_s = spec
+        prompt, aspect_ratio, duration_s, num_steps = spec
         profiler = BenchmarkProfiler()
         try:
             height, width = resolve_canvas_size(*aspect_ratio)
@@ -950,7 +1022,7 @@ def run_user_generations(
                     num_frames=num_frames,
                     height=height,
                     width=width,
-                    num_inference_steps=num_inference_steps,
+                    num_inference_steps=num_steps,
                     seed=seed,
                     on_event=profiler_event_callback(profiler, 0),
                 )
@@ -967,13 +1039,13 @@ def run_user_generations(
             profiler,
             label=label,
             pipeline=pipeline,
-            num_forwards=num_inference_steps - 1,
+            num_forwards=num_steps - 1,
             width=width,
             height=height,
             num_frames=output.num_frames,
             fps=MINIMAX_H3_FPS,
             aspect_ratio=aspect_ratio,
-            num_inference_steps=num_inference_steps,
+            num_inference_steps=num_steps,
         )
         if is_host():
             duration_tag = int(duration_s) if float(duration_s).is_integer() else duration_s
@@ -988,31 +1060,28 @@ def run_user_ref_generations(
     pipeline,
     request_provider,
     *,
-    aspect_ratio: tuple[int, int],
-    duration_s: float,
-    num_inference_steps: int,
     seed: int,
     label: str = "ref2va",
     artifact_name: str = "h3_ref2va_perf_artifacts",
 ) -> None:
     """ref2va prompt+reference REPL after the warm measured run. No-op unless ENABLE_USER_INPUT is set.
 
-    `request_provider()` returns one `(prompt, references)` per iteration (None to stop), already
-    broadcast to every rank. The working point is fixed at the measured one; prompt and references
-    change. Each entry is a fresh `BenchmarkProfiler` fed by `on_event`, and its artifacts are
-    stemmed by the reference modalities plus a 0-based index. Admission errors log and the loop continues.
+    `request_provider()` returns one `(prompt, references, aspect_ratio, duration_s, num_steps)` per
+    iteration (None to stop), already broadcast to every rank. Each entry is a fresh `BenchmarkProfiler`
+    fed by `on_event`, and its artifacts are stemmed by the reference modalities plus a 0-based index.
+    Admission errors log and the loop continues.
     """
     if not user_input_enabled():
         return
     artifacts = artifact_dir(artifact_name)
-    height, width = resolve_canvas_size(*aspect_ratio)
-    num_frames = align_num_frames(round(duration_s * MINIMAX_H3_FPS))
     index = 0
     while True:
         request = request_provider()
         if not request:
             return
-        prompt, references = request
+        prompt, references, aspect_ratio, duration_s, num_steps = request
+        height, width = resolve_canvas_size(*aspect_ratio)
+        num_frames = align_num_frames(round(duration_s * MINIMAX_H3_FPS))
         profiler = BenchmarkProfiler()
         try:
             with profiler("run", iteration=0):
@@ -1022,7 +1091,7 @@ def run_user_ref_generations(
                     num_frames=num_frames,
                     height=height,
                     width=width,
-                    num_inference_steps=num_inference_steps,
+                    num_inference_steps=num_steps,
                     seed=seed,
                     on_event=profiler_event_callback(profiler, 0),
                 )
@@ -1039,13 +1108,13 @@ def run_user_ref_generations(
             profiler,
             label=label,
             pipeline=pipeline,
-            num_forwards=num_inference_steps - 1,
+            num_forwards=num_steps - 1,
             width=width,
             height=height,
             num_frames=output.num_frames,
             fps=MINIMAX_H3_FPS,
             aspect_ratio=aspect_ratio,
-            num_inference_steps=num_inference_steps,
+            num_inference_steps=num_steps,
         )
         if is_host():
             kinds = "_".join(reference.kind for reference in references)

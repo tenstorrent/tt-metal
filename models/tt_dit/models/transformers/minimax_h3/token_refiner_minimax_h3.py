@@ -120,7 +120,7 @@ class MiniMaxH3TokenRefinerBlock(Module):
         # ff1 folds the TP all-gather into its matmul when parallel_config is passed; ff2 is
         # row-parallel and reduce-scatters back to TP-fractured.
         if not self.use_fused_agmm and self.tp_factor > 1:
-            normed = self.ccl_manager.all_gather_persistent_buffer(normed, dim=3, mesh_axis=self.tp_mesh_axis)
+            normed = self.ccl_manager.all_gather(normed, dim=3, mesh_axis=self.tp_mesh_axis, use_hyperparams=False)
         # ff1's block depends on per_core_M (hence M = the sequence length), only known here.
         ff1_block_size = agmm_block_size(*self._ff1_kn, normed.padded_shape[-2])
         ff_out = self.ff(

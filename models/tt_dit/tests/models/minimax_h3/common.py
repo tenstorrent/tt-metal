@@ -123,8 +123,9 @@ _ring_8k_trace = {**ring_params_8k_req_exact_devices, "trace_region_size": 450_0
 
 MESH_4X8_RING = pytest.param((4, 8), _ring_8k, id="4x8")
 MESH_4X32_RING = pytest.param((4, 32), _ring_8k_trace, id="4x32")
+MESH_4X32_RING_UNTRACED = pytest.param((4, 32), _ring_8k, id="4x32_UNTRACED")
 
-GALAXY_MESHES = [MESH_4X8_RING, MESH_4X32_RING]
+GALAXY_MESHES = [MESH_4X8_RING, MESH_4X32_RING, MESH_4X32_RING_UNTRACED]
 
 
 def randomize_norm_weights(module: torch.nn.Module, *, scale: float = 0.5) -> torch.nn.Module:

@@ -327,7 +327,7 @@ class Qwen3VlTextEncoder(Module):
         input_embeds = self.embed_tokens.forward(input_ids)
 
         if self._tp_axis is not None:
-            input_embeds = self._ccl_manager.all_gather_persistent_buffer(
+            input_embeds = self._ccl_manager.all_gather(
                 input_embeds, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True
             )
             # clone to move out of persistent buffer
@@ -381,8 +381,7 @@ class Qwen3VlTextEncoder(Module):
         if self._sp_axis is not None:
             # Gather the sequence back so the return matches the TP-only contract (full, replicated).
             captured = [
-                self._ccl_manager.all_gather_persistent_buffer(x, dim=1, mesh_axis=self._sp_axis, use_hyperparams=True)
-                for x in captured
+                self._ccl_manager.all_gather(x, dim=1, mesh_axis=self._sp_axis, use_hyperparams=True) for x in captured
             ]
 
         if padded_seq_len != seq_len:
@@ -633,12 +632,12 @@ class Qwen3VlAttention(Module):
         x = ttnn.transformer.concatenate_heads(x)
 
         if self._tp_axis is not None:
-            x = self._ccl_manager.all_gather_persistent_buffer(x, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
+            x = self._ccl_manager.all_gather(x, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
 
         x = self.o_proj.forward(x)
 
         if self._tp_axis is not None:
-            x = self._ccl_manager.all_gather_persistent_buffer(x, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
+            x = self._ccl_manager.all_gather(x, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
 
         return x
 
@@ -777,7 +776,7 @@ class Qwen3VlMlp(Module):
         x = self.down_proj(x)
 
         if self._tp_axis is not None:
-            x = self._ccl_manager.all_gather_persistent_buffer(x, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
+            x = self._ccl_manager.all_gather(x, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
 
         return x
 
