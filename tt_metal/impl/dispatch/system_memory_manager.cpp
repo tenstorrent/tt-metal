@@ -234,6 +234,21 @@ SystemMemoryManager::SystemMemoryManager(ContextId context_id, ChipId device_id,
     this->free_region_host_ptr_ = this->cq_sysmem_start + total_cq_space;
     this->free_region_bump_ = 0;
 
+    // Match write_sysmem's masked-channel mapping and modulo addressing exactly. In particular, the
+    // diagnostic header uses a channel-relative CQ offset, not cq_sysmem_start's Galaxy subdevice offset.
+    char* diagnostic_mapping = static_cast<char*>(ctx.get_cluster().host_dma_address(0, mmio_device_id, channel));
+    const uint32_t diagnostic_mapping_size = ctx.get_cluster().get_host_channel_size(mmio_device_id, channel);
+    TT_FATAL(diagnostic_mapping != nullptr && diagnostic_mapping_size >= sizeof(uint32_t), "Invalid CQ host mapping");
+    const uint32_t issue_q_wr_offset =
+        ctx.dispatch_mem_map().get_host_command_queue_addr(CommandQueueHostAddrType::ISSUE_Q_WR);
+    this->issue_queue_write_ptr_snapshots.reserve(num_hw_cqs);
+    for (uint8_t cq_id = 0; cq_id < num_hw_cqs; ++cq_id) {
+        const uint32_t offset =
+            (issue_q_wr_offset + get_relative_cq_offset(cq_id, this->cq_size)) % diagnostic_mapping_size;
+        TT_FATAL(offset <= diagnostic_mapping_size - sizeof(uint32_t), "CQ diagnostic header exceeds host mapping");
+        this->issue_queue_write_ptr_snapshots.push_back(diagnostic_mapping + offset);
+    }
+
     this->init_dispatch_core_interfaces(num_hw_cqs, channel);
 }
 
@@ -606,7 +621,6 @@ void SystemMemoryManager::issue_queue_push_back(uint32_t push_size_B, const uint
     const uint32_t push_size_16B = align(push_size_B, alignment) >> 4;
 
     SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
-    uint32_t issue_q_wr_ptr = ctx.dispatch_mem_map().get_host_command_queue_addr(CommandQueueHostAddrType::ISSUE_Q_WR);
 
     // Capture before advancing: issue_fifo_wr_ptr points to the slot just written; after the advance below it points to
     // the next slot.
@@ -620,6 +634,8 @@ void SystemMemoryManager::issue_queue_push_back(uint32_t push_size_B, const uint
     }
 
     if (is_dram_backed()) {
+        const uint32_t issue_q_wr_ptr =
+            ctx.dispatch_mem_map().get_host_command_queue_addr(CommandQueueHostAddrType::ISSUE_Q_WR);
         const IDevice* device = ctx.device_manager()->get_active_device(this->device_id);
         const uint32_t dram_channel =
             device->allocator_impl()->get_dram_channel_from_bank_id(this->get_dram_region_bank_id());
@@ -640,14 +656,7 @@ void SystemMemoryManager::issue_queue_push_back(uint32_t push_size_B, const uint
     }
 
     // Also store this data in hugepages, so if a hang happens we can see what was written by host.
-    ChipId mmio_device_id = ctx.get_cluster().get_associated_mmio_device(this->device_id);
-    uint16_t channel = ctx.get_cluster().get_assigned_channel_for_device(this->device_id);
-    ctx.get_cluster().write_sysmem(
-        &cq_interface.issue_fifo_wr_ptr,
-        sizeof(uint32_t),
-        issue_q_wr_ptr + get_relative_cq_offset(cq_id, this->cq_size),
-        mmio_device_id,
-        channel);
+    std::memcpy(this->issue_queue_write_ptr_snapshots[cq_id], &cq_interface.issue_fifo_wr_ptr, sizeof(uint32_t));
 }
 
 void SystemMemoryManager::send_completion_queue_read_ptr(const uint8_t cq_id) const {

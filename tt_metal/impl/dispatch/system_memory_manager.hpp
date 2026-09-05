@@ -123,6 +123,8 @@ private:
     ChipId device_id = 0;
     std::vector<uint32_t> completion_byte_addrs;
     char* cq_sysmem_start = nullptr;
+    // Host-only diagnostic snapshots; the cluster owns the mappings for this manager's lifetime.
+    std::vector<char*> issue_queue_write_ptr_snapshots;
     std::vector<SystemMemoryCQInterface> cq_interfaces;
     uint32_t cq_size = 0;
     uint32_t channel_offset = 0;

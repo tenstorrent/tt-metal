@@ -47,6 +47,11 @@
 #include "dispatch_test_utils.hpp"
 #include "env_lib.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/dispatch/system_memory_manager.hpp"
+#include "impl/dispatch/system_memory_cq_interface.hpp"
+#include "impl/dispatch/command_queue_common.hpp"
+#include "impl/dispatch/dispatch_mem_map.hpp"
+#include "llrt/tt_cluster.hpp"
 #include "llrt.hpp"
 #include "multi_command_queue_fixture.hpp"
 #include "random_program_fixture.hpp"
@@ -61,6 +66,88 @@
 namespace tt::tt_metal {
 
 using std::vector;
+
+namespace {
+
+void check_issue_queue_diagnostic_header(IDevice& device) {
+    auto& live_manager = device.sysmem_manager();
+    auto& ctx = MetalContext::instance(live_manager.get_context_id());
+    auto& cluster = ctx.get_cluster();
+    if (cluster.is_mock_or_emulated() || live_manager.is_dram_backed()) {
+        GTEST_SKIP() << "Host-mapped diagnostic headers require a host-backed hardware CQ";
+    }
+
+    // Use independent host queue state. Never advance or publish the live device's queue pointers.
+    SystemMemoryManager manager(live_manager.get_context_id(), device.id(), device.num_hw_cqs());
+    const auto mmio_device = cluster.get_associated_mmio_device(device.id());
+    const auto channel = cluster.get_assigned_channel_for_device(device.id());
+    const uint32_t header_offset =
+        ctx.dispatch_mem_map().get_host_command_queue_addr(CommandQueueHostAddrType::ISSUE_Q_WR);
+    const uint32_t alignment = ctx.hal().get_alignment(HalMemType::HOST);
+    ASSERT_EQ(alignment % 16, 0u);
+
+    for (uint8_t cq_id = 0; cq_id < device.num_hw_cqs(); ++cq_id) {
+        SCOPED_TRACE(::testing::Message() << "device=" << device.id() << " channel=" << channel << " cq=" << +cq_id);
+        // Read through the original public sysmem path to independently check channel masking,
+        // per-CQ addressing, and mapping offsets used by the cached-pointer implementation.
+        const uint32_t address = header_offset + get_relative_cq_offset(cq_id, manager.get_cq_size());
+        uint32_t original_header = 0;
+        cluster.read_sysmem(&original_header, sizeof(original_header), address, mmio_device, channel);
+        struct RestoreHeader {
+            Cluster& cluster;
+            ChipId mmio_device;
+            uint16_t channel;
+            uint32_t address;
+            uint32_t value;
+            ~RestoreHeader() { cluster.write_sysmem(&value, sizeof(value), address, mmio_device, channel); }
+        } restore{cluster, mmio_device, channel, address, original_header};
+
+        auto& cq = manager.get_cq_interfaces()[cq_id];
+        const uint32_t initial_ptr = cq.issue_fifo_wr_ptr;
+        const bool initial_toggle = cq.issue_fifo_wr_toggle;
+        auto check_header = [&](uint32_t expected) {
+            uint32_t actual = 0;
+            cluster.read_sysmem(&actual, sizeof(actual), address, mmio_device, channel);
+            EXPECT_EQ(actual, expected);
+        };
+
+        manager.issue_queue_push_back(1, cq_id);
+        EXPECT_EQ(cq.issue_fifo_wr_ptr, initial_ptr + alignment / 16);
+        EXPECT_EQ(cq.issue_fifo_wr_toggle, initial_toggle);
+        check_header(initial_ptr + alignment / 16);
+
+        // Exercise exact-boundary and over-boundary wrapping on independent host state.
+        for (const uint32_t push_bytes : {alignment, 2 * alignment}) {
+            cq.issue_fifo_wr_ptr = cq.issue_fifo_limit - alignment / 16;
+            const bool previous_toggle = cq.issue_fifo_wr_toggle;
+            manager.issue_queue_push_back(push_bytes, cq_id);
+            const uint32_t wrapped_ptr = (cq.cq_start + cq.offset) >> 4;
+            EXPECT_EQ(cq.issue_fifo_wr_ptr, wrapped_ptr);
+            EXPECT_NE(cq.issue_fifo_wr_toggle, previous_toggle);
+            check_header(wrapped_ptr);
+        }
+    }
+}
+
+}  // namespace
+
+TEST_F(UnitMeshCQProgramFixture, IssueQueueDiagnosticHeaderAdvanceAndWrap) {
+    for (const auto& mesh_device : this->devices_) {
+        distributed::Finish(mesh_device->mesh_command_queue());
+        for (auto* device : mesh_device->get_devices()) {
+            check_issue_queue_diagnostic_header(*device);
+        }
+    }
+}
+
+TEST_F(UnitMeshMultiCQSingleDeviceProgramFixture, IssueQueueDiagnosticHeaderAdvanceAndWrap) {
+    for (uint8_t cq_id = 0; cq_id < this->num_cqs_; ++cq_id) {
+        distributed::Finish(this->device_->mesh_command_queue(cq_id));
+    }
+    for (auto* device : this->device_->get_devices()) {
+        check_issue_queue_diagnostic_header(*device);
+    }
+}
 
 struct CBConfig {
     uint32_t cb_id;
